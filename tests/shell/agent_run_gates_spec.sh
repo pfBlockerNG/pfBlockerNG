@@ -245,4 +245,21 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The line 4 of output should equal 'GATES: PASS'
     The lines of output should equal 4
   End
+
+  # Delta re-review of the untracked-files fix: --exclude-standard must respect
+  # .gitignore, not just "untracked" -- a gitignored scratch file must stay excluded
+  # even while a genuine untracked file alongside it gets planned.
+  It 'excludes a gitignored untracked file while still planning a real untracked one'
+    head_sha=$(gitc rev-parse HEAD)
+    printf 'ignored.sh\n' > "$repo/.gitignore"
+    printf '#!/bin/sh\n# would gate if not excluded\ntrue\n' > "$repo/scripts/ignored.sh"
+    printf '#!/bin/sh\n# real untracked file alongside the ignored one\ntrue\n' > "$repo/scripts/brand_new.sh"
+    When run sh "$script" --worktree "$repo" --diff "$head_sha"
+    The status should equal 0
+    The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
+    The output should include 'GATE PASS: shellcheck scripts/brand_new.sh'
+    The output should not include 'ignored.sh'
+    The line 4 of output should equal 'GATES: PASS'
+    The lines of output should equal 4
+  End
 End
