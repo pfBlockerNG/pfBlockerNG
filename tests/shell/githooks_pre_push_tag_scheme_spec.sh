@@ -13,6 +13,7 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
     git init -q -b devel "${base}/repo"
     git -C "${base}/repo" config user.email t@example.com
     git -C "${base}/repo" config user.name T
+    git -C "${base}/repo" config commit.gpgsign false
     ( cd "${base}/repo" && echo one > f && git add f && git commit -q -m c1 )
     sha="$(git -C "${base}/repo" rev-parse HEAD)"
   }
@@ -29,7 +30,8 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
       # No origin/main or origin/devel exists here, so a versioned tag must
       # hit the reachability error — proving the loop actually read the line.
       cd "${base}/repo" && printf '%s\n' "refs/tags/v9.9.9 $sha refs/tags/v9.9.9 0000000000000000000000000000000000000000" \
-        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL sh "$hook" origin "${base}/repo"
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+          sh "$hook" origin "${base}/repo"
     }
     When run push_tag
     The status should equal 1

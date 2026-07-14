@@ -56,7 +56,7 @@ Produce the area report per the schema. Rules (CLAUDE.md "Evidence rules" + /adr
 - Third-party/external formats and platform behaviours are verified by fetching/probing, never from memory (the ADR-59 domain_col lesson).
 - Risks: hidden coupling, concurrent writers, chroot path rules, no-live-Unbound-in-CI, POSIX-sh-only — whatever your area actually touches.
 - Open questions are genuine user forks only, not things another grep would settle (settle those yourself, now).`,
-    { label: `investigate:${a.key}`, phase: 'Investigate', model: 'sonnet', effort: 'xhigh', schema: AREA_REPORT })))
+    { label: `investigate:${a.key}`, phase: 'Investigate', model: 'claude-sonnet-5', effort: 'xhigh', schema: AREA_REPORT })))
 
 const clean = reports.filter(Boolean)
 log(`${clean.length}/${areas.length} areas returned; ${clean.flatMap(r => r.facts).filter(f => f.confidence === 'assumed').length} facts still ASSUMED`)

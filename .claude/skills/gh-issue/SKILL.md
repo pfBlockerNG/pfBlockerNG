@@ -86,8 +86,8 @@ lives in `.claude/workflows/issue-triage.js` (its Triage prompt + schema), the s
 source of truth. Do NOT restate or re-improvise it. Run it as ONE fresh agent:
 `Workflow({name: 'issue-triage', args: {issue: N, worktree: '<an up-to-date
 checkout — the primary is fine, the agent reads origin/<base> refs read-only>', base:
-'devel', model: 'sonnet'}})` (pass `model: 'fable'` — or whatever the highest tier is —
-when verdict quality warrants the spend; sonnet is the default;
+'devel', model: 'claude-sonnet-5'}})` (pass `model: 'claude-fable-5'` — or whatever the highest tier is —
+when verdict quality warrants the spend; claude-sonnet-5 is the default;
 the Workflow tool is already asynchronous, and `run_in_background` is NOT a Workflow parameter
 — passing it fails validation; it is harness-tracked, so **end the turn and answer its
 completion notification — never arm a sleep/poll to await it**, CLAUDE.md "No orphaned
@@ -184,8 +184,8 @@ For each plan step `M`, in order:
 recorded reason in your report** — PR #937 bypassed it silently and neither step produced
 the fixed-field gate record (#943). Workflow tool unavailable → play the Implement and
 Verify stages from `.claude/workflows/phase-step.js` yourself with plain Agents (its
-prompts + schemas ARE the contract; implementer `model: sonnet`, verifier on the higher
-model, effort `xhigh` stated explicitly on every spawn), then validate as above — the gate
+prompts + schemas ARE the contract; implementer and verifier `model: claude-sonnet-5`,
+effort `xhigh` stated explicitly on every spawn), then validate as above — the gate
 record's fixed fields are what the workflow would have schema-forced; an empty field is a
 gate failure.
 

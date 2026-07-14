@@ -51,7 +51,7 @@ Decide:
 5. THE FIX ITSELF: is the suggested diff safe and correct as proposed?
 
 Return the structured verdict. DEFER only for findings you confirmed REAL but out of scope.`,
-    { label: `validate:${String(f.id).slice(0, 24)}`, phase: 'Validate', model: 'sonnet', effort: 'xhigh', schema: VERDICT })
+    { label: `validate:${String(f.id).slice(0, 24)}`, phase: 'Validate', model: 'claude-sonnet-5', effort: 'xhigh', schema: VERDICT })
 )
 
 const verdicts = results.filter(Boolean)

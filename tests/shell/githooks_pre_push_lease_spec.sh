@@ -1,6 +1,7 @@
 #shellcheck shell=sh
 # .githooks/pre-push agent lease-by-effect guard (issue #1307): an agent
-# (CLAUDECODE=1) push that rewrites a remote branch's history is allowed only
+# (CLAUDECODE=1 or CODEX_THREAD_ID set) push that rewrites a remote branch's
+# history is allowed only
 # when the hook's advertised remote oid equals the local remote-tracking ref —
 # i.e. the agent has fetched the history it is about to overwrite. That is
 # --force-with-lease's check, enforced on the push's EFFECT, so an alias or a
@@ -24,11 +25,13 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
     git clone -q "${base}/remote.git" "${base}/A" 2>/dev/null
     git -C "${base}/A" config user.email a@example.com
     git -C "${base}/A" config user.name A
+    git -C "${base}/A" config commit.gpgsign false
     ( cd "${base}/A" && git checkout -q -b devel && echo one > f \
         && git add f && git commit -q -m c1 && git push -q origin devel )
     git clone -q "${base}/remote.git" "${base}/B" 2>/dev/null
     git -C "${base}/B" config user.email b@example.com
     git -C "${base}/B" config user.name B
+    git -C "${base}/B" config commit.gpgsign false
     ( cd "${base}/B" && git checkout -q devel && echo two >> f \
         && git add f && git commit -q -m c2-other && git push -q origin devel )
     # A now diverges; its tracking ref still holds c1 while the remote is at c2.
@@ -53,11 +56,17 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   # per row (the suite itself may run under CLAUDECODE=1).
   agent_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
-      | env -u CLAUDE_CODE_USER_EMAIL CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
+      | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
+  }
+  codex_hook() {
+    cd "${base}/A" && printf '%s\n' "$1" \
+      | env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE CODEX_THREAD_ID=codex-test \
+        sh "$hook" origin "${base}/remote.git"
   }
   human_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
-      | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL sh "$hook" origin "${base}/remote.git"
+      | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+        sh "$hook" origin "${base}/remote.git"
   }
 
   It 'denies an agent history rewrite when the remote moved past the tracking ref'
@@ -77,6 +86,12 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
     When run fresh_tracking
     The status should equal 0
     The stderr should equal ''
+  End
+
+  It 'denies the same stale rewrite for a Codex session'
+    When run codex_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
+    The status should equal 1
+    The stderr should include 'unfetched'
   End
 
   It 'allows an agent fast-forward push with a stale tracking ref'
@@ -115,7 +130,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" && printf '%s\n%s\n' \
         "refs/heads/new $a_local refs/heads/new $Z40" \
         "refs/heads/devel $a_local refs/heads/devel $remote_tip" \
-        | env -u CLAUDE_CODE_USER_EMAIL CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
+        | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
     }
     When run two_refs
     The status should equal 1
@@ -135,9 +150,22 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" \
         && git config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDE_CODE_USER_EMAIL CLAUDECODE=1 git push --force origin devel
+        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 git push --force origin devel
     }
     When run real_force
+    The status should not equal 0
+    The stderr should include 'unfetched'
+    The result of function remote_tip_now should equal "$remote_tip"
+  End
+
+  It 'blocks the same real force-push for a Codex agent marker'
+    real_force_codex() {
+      cd "${base}/A" \
+        && git config core.hooksPath "${PFB_ROOT}/.githooks" \
+        && [ "$(remote_tip_now)" = "$remote_tip" ] \
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL CODEX_THREAD_ID=codex-test git push --force origin devel
+    }
+    When run real_force_codex
     The status should not equal 0
     The stderr should include 'unfetched'
     The result of function remote_tip_now should equal "$remote_tip"
@@ -148,7 +176,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" \
         && git config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL git push --force origin devel
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID git push --force origin devel
     }
     When run real_force_human
     The status should equal 0

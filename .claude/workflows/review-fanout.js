@@ -72,7 +72,7 @@ const LENSES = [
 ]
 
 const found = await parallel(LENSES.map(l => () =>
-  agent(l.prompt, { label: `find:${l.key}`, phase: 'Find', model: 'sonnet', effort: 'xhigh', schema: FINDINGS })))
+  agent(l.prompt, { label: `find:${l.key}`, phase: 'Find', model: 'claude-sonnet-5', effort: 'xhigh', schema: FINDINGS })))
 
 // Barrier is deliberate: dedup across all lenses before paying for verification.
 const clean = found.filter(Boolean)
@@ -90,7 +90,7 @@ phase('Verify')
 
 const verified = await parallel(merged.map(f => () =>
   agent(`${COMMON}\nVERIFY ONE FINDING — try to REFUTE it. Finding: [${f.severity}] ${f.location}: ${f.explanation}\nClaimed reproduction: ${f.reproduce}\nRe-derive it yourself: run the probe (or construct one), read the surrounding code, and decide whether it truly holds against the CURRENT branch tip. Default to holds=false if you cannot reproduce or ground it.`,
-    { label: `verify:${f.location.slice(0, 40)}`, phase: 'Verify', model: 'sonnet', effort: 'xhigh', schema: VERDICT })
+    { label: `verify:${f.location.slice(0, 40)}`, phase: 'Verify', model: 'claude-sonnet-5', effort: 'xhigh', schema: VERDICT })
     .then(v => ({ ...f, verified: v }))))
 
 const confirmed = verified.filter(Boolean).filter(f => f.verified?.holds)
