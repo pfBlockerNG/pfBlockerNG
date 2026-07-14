@@ -16108,6 +16108,9 @@ function sync_package_pfblockerng($cron='') {
 	// invocation that transitions the lock releases it (a nested reentrant call no-ops).
 	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock']);
 	if (!pfb_feed_pass_begin('sync')) {
+		// issue #1277: a lost race must not silently drop the GUI Save/Force --
+		// mirror pfblockerng_tick()'s 'cron' deferral so the next tick retries.
+		pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 		return;
 	}
 
