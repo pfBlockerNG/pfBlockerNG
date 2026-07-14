@@ -45,7 +45,9 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 		self::$src = $src;
 
 		self::$tmpDir = sys_get_temp_dir() . '/pfb_geoip_cat_stderr_' . getmypid();
-		@mkdir(self::$tmpDir, 0777, TRUE);
+		if (!@mkdir(self::$tmpDir, 0777, TRUE) && !is_dir(self::$tmpDir)) {
+			throw new RuntimeException('test bootstrap: failed to create tmp dir ' . self::$tmpDir);
+		}
 
 		// Oracle: the ISO-append exec() call itself, extracted verbatim so it
 		// tracks whichever form is actually in source -- with or without the
