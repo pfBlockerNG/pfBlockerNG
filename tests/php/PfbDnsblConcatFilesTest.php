@@ -18,6 +18,72 @@ use PHPUnit\Framework\TestCase;
  * The unwritable destination is modeled as a NON-EXISTENT directory (fopen fails for any
  * uid, unlike a chmod fixture, which root bypasses).
  */
+
+/**
+ * Stream wrapper simulating fopen($dest, 'w') SUCCEEDING (unlike the case-A test's
+ * missing-directory fopen failure) followed by a mid-loop fwrite() failure -- the
+ * confirmed-truncation case (issue #1275). Accepts exactly $writeBudget real writes
+ * (so the destination genuinely holds partial bytes at the moment of failure), then
+ * fails every write after; records whether unlink() was ever invoked on it. Single
+ * consumer, so it lives in this file (unlike the shared PfbTruncatedReadStreamWrapper).
+ */
+final class PfbFailingWriteStreamWrapper
+{
+	/** @var resource|null */
+	public $context;
+	private static int $writeBudget = 0;
+	private static int $calls = 0;
+	public static string $written = '';
+	public static bool $unlinkCalled = FALSE;
+
+	public static function reset(int $writeBudget): void
+	{
+		self::$writeBudget  = $writeBudget;
+		self::$calls        = 0;
+		self::$written      = '';
+		self::$unlinkCalled = FALSE;
+	}
+
+	public function stream_open(string $path, string $mode, int $options, ?string &$openedPath): bool
+	{
+		return TRUE;
+	}
+
+	public function stream_write(string $data): int|false
+	{
+		self::$calls++;
+		if (self::$calls > self::$writeBudget) {
+			return FALSE;
+		}
+		self::$written .= $data;
+		return strlen($data);
+	}
+
+	public function stream_eof(): bool
+	{
+		return FALSE;
+	}
+
+	public function stream_close(): void
+	{
+	}
+
+	/** @return array<string,int> */
+	public function url_stat(string $path, int $flags): array
+	{
+		return array_fill_keys(
+			['dev', 'ino', 'mode', 'nlink', 'uid', 'gid', 'rdev', 'size', 'atime', 'mtime', 'ctime', 'blksize', 'blocks'],
+			0
+		);
+	}
+
+	public function unlink(string $path): bool
+	{
+		self::$unlinkCalled = TRUE;
+		return TRUE;
+	}
+}
+
 #[CoversFunction('pfb_dnsbl_concat_files')]
 #[CoversFunction('pfb_dnsbl_concat_write_ok')]
 final class PfbDnsblConcatFilesTest extends TestCase
@@ -98,6 +164,43 @@ final class PfbDnsblConcatFilesTest extends TestCase
 			$logged,
 			'the skip must be operator-visible, not silent'
 		);
+	}
+
+	/**
+	 * issue #1275: fopen($dest, 'w') SUCCEEDS here (unlike the case-A test above), so
+	 * 'w' mode already truncated $dest before the mid-loop write failure. Two 2-line
+	 * sources, wrapper accepts exactly 3 real writes then fails the 4th -- proving
+	 * genuine partial bytes landed (not merely an empty file) at the moment of failure.
+	 * A left-behind truncated $dest is otherwise stuck "current" until an unrelated
+	 * source-content change (issue #1275): the caller's !file_exists($dest) retry gate
+	 * and pfb_dnsblip_rebuild_check()'s !is_file($output) gate both need $dest gone.
+	 */
+	public function testWriteFailureUnlinksTheTruncatedDestination(): void
+	{
+		$src1 = "{$this->workdir}/one.txt";
+		$src2 = "{$this->workdir}/two.txt";
+		file_put_contents($src1, "1.example.com\n2.example.com\n");
+		file_put_contents($src2, "3.example.com\n4.example.com\n");
+
+		PfbFailingWriteStreamWrapper::reset(3);
+		stream_wrapper_register('pfbfailwrite', PfbFailingWriteStreamWrapper::class);
+
+		try {
+			$result = pfb_dnsbl_concat_files('pfbfailwrite://sink', [$src1, $src2]);
+
+			$this->assertFalse($result, 'a mid-loop write failure must return FALSE');
+			$this->assertSame(
+				"1.example.com\n2.example.com\n3.example.com\n",
+				PfbFailingWriteStreamWrapper::$written,
+				'real bytes must have been flushed before the failure -- proves the destination was truncated, not merely empty'
+			);
+			$this->assertTrue(
+				PfbFailingWriteStreamWrapper::$unlinkCalled,
+				'a confirmed write-failure truncation (fopen already succeeded) must unlink the destination so the next pass retries'
+			);
+		} finally {
+			stream_wrapper_unregister('pfbfailwrite');
+		}
 	}
 
 	public function testVanishedSourceIsSkippedNotFatal(): void

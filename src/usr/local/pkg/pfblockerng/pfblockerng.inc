@@ -1987,6 +1987,9 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 					if (!pfb_dnsbl_concat_write_ok(@fwrite($out, $line), $line)) {
 						@fclose($in);
 						@fclose($out);
+						// issue #1275: fopen() above already truncated $dest -- leaving it
+						// behind stalls every retry gate that checks file_exists($dest).
+						unlink_if_exists($dest);
 						pfb_logger("\nDNSBL: write failed for [ {$dest} ] -- assembly aborted", 2);
 						return FALSE;
 					}
