@@ -215,4 +215,23 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The line 4 of output should equal 'GATES: PASS'
     The lines of output should equal 4
   End
+
+  # A `git diff <commit>` (no --cached) compares the WORKING TREE to that commit,
+  # not the index -- so a file staged then reverted back to HEAD's content in the
+  # working tree (index != HEAD, worktree == HEAD) is invisible to a lone `diff
+  # HEAD`, though `git status`/`diff --cached` still show it as staged.
+  It 'plans gates for a staged edit whose working-tree copy was reverted back to HEAD'
+    head_sha=$(gitc rev-parse HEAD)
+    printf '#!/bin/sh\n# staged edit\ntrue\n' > "$repo/scripts/kept.sh"
+    gitc add scripts/kept.sh
+    # Direct overwrite, NOT `git checkout` (which would reset the index too):
+    # index keeps the staged edit, working tree goes back to HEAD's exact bytes.
+    printf '#!/bin/sh\ntrue\n' > "$repo/scripts/kept.sh"
+    When run sh "$script" --worktree "$repo" --diff "$head_sha"
+    The status should equal 0
+    The output should include 'GATE PASS: sh -n scripts/kept.sh'
+    The output should include 'GATE PASS: shellcheck scripts/kept.sh'
+    The line 4 of output should equal 'GATES: PASS'
+    The lines of output should equal 4
+  End
 End
