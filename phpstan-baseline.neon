@@ -301,21 +301,9 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$rsync might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Variable \$src_ip in empty\(\) is never defined\.$#'
 			identifier: empty.variable
 			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$tld_list in empty\(\) always exists and is not falsy\.$#'
-			identifier: empty.variable
-			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -703,12 +691,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
-			message: '#^Variable \$pre might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
 			message: '#^Parameter \#2 \$callback of function array_filter expects \(callable\(string\)\: bool\)\|null, ''strlen'' given\.$#'
 			identifier: argument.type
 			count: 1
@@ -724,6 +706,12 @@ parameters:
 			message: '#^Deprecated in PHP 8\.0\: Required parameter \$a_key follows optional parameter \$alt_register\.$#'
 			identifier: parameter.requiredAfterOptional
 			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
+
+		-
+			message: '#^Variable \$icon in empty\(\) always exists and is always falsy\.$#'
+			identifier: empty.variable
+			count: 3
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
 
 		-

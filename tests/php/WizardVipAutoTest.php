@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\TestWith;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -138,10 +139,9 @@ final class WizardVipAutoTest extends TestCase
 	 * treated as OFF so validation still runs (mirrors the suppress-checkbox falsey
 	 * handling in WizardDecisionTest). Without this, an empty 'pfb_dnsvip_auto' POST
 	 * field would silently disable VIP validation.
-	 *
-	 * @testWith [""]
-	 *           ["0"]
 	 */
+	#[TestWith([''])]
+	#[TestWith(['0'])]
 	public function testAutoFalseyValuesStillEnforceVipValidation(string $falsey): void
 	{
 		$GLOBALS['input_errors'] = [];
