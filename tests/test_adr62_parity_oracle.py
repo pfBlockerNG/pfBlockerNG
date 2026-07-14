@@ -460,13 +460,13 @@ def test_cosmetic_prefix_guard_matches_php_row_for_row() -> None:
         "##\tSection",
         "#@# note",
         "##",  # marker alone, nothing after -- no non-whitespace char to require
-        # PR #1343 review: the space/tab guard missed other whitespace a malformed
-        # feed can embed mid-line (CR/VT/FF survive the caller's edge-only trim).
+        # issue #1276: other whitespace a malformed feed can embed mid-line
+        # (CR/VT/FF survive the caller's edge-only trim) is a comment too.
         "##\rSection",
         "##\x0bsection",
         "##\x0csection",
         "##\xa0Section",  # NBSP right after the marker -- .isspace() already catches it
-        # PR #1343 review: every element-hiding marker sibling gets a position-0
+        # issue #1276: every element-hiding marker sibling gets a position-0
         # row, not just '##'/'#@#' -- the guard branch is shared by all five.
         "#?# note",
         "#%# note",

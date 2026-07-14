@@ -80,16 +80,16 @@ final class Adr62DnsblIsAbpRuleLineTest extends TestCase
 			'sibling marker hosts-dialect, marker+space' => ['#@# note', false],
 			'sibling marker exception rule, no space'    => ['#@#selector', true],
 			'bare marker, nothing after'                 => ['##', false],
-			// PR #1343 review: the space/tab guard missed other whitespace a malformed
-			// feed can embed mid-line (CR/VT/FF survive the caller's edge-only trim).
+			// issue #1276: other whitespace a malformed feed can embed mid-line
+			// (CR/VT/FF survive the caller's edge-only trim) is a comment too.
 			'hosts-dialect header, marker+CR'            => ["##\rSection", false],
 			'hosts-dialect header, marker+vertical tab'  => ["##\x0Bsection", false],
 			'hosts-dialect header, marker+form feed'     => ["##\x0Csection", false],
-			// PR #1343 review: a copy-pasted NBSP (U+00A0, UTF-8 "\xC2\xA0") right
+			// issue #1276: a copy-pasted NBSP (U+00A0, UTF-8 "\xC2\xA0") right
 			// after the marker must count as whitespace too, matching the call
 			// site's own trim() charlist and Python's .isspace() on the same input.
 			'hosts-dialect header, marker+NBSP'          => ["##\xC2\xA0Section", false],
-			// PR #1343 review: every element-hiding marker sibling gets a position-0
+			// issue #1276: every element-hiding marker sibling gets a position-0
 			// row, not just '##'/'#@#' -- the guard branch is shared by all five.
 			'sibling marker #?#, hosts-dialect'          => ['#?# note', false],
 			'sibling marker #?#, no space'                => ['#?#selector', true],
