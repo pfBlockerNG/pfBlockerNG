@@ -1,11 +1,11 @@
 {
   "_doc": "Config inputs to the CURRENT DNSBL pipeline for the golden oracle. These mirror dnsblconfig keys read by tld_analysis / pfb_unbound_python_whitelist and the python init flags. The oracle loads two scenarios off this single config: TOP1M disabled (default) and TOP1M enabled.",
 
-  "tld_blacklist": ["zip"],
-  "_tld_blacklist_doc": "Whole-TLD block: every domain under .zip is wildcard-blocked via a synthetic DNSBL_TLD zone entry (mirrors PHP's tld_analysis() whole-TLD write). .zip is also removed from the TLD master.",
+  "tld_wildcard_blacklist": ["zip"],
+  "_tld_wildcard_blacklist_doc": "Whole-TLD block: every domain under .zip is wildcard-blocked via a synthetic DNSBL_TLD zone entry (mirrors PHP's tld_analysis() whole-TLD write). .zip is also removed from the TLD master.",
 
-  "tld_exclusion": ["excluded.com"],
-  "_tld_exclusion_doc": "Force exact DATA (transparent) classification for this whole domain even though as a 2-label registrable domain it would otherwise be a wildcard ZONE (mirrors PHP's tld_analysis() TLD-exclusion branch). Present in feed_extra.txt.",
+  "tld_wildcard_exclusion": ["excluded.com"],
+  "_tld_wildcard_exclusion_doc": "Force exact DATA (transparent) classification for this whole domain even though as a 2-label registrable domain it would otherwise be a wildcard ZONE (mirrors PHP's tld_analysis() TLD-exclusion branch). Present in feed_extra.txt.",
 
   "user_whitelist": ["www.adblock.com", ".wildwhite.org", "phishing.net"],
   "_user_whitelist_doc": "User DNSBL whitelist (dnsblconfig['suppression']). Normalised by PHP's pfb_unbound_python_whitelist(): www-strip, leading-dot -> wildcard '1' else '0'. Applied at QUERY TIME via whiteDB (un-blocks), never as a build-time removal in ADR-06's target.",

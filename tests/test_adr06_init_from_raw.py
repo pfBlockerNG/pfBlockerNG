@@ -109,8 +109,8 @@ def _write_onbox_manifest(tmp_path: Any, *, top1m_enabled: bool) -> str:
     manifest = {
         "version": 1,
         "config": {
-            "tld_blacklist": src_config.get("tld_blacklist", []),
-            "tld_exclusion": src_config.get("tld_exclusion", []),
+            "tld_wildcard_blacklist": src_config.get("tld_wildcard_blacklist", []),
+            "tld_wildcard_exclusion": src_config.get("tld_wildcard_exclusion", []),
             "user_whitelist": src_config.get("user_whitelist", []),
             "top1m_list": src_config.get("top1m_list", []),
             "top1m_enabled": top1m_enabled,

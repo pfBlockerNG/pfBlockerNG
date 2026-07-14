@@ -109,9 +109,9 @@ def _build_abp(feeds: dict[str, list[str]], *, user_whitelist: Iterable[str] = (
         "feeds": [{"raw": name, "feed": name, "group": name, "log_flag": "1"} for name in feeds],
     }
     config = {
-        "tld_master": _TLD_MASTER,
-        "tld_blacklist": [],
-        "tld_exclusion": [],
+        "tld_wildcard_master": _TLD_MASTER,
+        "tld_wildcard_blacklist": [],
+        "tld_wildcard_exclusion": [],
         "user_whitelist": list(user_whitelist),
         "top1m_list": [],
     }

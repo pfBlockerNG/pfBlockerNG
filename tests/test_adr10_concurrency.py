@@ -315,9 +315,9 @@ def _manifest_json(tld_master: str, plain_raw: str, user_raw: str, abp_raw: str,
         {
             "version": 1,
             "config": {
-                "tld_master": tld_master,
-                "tld_blacklist": [],
-                "tld_exclusion": [],
+                "tld_wildcard_master": tld_master,
+                "tld_wildcard_blacklist": [],
+                "tld_wildcard_exclusion": [],
                 "user_whitelist": spec.user_whitelist,
                 "user_unlock": spec.user_unlock,
                 "top1m_list": [],

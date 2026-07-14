@@ -58,7 +58,7 @@ final class UnboundPythonSourcesTest extends TestCase
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			// issue #1255: DNSBL Wildcard Blocking (TLD) toggle; OFF by default here.
-			'dnsbl_tld'          => '',
+			'dnsbl_tld_wildcard' => '',
 			'dnsblconfig'        => [
 				'tldblacklist' => '',
 				'tldexclusion' => '',
@@ -218,40 +218,41 @@ final class UnboundPythonSourcesTest extends TestCase
 		// issue #1255: the public-suffix oracle is no longer carried in the manifest
 		// (HSTS parity -- a shipped static file + ini flag instead); the key is absent.
 		$this->assertArrayNotHasKey('tld_master', $m['config']);
-		$this->assertSame([], $m['config']['tld_blacklist']);
+		$this->assertSame([], $m['config']['tld_wildcard_blacklist']);
 		$this->assertSame([], $m['config']['user_whitelist']);
 		$this->assertSame([], $m['config']['user_unlock']);
 		$this->assertFalse($m['config']['top1m_enabled']);
 	}
 
 	// issue #1255: the TLD-Wildcard oracle leaves the manifest entirely (HSTS parity) --
-	// present regardless of the dnsbl_tld toggle. tld_blacklist/tld_exclusion STAY (user
-	// config data) but are gated: OFF empties them even when the operator configured them,
-	// so the toggle gates the WHOLE wildcard-blocking contribution, not just the oracle.
+	// present regardless of the dnsbl_tld_wildcard toggle. tld_wildcard_blacklist/
+	// tld_wildcard_exclusion STAY (user config data) but are gated: OFF empties them even
+	// when the operator configured them, so the toggle gates the WHOLE wildcard-blocking
+	// contribution, not just the oracle.
 	public function testTldMasterKeyAbsentAndBlacklistExclusionEmptyWhenDnsblTldOff(): void
 	{
-		$GLOBALS['pfb']['dnsbl_tld'] = '';
+		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';
 		$GLOBALS['pfb']['dnsblconfig']['tldblacklist'] = base64_encode('evil-tld');
 		$GLOBALS['pfb']['dnsblconfig']['tldexclusion'] = base64_encode('good.example');
 
 		$m = pfb_unbound_python_sources($this->feeds());
 
 		$this->assertArrayNotHasKey('tld_master', $m['config'], 'tld_master must never appear in the manifest');
-		$this->assertSame([], $m['config']['tld_blacklist'], 'OFF must empty tld_blacklist even though it was configured');
-		$this->assertSame([], $m['config']['tld_exclusion'], 'OFF must empty tld_exclusion even though it was configured');
+		$this->assertSame([], $m['config']['tld_wildcard_blacklist'], 'OFF must empty tld_wildcard_blacklist even though it was configured');
+		$this->assertSame([], $m['config']['tld_wildcard_exclusion'], 'OFF must empty tld_wildcard_exclusion even though it was configured');
 	}
 
 	public function testTldBlacklistAndExclusionPopulatedWhenDnsblTldOn(): void
 	{
-		$GLOBALS['pfb']['dnsbl_tld'] = 'on';
+		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = 'on';
 		$GLOBALS['pfb']['dnsblconfig']['tldblacklist'] = base64_encode('evil-tld');
 		$GLOBALS['pfb']['dnsblconfig']['tldexclusion'] = base64_encode('good.example');
 
 		$m = pfb_unbound_python_sources($this->feeds());
 
 		$this->assertArrayNotHasKey('tld_master', $m['config'], 'tld_master must never appear in the manifest, even ON');
-		$this->assertSame(['evil-tld'], $m['config']['tld_blacklist'], 'ON must populate tld_blacklist from config');
-		$this->assertSame(['good.example'], $m['config']['tld_exclusion'], 'ON must populate tld_exclusion from config');
+		$this->assertSame(['evil-tld'], $m['config']['tld_wildcard_blacklist'], 'ON must populate tld_wildcard_blacklist from config');
+		$this->assertSame(['good.example'], $m['config']['tld_wildcard_exclusion'], 'ON must populate tld_wildcard_exclusion from config');
 	}
 
 	public function testManifestIsWrittenAsJson(): void

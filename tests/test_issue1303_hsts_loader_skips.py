@@ -1,6 +1,6 @@
 """issue #1303: the two HSTS preload loaders (_build_swap_snapshot's hsts_db and
 _load_hsts_db's hstsDB) must skip blank/whitespace-only and '#'-comment lines --
-the same contract _dnsbl_load_tld_master() already has -- so a later step can ship
+the same contract _dnsbl_load_tld_wildcard_master() already has -- so a later step can ship
 pfb_py_hsts.txt with a '#' traceability header. A falsy-but-valid line like '0' MUST
 still survive: 'not suffix' is only safe because '' is the sole falsy str after
 strip(); '0' is truthy.

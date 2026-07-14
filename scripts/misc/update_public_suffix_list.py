@@ -2,7 +2,7 @@
 """update_public_suffix_list.py -- refresh dnsbl_tld from the Public Suffix List.
 
 src/usr/local/pkg/pfblockerng/dnsbl_tld is the flat, one-suffix-per-line master list
-tld_analysis() (PHP) / _dnsbl_load_tld_master() (Python) key registrable domains
+tld_analysis() (PHP) / _dnsbl_load_tld_wildcard_master() (Python) key registrable domains
 against. This script refreshes it from the authoritative upstream source, ICANN
 section only -- the PRIVATE section (blogspot.*, github.io, ...) and PSL wildcard
 ('*.') / exception ('!') lines are intentionally dropped (issue #1272): the
@@ -30,7 +30,7 @@ A '#'-prefixed header (source URL + the upstream VERSION/COMMIT comment values,
 or 'unknown' if either is absent) followed by one suffix per line, in PSL source
 order (the file is NOT sorted). Both consumers already skip '' and '#'-prefixed
 lines (see pfblockerng.inc's tld_analysis() / pfb_unbound.py's
-_dnsbl_load_tld_master()), so the header rides through harmlessly end-to-end.
+_dnsbl_load_tld_wildcard_master()), so the header rides through harmlessly end-to-end.
 
 Churn guard: the header's VERSION timestamp moves on every upstream commit even
 when no suffix actually changed, so a plain run compares the GENERATED BODY

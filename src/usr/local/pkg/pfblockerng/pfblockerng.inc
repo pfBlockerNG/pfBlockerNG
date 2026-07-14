@@ -1872,12 +1872,12 @@ function pfb_dnsbl_loaded_input_paths(array $pfb): array {
 /* issue #1255: the reload fingerprint, narrowed for TLD mode. tld_analysis() rewrites
    unbound_py_data/unbound_py_zone INSIDE pfb_update_unbound(), strictly AFTER this
    fingerprint is taken (both the fp_old and fp_new call sites run before that), so
-   their content is unrelated to THIS pass and is excluded when dnsbl_tld is on; every
+   their content is unrelated to THIS pass and is excluded when dnsbl_tld_wildcard is on; every
    other input (the TLD-Wildcard oracle included) still gates the reload normally.
    Pure (no global access). */
 function pfb_dnsbl_reload_fingerprint(array $pfb): string {
 	$paths = pfb_dnsbl_loaded_input_paths($pfb);
-	if ($pfb['dnsbl_tld']) {
+	if ($pfb['dnsbl_tld_wildcard']) {
 		$paths = array_diff($paths, array($pfb['unbound_py_data'], $pfb['unbound_py_zone']));
 	}
 	return pfb_dnsbl_loaded_fingerprint($paths);
@@ -8198,7 +8198,7 @@ function pfb_unbound_python_sources($feeds) {
 	}
 
 	// Synthetic whole-TLD blacklist feed (DNSBL_TLD): the Python build emits these
-	// as whole-TLD ZONE entries from config.tld_blacklist, so no raw file is needed.
+	// as whole-TLD ZONE entries from config.tld_wildcard_blacklist, so no raw file is needed.
 
 	// TOP1M (Tranco/Cisco) popularity whitelist -> query-time whiteDB only when on.
 	// ponytail: pfbalexawhitelist.txt keeps its on-disk name -- renaming a generated
@@ -8214,24 +8214,24 @@ function pfb_unbound_python_sources($feeds) {
 	}
 
 	// issue #1255: TLD-Wildcard toggle gates the WHOLE wildcard-blocking contribution --
-	// tld_blacklist/tld_exclusion (user config, stay in the manifest) are emptied when
-	// off, even if configured. The public-suffix oracle itself (tld_master) no longer
-	// rides the manifest at all: it is a SHIPPED file (unbound_py_tld) gated by the same
+	// tld_wildcard_blacklist/tld_wildcard_exclusion (user config, stay in the manifest) are
+	// emptied when off, even if configured. The public-suffix oracle itself (tld_master) no
+	// longer rides the manifest at all: it is a SHIPPED file (unbound_py_tld) gated by the same
 	// toggle's ini flag (python_tld_wildcard), mirroring HSTS (unbound_py_hsts /
 	// python_hsts) -- see pfb_unbound_python()'s ini emit and pfb_unbound.py's
 	// _dnsbl_config_from_manifest().
-	$tld_blacklist = array();
-	$tld_exclusion = array();
-	if (!empty($pfb['dnsbl_tld'])) {
-		$tld_blacklist = pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE) ?: array();
-		$tld_exclusion = pfbng_text_area_decode($pfb['dnsblconfig']['tldexclusion'], TRUE, FALSE, TRUE) ?: array();
+	$tld_wildcard_blacklist = array();
+	$tld_wildcard_exclusion = array();
+	if (!empty($pfb['dnsbl_tld_wildcard'])) {
+		$tld_wildcard_blacklist = pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE) ?: array();
+		$tld_wildcard_exclusion = pfbng_text_area_decode($pfb['dnsblconfig']['tldexclusion'], TRUE, FALSE, TRUE) ?: array();
 	}
 
 	$manifest = array(
 		'version'	=> 1,
 		'config'	=> array(
-			'tld_blacklist'	=> array_values($tld_blacklist),
-			'tld_exclusion'	=> array_values($tld_exclusion),
+			'tld_wildcard_blacklist'	=> array_values($tld_wildcard_blacklist),
+			'tld_wildcard_exclusion'	=> array_values($tld_wildcard_exclusion),
 			'user_whitelist'=> pfb_dnsbl_whitelist_lines(),
 			// ADR-06 (#51): a FULL build CLEARS the temporary unlock set. A Force/Cron
 			// update deletes the pfb_unlock store (pfb_update_unbound) right after this
@@ -8409,10 +8409,10 @@ function pfb_unbound_python($mode) {
 		}
 
 		// issue #1255: DNSBL Wildcard Blocking (TLD) -- HSTS parity (shipped file +
-		// ini enable flag). $pfb['dnsbl_tld'] is used as a bare truthy check elsewhere
+		// ini enable flag). $pfb['dnsbl_tld_wildcard'] is used as a bare truthy check elsewhere
 		// (tld_analysis() gate, pfb_dnsbl_py_swap()), not an == 'on' comparison.
 		$python_tld_wildcard = 'off';
-		if ($pfb['dnsbl_tld']) {
+		if ($pfb['dnsbl_tld_wildcard']) {
 			$python_tld_wildcard = 'on';
 		}
 
@@ -9358,7 +9358,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 
 	// Execute TLD analysis, if configured
 	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && !$pfb['save']) {
-		if ($pfb['dnsbl_tld']) {
+		if ($pfb['dnsbl_tld_wildcard']) {
 			tld_analysis();
 		}
 	}
@@ -16323,7 +16323,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb_dcm_raw = (string) ($pfb['dnsblconfig']['pfb_py_cache_max'] ?? '');
 	$pfb['dnsbl_decisiondb_max'] = ctype_digit($pfb_dcm_raw) ? (string) min(5000000, (int) $pfb_dcm_raw) : '10000';
 	$pfb['dnsbl_top1m_inc']	= $pfb['dnsblconfig']['alexa_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
-	$pfb['dnsbl_tld']	= $pfb['dnsblconfig']['pfb_tld'];				// Enable TLD Function
+	$pfb['dnsbl_tld_wildcard']	= $pfb['dnsblconfig']['pfb_tld'];				// Enable TLD Function
 	$pfb['dnsbl_control']	= $pfb['dnsblconfig']['pfb_control']	?: '';			// Python Control integration
 	$pfb['dnsbl_control_legacy']	= $pfb['dnsblconfig']['pfb_control_legacy']	?? '';	// PFBL-03: deprecated legacy DNS-TXT control transport
 
@@ -16675,9 +16675,9 @@ function sync_package_pfblockerng($cron='') {
 		}
 
 		// If 'TLD' enabled and TLD Blacklists are defined, add to enabled DNSBL lists
-		if ($pfb['dnsbl_tld']) {
-			$tld_blacklist = pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE);
-			if (!empty($tld_blacklist)) {
+		if ($pfb['dnsbl_tld_wildcard']) {
+			$tld_wildcard_blacklist = pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE);
+			if (!empty($tld_wildcard_blacklist)) {
 				$pfb['existing']['dnsbl'][] = 'DNSBL_TLD';
 			}
 		}
@@ -16939,7 +16939,7 @@ function sync_package_pfblockerng($cron='') {
 
 
 			// When DNSBL python blocking mode is enabled, zone should not exist, and data should exist
-			if (!$pfb['dnsbl_tld']) {
+			if (!$pfb['dnsbl_tld_wildcard']) {
 				if (file_exists($pfb['unbound_py_zone'])) {
 					$dnsbl_missing = TRUE;
 				}
@@ -17957,12 +17957,12 @@ function sync_package_pfblockerng($cron='') {
 					}
 
 					// If changes found update DNSBL alias and TLD disabled, call function to update DNSBL alias
-					if ($pfb['aliasupdate'] && !$pfb['dnsbl_tld']) {
+					if ($pfb['aliasupdate'] && !$pfb['dnsbl_tld_wildcard']) {
 						dnsbl_alias_update('update', $alias, $pfbfolder, $lists_dnsbl_current, $alias_cnt);
 					}
 
 					// Collect Alias/Feeds for post TLD function
-					if ($pfb['dnsbl_tld']) {
+					if ($pfb['dnsbl_tld_wildcard']) {
 						if (!is_array($pfb['tld_update'][$alias])) {
 							$pfb['tld_update'][$alias] = array();
 						}
@@ -18045,7 +18045,7 @@ function sync_package_pfblockerng($cron='') {
 		}
 
 		// Save DNSBL Alias statistics (Not for TLD mode)
-		if ($pfb['domain_update'] && !$pfb['dnsbl_tld']) {
+		if ($pfb['domain_update'] && !$pfb['dnsbl_tld_wildcard']) {
 			dnsbl_save_stats();
 		}
 	}
@@ -18135,7 +18135,7 @@ function sync_package_pfblockerng($cron='') {
 			if (pfb_dnsbl_concat_files("{$pfb['dnsbl_file']}.raw", $pfb_dnsbl_sources)) {
 				pfb_logger("... completed", 1);
 
-				pfb_dnsbl_py_swap((bool) $pfb['dnsbl_tld'], "{$pfb['dnsbl_file']}.raw", $pfb['unbound_py_data'], $pfb['unbound_py_zone']);
+				pfb_dnsbl_py_swap((bool) $pfb['dnsbl_tld_wildcard'], "{$pfb['dnsbl_file']}.raw", $pfb['unbound_py_data'], $pfb['unbound_py_zone']);
 
 				// ADR-06: Write the per-feed manifest + IP-stripped raw that the Python
 				// plugin's init builds the DNSBL structures from. Python then owns

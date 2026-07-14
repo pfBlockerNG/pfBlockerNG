@@ -225,8 +225,8 @@ class ReferencePipeline:
         -- it stays loaded and is instead force-classified to exact DATA later, in
         _classify().
         """
-        blacklist = {t.strip(".") for t in self.config.get("tld_blacklist", [])}
-        exclusion_keys = {e.strip(".") for e in self.config.get("tld_exclusion", [])}
+        blacklist = {t.strip(".") for t in self.config.get("tld_wildcard_blacklist", [])}
+        exclusion_keys = {e.strip(".") for e in self.config.get("tld_wildcard_exclusion", [])}
         for line in _read_lines("tld_master.txt"):
             suffix = line.strip()
             if not suffix or suffix.startswith("#"):
@@ -267,7 +267,7 @@ class ReferencePipeline:
             dfound = ".".join(dparts[-2:])
 
         # TLD exclusion: whole-domain in the exclusion set -> transparent (data).
-        exclusion = {e.strip(".") for e in self.config.get("tld_exclusion", [])}
+        exclusion = {e.strip(".") for e in self.config.get("tld_wildcard_exclusion", [])}
         if domain in exclusion:
             dfound = ""
 
@@ -316,7 +316,7 @@ class ReferencePipeline:
         """Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone
         entry, matching the row shape PHP's tld_analysis() writes for the same
         case (``,<tld>,,1,DNSBL_TLD,DNSBL_TLD``)."""
-        for tld in self.config.get("tld_blacklist", []):
+        for tld in self.config.get("tld_wildcard_blacklist", []):
             tld = tld.strip(".")
             if not tld:
                 continue
