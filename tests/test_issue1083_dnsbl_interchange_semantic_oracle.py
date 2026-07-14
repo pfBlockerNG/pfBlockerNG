@@ -7,28 +7,25 @@ log attribution -- independent of HOW it is encoded, so it must stay green,
 unchanged, across that flip (a behaviour-PRESERVING oracle, CLAUDE.md Test
 coverage #1's exception: no red proof required).
 
-Two scenarios, against ``tests/fixtures/dnsbl_corpus/tld/golden_pfb_py_loader_expected.json``
-(hand-transcribed from the golden CSVs/``feeds.json`` -- never computed from the
-same bytes fed to the code under test):
+One remaining scenario, against
+``tests/fixtures/dnsbl_corpus/tld/golden_pfb_py_loader_expected.json`` (hand-
+transcribed from the golden CSVs/``feeds.json`` -- never computed from the same
+bytes fed to the code under test):
 
-A. The REAL legacy loaders ``_load_zone_db``/``_load_data_db`` over
-   ``golden_pfb_py_data.txt``/``golden_pfb_py_zone.txt`` (the PHP-side
-   ``tld_analysis()`` output these two files are transcribed from, and that
-   ``Adr62TldAnalysisCorpusTest.php`` already pins on the PHP side) -- exact
-   dict equality against the golden mapping, previously undriven on the Python
-   side.
 B. The REAL ``build()`` over the ADR-62 corpus, asserting feed/group/log
    attribution for one representative domain per corpus feed -- membership
    itself is already pinned by ``test_adr62_byte_identity_corpus.py``/
    ``test_adr62_parity_oracle.py``; neither file asserts attribution, so this
    complements rather than duplicates them.
+
+(Scenario A -- the legacy ``_load_zone_db``/``_load_data_db`` loaders over the
+golden CSV files -- is RETIRED: ADR-65 removes those loaders entirely.)
 """
 
 from __future__ import annotations
 
 import json
 import os
-from collections import defaultdict
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -46,26 +43,6 @@ _NAME_253 = ".".join(["b" * 61] * 4) + "." + "b" * 5
 def _load_expected() -> dict[str, Any]:
     with open(os.path.join(_TLD_DIR, "golden_pfb_py_loader_expected.json"), encoding="utf-8") as fh:
         return json.load(fh)
-
-
-# --------------------------------------------------------------------------- #
-# Scenario A: legacy _load_zone_db/_load_data_db over the golden CSV files.
-# --------------------------------------------------------------------------- #
-
-
-def test_legacy_loaders_membership_and_attribution_match_golden_fixture() -> None:
-    P.pfb["pfb_py_zone"] = os.path.join(_TLD_DIR, "golden_pfb_py_zone.txt")
-    P.pfb["pfb_py_data"] = os.path.join(_TLD_DIR, "golden_pfb_py_data.txt")
-    feed_group_db: defaultdict[str, Any] = defaultdict(str)
-    feed_group_index = P._load_zone_db(feed_group_db, 0)
-    P._load_data_db(feed_group_db, feed_group_index)
-
-    expected = _load_expected()["legacy_loader"]
-    actual_feed_group_index_db = {str(k): v for k, v in P.feedGroupIndexDB.items()}
-
-    assert dict(P.zoneDB) == expected["zone_db"]
-    assert dict(P.dataDB) == expected["data_db"]
-    assert actual_feed_group_index_db == expected["feed_group_index_db"]
 
 
 # --------------------------------------------------------------------------- #
