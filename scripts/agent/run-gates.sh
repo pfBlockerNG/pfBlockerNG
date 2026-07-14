@@ -5,7 +5,8 @@
 #
 # Usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing]
 #   --worktree       repo checkout to run in (default: cwd's repo root)
-#   --diff BASE      compute touched files vs BASE (default origin/devel); merge-base diff
+#   --diff BASE      compute touched files: BASE...HEAD merge-base diff UNIONED with
+#                     any uncommitted (staged+unstaged) changes vs HEAD (default origin/devel)
 #   --plan           print the gate commands that WOULD run, one per line, and exit
 #   --allow-missing  a missing tool reports SKIP without failing the run (default: fails)
 #
@@ -101,7 +102,11 @@ main() {
 
 	# --diff-filter=ACMR: a pure deletion stages nothing to lint (same rule as the
 	# pre-commit hook) -- per-file gates against ghost paths would always fail.
-	files=$(git -C "$worktree" diff --name-only --diff-filter=ACMR "$base...HEAD") || exit 2
+	committed=$(git -C "$worktree" diff --name-only --diff-filter=ACMR "$base...HEAD") || exit 2
+	# issue #1293: union with uncommitted (staged+unstaged) changes vs HEAD -- else
+	# gates run pre-commit see nothing and print a vacuous bare GATES: PASS.
+	uncommitted=$(git -C "$worktree" diff --name-only --diff-filter=ACMR HEAD) || exit 2
+	files=$(printf '%s\n%s\n' "$committed" "$uncommitted" | LC_ALL=C sort -u | grep -v '^$')
 	# The shellspec gate must also fire when only spec files changed (cross-language
 	# consumers rule): specs are .sh files, so the extension mapping already covers it.
 	cmds=$(printf '%s\n' "$files" | gates_for)
