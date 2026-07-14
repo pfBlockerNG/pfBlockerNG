@@ -3566,9 +3566,10 @@ def inform_super(id: int, qstate: module_qstate, superqstate: module_qstate, qda
 #   * Build-time OPTIMISATIONS are dropped, not reimplemented -- no dedup/
 #     collapse/build-time whitelist removal (the dict load dedups keys for
 #     free; whitelisting is QUERY-TIME via whiteDB).
-#   * Classification mirrors tld_analysis/tld_search: a registrable parent ->
-#     wildcard ZONE; a deeper sub-domain under an unknown public suffix, or a
-#     TLD-excluded name -> exact DATA; a blacklisted TLD -> a whole-TLD ZONE.
+#   * Classification (formerly mirrored from PHP's TLD pass; sole classifier
+#     since ADR-65): a registrable parent -> wildcard ZONE; a deeper sub-domain
+#     under an unknown public suffix, or a TLD-excluded name -> exact DATA; a
+#     blacklisted TLD -> a whole-TLD ZONE.
 #   * IP extraction is NOT Python's job -- it stays in PHP; the parser SKIPS
 #     non-domain lines and never produces firewall input.
 #   * build() is REENTRANT (returns a new structure-set, mutates no module
@@ -4306,7 +4307,7 @@ def _dnsbl_load_tld_wildcard_master(
     tld_wildcard_exclusion: Iterable[str],
 ) -> dict[str, dict[str, str]]:
     """Build the public-suffix oracle tlds[tld][full-suffix], minus any blacklisted
-    or excluded TLD -- mirrors PHP's tld_analysis() master-list load loop."""
+    or excluded TLD -- the classification pass's sole master-list loader (ADR-65)."""
     blacklist = {t.strip(".") for t in tld_wildcard_blacklist}
     exclusion_keys = {e.strip(".") for e in tld_wildcard_exclusion}
     tlds: dict[str, dict[str, str]] = {}
@@ -4326,8 +4327,8 @@ def _dnsbl_load_tld_wildcard_master(
 def _dnsbl_tld_wildcard_search(
     tlds: dict[str, dict[str, str]], tld: str, dparts: list[str], j: int, k: int
 ) -> str | None:
-    """Mirrors PHP's tld_search(): if the j-label suffix is a known public suffix,
-    the registrable parent is the k-label slice."""
+    """If the j-label suffix is a known public suffix, the registrable parent is
+    the k-label slice (formerly mirrored from PHP's tld_search(), ADR-65)."""
     tld_query = ".".join(dparts[-j:])
     if tld_query in tlds.get(tld, {}):
         return ".".join(dparts[-k:])
@@ -4337,10 +4338,10 @@ def _dnsbl_tld_wildcard_search(
 def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) -> tuple[str, str]:
     """Return ``(DNSBL_CLASS_ZONE, registrable-parent)`` or ``(DNSBL_CLASS_DATA, domain)``.
 
-    Mirrors PHP's tld_analysis() zone/data split exactly: a registrable parent ->
-    wildcard ZONE; a deeper sub-domain whose parent is not a known public suffix ->
-    exact DATA; a whole-domain TLD exclusion forces exact DATA (transparent, not
-    wildcarded).
+    The zone/data split (sole classifier since ADR-65 -- formerly mirrored from
+    PHP's TLD pass): a registrable parent -> wildcard ZONE; a deeper sub-domain
+    whose parent is not a known public suffix -> exact DATA; a whole-domain TLD
+    exclusion forces exact DATA (transparent, not wildcarded).
 
     issue #1255: an empty ``tlds`` (TLD-Wildcard OFF, or no oracle staged) forces
     exact DATA for every domain -- defense-in-depth, since the dcnt==2 branch below
@@ -5065,9 +5066,9 @@ def build(
             next_index += 1
         return idx
 
-    # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry,
-    # matching the row shape PHP's tld_analysis() writes for the same case
-    # (``,<tld>,,1,DNSBL_TLD,DNSBL_TLD``).
+    # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry
+    # (feed/group ``DNSBL_TLD``, log ``1``) -- the sole writer of this row shape
+    # since ADR-65 retired PHP's own equivalent write.
     for raw_tld in tld_wildcard_blacklist:
         tld = raw_tld.strip(".")
         if not tld:

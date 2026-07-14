@@ -11,29 +11,22 @@ use PHPUnit\Framework\TestCase;
  * Every DNSBL interchange writer/reader now speaks schema-v1 NDJSON
  * (pfb_dnsbl_ndjson_emit_domain_row()/emit_abp_row()/parse_row()), never the retired
  * positional CSV. Pins: pfb_unbound_python_sources() extracts a domain/abp raw payload
- * from NDJSON staging and silently skips an undecodable line; tld_analysis() over an
- * NDJSON pfb_dnsbl.raw produces the expected NDJSON data/zone rows, including the
- * synthetic TLD-blacklist row; pfb_dnsbl_parse_compute() returns attribution read from
- * NDJSON py_data/py_zone AND refuses an abp-embedded-needle spoof (hostile row).
+ * from NDJSON staging and silently skips an undecodable line; pfb_dnsbl_parse_compute()
+ * returns attribution read from NDJSON py_data/py_zone AND refuses an abp-embedded-needle
+ * spoof (hostile row).
  */
 #[CoversFunction('pfb_unbound_python_sources')]
-#[CoversFunction('tld_analysis')]
 #[CoversFunction('pfb_dnsbl_parse_compute')]
 final class DnsblNdjsonFlipTest extends TestCase
 {
 	private string $tmp;
 	private bool $hadPfb = false;
 	private array $originalPfb = [];
-	private bool $hadTlds = false;
-	private mixed $originalTlds = null;
 
 	protected function setUp(): void
 	{
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
-		$this->hadTlds = array_key_exists('tlds', $GLOBALS);
-		$this->originalTlds = $GLOBALS['tlds'] ?? null;
-		$GLOBALS['tlds'] = array();
 
 		$this->tmp = sys_get_temp_dir() . '/pfb_ndjson_flip_' . uniqid('', true);
 		mkdir("{$this->tmp}/dnsbl", 0777, true);
@@ -49,11 +42,6 @@ final class DnsblNdjsonFlipTest extends TestCase
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
 			unset($GLOBALS['pfb']);
-		}
-		if ($this->hadTlds) {
-			$GLOBALS['tlds'] = $this->originalTlds;
-		} else {
-			unset($GLOBALS['tlds']);
 		}
 		pfb_dnsbl_prefetch_store(NULL);
 		rmdir_recursive($this->tmp);
@@ -93,63 +81,6 @@ final class DnsblNdjsonFlipTest extends TestCase
 			$raw,
 			'expected the domain to be extracted, the abp raw passed through verbatim, and the NULL line silently skipped; got: '
 				. var_export($raw, TRUE)
-		);
-	}
-
-	// --- tld_analysis(): NDJSON pfb_dnsbl.raw -> NDJSON data/zone -----------------
-
-	public function testTldAnalysisOverNdjsonProducesExpectedDataZoneRowsIncludingSyntheticTldRow(): void
-	{
-		$tldMaster = "{$this->tmp}/tld_master.txt";
-		file_put_contents($tldMaster, "example\ndeep.example\n");
-
-		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
-			'log'              => "{$this->tmp}/pfblockerng.log",
-			'errlog'           => "{$this->tmp}/error.log",
-			'dnsdir'           => "{$this->tmp}/dnsbl",
-			'dnsbl_file'       => "{$this->tmp}/pfb_dnsbl",
-			'dnsbl_tmpdir'     => "{$this->tmp}/DNSBL_TMP",
-			'dnsbl_tmp'        => "{$this->tmp}/dnsbl_tmp",
-			'dnsbl_tld_data'   => $tldMaster,
-			'unbound_py_data'  => "{$this->tmp}/pfb_py_data.txt",
-			'unbound_py_zone'  => "{$this->tmp}/pfb_py_zone.txt",
-			'domain_max_cnt'   => 1000000,
-			'dnsbl_info'       => "{$this->tmp}/dnsbl_info.sqlite",
-			'sqlite_timeout'   => 2000,
-			'alias_dnsbl_all'  => [],
-			'dnsbl_info_stats' => [],
-			// pre-existing 'DNSBL_TLD' key (pre-seeded null, not missing) avoids an
-			// unrelated undefined-array-key warning in tld_analysis()'s blacklist branch.
-			'tld_update'       => ['DNSBL_TLD' => null],
-			'dnsalias'         => "{$this->tmp}/dnsalias",
-			'dnsblconfig'      => [
-				'tldblacklist' => base64_encode('blacklisted-tld'),
-				'tldexclusion' => '',
-			],
-		]);
-
-		file_put_contents(
-			"{$this->tmp}/pfb_dnsbl.raw",
-			pfb_dnsbl_ndjson_emit_domain_row('sub.deep.example', '1', 'FeedZone', 'GroupZone')
-			. pfb_dnsbl_ndjson_emit_domain_row('nosuffixmatch.example.invalidtld', '1', 'FeedData', 'GroupData')
-		);
-
-		tld_analysis();
-
-		$zone = (string) file_get_contents("{$this->tmp}/pfb_py_zone.txt");
-		$data = (string) file_get_contents("{$this->tmp}/pfb_py_data.txt");
-
-		$this->assertSame(
-			pfb_dnsbl_ndjson_emit_domain_row('blacklisted-tld', '1', 'DNSBL_TLD', 'DNSBL_TLD')
-			. pfb_dnsbl_ndjson_emit_domain_row('sub.deep.example', '1', 'FeedZone', 'GroupZone'),
-			$zone,
-			'expected the synthetic TLD-blacklist row (W4) followed by the known-suffix zone match (W5); got: '
-				. var_export($zone, TRUE)
-		);
-		$this->assertSame(
-			pfb_dnsbl_ndjson_emit_domain_row('nosuffixmatch.example.invalidtld', '1', 'FeedData', 'GroupData'),
-			$data,
-			'expected the no-suffix-match domain as the transparent data row (W6); got: ' . var_export($data, TRUE)
 		);
 	}
 

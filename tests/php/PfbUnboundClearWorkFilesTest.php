@@ -71,4 +71,28 @@ final class PfbUnboundClearWorkFilesTest extends TestCase
 
 		$this->assertFileDoesNotExist($legacy);
 	}
+
+	/** ADR-65: sweep a stray pre-upgrade pfb_py_data.txt (writer retired). */
+	public function testStrayUnboundPyDataIsSweptAlongsideTheOtherWorkFiles(): void
+	{
+		$legacy = $GLOBALS['pfb']['unbound_py_data'];
+		file_put_contents($legacy, "stale retired interchange content\n");
+		$this->assertFileExists($legacy, 'precondition: the stray retired file exists');
+
+		pfb_unbound_clear_work_files();
+
+		$this->assertFileDoesNotExist($legacy, 'a stray pre-ADR-65 pfb_py_data.txt must be swept opportunistically');
+	}
+
+	/** ADR-65: sweep a stray pre-upgrade pfb_py_zone.txt (writer retired). */
+	public function testStrayUnboundPyZoneIsSweptAlongsideTheOtherWorkFiles(): void
+	{
+		$legacy = $GLOBALS['pfb']['unbound_py_zone'];
+		file_put_contents($legacy, "stale retired interchange content\n");
+		$this->assertFileExists($legacy, 'precondition: the stray retired file exists');
+
+		pfb_unbound_clear_work_files();
+
+		$this->assertFileDoesNotExist($legacy, 'a stray pre-ADR-65 pfb_py_zone.txt must be swept opportunistically');
+	}
 }

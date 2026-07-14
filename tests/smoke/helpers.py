@@ -320,10 +320,11 @@ class DnsblCase:
     # python_control_legacy, emitted `on` only when BOTH pfb_control and pfb_control_legacy
     # are on, inc:4744). None (default) emits nothing.
     control_legacy: bool | None = None
-    # tld_enabled -> the "TLD Function" toggle (CFG_DNSBL_SETTINGS/pfb_tld -> $pfb['dnsbl_tld_wildcard'],
-    # inc:15156). On: tld_analysis() runs (inc:8372) with no blacklist/exclusion configured —
-    # a coarse regression guard (ADR-62 issue #1060) that TLD mode coexisting with a plain feed
-    # does not disturb ordinary DNSBL blocking. False (default) emits nothing.
+    # tld_enabled -> the "TLD Function" toggle (CFG_DNSBL_SETTINGS/pfb_tld -> $pfb['dnsbl_tld_wildcard']).
+    # On: the manifest-build TLD-Wildcard classifier runs with no blacklist/exclusion
+    # configured -- a coarse regression guard (ADR-62 issue #1060) that TLD mode
+    # coexisting with a plain feed does not disturb ordinary DNSBL blocking. False
+    # (default) emits nothing.
     tld_enabled: bool = False
 
     @property
