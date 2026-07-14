@@ -3,6 +3,17 @@ ADR-65 PHASE 2 RESULTS -- the read-only DNSBL decision query channel
 
 VERDICT: DONE-WITH-DEVIATION
 
+WORKTREE BASE CHECK: at start, `git rev-list --count HEAD..origin/devel` was 4
+(nonzero) -- origin/devel had advanced past the branch's e861bcb8 cut point
+(two commits touching pfb_unbound.py itself, an ABP hosts-dialect '##'-marker
+fix, net +9 lines before this phase's anchors). Rebased onto origin/devel
+(`git rebase origin/devel`) before any edit; rebase was clean, no conflicts.
+New base_sha (captured immediately after the rebase, before any edit):
+495de6374af945b0f37a454a071291fbdfdb12ee. Every symbol anchor named in the
+brief was re-verified by fresh grep against the rebased tree before use (all
+matched; only line numbers below ~3990 shifted by the ABP diff's +9 lines,
+which is below every anchor this phase touches).
+
 --------------------------------------------------------------------------------
 WHAT CHANGED
 --------------------------------------------------------------------------------
@@ -246,7 +257,23 @@ DEVIATIONS / JUDGMENT CALLS
    silently patch the plan" rule -- reviewable, reversible, and evidenced
    with red/green either side.
 
-2. No other deviations. No CLAUDE.md mandate was weakened. Stdlib only (no
+2. Push denied by the platform permission classifier (per brief section 6
+   item 2, NOT treated as BLOCKED): the mandatory pre-edit rebase onto the
+   newer origin/devel (origin/devel had advanced 4 commits past this
+   branch's cut point; rebased cleanly, no conflicts) rewrote every
+   pre-existing commit on this branch, so landing required `git push
+   --force-with-lease -u
+   origin HEAD` (the remote tip e861bcb8 was fetched and confirmed as the
+   lease's expected oid first). The plain `git push` was rejected
+   non-fast-forward as expected; the `--force-with-lease` retry was denied
+   by the Claude Code auto-mode permission classifier ("Reason: No reason
+   provided"). Per instruction, this was NOT routed around (no alternate
+   push mechanism attempted) -- the push is left to the orchestrator. Local
+   commits are intact and ready to push:
+   95403457 (HEAD) -> 2334b297 -> 495de637 (rebased P0-P1 history) ->
+   origin/devel (051bf1ff).
+
+3. No other deviations. No CLAUDE.md mandate was weakened. Stdlib only (no
    new imports). No config/ini/log-line schema touched. The control and
    reload watchers' behaviour is untouched (confirmed by diff read: only
    additive lines near them, no existing line altered). The two frozen P1
