@@ -256,6 +256,7 @@ def _query_domain(vm: SmokeVM, domain: str, *, timeout: float = 60.0) -> dict[st
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(300)  # two real blocks + the async dnsblcache settle exceed the smoke tier's 30s default
 def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: SmokeVM) -> None:
     """ADR-65 D4 + Semantic 3: pfb_dnsbl_query mirrors a real block, with ZERO query side effects.
 
@@ -556,6 +557,33 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
 # --------------------------------------------------------------------------- #
 
 
+_DNSBL_SETTINGS_PATH = "installedpackages/pfblockerngdnsblsettings/config/0"
+_NOLOG_OPEN, _NOLOG_CLOSE = "<<<ADR65NOLOG>>>", "<<<ADR65NOLOGEND>>>"
+
+
+def _set_py_nolog(vm: SmokeVM, value: str, *, timeout: float = 60.0) -> str:
+    """Set DNSBL's ``pfb_py_nolog`` ("log events via the DNSBL Webserver, not python").
+
+    The webserver-hit path this row pins EXISTS only under this setting: it is what makes
+    pfb_create_lighttpd() emit the accesslog pipe that feeds pfb_log_event(). Returns the
+    previous value so the caller can restore it.
+    """
+    snippet = (
+        f"$__c = config_get_path({h._php_str(_DNSBL_SETTINGS_PATH)}, array());\n"
+        "$__prev = isset($__c['pfb_py_nolog']) ? (string) $__c['pfb_py_nolog'] : '';\n"
+        f"$__c['pfb_py_nolog'] = {h._php_str(value)};\n"
+        f"config_set_path({h._php_str(_DNSBL_SETTINGS_PATH)}, $__c);\n"
+        "write_config('pfBlockerNG smoke: ADR-65 webserver-hit logging');\n"
+        f"echo '{_NOLOG_OPEN}' . $__prev . '{_NOLOG_CLOSE}';\n"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    out = res.stdout or ""
+    start, end = out.find(_NOLOG_OPEN), out.find(_NOLOG_CLOSE)
+    if res.returncode != 0 or start == -1 or end == -1:
+        raise RuntimeError(f"_set_py_nolog({value!r}) failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}")
+    return out[start + len(_NOLOG_OPEN) : end]
+
+
 @pytest.mark.timeout(300)  # sinkhole bind poll + block-page hit + log/counter settle exceed the 30s default
 def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -> None:
     """ADR-65 D4: a real sinkhole (VIP block-page) hit attributes via the query
@@ -577,83 +605,91 @@ def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -
     feed = h.write_local_feed(adr65_vm, "adr65_vip.txt", f"{domain}\n")
     spec = h.DnsblCase(aliasname="adr65vip", feed_url=feed, header="adr65viphdr", mode=h.DnsblMode.VIP)
 
-    # scope="update" (not the default "updatednsbl"): only a FULL update pass
-    # provisions the sinkhole NAT/lighttpd-conf/restart -- test_dnsbl_block_page.py
-    # documents the same split.
-    with h.CaseContext(adr65_vm, spec, scope="update"):
-        answer = h.dns_probe(adr65_vm, domain)
-        assert h.is_vip(answer), f"expected VIP block for {domain!r}, got {answer!r}"
+    # The webserver-hit event exists ONLY under pfb_py_nolog: it is what makes the sinkhole's
+    # lighttpd emit the accesslog pipe that feeds pfb_log_event(). Set it BEFORE the update
+    # pass below, which regenerates the lighttpd conf; restore it afterwards.
+    prev_nolog = _set_py_nolog(adr65_vm, "on")
+    try:
+        # scope="update" (not the default "updatednsbl"): only a FULL update pass
+        # provisions the sinkhole NAT/lighttpd-conf/restart -- test_dnsbl_block_page.py
+        # documents the same split.
+        with h.CaseContext(adr65_vm, spec, scope="update"):
+            answer = h.dns_probe(adr65_vm, domain)
+            assert h.is_vip(answer), f"expected VIP block for {domain!r}, got {answer!r}"
 
-        verdict = _query_domain(adr65_vm, domain)
-        assert verdict["blocked"] is True, f"expected blocked=true for {domain!r}, got {verdict!r}"
-        expected_group, expected_feed = verdict["group"], verdict["feed"]
-        assert expected_group and expected_group != "Unknown", (
-            f"expected a real (non-Unknown) group from pfb_dnsbl_query({domain!r}), got {verdict!r}"
-        )
-
-        c0, detail0 = _wait_group_counter_at_least(adr65_vm, expected_group, 0)
-        assert c0 >= 0, f"could not read the baseline counter for group {expected_group!r}: {detail0}"
-
-        curl_argv = (
-            h.GUEST_CURL,
-            "-sS",
-            "--connect-timeout",
-            "3",
-            "--max-time",
-            "8",
-            "-H",
-            f"Host: {domain}",
-            f"http://{h.DEFAULT_DNSBL_VIP4}/",
-        )
-        attempts, delay = 10, 1.5  # lighttpd's post-fork bind is normally sub-second; generous headroom
-        result: subprocess.CompletedProcess[str] | None = None
-        for attempt in range(attempts):
-            result = adr65_vm.ssh(*curl_argv, timeout=15.0)
-            if result.returncode == 0 and "Site blocked via DNSBL" in result.stdout:
-                break
-            if attempt < attempts - 1:
-                time.sleep(delay)
-        assert result is not None  # attempts >= 1, loop always assigns
-
-        if result.returncode != 0 or "Site blocked via DNSBL" not in result.stdout:
-            diag = adr65_vm.ssh(
-                "ps auxww | grep -i '[l]ighttpd_pfb'; "
-                "/usr/bin/sockstat -4 -l 2>/dev/null | grep -E ':80([[:space:]]|$)' || echo NO_LISTENER",
-                timeout=15.0,
-            )
-            pytest.fail(
-                f"sinkhole curl never succeeded after {attempts} attempts: "
-                f"rc={result.returncode} stderr={result.stderr!r}\n"
-                f"lighttpd_pfb/:80 snapshot (rc={diag.returncode}):\n{diag.stdout}{diag.stderr}"
+            verdict = _query_domain(adr65_vm, domain)
+            assert verdict["blocked"] is True, f"expected blocked=true for {domain!r}, got {verdict!r}"
+            expected_group, expected_feed = verdict["group"], verdict["feed"]
+            assert expected_group and expected_group != "Unknown", (
+                f"expected a real (non-Unknown) group from pfb_dnsbl_query({domain!r}), got {verdict!r}"
             )
 
-        deadline = time.monotonic() + 30.0
-        n = 0
-        first_line = ""
-        while time.monotonic() < deadline:
-            res_lines = adr65_vm.ssh("grep", "-hF", "--", "DNSBL-Full,", "/var/log/pfblockerng/dnsbl.log", timeout=15.0)
-            matching = [ln for ln in res_lines.stdout.splitlines() if ln and domain in ln]
-            n = len(matching)
-            if n >= 1:
-                first_line = matching[0]
-                break
-            time.sleep(2.0)
-        assert n >= 1, f"expected >=1 'DNSBL-Full,' host dnsbl.log line for {domain}, found {n}"
+            c0, detail0 = _wait_group_counter_at_least(adr65_vm, expected_group, 0)
+            assert c0 >= 0, f"could not read the baseline counter for group {expected_group!r}: {detail0}"
 
-        fields = first_line.split(",")
-        assert len(fields) > 8, f"unexpected webserver-hit dnsbl.log line shape: {first_line!r}"
-        group_seen, feed_seen = fields[6], fields[8]
-        assert group_seen == expected_group and group_seen != "Unknown", (
-            f"webserver-hit log group {group_seen!r} != query group {expected_group!r} for {domain!r} "
-            f"(line: {first_line!r})"
-        )
-        assert feed_seen == expected_feed and feed_seen != "Unknown", (
-            f"webserver-hit log feed {feed_seen!r} != query feed {expected_feed!r} for {domain!r} "
-            f"(line: {first_line!r})"
-        )
+            curl_argv = (
+                h.GUEST_CURL,
+                "-sS",
+                "--connect-timeout",
+                "3",
+                "--max-time",
+                "8",
+                "-H",
+                f"Host: {domain}",
+                f"http://{h.DEFAULT_DNSBL_VIP4}/",
+            )
+            attempts, delay = 10, 1.5  # lighttpd's post-fork bind is normally sub-second; generous headroom
+            result: subprocess.CompletedProcess[str] | None = None
+            for attempt in range(attempts):
+                result = adr65_vm.ssh(*curl_argv, timeout=15.0)
+                if result.returncode == 0 and "Site blocked via DNSBL" in result.stdout:
+                    break
+                if attempt < attempts - 1:
+                    time.sleep(delay)
+            assert result is not None  # attempts >= 1, loop always assigns
 
-        c_after, detail_after = _wait_group_counter_at_least(adr65_vm, expected_group, c0 + n)
-        assert c_after == c0 + n, (
-            f"expected group {expected_group!r} counter to be EXACTLY {c0 + n} (baseline {c0} + "
-            f"{n} observed 'DNSBL-Full,' line(s)), got {c_after} ({detail_after})"
-        )
+            if result.returncode != 0 or "Site blocked via DNSBL" not in result.stdout:
+                diag = adr65_vm.ssh(
+                    "ps auxww | grep -i '[l]ighttpd_pfb'; "
+                    "/usr/bin/sockstat -4 -l 2>/dev/null | grep -E ':80([[:space:]]|$)' || echo NO_LISTENER",
+                    timeout=15.0,
+                )
+                pytest.fail(
+                    f"sinkhole curl never succeeded after {attempts} attempts: "
+                    f"rc={result.returncode} stderr={result.stderr!r}\n"
+                    f"lighttpd_pfb/:80 snapshot (rc={diag.returncode}):\n{diag.stdout}{diag.stderr}"
+                )
+
+            deadline = time.monotonic() + 30.0
+            n = 0
+            first_line = ""
+            while time.monotonic() < deadline:
+                res_lines = adr65_vm.ssh("grep", "-hF", "--", "DNSBL-Full,", _DNSBL_LOG_PATHS[0], timeout=15.0)
+                matching = [ln for ln in res_lines.stdout.splitlines() if ln and domain in ln]
+                n = len(matching)
+                if n >= 1:
+                    first_line = matching[0]
+                    break
+                time.sleep(2.0)
+            assert n >= 1, f"expected >=1 'DNSBL-Full,' host dnsbl.log line for {domain}, found {n}"
+
+            fields = first_line.split(",")
+            assert len(fields) > 8, f"unexpected webserver-hit dnsbl.log line shape: {first_line!r}"
+            group_seen, feed_seen = fields[6], fields[8]
+            assert group_seen == expected_group and group_seen != "Unknown", (
+                f"webserver-hit log group {group_seen!r} != query group {expected_group!r} for {domain!r} "
+                f"(line: {first_line!r})"
+            )
+            assert feed_seen == expected_feed and feed_seen != "Unknown", (
+                f"webserver-hit log feed {feed_seen!r} != query feed {expected_feed!r} for {domain!r} "
+                f"(line: {first_line!r})"
+            )
+
+            c_after, detail_after = _wait_group_counter_at_least(adr65_vm, expected_group, c0 + n)
+            assert c_after == c0 + n, (
+                f"expected group {expected_group!r} counter to be EXACTLY {c0 + n} (baseline {c0} + "
+                f"{n} observed 'DNSBL-Full,' line(s)), got {c_after} ({detail_after})"
+            )
+
+    finally:
+        _set_py_nolog(adr65_vm, prev_nolog)
