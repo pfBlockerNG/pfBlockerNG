@@ -7696,15 +7696,26 @@ function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 	}
 	if (str_contains($line, '#')) {
 		$first = FALSE;
+		$marker_len = 0;
 		foreach (array('##', '#@#', '#?#', '#%#', '#$#') as $eh_marker) {
 			$pos = strpos($line, $eh_marker);
 			if ($pos !== FALSE && ($first === FALSE || $pos < $first)) {
 				$first = $pos;
+				$marker_len = strlen($eh_marker);
 			}
 		}
-		if ($first !== FALSE &&
-		    ($first === 0 || strspn($line, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-') >= $first)) {
-			return TRUE;
+		if ($first !== FALSE) {
+			if ($first === 0) {
+				// issue #1276: a hosts-dialect '## Section' comment shares the
+				// marker-at-position-0 shape with a real cosmetic rule -- require
+				// a non-whitespace char immediately after the marker.
+				$after = substr($line, $marker_len, 1);
+				if ($after !== '' && $after !== ' ' && $after !== "\t") {
+					return TRUE;
+				}
+			} elseif (strspn($line, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-') >= $first) {
+				return TRUE;
+			}
 		}
 	}
 	if (str_starts_with($line, '/') && !str_starts_with($line, '//')) {
