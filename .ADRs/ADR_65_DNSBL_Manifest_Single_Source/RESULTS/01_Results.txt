@@ -27,9 +27,7 @@ fixture files added or modified -- both modules reuse ONLY existing committed
 corpora (tests/fixtures/dnsbl_corpus/, tests/fixtures/adr06_golden/) and
 existing test-module helper functions (imported, never re-implemented).
 
-Commit: (a commit cannot embed its own resulting hash -- content-addressed
-self-reference is impossible. Recorded in the immediately-following docs-only
-follow-up commit on this same branch, which updates only this one line.)
+Commit: bb2733550c4a1d49c6064dc0f00d87f7ed8c5ced
 
 --------------------------------------------------------------------------------
 GATES (exact commands + pasted output tails)
@@ -73,10 +71,10 @@ below showed only the two new test files).
    a local sandbox PATH gap, not a repo issue; the console-script IS installed,
    `python3 -m mypy` already proved the tool clean in item 5 above)
 
-7) git diff origin/devel...HEAD --stat (after the commit below)
-   .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/01_Results.txt | <new>
-   tests/test_adr65_decision_oracle.py                              | <new>
-   tests/test_adr65_fallback_characterization.py                   | <new>
+7) git diff origin/devel...HEAD --stat
+   .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/01_Results.txt | 283 ++++++++++
+   tests/test_adr65_decision_oracle.py                              | 430 +++++++++++++
+   tests/test_adr65_fallback_characterization.py                    | 287 +++++++++
    (plus phase 0's already-landed ADR.md + 7 phase-prompt files, prior commit
    06239ed3 -- tests/ + .ADRs/ only; no src/, scripts/, or www/ touched)
 
