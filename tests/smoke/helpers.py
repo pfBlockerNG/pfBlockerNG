@@ -320,7 +320,7 @@ class DnsblCase:
     # python_control_legacy, emitted `on` only when BOTH pfb_control and pfb_control_legacy
     # are on, inc:4744). None (default) emits nothing.
     control_legacy: bool | None = None
-    # tld_enabled -> the "TLD Function" toggle (CFG_DNSBL_SETTINGS/pfb_tld -> $pfb['dnsbl_tld'],
+    # tld_enabled -> the "TLD Function" toggle (CFG_DNSBL_SETTINGS/pfb_tld -> $pfb['dnsbl_tld_wildcard'],
     # inc:15156). On: tld_analysis() runs (inc:8372) with no blacklist/exclusion configured —
     # a coarse regression guard (ADR-62 issue #1060) that TLD mode coexisting with a plain feed
     # does not disturb ordinary DNSBL blocking. False (default) emits nothing.
@@ -1783,11 +1783,13 @@ def set_dnsbl_lenient(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
 def set_dnsbl_tld_wildcard(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Toggle DNSBL Wildcard Blocking (TLD) (``pfb_tld`` -> ini ``python_tld_wildcard``).
 
-    issue #1255: ``pfb_tld`` is read as a bare truthy check (``$pfb['dnsbl_tld']``), so
-    off is the empty string, matching :func:`set_dnsbl_control`. On: the next reload's
-    ini carries ``python_tld_wildcard = on`` and the shipped public-suffix oracle
-    (``pfb_py_tld.txt``) gates classify()'s 2-label wildcard branch; off: the oracle is
-    never opened, so classify() forces exact DATA for every domain.
+    issue #1255: ``pfb_tld`` is read as a bare truthy check
+    (``$pfb['dnsbl_tld_wildcard']``), so off is the empty string, matching
+    :func:`set_dnsbl_control`. On: the next reload's ini carries
+    ``python_tld_wildcard = on`` and the shipped public-suffix oracle
+    (``pfb_py_tld.txt``) gates tld_wildcard_classify()'s 2-label wildcard branch; off:
+    the oracle is never opened, so tld_wildcard_classify() forces exact DATA for every
+    domain.
     """
     val = "on" if on else ""
     snippet = (
@@ -2951,7 +2953,7 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # The deprecated DNS-TXT sub-path (pfb_control_legacy -> ini python_control_legacy).
         settings["pfb_control_legacy"] = "on" if spec.control_legacy else ""
     if spec.tld_enabled:
-        # "TLD Function" (CFG_DNSBL_SETTINGS/pfb_tld -> $pfb['dnsbl_tld'], inc:15156).
+        # "TLD Function" (CFG_DNSBL_SETTINGS/pfb_tld -> $pfb['dnsbl_tld_wildcard'], inc:15156).
         settings["pfb_tld"] = "on"
     # The primary feed row + any ABP extra rows, all in ONE DNSBL list group. Each
     # row is downloaded and its lines captured per-line independently, so an ABP
