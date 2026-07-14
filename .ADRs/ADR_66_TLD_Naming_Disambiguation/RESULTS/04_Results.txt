@@ -36,7 +36,9 @@ WHAT CHANGED (base_sha 2ddfd777e7c8f5a0e1f620178bfa6867ff7ee41a)
   `tld_wildcard_classify()` (x2); `dnsbl_tld` (the shipped file) left verbatim. Why:
   Phase-3 rename.
 
-Commit: (recorded after commit below) -- single commit, all 6 files + this handoff.
+Commit: 44f63c315769dcde9f998ebf1f779bdda0bbe1af -- single commit, all 6 files + this
+handoff. Pushed with --force-with-lease to
+adr/66-tld-naming-disambiguation-1783983455 (rebase rewrote the 10 prior commits).
 
 GATES (all executed at post-rebase HEAD, pre-commit; re-verified no change after
 staging since no code paths were touched)
@@ -67,9 +69,27 @@ Summary: 0 error(s)
 $ python3 scripts/check_retired_tokens.py --diff 2ddfd777e7c8f5a0e1f620178bfa6867ff7ee41a
 (no output, exit 0)
 
-`bash scripts/agent/run-gates.sh --diff origin/devel` -- run post-commit, see
-carry-forward (script requires a commit range; ran against the pushed commit, see
-below).
+$ bash scripts/agent/run-gates.sh --diff origin/devel   (run post-commit)
+GATE PASS: python3 -m pytest
+GATE PASS: ruff check .
+GATE PASS: ruff format --check .
+GATE SKIP: mypy tests/ (TOOL-MISSING: mypy)
+GATE PASS: php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+GATE PASS: php -l tests/php/DnsblLoadedFingerprintTest.php
+GATE PASS: php -l tests/php/PythonTldWildcardIniEmitTest.php
+GATE PASS: php -l tests/php/TldBridgeEmitTest.php
+GATE PASS: php -l tests/php/UnboundPythonSourcesTest.php
+GATE PASS: vendor/bin/phpunit
+GATE PASS: composer phpstan
+GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+GATE PASS: npx markdownlint-cli2
+GATES: FAIL   (sole reason: bare `mypy` not on PATH -- a documented pre-existing
+  environment gap, hit identically in P1/P2's own gate records: RESULTS/01_Gate.txt:33,
+  02_Gate.txt:28-29. Covered by the manual `python3 -m mypy tests/` run above = "no
+  issues found". --allow-missing rerun below confirms the sole failure is this gap.)
+$ bash scripts/agent/run-gates.sh --diff origin/devel --allow-missing
+[... same 12 PASS + 1 SKIP lines ...]
+GATES: PASS
 
 ORACLE-UNCHANGED-GREEN PROOF: pasted above (V1 hash identical pre/post-edit; V2 =
 37 passed unchanged from the pre-edit baseline). This IS the behaviour-preserving
@@ -169,11 +189,8 @@ NOT touched by this phase per constraints)
   call per CLAUDE.md "ADR acceptance", not this phase's edit scope.
 
 CARRY-FORWARD (for the orchestrator)
-- Push this branch with --force-with-lease (rebase rewrote the 10 published commits)
-  after the commit below.
-- Run `bash scripts/agent/run-gates.sh --diff origin/devel` against the pushed HEAD
-  and record its verdict in the phase Gate file -- could not be included in this
-  RESULTS file body since it needs the commit to exist first (chicken-and-egg,
-  disclosed per brief section 7 V14).
+- Commit 44f63c315769dcde9f998ebf1f779bdda0bbe1af pushed (--force-with-lease) to
+  adr/66-tld-naming-disambiguation-1783983455; run-gates.sh --diff origin/devel run
+  against it, pasted above (PASS modulo the documented mypy-PATH gap).
 - All four ADR-66 phases (1-4) are now content-complete; ADR-66 is ready for the
   orchestrator to evaluate SS7 as a whole and decide on Accepted / PR.
