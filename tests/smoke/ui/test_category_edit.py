@@ -221,6 +221,50 @@ def test_dnsbl_alias_bad_name_rejected_leaves_config_unchanged(
         _del_rowid(vm, CFG_DNSBL, rowid)
 
 
+def test_dnsbl_disabled_row_reserved_header_rejected_leaves_config_unchanged(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A Disabled row's Header='DNSBLIP' aborts the save -> config UNCHANGED (issue #1270).
+
+    Before #1270, the header-format/reserved checks were gated on
+    ``state-N != 'Disabled'`` (pfblockerng_category_edit.php), so a row saved
+    while Disabled skipped validation entirely and a raw 'DNSBLIP' header could
+    reach config.xml unvalidated -- colliding with the package's own
+    DNSBLIP_v4.txt/_v6.txt list on disk. ``pfb_header_reserved_error()`` now
+    runs whenever the field is non-empty, regardless of row state; this is the
+    ONLY tier that can observe it (save-time POST behaviour, invisible to a
+    GET-only ui_render check).
+
+    Given:
+        A known-good DNSBL alias with one Disabled placeholder row (header
+        empty) is saved at a free rowid (the precondition asserted).
+    When:
+        The SAME rowid is re-posted with the still-Disabled row's
+        header-0 = 'DNSBLIP'.
+    Then:
+        The reserved-header guard aborts the whole save, so ``row/0/header``
+        in config.xml stays empty -- UNCHANGED.
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    base = f"{CFG_DNSBL}/{rowid}"
+    good = "smokereservedok"
+    try:
+        # Seed a valid alias with an empty Disabled placeholder row (precondition).
+        _post_form(webui, _dnsbl_payload(rowid, good))
+        assert helpers.config_get(vm, f"{base}/aliasname") == good, "precondition: valid alias did not persist"
+        assert helpers.config_get(vm, f"{base}/row/0/header") == "", "precondition: placeholder header not empty"
+
+        # REJECT: a reserved Header on a Disabled row must abort the save (header UNCHANGED).
+        _post_form(webui, _dnsbl_payload(rowid, good, **{"header-0": "DNSBLIP"}))
+        assert helpers.config_get(vm, f"{base}/row/0/header") == "", (
+            "a Disabled row's reserved Header ('DNSBLIP') must abort the save (row/0/header unchanged), but it changed"
+        )
+    finally:
+        _del_rowid(vm, CFG_DNSBL, rowid)
+
+
 # --------------------------------------------------------------------------- #
 # issue #1104: the save-time url-N character guard, end-to-end through a real
 # CSRF POST + config.xml round-trip. format=geoip is deliberate -- its OWN
