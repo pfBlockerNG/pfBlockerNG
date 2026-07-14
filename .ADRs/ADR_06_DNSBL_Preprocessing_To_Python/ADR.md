@@ -257,3 +257,36 @@ the dict floor.
   feeds is attributed to the last feed loaded, was first). Spot-check that a known
   duplicated domain's reported feed/group is sane — its per-feed count shifting is
   expected, not a regression.
+
+## 8. Post-merge amendments (2026-07-14 — ADR-65)
+
+Sections above stay as written for the record; **this section is the authoritative
+correction.** ADR-65 made the manifest the single source of truth for DNSBL and retired
+the `pfb_py_data.txt`/`pfb_py_zone.txt` interchange files this ADR introduced, end to end:
+
+- **The interchange files are gone, not merely deprioritized.** Their writers — the
+  `tld_analysis` TLD-classification pass and `pfb_dnsbl_py_swap` — are removed; no build
+  produces these files anymore. This dissolves issues **#1244** (unchecked finalize
+  rename logging "completed" regardless) and **#1245** (a failed publish leaving a stale
+  TLD-origin `pfb_py_zone` in place) — the code both issues describe no longer exists.
+- **The legacy fallback loaders are removed, not merely bypassed.** §4's "the legacy
+  data/zone CSV load … FALLBACK … used only when no manifest is present" no longer holds:
+  a manifest that cannot build now leaves the DNSBL structures **empty** and fails loud —
+  the ADR-61 ledger plus a `file_notice` so the dashboard bell fires — never a silent
+  stale-serve from the retired files. §7's "Retained CSV consumers (RESULTS/05 §5)" row
+  is superseded the same way: migrating those alerts-page features off the CSVs is no
+  longer a *future* follow-up, it already happened, because the CSVs they read no longer
+  exist.
+- **Alerts/Reports DNSBL rows are log-driven, not re-checked.** The render-time
+  freshness re-check this ADR's `pfb_dnsbl_parse()` performed for the Alerts page is
+  retired from that render path; each row shows exactly what `dnsbl.log` logged for it at
+  block time. `pfb_dnsbl_parse()` itself stays defined (unreachable from the render path)
+  pending a separate retirement pass.
+- **Webserver-hit (block-page) attribution asks the live matcher, not a grep.** Where
+  this ADR's `pfb_dnsbl_parse('daemon', …)` grepped the interchange files, the widget
+  counter and `dnsbl.log` line for a block-page hit are now sourced from the read-only
+  query channel `pfb_py_query` / `pfb_dnsbl_query()` ADR-65 added — the same decision
+  engine the resolver itself uses, so a webserver hit gets byte-identical attribution to
+  a real DNS block instead of a classified-subset approximation.
+
+Full design, delta table, and semantics: `.ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md`.

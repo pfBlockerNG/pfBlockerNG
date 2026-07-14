@@ -4,6 +4,10 @@
   anchor re-derived from `devel`@862a306f after ADR-66 and the #1255 fix landed; the original
   "manifest wildcards regardless of `pfb_tld`" divergence claim is retired — the fallback's
   verified defects are lossiness, staleness, and failure-masking, §1.1)
+  - **Release-note delta (D2, for the next release's notes):** DNSBL Alerts/Reports rows now
+    show exactly what was logged at block time — the render-time "still listed?" refinement
+    badges (struck-through Previous Feed / "Not currently listed" / TLD carve-out) are gone,
+    and feed/group filtering matches the LOGGED feed, not the current one.
 - **Date:** 2026-07-13
 - **Branch:** `adr/65-dnsbl-manifest-single-source` (off `devel`; `{slug}` = sanitised ADR-title
   slug per CLAUDE.md "Branch naming")
@@ -444,11 +448,18 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
   reports-from-logs, and webserver-hit-attribution smoke rows.
 - `config.xml` byte-identical across an upgrade.
 - ADR-06 §8 amended; #1244/#1245 closed at PR merge; the retirement-inventory cleanup issue filed.
-- **Manual smoke checklist (owner: maintainer)** — CI cannot run the module: (a) `drill` a
-  uuid-domain feed match on-box, confirm the block AND that `dnsbl.log` gets exactly one line while
-  a `pfb_dnsbl_query` of the same name adds **none**; (b) remove the manifest, confirm empty DNSBL +
-  dashboard bell + widget out-of-sync + no stale block, then a Force reload self-heals; (c) load a
-  block-page (VIP) hit and confirm the widget group counter increments with the query-derived group.
+- **Smoke checklist — automated, not a manual owner action.** What was originally scoped as a
+  manual owner checklist ((a) a `drill` feed match confirms the block AND that `dnsbl.log` gets
+  exactly one line while a `pfb_dnsbl_query` of the same name adds none; (b) removing the manifest
+  confirms empty DNSBL + dashboard bell + widget out-of-sync + no stale block, then a Force reload
+  self-heals; (c) a block-page (VIP) hit confirms the widget group counter increments with the
+  query-derived group) is instead covered by `tests/smoke/test_smoke_adr65.py`
+  (`test_query_channel_verdict_matches_block_with_no_side_effects`,
+  `test_manifest_absent_fails_loud_and_force_reload_self_heals`,
+  `test_vip_hit_increments_widget_counter_with_query_group`) plus the D2 render contract in
+  `tests/smoke/ui/test_adr65_alerts_live.py::test_alerts_row_renders_logged_group_and_feed_live`.
+  Their green proof rides the CE+Plus live-VM acceptance fan-out (below), same as every other
+  §7 row — no separate maintainer action is required.
 - **Reject criteria:** the query channel is measurably NOT decision-equal to `operate()` on the
   corpus; or a query mutates any counter/log/`dnsblcache`; or removing the fallback changes any net
   decision on the oracle; or the webserver-hit latency of the query round-trip is unacceptable on a

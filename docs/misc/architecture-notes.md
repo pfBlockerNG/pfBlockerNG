@@ -175,10 +175,10 @@ The window actually closes at the **first pass that enters the DNSBL loop**: a t
 feed's frequency is due, an explicit Force (Run Now), or any config-edit-driven sync. On a box
 where every DNSBL row is `Hold`/`Never` (or simply never redue), the window can persist
 indefinitely — it is not a bounded 15-minute-to-hourly window in that case. Impact stays bounded to
-attribution, not blocking: the in-memory `dataDB`/`zoneDB` loaded at the last successful build keep
-blocking unaffected; the Alerts page's per-domain feed/group lookup (`pfblockerng_alerts.php`),
-unable to grep-match the legacy positional-CSV `pfb_py_data`/`pfb_py_zone` against the NDJSON-shaped
-needle, reports the domain's feed/group as literal `Unknown` until the window closes. Accepted as a
+blocking only, and even that is unaffected: the in-memory `dataDB`/`zoneDB` loaded at the last
+successful build keep blocking correct throughout. There is no attribution impact either — ADR-65
+retired the Alerts page's per-domain feed/group render-time lookup entirely, so a DNSBL row renders
+whatever `dnsbl.log` logged for it at block time regardless of this window. Accepted as a
 self-healing (if potentially long) window, not a defect.
 
 **Downgrade is unsupported by design (no back-compat rule).** Reverting the package to a
@@ -187,14 +187,16 @@ mirror image of "No version marker" above: schema v1 has no forward-compat mecha
 equally no backward one. The old build's `dnsbl_build_from_manifest()`/`build()` read the retired
 `format_hint` manifest key via a bare `feed_row["format_hint"]` index (`KeyError` on a NEW-shaped
 manifest, which never emits it); `dnsbl_build_from_manifest()`'s own `except Exception` catches
-that and returns `None` (fail-closed — no matcher swap), so `init()` falls back to the legacy CSV
-loaders over `pfb_py_data`/`pfb_py_zone` — which, under NEW code, are NDJSON, not CSV. Those
-loaders (`csv.reader` with a strict six-field row gate) split each NDJSON object on commas into
-the wrong field count and skip every line, so `dataDB`/`zoneDB` load EMPTY — nothing crashes and
-nothing bogus loads. Net effect: DNSBL blocking on a downgraded box
-goes silently ineffective (fail-open — the resolver itself stays up, queries simply stop
-matching) until every feed redownloads and reparses through the old build's own dialect again.
-There is no supported downgrade path; the fix is to stay on, or return to, a #1083-or-later build.
+that and returns `None` (fail-closed — no matcher swap). Under a pre-#1083 build the next step
+would have been the legacy CSV loaders over `pfb_py_data`/`pfb_py_zone`; ADR-65 retired those
+files end-to-end, so on current code they are never written and get opportunistically swept by
+`pfb_unbound_clear_work_files()` (`pfblockerng.inc:9155-9156`) — the downgraded build's fallback
+loaders find nothing on disk and load `dataDB`/`zoneDB` EMPTY, same net outcome as the old
+CSV-vs-NDJSON mismatch (nothing crashes, nothing bogus loads). Net effect is unchanged: DNSBL
+blocking on a downgraded box goes silently ineffective (fail-open — the resolver itself stays up,
+queries simply stop matching) until every feed redownloads and reparses through the old build's
+own dialect again. There is no supported downgrade path; the fix is to stay on, or return to, a
+build from #1083 or later.
 
 **Benchmark evidence** (issue #1083, `scripts/bench_dnsbl_line_parsing.py`, 1,000,000 lines,
 5 iterations × 2 trials, base = the pre-#1083 merge-base `e9dda731`):
@@ -662,17 +664,19 @@ reorder on the GeoIP tab — `category.php` drops the row `class="sortable"` mar
 
 ## Alerts/Reports render pipeline — `pfblockerng_alerts.php`
 
-Reported events are attributed **twice**: once at event time by the log writers
-(`pfb_unbound.py` for `dnsbl.log`/`dns_reply.log`; the filterlog daemon for the `ip_*` +
-`unified` logs, incl. feed match, GeoIP, rDNS, ASN), and again at render time by the
-Alerts page, which re-validates each displayed row against the *current* feed/DNSBL state
-to show drift (the "Previous Feed:" strikethrough) and pick action icons. The render-time
-pass is per-row shell pipelines + per-row SQLite cycles and dominates page load time; the
-`dnsblcache` report cache is wiped on every DNSBL swap (ADR-10 P3), and the IP render path
-has no cache at all. Full model, cost table, ordering constraints (the DNSBL filter gate
-matches *corrected* fields and cannot be hoisted), and the day-to-day variability
-mechanics: [`alerts-reports-pipeline.md`](alerts-reports-pipeline.md). Perf work:
-issue #809.
+DNSBL rows are attributed **once**, at event time, by the log writer (`pfb_unbound.py` for
+`dnsbl.log`; the webserver-hit path via the ADR-65 query channel, `pfb_dnsbl_query()`) — the
+page renders exactly what was logged, with no render-time re-check. IP rows keep the older
+two-phase model: attributed once at event time by the filterlog daemon (feed match, GeoIP,
+rDNS, ASN, incl. the `unified` log, ADR-38 Amendment 1), then **re-validated at render time**
+by the Alerts page against the *current* feed state to show drift and pick action icons. The
+IP render-time pass is per-row shell pipelines + per-row SQLite cycles and dominates IP-table
+load time; the IP render path has no cache in front of it at all (`ipcache` is write-only from
+the daemon's perspective). Full model, cost table, IP ordering constraints (the IP filter gate
+matches *corrected* fields and cannot be hoisted), and the day-to-day variability mechanics:
+[`alerts-reports-pipeline.md`](alerts-reports-pipeline.md). Perf work: issue #809. The
+DNSBL-side render-time-recheck helpers this model left orphaned (`pfb_dnsbl_parse()`, the
+`dnsblcache` table, the DNSBL batched-prefetch family) are tracked for removal in issue #1349.
 
 ---
 
