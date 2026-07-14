@@ -1,17 +1,21 @@
 """Issue #809 populated-log render-verification harness for the Alerts page.
 
 ``pfblockerng_alerts.php`` renders ip_block/ip_permit/ip_match/dnsbl/dns_reply/
-unified.log through a re-validation pipeline that greps feed/alias/aliastables
-files, consults the ``dnsblcache`` SQLite cache, and falls back to a live
-``drill`` -- issue #809 batched several of those per-row lookups behind a
-prefetch pass (PR #825) without changing what gets rendered. This module is the
-durable regression harness that PROVES that: it seeds every log the page reads
-with fixed, deterministic content (domains, IPs, timestamps -- never
-``helpers.unique_domain()`` or a live clock reading), GETs the full
-view/filter/stats matrix in one fixed order exactly once, and asserts on the
-rendered output (feed-drift strikes, suppression/whitelist icons, GeoIP/IPv6/
-dup/alias-changed cells, the DNSBL cache/data/zone/TLD/upstream/Unknown paths,
-non-filter render caps, filter narrowing).
+unified.log. The IP-side rows still run the re-validation pipeline that greps
+feed/alias/aliastables files, consults the ``dnsblcache`` SQLite cache, and
+falls back to a live ``drill`` -- issue #809 batched several of those per-row
+lookups behind a prefetch pass (PR #825) without changing what gets rendered.
+DNSBL rows do NOT (ADR-65 D2): ``convert_dnsbl_log()`` renders the LOGGED
+group/feed straight off the log line, with no re-check, no strike/drift
+markup, and no 'Unknown' rewrite of a total miss; the seeded dnsblcache/
+pfb_py_data.txt/pfb_py_zone.txt rows for the D-scenarios are BAIT the page
+must ignore. This module is the durable regression harness that PROVES that:
+it seeds every log the page reads with fixed, deterministic content (domains,
+IPs, timestamps -- never ``helpers.unique_domain()`` or a live clock reading),
+GETs the full view/filter/stats matrix in one fixed order exactly once, and
+asserts on the rendered output (IP feed-drift strikes, suppression/whitelist
+icons, GeoIP/IPv6/dup/alias-changed cells, the DNSBL logged-fields/upstream/
+per-row-fallback paths, non-filter render caps, filter narrowing).
 
 Byte-identity contract: every ``<tbody>`` region from every GET, plus its
 SHA-256 and byte length, is written to ``smoke-diag/renderdiff/`` (env
@@ -174,15 +178,13 @@ D3_DOMAIN = "sub.rv809-z1.com"
 D3_PARENT = "rv809-z1.com"
 D4_DOMAIN = "rv809-gone1.com"
 D5_DOMAIN = "rv809-up1.com"
-# Deliberately fails PFB_FILTER_DOMAIN ([a-zA-Z0-9_.-]) via the '*' -- excluded from
-# pfb_dnsbl_prefetch()'s 'covered' set (issue #809 review, "B2"), forcing
-# pfb_dnsbl_parse_compute()'s per-row fallback instead of the batched grep. NB the
-# brief's own suggestion of an underscore does NOT trigger this: PFB_FILTER_DOMAIN's
-# charset explicitly includes '_', so an underscore domain WOULD be covered/batched.
-# D7 is nowhere on disk (total miss -> Unknown); D8 below is its positive counterpart
-# (its NDJSON row IS in pfb_py_data.txt, #1083/PR #1178 -- proves issue #837's per-row
-# needle fallback actually FINDS a covered metachar domain, not just that an uncovered
-# one renders the same 'Unknown' shape as a covered total miss).
+# Deliberately fails PFB_FILTER_DOMAIN ([a-zA-Z0-9_.-]) via the '*'. Formerly this
+# excluded the domain from pfb_dnsbl_prefetch()'s 'covered' set (issue #809 review,
+# "B2"), forcing pfb_dnsbl_parse_compute()'s per-row fallback instead of the batched
+# grep; ADR-65 D2 retired that whole re-check, so the metachar shape now pins that
+# rendering NEVER re-derives from the domain string at all -- D7's bait row is
+# nowhere on disk, D8's IS (pfb_py_data.txt), and both must render their LOGGED
+# fields untouched regardless.
 D7_DOMAIN = "rv809*m1.com"
 D8_DOMAIN = "rv809*p1.com"
 
@@ -190,7 +192,7 @@ D1_CACHE_GROUP, D1_CACHE_FEED = "RVCacheGroup", "RVCacheFeed"
 D1_LOGGED_GROUP, D1_LOGGED_FEED = "RVLoggedGroup1", "RVLoggedFeed1"
 D2_DATA_GROUP, D2_DATA_FEED = "RVGroupD", "RVFeedD"
 D2_LOGGED_GROUP, D2_LOGGED_FEED = "RVLoggedGroupD2", "RVLoggedFeedD2"
-D3_GROUP, D3_FEED = "RVGroupZ3", "RVFeedZ3"  # SAME logged + zone value -- isolates mode+domain drift
+D3_GROUP, D3_FEED = "RVGroupZ3", "RVFeedZ3"  # SAME as D3's logged value -- mode+domain are the bait discriminators
 D4_LOGGED_GROUP, D4_LOGGED_FEED = "RVLoggedGroupD4", "RVLoggedFeedD4"
 D7_LOGGED_GROUP, D7_LOGGED_FEED = "RVLoggedGroupD7", "RVLoggedFeedD7"
 D8_DATA_GROUP, D8_DATA_FEED = "RVGroupMeta", "RVFeedMeta"
@@ -440,7 +442,7 @@ GET_MATRIX: list[tuple[str, str]] = [
     ("ip_permit_stat", f"{ALERTS_PAGE}?view=ip_permit_stat"),
     ("ip_match_stat", f"{ALERTS_PAGE}?view=ip_match_stat"),
     ("alert_filterip", f"{ALERTS_PAGE}?filterip={quote(S1_ALIAS)}"),
-    ("alert_filterdnsbl", f"{ALERTS_PAGE}?filterdnsbl={quote(D1_CACHE_GROUP)}"),
+    ("alert_filterdnsbl", f"{ALERTS_PAGE}?filterdnsbl={quote(D1_LOGGED_GROUP)}"),
     ("unified_filterip", f"{ALERTS_PAGE}?view=unified&filterip={quote(S1_ALIAS)}"),
     ("alert_2", ALERTS_PAGE),
 ]
@@ -549,7 +551,7 @@ def _seed_feed_files(vm: helpers.SmokeVM) -> None:
 def _sqlite_open_guarded() -> str:
     """PHP prologue: open the dnsblcache DB via the package's own opener, loudly.
 
-    Uses ``pfb_open_sqlite(4, ...)`` — the exact opener the Alerts page itself runs —
+    Uses ``pfb_open_sqlite(4, ...)`` — the package's own opener —
     NOT a raw ``new SQLite3``: the package opener carries the ADR-03 WAL pragma, the
     integrity-check + corrupt-DB self-heal, and the unbound chown, all of which a
     home-rolled open skips. That skip bit runs 28721363021/28721822624: the first
@@ -602,9 +604,8 @@ def _sqlite_open_guarded() -> str:
 
 
 def _seed_dnsbl_cache(vm: helpers.SmokeVM) -> None:
-    """D1 cache-hit: pre-populate ``dnsblcache`` with a group/feed DIFFERENT from
-    the logged line, so the render deterministically drifts (strikes the logged
-    values, shows the cached ones)."""
+    """D1 cache bait: pre-populate ``dnsblcache`` with a group/feed DIFFERENT from
+    the logged line -- bait: the render must IGNORE it (ADR-65 D2)."""
     snippet = (
         _sqlite_open_guarded() + "$stmt = $db->prepare("
         "'INSERT INTO dnsblcache (type, domain, groupname, final, feed) "
@@ -710,9 +711,9 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
         _append(vm, PY_ZONE_FILE, _py_zone_appendix())
         _seed_dnsbl_cache(vm)
 
-        # (3) The FIXED-ORDER GET matrix, exactly once (a repeated domain's
-        # dnsblcache side effect from GET #1 is what GET #12, 'alert_2', re-renders
-        # against -- the cache round-trip stability check).
+        # (3) The FIXED-ORDER GET matrix, exactly once (GET #12, 'alert_2', re-renders
+        # the SAME view with no log/file mutation in between -- the idempotent
+        # re-render check).
         for key, path in GET_MATRIX:
             t0 = time.perf_counter()
             resp = webui.get(path)
@@ -782,11 +783,11 @@ def test_baseline_excludes_seed_tokens(render_diff_state: dict[str, dict[str, Ca
     url_echoed = {
         "alert_filterip": {S1_ALIAS},
         "unified_filterip": {S1_ALIAS},
-        "alert_filterdnsbl": {D1_CACHE_GROUP},
+        "alert_filterdnsbl": {D1_LOGGED_GROUP},
     }
     baseline = render_diff_state["baseline"]
     for key, cap in baseline.items():
-        for token in (D1_DOMAIN, S1_ALIAS, D1_CACHE_GROUP, FEED_A_NAME, "rv809"):
+        for token in (D1_DOMAIN, S1_ALIAS, D1_CACHE_GROUP, D1_LOGGED_GROUP, FEED_A_NAME, "rv809"):
             if token in url_echoed.get(key, set()):
                 continue
             assert token not in cap.body, (
@@ -953,80 +954,80 @@ def test_match_still_listed_and_delisted(render_diff_state: dict[str, dict[str, 
     assert "Not listed!" in delisted, f"Match {M2_IP} (de-listed) expected 'Not listed!': {delisted!r}"
 
 
-def test_d1_cache_hit_drift_renders_cache_groupname(render_diff_state: dict[str, dict[str, Capture]]) -> None:
-    """D1: a dnsblcache HIT re-attributes group/feed to the CACHED values, struck against the logged ones.
+def test_d1_cache_bait_ignored_renders_logged_fields(render_diff_state: dict[str, dict[str, Capture]]) -> None:
+    """D1: a dnsblcache HIT is bait the render must IGNORE (ADR-65 D2).
 
     Given: dnsblcache is seeded with group=RVCacheGroup/feed=RVCacheFeed for
     rv809-c1.com BEFORE the first GET; the logged line carries DIFFERENT
     group/feed (RVLoggedGroup1/RVLoggedFeed1).
-    Then: pfb_dnsbl_parse_compute()'s cache SELECT hits -> the row struck-shows
-    the logged group/feed and displays the cached ones.
+    Then: the row renders the LOGGED group/feed verbatim, with no strike markup
+    and no leaked cached value.
     """
     body = render_diff_state["captures"]["alert"].body
     row = row_containing(body, D1_DOMAIN)
-    assert f"<s>{D1_LOGGED_GROUP}</s>" in row, f"D1 expected the logged group struck: {row!r}"
-    assert D1_CACHE_GROUP in row, f"D1 expected the cached group {D1_CACHE_GROUP!r} present: {row!r}"
-    assert f"<s>{D1_LOGGED_FEED}</s>" in row, f"D1 expected the logged feed struck: {row!r}"
-    assert D1_CACHE_FEED in row, f"D1 expected the cached feed {D1_CACHE_FEED!r} present: {row!r}"
+    assert D1_LOGGED_GROUP in row, f"D1 expected the logged group {D1_LOGGED_GROUP!r} present: {row!r}"
+    assert D1_LOGGED_FEED in row, f"D1 expected the logged feed {D1_LOGGED_FEED!r} present: {row!r}"
+    assert "<s>" not in row, f"D1 expected no strikethrough markup: {row!r}"
+    assert D1_CACHE_GROUP not in row, f"D1 expected the cache-bait group {D1_CACHE_GROUP!r} absent: {row!r}"
+    assert D1_CACHE_FEED not in row, f"D1 expected the cache-bait feed {D1_CACHE_FEED!r} absent: {row!r}"
 
 
-def test_d2_data_hit_drift_renders_data_feed(render_diff_state: dict[str, dict[str, Capture]]) -> None:
-    """D2: a pfb_py_data.txt exact-domain hit re-attributes group/feed to the data-file values.
+def test_d2_data_bait_ignored_renders_logged_fields(render_diff_state: dict[str, dict[str, Capture]]) -> None:
+    """D2: a pfb_py_data.txt exact-domain hit is bait the render must IGNORE (ADR-65 D2).
 
     Given: rv809-d1.com is appended to pfb_py_data.txt with group=RVGroupD/
     feed=RVFeedD; the logged line carries different group/feed.
-    Then: the exact-domain data-file grep hits (a cache miss) and the row
-    struck-shows the logged values, displaying the data-file ones.
+    Then: the row renders the LOGGED group/feed verbatim, with no strike markup
+    and no leaked data-file value.
     """
     body = render_diff_state["captures"]["alert"].body
     row = row_containing(body, D2_DOMAIN)
-    assert f"<s>{D2_LOGGED_GROUP}</s>" in row, f"D2 expected the logged group struck: {row!r}"
-    assert D2_DATA_GROUP in row, f"D2 expected the data-file group {D2_DATA_GROUP!r} present: {row!r}"
-    assert f"<s>{D2_LOGGED_FEED}</s>" in row, f"D2 expected the logged feed struck: {row!r}"
-    assert D2_DATA_FEED in row, f"D2 expected the data-file feed {D2_DATA_FEED!r} present: {row!r}"
+    assert D2_LOGGED_GROUP in row, f"D2 expected the logged group {D2_LOGGED_GROUP!r} present: {row!r}"
+    assert D2_LOGGED_FEED in row, f"D2 expected the logged feed {D2_LOGGED_FEED!r} present: {row!r}"
+    assert "<s>" not in row, f"D2 expected no strikethrough markup: {row!r}"
+    assert D2_DATA_GROUP not in row, f"D2 expected the data-bait group {D2_DATA_GROUP!r} absent: {row!r}"
+    assert D2_DATA_FEED not in row, f"D2 expected the data-bait feed {D2_DATA_FEED!r} absent: {row!r}"
 
 
-def test_d3_zone_hit_renders_tld_mode(render_diff_state: dict[str, dict[str, Capture]]) -> None:
-    """D3: a per-label zone-file (TLD wildcard) hit re-attributes mode + domain.
+def test_d3_zone_bait_ignored_renders_logged_mode_and_domain(render_diff_state: dict[str, dict[str, Capture]]) -> None:
+    """D3: a per-label zone-file (TLD wildcard) hit is bait the render must IGNORE (ADR-65 D2).
 
     Given: domain sub.rv809-z1.com is logged mode=DNSBL; pfb_py_zone.txt carries
-    an entry for the ONE-LABEL-STRIPPED suffix rv809-z1.com (the exact per-label
-    walk pfb_dnsbl_parse_compute() performs, longest-first).
-    Then: the zone hit re-attributes mode to TLD and the evaluated domain to the
-    stripped parent -- both struck against the originally-logged values.
+    an entry for the ONE-LABEL-STRIPPED suffix rv809-z1.com -- the group/feed
+    are the SAME for both (D3_GROUP/D3_FEED), so mode+domain are the only
+    discriminators here.
+    Then: the row keeps the LOGGED mode (DNSBL, not TLD) and the LOGGED
+    (sub)domain, with no strike markup and no re-attributed threat-lookup href
+    for the stripped parent.
     """
     body = render_diff_state["captures"]["alert"].body
     row = row_containing(body, D3_DOMAIN)
-    assert '<s title="Previous Blocking Mode">DNSBL</s>' in row, f"D3 expected the logged mode struck: {row!r}"
-    assert "TLD" in row, f"D3 expected the corrected mode 'TLD' present: {row!r}"
-    # NB: D3_PARENT ("rv809-z1.com") is a trailing substring of D3_DOMAIN
-    # ("sub.rv809-z1.com") -- a bare `D3_PARENT in row` would ALWAYS pass (the
-    # un-corrected subdomain, which is how this row was located, already
-    # contains it as a substring), proving nothing about the correction. Assert
-    # the exact struck-previous-domain wrapper instead, which can only render
-    # when the domain correction actually fired.
-    struck_domain = f'<s title="Previous Domain: {D3_DOMAIN}">{D3_DOMAIN}</s>'
-    assert struck_domain in row, f"D3 expected the struck previous (sub)domain {struck_domain!r} present: {row!r}"
-    # The corrected/stripped parent domain surfaces in the row's threat-lookup
-    # href (?domain=rv809-z1.com) once isTLD flips true on the second
-    # dnsbl_log_details() pass -- assert that exact href, not a bare substring
-    # check (which the struck-domain text above would already satisfy).
-    threat_href = f"pfblockerng_threats.php?domain={D3_PARENT}"
-    assert threat_href in row, f"D3 expected the corrected-domain threat href {threat_href!r} present: {row!r}"
+    assert '<s title="Previous Blocking Mode">' not in row, f"D3 expected no struck-mode markup: {row!r}"
+    assert "TLD" not in row, f"D3 expected the logged mode 'DNSBL' kept, not re-attributed to 'TLD': {row!r}"
+    assert '<s title="Previous Domain' not in row, f"D3 expected no struck-previous-domain markup: {row!r}"
+    domain_href = f"pfblockerng_threats.php?domain={D3_DOMAIN}"
+    assert domain_href in row, f"D3 expected the logged-domain threat href {domain_href!r} present: {row!r}"
+    # D3_PARENT ("rv809-z1.com") is a trailing substring of D3_DOMAIN
+    # ("sub.rv809-z1.com") -- the '=' vs '.' boundary keeps this a valid negative
+    # (the parent's OWN href, "...=rv809-z1.com", is not a substring of
+    # "...=sub.rv809-z1.com").
+    parent_href = f"pfblockerng_threats.php?domain={D3_PARENT}"
+    assert parent_href not in row, f"D3 expected NO re-attributed parent threat href {parent_href!r}: {row!r}"
 
 
-def test_d4_delisted_renders_unknown(render_diff_state: dict[str, dict[str, Capture]]) -> None:
-    """D4: a domain absent from cache/data/zone AND unresolvable upstream renders Unknown.
+def test_d4_total_miss_renders_logged_fields_not_unknown(render_diff_state: dict[str, dict[str, Capture]]) -> None:
+    """D4: a domain absent from cache/data/zone no longer gets rewritten to Unknown (ADR-65 D2).
 
-    Given: rv809-gone1.com exists nowhere; the live drill @8.8.8.8 fallback
-    NXDOMAINs it (a uuid-style .com is never registered).
-    Then: pfb_dnsbl_parse_compute() falls through to 'Unknown' for feed/group,
-    struck against the logged (fabricated) values.
+    Given: rv809-gone1.com exists nowhere on disk.
+    Then: the row renders the LOGGED group/feed verbatim -- no re-check runs, so
+    there is nothing left to fall through to 'Unknown'.
     """
     body = render_diff_state["captures"]["alert"].body
     row = row_containing(body, D4_DOMAIN)
-    assert f"<s>{D4_LOGGED_GROUP}</s>" in row, f"D4 expected the logged group struck: {row!r}"
-    assert "Unknown" in row, f"D4 expected 'Unknown' (total miss) present: {row!r}"
+    assert D4_LOGGED_GROUP in row, f"D4 expected the logged group {D4_LOGGED_GROUP!r} present: {row!r}"
+    assert D4_LOGGED_FEED in row, f"D4 expected the logged feed {D4_LOGGED_FEED!r} present: {row!r}"
+    assert "<s>" not in row, f"D4 expected no strikethrough markup: {row!r}"
+    assert "Unknown" not in row, f"D4 expected no 'Unknown' rewrite of a total miss: {row!r}"
 
 
 def test_d5_upstream_renders_cloud_icon_and_group(render_diff_state: dict[str, dict[str, Capture]]) -> None:
@@ -1042,50 +1043,42 @@ def test_d5_upstream_renders_cloud_icon_and_group(render_diff_state: dict[str, d
     assert "Unknown" not in row, f"D5 upstream row wrongly ran the stale-entry correction ('Unknown' present): {row!r}"
 
 
-def test_d7_uncovered_metachar_domain_renders_unknown(render_diff_state: dict[str, dict[str, Capture]]) -> None:
-    """D7: a domain that fails PFB_FILTER_DOMAIN is excluded from the batched prefetch pass.
+def test_d7_uncovered_metachar_domain_renders_logged_fields(render_diff_state: dict[str, dict[str, Capture]]) -> None:
+    """D7: a metachar domain (nowhere on disk) renders its LOGGED fields, no re-derivation (ADR-65 D2).
 
     Given: 'rv809*m1.com' contains '*', outside PFB_FILTER_DOMAIN's
-    [a-zA-Z0-9_.-] charset -- pfb_dnsbl_prefetch() (PR #825) leaves it OUT of
-    its 'covered' set, so pfb_dnsbl_parse_compute() takes its UNBATCHED per-row
-    exec fallback for every consult site (identical to how #825's predecessor
-    behaved for every domain).
-    Then: it renders 'Unknown' (nowhere found) exactly like D4 -- SAME shape as
-    the covered/batched total-miss path. This is a NEGATIVE-only proof (a
-    domain absent everywhere renders 'Unknown' whether or not the per-row
-    fallback works at all); D8 below is the positive counterpart that actually
-    discriminates a working per-row fallback from a broken one (issue #837).
+    [a-zA-Z0-9_.-] charset -- historically this excluded it from
+    pfb_dnsbl_prefetch()'s 'covered' set (issue #809 review, "B2"). That whole
+    re-check is gone, so the metachar shape is now moot: the row renders its
+    logged group/feed exactly like D4's plain total miss.
     """
     body = render_diff_state["captures"]["alert"].body
     row = row_containing(body, D7_DOMAIN)
-    assert f"<s>{D7_LOGGED_GROUP}</s>" in row, f"D7 expected the logged group struck: {row!r}"
-    assert "Unknown" in row, f"D7 expected 'Unknown' (uncovered total miss) present: {row!r}"
+    assert D7_LOGGED_GROUP in row, f"D7 expected the logged group {D7_LOGGED_GROUP!r} present: {row!r}"
+    assert D7_LOGGED_FEED in row, f"D7 expected the logged feed {D7_LOGGED_FEED!r} present: {row!r}"
+    assert "<s>" not in row, f"D7 expected no strikethrough markup: {row!r}"
+    assert "Unknown" not in row, f"D7 expected no 'Unknown' rewrite of a total miss: {row!r}"
 
 
-def test_d8_covered_metachar_domain_found_via_per_row_fallback(
+def test_d8_covered_metachar_domain_data_bait_ignored(
     render_diff_state: dict[str, dict[str, Capture]],
 ) -> None:
-    """D8: a metachar domain the per-row fallback CAN find, unlike D7's total miss.
+    """D8: a metachar domain WITH a data-file bait row still renders its LOGGED fields (ADR-65 D2).
 
-    Given: 'rv809*p1.com' contains '*' so it also fails PFB_FILTER_DOMAIN and is
-    excluded from the batched prefetch, exactly like D7 -- but unlike D7 its
-    NDJSON row IS present in pfb_py_data.txt.
-    When: the alert view renders.
-    Then: pfb_dnsbl_parse_compute()'s per-row fallback (issue #837/#1083: `grep -F`
-    on the NDJSON "domain" field needle, not a hand-escaped BRE on the raw domain)
-    actually FINDS its own entry -- the row struck-shows the logged group/feed and
-    displays the data-file ones, never 'Unknown'. Red on a pre-#837 package (the
-    per-row BRE mis-escapes the '*' and misses the domain's own data-file line ->
-    Unknown), green post-fix; the offline red->green proof is
-    tests/php/DnsblParseComputeMetacharTest.php.
+    Given: 'rv809*p1.com' also contains '*' like D7, but unlike D7 its NDJSON
+    row IS present in pfb_py_data.txt (group=RVGroupMeta/feed=RVFeedMeta) --
+    historically this exercised pfb_dnsbl_parse_compute()'s per-row fallback
+    (issue #837/#1083). That re-check is gone; the data-file row is now bait
+    the render must ignore just like D1/D2's cache/data bait.
     """
     body = render_diff_state["captures"]["alert"].body
     row = row_containing(body, D8_DOMAIN)
-    assert f"<s>{D8_LOGGED_GROUP}</s>" in row, f"D8 expected the logged group struck: {row!r}"
-    assert D8_DATA_GROUP in row, f"D8 expected the data-file group {D8_DATA_GROUP!r} present: {row!r}"
-    assert f"<s>{D8_LOGGED_FEED}</s>" in row, f"D8 expected the logged feed struck: {row!r}"
-    assert D8_DATA_FEED in row, f"D8 expected the data-file feed {D8_DATA_FEED!r} present: {row!r}"
-    assert "Unknown" not in row, f"D8 covered metachar domain wrongly rendered 'Unknown': {row!r}"
+    assert D8_LOGGED_GROUP in row, f"D8 expected the logged group {D8_LOGGED_GROUP!r} present: {row!r}"
+    assert D8_LOGGED_FEED in row, f"D8 expected the logged feed {D8_LOGGED_FEED!r} present: {row!r}"
+    assert "<s>" not in row, f"D8 expected no strikethrough markup: {row!r}"
+    assert D8_DATA_GROUP not in row, f"D8 expected the data-bait group {D8_DATA_GROUP!r} absent: {row!r}"
+    assert D8_DATA_FEED not in row, f"D8 expected the data-bait feed {D8_DATA_FEED!r} absent: {row!r}"
+    assert "Unknown" not in row, f"D8 expected no 'Unknown' rewrite: {row!r}"
 
 
 def test_ip_block_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, Capture]]) -> None:
@@ -1170,12 +1163,13 @@ def test_filterdnsbl_narrows_to_group(render_diff_state: dict[str, dict[str, Cap
     """?filterdnsbl=<group> narrows the alert view's DNSBL table to that GROUP (not a literal domain).
 
     Correction vs. the naive reading of the param name: filterdnsbl sets
-    filterfieldsarray[1][13], which lands on $pfbalertdnsbl[13] -- the GROUP
-    NAME (post drift-correction), not the domain.
+    filterfieldsarray[1][13] -- the LOGGED group name (ADR-65 D2: filtering
+    matches what actually blocked, not a re-derived current value).
     """
     body = render_diff_state["captures"]["alert_filterdnsbl"].body
-    assert D1_CACHE_GROUP in body, f"filtered alert view missing the filtered-for group {D1_CACHE_GROUP!r}"
+    assert D1_LOGGED_GROUP in body, f"filtered alert view missing the filtered-for group {D1_LOGGED_GROUP!r}"
     assert D2_LOGGED_GROUP not in body, f"a DIFFERENT group {D2_LOGGED_GROUP!r} leaked into the filterdnsbl view"
+    assert D1_CACHE_GROUP not in body, f"filtered view must not resurrect the cache-bait group {D1_CACHE_GROUP!r}"
 
 
 def test_unified_filterip_narrows_ip_rows(render_diff_state: dict[str, dict[str, Capture]]) -> None:
@@ -1228,16 +1222,14 @@ def test_reply_view_renders_seeded_domains(render_diff_state: dict[str, dict[str
 
 
 def test_alert_view_stable_across_cache_populate_rerender(render_diff_state: dict[str, dict[str, Capture]]) -> None:
-    """GET #12 (post-cache-populate re-render) reproduces GET #1's tbody hashes byte-for-byte.
+    """GET #12 (a bare re-render) reproduces GET #1's tbody hashes byte-for-byte.
 
-    Scenario: dnsblcache round-trip stability.
-    Given: GET #1 (alert view) computed D1-D8's DNSBL attribution fresh (a
-        cache hit for D1, data/zone/drill fallbacks for the rest) and INSERTed
-        each newly-computed result into dnsblcache.
-    When: the SAME view is GET-ted again (GET #12) with no log/file mutation in
-        between -- only dnsblcache gained rows.
-    Then: every <tbody> region hashes IDENTICALLY. The cache round-trip changes
-        WHERE the answer came from, never WHAT gets rendered.
+    Scenario: idempotent re-render.
+    Given: GET #1 (alert view) rendered every row from its own log line (ADR-65
+        D2: no dnsblcache read or write happens on render).
+    When: the SAME view is GET-ted again (GET #12) with no log/file/cache
+        mutation in between.
+    Then: every <tbody> region hashes IDENTICALLY.
     """
     captures = render_diff_state["captures"]
     first_hashes = [_sha256(r.encode()) for r in _extract_tbody_regions(captures["alert"].body)]
