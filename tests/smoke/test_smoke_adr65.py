@@ -73,12 +73,13 @@ def adr65_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
 
 
 # --------------------------------------------------------------------------- #
-# dnsbl.log helpers -- mirrors test_smoke_matrix._dnsbl_log_hits' host+chroot
-# grep shape (pfb_unbound.py runs chrooted at /var/unbound); a module-local copy
-# per this phase's "new modules only" constraint (no helpers.py changes).
+# dnsbl.log helpers. ONE path only: pfb_unbound_include.inc nullfs-mounts
+# /var/log/pfblockerng rw at {chroot}/var/log/pfblockerng, so the chroot path is
+# the SAME file -- grepping both counts every line twice, which an exact-count
+# assertion (this module pins "the query adds NO line") cannot tolerate.
 # --------------------------------------------------------------------------- #
 
-_DNSBL_LOG_PATHS = ("/var/log/pfblockerng/dnsbl.log", "/var/unbound/var/log/pfblockerng/dnsbl.log")
+_DNSBL_LOG_PATHS = ("/var/log/pfblockerng/dnsbl.log",)
 
 
 def _dnsbl_log_hits(vm: SmokeVM, needle: str, *, timeout: float = 30.0) -> int:
@@ -432,6 +433,7 @@ def _close_notice(vm: SmokeVM, notice_id: str, *, timeout: float = 60.0) -> None
     h.php_eval(vm, f"close_notice({h._php_str(notice_id)});\necho 'OK';", timeout=timeout)
 
 
+@pytest.mark.timeout(300)  # a full DNSBL update pass + the swap-applied wait exceeds the smoke tier's 30s default
 def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeVM) -> None:
     """ADR-65 D3: an absent DNSBL manifest yields NO stale block, a widget-visible
     open ledger entry, and a GUI notice -- then a Force Reload self-heals.
@@ -491,7 +493,10 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             # SELF-HEAL: unblock egress (the update pass needs it) and Force Reload --
             # this regenerates the manifest via pfb_unbound_python_sources.
             h.unblock_egress()
-            h.reload(adr65_vm, "updatednsbl")
+            # data_path=True waits on the zero-downtime swap-applied signal (and RAISES if
+            # it never appears). The default only polls `unbound-control status`, which the
+            # raw bounce already satisfied -- the probe would race the module's rebuild.
+            h.reload(adr65_vm, "updatednsbl", data_path=True)
 
             healed = h.dns_probe(adr65_vm, domain)
             assert h.is_vip(healed), f"expected VIP block for {domain!r} again after the self-heal, got {healed!r}"
@@ -516,6 +521,7 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(300)  # sinkhole bind poll + block-page hit + log/counter settle exceed the 30s default
 def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -> None:
     """ADR-65 D4: a real sinkhole (VIP block-page) hit attributes via the query
     channel, and its widget counter increments by exactly the observed event count.
