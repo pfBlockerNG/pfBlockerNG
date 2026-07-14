@@ -5,9 +5,10 @@
 # Usage: work-branch.sh <issue|adr> <NN> [TITLE ...] [--worktree] [--path PATH] [--base REF]
 #   Prints the branch name (`issue/NN-slug` / `adr/NN-slug`; empty slug -> bare `type/NN`).
 #   --worktree  also `git fetch origin` + `git worktree add -b BRANCH PATH BASE` at an
-#               ABSOLUTE path (default <repo>/.claude/worktrees/<type>-<NN>); an existing
-#               branch or path gets a `-<epoch>` suffix (collision rule). Prints
-#               `BRANCH<TAB>PATH` instead.
+#               ABSOLUTE path (default <primary checkout>/.claude/worktrees/<type>-<NN>;
+#               a relative --path anchors there too, even when invoked from a linked
+#               worktree); an existing branch or path gets a `-<epoch>` suffix
+#               (collision rule). Prints `BRANCH<TAB>PATH` instead.
 #   --base REF  worktree base (default origin/devel)
 #
 # Sanitiser (pinned by tests/shell/agent_work_branch_spec.sh): lowercase; every
@@ -64,7 +65,11 @@ main() {
 	fi
 
 	require_tool git
-	root=$(git rev-parse --show-toplevel) || exit 2
+	# Anchor at the PRIMARY checkout: rc-mode/managed sessions run inside a linked
+	# session worktree, where --show-toplevel would nest the new worktree in a tree
+	# whose lifecycle the harness owns (pinned by agent_work_branch_spec.sh).
+	common=$(git rev-parse --git-common-dir) || exit 2
+	root=$(cd "$common/.." && pwd -P) || exit 2
 	git fetch origin >/dev/null 2>&1
 	if git show-ref --verify -q "refs/heads/$branch" ||
 	   git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
