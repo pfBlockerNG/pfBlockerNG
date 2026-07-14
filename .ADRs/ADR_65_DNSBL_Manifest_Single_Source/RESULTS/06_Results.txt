@@ -1,0 +1,423 @@
+ADR-65 PHASE 6 -- RESULTS
+================================================================================
+VERDICT: DONE-WITH-DEVIATION
+Commit:  7e452e6712d8c10d4e49f46b81660396474605f8 (code + tests; the
+         functional change this phase implements) plus a follow-up doc-only
+         commit landing this handoff file itself (docs: ADR-65 phase 6
+         handoff record) -- the brief asked for ONE commit; writing this
+         RESULTS file necessarily happens after the gates it reports on
+         finish, so it could not be part of the same commit as the code it
+         describes without a self-referential placeholder (the exact P1/P5
+         precedent this file's own CARRY-FORWARD section reads). Recorded
+         as the deviation; both commits are on this branch, in order.
+Branch:  adr/65-dnsbl-manifest-single-source
+Push:    origin/adr/65-dnsbl-manifest-single-source updated eb4bfac4..7e452e67
+         (plain fast-forward, not denied).
+base_sha (pre-fix baseline for the verifier): eb4bfac43267b144c1f3c6655fff34dee4abf05e
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - tld_analysis(): REWRITTEN. Removed: the "{dnsbl_file}.raw" existence gate
+    (replaced with a $pfb['domain_update'] gate), the .tsp unlink, the master
+    TLD-list loader (global $tlds) and its fopen/fclose, the
+    "{unbound_py_data/zone}.raw" file-handle creation + failure arm, the
+    fwrite($p_zone,...) blacklist row emit + the $tlds[$tld] unset, the
+    TLD-exclusion collection loop, the whole classification read-loop over
+    "{dnsbl_file}.raw" (progress dots, domain_max_cnt cap check, tld_search
+    switch, both fwrites), the handle-close loop, the $pfb_found finalize
+    gate (the exceedance log + the #1244 unchecked @rename() loop + the
+    unconditional "TLD finalize... completed" log), and the trailing
+    "{dnsbl_file}.raw" unlink. KEPT verbatim: the tldblacklist decode +
+    per-entry $tld_cnt++ counting (widget-count parity), the
+    tld_update['DNSBL_TLD']/alias_dnsbl_all bookkeeping, the
+    !empty($pfb['tld_update']) alias-update loop (dnsbl_alias_update() for
+    EVERY deferred DNSBL group alias in TLD mode, not just DNSBL_TLD), and
+    dnsbl_save_stats() -- all three now run under the new domain_update gate
+    instead of the deleted $pfb_found gate. Rewrote the function-header
+    comment to name the retained purpose.
+  - tld_search(): DELETED (no other src/ caller after tld_analysis's rewrite).
+  - pfb_dnsbl_py_swap(): DELETED, plus its sole call site in
+    sync_package_pfblockerng() and its comment mention (a stale
+    "tld_analysis() gate, pfb_dnsbl_py_swap()" reference reworded to name the
+    surviving tld_update deferral branch instead).
+  - sync_package_pfblockerng() domain-side assembly: removed the
+    "{dnsbl_file}.raw" unlink, the $pfb_dnsbl_sources array_map, the
+    pfb_dnsbl_concat_files()/if wrapper, and the concat-failure "DNSBL not
+    Updated!" else -- pfb_unbound_python_sources($pfb_py_feeds) now runs
+    directly under the surviving `if (!empty($lists_dnsbl_all))` (its publish
+    failure is already checked+notice'd internally, P5's hardening).
+    pfb_dnsbl_concat_files() itself is UNTOUCHED (still used by the two
+    DNSBLIP v4/v6 IP-side call sites).
+  - #546 no-feeds path: removed the `@file_put_contents($pfb['unbound_py_data'],
+    '', LOCK_EX)` and `unlink_if_exists($pfb['unbound_py_zone'])` calls;
+    reworded the surrounding block comment ("canonical files" ->
+    "manifest/rawdir"). The count/regex_count unlinks and
+    pfb_unbound_python_sources(array()) stay.
+  - Disable path: dropped unbound_py_data/unbound_py_zone from the
+    unlink-on-disable foreach (now just "{dnsbl_file}.conf"); the
+    unbound_py_sources unlink + rawdir rmdir_recursive stay.
+  - NEW pfb_dnsbl_manifest_missing(array $pfb): bool: TRUE iff the manifest
+    (unbound_py_sources) is absent, or the pfb_py_reload/pfb_py_reload.applied
+    marker generations disagree (reusing pfb_unbound_py_marker_generation()).
+    Placed beside its sibling pfb_unbound_py_marker_generation().
+  - sync_package_pfblockerng() health check: replaced the toggle-branched
+    (!dnsbl_tld_wildcard / else) interchange-file-presence checks with a single
+    `if (pfb_dnsbl_manifest_missing($pfb)) { $dnsbl_missing = TRUE; }`. The
+    stats-DB arm above and the $dnsbl_missing reaction (log + reuse_dnsbl=on +
+    touch .reload) are BYTE-IDENTICAL, unchanged.
+  - pfb_dnsbl_loaded_input_paths(): drops unbound_py_data/unbound_py_zone from
+    the returned list (now wh/sources/hsts/tld + sorted rawdir *.raw).
+  - pfb_dnsbl_reload_fingerprint(): the TLD-mode-only array_diff narrowing
+    removed (a no-op once the base list never carries the retired paths) --
+    now a thin wrapper: `pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb))`.
+  - pfb_dnsbl_has_loaded_feeds(): re-keyed on rawdir presence alone (drops the
+    py_data/py_zone branches) -- prevents a stale post-upgrade interchange file
+    from making a no-feeds setup look "loaded" forever (#546 class).
+  - pfb_unbound_clear_work_files(): added unbound_py_data/unbound_py_zone to
+    the opportunistic upgrade-hygiene sweep (same #1083 DNSBL_TLD.txt
+    precedent already in that array).
+  - Comment reconciliation only (no assertion/behaviour change): the
+    tld_wildcard_blacklist/exclusion embedding-region and DNSBL_TLD
+    manifest-emit comments were NOT touched (out of D1 scope, ADR §1.1
+    already embeds them).
+
+src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  - COMMENT-ONLY: 5 sites (module docstring's "Classification mirrors
+    tld_analysis/tld_search", _dnsbl_load_tld_wildcard_master's docstring,
+    _dnsbl_tld_wildcard_search's docstring, tld_wildcard_classify's docstring,
+    the whole-TLD-block inline comment) reworded to stop present-tense-naming
+    the deleted PHP functions -- "formerly mirrored from PHP's TLD pass; sole
+    classifier since ADR-65" style. Zero behaviour change (Oracle A proves it).
+
+tests/php/ (reconciliation -- see COVERAGE MATRIX for the tick-by-tick)
+  - NEW DnsblInterchangeRetirementTest.php: R1 (TLD-mode writer retirement +
+    bookkeeping retention), R2 (#546 re-key) + its vacuity twin,
+    R3 (fingerprint decoupling) + its vacuity twin. Frozen from red time.
+  - NEW DnsblManifestMissingTest.php: 12 tests, every branch + every hostile
+    row in the brief's table (brand-new-code carve-out, no red run --
+    the function did not exist before).
+  - NEW TldAnalysisBlacklistHostileInputTest.php: 1 test pinning the
+    retained (behaviour-preserving) hostile-textarea blacklist-counting
+    contract ('.zip.', '...', a dropped blank line) -- green on BOTH the
+    untouched and the rewritten tld_analysis() (genuine preservation oracle,
+    not a red/green pair).
+  - DELETED Adr62TldAnalysisCorpusTest.php (4), TldAnalysisAbpVerbatimTest.php
+    (2), TldAnalysisMasterKeyingTest.php (1), PfbDnsblPySwapTest.php (5) --
+    all drove deleted classification/swap code. The #1068/#1116 master-list
+    keying contracts TldAnalysisMasterKeyingTest.php pinned are independently
+    covered Python-side (test_branch_coverage_gaps.py::TestLoadTldMaster --
+    verified before deleting, no porting needed).
+  - DnsblNdjsonFlipTest.php: removed ONLY
+    testTldAnalysisOverNdjsonProducesExpectedDataZoneRowsIncludingSyntheticTldRow
+    (drove tld_analysis's classification) + its now-dead $tlds global
+    machinery + the #[CoversFunction('tld_analysis')] attribute; the other 4
+    tests (pfb_unbound_python_sources / pfb_dnsbl_parse_compute) untouched.
+  - DnsblHasLoadedFeedsTest.php: inverted testNonEmptyDataFileReturnsTrue ->
+    testNonEmptyDataFileNoLongerCountsAsLoaded and testZoneFilePresentReturnsTrue
+    -> testZoneFilePresentNoLongerCountsAsLoaded (both now assert FALSE); the
+    zero-byte-data and rawdir-presence tests are untouched, zero-edit green.
+  - DnsblLoadedFingerprintTest.php: testReturnsFlatInputsPlusSortedRaws's
+    py_data/py_zone assertContains -> assertNotContains;
+    testEmptyRawdirReturnsOnlyFlatInputs's assertCount(6,...) ->
+    assertCount(4,...); the TLD-narrowing block comment rewritten; renamed +
+    inverted testNonTldModeIncludesDataZoneChange ->
+    testNonTldModeAlsoExcludesRetiredDataZoneChange (now asserts SAME, not
+    NotSame); testTldModeIgnoresDataZoneChangeButOracleChangeStillTriggersReload
+    kept (still true post-phase), its stale inline comment reworded.
+  - PfbUnboundClearWorkFilesTest.php: +2 tests for the new sweep entries.
+  - TldAnalysisTldSegTest.php: untouched, still green zero-edit (the
+    tld_segments string it asserts absent is gone along with far more).
+
+tests/fixtures/dnsbl_corpus/README.md, tests/fixtures/adr06_golden/config.json,
+tests/smoke/helpers.py
+  - Comment/docstring reconciliation only: stop naming tld_analysis() as the
+    classifier / stop citing stale inc: line numbers; point at the manifest
+    build instead. No fixture bytes or test assertions changed.
+
+--------------------------------------------------------------------------------
+GATES (exact commands + pasted tails)
+--------------------------------------------------------------------------------
+NOTE: the scratchpad's gateshim/{pytest,mypy} thin wrappers (pre-existing in
+this session's scratchpad from an earlier phase) were reused for run-gates.sh's
+bare `mypy` invocation; `python3 -m pytest`/`vendor/bin/phpunit` forms were used
+directly everywhere else. Never committed.
+
+1) RED (untouched tree) -- vendor/bin/phpunit tests/php/DnsblInterchangeRetirementTest.php:
+     3 failures (R1, R2, R3), 2 passed (the two vacuity twins) -- see RED->GREEN
+     PROOF below for the pasted failure text.
+   git hash-object tests/php/DnsblInterchangeRetirementTest.php (red time):
+     32b5fe345da5f10bb474b5e97117bcb380c6d2ef
+
+2) GREEN (same command, file byte-identical) -- vendor/bin/phpunit
+   tests/php/DnsblInterchangeRetirementTest.php:
+     OK (5 tests, 8 assertions)
+   git hash-object (post-fix): 32b5fe345da5f10bb474b5e97117bcb380c6d2ef (IDENTICAL).
+
+3) python3 -m pytest tests/test_adr65_decision_oracle.py -q:
+     22 passed in 0.56s
+   git diff --stat HEAD -- tests/test_adr65_decision_oracle.py: (empty).
+
+4) vendor/bin/phpunit (whole suite):
+     Tests: 3453, Assertions: 21207, Warnings: 1, Deprecations: 1, Notices: 1,
+     Skipped: 4. "OK, but there were issues!" -- 1 warning
+     ("Undefined array key DNSBL_TLD" at pfblockerng.inc:8720, the
+     `!is_array($pfb['tld_update']['DNSBL_TLD'])` bookkeeping check on a
+     never-yet-set key -- PRE-EXISTING on the untouched tree too, verified
+     during the RED run above; not a regression). Zero FAILURES.
+     P5 baseline (RESULTS/05 item 3) was 3446. Honest delta: +7, itemised:
+       -4 Adr62TldAnalysisCorpusTest.php, -2 TldAnalysisAbpVerbatimTest.php,
+       -1 TldAnalysisMasterKeyingTest.php, -5 PfbDnsblPySwapTest.php,
+       -1 DnsblNdjsonFlipTest.php (5->4), +0 DnsblHasLoadedFeedsTest.php
+       (7->7, 2 inverted not added), +0 DnsblLoadedFingerprintTest.php
+       (14->14, 2 renamed/inverted not added), +2 PfbUnboundClearWorkFilesTest.php
+       (2->4), +5 DnsblInterchangeRetirementTest.php, +12 DnsblManifestMissingTest.php,
+       +1 TldAnalysisBlacklistHostileInputTest.php.
+       Sum: -13 (4+2+1+5+1) +20 (2+5+12+1) = +7. 3446+7 = 3453. Matches.
+
+5) php -l on every touched PHP file -> "No syntax errors detected" for all;
+   the 4 pre-existing optional-before-required-parameter deprecation notices
+   in pfblockerng.inc (unrelated lines, untouched by this diff) are the same
+   noise RESULTS/05 GATES item 6 already documented.
+
+6) composer phpstan -> [OK] No errors.
+   composer phpcs -- --standard=phpcs.xml.dist src/ -> exit 0, no output.
+
+7) python3 -m pytest (whole suite): 2933 passed, 2 skipped in ~69-73s --
+   IDENTICAL to the P5 end-state count (RESULTS/05 item 2's 2933/2); this
+   phase's pfb_unbound.py edits are comment-only, so the count must not move,
+   and it didn't.
+   ruff check . -> [] (clean). ruff format --check . -> 240 files already
+   formatted. mypy tests/ (via gateshim) -> Success: no issues found in 104
+   source files.
+
+8) npx markdownlint-cli2 "tests/fixtures/dnsbl_corpus/README.md" -> Summary:
+   0 error(s) (the fixture doc touched this phase).
+
+9) sh scripts/agent/run-gates.sh --diff origin/devel (with the gateshim dir
+   prepended to PATH for the bare `mypy` gate):
+     GATE PASS: python3 -m pytest
+     GATE PASS: ruff check .
+     GATE PASS: ruff format --check .
+     GATE PASS: mypy tests/
+     GATE PASS: php -l (11 files, listed)
+     GATE PASS: vendor/bin/phpunit
+     GATE PASS: composer phpstan
+     GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+     GATE PASS: npx markdownlint-cli2
+     REMINDER: www/ touched -- Tier-A ui_render coverage is required and
+       cannot be script-checked (test mandate #4) -- this reflects the
+       WHOLE branch's cumulative diff vs origin/devel (prior phases touched
+       www/); this phase's own diff touches ZERO www/ files (git diff --stat
+       confirms no www/ path in the 9-file phase-6 diff).
+     GATES: PASS
+
+10) python3 scripts/check_comment_narration.py --diff origin/devel -> exit 0
+    (run AFTER the commit -- this tool diffs origin/devel...HEAD via
+    committed history, so a pre-commit run is vacuous; noted as a
+    process learning for the next phase).
+    python3 scripts/check_version_literals.py --diff origin/devel -> exit 0
+    (same post-commit caveat).
+
+11) python3 scripts/check_retired_tokens.py --diff origin/devel -> exit 1
+    (WARN-ONLY; same post-commit caveat as #10 -- this tool also diffs
+    committed history, git-grep's HEAD/index, not the working tree).
+    Full honest classification of every finding (24 token-groups,
+    4213-line raw report):
+
+    UNCHANGED from the P5-documented 19 (RESULTS/05 item 9), same class,
+    counts drifted slightly (a few more common-word occurrences were among
+    this phase's ~330 deleted lines -- expected, not a new finding):
+      '</s><br />' (7), '<small>...</small>' (12), 'DNSBL' (1184, was 1190),
+      'Domain' (270, was 278), 'Feed' (228, was 231), 'Group' (1092, was 1098),
+      'alerts' (205), 'pfb_feed' (124), 'pfb_final' (12), 'pfb_group' (19),
+      'pfb_mode' (12), 'render' (177), 'unified' (95),
+      'Failed to load: {}: {}' (4), '[pfBlockerNG]: Failed to load: {}: {}' (2),
+      'important' (155), 'index' (240), 'python_blacklist' (15),
+      'wildcard' (174, was 178).
+
+    NEW hits introduced by THIS phase's own commit (absent from the P5
+    baseline) -- each individually verified, NONE is a genuine straggler
+    (no surviving writer of pfb_py_data.txt/pfb_py_zone.txt, no surviving
+    call to pfb_dnsbl_py_swap()/tld_search()):
+      - ' completed\n' (1 site): pfblockerng.inc:4816, an UNRELATED "[ pfB
+        Hook ] {$when} {$label} completed\n" log line -- coincidental
+        substring match, zero relation to tld_analysis. FP (format class).
+      - 'DNSBL_TLD' (21 sites): every site verified -- the retained, still-
+        very-much-alive alias/group name (tld_update bookkeeping,
+        alias_dnsbl_all, dnsbl_alias_update() calls, the #1083 legacy-sweep
+        path, feed/mode matching in the alerts parser, the manifest's own
+        synthetic-zone-entry comment in pfb_unbound.py). Flagged only because
+        the ONE removed line `pfb_dnsbl_ndjson_emit_domain_row($tld, '1',
+        'DNSBL_TLD', 'DNSBL_TLD')` happened to spell the literal twice.
+        FP (live-identifier class, exact RESULTS/04 pattern).
+      - 'domain_max_cnt' (1 site): pfblockerng.inc:16353, the SETTER
+        (`$pfb['domain_max_cnt'] = $domain_max;`) -- explicitly on this
+        phase's do-NOT-touch list (brief section 3(a): "Leave the
+        $pfb['domain_max_cnt'] SETTER alone; unused key is harmless").
+        Pre-authorized retained artifact, not a defect.
+      - 'redirect' (133 sites): verified a sample -- shell/CI redirection,
+        HTTP-redirect, DNS-redirect-post validators, safesearch redirection
+        prose -- a common English word, zero relation to the removed
+        "redirect zone" classification concept (which is now
+        DNSBL_CLASS_ZONE Python-side, an entirely different literal). FP.
+      - 'transparent' (5 sites): a stray HSTS-list domain
+        ("transparenti.com"), two Python Unicode-script docstring uses, and
+        two Python DNSBL-classification docstring/comment uses (including
+        one THIS phase itself just wrote, "transparent exact DATA") -- a
+        common word, not a straggler. FP.
+
+    Zero genuine stragglers among the 5 new hits or the 19 carried-over
+    ones. Never claim a clean run -- this one to genuinely is not; every
+    finding above is classified with its evidence.
+
+12) git grep -n 'unbound_py_data\|unbound_py_zone\|pfb_py_data\|pfb_py_zone'
+    -- src/ (committed tree):
+      src/usr/local/pkg/pfblockerng/pfb_unbound.py:1047,1048,1065,1066,1279,
+        1280,6438 (close-only wrappers, path defs, one unrelated comment --
+        Phase-5/g5 carry-forward, untouched)
+      src/usr/local/pkg/pfblockerng/pfblockerng.inc:130,131 (path defs),
+        1862,1874,1884,1885 (this phase's own doc comments),
+        9150,9151,9156,9157 (the g4 sweep -- 2 pre-existing .raw-intermediate
+        entries + this phase's 2 new entries),
+        14336,14337,14498,14532 (the g5 kept grep-helper sites, untouched)
+      src/usr/local/www/pfblockerng/pfblockerng_alerts.php:940,1141,1299,
+        1319,1463 (historical past-tense comments, untouched, g5)
+    Exactly the expected survivor list (brief verification item 12). ZERO
+    fopen('w')/fwrite/file_put_contents/rename targeting the retired paths
+    outside the g4 sweep (which only unlinks).
+
+13) R1's green run (see RED->GREEN PROOF) directly asserts (iv) tld_update
+    bookkeeping, (v) alias_dnsbl_all registration, (vi) the DNSBL_TLD master
+    alias file's existence -- all pass, proving the bookkeeping-intact claim.
+
+14) DEFERRED, NEVER CLAIMED RUN: live-VM
+    `scripts/local-smoke.sh --marker smoke --filter dnsbl` -- Phase-7
+    territory per the brief.
+
+--------------------------------------------------------------------------------
+RED->GREEN PROOF
+--------------------------------------------------------------------------------
+RED (untouched tree, BEFORE any production edit) --
+$ vendor/bin/phpunit tests/php/DnsblInterchangeRetirementTest.php
+
+  There were 3 failures:
+
+  1) DnsblInterchangeRetirementTest::testTldModeNeverWritesInterchangeFilesButKeepsAliasAndStatBookkeeping
+  tld_analysis() must never (re)write pfb_py_data.txt -- classification lives in the manifest build
+  Failed asserting that file ".../pfb_py_data.txt" does not exist.
+
+  2) DnsblInterchangeRetirementTest::testHasLoadedFeedsIgnoresStaleRetiredInterchangeFilesAlone
+  stale retired interchange files alone no longer count as loaded feeds
+  Failed asserting that true is false.
+
+  3) DnsblInterchangeRetirementTest::testReloadFingerprintDecoupledFromRetiredInterchangeFiles
+  a retired pfb_py_data.txt mutation must not move the reload fingerprint in non-TLD mode either
+  Failed asserting that two strings are identical.
+  --- Expected
+  +++ Actual
+  @@ @@
+  -'8eb00f394c40edc83261b00aa7718ae2'
+  +'fda66343b1aaab73d31d4e997b7e6fbd'
+
+  Tests: 5, Assertions: 5, Failures: 3, Warnings: 1.
+
+git hash-object tests/php/DnsblInterchangeRetirementTest.php (at red time):
+  32b5fe345da5f10bb474b5e97117bcb380c6d2ef
+
+GREEN (after the production edits, test file BYTE-IDENTICAL, zero edits) --
+$ vendor/bin/phpunit tests/php/DnsblInterchangeRetirementTest.php
+  OK (5 tests, 8 assertions)
+git hash-object tests/php/DnsblInterchangeRetirementTest.php (post-fix):
+  32b5fe345da5f10bb474b5e97117bcb380c6d2ef  (IDENTICAL to red time)
+
+Oracle A (D1 "decisions unchanged"):
+$ python3 -m pytest tests/test_adr65_decision_oracle.py -q
+  22 passed in 0.56s
+$ git diff --stat HEAD -- tests/test_adr65_decision_oracle.py
+  (empty)
+
+Bookkeeping-intact proof (R1's green assertions, item 13):
+  (iv) $pfb['tld_update']['DNSBL_TLD'] === ['feeds' => ['DNSBL_TLD'], 'count' => 1] -- PASS
+  (v) in_array('DNSBL_TLD', $pfb['alias_dnsbl_all']) -- PASS
+  (vi) file_exists("{dnsalias}/DNSBL_TLD") -- PASS
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+| Brief row                                              | Status |
+| ------------------------------------------------------ | ------ |
+| (a) tld_analysis(): gate replaced, classification removed, bookkeeping kept | DnsblInterchangeRetirementTest R1 |
+| (a) tld_search() deleted, no other caller               | git grep verified (evidence in brief); zero callers post-edit |
+| (b) pfb_dnsbl_py_swap() + call site deleted              | git grep zero hits; PfbDnsblPySwapTest.php deleted |
+| (c) domain-side assembly: concat/swap removed, manifest write kept | git diff read; consumer-proof grep (zero {dnsbl_file}.raw consumers) |
+| (d) #546 no-feeds path: data/zone writes removed, count/regex unlinks kept | git diff read |
+| (e) disable path: data/zone dropped from unlink foreach   | git diff read |
+| (f) health check re-keyed on pfb_dnsbl_manifest_missing() | DnsblManifestMissingTest.php (12 tests, every hostile row) |
+| (g1) pfb_dnsbl_loaded_input_paths drops data/zone         | DnsblLoadedFingerprintTest (assertNotContains + count(4)) |
+| (g2) pfb_dnsbl_reload_fingerprint narrowing removed       | DnsblInterchangeRetirementTest R3 + twin; DnsblLoadedFingerprintTest renamed/inverted test |
+| (g3) pfb_dnsbl_has_loaded_feeds re-keyed on rawdir only    | DnsblInterchangeRetirementTest R2 + twin; DnsblHasLoadedFeedsTest inverted pair |
+| (g4) clear_work_files sweeps the two retired files         | PfbUnboundClearWorkFilesTest.php +2 tests |
+| (g5) grep-helper/Python-wrapper sites kept untouched        | git diff --stat confirms zero change to those regions |
+| (h) comment reconciliation (pfb_unbound.py x5, helpers.py, README.md, config.json, inc:8436) | git diff read, each site verified |
+| Hostile rows (section 5, manifest_missing)                  | DnsblManifestMissingTest.php: absent/0-byte/both-absent/stuck-apply/garbage/multiline/unreadable/oversized -- all covered, each paired |
+| Hostile row (tldblacklist counting)                         | TldAnalysisBlacklistHostileInputTest.php ('.zip.', '...', dropped blank) |
+| Test reconciliation (section 4's per-file list)              | Every named file/test itemised above in WHAT CHANGED; honest count delta in GATES item 4 |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. Health-check-red deviation (planner-pre-approved in the brief): the phase
+   prompt's literal ask ("$dnsbl_missing keys on the manifest" as an executed
+   red test) is not off-appliance-drivable -- the $dnsbl_missing block lives
+   inline in sync_package_pfblockerng(), which restarts real services. Rides
+   R2/R3's executed reds (the sibling re-keys) + DnsblManifestMissingTest.php's
+   green-only branch coverage + the diff-read. The integrated behaviour is
+   DEFERRED to the Phase-7 live-VM smoke row, never claimed as run.
+2. DnsblManifestMissingTest.php is green-only (CLAUDE.md brand-new-code
+   carve-out) -- pfb_dnsbl_manifest_missing() did not exist before this phase;
+   an existence-only red would be coverage theater.
+3. The RESULTS-file follow-up doc-only commit (this file) lands separately
+   from the code commit, per the P1/P5 precedent -- pre-authorised deviation.
+4. GATES items 10/11 (comment-narration, version-literal, retired-token) were
+   first run PRE-commit and returned vacuous/misleading results (they diff
+   committed history, not the working tree) -- re-run POST-commit for the
+   real evidence pasted above. Process learning, not a plan deviation.
+5. Push: plain fast-forward, not denied -- no deviation to record there.
+6. No ESCALATE triggered -- every brief claim checked against the live code
+   matched exactly (line-region content, function signatures, call sites,
+   the domain_update precondition chain).
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD (Phase 7)
+--------------------------------------------------------------------------------
+- The Python close-only wrappers (_load_zone_and_data_dbs /
+  _load_whitelist_and_hsts_dbs) and the pfb["pfb_py_data"]/pfb["pfb_py_zone"]
+  path defs in pfb_unbound.py (:1047-1048/:1065-1066/:1279-1280) are now
+  FULLY orphaned (nothing on the PHP side ever creates these files again) --
+  Phase 7's retirement candidate, per P5's carry-forward.
+- The g5 grep-helper sites (pfb_dnsbl_prefetch_grep + pfb_dnsbl_parse_compute's
+  exec-grep fallback over unbound_py_data/unbound_py_zone,
+  pfblockerng.inc:14336-14337/14498/14532) still read files that (after
+  Phase 7 retires the path defs) may never be written or may not exist at
+  all -- needs its own retirement issue/phase; explicitly kept untouched
+  this phase per the brief's "Explicitly kept" list.
+- $pfb['unbound_py_data']/['unbound_py_zone'] path DEFS (pfblockerng.inc
+  :130-131) still exist -- Phase 7 retires them; g4's sweep in
+  pfb_unbound_clear_work_files() reads them via these same keys, so the
+  sweep entries need updating in lockstep if the defs go.
+- $pfb['domain_max_cnt'] is now a write-only orphaned config key (the setter
+  at pfblockerng.inc:16353 has zero remaining readers post this phase) --
+  flagged by the retired-token checker (1 site), explicitly left alone per
+  this phase's brief; a future phase may want to retire the setter too.
+- DEFERRED smoke row: `scripts/local-smoke.sh --marker smoke --filter dnsbl`
+  on a leased PFB_BOXES box, asserting a DNSBL run blocks with NO
+  pfb_py_data.txt/pfb_py_zone.txt ever appearing on disk, and that a stuck
+  zero-downtime apply (mismatched pfb_py_reload/.applied generations) still
+  triggers the health-check rebuild live. Phase-7 territory.
+- Retired-token FP ledger: the P5-documented 19 + this phase's 5 NEW
+  (' completed\n', 'DNSBL_TLD', 'domain_max_cnt', 'redirect', 'transparent')
+  = 24 total documented false-positive token-groups as of Phase 6's commit;
+  any future phase's run of this checker should diff against this 24-count
+  baseline, not re-litigate each one from scratch.
