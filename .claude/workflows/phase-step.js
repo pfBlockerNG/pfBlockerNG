@@ -4,8 +4,8 @@ export const meta = {
   whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning the implementer/verifier stages yourself. Args: {worktree, brief | briefSpec: {adrDir, phase, notes?, weight?: "full" (default) | "light"}, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null}. The Verify stage always runs on Sonnet — a fresh set of model-eyes distinct from the higher-model brief author (owner directive 2026-07-14). With briefSpec (ADR phases — issue #1089) the Brief stage derives brief/gates/redProof/planItems itself from disk, so the caller passes only pointers. weight "light" (owner directive 2026-07-14; ONLY when the phase prompt itself carries a WEIGHT: light line — behaviour-preserving mechanical execution pinned by an earlier gate-passed oracle) skips the Brief stage: the implementer executes the phase prompt directly and re-derives its enumerations from source; the Verify stage is unchanged. The caller keeps ALL judgment: it validates the returned records, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
   phases: [
     { title: 'Brief', detail: 'fresh higher-model planner enumerates the matrix + hostile rows and composes the brief (briefSpec callers only; skipped for weight: light)' },
-    { title: 'Implement', detail: 'one Sonnet implementer executes the brief', model: 'sonnet' },
-    { title: 'Verify', detail: 'fresh Sonnet verifier (never the brief author\'s model) re-derives every gate item', model: 'sonnet' },
+    { title: 'Implement', detail: 'one Sonnet implementer executes the brief', model: 'claude-sonnet-5' },
+    { title: 'Verify', detail: 'fresh Sonnet verifier (never the brief author\'s model) re-derives every gate item', model: 'claude-sonnet-5' },
   ],
 }
 
@@ -146,7 +146,7 @@ STANDING CONTRACT (CLAUDE.md "The delegation contract" — these override nothin
 - ESCALATE is REACTIVE, not an audit mandate: when code you are editing (or a probe you needed anyway) contradicts a brief claim, STOP and return verdict BLOCKED with the blocker field filled — never silently patch the plan. Encountering a contradiction triggers it; going looking for one does not.
 - FIRST, before any edit: run git -C ${worktree} rev-parse HEAD and report it verbatim as base_sha. That is the pre-fix baseline the verifier reverts to; it stays correct even if you land a follow-up commit on top of the fix, which HEAD~1 would not.
 - Commit as the brief instructs (single focused commit, repo commit style), then fill the structured handoff COMPLETELY — an empty field is a gate failure.`,
-  { label: 'implement', phase: 'Implement', model: 'sonnet', effort: 'xhigh', schema: HANDOFF })
+  { label: 'implement', phase: 'Implement', model: 'claude-sonnet-5', effort: 'xhigh', schema: HANDOFF })
 
 if (!handoff) throw new Error('implementer returned nothing (skipped or terminal error)')
 if (handoff.verdict === 'BLOCKED') {
@@ -204,6 +204,6 @@ Verdict FAIL iff any item fails; list blocking_reasons. Your structured output I
   // Owner directive (2026-07-14): the verifier never runs on the brief author's (higher)
   // model — Sonnet re-derives the gate; the top tier's cross-referencing is reserved for
   // the whole-PR review (review-single).
-  { label: 'verify', phase: 'Verify', model: 'sonnet', effort: 'xhigh', schema: GATE_RECORD })
+  { label: 'verify', phase: 'Verify', model: 'claude-sonnet-5', effort: 'xhigh', schema: GATE_RECORD })
 
 return { briefRecord, handoff, gateRecord }

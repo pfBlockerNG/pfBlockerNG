@@ -18,6 +18,8 @@ Describe 'mcp-token-savior.sh env exports'
 #!/bin/sh
 printf '%s\n' "${INCLUDE_PATTERNS:-UNSET}"
 printf '%s\n' "${TOKEN_SAVIOR_MAX_FILE_SIZE:-UNSET}"
+printf '%s\n' "${TOKEN_SAVIOR_CLIENT:-UNSET}"
+printf '%s\n' "${WORKSPACE_ROOTS:-UNSET}"
 EOF
     chmod +x "${WORK}/venv/bin/token-savior"
     default_source="$(sed -n 's/^TS_SOURCE="\${TS_SOURCE:-\(.*\)}"$/\1/p' "${SCRIPT}")"
@@ -56,6 +58,92 @@ EOF
     When run env TOKEN_SAVIOR_MAX_FILE_SIZE=777 TS_VENV="${WORK}/venv" sh "${SCRIPT}"
     The status should be success
     The line 2 of output should equal '777'
+  End
+
+  It 'defaults direct launches to the Claude Code telemetry label'
+    When run env TOKEN_SAVIOR_CLIENT="" TS_VENV="${WORK}/venv" sh "${SCRIPT}"
+    The status should be success
+    The line 3 of output should equal 'claude-code'
+  End
+
+  It 'lets Codex set its own telemetry label'
+    When run env TOKEN_SAVIOR_CLIENT=codex TS_VENV="${WORK}/venv" sh "${SCRIPT}"
+    The status should be success
+    The line 3 of output should equal 'codex'
+  End
+
+  It 'uses the Git worktree root when launched from a subdirectory'
+    When run sh -c 'unset WORKSPACE_ROOTS GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX; cd "$1" && TS_VENV="$2" exec sh "$3"' _ "${PFB_ROOT}/tests" "${WORK}/venv" "${SCRIPT}"
+    The status should be success
+    The line 4 of output should equal "${PFB_ROOT}"
+  End
+End
+
+Describe 'Token Savior vendor wiring'
+  It 'labels the Claude MCP client explicitly'
+    When run jq -r '.mcpServers["token-savior-recall"].env.TOKEN_SAVIOR_CLIENT' "${PFB_ROOT}/.mcp.json"
+    The status should be success
+    The output should equal 'claude-code'
+  End
+
+  It 'labels the Codex MCP client and uses the shared launcher'
+    When run python3 -c 'import sys, tomllib; c=tomllib.load(open(sys.argv[1], "rb"))["mcp_servers"]["token-savior-recall"]; print(c["env"]["TOKEN_SAVIOR_CLIENT"]); print(" ".join(c["args"]))' "${PFB_ROOT}/.codex/config.toml"
+    The status should be success
+    The line 1 of output should equal 'codex'
+    The line 2 of output should include 'scripts/mcp-token-savior.sh'
+  End
+
+  It 'runs the same capture wrapper from Claude and Codex PostToolUse hooks'
+    When run sh -c 'jq -er '\''[.hooks.PostToolUse[].hooks[].command | select(contains("scripts/ts-hook.sh") and contains("tool_capture_hook"))] | length > 0'\'' "$1" >/dev/null && jq -er '\''[.hooks.PostToolUse[].hooks[].command | select(contains("scripts/ts-hook.sh") and contains("tool_capture_hook"))] | length > 0'\'' "$2" >/dev/null' _ "${PFB_ROOT}/.claude/settings.json" "${PFB_ROOT}/.codex/hooks.json"
+    The status should be success
+  End
+
+  It 'requests only supported Bash and Playwright MCP capture events in Codex'
+    When run python3 -c 'import json, re, sys; groups=json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]; pattern=next(g["matcher"] for g in groups if any("tool_capture_hook" in h["command"] for h in g["hooks"])); approved=("Bash", "mcp__playwright__browser_snapshot"); rejected=("Read", "Grep", "WebFetch", "apply_patch", "PrefixBash", "BashSuffix", "mcp__token-savior-recall__capture_get", "mcp__github__get_file_contents", "mcp__other__read"); assert all(re.search(pattern, name) for name in approved); assert not any(re.search(pattern, name) for name in rejected)' "${PFB_ROOT}/.codex/hooks.json"
+    The status should be success
+  End
+End
+
+verify_codex_integrity_pins() {
+  python3 - "$PFB_ROOT" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+import tomllib
+
+root = Path(sys.argv[1])
+hooks = json.loads((root / ".codex/hooks.json").read_text())
+hook_commands = [
+    hook["command"]
+    for groups in hooks["hooks"].values()
+    for group in groups
+    for hook in group["hooks"]
+]
+for relative in (
+    ".claude/hooks/session-branch-sync.sh",
+    "scripts/claude-bash-guard.sh",
+    "scripts/check_retired_tokens.py",
+    "scripts/ts-hook.sh",
+):
+    digest = hashlib.sha256((root / relative).read_bytes()).hexdigest()
+    matches = [command for command in hook_commands if relative in command]
+    assert len(matches) == 1, f"expected one Codex hook command for {relative}"
+    assert digest in matches[0], f"stale Codex hook hash for {relative}"
+
+config = tomllib.loads((root / ".codex/config.toml").read_text())
+mcp_command = " ".join(config["mcp_servers"]["token-savior-recall"]["args"])
+relative = "scripts/mcp-token-savior.sh"
+digest = hashlib.sha256((root / relative).read_bytes()).hexdigest()
+assert relative in mcp_command
+assert digest in mcp_command, f"stale Codex MCP hash for {relative}"
+PY
+}
+
+Describe 'Codex repository-script integrity pins'
+  It 'pins every hook and MCP launcher to its current SHA-256'
+    When call verify_codex_integrity_pins
+    The status should be success
   End
 End
 

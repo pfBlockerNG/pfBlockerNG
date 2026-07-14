@@ -1,7 +1,7 @@
 #shellcheck shell=sh
 # .githooks/prepare-commit-msg agent worktree guard (issue #1262): an agent
-# commit (CLAUDECODE=1) in the PRIMARY checkout aborts; a linked-worktree
-# commit, a human commit, and an agent-dedicated checkout (managed-remote
+# commit (CLAUDECODE=1 or CODEX_THREAD_ID set) in the PRIMARY checkout aborts;
+# a linked-worktree commit, a human commit, and an agent-dedicated checkout (managed-remote
 # marker CLAUDE_CODE_USER_EMAIL, or the pfblockerng.allowprimarycommit valve)
 # all pass. Enforced in prepare-commit-msg because that hook still runs when
 # verification is skipped — the verify-skip row below is the point.
@@ -21,6 +21,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     git init -q -b devel "$primary"
     git -C "$primary" config user.email human@example.com
     git -C "$primary" config user.name Human
+    git -C "$primary" config commit.gpgsign false
     ( cd "$primary" && echo seed > seed.txt && git add seed.txt \
         && git commit -q -m seed )
     git -C "$primary" worktree add -q "$wt" -b spec-branch
@@ -42,11 +43,15 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   # Direct hook invocations: cwd selects primary vs linked worktree; env is
   # set explicitly per row because the suite itself may run under CLAUDECODE=1.
   agent_hook_in() {
-    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL CLAUDECODE=1 \
+    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 \
       sh "$hook" "$2"
   }
+  codex_hook_in() {
+    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE \
+      CODEX_THREAD_ID=codex-test sh "$hook" "$2"
+  }
   human_hook_in() {
-    cd "$1" && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL \
+    cd "$1" && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
       sh "$hook" "$2"
   }
 
@@ -61,6 +66,34 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The stderr should equal ''
+  End
+
+  It 'blocks a Codex commit in the primary checkout'
+    When run codex_hook_in "$primary" .git/PCM_MSG
+    The status should equal 1
+    The stderr should include 'primary checkout'
+  End
+
+  It 'passes a Codex commit in a linked worktree'
+    When run codex_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The stderr should equal ''
+  End
+
+  It 'does not apply a legacy Claude coauthor identity to a Codex commit'
+    git -C "$primary" config coauthor.name Claude
+    git -C "$primary" config coauthor.email noreply@anthropic.com
+    When run codex_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
+  End
+
+  It 'keeps the legacy coauthor identity for a Claude commit'
+    git -C "$primary" config coauthor.name Claude
+    git -C "$primary" config coauthor.email noreply@anthropic.com
+    When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include 'Co-Authored-By: Claude <noreply@anthropic.com>'
   End
 
   It 'passes a human commit in the primary checkout'
@@ -78,7 +111,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
 
   It 'passes an agent commit in a managed-remote session (owner email marker set)'
     managed_hook() {
-      cd "$primary" && env CLAUDECODE=1 CLAUDE_CODE_USER_EMAIL=owner@example.com \
+      cd "$primary" && env -u CODEX_THREAD_ID CLAUDECODE=1 CLAUDE_CODE_USER_EMAIL=owner@example.com \
         sh "$hook" .git/PCM_MSG
     }
     When run managed_hook
@@ -94,7 +127,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
       cd "$primary" \
         && git config core.hooksPath "${PFB_ROOT}/.githooks" \
         && echo change >> seed.txt && git add seed.txt \
-        && env -u CLAUDE_CODE_USER_EMAIL CLAUDECODE=1 git commit -n -m blocked
+        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 git commit -n -m blocked
     }
     When run real_commit
     The status should not equal 0
@@ -107,7 +140,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
       cd "$primary" \
         && git config core.hooksPath "${PFB_ROOT}/.githooks" \
         && echo change >> seed.txt && git add seed.txt \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL git commit -n -m allowed
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID git commit -n -m allowed
     }
     When run real_commit_human
     The status should equal 0

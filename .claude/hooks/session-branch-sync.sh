@@ -14,6 +14,8 @@
 #                               a diverged base is surfaced, never rewritten
 #   session branch           -> rebase onto origin/devel: merged commits drop,
 #                               new commits replay on the live base
+#   shallow history gap      -> unshallow once, then require a visible merge
+#                               base; otherwise report + touch nothing
 #   dirty tree               -> touch nothing; tell the agent to sync by hand
 #   rebase conflict (~1%)    -> abort cleanly; tell the agent to resolve by hand
 #
@@ -50,6 +52,27 @@ case "$branch" in
 esac
 
 git rev-parse --verify --quiet "$base" >/dev/null 2>&1 || exit 0
+
+# A shallow boundary can hide the true ancestry between an older session branch
+# and a freshly fetched base. Without this guard, `git rebase origin/devel`
+# treats the boundary as history's root and replays old BASE commits as if they
+# belonged to the session branch. Recover the missing ancestry once; never
+# launch a rebase that still has no visible merge base.
+case "$branch" in
+	devel | main) ;;
+	*)
+		if ! git merge-base HEAD "$base" >/dev/null 2>&1; then
+			if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+				git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=15 \
+					fetch --quiet --unshallow origin >/dev/null 2>&1 || true
+			fi
+			if ! git merge-base HEAD "$base" >/dev/null 2>&1; then
+				emit "SESSION BRANCH '${branch}': NO VISIBLE MERGE BASE with ${base}; branch left untouched. If this clone is shallow, run 'git fetch origin --unshallow' (or deepen it) and confirm 'git merge-base HEAD ${base}' prints a commit before rebasing. Never run a plain rebase across a missing merge base: it replays base history as work."
+				exit 0
+			fi
+		fi
+		;;
+esac
 
 # Nothing to do if already at/behind-only with no divergence for base branches,
 # or already sitting on the live base for session branches.

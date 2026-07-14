@@ -1,7 +1,7 @@
 export const meta = {
   name: 'review-single',
   description: 'Single-agent adversarial PR review: ONE reviewer covers contract, correctness/hostile-inputs, and test-honesty; schema-forced findings',
-  whenToUse: 'pr-merge-flow Step 1d\'s default review shape. Args: {pr: <number>, base: <branch, or a bare pre-fix SHA to review ONLY the fix delta — mandatory scoping for feedback-fix re-reviews>, worktree: <path>, spec: <intent/acceptance text>, model?: "sonnet" (default; also the model for every delta re-review) | "fable" (large/complex PR: >300 lines, >6 files, or src/ parsing/guard/scheduling behaviour — whole-PR cross-referencing) | "opus" (ONLY as the second pass of the dual fallback: top tier unavailable on a fable-grade PR -> run once with sonnet and once with opus, union the findings), profile?: "full" (default) | "verify" (mechanically-trivial data/pin/config diffs ONLY — the caller applies pr-merge-flow\'s objective no-new-control-flow gate before choosing it)}.',
+  whenToUse: 'pr-merge-flow Step 1d\'s default review shape. Args: {pr: <number>, base: <branch, or a bare pre-fix SHA to review ONLY the fix delta — mandatory scoping for feedback-fix re-reviews>, worktree: <path>, spec: <intent/acceptance text>, model?: "claude-sonnet-5" (default; also the model for every delta re-review) | "claude-fable-5" (large/complex PR: >300 lines, >6 files, or src/ parsing/guard/scheduling behaviour — whole-PR cross-referencing) | "claude-opus-4-8" (ONLY as the second pass of the dual fallback: top tier unavailable on a high-tier PR -> run once with claude-sonnet-5 and once with claude-opus-4-8, union the findings), profile?: "full" (default) | "verify" (mechanically-trivial data/pin/config diffs ONLY — the caller applies pr-merge-flow\'s objective no-new-control-flow gate before choosing it)}.',
   phases: [
     { title: 'Review', detail: 'one adversarial reviewer over the whole diff' },
   ],
@@ -10,7 +10,7 @@ export const meta = {
 // Single-agent variant of review-fanout (pr-merge-flow's default since 2026-07-11):
 // same schema-forced findings contract, no fan-out and no separate verify stage — the
 // one reviewer must ground its own blocking claims in executed probes. Model is the
-// bare family alias (resolves to the latest generation). Effort: xhigh for the full
+// configured full family identifier. Effort: xhigh for the full
 // profile (the flow's floor and ceiling); the verify profile runs at high — owner
 // authorization 2026-07-14: "do all 6" (item 6 of the review-speed batch). No ponytail
 // (reviewers build nothing; the SubagentStart capsule's review carve-out applies).
@@ -18,16 +18,16 @@ export const meta = {
 // Callers sometimes deliver args JSON-string-encoded (killed review-fanout on PR #937,
 // issue #942) — normalize before destructuring instead of trusting caller discipline.
 const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
-const { pr, base = 'devel', worktree, spec = '(no spec provided — flag that as a finding)', model = 'sonnet', profile = 'full' } = input
+const { pr, base = 'devel', worktree, spec = '(no spec provided — flag that as a finding)', model = 'claude-sonnet-5', profile = 'full' } = input
 // A bare SHA base reviews a fix delta (pr-merge-flow 1d.4); a branch name gets origin/.
 const baseRef = /^[0-9a-f]{7,40}$/.test(base) ? base : `origin/${base}`
 if (!pr || !worktree) throw new Error('args must be {pr, worktree, base?, spec?, model?, profile?}')
-// Owner directive (2026-07-14): fable (the highest tier) reviews large/complex PRs —
-// whole-PR cross-referencing; sonnet is the default AND the model for every delta
-// re-review. opus is valid ONLY as the second pass of the dual fallback (top tier
-// unavailable on a fable-grade PR: one sonnet + one opus run, findings unioned by the
+// Owner directive (2026-07-14): claude-fable-5 (the highest tier) reviews large/complex PRs —
+// whole-PR cross-referencing; claude-sonnet-5 is the default AND the model for every delta
+// re-review. claude-opus-4-8 is valid ONLY as the second pass of the dual fallback (top tier
+// unavailable on a high-tier PR: one claude-sonnet-5 + one claude-opus-4-8 run, findings unioned by the
 // caller) — never a sole reviewer.
-if (model !== 'sonnet' && model !== 'fable' && model !== 'opus') throw new Error(`model must be "sonnet", "fable", or "opus" (opus only as the dual-fallback second pass; never a dated ID); got "${model}"`)
+if (model !== 'claude-sonnet-5' && model !== 'claude-fable-5' && model !== 'claude-opus-4-8') throw new Error(`model must be "claude-sonnet-5", "claude-fable-5", or "claude-opus-4-8" (claude-opus-4-8 only as the dual-fallback second pass; never a dated ID); got "${model}"`)
 if (profile !== 'full' && profile !== 'verify') throw new Error(`profile must be "full" or "verify"; got "${profile}"`)
 
 const FINDINGS = {

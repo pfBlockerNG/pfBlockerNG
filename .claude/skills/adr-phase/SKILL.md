@@ -203,8 +203,8 @@ Your duties on return:
 The legacy `brief:` argument (you compose the brief yourself) remains supported but is not
 the default for ADR phases. **Workflow tool unavailable** → play the Brief, Implement, and
 Verify stages from `.claude/workflows/phase-step.js` yourself with plain Agents (its
-prompts + schemas ARE the contract; Brief and Verify on the higher model, implementer
-`model: sonnet`, effort `xhigh` stated explicitly on every spawn), then run the duties
+prompts + schemas ARE the contract; Brief on the higher model, Implement and Verify
+`model: claude-sonnet-5`, effort `xhigh` stated explicitly on every spawn), then run the duties
 above — the contract is identical; the workflow only packages it.
 
 A BLOCKED briefRecord or handoff, a FAIL gate record, or any missing fixed field →

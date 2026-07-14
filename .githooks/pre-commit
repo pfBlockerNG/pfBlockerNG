@@ -48,8 +48,9 @@ skip() { skipped="${skipped} $1"; }
 # --- Stage classification: run a language's gates ONLY when this commit stages a
 #     file of that type. (diff-filter ACMR = added/copied/modified/renamed; a pure
 #     deletion stages nothing to lint.) Nothing staged -> nothing to do. ---
+staged_all=$(git diff --cached --name-only --diff-filter=ACMRD)
+[ -n "$staged_all" ] || exit 0
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
-[ -n "$staged" ] || exit 0
 staged_has() { printf '%s\n' "$staged" | grep -qE "$1"; }
 staged_py=0;  staged_has '\.py$'        && staged_py=1
 staged_md=0;  staged_has '\.md$'        && staged_md=1
@@ -61,6 +62,17 @@ staged_sh=0;  staged_has '\.sh$'        && staged_sh=1
 staged_specplumb=0; staged_has '^tests/shell/(spec_helper\.sh|bin/|fixtures/)' && staged_specplumb=1
 staged_yaml=0; staged_has '\.ya?ml$'    && staged_yaml=1
 staged_adrtxt=0; staged_has '^\.ADRs/.*\.txt$' && staged_adrtxt=1
+staged_agentcfg=0
+printf '%s\n' "$staged_all" | grep -qE \
+	'^(AGENTS\.md|CLAUDE\.md|docs/misc/codex-migration\.md|\.claude/(skills|workflows)/|\.agents/(skills/|model-tiers\.conf$)|\.codex/|scripts/agent/check-agent-config-parity\.sh|tests/shell/agent_config_parity_spec\.sh)' \
+	&& staged_agentcfg=1
+
+# The detailed policy/procedures have one canonical source. Codex files are
+# discovery/runtime adapters only; catch a new or removed source with no mapping.
+if [ "$staged_agentcfg" = 1 ]; then
+	step 'agent-config parity (shared sources, adapters, and model tiers)'
+	sh scripts/agent/check-agent-config-parity.sh || failed 'agent-config parity'
+fi
 
 # =============================== Python (*.py) =============================== #
 if [ "$staged_py" = 1 ]; then

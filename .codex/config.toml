@@ -1,0 +1,14 @@
+# Repository-scoped Codex defaults. This layer is loaded only after the project
+# is trusted; keep machine-specific authentication and notification settings in
+# ~/.codex/config.toml.
+model_reasoning_effort = "xhigh"
+
+[agents]
+max_threads = 4
+max_depth = 2
+
+[mcp_servers.token-savior-recall]
+command = "sh"
+args = ["-c", '''root=$(git rev-parse --show-toplevel) && python3 -c "import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)" "$root/scripts/mcp-token-savior.sh" 4d4d264b22c38bbbbfa46459d6d3799ee07739093411ad61a21a3bf0bd3ab18e && exec sh "$root/scripts/mcp-token-savior.sh"''']
+env = { TOKEN_SAVIOR_CLIENT = "codex" }
+startup_timeout_sec = 120

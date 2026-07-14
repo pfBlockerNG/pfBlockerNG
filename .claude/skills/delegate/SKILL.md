@@ -5,7 +5,7 @@ description: >
   the same brief → Sonnet 5 implementer → mechanical gate discipline /adr-phase
   and /gh-issue enforce, for work that belongs to neither. Args: <task
   description> [--base <branch>]. Use when the user says "delegate this", "have
-  sonnet build X", "do this via the contract", or invokes /delegate. Not for
+  claude-sonnet-5 build X", "do this via the contract", or invokes /delegate. Not for
   ADR phases (/adr-phase) or issue fixes (/gh-issue --fix) — route those to
   their skills.
 ---
@@ -75,7 +75,7 @@ reuse the work-item convention when one applies; otherwise `task/{slug}` with th
 
 ## Step 3 — Spawn the implementer
 
-One Agent: `subagent_type: general-purpose`, **`model: sonnet`**, **effort `xhigh`** stated
+One Agent: `subagent_type: general-purpose`, **`model: claude-sonnet-5`**, **effort `xhigh`** stated
 explicitly. The brief is Step 1's text, self-contained — no carry-over from this
 conversation. The implementer works with Read/Edit/Write/Bash and may spawn subagents for a
 subtask that genuinely splits (CLAUDE.md "Plan with a higher model" — nested work is verified

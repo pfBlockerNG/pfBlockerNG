@@ -7,10 +7,11 @@
 #   - vX.Y.Z                       -> commit must be reachable from origin/main   (stable)
 #   - vX.Y.Z.alpha.N|.beta.N|.rc.N -> commit on origin/devel but NOT origin/main  (prerelease)
 #   - neither branch, or a malformed version tag -> rejected
-#   - agent (CLAUDECODE=1) branch push rewriting remote history -> allowed only
-#     when the advertised remote oid equals the local remote-tracking ref, i.e.
-#     the history being overwritten was fetched (--force-with-lease's check,
-#     applied to the push's effect regardless of how it was spelled)
+#   - agent (CLAUDECODE=1 or CODEX_THREAD_ID set) branch push rewriting remote
+#     history -> allowed only when the advertised remote oid equals the local
+#     remote-tracking ref, i.e. the history being overwritten was fetched
+#     (--force-with-lease's check, applied to the push's effect regardless of
+#     how it was spelled)
 #
 # Enable: git config core.hooksPath .githooks
 
@@ -69,7 +70,10 @@ PFB_TAG_UPDATES
 
 # Agent lease-by-effect guard (issue #1307): deny an agent branch rewrite over
 # remote history it never fetched (advertised remote oid != remote-tracking ref).
-if [ "${CLAUDECODE:-}" = "1" ]; then
+agent_runtime=0
+[ "${CLAUDECODE:-}" = "1" ] && agent_runtime=1
+[ -n "${CODEX_THREAD_ID:-}" ] && agent_runtime=1
+if [ "$agent_runtime" = "1" ]; then
     remote_name="${1:-origin}"
     while IFS=' ' read -r _local_ref local_sha remote_ref remote_sha; do
         case "$remote_ref" in refs/heads/*) ;; *) continue ;; esac
@@ -88,5 +92,6 @@ if [ "${CLAUDECODE:-}" = "1" ]; then
 $updates
 PFB_LEASE_UPDATES
 fi
+unset agent_runtime
 
 exit 0
