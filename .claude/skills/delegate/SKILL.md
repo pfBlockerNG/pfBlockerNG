@@ -58,11 +58,20 @@ ASSUMED with a verification step in the brief.
 
 ## Step 2 — Worktree and branch
 
-`git worktree add -b <branch> "$(git rev-parse --show-toplevel)/.claude/worktrees/<name>"
-origin/<base>` — the path must be **absolute** (a relative path resolves against whatever
-the cwd currently is and has nested worktrees inside worktrees). Branch: reuse the
-work-item convention when one applies; otherwise `task/{slug}` with the CLAUDE.md "Branch
-naming" sanitiser. All work happens in the worktree; never the main checkout.
+For an issue/ADR-shaped item, `sh scripts/agent/work-branch.sh <issue|adr> <NN> "<title>"
+--worktree` does branch + worktree in one step, anchored at the primary checkout. Otherwise:
+
+```sh
+root=$(CDPATH='' cd "$(git rev-parse --git-common-dir)/.." && pwd -P)
+git worktree add -b <branch> "$root/.claude/worktrees/<name>" origin/<base>
+```
+
+The path must be **absolute** (a relative path resolves against whatever the cwd currently
+is and has nested worktrees inside worktrees), and the anchor is the **primary checkout** —
+never `--show-toplevel`, which inside a session worktree names the session tree and nests
+the new worktree in a harness-lifecycle tree (fixed in work-branch.sh by PR #1341). Branch:
+reuse the work-item convention when one applies; otherwise `task/{slug}` with the CLAUDE.md
+"Branch naming" sanitiser. All work happens in the worktree; never the main checkout.
 
 ## Step 3 — Spawn the implementer
 

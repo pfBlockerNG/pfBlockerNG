@@ -262,6 +262,17 @@ may push is set by the environment's branch-push policy (configured in the envir
 trigger, not this repo — see <https://code.claude.com/docs/en/claude-code-on-the-web>). Two
 configurations, in order of preference:
 
+**Session-worktree environments (probe before assuming).** Some environments also cut **one
+linked worktree per session** and start the session inside it: rc-mode (mobile Devices view)
+at `<primary>/.claude/worktrees/bridge-<session-id>` on branch `worktree-bridge-<session-id>`
+(pushes NOT pinned — probed 2026-07-14: skills mint canonical branches as usual), managed
+environments one worktree per session named after the first-prompt issue. The session
+worktree is the orchestration home, never the work-item worktree (CLAUDE.md "Worktrees" —
+"Session layouts"). In an unfamiliar environment, probe at task start instead of assuming:
+`git rev-parse --git-dir --git-common-dir` (differing ⇒ linked worktree) and the push policy;
+an unverified "pushes are pinned here" is ASSUMED and must be probed before it shapes branch
+choice.
+
 **Preferred — allow pushing to the canonical work-item branch.** Configure the push policy to
 permit the repo's own `adr/{NN}-{slug}` and `issue/{NN}-{slug}` branches (keep `devel`/`main`
 PR-only). Then a managed-remote session works the item on its canonical branch exactly as

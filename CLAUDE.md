@@ -562,6 +562,19 @@ Run linters while working; the `.githooks/pre-commit` hook blocks failing commit
 primary checkout, never shared with another agent (concurrent agents race on the filesystem,
 index, `HEAD`, refs).
 
+**Session layouts (three environments, one rule).** A session may start in the primary
+checkout (CLI, one per terminal) or inside a **harness-made session worktree** — rc-mode cuts
+`<primary>/.claude/worktrees/bridge-<session-id>` (branch `worktree-bridge-*`, locked);
+managed environments cut one worktree per session named after the first-prompt issue. Detect
+mechanically, never from memory: `git rev-parse --git-dir --git-common-dir` differing ⇒ you
+are in a linked worktree. A session worktree is the harness's **orchestration home, not the
+work-item worktree**: cut the per-item worktree from wherever you sit
+(`scripts/agent/work-branch.sh --worktree` anchors it at the primary root — never derive
+placement from `--show-toplevel`, which names the session tree and nests worktrees inside a
+harness-lifecycle tree). Sole exception: the environment hard-pins pushes to the session
+branch — then that branch replaces the convention per
+[`workflow-reference.md`](docs/misc/workflow-reference.md) "Managed-remote sessions".
+
 **Exception — dev-only classes need no PR.** Classes never shipped to users skip the PR
 stage: **ADR text** (`.ADRs/`), **skills** (`.claude/skills/`), **agent workflows**
 (`.claude/workflows/`), and **documentation-only** changes (`**/*.md`, `docs/`). Each still
@@ -572,7 +585,7 @@ rebase-only-PR flow.
 ```sh
 git worktree add -b <branch> <path> origin/devel   # branch off the latest base
 # … work, commit, push, open the PR from inside <path> …
-git worktree remove <path>                          # run from the PRIMARY checkout
+git worktree remove <path>            # run from any directory OUTSIDE <path>
 ```
 
 - Branch off the **current** base (`git fetch` first); a stale-tip worktree needs a rebase
@@ -586,7 +599,8 @@ git worktree remove <path>                          # run from the PRIMARY check
   owns it: wait, cooperate, or start a NEW branch after the merge). **Never force-push over
   another session's in-flight PR.**
 - Name the branch for its work item — `adr/{NN}-{slug}` / `issue/{NN}-{slug}`.
-- Gotchas: `git worktree remove` fails from inside the tree — run from the primary checkout.
+- Gotchas: `git worktree remove` fails from inside the tree — run it from any directory
+  outside the tree being removed (the primary checkout works; so does a session worktree).
   `gh pr merge --delete-branch` can't check out a base another worktree holds — verify the
   merge landed, then `git push origin --delete <branch>`.
 
