@@ -57,3 +57,6 @@ test-results/
 
 # ── AI-agent worktrees (per-task, never committed) ───────────────────────────
 .claude/worktrees/
+
+# token-savior MCP server index cache (one per project root / worktree)
+.token-savior-cache.json
