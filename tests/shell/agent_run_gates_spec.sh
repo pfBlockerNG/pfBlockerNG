@@ -179,4 +179,40 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should include 'GATE PASS: shellspec'
     Assert [ -e "$marker" ]
   End
+
+  # issue #1293: --diff must see uncommitted work too, else running gates BEFORE
+  # committing (the normal iterate-while-working flow) plans zero gates and prints
+  # a bare, misleading GATES: PASS.
+  It 'plans gates for an uncommitted UNSTAGED edit even when the committed diff is empty'
+    head_sha=$(gitc rev-parse HEAD)
+    printf '#!/bin/sh\n# unstaged edit, never committed\ntrue\n' > "$repo/scripts/kept.sh"
+    When run sh "$script" --worktree "$repo" --diff "$head_sha"
+    The status should equal 0
+    The output should include 'GATE PASS: sh -n scripts/kept.sh'
+    The output should include 'GATE PASS: shellcheck scripts/kept.sh'
+    The line 4 of output should equal 'GATES: PASS'
+    The lines of output should equal 4
+  End
+
+  It 'plans gates for a STAGED (git add, not committed) edit identically'
+    head_sha=$(gitc rev-parse HEAD)
+    printf '#!/bin/sh\n# staged edit, never committed\ntrue\n' > "$repo/scripts/kept.sh"
+    gitc add scripts/kept.sh
+    When run sh "$script" --worktree "$repo" --diff "$head_sha"
+    The status should equal 0
+    The output should include 'GATE PASS: sh -n scripts/kept.sh'
+    The output should include 'GATE PASS: shellcheck scripts/kept.sh'
+    The line 4 of output should equal 'GATES: PASS'
+    The lines of output should equal 4
+  End
+
+  It 'lists a file touched by both a commit and a further uncommitted edit exactly once'
+    printf '#!/bin/sh\n# further uncommitted edit atop the committed one\ntrue\n' > "$repo/scripts/kept.sh"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 0
+    The output should include 'GATE PASS: sh -n scripts/kept.sh'
+    The output should include 'GATE PASS: shellcheck scripts/kept.sh'
+    The line 4 of output should equal 'GATES: PASS'
+    The lines of output should equal 4
+  End
 End
