@@ -7724,7 +7724,7 @@ function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 				// issue #1345: position-zero marker comments use Python's exact whitespace set.
 				$after = substr($line, $marker_len);
 				if ($after !== '' &&
-				    preg_match('/\A(?:[\x{0009}-\x{000D}\x{001C}-\x{001F}\x{0085}]|\p{Z})/u', $after) !== 1) {
+				    preg_match('/\A(?:[\x{0009}-\x{000D}\x{001C}-\x{001F}\x{0085}]|\p{Z})/u', mb_substr($after, 0, 1, 'UTF-8')) !== 1) {
 					return TRUE;
 				}
 			} elseif (strspn($line, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-') >= $first) {
