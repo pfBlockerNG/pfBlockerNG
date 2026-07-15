@@ -8546,8 +8546,9 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 // ADR-06: patch a single scalar key of the manifest's config section in place
 // (shared by the whitelist/unlock in-place patchers below), without a full
 // feed re-enumeration. The query-time whiteDB is rebuilt from this on reload.
-function pfb_unbound_python_sources_patch($key, $values) {
-	$lock = pfb_unbound_py_publication_lock();
+function pfb_unbound_python_sources_patch($key, $values, array $publication_ops=array()) {
+	$lock_fn = $publication_ops['lock'] ?? static fn() => pfb_unbound_py_publication_lock();
+	$lock = $lock_fn();
 	if ($lock === FALSE) {
 		return FALSE;
 	}

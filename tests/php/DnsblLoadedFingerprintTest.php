@@ -189,18 +189,20 @@ final class DnsblLoadedFingerprintTest extends TestCase
 
 	/**
 	 * Scenario: returns the four flat inputs (incl. HSTS + TLD oracle) plus sorted
-	 * *.raw from rawdir -- NOT the retired unbound_py_data/unbound_py_zone (ADR-65).
+	 * manifest-authoritative raw files -- NOT orphan raw files or the retired
+	 * unbound_py_data/unbound_py_zone (ADR-65).
 	 *
-	 * Given:  a $pfb array with the standard keys and two .raw files in rawdir
+	 * Given:  a $pfb array with two referenced raw files and one orphan raw file
 	 * When:   pfb_dnsbl_loaded_input_paths() is called
-	 * Then:   result contains wh/sources/hsts/tld plus both .raw paths, in sorted
-	 *         order, and excludes the retired data/zone paths
+	 * Then:   result contains wh/sources/hsts/tld plus both referenced paths, in
+	 *         sorted order, and excludes the orphan and retired data/zone paths
 	 */
 	public function testReturnsFlatInputsPlusSortedRaws(): void
 	{
 		$rawDir = "{$this->tmpDir}/raw";
 		file_put_contents("{$rawDir}/zz_feed.raw", 'z');
 		file_put_contents("{$rawDir}/aa_feed.raw", 'a');
+		file_put_contents("{$rawDir}/orphan.raw", 'orphan');
 		file_put_contents("{$this->tmpDir}/pfb_py_sources.json", json_encode([
 			'version' => 1,
 			'feeds' => [
@@ -238,6 +240,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		// Both .raw files must be present.
 		$this->assertContains("{$rawDir}/aa_feed.raw", $result, 'aa_feed.raw must be in the path list');
 		$this->assertContains("{$rawDir}/zz_feed.raw", $result, 'zz_feed.raw must be in the path list');
+		$this->assertNotContains("{$rawDir}/orphan.raw", $result, 'unreferenced raw files must be excluded');
 
 		// Excluded output keys must NOT appear.
 		$this->assertNotContains($pfb['unbound_py_count'],       $result, 'unbound_py_count must be excluded (Python-emitted output)');
@@ -282,25 +285,27 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	public function testManifestPathsIncludeMissingConfinedRefButRejectEscapesAndSymlinks(): void
 	{
 		$outside = dirname($this->tmpDir) . '/pfb_outside_' . uniqid() . '.raw';
-		file_put_contents($outside, 'outside');
-		symlink($outside, "{$this->tmpDir}/raw/link.raw");
-		$manifest = "{$this->tmpDir}/pfb_py_sources.json";
-		file_put_contents($manifest, json_encode([
-			'version' => 1,
-			'feeds' => [
-				['raw' => 'raw/missing.raw'],
-				['raw' => '../' . basename($outside)],
-				['raw' => 'raw/link.raw'],
-				['raw' => "raw/\0hostile.raw"],
-				['raw' => ['/wrong/type']],
-				['feed' => 'missing-key'],
-			],
-		]));
+		try {
+			file_put_contents($outside, 'outside');
+			symlink($outside, "{$this->tmpDir}/raw/link.raw");
+			$manifest = "{$this->tmpDir}/pfb_py_sources.json";
+			file_put_contents($manifest, json_encode([
+				'version' => 1,
+				'feeds' => [
+					['raw' => 'raw/missing.raw'],
+					['raw' => '../' . basename($outside)],
+					['raw' => 'raw/link.raw'],
+					['raw' => "raw/\0hostile.raw"],
+					['raw' => ['/wrong/type']],
+					['feed' => 'missing-key'],
+				],
+			]));
 
-		$paths = pfb_unbound_py_manifest_raw_paths($manifest);
-
-		$this->assertSame(["{$this->tmpDir}/raw/missing.raw"], $paths);
-		@unlink($outside);
+			$paths = pfb_unbound_py_manifest_raw_paths($manifest);
+			$this->assertSame(["{$this->tmpDir}/raw/missing.raw"], $paths);
+		} finally {
+			@unlink($outside);
+		}
 	}
 
 	/**

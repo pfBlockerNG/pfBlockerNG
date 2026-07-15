@@ -227,14 +227,18 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$patchPid = pcntl_fork();
 		if ($patchPid === 0) {
 			fclose($patchParent);
-			fwrite($patchChild, "STARTED\n");
-			$ok = pfb_unbound_python_sources_patch('user_unlock', ['allow.example']);
+			$ok = pfb_unbound_python_sources_patch('user_unlock', ['allow.example'], [
+				'lock' => static function () use ($patchChild) {
+					fwrite($patchChild, "ATTEMPT\n");
+					return pfb_unbound_py_publication_lock();
+				},
+			]);
 			fwrite($patchChild, $ok ? "DONE\n" : "FAILED\n");
 			fclose($patchChild);
 			exit($ok ? 0 : 1);
 		}
 		fclose($patchChild);
-		$this->assertSame("STARTED\n", fgets($patchParent));
+		$this->assertSame("ATTEMPT\n", fgets($patchParent));
 		$read = [$patchParent];
 		$write = NULL;
 		$except = NULL;
