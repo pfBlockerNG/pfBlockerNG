@@ -2773,7 +2773,7 @@ def get_details_dnsbl(
     kwargs: dict[str, Any] | None,
     dnsbl: Any,  # DnsblDecision operate() served; UNSET is a defensive no-op guard
 ) -> bool:
-    global pfb, _dnsbl_last_event
+    global _dnsbl_last_event
 
     if qstate and qstate is not None:
         q_name = get_q_name_qstate(qstate)
