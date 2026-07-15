@@ -103,6 +103,7 @@ $pfb['dnsbl_supptxt']	= "{$pfb['dbdir']}/pfbdnsblsuppression.txt";
 $pfb['geoip_isos']	= "{$pfb['dbdir']}/geoip.txt";
 $pfb['dnsbl_info']	= '/var/unbound/pfb_py_dnsbl.sqlite';
 $pfb['dnsbl_resolver']	= '/var/unbound/pfb_py_resolver.sqlite';
+// Legacy reports-cache path retained for exact upgrade cleanup only.
 $pfb['dnsbl_cache']	= '/var/unbound/pfb_py_cache.sqlite';
 $pfb['asn_cache']	= "{$pfb['dbdir']}/asn_cache.sqlite";
 $pfb['ip_cache']	= "{$pfb['dbdir']}/ip_cache.sqlite";
@@ -9130,6 +9131,8 @@ function pfb_unbound_clear_work_files() {
 	global $pfb;
 
 	foreach (array( $pfb['dnsbl_cache'],
+			"{$pfb['dnsbl_cache']}-wal",
+			"{$pfb['dnsbl_cache']}-shm",
 			"{$pfb['dnsbldir']}/unbound.bk",
 			"{$pfb['dnsbldir']}/unbound.tmp",
 			"{$pfb['dnsbl_file']}.bk",
@@ -14440,7 +14443,8 @@ function pfb_sqlite_table_spec(int $table): array {
 		case 3:
 			return [ 'db_table' => 'resolver', 'db_create' => "CREATE TABLE IF NOT EXISTS resolver ( row INTEGER, totalqueries INTEGER, queries INTEGER );" ];
 		case 4:
-			return [ 'db_table' => 'dnsblcache', 'db_create' => "CREATE TABLE IF NOT EXISTS dnsblcache ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );" ];
+			// Issue #1349: reserved retired reports-cache slot; keep IDs 5-7 stable.
+			return [ 'db_table' => '', 'db_create' => '' ];
 		case 5:
 			return [ 'db_table' => 'asncache', 'db_create' => "CREATE TABLE IF NOT EXISTS asncache ( asn TEXT, host TEXT, timestamp TEXT );" ];
 		case 6:
@@ -14457,9 +14461,6 @@ function pfb_sqlite_table_spec(int $table): array {
 function pfb_open_sqlite($table, $message) {
 	global $pfb;
 
-	// ADR-60: these writes bypass pfb_logger() entirely, so they stamp themselves.
-	$now = pfb_log_iso_timestamp();
-
 	// $table is always 1-7 from callers, but the if/elseif chain below has no else;
 	// default these so they are defined for any value. Behaviour-preserving.
 	$database	= '';
@@ -14470,8 +14471,6 @@ function pfb_open_sqlite($table, $message) {
 		$database	= $pfb['dnsbl_resolver'];
 	} elseif ($table == 3) {
 		$database	= $pfb['dnsbl_resolver'];
-	} elseif ($table == 4) {
-		$database	= $pfb['dnsbl_cache'];
 	} elseif ($table == 5) {
 		$database	= $pfb['asn_cache'];
 	} elseif ($table == 6) {
@@ -14483,6 +14482,12 @@ function pfb_open_sqlite($table, $message) {
 	$table_spec	= pfb_sqlite_table_spec((int) $table);
 	$db_table	= $table_spec['db_table'];
 	$db_create	= $table_spec['db_create'];
+	if ($database === '' || $db_table === '' || $db_create === '') {
+		return NULL;
+	}
+
+	// ADR-60: these writes bypass pfb_logger() entirely, so they stamp themselves.
+	$now = pfb_log_iso_timestamp();
 
 	try {
 		$db_handle = new SQLite3($database);
@@ -15216,7 +15221,9 @@ function pfb_clear_contents() {
 	unlink_if_exists("{$pfb['dnsbl_supptxt']}");
 	unlink_if_exists("{$pfb['dnsbl_info']}");
 	unlink_if_exists("{$pfb['dnsbl_resolver']}");
-	unlink_if_exists("{$pfb['dnsbl_cache']}");
+	foreach (array($pfb['dnsbl_cache'], "{$pfb['dnsbl_cache']}-wal", "{$pfb['dnsbl_cache']}-shm") as $legacy_cache) {
+		unlink_if_exists($legacy_cache);
+	}
 	unlink_if_exists("/var/tmp/unbound_cache_*");
 	unlink_if_exists("{$pfb['asn_cache']}");
 	unlink_if_exists("{$pfb['ip_cache']}");
@@ -20017,7 +20024,9 @@ function pfblockerng_php_pre_deinstall_command() {
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_filter.sh');
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_dnsbl.sh');
 
-	unlink_if_exists("{$pfb['dnsbl_cache']}");
+	foreach (array($pfb['dnsbl_cache'], "{$pfb['dnsbl_cache']}-wal", "{$pfb['dnsbl_cache']}-shm") as $legacy_cache) {
+		unlink_if_exists($legacy_cache);
+	}
 	unlink_if_exists("/var/tmp/unbound_cache_*");
 	unlink_if_exists("{$pfb['ip_cache']}");
 

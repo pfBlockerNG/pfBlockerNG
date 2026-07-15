@@ -279,7 +279,6 @@ or partial build is **fail-closed** — the last-good snapshot keeps serving.
 
 **Cache behaviour on a swap:**
 
-- **Reports** (the `dnsblcache` sqlite) is reset — parity with the restart.
 - The unified query-time decision cache **`decisionDB` is cleared** on every swap, so
   no stale block/allow *decision* survives.
 - **block→allow is immediate.** DNSBL blocks are not stored in Unbound's C message

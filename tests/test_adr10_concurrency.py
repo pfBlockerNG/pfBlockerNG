@@ -387,7 +387,6 @@ def _wire_module(monkeypatch: Any, *, live_manifest: str, live_ini: str, sentine
     P.pfb["pfb_py_count"] = "pfb_py_count"
     P.pfb["pfb_py_regex_count"] = "pfb_py_regex_count"
     monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)  # no UI count file
-    monkeypatch.setattr(P, "_db_reset_cache", lambda: True)  # no Reports sqlite
     monkeypatch.setattr(P, "RELOAD_POLL_INTERVAL", 0.05)  # prompt poll + stop observation
     monkeypatch.setattr(P, "_reload_total_ram_bytes", lambda: 8 * 1024 * 1024 * 1024)  # gate passes
     P.decisionDB = P._LruCache(0)

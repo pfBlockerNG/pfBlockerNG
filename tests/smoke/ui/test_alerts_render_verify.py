@@ -2,12 +2,12 @@
 
 ``pfblockerng_alerts.php`` renders ip_block/ip_permit/ip_match/dnsbl/dns_reply/
 unified.log. The IP-side rows still run the re-validation pipeline that greps
-feed/alias/aliastables files, consults the ``dnsblcache`` SQLite cache, and
-falls back to a live ``drill`` -- issue #809 batched several of those per-row
+feed/alias/aliastables files and falls back to a live ``drill`` -- issue #809
+batched several of those per-row
 lookups behind a prefetch pass (PR #825) without changing what gets rendered.
 DNSBL rows do NOT (ADR-65 D2): ``convert_dnsbl_log()`` renders the LOGGED
 group/feed straight off the log line, with no re-check, no strike/drift
-markup, and no 'Unknown' rewrite of a total miss; the seeded dnsblcache/
+markup, and no 'Unknown' rewrite of a total miss; the seeded
 pfb_py_data.txt/pfb_py_zone.txt rows for the D-scenarios are BAIT the page
 must ignore. This module is the durable regression harness that PROVES that:
 it seeds every log the page reads with fixed, deterministic content (domains,
@@ -27,7 +27,7 @@ picked up by ``ui-tests.yml``'s existing diagnostics upload; nothing new to
 wire.
 
 Cherry-pick constraint: this module drives the page over HTTP and seeds
-fixtures only via raw file writes / SQLite / generic ``config_get_path`` calls
+fixtures only via raw file writes and generic ``config_get_path`` calls
 -- it never calls a PHP function PR #825 introduced (``pfb_dnsbl_prefetch``,
 ``pfb_find_reported_headers``, ``pfb_ip_render_query``, …), so it applies
 cleanly to a base commit that predates that PR.
@@ -102,7 +102,6 @@ UNIFIED_LOG = f"{PFB_LOGDIR}/unified.log"
 
 PY_DATA_FILE = "/var/unbound/pfb_py_data.txt"
 PY_ZONE_FILE = "/var/unbound/pfb_py_zone.txt"
-DNSBL_CACHE_DB = "/var/unbound/pfb_py_cache.sqlite"
 
 DENY_DIR = "/var/db/pfblockerng/deny"
 PERMIT_DIR = "/var/db/pfblockerng/permit"
@@ -188,7 +187,6 @@ D5_DOMAIN = "rv809-up1.com"
 D7_DOMAIN = "rv809*m1.com"
 D8_DOMAIN = "rv809*p1.com"
 
-D1_CACHE_GROUP, D1_CACHE_FEED = "RVCacheGroup", "RVCacheFeed"
 D1_LOGGED_GROUP, D1_LOGGED_FEED = "RVLoggedGroup1", "RVLoggedFeed1"
 D2_DATA_GROUP, D2_DATA_FEED = "RVGroupD", "RVFeedD"
 D2_LOGGED_GROUP, D2_LOGGED_FEED = "RVLoggedGroupD2", "RVLoggedFeedD2"
@@ -548,99 +546,6 @@ def _seed_feed_files(vm: helpers.SmokeVM) -> None:
         assert result.returncode == 0, f"failed to write {path!r}: rc={result.returncode} stderr={result.stderr!r}"
 
 
-def _sqlite_open_guarded() -> str:
-    """PHP prologue: open the dnsblcache DB via the package's own opener, loudly.
-
-    Uses ``pfb_open_sqlite(4, ...)`` — the package's own opener —
-    NOT a raw ``new SQLite3``: the package opener carries the ADR-03 WAL pragma, the
-    integrity-check + corrupt-DB self-heal, and the unbound chown, all of which a
-    home-rolled open skips. That skip bit runs 28721363021/28721822624: the first
-    sessions running this module AFTER test_alerts.py found the cache DB in a state
-    where every raw statement returned ``disk I/O error``, and the bare ``bindValue()
-    on false`` fatal carried zero diagnostic value. The opener alone is not enough
-    either (run 28722003668): in PHP's SQLite3 warnings mode its internal recovery
-    fails silently and it returns a handle whose writes still all fail — so the
-    handle is probed with ``BEGIN IMMEDIATE`` before use. An unusable handle triggers
-    a WAL-family quarantine (db + -wal + -shm — it is a query CACHE; the package
-    rebuilds it, and production's own recovery similarly recreates a corrupt DB) and
-    one retry; still failing → echo every attempt's lastErrorMsg() plus df/ls/fstat
-    context (CLAUDE.md "print expected vs actual") and exit non-zero.
-    """
-    db = helpers._php_str(DNSBL_CACHE_DB)
-    return (
-        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
-        "pfb_global();\n"
-        "global $pfb_smoke_err;\n"
-        "$pfb_smoke_err = [];\n"
-        # PHP's SQLite3 runs in warnings (not exceptions) mode here, so pfb_open_sqlite's
-        # internal integrity/recovery failures return FALSE silently and it can hand back
-        # a handle whose every WRITE still fails (run 28722003668). BEGIN IMMEDIATE is the
-        # usability probe: it must acquire the write lock and touch the WAL, so a broken
-        # handle fails HERE, not at the caller's first real statement.
-        "function pfb_smoke_cache_open($tag) {\n"
-        "\tglobal $pfb_smoke_err;\n"
-        "\t$db = pfb_open_sqlite(4, 'smoke render-verify ' . $tag);\n"
-        "\tif (empty($db)) { $pfb_smoke_err[] = $tag . ': open returned NULL'; return NULL; }\n"
-        "\tif ($db->exec('BEGIN IMMEDIATE;') === FALSE) {\n"
-        "\t\t$pfb_smoke_err[] = $tag . ': ' . $db->lastErrorMsg();\n"
-        "\t\t@$db->exec('ROLLBACK;');\n"
-        "\t\t$db->close();\n"
-        "\t\treturn NULL;\n"
-        "\t}\n"
-        "\t$db->exec('COMMIT;');\n"
-        "\treturn $db;\n"
-        "}\n"
-        "$db = pfb_smoke_cache_open('first');\n"
-        "if (empty($db)) {\n"
-        f"\tforeach ([{db}, {db} . '-wal', {db} . '-shm'] as $f) {{ @unlink($f); }}\n"
-        "\t$db = pfb_smoke_cache_open('after-reset');\n"
-        "}\n"
-        "if (empty($db)) {\n"
-        "\techo 'ERR open: ' . implode(' | ', $pfb_smoke_err) . ' || '\n"
-        f"\t\t. shell_exec('df -k /var/unbound; ls -l ' . {db} . '* 2>&1; fstat ' . {db} . ' 2>&1');\n"
-        "\texit(1);\n"
-        "}\n"
-    )
-
-
-def _seed_dnsbl_cache(vm: helpers.SmokeVM) -> None:
-    """D1 cache bait: pre-populate ``dnsblcache`` with a group/feed DIFFERENT from
-    the logged line -- bait: the render must IGNORE it (ADR-65 D2)."""
-    snippet = (
-        _sqlite_open_guarded() + "$stmt = $db->prepare("
-        "'INSERT INTO dnsblcache (type, domain, groupname, final, feed) "
-        "VALUES (:type, :domain, :groupname, :final, :feed)');\n"
-        "if ($stmt === FALSE) { echo 'ERR prepare: ' . $db->lastErrorMsg(); exit(1); }\n"
-        f"$stmt->bindValue(':type', {helpers._php_str('DNSBL')}, SQLITE3_TEXT);\n"
-        f"$stmt->bindValue(':domain', {helpers._php_str(D1_DOMAIN)}, SQLITE3_TEXT);\n"
-        f"$stmt->bindValue(':groupname', {helpers._php_str(D1_CACHE_GROUP)}, SQLITE3_TEXT);\n"
-        f"$stmt->bindValue(':final', {helpers._php_str(D1_DOMAIN)}, SQLITE3_TEXT);\n"
-        f"$stmt->bindValue(':feed', {helpers._php_str(D1_CACHE_FEED)}, SQLITE3_TEXT);\n"
-        "if ($stmt->execute() === FALSE) { echo 'ERR execute: ' . $db->lastErrorMsg(); exit(1); }\n"
-        "echo 'OK';"
-    )
-    result = helpers.php_eval(vm, snippet)
-    assert result.returncode == 0 and "OK" in result.stdout, (
-        f"D1 dnsblcache seed failed: rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
-    )
-
-
-def _clear_dnsbl_cache(vm: helpers.SmokeVM) -> None:
-    # pfb_open_sqlite() guarantees the table exists (its db_create runs on open), so
-    # the DELETE can no longer silently no-op on a fresh VM the way the old raw
-    # new-SQLite3 + bare-DELETE snippet did.
-    snippet = (
-        _sqlite_open_guarded() + "$del = $db->exec(\"DELETE FROM dnsblcache WHERE domain LIKE 'rv809%'\");\n"
-        "if ($del === FALSE) { echo 'ERR delete: ' . $db->lastErrorMsg(); exit(1); }\n"
-        "echo 'OK';"
-    )
-    result = helpers.php_eval(vm, snippet)
-    assert result.returncode == 0 and "OK" in result.stdout, (
-        f"FAILED to clear dnsblcache: rc={result.returncode} "
-        f"stdout={result.stdout!r} stderr={result.stderr!r} -- dnsblcache may be left polluted for sibling tests"
-    )
-
-
 # --------------------------------------------------------------------------- #
 # The module-scoped fixture: seed ONCE, GET the fixed matrix ONCE, hand tests a
 # read-only dict. No test does its own GET (order-independence, CLAUDE.md).
@@ -680,13 +585,12 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
     captures: dict[str, Capture] = {}
 
     try:
-        # A prior hard-killed run (VM SIGKILL mid-module) can leave rv809% rows in the
-        # persistent dnsblcache and seeded feed/aliastable files on disk -- teardown
-        # never ran. Clear both FIRST so the baseline before-state is provably clean
-        # and symmetric with teardown. (Appended log lines from such a crash cannot be
+        # A prior hard-killed run (VM SIGKILL mid-module) can leave seeded
+        # feed/aliastable files on disk because teardown never ran. Clear them FIRST
+        # so the baseline before-state is provably clean and symmetric with teardown.
+        # (Appended log lines from such a crash cannot be
         # excised without the lost original sizes; the baseline token assertion below
         # stays the loud guard for that case.)
-        _clear_dnsbl_cache(vm)
         rm = vm.ssh("rm -f " + " ".join(SEEDED_FILES), timeout=15)
         assert rm.returncode == 0, f"pre-baseline cleanup of seeded files failed: {rm.stderr!r}"
 
@@ -699,7 +603,7 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
             assert not looks_like_login_page(resp.text), f"baseline GET {path!r} returned the login form"
             baseline[key] = Capture(status=resp.status_code, body=resp.text, elapsed=elapsed)
 
-        # (2) SEED every log/file/cache row this module's scenarios need.
+        # (2) SEED every log/file row this module's scenarios need.
         _seed_feed_files(vm)
         _append(vm, IP_BLOCK_LOG, "".join(_ip_filler_lines(IP_BLOCK_FILLER_IPS) + _ip_scenarios()))
         _append(vm, IP_PERMIT_LOG, "".join(_permit_lines()))
@@ -709,7 +613,6 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
         _append(vm, UNIFIED_LOG, "".join(_unified_lines()))
         _append(vm, PY_DATA_FILE, _py_data_appendix())
         _append(vm, PY_ZONE_FILE, _py_zone_appendix())
-        _seed_dnsbl_cache(vm)
 
         # (3) The FIXED-ORDER GET matrix, exactly once (GET #12, 'alert_2', re-renders
         # the SAME view with no log/file mutation in between -- the idempotent
@@ -742,11 +645,6 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
             )
             if result.returncode != 0:
                 errors.append(f"truncate {path!r} to size={size!r} failed: {result.stderr!r}")
-
-        try:
-            _clear_dnsbl_cache(vm)
-        except AssertionError as exc:
-            errors.append(str(exc))
 
         restore = helpers.php_eval(
             vm,
@@ -787,7 +685,7 @@ def test_baseline_excludes_seed_tokens(render_diff_state: dict[str, dict[str, Ca
     }
     baseline = render_diff_state["baseline"]
     for key, cap in baseline.items():
-        for token in (D1_DOMAIN, S1_ALIAS, D1_CACHE_GROUP, D1_LOGGED_GROUP, FEED_A_NAME, "rv809"):
+        for token in (D1_DOMAIN, S1_ALIAS, D1_LOGGED_GROUP, FEED_A_NAME, "rv809"):
             if token in url_echoed.get(key, set()):
                 continue
             assert token not in cap.body, (
@@ -954,22 +852,17 @@ def test_match_still_listed_and_delisted(render_diff_state: dict[str, dict[str, 
     assert "Not listed!" in delisted, f"Match {M2_IP} (de-listed) expected 'Not listed!': {delisted!r}"
 
 
-def test_d1_cache_bait_ignored_renders_logged_fields(render_diff_state: dict[str, dict[str, Capture]]) -> None:
-    """D1: a dnsblcache HIT is bait the render must IGNORE (ADR-65 D2).
+def test_d1_logged_fields_render_verbatim(render_diff_state: dict[str, dict[str, Capture]]) -> None:
+    """D1: the row renders its logged attribution directly (ADR-65 D2).
 
-    Given: dnsblcache is seeded with group=RVCacheGroup/feed=RVCacheFeed for
-    rv809-c1.com BEFORE the first GET; the logged line carries DIFFERENT
-    group/feed (RVLoggedGroup1/RVLoggedFeed1).
-    Then: the row renders the LOGGED group/feed verbatim, with no strike markup
-    and no leaked cached value.
+    Given: rv809-c1.com's log line carries RVLoggedGroup1/RVLoggedFeed1.
+    Then: the row renders both values verbatim, with no strike markup.
     """
     body = render_diff_state["captures"]["alert"].body
     row = row_containing(body, D1_DOMAIN)
     assert D1_LOGGED_GROUP in row, f"D1 expected the logged group {D1_LOGGED_GROUP!r} present: {row!r}"
     assert D1_LOGGED_FEED in row, f"D1 expected the logged feed {D1_LOGGED_FEED!r} present: {row!r}"
     assert "<s>" not in row, f"D1 expected no strikethrough markup: {row!r}"
-    assert D1_CACHE_GROUP not in row, f"D1 expected the cache-bait group {D1_CACHE_GROUP!r} absent: {row!r}"
-    assert D1_CACHE_FEED not in row, f"D1 expected the cache-bait feed {D1_CACHE_FEED!r} absent: {row!r}"
 
 
 def test_d2_data_bait_ignored_renders_logged_fields(render_diff_state: dict[str, dict[str, Capture]]) -> None:
@@ -1169,7 +1062,6 @@ def test_filterdnsbl_narrows_to_group(render_diff_state: dict[str, dict[str, Cap
     body = render_diff_state["captures"]["alert_filterdnsbl"].body
     assert D1_LOGGED_GROUP in body, f"filtered alert view missing the filtered-for group {D1_LOGGED_GROUP!r}"
     assert D2_LOGGED_GROUP not in body, f"a DIFFERENT group {D2_LOGGED_GROUP!r} leaked into the filterdnsbl view"
-    assert D1_CACHE_GROUP not in body, f"filtered view must not resurrect the cache-bait group {D1_CACHE_GROUP!r}"
 
 
 def test_unified_filterip_narrows_ip_rows(render_diff_state: dict[str, dict[str, Capture]]) -> None:
@@ -1221,13 +1113,12 @@ def test_reply_view_renders_seeded_domains(render_diff_state: dict[str, dict[str
         assert reply[4] in body, f"reply view missing the seeded domain {reply[4]!r}"
 
 
-def test_alert_view_stable_across_cache_populate_rerender(render_diff_state: dict[str, dict[str, Capture]]) -> None:
+def test_alert_view_stable_across_unmutated_rerender(render_diff_state: dict[str, dict[str, Capture]]) -> None:
     """GET #12 (a bare re-render) reproduces GET #1's tbody hashes byte-for-byte.
 
     Scenario: idempotent re-render.
-    Given: GET #1 (alert view) rendered every row from its own log line (ADR-65
-        D2: no dnsblcache read or write happens on render).
-    When: the SAME view is GET-ted again (GET #12) with no log/file/cache
+    Given: GET #1 (alert view) rendered every row from its own log line.
+    When: the SAME view is GET-ted again (GET #12) with no log/file
         mutation in between.
     Then: every <tbody> region hashes IDENTICALLY.
     """
@@ -1235,7 +1126,7 @@ def test_alert_view_stable_across_cache_populate_rerender(render_diff_state: dic
     first_hashes = [_sha256(r.encode()) for r in _extract_tbody_regions(captures["alert"].body)]
     second_hashes = [_sha256(r.encode()) for r in _extract_tbody_regions(captures["alert_2"].body)]
     assert first_hashes == second_hashes, (
-        "alert view re-render diverged from its first render after the dnsblcache populate:\n"
+        "alert view re-render diverged from its first unmutated render:\n"
         f"expected (GET #1 region hashes): {first_hashes}\n"
         f"actual   (GET #12 region hashes): {second_hashes}"
     )

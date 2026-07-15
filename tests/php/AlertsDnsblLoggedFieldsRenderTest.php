@@ -65,7 +65,6 @@ final class AlertsDnsblLoggedFieldsRenderTest extends TestCase
 			'extdns'          => '203.0.113.53',
 			'unbound_py_data' => "{$this->tmp}/pfb_py_data.txt",
 			'unbound_py_zone' => "{$this->tmp}/pfb_py_zone.txt",
-			'dnsbl_cache'     => "{$this->tmp}/dnsblcache.sqlite3",
 			'errlog'          => "{$this->tmp}/error.log",
 			'sqlite_timeout'  => 2000,
 			// 'Unified' mode row-background colours.

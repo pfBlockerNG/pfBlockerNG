@@ -501,15 +501,6 @@ class TestDbSubsystem:
         assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G1'").fetchone()[0] == 3
         assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G2'").fetchone()[0] == 1
 
-    def test_cache_inserts_preserve_order(self, tmp_path: Any) -> None:
-        db = str(tmp_path / "cache.sqlite")
-        pfb_unbound.pfb["pfb_py_cache"] = db
-        for d in ["a.com", "b.com", "a.com"]:
-            pfb_unbound.pfb_db_enqueue(("cache", ("DNSBL", d, "G", d, "feed")))
-        con = pfb_unbound._db_conns[pfb_unbound.DB_CACHE]
-        rows = [r[0] for r in con.execute("SELECT domain FROM dnsblcache").fetchall()]
-        assert rows == ["a.com", "b.com", "a.com"]
-
     def test_reconnect_after_db_removed(self, tmp_path: Any) -> None:
         # pfb removes a DB file underneath us (init / write-error path); the next
         # write must transparently reconnect, re-create the table, and not lose
@@ -1866,8 +1857,8 @@ class TestAttributionSurvivesRace:
         set_feed_group(0, "TestFeed", "TestGroup")
 
         # Plain decisionDB stand-in -- foreign_action mutates it directly. The race
-        # window (below) is anchored on operate()'s "cache" enqueue, a seam that
-        # fires in both the pre-fix and fixed code (unlike a logger-re-read hook).
+        # window is anchored on get_details_dnsbl()'s live per-group counter enqueue,
+        # immediately before the log write.
         cache = pfb_unbound._LruCache(maxsize=0)
         monkeypatch.setattr(pfb_unbound, "decisionDB", cache)
 
@@ -1881,7 +1872,7 @@ class TestAttributionSurvivesRace:
 
         def enqueue_hook(item: Any) -> None:
             enqueued.append(item)
-            if not fired.is_set() and item[0] == "cache":
+            if not fired.is_set() and item[0] == "dnsbl":
                 fired.set()
                 window_q.put("window")
                 if not resume.wait(timeout=10):
@@ -1907,7 +1898,7 @@ class TestAttributionSurvivesRace:
         window_q.put("done")
         writer.join(timeout=10)
         assert not writer.is_alive(), "writer thread failed to terminate"
-        # If the "cache" seam ever moves, this must fail loudly, not pass vacuously.
+        # If the counter seam ever moves, this must fail loudly, not pass vacuously.
         assert fired.is_set(), "race window never opened -- foreign injection never engaged"
 
         dnsbl_fields = [line.split(",") for path, line in lines if path.endswith("dnsbl.log")]

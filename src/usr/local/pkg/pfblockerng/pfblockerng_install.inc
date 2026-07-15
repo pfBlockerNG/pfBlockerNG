@@ -165,7 +165,9 @@ link('/usr/bin/tail', '/usr/bin/tail_pfb');
 // Remove cache databases
 unlink_if_exists("{$pfb['asn_cache']}");
 unlink_if_exists("{$pfb['ip_cache']}");
-unlink_if_exists("{$pfb['dnsbl_cache']}");
+foreach (array($pfb['dnsbl_cache'], "{$pfb['dnsbl_cache']}-wal", "{$pfb['dnsbl_cache']}-shm") as $legacy_cache) {
+	unlink_if_exists($legacy_cache);
+}
 
 update_status(" done.\nStarting Firewall filter Service...");
 start_service('pfb_filter');

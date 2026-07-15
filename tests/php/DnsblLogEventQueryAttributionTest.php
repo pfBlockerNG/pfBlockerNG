@@ -11,7 +11,7 @@ use PHPUnit\Framework\TestCase;
  * retired .txt interchange files via pfb_dnsbl_parse('daemon', ...).
  *
  * Sandbox: a fresh $pfb carrying BOTH the OLD grep-path globals (grep/extdns/
- * unbound_py_data/unbound_py_zone/dnsbl_cache/sqlite_timeout)
+ * unbound_py_data/unbound_py_zone/sqlite_timeout)
  * AND the query-channel globals (dnsbldir, DnsblQueryClientTest's shape) AND
  * the log-event globals (dnslog/dnsbl_resolver/dnsbl_info/errlog,
  * LogTimestampBaselineTest's shape). Each test seeds an NDJSON row under a
@@ -67,7 +67,6 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 			'extdns'          => '203.0.113.53', // TEST-NET-3 (RFC 5737); drill is absent off-appliance anyway
 			'unbound_py_data' => "{$this->tmp}/pfb_py_data.txt",
 			'unbound_py_zone' => "{$this->tmp}/pfb_py_zone.txt",
-			'dnsbl_cache'     => "{$this->tmp}/dnsblcache.sqlite3",
 			// query-channel sandbox (DnsblQueryClientTest shape)
 			'dnsbldir' => "{$this->tmp}/query",
 			'supp'     => 'off',

@@ -8,12 +8,6 @@ the build window BOTH structure-sets are resident -> the transient peak RAM is
 small appliance (e.g. 1 GB) a multi-million-entry ABP feed could OOM mid-swap.
 This spike produces that ~2x peak-RAM number and gates it against a min-spec box.
 
-It also measures the second Phase-1 agent-runnable number: the per-block Reports
-sqlite write overhead (``pfb_db_enqueue(("cache", ...))`` -> the ``dnsblcache``
-table, ``pfb_unbound.py``) versus the ~1 us matcher, to decide whether the async
-log path is overkill / droppable / generation-keyable on a swap (ADR-10 Bonus 2,
-feeds Phase 3).
-
 What this spike deliberately does NOT do (maintainer-owned, no live Unbound in CI):
 * the shared-interpreter / shared-module-globals visibility probe (the load-bearing
   gate) -- documented + cited in RESULTS/01, with a live-box procedure + a result slot;
@@ -30,7 +24,6 @@ Run from the repo root (dev-only; not shipped, not in the default pytest run)::
 
     python -m pip install pympler          # dev-only, ADR-05 SS3a baseline tool
     SPIKE_N=5 SPIKE_SIZES=2000000 python benchmarks/spike_adr10_swap.py
-    SPIKE_SQLITE_ROWS=20000 python benchmarks/spike_adr10_swap.py
 """
 
 from __future__ import annotations
@@ -38,11 +31,8 @@ from __future__ import annotations
 import gc
 import os
 import resource
-import sqlite3
 import statistics
 import sys
-import tempfile
-import time
 import tracemalloc
 from typing import Any
 
@@ -73,11 +63,6 @@ SWAP_RAM_BUDGET_FRACTION = 0.35  # transient peak must fit 35% of the min-spec b
 THRESH_SWAP_PEAK_MIB = MIN_SPEC_BOX_MIB * SWAP_RAM_BUDGET_FRACTION  # ~358 MiB
 
 BASELINE_BYTES_PER_ENTRY = 274.0  # ADR-05 SS3a steady-state dict baseline
-
-# Reports-sqlite write micro-bench: the per-block async log path must be cheap
-# relative to the ~1 us matcher, or it is overkill on the (now no_cache_store)
-# block path and a candidate to simplify/drop/generation-key on a swap (Bonus 2).
-MATCHER_US_BASELINE = 1.0  # ADR-05 SS3a ~1 us/lookup dict matcher
 
 
 # --------------------------------------------------------------------------- #
@@ -262,109 +247,11 @@ def run_ram(n_domain_lines: int, n_runs: int) -> str:
     return verdict
 
 
-# --------------------------------------------------------------------------- #
-# Part 2 -- Reports-sqlite per-block write overhead (Bonus 2).
-# --------------------------------------------------------------------------- #
-
-
-def _open_cache_db(path: str) -> sqlite3.Connection:
-    """Open the Reports cache db exactly as pfb_unbound.py does (WAL, table shape)."""
-    con = sqlite3.connect(path, timeout=100000, check_same_thread=False)
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA busy_timeout=100000")
-    con.execute("PRAGMA synchronous=NORMAL")
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS dnsblcache ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );"
-    )
-    con.commit()
-    return con
-
-
-def run_sqlite(n_rows: int) -> None:
-    print("=" * 78)
-    print("ADR-10 P1 SPIKE  Reports-sqlite per-block write overhead vs the ~1 us matcher")
-    print("-" * 78)
-    rows = [
-        ("py", "blocked{:07d}.example-feed.com".format(i), "DNSBL_Group", "0.0.0.0", "feed_03") for i in range(n_rows)
-    ]
-
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "pfb_py_cache.sqlite")
-        con = _open_cache_db(path)
-
-        # (a) Per-row INSERT + commit -- the worst case (no batching at all).
-        t0 = time.perf_counter()
-        for row in rows:
-            con.execute("INSERT INTO dnsblcache (type, domain, groupname, final, feed) VALUES (?,?,?,?,?)", row)
-            con.commit()
-        per_row_commit = (time.perf_counter() - t0) / n_rows
-
-        con.execute("DELETE FROM dnsblcache")
-        con.commit()
-
-        # (b) Batched executemany + one commit -- what pfb_db_worker actually does.
-        t0 = time.perf_counter()
-        con.executemany("INSERT INTO dnsblcache (type, domain, groupname, final, feed) VALUES (?,?,?,?,?)", rows)
-        con.commit()
-        per_row_batch = (time.perf_counter() - t0) / n_rows
-        con.close()
-
-    # (c) The enqueue cost the DNS thread ACTUALLY pays: a queue.put_nowait of a
-    # 5-tuple. The disk write happens off-thread in pfb_db_worker -- the response
-    # path never waits on it. Measure the put_nowait alone.
-    import queue as _queue
-
-    q: _queue.Queue[Any] = _queue.Queue(maxsize=5000)
-    t0 = time.perf_counter()
-    for i, row in enumerate(rows):
-        try:
-            q.put_nowait(("cache", row))
-        except _queue.Full:
-            q.get_nowait()  # drain so the micro-bench keeps measuring put cost
-            q.put_nowait(("cache", row))
-    per_enqueue = (time.perf_counter() - t0) / n_rows
-
-    print("rows: {:,}".format(n_rows))
-    print(
-        "  (a) per-row INSERT+commit   : {:>8.2f} us/row  (worst case, unbatched -- NOT what ships)".format(
-            per_row_commit * 1e6
-        )
-    )
-    print(
-        "  (b) batched executemany+commit: {:>6.2f} us/row  (what pfb_db_worker does off-thread)".format(
-            per_row_batch * 1e6
-        )
-    )
-    print(
-        "  (c) queue.put_nowait (DNS-thread cost): {:>5.3f} us/row  (the ONLY cost on the response path)".format(
-            per_enqueue * 1e6
-        )
-    )
-    print("-" * 78)
-    print("  matcher baseline: ~{:.1f} us/lookup (ADR-05 SS3a). On the response path the".format(MATCHER_US_BASELINE))
-    print("  block write costs only the enqueue (c); the INSERT (b) is amortised off-thread.")
-    ratio = per_enqueue * 1e6 / MATCHER_US_BASELINE
-    print(
-        "  enqueue / matcher ratio: {:.2f}x  ->  {}".format(
-            ratio,
-            "negligible (keep async path; clear/generation-key on swap)"
-            if ratio < 1.0
-            else "non-trivial (consider dropping/generation-keying)",
-        )
-    )
-    print("  NOTE: blocks set qstate.no_cache_store=1 (#43) -> EVERY block traverses operate()")
-    print("  and enqueues a row -> the write rate equals the block-query rate, not the")
-    print("  unique-blocked-name rate. This is the Bonus-2 input the Phase-3 Reports-log")
-    print("  decision (clear / generation-key / drop) is made on.")
-    print("=" * 78)
-
-
 def main() -> None:
     n_runs = int(os.environ.get("SPIKE_N", "3"))
     sizes = [int(s) for s in os.environ.get("SPIKE_SIZES", "2000000").split(",") if s.strip()]
     for n in sizes:
         run_ram(n, n_runs)
-    run_sqlite(int(os.environ.get("SPIKE_SQLITE_ROWS", "20000")))
 
 
 if __name__ == "__main__":

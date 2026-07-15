@@ -48,6 +48,11 @@ _MANIFEST_PATH = "/var/unbound/pfb_py_sources.json"
 _DNSBL_SQLITE = "/var/unbound/pfb_py_dnsbl.sqlite"
 _UNBOUND_PY_DATA = "/var/unbound/pfb_py_data.txt"
 _UNBOUND_PY_ZONE = "/var/unbound/pfb_py_zone.txt"
+_LEGACY_REPORT_CACHE_FAMILY = (
+    "/var/unbound/pfb_py_cache.sqlite",
+    "/var/unbound/pfb_py_cache.sqlite-wal",
+    "/var/unbound/pfb_py_cache.sqlite-shm",
+)
 _MANIFEST_NOTICE_ID = "pfBlockerNG DNSBL"
 
 
@@ -192,13 +197,13 @@ def _query_domain(vm: SmokeVM, domain: str, *, timeout: float = 60.0) -> dict[st
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.timeout(300)  # two real blocks + the async dnsblcache settle exceed the smoke tier's 30s default
+@pytest.mark.timeout(300)  # two real blocks and their async counter/log flushes exceed the default tier
 def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: SmokeVM) -> None:
     """ADR-65 D4 + Semantic 3: pfb_dnsbl_query mirrors a real block, with ZERO query side effects.
 
     Given: two unique domains share one feed; domain1 is the query subject,
     domain2 is a later real block used as an ORDERING BARRIER -- its own log
-    line / counter bump / cache row bound how far any query side effect (if
+    line / counter bump bound how far any query side effect (if
     one existed) could have propagated by the time it settles.
 
     When: domain1 is drilled on-box (the real block -- writes exactly one
@@ -207,7 +212,7 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
 
     Then: the query verdict's group/feed equal the log line's own group/feed
     byte-for-byte, AND after domain2's real block settles, domain1's own
-    log-hit count / counter / cache-row count are UNCHANGED from their
+    log-hit count / counter are UNCHANGED from their
     real-block values -- the query added nothing.
     """
     domain1 = h.unique_domain("adr65q1")
@@ -274,11 +279,8 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
             "must not have added its own increment"
         )
         # ZERO-SIDE-EFFECT (Semantic 3): domain1's own hit count is UNCHANGED by the
-        # query that ran between its block and domain2's block. The dnsblcache axis is
-        # NOT pinned on-box: the module unlinks pfb_py_cache.sqlite at init and only its
-        # -wal/-shm survive, so PHP cannot read the live table (issue #1350) -- a
-        # pre-existing quirk of a table ADR-65 leaves vestigial and #1349 retires. The
-        # counter + log-line axes above are the observable side-effect proof.
+        # query that ran between its block and domain2's block. The counter + log-line
+        # axes above are the observable side-effect proof.
         hits1_after = _dnsbl_log_hits(adr65_vm, domain1)
         assert hits1_after == 1, (
             f"expected {domain1}'s dnsbl.log hit count to stay 1 after the query, got {hits1_after} "
@@ -292,6 +294,11 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
                 f"ADR-65 D1: {retired} unexpectedly present after an update pass -- the retired "
                 f"interchange file must never be (re)written: {check.stdout!r}"
             )
+        # Issue #1349: the retired reports DB and both exact SQLite sidecars stay
+        # absent after a real update and live block traffic.
+        for retired in _LEGACY_REPORT_CACHE_FAMILY:
+            check = adr65_vm.ssh(f"test -e {retired} && echo PRESENT || echo ABSENT")
+            assert "ABSENT" in check.stdout, f"retired cache artifact survived: {retired}: {check.stdout!r}"
 
 
 # --------------------------------------------------------------------------- #

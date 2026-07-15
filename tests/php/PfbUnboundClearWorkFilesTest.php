@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -70,6 +71,36 @@ final class PfbUnboundClearWorkFilesTest extends TestCase
 		pfb_unbound_clear_work_files();
 
 		$this->assertFileDoesNotExist($legacy);
+	}
+
+	/** @return iterable<string,array{0:list<string>}> */
+	public static function legacyReportsCacheFamilyProvider(): iterable
+	{
+		yield 'base only' => [['']];
+		yield 'WAL only' => [['-wal']];
+		yield 'SHM only' => [['-shm']];
+		yield 'complete family' => [['', '-wal', '-shm']];
+		yield 'no family members' => [[]];
+	}
+
+	/** ADR-65 follow-up: remove the retired reports DB and its exact SQLite sidecars. */
+	#[DataProvider('legacyReportsCacheFamilyProvider')]
+	public function testLegacyReportsCacheFamilyIsSweptWithoutPrefixWildcards(array $presentSuffixes): void
+	{
+		$base = $GLOBALS['pfb']['dnsbl_cache'];
+		$unrelated = "{$base}.backup";
+		file_put_contents($unrelated, "keep\n");
+
+		foreach ($presentSuffixes as $suffix) {
+			file_put_contents("{$base}{$suffix}", "stale\n");
+		}
+
+		pfb_unbound_clear_work_files();
+
+		foreach (['', '-wal', '-shm'] as $suffix) {
+			$this->assertFileDoesNotExist("{$base}{$suffix}");
+		}
+		$this->assertFileExists($unrelated, 'similarly prefixed unrelated files must survive');
 	}
 
 	/** ADR-65: sweep a stray pre-upgrade pfb_py_data.txt (writer retired). */

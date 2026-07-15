@@ -237,7 +237,7 @@ ADR-12 `post` hook sees the new state).
   gate primary, Python free-page probe secondary — the ~2× transient build/swap footprint is
   `benchmarks/spike_adr10_swap.py`'s kill-gate), the feature/python mode off, Unbound down, a
   staged config change, or a prior swap/sentinel error.
-- **Cache on swap:** Reports reset; `decisionDB` cleared (no stale decision); **block→allow
+- **Cache on swap:** `decisionDB` cleared (no stale decision); **block→allow
   immediate** (blocks not C-cached since #43); **allow→block** flushes the prior resolved answer
   — a targeted delta flush for the #51 single-domain case, TTL-bounded for feed/cron (not a
   regression — the restart is TTL-stale there too).
@@ -671,8 +671,8 @@ the daemon's perspective). Full model, cost table, IP ordering constraints (the 
 matches *corrected* fields and cannot be hoisted), and the day-to-day variability mechanics:
 [`alerts-reports-pipeline.md`](alerts-reports-pipeline.md). Perf work: issue #809. The
 DNSBL-side render-time-recheck helpers this model left orphaned (`pfb_dnsbl_parse()` and the
-DNSBL batched-prefetch family) were removed in issue #1349; the `dnsblcache` table is retained
-(still populated by the Python daemon, no longer read at render time).
+DNSBL batched-prefetch family) were removed in issue #1349. The same follow-up retired the
+unconsumed reports-cache SQLite writer/table; only exact upgrade cleanup for its old files remains.
 
 ---
 
