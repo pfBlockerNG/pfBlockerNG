@@ -39,7 +39,7 @@ restore_srcs() {
 		if git -C "$worktree" cat-file -e "HEAD:$src" 2>/dev/null; then
 			git -C "$worktree" checkout HEAD -- "$src" || return 1
 		else
-			git -C "$worktree" rm -q -f -- "$src" || return 1
+			git -C "$worktree" rm -q -r -f -- "$src" || return 1
 		fi
 	done
 }

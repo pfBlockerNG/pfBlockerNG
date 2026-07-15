@@ -59,6 +59,20 @@ Describe 'verify-red-proof.sh'
     gitc add -A
     gitc commit -qm v2
   }
+  make_deleted_directory_repo() {
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-del-dir.XXXXXX")"
+    git -C "$repo" init -q
+    mkdir "$repo/gone"
+    echo OLD > "$repo/gone/a.txt"
+    printf 'test ! -e gone\n' > "$repo/test_pin.sh"
+    gitc add -A
+    gitc commit -qm v1
+    rm -rf "$repo/gone"
+    echo other > "$repo/other.txt"
+    gitc add -A
+    gitc commit -qm v2
+  }
   make_mixed_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-mixed.XXXXXX")"
@@ -107,6 +121,17 @@ Describe 'verify-red-proof.sh'
     The output should include 'GREEN-OK'
     The output should include 'VERDICT: PASS'
     Assert [ ! -e "$repo/old.txt" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'passes a deleted-directory red->green proof and restores the HEAD deletion'
+    make_deleted_directory_repo
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src gone
+    The status should equal 0
+    The output should include 'RED-OK'
+    The output should include 'GREEN-OK'
+    The output should include 'VERDICT: PASS'
+    Assert [ ! -e "$repo/gone" ]
     Assert [ -z "$(git -C "$repo" status --porcelain)" ]
   End
 
