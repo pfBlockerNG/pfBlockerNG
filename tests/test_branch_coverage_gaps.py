@@ -195,7 +195,8 @@ class TestLoadTldMaster:
 
     def test_empty_extracted_tld_dropped(self) -> None:
         # issue #1134: rsplit('.', 1)[-1] on a trailing-dot/bare-dot row extracts
-        # '' -- must be dropped like PHP's tld_analysis(), not seed a '' bucket.
+        # '' -- the Python classifier must drop it, preserving the retired PHP
+        # tld_analysis() contract rather than seeding a '' bucket.
         # 'com' (dot-less, unaffected) proves the guard is scoped to the empty case.
         tlds = _dnsbl_load_tld_wildcard_master(["bad.", ".", "..", "com"], [], [])
         assert tlds == {"com": {"com": ""}}

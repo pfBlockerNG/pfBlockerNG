@@ -78,7 +78,7 @@ BASELINE_BYTES_PER_ENTRY = 274.0  # ADR-05 §3a steady-state dict baseline
 SHELL_PASSES_REMOVED_SECONDS = 4.8  # measured sort -u + awk cross-dedup on 1M lines (excl. ggrep)
 
 # ICANN-style "registrable parent = last two labels" rule. The production
-# classifier (tld_analysis) consults the public-suffix master list; for an
+# manifest/Python classifier consults the public-suffix master list; for an
 # init-COST spike the exact suffix set is irrelevant -- what matters is the
 # per-line split/classify work + the dict build at scale. Two labels is the
 # dominant case and keeps the data/zone split realistic (~deep labels -> data).
@@ -139,8 +139,9 @@ def normalise(host: str) -> str | None:
 def classify(host: str) -> tuple[str, str]:
     """Return (kind, key): ('zone', registrable-parent) or ('data', host).
 
-    Mirrors `tld_analysis`: a domain that *is* its registrable parent becomes a
-    wildcard zone; a deeper sub-domain becomes an exact data entry.
+    Mirrors the manifest/Python classifier's contract: a domain that *is* its
+    registrable parent becomes a wildcard zone; a deeper sub-domain becomes an
+    exact data entry. The retired PHP ``tld_analysis()`` used the same split.
     """
     labels = host.split(".")
     if len(labels) <= _REGISTRABLE_LABELS:
