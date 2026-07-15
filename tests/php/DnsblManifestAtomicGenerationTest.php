@@ -56,11 +56,11 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			pfb_dnsbl_ndjson_emit_domain_row($domain, '1', 'Feed', 'Group'));
 	}
 
-	private function publish(): array|false
+	private function publish(array $publicationOps = []): array|false
 	{
 		return pfb_unbound_python_sources([
 			['header' => 'feed1', 'group' => 'Group', 'log' => '1', 'provenance' => 'feed'],
-		]);
+		], $publicationOps);
 	}
 
 	private function manifestRaw(array $manifest): string
@@ -153,6 +153,53 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$this->assertSame([], glob("{$this->tmp}/pfb_py_raw.stage.*") ?: []);
 	}
 
+	public function testInjectedPublicationBoundariesPreservePriorGeneration(): void
+	{
+		$old = $this->publish();
+		$this->assertIsArray($old);
+		$oldJson = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
+		$oldRaw = (string) file_get_contents($this->manifestRaw($old));
+		$oldDirs = $this->versionDirs();
+		$this->writeFeed('two.example');
+
+		$this->assertFalse($this->publish([
+			'stage_mkdir' => static fn(string $dir, int $mode): bool => FALSE,
+		]), 'staging failure must abort');
+		$this->assertFalse($this->publish([
+			'generation_rename' => static fn(string $from, string $to): bool => FALSE,
+		]), 'generation rename failure must abort');
+		$this->assertIsArray($this->publish([
+			'manifest_atomic' => [
+				'rename' => static fn(string $from, string $to): bool => FALSE,
+			],
+		]), 'manifest rename failure still returns the generated in-memory manifest');
+
+		$this->assertSame($oldJson, file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
+		$this->assertSame($oldRaw, file_get_contents($this->manifestRaw($old)));
+		$this->assertSame($oldDirs, $this->versionDirs(), 'failed boundaries must not leak raw generations');
+		$this->assertSame([], glob("{$this->tmp}/pfb_py_raw.stage.*") ?: []);
+	}
+
+	public function testRepeatedEncodeFailuresDoNotAccumulateUnreferencedGenerations(): void
+	{
+		$old = $this->publish();
+		$this->assertIsArray($old);
+		$oldJson = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
+		$oldRaw = (string) file_get_contents($this->manifestRaw($old));
+		$oldDirs = $this->versionDirs();
+
+		foreach (['two.example', 'three.example'] as $domain) {
+			$this->writeFeed($domain);
+			$generated = pfb_unbound_python_sources([
+				['header' => 'feed1', 'group' => NAN, 'log' => '1', 'provenance' => 'feed'],
+			]);
+			$this->assertIsArray($generated);
+			$this->assertSame($oldJson, file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
+			$this->assertSame($oldRaw, file_get_contents($this->manifestRaw($old)));
+			$this->assertSame($oldDirs, $this->versionDirs(), 'encode failure leaked a raw generation');
+		}
+	}
+
 	public function testScalarPatchPreservesRawReferencesAndSerializesOnPublicationLock(): void
 	{
 		$manifest = $this->publish();
@@ -188,6 +235,11 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		}
 		fclose($patchChild);
 		$this->assertSame("STARTED\n", fgets($patchParent));
+		$read = [$patchParent];
+		$write = NULL;
+		$except = NULL;
+		$this->assertSame(0, stream_select($read, $write, $except, 0, 200000),
+			'patch completed before the publication lock was released');
 		fwrite($holderParent, "RELEASE\n");
 		$this->assertSame("DONE\n", fgets($patchParent));
 		pcntl_waitpid($holderPid, $holderStatus);
@@ -219,6 +271,28 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$this->assertTrue(pfb_unbound_py_gc(TRUE));
 		$this->assertDirectoryDoesNotExist(dirname($this->manifestRaw($first)));
 		$this->assertDirectoryDoesNotExist($stage);
+		$this->assertSame("two.example\n", file_get_contents($this->manifestRaw($second)));
+	}
+
+	public function testGarbageCollectionAcceptsDuplicateValidRawReferences(): void
+	{
+		$feeds = [
+			['header' => 'feed1', 'group' => 'Group A', 'log' => '1', 'provenance' => 'feed'],
+			['header' => 'feed1', 'group' => 'Group B', 'log' => '1', 'provenance' => 'feed'],
+		];
+		$first = pfb_unbound_python_sources($feeds);
+		$this->assertIsArray($first);
+		$this->assertCount(2, $first['feeds']);
+		$this->assertSame($first['feeds'][0]['raw'], $first['feeds'][1]['raw']);
+
+		$this->writeFeed('two.example');
+		$second = pfb_unbound_python_sources($feeds);
+		$this->assertIsArray($second);
+		$this->assertCount(2, $this->versionDirs());
+
+		$this->assertTrue(pfb_unbound_py_gc(TRUE));
+		$this->assertDirectoryDoesNotExist(dirname($this->manifestRaw($first)));
+		$this->assertDirectoryExists(dirname($this->manifestRaw($second)));
 		$this->assertSame("two.example\n", file_get_contents($this->manifestRaw($second)));
 	}
 
