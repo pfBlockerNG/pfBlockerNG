@@ -34,7 +34,7 @@ The async worker hides the latency, but the per-call `connect()`/`open()` syscal
 
 1. **Threading model:** Unbound shares one Python interpreter across its worker threads (GIL); the `not pfb.get("async_worker")` guard makes worker/queue creation happen **once**. So a connection held by a worker thread is a **single writer** — a persistent connection is feasible.
 2. **PHP is a concurrent *writer*, not just a reader.** `pfBlockerNG_clearsqlite()` (`inc:6743`) runs `UPDATE resolver SET totalqueries = 0, queries = 0` and `UPDATE dnsbl SET counter = 0` **live from the UI** (`pfblockerng.php:69/73`, `pfblockerng.widget.php:175-191`) with **no Unbound restart**. The widget also `INSERT`s the default `resolver` row. → real writer/writer concurrency against the same files Python holds open.
-3. **Recovery scope is narrow** (per design decision): only pfb's own file delete/recreate (`write_sqlite` removes the cache on error, `inc/init` recreate) + Unbound restarts (which kill and re-`init` the process). No external file replacement, no RAM-disk special-casing — treat the DB as a plain on-disk file.
+3. **Recovery scope is narrow** (per design decision): only pfb's own file delete/recreate (`write_sqlite` removes a malformed active resolver/DNSBL stats DB on error, `inc/init` recreates it) + Unbound restarts (which kill and re-`init` the process). No external file replacement, no RAM-disk special-casing — treat the DB as a plain on-disk file.
 4. **A configurable line-cap already exists** and already covers our three logs: `pfb_log_mgmt()` (`inc:1227`) trims via `tail -n N > tmp; mv` using the `log_max_dnslog` / `log_max_dnsreplylog` / `log_max_unilog` knobs (UI "Log Settings (max lines)" in `pfblockerng_general.php`; default 20000, `'nolimit'` disables; runs on the cron/update path `pfblockerng.php:703` + `inc:6607`). The viewer "clear" (`pfblockerng_log.php:308`) already uses **`ftruncate`-in-place for the held-open `py_error.log`** and `unlink`+`touch` for the others. Both the trim (`mv`) and the clear (`unlink`) **change the inode**.
 5. **No pfSense precedent to borrow:** no other package (PHP or Python) uses sqlite; only 4 Python files exist across all packages and none run in Unbound. The reusable, well-tested tools are therefore **sqlite's own WAL/busy_timeout** and the **stdlib `logging`** framework — not a pfSense library.
 
@@ -125,7 +125,7 @@ Prompt: `02_Logging_Persistent_Handles.txt`
 Prompt: `03_Validation.txt`
 
 - Concurrency: PHP-style `clearsqlite` reset interleaved with Python increments under WAL → resets stick, post-reset increments count, no `locked`.
-- Fault injection: delete the cache file mid-run → reconnect, no loss of subsequent ops.
+- Fault injection: delete an active resolver/DNSBL stats DB file mid-run → reconnect, no loss of subsequent ops.
 - Perf: `connect()`/`open()`/`stat()` syscall counts + throughput, old vs new (reuse `benchmarks/`).
 - Shutdown: `deinit` drains+flushes (no loss on graceful reload).
 - Manual smoke checklist on a live pfSense box (no live Unbound in CI).
