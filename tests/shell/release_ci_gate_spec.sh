@@ -190,7 +190,7 @@ EOF
     Parameters
       'single space'              100644 'scripts/space name'
       'two consecutive spaces'    100644 'scripts/two  spaces'
-      'tab byte'                  100644 "scripts/$(printf '\t')name"
+      'tab byte'                  100644 "scripts/tab$(printf '\t')name"
       'double quote'              100644 'scripts/quote"name'
       'glob metacharacters'       100644 'scripts/glob[*?]name'
       'Unicode character'         100644 'scripts/pünicode'
