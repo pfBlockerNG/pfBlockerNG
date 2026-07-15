@@ -3815,9 +3815,22 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 	}
 
 	$locked = FALSE;
+	$first_lock_attempt = TRUE;
 	do {
+		$allow_expired_attempt = $first_lock_attempt && $wait_s <= 0.0;
+		$first_lock_attempt = FALSE;
+		if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
+			break;
+		}
 		$would_block = 0;
 		if (@flock($lock, LOCK_EX | LOCK_NB, $would_block)) {
+			// A waiter can be descheduled between its deadline check and flock().
+			// Never publish after that budget expires; timeout=0 still gets one
+			// immediate non-blocking attempt.
+			if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
+				@flock($lock, LOCK_UN);
+				break;
+			}
 			$locked = TRUE;
 			break;
 		}
@@ -3853,8 +3866,14 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 		$max_polls = (int) ceil($wait_s / 0.2) + 2;
 		$verdict   = NULL;
 		$polls     = 0;
+		$first_poll = TRUE;
 
 		do {
+			$allow_expired_poll = $first_poll && $wait_s <= 0.0;
+			$first_poll = FALSE;
+			if (!$allow_expired_poll && microtime(TRUE) >= $deadline) {
+				break;
+			}
 			if (file_exists($reply_path)) {
 				$raw = @file_get_contents($reply_path);
 				// An oversized read is treated as malformed -- a genuine reply is < 1 KB.
@@ -3870,6 +3889,11 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 						&& is_string($rec['feed'] ?? NULL)
 						&& is_string($rec['p_type'] ?? NULL)
 					) {
+						// A reply that becomes readable after the shared deadline is
+						// late even if this process was descheduled while reading it.
+						if (!$allow_expired_poll && microtime(TRUE) >= $deadline) {
+							break;
+						}
 						$verdict = array(
 							'blocked' => $rec['blocked'],
 							'b_type'  => $rec['b_type'],

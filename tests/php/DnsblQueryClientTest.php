@@ -436,6 +436,61 @@ final class DnsblQueryClientTest extends TestCase
 		$this->assertFalse($requestPublished, 'lock timeout must not publish a query request');
 	}
 
+	public function testResumedLockWaiterCannotPublishAfterDeadline(): void
+	{
+		if (!defined('SIGSTOP') || !defined('SIGCONT')) {
+			$this->markTestSkipped('SIGSTOP/SIGCONT are unavailable -- cannot suspend the lock waiter.');
+		}
+
+		$lock = fopen($this->lockPath(), 'c');
+		$this->assertIsResource($lock);
+		$this->assertTrue(flock($lock, LOCK_EX));
+		$child = $this->forkChild(function () use ($lock): void {
+			fclose($lock);
+			file_put_contents("{$this->tmp}/late-lock.started", '1');
+			$result = pfb_dnsbl_query('late-lock.example', 'A', 0.5);
+			file_put_contents("{$this->tmp}/late-lock.json", json_encode($result));
+		});
+
+		$this->readMarker('late-lock.started');
+		usleep(40000);
+		$this->assertTrue(posix_kill($child, (int) constant('SIGSTOP')));
+		usleep(600000);
+		flock($lock, LOCK_UN);
+		fclose($lock);
+		$this->assertTrue(posix_kill($child, (int) constant('SIGCONT')));
+
+		$this->assertNull($this->readQueryResult('late-lock', 2.0));
+		$this->reapChild($child);
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('query channel lock timed out', $logs);
+		$this->assertStringNotContainsString('timed out waiting for a verdict', $logs);
+		$this->assertFileDoesNotExist($this->channel());
+	}
+
+	public function testResumedReplyPollerRejectsVerdictPublishedAfterDeadline(): void
+	{
+		if (!defined('SIGSTOP') || !defined('SIGCONT')) {
+			$this->markTestSkipped('SIGSTOP/SIGCONT are unavailable -- cannot suspend the reply poller.');
+		}
+
+		$child = $this->forkQuery('late-reply.example', 0.5, 'late-reply');
+		$request = $this->waitForRequest('late-reply.example');
+		$this->assertTrue(posix_kill($child, (int) constant('SIGSTOP')));
+		usleep(600000);
+		$late_reply = $this->verdictReply($request['id'], 'late-group');
+		$this->assertSame(strlen($late_reply), file_put_contents($this->replyPath(), $late_reply));
+		$this->assertFileExists($this->replyPath());
+		$this->assertTrue(posix_kill($child, (int) constant('SIGCONT')));
+
+		$this->assertNull($this->readQueryResult('late-reply', 2.0));
+		$this->reapChild($child);
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('timed out waiting for a verdict', $logs);
+		$this->assertFileDoesNotExist($this->channel());
+		$this->assertFileDoesNotExist($this->replyPath());
+	}
+
 	// --- happy path: blocked verdict, request schema + perms, cleanup -------
 
 	public function testRoundTripBlockedVerdictAndRequestSchema(): void
