@@ -88,6 +88,35 @@ Describe 'verify-red-proof.sh'
     gitc add -A
     gitc commit -qm v2
   }
+  make_ignored_deleted_repo() {
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-ignored.XXXXXX")"
+    git -C "$repo" init -q
+    mkdir "$repo/gone"
+    echo OLD > "$repo/gone/a.txt"
+    printf 'gone/ignored.txt\nunrelated/\n' > "$repo/.gitignore"
+    printf 'test ! -e gone\n' > "$repo/test_pin.sh"
+    gitc add -A
+    gitc commit -qm v1
+    rm -rf "$repo/gone"
+    echo other > "$repo/other.txt"
+    gitc add -A
+    gitc commit -qm v2
+  }
+  make_deleted_directory_with_nested_repo() {
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-nested.XXXXXX")"
+    git -C "$repo" init -q
+    mkdir "$repo/gone"
+    echo OLD > "$repo/gone/a.txt"
+    printf 'if test -e gone/a.txt; then\n  mkdir -p gone/nested\n  git -C gone/nested init -q\n  %s\nelse\n  test ! -e gone\nfi\n' "$1" > "$repo/test_pin.sh"
+    gitc add -A
+    gitc commit -qm v1
+    rm -rf "$repo/gone"
+    echo other > "$repo/other.txt"
+    gitc add -A
+    gitc commit -qm v2
+  }
   make_mixed_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-mixed.XXXXXX")"
@@ -158,6 +187,76 @@ Describe 'verify-red-proof.sh'
     The output should include 'GREEN-OK'
     The output should include 'VERDICT: PASS'
     Assert [ ! -e "$repo/gone" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]
+  End
+
+  It 'rejects preexisting ignored data only beneath a HEAD-absent src and preserves it'
+    make_ignored_deleted_repo
+    mkdir -p "$repo/gone" "$repo/unrelated"
+    printf KEEP > "$repo/gone/ignored.txt"
+    printf OTHER > "$repo/unrelated/ignored.txt"
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src gone
+    The status should equal 2
+    The output should not include 'REVERT-FAIL'
+    The stderr should include 'DIRTY-TREE'
+    The contents of file "$repo/gone/ignored.txt" should equal 'KEEP'
+    The contents of file "$repo/unrelated/ignored.txt" should equal 'OTHER'
+    Assert [ ! -e "$repo/gone/a.txt" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'allows unrelated ignored data while proving the requested src path is clean'
+    make_ignored_deleted_repo
+    mkdir -p "$repo/unrelated"
+    printf OTHER > "$repo/unrelated/ignored.txt"
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src gone
+    The status should equal 0
+    The output should include 'RED-OK'
+    The output should include 'GREEN-OK'
+    The output should include 'VERDICT: PASS'
+    The contents of file "$repo/unrelated/ignored.txt" should equal 'OTHER'
+    Assert [ ! -e "$repo/gone" ]
+    Assert [ ! -L "$repo/gone" ]
+  End
+
+  It 'removes a red-created nested repository on normal restoration'
+    make_deleted_directory_with_nested_repo 'test ! -e gone'
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src gone
+    The status should equal 0
+    The output should include 'RED-OK'
+    The output should include 'GREEN-OK'
+    The output should include 'VERDICT: PASS'
+    Assert [ ! -e "$repo/gone" ]
+    Assert [ ! -L "$repo/gone" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]
+  End
+
+  It 'removes a red-created nested repository through EXIT after RED-FAIL'
+    make_deleted_directory_with_nested_repo ':'
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src gone
+    The status should equal 1
+    The output should include 'RED-FAIL'
+    The output should include 'VERDICT: FAIL'
+    Assert [ ! -e "$repo/gone" ]
+    Assert [ ! -L "$repo/gone" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]
+  End
+
+  It 'removes a red-created nested repository through SIGTERM restoration'
+    make_deleted_directory_with_nested_repo 'sleep 30'
+    interrupt_nested_case() {
+      dash "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src gone >/dev/null 2>&1 &
+      pid=$!
+      sleep 1
+      kill -TERM "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      printf '%s\n' "$?"
+      git -C "$repo" status --porcelain
+    }
+    When call interrupt_nested_case
+    The output should equal '130'
+    Assert [ ! -e "$repo/gone" ]
+    Assert [ ! -L "$repo/gone" ]
     Assert [ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]
   End
 

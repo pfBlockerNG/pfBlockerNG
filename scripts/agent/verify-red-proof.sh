@@ -40,7 +40,10 @@ restore_srcs() {
 			git -C "$worktree" checkout HEAD -- "$src" || return 1
 		else
 			git -C "$worktree" rm -q -r -f -- "$src" || return 1
-			git -C "$worktree" clean -q -d -f -x -- "$src" || return 1
+			git -C "$worktree" clean -q -d -f -f -x -- "$src" || return 1
+			if [ -e "$worktree/$src" ] || [ -L "$worktree/$src" ]; then
+				return 1
+			fi
 		fi
 	done
 }
@@ -89,6 +92,19 @@ main() {
 		echo "BAD-BASE-REF: '$base_ref' does not resolve to a single existing commit" >&2
 		exit 2
 	}
+	for src in $srcs; do
+		if ! git -C "$worktree" cat-file -e "HEAD:$src" 2>/dev/null; then
+			ignored=$(git -C "$worktree" status --porcelain=v1 --ignored --untracked-files=all -- "$src") || {
+				echo "DIRTY-TREE: the gate re-derives from committed state; commit or clean first." >&2
+				exit 2
+			}
+			case "$ignored" in
+				*'!! '* )
+					echo "DIRTY-TREE: the gate re-derives from committed state; commit or clean first." >&2
+					exit 2 ;;
+			esac
+		fi
+	done
 	# shellcheck disable=SC2086 # srcs is a space-separated path list by construction
 	git -C "$worktree" checkout "$base_sha" -- $srcs || fail "REVERT-FAIL: could not check out $base_ref src paths"
 	# INT/TERM trapped explicitly: under dash (Linux /bin/sh) an EXIT trap does NOT run
