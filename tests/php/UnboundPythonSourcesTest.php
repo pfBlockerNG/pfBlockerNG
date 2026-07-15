@@ -34,8 +34,10 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_whitelist_lines')]
 final class UnboundPythonSourcesTest extends TestCase
 {
+	private const OLD_GENERATION = 'pfb_py_raw.0123456789abcdef0123456789abcdef';
+
 	private string $tmp;
-	private bool $hadPfb = false;
+	private bool $hadPfb = FALSE;
 	private array $originalPfb = [];
 
 	protected function setUp(): void
@@ -45,9 +47,9 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
 
-		$this->tmp = sys_get_temp_dir() . '/pfb_sources_' . uniqid('', true);
-		mkdir("{$this->tmp}/dnsbl", 0777, true);
-		mkdir("{$this->tmp}/db", 0777, true);
+		$this->tmp = sys_get_temp_dir() . '/pfb_sources_' . uniqid('', TRUE);
+		mkdir("{$this->tmp}/dnsbl", 0777, TRUE);
+		mkdir("{$this->tmp}/db", 0777, TRUE);
 
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
 			'log'                => "{$this->tmp}/pfblockerng.log",
@@ -271,7 +273,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	{
 		$m = pfb_unbound_python_sources($this->feeds());
 		$json = file_get_contents("{$this->tmp}/pfb_py_sources.json");
-		$this->assertSame($m, json_decode($json, true));
+		$this->assertSame($m, json_decode($json, TRUE));
 	}
 
 	// #51: a FULL build CLEARS the temporary unlock set even when the live store has
@@ -306,7 +308,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		file_put_contents("{$this->tmp}/dnsbl_unlock", "evil.com,python\nfoo.org,python\n");
 		$this->assertTrue(pfb_unbound_python_sources_unlock());
 
-		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), true);
+		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), TRUE);
 		$this->assertSame(['evil.com', 'foo.org'], $patched['config']['user_unlock']);
 		// The feeds and the rest of config are untouched by the in-place patch.
 		$this->assertSame($m['feeds'], $patched['feeds']);
@@ -326,7 +328,7 @@ final class UnboundPythonSourcesTest extends TestCase
 
 		unlink("{$this->tmp}/dnsbl_unlock");           // store emptied (lock / Cron / Force)
 		$this->assertTrue(pfb_unbound_python_sources_unlock());
-		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), true);
+		$patched = json_decode(file_get_contents("{$this->tmp}/pfb_py_sources.json"), TRUE);
 		$this->assertSame([], $patched['config']['user_unlock']);
 	}
 
@@ -360,7 +362,7 @@ final class UnboundPythonSourcesTest extends TestCase
 				'user_unlock' => [],
 			],
 			'feeds' => [[
-				'raw' => 'pfb_py_raw/old.raw',
+				'raw' => self::OLD_GENERATION . '/old.raw',
 				'feed' => 'old-feed-secret',
 			]],
 		];
@@ -406,8 +408,9 @@ final class UnboundPythonSourcesTest extends TestCase
 	#[DataProvider('malformedUtf8Values')]
 	public function testFullManifestSubstitutesMalformedUtf8AndPublishes(string $invalid): void
 	{
-		mkdir($GLOBALS['pfb']['unbound_py_rawdir'], 0777, true);
-		file_put_contents("{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw", 'old-raw-secret');
+		$old_generation = dirname($GLOBALS['pfb']['unbound_py_rawdir']) . '/' . self::OLD_GENERATION;
+		mkdir($old_generation, 0777, TRUE);
+		file_put_contents("{$old_generation}/old.raw", 'old-raw-secret');
 		$old = $this->seedManifest();
 		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
 		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", $invalid . "\n");
@@ -415,22 +418,23 @@ final class UnboundPythonSourcesTest extends TestCase
 		pfb_unbound_python_sources([]);
 
 		$published = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
-		$decoded = json_decode($published, true);
+		$decoded = json_decode($published, TRUE);
 		$this->assertSame(JSON_ERROR_NONE, json_last_error(), 'the replacement manifest must be valid JSON');
 		$this->assertNotSame($old, $published, 'the stale manifest must be replaced');
 		$this->assertSame(["\u{FFFD}"], $decoded['config']['top1m_list']);
 		$this->assertSame(1, substr_count($published, '\\ufffd'), 'one malformed sequence must emit one replacement');
 		$this->assertSame(
 			'old-raw-secret',
-			file_get_contents("{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw"),
+			file_get_contents("{$old_generation}/old.raw"),
 			'the old generation remains readable until confirmed-apply garbage collection'
 		);
 	}
 
 	public function testFullManifestResidualEncodingFailureLogsGenericErrorAndKeepsOldManifest(): void
 	{
-		mkdir($GLOBALS['pfb']['unbound_py_rawdir'], 0777, true);
-		file_put_contents("{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw", 'old-raw-secret');
+		$old_generation = dirname($GLOBALS['pfb']['unbound_py_rawdir']) . '/' . self::OLD_GENERATION;
+		mkdir($old_generation, 0777, TRUE);
+		file_put_contents("{$old_generation}/old.raw", 'old-raw-secret');
 		$old = $this->seedManifest();
 
 		$manifest = pfb_unbound_python_sources([
@@ -440,7 +444,7 @@ final class UnboundPythonSourcesTest extends TestCase
 
 		$this->assertTrue(is_nan($manifest['feeds'][0]['group']), 'the full writer must keep returning the generated manifest');
 		$this->assertSame($old, file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
-		$this->assertSame('old-raw-secret', file_get_contents("{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw"));
+		$this->assertSame('old-raw-secret', file_get_contents("{$old_generation}/old.raw"));
 		$published = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE);
 		$this->assertIsArray($published);
 		foreach ($published['feeds'] as $feed) {
@@ -474,7 +478,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testManifestPatchValidInputsKeepLegacyJsonBytes(string $key, array $values): void
 	{
 		$old = $this->seedManifest();
-		$expected = json_decode($old, true);
+		$expected = json_decode($old, TRUE);
 		$expected['config'][$key] = $values;
 		$legacy = json_encode($expected, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 
@@ -505,7 +509,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertTrue(pfb_unbound_python_sources_patch($key, [$invalid]));
 
 		$published = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
-		$decoded = json_decode($published, true);
+		$decoded = json_decode($published, TRUE);
 		$this->assertSame(JSON_ERROR_NONE, json_last_error(), 'the patched manifest must be valid JSON');
 		$this->assertSame(["\u{FFFD}"], $decoded['config'][$key]);
 		$this->assertSame(1, substr_count($published, '\\ufffd'), 'one malformed sequence must emit one replacement');
