@@ -60,7 +60,7 @@ Apply DNSBL updates **without restarting Unbound**: the running module rebuilds 
 
 | Area | Decision |
 | --- | --- |
-| **Publish protocol (the safety barrier)** | PHP writes and `fsync`s every raw into a sibling staging directory, renames the complete set to immutable `pfb_py_raw.<xxh128>`, then atomically replaces `pfb_py_sources.json`. That **manifest rename is the sole visibility commit**: readers see either the old complete generation or the new one. The later sentinel flip is notification/apply sequencing, not a second path commit. Old generations are collected only after watcher/restart convergence. Runtime rename atomicity is required; crash-durability wording remains narrower until #1357's FreeBSD parent-directory `fsync` probe is executed. |
+| **Publish protocol (the safety barrier)** | PHP/shell writes the new manifest + per-feed raw into a **staging dir**, `fsync`s, then **atomically `rename`s** into place, and finally **flips a single sentinel file** (`mtime` bump / write of the new generation id). The sentinel flip is the **all-or-nothing commit**: the plugin only ever reads a **fully-written, immutable** manifest set. This — *not* notify latency — is what guarantees "never read a file mid-write" (Context 8). |
 | **Trigger / watch** | A new **reload-watcher daemon thread** (started in `init_standard` next to `pfb_db_worker`/`pfb_async_worker`, `:728-744`) waits on the sentinel: **`select.kqueue` `EVFILT_VNODE`** on the sentinel's directory where available (FreeBSD; **`inotify` is Linux-only, not present on pfSense**), with a **low-frequency `mtime` poll fallback**. Notification is **best-effort**; correctness rides on the atomic publish + the generation id, so a missed/coalesced event only delays, never corrupts. On trigger → `rebuild_and_swap()`. |
 | **Atomic swap shape (single snapshot)** | Replace the four-plus separate globals (`:559-562`) with **one module-level reference** to a **frozen `Snapshot`** bundling *all* ADR-07 strata: `dataDB`, `zoneDB`, `whiteDB`, `regexDB`, `allowRegexDB`, `feedGroupIndexDB`, the `important_rules` flag, and the counts. `evaluate_domain`/`op` capture the **one** reference at query start and read every field off it — so a query is internally consistent even if a swap lands mid-query. The swap is a single `STORE_NAME` (GIL-atomic). **No lock in the per-query hot path.** |
 | **Background rebuild** | `rebuild_and_swap()` runs `build()`/`dnsbl_build_from_manifest()` (already pure, `:1966`/`:2118`) **on the watcher thread**, off the live snapshot. Query threads keep serving the **old** snapshot throughout the build (seconds for a big ABP list) → **zero downtime, briefly stale by design**. Only on a **successful** build is the snapshot ref rebound. Concurrent triggers are **coalesced** (a rebuild-in-progress flag / single-flight); a trigger during a build re-checks the generation id and rebuilds once more if it advanced. |
@@ -174,18 +174,7 @@ Prompt: `04_Watcher_Background_Swap.txt`
 
 Prompt: `05_PHP_Publish_FastPath_Flush.txt`
 
-- Manifest writer: stage and `fsync` raw files → rename the complete set to immutable
-  `pfb_py_raw.<xxh128>` → atomically replace the manifest (the visibility commit) → flip the
-  sentinel (generation notification). Apply/restart convergence gates old-generation GC.
-  `pfb_reload_unbound` gains the **data-only** fork: a DNSBL-data update in Python mode →
-  publish + flip, **no `pfb_stop_start_unbound`**; config change / failed / disabled → restart
-  fallback. **Data-only includes the user custom-list edits** — route the alerts Lock/Unlock
-  and "add to whitelist" reloads (#51; `pfb_unbound_python_sources_unlock`/`_whitelist`)
-  through the same no-restart fast path. Compute the **newly-blocked delta** (allow→block)
-  and flush those names from Unbound's C-cache (`unbound-control flush`/`flush_zone`,
-  coalesced, coordinated with the DNSBL-queries-daemon marker `:3211`); **block→allow needs
-  no flush** (blocks not cached since #43, Context 7 — the `decisionDB` clear suffices).
-  `php -l` + ShellCheck clean; default `pytest` unchanged.
+- Manifest writer: stage → `fsync` → atomic `rename` → flip the sentinel (generation id) — the all-or-nothing commit. `pfb_reload_unbound` gains the **data-only** fork: a DNSBL-data update in Python mode → publish + flip, **no `pfb_stop_start_unbound`**; config change / failed / disabled → restart fallback. **Data-only includes the user custom-list edits** — route the alerts Lock/Unlock and "add to whitelist" reloads (#51; `pfb_unbound_python_sources_unlock`/`_whitelist`) through the same no-restart fast path. Compute the **newly-blocked delta** (allow→block) and flush those names from Unbound's C-cache (`unbound-control flush`/`flush_zone`, coalesced, coordinated with the DNSBL-queries-daemon marker `:3211`); **block→allow needs no flush** (blocks not cached since #43, Context 7 — the `decisionDB` clear suffices). `php -l` + ShellCheck clean; default `pytest` unchanged.
 
 ### Phase 6 — Validation, benchmark, manual smoke, DoD
 
@@ -238,3 +227,21 @@ whitelist removal) always perform an immediate targeted delta flush. User-trigge
 block→allow changes need only the `decisionDB` clear because blocked answers are not
 stored in Unbound's C cache. This addendum supersedes broader wording in the accepted
 body without changing the original record.
+
+---
+
+## Post-acceptance addendum (2026-07-15 — issue #1357)
+
+Issue #1357 hardened the accepted publish protocol without changing DNSBL decisions
+or the sentinel apply contract. PHP serializes full and scalar manifest writers with
+one publication lock, writes each accepted feed into a unique sibling staging
+directory, and publishes the complete raw set as an immutable content-addressed
+`pfb_py_raw.<xxh128>` generation. Atomic replacement of
+`pfb_py_sources.json` is the sole on-disk visibility commit; the later sentinel flip
+remains the notification/apply step. The previous generation remains available until
+a confirmed watcher or restart convergence, after which strict-name garbage
+collection may remove unreferenced generations and stages.
+
+The implementation claims runtime rename atomicity, not power-loss durability. The
+live FreeBSD probe confirmed that directory-stream `fsync()` is supported, but the
+shared atomic-write helper does not fsync the parent directory after rename.
