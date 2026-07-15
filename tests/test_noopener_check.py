@@ -145,6 +145,7 @@ _IN_SCOPE_SUFFIXES = ("php", "inc", "xml")
         ("unquoted", "target=_blank"),
         ("uppercase_attribute", 'TARGET="_blank"'),
         ("mixed_case_keyword", 'target="_Blank"'),
+        ("mixed_case_unquoted_keyword", "target=_Blank"),
     ),
     ids=lambda value: value if isinstance(value, str) and "=" not in value else None,
 )
@@ -195,6 +196,8 @@ _HOSTILE_CLEAN_ROWS = (
     ("mismatched_quotes", "<a target=\"_blank'>"),
     ("shell_shaped_value", '<a target="$(_blank)">'),
     ("bracketed_value", '<a target="[_blank]">'),
+    ("unquoted_word_suffix", "<a target=_blank_evil>"),
+    ("unquoted_hyphen_suffix", "<a target=_blank-evil>"),
     ("target_equals_split", '<a target\n="_blank" rel="noopener noreferrer">'),
     ("adjacent_noopener", '<a target="_blank" rel="noopener noreferrer">'),
     ("escape_marker", '<a target="_blank" href="x"> <!-- noopener-ok: sample -->'),

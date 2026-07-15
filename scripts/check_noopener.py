@@ -51,10 +51,11 @@ import subprocess
 import sys
 from typing import NamedTuple
 
-# HTML ASCII case/whitespace only. The unquoted branch must leave its separator
-# untouched for the adjacent-rel matcher; quoted trailing spaces/tabs are included.
+# HTML ASCII case/whitespace only. The unquoted branch requires a value delimiter
+# and leaves it untouched for the adjacent-rel matcher; quoted trailing spaces/tabs
+# are included.
 _TARGET_BLANK_RE = re.compile(
-    r'(?<![\w-])(?ai:target)[ \t]*=[ \t]*(?:(?P<q>["\'])(?ai:_blank)[ \t]*(?P=q)|(?ai:_blank))'
+    r'(?<![\w-])(?ai:target)[ \t]*=[ \t]*(?:(?P<q>["\'])(?ai:_blank)[ \t]*(?P=q)|(?ai:_blank)(?=[ \t>]|$))'
 )
 
 # `rel="noopener…"` (or single-quoted / unquoted), immediately after `target=…`
