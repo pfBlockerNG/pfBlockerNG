@@ -10,6 +10,13 @@
 - **Target runtime:** Python 3.11+ inside Unbound's `pythonmod` (stdlib only); PHP 8.3 (pfSense CE 2.8).
 - **Test suite:** `tests/test_pfb_unbound.py`, `tests/conftest.py`.
 
+> **Amendment (2026-07-15, issue #1349).** The unconsumed per-block reports-cache
+> SQLite writer/table was retired. The active persistent-DB contract now covers only
+> `pfb_py_resolver.sqlite` (`resolver`) and `pfb_py_dnsbl.sqlite` (`dnsbl`); their
+> WAL connections, relative counters, recovery, batching, worker drain, and PHP
+> concurrency rules are unchanged. References below to the third cache DB describe
+> the original implementation and are superseded by this amendment.
+
 ---
 
 ## 1. Context

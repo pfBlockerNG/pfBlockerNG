@@ -2065,7 +2065,7 @@ function pfb_match_filter_field($flent, $fields) {
    DNS-reply verdicts, and the filterlog daemon (pfb_daemon_filterlog) resolves the bare
    pf event into rule/feed/GeoIP/rDNS/ASN once, at event time, caching in its ipcache.
    DNSBL rows therefore render their logged fields directly — no render-time lookup (the
-   per-row re-check / dnsblcache read / drill machinery was removed in issue #1349). Only
+   retired per-row re-check and drill machinery were removed in issue #1349). Only
    the IP converter still re-checks the logged attribution against the CURRENT feed state
    (drift strikethrough + icon decisions): the issue #809 batched pfb_ip_prefetch() pass seeds
    in-process memos to cut per-row execs, but has no PERSISTENT cache (ipcache is daemon-write-

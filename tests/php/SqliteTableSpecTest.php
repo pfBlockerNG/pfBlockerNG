@@ -45,11 +45,18 @@ final class SqliteTableSpecTest extends TestCase
 			'1 dnsbl'        => [1, 'dnsbl'],
 			'2 lastevent'    => [2, 'lastevent'],
 			'3 resolver'     => [3, 'resolver'],
-			'4 dnsblcache'   => [4, 'dnsblcache'],
 			'5 asncache'     => [5, 'asncache'],
 			'6 lastclear'    => [6, 'lastclear'],
 			'7 ipcache'      => [7, 'ipcache'],
 		];
+	}
+
+	public function testTableFourIsAReservedEmptySlot(): void
+	{
+		$spec = pfb_sqlite_table_spec(4);
+
+		$this->assertSame('', $spec['db_table']);
+		$this->assertSame('', $spec['db_create']);
 	}
 
 	#[DataProvider('tableIndexProvider')]
@@ -70,5 +77,6 @@ final class SqliteTableSpecTest extends TestCase
 
 		$this->assertSame('', $spec['db_table']);
 		$this->assertSame('', $spec['db_create']);
+		$this->assertNull(pfb_open_sqlite(99, 'unknown table'));
 	}
 }

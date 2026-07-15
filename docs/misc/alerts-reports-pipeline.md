@@ -47,10 +47,8 @@ A DNSBL webserver-hit (block-page load) is attributed the same way: `pfb_log_eve
 query channel ADR-65 added — for the domain's current verdict, uses the returned
 group/feed to build the `dnsbl.log` line it appends, and increments the per-group widget
 counter (`UPDATE dnsbl SET counter = counter + 1`). A miss (`NULL` or `blocked=false`)
-renders every field `Unknown` rather than guessing. `pfb_unbound.py` still enqueues every
-fresh DNS-side block into the `dnsblcache` SQLite table, but no render path reads it
-anymore — the table and its lone remaining reader are vestigial and tracked for removal in
-issue #1349.
+renders every field `Unknown` rather than guessing. Issue #1349 retired the unconsumed
+reports-cache SQLite writer/table; the event log is the sole durable per-block record.
 
 ## Read path — the Alerts page
 

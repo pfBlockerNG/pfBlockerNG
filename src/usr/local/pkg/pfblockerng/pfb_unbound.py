@@ -1348,13 +1348,16 @@ def init_standard(id: int, env: module_env) -> bool:
     # pfb_py_reload) -- written/cleared by pfb_py_status_open()/close(); PHP only reads it.
     pfb["pfb_py_status"] = "pfb_py_status.json"
     pfb["pfb_py_dnsbl"] = "pfb_py_dnsbl.sqlite"
-    pfb["pfb_py_cache"] = "pfb_py_cache.sqlite"
     pfb["pfb_py_resolver"] = "pfb_py_resolver.sqlite"
     pfb["maxminddb"] = "/usr/local/share/GeoIP/GeoLite2-Country.mmdb"
 
-    # Remove DNSBL cache file (For Reports tab query)
-    if os.path.isfile(pfb["pfb_py_cache"]):
-        os.remove(pfb["pfb_py_cache"])
+    # Issue #1349: the unconsumed reports cache is retired. Sweep the exact legacy
+    # SQLite family at startup so upgrades do not strand a base/WAL/SHM sidecar.
+    for stale in ("pfb_py_cache.sqlite", "pfb_py_cache.sqlite-wal", "pfb_py_cache.sqlite-shm"):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
 
     # DNSBL validation on these RR_TYPES only
     pfb["rr_types"] = (
@@ -1754,8 +1757,7 @@ def init_standard(id: int, env: module_env) -> bool:
     # read -- the same dict objects, just bundled (pinned by the retained ADR-06/07
     # oracles). Net init behaviour is UNCHANGED: this builder never returns None (so the
     # swap always succeeds at init), the decisionDB.clear() is a no-op on the cache init
-    # just re-created empty, the Reports-cache reset matches init's earlier os.remove of
-    # pfb_py_cache.sqlite (the file was just removed and the table is empty), and
+    # just re-created empty, and
     # ``emit_counts=False`` keeps init's existing path-specific inline count emits (the
     # manifest-path pfb_py_count + the always-on pfb_py_regex_count above) -- the swap
     # must NOT re-emit here or the CSV-fallback/else paths would gain count writes they
@@ -2436,7 +2438,6 @@ PFB_DB_MAX_BATCH = 2000
 
 DB_RESOLVER = 1
 DB_DNSBL = 2
-DB_CACHE = 3
 
 
 def _db_file(db: int) -> str:
@@ -2444,8 +2445,6 @@ def _db_file(db: int) -> str:
         return pfb["pfb_py_resolver"]
     if db == DB_DNSBL:
         return pfb["pfb_py_dnsbl"]
-    if db == DB_CACHE:
-        return pfb["pfb_py_cache"]
     return ""
 
 
@@ -2484,10 +2483,6 @@ def _db_create(db: int, cursor: Any) -> None:
             "CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )"
         )
         _db_seed_upstream_row(cursor)
-    elif db == DB_CACHE:
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS dnsblcache ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );"
-        )
 
 
 def _db_connect(db: int) -> Any:
@@ -2542,13 +2537,6 @@ def _db_run(db: int, work: Callable[[Any], None]) -> bool:
                 _db_close(db)
                 if attempt == 3:
                     sys.stderr.write("[pfBlockerNG]: sqlite write failed db {}: {}\n".format(_db_file(db), e))
-                    # Preserve historical behaviour: clear a corrupt DNSBL cache db.
-                    if db == DB_CACHE:
-                        try:
-                            if os.path.isfile(pfb["pfb_py_cache"]):
-                                os.remove(pfb["pfb_py_cache"])
-                        except Exception:
-                            pass
                     return False
                 time.sleep(0.25)
         return False
@@ -2577,32 +2565,6 @@ def _db_flush_dnsbl(deltas: dict[str, int]) -> bool:
         con.executemany("UPDATE dnsbl SET counter = counter + ? WHERE groupname = ?", rows)
 
     return _db_run(DB_DNSBL, _flush)
-
-
-def _db_flush_cache(rows: list[Any]) -> bool:
-    if not rows:
-        return True
-    return _db_run(
-        DB_CACHE,
-        lambda con: con.executemany(
-            "INSERT INTO dnsblcache (type, domain, groupname, final, feed) VALUES (?,?,?,?,?)", rows
-        ),
-    )
-
-
-def _db_reset_cache() -> bool:
-    # ADR-10: reset the DNSBL Reports cache (the dnsblcache table the Reports tab
-    # reads) on a zero-downtime DNSBL swap, in parity with the init-time os.remove of
-    # pfb_py_cache.sqlite. Goes through _db_run -> _db_lock, so it serializes with the
-    # off-thread pfb_db_worker (and the synchronous fallback) on the SAME persistent
-    # connection -- it never touches the sqlite file directly off-thread (a delete/
-    # reconnect would race the worker mid-flush). DELETE FROM (vs DROP/os.remove) keeps
-    # the schema + WAL connection live so the very next enqueued block row inserts
-    # cleanly post-swap; _db_run re-creates the table on a faulted reconnect. The
-    # current PHP Reports reader reads ALL rows (no generation column), so a destructive
-    # clear is the correct no-restart equivalent of today's wipe-on-restart; a
-    # generation-key alternative is deferred to PHP.
-    return _db_run(DB_CACHE, lambda con: con.execute("DELETE FROM dnsblcache"))
 
 
 def pfb_db_validate(db: int) -> bool:
@@ -2683,17 +2645,14 @@ def _db_apply(task: tuple) -> None:
         _db_flush_resolver(1)
     elif kind == "dnsbl":
         _db_flush_dnsbl({task[1]: 1})
-    elif kind == "cache":
-        _db_flush_cache([task[1]])
 
 
 def pfb_db_worker() -> None:
     # Batch DB writes off the DNS path. Counter increments accumulate as per-key
-    # deltas (commutative); cache rows keep FIFO order. Flush on a timer, on a
-    # size threshold, when idle, and on stop.
+    # deltas (commutative). Flush on a timer, on a size threshold, when idle, and
+    # on stop.
     resolver_delta = 0
     dnsbl_deltas: dict[str, int] = {}
-    cache_rows: list[Any] = []
     last_flush = time.monotonic()
     stop = False
 
@@ -2703,17 +2662,13 @@ def pfb_db_worker() -> None:
             resolver_delta += 1
         elif t[0] == "dnsbl":
             dnsbl_deltas[t[1]] = dnsbl_deltas.get(t[1], 0) + 1
-        elif t[0] == "cache":
-            cache_rows.append(t[1])
 
     def flush() -> None:
-        nonlocal resolver_delta, dnsbl_deltas, cache_rows, last_flush
+        nonlocal resolver_delta, dnsbl_deltas, last_flush
         if resolver_delta and _db_flush_resolver(resolver_delta):
             resolver_delta = 0
         if dnsbl_deltas and _db_flush_dnsbl(dnsbl_deltas):
             dnsbl_deltas = {}
-        if cache_rows and _db_flush_cache(cache_rows):
-            cache_rows = []
         last_flush = time.monotonic()
 
     while True:
@@ -2744,7 +2699,7 @@ def pfb_db_worker() -> None:
         if (
             stop
             or task is None
-            or (resolver_delta + len(dnsbl_deltas) + len(cache_rows)) >= PFB_DB_MAX_BATCH
+            or (resolver_delta + len(dnsbl_deltas)) >= PFB_DB_MAX_BATCH
             or (time.monotonic() - last_flush) >= PFB_DB_FLUSH_INTERVAL
         ):
             flush()
@@ -5452,7 +5407,7 @@ def dnsbl_emit_reject_stats(stats_path: str, rejects: RejectTally) -> bool:
 
 
 def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_counts: bool = True) -> bool:
-    """ADR-10: the single fail-closed build -> atomic-swap + cache-reset step.
+    """ADR-10: the single fail-closed build -> atomic-swap + memo-reset step.
 
     ``build_snapshot`` is a zero-arg builder that produces a BRAND-NEW ``Snapshot`` off
     the live one (the pure ``build()``/``dnsbl_build_from_manifest()`` layer plus the
@@ -5473,23 +5428,21 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
          also stamped with its ``Snapshot.gen`` and a reader rejects a foreign-
          generation entry -- the clear remains as eager eviction, the stamp is the
          correctness guard;
-      3. reset the DNSBL Reports cache through ``_db_reset_cache`` (``_db_lock``-
-         serialized, parity with the init-time wipe -- never an off-thread file touch);
-      4. re-emit ``pfb_py_count`` / ``pfb_py_regex_count`` (the ``DNSBL_Regex`` UI alias)
+      3. re-emit ``pfb_py_count`` / ``pfb_py_regex_count`` (the ``DNSBL_Regex`` UI alias)
          from the NEW snapshot so the UI reflects the live lists without a restart --
          skipped when ``emit_counts=False`` (init opts out: it keeps its own existing
          path-specific inline emits to stay byte-identical -- see the call site).
 
     On FAILURE (builder returns ``None`` or raises): keep the OLD ``_snapshot``, touch
-    NEITHER cache (decisionDB AND the Reports sqlite stay intact), log, and return
+    the decisionDB memo untouched, log, and return
     ``False`` -- fail-closed, mirroring init's ``build_result is not None`` guard. The
     swap NEVER installs an empty/partial set on a build error; the resolver keeps
     serving the last good snapshot (the background reload-watcher relies on exactly
     this so a failed reload is a no-op, not an outage).
 
     ``init_standard`` calls it SYNCHRONOUSLY (net init behaviour unchanged: the same
-    snapshot, a no-op decisionDB clear on the fresh empty cache, a Reports reset in
-    parity with the init os.remove, and -- with ``emit_counts=False`` -- init's own
+    snapshot, a no-op decisionDB clear on the fresh empty cache, and -- with
+    ``emit_counts=False`` -- init's own
     unchanged inline count emits). The background reload-watcher thread calls this
     same function with the default ``emit_counts=True``.
     """
@@ -5498,7 +5451,7 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     try:
         new_snapshot = build_snapshot()
     except Exception as e:
-        # Fail-closed: a raising build leaves the live snapshot + both caches intact.
+        # Fail-closed: a raising build leaves the live snapshot + decision memo intact.
         sys.stderr.write("[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: {}".format(e))
         return False
 
@@ -5508,10 +5461,9 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
         return False
 
     # SUCCESS: install the new snapshot with one GIL-atomic store, then reset the
-    # query memo + Reports cache and re-emit the UI counts off the NEW snapshot.
+    # query memo and re-emit the UI counts off the NEW snapshot.
     _snapshot = new_snapshot
     decisionDB.clear()
-    _db_reset_cache()
     # #714 FIX #2: a swap installs a brand-new regex_db/allow_regex_db, so the runtime
     # warn-suppression + perf-fallback strike bookkeeping keyed on pattern NAME must not
     # survive it -- a name reused across reloads (a re-added or edited rule) would
@@ -6786,16 +6738,12 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # memo is stamped with THIS query's snapshot generation (issue #1074).
                 _decision_for(q_name, snap.gen).dnsbl = dnsbl
 
-                # Add domain data to DNSBL cache for Reports tab (fresh block only)
-                if dnsbl.is_found and not dnsbl.in_whitelist:
-                    pfb_db_enqueue(("cache", (dnsbl.b_type, q_name, dnsbl.group, dnsbl.b_eval, dnsbl.feed)))
-
                 # ADR-08: a Confusable-mode ALERT (suspicious/flagged, or malicious with
                 # block disabled) does NOT block -- the name resolves -- but the anomaly is
                 # surfaced once, here on the fresh evaluation, in the same dnsbl.log shape as
                 # a block (dual-form b_eval so it is actionable). A repeat query reuses the
                 # cached decision and is not re-logged (the name resolves normally).
-                elif dnsbl.idn_alert is not None:
+                if dnsbl.idn_alert is not None:
                     _log_idn_alert(q_name, q_ip, dnsbl.idn_alert, get_q_type(qstate, None))
 
             # Block iff found and not whitelisted; an allow decision falls through to
