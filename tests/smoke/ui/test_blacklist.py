@@ -51,13 +51,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-import requests
 
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
+    import requests
+
     from .webui import WebUI
 
 pytestmark = pytest.mark.ui_e2e
