@@ -168,6 +168,7 @@ unlink_if_exists("{$pfb['ip_cache']}");
 foreach (array($pfb['dnsbl_cache'], "{$pfb['dnsbl_cache']}-wal", "{$pfb['dnsbl_cache']}-shm") as $legacy_cache) {
 	unlink_if_exists($legacy_cache);
 }
+rmdir_recursive("{$pfb['dbdir']}/dnsblalias");
 
 update_status(" done.\nStarting Firewall filter Service...");
 start_service('pfb_filter');
