@@ -98,6 +98,18 @@ def _csrf_token(webui: WebUI) -> str:
     return extract_csrf_token(resp.text)
 
 
+def _config_path_exists(vm: helpers.SmokeVM, path: str) -> bool:
+    """Return whether a scalar config path exists, distinguishing missing from empty."""
+    return (
+        helpers._php_read_scalar(
+            vm,
+            "",
+            f"config_get_path({helpers._php_str(path)}, null) === null ? '0' : '1'",
+        )
+        == "1"
+    )
+
+
 def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TIMEOUT) -> requests.Response:
     """POST a FULLY-CONTROLLED payload to the blacklist page (token added here).
 
@@ -418,8 +430,8 @@ def test_blacklist_array_autosubmit_coerces_to_default_without_error(
     default: str,
 ) -> None:
     """An authenticated no-save array autosubmit persists the field default cleanly."""
+    original_present = _config_path_exists(smoke_vm, config_path)
     original = helpers.config_get(smoke_vm, config_path)
-    restore = original or default
     try:
         _direct_post(webui, {field: seed})
         assert helpers.config_get(smoke_vm, config_path) == seed, f"failed to seed {field}={seed!r}"
@@ -433,4 +445,19 @@ def test_blacklist_array_autosubmit_coerces_to_default_without_error(
         got = helpers.config_get(smoke_vm, config_path)
         assert got == default, f"array {field} should persist default {default!r}, got {got!r}"
     finally:
-        _direct_post(webui, {field: restore})
+        operation = (
+            f"config_set_path({helpers._php_str(config_path)}, {helpers._php_str(original)});"
+            if original_present
+            else f"config_del_path({helpers._php_str(config_path)});"
+        )
+        restored = helpers.php_eval(
+            smoke_vm,
+            f"{operation}\nwrite_config('pfBlockerNG smoke: restore blacklist scalar');\necho 'OK';",
+        )
+        assert restored.returncode == 0 and "OK" in restored.stdout, (
+            f"failed to restore {config_path!r}: stdout={restored.stdout!r} stderr={restored.stderr!r}"
+        )
+        assert helpers.config_get(smoke_vm, config_path) == original, f"failed to restore {config_path!r} value"
+        assert _config_path_exists(smoke_vm, config_path) is original_present, (
+            f"failed to restore {config_path!r} presence"
+        )
