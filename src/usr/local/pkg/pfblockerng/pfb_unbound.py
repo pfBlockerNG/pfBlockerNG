@@ -2773,7 +2773,7 @@ def get_details_dnsbl(
     kwargs: dict[str, Any] | None,
     dnsbl: Any,  # DnsblDecision operate() served; UNSET is a defensive no-op guard
 ) -> bool:
-    global pfb, rcodeDB, noAAAADB, maxmindReader, _dnsbl_last_event
+    global pfb, _dnsbl_last_event
 
     if qstate and qstate is not None:
         q_name = get_q_name_qstate(qstate)
@@ -5280,8 +5280,9 @@ def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
     its raw lines, streamed lazily so peak RAM stays at the dict floor.
 
     ``raw`` may be an absolute path or a name relative to ``base_dir`` (the directory
-    holding the manifest). Yields stripped-of-newline lines; a missing/unreadable feed
-    yields nothing (and is logged by the caller) rather than aborting the whole build.
+    holding the manifest). LF is the only record delimiter and actual CR characters
+    are removed from yielded lines. A missing/unreadable feed yields nothing (and is
+    logged by the caller) rather than aborting the whole build.
     """
 
     def reader(raw: str) -> Iterable[str]:
@@ -5291,7 +5292,7 @@ def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
             sys.stderr.write("[pfBlockerNG]: Refusing DNSBL feed outside base dir: '{}'".format(path))
             return
         try:
-            fh = open(path, encoding="utf-8", errors="replace")
+            fh = open(path, encoding="utf-8", errors="replace", newline="\n")
         except OSError as e:
             # A single missing/unreadable feed is logged and skipped -- it must not
             # abort the whole build (the other feeds still load).
@@ -5299,7 +5300,7 @@ def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
             return
         with fh:
             for line in fh:
-                yield line.rstrip("\r\n")
+                yield line.replace("\r", "").rstrip("\n")
 
     return reader
 
