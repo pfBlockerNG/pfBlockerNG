@@ -837,9 +837,12 @@ def pfb_control_watcher() -> None:
             last_seq = seq
             command = _control_record_to_command(rec)
             if command is not None:
-                applied, msg = pfb_apply_control_command(command)
-                if msg:
-                    log_info("[pfBlockerNG]: {}".format(msg))
+                try:
+                    applied, msg = pfb_apply_control_command(command)
+                    if msg:
+                        log_info("[pfBlockerNG]: {}".format(msg))
+                except Exception as e:
+                    sys.stderr.write("[pfBlockerNG]: control command failed: {}\n".format(e))
             # Advance the applied marker on every consumed record (advance or rejection),
             # so the writer's wait never blocks on a record the reader already saw.
             _control_write_applied(seq)
