@@ -108,9 +108,11 @@
 #
 # NORMALIZATION (issue #923 review F1): rather than matching rules against
 # the raw payload, everything matches against $norm, built by:
-#   1. Deleting every `'`, `"`, and `\` character -- collapses JSON-escaped quotes
+#   1. Converting odd-parity JSON `\t` escapes to tabs while leaving even-parity
+#      literal backslash+t data intact.
+#   2. Deleting every `'`, `"`, and `\` character -- collapses JSON-escaped quotes
 #      and a quoted subcommand token alike (`git 'commit'` -> `git commit`).
-#   2. Collapsing every run of whitespace (space/tab/newline) to one space --
+#   3. Collapsing every run of whitespace (space/tab/newline) to one space --
 #      defeats `git  commit` (double space) or a literal tab between tokens.
 # Fail-open holds through normalization: empty/garbled input still normalizes
 # to a string with no rule match, i.e. exit 0. $norm is then split into
@@ -133,9 +135,14 @@ set -u
 payload="$(cat)"
 
 # norm -- the single normalized view every rule matches against (see
-# NORMALIZATION above): strip ', ", and \, then collapse whitespace runs to one
-# space.
-norm="$(printf '%s' "$payload" | tr -d "\\\\\"'" | tr -s '[:space:]' ' ')"
+# NORMALIZATION above): decode odd-parity JSON tab escapes, strip ', ", and \,
+# then collapse whitespace runs to one space.
+tab="$(printf '\t')"
+norm="$(printf '%s' "$payload" | sed -E "
+:a
+s/(^|[^\\\\])((\\\\\\\\)*)\\\\t/\\1\\2${tab}/g
+ta
+" | tr -d "\\\\\"'" | tr -s '[:space:]' ' ')"
 
 # segs -- $norm split into newline-separated SEGMENTS on shell
 # command-separator metacharacters (`; & | ( )`). Each rule below matches

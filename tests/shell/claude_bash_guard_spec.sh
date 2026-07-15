@@ -29,9 +29,9 @@
 #                  never matching inside --force/-force/a token
 #                  like foo-f                                   -> PASS
 #   normalization (#923 review F1) -- every rule matches against a
-#              normalized view (quotes/backslashes stripped, whitespace
-#              runs collapsed to one space), so double/tab whitespace and a
-#              quoted subcommand token can't evade a rule               -> DENY
+#              normalized view (JSON tab escapes decoded, quotes/backslashes
+#              stripped, whitespace runs collapsed to one space), so double/tab
+#              whitespace and a quoted subcommand token can't evade a rule -> DENY
 #   force-flag boundary (#923 review F2/F3) -- a shell metacharacter
 #              (`; | & ( ) < > ,`) directly after -f, or a clustered short
 #              flag (-uf/-fu), still counts as force                    -> DENY
@@ -94,9 +94,18 @@ Describe 'claude-bash-guard.sh'
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
-    It 'H2 (F1 whitespace evasion): a literal TAB between git and commit -> DENY'
+    It 'A1 (#1375): a serialized tab between git and commit with short -n -> DENY'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git	commit --no-verify"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git\tcommit -n"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'A2 (#1375): a serialized tab between commit and short -n -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit\t-n"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -429,6 +438,60 @@ Describe 'claude-bash-guard.sh'
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
+    It 'B1 (#1375): a serialized tab between git and push with clustered -4f -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git\tpush -4f origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'B2 (#1375): a serialized tab between push and clustered -4f -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push\t-4f origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'B3 (#1375): serialized tabs with single-quoted push and flag tokens -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git\t'push'\t'-4f' origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'T1 (#1375): consecutive serialized tabs collapse to a token boundary -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git\t\tpush -4f origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'T2 (#1375): a serialized literal backslash-t remains data -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git\\tpush -4f origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'T3 (#1375): a backslash before a serialized tab retains tab whitespace semantics -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git\\\tpush -4f origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
     It 'H14 (issue #1058): --force AFTER --force-with-lease -> DENY (last force flag wins)'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease --force"}}
@@ -601,6 +664,33 @@ Describe 'claude-bash-guard.sh'
     It 'H9 (F1 whitespace evasion): double space (git worktree  remove --force ../wt) -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git worktree  remove --force ../wt"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'C1 (#1375): a serialized tab between git and worktree -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git\tworktree remove -f ../wt"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'C2 (#1375): a serialized tab between worktree and remove -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git worktree\tremove -f ../wt"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'C3 (#1375): a serialized tab between remove and short -f -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git worktree remove\t-f ../wt"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -800,6 +890,15 @@ Describe 'claude-bash-guard.sh'
     It 'D1: wait-checks.sh backgrounded, output redirected -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 > /tmp/ci.txt 2>&1 &"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'D1-tab (#1375): a serialized tab before a wait option remains DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh\t--repo o/r --pr 1 > /tmp/ci.txt 2>&1 &"}}
       End
       When run script "$GUARD"
       The status should be success
