@@ -65,7 +65,7 @@ final class DnsblQueryClientTest extends TestCase
 			'errlog'   => "{$this->tmp}/error.log",
 		]);
 
-		foreach (['pcntl_fork', 'pcntl_waitpid', 'pcntl_wifexited', 'pcntl_wexitstatus', 'posix_kill'] as $function) {
+		foreach (['pcntl_fork', 'pcntl_waitpid', 'pcntl_wifexited', 'pcntl_wexitstatus', 'pcntl_wifstopped', 'posix_kill'] as $function) {
 			if (!function_exists($function)) {
 				$this->markTestSkipped("{$function}() is unavailable -- cannot run cross-process query-channel tests.");
 			}
@@ -194,6 +194,28 @@ final class DnsblQueryClientTest extends TestCase
 	{
 		$error = @file_get_contents("{$this->tmp}/child-error-{$pid}");
 		return $error !== false && $error !== '' ? "child {$pid} failed: {$error}" : "child {$pid} failed";
+	}
+
+	/** Prove SIGSTOP reached a live child rather than an already-exited zombie. */
+	private function waitForStoppedChild(int $pid, float $timeout_s = 1.0): void
+	{
+		$deadline = microtime(true) + $timeout_s;
+		do {
+			$waited = pcntl_waitpid($pid, $status, WNOHANG | WUNTRACED);
+			if ($waited === $pid) {
+				if (!pcntl_wifstopped($status)) {
+					unset($this->children[$pid]);
+					$this->fail("child {$pid} exited before SIGSTOP was observed");
+				}
+				return;
+			}
+			if ($waited === -1) {
+				unset($this->children[$pid]);
+				$this->fail("child {$pid} was not waitable after SIGSTOP");
+			}
+			usleep(20000);
+		} while (microtime(true) < $deadline);
+		$this->fail("child {$pid} did not stop within {$timeout_s}s");
 	}
 
 	/** Read a non-empty file under a bounded test-side deadline. */
@@ -505,8 +527,8 @@ final class DnsblQueryClientTest extends TestCase
 
 	public function testResumedLockWaiterCannotPublishAfterDeadline(): void
 	{
-		if (!defined('SIGSTOP') || !defined('SIGCONT')) {
-			$this->markTestSkipped('SIGSTOP/SIGCONT are unavailable -- cannot suspend the lock waiter.');
+		if (!defined('SIGSTOP') || !defined('SIGCONT') || !defined('WUNTRACED')) {
+			$this->markTestSkipped('SIGSTOP/SIGCONT/WUNTRACED are unavailable -- cannot suspend the lock waiter.');
 		}
 
 		$lock = fopen($this->lockPath(), 'c');
@@ -522,6 +544,7 @@ final class DnsblQueryClientTest extends TestCase
 		$this->readMarker('late-lock.started');
 		usleep(40000);
 		$this->assertTrue(posix_kill($child, (int) constant('SIGSTOP')));
+		$this->waitForStoppedChild($child);
 		usleep(600000);
 		flock($lock, LOCK_UN);
 		fclose($lock);
