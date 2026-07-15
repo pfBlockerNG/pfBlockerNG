@@ -7,9 +7,10 @@ must never silently work around (the continent trap chief among them: a
 of its own, so deriving a Locations row from one would assign the wrong
 continent).
 
-No network, no committed-fixture reads: every test drives the pure
-``build_locations`` / ``build_blocks`` / ``write_*_csv`` functions directly
-against tiny hand-built record dicts shaped like MaxMind-DB's own JSON.
+No network: the focused generator tests drive the pure ``build_locations`` /
+``build_blocks`` / ``write_*_csv`` functions against tiny hand-built record
+dicts shaped like MaxMind-DB's own JSON; fixture-parity tests additionally read
+the committed CSVs.
 
 Loaded by path via importlib (scripts/ is not a package), same pattern as
 tests/test_update_tld_lists.py.
@@ -22,6 +23,7 @@ import hashlib
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 
@@ -39,6 +41,156 @@ def _country(geoname_id: int, iso: str, name: str, *, eu: bool = False) -> dict[
 
 def _continent(code: str, geoname_id: int, name: str) -> dict[str, object]:
     return {"code": code, "geoname_id": geoname_id, "names": {"en": name}}
+
+
+_FIXTURES = Path(__file__).resolve().parent / "smoke" / "fixtures"
+_CONTINENT_LOCATION_ROWS = {
+    ("6255147", "en", "AS", "Asia", "", "", "0"),
+    ("6255148", "en", "EU", "Europe", "", "", "0"),
+}
+_CONTINENT_BLOCK_ROWS = {
+    "GeoLite2-Country-Blocks-IPv4.csv": {
+        ("192.0.2.147/32", "6255147", "", "", "0", "0", ""),
+        ("192.0.2.148/32", "6255148", "", "", "0", "0", ""),
+    },
+    "GeoLite2-Country-Blocks-IPv6.csv": {
+        ("2001:db8:6255:147::/128", "6255147", "", "", "0", "0", ""),
+        ("2001:db8:6255:148::/128", "6255148", "", "", "0", "0", ""),
+    },
+}
+
+
+class _LocationRow(Protocol):
+    geoname_id: int
+    continent_code: str
+    continent_name: str
+    iso_code: str
+    country_name: str
+    is_in_eu: bool
+
+
+class _BlockRow(Protocol):
+    network: str
+    geoname_id: str
+    registered_geoname_id: str
+    represented_geoname_id: str
+    is_anonymous_proxy: bool
+    is_satellite_provider: bool
+    is_anycast: bool
+
+
+def _csv_rows(path: Path) -> list[tuple[str, ...]]:
+    with path.open(newline="", encoding="utf-8") as fh:
+        return [tuple(row) for row in csv.reader(fh)]
+
+
+def test_committed_geoip_csvs_include_continent_addendum() -> None:
+    location_rows = _csv_rows(_FIXTURES / "GeoLite2-Country-Locations-en.csv")
+    assert len(location_rows) - 1 == 48
+    assert _CONTINENT_LOCATION_ROWS <= set(location_rows[1:])
+
+    expected_counts = {
+        "GeoLite2-Country-Blocks-IPv4.csv": 16,
+        "GeoLite2-Country-Blocks-IPv6.csv": 232,
+    }
+    for name, expected_rows in _CONTINENT_BLOCK_ROWS.items():
+        block_rows = _csv_rows(_FIXTURES / name)
+        assert len(block_rows) - 1 == expected_counts[name]
+        assert expected_rows <= set(block_rows[1:])
+
+
+def test_continent_addendum_constants_match_committed_csvs() -> None:
+    assert {
+        tuple(
+            str(value) if not isinstance(value, bool) else ("1" if value else "0")
+            for value in (
+                row.geoname_id,
+                "en",
+                row.continent_code,
+                row.continent_name,
+                row.iso_code,
+                row.country_name,
+                row.is_in_eu,
+            )
+        )
+        for row in m.CONTINENT_ADDENDUM_LOCATIONS
+    } == _CONTINENT_LOCATION_ROWS
+    for name, rows in (
+        ("GeoLite2-Country-Blocks-IPv4.csv", m.CONTINENT_ADDENDUM_BLOCKS_V4),
+        ("GeoLite2-Country-Blocks-IPv6.csv", m.CONTINENT_ADDENDUM_BLOCKS_V6),
+    ):
+        assert {
+            (
+                row.network,
+                row.geoname_id,
+                row.registered_geoname_id,
+                row.represented_geoname_id,
+                "1" if row.is_anonymous_proxy else "0",
+                "1" if row.is_satellite_provider else "0",
+                "1" if row.is_anycast else "",
+            )
+            for row in rows
+        } == _CONTINENT_BLOCK_ROWS[name]
+
+
+def test_continent_addendum_is_deterministic(tmp_path: Path) -> None:
+    upstream_locations = {2635167: m.LocationRow(2635167, "EU", "Europe", "GB", "United Kingdom", False)}
+    upstream_v4 = [m.BlockRow("81.2.69.0/24", "2635167", "", "")]
+    first = m.apply_continent_addendum(upstream_locations, upstream_v4, [])
+    second = m.apply_continent_addendum(dict(upstream_locations), list(upstream_v4), [])
+
+    for label, output in (("first", first), ("second", second)):
+        out = tmp_path / label
+        out.mkdir()
+        m.write_locations_csv(out / "locations.csv", output[0])
+        m.write_blocks_csv(out / "v4.csv", output[1])
+        m.write_blocks_csv(out / "v6.csv", output[2])
+    for name in ("locations.csv", "v4.csv", "v6.csv"):
+        assert (tmp_path / "first" / name).read_bytes() == (tmp_path / "second" / name).read_bytes()
+
+
+def test_upstream_and_final_counts_are_checked_separately() -> None:
+    upstream_locations = {
+        gid: m.LocationRow(gid, "EU", "Europe", f"X{gid}", f"Country {gid}", False)
+        for gid in range(m.UPSTREAM_LOCATIONS_COUNT)
+    }
+    row = m.BlockRow("10.0.0.0/24", "1", "", "")
+    upstream_v4 = [row] * m.UPSTREAM_BLOCKS_V4_COUNT
+    upstream_v6 = [row] * m.UPSTREAM_BLOCKS_V6_COUNT
+    m.check_upstream_counts(upstream_locations, upstream_v4, upstream_v6)
+    locations, v4, v6 = m.apply_continent_addendum(upstream_locations, upstream_v4, upstream_v6)
+    m.check_counts(locations, v4, v6)
+
+
+@pytest.mark.parametrize(
+    ("kind", "value"),
+    [
+        ("location", 6255147),
+        ("location", 6255148),
+        ("v4", "192.0.2.147/32"),
+        ("v4", "192.0.2.148/32"),
+        ("v6", "2001:db8:6255:147::/128"),
+        ("v6", "2001:db8:6255:148::/128"),
+    ],
+)
+def test_continent_addendum_rejects_every_collision(kind: str, value: int | str) -> None:
+    locations: dict[int, _LocationRow] = {}
+    v4: list[_BlockRow] = []
+    v6: list[_BlockRow] = []
+    if kind == "location":
+        assert isinstance(value, int)
+        locations[value] = m.LocationRow(value, "XX", "Collision", "", "", False)
+    else:
+        assert isinstance(value, str)
+        (v4 if kind == "v4" else v6).append(m.BlockRow(value, "1", "", ""))
+    with pytest.raises(m.GeneratorError, match=str(value)):
+        m.apply_continent_addendum(locations, v4, v6)
+
+
+def test_applying_continent_addendum_twice_fails_loud() -> None:
+    first = m.apply_continent_addendum({}, [], [])
+    with pytest.raises(m.GeneratorError, match="6255147"):
+        m.apply_continent_addendum(*first)
 
 
 # --------------------------------------------------------------------------- #

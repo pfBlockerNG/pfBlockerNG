@@ -44,4 +44,6 @@ geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_na
 3144096,en,EU,Europe,NO,Norway,0
 3175395,en,EU,Europe,IT,Italy,1
 6252001,en,NA,North America,US,United States,0
+6255147,en,AS,Asia,,,0
+6255148,en,EU,Europe,,,0
 6290252,en,EU,Europe,RS,Serbia,0
