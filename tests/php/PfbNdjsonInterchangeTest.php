@@ -9,9 +9,9 @@ use PHPUnit\Framework\TestCase;
 /**
  * NDJSON interchange schema v1 (#1083 Phase 2) -- emit/parse primitives, no call
  * sites yet. pfb_dnsbl_ndjson_emit_domain_row()/pfb_dnsbl_ndjson_emit_abp_row() are
- * the two writers; pfb_dnsbl_ndjson_parse_row() is the strict reader both this file
- * and tests/test_issue1083_ndjson_primitives.py (the Python twin) exercise against
- * the identical hostile-input matrix, proving cross-language agreement.
+ * the two writers; pfb_dnsbl_ndjson_parse_row() is the strict reader this file exercises
+ * against a hostile-input matrix. (The Python read-side twin was retired in issue #1349
+ * once NDJSON became PHP-only; this file is now the sole parser pin.)
  */
 #[CoversFunction('pfb_dnsbl_ndjson_emit_domain_row')]
 #[CoversFunction('pfb_dnsbl_ndjson_emit_abp_row')]
@@ -164,8 +164,9 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	}
 
 	// =========================================================================
-	// Cross-language byte-exact fixtures -- also hardcoded verbatim in the Python
-	// twin (tests/test_issue1083_ndjson_primitives.py) to prove agreement.
+	// Byte-exact emit fixtures -- pin the exact on-wire NDJSON bytes the writers
+	// produce (the Python read-side twin that once cross-checked these was retired
+	// in issue #1349).
 	// =========================================================================
 
 	public function testEmitDomainRowByteExactOutput(): void
