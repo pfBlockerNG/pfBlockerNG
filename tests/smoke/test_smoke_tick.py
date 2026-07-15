@@ -452,9 +452,10 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
 
     The tick logs to syslog (not stdout), so observe the NON-dispatch via the
     ' CRON  PROCESS  START' marker (logged only by pfblockerng_sync_cron): a non-due cron
-    must produce NO new marker. The module-local runner drains active pfBlockerNG tasks before
-    dispatch so the marker baseline is stable. This is marker-based (not ledger-value-based) so it is immune
-    to a prior test's mark_ran overwriting the cron entry — both values stay 'future' anyway.
+    must produce NO new marker. The explicit pre-baseline drain stabilizes marker attribution;
+    ``_run_tick`` drains again to close the pre-dispatch race. This is marker-based
+    (not ledger-value-based) so it is immune to a prior test's mark_ran overwriting
+    the cron entry — both values stay 'future' anyway.
 
     On its own, "no CRON PROCESS marker" cannot distinguish "tick correctly skipped the
     non-due cron" from "tick never ran at all" — both look identical. The positive control:
