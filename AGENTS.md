@@ -54,6 +54,12 @@ prompts.
   through the approved elevated execution path before concluding that GitHub
   authentication is invalid; a sandboxed `gh auth status` failure is not
   conclusive.
+- The owner's usual local-smoke pool is `root@10.0.0.31` through
+  `root@10.0.0.38` (space-separated in `PFB_BOXES`). Treat it as the current
+  default inventory, while still letting the lease script skip unavailable
+  boxes. `SMOKE_ADMIN_PASSWORD` is provisioned on the boxes through their SSH
+  environment; do not ask for, copy, or print a local password before trying
+  the normal leased-box flow.
 - Project `.codex/config.toml`, `.codex/hooks.json`, and custom agents load only
   after the repository is trusted. Review changed hooks with `/hooks`.
 - Codex's shared-Git-hook marker is `CODEX_THREAD_ID`.
