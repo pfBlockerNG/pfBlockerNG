@@ -88,11 +88,6 @@ EOF
     shift
     commit_index_paths "$message" 100644 "$@"
   }
-  commit_executable_paths() {
-    message="$1"
-    shift
-    commit_index_paths "$message" 100755 "$@"
-  }
   commit_empty() {
     git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1"
     tip="$(git -C "$repo" rev-parse HEAD)"
@@ -181,18 +176,6 @@ EOF
     The output should not include "CI green on ${ancestor}"
   End
 
-  It 'rejects unchecked executable hooks under vendored plugin trees'
-    commit_executable_paths hooks \
-      '.claude/skills/ponytail/hooks/release.js' \
-      '.claude/skills/caveman/src/hooks/release.js'
-    hook_sha="$tip"
-    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
-    When call run_gate
-    The status should be failure
-    The output should include "Skipped commit ${hook_sha}"
-    The output should include 'changes CI-relevant paths'
-  End
-
   It 'rejects a near miss of an exact ignored plugin path'
     commit_paths near-miss '.claude/skills/ponytail/LICENSE.extra'
     near_miss_sha="$tip"
@@ -203,25 +186,30 @@ EOF
     The output should include 'changes CI-relevant paths'
   End
 
-  It 'rejects hostile and opaque names when their paths are CI-relevant'
-    tab_name="$(printf 'tab\tname')"
-    non_utf8="$(printf '\377')"
-    long_name="$(awk 'BEGIN { for (i = 0; i < 230; i++) printf "n" }')"
-    commit_paths hostile-code \
-      'scripts/space name' \
-      'scripts/two  spaces' \
-      "scripts/${tab_name}" \
-      'scripts/quote"name' \
-      'scripts/glob[*?]name' \
-      'scripts/pünicode' \
-      "scripts/${long_name}" \
-      "scripts/non-utf8-${non_utf8}"
-    code_sha="$tip"
-    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
-    When call run_gate
-    The status should be failure
-    The output should include "Skipped commit ${code_sha}"
-    The output should include 'changes CI-relevant paths'
+  Context 'individual CI-relevant deny paths'
+    Parameters
+      'single space'              100644 'scripts/space name'
+      'two consecutive spaces'    100644 'scripts/two  spaces'
+      'tab byte'                  100644 "scripts/$(printf '\t')name"
+      'double quote'              100644 'scripts/quote"name'
+      'glob metacharacters'       100644 'scripts/glob[*?]name'
+      'Unicode character'         100644 'scripts/pünicode'
+      '230-character name'        100644 "scripts/$(awk 'BEGIN { for (i = 0; i < 230; i++) printf "n" }')"
+      'non-UTF-8 FF byte'         100644 "scripts/non-utf8-$(printf '\377')"
+      'ponytail executable hook'  100755 '.claude/skills/ponytail/hooks/release.js'
+      'caveman executable hook'   100755 '.claude/skills/caveman/src/hooks/release.js'
+    End
+
+    It "rejects an isolated $1 path"
+      commit_index_paths "deny-$1" "$2" "$3"
+      denied_sha="$tip"
+      payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
+      When call run_gate
+      The status should be failure
+      The output should include "Skipped commit ${denied_sha}"
+      The output should include 'changes CI-relevant paths'
+      The output should not include "CI green on ${ancestor}"
+    End
   End
 
   It 'classifies every skipped commit before accepting a green ancestor'
@@ -302,22 +290,79 @@ EOF
     The output should not include "No 'All tests passed'"
   End
 
-  It 'does not walk back beyond the 20-commit window'
-    # The only matching run sits on commit 21 in first-parent order; the walk
-    # must exhaust at 20 and fail rather than validate an ancient ancestor.
-    deep="$repo-deep"
-    git init -q -b main "$deep"
-    ( cd "$deep" && for i in $(seq 1 22); do
-        git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "c$i"
-      done )
-    old21="$(git -C "$deep" rev-parse HEAD~21)"
-    payload "$old21" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"}]}'
-    run_gate_deep() {
-      ( cd "$deep" && PATH="${work}/bin:${PATH}" REPO="own/repo" GH_TOKEN=x \
+  It 'accepts a green check on the 20th queried commit'
+    deep20="${work}/deep20"
+    git init -q -b main "$deep20"
+    i=1
+    while [ "$i" -le 20 ]; do
+      git -C "$deep20" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "c$i"
+      i=$((i + 1))
+    done
+    green20="$(git -C "$deep20" rev-parse HEAD~19)"
+    payload "$green20" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"}]}'
+    run_gate_deep20() {
+      ( cd "$deep20" && PATH="${work}/bin:${PATH}" REPO="own/repo" GH_TOKEN=x \
           sh "${PFB_ROOT}/scripts/release-ci-gate.sh" )
     }
-    When call run_gate_deep
+    When call run_gate_deep20
+    The status should be success
+    The output should include "CI green on ${green20}"
+  End
+
+  It 'rejects a green check on the 21st commit outside the query window'
+    deep21="${work}/deep21"
+    git init -q -b main "$deep21"
+    i=1
+    while [ "$i" -le 21 ]; do
+      git -C "$deep21" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "c$i"
+      i=$((i + 1))
+    done
+    green21="$(git -C "$deep21" rev-parse HEAD~20)"
+    payload "$green21" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"}]}'
+    run_gate_deep21() {
+      ( cd "$deep21" && PATH="${work}/bin:${PATH}" REPO="own/repo" GH_TOKEN=x \
+          sh "${PFB_ROOT}/scripts/release-ci-gate.sh" )
+    }
+    When call run_gate_deep21
     The status should be failure
     The output should include "No 'All tests passed' check-run found"
+    The output should not include "CI green on ${green21}"
+  End
+
+  It 'walks merge commits through the first parent before accepting green'
+    merge_repo="${work}/merge"
+    git init -q -b main "$merge_repo"
+    git -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m root
+
+    code_blob="$(printf 'unchecked code\n' | git -C "$merge_repo" hash-object -w --stdin)"
+    printf '100644 %s\tscripts/unchecked.sh\0' "$code_blob" |
+      git -C "$merge_repo" update-index -z --index-info
+    git -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q -m code
+    code_sha="$(git -C "$merge_repo" rev-parse HEAD)"
+
+    git -C "$merge_repo" checkout -q -b side
+    side_blob="$(printf 'side docs\n' | git -C "$merge_repo" hash-object -w --stdin)"
+    printf '100644 %s\tdocs/side.txt\0' "$side_blob" |
+      git -C "$merge_repo" update-index -z --index-info
+    git -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q -m side-docs
+    side_sha="$(git -C "$merge_repo" rev-parse HEAD)"
+
+    git -C "$merge_repo" checkout -q main
+    main_blob="$(printf 'main docs\n' | git -C "$merge_repo" hash-object -w --stdin)"
+    printf '100644 %s\tdocs/main.txt\0' "$main_blob" |
+      git -C "$merge_repo" update-index -z --index-info
+    git -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q -m main-docs
+    git -C "$merge_repo" -c user.name=t -c user.email=t@t merge -q --no-ff side -m merge
+
+    payload "$side_sha" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"}]}'
+    run_gate_merge() {
+      ( cd "$merge_repo" && PATH="${work}/bin:${PATH}" REPO="own/repo" GH_TOKEN=x \
+          sh "${PFB_ROOT}/scripts/release-ci-gate.sh" )
+    }
+    When call run_gate_merge
+    The status should be failure
+    The output should include "Skipped commit ${code_sha}"
+    The output should include 'changes CI-relevant paths'
+    The output should not include "CI green on ${side_sha}"
   End
 End
