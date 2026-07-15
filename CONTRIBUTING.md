@@ -179,7 +179,7 @@ DNSBL blocklist preprocessing lives in the Python plugin
 
 - `/var/unbound/pfb_py_sources.json` — the manifest: a `config` block (TLD master
   path, TLD blacklist/exclusion, user whitelist, TOP1M list + enabled flag) plus
-  one `feeds` row per raw file (`{raw, feed, group, format_hint, log_flag}`).
+  one `feeds` row per raw file (`{raw, feed, group, log_flag}`).
 - `/var/unbound/pfb_py_raw/<feed>.raw` — per-feed IP-stripped bare-domain raw.
 
 `pfb_unbound.dnsbl_build_from_manifest()` then does **parse → normalise → classify
@@ -194,10 +194,10 @@ BuildResult` function — no Unbound symbols, fully unit-testable. See
 #### Full ABP/EasyList support (ADR-07)
 
 ABP/EasyList feeds are parsed **entirely in Python** — the old PHP `$easylist`
-lite parser is gone. PHP header-sniffs an ABP feed, tags it `format_hint = 'abp'`,
-and passes its **raw** lines through verbatim (IP anchors `||1.2.3.4^` and hosts
-IPs still diverted to the DNSBL-IP firewall pass). `parse('abp', line)` is the one
-DNS-only ABP parser; it adds the rules the lite parser silently dropped:
+lite parser and feed-level `format_hint` dispatch are gone. PHP passes feed lines
+through after the DNSBL-IP firewall pass; Python's per-line capture guard routes
+ABP-shaped lines to the typed parser regardless of their feed. It adds the rules
+the lite parser silently dropped:
 
 - **`@@` allow exceptions** (block + allow) — fixes the systematic over-blocking.
 - **Regex** `/re/` and `@@/re/`: anchored-reducible patterns fold to `dataDB`/

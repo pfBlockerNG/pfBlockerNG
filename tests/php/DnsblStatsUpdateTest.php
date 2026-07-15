@@ -44,7 +44,7 @@ final class DnsblStatsUpdateTest extends TestCase
 		$row = $GLOBALS['pfb']['dnsbl_info_stats'][0];
 		$this->assertSame('DNSBL_Test', $row['groupname']);
 		$this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $row['timestamp']);
-		$this->assertSame('9', (string) $row['entries']);
+		$this->assertSame(9, $row['entries']);
 		$this->assertSame(17, $row['counter']);
 	}
 

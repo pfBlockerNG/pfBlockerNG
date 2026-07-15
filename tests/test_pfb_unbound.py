@@ -1898,7 +1898,7 @@ class TestAttributionSurvivesRace:
         window_q.put("done")
         writer.join(timeout=10)
         assert not writer.is_alive(), "writer thread failed to terminate"
-        # If the counter seam ever moves, this must fail loudly, not pass vacuously.
+        # The race hook must observe the per-group dnsbl counter enqueue.
         assert fired.is_set(), "race window never opened -- foreign injection never engaged"
 
         dnsbl_fields = [line.split(",") for path, line in lines if path.endswith("dnsbl.log")]

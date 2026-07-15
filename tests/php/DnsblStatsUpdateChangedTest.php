@@ -12,10 +12,24 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('dnsbl_stats_update')]
 final class DnsblStatsUpdateChangedTest extends TestCase
 {
+	private array $originalPfb = [];
+	private bool $hadPfb = false;
+
 	protected function setUp(): void
 	{
+		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
+		$this->originalPfb = $GLOBALS['pfb'] ?? [];
 		$GLOBALS['pfb']['changed_dnsbl_groups'] = [];
 		$GLOBALS['pfb']['dnsbl_info_stats'] = [];
+	}
+
+	protected function tearDown(): void
+	{
+		if ($this->hadPfb) {
+			$GLOBALS['pfb'] = $this->originalPfb;
+		} else {
+			unset($GLOBALS['pfb']);
+		}
 	}
 
 	public function testUpdateModeDoesNotRecordGroup(): void

@@ -2064,8 +2064,8 @@ function pfb_match_filter_field($flent, $fields) {
    The logs already carry full event-time attribution: pfb_unbound.py writes the DNSBL/
    DNS-reply verdicts, and the filterlog daemon (pfb_daemon_filterlog) resolves the bare
    pf event into rule/feed/GeoIP/rDNS/ASN once, at event time, caching in its ipcache.
-   DNSBL rows therefore render their logged fields directly — no render-time lookup (the
-   retired per-row re-check and drill machinery were removed in issue #1349). Only
+   DNSBL rows therefore render their logged fields directly — no render-time lookup.
+   Issue #1349 removed the retired per-row re-check and drill machinery. Only
    the IP converter still re-checks the logged attribution against the CURRENT feed state
    (drift strikethrough + icon decisions): the issue #809 batched pfb_ip_prefetch() pass seeds
    in-process memos to cut per-row execs, but has no PERSISTENT cache (ipcache is daemon-write-

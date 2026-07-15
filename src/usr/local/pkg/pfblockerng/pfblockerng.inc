@@ -6360,14 +6360,14 @@ function dnsbl_stats_update($mode, $alias, $alias_cnt) {
 				if ($line['groupname'] == "{$alias}") {
 					$pfbfound = TRUE;
 					$pfb['dnsbl_info_stats'][$key]['timestamp']	= "{$dns_now}";
-					$pfb['dnsbl_info_stats'][$key]['entries']	= "{$alias_cnt}";
+					$pfb['dnsbl_info_stats'][$key]['entries']	= (int) $alias_cnt;
 					break;
 				}
 			}
 		}
 
 		if (!$pfbfound) {
-			$pfb['dnsbl_info_stats'][] = array ( 'groupname' => $alias, 'timestamp' => $dns_now, 'entries' => $alias_cnt, 'counter' => 0);
+			$pfb['dnsbl_info_stats'][] = array ( 'groupname' => $alias, 'timestamp' => $dns_now, 'entries' => (int) $alias_cnt, 'counter' => 0);
 		}
 
 	}
@@ -16736,12 +16736,13 @@ function sync_package_pfblockerng($cron='') {
 				// never close a DIFFERENT feed's still-open download-failure ledger entry.
 				$pfb_dl_failed		= FALSE;
 
+				$alias = "DNSBL_{$list['aliasname']}";
+				if (empty(pfb_filter($alias, PFB_FILTER_WORD, 'DNSBL - Processes'))) {
+					pfb_logger("\n Invalid Aliasname:{$list['aliasname']}, *skipping*", 1);
+					continue;
+				}
+
 				if ($list['action'] != 'Disabled' && isset($list['row'])) {
-					$alias				= "DNSBL_{$list['aliasname']}";
-					if (empty(pfb_filter($alias, PFB_FILTER_WORD, 'DNSBL - Processes'))) {
-						pfb_logger("\n Invalid Aliasname:{$list['aliasname']}, *skipping*", 1);
-						continue;
-					}
 					$pfb['alias_dnsbl_all'][]	= "{$alias}";
 
 					// cURL Source Interface (sets CURLOPT_INTERFACE) — per-DNSBL-group
