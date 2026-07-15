@@ -62,8 +62,11 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	private static function hasNonzeroRetvalGuard(string $segment): bool
 	{
 		$tokens = self::significantTokens($segment);
+		$depths = self::structuralDepths($tokens);
+		$outerDepth = $depths === array() ? 0 : min($depths);
 		for ($i = 0, $last = count($tokens) - 7; $i <= $last; $i++) {
-			if ($tokens[$i]['id'] === T_IF
+			if ($depths[$i] === $outerDepth
+				&& $tokens[$i]['id'] === T_IF
 				&& $tokens[$i + 1]['text'] === '('
 				&& $tokens[$i + 2] === array('id' => T_VARIABLE, 'text' => '$retval')
 				&& $tokens[$i + 3]['id'] === T_IS_NOT_EQUAL
@@ -80,9 +83,10 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	/**
 	 * @return array{bound: bool, directReturn: bool}
 	 */
-	private static function analyzeRenameGuard(string $segment, string $destination): array
+	private static function analyzeRenameGuard(string $segment, string $destination, int $outerDepth = 0): array
 	{
 		$tokens = self::significantTokens($segment);
+		$depths = self::structuralDepths($tokens);
 		$count = count($tokens);
 		for ($i = 0; $i < $count; $i++) {
 			$previousId = $tokens[$i - 1]['id'] ?? NULL;
@@ -95,6 +99,9 @@ final class DownloadExtractionExitCodeTest extends TestCase
 				|| in_array($previousId, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON, T_NEW, T_FUNCTION], TRUE)) {
 				continue;
 			}
+			if ($depths[$i] !== $outerDepth) {
+				continue;
+			}
 
 			$assignment = $i - 1;
 			if (($tokens[$assignment]['text'] ?? '') === '@') {
@@ -104,6 +111,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			$boundary = $tokens[$lhs - 1]['text'] ?? NULL;
 			if (($tokens[$assignment]['text'] ?? '') !== '='
 				|| ($tokens[$lhs] ?? NULL) !== array('id' => T_VARIABLE, 'text' => '$renamed')
+				|| ($depths[$assignment] ?? NULL) !== $outerDepth
+				|| ($depths[$lhs] ?? NULL) !== $outerDepth
 				|| ($boundary !== NULL && !in_array($boundary, [';', '{', '}'], TRUE))) {
 				return array('bound' => FALSE, 'directReturn' => FALSE);
 			}
@@ -140,7 +149,9 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 			$guard = $close + 2;
 			$bound = ($tokens[$close + 1]['text'] ?? '') === ';'
+				&& ($depths[$close] ?? NULL) === $outerDepth
 				&& ($tokens[$guard]['id'] ?? NULL) === T_IF
+				&& ($depths[$guard] ?? NULL) === $outerDepth
 				&& ($tokens[$guard + 1]['text'] ?? '') === '('
 				&& ($tokens[$guard + 2]['text'] ?? '') === '!'
 				&& ($tokens[$guard + 3] ?? NULL) === array('id' => T_VARIABLE, 'text' => '$renamed')
@@ -157,6 +168,39 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		}
 
 		return array('bound' => FALSE, 'directReturn' => FALSE);
+	}
+
+	/**
+	 * @param list<array{id: int|null, text: string}> $tokens
+	 * @return list<int>
+	 */
+	private static function structuralDepths(array $tokens): array
+	{
+		$depth = 0;
+		$interpolationDepth = 0;
+		$depths = array();
+		foreach ($tokens as $token) {
+			$depths[] = $depth;
+			if ($token['id'] === T_CURLY_OPEN || $token['id'] === T_DOLLAR_OPEN_CURLY_BRACES) {
+				$interpolationDepth++;
+				continue;
+			}
+			if ($interpolationDepth > 0) {
+				if ($token['text'] === '{') {
+					$interpolationDepth++;
+				} elseif ($token['text'] === '}') {
+					$interpolationDepth--;
+				}
+				continue;
+			}
+			if ($token['text'] === '{') {
+				$depth++;
+			} elseif ($token['text'] === '}') {
+				$depth--;
+			}
+		}
+
+		return $depths;
 	}
 
 	/**
@@ -339,7 +383,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($nextBranch, 'vacuity: the uncompressed-blacklist sibling branch must exist');
 		$segment = substr(self::$body, $branchPos, $nextBranch - $branchPos);
 
-		$analysis = self::analyzeRenameGuard($segment, '$head_download');
+		$analysis = self::analyzeRenameGuard($segment, '$head_download', 1);
 		$this->assertTrue($analysis['bound'],
 			'uncompressed extras must check !$renamed before return TRUE; segment: ' . json_encode($segment));
 		$this->assertTrue($analysis['directReturn'],
