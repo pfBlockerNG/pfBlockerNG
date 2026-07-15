@@ -62,14 +62,15 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	private static function hasNonzeroRetvalGuard(string $segment): bool
 	{
 		$tokens = self::significantTokens($segment);
-		for ($i = 0, $last = count($tokens) - 6; $i <= $last; $i++) {
+		for ($i = 0, $last = count($tokens) - 7; $i <= $last; $i++) {
 			if ($tokens[$i]['id'] === T_IF
 				&& $tokens[$i + 1]['text'] === '('
 				&& $tokens[$i + 2] === array('id' => T_VARIABLE, 'text' => '$retval')
 				&& $tokens[$i + 3]['id'] === T_IS_NOT_EQUAL
 				&& $tokens[$i + 4] === array('id' => T_LNUMBER, 'text' => '0')
 				&& $tokens[$i + 5]['text'] === ')') {
-				return TRUE;
+				return $tokens[$i + 6]['text'] === '{'
+					&& self::hasDirectFalseReturn($tokens, $i + 6);
 			}
 		}
 
@@ -84,8 +85,14 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$tokens = self::significantTokens($segment);
 		$count = count($tokens);
 		for ($i = 0; $i < $count; $i++) {
-			if ($tokens[$i] !== array('id' => T_STRING, 'text' => 'rename')
-				|| ($tokens[$i + 1]['text'] ?? '') !== '(') {
+			$previousId = $tokens[$i - 1]['id'] ?? NULL;
+			$isGlobalRename = ($tokens[$i]['id'] === T_STRING
+					&& strcasecmp($tokens[$i]['text'], 'rename') === 0)
+				|| ($tokens[$i]['id'] === T_NAME_FULLY_QUALIFIED
+					&& strcasecmp($tokens[$i]['text'], '\\rename') === 0);
+			if (!$isGlobalRename
+				|| ($tokens[$i + 1]['text'] ?? '') !== '('
+				|| in_array($previousId, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON, T_NEW, T_FUNCTION], TRUE)) {
 				continue;
 			}
 
@@ -93,8 +100,11 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			if (($tokens[$assignment]['text'] ?? '') === '@') {
 				$assignment--;
 			}
+			$lhs = $assignment - 1;
+			$boundary = $tokens[$lhs - 1]['text'] ?? NULL;
 			if (($tokens[$assignment]['text'] ?? '') !== '='
-				|| ($tokens[$assignment - 1] ?? NULL) !== array('id' => T_VARIABLE, 'text' => '$renamed')) {
+				|| ($tokens[$lhs] ?? NULL) !== array('id' => T_VARIABLE, 'text' => '$renamed')
+				|| ($boundary !== NULL && !in_array($boundary, [';', '{', '}'], TRUE))) {
 				return array('bound' => FALSE, 'directReturn' => FALSE);
 			}
 
@@ -343,10 +353,10 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 	public function testGenericUncompressedRenameResultChecked(): void
 	{
-		$commentPos = strpos(self::$body, "Rename file to 'orig' format");
+		$commentPos = strpos(self::$body, "// Rename file to 'orig' format");
 		$this->assertNotFalse($commentPos, 'vacuity: the generic-uncompressed orig-rename comment must exist');
 
-		$secondPos = strpos(self::$body, "Rename file to 'orig' format", $commentPos + 1);
+		$secondPos = strpos(self::$body, "// Rename file to 'orig' format", $commentPos + 1);
 		$this->assertFalse($secondPos, 'vacuity: "Rename file to \'orig\' format" must appear exactly once');
 
 		$gatePos = strpos(self::$body, 'if ($retval == 0) {', $commentPos);
