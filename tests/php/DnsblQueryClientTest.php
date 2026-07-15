@@ -10,13 +10,14 @@ use PHPUnit\Framework\TestCase;
  *
  * Scenario: the client writes a request onto the read-only query channel
  * (here redirected to a temp dnsbldir) and bounded-waits for the id-matching
- * reply, returning the parsed six-key verdict or NULL. Production-dormant:
- * no caller exists yet (Phase 4 wires the first one). These tests pin:
+ * reply, returning the parsed six-key verdict or NULL. In production,
+ * pfb_log_event() reaches it from two independent Lighttpd parsers. These tests pin:
  *   - PFBL-01 domain validation at the choke point (invalid domain -> NULL,
  *     no request written, no wait);
- *   - a request-publish failure (missing staging dir) -> NULL, no wait;
+ *   - lock-open and request-publish failures -> NULL before any reply wait;
+ *   - complete-transaction serialization across overlapping callers and timeouts;
  *   - the request's JSON schema (id/domain/qtype) and 0660 permission,
- *     observed by an independent background reader that plays the Python
+ *     observed by an independent child reader that plays the Python
  *     side of the channel;
  *   - a fresh, unique id per call;
  *   - strict reply validation (7 typed keys) -- every hostile shape (missing
@@ -24,16 +25,16 @@ use PHPUnit\Framework\TestCase;
  *     is ignored, never a fatal, and the call times out to NULL;
  *   - blocked=false with empty attribution is a VALID verdict, not NULL;
  *   - the bounded wait obeys both the deadline and the hard poll cap;
- *   - cleanup: reply+request unlinked on a matched verdict, request unlinked
- *     on timeout, no ".pfbctl_" staging residue.
+ *   - cleanup: reply+request unlinked on a matched verdict or timeout, no
+ *     ".pfbctl_" staging residue.
  *
- * Test mode (CLAUDE.md Test coverage #1, second exception): brand-new,
- * production-dormant code with no pre-existing behaviour to regress -- no
- * red run against the void. Every assertion below still fails on a real
- * regression (round-trip shape, timeout bounds, permission bits).
+ * Test mode: issue #1352 behaviour-changing regression coverage. The frozen
+ * overlapping-caller and lock-open rows fail against the pre-fix production
+ * source and pass with the serialized transaction, alongside the established
+ * round-trip, timeout, hostile-reply, and permission contracts.
  *
- * Round-trip technique: a background PHP process (`php -r`, backgrounded)
- * plays the Python side -- it polls the sandbox's request file, decodes it,
+ * Round-trip technique: a tracked/reaped `pcntl_fork()` child plays the Python
+ * side -- it polls the sandbox's request file under a deadline, decodes it,
  * records the observed request + permission bits into observed.json, and
  * writes a reply (substituting the request's real id into a template) --
  * this exercises the request-schema/perms assertions AND every
