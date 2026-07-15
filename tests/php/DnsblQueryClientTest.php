@@ -52,6 +52,12 @@ final class DnsblQueryClientTest extends TestCase
 
 	protected function setUp(): void
 	{
+		foreach (['pcntl_fork', 'pcntl_waitpid', 'pcntl_wifexited', 'pcntl_wexitstatus', 'posix_kill'] as $function) {
+			if (!function_exists($function)) {
+				$this->markTestSkipped("{$function}() is unavailable -- cannot run cross-process query-channel tests.");
+			}
+		}
+
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
 
@@ -114,7 +120,7 @@ final class DnsblQueryClientTest extends TestCase
 	{
 		$pid = pcntl_fork();
 		if ($pid === -1) {
-			$this->fail('test harness failed to fork a child process');
+			$this->markTestSkipped('pcntl_fork() failed.');
 		}
 		if ($pid === 0) {
 			try {
@@ -144,7 +150,7 @@ final class DnsblQueryClientTest extends TestCase
 			usleep(20000);
 		} while (microtime(true) < $deadline);
 
-		@posix_kill($pid, SIGKILL);
+		@posix_kill($pid, 9);
 		pcntl_waitpid($pid, $status);
 		unset($this->children[$pid]);
 		$this->fail("child {$pid} exceeded the {$timeout_s}s test deadline");
