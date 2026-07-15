@@ -143,7 +143,7 @@ S3_ALIAS = "RVAliasSC"
 S4_ALIAS = "RVAliasSD"
 S5_ALIAS = "pfB_Top_v4"  # continent alias -- routes pfb_geoip=TRUE (ADR-11 continent list)
 S6_ALIAS = "RVAliasSF"
-S8_ALIAS_LOGGED = "RVAliasSHOld"  # deliberately stale; ALIAS_OTHER's basename is the "new" one
+S8_ALIAS_LOGGED = "RVAliasSHOld"  # deliberately stale; ALIAS_S8_A's basename is the "new" one
 S9_ALIAS = "RVAliasSI"
 S10_ALIAS = "RVAliasSJ"
 FILLER_IP_ALIAS = "RVAliasFill"
@@ -523,7 +523,16 @@ def _seed_feed_files(vm: helpers.SmokeVM) -> None:
     )
     assert mkdir.returncode == 0, f"failed to mkdir feed dirs: rc={mkdir.returncode} stderr={mkdir.stderr!r}"
 
-    feed_a_lines = [S1_IP, "203.0.113.0/24", S6_IP, S8_IP, S9_IP, *IP_BLOCK_FILLER_IPS, *UNIFIED_ONLY_FILLER_IPS]
+    feed_a_lines = [
+        S1_IP,
+        f"{S3_IP}0",
+        "203.0.113.0/24",
+        S6_IP,
+        S8_IP,
+        S9_IP,
+        *IP_BLOCK_FILLER_IPS,
+        *UNIFIED_ONLY_FILLER_IPS,
+    ]
     files = {
         FEED_A: "\n".join(feed_a_lines) + "\n",
         FEED_B: f"{S3_IP}\n",
