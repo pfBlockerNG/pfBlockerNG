@@ -5235,9 +5235,9 @@ class _DnsblGenerationError(Exception):
 
 
 def _dnsbl_validate_manifest_raws(manifest: dict[str, Any], base_dir: str) -> None:
-    feeds = manifest.get("feeds", [])
-    if not isinstance(feeds, list):
+    if "feeds" not in manifest or not isinstance(manifest["feeds"], list):
         raise _DnsblGenerationError("DNSBL manifest feeds is not a list")
+    feeds = manifest["feeds"]
     for feed in feeds:
         if not isinstance(feed, dict) or not isinstance(feed.get("raw"), str) or not feed["raw"]:
             raise _DnsblGenerationError("DNSBL manifest feed has no valid raw reference")
@@ -5299,7 +5299,7 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
     shape) is ignored entirely -- an absent oracle is expected, not a warning.
     ``tld_wildcard_blacklist`` / ``tld_wildcard_exclusion`` / ``user_whitelist`` /
     ``user_unlock`` / ``top1m_list`` are passed through as lists. Missing keys
-    default empty so a partial manifest still builds.
+    within the required ``config`` object default empty.
     """
     config = manifest.get("config", {})
 
@@ -5367,11 +5367,11 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
         if not isinstance(manifest, dict):
             raise _DnsblGenerationError("DNSBL manifest root is not an object")
         base_dir = os.path.dirname(os.path.abspath(manifest_path))
+        if "config" not in manifest or not isinstance(manifest["config"], dict):
+            raise _DnsblGenerationError("DNSBL manifest config is not an object")
+        manifest_config = manifest["config"]
         _dnsbl_validate_manifest_raws(manifest, base_dir)
         config = _dnsbl_config_from_manifest(manifest, base_dir)
-        manifest_config = manifest.get("config", {})
-        if not isinstance(manifest_config, dict):
-            raise _DnsblGenerationError("DNSBL manifest config is not an object")
         top1m_enabled = bool(manifest_config.get("top1m_enabled", False))
         result = build(
             manifest,

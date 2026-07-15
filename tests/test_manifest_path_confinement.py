@@ -76,6 +76,7 @@ class TestManifestGenerationFailClosed:
         self,
         tmp_path: Path,
         raw_kind: str,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         base = tmp_path / "base"
         base.mkdir()
@@ -101,7 +102,7 @@ class TestManifestGenerationFailClosed:
         manifest_path = base / "pfb_py_sources.json"
         manifest_path.write_text(json.dumps({"version": 1, "config": {}, "feeds": [row]}), encoding="utf-8")
         status_path = base / "pfb_py_status.json"
-        pfb_unbound.pfb["pfb_py_status"] = str(status_path)
+        monkeypatch.setitem(pfb_unbound.pfb, "pfb_py_status", str(status_path))
 
         result = pfb_unbound.dnsbl_build_from_manifest(str(manifest_path))
 

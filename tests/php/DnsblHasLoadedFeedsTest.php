@@ -138,13 +138,14 @@ final class DnsblHasLoadedFeedsTest extends TestCase
 	}
 
 	/**
-	 * Scenario: at least one *.raw in rawdir → feeds are loaded.
+	 * Scenario: at least one manifest-authoritative raw file → feeds are loaded.
 	 *
-	 * Given:  a single *.raw file exists in the rawdir
+	 * Given:  a single raw file is referenced by the live manifest
 	 * When:   pfb_dnsbl_has_loaded_feeds() is called
 	 * Then:   returns TRUE
 	 *
-	 * Before-state assertion (empty rawdir → FALSE) proves the raw file caused the flip.
+	 * Before-state assertions prove neither an empty directory nor an orphan raw file
+	 * is treated as loaded.
 	 */
 	public function testRawFilePresentReturnsTrue(): void
 	{
@@ -153,15 +154,18 @@ final class DnsblHasLoadedFeedsTest extends TestCase
 		// Before: empty rawdir → FALSE.
 		$this->assertFalse(pfb_dnsbl_has_loaded_feeds($pfb), 'Before: empty rawdir → FALSE');
 
-		// Publish one manifest-authoritative raw reference.
+		// A raw file alone is not authoritative.
 		file_put_contents("{$this->rawDir}/some_feed.raw", "blocked.example.com\n");
+		$this->assertFalse(pfb_dnsbl_has_loaded_feeds($pfb), 'Unreferenced raw file must remain unloaded');
+
+		// Publish one manifest-authoritative raw reference.
 		file_put_contents($pfb['unbound_py_sources'], json_encode([
 			'version' => 1,
 			'feeds' => [['raw' => 'raw/some_feed.raw']],
 		]));
 
-		// After: *.raw present → TRUE.
-		$this->assertTrue(pfb_dnsbl_has_loaded_feeds($pfb), '*.raw in rawdir → TRUE');
+		// After: the live manifest references the raw file → TRUE.
+		$this->assertTrue(pfb_dnsbl_has_loaded_feeds($pfb), 'manifest-authoritative raw → TRUE');
 	}
 
 	/**

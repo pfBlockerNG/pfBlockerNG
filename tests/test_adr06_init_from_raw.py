@@ -307,7 +307,9 @@ class TestManifestFallback:
             fh.write("{ this is not json")
         assert pfb_unbound.dnsbl_build_from_manifest(bad) is None
 
-    def test_missing_feed_file_rejects_the_whole_generation(self, tmp_path: Any) -> None:
+    def test_missing_feed_file_rejects_the_whole_generation(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # One missing member makes the manifest generation unusable: never expose a
         # partial build assembled from only the readable members.
         path = os.path.join(str(tmp_path), "m.json")
@@ -334,7 +336,7 @@ class TestManifestFallback:
         }
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(manifest, fh)
-        pfb_unbound.pfb["pfb_py_status"] = status_path
+        monkeypatch.setitem(pfb_unbound.pfb, "pfb_py_status", status_path)
         result = pfb_unbound.dnsbl_build_from_manifest(path)
         assert result is None
         with open(status_path, encoding="utf-8") as fh:
