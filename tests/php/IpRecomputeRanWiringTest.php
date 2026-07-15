@@ -29,15 +29,25 @@ final class IpRecomputeRanWiringTest extends TestCase
 	public function testInvocationLoopRecordsWhetherRecomputeRanPerFamily(): void
 	{
 		$source = $this->source();
-		$this->assertStringContainsString(
-			'$pfb_recompute_ran_v4',
+		$this->assertMatchesRegularExpression(
+			'/^\s*\$pfb_recompute_ran_v4 = FALSE;$/m',
 			$source,
-			'the v4 recompute-ran flag must exist so the suppression/closing gates can consume it'
+			'the v4 recompute-ran flag must initialize FALSE in executable code'
 		);
-		$this->assertStringContainsString(
-			'$pfb_recompute_ran_v6',
+		$this->assertMatchesRegularExpression(
+			'/^\s*\$pfb_recompute_ran_v6 = FALSE;$/m',
 			$source,
-			'the v6 recompute-ran flag must exist so the suppression gate can consume it'
+			'the v6 recompute-ran flag must initialize FALSE in executable code'
+		);
+		$this->assertMatchesRegularExpression(
+			'/^\s*\$pfb_recompute_ran_v4 = TRUE;$/m',
+			$source,
+			'the v4 recompute-ran flag must become TRUE after the recompute exec'
+		);
+		$this->assertMatchesRegularExpression(
+			'/^\s*\$pfb_recompute_ran_v6 = TRUE;$/m',
+			$source,
+			'the v6 recompute-ran flag must become TRUE after the recompute exec'
 		);
 	}
 

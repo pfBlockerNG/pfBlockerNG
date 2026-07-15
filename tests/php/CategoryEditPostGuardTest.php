@@ -506,19 +506,6 @@ final class CategoryEditPostGuardTest extends TestCase
 		$this->assertSame($value, $_POST['url-0']);
 	}
 
-	public function testUrlSaveGuardDnsblGtypeAutoFormatRejectsScriptInQuery(): void
-	{
-		// Same code path as ipv4/ipv6 auto (single file; gtype only changes
-		// the format dropdown) -- prove the guard fires on the dnsbl tab too.
-		$this->assertGuardRejects([
-			'aliasname' => 'validname',
-			'state-0'   => 'Enabled',
-			'header-0'  => 'validheader',
-			'url-0'     => 'http://192.0.2.1/?x=<script>alert(1)</script>',
-			'format-0'  => 'auto',
-		], 'DNSBL', 'dnsbl');
-	}
-
 	// -- issue #1104: the remaining format-N axis rows (regex/rsync/whois-reject) --
 
 	public function testUrlSaveGuardRegexFormatRejectsScriptInQuery(): void

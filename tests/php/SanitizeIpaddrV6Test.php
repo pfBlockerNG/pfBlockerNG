@@ -19,10 +19,24 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('sanitize_ipaddr_v6')]
 final class SanitizeIpaddrV6Test extends TestCase
 {
+	private bool $hadSupp;
+	private mixed $savedSupp;
+
 	protected function setUp(): void
 	{
+		$this->hadSupp   = array_key_exists('supp', $GLOBALS['pfb'] ?? []);
+		$this->savedSupp = $GLOBALS['pfb']['supp'] ?? null;
 		// Default: suppression OFF (no reserved/private filtering).
 		$GLOBALS['pfb']['supp'] = 'off';
+	}
+
+	protected function tearDown(): void
+	{
+		if ($this->hadSupp) {
+			$GLOBALS['pfb']['supp'] = $this->savedSupp;
+		} else {
+			unset($GLOBALS['pfb']['supp']);
+		}
 	}
 
 	// --- Suppression on: reserved/private/loopback dropped -------------------

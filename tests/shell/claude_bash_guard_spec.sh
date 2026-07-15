@@ -384,6 +384,15 @@ Describe 'claude-bash-guard.sh'
       The output should equal ""
     End
 
+    It 'P16 (issue #1298): bare force BETWEEN two leases -> PASS (the final lease wins)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease --force --force-with-lease"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
     It 'P15 (issue #1058): --force-with-lease --force-if-includes -> PASS (lease companion, not a bare force)'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease --force-if-includes"}}
