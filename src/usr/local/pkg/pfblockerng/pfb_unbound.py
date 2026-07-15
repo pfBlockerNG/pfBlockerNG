@@ -842,7 +842,12 @@ def pfb_control_watcher() -> None:
                     if msg:
                         log_info("[pfBlockerNG]: {}".format(msg))
                 except Exception as e:
-                    sys.stderr.write("[pfBlockerNG]: control command failed: {}\n".format(e))
+                    err = sys.__stderr__
+                    if err is not None:
+                        try:
+                            err.write("[pfBlockerNG]: control command failed: {}\n".format(e))
+                        except Exception:
+                            pass
             # Advance the applied marker on every consumed record (advance or rejection),
             # so the writer's wait never blocks on a record the reader already saw.
             _control_write_applied(seq)

@@ -23,6 +23,7 @@ is gated on ``pfb["mod_threading"]`` and only a test that explicitly starts it r
 from __future__ import annotations
 
 import sqlite3
+import sys
 import threading
 import time
 from typing import Any
@@ -836,6 +837,21 @@ class TestControlWatcherLoop:
         first_call = threading.Event()
         later_call = threading.Event()
         handler_calls: list[str] = []
+        stderr_fallback: list[str] = []
+
+        class RecordingStderr:
+            def write(self, text: str) -> int:
+                stderr_fallback.append(text)
+                return len(text)
+
+        class SelectiveStderr:
+            def write(self, text: str) -> int:
+                if "control command failed" in text:
+                    raise OSError("closed stderr")
+                return len(text)
+
+        monkeypatch.setattr(sys, "__stderr__", RecordingStderr())
+        monkeypatch.setattr(sys, "stderr", SelectiveStderr())
 
         def apply_command(command: list[str]) -> tuple[bool, str]:
             handler_calls.append(command[1])
@@ -855,6 +871,7 @@ class TestControlWatcherLoop:
         h.publish({"seq": 1, "cmd": "disable"})
         assert first_call.wait(3.0), f"handler calls: {handler_calls!r}"
         assert h.wait_applied(1), f"applied marker: {h.read_applied()!r}"
+        assert "[pfBlockerNG]: control command failed: control handler failed\n" in stderr_fallback
         assert h.thread.is_alive(), "control watcher exited after handler exception"
 
         h.publish({"seq": 2, "cmd": "enable"})
