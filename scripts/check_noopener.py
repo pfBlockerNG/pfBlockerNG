@@ -12,8 +12,9 @@ is attacker-influenced, and cheap defence-in-depth even when it is not
 
 HEURISTIC (deliberately strict-adjacency, not an HTML parser)
 ---------------------------------------------------------------
-A `target=…_blank…` occurrence (double/single/no quotes; a `(?<![\\w-])`
-guard excludes `data-target="_blank"`) is a VIOLATION unless it is
+A `target … = … _blank…` occurrence (HTML ASCII case; double/single/no quotes;
+spaces/tabs around `=`; a `(?<![\\w-])` guard excludes `data-target="_blank"`)
+is a VIOLATION unless it is
 IMMEDIATELY followed — only whitespace between — by `rel=["']?noopener`.
 That is the house convention this codebase now follows: `rel` sits directly
 after `target`, so it survives even the multi-line PHP string-concatenation
@@ -50,9 +51,11 @@ import subprocess
 import sys
 from typing import NamedTuple
 
-# `target=…_blank…` in any of the three HTML quote forms. `(?<![\w-])` excludes
-# a `data-target="_blank"` tail (word/hyphen boundary before `target`).
-_TARGET_BLANK_RE = re.compile(r'(?<![\w-])target=(?P<q>["\']?)_blank(?P=q)')
+# HTML ASCII case/whitespace only. The unquoted branch must leave its separator
+# untouched for the adjacent-rel matcher; quoted trailing spaces/tabs are included.
+_TARGET_BLANK_RE = re.compile(
+    r'(?<![\w-])(?ai:target)[ \t]*=[ \t]*(?:(?P<q>["\'])(?ai:_blank)[ \t]*(?P=q)|(?ai:_blank))'
+)
 
 # `rel="noopener…"` (or single-quoted / unquoted), immediately after `target=…`
 # with only whitespace between -- the strict-adjacency house convention. The
@@ -74,7 +77,7 @@ class Violation(NamedTuple):
 
 
 def find_violations(text: str, source: str) -> list[Violation]:
-    """Find every `target=…_blank…` site with no adjacent `rel="noopener…"`.
+    """Find every HTML ASCII `target=…_blank…` spelling with no adjacent `rel="noopener…"`.
 
     Scanned per physical line — every current/expected site keeps `target`
     and its `rel` on the same line (see module docstring). A line carrying
