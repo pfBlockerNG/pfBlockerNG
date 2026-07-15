@@ -259,6 +259,15 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 			"[{$scenario}] expected pfb_ip_prefetch() to seed the exact validate_cmd key "
 				. "convert_ip_log() will look up: " . var_export($row['validate_cmd'], TRUE)
 		);
+		if (empty($seededMemos['validate'][$row['validate_cmd']])) {
+			$missKey = $row['host'] . '|' . $row['folder'];
+			$this->assertArrayHasKey(
+				$missKey,
+				$seededMemos['miss'],
+				"[{$scenario}] expected pfb_ip_prefetch() to seed the host/folder miss memo "
+					. "required after validation missed: " . var_export($missKey, TRUE)
+			);
+		}
 
 		// When: convert_ip_log() renders while the prefetch memos are seeded.
 		[$retSeeded, $htmlSeeded] = $this->render($fields, $rtype);
