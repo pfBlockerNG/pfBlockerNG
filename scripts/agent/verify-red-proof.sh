@@ -13,7 +13,8 @@
 #   --base-ref  the pre-fix baseline (default HEAD~1). Pass the true pre-fix commit
 #               explicitly whenever the step landed more than one commit (a follow-up
 #               doc/ADR reconciliation, a review fix) -- HEAD~1 then names the wrong
-#               commit. Omitting it keeps today's behaviour byte-identical.
+#               commit. Omitting it keeps today's behaviour byte-identical. Every --src
+#               must exist at --base-ref; added-only paths fail with REVERT-FAIL.
 #
 # Prints FREEZE-OK / RED-OK / GREEN-OK step lines, then final `VERDICT: PASS`.
 # Any step failing prints the failing step + `VERDICT: FAIL` and exits 1. Requires a
@@ -31,6 +32,16 @@ usage() {
 fail() {
 	printf '%s\nVERDICT: FAIL\n' "$1"
 	exit 1
+}
+
+restore_srcs() {
+	for src in $srcs; do
+		if git -C "$worktree" cat-file -e "HEAD:$src" 2>/dev/null; then
+			git -C "$worktree" checkout HEAD -- "$src" || return 1
+		else
+			git -C "$worktree" rm -q -f -- "$src" || return 1
+		fi
+	done
 }
 
 main() {
@@ -79,20 +90,17 @@ main() {
 	}
 	# shellcheck disable=SC2086 # srcs is a space-separated path list by construction
 	git -C "$worktree" checkout "$base_sha" -- $srcs || fail "REVERT-FAIL: could not check out $base_ref src paths"
-	# shellcheck disable=SC2064,SC2086 # expand now: restore exactly these paths on any exit.
 	# INT/TERM trapped explicitly: under dash (Linux /bin/sh) an EXIT trap does NOT run
 	# on an untrapped signal, which would strand the src paths at the base ref.
-	trap "git -C '$worktree' checkout HEAD -- $srcs" EXIT
-	# shellcheck disable=SC2064,SC2086 # expand now, deliberately (same paths as above)
-	trap "git -C '$worktree' checkout HEAD -- $srcs; trap - EXIT; exit 130" INT TERM
+	trap 'restore_srcs' EXIT
+	trap 'restore_srcs; trap - EXIT; exit 130' INT TERM
 
 	if (cd "$worktree" && sh -c "$test_cmd" >/dev/null 2>&1); then
 		fail "RED-FAIL: test passed against $base_ref src -- it does not pin the defect"
 	fi
 	printf 'RED-OK: test fails against %s src\n' "$base_ref"
 
-	# shellcheck disable=SC2086
-	git -C "$worktree" checkout HEAD -- $srcs || fail "RESTORE-FAIL"
+	restore_srcs || fail "RESTORE-FAIL"
 	trap - EXIT INT TERM
 
 	if ! (cd "$worktree" && sh -c "$test_cmd" >/dev/null 2>&1); then
