@@ -25,18 +25,16 @@ use PHPUnit\Framework\TestCase;
  *     direct unit tests, no exec: v4 mask math (both sides), v6 subnet math (both sides,
  *     via the Net_IPv6 double), and an empty $result array.
  *
- *   Scenario: pfb_ip_prefetch_last_match() -- the dual-prefix attribution test
+ *   Scenario: pfb_ip_prefetch_last_match() -- complete-entry attribution
  *     direct unit tests, no exec: an unprefixed (single-file) line, a file-prefixed
- *     ("path:content") line, a genuine miss, AND the grep prefix-match quirk (an anchored
- *     `^1.2.3.4`-style pattern also matching content beginning `1.2.3.45`) in both shapes --
- *     the per-row `exec()` this replaces has the identical quirk, so reproducing it (not an
- *     exact-match) is what keeps this behaviour-identical.
+ *     ("path:content") line, a genuine miss, longer textual prefixes in both shapes,
+ *     and last-duplicate semantics. Only complete raw entries are attributed.
  *
  *   Scenario: find_reported_header() vs the batched pfb_find_reported_headers() sibling
  *     Differential (oracle) scenarios over a real fixture feed dir, real grep/find exec:
  *     exact v4 hit, exact v6 hit, a v4 CIDR hit AND a miss sharing the same first-octet
  *     Round-B query group, a v6 CIDR hit AND a miss sharing the same prefix Round-B group,
- *     the exact-round prefix-match quirk, and two flavours of total miss (no CIDR
+ *     longer textual prefix collisions, and two flavours of total miss (no CIDR
  *     candidates at all; CIDR candidates present but none contain the host). A SEPARATE
  *     fixture dir/geoip=TRUE case proves the ccdir-redirect branch too.
  *
@@ -55,7 +53,7 @@ use PHPUnit\Framework\TestCase;
  *   Scenario: N1 -- pfb_ip_prefetch_last_match()'s colon-fallback false IPv6 attribution
  *     An UNPREFIXED IPv6 content line has ':' inside the address itself, not a grep
  *     "path:content" separator -- the fallback must not misattribute it merely because
- *     the tail after its first ':' happens to equal some host's raw_prefix.
+ *     the tail after its first ':' happens to equal some host's raw_entry.
  *
  *   Scenario: B3 -- a failed batched grep pass must never seed a false negative
  *     A child `php` process with `open_basedir` whitelisting only the repo tree (so
@@ -93,6 +91,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_ip_render_memos')]
 #[CoversFunction('pfb_ip_render_memos_reset')]
 #[CoversFunction('pfb_prefetch_pattern_file_write_ok')]
+#[CoversFunction('pfb_ip_exact_entry_pattern')]
 #[CoversFunction('pfb_ip_prefetch_grep_lines')]
 #[CoversFunction('pfb_ip_prefetch_last_match')]
 #[CoversFunction('pfb_find_reported_headers')]
@@ -288,7 +287,7 @@ final class IpPrefetchTest extends TestCase
 	public function test_last_match_unprefixed_single_file_shape(): void
 	{
 		$lines = ['203.0.113.0/28', '198.51.100.16/28'];
-		$match = pfb_ip_prefetch_last_match($lines, '203.0.113.0');
+		$match = pfb_ip_prefetch_last_match($lines, '203.0.113.0/28');
 		$this->assertSame('203.0.113.0/28', $match, 'expected the unprefixed line to be attributed, got ' . var_export($match, true));
 	}
 
@@ -298,7 +297,7 @@ final class IpPrefetchTest extends TestCase
 		// greps is an absolute glob) before the ':' separator -- see N1's docblock for
 		// why the '/' matters.
 		$lines = ['/var/db/pfblockerng/deny/DenyFeedA.txt:203.0.113.0/28', '/var/db/pfblockerng/deny/DenyFeedB.txt:198.51.100.16/28'];
-		$match = pfb_ip_prefetch_last_match($lines, '198.51.100.16');
+		$match = pfb_ip_prefetch_last_match($lines, '198.51.100.16/28');
 		$this->assertSame(
 			'/var/db/pfblockerng/deny/DenyFeedB.txt:198.51.100.16/28',
 			$match,
@@ -313,45 +312,45 @@ final class IpPrefetchTest extends TestCase
 		$this->assertNull($match, 'expected no attribution for an unrelated prefix, got ' . var_export($match, true));
 	}
 
-	public function test_last_match_preserves_the_grep_prefix_match_quirk(): void
+	public function test_last_match_rejects_longer_textual_prefixes(): void
 	{
-		// An anchored `^203\.0\.113\.4` pattern also matches content beginning
-		// "203.0.113.45" -- the per-row single-pattern exec() has this exact quirk (it is
-		// not `-w`/word-bounded), so the batched attribution must reproduce it, in BOTH
-		// output shapes grep can emit.
+		// Longer entries must not be attributed to a shorter address in either grep
+		// output shape.
 		$unprefixed = pfb_ip_prefetch_last_match(['203.0.113.45/32'], '203.0.113.4');
-		$this->assertSame(
-			'203.0.113.45/32',
+		$this->assertNull(
 			$unprefixed,
-			'expected the quirk to attribute an unprefixed longer-suffix line, got ' . var_export($unprefixed, true)
+			'expected an unprefixed longer entry not to be attributed, got ' . var_export($unprefixed, true)
 		);
 
-		// Realistic grep multi-file output: an ABSOLUTE path before the ':' separator.
 		$prefixed = pfb_ip_prefetch_last_match(['/var/db/pfblockerng/deny/DenyFeed.txt:203.0.113.45/32'], '203.0.113.4');
-		$this->assertSame(
-			'/var/db/pfblockerng/deny/DenyFeed.txt:203.0.113.45/32',
+		$this->assertNull(
 			$prefixed,
-			'expected the quirk to attribute a file-prefixed longer-suffix line, got ' . var_export($prefixed, true)
+			'expected a file-prefixed longer entry not to be attributed, got ' . var_export($prefixed, true)
 		);
 
-		// And the negative: a prefix that genuinely does not lead the content must NOT
-		// match (proves this is a real prefix test, not "contains").
-		$noHit = pfb_ip_prefetch_last_match(['203.0.113.99/32'], '203.0.113.4');
-		$this->assertNull($noHit, 'expected a non-leading occurrence NOT to match, got ' . var_export($noHit, true));
+		$duplicates = [
+			'/var/db/pfblockerng/deny/DenyFeedA.txt:203.0.113.4',
+			'/var/db/pfblockerng/deny/DenyFeedB.txt:203.0.113.4',
+		];
+		$this->assertSame(
+			$duplicates[1],
+			pfb_ip_prefetch_last_match($duplicates, '203.0.113.4'),
+			'expected the last duplicate complete entry to retain exec() last-line semantics'
+		);
 	}
 
 	/**
 	 * N1 (issue #809 review): the colon-fallback used to fire on ANY ':' in the line,
 	 * which misattributes an UNPREFIXED IPv6 content line (its OWN ':' is part of the
 	 * address, not a "path:content" separator) whenever the tail after that first ':'
-	 * happens to equal $raw_prefix. Guarded now by requiring the segment before that ':'
+	 * happens to equal $raw_entry. Guarded now by requiring the segment before that ':'
 	 * to look like a path (contain '/') -- true of every real grep path here, never true
 	 * of a bare IPv6 literal.
 	 */
 	public function test_last_match_does_not_misattribute_an_unprefixed_ipv6_content_line_via_the_colon_fallback(): void
 	{
 		// Given: an unprefixed IPv6 content line whose tail-after-first-colon equals a
-		// host's raw_prefix.
+		// host's raw_entry.
 		// When/Then: it must NOT be attributed via the colon-fallback.
 		$unprefixed = pfb_ip_prefetch_last_match(['2001:db8::1'], 'db8::1');
 		$this->assertNull(
@@ -361,7 +360,7 @@ final class IpPrefetchTest extends TestCase
 		);
 
 		// Given: a GENUINELY file-prefixed line (a real grep path, which always contains
-		// '/') for the SAME raw_prefix.
+		// '/') for the SAME raw_entry.
 		// When/Then: it still attributes correctly through the identical colon-fallback --
 		// proves the '/' guard does not break the real path-prefixed shape.
 		$prefixed = pfb_ip_prefetch_last_match(['/path/to/feed.txt:2001:db8::1'], '2001:db8::1');
@@ -422,7 +421,7 @@ final class IpPrefetchTest extends TestCase
 			'203.0.113.55',		// v4 CIDR miss -- SAME Round-B "203" group as the hit above
 			'2001:db8:1::5',	// v6 CIDR hit (inside 2001:db8:1::/64)
 			'2001:db8:9::5',	// v6 CIDR miss -- SAME Round-B "2001" group as the hit above
-			'198.51.100.4',		// exact-round prefix-match quirk (-> "198.51.100.45")
+			'198.51.100.4',		// longer textual prefix collision ("198.51.100.45")
 			'198.51.100.99',	// CIDR candidates present (198.51.100.16/28), none contain it
 			'192.0.2.222',		// no CIDR candidates in its group at all
 		];
@@ -434,12 +433,144 @@ final class IpPrefetchTest extends TestCase
 			'203.0.113.55'       => ['Unknown', 'Unknown'],
 			'2001:db8:1::5'      => ['ReportsFeedA', '2001:db8:1::/64'],
 			'2001:db8:9::5'      => ['Unknown', 'Unknown'],
-			'198.51.100.4'       => ['ReportsFeedB', '198.51.100.45'],
+			'198.51.100.4'       => ['Unknown', 'Unknown'],
 			'198.51.100.99'      => ['Unknown', 'Unknown'],
 			'192.0.2.222'        => ['Unknown', 'Unknown'],
 		];
 
 		$this->assertBatchedHeadersMatchPerRow($hosts, $folder, FALSE, $expected, 'reports fixture, non-geoip');
+	}
+
+	public function test_per_row_and_batch_require_complete_v4_v6_entries_across_orders_and_fallbacks(): void
+	{
+		$cases = [
+			['192.0.2.5', ['192.0.2.52', '192.0.2.54'], '192.0.2.0/24'],
+			['198.51.100.18', ['198.51.100.188'], '198.51.100.0/24'],
+			['203.0.113.4', ['203.0.113.48'], '203.0.113.0/24'],
+			['2001:db8::1', ['2001:db8::10', '2001:db8::12'], '2001:db8::/64'],
+		];
+		$tmp = sys_get_temp_dir() . '/pfb_1367_collisions_' . bin2hex(random_bytes(6));
+		mkdir($tmp, 0777, true);
+		$savedCcdir = $GLOBALS['pfb']['ccdir'];
+
+		try {
+			$GLOBALS['pfb']['ccdir'] = $tmp;
+			foreach ($cases as [$host, $collisions, $cidr]) {
+				foreach ([FALSE, TRUE] as $geoip) {
+					foreach ([FALSE, TRUE] as $collisionFirst) {
+						$first = $collisionFirst ? implode("\n", $collisions) : $host;
+						$second = $collisionFirst ? $host : implode("\n", $collisions);
+						file_put_contents("{$tmp}/A.txt", "{$first}\n");
+						file_put_contents("{$tmp}/B.txt", "{$second}\n");
+
+						$expectedFeed = $collisionFirst ? 'B' : 'A';
+						$this->assertBatchedHeadersMatchPerRow(
+							[$host],
+							"{$tmp}/*.txt",
+							$geoip,
+							[$host => [$expectedFeed, $host]],
+							"exact entry with collisions; geoip=" . ($geoip ? 'true' : 'false')
+						);
+
+						$first = $collisionFirst ? implode("\n", $collisions) : $cidr;
+						$second = $collisionFirst ? $cidr : implode("\n", $collisions);
+						file_put_contents("{$tmp}/A.txt", "{$first}\n");
+						file_put_contents("{$tmp}/B.txt", "{$second}\n");
+						$expectedFeed = $collisionFirst ? 'B' : 'A';
+						$this->assertBatchedHeadersMatchPerRow(
+							[$host],
+							"{$tmp}/*.txt",
+							$geoip,
+							[$host => [$expectedFeed, $cidr]],
+							"CIDR fallback with collisions; geoip=" . ($geoip ? 'true' : 'false')
+						);
+					}
+				}
+
+				file_put_contents("{$tmp}/A.txt", implode("\n", $collisions) . "\n");
+				@unlink("{$tmp}/B.txt");
+				$this->assertBatchedHeadersMatchPerRow(
+					[$host],
+					"{$tmp}/*.txt",
+					FALSE,
+					[$host => ['Unknown', 'Unknown']],
+					'single-file forced-prefix collision miss'
+				);
+			}
+		} finally {
+			$GLOBALS['pfb']['ccdir'] = $savedCcdir;
+			rmdir_recursive($tmp);
+		}
+	}
+
+	public function test_exact_entry_inputs_preserve_cidr_boundaries_ipv6_forms_and_strict_bytes(): void
+	{
+		$tmp = sys_get_temp_dir() . '/pfb_1367_entries_' . bin2hex(random_bytes(6));
+		mkdir($tmp, 0777, true);
+		$folder = "{$tmp}/*.txt";
+
+		try {
+			$exact = [
+				'192.0.2.5',
+				'2001:db8::1',
+				'2001:0db8:0:0:0:0:0:2',
+			];
+			file_put_contents("{$tmp}/Exact.txt", implode("\n", $exact) . "\n");
+			foreach ($exact as $host) {
+				$this->assertBatchedHeadersMatchPerRow(
+					[$host], $folder, FALSE, [$host => ['Exact', $host]], 'exact textual IPv4/IPv6 entry at EOL'
+				);
+			}
+
+			foreach ([
+				['203.0.113.9', '203.0.113.0/0'],
+				['192.0.2.5', '192.0.2.4/31'],
+				['192.0.2.5', '192.0.2.5/32'],
+				['2001:db8::9', '2001:db8::/0'],
+				['2001:db8::1', '2001:db8::/127'],
+				['2001:db8::1', '2001:db8::1/128'],
+			] as [$host, $cidr]) {
+				file_put_contents("{$tmp}/Exact.txt", "{$cidr}\n");
+				$this->assertBatchedHeadersMatchPerRow(
+					[$host], $folder, FALSE, [$host => ['Exact', $cidr]], "legal CIDR fallback {$cidr}"
+				);
+			}
+
+			file_put_contents("{$tmp}/Exact.txt", "192.0.2.5\r\n192.0.2.5 \n2001:db8::1\r\n2001:db8::1 \n");
+			foreach (['192.0.2.5', '2001:db8::1'] as $host) {
+				$this->assertBatchedHeadersMatchPerRow(
+					[$host], $folder, FALSE, [$host => ['Unknown', 'Unknown']], 'CRLF/trailing whitespace strict miss'
+				);
+			}
+		} finally {
+			rmdir_recursive($tmp);
+		}
+	}
+
+	public function test_invalid_hosts_cannot_expand_as_regex_or_shell_patterns(): void
+	{
+		$tmp = sys_get_temp_dir() . '/pfb_1367_invalid_' . bin2hex(random_bytes(6));
+		mkdir($tmp, 0777, true);
+		file_put_contents("{$tmp}/Feed.txt", "192.0.2.5\n2001:db8::1\n");
+		$folder = "{$tmp}/*.txt";
+
+		try {
+			foreach (['', '.*', '[0-9]', '^$', '\\', '-1', '999.999.999.999'] as $host) {
+				$this->assertSame(
+					['Unknown', 'Unknown'],
+					find_reported_header($host, $folder),
+					"expected invalid host " . var_export($host, true) . ' to be a safe per-row miss'
+				);
+				$batched = pfb_find_reported_headers([$host], $folder);
+				$this->assertSame(
+					['Unknown', 'Unknown'],
+					$batched[$host],
+					"expected invalid host " . var_export($host, true) . ' to be a safe batched miss'
+				);
+			}
+		} finally {
+			rmdir_recursive($tmp);
+		}
 	}
 
 	public function test_batched_headers_match_per_row_for_the_geoip_folder_variant(): void
