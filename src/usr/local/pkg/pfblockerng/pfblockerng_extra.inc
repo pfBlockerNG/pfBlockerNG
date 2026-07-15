@@ -3779,8 +3779,9 @@ function pfb_live_punch_plan(string $ip, array $table_entries): array
  *                          cap both bound the wait -- CLAUDE.md "No orphaned waits").
  * @return array{blocked:bool,b_type:string,group:string,b_eval:string,feed:string,p_type:string}|null
  *         The matcher's verdict, or NULL when none was obtained (invalid domain,
- *         write failure, timeout, or a malformed reply) -- callers must treat NULL
- *         and blocked=false identically ("no block"), never distinguish them.
+ *         lock open/acquire failure, write failure, timeout, or a malformed reply)
+ *         -- callers must treat NULL and blocked=false identically ("no block"),
+ *         never distinguish them.
  */
 function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s = 5.0): ?array {
 	global $pfb;
