@@ -11,8 +11,8 @@ use PHPUnit\Framework\TestCase;
  * retired .txt interchange files via pfb_dnsbl_parse('daemon', ...).
  *
  * Sandbox: a fresh $pfb carrying BOTH the OLD grep-path globals (grep/extdns/
- * unbound_py_data/unbound_py_zone/dnsbl_cache/sqlite_timeout, DnsblPrefetchTest's
- * shape) AND the query-channel globals (dnsbldir, DnsblQueryClientTest's shape) AND
+ * unbound_py_data/unbound_py_zone/dnsbl_cache/sqlite_timeout)
+ * AND the query-channel globals (dnsbldir, DnsblQueryClientTest's shape) AND
  * the log-event globals (dnslog/dnsbl_resolver/dnsbl_info/errlog,
  * LogTimestampBaselineTest's shape). Each test seeds an NDJSON row under a
  * "GrepGroup"/"GrepFeed" pair the OLD grep would find, so a RED run (which still
@@ -62,7 +62,7 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 			'errlog'         => "{$this->tmp}/error.log",
 			'log'            => "{$this->tmp}/pfblockerng.log",
 			'sqlite_timeout' => 2000,
-			// grep-path sandbox (DnsblPrefetchTest shape) -- exercised by the RED run
+			// grep-path sandbox -- exercised by the RED run
 			'grep'            => '/usr/bin/grep',
 			'extdns'          => '203.0.113.53', // TEST-NET-3 (RFC 5737); drill is absent off-appliance anyway
 			'unbound_py_data' => "{$this->tmp}/pfb_py_data.txt",
@@ -172,7 +172,7 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 	 * Calls $work() with every raised PHP warning/notice captured (not printed),
 	 * minus pfb_open_sqlite()'s @chown/@chgrp-to-'unbound' noise (the 'unbound' OS
 	 * user is absent on a dev/CI box -- same harness-noise filter as
-	 * LogTimestampBaselineTest/DnsblParseComputeMetacharTest).
+	 * LogTimestampBaselineTest).
 	 *
 	 * @return string[] unexpected warning messages (empty = none)
 	 */

@@ -10,7 +10,7 @@ use PHPUnit\Framework\TestCase;
  * segments into a function-LOCAL $tld_segments, then discarded it: nothing
  * reads the value, it feeds no output file, log line, or global (the
  * blacklist branch's real outputs — the synthetic DNSBL_TLD row, $tld_cnt,
- * $tlds pruning — are byte-pinned by DnsblNdjsonFlipTest). Dead-code
+ * $tlds pruning — are byte-pinned by TldAnalysisBlacklistHostileInputTest). Dead-code
  * sibling of issue #1155; this pins that the computation is gone.
  */
 #[CoversFunction('tld_analysis')]

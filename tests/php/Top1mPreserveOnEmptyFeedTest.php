@@ -33,7 +33,7 @@ use PHPUnit\Framework\TestCase;
  *     destination path and a read-only dbdir) -> preserved + WARN, not reported as
  *     success. The tempnam()/fopen()-returns-FALSE branch itself needs an
  *     `open_basedir`-restricted child process to force deterministically (see
- *     DnsblPrefetchTest/IpPrefetchTest's sandbox helper) -- left as a documented
+ *     IpPrefetchTest's sandbox helper) -- left as a documented
  *     out-of-CI/covered-by-guard gap rather than a further locally-flaky sandboxed test.
  *   * valid feed with matches -> whitelist REPLACED with the fresh build
  *   * valid feed with zero TLD matches -> whitelist replaced (with empty content) + a
@@ -221,7 +221,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * tempnam()/fopen()-returns-FALSE branch (both the given dir AND the system temp dir
 	 * refuse the create) is only deterministically forceable via an
 	 * `open_basedir`-restricted child process -- the same mechanism used by
-	 * DnsblPrefetchTest/IpPrefetchTest's `runInRestrictedTempDirSandbox()` -- so THAT
+	 * IpPrefetchTest's `runInRestrictedTempDirSandbox()` -- so THAT
 	 * exact branch is left as a documented out-of-CI/covered-by-guard gap rather than
 	 * adding a fourth sandboxed test here; this test still pins the finding-2 crash fix
 	 * via the read-only-dbdir trigger.

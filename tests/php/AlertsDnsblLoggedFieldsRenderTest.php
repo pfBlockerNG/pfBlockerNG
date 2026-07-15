@@ -12,7 +12,7 @@ use PHPUnit\Framework\TestCase;
  * filtering matches the LOGGED feed, not a re-derived current one.
  *
  * Sandbox: AlertsPageLoader's off-appliance function load (AlertsRowOutputEncodingTest
- * shape) PLUS DnsblPrefetchTest's grep-path globals, so the OLD re-check actually runs
+ * shape) PLUS the grep-path globals, so the OLD re-check actually runs
  * on a RED pass -- an NDJSON row seeds a DIFFERENT ("Cur*") group/feed for the row's
  * domain than the LOGGED ("Logged*") fields carry, so old code's compare/rewrite is
  * exercised and observable.
@@ -60,7 +60,7 @@ final class AlertsDnsblLoggedFieldsRenderTest extends TestCase
 
 		$GLOBALS['pfb'] = [
 			'filterlogentries' => false,
-			// grep-path sandbox (DnsblPrefetchTest shape) -- exercises the OLD re-check on RED.
+			// grep-path sandbox -- exercises the OLD re-check on RED.
 			'grep'            => '/usr/bin/grep',
 			'extdns'          => '203.0.113.53',
 			'unbound_py_data' => "{$this->tmp}/pfb_py_data.txt",
