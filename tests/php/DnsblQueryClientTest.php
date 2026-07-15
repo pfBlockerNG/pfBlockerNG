@@ -46,6 +46,8 @@ final class DnsblQueryClientTest extends TestCase
 	private string $tmp;
 	private array $originalPfb = [];
 	private bool $hadPfb = false;
+	/** @var array<int, true> */
+	private array $children = [];
 
 	protected function setUp(): void
 	{
@@ -58,11 +60,16 @@ final class DnsblQueryClientTest extends TestCase
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
 			'dnsbldir' => $this->tmp,
 			'supp'     => 'off',	// pfb_filter()'s private/reserved IP exclusion off for the test
+			'log'      => "{$this->tmp}/pfblockerng.log",
+			'errlog'   => "{$this->tmp}/error.log",
 		]);
 	}
 
 	protected function tearDown(): void
 	{
+		foreach (array_keys($this->children) as $pid) {
+			$this->reapChild($pid);
+		}
 		if ($this->hadPfb) {
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
@@ -96,6 +103,106 @@ final class DnsblQueryClientTest extends TestCase
 		return "{$this->tmp}/pfb_py_query.reply";
 	}
 
+	private function lockPath(): string
+	{
+		return "{$this->tmp}/pfb_py_query.lock";
+	}
+
+	/** Fork a tracked child; the closure must communicate through temp files. */
+	private function forkChild(callable $task): int
+	{
+		$pid = pcntl_fork();
+		if ($pid === -1) {
+			$this->fail('test harness failed to fork a child process');
+		}
+		if ($pid === 0) {
+			try {
+				$task();
+				exit(0);
+			} catch (Throwable $e) {
+				@file_put_contents("{$this->tmp}/child-error-" . getmypid(), $e->getMessage());
+				exit(1);
+			}
+		}
+		$this->children[$pid] = true;
+		return $pid;
+	}
+
+	/** Reap a tracked child under a hard deadline; kill it rather than orphaning it. */
+	private function reapChild(int $pid, float $timeout_s = 5.0): void
+	{
+		$deadline = microtime(true) + $timeout_s;
+		do {
+			$waited = pcntl_waitpid($pid, $status, WNOHANG);
+			if ($waited === $pid) {
+				unset($this->children[$pid]);
+				$this->assertTrue(pcntl_wifexited($status), "child {$pid} did not exit normally");
+				$this->assertSame(0, pcntl_wexitstatus($status), "child {$pid} failed");
+				return;
+			}
+			usleep(20000);
+		} while (microtime(true) < $deadline);
+
+		@posix_kill($pid, SIGKILL);
+		pcntl_waitpid($pid, $status);
+		unset($this->children[$pid]);
+		$this->fail("child {$pid} exceeded the {$timeout_s}s test deadline");
+	}
+
+	/** Read a non-empty file under a bounded test-side deadline. */
+	private function readMarker(string $name, float $timeout_s = 4.0): string
+	{
+		$path = "{$this->tmp}/{$name}";
+		$deadline = microtime(true) + $timeout_s;
+		do {
+			$raw = @file_get_contents($path);
+			if ($raw !== false && $raw !== '') {
+				return $raw;
+			}
+			usleep(20000);
+		} while (microtime(true) < $deadline);
+		$this->fail("marker {$name} did not appear within {$timeout_s}s");
+	}
+
+	/** Wait for a request with the requested domain and return its decoded record. */
+	private function waitForRequest(string $domain, float $timeout_s = 4.0): array
+	{
+		$deadline = microtime(true) + $timeout_s;
+		do {
+			$raw = @file_get_contents($this->channel());
+			$record = $raw === false ? null : json_decode($raw, true);
+			if (is_array($record) && ($record['domain'] ?? null) === $domain) {
+				return $record;
+			}
+			usleep(20000);
+		} while (microtime(true) < $deadline);
+		throw new RuntimeException("request for {$domain} did not appear within {$timeout_s}s");
+	}
+
+	private function verdictReply(string $id, string $group): string
+	{
+		return (string) json_encode([
+			'id' => $id, 'blocked' => true, 'b_type' => 'dataDB', 'group' => $group,
+			'b_eval' => 'exact', 'feed' => "{$group}-feed", 'p_type' => 'A',
+		]);
+	}
+
+	private function forkQuery(string $domain, float $timeout_s, string $marker): int
+	{
+		return $this->forkChild(function () use ($domain, $timeout_s, $marker): void {
+			file_put_contents("{$this->tmp}/{$marker}.started", '1');
+			$result = pfb_dnsbl_query($domain, 'A', $timeout_s);
+			file_put_contents("{$this->tmp}/{$marker}.json", json_encode($result));
+		});
+	}
+
+	private function readQueryResult(string $marker, float $timeout_s = 4.0): ?array
+	{
+		$raw = $this->readMarker("{$marker}.json", $timeout_s);
+		$result = json_decode($raw, true);
+		return is_array($result) ? $result : null;
+	}
+
 	/**
 	 * Spawn a background PHP process that plays the Python side of the
 	 * channel: it polls for the request (up to ~3s, 50ms steps), records
@@ -105,38 +212,29 @@ final class DnsblQueryClientTest extends TestCase
 	 */
 	private function spawnResponder(string $replyTemplateJson): void
 	{
-		$code = <<<'PHP'
-			$dir = $argv[1];
-			$tpl = $argv[2];
-			$reqPath = $dir . '/pfb_py_query';
+		$this->forkChild(function () use ($replyTemplateJson): void {
 			$deadline = microtime(true) + 3.0;
-			$req = null;
-			while (microtime(true) < $deadline) {
-				if (file_exists($reqPath)) {
-					$raw = @file_get_contents($reqPath);
-					if ($raw !== false && trim($raw) !== '') {
-						$dec = json_decode($raw, true);
-						if (is_array($dec) && isset($dec['id'])) {
-							$req = $dec;
-							break;
-						}
-					}
+			$request = null;
+			do {
+				$raw = @file_get_contents($this->channel());
+				$record = $raw === false ? null : json_decode($raw, true);
+				if (is_array($record) && isset($record['id'])) {
+					$request = $record;
+					break;
 				}
-				usleep(50000);
+				usleep(20000);
+			} while (microtime(true) < $deadline);
+			if ($request === null) {
+				throw new RuntimeException('responder did not observe a request');
 			}
-			if ($req === null) {
-				exit(1);
-			}
-			$perm = substr(sprintf('%o', fileperms($reqPath)), -4);
-			file_put_contents($dir . '/observed.json', json_encode(['request' => $req, 'perm' => $perm]));
-			$reply = str_replace('__ID__', (string) $req['id'], $tpl);
-			file_put_contents($dir . '/pfb_py_query.reply', $reply);
-			PHP;
-
-		$cmd = escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($code)
-			. ' ' . escapeshellarg($this->tmp) . ' ' . escapeshellarg($replyTemplateJson)
-			. ' > /dev/null 2>&1 &';
-		exec($cmd);
+			$perm = substr(sprintf('%o', fileperms($this->channel())), -4);
+			file_put_contents("{$this->tmp}/observed.json", json_encode([
+				'request' => $request,
+				'perm' => $perm,
+			]));
+			$reply = str_replace('__ID__', (string) $request['id'], $replyTemplateJson);
+			file_put_contents($this->replyPath(), $reply);
+		});
 	}
 
 	/** Poll (bounded, test-side only) for the responder's observed.json. */
@@ -163,6 +261,7 @@ final class DnsblQueryClientTest extends TestCase
 
 	public function testNoDotDomainRejectedNoRequestWritten(): void
 	{
+		mkdir($this->lockPath());
 		$this->assertFileDoesNotExist($this->channel());
 		$this->assertNull(pfb_dnsbl_query('nodotsatall'));
 		$this->assertFileDoesNotExist($this->channel());
@@ -201,16 +300,53 @@ final class DnsblQueryClientTest extends TestCase
 
 	public function testWriteFailureReturnsNullNoRequestWritten(): void
 	{
-		// Point dnsbldir at a path whose parent does not exist -- tempnam() fails
-		// inside pfb_unbound_py_atomic_write_root(), so the write is rejected
-		// before any wait begins (fail-fast, no pointless poll).
-		$GLOBALS['pfb']['dnsbldir'] = "{$this->tmp}/nope/deep";
+		// The lock can be opened, but publishing onto a directory cannot succeed.
+		// After that failure, removing the obstruction permits a second call to
+		// acquire the same lock and complete, proving the failure released it.
+		mkdir($this->channel());
 		$start = microtime(true);
 		$result = pfb_dnsbl_query('write-fail-case.example', 'A', 5.0);
 		$elapsed = microtime(true) - $start;
 
 		$this->assertNull($result);
 		$this->assertLessThan(1.0, $elapsed, 'a publish failure must return immediately, never wait');
+		rmdir($this->channel());
+		$this->spawnResponder(json_encode([
+			'id' => '__ID__', 'blocked' => false, 'b_type' => '', 'group' => '',
+			'b_eval' => '', 'feed' => '', 'p_type' => '',
+		]));
+		$this->assertIsArray(pfb_dnsbl_query('write-fail-recovery.example', 'A', 2.0));
+	}
+
+	public function testLockOpenFailureReturnsNullBeforePublishing(): void
+	{
+		mkdir($this->lockPath());
+		@unlink($GLOBALS['pfb']['log']);
+		@unlink($GLOBALS['pfb']['errlog']);
+
+		$start = microtime(true);
+		$result = pfb_dnsbl_query('lock-open-failure.example', 'A', 5.0);
+		$elapsed = microtime(true) - $start;
+
+		$this->assertNull($result);
+		$this->assertLessThan(1.0, $elapsed, 'a lock-open failure must return before publishing or polling');
+		$this->assertFileDoesNotExist($this->channel());
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('ADR-65', $logs);
+		$this->assertStringContainsString('query channel lock open failed', $logs);
+	}
+
+	public function testExistingGarbageLockFileIsNotTruncated(): void
+	{
+		$garbage = "arbitrary lock bytes\x00remain";
+		file_put_contents($this->lockPath(), $garbage);
+		$this->spawnResponder(json_encode([
+			'id' => '__ID__', 'blocked' => false, 'b_type' => '', 'group' => '',
+			'b_eval' => '', 'feed' => '', 'p_type' => '',
+		]));
+
+		$this->assertIsArray(pfb_dnsbl_query('garbage-lock.example', 'A', 2.0));
+		$this->assertSame($garbage, file_get_contents($this->lockPath()));
 	}
 
 	// --- happy path: blocked verdict, request schema + perms, cleanup -------
@@ -280,6 +416,81 @@ final class DnsblQueryClientTest extends TestCase
 		$this->assertSame('', $result['b_eval']);
 		$this->assertSame('', $result['feed']);
 		$this->assertSame('', $result['p_type']);
+	}
+
+	public function testConcurrentCallersAreSerializedAndReceiveOwnReplies(): void
+	{
+		// The responder deliberately withholds the first reply while caller B
+		// enters pfb_dnsbl_query(). With a shared unlocked slot B overwrites A;
+		// with the query lock B cannot publish until A consumes its own reply.
+		$server = $this->forkChild(function (): void {
+			$first = $this->waitForRequest('concurrent-a.example');
+			file_put_contents("{$this->tmp}/server-first-ready", '1');
+			$this->readMarker('release-first');
+			file_put_contents($this->replyPath(), $this->verdictReply($first['id'], 'group-a'));
+
+			$deadline = microtime(true) + 2.0;
+			while (file_exists($this->replyPath()) && microtime(true) < $deadline) {
+				usleep(20000);
+			}
+			if (file_exists($this->replyPath())) {
+				throw new RuntimeException('first caller did not consume its reply');
+			}
+			$second = $this->waitForRequest('concurrent-b.example');
+			file_put_contents($this->replyPath(), $this->verdictReply($second['id'], 'group-b'));
+		});
+
+		$callerA = $this->forkQuery('concurrent-a.example', 2.5, 'caller-a');
+		$this->readMarker('server-first-ready');
+		$callerB = $this->forkQuery('concurrent-b.example', 2.5, 'caller-b');
+		$this->readMarker('caller-b.started');
+		usleep(100000);
+		file_put_contents("{$this->tmp}/release-first", '1');
+
+		$resultA = $this->readQueryResult('caller-a', 4.0);
+		$resultB = $this->readQueryResult('caller-b', 4.0);
+		$this->assertSame('group-a', $resultA['group'] ?? null);
+		$this->assertSame('group-b', $resultB['group'] ?? null);
+		$this->reapChild($callerA);
+		$this->reapChild($callerB);
+		$this->reapChild($server);
+		$this->assertFileDoesNotExist($this->channel());
+		$this->assertFileDoesNotExist($this->replyPath());
+	}
+
+	public function testTimedOutCallerCannotDeleteNextCallersRequest(): void
+	{
+		// A receives no reply and must time out. The server records B's request,
+		// then waits until after A's timeout before replying. Without serialization
+		// A unlinks B's live request; with the lock B publishes only after A cleans
+		// up and releases, so B's request remains intact for its own responder.
+		$server = $this->forkChild(function (): void {
+			$this->waitForRequest('timeout-a.example');
+			file_put_contents("{$this->tmp}/timeout-a-ready", '1');
+			$second = $this->waitForRequest('timeout-b.example');
+			usleep(500000);
+			$raw = @file_get_contents($this->channel());
+			$current = $raw === false ? null : json_decode($raw, true);
+			$intact = is_array($current) && (($current['id'] ?? null) === $second['id']);
+			file_put_contents("{$this->tmp}/timeout-b-intact", $intact ? 'yes' : 'no');
+			if ($intact) {
+				file_put_contents($this->replyPath(), $this->verdictReply($second['id'], 'group-b'));
+			}
+		});
+
+		$callerA = $this->forkQuery('timeout-a.example', 0.3, 'timeout-caller-a');
+		$this->readMarker('timeout-a-ready');
+		$callerB = $this->forkQuery('timeout-b.example', 1.8, 'timeout-caller-b');
+
+		$this->assertNull($this->readQueryResult('timeout-caller-a', 2.0));
+		$resultB = $this->readQueryResult('timeout-caller-b', 3.0);
+		$this->assertSame('yes', $this->readMarker('timeout-b-intact'));
+		$this->assertSame('group-b', $resultB['group'] ?? null);
+		$this->reapChild($callerA);
+		$this->reapChild($callerB);
+		$this->reapChild($server);
+		$this->assertFileDoesNotExist($this->channel());
+		$this->assertFileDoesNotExist($this->replyPath());
 	}
 
 	public function testFreshIdIsUsedOnEachCall(): void
@@ -425,8 +636,9 @@ final class DnsblQueryClientTest extends TestCase
 	public function testUnencodableQtypeReturnsNullNoRequestWritten(): void
 	{
 		// Invalid-UTF-8 bytes in $qtype make json_encode() of the whole record
-		// fail -- the client must reject before any write, never emit a broken
-		// request or crash.
+		// fail -- even an unusable lock path must not be reached before that
+		// rejection, and no broken request may be emitted.
+		mkdir($this->lockPath());
 		$result = pfb_dnsbl_query('encode-fail-case.example', "\xB1\x31");
 		$this->assertNull($result);
 		$this->assertFileDoesNotExist($this->channel());
