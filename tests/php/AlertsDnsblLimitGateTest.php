@@ -101,8 +101,9 @@ final class AlertsDnsblLimitGateTest extends TestCase
     }
 
     /**
-     * Build a python-mode dnsbl.log $fields row (skips pfb_dnsbl_parse()'s DB
-     * dependency, mirroring AlertsRowOutputEncodingTest::dnsblFields()) blocked
+     * Build a python-mode dnsbl.log $fields row (avoids the DB dependency the
+     * now-removed pfb_dnsbl_parse() carried, mirroring
+     * AlertsRowOutputEncodingTest::dnsblFields()) blocked
      * by group $group, so the Group filter field (index 13 in the filter's
      * $pfbalertdnsbl view) can be steered to match or not match.
      */

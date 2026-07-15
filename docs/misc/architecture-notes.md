@@ -118,12 +118,8 @@ that consume them, are **unaffected** — they stay the old bare-domain/verbatim
 **Emit/parse primitives** (`pfblockerng.inc`): `pfb_dnsbl_ndjson_emit_domain_row()` /
 `pfb_dnsbl_ndjson_emit_abp_row()` are the only writers — `json_encode()` with a **fixed key
 order** (`kind` first), `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`, no pretty-printing,
-exactly one trailing `"\n"`. This makes an emitted line **grep-stable**:
-`pfb_dnsbl_ndjson_domain_needle()` builds `"domain":<json-encoded-value>`, and a hit is trusted
-only once `pfb_dnsbl_ndjson_domain_row_verified()` re-parses the line AND confirms the `domain`
-field matches exactly (a corrupt/foreign line could still substring-match; JSON's own quoting
-means an `abp` row's `raw` payload can never literally embed the needle).
-`pfb_dnsbl_ndjson_parse_row()` is the strict reader every PHP consumer shares.
+exactly one trailing `"\n"`. `pfb_dnsbl_ndjson_parse_row()` is the strict reader every PHP
+consumer shares — it decodes a line and rejects (returns `NULL`) any shape violation.
 
 **Staging-generation guard + lazy rebuild.** The sync loop's verbatim-reuse fork
 (`pfb_dnsbl_verbatim_reuse_active()`) additionally requires the staged `.txt` to be

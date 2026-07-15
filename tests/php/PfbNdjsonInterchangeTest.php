@@ -229,14 +229,4 @@ final class PfbNdjsonInterchangeTest extends TestCase
 		$this->assertIsArray($row, 'the emitted line must parse back as a valid schema-v1 row');
 		$this->assertSame('abp', $row['kind']);
 	}
-
-	#[DataProvider('invalidUtf8ByteProvider')]
-	public function testDomainNeedleWithInvalidUtf8DomainIsNeverDegenerate(string $badBytes): void
-	{
-		// Pre-fix: json_encode() of the raw domain returns FALSE and the needle
-		// degrades to the bare, valueless "domain": prefix -- matching every row.
-		$needle = pfb_dnsbl_ndjson_domain_needle("bad{$badBytes}domain.com");
-		$this->assertNotSame('"domain":', $needle, 'the needle must carry an actual encoded value, never degrade to the bare key');
-		$this->assertStringStartsWith('"domain":"', $needle);
-	}
 }
