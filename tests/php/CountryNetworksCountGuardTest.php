@@ -18,9 +18,9 @@ use PHPUnit\Framework\TestCase;
  * a mirror test (house precedent: tests/php/AliasCntGrepCountGuardTest.php).
  *
  * The file carries top-level execution and cannot be require()d
- * off-appliance. The $networks header block is eval-extracted verbatim
- * (PfbReflectorGuardTest.php precedent) into an oracle driven by REAL
- * pfb_count_lines() calls against real fixtures -- a directory path (exists,
+ * off-appliance. The $networks header block is eval-extracted verbatim into a
+ * callable oracle driven by REAL pfb_count_lines() calls against real fixtures
+ * -- a directory path (exists,
  * unreadable as a file -> NULL) and a real empty file (exists, 0 lines) --
  * so the same test file proves red on the pre-fix `?? 0` and green after,
  * with zero mocking of pfb_count_lines() itself. The placeholder-blank
