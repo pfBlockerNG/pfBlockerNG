@@ -9976,7 +9976,7 @@ function validate_ipv6($ipaddr) {
 // Return a BRE pattern for one complete validated IP/CIDR feed entry.
 // Invalid inputs return NULL so callers preserve no-pattern miss behaviour.
 function pfb_ip_exact_entry_pattern($entry): ?string {
-	if (!is_string($entry) || (!is_ipaddr($entry) && !is_subnet($entry))) {
+	if (!is_string($entry) || strpos($entry, "\0") !== FALSE || (!is_ipaddr($entry) && !is_subnet($entry))) {
 		return NULL;
 	}
 
