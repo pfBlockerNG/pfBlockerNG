@@ -34,7 +34,12 @@ fi
 
 CONCLUSION=""
 CHECK_SHA=""
-for sha in $(git rev-list --first-parent -n 20 HEAD); do
+if ! sha=$(git rev-parse --verify HEAD); then
+	echo "::error::Could not resolve HEAD; cannot verify CI state."
+	exit 1
+fi
+walked=0
+while [ "$walked" -lt 20 ]; do
 	if ! c=$(gh api \
 		"repos/${REPO}/commits/${sha}/check-runs?check_name=All%20tests%20passed&per_page=100" \
 		--jq '[.check_runs[] | select(.name == "All tests passed")]
@@ -46,6 +51,31 @@ for sha in $(git rev-list --first-parent -n 20 HEAD); do
 		exit 1
 	fi
 	if [ -n "$c" ]; then CONCLUSION="$c"; CHECK_SHA="$sha"; break; fi
+	if ! parent=$(git rev-parse --verify "${sha}^" 2>/dev/null); then
+		root=$(git rev-list --max-parents=0 -n 1 "$sha" 2>/dev/null)
+		if [ "$root" = "$sha" ]; then break; fi
+		echo "::error::Could not classify skipped commit ${sha}; cannot verify whether an older check-run applies."
+		exit 1
+	fi
+	git diff --quiet "$parent" "$sha" -- '.' \
+		':(top,exclude,glob)**/*.md' \
+		':(top,exclude,glob)*.md' \
+		':(top,exclude,glob)docs/**' \
+		':(top,exclude,literal).claude/skills/ponytail/LICENSE' \
+		':(top,exclude,literal).claude/skills/ponytail/UPSTREAM' \
+		':(top,exclude,literal).claude/skills/caveman/LICENSE' \
+		':(top,exclude,literal).claude/skills/caveman/UPSTREAM' 2>/dev/null
+	diff_status=$?
+	if [ "$diff_status" -eq 1 ]; then
+		echo "::error::Skipped commit ${sha} changes CI-relevant paths; cannot rely on an older check-run."
+		exit 1
+	fi
+	if [ "$diff_status" -ne 0 ]; then
+		echo "::error::Could not classify skipped commit ${sha}; cannot verify whether an older check-run applies."
+		exit 1
+	fi
+	sha="$parent"
+	walked=$((walked + 1))
 done
 if [ -z "$CONCLUSION" ]; then
 	echo "::error::No 'All tests passed' check-run found on HEAD or its recent ancestors."
