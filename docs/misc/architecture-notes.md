@@ -674,8 +674,9 @@ load time; the IP render path has no cache in front of it at all (`ipcache` is w
 the daemon's perspective). Full model, cost table, IP ordering constraints (the IP filter gate
 matches *corrected* fields and cannot be hoisted), and the day-to-day variability mechanics:
 [`alerts-reports-pipeline.md`](alerts-reports-pipeline.md). Perf work: issue #809. The
-DNSBL-side render-time-recheck helpers this model left orphaned (`pfb_dnsbl_parse()`, the
-`dnsblcache` table, the DNSBL batched-prefetch family) are tracked for removal in issue #1349.
+DNSBL-side render-time-recheck helpers this model left orphaned (`pfb_dnsbl_parse()` and the
+DNSBL batched-prefetch family) were removed in issue #1349; the `dnsblcache` table is retained
+(still populated by the Python daemon, no longer read at render time).
 
 ---
 

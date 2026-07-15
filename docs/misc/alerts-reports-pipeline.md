@@ -99,10 +99,9 @@ side at all. DNSBL rows need no cache: nothing external is read at render time.
 DNSBL rows have no render-time cost beyond parsing their own logged fields — the SQLite
 cache read/insert, the `unbound_py_data`/`unbound_py_zone` grep, the TLD-zone grep, and
 the external `drill` CNAME chase that used to run per DNSBL row are all gone (they were
-`pfb_dnsbl_parse()`/`pfb_dnsbl_parse_compute()` machinery; the functions stay defined,
-unreachable from this page — issue #1349 tracks their removal). There is likewise no
-DNSBL-side batched prefetch pass anymore: `pfb_dnsbl_prefetch()` and its helpers are
-defined but uncalled from `pfblockerng_alerts.php`.
+`pfb_dnsbl_parse()`/`pfb_dnsbl_parse_compute()` machinery, removed in issue #1349). There
+is likewise no DNSBL-side batched prefetch pass anymore: the `pfb_dnsbl_prefetch()` family
+was removed in issue #1349 too.
 
 IP row (`convert_ip_log`):
 
