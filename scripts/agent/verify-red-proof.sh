@@ -105,12 +105,12 @@ main() {
 			esac
 		fi
 	done
-	# shellcheck disable=SC2086 # srcs is a space-separated path list by construction
-	git -C "$worktree" checkout "$base_sha" -- $srcs || fail "REVERT-FAIL: could not check out $base_ref src paths"
 	# INT/TERM trapped explicitly: under dash (Linux /bin/sh) an EXIT trap does NOT run
 	# on an untrapped signal, which would strand the src paths at the base ref.
 	trap 'restore_srcs' EXIT
 	trap 'restore_srcs; trap - EXIT; exit 130' INT TERM
+	# shellcheck disable=SC2086 # srcs is a space-separated path list by construction
+	git -C "$worktree" checkout "$base_sha" -- $srcs || fail "REVERT-FAIL: could not check out $base_ref src paths"
 
 	if (cd "$worktree" && sh -c "$test_cmd" >/dev/null 2>&1); then
 		fail "RED-FAIL: test passed against $base_ref src -- it does not pin the defect"
