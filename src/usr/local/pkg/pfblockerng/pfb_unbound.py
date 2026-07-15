@@ -5281,8 +5281,8 @@ def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
 
     ``raw`` may be an absolute path or a name relative to ``base_dir`` (the directory
     holding the manifest). LF is the only record delimiter and actual CR characters
-    are removed from yielded lines. A missing/unreadable feed yields nothing (and is
-    logged by the caller) rather than aborting the whole build.
+    are removed from yielded lines. A missing/unreadable feed is logged to stderr and
+    yields nothing rather than aborting the whole build.
     """
 
     def reader(raw: str) -> Iterable[str]:
