@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/claude-bash-guard.sh\" 7a776a40f47d000f1d4db4a1ff0bdc7602c3c5944f751307066f46ac103667c8 && exec sh \"$root/scripts/claude-bash-guard.sh\"",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/claude-bash-guard.sh\" 5d764049dd28e5964de46167b313faa28681e6052ef0f8986288da6b88d7b7e3 && exec sh \"$root/scripts/claude-bash-guard.sh\"",
             "timeout": 10,
             "statusMessage": "Checking repository Git policy"
           },

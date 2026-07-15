@@ -66,8 +66,8 @@
 #      "--no-verify" (`git commit -m 'handle the --no-verify flag'`) also
 #      denies, because the guard cannot distinguish "the flag" from "prose
 #      about the flag" without a real parse.
-#   2. Normalization (below) strips quotes/backslashes and collapses
-#      whitespace BEFORE splitting into segments, specifically so
+#   2. Normalization (below) strips single/double quotes and backslashes,
+#      then collapses whitespace BEFORE splitting into segments, specifically so
 #      whitespace/quoting variance in the invoking command can't evade a
 #      rule -- but matching still runs over a segment's full text, so the
 #      same phrase-anywhere-in-segment caveat holds after normalization too.
@@ -108,8 +108,8 @@
 #
 # NORMALIZATION (issue #923 review F1): rather than matching rules against
 # the raw payload, everything matches against $norm, built by:
-#   1. Deleting every `"` and `\` character -- collapses JSON-escaped quotes
-#      and a quoted subcommand token alike (`git \"commit\"` -> `git commit`).
+#   1. Deleting every `'`, `"`, and `\` character -- collapses JSON-escaped quotes
+#      and a quoted subcommand token alike (`git 'commit'` -> `git commit`).
 #   2. Collapsing every run of whitespace (space/tab/newline) to one space --
 #      defeats `git  commit` (double space) or a literal tab between tokens.
 # Fail-open holds through normalization: empty/garbled input still normalizes
@@ -133,9 +133,9 @@ set -u
 payload="$(cat)"
 
 # norm -- the single normalized view every rule matches against (see
-# NORMALIZATION above): strip " and \, then collapse whitespace runs to one
+# NORMALIZATION above): strip ', ", and \, then collapse whitespace runs to one
 # space.
-norm="$(printf '%s' "$payload" | tr -d '\\"' | tr -s '[:space:]' ' ')"
+norm="$(printf '%s' "$payload" | tr -d "\\\\\"'" | tr -s '[:space:]' ' ')"
 
 # segs -- $norm split into newline-separated SEGMENTS on shell
 # command-separator metacharacters (`; & | ( )`). Each rule below matches
@@ -148,8 +148,9 @@ norm="$(printf '%s' "$payload" | tr -d '\\"' | tr -s '[:space:]' ' ')"
 # delimiter here is unambiguous.
 segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
 
-# norm_bg -- the view Rule D matches on: $norm (quotes/backslashes stripped, whitespace
-# collapsed) with the two `&` LOOKALIKES neutralized -- a redirection (`2>&1`, `>&2`,
+# norm_bg -- the view Rule D matches on: $norm (single/double quotes and
+# backslashes stripped, whitespace collapsed) with the two `&` LOOKALIKES
+# neutralized -- a redirection (`2>&1`, `>&2`,
 # `&>`) and the `&&` list operator -- so a surviving `&` is unambiguously a background.
 # Never $segs: `&` is one of the characters $segs splits on, so backgrounding is
 # invisible per-segment.
