@@ -6,8 +6,9 @@ does a pure-Python build (parse -> normalise -> classify data/zone -> build
 within an init-time / peak-memory budget on a large (>=1M-entry) UN-PRUNED feed?
 
 Why un-pruned: ADR-06 drops the build-time optimisations (dedup, subdomain
-collapse, user/TOP1M whitelist removal), so Python loads MORE entries than today's
-pruned ``pfb_py_data``/``pfb_py_zone``. The realistic init cost is on the raw,
+collapse, user/TOP1M whitelist removal), so Python loads MORE entries than the
+then-current pruned ``pfb_py_data``/``pfb_py_zone``. The realistic init cost was
+measured on the raw,
 un-pruned text -- which is what this spike feeds in (`_corpus_raw.py`).
 
 Scope (matches the Phase-1 prompt):
@@ -60,15 +61,15 @@ except ImportError:  # pragma: no cover - dev tool only
 # --------------------------------------------------------------------------- #
 # Kill-threshold (proposed in Phase 1; tune with the maintainer in the handoff).
 # --------------------------------------------------------------------------- #
-# The budget is "added reload time <= a few seconds" and "peak RAM not materially
-# worse than today" -- NOT an absolute wall-clock cap on the build in isolation.
-# The fair comparison is NET: the work today's shell/PHP already spends per build
-# that ADR-06 DELETES. Measured on this box, an equivalent 1M-line master raw:
+# The historical budget was "added reload time <= a few seconds" and "peak RAM
+# not materially worse than the old path" -- not an absolute build-time cap.
+# The historical comparison was NET: the work the shell/PHP path spent per build
+# before ADR-06 deleted it. Measured on this box, an equivalent 1M-line master raw:
 #   * sort -u (dedup)            ~2.1s   (domaintldpy runs it 2-3x)
 #   * awk cross-list dedup       ~2.7s   (dnsbl_scrub :379)
 #   * ggrep -vF whitelist/TOP1M  seconds more (grows with pattern-file size)
-# i.e. today already costs ~5s+ of out-of-process passes that the move REMOVES.
-# So the threshold is read as: build <= ~8s absolute (a few seconds ADDED over the
+# i.e. the retired path cost ~5s+ of out-of-process passes that the move removed.
+# The threshold therefore reads: build <= ~8s absolute (a few seconds added over the
 # shell time it replaces) AND retained footprint not materially worse than the
 # ADR-05 §3a 274 B/entry baseline (<= ~410 B/entry, ~1.5x headroom for the
 # un-pruned build's extra entries). Tune both with the maintainer.
@@ -95,9 +96,9 @@ _REGISTRABLE_LABELS = 2
 def parse_line(line: str) -> str | None:
     """Parse one raw feed line to a bare host, or None if it carries no domain.
 
-    Subsumes the basic-ABP token strip and the hosts/plain handling the PHP loop
-    does today (`pfblockerng.inc:7665-7960`). Returns None for blank/comment/IP
-    lines -- the IP case is the firewall path (PHP), which the Python build skips.
+    Models the basic-ABP token strip and hosts/plain handling from the retired PHP
+    loop. Returns None for blank/comment/IP lines; the IP case is the firewall
+    path, which this Python build spike skips.
     """
     line = line.strip()
     if not line or line[0] in "#!/":
@@ -323,7 +324,7 @@ def run(n_domain_lines: int, n_runs: int) -> bool:
     mem_ok = (retained is None) or (bpe <= THRESH_BYTES_PER_ENTRY)
     net_added = t_med - SHELL_PASSES_REMOVED_SECONDS
     print(
-        "net vs today: build {:.1f}s replaces ~{:.1f}s of removed shell passes "
+        "net vs retired path: build {:.1f}s replaces ~{:.1f}s of shell passes "
         "(sort -u + awk dedup; ggrep extra) -> net added ~{:+.1f}s".format(
             t_med, SHELL_PASSES_REMOVED_SECONDS, net_added
         )
