@@ -5173,7 +5173,7 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
  * @param string[] $existing_deny $pfb['existing']['deny'] -- '<header>_v4'/'<header>_v6' names.
  * @param bool     $ccwhite_match TRUE iff $pfb['ccwhite'] == 'match' (the exempt file's only writer).
  * @param string   $matchgendir   Absolute matchgendir path (no trailing slash).
- * @return string[] Basenames (no '.txt') actually reaped this pass.
+ * @return string[] Basenames actually reaped; staging artifacts retain their '.txt.new' suffix.
  */
 function pfb_matchgen_reap(array $existing_deny, bool $ccwhite_match, string $matchgendir): array {
 	// pfB_Match_ET_v4/_v6 are always kept: the reaper runs before processet() in
@@ -5199,6 +5199,13 @@ function pfb_matchgen_reap(array $existing_deny, bool $ccwhite_match, string $ma
 		if (!empty(pfb_filter($pfb_orphan, PFB_FILTER_WORD, 'Remove un-associated matchgen artifact'))) {
 			unlink_if_exists("{$matchgendir}/{$pfb_orphan}.txt");
 			$reaped[] = $pfb_orphan;
+		}
+	}
+	foreach (glob("{$matchgendir}/*.txt.new") ?: [] as $pfb_file) {
+		$pfb_orphan = basename($pfb_file, '.txt.new');
+		if (!empty(pfb_filter($pfb_orphan, PFB_FILTER_WORD, 'Remove stale matchgen staging artifact'))) {
+			unlink_if_exists($pfb_file);
+			$reaped[] = "{$pfb_orphan}.txt.new";
 		}
 	}
 	return $reaped;

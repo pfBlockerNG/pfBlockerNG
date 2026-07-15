@@ -111,6 +111,37 @@ EOF
 	chmod +x "$1"
 }
 
+make_window_awk_fail_stub() {
+	realawk="$(command -v awk)"
+	mkdir -p "$1"
+	cat > "$1/awk" <<EOF
+#!/bin/sh
+window=0
+for arg do
+	case "\${arg}" in
+		*'pfB_Match_Rep_'*'.txt.new'*) window=1 ;;
+	esac
+done
+"${realawk}" "\$@"
+rc=\$?
+if [ "\${window}" -eq 1 ]; then
+	: > "$1/window-hit"
+	[ "\${rc}" -eq 0 ] && exit 74
+fi
+exit "\${rc}"
+EOF
+	chmod +x "$1/awk"
+}
+
+recompute_with_window_awk_failure() {
+	(
+		PATH="$1:${PATH}"
+		export PATH
+		shift
+		pfb_recompute "$@"
+	)
+}
+
 Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
@@ -533,6 +564,24 @@ Describe 'pfb_recompute() dMax match-mode + GeoIP-unavailable bail + pMax'
 	BeforeAll 'pfb_source'
 	Before 'setup'
 	After 'cleanup'
+
+	It 'cleans per-alias reputation staging when the window awk fails after writing it'
+		make_geoip_stub "$pathgeoip" 'Could not find an entry for this IP address'
+		printf '192.0.2.20\n192.0.2.21\n' > "${snap}/ONE_v4.orig"
+		printf '%s\n' "${snap}/ONE_v4.orig" > "$memberlist"
+		printf '198.51.100.1\n' > "${pfbdeny}ONE_v4.txt"
+		printf '198.51.100.0/24\n!198.51.100.1\n' > "${pfbmatchgen}pfB_Match_Rep_ONE_v4.txt"
+		awkshim="${work}/awkshim"
+		make_window_awk_fail_stub "$awkshim"
+
+		When call silently recompute_with_window_awk_failure "$awkshim" recompute v4 "$memberlist" "$countsfile" on dmax 1 US off match
+		The status should be failure
+		The path "${awkshim}/window-hit" should be exist
+		The contents of file "$errorlog" should include 'reputation-apply pass failed'
+		The path "${pfbmatchgen}pfB_Match_Rep_ONE_v4.txt.new" should not be exist
+		The contents of file "${pfbdeny}ONE_v4.txt" should equal '198.51.100.1'
+		The contents of file "${pfbmatchgen}pfB_Match_Rep_ONE_v4.txt" should equal "$(printf '198.51.100.0/24\n!198.51.100.1')"
+	End
 
 	It 'ccblack=match: leaves the stream untouched and writes pfB_Match_Rep_<alias>.txt (cidr + negated members)'
 		make_geoip_stub "$pathgeoip" 'Could not find an entry for this IP address'
