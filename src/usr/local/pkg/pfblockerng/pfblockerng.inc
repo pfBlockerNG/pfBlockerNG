@@ -2097,27 +2097,6 @@ function pfb_dnsbl_ndjson_parse_row(string $line): ?array {
 	return $row;
 }
 
-// #1083: grep needle for a schema v1 domain row's "domain" field. json_encode's escaping
-// (incl. JSON_INVALID_UTF8_SUBSTITUTE, matching the emit helpers -- else an invalid-UTF-8
-// domain would degrade this to the bare, valueless '"domain":' prefix) keeps the needle
-// byte-identical to what pfb_dnsbl_ndjson_emit_domain_row() wrote, so a domain carrying a
-// JSON-special character still finds (only) its own row.
-function pfb_dnsbl_ndjson_domain_needle(string $domain): string {
-	return '"domain":' . json_encode($domain, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
-}
-
-// #1083: a grep hit is trustworthy only once parsed AND its domain field matches exactly --
-// an 'abp' row's raw payload cannot literally embed the needle (JSON quoting escapes it),
-// but a corrupt/foreign line could still substring-match; refuse anything that doesn't
-// decode to the SAME domain-kind row.
-function pfb_dnsbl_ndjson_domain_row_verified(string $line, string $domain): ?array {
-	$row = pfb_dnsbl_ndjson_parse_row($line);
-	if ($row !== NULL && $row['kind'] === 'domain' && $row['domain'] === $domain) {
-		return $row;
-	}
-	return NULL;
-}
-
 // DNSBLIP's "download" is a local-file copy of a just-rebuilt source, not a network
 // fetch -- the reuse-skip optimization (meant for real feeds) must never apply to it,
 // or a same-pass rebuild is silently stranded until the next .ip source change. (#1002)

@@ -53,8 +53,8 @@ final class AlertsRowOutputEncodingTest extends TestCase
     protected function setUp(): void
     {
         // Seed every global the DNSBL builder + its helpers read. The values are
-        // chosen so the python-mode path is taken: that skips pfb_dnsbl_parse()
-        // (a DB call) and, with an empty $dnsbl_int, skips ip_in_subnet(); an
+        // chosen so the python-mode path is taken: that avoided the DB call the
+        // now-removed pfb_dnsbl_parse() made and, with an empty $dnsbl_int, skips ip_in_subnet(); an
         // empty whitelist customlist skips array_get_path(). What remains is the
         // pure field-folding + print path we are pinning.
         foreach ([

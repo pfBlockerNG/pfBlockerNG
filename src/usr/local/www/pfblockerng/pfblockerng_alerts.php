@@ -2067,9 +2067,9 @@ function pfb_match_filter_field($flent, $fields) {
    DNSBL rows therefore render their logged fields directly — no render-time lookup (the
    per-row re-check / dnsblcache read / drill machinery was removed in issue #1349). Only
    the IP converter still re-checks the logged attribution against the CURRENT feed state
-   (drift strikethrough + icon decisions): per-row shell pipelines + SQLite cycles that
-   dominate page load time, with no render-time cache in front of them. See the doc before
-   changing lookup ordering or caching here. */
+   (drift strikethrough + icon decisions): the issue #809 batched pfb_ip_prefetch() pass seeds
+   in-process memos to cut per-row execs, but has no PERSISTENT cache (ipcache is daemon-write-
+   only, never read here). See the doc before changing lookup ordering or caching here. */
 
 // Function to collect DNSBL Log event details based on Blocking mode field
 function dnsbl_log_details($fields) {

@@ -464,9 +464,9 @@ final class LogTimestampBaselineTest extends TestCase
 	 * Seeds a minimal-but-real $pfb sandbox for pfb_log_event(): a temp dnsbl.log
 	 * plus two temp SQLite3 DB files for its 'dnsbl' (table 1) and 'lastevent'
 	 * (table 2) opens, with the SAME lastevent row pre-seeded so pfb_log_event()
-	 * takes its "duplicate entry" branch -- skipping pfb_dnsbl_parse() (a real-DNS
-	 * lookup + on-disk grep dependency unrelated to this phase's timestamp-only
-	 * change) entirely, without stubbing or touching pfb_log_event() itself.
+	 * takes its "duplicate entry" branch -- avoiding the now-removed pfb_dnsbl_parse()
+	 * (a real-DNS lookup + on-disk grep dependency unrelated to this phase's
+	 * timestamp-only change) entirely, without stubbing or touching pfb_log_event() itself.
 	 *
 	 * @return array{0:string,1:string} [$dnslog path, $lastevent groupname/details string]
 	 */

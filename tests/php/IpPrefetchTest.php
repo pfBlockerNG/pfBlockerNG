@@ -775,6 +775,21 @@ final class IpPrefetchTest extends TestCase
 		return $decoded;
 	}
 
+	/** issue #1349: migrated pin for the shared write-outcome predicate after DnsblPrefetchTest retired. */
+	public function test_write_complete_helper_flags_a_short_write_as_incomplete(): void
+	{
+		$data = "line-one\nline-two\n";
+
+		$short = pfb_prefetch_pattern_file_write_ok(strlen($data) - 3, $data);
+		$this->assertFalse($short, 'expected a short byte count to be flagged as an incomplete write');
+
+		$failed = pfb_prefetch_pattern_file_write_ok(FALSE, $data);
+		$this->assertFalse($failed, 'expected FALSE to be flagged as an incomplete write');
+
+		$complete = pfb_prefetch_pattern_file_write_ok(strlen($data), $data);
+		$this->assertTrue($complete, 'expected an exact full-length write to be flagged as complete');
+	}
+
 	public function test_grep_lines_returns_null_when_the_pattern_file_cannot_be_created(): void
 	{
 		$body = '$lines = pfb_ip_prefetch_grep_lines(\'/bin/echo\', \'\', [\'^192\\\\.0\\\\.2\\\\.10\']);'
