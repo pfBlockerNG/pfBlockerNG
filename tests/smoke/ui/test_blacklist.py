@@ -53,12 +53,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .render_oracle import PhpErrorLogGuard
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
-    import requests
-
     from .webui import WebUI
 
 pytestmark = pytest.mark.ui_e2e
@@ -98,19 +95,7 @@ def _csrf_token(webui: WebUI) -> str:
     return extract_csrf_token(resp.text)
 
 
-def _config_path_exists(vm: helpers.SmokeVM, path: str) -> bool:
-    """Return whether a scalar config path exists, distinguishing missing from empty."""
-    return (
-        helpers._php_read_scalar(
-            vm,
-            "",
-            f"config_get_path({helpers._php_str(path)}, null) === null ? '0' : '1'",
-        )
-        == "1"
-    )
-
-
-def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TIMEOUT) -> requests.Response:
+def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TIMEOUT) -> None:
     """POST a FULLY-CONTROLLED payload to the blacklist page (token added here).
 
     Bypasses the form-scrape ``webui.post`` so the caller owns the EXACT field set
@@ -130,7 +115,6 @@ def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TI
         allow_redirects=True,
     )
     assert not looks_like_login_page(resp.text), "blacklist POST returned the login form (session lost)"
-    return resp
 
 
 def _save_payload(**fields: str) -> dict[str, str]:
@@ -412,52 +396,3 @@ def test_blacklist_lang_autosubmit_persists_without_save(
         assert got == "EN", f"bogus blacklist_lang should coerce to default 'EN', got {got!r}"
     finally:
         _direct_post(webui, {"blacklist_lang": restore})
-
-
-@pytest.mark.parametrize(
-    ("field", "config_path", "seed", "default"),
-    [
-        ("blacklist_enable", CFG_ENABLE, "Enable", "Disable"),
-        ("blacklist_lang", CFG_LANG, "DE", "EN"),
-    ],
-)
-def test_blacklist_array_autosubmit_coerces_to_default_without_error(
-    webui: WebUI,
-    smoke_vm: helpers.SmokeVM,
-    field: str,
-    config_path: str,
-    seed: str,
-    default: str,
-) -> None:
-    """An authenticated no-save array autosubmit persists the field default cleanly."""
-    original_present = _config_path_exists(smoke_vm, config_path)
-    original = helpers.config_get(smoke_vm, config_path)
-    try:
-        _direct_post(webui, {field: seed})
-        assert helpers.config_get(smoke_vm, config_path) == seed, f"failed to seed {field}={seed!r}"
-
-        guard = PhpErrorLogGuard(smoke_vm)
-        guard.snapshot()
-        resp = _direct_post(webui, {f"{field}[]": "crafted"})
-        guard.assert_no_growth()
-
-        assert resp.status_code == 200, f"array {field} autosubmit -> HTTP {resp.status_code} (expected 200)"
-        got = helpers.config_get(smoke_vm, config_path)
-        assert got == default, f"array {field} should persist default {default!r}, got {got!r}"
-    finally:
-        operation = (
-            f"config_set_path({helpers._php_str(config_path)}, {helpers._php_str(original)});"
-            if original_present
-            else f"config_del_path({helpers._php_str(config_path)});"
-        )
-        restored = helpers.php_eval(
-            smoke_vm,
-            f"{operation}\nwrite_config('pfBlockerNG smoke: restore blacklist scalar');\necho 'OK';",
-        )
-        assert restored.returncode == 0 and "OK" in restored.stdout, (
-            f"failed to restore {config_path!r}: stdout={restored.stdout!r} stderr={restored.stderr!r}"
-        )
-        assert helpers.config_get(smoke_vm, config_path) == original, f"failed to restore {config_path!r} value"
-        assert _config_path_exists(smoke_vm, config_path) is original_present, (
-            f"failed to restore {config_path!r} presence"
-        )

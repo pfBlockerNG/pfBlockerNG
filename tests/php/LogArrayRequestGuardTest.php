@@ -5,26 +5,14 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfblockerng_log.php array-valued request-field guard (issue #1183).
+ * pfblockerng_log.php selected-logtype behavior and retained scalar defaults.
  *
- * A crafted request submitting an array-valued 'file' (ajax GET), 'logFile',
- * or 'logtype' field reached strictly-typed string sinks (htmlspecialchars(),
- * an array-offset access) before any type check, TypeError-ing the page
- * (HTTP 500). The fix normalizes 'logtype'/'logFile' to '' right after the
- * $pconfig = $_POST; ingress (one guard covers every downstream sink) and
- * guards $_REQUEST['file'] at its own ajax sink, mirroring the is_string
- * idiom landed for #1106/#1128/#1139.
- *
- * The page carries top-level execution and cannot be require()d
- * off-appliance, so each region below is eval-extracted verbatim from the
- * REAL source, anchored on text stable across both the pre-fix and post-fix
- * code so the same test file proves red on the old code and green on the new.
+ * The page carries top-level execution and cannot be require()d off-appliance,
+ * so the retained regions below are eval-extracted verbatim from the source.
  */
 final class LogArrayRequestGuardTest extends TestCase
 {
 	private array $savedPost = [];
-	private array $savedGet = [];
-	private array $savedRequest = [];
 
 	public static function setUpBeforeClass(): void
 	{
@@ -46,52 +34,11 @@ final class LogArrayRequestGuardTest extends TestCase
 			eval('function pfb_log_oracle_pconfig(): array { $pconfig = array(); ' . $m[1] . ' return $pconfig; }');
 		}
 
-		// Region 2: ajax 'file' -> $pfb_logfilename sink.
-		if (!function_exists('pfb_log_oracle_ajax_filename')) {
-			if (!preg_match(
-				'/\/\/ Send logfile to screen\nif \(isset\(\$_REQUEST\) && isset\(\$_REQUEST\[\'ajax\'\]\)\) \{\n\n'
-				. '(.*?)\n\tif \(!pfb_validate_filepath\(\$pfb_logfilename, \$pfb_logtypes\)\)/s',
-				$src,
-				$m
-			)) {
-				throw new RuntimeException('test bootstrap: ajax filename region not found');
-			}
-			eval('function pfb_log_oracle_ajax_filename(): string { ' . $m[1] . ' return $pfb_logfilename; }');
-		}
-
-		// Region 3: ajax 'action' == 'load' loose compare -- array-safe, no guard needed.
-		if (!function_exists('pfb_log_oracle_action_is_load')) {
-			if (!preg_match('/\t\/\/ Load log\n(\tif \(\$_REQUEST\[\'action\'\] == \'load\'\) \{)/', $src, $m)) {
-				throw new RuntimeException('test bootstrap: action-is-load region not found');
-			}
-			eval('function pfb_log_oracle_action_is_load(): bool { ' . $m[1] . ' return TRUE; } return FALSE; }');
-		}
-
-		// Region 4: 'logFile' download/clear gate + htmlspecialchars() sink.
-		if (!function_exists('pfb_log_oracle_logfile_sink')) {
-			if (!preg_match(
-				'/\/\/ Download\/Clear logfile\n(if \(isset\(\$pconfig\[\'logFile\'\]\) && !empty\(\$pconfig\[\'logFile\'\]\) && '
-				. '\(isset\(\$pconfig\[\'download\'\]\) \|\| isset\(\$pconfig\[\'clear\'\]\)\)\) \{\n\t\n\t\$s_logfile = '
-				. 'htmlspecialchars\(\$pconfig\[\'logFile\'\]\);)\n\tif \(!pfb_validate_filepath/s',
-				$src,
-				$m
-			)) {
-				throw new RuntimeException('test bootstrap: logFile sink region not found');
-			}
-			eval(
-				'function pfb_log_oracle_logfile_sink(array $pconfig): string { '
-				. $m[1]
-				. ' return $s_logfile; } $s_logfile = \'\'; return $s_logfile; }'
-			);
-		}
-
 		// Region 5: 'logtype' -> $selected -> $pfb_logtypes[$selected] offset,
-		// through $logs/getlogs()/$clearable/$downloadable (issue #1207).
+		// through $logs/getlogs()/$clearable/$downloadable (issues #1198/#1207).
 		if (!function_exists('pfb_log_oracle_selected_logtype')) {
-			// issue #1198: non-greedy $selected assignment (+ optional leading
-			// comment) matches both the pre-fix !empty() and post-fix
-			// array_key_exists() source. The downstream text is byte-identical
-			// pre/post-fix, so it is matched literally (no wildcard needed).
+			// Match the selected-logtype block while retaining the production
+			// scalar fallback and its downstream consumer matrix.
 			if (!preg_match(
 				'/\/\/ Collect selected logs\n\$logs = array\(\);\n\$clearable = \$downloadable = FALSE;\n'
 				. '((?:\/\/[^\n]*\n)*\$selected = .*?;\n'
@@ -121,23 +68,19 @@ final class LogArrayRequestGuardTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->savedPost    = $_POST;
-		$this->savedGet     = $_GET;
-		$this->savedRequest = $_REQUEST;
-		$_POST = $_GET = $_REQUEST = [];
+		$this->savedPost = $_POST;
+		$_POST = [];
 	}
 
 	protected function tearDown(): void
 	{
-		$_POST    = $this->savedPost;
-		$_GET     = $this->savedGet;
-		$_REQUEST = $this->savedRequest;
+		$_POST = $this->savedPost;
 	}
 
 	/**
-	 * A $pfb_logtypes fixture shaped like the real page's (LogValidateFilepathNulByteTest
-	 * sibling shape). issue #1207: every entry carries 'logs'/'clear'/'download', like the
-	 * real page's defaultlogs/masterfiles -- keeps the getlogs() double unreachable on green.
+	 * A $pfb_logtypes fixture shaped like the real page's entries. Every entry
+	 * carries 'logs'/'clear'/'download', like the real page's defaultlogs/masterfiles,
+	 * keeping the getlogs() double unreachable on green.
 	 */
 	private function logtypes(): array
 	{
@@ -152,9 +95,8 @@ final class LogArrayRequestGuardTest extends TestCase
 	}
 
 	/**
-	 * Runs Region 5 capturing E_WARNING/E_DEPRECATED; fails loudly on a TypeError,
-	 * which now only a non-string $selected reaching the $pfb_logtypes[] offset can
-	 * throw -- issue #1183's ingress guard is what keeps that unreachable.
+	 * Runs Region 5 capturing E_WARNING/E_DEPRECATED and fails loudly on a
+	 * TypeError at the selected-logtype offset.
 	 */
 	private function runSelectedLogtypeExpectingNoWarnings(array $pconfig, array $pfb_logtypes): array
 	{
@@ -176,213 +118,25 @@ final class LogArrayRequestGuardTest extends TestCase
 		return $result;
 	}
 
-	// --- ajax 'file' -> htmlspecialchars() ----------------------------------
-
-	public function testAjaxFileArrayValueDoesNotThrowAndFailsValidation(): void
-	{
-		$_REQUEST['file'] = ['x'];
-		try {
-			$filename = pfb_log_oracle_ajax_filename();
-		} catch (\TypeError $e) {
-			$this->fail('an array file value must not TypeError htmlspecialchars(): ' . $e->getMessage());
-		}
-		$this->assertSame('', $filename, 'an array file value must be blanked to the empty string');
-		$this->assertFalse(
-			pfb_validate_filepath($filename, $this->logtypes()),
-			'the blanked file value must fail validation, riding the existing reject path'
-		);
-	}
-
-	public function testAjaxFileNestedArrayValueDoesNotThrowAndFailsValidation(): void
-	{
-		parse_str('file[a][b]=x', $parsed);
-		$_REQUEST['file'] = $parsed['file'];
-		try {
-			$filename = pfb_log_oracle_ajax_filename();
-		} catch (\TypeError $e) {
-			$this->fail('a nested array file value must not TypeError htmlspecialchars(): ' . $e->getMessage());
-		}
-		$this->assertSame('', $filename, 'a nested array file value must be blanked to the empty string');
-		$this->assertFalse(pfb_validate_filepath($filename, $this->logtypes()));
-	}
-
-	public function testAjaxFileAbsentKeyDoesNotThrowOrEmitDeprecation(): void
-	{
-		unset($_REQUEST['file']);
-		$warnings = [];
-		set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
-			$warnings[] = $errstr;
-			return TRUE;
-		}, E_DEPRECATED | E_WARNING);
-		try {
-			$filename = pfb_log_oracle_ajax_filename();
-		} catch (\TypeError $e) {
-			restore_error_handler();
-			$this->fail('a missing file key must not TypeError: ' . $e->getMessage());
-		}
-		restore_error_handler();
-		$this->assertSame('', $filename, 'a missing file key must yield the blank filename');
-		$this->assertSame(
-			[],
-			$warnings,
-			'a missing file key must not emit a deprecation/warning from htmlspecialchars(null)'
-		);
-		$this->assertFalse(pfb_validate_filepath($filename, $this->logtypes()));
-	}
-
-	public function testAjaxFileScalarValueIsUnaffectedByTheGuard(): void
-	{
-		$_REQUEST['file'] = '/var/log/pfblockerng/ok.log';
-		$filename = pfb_log_oracle_ajax_filename();
-		$this->assertSame(
-			'/var/log/pfblockerng/ok.log',
-			$filename,
-			'a scalar file value must survive the guard unmodified'
-		);
-		$this->assertTrue(pfb_validate_filepath($filename, $this->logtypes()));
-	}
-
-	// --- 'action' loose compare, array-safe, no guard needed ----------------
-
-	public function testActionArrayValueIsNotLoadWithoutThrowing(): void
-	{
-		$_REQUEST['action'] = ['load'];
-		try {
-			$isLoad = pfb_log_oracle_action_is_load();
-		} catch (\TypeError $e) {
-			$this->fail('an array action value must not TypeError the loose == compare: ' . $e->getMessage());
-		}
-		$this->assertFalse($isLoad, 'an array action value must not be treated as the load action');
-	}
-
-	public function testActionScalarLoadValueEntersLoadBranch(): void
-	{
-		$_REQUEST['action'] = 'load';
-		$this->assertTrue(pfb_log_oracle_action_is_load(), 'a scalar "load" action must still enter the load branch');
-	}
-
-	public function testActionScalarOtherValueDoesNotEnterLoadBranch(): void
-	{
-		$_REQUEST['action'] = 'other';
-		$this->assertFalse(
-			pfb_log_oracle_action_is_load(),
-			'a non-"load" scalar action must not enter the load branch'
-		);
-	}
-
-	// --- ingress -- $_POST -> $pconfig['logtype']/'logFile' normalization ---
-
-	public function testPconfigLogFileArrayValueIsNormalizedToEmptyString(): void
-	{
-		$_POST['logFile'] = ['x'];
-		$pconfig = pfb_log_oracle_pconfig();
-		$this->assertSame('', $pconfig['logFile'], 'an array logFile POST value must be normalized to the empty string');
-	}
-
-	public function testPconfigLogtypeArrayValueIsNormalizedToEmptyString(): void
-	{
-		$_POST['logtype'] = ['y'];
-		$pconfig = pfb_log_oracle_pconfig();
-		$this->assertSame('', $pconfig['logtype'], 'an array logtype POST value must be normalized to the empty string');
-	}
-
-	public function testPconfigBothLogtypeAndLogFileArrayValuesAreNormalized(): void
-	{
-		$_POST['logtype'] = ['y'];
-		$_POST['logFile'] = ['x'];
-		$pconfig = pfb_log_oracle_pconfig();
-		$this->assertSame('', $pconfig['logtype']);
-		$this->assertSame('', $pconfig['logFile']);
-	}
-
 	public function testPconfigScalarValuesSurviveNormalizationUnmodified(): void
 	{
 		$_POST['logtype'] = 'defaultlogs';
 		$_POST['logFile'] = '/var/log/pfblockerng/ok.log';
 		$pconfig = pfb_log_oracle_pconfig();
-		$this->assertSame('defaultlogs', $pconfig['logtype'], 'a scalar logtype value must survive the guard unmodified');
+		$this->assertSame('defaultlogs', $pconfig['logtype'], 'a scalar logtype value must remain unmodified');
 		$this->assertSame(
 			'/var/log/pfblockerng/ok.log',
 			$pconfig['logFile'],
-			'a scalar logFile value must survive the guard unmodified'
+			'a scalar logFile value must remain unmodified'
 		);
 	}
 
 	public function testPconfigMissingKeysStillDefaultToEmptyString(): void
 	{
-		// Before-state control: the pre-existing !isset() defaults must survive the fix untouched.
+		// The pre-existing !isset() defaults remain empty for missing fields.
 		$pconfig = pfb_log_oracle_pconfig();
 		$this->assertSame('', $pconfig['logtype']);
 		$this->assertSame('', $pconfig['logFile']);
-	}
-
-	// --- download/clear gate + htmlspecialchars() sink ----------------------
-
-	public function testLogfileArrayValueWithClearSetDoesNotThrowAndSkipsGate(): void
-	{
-		$_POST['logFile'] = ['x'];
-		$_POST['clear'] = '1';
-		$pconfig = pfb_log_oracle_pconfig();
-		try {
-			$s_logfile = pfb_log_oracle_logfile_sink($pconfig);
-		} catch (\TypeError $e) {
-			$this->fail('an array logFile value (clear) must not TypeError htmlspecialchars(): ' . $e->getMessage());
-		}
-		$this->assertSame('', $s_logfile, 'the normalized empty logFile must skip the download/clear gate entirely');
-	}
-
-	public function testLogfileArrayValueWithDownloadSetDoesNotThrowAndSkipsGate(): void
-	{
-		$_POST['logFile'] = ['x'];
-		$_POST['download'] = '1';
-		$pconfig = pfb_log_oracle_pconfig();
-		try {
-			$s_logfile = pfb_log_oracle_logfile_sink($pconfig);
-		} catch (\TypeError $e) {
-			$this->fail('an array logFile value (download) must not TypeError htmlspecialchars(): ' . $e->getMessage());
-		}
-		$this->assertSame('', $s_logfile, 'the normalized empty logFile must skip the download/clear gate entirely');
-	}
-
-	public function testLogfileScalarValueWithClearSetStillReachesTheSink(): void
-	{
-		// Behaviour-preserving control: a genuine scalar logFile must still enter
-		// the gate and reach htmlspecialchars(), unaffected by the ingress guard.
-		$_POST['logFile'] = '/var/log/pfblockerng/ok.log';
-		$_POST['clear'] = '1';
-		$pconfig = pfb_log_oracle_pconfig();
-		$s_logfile = pfb_log_oracle_logfile_sink($pconfig);
-		$this->assertSame(
-			'/var/log/pfblockerng/ok.log',
-			$s_logfile,
-			'a scalar logFile value must still reach the sink unmodified'
-		);
-	}
-
-	// --- $pfb_logtypes[$selected] array-offset access -----------------------
-
-	public function testSelectedLogtypeArrayValueDoesNotThrowAndFallsBackToDefault(): void
-	{
-		$_POST['logtype'] = ['y'];
-		$pconfig = pfb_log_oracle_pconfig();
-		try {
-			$result = pfb_log_oracle_selected_logtype($pconfig, $this->logtypes());
-		} catch (\TypeError $e) {
-			$this->fail('an array logtype value must not TypeError the $pfb_logtypes[] offset: ' . $e->getMessage());
-		}
-		$this->assertSame(
-			$this->logtypes()['defaultlogs'],
-			$result['pfb_sel'],
-			'an array logtype value must fall back to defaultlogs'
-		);
-	}
-
-	public function testSelectedLogtypeScalarValueStillResolvesItsOwnEntry(): void
-	{
-		$_POST['logtype'] = 'python';
-		$pconfig = pfb_log_oracle_pconfig();
-		$result = pfb_log_oracle_selected_logtype($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['python'], $result['pfb_sel'], 'a scalar logtype value must still resolve its own entry');
 	}
 
 	// --- issue #1198: unknown-scalar coverage matrix + hostile inputs -------

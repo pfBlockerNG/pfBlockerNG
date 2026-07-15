@@ -68,19 +68,8 @@ if ($_POST) {
 			if (strpos($key, '-') !== FALSE) {
 				$k_field = explode('-', $key);
 
-				// Collect all rowhelper keys. Register the row BEFORE the scalar
-				// check so a rejected value still tracks its row -- else the
-				// "remove undefined rowhelpers" loop below would drop an existing
-				// target whose only posted field was invalid.
+				// Collect all rowhelper keys
 				$rowhelper_exist[$k_field[1]] = '';
-
-				// issue #1070: the scalar validators below (preg_match/strlen/is_port)
-				// throw a PHP 8 TypeError on an array value ('field-0[]=x') before the
-				// input-errors gate. Reject non-scalars here (mirrors hooks.php).
-				if (!is_scalar($value)) {
-					$input_errors[] = gettext('Invalid sync field value.');
-					continue;
-				}
 
 				switch ($k_field[0]) {
 					case 'syncinterfaces':

@@ -165,24 +165,14 @@ if ($_POST) {
 			$dkey = 'log_max_days_' . $log_suffix;
 			$v = $_POST[$dkey] ?? '0';
 			if (is_array($v) || !ctype_digit((string) $v)) {
-				$v = '0';
+				$_POST[$dkey] = '0';
 			}
-			// issue #1056: assign back unconditionally -- a POST missing this key left
-			// $_POST[$dkey] unset, so the persist step below raised an undefined-key warning.
-			$_POST[$dkey] = (string) $v;
 		}
 
 		// issue #1109: canonicalize the log-trim hysteresis margin through the same parser
 		// the backend reads it with, so the STORED value is the effective one -- storing an
 		// out-of-range '999999999' would render a number the runtime clamp never uses.
 		$_POST['pfb_log_trim_margin_pct'] = (string) pfb_log_trim_margin_pct($_POST['pfb_log_trim_margin_pct'] ?? '0');
-
-		// issue #1070: an array-valued POST ('pfb_feed_internal_allowlist[]=x')
-		// throws a PHP 8 TypeError in trim()/base64_encode() below; reject it
-		// here so the save gate blocks and the stored allowlist is preserved.
-		if (!is_string($_POST['pfb_feed_internal_allowlist'] ?? '')) {
-			$input_errors[] = gettext('Invalid feed-host allowlist value.');
-		}
 
 		if (!$input_errors) {
 

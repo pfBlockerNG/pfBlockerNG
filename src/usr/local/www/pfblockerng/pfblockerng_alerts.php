@@ -599,10 +599,7 @@ if (isset($_POST) && !empty($_POST)) {
 			unset($pfb['aglobal']['hostlookup']);
 		}
 
-		// issue #1128: an array-valued POST ('save[]=x') throws a PHP 8 TypeError in
-		// strstr() below; default to '' like the digit fields above default on bad input.
-		$pfb_save = is_string($_POST['save'] ?? null) ? $_POST['save'] : '';
-		$pageview = htmlspecialchars(trim(strstr($pfb_save, ' ', FALSE)));
+		$pageview = htmlspecialchars(trim(strstr($_POST['save'], ' ', FALSE)));
 		if (!in_array($pageview, array('', 'dnsbl_stat', 'dnsbl_reply_stat', 'ip_block_stat', 'ip_permit_stat', 'ip_match_stat', 'reply', 'unified', 'alert'))) {
 			$pageview = 'alert';
 		}
@@ -654,12 +651,6 @@ if (isset($_POST) && !empty($_POST)) {
 
 			foreach ($ftypes as $submit_type => $final_type) {
 				if (isset($_POST['filterlogentries_submit_' . $submit_type]) && !empty($_POST['filterlogentries_submit_' . $submit_type])) {
-					// issue #1139: an array-valued POST reaches explode()/pfb_filter() below
-					// with no scalar guard -- skip it instead of TypeError-ing the page.
-					if (!is_string($_POST['filterlogentries_submit_' . $submit_type])) {
-						continue;
-					}
-
 					$final_type = $ftypes[$submit_type];
 
 					// Split SRC/DST In/Outbound field into two filter fields (IP/GeoIP)
@@ -1520,13 +1511,8 @@ if (isset($_POST) && !empty($_POST)) {
 	elseif (isset($_POST['ip_remove']) && !empty($_POST['ip_remove'])) {
 
 		$ip = '';
-		// issue #1128: a non-string 'ip' (missing, or array-valued incl. NESTED arrays
-		// like 'ip[0][]=x') must never reach strpos() or pfb_filter() -- a nested array
-		// still TypeErrors inside pfb_filter()'s own control-char loop, since that loop
-		// runs before pfb_filter()'s array-reject check. Scalarize once, up front.
-		$pfb_ip = is_string($_POST['ip'] ?? null) ? $_POST['ip'] : '';
-		if (strpos($pfb_ip, '/') !== FALSE) {
-			if (preg_match('/^(?:([0-9.]{7,15})|([0-9a-f:]{2,39}|[0-9a-f:]{2,30}[0-9.]{7,15}))\/(\d{1,3})$/i', $pfb_ip, $parts)) {
+		if (strpos($_POST['ip'], '/') !== FALSE) {
+			if (is_string($_POST['ip']) && preg_match('/^(?:([0-9.]{7,15})|([0-9a-f:]{2,39}|[0-9a-f:]{2,30}[0-9.]{7,15}))\/(\d{1,3})$/i', $_POST['ip'], $parts)) {
 				$ip = pfb_filter($parts[1], PFB_FILTER_IP, 'alerts ip_remove');
 				if (empty($ip) || (count($parts) != 4) || ($parts[3] < 24) || ($parts[3] > 32)) {
 					$ip = '';
@@ -1534,7 +1520,7 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 		}
 		else {
-			$ip = pfb_filter($pfb_ip, PFB_FILTER_IP, 'alerts ip_remove');
+			$ip = pfb_filter($_POST['ip'], PFB_FILTER_IP, 'alerts ip_remove');
 		}
 		$table = pfb_filter($_POST['table'], PFB_FILTER_WORD, 'alerts ip_remove');
 
