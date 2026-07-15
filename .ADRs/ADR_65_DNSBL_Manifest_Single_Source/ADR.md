@@ -1,6 +1,6 @@
 # ADR-65: Make the manifest the single source of truth for DNSBL — retire the `py_data`/`py_zone` interchange files and add a read-only decision query channel
 
-- **Status:** **Proposed** (2026-07-13; **REWORKED 2026-07-14, phase 0** — every §1 fact and
+- **Status:** **Implemented** (all 9 phases + review landed on `devel` via PR #1351, rebase-merged 2026-07-15; the live-VM CE + Plus smoke fan-out — query round-trip, fail-loud+self-heal, VIP-hit attribution, reports-from-logs — plus Tier-A `ui_render` and the reconciled `ui_e2e` rows passed green on the branch commits; **Accepted** on the next green fan-out on the merged `devel` tip. Proposed 2026-07-13; **REWORKED 2026-07-14, phase 0** — every §1 fact and
   anchor re-derived from `devel`@862a306f after ADR-66 and the #1255 fix landed; the original
   "manifest wildcards regardless of `pfb_tld`" divergence claim is retired — the fallback's
   verified defects are lossiness, staleness, and failure-masking, §1.1)
