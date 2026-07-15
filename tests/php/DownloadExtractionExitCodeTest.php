@@ -84,24 +84,24 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$tokens = self::significantTokens($segment);
 		$count = count($tokens);
 		for ($i = 0; $i < $count; $i++) {
-			if ($tokens[$i] !== array('id' => T_VARIABLE, 'text' => '$renamed')
-				|| ($tokens[$i + 1]['text'] ?? '') !== '=') {
+			if ($tokens[$i] !== array('id' => T_STRING, 'text' => 'rename')
+				|| ($tokens[$i + 1]['text'] ?? '') !== '(') {
 				continue;
 			}
 
-			$call = $i + 2;
-			if (($tokens[$call]['text'] ?? '') === '@') {
-				$call++;
+			$assignment = $i - 1;
+			if (($tokens[$assignment]['text'] ?? '') === '@') {
+				$assignment--;
 			}
-			if (($tokens[$call] ?? NULL) !== array('id' => T_STRING, 'text' => 'rename')
-				|| ($tokens[$call + 1]['text'] ?? '') !== '(') {
-				continue;
+			if (($tokens[$assignment]['text'] ?? '') !== '='
+				|| ($tokens[$assignment - 1] ?? NULL) !== array('id' => T_VARIABLE, 'text' => '$renamed')) {
+				return array('bound' => FALSE, 'directReturn' => FALSE);
 			}
 
 			$args = array(array());
 			$depth = 1;
 			$close = NULL;
-			for ($j = $call + 2; $j < $count; $j++) {
+			for ($j = $i + 2; $j < $count; $j++) {
 				if ($tokens[$j]['text'] === '(') {
 					$depth++;
 				} elseif ($tokens[$j]['text'] === ')') {
@@ -117,14 +117,14 @@ final class DownloadExtractionExitCodeTest extends TestCase
 				$args[array_key_last($args)][] = $tokens[$j];
 			}
 
-			$variables = array_map(
-				static fn(array $arg): array => array_values(array_map(
+			$argumentText = array_map(
+				static fn(array $arg): string => implode('', array_map(
 					static fn(array $token): string => $token['text'],
-					array_filter($arg, static fn(array $token): bool => $token['id'] === T_VARIABLE)
+					$arg
 				)),
 				$args
 			);
-			if ($close === NULL || $variables !== [['$file_download'], [$destination]]) {
+			if ($close === NULL || $argumentText !== ['"{$file_download}"', '"{' . $destination . '}"']) {
 				return array('bound' => FALSE, 'directReturn' => FALSE);
 			}
 
