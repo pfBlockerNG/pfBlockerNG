@@ -66,7 +66,7 @@ from urllib.parse import quote
 import pytest
 
 from .. import helpers
-from .render_oracle import evaluate_render
+from .render_oracle import PhpErrorLogGuard, evaluate_render
 from .webui import looks_like_login_page, row_containing
 
 if TYPE_CHECKING:
@@ -116,27 +116,22 @@ FEED_PERMIT = f"{PERMIT_DIR}/RVPermitFeed.txt"
 FEED_MATCH = f"{MATCH_DIR}/RVMatchFeed.txt"
 FEED_ET = f"{ET_DIR}/RVFeedS10.txt"
 FEED_GEO = f"{GEOIP_CC_DIR}/RVGeoFeed.txt"
-ALIAS_OTHER = f"{ALIASTABLES_DIR}/pfB_RVOther_v4.txt"
-# Decoy so the aliastables dir holds >= 2 .txt files: grep only emits "path:content"
-# filename prefixes with two or more file arguments, and S8's alias-changed cell can
-# only derive the NEW alias name from that path prefix (single-file output is the
-# pre-existing unprefixed quirk tracked in issue #833 -- deliberately not exercised).
-ALIAS_DECOY = f"{ALIASTABLES_DIR}/pfB_RVDecoy_v4.txt"
+ALIAS_S8_A = f"{ALIASTABLES_DIR}/pfB_RVAliasA_v4.txt"
+ALIAS_S8_Z = f"{ALIASTABLES_DIR}/pfB_RVAliasZ_v4.txt"
 
-SEEDED_FILES = (FEED_A, FEED_B, FEED_PERMIT, FEED_MATCH, FEED_ET, FEED_GEO, ALIAS_OTHER, ALIAS_DECOY)
+SEEDED_FILES = (FEED_A, FEED_B, FEED_PERMIT, FEED_MATCH, FEED_ET, FEED_GEO, ALIAS_S8_A, ALIAS_S8_Z)
 
-# --- ip_block.log scenarios (S1-S10) -- RFC 5737/3849 addresses. Chosen so no
-# value is a textual PREFIX of another (a short IP's exact-match grep pattern is
-# an unanchored-at-the-end BRE, so e.g. "192.0.2.1" would spuriously satisfy a
-# search for "192.0.2.10"). ---
+# --- ip_block.log scenarios (S1-S10) -- RFC 5737/3849 addresses. S3 and S8
+# deliberately pair an exact address with a longer textual prefix collision;
+# the remaining values avoid accidental prefix overlap. ---
 S1_IP = "192.0.2.10"  # still-listed (found in FEED_A)
 S2_IP = "192.0.2.20"  # de-listed (nowhere)
-S3_IP = "192.0.2.30"  # moved: logged RVFeedA, found only in FEED_B
+S3_IP = "192.0.2.3"  # moved: FEED_A has only .30, exact address is in FEED_B
 S4_IP = "203.0.113.77"  # CIDR: logged RVFeedA, FEED_A holds 203.0.113.0/24
 S5_IP = "198.51.100.60"  # GeoIP: alias pfB_Top_v4, found in FEED_GEO
 S6_IP = "2001:db8::5"  # IPv6, found in FEED_A
 S6_LOCAL = "2001:db8:1234::1"  # the local/dst side of the v6 row (unmatched, cosmetic)
-S8_IP = "198.51.100.40"  # alias-changed: found via FEED_A, aliased in ALIAS_OTHER
+S8_IP = "198.51.100.4"  # alias-changed: exact A alias precedes longer Z decoy
 S9_IP = "192.0.2.50"  # outbound copy of S1 (dst side), also in FEED_A
 S10_IP = "192.0.2.90"  # ET feed, found in FEED_ET
 
@@ -536,14 +531,26 @@ def _seed_feed_files(vm: helpers.SmokeVM) -> None:
         FEED_MATCH: f"{M1_IP}\n",
         FEED_ET: f"{S10_IP}\n",
         FEED_GEO: f"{S5_IP}\n",
-        ALIAS_OTHER: f"{S8_IP}\n",
-        ALIAS_DECOY: "203.0.113.250\n",
+        ALIAS_S8_A: f"{S8_IP}\n",
+        ALIAS_S8_Z: f"{S8_IP}0\n",
     }
     for path, content in files.items():
         result = subprocess.run(
             vm.ssh_argv("tee", path), input=content, capture_output=True, text=True, timeout=30, check=False
         )
         assert result.returncode == 0, f"failed to write {path!r}: rc={result.returncode} stderr={result.stderr!r}"
+
+    alias_order = vm.ssh(f'for file in {ALIASTABLES_DIR}/*.txt; do printf "%s\\n" "$file"; done', timeout=15)
+    assert alias_order.returncode == 0, (
+        f"failed to read aliastables production-glob order: rc={alias_order.returncode} stderr={alias_order.stderr!r}"
+    )
+    ordered_aliases = alias_order.stdout.splitlines()
+    assert ALIAS_S8_A in ordered_aliases and ALIAS_S8_Z in ordered_aliases, (
+        f"S8 fixtures missing from production-glob order: {ordered_aliases!r}"
+    )
+    assert ordered_aliases.index(ALIAS_S8_A) < ordered_aliases.index(ALIAS_S8_Z), (
+        f"S8 requires exact A before longer Z in production-glob order: {ordered_aliases!r}"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -555,6 +562,7 @@ def _seed_feed_files(vm: helpers.SmokeVM) -> None:
 @pytest.fixture(scope="module")
 def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[str, dict[str, Capture]]]:
     vm = smoke_vm
+    error_log_guard = PhpErrorLogGuard(vm)
 
     original_dnsbl_cfg = helpers.config_get(vm, CFG_DNSBL_ENABLE)
     orig_sizes = {
@@ -593,6 +601,8 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
         # stays the loud guard for that case.)
         rm = vm.ssh("rm -f " + " ".join(SEEDED_FILES), timeout=15)
         assert rm.returncode == 0, f"pre-baseline cleanup of seeded files failed: {rm.stderr!r}"
+
+        error_log_guard.snapshot()
 
         # (1) BASELINE -- pre-seed captures, same fixed order, so "no rv809 tokens
         # yet" is PROVEN, not assumed (CLAUDE.md transition-test rule).
@@ -656,6 +666,11 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
             errors.append(
                 f"restore pfb_dnsbl failed: rc={restore.returncode} stdout={restore.stdout!r} stderr={restore.stderr!r}"
             )
+
+        try:
+            error_log_guard.assert_no_growth()
+        except AssertionError as exc:
+            errors.append(str(exc))
 
         if errors:
             detail = "\n".join(errors)
@@ -721,12 +736,14 @@ def test_s2_delisted_renders_not_listed(render_diff_state: dict[str, dict[str, C
     assert "<s>" in row, f"S2 ({S2_IP}) expected a struck old feed/IP -- row: {row!r}"
 
 
+@pytest.mark.ui_render
 def test_s3_moved_feed_renders_strike(render_diff_state: dict[str, dict[str, Capture]]) -> None:
     """S3: an IP re-located to a DIFFERENT feed file renders the struck old feed + the new one.
 
-    Given: 192.0.2.30 is logged against RVFeedA but is present ONLY in FEED_B (RVFeedB.txt).
-    Then: find_reported_header() locates it under RVFeedB -> the feed cell struck-shows
-    the old feed name and displays the new one.
+    Given: 192.0.2.3 is logged against RVFeedA, which contains only the longer
+    192.0.2.30; the exact address is present in FEED_B (RVFeedB.txt).
+    Then: exact attribution ignores FEED_A's collision and the feed cell
+    struck-shows the old feed name before displaying the current one.
     """
     body = render_diff_state["captures"]["alert"].body
     row = row_containing(body, f"host={S3_IP}")
@@ -784,19 +801,21 @@ def test_s7_dup_badge_renders_on_s1_row(render_diff_state: dict[str, dict[str, C
     assert "[1]" in row, f"S1 row missing the dup-count badge '[1]' expected from S7's dup marker: {row!r}"
 
 
+@pytest.mark.ui_render
 def test_s8_alias_changed_cell_renders(render_diff_state: dict[str, dict[str, Capture]]) -> None:
     """S8: a host now living under a DIFFERENT pf alias table renders the struck old alias + the new one.
 
-    Given: 198.51.100.40 is logged under alias RVAliasSHOld (feed RVFeedC8, which
-    has no on-disk file -- forces the miss path), found via FEED_A, and is
-    present in ALIAS_OTHER (pfB_RVOther_v4.txt).
-    Then: the aliastables sweep resolves the CURRENT alias table name and the
-    Rule column struck-shows the old alias name, then the new one.
+    Given: 198.51.100.4 is logged under alias RVAliasSHOld (feed RVFeedC8, which
+    has no on-disk file -- forces the miss path), found via FEED_A, and is an
+    exact entry in the A alias while the later Z alias holds only 198.51.100.40.
+    Then: the aliastables sweep ignores the longer collision and the Rule
+    column struck-shows the old alias name before the exact A alias.
     """
     body = render_diff_state["captures"]["alert"].body
     row = row_containing(body, f"host={S8_IP}")
     assert f"<s>{S8_ALIAS_LOGGED}</s>" in row, f"S8 ({S8_IP}) expected the stale alias struck: {row!r}"
-    assert "pfB_RVOther_v4" in row, f"S8 ({S8_IP}) expected the new alias table name pfB_RVOther_v4: {row!r}"
+    assert "pfB_RVAliasA_v4" in row, f"S8 ({S8_IP}) expected the exact current alias pfB_RVAliasA_v4: {row!r}"
+    assert "pfB_RVAliasZ_v4" not in row, f"S8 ({S8_IP}) unexpectedly attributed the longer Z decoy: {row!r}"
 
 
 def test_s9_outbound_direction_still_listed(render_diff_state: dict[str, dict[str, Capture]]) -> None:
