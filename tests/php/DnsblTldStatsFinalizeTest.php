@@ -133,13 +133,21 @@ final class DnsblTldStatsFinalizeTest extends TestCase
 
 		pfb_dnsbl_tld_stats_finalize(['DNSBL_Group' => 8]);
 
+		$activeAfter = $this->statsRow('DNSBL_Group');
+		$this->assertNotNull($activeAfter);
+		$this->assertNotSame($active['timestamp'], $activeAfter['timestamp']);
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/',
+			$activeAfter['timestamp']
+		);
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
 		$persisted = $db->querySingle(
-			"SELECT entries, counter FROM dnsbl WHERE groupname = 'DNSBL_Group'",
+			"SELECT timestamp, entries, counter FROM dnsbl WHERE groupname = 'DNSBL_Group'",
 			true
 		);
 		$staleCount = $db->querySingle("SELECT COUNT(*) FROM dnsbl WHERE groupname = 'DNSBL_Stale'");
 		$db->close();
+		$this->assertSame($activeAfter['timestamp'], $persisted['timestamp']);
 		$this->assertSame('8', $persisted['entries']);
 		$this->assertSame(11, $persisted['counter']);
 		$this->assertSame(0, $staleCount);
