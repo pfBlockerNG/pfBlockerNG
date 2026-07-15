@@ -16,6 +16,63 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_is_abp_rule_line')]
 final class Adr62DnsblIsAbpRuleLineTest extends TestCase
 {
+	public static function positionZeroUnicodeWhitespaceProvider(): array
+	{
+		$whitespace = [
+			'0009' => "\x09",
+			'000A' => "\x0A",
+			'000B' => "\x0B",
+			'000C' => "\x0C",
+			'000D' => "\x0D",
+			'001C' => "\x1C",
+			'001D' => "\x1D",
+			'001E' => "\x1E",
+			'001F' => "\x1F",
+			'0020' => ' ',
+			'0085' => "\xC2\x85",
+			'00A0' => "\xC2\xA0",
+			'1680' => "\xE1\x9A\x80",
+			'2000' => "\xE2\x80\x80",
+			'2001' => "\xE2\x80\x81",
+			'2002' => "\xE2\x80\x82",
+			'2003' => "\xE2\x80\x83",
+			'2004' => "\xE2\x80\x84",
+			'2005' => "\xE2\x80\x85",
+			'2006' => "\xE2\x80\x86",
+			'2007' => "\xE2\x80\x87",
+			'2008' => "\xE2\x80\x88",
+			'2009' => "\xE2\x80\x89",
+			'200A' => "\xE2\x80\x8A",
+			'2028' => "\xE2\x80\xA8",
+			'2029' => "\xE2\x80\xA9",
+			'202F' => "\xE2\x80\xAF",
+			'205F' => "\xE2\x81\x9F",
+			'3000' => "\xE3\x80\x80",
+		];
+		$cases = [];
+		foreach (['##', '#@#', '#?#', '#%#', '#$#'] as $marker) {
+			foreach ($whitespace as $codePoint => $separator) {
+				$cases["{$marker} U+{$codePoint}"] = ["{$marker}{$separator}Section", false];
+			}
+		}
+
+		return $cases + [
+			'U+200B is content' => ["##\xE2\x80\x8BSection", true],
+			'U+FEFF is content' => ["##\xEF\xBB\xBFSection", true],
+			'malformed UTF-8 is content' => ["##\xFFSection", true],
+			'metacharacter payload is content' => ['##[data-test="a+b?c$"]', true],
+			'punycode cosmetic prefix remains valid' => ['xn--nxasmq6b.com##.ad', true],
+			'raw-Unicode cosmetic prefix remains invalid' => ["\xC3\xA9.example##.ad", false],
+			'domain-prefixed marker with EM SPACE remains valid' => ["example.com##\xE2\x80\x83Section", true],
+		];
+	}
+
+	#[DataProvider('positionZeroUnicodeWhitespaceProvider')]
+	public function testPositionZeroUnicodeWhitespaceIsNotCaptured(string $line, bool $expected): void
+	{
+		$this->assertSame($expected, pfb_dnsbl_is_abp_rule_line($line));
+	}
+
 	public static function ruleShapeProvider(): array
 	{
 		return [

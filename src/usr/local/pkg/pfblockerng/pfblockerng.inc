@@ -7721,13 +7721,10 @@ function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 		}
 		if ($first !== FALSE) {
 			if ($first === 0) {
-				// issue #1276: a hosts-dialect '## Section' comment shares the
-				// marker-at-position-0 shape with a cosmetic rule -- require a
-				// non-whitespace char after it (explicit set, not ctype_space: ADR-26).
-				$after = substr($line, $marker_len, 1);
-				$after_is_content = $after !== '' && strspn($after, " \t\n\r\x0B\x0C") === 0;
-				$after_is_nbsp = substr($line, $marker_len, 2) === "\xC2\xA0";
-				if ($after_is_content && !$after_is_nbsp) {
+				// issue #1345: position-zero marker comments use Python's exact whitespace set.
+				$after = substr($line, $marker_len);
+				if ($after !== '' &&
+				    preg_match('/\A(?:[\x{0009}-\x{000D}\x{001C}-\x{001F}\x{0085}]|\p{Z})/u', $after) !== 1) {
 					return TRUE;
 				}
 			} elseif (strspn($line, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-') >= $first) {
