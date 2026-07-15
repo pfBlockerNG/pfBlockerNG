@@ -177,11 +177,9 @@ final class DownloadExtractionExitCodeTest extends TestCase
 				if ($depth === 0) {
 					break;
 				}
-			} elseif ($depth === 1
-				&& $tokens[$i]['id'] === T_RETURN
-				&& ($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'FALSE')
-				&& ($tokens[$i + 2]['text'] ?? '') === ';') {
-				return TRUE;
+			} elseif ($depth === 1 && $tokens[$i]['id'] === T_RETURN) {
+				return ($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'FALSE')
+					&& ($tokens[$i + 2]['text'] ?? '') === ';';
 			}
 		}
 
@@ -324,14 +322,12 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 	public function testUncompressedExtrasChecksRenameResult(): void
 	{
-		$renameCall = strpos(self::$body, '@rename("{$file_download}", "{$head_download}")');
-		$this->assertNotFalse($renameCall, 'vacuity: the uncompressed-extras rename site must exist');
-		$renamePos = strrpos(substr(self::$body, 0, $renameCall), "\n");
-		$renamePos = $renamePos === FALSE ? 0 : $renamePos + 1;
+		$branchPos = strpos(self::$body, '// Uncompressed file format.');
+		$this->assertNotFalse($branchPos, 'vacuity: the uncompressed-format branch must exist');
 
-		$nextBranch = strpos(self::$body, "elseif (\$type == 'blacklist') {", $renamePos);
+		$nextBranch = strpos(self::$body, "elseif (\$type == 'blacklist') {", $branchPos);
 		$this->assertNotFalse($nextBranch, 'vacuity: the uncompressed-blacklist sibling branch must exist');
-		$segment = substr(self::$body, $renamePos, $nextBranch - $renamePos);
+		$segment = substr(self::$body, $branchPos, $nextBranch - $branchPos);
 
 		$analysis = self::analyzeRenameGuard($segment, '$head_download');
 		$this->assertTrue($analysis['bound'],
