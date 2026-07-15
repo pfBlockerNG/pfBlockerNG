@@ -156,6 +156,11 @@ Describe 'verify-red-proof.sh'
     gitc add -A
     gitc commit -qm v2
   }
+  arm_checkout_term_hook() {
+    hook="$repo/.git/hooks/post-checkout"
+    printf '%s\n' '#!/bin/sh' 'rm -f "$0"' 'parent=$(ps -o ppid= -p "$PPID" | tr -d " ")' 'kill -TERM "$parent"' > "$hook"
+    chmod +x "$hook"
+  }
   cleanup() { rm -rf "$repo"; }
   After 'cleanup'
 
@@ -363,6 +368,21 @@ Describe 'verify-red-proof.sh'
     }
     When call interrupt_case
     The output should equal ''
+  End
+
+  It 'restores src paths when SIGTERM arrives during baseline checkout'
+    make_repo BAD GOOD
+    arm_checkout_term_hook
+    interrupt_checkout_case() {
+      dash "$script" --worktree "$repo" --test-cmd 'true' --src src.txt >/dev/null 2>&1 &
+      pid=$!
+      wait "$pid" 2>/dev/null
+      printf '%s\n' "$?"
+    }
+    When call interrupt_checkout_case
+    The output should equal '130'
+    The contents of file "$repo/src.txt" should equal 'GOOD'
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
   End
 
   It 'restores a deleted src path when SIGTERM interrupts the red run (dash semantics)'
