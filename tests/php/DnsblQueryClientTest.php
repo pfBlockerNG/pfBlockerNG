@@ -74,9 +74,14 @@ final class DnsblQueryClientTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		$failure = null;
 		try {
 			foreach (array_keys($this->children) as $pid) {
-				$this->reapChild($pid);
+				try {
+					$this->reapChild($pid);
+				} catch (Throwable $e) {
+					$failure ??= $e;
+				}
 			}
 		} finally {
 			if ($this->hadPfb) {
@@ -85,6 +90,9 @@ final class DnsblQueryClientTest extends TestCase
 				unset($GLOBALS['pfb']);
 			}
 			$this->rrmdir($this->tmp);
+		}
+		if ($failure !== null) {
+			throw $failure;
 		}
 	}
 
@@ -217,7 +225,11 @@ final class DnsblQueryClientTest extends TestCase
 	{
 		$raw = $this->readMarker("{$marker}.json", $timeout_s);
 		$result = json_decode($raw, true);
-		return is_array($result) ? $result : null;
+		$this->assertSame(JSON_ERROR_NONE, json_last_error(), json_last_error_msg());
+		if ($result !== null && !is_array($result)) {
+			$this->fail('expected query result array or NULL, got: ' . var_export($result, true));
+		}
+		return $result;
 	}
 
 	/** Run a query child while this process owns the channel lock. */
@@ -321,10 +333,13 @@ final class DnsblQueryClientTest extends TestCase
 
 	public function testNoDotDomainRejectedNoRequestWritten(): void
 	{
+		@unlink($GLOBALS['pfb']['errlog']);
 		mkdir($this->lockPath());
 		$this->assertFileDoesNotExist($this->channel());
 		$this->assertNull(pfb_dnsbl_query('nodotsatall'));
 		$this->assertFileDoesNotExist($this->channel());
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringNotContainsString('query channel lock open failed', $logs);
 	}
 
 	public function testEmptyDomainRejected(): void
@@ -790,9 +805,12 @@ final class DnsblQueryClientTest extends TestCase
 		// Invalid-UTF-8 bytes in $qtype make json_encode() of the whole record
 		// fail -- even an unusable lock path must not be reached before that
 		// rejection, and no broken request may be emitted.
+		@unlink($GLOBALS['pfb']['errlog']);
 		mkdir($this->lockPath());
 		$result = pfb_dnsbl_query('encode-fail-case.example', "\xB1\x31");
 		$this->assertNull($result);
 		$this->assertFileDoesNotExist($this->channel());
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringNotContainsString('query channel lock open failed', $logs);
 	}
 }
