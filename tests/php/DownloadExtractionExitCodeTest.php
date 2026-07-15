@@ -39,6 +39,155 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		self::$body = substr($source, $start, $end - $start);
 	}
 
+	/**
+	 * @return list<array{id: int|null, text: string}>
+	 */
+	private static function significantTokens(string $source): array
+	{
+		$tokens = array();
+		foreach (token_get_all('<?php ' . $source) as $token) {
+			if (is_array($token)) {
+				if (in_array($token[0], [T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], TRUE)) {
+					continue;
+				}
+				$tokens[] = array('id' => $token[0], 'text' => $token[1]);
+			} else {
+				$tokens[] = array('id' => NULL, 'text' => $token);
+			}
+		}
+
+		return $tokens;
+	}
+
+	private static function hasNonzeroRetvalGuard(string $segment): bool
+	{
+		$tokens = self::significantTokens($segment);
+		for ($i = 0, $last = count($tokens) - 6; $i <= $last; $i++) {
+			if ($tokens[$i]['id'] === T_IF
+				&& $tokens[$i + 1]['text'] === '('
+				&& $tokens[$i + 2] === array('id' => T_VARIABLE, 'text' => '$retval')
+				&& $tokens[$i + 3]['id'] === T_IS_NOT_EQUAL
+				&& $tokens[$i + 4] === array('id' => T_LNUMBER, 'text' => '0')
+				&& $tokens[$i + 5]['text'] === ')') {
+				return TRUE;
+			}
+		}
+
+		return FALSE;
+	}
+
+	/**
+	 * @return array{bound: bool, directReturn: bool}
+	 */
+	private static function analyzeRenameGuard(string $segment, string $destination): array
+	{
+		$tokens = self::significantTokens($segment);
+		$count = count($tokens);
+		for ($i = 0; $i < $count; $i++) {
+			if ($tokens[$i] !== array('id' => T_VARIABLE, 'text' => '$renamed')
+				|| ($tokens[$i + 1]['text'] ?? '') !== '=') {
+				continue;
+			}
+
+			$call = $i + 2;
+			if (($tokens[$call]['text'] ?? '') === '@') {
+				$call++;
+			}
+			if (($tokens[$call] ?? NULL) !== array('id' => T_STRING, 'text' => 'rename')
+				|| ($tokens[$call + 1]['text'] ?? '') !== '(') {
+				continue;
+			}
+
+			$args = array(array());
+			$depth = 1;
+			$close = NULL;
+			for ($j = $call + 2; $j < $count; $j++) {
+				if ($tokens[$j]['text'] === '(') {
+					$depth++;
+				} elseif ($tokens[$j]['text'] === ')') {
+					$depth--;
+					if ($depth === 0) {
+						$close = $j;
+						break;
+					}
+				} elseif ($tokens[$j]['text'] === ',' && $depth === 1) {
+					$args[] = array();
+					continue;
+				}
+				$args[array_key_last($args)][] = $tokens[$j];
+			}
+
+			$variables = array_map(
+				static fn(array $arg): array => array_values(array_map(
+					static fn(array $token): string => $token['text'],
+					array_filter($arg, static fn(array $token): bool => $token['id'] === T_VARIABLE)
+				)),
+				$args
+			);
+			if ($close === NULL || $variables !== [['$file_download'], [$destination]]) {
+				return array('bound' => FALSE, 'directReturn' => FALSE);
+			}
+
+			$guard = $close + 2;
+			$bound = ($tokens[$close + 1]['text'] ?? '') === ';'
+				&& ($tokens[$guard]['id'] ?? NULL) === T_IF
+				&& ($tokens[$guard + 1]['text'] ?? '') === '('
+				&& ($tokens[$guard + 2]['text'] ?? '') === '!'
+				&& ($tokens[$guard + 3] ?? NULL) === array('id' => T_VARIABLE, 'text' => '$renamed')
+				&& ($tokens[$guard + 4]['text'] ?? '') === ')'
+				&& ($tokens[$guard + 5]['text'] ?? '') === '{';
+			if (!$bound) {
+				return array('bound' => FALSE, 'directReturn' => FALSE);
+			}
+
+			return array(
+				'bound' => TRUE,
+				'directReturn' => self::hasDirectFalseReturn($tokens, $guard + 5)
+			);
+		}
+
+		return array('bound' => FALSE, 'directReturn' => FALSE);
+	}
+
+	/**
+	 * @param list<array{id: int|null, text: string}> $tokens
+	 */
+	private static function hasDirectFalseReturn(array $tokens, int $openingBrace): bool
+	{
+		$depth = 1;
+		$interpolationDepth = 0;
+		$count = count($tokens);
+		for ($i = $openingBrace + 1; $i < $count; $i++) {
+			if ($tokens[$i]['id'] === T_CURLY_OPEN || $tokens[$i]['id'] === T_DOLLAR_OPEN_CURLY_BRACES) {
+				$interpolationDepth++;
+				continue;
+			}
+			if ($interpolationDepth > 0) {
+				if ($tokens[$i]['text'] === '{') {
+					$interpolationDepth++;
+				} elseif ($tokens[$i]['text'] === '}') {
+					$interpolationDepth--;
+				}
+				continue;
+			}
+			if ($tokens[$i]['text'] === '{') {
+				$depth++;
+			} elseif ($tokens[$i]['text'] === '}') {
+				$depth--;
+				if ($depth === 0) {
+					break;
+				}
+			} elseif ($depth === 1
+				&& $tokens[$i]['id'] === T_RETURN
+				&& ($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'FALSE')
+				&& ($tokens[$i + 2]['text'] ?? '') === ';') {
+				return TRUE;
+			}
+		}
+
+		return FALSE;
+	}
+
 	// -----------------------------------------------------------------------
 	// Row 1 -- gzip geoip: /usr/bin/tar -xzf site.
 	// -----------------------------------------------------------------------
@@ -50,11 +199,13 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 		$returnTrue = strpos(self::$body, 'return TRUE;', $tarPos);
 		$this->assertNotFalse($returnTrue, 'vacuity: gzip-geoip site must reach a return TRUE;');
-		$segment = substr(self::$body, $tarPos, $returnTrue + strlen('return TRUE;') - $tarPos);
+		$segmentStart = strrpos(substr(self::$body, 0, $tarPos), "\n");
+		$segmentStart = $segmentStart === FALSE ? 0 : $segmentStart + 1;
+		$segment = substr(self::$body, $segmentStart, $returnTrue + strlen('return TRUE;') - $segmentStart);
 
 		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segment,
 			'gzip-geoip tar -xzf must capture $output, $retval -- a corrupt archive currently reports success unconditionally');
-		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval\s*!=\s*0\s*\)|if\s*\(\s*\$retval\s*<>\s*0\s*\)/', $segment,
+		$this->assertTrue(self::hasNonzeroRetvalGuard($segment),
 			'gzip-geoip must check nonzero $retval before its return TRUE -- a nonzero exit must not report success');
 	}
 
@@ -100,7 +251,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($returnTrue, 'vacuity: gzip-top1m site must reach a return TRUE;');
 		$segment = substr(self::$body, $gunzip, $returnTrue + strlen('return TRUE;') - $gunzip);
 
-		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval\s*!=\s*0\s*\)|if\s*\(\s*\$retval\s*<>\s*0\s*\)/', $segment,
+		$this->assertTrue(self::hasNonzeroRetvalGuard($segment),
 			'gzip-top1m must check nonzero $retval before its return TRUE -- a nonzero gunzip exit must not report success; '
 			. 'segment: ' . json_encode($segment));
 	}
@@ -162,7 +313,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$segSingleToReturn = substr(self::$body, $single, $returnTrue + strlen('return TRUE;') - $single);
 		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segSingleToReturn,
 			'zip single-member tar -xOf must capture $output, $retval; segment: ' . json_encode($segSingleToReturn));
-		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval\s*!=\s*0\s*\)|if\s*\(\s*\$retval\s*<>\s*0\s*\)/', $segSingleToReturn,
+		$this->assertTrue(self::hasNonzeroRetvalGuard($segSingleToReturn),
 			'zip extras must check nonzero $retval before their shared return TRUE; segment: '
 			. json_encode($segSingleToReturn));
 	}
@@ -173,21 +324,19 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 	public function testUncompressedExtrasChecksRenameResult(): void
 	{
-		$renamePos = strpos(self::$body, '$renamed = @rename("{$file_download}", "{$head_download}");');
-		$this->assertNotFalse($renamePos, 'vacuity: the uncompressed-extras rename site must exist');
+		$renameCall = strpos(self::$body, '@rename("{$file_download}", "{$head_download}")');
+		$this->assertNotFalse($renameCall, 'vacuity: the uncompressed-extras rename site must exist');
+		$renamePos = strrpos(substr(self::$body, 0, $renameCall), "\n");
+		$renamePos = $renamePos === FALSE ? 0 : $renamePos + 1;
 
 		$nextBranch = strpos(self::$body, "elseif (\$type == 'blacklist') {", $renamePos);
 		$this->assertNotFalse($nextBranch, 'vacuity: the uncompressed-blacklist sibling branch must exist');
 		$segment = substr(self::$body, $renamePos, $nextBranch - $renamePos);
 
-		$matched = preg_match(
-			'/^\h*\$renamed\s*=\s*@rename\([^;]*\);\R\h*if\s*\(\s*!\s*\$renamed\s*\)\s*\{\R(?<failure>.*?)^\h*\}/ms',
-			$segment,
-			$match
-		);
-		$this->assertSame(1, $matched,
+		$analysis = self::analyzeRenameGuard($segment, '$head_download');
+		$this->assertTrue($analysis['bound'],
 			'uncompressed extras must check !$renamed before return TRUE; segment: ' . json_encode($segment));
-		$this->assertStringContainsString('return FALSE', $match['failure'] ?? '',
+		$this->assertTrue($analysis['directReturn'],
 			'a failed rename() must have a return FALSE path; segment: ' . json_encode($segment));
 	}
 
@@ -209,15 +358,11 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 		$segment = substr(self::$body, $commentPos, $gatePos - $commentPos);
 
-		$matched = preg_match(
-			'/^\h*\$renamed\s*=\s*@rename\([^;]*\);\R\h*if\s*\(\s*!\s*\$renamed\s*\)\s*\{\R(?<failure>.*?)^\h*\}/ms',
-			$segment,
-			$match
-		);
-		$this->assertSame(1, $matched,
+		$analysis = self::analyzeRenameGuard($segment, '$orig_download');
+		$this->assertTrue($analysis['bound'],
 			'generic uncompressed feeds must check !$renamed before the $retval == 0 success gate; segment: '
 			. json_encode($segment));
-		$this->assertStringContainsString('return FALSE', $match['failure'] ?? '',
+		$this->assertTrue($analysis['directReturn'],
 			'a failed rename() must have a return FALSE path before the success gate; segment: ' . json_encode($segment));
 	}
 }
