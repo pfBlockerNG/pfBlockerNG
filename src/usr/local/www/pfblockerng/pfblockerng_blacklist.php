@@ -158,7 +158,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 	}
 
 	if (isset($_POST['blacklist_enable'])) {
-		if (!array_key_exists($_POST['blacklist_enable'], $options_blacklist_enable)) {
+		if (is_array($_POST['blacklist_enable']) || !array_key_exists($_POST['blacklist_enable'], $options_blacklist_enable)) {
 			$_POST['blacklist_enable'] = 'Disable';
 		}
 		$pfb['bconfig']['blacklist_enable'] = $_POST['blacklist_enable'];
@@ -168,7 +168,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 	}
 
 	if (isset($_POST['blacklist_lang'])) {
-		if (!array_key_exists($_POST['blacklist_lang'], $options_blacklist_lang)) {
+		if (is_array($_POST['blacklist_lang']) || !array_key_exists($_POST['blacklist_lang'], $options_blacklist_lang)) {
 			$_POST['blacklist_lang'] = 'EN';
 		}
 		$pfb['bconfig']['blacklist_lang'] = $_POST['blacklist_lang'];
