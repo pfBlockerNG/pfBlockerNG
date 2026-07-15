@@ -51,8 +51,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+import requests
 
 from .. import helpers
+from .render_oracle import PhpErrorLogGuard
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
@@ -95,7 +97,7 @@ def _csrf_token(webui: WebUI) -> str:
     return extract_csrf_token(resp.text)
 
 
-def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TIMEOUT) -> None:
+def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TIMEOUT) -> requests.Response:
     """POST a FULLY-CONTROLLED payload to the blacklist page (token added here).
 
     Bypasses the form-scrape ``webui.post`` so the caller owns the EXACT field set
@@ -115,6 +117,7 @@ def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TI
         allow_redirects=True,
     )
     assert not looks_like_login_page(resp.text), "blacklist POST returned the login form (session lost)"
+    return resp
 
 
 def _save_payload(**fields: str) -> dict[str, str]:
@@ -396,3 +399,37 @@ def test_blacklist_lang_autosubmit_persists_without_save(
         assert got == "EN", f"bogus blacklist_lang should coerce to default 'EN', got {got!r}"
     finally:
         _direct_post(webui, {"blacklist_lang": restore})
+
+
+@pytest.mark.parametrize(
+    ("field", "config_path", "seed", "default"),
+    [
+        ("blacklist_enable", CFG_ENABLE, "Enable", "Disable"),
+        ("blacklist_lang", CFG_LANG, "DE", "EN"),
+    ],
+)
+def test_blacklist_array_autosubmit_coerces_to_default_without_error(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    field: str,
+    config_path: str,
+    seed: str,
+    default: str,
+) -> None:
+    """An authenticated no-save array autosubmit persists the field default cleanly."""
+    original = helpers.config_get(smoke_vm, config_path)
+    restore = original or default
+    try:
+        _direct_post(webui, {field: seed})
+        assert helpers.config_get(smoke_vm, config_path) == seed, f"failed to seed {field}={seed!r}"
+
+        guard = PhpErrorLogGuard(smoke_vm)
+        guard.snapshot()
+        resp = _direct_post(webui, {f"{field}[]": "crafted"})
+        guard.assert_no_growth()
+
+        assert resp.status_code == 200, f"array {field} autosubmit -> HTTP {resp.status_code} (expected 200)"
+        got = helpers.config_get(smoke_vm, config_path)
+        assert got == default, f"array {field} should persist default {default!r}, got {got!r}"
+    finally:
+        _direct_post(webui, {field: restore})
