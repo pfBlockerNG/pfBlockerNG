@@ -123,8 +123,7 @@ exactly one trailing `"\n"`. This makes an emitted line **grep-stable**:
 only once `pfb_dnsbl_ndjson_domain_row_verified()` re-parses the line AND confirms the `domain`
 field matches exactly (a corrupt/foreign line could still substring-match; JSON's own quoting
 means an `abp` row's `raw` payload can never literally embed the needle).
-`pfb_dnsbl_ndjson_parse_row()` is the strict reader every PHP consumer shares;
-`_dnsbl_parse_ndjson_row()` mirrors it in Python (`pfb_unbound.py`).
+`pfb_dnsbl_ndjson_parse_row()` is the strict reader every PHP consumer shares.
 
 **Staging-generation guard + lazy rebuild.** The sync loop's verbatim-reuse fork
 (`pfb_dnsbl_verbatim_reuse_active()`) additionally requires the staged `.txt` to be
