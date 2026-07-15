@@ -99,6 +99,20 @@ final class DnsblPlaintextSummaryRetirementTest extends TestCase
 		$this->assertStringNotContainsString("['feeds']", $finalizerBody);
 	}
 
+	public function testDisabledGroupHasValidatedAliasBeforeStatsUpdate(): void
+	{
+		$groupLoop = strpos($this->source, '// Reset variables once per alias');
+		$this->assertNotFalse($groupLoop);
+		$aliasAssignment = strpos($this->source, '$alias = "DNSBL_{$list[\'aliasname\']}";', $groupLoop);
+		$activeBranch = strpos($this->source, "if (\$list['action'] != 'Disabled' && isset(\$list['row']))", $groupLoop);
+		$disabledStats = strpos($this->source, "dnsbl_stats_update('disabled', \$alias, '');", $groupLoop);
+		$this->assertNotFalse($aliasAssignment);
+		$this->assertNotFalse($activeBranch);
+		$this->assertNotFalse($disabledStats);
+		$this->assertLessThan($activeBranch, $aliasAssignment, 'alias must exist before the active/disabled branch');
+		$this->assertLessThan($disabledStats, $activeBranch, 'disabled stats must consume the validated alias');
+	}
+
 	public function testTldStatsFinalizationRetainsTheReloadAndDomainGates(): void
 	{
 		if (!str_contains($this->source, 'function pfb_dnsbl_tld_stats_finalize(')) {
