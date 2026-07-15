@@ -64,6 +64,10 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     /usr/bin/tar -tf "$(pfb_spec_archive_path "${dnsblarchive}")" 2>/dev/null | sed 's#.*/##'
   }
 
+  tar_list_full() {
+    /usr/bin/tar -tf "$(pfb_spec_archive_path "${dnsblarchive}")" 2>/dev/null
+  }
+
   It 'stage copies the shipped files and creates the nullfs/devfs mount-point dirs'
     setup_sandbox
     # Before: the chroot does not exist at all (fresh MFS).
@@ -117,7 +121,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The path "$arc" should be exist
     # The archive carries the GENERATED files ...
     The result of "tar_list()" should include 'pfb_py_sources.json'
-    The result of "tar_list()" should include 'feed.raw'
+    The result of "tar_list_full()" should include "${generation}/feed.raw"
     The result of "tar_list()" should not include "${stage}"
     The result of "tar_list()" should not include 'pfb_py_sources.lock'
     The result of "tar_list()" should include 'pfb_unbound.ini'
