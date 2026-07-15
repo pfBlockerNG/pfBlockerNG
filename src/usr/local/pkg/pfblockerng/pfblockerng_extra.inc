@@ -3805,9 +3805,9 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 	}
 
 	if (!pfb_unbound_py_atomic_write_root($channel, $payload . "\n")) {
-		// issue #1351 review: the shared atomic-write helper logs a PFBL-03
-		// "control channel" message, which misattributes a query-channel
-		// write failure -- emit an ADR-65-scoped line so it is attributable.
+		// The shared atomic-write helper logs a PFBL-03 "control channel" message,
+		// which misattributes a query-channel write failure -- emit an ADR-65-scoped
+		// line so it is attributable.
 		pfb_logger("\nADR-65: pfb_dnsbl_query failed to publish the request for [ {$clean} ]", 2);
 		return NULL;
 	}

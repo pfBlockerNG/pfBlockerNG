@@ -942,10 +942,10 @@ def pfb_query_watcher() -> None:
             if rec is None or rec == last_record:
                 return
             last_record = rec
-            # issue #1351 review: isolate per-request failures. evaluate_domain over an
-            # externally-supplied domain is a far larger surface than the control/reload
-            # watchers this mirrors; one raising request must not kill the answering
-            # thread for the rest of the process (init never restarts it).
+            # Isolate per-request failures: evaluate_domain over an externally-supplied
+            # domain is a far larger surface than the control/reload watchers this
+            # mirrors, and one raising request must not kill the answering thread for
+            # the rest of the process (init never restarts it).
             try:
                 _pfb_answer_query_request(rec)
             except Exception as e:
@@ -6346,8 +6346,8 @@ def _evaluate_cfg(snap: Snapshot) -> dict[str, Any]:
     # state: a zero-downtime swap that introduced a NEW stratum (e.g. feed/user regex,
     # or data/zone when the prior init had none) left its gate False, so
     # evaluate_domain skipped that stratum and the newly-swapped block never applied.
-    # Deriving them from ``snap``
-    # (the same object the dicts come from) keeps the gate consistent with the live
+    # Deriving them from ``snap`` (the same object the dicts come from) keeps the gate
+    # consistent with the live
     # lists on every swap, and is decision-identical at idle (init sets snapshot + pfb
     # flags together, so bool(snap.data_db) == pfb["dataDB"], etc.). The remaining keys
     # are genuine config (not list-presence) and correctly stay sourced from ``pfb``.
