@@ -6,11 +6,8 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-65 -- tld_analysis()'s retained TLD-blacklist counting, hostile
- * textarea rows. This logic (pfbng_text_area_decode() + the unconditional
- * per-entry $tld_cnt++) is carried over VERBATIM from before the phase --
- * behaviour-preserving, so this pins the pre-existing widget-count contract
- * rather than proving a new change.
+ * Issue #1283 -- empty-after-dot-trim TLD blacklist rows must not create
+ * alias or statistics bookkeeping, while valid rows remain counted.
  */
 #[CoversFunction('tld_analysis')]
 final class TldAnalysisBlacklistHostileInputTest extends TestCase
@@ -49,15 +46,53 @@ final class TldAnalysisBlacklistHostileInputTest extends TestCase
 		rmdir_recursive($this->tmp);
 	}
 
-	/**
-	 * Given: a textarea with a leading/trailing-dot entry ('.zip.'), an
-	 * all-dots entry ('...'), and a blank line (dropped by the decoder before
-	 * it ever reaches the counting loop)
-	 * When: tld_analysis() runs
-	 * Then: the widget count is exactly 2 (the blank line never counts; the
-	 * two non-empty hostile entries do, unconditionally, exactly as today)
-	 */
-	public function testHostileTextareaEntriesCountedExactlyAsToday(): void
+	public function testMixedBlacklistCountsOnlyValidEntries(): void
+	{
+		$this->runAnalysis(".zip.\r\n.\r\n..\r\n...\r\n\r\n");
+		$this->assertSame(
+			['feeds' => ['DNSBL_TLD'], 'count' => 1],
+			$GLOBALS['pfb']['tld_update']['DNSBL_TLD'] ?? null,
+			'dots-only and blank rows must not inflate valid TLD bookkeeping'
+		);
+		$this->assertContains('DNSBL_TLD', $GLOBALS['pfb']['alias_dnsbl_all']);
+		$this->assertFileExists("{$GLOBALS['pfb']['dnsalias']}/DNSBL_TLD");
+	}
+
+	public function testDotsOnlyEntriesCreateNoBookkeeping(): void
+	{
+		$this->runAnalysis(".\r\n..\r\n...\r\n");
+		$this->assertNoTldBookkeeping();
+	}
+
+	public function testWhitespaceHeaderBlankAndZeroRemainIgnored(): void
+	{
+		$this->runAnalysis("   \r\n# header\r\n\r\n0\r\n");
+		$this->assertNoTldBookkeeping();
+	}
+
+	public function testLeadingDotsAndPlainValidTldsRemainCounted(): void
+	{
+		$this->runAnalysis(".zip.\r\nzip\r\n");
+		$this->assertSame(
+			['feeds' => ['DNSBL_TLD'], 'count' => 2],
+			$GLOBALS['pfb']['tld_update']['DNSBL_TLD'] ?? null
+		);
+		$this->assertContains('DNSBL_TLD', $GLOBALS['pfb']['alias_dnsbl_all']);
+		$this->assertFileExists("{$GLOBALS['pfb']['dnsalias']}/DNSBL_TLD");
+	}
+
+	public function testPunycodeAndRawIdnRemainCounted(): void
+	{
+		$this->runAnalysis("xn--p1ai\r\nрф\r\n");
+		$this->assertSame(
+			['feeds' => ['DNSBL_TLD'], 'count' => 1],
+			$GLOBALS['pfb']['tld_update']['DNSBL_TLD'] ?? null
+		);
+		$this->assertContains('DNSBL_TLD', $GLOBALS['pfb']['alias_dnsbl_all']);
+		$this->assertFileExists("{$GLOBALS['pfb']['dnsalias']}/DNSBL_TLD");
+	}
+
+	private function runAnalysis(string $blacklist): void
 	{
 		$tldMaster = "{$this->tmp}/tld_master.txt";
 		file_put_contents($tldMaster, "com\n");
@@ -79,22 +114,19 @@ final class TldAnalysisBlacklistHostileInputTest extends TestCase
 			'dnsalias'         => "{$this->tmp}/dnsalias",
 			'domain_update'    => TRUE,
 			'dnsblconfig'      => [
-				'tldblacklist' => base64_encode(".zip.\r\n...\r\n"),
+				'tldblacklist' => base64_encode($blacklist),
 				'tldexclusion' => '',
 			],
 		]);
 
-		// Old code's early gate requires the .raw to exist; new code's gate is
-		// $pfb['domain_update'] instead -- an empty .raw satisfies BOTH, so this
-		// stays a genuine preservation-oracle across the change.
 		file_put_contents("{$GLOBALS['pfb']['dnsbl_file']}.raw", '');
-
 		tld_analysis();
+	}
 
-		$this->assertSame(
-			2,
-			$GLOBALS['pfb']['tld_update']['DNSBL_TLD']['count'] ?? null,
-			'the blank line must be dropped by the decoder; the two hostile-but-non-empty entries must both count'
-		);
+	private function assertNoTldBookkeeping(): void
+	{
+		$this->assertArrayNotHasKey('DNSBL_TLD', $GLOBALS['pfb']['tld_update']);
+		$this->assertNotContains('DNSBL_TLD', $GLOBALS['pfb']['alias_dnsbl_all']);
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsalias']}/DNSBL_TLD");
 	}
 }

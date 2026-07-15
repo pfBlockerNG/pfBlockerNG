@@ -8686,6 +8686,9 @@ function tld_analysis() {
 
 			unset($tld_blacklist[$tld]);			// Remove old entry
 			$tld = trim($tld, '.');				// Remove any leading/trailing dots
+			if ($tld === '') {
+				continue;
+			}
 			$tld_blacklist[$tld] = '';			// Add new TLD entry
 
 			$tld_cnt++;
