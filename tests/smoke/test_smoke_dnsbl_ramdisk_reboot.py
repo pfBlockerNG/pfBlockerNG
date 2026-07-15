@@ -32,7 +32,9 @@ reboot marker (destructive — reboots the shared session VM). Run::
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -59,6 +61,9 @@ class DnsblRebootObservation:
     var_wiped: bool
     staged_after: bool
     var_unbound_ls: str
+    manifest_raw_refs: list[str]
+    manifest_missing_refs: list[str]
+    manifest_generation_dirs: list[str]
     recovered: bool
     recovered_after_s: int
     # issue #1255: TLD-Wildcard blocking observed over the SAME reboot cycle.
@@ -150,6 +155,25 @@ def reboot_observation(dnsbl_vm: SmokeVM) -> DnsblRebootObservation:
     staged_after = vm.ssh("test", "-f", PFB_UNBOUND).returncode == 0
     tld_oracle_staged_after = vm.ssh("test", "-f", PFB_PY_TLD).returncode == 0
     var_unbound_ls = vm.ssh("/bin/ls", "-la", "/var/unbound").stdout
+    manifest_probe = h.php_eval(
+        vm,
+        "$m = json_decode(@file_get_contents('/var/unbound/pfb_py_sources.json'), TRUE);\n"
+        "$refs = array(); $missing = array(); $dirs = array();\n"
+        "foreach (($m['feeds'] ?? array()) as $row) {\n"
+        "  $raw = $row['raw'] ?? '';\n"
+        "  if (!is_string($raw) || $raw === '') { $missing[] = '<invalid>'; continue; }\n"
+        "  $refs[] = $raw; $dirs[dirname($raw)] = TRUE;\n"
+        "  if (!is_file('/var/unbound/' . $raw)) { $missing[] = $raw; }\n"
+        "}\n"
+        "echo '<<PFB1357>>' . json_encode(array(\n"
+        "  'refs' => $refs, 'missing' => $missing, 'dirs' => array_keys($dirs)\n"
+        ")) . '<<END1357>>';",
+        timeout=30.0,
+    )
+    if manifest_probe.returncode != 0:
+        raise RuntimeError(f"#1357 post-MFS manifest probe failed: {manifest_probe.stderr}")
+    manifest_state = json.loads(manifest_probe.stdout.split("<<PFB1357>>", 1)[1].split("<<END1357>>", 1)[0])
+    print(f"[smoke] #1357 post-MFS manifest refs: {manifest_state}")
 
     # Poll for self-recovery (pfb_unbound.py staged AND both sinkholes) with NO manual update.
     waited = 0
@@ -170,6 +194,9 @@ def reboot_observation(dnsbl_vm: SmokeVM) -> DnsblRebootObservation:
         var_wiped=var_wiped,
         staged_after=staged_after,
         var_unbound_ls=var_unbound_ls,
+        manifest_raw_refs=manifest_state["refs"],
+        manifest_missing_refs=manifest_state["missing"],
+        manifest_generation_dirs=manifest_state["dirs"],
         recovered=recovered,
         recovered_after_s=waited,
         wild_sub_domain=wild_sub_domain,
@@ -193,6 +220,16 @@ def test_dnsbl_survives_ramdisk_var_reboot(reboot_observation: DnsblRebootObserv
     assert obs.staged_after, (
         f"#468: {PFB_UNBOUND} missing after RAM-disk reboot (not re-staged).\n/var/unbound:\n{obs.var_unbound_ls}"
     )
+    # #1357: the archive restores the manifest and its complete immutable raw set
+    # before the matcher can self-recover from that manifest.
+    assert obs.manifest_raw_refs, "#1357: restored DNSBL manifest has no feed raw references"
+    assert obs.manifest_missing_refs == [], (
+        f"#1357: restored manifest references missing raws: {obs.manifest_missing_refs!r}\n"
+        f"/var/unbound:\n{obs.var_unbound_ls}"
+    )
+    assert len(obs.manifest_generation_dirs) == 1 and re.fullmatch(
+        r"pfb_py_raw\.[0-9a-f]{32}", obs.manifest_generation_dirs[0]
+    ), f"#1357: restored raws are not one immutable generation: {obs.manifest_generation_dirs!r}"
     # #468 end-state: still sinkholing — matcher rebuilt from the restored manifest, no manual update.
     assert obs.recovered, (
         f"#468: {obs.domain} did not sinkhole again within {RECOVERY_DEADLINE}s of a RAM-disk reboot "

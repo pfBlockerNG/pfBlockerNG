@@ -196,10 +196,11 @@ final class DnsblStagingGenerationGuardTest extends TestCase
 		try {
 			// Given: the fork VERBATIM-REUSED this stale file (today's pre-guard
 			// behaviour) -- pfb_unbound_python_sources() reads it as-is.
-			pfb_unbound_python_sources([
+			$manifest = pfb_unbound_python_sources([
 				['header' => $header, 'group' => 'G', 'log' => '1', 'provenance' => 'feed'],
 			]);
-			$raw = @file_get_contents("{$tmp}/pfb_py_raw/{$header}.raw");
+			$this->assertIsArray($manifest);
+			$raw = @file_get_contents("{$tmp}/{$manifest['feeds'][0]['raw']}");
 			$this->assertSame('', $raw, 'old-dialect verbatim reuse silently blanks the feed (#1105)');
 
 			// Then: the guard's decision for this exact file vetoes that reuse.

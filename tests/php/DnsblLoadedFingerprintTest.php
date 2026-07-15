@@ -200,6 +200,13 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		$rawDir = "{$this->tmpDir}/raw";
 		file_put_contents("{$rawDir}/zz_feed.raw", 'z');
 		file_put_contents("{$rawDir}/aa_feed.raw", 'a');
+		file_put_contents("{$this->tmpDir}/pfb_py_sources.json", json_encode([
+			'version' => 1,
+			'feeds' => [
+				['raw' => 'raw/zz_feed.raw'],
+				['raw' => 'raw/aa_feed.raw'],
+			],
+		]));
 
 		$pfb = [
 			'unbound_py_data'    => "{$this->tmpDir}/pfb_py_data.txt",
@@ -269,6 +276,29 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		$result = pfb_dnsbl_loaded_input_paths($pfb);
 
 		$this->assertCount(4, $result, 'With no .raw files, exactly the four flat inputs are returned (wh/sources/hsts/tld)');
+	}
+
+	public function testManifestPathsIncludeMissingConfinedRefButRejectEscapesAndSymlinks(): void
+	{
+		$outside = dirname($this->tmpDir) . '/pfb_outside_' . uniqid() . '.raw';
+		file_put_contents($outside, 'outside');
+		symlink($outside, "{$this->tmpDir}/raw/link.raw");
+		$manifest = "{$this->tmpDir}/pfb_py_sources.json";
+		file_put_contents($manifest, json_encode([
+			'version' => 1,
+			'feeds' => [
+				['raw' => 'raw/missing.raw'],
+				['raw' => '../' . basename($outside)],
+				['raw' => 'raw/link.raw'],
+				['raw' => ['/wrong/type']],
+				['feed' => 'missing-key'],
+			],
+		]));
+
+		$paths = pfb_unbound_py_manifest_raw_paths($manifest);
+
+		$this->assertSame(["{$this->tmpDir}/raw/missing.raw"], $paths);
+		@unlink($outside);
 	}
 
 	/**

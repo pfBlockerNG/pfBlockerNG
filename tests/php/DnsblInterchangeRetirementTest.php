@@ -12,8 +12,8 @@ use PHPUnit\Framework\TestCase;
  * the interchange files -- classification now lives solely in the manifest
  * build (pfb_unbound_python_sources() / pfb_unbound.py). R2/R3: a stale
  * on-disk copy of the retired files, alone, no longer counts as "loaded feeds"
- * nor moves the reload fingerprint -- only a rawdir *.raw (the manifest's own
- * artefact) does, in EITHER TLD toggle state.
+ * nor moves the reload fingerprint -- only a raw referenced by the published
+ * manifest does, in EITHER TLD toggle state.
  */
 #[CoversFunction('pfb_dnsbl_tld_stats_finalize')]
 #[CoversFunction('pfb_dnsbl_has_loaded_feeds')]
@@ -125,17 +125,17 @@ final class DnsblInterchangeRetirementTest extends TestCase
 		);
 	}
 
-	/** Vacuity twin: the SAME stale files, plus a genuine rawdir *.raw -> TRUE. */
+	/** Vacuity twin: the SAME stale files, plus a manifest-referenced raw -> TRUE. */
 	public function testHasLoadedFeedsVacuityTwinRawFileStillCounts(): void
 	{
 		$pfb = $this->makeLoadedFeedsPfb();
 		file_put_contents($pfb['unbound_py_data'], "stale.example,1\n");
 		file_put_contents($pfb['unbound_py_zone'], "stale-zone.example\n");
-		file_put_contents("{$pfb['unbound_py_rawdir']}/feed.raw", "blocked.example\n");
+		$this->publishRawFixture($pfb, "blocked.example\n");
 
 		$this->assertTrue(
 			pfb_dnsbl_has_loaded_feeds($pfb),
-			'sanity: a genuine rawdir *.raw file must still count as loaded (proves the FALSE assertion above can fail)'
+			'sanity: a manifest-referenced raw must still count as loaded (proves the FALSE assertion above can fail)'
 		);
 	}
 
@@ -144,6 +144,7 @@ final class DnsblInterchangeRetirementTest extends TestCase
 		return [
 			'unbound_py_data'   => "{$this->tmp}/pfb_py_data.txt",
 			'unbound_py_zone'   => "{$this->tmp}/pfb_py_zone.txt",
+			'unbound_py_sources'=> "{$this->tmp}/pfb_py_sources.json",
 			'unbound_py_rawdir' => "{$this->tmp}/raw",
 		];
 	}
@@ -167,15 +168,15 @@ final class DnsblInterchangeRetirementTest extends TestCase
 		);
 	}
 
-	/** Vacuity twin: a rawdir *.raw mutation between the SAME two snapshots MUST move it. */
+	/** Vacuity twin: a manifest-referenced raw mutation between snapshots MUST move it. */
 	public function testReloadFingerprintVacuityTwinRawMutationStillMovesIt(): void
 	{
 		$pfb = $this->makeFingerprintPfb();
 		$pfb['dnsbl_tld_wildcard'] = '';
-		file_put_contents("{$pfb['unbound_py_rawdir']}/feed.raw", 'v1');
+		$rawPath = $this->publishRawFixture($pfb, 'v1');
 
 		$fp_before = pfb_dnsbl_reload_fingerprint($pfb);
-		file_put_contents("{$pfb['unbound_py_rawdir']}/feed.raw", 'v2-mutated');
+		file_put_contents($rawPath, 'v2-mutated');
 		$fp_after = pfb_dnsbl_reload_fingerprint($pfb);
 
 		$this->assertNotSame(
@@ -196,5 +197,23 @@ final class DnsblInterchangeRetirementTest extends TestCase
 			'unbound_py_tld'     => "{$this->tmp}/pfb_py_tld.txt",
 			'unbound_py_rawdir'  => "{$this->tmp}/raw",
 		];
+	}
+
+	private function publishRawFixture(array $pfb, string $contents): string
+	{
+		$rawPath = "{$pfb['unbound_py_rawdir']}/feed.raw";
+		file_put_contents($rawPath, $contents);
+		$manifest = [
+			'version' => 1,
+			'config' => [],
+			'feeds' => [[
+				'raw' => 'raw/feed.raw',
+				'feed' => 'feed',
+				'group' => 'test',
+				'log_flag' => '1',
+			]],
+		];
+		file_put_contents($pfb['unbound_py_sources'], json_encode($manifest));
+		return $rawPath;
 	}
 }

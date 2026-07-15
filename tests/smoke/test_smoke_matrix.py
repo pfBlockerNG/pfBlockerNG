@@ -59,7 +59,9 @@ and the smoke deps; without them they skip cleanly.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import time
 from collections.abc import Iterator
 
@@ -826,6 +828,47 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
         # manifest and no swap fires). This is the config-clean data update the swap targets.
         h.force_dnsbl_refetch(deployed_vm, spec.header)
         h.reload(deployed_vm, "update", data_path=True)
+
+        fsync_probe = h.php_eval(
+            deployed_vm,
+            "$dir = '/var/unbound/.pfb1357-fsync-' . getmypid(); $step = 'mkdir';\n"
+            "$ok = @mkdir($dir, 0700);\n"
+            "if ($ok) { $step = 'write'; $ok = file_put_contents($dir . '/before', 'x') === 1; }\n"
+            "if ($ok) { $step = 'rename'; $ok = @rename($dir . '/before', $dir . '/after'); }\n"
+            "$fh = FALSE;\n"
+            "if ($ok) { $step = 'open-dir'; $fh = @fopen($dir, 'r'); $ok = $fh !== FALSE; }\n"
+            "if ($ok) { $step = 'fsync-dir'; $ok = @fsync($fh); }\n"
+            "$error = $ok ? NULL : error_get_last();\n"
+            "if (is_resource($fh)) { fclose($fh); }\n"
+            "@unlink($dir . '/before'); @unlink($dir . '/after'); @rmdir($dir);\n"
+            "echo '<<PFB1357>>' . json_encode(array('ok' => $ok, 'step' => $step, 'error' => $error)) . '<<END1357>>';",
+            timeout=30.0,
+        )
+        assert fsync_probe.returncode == 0, fsync_probe.stderr
+        fsync_result = json.loads(fsync_probe.stdout.split("<<PFB1357>>", 1)[1].split("<<END1357>>", 1)[0])
+        print(f"[smoke] #1357 FreeBSD directory fsync probe: {fsync_result}")
+        assert fsync_result["ok"] is True, f"FreeBSD directory fsync failed: {fsync_result!r}"
+
+        generation_probe = h.php_eval(
+            deployed_vm,
+            "$m = json_decode(file_get_contents('/var/unbound/pfb_py_sources.json'), TRUE);\n"
+            "$dirs = array(); $missing = array(); $staged = array();\n"
+            "foreach (($m['feeds'] ?? array()) as $row) {\n"
+            "  $raw = $row['raw'] ?? ''; $dir = dirname($raw); $dirs[$dir] = TRUE;\n"
+            "  if (strpos($raw, 'pfb_py_raw.stage.') !== FALSE) { $staged[] = $raw; }\n"
+            "  if (!is_file('/var/unbound/' . $raw)) { $missing[] = $raw; }\n"
+            "}\n"
+            "echo '<<PFB1357>>' . json_encode(array(\n"
+            "  'dirs' => array_keys($dirs), 'missing' => $missing, 'staged' => $staged\n"
+            ")) . '<<END1357>>';",
+            timeout=30.0,
+        )
+        assert generation_probe.returncode == 0, generation_probe.stderr
+        generation = json.loads(generation_probe.stdout.split("<<PFB1357>>", 1)[1].split("<<END1357>>", 1)[0])
+        assert len(generation["dirs"]) == 1, f"feed raws span generations: {generation!r}"
+        assert re.fullmatch(r"pfb_py_raw\.[0-9a-f]{32}", generation["dirs"][0]), generation
+        assert generation["missing"] == [], f"published manifest has missing raw refs: {generation!r}"
+        assert generation["staged"] == [], f"published manifest references staging: {generation!r}"
 
         # Clear the target's TTL-bounded prior resolved answer (feed/cron allow->block is
         # not targeted-flushed by PHP — RESULTS/05 SS3), then observe the swapped block.

@@ -102,9 +102,14 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
   It 'save archives the generated set only (never the shipped files)'
     setup_sandbox
     dc stage
-    # A generated manifest + raw + ini present in the chroot.
-    echo '{"feeds":[]}' > "${pfbchroot}/pfb_py_sources.json"
-    echo 'rawdata' > "${pfbchroot}/pfb_py_raw"
+    # A generation-consistent manifest + versioned raw dir + stale stage.
+    generation='pfb_py_raw.0123456789abcdef0123456789abcdef'
+    stage='pfb_py_raw.stage.abcdef0123456789abcdef0123456789'
+    mkdir "${pfbchroot}/${generation}" "${pfbchroot}/${stage}"
+    echo 'rawdata' > "${pfbchroot}/${generation}/feed.raw"
+    echo 'partial' > "${pfbchroot}/${stage}/feed.raw"
+    echo "{\"feeds\":[{\"raw\":\"${generation}/feed.raw\"}]}" > "${pfbchroot}/pfb_py_sources.json"
+    : > "${pfbchroot}/pfb_py_sources.lock"
     echo 'ini' > "${pfbchroot}/pfb_unbound.ini"
     When call dc save
     # An archive was written (codec-agnostic).
@@ -112,6 +117,9 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The path "$arc" should be exist
     # The archive carries the GENERATED files ...
     The result of "tar_list()" should include 'pfb_py_sources.json'
+    The result of "tar_list()" should include 'feed.raw'
+    The result of "tar_list()" should not include "${stage}"
+    The result of "tar_list()" should not include 'pfb_py_sources.lock'
     The result of "tar_list()" should include 'pfb_unbound.ini'
     # ... and NOT the shipped files (re-staged from /usr/local on restore).
     The result of "tar_list()" should not include 'pfb_py_hsts.txt'
@@ -155,6 +163,22 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The contents of file "${pfbchroot}/pfb_unbound.py" should equal 'PY-CODE-v2'
     # Mount-point dirs are present again after restore.
     The path "${pfbchroot}/lib" should be directory
+    cleanup_sandbox
+  End
+
+  It 'restore round-trips a manifest with its referenced versioned raw generation'
+    setup_sandbox
+    dc stage
+    generation='pfb_py_raw.0123456789abcdef0123456789abcdef'
+    mkdir "${pfbchroot}/${generation}"
+    echo 'RAW-v1' > "${pfbchroot}/${generation}/feed.raw"
+    echo "{\"feeds\":[{\"raw\":\"${generation}/feed.raw\"}]}" > "${pfbchroot}/pfb_py_sources.json"
+    dc save
+    rm -rf "${pfbchroot}"
+    When call dc restore
+    The path "${pfbchroot}/${generation}" should be directory
+    The contents of file "${pfbchroot}/${generation}/feed.raw" should equal 'RAW-v1'
+    The contents of file "${pfbchroot}/pfb_py_sources.json" should include "${generation}/feed.raw"
     cleanup_sandbox
   End
 

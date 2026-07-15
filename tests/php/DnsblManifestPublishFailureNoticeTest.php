@@ -6,14 +6,13 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-65: a DNSBL manifest publish failure (the atomic write pfb_unbound_python_sources()
- * performs) must surface loudly -- pfb_logger() + file_notice(), mirroring the existing
+ * ADR-65: a DNSBL manifest publication failure (including its serialization lock)
+ * must surface loudly -- pfb_logger() + file_notice(), mirroring the existing
  * MaxMind/VIP credential-notice pattern (issue #331) -- never silently swallowed as it was
  * before this phase.
  *
- * Drives the REAL pfb_unbound_python_sources(array()) (the no-feeds shape, so no raw file
- * is written -- only the manifest publish itself is exercised) with 'unbound_py_sources'
- * pointed at a read-only directory, so the underlying tempnam()/fopen() genuinely fails.
+ * Drives the REAL pfb_unbound_python_sources(array()) with 'unbound_py_sources' pointed
+ * at a read-only directory, so publication-lock creation genuinely fails.
  */
 #[CoversFunction('pfb_unbound_python_sources')]
 final class DnsblManifestPublishFailureNoticeTest extends TestCase
@@ -71,7 +70,7 @@ final class DnsblManifestPublishFailureNoticeTest extends TestCase
 
 	public function testPublishFailureIntoReadOnlyDirFiresANotice(): void
 	{
-		pfb_unbound_python_sources(array());
+		$this->assertFalse(pfb_unbound_python_sources(array()));
 
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'exactly one notice raised on publish failure');
 		$notice = $GLOBALS['pfb_test_file_notices'][0];

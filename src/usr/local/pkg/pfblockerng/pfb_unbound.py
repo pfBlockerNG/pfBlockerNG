@@ -5230,32 +5230,61 @@ def _dnsbl_path_within_base(path: str, base_dir: str) -> bool:
         return False
 
 
-def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
+class _DnsblGenerationError(Exception):
+    """A manifest generation member is invalid or unreadable."""
+
+
+def _dnsbl_validate_manifest_raws(manifest: dict[str, Any], base_dir: str) -> None:
+    feeds = manifest.get("feeds", [])
+    if not isinstance(feeds, list):
+        raise _DnsblGenerationError("DNSBL manifest feeds is not a list")
+    for feed in feeds:
+        if not isinstance(feed, dict) or not isinstance(feed.get("raw"), str) or not feed["raw"]:
+            raise _DnsblGenerationError("DNSBL manifest feed has no valid raw reference")
+        raw = feed["raw"]
+        path = raw if os.path.isabs(raw) else os.path.join(base_dir, raw)
+        if not _dnsbl_path_within_base(path, base_dir):
+            raise _DnsblGenerationError("DNSBL feed escapes manifest base: '{}'".format(path))
+        if not os.path.isfile(path):
+            raise _DnsblGenerationError("DNSBL feed is missing or not a regular file: '{}'".format(path))
+
+
+def _dnsbl_file_line_reader(base_dir: str, *, fail_closed: bool = False) -> Callable[[str], Iterable[str]]:
     """A file-backed ``line_reader`` for build(): map a feed_row["raw"] reference to
     its raw lines, streamed lazily so peak RAM stays at the dict floor.
 
     ``raw`` may be an absolute path or a name relative to ``base_dir`` (the directory
     holding the manifest). LF is the only record delimiter and actual CR characters
-    are removed from yielded lines. A missing/unreadable feed is logged to stderr and
-    yields nothing rather than aborting the whole build.
+    are removed from yielded lines. ``fail_closed`` turns any path/open/read failure into
+    a generation error for ``dnsbl_build_from_manifest``; direct diagnostic readers retain
+    the historical log-and-yield-nothing behavior.
     """
 
     def reader(raw: str) -> Iterable[str]:
         path = raw if os.path.isabs(raw) else os.path.join(base_dir, raw)
         if not _dnsbl_path_within_base(path, base_dir):
-            # The feed path escapes the manifest directory -- skip it (do not open).
-            sys.stderr.write("[pfBlockerNG]: Refusing DNSBL feed outside base dir: '{}'".format(path))
+            message = "Refusing DNSBL feed outside base dir: '{}'".format(path)
+            sys.stderr.write("[pfBlockerNG]: {}".format(message))
+            if fail_closed:
+                raise _DnsblGenerationError(message)
             return
         try:
             fh = open(path, encoding="utf-8", errors="replace", newline="\n")
         except OSError as e:
-            # A single missing/unreadable feed is logged and skipped -- it must not
-            # abort the whole build (the other feeds still load).
-            sys.stderr.write("[pfBlockerNG]: Failed to read DNSBL feed '{}': {}".format(path, e))
+            message = "Failed to read DNSBL feed '{}': {}".format(path, e)
+            sys.stderr.write("[pfBlockerNG]: {}".format(message))
+            if fail_closed:
+                raise _DnsblGenerationError(message) from e
             return
-        with fh:
-            for line in fh:
-                yield line.replace("\r", "").rstrip("\n")
+        try:
+            with fh:
+                for line in fh:
+                    yield line.replace("\r", "").rstrip("\n")
+        except OSError as e:
+            message = "Failed while reading DNSBL feed '{}': {}".format(path, e)
+            sys.stderr.write("[pfBlockerNG]: {}".format(message))
+            if fail_closed:
+                raise _DnsblGenerationError(message) from e
 
     return reader
 
@@ -5334,15 +5363,20 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
         )
         return None
 
-    base_dir = os.path.dirname(os.path.abspath(manifest_path))
-    config = _dnsbl_config_from_manifest(manifest, base_dir)
-    top1m_enabled = bool(manifest.get("config", {}).get("top1m_enabled", False))
-
     try:
+        if not isinstance(manifest, dict):
+            raise _DnsblGenerationError("DNSBL manifest root is not an object")
+        base_dir = os.path.dirname(os.path.abspath(manifest_path))
+        _dnsbl_validate_manifest_raws(manifest, base_dir)
+        config = _dnsbl_config_from_manifest(manifest, base_dir)
+        manifest_config = manifest.get("config", {})
+        if not isinstance(manifest_config, dict):
+            raise _DnsblGenerationError("DNSBL manifest config is not an object")
+        top1m_enabled = bool(manifest_config.get("top1m_enabled", False))
         result = build(
             manifest,
             config,
-            line_reader=_dnsbl_file_line_reader(base_dir),
+            line_reader=_dnsbl_file_line_reader(base_dir, fail_closed=True),
             top1m_enabled=top1m_enabled,
         )
     except Exception as e:

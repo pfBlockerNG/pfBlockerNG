@@ -371,6 +371,9 @@ dnsbl_cache() {
 			for _g in "${pfbchroot}"/pfb_unbound* "${pfbchroot}"/pfb_py_*; do
 				[ -e "${_g}" ] || continue
 				_skip=''
+				case "${_g}" in
+					"${pfbchroot}"/pfb_py_raw.stage.*|"${pfbchroot}"/pfb_py_sources.lock) _skip=1 ;;
+				esac
 				for _s in ${PFB_PY_SHIPPED}; do
 					[ "${_g}" = "${pfbchroot}/${_s}" ] && _skip=1 && break
 				done

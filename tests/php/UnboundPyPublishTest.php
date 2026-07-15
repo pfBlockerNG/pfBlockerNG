@@ -16,6 +16,7 @@ use PHPUnit\Framework\TestCase;
  * Run against a temp $pfb sandbox (no live box, no chroot).
  */
 #[CoversFunction('pfb_unbound_py_atomic_write')]
+#[CoversFunction('pfb_unbound_py_stream_sync')]
 #[CoversFunction('pfb_unbound_py_flip_sentinel')]
 #[CoversFunction('pfb_unbound_py_wait_applied')]
 final class UnboundPyPublishTest extends TestCase
@@ -108,6 +109,43 @@ final class UnboundPyPublishTest extends TestCase
 		$this->assertFalse(
 			pfb_unbound_py_atomic_write("{$this->tmp}/nope/deep/manifest.json", 'x')
 		);
+	}
+
+	public function testStreamSyncRejectsShortWriteFlushAndFsyncFailures(): void
+	{
+		$fh = tmpfile();
+		$this->assertIsResource($fh);
+		$full = static fn($stream, string $bytes): int => strlen($bytes);
+		$short = static fn($stream, string $bytes): int => strlen($bytes) - 1;
+		$yes = static fn($stream): bool => TRUE;
+		$no = static fn($stream): bool => FALSE;
+
+		$this->assertFalse(pfb_unbound_py_stream_sync($fh, 'abc', $short, $yes, $yes));
+		$this->assertFalse(pfb_unbound_py_stream_sync($fh, 'abc', $full, $no, $yes));
+		$this->assertFalse(pfb_unbound_py_stream_sync($fh, 'abc', $full, $yes, $no));
+		$this->assertTrue(pfb_unbound_py_stream_sync($fh, 'abc', $full, $yes, $yes));
+		fclose($fh);
+	}
+
+	public function testAtomicWriteFailuresKeepOldFileAndCleanTemporaryFile(): void
+	{
+		$path = "{$this->tmp}/manifest.json";
+		$full = static fn($stream, string $bytes): int => strlen($bytes);
+		$short = static fn($stream, string $bytes): int => strlen($bytes) - 1;
+		$yes = static fn($stream): bool => TRUE;
+		$no = static fn($stream): bool => FALSE;
+		$failures = [
+			'short write' => ['write' => $short, 'flush' => $yes, 'fsync' => $yes],
+			'flush' => ['write' => $full, 'flush' => $no, 'fsync' => $yes],
+			'fsync' => ['write' => $full, 'flush' => $yes, 'fsync' => $no],
+		];
+
+		foreach ($failures as $label => $ops) {
+			file_put_contents($path, 'OLD');
+			$this->assertFalse(pfb_unbound_py_atomic_write($path, 'NEW', $ops), $label);
+			$this->assertSame('OLD', file_get_contents($path), "{$label} changed the published file");
+			$this->assertSame([], glob("{$this->tmp}/.pfbpub_*") ?: [], "{$label} leaked a temp file");
+		}
 	}
 
 	// --- sentinel flip (the generation contract) ----------------------------

@@ -153,8 +153,12 @@ final class DnsblHasLoadedFeedsTest extends TestCase
 		// Before: empty rawdir → FALSE.
 		$this->assertFalse(pfb_dnsbl_has_loaded_feeds($pfb), 'Before: empty rawdir → FALSE');
 
-		// Drop a raw file (pfb_unbound_python_sources() writes these for each feed).
+		// Publish one manifest-authoritative raw reference.
 		file_put_contents("{$this->rawDir}/some_feed.raw", "blocked.example.com\n");
+		file_put_contents($pfb['unbound_py_sources'], json_encode([
+			'version' => 1,
+			'feeds' => [['raw' => 'raw/some_feed.raw']],
+		]));
 
 		// After: *.raw present → TRUE.
 		$this->assertTrue(pfb_dnsbl_has_loaded_feeds($pfb), '*.raw in rawdir → TRUE');

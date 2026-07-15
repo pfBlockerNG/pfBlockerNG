@@ -100,6 +100,16 @@ final class UnboundPythonSourcesTest extends TestCase
 		];
 	}
 
+	private function rawPath(array $manifest, string $feed): string
+	{
+		foreach ($manifest['feeds'] as $row) {
+			if ($row['feed'] === $feed) {
+				return dirname($GLOBALS['pfb']['unbound_py_sources']) . "/{$row['raw']}";
+			}
+		}
+		$this->fail("manifest has no feed row for {$feed}");
+	}
+
 	public function testManifestStructureAndTagging(): void
 	{
 		$m = pfb_unbound_python_sources($this->feeds());
@@ -117,8 +127,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame($closedKeySet, array_keys(array_diff_key($plain, ['mode' => NULL])));
 		$this->assertSame('feed', $plain['provenance']);
 		$this->assertSame('1', $plain['log_flag']);
-		// chroot-relative: basename(rawdir)/<feed>.raw, never host-absolute.
-		$this->assertSame('pfb_py_raw/feed1.raw', $plain['raw']);
+		$this->assertMatchesRegularExpression('/^pfb_py_raw\.[0-9a-f]{32}\/feed1\.raw$/D', $plain['raw']);
 
 		// The 'abpfeed' NDJSON rows are 'abp'-kind; the writer routes their raw payload
 		// verbatim purely from the NDJSON kind tag, independent of any feed-level format.
@@ -126,7 +135,8 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame($closedKeySet, array_keys(array_diff_key($abp, ['mode' => NULL])));
 		$this->assertSame('user', $abp['provenance']);
 		$this->assertSame('0', $abp['log_flag']);
-		$this->assertSame('pfb_py_raw/abpfeed.raw', $abp['raw']);
+		$this->assertSame(dirname($plain['raw']), dirname($abp['raw']), 'all feed raws must share one generation');
+		$this->assertSame('abpfeed.raw', basename($abp['raw']));
 	}
 
 	public function testProvenanceDefaultsToFeedWhenUnset(): void
@@ -175,15 +185,15 @@ final class UnboundPythonSourcesTest extends TestCase
 
 	public function testPlainRawIsBareDomainColumn(): void
 	{
-		pfb_unbound_python_sources($this->feeds());
-		$raw = file_get_contents("{$this->tmp}/pfb_py_raw/feed1.raw");
+		$manifest = pfb_unbound_python_sources($this->feeds());
+		$raw = file_get_contents($this->rawPath($manifest, 'feed1'));
 		$this->assertSame("example.com\nfoo.com\n", $raw);
 	}
 
 	public function testAbpRawIsVerbatim(): void
 	{
-		pfb_unbound_python_sources($this->feeds());
-		$raw = file_get_contents("{$this->tmp}/pfb_py_raw/abpfeed.raw");
+		$manifest = pfb_unbound_python_sources($this->feeds());
+		$raw = file_get_contents($this->rawPath($manifest, 'abpfeed'));
 		$this->assertSame("||ads.example^\n@@||good.example^\n", $raw);
 	}
 
@@ -203,10 +213,10 @@ final class UnboundPythonSourcesTest extends TestCase
 		file_put_contents("{$this->tmp}/dnsbl/stalefeed.txt",
 			pfb_dnsbl_ndjson_emit_domain_row('legit.example', '1', 'f', 'g') .
 			"not valid ndjson,stale-block.example,stale2.example##.ad\n");
-		pfb_unbound_python_sources([
+		$manifest = pfb_unbound_python_sources([
 			['header' => 'stalefeed', 'group' => 'g', 'log' => '1', 'provenance' => 'feed'],
 		]);
-		$raw = file_get_contents("{$this->tmp}/pfb_py_raw/stalefeed.raw");
+		$raw = file_get_contents($this->rawPath($manifest, 'stalefeed'));
 		$this->assertSame(
 			"legit.example\n",
 			$raw,
@@ -410,9 +420,10 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertNotSame($old, $published, 'the stale manifest must be replaced');
 		$this->assertSame(["\u{FFFD}"], $decoded['config']['top1m_list']);
 		$this->assertSame(1, substr_count($published, '\\ufffd'), 'one malformed sequence must emit one replacement');
-		$this->assertFileDoesNotExist(
-			"{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw",
-			'the old manifest raw must still be removed before replacement publication'
+		$this->assertSame(
+			'old-raw-secret',
+			file_get_contents("{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw"),
+			'the old generation remains readable until confirmed-apply garbage collection'
 		);
 	}
 
@@ -429,7 +440,13 @@ final class UnboundPythonSourcesTest extends TestCase
 
 		$this->assertTrue(is_nan($manifest['feeds'][0]['group']), 'the full writer must keep returning the generated manifest');
 		$this->assertSame($old, file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
-		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw");
+		$this->assertSame('old-raw-secret', file_get_contents("{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw"));
+		$published = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE);
+		$this->assertIsArray($published);
+		foreach ($published['feeds'] as $feed) {
+			$raw_path = dirname($GLOBALS['pfb']['unbound_py_sources']) . "/{$feed['raw']}";
+			$this->assertFileExists($raw_path, "published raw reference must still resolve: {$feed['raw']}");
+		}
 		$this->assertSame('Inf and NaN cannot be JSON encoded', $error);
 		foreach ([$this->logContents(), $this->errorLogContents()] as $log) {
 			$this->assertStringContainsString('DNSBL manifest JSON encoding failed: ' . $error, $log);
@@ -539,11 +556,11 @@ final class UnboundPythonSourcesTest extends TestCase
 		$log = $this->logContents();
 		$this->assertStringContainsString('pfb_unbound_python_sources', $log);
 		$this->assertStringContainsString('Feed header failed validation', $log);
-		$this->assertFileDoesNotExist("{$this->tmp}/pfb_py_raw/bad.header.raw");
+		$this->assertFileDoesNotExist(dirname($this->rawPath($m, 'feed1')) . '/bad.header.raw');
 
 		// ... and the valid rows built exactly as in an all-valid run.
 		$this->assertSame("example.com\nfoo.com\n",
-			file_get_contents("{$this->tmp}/pfb_py_raw/feed1.raw"));
+			file_get_contents($this->rawPath($m, 'feed1')));
 	}
 
 	public function testAllValidHeadersBuildWithoutValidationLogging(): void
