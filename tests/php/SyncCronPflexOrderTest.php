@@ -17,8 +17,7 @@ use PHPUnit\Framework\TestCase;
  * pfblockerng.php carries top-level execution and is never require()'d
  * off-appliance (the PHPUnit bootstrap doesn't load www/ dispatcher
  * scripts), and pfb_update_check() performs real network downloads, so
- * driving pfblockerng_sync_cron() behaviourally is infeasible here. Per
- * the TickEntrypointTest/PfbReflectorGuardTest house precedent, this suite
+ * driving pfblockerng_sync_cron() behaviourally is infeasible here. This suite
  * instead reads the function's source text and pins the ORDER of the two
  * statements: the first `$pflex = FALSE` derivation line must precede the
  * first `pfb_update_check(` call site (the .fail retry) textually.

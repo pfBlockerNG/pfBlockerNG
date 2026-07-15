@@ -21,8 +21,8 @@ use PHPUnit\Framework\TestCase;
  * array field), so no field is exempt any more -- every array-valued field,
  * Lmove included, is rejected the same way.
  *
- * Like SyncRowhelperGuardTest, the page carries top-level execution and
- * cannot be require()d off-appliance, so each region below is eval-extracted
+ * The page carries top-level execution and cannot be require()d off-appliance,
+ * so each region below is eval-extracted
  * verbatim from the REAL source, anchored on text stable across both the
  * pre-fix and post-fix code so the same test file proves red on the old
  * code and green on the new.

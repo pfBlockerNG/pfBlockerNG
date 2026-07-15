@@ -20,9 +20,8 @@ use PHPUnit\Framework\TestCase;
  *
  * The file executes top-level code on include (needs a live pfSense
  * session -- $pfb, $_REQUEST routing, real file I/O) and cannot be
- * require()d off-appliance. Per the PfbReflectorGuardTest.php eval-oracle
- * precedent, the guard + cap block is extracted verbatim from the real
- * source into a callable oracle (the count injected as the argument, print
+ * require()d off-appliance. The guard + cap block is extracted verbatim from
+ * the real source into a callable oracle (the count injected as the argument, print
  * captured, exit becomes an early return), so the branch logic is exercised
  * behaviourally, not just shape-matched.
  *

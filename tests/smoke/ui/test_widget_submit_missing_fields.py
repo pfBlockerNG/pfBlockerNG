@@ -5,8 +5,8 @@ key (``pfb_popup``, ``pfb_sortcolumn``, ``pfb_dnsblquery``, ...) unguarded: the 
 ``isset($_POST['pfb_submit'])`` gates the branch, not the keys, so a crafted POST
 missing a field -- or a NORMAL save with a checkbox unchecked (an unchecked checkbox
 posts no key at all) -- logged one PHP 8.3 "Undefined array key" warning per field.
-Same crafted-POST class as #1056 (this module mirrors its test) and the
-``pfblockerngack`` guard fixed on PR #1061.
+Same crafted-POST class: a submitted request omits expected per-field keys; the
+``pfblockerngack`` guard was fixed on PR #1061.
 """
 
 from __future__ import annotations
@@ -39,9 +39,8 @@ def test_widget_save_missing_per_field_keys_does_not_warn(
 
     Can't use ``WebUI.post()`` -- it always resends the page's OWN scraped field
     set, so it can never OMIT one; this replicates its scrape-then-POST shape with
-    the per-field keys deleted first (mirrors ``test_browser_general.py``'s #1056
-    test and ``test_widget_clear_failed.py``'s no-CSRF POST: ``$nocsrf = TRUE`` on
-    this page means no ``__csrf_magic`` token exists to scrape).
+    the per-field keys deleted first; ``$nocsrf = TRUE`` on this page means no
+    ``__csrf_magic`` token exists to scrape.
 
     Scenario: widget save survives a POST carrying only the submit marker.
       Background: pfBlockerNG deployed; webConfigurator authenticated.
