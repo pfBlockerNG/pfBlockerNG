@@ -856,7 +856,7 @@ final class LogMgmtAgeCutoffTest extends TestCase
 	 * (partial, non-FALSE) file_put_contents() write as failure, not success --
 	 * a genuine disk-full short write cannot be forced deterministically/
 	 * portably in a unit test (same constraint documented at
-	 * DnsblPrefetchTest::test_write_complete_helper_flags_a_short_write_as_incomplete),
+	 * IpPrefetchTest's write-outcome predicate tests),
 	 * so this pins the extracted write-outcome predicate directly with
 	 * fabricated byte counts -- the "testable shape" fallback for an
 	 * unforceable OS failure. The predicate is new code: it does not exist

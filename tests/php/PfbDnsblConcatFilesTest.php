@@ -242,7 +242,7 @@ final class PfbDnsblConcatFilesTest extends TestCase
 	 * failure -- not just a bare FALSE -- so a truncated destination can never advance
 	 * the rebuild bookkeeping as current. A genuine disk-full short write cannot be
 	 * forced deterministically/portably in a unit test (same constraint documented at
-	 * DnsblPrefetchTest::test_write_complete_helper_flags_a_short_write_as_incomplete),
+	 * IpPrefetchTest's write-outcome predicate tests),
 	 * so this pins the extracted decision predicate directly with fabricated byte counts.
 	 */
 	public function testWriteOkPredicateFlagsShortAndFailedWritesAsIncomplete(): void

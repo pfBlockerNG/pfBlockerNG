@@ -496,8 +496,8 @@ final class LogTimestampBaselineTest extends TestCase
 	/**
 	 * Calls $work() with every raised PHP warning/notice captured (not printed),
 	 * then returns those messages MINUS pfb_open_sqlite()'s @chown/@chgrp-to-
-	 * 'unbound' noise (the 'unbound' OS user is absent on a dev/CI box -- same
-	 * harness-noise filter as DnsblParseComputeMetacharTest).
+	 * 'unbound' noise (the 'unbound' OS user is absent on a dev/CI box; the
+	 * harness-noise filter is shared by the sqlite-touching tests).
 	 *
 	 * @return string[] unexpected warning messages (empty = none)
 	 */
