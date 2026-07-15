@@ -153,18 +153,6 @@ if ($_POST) {
 			$input_errors[] = 'IPinfo Token Invalid';
 		}
 
-		// issue #1070: an array-valued textarea POST ('v4suppression[]=x') throws a
-		// PHP 8 TypeError in explode()/base64_encode() before the input-errors gate;
-		// reject it and blank the field so every later read stays scalar.
-		foreach (array('v4suppression', 'v6suppression') as $pfb_sfield) {
-			$pfb_sval = $_POST[$pfb_sfield] ?? '';
-			if (!is_string($pfb_sval)) {
-				$input_errors[] = gettext('Invalid suppression list value.');
-				$pfb_sval = '';
-			}
-			$_POST[$pfb_sfield] = $pfb_sval;
-		}
-
 		$v4suppression = explode("\r\n", $_POST['v4suppression']);
 		if (!empty($v4suppression)) {
 			foreach ($v4suppression as $line) {
@@ -254,12 +242,9 @@ if ($_POST) {
 						(array) ($_POST['pfb_agg_types'] ?? array())));
 			PfbConfig::write('pfb_agg_types', implode(',', $agg_types_post));
 
-			// ADR-40: alias-table apply mode (gateway-registered scalar). issue #1070:
-			// array_key_exists() TypeErrors on an array key, so coerce a crafted
-			// array POST to the 'auto' default via the is_scalar guard.
-			$delta_mode_raw = $_POST['pfb_alias_delta_mode'] ?? '';
-			$delta_mode_post = (is_scalar($delta_mode_raw) && array_key_exists($delta_mode_raw, $options_pfb_alias_delta_mode))
-				? $delta_mode_raw
+			// ADR-40: alias-table apply mode (gateway-registered scalar).
+			$delta_mode_post = array_key_exists($_POST['pfb_alias_delta_mode'] ?? '', $options_pfb_alias_delta_mode)
+				? $_POST['pfb_alias_delta_mode']
 				: 'auto';
 			PfbConfig::write('pfb_alias_delta_mode', $delta_mode_post);
 
