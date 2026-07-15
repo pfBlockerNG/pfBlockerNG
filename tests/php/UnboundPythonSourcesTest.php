@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -27,6 +28,7 @@ use PHPUnit\Framework\TestCase;
  *     line is skipped + logged, never silently dropped.
  */
 #[CoversFunction('pfb_unbound_python_sources')]
+#[CoversFunction('pfb_unbound_python_sources_patch')]
 #[CoversFunction('pfb_unbound_python_sources_unlock')]
 #[CoversFunction('pfb_dnsbl_unlock_lines')]
 #[CoversFunction('pfb_dnsbl_whitelist_lines')]
@@ -331,6 +333,192 @@ final class UnboundPythonSourcesTest extends TestCase
 	{
 		$path = $GLOBALS['pfb']['log'];
 		return file_exists($path) ? (string) file_get_contents($path) : '';
+	}
+
+	private function errorLogContents(): string
+	{
+		$path = $GLOBALS['pfb']['errlog'];
+		return file_exists($path) ? (string) file_get_contents($path) : '';
+	}
+
+	private function seedManifest(string $marker = 'old-manifest-secret'): string
+	{
+		$manifest = [
+			'version' => 1,
+			'config' => [
+				'user_whitelist' => [$marker],
+				'user_unlock' => [],
+			],
+			'feeds' => [[
+				'raw' => 'pfb_py_raw/old.raw',
+				'feed' => 'old-feed-secret',
+			]],
+		];
+		$json = (string) json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], $json);
+		return $json;
+	}
+
+	public static function validFullManifestValues(): array
+	{
+		return [
+			'ASCII' => ['on', "ascii.example\n"],
+			'Unicode remains escaped' => ['on', "b\u{00FC}cher.example\n"],
+			'quote and slash keep legacy escaping' => ['on', "quo\"te/path.example\n"],
+			'empty list keeps legacy shape' => ['off', ''],
+		];
+	}
+
+	#[DataProvider('validFullManifestValues')]
+	public function testFullManifestValidInputsKeepLegacyJsonBytes(string $enabled, string $top1m): void
+	{
+		$GLOBALS['pfb']['dnsbl_top1m'] = $enabled;
+		if ($enabled === 'on') {
+			file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", $top1m);
+		}
+
+		$manifest = pfb_unbound_python_sources([]);
+		$published = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
+		$legacy = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+		$this->assertNotFalse($legacy);
+		$this->assertSame($legacy, $published, 'valid manifest JSON bytes must remain identical to the legacy encoder');
+	}
+
+	public static function malformedUtf8Values(): array
+	{
+		return [
+			'isolated invalid byte' => ["\xFF"],
+			'truncated three-byte sequence' => ["\xE2\x82"],
+		];
+	}
+
+	#[DataProvider('malformedUtf8Values')]
+	public function testFullManifestSubstitutesMalformedUtf8AndPublishes(string $invalid): void
+	{
+		mkdir($GLOBALS['pfb']['unbound_py_rawdir'], 0777, true);
+		file_put_contents("{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw", 'old-raw-secret');
+		$old = $this->seedManifest();
+		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", $invalid . "\n");
+
+		pfb_unbound_python_sources([]);
+
+		$published = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
+		$decoded = json_decode($published, true);
+		$this->assertSame(JSON_ERROR_NONE, json_last_error(), 'the replacement manifest must be valid JSON');
+		$this->assertNotSame($old, $published, 'the stale manifest must be replaced');
+		$this->assertSame(["\u{FFFD}"], $decoded['config']['top1m_list']);
+		$this->assertSame(1, substr_count($published, '\\ufffd'), 'one malformed sequence must emit one replacement');
+		$this->assertFileDoesNotExist(
+			"{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw",
+			'the old manifest raw must still be removed before replacement publication'
+		);
+	}
+
+	public function testFullManifestResidualEncodingFailureLogsGenericErrorAndKeepsOldManifest(): void
+	{
+		mkdir($GLOBALS['pfb']['unbound_py_rawdir'], 0777, true);
+		file_put_contents("{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw", 'old-raw-secret');
+		$old = $this->seedManifest();
+
+		$manifest = pfb_unbound_python_sources([
+			['header' => 'feed1', 'group' => NAN, 'log' => '1'],
+		]);
+		$error = json_last_error_msg();
+
+		$this->assertTrue(is_nan($manifest['feeds'][0]['group']), 'the full writer must keep returning the generated manifest');
+		$this->assertSame($old, file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['unbound_py_rawdir']}/old.raw");
+		$this->assertSame('Inf and NaN cannot be JSON encoded', $error);
+		foreach ([$this->logContents(), $this->errorLogContents()] as $log) {
+			$this->assertStringContainsString('DNSBL manifest JSON encoding failed: ' . $error, $log);
+			$this->assertStringNotContainsString('old-manifest-secret', $log);
+			$this->assertStringNotContainsString('old-raw-secret', $log);
+			$this->assertStringNotContainsString('feed1', $log);
+			$this->assertStringNotContainsString('example.com', $log);
+			$this->assertStringNotContainsString('old.raw', $log);
+			$this->assertStringNotContainsString('user_whitelist', $log);
+			$this->assertStringNotContainsString('group', $log);
+		}
+	}
+
+	public static function validPatchValues(): array
+	{
+		return [
+			'whitelist ASCII' => ['user_whitelist', ['ascii.example']],
+			'unlock Unicode remains escaped' => ['user_unlock', ["b\u{00FC}cher.example"]],
+			'whitelist quote and slash keep legacy escaping' => ['user_whitelist', ['quo"te/path.example']],
+			'unlock empty list keeps legacy shape' => ['user_unlock', []],
+		];
+	}
+
+	#[DataProvider('validPatchValues')]
+	public function testManifestPatchValidInputsKeepLegacyJsonBytes(string $key, array $values): void
+	{
+		$old = $this->seedManifest();
+		$expected = json_decode($old, true);
+		$expected['config'][$key] = $values;
+		$legacy = json_encode($expected, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+		$this->assertTrue(pfb_unbound_python_sources_patch($key, $values));
+		$this->assertNotFalse($legacy);
+		$this->assertSame(
+			$legacy,
+			file_get_contents($GLOBALS['pfb']['unbound_py_sources']),
+			'valid patch JSON bytes must remain identical to the legacy encoder'
+		);
+	}
+
+	public static function malformedPatchValues(): array
+	{
+		return [
+			'whitelist isolated invalid byte' => ['user_whitelist', "\xFF"],
+			'whitelist truncated sequence' => ['user_whitelist', "\xE2\x82"],
+			'unlock isolated invalid byte' => ['user_unlock', "\xFF"],
+			'unlock truncated sequence' => ['user_unlock', "\xE2\x82"],
+		];
+	}
+
+	#[DataProvider('malformedPatchValues')]
+	public function testManifestPatchSubstitutesMalformedUtf8AndPublishes(string $key, string $invalid): void
+	{
+		$this->seedManifest();
+
+		$this->assertTrue(pfb_unbound_python_sources_patch($key, [$invalid]));
+
+		$published = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
+		$decoded = json_decode($published, true);
+		$this->assertSame(JSON_ERROR_NONE, json_last_error(), 'the patched manifest must be valid JSON');
+		$this->assertSame(["\u{FFFD}"], $decoded['config'][$key]);
+		$this->assertSame(1, substr_count($published, '\\ufffd'), 'one malformed sequence must emit one replacement');
+	}
+
+	public static function residualPatchKeys(): array
+	{
+		return [
+			'whitelist' => ['user_whitelist'],
+			'unlock' => ['user_unlock'],
+		];
+	}
+
+	#[DataProvider('residualPatchKeys')]
+	public function testManifestPatchResidualEncodingFailureLogsGenericErrorAndKeepsOldManifest(string $key): void
+	{
+		$old = $this->seedManifest();
+
+		$this->assertFalse(pfb_unbound_python_sources_patch($key, [NAN]));
+		$error = json_last_error_msg();
+
+		$this->assertSame($old, file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
+		$this->assertSame('Inf and NaN cannot be JSON encoded', $error);
+		foreach ([$this->logContents(), $this->errorLogContents()] as $log) {
+			$this->assertStringContainsString('DNSBL manifest JSON encoding failed: ' . $error, $log);
+			$this->assertStringNotContainsString('old-manifest-secret', $log);
+			$this->assertStringNotContainsString('old-feed-secret', $log);
+			$this->assertStringNotContainsString('old.raw', $log);
+			$this->assertStringNotContainsString($key, $log);
+		}
 	}
 
 	public function testInvalidHeaderRowIsSkippedAndLoggedValidRowsKept(): void
