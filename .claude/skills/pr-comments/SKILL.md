@@ -317,9 +317,11 @@ body file before posting.
 
 ## Step 8 — Deferred findings → a tracking GitHub Issue (mandatory)
 
-Every DEFER finding is real (Step 5 already confirmed it) — so it MUST land in a
-GitHub Issue, never just an acknowledgement. Acknowledging without a follow-up is
-wasted computation.
+Every DEFER finding is real, pre-existing, and passed the scanner/audit finding gate in
+Step 5 — so it MUST land in a GitHub Issue, never just an acknowledgement. A
+HARDENING-ONLY finding is `SKIP`, never `DEFER`: keep it in the audit/reply evidence and do
+not create an issue. Acknowledging an actionable DEFER without a follow-up is wasted
+computation.
 
 - **Open the issue in the SAME (public) repo as the PR** — `gh issue create -R OWNER/REPO
   --title <t> --body-file <f>` with descriptive label(s) (`bug`/`enhancement`/…). The
@@ -328,8 +330,9 @@ wasted computation.
   (A genuinely *undisclosed* vulnerability you found yourself still follows the private
   disclosure rules — but a public review comment is not that.)
 - **The issue body is self-contained:** what the finding is, the `file:line`, why it is
-  out of scope for THIS PR, and a link back to the review comment/PR. Append the
-  attribution footer.
+  out of scope for THIS PR, a validated issue-gate block (producer, supported path,
+  required privilege, hand-crafted yes/no, impact scope, and black-box reproduction), and
+  a link back to the review comment/PR. Append the attribution footer.
 - **Optionally** also fix it now in its own branch+PR (`--body-file`; push first, PR if
   direct push is blocked) and link that too — but the issue is the required artifact.
 - **Link the issue** in the reply on the original thread (Step 7).

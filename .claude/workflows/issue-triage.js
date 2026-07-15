@@ -25,9 +25,9 @@ if (model !== 'claude-sonnet-5' && model !== 'claude-fable-5') throw new Error(`
 
 const TRIAGE = {
   type: 'object',
-  required: ['verdict', 'claims', 'impact', 'repro', 'plan_steps', 'base_tip'],
+  required: ['verdict', 'claims', 'reachability', 'impact', 'repro', 'plan_steps', 'base_tip'],
   properties: {
-    verdict: { type: 'string', enum: ['CONFIRMED', 'CONFIRMED-WITH-CORRECTIONS', 'ALREADY-FIXED', 'CANNOT-REPRODUCE', 'NEEDS-INFO', 'INVALID', 'WORKS-AS-INTENDED', 'DUPLICATE'] },
+    verdict: { type: 'string', enum: ['CONFIRMED', 'CONFIRMED-WITH-CORRECTIONS', 'ALREADY-FIXED', 'CANNOT-REPRODUCE', 'NEEDS-INFO', 'INVALID', 'WORKS-AS-INTENDED', 'DUPLICATE', 'HARDENING-ONLY'] },
     claims: {
       type: 'array',
       minItems: 1,
@@ -44,6 +44,18 @@ const TRIAGE = {
       },
     },
     alternatives: { type: 'string', description: 'the alternative explanations considered and the observation that discriminates them' },
+    reachability: {
+      type: 'object',
+      required: ['producer', 'supported_path', 'required_privilege', 'hand_crafted', 'impact_scope', 'black_box_repro'],
+      properties: {
+        producer: { type: 'string', description: 'GUI / API / import / upgrade / persisted configuration / external data / none' },
+        supported_path: { type: 'string', description: 'the supported path that produces the input, or the executed evidence that none does' },
+        required_privilege: { type: 'string' },
+        hand_crafted: { type: 'boolean', description: 'true when the request/input must be modified outside its supported producer' },
+        impact_scope: { type: 'string', description: 'request-local / persistent / cross-user / confidentiality-integrity / service-wide availability' },
+        black_box_repro: { type: 'string', description: 'executed end-to-end reproduction and outcome, or why infeasible' },
+      },
+    },
     impact: {
       type: 'object',
       required: ['severity', 'blast_radius', 'regression_risk', 'security_sensitive'],
@@ -89,7 +101,7 @@ const triage = await agent(`You TRIAGE GitHub issue #${issue} for this repositor
 
 2. VERIFY EVERY LOAD-BEARING CLAIM against the CURRENT code at origin/${base}, read from the up-to-date checkout at ${worktree} (git -C ${worktree} show origin/${base}:<path>, git -C ${worktree} grep ... origin/${base} -- <path>, git log/blame) — never a possibly-stale working tree. Each claims[] entry carries the executed command + output (or file:line read now) as evidence and the repo paths it rests on (cited_paths — the resume staleness check reruns against exactly those). A CONFIRMED verdict needs executable evidence: a minimal runnable repro (scratch space, e.g. php -r / python3 -c — NEVER files inside the checkout) in repro.output, or repro.infeasible_reason stating why off-appliance repro is impossible. Name the alternative explanations you considered and what discriminates them. Check specifically: already fixed on origin/${base}? duplicate? misunderstanding/works-as-intended?
 
-3. IMPACT: severity + who is exposed, blast radius (read docs/misc/architecture-notes.md in ${worktree} before implicating the DNSBL/ABP pipeline, manifest boundary, or swap/watcher), regression risk of fixing, security sensitivity (true => public text stays neutral; analysis details stay out of the artifact).
+3. REACHABILITY + IMPACT: record the producer, supported path, required privilege, whether hand-crafting is required, impact scope, and black-box reproduction. A scanner/audit finding is actionable only when executed evidence proves that a supported producer (GUI/API/import/upgrade/persisted configuration/external data) can generate it without modifying the request outside that producer, it crosses an authentication/authorization boundary, or it causes persistent, cross-user, confidentiality/integrity, or service-wide availability impact. If an already-authorized actor must hand-craft the input and only that actor's request fails, return HARDENING-ONLY with a close-as-not-planned step — no code fix and no tracker child. Also assess severity + who is exposed, blast radius (read docs/misc/architecture-notes.md in ${worktree} before implicating the DNSBL/ABP pipeline, manifest boundary, or swap/watcher), regression risk of fixing, and security sensitivity (true => public text stays neutral; analysis details stay out of the artifact).
 
 4. PLAN: minimal and proportionate — most bugs are reproduce-test -> fix -> verify, not a refactor. Each plan_steps[] entry gives the step objective and the brief_notes a planner needs to compose the delegate brief: required reading as file:line refs, coverage-matrix rows ENUMERATED FROM GREP (cite the command) for every sibling axis touched (v4/v6, CE/Plus, parse modes, callers), hostile-input rows for any parser/regex/guard, constraints, canonical gates, red-proof shape (test-first). A non-actionable verdict gets one step naming the non-code action instead — never an invented fix.
 

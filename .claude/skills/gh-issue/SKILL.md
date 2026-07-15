@@ -106,9 +106,10 @@ every judgment call: labels, `AskUserQuestion` forks, and the `--fix` decision s
 Orchestrator-only rules around the verdict:
 
 - **Non-actionable verdict** (ALREADY-FIXED / NEEDS-INFO / INVALID / WORKS-AS-INTENDED /
-  DUPLICATE) → the "plan" is the appropriate non-code action (close with rationale, ask the
-  precise follow-up, mark duplicate) — never an invented fix. `--fix` on such a verdict
-  means: carry out that non-code action and surface it, not force a code change.
+  DUPLICATE / HARDENING-ONLY) → the "plan" is the appropriate non-code action (close with
+  rationale, ask the precise follow-up, mark duplicate) — never an invented fix. `--fix` on
+  such a verdict means: carry out that non-code action and surface it, not force a code change.
+  HARDENING-ONLY closes as not planned unless the user explicitly expands policy.
 - **Security sensitivity** (`impact.security_sensitive`) → honour the `private` repo's
   disclosure rules: the threat analysis / attack vector / any `PFBL_*` detail stays in the
   private repo (a `PFBL-NN` ADR if the hardening warrants one); the public issue / PR /

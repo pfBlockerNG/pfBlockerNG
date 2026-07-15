@@ -894,11 +894,30 @@ user. Full policy: [`workflow-reference.md`](docs/misc/workflow-reference.md)
 (`gh issue view <N> --comments`); later comments routinely revise/narrow/downgrade/invalidate
 the original (issue #25). Never act on the opening text alone. Branch: `issue/{NN}-{slug}`.
 
+### Scanner/audit finding gate
+
+A scanner, audit, or review finding is **actionable** and may become a GitHub issue only when
+executed evidence proves at least one of these:
+
+1. A supported producer (GUI, API, import, upgrade, persisted configuration, or external
+   data) can generate it without modifying the request outside that producer.
+2. It crosses an authentication or authorization boundary.
+3. It causes persistent, cross-user, confidentiality/integrity, or service-wide availability
+   impact.
+
+Before issue creation, record the producer, supported-path verdict, required privilege,
+whether hand-crafting is required, impact scope, and black-box reproduction. A hand-crafted
+request requiring an already-authorized actor and causing only that request to fail is
+**HARDENING-ONLY**: keep it in the audit record, classify it `SKIP` rather than `DEFER`, and
+do not create an issue or modify production code. A scanner sink/crash probe alone proves a
+language behaviour, not an actionable product defect.
+
 ### TypeError-class tracker (#1143)
 
-Every newly found TypeError-class defect (a request/array value reaching a string-typed sink
-— the array-`$_POST` family: #1070/#1106/#1128/#1139) gets its own issue **and is linked as a
-sub-issue of tracker #1143** (GraphQL `addSubIssue`); never folded into an older issue.
+Every newly found **actionable** TypeError-class defect (a request/array value reaching a
+string-typed sink — the array-`$_POST` family: #1070/#1106/#1128/#1139) gets its own issue and
+is linked as a sub-issue of tracker #1143 (GraphQL `addSubIssue`); never fold it into an older
+issue. HARDENING-ONLY findings do not become tracker children.
 
 ### Labels (lifecycle)
 
