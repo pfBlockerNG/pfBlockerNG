@@ -624,6 +624,41 @@ class TestQueryWatcherLoop:
         assert open(h.channel, "rb").read() == before_bytes  # never rewritten
         assert os.stat(h.channel).st_mtime == before_mtime
 
+    def test_a_raising_request_does_not_kill_the_watcher_thread(
+        self, query_harness: _QueryHarness, monkeypatch: Any
+    ) -> None:
+        """issue #1351 review: one request whose evaluation raises must NOT permanently
+        disable the query channel. Before the per-request guard, the exception unwound
+        the whole daemon loop and the thread returned (init never restarts it); after,
+        the poison request is logged and skipped and the watcher keeps answering.
+        """
+        poison = "watcher-poison.uuidquery2007.com"
+        good = "watcher-survivor.uuidquery2007.com"
+        _seed_blocked_domain(good)
+        real = P.dnsbl_query_answer
+
+        def boom(domain: str, qtype: Any) -> dict[str, Any]:
+            if domain == poison:
+                raise RuntimeError("simulated evaluate_domain failure on a hostile domain")
+            return real(domain, qtype)
+
+        h = query_harness
+        monkeypatch.setattr(P, "dnsbl_query_answer", boom)
+        h.start()
+
+        # The poison request raises inside the watcher; it must get NO reply and NOT
+        # take the thread down with it.
+        h.publish({"id": "poison1", "domain": poison, "qtype": "A"})
+        time.sleep(0.3)
+        assert h.wait_reply("poison1", timeout=0.5) is None
+        live = [th for th in threading.enumerate() if th.name == "pfb_query_watcher_test"]
+        assert live and live[0].is_alive(), "the watcher thread died on a raising request"
+
+        # A subsequent valid request is still answered -- the channel survived.
+        h.publish({"id": "survivor1", "domain": good, "qtype": "A"})
+        reply = h.wait_reply("survivor1")
+        assert reply is not None and reply["blocked"] is True
+
     def test_stop_event_terminates_the_thread(self, query_harness: _QueryHarness) -> None:
         h = query_harness
         h.start()
