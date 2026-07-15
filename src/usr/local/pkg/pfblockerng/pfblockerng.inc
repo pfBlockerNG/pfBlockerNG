@@ -19913,13 +19913,15 @@ function sync_package_pfblockerng($cron='') {
 	#################################
 
 	$log = '';
+	if ($pfb['filter_configure'] || !empty($pfb_feed_changed)) {
+		// Remove IP Cache file
+		unlink_if_exists($pfb['ip_cache']);
+	}
+
 	if ($pfb['filter_configure']) {
 
 		// Remove any IPs in Alerts unlock feature
 		unlink_if_exists("{$pfb['ip_unlock']}");
-
-		// Remove IP Cache file
-		unlink_if_exists($pfb['ip_cache']);
 
 		require_once('filter.inc');
 		filter_configure();
