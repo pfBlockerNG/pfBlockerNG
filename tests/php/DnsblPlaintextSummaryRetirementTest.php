@@ -103,7 +103,15 @@ final class DnsblPlaintextSummaryRetirementTest extends TestCase
 	{
 		$groupLoop = strpos($this->source, '// Reset variables once per alias');
 		$this->assertNotFalse($groupLoop);
-		$aliasAssignment = strpos($this->source, '$alias = "DNSBL_{$list[\'aliasname\']}";', $groupLoop);
+		$assignmentMatched = preg_match(
+			'/\$alias\s*=\s*"DNSBL_\{\$list\[\'aliasname\'\]\}";/',
+			$this->source,
+			$assignmentMatch,
+			PREG_OFFSET_CAPTURE,
+			$groupLoop
+		);
+		$this->assertSame(1, $assignmentMatched, 'DNSBL alias assignment not found');
+		$aliasAssignment = $assignmentMatch[0][1];
 		$aliasValidation = strpos(
 			$this->source,
 			"if (empty(pfb_filter(\$alias, PFB_FILTER_WORD, 'DNSBL - Processes')))",
