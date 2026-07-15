@@ -112,6 +112,15 @@ Describe 'claude-bash-guard.sh'
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
+    It 'H22 (#1339): single-quoted subcommand token (git '\''commit'\'' -n -m x) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git 'commit' -n -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
     It 'H12a (F5 full JSON validity): exact deny JSON for Rule A'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m x"}}
@@ -130,9 +139,27 @@ Describe 'claude-bash-guard.sh'
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
+    It 'B18 (#1339): single-quoted standalone short flag (git commit '\''-n'\'' -m x) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit '-n' -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
     It 'B12 (#1292): clustered short flag, n mid-cluster (git commit -anm x) -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git commit -anm x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'B19 (#1339): single-quoted short-flag cluster (git commit '\''-an'\'' -m x) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit '-an' -m x"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -240,6 +267,24 @@ Describe 'claude-bash-guard.sh'
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
+    It 'B20 (#1339): single-quoted standalone short flag (git push '\''-f'\'' origin main) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push '-f' origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'B21 (#1339): single-quoted push subcommand token (git '\''push'\'' -f origin main) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git 'push' -f origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
     It 'B6: flag after args (git push origin main --force) -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git push origin main --force"}}
@@ -288,6 +333,15 @@ Describe 'claude-bash-guard.sh'
     It 'H7 (F3 clustered short flag): git push -uf origin main -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git push -uf origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H23 (#1339): single-quoted short-flag cluster (git push '\''-uf'\'' origin main) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push '-uf' origin main"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -357,6 +411,15 @@ Describe 'claude-bash-guard.sh'
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
+    It 'B22 (#1339): single-quoted -f AFTER --force-with-lease -> DENY (last force flag wins)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease '-f' origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
     It 'H13 (issue #1058): digit-bearing short-flag cluster (git push -4f origin main) -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git push -4f origin main"}}
@@ -378,6 +441,15 @@ Describe 'claude-bash-guard.sh'
     It 'P14 (issue #1058): bare force BEFORE --force-with-lease -> PASS (the lease, last, wins)'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git push --force --force-with-lease origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'P17 (#1339): single-quoted -f BEFORE --force-with-lease -> PASS (the lease, last, wins)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push '-f' --force-with-lease origin main"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -447,6 +519,42 @@ Describe 'claude-bash-guard.sh'
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
+    It 'H24 (#1339): a single-quoted force refspec (git push origin '\''+branch:branch'\'') -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push origin '+branch:branch'"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H25 (#1339): a leased single-quoted force refspec still DENIES'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease origin '+branch:branch'"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'P18 (#1339): a bare + token is not a force refspec -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push origin '+'"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'P19 (#1339): a mid-token + is not a force refspec -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push origin 'branch+branch'"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
     It 'B17 (#1292, documented accepted false-positive): a `+` opening a push option VALUE -> DENY'
       # `-o "+1 note"` is a normal push option whose value happens to start
       # with +. Double-quote stripping (normalization) exposes it at a
@@ -475,6 +583,15 @@ Describe 'claude-bash-guard.sh'
     It 'B9: short flag (git worktree remove -f ../wt) -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git worktree remove -f ../wt"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'B23 (#1339): single-quoted short flag (git worktree remove '\''-f'\'' ../wt) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git worktree remove '-f' ../wt"}}
       End
       When run script "$GUARD"
       The status should be success
