@@ -245,11 +245,16 @@ ADR text then seeded #1047).
 
 - **When a post-merge fix overturns a piece of an Accepted/Implemented ADR** — a review
   finding, an issue fix, anything that invalidates a decision, contract, or stated fact —
-  the ADR gains (or extends) a **§8 "Post-merge amendments" section in the same change**
-  as the fix. The correction never lives only in the issue/PR.
-- Earlier sections stay as written (the historical record); §8 is the authoritative
-  correction: one numbered item per overturned piece, each naming the issue/commit that
-  overturned it and the corrected decision.
+  the ADR gains (or extends) a dated **"Post-merge amendments" / "Post-acceptance
+  addendum" section in the same change** as the fix. The correction never lives only in
+  the issue/PR.
+- The accepted ADR body stays byte-identical as the historical record. The same
+  immutability applies to that ADR's phase documents and Results artifacts: later work
+  appends a dated correction/addendum and never edits their existing content. Direct
+  edits are allowed only while authoring, implementing, or testing the ADR before
+  acceptance.
+- The dated amendment/addendum is the authoritative correction: one item per overturned
+  piece, each naming the issue/commit that overturned it and the corrected decision.
 - Exemplars: `.ADRs/ADR_60_Age_Based_Log_Retention/ADR.md` §8 and
   `.ADRs/ADR_61_Sync_Status_Ledger/ADR.md` §8.
 - ADR text is the dev-only no-PR class, so the amendment commits directly to `devel`

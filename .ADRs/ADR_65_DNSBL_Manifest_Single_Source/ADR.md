@@ -202,7 +202,7 @@ single question and receive the answer it would have logged:
 | **Engine** | Runs the **pure decision** `evaluate_domain`/`_scan_block_band` against the live `dataDB`/`zoneDB`/`regexDB`/`whiteDB`/`hstsDB` — the SAME code `operate()` uses, so the answer reflects the full matcher (regex/ABP, allow, whitelist precedence, TOP1M, `$important`, HSTS, homoglyph), never a grep approximation. |
 | **Side effects** | **NONE that a real query has, except the LRU.** No `("resolver")`/`("dnsbl")` counter enqueue, no `dnsbl.log` line, no `dnsblcache` row. Writing the LRU `decisionDB` memo is **allowed** (it warms the cache and is decision-neutral). Pinned by a test that asserts every counter/log/cache is untouched across a query while `decisionDB` may change. |
 | **Always-on** | The query watcher runs unconditionally (read-only ⇒ safe), independent of the legacy-control toggle. Started alongside the existing watchers in init. |
-| **Transport** | File request + reply file keyed by `id`, reusing the control channel's kqueue-watch + atomic-write pattern (lazy: mirrors existing code). The caller `pfb_log_event` runs in TWO independent webserver-hit daemons (`pfb_daemon_dnsbl` HTTPS + `pfb_daemon_dnsbl_index` HTTP), so PHP serializes the complete publish → reply poll → cleanup transaction with the advisory `pfb_py_query.lock`. Lock contention and reply polling share one deadline: lock-deadline exhaustion returns `NULL` → `Unknown` (the documented D4 fallback) without publishing, while reply-deadline exhaustion cleans the already-published transaction before returning the same fallback. A lock open/acquire failure returns without publishing. The low webserver-hit rate makes this file transport sufficient without a socket or per-`id` files. |
+| **Transport** | File request + reply file keyed by `id`, reusing the control channel's kqueue-watch + atomic-write pattern (lazy: mirrors existing code). **Concurrency (corrected post-review, PR #1351):** the caller `pfb_log_event` runs in TWO independent webserver-hit daemons (`pfb_daemon_dnsbl` HTTPS + `pfb_daemon_dnsbl_index` HTTP), which CAN race on the single shared request/reply slot — the earlier "one-event-at-a-time" premise was inaccurate. The race is **safe, not correct**: `id`-correlation means a losing caller sees a mismatched reply, keeps polling, and returns `NULL` → `Unknown` (the documented D4 fallback) after ≤5 s — never a wrong verdict, only added latency and a rare Unknown-under-contention misattribution of the hit's group. A Unix-domain socket or per-`id` filenames is the documented upgrade path if that contention ever matters (tracked: issue #1352). |
 | **Privilege** | Owner root, group `unbound`, mode **0660** on the request file (the attributing daemon must write it; it is read-only in effect — it mutates no state), reply file 0640. Read-only ⇒ no authorization beyond "local" is required; a hostile local writer can at worst warm the LRU. Stated as a security decision, not an accident. |
 
 ### 2.2 Retire the `.txt`; rewire every consumer
@@ -287,8 +287,7 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
 - **User-visible:** the reports "changed since" refinement badges go away and feed-filtering
   semantics shift (D2). Release-noted.
 - **Latency:** the webserver-hit path gains a round-trip to the module per hit. It is off the DNS
-  fast path; either daemon may spend its bounded deadline waiting behind the other daemon's
-  transaction, with an `Unknown` fallback on lock/channel failure or reply timeout.
+  fast path (daemon context, one event at a time); bounded-wait with an `Unknown` fallback.
 
 ## 4. Requirements (acceptance)
 
@@ -483,5 +482,21 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
   privileged, seq-gated, and fire-and-forget (no data reply); a read-only query wants a separate,
   always-on, unprivileged, request/reply channel — @andrebrait's "always-on read-only parallel."
 - **A Unix-domain socket for the query channel.** Deferred, not rejected: the file channel matches
-  existing code and is sufficient for the low-rate, lock-serialized webserver-hit path; a socket
-  remains an upgrade path only if measured latency or throughput later demands it.
+  existing code and suffices for one-event-at-a-time; the socket is the documented upgrade path if
+  latency/concurrency ever demands it.
+
+---
+
+## 9. Post-implementation addendum (2026-07-15 — issue #1352 / PR #1360)
+
+The accepted transport text records the pre-fix shared-slot design. Issue #1352
+proved that the HTTPS and HTTP webserver-hit daemons can overlap, so PR #1360 added
+an advisory `pfb_py_query.lock` around the complete publish → reply poll → cleanup
+transaction. Lock contention and reply polling share one deadline. Lock open/acquire
+failure or lock-deadline exhaustion returns `NULL` → `Unknown` without publishing;
+reply-deadline exhaustion cleans the already-published transaction before returning
+the same fallback. No failure returns another caller's attribution.
+
+The hit rate is low enough that the lock-serialized file channel remains the chosen
+transport. A Unix-domain socket remains a future option only if measured latency or
+throughput later requires it.
