@@ -25,7 +25,7 @@
 
 `pfb_unbound.py` runs inside Unbound's embedded Python. DB writes and log writes are pushed off the DNS-response path onto **one shared async worker thread** fed by a bounded `queue.Queue(5000)` (`pfb_async` / `pfb_async_worker`); the worker drops tasks when the queue is full (`async_dropped`) and `deinit` drains it with a 5s join. On that worker:
 
-- **`write_sqlite()`** opens a **new `sqlite3` connection per call** (`connect(timeout=100s)`), runs `CREATE TABLE IF NOT EXISTS` *every time*, executes, `commit`s, and `close`s. Three DBs: `pfb_py_resolver.sqlite` (`resolver`), `pfb_py_dnsbl.sqlite` (`dnsbl`), `pfb_py_cache.sqlite` (`dnsblcache`). Per-call connect was a deliberate workaround (BBcan177) for connection-stability issues on pfSense.
+- **Historical pre-#1349 baseline:** `write_sqlite()` opened a **new `sqlite3` connection per call** (`connect(timeout=100s)`), ran `CREATE TABLE IF NOT EXISTS` *every time*, executed, `commit`ed, and `close`d. It served three DBs: `pfb_py_resolver.sqlite` (`resolver`), `pfb_py_dnsbl.sqlite` (`dnsbl`), and the now-retired `pfb_py_cache.sqlite` (`dnsblcache`). Per-call connect was a deliberate workaround (BBcan177) for connection-stability issues on pfSense.
 - **`log_entry()`** does `open(append)` → write → `close` **per line** to `dnsbl.log`, `dns_reply.log`, `unified.log`. (`py_error.log` already goes through stdlib `logging` with a persistent handler.)
 
 The async worker hides the latency, but the per-call `connect()`/`open()` syscalls are still wasteful.
@@ -46,16 +46,16 @@ Replace per-call open/close with persistent, recoverable I/O, split into two ind
 
 | Area | Decision |
 | --- | --- |
-| **DB (Python)** | One persistent `sqlite3` connection per file, owned solely by a **DB-worker thread** (`check_same_thread` satisfied), opened lazily, kept open. On (re)connect: `PRAGMA journal_mode=WAL`, `busy_timeout`, `synchronous=NORMAL`, then `CREATE TABLE IF NOT EXISTS`. **Batched** writes flushed on a short timer + on `deinit`: counters accumulate a **per-key delta** flushed as **relative** `… = … + :delta` (never absolute); cache rows buffer in **FIFO** and flush via one `executemany` transaction. **Reconnect-on-fault**: on `OperationalError`/malformed/file-gone → close, reconnect, re-`CREATE TABLE`, **re-run the pending op** (bounded retries; never silently drop a dequeued write). |
+| **DB (Python)** | One persistent `sqlite3` connection per file, owned solely by a **DB-worker thread** (`check_same_thread` satisfied), opened lazily, kept open. On (re)connect: `PRAGMA journal_mode=WAL`, `busy_timeout`, `synchronous=NORMAL`, then `CREATE TABLE IF NOT EXISTS`. **Batched** writes flushed on a short timer + on `deinit`: counters accumulate a **per-key delta** flushed as **relative** `… = … + :delta` (never absolute). The retired pre-#1349 reports cache also buffered rows in **FIFO** for one `executemany` transaction; active DB work is counter-only. **Reconnect-on-fault**: on `OperationalError`/malformed/file-gone → close, reconnect, re-`CREATE TABLE`, **re-run the pending op** (bounded retries; never silently drop a dequeued write). |
 | **DB (PHP)** | `pfb_open_sqlite` sets `journal_mode=WAL` + `busy_timeout` consistently; **reconcile the `PRAGMA journal_mode = delete` at `inc:6297`** so nothing flips the file out of WAL under the live Python connection. |
 | **Logging** | stdlib `logging`: `QueueHandler` (DNS path, bounded, drop-on-full) → `QueueListener` (**log-worker thread**) → one **`WatchedFileHandler`** per file with a **raw `%(message)s`** formatter (byte-identical lines). The existing line-cap is reused unchanged; `WatchedFileHandler` re-`stat`s before each emit, so it tolerates the trim (`mv`) and the clear (`unlink`) **without modifying either**. |
-| **Threads** | Two independent workers (DB, log). Only **intra-stream** order matters: counters are commutative (`+= 1`), so per-key delta summation is order-free even for the same key; **cache inserts preserve FIFO** (same-domain re-blocks). No cross-stream (log↔db) ordering. |
+| **Threads** | Two independent workers (DB, log). Only **intra-stream** order matters: active resolver/DNSBL counters are commutative (`+= 1`), so per-key delta summation is order-free even for the same key. The retired pre-#1349 reports-cache inserts preserved FIFO (same-domain re-blocks). No cross-stream (log↔db) ordering. |
 | **Durability** | `≥` today. Hard floor: never block the DNS path → keep the **bounded queue + drop-on-full**. `deinit` **drains both queues and flushes the DB batch** before join (the "better than today" win, since pfBlockerNG restarts Unbound on every reload). |
 
 ### Semantics that MUST be preserved (the contract — pin with tests before swapping)
 
-- `resolver.totalqueries += 1` per counted query; `dnsbl.counter += 1 WHERE groupname = ?`; `dnsblcache` gets one `INSERT` per block event. **All counter writes stay relative** (`+= delta`) so a concurrent UI reset is never clobbered.
-- Cache-insert row order is preserved within a flush (same-domain ordering).
+- `resolver.totalqueries += 1` per counted query; `dnsbl.counter += 1 WHERE groupname = ?`. **All counter writes stay relative** (`+= delta`) so a concurrent UI reset is never clobbered.
+- Historical only: before #1349, `dnsblcache` received one FIFO-preserved `INSERT` per block event. That table and write path are not part of the active contract.
 - Each app-log line is written **verbatim** (`line + "\n"`, no added level/timestamp/encoding) to the **same file** as today (`dnsbl.log` / `dns_reply.log` / `unified.log`).
 - Drop-on-full and the set of log files/targets are unchanged.
 
@@ -109,9 +109,9 @@ Each phase is one commit, leaves `python -m pytest` green, and is behaviour-pres
 
 Prompt: `01_DB_Persistent_Connection.txt`
 
-- Python: DB-worker thread owning persistent per-file connections; WAL + busy_timeout + synchronous=NORMAL; batched relative-increment counters + FIFO cache inserts; reconnect-on-fault; `deinit` flush+drain.
+- Python: DB-worker thread owning persistent per-file connections; WAL + busy_timeout + synchronous=NORMAL; batched relative-increment counters; reconnect-on-fault; `deinit` flush+drain. The original implementation also batched FIFO reports-cache inserts, retired by #1349.
 - PHP: WAL + busy_timeout in `pfb_open_sqlite`; reconcile `journal_mode=delete` (`inc:6297`).
-- Golden tests: identical `resolver`/`dnsbl`/`dnsblcache` table state for a fixed op sequence, old vs new; relative-increment-survives-reset test.
+- Golden tests: identical active `resolver`/`dnsbl` table state for a fixed op sequence, old vs new; relative-increment-survives-reset test. Historical pre-#1349 tests also covered `dnsblcache`, which is no longer required or emitted.
 
 ### Phase 2 — Logging subsystem: QueueListener + WatchedFileHandler
 
@@ -136,5 +136,5 @@ Prompt: `03_Validation.txt`
 
 - `python -m pytest` green incl. new golden/concurrency/fault tests; `ruff` clean; ShellCheck/intelephense/`php -l` clean.
 - Persistent connection + WAL on both sides; batched relative-increment counters; reconnect-on-fault; two async workers; `deinit` flush+drain.
-- Byte-identical logs + identical DB table dumps vs current, under the golden harness.
+- Byte-identical logs + identical active `resolver`/`dnsbl` table dumps vs current, under the golden harness.
 - Status → **Accepted** after the manual smoke passes on a live box.
