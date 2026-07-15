@@ -205,51 +205,77 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$manifest = $this->publish();
 		$this->assertIsArray($manifest);
 		$rawRefs = array_column($manifest['feeds'], 'raw');
-		[$holderParent, $holderChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
-		stream_set_timeout($holderParent, 5);
-		stream_set_timeout($holderChild, 5);
-		$holderPid = pcntl_fork();
-		if ($holderPid === 0) {
-			fclose($holderParent);
-			$lock = pfb_unbound_py_publication_lock();
-			fwrite($holderChild, "LOCKED\n");
-			fgets($holderChild);
-			pfb_unbound_py_publication_unlock($lock);
+		$holderPid = NULL;
+		$patchPid = NULL;
+		$holderParent = NULL;
+		$patchParent = NULL;
+		try {
+			[$holderParent, $holderChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+			stream_set_timeout($holderParent, 5);
+			stream_set_timeout($holderChild, 5);
+			$holderPid = pcntl_fork();
+			if ($holderPid === 0) {
+				fclose($holderParent);
+				$lock = pfb_unbound_py_publication_lock();
+				fwrite($holderChild, "LOCKED\n");
+				fgets($holderChild);
+				pfb_unbound_py_publication_unlock($lock);
+				fclose($holderChild);
+				exit(0);
+			}
+			$this->assertGreaterThan(0, $holderPid);
 			fclose($holderChild);
-			exit(0);
-		}
-		fclose($holderChild);
-		$this->assertSame("LOCKED\n", fgets($holderParent));
+			$this->assertSame("LOCKED\n", fgets($holderParent));
 
-		[$patchParent, $patchChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
-		stream_set_timeout($patchParent, 5);
-		stream_set_timeout($patchChild, 5);
-		$patchPid = pcntl_fork();
-		if ($patchPid === 0) {
-			fclose($patchParent);
-			$ok = pfb_unbound_python_sources_patch('user_unlock', ['allow.example'], [
-				'lock' => static function () use ($patchChild) {
-					fwrite($patchChild, "ATTEMPT\n");
-					return pfb_unbound_py_publication_lock();
-				},
-			]);
-			fwrite($patchChild, $ok ? "DONE\n" : "FAILED\n");
+			[$patchParent, $patchChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+			stream_set_timeout($patchParent, 5);
+			stream_set_timeout($patchChild, 5);
+			$patchPid = pcntl_fork();
+			if ($patchPid === 0) {
+				fclose($patchParent);
+				$ok = pfb_unbound_python_sources_patch('user_unlock', ['allow.example'], [
+					'lock' => static function () use ($patchChild) {
+						fwrite($patchChild, "ATTEMPT\n");
+						return pfb_unbound_py_publication_lock();
+					},
+				]);
+				fwrite($patchChild, $ok ? "DONE\n" : "FAILED\n");
+				fclose($patchChild);
+				exit($ok ? 0 : 1);
+			}
+			$this->assertGreaterThan(0, $patchPid);
 			fclose($patchChild);
-			exit($ok ? 0 : 1);
+			$this->assertSame("ATTEMPT\n", fgets($patchParent));
+			$read = [$patchParent];
+			$write = NULL;
+			$except = NULL;
+			$this->assertSame(0, stream_select($read, $write, $except, 0, 200000),
+				'patch completed before the publication lock was released');
+			fwrite($holderParent, "RELEASE\n");
+			$this->assertSame("DONE\n", fgets($patchParent));
+			pcntl_waitpid($holderPid, $holderStatus);
+			$holderPid = NULL;
+			pcntl_waitpid($patchPid, $patchStatus);
+			$patchPid = NULL;
+			$this->assertTrue(pcntl_wifexited($holderStatus) && pcntl_wexitstatus($holderStatus) === 0);
+			$this->assertTrue(pcntl_wifexited($patchStatus) && pcntl_wexitstatus($patchStatus) === 0);
+		} finally {
+			if (is_resource($holderParent)) {
+				@fwrite($holderParent, "RELEASE\n");
+				fclose($holderParent);
+			}
+			if (is_resource($patchParent)) {
+				fclose($patchParent);
+			}
+			foreach ([$holderPid, $patchPid] as $pid) {
+				if (is_int($pid) && $pid > 0) {
+					if (pcntl_waitpid($pid, $childStatus, WNOHANG) === 0 && function_exists('posix_kill')) {
+						posix_kill($pid, SIGKILL);
+					}
+					pcntl_waitpid($pid, $childStatus);
+				}
+			}
 		}
-		fclose($patchChild);
-		$this->assertSame("ATTEMPT\n", fgets($patchParent));
-		$read = [$patchParent];
-		$write = NULL;
-		$except = NULL;
-		$this->assertSame(0, stream_select($read, $write, $except, 0, 200000),
-			'patch completed before the publication lock was released');
-		fwrite($holderParent, "RELEASE\n");
-		$this->assertSame("DONE\n", fgets($patchParent));
-		pcntl_waitpid($holderPid, $holderStatus);
-		pcntl_waitpid($patchPid, $patchStatus);
-		$this->assertTrue(pcntl_wifexited($holderStatus) && pcntl_wexitstatus($holderStatus) === 0);
-		$this->assertTrue(pcntl_wifexited($patchStatus) && pcntl_wexitstatus($patchStatus) === 0);
 		$patched = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE);
 		$this->assertSame($rawRefs, array_column($patched['feeds'], 'raw'));
 		$this->assertSame(['allow.example'], $patched['config']['user_unlock']);
