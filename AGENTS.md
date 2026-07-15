@@ -49,6 +49,11 @@ prompts.
   resolves the primary checkout even from a Codex session worktree.
 - The Codex `SessionStart` hook runs the shared branch-freshness and visible
   merge-base check.
+- In Codex desktop, `gh` credentials may live in macOS Keychain and be
+  unavailable to sandboxed commands. Run the authenticated `gh` operation
+  through the approved elevated execution path before concluding that GitHub
+  authentication is invalid; a sandboxed `gh auth status` failure is not
+  conclusive.
 - Project `.codex/config.toml`, `.codex/hooks.json`, and custom agents load only
   after the repository is trusted. Review changed hooks with `/hooks`.
 - Codex's shared-Git-hook marker is `CODEX_THREAD_ID`.
