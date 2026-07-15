@@ -20,7 +20,9 @@ Tests:
 
 import json
 import os
+import subprocess
 from collections.abc import Iterator
+from typing import Literal
 
 import pytest
 
@@ -125,9 +127,10 @@ def _write_ledger_entry(vm: SmokeVM, job_key: str, last_run: int, next_due: int,
         raise RuntimeError(f"_write_ledger_entry failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-def _run_tick(vm: SmokeVM) -> str:
-    """Fire one tick synchronously and return its combined stdout+stderr."""
-    return vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1").stdout
+def _run_tick(vm: SmokeVM, verb: Literal["tick", "cron-tick"] = "tick") -> subprocess.CompletedProcess[str]:
+    """Drain active pfBlockerNG tasks, then fire one tick verb."""
+    h.wait_no_active_pfb_task(vm)
+    return vm.ssh(_PHP, _PFB_PHP, verb)
 
 
 _SS_EXTDNS_STUB = "192.168.89.2"  # WAN SLIRP host alias -> the stub_dns fixture
@@ -318,7 +321,7 @@ def test_cron_tick_respects_disable_flag(deployed_vm: SmokeVM) -> None:
         # --- flag present: cron-tick must NOT dispatch. ---
         _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
         before = _read_ledger(vm)
-        result = vm.ssh(_PHP, _PFB_PHP, "cron-tick")
+        result = _run_tick(vm, "cron-tick")
         assert result.returncode == 0, f"cron-tick (flag present) rc={result.returncode} stderr={result.stderr!r}"
         assert f"[ Disabled by {flag} ]" in result.stdout, (
             f"cron-tick (flag present) must print the disabled banner; got {result.stdout!r}"
@@ -332,7 +335,7 @@ def test_cron_tick_respects_disable_flag(deployed_vm: SmokeVM) -> None:
         # --- flag absent: cron-tick DOES dispatch (the non-vacuous other half). ---
         rm = vm.ssh("rm", "-f", flag)
         assert rm.returncode == 0, f"failed to remove {flag}: rc={rm.returncode} {rm.stderr!r}"
-        result2 = vm.ssh(_PHP, _PFB_PHP, "cron-tick")
+        result2 = _run_tick(vm, "cron-tick")
         assert result2.returncode == 0, f"cron-tick (flag absent) rc={result2.returncode} stderr={result2.stderr!r}"
         assert "[ Disabled by" not in result2.stdout, (
             f"cron-tick (flag absent) must not print the disabled banner; got {result2.stdout!r}"
@@ -368,7 +371,7 @@ def test_tick_verb_ignores_disable_flag(deployed_vm: SmokeVM) -> None:
     now_ts = int(vm.ssh("date +%s").stdout.strip())
     _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
 
-    result = vm.ssh(_PHP, _PFB_PHP, "tick")
+    result = _run_tick(vm)
     assert result.returncode == 0, f"tick rc={result.returncode} stderr={result.stderr!r}"
     assert "[ Disabled by" not in result.stdout, (
         f"the direct 'tick' verb must never print the cron-tick disabled banner; got {result.stdout!r}"
@@ -391,8 +394,8 @@ def test_tick_dispatches_due_feed(deployed_vm: SmokeVM) -> None:
       2. a ' CRON  PROCESS  START' marker appears in pfblockerng.log — that marker is logged
          ONLY by pfblockerng_sync_cron, so it proves the tick dispatches the `cron` verb
          (-> per-list Update Frequency + scheduled log reset) and NOT a bare
-         `pfb_trigger scope=both` (which logs no CRON PROCESS pass). This is the FIRST tick
-         test, so it runs on a clean box (no prior backgrounded cron holding the sync lock).
+         `pfb_trigger scope=both` (which logs no CRON PROCESS pass). The module-local runner
+         drains active pfBlockerNG tasks before dispatch, establishing a quiescent appliance.
 
     Scenario:
         Background: pfBlockerNG installed with at least one enabled feed.
@@ -448,8 +451,8 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
 
     The tick logs to syslog (not stdout), so observe the NON-dispatch via the
     ' CRON  PROCESS  START' marker (logged only by pfblockerng_sync_cron): a non-due cron
-    must produce NO new marker. Drain any in-flight cron from a prior tick test first so the
-    marker baseline is stable. This is marker-based (not ledger-value-based) so it is immune
+    must produce NO new marker. The module-local runner drains active pfBlockerNG tasks before
+    dispatch so the marker baseline is stable. This is marker-based (not ledger-value-based) so it is immune
     to a prior test's mark_ran overwriting the cron entry — both values stay 'future' anyway.
 
     On its own, "no CRON PROCESS marker" cannot distinguish "tick correctly skipped the
@@ -470,16 +473,6 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
     vm = deployed_vm
     marker = "CRON  PROCESS  START"
     ss_marker = "SafeSearch CNAME fallback IPs refreshed"
-
-    # Drain any in-flight backgrounded cron from a prior tick test so the marker baseline
-    # is stable (a still-running prior cron would log a marker unrelated to this tick).
-    assert h.wait_until(
-        lambda: (
-            vm.ssh("pgrep -f 'pfblockerng[.]php cron' >/dev/null && echo BUSY || echo CLEAR").stdout.strip() == "CLEAR"
-        ),
-        timeout=90,
-        interval=3,
-    ), "a prior backgrounded cron never finished; cannot isolate this tick"
 
     now_ts = int(vm.ssh("date +%s").stdout.strip())
     _write_ledger_entry(vm, "cron", now_ts - 86400, now_ts + 3600)
