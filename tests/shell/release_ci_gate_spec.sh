@@ -236,6 +236,7 @@ EOF
   End
 
   It 'fails closed when Git cannot classify a skipped commit'
+    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
     parent_dir="$(printf '%.2s' "$ancestor")"
     parent_file="$(printf '%s' "$ancestor" | cut -c3-)"
     rm "${repo}/.git/objects/${parent_dir}/${parent_file}"
