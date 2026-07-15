@@ -9973,6 +9973,17 @@ function validate_ipv6($ipaddr) {
 }
 
 
+// Return a BRE pattern for one complete validated IP/CIDR feed entry.
+// Invalid inputs return NULL so callers preserve no-pattern miss behaviour.
+function pfb_ip_exact_entry_pattern($entry): ?string {
+	if (!is_string($entry) || (!is_ipaddr($entry) && !is_subnet($entry))) {
+		return NULL;
+	}
+
+	return '^' . str_replace('.', '\.', $entry) . '$';
+}
+
+
 // Function to check for loopback addresses (IPv4 range: 127.0.0.0/8, excluding IPv6)
 function FILTER_FLAG_NO_LOOPBACK_RANGE($value) {
 	// http://www.php.net/manual/en/filter.filters.flags.php
@@ -10003,7 +10014,11 @@ function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 	global $pfb;
 
 	// Find exact IP match
-	$q_ip	= escapeshellarg(str_replace('.', '\.', "^{$ip}"));
+	$q_ip = pfb_ip_exact_entry_pattern($ip);
+	if ($q_ip === NULL) {
+		return array('Unknown', 'Unknown');
+	}
+	$q_ip = escapeshellarg($q_ip);
 	// issue #833: /dev/null forces grep to always be given >=2 files, so it
 	// always emits the "path:" prefix -- even when $pfbfolder's glob resolves to
 	// exactly ONE .txt file. Without it, pfb_parse_query() gets an unprefixed
@@ -10191,11 +10206,13 @@ function pfb_ip_render_query(array $fields): array {
 	// validate exec at all).
 	$validate_file_cmd = NULL;
 	$validate_cmd	    = NULL;
+	$q_ip		    = NULL;
 	if ($fields[14] != 'Unknown' && $fields[15] != 'Unknown') {
-		$q_ip = str_replace('.', '\.', $fields[14]);
+		$q_ip = pfb_ip_exact_entry_pattern($fields[14]);
+	}
 
-		$q_ip_esc = escapeshellarg("^{$q_ip}");
-
+	if ($q_ip !== NULL) {
+		$q_ip_esc = escapeshellarg($q_ip);
 		// issue #832: the ET/Proofpoint branch above blanks $query/$query_host/
 		// $query_prefix (no filename filter -- every file under etdir is a
 		// candidate), so only append the filter tail when there IS one -- two
@@ -10300,25 +10317,27 @@ function pfb_ip_prefetch_grep_lines(string $cmd_prefix, string $cmd_suffix, arra
 
 
 // Attribute the LAST line in $lines (grep's original order is preserved regardless of pattern
-// order) that "belongs" to $raw_prefix — reproducing per-row exec()'s "last stdout line"
+// order) that exactly equals $raw_entry — reproducing per-row exec()'s "last stdout line"
 // semantics from a batched multi-pattern grep pass whose output interleaves every candidate's
 // matches. A line belongs under either grep shape: unprefixed (single file matched, line IS
 // the content) or file-prefixed ("path:content", path always contains '/', so the substring
-// after the FIRST ':' is the content) — preserving grep's own prefix-match quirk (`^1.2.3.4`
-// also matches `1.2.3.45`) for behaviour-identity with the exec it replaces. The colon-fallback
-// requires the segment BEFORE ':' to contain '/', else an unprefixed IPv6 line could misattribute.
-function pfb_ip_prefetch_last_match(array $lines, string $raw_prefix): ?string {
+// after the FIRST ':' is the content). The colon fallback requires the segment before ':' to
+// contain '/', else an unprefixed IPv6 line could be mistaken for path-prefixed output.
+function pfb_ip_prefetch_last_match(array $lines, string $raw_entry): ?string {
+	if (pfb_ip_exact_entry_pattern($raw_entry) === NULL) {
+		return NULL;
+	}
 
 	$match = NULL;
 	foreach ($lines as $line) {
-		if (str_starts_with($line, $raw_prefix)) {
+		if ($line === $raw_entry) {
 			$match = $line;
 			continue;
 		}
 		$colon_pos = strpos($line, ':');
 		if ($colon_pos !== FALSE &&
 		    strpos(substr($line, 0, $colon_pos), '/') !== FALSE &&
-		    str_starts_with(substr($line, $colon_pos + 1), $raw_prefix)) {
+		    substr($line, $colon_pos + 1) === $raw_entry) {
 			$match = $line;
 		}
 	}
@@ -10353,8 +10372,13 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 	// host's own LAST matching line from the shared batched output, reproducing what a
 	// per-row `exec()` (last-line-of-output) call would have returned for that host alone.
 	$patterns = array();
+	$valid_hosts = array();
 	foreach ($hosts as $host) {
-		$patterns[] = '^' . str_replace('.', '\.', $host);
+		$pattern = pfb_ip_exact_entry_pattern($host);
+		if ($pattern !== NULL) {
+			$patterns[] = $pattern;
+			$valid_hosts[$host] = TRUE;
+		}
 	}
 	// issue #833: /dev/null forces the same file-prefix output as find_reported_
 	// header()'s own exact-match exec, even for a single-file $pfbfolder glob.
@@ -10367,6 +10391,9 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 
 	$missed = array();
 	foreach ($hosts as $host) {
+		if (!isset($valid_hosts[$host])) {
+			continue;
+		}
 		$match = pfb_ip_prefetch_last_match($lines, $host);
 		if ($match !== NULL) {
 			$out[$host] = pfb_parse_query($match);
@@ -10472,7 +10499,10 @@ function pfb_ip_prefetch(array $rows): void {
 	foreach ($validate_groups as $group) {
 		$patterns = array();
 		foreach ($group['entries'] as $raw_ip) {
-			$patterns[] = '^' . str_replace('.', '\.', $raw_ip);
+			$pattern = pfb_ip_exact_entry_pattern($raw_ip);
+			if ($pattern !== NULL) {
+				$patterns[] = $pattern;
+			}
 		}
 		$patterns = array_values(array_unique($patterns));
 
@@ -10551,7 +10581,10 @@ function pfb_ip_prefetch(array $rows): void {
 		$pfb_query = $headers_by_host_folder[$miss_key];
 		$eval_new = ($pfb_query[1] == 'Unknown') ? 'Not listed!' : $pfb_query[1];
 		$eval_new_by_key[$miss_key] = $eval_new;
-		$alias_patterns[] = '^' . str_replace('.', '\.', $eval_new);
+		$pattern = pfb_ip_exact_entry_pattern($eval_new);
+		if ($pattern !== NULL) {
+			$alias_patterns[] = $pattern;
+		}
 	}
 	$alias_patterns = array_values(array_unique($alias_patterns));
 

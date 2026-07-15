@@ -2998,13 +2998,16 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			$eval_new = ($pfb_query[1] == 'Unknown') ? 'Not listed!' : $pfb_query[1];
 
 			// Determine if IP is in a new Aliastable
-			$q_ip = str_replace('.', '\.', $eval_new);
-			$q_ip_esc = escapeshellarg("^{$q_ip}");
-			// issue #833: '/dev/null' gives xargs a permanent extra file arg, so
-			// grep always emits a "path:" prefix even when aliasdir holds exactly
-			// one .txt file -- the ltrim(strrchr(strstr(strstr(...)))) alias-name
-			// parse below requires that shape.
-			$raw_validate = exec("/usr/bin/find {$pfb['aliasdir']}/*.txt -type f | xargs {$pfb['grep']} {$q_ip_esc} /dev/null 2>&1");
+			$raw_validate = '';
+			$q_ip = pfb_ip_exact_entry_pattern($eval_new);
+			if ($q_ip !== NULL) {
+				$q_ip_esc = escapeshellarg($q_ip);
+				// issue #833: '/dev/null' gives xargs a permanent extra file arg, so
+				// grep always emits a "path:" prefix even when aliasdir holds exactly
+				// one .txt file -- the ltrim(strrchr(strstr(strstr(...)))) alias-name
+				// parse below requires that shape.
+				$raw_validate = exec("/usr/bin/find {$pfb['aliasdir']}/*.txt -type f | xargs {$pfb['grep']} {$q_ip_esc} /dev/null 2>&1");
+			}
 
 			return array($pfb_query, $raw_validate);
 		});

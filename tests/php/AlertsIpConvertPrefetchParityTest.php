@@ -416,6 +416,48 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 		$this->assertParity($fields, 'Block', 'aliastable-changed v4');
 	}
 
+	public function test_longer_logged_entry_detects_historical_feed_drift_prefetched_and_cold(): void
+	{
+		file_put_contents("{$this->denydir}/OldFeed.txt", "192.0.2.54\n");
+		file_put_contents("{$this->denydir}/NewFeed.txt", "192.0.2.5\n");
+
+		$fields = $this->rawFields([
+			8 => '192.0.2.5', 15 => '192.0.2.5',
+			14 => 'pfB_Historical_v4', 16 => 'OldFeed',
+		]);
+
+		$html = $this->assertParity($fields, 'Block', 'longer logged-entry collision reveals feed drift');
+		$this->assertStringContainsString(
+			'<s>OldFeed</s><br /><small><s>192.0.2.5</s></small><br />NewFeed<br /><small>192.0.2.5</small>',
+			$html,
+			"expected the old feed/match struck through and the exact current feed rendered, got:\n{$html}"
+		);
+	}
+
+	public function test_longer_alias_decoy_never_wins_over_exact_alias_prefetched_and_cold(): void
+	{
+		file_put_contents("{$this->denydir}/CurrentFeed.txt", "192.0.2.5\n");
+		file_put_contents("{$this->aliasdir}/A_pfB_Correct_v4.txt", "192.0.2.5\n");
+		file_put_contents("{$this->aliasdir}/Z_pfB_Decoy_v4.txt", "192.0.2.54\n");
+
+		$fields = $this->rawFields([
+			8 => '192.0.2.5', 15 => '192.0.2.5',
+			14 => 'pfB_OldAlias_v4', 16 => 'GoneFeed',
+		]);
+
+		$html = $this->assertParity($fields, 'Block', 'longer alias decoy cannot beat exact alias');
+		$this->assertStringContainsString(
+			'<s>pfB_OldAlias_v4</s><br />A_pfB_Correct_v4',
+			$html,
+			"expected exact current alias to replace the historical alias, got:\n{$html}"
+		);
+		$this->assertStringNotContainsString(
+			'Z_pfB_Decoy_v4',
+			$html,
+			"expected the longer-prefix alias decoy to stay absent, got:\n{$html}"
+		);
+	}
+
 	/**
 	 * Case 8 -- ET-header feed: a Proofpoint/IQRisk-style "Category:Feed" name routes
 	 * the folder to $pfb['etdir'] with no filename filter (the et_header branch of
