@@ -235,3 +235,11 @@ Prompt: `04_Docs_Adr65_Reconcile.txt`
 - **Reject criteria:** any oracle drift (a decision or log field changed) → the rename altered
   behaviour, STOP; any stored-key/POST-field change; any substring over-reach
   (`dnsbl_tld_data`/`classify_idn` mutated).
+
+## 8. Post-merge amendment (2026-07-15 — issue #1349)
+
+ADR-65 removed the classifier and interchange writers but initially retained their
+stats-only tail under the old analysis name. Issue #1349 completed the retirement:
+classification remains manifest/Python-owned, while the narrow PHP seam is now
+`pfb_dnsbl_tld_stats_finalize()` and consumes only in-memory group counts. The old
+analysis name and redundant plaintext-summary lifecycle no longer exist.

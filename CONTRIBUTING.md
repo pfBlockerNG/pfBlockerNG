@@ -222,10 +222,10 @@ See [ADR-07](.ADRs/ADR_07_ABP_DNSBL_Support/ADR.md) for the full contract.
 
 ABP feeds build through the Python manifest path regardless of the DNSBL **TLD**
 mode: the manifest is written unconditionally and `parse('abp', …)` does its own
-TLD classification. ADR-65 completed the fold of the legacy PHP TLD pass into the
-Python build: `tld_analysis()` now only maintains TLD-mode alias/stat bookkeeping,
-and zone/data classification for ALL feeds — plain and ABP alike — lives in the
-manifest build (`tld_wildcard_classify()` in `pfb_unbound.py`).
+TLD classification. ADR-65 and issue #1349 completed the fold of the legacy PHP
+TLD pass into the Python build: zone/data classification for ALL feeds — plain and
+ABP alike — lives in `tld_wildcard_classify()` in `pfb_unbound.py`; PHP finalizes
+widget statistics from the group counts already computed during feed ingest.
 
 The decision-equivalence of the ADR-06 move (block/resolve/whitelist/HSTS/noAAAA
 across hosts/plain/abp, plus feed/group attribution and the emitted count) is

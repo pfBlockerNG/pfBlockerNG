@@ -8,15 +8,14 @@ use PHPUnit\Framework\TestCase;
 /**
  * ADR-65 -- pfb_py_data.txt/pfb_py_zone.txt writer retirement.
  *
- * R1: tld_analysis() keeps its TLD-mode alias/stat bookkeeping (DNSBL_TLD
- * feeds/count, the alias-all list, dnsbl_alias_update()) but never (re)writes
+ * R1: pfb_dnsbl_tld_stats_finalize() keeps its TLD-mode stats bookkeeping but never (re)writes
  * the interchange files -- classification now lives solely in the manifest
  * build (pfb_unbound_python_sources() / pfb_unbound.py). R2/R3: a stale
  * on-disk copy of the retired files, alone, no longer counts as "loaded feeds"
  * nor moves the reload fingerprint -- only a rawdir *.raw (the manifest's own
  * artefact) does, in EITHER TLD toggle state.
  */
-#[CoversFunction('tld_analysis')]
+#[CoversFunction('pfb_dnsbl_tld_stats_finalize')]
 #[CoversFunction('pfb_dnsbl_has_loaded_feeds')]
 #[CoversFunction('pfb_dnsbl_reload_fingerprint')]
 final class DnsblInterchangeRetirementTest extends TestCase
@@ -24,22 +23,13 @@ final class DnsblInterchangeRetirementTest extends TestCase
 	private string $tmp;
 	private bool $hadPfb = false;
 	private array $originalPfb = [];
-	private bool $hadTlds = false;
-	private mixed $originalTlds = null;
 
 	protected function setUp(): void
 	{
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
-		// tld_analysis() (pre-fix) accumulates into the GLOBAL $tlds by reference --
-		// isolate this test class from any prior run's residue and restore it after.
-		$this->hadTlds = array_key_exists('tlds', $GLOBALS);
-		$this->originalTlds = $GLOBALS['tlds'] ?? null;
-		$GLOBALS['tlds'] = array();
-
 		$this->tmp = sys_get_temp_dir() . '/adr65_p6_' . uniqid('', true);
 		mkdir("{$this->tmp}/dnsbl", 0777, true);
-		mkdir("{$this->tmp}/dnsalias", 0777, true);
 		mkdir("{$this->tmp}/raw", 0777, true);
 	}
 
@@ -49,11 +39,6 @@ final class DnsblInterchangeRetirementTest extends TestCase
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
 			unset($GLOBALS['pfb']);
-		}
-		if ($this->hadTlds) {
-			$GLOBALS['tlds'] = $this->originalTlds;
-		} else {
-			unset($GLOBALS['tlds']);
 		}
 		rmdir_recursive($this->tmp);
 	}
@@ -78,8 +63,6 @@ final class DnsblInterchangeRetirementTest extends TestCase
 			'sqlite_timeout'   => 2000,
 			'alias_dnsbl_all'  => [],
 			'dnsbl_info_stats' => [],
-			'tld_update'       => [],
-			'dnsalias'         => "{$this->tmp}/dnsalias",
 			'domain_update'    => TRUE,
 			'dnsblconfig'      => [
 				'tldblacklist' => base64_encode('zip'),
@@ -92,16 +75,16 @@ final class DnsblInterchangeRetirementTest extends TestCase
 			pfb_dnsbl_ndjson_emit_domain_row('sub.deep.example', '1', 'PlainFeed', 'GroupA')
 		);
 
-		tld_analysis();
+		pfb_dnsbl_tld_stats_finalize([]);
 
 		// (i)-(ii): the interchange files themselves must never be (re)created.
 		$this->assertFileDoesNotExist(
 			$GLOBALS['pfb']['unbound_py_data'],
-			'tld_analysis() must never (re)write pfb_py_data.txt -- classification lives in the manifest build'
+			'TLD stats finalization must never (re)write pfb_py_data.txt -- classification lives in the manifest build'
 		);
 		$this->assertFileDoesNotExist(
 			$GLOBALS['pfb']['unbound_py_zone'],
-			'tld_analysis() must never (re)write pfb_py_zone.txt -- classification lives in the manifest build'
+			'TLD stats finalization must never (re)write pfb_py_zone.txt -- classification lives in the manifest build'
 		);
 
 		// (iii): the classification .raw staging intermediates must never exist either.
@@ -114,20 +97,17 @@ final class DnsblInterchangeRetirementTest extends TestCase
 			'the retired classification .raw intermediate must not be created'
 		);
 
-		// (iv)-(vi): the TLD-mode alias/stat bookkeeping must still run untouched.
-		$this->assertSame(
-			['feeds' => ['DNSBL_TLD'], 'count' => 1],
-			$GLOBALS['pfb']['tld_update']['DNSBL_TLD'] ?? null,
-			'the TLD-blacklist bookkeeping (feeds/count) must still run'
-		);
+		// (iv)-(v): the TLD-mode alias/stat bookkeeping must still run untouched.
+		$tldStats = array_values(array_filter(
+			$GLOBALS['pfb']['dnsbl_info_stats'],
+			static fn(array $row): bool => ($row['groupname'] ?? '') === 'DNSBL_TLD'
+		));
+		$this->assertCount(1, $tldStats);
+		$this->assertSame('1', (string) $tldStats[0]['entries']);
 		$this->assertContains(
 			'DNSBL_TLD',
 			$GLOBALS['pfb']['alias_dnsbl_all'],
 			'DNSBL_TLD must still be registered in the alias-all list'
-		);
-		$this->assertFileExists(
-			"{$GLOBALS['pfb']['dnsalias']}/DNSBL_TLD",
-			'dnsbl_alias_update() must still run and materialise the DNSBL_TLD master alias file'
 		);
 	}
 

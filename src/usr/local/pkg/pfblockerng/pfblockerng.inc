@@ -54,7 +54,6 @@ $pfb['origdir']		= "{$pfb['dbdir']}/original";
 $pfb['snapdir']		= "{$pfb['dbdir']}/snapshot";	// issue #1084: pristine post-preprocessing feed snapshots (recompute memberlist inputs)
 $pfb['dnsdir']		= "{$pfb['dbdir']}/dnsbl";
 $pfb['dnsorigdir']	= "{$pfb['dbdir']}/dnsblorig";
-$pfb['dnsalias']	= "{$pfb['dbdir']}/dnsblalias";
 $pfb['geoipshare']	= '/usr/local/share/GeoIP';
 $pfb['ccdir']		= '/usr/local/share/GeoIP/cc';
 $pfb['ccdir_tmp']	= '/tmp/geoip_cc';
@@ -75,7 +74,7 @@ $pfb['wc']	= '/usr/bin/wc';
 // Folder Array
 $pfb['folder_array'] = array(	"{$pfb['dbdir']}", "{$pfb['logdir']}", "{$pfb['ccdir']}", "{$pfb['origdir']}", "{$pfb['nativedir']}",
 				"{$pfb['denydir']}", "{$pfb['matchdir']}","{$pfb['permitdir']}", "{$pfb['aliasdir']}",
-				"{$pfb['dnsdir']}", "{$pfb['dnsorigdir']}", "{$pfb['dnsalias']}", "{$pfb['snapdir']}",
+				"{$pfb['dnsdir']}", "{$pfb['dnsorigdir']}", "{$pfb['snapdir']}",
 				"{$pfb['matchgendir']}");
 
 // Files
@@ -6345,31 +6344,11 @@ function pfb_create_suppression_file() {
 }
 
 
-// Function to update DNSBL aliases and widget stats
-function dnsbl_alias_update($mode, $alias, $pfbfolder, $lists_dnsbl_current, $alias_cnt) {
+// Function to update DNSBL widget stats
+function dnsbl_stats_update($mode, $alias, $alias_cnt) {
 	global $pfb;
 
 	if ($mode == 'update') {
-
-		// Create master alias file
-		if ($lists_dnsbl_current != '') {
-			// issue #1073: fwrite(FALSE)/fclose(FALSE) throw TypeError on PHP 8 ('@'
-			// only silences warnings), so a failed open must skip its write/close.
-			if (($pfb_output = @fopen("{$pfb['dnsalias']}/{$alias}", 'w')) !== FALSE) {
-				foreach ($lists_dnsbl_current as $clist) {
-					if (($handle = @fopen("{$pfbfolder}/{$clist}.txt", 'r')) !== FALSE) {
-						while (($line = @fgets($handle)) !== FALSE) {
-							@fwrite($pfb_output, $line);
-						}
-						@fclose($handle);
-					}
-				}
-				@fclose($pfb_output);
-			} else {
-				pfb_logger("\nDNSBL [ {$alias} ]: failed to open master alias file for writing", 2);
-			}
-		}
-
 		// Update DNSBL alias statistics
 		$dns_now = date('Y-m-d H:i:s', time());
 		$pfbfound = FALSE;
@@ -8395,7 +8374,7 @@ function pfb_unbound_python($mode) {
 
 		// issue #1255: DNSBL Wildcard Blocking (TLD) -- HSTS parity (shipped file +
 		// ini enable flag). $pfb['dnsbl_tld_wildcard'] is used as a bare truthy check
-		// elsewhere (the tld_update deferral branch), not an == 'on' comparison.
+		// elsewhere (the deferred stats branch), not an == 'on' comparison.
 		$python_tld_wildcard = 'off';
 		if ($pfb['dnsbl_tld_wildcard']) {
 			$python_tld_wildcard = 'on';
@@ -8672,10 +8651,8 @@ function pfb_unbound_python_unmount() {
 }
 
 
-// ADR-65: TLD-mode DNSBL alias/stat bookkeeping only -- zone/data classification
-// lives solely in the manifest build (pfb_unbound.py's tld_wildcard_classify());
-// this function never writes the interchange files.
-function tld_analysis() {
+// ADR-65: finalize TLD-mode widget stats from counts already collected by the feed loop.
+function pfb_dnsbl_tld_stats_finalize(array $group_counts): void {
 	global $pfb;
 
 	if (!$pfb['domain_update']) {
@@ -8708,27 +8685,15 @@ function tld_analysis() {
 		}
 
 		if ($tld_cnt > 0) {
-			// Add 'TLD' to Alias/Feeds array
-			if (!is_array($pfb['tld_update']['DNSBL_TLD'])) {
-				$pfb['tld_update']['DNSBL_TLD'] = array();
-			}
-
-			$pfb['tld_update']['DNSBL_TLD']['feeds']	= array('DNSBL_TLD');
-			$pfb['tld_update']['DNSBL_TLD']['count']	= $tld_cnt;
-			$pfb['alias_dnsbl_all'][]			= 'DNSBL_TLD';
+			$group_counts['DNSBL_TLD'] = $tld_cnt;
+			$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD';
 		}
 	}
 
-	// Update DNSBL Alias and Widget Stats
-	if (!empty($pfb['tld_update'])) {
-		foreach ($pfb['tld_update'] as $alias => $data) {
-
-			// Create Alias summary file for each DNSBL Alias
-			$lists_dnsbl_current = array();
-			foreach ($data['feeds'] as $feed) {
-				$lists_dnsbl_current[] = "{$feed}";
-			}
-			dnsbl_alias_update('update', $alias, $pfb['dnsdir'], $lists_dnsbl_current, $data['count']);
+	// Update DNSBL widget stats
+	if (!empty($group_counts)) {
+		foreach ($group_counts as $alias => $alias_cnt) {
+			dnsbl_stats_update('update', $alias, $alias_cnt);
 		}
 	}
 
@@ -9156,7 +9121,7 @@ function pfb_unbound_clear_work_files() {
 
 
 // Load new DNSBL updates to Unbound Resolver
-function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
+function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_group_counts = array()) {
 	global $g, $pfb;
 
 	if ($mode == 'enabled') {
@@ -9165,10 +9130,12 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 		$ext = '.*';	// Remove all DNSBL Unbound files
 	}
 
-	// Execute TLD analysis, if configured
+	// Finalize deferred TLD-mode statistics, if configured
 	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && !$pfb['save']) {
 		if ($pfb['dnsbl_tld_wildcard']) {
-			tld_analysis();
+			if ($pfb['domain_update']) {
+				pfb_dnsbl_tld_stats_finalize($dnsbl_tld_group_counts);
+			}
 		}
 	}
 
@@ -15236,7 +15203,7 @@ function pfb_clear_contents() {
 	rmdir_recursive("{$pfb['etdir']}");
 	rmdir_recursive("{$pfb['dnsdir']}");
 	rmdir_recursive("{$pfb['dnsorigdir']}");
-	rmdir_recursive("{$pfb['dnsalias']}");
+	rmdir_recursive("{$pfb['dbdir']}/dnsblalias");
 }
 
 
@@ -16301,7 +16268,7 @@ function sync_package_pfblockerng($cron='') {
 
 	// Define DNSBL arrays and variables
 	$pfb['alias_dnsbl_all']		= array();	// Array of all DNSBL aliases
-	$pfb['tld_update']		= array();	// Array of all DNSBL Aliases/Feeds used for TLD Function
+	$dnsbl_tld_group_counts		= array();	// Deferred DNSBL group counts for TLD-mode statistics
 	$pfb['domain_update']		= FALSE;	// Flag to signal update Unbound
 	$pfb['updateip']		= FALSE;	// Flag to signal updates to DNSBL IP lists
 	$pfb_py_feeds			= array();	// ADR-06: per-feed manifest rows [header,group,log] for pfb_unbound_python_sources()
@@ -16762,7 +16729,6 @@ function sync_package_pfblockerng($cron='') {
 			foreach ($lists as $list) {
 
 				// Reset variables once per alias
-				$lists_dnsbl_current	= array();		// Array of all active Lists in current alias
 				$pfb['aliasupdate']	= FALSE;		// Flag to signal changes to alias
 				$pfb['domain_clear']	= FALSE;		// Flag to signal no Aliases defined or all Aliases disabled.
 				$alias_cnt		= 0;
@@ -16871,7 +16837,6 @@ function sync_package_pfblockerng($cron='') {
 
 								// Collect existing list stats
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
-								$lists_dnsbl_current[]	= "{$row['header']}";
 								// ADR-31: delegate to pfb_feed_manifest_row() (deny default).
 								// ADR-31: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
@@ -17295,7 +17260,6 @@ function sync_package_pfblockerng($cron='') {
 								// Save DNSBL feed info for next steps
 								$pfb['domain_update']	= $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
-								$lists_dnsbl_current[]	= "{$row['header']}";
 								// ADR-31: delegate to pfb_feed_manifest_row() (deny default).
 								// ADR-31: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
@@ -17351,35 +17315,21 @@ function sync_package_pfblockerng($cron='') {
 						$pfb['changed_dnsbl_groups'][] = $alias;
 					}
 
-					// If changes found update DNSBL alias and TLD disabled, call function to update DNSBL alias
+					// Update changed group stats immediately when TLD mode is disabled
 					if ($pfb['aliasupdate'] && !$pfb['dnsbl_tld_wildcard']) {
-						dnsbl_alias_update('update', $alias, $pfbfolder, $lists_dnsbl_current, $alias_cnt);
+						dnsbl_stats_update('update', $alias, $alias_cnt);
 					}
 
-					// Collect Alias/Feeds for post TLD function
+					// Defer all active group stats until a TLD-mode reload is committed
 					if ($pfb['dnsbl_tld_wildcard']) {
-						if (!is_array($pfb['tld_update'][$alias])) {
-							$pfb['tld_update'][$alias] = array();
-						}
-						$pfb['tld_update'][$alias]['feeds']	= $lists_dnsbl_current;
-						$pfb['tld_update'][$alias]['count']	= $alias_cnt;
+						$dnsbl_tld_group_counts[$alias] = $alias_cnt;
 					}
 				}
 				else {
-					dnsbl_alias_update('disabled', $alias, '', '', '');
+					dnsbl_stats_update('disabled', $alias, '');
 				}
 			}
 
-		}
-
-		// Remove any unused DNSBL aliases
-		$daliases = glob("{$pfb['dnsalias']}/*");
-		if (!empty($daliases)) {
-			foreach ($daliases as $dlist) {
-				if (!in_array(basename($dlist), $pfb['alias_dnsbl_all'])) {
-					unlink_if_exists ("{$dlist}");
-				}
-			}
 		}
 
 		// Add DNSBL Python options to widget statistics. ADR-08: All-IDN keeps the
@@ -17389,13 +17339,13 @@ function sync_package_pfblockerng($cron='') {
 		if ($pfb['dnsbl_idn'] === PfbIdnMode::All) {
 			$idn_cnt = 1;
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_IDN';
-			dnsbl_alias_update('update', 'DNSBL_IDN', '', '', $idn_cnt);
+			dnsbl_stats_update('update', 'DNSBL_IDN', $idn_cnt);
 		}
 		elseif ($pfb['dnsbl_idn'] === PfbIdnMode::Confusable) {
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Homoglyph';
-			dnsbl_alias_update('update', 'DNSBL_Homoglyph', '', '', 1);
+			dnsbl_stats_update('update', 'DNSBL_Homoglyph', 1);
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Homoglyph_Suspect';
-			dnsbl_alias_update('update', 'DNSBL_Homoglyph_Suspect', '', '', 1);
+			dnsbl_stats_update('update', 'DNSBL_Homoglyph_Suspect', 1);
 		}
 		if ($pfb['dnsbl_tld_allow'] == 'on') {
 			$tld_allow_cnt = 0;
@@ -17409,7 +17359,7 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD_Allow';
-			dnsbl_alias_update('update', 'DNSBL_TLD_Allow', '', '', $tld_allow_cnt);
+			dnsbl_stats_update('update', 'DNSBL_TLD_Allow', $tld_allow_cnt);
 		}
 		// ADR-07: the DNSBL_Regex alias count now reflects the ADMITTED
 		// (cap-filtered) feed + user regex total emitted by Python (regexDB +
@@ -17436,7 +17386,7 @@ function sync_package_pfblockerng($cron='') {
 				}
 			}
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Regex';
-			dnsbl_alias_update('update', 'DNSBL_Regex', '', '', $regex_cnt);
+			dnsbl_stats_update('update', 'DNSBL_Regex', $regex_cnt);
 		}
 
 		// Save DNSBL Alias statistics (Not for TLD mode)
@@ -17891,7 +17841,7 @@ function sync_package_pfblockerng($cron='') {
 			$pfbpython = TRUE;
 		}
 
-		pfb_update_unbound($mode, $pfbupdate, $pfbpython);
+		pfb_update_unbound($mode, $pfbupdate, $pfbpython, $dnsbl_tld_group_counts);
 
 		// #468: DNSBL actually changed this pass and the reload above has applied (the
 		// zero-downtime swap waited / Unbound restarted). On a RAM-disk /var, re-archive

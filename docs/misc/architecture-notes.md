@@ -64,12 +64,10 @@ bracketed-IPv6 carve-out: `pfb_dnsbl_unbracket_ip6()` runs FIRST, so `[2604:2dc0
 collects to the DNSBL-IP firewall pass (never treated as an ABP `[section]` comment); only a
 non-IPv6 `[…]` is dropped as a control line.
 
-The TLD-analysis pass (`tld_analysis()`) reads the aggregated `pfb_dnsbl.raw` (schema-v1 NDJSON,
-issue #1083 — see below) and must skip a verbatim-captured line; this used to gate on the `.abp`
-marker glob (`!empty($abp_feeds)`) — a latent bug (issue #1060) meant a *plain* feed's verbatim
-`||…^` line was CSV-mangled whenever no feed was ABP-classified. The skip is now unconditional on
-the row's `"kind"` field (`pfb_dnsbl_ndjson_parse_row()` returns `NULL`/non-`'domain'` for an ABP
-row), independent of any marker or column count.
+The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
+raw rows and metadata, then `pfb_unbound.py` routes plain and ABP rows through the production
+matcher build. PHP does not re-read an aggregate feed or rebuild per-group plaintext summaries;
+it finalizes widget statistics from counts already computed during feed ingest.
 
 The deliberate behaviour changes are enumerated in the ADR's delta table (D1–D6, ADR.md §2) —
 the headline rows: a bare hosts/plain domain line inside a feed that used to be

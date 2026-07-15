@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
  * ADR-60 §1.8: pfBlockerNG_clearsqlite()'s 'clearip'/'cleardnsbl' branches stamped
  * lastipclear/lastdnsblclear with date('M j H:i:s', time()) -- no year -- and the
  * dashboard widget (widget.php ~:797-:798) displays that value RAW, with no
- * reformatter at all (unlike dnsbl_alias_update()'s value, which pfb_iso_timestamp()
+ * reformatter at all (unlike dnsbl_stats_update()'s value, which pfb_iso_timestamp()
  * at least guesses a year for). Both branches now write date('Y-m-d H:i:s', time()),
  * so the operator sees the real write year, not an ambiguous "Dec 31 23:00:00" that
  * could be any past year.

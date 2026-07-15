@@ -333,3 +333,10 @@ Checklist → coverage (✅ automated in `test_smoke_abp.py` unless noted; ☐ h
 - [ ] **Reload.** ✅ implicitly — every `CaseContext` does inject → reload (`updatednsbl`/forced `update`) → probe, so feed/whitelist/regex-list/cap changes taking effect across a reload is exercised by every passing case above (the cap case proves a *settings* change is re-read; the count case proves the regex list is).
 
 > **Record results** in `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/` (ADR-04 style: the VM image ref/digest, the commands run, per-item PASS/FAIL, and the runtime-evict log excerpt). Do **not** flip Status to Accepted on a failure — file the defect and report which decision diverged from the unit oracle (the signal of a build/matcher integration bug the pure tests missed). One such gap was caught while wiring this smoke and **fixed**: the user regex loaded as a bare pattern (feed band 1) instead of the oracle's user band 5, so a feed `@@…$important` could override it — now loaded as the band-5 `PRIO_USER_BLOCK` payload (sovereign over any ABP feed allow).
+
+## Post-merge amendment (2026-07-15 — issue #1349)
+
+ADR-65 later made the manifest/Python build the sole classifier for plain and ABP
+feeds in every TLD mode. Issue #1349 removed the residual PHP analysis and redundant
+per-group plaintext summaries. PHP now finalizes widget statistics from in-memory
+group counts only; it does not re-read feed bytes or interpret the manifest.

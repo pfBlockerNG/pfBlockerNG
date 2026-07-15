@@ -40,7 +40,7 @@
     fixed space-token count that the old (3-token) log format satisfies and the new (2-token) ISO
     format does not. BREAKS the moment the log format changes unless fixed in lockstep (§1.8).
   - Wider ISO-8601 sweep (§1.8, Phase 10 — lower priority, optional-but-requested normalization):
-    `pfblockerng.inc` — `dnsbl_alias_update()` (~`:5370`/`:5404`, DNSBL group "last updated"),
+    `pfblockerng.inc` — `dnsbl_stats_update()` (~`:5370`/`:5404`, DNSBL group "last updated"),
     `pfBlockerNG_clearsqlite()` (~`:14133`/`:14137`, "last clear" timestamps), the `/tmp` debug
     snapshot filename (~`:16534`); `pfblockerng.php` (~`:843`, MaxMind version `gmdate`);
     `pfblockerng_update.php` (~`:291`-`:292`, schedule ledger display); `pfb_unbound.py`
@@ -189,13 +189,13 @@ land if not fixed alongside them (not optional, folded into Phases 4-5 below):**
 
 | Site | Format today | Has year? | What it's for |
 | --- | --- | --- | --- |
-| `pfblockerng.inc:5370`/`:5404` (`dnsbl_alias_update()`) | `'M j H:i:s'` | No | DNSBL group "last updated" stat (SQLite `dnsbl.timestamp`); the widget's `pfb_iso_timestamp()` helper (below) already has to GUESS the year from this — a real latent wrong-year bug for a group updated in December and viewed in January |
+| `pfblockerng.inc:5370`/`:5404` (`dnsbl_stats_update()`) | `'M j H:i:s'` | No | DNSBL group "last updated" stat (SQLite `dnsbl.timestamp`); the widget's `pfb_iso_timestamp()` helper (below) already has to GUESS the year from this — a real latent wrong-year bug for a group updated in December and viewed in January |
 | `pfblockerng.inc:14133`/`:14137` (`pfBlockerNG_clearsqlite()`) | `'M j H:i:s'` | No | "Last clear" timestamp, shown RAW (no reformatter) in the dashboard widget tooltip — same latent wrong-year exposure, with no safety net at all |
 | `pfblockerng.inc:16534` | `'M_j'` | No | `/tmp` debug snapshot filename on a DNSBL feed `unbound-checkconf` failure — zero external consumer, trivial to convert |
 | `pfblockerng.php:843` (`gmdate`) | `'D, j M Y H:i:s T'` | Yes | MaxMind version file, displayed on the dashboard widget — already unambiguous, purely cosmetic normalization |
 | `pfblockerng_update.php:291`/`:292` | `'Y-m-d H:i'` | Yes | Update page "Last/Next" schedule display — already ISO-shaped, just missing seconds vs the `H:i:s` used elsewhere |
 | `pfb_unbound.py:893`/`:898` | `strftime("_%Y%m%-d%H%M%S.log")` | Yes | Unwritable-log rename filename (ownership-repair path) — `%-d` is variable-width, so the filename isn't fixed-width/sortable; low-frequency, zero-risk fix (`%Y%m%d%H%M%S`) |
-| `widget.php:390` (`pfb_iso_timestamp()`, `pfblockerng.inc:702`-`:711`) | reformatter, not a writer | n/a | Best-effort `strtotime()`-based reformatter for the (no-year) `dnsbl_alias_update()` value above — becomes dead weight once the source is already ISO; candidate for simplification/removal |
+| `widget.php:390` (`pfb_iso_timestamp()`, `pfblockerng.inc:702`-`:711`) | reformatter, not a writer | n/a | Best-effort `strtotime()`-based reformatter for the (no-year) `dnsbl_stats_update()` value above — becomes dead weight once the source is already ISO; candidate for simplification/removal |
 
 **Explicitly out of scope, never touch:** `www/index.php:101`'s hardcoded
 `"Sat, 26 Jul 2014 05:00:00 GMT"` `Expires:` HTTP response header — RFC 7231/2822 format is
@@ -219,7 +219,7 @@ reading of "everywhere." No non-ISO date rendering was found in `src/usr/local/w
 | `pfblockerng_alerts.php`'s day-bucket/chart stats | `cut`/`awk` assuming a 3-space-token log line | Rebuilt for the 2-space-token ISO shape (Phase 5); the `:`-split hour buckets are verified unaffected |
 | Continuous retention | line-count only (`log_max_<type>`) | **adds** `log_max_days_<type>` (numeric string, default `'0'` = off) — both caps apply independently every tick; whichever is more restrictive wins |
 | Calendar-boundary reset (ADR-30) | `log_rotate_<type>` / `log_reset_keep_<type>` / `pfb_log_reset()` / marker file | **removed** — superseded by the continuous age cap above |
-| Wider ISO sweep (§1.8, optional) | `dnsbl_alias_update()`/`pfBlockerNG_clearsqlite()` (no year, 2 latent wrong-year bugs), a debug filename, a cosmetic `gmdate`, a seconds-less display, a variable-width Python rename filename | All converted to ISO-8601 (or the closest fixed-width equivalent for filenames); `pfb_iso_timestamp()`'s year-guessing simplified once its source is already ISO |
+| Wider ISO sweep (§1.8, optional) | `dnsbl_stats_update()`/`pfBlockerNG_clearsqlite()` (no year, 2 latent wrong-year bugs), a debug filename, a cosmetic `gmdate`, a seconds-less display, a variable-width Python rename filename | All converted to ISO-8601 (or the closest fixed-width equivalent for filenames); `pfb_iso_timestamp()`'s year-guessing simplified once its source is already ISO |
 
 ### 2.2 The age-cutoff mechanism (mechanically simple, reuses the existing trim)
 
@@ -485,14 +485,14 @@ line-count cap; `log_max_days_<type}` still applies if set. Pinned as a coverage
 
 - Prompt: `10_Wider_Iso_Sweep.txt`
 - Convert every §1.8 lower-priority site to ISO-8601 (or the closest fixed-width equivalent for a
-  filename): `dnsbl_alias_update()` (`:5370`/`:5404`), `pfBlockerNG_clearsqlite()`
+  filename): `dnsbl_stats_update()` (`:5370`/`:5404`), `pfBlockerNG_clearsqlite()`
   (`:14133`/`:14137`), the `/tmp` debug filename (`:16534`), `pfblockerng.php`'s MaxMind `gmdate`
   (`:843`), `pfblockerng_update.php`'s schedule display (`:291`/`:292`), and `pfb_unbound.py`'s
   rename filename (`:893`/`:898`). Simplify/remove `pfb_iso_timestamp()`'s (`pfblockerng.inc:702`-
-  `:711`) year-guessing logic now that its source (`dnsbl_alias_update()`) is already ISO. Do NOT
+  `:711`) year-guessing logic now that its source (`dnsbl_stats_update()`) is already ISO. Do NOT
   touch `www/index.php:101`'s hardcoded HTTP `Expires:` header — protocol-mandated, explicitly
   out of scope (§1.8).
-- Tests: for `dnsbl_alias_update()`/`pfBlockerNG_clearsqlite()` — a red-before/green-after proving
+- Tests: for `dnsbl_stats_update()`/`pfBlockerNG_clearsqlite()` — a red-before/green-after proving
   the December-updated/January-viewed wrong-year bug is actually fixed (construct a fixture that
   straddles a year boundary); for the rest, straightforward before/after format assertions; a test
   proving `pfb_iso_timestamp()`'s simplified form still round-trips correctly (or that its removal
@@ -537,7 +537,7 @@ year-less format for the `'BSD'` branch only and treat every `'BSD'`-sourced lin
 line-count cap (not the age cap) until a better source of truth exists.
 
 **Phase 10 (follow-on, does not gate Accepted):** all §1.8 lower-priority sites converted; the two
-genuine latent wrong-year bugs (`dnsbl_alias_update()`, `pfBlockerNG_clearsqlite()`) proven fixed with
+genuine latent wrong-year bugs (`dnsbl_stats_update()`, `pfBlockerNG_clearsqlite()`) proven fixed with
 a year-boundary test; `pfb_iso_timestamp()` simplified or removed with the widget still correct;
 `www/index.php:101`'s HTTP header untouched (verified, not just "didn't get to it").
 
