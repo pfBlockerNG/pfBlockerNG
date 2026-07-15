@@ -97,7 +97,7 @@ _VAR_WIPE_SENTINEL = "/var/PFB_SMOKE_TICK_WIPE_SENTINEL"
 # ---------------------------------------------------------------------------
 
 
-def _read_ledger(vm) -> dict:
+def _read_ledger(vm: SmokeVM) -> dict:
     """Return the parsed ledger as a dict (empty on absent/corrupt)."""
     raw = vm.ssh(f"cat {LEDGER_PATH} 2>/dev/null || echo '{{}}'").stdout
     try:
@@ -106,7 +106,7 @@ def _read_ledger(vm) -> dict:
         return {}
 
 
-def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: int = 0) -> None:
+def _write_ledger_entry(vm: SmokeVM, job_key: str, last_run: int, next_due: int, jitter: int = 0) -> None:
     """Merge one entry into the on-box ledger via the package's own PHP ledger writer.
 
     pfSense ships no ``python3`` (python3.11 only, no symlink), and the product already owns the
@@ -125,7 +125,7 @@ def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: 
         raise RuntimeError(f"_write_ledger_entry failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-def _run_tick(vm) -> str:
+def _run_tick(vm: SmokeVM) -> str:
     """Fire one tick synchronously and return its combined stdout+stderr."""
     return vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1").stdout
 
@@ -134,7 +134,7 @@ _SS_EXTDNS_STUB = "192.168.89.2"  # WAN SLIRP host alias -> the stub_dns fixture
 _SS_EXTDNS_DEFAULT = "8.8.8.8"  # pfb_global()'s documented absent-default
 
 
-def _seed_ss_refresh_positive_control(vm, target: str, stale_v4: str) -> str:
+def _seed_ss_refresh_positive_control(vm: SmokeVM, target: str, stale_v4: str) -> str:
     """Point ss_refresh's resolver at the stub DNS and seed a CNAME row baked STALE.
 
     pfblockerng_ss_refresh() re-resolves each SafeSearch CNAME row's target and rewrites
@@ -165,7 +165,7 @@ def _seed_ss_refresh_positive_control(vm, target: str, stale_v4: str) -> str:
     return domain
 
 
-def _remove_ss_row(vm, domain: str) -> None:
+def _remove_ss_row(vm: SmokeVM, domain: str) -> None:
     """Strip the seeded SafeSearch CSV row again (issue #582 cleanup).
 
     Matched by the row's unique source domain — ss_refresh may have rewritten the
@@ -185,7 +185,7 @@ def _remove_ss_row(vm, domain: str) -> None:
         raise RuntimeError(f"_remove_ss_row failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-def _reset_ss_extdns(vm) -> None:
+def _reset_ss_extdns(vm: SmokeVM) -> None:
     """Restore the 'pfbextdns' general setting to its documented default (issue #582 cleanup)."""
     snippet = (
         "$g = config_get_path('installedpackages/pfblockerngglobal', array());"
@@ -214,7 +214,7 @@ _CRON_JSON_OPEN = "<<<PFBCRON>>>"
 _CRON_JSON_CLOSE = "<<<ENDPFBCRON>>>"
 
 
-def _read_pfb_tick_cron_items(vm) -> list[str]:
+def _read_pfb_tick_cron_items(vm: SmokeVM) -> list[str]:
     """Return the 'command' string of every config.xml cron/item naming the
     tick-family verb (the current cron-tick, or the legacy bare tick)."""
     snippet = (
@@ -245,7 +245,7 @@ def _read_pfb_tick_cron_items(vm) -> list[str]:
 @pytest.mark.smoke
 @pytest.mark.tick
 @pytest.mark.timeout(180)  # two foreground sync passes (master switch off, then on)
-def test_tick_cron_entry_installed(deployed_vm: SmokeVM):
+def test_tick_cron_entry_installed(deployed_vm: SmokeVM) -> None:
     """The installed scheduled-tick cron entry is the #1204 cron-tick verb.
 
     Guards pfblockerng_configure_tick_cron's trailing-space teardown needle
@@ -289,7 +289,7 @@ def test_tick_cron_entry_installed(deployed_vm: SmokeVM):
 @pytest.mark.smoke
 @pytest.mark.tick
 @pytest.mark.timeout(120)
-def test_cron_tick_respects_disable_flag(deployed_vm: SmokeVM):
+def test_cron_tick_respects_disable_flag(deployed_vm: SmokeVM) -> None:
     """The cron-tick verb honours the harness's .pfb_cron_disable sentinel.
 
     Branch PAIR (CLAUDE.md branch coverage): the same due-ledger precondition is
@@ -351,7 +351,7 @@ def test_cron_tick_respects_disable_flag(deployed_vm: SmokeVM):
 @pytest.mark.smoke
 @pytest.mark.tick
 @pytest.mark.timeout(90)
-def test_tick_verb_ignores_disable_flag(deployed_vm: SmokeVM):
+def test_tick_verb_ignores_disable_flag(deployed_vm: SmokeVM) -> None:
     """The direct 'tick' verb is NEVER gated by .pfb_cron_disable -- only 'cron-tick' is.
 
     Scenario:
@@ -383,7 +383,7 @@ def test_tick_verb_ignores_disable_flag(deployed_vm: SmokeVM):
 @pytest.mark.smoke
 @pytest.mark.tick
 @pytest.mark.timeout(150)  # the cron pass is backgrounded; its CRON PROCESS marker lands async
-def test_tick_dispatches_due_feed(deployed_vm: SmokeVM):
+def test_tick_dispatches_due_feed(deployed_vm: SmokeVM) -> None:
     """Tick fires a due feed sync, dispatched THROUGH pfblockerng_sync_cron (issue #570).
 
     Two observables (the tick logs to syslog, not stdout, so we never assert on tick stdout):
@@ -442,7 +442,7 @@ def test_tick_dispatches_due_feed(deployed_vm: SmokeVM):
 @pytest.mark.smoke
 @pytest.mark.tick
 @pytest.mark.timeout(150)  # drain + bounded no-dispatch poll can exceed the 30s body cap
-def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer):
+def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
     """Tick does NOT dispatch a feed sync when the cron ledger entry is not yet due —
     yet the tick itself genuinely ran (issue #582 positive control).
 
@@ -518,7 +518,7 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
 
 @pytest.mark.smoke
 @pytest.mark.tick
-def test_tick_wiped_ledger_jittered(deployed_vm: SmokeVM):
+def test_tick_wiped_ledger_jittered(deployed_vm: SmokeVM) -> None:
     """After the ledger is wiped, the tick runs jobs but schedules them jittered.
 
     Scenario:
@@ -631,7 +631,7 @@ def mfs_var(deployed_vm: SmokeVM, request: pytest.FixtureRequest) -> Iterator[Sm
 # mfs_var fixture reboots twice more (arrange + teardown) — exempt from the func-only cap,
 # same as boot_reload's fixture reboots — so the body still contains exactly ONE reboot.
 @pytest.mark.timeout(300)
-def test_tick_reboot_persists_ledger(mfs_var: SmokeVM):
+def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
     """A clean reboot with MFS /var keeps the due-ledger (restored via #468 earlyshellcmd).
 
     Scenario:

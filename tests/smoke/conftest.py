@@ -51,7 +51,7 @@ from email.utils import parsedate_to_datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -321,7 +321,7 @@ class BootHandle:
 
     process: subprocess.Popen[bytes]
     vm: SmokeVM
-    log_file: object = field(repr=False)
+    log_file: BinaryIO = field(repr=False)
 
 
 @timed_step("boot_and_probe")
@@ -579,7 +579,7 @@ def smoke_vm(
 
     # `oras` is only needed when we have to pull; a pre-pulled SMOKE_IMAGE_DIR
     # run (egress blocked) does not require it.
-    required = ("qemu-system-x86_64", "qemu-img", "ssh")
+    required: tuple[str, ...] = ("qemu-system-x86_64", "qemu-img", "ssh")
     if not image_dir:
         required = ("oras", *required)
     for binary in required:
@@ -593,6 +593,7 @@ def smoke_vm(
             raise RuntimeError(f"SMOKE_IMAGE_DIR must hold exactly one .qcow2, found {len(qcows)}: {qcows}")
         base_image = qcows[0]
     else:
+        assert image_ref is not None
         base_image = oras_pull_image(image_ref, work / "image")
 
     handle = boot_and_probe(
@@ -1510,7 +1511,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     ``-m two_vm`` / ``-m 'not two_vm'`` without a hardcoded list.
     """
     for item in items:
-        if _needs_two_vm(item.fixturenames):
+        if _needs_two_vm(cast(Any, item).fixturenames):
             item.add_marker("two_vm")
 
 
@@ -1518,7 +1519,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> Generator[None, None, None]:
     """Stash each phase's report on the item so fixtures can read pass/fail."""
     outcome = yield
-    rep = outcome.get_result()
+    rep = cast(Any, outcome).get_result()
     setattr(item, f"_rep_{rep.when}", rep)
 
 

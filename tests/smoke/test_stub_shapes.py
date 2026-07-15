@@ -135,7 +135,7 @@ class TestStubResolvingBranches:
         assert len(resp.answer) == 0
 
     def test_cname_chain_resolves_to_target(self) -> None:
-        records = {
+        records: dict[str, dict[str, object]] = {
             "alias-267.example.": {"cname": "canon-267.example."},
             "canon-267.example.": {"a": ("203.0.113.8",)},
         }

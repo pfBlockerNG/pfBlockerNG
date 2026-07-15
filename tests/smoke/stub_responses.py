@@ -11,6 +11,8 @@ Uses dnspython (a smoke-only dependency), so every consumer lives under ``tests/
 
 from __future__ import annotations
 
+from typing import cast
+
 STUB_DNS_A = "203.0.113.99"  # RFC 5737 documentation range
 STUB_DNS_AAAA = "2001:db8::99"  # RFC 3849 documentation range
 
@@ -94,11 +96,11 @@ def build_response(
             resp.flags |= dns.flags.AA
         if rec.get("ra"):
             resp.flags |= dns.flags.RA
-        ede_info_code = rec.get("ede_info_code")
+        ede_info_code = cast(int | None, rec.get("ede_info_code"))
         if ede_info_code is not None:
             # Attach an RFC 8914 EDE option so Unbound passes it upstream-side.
             ede_text = str(rec.get("ede_text", "")) or None
-            ede_opt = dns.edns.EDEOption(int(ede_info_code), text=ede_text)
+            ede_opt = dns.edns.EDEOption(cast("dns.edns.EDECode", int(ede_info_code)), text=ede_text)
             resp.use_edns(edns=0, options=[ede_opt])
         return resp.to_wire(), qlog
 

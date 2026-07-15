@@ -169,8 +169,8 @@ jobs:
 
       - name: mypy tests/
         # Config in pyproject.toml: the tests.* override requires
-        # disallow_untyped_defs/disallow_incomplete_defs, tests/smoke is excluded,
-        # and follow_imports=silent keeps production (incremental) typing out of scope.
+        # disallow_untyped_defs/disallow_incomplete_defs, including tests/smoke;
+        # follow_imports=silent keeps production (incremental) typing out of scope.
         run: mypy tests/
 
   ruff:
