@@ -3795,8 +3795,6 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 		return NULL;
 	}
 
-	// Stateless query, one caller at a time (ADR-65 SS2.1 transport row) -- no lock,
-	// unlike the mutating control channel's seq read-increment.
 	$id      = uniqid('pfbq_', TRUE);
 	$payload = json_encode(array('id' => $id, 'domain' => $clean, 'qtype' => $qtype));
 	if ($payload === FALSE) {
@@ -3804,66 +3802,88 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 		return NULL;
 	}
 
-	if (!pfb_unbound_py_atomic_write_root($channel, $payload . "\n")) {
-		// The shared atomic-write helper logs a PFBL-03 "control channel" message,
-		// which misattributes a query-channel write failure -- emit an ADR-65-scoped
-		// line so it is attributable.
-		pfb_logger("\nADR-65: pfb_dnsbl_query failed to publish the request for [ {$clean} ]", 2);
+	// The two Lighttpd hit parsers share one request/reply slot. Serialize the
+	// complete transaction so neither can overwrite or clean up the other's files.
+	$lock_path = "{$pfb['dnsbldir']}/pfb_py_query.lock";
+	$lock = is_dir($lock_path) ? FALSE : @fopen($lock_path, 'c');
+	if ($lock === FALSE) {
+		pfb_logger("\nADR-65: query channel lock open failed [ {$lock_path} ]", 2);
 		return NULL;
 	}
-	// ADR-65 SS2.1: the query request is group-writable (0660) for the attributing
-	// daemon, unlike the owner-only 0640 control-command channel.
-	@chmod($channel, 0660);
+	if (!@flock($lock, LOCK_EX)) {
+		@fclose($lock);
+		pfb_logger("\nADR-65: query channel lock acquire failed [ {$lock_path} ]", 2);
+		return NULL;
+	}
 
-	$deadline  = microtime(TRUE) + $timeout_s;
-	$max_polls = (int) ceil(max($timeout_s, 0.0) / 0.2) + 2;
-	$verdict   = NULL;
-	$polls     = 0;
+	try {
+		if (!pfb_unbound_py_atomic_write_root($channel, $payload . "\n")) {
+			// The shared atomic-write helper logs a PFBL-03 "control channel" message,
+			// which misattributes a query-channel write failure -- emit an ADR-65-scoped
+			// line so it is attributable.
+			pfb_logger("\nADR-65: pfb_dnsbl_query failed to publish the request for [ {$clean} ]", 2);
+			return NULL;
+		}
+		// ADR-65 SS2.1: the query request is group-writable (0660) for the attributing
+		// daemon, unlike the owner-only 0640 control-command channel.
+		@chmod($channel, 0660);
 
-	do {
-		if (file_exists($reply_path)) {
-			$raw = @file_get_contents($reply_path);
-			// An oversized read is treated as malformed -- a genuine reply is < 1 KB.
-			if ($raw !== FALSE && strlen($raw) <= 65536) {
-				$rec = json_decode($raw, TRUE);
-				if (
-					is_array($rec)
-					&& (($rec['id'] ?? NULL) === $id)
-					&& is_bool($rec['blocked'] ?? NULL)
-					&& is_string($rec['b_type'] ?? NULL)
-					&& is_string($rec['group'] ?? NULL)
-					&& is_string($rec['b_eval'] ?? NULL)
-					&& is_string($rec['feed'] ?? NULL)
-					&& is_string($rec['p_type'] ?? NULL)
-				) {
-					$verdict = array(
-						'blocked' => $rec['blocked'],
-						'b_type'  => $rec['b_type'],
-						'group'   => $rec['group'],
-						'b_eval'  => $rec['b_eval'],
-						'feed'    => $rec['feed'],
-						'p_type'  => $rec['p_type'],
-					);
-					break;
+		$deadline  = microtime(TRUE) + $timeout_s;
+		$max_polls = (int) ceil(max($timeout_s, 0.0) / 0.2) + 2;
+		$verdict   = NULL;
+		$polls     = 0;
+
+		do {
+			if (file_exists($reply_path)) {
+				$raw = @file_get_contents($reply_path);
+				// An oversized read is treated as malformed -- a genuine reply is < 1 KB.
+				if ($raw !== FALSE && strlen($raw) <= 65536) {
+					$rec = json_decode($raw, TRUE);
+					if (
+						is_array($rec)
+						&& (($rec['id'] ?? NULL) === $id)
+						&& is_bool($rec['blocked'] ?? NULL)
+						&& is_string($rec['b_type'] ?? NULL)
+						&& is_string($rec['group'] ?? NULL)
+						&& is_string($rec['b_eval'] ?? NULL)
+						&& is_string($rec['feed'] ?? NULL)
+						&& is_string($rec['p_type'] ?? NULL)
+					) {
+						$verdict = array(
+							'blocked' => $rec['blocked'],
+							'b_type'  => $rec['b_type'],
+							'group'   => $rec['group'],
+							'b_eval'  => $rec['b_eval'],
+							'feed'    => $rec['feed'],
+							'p_type'  => $rec['p_type'],
+						);
+						break;
+					}
 				}
 			}
-		}
-		$polls++;
-		if ($polls >= $max_polls || microtime(TRUE) >= $deadline) {
-			break;
-		}
-		usleep(200000);
-	} while (TRUE);
+			$polls++;
+			if ($polls >= $max_polls || microtime(TRUE) >= $deadline) {
+				break;
+			}
+			usleep(200000);
+		} while (TRUE);
 
-	if ($verdict === NULL) {
-		pfb_logger("\nADR-65: pfb_dnsbl_query timed out waiting for a verdict [ {$clean} ]", 2);
+		if ($verdict === NULL) {
+			pfb_logger("\nADR-65: pfb_dnsbl_query timed out waiting for a verdict [ {$clean} ]", 2);
+			if (file_exists($reply_path)) {
+				@unlink($reply_path);
+			}
+			@unlink($channel);
+			return NULL;
+		}
+
+		@unlink($reply_path);
 		@unlink($channel);
-		return NULL;
+		return $verdict;
+	} finally {
+		@flock($lock, LOCK_UN);
+		@fclose($lock);
 	}
-
-	@unlink($reply_path);
-	@unlink($channel);
-	return $verdict;
 }
 
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
