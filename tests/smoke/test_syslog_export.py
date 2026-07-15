@@ -32,6 +32,7 @@ the ``stub_dns`` fixture. Without these all cases skip cleanly.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Iterator
@@ -61,6 +62,8 @@ SYSTEM_LOG = "/var/log/system.log"
 PFB_LOGDIR = "/var/log/pfblockerng"
 DNSBL_LOG = f"{PFB_LOGDIR}/dnsbl.log"
 IP_BLOCK_LOG = f"{PFB_LOGDIR}/ip_block.log"
+UNIFIED_LOG = f"{PFB_LOGDIR}/unified.log"
+IP_CACHE = "/var/db/pfblockerng/ip_cache.sqlite"
 
 # Config path for the syslog export toggle (under the General settings section).
 CFG_GENERAL = "installedpackages/pfblockerng/config/0"
@@ -328,7 +331,7 @@ def syslog_export_state_snapshot(vm: SmokeVM) -> str:
     )
 
 
-def _trigger_ip_block(client: SmokeVM, *, timeout: float = 30.0) -> None:
+def _trigger_ip_block(client: SmokeVM, *, port: int = 80, timeout: float = 30.0) -> None:
     """Generate a pf-logged IP block by curling the blocked WAN IP FROM civm.
 
     The block must be triggered by PASS-THROUGH traffic — a client BEHIND the
@@ -346,8 +349,116 @@ def _trigger_ip_block(client: SmokeVM, *, timeout: float = 30.0) -> None:
         "-c",
         "dev=$(ip -4 -o addr show | awk '/192\\.168\\.1\\./{print $2; exit}'); "
         f'ip route replace {TEST_IP_BLOCK_DST}/32 via {PFSENSE_LAN_IP} dev "$dev" 2>/dev/null || true; '
-        f"curl --connect-timeout 2 --max-time 4 http://{TEST_IP_BLOCK_DST}/ >/dev/null 2>&1 || true",
+        f"curl --connect-timeout 2 --max-time 4 http://{TEST_IP_BLOCK_DST}:{port}/ >/dev/null 2>&1 || true",
         timeout=timeout,
+    )
+
+
+def _ip_cache_snapshot(vm: SmokeVM, *, timeout: float = 30.0) -> tuple[int, dict[str, tuple[str, str]]] | None:
+    """Return the cache inode plus host -> (feed, evaluated entry), or None when absent."""
+    open_marker = "<<<IPCACHE>>>"
+    close_marker = "<<<IPCACHEEND>>>"
+    snippet = (
+        f"$path = {h._php_str(IP_CACHE)};\n"
+        f"if (!file_exists($path)) {{ echo {h._php_str(open_marker + 'MISSING' + close_marker)}; }} else {{\n"
+        "$db = new SQLite3($path);\n"
+        "$rows = array();\n"
+        "$result = $db->query('SELECT host, q0, q1 FROM ipcache ORDER BY host');\n"
+        "while ($row = $result->fetchArray(SQLITE3_ASSOC)) { $rows[] = $row; }\n"
+        f"echo {h._php_str(open_marker)} . json_encode(array('inode' => fileinode($path), 'rows' => $rows))"
+        f" . {h._php_str(close_marker)};\n"
+        "$db->close();\n"
+        "}"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"IP cache snapshot failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    start = result.stdout.find(open_marker)
+    end = result.stdout.find(close_marker, start + len(open_marker))
+    if start == -1 or end == -1:
+        raise RuntimeError(f"IP cache snapshot markers absent: {result.stdout!r}")
+    raw = result.stdout[start + len(open_marker) : end]
+    if raw == "MISSING":
+        return None
+    payload = json.loads(raw)
+    rows = {str(row["host"]): (str(row["q0"]), str(row["q1"])) for row in payload["rows"]}
+    return int(payload["inode"]), rows
+
+
+def _seed_ip_cache_row(vm: SmokeVM, host: str, feed: str, evaluated: str, *, timeout: float = 30.0) -> None:
+    """Add a second production-shaped cache row so a whole-file flush is observable."""
+    snippet = (
+        f"$db = new SQLite3({h._php_str(IP_CACHE)});\n"
+        "$stmt = $db->prepare('INSERT INTO ipcache (host, q0, q1, geoip, resolved_host) "
+        "VALUES (:host, :q0, :q1, :geoip, :resolved_host)');\n"
+        f"$stmt->bindValue(':host', {h._php_str(host)}, SQLITE3_TEXT);\n"
+        f"$stmt->bindValue(':q0', {h._php_str(feed)}, SQLITE3_TEXT);\n"
+        f"$stmt->bindValue(':q1', {h._php_str(evaluated)}, SQLITE3_TEXT);\n"
+        "$stmt->bindValue(':geoip', 'Unk', SQLITE3_TEXT);\n"
+        "$stmt->bindValue(':resolved_host', 'Unknown', SQLITE3_TEXT);\n"
+        "$ok = $stmt->execute();\n"
+        "echo $ok ? 'OK' : 'FAIL';\n"
+        "$db->close();"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"IP cache seed failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def _set_ip_attribution_rows(vm: SmokeVM, feed_a: str, feed_b: str, *, timeout: float = 60.0) -> None:
+    """Give the fixture's existing IP alias two attribution-source rows."""
+    row_a = {
+        "header": "pfb_syslog_ip",
+        "url": feed_a,
+        "state": "Enabled",
+        "format": "auto",
+    }
+    row_b = {
+        "header": "pfb_syslog_ip_b",
+        "url": feed_b,
+        "state": "Enabled",
+        "format": "auto",
+    }
+    snippet = (
+        f"$lists = config_get_path({h._php_str(h.CFG_IP_V4_LISTS)}, array());\n"
+        "$found = false;\n"
+        "foreach ($lists as &$list) {\n"
+        "if (($list['aliasname'] ?? '') === 'pfb_syslog_iptest') {\n"
+        f"$list['row'] = array({h._php_kv_array(row_a)}, {h._php_kv_array(row_b)});\n"
+        "$found = true;\n"
+        "}\n"
+        "}\n"
+        "unset($list);\n"
+        f"config_set_path({h._php_str(h.CFG_IP_V4_LISTS)}, $lists);\n"
+        "write_config('pfBlockerNG smoke: IP attribution source rows');\n"
+        "echo $found ? 'OK' : 'NOTFOUND';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"IP attribution row setup failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def _filterlog_pid(vm: SmokeVM, *, timeout: float = 30.0) -> str:
+    """Return the live filterlog daemon PID, failing loudly when it is absent."""
+    result = vm.ssh(
+        "/bin/sh",
+        "-c",
+        "/bin/ps -waxo pid,command | /usr/bin/awk '/[p]fblockerng.inc filterlog/{print $1; exit}'",
+        timeout=timeout,
+    )
+    pid = result.stdout.strip()
+    if result.returncode != 0 or not pid:
+        raise RuntimeError(f"filterlog daemon PID absent: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    return pid
+
+
+def _last_log_line(vm: SmokeVM, path: str, *tokens: str) -> str:
+    """Return the newest line containing every token, or an empty string."""
+    return next(
+        (line for line in reversed(h.read_log_file(vm, path).splitlines()) if all(token in line for token in tokens)),
+        "",
     )
 
 
@@ -565,7 +676,233 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
 
 
 # --------------------------------------------------------------------------- #
-# Test 3: OFF ⇒ no new export records (LIVE toggle, before/after proof)
+# Test 3: event-time IP attribution cache follows successful feed ownership moves.
+# --------------------------------------------------------------------------- #
+
+
+def test_ip_attribution_cache_invalidated_after_feed_ownership_change(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """A successful feed reparse invalidates cached event attribution without a rule reload.
+
+    Given: one blocked host belongs to FeedA, a second host belongs to FeedB, and an
+           event caches FeedA plus its evaluated CIDR for the blocked host.
+    When:  a no-op pass, an unlock-only pass, then a genuine refetch move the two
+           hosts between feeds while leaving the alias's final membership unchanged.
+    Then:  the no-op and unlock-only passes preserve the cache, but the refetch drops
+           the whole cache; the next event recomputes FeedB in CSV, unified, and syslog
+           output while the historical FeedA CSV row remains unchanged.
+    """
+    vm = deployed_vm
+    alias = "pfB_pfb_syslog_iptest_v4"
+    feed_a_header = "pfb_syslog_ip_v4"
+    feed_b_header = "pfb_syslog_ip_b_v4"
+    feed_a_path = h.write_local_feed(vm, "pfb_syslog_ip.txt", f"{TEST_IP_BLOCK_RANGE}\n")
+    control_ip = "198.51.100.240"
+    control_range = f"{control_ip}/32"
+    feed_b_path = h.write_local_feed(vm, "pfb_syslog_ip_b.txt", f"{control_range}\n")
+    sentinel_host = "203.0.113.250"
+    original_syslog = h.config_get(vm, CFG_GENERAL + "/log_syslog")
+    token = "ipattrcache"
+    marker = h.hook_marker_path(token, "post")
+
+    try:
+        _set_ip_attribution_rows(vm, feed_a_path, feed_b_path)
+        _set_syslog_enabled(vm, on=True)
+        h.set_update_hooks(vm, [h.env_dump_hook(token, "post")])
+        h.force_ip_refetch(vm, feed_a_header)
+        h.force_ip_refetch(vm, feed_b_header)
+        h.clear_hook_markers(vm, token)
+        h.reload(vm, "update")
+
+        table = vm.ssh("/sbin/pfctl", "-t", alias, "-T", "show", timeout=30)
+        assert table.returncode == 0, f"failed to read {alias}: rc={table.returncode} {table.stderr!r}"
+        membership_before = {line.strip() for line in table.stdout.splitlines() if line.strip()}
+        assert {TEST_IP_BLOCK_DST, control_ip} <= membership_before, (
+            f"setup alias membership missing fixture hosts: expected {TEST_IP_BLOCK_DST!r} and "
+            f"{control_ip!r}, got {sorted(membership_before)!r}"
+        )
+
+        # Missing-cache state: the first real event must recreate it naturally.
+        vm.ssh("/bin/rm", "-f", IP_CACHE, timeout=30)
+        assert _ip_cache_snapshot(vm) is None, "precondition: IP cache still exists after explicit removal"
+        daemon_pid = _filterlog_pid(vm)
+
+        events_before = len(_pfb_event_lines(vm))
+        _trigger_ip_block(client_vm, port=18080)
+        initial_syslog = _wait_for_event(
+            vm,
+            baseline_len=events_before,
+            want=(TEST_IP_BLOCK_DST, "dport=18080"),
+            any_of=IP_ACT_TOKENS,
+        )
+        assert initial_syslog, f"initial FeedA event absent\n{syslog_export_state_snapshot(vm)}"
+        assert f"feed={feed_a_header}" in initial_syslog, (
+            f"initial event did not attribute {TEST_IP_BLOCK_DST} to FeedA {feed_a_header!r}: {initial_syslog!r}"
+        )
+        initial_csv = _last_log_line(vm, IP_BLOCK_LOG, TEST_IP_BLOCK_DST, ",18080,")
+        initial_unified = _last_log_line(vm, UNIFIED_LOG, TEST_IP_BLOCK_DST, ",18080,")
+        for label, line in (("IP CSV", initial_csv), ("unified", initial_unified)):
+            assert feed_a_header in line and TEST_IP_BLOCK_DST in line, (
+                f"initial {label} attribution should contain FeedA={feed_a_header!r} and "
+                f"evaluated={TEST_IP_BLOCK_DST!r}, got {line!r}"
+            )
+
+        initial_cache = _ip_cache_snapshot(vm)
+        assert initial_cache is not None, "first event did not recreate the missing IP cache"
+        assert initial_cache[1].get(TEST_IP_BLOCK_DST) == (feed_a_header, TEST_IP_BLOCK_DST), (
+            f"initial cached q0/q1 mismatch: {initial_cache!r}"
+        )
+        _seed_ip_cache_row(vm, sentinel_host, "SentinelFeed", f"{sentinel_host}/32")
+        cached_before_noop = _ip_cache_snapshot(vm)
+        assert cached_before_noop is not None and sentinel_host in cached_before_noop[1], (
+            f"second host was not seeded into the shared cache: {cached_before_noop!r}"
+        )
+
+        # True reuse/no-op: both the inode and every row survive, and events still hit FeedA.
+        h.clear_hook_markers(vm, token)
+        h.reload(vm, "update")
+        env_noop = h.read_hook_env(vm, marker)
+        assert env_noop is not None, "post hook absent for no-op update"
+        assert env_noop.get("PFB_IP_CHANGED") == "0" and env_noop.get("PFB_CHANGED_IP_ALIASES") == "", (
+            f"expected a true no-op pass, got {env_noop!r}"
+        )
+        assert _ip_cache_snapshot(vm) == cached_before_noop, "no-op update changed the IP cache inode or rows"
+        assert _filterlog_pid(vm) == daemon_pid, "no-op update restarted the filterlog daemon"
+
+        events_before = len(_pfb_event_lines(vm))
+        _trigger_ip_block(client_vm, port=18081)
+        noop_syslog = _wait_for_event(
+            vm,
+            baseline_len=events_before,
+            want=(TEST_IP_BLOCK_DST, "dport=18081"),
+            any_of=IP_ACT_TOKENS,
+        )
+        assert f"feed={feed_a_header}" in noop_syslog, f"no-op cache hit lost FeedA attribution: {noop_syslog!r}"
+
+        # Unlock-only re-block widens alias reloads, but must not invalidate attribution.
+        unlock = h.php_eval(
+            vm,
+            f"file_put_contents('/tmp/ip_unlock', {h._php_str(TEST_IP_BLOCK_DST + ',' + alias + chr(10))}); echo 'OK';",
+        )
+        assert unlock.returncode == 0 and "OK" in unlock.stdout, (
+            f"failed to create unlock fixture: rc={unlock.returncode} {unlock.stderr!r} {unlock.stdout!r}"
+        )
+        h.clear_hook_markers(vm, token)
+        h.reload(vm, "update")
+        env_unlock = h.read_hook_env(vm, marker)
+        assert env_unlock is not None and env_unlock.get("PFB_IP_CHANGED") == "1", (
+            f"unlock-only pass did not report its re-block: {env_unlock!r}"
+        )
+        assert _ip_cache_snapshot(vm) == cached_before_noop, "unlock-only re-block changed the IP cache"
+        assert _filterlog_pid(vm) == daemon_pid, "unlock-only re-block restarted the filterlog daemon"
+
+        events_before = len(_pfb_event_lines(vm))
+        _trigger_ip_block(client_vm, port=18082)
+        unlock_syslog = _wait_for_event(
+            vm,
+            baseline_len=events_before,
+            want=(TEST_IP_BLOCK_DST, "dport=18082"),
+            any_of=IP_ACT_TOKENS,
+        )
+        assert f"feed={feed_a_header}" in unlock_syslog, (
+            f"unlock-only pass should retain cached FeedA attribution: {unlock_syslog!r}"
+        )
+        assert _ip_cache_snapshot(vm) == cached_before_noop, "cache-hit events changed the cached q0/q1 rows"
+
+        # Genuine refetch: swap ownership while preserving the exact final alias union.
+        h.write_local_feed(vm, "pfb_syslog_ip.txt", f"{control_range}\n")
+        h.write_local_feed(vm, "pfb_syslog_ip_b.txt", f"{TEST_IP_BLOCK_RANGE}\n")
+        h.force_ip_refetch(vm, feed_a_header)
+        h.force_ip_refetch(vm, feed_b_header)
+        h.clear_hook_markers(vm, token)
+        h.reload(vm, "update")
+        env_refresh = h.read_hook_env(vm, marker)
+        assert env_refresh is not None, "post hook absent for ownership-change update"
+        assert env_refresh.get("PFB_IP_CHANGED") == "0", (
+            f"ownership-only feed move unexpectedly reloaded firewall rules: {env_refresh!r}"
+        )
+        assert env_refresh.get("PFB_CHANGED_IP_ALIASES") == "", (
+            f"final alias union changed during ownership-only move: {env_refresh!r}"
+        )
+        assert _filterlog_pid(vm) == daemon_pid, "ownership-only content refresh restarted the filterlog daemon"
+
+        table = vm.ssh("/sbin/pfctl", "-t", alias, "-T", "show", timeout=30)
+        membership_after = {line.strip() for line in table.stdout.splitlines() if line.strip()}
+        assert table.returncode == 0 and membership_after == membership_before, (
+            f"ownership move changed pf enforcement: before={sorted(membership_before)!r} "
+            f"after={sorted(membership_after)!r} rc={table.returncode}"
+        )
+        feed_a_output = h.read_log_file(vm, f"{h.PFB_DBDIR}/deny/{feed_a_header}.txt")
+        feed_b_output = h.read_log_file(vm, f"{h.PFB_DBDIR}/deny/{feed_b_header}.txt")
+        assert TEST_IP_BLOCK_DST not in feed_a_output and TEST_IP_BLOCK_DST in feed_b_output, (
+            "refetched attribution sources did not move the host from FeedA to FeedB: "
+            f"FeedA={feed_a_output!r} FeedB={feed_b_output!r}"
+        )
+
+        events_before = len(_pfb_event_lines(vm))
+        _trigger_ip_block(client_vm, port=18083)
+        refreshed_syslog = _wait_for_event(
+            vm,
+            baseline_len=events_before,
+            want=(TEST_IP_BLOCK_DST, "dport=18083"),
+            any_of=IP_ACT_TOKENS,
+        )
+        assert f"feed={feed_b_header}" in refreshed_syslog, (
+            f"post-refresh event stayed stale instead of recomputing FeedB {feed_b_header!r}: "
+            f"actual={refreshed_syslog!r} cached_before={cached_before_noop!r}"
+        )
+        assert f"feed={feed_a_header}" not in refreshed_syslog, (
+            f"post-refresh syslog still contains removed FeedA attribution: {refreshed_syslog!r}"
+        )
+
+        refreshed_csv = _last_log_line(vm, IP_BLOCK_LOG, TEST_IP_BLOCK_DST, ",18083,")
+        refreshed_unified = _last_log_line(vm, UNIFIED_LOG, TEST_IP_BLOCK_DST, ",18083,")
+        for label, line in (("IP CSV", refreshed_csv), ("unified", refreshed_unified)):
+            assert feed_b_header in line and TEST_IP_BLOCK_DST in line and feed_a_header not in line, (
+                f"post-refresh {label} did not use recomputed FeedB/evaluated attribution: {line!r}"
+            )
+        assert initial_csv in h.read_log_file(vm, IP_BLOCK_LOG).splitlines(), (
+            f"historical FeedA CSV row was rewritten or lost: {initial_csv!r}"
+        )
+
+        refreshed_cache = _ip_cache_snapshot(vm)
+        assert refreshed_cache is not None, "post-refresh event did not recreate the IP cache"
+        assert refreshed_cache[1].get(TEST_IP_BLOCK_DST) == (feed_b_header, TEST_IP_BLOCK_DST), (
+            f"post-refresh cached q0/q1 mismatch: {refreshed_cache!r}"
+        )
+        assert sentinel_host not in refreshed_cache[1], (
+            f"content refresh did not invalidate the whole shared cache: {refreshed_cache!r}"
+        )
+    finally:
+        h.clear_update_hooks(vm)
+        vm.ssh("/bin/rm", "-f", "/tmp/ip_unlock", timeout=30)
+        h.write_local_feed(vm, "pfb_syslog_ip.txt", f"{TEST_IP_BLOCK_RANGE}\n")
+        h.inject(
+            vm,
+            h.IpCase(
+                aliasname="pfb_syslog_iptest",
+                feed_url=feed_a_path,
+                action="Deny_Outbound",
+                family="v4",
+                header="pfb_syslog_ip",
+            ),
+        )
+        _set_syslog_enabled(vm, on=original_syslog == "on")
+        h.force_ip_refetch(vm, feed_a_header)
+        h.reload(vm, "update")
+        vm.ssh(
+            "/bin/rm",
+            "-f",
+            IP_CACHE,
+            feed_b_path,
+            f"{h.PFB_DBDIR}/deny/{feed_b_header}.txt",
+            f"{h.PFB_DBDIR}/deny/{feed_b_header}.update",
+            f"{h.PFB_DBDIR}/deny/{feed_b_header}.fail",
+            timeout=30,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Test 4: OFF ⇒ no new export records (LIVE toggle, before/after proof)
 # --------------------------------------------------------------------------- #
 
 
