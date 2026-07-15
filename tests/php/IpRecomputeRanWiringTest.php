@@ -13,9 +13,9 @@ use PHPUnit\Framework\TestCase;
  * pure helpers (pfb_ip_suppress_body_active(), pfb_ip_closing_pass_active()) rather than
  * their old feed-changed-only / dedup-only conditions.
  *
- * Each assertion is a real substring check against the CURRENT file content, so it fails
- * for as long as the old condition (or no condition at all) is what is actually wired --
- * a stale rename/refactor of any of these lines fails this oracle immediately.
+	 * Assertions scan the CURRENT file content with PHP comments removed, so comment-only
+	 * identifiers cannot satisfy the wiring oracle. A stale rename/refactor of any pinned
+	 * line fails this oracle immediately.
  */
 final class IpRecomputeRanWiringTest extends TestCase
 {
@@ -23,7 +23,17 @@ final class IpRecomputeRanWiringTest extends TestCase
 
 	private function source(): string
 	{
-		return (string) file_get_contents(self::PFBLOCKERNG_INC);
+		$source = '';
+		foreach (token_get_all((string) file_get_contents(self::PFBLOCKERNG_INC)) as $token) {
+			if (is_array($token)) {
+				if (in_array($token[0], [T_COMMENT, T_DOC_COMMENT], TRUE)) {
+					continue;
+				}
+				$token = $token[1];
+			}
+			$source .= $token;
+		}
+		return $source;
 	}
 
 	public function testInvocationLoopRecordsWhetherRecomputeRanPerFamily(): void
