@@ -126,6 +126,28 @@ final class DnsblQueryClientTest extends TestCase
 		return "{$this->tmp}/pfb_py_query.lock";
 	}
 
+	/** Publish a cross-process test artifact without exposing partial bytes. */
+	private function atomicWrite(string $path, string $contents): void
+	{
+		$tmp = "{$path}.tmp." . getmypid() . '.' . uniqid('', true);
+		try {
+			if (file_put_contents($tmp, $contents) !== strlen($contents) || !rename($tmp, $path)) {
+				throw new RuntimeException("failed to publish {$path}");
+			}
+		} finally {
+			@unlink($tmp);
+		}
+	}
+
+	private function atomicWriteJson(string $path, mixed $value): void
+	{
+		$json = json_encode($value);
+		if ($json === false) {
+			throw new RuntimeException('failed to encode cross-process test artifact');
+		}
+		$this->atomicWrite($path, $json);
+	}
+
 	/** Fork a tracked child; the closure must communicate through temp files. */
 	private function forkChild(callable $task): int
 	{
@@ -217,7 +239,7 @@ final class DnsblQueryClientTest extends TestCase
 		return $this->forkChild(function () use ($domain, $timeout_s, $marker): void {
 			file_put_contents("{$this->tmp}/{$marker}.started", '1');
 			$result = pfb_dnsbl_query($domain, 'A', $timeout_s);
-			file_put_contents("{$this->tmp}/{$marker}.json", json_encode($result));
+			$this->atomicWriteJson("{$this->tmp}/{$marker}.json", $result);
 		});
 	}
 
@@ -240,15 +262,30 @@ final class DnsblQueryClientTest extends TestCase
 		$this->assertTrue(flock($lock, LOCK_EX));
 
 		$marker = "contended-{$domain}.json";
-		$child = $this->forkChild(function () use ($lock, $domain, $timeout_s, $marker): void {
+		$ready = "contended-{$domain}.ready";
+		$go = "contended-{$domain}.go";
+		$child = $this->forkChild(function () use ($lock, $domain, $timeout_s, $marker, $ready, $go): void {
 			fclose($lock);
+			$probe = fopen($this->lockPath(), 'c');
+			if ($probe === false) {
+				throw new RuntimeException('failed to open contention probe lock');
+			}
+			$wouldBlock = 0;
+			if (flock($probe, LOCK_EX | LOCK_NB, $wouldBlock) || $wouldBlock !== 1) {
+				throw new RuntimeException('contention probe did not observe the parent lock');
+			}
+			fclose($probe);
+			$this->atomicWrite("{$this->tmp}/{$ready}", '1');
+			$this->readMarker($go);
 			$start = microtime(true);
 			$result = pfb_dnsbl_query($domain, 'A', $timeout_s);
-			file_put_contents("{$this->tmp}/{$marker}", json_encode([
+			$this->atomicWriteJson("{$this->tmp}/{$marker}", [
 				'result' => $result,
 				'elapsed' => microtime(true) - $start,
-			]));
+			]);
 		});
+		$this->readMarker($ready);
+		$this->atomicWrite("{$this->tmp}/{$go}", '1');
 
 		$path = "{$this->tmp}/{$marker}";
 		$deadline = microtime(true) + 0.75;
@@ -300,12 +337,12 @@ final class DnsblQueryClientTest extends TestCase
 				throw new RuntimeException('responder did not observe a request');
 			}
 			$perm = substr(sprintf('%o', fileperms($this->channel())), -4);
-			file_put_contents("{$this->tmp}/observed.json", json_encode([
+			$this->atomicWriteJson("{$this->tmp}/observed.json", [
 				'request' => $request,
 				'perm' => $perm,
-			]));
+			]);
 			$reply = str_replace('__ID__', (string) $request['id'], $replyTemplateJson);
-			file_put_contents($this->replyPath(), $reply);
+			$this->atomicWrite($this->replyPath(), $reply);
 		});
 	}
 
@@ -437,6 +474,21 @@ final class DnsblQueryClientTest extends TestCase
 		$this->assertFalse($requestPublished, 'lock timeout must not publish a query request');
 	}
 
+	public function testLockWaitHasHardPollCapIndependentOfClockDeadline(): void
+	{
+		$function = new ReflectionFunction('pfb_dnsbl_query');
+		$lines = file($function->getFileName());
+		$this->assertIsArray($lines);
+		$source = implode('', array_slice(
+			$lines,
+			$function->getStartLine() - 1,
+			$function->getEndLine() - $function->getStartLine() + 1
+		));
+
+		$this->assertStringContainsString('$lock_polls++;', $source);
+		$this->assertStringContainsString('$lock_polls >= $max_lock_polls', $source);
+	}
+
 	public function testContendedLockWithShortTimeoutReturnsWithoutPublishing(): void
 	{
 		[$record, $completedWhileLocked, $requestPublished] = $this->queryUnderContention(
@@ -464,7 +516,7 @@ final class DnsblQueryClientTest extends TestCase
 			fclose($lock);
 			file_put_contents("{$this->tmp}/late-lock.started", '1');
 			$result = pfb_dnsbl_query('late-lock.example', 'A', 0.5);
-			file_put_contents("{$this->tmp}/late-lock.json", json_encode($result));
+			$this->atomicWriteJson("{$this->tmp}/late-lock.json", $result);
 		});
 
 		$this->readMarker('late-lock.started');
@@ -494,7 +546,7 @@ final class DnsblQueryClientTest extends TestCase
 		$this->assertTrue(posix_kill($child, (int) constant('SIGSTOP')));
 		usleep(600000);
 		$late_reply = $this->verdictReply($request['id'], 'late-group');
-		$this->assertSame(strlen($late_reply), file_put_contents($this->replyPath(), $late_reply));
+		$this->atomicWrite($this->replyPath(), $late_reply);
 		$this->assertFileExists($this->replyPath());
 		$this->assertTrue(posix_kill($child, (int) constant('SIGCONT')));
 
@@ -584,7 +636,7 @@ final class DnsblQueryClientTest extends TestCase
 			$first = $this->waitForRequest('concurrent-a.example');
 			file_put_contents("{$this->tmp}/server-first-ready", '1');
 			$this->readMarker('release-first');
-			file_put_contents($this->replyPath(), $this->verdictReply($first['id'], 'group-a'));
+			$this->atomicWrite($this->replyPath(), $this->verdictReply($first['id'], 'group-a'));
 
 			$deadline = microtime(true) + 2.0;
 			while (file_exists($this->replyPath()) && microtime(true) < $deadline) {
@@ -594,7 +646,7 @@ final class DnsblQueryClientTest extends TestCase
 				throw new RuntimeException('first caller did not consume its reply');
 			}
 			$second = $this->waitForRequest('concurrent-b.example');
-			file_put_contents($this->replyPath(), $this->verdictReply($second['id'], 'group-b'));
+			$this->atomicWrite($this->replyPath(), $this->verdictReply($second['id'], 'group-b'));
 		});
 
 		$callerA = $this->forkQuery('concurrent-a.example', 2.5, 'caller-a');
@@ -631,7 +683,7 @@ final class DnsblQueryClientTest extends TestCase
 			$intact = is_array($current) && (($current['id'] ?? null) === $second['id']);
 			file_put_contents("{$this->tmp}/timeout-b-intact", $intact ? 'yes' : 'no');
 			if ($intact) {
-				file_put_contents($this->replyPath(), $this->verdictReply($second['id'], 'group-b'));
+				$this->atomicWrite($this->replyPath(), $this->verdictReply($second['id'], 'group-b'));
 			}
 		});
 
