@@ -204,6 +204,49 @@ final class DnsblQueryClientTest extends TestCase
 		return is_array($result) ? $result : null;
 	}
 
+	/** Run a query child while this process owns the channel lock. */
+	private function queryUnderContention(string $domain, float $timeout_s): array
+	{
+		$lock = fopen($this->lockPath(), 'c');
+		$this->assertIsResource($lock);
+		$this->assertTrue(flock($lock, LOCK_EX));
+
+		$marker = "contended-{$domain}.json";
+		$child = $this->forkChild(function () use ($lock, $domain, $timeout_s, $marker): void {
+			fclose($lock);
+			$start = microtime(true);
+			$result = pfb_dnsbl_query($domain, 'A', $timeout_s);
+			file_put_contents("{$this->tmp}/{$marker}", json_encode([
+				'result' => $result,
+				'elapsed' => microtime(true) - $start,
+			]));
+		});
+
+		$path = "{$this->tmp}/{$marker}";
+		$deadline = microtime(true) + 0.75;
+		$raw = false;
+		do {
+			$raw = @file_get_contents($path);
+			if ($raw !== false && $raw !== '') {
+				break;
+			}
+			usleep(20000);
+		} while (microtime(true) < $deadline);
+		$completedWhileLocked = $raw !== false && $raw !== '';
+		$requestPublished = file_exists($this->channel());
+
+		flock($lock, LOCK_UN);
+		fclose($lock);
+		if (!$completedWhileLocked) {
+			$raw = $this->readMarker($marker, 2.0);
+		}
+		$this->reapChild($child);
+		$record = json_decode((string) $raw, true);
+		$this->assertIsArray($record);
+
+		return [$record, $completedWhileLocked, $requestPublished];
+	}
+
 	/**
 	 * Spawn a background PHP process that plays the Python side of the
 	 * channel: it polls for the request (up to ~3s, 50ms steps), records
@@ -348,6 +391,33 @@ final class DnsblQueryClientTest extends TestCase
 
 		$this->assertIsArray(pfb_dnsbl_query('garbage-lock.example', 'A', 2.0));
 		$this->assertSame($garbage, file_get_contents($this->lockPath()));
+	}
+
+	public function testContendedLockWithZeroTimeoutReturnsWithoutPublishing(): void
+	{
+		[$record, $completedWhileLocked, $requestPublished] = $this->queryUnderContention(
+			'zero-lock-timeout.example',
+			0.0
+		);
+
+		$this->assertTrue($completedWhileLocked, 'zero-timeout query blocked on the occupied channel lock');
+		$this->assertNull($record['result']);
+		$this->assertLessThan(0.5, $record['elapsed'], 'zero-timeout query exceeded its total wait budget');
+		$this->assertFalse($requestPublished, 'lock timeout must not publish a query request');
+	}
+
+	public function testContendedLockWithShortTimeoutReturnsWithoutPublishing(): void
+	{
+		[$record, $completedWhileLocked, $requestPublished] = $this->queryUnderContention(
+			'short-lock-timeout.example',
+			0.1
+		);
+
+		$this->assertTrue($completedWhileLocked, 'short-timeout query blocked past its channel-lock deadline');
+		$this->assertNull($record['result']);
+		$this->assertGreaterThanOrEqual(0.08, $record['elapsed'], 'contended query abandoned before its wait budget');
+		$this->assertLessThan(0.5, $record['elapsed'], 'short-timeout query exceeded its total wait budget');
+		$this->assertFalse($requestPublished, 'lock timeout must not publish a query request');
 	}
 
 	// --- happy path: blocked verdict, request schema + perms, cleanup -------
@@ -539,6 +609,16 @@ final class DnsblQueryClientTest extends TestCase
 
 		$this->assertNull($result);
 		$this->assertLessThan(0.5, $elapsed, "expected a near-instant single attempt, got {$elapsed}");
+	}
+
+	public function testShortReplyTimeoutDoesNotOversleepItsDeadline(): void
+	{
+		$start = microtime(true);
+		$result = pfb_dnsbl_query('short-reply-timeout.example', 'A', 0.001);
+		$elapsed = microtime(true) - $start;
+
+		$this->assertNull($result);
+		$this->assertLessThan(0.1, $elapsed, "short reply timeout overslept its deadline: {$elapsed}s");
 	}
 
 	// --- hostile reply rows: id-independent (pre-seeded, no responder) -----

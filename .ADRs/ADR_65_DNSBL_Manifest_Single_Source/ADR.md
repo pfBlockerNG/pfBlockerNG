@@ -202,7 +202,7 @@ single question and receive the answer it would have logged:
 | **Engine** | Runs the **pure decision** `evaluate_domain`/`_scan_block_band` against the live `dataDB`/`zoneDB`/`regexDB`/`whiteDB`/`hstsDB` — the SAME code `operate()` uses, so the answer reflects the full matcher (regex/ABP, allow, whitelist precedence, TOP1M, `$important`, HSTS, homoglyph), never a grep approximation. |
 | **Side effects** | **NONE that a real query has, except the LRU.** No `("resolver")`/`("dnsbl")` counter enqueue, no `dnsbl.log` line, no `dnsblcache` row. Writing the LRU `decisionDB` memo is **allowed** (it warms the cache and is decision-neutral). Pinned by a test that asserts every counter/log/cache is untouched across a query while `decisionDB` may change. |
 | **Always-on** | The query watcher runs unconditionally (read-only ⇒ safe), independent of the legacy-control toggle. Started alongside the existing watchers in init. |
-| **Transport** | File request + reply file keyed by `id`, reusing the control channel's kqueue-watch + atomic-write pattern (lazy: mirrors existing code). The caller `pfb_log_event` runs in TWO independent webserver-hit daemons (`pfb_daemon_dnsbl` HTTPS + `pfb_daemon_dnsbl_index` HTTP), so PHP serializes the complete publish → reply poll → cleanup transaction with the advisory `pfb_py_query.lock`. Contention queues behind that bounded transaction; a lock open/acquire failure returns `NULL` → `Unknown` (the documented D4 fallback) without publishing. The low webserver-hit rate makes this file transport sufficient without a socket or per-`id` files. |
+| **Transport** | File request + reply file keyed by `id`, reusing the control channel's kqueue-watch + atomic-write pattern (lazy: mirrors existing code). The caller `pfb_log_event` runs in TWO independent webserver-hit daemons (`pfb_daemon_dnsbl` HTTPS + `pfb_daemon_dnsbl_index` HTTP), so PHP serializes the complete publish → reply poll → cleanup transaction with the advisory `pfb_py_query.lock`. Lock contention and reply polling share one deadline; exhausting it returns `NULL` → `Unknown` (the documented D4 fallback) without publishing. A lock open/acquire failure does the same. The low webserver-hit rate makes this file transport sufficient without a socket or per-`id` files. |
 | **Privilege** | Owner root, group `unbound`, mode **0660** on the request file (the attributing daemon must write it; it is read-only in effect — it mutates no state), reply file 0640. Read-only ⇒ no authorization beyond "local" is required; a hostile local writer can at worst warm the LRU. Stated as a security decision, not an accident. |
 
 ### 2.2 Retire the `.txt`; rewire every consumer
@@ -287,8 +287,8 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
 - **User-visible:** the reports "changed since" refinement badges go away and feed-filtering
   semantics shift (D2). Release-noted.
 - **Latency:** the webserver-hit path gains a round-trip to the module per hit. It is off the DNS
-  fast path; either daemon may wait behind the other daemon's bounded transaction, with an
-  `Unknown` fallback on lock/channel failure or reply timeout.
+  fast path; either daemon may spend its bounded deadline waiting behind the other daemon's
+  transaction, with an `Unknown` fallback on lock/channel failure or reply timeout.
 
 ## 4. Requirements (acceptance)
 

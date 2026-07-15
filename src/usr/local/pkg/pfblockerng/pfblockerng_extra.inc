@@ -3805,15 +3805,36 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 
 	// The two Lighttpd hit parsers share one request/reply slot. Serialize the
 	// complete transaction so neither can overwrite or clean up the other's files.
+	$wait_s    = max($timeout_s, 0.0);
+	$deadline  = microtime(TRUE) + $wait_s;
 	$lock_path = "{$pfb['dnsbldir']}/pfb_py_query.lock";
 	$lock = is_dir($lock_path) ? FALSE : @fopen($lock_path, 'c');
 	if ($lock === FALSE) {
 		pfb_logger("\nADR-65: query channel lock open failed [ {$lock_path} ]", 2);
 		return NULL;
 	}
-	if (!@flock($lock, LOCK_EX)) {
+
+	$locked = FALSE;
+	do {
+		$would_block = 0;
+		if (@flock($lock, LOCK_EX | LOCK_NB, $would_block)) {
+			$locked = TRUE;
+			break;
+		}
+		if ($would_block !== 1) {
+			@fclose($lock);
+			pfb_logger("\nADR-65: query channel lock acquire failed [ {$lock_path} ]", 2);
+			return NULL;
+		}
+		$remaining_s = $deadline - microtime(TRUE);
+		if ($remaining_s <= 0.0) {
+			break;
+		}
+		usleep((int) min(20000, ceil($remaining_s * 1000000)));
+	} while (TRUE);
+	if (!$locked) {
 		@fclose($lock);
-		pfb_logger("\nADR-65: query channel lock acquire failed [ {$lock_path} ]", 2);
+		pfb_logger("\nADR-65: query channel lock timed out [ {$lock_path} ]", 2);
 		return NULL;
 	}
 
@@ -3829,8 +3850,7 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 		// daemon, unlike the owner-only 0640 control-command channel.
 		@chmod($channel, 0660);
 
-		$deadline  = microtime(TRUE) + $timeout_s;
-		$max_polls = (int) ceil(max($timeout_s, 0.0) / 0.2) + 2;
+		$max_polls = (int) ceil($wait_s / 0.2) + 2;
 		$verdict   = NULL;
 		$polls     = 0;
 
@@ -3863,10 +3883,11 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 				}
 			}
 			$polls++;
-			if ($polls >= $max_polls || microtime(TRUE) >= $deadline) {
+			$remaining_s = $deadline - microtime(TRUE);
+			if ($polls >= $max_polls || $remaining_s <= 0.0) {
 				break;
 			}
-			usleep(200000);
+			usleep((int) min(200000, ceil($remaining_s * 1000000)));
 		} while (TRUE);
 
 		if ($verdict === NULL) {
