@@ -12,8 +12,7 @@ use PHPUnit\Framework\TestCase;
  * per-type IP (Block/Permit/Match) tables.
  *
  * convert_ip_log() (pfblockerng_alerts.php -- a www/ page controller tests/php/bootstrap.php
- * does not load, same boundary DnsblPrefetchTest already established for convert_dnsbl_log())
- * re-validates a reported IP against the CURRENT feed state on every render: one exec() to
+ * does not load) re-validates a reported IP against the CURRENT feed state on every render: one exec() to
  * check the logged IP/CIDR is still in its logged feed file, and, on a miss,
  * find_reported_header() (an exact + prefix/CIDR grep) plus one more exec() against every
  * aliastables file. This phase batches all three into a bounded number of grep passes.
@@ -146,18 +145,13 @@ final class IpPrefetchTest extends TestCase
 		// earlier test's seeded memo entries -- a sibling-order leak that made
 		// test_covered_rows_resolve_without_reexecuting_after_the_backing_dirs_disappear()
 		// below a no-op: it reused a PRIOR test's seed for the identical row instead of
-		// exercising its own pfb_ip_prefetch() call. Also resets the DNSBL-side store
-		// (unused by these tests, reset here purely for a clean, uniform per-test
-		// baseline) so every test starts from a known-empty baseline regardless of
-		// execution order.
+		// exercising its own pfb_ip_prefetch() call.
 		pfb_ip_render_memos_reset();
-		pfb_dnsbl_prefetch_store(NULL);
 	}
 
 	protected function tearDown(): void
 	{
 		pfb_ip_render_memos_reset();
-		pfb_dnsbl_prefetch_store(NULL);
 
 		foreach (['pfb', 'continents'] as $g) {
 			if ($this->savedGlobals[$g] === null) {
@@ -742,13 +736,11 @@ final class IpPrefetchTest extends TestCase
 	// ------------------------------------------------------------------------------
 
 	/**
-	 * Run a PHP body in a genuinely restricted CHILD process (issue #809 review, B3/R1)
-	 * -- see DnsblPrefetchTest::runInRestrictedTempDirSandbox() for the full rationale
-	 * (why a child process, why `open_basedir` is the only reliable lever: TMPDIR is
-	 * ignored once sys_get_temp_dir() is cached, and tempnam() silently substitutes the
-	 * real system temp dir for an invalid hint directory). $phpBody runs AFTER the real
-	 * bootstrap.php has loaded the production include; it must `echo json_encode(...)`
-	 * its result.
+	 * Run a PHP body in a genuinely restricted CHILD process (issue #809 review, B3/R1):
+	 * a child process is the only reliable lever, since TMPDIR is ignored once
+	 * sys_get_temp_dir() is cached, and tempnam() silently substitutes the real system
+	 * temp dir for an invalid hint directory. $phpBody runs AFTER the real bootstrap.php
+	 * has loaded the production include; it must `echo json_encode(...)` its result.
 	 *
 	 * @return array<string, mixed> the JSON-decoded child-process output
 	 */
