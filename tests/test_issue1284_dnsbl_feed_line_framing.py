@@ -210,5 +210,5 @@ def test_get_details_dnsbl_declares_only_used_globals() -> None:
     declared = {name for node in ast.walk(function) if isinstance(node, ast.Global) for name in node.names}
     referenced = {node.id for node in ast.walk(function) if isinstance(node, ast.Name)}
 
-    assert declared == {"pfb", "_dnsbl_last_event"}, f"unexpected global declaration: {sorted(declared)!r}"
+    assert declared == {"_dnsbl_last_event"}, f"unexpected global declaration: {sorted(declared)!r}"
     assert declared <= referenced, f"declared but unreferenced globals: {sorted(declared - referenced)!r}"
