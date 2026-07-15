@@ -8,6 +8,19 @@ Describe 'verify-red-proof.sh'
 
   gitc() { git -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
 
+  assert_repo_clean() {
+    status_output=$(git -C "$repo" status --porcelain "$@")
+    status_code=$?
+    if [ "$status_code" -ne 0 ]; then
+      return "$status_code"
+    fi
+    if [ -n "$status_output" ]; then
+      printf '%s\n' "$status_output" >&2
+      return 1
+    fi
+    return 0
+  }
+
   make_repo() {
     # $1 = HEAD~1 src content, $2 = HEAD src content
     # ADR-47: under the pre-commit hook, exported GIT_DIR/GIT_INDEX_FILE would
@@ -173,7 +186,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'RED-OK'
     The output should include 'GREEN-OK'
     The line 4 of output should equal 'VERDICT: PASS'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'passes a deleted-only red->green proof and restores the HEAD deletion'
@@ -184,7 +197,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'GREEN-OK'
     The output should include 'VERDICT: PASS'
     Assert [ ! -e "$repo/old.txt" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'passes a deleted-directory red->green proof and restores the HEAD deletion'
@@ -195,7 +208,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'GREEN-OK'
     The output should include 'VERDICT: PASS'
     Assert [ ! -e "$repo/gone" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'removes untracked and ignored descendants from a red-run deleted directory'
@@ -206,7 +219,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'GREEN-OK'
     The output should include 'VERDICT: PASS'
     Assert [ ! -e "$repo/gone" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]
+    Assert assert_repo_clean --untracked-files=all
   End
 
   It 'rejects preexisting ignored data only beneath a HEAD-absent src and preserves it'
@@ -221,7 +234,7 @@ Describe 'verify-red-proof.sh'
     The contents of file "$repo/gone/ignored.txt" should equal 'KEEP'
     The contents of file "$repo/unrelated/ignored.txt" should equal 'OTHER'
     Assert [ ! -e "$repo/gone/a.txt" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'allows unrelated ignored data while proving the requested src path is clean'
@@ -247,7 +260,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'VERDICT: PASS'
     Assert [ ! -e "$repo/gone" ]
     Assert [ ! -L "$repo/gone" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]
+    Assert assert_repo_clean --untracked-files=all
   End
 
   It 'removes a red-created nested repository through EXIT after RED-FAIL'
@@ -258,7 +271,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'VERDICT: FAIL'
     Assert [ ! -e "$repo/gone" ]
     Assert [ ! -L "$repo/gone" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]
+    Assert assert_repo_clean --untracked-files=all
   End
 
   It 'removes a red-created nested repository through SIGTERM restoration'
@@ -270,13 +283,13 @@ Describe 'verify-red-proof.sh'
       kill -TERM "$pid" 2>/dev/null
       wait "$pid" 2>/dev/null
       printf '%s\n' "$?"
-      git -C "$repo" status --porcelain
+      assert_repo_clean
     }
     When call interrupt_nested_case
     The output should equal '130'
     Assert [ ! -e "$repo/gone" ]
     Assert [ ! -L "$repo/gone" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]
+    Assert assert_repo_clean --untracked-files=all
   End
 
   It 'restores modified and deleted src paths to their distinct HEAD states'
@@ -289,7 +302,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'VERDICT: PASS'
     The contents of file "$repo/src.txt" should equal 'GOOD'
     Assert [ ! -e "$repo/old.txt" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'restores duplicate HEAD-absent src paths idempotently'
@@ -301,7 +314,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'GREEN-OK'
     The output should include 'VERDICT: PASS'
     Assert [ ! -e "$repo/gone" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'restores overlapping HEAD-absent src paths in ancestor-first order'
@@ -313,7 +326,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'GREEN-OK'
     The output should include 'VERDICT: PASS'
     Assert [ ! -e "$repo/gone" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'restores overlapping HEAD-absent src paths in descendant-first order'
@@ -325,7 +338,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'GREEN-OK'
     The output should include 'VERDICT: PASS'
     Assert [ ! -e "$repo/gone" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'rejects a test that already passes against HEAD~1 (pins nothing)'
@@ -334,7 +347,7 @@ Describe 'verify-red-proof.sh'
     The status should equal 1
     The output should include 'RED-FAIL'
     The output should include 'VERDICT: FAIL'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'restores a deleted src path through the EXIT trap after RED-FAIL'
@@ -344,7 +357,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'RED-FAIL'
     The output should include 'VERDICT: FAIL'
     Assert [ ! -e "$repo/old.txt" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'rejects an edited reproduction test via the freeze hash'
@@ -364,7 +377,7 @@ Describe 'verify-red-proof.sh'
       sleep 1
       kill -TERM "$pid" 2>/dev/null
       wait "$pid" 2>/dev/null
-      git -C "$repo" status --porcelain
+      assert_repo_clean
     }
     When call interrupt_case
     The output should equal ''
@@ -382,7 +395,7 @@ Describe 'verify-red-proof.sh'
     When call interrupt_checkout_case
     The output should equal '130'
     The contents of file "$repo/src.txt" should equal 'GOOD'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'restores a deleted src path when SIGTERM interrupts the red run (dash semantics)'
@@ -394,12 +407,12 @@ Describe 'verify-red-proof.sh'
       kill -TERM "$pid" 2>/dev/null
       wait "$pid" 2>/dev/null
       printf '%s\n' "$?"
-      git -C "$repo" status --porcelain
+      assert_repo_clean
     }
     When call interrupt_deleted_case
     The output should equal '130'
     Assert [ ! -e "$repo/old.txt" ]
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'rejects a fix that does not satisfy its own pin (GREEN-FAIL)'
@@ -408,7 +421,7 @@ Describe 'verify-red-proof.sh'
     The status should equal 1
     The output should include 'RED-OK'
     The output should include 'GREEN-FAIL'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'keeps added-only src paths unsupported and leaves HEAD clean after REVERT-FAIL'
@@ -419,7 +432,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'VERDICT: FAIL'
     The stderr should include "pathspec 'added.txt'"
     The contents of file "$repo/added.txt" should equal 'ADDED'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'rejects a --src path with shell metacharacters at parse time'
@@ -438,6 +451,22 @@ Describe 'verify-red-proof.sh'
     The stderr should include 'DIRTY-TREE'
   End
 
+  It 'does not pass when git status cannot inspect the path'
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-not-repo.XXXXXX")"
+    When call assert_repo_clean
+    The status should equal 128
+    The stderr should include 'not a git repository'
+  End
+
+  It 'prints porcelain diagnostics for a dirty untracked repository'
+    make_repo BAD GOOD
+    echo scratch > "$repo/untracked.txt"
+    When call assert_repo_clean
+    The status should equal 1
+    The stderr should include '?? untracked.txt'
+  End
+
   It 'verifies a genuine red->green proof against an explicit --base-ref (3-commit fixture, mirrors PR #1247)'
     make_repo3 BAD GOOD FOLLOWUP
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' \
@@ -446,7 +475,7 @@ Describe 'verify-red-proof.sh'
     The output should include 'RED-OK'
     The output should include 'GREEN-OK'
     The line 4 of output should equal 'VERDICT: PASS'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'without --base-ref, the same 3-commit fixture still falsely reports RED-FAIL (documents the default HEAD~1 bug)'
@@ -472,7 +501,7 @@ Describe 'verify-red-proof.sh'
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref '-q'
     The status should equal 2
     The stderr should include 'BAD-BASE-REF'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'rejects a --base-ref that looks like a git option ("--force")'
@@ -480,7 +509,7 @@ Describe 'verify-red-proof.sh'
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref '--force'
     The status should equal 2
     The stderr should include 'BAD-BASE-REF'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   # An empty value is caught by the parse-time guard, NOT by the later rev-parse check:
@@ -499,7 +528,7 @@ Describe 'verify-red-proof.sh'
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref 'no-such-ref'
     The status should equal 2
     The stderr should include 'BAD-BASE-REF'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   # The 3-commit fixture is what makes these pin RANGE rejection rather than merely
@@ -509,7 +538,7 @@ Describe 'verify-red-proof.sh'
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref 'HEAD~2..HEAD'
     The status should equal 2
     The stderr should include 'BAD-BASE-REF'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 
   It 'rejects a --base-ref that is a symmetric revision range whose endpoints both exist ("HEAD~2...HEAD")'
@@ -517,6 +546,6 @@ Describe 'verify-red-proof.sh'
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref 'HEAD~2...HEAD'
     The status should equal 2
     The stderr should include 'BAD-BASE-REF'
-    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+    Assert assert_repo_clean
   End
 End
