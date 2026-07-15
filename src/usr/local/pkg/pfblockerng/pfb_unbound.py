@@ -942,7 +942,14 @@ def pfb_query_watcher() -> None:
             if rec is None or rec == last_record:
                 return
             last_record = rec
-            _pfb_answer_query_request(rec)
+            # issue #1351 review: isolate per-request failures. evaluate_domain over an
+            # externally-supplied domain is a far larger surface than the control/reload
+            # watchers this mirrors; one raising request must not kill the answering
+            # thread for the rest of the process (init never restarts it).
+            try:
+                _pfb_answer_query_request(rec)
+            except Exception as e:
+                sys.stderr.write("[pfBlockerNG]: query watcher failed to answer a request: {}\n".format(e))
 
     waiter = _ReloadKqueueWaiter(watch_dir) if hasattr(select, "kqueue") else None
     if waiter is not None and not waiter.is_active():
@@ -1021,7 +1028,7 @@ def warn_if_legacy_control_enabled(enabled: bool) -> None:
 def _load_hsts_db() -> None:
     """Parse the HSTS preload file (``pfb["pfb_py_hsts"]``) into ``hstsDB`` --
     gated on ``pfb["python_hsts"]`` (not on the ADR-06 manifest: hstsDB is NOT
-    part of the manifest build). Same extraction rationale as ``_load_zone_db``."""
+    part of the manifest build). Extracted out of init_standard for unit-testability."""
     if not (pfb["python_hsts"] and os.path.isfile(pfb["pfb_py_hsts"])):
         pfb_py_status_close("dnsbl", pfb["pfb_py_hsts"], "parse")
         return
@@ -1073,7 +1080,7 @@ def _close_dnsbl_loader_entries_when_disabled() -> None:
 
 def _load_ini_config() -> ConfigParser | None:
     """Parse ``pfb["pfb_unbound.ini"]`` -- extracted out of ``init_standard`` (same
-    extraction rationale as ``_load_zone_db``) so the load -- and its failure
+    extraction rationale as the other _load_* helpers) so the load -- and its failure
     diagnostic -- are unit-testable. Returns ``None`` when the ini file is absent
     (caller's existing "ini file missing" fallback applies unchanged). On a parse
     failure, still returns the (empty) ConfigParser -- behaviour-preserving fall-
@@ -6338,8 +6345,8 @@ def _evaluate_cfg(snap: Snapshot) -> dict[str, Any]:
     # background swap. Reading them from ``pfb`` froze the gate at the last restart's
     # state: a zero-downtime swap that introduced a NEW stratum (e.g. feed/user regex,
     # or data/zone when the prior init had none) left its gate False, so
-    # evaluate_domain skipped that stratum and the newly-swapped block never applied
-    # (the regex/important/custom-list smoke failures). Deriving them from ``snap``
+    # evaluate_domain skipped that stratum and the newly-swapped block never applied.
+    # Deriving them from ``snap``
     # (the same object the dicts come from) keeps the gate consistent with the live
     # lists on every swap, and is decision-identical at idle (init sets snapshot + pfb
     # flags together, so bool(snap.data_db) == pfb["dataDB"], etc.). The remaining keys

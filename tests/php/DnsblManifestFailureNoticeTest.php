@@ -147,7 +147,9 @@ final class DnsblManifestFailureNoticeTest extends TestCase
 	public function testAbsolutePathItemMatchesOnBasename(): void
 	{
 		$this->writeLedger([
-			['facility' => 'dnsbl', 'item' => '/var/unbound/pfb_py_sources.json', 'stage' => 'parse',
+			// A DIFFERENT directory than the configured unbound_py_sources: only a
+			// basename comparison (not exact-string) can match this item (issue #1351 review).
+			['facility' => 'dnsbl', 'item' => '/some/other/dir/pfb_py_sources.json', 'stage' => 'parse',
 				'message' => 'boom', 'first_seen' => 1, 'last_seen' => 2],
 		]);
 

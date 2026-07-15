@@ -454,9 +454,10 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		// A retired unbound_py_data file is never in the path set -- its content must
 		// NOT move the fingerprint...
 		file_put_contents($pfb['unbound_py_data'], 'a-different-write-to-the-retired-file');
+		file_put_contents($pfb['unbound_py_zone'], 'a-different-write-to-the-retired-zone');
 		$fp_after_data_write = pfb_dnsbl_reload_fingerprint($pfb);
 		$this->assertSame($fp_before, $fp_after_data_write,
-			'a retired unbound_py_data write must never move the fingerprint (ADR-65)');
+			'a retired unbound_py_data/unbound_py_zone write must never move the fingerprint (ADR-65)');
 
 		// ...but a staged oracle content change (dnsbl_cache_stage cp -f) MUST.
 		file_put_contents($pfb['unbound_py_tld'], "com\nnet\n");
@@ -475,12 +476,14 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		$pfb = $this->reloadFpBasePfb();
 		$pfb['dnsbl_tld_wildcard'] = '';
 		file_put_contents($pfb['unbound_py_data'], 'v1');
+		file_put_contents($pfb['unbound_py_zone'], 'z1');
 
 		$fp_before = pfb_dnsbl_reload_fingerprint($pfb);
 		file_put_contents($pfb['unbound_py_data'], 'v2');
+		file_put_contents($pfb['unbound_py_zone'], 'z2');
 		$fp_after = pfb_dnsbl_reload_fingerprint($pfb);
 
 		$this->assertSame($fp_before, $fp_after,
-			'Non-TLD mode must ALSO exclude the retired unbound_py_data -- it is never in the path set (ADR-65)');
+			'Non-TLD mode must ALSO exclude the retired unbound_py_data/unbound_py_zone -- never in the path set (ADR-65)');
 	}
 }

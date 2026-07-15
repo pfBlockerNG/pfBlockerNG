@@ -95,6 +95,7 @@ def test_alerts_row_renders_logged_group_and_feed_live(deployed_vm: helpers.Smok
         assert len(fields) > 8, f"unexpected dnsbl.log line shape for {domain}: {line!r}"
         logged_group, logged_feed = fields[6], fields[8]
         assert logged_group and logged_group != "Unknown", f"empty/Unknown group parsed from log line: {line!r}"
+        assert logged_feed and logged_feed != "Unknown", f"empty/Unknown feed parsed from log line: {line!r}"
 
         resp = webui.get(ALERTS_PAGE)
         assert resp.status_code == 200, f"GET {ALERTS_PAGE} -> HTTP {resp.status_code}"

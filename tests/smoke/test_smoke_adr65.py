@@ -82,13 +82,13 @@ _DNSBL_LOG_PATHS = ("/var/log/pfblockerng/dnsbl.log",)
 
 
 def _dnsbl_log_hits(vm: SmokeVM, needle: str, *, timeout: float = 30.0) -> int:
-    """Count dnsbl.log lines containing ``needle`` across host + chroot paths (summed)."""
+    """Count dnsbl.log lines containing ``needle`` (single path: chroot nullfs-aliases host)."""
     res = vm.ssh("grep", "-hcF", "--", needle, *_DNSBL_LOG_PATHS, timeout=timeout)
     return sum(int(tok) for tok in res.stdout.split() if tok.isdigit())
 
 
 def _dnsbl_log_line(vm: SmokeVM, needle: str, *, timeout: float = 30.0) -> str:
-    """First dnsbl.log line (host or chroot) containing ``needle``; raises loudly if none."""
+    """First dnsbl.log line containing ``needle`` (single path); raises loudly if none."""
     res = vm.ssh("grep", "-hF", "--", needle, *_DNSBL_LOG_PATHS, timeout=timeout)
     lines = [ln for ln in res.stdout.splitlines() if ln]
     if not lines:

@@ -153,9 +153,9 @@ Page level:
 
 ## Why load time varies day to day
 
-- The path to the external DNS server is slow/filtered → each IP-side re-check that
-  ends up hunting a moved entry can involve slow filesystem scans over large alias
-  tables.
+- Each IP-side re-check that ends up hunting a moved entry can involve slow
+  filesystem scans over large alias tables. (The DNSBL side no longer re-checks at
+  render time — ADR-65 — so this cost is IP-only.)
 - The logs grew — every `tail -r`, converter walk and stats pipeline scales with log
   size until rotation trims them.
 
