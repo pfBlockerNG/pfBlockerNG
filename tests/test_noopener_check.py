@@ -130,6 +130,112 @@ def test_row14_noopener_with_wordchar_suffix_is_flagged() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Issue #1294: HTML ASCII target spelling and whitespace variants
+# --------------------------------------------------------------------------- #
+
+_IN_SCOPE_SUFFIXES = ("php", "inc", "xml")
+
+
+@pytest.mark.parametrize("suffix", _IN_SCOPE_SUFFIXES)
+@pytest.mark.parametrize(
+    ("case_name", "target_attribute"),
+    (
+        ("double_quoted", 'target="_blank"'),
+        ("single_quoted", "target='_blank'"),
+        ("unquoted", "target=_blank"),
+        ("uppercase_attribute", 'TARGET="_blank"'),
+        ("mixed_case_keyword", 'target="_Blank"'),
+    ),
+    ids=lambda value: value if isinstance(value, str) and "=" not in value else None,
+)
+def test_target_case_variants_require_adjacent_rel(suffix: str, case_name: str, target_attribute: str) -> None:
+    source = f"page.{suffix}"
+    violations = _find(f'<a {target_attribute} href="x">', source)
+    assert len(violations) == 1, f"{case_name} in {source}: expected one violation, got {violations!r}"
+    assert violations[0].source == source
+
+    clean = f'<a {target_attribute} rel="noopener noreferrer" href="x">'
+    assert _find(clean, source) == [], f"{case_name} in {source}: adjacent noopener rel was not clean"
+
+
+@pytest.mark.parametrize("suffix", _IN_SCOPE_SUFFIXES)
+@pytest.mark.parametrize(
+    ("case_name", "target_attribute"),
+    (
+        ("space_before_equals", 'target ="_blank"'),
+        ("space_after_equals", 'target= "_blank"'),
+        ("space_both_sides", 'target = "_blank"'),
+        ("tabs_around_equals", 'target\t=\t"_blank"'),
+        ("consecutive_spaces", 'target  =  "_blank"'),
+        ("quoted_trailing_space", 'target="_blank "'),
+        ("quoted_trailing_tab", 'target="_blank\t"'),
+        ("unquoted_spaced_equals", "target = _blank"),
+    ),
+    ids=lambda value: value if isinstance(value, str) and "=" not in value else None,
+)
+def test_target_whitespace_variants_require_adjacent_rel(suffix: str, case_name: str, target_attribute: str) -> None:
+    source = f"page.{suffix}"
+    violations = _find(f'<a {target_attribute} href="x">', source)
+    assert len(violations) == 1, f"{case_name} in {source}: expected one violation, got {violations!r}"
+
+    clean = f'<a {target_attribute} rel="noopener noreferrer" href="x">'
+    assert _find(clean, source) == [], f"{case_name} in {source}: adjacent noopener rel was not clean"
+
+
+_HOSTILE_CLEAN_ROWS = (
+    ("data_target", '<div data-target="_blank">'),
+    ("data_target_ascii_case", '<div data-TARGET="_Blank">'),
+    ("identifier_prefix", '<div mytarget="_blank">'),
+    ("unicode_identifier_prefix", '<div étarget="_blank">'),
+    ("unicode_casefold_keyword", '<a target="_blanK">'),
+    ("nbsp_around_equals", '<a target\u00a0=\u00a0"_blank">'),
+    ("zero_width_around_equals", '<a target\u200b=\u200b"_blank">'),
+    ("empty_target", '<a target="">'),
+    ("missing_target_value", "<a target=>"),
+    ("mismatched_quotes", "<a target=\"_blank'>"),
+    ("shell_shaped_value", '<a target="$(_blank)">'),
+    ("bracketed_value", '<a target="[_blank]">'),
+    ("target_equals_split", '<a target\n="_blank" rel="noopener noreferrer">'),
+    ("adjacent_noopener", '<a target="_blank" rel="noopener noreferrer">'),
+    ("escape_marker", '<a target="_blank" href="x"> <!-- noopener-ok: sample -->'),
+)
+
+
+@pytest.mark.parametrize("suffix", _IN_SCOPE_SUFFIXES)
+@pytest.mark.parametrize(("case_name", "text"), _HOSTILE_CLEAN_ROWS, ids=[row[0] for row in _HOSTILE_CLEAN_ROWS])
+def test_target_matcher_hostile_clean_inputs_stay_clean(suffix: str, case_name: str, text: str) -> None:
+    source = f"page.{suffix}"
+    assert _find(text, source) == [], f"{case_name} in {source}: non-target input was flagged"
+
+
+_HOSTILE_VIOLATION_ROWS = (
+    ("rel_before_target", '<a rel="noopener noreferrer" target="_blank">'),
+    ("intervening_attribute", '<a target="_blank" href="x" rel="noopener noreferrer">'),
+    ("rel_next_line", '<a target="_blank"\nrel="noopener noreferrer">'),
+    ("wrong_rel", '<a target="_blank" rel="opener">'),
+    ("hyphen_rel_suffix", '<a target="_blank" rel="noopener-evil">'),
+    ("word_rel_suffix", '<a target="_blank" rel="noopener_evil">'),
+)
+
+
+@pytest.mark.parametrize("suffix", _IN_SCOPE_SUFFIXES)
+@pytest.mark.parametrize(
+    ("case_name", "text"), _HOSTILE_VIOLATION_ROWS, ids=[row[0] for row in _HOSTILE_VIOLATION_ROWS]
+)
+def test_target_matcher_hostile_violations_remain_flagged(suffix: str, case_name: str, text: str) -> None:
+    source = f"page.{suffix}"
+    violations = _find(text, source)
+    assert len(violations) == 1, f"{case_name} in {source}: expected one violation, got {violations!r}"
+
+
+@pytest.mark.parametrize("suffix", _IN_SCOPE_SUFFIXES)
+def test_target_matcher_hostile_oversized_non_target_stays_clean(suffix: str) -> None:
+    long_value = "x" * 8192
+    text = f'<div data-prefix="{long_value}" data-target="_blank" data-suffix="{long_value}">'
+    assert _find(text, f"page.{suffix}") == []
+
+
+# --------------------------------------------------------------------------- #
 # Additional branch coverage: line numbers, multiple violations, quote forms
 # --------------------------------------------------------------------------- #
 
