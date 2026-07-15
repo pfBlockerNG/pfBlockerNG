@@ -20,6 +20,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -88,6 +89,7 @@ def matrix_variants() -> list[Variant]:
             "version matrix unavailable (set SMOKE_MATRIX_JSON, or make the ci-metadata ref "
             "readable by scripts/read-version-matrix.sh) — cannot derive the variant topology"
         )
+    entries = cast(tuple[dict, ...], entries)
     out: dict[tuple[str, str], Variant] = {}
     for e in entries:
         major = str(e.get("freebsd_major", "")).strip()

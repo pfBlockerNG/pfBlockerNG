@@ -573,6 +573,7 @@ def smoke_vm(
     ssh_key_path = os.environ.get("SMOKE_SSH_KEY")
     if not ssh_key_path or not Path(ssh_key_path).is_file():
         pytest.skip("SMOKE_SSH_KEY not set or not a file — no guest SSH key")
+    ssh_key_path = cast(str, ssh_key_path)
 
     if not Path("/dev/kvm").exists():
         pytest.skip("/dev/kvm absent — KVM acceleration required for the smoke VM")
@@ -676,6 +677,7 @@ def client_vm(
     ssh_key_path = os.environ.get("SMOKE_SSH_KEY")
     if not ssh_key_path or not Path(ssh_key_path).is_file():
         pytest.skip("SMOKE_SSH_KEY not set or not a file — no guest SSH key")
+    ssh_key_path = cast(str, ssh_key_path)
 
     if not Path("/dev/kvm").exists():
         pytest.skip("/dev/kvm absent — KVM acceleration required for the smoke VM")

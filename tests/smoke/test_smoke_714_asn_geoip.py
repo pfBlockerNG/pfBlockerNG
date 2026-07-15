@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from typing import cast
 
 import pytest
 
@@ -99,6 +100,7 @@ def test_714_c1_asn_table_logs_not_stray_file(deployed_vm: SmokeVM) -> None:
             f"{ASN_TOKEN_ENV} not set — the ASN database download needs a real, licensed "
             "IPinfo account token (absent from CI); dispatch-only, validate live (ADR-04 §7)"
         )
+    token = cast(str, token)
 
     try:
         # BEFORE: no stray numeric-logtype file yet.
@@ -184,6 +186,8 @@ def test_714_c8_geoip_single_ip_preserved(deployed_vm: SmokeVM) -> None:
             f"{GEOIP_KEY_ENV}/{GEOIP_ACCOUNT_ENV} not set — the GeoIP continent build needs a real, "
             "licensed MaxMind account (absent from CI); dispatch-only, validate live (ADR-04 §7)"
         )
+    key = cast(str, key)
+    account = cast(str, account)
 
     try:
         snippet_creds = (
