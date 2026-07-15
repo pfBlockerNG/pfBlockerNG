@@ -52,12 +52,6 @@ final class DnsblQueryClientTest extends TestCase
 
 	protected function setUp(): void
 	{
-		foreach (['pcntl_fork', 'pcntl_waitpid', 'pcntl_wifexited', 'pcntl_wexitstatus', 'posix_kill'] as $function) {
-			if (!function_exists($function)) {
-				$this->markTestSkipped("{$function}() is unavailable -- cannot run cross-process query-channel tests.");
-			}
-		}
-
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
 
@@ -70,19 +64,28 @@ final class DnsblQueryClientTest extends TestCase
 			'log'      => "{$this->tmp}/pfblockerng.log",
 			'errlog'   => "{$this->tmp}/error.log",
 		]);
+
+		foreach (['pcntl_fork', 'pcntl_waitpid', 'pcntl_wifexited', 'pcntl_wexitstatus', 'posix_kill'] as $function) {
+			if (!function_exists($function)) {
+				$this->markTestSkipped("{$function}() is unavailable -- cannot run cross-process query-channel tests.");
+			}
+		}
 	}
 
 	protected function tearDown(): void
 	{
-		foreach (array_keys($this->children) as $pid) {
-			$this->reapChild($pid);
+		try {
+			foreach (array_keys($this->children) as $pid) {
+				$this->reapChild($pid);
+			}
+		} finally {
+			if ($this->hadPfb) {
+				$GLOBALS['pfb'] = $this->originalPfb;
+			} else {
+				unset($GLOBALS['pfb']);
+			}
+			$this->rrmdir($this->tmp);
 		}
-		if ($this->hadPfb) {
-			$GLOBALS['pfb'] = $this->originalPfb;
-		} else {
-			unset($GLOBALS['pfb']);
-		}
-		$this->rrmdir($this->tmp);
 	}
 
 	private function rrmdir(string $dir): void
@@ -143,8 +146,9 @@ final class DnsblQueryClientTest extends TestCase
 			$waited = pcntl_waitpid($pid, $status, WNOHANG);
 			if ($waited === $pid) {
 				unset($this->children[$pid]);
-				$this->assertTrue(pcntl_wifexited($status), "child {$pid} did not exit normally");
-				$this->assertSame(0, pcntl_wexitstatus($status), "child {$pid} failed");
+				$failure = $this->childFailureMessage($pid);
+				$this->assertTrue(pcntl_wifexited($status), $failure);
+				$this->assertSame(0, pcntl_wexitstatus($status), $failure);
 				return;
 			}
 			usleep(20000);
@@ -154,6 +158,12 @@ final class DnsblQueryClientTest extends TestCase
 		pcntl_waitpid($pid, $status);
 		unset($this->children[$pid]);
 		$this->fail("child {$pid} exceeded the {$timeout_s}s test deadline");
+	}
+
+	private function childFailureMessage(int $pid): string
+	{
+		$error = @file_get_contents("{$this->tmp}/child-error-{$pid}");
+		return $error !== false && $error !== '' ? "child {$pid} failed: {$error}" : "child {$pid} failed";
 	}
 
 	/** Read a non-empty file under a bounded test-side deadline. */
@@ -255,7 +265,7 @@ final class DnsblQueryClientTest extends TestCase
 
 	/**
 	 * Spawn a background PHP process that plays the Python side of the
-	 * channel: it polls for the request (up to ~3s, 50ms steps), records
+	 * channel: it polls for the request (up to ~3s, 20ms steps), records
 	 * the decoded request JSON + the request file's permission bits into
 	 * observed.json, substitutes the request's real id for the literal
 	 * "__ID__" placeholder in $replyTemplateJson, and writes the reply.
