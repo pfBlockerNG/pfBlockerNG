@@ -3815,6 +3815,8 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 	}
 
 	$locked = FALSE;
+	$max_lock_polls = (int) ceil($wait_s / 0.02) + 2;
+	$lock_polls = 0;
 	$first_lock_attempt = TRUE;
 	do {
 		$allow_expired_attempt = $first_lock_attempt && $wait_s <= 0.0;
@@ -3839,8 +3841,9 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 			pfb_logger("\nADR-65: query channel lock acquire failed [ {$lock_path} ]", 2);
 			return NULL;
 		}
+		$lock_polls++;
 		$remaining_s = $deadline - microtime(TRUE);
-		if ($remaining_s <= 0.0) {
+		if ($lock_polls >= $max_lock_polls || $remaining_s <= 0.0) {
 			break;
 		}
 		usleep((int) min(20000, ceil($remaining_s * 1000000)));
