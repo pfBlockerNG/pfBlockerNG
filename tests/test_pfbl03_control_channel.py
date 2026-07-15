@@ -828,7 +828,56 @@ def control_harness(tmp_path: Any, monkeypatch: Any) -> Any:
         assert not teardown_errors, "\n".join(teardown_errors)
 
 
+class _RaisingStderr:
+    def write(self, text: str) -> int:
+        raise OSError(f"closed stderr: {text}")
+
+
 class TestControlWatcherLoop:
+    @pytest.mark.parametrize(
+        "hostile_stderr",
+        [
+            pytest.param(None, id="stderr-none"),
+            pytest.param(_RaisingStderr(), id="stderr-write-raises"),
+        ],
+    )
+    def test_hostile_stderr_fallback_preserves_progress(
+        self, control_harness: _ControlHarness, monkeypatch: Any, hostile_stderr: Any
+    ) -> None:
+        h = control_harness
+        original_handler = P.pfb_apply_control_command
+        first_call = threading.Event()
+        later_call = threading.Event()
+        handler_calls: list[str] = []
+
+        monkeypatch.setattr(sys, "__stderr__", hostile_stderr)
+
+        def apply_command(command: list[str]) -> tuple[bool, str]:
+            handler_calls.append(command[1])
+            if len(handler_calls) == 1:
+                first_call.set()
+                raise RuntimeError("control handler failed")
+            result = original_handler(command)
+            later_call.set()
+            return result
+
+        monkeypatch.setattr(P, "pfb_apply_control_command", apply_command)
+        P.pfb["python_blacklist"] = False
+        h.start()
+        assert h.wait_started()
+        assert P.pfb["python_blacklist"] is False
+
+        h.publish({"seq": 1, "cmd": "disable"})
+        assert first_call.wait(3.0), f"handler calls: {handler_calls!r}"
+        assert h.wait_applied(1), f"applied marker: {h.read_applied()!r}"
+        assert h.thread.is_alive(), "control watcher exited after hostile stderr fallback"
+
+        h.publish({"seq": 2, "cmd": "enable"})
+        assert later_call.wait(3.0), f"handler calls: {handler_calls!r}"
+        assert h.wait_applied(2), f"applied marker: {h.read_applied()!r}"
+        assert handler_calls == ["disable", "enable"]
+        assert P.pfb["python_blacklist"] is True
+
     def test_handler_exception_is_consumed_and_later_record_applies(
         self, control_harness: _ControlHarness, monkeypatch: Any
     ) -> None:
