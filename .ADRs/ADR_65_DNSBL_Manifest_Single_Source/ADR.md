@@ -36,8 +36,8 @@
 ### 1.1 The manifest is the primary source; the interchange files are a failure-only fallback
 
 ADR-06 moved parse/normalise/classify into Python. `init_standard()` builds from the per-feed
-**manifest** (`pfb_py_sources.json` plus the per-feed IP-stripped raw files in an immutable
-`/var/unbound/pfb_py_raw.<xxh128>` generation, which the manifest references by path):
+**manifest** (`pfb_py_sources.json` plus the per-feed IP-stripped raw files under
+`/var/unbound/pfb_py_raw`, which the manifest references by path — `pfblockerng.inc:8184`):
 `dnsbl_build_from_manifest()` (`pfb_unbound.py:5351`, called at `:1658`) builds
 `dataDB`/`zoneDB`/`whiteDB`/`regexDB`/`allowRegexDB` via the pure `build()` layer, and only
 when it returns `None` — manifest **absent** (`:5365`), **unparseable** (`:5374`), or
@@ -227,12 +227,6 @@ result, unchecked today at the sources write (`:8258`), is checked and a write f
 serves stale data is false security; a loud "DNSBL not loaded" is correct for a security tool, and
 the ADR-10 generation + the `:16968-16972` rebuild trigger already self-heal on the next
 successful tick.
-
-Post-implementation amendment (#1357): a raw reference is part of the manifest's authority, not
-an optional row. If any feed reference is malformed, escapes the manifest directory, is missing,
-is not a readable regular file, or fails while being read, the **whole generation build returns
-`None`**, opens the parse ledger entry, and leaves ADR-10's last-good snapshot live. A partial
-`BuildResult` is never accepted.
 
 ### Accepted user-visible deltas (the ONLY permitted output changes)
 
@@ -527,3 +521,21 @@ PHP now passes already-computed per-group counts to
 entries, counters, stale-row handling, changed-group hooks, and reload timing without
 feed or manifest I/O. Install/upgrade and full-clear retain one-way cleanup of the
 legacy summary directory.
+
+---
+
+## 11. Post-implementation addendum (2026-07-15 — issue #1357)
+
+The schema-v1 manifest remains the single DNSBL authority, and each `feeds[*].raw`
+reference is part of one immutable content-addressed raw generation. A referenced raw
+is not an optional row: if any reference is malformed, escapes the manifest directory,
+is missing, is not a readable regular file, or fails during open/read, Python rejects
+the whole generation, returns `None`, and opens the ADR-61 parse-ledger entry. ADR-10
+therefore keeps the last-good live snapshot; a partial `BuildResult` is never accepted.
+Manifest-aware loaded-feed and fingerprint helpers use the same confined references.
+This changes neither manifest version 1 nor feed parsing, classification, query-time,
+or TLD decisions.
+
+The 1,000,000-line base-versus-branch benchmark stayed within the 10% gate: PHP
+publication was +6.97% wall / +0.19% peak RSS, while Python manifest build was -0.23%
+wall / -1.74% peak RSS.
