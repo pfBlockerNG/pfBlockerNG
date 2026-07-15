@@ -13,8 +13,8 @@ from tests.smoke import test_smoke_tick as tick
 def test_due_marker_baseline_drains_before_capture(monkeypatch: pytest.MonkeyPatch) -> None:
     state = {"drains": 0, "marker": 0, "next_due": 0}
 
-    class VM:
-        def ssh(self, *args: str) -> Any:
+    class VM(tick.SmokeVM):
+        def ssh(self, *args: str, timeout: float = 60.0) -> Any:
             if args == ("date +%s",):
                 return SimpleNamespace(returncode=0, stdout="100\n", stderr="")
             if args == (tick._PHP, tick._PFB_PHP, "tick"):
@@ -40,4 +40,4 @@ def test_due_marker_baseline_drains_before_capture(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(tick.h, "wait_until", lambda predicate, **_kwargs: bool(predicate()))
 
     with pytest.raises(AssertionError, match="marker count did not increase"):
-        tick.test_tick_dispatches_due_feed(VM())
+        tick.test_tick_dispatches_due_feed(VM(""))
