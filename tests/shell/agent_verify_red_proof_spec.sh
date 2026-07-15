@@ -103,6 +103,20 @@ Describe 'verify-red-proof.sh'
     gitc add -A
     gitc commit -qm v2
   }
+  make_deleted_overlap_repo() {
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-overlap.XXXXXX")"
+    git -C "$repo" init -q
+    mkdir "$repo/gone"
+    echo OLD > "$repo/gone/a.txt"
+    printf 'test ! -e gone/a.txt\n' > "$repo/test_pin.sh"
+    gitc add -A
+    gitc commit -qm v1
+    rm -rf "$repo/gone"
+    echo other > "$repo/other.txt"
+    gitc add -A
+    gitc commit -qm v2
+  }
   make_deleted_directory_with_nested_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-nested.XXXXXX")"
@@ -270,6 +284,42 @@ Describe 'verify-red-proof.sh'
     The output should include 'VERDICT: PASS'
     The contents of file "$repo/src.txt" should equal 'GOOD'
     Assert [ ! -e "$repo/old.txt" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'restores duplicate HEAD-absent src paths idempotently'
+    make_deleted_overlap_repo
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' \
+      --src gone --src gone
+    The status should equal 0
+    The output should include 'RED-OK'
+    The output should include 'GREEN-OK'
+    The output should include 'VERDICT: PASS'
+    Assert [ ! -e "$repo/gone" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'restores overlapping HEAD-absent src paths in ancestor-first order'
+    make_deleted_overlap_repo
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' \
+      --src gone --src gone/a.txt
+    The status should equal 0
+    The output should include 'RED-OK'
+    The output should include 'GREEN-OK'
+    The output should include 'VERDICT: PASS'
+    Assert [ ! -e "$repo/gone" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'restores overlapping HEAD-absent src paths in descendant-first order'
+    make_deleted_overlap_repo
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' \
+      --src gone/a.txt --src gone
+    The status should equal 0
+    The output should include 'RED-OK'
+    The output should include 'GREEN-OK'
+    The output should include 'VERDICT: PASS'
+    Assert [ ! -e "$repo/gone" ]
     Assert [ -z "$(git -C "$repo" status --porcelain)" ]
   End
 
