@@ -555,7 +555,11 @@ final class IpPrefetchTest extends TestCase
 		$folder = "{$tmp}/*.txt";
 
 		try {
-			foreach (['', '.*', '[0-9]', '^$', '\\', '-1', '999.999.999.999'] as $host) {
+			foreach (['', '.*', '[0-9]', '^$', '\\', '-1', '999.999.999.999', "192.0.2.5\0junk", "2001:db8::1\0junk"] as $host) {
+				$this->assertNull(
+					pfb_ip_exact_entry_pattern($host),
+					"expected invalid host " . var_export($host, true) . ' to produce no exact-entry pattern'
+				);
 				$this->assertSame(
 					['Unknown', 'Unknown'],
 					find_reported_header($host, $folder),
