@@ -173,16 +173,21 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 	public function testUncompressedExtrasChecksRenameResult(): void
 	{
-		$renamePos = strpos(self::$body, '@rename("{$file_download}", "{$head_download}");');
+		$renamePos = strpos(self::$body, '$renamed = @rename("{$file_download}", "{$head_download}");');
 		$this->assertNotFalse($renamePos, 'vacuity: the uncompressed-extras rename site must exist');
 
 		$nextBranch = strpos(self::$body, "elseif (\$type == 'blacklist') {", $renamePos);
 		$this->assertNotFalse($nextBranch, 'vacuity: the uncompressed-blacklist sibling branch must exist');
 		$segment = substr(self::$body, $renamePos, $nextBranch - $renamePos);
 
-		$this->assertMatchesRegularExpression('/if\s*\(\s*!\s*\$renamed\s*\)/', $segment,
+		$matched = preg_match(
+			'/^\h*\$renamed\s*=\s*@rename\([^;]*\);\R\h*if\s*\(\s*!\s*\$renamed\s*\)\s*\{\R(?<failure>.*?)^\h*\}/ms',
+			$segment,
+			$match
+		);
+		$this->assertSame(1, $matched,
 			'uncompressed extras must check !$renamed before return TRUE; segment: ' . json_encode($segment));
-		$this->assertStringContainsString('return FALSE', $segment,
+		$this->assertStringContainsString('return FALSE', $match['failure'] ?? '',
 			'a failed rename() must have a return FALSE path; segment: ' . json_encode($segment));
 	}
 
@@ -204,10 +209,15 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 		$segment = substr(self::$body, $commentPos, $gatePos - $commentPos);
 
-		$this->assertMatchesRegularExpression('/if\s*\(\s*!\s*\$renamed\s*\)/', $segment,
+		$matched = preg_match(
+			'/^\h*\$renamed\s*=\s*@rename\([^;]*\);\R\h*if\s*\(\s*!\s*\$renamed\s*\)\s*\{\R(?<failure>.*?)^\h*\}/ms',
+			$segment,
+			$match
+		);
+		$this->assertSame(1, $matched,
 			'generic uncompressed feeds must check !$renamed before the $retval == 0 success gate; segment: '
 			. json_encode($segment));
-		$this->assertStringContainsString('return FALSE', $segment,
+		$this->assertStringContainsString('return FALSE', $match['failure'] ?? '',
 			'a failed rename() must have a return FALSE path before the success gate; segment: ' . json_encode($segment));
 	}
 }
