@@ -110,13 +110,16 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 	 */
 	public function testEveryCorpusFeedRawMatchesGolden(): void
 	{
-		pfb_unbound_python_sources($this->feedRows());
+		$manifest = pfb_unbound_python_sources($this->feedRows());
+		$this->assertIsArray($manifest);
+		$rawByHeader = array_column($manifest['feeds'], 'raw', 'feed');
 
 		foreach ($this->feeds as $f) {
 			$header = $f['header'];
 			$golden = self::CORPUS_DIR . "/raw/{$header}.raw";
 			$this->assertFileExists($golden, "missing golden fixture for [ {$header} ] ({$f['row']})");
-			$produced = file_get_contents("{$this->tmp}/pfb_py_raw/{$header}.raw");
+			$this->assertArrayHasKey($header, $rawByHeader);
+			$produced = file_get_contents("{$this->tmp}/{$rawByHeader[$header]}");
 			$this->assertSame(
 				file_get_contents($golden),
 				$produced,

@@ -58,7 +58,9 @@ printf("isolated_max_seconds=%.4f\n", $durations[count($durations) - 1]);
 
 // Sanity: a missing/empty raw output means the pipeline never ran -- fail, never
 // report timings for a no-op (a broken worker must not read as a perf PASS).
-$rawFile = "{$sandbox}/pfb_py_raw/benchfeed.raw";
+$manifest = json_decode((string) file_get_contents("{$sandbox}/pfb_py_sources.json"), TRUE);
+$rawRef = $manifest['feeds'][0]['raw'] ?? '';
+$rawFile = "{$sandbox}/{$rawRef}";
 if (!is_file($rawFile) || filesize($rawFile) === 0) {
 	fwrite(STDERR, "benchmark output missing or empty: {$rawFile}\n");
 	exit(1);

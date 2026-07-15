@@ -307,11 +307,11 @@ class TestManifestFallback:
             fh.write("{ this is not json")
         assert pfb_unbound.dnsbl_build_from_manifest(bad) is None
 
-    def test_missing_feed_file_is_skipped_not_fatal(self, tmp_path: Any) -> None:
-        # One feed references a non-existent raw file; the build must still load the
-        # OTHER feeds rather than aborting (the bad feed is logged + skipped). All
-        # referenced paths live UNDER the manifest dir (the production/confined shape).
+    def test_missing_feed_file_rejects_the_whole_generation(self, tmp_path: Any) -> None:
+        # One missing member makes the manifest generation unusable: never expose a
+        # partial build assembled from only the readable members.
         path = os.path.join(str(tmp_path), "m.json")
+        status_path = os.path.join(str(tmp_path), "pfb_py_status.json")
         _stage_tld_oracle(tmp_path)
         shutil.copyfile(os.path.join(FIXTURES, "feed_plain.txt"), os.path.join(str(tmp_path), "feed_plain.txt"))
         manifest = {
@@ -334,10 +334,14 @@ class TestManifestFallback:
         }
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(manifest, fh)
+        pfb_unbound.pfb["pfb_py_status"] = status_path
         result = pfb_unbound.dnsbl_build_from_manifest(path)
-        assert result is not None
-        # The good feed's entries are present despite the missing one.
-        assert "malware.com" in result.zone_db
+        assert result is None
+        with open(status_path, encoding="utf-8") as fh:
+            entries = json.load(fh)
+        assert any(
+            entry["facility"] == "dnsbl" and entry["item"] == path and entry["stage"] == "parse" for entry in entries
+        )
 
     def test_empty_feeds_manifest_builds_empty(self, tmp_path: Any) -> None:
         # A manifest with no feeds still builds (TLD-blacklist zones + whiteDB only).

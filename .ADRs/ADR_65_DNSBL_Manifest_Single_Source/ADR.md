@@ -36,8 +36,8 @@
 ### 1.1 The manifest is the primary source; the interchange files are a failure-only fallback
 
 ADR-06 moved parse/normalise/classify into Python. `init_standard()` builds from the per-feed
-**manifest** (`pfb_py_sources.json` plus the per-feed IP-stripped raw files under
-`/var/unbound/pfb_py_raw`, which the manifest references by path — `pfblockerng.inc:8184`):
+**manifest** (`pfb_py_sources.json` plus the per-feed IP-stripped raw files in an immutable
+`/var/unbound/pfb_py_raw.<xxh128>` generation, which the manifest references by path):
 `dnsbl_build_from_manifest()` (`pfb_unbound.py:5351`, called at `:1658`) builds
 `dataDB`/`zoneDB`/`whiteDB`/`regexDB`/`allowRegexDB` via the pure `build()` layer, and only
 when it returns `None` — manifest **absent** (`:5365`), **unparseable** (`:5374`), or
@@ -227,6 +227,12 @@ result, unchecked today at the sources write (`:8258`), is checked and a write f
 serves stale data is false security; a loud "DNSBL not loaded" is correct for a security tool, and
 the ADR-10 generation + the `:16968-16972` rebuild trigger already self-heal on the next
 successful tick.
+
+Post-implementation amendment (#1357): a raw reference is part of the manifest's authority, not
+an optional row. If any feed reference is malformed, escapes the manifest directory, is missing,
+is not a readable regular file, or fails while being read, the **whole generation build returns
+`None`**, opens the parse ledger entry, and leaves ADR-10's last-good snapshot live. A partial
+`BuildResult` is never accepted.
 
 ### Accepted user-visible deltas (the ONLY permitted output changes)
 

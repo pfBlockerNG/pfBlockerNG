@@ -107,7 +107,8 @@ lives in the Python manifest build):
 Every field is a **required, non-empty string**; a numeric/bool/null value or a missing key is a
 shape violation the reader rejects (returns `NULL`), never a partial read. This supersedes the
 pre-#1083 positional 6-column CSV dialect (`,domain,,log,feed,group`) and rides alongside ADR-62's
-retirement of the file-level `.abp` marker (above). The per-feed `pfb_py_raw/*.raw` files the
+retirement of the file-level `.abp` marker (above). The per-feed
+`pfb_py_raw.<xxh128>/*.raw` files the
 ADR-06 manifest (`pfb_py_sources.json`) references, and `dnsbl_build_from_manifest()`/`build()`
 that consume them, are **unaffected** — they stay the old bare-domain/verbatim-ABP-line format;
 `pfb_unbound_python_sources()` is the sole translator, reading NDJSON `.txt` and writing plain
@@ -221,12 +222,20 @@ holds the matcher strata as one frozen `Snapshot` behind a single module ref; a 
 daemon thread (`kqueue` `EVFILT_VNODE`, mtime-poll fallback) wakes on a generation **sentinel**
 (`/var/unbound/pfb_py_reload`), rebuilds off the live snapshot, and **atomically swaps** the
 single ref (GIL-atomic → visible to every query thread, no torn read, no dropped queries).
-PHP/shell **atomically publish** the manifest (stage → `fsync` → `rename`) then **flip the
-sentinel** (next integer) — the all-or-nothing commit. After flipping, PHP **waits (bounded)
+PHP writes and `fsync`s the raw set in a sibling staging directory, renames it to immutable
+`pfb_py_raw.<xxh128>`, then **atomically replaces the manifest as the sole visibility commit**.
+The sentinel flip (next integer) then notifies the watcher. After flipping, PHP **waits (bounded)
 for the watcher's applied-generation marker** to catch up, so the reload call returns only once
 the new lists are LIVE (queries keep flowing on the old snapshot during the wait — still
 zero-downtime; this restores the "lists live on return" invariant the restart had, so the
 ADR-12 `post` hook sees the new state).
+
+The full writer and scalar manifest patchers share one publication lock. Old raw generations
+and staging directories remain harmless until watcher/restart convergence, then strict-name GC
+removes everything except the manifest-referenced generation. Peak temporary disk is therefore
+approximately the old raw bytes plus the staged/new raw bytes (about 2× for similar generations),
+plus small per-feed metadata and the manifest. RAM-disk save archives final generations with the
+manifest and excludes stages; legacy fixed `pfb_py_raw/` manifests remain readable during upgrade.
 
 - **Data = swap; config = restart:** feed/cron updates AND the user custom-list edits (alerts
   Lock/Unlock + "add to whitelist" + customlist add/delete, #51) take the no-restart fast path;

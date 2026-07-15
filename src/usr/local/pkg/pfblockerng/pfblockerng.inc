@@ -136,7 +136,7 @@ $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted ADMITTED (cap-filtered) feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
-$pfb['unbound_py_rawdir']= '/var/unbound/pfb_py_raw';		// ADR-06: per-feed IP-stripped raw feeds referenced by the manifest
+$pfb['unbound_py_rawdir']= '/var/unbound/pfb_py_raw';		// #1357: basename for immutable per-feed raw generations
 
 $pfb['dnsbl_safesearch']		= '/usr/local/pkg/pfblockerng/pfb_dnsbl.safesearch.conf';
 $pfb['dnsbl_youtube_restrict']		= '/usr/local/pkg/pfblockerng/pfb_dnsbl.youtube_restrict.conf';
@@ -1861,9 +1861,76 @@ function pfb_resolve_list_script($name, $dirs = null) {
    md5 gate via $safesearch_update; double-gating would suppress SafeSearch restarts), and
    unbound_py_data/unbound_py_zone (ADR-65: retired writer targets, never written again).
    Pure (no global access): caller passes $pfb explicitly so tests can inject any paths. */
+function pfb_unbound_py_normalize_absolute_path(string $path) {
+	if ($path === '' || $path[0] !== '/') {
+		return FALSE;
+	}
+
+	$parts = array();
+	foreach (explode('/', $path) as $part) {
+		if ($part === '' || $part === '.') {
+			continue;
+		}
+		if ($part === '..') {
+			if (empty($parts)) {
+				return FALSE;
+			}
+			array_pop($parts);
+			continue;
+		}
+		$parts[] = $part;
+	}
+	return '/' . implode('/', $parts);
+}
+
+// ADR-65/#1357: resolve only manifest-authoritative raw refs under the manifest's
+// directory. Missing confined refs stay in the set so the reload fingerprint fails loud.
+function pfb_unbound_py_manifest_raw_paths(string $manifest_path): array {
+	$json = @file_get_contents($manifest_path);
+	if ($json === FALSE) {
+		return array();
+	}
+	$manifest = json_decode($json, TRUE);
+	if (!is_array($manifest) || !isset($manifest['feeds']) || !is_array($manifest['feeds'])) {
+		return array();
+	}
+
+	$base_path = dirname($manifest_path);
+	if ($base_path === '' || $base_path[0] !== '/') {
+		$base_path = getcwd() . "/{$base_path}";
+	}
+	$base_normalized = pfb_unbound_py_normalize_absolute_path($base_path);
+	$base_resolved = realpath($base_path);
+	if ($base_normalized === FALSE || $base_resolved === FALSE) {
+		return array();
+	}
+
+	$paths = array();
+	foreach ($manifest['feeds'] as $feed) {
+		if (!is_array($feed) || !isset($feed['raw']) || !is_string($feed['raw']) || $feed['raw'] === '') {
+			continue;
+		}
+		$path = $feed['raw'][0] === '/' ? $feed['raw'] : "{$base_normalized}/{$feed['raw']}";
+		$normalized = pfb_unbound_py_normalize_absolute_path($path);
+		if ($normalized === FALSE) {
+			continue;
+		}
+		$resolved = realpath($path);
+		$confined = $resolved !== FALSE ? $resolved : $normalized;
+		$confined_base = $resolved !== FALSE ? $base_resolved : $base_normalized;
+		if ($confined !== $confined_base && !str_starts_with($confined, "{$confined_base}/")) {
+			continue;
+		}
+		$paths[] = $normalized;
+	}
+
+	$paths = array_values(array_unique($paths));
+	sort($paths, SORT_STRING);
+	return $paths;
+}
+
 function pfb_dnsbl_loaded_input_paths(array $pfb): array {
-	$raw_files = glob("{$pfb['unbound_py_rawdir']}/*.raw") ?: array();
-	sort($raw_files, SORT_STRING);
+	$raw_files = pfb_unbound_py_manifest_raw_paths((string) ($pfb['unbound_py_sources'] ?? ''));
 	return array_merge(
 		array($pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts'], $pfb['unbound_py_tld']),
 		$raw_files
@@ -1886,7 +1953,12 @@ function pfb_dnsbl_reload_fingerprint(array $pfb): string {
    look "loaded" forever, triggering a clear+reload every cron pass (#546).
    Pure (no global access). */
 function pfb_dnsbl_has_loaded_feeds(array $pfb): bool {
-	return !empty(glob("{$pfb['unbound_py_rawdir']}/*.raw") ?: array());
+	foreach (pfb_unbound_py_manifest_raw_paths((string) ($pfb['unbound_py_sources'] ?? '')) as $raw_path) {
+		if (is_file($raw_path) && is_readable($raw_path)) {
+			return TRUE;
+		}
+	}
+	return FALSE;
 }
 
 /* Return a stable fingerprint of the given input-file set.
@@ -7669,14 +7741,20 @@ function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 }
 
 
-// ADR-10: atomically publish a file to the chroot (/var/unbound). Stage into a
-// temp file ON THE SAME FILESYSTEM (same directory) -> flush + fsync the data ->
-// fix ownership -> atomic rename() over the final path. The plugin only ever reads
-// a fully-written, immutable file: a half-written manifest is never visible because
-// the rename is the all-or-nothing commit (POSIX rename(2) is atomic within a dir).
+// ADR-10: atomically publish a file to the chroot (/var/unbound). The same-directory
+// rename is the runtime visibility commit; crash durability needs the #1357 FreeBSD
+// parent-directory fsync probe and is not claimed by this helper.
 // Returns TRUE on success. No die()/exit(): a failure is logged + returned FALSE so
 // the caller can fall back to the restart path.
-function pfb_unbound_py_atomic_write($path, $content) {
+function pfb_unbound_py_stream_sync($fh, string $content, $write_fn=NULL, $flush_fn=NULL, $fsync_fn=NULL): bool {
+	$write_fn = $write_fn ?? static fn($stream, $bytes) => @fwrite($stream, $bytes);
+	$flush_fn = $flush_fn ?? static fn($stream) => @fflush($stream);
+	$fsync_fn = $fsync_fn ?? static fn($stream) => @fsync($stream);
+	$written = $write_fn($fh, $content);
+	return $written !== FALSE && $written === strlen($content) && $flush_fn($fh) && $fsync_fn($fh);
+}
+
+function pfb_unbound_py_atomic_write($path, $content, array $stream_ops=array()) {
 	$dir = dirname($path);
 	$tmp = @tempnam($dir, '.pfbpub_');
 	if ($tmp === FALSE) {
@@ -7691,14 +7769,9 @@ function pfb_unbound_py_atomic_write($path, $content) {
 		return FALSE;
 	}
 
-	$ok = (@fwrite($fh, $content) !== FALSE);
-	if ($ok) {
-		@fflush($fh);
-		// Durably persist the staged bytes before the rename so a crash between
-		// rename and the OS flush cannot expose a zero-length manifest.
-		@fsync($fh);
-	}
-	@fclose($fh);
+	$ok = pfb_unbound_py_stream_sync($fh, $content,
+		$stream_ops['write'] ?? NULL, $stream_ops['flush'] ?? NULL, $stream_ops['fsync'] ?? NULL);
+	$ok = @fclose($fh) && $ok;
 
 	if (!$ok) {
 		@unlink($tmp);
@@ -7706,8 +7779,8 @@ function pfb_unbound_py_atomic_write($path, $content) {
 		return FALSE;
 	}
 
-	// Ownership must match the consuming (chrooted) unbound user; set it on the
-	// staging file so the rename publishes a correctly-owned inode atomically.
+	// Preserve the helper's existing best-effort ownership semantics: test/dev hosts
+	// need not have an unbound account, while appliance writes still request it.
 	@chown($tmp, 'unbound');
 	@chgrp($tmp, 'unbound');
 
@@ -7718,6 +7791,132 @@ function pfb_unbound_py_atomic_write($path, $content) {
 	}
 
 	return TRUE;
+}
+
+// #1357: one exclusive lock serializes full-set publication, scalar manifest patches,
+// convergence-gated generation GC, and teardown. Python readers never take this lock.
+function pfb_unbound_py_publication_lock() {
+	global $pfb;
+
+	$manifest_path = $pfb['unbound_py_sources'] ?? '';
+	if ($manifest_path === '') {
+		pfb_logger("\nDNSBL publication lock path unavailable", 2);
+		return FALSE;
+	}
+	$lock = @fopen(dirname($manifest_path) . '/pfb_py_sources.lock', 'c');
+	if ($lock === FALSE || !@flock($lock, LOCK_EX)) {
+		if (is_resource($lock)) {
+			@fclose($lock);
+		}
+		pfb_logger("\nDNSBL publication lock unavailable", 2);
+		return FALSE;
+	}
+	return $lock;
+}
+
+function pfb_unbound_py_publication_unlock($lock): void {
+	if (is_resource($lock)) {
+		@flock($lock, LOCK_UN);
+		@fclose($lock);
+	}
+}
+
+// Strictly enumerate only #1357 generation/stage siblings; never broaden this prefix.
+function pfb_unbound_py_raw_artifacts(array $pfb): array {
+	$rawdir = $pfb['unbound_py_rawdir'] ?? '';
+	if ($rawdir === '' || $rawdir[0] !== '/') {
+		return array();
+	}
+	$parent = realpath(dirname($rawdir)) ?: dirname($rawdir);
+	$rawdir = "{$parent}/" . basename($rawdir);
+	$base = basename($rawdir);
+	$entries = @scandir($parent);
+	if ($entries === FALSE) {
+		return array();
+	}
+	$pattern = '/^' . preg_quote($base, '/') . '\.(?:[0-9a-f]{32}|stage\.[0-9a-f]{32})$/D';
+	$paths = (file_exists($rawdir) || is_link($rawdir)) ? array($rawdir) : array();
+	foreach ($entries as $entry) {
+		if (preg_match($pattern, $entry) === 1) {
+			$paths[] = "{$parent}/{$entry}";
+		}
+	}
+	sort($paths, SORT_STRING);
+	return $paths;
+}
+
+function pfb_unbound_py_remove_raw_artifact(string $path): bool {
+	if (is_dir($path) && !is_link($path)) {
+		rmdir_recursive($path);
+	} else {
+		@unlink($path);
+	}
+	return !file_exists($path) && !is_link($path);
+}
+
+// #1357: collect only after a watcher apply or restart has truly converged.
+function pfb_unbound_py_gc(bool $converged): bool {
+	global $pfb;
+
+	$lock = pfb_unbound_py_publication_lock();
+	if ($lock === FALSE) {
+		return FALSE;
+	}
+	try {
+		if (!$converged) {
+			return FALSE;
+		}
+		$json = @file_get_contents($pfb['unbound_py_sources']);
+		$manifest = $json !== FALSE ? json_decode($json, TRUE) : NULL;
+		if (!is_array($manifest) || !isset($manifest['feeds']) || !is_array($manifest['feeds'])) {
+			return FALSE;
+		}
+		$raw_paths = pfb_unbound_py_manifest_raw_paths($pfb['unbound_py_sources']);
+		if (count($raw_paths) !== count($manifest['feeds'])) {
+			return FALSE;
+		}
+		$protected = array();
+		foreach ($raw_paths as $raw_path) {
+			$raw_dir = realpath(dirname($raw_path));
+			if ($raw_dir === FALSE || !is_file($raw_path)) {
+				return FALSE;
+			}
+			$protected[$raw_dir] = TRUE;
+		}
+		$ok = TRUE;
+		foreach (pfb_unbound_py_raw_artifacts($pfb) as $artifact) {
+			if (isset($protected[$artifact])) {
+				continue;
+			}
+			if (!pfb_unbound_py_remove_raw_artifact($artifact)) {
+				pfb_logger("\nDNSBL raw generation cleanup failed", 2);
+				$ok = FALSE;
+			}
+		}
+		return $ok;
+	} finally {
+		pfb_unbound_py_publication_unlock($lock);
+	}
+}
+
+function pfb_unbound_py_teardown_raw_set(): bool {
+	global $pfb;
+
+	$lock = pfb_unbound_py_publication_lock();
+	if ($lock === FALSE) {
+		return FALSE;
+	}
+	try {
+		unlink_if_exists($pfb['unbound_py_sources']);
+		pfb_unbound_py_remove_raw_artifact($pfb['unbound_py_rawdir']);
+		$ok = TRUE;
+		foreach (pfb_unbound_py_raw_artifacts($pfb) as $artifact) {
+			$ok = pfb_unbound_py_remove_raw_artifact($artifact) && $ok;
+		}
+		return $ok;
+	} finally {
+		pfb_unbound_py_publication_unlock($lock);
+	}
 }
 
 
@@ -8066,18 +8265,72 @@ function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
 // PFBL-01: RE-validates each header via pfb_sanitise_feed_header() (PFB_FILTER_WORD, not
 // DOMAIN); a failing row is SKIPPED + logged before any file touch; pinned by
 // tests/php/PfbFilterContractTest.php.
+function pfb_unbound_py_generation_matches(string $dir, array $metadata): bool {
+	$entries = @scandir($dir);
+	if ($entries === FALSE) {
+		return FALSE;
+	}
+	$actual = array_values(array_diff($entries, array('.', '..')));
+	$expected = array();
+	foreach ($metadata as $header => $meta) {
+		$expected[] = "{$header}.raw";
+	}
+	sort($actual, SORT_STRING);
+	sort($expected, SORT_STRING);
+	if ($actual !== $expected) {
+		return FALSE;
+	}
+	foreach ($metadata as $header => $meta) {
+		$path = "{$dir}/{$header}.raw";
+		if (is_link($path) || !is_file($path) || !is_readable($path) || filesize($path) !== $meta['bytes'] ||
+		    @hash_file('xxh128', $path) !== $meta['hash']) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
 function pfb_unbound_python_sources($feeds) {
+	$lock = pfb_unbound_py_publication_lock();
+	if ($lock === FALSE) {
+		$manifest_path = $GLOBALS['pfb']['unbound_py_sources'] ?? 'unknown path';
+		$manifest_notice = "DNSBL manifest publication lock failed: {$manifest_path}";
+		file_notice('pfBlockerNG DNSBL', $manifest_notice, 'pfBlockerNG',
+			'/pfblockerng/pfblockerng_dnsbl.php', 2);
+		return FALSE;
+	}
+	try {
+		return pfb_unbound_python_sources_locked($feeds);
+	} finally {
+		pfb_unbound_py_publication_unlock($lock);
+	}
+}
+
+function pfb_unbound_python_sources_locked($feeds) {
 	global $pfb;
 
 	if (!is_array($feeds)) {
 		$feeds = array();
 	}
 
-	// Per-feed raw directory (recreated each build)
-	rmdir_recursive("{$pfb['unbound_py_rawdir']}");
-	safe_mkdir("{$pfb['unbound_py_rawdir']}");
+	$raw_parent = dirname($pfb['unbound_py_rawdir']);
+	$raw_base = basename($pfb['unbound_py_rawdir']);
+	$stage_digest = hash('xxh128', uniqid('', TRUE) . ':' . getmypid());
+	$stage_dir = "{$raw_parent}/{$raw_base}.stage.{$stage_digest}";
+	if (!@mkdir($stage_dir, 0755)) {
+		pfb_logger("\nDNSBL raw generation staging failed", 2);
+		return FALSE;
+	}
+	$abort_generation = static function (string $reason) use ($stage_dir) {
+		rmdir_recursive($stage_dir);
+		pfb_logger("\nDNSBL raw generation failed: {$reason}", 2);
+		file_notice('pfBlockerNG DNSBL', 'DNSBL raw generation publish failed', 'pfBlockerNG',
+			'/pfblockerng/pfblockerng_dnsbl.php', 2);
+		return FALSE;
+	};
 
 	$manifest_feeds = array();
+	$raw_metadata = array();
 	foreach ($feeds as $feed) {
 		$header	= isset($feed['header']) ? $feed['header'] : '';
 		$group	= isset($feed['group'])  ? $feed['group']  : '';
@@ -8097,35 +8350,50 @@ function pfb_unbound_python_sources($feeds) {
 		if (!file_exists($src)) {
 			continue;
 		}
+		if (!is_file($src)) {
+			return $abort_generation('source type');
+		}
 
-		$rawpath	= "{$pfb['unbound_py_rawdir']}/{$header}.raw";
-		$raw_h		= @fopen($rawpath, 'w');
+		$in_h = @fopen($src, 'r');
+		if ($in_h === FALSE) {
+			return $abort_generation('source open');
+		}
+		$rawpath = "{$stage_dir}/{$header}.raw";
+		$raw_h = @fopen($rawpath, 'wb');
 		if ($raw_h === FALSE) {
-			pfb_logger("\nFailed to create DNSBL python raw feed [ {$rawpath} ]", 2);
-			continue;
-		}
-		if (($in_h = @fopen($src, 'r')) !== FALSE) {
-			while (($line = @fgets($in_h)) !== FALSE) {
-				// #1083: an 'abp' row's raw payload (the download loop captured it
-				// verbatim) passes straight through to the '.raw' -- Python's build()
-				// routes it to parse_abp(). A 'domain' row extracts its bare domain,
-				// already IP-free and cleaned/validated by the download loop. NULL
-				// (undecodable, e.g. stale pre-flip residue) is silently skipped.
-				$row = pfb_dnsbl_ndjson_parse_row($line);
-				if ($row === NULL) {
-					continue;
-				}
-				if ($row['kind'] === 'abp') {
-					@fwrite($raw_h, "{$row['raw']}\n");
-				} else {
-					@fwrite($raw_h, "{$row['domain']}\n");
-				}
-			}
 			@fclose($in_h);
+			return $abort_generation('raw open');
 		}
-		if ($raw_h) {
-			@fclose($raw_h);
+		$raw_hash = hash_init('xxh128');
+		$raw_bytes = 0;
+		$raw_ok = TRUE;
+		while (($line = @fgets($in_h)) !== FALSE) {
+			// #1083: an 'abp' row's raw payload (the download loop captured it
+			// verbatim) passes straight through to the '.raw' -- Python's build()
+			// routes it to parse_abp(). A 'domain' row extracts its bare domain,
+			// already IP-free and cleaned/validated by the download loop. NULL
+			// (undecodable, e.g. stale pre-flip residue) is silently skipped.
+			$row = pfb_dnsbl_ndjson_parse_row($line);
+			if ($row === NULL) {
+				continue;
+			}
+			$raw_line = $row['kind'] === 'abp' ? "{$row['raw']}\n" : "{$row['domain']}\n";
+			$written = @fwrite($raw_h, $raw_line);
+			if ($written === FALSE || $written !== strlen($raw_line)) {
+				$raw_ok = FALSE;
+				break;
+			}
+			hash_update($raw_hash, $raw_line);
+			$raw_bytes += $written;
 		}
+		$raw_ok = $raw_ok && feof($in_h);
+		$raw_ok = @fclose($in_h) && $raw_ok;
+		$raw_ok = $raw_ok && @fflush($raw_h) && @fsync($raw_h);
+		$raw_ok = @fclose($raw_h) && $raw_ok;
+		if (!$raw_ok) {
+			return $abort_generation('raw write');
+		}
+		$raw_metadata[$header] = array('bytes' => $raw_bytes, 'hash' => hash_final($raw_hash));
 
 		// Store the raw path RELATIVE to the manifest's directory. pfb_unbound.py
 		// runs inside Unbound's chroot (/var/unbound), so an absolute HOST path
@@ -8135,7 +8403,7 @@ function pfb_unbound_python_sources($feeds) {
 		// joins a relative path against the manifest's dir (the chroot root), which
 		// resolves correctly both chrooted and not.
 		$manifest_feeds[] = array(
-			'raw'		=> basename($pfb['unbound_py_rawdir']) . "/{$header}.raw",
+			'raw'		=> "{$header}.raw",
 			'feed'		=> $header,
 			'group'		=> $group,
 			'provenance'	=> (isset($feed['provenance']) && $feed['provenance'] === 'user') ? 'user' : 'feed',
@@ -8150,6 +8418,31 @@ function pfb_unbound_python_sources($feeds) {
 			$manifest_feeds[count($manifest_feeds) - 1]['mode'] = 'permit';
 		}
 	}
+
+	$generation_hash = hash_init('xxh128');
+	ksort($raw_metadata, SORT_STRING);
+	foreach ($raw_metadata as $header => $meta) {
+		hash_update($generation_hash,
+			strlen($header) . ":{$header}:{$meta['bytes']}:{$meta['hash']}\n");
+	}
+	$generation_digest = hash_final($generation_hash);
+	$generation_base = "{$raw_base}.{$generation_digest}";
+	$generation_dir = "{$raw_parent}/{$generation_base}";
+	if (file_exists($generation_dir) || is_link($generation_dir)) {
+		if (!pfb_unbound_py_generation_matches($generation_dir, $raw_metadata)) {
+			return $abort_generation('generation collision');
+		}
+		rmdir_recursive($stage_dir);
+		if (file_exists($stage_dir)) {
+			return $abort_generation('duplicate stage cleanup');
+		}
+	} elseif (!@rename($stage_dir, $generation_dir)) {
+		return $abort_generation('generation publish');
+	}
+	foreach ($manifest_feeds as &$manifest_feed) {
+		$manifest_feed['raw'] = "{$generation_base}/{$manifest_feed['raw']}";
+	}
+	unset($manifest_feed);
 
 	// Synthetic whole-TLD blacklist feed (DNSBL_TLD): the Python build emits these
 	// as whole-TLD ZONE entries from config.tld_wildcard_blacklist, so no raw file is needed.
@@ -8203,9 +8496,8 @@ function pfb_unbound_python_sources($feeds) {
 
 	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 	if ($json !== FALSE) {
-		// ADR-10: atomic publish (stage -> fsync -> rename). The per-feed raw
-		// files were already (re)written into unbound_py_rawdir above; the manifest
-		// rename is the point at which the new immutable set becomes readable. The
+		// #1357: every raw is complete in an immutable content-addressed directory;
+		// this manifest rename is the sole visibility commit for the complete set. The
 		// sentinel flip that ACTS on it is driven by pfb_reload_unbound's data
 		// fast path (so a full feed update advances the generation exactly once,
 		// after every manifest+raw file is in place), not here.
@@ -8229,6 +8521,18 @@ function pfb_unbound_python_sources($feeds) {
 // (shared by the whitelist/unlock in-place patchers below), without a full
 // feed re-enumeration. The query-time whiteDB is rebuilt from this on reload.
 function pfb_unbound_python_sources_patch($key, $values) {
+	$lock = pfb_unbound_py_publication_lock();
+	if ($lock === FALSE) {
+		return FALSE;
+	}
+	try {
+		return pfb_unbound_python_sources_patch_locked($key, $values);
+	} finally {
+		pfb_unbound_py_publication_unlock($lock);
+	}
+}
+
+function pfb_unbound_python_sources_patch_locked($key, $values) {
 	global $pfb;
 
 	if (!file_exists($pfb['unbound_py_sources'])) {
@@ -8872,16 +9176,18 @@ function pfb_dnsbl_converged(): bool {
 // pfb_reload_unbound() where convergence might settle (the zero-downtime swap's own
 // success return, and the shared restart path's completion). Kept separate from
 // pfb_dnsbl_converged() so it stays directly unit-testable.
-function pfb_dnsbl_apply_ledger_update(): void {
+function pfb_dnsbl_apply_ledger_update(): bool {
 	global $pfb;
 
-	if (pfb_dnsbl_converged()) {
+	$converged = pfb_dnsbl_converged();
+	if ($converged) {
 		pfb_sync_status_close('dnsbl', 'dnsbl', 'apply', $pfb['dbdir']);
 	} else {
 		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply',
 			'DNSBL apply not converged -- Unbound not fully live with pfb_unbound.py; see error.log',
 			$pfb['dbdir']);
 	}
+	return $converged;
 }
 
 // ADR-61: tick-driven reconciliation for a stuck (dnsbl,dnsbl,apply) ledger entry.
@@ -8978,7 +9284,8 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 					unlink_if_exists("{$pfb['dnsbl_file']}.sync");
 					// ADR-61: this swap just confirmed applied == sentinel -- a second,
 					// independent convergence point besides the restart path's completion.
-					pfb_dnsbl_apply_ledger_update();
+					$converged = pfb_dnsbl_apply_ledger_update();
+					pfb_unbound_py_gc($converged);
 					return;
 				}
 
@@ -9082,7 +9389,8 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 	// a deliberate 'disabled' teardown clears any stale entry rather than flagging its
 	// own (expected) non-convergence as a failure.
 	if ($mode == 'enabled') {
-		pfb_dnsbl_apply_ledger_update();
+		$converged = pfb_dnsbl_apply_ledger_update();
+		pfb_unbound_py_gc($converged);
 	} else {
 		pfb_sync_status_close('dnsbl', 'dnsbl', 'apply', $pfb['dbdir']);
 	}
@@ -17516,8 +17824,7 @@ function sync_package_pfblockerng($cron='') {
 					@unlink($pfb_file);
 				}
 			}
-			unlink_if_exists($pfb['unbound_py_sources']);
-			rmdir_recursive("{$pfb['unbound_py_rawdir']}");
+			pfb_unbound_py_teardown_raw_set();
 		}
 	}
 

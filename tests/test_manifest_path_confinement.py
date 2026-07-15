@@ -21,7 +21,9 @@ Scenario: confine manifest file references under base_dir
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -63,6 +65,51 @@ class TestFeedPathConfinement:
         # Then nothing is yielded (the outside file is never opened) and it is logged.
         assert escaped == []
         assert "Refusing DNSBL feed outside base dir" in capsys.readouterr().err
+
+
+class TestManifestGenerationFailClosed:
+    @pytest.mark.parametrize(
+        "raw_kind",
+        ["missing", "directory", "traversal", "absolute", "symlink_escape", "missing_key", "wrong_type"],
+    )
+    def test_invalid_raw_member_rejects_whole_manifest_and_opens_ledger(
+        self,
+        tmp_path: Path,
+        raw_kind: str,
+    ) -> None:
+        base = tmp_path / "base"
+        base.mkdir()
+        outside = tmp_path / "outside.raw"
+        outside.write_text("outside.example\n", encoding="utf-8")
+        raw: object = "missing.raw"
+        if raw_kind == "directory":
+            (base / "directory.raw").mkdir()
+            raw = "directory.raw"
+        elif raw_kind == "traversal":
+            raw = "../outside.raw"
+        elif raw_kind == "absolute":
+            raw = str(outside)
+        elif raw_kind == "symlink_escape":
+            os.symlink(outside, base / "link.raw")
+            raw = "link.raw"
+        elif raw_kind == "wrong_type":
+            raw = ["feed.raw"]
+
+        row: dict[str, object] = {"raw": raw, "feed": "Bad", "group": "Test", "log_flag": "1"}
+        if raw_kind == "missing_key":
+            row.pop("raw")
+        manifest_path = base / "pfb_py_sources.json"
+        manifest_path.write_text(json.dumps({"version": 1, "config": {}, "feeds": [row]}), encoding="utf-8")
+        status_path = base / "pfb_py_status.json"
+        pfb_unbound.pfb["pfb_py_status"] = str(status_path)
+
+        result = pfb_unbound.dnsbl_build_from_manifest(str(manifest_path))
+
+        assert result is None, f"{raw_kind} raw reference unexpectedly produced a partial build"
+        entries = json.loads(status_path.read_text(encoding="utf-8"))
+        assert len(entries) == 1
+        assert entries[0]["item"] == str(manifest_path)
+        assert entries[0]["stage"] == "parse"
 
     def test_absolute_out_of_base_feed_is_skipped(self, tmp_path: Any, capsys: pytest.CaptureFixture[str]) -> None:
         # An absolute path pointing outside base_dir is refused too.
