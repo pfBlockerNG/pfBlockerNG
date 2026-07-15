@@ -54,8 +54,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segment,
 			'gzip-geoip tar -xzf must capture $output, $retval -- a corrupt archive currently reports success unconditionally');
-		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval/', $segment,
-			'gzip-geoip must check $retval before its return TRUE -- a nonzero exit must not report success');
+		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval\s*!=\s*0\s*\)|if\s*\(\s*\$retval\s*<>\s*0\s*\)/', $segment,
+			'gzip-geoip must check nonzero $retval before its return TRUE -- a nonzero exit must not report success');
 	}
 
 	// -----------------------------------------------------------------------
@@ -100,8 +100,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($returnTrue, 'vacuity: gzip-top1m site must reach a return TRUE;');
 		$segment = substr(self::$body, $gunzip, $returnTrue + strlen('return TRUE;') - $gunzip);
 
-		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval/', $segment,
-			'gzip-top1m must check $retval before its return TRUE -- a nonzero gunzip exit must not report success; '
+		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval\s*!=\s*0\s*\)|if\s*\(\s*\$retval\s*<>\s*0\s*\)/', $segment,
+			'gzip-top1m must check nonzero $retval before its return TRUE -- a nonzero gunzip exit must not report success; '
 			. 'segment: ' . json_encode($segment));
 	}
 
@@ -162,8 +162,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$segSingleToReturn = substr(self::$body, $single, $returnTrue + strlen('return TRUE;') - $single);
 		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segSingleToReturn,
 			'zip single-member tar -xOf must capture $output, $retval; segment: ' . json_encode($segSingleToReturn));
-		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval/', $segSingleToReturn,
-			'zip extras must check $retval before their shared return TRUE; segment: '
+		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval\s*!=\s*0\s*\)|if\s*\(\s*\$retval\s*<>\s*0\s*\)/', $segSingleToReturn,
+			'zip extras must check nonzero $retval before their shared return TRUE; segment: '
 			. json_encode($segSingleToReturn));
 	}
 
@@ -180,9 +180,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($nextBranch, 'vacuity: the uncompressed-blacklist sibling branch must exist');
 		$segment = substr(self::$body, $renamePos, $nextBranch - $renamePos);
 
-		$this->assertDoesNotMatchRegularExpression('/@rename\([^;]*\);\s*return TRUE;/', $segment,
-			'a bare @rename(...); return TRUE; ignores rename()\'s own failure -- a failed rename must not '
-			. 'report success; segment: ' . json_encode($segment));
+		$this->assertMatchesRegularExpression('/if\s*\(\s*!\s*\$renamed\s*\)/', $segment,
+			'uncompressed extras must check !$renamed before return TRUE; segment: ' . json_encode($segment));
 		$this->assertStringContainsString('return FALSE', $segment,
 			'a failed rename() must have a return FALSE path; segment: ' . json_encode($segment));
 	}
@@ -205,9 +204,9 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 		$segment = substr(self::$body, $commentPos, $gatePos - $commentPos);
 
-		$this->assertDoesNotMatchRegularExpression('/@rename\([^;]*\);\s*\$retval\s*=\s*0;/', $segment,
-			'a bare @rename(...); $retval = 0; ignores rename()\'s own failure -- a failed rename must not '
-			. 'enter the $retval == 0 success gate; segment: ' . json_encode($segment));
+		$this->assertMatchesRegularExpression('/if\s*\(\s*!\s*\$renamed\s*\)/', $segment,
+			'generic uncompressed feeds must check !$renamed before the $retval == 0 success gate; segment: '
+			. json_encode($segment));
 		$this->assertStringContainsString('return FALSE', $segment,
 			'a failed rename() must have a return FALSE path before the success gate; segment: ' . json_encode($segment));
 	}
