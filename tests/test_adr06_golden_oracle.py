@@ -1,13 +1,13 @@
-"""ADR-06 Phase 2 -- golden oracle for the CURRENT DNSBL preprocessing behaviour.
+"""ADR-06 Phase 2 -- golden oracle for the DNSBL migration decision contract.
 
 WHY THIS FILE EXISTS
 --------------------
-ADR-06 moves DNSBL list preprocessing (parse -> normalise -> classify data/zone
+ADR-06 moved DNSBL list preprocessing (parse -> normalise -> classify data/zone
 -> build dicts) out of shell/PHP into ``pfb_unbound.py``. That is the DNS
-*blocking* path, so the move (Phases 3-5) must be provably equivalent **at the
-level of net DNS decisions** (ADR.md §2). This module pins TODAY's decisions as a
-committed golden oracle, captured while the old shell/PHP path is still
-authoritative, so a silent regression in a later phase goes red here.
+*blocking* path, so the migration had to be provably equivalent **at the level
+of net DNS decisions** (ADR.md §2). This module preserves the decisions captured
+from the now-retired shell/PHP path and drives them through the live Python
+matcher so a regression still goes red here.
 
 The contract is decisions, NOT list contents/counts. ADR-06 deliberately drops the
 build-time optimisations (dedup, subdomain collapse, user-whitelist removal, TOP1M
@@ -23,12 +23,12 @@ What MUST stay invariant is every block/resolve outcome. Accordingly this oracle
 
 It does NOT assert identical dict contents or counts (those change by design).
 
-WHAT MODELS "THE CURRENT PIPELINE"
-----------------------------------
+WHAT THE HISTORICAL REFERENCE MODELS
+------------------------------------
 There is no live PHP/Unbound in CI (every prior ADR). So this file contains a
-pure-Python *reference preprocessor* (``ReferencePipeline``) that faithfully
-re-implements the CURRENT shell/PHP preprocessing semantics inventoried in
-Phase 1 (``RESULTS/01_Results.txt``), with PHP-symbol anchors in the docstrings:
+pure-Python *reference preprocessor* (``ReferencePipeline``) that preserves the
+retired shell/PHP preprocessing semantics inventoried in Phase 1
+(``RESULTS/01_Results.txt``), with historical PHP-symbol anchors in docstrings:
 
   * per-format parse (hosts / plain / basic-ABP), incl. the legacy basic-ABP
     token-strip (upgrade-compat only since ADR-62 -- live ABP-shaped lines now
@@ -93,12 +93,12 @@ def _load_json(name: str) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# Reference model of the CURRENT preprocessing pipeline (shell + PHP).
+# Reference model of the retired preprocessing pipeline (shell + PHP).
 #
 # Pure, stdlib-only. Re-implements the inventoried semantics so the oracle can run
 # in CI without live PHP/Unbound. Anchors to pfblockerng.inc / .sh symbol names
-# are in the method docstrings. This is the authoritative-today behaviour Phase 3
-# must match at the DECISION level.
+# remain in method docstrings. This is the migration baseline that the live Python
+# matcher must continue to match at the DECISION level.
 # --------------------------------------------------------------------------- #
 
 
@@ -114,7 +114,7 @@ def _is_ipv4(token: str) -> bool:
 
 
 class ReferencePipeline:
-    """Faithful pure-Python stand-in for the current shell/PHP DNSBL preprocessing.
+    """Pure-Python stand-in for the retired shell/PHP DNSBL preprocessing.
 
     Produces the runtime structures the matcher consumes (``dataDB`` / ``zoneDB`` /
     ``feedGroupIndexDB`` / ``whiteDB``) plus the extracted-IP firewall set, from the
@@ -171,8 +171,8 @@ class ReferencePipeline:
     def _extract(self, raw_line: str, fmt: str) -> tuple[str | None, str | None]:
         """Return ``(domain, firewall_ip)`` for one raw line; either may be None.
 
-        Implements the per-format dispatch + the embedded-IP firewall detection of
-        the current parse loop. A generic bare-IP line yields ``(None, ip)`` -- the
+        Models per-format dispatch + embedded-IP firewall detection from the
+        retired parse loop. A generic bare-IP line yields ``(None, ip)`` -- the
         IP goes to the firewall and the line is stripped from the domain build
         (``sync_package_pfblockerng()``'s DNSBL download/parse loop).
         """
@@ -532,7 +532,7 @@ GOLDEN_ABP_CONFORMANT_OVERRIDES: dict[str, dict[str, Any]] = {
 
 # The extracted-IP firewall handoff set (the *_v4.ip -> DNSBLIP_v4 input). Comes
 # from generic bare-IP lines (PHP's separate CSV-feed IP extraction isn't
-# modelled by this oracle's current fixtures -- see the module docstring).
+# modelled by this oracle's existing fixtures -- see the module docstring).
 # This is part of the oracle: Phase 5's independent DNSBL-IP pass must
 # produce the SAME set.
 GOLDEN_EXTRACTED_IPS: set[str] = {
