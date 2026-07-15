@@ -14,16 +14,18 @@ tests/smoke/fixtures/ — named exactly as their on-box targets:
     GeoLite2-Country-Blocks-IPv4.csv    (derived from the JSON source data)
     GeoLite2-Country-Blocks-IPv6.csv    (derived from the JSON source data)
 
-The CSVs and the mmdb encode the SAME dataset, so a smoke test seeding both
-drives the CSV->`ugc` continent/cc-file pipeline and the binary
-`mmdblookup`-backed reputation path from one consistent corpus.
+The CSVs begin with the same dataset as the mmdb, then receive a deterministic
+two-continent addendum for the continent-only GeoNames IDs that the upstream
+test corpus omits. The upstream-derived rows drive both the CSV->`ugc` pipeline
+and binary `mmdblookup` coverage; the CSV-only addendum exercises continent and
+cc-file generation without modifying MaxMind's binary fixture.
 
-The Blocks CSVs carry the corpus's real MaxMind test/public IP space
-(67.43.156.0/24 et al.) — a GeoIP database can only classify addresses it
-actually knows, so no RFC 5737/3849 substitute is possible here; see
-tests/smoke/fixtures/README.md for the full rationale (no traffic is ever
-sent to these addresses — they are table rows and `mmdblookup` arguments
-only).
+The upstream-derived Blocks rows carry the corpus's real MaxMind test/public IP
+space (67.43.156.0/24 et al.) because MMDB-backed tests need addresses the
+database knows. The addendum is the deliberate RFC 5737/3849 exception: its
+documentation addresses are CSV-only and never `mmdblookup` inputs. See
+tests/smoke/fixtures/README.md for the full rationale; no traffic is sent to any
+of these addresses.
 
 Usage:
     python3 scripts/update-geoip-fixtures.py [--output DIR]
@@ -59,9 +61,12 @@ JSON_SRC_SHA256 = "444a9c27d83a4d00b6f3807d9afde3878c3502d3685fb807c1f22fe6382b4
 
 # Expected row counts for this pinned commit — a drift here means the corpus
 # changed underneath us; regenerate the counts deliberately, don't patch them.
-LOCATIONS_COUNT = 46
-BLOCKS_V4_COUNT = 14
-BLOCKS_V6_COUNT = 230
+UPSTREAM_LOCATIONS_COUNT = 46
+UPSTREAM_BLOCKS_V4_COUNT = 14
+UPSTREAM_BLOCKS_V6_COUNT = 230
+LOCATIONS_COUNT = 48
+BLOCKS_V4_COUNT = 16
+BLOCKS_V6_COUNT = 232
 
 OUTPUT_FILENAMES = {
     "mmdb": "GeoLite2-Country.mmdb",
@@ -133,6 +138,20 @@ class BlockRow:
     is_anonymous_proxy: bool = False
     is_satellite_provider: bool = False
     is_anycast: bool = False
+
+
+CONTINENT_ADDENDUM_LOCATIONS = (
+    LocationRow(6255147, "AS", "Asia", "", "", False),
+    LocationRow(6255148, "EU", "Europe", "", "", False),
+)
+CONTINENT_ADDENDUM_BLOCKS_V4 = (
+    BlockRow("192.0.2.147/32", "6255147", "", ""),
+    BlockRow("192.0.2.148/32", "6255148", "", ""),
+)
+CONTINENT_ADDENDUM_BLOCKS_V6 = (
+    BlockRow("2001:db8:6255:147::/128", "6255147", "", ""),
+    BlockRow("2001:db8:6255:148::/128", "6255148", "", ""),
+)
 
 
 def load_records(json_bytes: bytes) -> list[tuple[str, dict[str, Any]]]:
@@ -221,6 +240,30 @@ def build_blocks(
     return v4, v6
 
 
+def apply_continent_addendum(
+    locations: dict[int, LocationRow], blocks_v4: list[BlockRow], blocks_v6: list[BlockRow]
+) -> tuple[dict[int, LocationRow], list[BlockRow], list[BlockRow]]:
+    """Add continent-only fixture rows, failing if the pinned corpus collides."""
+    result_locations = dict(locations)
+    result_v4 = list(blocks_v4)
+    result_v6 = list(blocks_v6)
+    for row in CONTINENT_ADDENDUM_LOCATIONS:
+        if row.geoname_id in result_locations:
+            raise GeneratorError(f"continent addendum geoname collision: {row.geoname_id}")
+        result_locations[row.geoname_id] = row
+    for rows, addendum in (
+        (result_v4, CONTINENT_ADDENDUM_BLOCKS_V4),
+        (result_v6, CONTINENT_ADDENDUM_BLOCKS_V6),
+    ):
+        networks = {row.network for row in rows}
+        for row in addendum:
+            if row.network in networks:
+                raise GeneratorError(f"continent addendum network collision: {row.network}")
+            rows.append(row)
+            networks.add(row.network)
+    return result_locations, result_v4, result_v6
+
+
 # ── CSV writers (MaxMind schema: header + column order verbatim) ──────────
 
 
@@ -262,15 +305,36 @@ def write_blocks_csv(path: Path, rows: list[BlockRow]) -> None:
             )
 
 
-def check_counts(locations: dict[int, LocationRow], blocks_v4: list[BlockRow], blocks_v6: list[BlockRow]) -> None:
-    """Refuse to write fixtures whose row counts drifted from the pinned commit's."""
+def _check_counts(
+    locations: dict[int, LocationRow],
+    blocks_v4: list[BlockRow],
+    blocks_v6: list[BlockRow],
+    expected_counts: tuple[int, int, int],
+) -> None:
     for label, actual, expected in (
-        ("Locations", len(locations), LOCATIONS_COUNT),
-        ("Blocks-IPv4", len(blocks_v4), BLOCKS_V4_COUNT),
-        ("Blocks-IPv6", len(blocks_v6), BLOCKS_V6_COUNT),
+        ("Locations", len(locations), expected_counts[0]),
+        ("Blocks-IPv4", len(blocks_v4), expected_counts[1]),
+        ("Blocks-IPv6", len(blocks_v6), expected_counts[2]),
     ):
         if actual != expected:
             raise GeneratorError(f"{label} count drifted: expected {expected}, got {actual}")
+
+
+def check_upstream_counts(
+    locations: dict[int, LocationRow], blocks_v4: list[BlockRow], blocks_v6: list[BlockRow]
+) -> None:
+    """Refuse a pinned upstream corpus whose row counts drifted."""
+    _check_counts(
+        locations,
+        blocks_v4,
+        blocks_v6,
+        (UPSTREAM_LOCATIONS_COUNT, UPSTREAM_BLOCKS_V4_COUNT, UPSTREAM_BLOCKS_V6_COUNT),
+    )
+
+
+def check_counts(locations: dict[int, LocationRow], blocks_v4: list[BlockRow], blocks_v6: list[BlockRow]) -> None:
+    """Refuse final fixtures whose row counts drifted."""
+    _check_counts(locations, blocks_v4, blocks_v6, (LOCATIONS_COUNT, BLOCKS_V4_COUNT, BLOCKS_V6_COUNT))
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -297,6 +361,8 @@ def main() -> None:
     records = load_records(json_bytes)
     locations = build_locations(records)
     blocks_v4, blocks_v6 = build_blocks(records, locations)
+    check_upstream_counts(locations, blocks_v4, blocks_v6)
+    locations, blocks_v4, blocks_v6 = apply_continent_addendum(locations, blocks_v4, blocks_v6)
     check_counts(locations, blocks_v4, blocks_v6)
 
     (out_dir / OUTPUT_FILENAMES["mmdb"]).write_bytes(mmdb_bytes)

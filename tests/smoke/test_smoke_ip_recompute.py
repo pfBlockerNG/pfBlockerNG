@@ -593,6 +593,33 @@ def test_recompute_continent_snapshot_both_families(deployed_vm: SmokeVM) -> Non
     assert v6_aggcount == "1\n", f"v6 .aggcount sidecar wrong: {v6_aggcount!r}"
 
 
+def test_continent_only_geoip_rows_build_correct_aliases(deployed_vm: SmokeVM) -> None:
+    """Asia/Europe continent GeoNames IDs, not ISO codes, build their v4/v6 alias files."""
+    cases = (
+        ("Asia", "6255147", "v4", "192.0.2.147/32"),
+        ("Asia", "6255147", "v6", "2001:db8:6255:147::/128"),
+        ("Europe", "6255148", "v4", "192.0.2.148/32"),
+        ("Europe", "6255148", "v6", "2001:db8:6255:148::/128"),
+    )
+    h.seed_geoip_dataset(deployed_vm)
+    h.set_package_enabled(deployed_vm, True)
+    try:
+        h.set_ip_continent(deployed_vm, "Asia", action="Alias_Deny", countries4="6255147", countries6="6255147")
+        h.set_ip_continent(deployed_vm, "Europe", action="Alias_Deny", countries4="6255148", countries6="6255148")
+        h.reload(deployed_vm, "update", wait_unbound=False)
+
+        for continent, geoname_id, family, network in cases:
+            cc_lines = _lines(deployed_vm, f"{h.GEOIP_SHARE_DIR}/cc/{geoname_id}_{family}.txt")
+            assert cc_lines == [network], f"{continent} {family} continent-only cc file wrong: {cc_lines}"
+
+            alias = f"pfB_{continent}_{family}"
+            deny_lines = _lines(deployed_vm, f"{DENYDIR}/{alias}.txt")
+            assert deny_lines == [network], f"{alias} deny file wrong: {deny_lines}"
+    finally:
+        h.set_ip_continent(deployed_vm, "Asia", action="Disabled")
+        h.set_ip_continent(deployed_vm, "Europe", action="Disabled")
+
+
 # --------------------------------------------------------------------------- #
 # R7 -- v6 continent snapshot TRACKS across two regens (not frozen at the seed)
 # --------------------------------------------------------------------------- #
