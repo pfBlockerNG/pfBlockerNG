@@ -1553,25 +1553,24 @@ class TestOperateDnsbl:
         assert dec.dnsbl.is_found is False
 
     def test_stale_generation_write_cannot_extend_a_live_memo(self, monkeypatch: Any) -> None:
-        # issue #1074, writer side: a late _decision_for() call carrying a FOREIGN
-        # generation must REPLACE (restamp) the entry, never extend a live one -- and
-        # its verdict must then be invisible to a live-generation read.
+        # issue #1074: a later generation replaces an older resident memo without
+        # inheriting its verdict.
         self._enable(monkeypatch)
-        live_gen = pfb_unbound._snapshot.gen
-        # A REAL generation drawn from the counter, never the live one: live_gen - 1
-        # would collide with the 0 "unstamped" sentinel when this test runs alone,
-        # exercising the wrong case.
-        old_gen = next(pfb_unbound._snapshot_gen)
-        assert old_gen > 0 and old_gen != live_gen
-        late = pfb_unbound._decision_for("evil.com", old_gen)
-        late.dnsbl = _dnsbl_decision(
-            is_found=True, log_type="1", b_type="DNSBL", p_type="Python", feed="F", group="G", b_eval="evil.com"
+        stale_gen = next(pfb_unbound._snapshot_gen)
+        replacement_gen = next(pfb_unbound._snapshot_gen)
+        assert 0 < stale_gen < replacement_gen
+        stale = pfb_unbound.Decision(
+            dnsbl=_dnsbl_decision(
+                is_found=True, log_type="1", b_type="DNSBL", p_type="Python", feed="F", group="G", b_eval="evil.com"
+            ),
+            snap_gen=stale_gen,
         )
-        assert pfb_unbound.decisionDB.get("evil.com").snap_gen == old_gen
-        # A live-generation get-or-create sees the foreign stamp and starts fresh.
-        dec = pfb_unbound._decision_for("evil.com", live_gen)
-        assert dec.snap_gen == live_gen
-        assert dec.dnsbl is pfb_unbound.UNSET
+        pfb_unbound.decisionDB["evil.com"] = stale
+        replacement = pfb_unbound._decision_for("evil.com", replacement_gen)
+        assert replacement is not stale
+        assert pfb_unbound.decisionDB.get("evil.com") is replacement
+        assert replacement.snap_gen == replacement_gen
+        assert replacement.dnsbl is pfb_unbound.UNSET
 
     def test_older_generation_straggler_neither_evicts_nor_extends(self, monkeypatch: Any) -> None:
         # issue #1074 hardening: a straggler carrying an OLDER generation gets a
