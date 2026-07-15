@@ -627,8 +627,8 @@ class TestQueryWatcherLoop:
     def test_a_raising_request_does_not_kill_the_watcher_thread(
         self, query_harness: _QueryHarness, monkeypatch: Any
     ) -> None:
-        """issue #1351 review: one request whose evaluation raises must NOT permanently
-        disable the query channel. Before the per-request guard, the exception unwound
+        """One request whose evaluation raises must NOT permanently disable the query
+        channel. Before the per-request guard, the exception unwound
         the whole daemon loop and the thread returned (init never restarts it); after,
         the poison request is logged and skipped and the watcher keeps answering.
         """
