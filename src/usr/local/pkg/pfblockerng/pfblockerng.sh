@@ -1432,7 +1432,7 @@ pfb_recompute_finish() {
 
 	pfb_recompute_swap_mv "${rec_countsfile_new}" "${rec_countsfile}" 'countsfile.new' || return 1
 
-	if [ "${rec_repmode}" = 'dmax' ]; then
+	if [ "${rec_do_rep}" -eq 1 ] && [ "${rec_repmode}" = 'dmax' ]; then
 		if [ "${rec_geoip_ok:-1}" -eq 1 ]; then
 			# GeoIP ran (or there were no offenders to classify) -- a missing ".new"
 			# genuinely means "no reputation match for this alias this pass", so
@@ -2038,8 +2038,8 @@ closingprocess() {
 		s1="$(grep -cv "^${ip_placeholder2}$" "${mastercat}")"
 		# issue #1263: awk 1 -- an unterminated deny file no longer welds into its neighbour.
 		s2="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | grep -cv "^${ip_placeholder2}$")"
-		s3="$(sort "${mastercat}" | uniq -d | tail -30)"
-		s4="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | sort | uniq -d | tail -30 | grep -v "^${ip_placeholder2}$")"
+		s3="$(LC_ALL=C sort "${mastercat}" | LC_ALL=C uniq -d | tail -30)"
+		s4="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort | LC_ALL=C uniq -d | tail -30 | grep -v "^${ip_placeholder2}$")"
 	else
 		echo "   [ Original IP count   ]  [ ${counto} ]"
 	fi

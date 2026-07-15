@@ -973,6 +973,26 @@ Describe 'pfb_recompute() finish-arm reputation reconcile (issue #1084 review: s
 		countsfile="${work}/counts"
 	}
 	cleanup() { rm -rf "$work"; }
+	artifact_is_unchanged() {
+		expected="$1"; actual="$2"; label="$3"
+		cmp -s "$expected" "$actual" && return 0
+		printf '%s artifact changed (expected: %s; actual: %s)\n' \
+			"$label" "$expected" "$actual" >&2
+		printf '%s\n' '--- expected contents ---' >&2
+		if [ -f "$expected" ]; then cat "$expected" >&2; else printf '%s\n' '<missing>' >&2; fi
+		printf '%s\n' '--- actual contents ---' >&2
+		if [ -f "$actual" ]; then cat "$actual" >&2; else printf '%s\n' '<missing>' >&2; fi
+		if [ -f "$expected" ] && [ -f "$actual" ]; then diff -u "$expected" "$actual" >&2 || :; fi
+		return 1
+	}
+	recompute_v6_and_check_match_artifacts() {
+		rec_geoip_ok=1
+		pfb_recompute recompute v6 "$memberlist" "$countsfile" on dmax 1 US match off >/dev/null || return
+		artifact_is_unchanged "${work}/exempt.before" \
+			"${pfbmatchgen}pfB_Match_Exempt_v4.txt" 'v4 exempt' || return
+		artifact_is_unchanged "${work}/rep.before" \
+			"${pfbmatchgen}pfB_Match_Rep_Six_v6.txt" 'v6 reputation'
+	}
 	BeforeAll 'pfb_source'
 	Before 'setup'
 	After 'cleanup'
@@ -1007,6 +1027,19 @@ Describe 'pfb_recompute() finish-arm reputation reconcile (issue #1084 review: s
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 100 US match off
 		The status should be success
 		The path "${pfbmatchgen}pfB_Match_Exempt_v4.txt" should not be exist
+	End
+
+	It 'keeps v4 exempt and v6 reputation artifacts byte-identical when a direct v6 call carries dmax arguments'
+		printf '1.1.1.0/24\n!1.1.1.1\n' > "${pfbmatchgen}pfB_Match_Exempt_v4.txt"
+		printf '2a01:db8::/64\n!2a01:db8::1\n' > "${pfbmatchgen}pfB_Match_Rep_Six_v6.txt"
+		cp "${pfbmatchgen}pfB_Match_Exempt_v4.txt" "${work}/exempt.before"
+		cp "${pfbmatchgen}pfB_Match_Rep_Six_v6.txt" "${work}/rep.before"
+		printf '2001:db8::1\n' > "${snap}/Six_v6.orig"
+		printf '%s\n' "${snap}/Six_v6.orig" > "$memberlist"
+
+		When call recompute_v6_and_check_match_artifacts
+		The status should be success
+		The contents of file "${pfbdeny}Six_v6.txt" should equal '2001:db8::1'
 	End
 End
 
