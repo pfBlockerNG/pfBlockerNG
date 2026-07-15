@@ -411,6 +411,7 @@ def test_tick_dispatches_due_feed(deployed_vm: SmokeVM) -> None:
 
     # Given: force cron past; snapshot the sync_cron marker count before the tick.
     _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
+    h.wait_no_active_pfb_task(vm)
     cron_marker_before = h.count_log_marker(vm, h.PFB_LOG, marker)
 
     before = _read_ledger(vm)
@@ -476,6 +477,7 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
 
     now_ts = int(vm.ssh("date +%s").stdout.strip())
     _write_ledger_entry(vm, "cron", now_ts - 86400, now_ts + 3600)
+    h.wait_no_active_pfb_task(vm)
     before = h.count_log_marker(vm, h.PFB_LOG, marker)
 
     # Positive control: a resolvable CNAME target the stub answers, baked stale in the CSV.
