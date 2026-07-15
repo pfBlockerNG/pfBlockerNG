@@ -45,6 +45,45 @@ Describe 'verify-red-proof.sh'
     gitc commit -qm v3-followup
     pin_hash=$(gitc hash-object test_pin.sh)
   }
+  make_deleted_repo() {
+    # HEAD~1 tracks old.txt; HEAD deletes it. $1 is the test command.
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-del.XXXXXX")"
+    git -C "$repo" init -q
+    echo OLD > "$repo/old.txt"
+    printf '%s\n' "$1" > "$repo/test_pin.sh"
+    gitc add -A
+    gitc commit -qm v1
+    rm "$repo/old.txt"
+    echo other > "$repo/other.txt"
+    gitc add -A
+    gitc commit -qm v2
+  }
+  make_mixed_repo() {
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-mixed.XXXXXX")"
+    git -C "$repo" init -q
+    echo BAD > "$repo/src.txt"
+    echo OLD > "$repo/old.txt"
+    printf 'grep -q GOOD src.txt && test ! -e old.txt\n' > "$repo/test_pin.sh"
+    gitc add -A
+    gitc commit -qm v1
+    echo GOOD > "$repo/src.txt"
+    rm "$repo/old.txt"
+    gitc add -A
+    gitc commit -qm v2
+  }
+  make_added_repo() {
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-add.XXXXXX")"
+    git -C "$repo" init -q
+    printf 'test -e added.txt\n' > "$repo/test_pin.sh"
+    gitc add -A
+    gitc commit -qm v1
+    echo ADDED > "$repo/added.txt"
+    gitc add -A
+    gitc commit -qm v2
+  }
   cleanup() { rm -rf "$repo"; }
   After 'cleanup'
 
@@ -60,12 +99,46 @@ Describe 'verify-red-proof.sh'
     Assert [ -z "$(git -C "$repo" status --porcelain)" ]
   End
 
+  It 'passes a deleted-only red->green proof and restores the HEAD deletion'
+    make_deleted_repo 'test ! -e old.txt'
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src old.txt
+    The status should equal 0
+    The output should include 'RED-OK'
+    The output should include 'GREEN-OK'
+    The output should include 'VERDICT: PASS'
+    Assert [ ! -e "$repo/old.txt" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'restores modified and deleted src paths to their distinct HEAD states'
+    make_mixed_repo
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' \
+      --src src.txt --src old.txt
+    The status should equal 0
+    The output should include 'RED-OK'
+    The output should include 'GREEN-OK'
+    The output should include 'VERDICT: PASS'
+    The contents of file "$repo/src.txt" should equal 'GOOD'
+    Assert [ ! -e "$repo/old.txt" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
   It 'rejects a test that already passes against HEAD~1 (pins nothing)'
     make_repo GOOD GOOD
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt
     The status should equal 1
     The output should include 'RED-FAIL'
     The output should include 'VERDICT: FAIL'
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'restores a deleted src path through the EXIT trap after RED-FAIL'
+    make_deleted_repo 'test -e old.txt'
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src old.txt
+    The status should equal 1
+    The output should include 'RED-FAIL'
+    The output should include 'VERDICT: FAIL'
+    Assert [ ! -e "$repo/old.txt" ]
     Assert [ -z "$(git -C "$repo" status --porcelain)" ]
   End
 
@@ -92,12 +165,40 @@ Describe 'verify-red-proof.sh'
     The output should equal ''
   End
 
+  It 'restores a deleted src path when SIGTERM interrupts the red run (dash semantics)'
+    make_deleted_repo 'test ! -e old.txt'
+    interrupt_deleted_case() {
+      dash "$script" --worktree "$repo" --test-cmd 'sleep 30' --src old.txt >/dev/null 2>&1 &
+      pid=$!
+      sleep 1
+      kill -TERM "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      printf '%s\n' "$?"
+      git -C "$repo" status --porcelain
+    }
+    When call interrupt_deleted_case
+    The output should equal '130'
+    Assert [ ! -e "$repo/old.txt" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
   It 'rejects a fix that does not satisfy its own pin (GREEN-FAIL)'
     make_repo BAD BAD
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt
     The status should equal 1
     The output should include 'RED-OK'
     The output should include 'GREEN-FAIL'
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'keeps added-only src paths unsupported and leaves HEAD clean after REVERT-FAIL'
+    make_added_repo
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src added.txt
+    The status should equal 1
+    The output should include 'REVERT-FAIL'
+    The output should include 'VERDICT: FAIL'
+    The stderr should include "pathspec 'added.txt'"
+    The contents of file "$repo/added.txt" should equal 'ADDED'
     Assert [ -z "$(git -C "$repo" status --porcelain)" ]
   End
 
