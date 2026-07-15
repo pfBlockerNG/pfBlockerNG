@@ -88,7 +88,7 @@ EOF
   Before 'setup'
   After 'cleanup'
 
-  It 'keeps the FIRST ASN range when a second ASN entry follows'
+  It 'accumulates BOTH ASN ranges across the two ASN entries'
     When call whoisconvert
     The status should be success
     The stdout should include 'Collecting ASN: AS64501'

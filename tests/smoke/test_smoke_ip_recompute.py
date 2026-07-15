@@ -765,7 +765,10 @@ def test_recompute_geoip_outage_preserves_match_artifacts(deployed_vm: SmokeVM) 
         )
     finally:
         if stashed:
-            deployed_vm.ssh("/bin/mv", stash_path, mmdb_path)
+            restored = deployed_vm.ssh("/bin/mv", stash_path, mmdb_path)
+            assert restored.returncode == 0, (
+                f"could not restore {mmdb_path}: rc={restored.returncode} stderr={restored.stderr!r}"
+            )
 
 
 # --------------------------------------------------------------------------- #

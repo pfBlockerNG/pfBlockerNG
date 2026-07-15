@@ -363,7 +363,7 @@ def test_hostile_regex_shapes_route_to_parse_abp() -> None:
     )
     assert _blocked(result, "re1.example")
     assert _allowed(result, "re2.example")
-    assert result.zone_db.get("re3.example", {}).get("important") is True or "re3.example" in result.data_db
+    assert result.data_db["re3.example"]["important"] is True
 
 
 def test_hostile_banded_rules_preserve_domain() -> None:
