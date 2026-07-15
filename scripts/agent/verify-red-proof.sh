@@ -40,6 +40,7 @@ restore_srcs() {
 			git -C "$worktree" checkout HEAD -- "$src" || return 1
 		else
 			git -C "$worktree" rm -q -r -f -- "$src" || return 1
+			git -C "$worktree" clean -q -d -f -x -- "$src" || return 1
 		fi
 	done
 }

@@ -73,6 +73,21 @@ Describe 'verify-red-proof.sh'
     gitc add -A
     gitc commit -qm v2
   }
+  make_deleted_directory_with_red_descendants_repo() {
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-del-dir-desc.XXXXXX")"
+    git -C "$repo" init -q
+    mkdir "$repo/gone"
+    echo OLD > "$repo/gone/a.txt"
+    printf 'gone/ignored.txt\n' > "$repo/.gitignore"
+    printf 'if test -e gone/a.txt; then\n  printf UNTRACKED > gone/new.txt\n  printf IGNORED > gone/ignored.txt\n  false\nfi\ntest ! -e gone\n' > "$repo/test_pin.sh"
+    gitc add -A
+    gitc commit -qm v1
+    rm -rf "$repo/gone"
+    echo other > "$repo/other.txt"
+    gitc add -A
+    gitc commit -qm v2
+  }
   make_mixed_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-mixed.XXXXXX")"
@@ -133,6 +148,17 @@ Describe 'verify-red-proof.sh'
     The output should include 'VERDICT: PASS'
     Assert [ ! -e "$repo/gone" ]
     Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'removes untracked and ignored descendants from a red-run deleted directory'
+    make_deleted_directory_with_red_descendants_repo
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src gone
+    The status should equal 0
+    The output should include 'RED-OK'
+    The output should include 'GREEN-OK'
+    The output should include 'VERDICT: PASS'
+    Assert [ ! -e "$repo/gone" ]
+    Assert [ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]
   End
 
   It 'restores modified and deleted src paths to their distinct HEAD states'
