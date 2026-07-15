@@ -94,7 +94,7 @@ def _set_pfb_interval(vm: SmokeVM, value: str, *, timeout: float = 60.0) -> None
         raise RuntimeError(f"_set_pfb_interval({value!r}) did not take: config reads {readback!r}")
 
 
-def _read_ledger(vm) -> dict:
+def _read_ledger(vm: SmokeVM) -> dict:
     """Return the parsed ledger from the box (empty on absent/corrupt)."""
     raw = vm.ssh(f"cat {LEDGER_PATH} 2>/dev/null || echo '{{}}'").stdout
     try:
@@ -103,7 +103,7 @@ def _read_ledger(vm) -> dict:
         return {}
 
 
-def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: int = 0) -> None:
+def _write_ledger_entry(vm: SmokeVM, job_key: str, last_run: int, next_due: int, jitter: int = 0) -> None:
     """Write a single ledger entry via the package's own PHP ledger writer.
 
     pfSense ships no ``python3``, and the product already owns the ledger format, so
@@ -121,7 +121,7 @@ def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: 
         raise RuntimeError(f"_write_ledger_entry failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-def _set_quiet_hours(vm, window: str) -> None:
+def _set_quiet_hours(vm: SmokeVM, window: str) -> None:
     """Set pfb_quiet_hours in config.xml via pfSsh.php."""
     # Use the config gateway rather than direct xml munging.
     snippet = (
@@ -135,17 +135,17 @@ def _set_quiet_hours(vm, window: str) -> None:
         raise RuntimeError(f"_set_quiet_hours({window!r}) failed: rc={result.returncode} {result.stderr!r}")
 
 
-def _clear_quiet_hours(vm) -> None:
+def _clear_quiet_hours(vm: SmokeVM) -> None:
     """Clear pfb_quiet_hours (reset to default '')."""
     _set_quiet_hours(vm, "")
 
 
-def _force_cron_due(vm) -> None:
+def _force_cron_due(vm: SmokeVM) -> None:
     """Force the cron job due-now by back-dating next_due to epoch 0."""
     _write_ledger_entry(vm, "cron", last_run=0, next_due=0)
 
 
-def _run_tick(vm) -> str:
+def _run_tick(vm: SmokeVM) -> str:
     """Fire one tick synchronously and return combined stdout+stderr.
 
     Drains any in-flight pfBlockerNG pass first: the tick defers its feed cron while
@@ -157,12 +157,12 @@ def _run_tick(vm) -> str:
     return vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1").stdout
 
 
-def _cron_ledger(vm) -> dict | None:
+def _cron_ledger(vm: SmokeVM) -> dict | None:
     """Return the 'cron' entry from the ledger, or None if absent."""
     return _read_ledger(vm).get("cron")
 
 
-def _is_pending(vm) -> bool:
+def _is_pending(vm: SmokeVM) -> bool:
     """Return True iff the 'cron' ledger entry has pending_apply set."""
     entry = _cron_ledger(vm)
     return bool(entry and entry.get("pending_apply"))
@@ -175,7 +175,7 @@ def _is_pending(vm) -> bool:
 
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
-def test_apply_no_window_dispatches_immediately(deployed_vm: SmokeVM):
+def test_apply_no_window_dispatches_immediately(deployed_vm: SmokeVM) -> None:
     """No quiet-hours window → tick dispatches a due job without deferral.
 
     Scenario:
@@ -217,7 +217,7 @@ def test_apply_no_window_dispatches_immediately(deployed_vm: SmokeVM):
 
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
-def test_apply_inside_window_dispatches(deployed_vm: SmokeVM):
+def test_apply_inside_window_dispatches(deployed_vm: SmokeVM) -> None:
     """Window that covers now → tick dispatches, pending NOT set.
 
     Scenario:
@@ -252,7 +252,7 @@ def test_apply_inside_window_dispatches(deployed_vm: SmokeVM):
 
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
-def test_apply_outside_window_defers(deployed_vm: SmokeVM):
+def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
     """Window that excludes now → tick defers (pending set, job NOT dispatched).
 
     Scenario:
@@ -302,7 +302,7 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM):
 
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
-def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM):
+def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM) -> None:
     """Pending job is applied when window opens (pending cleared, last_run updated).
 
     Scenario:

@@ -75,6 +75,7 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
@@ -474,7 +475,23 @@ def _parse_kv(text: str) -> dict[str, str]:
     return out
 
 
-def _parse_guest_row(kv: dict[str, str]) -> dict[str, object]:
+class _GuestRow(TypedDict):
+    op: str
+    size: int
+    churn: int
+    batch: str
+    wall_ms: int
+    epoch_start: float
+    epoch_end: float
+    ctrl_p50_ms: int
+    ctrl_p99_ms: int
+    ctrl_max_ms: int
+    ctrl_n: int
+    error: str
+    timed_out: bool
+
+
+def _parse_guest_row(kv: dict[str, str]) -> _GuestRow:
     return {
         "op": kv.get("op", ""),
         "size": int(kv.get("size", 0)),
@@ -1257,8 +1274,8 @@ def test_pfctl_knee_sweep(
     for sz, churn in _KNEE_CELLS:
         print(f"\n  == knee size={sz:,} churn={churn:,} ==")
         for batch in _KNEE_BATCHES:
-            key = (sz, churn, batch)
-            knee_rows[key] = []
+            knee_key = (sz, churn, batch)
+            knee_rows[knee_key] = []
             for rep in range(_REPS):
                 print(f"  delta {sz:,}/{churn:,}/batch={batch} rep={rep + 1}/{_REPS}", flush=True)
                 row = _measure_with_probe(
@@ -1269,13 +1286,13 @@ def test_pfctl_knee_sweep(
                     op_timeout_s=600.0,
                     interval_s=_KNEE_INTERVAL,
                 )
-                knee_rows[key].append(row)
+                knee_rows[knee_key].append(row)
             ps = _compute_pooled(
-                [r.icmp_during for r in knee_rows[key]],
-                [r.icmp_baseline for r in knee_rows[key]],
+                [r.icmp_during for r in knee_rows[knee_key]],
+                [r.icmp_baseline for r in knee_rows[knee_key]],
             )
-            knee_stats[key] = ps
-            med_wall = statistics.median(r.wall_ms for r in knee_rows[key])
+            knee_stats[knee_key] = ps
+            med_wall = statistics.median(r.wall_ms for r in knee_rows[knee_key])
             _print_pooled(f"delta {sz:,}/{churn:,}/batch={batch}", _REPS, med_wall, ps)
 
     # ------------------------------------------------------------------ #
@@ -1291,8 +1308,8 @@ def test_pfctl_knee_sweep(
     for sz, lbl, churn in _SMALL_CHURN_CELLS:
         print(f"\n  == small-churn size={sz:,} churn={churn:,} ({lbl}) ==")
         for batch in _SC_BATCHES:
-            key = (sz, lbl, churn, batch)
-            sc_rows[key] = []
+            small_churn_key = (sz, lbl, churn, batch)
+            sc_rows[small_churn_key] = []
             for rep in range(_REPS):
                 print(f"  delta {sz:,}/{churn:,}/batch={batch} rep={rep + 1}/{_REPS}", flush=True)
                 row = _measure_with_probe(
@@ -1303,13 +1320,13 @@ def test_pfctl_knee_sweep(
                     op_timeout_s=300.0,
                     interval_s=_KNEE_INTERVAL,
                 )
-                sc_rows[key].append(row)
+                sc_rows[small_churn_key].append(row)
             ps = _compute_pooled(
-                [r.icmp_during for r in sc_rows[key]],
-                [r.icmp_baseline for r in sc_rows[key]],
+                [r.icmp_during for r in sc_rows[small_churn_key]],
+                [r.icmp_baseline for r in sc_rows[small_churn_key]],
             )
-            sc_stats[key] = ps
-            med_wall = statistics.median(r.wall_ms for r in sc_rows[key])
+            sc_stats[small_churn_key] = ps
+            med_wall = statistics.median(r.wall_ms for r in sc_rows[small_churn_key])
             _print_pooled(f"delta {sz:,}/{churn:,}({lbl})/batch={batch}", _REPS, med_wall, ps)
 
     # ------------------------------------------------------------------ #
@@ -1350,18 +1367,18 @@ def test_pfctl_knee_sweep(
     for sz, churn in _KNEE_CELLS:
         print(f"  --- size={sz:,} churn={churn:,} ---")
         for batch in _KNEE_BATCHES:
-            key = (sz, churn, batch)
-            ps = knee_stats[key]
-            med_wall = statistics.median(r.wall_ms for r in knee_rows[key])
+            knee_key = (sz, churn, batch)
+            ps = knee_stats[knee_key]
+            med_wall = statistics.median(r.wall_ms for r in knee_rows[knee_key])
             print(_row_str("delta", sz, churn, batch, ps, med_wall))
 
     print("\n-- C: small-churn reference --")
     for sz, lbl, churn in _SMALL_CHURN_CELLS:
         print(f"  --- size={sz:,} churn={churn:,} ({lbl}) ---")
         for batch in _SC_BATCHES:
-            key = (sz, lbl, churn, batch)
-            ps = sc_stats[key]
-            med_wall = statistics.median(r.wall_ms for r in sc_rows[key])
+            small_churn_key = (sz, lbl, churn, batch)
+            ps = sc_stats[small_churn_key]
+            med_wall = statistics.median(r.wall_ms for r in sc_rows[small_churn_key])
             print(_row_str("delta", sz, churn, batch, ps, med_wall))
 
     print(
@@ -1714,8 +1731,8 @@ def test_pfctl_reject_loop(
             op = bench_args[0]
             sz = int(bench_args[1])
             churn = int(bench_args[2]) if len(bench_args) > 2 else 0
-            batch = bench_args[3] if len(bench_args) > 3 else "-"
-            print(_rst_row(rule_type, op, sz, churn, batch, ps, med_wall))
+            batch_label = bench_args[3] if len(bench_args) > 3 else "-"
+            print(_rst_row(rule_type, op, sz, churn, batch_label, ps, med_wall))
 
     if replace_stats_rst:
         print("\n-- A: replace baselines (floating) --")
