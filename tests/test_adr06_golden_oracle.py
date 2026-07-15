@@ -42,8 +42,9 @@ Phase 1 (``RESULTS/01_Results.txt``), with PHP-symbol anchors in the docstrings:
     separate, still-live PHP path this oracle's fixtures don't currently
     exercise, so it isn't modelled here);
   * domain validation + lower-casing (``pfb_filter()``'s ``PFB_FILTER_DOMAIN`` case);
-  * data/zone classification via the public-suffix TLD master (``tld_analysis()``
-    / ``tld_search()``), incl. TLD blacklist (whole-TLD zone) and TLD exclusion
+  * data/zone classification via the public-suffix TLD master (the manifest/Python
+    classifier; historically ``tld_analysis()`` / ``tld_search()``), incl. TLD
+    blacklist (whole-TLD zone) and TLD exclusion
     (force exact data);
   * user-whitelist normalisation (``pfb_unbound_python_whitelist()``:
     www-strip, leading-dot -> wildcard) feeding the query-time ``whiteDB``; and
@@ -133,9 +134,9 @@ class ReferencePipeline:
 
         self._feed_group_db: dict[str, int] = {}
         self._next_index = 0
-        # Public-suffix oracle: tlds[tld][full-suffix] = '' (mirrors PHP's
-        # tld_analysis() master-list load loop), minus any TLD that is
-        # blacklisted or excluded.
+        # Public-suffix oracle: tlds[tld][full-suffix] = '', matching the live
+        # manifest/Python classifier's lookup shape, minus any TLD that is
+        # blacklisted or excluded. The retired PHP path used the same shape.
         self._tlds: dict[str, dict[str, str]] = defaultdict(dict)
 
     # -- parse layer -------------------------------------------------------- #
@@ -218,9 +219,10 @@ class ReferencePipeline:
     def _load_tld_master(self) -> None:
         """Load the public-suffix master, minus blacklisted/single-label-excluded TLDs.
 
-        Mirrors PHP's tld_analysis() master-list load loop, which builds
-        tlds[tld][full-suffix]; the TLD blacklist removes entries from it. A
-        single-label TLD exclusion does too (tld_analysis()'s unset($tlds[$exclude])),
+        Models the retired PHP ``tld_analysis()`` master-list algorithm, whose
+        contract the live manifest/Python classifier preserves: it builds
+        tlds[tld][full-suffix], and the TLD blacklist removes entries from it. A
+        single-label TLD exclusion does too (the old unset($tlds[$exclude])),
         but a multi-label exclusion (e.g. "excluded.com") never matches a tld key here
         -- it stays loaded and is instead force-classified to exact DATA later, in
         _classify().
@@ -247,8 +249,9 @@ class ReferencePipeline:
     def _classify(self, domain: str) -> tuple[str, str]:
         """Return ('zone', registrable-parent) or ('data', domain).
 
-        Mirrors PHP's tld_analysis() zone/data split: registrable-parent -> wildcard ZONE;
-        deeper sub-domain -> exact DATA; TLD-exclusion -> force exact DATA.
+        Mirrors the live manifest/Python zone/data split: registrable-parent ->
+        wildcard ZONE; deeper sub-domain -> exact DATA; TLD-exclusion -> force
+        exact DATA. The retired PHP ``tld_analysis()`` used the same contract.
         """
         dparts = domain.split(".")
         dcnt = len(dparts)
@@ -314,8 +317,8 @@ class ReferencePipeline:
 
     def _emit_tld_blacklist_zones(self) -> None:
         """Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone
-        entry, matching the row shape PHP's tld_analysis() writes for the same
-        case (``,<tld>,,1,DNSBL_TLD,DNSBL_TLD``)."""
+        entry, matching the row shape emitted by the manifest/Python build for
+        the same case (``,<tld>,,1,DNSBL_TLD,DNSBL_TLD``)."""
         for tld in self.config.get("tld_wildcard_blacklist", []):
             tld = tld.strip(".")
             if not tld:

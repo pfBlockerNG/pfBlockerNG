@@ -1094,7 +1094,7 @@ def test_widget_dnsbl_stat_renders_year_bearing_iso_timestamp(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
     """The dashboard widget's per-group DNSBL 'last updated' stat renders a YEAR-bearing
-    ISO timestamp (ADR-60 P10 -- dnsbl_alias_update() now stores 'Y-m-d H:i:s', not the
+    ISO timestamp (ADR-60 P10 -- dnsbl_stats_update() stores 'Y-m-d H:i:s', not the
     old year-less 'M j H:i:s' that pfb_iso_timestamp() had to guess a year for).
 
     Seeds the SQLite 'dnsbl' row directly (the widget's own read path, ``SELECT * FROM
