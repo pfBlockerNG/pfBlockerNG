@@ -104,12 +104,22 @@ final class DnsblPlaintextSummaryRetirementTest extends TestCase
 		$groupLoop = strpos($this->source, '// Reset variables once per alias');
 		$this->assertNotFalse($groupLoop);
 		$aliasAssignment = strpos($this->source, '$alias = "DNSBL_{$list[\'aliasname\']}";', $groupLoop);
+		$aliasValidation = strpos(
+			$this->source,
+			"if (empty(pfb_filter(\$alias, PFB_FILTER_WORD, 'DNSBL - Processes')))",
+			$groupLoop
+		);
+		$invalidAliasSkip = strpos($this->source, 'continue;', $aliasValidation === false ? $groupLoop : $aliasValidation);
 		$activeBranch = strpos($this->source, "if (\$list['action'] != 'Disabled' && isset(\$list['row']))", $groupLoop);
 		$disabledStats = strpos($this->source, "dnsbl_stats_update('disabled', \$alias, '');", $groupLoop);
 		$this->assertNotFalse($aliasAssignment);
+		$this->assertNotFalse($aliasValidation);
+		$this->assertNotFalse($invalidAliasSkip);
 		$this->assertNotFalse($activeBranch);
 		$this->assertNotFalse($disabledStats);
-		$this->assertLessThan($activeBranch, $aliasAssignment, 'alias must exist before the active/disabled branch');
+		$this->assertLessThan($aliasValidation, $aliasAssignment, 'alias must exist before validation');
+		$this->assertLessThan($invalidAliasSkip, $aliasValidation, 'validation must precede its invalid-alias skip');
+		$this->assertLessThan($activeBranch, $invalidAliasSkip, 'validation and invalid-alias skip must precede the branch');
 		$this->assertLessThan($disabledStats, $activeBranch, 'disabled stats must consume the validated alias');
 	}
 
