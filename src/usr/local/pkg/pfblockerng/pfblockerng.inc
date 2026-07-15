@@ -1885,7 +1885,7 @@ function pfb_unbound_py_normalize_absolute_path(string $path) {
 
 // ADR-65/#1357: resolve only manifest-authoritative raw refs under the manifest's
 // directory. Missing confined refs stay in the set so the reload fingerprint fails loud.
-function pfb_unbound_py_manifest_raw_paths(string $manifest_path): array {
+function pfb_unbound_py_manifest_raw_paths(string $manifest_path, bool $deduplicate=TRUE): array {
 	$json = @file_get_contents($manifest_path);
 	if ($json === FALSE) {
 		return array();
@@ -1910,6 +1910,9 @@ function pfb_unbound_py_manifest_raw_paths(string $manifest_path): array {
 		if (!is_array($feed) || !isset($feed['raw']) || !is_string($feed['raw']) || $feed['raw'] === '') {
 			continue;
 		}
+		if (str_contains($feed['raw'], "\0")) {
+			continue;
+		}
 		$path = $feed['raw'][0] === '/' ? $feed['raw'] : "{$base_normalized}/{$feed['raw']}";
 		$normalized = pfb_unbound_py_normalize_absolute_path($path);
 		if ($normalized === FALSE) {
@@ -1924,7 +1927,9 @@ function pfb_unbound_py_manifest_raw_paths(string $manifest_path): array {
 		$paths[] = $normalized;
 	}
 
-	$paths = array_values(array_unique($paths));
+	if ($deduplicate) {
+		$paths = array_values(array_unique($paths));
+	}
 	sort($paths, SORT_STRING);
 	return $paths;
 }
@@ -7784,7 +7789,8 @@ function pfb_unbound_py_atomic_write($path, $content, array $stream_ops=array())
 	@chown($tmp, 'unbound');
 	@chgrp($tmp, 'unbound');
 
-	if (!@rename($tmp, $path)) {
+	$rename_fn = $stream_ops['rename'] ?? static fn($from, $to) => @rename($from, $to);
+	if (!$rename_fn($tmp, $path)) {
 		@unlink($tmp);
 		pfb_logger("\nADR-10: failed to publish [ {$path} ]", 2);
 		return FALSE;
@@ -7871,7 +7877,7 @@ function pfb_unbound_py_gc(bool $converged): bool {
 		if (!is_array($manifest) || !isset($manifest['feeds']) || !is_array($manifest['feeds'])) {
 			return FALSE;
 		}
-		$raw_paths = pfb_unbound_py_manifest_raw_paths($pfb['unbound_py_sources']);
+		$raw_paths = pfb_unbound_py_manifest_raw_paths($pfb['unbound_py_sources'], FALSE);
 		if (count($raw_paths) !== count($manifest['feeds'])) {
 			return FALSE;
 		}
@@ -8290,7 +8296,7 @@ function pfb_unbound_py_generation_matches(string $dir, array $metadata): bool {
 	return TRUE;
 }
 
-function pfb_unbound_python_sources($feeds) {
+function pfb_unbound_python_sources($feeds, array $publication_ops=array()) {
 	$lock = pfb_unbound_py_publication_lock();
 	if ($lock === FALSE) {
 		$manifest_path = $GLOBALS['pfb']['unbound_py_sources'] ?? 'unknown path';
@@ -8300,13 +8306,13 @@ function pfb_unbound_python_sources($feeds) {
 		return FALSE;
 	}
 	try {
-		return pfb_unbound_python_sources_locked($feeds);
+		return pfb_unbound_python_sources_locked($feeds, $publication_ops);
 	} finally {
 		pfb_unbound_py_publication_unlock($lock);
 	}
 }
 
-function pfb_unbound_python_sources_locked($feeds) {
+function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array()) {
 	global $pfb;
 
 	if (!is_array($feeds)) {
@@ -8317,7 +8323,8 @@ function pfb_unbound_python_sources_locked($feeds) {
 	$raw_base = basename($pfb['unbound_py_rawdir']);
 	$stage_digest = hash('xxh128', uniqid('', TRUE) . ':' . getmypid());
 	$stage_dir = "{$raw_parent}/{$raw_base}.stage.{$stage_digest}";
-	if (!@mkdir($stage_dir, 0755)) {
+	$stage_mkdir = $publication_ops['stage_mkdir'] ?? static fn($dir, $mode) => @mkdir($dir, $mode);
+	if (!$stage_mkdir($stage_dir, 0755)) {
 		pfb_logger("\nDNSBL raw generation staging failed", 2);
 		return FALSE;
 	}
@@ -8428,6 +8435,7 @@ function pfb_unbound_python_sources_locked($feeds) {
 	$generation_digest = hash_final($generation_hash);
 	$generation_base = "{$raw_base}.{$generation_digest}";
 	$generation_dir = "{$raw_parent}/{$generation_base}";
+	$generation_created = FALSE;
 	if (file_exists($generation_dir) || is_link($generation_dir)) {
 		if (!pfb_unbound_py_generation_matches($generation_dir, $raw_metadata)) {
 			return $abort_generation('generation collision');
@@ -8436,9 +8444,23 @@ function pfb_unbound_python_sources_locked($feeds) {
 		if (file_exists($stage_dir)) {
 			return $abort_generation('duplicate stage cleanup');
 		}
-	} elseif (!@rename($stage_dir, $generation_dir)) {
-		return $abort_generation('generation publish');
+	} else {
+		$generation_rename = $publication_ops['generation_rename']
+			?? static fn($from, $to) => @rename($from, $to);
+		if (!$generation_rename($stage_dir, $generation_dir)) {
+			return $abort_generation('generation publish');
+		}
+		$generation_created = TRUE;
 	}
+	$discard_unpublished_generation = static function () use (&$generation_created, $generation_dir): void {
+		if (!$generation_created) {
+			return;
+		}
+		if (!pfb_unbound_py_remove_raw_artifact($generation_dir)) {
+			pfb_logger("\nDNSBL unpublished raw generation cleanup failed", 2);
+		}
+		$generation_created = FALSE;
+	};
 	foreach ($manifest_feeds as &$manifest_feed) {
 		$manifest_feed['raw'] = "{$generation_base}/{$manifest_feed['raw']}";
 	}
@@ -8501,7 +8523,10 @@ function pfb_unbound_python_sources_locked($feeds) {
 		// sentinel flip that ACTS on it is driven by pfb_reload_unbound's data
 		// fast path (so a full feed update advances the generation exactly once,
 		// after every manifest+raw file is in place), not here.
-		if (!pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json)) {
+		$manifest_atomic_ops = isset($publication_ops['manifest_atomic'])
+			&& is_array($publication_ops['manifest_atomic']) ? $publication_ops['manifest_atomic'] : array();
+		if (!pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json, $manifest_atomic_ops)) {
+			$discard_unpublished_generation();
 			// ADR-65: a swallowed publish failure left Python running on a stale/absent
 			// manifest with no operator-visible signal -- surface it like the existing
 			// MaxMind/VIP credential notices (issue #331 pattern).
@@ -8510,6 +8535,7 @@ function pfb_unbound_python_sources_locked($feeds) {
 			file_notice('pfBlockerNG DNSBL', $manifest_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
 		}
 	} else {
+		$discard_unpublished_generation();
 		pfb_logger("\nDNSBL manifest JSON encoding failed: " . json_last_error_msg(), 2);
 	}
 

@@ -18,6 +18,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_loaded_fingerprint')]
 #[CoversFunction('pfb_dnsbl_loaded_input_paths')]
 #[CoversFunction('pfb_dnsbl_reload_fingerprint')]
+#[CoversFunction('pfb_unbound_py_manifest_raw_paths')]
 final class DnsblLoadedFingerprintTest extends TestCase
 {
 	private string $tmpDir;
@@ -290,6 +291,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 				['raw' => 'raw/missing.raw'],
 				['raw' => '../' . basename($outside)],
 				['raw' => 'raw/link.raw'],
+				['raw' => "raw/\0hostile.raw"],
 				['raw' => ['/wrong/type']],
 				['feed' => 'missing-key'],
 			],

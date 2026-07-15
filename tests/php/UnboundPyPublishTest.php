@@ -23,15 +23,15 @@ final class UnboundPyPublishTest extends TestCase
 {
 	private string $tmp;
 	private array $originalPfb = [];
-	private bool $hadPfb = false;
+	private bool $hadPfb = FALSE;
 
 	protected function setUp(): void
 	{
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
 
-		$this->tmp = sys_get_temp_dir() . '/pfb_publish_' . uniqid('', true);
-		mkdir($this->tmp, 0777, true);
+		$this->tmp = sys_get_temp_dir() . '/pfb_publish_' . uniqid('', TRUE);
+		mkdir($this->tmp, 0777, TRUE);
 
 		// dnsbldir is the chroot root; the sentinel lives at "{dnsbldir}/pfb_py_reload".
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
@@ -134,10 +134,12 @@ final class UnboundPyPublishTest extends TestCase
 		$short = static fn($stream, string $bytes): int => strlen($bytes) - 1;
 		$yes = static fn($stream): bool => TRUE;
 		$no = static fn($stream): bool => FALSE;
+		$renameNo = static fn(string $from, string $to): bool => FALSE;
 		$failures = [
 			'short write' => ['write' => $short, 'flush' => $yes, 'fsync' => $yes],
 			'flush' => ['write' => $full, 'flush' => $no, 'fsync' => $yes],
 			'fsync' => ['write' => $full, 'flush' => $yes, 'fsync' => $no],
+			'rename' => ['rename' => $renameNo],
 		];
 
 		foreach ($failures as $label => $ops) {
