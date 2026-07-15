@@ -71,6 +71,32 @@ EOF
     printf '%s' "$2" > "${GH_MOCK_DIR}/$1.filtered.json"
     printf '%s' "$2" > "${GH_MOCK_DIR}/$1.unfiltered.json"
   }
+  commit_index_paths() { # $1 message, $2 mode, remaining args are paths
+    message="$1"
+    mode="$2"
+    shift 2
+    blob="$(printf '%s\n' "$message" | git -C "$repo" hash-object -w --stdin)"
+    for path do
+      printf '%s %s\t%s\0' "$mode" "$blob" "$path" |
+        git -C "$repo" update-index -z --index-info
+    done
+    git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m "$message"
+    tip="$(git -C "$repo" rev-parse HEAD)"
+  }
+  commit_paths() {
+    message="$1"
+    shift
+    commit_index_paths "$message" 100644 "$@"
+  }
+  commit_executable_paths() {
+    message="$1"
+    shift
+    commit_index_paths "$message" 100755 "$@"
+  }
+  commit_empty() {
+    git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1"
+    tip="$(git -C "$repo" rev-parse HEAD)"
+  }
   run_gate() {
     ( cd "$repo" && PATH="${work}/bin:${PATH}" REPO="own/repo" GH_TOKEN=x \
         sh "${PFB_ROOT}/scripts/release-ci-gate.sh" )
@@ -109,14 +135,114 @@ EOF
     The output should include "CI green on ${tip}"
   End
 
-  It 'walks back to the nearest CI-run ancestor for a docs-only tip'
-    # Preserved behaviour: a tip with genuinely NO matching run (docs-only
-    # commit, CI skipped) defers to the nearest ancestor that ran CI.
-    payload "$tip" '{"check_runs":[]}'
+  It 'walks across every exact CI-ignored path class and an empty commit'
+    commit_paths root-markdown 'README.md'
+    commit_paths nested-markdown 'notes/release/details.md'
+    commit_paths docs-non-markdown 'docs/release-notes.txt'
+    commit_paths ponytail-license '.claude/skills/ponytail/LICENSE'
+    commit_paths ponytail-upstream '.claude/skills/ponytail/UPSTREAM'
+    commit_paths caveman-license '.claude/skills/caveman/LICENSE'
+    commit_paths caveman-upstream '.claude/skills/caveman/UPSTREAM'
+    commit_empty empty
     payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
     When call run_gate
     The status should be success
     The output should include "CI green on ${ancestor}"
+  End
+
+  It 'allows hostile and opaque names when their paths are CI-ignored'
+    tab_name="$(printf 'tab\tname')"
+    non_utf8="$(printf '\377')"
+    long_name="$(awk 'BEGIN { for (i = 0; i < 230; i++) printf "n" }')"
+    commit_paths hostile-docs \
+      'docs/space name' \
+      'docs/two  spaces' \
+      "docs/${tab_name}" \
+      'docs/quote"name' \
+      'docs/glob[*?]name' \
+      'docs/pünicode' \
+      "docs/${long_name}" \
+      "docs/non-utf8-${non_utf8}" \
+      'root hostile [*?] name.md'
+    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
+    When call run_gate
+    The status should be success
+    The output should include "CI green on ${ancestor}"
+  End
+
+  It 'rejects an unchecked ordinary code commit'
+    commit_paths code 'scripts/changed.sh'
+    code_sha="$tip"
+    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
+    When call run_gate
+    The status should be failure
+    The output should include "Skipped commit ${code_sha}"
+    The output should include 'changes CI-relevant paths'
+    The output should not include "CI green on ${ancestor}"
+  End
+
+  It 'rejects unchecked executable hooks under vendored plugin trees'
+    commit_executable_paths hooks \
+      '.claude/skills/ponytail/hooks/release.js' \
+      '.claude/skills/caveman/src/hooks/release.js'
+    hook_sha="$tip"
+    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
+    When call run_gate
+    The status should be failure
+    The output should include "Skipped commit ${hook_sha}"
+    The output should include 'changes CI-relevant paths'
+  End
+
+  It 'rejects a near miss of an exact ignored plugin path'
+    commit_paths near-miss '.claude/skills/ponytail/LICENSE.extra'
+    near_miss_sha="$tip"
+    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
+    When call run_gate
+    The status should be failure
+    The output should include "Skipped commit ${near_miss_sha}"
+    The output should include 'changes CI-relevant paths'
+  End
+
+  It 'rejects hostile and opaque names when their paths are CI-relevant'
+    tab_name="$(printf 'tab\tname')"
+    non_utf8="$(printf '\377')"
+    long_name="$(awk 'BEGIN { for (i = 0; i < 230; i++) printf "n" }')"
+    commit_paths hostile-code \
+      'scripts/space name' \
+      'scripts/two  spaces' \
+      "scripts/${tab_name}" \
+      'scripts/quote"name' \
+      'scripts/glob[*?]name' \
+      'scripts/pünicode' \
+      "scripts/${long_name}" \
+      "scripts/non-utf8-${non_utf8}"
+    code_sha="$tip"
+    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
+    When call run_gate
+    The status should be failure
+    The output should include "Skipped commit ${code_sha}"
+    The output should include 'changes CI-relevant paths'
+  End
+
+  It 'classifies every skipped commit before accepting a green ancestor'
+    commit_paths unchecked-code 'scripts/changed.sh'
+    code_sha="$tip"
+    commit_paths docs-after-code 'docs/release-notes.txt'
+    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
+    When call run_gate
+    The status should be failure
+    The output should include "Skipped commit ${code_sha}"
+    The output should not include "CI green on ${ancestor}"
+  End
+
+  It 'fails closed when Git cannot classify a skipped commit'
+    parent_dir="$(printf '%.2s' "$ancestor")"
+    parent_file="$(printf '%s' "$ancestor" | cut -c3-)"
+    rm "${repo}/.git/objects/${parent_dir}/${parent_file}"
+    When call run_gate
+    The status should be failure
+    The output should include "Could not classify skipped commit ${tip}"
+    The output should not include 'CI green on'
   End
 
   It 'fails when a concluded run is not success'
