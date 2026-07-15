@@ -8214,7 +8214,7 @@ function pfb_unbound_python_sources($feeds) {
 		'feeds'		=> $manifest_feeds
 	);
 
-	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 	if ($json !== FALSE) {
 		// ADR-10: atomic publish (stage -> fsync -> rename). The per-feed raw
 		// files were already (re)written into unbound_py_rawdir above; the manifest
@@ -8230,6 +8230,8 @@ function pfb_unbound_python_sources($feeds) {
 			pfb_logger("\n{$manifest_notice}", 2);
 			file_notice('pfBlockerNG DNSBL', $manifest_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
 		}
+	} else {
+		pfb_logger("\nDNSBL manifest JSON encoding failed: " . json_last_error_msg(), 2);
 	}
 
 	return $manifest;
@@ -8261,12 +8263,13 @@ function pfb_unbound_python_sources_patch($key, $values) {
 	}
 	$manifest['config'][$key] = $values;
 
-	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 	if ($json !== FALSE) {
 		// ADR-10: atomic publish (the sentinel flip is driven by the reload).
 		return pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json);
 	}
 
+	pfb_logger("\nDNSBL manifest JSON encoding failed: " . json_last_error_msg(), 2);
 	return FALSE;
 }
 
