@@ -225,10 +225,8 @@ class TestControlEnableOpensDnsblStatsDb:
         ADR-10 swap, the control-channel enable, the timed re-enable). Two racing to
         recover the SAME corrupt stats DB can both fail ``_validate_db_with_recovery``'s
         first validate, so the loser's ``os.remove()`` hits an already-deleted file. That
-        FileNotFoundError must NOT escape the helper -- from the un-wrapped enable call
-        site it would propagate out of ``pfb_apply_control_command``, kill
-        ``pfb_control_watcher``'s thread, and silently disable the control channel until
-        Unbound restarts (issue #870).
+        FileNotFoundError must NOT escape the helper: the shared handler also runs on the
+        legacy DNS-TXT query path, where no watcher boundary contains it (issue #870).
 
         Issue #900: ``pfb_db_validate`` -> ``_db_run`` swallows every fault internally and
         never raises in production, so (unlike the test this replaces) it is NOT
@@ -543,10 +541,8 @@ class TestSharedHandlerBypass:
         assert P.gpListDB.get("192.0.2.10") == 0
 
     def test_malformed_bypass_rejected_without_raising(self) -> None:
-        # PFBL-03: a malformed bypass command must be REJECTED (returned), never RAISED --
-        # a missing IP (IndexError) or a non-IP (ValueError) would otherwise crash the
-        # control watcher thread. Both classes return (False, <message>) and leave the
-        # bypass DB untouched.
+        # PFBL-03: malformed bypass commands return stable rejections and never raise into
+        # the shared handler's unwrapped legacy DNS-TXT caller. Both classes leave the bypass DB untouched.
         # Given: the would-be IP is NOT in the bypass DB (BEFORE).
         assert P.gpListDB.get("not-an-ip") is None
 
@@ -832,6 +828,41 @@ def control_harness(tmp_path: Any, monkeypatch: Any) -> Any:
 
 
 class TestControlWatcherLoop:
+    def test_handler_exception_is_consumed_and_later_record_applies(
+        self, control_harness: _ControlHarness, monkeypatch: Any
+    ) -> None:
+        h = control_harness
+        original_handler = P.pfb_apply_control_command
+        first_call = threading.Event()
+        later_call = threading.Event()
+        handler_calls: list[str] = []
+
+        def apply_command(command: list[str]) -> tuple[bool, str]:
+            handler_calls.append(command[1])
+            if len(handler_calls) == 1:
+                first_call.set()
+                raise RuntimeError("control handler failed")
+            result = original_handler(command)
+            later_call.set()
+            return result
+
+        monkeypatch.setattr(P, "pfb_apply_control_command", apply_command)
+        P.pfb["python_blacklist"] = False
+        h.start()
+        assert h.wait_started()
+        assert P.pfb["python_blacklist"] is False
+
+        h.publish({"seq": 1, "cmd": "disable"})
+        assert first_call.wait(3.0), f"handler calls: {handler_calls!r}"
+        assert h.wait_applied(1), f"applied marker: {h.read_applied()!r}"
+        assert h.thread.is_alive(), "control watcher exited after handler exception"
+
+        h.publish({"seq": 2, "cmd": "enable"})
+        assert later_call.wait(3.0), f"handler calls: {handler_calls!r}"
+        assert h.wait_applied(2), f"applied marker: {h.read_applied()!r}"
+        assert handler_calls == ["disable", "enable"]
+        assert P.pfb["python_blacklist"] is True
+
     def test_fresh_command_is_applied(self, control_harness: _ControlHarness) -> None:
         # Scenario: a root-issued command arriving on the channel performs the action.
         h = control_harness
