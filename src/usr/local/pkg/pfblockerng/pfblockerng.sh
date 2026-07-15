@@ -1098,11 +1098,13 @@ pfb_recompute_clean_new() {
 		rm -f "${pfbdeny}${rec_alias}.txt.new"
 	done < "${rec_priority}"
 	rm -f "${rec_masterfile_new}" "${rec_mastercat_new}" "${rec_countsfile_new}"
+	pfb_recompute_clean_rep_new
 }
 
 # Same cleanup for the per-alias reputation artifacts' .new siblings (dMax emits
 # them into matchgendir); the consolidated exempt file's .new stays caller-owned.
 pfb_recompute_clean_rep_new() {
+	[ -n "${pfbmatchgen:-}" ] || return 0
 	while IFS=' ' read -r rec_alias _; do
 		rm -f "${pfbmatchgen}pfB_Match_Rep_${rec_alias}.txt.new"
 	done < "${rec_priority}"
@@ -1354,9 +1356,6 @@ pfb_recompute_rep_subset() {
 		log="recompute [ ${rec_family} ]: reinject pass failed; aborting pass, cleaning up partial artifacts"
 		echo "${log}" | tee -a "${errorlog}"
 		pfb_recompute_clean_new
-		if [ "${rec_repmode}" = 'dmax' ]; then
-			pfb_recompute_clean_rep_new
-		fi
 		return 1
 	fi
 
@@ -1374,9 +1373,6 @@ pfb_recompute_rep_subset() {
 			log="recompute [ ${rec_family} ]: emit pass failed for [ ${rec_alias} ]; aborting pass, cleaning up partial artifacts"
 			echo "${log}" | tee -a "${errorlog}"
 			pfb_recompute_clean_new
-			if [ "${rec_repmode}" = 'dmax' ]; then
-				pfb_recompute_clean_rep_new
-			fi
 			return 1
 		fi
 	done < "${rec_priority}"

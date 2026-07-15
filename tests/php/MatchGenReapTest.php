@@ -23,6 +23,7 @@ use PHPUnit\Framework\TestCase;
  *   H5 no cross-directory reach (a matchdir user file is untouched); H6 a stray artifact with
  *   no owning alias is reaped; H7 both v4 and v6 families are enumerated, not just v4.
  *   R1-R3: the ET/Exempt keep-list is family-complete (v4 AND v6), not v4-only.
+ *   H8 stale .txt.new staging is reaped without touching a configured alias's live artifact.
  */
 #[CoversFunction('pfb_matchgen_reap')]
 final class MatchGenReapTest extends TestCase
@@ -103,6 +104,25 @@ final class MatchGenReapTest extends TestCase
 
 		$this->assertFileDoesNotExist($artifact, 'a removed Deny alias leaves an orphan the sweep must reap');
 		$this->assertContains('pfB_Match_Rep_Spam_v4', $reaped);
+	}
+
+	/**
+	 * H8: a pass aborted after writing a staging sibling can outlive its removed Deny alias.
+	 * The orphan sweep removes that machine-owned staging file while preserving live artifacts.
+	 */
+	public function testReapsStaleNewArtifactWithoutTouchingLiveArtifact(): void
+	{
+		$live = $this->touchGen('pfB_Match_Rep_Live_v4');
+		$staged = "{$this->matchgendir}/pfB_Match_Rep_GONE_v4.txt.new";
+		$this->assertNotFalse(file_put_contents($staged, 'stale'));
+		$this->assertFileExists($staged, 'precondition: the orphan staging artifact exists');
+
+		$reaped = pfb_matchgen_reap(['Live_v4'], FALSE, $this->matchgendir);
+
+		$this->assertFileDoesNotExist($staged, 'a removed alias must not strand its staging artifact');
+		$this->assertFileExists($live, 'the configured alias live artifact must survive');
+		$this->assertContains('pfB_Match_Rep_GONE_v4.txt.new', $reaped);
+		$this->assertNotContains('pfB_Match_Rep_Live_v4', $reaped);
 	}
 
 	/**
