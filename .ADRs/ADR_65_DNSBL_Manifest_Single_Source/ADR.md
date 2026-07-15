@@ -8,9 +8,6 @@
     show exactly what was logged at block time — the render-time "still listed?" refinement
     badges (struck-through Previous Feed / "Not currently listed" / TLD carve-out) are gone,
     and feed/group filtering matches the LOGGED feed, not the current one.
-  - **Follow-up (issue #1349, 2026-07-15):** the unconsumed reports-cache
-    SQLite writer/table and its swap-reset machinery were retired end-to-end.
-    Exact startup/upgrade cleanup remains for the old base/WAL/SHM files.
 - **Date:** 2026-07-13
 - **Branch:** `adr/65-dnsbl-manifest-single-source` (off `devel`; `{slug}` = sanitised ADR-title
   slug per CLAUDE.md "Branch naming")
@@ -143,15 +140,17 @@ b_eval, feed, dup, q_type` (0-based: group at index 6, feed at index 8), compute
 `unified.log` via `pfb_unified_format_dnsbl()` (`pfblockerng_extra.inc:2041`; write site
 `pfblockerng.inc:13867`, group/feed preserved). The alerts/reports **event table is
 log-driven** (`pfblockerng_alerts.php` sources `$pfb['dnslog']`/`$pfb['unilog']`,
-`:4253-4259`). Issue #1349 retired the unconsumed reports-cache writer/table. The widget reads
-durable per-group **counters** (`dnsbl`/`resolver` tables, `pfblockerng.widget.php:382`), never
-the interchange files.
+`:4253-4259`); `dnsblcache` (`type,domain,groupname,final,feed`) is only the re-check's cache
+— Python writes it per block (enqueue `pfb_unbound.py:6750`, INSERT `:2581`) and **wipes it on
+every swap** (`_db_reset_cache`, `:2586`) — and the widget reads durable per-group
+**counters** (`dnsbl`/`resolver` tables, `pfblockerng.widget.php:382`), never the interchange
+files.
 
 ### 1.5 Side effects a real query has (the ones a check must NOT have)
 
 A served DNS query enqueues, on the block path: `("resolver",)` — totalqueries count
 (`:2780`); `("dnsbl", group)` — per-group counter (`:2794`); the `dnsbl.log` line (`:2845`);
-and it writes the LRU memo `decisionDB[name] = dec` (`:5730`,
+the `dnsblcache` row (`:6750`); and it writes the LRU memo `decisionDB[name] = dec` (`:5730`,
 in `_decision_for` `:5718`). All of these except the LRU write live in the **log/emit path**
 (`get_details_dnsbl` and its callers), not in the pure decision
 (`evaluate_domain`/`_scan_block_band`).
@@ -201,7 +200,7 @@ single question and receive the answer it would have logged:
 | **Request** | `{"id": <str>, "domain": <str>, "qtype": <str>}` — `id` is a caller-chosen correlation token (not seq-gated: a query is stateless, has no replay concern, unlike the mutating channel). |
 | **Reply** | `{"id": <str>, "blocked": <bool>, "b_type","group","b_eval","feed","p_type"}` — the **exact fields `dnsbl.log` carries** (§1.4), so a consumer gets byte-identical attribution to a real block. `blocked=false` → the other fields are empty. |
 | **Engine** | Runs the **pure decision** `evaluate_domain`/`_scan_block_band` against the live `dataDB`/`zoneDB`/`regexDB`/`whiteDB`/`hstsDB` — the SAME code `operate()` uses, so the answer reflects the full matcher (regex/ABP, allow, whitelist precedence, TOP1M, `$important`, HSTS, homoglyph), never a grep approximation. |
-| **Side effects** | **NONE that a real query has, except the LRU.** No `("resolver")`/`("dnsbl")` counter enqueue and no `dnsbl.log` line. Writing the LRU `decisionDB` memo is **allowed** (it warms the cache and is decision-neutral). Pinned by a test that asserts every counter/log sink is untouched across a query while `decisionDB` may change. |
+| **Side effects** | **NONE that a real query has, except the LRU.** No `("resolver")`/`("dnsbl")` counter enqueue, no `dnsbl.log` line, no `dnsblcache` row. Writing the LRU `decisionDB` memo is **allowed** (it warms the cache and is decision-neutral). Pinned by a test that asserts every counter/log/cache is untouched across a query while `decisionDB` may change. |
 | **Always-on** | The query watcher runs unconditionally (read-only ⇒ safe), independent of the legacy-control toggle. Started alongside the existing watchers in init. |
 | **Transport** | File request + reply file keyed by `id`, reusing the control channel's kqueue-watch + atomic-write pattern (lazy: mirrors existing code). **Concurrency (corrected post-review, PR #1351):** the caller `pfb_log_event` runs in TWO independent webserver-hit daemons (`pfb_daemon_dnsbl` HTTPS + `pfb_daemon_dnsbl_index` HTTP), which CAN race on the single shared request/reply slot — the earlier "one-event-at-a-time" premise was inaccurate. The race is **safe, not correct**: `id`-correlation means a losing caller sees a mismatched reply, keeps polling, and returns `NULL` → `Unknown` (the documented D4 fallback) after ≤5 s — never a wrong verdict, only added latency and a rare Unknown-under-contention misattribution of the hit's group. A Unix-domain socket or per-`id` filenames is the documented upgrade path if that contention ever matters (tracked: issue #1352). |
 | **Privilege** | Owner root, group `unbound`, mode **0660** on the request file (the attributing daemon must write it; it is read-only in effect — it mutates no state), reply file 0640. Read-only ⇒ no authorization beyond "local" is required; a hostile local writer can at worst warm the LRU. Stated as a security decision, not an accident. |
@@ -253,7 +252,7 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
    `blocked` + `{b_type,group,b_eval,feed,p_type}` equal what `operate()` would log for the same
    name against the same DBs.
 3. **The query channel has no query side effects except the LRU.** No `resolver`/`dnsbl` counter
-   bump and no `dnsbl.log` line across a query; `decisionDB` may change.
+   bump, no `dnsbl.log` line, no `dnsblcache` row across a query; `decisionDB` may change.
 4. **HSTS still loads** regardless of the manifest (it is not in the manifest build —
    `_load_hsts_db` `:1023`, unconditional of `dnsbl_built` inside
    `_load_whitelist_and_hsts_dbs` `:1058`).
@@ -269,7 +268,8 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
 - The **IP** side (`convert_ip_log` grep) — a grep is accurate for IP membership; unchanged.
 - `pfb_dnsbl_parse` / the DNSBL grep helpers stay **defined** (gated off for alerts, reused by the
   daemon path until Phase 4, and reachable on `main`/non-python) — removal is a later cleanup.
-- The per-block reports-cache writer/table was initially deferred, then removed by issue #1349.
+- `dnsblcache`'s per-block Python write (`:6750`) — its grep-cache role ends, but removing the
+  table is a follow-up (a tracking issue), not this ADR; the query channel makes it vestigial.
 - `main`-branch (native-mode) behaviour — this ADR targets `devel` (python-mode). Any `main`
   backport is separate.
 
@@ -352,7 +352,7 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
 - `pfb_py_query`/`pfb_py_query.reply` watcher (mirror `pfb_control_watcher` `:799`), a
   `dnsbl_query_answer(domain, qtype)` that calls the pure decision and returns the reply dict, and
   the always-on start in init.
-- **Side-effect-free**: no counter enqueue and no `dnsbl.log`; `decisionDB` may write.
+- **Side-effect-free**: no counter enqueue, no `dnsbl.log`, no `dnsblcache`; `decisionDB` may write.
   Pinned by a test asserting each side-effect sink is untouched across a query.
 - Hostile-input rows (the request JSON parser): empty/missing `domain`, punycode/IDN + non-ASCII,
   oversized domain, malformed JSON, non-string fields, missing `id`, `qtype` unknown, a `domain`
@@ -427,7 +427,7 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
 - Rewrite `docs/misc/alerts-reports-pipeline.md` to the one-phase log-driven model; update
   architecture-notes; **amend ADR-06 §8** (manifest = single source, interchange files
   retired, fail-loud); stage the D2 release note; draft #1244/#1245 closure comments (closed
-  at PR merge) and file the retirement-inventory tracking issue (the reports cache, the
+  at PR merge) and file the retirement-inventory tracking issue (`dnsblcache`, the
   `pfb_dnsbl_parse`/prefetch grep helpers, the Python close-only wrappers + path defs). (The
   originally planned "vestigial `pfb_tld`" issue is moot: #1255 made the toggle gate the
   manifest path.)
@@ -461,7 +461,7 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
   Their green proof rides the CE+Plus live-VM acceptance fan-out (below), same as every other
   §7 row — no separate maintainer action is required.
 - **Reject criteria:** the query channel is measurably NOT decision-equal to `operate()` on the
-  corpus; or a query mutates any counter/log; or removing the fallback changes any net
+  corpus; or a query mutates any counter/log/`dnsblcache`; or removing the fallback changes any net
   decision on the oracle; or the webserver-hit latency of the query round-trip is unacceptable on a
   smallest-box profile with no viable `Unknown`-fallback mitigation.
 
@@ -500,3 +500,24 @@ the same fallback. No failure returns another caller's attribution.
 The hit rate is low enough that the lock-serialized file channel remains the chosen
 transport. A Unix-domain socket remains a future option only if measured latency or
 throughput later requires it.
+
+---
+
+## 10. Post-implementation addendum (2026-07-15 — issue #1349)
+
+Issue #1349 completed two retirements that ADR-65 intentionally left for follow-up.
+First, it removed the unconsumed `pfb_py_cache.sqlite` reports writer/table and its
+swap-reset machinery while retaining exact startup/upgrade cleanup of the legacy
+base/WAL/SHM files. All accepted-body references to `dnsblcache` describe the state
+at implementation and no longer impose an active write, reset, side-effect, test, or
+inventory requirement.
+
+Second, it removed the residual PHP `tld_analysis()` entry point and
+`{dbdir}/dnsblalias/*` plaintext summaries after inventory proved they had no
+production reader or firewall-table consumer. DNSBL groups are not firewall aliases;
+the separate `DNSBLIP_v4` path continues to own DNSBL-derived firewall membership.
+PHP now passes already-computed per-group counts to
+`pfb_dnsbl_tld_stats_finalize()`, preserving blacklist normalization, timestamps,
+entries, counters, stale-row handling, changed-group hooks, and reload timing without
+feed or manifest I/O. Install/upgrade and full-clear retain one-way cleanup of the
+legacy summary directory.
