@@ -1,0 +1,5 @@
+interface:
+  display_name: "ADR List"
+  short_description: "List ADRs still open for work"
+policy:
+  allow_implicit_invocation: false

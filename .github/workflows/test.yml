@@ -25,15 +25,6 @@ on:
       - '**/*.md'
       - '*.md'
       - 'docs/**'
-      # Vendored plugin trees: only the INERT files skip CI. The vendored
-      # hook scripts (hooks/*.js, src/hooks/*.js) are EXECUTED at runtime by
-      # .claude/hooks/vendored-plugin-hook.sh and integration-tested by
-      # pytest, so a refresh touching them must run the suite (the top
-      # '**/*.md' pattern already covers the vendored markdown).
-      - '.claude/skills/ponytail/LICENSE'
-      - '.claude/skills/ponytail/UPSTREAM'
-      - '.claude/skills/caveman/LICENSE'
-      - '.claude/skills/caveman/UPSTREAM'
   pull_request:
     # labeled/unlabeled so adding or removing a gate label re-evaluates the
     # label-gated jobs — TWO depend on these types: `ui-tests` (the UI suite gate)
@@ -47,15 +38,6 @@ on:
       - '**/*.md'
       - '*.md'
       - 'docs/**'
-      # Vendored plugin trees: only the INERT files skip CI. The vendored
-      # hook scripts (hooks/*.js, src/hooks/*.js) are EXECUTED at runtime by
-      # .claude/hooks/vendored-plugin-hook.sh and integration-tested by
-      # pytest, so a refresh touching them must run the suite (the top
-      # '**/*.md' pattern already covers the vendored markdown).
-      - '.claude/skills/ponytail/LICENSE'
-      - '.claude/skills/ponytail/UPSTREAM'
-      - '.claude/skills/caveman/LICENSE'
-      - '.claude/skills/caveman/UPSTREAM'
   # Manual trigger to opt INTO the benchmark kill-gates (issue #76). They are OFF in
   # the automated push/PR flow: a synthetic corpus on a generic runner is not the
   # number that matters — the production-faithful build-time/RAM measurement belongs

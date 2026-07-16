@@ -1,0 +1,5 @@
+interface:
+  display_name: "GitHub Issue"
+  short_description: "Triage and optionally fix a GitHub issue"
+policy:
+  allow_implicit_invocation: false

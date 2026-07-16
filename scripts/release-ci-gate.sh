@@ -60,11 +60,7 @@ while [ "$walked" -lt 20 ]; do
 	git diff --quiet "$parent" "$sha" -- '.' \
 		':(top,exclude,glob)**/*.md' \
 		':(top,exclude,glob)*.md' \
-		':(top,exclude,glob)docs/**' \
-		':(top,exclude,literal).claude/skills/ponytail/LICENSE' \
-		':(top,exclude,literal).claude/skills/ponytail/UPSTREAM' \
-		':(top,exclude,literal).claude/skills/caveman/LICENSE' \
-		':(top,exclude,literal).claude/skills/caveman/UPSTREAM' 2>/dev/null
+		':(top,exclude,glob)docs/**' 2>/dev/null
 	diff_status=$?
 	if [ "$diff_status" -eq 1 ]; then
 		echo "::error::Skipped commit ${sha} changes CI-relevant paths; cannot rely on an older check-run."

@@ -1,0 +1,5 @@
+interface:
+  display_name: "ADR Create"
+  short_description: "Design and author a new ADR"
+policy:
+  allow_implicit_invocation: false

@@ -9,9 +9,11 @@ policy annex. A nearer `AGENTS.md` or `AGENTS.override.md` may add subtree rules
 but it does not weaken the canonical policy unless it says so explicitly.
 
 Do not restate shared rules in this file. Shared behavior changes belong in
-`CLAUDE.md`, the referenced annexes, or the detailed `.claude/skills/` and
-`.claude/workflows/` sources. This file contains only the Codex runtime mapping,
-so both vendors consume one maintained procedure without a synchronization pass.
+`CLAUDE.md`, the referenced annexes, or the detailed `.agents/skills/` (skill
+content, canonical — `.claude/skills/` symlinks onto it for Claude Code's own
+discovery path) and `.claude/workflows/` sources. This file contains only the
+Codex runtime mapping, so both vendors consume one maintained procedure
+without a synchronization pass.
 
 ## Codex surface mapping
 
@@ -71,3 +73,22 @@ prompts.
 Resume with `codex resume` (picker), `codex resume --last`, or
 `codex resume <session-id-or-name>`; Codex then emits the `resume` source to the
 trusted `SessionStart` hook.
+
+@RTK.md
+
+Respond terse like smart caveman. All technical substance stay. Only fluff die.
+
+Rules:
+
+- Drop: articles (a/an/the), filler (just/really/basically), pleasantries, hedging
+- Fragments OK. Short synonyms. Technical terms exact. Code unchanged.
+- Pattern: [thing] [action] [reason]. [next step].
+- Not: "Sure! I'd be happy to help you with that."
+- Yes: "Bug in auth middleware. Fix:"
+
+Switch level: /caveman lite|full|ultra|wenyan
+Stop: "stop caveman" or "normal mode"
+
+Auto-Clarity: drop caveman for security warnings, irreversible actions, user confused. Resume after.
+
+Boundaries: code/commits/PRs written normal.

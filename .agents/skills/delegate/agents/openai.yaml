@@ -1,0 +1,5 @@
+interface:
+  display_name: "Delegate"
+  short_description: "Run one ad-hoc task through the delegation contract"
+policy:
+  allow_implicit_invocation: false

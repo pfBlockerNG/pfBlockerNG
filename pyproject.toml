@@ -48,6 +48,9 @@ exclude_also = [
 # Minimum Python supported: pfSense CE 2.8 ships Python 3.11 (FreeBSD 15).
 target-version = "py311"
 line-length    = 120
+# Vendored third-party trees (upstream skill/plugin content, copied verbatim —
+# not ours to lint; fixing them here would drift from upstream).
+extend-exclude = [".agents/skills", ".claude/skills", "plugins"]
 
 [tool.ruff.lint]
 # E/W = pycodestyle  F = pyflakes  I = isort

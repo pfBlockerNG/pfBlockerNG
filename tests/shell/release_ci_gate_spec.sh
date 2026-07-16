@@ -134,10 +134,6 @@ EOF
     commit_paths root-markdown 'README.md'
     commit_paths nested-markdown 'notes/release/details.md'
     commit_paths docs-non-markdown 'docs/release-notes.txt'
-    commit_paths ponytail-license '.claude/skills/ponytail/LICENSE'
-    commit_paths ponytail-upstream '.claude/skills/ponytail/UPSTREAM'
-    commit_paths caveman-license '.claude/skills/caveman/LICENSE'
-    commit_paths caveman-upstream '.claude/skills/caveman/UPSTREAM'
     commit_empty empty
     payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
     When call run_gate
@@ -176,16 +172,6 @@ EOF
     The output should not include "CI green on ${ancestor}"
   End
 
-  It 'rejects a near miss of an exact ignored plugin path'
-    commit_paths near-miss '.claude/skills/ponytail/LICENSE.extra'
-    near_miss_sha="$tip"
-    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","completed_at":"2026-01-01T00:00:00Z","conclusion":"success"}]}'
-    When call run_gate
-    The status should be failure
-    The output should include "Skipped commit ${near_miss_sha}"
-    The output should include 'changes CI-relevant paths'
-  End
-
   Context 'individual CI-relevant deny paths'
     Parameters
       'single space'              100644 'scripts/space name'
@@ -196,8 +182,6 @@ EOF
       'Unicode character'         100644 'scripts/pünicode'
       '230-character name'        100644 "scripts/$(awk 'BEGIN { for (i = 0; i < 230; i++) printf "n" }')"
       'non-UTF-8 FF byte'         100644 "scripts/non-utf8-$(printf '\377')"
-      'ponytail executable hook'  100755 '.claude/skills/ponytail/hooks/release.js'
-      'caveman executable hook'   100755 '.claude/skills/caveman/src/hooks/release.js'
     End
 
     It "rejects an isolated $1 path"

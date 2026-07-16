@@ -95,6 +95,29 @@ Describe 'check-agent-config-parity.sh'
     The stderr should include 'stale Codex adapter has no canonical source: .agents/skills/example/SKILL.md'
   End
 
+  It 'accepts a symlinked skill without a textual back-reference'
+    # The vendor-agnostic layout: .agents/skills/<name> is canonical real
+    # content, .claude/skills/<name> a symlink onto it. Parity is the
+    # filesystem link itself -- no "must reference canonical source" text
+    # required, unlike the dual-real-file adapter model above.
+    mkdir -p "$work/.agents/skills/linked"
+    printf '%s\n' 'canonical linked skill' > "$work/.agents/skills/linked/SKILL.md"
+    ln -s '../../.agents/skills/linked' "$work/.claude/skills/linked"
+    When run sh "$guard" --root "$work"
+    The status should equal 0
+    The output should equal 'agent-config-parity: 2 skills + 1 workflows mapped'
+  End
+
+  It 'rejects a symlinked skill that resolves to the wrong canonical target'
+    mkdir -p "$work/.agents/skills/linked" "$work/.agents/skills/decoy"
+    printf '%s\n' 'canonical linked skill' > "$work/.agents/skills/linked/SKILL.md"
+    printf '%s\n' 'decoy' > "$work/.agents/skills/decoy/SKILL.md"
+    ln -s '../../.agents/skills/decoy' "$work/.claude/skills/linked"
+    When run sh "$guard" --root "$work"
+    The status should equal 1
+    The stderr should include '.claude/skills/linked is a symlink but does not resolve to canonical .agents/skills/linked'
+  End
+
   It 'rejects an adapter name shared by a canonical skill and workflow'
     printf '%s\n' 'canonical workflow' > "$work/.claude/workflows/example.js"
     When run sh "$guard" --root "$work"

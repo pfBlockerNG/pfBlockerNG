@@ -1,0 +1,20 @@
+{
+  "name": "codex-marketplace-pfblockerng-a0f599f7",
+  "interface": {
+    "displayName": "Codex Plugins (pfBlockerNG)"
+  },
+  "plugins": [
+    {
+      "name": "ponytail",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ponytail"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
