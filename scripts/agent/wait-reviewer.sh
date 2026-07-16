@@ -23,7 +23,8 @@
 # Login match is ANCHORED: == handle, == handle[bot], or startswith(handle-).
 # A wall-clock deadline (max-iter x interval + 300 s slack; PFB_WAIT_DEADLINE overrides)
 # bounds the wait even when individual gh calls stall.
-# Exit codes: see agent_env.sh (0 verdict, 2 usage, 3 gh unavailable -> MCP fallback).
+# Exit codes: see agent_env.sh (0 verdict, 1 GH-ERROR after 3 failed polls, 2 usage,
+# 3 gh unavailable -> MCP fallback, 4 TOOL-MISSING).
 # Self-terminating by construction (CLAUDE.md "No orphaned waits" #1): iteration cap AND
 # wall-clock deadline; run it in the background and read the verdict.
 
@@ -96,28 +97,73 @@ jq_filter() {
 }
 
 fetch_state() {
-	inline=$(gh api "repos/$repo/pulls/$pr/comments" --paginate -q "$(jq_filter created_at) | .id" 2>/dev/null)
-	review=$(gh api "repos/$repo/pulls/$pr/reviews" --paginate -q "$(jq_filter submitted_at) | (.body // \"x\")" 2>/dev/null)
-	issuec=$(gh api "repos/$repo/issues/$pr/comments" --paginate -q "$(jq_filter updated_at) | (.body // \"\")" 2>/dev/null)
+	fetch_error=''
+	if [ "$default_since" -eq 1 ]; then
+		if ! since=$(gh_bounded pr view "$pr" --repo "$repo" --json commits -q '.commits[-1].committedDate'); then
+			fetch_error=$since
+			since=''
+			return 1
+		fi
+		default_since=0
+	fi
+	if ! fetch_inline=$(gh_bounded api "repos/$repo/pulls/$pr/comments" --paginate -q "$(jq_filter created_at) | .id"); then
+		fetch_error=$fetch_inline
+		return 1
+	fi
+	if ! fetch_review=$(gh_bounded api "repos/$repo/pulls/$pr/reviews" --paginate -q "$(jq_filter submitted_at) | (.body // \"x\")"); then
+		fetch_error=$fetch_review
+		return 1
+	fi
+	if ! fetch_issuec=$(gh_bounded api "repos/$repo/issues/$pr/comments" --paginate -q "$(jq_filter updated_at) | (.body // \"\")"); then
+		fetch_error=$fetch_issuec
+		return 1
+	fi
 	# Presence (any commit) vs content (since $since) split (issue #1325): only fetched
 	# when $since narrows the content query, else presence == content already.
 	if [ -n "$since" ]; then
-		inline_any=$(gh api "repos/$repo/pulls/$pr/comments" --paginate -q "$(jq_filter created_at notime) | .id" 2>/dev/null)
-		review_any=$(gh api "repos/$repo/pulls/$pr/reviews" --paginate -q "$(jq_filter submitted_at notime) | .id" 2>/dev/null)
-		issuec_any=$(gh api "repos/$repo/issues/$pr/comments" --paginate -q "$(jq_filter updated_at notime) | .id" 2>/dev/null)
+		if ! fetch_inline_any=$(gh_bounded api "repos/$repo/pulls/$pr/comments" --paginate -q "$(jq_filter created_at notime) | .id"); then
+			fetch_error=$fetch_inline_any
+			return 1
+		fi
+		if ! fetch_review_any=$(gh_bounded api "repos/$repo/pulls/$pr/reviews" --paginate -q "$(jq_filter submitted_at notime) | .id"); then
+			fetch_error=$fetch_review_any
+			return 1
+		fi
+		if ! fetch_issuec_any=$(gh_bounded api "repos/$repo/issues/$pr/comments" --paginate -q "$(jq_filter updated_at notime) | .id"); then
+			fetch_error=$fetch_issuec_any
+			return 1
+		fi
 	else
-		inline_any=$inline
-		review_any=$review
-		issuec_any=$issuec
+		fetch_inline_any=$fetch_inline
+		fetch_review_any=$fetch_review
+		fetch_issuec_any=$fetch_issuec
 	fi
+	fetch_sinfo=''
 	if [ "$handle" = "snyk" ]; then
-		sha=$(gh pr view "$pr" --repo "$repo" --json headRefOid -q .headRefOid 2>/dev/null)
-		sinfo=$(gh api "repos/$repo/commits/$sha/status" \
-			-q '.statuses[] | select((.context|ascii_downcase)|test("snyk")) | "\(.state) \(.description)"' 2>/dev/null)
-		sinfo="$sinfo
-$(gh api "repos/$repo/commits/$sha/check-runs" --paginate \
-			-q '.check_runs[] | select((.name|ascii_downcase)|test("snyk")) | "\(.conclusion // .status) \(.output.title // "")"' 2>/dev/null)"
+		if ! fetch_sha=$(gh_bounded pr view "$pr" --repo "$repo" --json headRefOid -q .headRefOid); then
+			fetch_error=$fetch_sha
+			return 1
+		fi
+		if ! fetch_status=$(gh_bounded api "repos/$repo/commits/$fetch_sha/status" \
+			-q '.statuses[] | select((.context|ascii_downcase)|test("snyk")) | "\(.state) \(.description)"'); then
+			fetch_error=$fetch_status
+			return 1
+		fi
+		if ! fetch_checks=$(gh_bounded api "repos/$repo/commits/$fetch_sha/check-runs" --paginate \
+			-q '.check_runs[] | select((.name|ascii_downcase)|test("snyk")) | "\(.conclusion // .status) \(.output.title // "")"'); then
+			fetch_error=$fetch_checks
+			return 1
+		fi
+		fetch_sinfo="$fetch_status
+$fetch_checks"
 	fi
+	inline=$fetch_inline
+	review=$fetch_review
+	issuec=$fetch_issuec
+	inline_any=$fetch_inline_any
+	review_any=$fetch_review_any
+	issuec_any=$fetch_issuec_any
+	sinfo=$fetch_sinfo
 }
 
 main() {
@@ -139,12 +185,14 @@ main() {
 	{ [ -n "$repo" ] && [ -n "$pr" ] && [ -n "$handle" ]; } || usage
 	case "$mode" in ack|finished) ;; *) usage ;; esac
 	require_gh
+	require_tool timeout
 
 	if [ -z "$max_iter" ]; then
 		if [ "$mode" = "ack" ]; then max_iter=20; else max_iter=60; fi
 	fi
+	default_since=0
 	if [ -z "$since" ] && [ "$mode" = "finished" ] && [ "$handle" != "snyk" ]; then
-		since=$(gh pr view "$pr" --repo "$repo" --json commits -q '.commits[-1].committedDate' 2>/dev/null)
+		default_since=1
 	fi
 
 	# Wall-clock deadline alongside the iteration cap (CLAUDE.md "No orphaned waits" #1):
@@ -153,11 +201,22 @@ main() {
 	deadline=${PFB_WAIT_DEADLINE:-$(( $(date +%s) + max_iter * interval + 300 ))}
 	i=0
 	seen=0
+	ghfail=0
 	while [ "$i" -lt "$max_iter" ]; do
 		if [ "$(date +%s)" -ge "$deadline" ]; then
 			break
 		fi
-		fetch_state
+		if ! fetch_state; then
+			ghfail=$((ghfail + 1))
+			if [ "$ghfail" -ge 3 ]; then
+				printf 'GH-ERROR\n%s\n' "$fetch_error"
+				exit 1
+			fi
+			i=$((i + 1))
+			sleep_bounded "$interval" || break
+			continue
+		fi
+		ghfail=0
 		[ -n "${inline_any}${review_any}${issuec_any}$(printf '%s' "$sinfo" | tr -dc '[:lower:]')" ] && seen=1
 		v=$(classify)
 		if [ -n "$v" ]; then
@@ -170,7 +229,7 @@ main() {
 			exit 0
 		fi
 		i=$((i + 1))
-		sleep "$interval"
+		sleep_bounded "$interval" || break
 	done
 	if [ "$mode" = "ack" ]; then printf 'NOACK\n'; else printf 'TIMEOUT\n'; fi
 }

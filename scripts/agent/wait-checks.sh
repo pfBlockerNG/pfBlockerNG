@@ -55,6 +55,7 @@ main() {
 	done
 	{ [ -n "$repo" ] && [ -n "$pr" ]; } || usage
 	require_gh
+	require_tool timeout
 	require_tool jq
 
 	# Wall-clock deadline alongside the cap (CLAUDE.md "No orphaned waits" #1);
@@ -66,7 +67,7 @@ main() {
 		if [ "$(date +%s)" -ge "$deadline" ]; then
 			break
 		fi
-		if ! json=$(gh pr checks "$pr" --repo "$repo" --json name,bucket 2>&1); then
+		if ! json=$(gh_bounded pr checks "$pr" --repo "$repo" --json name,bucket); then
 			# 3 consecutive gh failures = a real problem (bad repo/pr, auth, outage),
 			# not "no checks yet" -- fail loudly instead of polling to a blind TIMEOUT.
 			ghfail=$((ghfail + 1))
@@ -75,7 +76,7 @@ main() {
 				exit 1
 			fi
 			i=$((i + 1))
-			sleep "$interval"
+			sleep_bounded "$interval" || break
 			continue
 		fi
 		ghfail=0
@@ -89,7 +90,7 @@ main() {
 				;;
 		esac
 		i=$((i + 1))
-		sleep "$interval"
+		sleep_bounded "$interval" || break
 	done
 	printf 'TIMEOUT\n'
 }

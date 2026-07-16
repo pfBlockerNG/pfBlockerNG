@@ -34,6 +34,39 @@ require_tool() {
 	fi
 }
 
+# Run one gh request within both its per-call cap and the wait's remaining deadline.
+gh_bounded() {
+	gh_now=$(date +%s)
+	gh_remaining=$((deadline - gh_now))
+	[ "$gh_remaining" -gt 0 ] || return 124
+	[ "$gh_remaining" -le 30 ] || gh_remaining=30
+	gh_stderr=$(mktemp "${TMPDIR:-/tmp}/pfb-gh-stderr.XXXXXX") || return 1
+	if [ "$gh_remaining" -gt 1 ]; then
+		gh_soft=$((gh_remaining - 1))
+		{ timeout -k 1 "$gh_soft" gh "$@"; } 2>"$gh_stderr"
+		gh_status=$?
+	else
+		{ timeout -s KILL "$gh_remaining" gh "$@"; } 2>"$gh_stderr"
+		gh_status=$?
+	fi
+	if [ "$gh_status" -ne 0 ]; then
+		cat "$gh_stderr"
+	fi
+	rm -f "$gh_stderr"
+	return "$gh_status"
+}
+
+# Pause no longer than the wait's remaining wall-clock budget.
+sleep_bounded() {
+	sleep_now=$(date +%s)
+	sleep_remaining=$((deadline - sleep_now))
+	[ "$sleep_remaining" -gt 0 ] || return 1
+	sleep_delay=$1
+	[ "$sleep_delay" -le "$sleep_remaining" ] || sleep_delay=$sleep_remaining
+	[ "$sleep_delay" -gt 0 ] || return 0
+	sleep "$sleep_delay"
+}
+
 # ADR-47: under a git hook, exported GIT_DIR/GIT_INDEX_FILE would aim every git op
 # at the hook's repo instead of the --worktree the caller named. Git-touching scripts
 # call this first. $1 = the calling script's $0 (to locate the shared lib).
