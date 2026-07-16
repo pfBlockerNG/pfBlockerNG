@@ -1538,6 +1538,28 @@ class TestOperateDnsbl:
         assert fields[5] == "Homoglyph_Alert", f"expected IDN alert type, got {fields!r}"
         assert fields[6] == pfb_unbound.IDN_GROUP_SUSPECT, f"expected suspect group, got {fields!r}"
 
+    def test_idn_alert_overlapping_whitelisted_regex_emits_alert_log(self, monkeypatch: Any) -> None:
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["idn_mode"] = pfb_unbound.IDN_MODE_CONFUSABLE
+        pfb_unbound.pfb["python_idn_block_malicious"] = False
+        pfb_unbound.pfb["python_idn_escalate_suspicious"] = False
+        pfb_unbound.regexDB["user-overlap"] = re.compile(r"xn--bnk-1ce")
+        add_white("xn--bnk-1ce.com", wildcard=False)
+        logs: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: logs.append((path, line)))
+
+        qstate = make_qstate("xn--bnk-1ce.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        decision = pfb_unbound.decisionDB["xn--bnk-1ce.com"].dnsbl
+        assert decision.is_found is True
+        assert decision.in_whitelist is True
+        assert len(logs) == 1, f"expected one whitelisted IDN alert log, got {logs!r}"
+        fields = logs[0][1].split(",")
+        assert fields[5] == "Homoglyph_Alert", f"expected IDN alert type, got {fields!r}"
+        assert fields[6] == pfb_unbound.IDN_GROUP_SUSPECT, f"expected suspect group, got {fields!r}"
+
     def test_allow_decision_short_circuit(self, monkeypatch: Any) -> None:
         # A cached allow verdict ("let it resolve") short-circuits the matcher -- the
         # unified-cache equivalent of the old excludeDB membership skip.
