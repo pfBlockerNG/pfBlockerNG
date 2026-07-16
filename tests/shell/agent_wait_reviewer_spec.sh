@@ -129,11 +129,28 @@ Describe 'wait-reviewer.sh classify()'
 End
 
 Describe 'wait-reviewer.sh gh-unavailable contract'
+  setup_tool_path() {
+    toolpath="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/toolpath.XXXXXX")"
+    ln -s "$(command -v dirname)" "$toolpath/dirname"
+    ln -s "$(command -v tr)" "$toolpath/tr"
+  }
+  cleanup_tool_path() { rm -rf "$toolpath"; }
+  Before 'setup_tool_path'
+  After 'cleanup_tool_path'
+
   It 'exits 3 with the MCP fallback pointer when gh is absent'
     When run sh -c 'PATH=/dev/null; . scripts/agent/agent_env.sh; require_gh'
     The status should equal 3
     The stderr should include 'GH-UNAVAILABLE'
     The stderr should include 'mcp__github__'
+  End
+
+  It 'exits 4 when timeout is absent'
+    printf '#!/bin/sh\nexit 0\n' > "$toolpath/gh"
+    chmod +x "$toolpath/gh"
+    When run env PATH="$toolpath" /bin/sh scripts/agent/wait-reviewer.sh --repo o/r --pr 1 --handle bot --until ack --interval 0 --max-iter 1
+    The status should equal 4
+    The stderr should include 'TOOL-MISSING: timeout'
   End
 End
 
@@ -176,16 +193,53 @@ Describe 'wait-reviewer.sh loop verdicts (stub gh)'
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/ghstub.XXXXXX")"
     cat > "$stubdir/gh" <<'STUB'
 #!/bin/sh
+count=0
+if [ -n "${GH_STUB_COUNT_FILE:-}" ]; then
+	[ ! -f "$GH_STUB_COUNT_FILE" ] || count=$(cat "$GH_STUB_COUNT_FILE")
+	count=$((count + 1))
+	printf '%s\n' "$count" > "$GH_STUB_COUNT_FILE"
+	case " ${GH_STUB_FAIL_CALLS:-} " in
+		*" $count "*) printf '%s\n' "${GH_STUB_FAIL_OUTPUT:-HTTP 404}"; exit 1 ;;
+	esac
+fi
+
+site='' file=''
 case "$*" in
-	*pulls/*/comments*) cat "$GH_STUB_INLINE" 2>/dev/null ;;
-	*pulls/*/reviews*)
+	*'--json commits'*) site='default-since' ;;
+	*pulls/*/comments*)
 		case "$*" in
-			*'select(.submitted_at >'*) cat "$GH_STUB_REVIEW_SINCE" 2>/dev/null ;;
-			*) cat "$GH_STUB_REVIEW_ANY" 2>/dev/null ;;
+			*'created_at >'*) site='inline-content'; file=${GH_STUB_INLINE:-} ;;
+			*) site='inline-presence'; file=${GH_STUB_INLINE_ANY:-${GH_STUB_INLINE:-}} ;;
 		esac
 		;;
-	*) exit 0 ;;
+	*pulls/*/reviews*)
+		case "$*" in
+			*'submitted_at >'*) site='review-content'; file=${GH_STUB_REVIEW_SINCE:-} ;;
+			*) site='review-presence'; file=${GH_STUB_REVIEW_ANY:-${GH_STUB_REVIEW_SINCE:-}} ;;
+		esac
+		;;
+	*issues/*/comments*)
+		case "$*" in
+			*'updated_at >'*) site='issue-content'; file=${GH_STUB_ISSUE_SINCE:-} ;;
+			*) site='issue-presence'; file=${GH_STUB_ISSUE_ANY:-${GH_STUB_ISSUE_SINCE:-}} ;;
+		esac
+		;;
+	*'--json headRefOid'*) site='snyk-head' ;;
+	*/status*) site='snyk-status'; file=${GH_STUB_SNYK_STATUS:-} ;;
+	*/check-runs*) site='snyk-check-runs'; file=${GH_STUB_SNYK_CHECKS:-} ;;
 esac
+
+if [ "${GH_STUB_FAIL_SITE:-}" = "$site" ]; then
+	[ "$site" = 'default-since' ] || printf '%s\n' "${GH_STUB_FAIL_OUTPUT:-HTTP 404}"
+	exit 1
+fi
+
+case "$site" in
+	default-since) printf '%s\n' '2026-01-01T00:00:00Z' ;;
+	snyk-head) printf '%s\n' 'deadbeef' ;;
+	*) [ -z "$file" ] || cat "$file" ;;
+esac
+exit 0
 STUB
     chmod +x "$stubdir/gh"
     PATH="$stubdir:$PATH"
@@ -194,6 +248,19 @@ STUB
   Before 'setup_stub'
   After 'cleanup_stub'
   script="scripts/agent/wait-reviewer.sh"
+
+  setup_near_deadline() {
+    cat > "$stubdir/date" <<'STUB'
+#!/bin/sh
+printf '100\n'
+STUB
+    cat > "$stubdir/sleep" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$1" >> "$WAIT_SLEEP_FILE"
+STUB
+    chmod +x "$stubdir/date" "$stubdir/sleep"
+    export PFB_WAIT_DEADLINE=103 WAIT_SLEEP_FILE="$stubdir/sleeps"
+  }
 
   It 'reports NOACK when the cap expires in ack mode with zero engagement'
     unset GH_STUB_INLINE
@@ -214,6 +281,20 @@ STUB
     The output should include 'FINISHED'
   End
 
+  It 'reports FINISHED when a submitted review appears'
+    export GH_STUB_REVIEW_SINCE="$stubdir/review.txt"
+    echo review > "$GH_STUB_REVIEW_SINCE"
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3
+    The output should include 'FINISHED'
+  End
+
+  It 'reports FINISHED when an actionable issue comment appears'
+    export GH_STUB_ISSUE_SINCE="$stubdir/issue.txt"
+    echo 'Actionable comments posted: 1' > "$GH_STUB_ISSUE_SINCE"
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3
+    The output should include 'FINISHED'
+  End
+
   It 'honours the wall-clock deadline even when content would be found (No-orphaned-waits #1)'
     export GH_STUB_INLINE="$stubdir/inline.txt"
     echo 42 > "$GH_STUB_INLINE"
@@ -227,5 +308,107 @@ STUB
     echo 99 > "$GH_STUB_REVIEW_ANY"
     When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3 --presence 1
     The line 1 of output should equal 'TIMEOUT'
+  End
+
+  It 'uses the default time floor while treating an older review only as presence'
+    export GH_STUB_REVIEW_ANY="$stubdir/review_any.txt"
+    echo 99 > "$GH_STUB_REVIEW_ANY"
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --interval 0 --max-iter 3 --presence 1
+    The line 1 of output should equal 'TIMEOUT'
+  End
+
+
+  It 'treats an inline comment before --since as presence: TIMEOUT, not NOTPRESENT'
+    export GH_STUB_INLINE_ANY="$stubdir/inline_any.txt"
+    echo 98 > "$GH_STUB_INLINE_ANY"
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3 --presence 1
+    The line 1 of output should equal 'TIMEOUT'
+  End
+
+  It 'treats an issue comment before --since as presence: TIMEOUT, not NOTPRESENT'
+    export GH_STUB_ISSUE_ANY="$stubdir/issue_any.txt"
+    echo 97 > "$GH_STUB_ISSUE_ANY"
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3 --presence 1
+    The line 1 of output should equal 'TIMEOUT'
+  End
+
+  It 'reads a terminal Snyk commit status'
+    export GH_STUB_SNYK_STATUS="$stubdir/status.txt"
+    echo 'success Scan completed' > "$GH_STUB_SNYK_STATUS"
+    When run sh "$script" --repo o/r --pr 1 --handle snyk --until finished --since x --interval 0 --max-iter 3
+    The output should include 'FINISHED'
+  End
+
+  It 'reads a terminal Snyk check-run'
+    export GH_STUB_SNYK_CHECKS="$stubdir/checks.txt"
+    echo 'completed Scan completed' > "$GH_STUB_SNYK_CHECKS"
+    When run sh "$script" --repo o/r --pr 1 --handle snyk --until finished --since x --interval 0 --max-iter 3
+    The output should include 'FINISHED'
+  End
+
+  It 'discards earlier terminal data when a later snapshot call fails'
+    export GH_STUB_INLINE="$stubdir/inline.txt"
+    echo 42 > "$GH_STUB_INLINE"
+    export GH_STUB_FAIL_SITE='issue-content'
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 1
+    The line 1 of output should equal 'TIMEOUT'
+  End
+
+  It 'never classifies actionable stdout from a failed gh call'
+    export GH_STUB_FAIL_SITE='inline-content'
+    export GH_STUB_FAIL_OUTPUT='Actionable comments posted: 3 (HTTP 404)'
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3
+    The status should equal 1
+    The line 1 of output should equal 'GH-ERROR'
+  End
+
+  It 'keeps the default time floor when its lookup fails, rejecting a stale review'
+    export GH_STUB_FAIL_SITE='default-since'
+    export GH_STUB_REVIEW_ANY="$stubdir/stale_review.txt"
+    echo stale-review > "$GH_STUB_REVIEW_ANY"
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --interval 0 --max-iter 3
+    The status should equal 1
+    The line 1 of output should equal 'GH-ERROR'
+  End
+
+  It 'resets the failure streak after a complete successful poll'
+    export GH_STUB_COUNT_FILE="$stubdir/count"
+    export GH_STUB_FAIL_CALLS='1 2 6 7'
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until ack --interval 0 --max-iter 5 --presence 0
+    The status should equal 0
+    The line 1 of output should equal 'NOACK'
+  End
+
+  It 'caps sleep after a successful pending poll at the remaining deadline'
+    setup_near_deadline
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until ack --interval 99 --max-iter 1 --presence 0
+    The line 1 of output should equal 'NOACK'
+    The contents of file "$WAIT_SLEEP_FILE" should equal '3'
+  End
+
+  It 'caps sleep after a failed poll at the remaining deadline'
+    setup_near_deadline
+    export GH_STUB_FAIL_SITE='inline-content'
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 99 --max-iter 1 --presence 0
+    The line 1 of output should equal 'TIMEOUT'
+    The contents of file "$WAIT_SLEEP_FILE" should equal '3'
+  End
+
+  Parameters
+    inline-content coderabbitai
+    review-content coderabbitai
+    issue-content coderabbitai
+    inline-presence coderabbitai
+    review-presence coderabbitai
+    issue-presence coderabbitai
+    snyk-head snyk
+    snyk-status snyk
+    snyk-check-runs snyk
+  End
+  It "reports GH-ERROR when reviewer endpoint $1 fails for three polls"
+    export GH_STUB_FAIL_SITE="$1"
+    When run sh "$script" --repo o/r --pr 1 --handle "$2" --until finished --since x --interval 0 --max-iter 3 --presence 0
+    The status should equal 1
+    The line 1 of output should equal 'GH-ERROR'
   End
 End
