@@ -7,8 +7,8 @@ description: "Run the standard pfBlockerNG end-to-end PR landing flow: adversari
 
 Read `../../../.claude/skills/pr-merge-flow/SKILL.md` for the exact external-review and
 wait policy. Replace its `review-single` Claude workflow with the equivalent
-`$review-single` Codex subagent review. Use low for the standard and every delta review, high for a
-large/complex whole-PR review, and the sequential low-plus-medium fallback when
+`$review-single` Codex subagent review. Use small for the standard and every delta review, top for a
+large/complex whole-PR review, and the sequential small-plus-mid fallback when
 the documented top tier is unavailable; never fan out unless the user requests
 it. Run `$pr-comments` before `$pr-merge`, preserve every required review record,
 and apply the canonical `CLAUDE.md` policy through the `AGENTS.md` Codex mapping.

@@ -32,7 +32,7 @@ description: >
 ---
 
 You run this repo's standard land-a-PR flow: **review feedback first, then merge.**
-Capability prose uses the high / medium / small tiers from
+Capability prose uses the top / mid / small tiers from
 `.agents/model-tiers.conf`. The `claude-fable-5`, `claude-opus-4-8`, and
 `claude-sonnet-5` literals below are full Claude runtime identifiers; the Codex
 adapter selects `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
