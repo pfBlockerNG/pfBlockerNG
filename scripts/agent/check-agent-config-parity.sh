@@ -101,8 +101,8 @@ if [ ! -f "$tiers" ]; then
 	echo 'agent-config-parity: missing shared model tier mapping: .agents/model-tiers.conf' >&2
 	fail=1
 else
-	high_claude=''; high_codex=''; medium_claude=''; medium_codex=''
-	low_claude=''; low_codex=''
+	top_claude=''; top_codex=''; mid_claude=''; mid_codex=''
+	small_claude=''; small_codex=''
 	while IFS= read -r tier_line || [ -n "$tier_line" ]; do
 		case "$tier_line" in
 		''|'#'*) continue ;;
@@ -119,12 +119,12 @@ else
 			esac
 			tier_current=''
 			case "$tier_key" in
-			HIGH_CLAUDE) tier_current=$high_claude ;;
-			HIGH_CODEX) tier_current=$high_codex ;;
-			MEDIUM_CLAUDE) tier_current=$medium_claude ;;
-			MEDIUM_CODEX) tier_current=$medium_codex ;;
-			LOW_CLAUDE) tier_current=$low_claude ;;
-			LOW_CODEX) tier_current=$low_codex ;;
+			TOP_CLAUDE) tier_current=$top_claude ;;
+			TOP_CODEX) tier_current=$top_codex ;;
+			MID_CLAUDE) tier_current=$mid_claude ;;
+			MID_CODEX) tier_current=$mid_codex ;;
+			SMALL_CLAUDE) tier_current=$small_claude ;;
+			SMALL_CODEX) tier_current=$small_codex ;;
 			*)
 				printf 'agent-config-parity: unknown model tier key: %s\n' \
 					"$tier_key" >&2
@@ -139,12 +139,12 @@ else
 				continue
 			fi
 			case "$tier_key" in
-			HIGH_CLAUDE) high_claude=$tier_value ;;
-			HIGH_CODEX) high_codex=$tier_value ;;
-			MEDIUM_CLAUDE) medium_claude=$tier_value ;;
-			MEDIUM_CODEX) medium_codex=$tier_value ;;
-			LOW_CLAUDE) low_claude=$tier_value ;;
-			LOW_CODEX) low_codex=$tier_value ;;
+			TOP_CLAUDE) top_claude=$tier_value ;;
+			TOP_CODEX) top_codex=$tier_value ;;
+			MID_CLAUDE) mid_claude=$tier_value ;;
+			MID_CODEX) mid_codex=$tier_value ;;
+			SMALL_CLAUDE) small_claude=$tier_value ;;
+			SMALL_CODEX) small_codex=$tier_value ;;
 			esac
 		;;
 		*)
@@ -154,14 +154,14 @@ else
 			;;
 		esac
 	done < "$tiers"
-	for tier_key in HIGH_CLAUDE HIGH_CODEX MEDIUM_CLAUDE MEDIUM_CODEX LOW_CLAUDE LOW_CODEX; do
+	for tier_key in TOP_CLAUDE TOP_CODEX MID_CLAUDE MID_CODEX SMALL_CLAUDE SMALL_CODEX; do
 		case "$tier_key" in
-		HIGH_CLAUDE) tier_value=$high_claude ;;
-		HIGH_CODEX) tier_value=$high_codex ;;
-		MEDIUM_CLAUDE) tier_value=$medium_claude ;;
-		MEDIUM_CODEX) tier_value=$medium_codex ;;
-		LOW_CLAUDE) tier_value=$low_claude ;;
-		LOW_CODEX) tier_value=$low_codex ;;
+		TOP_CLAUDE) tier_value=$top_claude ;;
+		TOP_CODEX) tier_value=$top_codex ;;
+		MID_CLAUDE) tier_value=$mid_claude ;;
+		MID_CODEX) tier_value=$mid_codex ;;
+		SMALL_CLAUDE) tier_value=$small_claude ;;
+		SMALL_CODEX) tier_value=$small_codex ;;
 		esac
 		if [ -z "$tier_value" ]; then
 			printf 'agent-config-parity: missing model tier assignment: %s\n' \
@@ -185,13 +185,13 @@ else
 			fail=1
 		fi
 	}
-	check_role_model planner "$high_codex"
-	check_role_model implementer "$low_codex"
-	check_role_model analyst "$low_codex"
-	check_role_model analyst-high "$high_codex"
-	check_role_model adversarial-reviewer "$low_codex"
-	check_role_model adversarial-reviewer-high "$high_codex"
-	check_role_model adversarial-reviewer-medium "$medium_codex"
+	check_role_model planner "$top_codex"
+	check_role_model implementer "$small_codex"
+	check_role_model analyst "$small_codex"
+	check_role_model analyst-top "$top_codex"
+	check_role_model adversarial-reviewer "$small_codex"
+	check_role_model adversarial-reviewer-top "$top_codex"
+	check_role_model adversarial-reviewer-mid "$mid_codex"
 fi
 
 if [ "$skills" -eq 0 ] || [ "$workflows" -eq 0 ]; then

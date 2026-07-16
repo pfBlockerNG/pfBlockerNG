@@ -55,7 +55,7 @@ This is the only synchronization boundary:
 | `CLAUDE.md` | `AGENTS.md` adapter | Codex loads `AGENTS.md`; it routes to the canonical policy and translates only runtime surfaces. |
 | `.claude/skills/*` | `.agents/skills/*` | Same trigger intent and one shared detailed procedure. |
 | `.claude/workflows/*.js` | `$adr-investigate`, `$issue-triage`, `$phase-step`, `$review-single`, `$review-fanout`, `$triage-findings` | Codex has subagents rather than the Claude JavaScript `Workflow` runtime. |
-| High / medium / low model tier | GPT-5.6-Sol / GPT-5.6-Terra / GPT-5.6-Luna | `.agents/model-tiers.conf` is the shared mapping; reasoning effort remains independent. |
+| Top / mid / small model tier | GPT-5.6-Sol / GPT-5.6-Terra / GPT-5.6-Luna | `.agents/model-tiers.conf` is the shared mapping; reasoning effort remains independent. |
 | Planner/implementer/analyst/verifier | `planner`, `implementer`, low/high `analyst`, and `adversarial-reviewer` plus high/medium reviewer variants | Project-scoped custom agents pin the corresponding Codex model tier without changing the canonical output contract. |
 | `PreToolUse` Git policy | `.codex/hooks.json` | Reuses the raw-payload-compatible shared guard for Codex `Bash` hook events; coverage remains subject to the client emitting that event for unified shell execution. |
 | `PreToolUse` retired-token notice | `.codex/hooks.json` | Reuses `check_retired_tokens.py --claude-hook` for the same supported `Bash` event surface. |
@@ -103,7 +103,7 @@ freshness on resume and never rebases a dirty tree.
   repository Python gates remain authoritative.
 - **Remote-control URL cloning:** `$new-terminal` can start another CLI session,
   but Codex has no equivalent for Claude's bridge URL.
-- **Provider model identifiers:** procedures use high / medium / low tiers;
+- **Provider model identifiers:** procedures use high / medium / small tiers;
   `.agents/model-tiers.conf` maps them explicitly instead of treating one
   provider's model alias as portable.
 

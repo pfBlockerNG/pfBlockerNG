@@ -1,7 +1,7 @@
 export const meta = {
   name: 'issue-triage',
   description: 'One agent triages a GitHub issue: whole-issue read, claims verified against fresh origin base with executed evidence, impact, ordered resolution plan — schema-forced',
-  whenToUse: 'gh-issue Steps 2-5 (triage + plan). The returned artifact is DURABLE: a same-session --fix resumes from it (base_tip + per-claim cited_paths feed the targeted staleness check) instead of re-triaging. Args: {issue: <number>, worktree: <path to an up-to-date checkout>, base?: <branch, default devel>, model?: "claude-sonnet-5" (default) | "claude-fable-5" (the highest-tier model — preferred verdict quality; fall back to claude-sonnet-5 when unavailable), notes?: <caller context>}.',
+  whenToUse: 'gh-issue Steps 2-5 (triage + plan). The returned artifact is DURABLE: a same-session --fix resumes from it (base_tip + per-claim cited_paths feed the targeted staleness check) instead of re-triaging. Args: {issue: <number>, worktree: <path to an up-to-date checkout>, base?: <branch, default devel>, model?: "claude-sonnet-5" (default) | "claude-fable-5" (the top-tier model — preferred verdict quality; fall back to claude-sonnet-5 when unavailable), notes?: <caller context>}.',
   phases: [
     { title: 'Triage', detail: 'one agent: read whole issue, verify claims, size impact, plan' },
   ],
@@ -18,7 +18,7 @@ export const meta = {
 const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
 const { issue, worktree, base = 'devel', model = 'claude-sonnet-5', notes = '' } = input
 if (!issue || !worktree) throw new Error('args must be {issue, worktree, base?, model?, notes?}')
-// The highest-tier model (currently claude-fable-5) is the preferred verdict-quality triage model;
+// The top-tier model (currently claude-fable-5) is the preferred verdict-quality triage model;
 // claude-sonnet-5 is the default and the fallback when the top tier is unavailable.
 // Never claude-opus-4-8.
 if (model !== 'claude-sonnet-5' && model !== 'claude-fable-5') throw new Error(`model must be "claude-sonnet-5" or "claude-fable-5"; got "${model}"`)

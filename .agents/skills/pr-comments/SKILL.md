@@ -12,7 +12,7 @@ Replace Claude workflow calls with Codex subagents; preserve bounded waits,
 per-thread replies, scope checks, tests, and the final cancellation sweep.
 Follow `$review-single`'s tier policy: low for normal and every delta review,
 high for a large/complex whole-PR review, and low plus medium only for its
-documented high-tier fallback. These remain sequential single-reviewer passes,
+documented top-tier fallback. These remain sequential single-reviewer passes,
 not fan-out.
 For every public comment or audit record, replace the canonical Claude footer
 and reviewer label with the truthful Codex footer

@@ -1,5 +1,5 @@
-name = "analyst-high"
-description = "High-tier read-only analyst for complex issue triage and evidence-heavy reports."
+name = "analyst-top"
+description = "Top-tier read-only analyst for complex issue triage and evidence-heavy reports."
 model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"

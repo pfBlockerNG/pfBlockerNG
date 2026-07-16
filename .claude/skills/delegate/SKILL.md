@@ -78,7 +78,7 @@ reuse the work-item convention when one applies; otherwise `task/{slug}` with th
 One Agent: `subagent_type: general-purpose`, **`model: claude-sonnet-5`**, **effort `xhigh`** stated
 explicitly. The brief is Step 1's text, self-contained — no carry-over from this
 conversation. The implementer works with Read/Edit/Write/Bash and may spawn subagents for a
-subtask that genuinely splits (CLAUDE.md "Plan with a higher model" — nested work is verified
+subtask that genuinely splits (CLAUDE.md "Plan top-tier, implement small-tier" — nested work is verified
 by the spawner and its defects are the spawner's at the gate); it runs the gates, does not
 proceed red, self-reviews the diff against the objective, commits (`<scope>: <imperative
 summary>`), and returns the handoff with every fixed field.

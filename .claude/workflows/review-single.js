@@ -1,7 +1,7 @@
 export const meta = {
   name: 'review-single',
   description: 'Single-agent adversarial PR review: ONE reviewer covers contract, correctness/hostile-inputs, and test-honesty; schema-forced findings',
-  whenToUse: 'pr-merge-flow Step 1d\'s default review shape. Args: {pr: <number>, base: <branch, or a bare pre-fix SHA to review ONLY the fix delta — mandatory scoping for feedback-fix re-reviews>, worktree: <path>, spec: <intent/acceptance text>, model?: "claude-sonnet-5" (default; also the model for every delta re-review) | "claude-fable-5" (large/complex PR: >300 lines, >6 files, or src/ parsing/guard/scheduling behaviour — whole-PR cross-referencing) | "claude-opus-4-8" (ONLY as the second pass of the dual fallback: top tier unavailable on a high-tier PR -> run once with claude-sonnet-5 and once with claude-opus-4-8, union the findings), profile?: "full" (default) | "verify" (mechanically-trivial data/pin/config diffs ONLY — the caller applies pr-merge-flow\'s objective no-new-control-flow gate before choosing it)}.',
+  whenToUse: 'pr-merge-flow Step 1d\'s default review shape. Args: {pr: <number>, base: <branch, or a bare pre-fix SHA to review ONLY the fix delta — mandatory scoping for feedback-fix re-reviews>, worktree: <path>, spec: <intent/acceptance text>, model?: "claude-sonnet-5" (default; also the model for every delta re-review) | "claude-fable-5" (large/complex PR: >300 lines, >6 files, or src/ parsing/guard/scheduling behaviour — whole-PR cross-referencing) | "claude-opus-4-8" (ONLY as the second pass of the dual fallback: top tier unavailable on a top-tier PR -> run once with claude-sonnet-5 and once with claude-opus-4-8, union the findings), profile?: "full" (default) | "verify" (mechanically-trivial data/pin/config diffs ONLY — the caller applies pr-merge-flow\'s objective no-new-control-flow gate before choosing it)}.',
   phases: [
     { title: 'Review', detail: 'one adversarial reviewer over the whole diff' },
   ],
@@ -22,10 +22,10 @@ const { pr, base = 'devel', worktree, spec = '(no spec provided — flag that as
 // A bare SHA base reviews a fix delta (pr-merge-flow 1d.4); a branch name gets origin/.
 const baseRef = /^[0-9a-f]{7,40}$/.test(base) ? base : `origin/${base}`
 if (!pr || !worktree) throw new Error('args must be {pr, worktree, base?, spec?, model?, profile?}')
-// Owner directive (2026-07-14): claude-fable-5 (the highest tier) reviews large/complex PRs —
+// Owner directive (2026-07-14): claude-fable-5 (the top tier) reviews large/complex PRs —
 // whole-PR cross-referencing; claude-sonnet-5 is the default AND the model for every delta
 // re-review. claude-opus-4-8 is valid ONLY as the second pass of the dual fallback (top tier
-// unavailable on a high-tier PR: one claude-sonnet-5 + one claude-opus-4-8 run, findings unioned by the
+// unavailable on a top-tier PR: one claude-sonnet-5 + one claude-opus-4-8 run, findings unioned by the
 // caller) — never a sole reviewer.
 if (model !== 'claude-sonnet-5' && model !== 'claude-fable-5' && model !== 'claude-opus-4-8') throw new Error(`model must be "claude-sonnet-5", "claude-fable-5", or "claude-opus-4-8" (claude-opus-4-8 only as the dual-fallback second pass; never a dated ID); got "${model}"`)
 if (profile !== 'full' && profile !== 'verify') throw new Error(`profile must be "full" or "verify"; got "${profile}"`)
