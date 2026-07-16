@@ -70,7 +70,7 @@ ON_BOX_HOOK="${ON_BOX_RCD_DIR}/pfblockerng_repo_generate.sh"
 
 # The hook source script lives next to this file. Resolve relative to this
 # script's directory so it works regardless of cwd.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 HOOK_SRC="${SCRIPT_DIR}/rc.d/pfblockerng_repo_generate.sh"
 
 # pfb_emit_embedded_hook — print the rc.d generator hook to stdout. In the repository

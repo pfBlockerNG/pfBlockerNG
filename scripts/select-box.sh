@@ -41,7 +41,7 @@
 #   is a single shared object visible to the whole pool.
 
 # ── Locate sibling lib/ (same directory as this script) ──────────────────────
-_SB_SELF="$(cd "$(dirname "$0")" && pwd)"
+_SB_SELF="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 
 # ── Scrub inherited GIT_* context (via shared lib — ADR-47 chokepoint) ────
 # The pre-commit hook exports GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE / ...

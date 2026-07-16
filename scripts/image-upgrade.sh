@@ -115,7 +115,7 @@ die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # Shared type/tag/push helpers — sourced so the published artifact is byte-identical
 # to running image-publish.sh --type <type> with the derived tag.
-SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 [ -f "$SCRIPT_DIR/image-lib.sh" ] || die "image-lib.sh not found next to this script: $SCRIPT_DIR/image-lib.sh"
 # shellcheck source=scripts/image-lib.sh
 . "$SCRIPT_DIR/image-lib.sh"

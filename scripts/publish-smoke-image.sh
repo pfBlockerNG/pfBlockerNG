@@ -23,7 +23,7 @@ set -e
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 PUBLISH="$SCRIPT_DIR/image-publish.sh"
 [ -x "$PUBLISH" ] || die "image-publish.sh not found next to this script: $PUBLISH"
 

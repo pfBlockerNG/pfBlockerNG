@@ -55,7 +55,7 @@
 set -eu
 
 # ── Self-dir (for lib + sibling scripts) ─────────────────────────────────── #
-_RL_DIR="$(cd "$(dirname "$0")" && pwd)"
+_RL_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 
 # ── GIT_* scrub (ADR-47 chokepoint) ───────────────────────────────────── #
 # shellcheck source=scripts/lib/git-env-scrub.sh

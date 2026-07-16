@@ -157,7 +157,7 @@ fi
 # and fail. An absolute backing path is location-independent.
 case "$BASE_IMG" in
     /*) ;;
-    *) BASE_IMG="$(cd "$(dirname "$BASE_IMG")" && pwd)/$(basename "$BASE_IMG")" ;;
+    *) BASE_IMG="$(CDPATH='' cd "$(dirname "$BASE_IMG")" && pwd)/$(basename "$BASE_IMG")" ;;
 esac
 
 # Resolve the qemu binaries by name if the absolute path is not present

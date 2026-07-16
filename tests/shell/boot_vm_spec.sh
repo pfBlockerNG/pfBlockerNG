@@ -15,6 +15,7 @@ Describe 'boot_vm.sh slirp netdev argv'
     scrub_git_env
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/bootvmspec.XXXXXX")"
     ARGV_FILE="${WORK}/argv"
+    IMG_ARGV_FILE="${WORK}/img-argv"
     BASE="${WORK}/base.qcow2"; : > "$BASE"
     OVERLAY="${WORK}/ovl.qcow2"
     BIN="${WORK}/bin"; mkdir -p "$BIN"
@@ -28,6 +29,7 @@ QEOF
     # Stub qemu-img: create the overlay (its LAST arg) so the -drive path is valid.
     cat > "${BIN}/qemu-img" << 'QIEOF'
 #!/bin/sh
+printf '%s\n' "$@" > "$IMG_ARGV_FILE"
 while [ "$#" -gt 1 ]; do shift; done
 : > "$1"
 QIEOF
@@ -35,7 +37,7 @@ QIEOF
 
     SMOKE_QEMU_BIN="${BIN}/qemu"
     SMOKE_QEMU_IMG_BIN="${BIN}/qemu-img"
-    export WORK ARGV_FILE BASE OVERLAY SMOKE_QEMU_BIN SMOKE_QEMU_IMG_BIN
+    export WORK ARGV_FILE IMG_ARGV_FILE BASE OVERLAY SMOKE_QEMU_BIN SMOKE_QEMU_IMG_BIN
   }
   teardown() { rm -rf "$WORK"; }
   BeforeEach 'setup'
@@ -44,6 +46,24 @@ QIEOF
   # ---- slirp (default) — role pfsense ----------------------------------------
 
   Describe 'role pfsense'
+    It 'resolves absolute, basename, and nested-relative base images independently of CDPATH'
+      mkdir -p "${WORK}/base-dir/nested" "${WORK}/decoy/nested"
+      : > "${WORK}/base-dir/base.qcow2"
+      : > "${WORK}/base-dir/nested/base.qcow2"
+      When run sh -c '
+        unset CDPATH
+        IMG_ARGV_FILE="$5/absolute" sh "$1" "$2" "$5/absolute-overlay"
+        cd "$3" || exit 1
+        CDPATH="" IMG_ARGV_FILE="$5/basename" sh "$1" base.qcow2 "$5/basename-overlay"
+        CDPATH="$4" IMG_ARGV_FILE="$5/nested" sh "$1" nested/base.qcow2 "$5/nested-overlay"
+      ' _ "$SCRIPT" "$BASE" "${WORK}/base-dir" "${WORK}/decoy" "$WORK"
+      The status should be success
+      The stderr should include 'boot_vm:'
+      The contents of file "${WORK}/absolute" should include "$BASE"
+      The contents of file "${WORK}/basename" should include "${WORK}/base-dir/base.qcow2"
+      The contents of file "${WORK}/nested" should include "${WORK}/base-dir/nested/base.qcow2"
+    End
+
     It 'WAN net0 is user-net with the 192.168.89.2 host alias'
       When run sh "$SCRIPT" --role pfsense "$BASE" "$OVERLAY"
       The status should be success
