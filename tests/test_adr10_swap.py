@@ -232,7 +232,7 @@ class TestRebuildAndSwapFailClosed:
         assert P.decisionDB.get("stale.example.com") is not None
         assert emitted == {}  # no recount on failure.
 
-    def test_builder_raises_keeps_everything(self, tmp_path: Any, monkeypatch: Any) -> None:
+    def test_builder_raises_keeps_everything(self, tmp_path: Any, monkeypatch: Any, capsys: Any) -> None:
         old = _snapshot(data={"old.example.com": {"log": "1", "index": 0, "important": False}}, counts=1)
         P._snapshot = old
         _seed_decision("stale.example.com")
@@ -255,6 +255,9 @@ class TestRebuildAndSwapFailClosed:
         assert P._snapshot is old
         assert "stale.example.com" in P.decisionDB  # STALE memo SURVIVES a raising build.
         assert emitted == {}
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == "[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: build blew up"
 
     @pytest.mark.parametrize("emit_counts", [True, False])
     @pytest.mark.parametrize(

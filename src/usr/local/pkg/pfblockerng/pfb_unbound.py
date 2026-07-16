@@ -5498,7 +5498,7 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
         if err is not None:
             try:
                 err.write("[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: {}".format(e))
-            except Exception:
+            except OSError:
                 pass
         return False
 
