@@ -8,7 +8,11 @@
 set -eu
 
 d="${CLAUDE_PROJECT_DIR:-.}/.claude"
-bash "$d/skills/ponytail/hooks/ponytail-statusline.sh"
+# Badge scripts: ponytail's lives in-repo (plugins/); caveman's only in the client's
+# plugin cache — resolve the newest cached version, skip the badge when absent.
+caveman_dir=$(ls -td "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/caveman/caveman/*/ 2>/dev/null | head -1)
+caveman_sl="${caveman_dir}src/hooks/caveman-statusline.sh"
+bash "${CLAUDE_PROJECT_DIR:-.}/plugins/ponytail/hooks/ponytail-statusline.sh"
 printf ' '
 
 case ${STATUSLINE_SAVINGS_WINDOW:-24h} in
@@ -17,10 +21,12 @@ case ${STATUSLINE_SAVINGS_WINDOW:-24h} in
 esac
 inline="${CAVEMAN_STATUSLINE_INLINE:-1}"
 
-if [ "$lifetime" = 1 ] && [ "$inline" = 0 ]; then
-	bash "$d/skills/caveman/src/hooks/caveman-statusline.sh"
+if [ -z "$caveman_dir" ] || [ ! -f "$caveman_sl" ]; then
+	: # no cached caveman plugin — skip its badge
+elif [ "$lifetime" = 1 ] && [ "$inline" = 0 ]; then
+	bash "$caveman_sl"
 else
-	badge=$(CAVEMAN_STATUSLINE_SAVINGS=0 bash "$d/skills/caveman/src/hooks/caveman-statusline.sh")
+	badge=$(CAVEMAN_STATUSLINE_SAVINGS=0 bash "$caveman_sl")
 	saved=$(sh "$d/hooks/caveman-rolling.sh")
 	if [ -n "$saved" ] && [ "$inline" != 0 ]; then
 		printf '%s' "$badge" | sed "s/]/ ${saved}↓]/"
