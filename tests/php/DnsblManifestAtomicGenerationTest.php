@@ -7,6 +7,7 @@ use PHPUnit\Framework\TestCase;
 
 #[CoversFunction('pfb_unbound_python_sources')]
 #[CoversFunction('pfb_unbound_python_sources_patch')]
+#[CoversFunction('pfb_unbound_py_publication_lock')]
 #[CoversFunction('pfb_unbound_py_gc')]
 #[CoversFunction('pfb_unbound_py_teardown_raw_set')]
 final class DnsblManifestAtomicGenerationTest extends TestCase
@@ -73,6 +74,79 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$dirs = glob("{$this->tmp}/pfb_py_raw.*") ?: [];
 		return array_values(array_filter($dirs,
 			static fn(string $path): bool => preg_match('/pfb_py_raw\.[0-9a-f]{32}$/D', $path) === 1));
+	}
+
+	private function assertContendedOperationTimesOut(callable $operation): void
+	{
+		$manifestBefore = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
+		$holderPid = NULL;
+		$operationPid = NULL;
+		$holderParent = NULL;
+		$operationParent = NULL;
+		try {
+			[$holderParent, $holderChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+			stream_set_timeout($holderParent, 5);
+			stream_set_timeout($holderChild, 5);
+			$holderPid = pcntl_fork();
+			if ($holderPid === 0) {
+				fclose($holderParent);
+				$lock = pfb_unbound_py_publication_lock();
+				fwrite($holderChild, "LOCKED\n");
+				fgets($holderChild);
+				pfb_unbound_py_publication_unlock($lock);
+				fclose($holderChild);
+				exit(0);
+			}
+			$this->assertGreaterThan(0, $holderPid);
+			fclose($holderChild);
+			$this->assertSame("LOCKED\n", fgets($holderParent));
+
+			[$operationParent, $operationChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+			stream_set_timeout($operationParent, 5);
+			stream_set_timeout($operationChild, 5);
+			$operationPid = pcntl_fork();
+			if ($operationPid === 0) {
+				fclose($operationParent);
+				$started = microtime(TRUE);
+				$ok = $operation();
+				fwrite($operationChild, json_encode([
+					'ok' => $ok,
+					'elapsed' => microtime(TRUE) - $started,
+				]) . "\n");
+				fclose($operationChild);
+				exit(0);
+			}
+			$this->assertGreaterThan(0, $operationPid);
+			fclose($operationChild);
+
+			$read = [$operationParent];
+			$write = NULL;
+			$except = NULL;
+			$this->assertSame(1, stream_select($read, $write, $except, 1),
+				'contended interactive operation exceeded its bounded lock wait');
+			$result = json_decode((string) fgets($operationParent), TRUE);
+			$this->assertIsArray($result);
+			$this->assertFalse($result['ok'], 'contended interactive operation must skip mutation');
+			$this->assertLessThan(1.0, $result['elapsed'], 'contended lock wait exceeded its deadline margin');
+			$this->assertSame($manifestBefore, file_get_contents($GLOBALS['pfb']['unbound_py_sources']),
+				'lock timeout must not mutate the published manifest');
+		} finally {
+			if (is_resource($holderParent)) {
+				@fwrite($holderParent, "RELEASE\n");
+				fclose($holderParent);
+			}
+			if (is_resource($operationParent)) {
+				fclose($operationParent);
+			}
+			foreach ([$holderPid, $operationPid] as $pid) {
+				if (is_int($pid) && $pid > 0) {
+					if (pcntl_waitpid($pid, $childStatus, WNOHANG) === 0 && function_exists('posix_kill')) {
+						posix_kill($pid, SIGKILL);
+					}
+					pcntl_waitpid($pid, $childStatus);
+				}
+			}
+		}
 	}
 
 	public function testSuccessfulPublicationKeepsOldSetAndCommitsOneCompleteGeneration(): void
@@ -279,6 +353,38 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$patched = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE);
 		$this->assertSame($rawRefs, array_column($patched['feeds'], 'raw'));
 		$this->assertSame(['allow.example'], $patched['config']['user_unlock']);
+	}
+
+	public function testScalarPatchTimesOutWithoutMutatingManifest(): void
+	{
+		$manifest = $this->publish();
+		$this->assertIsArray($manifest);
+
+		$this->assertContendedOperationTimesOut(
+			static fn(): bool => pfb_unbound_python_sources_patch('user_unlock', ['allow.example'])
+		);
+
+		$patched = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE);
+		$this->assertSame([], $patched['config']['user_unlock']);
+		$log = (string) file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertStringContainsString('retry the action or run a DNSBL update', $log);
+	}
+
+	public function testGarbageCollectionTimesOutWithoutRemovingRawGenerations(): void
+	{
+		$first = $this->publish();
+		$this->assertIsArray($first);
+		$this->writeFeed('two.example');
+		$second = $this->publish();
+		$this->assertIsArray($second);
+		$stage = "{$this->tmp}/pfb_py_raw.stage.abcdef0123456789abcdef0123456789";
+		mkdir($stage);
+
+		$this->assertContendedOperationTimesOut(static fn(): bool => pfb_unbound_py_gc(TRUE));
+
+		$this->assertDirectoryExists(dirname($this->manifestRaw($first)));
+		$this->assertDirectoryExists(dirname($this->manifestRaw($second)));
+		$this->assertDirectoryExists($stage);
 	}
 
 	public function testGarbageCollectionRequiresConvergenceAndProtectsCurrentGeneration(): void

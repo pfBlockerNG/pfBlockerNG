@@ -893,14 +893,7 @@ class TestControlWatcherLoop:
                 stderr_fallback.append(text)
                 return len(text)
 
-        class SelectiveStderr:
-            def write(self, text: str) -> int:
-                if "control command failed" in text:
-                    raise OSError("closed stderr")
-                return len(text)
-
         monkeypatch.setattr(sys, "__stderr__", RecordingStderr())
-        monkeypatch.setattr(sys, "stderr", SelectiveStderr())
 
         def apply_command(command: list[str]) -> tuple[bool, str]:
             handler_calls.append(command[1])

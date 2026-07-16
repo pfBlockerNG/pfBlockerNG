@@ -218,6 +218,9 @@ _HOSTILE_VIOLATION_ROWS = (
     ("wrong_rel", '<a target="_blank" rel="opener">'),
     ("hyphen_rel_suffix", '<a target="_blank" rel="noopener-evil">'),
     ("word_rel_suffix", '<a target="_blank" rel="noopener_evil">'),
+    ("unquoted_slash", "<a target=_blank/>"),
+    ("unquoted_slash_with_rel", '<a target=_blank/ rel="noopener noreferrer">'),
+    ("quoted_slash", '<a target="_blank"/>'),
 )
 
 

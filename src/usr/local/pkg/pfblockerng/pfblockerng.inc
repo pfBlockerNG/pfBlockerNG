@@ -7799,7 +7799,7 @@ function pfb_unbound_py_atomic_write($path, $content, array $stream_ops=array())
 
 // #1357: one exclusive lock serializes full-set publication, scalar manifest patches,
 // convergence-gated generation GC, and teardown. Python readers never take this lock.
-function pfb_unbound_py_publication_lock() {
+function pfb_unbound_py_publication_lock(?float $timeout_s=NULL) {
 	global $pfb;
 
 	$manifest_path = $pfb['unbound_py_sources'] ?? '';
@@ -7808,14 +7808,55 @@ function pfb_unbound_py_publication_lock() {
 		return FALSE;
 	}
 	$lock = @fopen(dirname($manifest_path) . '/pfb_py_sources.lock', 'c');
-	if ($lock === FALSE || !@flock($lock, LOCK_EX)) {
-		if (is_resource($lock)) {
-			@fclose($lock);
-		}
+	if ($lock === FALSE) {
 		pfb_logger("\nDNSBL publication lock unavailable", 2);
 		return FALSE;
 	}
-	return $lock;
+
+	if ($timeout_s === NULL) {
+		if (!@flock($lock, LOCK_EX)) {
+			@fclose($lock);
+			pfb_logger("\nDNSBL publication lock unavailable", 2);
+			return FALSE;
+		}
+		return $lock;
+	}
+
+	$wait_s = max($timeout_s, 0.0);
+	$deadline = microtime(TRUE) + $wait_s;
+	$max_polls = (int) ceil($wait_s / 0.02) + 2;
+	$polls = 0;
+	$first_attempt = TRUE;
+	do {
+		$allow_expired_attempt = $first_attempt && $wait_s <= 0.0;
+		$first_attempt = FALSE;
+		if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
+			break;
+		}
+		$would_block = 0;
+		if (@flock($lock, LOCK_EX | LOCK_NB, $would_block)) {
+			if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
+				@flock($lock, LOCK_UN);
+				break;
+			}
+			return $lock;
+		}
+		if ($would_block !== 1) {
+			@fclose($lock);
+			pfb_logger("\nDNSBL publication lock unavailable", 2);
+			return FALSE;
+		}
+		$polls++;
+		$remaining_s = $deadline - microtime(TRUE);
+		if ($polls >= $max_polls || $remaining_s <= 0.0) {
+			break;
+		}
+		usleep((int) min(20000, ceil($remaining_s * 1000000)));
+	} while (TRUE);
+
+	@fclose($lock);
+	pfb_logger("\nDNSBL publication lock timed out", 2);
+	return FALSE;
 }
 
 function pfb_unbound_py_publication_unlock($lock): void {
@@ -7862,7 +7903,7 @@ function pfb_unbound_py_remove_raw_artifact(string $path): bool {
 function pfb_unbound_py_gc(bool $converged): bool {
 	global $pfb;
 
-	$lock = pfb_unbound_py_publication_lock();
+	$lock = pfb_unbound_py_publication_lock(0.25);
 	if ($lock === FALSE) {
 		return FALSE;
 	}
@@ -8545,9 +8586,10 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 // (shared by the whitelist/unlock in-place patchers below), without a full
 // feed re-enumeration. The query-time whiteDB is rebuilt from this on reload.
 function pfb_unbound_python_sources_patch($key, $values, array $publication_ops=array()) {
-	$lock_fn = $publication_ops['lock'] ?? static fn() => pfb_unbound_py_publication_lock();
+	$lock_fn = $publication_ops['lock'] ?? static fn() => pfb_unbound_py_publication_lock(0.25);
 	$lock = $lock_fn();
 	if ($lock === FALSE) {
+		pfb_logger("\nDNSBL scalar manifest patch skipped while publication was busy; retry the action or run a DNSBL update", 2);
 		return FALSE;
 	}
 	try {
