@@ -10,7 +10,7 @@ use PHPUnit\Framework\TestCase;
  * The page carries top-level execution and cannot be require()d off-appliance,
  * so the retained regions below are eval-extracted verbatim from the source.
  */
-final class LogArrayRequestGuardTest extends TestCase
+final class LogSelectedTypeTest extends TestCase
 {
 	private array $savedPost = [];
 
@@ -80,7 +80,7 @@ final class LogArrayRequestGuardTest extends TestCase
 	/**
 	 * A $pfb_logtypes fixture shaped like the real page's entries. Every entry
 	 * carries 'logs'/'clear'/'download', like the real page's defaultlogs/masterfiles,
-	 * keeping the getlogs() double unreachable on green.
+	 * keeping the getlogs() double unreachable.
 	 */
 	private function logtypes(): array
 	{
@@ -118,7 +118,7 @@ final class LogArrayRequestGuardTest extends TestCase
 		return $result;
 	}
 
-	public function testPconfigScalarValuesSurviveNormalizationUnmodified(): void
+	public function testPconfigScalarValuesRemainUnmodified(): void
 	{
 		$_POST['logtype'] = 'defaultlogs';
 		$_POST['logFile'] = '/var/log/pfblockerng/ok.log';

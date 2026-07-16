@@ -95,6 +95,35 @@ def _csrf_token(webui: WebUI) -> str:
     return extract_csrf_token(resp.text)
 
 
+def _config_path_exists(vm: helpers.SmokeVM, path: str) -> bool:
+    """Return whether a scalar config path exists, distinguishing missing from empty."""
+    return (
+        helpers._php_read_scalar(
+            vm,
+            "",
+            f"config_get_path({helpers._php_str(path)}, null) === null ? '0' : '1'",
+        )
+        == "1"
+    )
+
+
+def _restore_scalar(vm: helpers.SmokeVM, path: str, value: str, existed: bool) -> None:
+    operation = (
+        f"config_set_path({helpers._php_str(path)}, {helpers._php_str(value)});"
+        if existed
+        else f"config_del_path({helpers._php_str(path)});"
+    )
+    result = helpers.php_eval(
+        vm,
+        f"{operation}\nwrite_config('pfBlockerNG smoke: restore blacklist scalar');\necho 'OK';",
+    )
+    assert result.returncode == 0 and "OK" in result.stdout, (
+        f"failed to restore {path!r}: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert helpers.config_get(vm, path) == value, f"failed to restore {path!r} value"
+    assert _config_path_exists(vm, path) is existed, f"failed to restore {path!r} presence"
+
+
 def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TIMEOUT) -> None:
     """POST a FULLY-CONTROLLED payload to the blacklist page (token added here).
 
@@ -323,11 +352,7 @@ def test_blacklist_bogus_category_rejected_config_unchanged(
 
 
 # --------------------------------------------------------------------------- #
-# 4) enable / lang AUTO-SUBMIT path -- config_mod WITHOUT the Save button.
-#    The page's JS submits the form on a blacklist_enable/blacklist_lang change;
-#    that POST carries NO `save`, yet the handler writes those scalars on
-#    `isset($_POST[field])` (lines 160-176) and write_config()s at line 288. The
-#    direct payload OMITS `save` to exercise exactly this arm (webui.post can't).
+# 4) enable / lang auto-submit path without the Save button.
 # --------------------------------------------------------------------------- #
 
 
@@ -335,24 +360,12 @@ def test_blacklist_enable_autosubmit_persists_without_save(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """``blacklist_enable`` persists via the auto-submit (no-``save``) path, both ways.
-
-    With ``isset($_POST['blacklist_enable'])`` and NO ``save``, lines 160-167 set
-    the node and config_mod=TRUE; the ``save`` block is skipped; line 288 writes
-    config. So the scalar persists with NO ``save`` in the payload. Options map
-    ``{Disable, Enable}``; an unknown value coerces to 'Disable' (line 161-162).
-
-    Transition + branch coverage: drive 'Enable' (assert), drive 'Disable'
-    (assert), and a bogus value (assert it coerced to 'Disable'). The restore
-    target is 'Disable' -- equivalent to the read default ('' ``?: 'Disable'``),
-    so an originally-unset node is left in its effective default.
-    """
+    """Auto-submit persists both enable values and coerces an unknown value to ``Disable``."""
     vm = smoke_vm
+    original_present = _config_path_exists(vm, CFG_ENABLE)
     original = helpers.config_get(vm, CFG_ENABLE)
-    # '' (unset) reads as 'Disable' on the page; restore there.
-    restore = original or "Disable"
     try:
-        assert restore in ("Disable", "Enable"), f"unexpected blacklist_enable baseline {original!r}"
+        assert original in ("", "Disable", "Enable"), f"unexpected blacklist_enable baseline {original!r}"
         # AUTO-SUBMIT 'Enable' (NO save in the payload) -> persists 'Enable'.
         _direct_post(webui, {"blacklist_enable": "Enable"})
         got_enable = helpers.config_get(vm, CFG_ENABLE)
@@ -365,34 +378,29 @@ def test_blacklist_enable_autosubmit_persists_without_save(
         got = helpers.config_get(vm, CFG_ENABLE)
         assert got == "Disable", f"bogus blacklist_enable should coerce to 'Disable', got {got!r}"
     finally:
-        _direct_post(webui, {"blacklist_enable": restore})
+        _restore_scalar(vm, CFG_ENABLE, original, original_present)
 
 
 def test_blacklist_lang_autosubmit_persists_without_save(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """``blacklist_lang`` persists via the auto-submit (no-``save``) path; bogus coerces to 'EN'.
-
-    Same no-``save`` arm as ``blacklist_enable`` (lines 169-176): the scalar is
-    written on ``isset`` alone, an unknown value coerces to the default 'EN' (line
-    170-171). Options include EN/DE/FR/... -- a valid 'DE' is a real change from
-    the 'EN' default.
-
-    Transition: assert the original, drive a VALID 'DE' (assert), drive a bogus
-    value (assert it coerced to 'EN'), restore.
-    """
+    """Auto-submit persists a valid language and coerces an unknown value to ``EN``."""
     vm = smoke_vm
+    original_present = _config_path_exists(vm, CFG_LANG)
     original = helpers.config_get(vm, CFG_LANG)
-    restore = original or "EN"
+    alternate = "FR" if original == "DE" else "DE"
     try:
-        assert original != "DE", f"blacklist_lang already 'DE' before the valid POST (original={original!r})"
-        # VALID 'DE' via the no-save path.
-        _direct_post(webui, {"blacklist_lang": "DE"})
-        assert helpers.config_get(vm, CFG_LANG) == "DE", "blacklist_lang did not persist 'DE' (no-save path)"
+        assert original in ("", "EN", "DE", "FR", "IT", "NL", "PT", "ES", "RU"), (
+            f"unexpected blacklist_lang baseline {original!r}"
+        )
+        _direct_post(webui, {"blacklist_lang": alternate})
+        assert helpers.config_get(vm, CFG_LANG) == alternate, (
+            f"blacklist_lang did not persist {alternate!r} (no-save path)"
+        )
         # BOGUS -> coerced to the default 'EN'.
         _direct_post(webui, {"blacklist_lang": "ZZ"})
         got = helpers.config_get(vm, CFG_LANG)
         assert got == "EN", f"bogus blacklist_lang should coerce to default 'EN', got {got!r}"
     finally:
-        _direct_post(webui, {"blacklist_lang": restore})
+        _restore_scalar(vm, CFG_LANG, original, original_present)
