@@ -89,6 +89,11 @@ class _RaisingStderr:
         raise OSError(text)
 
 
+class _ValueErrorStderr:
+    def write(self, text: str) -> int:
+        raise ValueError(text)
+
+
 def test_each_snapshot_gets_a_fresh_generation() -> None:
     # issue #1074: the decisionDB memo stamp needs every built Snapshot to carry a
     # unique, advancing generation -- two builds must never share one (id() reuse is
@@ -283,6 +288,15 @@ class TestRebuildAndSwapFailClosed:
         assert P.rebuild_and_swap(_boom, emit_counts=emit_counts) is False
         assert P._snapshot is old
         assert "stale.example.com" in P.decisionDB
+
+    def test_builder_error_diagnostic_propagates_non_oserror(self, monkeypatch: Any) -> None:
+        monkeypatch.setattr(sys, "stderr", _ValueErrorStderr())
+
+        def _boom() -> P.Snapshot:
+            raise RuntimeError("build blew up")
+
+        with pytest.raises(ValueError, match="DNSBL rebuild failed.*build blew up"):
+            P.rebuild_and_swap(_boom)
 
 
 # --------------------------------------------------------------------------- #
