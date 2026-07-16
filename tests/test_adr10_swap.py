@@ -21,7 +21,10 @@ shape -- None and raising builder).
 from __future__ import annotations
 
 import re
+import sys
 from typing import Any
+
+import pytest
 
 import pfb_unbound as P
 from pfb_unbound import _db_flush_dnsbl, _dnsbl_stats_wanted
@@ -79,6 +82,11 @@ def _set_count_paths(tmp_path: Any) -> None:
     so a test exercising the count re-emit must set them itself."""
     P.pfb["pfb_py_count"] = str(tmp_path / "pfb_py_count")
     P.pfb["pfb_py_regex_count"] = str(tmp_path / "pfb_py_regex_count")
+
+
+class _RaisingStderr:
+    def write(self, text: str) -> int:
+        raise OSError(text)
 
 
 def test_each_snapshot_gets_a_fresh_generation() -> None:
@@ -247,6 +255,31 @@ class TestRebuildAndSwapFailClosed:
         assert P._snapshot is old
         assert "stale.example.com" in P.decisionDB  # STALE memo SURVIVES a raising build.
         assert emitted == {}
+
+    @pytest.mark.parametrize("emit_counts", [True, False])
+    @pytest.mark.parametrize(
+        "hostile_stderr",
+        [
+            pytest.param(None, id="stderr-none"),
+            pytest.param(_RaisingStderr(), id="stderr-write-raises"),
+        ],
+    )
+    def test_builder_raises_with_hostile_stderr_keeps_everything(
+        self, monkeypatch: Any, hostile_stderr: Any, emit_counts: bool
+    ) -> None:
+        old = _snapshot(data={"old.example.com": {"log": "1", "index": 0, "important": False}}, counts=1)
+        P._snapshot = old
+        _seed_decision("stale.example.com")
+        monkeypatch.setattr(sys, "stderr", hostile_stderr)
+
+        def _boom() -> P.Snapshot:
+            raise RuntimeError("build blew up")
+
+        assert P._snapshot is old
+        assert "stale.example.com" in P.decisionDB
+        assert P.rebuild_and_swap(_boom, emit_counts=emit_counts) is False
+        assert P._snapshot is old
+        assert "stale.example.com" in P.decisionDB
 
 
 # --------------------------------------------------------------------------- #

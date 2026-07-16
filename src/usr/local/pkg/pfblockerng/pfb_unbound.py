@@ -5494,7 +5494,12 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
         new_snapshot = build_snapshot()
     except Exception as e:
         # Fail-closed: a raising build leaves the live snapshot + decision memo intact.
-        sys.stderr.write("[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: {}".format(e))
+        err = sys.stderr
+        if err is not None:
+            try:
+                err.write("[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: {}".format(e))
+            except Exception:
+                pass
         return False
 
     if new_snapshot is None:
