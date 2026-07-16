@@ -135,10 +135,15 @@ if [ "$staged_sh" = 1 ] || [ "$staged_specplumb" = 1 ]; then
 	step 'shebang policy (no #!bash)'
 	# Vendored third-party plugin trees are exempt (upstream content, refreshed
 	# wholesale by scripts/update-vendored-skills.py; never runs on the box).
+	# .agents/skills/<name> is canonical for a migrated skill, .claude/skills/<name>
+	# either the same content (pre-migration) or a symlink onto it — exempt both
+	# prefixes so this stays correct regardless of migration state.
 	git ls-files \
 		| grep -v -e '^\.claude/skills/ponytail/' -e '^\.claude/skills/caveman/' \
 			-e '^\.claude/skills/diagnosing-bugs/' -e '^\.claude/skills/git-guardrails-claude-code/' \
 			-e '^\.claude/skills/wizard/' \
+			-e '^\.agents/skills/diagnosing-bugs/' -e '^\.agents/skills/git-guardrails-claude-code/' \
+			-e '^\.agents/skills/wizard/' \
 		| while IFS= read -r f; do
 		case $(head -n1 "$f" 2>/dev/null) in
 		'#!'*bash*)

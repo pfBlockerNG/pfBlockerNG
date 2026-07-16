@@ -2,8 +2,9 @@
   // markdownlint-cli2 runner config (globs + ignores). Rule set lives in
   // `.markdownlint.jsonc`. Run from the repo root: `npx markdownlint-cli2`
   // (add `--fix` to auto-fix). Lints every tracked Markdown file, including
-  // .ADRs/ and the repo's own .claude/skills/; skips dependency/virtualenv
-  // trees and the VENDORED plugin skill trees listed below.
+  // .ADRs/ and the repo's own .claude/skills/ + .agents/skills/; skips
+  // dependency/virtualenv trees and the VENDORED plugin skill trees listed
+  // below.
   "globs": ["**/*.md"],
   "ignores": [
     "node_modules",
@@ -23,6 +24,10 @@
     ".claude/skills/ponytail/**",
     ".claude/skills/caveman/**",
     // skills-lock.json tracks these byte-identical mattpocock/skills imports.
-    ".claude/skills/{ask-matt,claude-handoff,code-review,codebase-design,design-an-interface,diagnosing-bugs,domain-modeling,edit-article,git-guardrails-claude-code,grill-me,grill-with-docs,grilling,handoff,implement,improve-codebase-architecture,loop-me,migrate-to-shoehorn,obsidian-vault,prototype,qa,request-refactor-plan,research,resolving-merge-conflicts,scaffold-exercises,setup-matt-pocock-skills,setup-pre-commit,setup-ts-deep-modules,tdd,teach,to-questionnaire,to-spec,to-tickets,triage,ubiquitous-language,wayfinder,wizard,writing-beats,writing-fragments,writing-great-skills,writing-shape}/**"
+    // .agents/skills/<name> is the canonical path; .claude/skills/<name> is
+    // either the same content (pre-migration) or a symlink onto it — ignore
+    // both so lint stays correct regardless of migration state per skill.
+    ".claude/skills/{ask-matt,batch-grill-me,claude-handoff,code-review,codebase-design,design-an-interface,diagnosing-bugs,domain-modeling,edit-article,git-guardrails-claude-code,grill-me,grill-with-docs,grilling,handoff,implement,improve-codebase-architecture,loop-me,migrate-to-shoehorn,obsidian-vault,prototype,qa,request-refactor-plan,research,resolving-merge-conflicts,scaffold-exercises,setup-matt-pocock-skills,setup-pre-commit,setup-ts-deep-modules,tdd,teach,to-questionnaire,to-spec,to-tickets,triage,ubiquitous-language,wayfinder,wizard,writing-beats,writing-fragments,writing-great-skills,writing-shape}/**",
+    ".agents/skills/{ask-matt,batch-grill-me,claude-handoff,code-review,codebase-design,design-an-interface,diagnosing-bugs,domain-modeling,edit-article,git-guardrails-claude-code,grill-me,grill-with-docs,grilling,handoff,implement,improve-codebase-architecture,loop-me,migrate-to-shoehorn,obsidian-vault,prototype,qa,request-refactor-plan,research,resolving-merge-conflicts,scaffold-exercises,setup-matt-pocock-skills,setup-pre-commit,setup-ts-deep-modules,tdd,teach,to-questionnaire,to-spec,to-tickets,triage,ubiquitous-language,wayfinder,wizard,writing-beats,writing-fragments,writing-great-skills,writing-shape}/**"
   ]
 }

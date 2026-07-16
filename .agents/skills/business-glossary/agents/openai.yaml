@@ -1,0 +1,5 @@
+interface:
+  display_name: "Business Glossary"
+  short_description: "Build a shared business/stakeholder glossary"
+policy:
+  allow_implicit_invocation: false

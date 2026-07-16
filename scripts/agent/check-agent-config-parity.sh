@@ -61,9 +61,28 @@ check_adapter() {
 	fi
 }
 
-for source in "$root"/.claude/skills/*/SKILL.md; do
+for source_dir in "$root"/.claude/skills/*/; do
+	name=$(basename "${source_dir%/}")
+	link_path="$root/.claude/skills/$name"
+
+	if [ -L "$link_path" ]; then
+		# Vendor-agnostic skill: .claude/skills/$name is a symlink onto
+		# canonical .agents/skills/$name (or vice versa mid-migration).
+		# Filesystem identity IS the parity guarantee here — no textual
+		# back-reference to check, just that the link resolves.
+		resolved=$(CDPATH='' cd "$link_path" 2>/dev/null && pwd -P) || resolved=''
+		canonical=$(CDPATH='' cd "$root/.agents/skills/$name" 2>/dev/null && pwd -P) || canonical=''
+		if [ -z "$resolved" ] || [ -z "$canonical" ] || [ "$resolved" != "$canonical" ]; then
+			printf 'agent-config-parity: .claude/skills/%s is a symlink but does not resolve to canonical .agents/skills/%s\n' \
+				"$name" "$name" >&2
+			fail=1
+		fi
+		skills=$((skills + 1))
+		continue
+	fi
+
+	source="$source_dir/SKILL.md"
 	[ -f "$source" ] || continue
-	name=$(basename "$(dirname "$source")")
 	source_rel=".claude/skills/$name/SKILL.md"
 	check_adapter "$source_rel" ".agents/skills/$name/SKILL.md" "$name" skill
 	skills=$((skills + 1))

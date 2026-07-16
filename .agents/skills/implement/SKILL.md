@@ -1,11 +1,15 @@
 ---
 name: implement
 description: "Implement a piece of work based on a spec or set of tickets."
+disable-model-invocation: true
 ---
 
-# Codex adapter
+Implement the work described by the user in the spec or tickets.
 
-Read and follow `../../../.claude/skills/implement/SKILL.md` as the complete
-procedure. Translate Claude-specific tool names and sub-agent calls to Codex
-surfaces through `AGENTS.md`. Preserve upstream requirements unless repository
-policy is stricter; `CLAUDE.md` and `AGENTS.md` win on conflict.
+Use /tdd where possible, at pre-agreed seams.
+
+Run typechecking regularly, single test files regularly, and the full test suite once at the end.
+
+Once done, use /code-review to review the work.
+
+Commit your work to the current branch.
