@@ -43,6 +43,8 @@ final class TickFeedPassDeferralTest extends TestCase
 	private mixed $originalRunlog = NULL;
 	private bool $hadExtraslog = FALSE;
 	private mixed $originalExtraslog = NULL;
+	private bool $hadPhp = FALSE;
+	private mixed $originalPhp = NULL;
 
 	/** Raw fd simulating another process holding the feed-pass lock. */
 	private $lockFp = NULL;
@@ -57,6 +59,9 @@ final class TickFeedPassDeferralTest extends TestCase
 
 		$this->hadExtraslog      = array_key_exists('extraslog', $GLOBALS['pfb'] ?? []);
 		$this->originalExtraslog = $GLOBALS['pfb']['extraslog'] ?? NULL;
+
+		$this->hadPhp      = array_key_exists('php', $GLOBALS['pfb'] ?? []);
+		$this->originalPhp = $GLOBALS['pfb']['php'] ?? NULL;
 
 		$this->dbdir = sys_get_temp_dir() . '/pfb_tick_feedpass_' . uniqid('', TRUE);
 		mkdir($this->dbdir, 0755, TRUE);
@@ -94,6 +99,11 @@ final class TickFeedPassDeferralTest extends TestCase
 			$GLOBALS['pfb']['extraslog'] = $this->originalExtraslog;
 		} else {
 			unset($GLOBALS['pfb']['extraslog']);
+		}
+		if ($this->hadPhp) {
+			$GLOBALS['pfb']['php'] = $this->originalPhp;
+		} else {
+			unset($GLOBALS['pfb']['php']);
 		}
 		$this->rrmdir($this->dbdir);
 	}
@@ -169,6 +179,84 @@ final class TickFeedPassDeferralTest extends TestCase
 			'next_due' => $now + 3600,
 			'jitter'   => 0,
 		], $GLOBALS['pfb']['dbdir']);
+	}
+
+	private function seedDueLedgerEntry(string $jobKey, int $now): void
+	{
+		pfb_due_ledger_write_entry($jobKey, [
+			'last_run' => $now - 86410,
+			'next_due' => $now - 10,
+			'jitter'   => 0,
+		], $GLOBALS['pfb']['dbdir']);
+	}
+
+	private function installPhpArgvRecorder(): string
+	{
+		$phpPath = "{$this->dbdir}/php-recorder";
+		$script   = <<<'SH'
+#!/bin/sh
+active="${0}.active.$$"
+done="${0}.done.$$"
+tmp="${done}.tmp"
+: > "$active"
+trap 'rm -f "$active" "$tmp"' EXIT HUP INT TERM
+printf '%s\0' "$@" > "$tmp"
+mv "$tmp" "$done"
+SH;
+		file_put_contents($phpPath, $script . "\n");
+		chmod($phpPath, 0755);
+		return $phpPath;
+	}
+
+	/** @return list<list<string>> */
+	private function awaitRecordedInvocations(string $phpPath): array
+	{
+		$deadline    = hrtime(TRUE) + 2_000_000_000;
+		$stableSince = NULL;
+		$donePaths   = [];
+		while (hrtime(TRUE) < $deadline) {
+			$now         = hrtime(TRUE);
+			$currentDone = glob("{$phpPath}.done.*") ?: [];
+			$activePaths = glob("{$phpPath}.active.*") ?: [];
+			sort($currentDone);
+			if ($currentDone !== [] && $activePaths === []) {
+				if ($currentDone !== $donePaths) {
+					$donePaths   = $currentDone;
+					$stableSince = $now;
+				} elseif ($stableSince !== NULL && $now - $stableSince >= 200_000_000) {
+					break;
+				}
+			} else {
+				$stableSince = NULL;
+			}
+			usleep(1000);
+		}
+		$this->assertNotEmpty($donePaths,
+			'tick dispatch must complete at the configured PHP executable within 2 seconds');
+		$this->assertSame([], glob("{$phpPath}.active.*") ?: [],
+			'all configured PHP invocations must finish before argv is asserted');
+
+		$recorded = [];
+		foreach ($donePaths as $donePath) {
+			$raw = file_get_contents($donePath);
+			$this->assertNotFalse($raw, 'PHP argv recorder output must be readable');
+			$args = explode("\0", $raw);
+			array_pop($args);
+			$recorded[] = $args;
+		}
+		return $recorded;
+	}
+
+	private function installLedgerRequeueCommand(): string
+	{
+		$ledgerPath = "{$this->dbdir}/pfb_due_ledger.json";
+		$sourcePath = "{$ledgerPath}.requeued";
+		$scriptPath = "{$this->dbdir}/requeue-ledger";
+		copy($ledgerPath, $sourcePath);
+		file_put_contents($scriptPath, "#!/bin/sh\n/bin/cp "
+			. escapeshellarg($sourcePath) . ' ' . escapeshellarg($ledgerPath) . "\n");
+		chmod($scriptPath, 0755);
+		return $scriptPath;
 	}
 
 	/** Hold the feed-pass lock as ANOTHER process would -- a second, independent fd. */
@@ -386,5 +474,213 @@ final class TickFeedPassDeferralTest extends TestCase
 		$this->assertTrue(!empty($after['pending_apply']),
 			'outside the quiet-hours window the tick must defer via pending_apply, whether or not '
 			. 'a feed pass is running');
+	}
+
+	/**
+	 * Scenario:
+	 *   Given pfb_interval='Disabled' and a future cron ledger entry whose manual
+	 *         GUI apply was deferred with pending_apply=TRUE.
+	 *   And   the apply window is open and the feed-pass lock is free.
+	 *   When  pfblockerng_tick() runs.
+	 *   Then  the pending manual apply dispatches once, clears only pending_apply,
+	 *         preserves cadence fields, and suppresses same-tick log maintenance.
+	 */
+	public function testDisabledIntervalDispatchesPendingManualApplyWithoutMovingCadence(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		pfb_global();
+		$fakePhp = $this->installPhpArgvRecorder();
+		$GLOBALS['pfb']['php'] = $fakePhp;
+		if (!is_dir($GLOBALS['pfb']['logdir'])) {
+			@mkdir($GLOBALS['pfb']['logdir'], 0755, TRUE);
+		}
+
+		$now = time();
+		$expected = [
+			'last_run'      => $now - 7200,
+			'next_due'      => $now + 7200,
+			'jitter'        => 37,
+			'pending_apply' => TRUE,
+		];
+		pfb_due_ledger_write_entry('cron', $expected, $GLOBALS['pfb']['dbdir']);
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl',  $now);
+
+		$logPath = $GLOBALS['pfb']['log'];
+		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
+		$this->assertSame($expected,
+			pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']),
+			'test setup: disabled cron must start future, pending, and byte-for-byte known');
+
+		pfblockerng_tick();
+
+		$this->assertSame([
+			['/usr/local/www/pfblockerng/pfblockerng.php', 'pfb_trigger', 'scope=both', 'force=false', 'trigger=manual'],
+		], $this->awaitRecordedInvocations($fakePhp),
+			'disabled pending apply must dispatch exactly once with the manual trigger argv');
+		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
+		$this->assertSame([
+			'last_run' => $expected['last_run'],
+			'next_due' => $expected['next_due'],
+			'jitter'   => $expected['jitter'],
+		], $after,
+			'disabled pending apply must clear only pending_apply; cadence fields must remain unchanged');
+		$lines = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame(['l1', 'l2', 'l3', 'l4', 'l5'], $lines,
+			'dispatching the pending manual apply must suppress same-tick log maintenance');
+	}
+
+	/**
+	 * Scenario:
+	 *   Given pfb_interval='Disabled' with pending_apply=TRUE inside the window.
+	 *   And   another feed pass holds the lock.
+	 *   When  pfblockerng_tick() runs.
+	 *   Then  the whole ledger entry remains pending and unchanged for retry.
+	 */
+	public function testDisabledIntervalRetainsPendingManualApplyWhileFeedPassIsBusy(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		pfb_global();
+		$now = time();
+		$expected = [
+			'last_run'      => $now - 3600,
+			'next_due'      => $now + 3600,
+			'jitter'        => 19,
+			'pending_apply' => TRUE,
+		];
+		pfb_due_ledger_write_entry('cron', $expected, $GLOBALS['pfb']['dbdir']);
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl',  $now);
+		$this->holdLockAsAnotherProcess();
+
+		pfblockerng_tick();
+
+		$this->assertSame($expected,
+			pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']),
+			'busy feed pass must retain disabled pending apply and every cadence field unchanged');
+	}
+
+	/**
+	 * Scenario:
+	 *   Given pfb_interval='Disabled' with pending_apply=TRUE outside the window.
+	 *   When  pfblockerng_tick() runs.
+	 *   Then  the whole ledger entry remains pending and unchanged for retry.
+	 */
+	public function testDisabledIntervalRetainsPendingManualApplyOutsideQuietHours(): void
+	{
+		$this->seedTickPrereqs('Disabled', $this->outsideWindowNow());
+		pfb_global();
+		$now = time();
+		$expected = [
+			'last_run'      => $now - 1800,
+			'next_due'      => $now + 1800,
+			'jitter'        => 11,
+			'pending_apply' => TRUE,
+		];
+		pfb_due_ledger_write_entry('cron', $expected, $GLOBALS['pfb']['dbdir']);
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl',  $now);
+
+		pfblockerng_tick();
+
+		$this->assertSame($expected,
+			pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']),
+			'closed quiet-hours window must retain disabled pending apply and every cadence field unchanged');
+	}
+
+	public function testScheduledCronUsesConfiguredPhpExactlyOnce(): void
+	{
+		$this->seedTickPrereqs('24');
+		pfb_global();
+		$fakePhp = $this->installPhpArgvRecorder();
+		$GLOBALS['pfb']['php'] = $fakePhp;
+		$now = time();
+		$this->seedDueLedgerEntry('cron', $now);
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl', $now);
+
+		pfblockerng_tick();
+
+		$this->assertSame([
+			['/usr/local/www/pfblockerng/pfblockerng.php', 'cron'],
+		], $this->awaitRecordedInvocations($fakePhp));
+	}
+
+	public function testDccUsesConfiguredPhpExactlyOnce(): void
+	{
+		$this->seedTickPrereqs('24');
+		pfb_global();
+		$fakePhp = $this->installPhpArgvRecorder();
+		$GLOBALS['pfb']['php'] = $fakePhp;
+		$now = time();
+		$this->seedFutureLedgerEntry('cron', $now);
+		$this->seedDueLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl', $now);
+
+		pfblockerng_tick();
+
+		$this->assertSame([
+			['/usr/local/www/pfblockerng/pfblockerng.php', 'dcc'],
+		], $this->awaitRecordedInvocations($fakePhp));
+	}
+
+	public function testBlUsesConfiguredPhpExactlyOnce(): void
+	{
+		$this->seedTickPrereqs('24');
+		pfb_global();
+		$fakePhp = $this->installPhpArgvRecorder();
+		$GLOBALS['pfb']['php'] = $fakePhp;
+		$GLOBALS['pfb']['enable'] = 'on';
+		$GLOBALS['pfb']['blconfig'] = [
+			'blacklist_enable'   => 'Enable',
+			'blacklist_selected' => 'test-list',
+			'item'               => [[
+				'xml'      => 'test-list',
+				'selected' => 'on',
+			]],
+		];
+		$now = time();
+		$this->seedFutureLedgerEntry('cron', $now);
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedDueLedgerEntry('bl', $now);
+
+		pfblockerng_tick();
+
+		$this->assertSame([
+			['/usr/local/www/pfblockerng/pfblockerng.php', 'bl', 'test-list'],
+		], $this->awaitRecordedInvocations($fakePhp));
+	}
+
+	public function testDisabledManualChildRequeueSurvivesDispatch(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		pfb_global();
+		$now = time();
+		$expected = [
+			'last_run'      => $now - 7200,
+			'next_due'      => $now + 7200,
+			'jitter'        => 37,
+			'pending_apply' => TRUE,
+		];
+		pfb_due_ledger_write_entry('cron', $expected, $GLOBALS['pfb']['dbdir']);
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl', $now);
+		$fakePhp = $this->installPhpArgvRecorder();
+		$requeue = $this->installLedgerRequeueCommand();
+		$GLOBALS['pfb']['php'] = escapeshellarg($requeue) . '; ' . escapeshellarg($fakePhp);
+
+		pfblockerng_tick();
+
+		$this->assertSame([
+			['/usr/local/www/pfblockerng/pfblockerng.php', 'pfb_trigger', 'scope=both', 'force=false', 'trigger=manual'],
+		], $this->awaitRecordedInvocations($fakePhp));
+		$this->assertSame($expected,
+			pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']),
+			'a child lock-loss requeue must survive the parent dispatch path');
+	}
+
+	public function testDefaultPhpExecutableIsProductionPhp(): void
+	{
+		$this->assertSame('/usr/local/bin/php', $GLOBALS['pfb']['php']);
 	}
 }

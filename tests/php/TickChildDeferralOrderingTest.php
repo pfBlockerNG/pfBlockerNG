@@ -80,7 +80,7 @@ final class TickChildDeferralOrderingTest extends TestCase
 		$this->assertNotFalse($branchEnd, 'test oracle: feed-cron dispatch branch end not found');
 		$branch = substr($src, $branchStart, $branchEnd - $branchStart);
 
-		$launchPos = strpos($branch, 'exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron');
+		$launchPos = strpos($branch, 'exec("{$pfb[\'php\']} /usr/local/www/pfblockerng/pfblockerng.php cron');
 		$markPos = strpos($branch, "pfb_due_ledger_mark_ran_anchored('cron'");
 		$this->assertNotFalse($launchPos, 'test oracle: exact cron background launch not found');
 		$this->assertNotFalse($markPos, 'test oracle: anchored cadence update not found');
