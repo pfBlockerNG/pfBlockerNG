@@ -98,8 +98,13 @@ Describe 'Token Savior vendor wiring'
     The status should be success
   End
 
-  It 'requests only supported Bash and Playwright MCP capture events in Codex'
-    When run python3 -c 'import json, re, sys; groups=json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]; pattern=next(g["matcher"] for g in groups if any("tool_capture_hook" in h["command"] for h in g["hooks"])); approved=("Bash", "mcp__playwright__browser_snapshot"); rejected=("Read", "Grep", "WebFetch", "apply_patch", "PrefixBash", "BashSuffix", "mcp__token-savior-recall__capture_get", "mcp__github__get_file_contents", "mcp__other__read"); assert all(re.search(pattern, name) for name in approved); assert not any(re.search(pattern, name) for name in rejected)' "${PFB_ROOT}/.codex/hooks.json"
+  It 'captures Claude tool and token-savior-recall output without blanket MCP matching'
+    When run python3 -c 'import json, re, sys; groups=json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]; pattern=next(g["matcher"] for g in groups if any("tool_capture_hook" in h["command"] for h in g["hooks"])); approved=("Bash", "Read", "Grep", "WebFetch", "mcp__playwright__browser_snapshot", "mcp__token-savior-recall__search_codebase", "mcp__token-savior-recall__get_full_context"); rejected=("mcp__github__get_file_contents", "mcp__other__read"); assert all(re.search(pattern, name) for name in approved); assert not any(re.search(pattern, name) for name in rejected)' "${PFB_ROOT}/.claude/settings.json"
+    The status should be success
+  End
+
+  It 'requests only supported Bash, Playwright, and token-savior-recall capture events in Codex'
+    When run python3 -c 'import json, re, sys; groups=json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]; pattern=next(g["matcher"] for g in groups if any("tool_capture_hook" in h["command"] for h in g["hooks"])); approved=("Bash", "mcp__playwright__browser_snapshot", "mcp__token-savior-recall__search_codebase", "mcp__token-savior-recall__get_full_context"); rejected=("Read", "Grep", "WebFetch", "apply_patch", "PrefixBash", "BashSuffix", "mcp__github__get_file_contents", "mcp__other__read"); assert all(re.search(pattern, name) for name in approved); assert not any(re.search(pattern, name) for name in rejected)' "${PFB_ROOT}/.codex/hooks.json"
     The status should be success
   End
 End

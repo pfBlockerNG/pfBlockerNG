@@ -34,7 +34,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(Bash|mcp__playwright__.*)$",
+        "matcher": "^(Bash|mcp__playwright__.*|mcp__token-savior-recall__.*)$",
         "hooks": [
           {
             "type": "command",

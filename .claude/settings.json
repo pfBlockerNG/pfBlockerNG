@@ -62,7 +62,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|WebFetch|Read|Grep|mcp__playwright__.*",
+        "matcher": "Bash|WebFetch|Read|Grep|mcp__playwright__.*|mcp__token-savior-recall__.*",
         "hooks": [
           {
             "type": "command",
