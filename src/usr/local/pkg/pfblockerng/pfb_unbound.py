@@ -5224,8 +5224,8 @@ def build(
 def _dnsbl_path_within_base(path: str, base_dir: str) -> bool:
     """Containment check: is the resolved real path of ``path`` inside ``base_dir``?
 
-    The manifest is published next to its raw feeds, so every ``raw`` / ``tld_master``
-    file a row references must resolve under the manifest's own directory. A row whose
+    The manifest is published next to its raw feeds, so every ``raw`` file a row
+    references must resolve under the manifest's own directory. A row whose
     resolved path escapes that directory (via ``..`` or an absolute path elsewhere) is
     rejected by the caller -- never opened. Symlinks are resolved (``os.path.realpath``)
     so a link inside ``base_dir`` cannot point outside it.
