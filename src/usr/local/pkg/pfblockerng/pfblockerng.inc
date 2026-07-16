@@ -68,6 +68,7 @@ $pfb['cut']	= '/usr/bin/cut';
 $pfb['sed']	= '/usr/bin/sed';
 $pfb['cat']	= '/bin/cat';
 $pfb['ls']	= '/bin/ls';
+$pfb['php']	= '/usr/local/bin/php';
 $pfb['pfctl']	= '/sbin/pfctl';
 $pfb['wc']	= '/usr/bin/wc';
 
