@@ -1,5 +1,5 @@
 name = "analyst"
-description = "Low-tier read-only analyst for evidence gathering, issue triage, and schema-constrained reports."
+description = "Small-tier read-only analyst for evidence gathering, issue triage, and schema-constrained reports."
 model = "gpt-5.6-luna"
 model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"

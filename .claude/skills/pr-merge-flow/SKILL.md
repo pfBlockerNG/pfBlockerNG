@@ -10,7 +10,7 @@ description: >
   workflow — ONE Claude sub-agent as an ADVERSARIAL reviewer IN ADDITION TO CodeRabbit,
   never a mere fallback — at reasoning effort xhigh for the full profile / high for the
   mechanically-gated verify profile (never below the profile's floor, never max): the latest
-  `claude-sonnet-5` by default; the highest-tier model (`claude-fable-5`) for a
+  `claude-sonnet-5` by default; the top-tier model (`claude-fable-5`) for a
   large/complex PR; if the top tier is unavailable for such a PR, run TWO review-single
   passes — one `claude-sonnet-5` and one `claude-opus-4-8` — and union their findings (never `claude-opus-4-8` as a sole
   reviewer, never a multi-agent fan-out). Feedback-fix re-reviews are DELTA-scoped
@@ -32,7 +32,7 @@ description: >
 ---
 
 You run this repo's standard land-a-PR flow: **review feedback first, then merge.**
-Capability prose uses the high / medium / low tiers from
+Capability prose uses the high / medium / small tiers from
 `.agents/model-tiers.conf`. The `claude-fable-5`, `claude-opus-4-8`, and
 `claude-sonnet-5` literals below are full Claude runtime identifiers; the Codex
 adapter selects `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
@@ -209,7 +209,7 @@ replace CodeRabbit; when CodeRabbit never reviews it stands alone.
      that finding as mandatory: re-run with `profile: full`, never argue with it.
    - **Pick the model** by the PR's size and complexity, and record the chosen model +
      the size metric that drove it in the Step-1d.5 audit comment: `model: claude-sonnet-5`
-     by default; the highest-tier model (currently `claude-fable-5`) for a large/complex PR —
+     by default; the top-tier model (currently `claude-fable-5`) for a large/complex PR —
      >300 changed lines, >6 files, or any behaviour change in `src/`'s
      parsing/guard/scheduling logic — where whole-PR cross-referencing pays.
      **Top tier unavailable on a large/complex PR** (owner directive 2026-07-14): run
@@ -219,7 +219,7 @@ replace CodeRabbit; when CodeRabbit never reviews it stands alone.
      fan-out** (user directive 2026-07-11 — `review-fanout` runs only on an explicit
      user request), never `max`; effort floor is `xhigh` for `profile: full` and
      `high` for `profile: verify` (owner authorization 2026-07-14) — never below the
-     profile's floor; use the configured full low-tier identifier
+     profile's floor; use the configured full small-tier identifier
      (`claude-sonnet-5`) — never pin a dated model ID.
    - **Validate the result**: treat `findings` as the review; `per_file` must cover
      every changed file (a review missing files is incomplete — re-run it).
@@ -334,7 +334,7 @@ a numbered list of every finding with its outcome — `fixed@<commit>` / `skippe
 `deferred: <issue link>` — folded into the Step-1d.5 audit comment; refuse to merge while any
 item lacks an outcome. **When NO external reviewer reviewed a substantive PR** (CodeRabbit dropped under the
 5-minute rule AND Copilot unavailable/timed out), **escalate instead of merging on the single
-Claude pass** — a focused second single-agent pass over the final diff (the highest-tier model —
+Claude pass** — a focused second single-agent pass over the final diff (the top-tier model —
 `claude-fable-5` preferred, else `claude-sonnet-5`), or pace the merge; the audited defect window coincided exactly with a
 bots-quota batch-merge cadence. If a finding is unresolved, contested, or needs the user,
 **stop here and report** — do not merge.

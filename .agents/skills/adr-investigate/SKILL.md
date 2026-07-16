@@ -6,7 +6,7 @@ description: Gather evidence for a multi-component pfBlockerNG ADR without desig
 # Investigate ADR areas
 
 Read `../../../.claude/workflows/adr-investigate.js` as the maintained area-report schema
-and prompt contract. Spawn one read-only, low-reasoning `analyst` subagent per
+and prompt contract. Spawn one read-only, small-tier `analyst` subagent per
 independent area. Each report labels every fact `verified` with command/file-line
 evidence or `assumed`; the caller owns synthesis and must resolve assumptions
 before a phase depends on them.

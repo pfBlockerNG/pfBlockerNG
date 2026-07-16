@@ -7,7 +7,7 @@ description: Perform an explicit-user-requested multi-agent adversarial review o
 
 Read and execute the canonical workflow at
 `../../../.claude/workflows/review-fanout.js`, translating its Claude agents to
-low-reasoning Codex subagents with the
+small-tier Codex subagents with the
 `../../../.codex/agents/adversarial-reviewer.toml` role and the tier mapping in
 `../../model-tiers.conf`. Use only when the user
 explicitly requests fan-out. Preserve the canonical lenses, prompts, schemas,

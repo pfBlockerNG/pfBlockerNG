@@ -7,7 +7,7 @@ description: Produce an evidence-backed pfBlockerNG issue verdict, impact assess
 
 Read `../../../.claude/workflows/issue-triage.js` for the durable triage-record fields and
 its exact evidence standard. Use a read-only `analyst` against an up-to-date
-target-base worktree by default, or `analyst-high` when the caller explicitly
-selects high reasoning. Verify each claim, consider alternatives, reproduce when
+target-base worktree by default, or `analyst-top` when the caller explicitly
+selects the top tier. Verify each claim, consider alternatives, reproduce when
 possible, assess impact, record cited paths and base tip, and return a plan of
 self-contained delegated steps. Never edit or comment on the issue in this stage.

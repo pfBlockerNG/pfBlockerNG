@@ -17,17 +17,17 @@ Describe 'check-agent-config-parity.sh'
       '../../../.claude/skills/example/SKILL.md' > "$work/.agents/skills/example/SKILL.md"
     printf '%s\n' '---' 'name: review' 'description: fixture' '---' \
       '../../../.claude/workflows/review.js' > "$work/.agents/skills/review/SKILL.md"
-    printf '%s\n' 'HIGH_CLAUDE=claude-fable-5' 'HIGH_CODEX=gpt-5.6-sol' \
-      'MEDIUM_CLAUDE=claude-opus-4-8' 'MEDIUM_CODEX=gpt-5.6-terra' \
-      'LOW_CLAUDE=claude-sonnet-5' 'LOW_CODEX=gpt-5.6-luna' > "$work/.agents/model-tiers.conf"
+    printf '%s\n' 'TOP_CLAUDE=claude-fable-5' 'TOP_CODEX=gpt-5.6-sol' \
+      'MID_CLAUDE=claude-opus-4-8' 'MID_CODEX=gpt-5.6-terra' \
+      'SMALL_CLAUDE=claude-sonnet-5' 'SMALL_CODEX=gpt-5.6-luna' > "$work/.agents/model-tiers.conf"
     for role_model in \
       'planner gpt-5.6-sol' \
       'implementer gpt-5.6-luna' \
       'analyst gpt-5.6-luna' \
-      'analyst-high gpt-5.6-sol' \
+      'analyst-top gpt-5.6-sol' \
       'adversarial-reviewer gpt-5.6-luna' \
-      'adversarial-reviewer-high gpt-5.6-sol' \
-      'adversarial-reviewer-medium gpt-5.6-terra'; do
+      'adversarial-reviewer-top gpt-5.6-sol' \
+      'adversarial-reviewer-mid gpt-5.6-terra'; do
       set -- $role_model
       printf 'model = "%s"\n' "$2" > "$work/.codex/agents/$1.toml"
     done
@@ -111,9 +111,9 @@ Describe 'check-agent-config-parity.sh'
 
   It 'parses model tiers as data and never executes repository-controlled text'
     marker="$work/tier-code-executed"
-    printf '%s\n' 'HIGH_CLAUDE=claude-fable-5' "HIGH_CODEX=\$(touch $marker)" \
-      'MEDIUM_CLAUDE=claude-opus-4-8' 'MEDIUM_CODEX=gpt-5.6-terra' \
-      'LOW_CLAUDE=claude-sonnet-5' 'LOW_CODEX=gpt-5.6-luna' > "$work/.agents/model-tiers.conf"
+    printf '%s\n' 'TOP_CLAUDE=claude-fable-5' "TOP_CODEX=\$(touch $marker)" \
+      'MID_CLAUDE=claude-opus-4-8' 'MID_CODEX=gpt-5.6-terra' \
+      'SMALL_CLAUDE=claude-sonnet-5' 'SMALL_CODEX=gpt-5.6-luna' > "$work/.agents/model-tiers.conf"
     When run sh "$guard" --root "$work"
     The status should equal 1
     The stderr should include 'invalid model tier assignment'
@@ -121,10 +121,10 @@ Describe 'check-agent-config-parity.sh'
   End
 
   It 'rejects duplicate model tier assignments'
-    printf '%s\n' 'LOW_CODEX=gpt-5.6-luna' >> "$work/.agents/model-tiers.conf"
+    printf '%s\n' 'SMALL_CODEX=gpt-5.6-luna' >> "$work/.agents/model-tiers.conf"
     When run sh "$guard" --root "$work"
     The status should equal 1
-    The stderr should include 'duplicate model tier assignment: LOW_CODEX'
+    The stderr should include 'duplicate model tier assignment: SMALL_CODEX'
   End
 
   It 'maps every canonical source in the real repository'

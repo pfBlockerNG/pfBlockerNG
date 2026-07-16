@@ -91,18 +91,19 @@ pfSense-provided PHP functions".
   actual output. Only a CONFIRMED hypothesis gets a fix; the ledger rides the handoff so the
   gate can audit the causal chain instead of trusting the patch.
 
-### Plan high, implement low
+### Plan top-tier, implement small-tier
 
-Provider-neutral procedures name three capability tiers. The machine-readable
-mapping is `.agents/model-tiers.conf`: **high reasoning** means
-`claude-fable-5` in Claude and `gpt-5.6-sol` in Codex; **medium reasoning** means
-`claude-opus-4-8` and `gpt-5.6-terra`; **low reasoning** means
-`claude-sonnet-5` and `gpt-5.6-luna`. A tier selects the model, not
+Provider-neutral procedures name three capability tiers — **top / mid / small**
+(deliberately disjoint from the effort-level words, so "high" always means an
+effort value). The machine-readable mapping is `.agents/model-tiers.conf`: the
+**top tier** means `claude-fable-5` in Claude and `gpt-5.6-sol` in Codex; the
+**mid tier** means `claude-opus-4-8` and `gpt-5.6-terra`; the **small tier**
+means `claude-sonnet-5` and `gpt-5.6-luna`. A tier selects the model, not
 the effort knob: workflows still set their required effort independently.
 
-Substantial coding work is **planned and gated by the high tier** (falling back
-to medium when high is unavailable) and **implemented by low-tier** sub-agents:
-the planner splits the task into steps, a low-tier
+Substantial coding work is **planned and gated by the top tier** (falling back
+to mid when top is unavailable) and **implemented by small-tier** sub-agents:
+the planner splits the task into steps, a small-tier
 implementer executes each, and the planner **independently checks every step** before the next
 — that per-step gating is what makes a cheaper implementer safe. The skills already wire this
 (`/adr-phase` and `/gh-issue --fix`); for ad-hoc coding, follow the same shape. The higher
@@ -110,8 +111,8 @@ model may implement a fix **directly** when it is relatively small and doable in
 and always handles **docs / config / settings / skills** directly. Delegation is for
 non-trivial, multi-step `src/`/`tests/`/CI work.
 
-- **The per-step verifier is always low tier** (owner directive 2026-07-14) — never the
-  high-tier model that authored the brief; a different model reads with different blind
+- **The per-step verifier is always small tier** (owner directive 2026-07-14) — never the
+  top-tier model that authored the brief; a different model reads with different blind
   spots, and the step gate doesn't need the top tier. `phase-step.js` pins it. The top
   model's cross-referencing is reserved for the **whole-PR review** (`review-single` with
   `model: "claude-fable-5"` on a large/complex PR), where it sees every phase's diff at once.
@@ -122,7 +123,7 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
   itself before it enters its handoff, every handoff/gate field stays the spawner's to fill,
   and a nested delegate's defect is the spawner's defect at the gate above. Delegating the
   whole brief downward unexamined is still a defect — split work, not responsibility.
-- **The planner's brief to the low-tier implementer follows the delegation contract below** — a vague or wrong
+- **The planner's brief to the small-tier implementer follows the delegation contract below** — a vague or wrong
   brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs
   (a half-enumerated axis, a vacuous test spec, an unverified "fact" stated as truth).
 - **ADR phases: the phase prompt IS the brief; a fresh-context Reconcile stage keeps it
@@ -135,7 +136,7 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
   in `.claude/workflows/phase-step.js`); the implementer executes the reconciled prompt
   directly with those enumerations rendered mechanically — no separate brief document is
   composed (the per-phase Brief that re-authored the prompt was a fixed ~16-min toll that
-  dominated small phases). The workflow's verifier runs on the low tier (never the
+  dominated small phases). The workflow's verifier runs on the small tier (never the
   reconciler's model). The main session validates the records non-vacuously, commits the
   Gate file, and keeps HALT/continue/landing — its context stays flat across a long `all`
   run. Composing an ADR-phase brief in the main session is a recorded deviation, exactly
@@ -150,7 +151,7 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
   (`.claude/settings.json`) injects the ponytail + caveman capsule into every spawned
   sub-agent; the capsule itself carries the rules (reviewer carve-out; "terse prose,
   verbatim evidence"). Briefs add a mode line only for a non-default level (e.g. `ultra`).
-- **The low tier follows every directive in this file.** The implementer is cheaper, not exempt.
+- **The small tier follows every directive in this file.** The implementer is cheaper, not exempt.
 - **Run at effort xhigh or better** — the session default in `.claude/settings.json`
   (`effortLevel: xhigh`), and stated explicitly in every spawn (never rely on inheritance).
 
@@ -811,14 +812,14 @@ as the committed `review-single` workflow** — ONE reviewer sub-agent at effort
 for the `full` profile / `high` for the mechanically-gated `verify` profile (data/pin/
 config-only diffs, objective no-new-control-flow classifier in `pr-merge-flow`; owner
 authorization 2026-07-14 "do all 6"; never below the profile's floor, never `max`),
-the low tier by default; the high tier for a large/complex PR — its whole-PR
+the small tier by default; the top tier for a large/complex PR — its whole-PR
 cross-referencing is why it reviews the PR
-rather than the per-step gates. High tier unavailable on such a PR ⇒ TWO `review-single`
-passes (one low + one medium), findings unioned. Feedback-fix re-reviews are
-**delta-scoped** (`base` = the pre-fix head SHA) on the low tier — never a whole-PR re-run —
+rather than the per-step gates. Top tier unavailable on such a PR ⇒ TWO `review-single`
+passes (one small + one mid), findings unioned. Feedback-fix re-reviews are
+**delta-scoped** (`base` = the pre-fix head SHA) on the small tier — never a whole-PR re-run —
 and the fix→re-review loop **converges**: it continues only while the latest round
 returned a `blocking` finding; an all-nitpick (or clean) round closes it.
-**Never the medium tier as a sole reviewer, never a multi-agent fan-out** (`review-fanout` only on
+**Never the mid tier as a sole reviewer, never a multi-agent fan-out** (`review-fanout` only on
 explicit user request);
 the full reviewer contract lives in `.claude/workflows/review-single.js`, not here. External
 reviewers — CodeRabbit, GitHub Copilot, advisory Snyk — are requested / waited on (bounded) /
