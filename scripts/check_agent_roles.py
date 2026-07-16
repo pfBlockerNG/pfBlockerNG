@@ -352,7 +352,7 @@ def touches_role_surface(paths: list[str]) -> bool:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], prog="check_agent_roles.py")
+    parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0], prog="check_agent_roles.py")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--staged", action="store_true", help="validate iff the staged diff touches a role surface")
     mode.add_argument("--diff", metavar="BASE", help="validate iff BASE...HEAD touches a role surface")
