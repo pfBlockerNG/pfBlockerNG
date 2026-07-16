@@ -72,8 +72,7 @@ from .webui import looks_like_login_page, row_containing
 if TYPE_CHECKING:
     from .webui import WebUI
 
-# S3 and S8 intentionally also gate Tier A. Selecting either runs this shared
-# fixture's full baseline-plus-seeded GET matrix to verify exact Alerts attribution.
+# Selecting S3 or S8 runs the full baseline-plus-seeded GET matrix.
 pytestmark = pytest.mark.ui_e2e
 
 ALERTS_PAGE = "/pfblockerng/pfblockerng_alerts.php"

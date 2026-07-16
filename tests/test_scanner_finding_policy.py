@@ -4,6 +4,8 @@ Behavioral enforcement coverage lives in ``tests/js/triage_findings_guard.test.j
 these checks only keep policy, workflow schemas, and skill text on one vocabulary.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +31,7 @@ def test_scanner_finding_actionability_vocabulary_is_consistent() -> None:
 
     _assert_vocabulary("triage-findings.js", batch_triage, "'issue_gate'")
     for field in (
+        "disposition",
         "producer",
         "supported_path",
         "required_privilege",

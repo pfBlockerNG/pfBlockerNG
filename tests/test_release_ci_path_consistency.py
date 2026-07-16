@@ -1,5 +1,7 @@
 """Keep release CI fallback exclusions aligned with workflow path filters."""
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
 
@@ -27,9 +29,12 @@ def _workflow_paths_from_source(source: str, trigger: str) -> list[str]:
     for line in lines[paths_start + 1 : end]:
         if line and not line.startswith("      "):
             break
-        match = re.match(r"      - '(.+)'$", line)
-        if match:
-            paths.append(match.group(1))
+        if not line:
+            continue
+        match = re.fullmatch(r"      - '(.+)'", line)
+        if match is None:
+            raise AssertionError(f"unparsed paths-ignore entry: {line!r}")
+        paths.append(match.group(1))
     return paths
 
 
@@ -48,6 +53,9 @@ def test_release_fallback_exclusions_match_both_workflow_triggers() -> None:
     pull_request = _workflow_paths("pull_request")
     release_gate = _release_gate_paths()
 
+    assert push, "push paths-ignore must not be empty"
+    assert pull_request, "pull_request paths-ignore must not be empty"
+    assert release_gate, "release fallback exclusions must not be empty"
     assert pull_request == push, f"pull_request paths-ignore differs from push: {pull_request!r} != {push!r}"
     assert release_gate == push, f"release fallback exclusions differ from workflow: {release_gate!r} != {push!r}"
 
@@ -64,4 +72,16 @@ on:
 """
 
     with pytest.raises(AssertionError, match="push: missing paths-ignore"):
+        _workflow_paths_from_source(source, "push")
+
+
+def test_workflow_parser_rejects_unparsed_path_entries() -> None:
+    source = """\
+on:
+  push:
+    paths-ignore:
+      - "**/*.md"
+"""
+
+    with pytest.raises(AssertionError, match="unparsed paths-ignore entry"):
         _workflow_paths_from_source(source, "push")

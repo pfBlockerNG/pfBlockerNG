@@ -7824,6 +7824,7 @@ function pfb_unbound_py_publication_lock(?float $timeout_s=NULL) {
 
 	$wait_s = max($timeout_s, 0.0);
 	$deadline = microtime(TRUE) + $wait_s;
+	// Independent poll cap bounds the wait if the wall clock stalls or moves backward.
 	$max_polls = (int) ceil($wait_s / 0.02) + 2;
 	$polls = 0;
 	$first_attempt = TRUE;
