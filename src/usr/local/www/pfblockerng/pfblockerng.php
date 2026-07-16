@@ -341,8 +341,9 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 
 				// Proceed with conversion of MaxMind files on download success
 				if (empty($pfb['cc']) || !empty($pfb['maxmind_key']) || !empty($pfb['maxmind_account'])) {
-					pfblockerng_uc_countries();
-					pfblockerng_get_countries();
+					if (pfblockerng_uc_countries()) {
+						pfblockerng_get_countries();
+					}
 				}
 			}
 			break;
@@ -400,8 +401,9 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 			pfblockerng_get_countries();
 			break;
 		case 'ugc':
-			pfblockerng_uc_countries();
-			pfblockerng_get_countries();
+			if (pfblockerng_uc_countries()) {
+				pfblockerng_get_countries();
+			}
 
 			if (!empty($argv[2]) && !empty($argv[3])) {
 				$argv2 = htmlspecialchars($argv[2]);
@@ -1421,7 +1423,16 @@ function pfblockerng_uc_countries() {
 											// Concat ISO Networks to Continent file
 											// issue #1299: no 2>&1 -- merging cat's stderr into this
 											// data file lets a cat failure corrupt it on reparse.
-											exec("{$pfb['cat']} {$iso_file_esc} >> {$pfb_file_esc}");
+											$cat_output = array();
+											$cat_status = 0;
+											exec("{$pfb['cat']} {$iso_file_esc} >> {$pfb_file_esc}", $cat_output, $cat_status);
+											if ($cat_status !== 0) {
+												$log = "\n Failed to append ISO data [ {$iso} IPv{$type} ] (cat status {$cat_status})\n";
+												pfb_logger("{$log}", 4);
+												@unlink($pfb_file);
+												rmdir_recursive("{$pfb['ccdir_tmp']}");
+												return FALSE;
+											}
 										}
 										else {
 											// Create placeholder file for undefined 'ISO Represented' or undefined Countries
@@ -1464,6 +1475,7 @@ function pfblockerng_uc_countries() {
 	}
 	unset($pfb_geoip);
 	rmdir_recursive("{$pfb['ccdir_tmp']}");
+	return TRUE;
 }
 
 
