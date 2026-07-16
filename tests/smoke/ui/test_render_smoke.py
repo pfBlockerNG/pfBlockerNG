@@ -643,7 +643,9 @@ def test_update_page_cron_status_without_flag_never_misreports_missing_cron(
             raise AssertionError(f"failed to restore {flag}: rc={touch.returncode} {touch.stderr!r}")
 
 
-def test_geoip_pages_render_the_seeded_csv_rows(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+def test_geoip_pages_render_the_seeded_csv_rows(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
     """Scenario: the GeoIP pages carry the SEEDED data, not just their chrome (issue #1219/#1228).
 
     Given the UI session seeded MaxMind's official test corpus and ran `ugc`,
@@ -708,6 +710,12 @@ def test_geoip_pages_render_the_seeded_csv_rows(webui: WebUI, php_error_log_guar
                 f"{path} is missing the seeded-data needle {needle!r} — the GeoIP fixture row it "
                 f"pins never reached the render (page rendered, but on empty/incomplete data)"
             )
+
+    append_failure = smoke_vm.ssh("grep", "-F", "Failed to append ISO data", "/var/log/pfblockerng/extras.log")
+    assert append_failure.returncode == 1, (
+        "seeded ugc rendered complete GeoIP rows but logged an ISO append failure: "
+        f"rc={append_failure.returncode} {append_failure.stderr!r} {append_failure.stdout!r}"
+    )
 
 
 def test_general_page_keep_help_upgrade_warning(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
