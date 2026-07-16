@@ -2667,7 +2667,7 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
  * inside the window applies it. Default '' = apply immediately on every due tick.
  *
  * Cadence seeding from legacy knobs (§2.G — no config.xml migration):
- *   feed cron : PfbConfig::read('pfb_interval') hours; skip when 'Disabled'.
+ *   feed cron : PfbConfig::read('pfb_interval') hours; skip scheduled runs when 'Disabled'.
  *   dcc       : 86400 s daily, jitter = seeded_jitter (stable per install).
  *   bl        : 86400 or 604800 s, jitter = seeded_jitter (stable per install).
  *
@@ -2712,8 +2712,8 @@ function pfblockerng_tick(): void
 
 	// --- Dispatch due (or pending) jobs; defer when outside the apply window ---
 
-	// Feed cron: dispatch the `cron` verb (-> pfblockerng_sync_cron), NOT pfb_trigger
-	// directly.  pfblockerng_sync_cron applies each feed's per-list Update Frequency
+	// Scheduled feed cron: dispatch the `cron` verb (-> pfblockerng_sync_cron), NOT pfb_trigger
+	// directly. pfblockerng_sync_cron applies each feed's per-list Update Frequency
 	// ($list['cron']: EveryDay/Weekly/NNhour) before its final sync_package_pfblockerng('cron'),
 	// and runs the ADR-19 software-update check at the end -- both of which a bare
 	// `pfb_trigger scope=both` skips (it would poll every feed every tick and never
@@ -2721,7 +2721,9 @@ function pfblockerng_tick(): void
 	// (IP) + ADR-10 (DNSBL) inside that final sync. Backgrounded so the tick stays
 	// fast. The scheduled log trim no longer rides this dispatch (issue #573) --
 	// see pfb_log_mgmt() at the end of this function.
-	if (!$cron_disabled && ($due['cron'] || pfb_due_ledger_is_pending('cron', $dbdir))) {
+	$cron_entry   = pfb_due_ledger_read_entry('cron', $dbdir);
+	$cron_pending = $cron_entry !== NULL && !empty($cron_entry['pending_apply']);
+	if ((!$cron_disabled && $due['cron']) || $cron_pending) {
 		if ($in_win && pfb_feed_pass_busy()) {
 			// issue #1175: a running feed pass would race the shared recompute staging --
 			// defer via pending so the NEXT tick retries. busy() is advisory only: the
@@ -2729,9 +2731,16 @@ function pfblockerng_tick(): void
 			logger(LOG_INFO, localize_text('Tick: feed cron deferred (another feed pass is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			pfb_due_ledger_set_pending('cron', $dbdir);
 		} elseif ($in_win) {
-			logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			pfb_due_ledger_mark_ran_anchored('cron', $cron_secs, $now, $seed, 0, $dbdir);
-			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['runlog']} 2>&1 &");
+			if ($cron_disabled) {
+				logger(LOG_NOTICE, localize_text('Tick: dispatching pending manual apply.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+				unset($cron_entry['pending_apply']);
+				pfb_due_ledger_write_entry('cron', $cron_entry, $dbdir);
+				exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=both force=false trigger=manual >> {$pfb['runlog']} 2>&1 &");
+			} else {
+				logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+				pfb_due_ledger_mark_ran_anchored('cron', $cron_secs, $now, $seed, 0, $dbdir);
+				exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['runlog']} 2>&1 &");
+			}
 			$dispatched = TRUE;
 		} else {
 			logger(LOG_INFO, localize_text('Tick: feed cron deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
@@ -2743,7 +2752,7 @@ function pfblockerng_tick(): void
 	if ($due['dcc'] || pfb_due_ledger_is_pending('dcc', $dbdir)) {
 		if ($in_win) {
 			logger(LOG_NOTICE, localize_text('Tick: dispatching dcc.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1 &");
+			exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1 &");
 			pfb_due_ledger_mark_ran('dcc', 86400, $now, $seed, 23 * 3600, $dbdir);
 			$dispatched = TRUE;
 		} else {
@@ -2770,7 +2779,7 @@ function pfblockerng_tick(): void
 
 			if (!empty($bl_str)) {
 				logger(LOG_NOTICE, localize_text('Tick: dispatching bl.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-				exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bl " . escapeshellarg($bl_str) . " >> {$pfb['extraslog']} 2>&1 &");
+				exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php bl " . escapeshellarg($bl_str) . " >> {$pfb['extraslog']} 2>&1 &");
 				pfb_due_ledger_mark_ran('bl', $bl_secs, $now, $seed, 23 * 3600, $dbdir);
 				$dispatched = TRUE;
 			}
