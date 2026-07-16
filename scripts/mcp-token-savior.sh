@@ -43,7 +43,7 @@ if [ "$venv_bad" = 1 ]; then
 fi
 bin="$venv/bin/token-savior"
 stamp="$venv/.pfb-ts-source"
-TS_SOURCE="${TS_SOURCE:-token-savior-recall[mcp,memory-vector] @ git+https://github.com/andrebrait/token-savior@162aa29947fc98da8dfc5319e9fd59b11bdfed34}"
+TS_SOURCE="${TS_SOURCE:-token-savior-recall[mcp,memory-vector] @ git+https://github.com/andrebrait/token-savior@0fd6ed140d5d3732349552e14d969b2ceb5b4da7}"
 
 # stdout is the MCP stdio channel — install chatter must stay on stderr
 if [ ! -x "$bin" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$TS_SOURCE" ]; then
