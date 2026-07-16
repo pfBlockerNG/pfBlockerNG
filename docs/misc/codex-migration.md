@@ -60,7 +60,7 @@ This is the only synchronization boundary:
 | `PreToolUse` Git policy | `.codex/hooks.json` | Reuses the raw-payload-compatible shared guard for Codex `Bash` hook events; coverage remains subject to the client emitting that event for unified shell execution. |
 | `PreToolUse` retired-token notice | `.codex/hooks.json` | Reuses `check_retired_tokens.py --claude-hook` for the same supported `Bash` event surface. |
 | `SessionStart` branch synchronization | `.codex/hooks.json` | Runs on startup/resume/clear and shares the same branch script. |
-| Token Savior MCP and capture hook | `.codex/config.toml` plus `.codex/hooks.json` | Uses the same pinned `andrebrait/token-savior` launcher and capture wrapper as Claude, with the client label set to `codex`. Current Codex hooks expose `Bash`, `apply_patch`, and MCP tool-name matching, not Claude-style Read/Grep/WebFetch events, so this config requests best-effort capture for `Bash` and Playwright MCP output only; it never captures Token Savior itself or unrelated MCP servers. |
+| Token Savior MCP and capture hook | `.codex/config.toml` plus `.codex/hooks.json` | Uses the same pinned `andrebrait/token-savior` launcher and capture wrapper as Claude, with the client label set to `codex`. Current Codex hooks expose `Bash`, `apply_patch`, and MCP tool-name matching, not Claude-style Read/Grep/WebFetch events, so this config requests best-effort capture for `Bash`, Playwright, and `token-savior-recall` MCP output only; it never captures unrelated MCP servers. |
 | Ponytail and Caveman | Real Codex plugins | Installed directly (`codex plugin marketplace add …` / `npx skills add … -a codex`), not vendored into the repo. |
 
 The shared Git hooks recognize both `CLAUDECODE=1` and Codex's
