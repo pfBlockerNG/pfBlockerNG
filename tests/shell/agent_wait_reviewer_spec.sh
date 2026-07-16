@@ -83,6 +83,12 @@ Describe 'wait-reviewer.sh classify()'
   End
 
   It 'reports PAUSE when reviews are paused'
+    issuec='Reviews are paused because the branch is too active.'
+    When call classify
+    The output should equal 'PAUSE'
+  End
+
+  It 'reports PAUSE when reviews paused'
     issuec='Reviews paused because the branch is too active.'
     When call classify
     The output should equal 'PAUSE'
@@ -92,6 +98,15 @@ Describe 'wait-reviewer.sh classify()'
     issuec='⏸ CodeRabbit'
     When call classify
     The output should equal 'PAUSE'
+  End
+
+  It 'keeps polling after a triggered-review disclaimer mentions paused reviews'
+    issuec='Review triggered.
+
+> Note: CodeRabbit is an incremental review system and does not re-review already
+> reviewed commits. This command is applicable only when automatic reviews are paused.'
+    When call classify
+    The output should equal ''
   End
 
   It 'keeps polling (empty verdict) on unrelated chatter'
