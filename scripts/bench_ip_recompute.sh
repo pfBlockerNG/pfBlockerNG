@@ -25,7 +25,7 @@
 # for that side of the comparison; duplicate() is never resurrected here.
 set -u
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
 PFBSH="${REPO_ROOT}/src/usr/local/pkg/pfblockerng/pfblockerng.sh"
 GREPCIDR="$(command -v grepcidr || true)"
 [ -n "$GREPCIDR" ] || { echo "bench: real grepcidr not found on PATH" >&2; exit 1; }

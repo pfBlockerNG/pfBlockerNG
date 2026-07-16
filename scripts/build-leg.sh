@@ -46,7 +46,7 @@
 set -eu
 
 # ── Locate helpers relative to this script (CWD-independent) ────────────────
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 
 # ── Scrub inherited git context (pre-commit hook exports GIT_DIR etc.) ──────
 # shellcheck source=scripts/lib/git-env-scrub.sh

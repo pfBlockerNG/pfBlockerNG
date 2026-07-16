@@ -30,7 +30,7 @@
 
 set -eu
 
-_SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+_SELF_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 ROOT="${1:-${_SELF_DIR%/scripts}}"
 
 TMPF="$(mktemp)"

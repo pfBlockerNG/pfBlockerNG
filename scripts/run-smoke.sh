@@ -55,7 +55,7 @@
 
 set -eu
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
 
 # ── Defaults ───────────────────────────────────────────────────────────────── #
 _PATHS="tests/smoke"

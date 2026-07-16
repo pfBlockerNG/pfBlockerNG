@@ -58,7 +58,7 @@ case "${1:-}" in
     -h|--help) usage 0 ;;
 esac
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ── Required env ──────────────────────────────────────────────────────────── #

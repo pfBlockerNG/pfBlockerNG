@@ -48,7 +48,7 @@ PYFLAVOR="$6"
 
 # Resolve the repo root relative to this script so the builder can always be found
 # regardless of where the caller's CWD is.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 BUILDER="${SCRIPT_DIR}/build-pkg-portable.py"
 
 # Derive the pfBlockerNG port dir for the channel — single source of truth in the
