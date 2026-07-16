@@ -49,23 +49,33 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 			throw new RuntimeException('test bootstrap: failed to create tmp dir ' . self::$tmpDir);
 		}
 
-		// Oracle: the ISO-append exec() call itself, extracted verbatim so it
-		// tracks whichever form is actually in source -- with or without the
-		// trailing " 2>&1" -- proving red pre-fix, green post-fix.
+		// Oracle: the ISO-append status-handling block, extracted verbatim so
+		// the real command and its failure cleanup execute in this test.
 		if (!function_exists('pfb_cat_append_oracle')) {
 			if (!preg_match(
-				'/exec\("\{\$pfb\[\'cat\'\]\} \{\$iso_file_esc\} >> \{\$pfb_file_esc\}( 2>&1)?"\);/',
+				'/(?:\$cat_output\s*=\s*array\(\);\s*\$cat_status\s*=\s*0;\s*)?'
+				. 'exec\("\{\$pfb\[\'cat\'\]\} \{\$iso_file_esc\} >> \{\$pfb_file_esc\}( 2>&1)?"'
+				. '(?:,\s*\$cat_output,\s*\$cat_status)?\);'
+				. '(?:\s*if \(\$cat_status !== 0\) \{.*?return FALSE;\s*\})?/s',
 				$src,
 				$m
 			)) {
-				throw new RuntimeException('oracle extraction failed: the cat-append exec() call was not found in pfblockerng.php');
+				throw new RuntimeException('oracle extraction failed: the cat-append status block was not found in pfblockerng.php');
 			}
+			$block = str_replace(
+				['pfb_logger(', 'rmdir_recursive('],
+				['pfb_geoip_test_logger(', 'pfb_geoip_test_rmdir_recursive('],
+				$m[0]
+			);
 			eval(
-				'function pfb_cat_append_oracle(string $iso_file, string $pfb_file): void {'
-				. ' $pfb = ["cat" => "/bin/cat"];'
+				'function pfb_cat_append_oracle('
+				. 'string $iso_file, string $pfb_file, string $cat = "/bin/cat", string $iso = "US", string $type = "4"'
+				. '): bool {'
+				. ' $pfb = ["cat" => $cat, "ccdir_tmp" => dirname($pfb_file) . "/build_tmp"];'
 				. ' $iso_file_esc = escapeshellarg($iso_file);'
 				. ' $pfb_file_esc = escapeshellarg($pfb_file);'
-				. ' ' . $m[0]
+				. ' ' . $block
+				. ' return TRUE;'
 				. ' }'
 			);
 		}
@@ -77,6 +87,55 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 			is_dir($f) ? @rmdir($f) : @unlink($f);
 		}
 		@rmdir(self::$tmpDir);
+	}
+
+	private function makeCatFixture(string $name, string $body): string
+	{
+		$path = self::$tmpDir . '/' . $name;
+		file_put_contents($path, "#!/bin/sh\n{$body}");
+		chmod($path, 0755);
+		return $path;
+	}
+
+	public function testPartialStdoutFailureIsDiscardedAndReported(): void
+	{
+		$cat = $this->makeCatFixture('partial-cat', "printf 'partial-network\\n'\nexit 7\n");
+		$isoFile = self::$tmpDir . '/US_v4.txt';
+		$pfbFile = self::$tmpDir . '/continent_partial_v4.txt';
+		$buildTmp = self::$tmpDir . '/build_tmp';
+		pfb_geoip_test_rmdir_recursive($buildTmp);
+		mkdir($buildTmp);
+		file_put_contents($buildTmp . '/working', 'temporary');
+		file_put_contents($isoFile, "ignored\n");
+		file_put_contents($pfbFile, "# header\n");
+		$GLOBALS['pfb_geoip_test_logs'] = [];
+
+		$result = pfb_cat_append_oracle($isoFile, $pfbFile, $cat, 'US', '4');
+
+		$this->assertFalse($result);
+		$this->assertFileDoesNotExist($pfbFile, 'failed append must discard header plus partial stdout');
+		$this->assertDirectoryDoesNotExist($buildTmp, 'failed build must clean temporary state');
+		$this->assertSame([["\n Failed to append ISO data [ US IPv4 ] (cat status 7)\n", 4]], $GLOBALS['pfb_geoip_test_logs']);
+	}
+
+	public function testFailureWithoutStdoutIsDiscardedAndReported(): void
+	{
+		$cat = $this->makeCatFixture('silent-cat', "exit 9\n");
+		$isoFile = self::$tmpDir . '/CA_v6.txt';
+		$pfbFile = self::$tmpDir . '/continent_silent_v6.txt';
+		$buildTmp = self::$tmpDir . '/build_tmp';
+		pfb_geoip_test_rmdir_recursive($buildTmp);
+		mkdir($buildTmp);
+		file_put_contents($isoFile, "ignored\n");
+		file_put_contents($pfbFile, "# header\n");
+		$GLOBALS['pfb_geoip_test_logs'] = [];
+
+		$result = pfb_cat_append_oracle($isoFile, $pfbFile, $cat, 'CA', '6');
+
+		$this->assertFalse($result);
+		$this->assertFileDoesNotExist($pfbFile);
+		$this->assertDirectoryDoesNotExist($buildTmp);
+		$this->assertSame([["\n Failed to append ISO data [ CA IPv6 ] (cat status 9)\n", 4]], $GLOBALS['pfb_geoip_test_logs']);
 	}
 
 	public function testCatFailureOnUnreadableIsoDoesNotCorruptContinentFile(): void
@@ -91,18 +150,12 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 		$this->assertTrue(file_exists($isoDir), 'fixture must pass the file_exists() guard at line 1412 unchanged');
 
 		$pfbFile = self::$tmpDir . '/continent_v4.txt';
-		touch($pfbFile);
-		$this->assertSame('', file_get_contents($pfbFile), 'fixture must start empty');
+		file_put_contents($pfbFile, "# partial continent output\n");
 
-		pfb_cat_append_oracle($isoDir, $pfbFile);
+		$result = pfb_cat_append_oracle($isoDir, $pfbFile);
 
-		$content = file_get_contents($pfbFile);
-		$this->assertNotFalse($content, 'destination file must remain readable after the exec() call');
-		$this->assertSame(
-			'',
-			$content,
-			"issue #1299: cat's stderr leaked into the continent data file -- expected '' but got " . var_export($content, TRUE)
-		);
+		$this->assertFalse($result, 'cat failure must be reported to the conversion caller');
+		$this->assertFileDoesNotExist($pfbFile, 'failed conversion must discard partial continent output');
 	}
 
 	public function testCatAppendExecDoesNotMergeStderrIntoDataFile(): void
@@ -111,7 +164,8 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 		// source string -- keeps the failure diff readable (the whole-source
 		// form dumps ~2700 lines on failure).
 		if (!preg_match(
-			'/exec\("\{\$pfb\[\'cat\'\]\} \{\$iso_file_esc\} >> \{\$pfb_file_esc\}( 2>&1)?"\);/',
+			'/exec\("\{\$pfb\[\'cat\'\]\} \{\$iso_file_esc\} >> \{\$pfb_file_esc\}( 2>&1)?"'
+			. '(?:,\s*\$cat_output,\s*\$cat_status)?\);/',
 			self::$src,
 			$m
 		)) {
@@ -123,4 +177,79 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 			"issue #1299: the continent-file cat append must not redirect cat's stderr (2>&1) into the data file -- got: {$m[0]}"
 		);
 	}
+
+	/** @return array<string, array{string}> */
+	public static function ipVersionProvider(): array
+	{
+		return [
+			'IPv4' => ['v4'],
+			'IPv6' => ['v6'],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('ipVersionProvider')]
+	public function testCatSuccessAppendsNetworksAndReportsTrue(string $type): void
+	{
+		$isoFile = self::$tmpDir . "/US_{$type}.txt";
+		$pfbFile = self::$tmpDir . "/continent_{$type}_success.txt";
+		file_put_contents($isoFile, "network-{$type}\n");
+		file_put_contents($pfbFile, "# header {$type}\n");
+
+		$this->assertTrue(pfb_cat_append_oracle($isoFile, $pfbFile));
+		$this->assertSame("# header {$type}\nnetwork-{$type}\n", file_get_contents($pfbFile));
+	}
+
+	public function testBuilderReportsSuccessAfterAllContinentRows(): void
+	{
+		$this->assertMatchesRegularExpression(
+			'/rmdir_recursive\("\{\$pfb\[\'ccdir_tmp\'\]\}"\);\s*return TRUE;\s*}/',
+			self::$src,
+			'pfblockerng_uc_countries() must report successful completion to paired callers'
+		);
+	}
+
+	public function testDcAndDccGateCountryGenerationOnConversionSuccess(): void
+	{
+		$this->assertMatchesRegularExpression(
+			'/case \'dc\':.*?case \'dcc\':.*?if \(pfblockerng_uc_countries\(\)\) \{\s*pfblockerng_get_countries\(\);\s*}/s',
+			self::$src
+		);
+	}
+
+	public function testUgcGatesCountryGenerationOnConversionSuccess(): void
+	{
+		$this->assertMatchesRegularExpression(
+			'/case \'ugc\':\s*if \(pfblockerng_uc_countries\(\)\) \{\s*pfblockerng_get_countries\(\);\s*}/s',
+			self::$src
+		);
+	}
+
+	public function testStandaloneUcAndGcDispatchRemainIndependent(): void
+	{
+		$this->assertMatchesRegularExpression(
+			'/case \'uc\':.*?pfblockerng_uc_countries\(\);\s*break;\s*case \'gc\':.*?pfblockerng_get_countries\(\);\s*break;/s',
+			self::$src
+		);
+	}
+
+	public function testCountryBuildUsesSameAppendGuardForIpv4AndIpv6(): void
+	{
+		$this->assertMatchesRegularExpression(
+			'/foreach \(array\(\'4\', \'6\'\) as \$type\).*?' . preg_quote('exec("{$pfb[\'cat\']} {$iso_file_esc} >> {$pfb_file_esc}"', '/') . '/s',
+			self::$src
+		);
+	}
+}
+
+function pfb_geoip_test_logger(string $message, int $level): void
+{
+	$GLOBALS['pfb_geoip_test_logs'][] = [$message, $level];
+}
+
+function pfb_geoip_test_rmdir_recursive(string $path): void
+{
+	foreach (glob($path . '/*') ?: [] as $entry) {
+		is_dir($entry) ? pfb_geoip_test_rmdir_recursive($entry) : unlink($entry);
+	}
+	@rmdir($path);
 }
