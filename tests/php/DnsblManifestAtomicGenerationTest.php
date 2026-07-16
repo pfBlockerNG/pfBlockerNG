@@ -274,7 +274,18 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		}
 	}
 
-	public function testScalarPatchPreservesRawReferencesAndSerializesOnPublicationLock(): void
+	public function testDefaultScalarPatchSucceedsWhenPublicationLockIsUncontended(): void
+	{
+		$manifest = $this->publish();
+		$this->assertIsArray($manifest);
+
+		$this->assertTrue(pfb_unbound_python_sources_patch('user_unlock', ['allow.example']));
+
+		$patched = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE);
+		$this->assertSame(['allow.example'], $patched['config']['user_unlock']);
+	}
+
+	public function testDefaultScalarPatchRetriesUntilPublicationLockIsReleased(): void
 	{
 		$manifest = $this->publish();
 		$this->assertIsArray($manifest);
@@ -307,12 +318,8 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			$patchPid = pcntl_fork();
 			if ($patchPid === 0) {
 				fclose($patchParent);
-				$ok = pfb_unbound_python_sources_patch('user_unlock', ['allow.example'], [
-					'lock' => static function () use ($patchChild) {
-						fwrite($patchChild, "ATTEMPT\n");
-						return pfb_unbound_py_publication_lock();
-					},
-				]);
+				fwrite($patchChild, "ATTEMPT\n");
+				$ok = pfb_unbound_python_sources_patch('user_unlock', ['allow.example']);
 				fwrite($patchChild, $ok ? "DONE\n" : "FAILED\n");
 				fclose($patchChild);
 				exit($ok ? 0 : 1);
