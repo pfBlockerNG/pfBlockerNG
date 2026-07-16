@@ -20,9 +20,8 @@ description: >
   minutes; if it is STILL silent the Claude review stands alone (folding CodeRabbit's
   review in if it shows up late); a CodeRabbit rate-limit notice follows the 5-minute
   rule (resume > 5 min = proceed without it; else wait 5 min, nudge once, and drop it on
-  any further problem). GitHub Copilot's review is REQUESTED when available (skipped if
-  already reviewing) and waited on, bounded. Snyk is advisory — never waited on; only a
-  terminal failure verdict (it ran and flagged something) enters the gate. Handle every
+  any further problem). Snyk is advisory — never waited on; only a terminal failure
+  verdict (it ran and flagged something) enters the gate. Handle every
   comment of every review the same way. This
   is the default flow after any GitHub issue, ADR, or code change — everything
   except the dev-only classes that land straight on devel with no PR
@@ -83,10 +82,6 @@ this wait as part of the trigger sweep — no orphaned waits.
   Workflow is **harness-tracked** — never arm a wait for it; the CodeRabbit wait beside it is
   for an **untracked** external, which is why that one gets a bounded poll and this one does
   not. It is independent of CodeRabbit's availability and never a mere fallback.
-- **GitHub Copilot (Step 1f) — request + wait when available.** If Copilot is not already
-  reviewing the PR, request its review at the start of Step 1; either way, wait for it
-  (bounded) and triage its findings. If the request fails (Copilot review unavailable),
-  skip and note it — never stall on Copilot.
 - **CodeRabbit (Steps 1a–1c)** — decide availability with a **10-minute acknowledgement
   window** (1a), wait on + handle its review when it acknowledges (1b), nudge once when
   silent (1c). A rate-limit notice follows the **5-minute rule** (see 1b): resume time
@@ -151,8 +146,7 @@ sh scripts/agent/wait-reviewer.sh --repo "$OWNER_REPO" --pr "$PR" \
   won't help once it has already acknowledged.
 - If the wait resolves to CodeRabbit dropped under the **5-minute rule** (`QUOTA` with a
   long resume time, or a failed post-nudge wait — see Step 2 of `pr-comments`), proceed on
-  the Step-1d Claude review + Step-1f Copilot review and note the quota skip in the final
-  report.
+  the Step-1d Claude review and note the quota skip in the final report.
 
 ### Step 1c — No ack → nudge `@coderabbitai review`, then wait 10 more minutes
 
@@ -169,7 +163,7 @@ command plus `--since "$(date -u +%Y-%m-%dT%H:%M:%SZ)"`. On the result:
 
 - **`ACK`** (CodeRabbit posted something after the nudge) → **Step 1b**.
 - **`NOACK`** (still silent 10 min after the nudge) → CodeRabbit is unavailable; the
-  Step-1d Claude review and the Step-1f Copilot review carry the review step.
+  Step-1d Claude review carries the review step.
 
 Nudge **once only** — a second silent window means CodeRabbit is genuinely unavailable;
 do not loop on it.
@@ -233,8 +227,8 @@ replace CodeRabbit; when CodeRabbit never reviews it stands alone.
    CodeRabbit result), so you hold **both** reviews. If it never did, you have only the
    Claude review.
 3. **Dedupe across reviewers, then triage every finding.** First MERGE the findings of
-   all reviews received (the Claude review, CodeRabbit, Copilot, a terminal Snyk failure)
-   by file:line + substance — reviewers routinely flag the same defect, and triaging each
+   all reviews received (the Claude review, CodeRabbit, any unsolicited review, a terminal
+   Snyk failure) by file:line + substance — reviewers routinely flag the same defect, and triaging each
    copy separately wastes a validation and splinters the audit trail. One verdict per
    underlying finding; every reviewer's thread still gets its reply (pointing at the
    shared resolution). Then handle EACH deduped finding. The per-finding handling is
@@ -297,43 +291,18 @@ below, read its state once from the head SHA:
   issue), honouring the `private`-repo disclosure rules when sensitive.
 - Status `success` → note it; still not a gate requirement.
 
-### Step 1f — GitHub Copilot review (request + wait when available)
-
-Runs on **every** PR, started at the beginning of Step 1 alongside the reviewer spawn and the
-CodeRabbit wait:
-
-1. **Already reviewing?** Check for an existing Copilot review or a pending request:
-   `gh api repos/OWNER/REPO/pulls/N/reviews --paginate -q '.[]|select(.user.login|test("copilot";"i"))|.id'`
-   and `gh pr view N --json reviewRequests`. If Copilot has reviewed or is requested,
-   **skip the request** — go straight to the wait.
-2. **Request it:** `gh pr edit N --add-reviewer "@copilot"` (fallback:
-   `gh api --method POST repos/OWNER/REPO/pulls/N/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`).
-   If both fail, Copilot code review is not available on this repo/plan — **skip this step
-   and note it**; never stall.
-3. **Wait (bounded)** for its review: `sh scripts/agent/wait-reviewer.sh --repo O/R
-   --pr N --handle copilot --until finished --max-iter 20` in the background (~10-minute
-   window; anchored handle matching — `copilot` matches `copilot-pull-request-reviewer[bot]`
-   via its `handle-` prefix). TIMEOUT →
-   proceed and note it (the pre-merge catch-all sweep still picks up a late review).
-4. **Triage its findings** exactly like any other review (APPLY / SKIP / DEFER + reply per
-   thread) — a summary-only "generated no comments" review is just noted in the audit trail.
-   **A confirmed-real finding the reviewer itself downgrades to "pre-existing / out of scope /
-   no action needed" still enters triage**: DEFER + tracking issue, never a silent drop — PR
-   #937's focused re-review found two real pre-existing bugs that existed only in the session
-   transcript until the post-merge audit surfaced them (#941, #943).
-
 ### Gate before Step 2 (all paths)
 
 Continue to the merge ONLY if the review step finished cleanly: every finding from **every**
-review received — the always-on Claude adversarial review, Copilot when it reviewed,
-CodeRabbit when it reviewed, and any **terminal Snyk `failure` finding** (Step 1e; a Snyk
+review received — the always-on Claude adversarial review, CodeRabbit when it reviewed,
+any unsolicited review, and any **terminal Snyk `failure` finding** (Step 1e; a Snyk
 quota/infra error is ignored, not gated) — triaged, any accepted fixes committed and pushed,
 and nothing left that needs a human decision. The Claude review is **mandatory** — never
 merge without its findings triaged, even when every bot came back clean. **Produce the findings ledger before invoking `pr-merge`:**
 a numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` /
 `deferred: <issue link>` — folded into the Step-1d.5 audit comment; refuse to merge while any
 item lacks an outcome. **When NO external reviewer reviewed a substantive PR** (CodeRabbit dropped under the
-5-minute rule AND Copilot unavailable/timed out), **escalate instead of merging on the single
+5-minute rule and no unsolicited reviewer appeared), **escalate instead of merging on the single
 Claude pass** — a focused second single-agent pass over the final diff (the top-tier model —
 `claude-fable-5` preferred, else `claude-sonnet-5`), or pace the merge; the audited defect window coincided exactly with a
 bots-quota batch-merge cadence. If a finding is unresolved, contested, or needs the user,
@@ -372,7 +341,7 @@ it may not be clean.
 - Review resolved (note which reviews landed — the always-on single-agent Claude
   adversarial review with its model and profile (`claude-sonnet-5`, or `claude-fable-5` on a large/complex
   PR; `xhigh` for `full`, `high` for `verify` + the classifier grep evidence),
-  Copilot when it reviewed, CodeRabbit when it reviewed, plus any terminal Snyk
+  CodeRabbit when it reviewed, any unsolicited review, plus any terminal Snyk
   `failure` finding); PR merged by rebase; remote branch deleted.
 - Sync the work item's labels (an issue's `Waiting PR` removed on merge), per
   `CLAUDE.md` → "Labels (lifecycle)".

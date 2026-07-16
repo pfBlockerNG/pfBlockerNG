@@ -84,7 +84,7 @@ no visibility into:
 | A `Workflow` you launched (`issue-triage`, `phase-step`, `review-single`, …) | yes | end the turn; the completion notification wakes you |
 | An `Agent` / subagent you spawned | yes | same |
 | `wait-checks.sh` / `wait-reviewer.sh` run with `run_in_background: true` | yes | same — the script self-exits and notifies; do not also poll it |
-| CodeRabbit / Copilot posting a review; a CI run; a remote queue | **no** | a bounded wait: the script above, or the ladder in §1 |
+| CodeRabbit posting a review; a CI run; a remote queue | **no** | a bounded wait: the script above, or the ladder in §1 |
 
 The ladder's self-invalidating discipline applies to **every** timer you arm, not just
 `ScheduleWakeup`: on firing, CHECK the concrete state first; if resolved, no-op and do NOT

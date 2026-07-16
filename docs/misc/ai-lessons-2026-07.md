@@ -65,7 +65,7 @@ shipped defect or a session-transcript observation, not theory.
 | Ad-hoc work under the contract; hypothesis-ledger debugging | `/delegate`, `/debug` |
 | Deterministic multi-agent shapes | `.claude/workflows/`: `review-fanout` (3-lens PR review + execution-grounded verify), `phase-step` (implementer→verifier pair), `triage-findings` (per-finding validation pipeline), `adr-investigate` (evidence-tagged investigation fan-out) |
 | Drift control | `SessionStart` + per-prompt `UserPromptSubmit` capsule hooks; `permissions.deny` for `git stash` |
-| Review-source policy | Copilot requested + waited (bounded); CodeRabbit 5-minute rule on rate limits (its notice states the resume time); Snyk advisory — only a terminal `failure` where it actually ran gates anything |
+| Review-source policy | CodeRabbit 5-minute rule on rate limits (its notice states the resume time); Snyk advisory — only a terminal `failure` where it actually ran gates anything |
 | Prompt retrofits | All Proposed-ADR prompts (25/32/33/34/52/54/55) carry the contract blocks; the checker gates every Proposed ADR incl. future prompts of 51/56/57 |
 
 Open follow-ups: #921 (src↔tests CI pairing gate), #922 (version-literal checker), #923

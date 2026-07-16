@@ -822,8 +822,8 @@ returned a `blocking` finding; an all-nitpick (or clean) round closes it.
 **Never the mid tier as a sole reviewer, never a multi-agent fan-out** (`review-fanout` only on
 explicit user request);
 the full reviewer contract lives in `.claude/workflows/review-single.js`, not here. External
-reviewers — CodeRabbit, GitHub Copilot, advisory Snyk — are requested / waited on (bounded) /
-skipped per the `pr-merge-flow` skill; a bot quota notice is an acknowledgement with **no
+review sources — CodeRabbit and advisory Snyk — are handled per the `pr-merge-flow` skill;
+a bot quota notice is an acknowledgement with **no
 review** — surface the skipped reviewer, never read it as "PR is clean". Only the dev-only
 no-PR classes are exempt.
 
