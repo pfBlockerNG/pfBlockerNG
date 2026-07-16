@@ -514,6 +514,10 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Node.js
+        # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
+        # 503s for whole hours (2026-07-16). On failure the job proceeds on the
+        # runner image's preinstalled Node, which satisfies npx/node --test here.
+        continue-on-error: true
         uses: actions/setup-node@v7
         with:
           node-version: 'lts/*'
@@ -531,6 +535,10 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Node.js
+        # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
+        # 503s for whole hours (2026-07-16). On failure the job proceeds on the
+        # runner image's preinstalled Node, which satisfies npx/node --test here.
+        continue-on-error: true
         uses: actions/setup-node@v7
         with:
           node-version: 'lts/*'
