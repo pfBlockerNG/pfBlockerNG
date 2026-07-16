@@ -30,7 +30,8 @@ Never hand-edit `raw/*.raw`. Change `txt/*.txt` or `feeds.json`, then regenerate
 `pfb_unbound_python_sources()` over the corpus (see
 `tests/php/Adr62DnsblCorpusManifestTest.php`::`GENERATE.md` note, or simply run the PHPUnit
 suite — a byte mismatch fails loudly with a diff) and copy the freshly written
-`<rawdir>/pfb_py_raw/*.raw` back over `raw/*.raw`. Commit the diff.
+files named by the manifest's `feeds[].raw` rows from
+`<rawdir>/pfb_py_raw.<xxh128>/` back over `raw/*.raw`. Commit the diff.
 
 ## What the corpus is NOT
 

@@ -6790,7 +6790,8 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # surfaced once, here on the fresh evaluation, in the same dnsbl.log shape as
                 # a block (dual-form b_eval so it is actionable). A repeat query reuses the
                 # cached decision and is not re-logged (the name resolves normally).
-                if dnsbl.idn_alert is not None:
+                # issue #1349: preserve block/alert exclusivity after cache retirement.
+                if dnsbl.idn_alert is not None and not (dnsbl.is_found and not dnsbl.in_whitelist):
                     _log_idn_alert(q_name, q_ip, dnsbl.idn_alert, get_q_type(qstate, None))
 
             # Block iff found and not whitelisted; an allow decision falls through to

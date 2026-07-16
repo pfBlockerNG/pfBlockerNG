@@ -35,17 +35,24 @@ fail() {
 }
 
 restore_srcs() {
+	restore_failed=0
 	for src in $srcs; do
+		path_failed=0
 		if git -C "$worktree" cat-file -e "HEAD:$src" 2>/dev/null; then
-			git -C "$worktree" checkout HEAD -- "$src" || return 1
+			git -C "$worktree" checkout HEAD -- "$src" || path_failed=1
 		else
-			git -C "$worktree" rm -q -r -f --ignore-unmatch -- "$src" || return 1
-			git -C "$worktree" clean -q -d -f -f -x -- "$src" || return 1
+			git -C "$worktree" rm -q -r -f --ignore-unmatch -- "$src" || path_failed=1
+			git -C "$worktree" clean -q -d -f -f -x -- "$src" || path_failed=1
 			if [ -e "$worktree/$src" ] || [ -L "$worktree/$src" ]; then
-				return 1
+				path_failed=1
 			fi
 		fi
+		if [ "$path_failed" -ne 0 ]; then
+			echo "restore failed for --src path: $src" >&2
+			restore_failed=1
+		fi
 	done
+	return "$restore_failed"
 }
 
 main() {
@@ -72,7 +79,11 @@ main() {
 	{ [ -n "$worktree" ] && [ -n "$test_cmd" ] && [ -n "$srcs" ]; } || usage
 	require_tool git
 
-	if [ -n "$(git -C "$worktree" status --porcelain)" ]; then
+	status_output=$(git -C "$worktree" status --porcelain) || {
+		echo "DIRTY-TREE: cannot inspect the worktree; refusing to continue." >&2
+		exit 2
+	}
+	if [ -n "$status_output" ]; then
 		echo "DIRTY-TREE: the gate re-derives from committed state; commit or clean first." >&2
 		exit 2
 	fi

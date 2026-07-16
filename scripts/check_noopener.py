@@ -16,6 +16,9 @@ A `target … = … _blank…` occurrence (HTML ASCII case; double/single/no quo
 spaces/tabs around `=`; a `(?<![\\w-])` guard excludes `data-target="_blank"`)
 is a VIOLATION unless it is
 IMMEDIATELY followed — only whitespace between — by `rel=["']?noopener`.
+An unquoted `_blank/` prefix is deliberately treated as a flaggable near-miss:
+WHATWG includes the slash in the attribute value, but the likely typo must fail
+review rather than silently escape this checker.
 That is the house convention this codebase now follows: `rel` sits directly
 after `target`, so it survives even the multi-line PHP string-concatenation
 tag shape (`'target="_blank"' . ' rel="noopener noreferrer"'` would NOT be
@@ -52,10 +55,10 @@ import sys
 from typing import NamedTuple
 
 # HTML ASCII case/whitespace only. The unquoted branch requires a value delimiter
-# and leaves it untouched for the adjacent-rel matcher; quoted trailing spaces/tabs
-# are included.
+# or the deliberate slash near-miss and leaves it untouched for the adjacent-rel
+# matcher; quoted trailing spaces/tabs are included.
 _TARGET_BLANK_RE = re.compile(
-    r'(?<![\w-])(?ai:target)[ \t]*=[ \t]*(?:(?P<q>["\'])(?ai:_blank)[ \t]*(?P=q)|(?ai:_blank)(?=[ \t>]|$))'
+    r'(?<![\w-])(?ai:target)[ \t]*=[ \t]*(?:(?P<q>["\'])(?ai:_blank)[ \t]*(?P=q)|(?ai:_blank)(?=[ \t>/]|$))'
 )
 
 # `rel="noopener…"` (or single-quoted / unquoted), immediately after `target=…`

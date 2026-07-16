@@ -171,8 +171,65 @@ Describe 'verify-red-proof.sh'
   }
   arm_checkout_term_hook() {
     hook="$repo/.git/hooks/post-checkout"
-    printf '%s\n' '#!/bin/sh' 'rm -f "$0"' 'parent=$(ps -o ppid= -p "$PPID" | tr -d " ")' 'kill -TERM "$parent"' > "$hook"
+    printf '%s\n' \
+      '#!/bin/sh' \
+      'rm -f "$0"' \
+      'gitdir=${0%/hooks/post-checkout}' \
+      'mkfifo "$gitdir/checkout-release"' \
+      'touch "$gitdir/checkout-ready"' \
+      'read ready < "$gitdir/checkout-release"' > "$hook"
     chmod +x "$hook"
+  }
+  interrupt_after_marker() {
+    marker=$1
+    shift
+    interrupt_status=$(dash -c '
+      marker=$1
+      shift
+      "$@" >/dev/null 2>&1 &
+      child=$!
+      polls=0
+      while [ ! -e "$marker" ]; do
+        if ! kill -0 "$child" 2>/dev/null; then
+          echo "child exited before readiness marker: $marker" >&2
+          exit 1
+        fi
+        polls=$((polls + 1))
+        if [ "$polls" -ge 500 ]; then
+          echo "timed out waiting for readiness marker: $marker" >&2
+          kill -TERM "$child" 2>/dev/null
+          wait "$child" 2>/dev/null
+          exit 1
+        fi
+        sleep 0.01
+      done
+      kill -TERM "$child" 2>/dev/null
+      printf 'release\n' > "${marker%ready}release"
+      wait "$child" 2>/dev/null
+      printf "%s\n" "$?"
+    ' sh "$marker" "$@") || return 1
+  }
+  make_restore_failure_shim() {
+    real_git=$(command -v git)
+    shim_dir="$repo/.git/restore-shim"
+    mkdir "$shim_dir"
+    printf '%s\n' \
+      '#!/bin/sh' \
+      'last=' \
+      'for arg in "$@"; do last=$arg; done' \
+      'case "${PFB_FAIL_RESTORE:-}:$3:$4:$last" in' \
+      '  checkout:checkout:HEAD:src.txt|rm:rm:*:old.txt|clean:clean:*:old.txt) exit 9 ;;' \
+      '  residual:rm:*:old.txt|residual:clean:*:old.txt) exit 0 ;;' \
+      'esac' \
+      "exec '$real_git' \"\$@\"" > "$shim_dir/git"
+    chmod +x "$shim_dir/git"
+  }
+  assert_later_restore() {
+    case "$1" in
+      old-absent) [ ! -e "$repo/old.txt" ] ;;
+      src-good) [ "$(cat "$repo/src.txt")" = GOOD ] ;;
+      *) return 2 ;;
+    esac
   }
   cleanup() { rm -rf "$repo"; }
   After 'cleanup'
@@ -275,14 +332,11 @@ Describe 'verify-red-proof.sh'
   End
 
   It 'removes a red-created nested repository through SIGTERM restoration'
-    make_deleted_directory_with_nested_repo 'sleep 30'
+    make_deleted_directory_with_nested_repo 'mkfifo .git/redproof-release; touch .git/redproof-ready; read ready < .git/redproof-release; false'
     interrupt_nested_case() {
-      dash "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src gone >/dev/null 2>&1 &
-      pid=$!
-      sleep 1
-      kill -TERM "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
-      printf '%s\n' "$?"
+      interrupt_after_marker "$repo/.git/redproof-ready" \
+        dash "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src gone || return 1
+      printf '%s\n' "$interrupt_status"
       assert_repo_clean
     }
     When call interrupt_nested_case
@@ -372,11 +426,8 @@ Describe 'verify-red-proof.sh'
   It 'restores the src paths when SIGTERM interrupts the red run (dash semantics)'
     make_repo BAD GOOD
     interrupt_case() {
-      dash "$script" --worktree "$repo" --test-cmd 'sleep 30' --src src.txt >/dev/null 2>&1 &
-      pid=$!
-      sleep 1
-      kill -TERM "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
+      interrupt_after_marker "$repo/.git/redproof-ready" \
+        dash "$script" --worktree "$repo" --test-cmd 'mkfifo .git/redproof-release; touch .git/redproof-ready; read ready < .git/redproof-release; false' --src src.txt || return 1
       assert_repo_clean
     }
     When call interrupt_case
@@ -387,26 +438,22 @@ Describe 'verify-red-proof.sh'
     make_repo BAD GOOD
     arm_checkout_term_hook
     interrupt_checkout_case() {
-      dash "$script" --worktree "$repo" --test-cmd 'true' --src src.txt >/dev/null 2>&1 &
-      pid=$!
-      wait "$pid" 2>/dev/null
-      printf '%s\n' "$?"
+      interrupt_after_marker "$repo/.git/checkout-ready" \
+        dash "$script" --worktree "$repo" --test-cmd 'true' --src src.txt || return 1
+      printf '%s\n' "$interrupt_status"
+      assert_repo_clean
     }
     When call interrupt_checkout_case
     The output should equal '130'
     The contents of file "$repo/src.txt" should equal 'GOOD'
-    Assert assert_repo_clean
   End
 
   It 'restores a deleted src path when SIGTERM interrupts the red run (dash semantics)'
     make_deleted_repo 'test ! -e old.txt'
     interrupt_deleted_case() {
-      dash "$script" --worktree "$repo" --test-cmd 'sleep 30' --src old.txt >/dev/null 2>&1 &
-      pid=$!
-      sleep 1
-      kill -TERM "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
-      printf '%s\n' "$?"
+      interrupt_after_marker "$repo/.git/redproof-ready" \
+        dash "$script" --worktree "$repo" --test-cmd 'mkfifo .git/redproof-release; touch .git/redproof-ready; read ready < .git/redproof-release; false' --src old.txt || return 1
+      printf '%s\n' "$interrupt_status"
       assert_repo_clean
     }
     When call interrupt_deleted_case
@@ -449,6 +496,37 @@ Describe 'verify-red-proof.sh'
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt
     The status should equal 2
     The stderr should include 'DIRTY-TREE'
+  End
+
+  It 'fails closed when initial git status fails with empty stdout'
+    make_repo BAD GOOD
+    gitc config status.showUntrackedFiles bogus
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt
+    The status should equal 2
+    The stderr should include 'DIRTY-TREE'
+    The output should not include 'RED-OK'
+    The output should not include 'VERDICT: PASS'
+    The contents of file "$repo/src.txt" should equal 'GOOD'
+  End
+
+  Context 'best-effort restoration after one path fails'
+    Parameters
+      'checkout' 'src.txt' 'old.txt' 'old-absent'
+      'rm'       'old.txt' 'src.txt' 'src-good'
+      'clean'    'old.txt' 'src.txt' 'src-good'
+      'residual' 'old.txt' 'src.txt' 'src-good'
+    End
+
+    It "continues after a $1 failure and restores the later path"
+      make_mixed_repo
+      make_restore_failure_shim
+      When run env PFB_FAIL_RESTORE="$1" PATH="$shim_dir:$PATH" \
+        sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src "$2" --src "$3"
+      The status should equal 1
+      The output should include 'RESTORE-FAIL'
+      The stderr should include 'restore failed for'
+      Assert assert_later_restore "$4"
+    End
   End
 
   It 'does not pass when git status cannot inspect the path'

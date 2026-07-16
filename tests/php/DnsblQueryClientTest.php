@@ -24,7 +24,8 @@ use PHPUnit\Framework\TestCase;
  *     field, mistyped field, truncated/non-JSON/oversized bytes, foreign id)
  *     is ignored, never a fatal, and the call times out to NULL;
  *   - blocked=false with empty attribution is a VALID verdict, not NULL;
- *   - the bounded wait obeys both the deadline and the hard poll cap;
+ *   - the bounded wait behaviorally obeys its deadline, while a source pin
+ *     records the independent hard poll cap that protects a stalled clock;
  *   - cleanup: reply+request unlinked on a matched verdict or timeout, no
  *     ".pfbctl_" staging residue.
  *
@@ -496,7 +497,8 @@ final class DnsblQueryClientTest extends TestCase
 		$this->assertFalse($requestPublished, 'lock timeout must not publish a query request');
 	}
 
-	public function testLockWaitHasHardPollCapIndependentOfClockDeadline(): void
+	/** Source pin: stalled-clock behavior has no deterministic production seam. */
+	public function testSourcePinLockWaitContainsIndependentHardPollCap(): void
 	{
 		$function = new ReflectionFunction('pfb_dnsbl_query');
 		$lines = file($function->getFileName());

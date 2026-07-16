@@ -1502,6 +1502,42 @@ class TestOperateDnsbl:
         entry = pfb_unbound.decisionDB.get("evil-domain.com")
         assert entry.dnsbl.group == "DNSBL_Regex"
 
+    def test_idn_alert_overlapping_regex_emits_only_block_log(self, monkeypatch: Any) -> None:
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["idn_mode"] = pfb_unbound.IDN_MODE_CONFUSABLE
+        pfb_unbound.pfb["python_idn_block_malicious"] = False
+        pfb_unbound.pfb["python_idn_escalate_suspicious"] = False
+        pfb_unbound.regexDB["user-overlap"] = re.compile(r"xn--bnk-1ce")
+        logs: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: logs.append((path, line)))
+
+        qstate = make_qstate("xn--bnk-1ce.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert len(logs) == 1, f"expected one block log, got {logs!r}"
+        fields = logs[0][1].split(",")
+        assert fields[5] == "Python", f"expected regex block type, got {fields!r}"
+        assert fields[6] == "DNSBL_Regex", f"expected regex group, got {fields!r}"
+        assert fields[8] == "user-overlap", f"expected user regex feed, got {fields!r}"
+
+    def test_idn_alert_without_block_emits_one_alert_log(self, monkeypatch: Any) -> None:
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["idn_mode"] = pfb_unbound.IDN_MODE_CONFUSABLE
+        pfb_unbound.pfb["python_idn_block_malicious"] = False
+        pfb_unbound.pfb["python_idn_escalate_suspicious"] = False
+        logs: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: logs.append((path, line)))
+
+        qstate = make_qstate("xn--bnk-1ce.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert len(logs) == 1, f"expected one IDN alert log, got {logs!r}"
+        fields = logs[0][1].split(",")
+        assert fields[5] == "Homoglyph_Alert", f"expected IDN alert type, got {fields!r}"
+        assert fields[6] == pfb_unbound.IDN_GROUP_SUSPECT, f"expected suspect group, got {fields!r}"
+
     def test_allow_decision_short_circuit(self, monkeypatch: Any) -> None:
         # A cached allow verdict ("let it resolve") short-circuits the matcher -- the
         # unified-cache equivalent of the old excludeDB membership skip.

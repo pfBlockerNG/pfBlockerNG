@@ -10,7 +10,7 @@ import pytest
 from tests.smoke import test_smoke_tick as tick
 
 
-def test_due_marker_baseline_drains_before_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+def _tick_fixture(monkeypatch: pytest.MonkeyPatch, *, emit_tick_marker: bool) -> tuple[dict[str, int], tick.SmokeVM]:
     state = {"drains": 0, "marker": 0, "next_due": 0}
 
     class VM(tick.SmokeVM):
@@ -19,6 +19,8 @@ def test_due_marker_baseline_drains_before_capture(monkeypatch: pytest.MonkeyPat
                 return SimpleNamespace(returncode=0, stdout="100\n", stderr="")
             if args == (tick._PHP, tick._PFB_PHP, "tick"):
                 state["next_due"] = 101
+                if emit_tick_marker:
+                    state["marker"] += 1
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             raise AssertionError(args)
 
@@ -39,5 +41,19 @@ def test_due_marker_baseline_drains_before_capture(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(tick.h, "count_log_marker", lambda *_args: state["marker"])
     monkeypatch.setattr(tick.h, "wait_until", lambda predicate, **_kwargs: bool(predicate()))
 
+    return state, VM("")
+
+
+def test_due_marker_baseline_drains_before_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    _state, vm = _tick_fixture(monkeypatch, emit_tick_marker=False)
+
     with pytest.raises(AssertionError, match="marker count did not increase"):
-        tick.test_tick_dispatches_due_feed(VM(""))
+        tick.test_tick_dispatches_due_feed(vm)
+
+
+def test_due_marker_after_baseline_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    state, vm = _tick_fixture(monkeypatch, emit_tick_marker=True)
+
+    tick.test_tick_dispatches_due_feed(vm)
+
+    assert state == {"drains": 2, "marker": 2, "next_due": 101}

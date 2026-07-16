@@ -181,7 +181,8 @@ DNSBL blocklist preprocessing lives in the Python plugin
   path, TLD blacklist/exclusion, user whitelist, TOP1M list + enabled flag) plus
   one `feeds` row per raw file
   (`{raw, feed, group, provenance, log_flag[, mode]}`; absent `mode` means deny).
-- `/var/unbound/pfb_py_raw/<feed>.raw` — per-feed IP-stripped bare-domain raw.
+- `/var/unbound/pfb_py_raw.<xxh128>/<feed>.raw` — per-feed IP-stripped
+  bare-domain raw in the immutable generation named by each manifest `raw` row.
 
 `pfb_unbound.dnsbl_build_from_manifest()` then does **parse → normalise → classify
 (data/zone via the public-suffix master) → build** `dataDB`/`zoneDB` +
