@@ -288,6 +288,18 @@ else
 	skip retired-tokens
 fi
 
+# --- Agent role-family parity (issue #1387): the shared role registry
+#     (.agents/policy/agent-roles.md) vs both vendors' role definitions. The
+#     checker self-scopes: it validates iff the staged diff touches a role
+#     surface (registry doc, model-tiers.conf, .codex/agents/,
+#     .claude/workflows/, .agents/skills/); otherwise it reports the skip. ---
+if [ -n "$py_bin" ]; then
+	step 'agent-roles (role registry vs vendor role definitions)'
+	"$py_bin" scripts/check_agent_roles.py --staged || failed 'agent-roles'
+else
+	skip agent-roles
+fi
+
 # --- ADR phase prompts: post-contract prompts (ADR >= 60) must carry the
 #     delegation-contract blocks (VERIFICATION, HANDOFF->RESULTS, test mode,
 #     reality-override). Older ADRs are grandfathered by the script itself. ---
