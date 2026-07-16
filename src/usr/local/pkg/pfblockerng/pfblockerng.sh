@@ -960,7 +960,7 @@ pfb_recompute() {
 			# grepcidr with a pattern-free file, which prints NOTHING for -vf (not
 			# "keep everything"): it would wipe every row of every lower-priority
 			# feed sharing this pass.
-			if ! awk 'NF' "${rec_ownedfile}" >> "${rec_cumulative}"; then
+			if ! LC_ALL=C awk '{ sub(/\r$/, "") } NF' "${rec_ownedfile}" >> "${rec_cumulative}"; then
 				log="recompute [ ${rec_family} ]: could not extend cumulative dedup stream for [ ${rec_alias} ]; aborting pass, cleaning up partial artifacts"
 				echo "${log}" | tee -a "${errorlog}"
 				pfb_recompute_clean_new
@@ -1054,7 +1054,7 @@ pfb_recompute() {
 		while IFS=' ' read -r rec_alias _; do
 			rec_ownedfile="${rec_scratch}/owned/${rec_alias}.txt"
 			if [ -f "${rec_ownedfile}" ]; then
-				awk '$0 != ""' "${rec_ownedfile}" > "${rec_scratch}/direct"
+				LC_ALL=C awk '{ sub(/\r$/, "") } NF' "${rec_ownedfile}" > "${rec_scratch}/direct"
 				rec_rc=$?
 				if [ "${rec_rc}" -eq 0 ]; then
 					pfb_recompute_emit_alias "${rec_alias}" "${rec_scratch}/direct"
@@ -1224,18 +1224,19 @@ pfb_recompute_rep_subset() {
 		# untouched -- never diverted/windowed, same class exclusion as detection.
 		case "${rec_alias}" in
 			pfB*)
-				awk '$0 != ""' "${rec_ownedfile}" > "${rec_scratch}/keep/${rec_alias}.keep"
+				LC_ALL=C awk '{ sub(/\r$/, "") } NF' "${rec_ownedfile}" > "${rec_scratch}/keep/${rec_alias}.keep"
 				continue
 				;;
 		esac
-		awk -v a="${rec_alias}" -v actionfile="${rec_actionmap}" -v side="${rec_side}" '
+		LC_ALL=C awk -v a="${rec_alias}" -v actionfile="${rec_actionmap}" -v side="${rec_side}" '
 			BEGIN {
 				while ((getline line < actionfile) > 0) {
 					split(line, f, " "); act[f[1]] = 1
 				}
 				close(actionfile)
 			}
-			$0 == "" { next }
+			{ sub(/\r$/, "") }
+			NF == 0 { next }
 			{
 				n = split($1, o, ".")
 				pfx = (n >= 3) ? o[1] "." o[2] "." o[3] : ""
