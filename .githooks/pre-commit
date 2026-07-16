@@ -135,7 +135,11 @@ if [ "$staged_sh" = 1 ] || [ "$staged_specplumb" = 1 ]; then
 	step 'shebang policy (no #!bash)'
 	# Vendored third-party plugin trees are exempt (upstream content, refreshed
 	# wholesale by scripts/update-vendored-skills.py; never runs on the box).
-	git ls-files | grep -v -e '^\.claude/skills/ponytail/' -e '^\.claude/skills/caveman/' | while IFS= read -r f; do
+	git ls-files \
+		| grep -v -e '^\.claude/skills/ponytail/' -e '^\.claude/skills/caveman/' \
+			-e '^\.claude/skills/diagnosing-bugs/' -e '^\.claude/skills/git-guardrails-claude-code/' \
+			-e '^\.claude/skills/wizard/' \
+		| while IFS= read -r f; do
 		case $(head -n1 "$f" 2>/dev/null) in
 		'#!'*bash*)
 			printf '[pre-commit] bash shebang not allowed (use #!/bin/sh): %s\n' "$f" >&2

@@ -21,6 +21,8 @@
     // plugin machinery): not ours to lint — fixing them here would drift
     // from upstream.
     ".claude/skills/ponytail/**",
-    ".claude/skills/caveman/**"
+    ".claude/skills/caveman/**",
+    // skills-lock.json tracks these byte-identical mattpocock/skills imports.
+    ".claude/skills/{ask-matt,claude-handoff,code-review,codebase-design,design-an-interface,diagnosing-bugs,domain-modeling,edit-article,git-guardrails-claude-code,grill-me,grill-with-docs,grilling,handoff,implement,improve-codebase-architecture,loop-me,migrate-to-shoehorn,obsidian-vault,prototype,qa,request-refactor-plan,research,resolving-merge-conflicts,scaffold-exercises,setup-matt-pocock-skills,setup-pre-commit,setup-ts-deep-modules,tdd,teach,to-questionnaire,to-spec,to-tickets,triage,ubiquitous-language,wayfinder,wizard,writing-beats,writing-fragments,writing-great-skills,writing-shape}/**"
   ]
 }
