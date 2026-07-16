@@ -649,10 +649,11 @@ def test_geoip_pages_render_the_seeded_csv_rows(
     """Scenario: the GeoIP pages carry the SEEDED data, not just their chrome (issue #1219/#1228).
 
     Given the UI session seeded MaxMind's official test corpus and ran `ugc`,
-    When the GeoIP pages that carry seeded rows are fetched (the seven below; the other GeoIP
-         pages are covered for RENDER by PAGE_TABLE),
-    Then every needle below renders — and each one is produced by specific corpus rows, so
-         deleting them (or gutting a whole CSV) fails this test.
+    When `ugc` is rerun locally and the GeoIP pages that carry seeded rows are fetched (the
+         seven below; the other GeoIP pages are covered for RENDER by PAGE_TABLE),
+    Then the rerun adds no ISO-append failure marker and every needle below renders — and each
+         one is produced by specific corpus rows, so deleting them (or gutting a whole CSV)
+         fails this test.
 
     These assertions cannot live in ``PAGE_TABLE``: the render oracle matches markers with
     ``any()`` (``render_oracle.py``), and every GeoIP page already carries a data-INDEPENDENT
@@ -685,6 +686,24 @@ def test_geoip_pages_render_the_seeded_csv_rows(
       * Reputation's ``BT (1)`` — the same seeded data through a SEPARATE serialization path
                          (``pfb_build_reputation_tab()``), which the continent pages never touch
     """
+    marker = "Failed to append ISO data"
+    extras_log = "/var/log/pfblockerng/extras.log"
+
+    def append_failure_count() -> int:
+        result = smoke_vm.ssh("grep", "-Fc", marker, extras_log)
+        assert result.returncode in (0, 1), (
+            f"failed to count {marker!r} in {extras_log}: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+        return int(result.stdout.strip())
+
+    failures_before = append_failure_count()
+    ugc = smoke_vm.ssh(helpers.PHP_BIN, helpers.PFB_CLI, "ugc", timeout=600)
+    assert ugc.returncode == 0, f"fresh local ugc failed: rc={ugc.returncode} {ugc.stderr!r} {ugc.stdout!r}"
+    failures_after = append_failure_count()
+    assert failures_after == failures_before, (
+        f"fresh local ugc logged an ISO append failure: before={failures_before} after={failures_after}"
+    )
+
     expected: dict[str, tuple[str, ...]] = {
         "/pfblockerng/pfblockerng_Africa.php": ("Libya [2215636] LY (1)",),
         "/pfblockerng/pfblockerng_Asia.php": ("Bhutan [1252634] BT (1)",),
@@ -710,12 +729,6 @@ def test_geoip_pages_render_the_seeded_csv_rows(
                 f"{path} is missing the seeded-data needle {needle!r} — the GeoIP fixture row it "
                 f"pins never reached the render (page rendered, but on empty/incomplete data)"
             )
-
-    append_failure = smoke_vm.ssh("grep", "-F", "Failed to append ISO data", "/var/log/pfblockerng/extras.log")
-    assert append_failure.returncode == 1, (
-        "seeded ugc rendered complete GeoIP rows but logged an ISO append failure: "
-        f"rc={append_failure.returncode} {append_failure.stderr!r} {append_failure.stdout!r}"
-    )
 
 
 def test_general_page_keep_help_upgrade_warning(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
