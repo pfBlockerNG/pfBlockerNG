@@ -757,35 +757,6 @@ jobs:
             exit "$rc"
           fi
 
-  # ── Agent role-family parity (issue #1387) ──
-  # PR-only, self-scoped: scripts/check_agent_roles.py validates the shared role
-  # registry (.agents/policy/agent-roles.md) against both vendors' role
-  # definitions IF AND ONLY IF the PR touches a role surface (registry doc,
-  # model-tiers.conf, .codex/agents/, .claude/workflows/, .agents/skills/);
-  # otherwise it reports the skip and passes. Semantic fields only — tier
-  # vocabulary, mutation boundaries, binding targets, model pins — never textual
-  # identity. On push it is skipped and folds into all-tests-passed as a pass,
-  # same shape as comment-narration above.
-  agent-roles:
-    name: Agent roles (role registry vs vendor role definitions)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0 # need the merge-base with the PR base ref for the three-dot diff
-
-      - name: Validate the role registry against vendor role definitions
-        # ubuntu-latest ships python3 (3.11+ for tomllib). A deliberate model
-        # pin on an exempt line carries `roles-ok: <reason>`.
-        env:
-          BASE: ${{ github.event.pull_request.base.ref }}
-        run: |
-          set -eu
-          git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
-          python3 scripts/check_agent_roles.py --diff "origin/$BASE"
-
   # Single stable job name for branch-protection required-status-checks.
   # Must use if: always() so it runs (and fails) even when 'test' fails.
   all-tests-passed:
@@ -797,7 +768,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, ui-suite, coverage-pairing, comment-narration, retired-tokens, agent-roles]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, ui-suite, coverage-pairing, comment-narration, retired-tokens]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -879,11 +850,4 @@ jobs:
           case "${{ needs.retired-tokens.result }}" in
             success|skipped) ;;
             *) echo "Retired-token guard job errored or was cancelled."; exit 1 ;;
-          esac
-          # Agent role-family gate (issue #1387): 'skipped' (push, no PR base)
-          # is a PASS; a PR that drifts the role registry from either vendor's
-          # role definitions blocks here.
-          case "${{ needs.agent-roles.result }}" in
-            success|skipped) ;;
-            *) echo "Agent role-family gate (registry vs vendor role definitions) failed or was cancelled."; exit 1 ;;
           esac

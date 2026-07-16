@@ -12,7 +12,7 @@ retiered model pin, a sandbox/mutation mismatch, an orphaned vendor role, a
 missing contract field) fails loudly.
 
 CONDITIONAL: in --staged / --diff mode the full validation runs IF AND ONLY IF
-the change touches a role surface (the registry doc, .agents/model-tiers.conf,
+the change touches a role surface (.agents/policy/, .agents/model-tiers.conf,
 .codex/agents/, .claude/workflows/, .agents/skills/, or this checker); otherwise
 it reports the skip and exits 0. --all validates unconditionally.
 
@@ -48,15 +48,15 @@ _POLICY = ".agents/policy"
 # Role surfaces: full validation triggers iff a changed path is one of these
 # files or sits under one of these directories.
 _TRIGGER_FILES = (_ROLES_DOC, _TIERS_CONF, "scripts/check_agent_roles.py")
-_TRIGGER_DIRS = (f"{_CODEX_AGENTS}/", f"{_CLAUDE_WORKFLOWS}/", f"{_SKILLS}/")
+_TRIGGER_DIRS = (f"{_CODEX_AGENTS}/", f"{_CLAUDE_WORKFLOWS}/", f"{_SKILLS}/", f"{_POLICY}/")
 
 _BEGIN = "<!-- role-registry:begin -->"
 _END = "<!-- role-registry:end -->"
 _HEADER = ("Role", "Tiers", "Mutation", "Independent", "Claude bindings", "Codex bindings")
 _TIERS = ("top", "mid", "small")
 _MUTATIONS = ("read-only", "workspace-write")
-_CLAUDE_KINDS = ("workflow", "skill", "policy", "session")
-_CODEX_KINDS = ("agent", "skill", "policy", "session")
+_CLAUDE_KINDS = ("workflow", "skill", "policy")
+_CODEX_KINDS = ("agent", "skill", "policy")
 _TIER_KEYS = tuple(f"{tier.upper()}_{vendor}" for tier in _TIERS for vendor in ("CLAUDE", "CODEX"))
 _ROLE_ID = re.compile(r"[a-z][a-z0-9-]*")
 # A DIRECTLY QUOTED model id is a pin; a mid-prose mention inside a longer
@@ -126,7 +126,7 @@ def _parse_bindings(
         if not sep or not target or kind not in kinds:
             problems.append(
                 f"{_ROLES_DOC}: role '{role}': {column} binding '{part}' is not 'session' or "
-                f"kind:name with kind in {'/'.join(k for k in kinds if k != 'session')}"
+                f"kind:name with kind in {'/'.join(kinds)}"
             )
             continue
         bindings.append((kind, target))
@@ -150,8 +150,8 @@ def _parse_registry(doc: str, problems: list[str]) -> list[Role]:
     seen: set[str] = set()
     for line in rows[1:]:
         cells = _split_row(line)
-        if all(set(cell) <= set("-: ") for cell in cells):
-            continue  # the |----| separator row
+        if all(cell and set(cell) <= set("-: ") for cell in cells):
+            continue  # the |----| separator row (all-empty cells are NOT a separator)
         if len(cells) != len(_HEADER):
             problems.append(f"{_ROLES_DOC}: registry row needs {len(_HEADER)} columns: {line.strip()}")
             continue
@@ -309,10 +309,10 @@ def validate(root: Path) -> tuple[int, list[str]]:
     if not doc_path.is_file():
         return 0, [f"missing role contract: {_ROLES_DOC}"]
     problems: list[str] = []
-    doc = doc_path.read_text(encoding="utf-8")
+    doc = doc_path.read_text(encoding="utf-8", errors="replace")
     tiers_path = root / _TIERS_CONF
     if tiers_path.is_file():
-        tiers_conf = _parse_tiers_conf(tiers_path.read_text(encoding="utf-8"), problems)
+        tiers_conf = _parse_tiers_conf(tiers_path.read_text(encoding="utf-8", errors="replace"), problems)
     else:
         tiers_conf = {}
         problems.append(f"missing tier vocabulary: {_TIERS_CONF}")

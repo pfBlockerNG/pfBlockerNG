@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,8 +47,9 @@ _ROWS = (
     "| checker | small+top | read-only | yes | workflow:check | agent:checker, agent:checker-top |",
     "| lander | small | workspace-write | no | skill:land | skill:land |",
     "| steward | top | read-only | no | session | session |",
+    "| keeper | small | workspace-write | no | policy:flow.md | policy:flow.md |",
 )
-_ROLE_NAMES = ("builder", "checker", "lander", "steward")
+_ROLE_NAMES = ("builder", "checker", "lander", "steward", "keeper")
 
 
 def _section(name: str) -> str:
@@ -84,6 +86,7 @@ def make_tree(
     _write(root / ".agents/model-tiers.conf", tiers)
     _write(root / ".agents/policy/agent-roles.md", doc if doc is not None else _doc())
     _write(root / ".agents/skills/land/SKILL.md", "# land\n")
+    _write(root / ".agents/policy/flow.md", "# flow\n")
     _write(root / ".claude/workflows/build.js", build_js)
     _write(root / ".claude/workflows/check.js", check_js)
     _write(root / ".codex/agents/builder.toml", builder_toml or _toml("codex-small", "workspace-write"))
@@ -115,6 +118,16 @@ def test_live_repository_registry_is_consistent() -> None:
     count, problems = car.validate(_REPO_ROOT)
     assert problems == []
     assert count >= 7  # explorer/planner/implementer/verifier/reviewer/publisher/coordinator
+
+
+def test_ci_workflow_paths_match_checker_triggers() -> None:
+    # The CI trigger must mirror the checker's role surfaces: test.yml's global
+    # `paths-ignore: '**/*.md'` skips that whole workflow for md-only changes,
+    # so the agent-roles gate rides its own path-filtered workflow instead.
+    text = (_REPO_ROOT / ".github/workflows/agent-roles.yml").read_text(encoding="utf-8")
+    listed = re.findall(r"^\s+- '([^']+)'\s*$", text, re.MULTILINE)
+    expected = set(car._TRIGGER_FILES) | {f"{d}**" for d in car._TRIGGER_DIRS}
+    assert set(listed) == expected, f"workflow paths {sorted(listed)} != checker triggers {sorted(expected)}"
 
 
 # --------------------------------------------------------------------------- #
@@ -207,6 +220,26 @@ def test_empty_binding_cell(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # Tier vocabulary (.agents/model-tiers.conf)
 # --------------------------------------------------------------------------- #
+
+
+def test_session_binding_with_target_rejected(tmp_path: Path) -> None:
+    rows = _ROWS[:3] + ("| steward | top | read-only | no | session:evil | session |",) + _ROWS[4:]
+    make_tree(tmp_path, doc=_doc(rows=rows))
+    _assert_flags(_problems(tmp_path), "Claude binding 'session:evil'")
+
+
+def test_registry_blank_row_rejected(tmp_path: Path) -> None:
+    make_tree(tmp_path, doc=_doc(rows=(*_ROWS, "|  |  |  |  |  |  |")))
+    _assert_flags(_problems(tmp_path), "invalid role id")
+
+
+def test_doc_not_utf8_clean_error(tmp_path: Path) -> None:
+    make_tree(tmp_path)
+    (tmp_path / ".agents/policy/agent-roles.md").write_text(_doc(), encoding="utf-16")
+    result = _cli(tmp_path, "--all")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+    assert "registry markers missing" in result.stderr
 
 
 def test_tiers_missing_key(tmp_path: Path) -> None:
@@ -370,6 +403,7 @@ def test_touches_role_surface_unit() -> None:
     assert car.touches_role_surface([".claude/workflows/phase-step.js"])
     assert car.touches_role_surface([".agents/model-tiers.conf"])
     assert car.touches_role_surface([".agents/policy/agent-roles.md"])
+    assert car.touches_role_surface([".agents/policy/flow.md"])
     assert car.touches_role_surface(["scripts/check_agent_roles.py"])
     assert not car.touches_role_surface(["src/usr/local/pkg/pfblockerng/pfblockerng.inc", "README.md"])
     assert not car.touches_role_surface([])
@@ -423,7 +457,6 @@ def test_cli_staged_validates_clean_role_surface_change(tmp_path: Path) -> None:
 
 
 def test_cli_staged_red_on_drift(tmp_path: Path) -> None:
-    # The wired gate's red path: a retiered Codex implementer must FAIL --staged.
     root = _git_tree(tmp_path)
     _write(root / ".codex/agents/builder.toml", _toml("codex-top", "workspace-write"))
     _git(root, "add", ".codex/agents/builder.toml")
@@ -431,6 +464,14 @@ def test_cli_staged_red_on_drift(tmp_path: Path) -> None:
     assert result.returncode == 1, result.stdout + result.stderr
     assert "Agent role-family drift detected" in result.stderr
     assert "builder.toml model 'codex-top'" in result.stderr
+
+
+def test_cli_staged_red_on_deleted_policy_binding(tmp_path: Path) -> None:
+    root = _git_tree(tmp_path)
+    _git(root, "rm", "-q", ".agents/policy/flow.md")
+    result = _cli(root, "--staged")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "policy binding 'flow.md' has no .agents/policy/flow.md" in result.stderr
 
 
 def test_cli_diff_skips_unrelated_change(tmp_path: Path) -> None:
@@ -456,7 +497,7 @@ def test_cli_diff_red_on_drift(tmp_path: Path) -> None:
 def test_cli_all_green_and_exit_codes(tmp_path: Path) -> None:
     result = _cli(make_tree(tmp_path), "--all")
     assert result.returncode == 0, result.stderr
-    assert "consistent (4 roles)" in result.stdout
+    assert "consistent (5 roles)" in result.stdout
 
 
 def test_cli_usage_error_exit_2(tmp_path: Path) -> None:

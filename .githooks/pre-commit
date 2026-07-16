@@ -291,7 +291,7 @@ fi
 # --- Agent role-family parity (issue #1387): the shared role registry
 #     (.agents/policy/agent-roles.md) vs both vendors' role definitions. The
 #     checker self-scopes: it validates iff the staged diff touches a role
-#     surface (registry doc, model-tiers.conf, .codex/agents/,
+#     surface (.agents/policy/, model-tiers.conf, .codex/agents/,
 #     .claude/workflows/, .agents/skills/); otherwise it reports the skip. ---
 if [ -n "$py_bin" ]; then
 	step 'agent-roles (role registry vs vendor role definitions)'
