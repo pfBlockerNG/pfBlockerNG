@@ -242,6 +242,15 @@ def test_doc_not_utf8_clean_error(tmp_path: Path) -> None:
     assert "registry markers missing" in result.stderr
 
 
+def test_tiers_not_utf8_clean_error(tmp_path: Path) -> None:
+    make_tree(tmp_path)
+    (tmp_path / ".agents/model-tiers.conf").write_text(_TIERS_TEXT, encoding="utf-16")
+    result = _cli(tmp_path, "--all")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+    assert "tier key" in result.stderr
+
+
 def test_tiers_missing_key(tmp_path: Path) -> None:
     make_tree(tmp_path, tiers=_TIERS_TEXT.replace("MID_CODEX=codex-mid\n", ""))
     _assert_flags(_problems(tmp_path), "missing tier key: MID_CODEX")
