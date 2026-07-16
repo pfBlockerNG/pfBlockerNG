@@ -2647,8 +2647,8 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
 /**
  * pfblockerng_tick — ADR-43: apply-on-change due-ledger tick dispatcher.
  *
- * Reads the ledger, dispatches each job that is due (feeds, dcc, bl) via exec() as a
- * separate process, then marks each as ran. ss_refresh runs every tick; the scheduled
+ * Reads the ledger and handles both cadence advancement and separate-process dispatch via
+ * exec() for each due job (feeds, dcc, bl). ss_refresh runs every tick; the scheduled
  * log maintenance (pfb_log_mgmt) runs only on an idle tick (see below).
  *
  * Lives here (not in the www/ dispatcher script) rather than the reverse so the
