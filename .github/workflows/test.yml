@@ -213,9 +213,14 @@ jobs:
         # Vendored third-party plugin trees are exempt (upstream content, never
         # runs on the box; same fence as .githooks/pre-commit).
         run: |
-          bad=$(git ls-files | grep -v -e '^\.claude/skills/ponytail/' -e '^\.claude/skills/caveman/' | while IFS= read -r f; do
-            case $(head -n1 "$f" 2>/dev/null) in '#!'*bash*) echo "$f" ;; esac
-          done)
+          find_bash_shebangs() {
+            while IFS= read -r f; do
+              case $(head -n1 "$f" 2>/dev/null) in '#!'*bash*) echo "$f" ;; esac
+            done
+          }
+          bad=$(git ls-files | grep -v -e '^\.claude/skills/ponytail/' -e '^\.claude/skills/caveman/' \
+            -e '^\.claude/skills/diagnosing-bugs/' -e '^\.claude/skills/git-guardrails-claude-code/' \
+            -e '^\.claude/skills/wizard/' | find_bash_shebangs)
           if [ -n "$bad" ]; then
             echo "bash shebang not allowed (use #!/bin/sh):"; echo "$bad"; exit 1
           fi
