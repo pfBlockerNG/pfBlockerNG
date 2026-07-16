@@ -46,7 +46,10 @@ prompts.
   large/complex whole-PR review uses `adversarial-reviewer-top`; its documented
   fallback pairs the small role with `adversarial-reviewer-mid`. The
   `$review-single` and `$review-fanout` adapters apply those roles to the shared
-  canonical review workflows.
+  canonical review workflows. The role-family semantics (purpose, permissions,
+  tier intent, bindings) live in
+  [`.agents/policy/agent-roles.md`](.agents/policy/agent-roles.md), validated by
+  `scripts/check_agent_roles.py` whenever a role surface changes.
 - For the shared worktree policy, `scripts/agent/work-branch.sh --worktree`
   resolves the primary checkout even from a Codex session worktree.
 - The Codex `SessionStart` hook runs the shared branch-freshness and visible

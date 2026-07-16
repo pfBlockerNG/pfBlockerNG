@@ -100,6 +100,11 @@ effort value). The machine-readable mapping is `.agents/model-tiers.conf`: the
 **mid tier** means `claude-opus-4-8` and `gpt-5.6-terra`; the **small tier**
 means `claude-sonnet-5` and `gpt-5.6-luna`. A tier selects the model, not
 the effort knob: workflows still set their required effort independently.
+The role families built on these tiers (explorer, planner, implementer,
+verifier, reviewer, publisher, coordinator) are specified with their vendor
+bindings in [`.agents/policy/agent-roles.md`](.agents/policy/agent-roles.md);
+`scripts/check_agent_roles.py` keeps both vendors' definitions aligned
+whenever either side changes.
 
 Substantial coding work is **planned and gated by the top tier** (falling back
 to mid when top is unavailable) and **implemented by small-tier** sub-agents:
