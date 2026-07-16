@@ -17,7 +17,7 @@
 make_grepcidr_stub() {
 	cat > "$1" <<'EOF'
 #!/bin/sh
-awk -v patfile="$2" '
+LC_ALL=C awk -v patfile="$2" '
 function ip2int(ip,   a) {
 	split(ip, a, ".")
 	return (a[1]*16777216) + (a[2]*65536) + (a[3]*256) + a[4]
@@ -26,8 +26,10 @@ function net(ipint, bits,   div) {
 	div = 2 ^ (32 - bits)
 	return int(ipint / div)
 }
+
 BEGIN {
 	while ((getline line < patfile) > 0) {
+		sub(/\r$/, "", line)
 		if (line ~ /^[ \t]*$/) continue
 		split(line, parts, "/")
 		n++
@@ -61,7 +63,7 @@ EOF
 make_grepcidr_v6_stub() {
 	cat > "$1" <<'EOF'
 #!/bin/sh
-awk -v patfile="$2" '
+LC_ALL=C awk -v patfile="$2" '
 function expand(addr, arr,    dc, left, right, lparts, rparts, ln, rn, i, missing) {
 	dc = index(addr, "::")
 	if (dc > 0) {
@@ -78,9 +80,11 @@ function expand(addr, arr,    dc, left, right, lparts, rparts, ln, rn, i, missin
 		for (i = 1; i <= 8; i++) arr[i] = lparts[i]
 	}
 }
+
 BEGIN {
 	while ((getline line < patfile) > 0) {
-		if (line == "") continue
+		sub(/\r$/, "", line)
+		if (line ~ /^[ \t]*$/) continue
 		split(line, parts, "/")
 		n++
 		pbits[n] = (parts[2] == "" ? 128 : parts[2])
@@ -90,6 +94,7 @@ BEGIN {
 	}
 	close(patfile)
 }
+n == 0 { next }
 {
 	if ($0 == "") { print; next }
 	split($0, tp, "/")
@@ -106,9 +111,59 @@ BEGIN {
 	}
 	if (!matched) print
 }
+END { if (n == 0) exit 1 }
 ' "$3"
 EOF
 	chmod +x "$1"
+}
+
+setup_grepcidr_stub_fidelity() {
+	work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recgrepcidr.XXXXXX")"
+	patterns="${work}/patterns"
+	target="${work}/target"
+}
+
+cleanup_grepcidr_stub_fidelity() { rm -rf "$work"; }
+
+Describe 'recompute grepcidr stand-ins'
+	Before 'setup_grepcidr_stub_fidelity'
+	After 'cleanup_grepcidr_stub_fidelity'
+
+	It 'v4 treats CRLF blank, space-only, and tab-only patterns as zero parseable patterns'
+		grepcidr="${work}/grepcidr"
+		make_grepcidr_stub "$grepcidr"
+		printf '\r\n   \r\n\t\t\r\n' > "$patterns"
+		printf '198.51.100.10\n' > "$target"
+
+		When run "$grepcidr" -vf "$patterns" "$target"
+		The status should be failure
+		The output should equal ''
+	End
+
+	It 'v6 matches v4 zero-pattern output and rc parity for CRLF blank, space-only, and tab-only patterns'
+		grepcidr="${work}/grepcidr"
+		make_grepcidr_v6_stub "$grepcidr"
+		printf '\r\n   \r\n\t\t\r\n' > "$patterns"
+		printf '2001:db8::10\n' > "$target"
+
+		When run "$grepcidr" -vf "$patterns" "$target"
+		The status should be failure
+		The output should equal ''
+	End
+End
+
+recompute_matches_expected() {
+	expected="$1"; actual="$2"; shift 2
+	pfb_recompute "$@" || return
+	cmp "$expected" "$actual"
+}
+
+c_utf8_unavailable() { ! locale -a 2>/dev/null | grep -qiE '^C\.UTF-?8$'; }
+
+recompute_matches_expected_c_utf8() {
+	expected="$1"; actual="$2"; shift 2
+	LC_ALL=C.UTF-8 pfb_recompute "$@" || return
+	cmp "$expected" "$actual"
 }
 
 make_window_awk_fail_stub() {
@@ -283,6 +338,18 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The contents of file "$countsfile" should include 'Empty_v4 0'
 	End
 
+	It 'direct v4 emit preserves invalid bytes under C.UTF-8 while filtering zero-field rows and terminal CR'
+		Skip if 'requires C.UTF-8 to exercise invalid-byte handling' c_utf8_unavailable
+		printf '\n   \n\t\t\n\r\n198.51.100.10\r\n  198.51.100.11  \r\n198.51.100.12\377' > "${snap}/Direct_v4.orig"
+		printf '%s\n' "${snap}/Direct_v4.orig" > "$memberlist"
+		expected="${work}/expected-direct-v4"
+		printf '  198.51.100.11  \n198.51.100.10\n198.51.100.12\377\n' > "$expected"
+
+		When call silently recompute_matches_expected_c_utf8 "$expected" "${pfbdeny}Direct_v4.txt" recompute v4 "$memberlist" "$countsfile" off off
+		The status should be success
+		The contents of file "$countsfile" should include 'Direct_v4 3'
+	End
+
 	It 'tolerates a trailing blank line in a snapshot without emitting a blank member row, or leaking it into the cumulative stream for a later feed (issue #1084 review)'
 		printf '203.0.113.40\n203.0.113.41\n\n' > "${snap}/Blank_v4.orig"
 		printf '198.51.100.60\n' > "${snap}/Later_v4.orig"
@@ -305,16 +372,17 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The contents of file "$countsfile" should include 'Disjoint_v4 1'
 	End
 
-	It 'never lets a whitespace-only (spaces) high-priority snapshot poison the cumulative dedup stream into eating a disjoint lower feed (issue #1279)'
-		printf '   \n' > "${snap}/OnlySpaces_v4.orig"
+	It 'cumulative dedup preserves invalid bytes under C.UTF-8 and rejects zero-field rows (issues #1279/#1326)'
+		Skip if 'requires C.UTF-8 to exercise invalid-byte handling' c_utf8_unavailable
+		printf '\n   \n\t\t\n\r\n203.0.113.71\377\n' > "${snap}/OnlySpaces_v4.orig"
 		printf '198.51.100.71\n' > "${snap}/Disjoint_v4.orig"
 		printf '%s\n%s\n' "${snap}/OnlySpaces_v4.orig" "${snap}/Disjoint_v4.orig" > "$memberlist"
-		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		expected="${work}/expected-cumulative-v4"
+		printf '203.0.113.71\377\n' > "$expected"
+		When call silently recompute_matches_expected_c_utf8 "$expected" "${pfbdeny}OnlySpaces_v4.txt" recompute v4 "$memberlist" "$countsfile" on off
 		The status should be success
-		# the whitespace-only row's OWN emitted file is governed by the unrelated,
-		# out-of-scope per-alias direct-emit/reputation-keep blank filters -- only
-		# the cumulative-dedup wipe of the disjoint feed is this fix's contract.
 		The contents of file "${pfbdeny}Disjoint_v4.txt" should equal '198.51.100.71'
+		The contents of file "$countsfile" should include 'OnlySpaces_v4 1'
 		The contents of file "$countsfile" should include 'Disjoint_v4 1'
 	End
 
@@ -467,6 +535,30 @@ Describe 'pfb_recompute() v6 dedup (same Stage A/B/D/E loop, per family)'
 		The contents of file "$masterfile" should include 'SixA_v6 2001:db8::/32'
 	End
 
+	It 'direct v6 emit drops zero-field rows, strips one terminal CR, and preserves padded and unterminated rows'
+		printf '\n   \n\t\t\n\r\n2001:db8::10\r\n  2001:db8::11  \r\n2001:db8::12' > "${snap}/Direct_v6.orig"
+		printf '%s\n' "${snap}/Direct_v6.orig" > "$memberlist"
+		expected="${work}/expected-direct-v6"
+		printf '  2001:db8::11  \n2001:db8::10\n2001:db8::12\n' > "$expected"
+
+		When call silently recompute_matches_expected "$expected" "${pfbdeny}Direct_v6.txt" recompute v6 "$memberlist" "$countsfile" off off
+		The status should be success
+		The contents of file "$countsfile" should include 'Direct_v6 3'
+	End
+
+	It 'never lets zero-field LF, spaces, tabs, or CRLF in a high-priority v6 snapshot poison the cumulative dedup stream'
+		printf '\n   \n\t\t\n\r\n' > "${snap}/OnlySpaces_v6.orig"
+		printf '2001:db8::71\n' > "${snap}/Disjoint_v6.orig"
+		printf '%s\n%s\n' "${snap}/OnlySpaces_v6.orig" "${snap}/Disjoint_v6.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v6 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}OnlySpaces_v6.txt" should equal ''
+		The contents of file "${pfbdeny}Disjoint_v6.txt" should equal '2001:db8::71'
+		The contents of file "$countsfile" should include 'OnlySpaces_v6 0'
+		The contents of file "$countsfile" should include 'Disjoint_v6 1'
+	End
+
 	It 'keeps v4 and v6 masterfile rows separate: a v6 recompute never touches v4 family rows and vice versa'
 		printf 'Legacy_v4 1.2.3.4\n' > "$masterfile"
 		printf 'fd99::5\n' > "${snap}/Six_v6.orig"
@@ -540,6 +632,18 @@ Describe 'pfb_recompute() dMax block-mode (class-wide offender collapse, priorit
 		The status should be success
 		The contents of file "${pfbdeny}PH1_v4.txt" should equal '240.0.0.0'
 		The contents of file "$countsfile" should include 'PH1_v4 1'
+	End
+
+	It 'ordinary v4 reputation emit preserves invalid bytes under C.UTF-8 while filtering zero-field rows'
+		Skip if 'requires C.UTF-8 to exercise invalid-byte handling' c_utf8_unavailable
+		printf '\n   \n\t\t\n\r\n192.0.2.10\r\n192.0.2.11\r\n  198.51.100.20  \r\n203.0.113.30\377' > "${snap}/Ordinary_v4.orig"
+		printf '%s\n' "${snap}/Ordinary_v4.orig" > "$memberlist"
+		expected="${work}/expected-ordinary-v4"
+		printf '  198.51.100.20  \n192.0.2.0/24\n203.0.113.30\377\n' > "$expected"
+
+		When call silently recompute_matches_expected_c_utf8 "$expected" "${pfbdeny}Ordinary_v4.txt" recompute v4 "$memberlist" "$countsfile" on pmax 1
+		The status should be success
+		The contents of file "$countsfile" should include 'Ordinary_v4 3'
 	End
 End
 
@@ -937,6 +1041,19 @@ Describe 'pfb_recompute() continent/Uber alias exclusion from reputation (issue 
 		The status should be success
 		The contents of file "${pfbdeny}pfB_Test_v4.txt" should equal "$(printf '192.0.2.0/23\n192.0.2.55')"
 		The contents of file "${pfbdeny}Feed_v4.txt" should equal '198.51.100.0/24'
+	End
+
+	It 'pfB_ reputation passthrough preserves invalid bytes under C.UTF-8 while filtering zero-field rows'
+		Skip if 'requires C.UTF-8 to exercise invalid-byte handling' c_utf8_unavailable
+		printf '\n   \n\t\t\n\r\n198.51.100.20\r\n  203.0.113.21  \r\n192.0.2.22\377' > "${snap}/pfB_Hostile_v4.orig"
+		printf '10.0.0.1\n10.0.0.2\n' > "${snap}/Feed_v4.orig"
+		printf '%s\n%s\n' "${snap}/pfB_Hostile_v4.orig" "${snap}/Feed_v4.orig" > "$memberlist"
+		expected="${work}/expected-pfb-v4"
+		printf '  203.0.113.21  \n192.0.2.22\377\n198.51.100.20\n' > "$expected"
+
+		When call silently recompute_matches_expected_c_utf8 "$expected" "${pfbdeny}pfB_Hostile_v4.txt" recompute v4 "$memberlist" "$countsfile" on pmax 1
+		The status should be success
+		The contents of file "$countsfile" should include 'pfB_Hostile_v4 3'
 	End
 
 	It "excludes a pfB_-prefixed alias's rows from the offender DETECTION count so a real feed's own (below-threshold) row is never dragged into a false collapse"
