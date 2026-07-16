@@ -36,3 +36,10 @@ test('hardening-only findings require SKIP', () => {
 	);
 	assert.doesNotThrow(() => runGuard([verdict('hardening-skip', 'SKIP', 'hardening-only')]));
 });
+
+test('every verdict is checked', () => {
+	const valid = verdict('valid', 'SKIP', 'not-applicable');
+	const invalid = verdict('invalid', 'DEFER', 'hardening-only');
+	assert.throws(() => runGuard([valid, invalid]), /invalid: DEFER requires an actionable issue_gate/);
+	assert.throws(() => runGuard([invalid, valid]), /invalid: DEFER requires an actionable issue_gate/);
+});

@@ -226,9 +226,21 @@ Describe 'verify-red-proof.sh'
   }
   assert_later_restore() {
     case "$1" in
-      old-absent) [ ! -e "$repo/old.txt" ] ;;
-      src-good) [ "$(cat "$repo/src.txt")" = GOOD ] ;;
-      *) return 2 ;;
+      old-absent)
+        [ ! -e "$repo/old.txt" ] && return 0
+        echo 'expected old.txt state: absent; actual: present' >&2
+        return 1
+        ;;
+      src-good)
+        actual=$(cat "$repo/src.txt" 2>/dev/null || echo '<missing>')
+        [ "$actual" = GOOD ] && return 0
+        echo "expected src.txt content: GOOD; actual: $actual" >&2
+        return 1
+        ;;
+      *)
+        echo "expected restore selector: old-absent or src-good; actual: $1" >&2
+        return 2
+        ;;
     esac
   }
   cleanup() { rm -rf "$repo"; }
@@ -527,6 +539,22 @@ Describe 'verify-red-proof.sh'
       The stderr should include 'restore failed for'
       Assert assert_later_restore "$4"
     End
+  End
+
+  It 'reports expected and actual state for failed restoration checks'
+    make_mixed_repo
+    touch "$repo/old.txt"
+    When call assert_later_restore old-absent
+    The status should equal 1
+    The stderr should include 'expected old.txt state: absent; actual: present'
+  End
+
+  It 'reports expected and actual content for failed restoration checks'
+    make_mixed_repo
+    printf '%s\n' BAD > "$repo/src.txt"
+    When call assert_later_restore src-good
+    The status should equal 1
+    The stderr should include 'expected src.txt content: GOOD; actual: BAD'
   End
 
   It 'does not pass when git status cannot inspect the path'
