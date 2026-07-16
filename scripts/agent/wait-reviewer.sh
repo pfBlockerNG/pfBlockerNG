@@ -73,7 +73,7 @@ classify() {
 		printf 'DECLINE'
 		return 0
 	fi
-	if printf '%s' "$issuec" | grep -Eqi 'reviews? paused|paused .*review|review.*paused|⏸'; then
+	if printf '%s' "$issuec" | grep -Eqi '^[[:space:]>#*-]*reviews? (are )?paused([[:space:].!]|$)|⏸'; then
 		printf 'PAUSE'
 		return 0
 	fi
