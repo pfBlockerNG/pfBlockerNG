@@ -21,6 +21,7 @@ join. The watcher does NOT auto-run during the normal suite -- it is gated on
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from typing import Any
@@ -69,6 +70,11 @@ def _no_emit(monkeypatch: Any) -> None:
     P.pfb["pfb_py_count"] = "pfb_py_count"
     P.pfb["pfb_py_regex_count"] = "pfb_py_regex_count"
     monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+
+
+class _RaisingStderr:
+    def write(self, text: str) -> int:
+        raise OSError(text)
 
 
 # --------------------------------------------------------------------------- #
@@ -449,6 +455,58 @@ class TestHarnessWaiterDiagnostics:
 
 
 class TestWatcherLoop:
+    @pytest.mark.parametrize(
+        "hostile_stderr",
+        [
+            pytest.param(None, id="stderr-none"),
+            pytest.param(_RaisingStderr(), id="stderr-write-raises"),
+        ],
+    )
+    def test_builder_exception_with_hostile_stderr_keeps_watcher_alive_for_next_generation(
+        self, tmp_path: Any, monkeypatch: Any, hostile_stderr: Any
+    ) -> None:
+        h = _Harness(tmp_path, monkeypatch)
+        old = _snapshot(tag="old.example.com", counts=0)
+        P._snapshot = old
+        original_builder = h.builder
+        first_failure = threading.Event()
+        calls = 0
+
+        def fail_once() -> P.Snapshot:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_failure.set()
+                raise RuntimeError("build blew up")
+            result = original_builder()
+            assert result is not None
+            return result
+
+        h.builder = fail_once  # type: ignore[method-assign]
+        monkeypatch.setattr(P, "_open_dnsbl_stats_db_if_wanted", lambda: None)
+        monkeypatch.setattr(sys, "stderr", hostile_stderr)
+        h.start()
+        try:
+            with h._builds_cond:
+                baseline_reads = h.sentinel_reads
+            h.publish(1)
+            assert first_failure.wait(3.0)
+            h.wait_sentinel_reads(baseline_reads + 2, timeout=3.0)
+            assert P._snapshot is old
+            assert h.read_applied() is None
+            assert h.thread.is_alive()
+
+            h.publish(2)
+            h.wait_builds(1, timeout=3.0)
+            h.wait_snapshot_contains("gen2.example.com", timeout=3.0)
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline and h.read_applied() != 2:
+                time.sleep(0.01)
+            assert h.read_applied() == 2
+            assert h.thread.is_alive()
+        finally:
+            h.stop_join()
+
     def test_generation_advance_triggers_swap(self, tmp_path: Any, monkeypatch: Any) -> None:
         h = _Harness(tmp_path, monkeypatch)
         old = _snapshot(tag="old.example.com", counts=0)
