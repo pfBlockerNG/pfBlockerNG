@@ -716,6 +716,7 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	// sync_package_pfblockerng(); its tail call below reenters the SAME lock.
 	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock']);
 	if (!pfb_feed_pass_begin('cron')) {
+		pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 		return;
 	}
 
