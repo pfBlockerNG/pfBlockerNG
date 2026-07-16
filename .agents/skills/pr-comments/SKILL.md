@@ -10,8 +10,8 @@ Read `../../../.claude/skills/pr-comments/SKILL.md` for the full process. Use
 checks, and the available GitHub CLI or configured GitHub MCP tools.
 Replace Claude workflow calls with Codex subagents; preserve bounded waits,
 per-thread replies, scope checks, tests, and the final cancellation sweep.
-Follow `$review-single`'s tier policy: low for normal and every delta review,
-high for a large/complex whole-PR review, and low plus medium only for its
+Follow `$review-single`'s tier policy: small for normal and every delta review,
+top for a large/complex whole-PR review, and small plus mid only for its
 documented top-tier fallback. These remain sequential single-reviewer passes,
 not fan-out.
 For every public comment or audit record, replace the canonical Claude footer
