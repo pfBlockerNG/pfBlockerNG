@@ -19,6 +19,14 @@ These two tests pin the keystone's behaviour (red→green vs the old ``reset()``
   it declares: a prior case's ``pfb_hsts`` does not survive (replace-not-merge), while the
   VIP/port infrastructure ``ensure_dnsbl_vip`` set IS preserved (so DNSBL is not force-disabled).
   A plain ``array_merge`` leaves ``pfb_hsts=on`` leaked → the first ``Then`` fails on the old path.
+
+Two more (issue #1214), same keystone family:
+
+* ``test_inject_ip_lists_resets_untouched_family`` — a family absent from an
+  ``inject_ip_lists`` call is reset to empty, not left holding a PRIOR call's list group.
+* ``test_reset_pfb_baseline_clears_geoip_dataset`` — ``reset_pfb_baseline`` removes every
+  ``seed_geoip_dataset`` artifact (CSVs, mmdb, generated GUI pages), so a later module never
+  reads a fake GeoIP corpus a prior module seeded.
 """
 
 from __future__ import annotations
@@ -152,3 +160,70 @@ def test_dnsbl_inject_replaces_leaked_toggle(deployed_vm: SmokeVM) -> None:
     assert leaked == "", f"pfb_hsts leaked across DNSBL cases: {leaked!r} (array_merge would keep 'on')"
     # ... and the VIP infrastructure key is PRESERVED (a naive config_del would force-disable DNSBL).
     assert h.config_get(vm, vip_key) != "", "replace dropped pfb_dnsvip4 — would force-disable DNSBL"
+
+
+def test_inject_ip_lists_resets_untouched_family(deployed_vm: SmokeVM) -> None:
+    """A family absent from an inject_ip_lists() call is reset to empty, not left holding a
+    PRIOR call's list group (issue #1214) -- proved in BOTH directions.
+
+    Scenario:
+      Given a v6 IP list injected via inject_ip_lists,
+      When a LATER inject_ip_lists call in the same module injects only a v4 spec,
+      Then the v6 list-config root is EMPTY (not the leaked-forward v6 list) and the v4
+        root holds exactly the new spec (the issue's reported shape);
+      When a THIRD call injects only a v6 spec (the mirror direction),
+      Then the now-untouched v4 root is EMPTY too, and the v6 root holds the newest spec.
+    """
+    vm = deployed_vm
+    feed_url = "http://192.168.89.2/ip_plain_cidr.txt"
+    v6spec = h.IpCase(aliasname="smokeisoipv6", feed_url=feed_url, header="smokeisoipv6", family="v6")
+    v4spec = h.IpCase(aliasname="smokeisoipv4", feed_url=feed_url, header="smokeisoipv4")
+    v6spec2 = h.IpCase(aliasname="smokeisoipv6b", feed_url=feed_url, header="smokeisoipv6b", family="v6")
+
+    # GIVEN a v6-only inject_ip_lists call.
+    h.inject_ip_lists(vm, [v6spec])
+    assert _section_count(vm, h.CFG_IP_V6_LISTS) == 1, "inject_ip_lists did not write the v6 list section"
+
+    # WHEN a LATER call injects only a v4 spec.
+    h.inject_ip_lists(vm, [v4spec])
+
+    # THEN the untouched v6 root is reset to empty (not left holding the prior v6 list) ...
+    leaked = _section_count(vm, h.CFG_IP_V6_LISTS)
+    assert leaked == 0, f"v6 list root leaked forward from a prior inject_ip_lists call ({leaked} rows)"
+    # ... and the v4 root holds exactly the new spec.
+    assert _section_count(vm, h.CFG_IP_V4_LISTS) == 1, "inject_ip_lists did not write the v4 list section"
+
+    # WHEN a THIRD call injects only a v6 spec (the mirror direction).
+    h.inject_ip_lists(vm, [v6spec2])
+
+    # THEN the now-untouched v4 root is reset to empty too ...
+    leaked_v4 = _section_count(vm, h.CFG_IP_V4_LISTS)
+    assert leaked_v4 == 0, f"v4 list root leaked forward from a prior inject_ip_lists call ({leaked_v4} rows)"
+    # ... and the v6 root holds exactly the newest spec.
+    assert _section_count(vm, h.CFG_IP_V6_LISTS) == 1, "inject_ip_lists did not write the v6 list section (3rd call)"
+
+
+def test_reset_pfb_baseline_clears_geoip_dataset(deployed_vm: SmokeVM) -> None:
+    """reset_pfb_baseline undoes seed_geoip_dataset's on-box footprint: a later module must
+    not inherit a fake GeoIP corpus a prior module seeded (issue #1214).
+
+    Scenario:
+      Given the MaxMind-DB test corpus is seeded (CSVs, mmdb, generated GUI pages),
+      When reset_pfb_baseline runs,
+      Then every seeded/generated GeoIP artifact is gone.
+    """
+    vm = deployed_vm
+    mmdb_path = f"{h.GEOIP_SHARE_DIR}/GeoLite2-Country.mmdb"
+    a_page = f"{h.PFB_WWW_DIR}/{h.GEOIP_CONTINENT_PAGES[0]}"
+
+    # GIVEN the GeoIP corpus is seeded.
+    h.seed_geoip_dataset(vm)
+    assert vm.ssh("test", "-f", mmdb_path).returncode == 0, "seed_geoip_dataset did not write the mmdb fixture"
+    assert vm.ssh("test", "-f", a_page).returncode == 0, "seed_geoip_dataset did not generate the Africa page"
+
+    # WHEN the clean-baseline reset runs.
+    h.reset_pfb_baseline(vm)
+
+    # THEN every seeded/generated GeoIP artifact is gone.
+    assert vm.ssh("test", "-f", mmdb_path).returncode != 0, "mmdb fixture survived reset_pfb_baseline"
+    assert vm.ssh("test", "-f", a_page).returncode != 0, "generated Africa page survived reset_pfb_baseline"
