@@ -1,5 +1,0 @@
-interface:
-  display_name: "ADR Phase"
-  short_description: "Implement one ADR phase, or all"
-policy:
-  allow_implicit_invocation: false

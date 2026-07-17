@@ -14,7 +14,7 @@ organization** — not only `pfBlockerNG/pfBlockerNG`. A repo-local canonical-po
 wins for that repo, and only there.
 
 **Carries over (how we work):** communication, Working principles, the delegation contract,
-worktrees + the rebase-only landing flow + `/pr-merge-flow`, branch naming, the test-coverage
+worktrees + the rebase-only landing flow (`.agents/policy/landing.md`), branch naming, the test-coverage
 mandate, linting discipline, GitHub-issue handling + labels, commit style. **Does not carry
 over (this package's mechanics):** the DNSBL/ABP pipeline, smoke/UI suites, the pkg repo,
 ports/release plumbing, and the language/runtime specifics tied to this package. When in
@@ -110,17 +110,19 @@ Substantial coding work is **planned and gated by the top tier** (falling back
 to mid when top is unavailable) and **implemented by small-tier** sub-agents:
 the planner splits the task into steps, a small-tier
 implementer executes each, and the planner **independently checks every step** before the next
-— that per-step gating is what makes a cheaper implementer safe. The skills already wire this
-(`/adr-phase` and `/gh-issue --fix`); for ad-hoc coding, follow the same shape. The higher
+— that per-step gating is what makes a cheaper implementer safe. Ticket execution follows
+the fresh-session workflow (`.agents/policy/workflow.md`); for ad-hoc coding, follow the
+same shape. The higher
 model may implement a fix **directly** when it is relatively small and doable in one step —
 and always handles **docs / config / settings / skills** directly. Delegation is for
 non-trivial, multi-step `src/`/`tests/`/CI work.
 
 - **The per-step verifier is always small tier** (owner directive 2026-07-14) — never the
   top-tier model that authored the brief; a different model reads with different blind
-  spots, and the step gate doesn't need the top tier. `phase-step.js` pins it. The top
-  model's cross-referencing is reserved for the **whole-PR review** (`review-single` with
-  `model: "claude-fable-5"` on a large/complex PR), where it sees every phase's diff at once.
+  spots, and the step gate doesn't need the top tier. The top
+  model's cross-referencing is reserved for the **whole-PR review** (the adversarial
+  reviewer on a large/complex PR, `.agents/policy/landing.md`), where it sees every
+  step's diff at once.
 
 - **An implementer may re-delegate when a subtask genuinely splits** (parallel siblings, a
   verifier per finding) — the platform enforces its own nesting-depth cap, so we add no depth
@@ -131,27 +133,11 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
 - **The planner's brief to the small-tier implementer follows the delegation contract below** — a vague or wrong
   brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs
   (a half-enumerated axis, a vacuous test spec, an unverified "fact" stated as truth).
-- **ADR phases: the phase prompt IS the brief; a fresh-context Reconcile stage keeps it
-  true (issue #1089; 2026-07-14 overhead redesign).** The default `/adr-phase` route passes
-  `briefSpec` (pointers: ADR dir + phase number) to the `phase-step` workflow, whose
-  **Reconcile stage** — a fresh higher-model agent — validates the previous phase's landed
-  diff against the ADR invariants it touches (scoped drift check), patches the phase prompt
-  on disk to match the live tree (smallest diff, spec-lint-clean, committed), and derives
-  the coverage matrix, hostile rows, gates, and red-proof spec from source (schema-forced
-  in `.claude/workflows/phase-step.js`); the implementer executes the reconciled prompt
-  directly with those enumerations rendered mechanically — no separate brief document is
-  composed (the per-phase Brief that re-authored the prompt was a fixed ~16-min toll that
-  dominated small phases). The workflow's verifier runs on the small tier (never the
-  reconciler's model). The main session validates the records non-vacuously, commits the
-  Gate file, and keeps HALT/continue/landing — its context stays flat across a long `all`
-  run. Composing an ADR-phase brief in the main session is a recorded deviation, exactly
-  like hand-spawning the implementer/verifier yourself.
-  **Light phases** (owner directive 2026-07-14): a phase prompt whose banner carries
-  `WEIGHT: light` — behaviour-preserving mechanical execution pinned by an earlier
-  phase's gate-passed oracle — runs with `briefSpec.weight: 'light'`: the Reconcile stage
-  is skipped, the implementer executes the prompt directly and re-derives its enumerations
-  from source, and in-workflow guards BLOCK a mis-tagged call. The Verify stage never
-  lightens.
+- **New implementation-plan ADRs stop now** (wayfinder map #1383): big work is charted as a
+  map of tickets with committed specs (`.agents/policy/workflow.md`); unimplemented ADRs
+  migrate to specs and tickets (#1389); implemented ADRs remain immutable historical
+  records. The retired ADR-phase orchestration (`/adr-phase`, `phase-step`) lives on only
+  in those historical records.
 - **Mode propagation to delegates is mechanical** — the `SubagentStart` hook
   (`.claude/settings.json`) injects the ponytail + caveman capsule into every spawned
   sub-agent; the capsule itself carries the rules (reviewer carve-out; "terse prose,
@@ -162,8 +148,8 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
 
 ### The delegation contract (brief → handoff → gate)
 
-Three fixed artifacts govern **every** delegated step — `/adr-phase` phases, `/gh-issue --fix`
-steps, and ad-hoc delegation alike. The design principle: **cheap models reliably fill
+Three fixed artifacts govern **every** delegated step — ticket packets under
+`.agents/policy/workflow.md` and ad-hoc delegation alike. The design principle: **cheap models reliably fill
 required fields and reliably drop optional virtues**, so every check is a named field in an
 artifact, and **an empty or missing field is a gate failure** — never a judgment call. This
 contract exists because prose-only gates demonstrably failed: a one-day post-hoc audit
@@ -811,26 +797,12 @@ distribution".
 **Merge PRs by rebase only** — `gh pr merge <N> --rebase`; never a merge commit, never
 squash. History stays strictly linear (`main` always an ancestor of `devel`).
 
-**Default landing flow — `/pr-merge-flow N`** after completing any issue, ADR, or code
-change: review feedback first, then merge. A **Claude adversarial review runs on EVERY PR
-as the committed `review-single` workflow** — ONE reviewer sub-agent at effort `xhigh`
-for the `full` profile / `high` for the mechanically-gated `verify` profile (data/pin/
-config-only diffs, objective no-new-control-flow classifier in `pr-merge-flow`; owner
-authorization 2026-07-14 "do all 6"; never below the profile's floor, never `max`),
-the small tier by default; the top tier for a large/complex PR — its whole-PR
-cross-referencing is why it reviews the PR
-rather than the per-step gates. Top tier unavailable on such a PR ⇒ TWO `review-single`
-passes (one small + one mid), findings unioned. Feedback-fix re-reviews are
-**delta-scoped** (`base` = the pre-fix head SHA) on the small tier — never a whole-PR re-run —
-and the fix→re-review loop **converges**: it continues only while the latest round
-returned a `blocking` finding; an all-nitpick (or clean) round closes it.
-**Never the mid tier as a sole reviewer, never a multi-agent fan-out** (`review-fanout` only on
-explicit user request);
-the full reviewer contract lives in `.claude/workflows/review-single.js`, not here. External
-review sources — CodeRabbit and advisory Snyk — are handled per the `pr-merge-flow` skill;
-a bot quota notice is an acknowledgement with **no
-review** — surface the skipped reviewer, never read it as "PR is clean". Only the dev-only
-no-PR classes are exempt.
+**Default landing flow** after completing any issue or code change: review feedback first,
+then merge, per [`.agents/policy/landing.md`](.agents/policy/landing.md) — the single
+source for the landing mechanics AND the adversarial reviewer contract (an independent
+review in a fresh read-only context runs on EVERY PR; effort floors, model-by-size rules,
+delta-scoped convergent re-reviews, CodeRabbit/Snyk handling all live there, not here).
+Only the dev-only no-PR classes are exempt.
 
 **Applying review findings follows the coverage-matrix discipline.** A finding that names a
 *class* ("the X clauses", "all Y", "… etc.") is fixed by re-enumerating the class **from the

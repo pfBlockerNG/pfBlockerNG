@@ -81,7 +81,7 @@ no visibility into:
 
 | Awaited thing | Tracked? | Correct move |
 | ------------- | -------- | ------------ |
-| A `Workflow` you launched (`issue-triage`, `phase-step`, `review-single`, …) | yes | end the turn; the completion notification wakes you |
+| A `Workflow` you launched | yes | end the turn; the completion notification wakes you |
 | An `Agent` / subagent you spawned | yes | same |
 | `wait-checks.sh` / `wait-reviewer.sh` run with `run_in_background: true` | yes | same — the script self-exits and notifies; do not also poll it |
 | CodeRabbit posting a review; a CI run; a remote queue | **no** | a bounded wait: the script above, or the ladder in §1 |
@@ -134,8 +134,8 @@ the moment the awaited item reaches ANY terminal state, and again at work-item p
 | PR/event subscription | unsubscribe | A user-driven check supersedes the subscription — kill it then and there. |
 | `ScheduleWakeup` | **none — cannot be cancelled** | Fires regardless. Therefore: (a) FALLBACK only — harness completion notifications are the primary wake; (b) **short rung + minimal check + re-arm**, never one long wakeup at a speculative future time: arm the shortest sensible delay, and on firing do a minimal state check and re-arm the next ladder rung only if still unresolved (pick the rung by how fast the watched state actually changes; slow externals take 10 min+ rungs); (c) fixed self-invalidating prompt template: `CHECK <concrete state/command>; IF RESOLVED: no-op, do NOT re-arm; ELSE <next action> + re-arm <n> min` — a stale firing then costs one cheap turn. |
 
-The sweep is an explicit terminal step in every wait-spawning skill (`/pr-merge`,
-`/pr-merge-flow`, `/pr-comments`, `/gh-issue`, `/adr-phase`) — mechanical, not remembered.
+The sweep is an explicit terminal step of every wait-spawning flow (the review/CI waits in
+[`.agents/policy/landing.md`](../../.agents/policy/landing.md)) — mechanical, not remembered.
 It cannot be a workflow: `TaskStop`/`CronDelete` are orchestrator tools, invisible to
 workflow agents.
 
@@ -281,8 +281,8 @@ choice.
 **Preferred — allow pushing to the canonical work-item branch.** Configure the push policy to
 permit the repo's own `adr/{NN}-{slug}` and `issue/{NN}-{slug}` branches (keep `devel`/`main`
 PR-only). Then a managed-remote session works the item on its canonical branch exactly as
-off-appliance, and resume is native — `/adr-phase` / `/gh-issue` recompute the slug and find
-the existing branch with no archaeology. The hard "never push anywhere but the session branch"
+off-appliance, and resume is native — recompute the slug (`scripts/agent/work-branch.sh`)
+and find the existing branch with no archaeology. The hard "never push anywhere but the session branch"
 pin is the wrong default for this repo — always carve out this exception.
 
 **One branch per work item.** Whichever model is in force, a branch belongs to the single
@@ -346,9 +346,9 @@ correctly attributed but read *Unverified*).
 
 ## Validating workflow records
 
-What the calling session does with the schema-forced records a delegation workflow returns
-(`phase-step`'s `{reconcileRecord, handoff, gateRecord}` — `/adr-phase`, `/gh-issue --fix`, and
-`/delegate` all point here). **Validate, don't re-derive**: the workflow's independent
+What the calling session does with the fixed-field records a delegated implementer/verifier
+returns (the handoff + gate record of CLAUDE.md "The delegation contract").
+**Validate, don't re-derive**: the workflow's independent
 verifier just re-ran the gates, re-executed the red proof, and read the full diff, with
 pasted evidence — a third derivation is redundant spend.
 

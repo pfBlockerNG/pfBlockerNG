@@ -2,7 +2,7 @@
 # verify-red-proof.sh -- mechanically re-execute a red->green proof (CLAUDE.md "THE GATE"
 # item 2): freeze-hash check, revert the src paths to the pre-fix baseline (tests stay),
 # expect the pinning test to FAIL, restore, expect it to PASS. The single implementation
-# the gh-issue / adr-phase / delegate gates and the phase-step verifier reference.
+# the delegation gates (CLAUDE.md "THE GATE" item 2) and independent verifiers reference.
 #
 # Usage: verify-red-proof.sh --worktree PATH --test-cmd 'CMD' --src PATH [--src PATH ...]
 #                            [--hash FILE=SHA ...] [--base-ref REF]

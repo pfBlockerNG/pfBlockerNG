@@ -5,8 +5,8 @@
   (issue [#1387](https://github.com/pfBlockerNG/pfBlockerNG/issues/1387); companion to
   the fresh-session ticket workflow in [`workflow.md`](workflow.md)).
 - **Load-when:** defining or routing an agent role; changing `.codex/agents/`,
-  `.claude/workflows/` model pins, `.agents/model-tiers.conf`, or this registry.
-- **Owner:** repo owner. **Last-verified:** 2026-07-16.
+  `.agents/model-tiers.conf`, or this registry.
+- **Owner:** repo owner. **Last-verified:** 2026-07-17.
 
 ## Goal
 
@@ -50,21 +50,21 @@ policy corpus.
 `scripts/check_agent_roles.py` parses this table. Column vocabularies: **Tiers** —
 `top`/`mid`/`small`, primary (default) tier first, `+`-separated; **Mutation** —
 `read-only`/`workspace-write`; **Independent** — `yes`/`no`; **bindings** —
-comma-separated `kind:name` (Claude kinds: `workflow` = `.claude/workflows/<name>.js`,
-`skill` = `.agents/skills/<name>/`, `policy` = `.agents/policy/<name>`, `session` =
-the top-level session itself; Codex kinds: `agent` = `.codex/agents/<name>.toml`, plus
-`skill`/`policy`/`session` as for Claude).
+comma-separated `kind:name` (Claude kinds: `skill` = `.agents/skills/<name>/`,
+`policy` = `.agents/policy/<name>`, `session` = the top-level session itself or a
+fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` =
+`.codex/agents/<name>.toml`, plus `skill`/`policy`/`session` as for Claude).
 
 <!-- role-registry:begin -->
 
 | Role | Tiers | Mutation | Independent | Claude bindings | Codex bindings |
 | ---- | ----- | -------- | ----------- | --------------- | -------------- |
-| explorer | small+top | read-only | no | workflow:adr-investigate, workflow:issue-triage | agent:analyst, agent:analyst-top |
+| explorer | small+top | read-only | no | session | agent:analyst, agent:analyst-top |
 | planner | top+mid | read-only | no | session | agent:planner |
-| implementer | small | workspace-write | no | workflow:phase-step | agent:implementer |
-| verifier | small | read-only | yes | workflow:phase-step, workflow:triage-findings | agent:adversarial-reviewer |
-| reviewer | small+top+mid | read-only | yes | workflow:review-single, workflow:review-fanout | agent:adversarial-reviewer, agent:adversarial-reviewer-top, agent:adversarial-reviewer-mid |
-| publisher | small | workspace-write | no | skill:pr-merge-flow | skill:pr-merge-flow |
+| implementer | small | workspace-write | no | session | agent:implementer |
+| verifier | small | read-only | yes | session | agent:adversarial-reviewer |
+| reviewer | small+top+mid | read-only | yes | session | agent:adversarial-reviewer, agent:adversarial-reviewer-top, agent:adversarial-reviewer-mid |
+| publisher | small | workspace-write | no | policy:landing.md | policy:landing.md |
 | coordinator | small | workspace-write | no | policy:workflow.md | policy:workflow.md |
 
 <!-- role-registry:end -->
@@ -105,8 +105,8 @@ the top-level session itself; Codex kinds: `agent` = `.codex/agents/<name>.toml`
   session hosting it may switch roles in place — implementer for a small direct fix or
   docs/config/skills work (CLAUDE.md carve-out), publisher/coordinator for landing and
   bookkeeping — but the planner never grades its own implementation work.
-- **Context & skills:** CLAUDE.md and its annexes, the ADR directory, prior handoffs;
-  delegation skills (`/adr-phase`, `/gh-issue`, `/delegate`).
+- **Context & skills:** CLAUDE.md and its annexes, prior handoffs; the fresh-session
+  workflow ([`workflow.md`](workflow.md)).
 - **Stop & escalation:** a genuine user fork ⇒ ask the user; a falsified premise ⇒ stop
   and re-plan, loudly. Never silently patch the plan.
 - **Independence:** not independent of the work item, but producer≠gater: the per-step
@@ -193,8 +193,8 @@ the top-level session itself; Codex kinds: `agent` = `.codex/agents/<name>.toml`
 - **Permissions & mutation:** git/gh writes only — branch pushes, PR metadata, labels.
   No new source changes beyond rebase conflict resolution; never force-push over
   another session's PR; every wait is bounded and swept.
-- **Context & skills:** the `pr-merge-flow` / `pr-merge` / `pr-comments` skills and the
-  branch/release policy — not the implementation history.
+- **Context & skills:** [`landing.md`](landing.md) and the branch/release policy — not
+  the implementation history.
 - **Stop & escalation:** the same CI failure cause twice after a fix attempt ⇒ stop and
   checkpoint; a blocking review finding routes back to the planner, never a silent
   self-fix.
@@ -232,12 +232,12 @@ goes through [`model-tiers.conf`](../model-tiers.conf).
 
 | Role | Native definition |
 | ---- | ----------------- |
-| explorer | `.claude/workflows/adr-investigate.js` area readers and `.claude/workflows/issue-triage.js` (small default; top allowed for verdict quality); the harness `Explore` agent type for ad-hoc read-only fan-out |
-| planner | the top-level session itself (CLAUDE.md "Plan top-tier, implement small-tier"), including the `phase-step` Reconcile stage, which inherits the session model or an explicit `briefModel` |
-| implementer | `.claude/workflows/phase-step.js` Implement stage (pinned small); `/delegate` for ad-hoc briefs; `briefSpec.weight: 'light'` is the light variant |
-| verifier | `.claude/workflows/phase-step.js` Verify stage (pinned small, never the reconciler's model); `.claude/workflows/triage-findings.js` per-finding verifiers |
-| reviewer | `.claude/workflows/review-single.js` (small default; top for large/complex; mid only in the dual fallback); `.claude/workflows/review-fanout.js` on explicit user request |
-| publisher | `/pr-merge-flow` (with `/pr-merge`, `/pr-comments`) executed by the session or a small-tier delegate |
+| explorer | fresh read-only sub-agents with packet-scoped briefs (small default; top allowed for verdict quality); the harness `Explore` agent type for ad-hoc read-only fan-out |
+| planner | the top-level session itself (CLAUDE.md "Plan top-tier, implement small-tier") |
+| implementer | a fresh small-tier sub-agent executing THE BRIEF in the assigned worktree |
+| verifier | a fresh small-tier sub-agent (never the brief author's model) re-deriving one step; fresh read-only validator sub-agents for per-finding validation |
+| reviewer | a fresh read-only sub-agent implementing the [`landing.md`](landing.md) reviewer contract (small default; top for large/complex; mid only in the dual fallback) |
+| publisher | the session (or a small-tier delegate) following [`landing.md`](landing.md) |
 | coordinator | the session following [`workflow.md`](workflow.md) |
 
 ### Codex
@@ -249,7 +249,7 @@ goes through [`model-tiers.conf`](../model-tiers.conf).
 | implementer | `.codex/agents/implementer.toml` (small, workspace-write) |
 | verifier | `.codex/agents/adversarial-reviewer.toml` (small) |
 | reviewer | `.codex/agents/adversarial-reviewer.toml` (small), `.codex/agents/adversarial-reviewer-top.toml` (top), `.codex/agents/adversarial-reviewer-mid.toml` (mid, fallback second pass only) |
-| publisher | the `$pr-merge-flow` adapter (`.agents/skills/pr-merge-flow/`) |
+| publisher | the session following [`landing.md`](landing.md) |
 | coordinator | the session following [`workflow.md`](workflow.md) |
 
 ## Decisions
@@ -269,8 +269,8 @@ Deviations from issue #1387's starting six, with rationale:
   independent and read-only; Codex serves both from the `adversarial-reviewer` family.
 - **code explorer kept** (named `explorer`), covering evidence gathering, triage, and
   investigation fan-outs — the Codex `analyst` family.
-- **publisher and coordinator kept**, bound to a skill and a policy document rather
-  than a dedicated vendor agent: both are procedure-driven small-tier roles a session
+- **publisher and coordinator kept**, bound to policy documents rather than a
+  dedicated vendor agent: both are procedure-driven small-tier roles a session
   fills by loading one document, and neither vendor needs a separate agent definition
   for them.
 - **The shell discovery guard stays.** `scripts/agent/check-agent-config-parity.sh`

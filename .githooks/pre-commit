@@ -61,7 +61,6 @@ staged_sh=0;  staged_has '\.sh$'        && staged_sh=1
 # run but need not end in .sh -- it must open the shell block on its own.
 staged_specplumb=0; staged_has '^tests/shell/(spec_helper\.sh|bin/|fixtures/)' && staged_specplumb=1
 staged_yaml=0; staged_has '\.ya?ml$'    && staged_yaml=1
-staged_adrtxt=0; staged_has '^\.ADRs/.*\.txt$' && staged_adrtxt=1
 staged_agentcfg=0
 printf '%s\n' "$staged_all" | grep -qE \
 	'^(AGENTS\.md|CLAUDE\.md|docs/misc/codex-migration\.md|\.claude/(skills|workflows)/|\.agents/(skills/|model-tiers\.conf$)|\.codex/|scripts/agent/check-agent-config-parity\.sh|tests/shell/agent_config_parity_spec\.sh)' \
@@ -298,18 +297,6 @@ if [ -n "$py_bin" ]; then
 	"$py_bin" scripts/check_agent_roles.py --staged || failed 'agent-roles'
 else
 	skip agent-roles
-fi
-
-# --- ADR phase prompts: post-contract prompts (ADR >= 60) must carry the
-#     delegation-contract blocks (VERIFICATION, HANDOFF->RESULTS, test mode,
-#     reality-override). Older ADRs are grandfathered by the script itself. ---
-if [ "$staged_adrtxt" = 1 ]; then
-	if [ -n "$py_bin" ]; then
-		step 'phase-prompts (delegation-contract blocks)'
-		"$py_bin" scripts/check_phase_prompts.py || failed 'phase-prompts'
-	else
-		skip phase-prompts
-	fi
 fi
 
 # =============================== PHP (*.php, *.inc) ========================== #
