@@ -1166,7 +1166,7 @@ def test_alerts_rows_render_whitelist_icons_oracle(
     base = f"{CFG_IPV4_LISTS}/{rowid}"
     permit_row = {
         "aliasname": "Wlorc798",
-        "action": "Permit",
+        "action": "Permit_Inbound",
         "custom": helpers._b64_textarea([trash_host]),
     }
 
