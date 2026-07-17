@@ -907,6 +907,7 @@ def test_ip_unlock_v4_carves_containing_range_relock_restores_and_spares_sibling
     vm = smoke_vm
     target = "198.18.6.9"  # inside 198.18.0.0/16
     sibling = "198.19.51.6"  # a SEPARATE feed entry, RFC 2544 space, outside the /16 hole
+    inside_sibling = "198.18.200.7"  # inside the SAME /16, covered only by the re-added remainder
 
     feed_url = helpers.write_local_feed(vm, "ui_ipunlock4.txt", f"198.18.0.0/16\n{sibling}\n")
     spec = helpers.IpCase(aliasname="uiipunlock4", feed_url=feed_url, header="uiipunlock4")
@@ -939,6 +940,14 @@ def test_ip_unlock_v4_carves_containing_range_relock_restores_and_spares_sibling
         assert matched, (
             f"{sibling} no longer matches pf table {table} after ip_remove=unlock -- an unrelated sibling "
             f"was punched (the whole containing entry was deleted, not just the target); pfctl said: {raw!r}"
+        )
+        # THEN: an address INSIDE the carved /16 (not the target) still matches --
+        # only the re-added remainder CIDRs can cover it, so this discriminates a
+        # delete-only regression the outside-hole sibling above cannot see.
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, inside_sibling)
+        assert matched, (
+            f"{inside_sibling} no longer matches pf table {table} after ip_remove=unlock -- the "
+            f"covering-CIDR remainder was not re-added (delete-only punch); pfctl said: {raw!r}"
         )
 
         # THEN: IP_UNLOCK_STORE records the EXACT host -- never the /16.
@@ -976,6 +985,7 @@ def test_ip_unlock_v6_carves_containing_range_relock_restores_and_spares_sibling
     vm = smoke_vm
     target = "2001:db8:19:1::42"  # inside 2001:db8:19:1::/64
     sibling = "2001:db8:19:2::9"  # a SEPARATE feed entry, a different /64, outside the hole
+    inside_sibling = "2001:db8:19:1::43"  # inside the SAME /64, covered only by the re-added remainder
 
     feed_url = helpers.write_local_feed(vm, "ui_ipunlock6.txt", f"2001:db8:19:1::/64\n{sibling}\n")
     spec = helpers.IpCase(aliasname="uiipunlock6", feed_url=feed_url, header="uiipunlock6", family="v6")
@@ -1004,6 +1014,14 @@ def test_ip_unlock_v6_carves_containing_range_relock_restores_and_spares_sibling
         assert matched, (
             f"{sibling} no longer matches pf table {table} after ip_remove=unlock -- an unrelated sibling "
             f"was punched; pfctl said: {raw!r}"
+        )
+        # THEN: an address INSIDE the carved /64 (not the target) still matches --
+        # only the re-added remainder CIDRs can cover it, so this discriminates a
+        # delete-only regression the outside-hole sibling above cannot see.
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, inside_sibling)
+        assert matched, (
+            f"{inside_sibling} no longer matches pf table {table} after ip_remove=unlock -- the "
+            f"covering-CIDR remainder was not re-added (delete-only punch); pfctl said: {raw!r}"
         )
         unlocked = _ip_unlock_hosts(vm)
         assert unlocked.get(target) == table, (
