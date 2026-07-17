@@ -57,6 +57,7 @@ _HOSTILE_BOOTSTRAP = """# Bootstrap
 | empty alt middle | `<a||b>.md` |
 | unclosed group | `lang-<php|python.md` |
 | two groups | `a<b|c>d<e|f>g.md` |
+| no alternation | `lang-<php>.md` |
 """
 
 _PARITY_AGENTS = """# Doc
@@ -81,8 +82,8 @@ def _scratch_repo(tmp_path: Path) -> Path:
     _write(root, "AGENTS.md", _BOOTSTRAP)
     _write(root, ".agents/policy/alpha.md", f"# Alpha\n\n{_HEADER}")
     _write(root, ".agents/context/beta.md", f"# Beta\n\n{_HEADER}")
-    # _BOOTSTRAP's `lang-<php\|python\|shell>.md` row now expands (map #1439) —
-    # all three alternatives must resolve for this fixture to stay header-clean.
+    # _BOOTSTRAP carries a `lang-<php\|python\|shell>.md` template row — every
+    # expanded alternative must resolve for this fixture to stay header-clean.
     _write(root, ".agents/context/lang-php.md", f"# PHP\n\n{_HEADER}")
     _write(root, ".agents/context/lang-python.md", f"# Python\n\n{_HEADER}")
     _write(root, ".agents/context/lang-shell.md", f"# Shell\n\n{_HEADER}")
@@ -170,8 +171,8 @@ def test_nested_plugins_segment_oversized_stub_has_no_budget(tmp_path: Path) -> 
 
 
 def test_routing_targets_extracts_table_rows_only() -> None:
-    # The `lang-<php\|python\|shell>.md` template row expands into three concrete
-    # tokens now (markdown-escaped pipes stripped) — it is no longer skipped.
+    # A well-formed `lang-<php\|python\|shell>.md` template row expands into one
+    # concrete token per alternative (markdown-escaped pipes stripped), never skips.
     tokens, skipped = ccb.routing_targets(_BOOTSTRAP)
     assert tokens == [".agents/policy/alpha.md", "beta.md", "lang-php.md", "lang-python.md", "lang-shell.md"]
     assert skipped == []
@@ -180,7 +181,7 @@ def test_routing_targets_extracts_table_rows_only() -> None:
 def test_routing_targets_hostile_templates_skip_without_crash() -> None:
     tokens, skipped = ccb.routing_targets(_HOSTILE_BOOTSTRAP)
     assert tokens == [".agents/policy/alpha.md"]
-    assert skipped == ["<>.md", "<|>.md", "<a||b>.md", "lang-<php|python.md", "a<b|c>d<e|f>g.md"]
+    assert skipped == ["<>.md", "<|>.md", "<a||b>.md", "lang-<php|python.md", "a<b|c>d<e|f>g.md", "lang-<php>.md"]
 
 
 def test_resolve_target_bare_token_searches_policy_context_docs(tmp_path: Path) -> None:
@@ -219,9 +220,9 @@ def test_check_headers_flags_renamed_routing_table_heading(tmp_path: Path) -> No
 
 
 def test_check_headers_expanded_template_flags_missing_alternative(tmp_path: Path) -> None:
-    # _scratch_repo ships all three lang-*.md alternatives already (fixture must
-    # stay header-clean by default) — remove one to prove the expansion resolves
-    # and header-checks each alternative independently.
+    # _scratch_repo ships all three lang-*.md alternatives (header-clean by
+    # default); a missing alternative is an unresolved-target violation — each
+    # expanded alternative resolves and header-checks independently.
     root = _scratch_repo(tmp_path)
     (root / ".agents/context/lang-shell.md").unlink()
     violations = ccb.check_headers(root)
@@ -289,8 +290,8 @@ def _settings_ups(capsule: str) -> str:
 
 
 def test_extract_capsules_returns_event_text_and_measures_bytes() -> None:
-    # extract_capsules now returns the capsule TEXT per event, not a precomputed
-    # byte length — byte-length is derived by the caller where it matters.
+    # extract_capsules returns the capsule TEXT per event; byte length is
+    # derived by the caller where it matters.
     capsules, errors = ccb.extract_capsules(_settings("abc"))
     assert capsules == [("SessionStart", "abc")] and errors == []
     assert len(capsules[0][1].encode("utf-8")) == 3
@@ -429,7 +430,7 @@ def test_check_parity_label_only_capsule_flags_violation(tmp_path: Path) -> None
 
 
 def test_check_parity_live_repository_user_prompt_submit_clean() -> None:
-    # Pins the step-1 UserPromptSubmit capsule content against the live AGENTS.md.
+    # Pins the live UserPromptSubmit capsule content against the live AGENTS.md.
     assert ccb.check_parity(_REPO_ROOT) == []
 
 
