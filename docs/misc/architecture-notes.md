@@ -1,5 +1,8 @@
 # Architecture notes (dev-only)
 
+Scope: subsystem architecture reference (DNSBL/ABP, change detection, aliases,
+scheduling, UI tiers, pkg distribution). Load when: the routing table names a section.
+
 Implementation detail extracted from `CLAUDE.md` to keep the always-loaded instructions
 lean. This is the mid-level summary; the authoritative design for each item is its
 `.ADRs/ADR_NN_*/` directory. Read the relevant section here before touching the code it

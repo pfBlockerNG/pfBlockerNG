@@ -1,5 +1,8 @@
 # Config gateway (PfbConfig) — reference
 
+Scope: PfbConfig gateway contract, storage adapters, field inventory. Load when:
+touching config fields, `PfbConfig`, or rollback/downgrade behaviour.
+
 Deep reference for the ADR-28/29 config-storage adapters and the `PfbConfig` gateway: the
 operative gateway contract, the storage adapter rule, and the mechanics a change needs when
 adding a field, reasoning about rollback/downgrade, or checking the foreign-key exclusions.
@@ -278,7 +281,7 @@ registered path set). Each annotation is committed in the relevant source file.
 ## Sniff file-scope exclusion — `pfblockerng_extra.inc` / `pfblockerng_migrate.inc`
 
 Distinct from the per-path foreign-key list above: `RequireConfigGatewaySniff` excludes these two
-**whole files** from its scan (see the PHPCS sniff entry in `CLAUDE.md` → "Code standards → PHP"),
+**whole files** from its scan (see the PHPCS sniff entry in `.agents/policy/coding.md` → "Linting"),
 originally because `pfblockerng_extra.inc` hosts `PfbConfig` itself (the gateway can't call
 through itself) and `pfblockerng_migrate.inc` predates the registry. `pfblockerng_extra.inc` has
 since grown well beyond the gateway — it also hosts real dispatch/scheduling logic (e.g. the

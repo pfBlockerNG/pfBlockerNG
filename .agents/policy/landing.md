@@ -1,5 +1,8 @@
 # PR landing — the contract
 
+Scope: PR landing — review sources, adversarial reviewer contract, finding intake,
+merge gate, CI waits, post-merge. Load when: landing a PR or applying review findings.
+
 - **Scope:** vendor-neutral mechanics for landing a pull request — review feedback
   first, then rebase-merge — extracted from the `pr-merge`, `pr-merge-flow`, and
   `pr-comments` skills and the `review-single` reviewer contract (all since retired,
@@ -95,7 +98,7 @@ blocking finding. One reviewer covers all three lenses — none may be skipped:
    memory) and flag uncovered rows; flag hardcoded environment-derived literals.
 2. **Correctness + hostile inputs** — logic errors, dead branches, unchecked error
    paths, races, security holes, repo-standard violations, stale comments/docs about
-   touched symbols; attack any parser/regex/guard with the CLAUDE.md hostile-input
+   touched symbols; attack any parser/regex/guard with the delegation.md hostile-input
    classes, **executing** probes.
 3. **Test honesty** — every new/changed test carries an assertion that fails on
    regression; negative assertions have fixtures that could fail them (vacuity); no
@@ -252,13 +255,13 @@ still gets its reply, pointing at the shared resolution. Then per finding:
 - **Verdict:** **APPLY** (valid, in scope, safe) · **SKIP** (stale / unenforced /
   wrong-premise / suggestion-unsafe — record the reason) · **DEFER** (confirmed real
   but pre-existing/orthogonal → a tracking issue, mandatory — a "deferred" reply with
-  no issue is wasted effort). A HARDENING-ONLY finding (per the CLAUDE.md scanner
+  no issue is wasted effort). A HARDENING-ONLY finding (per the issues.md scanner
   gate) is SKIP with its evidence kept in the audit record, never DEFER.
 - **Skip asymmetry (anti self-grading):** a style/lint nit may be SKIPped on config
   grounds alone; a **correctness or security** finding — including a `blocking`
   adversarial-review finding — is closed only by APPLY (with its test) or explicit
   user sign-off, and SKIPped only with **demonstrated evidence its premise is wrong**
-  (command + output in the reply), never prose. A finding citing a CLAUDE.md mandate
+  (command + output in the reply), never prose. A finding citing a canonical-policy mandate
   is never self-skipped by the agent whose code it flags: fix it or escalate.
 
 ### Applying fixes
@@ -381,7 +384,7 @@ unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
   (states per workflow.md "Ticket states").
 - **Trigger sweep (mandatory):** the task reached a terminal state — kill every
   trigger class (background polls, scheduled check-ins, subscriptions), then sweep
-  once for stale waits from earlier items (CLAUDE.md "No orphaned waits").
+  once for stale waits from earlier items (waits.md).
 - **Report:** the PR, whether a rebase was needed, the CI verdict (and that advisory
   bots were intentionally not waited on), the reviews received (models, profiles,
   skips surfaced), the merge result, and the cleanup. An abort at any step says

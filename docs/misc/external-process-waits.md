@@ -1,5 +1,8 @@
 # Launching and waiting on external processes
 
+Scope: launching and waiting on external processes on FreeBSD/pfSense. Load when:
+code runs `timeout(1)`, `mwexec_bg()`, a spawned daemon, or a live-tail/poll loop.
+
 Running an external OS process from PHP or shell and then *waiting on it* has several
 non-obvious semantics that have bitten this package — a post-update hook falsely timing
 out and killing the daemon it had just (re)started, and the Update-page live tail hanging.

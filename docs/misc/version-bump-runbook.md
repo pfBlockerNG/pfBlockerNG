@@ -1,5 +1,7 @@
 # Version-bump runbook (stubs, matrix, smoke images)
 
+Scope: the minimum-pfSense-version bump runbook. Load when: bumping min CE/Plus.
+
 Procedure for bumping the minimum supported pfSense version and regenerating the PHP stubs. The
 **rules** (when to regenerate, stub-over-baseline preference) live in `CLAUDE.md` → "Updating
 documentation"; this file is the step-by-step.

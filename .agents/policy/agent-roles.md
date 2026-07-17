@@ -22,7 +22,7 @@ policy corpus.
   [`.agents/model-tiers.conf`](../model-tiers.conf). The contract names tiers, never
   vendor model ids; a tier selects the model, and procedures set effort independently.
 - Expensive tiers require evidence (see Tier economics).
-- The delegation contract (CLAUDE.md: brief → handoff → gate) and the task-packet /
+- The delegation contract (`.agents/policy/delegation.md`: brief → handoff → gate) and the task-packet /
   checkpoint schemas ([`workflow.md`](workflow.md)) bind every role unchanged; a role
   contract may narrow them, never weaken them.
 - `scripts/check_agent_roles.py` validates the registry below against both vendors'
@@ -233,7 +233,7 @@ goes through [`model-tiers.conf`](../model-tiers.conf).
 | Role | Native definition |
 | ---- | ----------------- |
 | explorer | fresh read-only sub-agents with packet-scoped briefs (small default; top allowed for verdict quality); the harness `Explore` agent type for ad-hoc read-only fan-out |
-| planner | the top-level session itself (CLAUDE.md "Plan top-tier, implement small-tier") |
+| planner | the top-level session itself (delegation.md "Plan top-tier, implement small-tier") |
 | implementer | a fresh small-tier sub-agent executing THE BRIEF in the assigned worktree |
 | verifier | a fresh small-tier sub-agent (never the brief author's model) re-deriving one step; fresh read-only validator sub-agents for per-finding validation |
 | reviewer | a fresh read-only sub-agent implementing the [`landing.md`](landing.md) reviewer contract (small default; top for large/complex; mid only in the dual fallback) |

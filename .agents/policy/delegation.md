@@ -55,7 +55,7 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
   (`.claude/settings.json`) injects the ponytail + caveman capsule into every spawned
   sub-agent; the capsule itself carries the rules (reviewer carve-out; "terse prose,
   verbatim evidence"). Briefs add a mode line only for a non-default level (e.g. `ultra`).
-- **The small tier follows every directive in CLAUDE.md.** The implementer is cheaper, not exempt.
+- **The small tier follows every directive of the canonical policy (AGENTS.md + its routed files).** The implementer is cheaper, not exempt.
 - **Run at effort xhigh or better** — the session default in `.claude/settings.json`
   (`effortLevel: xhigh`), and stated explicitly in every spawn (never rely on inheritance).
 
@@ -92,7 +92,7 @@ and review.
    oversized values, wrong encoding (#903, #904, #907, #908, #920 were all misses of exactly
    these).
 5. **Constraints** — the do-NOT-touch list, plus the **never-weaken rule**: a brief may never
-   weaken a CLAUDE.md mandate. In particular, red→green is **test-first** (Test coverage #1):
+   weaken a canonical-policy mandate. In particular, red→green is **test-first** (testing.md principle #1):
    the reproduction test authored and executed RED before any production edit, frozen
    byte-identical, re-run GREEN unchanged after — **executed runs with output pasted**, never
    "reasoned through" or "verified by reading". Comments follow "Comments —
@@ -216,7 +216,7 @@ by `tests/shell/agent_*_spec.sh`.
   cloud environments route git/ssh/https through a localhost proxy that only those
   CLIs inherit; never call raw endpoints. `gh` absent → the script exits **3** with a
   `GH-UNAVAILABLE` message: the agent falls back to `mcp__github__*` tools with
-  wakeup-paced checks (CLAUDE.md "No orphaned waits" #4) — MCP tools are harness
+  wakeup-paced checks (waits.md rule #4) — MCP tools are harness
   tools, unreachable from inside a shell, so the fallback cannot live in the script.
   Any other missing tool → exit **4** (`TOOL-MISSING`). Exit **2** = usage/precondition,
   **1** = the check itself failed, **0** = verdict reached.

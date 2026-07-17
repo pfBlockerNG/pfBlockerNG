@@ -125,7 +125,7 @@ Continue-with refs — never a transcript — and resumes from **Next**.
 
 Native signals replaced the `WIP`/`Waiting PR` labels
 ([#1388](https://github.com/pfBlockerNG/pfBlockerNG/issues/1388), adopted 2026-07-17;
-scheme in CLAUDE.md "Issue state (lifecycle)"). Old issues keep their legacy labels —
+scheme in `.agents/policy/issues.md` "Issue state (lifecycle)"). Old issues keep their legacy labels —
 no bulk migration; clear one when a transition you perform would have cleared it.
 
 A worker may move its claimed ticket between agent states but never cancels without a

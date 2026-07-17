@@ -9,11 +9,11 @@ rules). Swept from `CLAUDE.md` and `docs/misc/workflow-reference.md` in Stage 1 
 
 - **#902** — a CI contract shipped from memory that `GITHUB_TOKEN` event suppression made
   unfulfillable → probe environmental claims in-session before writing them into artifacts
-  (`CLAUDE.md` "Evidence rules").
+  (AGENTS.md "Working principles").
 - **ADR-59** — wrong `domain_col` values shipped for feeds nobody had fetched → same rule.
 - **PR #933 / #935** — a pipefail no-op gate was seeded by the planner's own brief and caught
   only at the independent gate → briefs are artifacts; embedded environmental claims carry
-  probe evidence or an ASSUMED tag (`CLAUDE.md` "Evidence rules").
+  probe evidence or an ASSUMED tag (AGENTS.md "Working principles").
 - **#900–#909** — a one-day post-hoc audit found ten reproducible defects in work that had
   passed every prose gate → the artifact-field delegation contract
   (`.agents/policy/delegation.md`).
@@ -41,7 +41,7 @@ rules). Swept from `CLAUDE.md` and `docs/misc/workflow-reference.md` in Stage 1 
 ## Testing
 
 - **PR #933** — GitHub Actions' default `bash -e {0}` has no `pipefail`, so `| tee` masked an
-  exit 1 → the in-job red canary (`CLAUDE.md` "Test coverage"; `testing.md`).
+  exit 1 → the in-job red canary (`testing.md`).
 - **PR #937 / #943** — a newly wired blocking gate shipped green-path-only → every new gate
   demonstrates its red path once, in-session (`testing.md`).
 - **issue #456** — fixed-time waits coordinating concurrency → synchronisation primitives;
