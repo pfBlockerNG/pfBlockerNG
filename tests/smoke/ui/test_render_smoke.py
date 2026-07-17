@@ -38,7 +38,8 @@ import pytest
 
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard, evaluate_render
-from .test_category_edit import CFG_DNSBL, _del_rowid, _free_rowid
+from .test_category import _restore_node, _snapshot_node
+from .test_category_edit import CFG_DNSBL, CFG_IPV4, _free_rowid
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1698,38 +1699,78 @@ def test_category_edit_no_sort_mode_renders_reorder_wiring(
     """ADR-63 P4: a no-sort category-edit page emits the staged-reorder wiring +
     the gutter container class, still with zero retired Lmove/Xmove markup.
 
-    Seeds one DNSBL alias row with ``sort='no-sort'`` directly via config (the
-    render gate itself, not the save path -- Tier B covers the save/persist path).
+    Also seeds invalid persisted IPv4/DNSBL actions. Alerts must exclude them,
+    and Category Edit must render both rows with a repairable Disabled selection.
+    Whole config nodes are restored exactly after the probe.
     """
     vm = smoke_vm
-    rowid = _free_rowid(vm, CFG_DNSBL)
-    base = f"{CFG_DNSBL}/{rowid}"
+    dnsbl_snap = _snapshot_node(vm, CFG_DNSBL)
+    ipv4_snap = _snapshot_node(vm, CFG_IPV4)
+    dnsbl_rowid = _free_rowid(vm, CFG_DNSBL)
+    ipv4_rowid = _free_rowid(vm, CFG_IPV4)
+    dnsbl_base = f"{CFG_DNSBL}/{dnsbl_rowid}"
+    ipv4_base = f"{CFG_IPV4}/{ipv4_rowid}"
     seed = helpers.php_eval(
         vm,
-        f"config_set_path({helpers._php_str(f'{base}/aliasname')}, 'pfbrenderns');\n"
-        f"config_set_path({helpers._php_str(f'{base}/action')}, 'unbound');\n"
-        f"config_set_path({helpers._php_str(f'{base}/sort')}, 'no-sort');\n"
-        f"config_set_path({helpers._php_str(f'{base}/row/0/format')}, 'Auto');\n"
-        f"config_set_path({helpers._php_str(f'{base}/row/0/state')}, 'Disabled');\n"
-        f"config_set_path({helpers._php_str(f'{base}/row/0/url')}, '');\n"
-        f"config_set_path({helpers._php_str(f'{base}/row/0/header')}, 'pfbrenderns0');\n"
-        "write_config('ADR-63 P4 smoke: seed no-sort render row');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/aliasname')}, 'pfbrepairdns');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/action')}, array('unbound'));\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/sort')}, 'no-sort');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/custom')}, base64_encode('bad.example'));\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/format')}, 'auto');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/state')}, 'Disabled');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/url')}, '');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/header')}, 'pfbrepairdns0');\n"
+        f"config_set_path({helpers._php_str(f'{ipv4_base}/aliasname')}, 'pfbrepairip');\n"
+        f"config_set_path({helpers._php_str(f'{ipv4_base}/action')}, 'PermitBogus');\n"
+        f"config_set_path({helpers._php_str(f'{ipv4_base}/sort')}, 'sort');\n"
+        f"config_set_path({helpers._php_str(f'{ipv4_base}/custom')}, base64_encode('192.0.2.1'));\n"
+        f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/format')}, 'auto');\n"
+        f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/state')}, 'Disabled');\n"
+        f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/url')}, '');\n"
+        f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/header')}, 'pfbrepairip0');\n"
+        "write_config('pfBlockerNG smoke: seed corrupt action render rows');\n"
         "echo 'OK';",
     )
-    assert "OK" in seed.stdout, f"failed to seed no-sort category row: {seed.stdout!r}"
+    assert "OK" in seed.stdout, f"failed to seed corrupt action rows: {seed.stdout!r}"
+
+    def assert_disabled_selected(body: str, path: str) -> None:
+        select = re.search(r'<select(?=[^>]*name="action")[^>]*>(.*?)</select>', body, re.DOTALL)
+        assert select is not None, f"action select missing on {path}"
+        disabled = re.search(r'<option(?=[^>]*value="Disabled")(?=[^>]*selected(?:=|\s|>))[^>]*>', select.group(1))
+        assert disabled is not None, f"invalid persisted action did not render as selected Disabled on {path}"
+
     try:
-        path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={rowid}"
+        alerts_path = "/pfblockerng/pfblockerng_alerts.php"
+        alerts_resp = webui.get(alerts_path)
+        alerts_result = evaluate_render(alerts_path, alerts_resp.status_code, alerts_resp.text, ("Alert Settings",))
+        assert alerts_result.ok, f"Alerts corrupt-action render failed: {alerts_result.detail}"
+        assert "pfB_pfbrepairip_v4" not in alerts_resp.text, "PermitBogus IP row entered Alerts permit options"
+        assert "DNSBL_pfbrepairdns" not in alerts_resp.text, "array DNSBL row entered Alerts custom-list options"
+
+        path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={dnsbl_rowid}"
         resp = webui.get(path)
-        assert resp.status_code == 200, f"GET {path} -> HTTP {resp.status_code} (expected 200)"
+        result = evaluate_render(path, resp.status_code, resp.text, ("Advanced Tuneables",))
+        assert result.ok, f"Category Edit DNSBL corrupt-action render failed: {result.detail}"
         body = resp.text
+        assert_disabled_selected(body, path)
         assert "pfb_reorder_init('#sourcedefinitions .panel-body'" in body, (
             f"pfb_reorder_init wiring missing in no-sort mode on {path}"
         )
         assert 'class="pfb-gutter"' in body, f"pfb-gutter container class missing in no-sort mode on {path}"
         assert 'name="Lmove' not in body, f"retired Lmove markup found on {path}"
         assert 'name="Xmove' not in body, f"retired Xmove markup found on {path}"
+
+        path = f"/pfblockerng/pfblockerng_category_edit.php?type=ipv4&rowid={ipv4_rowid}"
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, ("Advanced Tuneables",))
+        assert result.ok, f"Category Edit IPv4 corrupt-action render failed: {result.detail}"
+        assert "PermitBogus" not in resp.text, f"invalid persisted action leaked into repair form on {path}"
+        assert_disabled_selected(resp.text, path)
     finally:
-        _del_rowid(vm, CFG_DNSBL, rowid)
+        _restore_node(vm, CFG_IPV4, ipv4_snap)
+        _restore_node(vm, CFG_DNSBL, dnsbl_snap)
+        assert _snapshot_node(vm, CFG_IPV4) == ipv4_snap, "IPv4 config restore was not exact"
+        assert _snapshot_node(vm, CFG_DNSBL) == dnsbl_snap, "DNSBL config restore was not exact"
 
 
 # ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP

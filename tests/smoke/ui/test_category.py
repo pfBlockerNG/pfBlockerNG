@@ -54,6 +54,7 @@ reads the persist sink -- an ``ids[]`` POST there is a proven SILENT NO-OP.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
@@ -258,11 +259,11 @@ def test_category_update_row_action_changes_config(
 
     Branch coverage of the action validator (pfblockerng_category.php:238-243):
 
-    * VALID: ``Deny_Outbound`` is a key of ``$action_values`` -> the handler writes
+    * VALID: ``Deny_Outbound`` passes ``pfb_group_action_valid()`` -> the handler writes
       ``installedpackages/pfblockernglistsv4/config/0/action`` -> config holds the
       new value. The seed starts at ``Deny_Inbound`` so the change is a real
       transition (before != after), proving the POST caused it.
-    * REJECT: ``BogusAction`` is NOT a key -> ``$input_errors`` -> the
+    * REJECT: ``BogusAction`` fails the shared group validator -> ``$input_errors`` -> the
       ``if (!$input_errors)`` guard skips the whole write -> config UNCHANGED
       (stays at the prior valid value, NOT coerced, NOT the bogus token).
 
@@ -334,6 +335,18 @@ def test_category_update_rejects_cross_group_and_array_actions(
         )
         assert "Fatal error" not in body
         assert helpers.config_get(vm, f"{DNSBL_GROUPS}/0/action") == "unbound"
+
+        ipv4_seeded = _snapshot_node(vm, IPV4_LISTS)
+        dnsbl_seeded = _snapshot_node(vm, DNSBL_GROUPS)
+        mutation = {"act": "update", "rowid": "0", "postdata": urlencode({"action-0": "Disabled"})}
+        for case, type_value in (("missing", None), ("bogus", "not-a-category")):
+            payload = dict(mutation)
+            if type_value is not None:
+                payload["type"] = type_value
+            body = _ajax_post(webui, payload, page=_page_url("dnsbl"))
+            assert json.loads(body) == ["Failed Type"], f"{case} type returned non-neutral error: {body!r}"
+            assert _snapshot_node(vm, IPV4_LISTS) == ipv4_seeded, f"{case} type mutated IPv4 config"
+            assert _snapshot_node(vm, DNSBL_GROUPS) == dnsbl_seeded, f"{case} type mutated DNSBL config"
     finally:
         _restore_node(vm, IPV4_LISTS, ipv4_snap)
         _restore_node(vm, DNSBL_GROUPS, dnsbl_snap)

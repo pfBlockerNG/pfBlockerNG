@@ -10,12 +10,16 @@ final class GroupActionWiringTest extends TestCase
 	private static string $inc;
 	private static string $cron;
 	private static string $category;
+	private static string $alerts;
+	private static string $categoryEdit;
 
 	public static function setUpBeforeClass(): void
 	{
 		$root = dirname(__DIR__, 2);
 		self::$inc = (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng.inc");
 		self::$category = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category.php");
+		self::$alerts = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_alerts.php");
+		self::$categoryEdit = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php");
 		$www = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng.php");
 		if (!preg_match('/function pfblockerng_sync_cron\b.*?(?=\nfunction )/s', $www, $match)) {
 			throw new RuntimeException('test bootstrap: pfblockerng_sync_cron() body not found');
@@ -46,6 +50,76 @@ final class GroupActionWiringTest extends TestCase
 	{
 		$this->assertStringContainsString('pfb_group_action_valid($value, $gtype)', self::$category);
 		$this->assertStringNotContainsString('in_array($value, $action_values)', self::$category);
+	}
+
+	public function testSummaryMutationRequiresExactPostTypeBeforeConfigSelection(): void
+	{
+		$this->assertStringContainsString(
+			"is_string(\$_POST['type']) && in_array(\$_POST['type'], array('ipv4', 'ipv6', 'geoip', 'dnsbl'), TRUE)",
+			self::$category
+		);
+		$this->assertGuardBeforeActionUse(
+			self::$category,
+			'if (isset($_POST))',
+			'// Collect rowdata',
+			'if (!empty($action) && !$post_type_valid)',
+			'switch ($gtype)'
+		);
+	}
+
+	public function testMatchdirIpListActionIsValidatedBeforeClassification(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'function pfb_matchdir_config_headers',
+			'$pfb_dnsbl_action =',
+			"pfb_group_action_valid(\$pfb_action, 'ipv4')",
+			"strpos(\$pfb_action, 'Deny')"
+		);
+	}
+
+	public function testMatchdirDnsblIpActionIsNormalizedBeforeClassification(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'$pfb_dnsbl_action =',
+			'foreach ($continent_configs',
+			'pfb_dnsblip_action_value(',
+			"strpos(\$pfb_dnsbl_action, 'Deny')"
+		);
+	}
+
+	public function testMatchdirGeoipActionIsValidatedBeforeClassification(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'foreach ($continent_configs',
+			"return array('deny' => \$deny",
+			"pfb_group_action_valid(\$pfb_cont_action, 'geoip')",
+			"strpos(\$pfb_cont_action, 'Deny')"
+		);
+	}
+
+	public function testAlertsStoredActionIsValidatedBeforePermitClassification(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$alerts,
+			"foreach (\$c_config['config'] as \$row => \$data)",
+			'// Add Default pfBlockerNG IP Whitelist',
+			'pfb_group_action_valid($group_action, $group_type)',
+			"strpos(\$group_action, 'Permit')"
+		);
+	}
+
+	public function testCategoryEditStoredActionIsValidatedBeforeFolderClassification(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$categoryEdit,
+			"\$pconfig['custom']",
+			'// Indicate any failed downloads',
+			"pfb_group_action_valid(\$pconfig['action'] ?? NULL, \$gtype)",
+			"strpos(\$pconfig['action'], 'Deny_')"
+		);
 	}
 
 	public function testNormalizeLoopGuardsStoredAction(): void

@@ -191,7 +191,10 @@ if (!$alert_summary) {
 		    !empty($c_config['config'])) {
 
 			foreach ($c_config['config'] as $row => $data) {
-				if (strpos($data['action'], 'Permit') !== FALSE || $data['action'] == 'unbound') {
+				$group_action = $data['action'] ?? NULL;
+				$group_type = $type == 'dnsbl' ? 'dnsbl' : 'ipv4';
+				if (pfb_group_action_valid($group_action, $group_type) &&
+				    (strpos($group_action, 'Permit') !== FALSE || $group_action == 'unbound')) {
 
 					if ($type == 'dnsbl') {
 						$lname = "DNSBL_{$data['aliasname']}";

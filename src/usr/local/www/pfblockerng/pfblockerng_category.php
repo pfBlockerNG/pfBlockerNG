@@ -28,6 +28,7 @@ global $pfb;
 pfb_global();
 
 $action = $gtype = '';
+$post_type_valid = FALSE;
 $rowdata = array();
 $rowid = 0;
 
@@ -59,11 +60,9 @@ if (isset($_POST)) {
 			$rowid = $temp_value ?: 0;
 		}
 	}
-	if (isset($_POST['type']) && !empty($_POST['type'])) {
-		$temp_value = pfb_filter($_POST['type'], PFB_FILTER_HTML, 'Category');
-		if (in_array($temp_value, array('ipv4', 'ipv6', 'geoip', 'dnsbl'))) {
-			$gtype = $temp_value;
-		}
+	$post_type_valid = isset($_POST['type']) && is_string($_POST['type']) && in_array($_POST['type'], array('ipv4', 'ipv6', 'geoip', 'dnsbl'), TRUE);
+	if ($post_type_valid) {
+		$gtype = $_POST['type'];
 	}
 
 	// AJAX request
@@ -80,6 +79,11 @@ if (isset($_POST)) {
 			$action = 'update';
 		}
 	}
+}
+
+if (!empty($action) && !$post_type_valid) {
+	print(json_encode(array('Failed Type')));
+	exit;
 }
 
 // Set 'active' GUI Tabs
