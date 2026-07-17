@@ -27,6 +27,11 @@ Two more (issue #1214), same keystone family:
 * ``test_reset_pfb_baseline_clears_geoip_dataset`` — ``reset_pfb_baseline`` removes every
   ``seed_geoip_dataset`` artifact (CSVs, mmdb, generated GUI pages), so a later module never
   reads a fake GeoIP corpus a prior module seeded.
+
+One more (issue #1456), the single-case sibling of the #1214 fix:
+
+* ``test_inject_resets_untouched_family`` — a family absent from a single-case ``inject()``
+  call is reset to empty too, not left holding a PRIOR call's list group.
 """
 
 from __future__ import annotations
@@ -201,6 +206,49 @@ def test_inject_ip_lists_resets_untouched_family(deployed_vm: SmokeVM) -> None:
     assert leaked_v4 == 0, f"v4 list root leaked forward from a prior inject_ip_lists call ({leaked_v4} rows)"
     # ... and the v6 root holds exactly the newest spec.
     assert _section_count(vm, h.CFG_IP_V6_LISTS) == 1, "inject_ip_lists did not write the v6 list section (3rd call)"
+
+
+def test_inject_resets_untouched_family(deployed_vm: SmokeVM) -> None:
+    """A family absent from a single-case inject() call is reset to empty, not left holding a
+    PRIOR call's list group (issue #1456, the ``inject_ip_lists``/#1214 fix's single-case
+    sibling: ``_ip_inject_snippet`` only wrote its OWN family's root) -- proved in BOTH
+    directions.
+
+    Scenario:
+      Given a v6 IP list injected via inject(),
+      When a LATER inject() call in the same module injects only a v4 spec,
+      Then the v6 list-config root is EMPTY (not the leaked-forward v6 list) and the v4
+        root holds exactly the new spec (the issue's reported shape);
+      When a THIRD call injects only a v6 spec (the mirror direction),
+      Then the now-untouched v4 root is EMPTY too, and the v6 root holds the newest spec.
+    """
+    vm = deployed_vm
+    feed_url = "http://192.168.89.2/ip_plain_cidr.txt"
+    v6spec = h.IpCase(aliasname="smokeisoinjv6", feed_url=feed_url, header="smokeisoinjv6", family="v6")
+    v4spec = h.IpCase(aliasname="smokeisoinjv4", feed_url=feed_url, header="smokeisoinjv4")
+    v6spec2 = h.IpCase(aliasname="smokeisoinjv6b", feed_url=feed_url, header="smokeisoinjv6b", family="v6")
+
+    # GIVEN a v6-only inject() call.
+    h.inject(vm, v6spec)
+    assert _section_count(vm, h.CFG_IP_V6_LISTS) == 1, "inject did not write the v6 list section"
+
+    # WHEN a LATER call injects only a v4 spec.
+    h.inject(vm, v4spec)
+
+    # THEN the untouched v6 root is reset to empty (not left holding the prior v6 list) ...
+    leaked = _section_count(vm, h.CFG_IP_V6_LISTS)
+    assert leaked == 0, f"v6 list root leaked forward from a prior inject() call ({leaked} rows)"
+    # ... and the v4 root holds exactly the new spec.
+    assert _section_count(vm, h.CFG_IP_V4_LISTS) == 1, "inject did not write the v4 list section"
+
+    # WHEN a THIRD call injects only a v6 spec (the mirror direction).
+    h.inject(vm, v6spec2)
+
+    # THEN the now-untouched v4 root is reset to empty too ...
+    leaked_v4 = _section_count(vm, h.CFG_IP_V4_LISTS)
+    assert leaked_v4 == 0, f"v4 list root leaked forward from a prior inject() call ({leaked_v4} rows)"
+    # ... and the v6 root holds exactly the newest spec.
+    assert _section_count(vm, h.CFG_IP_V6_LISTS) == 1, "inject did not write the v6 list section (3rd call)"
 
 
 def test_reset_pfb_baseline_clears_geoip_dataset(deployed_vm: SmokeVM) -> None:
