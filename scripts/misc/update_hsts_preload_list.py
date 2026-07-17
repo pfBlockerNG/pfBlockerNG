@@ -28,8 +28,9 @@ Conversion
 Mirrors update_public_suffix_list.py: every non-ASCII label is punycode-encoded
 via the stdlib 'idna' codec (per-label); an already-ASCII label passes through
 verbatim (idempotent). Names are lowercased. A malformed name is skipped rather
-than emitted: whitespace or an invisible Unicode format character (zero-width
-space, BOM, ...) anywhere, or a label past the 63-octet DNS cap, ASCII or not.
+than emitted: whitespace or an RFC 3454 Table B.1 "commonly mapped to nothing"
+character (zero-width space, BOM, variation selectors, ...) anywhere, or a
+label past the 63-octet DNS cap, ASCII or not.
 
 Output format
 -------------
@@ -57,8 +58,8 @@ import argparse
 import base64
 import binascii
 import json
+import stringprep
 import sys
-import unicodedata
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -129,12 +130,15 @@ def extract_names(entries: list[dict[str, object]]) -> list[str]:
     return names
 
 
-def _has_blank_or_format_char(text: str) -> bool:
-    """True if text carries a blank (str.isspace()) or an invisible Unicode format
-    character (category 'Cf': zero-width space, BOM, word joiner, ...) -- isspace()
-    alone misses the latter, letting idna's encoder silently coalesce them away
-    instead of the name being treated as malformed (issue #1306)."""
-    return any(c.isspace() or unicodedata.category(c) == "Cf" for c in text)
+def _has_blank_or_ignorable_char(text: str) -> bool:
+    """True if text carries a blank (str.isspace()) or an RFC 3454 Table B.1
+    "commonly mapped to nothing" character (zero-width space, BOM, word joiner,
+    variation selectors, ...) -- the exact predicate the stdlib idna codec's
+    nameprep step uses internally (stringprep.in_table_b1) to silently strip these
+    before punycode-encoding a label. A category-'Cf'-only check misses several
+    Table B.1 members that are category Mn/Pd (issue #1306 follow-up), letting
+    idna's encoder silently coalesce them away instead of the name being skipped."""
+    return any(c.isspace() or stringprep.in_table_b1(c) for c in text)
 
 
 def _punycode_label(label: str) -> str:
@@ -155,11 +159,11 @@ def _punycode_label(label: str) -> str:
 def normalise_name(name: str) -> str | None:
     """Convert one HSTS entry name to its stored form, or None to skip it.
 
-    Skips a name carrying whitespace/format characters anywhere (see
-    _has_blank_or_format_char -- Chromium never ships one) and a label the idna
+    Skips a name carrying whitespace/ignorable characters anywhere (see
+    _has_blank_or_ignorable_char -- Chromium never ships one) and a label the idna
     codec rejects (past the 63-octet DNS cap, ASCII or not -- issue #1306).
     """
-    if not name or _has_blank_or_format_char(name):
+    if not name or _has_blank_or_ignorable_char(name):
         return None
     try:
         return ".".join(_punycode_label(label) for label in name.split("."))
