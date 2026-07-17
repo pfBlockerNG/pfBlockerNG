@@ -17,7 +17,7 @@ use PHPUnit\Framework\TestCase;
  *       source line number, issue #1004) + bumping the per-feed counter.
  *     - pfb_dnsbl_scheme_skip_warn($skipped, $header): one main-log WARNING when $skipped>0.
  *
- * Real pfb_parsed_fail()/pfb_logger() are exercised (the shipped code), pointed at temp
+ * Real pfb_parse_fail_log()/pfb_logger() are exercised (the shipped code), pointed at temp
  * files so the side-effects are asserted -- not coverage theater. File I/O results are
  * asserted (no '@' suppression) so a setup/teardown failure cannot mask a false green, and
  * $GLOBALS['pfb']['log'] is saved/restored per test so the suite stays order-independent.

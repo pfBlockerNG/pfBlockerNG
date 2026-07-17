@@ -1825,7 +1825,7 @@ def read_log_file(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> str:
 
     Used to assert ADR-22 strict-mode skips landed in the DNSBL parse-error log:
     a rejected line's original text (its ``uuid-*`` label) appears in the CSV record
-    pfb_parsed_fail() appended. ``cat`` a missing file -> '' (never raises)."""
+    pfb_parse_fail_log() appended. ``cat`` a missing file -> '' (never raises)."""
     result = vm.ssh("cat", path, timeout=timeout)
     return result.stdout if result.returncode == 0 else ""
 
@@ -3949,15 +3949,15 @@ PY_ERROR_LOG = f"{PFB_LOGDIR}/py_error.log"
 # bare phrase "the zero-downtime swap", so matching the unbracketed substring would
 # false-positive on a fallback (restart) as if the swap had been taken.
 SWAP_LOG_MARKER = "[ zero-downtime swap ]"
-# The DNSBL per-line parse-error log: pfb_parsed_fail() appends one CSV record
+# The DNSBL per-line parse-error log: pfb_parse_fail_log() appends one CSV record
 # ({date},{header},{line},{oline},{lineno}) here for every rejected line — including
 # an ADR-22 strict-mode scheme/path skip. Mirrors $pfb['dnsbl_parse_err'] (inc:91,
 # "{$pfb['logdir']}/dnsbl_parsed_error.log"), the established per-line failure sink.
 DNSBL_PARSE_ERR_LOG = f"{PFB_LOGDIR}/dnsbl_parsed_error.log"
-# issue #1004: the generic IP-list sibling sink. pfb_ip_parsed_fail() appends one CSV
-# record ({date},{header},{line-or-'null'},{oline},{lineno}) here for every line the
-# Site-B "other family" heuristic rejects. Mirrors $pfb['ip_parse_err'] (inc:92,
-# "{$pfb['logdir']}/ip_parsed_error.log").
+# issue #1004: the generic IP-list sibling sink. pfb_parse_fail_log() (strict mode)
+# appends one CSV record ({date},{header},{line-or-'null'},{oline},{lineno}) here for
+# every line the Site-B "other family" heuristic rejects. Mirrors $pfb['ip_parse_err']
+# (inc:92, "{$pfb['logdir']}/ip_parsed_error.log").
 IP_PARSE_ERR_LOG = f"{PFB_LOGDIR}/ip_parsed_error.log"
 
 

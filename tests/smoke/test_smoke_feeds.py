@@ -339,7 +339,7 @@ def test_ipv6_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
 # issue #1004 — the generic IP-list per-line parse-error detail sink (Site B: the
 # "other family" heuristic in the regex-fallback path). Mirrors the DNSBL strict-
 # scheme parse-error-log proof (test_strict_skips_invalid_scheme_and_path_and_logs)
-# but for pfb_ip_parsed_fail()/ip_parsed_error.log.
+# but for pfb_parse_fail_log() (strict mode)/ip_parsed_error.log.
 # --------------------------------------------------------------------------- #
 
 
@@ -715,7 +715,7 @@ def test_dnsbl_bom_header_feed_parses_without_error(
     is now hoisted to the TOP of the per-line loop, so line 1's BOM is stripped BEFORE
     the '!' comment check runs. Pre-fix, that check ran against the still-BOM'd line,
     missed the '!' prefix, and the line fell through as data -- ultimately failing
-    domain validation and getting logged via ``pfb_parsed_fail()``, whose ``$oline``
+    domain validation and getting logged via ``pfb_parse_fail_log()``, whose ``$oline``
     field is the untouched, BOM-bearing original line.
 
     The anchor line and the hosts line carry NO BOM, so both block identically
@@ -784,7 +784,7 @@ def test_dnsbl_bom_header_feed_parses_without_error(
 # (digit-start) and a path line are still extracted + blocked. Strict (toggle OFF —
 # the new-install default) validates the scheme against RFC 3986 and rejects a URL
 # path: a rejected line is SKIPPED, recorded per-line in the DNSBL parse-error log
-# (pfb_parsed_fail -> $pfb['dnsbl_parse_err']), and counted into ONE per-feed WARNING
+# (pfb_parse_fail_log -> $pfb['dnsbl_parse_err']), and counted into ONE per-feed WARNING
 # in the main pfBlockerNG log (pfb_dnsbl_scheme_skip_warn).
 #
 # DELIVERY: the scheme lines ride a normal LOCAL feed row (write_local_feed), the
