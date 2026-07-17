@@ -397,10 +397,12 @@ def test_convert_suffix_skips_oversized_non_ascii_label_instead_of_crashing() ->
 
 
 # --------------------------------------------------------------------------- #
-# Hostile-input row H8 (issue #1306): exotic Unicode blank/format characters
-# skipped like ordinary whitespace -- str.isspace() alone misses category-Cf
-# format characters (zero-width space, BOM, word joiner, ...), letting idna's
-# encoder silently coalesce them away instead of the line being skipped.
+# Hostile-input row H8 (issue #1306): exotic Unicode blanks / RFC 3454 Table
+# B.1 "commonly mapped to nothing" characters skipped like ordinary whitespace
+# -- str.isspace() plus stringprep.in_table_b1() (the exact predicate the
+# stdlib idna codec's nameprep step uses internally) catches the whole class,
+# not a hardcoded few, so idna's encoder never gets the chance to silently
+# coalesce one away.
 # --------------------------------------------------------------------------- #
 
 
@@ -415,9 +417,34 @@ def test_convert_suffix_skips_line_with_byte_order_mark() -> None:
 
 
 def test_convert_suffix_skips_line_with_word_joiner() -> None:
-    # A second category-Cf character (not named in the issue) proves the fix is
-    # category-based, not a hardcoded two-character list.
+    # A Table B.1 member not explicitly named in the issue -- proves the fix
+    # catches the whole ignorable-character class, not a hardcoded list.
     assert upsl.convert_suffix("a\u2060b.com") is None
+
+
+def test_convert_suffix_skips_line_with_variation_selector() -> None:
+    # issue #1306 follow-up: U+FE0F is Table B.1 but category Mn, not Cf -- a
+    # category-Cf-only check misses it; stringprep.in_table_b1() catches it.
+    assert upsl.convert_suffix("a\ufe0fb.com") is None
+
+
+def test_convert_suffix_skips_line_with_combining_grapheme_joiner() -> None:
+    # U+034F: Table B.1, category Mn -- same Cf-blind-spot class as the variation
+    # selector above.
+    assert upsl.convert_suffix("a\u034fb.com") is None
+
+
+def test_convert_suffix_skips_line_with_mongolian_free_variation_selector() -> None:
+    # U+180B: Table B.1, category Mn -- same Cf-blind-spot class.
+    assert upsl.convert_suffix("a\u180bb.com") is None
+
+
+def test_convert_suffix_still_encodes_combining_acute_not_in_table_b1() -> None:
+    # U+0301 (combining acute) is category Mn like the Table B.1 members above,
+    # but is NOT itself in Table B.1 -- must still punycode-encode, never be
+    # skipped (proves the predicate isn't "skip every Mn character").
+    label = "a" + "\u0301" + "b.com"
+    assert upsl.convert_suffix(label) is not None
 
 
 def test_convert_suffix_skips_line_with_non_breaking_space() -> None:

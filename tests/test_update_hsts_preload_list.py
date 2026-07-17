@@ -196,10 +196,12 @@ def test_build_body_excludes_whitespace_carrying_entry() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Coverage matrix row 8b (issue #1306): exotic Unicode blank/format characters
-# skipped like ordinary whitespace -- str.isspace() alone misses category-Cf
-# format characters (zero-width space, BOM, word joiner, ...), letting idna's
-# encoder silently coalesce them away instead of the name being skipped.
+# Coverage matrix row 8b (issue #1306): exotic Unicode blanks / RFC 3454 Table
+# B.1 "commonly mapped to nothing" characters skipped like ordinary whitespace
+# -- str.isspace() plus stringprep.in_table_b1() (the exact predicate the
+# stdlib idna codec's nameprep step uses internally) catches the whole class,
+# not a hardcoded few, so idna's encoder never gets the chance to silently
+# coalesce one away.
 # --------------------------------------------------------------------------- #
 
 
@@ -214,9 +216,33 @@ def test_normalise_name_skips_name_with_byte_order_mark() -> None:
 
 
 def test_normalise_name_skips_name_with_word_joiner() -> None:
-    # A second category-Cf character (not named in the issue) proves the fix is
-    # category-based, not a hardcoded two-character list.
+    # A Table B.1 member not explicitly named in the issue -- proves the fix
+    # catches the whole ignorable-character class, not a hardcoded list.
     assert uhpl.normalise_name("a\u2060b.example") is None
+
+
+def test_normalise_name_skips_name_with_variation_selector() -> None:
+    # issue #1306 follow-up: U+FE0F is Table B.1 but category Mn, not Cf -- a
+    # category-Cf-only check misses it; stringprep.in_table_b1() catches it.
+    assert uhpl.normalise_name("a\ufe0fb.example") is None
+
+
+def test_normalise_name_skips_name_with_combining_grapheme_joiner() -> None:
+    # U+034F: Table B.1, category Mn -- same Cf-blind-spot class as above.
+    assert uhpl.normalise_name("a\u034fb.example") is None
+
+
+def test_normalise_name_skips_name_with_mongolian_free_variation_selector() -> None:
+    # U+180B: Table B.1, category Mn -- same Cf-blind-spot class.
+    assert uhpl.normalise_name("a\u180bb.example") is None
+
+
+def test_normalise_name_still_encodes_combining_acute_not_in_table_b1() -> None:
+    # U+0301 (combining acute) is category Mn like the Table B.1 members above,
+    # but is NOT itself in Table B.1 -- must still punycode-encode, never be
+    # skipped (proves the predicate isn't "skip every Mn character").
+    name = "a" + "\u0301" + "b.example"
+    assert uhpl.normalise_name(name) is not None
 
 
 def test_normalise_name_skips_name_with_non_breaking_space() -> None:

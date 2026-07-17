@@ -23,9 +23,9 @@ so a mixed ascii+unicode suffix only converts its unicode label(s)); an
 already-ASCII label (including 'xn--' punycode) passes through verbatim -- the
 conversion is therefore idempotent. Labels are lowercased defensively (DNS is
 case-insensitive). A malformed line is skipped rather than emitted: internal
-whitespace or an invisible Unicode format character (zero-width space, BOM, ...)
-after stripping, or any label past the 63-octet DNS cap, ASCII or not -- PSL
-never ships any of these.
+whitespace or an RFC 3454 Table B.1 "commonly mapped to nothing" character
+(zero-width space, BOM, variation selectors, ...) after stripping, or any
+label past the 63-octet DNS cap, ASCII or not -- PSL never ships any of these.
 
 Output format
 -------------
@@ -52,8 +52,8 @@ Dev-host tooling: run from the repo root on a dev box (never the appliance).
 from __future__ import annotations
 
 import argparse
+import stringprep
 import sys
-import unicodedata
 import urllib.request
 from pathlib import Path
 
@@ -115,12 +115,15 @@ def extract_icann_lines(lines: list[str]) -> list[str]:
     return lines[begin + 1 : end]
 
 
-def _has_blank_or_format_char(text: str) -> bool:
-    """True if text carries a blank (str.isspace()) or an invisible Unicode format
-    character (category 'Cf': zero-width space, BOM, word joiner, ...) -- isspace()
-    alone misses the latter, letting idna's encoder silently coalesce them away
-    instead of the line being treated as malformed (issue #1306)."""
-    return any(c.isspace() or unicodedata.category(c) == "Cf" for c in text)
+def _has_blank_or_ignorable_char(text: str) -> bool:
+    """True if text carries a blank (str.isspace()) or an RFC 3454 Table B.1
+    "commonly mapped to nothing" character (zero-width space, BOM, word joiner,
+    variation selectors, ...) -- the exact predicate the stdlib idna codec's
+    nameprep step uses internally (stringprep.in_table_b1) to silently strip these
+    before punycode-encoding a label. A category-'Cf'-only check misses several
+    Table B.1 members that are category Mn/Pd (issue #1306 follow-up), letting
+    idna's encoder silently coalesce them away instead of the line being skipped."""
+    return any(c.isspace() or stringprep.in_table_b1(c) for c in text)
 
 
 def _punycode_label(label: str) -> str:
@@ -143,14 +146,14 @@ def convert_suffix(line: str) -> str | None:
 
     Skips blank lines, '//' comments, '*.' wildcard rules, and '!' exception rules
     (owner decision, issue #1272 -- no parser/format extension for either), plus any
-    malformed line carrying whitespace/format characters (see _has_blank_or_format_char)
+    malformed line carrying whitespace/ignorable characters (see _has_blank_or_ignorable_char)
     or a label the idna codec rejects (past the 63-octet DNS cap, ASCII or not --
     issue #1306) -- PSL never ships either. A dot-less bare TLD passes through
     unchanged (issue #1068: consumers key it under its own full value).
     """
     if not line or line.startswith("//") or line.startswith("*.") or line.startswith("!"):
         return None
-    if _has_blank_or_format_char(line):
+    if _has_blank_or_ignorable_char(line):
         return None
     try:
         return ".".join(_punycode_label(label) for label in line.split("."))
