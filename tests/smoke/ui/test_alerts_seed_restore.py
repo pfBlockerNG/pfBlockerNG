@@ -101,7 +101,7 @@ def _snapshot(path: Path) -> dict[str, Any]:
         "mtime_ns": info.st_mtime_ns,
     }
     if hasattr(info, "st_birthtime"):
-        snapshot["birthtime"] = info.st_birthtime
+        snapshot["birthtime"] = getattr(info, "st_birthtime")
     if path.is_symlink():
         return {"kind": "symlink", "target": os.readlink(path), **snapshot}
     if path.is_file():
