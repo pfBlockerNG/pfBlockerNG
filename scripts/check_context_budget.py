@@ -82,14 +82,15 @@ def _expand_template(tok: str) -> list[str] | None:
 
     None means "not a clean single-group template" — either a plain literal
     token (no `<`/`>` at all) or a malformed/ambiguous one (unclosed `<`, more
-    than one group, or any empty alternative like `<>`/`<|>`/`<a||b>`); the
-    caller SKIPS those, it never crashes or invents a resolved target.
+    than one group, a group with no alternation like `<php>`, or any empty
+    alternative like `<>`/`<|>`/`<a||b>`); the caller SKIPS those, it never
+    crashes or invents a resolved target.
     """
     match = _TEMPLATE_RE.fullmatch(tok)
     if match is None:
         return None
     alts = match["body"].replace("\\", "").split("|")
-    if any(alt == "" for alt in alts):
+    if len(alts) < 2 or any(alt == "" for alt in alts):
         return None
     return [f"{match['prefix']}{alt}{match['suffix']}" for alt in alts]
 
