@@ -4172,14 +4172,10 @@ class TestAbpWildcardUnaffectedByTldWildcardToggle:
 
 
 class TestTldWildcardClassifyTwoLabelPublicSuffix:
-    """issue #1256: the dcnt==2 branch wildcarded ANY 2-label domain unconditionally,
-    including a domain that is ITSELF a known 2-label public suffix (com.br, co.uk,
-    gov.br, ...) -- wildcarding the suffix itself would block the WHOLE suffix
-    (every registrant under it), not just the one feed entry.
-
-    Decided semantics (the issue's own proposal, "edge to define" resolved): a bare
-    public-suffix feed entry exact-blocks the apex only (DATA) -- it is never
-    silently skipped, and it is never promoted to a wildcard ZONE.
+    """A 2-label domain that is ITSELF a known public suffix (com.br, co.uk,
+    gov.br, ...) exact-blocks the apex only (DATA) -- never silently skipped,
+    never promoted to a wildcard ZONE that would block the WHOLE suffix (every
+    registrant under it). Any other 2-label domain still wildcards (#1256).
     """
 
     # A realistic oracle shape: bare single-label TLDs coexist with 2-label
@@ -4188,7 +4184,7 @@ class TestTldWildcardClassifyTwoLabelPublicSuffix:
     # lines). "xn--p1ai.xn--80asehdb" is a synthetic-but-PSL-shaped (per-label
     # punycode, ADR-08/#914 "xn-- stays iTLD") 2-label suffix -- classify() treats
     # a suffix as an opaque string, so no real PSL entry is needed to pin this.
-    _SUFFIXES = ["com", "net", "org", "co.uk", "com.br", "gov.br", "xn--p1ai.xn--80asehdb"]
+    _SUFFIXES = ["com", "net", "org", "uk", "br", "co.uk", "com.br", "gov.br", "xn--p1ai.xn--80asehdb"]
 
     def _tlds(self) -> dict[str, dict[str, str]]:
         return _dnsbl_load_tld_wildcard_master(self._SUFFIXES, [], [])
@@ -4204,12 +4200,12 @@ class TestTldWildcardClassifyTwoLabelPublicSuffix:
 
     def test_evil_com_two_label_non_suffix_still_wildcards(self) -> None:
         # evil.com is a registrable domain UNDER the "com" suffix, not a suffix
-        # itself -- must still wildcard (the pre-existing, unchanged case).
+        # itself -- it must still wildcard.
         assert tld_wildcard_classify("evil.com", self._tlds(), set()) == (DNSBL_CLASS_ZONE, "evil.com")
 
     def test_three_label_under_two_label_suffix_still_wildcard_registrable(self) -> None:
         # example.co.uk is registrable UNDER co.uk (an actual public suffix) --
-        # the dcnt==3 oracle-search branch is untouched by this fix.
+        # the dcnt==3 oracle search classifies it registrable -> wildcard ZONE.
         assert tld_wildcard_classify("example.co.uk", self._tlds(), set()) == (DNSBL_CLASS_ZONE, "example.co.uk")
 
     def test_sub_domain_under_two_label_suffix_stays_exact(self) -> None:
@@ -4219,10 +4215,8 @@ class TestTldWildcardClassifyTwoLabelPublicSuffix:
         )
 
     def test_oracle_absent_two_label_public_suffix_stays_data(self) -> None:
-        # issue #1255's empty-oracle guard fires FIRST (top-of-function early
-        # return) -- this fix's new dcnt==2 suffix check is never reached, so the
-        # two features compose without conflict (whatever #1255 defined for an
-        # absent oracle is unchanged by this fix).
+        # The empty-oracle guard (#1255) returns exact DATA at the top of the
+        # function, before the dcnt==2 suffix check is ever reached.
         assert tld_wildcard_classify("com.br", {}, set()) == (DNSBL_CLASS_DATA, "com.br")
 
     def test_two_label_punycode_suffix_is_exact_data(self) -> None:
@@ -4235,30 +4229,27 @@ class TestTldWildcardClassifyTwoLabelPublicSuffix:
 
     def test_empty_label_two_label_shape_does_not_false_match(self) -> None:
         # Hostile input: a leading empty label (".uk") is never a real oracle key
-        # (the oracle stores "co.uk", not ".uk") -- must not spuriously match and
-        # suppress a wildcard. Unreachable through the production build() pipeline
-        # (_normalise_verdict rejects an empty label as domain-shape-invalid before
-        # tld_wildcard_classify() is ever called) -- this pins the classifier's own
-        # defensive behaviour when called directly, as the unit tests in this class
-        # do.
+        # (the oracle stores "uk"/"co.uk", not ".uk") -- it must not spuriously
+        # match and suppress a wildcard. Unreachable through the production
+        # build() pipeline (_normalise_verdict rejects an empty label as
+        # domain-shape-invalid first); the classifier stays defensive when
+        # called directly.
         assert tld_wildcard_classify(".uk", self._tlds(), set()) == (DNSBL_CLASS_ZONE, ".uk")
 
     def test_trailing_dot_form_is_not_a_two_label_shape(self) -> None:
-        # Probe: str.split(".") on a trailing-dot domain yields a trailing empty
-        # label, so "com.br." is dcnt==3, not dcnt==2 -- it never reaches this
-        # fix's branch at all (the dcnt==3 oracle search then misses on the empty
-        # tld and falls through to DATA anyway). Also moot in production:
-        # _normalise_verdict() strips the trailing dot (`.strip(".")`) before any
-        # domain reaches tld_wildcard_classify() -- probed here directly since the
-        # pipeline can never hand it a trailing-dot form.
+        # str.split(".") on a trailing-dot domain yields a trailing empty label,
+        # so "com.br." is dcnt==3, not dcnt==2 -- the dcnt==3 oracle search
+        # misses on the empty tld and falls through to DATA. Moot in production:
+        # _normalise_verdict() strips the trailing dot (`.strip(".")`) before
+        # any domain reaches tld_wildcard_classify().
         assert tld_wildcard_classify("com.br.", self._tlds(), set()) == (DNSBL_CLASS_DATA, "com.br.")
 
 
 class TestTldWildcardClassifyTwoLabelPublicSuffixViaBuild:
-    """issue #1256, full build() pipeline proof: a plain feed line reaching
+    """Full build() pipeline coverage (#1256): a plain feed line reaching
     tld_wildcard_classify() via build() is pre-normalised (lower-cased, dot-
     stripped) by _normalise_verdict() BEFORE classification -- so the bare
-    public-suffix exact-DATA fix is case-insensitive end to end without
+    public-suffix exact-DATA behaviour is case-insensitive end to end without
     tld_wildcard_classify() itself needing to normalise its input.
     """
 

@@ -4282,15 +4282,15 @@ def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusio
     whose parent is not a known public suffix -> exact DATA; a whole-domain TLD
     exclusion forces exact DATA (transparent, not wildcarded).
 
-    issue #1255: an empty ``tlds`` (TLD-Wildcard OFF, or no oracle staged) forces
-    exact DATA for every domain -- defense-in-depth, since the dcnt==2 branch below
-    never consults ``tlds`` for a NON-suffix 2-label name (trivially its own
-    registrable form).
+    An empty ``tlds`` (TLD-Wildcard OFF, or no oracle staged) returns exact DATA
+    for every domain BEFORE any classification runs (#1255) -- every branch below,
+    including the dcnt==2 suffix check, is oracle-present-only.
 
-    issue #1256: a bare 2-label string that is ITSELF a known public suffix
-    (``co.uk``, ``com.br``, ``gov.br``, ...) is the apex of that suffix, not a
-    registrable domain under it -- wildcarding it would block the WHOLE suffix.
-    Decided semantics: exact-block the apex only (DATA), never silently skip it.
+    A bare 2-label string that is ITSELF a known public suffix (``co.uk``,
+    ``com.br``, ``gov.br``, ...) is the apex of that suffix, not a registrable
+    domain under it -- wildcarding it would block the WHOLE suffix. It
+    exact-blocks the apex only (DATA); it is never wildcarded and never
+    silently skipped (#1256).
     """
     if not tlds:
         return DNSBL_CLASS_DATA, domain
@@ -4310,8 +4310,8 @@ def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusio
         dfound = _dnsbl_tld_wildcard_search(tlds, tld, dparts, 2, 3) or ""
     elif dcnt == 2:
         candidate = ".".join(dparts[-2:])
-        # issue #1256: the candidate is itself a known public suffix -> its own
-        # apex, not a registrable domain -> exact DATA, not a wildcard ZONE.
+        # A candidate that is itself a known public suffix is the suffix apex,
+        # not a registrable domain -> exact DATA, never a wildcard ZONE (#1256).
         dfound = "" if candidate in tlds.get(tld, {}) else candidate
 
     # TLD exclusion: whole domain in the exclusion set -> force exact DATA.
