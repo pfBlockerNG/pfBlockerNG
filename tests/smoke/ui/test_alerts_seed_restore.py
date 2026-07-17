@@ -49,9 +49,13 @@ class _WrappedVM:
         self,
         inner: _LocalVM,
         fail: Callable[[tuple[str, ...]], bool] | None = None,
+        raise_before: Callable[[tuple[str, ...]], bool] | None = None,
+        raise_after: Callable[[tuple[str, ...]], bool] | None = None,
     ) -> None:
         self.inner = inner
         self.fail = fail
+        self.raise_before = raise_before
+        self.raise_after = raise_after
         self.calls: list[tuple[str, ...]] = []
 
     def ssh_argv(self, *remote: str) -> list[str]:
@@ -59,9 +63,14 @@ class _WrappedVM:
 
     def ssh(self, *remote: str, timeout: float = 15.0) -> subprocess.CompletedProcess[str]:
         self.calls.append(remote)
+        if self.raise_before is not None and self.raise_before(remote):
+            raise subprocess.TimeoutExpired(remote, timeout)
         if self.fail is not None and self.fail(remote):
             return subprocess.CompletedProcess(remote, 1, "", f"injected failure: {remote!r}")
-        return self.inner.ssh(*remote, timeout=timeout)
+        result = self.inner.ssh(*remote, timeout=timeout)
+        if self.raise_after is not None and self.raise_after(remote):
+            raise subprocess.TimeoutExpired(remote, timeout)
+        return result
 
 
 def _matrix_paths(tmp_path: Path) -> tuple[list[Path], Path, Path]:
@@ -304,6 +313,27 @@ def test_fixture_backup_failure_does_not_delete_rolled_back_files(tmp_path: Path
     assert set(tmp_path.iterdir()) == {first, second}
 
 
+def test_fixture_backup_timeout_after_ambiguous_move_restores_all_files(tmp_path: Path, monkeypatch: Any) -> None:
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_bytes(b"first original\n")
+    second.write_bytes(b"second original\n")
+    before = _snapshots([first, second])
+    vm = _WrappedVM(
+        _LocalVM(),
+        raise_after=lambda remote: len(remote) >= 2 and remote[0] == "mv" and remote[1] == str(second),
+    )
+
+    monkeypatch.setattr(alerts, "SEEDED_FILES", (str(first), str(second)))
+    fixture = cast(Any, alerts.render_diff_state).__wrapped__(vm, object())
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        next(fixture)
+
+    assert _snapshots([first, second]) == before
+    assert set(tmp_path.iterdir()) == {first, second}
+
+
 def test_restore_remove_failure_keeps_backup_at_recorded_path(tmp_path: Path) -> None:
     target = tmp_path / "seed.txt"
     target.write_bytes(b"original\n")
@@ -346,6 +376,34 @@ def test_restore_runs_in_reverse_and_aggregates_failures(tmp_path: Path) -> None
     ]
     existing_targets = [backup.path for backup in backups if backup.backup_path is not None]
     assert restored_targets == list(reversed(existing_targets))
+
+
+def test_restore_timeout_keeps_affected_backup_and_continues_full_matrix(tmp_path: Path) -> None:
+    paths, live_target, dangling_target = _matrix_paths(tmp_path)
+    _create_matrix(paths, live_target, dangling_target)
+    before = _snapshots(paths)
+    backups = alerts._backup_seeded_files(_LocalVM(), tuple(map(str, paths)))
+    affected = backups[-1]
+    affected_backup = Path(affected.backup_path or "")
+    _seed_replacements(paths)
+    vm = _WrappedVM(
+        _LocalVM(),
+        raise_before=lambda remote: len(remote) >= 3 and remote[:2] == ("rm", "-f") and remote[2] == affected.path,
+    )
+
+    errors = alerts._restore_seeded_files(vm, backups)
+
+    assert len(errors) == 1
+    assert affected.path in errors[0]
+    assert "timed out" in errors[0]
+    assert paths[-1].read_bytes() == b"replacement 7\n"
+    assert affected_backup.is_symlink()
+    assert _snapshots(paths[:-1]) == {path: state for path, state in before.items() if path != str(paths[-1])}
+    assert all(
+        backup.backup_path == affected.backup_path or not os.path.lexists(backup.backup_path)
+        for backup in backups
+        if backup.backup_path is not None
+    )
 
 
 @pytest.mark.parametrize("unsupported", ["directory", "fifo", "device"])
