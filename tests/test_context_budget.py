@@ -241,7 +241,10 @@ def _run_cli(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def test_cli_staged_skips_when_no_context_surface_staged(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
-    subprocess.run(["git", "-C", root, "commit", "-qm", "base"], check=True)
+    subprocess.run(
+        ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
+        check=True,
+    )
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
     _write(root, "src/thing.inc", "<?php\n")
     subprocess.run(["git", "-C", root, "add", "src/thing.inc"], check=True)
@@ -252,7 +255,10 @@ def test_cli_staged_skips_when_no_context_surface_staged(tmp_path: Path) -> None
 
 def test_cli_staged_runs_and_fails_on_staged_over_budget_policy(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
-    subprocess.run(["git", "-C", root, "commit", "-qm", "base"], check=True)
+    subprocess.run(
+        ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
+        check=True,
+    )
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
     subprocess.run(["git", "-C", root, "add", "-A"], check=True)
     proc = _run_cli(root, "--staged")
