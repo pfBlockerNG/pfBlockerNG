@@ -769,6 +769,9 @@ _GEOIP_MMDB_FIXTURE = "GeoLite2-Country.mmdb"
 # pfblockerng.sh's dMax classify loop runs (~:1148).
 _GEOIP_MMDB_PROBE_IP = "67.43.156.1"
 _GEOIP_MMDB_PROBE_CC = "BT"
+# $pfb['ccdir'] (pfblockerng.inc) -- per-continent/per-ISO-code txt files `ugc`'s
+# uc_countries()/get_countries() derive from the CSVs; teardown_geoip_dataset's cleanup.
+_GEOIP_CCDIR = "/usr/local/share/GeoIP/cc"
 
 
 def seed_geoip_dataset(vm: SmokeVM, *, timeout: float = 120.0) -> None:
@@ -865,6 +868,28 @@ def seed_geoip_dataset(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         raise RuntimeError(
             f"seed_geoip_dataset: mmdblookup sanity check failed: rc={lookup.returncode} "
             f"stdout={lookup.stdout!r} stderr={lookup.stderr!r}"
+        )
+
+
+def teardown_geoip_dataset(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Undo :func:`seed_geoip_dataset`'s on-box footprint (issue #1214).
+
+    Removes the seeded CSV/mmdb fixtures, the derived per-continent/per-ISO-code
+    txt files (:data:`_GEOIP_CCDIR`), and the generated GUI pages
+    (:data:`GEOIP_CONTINENT_PAGES`) -- restoring the box's natural "no GeoIP
+    database" state (none of this is package-shipped; `ugc` is what creates it
+    all). Plain ``rm``, so a path never seeded/generated this run is not an error;
+    wired into :func:`reset_pfb_baseline` so a later module never inherits it.
+    """
+    fixture_paths = [f"{GEOIP_SHARE_DIR}/{name}" for name in (*_GEOIP_CSV_FIXTURES, _GEOIP_MMDB_FIXTURE)]
+    page_paths = [f"{PFB_WWW_DIR}/{page}" for page in GEOIP_CONTINENT_PAGES]
+    result = vm.ssh("rm", "-f", *fixture_paths, *page_paths, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"teardown_geoip_dataset: rm -f failed: rc={result.returncode} stderr={result.stderr!r}")
+    result = vm.ssh("rm", "-rf", _GEOIP_CCDIR, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"teardown_geoip_dataset: rm -rf {_GEOIP_CCDIR} failed: rc={result.returncode} stderr={result.stderr!r}"
         )
 
 
@@ -2716,13 +2741,17 @@ def inject_ip_lists(vm: SmokeVM, specs: list[IpCase], *, timeout: float = 90.0) 
     aggregate test -- use this: it groups the specs by family root and writes each root with
     ALL its list groups at once (and still sets enable_cb + the inbound/outbound interface,
     like ``inject``). Control records are applied first, per IpCase, mirroring ``inject``.
+
+    issue #1214: BOTH family roots are always written -- a family absent from ``specs``
+    gets reset to ``array()`` -- so a family untouched by this call never inherits a
+    stale list group a PRIOR call (same module, no reset in between) left behind.
     """
     for spec in specs:
         set_control_records(vm, spec.control_local_data, spec.control_local_zone, timeout=timeout)
-    by_root: dict[str, list[str]] = {}
+    by_root: dict[str, list[str]] = {CFG_IP_V4_LISTS: [], CFG_IP_V6_LISTS: []}
     for spec in specs:
         root = CFG_IP_V6_LISTS if spec.family == "v6" else CFG_IP_V4_LISTS
-        by_root.setdefault(root, []).append(_ip_list_php(spec))
+        by_root[root].append(_ip_list_php(spec))
     ipset = {"inbound_interface": SMOKE_IP_IFACE, "outbound_interface": SMOKE_IP_IFACE}
     set_roots = "".join(
         f"config_set_path({_php_str(root)}, array({', '.join(groups)}));\n" for root, groups in by_root.items()
@@ -3245,7 +3274,9 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
         row cannot answer a later module's probe before the DNSBL module) and regenerates
         the resolver config so the live daemon matches;
       * drops the derived state — ``clearip``/``cleardnsbl`` (tables/sqlite) then a blocking
-        ``apply_filter_sync`` (pf rules).
+        ``apply_filter_sync`` (pf rules);
+      * removes any :func:`seed_geoip_dataset` footprint (issue #1214) so a later module never
+        reads a fake GeoIP corpus a prior module seeded.
 
     NO forced ``update``: the config is now empty, so there is nothing to rebuild — the next
     module's ``deployed_vm`` re-establishes the VIP/DNS/feed config it needs. (Like :func:`reset`,
@@ -3278,6 +3309,9 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"reset_pfb_baseline failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    # Plain filesystem cleanup, independent of package install state (unlike the CLI-driven
+    # clears below) — always undo any GeoIP corpus a prior module seeded.
+    teardown_geoip_dataset(vm)
     # Drop the derived state: tables/sqlite (clearip/cleardnsbl) + pf rules (blocking sync).
     # Skip the CLI-driven clears when the package is uninstalled — a prior test's `pkg delete`
     # (e.g. test_dot_doq_block's uninstall case) removes PFB_CLI, so shelling it here fails with
