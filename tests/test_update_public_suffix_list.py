@@ -459,3 +459,26 @@ def test_convert_suffix_skips_line_with_ideographic_space() -> None:
 
 def test_convert_suffix_skips_empty_line() -> None:
     assert upsl.convert_suffix("") is None
+
+
+# --------------------------------------------------------------------------- #
+# Hostile-input row H9 (issue #1455): category-Cc control characters skipped,
+# not emitted verbatim -- an ASCII-range Cc char (e.g. NUL, DEL) is neither
+# str.isspace() nor stringprep.in_table_b1(), so it takes the isascii()
+# passthrough branch in _punycode_label untouched instead of being rejected.
+# --------------------------------------------------------------------------- #
+
+
+def test_convert_suffix_skips_line_with_nul() -> None:
+    # issue #1455 repro: raw NUL was previously emitted verbatim into dnsbl_tld.
+    assert upsl.convert_suffix("a\x00b.com") is None
+
+
+def test_convert_suffix_skips_line_with_del() -> None:
+    assert upsl.convert_suffix("a\x7fb.com") is None
+
+
+def test_convert_suffix_skips_line_with_bell() -> None:
+    # U+0007 (BEL) -- not one of the two codepoints named in the issue, proves
+    # the fix catches the whole category-Cc class, not a hardcoded pair.
+    assert upsl.convert_suffix("a\x07b.com") is None
