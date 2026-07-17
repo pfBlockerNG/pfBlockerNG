@@ -75,11 +75,10 @@ final class PfbNdjsonInterchangeTest extends TestCase
 		$this->assertNull(pfb_dnsbl_ndjson_parse_row($line), 'this line must be rejected as NULL');
 	}
 
-	public function testExtraUnknownKeyAlongsideValidDomainRowIsIgnoredIncidentally(): void
+	public function testLegacyDomainRowRetainsExtraFields(): void
 	{
-		// Incidental behaviour of json_decode()'s associative mode -- NOT a forward-
-		// compatibility promise (schema v1 has none); pinned so a future change to the
-		// parser's key handling shows up here first.
+		// Legacy schema-v1 metadata remains available while only kind is normalized
+		// to the internal enum.
 		$row = pfb_dnsbl_ndjson_parse_row('{"kind":"domain","domain":"a.com","log":"1","feed":"f","group":"g","extra":"ignored-me"}');
 
 		$this->assertSame([
