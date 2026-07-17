@@ -2823,7 +2823,7 @@ class TestStage2UnifiedDecision:
         add_noaaaa("unrelated.com", wildcard=False)  # enables the noAAAA path; multi.com unlisted
         pfb_unbound.pfb["safeSearchDB"] = True  # enables the SafeSearch path; multi.com unlisted
         assert "multi.com" not in pfb_unbound.decisionDB, (
-            f"expected 'multi.com' not in {pfb_unbound.decisionDB!r}"
+            f"expected 'multi.com' not in {dict(pfb_unbound.decisionDB._d)!r}"
         )  # before-state: no Decision yet
         qstate = make_qstate("multi.com.", qtype=RR_AAAA)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
@@ -2914,18 +2914,18 @@ class TestStage2UnifiedDecision:
         assert len(pfb_unbound.decisionDB) == 1, (
             f"expected 1, got {len(pfb_unbound.decisionDB)!r}"
         )  # capped; one.com (LRU) evicted
-        assert "two.com" in pfb_unbound.decisionDB, f"expected 'two.com' in {pfb_unbound.decisionDB!r}"
-        assert "one.com" not in pfb_unbound.decisionDB, f"expected 'one.com' not in {pfb_unbound.decisionDB!r}"
+        assert "two.com" in pfb_unbound.decisionDB, f"expected 'two.com' in {dict(pfb_unbound.decisionDB._d)!r}"
+        assert "one.com" not in pfb_unbound.decisionDB, f"expected 'one.com' not in {dict(pfb_unbound.decisionDB._d)!r}"
 
 
 class TestLruCache:
     def test_get_set_contains_len(self) -> None:
         c = pfb_unbound._LruCache(0)
-        assert "a" not in c, f"expected 'a' not in {c!r}"
+        assert "a" not in c, f"expected 'a' not in {dict(c._d)!r}"
         assert c.get("a") is None, f"expected None, got {c.get('a')!r}"
         c["a"] = 1
         assert "a" in c and c["a"] == 1 and c.get("a") == 1 and len(c) == 1, (
-            f"expected a==1 present and len==1, got c={c!r}"
+            f"expected a==1 present and len==1, got c={dict(c._d)!r}"
         )
 
     def test_unbounded_when_maxsize_zero(self) -> None:
@@ -2940,7 +2940,7 @@ class TestLruCache:
         c["b"] = 2
         c["c"] = 3  # over cap -> evict the LRU ("a")
         assert "a" not in c and "b" in c and "c" in c and len(c) == 2, (
-            f"expected a-absent, b/c-present, len==2, got c={c!r}"
+            f"expected a-absent, b/c-present, len==2, got c={dict(c._d)!r}"
         )
 
     def test_get_bumps_recency_keeps_hot(self) -> None:
@@ -2949,7 +2949,7 @@ class TestLruCache:
         c["b"] = 2
         assert c.get("a") == 1, f"expected 1, got {c.get('a')!r}"  # bump "a" -> MRU, so "b" becomes LRU
         c["c"] = 3
-        assert "a" in c and "b" not in c and "c" in c, f"expected a/c-present, b-absent, got c={c!r}"
+        assert "a" in c and "b" not in c and "c" in c, f"expected a/c-present, b-absent, got c={dict(c._d)!r}"
 
     def test_setitem_existing_bumps_recency(self) -> None:
         c = pfb_unbound._LruCache(2)
@@ -2957,16 +2957,16 @@ class TestLruCache:
         c["b"] = 2
         c["a"] = 10  # update bumps "a" -> MRU
         c["c"] = 3
-        assert c["a"] == 10 and "b" not in c and "c" in c, f"expected a==10, b-absent, c-present, got c={c!r}"
+        assert c["a"] == 10 and "b" not in c and "c" in c, f"expected a==10, b-absent, c-present, got c={dict(c._d)!r}"
 
     def test_clear_and_delitem(self) -> None:
         c = pfb_unbound._LruCache(0)
         c["a"] = 1
         c["b"] = 2
         del c["a"]
-        assert "a" not in c, f"expected 'a' not in {c!r}"
+        assert "a" not in c, f"expected 'a' not in {dict(c._d)!r}"
         c.clear()
-        assert len(c) == 0 and "b" not in c, f"expected empty c without 'b', got c={c!r}"
+        assert len(c) == 0 and "b" not in c, f"expected empty c without 'b', got c={dict(c._d)!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -4160,8 +4160,12 @@ class TestAbpWildcardUnaffectedByTldWildcardToggle:
 
     def test_abp_explicit_wildcard_is_zone_with_oracle_empty(self) -> None:
         result = self._build([])
-        assert "evil.com" in result.zone_db, "||evil.com^ must stay ZONE with an empty oracle (TLD-Wildcard OFF)"
+        assert "evil.com" in result.zone_db, (
+            f"||evil.com^ must stay ZONE with an empty oracle (TLD-Wildcard OFF), got {sorted(result.zone_db)!r}"
+        )
 
     def test_abp_explicit_wildcard_is_zone_with_oracle_populated(self) -> None:
         result = self._build(["com"])
-        assert "evil.com" in result.zone_db, "||evil.com^ must stay ZONE with a populated oracle (TLD-Wildcard ON)"
+        assert "evil.com" in result.zone_db, (
+            f"||evil.com^ must stay ZONE with a populated oracle (TLD-Wildcard ON), got {sorted(result.zone_db)!r}"
+        )
