@@ -1749,7 +1749,7 @@ def test_corrupt_group_actions_render_repairably(
     seed = helpers.php_eval(
         vm,
         f"config_set_path({helpers._php_str(f'{dnsbl_base}/aliasname')}, 'pfbrepairdns');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_base}/action')}, array('unbound'));\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/action')}, array('bogus' => 'unbound'));\n"
         f"config_set_path({helpers._php_str(f'{dnsbl_base}/custom')}, base64_encode('bad.example'));\n"
         f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/format')}, 'auto');\n"
         f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/state')}, 'Disabled');\n"
@@ -1772,9 +1772,11 @@ def test_corrupt_group_actions_render_repairably(
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc'); "
         f"$raw = config_get_path({helpers._php_str(f'{dnsbl_base}/action')}, NULL); "
         "$normalized = pfb_group_action_valid($raw, 'dnsbl') ? $raw : 'Disabled'; "
-        "echo json_encode(array(gettype($raw), pfb_group_action_valid($raw, 'dnsbl'), $normalized));",
+        "echo '__PFB_ACTION__' . json_encode(array(gettype($raw), "
+        "pfb_group_action_valid($raw, 'dnsbl'), $normalized));",
     )
-    assert json.loads(raw_probe.stdout) == ["array", False, "Disabled"], (
+    raw_state = json.loads(raw_probe.stdout.rpartition("__PFB_ACTION__")[2])
+    assert raw_state == ["array", False, "Disabled"], (
         f"DNSBL action seed/normalization precondition failed: {raw_probe.stdout!r}"
     )
 
