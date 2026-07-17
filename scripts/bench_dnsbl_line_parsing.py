@@ -228,6 +228,7 @@ def bench_python(worktree: str, raw_path: str, iterations: int) -> TrialResult:
 
 def aggregate_trials(trials: list[TrialResult], expected_raw_line_count: int | None = None) -> TrialResult:
     observed = [trial.raw_line_count for trial in trials]
+    aggregate_raw_line_count: int | None
     if expected_raw_line_count is not None:
         if any(count != expected_raw_line_count for count in observed):
             formatted = ", ".join("missing" if count is None else f"{count:,}" for count in observed)

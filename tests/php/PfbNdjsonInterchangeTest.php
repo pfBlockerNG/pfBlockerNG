@@ -231,7 +231,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	// =========================================================================
 	// Invalid-UTF-8 bytes -- json_encode() returns FALSE on malformed UTF-8, and
 	// FALSE . "\n" coerces to a bare "\n": without JSON_INVALID_UTF8_SUBSTITUTE the
-	// row is a phantom blank line, not a valid schema-v1 row (issue #1083 review).
+	// row is a phantom blank line, not valid interchange (issue #1083 review).
 	// =========================================================================
 
 	public static function invalidUtf8ByteProvider(): array

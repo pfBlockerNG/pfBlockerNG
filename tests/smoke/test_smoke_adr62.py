@@ -535,8 +535,8 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
       and the staging-generation guard rejects the stale '.txt',
     Then a NEW 'Rebuild' log line appears for the header, '.orig' is BYTE-
       IDENTICAL before and after (the rebuild reparsed the existing download
-      cache — it never refetched over the network), the rebuilt '.txt' is
-      NDJSON (starts with '{'), and BOTH domains are blocked — including the
+      cache — it never refetched over the network), the rebuilt '.txt' starts
+      with compact domain NDJSON, and BOTH domains are blocked — including the
       bare-domain line, proving the #1105 dropped-line class cannot recur once
       a stale staging file is rebuilt from '.orig' instead of reused verbatim.
     """
