@@ -166,24 +166,26 @@ def extract_capsules(settings_text: str) -> tuple[list[tuple[str, int]], list[st
     errors: list[str] = []
     try:
         settings = json.loads(settings_text)
-    except ValueError:
-        # Fail closed as a violation, not a traceback: a malformed settings file
-        # means the capsule budgets cannot be verified.
-        return [], [f"{SETTINGS}: not parseable JSON — capsule budgets unverifiable"]
-    for event, entries in settings.get("hooks", {}).items():
-        for entry in entries:
-            for hook in entry.get("hooks", []):
-                command = hook.get("command", "")
-                if "additionalContext" not in command:
-                    continue
-                start, end = command.find("'"), command.rfind("'")
-                try:
-                    payload = json.loads(command[start + 1 : end])
-                    text = payload["hookSpecificOutput"]["additionalContext"]
-                except (ValueError, KeyError, TypeError):
-                    errors.append(f"{SETTINGS}: {event} capsule payload is not extractable JSON")
-                    continue
-                capsules.append((event, len(text.encode("utf-8"))))
+        # The whole traversal sits in the try: a parse error OR a valid-JSON
+        # wrong-shape file (hooks as a list, entries as strings, …) fails closed
+        # as a violation, never a traceback that would also swallow the other
+        # checks' already-found violations.
+        for event, entries in settings.get("hooks", {}).items():
+            for entry in entries:
+                for hook in entry.get("hooks", []):
+                    command = hook.get("command", "")
+                    if "additionalContext" not in command:
+                        continue
+                    start, end = command.find("'"), command.rfind("'")
+                    try:
+                        payload = json.loads(command[start + 1 : end])
+                        text = payload["hookSpecificOutput"]["additionalContext"]
+                    except (ValueError, KeyError, TypeError):
+                        errors.append(f"{SETTINGS}: {event} capsule payload is not extractable JSON")
+                        continue
+                    capsules.append((event, len(text.encode("utf-8"))))
+    except (ValueError, AttributeError, TypeError):
+        return [], [f"{SETTINGS}: not a parseable hooks structure — capsule budgets unverifiable"]
     return capsules, errors
 
 

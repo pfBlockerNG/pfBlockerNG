@@ -225,10 +225,29 @@ def test_extract_capsules_reports_unextractable_payload() -> None:
     assert errors == [".claude/settings.json: SessionStart capsule payload is not extractable JSON"]
 
 
-def test_extract_capsules_malformed_settings_fails_closed() -> None:
-    capsules, errors = ccb.extract_capsules("{not json")
+@pytest.mark.parametrize(
+    "settings_text",
+    [
+        "{not json",  # parse error
+        '{"hooks": ["not", "a", "dict"]}',  # valid JSON, hooks is a list
+        '["top-level list"]',  # valid JSON, wrong top-level shape
+        '{"hooks": {"SessionStart": "not-entries"}}',  # entries not a list of dicts
+    ],
+)
+def test_extract_capsules_malformed_settings_fails_closed(settings_text: str) -> None:
+    capsules, errors = ccb.extract_capsules(settings_text)
     assert capsules == []
-    assert errors == [".claude/settings.json: not parseable JSON — capsule budgets unverifiable"]
+    assert errors == [".claude/settings.json: not a parseable hooks structure — capsule budgets unverifiable"]
+
+
+def test_run_checks_reports_size_violations_despite_malformed_settings(tmp_path: Path) -> None:
+    # A capsule-check failure must not swallow violations the other checks found.
+    root = _scratch_repo(tmp_path)
+    _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
+    _write(root, ".claude/settings.json", '{"hooks": ["not", "a", "dict"]}')
+    violations = ccb.run_checks(root, [".agents/policy/alpha.md", ".claude/settings.json"])
+    assert any("> budget 12288" in v for v in violations)
+    assert any("not a parseable hooks structure" in v for v in violations)
 
 
 # --- conditional trigger -------------------------------------------------------
@@ -368,16 +387,22 @@ def test_ci_workflow_paths_match_checker_triggers() -> None:
     # `paths-ignore: '**/*.md'` would skip an md-only change — the exact class
     # this gate polices). Both trigger blocks must mirror the checker's surfaces.
     text = (_REPO_ROOT / ".github/workflows/context-budget.yml").read_text(encoding="utf-8")
-    listed = re.findall(r"^\s+- '([^']+)'\s*$", text, re.MULTILINE)
     expected = (
         set(ccb._TRIGGER_FILES)
         | {f"{d}**" for d in ccb._TRIGGER_DIRS}
         # the basename trigger (nested dir stubs anywhere) as workflow globs:
         | {"**/AGENTS.md", "**/CLAUDE.md"}
     )
-    assert set(listed) == expected, f"workflow paths {sorted(set(listed))} != checker triggers {sorted(expected)}"
-    assert listed.count("AGENTS.md") == 2, "push AND pull_request must each carry the full paths list"
+    # Compare each trigger block INDEPENDENTLY: the two hand-duplicated paths
+    # lists drift exactly one-block-at-a-time, and a whole-file set comparison
+    # cannot see an entry dropped from only one of them.
     assert "push:" in text, "md-only pushes straight to devel are the dominant re-accretion vector"
+    push_block, _, tail = text.partition("pull_request:")
+    pr_block = tail.partition("permissions:")[0]
+    for name, block in (("push", push_block), ("pull_request", pr_block)):
+        listed = re.findall(r"^\s+- '([^']+)'\s*$", block, re.MULTILINE)
+        assert len(listed) == len(expected), f"{name} paths list has duplicates or gaps: {sorted(listed)}"
+        assert set(listed) == expected, f"{name} paths {sorted(listed)} != checker triggers {sorted(expected)}"
 
 
 # --- the live tree stays within its own budgets --------------------------------
