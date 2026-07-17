@@ -4169,3 +4169,116 @@ class TestAbpWildcardUnaffectedByTldWildcardToggle:
         assert "evil.com" in result.zone_db, (
             f"||evil.com^ must stay ZONE with a populated oracle (TLD-Wildcard ON), got {sorted(result.zone_db)!r}"
         )
+
+
+class TestTldWildcardClassifyTwoLabelPublicSuffix:
+    """issue #1256: the dcnt==2 branch wildcarded ANY 2-label domain unconditionally,
+    including a domain that is ITSELF a known 2-label public suffix (com.br, co.uk,
+    gov.br, ...) -- wildcarding the suffix itself would block the WHOLE suffix
+    (every registrant under it), not just the one feed entry.
+
+    Decided semantics (the issue's own proposal, "edge to define" resolved): a bare
+    public-suffix feed entry exact-blocks the apex only (DATA) -- it is never
+    silently skipped, and it is never promoted to a wildcard ZONE.
+    """
+
+    # A realistic oracle shape: bare single-label TLDs coexist with 2-label
+    # suffixes, exactly as the real PSL-derived dnsbl_tld ships them (see
+    # tests/fixtures/adr06_golden/tld_master.txt: com/net/org/co.uk on adjacent
+    # lines). "xn--p1ai.xn--80asehdb" is a synthetic-but-PSL-shaped (per-label
+    # punycode, ADR-08/#914 "xn-- stays iTLD") 2-label suffix -- classify() treats
+    # a suffix as an opaque string, so no real PSL entry is needed to pin this.
+    _SUFFIXES = ["com", "net", "org", "co.uk", "com.br", "gov.br", "xn--p1ai.xn--80asehdb"]
+
+    def _tlds(self) -> dict[str, dict[str, str]]:
+        return _dnsbl_load_tld_wildcard_master(self._SUFFIXES, [], [])
+
+    def test_com_br_bare_suffix_is_exact_data(self) -> None:
+        assert tld_wildcard_classify("com.br", self._tlds(), set()) == (DNSBL_CLASS_DATA, "com.br")
+
+    def test_co_uk_bare_suffix_is_exact_data(self) -> None:
+        assert tld_wildcard_classify("co.uk", self._tlds(), set()) == (DNSBL_CLASS_DATA, "co.uk")
+
+    def test_gov_br_bare_suffix_is_exact_data(self) -> None:
+        assert tld_wildcard_classify("gov.br", self._tlds(), set()) == (DNSBL_CLASS_DATA, "gov.br")
+
+    def test_evil_com_two_label_non_suffix_still_wildcards(self) -> None:
+        # evil.com is a registrable domain UNDER the "com" suffix, not a suffix
+        # itself -- must still wildcard (the pre-existing, unchanged case).
+        assert tld_wildcard_classify("evil.com", self._tlds(), set()) == (DNSBL_CLASS_ZONE, "evil.com")
+
+    def test_three_label_under_two_label_suffix_still_wildcard_registrable(self) -> None:
+        # example.co.uk is registrable UNDER co.uk (an actual public suffix) --
+        # the dcnt==3 oracle-search branch is untouched by this fix.
+        assert tld_wildcard_classify("example.co.uk", self._tlds(), set()) == (DNSBL_CLASS_ZONE, "example.co.uk")
+
+    def test_sub_domain_under_two_label_suffix_stays_exact(self) -> None:
+        assert tld_wildcard_classify("sub.example.co.uk", self._tlds(), set()) == (
+            DNSBL_CLASS_DATA,
+            "sub.example.co.uk",
+        )
+
+    def test_oracle_absent_two_label_public_suffix_stays_data(self) -> None:
+        # issue #1255's empty-oracle guard fires FIRST (top-of-function early
+        # return) -- this fix's new dcnt==2 suffix check is never reached, so the
+        # two features compose without conflict (whatever #1255 defined for an
+        # absent oracle is unchanged by this fix).
+        assert tld_wildcard_classify("com.br", {}, set()) == (DNSBL_CLASS_DATA, "com.br")
+
+    def test_two_label_punycode_suffix_is_exact_data(self) -> None:
+        # Unicode/xn-- 2-label suffixes are opaque strings to the classifier --
+        # no ASCII-only special-casing exists or is needed.
+        assert tld_wildcard_classify("xn--p1ai.xn--80asehdb", self._tlds(), set()) == (
+            DNSBL_CLASS_DATA,
+            "xn--p1ai.xn--80asehdb",
+        )
+
+    def test_empty_label_two_label_shape_does_not_false_match(self) -> None:
+        # Hostile input: a leading empty label (".uk") is never a real oracle key
+        # (the oracle stores "co.uk", not ".uk") -- must not spuriously match and
+        # suppress a wildcard. Unreachable through the production build() pipeline
+        # (_normalise_verdict rejects an empty label as domain-shape-invalid before
+        # tld_wildcard_classify() is ever called) -- this pins the classifier's own
+        # defensive behaviour when called directly, as the unit tests in this class
+        # do.
+        assert tld_wildcard_classify(".uk", self._tlds(), set()) == (DNSBL_CLASS_ZONE, ".uk")
+
+    def test_trailing_dot_form_is_not_a_two_label_shape(self) -> None:
+        # Probe: str.split(".") on a trailing-dot domain yields a trailing empty
+        # label, so "com.br." is dcnt==3, not dcnt==2 -- it never reaches this
+        # fix's branch at all (the dcnt==3 oracle search then misses on the empty
+        # tld and falls through to DATA anyway). Also moot in production:
+        # _normalise_verdict() strips the trailing dot (`.strip(".")`) before any
+        # domain reaches tld_wildcard_classify() -- probed here directly since the
+        # pipeline can never hand it a trailing-dot form.
+        assert tld_wildcard_classify("com.br.", self._tlds(), set()) == (DNSBL_CLASS_DATA, "com.br.")
+
+
+class TestTldWildcardClassifyTwoLabelPublicSuffixViaBuild:
+    """issue #1256, full build() pipeline proof: a plain feed line reaching
+    tld_wildcard_classify() via build() is pre-normalised (lower-cased, dot-
+    stripped) by _normalise_verdict() BEFORE classification -- so the bare
+    public-suffix exact-DATA fix is case-insensitive end to end without
+    tld_wildcard_classify() itself needing to normalise its input.
+    """
+
+    def _build(self, raw_lines: list[str]) -> pfb_unbound.BuildResult:
+        manifest = {"feeds": [{"raw": "f.raw", "feed": "F", "group": "G", "log_flag": "1"}]}
+        config: dict[str, object] = {
+            "tld_wildcard_master": ["com", "net", "org", "co.uk", "com.br", "gov.br"],
+            "tld_wildcard_blacklist": [],
+            "tld_wildcard_exclusion": [],
+            "user_whitelist": [],
+            "top1m_list": [],
+        }
+        return pfb_unbound.build(manifest, config, line_reader=lambda raw: raw_lines)
+
+    def test_mixed_case_bare_suffix_feed_line_is_exact_not_wildcarded(self) -> None:
+        result = self._build(["COM.BR"])
+        assert "com.br" in result.data_db, "COM.BR must classify as exact DATA (case-insensitive)"
+        assert "com.br" not in result.zone_db
+
+    def test_mixed_case_registrable_feed_line_still_wildcards(self) -> None:
+        result = self._build(["EVIL.COM"])
+        assert "evil.com" in result.zone_db, "EVIL.COM must still wildcard (unchanged, case-insensitive)"
+        assert "evil.com" not in result.data_db
