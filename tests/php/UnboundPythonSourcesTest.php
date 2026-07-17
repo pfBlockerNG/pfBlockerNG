@@ -226,6 +226,25 @@ final class UnboundPythonSourcesTest extends TestCase
 		);
 	}
 
+	public function testMixedCompactAndLegacyRowsPreserveBareAndVerbatimPayloads(): void
+	{
+		file_put_contents("{$this->tmp}/dnsbl/mixedfeed.txt",
+			"[\"d\",\"compact.example\"]\n" .
+			"{\"kind\":\"domain\",\"domain\":\"legacy.example\",\"log\":\"1\",\"feed\":\"f\",\"group\":\"g\"}\n" .
+			"[\"a\",\"||compact.example^\"]\n" .
+			"{\"kind\":\"abp\",\"raw\":\"@@||legacy.example^\"}\n" .
+			"[\"d\",\"\", \"extra\"]\n" .
+			"[\"x\",\"skipped.example\"]\n");
+
+		$manifest = pfb_unbound_python_sources([
+			['header' => 'mixedfeed', 'group' => 'g', 'log' => '1', 'provenance' => 'feed'],
+		]);
+		$this->assertSame(
+			"compact.example\nlegacy.example\n||compact.example^\n@@||legacy.example^\n",
+			file_get_contents($this->rawPath($manifest, 'mixedfeed'))
+		);
+	}
+
 	public function testConfigBlockEmptyWhenUnconfigured(): void
 	{
 		$m = pfb_unbound_python_sources($this->feeds());
