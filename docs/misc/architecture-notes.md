@@ -94,42 +94,59 @@ byte-identical to `origin/devel`, pinned by a corpus oracle (`tests/test_adr62_*
 functions at the pre-change base and are regenerated only through those same functions.
 See `.ADRs/ADR_62_DNSBL_Unified_Line_Parsing/`.
 
-### DNSBL interchange format — NDJSON schema v1 (issue #1083)
+### DNSBL interchange format — compact NDJSON (issues #1083 and #1177)
 
 Every DNSBL interchange file the sync pass writes or reads between PHP stages — the per-feed
-staging `.txt` (`{dnsdir}/{header}.txt`) — is **NDJSON schema v1**: one JSON object per
-physical line, two kinds only (the all-feeds `pfb_dnsbl.raw` concat and the TLD-analysis
-outputs `pfb_py_data.txt`/`pfb_py_zone.txt` were retired by ADR-65 — zone/data classification
-lives in the Python manifest build):
+staging `.txt` (`{dnsdir}/{header}.txt`) — is NDJSON: one JSON value per physical line. Current
+writers use compact two-string arrays with two tags only:
+
+```text
+["d",D]
+["a",R]
+```
+
+`d` carries a cleaned domain; `a` carries a verbatim ABP rule. There is no wildcard tag: the
+Python manifest build later classifies each `d` row as an exact domain or wildcard/ZONE entry.
+The all-feeds `pfb_dnsbl.raw` concat and the TLD-analysis outputs
+`pfb_py_data.txt`/`pfb_py_zone.txt` were retired by ADR-65.
+
+For installed staging files written by issue #1083, the reader also accepts the original
+self-describing objects:
 
 ```text
 {"kind":"domain","domain":D,"log":L,"feed":F,"group":G}
 {"kind":"abp","raw":R}
 ```
 
-Every field is a **required, non-empty string**; a numeric/bool/null value or a missing key is a
-shape violation the reader rejects (returns `NULL`), never a partial read. This supersedes the
-pre-#1083 positional 6-column CSV dialect (`,domain,,log,feed,group`) and rides alongside ADR-62's
-retirement of the file-level `.abp` marker (above). The per-feed
+Compact rows must contain exactly two non-empty strings. Legacy rows retain their original rule:
+every shown field is a required, non-empty string; a numeric/bool/null value or missing key is a
+shape violation the reader rejects (returns `NULL`), never a partial read. The current format
+supersedes the pre-#1083 positional 6-column CSV dialect (`,domain,,log,feed,group`) and rides
+alongside ADR-62's retirement of the file-level `.abp` marker (above). Compact domain rows do not
+repeat `log`/`feed`/`group`: the sole translator, `pfb_unbound_python_sources()`, already receives
+that authoritative metadata from `$feeds`; no downstream consumer used the staged copies. The
+per-feed
 `pfb_py_raw.<xxh128>/*.raw` files the
 ADR-06 manifest (`pfb_py_sources.json`) references, and `dnsbl_build_from_manifest()`/`build()`
 that consume them, are **unaffected** — they stay the old bare-domain/verbatim-ABP-line format;
 `pfb_unbound_python_sources()` is the sole translator, reading NDJSON `.txt` and writing plain
-`.raw` per feed.
+`.raw` per feed. The final manifest remains readable, self-describing JSON with its existing
+`raw`, `feed`, `group`, `provenance`, `log_flag`, and `mode` fields.
 
 **Emit/parse primitives** (`pfblockerng.inc`): `pfb_dnsbl_ndjson_emit_domain_row()` /
 `pfb_dnsbl_ndjson_emit_abp_row()` are the only writers — `json_encode()` with a **fixed key
-order** (`kind` first), `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`, no pretty-printing,
+order** (tag, payload), `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`, no pretty-printing,
 exactly one trailing `"\n"`. `pfb_dnsbl_ndjson_parse_row()` is the strict reader every PHP
-consumer shares — it decodes a line and rejects (returns `NULL`) any shape violation.
+consumer shares: it normalizes current compact arrays and accepted legacy objects to the same
+internal `kind` plus `domain`/`raw` shape, and rejects (returns `NULL`) every other shape.
 
 **Staging-generation guard + lazy rebuild.** The sync loop's verbatim-reuse fork
 (`pfb_dnsbl_verbatim_reuse_active()`) additionally requires the staged `.txt` to be
 **current-generation**: `pfb_dnsbl_staging_first_line()` reads the first NON-BLANK physical line
 (a blank leading line must not mask stale content after it), and
 `pfb_dnsbl_staging_is_current_generation()` accepts it only when that line actually PARSES via
-`pfb_dnsbl_ndjson_parse_row()` (or the file is absent/wholly blank) — a leading `'{'` byte alone is
-not proof (a truncated/corrupt line rejects too). A feed whose `.txt` predates the #1083 flip (a
+`pfb_dnsbl_ndjson_parse_row()` (or the file is absent/wholly blank) — a leading JSON delimiter
+alone is not proof (a truncated/corrupt line rejects too). A feed whose `.txt` predates the #1083 flip (a
 pkg-upgrade leftover, never redownloaded since) fails that check and is **never verbatim-reused**
 — the sync loop instead reparses from the existing `.orig` download cache via the same machinery a
 Reload uses (logged `Rebuild`), refetching over the network **only** when `.orig` itself is absent
@@ -151,10 +168,10 @@ sequence, not the loop itself).
 
 **No version marker — every future interchange change must be backwards-compatible.** A
 deliberate design choice (issue #1083): the schema carries no version field and the codebase has
-no migration/back-compat mechanism for a schema bump. Any future change to this interchange
-format must therefore be additive/backwards-compatible with schema v1 as shipped — a breaking
-change would need the staging-generation-guard's rebuild-from-`.orig` pattern again, not a new
-mechanism.
+no migration/back-compat mechanism for a schema bump. Issue #1177 is the model: writers changed
+to compact arrays while readers retained the shipped object shapes. Any future change must be
+similarly additive/backwards-compatible; a breaking change would need the
+staging-generation-guard's rebuild-from-`.orig` pattern again, not a new mechanism.
 
 **Accepted transitional window.** A pkg upgrade does **not** trigger an immediate DNSBL rebuild:
 `custom_php_resync_config_command` (`pfblockerng.xml`) calls `sync_package_pfblockerng()`, but
@@ -203,17 +220,29 @@ build from #1083 or later.
 | PHP `pfb_unbound_python_sources()` (per-line `json_decode`) | 1.8409s | 2.4440s | **+32.76%** | 31.7 MiB | 31.9 MiB | +0.44% |
 | Python `dnsbl_build_from_manifest()` (unchanged `.raw` reader) | 3.8041s | 3.7889s | −0.40% | 660.2 MiB | 649.0 MiB | −1.69% |
 
-The PHP surface's per-line `json_decode` **does** regress the staging-parse pass — +32.76%
+The PHP surface's per-line `json_decode` originally regressed the staging-parse pass by +32.76%
 wall-clock, above ADR-62's own SS7 criterion-2 kill-threshold (25%). That threshold governed
-ADR-62's build-path change; for this format migration the breach was reviewed and **accepted
-as an explicit owner exception at landing** (issue #1083 / PR #1178) — a real, measured cost
-of the self-describing per-line format, traded off against its grep-stability/attribution
-guarantees, with the follow-up optimization tracked in issue #1177 (batched decode, a leaner
-encoding). The Python surface — an unrelated code path, since it reads the untouched
-per-feed `.raw` — shows no regression, as expected. On-disk size (1,000,000 domain rows, a realistic domain-length mix per
-`benchmarks/_corpus_raw.py`'s distribution): the old 6-column CSV dialect is 45,719,338 bytes
-(45.72 B/row) vs the new NDJSON's 99,719,338 bytes (99.72 B/row) — **2.18× the size**
-(≈ +118%).
+ADR-62's build-path change; for issue #1083 the breach was reviewed and accepted as an explicit
+owner exception at PR #1178. Issue #1177 resolves that follow-up without batching or changing
+the streaming model: each physical line is still read with `fgets()` and decoded independently,
+so memory remains bounded by one row.
+
+Issue #1177 evidence from the same benchmark shape (1,000,000 lines, 5 iterations × 2 trials,
+base = pre-#1083 merge-base `e9dda731`):
+
+| Surface | base wall | compact wall | Δ wall | base peak RSS | compact peak RSS | Δ RSS |
+| --- | --- | --- | --- | --- | --- | --- |
+| PHP `pfb_unbound_python_sources()` | 1.8223s | 2.1443s | **+17.67%** | 31.8 MiB | 32.3 MiB | +1.47% |
+| Python `dnsbl_build_from_manifest()` | 3.8525s | 3.4916s | −9.37% | 660.9 MiB | 651.3 MiB | −1.45% |
+
+The PHP result is back below the 25% threshold. The Python surface is an unrelated path that
+reads unchanged per-feed `.raw` files. For 1,000,000 domain rows with
+`benchmarks/_corpus_raw.py`'s realistic domain-length distribution, legacy CSV occupies
+45,719,338 bytes, issue #1083 objects occupy 99,719,338 bytes, and compact `d` rows occupy
+29,719,338 bytes (29.72 B/row): **70.2% smaller than objects and 35.0% smaller than CSV**.
+This compact representation is staging-only; the final manifest and `.raw` files remain
+readable and unchanged.
+
 `benchmarks/spike_adr06_build.py` (the ADR-06 Phase-1 spike) is unaffected: it drives a
 self-contained synthetic corpus (`benchmarks/_corpus_raw.py:59`) and never imports
 `pfb_unbound.py` or touches the interchange format (`benchmarks/spike_adr06_build.py:53`).
