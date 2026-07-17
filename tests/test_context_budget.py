@@ -1,8 +1,8 @@
 """Tests for scripts/check_context_budget.py.
 
-Every violation class is paired with its nearest clean sibling so a green run
-proves the checker discriminates (fires on the violating shape, stays quiet on
-the compliant one): budgets per surface class, boundary at the exact budget,
+Every violation class is paired with its nearest clean sibling (the checker
+must fire on the violating shape and stay quiet on the compliant one):
+budgets per surface class, boundary at the exact budget,
 routing-table extraction/resolution, both header shapes, capsule extraction,
 and the conditional --staged/--diff trigger through the CLI against scratch
 git repos. One test pins the live repository tree itself within budget.
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -82,6 +83,10 @@ def _tracked(root: Path) -> list[str]:
         (".agents/policy/delegation.md", 18_000),
         ("tests/smoke/CLAUDE.md", 400),
         ("src/usr/local/AGENTS.md", 400),
+        # Nested stubs under .agents/ are dir stubs, not routed policy files —
+        # the stub branch must win over the policy/context prefix.
+        (".agents/context/sub/AGENTS.md", 400),
+        (".agents/policy/sub/CLAUDE.md", 400),
         ("plugins/ponytail/AGENTS.md", None),
         ("src/usr/local/pkg/pfblockerng/pfblockerng.inc", None),
         ("docs/misc/architecture-notes.md", None),
@@ -105,6 +110,12 @@ def test_nested_stub_over_budget_fires_root_files_use_own_budget(tmp_path: Path)
     _write(root, "AGENTS.md", "x" * 401)  # root bootstrap: 401 B is far under 10,240
     violations = ccb.check_sizes(root, ["www/CLAUDE.md", "AGENTS.md"])
     assert violations == ["www/CLAUDE.md: 401 bytes > budget 400"]
+
+
+def test_size_of_missing_tracked_file_fails_closed(tmp_path: Path) -> None:
+    # Tracked-but-deleted (deletion unstaged) must yield a violation, not a traceback.
+    violations = ccb.check_sizes(tmp_path, [".agents/policy/gone.md"])
+    assert len(violations) == 1 and violations[0].startswith(".agents/policy/gone.md: unreadable")
 
 
 # --- routing-table extraction and resolution -----------------------------------
@@ -139,6 +150,16 @@ def test_check_headers_flags_missing_header(tmp_path: Path) -> None:
     _write(root, ".agents/context/beta.md", "# Beta\n\nNo routing header here.\n")
     violations = ccb.check_headers(root)
     assert violations == [".agents/context/beta.md: routed file lacks a Scope: + Load-when: header (first 12 lines)"]
+
+
+def test_check_headers_flags_renamed_routing_table_heading(tmp_path: Path) -> None:
+    # Zero extracted targets must be a violation, not a vacuous pass — otherwise
+    # renaming the "## Routing table" heading disarms the whole header gate.
+    root = _scratch_repo(tmp_path)
+    _write(root, "AGENTS.md", _BOOTSTRAP.replace("## Routing table", "## Where to read"))
+    _write(root, ".agents/context/beta.md", "# Beta\n\nNo routing header here.\n")
+    violations = ccb.check_headers(root)
+    assert violations == ["AGENTS.md: no routing-table targets extracted — heading renamed or table removed?"]
 
 
 # --- both header shapes accepted; window enforced ------------------------------
@@ -204,6 +225,12 @@ def test_extract_capsules_reports_unextractable_payload() -> None:
     assert errors == [".claude/settings.json: SessionStart capsule payload is not extractable JSON"]
 
 
+def test_extract_capsules_malformed_settings_fails_closed() -> None:
+    capsules, errors = ccb.extract_capsules("{not json")
+    assert capsules == []
+    assert errors == [".claude/settings.json: not parseable JSON — capsule budgets unverifiable"]
+
+
 # --- conditional trigger -------------------------------------------------------
 
 
@@ -216,6 +243,7 @@ def test_extract_capsules_reports_unextractable_payload() -> None:
         "scripts/check_context_budget.py",
         ".agents/policy/alpha.md",
         ".agents/context/beta.md",
+        "docs/misc/architecture-notes.md",
         "tests/smoke/CLAUDE.md",
     ],
 )
@@ -224,7 +252,7 @@ def test_touches_context_surface_true(rel: str) -> None:
 
 
 def test_touches_context_surface_false_on_unrelated() -> None:
-    assert not ccb.touches_context_surface(["src/usr/local/www/x.php", "docs/misc/notes.md"])
+    assert not ccb.touches_context_surface(["src/usr/local/www/x.php", "docs/history/incidents.md"])
 
 
 # --- CLI against scratch repos -------------------------------------------------
@@ -266,6 +294,61 @@ def test_cli_staged_runs_and_fails_on_staged_over_budget_policy(tmp_path: Path) 
     assert ".agents/policy/alpha.md" in proc.stdout and "> budget 12288" in proc.stdout
 
 
+def test_cli_staged_checks_index_content_not_working_tree(tmp_path: Path) -> None:
+    # Staged over-budget + worktree fixed back under budget: the commit would
+    # still ship the violation, so --staged must fail (index is the snapshot).
+    root = _scratch_repo(tmp_path)
+    subprocess.run(
+        ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
+        check=True,
+    )
+    _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True)
+    _write(root, ".agents/policy/alpha.md", f"# Alpha\n\n{_HEADER}")
+    proc = _run_cli(root, "--staged")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert ".agents/policy/alpha.md" in proc.stdout and "> budget 12288" in proc.stdout
+
+
+def test_cli_staged_ignores_unstaged_working_tree_violation(tmp_path: Path) -> None:
+    # Staged content clean + worktree bloated: the commit ships the clean index,
+    # so --staged must pass instead of false-failing on the dirty worktree.
+    root = _scratch_repo(tmp_path)
+    subprocess.run(
+        ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
+        check=True,
+    )
+    _write(root, ".agents/policy/alpha.md", f"# Alpha (tweaked)\n\n{_HEADER}")
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True)
+    _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
+    proc = _run_cli(root, "--staged")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_cli_diff_fires_on_over_budget_commit_vs_base(tmp_path: Path) -> None:
+    root = _scratch_repo(tmp_path)
+    git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com"]
+    subprocess.run([*git, "commit", "-qm", "base"], check=True)
+    _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-qm", "bloat"], check=True)
+    proc = _run_cli(root, "--diff", "HEAD~1")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert ".agents/policy/alpha.md" in proc.stdout and "> budget 12288" in proc.stdout
+
+
+def test_cli_all_flags_non_ascii_named_policy_file(tmp_path: Path) -> None:
+    # Under default core.quotePath, ls-files C-quotes non-ASCII names and the
+    # quoted string would match no budget — the checker must still see the file.
+    root = _scratch_repo(tmp_path)
+    _write(root, ".agents/policy/pölicy.md", "# P\n\n" + _HEADER + "x" * 20_000)
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True)
+    proc = _run_cli(root, "--all")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    # NFC/NFD filename normalization differs per OS — match the ASCII tail only.
+    assert "licy.md" in proc.stdout and "> budget 12288" in proc.stdout
+
+
 def test_cli_all_clean_scratch_repo_exits_zero(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
     proc = _run_cli(root, "--all")
@@ -275,6 +358,26 @@ def test_cli_all_clean_scratch_repo_exits_zero(tmp_path: Path) -> None:
 def test_cli_all_missing_git_exits_two(tmp_path: Path) -> None:
     proc = _run_cli(tmp_path / "not-a-repo", "--all")
     assert proc.returncode == 2
+
+
+# --- CI wiring ------------------------------------------------------------------
+
+
+def test_ci_workflow_paths_match_checker_triggers() -> None:
+    # The gate rides its own path-filtered workflow (test.yml's global
+    # `paths-ignore: '**/*.md'` would skip an md-only change — the exact class
+    # this gate polices). Both trigger blocks must mirror the checker's surfaces.
+    text = (_REPO_ROOT / ".github/workflows/context-budget.yml").read_text(encoding="utf-8")
+    listed = re.findall(r"^\s+- '([^']+)'\s*$", text, re.MULTILINE)
+    expected = (
+        set(ccb._TRIGGER_FILES)
+        | {f"{d}**" for d in ccb._TRIGGER_DIRS}
+        # the basename trigger (nested dir stubs anywhere) as workflow globs:
+        | {"**/AGENTS.md", "**/CLAUDE.md"}
+    )
+    assert set(listed) == expected, f"workflow paths {sorted(set(listed))} != checker triggers {sorted(expected)}"
+    assert listed.count("AGENTS.md") == 2, "push AND pull_request must each carry the full paths list"
+    assert "push:" in text, "md-only pushes straight to devel are the dominant re-accretion vector"
 
 
 # --- the live tree stays within its own budgets --------------------------------

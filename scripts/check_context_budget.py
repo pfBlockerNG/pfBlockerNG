@@ -6,14 +6,13 @@ hold the routed policy/context files; hook capsules ride `.claude/settings.json`
 Every surface has a byte budget so the hot context cannot silently re-accrete
 (taxonomy #1386 anti-monolith rules), and every file the bootstrap's routing
 table references must carry a `Scope:` + `Load-when:` header so it stays
-routable. Budgets (calibrated on the measured Stage 1/2 tree, not the matrix
-estimates):
+routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 
 - `AGENTS.md` (bootstrap)                          10,240 B
 - `CLAUDE.md` (thin adapter + tool-managed blocks)  8,192 B
 - `.agents/policy/*.md` / `.agents/context/*.md`   12,288 B default; grandfathered
   ratchet caps for the pre-taxonomy files (landing 26,000, agent-roles 19,000,
-  delegation 18,000 — may shrink, never grow)
+  delegation 18,000 — frozen constants: lower them as the files shrink)
 - nested `CLAUDE.md`/`AGENTS.md` dir stubs            400 B
 - each hook-capsule `additionalContext` payload     1,800 B
 
@@ -23,9 +22,9 @@ touches a context surface (AGENTS.md, CLAUDE.md, .agents/policy/,
 checker); otherwise it reports the skip and exits 0. --all checks unconditionally.
 
 Usage:
-    check_context_budget.py --staged        # pre-commit: staged diff decides
-    check_context_budget.py --diff <base>   # CI PR gate: base...HEAD decides
-    check_context_budget.py --all           # unconditional full check
+    check_context_budget.py --staged        # pre-commit: staged diff decides, index content checked
+    check_context_budget.py --diff <base>   # local/ad-hoc: base...HEAD decides
+    check_context_budget.py --all           # CI gate (context-budget.yml) + unconditional full check
     [--root PATH]                           # repo root (default: script's repo)
 
 Exit status: 0 = clean or skipped, 1 = violations (printed), 2 = usage/git error.
@@ -38,6 +37,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 BOOTSTRAP_BUDGET = 10_240
@@ -72,12 +72,14 @@ def budget_for(rel: str) -> int | None:
     """Byte budget for a tracked file, or None when unbudgeted."""
     if rel in FILE_BUDGETS:
         return FILE_BUDGETS[rel]
-    if rel.startswith((".agents/policy/", ".agents/context/")) and rel.endswith(".md"):
-        return POLICY_BUDGET
     base = rel.rsplit("/", 1)[-1]
     if "/" in rel and base in ("CLAUDE.md", "AGENTS.md") and not rel.startswith("plugins/"):
         # plugins/ is vendored — its instruction files are not our dir stubs.
+        # Checked before the policy/context prefix: a nested AGENTS.md/CLAUDE.md
+        # under .agents/ is a dir stub, not a routed policy file.
         return STUB_BUDGET
+    if rel.startswith((".agents/policy/", ".agents/context/")) and rel.endswith(".md"):
+        return POLICY_BUDGET
     return None
 
 
@@ -87,7 +89,13 @@ def check_sizes(root: Path, tracked: list[str]) -> list[str]:
         budget = budget_for(rel)
         if budget is None:
             continue
-        size = (root / rel).stat().st_size
+        try:
+            size = (root / rel).stat().st_size
+        except OSError as exc:
+            # Tracked but unreadable (e.g. deleted from the worktree with the
+            # deletion unstaged) — fail closed with a violation, not a traceback.
+            violations.append(f"{rel}: unreadable ({exc.strerror or exc})")
+            continue
         if size > budget:
             violations.append(f"{rel}: {size} bytes > budget {budget}")
     return violations
@@ -137,6 +145,10 @@ def check_headers(root: Path) -> list[str]:
     if not bootstrap.is_file():
         return ["AGENTS.md: bootstrap missing — nothing to route from"]
     tokens, _ = routing_targets(bootstrap.read_text(encoding="utf-8"))
+    if not tokens:
+        # A renamed/removed "## Routing table" heading would otherwise disarm
+        # the whole header gate silently (zero targets = vacuous pass).
+        return ["AGENTS.md: no routing-table targets extracted — heading renamed or table removed?"]
     violations = []
     for token in dict.fromkeys(tokens):
         rel = resolve_target(root, token)
@@ -152,7 +164,12 @@ def extract_capsules(settings_text: str) -> tuple[list[tuple[str, int]], list[st
     """(event, payload-bytes) per hook capsule; second element = extraction errors."""
     capsules: list[tuple[str, int]] = []
     errors: list[str] = []
-    settings = json.loads(settings_text)
+    try:
+        settings = json.loads(settings_text)
+    except ValueError:
+        # Fail closed as a violation, not a traceback: a malformed settings file
+        # means the capsule budgets cannot be verified.
+        return [], [f"{SETTINGS}: not parseable JSON — capsule budgets unverifiable"]
     for event, entries in settings.get("hooks", {}).items():
         for entry in entries:
             for hook in entry.get("hooks", []):
@@ -190,14 +207,16 @@ def _git(root: Path, *args: str) -> str:
     return proc.stdout
 
 
+# The CI workflow (.github/workflows/context-budget.yml) path-filters on these same
+# surfaces; pinned by tests/test_context_budget.py::test_ci_workflow_paths_match_checker_triggers.
+_TRIGGER_FILES = ("AGENTS.md", "CLAUDE.md", SETTINGS, "scripts/check_context_budget.py")
+_TRIGGER_DIRS = (".agents/policy/", ".agents/context/", "docs/misc/")
+
+
 def touches_context_surface(changed: list[str]) -> bool:
     for rel in changed:
         base = rel.rsplit("/", 1)[-1]
-        if (
-            rel in ("AGENTS.md", "CLAUDE.md", SETTINGS, "scripts/check_context_budget.py")
-            or rel.startswith((".agents/policy/", ".agents/context/"))
-            or base in ("CLAUDE.md", "AGENTS.md")
-        ):
+        if rel in _TRIGGER_FILES or rel.startswith(_TRIGGER_DIRS) or base in ("CLAUDE.md", "AGENTS.md"):
             return True
     return False
 
@@ -216,16 +235,25 @@ def main(argv: list[str] | None = None) -> int:
             diff_args = (
                 ["diff", "--cached", "--name-only"] if args.staged else ["diff", "--name-only", f"{args.diff}...HEAD"]
             )
-            changed = _git(root, *diff_args).split()
-            if not touches_context_surface(changed):
+            changed = _git(root, "-c", "core.quotePath=off", *diff_args).split("\n")
+            if not touches_context_surface([c for c in changed if c]):
                 print("context-budget: no context surface in the diff — skipped")
                 return 0
-        tracked = _git(root, "ls-files").split("\n")
+        # quotePath=off: a non-ASCII filename would otherwise come back
+        # C-quoted ("…") and silently match no budget.
+        tracked = _git(root, "-c", "core.quotePath=off", "ls-files").split("\n")
         tracked = [t for t in tracked if t]
+        if args.staged:
+            # Validate the INDEX snapshot, not the working tree: staged and
+            # worktree content can diverge, and the commit ships the index.
+            with tempfile.TemporaryDirectory() as staged_root:
+                _git(root, "checkout-index", "--all", f"--prefix={staged_root}/")
+                violations = run_checks(Path(staged_root), tracked)
+        else:
+            violations = run_checks(root, tracked)
     except (subprocess.CalledProcessError, OSError) as exc:
         print(f"context-budget: git failed: {exc}", file=sys.stderr)
         return 2
-    violations = run_checks(root, tracked)
     for violation in violations:
         print(violation)
     return 1 if violations else 0

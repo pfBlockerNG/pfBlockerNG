@@ -262,13 +262,6 @@ jobs:
           git fetch --no-tags --depth=1 origin ci-metadata:refs/remotes/origin/ci-metadata
           python3 scripts/check_version_literals.py --verify-matrix
 
-      - name: Context byte budgets + routing headers
-        # The AGENTS.md bootstrap, .agents/policy|context files, dir stubs, and
-        # hook capsules each carry a byte budget (map #1383 anti-monolith rules),
-        # and every bootstrap routing-table target must keep its Scope/Load-when
-        # header. Full check — the budgets gate re-accretion of the hot context.
-        run: python3 scripts/check_context_budget.py --all
-
   shell-tests:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest
