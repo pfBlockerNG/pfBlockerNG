@@ -290,6 +290,55 @@ def test_category_update_row_action_changes_config(
         _restore_lists(vm, snap)
 
 
+def test_category_update_rejects_cross_group_and_array_actions(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Issue #1346: Summary AJAX rejects wrong-group and array actions without a 500."""
+    vm = smoke_vm
+    ipv4_snap = _snapshot_node(vm, IPV4_LISTS)
+    dnsbl_snap = _snapshot_node(vm, DNSBL_GROUPS)
+    try:
+        _seed_single_ipv4_row(vm, "pfbactip", "Deny_Inbound")
+        _update_action(webui, 0, "unbound")
+        assert helpers.config_get(vm, f"{IPV4_LISTS}/0/action") == "Deny_Inbound"
+
+        row = {
+            "aliasname": "pfbactdns",
+            "action": "unbound",
+            "cron": "Never",
+            "logging": "enabled",
+            "description": "pfBlockerNG smoke DNSBL action row",
+        }
+        feed = {"header": "pfbactdns", "url": f"{helpers.PFB_DBDIR}/pfbactdns", "state": "Enabled", "format": "auto"}
+        seed = helpers.php_eval(
+            vm,
+            f"config_set_path({helpers._php_str(DNSBL_GROUPS)}, array({_php_row_literal(row, feed)}));\n"
+            "write_config('pfBlockerNG smoke: seed DNSBL category row');\n"
+            "echo 'OK';",
+            timeout=AJAX_TIMEOUT,
+        )
+        assert seed.returncode == 0 and "OK" in seed.stdout
+
+        body = _ajax_post(
+            webui,
+            {"act": "update", "type": "dnsbl", "rowid": "0", "postdata": urlencode({"action-0": "Deny_Both"})},
+            page=_page_url("dnsbl"),
+        )
+        assert helpers.config_get(vm, f"{DNSBL_GROUPS}/0/action") == "unbound"
+
+        body = _ajax_post(
+            webui,
+            {"act": "update", "type": "dnsbl", "rowid": "0", "postdata": urlencode({"action-0[]": "unbound"})},
+            page=_page_url("dnsbl"),
+        )
+        assert "Fatal error" not in body
+        assert helpers.config_get(vm, f"{DNSBL_GROUPS}/0/action") == "unbound"
+    finally:
+        _restore_node(vm, IPV4_LISTS, ipv4_snap)
+        _restore_node(vm, DNSBL_GROUPS, dnsbl_snap)
+
+
 def test_category_update_row_cron_valid_and_reject_unchanged(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,

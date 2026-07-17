@@ -1741,6 +1741,26 @@ def test_category_edit_no_sort_mode_renders_reorder_wiring(
 _WIZARD_DNSBL_STEP = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=3"
 
 
+def test_group_action_validator_is_strict_on_appliance(smoke_vm: SmokeVM, webui: WebUI) -> None:  # noqa: ARG001
+    """Issue #1346: shipped validator rejects cross-group and non-string actions."""
+    result = helpers.php_eval(
+        smoke_vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc'); "
+        "$rows = array("
+        "array('Deny_Both', 'ipv4', true), "
+        "array('unbound', 'dnsbl', true), "
+        "array('unbound', 'ipv4', false), "
+        "array('Deny_Both', 'dnsbl', false), "
+        "array(array('Deny_Both'), 'ipv4', false), "
+        "array(0, 'dnsbl', false)); "
+        "foreach ($rows as $row) { if (pfb_group_action_valid($row[0], $row[1]) !== $row[2]) { exit(9); } } "
+        "echo 'OK';",
+    )
+    assert result.returncode == 0 and "OK" in result.stdout, (
+        f"group-action validator matrix failed: rc={result.returncode} out={result.stdout!r} err={result.stderr!r}"
+    )
+
+
 def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """ADR-23: the wizard DNSBL step renders the Auto VIP (pfb_dnsvip_auto) checkbox cleanly.
 

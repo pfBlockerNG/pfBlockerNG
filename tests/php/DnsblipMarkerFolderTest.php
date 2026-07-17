@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -33,6 +34,27 @@ final class DnsblipMarkerFolderTest extends TestCase
 
 	private string $denydir;
 	private string $nativedir;
+	private string $dnsdir;
+	private string $permitdir;
+	private string $matchdir;
+
+	/** @return iterable<string,array{mixed}> */
+	public static function hostileActionProvider(): iterable
+	{
+		yield 'DNSBL action' => ['unbound'];
+		yield 'uppercase DNSBL action' => ['UNBOUND'];
+		yield 'lowercase IP action' => ['deny_both'];
+		yield 'case-mutated IP action' => ['Deny_both'];
+		yield 'leading whitespace' => [' Deny_Both'];
+		yield 'trailing whitespace' => ['Deny_Both '];
+		yield 'empty string' => [''];
+		yield 'numeric string' => ['0'];
+		yield 'integer' => [0];
+		yield 'null' => [NULL];
+		yield 'false' => [FALSE];
+		yield 'true' => [TRUE];
+		yield 'array' => [['Deny_Both']];
+	}
 
 	protected function setUp(): void
 	{
@@ -44,11 +66,18 @@ final class DnsblipMarkerFolderTest extends TestCase
 		$base = sys_get_temp_dir() . '/pfb_marker_' . uniqid('', TRUE);
 		$this->denydir   = "{$base}/deny";
 		$this->nativedir = "{$base}/native";
-		mkdir($this->denydir, 0o777, TRUE);
-		mkdir($this->nativedir, 0o777, TRUE);
+		$this->dnsdir    = "{$base}/dns";
+		$this->permitdir = "{$base}/permit";
+		$this->matchdir  = "{$base}/match";
+		foreach ($this->actionFolders() as $folder) {
+			mkdir($folder, 0o777, TRUE);
+		}
 
 		$GLOBALS['pfb']['denydir']   = $this->denydir;
 		$GLOBALS['pfb']['nativedir'] = $this->nativedir;
+		$GLOBALS['pfb']['dnsdir']    = $this->dnsdir;
+		$GLOBALS['pfb']['permitdir'] = $this->permitdir;
+		$GLOBALS['pfb']['matchdir']  = $this->matchdir;
 		$GLOBALS['pfb']['origdir']   = "{$base}/orig";
 		$GLOBALS['pfb']['reuse']     = '';
 
@@ -71,6 +100,12 @@ final class DnsblipMarkerFolderTest extends TestCase
 				unset($GLOBALS[$g]);
 			}
 		}
+	}
+
+	/** @return list<string> */
+	private function actionFolders(): array
+	{
+		return [$this->denydir, $this->nativedir, $this->dnsdir, $this->permitdir, $this->matchdir];
 	}
 
 	public function testAliasNativeMarkerLandsInNativeFolderNotDeny(): void
@@ -126,5 +161,17 @@ final class DnsblipMarkerFolderTest extends TestCase
 		$this->assertSame($this->denydir, pfb_dnsblip_action_folder('Alias_Deny'));
 		$this->assertSame($this->denydir, pfb_dnsblip_action_folder('Deny_Both'));
 		$this->assertSame('', pfb_dnsblip_action_folder('Disabled'));
+	}
+
+	#[DataProvider('hostileActionProvider')]
+	public function testHostileActionRoutesNowhereAndWritesNoMarker($action): void
+	{
+		$this->assertSame('', pfb_dnsblip_action_folder($action));
+
+		pfb_dnsblip_mark_reprocess($action, '_v4');
+
+		foreach ($this->actionFolders() as $folder) {
+			$this->assertSame([], glob("{$folder}/*") ?: [], "invalid action wrote into {$folder}");
+		}
 	}
 }

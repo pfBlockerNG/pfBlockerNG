@@ -175,23 +175,6 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 				unset($input_errors);
 			}
 			if (is_array($rowdata)) {
-				$action_values = array(	'Disabled',
-							'Deny_Inbound', 
-							'Deny_Outbound',
-							'Deny_Both',
-							'Permit_Inbound',
-							'Permit_Outbound',
-							'Permit_Both',
-							'Match_Inbound',
-							'Match_Outbound',
-							'Match_Both',
-							'Alias_Deny',
-							'Alias_Permit',
-							'Alias_Match',
-							'Alias_Native',
-							'unbound'
-							);	
-
 				$cron_values = array(	'Never',
 							'01hour',
 							'02hours',
@@ -235,10 +218,14 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 							} else {
 								$input_errors[] = "Failed Rowid: " . htmlspecialchars($k_field[1]);
 							}
+							if (!is_string($value)) {
+								$input_errors[] = 'Failed Value';
+								continue;
+							}
 
 							switch ($variable) {
 								case 'action':
-									if (!in_array($value, $action_values)) {
+									if (!pfb_group_action_valid($value, $gtype)) {
 										$input_errors[] = "Failed Action: " . htmlspecialchars($value);
 									}
 									break;

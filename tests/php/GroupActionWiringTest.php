@@ -1,0 +1,232 @@
+<?php
+
+declare(strict_types=1);
+
+use PHPUnit\Framework\TestCase;
+
+/** Issue #1346 — every independent persisted group-action read must fail closed. */
+final class GroupActionWiringTest extends TestCase
+{
+	private static string $inc;
+	private static string $cron;
+	private static string $category;
+
+	public static function setUpBeforeClass(): void
+	{
+		$root = dirname(__DIR__, 2);
+		self::$inc = (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng.inc");
+		self::$category = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category.php");
+		$www = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng.php");
+		if (!preg_match('/function pfblockerng_sync_cron\b.*?(?=\nfunction )/s', $www, $match)) {
+			throw new RuntimeException('test bootstrap: pfblockerng_sync_cron() body not found');
+		}
+		self::$cron = $match[0];
+	}
+
+	private function assertGuardBeforeActionUse(
+		string $source,
+		string $start,
+		string $end,
+		string $guard,
+		string $actionUse
+	): void {
+		$startPos = strpos($source, $start);
+		$this->assertNotFalse($startPos, "start anchor not found: {$start}");
+		$endPos = strpos($source, $end, $startPos + strlen($start));
+		$this->assertNotFalse($endPos, "end anchor not found: {$end}");
+		$block = substr($source, $startPos, $endPos - $startPos);
+		$guardPos = strpos($block, $guard);
+		$this->assertNotFalse($guardPos, "guard not found between anchors: {$guard}");
+		$usePos = strpos($block, $actionUse);
+		$this->assertNotFalse($usePos, "action use not found between anchors: {$actionUse}");
+		$this->assertTrue($guardPos < $usePos, "guard must precede action use: {$actionUse}");
+	}
+
+	public function testSummaryAjaxUsesSharedGroupValidator(): void
+	{
+		$this->assertStringContainsString('pfb_group_action_valid($value, $gtype)', self::$category);
+		$this->assertStringNotContainsString('in_array($value, $action_values)', self::$category);
+	}
+
+	public function testNormalizeLoopGuardsStoredAction(): void
+	{
+		$this->assertStringContainsString(<<<'PHP'
+				foreach ($type_config as $list) {
+					if (!pfb_group_action_valid($list['action'] ?? NULL, $ltype === 'pfblockerngdnsbl' ? 'dnsbl' : 'ipv4')) {
+						continue;
+					}
+PHP, self::$inc);
+	}
+
+	public function testDnsblProcessingLoopGuardsStoredAction(): void
+	{
+		$this->assertStringContainsString(<<<'PHP'
+			foreach (config_get_path('installedpackages/pfblockerngdnsbl/config', []) as $list) {
+				if (!pfb_group_action_valid($list['action'] ?? NULL, 'dnsbl')) {
+					continue;
+				}
+PHP, self::$inc);
+	}
+
+	public function testCronPrepassGuardsStoredAction(): void
+	{
+		$this->assertStringContainsString(<<<'PHP'
+		foreach (config_get_path("installedpackages/{$ltype}/config", []) as $list) {
+			if (!pfb_group_action_valid($list['action'] ?? NULL, $is_dnsbl ? 'dnsbl' : 'ipv4')) {
+				continue;
+			}
+PHP, self::$cron);
+	}
+
+	public function testCronGeoipFallbackGuardsStoredAction(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$cron,
+			'// If no lists require updates, check if Continents are configured',
+			"if (\$pfb['update_cron']) {",
+			"pfb_group_action_valid(\$continent_config['action'] ?? NULL, 'geoip')",
+			"\$continent_config['action'] != 'Disabled'"
+		);
+	}
+
+	public function testCustomPermitSuppressionGuardsStoredAction(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			"// Collect any 'Permit' Customlist IPs to suppress",
+			'$custom_supp = array_unique',
+			"pfb_group_action_valid(\$list['action'] ?? NULL, 'ipv4')",
+			"strpos(\$list['action'], 'Permit_')"
+		);
+	}
+
+	public function testAutoruleGeoipDiscoveryGuardsStoredAction(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'// Discover if any rules are autorules',
+			"if (!\$pfb['autorules']) {",
+			"pfb_group_action_valid(\$continent_config['action'] ?? NULL, 'geoip')",
+			"\$continent_config['action'] != 'Disabled'"
+		);
+	}
+
+	public function testAutoruleIpDiscoveryGuardsStoredAction(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			"if (!\$pfb['autorules']) {",
+			'// Check if DNSBL auto permit rule',
+			"pfb_group_action_valid(\$list['action'] ?? NULL, 'ipv4')",
+			"\$list['action'] != 'Disabled'"
+		);
+	}
+
+	public function testDnsblIpGlobalActionIsNormalizedAtReadBoundary(): void
+	{
+		$this->assertStringContainsString(
+			"\$pfb['dnsbl_ip']\t= pfb_dnsblip_action_value(\$pfb['dnsblconfig']['action'] ?? NULL);",
+			self::$inc
+		);
+	}
+
+	public function testDnsblIpAutoruleUsesNormalizedAction(): void
+	{
+		$start = strpos(self::$inc, '// Check if DNSBL auto permit rule');
+		$this->assertNotFalse($start);
+		$end = strpos(self::$inc, '// Configure auto rule suffix', $start);
+		$this->assertNotFalse($end);
+		$block = substr(self::$inc, $start, $end - $start);
+
+		$this->assertStringContainsString("strpos(\$pfb['dnsbl_ip'], 'Deny_')", $block);
+		$this->assertStringNotContainsString("\$pfb['dnsblconfig']['action']", $block);
+	}
+
+	public function testDnsblIpActionFolderGuardsBeforeRouting(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'function pfb_dnsblip_action_folder',
+			'// Write the DNSBLIP',
+			"pfb_group_action_valid(\$action, 'ipv4')",
+			'pfb_determine_list_detail($action'
+		);
+	}
+
+	public function testMasterDnsblIpSyntheticActionGuardsBeforeInterpolation(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'// ADD DNSBL IP',
+			'if (!empty($lists))',
+			"pfb_group_action_valid(\$pfb['dnsbl_ip'] ?? NULL, 'ipv4')",
+			'"{$pfb[\'dnsbl_ip\']}"'
+		);
+	}
+
+	public function testDownloadDnsblIpSyntheticActionGuardsBeforeInterpolation(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'// Add DNSBLIP, if configured (IPv4 + IPv6)',
+			'$maxmind_run_once',
+			"pfb_group_action_valid(\$pfb['dnsbl_ip'] ?? NULL, 'ipv4')",
+			'"{$pfb[\'dnsbl_ip\']}"'
+		);
+	}
+
+	public function testAliasDnsblIpSyntheticActionGuardsBeforeInterpolation(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'CONFIGURE ALIASES AND FIREWALL RULES',
+			'// Clear variables',
+			"pfb_group_action_valid(\$pfb['dnsbl_ip'] ?? NULL, 'ipv4')",
+			'"{$pfb[\'dnsbl_ip\']}"'
+		);
+	}
+
+	public function testMasterGeoipDiscoveryGuardsStoredAction(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'// Find all enabled Continents lists',
+			'// Find all enabled IPv4/IPv6 lists and DNSBL lists',
+			"pfb_group_action_valid(\$continent_config['action'] ?? NULL, 'geoip')",
+			"\$continent_config['action'] != 'Disabled'"
+		);
+	}
+
+	public function testGeoipProcessingGuardsStoredAction(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'// Download MaxMind Databases if not found',
+			'// Remove temp file',
+			"pfb_group_action_valid(\$continent_config['action'] ?? NULL, 'geoip')",
+			"pfb_determine_list_detail(\$continent_config['action']"
+		);
+	}
+
+	public function testIpDownloadCollectionGuardsStoredAction(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'// Collect lists and custom list configuration and format into one array',
+			'// Add DNSBLIP, if configured',
+			"pfb_group_action_valid(\$list['action'] ?? NULL, 'ipv4')",
+			'$lists[] = $list'
+		);
+	}
+
+	public function testIpAliasRuleLoopGuardsStoredAction(): void
+	{
+		$this->assertGuardBeforeActionUse(
+			self::$inc,
+			'CONFIGURE ALIASES AND FIREWALL RULES',
+			'// Clear variables',
+			"pfb_group_action_valid(\$list['action'] ?? NULL, 'ipv4')",
+			"pfb_determine_list_detail(\$list['action']"
+		);
+	}
+}
