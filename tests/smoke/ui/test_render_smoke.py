@@ -1767,11 +1767,24 @@ def test_corrupt_group_actions_render_repairably(
     )
     assert "OK" in seed.stdout, f"failed to seed corrupt action rows: {seed.stdout!r}"
 
+    raw_probe = helpers.php_eval(
+        vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc'); "
+        f"$raw = config_get_path({helpers._php_str(f'{dnsbl_base}/action')}, NULL); "
+        "$normalized = pfb_group_action_valid($raw, 'dnsbl') ? $raw : 'Disabled'; "
+        "echo json_encode(array(gettype($raw), pfb_group_action_valid($raw, 'dnsbl'), $normalized));",
+    )
+    assert json.loads(raw_probe.stdout) == ["array", False, "Disabled"], (
+        f"DNSBL action seed/normalization precondition failed: {raw_probe.stdout!r}"
+    )
+
     def assert_disabled_selected(body: str, path: str) -> None:
         select = re.search(r'<select(?=[^>]*name="action")[^>]*>(.*?)</select>', body, re.DOTALL)
         assert select is not None, f"action select missing on {path}"
         disabled = re.search(r'<option(?=[^>]*value="Disabled")(?=[^>]*selected(?:=|\s|>))[^>]*>', select.group(1))
-        assert disabled is not None, f"invalid persisted action did not render as selected Disabled on {path}"
+        assert disabled is not None, (
+            f"invalid persisted action did not render as selected Disabled on {path}: {select.group(0)!r}"
+        )
 
     try:
         alerts_path = "/pfblockerng/pfblockerng_alerts.php"
