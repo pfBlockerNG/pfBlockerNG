@@ -22,8 +22,8 @@ Usage:
     check_agent_roles.py --all               # unconditional full validation
     [--root PATH]                            # repo root (default: script's repo)
 
-A model pin on a line containing `roles-ok` is exempt (with a reason, like the
-other checkers' escape hatches).
+A model pin is exempt only when its line carries standalone, case-sensitive
+`roles-ok:` followed by a same-line non-whitespace reason.
 
 Exit status: 0 = clean or skipped, 1 = violations (printed), 2 = usage/git error.
 """

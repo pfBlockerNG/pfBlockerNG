@@ -33,8 +33,8 @@ SCOPE (deliberately low false-positive: VALUES only, never prose)
   (they define/contain the patterns being matched, so scanning them is
   meaningless self-reference). ``docs/misc/pfSense_versions.md`` is outside
   the scan roots anyway; it is named here only to document that intent.
-* A line containing the substring ``version-literal-ok`` is exempt (inline
-  escape: ``# version-literal-ok: <reason>``).
+* A line is exempt only when it carries standalone, case-sensitive
+  ``version-literal-ok:`` followed by a same-line non-whitespace reason.
 * Comments are prose in every scanned language, per that language's syntax
   (enumerated from the scan roots' actual file types — issue #941): ``#``
   line/trailing comments everywhere; ``//`` and ``/* ... */`` in PHP/JS
