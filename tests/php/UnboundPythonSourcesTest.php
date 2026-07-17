@@ -232,6 +232,10 @@ final class UnboundPythonSourcesTest extends TestCase
 		// issue #1255: the public-suffix oracle is no longer carried in the manifest
 		// (HSTS parity -- a shipped static file + ini flag instead); the key is absent.
 		$this->assertArrayNotHasKey('tld_master', $m['config']);
+		// issue #1328: pin the POST-RENAME (ADR-66) blob name too -- a writer
+		// regression emitting the oracle under the new name would slip past the
+		// old-name-only pin above.
+		$this->assertArrayNotHasKey('tld_wildcard_master', $m['config']);
 		$this->assertSame([], $m['config']['tld_wildcard_blacklist']);
 		$this->assertSame([], $m['config']['user_whitelist']);
 		$this->assertSame([], $m['config']['user_unlock']);
@@ -252,6 +256,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		$m = pfb_unbound_python_sources($this->feeds());
 
 		$this->assertArrayNotHasKey('tld_master', $m['config'], 'tld_master must never appear in the manifest');
+		$this->assertArrayNotHasKey('tld_wildcard_master', $m['config'], 'tld_wildcard_master (post-rename blob name) must never appear in the manifest');
 		$this->assertSame([], $m['config']['tld_wildcard_blacklist'], 'OFF must empty tld_wildcard_blacklist even though it was configured');
 		$this->assertSame([], $m['config']['tld_wildcard_exclusion'], 'OFF must empty tld_wildcard_exclusion even though it was configured');
 	}
@@ -265,6 +270,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		$m = pfb_unbound_python_sources($this->feeds());
 
 		$this->assertArrayNotHasKey('tld_master', $m['config'], 'tld_master must never appear in the manifest, even ON');
+		$this->assertArrayNotHasKey('tld_wildcard_master', $m['config'], 'tld_wildcard_master (post-rename blob name) must never appear in the manifest, even ON');
 		$this->assertSame(['evil-tld'], $m['config']['tld_wildcard_blacklist'], 'ON must populate tld_wildcard_blacklist from config');
 		$this->assertSame(['good.example'], $m['config']['tld_wildcard_exclusion'], 'ON must populate tld_wildcard_exclusion from config');
 	}

@@ -182,12 +182,25 @@ class TestTldWildcardOracleGating:
 
         assert config["tld_wildcard_master"] == []
 
-    def test_manifest_tld_master_key_is_ignored_regardless_of_flag(self, tmp_path: Any) -> None:
+    @pytest.mark.parametrize("flag_on", [False, True])
+    def test_manifest_tld_master_key_is_ignored_regardless_of_flag(self, tmp_path: Any, flag_on: bool) -> None:
         # A manifest embedding tld_master (stale pre-#1255 shape, or crafted) must
-        # never feed the oracle -- the flag + shipped file are the sole source.
-        pfb_unbound.pfb["python_tld_wildcard"] = False
+        # never feed the oracle -- the flag + shipped file are the sole source, for
+        # BOTH flag states. ON ships a REAL oracle file alongside the poisoned
+        # manifest key, so a regression that merged/fell back to the manifest value
+        # would surface as extra/wrong entries, not just an empty-vs-empty match.
+        pfb_unbound.pfb["python_tld_wildcard"] = flag_on
+        expected: list[str] = []
+        if flag_on:
+            oracle = tmp_path / "pfb_py_tld.txt"
+            oracle.write_text("com\nnet\n", encoding="utf-8")
+            pfb_unbound.pfb["pfb_py_tld"] = str(oracle)
+            expected = ["com", "net"]
         manifest = {"config": {"tld_master": "/etc/passwd"}}
 
         config = pfb_unbound._dnsbl_config_from_manifest(manifest, str(tmp_path))
 
-        assert config["tld_wildcard_master"] == []
+        assert config["tld_wildcard_master"] == expected, (
+            f"expected {expected!r} (only the shipped oracle, never the poisoned "
+            f"manifest 'tld_master' key), got {config['tld_wildcard_master']!r}"
+        )
