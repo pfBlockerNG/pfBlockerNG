@@ -1,9 +1,56 @@
 # Config gateway (PfbConfig) — reference
 
-Deep reference for the ADR-28/29 config-storage adapters and the `PfbConfig` gateway. The
-**operative rules** (read/write/delete via `PfbConfig`, the enforcement sniff) live in `CLAUDE.md`
-→ "Config gateway — PfbConfig". This file holds the mechanics a change needs only when adding a
-field, reasoning about rollback/downgrade, or checking the foreign-key exclusions.
+Deep reference for the ADR-28/29 config-storage adapters and the `PfbConfig` gateway: the
+operative gateway contract, the storage adapter rule, and the mechanics a change needs when
+adding a field, reasoning about rollback/downgrade, or checking the foreign-key exclusions.
+
+## Gateway contract (ADR-29)
+
+`PfbConfig` (`pfblockerng_extra.inc`) is the **single access point for every registered
+`installedpackages/pfblockerng*` scalar field**:
+
+- **Read/write/delete via `PfbConfig::read/write/delete($key)`** — never direct
+  `config_*_path` on a registered key (enforced by the
+  `PfBlockerNG.Config.RequireConfigGateway` sniff; adding a registered key ⇒ also add it to
+  the sniff's `$registeredPaths`).
+- Section helpers (`readSection`/`writeSection`/`deleteSection`) for whole-section,
+  non-per-field access. Unregistered key → `InvalidArgumentException`.
+- **No `write_config()` inside the gateway** — the caller decides when to flush. The registry
+  (`pfb_cfg_registry()`) is read-only after boot.
+
+## Storage adapter rule (ADR-28 §2.2)
+
+- **Storage is NOT frozen — consistent for back-compat where practical, not byte-for-byte.**
+  No versioned migration routine. New options add new stored strings; read-boundary adapters
+  absorb legacy tokens and writes emit a canonical token (which may differ from the legacy one
+  when behaviour-equivalent). The goal is to preserve *behaviour* on upgrade, not bytes.
+- **Forward-compat (upgrade) has two cases:** an existing config with the key absent reads to
+  a value that **preserves that user's prior behaviour**; a brand-new config gets the new
+  default. When those differ, a one-time grandfather seed sets the key for existing installs
+  at upgrade (e.g. `pfb_rdns_seed_value`, `pfb_feed_filter_install_default`) so the
+  absent-default never silently changes an existing user's behaviour.
+- **Downgrade-tolerant.** Older releases string-compared these values, so an unknown token
+  falls through to that release's safe default. Reusing a legacy token as the canonical value
+  (see `pfb_idn`) keeps downgrade behaviour intact; a genuinely new token simply reads as off
+  on an old release — acceptable, the feature didn't exist there.
+- Enums/booleans are the **internal runtime representation**; conversion at the boundary:
+  stored string → enum on read; enum → canonical stored string on write.
+- **The enum owns its stored-value semantics** via the `PfbStoredEnum` interface +
+  `PfbStoredEnumAdapter` trait: `EnumClass::fromStored($raw)` (read) and `$enum->toStored()`
+  (write). The per-field **absent default** is the registry's `$entry['default']` (applied by
+  `PfbConfig::read()` *before* the adapter); the enum's `default()` is only the
+  **parse-fallback** for unknown/non-scalar tokens, never the absent-default. A field's `''`
+  vs `'off'` off-value is handled by its own enum.
+- **Round-trip pinned by tests** (`CfgAdaptersTest`, `RollbackContractTest`): every canonical
+  token round-trips (`write(read(v)) == v`); a legacy token reads to the right runtime value
+  and writes to its behaviour-equivalent canonical token (itself legacy-valid, so no novel
+  on-disk value reaches an older release).
+- **Explicitly out of scope (ADR-28 §2.4):** `config.xml` versioned schema/migrations;
+  `py_unbound.ini` and any manifest/serialized/wire value read by Python or shell; ADR-26
+  locale prefixes; genuine boolean predicates (return `bool`, not an enum); mass realignment
+  of untouched lines; `stubs/`, generated artifacts, vendored code.
+- Per-field adapter inventory, field-vocabulary table, since-version convention, and rollback
+  invariants: the sections below.
 
 ## Adapter inventory (field → enum)
 

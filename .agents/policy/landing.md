@@ -12,7 +12,7 @@
 Composes with [`workflow.md`](workflow.md) — its "Review" section defines the
 independent adversarial review principle and "Retry and fix-loop limits" bounds every
 loop here; this document carries only the landing mechanics. Every wait armed here
-follows CLAUDE.md "No orphaned waits" and workflow-reference "Bounded waits".
+follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
 
 ## Fixed floors (never weaken)
 
@@ -50,7 +50,7 @@ follows CLAUDE.md "No orphaned waits" and workflow-reference "Bounded waits".
   not apply; say so and stop.
 - **Transport check (once):** confirm the GitHub CLI is present and authenticated.
   Absent → use the client's GitHub MCP tools with wakeup-paced bounded checks
-  (workflow-reference "Managed environments"); neither transport → stop and report.
+  ([`waits.md`](waits.md) §4 "Managed environments"); neither transport → stop and report.
 - **Refusal cases (re-checked immediately before merging):** never merge a PR that is
   not OPEN, is a draft (ask the user to mark it ready), or is CONFLICTING (conflict
   resolution is separate work — report, do not guess). A mergeability of UNKNOWN means
@@ -267,7 +267,9 @@ still gets its reply, pointing at the shared resolution. Then per finding:
 - **A finding that names a class** ("the X clauses", "all Y call sites", "… etc.") is
   fixed by re-enumerating the class **tree-wide from the source** (`git grep` across
   every scan root), never from the finding's wording or the one file it names; paste
-  the enumeration into the audit/reply so the tick is auditable.
+  the enumeration into the audit/reply so the tick is auditable. When a change
+  *retires* a literal token, a zero-hit tree grep for it is part of done (the #1047
+  class; mechanical backstop `scripts/check_retired_tokens.py`, #1059).
 - **A fix that changes behaviour carries its own test** (fail-before/pass-after per
   the repo test policy; Tier-A coverage for a `www/` change). Pure comment/lint nits
   need none.
