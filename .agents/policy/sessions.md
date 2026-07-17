@@ -1,7 +1,7 @@
 # Session layouts and managed-remote sessions
 
-Scope: where a session runs, where work-item worktrees go, and cross-session resume. Load
-when: starting work in an unfamiliar environment or resuming another session's item.
+Scope: where a session runs, where work-item worktrees go, and cross-session resume.
+Load when: starting work in an unfamiliar environment or resuming another session's item.
 
 ## Session layouts (three environments, one rule)
 
