@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -9,11 +10,19 @@ use PHPUnit\Framework\TestCase;
 /**
  * NDJSON interchange -- compact tagged-array writers plus schema-v1 object fallback.
  */
+#[CoversClass(PfbDnsblRowKind::class)]
 #[CoversFunction('pfb_dnsbl_ndjson_emit_domain_row')]
 #[CoversFunction('pfb_dnsbl_ndjson_emit_abp_row')]
 #[CoversFunction('pfb_dnsbl_ndjson_parse_row')]
 final class PfbNdjsonInterchangeTest extends TestCase
 {
+	public function testCompactRowKindsOwnWireTags(): void
+	{
+		$this->assertSame('d', PfbDnsblRowKind::Domain->value);
+		$this->assertSame('a', PfbDnsblRowKind::Abp->value);
+		$this->assertNull(PfbDnsblRowKind::tryFrom('x'));
+	}
+
 	// =========================================================================
 	// Hostile-input matrix -- parse rejects every malformed/wrong-kind line.
 	// =========================================================================
