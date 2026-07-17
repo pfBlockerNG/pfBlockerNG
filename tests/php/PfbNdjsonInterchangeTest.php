@@ -11,8 +11,7 @@ use PHPUnit\Framework\TestCase;
  * NDJSON interchange -- compact tagged-array writers plus schema-v1 object fallback.
  */
 #[CoversClass(PfbDnsblRowKind::class)]
-#[CoversFunction('pfb_dnsbl_ndjson_emit_domain_row')]
-#[CoversFunction('pfb_dnsbl_ndjson_emit_abp_row')]
+#[CoversFunction('pfb_dnsbl_ndjson_emit_row')]
 #[CoversFunction('pfb_dnsbl_ndjson_parse_row')]
 final class PfbNdjsonInterchangeTest extends TestCase
 {
@@ -83,8 +82,14 @@ final class PfbNdjsonInterchangeTest extends TestCase
 		// parser's key handling shows up here first.
 		$row = pfb_dnsbl_ndjson_parse_row('{"kind":"domain","domain":"a.com","log":"1","feed":"f","group":"g","extra":"ignored-me"}');
 
-		$this->assertIsArray($row);
-		$this->assertSame('a.com', $row['domain']);
+		$this->assertSame([
+			'kind'   => PfbDnsblRowKind::Domain,
+			'domain' => 'a.com',
+			'log'    => '1',
+			'feed'   => 'f',
+			'group'  => 'g',
+			'extra'  => 'ignored-me',
+		], $row);
 	}
 
 	public function testDuplicateKeyLastValueWinsIncidentally(): void
@@ -111,7 +116,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	public function testCompactDomainRowNormalizesToSchemaFields(): void
 	{
 		$this->assertSame(
-			['kind' => 'domain', 'domain' => 'example.com'],
+			['kind' => PfbDnsblRowKind::Domain, 'domain' => 'example.com'],
 			pfb_dnsbl_ndjson_parse_row('["d","example.com"]')
 		);
 	}
@@ -119,7 +124,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	public function testCompactAbpRowNormalizesToSchemaFields(): void
 	{
 		$this->assertSame(
-			['kind' => 'abp', 'raw' => '@@||allow.example^'],
+			['kind' => PfbDnsblRowKind::Abp, 'raw' => '@@||allow.example^'],
 			pfb_dnsbl_ndjson_parse_row('["a","@@||allow.example^"]')
 		);
 	}
@@ -128,7 +133,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	{
 		$huge = str_repeat('a', 100000) . '.com';
 		$this->assertSame(
-			['kind' => 'domain', 'domain' => $huge],
+			['kind' => PfbDnsblRowKind::Domain, 'domain' => $huge],
 			pfb_dnsbl_ndjson_parse_row('["d","' . $huge . '"]')
 		);
 	}
@@ -137,7 +142,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	{
 		$this->assertSame(
 			[
-				'kind' => 'domain',
+				'kind' => PfbDnsblRowKind::Domain,
 				'domain' => 'legacy.example',
 				'log' => '1',
 				'feed' => 'feedA',
@@ -146,7 +151,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 			pfb_dnsbl_ndjson_parse_row('{"kind":"domain","domain":"legacy.example","log":"1","feed":"feedA","group":"groupA"}')
 		);
 		$this->assertSame(
-			['kind' => 'abp', 'raw' => '@@||legacy.example^'],
+			['kind' => PfbDnsblRowKind::Abp, 'raw' => '@@||legacy.example^'],
 			pfb_dnsbl_ndjson_parse_row('{"kind":"abp","raw":"@@||legacy.example^"}')
 		);
 	}
@@ -168,7 +173,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	#[DataProvider('domainRoundTripProvider')]
 	public function testEmitDomainRowRoundTripsAndStaysSingleLine(string $domain): void
 	{
-		$line = pfb_dnsbl_ndjson_emit_domain_row($domain, '1', 'feedA', 'groupA');
+		$line = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, $domain);
 
 		$this->assertStringStartsWith('["d","', $line, 'compact domain tag first');
 		$this->assertSame(1, substr_count($line, "\n"), 'exactly one raw newline byte -- the trailing one');
@@ -177,7 +182,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 		$parsed = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
 		$this->assertIsArray($parsed, 'the emitted line must parse back');
 		$this->assertSame($domain, $parsed['domain'], 'round-trip must recover the exact original domain, escaping notwithstanding');
-		$this->assertSame(['kind' => 'domain', 'domain' => $domain], $parsed);
+		$this->assertSame(['kind' => PfbDnsblRowKind::Domain, 'domain' => $domain], $parsed);
 	}
 
 	public static function abpRoundTripProvider(): array
@@ -195,7 +200,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	#[DataProvider('abpRoundTripProvider')]
 	public function testEmitAbpRowRoundTrips(string $raw): void
 	{
-		$line = pfb_dnsbl_ndjson_emit_abp_row($raw);
+		$line = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, $raw);
 
 		$this->assertStringStartsWith('["a","', $line, 'compact ABP tag first');
 		$this->assertSame(1, substr_count($line, "\n"));
@@ -207,11 +212,11 @@ final class PfbNdjsonInterchangeTest extends TestCase
 
 	public function testEmitAbpRowUsesExpectedTagAndUnescapedSlashes(): void
 	{
-		$line = pfb_dnsbl_ndjson_emit_abp_row('||example.com^');
+		$line = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, '||example.com^');
 		$this->assertSame("[\"a\",\"||example.com^\"]\n", $line);
 
 		// JSON_UNESCAPED_SLASHES proof: a raw containing '/' must not gain '\/'.
-		$regexLine = pfb_dnsbl_ndjson_emit_abp_row('/^ad[0-9]+\\./');
+		$regexLine = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, '/^ad[0-9]+\\./');
 		$this->assertStringNotContainsString('\\/', $regexLine, 'JSON_UNESCAPED_SLASHES must leave "/" unescaped');
 	}
 
@@ -225,7 +230,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	{
 		$this->assertSame(
 			"[\"d\",\"example.com\"]\n",
-			pfb_dnsbl_ndjson_emit_domain_row('example.com', '1', 'feedA', 'groupA')
+			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'example.com')
 		);
 	}
 
@@ -233,7 +238,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	{
 		$this->assertSame(
 			"[\"a\",\"/^ad[0-9]+\\\\./\"]\n",
-			pfb_dnsbl_ndjson_emit_abp_row('/^ad[0-9]+\\./')
+			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, '/^ad[0-9]+\\./')
 		);
 	}
 
@@ -254,7 +259,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	#[DataProvider('invalidUtf8ByteProvider')]
 	public function testEmitDomainRowWithInvalidUtf8DomainStaysAValidRow(string $badBytes): void
 	{
-		$line = pfb_dnsbl_ndjson_emit_domain_row("bad{$badBytes}domain.com", '1', 'feedA', 'groupA');
+		$line = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, "bad{$badBytes}domain.com");
 
 		$this->assertSame(1, substr_count($line, "\n"), 'exactly one line, never a phantom blank');
 		$this->assertNotSame("\n", $line, 'must never degrade to a bare newline');
@@ -262,7 +267,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 
 		$row = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
 		$this->assertIsArray($row, 'the emitted line must parse back as valid interchange');
-		$this->assertSame('domain', $row['kind']);
+		$this->assertSame(PfbDnsblRowKind::Domain, $row['kind']);
 		$expected = $badBytes === "\xFF" ? 'bad�domain.com' : 'bad�(domain.com';
 		$this->assertSame($expected, $row['domain']);
 	}
@@ -270,7 +275,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	#[DataProvider('invalidUtf8ByteProvider')]
 	public function testEmitAbpRowWithInvalidUtf8RawStaysAValidRow(string $badBytes): void
 	{
-		$line = pfb_dnsbl_ndjson_emit_abp_row("||bad{$badBytes}domain.example^");
+		$line = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, "||bad{$badBytes}domain.example^");
 
 		$this->assertSame(1, substr_count($line, "\n"), 'exactly one line, never a phantom blank');
 		$this->assertNotSame("\n", $line, 'must never degrade to a bare newline');
@@ -278,7 +283,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 
 		$row = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
 		$this->assertIsArray($row, 'the emitted line must parse back as valid interchange');
-		$this->assertSame('abp', $row['kind']);
+		$this->assertSame(PfbDnsblRowKind::Abp, $row['kind']);
 		$expected = $badBytes === "\xFF" ? '||bad�domain.example^' : '||bad�(domain.example^';
 		$this->assertSame($expected, $row['raw']);
 	}
