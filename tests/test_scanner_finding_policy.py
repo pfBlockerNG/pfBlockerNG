@@ -1,7 +1,9 @@
 """Vocabulary-consistency tripwires for scanner-finding policy artifacts.
 
-Keeps CLAUDE.md and the landing policy (.agents/policy/landing.md) on one
-vocabulary for the scanner/audit finding gate and HARDENING-ONLY handling.
+Keeps the issue policy (.agents/policy/issues.md — the scanner/audit finding
+gate's home since the #1436/#1437 context extraction) and the landing policy
+(.agents/policy/landing.md) on one vocabulary for the scanner/audit finding
+gate and HARDENING-ONLY handling.
 """
 
 from __future__ import annotations
@@ -23,11 +25,11 @@ def _assert_vocabulary(source: str, text: str, expected: str) -> None:
 
 
 def test_scanner_finding_actionability_vocabulary_is_consistent() -> None:
-    policy = _read("CLAUDE.md")
+    issues = _read(".agents/policy/issues.md")
     landing = _read(".agents/policy/landing.md")
 
-    _assert_vocabulary("CLAUDE.md", policy, "### Scanner/audit finding gate")
-    _assert_vocabulary("CLAUDE.md", policy, "Every newly found **actionable** TypeError-class defect")
+    _assert_vocabulary("issues.md", issues, "## Scanner/audit finding gate")
+    _assert_vocabulary("issues.md", issues, "Every newly found **actionable** TypeError-class defect")
 
     _assert_vocabulary(
         "landing.md",
@@ -38,13 +40,13 @@ def test_scanner_finding_actionability_vocabulary_is_consistent() -> None:
 
 
 def test_hardening_only_vocabulary_is_consistent_across_policy() -> None:
-    policy = _read("CLAUDE.md")
+    issues = _read(".agents/policy/issues.md")
     landing = _read(".agents/policy/landing.md")
 
-    _assert_vocabulary("CLAUDE.md", policy, "**HARDENING-ONLY**")
-    _assert_vocabulary("CLAUDE.md", policy, "HARDENING-ONLY findings do not become tracker children")
+    _assert_vocabulary("issues.md", issues, "**HARDENING-ONLY**")
+    _assert_vocabulary("issues.md", issues, "HARDENING-ONLY findings do not become tracker children")
     _assert_vocabulary(
         "landing.md",
         landing,
-        "HARDENING-ONLY finding (per the CLAUDE.md scanner gate) is SKIP",
+        "HARDENING-ONLY finding (per the issues.md scanner gate) is SKIP",
     )
