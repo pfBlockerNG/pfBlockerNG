@@ -34,6 +34,19 @@ final class DnsblStagingGenerationGuardTest extends TestCase
 			'{"kind":"domain","domain":"x.example.com","log":"1","feed":"F","group":"G"}'));
 	}
 
+	public function testCompactDomainAndAbpFirstLinesAreCurrentGeneration(): void
+	{
+		$this->assertTrue(pfb_dnsbl_staging_is_current_generation('["d","x.example.com"]'));
+		$this->assertTrue(pfb_dnsbl_staging_is_current_generation('["a","||ads.example^"]'));
+	}
+
+	public function testMalformedCompactFirstLinesAreStale(): void
+	{
+		foreach (['["d"]', '["d",""]', '["d",1]', '["x","x.example"]', '["a","x","extra"]'] as $line) {
+			$this->assertFalse(pfb_dnsbl_staging_is_current_generation($line), "expected stale for [ {$line} ]");
+		}
+	}
+
 	public function testOldCsvCommaLedLineIsStale(): void
 	{
 		$this->assertFalse(pfb_dnsbl_staging_is_current_generation(',x.example.com,,1,F,ALIAS'));

@@ -2150,44 +2150,43 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 }
 
 /**
- * NDJSON interchange schema v1 (#1083). STRICT: fixed vocabulary, no version field, no
- * forward-compat mechanism. One JSON object per line, two kinds only:
- *   {"kind":"domain","domain":D,"log":L,"feed":F,"group":G}
- *   {"kind":"abp","raw":R}
- * Every value is a string (a numeric/bool/null field is a shape violation the parser
- * rejects); the required fields per kind are exactly the keys shown above. Encoding is
- * deterministic and grep-stable: fixed key order (kind first), compact (json_encode
- * default, no pretty flags), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE, exactly
- * one trailing "\n" -- callers may grep a line for '"domain":"<value>"' verbatim. JSON
- * string escaping guarantees the payload itself never carries a raw newline, so a value
- * holding "\n" still lands on one physical line. Domain/raw SYNTAX (punycode, length,
- * ...) stays with the existing validators; this format only carries opaque strings --
- * an invalid-UTF-8 byte is substituted with U+FFFD (JSON_INVALID_UTF8_SUBSTITUTE), never
- * left to fail json_encode() into FALSE (which "FALSE . \"\\n\"" would coerce to a bare,
- * phantom blank line instead of a row).
- * pfb_dnsbl_ndjson_parse_row() is this schema's strict reader.
+ * DNSBL interchange rows are compact tagged arrays: ["d", domain] or ["a", raw].
+ * The reader also accepts schema-v1 objects for upgrade compatibility.
  */
 function pfb_dnsbl_ndjson_emit_domain_row(string $domain, string $log, string $feed, string $group): string {
 	return json_encode(
-		array('kind' => 'domain', 'domain' => $domain, 'log' => $log, 'feed' => $feed, 'group' => $group),
+		array('d', $domain),
 		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
 	) . "\n";
 }
 
-// Schema v1 abp row -- see pfb_dnsbl_ndjson_emit_domain_row()'s docblock for the contract.
 function pfb_dnsbl_ndjson_emit_abp_row(string $raw): string {
 	return json_encode(
-		array('kind' => 'abp', 'raw' => $raw),
+		array('a', $raw),
 		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
 	) . "\n";
 }
 
-// Schema v1 strict reader -- see pfb_dnsbl_ndjson_emit_domain_row()'s docblock for the
-// contract. Returns the validated row, or NULL on any shape violation (undecodable
-// line, non-object, unknown/missing kind, a missing/empty/non-string required field).
 function pfb_dnsbl_ndjson_parse_row(string $line): ?array {
 	$row = json_decode($line, TRUE);
-	if (!is_array($row) || !array_key_exists('kind', $row)) {
+	if (!is_array($row)) {
+		return NULL;
+	}
+	$trimmed = ltrim($line);
+	if (str_starts_with($trimmed, '[')) {
+		if (count($row) !== 2 || array_keys($row) !== [0, 1] || !is_string($row[0]) ||
+			!is_string($row[1]) || $row[1] === '') {
+			return NULL;
+		}
+		if ($row[0] === 'd') {
+			return ['kind' => 'domain', 'domain' => $row[1]];
+		}
+		if ($row[0] === 'a') {
+			return ['kind' => 'abp', 'raw' => $row[1]];
+		}
+		return NULL;
+	}
+	if (!str_starts_with($trimmed, '{') || !array_key_exists('kind', $row)) {
 		return NULL;
 	}
 	if ($row['kind'] === 'domain') {
