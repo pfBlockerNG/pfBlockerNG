@@ -4284,13 +4284,17 @@ def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusio
 
     An empty ``tlds`` (TLD-Wildcard OFF, or no oracle staged) returns exact DATA
     for every domain BEFORE any classification runs (#1255) -- every branch below,
-    including the dcnt==2 suffix check, is oracle-present-only.
+    including the suffix-apex check, is oracle-present-only.
 
-    A bare 2-label string that is ITSELF a known public suffix (``co.uk``,
-    ``com.br``, ``gov.br``, ...) is the apex of that suffix, not a registrable
-    domain under it -- wildcarding it would block the WHOLE suffix. It
-    exact-blocks the apex only (DATA); it is never wildcarded and never
-    silently skipped (#1256).
+    A domain that is ITSELF a known public suffix, at ANY label count
+    (``co.uk``, ``com.br``, ``act.edu.au``, ``pvt.k12.ma.us``, ...) is the apex
+    of that suffix, not a registrable domain under it -- wildcarding it would
+    block the WHOLE suffix (every registrant under it). It exact-blocks the
+    apex only (DATA); it is never wildcarded and never silently skipped.
+    Checked once, ahead of the dcnt dispatch below, so this subsumes what was
+    originally a dcnt==2-only special case (#1256) -- the identical bug class
+    recurred one level deeper at dcnt==3..5 (#1476: e.g. ``act.edu.au``
+    blanket-wildcarding ``*.act.edu.au``).
     """
     if not tlds:
         return DNSBL_CLASS_DATA, domain
@@ -4300,7 +4304,12 @@ def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusio
     tld = dparts[-1]
     dfound = ""
 
-    if dcnt > 5:
+    if domain in tlds.get(tld, {}):
+        # The domain is itself a known public suffix -- its own apex, not a
+        # registrable name under it -> exact DATA, never a wildcard ZONE
+        # (#1256, generalized to every label count by #1476).
+        dfound = ""
+    elif dcnt > 5:
         dfound = ""
     elif dcnt == 5:
         dfound = _dnsbl_tld_wildcard_search(tlds, tld, dparts, 4, 5) or ""
@@ -4309,10 +4318,7 @@ def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusio
     elif dcnt == 3:
         dfound = _dnsbl_tld_wildcard_search(tlds, tld, dparts, 2, 3) or ""
     elif dcnt == 2:
-        candidate = ".".join(dparts[-2:])
-        # A candidate that is itself a known public suffix is the suffix apex,
-        # not a registrable domain -> exact DATA, never a wildcard ZONE (#1256).
-        dfound = "" if candidate in tlds.get(tld, {}) else candidate
+        dfound = domain
 
     # TLD exclusion: whole domain in the exclusion set -> force exact DATA.
     if domain in exclusion:
