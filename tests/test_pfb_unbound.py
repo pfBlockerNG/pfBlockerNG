@@ -141,51 +141,59 @@ def block_decision(**kw: Any) -> Any:
 
 class TestIsUnknown:
     def test_none_returns_unknown(self) -> None:
-        assert is_unknown(None) == "Unknown"
+        assert is_unknown(None) == "Unknown", f"expected 'Unknown', got {is_unknown(None)!r}"
 
     def test_empty_string_returns_unknown(self) -> None:
-        assert is_unknown("") == "Unknown"
+        assert is_unknown("") == "Unknown", f"expected 'Unknown', got {is_unknown('')!r}"
 
     def test_zero_returns_unknown(self) -> None:
-        assert is_unknown(0) == "Unknown"
+        assert is_unknown(0) == "Unknown", f"expected 'Unknown', got {is_unknown(0)!r}"
 
     def test_false_returns_unknown(self) -> None:
-        assert is_unknown(False) == "Unknown"
+        assert is_unknown(False) == "Unknown", f"expected 'Unknown', got {is_unknown(False)!r}"
 
     def test_nonempty_string_returned_as_is(self) -> None:
-        assert is_unknown("example.com") == "example.com"
+        assert is_unknown("example.com") == "example.com", f"expected 'example.com', got {is_unknown('example.com')!r}"
 
     def test_ip_string_returned_as_is(self) -> None:
-        assert is_unknown("192.168.1.1") == "192.168.1.1"
+        assert is_unknown("192.168.1.1") == "192.168.1.1", f"expected '192.168.1.1', got {is_unknown('192.168.1.1')!r}"
 
     def test_string_zero_returned_as_is(self) -> None:
         # '0' is a non-empty string, so it is not unknown
-        assert is_unknown("0") == "0"
+        assert is_unknown("0") == "0", f"expected '0', got {is_unknown('0')!r}"
 
     def test_nonzero_int_returned_as_is(self) -> None:
-        assert is_unknown(42) == 42
+        assert is_unknown(42) == 42, f"expected 42, got {is_unknown(42)!r}"
 
 
 class TestConvertIPv4:
     # x[2], x[3], x[4], x[5] are the four octets; x[0] and x[1] are ignored
 
     def test_standard_address(self) -> None:
-        assert convert_ipv4(bytes([0, 0, 192, 168, 1, 1])) == "192.168.1.1"
+        assert convert_ipv4(bytes([0, 0, 192, 168, 1, 1])) == "192.168.1.1", (
+            f"expected '192.168.1.1', got {convert_ipv4(bytes([0, 0, 192, 168, 1, 1]))!r}"
+        )
 
     def test_loopback(self) -> None:
-        assert convert_ipv4(bytes([0, 0, 127, 0, 0, 1])) == "127.0.0.1"
+        assert convert_ipv4(bytes([0, 0, 127, 0, 0, 1])) == "127.0.0.1", (
+            f"expected '127.0.0.1', got {convert_ipv4(bytes([0, 0, 127, 0, 0, 1]))!r}"
+        )
 
     def test_broadcast(self) -> None:
-        assert convert_ipv4(bytes([0, 0, 255, 255, 255, 255])) == "255.255.255.255"
+        assert convert_ipv4(bytes([0, 0, 255, 255, 255, 255])) == "255.255.255.255", (
+            f"expected '255.255.255.255', got {convert_ipv4(bytes([0, 0, 255, 255, 255, 255]))!r}"
+        )
 
     def test_all_zeros(self) -> None:
-        assert convert_ipv4(bytes([0, 0, 0, 0, 0, 0])) == "0.0.0.0"
+        assert convert_ipv4(bytes([0, 0, 0, 0, 0, 0])) == "0.0.0.0", (
+            f"expected '0.0.0.0', got {convert_ipv4(bytes([0, 0, 0, 0, 0, 0]))!r}"
+        )
 
     def test_empty_bytes_returns_unknown(self) -> None:
-        assert convert_ipv4(b"") == "Unknown"
+        assert convert_ipv4(b"") == "Unknown", f"expected 'Unknown', got {convert_ipv4(b'')!r}"
 
     def test_none_returns_unknown(self) -> None:
-        assert convert_ipv4(None) == "Unknown"
+        assert convert_ipv4(None) == "Unknown", f"expected 'Unknown', got {convert_ipv4(None)!r}"
 
 
 class TestConvertIPv6:
@@ -193,23 +201,29 @@ class TestConvertIPv6:
 
     def test_loopback(self) -> None:
         x = bytes([0, 0] + [0] * 15 + [1])
-        assert convert_ipv6(x) == "0000:0000:0000:0000:0000:0000:0000:0001"
+        assert convert_ipv6(x) == "0000:0000:0000:0000:0000:0000:0000:0001", (
+            f"expected '0000:0000:0000:0000:0000:0000:0000:0001', got {convert_ipv6(x)!r}"
+        )
 
     def test_known_prefix(self) -> None:
         # 2001:0db8::1
         x = bytes([0, 0, 0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
-        assert convert_ipv6(x) == "2001:0db8:0000:0000:0000:0000:0000:0001"
+        assert convert_ipv6(x) == "2001:0db8:0000:0000:0000:0000:0000:0001", (
+            f"expected '2001:0db8:0000:0000:0000:0000:0000:0001', got {convert_ipv6(x)!r}"
+        )
 
     def test_all_zeros_not_unknown(self) -> None:
         # All-zeros IPv6 address is a valid (if unusual) value
         x = bytes([0, 0] + [0] * 16)
-        assert convert_ipv6(x) == "0000:0000:0000:0000:0000:0000:0000:0000"
+        assert convert_ipv6(x) == "0000:0000:0000:0000:0000:0000:0000:0000", (
+            f"expected '0000:0000:0000:0000:0000:0000:0000:0000', got {convert_ipv6(x)!r}"
+        )
 
     def test_empty_bytes_returns_unknown(self) -> None:
-        assert convert_ipv6(b"") == "Unknown"
+        assert convert_ipv6(b"") == "Unknown", f"expected 'Unknown', got {convert_ipv6(b'')!r}"
 
     def test_none_returns_unknown(self) -> None:
-        assert convert_ipv6(None) == "Unknown"
+        assert convert_ipv6(None) == "Unknown", f"expected 'Unknown', got {convert_ipv6(None)!r}"
 
 
 def _rr_dname(name: str) -> bytes:
@@ -239,13 +253,17 @@ class TestConvertOther:
         # A label longer than the old scrape's accidental 1..12 "dot" window must NOT
         # merge with its neighbour. RED today: the 16-char label yields "wwwgoogleadservices.com".
         x = _rr_dname("www.googleadservices.com")
-        assert convert_other(x) == "www.googleadservices.com"
+        assert convert_other(x) == "www.googleadservices.com", (
+            f"expected 'www.googleadservices.com', got {convert_other(x)!r}"
+        )
 
     def test_interior_13char_label_decodes_whole_name(self) -> None:
         # The old scrape treated the length octet 13 as a "carriage return" that stops
         # decoding entirely. RED today: truncates to "www".
         x = _rr_dname("www.thirteenchars.com")
-        assert convert_other(x) == "www.thirteenchars.com"
+        assert convert_other(x) == "www.thirteenchars.com", (
+            f"expected 'www.thirteenchars.com', got {convert_other(x)!r}"
+        )
 
     def test_interior_40char_label_decodes_whole_name(self) -> None:
         # A 34-63 length octet fell into the old scrape's `else: chr(val)` branch and was
@@ -253,7 +271,7 @@ class TestConvertOther:
         # "(" is chr(40), the label's own length octet leaking into the output).
         label = "a" * 40
         x = _rr_dname(f"www.{label}.com")
-        assert convert_other(x) == f"www.{label}.com"
+        assert convert_other(x) == f"www.{label}.com", f"expected {f'www.{label}.com'!r}, got {convert_other(x)!r}"
 
     def test_label_content_byte_above_126_is_preserved(self) -> None:
         # Label content is arbitrary binary (RFC 2181 SS11) -- a byte > 126 is part of
@@ -261,14 +279,14 @@ class TestConvertOther:
         # `val <= 33 or val > 126: continue` silently dropped it ("ab" instead of "a\xe9b").
         wire = bytes([3]) + b"www" + bytes([3]) + bytes([ord("a"), 0xE9, ord("b")]) + bytes([3]) + b"com" + b"\x00"
         x = bytes([0, len(wire)]) + wire
-        assert convert_other(x) == "www.a\xe9b.com"
+        assert convert_other(x) == "www.a\xe9b.com", f"expected 'www.aéb.com', got {convert_other(x)!r}"
 
     def test_plain_two_label_name_decodes_unchanged(self) -> None:
         # No regression on the short-label path: every label here already fit inside the
         # old scrape's accidental 1..12 "dot" window, so this is green both before and
         # after the decoder rewrite.
         x = _rr_dname("example.com")
-        assert convert_other(x) == "example.com"
+        assert convert_other(x) == "example.com", f"expected 'example.com', got {convert_other(x)!r}"
 
     def test_root_only_dname_is_unknown(self) -> None:
         # A bare zero-length root label (no preceding labels) is the empty name --
@@ -276,7 +294,7 @@ class TestConvertOther:
         # "empty payload" case (b"\x00\x00\x00"), which meant something different under
         # the retired x[3:]-scrape contract; this is its wire-format-shaped replacement.
         x = bytes([0, 1, 0])
-        assert convert_other(x) == "Unknown"
+        assert convert_other(x) == "Unknown", f"expected 'Unknown', got {convert_other(x)!r}"
 
     def test_length_octet_over_63_is_malformed(self) -> None:
         # A length octet with the top two bits set (>63 -- e.g. the DNS compression-
@@ -285,37 +303,37 @@ class TestConvertOther:
         # the old scrape read past it and emitted "*" (chr(42) from the pointer's low
         # offset byte).
         x = bytes([0, 2, 0xC0, 0x2A])
-        assert convert_other(x) == "Unknown"
+        assert convert_other(x) == "Unknown", f"expected 'Unknown', got {convert_other(x)!r}"
 
     def test_label_length_overrunning_buffer_is_malformed(self) -> None:
         # A length octet claiming more bytes than remain in the buffer is malformed;
         # fail safe to "Unknown". RED today: the old scrape ignored the claimed length
         # entirely and just echoed the leftover bytes ("ab").
         x = bytes([0, 3, 10, ord("a"), ord("b")])
-        assert convert_other(x) == "Unknown"
+        assert convert_other(x) == "Unknown", f"expected 'Unknown', got {convert_other(x)!r}"
 
     def test_empty_bytes_returns_unknown(self) -> None:
-        assert convert_other(b"") == "Unknown"
+        assert convert_other(b"") == "Unknown", f"expected 'Unknown', got {convert_other(b'')!r}"
 
     def test_none_returns_unknown(self) -> None:
-        assert convert_other(None) == "Unknown"
+        assert convert_other(None) == "Unknown", f"expected 'Unknown', got {convert_other(None)!r}"
 
     def test_63_char_label_is_the_valid_maximum(self) -> None:
         # RFC 1035 SS2.3.4 caps a label at 63 octets: exactly 63 decodes whole...
         name = "www." + "a" * 63 + ".com"
-        assert convert_other(_rr_dname(name)) == name
+        assert convert_other(_rr_dname(name)) == name, f"expected {name!r}, got {convert_other(_rr_dname(name))!r}"
 
     def test_64_char_label_is_malformed_without_overrun(self) -> None:
         # ...and 64 is malformed on the length octet ALONE -- the buffer holds enough
         # bytes that no overrun occurs, isolating the >63 branch from the overrun branch.
         wire = bytes([3]) + b"www" + bytes([64]) + b"a" * 64 + bytes([3]) + b"com" + b"\x00"
         x = len(wire).to_bytes(2, "big") + wire
-        assert convert_other(x) == "Unknown"
+        assert convert_other(x) == "Unknown", f"expected 'Unknown', got {convert_other(x)!r}"
 
     def test_truthy_input_with_empty_body_is_unknown(self) -> None:
         # A 2-byte rr_data (just the length prefix, no dname bytes at all) is truthy
         # yet decodes to the empty name -- distinct from the b""/None short-circuits.
-        assert convert_other(bytes([0, 5])) == "Unknown"
+        assert convert_other(bytes([0, 5])) == "Unknown", f"expected 'Unknown', got {convert_other(bytes([0, 5]))!r}"
 
     def test_txt_character_string_without_root_terminator_decodes(self) -> None:
         # The reply logger (the non-A/AAAA branch of get_details_reply's rrset loop) feeds TXT rdata through this same
@@ -324,7 +342,7 @@ class TestConvertOther:
         # a defined shape -- the buffer simply ends when the label's content is
         # exhausted, with no explicit terminator required. Green both before and after.
         x = b"\x00\x06" + b"\x05hello"
-        assert convert_other(x) == "hello"
+        assert convert_other(x) == "hello", f"expected 'hello', got {convert_other(x)!r}"
 
     def test_mx_style_rdata_reads_as_root_and_is_unknown(self) -> None:
         # ACCEPTED logging-only change: MX rdata carries a 2-byte preference field
@@ -334,82 +352,92 @@ class TestConvertOther:
         # reply logger ever feeds MX rdata through convert_other(); the DNSBL
         # CNAME walk only ever passes CNAME rdata, which has no such leading field.
         x = bytes([0, 11]) + b"\x00\x0a" + bytes([3]) + b"foo" + bytes([3]) + b"com" + b"\x00"
-        assert convert_other(x) == "Unknown"
+        assert convert_other(x) == "Unknown", f"expected 'Unknown', got {convert_other(x)!r}"
 
 
 class TestPythonControlDuration:
     def test_valid_duration(self) -> None:
-        assert python_control_duration("60") == 60
+        assert python_control_duration("60") == 60, f"expected 60, got {python_control_duration('60')!r}"
 
     def test_minimum_valid(self) -> None:
-        assert python_control_duration("1") == 1
+        assert python_control_duration("1") == 1, f"expected 1, got {python_control_duration('1')!r}"
 
     def test_maximum_valid(self) -> None:
-        assert python_control_duration("3600") == 3600
+        assert python_control_duration("3600") == 3600, f"expected 3600, got {python_control_duration('3600')!r}"
 
     def test_zero_rejected(self) -> None:
-        assert python_control_duration("0") is False
+        assert python_control_duration("0") is False, f"expected False, got {python_control_duration('0')!r}"
 
     def test_above_maximum_rejected(self) -> None:
-        assert python_control_duration("3601") is False
+        assert python_control_duration("3601") is False, f"expected False, got {python_control_duration('3601')!r}"
 
     def test_non_numeric_rejected(self) -> None:
-        assert python_control_duration("abc") is False
+        assert python_control_duration("abc") is False, f"expected False, got {python_control_duration('abc')!r}"
 
     def test_negative_rejected(self) -> None:
         # isnumeric() returns False for strings with a leading '-'
-        assert python_control_duration("-1") is False
+        assert python_control_duration("-1") is False, f"expected False, got {python_control_duration('-1')!r}"
 
     def test_empty_string_rejected(self) -> None:
-        assert python_control_duration("") is False
+        assert python_control_duration("") is False, f"expected False, got {python_control_duration('')!r}"
 
     def test_none_rejected(self) -> None:
         # AttributeError on None.isnumeric() is caught internally
-        assert python_control_duration(None) is False
+        assert python_control_duration(None) is False, f"expected False, got {python_control_duration(None)!r}"
 
 
 class TestGetQIpComm:
     def test_pfb_addr_key_present(self) -> None:
         kwargs = {"pfb_addr": "1.2.3.4"}
-        assert pfb_unbound.get_q_ip_comm(kwargs) == "1.2.3.4"
+        assert pfb_unbound.get_q_ip_comm(kwargs) == "1.2.3.4", (
+            f"expected '1.2.3.4', got {pfb_unbound.get_q_ip_comm(kwargs)!r}"
+        )
 
     def test_fallback_to_repinfo_addr(self) -> None:
         kwargs = {"repinfo": types.SimpleNamespace(addr="5.6.7.8")}
-        assert pfb_unbound.get_q_ip_comm(kwargs) == "5.6.7.8"
+        assert pfb_unbound.get_q_ip_comm(kwargs) == "5.6.7.8", (
+            f"expected '5.6.7.8', got {pfb_unbound.get_q_ip_comm(kwargs)!r}"
+        )
 
     def test_pfb_addr_takes_precedence(self) -> None:
         kwargs = {"pfb_addr": "1.2.3.4", "repinfo": types.SimpleNamespace(addr="5.6.7.8")}
-        assert pfb_unbound.get_q_ip_comm(kwargs) == "1.2.3.4"
+        assert pfb_unbound.get_q_ip_comm(kwargs) == "1.2.3.4", (
+            f"expected '1.2.3.4', got {pfb_unbound.get_q_ip_comm(kwargs)!r}"
+        )
 
     def test_empty_kwargs_returns_unknown(self) -> None:
-        assert pfb_unbound.get_q_ip_comm({}) == "Unknown"
+        assert pfb_unbound.get_q_ip_comm({}) == "Unknown", f"expected 'Unknown', got {pfb_unbound.get_q_ip_comm({})!r}"
 
     def test_none_kwargs_returns_unknown(self) -> None:
-        assert pfb_unbound.get_q_ip_comm(None) == "Unknown"
+        assert pfb_unbound.get_q_ip_comm(None) == "Unknown", (
+            f"expected 'Unknown', got {pfb_unbound.get_q_ip_comm(None)!r}"
+        )
 
     def test_repinfo_empty_addr_returns_unknown(self) -> None:
         kwargs = {"repinfo": types.SimpleNamespace(addr="")}
-        assert pfb_unbound.get_q_ip_comm(kwargs) == "Unknown"
+        assert pfb_unbound.get_q_ip_comm(kwargs) == "Unknown", (
+            f"expected 'Unknown', got {pfb_unbound.get_q_ip_comm(kwargs)!r}"
+        )
 
 
 class TestLogEntry:
     def test_normal_write(self, tmp_path: Any) -> None:
         log = tmp_path / "dnsbl.log"
         pfb_unbound._log_entry_direct("a,b,c", str(log))
-        assert log.read_text() == "a,b,c\n"
+        assert log.read_text() == "a,b,c\n", f"expected 'a,b,c\n', got {log.read_text()!r}"
 
     def test_multiple_calls_accumulate(self, tmp_path: Any) -> None:
         log = tmp_path / "dnsbl.log"
         pfb_unbound._log_entry_direct("line1", str(log))
         pfb_unbound._log_entry_direct("line2", str(log))
-        assert log.read_text() == "line1\nline2\n"
+        assert log.read_text() == "line1\nline2\n", f"expected 'line1\nline2\n', got {log.read_text()!r}"
 
     def test_file_created_when_missing(self, tmp_path: Any) -> None:
         log = tmp_path / "sub" / "dnsbl.log"
         log.parent.mkdir()
-        assert not log.exists()
+        assert not log.exists(), f"expected falsy, got {log.exists()!r}"
         pfb_unbound._log_entry_direct("x", str(log))
-        assert log.exists()
+        assert log.exists(), f"expected truthy, got {log.exists()!r}"
 
 
 class TestDbSubsystem:
@@ -424,12 +452,16 @@ class TestDbSubsystem:
 
     def test_validate_creates_table_and_seed_row(self, tmp_path: Any) -> None:
         db = self._resolver(tmp_path)
-        assert pfb_unbound.pfb_db_validate(pfb_unbound.DB_RESOLVER) is True
+        assert pfb_unbound.pfb_db_validate(pfb_unbound.DB_RESOLVER) is True, (
+            f"expected True, got {pfb_unbound.pfb_db_validate(pfb_unbound.DB_RESOLVER)!r}"
+        )
         import sqlite3
 
         con = sqlite3.connect(db)
         try:
-            assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 0
+            assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 0, (
+                f"expected 0, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
+            )
         finally:
             con.close()
 
@@ -442,7 +474,9 @@ class TestDbSubsystem:
         try:
             pfb_unbound._db_create(pfb_unbound.DB_RESOLVER, con.cursor())
             con.commit()
-            assert con.execute("SELECT totalqueries FROM resolver").fetchall() == [(0,)]  # before: single seed at 0
+            assert con.execute("SELECT totalqueries FROM resolver").fetchall() == [(0,)], (
+                f"expected [(0,)], got {con.execute('SELECT totalqueries FROM resolver').fetchall()!r}"
+            )  # before: single seed at 0
             con.execute("UPDATE resolver SET totalqueries = totalqueries + 7 WHERE row = 0")
             con.commit()
 
@@ -450,7 +484,9 @@ class TestDbSubsystem:
             con.commit()
 
             # Single row, counter preserved (not reset to 0, not duplicated).
-            assert con.execute("SELECT totalqueries FROM resolver").fetchall() == [(7,)]
+            assert con.execute("SELECT totalqueries FROM resolver").fetchall() == [(7,)], (
+                f"expected [(7,)], got {con.execute('SELECT totalqueries FROM resolver').fetchall()!r}"
+            )
         finally:
             con.close()
 
@@ -459,7 +495,9 @@ class TestDbSubsystem:
         for _ in range(5):
             pfb_unbound.pfb_db_enqueue(("resolver",))
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
-        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 5
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 5, (
+            f"expected 5, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
+        )
 
     def test_resolver_counting_gated_by_flag(self, tmp_path: Any) -> None:
         db = str(tmp_path / "resolver.sqlite")
@@ -467,7 +505,9 @@ class TestDbSubsystem:
         pfb_unbound.pfb["sqlite3_resolver_con"] = False
         pfb_unbound.pfb_db_enqueue(("resolver",))
         # Gated off -> no connection opened, nothing written.
-        assert pfb_unbound.DB_RESOLVER not in pfb_unbound._db_conns
+        assert pfb_unbound.DB_RESOLVER not in pfb_unbound._db_conns, (
+            f"expected {pfb_unbound.DB_RESOLVER!r} not in {pfb_unbound._db_conns!r}"
+        )
 
     def test_relative_increment_survives_concurrent_reset(self, tmp_path: Any) -> None:
         db = self._resolver(tmp_path)
@@ -484,7 +524,9 @@ class TestDbSubsystem:
             other.close()
         pfb_unbound.pfb_db_enqueue(("resolver",))  # relative += 1, must not clobber the reset
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
-        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 1
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 1, (
+            f"expected 1, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
+        )
 
     def test_dnsbl_counter_per_group(self, tmp_path: Any) -> None:
         db = str(tmp_path / "dnsbl.sqlite")
@@ -498,8 +540,14 @@ class TestDbSubsystem:
         for _ in range(3):
             pfb_unbound.pfb_db_enqueue(("dnsbl", "G1"))
         pfb_unbound.pfb_db_enqueue(("dnsbl", "G2"))
-        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G1'").fetchone()[0] == 3
-        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G2'").fetchone()[0] == 1
+        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G1'").fetchone()[0] == 3, (
+            f"""expected 3"""
+            f""", got {con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G1'").fetchone()[0]!r}"""
+        )
+        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G2'").fetchone()[0] == 1, (
+            f"""expected 1"""
+            f""", got {con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G2'").fetchone()[0]!r}"""
+        )
 
     def test_reconnect_after_db_removed(self, tmp_path: Any) -> None:
         # pfb removes a DB file underneath us (init / write-error path); the next
@@ -514,7 +562,9 @@ class TestDbSubsystem:
             _os.remove(db)
         pfb_unbound.pfb_db_enqueue(("resolver",))  # reconnect + re-create + write
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
-        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 1
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 1, (
+            f"expected 1, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
+        )
 
     def test_worker_batches_and_flushes(self, tmp_path: Any) -> None:
         import queue as _queue
@@ -530,11 +580,13 @@ class TestDbSubsystem:
                 pfb_unbound.pfb_db_enqueue(("resolver",))
             pfb_unbound.pfb_db_queue.put(("stop",))
             th.join(timeout=5)
-            assert not th.is_alive()
+            assert not th.is_alive(), f"expected falsy, got {th.is_alive()!r}"
         finally:
             pfb_unbound.pfb["db_worker"] = False
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
-        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 10
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 10, (
+            f"expected 10, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
+        )
 
     # -- issue #771: _db_connect PRAGMA observability ----------------------------
 
@@ -582,7 +634,9 @@ class TestDbSubsystem:
                 f"expected a PRAGMA-failure log line with the exception text, stderr was: {err!r}"
             )
             # Connect survived the pragma failure: table created and seed row present.
-            assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 0
+            assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 0, (
+                f"expected 0, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
+            )
         finally:
             con.close()
 
@@ -667,7 +721,9 @@ class TestDbConcurrencyAndPerf:
         assert errors == [], errors  # no 'database is locked'
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
         # Every increment from both writers was applied (relative += 1, no clobber).
-        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 2 * n
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 2 * n, (
+            f"expected {2 * n!r}, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
+        )
 
     def test_persistent_connection_single_connect(self, tmp_path: Any, monkeypatch: Any) -> None:
         import sqlite3
@@ -687,9 +743,11 @@ class TestDbConcurrencyAndPerf:
         for _ in range(20):
             pfb_unbound.pfb_db_enqueue(("resolver",))
         # Persistent: one connect for 20 writes (the per-call design connected 20 times).
-        assert count["n"] == 1
+        assert count["n"] == 1, f"expected 1, got {count['n']!r}"
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
-        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 20
+        assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 20, (
+            f"expected 20, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
+        )
 
 
 class TestLogging:
@@ -744,21 +802,21 @@ class TestLogging:
 class TestGetRepTtl:
     def test_ttl_present(self) -> None:
         rep = types.SimpleNamespace(ttl=300)
-        assert pfb_unbound.get_rep_ttl(rep) == "300"
+        assert pfb_unbound.get_rep_ttl(rep) == "300", f"expected '300', got {pfb_unbound.get_rep_ttl(rep)!r}"
 
     def test_none_rep_returns_unk(self) -> None:
-        assert pfb_unbound.get_rep_ttl(None) == "Unk"
+        assert pfb_unbound.get_rep_ttl(None) == "Unk", f"expected 'Unk', got {pfb_unbound.get_rep_ttl(None)!r}"
 
     def test_zero_ttl_reported_as_zero(self) -> None:
         # TTL 0 is a real, meaningful value (RFC 2181 s8: deliverable, non-cacheable)
         # -- it must reach the DNS-reply log as "0", never masked as unknown (#723).
         rep = types.SimpleNamespace(ttl=0)
-        assert pfb_unbound.get_rep_ttl(rep) == "0"
+        assert pfb_unbound.get_rep_ttl(rep) == "0", f"expected '0', got {pfb_unbound.get_rep_ttl(rep)!r}"
 
     def test_absent_ttl_returns_unk(self) -> None:
         # Only a genuinely missing TTL (no value on the reply) is unknown.
         rep = types.SimpleNamespace(ttl=None)
-        assert pfb_unbound.get_rep_ttl(rep) == "Unk"
+        assert pfb_unbound.get_rep_ttl(rep) == "Unk", f"expected 'Unk', got {pfb_unbound.get_rep_ttl(rep)!r}"
 
 
 class TestPythonControlThread:
@@ -769,60 +827,82 @@ class TestPythonControlThread:
         t = threading.Thread(name="pfb-test-thread", target=stop.wait, daemon=True)
         t.start()
         try:
-            assert pfb_unbound.python_control_thread("pfb-test-thread") is True
+            assert pfb_unbound.python_control_thread("pfb-test-thread") is True, (
+                f"expected True, got {pfb_unbound.python_control_thread('pfb-test-thread')!r}"
+            )
         finally:
             stop.set()
             t.join()
 
     def test_unknown_thread_returns_false(self) -> None:
-        assert pfb_unbound.python_control_thread("nonexistent-thread-xyz") is False
+        assert pfb_unbound.python_control_thread("nonexistent-thread-xyz") is False, (
+            f"expected False, got {pfb_unbound.python_control_thread('nonexistent-thread-xyz')!r}"
+        )
 
 
 class TestGetQNameQstate:
     def test_primary_strips_trailing_dot(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_str="example.com."), return_msg=None)
-        assert pfb_unbound.get_q_name_qstate(qstate) == "example.com"
+        assert pfb_unbound.get_q_name_qstate(qstate) == "example.com", (
+            f"expected 'example.com', got {pfb_unbound.get_q_name_qstate(qstate)!r}"
+        )
 
     def test_fallback_to_return_msg(self) -> None:
         qstate = types.SimpleNamespace(
             qinfo=types.SimpleNamespace(qname_str="   "),
             return_msg=types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_str="fallback.com.")),
         )
-        assert pfb_unbound.get_q_name_qstate(qstate) == "fallback.com"
+        assert pfb_unbound.get_q_name_qstate(qstate) == "fallback.com", (
+            f"expected 'fallback.com', got {pfb_unbound.get_q_name_qstate(qstate)!r}"
+        )
 
     def test_both_empty_returns_unknown(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_str=""), return_msg=None)
-        assert pfb_unbound.get_q_name_qstate(qstate) == "Unknown"
+        assert pfb_unbound.get_q_name_qstate(qstate) == "Unknown", (
+            f"expected 'Unknown', got {pfb_unbound.get_q_name_qstate(qstate)!r}"
+        )
 
 
 class TestGetQNameQinfo:
     def test_present_stripped(self) -> None:
         qinfo = types.SimpleNamespace(qname_str="example.com.")
-        assert pfb_unbound.get_q_name_qinfo(qinfo) == "example.com"
+        assert pfb_unbound.get_q_name_qinfo(qinfo) == "example.com", (
+            f"expected 'example.com', got {pfb_unbound.get_q_name_qinfo(qinfo)!r}"
+        )
 
     def test_whitespace_returns_unknown(self) -> None:
         qinfo = types.SimpleNamespace(qname_str="   ")
-        assert pfb_unbound.get_q_name_qinfo(qinfo) == "Unknown"
+        assert pfb_unbound.get_q_name_qinfo(qinfo) == "Unknown", (
+            f"expected 'Unknown', got {pfb_unbound.get_q_name_qinfo(qinfo)!r}"
+        )
 
     def test_none_returns_unknown(self) -> None:
-        assert pfb_unbound.get_q_name_qinfo(None) == "Unknown"
+        assert pfb_unbound.get_q_name_qinfo(None) == "Unknown", (
+            f"expected 'Unknown', got {pfb_unbound.get_q_name_qinfo(None)!r}"
+        )
 
 
 class TestGetQType:
     def test_prefers_qstate(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qtype_str="A"))
         qinfo = types.SimpleNamespace(qtype_str="AAAA")
-        assert pfb_unbound.get_q_type(qstate, qinfo) == "A"
+        assert pfb_unbound.get_q_type(qstate, qinfo) == "A", (
+            f"expected 'A', got {pfb_unbound.get_q_type(qstate, qinfo)!r}"
+        )
 
     def test_falls_back_to_qinfo(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qtype_str=""))
         qinfo = types.SimpleNamespace(qtype_str="AAAA")
-        assert pfb_unbound.get_q_type(qstate, qinfo) == "AAAA"
+        assert pfb_unbound.get_q_type(qstate, qinfo) == "AAAA", (
+            f"expected 'AAAA', got {pfb_unbound.get_q_type(qstate, qinfo)!r}"
+        )
 
     def test_both_none_returns_unknown(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qtype_str=""))
         qinfo = types.SimpleNamespace(qtype_str="")
-        assert pfb_unbound.get_q_type(qstate, qinfo) == "Unknown"
+        assert pfb_unbound.get_q_type(qstate, qinfo) == "Unknown", (
+            f"expected 'Unknown', got {pfb_unbound.get_q_type(qstate, qinfo)!r}"
+        )
 
 
 class TestGetDetailsDnsblQtype:
@@ -875,8 +955,8 @@ class TestGetDetailsDnsblQtype:
         lines = self._prep(monkeypatch)
         self._block("AAAA")
         (fields,) = self._dnsbl_fields(lines)
-        assert fields[0] == "DNSBL-python"
-        assert fields[10] == "AAAA"  # query type appended after dupEntry
+        assert fields[0] == "DNSBL-python", f"expected 'DNSBL-python', got {fields[0]!r}"
+        assert fields[10] == "AAAA", f"expected 'AAAA', got {fields[10]!r}"  # query type appended after dupEntry
 
     def test_dual_stack_pair_both_count(self, monkeypatch: Any) -> None:
         # A then AAAA for the SAME name: the old qtype-blind dedup collapsed the
@@ -885,8 +965,10 @@ class TestGetDetailsDnsblQtype:
         self._block("A")
         self._block("AAAA")
         a_fields, aaaa_fields = self._dnsbl_fields(lines)
-        assert (a_fields[9], a_fields[10]) == ("+", "A")
-        assert (aaaa_fields[9], aaaa_fields[10]) == ("+", "AAAA")
+        assert (a_fields[9], a_fields[10]) == ("+", "A"), f"expected ('+', 'A'), got {(a_fields[9], a_fields[10])!r}"
+        assert (aaaa_fields[9], aaaa_fields[10]) == ("+", "AAAA"), (
+            f"expected ('+', 'AAAA'), got {(aaaa_fields[9], aaaa_fields[10])!r}"
+        )
 
     def test_same_qtype_repeat_is_duplicate(self, monkeypatch: Any) -> None:
         # A true consecutive repeat (same name AND same record type) still dedups.
@@ -894,8 +976,8 @@ class TestGetDetailsDnsblQtype:
         self._block("AAAA")
         self._block("AAAA")
         first, second = self._dnsbl_fields(lines)
-        assert first[9] == "+"
-        assert second[9] == "-"
+        assert first[9] == "+", f"expected '+', got {first[9]!r}"
+        assert second[9] == "-", f"expected '-', got {second[9]!r}"
 
     def test_distinct_names_not_deduped(self, monkeypatch: Any) -> None:
         # Two different names blocked by the SAME list entry share an identical
@@ -929,8 +1011,8 @@ class TestGetDetailsDnsblQtype:
             )
             pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, {"pfb_addr": "1.2.3.4"}, dec)
         a_fields, b_fields = self._dnsbl_fields(lines)
-        assert a_fields[9] == "+"
-        assert b_fields[9] == "+"
+        assert a_fields[9] == "+", f"expected '+', got {a_fields[9]!r}"
+        assert b_fields[9] == "+", f"expected '+', got {b_fields[9]!r}"
 
     def test_mixed_case_query_is_attributed(self, monkeypatch: Any) -> None:
         # issue #1094: the served verdict rides by value now, so a mixed-case query
@@ -948,7 +1030,9 @@ class TestGetDetailsDnsblQtype:
             return_msg=None,
         )
         pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, {"pfb_addr": "1.2.3.4"}, self._dnsbl())
-        assert len(self._dnsbl_fields(lines)) == 1  # attributed despite mixed-case query
+        assert len(self._dnsbl_fields(lines)) == 1, (
+            f"expected 1, got {len(self._dnsbl_fields(lines))!r}"
+        )  # attributed despite mixed-case query
 
 
 class TestGetDetailsDnsblNxdomain:
@@ -986,13 +1070,13 @@ class TestGetDetailsDnsblNxdomain:
     def test_nxdomain_logging_writes_a_line(self, monkeypatch: Any) -> None:
         # Then the "3" variant records the block to dnsbl.log
         lines = self._emit(monkeypatch, "3")
-        assert any(path.endswith("dnsbl.log") for path, _ in lines)
+        assert any(path.endswith("dnsbl.log") for path, _ in lines), f"expected a match in {lines!r}"
 
     def test_nxdomain_no_logging_is_silent(self, monkeypatch: Any) -> None:
         # Then the "4" variant writes nothing -- contrast the "3" case: same NXDOMAIN
         # block, logging flag flipped, proves the skip gate is a real branch.
         lines = self._emit(monkeypatch, "4")
-        assert lines == []
+        assert lines == [], f"expected [], got {lines!r}"
 
 
 class TestGetDetailsDnsblUnsetGuard:
@@ -1012,7 +1096,7 @@ class TestGetDetailsDnsblUnsetGuard:
 
         result = pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, {"pfb_addr": "1.2.3.4"}, pfb_unbound.UNSET)
 
-        assert result is True
+        assert result is True, f"expected True, got {result!r}"
         assert not any(path.endswith("dnsbl.log") for path, _ in lines), lines
 
 
@@ -1024,20 +1108,28 @@ class TestGetOType:
             return_msg=types.SimpleNamespace(rep=types.SimpleNamespace(rrsets=[rrset])),
             qinfo=types.SimpleNamespace(qtype_str="AAAA"),
         )
-        assert pfb_unbound.get_o_type(qstate, None) == "A"
+        assert pfb_unbound.get_o_type(qstate, None) == "A", (
+            f"expected 'A', got {pfb_unbound.get_o_type(qstate, None)!r}"
+        )
 
     def test_qinfo_qtype_branch(self) -> None:
         qstate = types.SimpleNamespace(return_msg=None, qinfo=types.SimpleNamespace(qtype_str="AAAA"))
-        assert pfb_unbound.get_o_type(qstate, None) == "AAAA"
+        assert pfb_unbound.get_o_type(qstate, None) == "AAAA", (
+            f"expected 'AAAA', got {pfb_unbound.get_o_type(qstate, None)!r}"
+        )
 
     def test_rep_branch(self) -> None:
         rk = types.SimpleNamespace(type_str="TXT")
         rep = types.SimpleNamespace(rrsets=[types.SimpleNamespace(rk=rk)])
         qstate = types.SimpleNamespace(return_msg=None, qinfo=types.SimpleNamespace(qtype_str=""))
-        assert pfb_unbound.get_o_type(qstate, rep) == "TXT"
+        assert pfb_unbound.get_o_type(qstate, rep) == "TXT", (
+            f"expected 'TXT', got {pfb_unbound.get_o_type(qstate, rep)!r}"
+        )
 
     def test_no_qstate_returns_unknown(self) -> None:
-        assert pfb_unbound.get_o_type(None, None) == "Unknown"
+        assert pfb_unbound.get_o_type(None, None) == "Unknown", (
+            f"expected 'Unknown', got {pfb_unbound.get_o_type(None, None)!r}"
+        )
 
 
 class TestGetTld:
@@ -1047,20 +1139,20 @@ class TestGetTld:
     # root label is what makes these assert the real TLD rather than the SLD (#706).
     def test_multilabel(self) -> None:
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["sub", "example", "com", ""]))
-        assert pfb_unbound.get_tld(qstate) == "com"
+        assert pfb_unbound.get_tld(qstate) == "com", f"expected 'com', got {pfb_unbound.get_tld(qstate)!r}"
 
     def test_tld_only_query(self) -> None:
         # A bare-TLD query "com." -> ["com", ""]; [-2] is the TLD itself.
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["com", ""]))
-        assert pfb_unbound.get_tld(qstate) == "com"
+        assert pfb_unbound.get_tld(qstate) == "com", f"expected 'com', got {pfb_unbound.get_tld(qstate)!r}"
 
     def test_root_query_returns_empty(self) -> None:
         # The root query "." -> [""] is the only len<=1 case in production; no TLD.
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=[""]))
-        assert pfb_unbound.get_tld(qstate) == ""
+        assert pfb_unbound.get_tld(qstate) == "", f"expected '', got {pfb_unbound.get_tld(qstate)!r}"
 
     def test_none_qstate_returns_empty(self) -> None:
-        assert pfb_unbound.get_tld(None) == ""
+        assert pfb_unbound.get_tld(None) == "", f"expected '', got {pfb_unbound.get_tld(None)!r}"
 
     def test_mixed_case_wire_label_is_lowercased(self) -> None:
         # RFC 4343: DNS name comparison is case-insensitive, but production Unbound's
@@ -1069,7 +1161,7 @@ class TestGetTld:
         # mixed-case wire label must still resolve to the lowercase TLD -- else a
         # membership test against those lists silently mismatches (#720).
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["sub", "ExAmPlE", "CoM", ""]))
-        assert pfb_unbound.get_tld(qstate) == "com"
+        assert pfb_unbound.get_tld(qstate) == "com", f"expected 'com', got {pfb_unbound.get_tld(qstate)!r}"
 
     def test_invalid_utf8_qname_returns_empty_not_raise(self) -> None:
         # Regression (issue #328): a qname carrying an invalid UTF-8 byte (0xdc) makes
@@ -1081,7 +1173,7 @@ class TestGetTld:
                 raise UnicodeDecodeError("utf-8", b"\xdc", 0, 1, "invalid continuation byte")
 
         qstate = types.SimpleNamespace(qinfo=_RaisingQinfo())
-        assert pfb_unbound.get_tld(qstate) == ""
+        assert pfb_unbound.get_tld(qstate) == "", f"expected '', got {pfb_unbound.get_tld(qstate)!r}"
 
 
 class TestGetTldFromName:
@@ -1090,21 +1182,29 @@ class TestGetTldFromName:
     # own TLD, not its second-level label. Pre-#706 this returned parts[-2] (the SLD),
     # so a target whose TLD was allowed was falsely blocked. (#706)
     def test_multilabel(self) -> None:
-        assert pfb_unbound.get_tld_from_name("sub.example.com") == "com"
-        assert pfb_unbound.get_tld_from_name("evil.net") == "net"
+        assert pfb_unbound.get_tld_from_name("sub.example.com") == "com", (
+            f"expected 'com', got {pfb_unbound.get_tld_from_name('sub.example.com')!r}"
+        )
+        assert pfb_unbound.get_tld_from_name("evil.net") == "net", (
+            f"expected 'net', got {pfb_unbound.get_tld_from_name('evil.net')!r}"
+        )
 
     def test_trailing_dot_ignored(self) -> None:
-        assert pfb_unbound.get_tld_from_name("evil.net.") == "net"
+        assert pfb_unbound.get_tld_from_name("evil.net.") == "net", (
+            f"expected 'net', got {pfb_unbound.get_tld_from_name('evil.net.')!r}"
+        )
 
     def test_single_label_returns_empty(self) -> None:
-        assert pfb_unbound.get_tld_from_name("com") == ""
-        assert pfb_unbound.get_tld_from_name("") == ""
+        assert pfb_unbound.get_tld_from_name("com") == "", f"expected '', got {pfb_unbound.get_tld_from_name('com')!r}"
+        assert pfb_unbound.get_tld_from_name("") == "", f"expected '', got {pfb_unbound.get_tld_from_name('')!r}"
 
     def test_mixed_case_name_is_lowercased(self) -> None:
         # Same RFC 4343 contract as get_tld(): a CNAME target string carrying mixed
         # case must still resolve to the lowercase TLD tld_allow_list/hsts_tlds compare
         # against (#720).
-        assert pfb_unbound.get_tld_from_name("sub.ExAmPlE.CoM") == "com"
+        assert pfb_unbound.get_tld_from_name("sub.ExAmPlE.CoM") == "com", (
+            f"expected 'com', got {pfb_unbound.get_tld_from_name('sub.ExAmPlE.CoM')!r}"
+        )
 
 
 class TestSeverityOfDigitHyphenCarveOut:
@@ -1115,21 +1215,31 @@ class TestSeverityOfDigitHyphenCarveOut:
     legit" rule (#720)."""
 
     def test_digits_and_hyphen_only_label_is_legit(self) -> None:
-        assert pfb_unbound.severity_of("24") == pfb_unbound.SEV_LEGIT
-        assert pfb_unbound.severity_of("123-45") == pfb_unbound.SEV_LEGIT
+        assert pfb_unbound.severity_of("24") == pfb_unbound.SEV_LEGIT, (
+            f"expected {pfb_unbound.SEV_LEGIT!r}, got {pfb_unbound.severity_of('24')!r}"
+        )
+        assert pfb_unbound.severity_of("123-45") == pfb_unbound.SEV_LEGIT, (
+            f"expected {pfb_unbound.SEV_LEGIT!r}, got {pfb_unbound.severity_of('123-45')!r}"
+        )
 
     def test_other_scriptless_labels_stay_flagged(self) -> None:
         # The contrast that proves the carve-out is narrow: an empty label and an
         # emoji label (neither is digits/hyphen) resolve to NO letter-script too, but
         # must stay flagged -- behaviour-PRESERVING on both sides of #720 (these were
         # already flagged pre-fix and must remain so).
-        assert pfb_unbound.severity_of("") == pfb_unbound.SEV_FLAGGED
-        assert pfb_unbound.severity_of("\U0001f4a9") == pfb_unbound.SEV_FLAGGED  # pile of poo
+        assert pfb_unbound.severity_of("") == pfb_unbound.SEV_FLAGGED, (
+            f"expected {pfb_unbound.SEV_FLAGGED!r}, got {pfb_unbound.severity_of('')!r}"
+        )
+        assert pfb_unbound.severity_of("\U0001f4a9") == pfb_unbound.SEV_FLAGGED, (
+            f"expected {pfb_unbound.SEV_FLAGGED!r}, got {pfb_unbound.severity_of('💩')!r}"
+        )  # pile of poo
         # Non-ASCII digits (Arabic-Indic 012, category Nd) are scriptless too but are
         # NOT in the ASCII-only carve-out set -- pins the boundary so a future
         # refactor to str.isdigit()/isdecimal() (both True for these) cannot silently
         # widen the carve-out (#745 review).
-        assert pfb_unbound.severity_of("٠١٢") == pfb_unbound.SEV_FLAGGED
+        assert pfb_unbound.severity_of("٠١٢") == pfb_unbound.SEV_FLAGGED, (
+            f"expected {pfb_unbound.SEV_FLAGGED!r}, got {pfb_unbound.severity_of('٠١٢')!r}"
+        )
 
     def test_escalate_suspicious_does_not_promote_a_digit_label_to_action(self) -> None:
         # A digits/hyphen-only label reaches idn_confusable_action via classify_idn
@@ -1143,10 +1253,10 @@ class TestSeverityOfDigitHyphenCarveOut:
         # be off".
         q_name = "24.xn--mnchen-3ya.com"  # digit subdomain + a legit accented-Latin label
         action_off, _ = pfb_unbound.idn_confusable_action(q_name, block_malicious=True, escalate_suspicious=False)
-        assert action_off == pfb_unbound.IDN_ACT_NONE
+        assert action_off == pfb_unbound.IDN_ACT_NONE, f"expected {pfb_unbound.IDN_ACT_NONE!r}, got {action_off!r}"
 
         action_on, _ = pfb_unbound.idn_confusable_action(q_name, block_malicious=True, escalate_suspicious=True)
-        assert action_on == pfb_unbound.IDN_ACT_NONE
+        assert action_on == pfb_unbound.IDN_ACT_NONE, f"expected {pfb_unbound.IDN_ACT_NONE!r}, got {action_on!r}"
 
 
 class TestGetQIp:
@@ -1154,11 +1264,11 @@ class TestGetQIp:
         node2 = types.SimpleNamespace(query_reply=types.SimpleNamespace(addr="2.2.2.2"), next=None)
         node1 = types.SimpleNamespace(query_reply=types.SimpleNamespace(addr="1.1.1.1"), next=node2)
         qstate = types.SimpleNamespace(mesh_info=types.SimpleNamespace(reply_list=node1))
-        assert pfb_unbound.get_q_ip(qstate) == "1.1.1.1"
+        assert pfb_unbound.get_q_ip(qstate) == "1.1.1.1", f"expected '1.1.1.1', got {pfb_unbound.get_q_ip(qstate)!r}"
 
     def test_no_reply_list_returns_unknown(self) -> None:
         qstate = types.SimpleNamespace(mesh_info=types.SimpleNamespace(reply_list=None))
-        assert pfb_unbound.get_q_ip(qstate) == "Unknown"
+        assert pfb_unbound.get_q_ip(qstate) == "Unknown", f"expected 'Unknown', got {pfb_unbound.get_q_ip(qstate)!r}"
 
 
 def make_qstate(
@@ -1207,14 +1317,16 @@ class TestModuleConstantsStubFidelity:
     def test_event_moddone_is_module_h_position(self) -> None:
         # util/module.h enum module_ev: moddone is position 5 (noreply is 3,
         # which the old stub mislabeled as MODDONE).
-        assert MODULE_EVENT_MODDONE == 5
-        assert MODULE_EVENT_MODDONE != MODULE_RESTART_NEXT
+        assert MODULE_EVENT_MODDONE == 5, f"expected 5, got {MODULE_EVENT_MODDONE!r}"
+        assert MODULE_EVENT_MODDONE != MODULE_RESTART_NEXT, (
+            f"expected != {MODULE_RESTART_NEXT!r}, got {MODULE_EVENT_MODDONE!r}"
+        )
 
     def test_finished_is_module_h_position_and_distinct(self) -> None:
         # util/module.h enum module_ext_state: finished is position 6;
         # the old stub's 4 collided with wait_subquery.
-        assert MODULE_FINISHED == 6
-        assert MODULE_FINISHED != MODULE_WAIT_SUBQUERY
+        assert MODULE_FINISHED == 6, f"expected 6, got {MODULE_FINISHED!r}"
+        assert MODULE_FINISHED != MODULE_WAIT_SUBQUERY, f"expected != {MODULE_WAIT_SUBQUERY!r}, got {MODULE_FINISHED!r}"
 
 
 class TestSetReturnMsgStubFidelity:
@@ -1231,8 +1343,8 @@ class TestSetReturnMsgStubFidelity:
         # sec_status_unchecked (0) -- createResponse never stamps security.
         qstate = make_qstate("example.com.")
         msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR)
-        assert msg.set_return_msg(qstate) is True
-        assert qstate.return_msg.rep.security == 0
+        assert msg.set_return_msg(qstate) is True, f"expected True, got {msg.set_return_msg(qstate)!r}"
+        assert qstate.return_msg.rep.security == 0, f"expected 0, got {qstate.return_msg.rep.security!r}"
 
     def test_replaces_existing_return_msg(self) -> None:
         # Given a qstate that already carries a return_msg (e.g. a resolved
@@ -1249,11 +1361,13 @@ class TestSetReturnMsgStubFidelity:
         )
         qstate = make_qstate("example.com.", return_msg=sentinel)
         msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR)
-        assert msg.set_return_msg(qstate) is True
-        assert qstate.return_msg is not sentinel
-        assert qstate.return_msg.rep is not sentinel.rep
-        assert qstate.return_msg.rep.rrsets == []
-        assert qstate.return_msg.rep.an_numrrsets == 0
+        assert msg.set_return_msg(qstate) is True, f"expected True, got {msg.set_return_msg(qstate)!r}"
+        assert qstate.return_msg is not sentinel, f"expected not {sentinel!r}, got {qstate.return_msg!r}"
+        assert qstate.return_msg.rep is not sentinel.rep, (
+            f"expected not {sentinel.rep!r}, got {qstate.return_msg.rep!r}"
+        )
+        assert qstate.return_msg.rep.rrsets == [], f"expected [], got {qstate.return_msg.rep.rrsets!r}"
+        assert qstate.return_msg.rep.an_numrrsets == 0, f"expected 0, got {qstate.return_msg.rep.an_numrrsets!r}"
 
     def test_rep_flags_carry_wire_format_bits(self) -> None:
         # Given a message built with runtime PKT_* constants, When
@@ -1262,8 +1376,8 @@ class TestSetReturnMsgStubFidelity:
         # runtime PKT_* vocabulary -- QR|RA maps to 0x8000|0x0080.
         qstate = make_qstate("example.com.")
         msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR | PKT_RA)
-        assert msg.set_return_msg(qstate) is True
-        assert qstate.return_msg.rep.flags == 0x8080
+        assert msg.set_return_msg(qstate) is True, f"expected True, got {msg.set_return_msg(qstate)!r}"
+        assert qstate.return_msg.rep.flags == 0x8080, f"expected 32896, got {qstate.return_msg.rep.flags!r}"
 
     def test_authoritative_set_only_when_pkt_aa_flagged(self) -> None:
         # Given PKT_AA is set on the message's flags, When set_return_msg()
@@ -1273,12 +1387,16 @@ class TestSetReturnMsgStubFidelity:
         qstate_aa = make_qstate("example.com.")
         msg_aa = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR | PKT_AA)
         msg_aa.set_return_msg(qstate_aa)
-        assert qstate_aa.return_msg.rep.authoritative == 1
+        assert qstate_aa.return_msg.rep.authoritative == 1, (
+            f"expected 1, got {qstate_aa.return_msg.rep.authoritative!r}"
+        )
 
         qstate_no_aa = make_qstate("example.com.")
         msg_no_aa = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR)
         msg_no_aa.set_return_msg(qstate_no_aa)
-        assert qstate_no_aa.return_msg.rep.authoritative == 0
+        assert qstate_no_aa.return_msg.rep.authoritative == 0, (
+            f"expected 0, got {qstate_no_aa.return_msg.rep.authoritative!r}"
+        )
 
 
 class TestStoreQueryInCacheStubFidelity:
@@ -1299,28 +1417,36 @@ class TestStoreQueryInCacheStubFidelity:
         # but miss on-box.
         qstate = make_qstate("example.com.")
         msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR | PKT_AA)
-        assert msg.set_return_msg(qstate) is True
-        assert qstate.return_msg.rep.authoritative == 1
+        assert msg.set_return_msg(qstate) is True, f"expected True, got {msg.set_return_msg(qstate)!r}"
+        assert qstate.return_msg.rep.authoritative == 1, f"expected 1, got {qstate.return_msg.rep.authoritative!r}"
         with pytest.raises(SystemError, match="returned a result with an exception set") as excinfo:
             storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0)
-        assert isinstance(excinfo.value.__cause__, ValueError)
-        assert str(excinfo.value.__cause__) == "Authoritative answer can't be stored"
+        assert isinstance(excinfo.value.__cause__, ValueError), (
+            f"expected truthy, got {isinstance(excinfo.value.__cause__, ValueError)!r}"
+        )
+        assert str(excinfo.value.__cause__) == "Authoritative answer can't be stored", (
+            f'expected "Authoritative answer can\'t be stored", got {str(excinfo.value.__cause__)!r}'
+        )
 
     def test_none_reply_is_silent_falsy_failure(self) -> None:
         # Given a None msgrep, When it is stored, Then the stub returns False
         # with no exception -- real storeQueryInCache checks NULL first and
         # returns 0 silently, before the authoritative refusal.
         qstate = make_qstate("example.com.")
-        assert storeQueryInCache(qstate, qstate.qinfo, None, 0) is False
+        assert storeQueryInCache(qstate, qstate.qinfo, None, 0) is False, (
+            f"expected False, got {storeQueryInCache(qstate, qstate.qinfo, None, 0)!r}"
+        )
 
     def test_stores_non_authoritative_reply(self) -> None:
         # Given a non-authoritative reply (no PKT_AA), When it is stored,
         # Then the store succeeds -- the refusal branch must not over-reach.
         qstate = make_qstate("example.com.")
         msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR)
-        assert msg.set_return_msg(qstate) is True
-        assert qstate.return_msg.rep.authoritative == 0
-        assert storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0) is True
+        assert msg.set_return_msg(qstate) is True, f"expected True, got {msg.set_return_msg(qstate)!r}"
+        assert qstate.return_msg.rep.authoritative == 0, f"expected 0, got {qstate.return_msg.rep.authoritative!r}"
+        assert storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0) is True, (
+            f"expected True, got {storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0)!r}"
+        )
 
 
 class TestOperateNoAAAA:
@@ -1328,33 +1454,37 @@ class TestOperateNoAAAA:
         add_noaaaa("example.com", wildcard=False)
         qstate = make_qstate("example.com.", qtype=RR_AAAA)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert qstate.return_rcode == RCODE_NOERROR
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
         # The synthesized AAAA -> A reply is unsigned; it must be stamped
         # non-bogus or the validator SERVFAILs it (issue #149 class).
-        assert qstate.return_msg.rep.security == 2
+        assert qstate.return_msg.rep.security == 2, f"expected 2, got {qstate.return_msg.rep.security!r}"
 
     def test_wildcard_blocks_subdomain_and_caches(self) -> None:
         add_noaaaa("example.com", wildcard=True)
         qstate = make_qstate("sub.example.com.", qtype=RR_AAAA)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
         # The wildcard-path synthesized reply needs the same non-bogus stamp
         # as the exact-match one (issue #149 class).
-        assert qstate.return_msg.rep.security == 2
+        assert qstate.return_msg.rep.security == 2, f"expected 2, got {qstate.return_msg.rep.security!r}"
         # The wildcard-parent hit is memoized as the child's noaaaa verdict on its
         # Decision, so a subsequent identical query short-circuits on the cache.
-        assert pfb_unbound.decisionDB["sub.example.com"].noaaaa is True
-        assert evaluate_noaaaa("sub.example.com", pfb_unbound.noAAAADB) is True
+        assert pfb_unbound.decisionDB["sub.example.com"].noaaaa is True, (
+            f"expected True, got {pfb_unbound.decisionDB['sub.example.com'].noaaaa!r}"
+        )
+        assert evaluate_noaaaa("sub.example.com", pfb_unbound.noAAAADB) is True, (
+            f"expected True, got {evaluate_noaaaa('sub.example.com', pfb_unbound.noAAAADB)!r}"
+        )
         # Fast-path is unchanged: a subsequent identical query still blocks,
         # and the memoized-verdict reply carries the stamp too.
         qstate2 = make_qstate("sub.example.com.", qtype=RR_AAAA)
         rcd2 = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate2, None)
-        assert rcd2 is True
-        assert qstate2.ext_state[0] == MODULE_FINISHED
-        assert qstate2.return_msg.rep.security == 2
+        assert rcd2 is True, f"expected True, got {rcd2!r}"
+        assert qstate2.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate2.ext_state[0]!r}"
+        assert qstate2.return_msg.rep.security == 2, f"expected 2, got {qstate2.return_msg.rep.security!r}"
 
     def test_excluded_domain_not_blocked(self) -> None:
         add_noaaaa("example.com", wildcard=False)
@@ -1362,20 +1492,28 @@ class TestOperateNoAAAA:
         pfb_unbound.decisionDB["example.com"] = pfb_unbound.Decision(noaaaa=False, snap_gen=pfb_unbound._snapshot.gen)
         qstate = make_qstate("example.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
 
     def test_non_aaaa_skips_logic(self) -> None:
         add_noaaaa("example.com", wildcard=False)
         qstate = make_qstate("example.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
 
     def test_no_match_caches_allow(self) -> None:
         add_noaaaa("other.com", wildcard=True)
         qstate = make_qstate("example.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert pfb_unbound.decisionDB["example.com"].noaaaa is False
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert pfb_unbound.decisionDB["example.com"].noaaaa is False, (
+            f"expected False, got {pfb_unbound.decisionDB['example.com'].noaaaa!r}"
+        )
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
 
 
 class TestOperateDnsbl:
@@ -1391,11 +1529,11 @@ class TestOperateDnsbl:
         set_feed_group(0, "TestFeed", "TestGroup")
         qstate = make_qstate("evil.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert qstate.return_rcode == RCODE_NOERROR
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
         answers = DNSMessage.instances[-1].answer
-        assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers)
+        assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers), f"expected a match in {answers!r}"
 
     def test_nxdomain_mode_returns_bare_nxdomain(self, monkeypatch: Any) -> None:
         # Issue #31. Scenario: a DNSBL hit in NXDOMAIN-logging mode ("3").
@@ -1408,15 +1546,23 @@ class TestOperateDnsbl:
         add_data("evil.com", log="3", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
         qstate = make_qstate("evil.com.", qtype=RR_A)
-        assert qstate.no_cache_store == 0  # before-state: cacheable by default
+        assert qstate.no_cache_store == 0, (
+            f"expected 0, got {qstate.no_cache_store!r}"
+        )  # before-state: cacheable by default
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert qstate.return_rcode == RCODE_NXDOMAIN
-        assert qstate.return_msg is None  # no A/AAAA reply synthesized
-        assert DNSMessage.instances == []  # the VIP/null DNSMessage path was NOT taken
-        assert qstate.no_cache_store == 1  # not cached, same as VIP/null blocks
-        assert pfb_unbound.decisionDB["evil.com"].dnsbl.nxdomain is True
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.return_rcode == RCODE_NXDOMAIN, f"expected {RCODE_NXDOMAIN!r}, got {qstate.return_rcode!r}"
+        assert qstate.return_msg is None, f"expected None, got {qstate.return_msg!r}"  # no A/AAAA reply synthesized
+        assert DNSMessage.instances == [], (
+            f"expected [], got {DNSMessage.instances!r}"
+        )  # the VIP/null DNSMessage path was NOT taken
+        assert qstate.no_cache_store == 1, (
+            f"expected 1, got {qstate.no_cache_store!r}"
+        )  # not cached, same as VIP/null blocks
+        assert pfb_unbound.decisionDB["evil.com"].dnsbl.nxdomain is True, (
+            f"expected True, got {pfb_unbound.decisionDB['evil.com'].dnsbl.nxdomain!r}"
+        )
 
     def test_nxdomain_no_logging_mode_also_returns_nxdomain(self, monkeypatch: Any) -> None:
         # The "4" (no-logging) variant produces the IDENTICAL block SHAPE as "3"; only
@@ -1426,16 +1572,20 @@ class TestOperateDnsbl:
         add_data("evil.com", log="4", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
         qstate = make_qstate("evil.com.", qtype=RR_A)
-        assert qstate.no_cache_store == 0  # before-state: cacheable by default
+        assert qstate.no_cache_store == 0, (
+            f"expected 0, got {qstate.no_cache_store!r}"
+        )  # before-state: cacheable by default
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
         # IDENTICAL shape to the "3" case: bare NXDOMAIN, no message, uncached, nxdomain.
-        assert qstate.return_rcode == RCODE_NXDOMAIN
-        assert qstate.return_msg is None
-        assert DNSMessage.instances == []
-        assert qstate.no_cache_store == 1
-        assert pfb_unbound.decisionDB["evil.com"].dnsbl.nxdomain is True
+        assert qstate.return_rcode == RCODE_NXDOMAIN, f"expected {RCODE_NXDOMAIN!r}, got {qstate.return_rcode!r}"
+        assert qstate.return_msg is None, f"expected None, got {qstate.return_msg!r}"
+        assert DNSMessage.instances == [], f"expected [], got {DNSMessage.instances!r}"
+        assert qstate.no_cache_store == 1, f"expected 1, got {qstate.no_cache_store!r}"
+        assert pfb_unbound.decisionDB["evil.com"].dnsbl.nxdomain is True, (
+            f"expected True, got {pfb_unbound.decisionDB['evil.com'].dnsbl.nxdomain!r}"
+        )
 
     def test_block_sets_no_cache_store(self, monkeypatch: Any) -> None:
         # #43: the synthetic block reply must NOT be stored in Unbound's C message
@@ -1446,19 +1596,23 @@ class TestOperateDnsbl:
         add_data("evil.com", log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
         qstate = make_qstate("evil.com.", qtype=RR_A)
-        assert qstate.no_cache_store == 0  # before-state: default is cacheable
+        assert qstate.no_cache_store == 0, (
+            f"expected 0, got {qstate.no_cache_store!r}"
+        )  # before-state: default is cacheable
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert qstate.no_cache_store == 1
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.no_cache_store == 1, f"expected 1, got {qstate.no_cache_store!r}"
 
         # The memoized re-block path (name already in decisionDB) must set it too --
         # that is the whole point: every blocked query, miss or memo, re-runs here.
-        assert _is_block(pfb_unbound.decisionDB.get("evil.com"))
+        assert _is_block(pfb_unbound.decisionDB.get("evil.com")), (
+            f"expected truthy, got {_is_block(pfb_unbound.decisionDB.get('evil.com'))!r}"
+        )
         qstate2 = make_qstate("evil.com.", qtype=RR_A)
-        assert qstate2.no_cache_store == 0  # before-state
+        assert qstate2.no_cache_store == 0, f"expected 0, got {qstate2.no_cache_store!r}"  # before-state
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate2, None)
-        assert qstate2.ext_state[0] == MODULE_FINISHED
-        assert qstate2.no_cache_store == 1
+        assert qstate2.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate2.ext_state[0]!r}"
+        assert qstate2.no_cache_store == 1, f"expected 1, got {qstate2.no_cache_store!r}"
 
     def test_pass_through_leaves_cache_store_enabled(self, monkeypatch: Any) -> None:
         # A non-blocked name falls through to the resolver and MUST stay cacheable
@@ -1468,8 +1622,10 @@ class TestOperateDnsbl:
         set_feed_group(0, "TestFeed", "TestGroup")
         qstate = make_qstate("good.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
-        assert qstate.no_cache_store == 0
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
+        assert qstate.no_cache_store == 0, f"expected 0, got {qstate.no_cache_store!r}"
 
     def test_zone_lookup_matches_subdomain(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
@@ -1477,8 +1633,8 @@ class TestOperateDnsbl:
         set_feed_group(0, "TestFeed", "TestGroup")
         qstate = make_qstate("sub.example.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
 
     def test_whitelist_override_not_blocked(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
@@ -1487,9 +1643,13 @@ class TestOperateDnsbl:
         add_white("evil.com", wildcard=False)
         qstate = make_qstate("evil.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
         dec = pfb_unbound.decisionDB.get("evil.com")
-        assert dec is not None and not _is_block(dec)  # whitelisted -> memoized as an allow
+        assert dec is not None and not _is_block(dec), (
+            f"expected dec-not-None and not blocked, got dec={dec!r}, blocked={_is_block(dec)!r}"
+        )  # whitelisted -> memoized as an allow
 
     def test_regex_block(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
@@ -1497,10 +1657,10 @@ class TestOperateDnsbl:
         pfb_unbound.regexDB["bad-pattern"] = re.compile(r"evil")
         qstate = make_qstate("evil-domain.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
         entry = pfb_unbound.decisionDB.get("evil-domain.com")
-        assert entry.dnsbl.group == "DNSBL_Regex"
+        assert entry.dnsbl.group == "DNSBL_Regex", f"expected 'DNSBL_Regex', got {entry.dnsbl.group!r}"
 
     def test_idn_alert_overlapping_regex_emits_only_block_log(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
@@ -1514,7 +1674,7 @@ class TestOperateDnsbl:
         qstate = make_qstate("xn--bnk-1ce.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
 
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
         assert len(logs) == 1, f"expected one block log, got {logs!r}"
         fields = logs[0][1].split(",")
         assert fields[5] == "Python", f"expected regex block type, got {fields!r}"
@@ -1532,7 +1692,9 @@ class TestOperateDnsbl:
         qstate = make_qstate("xn--bnk-1ce.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
 
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
         assert len(logs) == 1, f"expected one IDN alert log, got {logs!r}"
         fields = logs[0][1].split(",")
         assert fields[5] == "Homoglyph_Alert", f"expected IDN alert type, got {fields!r}"
@@ -1551,10 +1713,12 @@ class TestOperateDnsbl:
         qstate = make_qstate("xn--bnk-1ce.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
 
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
         decision = pfb_unbound.decisionDB["xn--bnk-1ce.com"].dnsbl
-        assert decision.is_found is True
-        assert decision.in_whitelist is True
+        assert decision.is_found is True, f"expected True, got {decision.is_found!r}"
+        assert decision.in_whitelist is True, f"expected True, got {decision.in_whitelist!r}"
         assert len(logs) == 1, f"expected one whitelisted IDN alert log, got {logs!r}"
         fields = logs[0][1].split(",")
         assert fields[5] == "Homoglyph_Alert", f"expected IDN alert type, got {fields!r}"
@@ -1569,7 +1733,9 @@ class TestOperateDnsbl:
         pfb_unbound.decisionDB["evil.com"] = allow_decision()
         qstate = make_qstate("evil.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
 
     def test_block_decision_reuse_without_reeval(self, monkeypatch: Any) -> None:
         # A cached BLOCK verdict short-circuits the matcher: operate() blocks straight
@@ -1579,10 +1745,10 @@ class TestOperateDnsbl:
         pfb_unbound.decisionDB["cached-block.com"] = block_decision(b_eval="cached-block.com")
         qstate = make_qstate("cached-block.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
         answers = DNSMessage.instances[-1].answer
-        assert any(a.startswith("cached-block.com. ") for a in answers)
+        assert any(a.startswith("cached-block.com. ") for a in answers), f"expected a match in {answers!r}"
 
     def test_stale_generation_memo_is_recomputed_not_served(self, monkeypatch: Any) -> None:
         # issue #1074: a query thread that captured the OLD snapshot can memoize its
@@ -1602,13 +1768,17 @@ class TestOperateDnsbl:
         qstate = make_qstate("evil.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         # Before the fix this served the stale block (MODULE_FINISHED + a reply).
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
         # The memo was replaced by a live-generation allow verdict, so the stale one
         # cannot be served on the next query either.
         dec = pfb_unbound.decisionDB.get("evil.com")
-        assert dec is not None
-        assert dec.snap_gen == pfb_unbound._snapshot.gen
-        assert dec.dnsbl.is_found is False
+        assert dec is not None, f"expected not None, got {dec!r}"
+        assert dec.snap_gen == pfb_unbound._snapshot.gen, (
+            f"expected {pfb_unbound._snapshot.gen!r}, got {dec.snap_gen!r}"
+        )
+        assert dec.dnsbl.is_found is False, f"expected False, got {dec.dnsbl.is_found!r}"
 
     def test_stale_generation_write_cannot_extend_a_live_memo(self, monkeypatch: Any) -> None:
         # issue #1074: a later generation replaces an older resident memo without
@@ -1616,7 +1786,9 @@ class TestOperateDnsbl:
         self._enable(monkeypatch)
         stale_gen = next(pfb_unbound._snapshot_gen)
         replacement_gen = next(pfb_unbound._snapshot_gen)
-        assert 0 < stale_gen < replacement_gen
+        assert 0 < stale_gen < replacement_gen, (
+            f"expected 0<stale<replacement, got stale_gen={stale_gen!r}, replacement_gen={replacement_gen!r}"
+        )
         stale = pfb_unbound.Decision(
             dnsbl=_dnsbl_decision(
                 is_found=True, log_type="1", b_type="DNSBL", p_type="Python", feed="F", group="G", b_eval="evil.com"
@@ -1625,10 +1797,12 @@ class TestOperateDnsbl:
         )
         pfb_unbound.decisionDB["evil.com"] = stale
         replacement = pfb_unbound._decision_for("evil.com", replacement_gen)
-        assert replacement is not stale
-        assert pfb_unbound.decisionDB.get("evil.com") is replacement
-        assert replacement.snap_gen == replacement_gen
-        assert replacement.dnsbl is pfb_unbound.UNSET
+        assert replacement is not stale, f"expected not {stale!r}, got {replacement!r}"
+        assert pfb_unbound.decisionDB.get("evil.com") is replacement, (
+            f"expected {replacement!r}, got {pfb_unbound.decisionDB.get('evil.com')!r}"
+        )
+        assert replacement.snap_gen == replacement_gen, f"expected {replacement_gen!r}, got {replacement.snap_gen!r}"
+        assert replacement.dnsbl is pfb_unbound.UNSET, f"expected {pfb_unbound.UNSET!r}, got {replacement.dnsbl!r}"
 
     def test_older_generation_straggler_neither_evicts_nor_extends(self, monkeypatch: Any) -> None:
         # issue #1074 hardening: a straggler carrying an OLDER generation gets a
@@ -1640,14 +1814,14 @@ class TestOperateDnsbl:
         resident = pfb_unbound._decision_for("evil.com", newer_gen)
         resident.dnsbl = _dnsbl_decision()  # a live not-found (allow) verdict
         straggler = pfb_unbound._decision_for("evil.com", older_gen)
-        assert straggler is not resident
-        assert straggler.snap_gen == older_gen
+        assert straggler is not resident, f"expected not {resident!r}, got {straggler!r}"
+        assert straggler.snap_gen == older_gen, f"expected {older_gen!r}, got {straggler.snap_gen!r}"
         straggler.dnsbl = _dnsbl_decision(
             is_found=True, log_type="1", b_type="DNSBL", p_type="Python", feed="F", group="G", b_eval="evil.com"
         )
         stored = pfb_unbound.decisionDB.get("evil.com")
-        assert stored is resident
-        assert stored.dnsbl.is_found is False
+        assert stored is resident, f"expected {resident!r}, got {stored!r}"
+        assert stored.dnsbl.is_found is False, f"expected False, got {stored.dnsbl.is_found!r}"
 
     def test_group_policy_bypass(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
@@ -1657,7 +1831,9 @@ class TestOperateDnsbl:
         pfb_unbound.gpListDB["1.2.3.4"] = 0
         qstate = make_qstate("evil.com.", qtype=RR_A, q_ip="1.2.3.4")
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
 
     @staticmethod
     def _cname_reply(orig_qname: str = "orig.com.") -> types.SimpleNamespace:
@@ -1693,17 +1869,19 @@ class TestOperateDnsbl:
 
         qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
 
         entry = pfb_unbound.decisionDB.get("orig.com")
-        assert entry is not None
-        assert entry.dnsbl.b_type == "DNSBL_CNAME"
+        assert entry is not None, f"expected not None, got {entry!r}"
+        assert entry.dnsbl.b_type == "DNSBL_CNAME", f"expected 'DNSBL_CNAME', got {entry.dnsbl.b_type!r}"
         # Block is keyed on the original name after the q_name reassignment,
         # not on the CNAME target itself.
-        assert not _is_block(pfb_unbound.decisionDB.get("evil-cname.com"))
+        assert not _is_block(pfb_unbound.decisionDB.get("evil-cname.com")), (
+            f"expected falsy, got {_is_block(pfb_unbound.decisionDB.get('evil-cname.com'))!r}"
+        )
         answers = DNSMessage.instances[-1].answer
-        assert any(a.startswith("orig.com. ") for a in answers)
+        assert any(a.startswith("orig.com. ") for a in answers), f"expected a match in {answers!r}"
 
     def test_cname_target_with_long_interior_label_blocks_without_decoder_stub(self, monkeypatch: Any) -> None:
         # End-to-end proof that operate()'s CNAME walk feeds the REAL convert_other()
@@ -1737,11 +1915,11 @@ class TestOperateDnsbl:
 
         qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=return_msg)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
         entry = pfb_unbound.decisionDB.get("orig.com")
-        assert entry is not None
-        assert entry.dnsbl.b_type == "DNSBL_CNAME"
+        assert entry is not None, f"expected not None, got {entry!r}"
+        assert entry.dnsbl.b_type == "DNSBL_CNAME", f"expected 'DNSBL_CNAME', got {entry.dnsbl.b_type!r}"
 
     def test_cname_disabled_original_not_blocked(self, monkeypatch: Any) -> None:
         # CNAME validation OFF (the default): the SAME setup -- A (orig.com) CNAMEs to
@@ -1759,8 +1937,12 @@ class TestOperateDnsbl:
         qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         # Not blocked -> passes through to the resolver (no block return_msg set).
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
-        assert not _is_block(pfb_unbound.decisionDB.get("orig.com"))
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
+        assert not _is_block(pfb_unbound.decisionDB.get("orig.com")), (
+            f"expected falsy, got {_is_block(pfb_unbound.decisionDB.get('orig.com'))!r}"
+        )
 
     def test_cname_target_blocked_when_queried_directly(self, monkeypatch: Any) -> None:
         # The ERRATA invariant: B (the CNAME target) is genuinely on the blocklist in
@@ -1772,9 +1954,13 @@ class TestOperateDnsbl:
         set_feed_group(0, "F", "G")
         qstate = make_qstate("evil-cname.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED  # B is blocked
-        assert _is_block(pfb_unbound.decisionDB.get("evil-cname.com"))
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, (
+            f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        )  # B is blocked
+        assert _is_block(pfb_unbound.decisionDB.get("evil-cname.com")), (
+            f"expected truthy, got {_is_block(pfb_unbound.decisionDB.get('evil-cname.com'))!r}"
+        )
 
     def test_cname_target_allowed_by_its_own_tld(self, monkeypatch: Any) -> None:
         # #706 red->green: operate() must derive the TLD-Allow tld from the CNAME TARGET
@@ -1793,8 +1979,12 @@ class TestOperateDnsbl:
         qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         # Neither the original nor its target is blocked -> passes to the resolver.
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
-        assert not _is_block(pfb_unbound.decisionDB.get("orig.com"))
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
+        assert not _is_block(pfb_unbound.decisionDB.get("orig.com")), (
+            f"expected falsy, got {_is_block(pfb_unbound.decisionDB.get('orig.com'))!r}"
+        )
 
     def test_cname_target_blocked_by_its_own_tld(self, monkeypatch: Any) -> None:
         # The paired block branch: TLD-Allow lists ONLY "com", so the original (orig.com)
@@ -1809,11 +1999,13 @@ class TestOperateDnsbl:
         monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "good.net")
         qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED  # blocked via the TARGET's TLD
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, (
+            f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        )  # blocked via the TARGET's TLD
         entry = pfb_unbound.decisionDB.get("orig.com")
-        assert entry is not None
-        assert entry.dnsbl.group == "DNSBL_TLD_Allow"
+        assert entry is not None, f"expected not None, got {entry!r}"
+        assert entry.dnsbl.group == "DNSBL_TLD_Allow", f"expected 'DNSBL_TLD_Allow', got {entry.dnsbl.group!r}"
 
     def test_cname_repeat_short_circuits_without_chain(self, monkeypatch: Any) -> None:
         # The unified-cache CNAME fix: a CNAME-blocked name is keyed on the ORIGINAL in
@@ -1829,16 +2021,18 @@ class TestOperateDnsbl:
         # First query carries the resolved CNAME chain -> blocks and memoizes orig.
         q1 = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
         pfb_unbound.operate(0, MODULE_EVENT_NEW, q1, None)
-        assert q1.ext_state[0] == MODULE_FINISHED
-        assert _is_block(pfb_unbound.decisionDB.get("orig.com"))
+        assert q1.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {q1.ext_state[0]!r}"
+        assert _is_block(pfb_unbound.decisionDB.get("orig.com")), (
+            f"expected truthy, got {_is_block(pfb_unbound.decisionDB.get('orig.com'))!r}"
+        )
 
         # Second query has NO resolved chain -- it still blocks, purely from
         # decisionDB[orig], with the answer built for the original name.
         q2 = make_qstate("orig.com.", qtype=RR_A, return_msg=None)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, q2, None)
-        assert q2.ext_state[0] == MODULE_FINISHED
+        assert q2.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {q2.ext_state[0]!r}"
         answers = DNSMessage.instances[-1].answer
-        assert any(a.startswith("orig.com. ") for a in answers)
+        assert any(a.startswith("orig.com. ") for a in answers), f"expected a match in {answers!r}"
 
     def test_block_sets_return_msg_exactly_once(self, monkeypatch: Any) -> None:
         # The DNSBL block path previously called msg.set_return_msg(qstate)
@@ -1856,12 +2050,12 @@ class TestOperateDnsbl:
         set_feed_group(0, "F", "G")
         qstate = make_qstate("evil.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert calls["n"] == 1
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert calls["n"] == 1, f"expected 1, got {calls['n']!r}"
         # The synthesized DNSBL block reply is unsigned; it must be stamped
         # non-bogus or the validator SERVFAILs it (issue #149 class).
-        assert qstate.return_msg.rep.security == 2
+        assert qstate.return_msg.rep.security == 2, f"expected 2, got {qstate.return_msg.rep.security!r}"
 
     def test_cname_unknown_sentinel_is_never_evaluated(self, monkeypatch: Any) -> None:
         # #714 FIX #3: convert_other() returns the is_unknown() decode-failure sentinel
@@ -1884,10 +2078,16 @@ class TestOperateDnsbl:
         qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
 
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE  # resolves clean, not blocked
-        assert not _is_block(pfb_unbound.decisionDB.get("orig.com"))
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )  # resolves clean, not blocked
+        assert not _is_block(pfb_unbound.decisionDB.get("orig.com")), (
+            f"expected falsy, got {_is_block(pfb_unbound.decisionDB.get('orig.com'))!r}"
+        )
         # The sentinel itself must never be memoized as an evaluated decision.
-        assert pfb_unbound.decisionDB.get("unknown") is None
+        assert pfb_unbound.decisionDB.get("unknown") is None, (
+            f"expected None, got {pfb_unbound.decisionDB.get('unknown')!r}"
+        )
 
 
 class TestAttributionSurvivesRace:
@@ -1965,9 +2165,9 @@ class TestAttributionSurvivesRace:
     def _assert_block_genuinely_served(rcd: bool, qstate: Any) -> None:
         # Before-state: the served DNS answer is never affected by the race -- only
         # its attribution is. Prove the block actually happened before checking that.
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert qstate.return_rcode == RCODE_NOERROR
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
         answers = DNSMessage.instances[-1].answer
         assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers), answers
 
@@ -2069,8 +2269,8 @@ class TestAttributionMemoPath:
         for _ in range(2):
             qstate = make_qstate("memo-path.com.", qtype=RR_A)
             rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-            assert rcd is True
-            assert qstate.ext_state[0] == MODULE_FINISHED
+            assert rcd is True, f"expected True, got {rcd!r}"
+            assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
 
         dnsbl_fields = [line.split(",") for path, line in lines if path.endswith("dnsbl.log")]
         assert len(dnsbl_fields) == 2, f"expected one line per query, got {dnsbl_fields}"
@@ -2083,14 +2283,14 @@ class TestOperateEvents:
     def test_moddone_logs_and_finishes(self) -> None:
         qstate = make_qstate("example.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
 
     def test_unknown_event_returns_error(self) -> None:
         qstate = make_qstate("example.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, 99, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_ERROR
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_ERROR, f"expected {MODULE_ERROR!r}, got {qstate.ext_state[0]!r}"
 
 
 class TestOperatePythonControlLegacy:
@@ -2110,11 +2310,13 @@ class TestOperatePythonControlLegacy:
         pfb_unbound.pfb["python_control"] = True
         qstate = make_qstate("python_control.disable.", qtype=RR_TXT, q_ip="127.0.0.1")
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert qstate.return_rcode == RCODE_NOERROR
-        assert any("IN TXT" in a for a in DNSMessage.instances[-1].answer)
-        assert qstate.return_msg.rep.security == 2
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
+        assert any("IN TXT" in a for a in DNSMessage.instances[-1].answer), (
+            f"expected a match in {DNSMessage.instances[-1].answer!r}"
+        )
+        assert qstate.return_msg.rep.security == 2, f"expected 2, got {qstate.return_msg.rep.security!r}"
 
 
 class TestLoadSafeSearchDb:
@@ -2133,14 +2335,19 @@ class TestLoadSafeSearchDb:
 
         pfb_unbound._load_safesearch_db()
 
-        assert pfb_unbound.safeSearchDB["forcesafe.com"] == {"A": "1.2.3.4", "AAAA": "::1"}
+        assert pfb_unbound.safeSearchDB["forcesafe.com"] == {"A": "1.2.3.4", "AAAA": "::1"}, (
+            f"expected {'A': '1.2.3.4', 'AAAA': '::1'}, got {pfb_unbound.safeSearchDB['forcesafe.com']!r}"
+        )
         assert pfb_unbound.safeSearchDB["cname.com"] == {
             "A": "cname",
             "AAAA": "target.com",
             "v4": "5.6.7.8",
             "v6": "::2",
-        }
-        assert pfb_unbound.pfb["safeSearchDB"] is True
+        }, (
+            f"expected {'A': 'cname', 'AAAA': 'target.com', 'v4': '5.6.7.8', 'v6': '::2'}, got "
+            f"{pfb_unbound.safeSearchDB['cname.com']!r}"
+        )
+        assert pfb_unbound.pfb["safeSearchDB"] is True, f"expected True, got {pfb_unbound.pfb['safeSearchDB']!r}"
 
     def test_load_failure_names_the_safesearch_file_not_the_zone_file(
         self, tmp_path: Any, monkeypatch: Any, capsys: Any
@@ -2164,8 +2371,10 @@ class TestLoadSafeSearchDb:
         pfb_unbound._load_safesearch_db()
 
         err = capsys.readouterr().err
-        assert str(ss_path) in err
-        assert str(pfb_unbound.pfb["pfb_py_zone"]) not in err
+        assert str(ss_path) in err, f"expected {str(ss_path)!r} in {err!r}"
+        assert str(pfb_unbound.pfb["pfb_py_zone"]) not in err, (
+            f"expected {str(pfb_unbound.pfb['pfb_py_zone'])!r} not in {err!r}"
+        )
 
 
 class TestSafeSearchEntry:
@@ -2174,19 +2383,27 @@ class TestSafeSearchEntry:
     def test_exact_match_returns_entry(self) -> None:
         pfb_unbound.pfb["safeSearchDB"] = True
         pfb_unbound.safeSearchDB["forcesafe.com"] = {"A": "1.2.3.4", "AAAA": ""}
-        assert pfb_unbound.safesearch_entry("forcesafe.com") == {"A": "1.2.3.4", "AAAA": ""}
+        assert pfb_unbound.safesearch_entry("forcesafe.com") == {"A": "1.2.3.4", "AAAA": ""}, (
+            f"expected {'A': '1.2.3.4', 'AAAA': ''}, got {pfb_unbound.safesearch_entry('forcesafe.com')!r}"
+        )
 
     def test_www_fallback_matches_bare_entry(self) -> None:
         # A query for 'x.com' (no www) falls back to the 'www.x.com' entry.
         pfb_unbound.pfb["safeSearchDB"] = True
         pfb_unbound.safeSearchDB["www.x.com"] = {"A": "1.2.3.4", "AAAA": ""}
-        assert pfb_unbound.safesearch_entry("x.com") == {"A": "1.2.3.4", "AAAA": ""}
+        assert pfb_unbound.safesearch_entry("x.com") == {"A": "1.2.3.4", "AAAA": ""}, (
+            f"expected {'A': '1.2.3.4', 'AAAA': ''}, got {pfb_unbound.safesearch_entry('x.com')!r}"
+        )
 
     def test_no_match_memoizes_none(self) -> None:
         # A miss is memoized as None on the Decision so it is decided once.
         pfb_unbound.pfb["safeSearchDB"] = True
-        assert pfb_unbound.safesearch_entry("nomatch.com") is None
-        assert pfb_unbound.decisionDB.get("nomatch.com").safesearch is None
+        assert pfb_unbound.safesearch_entry("nomatch.com") is None, (
+            f"expected None, got {pfb_unbound.safesearch_entry('nomatch.com')!r}"
+        )
+        assert pfb_unbound.decisionDB.get("nomatch.com").safesearch is None, (
+            f"expected None, got {pfb_unbound.decisionDB.get('nomatch.com').safesearch!r}"
+        )
 
 
 class TestSafeSearchAnswerHelpers:
@@ -2208,27 +2425,39 @@ class TestSafeSearchAnswerHelpers:
     def test_has_cname_to_true_when_target_matches(self, monkeypatch: Any) -> None:
         monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "safe.duckduckgo.com")
         qstate = self._reply(["CNAME", "A"])
-        assert pfb_unbound._ss_answer_has_cname_to(qstate, "safe.duckduckgo.com") is True
+        assert pfb_unbound._ss_answer_has_cname_to(qstate, "safe.duckduckgo.com") is True, (
+            f"expected True, got {pfb_unbound._ss_answer_has_cname_to(qstate, 'safe.duckduckgo.com')!r}"
+        )
 
     def test_has_cname_to_false_for_other_target(self, monkeypatch: Any) -> None:
         # A genuine CNAME chain to some OTHER name is not our planted redirect.
         monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "cdn.example.net")
         qstate = self._reply(["CNAME"])
-        assert pfb_unbound._ss_answer_has_cname_to(qstate, "safe.duckduckgo.com") is False
+        assert pfb_unbound._ss_answer_has_cname_to(qstate, "safe.duckduckgo.com") is False, (
+            f"expected False, got {pfb_unbound._ss_answer_has_cname_to(qstate, 'safe.duckduckgo.com')!r}"
+        )
 
     def test_has_cname_to_false_when_no_return_msg(self) -> None:
         qstate = types.SimpleNamespace(return_msg=None)
-        assert pfb_unbound._ss_answer_has_cname_to(qstate, "safe.duckduckgo.com") is False
+        assert pfb_unbound._ss_answer_has_cname_to(qstate, "safe.duckduckgo.com") is False, (
+            f"expected False, got {pfb_unbound._ss_answer_has_cname_to(qstate, 'safe.duckduckgo.com')!r}"
+        )
 
     def test_has_address_true_with_a(self) -> None:
-        assert pfb_unbound._ss_answer_has_address(self._reply(["CNAME", "A"])) is True
+        assert pfb_unbound._ss_answer_has_address(self._reply(["CNAME", "A"])) is True, (
+            f"expected True, got {pfb_unbound._ss_answer_has_address(self._reply(['CNAME', 'A']))!r}"
+        )
 
     def test_has_address_true_with_aaaa(self) -> None:
-        assert pfb_unbound._ss_answer_has_address(self._reply(["CNAME", "AAAA"])) is True
+        assert pfb_unbound._ss_answer_has_address(self._reply(["CNAME", "AAAA"])) is True, (
+            f"expected True, got {pfb_unbound._ss_answer_has_address(self._reply(['CNAME', 'AAAA']))!r}"
+        )
 
     def test_has_address_false_bare_cname(self) -> None:
         # The chase produced only a bare CNAME -> no address -> #2 fallback territory.
-        assert pfb_unbound._ss_answer_has_address(self._reply(["CNAME"])) is False
+        assert pfb_unbound._ss_answer_has_address(self._reply(["CNAME"])) is False, (
+            f"expected False, got {pfb_unbound._ss_answer_has_address(self._reply(['CNAME']))!r}"
+        )
 
 
 class TestSafeSearchCnameRedirect:
@@ -2307,8 +2536,10 @@ class TestSafeSearchCnameRedirect:
         self._enable()
         qstate = make_qstate("duckduckgo.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
-        assert DNSMessage.instances == []
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
+        assert DNSMessage.instances == [], f"expected [], got {DNSMessage.instances!r}"
 
     def test_a_entry_answered_in_new_pass(self) -> None:
         # The with/without pair: a plain A-rewrite SafeSearch entry IS answered in the
@@ -2318,11 +2549,13 @@ class TestSafeSearchCnameRedirect:
         pfb_unbound.safeSearchDB["forcesafe.com"] = {"A": "1.2.3.4", "AAAA": ""}
         qstate = make_qstate("forcesafe.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert any(a.startswith("forcesafe.com. ") and " A 1.2.3.4" in a for a in DNSMessage.instances[-1].answer)
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert any(a.startswith("forcesafe.com. ") and " A 1.2.3.4" in a for a in DNSMessage.instances[-1].answer), (
+            f"expected a match in {DNSMessage.instances[-1].answer!r}"
+        )
         # The synthesized SafeSearch answer is unsigned; it must be stamped
         # non-bogus or the validator SERVFAILs it (issue #149 class).
-        assert qstate.return_msg.rep.security == 2
+        assert qstate.return_msg.rep.security == 2, f"expected 2, got {qstate.return_msg.rep.security!r}"
 
     def test_phase1_plants_cname_and_restarts(self, monkeypatch: Any) -> None:
         # Phase 1 (When the resolved answer does not yet carry our CNAME): plant the
@@ -2332,12 +2565,16 @@ class TestSafeSearchCnameRedirect:
         calls = self._spy_cache(monkeypatch)
         qstate = make_qstate("duckduckgo.com.", qtype=RR_A, return_msg=None)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_RESTART_NEXT
-        assert qstate.no_cache_store == 1
-        assert calls["store"] == [1]  # is_referral=1
-        assert calls["invalidate"] == 1
-        assert any("IN CNAME safe.duckduckgo.com" in a for a in DNSMessage.instances[-1].answer)
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_RESTART_NEXT, (
+            f"expected {MODULE_RESTART_NEXT!r}, got {qstate.ext_state[0]!r}"
+        )
+        assert qstate.no_cache_store == 1, f"expected 1, got {qstate.no_cache_store!r}"
+        assert calls["store"] == [1], f"expected [1], got {calls['store']!r}"  # is_referral=1
+        assert calls["invalidate"] == 1, f"expected 1, got {calls['invalidate']!r}"
+        assert any("IN CNAME safe.duckduckgo.com" in a for a in DNSMessage.instances[-1].answer), (
+            f"expected a match in {DNSMessage.instances[-1].answer!r}"
+        )
 
     def test_first_pass_store_failure_falls_back_to_baked_ip(self, monkeypatch: Any) -> None:
         # issue #749: When the phase-1 planted-referral store fails (real Unbound's
@@ -2349,9 +2586,11 @@ class TestSafeSearchCnameRedirect:
         self._spy_cache(monkeypatch, store_fails=True)
         qstate = make_qstate("duckduckgo.com.", qtype=RR_A, return_msg=None)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert any("IN A 203.0.113.7" in a for a in DNSMessage.instances[-1].answer)
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert any("IN A 203.0.113.7" in a for a in DNSMessage.instances[-1].answer), (
+            f"expected a match in {DNSMessage.instances[-1].answer!r}"
+        )
 
     def test_first_pass_store_failure_without_baked_ip_errors(self, monkeypatch: Any) -> None:
         # issue #749: the without-baked side of the pair above -- when the referral
@@ -2362,9 +2601,11 @@ class TestSafeSearchCnameRedirect:
         self._spy_cache(monkeypatch, store_fails=True)
         qstate = make_qstate("duckduckgo.com.", qtype=RR_A, return_msg=None)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_ERROR
-        assert qstate.ext_state[0] != MODULE_RESTART_NEXT
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_ERROR, f"expected {MODULE_ERROR!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.ext_state[0] != MODULE_RESTART_NEXT, (
+            f"expected != {MODULE_RESTART_NEXT!r}, got {qstate.ext_state[0]!r}"
+        )
 
     def test_first_pass_store_failure_aaaa_falls_back_to_baked_v6(self, monkeypatch: Any) -> None:
         # issue #749: the AAAA leg of the store-failure fallback -- the baked answer
@@ -2373,9 +2614,11 @@ class TestSafeSearchCnameRedirect:
         self._spy_cache(monkeypatch, store_fails=True)
         qstate = make_qstate("duckduckgo.com.", qtype=RR_AAAA, return_msg=None)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert any("IN AAAA 2001:db8::7" in a for a in DNSMessage.instances[-1].answer)
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert any("IN AAAA 2001:db8::7" in a for a in DNSMessage.instances[-1].answer), (
+            f"expected a match in {DNSMessage.instances[-1].answer!r}"
+        )
 
     def test_first_pass_store_failure_aaaa_without_baked_v6_errors(self, monkeypatch: Any) -> None:
         # issue #749: family mismatch -- the entry has a baked v4 but the AAAA query
@@ -2386,8 +2629,8 @@ class TestSafeSearchCnameRedirect:
         self._spy_cache(monkeypatch, store_fails=True)
         qstate = make_qstate("duckduckgo.com.", qtype=RR_AAAA, return_msg=None)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_ERROR
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_ERROR, f"expected {MODULE_ERROR!r}, got {qstate.ext_state[0]!r}"
 
     def test_phase2_success_restamps_dnssec_and_finishes(self, monkeypatch: Any) -> None:
         # Phase 2 success (the AFTER of phase 1): the iterator chased our CNAME to an
@@ -2401,13 +2644,15 @@ class TestSafeSearchCnameRedirect:
             "duckduckgo.com.", qtype=RR_A, return_msg=self._reply("duckduckgo.com.", cname=True, has_a=True)
         )
         # Given the chased answer is not yet marked (security 0 = unchecked)...
-        assert qstate.return_msg.rep.security == 0
+        assert qstate.return_msg.rep.security == 0, f"expected 0, got {qstate.return_msg.rep.security!r}"
         rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert qstate.return_msg.rep.security == sec_status_insecure
-        assert calls["store"] == [0]  # is_referral=0 (final answer)
-        assert calls["invalidate"] == 1
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.return_msg.rep.security == sec_status_insecure, (
+            f"expected {sec_status_insecure!r}, got {qstate.return_msg.rep.security!r}"
+        )
+        assert calls["store"] == [0], f"expected [0], got {calls['store']!r}"  # is_referral=0 (final answer)
+        assert calls["invalidate"] == 1, f"expected 1, got {calls['invalidate']!r}"
 
     def test_phase2_recache_failure_still_finishes(self, monkeypatch: Any) -> None:
         # issue #749: When the post-restart final-answer re-cache store fails, Then the
@@ -2423,15 +2668,19 @@ class TestSafeSearchCnameRedirect:
             "duckduckgo.com.", qtype=RR_A, return_msg=self._reply("duckduckgo.com.", cname=True, has_a=True)
         )
         rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert qstate.return_rcode == RCODE_NOERROR
-        assert qstate.return_msg.rep.security == sec_status_insecure
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
+        assert qstate.return_msg.rep.security == sec_status_insecure, (
+            f"expected {sec_status_insecure!r}, got {qstate.return_msg.rep.security!r}"
+        )
         # The failable evidence: THE re-cache warning was actually emitted
         # (FINISHED/NOERROR/security alone are already true before the fix -- this store
         # failure is otherwise silently swallowed). Match the warning text itself, not
         # just the qname, so an unrelated future log line can't green this test.
-        assert any("failed to re-cache" in msg and "duckduckgo.com" in msg for msg in log_calls)
+        assert any("failed to re-cache" in msg and "duckduckgo.com" in msg for msg in log_calls), (
+            f"expected a match in {log_calls!r}"
+        )
 
     def test_phase2_baked_fallback_when_chase_has_no_address_a(self, monkeypatch: Any) -> None:
         # #2 fallback (When the chase yields only a bare CNAME, no address): answer the
@@ -2442,9 +2691,11 @@ class TestSafeSearchCnameRedirect:
             "duckduckgo.com.", qtype=RR_A, return_msg=self._reply("duckduckgo.com.", cname=True, has_a=False)
         )
         rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert any("IN A 203.0.113.7" in a for a in DNSMessage.instances[-1].answer)
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert any("IN A 203.0.113.7" in a for a in DNSMessage.instances[-1].answer), (
+            f"expected a match in {DNSMessage.instances[-1].answer!r}"
+        )
 
     def test_phase2_baked_fallback_aaaa_uses_v6(self, monkeypatch: Any) -> None:
         # The AAAA leg of the baked fallback uses the v6 column.
@@ -2454,8 +2705,10 @@ class TestSafeSearchCnameRedirect:
             "duckduckgo.com.", qtype=RR_AAAA, return_msg=self._reply("duckduckgo.com.", cname=True, has_a=False)
         )
         pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert any("IN AAAA 2001:db8::7" in a for a in DNSMessage.instances[-1].answer)
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert any("IN AAAA 2001:db8::7" in a for a in DNSMessage.instances[-1].answer), (
+            f"expected a match in {DNSMessage.instances[-1].answer!r}"
+        )
 
     def test_phase2_no_address_no_baked_falls_through(self, monkeypatch: Any) -> None:
         # The without-baked side of the fallback pair: a CNAME entry with NO baked IPs
@@ -2469,8 +2722,10 @@ class TestSafeSearchCnameRedirect:
             "duckduckgo.com.", qtype=RR_A, return_msg=self._reply("duckduckgo.com.", cname=True, has_a=False)
         )
         pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert qstate.ext_state[0] == MODULE_FINISHED  # finished by the generic logger
-        assert DNSMessage.instances == []  # redirect synthesized nothing
+        assert qstate.ext_state[0] == MODULE_FINISHED, (
+            f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        )  # finished by the generic logger
+        assert DNSMessage.instances == [], f"expected [], got {DNSMessage.instances!r}"  # redirect synthesized nothing
 
     def test_non_address_qtype_not_redirected(self, monkeypatch: Any) -> None:
         # A non-A/AAAA query (e.g. MX) for a CNAME-SafeSearch name is NOT redirected;
@@ -2481,6 +2736,9 @@ class TestSafeSearchCnameRedirect:
         assert (
             pfb_unbound.safesearch_cname_redirect(0, qstate, RR_TXT, pfb_unbound.safeSearchDB["duckduckgo.com"])
             is False
+        ), (
+            f"expected False, got "
+            f"{pfb_unbound.safesearch_cname_redirect(0, qstate, RR_TXT, pfb_unbound.safeSearchDB['duckduckgo.com'])!r}"
         )
 
     def test_non_safesearch_name_unaffected_at_moddone(self, monkeypatch: Any) -> None:
@@ -2489,8 +2747,8 @@ class TestSafeSearchCnameRedirect:
         monkeypatch.setattr(pfb_unbound, "get_details_reply", lambda *a, **k: None)
         qstate = make_qstate("normal.com.", qtype=RR_A, return_msg=None)
         pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert DNSMessage.instances == []
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert DNSMessage.instances == [], f"expected [], got {DNSMessage.instances!r}"
 
 
 class TestGetDetailsReplyNoaaaa:
@@ -2512,9 +2770,9 @@ class TestGetDetailsReplyNoaaaa:
         add_noaaaa("blocked.example.com", wildcard=False)
         qstate = self._aaaa_qstate("blocked.example.com.")
         rcd = pfb_unbound.get_details_reply("reply-x", None, qstate, None, {"pfb_addr": "1.2.3.4"})
-        assert rcd is True
+        assert rcd is True, f"expected True, got {rcd!r}"
         # Gate passed -> proceeds past the reply-x gate to the resolver counter.
-        assert len(calls) == 1
+        assert len(calls) == 1, f"expected 1, got {len(calls)!r}"
 
     def test_reply_x_aaaa_without_noaaaa_short_circuits(self, monkeypatch: Any) -> None:
         calls = []
@@ -2522,24 +2780,26 @@ class TestGetDetailsReplyNoaaaa:
         pfb_unbound.pfb["sqlite3_resolver_con"] = True
         qstate = self._aaaa_qstate("notblocked.example.com.")
         rcd = pfb_unbound.get_details_reply("reply-x", None, qstate, None, {"pfb_addr": "1.2.3.4"})
-        assert rcd is True
+        assert rcd is True, f"expected True, got {rcd!r}"
         # Gate failed -> early return before the resolver counter fires.
-        assert calls == []
+        assert calls == [], f"expected [], got {calls!r}"
 
     def test_reply_x_aaaa_wildcard_child_proceeds(self, monkeypatch: Any) -> None:
         # Stage 2: a wildcard-parent noAAAA child (not an exact entry) now passes the
         # gate via evaluate_noaaaa. Pre-Stage-2 the gate read noAAAADB.get(child), which
         # only saw the child once the (now-removed) query-time memo wrote it.
         calls: list[Any] = []
-        assert calls == []  # before-state: no side effect yet
+        assert calls == [], f"expected [], got {calls!r}"  # before-state: no side effect yet
         monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a, **k: calls.append(a))
         pfb_unbound.pfb["sqlite3_resolver_con"] = True
         add_noaaaa("example.com", wildcard=True)
-        assert "sub.example.com" not in pfb_unbound.noAAAADB  # not exact -> gate must pass via wildcard
+        assert "sub.example.com" not in pfb_unbound.noAAAADB, (
+            f"expected 'sub.example.com' not in {pfb_unbound.noAAAADB!r}"
+        )  # not exact -> gate must pass via wildcard
         qstate = self._aaaa_qstate("sub.example.com.")
         rcd = pfb_unbound.get_details_reply("reply-x", None, qstate, None, {"pfb_addr": "1.2.3.4"})
-        assert rcd is True
-        assert len(calls) == 1
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert len(calls) == 1, f"expected 1, got {len(calls)!r}"
 
 
 class TestStage2UnifiedDecision:
@@ -2562,42 +2822,52 @@ class TestStage2UnifiedDecision:
         set_feed_group(0, "F", "G")
         add_noaaaa("unrelated.com", wildcard=False)  # enables the noAAAA path; multi.com unlisted
         pfb_unbound.pfb["safeSearchDB"] = True  # enables the SafeSearch path; multi.com unlisted
-        assert "multi.com" not in pfb_unbound.decisionDB  # before-state: no Decision yet
+        assert "multi.com" not in pfb_unbound.decisionDB, (
+            f"expected 'multi.com' not in {pfb_unbound.decisionDB!r}"
+        )  # before-state: no Decision yet
         qstate = make_qstate("multi.com.", qtype=RR_AAAA)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED  # DNSBL blocked
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, (
+            f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        )  # DNSBL blocked
         dec = pfb_unbound.decisionDB["multi.com"]
-        assert dec.noaaaa is False  # noAAAA allow, evaluated + cached
-        assert dec.safesearch is None  # SafeSearch no-match, evaluated + cached
-        assert _is_block(dec)  # DNSBL block
+        assert dec.noaaaa is False, f"expected False, got {dec.noaaaa!r}"  # noAAAA allow, evaluated + cached
+        assert dec.safesearch is None, (
+            f"expected None, got {dec.safesearch!r}"
+        )  # SafeSearch no-match, evaluated + cached
+        assert _is_block(dec), f"expected truthy, got {_is_block(dec)!r}"  # DNSBL block
 
     def test_noaaaa_verdict_reused_without_reeval(self, monkeypatch: Any) -> None:
         # A cached noaaaa=True blocks an AAAA query straight from the Decision, with the
         # name NOT in the noAAAADB source -> the memo, not re-evaluation, did it.
         self._enable(monkeypatch)
         add_noaaaa("unrelated.com", wildcard=False)  # enable the path; x.com unlisted
-        assert "x.com" not in pfb_unbound.noAAAADB  # absent from source -> only the cache can block
+        assert "x.com" not in pfb_unbound.noAAAADB, (
+            f"expected 'x.com' not in {pfb_unbound.noAAAADB!r}"
+        )  # absent from source -> only the cache can block
         pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(noaaaa=True, snap_gen=pfb_unbound._snapshot.gen)
         qstate = make_qstate("x.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
 
     def test_safesearch_verdict_reused_without_reeval(self, monkeypatch: Any) -> None:
         # A cached safesearch entry rewrites straight from the Decision, with the name
         # NOT in the safeSearchDB source -> the memo did it.
         self._enable(monkeypatch)
         pfb_unbound.pfb["safeSearchDB"] = True
-        assert "x.com" not in pfb_unbound.safeSearchDB  # absent from source -> only the cache rewrites
+        assert "x.com" not in pfb_unbound.safeSearchDB, (
+            f"expected 'x.com' not in {pfb_unbound.safeSearchDB!r}"
+        )  # absent from source -> only the cache rewrites
         pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(
             safesearch={"A": "1.2.3.4", "AAAA": ""}, snap_gen=pfb_unbound._snapshot.gen
         )
         qstate = make_qstate("x.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
         answers = DNSMessage.instances[-1].answer
-        assert any("1.2.3.4" in a for a in answers)
+        assert any("1.2.3.4" in a for a in answers), f"expected a match in {answers!r}"
 
     def test_stale_generation_noaaaa_memo_is_recomputed(self, monkeypatch: Any) -> None:
         # issue #1074 sibling axis: a foreign-generation noaaaa=True memo for a name
@@ -2605,24 +2875,28 @@ class TestStage2UnifiedDecision:
         # as a block -- same staleness gate as the dnsbl axis.
         self._enable(monkeypatch)
         add_noaaaa("unrelated.com", wildcard=False)  # enable the path; x.com unlisted
-        assert "x.com" not in pfb_unbound.noAAAADB
+        assert "x.com" not in pfb_unbound.noAAAADB, f"expected 'x.com' not in {pfb_unbound.noAAAADB!r}"
         pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(noaaaa=True)  # unstamped -> stale
         qstate = make_qstate("x.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
 
     def test_stale_generation_safesearch_memo_is_recomputed(self, monkeypatch: Any) -> None:
         # issue #1074 sibling axis: a foreign-generation safesearch memo for a name
         # NOT in the live safeSearchDB must be recomputed (no rewrite), not re-served.
         self._enable(monkeypatch)
         pfb_unbound.pfb["safeSearchDB"] = True
-        assert "x.com" not in pfb_unbound.safeSearchDB
+        assert "x.com" not in pfb_unbound.safeSearchDB, f"expected 'x.com' not in {pfb_unbound.safeSearchDB!r}"
         pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(
             safesearch={"A": "1.2.3.4", "AAAA": ""}  # unstamped -> stale
         )
         qstate = make_qstate("x.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
 
     def test_operate_respects_decisiondb_cap(self, monkeypatch: Any) -> None:
         # decisionDB is the LRU; with cap 1, querying a second blocked name evicts the
@@ -2633,43 +2907,49 @@ class TestStage2UnifiedDecision:
         set_feed_group(0, "F1", "G1")
         add_data("two.com", log="1", index=1)
         set_feed_group(1, "F2", "G2")
-        assert len(pfb_unbound.decisionDB) == 0  # before-state
+        assert len(pfb_unbound.decisionDB) == 0, f"expected 0, got {len(pfb_unbound.decisionDB)!r}"  # before-state
         pfb_unbound.operate(0, MODULE_EVENT_NEW, make_qstate("one.com.", qtype=RR_A), None)
-        assert len(pfb_unbound.decisionDB) == 1
+        assert len(pfb_unbound.decisionDB) == 1, f"expected 1, got {len(pfb_unbound.decisionDB)!r}"
         pfb_unbound.operate(0, MODULE_EVENT_NEW, make_qstate("two.com.", qtype=RR_A), None)
-        assert len(pfb_unbound.decisionDB) == 1  # capped; one.com (LRU) evicted
-        assert "two.com" in pfb_unbound.decisionDB
-        assert "one.com" not in pfb_unbound.decisionDB
+        assert len(pfb_unbound.decisionDB) == 1, (
+            f"expected 1, got {len(pfb_unbound.decisionDB)!r}"
+        )  # capped; one.com (LRU) evicted
+        assert "two.com" in pfb_unbound.decisionDB, f"expected 'two.com' in {pfb_unbound.decisionDB!r}"
+        assert "one.com" not in pfb_unbound.decisionDB, f"expected 'one.com' not in {pfb_unbound.decisionDB!r}"
 
 
 class TestLruCache:
     def test_get_set_contains_len(self) -> None:
         c = pfb_unbound._LruCache(0)
-        assert "a" not in c
-        assert c.get("a") is None
+        assert "a" not in c, f"expected 'a' not in {c!r}"
+        assert c.get("a") is None, f"expected None, got {c.get('a')!r}"
         c["a"] = 1
-        assert "a" in c and c["a"] == 1 and c.get("a") == 1 and len(c) == 1
+        assert "a" in c and c["a"] == 1 and c.get("a") == 1 and len(c) == 1, (
+            f"expected a==1 present and len==1, got c={c!r}"
+        )
 
     def test_unbounded_when_maxsize_zero(self) -> None:
         c = pfb_unbound._LruCache(0)
         for i in range(1000):
             c[str(i)] = i
-        assert len(c) == 1000  # 0 = no eviction (pre-LRU behaviour)
+        assert len(c) == 1000, f"expected 1000, got {len(c)!r}"  # 0 = no eviction (pre-LRU behaviour)
 
     def test_evicts_lru_at_cap(self) -> None:
         c = pfb_unbound._LruCache(2)
         c["a"] = 1
         c["b"] = 2
         c["c"] = 3  # over cap -> evict the LRU ("a")
-        assert "a" not in c and "b" in c and "c" in c and len(c) == 2
+        assert "a" not in c and "b" in c and "c" in c and len(c) == 2, (
+            f"expected a-absent, b/c-present, len==2, got c={c!r}"
+        )
 
     def test_get_bumps_recency_keeps_hot(self) -> None:
         c = pfb_unbound._LruCache(2)
         c["a"] = 1
         c["b"] = 2
-        assert c.get("a") == 1  # bump "a" -> MRU, so "b" becomes LRU
+        assert c.get("a") == 1, f"expected 1, got {c.get('a')!r}"  # bump "a" -> MRU, so "b" becomes LRU
         c["c"] = 3
-        assert "a" in c and "b" not in c and "c" in c
+        assert "a" in c and "b" not in c and "c" in c, f"expected a/c-present, b-absent, got c={c!r}"
 
     def test_setitem_existing_bumps_recency(self) -> None:
         c = pfb_unbound._LruCache(2)
@@ -2677,16 +2957,16 @@ class TestLruCache:
         c["b"] = 2
         c["a"] = 10  # update bumps "a" -> MRU
         c["c"] = 3
-        assert c["a"] == 10 and "b" not in c and "c" in c
+        assert c["a"] == 10 and "b" not in c and "c" in c, f"expected a==10, b-absent, c-present, got c={c!r}"
 
     def test_clear_and_delitem(self) -> None:
         c = pfb_unbound._LruCache(0)
         c["a"] = 1
         c["b"] = 2
         del c["a"]
-        assert "a" not in c
+        assert "a" not in c, f"expected 'a' not in {c!r}"
         c.clear()
-        assert len(c) == 0 and "b" not in c
+        assert len(c) == 0 and "b" not in c, f"expected empty c without 'b', got c={c!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -2696,42 +2976,48 @@ class TestLruCache:
 
 class TestIterDomainSuffixes:
     def test_single_label(self) -> None:
-        assert list(iter_domain_suffixes("com")) == ["com"]
+        assert list(iter_domain_suffixes("com")) == ["com"], (
+            f"expected ['com'], got {list(iter_domain_suffixes('com'))!r}"
+        )
 
     def test_two_labels(self) -> None:
-        assert list(iter_domain_suffixes("example.com")) == ["example.com", "com"]
+        assert list(iter_domain_suffixes("example.com")) == ["example.com", "com"], (
+            f"expected ['example.com', 'com'], got {list(iter_domain_suffixes('example.com'))!r}"
+        )
 
     def test_three_labels(self) -> None:
-        assert list(iter_domain_suffixes("sub.example.com")) == ["sub.example.com", "example.com", "com"]
+        assert list(iter_domain_suffixes("sub.example.com")) == ["sub.example.com", "example.com", "com"], (
+            f"expected ['sub.example.com', 'example.com', 'com'], got {list(iter_domain_suffixes('sub.example.com'))!r}"
+        )
 
     def test_empty_string(self) -> None:
         # Empty string has no dots; yields one item (the empty string itself)
-        assert list(iter_domain_suffixes("")) == [""]
+        assert list(iter_domain_suffixes("")) == [""], f"expected [''], got {list(iter_domain_suffixes(''))!r}"
 
 
 class TestFindZoneMatch:
     def test_exact_self_match(self) -> None:
         zone_db = {"example.com": {"log": "1", "index": 0}}
         matched, entry = find_zone_match("example.com", zone_db)
-        assert matched == "example.com"
-        assert entry == {"log": "1", "index": 0}
+        assert matched == "example.com", f"expected 'example.com', got {matched!r}"
+        assert entry == {"log": "1", "index": 0}, f"expected {'log': '1', 'index': 0}, got {entry!r}"
 
     def test_subdomain_matches_parent_zone(self) -> None:
         zone_db = {"example.com": {"log": "1", "index": 0}}
         matched, entry = find_zone_match("sub.example.com", zone_db)
-        assert matched == "example.com"
-        assert entry is not None
+        assert matched == "example.com", f"expected 'example.com', got {matched!r}"
+        assert entry is not None, f"expected not None, got {entry!r}"
 
     def test_deep_subdomain_matches(self) -> None:
         zone_db = {"example.com": {"log": "1", "index": 0}}
         matched, entry = find_zone_match("a.b.example.com", zone_db)
-        assert matched == "example.com"
+        assert matched == "example.com", f"expected 'example.com', got {matched!r}"
 
     def test_no_match_returns_none_none(self) -> None:
         zone_db = {"evil.com": {"log": "1", "index": 0}}
         matched, entry = find_zone_match("good.com", zone_db)
-        assert matched is None
-        assert entry is None
+        assert matched is None, f"expected None, got {matched!r}"
+        assert entry is None, f"expected None, got {entry!r}"
 
     def test_data_exact_not_wildcard(self) -> None:
         # dataDB uses exact only; simulate: zone_db contains 'evil.com'
@@ -2740,13 +3026,13 @@ class TestFindZoneMatch:
         # This test pins that find_zone_match IS the wildcard matcher.
         zone_db = {"evil.com": {"log": "1", "index": 0}}
         matched, _ = find_zone_match("x.evil.com", zone_db)
-        assert matched == "evil.com"
+        assert matched == "evil.com", f"expected 'evil.com', got {matched!r}"
 
     def test_matched_parent_string_correct(self) -> None:
         # b_eval = matched parent string; must be the zone key, not the query name
         zone_db = {"example.com": {"log": "1", "index": 0}}
         matched, _ = find_zone_match("deep.sub.example.com", zone_db)
-        assert matched == "example.com"
+        assert matched == "example.com", f"expected 'example.com', got {matched!r}"
 
     def test_most_specific_match_wins(self) -> None:
         # iter_domain_suffixes walks q_name → ... TLD, so first hit is most specific
@@ -2755,37 +3041,49 @@ class TestFindZoneMatch:
             "example.com": {"log": "1", "index": 2},
         }
         matched, entry = find_zone_match("sub.example.com", zone_db)
-        assert matched == "sub.example.com"
-        assert entry["index"] == 1
+        assert matched == "sub.example.com", f"expected 'sub.example.com', got {matched!r}"
+        assert entry["index"] == 1, f"expected 1, got {entry['index']!r}"
 
 
 class TestWhitelistCheckDomain:
     def test_exact_match(self) -> None:
         white_db: dict = {"allowed.com": False}
-        assert whitelist_check_domain("allowed.com", white_db, tld_seg=2) is True
+        assert whitelist_check_domain("allowed.com", white_db, tld_seg=2) is True, (
+            f"expected True, got {whitelist_check_domain('allowed.com', white_db, tld_seg=2)!r}"
+        )
 
     def test_no_match(self) -> None:
         white_db: dict = {"other.com": False}
-        assert whitelist_check_domain("allowed.com", white_db, tld_seg=2) is False
+        assert whitelist_check_domain("allowed.com", white_db, tld_seg=2) is False, (
+            f"expected False, got {whitelist_check_domain('allowed.com', white_db, tld_seg=2)!r}"
+        )
 
     def test_www_strip(self) -> None:
         # "www.allowed.com" → strips "www." → checks "allowed.com"
         white_db: dict = {"allowed.com": False}
-        assert whitelist_check_domain("www.allowed.com", white_db, tld_seg=2) is True
+        assert whitelist_check_domain("www.allowed.com", white_db, tld_seg=2) is True, (
+            f"expected True, got {whitelist_check_domain('www.allowed.com', white_db, tld_seg=2)!r}"
+        )
 
     def test_www_strip_not_triggered_for_non_www(self) -> None:
         white_db: dict = {"allowed.com": False}
-        assert whitelist_check_domain("sub.allowed.com", white_db, tld_seg=2) is False
+        assert whitelist_check_domain("sub.allowed.com", white_db, tld_seg=2) is False, (
+            f"expected False, got {whitelist_check_domain('sub.allowed.com', white_db, tld_seg=2)!r}"
+        )
 
     def test_suffix_walk_at_tld_seg_boundary_matches(self) -> None:
         # "sub.evil.com": suffix walk starts at "evil.com" (x=2, tld_seg=2) → match
         white_db: dict = {"evil.com": True}
-        assert whitelist_check_domain("sub.evil.com", white_db, tld_seg=2) is True
+        assert whitelist_check_domain("sub.evil.com", white_db, tld_seg=2) is True, (
+            f"expected True, got {whitelist_check_domain('sub.evil.com', white_db, tld_seg=2)!r}"
+        )
 
     def test_suffix_walk_below_tld_seg_does_not_match(self) -> None:
         # "evil.com": suffix walk starts at "com" (x=1, tld_seg=2) → 1 < 2 → no match
         white_db: dict = {"com": True}
-        assert whitelist_check_domain("evil.com", white_db, tld_seg=2) is False
+        assert whitelist_check_domain("evil.com", white_db, tld_seg=2) is False, (
+            f"expected False, got {whitelist_check_domain('evil.com', white_db, tld_seg=2)!r}"
+        )
 
     def test_suffix_walk_with_high_tld_seg_blocks_intermediate(self) -> None:
         # "a.b.example.com" with tld_seg=3:
@@ -2793,12 +3091,16 @@ class TestWhitelistCheckDomain:
         #   x=3 >= 3 → check "b.example.com" (not in db)
         #   x=2 < 3 → skip "example.com"  (below tld_seg gate)
         white_db: dict = {"example.com": True}
-        assert whitelist_check_domain("a.b.example.com", white_db, tld_seg=3) is False
+        assert whitelist_check_domain("a.b.example.com", white_db, tld_seg=3) is False, (
+            f"expected False, got {whitelist_check_domain('a.b.example.com', white_db, tld_seg=3)!r}"
+        )
 
     def test_suffix_walk_respects_tld_seg_allows_higher(self) -> None:
         # Same domain but entry is at "b.example.com" (x=3 >= 3) → match
         white_db: dict = {"b.example.com": True}
-        assert whitelist_check_domain("a.b.example.com", white_db, tld_seg=3) is True
+        assert whitelist_check_domain("a.b.example.com", white_db, tld_seg=3) is True, (
+            f"expected True, got {whitelist_check_domain('a.b.example.com', white_db, tld_seg=3)!r}"
+        )
 
 
 class TestFindNoaaaaWildcardParent:
@@ -2806,34 +3108,34 @@ class TestFindNoaaaaWildcardParent:
         # find_noaaaa_wildcard_parent starts from PARENT, so self is never checked
         noaaaa_db: dict = {"example.com": True}
         result = find_noaaaa_wildcard_parent("example.com", noaaaa_db)
-        assert result is None
+        assert result is None, f"expected None, got {result!r}"
 
     def test_direct_parent_matched(self) -> None:
         noaaaa_db: dict = {"example.com": True}
         result = find_noaaaa_wildcard_parent("sub.example.com", noaaaa_db)
-        assert result == "example.com"
+        assert result == "example.com", f"expected 'example.com', got {result!r}"
 
     def test_grandparent_matched(self) -> None:
         noaaaa_db: dict = {"example.com": True}
         result = find_noaaaa_wildcard_parent("a.b.example.com", noaaaa_db)
-        assert result == "example.com"
+        assert result == "example.com", f"expected 'example.com', got {result!r}"
 
     def test_no_match_returns_none(self) -> None:
         noaaaa_db: dict = {"other.com": True}
         result = find_noaaaa_wildcard_parent("sub.example.com", noaaaa_db)
-        assert result is None
+        assert result is None, f"expected None, got {result!r}"
 
     def test_wildcard_false_value_not_matched(self) -> None:
         # noaaaa_db.get(q) is truthy check; wildcard=False means value is False → not matched
         noaaaa_db: dict = {"example.com": False}
         result = find_noaaaa_wildcard_parent("sub.example.com", noaaaa_db)
-        assert result is None
+        assert result is None, f"expected None, got {result!r}"
 
     def test_single_label_parent_not_checked(self) -> None:
         # "sub.com": parent = "com", but loop range(0, 0, -1) is empty → no check
         noaaaa_db: dict = {"com": True}
         result = find_noaaaa_wildcard_parent("sub.com", noaaaa_db)
-        assert result is None
+        assert result is None, f"expected None, got {result!r}"
 
 
 def _noaaaa_db(entries: dict[str, bool]) -> dict[str, bool]:
@@ -2845,52 +3147,60 @@ class TestEvaluateNoaaaa:
     def test_exact_match_no_wildcard_flag(self) -> None:
         # wildcard=False → exact branch fires on presence (get(name) is not None)
         db = _noaaaa_db({"example.com": False})
-        assert evaluate_noaaaa("example.com", db) is True
+        assert evaluate_noaaaa("example.com", db) is True, f"expected True, got {evaluate_noaaaa('example.com', db)!r}"
 
     def test_exact_match_wildcard_flag(self) -> None:
         db = _noaaaa_db({"example.com": True})
-        assert evaluate_noaaaa("example.com", db) is True
+        assert evaluate_noaaaa("example.com", db) is True, f"expected True, got {evaluate_noaaaa('example.com', db)!r}"
 
     def test_wildcard_parent_matches_subdomain(self) -> None:
         db = _noaaaa_db({"example.com": True})
-        assert evaluate_noaaaa("sub.example.com", db) is True
+        assert evaluate_noaaaa("sub.example.com", db) is True, (
+            f"expected True, got {evaluate_noaaaa('sub.example.com', db)!r}"
+        )
 
     def test_wildcard_false_does_not_match_subdomain(self) -> None:
         # wildcard=False → wildcard-parent branch skips it (truthy check)
         db = _noaaaa_db({"example.com": False})
-        assert evaluate_noaaaa("sub.example.com", db) is False
+        assert evaluate_noaaaa("sub.example.com", db) is False, (
+            f"expected False, got {evaluate_noaaaa('sub.example.com', db)!r}"
+        )
 
     def test_no_match(self) -> None:
         db = _noaaaa_db({"other.com": True})
-        assert evaluate_noaaaa("example.com", db) is False
+        assert evaluate_noaaaa("example.com", db) is False, (
+            f"expected False, got {evaluate_noaaaa('example.com', db)!r}"
+        )
 
     def test_self_not_matched_by_wildcard_branch(self) -> None:
         # wildcard branch is parent-only; exact branch handles self
         db = _noaaaa_db({"example.com": True})
-        assert evaluate_noaaaa("example.com", db) is True
+        assert evaluate_noaaaa("example.com", db) is True, f"expected True, got {evaluate_noaaaa('example.com', db)!r}"
 
 
 class TestHstsCheckDomain:
     def test_tld_in_hsts_tlds_returns_hsts_tld(self) -> None:
         hsts_db: dict = {}
-        assert hsts_check_domain("example.app", hsts_db, ("app",), "app") == (True, "HSTS_TLD")
+        assert hsts_check_domain("example.app", hsts_db, ("app",), "app") == (True, "HSTS_TLD"), (
+            f"expected (True, 'HSTS_TLD'), got {hsts_check_domain('example.app', hsts_db, ('app',), 'app')!r}"
+        )
 
     def test_tld_not_in_hsts_tlds_falls_through(self) -> None:
         hsts_db: dict = {}
         result = hsts_check_domain("example.com", hsts_db, ("app",), "com")
-        assert result == (False, "Python")
+        assert result == (False, "Python"), f"expected (False, 'Python'), got {result!r}"
 
     def test_exact_domain_in_hsts_db(self) -> None:
         hsts_db: dict = {"example.com": 0}
         result = hsts_check_domain("example.com", hsts_db, (), "com")
-        assert result == (True, "HSTS")
+        assert result == (True, "HSTS"), f"expected (True, 'HSTS'), got {result!r}"
 
     def test_suffix_walk_hits_parent(self) -> None:
         # "sub.example.com" (2 dots): the walk checks "sub.example.com" (miss), steps
         # to "example.com" (hit) -- every parent suffix level is visited in order.
         hsts_db: dict = {"example.com": 0}
         result = hsts_check_domain("sub.example.com", hsts_db, (), "com")
-        assert result == (True, "HSTS")
+        assert result == (True, "HSTS"), f"expected (True, 'HSTS'), got {result!r}"
 
     def test_every_parent_suffix_is_checked_for_hsts(self) -> None:
         # issue #713: the walk used to stride by -2, skipping every OTHER parent
@@ -2902,14 +3212,14 @@ class TestHstsCheckDomain:
         # checks every level ("a.b.c.d", "b.c.d", "c.d", "d") and finds it.
         hsts_db: dict = {"c.d": 0}
         result = hsts_check_domain("a.b.c.d", hsts_db, (), "d")
-        assert result == (True, "HSTS")
+        assert result == (True, "HSTS"), f"expected (True, 'HSTS'), got {result!r}"
 
     def test_second_level_parent_suffix_matches(self) -> None:
         # The second suffix level checked ("b.c.d", one step up from the full name)
         # resolves to HSTS -- confirms the walk isn't only correct at the extremes.
         hsts_db: dict = {"b.c.d": 0}
         result = hsts_check_domain("a.b.c.d", hsts_db, (), "d")
-        assert result == (True, "HSTS")
+        assert result == (True, "HSTS"), f"expected (True, 'HSTS'), got {result!r}"
 
     def test_bare_tld_suffix_is_checked(self) -> None:
         # issue #713: the walk must reach the LAST level -- the bare TLD label itself.
@@ -2919,12 +3229,12 @@ class TestHstsCheckDomain:
         # (and including) the TLD.
         hsts_db: dict = {"d": 0}
         result = hsts_check_domain("a.b.c.d", hsts_db, (), "d")
-        assert result == (True, "HSTS")
+        assert result == (True, "HSTS"), f"expected (True, 'HSTS'), got {result!r}"
 
     def test_no_match_returns_python(self) -> None:
         hsts_db: dict = {"other.com": 0}
         result = hsts_check_domain("example.com", hsts_db, (), "com")
-        assert result == (False, "Python")
+        assert result == (False, "Python"), f"expected (False, 'Python'), got {result!r}"
 
 
 class TestParseTldAllow:
@@ -2934,32 +3244,38 @@ class TestParseTldAllow:
     of force-enabling it (the old ``!= ""`` list-vs-str compare was always True)."""
 
     def test_empty_value_parses_to_empty_list(self) -> None:
-        assert parse_tld_allow("") == []
+        assert parse_tld_allow("") == [], f"expected [], got {parse_tld_allow('')!r}"
 
     def test_whitespace_only_value_parses_to_empty_list(self) -> None:
-        assert parse_tld_allow("   ") == []
+        assert parse_tld_allow("   ") == [], f"expected [], got {parse_tld_allow('   ')!r}"
 
     def test_populated_value_parses_and_strips_entries(self) -> None:
-        assert parse_tld_allow("com, net ,org") == ["com", "net", "org"]
+        assert parse_tld_allow("com, net ,org") == ["com", "net", "org"], (
+            f"expected ['com', 'net', 'org'], got {parse_tld_allow('com, net ,org')!r}"
+        )
 
     def test_entries_are_lowercased(self) -> None:
         # issue #720: the value can carry the case-preserved system-domain TLD
         # (free-text `system/domain`, e.g. "MyLab.LOCAL" -> "LOCAL"); the membership
         # test compares against the lowercased qname label (RFC 4343), so the config
         # side must normalise at the same read boundary.
-        assert parse_tld_allow("CoM, LOCAL") == ["com", "local"]
+        assert parse_tld_allow("CoM, LOCAL") == ["com", "local"], (
+            f"expected ['com', 'local'], got {parse_tld_allow('CoM, LOCAL')!r}"
+        )
 
     def test_empty_parsed_list_does_not_enable_tld_blacklist(self) -> None:
         # Reproduces init_standard's guard verbatim: `if tld_allow and tld_allow_list:`.
         # An empty/degenerate TLD-Allow value must NOT force python_blacklist on.
         tld_allow_list = parse_tld_allow("")
         tld_allow = True
-        assert bool(tld_allow and tld_allow_list) is False
+        assert bool(tld_allow and tld_allow_list) is False, (
+            f"expected False, got {bool(tld_allow and tld_allow_list)!r}"
+        )
 
     def test_populated_parsed_list_enables_tld_blacklist(self) -> None:
         tld_allow_list = parse_tld_allow("com,net")
         tld_allow = True
-        assert bool(tld_allow and tld_allow_list) is True
+        assert bool(tld_allow and tld_allow_list) is True, f"expected True, got {bool(tld_allow and tld_allow_list)!r}"
 
 
 class TestParseIniInt:
@@ -2977,11 +3293,15 @@ class TestParseIniInt:
 
     def test_malformed_value_returns_none_instead_of_raising(self) -> None:
         config = self._config("not-an-int")
-        assert _parse_ini_int(config, "MAIN", "python_tld_seg") is None
+        assert _parse_ini_int(config, "MAIN", "python_tld_seg") is None, (
+            f"expected None, got {_parse_ini_int(config, 'MAIN', 'python_tld_seg')!r}"
+        )
 
     def test_well_formed_value_parses_to_int(self) -> None:
         config = self._config("3")
-        assert _parse_ini_int(config, "MAIN", "python_tld_seg") == 3
+        assert _parse_ini_int(config, "MAIN", "python_tld_seg") == 3, (
+            f"expected 3, got {_parse_ini_int(config, 'MAIN', 'python_tld_seg')!r}"
+        )
 
     def test_default_is_preserved_when_parse_fails(self) -> None:
         # Mirrors init_standard's call-site guard: only overwrite the current default
@@ -2990,28 +3310,34 @@ class TestParseIniInt:
         config = self._config("garbage")
         parsed = _parse_ini_int(config, "MAIN", "python_tld_seg")
         result = parsed if parsed is not None else current_default
-        assert result == current_default
+        assert result == current_default, f"expected {current_default!r}, got {result!r}"
 
     def test_default_is_replaced_when_parse_succeeds(self) -> None:
         current_default = 2
         config = self._config("9")
         parsed = _parse_ini_int(config, "MAIN", "python_tld_seg")
         result = parsed if parsed is not None else current_default
-        assert result == 9
+        assert result == 9, f"expected 9, got {result!r}"
 
 
 class TestResolveFeedGroup:
     def test_hit_returns_feed_and_group(self) -> None:
         fgidb = {0: {"feed": "MyFeed", "group": "MyGroup"}}
-        assert resolve_feed_group(0, fgidb) == ("MyFeed", "MyGroup")
+        assert resolve_feed_group(0, fgidb) == ("MyFeed", "MyGroup"), (
+            f"expected ('MyFeed', 'MyGroup'), got {resolve_feed_group(0, fgidb)!r}"
+        )
 
     def test_miss_returns_unknown_unknown(self) -> None:
         fgidb: dict = {}
-        assert resolve_feed_group(99, fgidb) == ("Unknown", "Unknown")
+        assert resolve_feed_group(99, fgidb) == ("Unknown", "Unknown"), (
+            f"expected ('Unknown', 'Unknown'), got {resolve_feed_group(99, fgidb)!r}"
+        )
 
     def test_none_index_returns_unknown(self) -> None:
         fgidb = {0: {"feed": "F", "group": "G"}}
-        assert resolve_feed_group(None, fgidb) == ("Unknown", "Unknown")
+        assert resolve_feed_group(None, fgidb) == ("Unknown", "Unknown"), (
+            f"expected ('Unknown', 'Unknown'), got {resolve_feed_group(None, fgidb)!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3163,22 +3489,26 @@ class TestEvaluateDomainGolden:
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True)
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.in_whitelist is False
-        assert dec.b_type == "DNSBL"
-        assert dec.b_eval == "evil.com"
-        assert dec.feed == "BadFeed"
-        assert dec.group == "BadGroup"
-        assert dec.log_type == "1"
-        assert dec.null_blocking is False  # log_type="1" and not in_hsts -> null_blocking=False
-        assert dec.nxdomain is False  # VIP is neither null nor NXDOMAIN (issue #31 contrast)
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.in_whitelist is False, f"expected False, got {dec.in_whitelist!r}"
+        assert dec.b_type == "DNSBL", f"expected 'DNSBL', got {dec.b_type!r}"
+        assert dec.b_eval == "evil.com", f"expected 'evil.com', got {dec.b_eval!r}"
+        assert dec.feed == "BadFeed", f"expected 'BadFeed', got {dec.feed!r}"
+        assert dec.group == "BadGroup", f"expected 'BadGroup', got {dec.group!r}"
+        assert dec.log_type == "1", f"expected '1', got {dec.log_type!r}"
+        assert dec.null_blocking is False, (
+            f"expected False, got {dec.null_blocking!r}"
+        )  # log_type="1" and not in_hsts -> null_blocking=False
+        assert dec.nxdomain is False, (
+            f"expected False, got {dec.nxdomain!r}"
+        )  # VIP is neither null nor NXDOMAIN (issue #31 contrast)
 
     def test_data_exact_does_not_match_subdomain(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
         containers = _make_containers(dataDB=data_db)
         cfg = _make_cfg(dataDB=True)
         dec = evaluate_domain("sub.evil.com", "sub.evil.com", "com", False, cfg, containers)
-        assert dec.is_found is False
+        assert dec.is_found is False, f"expected False, got {dec.is_found!r}"
 
     def test_zone_hit_wildcard_incl_self(self) -> None:
         zone_db: dict = {"example.com": {"log": "1", "index": 0}}
@@ -3187,36 +3517,38 @@ class TestEvaluateDomainGolden:
         cfg = _make_cfg(zoneDB=True)
         # Self match
         dec_self = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
-        assert dec_self.is_found is True
-        assert dec_self.b_type == "TLD"
-        assert dec_self.b_eval == "example.com"
+        assert dec_self.is_found is True, f"expected True, got {dec_self.is_found!r}"
+        assert dec_self.b_type == "TLD", f"expected 'TLD', got {dec_self.b_type!r}"
+        assert dec_self.b_eval == "example.com", f"expected 'example.com', got {dec_self.b_eval!r}"
         # Subdomain match
         dec_sub = evaluate_domain("sub.example.com", "sub.example.com", "com", False, cfg, containers)
-        assert dec_sub.is_found is True
-        assert dec_sub.b_type == "TLD"
-        assert dec_sub.b_eval == "example.com"  # matched parent, not query name
+        assert dec_sub.is_found is True, f"expected True, got {dec_sub.is_found!r}"
+        assert dec_sub.b_type == "TLD", f"expected 'TLD', got {dec_sub.b_type!r}"
+        assert dec_sub.b_eval == "example.com", (
+            f"expected 'example.com', got {dec_sub.b_eval!r}"
+        )  # matched parent, not query name
 
     def test_zone_b_eval_is_parent_not_query(self) -> None:
         zone_db: dict = {"example.com": {"log": "1", "index": 0}}
         containers = _make_containers(zoneDB=zone_db)
         cfg = _make_cfg(zoneDB=True)
         dec = evaluate_domain("deep.sub.example.com", "deep.sub.example.com", "com", False, cfg, containers)
-        assert dec.b_eval == "example.com"
+        assert dec.b_eval == "example.com", f"expected 'example.com', got {dec.b_eval!r}"
 
     def test_tld_allow(self) -> None:
         cfg = _make_cfg(tld_allow=True, tld_allow_list=["com", "net"])
         containers = _make_containers()
         # "com" NOT in allowed list → block
         dec = evaluate_domain("example.org", "example.org", "example", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.feed == "TLD_Allow"
-        assert dec.group == "DNSBL_TLD_Allow"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.feed == "TLD_Allow", f"expected 'TLD_Allow', got {dec.feed!r}"
+        assert dec.group == "DNSBL_TLD_Allow", f"expected 'DNSBL_TLD_Allow', got {dec.group!r}"
 
     def test_tld_allow_passthrough_when_tld_allowed(self) -> None:
         cfg = _make_cfg(tld_allow=True, tld_allow_list=["com"])
         containers = _make_containers()
         dec = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
-        assert dec.is_found is False
+        assert dec.is_found is False, f"expected False, got {dec.is_found!r}"
 
     def test_tld_allow_empty_list_is_a_noop(self) -> None:
         """issue #713: an empty ``tld_allow_list`` (TLD-Allow enabled but no TLDs
@@ -3228,7 +3560,7 @@ class TestEvaluateDomainGolden:
         cfg = _make_cfg(tld_allow=True, tld_allow_list=[])
         containers = _make_containers()
         dec = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
-        assert dec.is_found is False
+        assert dec.is_found is False, f"expected False, got {dec.is_found!r}"
 
     def test_tld_allow_branches_both_ways_on_a_populated_list(self) -> None:
         """With a populated TLD-Allow list, a disallowed tld is still blocked
@@ -3238,12 +3570,12 @@ class TestEvaluateDomainGolden:
         containers = _make_containers()
 
         dec_blocked = evaluate_domain("example.net", "example.net", "net", False, cfg, containers)
-        assert dec_blocked.is_found is True
-        assert dec_blocked.feed == "TLD_Allow"
-        assert dec_blocked.group == "DNSBL_TLD_Allow"
+        assert dec_blocked.is_found is True, f"expected True, got {dec_blocked.is_found!r}"
+        assert dec_blocked.feed == "TLD_Allow", f"expected 'TLD_Allow', got {dec_blocked.feed!r}"
+        assert dec_blocked.group == "DNSBL_TLD_Allow", f"expected 'DNSBL_TLD_Allow', got {dec_blocked.group!r}"
 
         dec_allowed = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
-        assert dec_allowed.is_found is False
+        assert dec_allowed.is_found is False, f"expected False, got {dec_allowed.is_found!r}"
 
     def test_tld_allow_mixed_case_query_gets_same_verdict_as_lowercase(self) -> None:
         # #720: tld_allow_list is stored lowercase-only ("com"); operate() derives ``tld``
@@ -3258,30 +3590,30 @@ class TestEvaluateDomainGolden:
         # Before-state: the lowercase wire form's tld ("com") is allowed -> passes.
         tld_lower = pfb_unbound.get_tld(make_qstate("example.com."))
         dec_lower = evaluate_domain("example.com", "example.com", tld_lower, False, cfg, containers)
-        assert dec_lower.is_found is False
+        assert dec_lower.is_found is False, f"expected False, got {dec_lower.is_found!r}"
 
         # A mixed-case wire form of the SAME domain must get the SAME verdict.
         tld_mixed = pfb_unbound.get_tld(make_qstate("ExAmPlE.CoM."))
-        assert tld_mixed == "com"
+        assert tld_mixed == "com", f"expected 'com', got {tld_mixed!r}"
         dec_mixed = evaluate_domain("example.com", "example.com", tld_mixed, False, cfg, containers)
-        assert dec_mixed.is_found is False
+        assert dec_mixed.is_found is False, f"expected False, got {dec_mixed.is_found!r}"
 
     def test_idn_block(self) -> None:
         cfg = _make_cfg(python_idn=True)
         containers = _make_containers()
         dec = evaluate_domain("xn--evil.com", "xn--evil.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.feed == "IDN"
-        assert dec.group == "DNSBL_IDN"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.feed == "IDN", f"expected 'IDN', got {dec.feed!r}"
+        assert dec.group == "DNSBL_IDN", f"expected 'DNSBL_IDN', got {dec.group!r}"
 
     def test_regex_block(self) -> None:
         regex_db: dict = {"bad-pattern": re.compile(r"tracker")}
         cfg = _make_cfg(regexDB=True)
         containers = _make_containers(regexDB=regex_db)
         dec = evaluate_domain("tracker.evil.com", "tracker.evil.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.group == "DNSBL_Regex"
-        assert dec.feed == "bad-pattern"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.group == "DNSBL_Regex", f"expected 'DNSBL_Regex', got {dec.group!r}"
+        assert dec.feed == "bad-pattern", f"expected 'bad-pattern', got {dec.feed!r}"
 
     def test_regex_not_evaluated_for_empty_qname(self) -> None:
         # An empty q_name must not be run against the regex set. This preserves
@@ -3291,7 +3623,7 @@ class TestEvaluateDomainGolden:
         cfg = _make_cfg(regexDB=True)
         containers = _make_containers(regexDB=regex_db)
         dec = evaluate_domain("", "", "", False, cfg, containers)
-        assert dec.is_found is False
+        assert dec.is_found is False, f"expected False, got {dec.is_found!r}"
 
     def test_regex_first_matching_pattern_wins(self) -> None:
         # Linear scan over regex_db.items() in insertion order; first hit wins.
@@ -3299,8 +3631,8 @@ class TestEvaluateDomainGolden:
         cfg = _make_cfg(regexDB=True)
         containers = _make_containers(regexDB=regex_db)
         dec = evaluate_domain("barfoo.com", "barfoo.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.feed == "first"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.feed == "first", f"expected 'first', got {dec.feed!r}"
 
     def test_whitelist_override(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
@@ -3309,10 +3641,10 @@ class TestEvaluateDomainGolden:
         containers = _make_containers(dataDB=data_db, whiteDB=white_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True, whiteDB=True)
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.in_whitelist is True
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.in_whitelist is True, f"expected True, got {dec.in_whitelist!r}"
         # Whitelisted → null_blocking stays True (default), b_type stays "DNSBL"
-        assert dec.null_blocking is True
+        assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
 
     def test_hsts_null_blocking(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
@@ -3321,11 +3653,11 @@ class TestEvaluateDomainGolden:
         containers = _make_containers(dataDB=data_db, hstsDB=hsts_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True, hstsDB=True, hsts_tlds=())
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.in_hsts is True
-        assert dec.p_type == "HSTS"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.in_hsts is True, f"expected True, got {dec.in_hsts!r}"
+        assert dec.p_type == "HSTS", f"expected 'HSTS', got {dec.p_type!r}"
         # in_hsts → null_blocking stays True even though log_type="1"
-        assert dec.null_blocking is True
+        assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
 
     def test_hsts_tld_null_blocking(self) -> None:
         data_db: dict = {"evil.app": {"log": "1", "index": 0}}
@@ -3333,9 +3665,9 @@ class TestEvaluateDomainGolden:
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True, hstsDB=True, hsts_tlds=("app",))
         dec = evaluate_domain("evil.app", "evil.app", "app", False, cfg, containers)
-        assert dec.in_hsts is True
-        assert dec.p_type == "HSTS_TLD"
-        assert dec.null_blocking is True
+        assert dec.in_hsts is True, f"expected True, got {dec.in_hsts!r}"
+        assert dec.p_type == "HSTS_TLD", f"expected 'HSTS_TLD', got {dec.p_type!r}"
+        assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
 
     def test_hsts_tld_mixed_case_query_still_null_blocks(self) -> None:
         # #720: hsts_tlds is stored lowercase-only ("app"); a mixed-case query under
@@ -3351,17 +3683,17 @@ class TestEvaluateDomainGolden:
         # Before-state: the lowercase wire form's tld ("app") trips the override.
         tld_lower = pfb_unbound.get_tld(make_qstate("evil.app."))
         dec_lower = evaluate_domain("evil.app", "evil.app", tld_lower, False, cfg, containers)
-        assert dec_lower.in_hsts is True
-        assert dec_lower.p_type == "HSTS_TLD"
-        assert dec_lower.null_blocking is True
+        assert dec_lower.in_hsts is True, f"expected True, got {dec_lower.in_hsts!r}"
+        assert dec_lower.p_type == "HSTS_TLD", f"expected 'HSTS_TLD', got {dec_lower.p_type!r}"
+        assert dec_lower.null_blocking is True, f"expected True, got {dec_lower.null_blocking!r}"
 
         # A mixed-case wire form of the SAME domain must get the SAME override.
         tld_mixed = pfb_unbound.get_tld(make_qstate("Evil.APP."))
-        assert tld_mixed == "app"
+        assert tld_mixed == "app", f"expected 'app', got {tld_mixed!r}"
         dec_mixed = evaluate_domain("evil.app", "evil.app", tld_mixed, False, cfg, containers)
-        assert dec_mixed.in_hsts is True
-        assert dec_mixed.p_type == "HSTS_TLD"
-        assert dec_mixed.null_blocking is True
+        assert dec_mixed.in_hsts is True, f"expected True, got {dec_mixed.in_hsts!r}"
+        assert dec_mixed.p_type == "HSTS_TLD", f"expected 'HSTS_TLD', got {dec_mixed.p_type!r}"
+        assert dec_mixed.null_blocking is True, f"expected True, got {dec_mixed.null_blocking!r}"
 
     def test_cname_b_type_suffix(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
@@ -3369,30 +3701,30 @@ class TestEvaluateDomainGolden:
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True)
         dec = evaluate_domain("evil.com", "original.com", "com", True, cfg, containers)
-        assert dec.is_found is True
-        assert dec.b_type == "DNSBL_CNAME"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.b_type == "DNSBL_CNAME", f"expected 'DNSBL_CNAME', got {dec.b_type!r}"
 
     def test_not_found_returns_default_decision(self) -> None:
         containers = _make_containers()
         cfg = _make_cfg()
         dec = evaluate_domain("notblocked.com", "notblocked.com", "com", False, cfg, containers)
-        assert dec.is_found is False
-        assert dec.in_whitelist is False
-        assert dec.in_hsts is False
-        assert dec.feed == "Unknown"
-        assert dec.group == "Unknown"
-        assert dec.b_eval == ""
-        assert dec.b_type == "Python"
-        assert dec.p_type == "Python"
+        assert dec.is_found is False, f"expected False, got {dec.is_found!r}"
+        assert dec.in_whitelist is False, f"expected False, got {dec.in_whitelist!r}"
+        assert dec.in_hsts is False, f"expected False, got {dec.in_hsts!r}"
+        assert dec.feed == "Unknown", f"expected 'Unknown', got {dec.feed!r}"
+        assert dec.group == "Unknown", f"expected 'Unknown', got {dec.group!r}"
+        assert dec.b_eval == "", f"expected '', got {dec.b_eval!r}"
+        assert dec.b_type == "Python", f"expected 'Python', got {dec.b_type!r}"
+        assert dec.p_type == "Python", f"expected 'Python', got {dec.p_type!r}"
         # null_blocking stays True when not found (no DNSBL response sent)
-        assert dec.null_blocking is True
+        assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
 
     def test_python_blocking_false_skips_data_zone(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
         containers = _make_containers(dataDB=data_db)
         cfg = _make_cfg(dataDB=True, python_blocking=False)
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
-        assert dec.is_found is False
+        assert dec.is_found is False, f"expected False, got {dec.is_found!r}"
 
     def test_log_type_2_does_not_change_null_blocking(self) -> None:
         # log_type != "1" → null_blocking stays True (default)
@@ -3401,9 +3733,13 @@ class TestEvaluateDomainGolden:
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True)
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.null_blocking is True  # log_type="2" != "1" → no null_blocking flip
-        assert dec.nxdomain is False  # null block is not NXDOMAIN (issue #31 contrast)
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.null_blocking is True, (
+            f"expected True, got {dec.null_blocking!r}"
+        )  # log_type="2" != "1" → no null_blocking flip
+        assert dec.nxdomain is False, (
+            f"expected False, got {dec.nxdomain!r}"
+        )  # null block is not NXDOMAIN (issue #31 contrast)
 
 
 class TestEvaluateDomainNxdomain:
@@ -3432,17 +3768,19 @@ class TestEvaluateDomainNxdomain:
     def test_log_type_3_selects_nxdomain_logging(self) -> None:
         dec = self._dec("3")
         # Then it is a block flagged NXDOMAIN, not a null/VIP reply
-        assert dec.is_found is True
-        assert dec.nxdomain is True
-        assert dec.null_blocking is True  # no synthesized 0.0.0.0 / VIP record
-        assert dec.log_type == "3"  # logger logs this variant
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.nxdomain is True, f"expected True, got {dec.nxdomain!r}"
+        assert dec.null_blocking is True, (
+            f"expected True, got {dec.null_blocking!r}"
+        )  # no synthesized 0.0.0.0 / VIP record
+        assert dec.log_type == "3", f"expected '3', got {dec.log_type!r}"  # logger logs this variant
 
     def test_log_type_4_selects_nxdomain_no_logging(self) -> None:
         dec = self._dec("4")
-        assert dec.is_found is True
-        assert dec.nxdomain is True
-        assert dec.null_blocking is True
-        assert dec.log_type == "4"  # logger silences this variant
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.nxdomain is True, f"expected True, got {dec.nxdomain!r}"
+        assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
+        assert dec.log_type == "4", f"expected '4', got {dec.log_type!r}"  # logger silences this variant
 
     def test_nxdomain_does_not_inherit_hsts_attribution(self) -> None:
         # NXDOMAIN avoids the TLS handshake HSTS guards, so the HSTS null-override
@@ -3459,45 +3797,59 @@ class TestEvaluateDomainNxdomain:
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
         # Then the block stays NXDOMAIN (not reshaped to null/VIP) AND reports as a clean
         # Python block -- the HSTS attribution is cleared, not carried into the decision.
-        assert dec.nxdomain is True
-        assert dec.null_blocking is True
-        assert dec.in_hsts is False  # HSTS membership did not influence NXDOMAIN -> cleared
-        assert dec.p_type == "Python"  # mislabeled "HSTS"/"HSTS_TLD" before the fix
+        assert dec.nxdomain is True, f"expected True, got {dec.nxdomain!r}"
+        assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
+        assert dec.in_hsts is False, (
+            f"expected False, got {dec.in_hsts!r}"
+        )  # HSTS membership did not influence NXDOMAIN -> cleared
+        assert dec.p_type == "Python", (
+            f"expected 'Python', got {dec.p_type!r}"
+        )  # mislabeled "HSTS"/"HSTS_TLD" before the fix
 
 
 class TestEvaluateNoaaaGolden:
     def test_exact_match(self) -> None:
         db = _noaaaa_db({"example.com": False})
-        assert evaluate_noaaaa("example.com", db) is True
+        assert evaluate_noaaaa("example.com", db) is True, f"expected True, got {evaluate_noaaaa('example.com', db)!r}"
 
     def test_exact_match_wildcard_true(self) -> None:
         db = _noaaaa_db({"example.com": True})
-        assert evaluate_noaaaa("example.com", db) is True
+        assert evaluate_noaaaa("example.com", db) is True, f"expected True, got {evaluate_noaaaa('example.com', db)!r}"
 
     def test_wildcard_parent_matches_child(self) -> None:
         db = _noaaaa_db({"example.com": True})
-        assert evaluate_noaaaa("sub.example.com", db) is True
+        assert evaluate_noaaaa("sub.example.com", db) is True, (
+            f"expected True, got {evaluate_noaaaa('sub.example.com', db)!r}"
+        )
 
     def test_wildcard_false_parent_does_not_match_child(self) -> None:
         db = _noaaaa_db({"example.com": False})
-        assert evaluate_noaaaa("sub.example.com", db) is False
+        assert evaluate_noaaaa("sub.example.com", db) is False, (
+            f"expected False, got {evaluate_noaaaa('sub.example.com', db)!r}"
+        )
 
     def test_no_entry(self) -> None:
         db = _noaaaa_db({})
-        assert evaluate_noaaaa("example.com", db) is False
+        assert evaluate_noaaaa("example.com", db) is False, (
+            f"expected False, got {evaluate_noaaaa('example.com', db)!r}"
+        )
 
     def test_parent_only_semantics_self_requires_exact_key(self) -> None:
         # Wildcard on "example.com" does NOT match self via wildcard branch;
         # exact branch handles self. Both give True but via different paths.
         db = _noaaaa_db({"example.com": True})
         # "example.com" itself: exact branch fires → True
-        assert evaluate_noaaaa("example.com", db) is True
+        assert evaluate_noaaaa("example.com", db) is True, f"expected True, got {evaluate_noaaaa('example.com', db)!r}"
         # "sub.example.com": wildcard-parent branch fires → True
-        assert evaluate_noaaaa("sub.example.com", db) is True
+        assert evaluate_noaaaa("sub.example.com", db) is True, (
+            f"expected True, got {evaluate_noaaaa('sub.example.com', db)!r}"
+        )
         # A domain with only the sub key (wildcard) should match deeper sub
         db2 = _noaaaa_db({"sub.example.com": True})
         # "deep.sub.example.com": parent chain includes "sub.example.com" → True
-        assert evaluate_noaaaa("deep.sub.example.com", db2) is True
+        assert evaluate_noaaaa("deep.sub.example.com", db2) is True, (
+            f"expected True, got {evaluate_noaaaa('deep.sub.example.com', db2)!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3531,10 +3883,10 @@ class TestADR02PythonOnlyBlocking:
         containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True)  # python_blocking defaults to True
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.b_type == "DNSBL"
-        assert dec.b_eval == "evil.com"
-        assert dec.feed == "TestFeed"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.b_type == "DNSBL", f"expected 'DNSBL', got {dec.b_type!r}"
+        assert dec.b_eval == "evil.com", f"expected 'evil.com', got {dec.b_eval!r}"
+        assert dec.feed == "TestFeed", f"expected 'TestFeed', got {dec.feed!r}"
 
     def test_python_blocking_true_enables_zone_lookup(self) -> None:
         # Zone/wildcard lookup is also inside the python_blocking gate.
@@ -3544,10 +3896,10 @@ class TestADR02PythonOnlyBlocking:
         containers = _make_containers(zoneDB=zone_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(zoneDB=True)  # python_blocking defaults to True
         dec = evaluate_domain("deep.sub.example.com", "deep.sub.example.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.b_type == "TLD"
-        assert dec.b_eval == "example.com"
-        assert dec.feed == "ZoneFeed"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.b_type == "TLD", f"expected 'TLD', got {dec.b_type!r}"
+        assert dec.b_eval == "example.com", f"expected 'example.com', got {dec.b_eval!r}"
+        assert dec.feed == "ZoneFeed", f"expected 'ZoneFeed', got {dec.feed!r}"
 
     def test_data_lookup_takes_priority_over_zone_when_both_match(self) -> None:
         # When a domain appears in BOTH dataDB (exact) and zoneDB (wildcard),
@@ -3562,10 +3914,10 @@ class TestADR02PythonOnlyBlocking:
         containers = _make_containers(dataDB=data_db, zoneDB=zone_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True, zoneDB=True)
         dec = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.b_type == "DNSBL"  # data path wins, not zone/TLD
-        assert dec.feed == "DataFeed"
-        assert dec.group == "DataGroup"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.b_type == "DNSBL", f"expected 'DNSBL', got {dec.b_type!r}"  # data path wins, not zone/TLD
+        assert dec.feed == "DataFeed", f"expected 'DataFeed', got {dec.feed!r}"
+        assert dec.group == "DataGroup", f"expected 'DataGroup', got {dec.group!r}"
 
     def test_zone_lookup_fires_only_when_data_misses(self) -> None:
         # If a domain is absent from dataDB (even when the flag is enabled) but
@@ -3576,9 +3928,9 @@ class TestADR02PythonOnlyBlocking:
         containers = _make_containers(zoneDB=zone_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True, zoneDB=True)
         dec = evaluate_domain("sub.example.com", "sub.example.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.b_type == "TLD"
-        assert dec.b_eval == "example.com"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.b_type == "TLD", f"expected 'TLD', got {dec.b_type!r}"
+        assert dec.b_eval == "example.com", f"expected 'example.com', got {dec.b_eval!r}"
 
     def test_empty_dbs_with_python_blocking_true_returns_not_found(self) -> None:
         # python_blocking=True does not block anything by itself; it only enables
@@ -3586,8 +3938,10 @@ class TestADR02PythonOnlyBlocking:
         containers = _make_containers()
         cfg = _make_cfg(dataDB=True, zoneDB=True)
         dec = evaluate_domain("innocent.com", "innocent.com", "com", False, cfg, containers)
-        assert dec.is_found is False
-        assert dec.null_blocking is True  # no block sent → null_blocking stays True
+        assert dec.is_found is False, f"expected False, got {dec.is_found!r}"
+        assert dec.null_blocking is True, (
+            f"expected True, got {dec.null_blocking!r}"
+        )  # no block sent → null_blocking stays True
 
     # ------------------------------------------------------------------
     # Whitelist overrides: both data and zone matches are overridable
@@ -3601,9 +3955,9 @@ class TestADR02PythonOnlyBlocking:
         containers = _make_containers(dataDB=data_db, whiteDB=white_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(dataDB=True, whiteDB=True)
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.in_whitelist is True
-        assert dec.null_blocking is True  # whitelisted → no DNSBL response
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.in_whitelist is True, f"expected True, got {dec.in_whitelist!r}"
+        assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"  # whitelisted → no DNSBL response
 
     def test_whitelist_overrides_zone_match(self) -> None:
         # A whitelisted subdomain is not blocked even when its parent zone entry
@@ -3615,9 +3969,9 @@ class TestADR02PythonOnlyBlocking:
         containers = _make_containers(zoneDB=zone_db, whiteDB=white_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(zoneDB=True, whiteDB=True)
         dec = evaluate_domain("sub.example.com", "sub.example.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.in_whitelist is True
-        assert dec.null_blocking is True
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.in_whitelist is True, f"expected True, got {dec.in_whitelist!r}"
+        assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
 
     def test_wildcard_whitelist_overrides_zone_match_for_subdomain(self) -> None:
         # A wildcard whitelist entry (wildcard=True) covers the domain and its
@@ -3629,8 +3983,8 @@ class TestADR02PythonOnlyBlocking:
         containers = _make_containers(zoneDB=zone_db, whiteDB=white_db, feedGroupIndexDB=fgi_db)
         cfg = _make_cfg(zoneDB=True, whiteDB=True)
         dec = evaluate_domain("deep.sub.example.com", "deep.sub.example.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.in_whitelist is True
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.in_whitelist is True, f"expected True, got {dec.in_whitelist!r}"
 
     # ------------------------------------------------------------------
     # Secondary matchers are OUTSIDE the python_blocking gate
@@ -3646,18 +4000,18 @@ class TestADR02PythonOnlyBlocking:
         containers = _make_containers(regexDB=regex_db)
         cfg = _make_cfg(regexDB=True, python_blocking=False)
         dec = evaluate_domain("malicious.tracker.com", "malicious.tracker.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.group == "DNSBL_Regex"
-        assert dec.feed == "bad-pattern"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.group == "DNSBL_Regex", f"expected 'DNSBL_Regex', got {dec.group!r}"
+        assert dec.feed == "bad-pattern", f"expected 'bad-pattern', got {dec.feed!r}"
 
     def test_idn_still_evaluates_when_python_blocking_is_false(self) -> None:
         # IDN detection is likewise outside the gate.
         containers = _make_containers()
         cfg = _make_cfg(python_idn=True, python_blocking=False)
         dec = evaluate_domain("xn--test.com", "xn--test.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.group == "DNSBL_IDN"
-        assert dec.feed == "IDN"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.group == "DNSBL_IDN", f"expected 'DNSBL_IDN', got {dec.group!r}"
+        assert dec.feed == "IDN", f"expected 'IDN', got {dec.feed!r}"
 
     def test_tld_allow_still_evaluates_when_python_blocking_is_false(self) -> None:
         # TLD-Allow also lives outside the python_blocking gate.
@@ -3665,9 +4019,9 @@ class TestADR02PythonOnlyBlocking:
         cfg = _make_cfg(tld_allow=True, tld_allow_list=["com", "net"], python_blocking=False)
         # "org" is not in the allowed list → fires TLD-Allow block
         dec = evaluate_domain("example.org", "example.org", "example", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.group == "DNSBL_TLD_Allow"
-        assert dec.feed == "TLD_Allow"
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.group == "DNSBL_TLD_Allow", f"expected 'DNSBL_TLD_Allow', got {dec.group!r}"
+        assert dec.feed == "TLD_Allow", f"expected 'TLD_Allow', got {dec.feed!r}"
 
     def test_data_skipped_but_regex_fires_when_python_blocking_false(self) -> None:
         # Compound case: python_blocking=False disables data/zone lookups but regex
@@ -3677,9 +4031,11 @@ class TestADR02PythonOnlyBlocking:
         containers = _make_containers(dataDB=data_db, regexDB=regex_db)
         cfg = _make_cfg(dataDB=True, regexDB=True, python_blocking=False)
         dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.group == "DNSBL_Regex"  # regex fired, NOT the data-path DNSBL entry
-        assert dec.b_type != "DNSBL"  # confirm data path was skipped
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.group == "DNSBL_Regex", (
+            f"expected 'DNSBL_Regex', got {dec.group!r}"
+        )  # regex fired, NOT the data-path DNSBL entry
+        assert dec.b_type != "DNSBL", f"expected != 'DNSBL', got {dec.b_type!r}"  # confirm data path was skipped
 
     # ------------------------------------------------------------------
     # operate() integration: pfb["python_blocking"] is passed into cfg
@@ -3698,11 +4054,11 @@ class TestADR02PythonOnlyBlocking:
         set_feed_group(0, "ADR02Feed", "ADR02Group")
         qstate = make_qstate("adr02-blocked.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
-        assert qstate.return_rcode == RCODE_NOERROR
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
         answers = DNSMessage.instances[-1].answer
-        assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers)
+        assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers), f"expected a match in {answers!r}"
 
     def test_operate_does_not_block_when_python_blocking_false(self, monkeypatch: Any) -> None:
         # Boundary check: with python_blocking=False in the pfb global (the old
@@ -3718,9 +4074,13 @@ class TestADR02PythonOnlyBlocking:
         qstate = make_qstate("adr02-not-blocked.com.", qtype=RR_A)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         # Without python_blocking, the domain is memoized as an allow and passed through
-        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
         dec = pfb_unbound.decisionDB.get("adr02-not-blocked.com")
-        assert dec is not None and not _is_block(dec)
+        assert dec is not None and not _is_block(dec), (
+            f"expected dec-not-None and not blocked, got dec={dec!r}, blocked={_is_block(dec)!r}"
+        )
 
     def test_operate_zone_block_with_python_blocking_true(self, monkeypatch: Any) -> None:
         # Wildcard/zone blocking via operate() with the ADR-02 invariant state.
@@ -3732,12 +4092,12 @@ class TestADR02PythonOnlyBlocking:
         set_feed_group(0, "ZoneFeed", "ZoneGroup")
         qstate = make_qstate("any.subdomain.blocked-zone.net.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
-        assert rcd is True
-        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
         entry = pfb_unbound.decisionDB.get("any.subdomain.blocked-zone.net")
-        assert entry is not None
-        assert entry.dnsbl.b_type == "TLD"
-        assert entry.dnsbl.feed == "ZoneFeed"
+        assert entry is not None, f"expected not None, got {entry!r}"
+        assert entry.dnsbl.b_type == "TLD", f"expected 'TLD', got {entry.dnsbl.b_type!r}"
+        assert entry.dnsbl.feed == "ZoneFeed", f"expected 'ZoneFeed', got {entry.dnsbl.feed!r}"
 
 
 class TestClassifyTldWildcardOffEmptyOracle:
@@ -3756,16 +4116,23 @@ class TestClassifyTldWildcardOffEmptyOracle:
     def test_tld_wildcard_off_empty_oracle_two_label_is_data(self) -> None:
         # Before the #1255 fix this returned (DNSBL_CLASS_ZONE, "evil.com") --
         # the RED proof: the dcnt==2 branch never consulted tlds.
-        assert tld_wildcard_classify("evil.com", {}, set()) == (DNSBL_CLASS_DATA, "evil.com")
+        assert tld_wildcard_classify("evil.com", {}, set()) == (DNSBL_CLASS_DATA, "evil.com"), (
+            f"expected {(DNSBL_CLASS_DATA, 'evil.com')!r}, got {tld_wildcard_classify('evil.com', {}, set())!r}"
+        )
 
     def test_tld_wildcard_off_empty_oracle_public_suffix_is_data(self) -> None:
-        assert tld_wildcard_classify("example.co.uk", {}, set()) == (DNSBL_CLASS_DATA, "example.co.uk")
+        assert tld_wildcard_classify("example.co.uk", {}, set()) == (DNSBL_CLASS_DATA, "example.co.uk"), (
+            f"expected {(DNSBL_CLASS_DATA, 'example.co.uk')!r}, got "
+            f"{tld_wildcard_classify('example.co.uk', {}, set())!r}"
+        )
 
     def test_two_label_domain_stays_zone_when_oracle_populated(self) -> None:
         # Before-state proven above (empty oracle -> DATA); with the SAME domain
         # and a populated oracle, the guard must not fire -- ON-side is unchanged.
         tlds = _dnsbl_load_tld_wildcard_master(["com"], [], [])
-        assert tld_wildcard_classify("evil.com", tlds, set()) == (DNSBL_CLASS_ZONE, "evil.com")
+        assert tld_wildcard_classify("evil.com", tlds, set()) == (DNSBL_CLASS_ZONE, "evil.com"), (
+            f"expected {(DNSBL_CLASS_ZONE, 'evil.com')!r}, got {tld_wildcard_classify('evil.com', tlds, set())!r}"
+        )
 
 
 class TestAbpWildcardUnaffectedByTldWildcardToggle:
