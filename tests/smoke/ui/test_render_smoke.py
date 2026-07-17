@@ -38,8 +38,9 @@ import pytest
 
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard, evaluate_render
-from .test_category import _restore_node, _snapshot_node
+from .test_category import _snapshot_node
 from .test_category_edit import CFG_DNSBL, CFG_IPV4, _del_rowid, _free_rowid
+from .webui import row_containing
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1702,21 +1703,23 @@ def test_category_edit_no_sort_mode_renders_reorder_wiring(
     vm = smoke_vm
     rowid = _free_rowid(vm, CFG_DNSBL)
     base = f"{CFG_DNSBL}/{rowid}"
-    seed = helpers.php_eval(
-        vm,
-        f"config_set_path({helpers._php_str(f'{base}/aliasname')}, 'pfbrenderns');\n"
-        f"config_set_path({helpers._php_str(f'{base}/action')}, 'unbound');\n"
-        f"config_set_path({helpers._php_str(f'{base}/sort')}, 'no-sort');\n"
-        f"config_set_path({helpers._php_str(f'{base}/row/0/format')}, 'Auto');\n"
-        f"config_set_path({helpers._php_str(f'{base}/row/0/state')}, 'Disabled');\n"
-        f"config_set_path({helpers._php_str(f'{base}/row/0/url')}, '');\n"
-        f"config_set_path({helpers._php_str(f'{base}/row/0/header')}, 'pfbrenderns0');\n"
-        "write_config('ADR-63 P4 smoke: seed no-sort render row');\n"
-        "echo 'OK';",
-    )
-    assert "OK" in seed.stdout, f"failed to seed no-sort category row: {seed.stdout!r}"
-
     try:
+        seed = helpers.php_eval(
+            vm,
+            f"config_set_path({helpers._php_str(f'{base}/aliasname')}, 'pfbrenderns');\n"
+            f"config_set_path({helpers._php_str(f'{base}/action')}, 'unbound');\n"
+            f"config_set_path({helpers._php_str(f'{base}/sort')}, 'no-sort');\n"
+            f"config_set_path({helpers._php_str(f'{base}/row/0/format')}, 'auto');\n"
+            f"config_set_path({helpers._php_str(f'{base}/row/0/state')}, 'Disabled');\n"
+            f"config_set_path({helpers._php_str(f'{base}/row/0/url')}, '');\n"
+            f"config_set_path({helpers._php_str(f'{base}/row/0/header')}, 'pfbrenderns0');\n"
+            "write_config('ADR-63 P4 smoke: seed no-sort render row');\n"
+            "echo 'OK';",
+        )
+        assert seed.returncode == 0 and "OK" in seed.stdout, (
+            f"failed to seed no-sort category row: rc={seed.returncode}, stdout={seed.stdout!r}, stderr={seed.stderr!r}"
+        )
+
         path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={rowid}"
         resp = webui.get(path)
         assert resp.status_code == 200, f"GET {path} -> HTTP {resp.status_code} (expected 200)"
@@ -1740,44 +1743,52 @@ def test_corrupt_group_actions_render_repairably(
     Whole IPv4 and DNSBL config nodes are restored exactly after the probe.
     """
     vm = smoke_vm
+
+    def node_present(node: str) -> bool:
+        pre = (
+            "$missing = new stdClass();\n"
+            f"$value = config_get_path({helpers._php_str(node)}, $missing);\n"
+            "$present = ($value === $missing) ? '0' : '1';"
+        )
+        return helpers._php_read_scalar(vm, pre, "$present") == "1"
+
+    def file_size(path: str) -> str | None:
+        result = vm.ssh("stat", "-f", "%z", path, timeout=15)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        missing = vm.ssh("test", "!", "-e", path, timeout=15)
+        if missing.returncode != 0:
+            raise RuntimeError(f"stat failed for existing file {path!r}: {result.stderr!r}")
+        return None
+
+    dnsbl_was_present = node_present(CFG_DNSBL)
+    ipv4_was_present = node_present(CFG_IPV4)
     dnsbl_snap = _snapshot_node(vm, CFG_DNSBL)
     ipv4_snap = _snapshot_node(vm, CFG_IPV4)
     dnsbl_rowid = _free_rowid(vm, CFG_DNSBL)
     ipv4_rowid = _free_rowid(vm, CFG_IPV4)
     dnsbl_base = f"{CFG_DNSBL}/{dnsbl_rowid}"
     ipv4_base = f"{CFG_IPV4}/{ipv4_rowid}"
-    seed = helpers.php_eval(
-        vm,
-        f"config_set_path({helpers._php_str(f'{dnsbl_base}/aliasname')}, 'pfbrepairdns');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_base}/action')}, array('bogus' => 'unbound'));\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_base}/custom')}, base64_encode('bad.example'));\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/format')}, 'Auto');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/state')}, 'Disabled');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/url')}, '');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/header')}, 'pfbrepairdns0');\n"
-        f"config_set_path({helpers._php_str(f'{ipv4_base}/aliasname')}, 'pfbrepairip');\n"
-        f"config_set_path({helpers._php_str(f'{ipv4_base}/action')}, 'PermitBogus');\n"
-        f"config_set_path({helpers._php_str(f'{ipv4_base}/custom')}, base64_encode('192.0.2.1'));\n"
-        f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/format')}, 'Auto');\n"
-        f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/state')}, 'Disabled');\n"
-        f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/url')}, '');\n"
-        f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/header')}, 'pfbrepairip0');\n"
-        "write_config('pfBlockerNG smoke: seed corrupt action render rows');\n"
-        "echo 'OK';",
-    )
-    assert "OK" in seed.stdout, f"failed to seed corrupt action rows: {seed.stdout!r}"
+    dnsbl_valid_base = f"{CFG_DNSBL}/{dnsbl_rowid + 1}"
+    ipv4_valid_base = f"{CFG_IPV4}/{ipv4_rowid + 1}"
 
-    raw_probe = helpers.php_eval(
-        vm,
-        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc'); "
-        f"$raw = config_get_path({helpers._php_str(f'{dnsbl_base}/action')}, NULL); "
-        "$normalized = pfb_group_action_valid($raw, 'dnsbl') ? $raw : 'Disabled'; "
-        "echo '__PFB_ACTION__' . json_encode(array(gettype($raw), "
-        "pfb_group_action_valid($raw, 'dnsbl'), $normalized));",
-    )
-    raw_state = json.loads(raw_probe.stdout.rpartition("__PFB_ACTION__")[2])
-    assert raw_state == ["array", False, "Disabled"], (
-        f"DNSBL action seed/normalization precondition failed: {raw_probe.stdout!r}"
+    unified_log = "/var/log/pfblockerng/unified.log"
+    ip_feed_name = "pfB_RepairActionFeed1346_v4"
+    ip_feed = f"/var/db/pfblockerng/deny/{ip_feed_name}.txt"
+    unified_size = file_size(unified_log)
+    feed_size = file_size(ip_feed)
+
+    ip_host = "198.51.100.134"
+    ip_eval = f"{ip_host}/32"
+    ip_logged_alias = "pfB_RepairActionDeny1346_v4"
+    dns_domain = "repair-action-1346.invalid"
+    fixed_ts = "Jan 01 00:00:00"
+    unified_rows = (
+        f"Block,{fixed_ts},100,em0,WAN,block,4,6,TCP,"
+        f"{ip_host},10.0.0.134,12345,443,in,US,{ip_logged_alias},{ip_eval},"
+        f"{ip_feed_name},Unknown,Unknown,Unknown,+\n"
+        f"DNSBL-python,{fixed_ts},{dns_domain},127.0.0.1,Python,DNSBL,"
+        f"RepairAction1346,{dns_domain},RepairActionFeed1346,+,A\n"
     )
 
     def assert_disabled_selected(body: str, path: str) -> None:
@@ -1789,10 +1800,110 @@ def test_corrupt_group_actions_render_repairably(
         )
 
     try:
-        alerts_path = "/pfblockerng/pfblockerng_alerts.php"
+        seed = helpers.php_eval(
+            vm,
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/aliasname')}, 'pfbrepairdns');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/action')}, array('bogus' => 'unbound'));\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/custom')}, base64_encode('bad.example'));\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/format')}, 'auto');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/state')}, 'Disabled');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/url')}, '');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/header')}, 'pfbrepairdns0');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_valid_base}/aliasname')}, 'pfbvaliddns1346');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_valid_base}/action')}, 'unbound');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_valid_base}/custom')}, base64_encode('valid.example'));\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/aliasname')}, 'pfbrepairip');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/action')}, 'PermitBogus');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/custom')}, base64_encode('192.0.2.1'));\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/format')}, 'auto');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/state')}, 'Disabled');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/url')}, '');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/header')}, 'pfbrepairip0');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_valid_base}/aliasname')}, 'pfbvalidip1346');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_valid_base}/action')}, 'Permit_Inbound');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_valid_base}/custom')}, base64_encode('192.0.2.200'));\n"
+            "write_config('pfBlockerNG smoke: seed corrupt action render rows');\n"
+            "echo 'OK';",
+        )
+        assert seed.returncode == 0 and "OK" in seed.stdout, (
+            f"failed to seed corrupt action rows: rc={seed.returncode}, stdout={seed.stdout!r}, stderr={seed.stderr!r}"
+        )
+
+        open_marker = "__PFB_ACTION_OPEN__"
+        close_marker = "__PFB_ACTION_CLOSE__"
+        raw_probe = helpers.php_eval(
+            vm,
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc'); "
+            f"$raw = config_get_path({helpers._php_str(f'{dnsbl_base}/action')}, NULL); "
+            "$normalized = pfb_group_action_valid($raw, 'dnsbl') ? $raw : 'Disabled'; "
+            f"echo '{open_marker}' . json_encode(array(gettype($raw), "
+            f"pfb_group_action_valid($raw, 'dnsbl'), $normalized)) . '{close_marker}';",
+        )
+        probe_diag = f"stdout={raw_probe.stdout!r}, stderr={raw_probe.stderr!r}"
+        assert raw_probe.returncode == 0, f"DNSBL action raw probe failed rc={raw_probe.returncode}: {probe_diag}"
+        assert raw_probe.stdout.count(open_marker) == 1 and raw_probe.stdout.count(close_marker) == 1, (
+            f"DNSBL action raw probe markers missing or duplicated: {probe_diag}"
+        )
+        open_idx = raw_probe.stdout.find(open_marker)
+        close_idx = raw_probe.stdout.find(close_marker)
+        assert 0 <= open_idx < close_idx, f"DNSBL action raw probe markers out of order: {probe_diag}"
+        payload = raw_probe.stdout[open_idx + len(open_marker) : close_idx]
+        try:
+            raw_state = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise AssertionError(f"DNSBL action raw probe returned malformed JSON: {probe_diag}") from exc
+        assert raw_state == ["array", False, "Disabled"], (
+            f"DNSBL action seed/normalization precondition failed: {probe_diag}"
+        )
+
+        for directory in (unified_log.rsplit("/", 1)[0], ip_feed.rsplit("/", 1)[0]):
+            mkdir = vm.ssh("mkdir", "-p", directory, timeout=15)
+            assert mkdir.returncode == 0, (
+                f"failed to create alert fixture directory {directory!r}: "
+                f"rc={mkdir.returncode}, stderr={mkdir.stderr!r}"
+            )
+
+        feed_append = subprocess.run(
+            vm.ssh_argv("tee", "-a", ip_feed),
+            input=f"{ip_eval}\n",
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert feed_append.returncode == 0, (
+            f"failed to append alert fixture feed {ip_feed!r}: "
+            f"rc={feed_append.returncode}, stderr={feed_append.stderr!r}"
+        )
+
+        alerts_path = "/pfblockerng/pfblockerng_alerts.php?view=unified"
+        pre = webui.get(alerts_path)
+        pre_result = evaluate_render(alerts_path, pre.status_code, pre.text, ("Alert Settings",))
+        assert pre_result.ok, f"Alerts precondition render failed: {pre_result.detail}"
+        assert ip_host not in pre.text, f"IP alert fixture host {ip_host!r} already rendered before log append"
+        assert dns_domain not in pre.text, (
+            f"DNSBL alert fixture domain {dns_domain!r} already rendered before log append"
+        )
+
+        log_append = subprocess.run(
+            vm.ssh_argv("tee", "-a", unified_log),
+            input=unified_rows,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert log_append.returncode == 0, (
+            f"failed to append unified alert fixtures: rc={log_append.returncode}, stderr={log_append.stderr!r}"
+        )
+
         alerts_resp = webui.get(alerts_path)
         alerts_result = evaluate_render(alerts_path, alerts_resp.status_code, alerts_resp.text, ("Alert Settings",))
         assert alerts_result.ok, f"Alerts corrupt-action render failed: {alerts_result.detail}"
+        ip_row = row_containing(alerts_resp.text, ip_host)
+        dns_row = row_containing(alerts_resp.text, dns_domain)
+        assert "pfB_pfbvalidip1346_v4" in ip_row, "valid Permit IP alias missing from seeded alert row"
+        assert "DNSBL_pfbvaliddns1346" in dns_row, "valid DNSBL alias missing from seeded alert row"
         assert "pfB_pfbrepairip_v4" not in alerts_resp.text, "PermitBogus IP row entered Alerts permit options"
         assert "DNSBL_pfbrepairdns" not in alerts_resp.text, "array DNSBL row entered Alerts custom-list options"
 
@@ -1809,10 +1920,59 @@ def test_corrupt_group_actions_render_repairably(
         assert "PermitBogus" not in resp.text, f"invalid persisted action leaked into repair form on {path}"
         assert_disabled_selected(resp.text, path)
     finally:
-        _restore_node(vm, CFG_IPV4, ipv4_snap)
-        _restore_node(vm, CFG_DNSBL, dnsbl_snap)
-        assert _snapshot_node(vm, CFG_IPV4) == ipv4_snap, "IPv4 config restore was not exact"
-        assert _snapshot_node(vm, CFG_DNSBL) == dnsbl_snap, "DNSBL config restore was not exact"
+        ipv4_restore = (
+            f"config_set_path({helpers._php_str(CFG_IPV4)}, unserialize(base64_decode({helpers._php_str(ipv4_snap)})));"
+            if ipv4_was_present
+            else f"config_del_path({helpers._php_str(CFG_IPV4)});"
+        )
+        dnsbl_restore = (
+            f"config_set_path({helpers._php_str(CFG_DNSBL)}, "
+            f"unserialize(base64_decode({helpers._php_str(dnsbl_snap)})));"
+            if dnsbl_was_present
+            else f"config_del_path({helpers._php_str(CFG_DNSBL)});"
+        )
+        config_restore = None
+        file_restore_errors: list[str] = []
+        try:
+            config_restore = helpers.php_eval(
+                vm,
+                f"{ipv4_restore}\n{dnsbl_restore}\n"
+                "write_config('pfBlockerNG smoke: restore corrupt-action fixtures');\n"
+                "echo 'OK';",
+            )
+        finally:
+            for file_path, original_size in ((unified_log, unified_size), (ip_feed, feed_size)):
+                argv = (
+                    vm.ssh_argv("/bin/rm", "-f", file_path)
+                    if original_size is None
+                    else vm.ssh_argv("/usr/bin/truncate", "-s", original_size, file_path)
+                )
+                try:
+                    restored = subprocess.run(
+                        argv,
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                        check=False,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    file_restore_errors.append(f"{file_path}: restore command failed: {exc!r}")
+                    continue
+                if restored.returncode != 0:
+                    file_restore_errors.append(f"{file_path}: rc={restored.returncode}, stderr={restored.stderr!r}")
+
+        assert not file_restore_errors, f"alert fixture file restore failed: {file_restore_errors}"
+        assert config_restore is not None
+        assert config_restore.returncode == 0 and "OK" in config_restore.stdout, (
+            f"config restore failed: rc={config_restore.returncode}, "
+            f"stdout={config_restore.stdout!r}, stderr={config_restore.stderr!r}"
+        )
+        assert node_present(CFG_IPV4) == ipv4_was_present, "IPv4 config presence was not restored"
+        assert node_present(CFG_DNSBL) == dnsbl_was_present, "DNSBL config presence was not restored"
+        if ipv4_was_present:
+            assert _snapshot_node(vm, CFG_IPV4) == ipv4_snap, "IPv4 config restore was not exact"
+        if dnsbl_was_present:
+            assert _snapshot_node(vm, CFG_DNSBL) == dnsbl_snap, "DNSBL config restore was not exact"
 
 
 # ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP
