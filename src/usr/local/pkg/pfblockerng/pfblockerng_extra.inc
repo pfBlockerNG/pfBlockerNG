@@ -3681,6 +3681,51 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
 // ---------------------------------------------------------------------------
 
 /**
+ * pfb_live_table_snapshot -- read a live pf table's current membership: the
+ * ADR-40 mirror file when present (freshest applied set), else a live
+ * `pfctl -T show` fallback -- both streamed line-by-line (fgets), never
+ * slurped whole (a Deny table mirror can hold millions of entries, ADR-53
+ * §3). Extracted from the Alerts "+" (addsuppress) handler (issue #1412) so
+ * the temporary Unlock icon's live punch shares the exact same read instead
+ * of re-deriving it.
+ *
+ * NOT pure -- reads the mirror file / execs pfctl.
+ *
+ * @param  string $pfctl    Absolute path to the pfctl binary ($pfb['pfctl']).
+ * @param  string $aliasdir Alias mirror directory ($pfb['aliasdir']).
+ * @param  string $dbdir    Scratch-file directory for the pfctl-show fallback ($pfb['dbdir']).
+ * @param  string $table    The pf table name (caller-validated, e.g. via PFB_FILTER_WORD).
+ * @return string[] Raw membership lines (bare host or CIDR tokens; blank/'#'-comment lines tolerated).
+ */
+function pfb_live_table_snapshot(string $pfctl, string $aliasdir, string $dbdir, string $table): array
+{
+	$table_esc = escapeshellarg($table);
+	$mirror    = "{$aliasdir}/{$table}.txt";
+	$scan_file = is_readable($mirror) ? $mirror : NULL;
+	$scan_tmp  = NULL;
+	if ($scan_file === NULL) {
+		$scan_tmp = tempnam($dbdir, 'pfb_punch_');
+		// ADR-53 review finding H4: stderr -> /dev/null, NOT 2>&1 -- the
+		// capture file is parsed line-by-line as membership entries below;
+		// merging stderr into it would feed any pfctl diagnostic line into
+		// that parse as if it were a table member.
+		exec("{$pfctl} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>/dev/null');
+		$scan_file = $scan_tmp;
+	}
+	$table_entries = array();
+	if (($handle = @fopen($scan_file, 'r')) !== FALSE) {
+		while (($line = @fgets($handle)) !== FALSE) {
+			$table_entries[] = trim($line);
+		}
+		fclose($handle);
+	}
+	if ($scan_tmp !== NULL) {
+		@unlink($scan_tmp);
+	}
+	return $table_entries;
+}
+
+/**
  * pfb_v4_carve_single -- the covering-CIDR remainder of one IPv4 CIDR (or
  * bare host, normalised to '/32') with a single host removed. The IPv4
  * sibling of pfb_cidr_subtract_v6(), scoped to the one-entry/one-hole shape
