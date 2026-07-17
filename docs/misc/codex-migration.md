@@ -1,59 +1,49 @@
-# Claude Code → Codex migration
+# Codex client — repository integration notes
 
-The repository supports both clients with one maintained policy and procedure
-layer. Vendor files are discovery/runtime adapters, not independent copies.
-This avoids an explicit synchronization pass after ordinary policy, skill, or
-workflow edits.
+Scope: Codex-side integration surfaces (`.codex/`, skill/role parity, hook trust,
+activation). Load when: working from the Codex client or changing vendor adapter
+configuration. This note grew out of the 2026-07 Claude Code → Codex migration
+(#1348); the migration itself is complete — since the Stage-2 inversion (#1437)
+`AGENTS.md` is the canonical vendor-neutral bootstrap, and since #1431 the
+fresh-session policy replaced the workflow-era orchestration.
 
 ## Source-of-truth layout
 
 | Concern | Canonical source | Claude discovery/runtime | Codex discovery/runtime |
 | --- | --- | --- | --- |
-| Repository policy | `CLAUDE.md` plus its linked annexes | `CLAUDE.md` loads directly | `AGENTS.md` loads automatically, requires the canonical policy, and maps runtime nouns |
-| Task procedures | `.claude/skills/*/SKILL.md` | Direct skill discovery | Same-name `.agents/skills/*/SKILL.md` adapter loads the detailed source |
-| Workflow schemas/prompts | *(retired 2026-07-17, #1431)* — `.agents/policy/workflow.md` + `landing.md` | Fresh native sub-agents | Codex subagents per `.codex/agents/` |
-| Specialist roles | Planner/implementer/verifier declarations plus `.agents/model-tiers.conf` | Claude agents using `claude-fable-5` / `claude-opus-4-8` / `claude-sonnet-5` | Codex role TOMLs using `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` |
-| Lifecycle enforcement | Shared repository scripts and Git hooks | `.claude/settings.json` | `.codex/hooks.json` and `.codex/config.toml` |
+| Repository policy | `AGENTS.md` + `.agents/policy/` + `.agents/context/` | `CLAUDE.md` is the thin `@AGENTS.md` adapter | Loads `AGENTS.md` natively |
+| Task procedures (skills) | `.agents/skills/*/SKILL.md` | `.claude/skills/*` symlinks onto the canonical dirs | Direct discovery (`$name`) |
+| Specialist roles | `.agents/policy/agent-roles.md` + `.agents/model-tiers.conf` | Claude agents (`claude-fable-5` / `claude-opus-4-8` / `claude-sonnet-5`) | Role TOMLs in `.codex/agents/` (`gpt-5.6-sol` / `-terra` / `-luna`) |
+| Lifecycle enforcement | Shared `.githooks/` + repository scripts | `.claude/settings.json` | `.codex/hooks.json` + `.codex/config.toml` |
 
-`CLAUDE.md` keeps its historical filename because Claude Code discovers it.
-Its opening section declares it cross-client policy. `AGENTS.md` deliberately
-does not summarize that policy: summaries drift, as the July 14 session-worktree,
-review-profile, delta-review, and tracked-wait changes demonstrated. It contains
-only translations that are genuinely specific to Codex.
-
-The short Codex skill files similarly contain trigger text and orchestration
-translation only. Their `../../../.claude/...` references resolve from each
-adapter directory to the repository source. A change to a detailed skill or
-workflow is immediately used by both clients because the adapter reads the same
-source.
+`AGENTS.md` deliberately carries only a thin Codex adapter table (its "Vendor
+adapters" section): detailed procedure lives once, in the routed policy/context
+files, because summaries drift.
 
 ## Automatic parity enforcement
 
-Run:
+Run `sh scripts/agent/check-agent-config-parity.sh`. The pre-commit hook runs it
+whenever either vendor's agent configuration is staged (including deletions);
+the ShellSpec suite checks the real repository inventory in CI.
 
-```sh
-sh scripts/agent/check-agent-config-parity.sh
-```
+For a symlinked skill — the normal state — filesystem identity is the parity
+guarantee: `.claude/skills/<name>` must resolve to canonical
+`.agents/skills/<name>`. The textual-adapter branch (a same-name `SKILL.md`
+whose `../../../` reference must resolve to its exact source) exists only for a
+mid-migration non-symlink entry. The checker also rejects a stale entry whose
+counterpart was deleted or renamed, and validates the shared
+`.agents/model-tiers.conf` tier mapping.
 
-The checker requires every canonical `.claude/skills/*/SKILL.md` source (the
-committed workflow inventory retired with #1431 and may be empty) to have a
-same-name Codex adapter whose relative reference resolves to that exact file. It also rejects stale adapters whose
-canonical source was deleted or renamed. The pre-commit hook runs it whenever
-either vendor's agent configuration is staged, including deletions; the
-shellspec suite also checks the real repository inventory in CI.
-
-This is the only synchronization boundary:
-
-- Editing canonical policy/procedure content requires no adapter change.
-- Adding or renaming a skill/workflow requires one small Codex discovery adapter.
-- Changing only a provider-specific runtime stays in that provider's adapter.
+This is the only synchronization boundary: editing canonical policy or a skill
+body requires no adapter change; adding or renaming a skill requires only the
+symlink; a provider-specific runtime change stays in that provider's adapter.
 
 ## Active Codex equivalents
 
 | Claude Code surface | Codex equivalent | Notes |
 | --- | --- | --- |
-| `CLAUDE.md` | `AGENTS.md` adapter | Codex loads `AGENTS.md`; it routes to the canonical policy and translates only runtime surfaces. |
-| `.claude/skills/*` | `.agents/skills/*` | Same trigger intent and one shared detailed procedure. |
+| `CLAUDE.md` adapter | native `AGENTS.md` | Same canonical bootstrap; Codex needs no adapter file. |
+| `.claude/skills/*` symlinks | `.agents/skills/*` | One shared detailed procedure per skill. |
 | `.claude/workflows/*.js` | *(retired 2026-07-17, #1431)* | Superseded by the fresh-session policy: `.agents/policy/workflow.md` + `landing.md`; both clients use fresh native sub-agents. |
 | Top / mid / small model tier | GPT-5.6-Sol / GPT-5.6-Terra / GPT-5.6-Luna | `.agents/model-tiers.conf` is the shared mapping; reasoning effort remains independent. |
 | Planner/implementer/analyst/verifier | `planner`, `implementer`, small/top `analyst`, and `adversarial-reviewer` plus top/mid reviewer variants | Project-scoped custom agents pin the corresponding Codex model tier without changing the canonical output contract. |
@@ -75,22 +65,18 @@ legitimate edits from leaving stale pins.
 
 ## Worktrees, shallow history, and resume
 
-Both clients follow the canonical one-agent/one-worktree rule. A harness-made
-session worktree is an orchestration home; create the work-item worktree through
-`scripts/agent/work-branch.sh --worktree`, which resolves the primary checkout
-through `--git-common-dir` and does not nest worktrees inside a session tree.
+Both clients follow the canonical one-agent/one-worktree rule
+(`.agents/policy/git.md`; session layouts in `.agents/policy/sessions.md`);
+create the work-item worktree through `scripts/agent/work-branch.sh --worktree`,
+which resolves the primary checkout through `--git-common-dir` and does not nest
+worktrees inside a session tree.
 
-A shallow clone can retain an old worktree tip while a depth-limited fetch moves
-`origin/devel` beyond the visible boundary. In that state Git reports no merge
-base, and a plain rebase tries to replay base history. The shared session hook now
-unshallows once when needed, requires a visible merge base, and otherwise leaves
-the branch untouched with a recovery message.
-
-Codex conversation persistence is separate from Git state. Before closing the
-CLI, leave the dedicated worktree coherent—preferably committed. Resume with
-`codex resume`, `codex resume --last`, or
-`codex resume <session-id-or-name>`. The trusted startup hook checks branch
-freshness on resume and never rebases a dirty tree.
+The shared session hook unshallows once when a depth-limited fetch has moved
+`origin/devel` past the visible boundary, requires a visible merge base, and
+otherwise leaves the branch untouched with a recovery message; it never rebases
+a dirty tree. Codex conversation persistence is separate from Git state — leave
+the worktree coherent (preferably committed) before closing the CLI, then
+`codex resume`, `codex resume --last`, or `codex resume <session-id-or-name>`.
 
 ## Intentionally provider-specific
 
