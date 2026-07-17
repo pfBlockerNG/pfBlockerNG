@@ -5415,7 +5415,8 @@ function pfb_matchdir_config_headers(array $lists_by_vtype, array $dnsbl_config,
 
 	foreach ($lists_by_vtype as $pfb_vtype => $pfb_lists) {
 		foreach ($pfb_lists as $pfb_list) {
-			$pfb_is_deny = strpos((string) ($pfb_list['action'] ?? ''), 'Deny') !== FALSE;
+			$pfb_action = $pfb_list['action'] ?? NULL;
+			$pfb_is_deny = pfb_group_action_valid($pfb_action, 'ipv4') && strpos($pfb_action, 'Deny') !== FALSE;
 
 			if (!empty($pfb_list['custom'])) {
 				$pfb_alias_norm = preg_replace('/\W/', '', (string) ($pfb_list['aliasname'] ?? ''));
@@ -5442,13 +5443,15 @@ function pfb_matchdir_config_headers(array $lists_by_vtype, array $dnsbl_config,
 		}
 	}
 
-	if (strpos((string) ($dnsbl_config['action'] ?? ''), 'Deny') !== FALSE) {
+	$pfb_dnsbl_action = pfb_dnsblip_action_value($dnsbl_config['action'] ?? NULL);
+	if (strpos($pfb_dnsbl_action, 'Deny') !== FALSE) {
 		$deny[] = 'DNSBLIP_v4';
 		$deny[] = 'DNSBLIP_v6';
 	}
 
 	foreach ($continent_configs as $pfb_alias => $pfb_cont_config) {
-		if (strpos((string) ($pfb_cont_config['action'] ?? ''), 'Deny') !== FALSE) {
+		$pfb_cont_action = $pfb_cont_config['action'] ?? NULL;
+		if (pfb_group_action_valid($pfb_cont_action, 'geoip') && strpos($pfb_cont_action, 'Deny') !== FALSE) {
 			$deny[] = "{$pfb_alias}_v4";
 			$deny[] = "{$pfb_alias}_v6";
 		}

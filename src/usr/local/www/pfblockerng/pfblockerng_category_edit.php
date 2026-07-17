@@ -933,6 +933,9 @@ else {
 	$pconfig['custom']			= base64_decode($rowdata[$rowid]['custom'] ?? '');
 }
 
+if (!pfb_group_action_valid($pconfig['action'] ?? NULL, $gtype)) {
+	$pconfig['action'] = 'Disabled';
+}
 
 if ($input_errors) {
 	print_input_errors($input_errors);
@@ -1128,7 +1131,6 @@ foreach ($rowdata[$rowid] as $tags) {
 		))->setHelp(($numrows == $rowcounter) ? 'Source' : NULL)
 		  ->setWidth(5);
 
-		// Indicate any failed downloads with yellow select field background
 		if (strpos($pconfig['action'], 'Deny_') !== FALSE) {
 			$folder = "{$pfb['denydir']}";
 		} elseif (strpos($pconfig['action'], 'Permit_') !== FALSE) {
@@ -1141,6 +1143,7 @@ foreach ($rowdata[$rowid] as $tags) {
 			$folder = FALSE;
 		}
 
+		// Indicate any failed downloads with yellow select field background
 		$failed_bg = '';
 		if ($folder && file_exists("{$folder}/{$row['header']}{$suffix}.fail")) {
 			$failed_bg = 'background-color: #FFFF00;';
