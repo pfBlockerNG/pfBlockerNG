@@ -1740,7 +1740,7 @@ def test_corrupt_group_actions_render_repairably(
 ) -> None:  # noqa: ARG001
     """Bogus and array actions fail closed in Alerts and remain repairable.
 
-    Whole IPv4 and DNSBL config nodes are restored exactly after the probe.
+    Whole IPv4, DNSBL, and Africa GeoIP config nodes are restored exactly.
     """
     vm = smoke_vm
 
@@ -1761,10 +1761,13 @@ def test_corrupt_group_actions_render_repairably(
             raise RuntimeError(f"stat failed for existing file {path!r}: {result.stderr!r}")
         return None
 
+    geoip_root = "installedpackages/pfblockerngafrica/config"
     dnsbl_was_present = node_present(CFG_DNSBL)
     ipv4_was_present = node_present(CFG_IPV4)
+    geoip_was_present = node_present(geoip_root)
     dnsbl_snap = _snapshot_node(vm, CFG_DNSBL)
     ipv4_snap = _snapshot_node(vm, CFG_IPV4)
+    geoip_snap = _snapshot_node(vm, geoip_root)
     dnsbl_rowid = _free_rowid(vm, CFG_DNSBL)
     ipv4_rowid = _free_rowid(vm, CFG_IPV4)
     dnsbl_base = f"{CFG_DNSBL}/{dnsbl_rowid}"
@@ -1782,6 +1785,9 @@ def test_corrupt_group_actions_render_repairably(
     ip_eval = f"{ip_host}/32"
     ip_logged_alias = "pfB_RepairActionDeny1346_v4"
     dns_domain = helpers.unique_domain("repair1346")
+    dns_corrupt_action = "CorruptDnsAction1346"
+    ip_corrupt_action = "PermitBogus"
+    geoip_corrupt_action = "GeoipBogus1346"
     fixed_ts = "Jan 01 00:00:00"
     unified_rows = (
         f"Block,{fixed_ts},100,em0,WAN,block,4,6,TCP,"
@@ -1790,37 +1796,69 @@ def test_corrupt_group_actions_render_repairably(
         f"DNS-reply,{fixed_ts},cache,,A,30,{dns_domain},127.0.0.1,203.0.113.134,US\n"
     )
 
-    def assert_disabled_selected(body: str, path: str) -> None:
-        select = re.search(r'<select(?=[^>]*name="action")[^>]*>(.*?)</select>', body, re.DOTALL)
-        assert select is not None, f"action select missing on {path}"
-        disabled = re.search(r'<option(?=[^>]*value="Disabled")(?=[^>]*selected(?:=|\s|>))[^>]*>', select.group(1))
-        assert disabled is not None, (
-            f"invalid persisted action did not render as selected Disabled on {path}: {select.group(0)!r}"
+    def assert_action_selected(body: str, path: str, field_name: str, expected: str) -> None:
+        select = re.search(rf'<select(?=[^>]*name="{re.escape(field_name)}")[^>]*>(.*?)</select>', body, re.DOTALL)
+        assert select is not None, f"action select {field_name!r} missing on {path}"
+        selected = re.search(
+            rf'<option(?=[^>]*value="{re.escape(expected)}")(?=[^>]*selected(?:=|\s|>))[^>]*>', select.group(1)
         )
+        assert selected is not None, (
+            f"action {field_name!r} did not render selected {expected!r} on {path}: {select.group(0)!r}"
+        )
+
+    def assert_disabled_selected(body: str, path: str) -> None:
+        assert_action_selected(body, path, "action", "Disabled")
+
+    def summary_action_field(row: str, path: str) -> str:
+        action_field = re.search(r'<select(?=[^>]*name="(action-\d+)")[^>]*>', row)
+        assert action_field is not None, f"summary action select missing on {path}: {row!r}"
+        return action_field.group(1)
 
     try:
         seed = helpers.php_eval(
             vm,
             f"config_set_path({helpers._php_str(f'{dnsbl_base}/aliasname')}, 'pfbrepairdns');\n"
-            f"config_set_path({helpers._php_str(f'{dnsbl_base}/action')}, array('bogus' => 'unbound'));\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/description')}, '');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/action')}, "
+            f"array('bogus' => {helpers._php_str(dns_corrupt_action)}));\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/cron')}, 'Never');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_base}/logging')}, 'enabled');\n"
             f"config_set_path({helpers._php_str(f'{dnsbl_base}/custom')}, base64_encode('bad.example'));\n"
             f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/format')}, 'auto');\n"
             f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/state')}, 'Disabled');\n"
             f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/url')}, '');\n"
             f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/header')}, 'pfbrepairdns0');\n"
             f"config_set_path({helpers._php_str(f'{dnsbl_valid_base}/aliasname')}, 'pfbvaliddns1346');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_valid_base}/description')}, '');\n"
             f"config_set_path({helpers._php_str(f'{dnsbl_valid_base}/action')}, 'unbound');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_valid_base}/cron')}, 'Never');\n"
+            f"config_set_path({helpers._php_str(f'{dnsbl_valid_base}/logging')}, 'enabled');\n"
             f"config_set_path({helpers._php_str(f'{dnsbl_valid_base}/custom')}, base64_encode('valid.example'));\n"
             f"config_set_path({helpers._php_str(f'{ipv4_base}/aliasname')}, 'pfbrepairip');\n"
-            f"config_set_path({helpers._php_str(f'{ipv4_base}/action')}, 'PermitBogus');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/description')}, '');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/action')}, {helpers._php_str(ip_corrupt_action)});\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/cron')}, 'Never');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_base}/aliaslog')}, 'enabled');\n"
             f"config_set_path({helpers._php_str(f'{ipv4_base}/custom')}, base64_encode('192.0.2.1'));\n"
             f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/format')}, 'auto');\n"
             f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/state')}, 'Disabled');\n"
             f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/url')}, '');\n"
             f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/header')}, 'pfbrepairip0');\n"
             f"config_set_path({helpers._php_str(f'{ipv4_valid_base}/aliasname')}, 'pfbvalidip1346');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_valid_base}/description')}, '');\n"
             f"config_set_path({helpers._php_str(f'{ipv4_valid_base}/action')}, 'Permit_Inbound');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_valid_base}/cron')}, 'Never');\n"
+            f"config_set_path({helpers._php_str(f'{ipv4_valid_base}/aliaslog')}, 'enabled');\n"
             f"config_set_path({helpers._php_str(f'{ipv4_valid_base}/custom')}, base64_encode('192.0.2.200'));\n"
+            f"$geoip = config_get_path({helpers._php_str(f'{geoip_root}/0')}, array());\n"
+            "if (!is_array($geoip)) { $geoip = array(); }\n"
+            "$geoip += array('countries4' => '', 'countries6' => '', 'aliaslog' => 'enabled', "
+            "'autoaddrnot_in' => '', 'autoports_in' => '', 'aliasports_in' => '', 'autoaddr_in' => '', "
+            "'autonot_in' => '', 'aliasaddr_in' => '', 'autoproto_in' => 'any', 'agateway_in' => 'default', "
+            "'autoaddrnot_out' => '', 'autoports_out' => '', 'aliasports_out' => '', 'autoaddr_out' => '', "
+            "'autonot_out' => '', 'aliasaddr_out' => '', 'autoproto_out' => 'any', 'agateway_out' => 'default');\n"
+            f"$geoip['action'] = {helpers._php_str(geoip_corrupt_action)};\n"
+            f"config_set_path({helpers._php_str(f'{geoip_root}/0')}, $geoip);\n"
             "write_config('pfBlockerNG smoke: seed corrupt action render rows');\n"
             "echo 'OK';",
         )
@@ -1906,13 +1944,50 @@ def test_corrupt_group_actions_render_repairably(
         assert "pfB_pfbrepairip_v4" not in alerts_resp.text, "PermitBogus IP row entered Alerts permit options"
         assert "DNSBL_pfbrepairdns" not in alerts_resp.text, "array DNSBL row entered Alerts custom-list options"
 
-        path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={dnsbl_rowid}"
+        summary_cases = (
+            (
+                "ipv4",
+                "pfbrepairip",
+                ip_corrupt_action,
+                "pfbvalidip1346",
+                "Permit_Inbound",
+            ),
+            (
+                "dnsbl",
+                "pfbrepairdns",
+                dns_corrupt_action,
+                "pfbvaliddns1346",
+                "unbound",
+            ),
+        )
+        effective_rowids: dict[str, int] = {}
+        for gtype, bad_alias, corrupt_action, valid_alias, valid_action in summary_cases:
+            path = f"/pfblockerng/pfblockerng_category.php?type={gtype}"
+            resp = webui.get(path)
+            result = evaluate_render(path, resp.status_code, resp.text, ("Summary",))
+            assert result.ok, f"Category {gtype} corrupt-action summary render failed: {result.detail}"
+            invalid_row = row_containing(resp.text, bad_alias)
+            invalid_action_field = summary_action_field(invalid_row, path)
+            assert_action_selected(invalid_row, path, invalid_action_field, "Disabled")
+            effective_rowids[gtype] = int(invalid_action_field.removeprefix("action-"))
+            assert corrupt_action not in resp.text, f"invalid persisted action leaked into summary form on {path}"
+            valid_row = row_containing(resp.text, valid_alias)
+            assert_action_selected(valid_row, path, summary_action_field(valid_row, path), valid_action)
+
+        path = "/pfblockerng/pfblockerng_Africa.php"
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, ("Continent - Africa",))
+        assert result.ok, f"Generated GeoIP corrupt-action render failed: {result.detail}"
+        assert geoip_corrupt_action not in resp.text, f"invalid persisted GeoIP action leaked into form on {path}"
+        assert_disabled_selected(resp.text, path)
+
+        path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={effective_rowids['dnsbl']}"
         resp = webui.get(path)
         result = evaluate_render(path, resp.status_code, resp.text, ("Advanced Tuneables",))
         assert result.ok, f"Category Edit DNSBL corrupt-action render failed: {result.detail}"
         assert_disabled_selected(resp.text, path)
 
-        path = f"/pfblockerng/pfblockerng_category_edit.php?type=ipv4&rowid={ipv4_rowid}"
+        path = f"/pfblockerng/pfblockerng_category_edit.php?type=ipv4&rowid={effective_rowids['ipv4']}"
         resp = webui.get(path)
         result = evaluate_render(path, resp.status_code, resp.text, ("Advanced Tuneables",))
         assert result.ok, f"Category Edit IPv4 corrupt-action render failed: {result.detail}"
@@ -1930,10 +2005,17 @@ def test_corrupt_group_actions_render_repairably(
             if dnsbl_was_present
             else f"config_del_path({helpers._php_str(CFG_DNSBL)});"
         )
+        geoip_restore = (
+            f"config_set_path({helpers._php_str(geoip_root)}, "
+            f"unserialize(base64_decode({helpers._php_str(geoip_snap)})));"
+            if geoip_was_present
+            else f"config_del_path({helpers._php_str(geoip_root)});"
+        )
         restore_errors: list[str] = []
         config_fixtures = (
             ("IPv4", CFG_IPV4, ipv4_was_present, ipv4_snap, ipv4_restore),
             ("DNSBL", CFG_DNSBL, dnsbl_was_present, dnsbl_snap, dnsbl_restore),
+            ("GeoIP", geoip_root, geoip_was_present, geoip_snap, geoip_restore),
         )
         for label, _node, _was_present, _snap, restore in config_fixtures:
             try:

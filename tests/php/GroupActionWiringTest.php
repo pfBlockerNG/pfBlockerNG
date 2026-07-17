@@ -12,6 +12,7 @@ final class GroupActionWiringTest extends TestCase
 	private static string $category;
 	private static string $alerts;
 	private static string $categoryEdit;
+	private static string $www;
 
 	public static function setUpBeforeClass(): void
 	{
@@ -20,8 +21,8 @@ final class GroupActionWiringTest extends TestCase
 		self::$category = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category.php");
 		self::$alerts = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_alerts.php");
 		self::$categoryEdit = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php");
-		$www = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng.php");
-		if (!preg_match('/function pfblockerng_sync_cron\b.*?(?=\nfunction )/s', $www, $match)) {
+		self::$www = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng.php");
+		if (!preg_match('/function pfblockerng_sync_cron\b.*?(?=\nfunction )/s', self::$www, $match)) {
 			throw new RuntimeException('test bootstrap: pfblockerng_sync_cron() body not found');
 		}
 		self::$cron = $match[0];
@@ -50,6 +51,37 @@ final class GroupActionWiringTest extends TestCase
 	{
 		$this->assertStringContainsString('pfb_group_action_valid($value, $gtype)', self::$category);
 		$this->assertStringNotContainsString('in_array($value, $action_values)', self::$category);
+	}
+
+	public function testSummaryRenderNormalizesStoredActionBeforeFormSelect(): void
+	{
+		$this->assertStringContainsString(<<<'PHP'
+						if (!pfb_group_action_valid($rowdata[$r_id]['action'] ?? NULL, $gtype)) {
+							$rowdata[$r_id]['action'] = 'Disabled';
+						}
+PHP, self::$category);
+		$this->assertGuardBeforeActionUse(
+			self::$category,
+			"if (\$gtype == 'ipv4' || \$gtype == 'ipv6' || \$gtype == 'geoip') {\n\t\t\t\t\t\t\t\$list_array",
+			"\$selectadd->setWidth(8)->setAttribute('style', 'width: auto');",
+			"pfb_group_action_valid(\$rowdata[\$r_id]['action'] ?? NULL, \$gtype)",
+			"\$rowdata[\$r_id]['action'],"
+		);
+	}
+
+	public function testGeneratedGeoipPageNormalizesStoredActionBeforeFormSelect(): void
+	{
+		$this->assertStringContainsString(
+			"\$pconfig['action'] = pfb_group_action_valid(\$pfb['geoipconfig']['action'] ?? NULL, 'geoip') ? \$pfb['geoipconfig']['action'] : 'Disabled';",
+			self::$www
+		);
+		$this->assertGuardBeforeActionUse(
+			self::$www,
+			"\$pfb['geoipconfig'] = config_get_path",
+			"\$section->addInput(new Form_Select(\n\t'aliaslog'",
+			"pfb_group_action_valid(\$pfb['geoipconfig']['action'] ?? NULL, 'geoip')",
+			"\t\$pconfig['action'],\n\t\$options_action"
+		);
 	}
 
 	public function testSummaryMutationRequiresExactPostTypeBeforeConfigSelection(): void
