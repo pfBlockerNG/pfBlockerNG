@@ -2153,16 +2153,22 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
  * DNSBL interchange rows are compact tagged arrays: ["d", domain] or ["a", raw].
  * The reader also accepts schema-v1 objects for upgrade compatibility.
  */
+enum PfbDnsblRowKind: string
+{
+	case Domain = 'd';
+	case Abp    = 'a';
+}
+
 function pfb_dnsbl_ndjson_emit_domain_row(string $domain, string $log, string $feed, string $group): string {
 	return json_encode(
-		array('d', $domain),
+		array(PfbDnsblRowKind::Domain->value, $domain),
 		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
 	) . "\n";
 }
 
 function pfb_dnsbl_ndjson_emit_abp_row(string $raw): string {
 	return json_encode(
-		array('a', $raw),
+		array(PfbDnsblRowKind::Abp->value, $raw),
 		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
 	) . "\n";
 }
@@ -2178,13 +2184,11 @@ function pfb_dnsbl_ndjson_parse_row(string $line): ?array {
 			!is_string($row[1]) || $row[1] === '') {
 			return NULL;
 		}
-		if ($row[0] === 'd') {
-			return ['kind' => 'domain', 'domain' => $row[1]];
-		}
-		if ($row[0] === 'a') {
-			return ['kind' => 'abp', 'raw' => $row[1]];
-		}
-		return NULL;
+		return match (PfbDnsblRowKind::tryFrom($row[0])) {
+			PfbDnsblRowKind::Domain => ['kind' => 'domain', 'domain' => $row[1]],
+			PfbDnsblRowKind::Abp    => ['kind' => 'abp', 'raw' => $row[1]],
+			NULL                     => NULL,
+		};
 	}
 	if (!str_starts_with($trimmed, '{') || !array_key_exists('kind', $row)) {
 		return NULL;
