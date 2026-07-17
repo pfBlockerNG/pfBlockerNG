@@ -134,7 +134,7 @@ that consume them, are **unaffected** — they stay the old bare-domain/verbatim
 `raw`, `feed`, `group`, `provenance`, `log_flag`, and `mode` fields.
 
 **Emit/parse primitives** (`pfblockerng.inc`): `pfb_dnsbl_ndjson_emit_domain_row()` /
-`pfb_dnsbl_ndjson_emit_abp_row()` are the only writers — `json_encode()` with a **fixed key
+`pfb_dnsbl_ndjson_emit_abp_row()` are the only writers — `json_encode()` with a **fixed element
 order** (tag, payload), `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`, no pretty-printing,
 exactly one trailing `"\n"`. `pfb_dnsbl_ndjson_parse_row()` is the strict reader every PHP
 consumer shares: it normalizes current compact arrays and accepted legacy objects to the same
