@@ -107,7 +107,9 @@ def worker_python(worktree: str, raw_path: str, iterations: int) -> int:
     manifest = {
         "version": 1,
         "config": {
-            "tld_wildcard_master": [],
+            # issue #1328: 'tld_wildcard_master' is NOT a real manifest wire key --
+            # the oracle rides a shipped file (_dnsbl_config_from_manifest() never
+            # reads it from config), so this fixture must not carry it.
             "tld_wildcard_blacklist": [],
             "tld_wildcard_exclusion": [],
             "user_whitelist": [],

@@ -157,6 +157,9 @@ final class TldBridgeEmitTest extends TestCase
 
 		$m = pfb_unbound_python_sources([]);
 
+		// issue #1328: the oracle must never ride the manifest under its post-rename
+		// (ADR-66) blob name either.
+		$this->assertArrayNotHasKey('tld_wildcard_master', $m['config'], 'tld_wildcard_master must never appear in the manifest');
 		$this->assertSame([], $m['config']['tld_wildcard_blacklist'], 'OFF must empty tld_wildcard_blacklist even though it was configured');
 		$this->assertSame([], $m['config']['tld_wildcard_exclusion'], 'OFF must empty tld_wildcard_exclusion even though it was configured');
 	}
@@ -169,6 +172,7 @@ final class TldBridgeEmitTest extends TestCase
 
 		$m = pfb_unbound_python_sources([]);
 
+		$this->assertArrayNotHasKey('tld_wildcard_master', $m['config'], 'tld_wildcard_master must never appear in the manifest, even ON');
 		$this->assertSame(['evil-tld'], $m['config']['tld_wildcard_blacklist'], 'ON must populate tld_wildcard_blacklist from config');
 		$this->assertSame(['good.example'], $m['config']['tld_wildcard_exclusion'], 'ON must populate tld_wildcard_exclusion from config');
 	}
