@@ -30,8 +30,8 @@ via the stdlib 'idna' codec (per-label); an already-ASCII label passes through
 verbatim (idempotent). Names are lowercased. A malformed name is skipped rather
 than emitted: whitespace, an RFC 3454 Table B.1 "commonly mapped to nothing"
 character (zero-width space, BOM, variation selectors, ...) anywhere, a
-category-Cc control character (NUL, DEL, ...), or a label past the 63-octet
-DNS cap, ASCII or not.
+category-Cc control character (NUL, DEL, ...), a category-Cn (unassigned)
+codepoint, or a label past the 63-octet DNS cap, ASCII or not.
 
 Output format
 -------------
@@ -137,13 +137,20 @@ def _has_blank_or_ignorable_char(text: str) -> bool:
     "commonly mapped to nothing" character (zero-width space, BOM, word joiner,
     variation selectors, ...) -- the exact predicate the stdlib idna codec's
     nameprep step uses internally (stringprep.in_table_b1) to silently strip these
-    before punycode-encoding a label -- or a category-Cc control character (NUL,
+    before punycode-encoding a label -- a category-Cc control character (NUL,
     DEL, ...): an ASCII-range Cc char takes the isascii() passthrough branch in
     _punycode_label untouched, so it would otherwise be emitted verbatim instead
-    of being skipped (issue #1455). A category-'Cf'-only check misses several
-    Table B.1 members that are category Mn/Pd (issue #1306 follow-up), letting
-    idna's encoder silently coalesce them away instead of the name being skipped."""
-    return any(c.isspace() or stringprep.in_table_b1(c) or unicodedata.category(c) == "Cc" for c in text)
+    of being skipped (issue #1455) -- or a category-Cn (unassigned) codepoint: the
+    idna codec accepts one without error and silently punycode-encodes it (issue
+    #1463; probed: U+0378 encodes cleanly). category(c) == "Cn" tracks the
+    interpreter's own (live) Unicode data, so it rejects only codepoints
+    unassigned as of THIS run; the alternative, stringprep.in_table_a1, is frozen
+    to the Unicode 3.2 baseline and would reject every codepoint assigned since
+    (e.g. U+0526, U+08A0) -- a massive false-positive class, so it was rejected
+    for this guard. A category-'Cf'-only check misses several Table B.1 members
+    that are category Mn/Pd (issue #1306 follow-up), letting idna's encoder
+    silently coalesce them away instead of the name being skipped."""
+    return any(c.isspace() or stringprep.in_table_b1(c) or unicodedata.category(c) in ("Cc", "Cn") for c in text)
 
 
 def _punycode_label(label: str) -> str:

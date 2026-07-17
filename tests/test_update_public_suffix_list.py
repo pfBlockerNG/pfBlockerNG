@@ -482,3 +482,37 @@ def test_convert_suffix_skips_line_with_bell() -> None:
     # U+0007 (BEL) -- not one of the two codepoints named in the issue, proves
     # the fix catches the whole category-Cc class, not a hardcoded pair.
     assert upsl.convert_suffix("a\x07b.com") is None
+
+
+# --------------------------------------------------------------------------- #
+# Hostile-input row H10 (issue #1463): category-Cn (unassigned) codepoints
+# skipped, not silently punycode-encoded -- the stdlib idna codec accepts an
+# unassigned codepoint without error (probed: U+0378 encodes cleanly), so it
+# rides into dnsbl_tld untouched unless _has_blank_or_ignorable_char() also
+# rejects category-Cn.
+# --------------------------------------------------------------------------- #
+
+
+def test_convert_suffix_skips_line_with_unassigned_codepoint_mixed_nonascii() -> None:
+    # issue #1463 reported shape: Cn (U+0378) mixed with another non-ASCII
+    # label char (U+00E9, e-acute) in the same label.
+    assert upsl.convert_suffix("a͸é.com") is None
+
+
+def test_convert_suffix_skips_line_with_unassigned_codepoint_otherwise_ascii_label() -> None:
+    # Cn is the ONLY non-ASCII char in an otherwise-ASCII label -- probed: no
+    # ASCII-range (0x00-0x7F) codepoint is Cn, so this label is non-ASCII
+    # overall and takes the idna path, never the isascii() passthrough branch
+    # (unlike the Cc case in issue #1455, which DID pass through raw).
+    assert upsl.convert_suffix("a͸b.com") is None
+
+
+def test_convert_suffix_still_encodes_recently_assigned_codepoint_not_cn() -> None:
+    # U+0526 (CYRILLIC CAPITAL LETTER PE WITH DESCENDER, assigned Unicode 5.1)
+    # is "unassigned" under RFC 3454 Table A.1's frozen Unicode-3.2 baseline
+    # (stringprep.in_table_a1 -> True) but is NOT category-Cn on this
+    # interpreter's live Unicode data -- pins the tolerance decision: reject
+    # unassigned-NOW (unicodedata.category(c) == "Cn"), not
+    # unassigned-as-of-3.2 (stringprep.in_table_a1), which would false-positive
+    # reject this valid, currently-assigned codepoint.
+    assert upsl.convert_suffix("aԦb.com") == "xn--ab-e6c.com"
