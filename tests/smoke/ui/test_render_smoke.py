@@ -1781,7 +1781,7 @@ def test_corrupt_group_actions_render_repairably(
     ip_host = "198.51.100.134"
     ip_eval = f"{ip_host}/32"
     ip_logged_alias = "pfB_RepairActionDeny1346_v4"
-    dns_domain = "repair-action-1346.invalid"
+    dns_domain = helpers.unique_domain("repair1346")
     fixed_ts = "Jan 01 00:00:00"
     unified_rows = (
         f"Block,{fixed_ts},100,em0,WAN,block,4,6,TCP,"
