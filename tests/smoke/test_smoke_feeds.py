@@ -599,30 +599,37 @@ def test_abp_perline_detection_in_plain_feed(
 
 @pytest.mark.timeout(300)
 def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """ADR-21/ADR-62: a UTF-8 BOM before ``[Adblock Plus 2.0]`` must not mask a feed ``/regex/``.
+    """ADR-21/ADR-62/#1108: a UTF-8 BOM must not mask a header line OR a mid-feed comment.
 
     Scenario: a feed whose first bytes are a UTF-8 BOM (``EF BB BF``) followed by the
-    ``[Adblock Plus 2.0]`` header and a single feed regex ``/badword/``. ADR-62's
-    per-line capture (``pfb_dnsbl_is_abp_rule_line()``) compiles a feed ``/regex/``
-    regardless of a header line's presence, so a VIP block on a ``badword``-bearing
-    name proves per-line ``/regex/`` capture works with a BOM-led header line ahead
-    of it in the SAME feed (a smoke-level sanity, not a strict regression pin: since
-    ADR-62 removed all feed-level state, this test's line-2 outcome no longer
-    depends on line 1's own BOM-classification correctness — the precise BOM-strip
-    regression oracle for a LEADING line is
-    ``test_dnsbl_bom_header_feed_parses_without_error`` below, which asserts the
-    parse-error-log count directly).
+    ``[Adblock Plus 2.0]`` header, a single feed regex ``/badword/``, and a THIRD,
+    non-leading line that itself opens with its own BOM ahead of a ``!`` comment
+    carrying a unique marker. ADR-62's per-line capture (``pfb_dnsbl_is_abp_rule_line()``)
+    compiles the feed ``/regex/`` regardless of a header line's presence, so the VIP
+    block on a ``badword``-bearing name is feed-loaded sanity; the strict regression
+    oracle is the parse-error-log count for the mid-feed marker.
+    ``pfb_dnsbl_strip_bom()`` runs on EVERY line, not just the first — a regression
+    there leaves the mid-feed BOM in place, the ``!`` control-line skip misses it
+    (it no longer starts with ``!``), and the line falls through to domain
+    validation and gets logged via ``pfb_parse_fail_log()``. This complements
+    ``test_dnsbl_bom_header_feed_parses_without_error`` below, which pins the
+    LEADING-line case the same way.
 
     Given (before the feed loads) the regex-target name RESOLVES via the controlled stub
-      upstream (``STUB_DNS_A``) — the observable before-state.
+      upstream (``STUB_DNS_A``), and a baseline count of the mid-feed marker in the
+      DNSBL parse-error log.
     When the BOM-led ABP feed loads (Force Update),
-    Then the ``badword``-bearing name returns the VIP block shape and no longer resolves.
-      A regression (BOM masks the header -> feed stays ``plain`` -> the regex line is
-      dropped) would leave it resolving, failing this assertion.
+    Then the ``badword``-bearing name returns the VIP block shape and no longer
+      resolves (feed-loaded sanity), AND the parse-error-log count for the mid-feed
+      marker stays AT the baseline — a per-line BOM-strip regression would strictly
+      increase it (the mid-feed comment logged as invalid data instead of skipped).
     """
     uid = h.unique_domain("adr21bom").split(".", 1)[0]  # the unique label only
     blocked = f"xbadwordx-{uid}.com"
-    body = h.abp_feed_bom("/badword/")
+    # A fixed ASCII marker (mirrors the sibling test below), reused both as the
+    # mid-feed comment text and as the count_log_marker() needle.
+    bom_marker = "Issue #1108: BOM-led mid-feed '!' comment line"
+    body = h.abp_feed_bom("/badword/", h.ABP_BOM + "! " + bom_marker)
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr21_bom.txt", body)
     spec = h.DnsblCase(aliasname="smokeadr21bom", feed_url=feed_url, header="smokeadr21bom", mode=h.DnsblMode.VIP)
 
@@ -630,6 +637,8 @@ def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, client_vm: SmokeVM,
     before = h.dns_probe_client(client_vm, blocked, "A")
     assert h.resolves_to(before, STUB_DNS_A), f"{blocked} should resolve via stub BEFORE listing, got {before}"
     assert not h.is_vip(before), f"{blocked} unexpectedly VIP-blocked before any feed: {before}"
+
+    parse_err_before = h.count_log_marker(deployed_vm, h.DNSBL_PARSE_ERR_LOG, bom_marker)
 
     with h.CaseContext(deployed_vm, spec):
         # The block returns the VIP locally; egress stays OPEN so the before/after stub
@@ -640,6 +649,17 @@ def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, client_vm: SmokeVM,
         assert not h.resolves_to(ans, STUB_DNS_A), (
             f"{blocked} still resolving after a BOM-led ABP feed regex block "
             f"(a BOM-masked header would leave the feed 'plain' and drop the regex): {ans}"
+        )
+
+        # THEN (RED->GREEN carrier): no NEW parse-error log line for the mid-feed
+        # BOM-led '!' comment -- a regressed per-line strip would leave it un-skipped,
+        # falling through to domain validation and logged as invalid data.
+        parse_err_after = h.count_log_marker(deployed_vm, h.DNSBL_PARSE_ERR_LOG, bom_marker)
+        assert parse_err_after == parse_err_before, (
+            f"expected NO new DNSBL parse-error log line for the mid-feed BOM-led '!' "
+            f"comment (before={parse_err_before}, after={parse_err_after}) -- a "
+            f"non-leading BOM must be stripped and the comment skipped, never logged "
+            f"as invalid data:\n{h.read_log_file(deployed_vm, h.DNSBL_PARSE_ERR_LOG)[-2000:]}"
         )
 
 
