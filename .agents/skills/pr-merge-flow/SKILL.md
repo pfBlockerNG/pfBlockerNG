@@ -343,8 +343,9 @@ it may not be clean.
   PR; `xhigh` for `full`, `high` for `verify` + the classifier grep evidence),
   CodeRabbit when it reviewed, any unsolicited review, plus any terminal Snyk
   `failure` finding); PR merged by rebase; remote branch deleted.
-- Sync the work item's labels (an issue's `Waiting PR` removed on merge), per
-  `CLAUDE.md` → "Labels (lifecycle)".
+- Sync the work item's state (a `Fixes #N` issue auto-closes on merge — verify it
+  closed; clear a legacy `WIP`/`Waiting PR` label if present), per `CLAUDE.md` →
+  "Issue state (lifecycle)".
 - **Trigger sweep (mandatory).** The task just reached a terminal state: run the
   cancel-on-resolution sweep — CLAUDE.md "No orphaned waits" / workflow-reference "Bounded
   waits" §3 (kill every trigger class, then `TaskList` once for stale waits you own) — and

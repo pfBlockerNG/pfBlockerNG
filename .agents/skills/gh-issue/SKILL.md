@@ -146,8 +146,8 @@ Only with `--fix`, and only for an actionable verdict. Set up idempotently (mirr
 - **On reuse, rebase the branch onto the freshly-fetched `origin/devel` (Step 0) before
   executing steps** — a branch cut earlier in (or before) this session must pick up commits
   the base gained since, or the fix runs against an already-fixed base.
-- **Labels**: mark the issue picked up — remove none, add `WIP` (CLAUDE.md
-  "Labels"). Keep GitHub writes frugal.
+- **Claim**: `gh issue edit {NN} --add-assignee @me` (CLAUDE.md "Issue state
+  (lifecycle)"; drop a legacy `WIP` label if present). Keep GitHub writes frugal.
 
 From here every git/file op uses `<path>` (`git -C <path> …`, absolute paths under
 `<path>`). The worktree and branch are **reused across all steps** — never a fresh
@@ -208,12 +208,14 @@ completed step except on explicit user instruction.
 - **Dev-only (only docs/`*.md`, `CLAUDE.md`, ADR text, or a skill `SKILL.md`)** — no
   PR: fetch + rebase onto `origin/devel`, then push **directly to `devel`**.
 
-**Labels (CLAUDE.md lifecycle), kept in sync at each transition:** on PR open →
-remove `WIP`, add `Waiting PR`; on merge → remove `Waiting PR`; put `Fixes #N` in the
-PR body so the merge auto-closes the issue. For an **ALREADY-FIXED / INVALID /
-DUPLICATE** verdict (no PR): remove `WIP`, post the rationale comment, and close
-(linking the canonical issue if duplicate). For **NEEDS-INFO**: leave the precise
-follow-up question, keep `WIP` only if you're holding it. Keep GitHub writes frugal.
+**Issue state (CLAUDE.md lifecycle), kept in sync at each transition:** put `Fixes #N`
+in the PR body — the open PR IS the waiting-PR state and the merge auto-closes the
+issue; no state writes (clear a legacy `WIP`/`Waiting PR` label if the issue carries
+one). For an **ALREADY-FIXED / INVALID / DUPLICATE** verdict (no PR): post the
+rationale comment and close with the matching `--reason` (`completed` /
+`"not planned"` / `duplicate`, linking the canonical issue if duplicate). For
+**NEEDS-INFO**: leave the precise follow-up question, add `needs-info`, keep your
+assignee only if you're holding it. Keep GitHub writes frugal.
 
 After landing, offer to remove the worktree (`git worktree remove <path>` from the
 main checkout) once the PR has merged / the push has landed.

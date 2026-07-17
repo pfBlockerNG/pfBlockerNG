@@ -115,15 +115,16 @@ Continue-with refs — never a transcript — and resumes from **Next**.
 | intake | `needs-triage` label | opener/automation |
 | under-specified | `needs-info` label | triager or worker |
 | ready | `ready-for-agent` / `ready-for-human` label | triager |
-| claimed/active | assignee (+ `WIP` label) | worker |
-| waiting on PR | open linked PR (+ `Waiting PR` label) | worker |
+| claimed/active | assignee | worker |
+| waiting on PR | open PR with a `Fixes #N` closing reference | worker |
 | blocked | open blocked-by relation | whoever discovers the dependency |
 | done | closed + resolution comment | worker after gates pass / merger |
 | cancelled | closed + comment stating why and what is NOT done | human (or worker on explicit human instruction) |
 
-`WIP`/`Waiting PR` labels stay mandatory coordination markers until
-[#1388](https://github.com/pfBlockerNG/pfBlockerNG/issues/1388) proves a native
-replacement (map decision).
+Native signals replaced the `WIP`/`Waiting PR` labels
+([#1388](https://github.com/pfBlockerNG/pfBlockerNG/issues/1388), adopted 2026-07-17;
+scheme in CLAUDE.md "Issue state (lifecycle)"). Old issues keep their legacy labels —
+no bulk migration; clear one when a transition you perform would have cleared it.
 
 A worker may move its claimed ticket between agent states but never cancels without a
 human and never overrides a human-set `needs-info`/`ready-for-human` routing.
