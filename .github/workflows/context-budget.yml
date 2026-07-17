@@ -19,6 +19,7 @@ on:
       - '.agents/policy/**'
       - '.agents/context/**'
       - 'docs/misc/**'
+      - '.claude/rules/**'
       - '**/AGENTS.md'
       - '**/CLAUDE.md'
   pull_request:
@@ -30,6 +31,7 @@ on:
       - '.agents/policy/**'
       - '.agents/context/**'
       - 'docs/misc/**'
+      - '.claude/rules/**'
       - '**/AGENTS.md'
       - '**/CLAUDE.md'
 
