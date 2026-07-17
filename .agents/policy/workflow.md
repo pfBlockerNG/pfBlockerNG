@@ -94,6 +94,8 @@ executed and pasted per the repo test policy — never reasoned through.
 Every code PR gets an independent adversarial review in a fresh read-only context using
 the client's native reviewer surface, in addition to mechanical gates and CI. The
 reviewer never edits; findings return as PR review comments. Loop limits below.
+Landing mechanics — review sources, the reviewer contract, CI waits, rebase-merge —
+are specified in [`landing.md`](landing.md).
 
 ### Continuation
 
