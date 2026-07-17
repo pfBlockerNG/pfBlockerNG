@@ -152,7 +152,11 @@ def _seeded_file_kind(vm: Any, path: str) -> str:
 def _restore_seeded_files(vm: Any, backups: list[SeededFileBackup]) -> list[str]:
     errors: list[str] = []
     for backup in reversed(backups):
-        remove = vm.ssh("rm", "-f", backup.path, timeout=15)
+        try:
+            remove = vm.ssh("rm", "-f", backup.path, timeout=15)
+        except Exception as exc:
+            errors.append(f"remove seeded replacement {backup.path!r} raised unexpectedly: {exc}")
+            continue
         if remove.returncode != 0:
             errors.append(
                 f"remove seeded replacement {backup.path!r} failed: rc={remove.returncode} stderr={remove.stderr!r}"
@@ -160,7 +164,11 @@ def _restore_seeded_files(vm: Any, backups: list[SeededFileBackup]) -> list[str]
             continue
         if backup.backup_path is None:
             continue
-        restore = vm.ssh("mv", backup.backup_path, backup.path, timeout=15)
+        try:
+            restore = vm.ssh("mv", backup.backup_path, backup.path, timeout=15)
+        except Exception as exc:
+            errors.append(f"restore seeded path {backup.path!r} from {backup.backup_path!r} raised unexpectedly: {exc}")
+            continue
         if restore.returncode != 0:
             errors.append(
                 f"restore seeded path {backup.path!r} from {backup.backup_path!r} failed: "
@@ -186,8 +194,10 @@ def _backup_seeded_files(vm: Any, paths: tuple[str, ...]) -> list[SeededFileBack
                 break
         planned.append(SeededFileBackup(path, backup_path))
 
+    current: SeededFileBackup | None = None
     try:
         for backup in planned:
+            current = backup
             if backup.backup_path is not None:
                 move = vm.ssh("mv", backup.path, backup.backup_path, timeout=15)
                 assert move.returncode == 0, (
@@ -195,10 +205,41 @@ def _backup_seeded_files(vm: Any, paths: tuple[str, ...]) -> list[SeededFileBack
                     f"rc={move.returncode} stderr={move.stderr!r}"
                 )
             backups.append(backup)
-    except AssertionError as exc:
-        rollback_errors = _restore_seeded_files(vm, backups)
-        detail = "\n".join([str(exc), *rollback_errors])
-        raise AssertionError(f"seeded path backup failed; rollback attempted:\n{detail}") from exc
+            current = None
+    except Exception as exc:
+        rollback_errors: list[str] = []
+        if current is not None and current.backup_path is not None:
+            try:
+                path_kind = _seeded_file_kind(vm, current.path)
+                backup_kind = _seeded_file_kind(vm, current.backup_path)
+                if path_kind == "absent" and backup_kind in {"file", "symlink"}:
+                    try:
+                        restore = vm.ssh("mv", current.backup_path, current.path, timeout=15)
+                    except Exception as restore_exc:
+                        rollback_errors.append(
+                            f"restore ambiguous seeded path {current.path!r} from {current.backup_path!r} "
+                            f"raised unexpectedly: {restore_exc}"
+                        )
+                    else:
+                        if restore.returncode != 0:
+                            rollback_errors.append(
+                                f"restore ambiguous seeded path {current.path!r} from {current.backup_path!r} "
+                                f"failed: rc={restore.returncode} stderr={restore.stderr!r}"
+                            )
+                elif path_kind == "absent" or backup_kind != "absent":
+                    rollback_errors.append(
+                        f"ambiguous seeded path {current.path!r} retained for recovery: "
+                        f"path={path_kind} backup={backup_kind} at {current.backup_path!r}"
+                    )
+            except Exception as inspect_exc:
+                rollback_errors.append(
+                    f"inspect ambiguous seeded path {current.path!r} and {current.backup_path!r} "
+                    f"raised unexpectedly: {inspect_exc}"
+                )
+        rollback_errors.extend(_restore_seeded_files(vm, backups))
+        if rollback_errors:
+            exc.add_note("seeded path backup rollback errors:\n" + "\n".join(rollback_errors))
+        raise
 
     return backups
 
