@@ -202,10 +202,14 @@ function pfb_feeds_render_aliasname_inputs($section, $type, $feeds_list, $pconfi
 	}
 }
 
+// Returns the matched-feed icon markup for the ($alternate = FALSE) primary-URL
+// comparison (issue #1330); the caller assigns it to $icon only when non-empty, same
+// as this function's former direct `global $icon` mutation. Empty string means "no
+// match, leave $icon as the caller already has it" -- never a request to clear it.
 function url_compare($ftype, $key, $rowid, $aliasname, $row_aliasname, $row_url, $feed_url, $row_state,
 	    $feed_header, $alternate=FALSE, $alt_header='', $alt_info='', $alt_register='', $a_key) {
 
-	global $ex_feeds, $alt_feeds, $icon;
+	global $ex_feeds, $alt_feeds;
 	$x_icon = '';
 
 	// Convert user defined URLs with '_API_KEY' to baseline URL format
@@ -263,10 +267,7 @@ function url_compare($ftype, $key, $rowid, $aliasname, $row_aliasname, $row_url,
 	}
 
 	if (!empty($x_icon)) {
-		if (!$alternate) {
-			$icon	= $x_icon;
-		}
-		else {
+		if ($alternate) {
 			if (!isset($alt_feeds[$ftype][$aliasname][$alt_header])) {
 				$alt_feeds[$ftype][$aliasname][$feed_header][$a_key] = array(	'icon' => $x_icon, 'url' => $feed_url, 'header' => $alt_header,
 												'info' => $alt_info, 'register' => !empty($alt_register) ? TRUE : FALSE);
@@ -285,6 +286,8 @@ function url_compare($ftype, $key, $rowid, $aliasname, $row_aliasname, $row_url,
 											'info' => $alt_info, 'register' => !empty($alt_register) ? TRUE : FALSE );
 		}
 	}
+
+	return $x_icon;
 }
 
 // Render the predefined-feeds table rows for a single $type ('ipv4'|'ipv6'|'dnsbl'),
@@ -292,9 +295,10 @@ function url_compare($ftype, $key, $rowid, $aliasname, $row_aliasname, $row_url,
 // group + the hidden alt_<header> input + the per-row icons), identical to the inline
 // per-type block it replaces. The cross-type accumulators ($alt_selected CSV,
 // $feed_info_row separator counter, $aliasname_found) and the state shared with
-// url_compare ($ex_feeds, $alt_feeds, $icon) live at page (global) scope and are bound
-// via `global`. The page calls it once, for the active (?type=) tab only
-// (ADR-16 type-scoped UI).
+// url_compare() ($ex_feeds, $alt_feeds) live at page (global) scope and are bound via
+// `global`; $icon is assigned here from url_compare()'s return value (issue #1330 --
+// no longer a cross-function global mutation). The page calls it once, for the active
+// (?type=) tab only (ADR-16 type-scoped UI).
 function pfb_feeds_render_predefined_type($ftype, $info) {
 
 	global $ex_feeds, $alt_feeds, $icon, $fconfig, $feed_alt_selected;
@@ -343,8 +347,11 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 					}
 
 					// Determine all Aliases that reference the Feed URL
-					url_compare($ftype, $key, $row['rowid'], $aliasname, $row['aliasname'], $row['url'], $feed['url'],
+					$row_icon = url_compare($ftype, $key, $row['rowid'], $aliasname, $row['aliasname'], $row['url'], $feed['url'],
 							$row['state'], $feed['header'], FALSE, '', '', '', 0);
+					if (!empty($row_icon)) {
+						$icon = $row_icon;
+					}
 
 					// Determine all Aliases that reference the 'Alternate' Feed URLs
 					if (isset($feed['alternate'])) {

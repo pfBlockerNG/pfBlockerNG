@@ -709,12 +709,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
 
 		-
-			message: '#^Variable \$icon in empty\(\) always exists and is always falsy\.$#'
-			identifier: empty.variable
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
-
-		-
 			message: '#^Variable \$p_tr_style might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
