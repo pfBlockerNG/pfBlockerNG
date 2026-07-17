@@ -3112,13 +3112,15 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// SAME exact-host token the Suppression "+" posts ($host), never the
 	// possibly-CIDR $eval_ip a feed match can report; $ip_unlock is keyed by
 	// that same exact host (pfb_unlock() is called with $ip = the posted
-	// host in the ip_remove handler above).
+	// host in the ip_remove handler above). The stored table must match THIS
+	// row's table -- a host unlocked in another alias still shows the Unlock
+	// icon here.
 	if ($rtype == 'Block' && !$pfb_geoip) {
 		$tnote = "\n\nNote:\n&emsp;&emsp;&#8226; Unlocking IP(s) is temporary and may be automatically\n"
 			. "&emsp;&emsp;&emsp;re-locked on a Cron or Force command!\n"
 			. "&emsp;&emsp;&#8226; Review Threat Source ( i ) Icons for further IP details.";
 
-		if (!isset($ip_unlock[$host])) {
+		if (($ip_unlock[$host] ?? NULL) !== $table) {
 			$unlock_ip = '<i class="fa-solid fa-lock text-danger" id="IPULCK|' . $h_host . '|'  . $h_table
 					. '" title="Unlock IP: [ ' . $h_host . ' ] from Aliastable [ ' . $h_table . ' ]?'
 					. $tnote . '" ></i>';
