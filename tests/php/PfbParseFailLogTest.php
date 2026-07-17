@@ -6,15 +6,12 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1408 -- pfb_parse_fail_log(): the merged CSV parse-failure sink,
- * replacing the former separate lenient/DNSBL and strict/IP per-line
- * sinks. Every assertion is a byte-exact characterization migrated from
- * the pre-collapse oracle (or folded in from the former dedicated
- * strict-mode sink test) -- the collapse must reproduce every byte
- * unchanged.
+ * pfb_parse_fail_log() -- the CSV parse-failure sink shared by the DNSBL and
+ * IP per-line fail paths (issue #1408). Pins the written bytes: one appended
+ * newline-terminated row "{Y-m-d H:i:s},{header},{line},{oline},{lineno}".
  *
- * Axes: falsy-line coercion divergence ('0' vs '') x mode (lenient/strict
- * via $keep_falsy_line), $oline CRLF-stripped vs mid-string LF kept,
+ * Axes: falsy-line coercion ('0' vs '') x mode (lenient/strict via
+ * $keep_falsy_line), $oline trailing CRLF stripped vs mid-string LF kept,
  * comma-containing $line kept raw, UTF-8 $line kept raw, default
  * $lineno='', multi-append ordering (FILE_APPEND).
  */
@@ -52,9 +49,9 @@ final class PfbParseFailLogTest extends TestCase
 	}
 
 	/**
-	 * The one genuinely divergent branch (issue #1408 packet): lenient mode's
-	 * `$line ?: 'null'` treats the literal string '0' as falsy -- unlike strict
-	 * mode's `$line !== ''`, which keeps '0' as-is. Currently unpinned.
+	 * The divergent branch: lenient mode's `$line ?: 'null'` treats the literal
+	 * string '0' as falsy -- unlike strict mode's `$line !== ''`, which keeps
+	 * '0' as-is.
 	 */
 	public function testLenientModeCoercesLiteralZeroLineToNull(): void
 	{
@@ -169,8 +166,7 @@ final class PfbParseFailLogTest extends TestCase
 	}
 
 	// -------------------------------------------------------------------
-	// Folded in from the former dedicated strict-mode IP-sink test
-	// (strict mode, $keep_falsy_line = TRUE) -- expected strings unchanged.
+	// Strict mode ($keep_falsy_line = TRUE) -- the IP fail path's contract.
 	// -------------------------------------------------------------------
 
 	/**
