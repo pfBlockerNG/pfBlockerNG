@@ -3032,6 +3032,7 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
 
 def _ip_inject_snippet(spec: IpCase) -> str:
     root = CFG_IP_V6_LISTS if spec.family == "v6" else CFG_IP_V4_LISTS
+    other_root = CFG_IP_V4_LISTS if spec.family == "v6" else CFG_IP_V6_LISTS
     row = {
         "header": spec.header,
         "url": spec.feed_url,
@@ -3060,6 +3061,9 @@ def _ip_inject_snippet(spec: IpCase) -> str:
         f"$list = {_php_kv_array(listcfg)};\n"
         f"$list['row'] = array({_php_kv_array(row)});\n"
         f"config_set_path({_php_str(root)}, array($list));\n"
+        # issue #1456 (inject_ip_lists' #1214 sibling): reset the OTHER family's
+        # root too, else it keeps holding a PRIOR call's list group.
+        f"config_set_path({_php_str(other_root)}, array());\n"
         "write_config('pfBlockerNG smoke: IP case');\n"
         "echo 'OK';"
     )
