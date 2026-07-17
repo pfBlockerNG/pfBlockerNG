@@ -45,6 +45,29 @@ _BOOTSTRAP = """# Bootstrap
 Prose mentioning `outside.md` that is not a routing row.
 """
 
+_HOSTILE_BOOTSTRAP = """# Bootstrap
+
+## Routing table — read on trigger, not up front
+
+| Task touches | Read first |
+| ------------ | ---------- |
+| policy work | `.agents/policy/alpha.md` |
+| empty group | `<>.md` |
+| empty alts both | `<|>.md` |
+| empty alt middle | `<a||b>.md` |
+| unclosed group | `lang-<php|python.md` |
+| two groups | `a<b|c>d<e|f>g.md` |
+"""
+
+_PARITY_AGENTS = """# Doc
+
+Never assume — read the source of truth, investigate the live state, and confirm a
+genuine fork before building.
+
+Delegation shape: substantial coding work is planned by the **top tier**, implemented
+by small-tier agents.
+"""
+
 
 def _write(root: Path, rel: str, text: str) -> Path:
     path = root / rel
@@ -58,6 +81,11 @@ def _scratch_repo(tmp_path: Path) -> Path:
     _write(root, "AGENTS.md", _BOOTSTRAP)
     _write(root, ".agents/policy/alpha.md", f"# Alpha\n\n{_HEADER}")
     _write(root, ".agents/context/beta.md", f"# Beta\n\n{_HEADER}")
+    # _BOOTSTRAP's `lang-<php\|python\|shell>.md` row now expands (map #1439) —
+    # all three alternatives must resolve for this fixture to stay header-clean.
+    _write(root, ".agents/context/lang-php.md", f"# PHP\n\n{_HEADER}")
+    _write(root, ".agents/context/lang-python.md", f"# Python\n\n{_HEADER}")
+    _write(root, ".agents/context/lang-shell.md", f"# Shell\n\n{_HEADER}")
     subprocess.run(["git", "init", "-q", root], check=True)
     subprocess.run(["git", "-C", root, "add", "-A"], check=True)
     return root
@@ -90,6 +118,10 @@ def _tracked(root: Path) -> list[str]:
         ("plugins/ponytail/AGENTS.md", None),
         ("src/usr/local/pkg/pfblockerng/pfblockerng.inc", None),
         ("docs/misc/architecture-notes.md", None),
+        (".claude/rules/smoke.md", 400),
+        (".claude/rules/sub/deep.md", 400),
+        # A `plugins/` segment ANYWHERE (not just root-anchored) is vendored.
+        (".claude/plugins/foo/CLAUDE.md", None),
     ],
 )
 def test_budget_for_surface_classes(rel: str, budget: int | None) -> None:
@@ -118,13 +150,37 @@ def test_size_of_missing_tracked_file_fails_closed(tmp_path: Path) -> None:
     assert len(violations) == 1 and violations[0].startswith(".agents/policy/gone.md: unreadable")
 
 
+def test_rules_budget_over_fires_and_at_budget_passes(tmp_path: Path) -> None:
+    root = tmp_path
+    _write(root, ".claude/rules/x.md", "x" * 401)
+    _write(root, ".claude/rules/y.md", "x" * 400)
+    violations = ccb.check_sizes(root, [".claude/rules/x.md", ".claude/rules/y.md"])
+    assert violations == [".claude/rules/x.md: 401 bytes > budget 400"]
+
+
+def test_nested_plugins_segment_oversized_stub_has_no_budget(tmp_path: Path) -> None:
+    # A `plugins/` segment anywhere in the path is vendored content, not our dir
+    # stub — no budget applies, so an oversized file here is not a violation.
+    root = tmp_path
+    _write(root, ".claude/plugins/foo/CLAUDE.md", "x" * 500)
+    assert ccb.check_sizes(root, [".claude/plugins/foo/CLAUDE.md"]) == []
+
+
 # --- routing-table extraction and resolution -----------------------------------
 
 
 def test_routing_targets_extracts_table_rows_only() -> None:
+    # The `lang-<php\|python\|shell>.md` template row expands into three concrete
+    # tokens now (markdown-escaped pipes stripped) — it is no longer skipped.
     tokens, skipped = ccb.routing_targets(_BOOTSTRAP)
-    assert tokens == [".agents/policy/alpha.md", "beta.md"]
-    assert skipped == ["lang-<php\\|python\\|shell>.md"]
+    assert tokens == [".agents/policy/alpha.md", "beta.md", "lang-php.md", "lang-python.md", "lang-shell.md"]
+    assert skipped == []
+
+
+def test_routing_targets_hostile_templates_skip_without_crash() -> None:
+    tokens, skipped = ccb.routing_targets(_HOSTILE_BOOTSTRAP)
+    assert tokens == [".agents/policy/alpha.md"]
+    assert skipped == ["<>.md", "<|>.md", "<a||b>.md", "lang-<php|python.md", "a<b|c>d<e|f>g.md"]
 
 
 def test_resolve_target_bare_token_searches_policy_context_docs(tmp_path: Path) -> None:
@@ -160,6 +216,28 @@ def test_check_headers_flags_renamed_routing_table_heading(tmp_path: Path) -> No
     _write(root, ".agents/context/beta.md", "# Beta\n\nNo routing header here.\n")
     violations = ccb.check_headers(root)
     assert violations == ["AGENTS.md: no routing-table targets extracted — heading renamed or table removed?"]
+
+
+def test_check_headers_expanded_template_flags_missing_alternative(tmp_path: Path) -> None:
+    # _scratch_repo ships all three lang-*.md alternatives already (fixture must
+    # stay header-clean by default) — remove one to prove the expansion resolves
+    # and header-checks each alternative independently.
+    root = _scratch_repo(tmp_path)
+    (root / ".agents/context/lang-shell.md").unlink()
+    violations = ccb.check_headers(root)
+    assert violations == ["AGENTS.md: routing target `lang-shell.md` does not resolve to a file"]
+
+
+def test_check_headers_expanded_template_all_alternatives_present_clean(tmp_path: Path) -> None:
+    root = _scratch_repo(tmp_path)
+    assert ccb.check_headers(root) == []
+
+
+def test_check_headers_hostile_templates_skip_silently_no_crash(tmp_path: Path) -> None:
+    root = tmp_path
+    _write(root, "AGENTS.md", _HOSTILE_BOOTSTRAP)
+    _write(root, ".agents/policy/alpha.md", f"# Alpha\n\n{_HEADER}")
+    assert ccb.check_headers(root) == []
 
 
 # --- both header shapes accepted; window enforced ------------------------------
@@ -203,9 +281,19 @@ def _settings(capsule: str) -> str:
     )
 
 
+def _settings_ups(capsule: str) -> str:
+    payload = json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": capsule}})
+    return json.dumps(
+        {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": f"echo '{payload}'"}]}]}}
+    )
+
+
 def test_extract_capsules_measures_payload_bytes() -> None:
+    # extract_capsules now returns the capsule TEXT per event, not a precomputed
+    # byte length — byte-length is derived by the caller where it matters.
     capsules, errors = ccb.extract_capsules(_settings("abc"))
-    assert capsules == [("SessionStart", 3)] and errors == []
+    assert capsules == [("SessionStart", "abc")] and errors == []
+    assert len(capsules[0][1].encode("utf-8")) == 3
 
 
 def test_check_capsules_flags_over_budget_only(tmp_path: Path) -> None:
@@ -250,6 +338,62 @@ def test_run_checks_reports_size_violations_despite_malformed_settings(tmp_path:
     assert any("not a parseable hooks structure" in v for v in violations)
 
 
+# --- UserPromptSubmit capsule <-> AGENTS.md parity ------------------------------
+
+
+def test_check_parity_all_verbatim_segments_clean(tmp_path: Path) -> None:
+    root = tmp_path
+    _write(root, "AGENTS.md", _PARITY_AGENTS)
+    capsule = (
+        "DISCIPLINE: read the source of truth, investigate the live state, and confirm a "
+        "genuine fork before building. · planned by the top tier, implemented by small-tier agents."
+    )
+    _write(root, ".claude/settings.json", _settings_ups(capsule))
+    assert ccb.check_parity(root) == []
+
+
+def test_check_parity_alien_segment_flags_violation(tmp_path: Path) -> None:
+    root = tmp_path
+    _write(root, "AGENTS.md", _PARITY_AGENTS)
+    _write(root, ".claude/settings.json", _settings_ups("DISCIPLINE: totally alien text absent from agents md"))
+    violations = ccb.check_parity(root)
+    assert len(violations) == 1
+    assert "totally alien text absent from agents md" in violations[0]
+
+
+def test_check_parity_no_user_prompt_submit_capsule_clean(tmp_path: Path) -> None:
+    root = tmp_path
+    _write(root, "AGENTS.md", _PARITY_AGENTS)
+    _write(root, ".claude/settings.json", _settings("abc"))  # SessionStart capsule only
+    assert ccb.check_parity(root) == []
+
+
+def test_check_parity_capsule_without_colon_shape_flags_violation(tmp_path: Path) -> None:
+    root = tmp_path
+    _write(root, "AGENTS.md", _PARITY_AGENTS)
+    _write(root, ".claude/settings.json", _settings_ups("no colon separator here at all"))
+    violations = ccb.check_parity(root)
+    assert len(violations) == 1
+    assert "UserPromptSubmit" in violations[0]
+
+
+def test_check_parity_segments_split_only_on_middle_dot_not_colon(tmp_path: Path) -> None:
+    # "alpha" and "beta" each appear standalone in AGENTS.md, but "alpha: beta" as a
+    # contiguous phrase does not — proves the per-segment text is never re-split (or
+    # re-partitioned) on ":", only the outer remainder is ever split, and only on " · ".
+    root = tmp_path
+    _write(root, "AGENTS.md", "# Doc\n\nalpha appears standalone here.\n\nbeta appears standalone here too.\n")
+    _write(root, ".claude/settings.json", _settings_ups("Label: alpha: beta"))
+    violations = ccb.check_parity(root)
+    assert len(violations) == 1
+    assert "alpha: beta" in violations[0]
+
+
+def test_check_parity_live_repository_user_prompt_submit_clean() -> None:
+    # Pins the step-1 UserPromptSubmit capsule content against the live AGENTS.md.
+    assert ccb.check_parity(_REPO_ROOT) == []
+
+
 # --- conditional trigger -------------------------------------------------------
 
 
@@ -264,6 +408,7 @@ def test_run_checks_reports_size_violations_despite_malformed_settings(tmp_path:
         ".agents/context/beta.md",
         "docs/misc/architecture-notes.md",
         "tests/smoke/CLAUDE.md",
+        ".claude/rules/smoke.md",
     ],
 )
 def test_touches_context_surface_true(rel: str) -> None:
