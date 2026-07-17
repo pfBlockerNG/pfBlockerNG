@@ -39,7 +39,7 @@ import pytest
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard, evaluate_render
 from .test_category import _restore_node, _snapshot_node
-from .test_category_edit import CFG_DNSBL, CFG_IPV4, _free_rowid
+from .test_category_edit import CFG_DNSBL, CFG_IPV4, _del_rowid, _free_rowid
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1698,40 +1698,65 @@ def test_category_edit_no_sort_mode_renders_reorder_wiring(
 ) -> None:  # noqa: ARG001
     """ADR-63 P4: a no-sort category-edit page emits the staged-reorder wiring +
     the gutter container class, still with zero retired Lmove/Xmove markup.
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    base = f"{CFG_DNSBL}/{rowid}"
+    seed = helpers.php_eval(
+        vm,
+        f"config_set_path({helpers._php_str(f'{base}/aliasname')}, 'pfbrenderns');\n"
+        f"config_set_path({helpers._php_str(f'{base}/action')}, 'unbound');\n"
+        f"config_set_path({helpers._php_str(f'{base}/sort')}, 'no-sort');\n"
+        f"config_set_path({helpers._php_str(f'{base}/row/0/format')}, 'Auto');\n"
+        f"config_set_path({helpers._php_str(f'{base}/row/0/state')}, 'Disabled');\n"
+        f"config_set_path({helpers._php_str(f'{base}/row/0/url')}, '');\n"
+        f"config_set_path({helpers._php_str(f'{base}/row/0/header')}, 'pfbrenderns0');\n"
+        "write_config('ADR-63 P4 smoke: seed no-sort render row');\n"
+        "echo 'OK';",
+    )
+    assert "OK" in seed.stdout, f"failed to seed no-sort category row: {seed.stdout!r}"
 
-    Also seeds invalid persisted IPv4/DNSBL actions in separate rows. Alerts must
-    exclude them, and Category Edit must render both with a repairable Disabled
-    selection. Whole config nodes are restored exactly after the probe.
+    try:
+        path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={rowid}"
+        resp = webui.get(path)
+        assert resp.status_code == 200, f"GET {path} -> HTTP {resp.status_code} (expected 200)"
+        body = resp.text
+        assert "pfb_reorder_init('#sourcedefinitions .panel-body'" in body, (
+            f"pfb_reorder_init wiring missing in no-sort mode on {path}"
+        )
+        assert 'class="pfb-gutter"' in body, f"pfb-gutter container class missing in no-sort mode on {path}"
+        assert 'name="Lmove' not in body, f"retired Lmove markup found on {path}"
+        assert 'name="Xmove' not in body, f"retired Xmove markup found on {path}"
+    finally:
+        _del_rowid(vm, CFG_DNSBL, rowid)
+
+
+@pytest.mark.ui_e2e
+def test_corrupt_group_actions_render_repairably(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
+    """Bogus and array actions fail closed in Alerts and remain repairable.
+
+    Whole IPv4 and DNSBL config nodes are restored exactly after the probe.
     """
     vm = smoke_vm
     dnsbl_snap = _snapshot_node(vm, CFG_DNSBL)
     ipv4_snap = _snapshot_node(vm, CFG_IPV4)
-    dnsbl_reorder_rowid = _free_rowid(vm, CFG_DNSBL)
-    dnsbl_repair_rowid = dnsbl_reorder_rowid + 1
+    dnsbl_rowid = _free_rowid(vm, CFG_DNSBL)
     ipv4_rowid = _free_rowid(vm, CFG_IPV4)
-    dnsbl_reorder_base = f"{CFG_DNSBL}/{dnsbl_reorder_rowid}"
-    dnsbl_repair_base = f"{CFG_DNSBL}/{dnsbl_repair_rowid}"
+    dnsbl_base = f"{CFG_DNSBL}/{dnsbl_rowid}"
     ipv4_base = f"{CFG_IPV4}/{ipv4_rowid}"
     seed = helpers.php_eval(
         vm,
-        f"config_set_path({helpers._php_str(f'{dnsbl_reorder_base}/aliasname')}, 'pfbrenderns');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_reorder_base}/action')}, 'unbound');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_reorder_base}/sort')}, 'no-sort');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_reorder_base}/row/0/format')}, 'auto');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_reorder_base}/row/0/state')}, 'Disabled');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_reorder_base}/row/0/url')}, '');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_reorder_base}/row/0/header')}, 'pfbrenderns0');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_repair_base}/aliasname')}, 'pfbrepairdns');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_repair_base}/action')}, array('unbound'));\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_repair_base}/sort')}, 'sort');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_repair_base}/custom')}, base64_encode('bad.example'));\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_repair_base}/row/0/format')}, 'auto');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_repair_base}/row/0/state')}, 'Disabled');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_repair_base}/row/0/url')}, '');\n"
-        f"config_set_path({helpers._php_str(f'{dnsbl_repair_base}/row/0/header')}, 'pfbrepairdns0');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/aliasname')}, 'pfbrepairdns');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/action')}, array('unbound'));\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/custom')}, base64_encode('bad.example'));\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/format')}, 'auto');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/state')}, 'Disabled');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/url')}, '');\n"
+        f"config_set_path({helpers._php_str(f'{dnsbl_base}/row/0/header')}, 'pfbrepairdns0');\n"
         f"config_set_path({helpers._php_str(f'{ipv4_base}/aliasname')}, 'pfbrepairip');\n"
         f"config_set_path({helpers._php_str(f'{ipv4_base}/action')}, 'PermitBogus');\n"
-        f"config_set_path({helpers._php_str(f'{ipv4_base}/sort')}, 'sort');\n"
         f"config_set_path({helpers._php_str(f'{ipv4_base}/custom')}, base64_encode('192.0.2.1'));\n"
         f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/format')}, 'auto');\n"
         f"config_set_path({helpers._php_str(f'{ipv4_base}/row/0/state')}, 'Disabled');\n"
@@ -1756,23 +1781,11 @@ def test_category_edit_no_sort_mode_renders_reorder_wiring(
         assert "pfB_pfbrepairip_v4" not in alerts_resp.text, "PermitBogus IP row entered Alerts permit options"
         assert "DNSBL_pfbrepairdns" not in alerts_resp.text, "array DNSBL row entered Alerts custom-list options"
 
-        path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={dnsbl_repair_rowid}"
+        path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={dnsbl_rowid}"
         resp = webui.get(path)
         result = evaluate_render(path, resp.status_code, resp.text, ("Advanced Tuneables",))
         assert result.ok, f"Category Edit DNSBL corrupt-action render failed: {result.detail}"
         assert_disabled_selected(resp.text, path)
-
-        path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={dnsbl_reorder_rowid}"
-        resp = webui.get(path)
-        result = evaluate_render(path, resp.status_code, resp.text, ("Advanced Tuneables",))
-        assert result.ok, f"Category Edit DNSBL no-sort render failed: {result.detail}"
-        body = resp.text
-        assert "pfb_reorder_init('#sourcedefinitions .panel-body'" in body, (
-            f"pfb_reorder_init wiring missing in no-sort mode on {path}"
-        )
-        assert 'class="pfb-gutter"' in body, f"pfb-gutter container class missing in no-sort mode on {path}"
-        assert 'name="Lmove' not in body, f"retired Lmove markup found on {path}"
-        assert 'name="Xmove' not in body, f"retired Xmove markup found on {path}"
 
         path = f"/pfblockerng/pfblockerng_category_edit.php?type=ipv4&rowid={ipv4_rowid}"
         resp = webui.get(path)
