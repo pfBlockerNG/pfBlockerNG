@@ -1788,7 +1788,7 @@ def test_corrupt_group_actions_render_repairably(
         f"{ip_host},10.0.0.134,12345,443,in,US,{ip_logged_alias},{ip_eval},"
         f"{ip_feed_name},Unknown,Unknown,Unknown,+\n"
         f"DNSBL-python,{fixed_ts},{dns_domain},127.0.0.1,Python,DNSBL,"
-        f"RepairAction1346,{dns_domain},RepairActionFeed1346,+,A\n"
+        f"Unknown,{dns_domain},RepairActionFeed1346,+,A\n"
     )
 
     def assert_disabled_selected(body: str, path: str) -> None:
