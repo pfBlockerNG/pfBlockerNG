@@ -681,6 +681,33 @@ function pfb_valid_vtype($vtype) {
 	return ($vtype === '_v4' || $vtype === '_v6');
 }
 
+// Accept only actions belonging to the group that stores them. Summary AJAX,
+// restored/HA config, and runtime consumers all share this exact boundary.
+function pfb_group_action_valid(mixed $action, string $gtype): bool {
+	if (!is_string($action)) {
+		return FALSE;
+	}
+	if ($gtype === 'dnsbl') {
+		return in_array($action, array('Disabled', 'unbound'), TRUE);
+	}
+	if (!in_array($gtype, array('ipv4', 'ipv6', 'geoip'), TRUE)) {
+		return FALSE;
+	}
+	return in_array($action, array(
+		'Disabled',
+		'Deny_Inbound', 'Deny_Outbound', 'Deny_Both',
+		'Permit_Inbound', 'Permit_Outbound', 'Permit_Both',
+		'Match_Inbound', 'Match_Outbound', 'Match_Both',
+		'Alias_Deny', 'Alias_Permit', 'Alias_Match', 'Alias_Native'
+	), TRUE);
+}
+
+// DNSBL-IP is an IP group even though its setting lives on the DNSBL page.
+// Invalid persisted/HA values fail closed before any autorule, path, or alias use.
+function pfb_dnsblip_action_value(mixed $action): string {
+	return pfb_group_action_valid($action, 'ipv4') ? (string) $action : 'Disabled';
+}
+
 // Normalise the user-supplied 'Force Reload' option to one of its only
 // legitimate values — 'All', 'IP', 'DNSBL' — returning 'All' for any absent,
 // non-string, or unexpected input. Used to validate $_POST['pfb_reload_option']
@@ -2005,6 +2032,9 @@ function pfb_dnsblip_rebuild_check(string $output, array $ip_files, string $fp_p
 // for a non-routable action (e.g. 'Disabled'). (#655)
 function pfb_dnsblip_action_folder($action): string {
 	global $pfbarr;
+	if (!pfb_group_action_valid($action, 'ipv4')) {
+		return '';
+	}
 	// key 0 + the DNSBL settings section mirror what the IP loop passes for DNSBLIP,
 	// so the force-Native override (Advanced Invert) routes identically here.
 	pfb_determine_list_detail($action, 'DNSBLIP', 'pfblockerngdnsblsettings', 0);
@@ -12959,6 +12989,9 @@ function pfb_remove_states() {
 	$custom_supp = array();
 	foreach (array('pfblockernglistsv4', 'pfblockernglistsv6') as $ip_type) {
 		foreach (config_get_path("installedpackages/{$ip_type}/config", []) as $list) {
+			if (!pfb_group_action_valid($list['action'] ?? NULL, 'ipv4')) {
+				continue;
+			}
 			if (!empty($list['custom']) && strpos($list['action'], 'Permit_') !== FALSE) {
 				$custom		= pfbng_text_area_decode($list['custom'], TRUE, FALSE);
 				$custom_supp	= array_merge($custom_supp, $custom);
@@ -16105,7 +16138,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['ip_ph']		= pfb_filter($pfb['ipconfig']['ip_placeholder'], PFB_FILTER_IPV4, 'Placeholder IP Address', '127.1.7.7');	// Placeholder IP Address
 
 	// DNSBL settings
-	$pfb['dnsbl_ip']	= $pfb['dnsblconfig']['action']		?:  'Disabled';		// Enable/Disable IP blocking from DNSBL lists
+	$pfb['dnsbl_ip']	= pfb_dnsblip_action_value($pfb['dnsblconfig']['action'] ?? NULL);	// Enable/Disable IP blocking from DNSBL lists
 	$pfb['dnsbl_rule']	= $pfb['dnsblconfig']['pfb_dnsbl_rule'] ?: 'Disabled';		// Auto create a Floating Pass Rule for other Lan subnets
 	$pfb['dnsbl_top1m_cnt']	= $pfb['dnsblconfig']['alexa_count']	?: '1000';		// TOP1M whitelist domain setting
 	// DNSBL Python decision-cache cap (LRU); 0 = unlimited. 0 is meaningful so avoid the
@@ -16191,6 +16224,9 @@ function sync_package_pfblockerng($cron='') {
 		$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
 		if (!empty(config_get_path("installedpackages/{$cont_key}/config"))) {
 			$continent_config = config_get_path("installedpackages/{$cont_key}/config/0");
+			if (!pfb_group_action_valid($continent_config['action'] ?? NULL, 'geoip')) {
+				continue;
+			}
 			if ($continent_config['action'] != 'Disabled' && in_array($continent_config['action'], $action)) {
 				$pfb['autorules'] = TRUE;
 				break;
@@ -16201,6 +16237,9 @@ function sync_package_pfblockerng($cron='') {
 	if (!$pfb['autorules']) {
 		foreach ($ip_types as $ip_type => $vtype) {
 			foreach(config_get_path("installedpackages/{$ip_type}/config", []) as $list) {
+				if (!pfb_group_action_valid($list['action'] ?? NULL, 'ipv4')) {
+					continue;
+				}
 				if ($list['action'] != 'Disabled' && in_array($list['action'], $action)) {
 					$pfb['autorules'] = TRUE;
 					break;
@@ -16210,7 +16249,7 @@ function sync_package_pfblockerng($cron='') {
 	}
 
 	// Check if DNSBL auto permit rule or DNSBL 'Auto Deny' rules for DNSBL IPs are defined
-	if (!empty($pfb['dnsblconfig']['dnsbl_allow_int']) || strpos($pfb['dnsblconfig']['action'], 'Deny_') !== FALSE) {
+	if (!empty($pfb['dnsblconfig']['dnsbl_allow_int']) || strpos($pfb['dnsbl_ip'], 'Deny_') !== FALSE) {
 		$pfb['autorules'] = TRUE;
 	}
 
@@ -16300,6 +16339,9 @@ function sync_package_pfblockerng($cron='') {
 			$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
 			if (!empty(config_get_path("installedpackages/{$cont_key}/config")) && $pfb['enable'] == 'on') {
 				$continent_config = config_get_path("installedpackages/{$cont_key}/config/0");
+				if (!pfb_group_action_valid($continent_config['action'] ?? NULL, 'geoip')) {
+					continue;
+				}
 				if ($continent_config['action'] != 'Disabled') {
 					foreach ($cont_types as $c_type => $vtype) {
 						if (!empty($continent_config[$c_type])) {
@@ -16346,6 +16388,9 @@ function sync_package_pfblockerng($cron='') {
 			$type_config = config_get_path("installedpackages/{$ltype}/config");
 			if (!empty($type_config) && $pfb['enable'] == 'on') {
 				foreach ($type_config as $list) {
+					if (!pfb_group_action_valid($list['action'] ?? NULL, $ltype === 'pfblockerngdnsbl' ? 'dnsbl' : 'ipv4')) {
+						continue;
+					}
 
 					// If only the 'customlist' is defined. Remove the 'List row' data.
 					if (isset($list['row']) && empty($list['row'][0]['url'])) {
@@ -16364,7 +16409,8 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			// ADD DNSBL IP
-			if (($ltype == 'pfblockernglistsv4' || $ltype == 'pfblockernglistsv6') && $pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['dnsbl_ip'] != 'Disabled') {
+			if (($ltype == 'pfblockernglistsv4' || $ltype == 'pfblockernglistsv6') && $pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on'
+			    && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4') && $pfb['dnsbl_ip'] != 'Disabled') {
 				$list = array();
 				$list['action'] = "{$pfb['dnsbl_ip']}";
 				$list['row'][]	= array('format'	=> 'auto',
@@ -17098,6 +17144,9 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			foreach (config_get_path('installedpackages/pfblockerngdnsbl/config', []) as $list) {
+				if (!pfb_group_action_valid($list['action'] ?? NULL, 'dnsbl')) {
+					continue;
+				}
 				// If only the 'customlist' is defined. Remove the 'List row' data.
 				if (isset($list['row']) && empty($list['row'][0]['url'])) {
 					unset($list['row']);
@@ -18296,6 +18345,9 @@ function sync_package_pfblockerng($cron='') {
 		$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
 		if (!empty(config_get_path("installedpackages/{$cont_key}/config"))) {
 			$continent_config = config_get_path("installedpackages/{$cont_key}/config/0");
+			if (!pfb_group_action_valid($continent_config['action'] ?? NULL, 'geoip')) {
+				continue;
+			}
 			$cc_name = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
 			if (isset($continent_config['action']) && $continent_config['action'] != 'Disabled' && $pfb['enable'] == 'on') {
 
@@ -18507,8 +18559,8 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			foreach (config_get_path("installedpackages/{$ip_type}/config", []) as $key => $list) {
-				if (!is_array($list)) {
-					$list = array();
+				if (!is_array($list) || !pfb_group_action_valid($list['action'] ?? NULL, 'ipv4')) {
+					continue;
 				}
 				if (!is_array($list['row'])) {
 					$list['row'] = array();
@@ -18534,7 +18586,8 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			// Add DNSBLIP, if configured (IPv4 + IPv6)
-			if ($pfb['dnsbl'] == 'on' && $pfb['dnsbl_ip'] != 'Disabled' && ($vtype == '_v4' || $vtype == '_v6')) {
+			if ($pfb['dnsbl'] == 'on' && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4')
+			    && $pfb['dnsbl_ip'] != 'Disabled' && ($vtype == '_v4' || $vtype == '_v6')) {
 
 				$list = array(	'aliasname'	=> 'DNSBLIP',
 						'vtype'		=> "{$vtype}",
@@ -19343,7 +19396,8 @@ function sync_package_pfblockerng($cron='') {
 		$lists = config_get_path("installedpackages/{$ip_type}/config");
 
 		// Add DNSBLIP, if configured (IPv4 + IPv6)
-		if ($pfb['dnsbl'] == 'on' && $pfb['dnsbl_ip'] != 'Disabled' && ($vtype == '_v4' || $vtype == '_v6')) {
+		if ($pfb['dnsbl'] == 'on' && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4')
+		    && $pfb['dnsbl_ip'] != 'Disabled' && ($vtype == '_v4' || $vtype == '_v6')) {
 
 			$list = array(	'aliasname'	=> 'DNSBLIP',
 					'vtype'		=> "{$vtype}",
@@ -19362,6 +19416,9 @@ function sync_package_pfblockerng($cron='') {
 		if (!empty($lists) && $pfb['enable'] == 'on') {
 			$pfbrunonce = TRUE;
 			foreach ($lists as $key => $list) {
+				if (!pfb_group_action_valid($list['action'] ?? NULL, 'ipv4')) {
+					continue;
+				}
 				$alias = "pfB_{$list['aliasname']}{$vtype}";
 				if (empty(pfb_filter($alias, PFB_FILTER_WORD, 'Configure Aliases and Firewall Rules'))) {
 					pfb_logger("\n Invalid Aliasname:{$list['aliasname']}{$vtype}, *skipping*", 1);

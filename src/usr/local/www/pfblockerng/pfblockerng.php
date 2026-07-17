@@ -741,6 +741,9 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 		if ($scope === 'dnsbl' && !$is_dnsbl) { continue; }
 
 		foreach (config_get_path("installedpackages/{$ltype}/config", []) as $list) {
+			if (!pfb_group_action_valid($list['action'] ?? NULL, $is_dnsbl ? 'dnsbl' : 'ipv4')) {
+				continue;
+			}
 			if (isset($list['row']) && $list['action'] != 'Disabled' && $list['cron'] != 'Never') {
 				foreach ($list['row'] as $row) {
 					if (!empty($row['url']) && $row['state'] != 'Disabled') {
@@ -816,11 +819,12 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	if (!$pfb['update_cron']) {
 		foreach ($pfb['continents'] as $continent => $pfb_alias) {
 			$continent_config = config_get_path('installedpackages/pfblockerng' . strtolower(str_replace(' ', '', $continent)) . '/config/0');
-			if ($continent_config !== null) {
-				if ($continent_config['action'] != 'Disabled') {
-					$pfb['update_cron'] = TRUE;
-					break;
-				}
+			if (!pfb_group_action_valid($continent_config['action'] ?? NULL, 'geoip')) {
+				continue;
+			}
+			if ($continent_config['action'] != 'Disabled') {
+				$pfb['update_cron'] = TRUE;
+				break;
 			}
 		}
 	}
