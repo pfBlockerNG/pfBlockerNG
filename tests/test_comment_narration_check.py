@@ -292,6 +292,39 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(_TOOL), *args], cwd=repo, capture_output=True, text=True)
 
 
+def test_cli_escape_requires_colon_and_reason(tmp_path: Path) -> None:
+    valid = (
+        "narration-ok: reason",
+        "narration-ok:\t  reason",
+        "Narration-OK: reason",
+        "narration-ok: []{}()$.*+?",
+        f"narration-ok: {'x' * 4096}",
+        "narration-ok: \ufffd",
+    )
+    malformed = (
+        "narration-ok",
+        "narration-ok:",
+        "narration-ok:   ",
+        "narration-ok reason",
+        "narration-ok - reason",
+        "xnarration-ok: reason",
+        "narration-ok-extra: reason",
+        "narration-ok:\n// reason",
+    )
+    for index, (marker, expected) in enumerate((*((m, 0) for m in valid), *((m, 1) for m in malformed))):
+        repo = tmp_path / str(index)
+        repo.mkdir()
+        _git(repo, "init", "-q", "-b", "devel")
+        (repo / "src").mkdir()
+        (repo / "src/a.inc").write_text("// clean\n")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "base")
+        (repo / "src/a.inc").write_text(f"// clean\n// Phase 2 // {marker}\n")
+        _git(repo, "add", ".")
+        result = _run(repo, "--staged")
+        assert result.returncode == expected, f"marker {marker!r}: {result.stdout}{result.stderr}"
+
+
 def test_cli_staged_and_diff_modes(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q", "-b", "devel")
     (tmp_path / "src").mkdir()

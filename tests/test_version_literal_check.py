@@ -608,6 +608,36 @@ def _rev(repo: Path) -> str:
     return out.stdout.strip()
 
 
+def test_cli_escape_requires_colon_and_reason(tmp_path: Path) -> None:
+    valid = (
+        "version-literal-ok: reason",
+        "version-literal-ok:\t  reason",
+        "version-literal-ok: []{}()$.*+?",
+        f"version-literal-ok: {'x' * 4096}",
+        "version-literal-ok: \ufffd",
+    )
+    malformed = (
+        "version-literal-ok",
+        "version-literal-ok:",
+        "version-literal-ok:   ",
+        "version-literal-ok reason",
+        "version-literal-ok - reason",
+        "xversion-literal-ok: reason",
+        "version-literal-ok-extra: reason",
+        "Version-Literal-OK: reason",
+        "version-literal-ok:\n# reason",
+    )
+    for index, (marker, expected) in enumerate((*((m, 0) for m in valid), *((m, 1) for m in malformed))):
+        repo = tmp_path / str(index)
+        repo.mkdir()
+        _git(repo, "init", "-q", "-b", "devel")
+        (repo / "scripts").mkdir()
+        (repo / "scripts/tool.sh").write_text(f'_ABI="{_FREEBSD15}" # {marker}\n')
+        _git(repo, "add", ".")
+        result = _run(repo)
+        assert result.returncode == expected, f"marker {marker!r}: {result.stdout}{result.stderr}"
+
+
 def test_cli_staged_mode_flags_then_clears(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q", "-b", "devel")
     (tmp_path / "scripts").mkdir()
