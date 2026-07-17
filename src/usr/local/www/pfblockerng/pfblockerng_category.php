@@ -453,6 +453,9 @@ if (isset($savemsg)) {
 						} else {
 							$list_array = array(	'Disabled' => 'Disabled', 'unbound' => 'Unbound' );
 						}
+						if (!pfb_group_action_valid($rowdata[$r_id]['action'] ?? NULL, $gtype)) {
+							$rowdata[$r_id]['action'] = 'Disabled';
+						}
 
 						$selectadd = new Form_Select(
 								'action-' . $r_id,

@@ -1735,7 +1735,7 @@ foreach (array('Top Spammers', 'Africa', 'Antarctica', 'Asia', 'Europe', 'North 
 $pconfig = array();
 $pconfig['countries4']		= explode(',', $pfb['geoipconfig']['countries4']);
 $pconfig['countries6']		= explode(',', $pfb['geoipconfig']['countries6']);
-$pconfig['action']		= $pfb['geoipconfig']['action']				?: 'Disabled';
+$pconfig['action'] = pfb_group_action_valid($pfb['geoipconfig']['action'] ?? NULL, 'geoip') ? $pfb['geoipconfig']['action'] : 'Disabled';
 $pconfig['aliaslog']		= $pfb['geoipconfig']['aliaslog']			?: 'enabled';
 
 $pconfig['autoaddrnot_in']	= $pfb['geoipconfig']['autoaddrnot_in'];
