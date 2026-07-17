@@ -799,33 +799,10 @@ if (isset($_POST) && !empty($_POST)) {
 			$descr = pfb_filter($_POST['descr'], PFB_FILTER_HTML, 'alerts addsuppress');
 		}
 
-		// Read the table's current membership -- the ADR-40 mirror file when
-		// present (freshest applied set), else a live `pfctl -T show` fallback,
-		// both streamed line-by-line (fgets): a Deny table mirror can hold
-		// millions of entries (ADR-53 §3), so it is never slurped whole.
+		// Read the table's current membership (pfb_live_table_snapshot(),
+		// pfblockerng_extra.inc -- shared with the Unlock icon's live punch, #1412).
 		$table_esc	= escapeshellarg($table);
-		$mirror		= "{$pfb['aliasdir']}/{$table}.txt";
-		$scan_file	= is_readable($mirror) ? $mirror : NULL;
-		$scan_tmp	= NULL;
-		if ($scan_file === NULL) {
-			$scan_tmp = tempnam($pfb['dbdir'], 'pfb_punch_');
-			// ADR-53 review finding H4: stderr -> /dev/null, NOT 2>&1 -- the
-			// capture file is parsed line-by-line as membership entries below;
-			// merging stderr into it would feed any pfctl diagnostic line into
-			// that parse as if it were a table member.
-			exec("{$pfb['pfctl']} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>/dev/null');
-			$scan_file = $scan_tmp;
-		}
-		$table_entries = array();
-		if (($handle = @fopen($scan_file, 'r')) !== FALSE) {
-			while (($line = @fgets($handle)) !== FALSE) {
-				$table_entries[] = trim($line);
-			}
-			fclose($handle);
-		}
-		if ($scan_tmp !== NULL) {
-			@unlink($scan_tmp);
-		}
+		$table_entries	= pfb_live_table_snapshot($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table);
 
 		// Locate + carve every containing table entry (any mask, both
 		// families). Unlike the old /32 branch, an empty plan (nothing
@@ -1510,22 +1487,15 @@ if (isset($_POST) && !empty($_POST)) {
 		exit;
 	}
 
-	// Unlock/Lock IP events
+	// Unlock/Lock IP events -- ADR-53 parity (#1412): the icon now posts the
+	// EXACT alerted host (never a feed CIDR), same shape the Suppression "+"
+	// already posts, so a single PFB_FILTER_IP call replaces the old v4-only,
+	// /24-/32-only split-capture regex; any CIDR-shaped or otherwise invalid
+	// $_POST['ip'] (either family) is rejected by is_ipaddr() outright.
 	elseif (isset($_POST['ip_remove']) && !empty($_POST['ip_remove'])) {
 
-		$ip = '';
-		if (strpos($_POST['ip'], '/') !== FALSE) {
-			if (is_string($_POST['ip']) && preg_match('/^(?:([0-9.]{7,15})|([0-9a-f:]{2,39}|[0-9a-f:]{2,30}[0-9.]{7,15}))\/(\d{1,3})$/i', $_POST['ip'], $parts)) {
-				$ip = pfb_filter($parts[1], PFB_FILTER_IP, 'alerts ip_remove');
-				if (empty($ip) || (count($parts) != 4) || ($parts[3] < 24) || ($parts[3] > 32)) {
-					$ip = '';
-				}
-			}
-		}
-		else {
-			$ip = pfb_filter($_POST['ip'], PFB_FILTER_IP, 'alerts ip_remove');
-		}
-		$table = pfb_filter($_POST['table'], PFB_FILTER_WORD, 'alerts ip_remove');
+		$ip	= pfb_filter($_POST['ip'], PFB_FILTER_IP, 'alerts ip_remove');
+		$table	= pfb_filter($_POST['table'], PFB_FILTER_WORD, 'alerts ip_remove');
 
 		// If IP or table field is empty, exit.
 		if (empty($ip) || empty($table)) {
@@ -1534,19 +1504,34 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		$ip_esc		= escapeshellarg($ip);
-		$table_esc	= escapeshellarg($table);
+		$table_esc = escapeshellarg($table);
 
-		// Unlock IP
+		// Unlock IP -- ADR-53 covering-CIDR live punch (pfb_live_punch_plan(),
+		// pfblockerng_extra.inc), the same mechanism the Suppression "+" uses:
+		// carve exactly this host out of whichever table entr(y/ies) currently
+		// block it live, any mask, either family, instead of deleting the
+		// whole containing entry (the old direct single-token delete unblocked
+		// every sibling in that entry too).
 		if ($_POST['ip_remove'] == 'unlock') {
-			exec("{$pfb['pfctl']} -t {$table_esc} -T delete {$ip_esc} 2>&1");
+			$table_entries = pfb_live_table_snapshot($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table);
+			$plan = pfb_live_punch_plan($ip, $table_entries);
+
+			foreach ($plan['delete'] as $entry) {
+				exec("{$pfb['pfctl']} -t {$table_esc} -T delete " . escapeshellarg($entry) . ' 2>&1');
+			}
+			foreach ($plan['add'] as $cidr) {
+				exec("{$pfb['pfctl']} -t {$table_esc} -T add " . escapeshellarg($cidr) . ' 2>&1');
+			}
+
 			pfb_unlock('unlock', 'ip', $ip, $table, $ip_unlock);
 			$savemsg = "The IP [ {$ip} ] has been temporarily Unlocked from table [ {$table} ]!";
 		}
 
-		// Lock IP
+		// Lock IP -- restores exactly the alerted host (mirrors the
+		// un-suppress 'delete_ip' handler's direct re-add: no covering-CIDR
+		// remainder to compute, only the single host that was carved out).
 		elseif ($_POST['ip_remove'] == 'lock') {
-			exec("{$pfb['pfctl']} -t {$table_esc} -T add {$ip_esc} 2>&1");
+			exec("{$pfb['pfctl']} -t {$table_esc} -T add " . escapeshellarg($ip) . ' 2>&1');
 			pfb_unlock('lock', 'ip', $ip, $table, $ip_unlock);
 			$savemsg = "The IP [ {$ip} ] has been re-locked into table [ {$table} ]!";
 		}
@@ -3026,20 +3011,15 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		}
 	}
 
-	// v4-only, /32|/24 vs /25-/31 -- since ADR-53 (issue #422) this feeds ONLY
-	// the Unlock-icon gate below and the legacy whitelist-fallback quirk gate;
-	// the Suppression-icon gate itself is now family/mask-agnostic and no
-	// longer reads $mask_suppression. Left exactly as-is, deliberately out of
-	// scope for this change.
-	$mask_suppression	= FALSE;
-	$mask_unlock		= FALSE;
+	// v4-only, /32|/24 -- ADR-53 (issue #422) narrowed this to feed ONLY the
+	// legacy whitelist-fallback quirk gate below (issue #1412 moved the
+	// Unlock/Lock icon gate onto the family/mask-agnostic condition the
+	// Suppression icon already uses, so $mask_unlock -- its only other
+	// reader -- is retired).
+	$mask_suppression = FALSE;
 
-	if ($pfb_ipv4) {
-		if ($mask == '/32' || $mask == '/24') {
-			$mask_suppression = TRUE;
-		} elseif (substr($mask, strrpos($mask, '/') + 1) > 24) {
-			$mask_unlock = TRUE;
-		}
+	if ($pfb_ipv4 && ($mask == '/32' || $mask == '/24')) {
+		$mask_suppression = TRUE;
 	}
 
 	$table = $fields[13];
@@ -3126,19 +3106,25 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		}
 	}
 
-	// Unlock/Lock Icon
-	if ($rtype == 'Block' && ($mask_suppression || $mask_unlock)) {
+	// Unlock/Lock Icon -- ADR-53 parity (#1412): same eligibility as the
+	// Suppression icon above (any family, any mask -- $mask_suppression /
+	// the retired $mask_unlock were v4-only /24|/32 restrictions), and the
+	// SAME exact-host token the Suppression "+" posts ($host), never the
+	// possibly-CIDR $eval_ip a feed match can report; $ip_unlock is keyed by
+	// that same exact host (pfb_unlock() is called with $ip = the posted
+	// host in the ip_remove handler above).
+	if ($rtype == 'Block' && !$pfb_geoip) {
 		$tnote = "\n\nNote:\n&emsp;&emsp;&#8226; Unlocking IP(s) is temporary and may be automatically\n"
 			. "&emsp;&emsp;&emsp;re-locked on a Cron or Force command!\n"
 			. "&emsp;&emsp;&#8226; Review Threat Source ( i ) Icons for further IP details.";
 
-		if (!isset($ip_unlock[$eval_ip])) {
-			$unlock_ip = '<i class="fa-solid fa-lock text-danger" id="IPULCK|' . $h_eval_ip . '|'  . $h_table
-					. '" title="Unlock IP: [ ' . $h_eval_ip . ' ] from Aliastable [ ' . $h_table . ' ]?'
+		if (!isset($ip_unlock[$host])) {
+			$unlock_ip = '<i class="fa-solid fa-lock text-danger" id="IPULCK|' . $h_host . '|'  . $h_table
+					. '" title="Unlock IP: [ ' . $h_host . ' ] from Aliastable [ ' . $h_table . ' ]?'
 					. $tnote . '" ></i>';
 		} else {
-			$unlock_ip = '<i class="fa-solid fa-unlock text-primary" id="IPLCK|' . $h_eval_ip . '|' . $h_table
-					. '" title="Re-Lock IP: [ ' . $h_eval_ip . ' ] back into Aliastable [ ' . $h_table . ' ]?'
+			$unlock_ip = '<i class="fa-solid fa-unlock text-primary" id="IPLCK|' . $h_host . '|' . $h_table
+					. '" title="Re-Lock IP: [ ' . $h_host . ' ] back into Aliastable [ ' . $h_table . ' ]?'
 					. $tnote . '" ></i>';
 		}
 	}
