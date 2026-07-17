@@ -10,7 +10,7 @@ use PHPUnit\Framework\TestCase;
  * #1412 -- ADR-53 parity for the Alerts page's temporary IP Unlock/Re-Lock
  * action).
  *
- * BEHAVIOUR CHANGE, red->green: before this fix the gate was
+ * BEHAVIOUR CHANGE (#1412): before this change the gate was
  * ``$rtype == 'Block' && ($mask_suppression || $mask_unlock)`` -- both flags
  * were computed ONLY ``if ($pfb_ipv4)`` (an IPv6 Block row got neither, so
  * the icon NEVER rendered for v6) and, for v4, TRUE only for an exact /32 or
@@ -317,5 +317,27 @@ final class AlertsIpUnlockIconTest extends TestCase
 				. "host), got:\n{$html}"
 		);
 		$this->assertStringNotContainsString('IPULCK|192.0.2.11|', $html);
+	}
+
+	public function testHostUnlockedInAnotherTableStillRendersUnlockIconForThisRow(): void
+	{
+		file_put_contents("{$this->denydir}/ExactFeed.txt", "192.0.2.11\n");
+		// The host is unlocked in a DIFFERENT table -- this row's table is not.
+		$GLOBALS['ip_unlock'] = ['192.0.2.11' => 'pfB_Other_v4'];
+
+		$fields = $this->rawFields([
+			8 => '192.0.2.11', 15 => '192.0.2.11',
+			14 => 'pfB_Exact_v4', 16 => 'ExactFeed',
+		]);
+
+		$html = $this->render($fields, 'Block');
+
+		$this->assertStringContainsString(
+			'IPULCK|192.0.2.11|pfB_Exact_v4',
+			$html,
+			"expected the Unlock icon for this row's table when the host's \$ip_unlock entry "
+				. "belongs to a DIFFERENT table, got:\n{$html}"
+		);
+		$this->assertStringNotContainsString('IPLCK|192.0.2.11|', $html);
 	}
 }
