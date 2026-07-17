@@ -1787,8 +1787,7 @@ def test_corrupt_group_actions_render_repairably(
         f"Block,{fixed_ts},100,em0,WAN,block,4,6,TCP,"
         f"{ip_host},10.0.0.134,12345,443,in,US,{ip_logged_alias},{ip_eval},"
         f"{ip_feed_name},Unknown,Unknown,Unknown,+\n"
-        f"DNSBL-python,{fixed_ts},{dns_domain},127.0.0.1,Python,DNSBL,"
-        f"Unknown,{dns_domain},RepairActionFeed1346,+,A\n"
+        f"DNS-reply,{fixed_ts},cache,,A,30,{dns_domain},127.0.0.1,203.0.113.134,US\n"
     )
 
     def assert_disabled_selected(body: str, path: str) -> None:
@@ -1931,48 +1930,70 @@ def test_corrupt_group_actions_render_repairably(
             if dnsbl_was_present
             else f"config_del_path({helpers._php_str(CFG_DNSBL)});"
         )
-        config_restore = None
-        file_restore_errors: list[str] = []
-        try:
-            config_restore = helpers.php_eval(
-                vm,
-                f"{ipv4_restore}\n{dnsbl_restore}\n"
-                "write_config('pfBlockerNG smoke: restore corrupt-action fixtures');\n"
-                "echo 'OK';",
-            )
-        finally:
-            for file_path, original_size in ((unified_log, unified_size), (ip_feed, feed_size)):
-                argv = (
-                    vm.ssh_argv("/bin/rm", "-f", file_path)
-                    if original_size is None
-                    else vm.ssh_argv("/usr/bin/truncate", "-s", original_size, file_path)
-                )
-                try:
-                    restored = subprocess.run(
-                        argv,
-                        capture_output=True,
-                        text=True,
-                        timeout=15,
-                        check=False,
-                    )
-                except (OSError, subprocess.SubprocessError) as exc:
-                    file_restore_errors.append(f"{file_path}: restore command failed: {exc!r}")
-                    continue
-                if restored.returncode != 0:
-                    file_restore_errors.append(f"{file_path}: rc={restored.returncode}, stderr={restored.stderr!r}")
-
-        assert not file_restore_errors, f"alert fixture file restore failed: {file_restore_errors}"
-        assert config_restore is not None
-        assert config_restore.returncode == 0 and "OK" in config_restore.stdout, (
-            f"config restore failed: rc={config_restore.returncode}, "
-            f"stdout={config_restore.stdout!r}, stderr={config_restore.stderr!r}"
+        restore_errors: list[str] = []
+        config_fixtures = (
+            ("IPv4", CFG_IPV4, ipv4_was_present, ipv4_snap, ipv4_restore),
+            ("DNSBL", CFG_DNSBL, dnsbl_was_present, dnsbl_snap, dnsbl_restore),
         )
-        assert node_present(CFG_IPV4) == ipv4_was_present, "IPv4 config presence was not restored"
-        assert node_present(CFG_DNSBL) == dnsbl_was_present, "DNSBL config presence was not restored"
-        if ipv4_was_present:
-            assert _snapshot_node(vm, CFG_IPV4) == ipv4_snap, "IPv4 config restore was not exact"
-        if dnsbl_was_present:
-            assert _snapshot_node(vm, CFG_DNSBL) == dnsbl_snap, "DNSBL config restore was not exact"
+        for label, _node, _was_present, _snap, restore in config_fixtures:
+            try:
+                config_restore = helpers.php_eval(
+                    vm,
+                    f"{restore}\n"
+                    f"write_config('pfBlockerNG smoke: restore corrupt-action {label} fixture');\n"
+                    "echo 'OK';",
+                )
+            except Exception as exc:  # noqa: BLE001 -- cleanup must attempt every independent restore
+                restore_errors.append(f"{label} config: restore command failed: {exc!r}")
+                continue
+            if config_restore.returncode != 0 or "OK" not in config_restore.stdout:
+                restore_errors.append(
+                    f"{label} config: rc={config_restore.returncode}, "
+                    f"stdout={config_restore.stdout!r}, stderr={config_restore.stderr!r}"
+                )
+
+        file_fixtures = ((unified_log, unified_size), (ip_feed, feed_size))
+        for file_path, original_size in file_fixtures:
+            argv = (
+                vm.ssh_argv("/bin/rm", "-f", file_path)
+                if original_size is None
+                else vm.ssh_argv("/usr/bin/truncate", "-s", original_size, file_path)
+            )
+            try:
+                restored = subprocess.run(
+                    argv,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                restore_errors.append(f"{file_path}: restore command failed: {exc!r}")
+                continue
+            if restored.returncode != 0:
+                restore_errors.append(f"{file_path}: rc={restored.returncode}, stderr={restored.stderr!r}")
+
+        for label, node, was_present, snap, _restore in config_fixtures:
+            try:
+                present = node_present(node)
+                if present != was_present:
+                    restore_errors.append(f"{label} config: presence mismatch (expected {was_present}, got {present})")
+                elif was_present and _snapshot_node(vm, node) != snap:
+                    restore_errors.append(f"{label} config: restored snapshot was not exact")
+            except Exception as exc:  # noqa: BLE001 -- cleanup must verify every independent restore
+                restore_errors.append(f"{label} config: verification failed: {exc!r}")
+
+        for file_path, original_size in file_fixtures:
+            try:
+                restored_size = file_size(file_path)
+                if restored_size != original_size:
+                    restore_errors.append(
+                        f"{file_path}: size/presence mismatch (expected {original_size!r}, got {restored_size!r})"
+                    )
+            except Exception as exc:  # noqa: BLE001 -- cleanup must verify every independent restore
+                restore_errors.append(f"{file_path}: verification failed: {exc!r}")
+
+        assert not restore_errors, f"corrupt-action fixture restore failed: {restore_errors}"
 
 
 # ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP
