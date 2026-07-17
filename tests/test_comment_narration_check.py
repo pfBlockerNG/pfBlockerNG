@@ -309,6 +309,8 @@ def test_cli_escape_requires_colon_and_reason(tmp_path: Path) -> None:
         "narration-ok - reason",
         "xnarration-ok: reason",
         "narration-ok-extra: reason",
+        "narratİon-ok: reason",
+        "narratıon-ok: reason",
         "narration-ok:\n// reason",
     )
     for index, (marker, expected) in enumerate((*((m, 0) for m in valid), *((m, 1) for m in malformed))):
