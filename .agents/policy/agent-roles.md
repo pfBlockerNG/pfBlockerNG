@@ -82,8 +82,9 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
   verified (command + output) or ASSUMED; never a different planning artifact.
 - **Permissions & mutation:** read-only. May run read-only commands (grep, `git log`,
   `gh` reads); never edits, commits, pushes, or changes labels.
-- **Context & skills:** the packet plus its named refs; code-search tooling. Not the
-  full policy corpus.
+- **Context & skills:** the packet plus its named refs; code-search tooling. Not the full
+  policy corpus. Floor: `issues.md` when triaging; `pfsense-live.md` for a live repro; the
+  routing row of the suspect subsystem.
 - **Stop & escalation:** a packet premise contradicted by source ⇒ STOP and return a
   structured blocker; an under-specified scope ⇒ route `needs-info`.
 - **Independence:** not required — it serves its caller.
@@ -105,8 +106,10 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
   session hosting it may switch roles in place — implementer for a small direct fix or
   docs/config/skills work (CLAUDE.md carve-out), publisher/coordinator for landing and
   bookkeeping — but the planner never grades its own implementation work.
-- **Context & skills:** CLAUDE.md and its annexes, prior handoffs; the fresh-session
-  workflow ([`workflow.md`](workflow.md)).
+- **Context & skills:** the bootstrap (AGENTS.md) and its routed annexes, prior handoffs;
+  the fresh-session workflow ([`workflow.md`](workflow.md)). Floor:
+  [`delegation.md`](delegation.md) always; `issues.md` on issue work, `landing.md` when
+  landing, `waits.md` when a wait is armed.
 - **Stop & escalation:** a genuine user fork ⇒ ask the user; a falsified premise ⇒ stop
   and re-plan, loudly. Never silently patch the plan.
 - **Independence:** not independent of the work item, but producer≠gater: the per-step
@@ -130,7 +133,8 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
 - **Permissions & mutation:** workspace-write inside its worktree; commits as directed.
   Never pushes protected branches, never merges, never edits the brief or policy.
 - **Context & skills:** the brief, its named refs, the code it edits, and the language
-  annex for the touched file types — nothing broader.
+  annex for the touched file types — nothing broader. Floor: `coding.md`, `testing.md`, the
+  `lang-*.md` per touched file type; domain rows per the routing table.
 - **Stop & escalation:** the ESCALATE contract — a contradicted premise or a mechanism
   the brief never named ⇒ BLOCKED (or DONE-WITH-DEVIATION), never plain DONE; at most
   2 executed attempts per step, then checkpoint and escalate citing both runs.
@@ -152,7 +156,8 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
 - **Permissions & mutation:** read-only on sources; may execute gates and tests
   ephemerally. Never patches a finding — defects route back to the planner.
 - **Context & skills:** the brief + handoff + diff and the canonical gate table;
-  deliberately not the implementer's transcript.
+  deliberately not the implementer's transcript. Floor: `testing.md`, `landing.md`; the
+  touched `lang-*.md` and the domain rows of the diff.
 - **Stop & escalation:** any defect or unnamed mechanism in the diff ⇒ reject the step;
   a check it cannot run is recorded SKIPPED with the reason, never silently dropped.
 - **Independence:** required — never the agent (or model) that authored the brief or
@@ -171,8 +176,9 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
 - **Permissions & mutation:** read-only; may run discriminating probes and hostile
   inputs. Never edits, commits, or downgrades a real pre-existing defect — those route
   to a tracked follow-up.
-- **Context & skills:** the full diff plus surrounding code; the policy annexes the
-  diff touches.
+- **Context & skills:** the full diff plus surrounding code; the policy annexes the diff
+  touches. Floor: `testing.md`, `landing.md`; the touched `lang-*.md` and the domain rows
+  of the diff.
 - **Stop & escalation:** the fix→re-review loop converges — it continues only while the
   latest round has a blocking finding; hard cap 3 rounds, then a human decides.
 - **Independence:** required — a fresh context, never the author of the change.
@@ -193,8 +199,9 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
 - **Permissions & mutation:** git/gh writes only — branch pushes, PR metadata, labels.
   No new source changes beyond rebase conflict resolution; never force-push over
   another session's PR; every wait is bounded and swept.
-- **Context & skills:** [`landing.md`](landing.md) and the branch/release policy — not
-  the implementation history.
+- **Context & skills:** [`landing.md`](landing.md) and the branch/release policy — not the
+  implementation history. Floor: [`landing.md`](landing.md); `context/release.md` for a
+  release, `git.md` for tag/push mechanics.
 - **Stop & escalation:** the same CI failure cause twice after a fix attempt ⇒ stop and
   checkpoint; a blocking review finding routes back to the planner, never a silent
   self-fix.
@@ -215,7 +222,7 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
   sub-issue/blocked-by relations). No source edits; never cancels a ticket without a
   human; never overrides a human-set routing.
 - **Context & skills:** [`workflow.md`](workflow.md) plus the bootstrap routing rows —
-  deliberately minimal.
+  deliberately minimal. Floor: [`workflow.md`](workflow.md); `issues.md`.
 - **Stop & escalation:** approaching compaction ⇒ checkpoint, unassign, terminate;
   correctness-critical work never continues through compaction.
 - **Independence:** not required.

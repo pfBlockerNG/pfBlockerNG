@@ -16,6 +16,10 @@ is only the Claude Code adapter. The import below inlines it — if it did not e
   identity is `Claude <noreply@anthropic.com>`.
 - Claude sessions may start inside a harness session worktree (`.claude/worktrees/…`) — see
   `.agents/policy/sessions.md`.
+- Code lookup: prefer the `mcp__token-savior-recall__` MCP tools (`search_codebase`,
+  `find_symbol`, `get_function_source`, `get_call_chain`; load via ToolSearch) over raw
+  Grep/Read whole-file dumps when locating a symbol or reading a single function/class
+  body; fall back to Grep/Read only for files the index does not cover.
 
 <!-- rtk-instructions v2 -->
 ## RTK (Rust Token Killer) - Token-Optimized Commands
