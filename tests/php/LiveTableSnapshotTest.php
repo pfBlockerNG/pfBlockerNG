@@ -11,10 +11,7 @@ use PHPUnit\Framework\TestCase;
  * so the temporary Unlock icon's live punch shares the exact same read
  * instead of re-deriving it (pfblockerng_extra.inc).
  *
- * Brand-new symbol, no pre-existing behaviour to be wrong -- CLAUDE.md's
- * existence-only-red exemption applies (Test coverage #1): its only possible
- * "red" against the pre-#1412 tree is "undefined function", itself coverage
- * theater. These tests instead pin its two real branches directly: the
+ * These tests pin the extraction's two real branches directly: the
  * ADR-40 mirror file wins when readable (no pfctl needed at all -- proven by
  * pointing $pfctl at a binary that does not exist), and a missing/unreadable
  * mirror falls back to the pfctl path, failing SOFT (empty array, no
