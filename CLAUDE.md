@@ -109,7 +109,8 @@ whenever either side changes.
 Substantial coding work is **planned and gated by the top tier** (falling back
 to mid when top is unavailable) and **implemented by small-tier** sub-agents:
 the planner splits the task into steps, a small-tier
-implementer executes each, and the planner **independently checks every step** before the next
+implementer executes each, an **independent small-tier verifier gates every step** (never
+the brief author's model), and the planner validates the returned records before the next
 — that per-step gating is what makes a cheaper implementer safe. Ticket execution follows
 the fresh-session workflow (`.agents/policy/workflow.md`); for ad-hoc coding, follow the
 same shape. The higher
