@@ -16,6 +16,9 @@ is only the Claude Code adapter. The import below inlines it — if it did not e
   identity is `Claude <noreply@anthropic.com>`.
 - Claude sessions may start inside a harness session worktree (`.claude/worktrees/…`) — see
   `.agents/policy/sessions.md`.
+- Soft routing backstops live in `.claude/rules/*.md` (`paths:` frontmatter,
+  Read-tool-triggered; shell reads bypass them — they carry pointers, never MUST
+  invariants; the bootstrap routing table stays authoritative).
 - Code lookup: prefer the `mcp__token-savior-recall__` MCP tools (`search_codebase`,
   `find_symbol`, `get_function_source`, `get_call_chain`; load via ToolSearch) over raw
   Grep/Read whole-file dumps when locating a symbol or reading a single function/class
