@@ -24,8 +24,9 @@ Row -> test map (ADR.md §7):
   7. Reuse + TLD-enabled run      -> test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
                                      + test_adr62_tld_enabled_run_keeps_plain_row_classification (this module)
 
-NDJSON interchange format (issue #1083): the per-feed staging '.txt'/'.raw' files are
-schema-v1 NDJSON now (docs/misc/architecture-notes.md "DNSBL interchange format").
+NDJSON interchange format (issues #1083/#1177): per-feed staging '.txt' files use compact
+tagged NDJSON; translated '.raw' files remain plain domain/ABP lines
+(docs/misc/architecture-notes.md "DNSBL interchange format").
 test_adr62_stale_generation_rebuild_hold_row_orig_present and its '.orig'-absent sibling
 below pin the staging-generation guard's rebuild-from-'.orig' fallback (a pre-#1083 '.txt'
 is never verbatim-reused, even on a Held row).
@@ -403,7 +404,7 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
     Given a configured, already-loaded DNSBL group with TWO feed rows (a normal
       pass downloaded both: the main row blocked domain A, the sibling row
       blocked X1), whose main-row staging file (``{dnsdir}/{header}.txt``) is
-      then OVERWRITTEN with a hand-written schema-v1 NDJSON domain row (the exact
+      then OVERWRITTEN with a hand-written compact NDJSON domain row (the exact
       ``pfb_dnsbl_ndjson_emit_domain_row`` byte shape) for a DIFFERENT domain B —
       simulating a feed whose staging genuinely already is in the current NDJSON
       generation — while the SIBLING row's served feed changes content (X1 → X2)
@@ -456,12 +457,10 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
 
         # Overwrite the MAIN row's staging with a hand-written, CURRENT-generation
         # NDJSON domain row for a DIFFERENT domain — the exact byte shape
-        # pfb_dnsbl_ndjson_emit_domain_row() produces for this header/alias/mode.
+        # pfb_dnsbl_ndjson_emit_domain_row() produces.
         # Its served feed stays byte-identical (no re-download trigger); the
         # SIBLING feed changes so the cron pass rebuilds the database at all.
-        ndjson_line = (
-            f'{{"kind":"domain","domain":"{reused_domain}","log":"1","feed":"{header}","group":"{spec.alias}"}}\n'
-        )
+        ndjson_line = f'["d","{reused_domain}"]\n'
         h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", ndjson_line)
         h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
 
@@ -612,8 +611,8 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
         )
 
         txt_content = deployed_vm.ssh("cat", txt_path)
-        assert txt_content.returncode == 0 and txt_content.stdout.startswith("{"), (
-            f"rebuilt staging {txt_path} does not start with NDJSON '{{': {txt_content.stdout[:80]!r}"
+        assert txt_content.returncode == 0 and txt_content.stdout.startswith('["d",'), (
+            f"rebuilt staging {txt_path} does not start with compact domain NDJSON: {txt_content.stdout[:80]!r}"
         )
 
         h.flush_unbound_name(deployed_vm, sib2_domain)
@@ -708,8 +707,8 @@ def test_adr62_stale_generation_rebuild_orig_absent_triggers_download(deployed_v
         )
 
         txt_content = deployed_vm.ssh("cat", txt_path)
-        assert txt_content.returncode == 0 and txt_content.stdout.startswith("{"), (
-            f"rebuilt staging {txt_path} does not start with NDJSON '{{': {txt_content.stdout[:80]!r}"
+        assert txt_content.returncode == 0 and txt_content.stdout.startswith('["d",'), (
+            f"rebuilt staging {txt_path} does not start with compact domain NDJSON: {txt_content.stdout[:80]!r}"
         )
 
         h.flush_unbound_name(deployed_vm, sib2_domain)

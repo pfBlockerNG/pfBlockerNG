@@ -2228,8 +2228,8 @@ function pfb_dnsbl_update_marker_clear_active(bool $orig_content_stale): bool {
 // #1083: a field box upgrading with a pre-NDJSON staging .txt (a feed never
 // redownloaded since the flip) must not verbatim-reuse it -- every interchange
 // reader now expects NDJSON and would silently skip every old-dialect line. A
-// leading '{' byte alone is not proof (e.g. a truncated/corrupt "{garbage" line);
-// this actually PARSES the line via the schema-v1 reader (one json_decode per
+// leading JSON delimiter alone is not proof (e.g. a truncated/corrupt line);
+// this actually PARSES the line via the compact-plus-legacy reader (one json_decode per
 // feed per pass) -- an empty/absent file has no stale content to misread either.
 function pfb_dnsbl_staging_is_current_generation(string $first_line): bool {
 	return $first_line === '' || pfb_dnsbl_ndjson_parse_row($first_line) !== NULL;

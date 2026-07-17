@@ -175,6 +175,7 @@ class TrialResult:
     isolated_min_s: float
     isolated_max_s: float
     peak_rss_bytes: int
+    raw_line_count: int | None = None
     stdout: str = field(repr=False, default="")
 
 
@@ -212,6 +213,7 @@ def _run_timed(cmd: list[str]) -> TrialResult:
         isolated_min_s=float(values["isolated_min_seconds"]),
         isolated_max_s=float(values["isolated_max_seconds"]),
         peak_rss_bytes=rss_bytes,
+        raw_line_count=int(values["raw_line_count"]) if "raw_line_count" in values else None,
         stdout=proc.stdout,
     )
 
@@ -224,12 +226,22 @@ def bench_python(worktree: str, raw_path: str, iterations: int) -> TrialResult:
     return _run_timed([sys.executable, os.path.abspath(__file__), "worker-python", worktree, raw_path, str(iterations)])
 
 
-def aggregate_trials(trials: list[TrialResult]) -> TrialResult:
+def aggregate_trials(trials: list[TrialResult], expected_raw_line_count: int | None = None) -> TrialResult:
+    observed = [trial.raw_line_count for trial in trials]
+    if expected_raw_line_count is not None:
+        if any(count != expected_raw_line_count for count in observed):
+            formatted = ", ".join("missing" if count is None else f"{count:,}" for count in observed)
+            raise RuntimeError(f"raw line count mismatch: expected {expected_raw_line_count:,}; observed {formatted}")
+        aggregate_raw_line_count = expected_raw_line_count
+    else:
+        aggregate_raw_line_count = observed[0] if observed and all(count == observed[0] for count in observed) else None
+
     return TrialResult(
         isolated_median_s=statistics.median(t.isolated_median_s for t in trials),
         isolated_min_s=min(t.isolated_min_s for t in trials),
         isolated_max_s=max(t.isolated_max_s for t in trials),
         peak_rss_bytes=max(t.peak_rss_bytes for t in trials),
+        raw_line_count=aggregate_raw_line_count,
     )
 
 
@@ -274,7 +286,8 @@ def run(args: argparse.Namespace) -> int:
             os.makedirs(os.path.join(sandbox, "dnsbl"), exist_ok=True)
             shutil.copy(txt_path, os.path.join(sandbox, "dnsbl", "benchfeed.txt"))
             trials = [bench_php(worktree, sandbox, args.iterations) for _ in range(args.trials)]
-            php_results[label] = aggregate_trials(trials)
+            expected_lines = args.lines if label == "branch" else None
+            php_results[label] = aggregate_trials(trials, expected_raw_line_count=expected_lines)
             print(f"# php[{label}]: {php_results[label]}", file=sys.stderr)
 
             py_sandbox = os.path.join(workdir, f"sandbox_py_{label}", "pfb_py_raw")
@@ -306,8 +319,16 @@ def report(php_results: dict[str, TrialResult], py_results: dict[str, TrialResul
         wall_delta = pct_delta(base.isolated_median_s, branch.isolated_median_s)
         rss_delta = pct_delta(base.peak_rss_bytes, branch.peak_rss_bytes)
         print(f"\n-- {surface} --")
-        print(f"  base:   wall={base.isolated_median_s:.4f}s  peak_rss={base.peak_rss_bytes / 1_048_576:.1f} MiB")
-        print(f"  branch: wall={branch.isolated_median_s:.4f}s  peak_rss={branch.peak_rss_bytes / 1_048_576:.1f} MiB")
+        base_count = f"  raw_lines={base.raw_line_count:,}" if base.raw_line_count is not None else ""
+        branch_count = f"  raw_lines={branch.raw_line_count:,}" if branch.raw_line_count is not None else ""
+        print(
+            f"  base:   wall={base.isolated_median_s:.4f}s  "
+            f"peak_rss={base.peak_rss_bytes / 1_048_576:.1f} MiB{base_count}"
+        )
+        print(
+            f"  branch: wall={branch.isolated_median_s:.4f}s  "
+            f"peak_rss={branch.peak_rss_bytes / 1_048_576:.1f} MiB{branch_count}"
+        )
         print(f"  delta:  wall={wall_delta:+.2f}%  peak_rss={rss_delta:+.2f}%")
         if wall_delta > threshold_pct or rss_delta > threshold_pct:
             verdict_pass = False

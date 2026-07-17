@@ -25,13 +25,14 @@ final class PfbNdjsonInterchangeTest extends TestCase
 			'whitespace-only line'            => ["   "],
 			'truncated open brace'            => ['{'],
 			'truncated partial object'        => ['{"kind":"domain"'],
-			'json array (non-object)'         => ['[]'],
+			'empty compact array'             => ['[]'],
 			'json string (non-object)'        => ['"str"'],
 			'json number (non-object)'        => ['42'],
 			'json null (non-object)'          => ['null'],
 			'json true (non-object)'          => ['true'],
 			'compact missing payload'         => ['["d"]'],
 			'compact empty payload'           => ['["d",""]'],
+			'compact non-string tag'          => ['[1,"x.example"]'],
 			'compact non-string payload'      => ['["d",1]'],
 			'compact unknown tag'             => ['["x","x.example"]'],
 			'compact extra element'           => ['["d","x.example","extra"]'],
@@ -142,7 +143,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 	}
 
 	// =========================================================================
-	// Round-trip + determinism -- emit() -> parse() identity, grep-stable shape.
+	// Round-trip + determinism -- emit() -> parse() identity, compact tagged shape.
 	// =========================================================================
 
 	public static function domainRoundTripProvider(): array
@@ -170,21 +171,15 @@ final class PfbNdjsonInterchangeTest extends TestCase
 		$this->assertSame(['kind' => 'domain', 'domain' => $domain], $parsed);
 	}
 
-	public function testEmitDomainRowLiteralGrepSubstringForPlainDomain(): void
-	{
-		$line = pfb_dnsbl_ndjson_emit_domain_row('example.com', '1', 'feedA', 'groupA');
-
-		$this->assertSame("[\"d\",\"example.com\"]\n", $line);
-	}
-
 	public static function abpRoundTripProvider(): array
 	{
 		return [
-			'adblock network rule'  => ['||example.com^'],
-			'allow exception rule'  => ['@@||allow.example^'],
-			'regex rule'            => ['/^ad[0-9]+\\./'],
-			'hosts-style line'      => ['0.0.0.0 host.example'],
-			'comma and hash raw'    => ['ads,tracker#comment'],
+			'adblock network rule'       => ['||example.com^'],
+			'allow exception rule'       => ['@@||allow.example^'],
+			'regex rule'                 => ['/^ad[0-9]+\\./'],
+			'hosts-style line'           => ['0.0.0.0 host.example'],
+			'comma and hash raw'         => ['ads,tracker#comment'],
+			'tab spaces shell regex raw' => ["@@||x^\$important\t  /[a-z]+/;\$(x)"],
 		];
 	}
 
@@ -201,7 +196,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 		$this->assertSame($raw, $parsed['raw']);
 	}
 
-	public function testEmitAbpRowLiteralGrepSubstringAndUnescapedSlashes(): void
+	public function testEmitAbpRowUsesExpectedTagAndUnescapedSlashes(): void
 	{
 		$line = pfb_dnsbl_ndjson_emit_abp_row('||example.com^');
 		$this->assertSame("[\"a\",\"||example.com^\"]\n", $line);
@@ -257,7 +252,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 		$this->assertNotFalse(json_decode(rtrim($line, "\n"), TRUE), 'must stay JSON-decodable');
 
 		$row = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
-		$this->assertIsArray($row, 'the emitted line must parse back as a valid schema-v1 row');
+		$this->assertIsArray($row, 'the emitted line must parse back as valid interchange');
 		$this->assertSame('domain', $row['kind']);
 		$expected = $badBytes === "\xFF" ? 'bad�domain.com' : 'bad�(domain.com';
 		$this->assertSame($expected, $row['domain']);
@@ -273,7 +268,7 @@ final class PfbNdjsonInterchangeTest extends TestCase
 		$this->assertNotFalse(json_decode(rtrim($line, "\n"), TRUE), 'must stay JSON-decodable');
 
 		$row = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
-		$this->assertIsArray($row, 'the emitted line must parse back as a valid schema-v1 row');
+		$this->assertIsArray($row, 'the emitted line must parse back as valid interchange');
 		$this->assertSame('abp', $row['kind']);
 		$expected = $badBytes === "\xFF" ? '||bad�domain.example^' : '||bad�(domain.example^';
 		$this->assertSame($expected, $row['raw']);

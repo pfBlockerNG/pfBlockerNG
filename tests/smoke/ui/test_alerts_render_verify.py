@@ -547,10 +547,10 @@ def _unified_lines() -> list[str]:
 
 
 def _ndjson_domain_row(domain: str, feed: str, group: str) -> str:
-    """Schema v1 domain row (#1189/#1083/PR #1178), byte-compatible with
-    pfb_dnsbl_ndjson_emit_domain_row(): key order kind/domain/log/feed/group; the explicit
-    separators + ensure_ascii=False give the compact, unescaped-unicode shape of PHP's
-    JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE (json.dumps leaves slashes unescaped anyway).
+    """Legacy object row for the retired pfb_py_data/zone UI fixture.
+
+    Current issue #1177 staging writers emit compact tagged arrays. These historical files are
+    not staging input; retaining their old object shape keeps the render fixture explicit.
     """
     row = {"kind": "domain", "domain": domain, "log": "1", "feed": feed, "group": group}
     return json.dumps(row, separators=(",", ":"), ensure_ascii=False) + "\n"

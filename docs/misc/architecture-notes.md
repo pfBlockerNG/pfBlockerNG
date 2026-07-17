@@ -51,7 +51,7 @@ pipeline (plain) — two parallel per-line paths, one classifier, one `.abp` on-
 recording the decision for a reused (not re-downloaded) feed. ADR-62 deletes all of it:
 `$easylist`, `pfb_dnsbl_is_abp_header()`, `$validate_header`, and the `.abp` marker are gone
 entirely (issue #1083 later retired the stale-marker sweeps and `format_hint` end-to-end —
-the NDJSON `kind` field carries the per-line discrimination; see the interchange section
+the NDJSON row tag carries the per-line discrimination; see the interchange section
 below).
 
 **The line itself, not the feed it came from, now decides its parser.** One pure PHP predicate,
@@ -83,7 +83,7 @@ vanished (D6). The element-hiding capture requires an ABP cosmetic domain-list p
 comment, a `#`-led comment, or a CSV row's `#`-fragment URL is never captured — a
 comma-first line is never captured either (issue #1067: a leading comma is not valid ABP
 syntax; extracting it as a plain domain historically collided with the interchange file's
-positional-CSV dialect, and now instead lands JSON-quoted in an NDJSON `"domain"` field —
+positional-CSV dialect, and now instead lands as a JSON-quoted NDJSON payload —
 immune to comma-collision by construction; see "DNSBL interchange format" below — but the
 capture guard's own skip predates and is independent of that format change); the manifest
 writer's plain fallback likewise skips non-captured `#`-bearing residue lines instead of
