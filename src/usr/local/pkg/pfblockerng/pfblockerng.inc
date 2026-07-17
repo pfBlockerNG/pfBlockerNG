@@ -3168,7 +3168,7 @@ function pfb_log_trim_margin_pct($raw): int {
 
 // ADR-60 S2.1: where a log type's Y-m-d H:i:s timestamp lives in a line -- a
 // leading line-prefix for the free-text logs, else a fixed CSV field (verified
-// per writer: pfb_logger()/pfb_daemon_filterlog()/pfb_parsed_fail()/dnsbl.log's
+// per writer: pfb_logger()/pfb_daemon_filterlog()/pfb_parse_fail_log()/dnsbl.log's
 // python+PHP writers/pfb_unified_format_ip()'s comma-join).
 function pfb_log_age_field_mode(string $logtype): string {
 	switch ($logtype) {
@@ -4990,19 +4990,6 @@ function pfb_verb_deprecation_warning($verb) {
 }
 
 
-// issue #1004: dedicated IP-parse-error sink; CSV adds a line-number column vs pfb_parsed_fail()
-function pfb_ip_parsed_fail($header, $line, $oline, $logfile, $lineno) {
-	$line  = $line !== '' ? $line : 'null';
-	// issue #1004: $oline is a raw fgets() line (keeps its trailing \n); strip it and
-	// terminate the row ourselves so the trailing $lineno stays on the SAME physical
-	// line -- else the record splits and field0 empties (ADR-60 age-cutoff wipe).
-	$oline = rtrim((string) $oline, "\r\n");
-	$now   = pfb_log_iso_timestamp();
-	$log   = "{$now},{$header},{$line},{$oline},{$lineno}\n";
-	@file_put_contents("{$logfile}", "{$log}", FILE_APPEND);
-}
-
-
 // issue #993: per-feed parse-error summary wrapper extracted for unit coverage.
 function pfb_ip_parse_fail_warn($parse_fail, $header) {
 	if ($parse_fail > 0) {
@@ -5011,17 +4998,16 @@ function pfb_ip_parse_fail_warn($parse_fail, $header) {
 }
 
 
-// Record failed IP/DNSBL Feed parse errors
-// issue #1004: trailing optional $lineno keeps existing 4-arg callers call-safe.
-function pfb_parsed_fail($header, $line='', $oline, $logfile, $lineno = '') {
-
-	$line   = $line ?: 'null';
+// issue #1408: the merged CSV parse-failure sink for DNSBL + IP per-line failures.
+// $keep_falsy_line: FALSE (DNSBL callers, default) coerces any falsy $line (incl.
+// '0') to 'null'; TRUE (the IP caller) coerces only the empty string.
+function pfb_parse_fail_log($header, $line, $oline, $logfile, $lineno = '', bool $keep_falsy_line = FALSE) {
+	$line = $keep_falsy_line ? ($line !== '' ? $line : 'null') : ($line ?: 'null');
 	// issue #1004: strip the raw fgets() line's trailing \n and terminate the row here,
 	// so the appended $lineno column can't split the record and empty field0 (ADR-60).
-	$oline  = rtrim((string) $oline, "\r\n");
-	$now	= pfb_log_iso_timestamp();
-
-	$log	= "{$now},{$header},{$line},{$oline},{$lineno}\n";
+	$oline = rtrim((string) $oline, "\r\n");
+	$now   = pfb_log_iso_timestamp();
+	$log   = "{$now},{$header},{$line},{$oline},{$lineno}\n";
 	@file_put_contents("{$logfile}", "{$log}", FILE_APPEND);
 }
 
@@ -7477,7 +7463,7 @@ function pfb_is_blank_or_comment_line(string $line): bool {
 function pfb_dnsbl_scheme_line(string $line, bool $strict, $header, $oline, $lineno, $logfile, &$skipped): string|false {
 	$stripped = pfb_dnsbl_strip_scheme($line, $strict);
 	if ($stripped === FALSE) {
-		pfb_parsed_fail($header, $line, $oline, $logfile, $lineno);
+		pfb_parse_fail_log($header, $line, $oline, $logfile, $lineno);
 		$skipped++;
 		return FALSE;
 	}
@@ -7542,7 +7528,7 @@ function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value,
 // pfb_dnsbl_extract_host()'s sentinel-action pattern). $csv_parser=FALSE is a pure
 // passthrough (nothing ran in the original block either). Every `continue 2` site
 // becomes action='skip' -- the caller's own `continue` replaces it, same as the
-// fail-path (pfb_parsed_fail() moved in here, mirroring pfb_dnsbl_scheme_line()'s
+// fail-path (pfb_parse_fail_log() moved in here, mirroring pfb_dnsbl_scheme_line()'s
 // own logging inside pfb_dnsbl_extract_host()).
 function pfb_dnsbl_csv_extract(string $line, array $csvline, string $csv_type, bool $csv_parser,
 	bool $run_once, array $alienvault_types, bool $dnsbl_ip_enabled, bool $custom,
@@ -7664,7 +7650,7 @@ function pfb_dnsbl_csv_extract(string $line, array $csvline, string $csv_type, b
 
 	// Record Failed CSV Parse event
 	if (!$csv_found || empty($csv_type)) {
-		pfb_parsed_fail($header, '', $oline, $parse_err, $dnsbl_lineno);
+		pfb_parse_fail_log($header, '', $oline, $parse_err, $dnsbl_lineno);
 		return $result('skip');
 	}
 
@@ -17545,7 +17531,7 @@ function sync_package_pfblockerng($cron='') {
 												}
 												else {
 													// Record failed parsed line
-													pfb_parsed_fail($header, '', $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
+													pfb_parse_fail_log($header, '', $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
 													continue;
 												}
 											}
@@ -17563,7 +17549,7 @@ function sync_package_pfblockerng($cron='') {
 
 												// Log invalid Domains
 												if (!isset($dnsbl_skip[$line])) {
-													pfb_parsed_fail($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
+													pfb_parse_fail_log($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
 												}
 												continue;
 											}
@@ -19085,7 +19071,7 @@ function sync_package_pfblockerng($cron='') {
 
 										if (!$other_family_addr) {
 											$parse_fail++;
-											pfb_ip_parsed_fail($header, $line, $oline, $pfb['ip_parse_err'], $ip_lineno);
+											pfb_parse_fail_log($header, $line, $oline, $pfb['ip_parse_err'], $ip_lineno, TRUE);
 										}
 									}
 								}

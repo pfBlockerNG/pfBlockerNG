@@ -273,7 +273,7 @@ def test_714_b2_parse_fail_counts_every_bad_line(deployed_vm: SmokeVM) -> None:
     "[ header ] Reload..." context of its own).
 
     NOTE: this is the IP-side ``$parse_fail`` counter in the MAIN pfBlockerNG log —
-    distinct from the DNSBL per-line parse-error CSV (``pfb_parsed_fail()`` →
+    distinct from the DNSBL per-line parse-error CSV (``pfb_parse_fail_log()`` →
     ``DNSBL_PARSE_ERR_LOG``).
 
     Given a v4 feed with three non-empty, letter-free lines that all fail IPv4 parsing

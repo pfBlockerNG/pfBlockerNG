@@ -6,18 +6,19 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1408 oracle -- pins CSV parse-fail output that pfb_parsed_fail()/
- * pfb_ip_parsed_fail() write TODAY but no existing test covers, ahead of
- * collapsing both into pfb_parse_fail_log(). Every assertion here is a
- * characterization of CURRENT behaviour (not a spec for new behaviour);
- * the collapse must reproduce every byte unchanged.
+ * issue #1408 -- pfb_parse_fail_log(): the merged CSV parse-failure sink,
+ * replacing the former separate lenient/DNSBL and strict/IP per-line
+ * sinks. Every assertion is a byte-exact characterization migrated from
+ * the pre-collapse oracle (or folded in from the former dedicated
+ * strict-mode sink test) -- the collapse must reproduce every byte
+ * unchanged.
  *
- * Axes: falsy-line coercion divergence ('0' vs '') x mode (lenient/strict),
- * $oline CRLF-stripped vs mid-string LF kept, comma-containing $line kept
- * raw, UTF-8 $line kept raw, default $lineno=''.
+ * Axes: falsy-line coercion divergence ('0' vs '') x mode (lenient/strict
+ * via $keep_falsy_line), $oline CRLF-stripped vs mid-string LF kept,
+ * comma-containing $line kept raw, UTF-8 $line kept raw, default
+ * $lineno='', multi-append ordering (FILE_APPEND).
  */
-#[CoversFunction('pfb_parsed_fail')]
-#[CoversFunction('pfb_ip_parsed_fail')]
+#[CoversFunction('pfb_parse_fail_log')]
 final class PfbParseFailLogTest extends TestCase
 {
 	/** @var string[] temp files to remove in tearDown */
@@ -59,7 +60,7 @@ final class PfbParseFailLogTest extends TestCase
 	{
 		$logfile = $this->mktemp('pfb_parsefail_lenient0_');
 
-		pfb_parsed_fail('TestFeed', '0', 'orig 0 line', $logfile, 9);
+		pfb_parse_fail_log('TestFeed', '0', 'orig 0 line', $logfile, 9);
 
 		$logged = $this->readFile($logfile);
 		$this->assertMatchesRegularExpression(
@@ -73,7 +74,7 @@ final class PfbParseFailLogTest extends TestCase
 	{
 		$logfile = $this->mktemp('pfb_parsefail_strict0_');
 
-		pfb_ip_parsed_fail('TestFeed', '0', 'orig 0 line', $logfile, 9);
+		pfb_parse_fail_log('TestFeed', '0', 'orig 0 line', $logfile, 9, TRUE);
 
 		$logged = $this->readFile($logfile);
 		$this->assertMatchesRegularExpression(
@@ -87,7 +88,7 @@ final class PfbParseFailLogTest extends TestCase
 	{
 		$logfile = $this->mktemp('pfb_parsefail_lenientempty_');
 
-		pfb_parsed_fail('TestFeed', '', 'orig empty line', $logfile, 2);
+		pfb_parse_fail_log('TestFeed', '', 'orig empty line', $logfile, 2);
 
 		$logged = $this->readFile($logfile);
 		$this->assertMatchesRegularExpression(
@@ -101,7 +102,7 @@ final class PfbParseFailLogTest extends TestCase
 	{
 		$logfile = $this->mktemp('pfb_parsefail_comma_');
 
-		pfb_parsed_fail('TestFeed', 'a,b,c-not-a-domain', 'orig, csv, line', $logfile, 1);
+		pfb_parse_fail_log('TestFeed', 'a,b,c-not-a-domain', 'orig, csv, line', $logfile, 1);
 
 		$logged = $this->readFile($logfile);
 		$this->assertMatchesRegularExpression(
@@ -115,7 +116,7 @@ final class PfbParseFailLogTest extends TestCase
 	{
 		$logfile = $this->mktemp('pfb_parsefail_crlf_');
 
-		pfb_parsed_fail('TestFeed', 'line', "orig line\r\n", $logfile, 4);
+		pfb_parse_fail_log('TestFeed', 'line', "orig line\r\n", $logfile, 4);
 
 		$logged = $this->readFile($logfile);
 		$this->assertMatchesRegularExpression(
@@ -129,7 +130,7 @@ final class PfbParseFailLogTest extends TestCase
 	{
 		$logfile = $this->mktemp('pfb_parsefail_midnl_');
 
-		pfb_parsed_fail('TestFeed', 'line', "before\nafter", $logfile, 6);
+		pfb_parse_fail_log('TestFeed', 'line', "before\nafter", $logfile, 6);
 
 		$logged = $this->readFile($logfile);
 		$this->assertStringContainsString(
@@ -143,7 +144,7 @@ final class PfbParseFailLogTest extends TestCase
 	{
 		$logfile = $this->mktemp('pfb_parsefail_utf8_');
 
-		pfb_parsed_fail('TestFeed', 'xn--might-be-münchen.example', 'orig utf8 line', $logfile, 3);
+		pfb_parse_fail_log('TestFeed', 'xn--might-be-münchen.example', 'orig utf8 line', $logfile, 3);
 
 		$logged = $this->readFile($logfile);
 		$this->assertStringContainsString(
@@ -157,13 +158,110 @@ final class PfbParseFailLogTest extends TestCase
 	{
 		$logfile = $this->mktemp('pfb_parsefail_deflineno_');
 
-		pfb_parsed_fail('TestFeed', 'line', 'orig line', $logfile);
+		pfb_parse_fail_log('TestFeed', 'line', 'orig line', $logfile);
 
 		$logged = $this->readFile($logfile);
 		$this->assertMatchesRegularExpression(
 			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},TestFeed,line,orig line,\n$/',
 			$logged,
 			"omitting \$lineno must default to an empty trailing column, not drop it; got: {$logged}"
+		);
+	}
+
+	// -------------------------------------------------------------------
+	// Folded in from the former dedicated strict-mode IP-sink test
+	// (strict mode, $keep_falsy_line = TRUE) -- expected strings unchanged.
+	// -------------------------------------------------------------------
+
+	/**
+	 * A single call writes exactly one CSV row: now,header,line,oline,lineno.
+	 */
+	public function testStrictModeAppendsSingleCsvRowWithLineNumber(): void
+	{
+		$logfile = $this->mktemp('pfb_ip_parse_err_');	// Given: an empty parse-error log.
+
+		// When: a malformed IP line is recorded with its source line number.
+		pfb_parse_fail_log('pfB_X_v4', '1.2.3.4bad', '1.2.3.4bad garbage', $logfile, 42, TRUE);
+
+		// Then: exactly one newline-terminated CSV row, timestamp first, lineno last.
+		$logged = $this->readFile($logfile);
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},pfB_X_v4,1\.2\.3\.4bad,1\.2\.3\.4bad garbage,42\n$/',
+			$logged,
+			"unexpected CSV row shape: {$logged}"
+		);
+	}
+
+	/**
+	 * An empty $line records the literal 'null' -- never a blank field. Strict mode
+	 * uses `!== ''` (not `?:`), so a line whose content is literally "0" is kept as
+	 * "0" here (pinned separately above), not coerced to 'null'.
+	 */
+	public function testStrictModeEmptyLineRecordsNullPlaceholder(): void
+	{
+		$logfile = $this->mktemp('pfb_ip_parse_err_');	// Given: an empty parse-error log.
+
+		// When: $line is empty (e.g. a wholly-unparseable row).
+		pfb_parse_fail_log('pfB_X_v4', '', 'garbage-row', $logfile, 7, TRUE);
+
+		// Then: the line field reads 'null', not ''.
+		$logged = $this->readFile($logfile);
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},pfB_X_v4,null,garbage-row,7\n$/',
+			$logged,
+			"empty \$line must record 'null', not blank: {$logged}"
+		);
+	}
+
+	/**
+	 * Regression (issue #1004): a raw fgets() $oline keeps its trailing newline.
+	 * The writer must strip it so the appended $lineno column stays on the SAME
+	 * physical line -- otherwise the record splits and the next row's field0
+	 * (its timestamp) is emptied, which ADR-60 age-cutoff reads as expired and
+	 * can wipe the whole log. Pins exactly one physical line per record.
+	 */
+	public function testStrictModeRawFgetsLineWithTrailingNewlineDoesNotSplitTheRecord(): void
+	{
+		$logfile = $this->mktemp('pfb_ip_parse_err_');	// Given: an empty parse-error log.
+
+		// When: two failures are recorded with fgets-shaped $oline (trailing "\n").
+		pfb_parse_fail_log('FeedA', '1.1.1.1bad', "1.1.1.1bad junk\n", $logfile, 3, TRUE);
+		pfb_parse_fail_log('FeedB', '2.2.2.2bad', "2.2.2.2bad junk\n", $logfile, 8, TRUE);
+
+		// Then: exactly two physical lines, each with a parseable timestamp in field0
+		// (a split would produce 3+ lines, two of them starting with a stray comma).
+		$logged = $this->readFile($logfile);
+		$lines  = explode("\n", rtrim($logged, "\n"));
+		$this->assertCount(2, $lines, "each record must be exactly one physical line: {$logged}");
+		foreach ($lines as $l) {
+			$this->assertMatchesRegularExpression(
+				'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},/',
+				$l,
+				"every physical line must start with a parseable field0 timestamp: {$l}"
+			);
+		}
+		$this->assertStringEndsWith(",1.1.1.1bad junk,3\n", explode("\n", $logged)[0] . "\n");
+	}
+
+	/**
+	 * Two calls append two rows back-to-back (FILE_APPEND) -- the second call
+	 * must not truncate/overwrite the first.
+	 */
+	public function testStrictModeTwoCallsAppendTwoRowsViaFileAppend(): void
+	{
+		$logfile = $this->mktemp('pfb_ip_parse_err_');	// Given: an empty parse-error log.
+
+		// When: two distinct failures are recorded in sequence.
+		pfb_parse_fail_log('FeedA', '1.1.1.1bad', '1.1.1.1bad junk', $logfile, 1, TRUE);
+		pfb_parse_fail_log('FeedB', '2.2.2.2bad', '2.2.2.2bad junk', $logfile, 2, TRUE);
+
+		// Then: both rows are present, back-to-back (each newline-terminated), in call order.
+		$logged = $this->readFile($logfile);
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},FeedA,1\.1\.1\.1bad,1\.1\.1\.1bad junk,1\n'
+			. '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},FeedB,2\.2\.2\.2bad,2\.2\.2\.2bad junk,2\n$/',
+			$logged,
+			"FILE_APPEND must accumulate both rows, not overwrite the first: {$logged}"
 		);
 	}
 }
