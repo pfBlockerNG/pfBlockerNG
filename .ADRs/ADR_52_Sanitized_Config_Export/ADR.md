@@ -1,6 +1,15 @@
 # ADR-52: Export a sanitized pfBlockerNG configuration from a new Diagnostics page
 
 - **Status:** **Proposed** (2026-06-29). Not yet implemented.
+- **Migration note (2026-07-18):** migrated to
+  [`docs/specs/adr-52-sanitized-config-export.md`](../../docs/specs/adr-52-sanitized-config-export.md)
+  under wayfinder map #1383 (spec ticket #1441). The spec is the live requirements
+  document; this ADR is historical. The §6 phase plan and the phase-prompt `.txt` files
+  are obsolete under the fresh-session workflow. Fork resolutions (#1441): feed-URL
+  redaction strips the whole query string + userinfo; the fail-closed
+  `pfb_cfg_registry()`-walk inventory test is adopted; the top-level Diagnostics tab is
+  confirmed. Premise fix: `maxmind_account` lives in `pfblockerng.inc`
+  (`pfb_maxmind_credential_notice()`), not `pfblockerng_install.inc` as §1.1 cites.
 - **Date:** 2026-06-29
 - **Branch:** `adr/52-sanitized-config-export` (off **`devel`**; `{slug}` = sanitised ADR-title
   slug per CLAUDE.md "Branch naming"). / **Component(s):** a new diagnostics engine
