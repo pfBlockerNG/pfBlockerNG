@@ -4273,3 +4273,180 @@ class TestTldWildcardClassifyTwoLabelPublicSuffixViaBuild:
         result = self._build(["EVIL.COM"])
         assert "evil.com" in result.zone_db, "EVIL.COM must still wildcard (unchanged, case-insensitive)"
         assert "evil.com" not in result.data_db
+
+
+class TestTldWildcardClassifyMultiLabelPublicSuffix:
+    """issue #1476: the dcnt==2-only bare-suffix protection added by #1256/#1475
+    wildcarded a bare N-label feed entry (N=3..5) that is ITSELF a public suffix
+    whenever its (N-1)-label parent is ALSO a known suffix -- the identical bug
+    class recurred one level deeper (e.g. ``act.edu.au`` blanket-wildcarding
+    ``*.act.edu.au``). The apex-protection check is generalized to fire at ANY
+    label count, ahead of the dcnt dispatch -- subsuming the old dcnt==2 special
+    case rather than living alongside it.
+
+    All suffix chains below are REAL entries from the shipped oracle
+    (src/usr/local/pkg/pfblockerng/dnsbl_tld) except the 5-label chain -- the
+    real oracle ships zero 4-dot (5-label) suffix lines as of #1476, so that one
+    is synthetic but PSL-shaped: one level deeper than the real
+    edu.au/act.edu.au and k12.ma.us/pvt.k12.ma.us nesting used below.
+    """
+
+    _SUFFIXES = [
+        "com",
+        "net",
+        "org",
+        # Real oracle: au -> edu.au -> act.edu.au / nsw.edu.au (3-label suffixes,
+        # each with its 2-label parent ALSO a suffix -- the dcnt==3 bug shape).
+        "au",
+        "edu.au",
+        "act.edu.au",
+        "nsw.edu.au",
+        # Real oracle: us -> ma.us -> k12.ma.us -> pvt.k12.ma.us (4-label
+        # suffix, whose 3-label parent k12.ma.us is ALSO a suffix -- the
+        # dcnt==4 bug shape; issue #1476's own evidence).
+        "us",
+        "ma.us",
+        "k12.ma.us",
+        "pvt.k12.ma.us",
+        # Synthetic PSL-shaped 5-label suffix ("e.d.c.b.psltest") whose
+        # 4-label parent ("d.c.b.psltest") is ALSO a suffix -- the dcnt==5 bug
+        # shape, no real 5-label suffix ships to pin this with real data.
+        "d.c.b.psltest",
+        "e.d.c.b.psltest",
+        # Synthetic PSL-shaped 3-label punycode suffix ("xn--a1.xn--b2.xn--c3")
+        # whose 2-label parent ("xn--b2.xn--c3") is ALSO a suffix -- same
+        # dcnt==3 bug shape as act.edu.au, opaque-punycode hostile row.
+        "xn--b2.xn--c3",
+        "xn--a1.xn--b2.xn--c3",
+    ]
+
+    def _tlds(self) -> dict[str, dict[str, str]]:
+        return _dnsbl_load_tld_wildcard_master(self._SUFFIXES, [], [])
+
+    # ---- bare N-label suffix apex -> exact DATA, one row per dcnt branch ---- #
+
+    def test_three_label_real_suffix_apex_is_exact_data(self) -> None:
+        # act.edu.au is itself a public suffix (real oracle); its parent
+        # edu.au is ALSO a suffix -- the pre-#1476 dcnt==3 branch wildcarded it.
+        assert tld_wildcard_classify("act.edu.au", self._tlds(), set()) == (DNSBL_CLASS_DATA, "act.edu.au"), (
+            f"expected {(DNSBL_CLASS_DATA, 'act.edu.au')!r}, got "
+            f"{tld_wildcard_classify('act.edu.au', self._tlds(), set())!r}"
+        )
+
+    def test_three_label_real_suffix_apex_is_exact_data_second_entry(self) -> None:
+        assert tld_wildcard_classify("nsw.edu.au", self._tlds(), set()) == (DNSBL_CLASS_DATA, "nsw.edu.au"), (
+            f"expected {(DNSBL_CLASS_DATA, 'nsw.edu.au')!r}, got "
+            f"{tld_wildcard_classify('nsw.edu.au', self._tlds(), set())!r}"
+        )
+
+    def test_four_label_real_suffix_apex_is_exact_data(self) -> None:
+        # pvt.k12.ma.us is itself a public suffix (real oracle); its parent
+        # k12.ma.us is ALSO a suffix -- the pre-#1476 dcnt==4 branch wildcarded
+        # it (issue #1476's own pasted evidence: -> ('zone', 'pvt.k12.ma.us')).
+        assert tld_wildcard_classify("pvt.k12.ma.us", self._tlds(), set()) == (
+            DNSBL_CLASS_DATA,
+            "pvt.k12.ma.us",
+        ), (
+            f"expected {(DNSBL_CLASS_DATA, 'pvt.k12.ma.us')!r}, got "
+            f"{tld_wildcard_classify('pvt.k12.ma.us', self._tlds(), set())!r}"
+        )
+
+    def test_five_label_synthetic_suffix_apex_is_exact_data(self) -> None:
+        # Synthetic PSL-shaped 5-label suffix whose 4-label parent is ALSO a
+        # suffix -- the pre-#1476 dcnt==5 branch would wildcard it, same bug
+        # class one level deeper still (no real 5-label suffix to pin instead).
+        assert tld_wildcard_classify("e.d.c.b.psltest", self._tlds(), set()) == (
+            DNSBL_CLASS_DATA,
+            "e.d.c.b.psltest",
+        ), (
+            f"expected {(DNSBL_CLASS_DATA, 'e.d.c.b.psltest')!r}, got "
+            f"{tld_wildcard_classify('e.d.c.b.psltest', self._tlds(), set())!r}"
+        )
+
+    def test_three_label_punycode_suffix_apex_is_exact_data(self) -> None:
+        # Punycode/xn-- multi-label suffix, same dcnt==3 bug shape as
+        # act.edu.au (2-label parent also a suffix) -- opaque-string hostile
+        # row: no ASCII-only special-casing exists or is needed.
+        assert tld_wildcard_classify("xn--a1.xn--b2.xn--c3", self._tlds(), set()) == (
+            DNSBL_CLASS_DATA,
+            "xn--a1.xn--b2.xn--c3",
+        ), (
+            f"expected {(DNSBL_CLASS_DATA, 'xn--a1.xn--b2.xn--c3')!r}, got "
+            f"{tld_wildcard_classify('xn--a1.xn--b2.xn--c3', self._tlds(), set())!r}"
+        )
+
+    # ---- registrable name UNDER a known suffix -> still wildcard ZONE ------- #
+
+    def test_four_label_registrable_under_three_label_suffix_still_wildcards(self) -> None:
+        # example.act.edu.au is registrable UNDER the real 3-label suffix
+        # act.edu.au -- the dcnt==4 oracle search classifies it registrable ->
+        # wildcard ZONE, untouched by the generalized apex check.
+        assert tld_wildcard_classify("example.act.edu.au", self._tlds(), set()) == (
+            DNSBL_CLASS_ZONE,
+            "example.act.edu.au",
+        )
+
+    def test_five_label_registrable_under_four_label_suffix_still_wildcards(self) -> None:
+        # sub.pvt.k12.ma.us is registrable UNDER the real 4-label suffix
+        # pvt.k12.ma.us -- exercises the dcnt==5 oracle-search ZONE side with
+        # real data (complements the synthetic apex-DATA row above).
+        assert tld_wildcard_classify("sub.pvt.k12.ma.us", self._tlds(), set()) == (
+            DNSBL_CLASS_ZONE,
+            "sub.pvt.k12.ma.us",
+        )
+
+    def test_sub_domain_under_registrable_name_stays_exact(self) -> None:
+        # sub.example.act.edu.au is two levels below the suffix apex -- its
+        # 4-label truncation (example.act.edu.au) is not itself a known
+        # suffix, so it stays exact DATA (unchanged).
+        assert tld_wildcard_classify("sub.example.act.edu.au", self._tlds(), set()) == (
+            DNSBL_CLASS_DATA,
+            "sub.example.act.edu.au",
+        )
+
+    # ---- unchanged controls -------------------------------------------------- #
+
+    def test_dcnt_greater_than_five_stays_unclassified_data(self) -> None:
+        # 6-label name under the real au suffix chain -- dcnt>5 is never
+        # classified (unconditional dfound="" branch), unchanged by #1476.
+        domain = "another.sub.example.act.edu.au"
+        assert tld_wildcard_classify(domain, self._tlds(), set()) == (DNSBL_CLASS_DATA, domain)
+
+    def test_oracle_absent_multi_label_suffix_apex_stays_data(self) -> None:
+        # The empty-oracle guard (#1255) returns exact DATA at the top of the
+        # function, before the generalized apex check is ever reached.
+        assert tld_wildcard_classify("act.edu.au", {}, set()) == (DNSBL_CLASS_DATA, "act.edu.au")
+
+    def test_exclusion_and_oracle_apex_agree_on_data(self) -> None:
+        # act.edu.au is in BOTH the oracle (as a suffix apex) AND the
+        # exclusion set -- the two mechanisms must agree, never conflict:
+        # still DATA either way.
+        assert tld_wildcard_classify("act.edu.au", self._tlds(), {"act.edu.au"}) == (
+            DNSBL_CLASS_DATA,
+            "act.edu.au",
+        )
+
+    # ---- hostile shapes ------------------------------------------------------- #
+
+    def test_leading_empty_label_three_label_suffix_shape_does_not_false_match(self) -> None:
+        # Hostile input: a leading empty label on the 3-label suffix
+        # act.edu.au (".act.edu.au") is dcnt==4, not dcnt==3, and its own
+        # domain string is never a literal oracle key (the oracle stores
+        # "act.edu.au", not ".act.edu.au") -- the generalized apex check must
+        # not spuriously match. It falls through to the dcnt==4 oracle search,
+        # whose 3-label truncation ("act.edu.au") IS the real suffix -> still
+        # classifies as a wildcard ZONE (same pattern as the pre-existing
+        # 2-label ".uk" pin) -- unreachable in production (_normalise_verdict
+        # rejects an empty label first).
+        assert tld_wildcard_classify(".act.edu.au", self._tlds(), set()) == (
+            DNSBL_CLASS_ZONE,
+            ".act.edu.au",
+        )
+
+    def test_trailing_dot_three_label_suffix_form_is_not_a_three_label_shape(self) -> None:
+        # str.split(".") on a trailing-dot domain yields a trailing empty
+        # label, so "act.edu.au." is dcnt==4, not dcnt==3 -- the dcnt==4
+        # oracle search misses on the empty tld and falls through to DATA.
+        # Moot in production: _normalise_verdict() strips the trailing dot
+        # before any domain reaches tld_wildcard_classify().
+        assert tld_wildcard_classify("act.edu.au.", self._tlds(), set()) == (DNSBL_CLASS_DATA, "act.edu.au.")
