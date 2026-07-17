@@ -754,21 +754,15 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
         ):
             orig_sizes[path] = _ensure_log(vm, path)
 
-        # DNSBL must be EFFECTIVELY enabled for the alert view's DNSBL Python panel to
-        # render at all: the panel gate reads the runtime $pfb['dnsbl'], which pfb_global
-        # force-disables ("DNSBL disabled: no VIP configured") when no sinkhole VIP
-        # exists -- the config toggle alone is not enough (first live run proved it:
-        # every D-scenario row was absent). Seed the VIP first (idempotent, the standard
-        # harness fixture), then flip the toggle. The Block/Permit/Match panels are NOT
-        # gated by this toggle.
+        # DNSBL panel requires a configured sinkhole VIP and enabled toggle.
+        # Configure VIP before enabling DNSBL.
         helpers.ensure_dnsbl_vip(vm)
         helpers.set_dnsbl_enabled(vm, True)
 
         error_log_guard.snapshot()
         error_log_snapshotted = True
 
-        # (1) BASELINE -- pre-seed captures, same fixed order, so "no rv809 tokens
-        # yet" is PROVEN, not assumed (CLAUDE.md transition-test rule).
+        # (1) Capture fixed-order baseline responses before seeding.
         for key, path in GET_MATRIX:
             t0 = time.perf_counter()
             resp = webui.get(path)
