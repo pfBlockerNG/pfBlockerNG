@@ -32,8 +32,8 @@ final class DnsblLineParsingBenchmarkTest extends TestCase
 	{
 		$root = dirname(__DIR__, 2);
 		file_put_contents("{$this->tmp}/dnsbl/benchfeed.txt",
-			pfb_dnsbl_ndjson_emit_domain_row('one.example', '1', 'benchfeed', 'grp') .
-			pfb_dnsbl_ndjson_emit_domain_row('two.example', '1', 'benchfeed', 'grp'));
+			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'one.example') .
+			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'two.example'));
 
 		$command = implode(' ', array_map('escapeshellarg', [
 			PHP_BINARY,

@@ -2159,16 +2159,9 @@ enum PfbDnsblRowKind: string
 	case Abp    = 'a';
 }
 
-function pfb_dnsbl_ndjson_emit_domain_row(string $domain, string $log, string $feed, string $group): string {
+function pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind $kind, string $payload): string {
 	return json_encode(
-		array(PfbDnsblRowKind::Domain->value, $domain),
-		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
-	) . "\n";
-}
-
-function pfb_dnsbl_ndjson_emit_abp_row(string $raw): string {
-	return json_encode(
-		array(PfbDnsblRowKind::Abp->value, $raw),
+		array($kind, $payload),
 		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
 	) . "\n";
 }
@@ -2184,27 +2177,34 @@ function pfb_dnsbl_ndjson_parse_row(string $line): ?array {
 			!is_string($row[1]) || $row[1] === '') {
 			return NULL;
 		}
-		return match (PfbDnsblRowKind::tryFrom($row[0])) {
-			PfbDnsblRowKind::Domain => ['kind' => 'domain', 'domain' => $row[1]],
-			PfbDnsblRowKind::Abp    => ['kind' => 'abp', 'raw' => $row[1]],
+		$kind = PfbDnsblRowKind::tryFrom($row[0]);
+		return match ($kind) {
+			PfbDnsblRowKind::Domain => ['kind' => $kind, 'domain' => $row[1]],
+			PfbDnsblRowKind::Abp    => ['kind' => $kind, 'raw' => $row[1]],
 			NULL                     => NULL,
 		};
 	}
 	if (!str_starts_with($trimmed, '{') || !array_key_exists('kind', $row)) {
 		return NULL;
 	}
-	if ($row['kind'] === 'domain') {
-		$required = array('domain', 'log', 'feed', 'group');
-	} elseif ($row['kind'] === 'abp') {
-		$required = array('raw');
-	} else {
+	$kind = match ($row['kind']) {
+		'domain' => PfbDnsblRowKind::Domain,
+		'abp'    => PfbDnsblRowKind::Abp,
+		default  => NULL,
+	};
+	if ($kind === NULL) {
 		return NULL;
 	}
+	$required = match ($kind) {
+		PfbDnsblRowKind::Domain => array('domain', 'log', 'feed', 'group'),
+		PfbDnsblRowKind::Abp    => array('raw'),
+	};
 	foreach ($required as $key) {
 		if (!isset($row[$key]) || !is_string($row[$key]) || $row[$key] === '') {
 			return NULL;
 		}
 	}
+	$row['kind'] = $kind;
 	return $row;
 }
 
@@ -8446,7 +8446,10 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 			if ($row === NULL) {
 				continue;
 			}
-			$raw_line = $row['kind'] === 'abp' ? "{$row['raw']}\n" : "{$row['domain']}\n";
+			$raw_line = match ($row['kind']) {
+				PfbDnsblRowKind::Domain => "{$row['domain']}\n",
+				PfbDnsblRowKind::Abp    => "{$row['raw']}\n",
+			};
 			$written = @fwrite($raw_h, $raw_line);
 			if ($written === FALSE || $written !== strlen($raw_line)) {
 				$raw_ok = FALSE;
@@ -17439,7 +17442,7 @@ function sync_package_pfblockerng($cron='') {
 											// parse_abp() (never a domain/IP/path anchor -> silently
 											// skipped).
 											if (pfb_dnsbl_is_abp_rule_line($line)) {
-												$domain_data = pfb_dnsbl_ndjson_emit_abp_row($line);
+												$domain_data = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, $line);
 												@fwrite($dhandle, $domain_data);
 												continue;
 											}
@@ -17610,8 +17613,7 @@ function sync_package_pfblockerng($cron='') {
 											}
 
 											// For DNSBL python, save domain and Logging type
-											$domain_data = pfb_dnsbl_ndjson_emit_domain_row(
-												strtolower($line), (string) $logging_type, $header, $alias);
+											$domain_data = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, strtolower($line));
 											@fwrite($dhandle, $domain_data);
 										}
 									}

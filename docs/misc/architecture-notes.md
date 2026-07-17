@@ -133,12 +133,13 @@ that consume them, are **unaffected** — they stay the old bare-domain/verbatim
 `.raw` per feed. The final manifest remains readable, self-describing JSON with its existing
 `raw`, `feed`, `group`, `provenance`, `log_flag`, and `mode` fields.
 
-**Emit/parse primitives** (`pfblockerng.inc`): `pfb_dnsbl_ndjson_emit_domain_row()` /
-`pfb_dnsbl_ndjson_emit_abp_row()` are the only writers — `json_encode()` with a **fixed element
-order** (tag, payload), `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`, no pretty-printing,
+**Emit/parse primitives** (`pfblockerng.inc`): `pfb_dnsbl_ndjson_emit_row()` is the only
+writer — its typed `PfbDnsblRowKind` argument serializes directly through `json_encode()`
+with a **fixed element order** (tag, payload),
+`JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`, no pretty-printing,
 exactly one trailing `"\n"`. `pfb_dnsbl_ndjson_parse_row()` is the strict reader every PHP
 consumer shares: it normalizes current compact arrays and accepted legacy objects to the same
-internal `kind` plus `domain`/`raw` shape, and rejects (returns `NULL`) every other shape.
+enum-valued `kind` plus `domain`/`raw` shape, and rejects (returns `NULL`) every other shape.
 
 **Staging-generation guard + lazy rebuild.** The sync loop's verbatim-reuse fork
 (`pfb_dnsbl_verbatim_reuse_active()`) additionally requires the staged `.txt` to be

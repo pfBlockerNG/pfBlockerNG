@@ -405,7 +405,7 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
       pass downloaded both: the main row blocked domain A, the sibling row
       blocked X1), whose main-row staging file (``{dnsdir}/{header}.txt``) is
       then OVERWRITTEN with a hand-written compact NDJSON domain row (the exact
-      ``pfb_dnsbl_ndjson_emit_domain_row`` byte shape) for a DIFFERENT domain B —
+      ``pfb_dnsbl_ndjson_emit_row`` domain byte shape) for a DIFFERENT domain B —
       simulating a feed whose staging genuinely already is in the current NDJSON
       generation — while the SIBLING row's served feed changes content (X1 → X2)
       and the main row's served feed stays byte-identical.
@@ -457,7 +457,7 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
 
         # Overwrite the MAIN row's staging with a hand-written, CURRENT-generation
         # NDJSON domain row for a DIFFERENT domain — the exact byte shape
-        # pfb_dnsbl_ndjson_emit_domain_row() produces.
+        # pfb_dnsbl_ndjson_emit_row() produces for a domain.
         # Its served feed stays byte-identical (no re-download trigger); the
         # SIBLING feed changes so the cron pass rebuilds the database at all.
         ndjson_line = f'["d","{reused_domain}"]\n'
