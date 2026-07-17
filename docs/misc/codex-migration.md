@@ -54,7 +54,7 @@ This is the only synchronization boundary:
 | --- | --- | --- |
 | `CLAUDE.md` | `AGENTS.md` adapter | Codex loads `AGENTS.md`; it routes to the canonical policy and translates only runtime surfaces. |
 | `.claude/skills/*` | `.agents/skills/*` | Same trigger intent and one shared detailed procedure. |
-| `.claude/workflows/*.js` | `$adr-investigate`, `$issue-triage`, `$phase-step`, `$review-single`, `$review-fanout`, `$triage-findings` | Codex has subagents rather than the Claude JavaScript `Workflow` runtime. |
+| `.claude/workflows/*.js` | *(retired 2026-07-17, #1431)* | Superseded by the fresh-session policy: `.agents/policy/workflow.md` + `landing.md`; both clients use fresh native sub-agents. |
 | Top / mid / small model tier | GPT-5.6-Sol / GPT-5.6-Terra / GPT-5.6-Luna | `.agents/model-tiers.conf` is the shared mapping; reasoning effort remains independent. |
 | Planner/implementer/analyst/verifier | `planner`, `implementer`, small/top `analyst`, and `adversarial-reviewer` plus top/mid reviewer variants | Project-scoped custom agents pin the corresponding Codex model tier without changing the canonical output contract. |
 | `PreToolUse` Git policy | `.codex/hooks.json` | Reuses the raw-payload-compatible shared guard for Codex `Bash` hook events; coverage remains subject to the client emitting that event for unified shell execution. |

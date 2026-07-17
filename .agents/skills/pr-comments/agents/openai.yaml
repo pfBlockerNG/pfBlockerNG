@@ -1,5 +1,0 @@
-interface:
-  display_name: "PR Comments"
-  short_description: "Address pull request review comments"
-policy:
-  allow_implicit_invocation: false

@@ -11,7 +11,7 @@ DIFF-SCOPED: only ADDED lines are judged (`--staged` for the pre-commit hook,
 `--diff <base>` for CI's PR gate), so the pre-existing narration is
 grandfathered until its cleanup lands and this gate never blocks an unrelated
 change. Scope: `src/` and `scripts/`, minus `*.md` and the files whose subject
-IS phases/narration (this checker, its test, `check_phase_prompts.py`).
+IS phases/narration (this checker and its test).
 
 Every added line is judged, not only comment-shaped ones: the banned
 vocabulary has no legitimate code/string use in the scan roots, and
@@ -55,7 +55,6 @@ _SCAN_ROOTS = ("src", "scripts")
 _EXCLUDED_PATHS = (
     "scripts/check_comment_narration.py",
     "tests/test_comment_narration_check.py",
-    "scripts/check_phase_prompts.py",
 )
 
 

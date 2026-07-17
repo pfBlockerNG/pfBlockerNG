@@ -5,8 +5,7 @@ description: >
   first, list competing hypotheses, run the discriminating probe for each, and
   only fix a CONFIRMED cause — never "try a fix and see". Args: <symptom, error
   message, or failing command>. Use when the user says "debug this", "why is X
-  failing", "investigate this error", or invokes /debug. For a filed GitHub
-  issue, prefer /gh-issue N (it embeds this protocol).
+  failing", "investigate this error", or invokes /debug.
 ---
 
 You are debugging under the CLAUDE.md hypothesis-ledger rule: **no fix edit before a
@@ -59,9 +58,9 @@ Rules:
   #858→#900 chain was five symptom-fixes of one cause. Enumerate the sibling axes before
   choosing where the fix goes.
 - The fix follows the test mandate: pin with a test that **fails on the broken code**
-  (executed, output recorded) and passes after. Land per the normal flow (worktree; PR via
-  `/pr-merge-flow` for code, direct `devel` for dev-only classes) — or hand the confirmed
-  diagnosis to `/delegate` / `/gh-issue --fix` if the user only asked for the investigation.
+  (executed, output recorded) and passes after. Land per the normal flow (worktree; PR per
+  `.agents/policy/landing.md` for code, direct `devel` for dev-only classes) — or hand the
+  confirmed diagnosis to a delegated implementer if the user only asked for the investigation.
 
 ## Step 4 — Report
 

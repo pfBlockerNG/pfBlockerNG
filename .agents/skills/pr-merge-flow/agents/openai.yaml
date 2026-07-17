@@ -1,5 +1,0 @@
-interface:
-  display_name: "PR Merge Flow"
-  short_description: "Review feedback then merge a PR"
-policy:
-  allow_implicit_invocation: false

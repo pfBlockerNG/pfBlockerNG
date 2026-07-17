@@ -1,7 +1,7 @@
 #!/bin/sh
 # wait-reviewer.sh -- poll a PR until a bot/human reviewer engages or finishes.
-# The single implementation of the reviewer-wait state machine the pr-comments /
-# pr-merge-flow skills used to inline (content-first FINISHED, CodeRabbit QUOTA with
+# The single implementation of the reviewer-wait state machine the landing policy
+# (.agents/policy/landing.md) references (content-first FINISHED, CodeRabbit QUOTA with
 # resume minutes, DECLINE/PAUSE, Snyk status handling, NOTPRESENT presence window).
 #
 # Usage: wait-reviewer.sh --repo OWNER/REPO --pr N --handle LOGIN [options]

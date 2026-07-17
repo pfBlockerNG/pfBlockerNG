@@ -1,5 +1,0 @@
-interface:
-  display_name: "ADR All"
-  short_description: "Implement an entire ADR end-to-end"
-policy:
-  allow_implicit_invocation: false

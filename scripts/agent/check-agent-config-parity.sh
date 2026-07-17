@@ -213,8 +213,9 @@ else
 	check_role_model adversarial-reviewer-mid "$mid_codex"
 fi
 
-if [ "$skills" -eq 0 ] || [ "$workflows" -eq 0 ]; then
-	echo 'agent-config-parity: canonical skill/workflow inventory is empty' >&2
+# issue #1431: the committed workflow inventory retired; only skills must exist.
+if [ "$skills" -eq 0 ]; then
+	echo 'agent-config-parity: canonical skill inventory is empty' >&2
 	exit 1
 fi
 

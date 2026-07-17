@@ -1,5 +1,0 @@
-interface:
-  display_name: "PR Merge"
-  short_description: "Rebase, wait for CI, and merge a PR"
-policy:
-  allow_implicit_invocation: false

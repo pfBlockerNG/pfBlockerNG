@@ -197,11 +197,10 @@ def test_markdown_and_out_of_root_paths_are_clean() -> None:
     assert _find(".ADRs/ADR_60_X/prompt.txt", bad) == []
 
 
-def test_self_and_phase_prompt_checker_are_excluded() -> None:
+def test_self_and_companion_test_are_excluded() -> None:
     bad = ["# RESULTS/ Phase 1"]
     assert _find("scripts/check_comment_narration.py", bad) == []
     assert _find("tests/test_comment_narration_check.py", bad) == []
-    assert _find("scripts/check_phase_prompts.py", bad) == []
 
 
 def test_self_exclusion_is_full_path_not_basename() -> None:

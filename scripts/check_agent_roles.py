@@ -296,7 +296,8 @@ def _check_orphans(root: Path, roles: list[Role], problems: list[str]) -> None:
         (root / _CLAUDE_WORKFLOWS, ".js", claimed_workflows, "Claude workflow"),
     ):
         if not directory.is_dir():
-            problems.append(f"missing directory: {directory.relative_to(root)}")
+            if claimed:
+                problems.append(f"missing directory: {directory.relative_to(root)}")
             continue
         for path in sorted(directory.glob(f"*{suffix}")):
             if path.stem not in claimed:

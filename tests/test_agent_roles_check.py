@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -400,6 +401,20 @@ def test_unclaimed_claude_workflow(tmp_path: Path) -> None:
     make_tree(tmp_path)
     _write(tmp_path / ".claude/workflows/stray.js", "x\n")
     _assert_flags(_problems(tmp_path), "stray.js: Claude workflow not claimed by any registry row")
+
+
+def test_missing_vendor_dir_ok_when_side_unclaimed(tmp_path: Path) -> None:
+    """A registry with no workflow bindings tolerates an absent .claude/workflows (issue #1431)."""
+    rows = tuple(row.replace("workflow:build", "session").replace("workflow:check", "session") for row in _ROWS)
+    make_tree(tmp_path, doc=_doc(rows=rows))
+    shutil.rmtree(tmp_path / ".claude/workflows")
+    assert _problems(tmp_path) == []
+
+
+def test_missing_vendor_dir_flagged_when_side_claimed(tmp_path: Path) -> None:
+    make_tree(tmp_path)
+    shutil.rmtree(tmp_path / ".claude/workflows")
+    _assert_flags(_problems(tmp_path), "missing directory: .claude/workflows")
 
 
 # --------------------------------------------------------------------------- #
