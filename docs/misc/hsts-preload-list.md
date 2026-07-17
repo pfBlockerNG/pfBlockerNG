@@ -1,5 +1,8 @@
 # HSTS preload list — maintenance (dev-only)
 
+Scope: maintaining the vendored `pfb_py_hsts.txt` HSTS exclusion list. Load when:
+refreshing or auditing the HSTS preload snapshot.
+
 `src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt` is the flat, one-name-per-line HSTS
 exclusion oracle `_load_hsts_db()` (pfb_unbound.py) keys resolved domains against: a
 blocked domain on this list resolves real (HSTS bypass) instead of being null-blocked —

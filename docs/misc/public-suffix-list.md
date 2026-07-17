@@ -1,5 +1,8 @@
 # Public Suffix List — maintenance (dev-only)
 
+Scope: maintaining the vendored `dnsbl_tld` public-suffix master list. Load when:
+refreshing or auditing `dnsbl_tld` / `pfb_py_tld.txt` against publicsuffix.org.
+
 `src/usr/local/pkg/pfblockerng/dnsbl_tld` is the flat, one-suffix-per-line public-suffix
 master list that `_dnsbl_load_tld_wildcard_master()` (`pfb_unbound.py`) uses — staged into the
 Unbound chroot as `pfb_py_tld.txt` by `pfblockerng.sh` — to derive each domain's registrable

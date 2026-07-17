@@ -1,5 +1,8 @@
 # TLD Allow lists — maintenance (dev-only)
 
+Scope: maintaining the TLD Allow picker arrays. Load when: refreshing the
+`$tld_list` arrays in `pfblockerng_dnsbl.php` from the IANA root zone.
+
 The DNSBL **TLD Allow** feature (DNSBL Configuration page → *TLD Allow*) blocks any domain
 whose top-level domain is not in a selected allow-set. The pickers are populated from four
 hardcoded arrays in `src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` (`$tld_list['gTLD']`,

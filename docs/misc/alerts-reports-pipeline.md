@@ -1,5 +1,8 @@
 # Alerts/Reports pages — attribution pipeline and render-time costs
 
+Scope: Alerts/Reports attribution pipeline and render-time costs. Load when:
+touching the Alerts/Reports render path, the log converters, or the IP report cache.
+
 How `src/usr/local/www/pfblockerng/pfblockerng_alerts.php` gets its data, why the IP rows
 still re-query feed/alias state on every load even though the logs already carry full
 attribution, and where the load time goes. Read this before touching the Alerts/Reports

@@ -1,5 +1,8 @@
 # TOP1M providers — reference (ADR-59)
 
+Scope: TOP1M Whitelist provider framework (ADR-59). Load when: adding or updating
+a TOP1M provider descriptor or auditing provider licences.
+
 The DNSBL **TOP1M Whitelist** feature (DNSBL Configuration page → *TOP1M Whitelist*) downloads a
 "most popular domains" list and whitelists it, to cut false positives on feeds that block full
 URLs (PhishTank, OpenPhish, MalwarePatrol, …). ADR-59 turned the single hardcoded Tranco/Cisco
