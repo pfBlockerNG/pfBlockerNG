@@ -46,7 +46,7 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 # Matched case-insensitively so a differently-cased escape still exempts.
-_ESCAPE = "narration-ok"
+_ESCAPE = re.compile(r"(?<![\w-])narration-ok:[^\S\r\n]*\S", re.IGNORECASE)
 
 _SCAN_ROOTS = ("src", "scripts")
 
@@ -98,7 +98,7 @@ def find_violations(diff_text: str) -> list[Violation]:
             continue
         if in_hunk and raw.startswith("+"):
             line = raw[1:]
-            if path is not None and _in_scope(path) and _ESCAPE not in line.lower():
+            if path is not None and _in_scope(path) and not _ESCAPE.search(line):
                 for pattern, reason in _PATTERNS:
                     if pattern.search(line):
                         violations.append(Violation(path, lineno, line.strip(), reason))

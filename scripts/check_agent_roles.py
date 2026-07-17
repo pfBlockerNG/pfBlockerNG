@@ -62,7 +62,7 @@ _ROLE_ID = re.compile(r"[a-z][a-z0-9-]*")
 # A DIRECTLY QUOTED model id is a pin; a mid-prose mention inside a longer
 # string is not — that tolerance is what "no textual identity" means here.
 _CLAUDE_MODEL_PIN = re.compile(r"""['"](claude-[a-z0-9.-]+)['"]""")
-_ESCAPE = "roles-ok"
+_ESCAPE = re.compile(r"(?<![\w-])roles-ok:[^\S\r\n]*\S")
 # The eight semantic fields every role's contract section must carry.
 _SECTION_FIELDS = (
     "Purpose & routing",
@@ -201,7 +201,7 @@ def _check_sections(doc: str, roles: list[Role], problems: list[str]) -> None:
 def _scan_model_pins(path: Path) -> list[str]:
     pins: list[str] = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if _ESCAPE in line:
+        if _ESCAPE.search(line):
             continue
         pins.extend(_CLAUDE_MODEL_PIN.findall(line))
     return pins

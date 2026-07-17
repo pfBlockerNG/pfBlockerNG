@@ -127,7 +127,7 @@ _QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'([^\']*)\'|`(?:[^`\\]|\\.)*`')
 _QUOTED_C_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'|`((?:[^`\\]|\\.)*)`')
 
 # Inline per-line escape (`# version-literal-ok: <reason>`), spec'd in issue #922.
-_ESCAPE = "version-literal-ok"
+_ESCAPE = re.compile(r"(?<![\w-])version-literal-ok:[^\S\r\n]*\S")
 
 # Tracked-tree roots where a version literal could plausibly be pasted.
 _SCAN_ROOTS = ("src", "scripts", ".github/workflows")
@@ -437,7 +437,7 @@ def scan_text(path: Path, text: str) -> list[tuple[Path, int, str]]:
     c_style = path.suffix in _C_COMMENT_EXTS
     code_lines = _code_lines(lines, path.suffix)
     for lineno, (line, code) in enumerate(zip(lines, code_lines, strict=True), start=1):
-        if code is None or _ESCAPE in line:
+        if code is None or _ESCAPE.search(line):
             continue
         if _line_has_value_literal(code, c_style):
             violations.append((path, lineno, line.strip()))

@@ -509,6 +509,35 @@ def test_cli_all_green_and_exit_codes(tmp_path: Path) -> None:
     assert "consistent (5 roles)" in result.stdout
 
 
+def test_cli_escape_requires_colon_and_reason(tmp_path: Path) -> None:
+    valid = (
+        "roles-ok: reason",
+        "roles-ok:\t  reason",
+        "roles-ok: []{}()$.*+?",
+        f"roles-ok: {'x' * 4096}",
+        "roles-ok: \ufffd",
+    )
+    malformed = (
+        "roles-ok",
+        "roles-ok:",
+        "roles-ok:   ",
+        "roles-ok reason",
+        "roles-ok - reason",
+        "xroles-ok: reason",
+        "roles-ok-extra: reason",
+        "Roles-OK: reason",
+        "roles-ok:\n// reason",
+    )
+    for marker in valid:
+        make_tree(tmp_path, build_js=f"m 'claude-small-x'\nm 'claude-top-x' // {marker}\n")
+        result = _cli(tmp_path, "--all")
+        assert result.returncode == 0, f"valid marker {marker!r}: {result.stdout}{result.stderr}"
+    for marker in malformed:
+        make_tree(tmp_path, build_js=f"m 'claude-small-x'\nm 'claude-top-x' // {marker}\n")
+        result = _cli(tmp_path, "--all")
+        assert result.returncode == 1, f"malformed marker {marker!r}: {result.stdout}{result.stderr}"
+
+
 def test_cli_usage_error_exit_2(tmp_path: Path) -> None:
     result = _cli(tmp_path)  # no mode flag
     assert result.returncode == 2
