@@ -25,7 +25,7 @@ def test_txt_line_uses_compact_abp_shapes() -> None:
     assert _BENCH._txt_line(99) == '["a","@@||uuid-bench-99.example.com^"]\n'
 
 
-def _trial(raw_line_count: int) -> object:
+def _trial(raw_line_count: int | None) -> object:
     return _BENCH.TrialResult(
         isolated_median_s=1.0,
         isolated_min_s=0.9,
@@ -38,6 +38,8 @@ def _trial(raw_line_count: int) -> object:
 def test_php_trial_aggregation_rejects_dropped_rows() -> None:
     with pytest.raises(RuntimeError, match=r"expected 1,000,000.*999,999"):
         _BENCH.aggregate_trials([_trial(1_000_000), _trial(999_999)], expected_raw_line_count=1_000_000)
+    with pytest.raises(RuntimeError, match=r"expected 1,000,000.*missing"):
+        _BENCH.aggregate_trials([_trial(1_000_000), _trial(None)], expected_raw_line_count=1_000_000)
 
 
 def test_timing_only_base_preserves_its_consistent_observed_count() -> None:
