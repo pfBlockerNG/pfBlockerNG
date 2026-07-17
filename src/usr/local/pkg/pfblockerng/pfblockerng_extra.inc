@@ -3705,7 +3705,7 @@ function pfb_live_table_snapshot(string $pfctl, string $aliasdir, string $dbdir,
 	$scan_tmp  = NULL;
 	if ($scan_file === NULL) {
 		$scan_tmp = tempnam($dbdir, 'pfb_punch_');
-		// ADR-53 review finding H4: stderr -> /dev/null, NOT 2>&1 -- the
+		// ADR-53: stderr -> /dev/null, NOT 2>&1 -- the
 		// capture file is parsed line-by-line as membership entries below;
 		// merging stderr into it would feed any pfctl diagnostic line into
 		// that parse as if it were a table member.

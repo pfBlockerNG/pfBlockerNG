@@ -9,10 +9,10 @@ use PHPUnit\Framework\TestCase;
  * Pin the ip_remove handler's ip-validation shape (issue #1412): a single
  * ``pfb_filter($_POST['ip'], PFB_FILTER_IP, ...)`` call replaced the retired
  * v4-only, /24-/32-only split-capture regex. This exercises that EXACT call
- * (pfb_filter()/is_ipaddr() are untouched by #1412 -- no red/green dance
- * needed here, this is coverage of the validator the handler now relies on,
- * not a behaviour it changes) against the hostile-input shapes the brief
- * calls out: a v4-mapped IPv6 literal must be ACCEPTED as an ordinary v6
+ * (pfb_filter()/is_ipaddr() are untouched by #1412 -- this is coverage of
+ * the validator the handler now relies on, not a behaviour it changes)
+ * against hostile-input shapes: a v4-mapped IPv6 literal must be ACCEPTED
+ * as an ordinary v6
  * address (the retired regex's mixed hex/dotted branch handled this shape
  * too -- the replacement must not regress it), while the SAME literal with a
  * CIDR suffix must be REJECTED, exactly like any other masked input.

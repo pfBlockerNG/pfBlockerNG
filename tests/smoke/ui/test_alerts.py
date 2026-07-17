@@ -889,7 +889,7 @@ def test_ip_unlock_v4_carves_containing_range_relock_restores_and_spares_sibling
 ) -> None:
     """ip_remove=unlock carves a host out of a containing /16; relock restores it.
 
-    True multi-step transition (CLAUDE.md before/after rule): a local IPv4
+    True multi-step transition test: a local IPv4
     feed lists an RFC 2544 benchmarking /16 (unblockable via a single-token
     pfctl delete -- no such exact entry exists in the table) plus a separate
     sibling entry outside it.
