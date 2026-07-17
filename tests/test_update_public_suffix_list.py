@@ -364,17 +364,27 @@ def test_convert_suffix_lowercases_uppercase_ascii() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Hostile-input row H7: oversized whitespace-free junk -- no crash, still
-# one-line-per-suffix
+# Hostile-input row H7 (issue #1306): oversized all-ASCII label skipped like
+# the IDN path, not emitted verbatim -- no crash either way.
 # --------------------------------------------------------------------------- #
 
 
-def test_convert_suffix_emits_oversized_whitespace_free_junk_without_crashing() -> None:
-    junk = "a" * 4096
-    assert upsl.convert_suffix(junk) == junk
+def test_convert_suffix_skips_oversized_all_ascii_label_instead_of_emitting_unchanged() -> None:
+    assert upsl.convert_suffix("a" * 4096) is None
 
 
-def test_render_output_stays_one_suffix_per_line_with_oversized_entry() -> None:
+def test_convert_suffix_keeps_all_ascii_label_at_the_63_octet_boundary() -> None:
+    label = "a" * 63
+    assert upsl.convert_suffix(label) == label
+
+
+def test_convert_suffix_skips_all_ascii_label_one_octet_past_the_boundary() -> None:
+    assert upsl.convert_suffix("a" * 64) is None
+
+
+def test_render_output_stays_one_suffix_per_line_with_an_oversized_body_entry() -> None:
+    # render_output only formats an already-built body list -- it never re-validates
+    # label length, so a pre-validated oversized entry must still render as one line.
     junk = "a" * 4096
     out = upsl.render_output("v", "c", ["ac", junk, "com"])
     assert out.splitlines()[4:] == ["ac", junk, "com"]
@@ -384,3 +394,41 @@ def test_convert_suffix_skips_oversized_non_ascii_label_instead_of_crashing() ->
     # A non-ASCII label past the 63-octet DNS cap makes the stdlib idna codec
     # raise; a malformed line must be skipped like the whitespace ones, never crash.
     assert upsl.convert_suffix("a." + "ä" * 64) is None
+
+
+# --------------------------------------------------------------------------- #
+# Hostile-input row H8 (issue #1306): exotic Unicode blank/format characters
+# skipped like ordinary whitespace -- str.isspace() alone misses category-Cf
+# format characters (zero-width space, BOM, word joiner, ...), letting idna's
+# encoder silently coalesce them away instead of the line being skipped.
+# --------------------------------------------------------------------------- #
+
+
+def test_convert_suffix_skips_line_with_zero_width_space() -> None:
+    # issue #1306 repro: U+200B was previously silently coalesced away by idna's
+    # encoder instead of the line being treated as malformed.
+    assert upsl.convert_suffix("a\u200bb.com") is None
+
+
+def test_convert_suffix_skips_line_with_byte_order_mark() -> None:
+    assert upsl.convert_suffix("a\ufeffb.com") is None
+
+
+def test_convert_suffix_skips_line_with_word_joiner() -> None:
+    # A second category-Cf character (not named in the issue) proves the fix is
+    # category-based, not a hardcoded two-character list.
+    assert upsl.convert_suffix("a\u2060b.com") is None
+
+
+def test_convert_suffix_skips_line_with_non_breaking_space() -> None:
+    # U+00A0 is already str.isspace() -- pins the pre-existing behaviour, no regression.
+    assert upsl.convert_suffix("a\xa0b.com") is None
+
+
+def test_convert_suffix_skips_line_with_ideographic_space() -> None:
+    # U+3000 is already str.isspace() -- pins the pre-existing behaviour, no regression.
+    assert upsl.convert_suffix("a\u3000b.com") is None
+
+
+def test_convert_suffix_skips_empty_line() -> None:
+    assert upsl.convert_suffix("") is None

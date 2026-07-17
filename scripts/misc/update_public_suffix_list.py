@@ -22,8 +22,10 @@ Every non-ASCII label is punycode-encoded via the stdlib 'idna' codec (per-label
 so a mixed ascii+unicode suffix only converts its unicode label(s)); an
 already-ASCII label (including 'xn--' punycode) passes through verbatim -- the
 conversion is therefore idempotent. Labels are lowercased defensively (DNS is
-case-insensitive). A malformed line (internal whitespace after stripping -- PSL
-never ships one) is skipped rather than emitted.
+case-insensitive). A malformed line is skipped rather than emitted: internal
+whitespace or an invisible Unicode format character (zero-width space, BOM, ...)
+after stripping, or any label past the 63-octet DNS cap, ASCII or not -- PSL
+never ships any of these.
 
 Output format
 -------------
@@ -51,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import unicodedata
 import urllib.request
 from pathlib import Path
 
@@ -112,10 +115,25 @@ def extract_icann_lines(lines: list[str]) -> list[str]:
     return lines[begin + 1 : end]
 
 
+def _has_blank_or_format_char(text: str) -> bool:
+    """True if text carries a blank (str.isspace()) or an invisible Unicode format
+    character (category 'Cf': zero-width space, BOM, word joiner, ...) -- isspace()
+    alone misses the latter, letting idna's encoder silently coalesce them away
+    instead of the line being treated as malformed (issue #1306)."""
+    return any(c.isspace() or unicodedata.category(c) == "Cf" for c in text)
+
+
 def _punycode_label(label: str) -> str:
     """Punycode-encode a label iff it holds non-ASCII; an ASCII label (including an
-    already-punycode 'xn--' one) passes through verbatim -- makes conversion idempotent."""
+    already-punycode 'xn--' one) passes through verbatim -- makes conversion idempotent.
+
+    Raises UnicodeError for either shape past the 63-octet DNS label cap, so both
+    paths are skipped identically by the caller's 'except UnicodeError' (issue #1306:
+    an ASCII label used to bypass the cap entirely via the isascii() short-circuit).
+    """
     if label.isascii():
+        if len(label) > 63:
+            raise UnicodeError(f"ASCII label exceeds the 63-octet DNS cap: {len(label)} octets")
         return label.lower()
     return label.encode("idna").decode("ascii").lower()
 
@@ -125,19 +143,20 @@ def convert_suffix(line: str) -> str | None:
 
     Skips blank lines, '//' comments, '*.' wildcard rules, and '!' exception rules
     (owner decision, issue #1272 -- no parser/format extension for either), plus any
-    malformed line carrying internal whitespace or a label the idna codec rejects
-    (past the 63-octet DNS cap) -- PSL never ships either. A dot-less bare TLD
-    passes through unchanged (issue #1068: consumers key it under its own full
-    value).
+    malformed line carrying whitespace/format characters (see _has_blank_or_format_char)
+    or a label the idna codec rejects (past the 63-octet DNS cap, ASCII or not --
+    issue #1306) -- PSL never ships either. A dot-less bare TLD passes through
+    unchanged (issue #1068: consumers key it under its own full value).
     """
     if not line or line.startswith("//") or line.startswith("*.") or line.startswith("!"):
         return None
-    if any(c.isspace() for c in line):
+    if _has_blank_or_format_char(line):
         return None
     try:
         return ".".join(_punycode_label(label) for label in line.split("."))
     except UnicodeError:
-        # idna refuses a label past the 63-octet DNS cap -- malformed, skip it.
+        # idna (or our own length check) refuses a label past the 63-octet DNS cap --
+        # malformed, skip it.
         return None
 
 

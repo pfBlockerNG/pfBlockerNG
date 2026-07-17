@@ -51,6 +51,7 @@ def test_shipped_pfb_py_hsts_is_sorted_ascii_and_deduplicated() -> None:
 # --------------------------------------------------------------------------- #
 
 _OVERSIZED_NON_ASCII_LABEL = "ä" * 64  # > 63 octets once idna-encoded -- must be skipped, not crash
+_OVERSIZED_ASCII_LABEL = "a" * 64  # issue #1306: all-ASCII past the 63-octet cap -- must be skipped too
 
 _FAKE_HSTS_JSON = (
     "// Copyright 2012 The Chromium Authors\n"
@@ -65,6 +66,7 @@ _FAKE_HSTS_JSON = (
     '    {"name": "no-mode-field.example"},\n'
     '    {"name": "caf\\u00e9.example", "mode": "force-https"},\n'
     f'    {{"name": "a.{_OVERSIZED_NON_ASCII_LABEL}.example", "mode": "force-https"}},\n'
+    f'    {{"name": "{_OVERSIZED_ASCII_LABEL}.example", "mode": "force-https"}},\n'
     '    {"name": "bad name.example", "mode": "force-https"},\n'
     '    {"name": "aaa.example", "mode": "force-https"}\n'
     "  ]\n"
@@ -94,7 +96,7 @@ def test_strip_json_comments_drops_plain_and_indented_comment_lines() -> None:
 
 def test_parse_entries_parses_cleanly_after_comment_stripping() -> None:
     entries = _fake_entries()
-    assert len(entries) == 9
+    assert len(entries) == 10
 
 
 # --------------------------------------------------------------------------- #
@@ -154,6 +156,31 @@ def test_build_body_excludes_oversized_idn_entry() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Coverage matrix row 7b (issue #1306): oversized all-ASCII label skipped like
+# the IDN path, not emitted verbatim.
+# --------------------------------------------------------------------------- #
+
+
+def test_normalise_name_skips_oversized_all_ascii_label_instead_of_emitting_unchanged() -> None:
+    assert uhpl.normalise_name(_OVERSIZED_ASCII_LABEL + ".example") is None
+
+
+def test_normalise_name_keeps_all_ascii_label_at_the_63_octet_boundary() -> None:
+    name = "a" * 63 + ".example"
+    assert uhpl.normalise_name(name) == name
+
+
+def test_normalise_name_skips_all_ascii_label_one_octet_past_the_boundary() -> None:
+    assert uhpl.normalise_name("a" * 64 + ".example") is None
+
+
+def test_build_body_excludes_oversized_ascii_entry() -> None:
+    body = uhpl.build_body(_fake_entries())
+    assert not any(_OVERSIZED_ASCII_LABEL in name for name in body)
+    assert "aaa.example" in body
+
+
+# --------------------------------------------------------------------------- #
 # Coverage matrix row 8: whitespace-carrying name skipped
 # --------------------------------------------------------------------------- #
 
@@ -166,6 +193,44 @@ def test_build_body_excludes_whitespace_carrying_entry() -> None:
     body = uhpl.build_body(_fake_entries())
     assert "bad name.example" not in body
     assert not any(" " in name for name in body)
+
+
+# --------------------------------------------------------------------------- #
+# Coverage matrix row 8b (issue #1306): exotic Unicode blank/format characters
+# skipped like ordinary whitespace -- str.isspace() alone misses category-Cf
+# format characters (zero-width space, BOM, word joiner, ...), letting idna's
+# encoder silently coalesce them away instead of the name being skipped.
+# --------------------------------------------------------------------------- #
+
+
+def test_normalise_name_skips_name_with_zero_width_space() -> None:
+    # issue #1306 repro: U+200B was previously silently coalesced away by idna's
+    # encoder instead of the name being treated as malformed.
+    assert uhpl.normalise_name("a\u200bb.example") is None
+
+
+def test_normalise_name_skips_name_with_byte_order_mark() -> None:
+    assert uhpl.normalise_name("a\ufeffb.example") is None
+
+
+def test_normalise_name_skips_name_with_word_joiner() -> None:
+    # A second category-Cf character (not named in the issue) proves the fix is
+    # category-based, not a hardcoded two-character list.
+    assert uhpl.normalise_name("a\u2060b.example") is None
+
+
+def test_normalise_name_skips_name_with_non_breaking_space() -> None:
+    # U+00A0 is already str.isspace() -- pins the pre-existing behaviour, no regression.
+    assert uhpl.normalise_name("a\xa0b.example") is None
+
+
+def test_normalise_name_skips_name_with_ideographic_space() -> None:
+    # U+3000 is already str.isspace() -- pins the pre-existing behaviour, no regression.
+    assert uhpl.normalise_name("a\u3000b.example") is None
+
+
+def test_normalise_name_skips_empty_name() -> None:
+    assert uhpl.normalise_name("") is None
 
 
 # --------------------------------------------------------------------------- #

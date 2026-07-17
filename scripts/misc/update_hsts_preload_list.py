@@ -27,9 +27,9 @@ Conversion
 ----------
 Mirrors update_public_suffix_list.py: every non-ASCII label is punycode-encoded
 via the stdlib 'idna' codec (per-label); an already-ASCII label passes through
-verbatim (idempotent). Names are lowercased. A malformed name (whitespace
-anywhere) or one whose idna encoding fails (a label past the 63-octet DNS cap)
-is skipped rather than emitted.
+verbatim (idempotent). Names are lowercased. A malformed name is skipped rather
+than emitted: whitespace or an invisible Unicode format character (zero-width
+space, BOM, ...) anywhere, or a label past the 63-octet DNS cap, ASCII or not.
 
 Output format
 -------------
@@ -58,6 +58,7 @@ import base64
 import binascii
 import json
 import sys
+import unicodedata
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -128,10 +129,25 @@ def extract_names(entries: list[dict[str, object]]) -> list[str]:
     return names
 
 
+def _has_blank_or_format_char(text: str) -> bool:
+    """True if text carries a blank (str.isspace()) or an invisible Unicode format
+    character (category 'Cf': zero-width space, BOM, word joiner, ...) -- isspace()
+    alone misses the latter, letting idna's encoder silently coalesce them away
+    instead of the name being treated as malformed (issue #1306)."""
+    return any(c.isspace() or unicodedata.category(c) == "Cf" for c in text)
+
+
 def _punycode_label(label: str) -> str:
     """Punycode-encode a label iff it holds non-ASCII; an ASCII label (including an
-    already-punycode 'xn--' one) passes through verbatim -- makes conversion idempotent."""
+    already-punycode 'xn--' one) passes through verbatim -- makes conversion idempotent.
+
+    Raises UnicodeError for either shape past the 63-octet DNS label cap, so both
+    paths are skipped identically by the caller's 'except UnicodeError' (issue #1306:
+    an ASCII label used to bypass the cap entirely via the isascii() short-circuit).
+    """
     if label.isascii():
+        if len(label) > 63:
+            raise UnicodeError(f"ASCII label exceeds the 63-octet DNS cap: {len(label)} octets")
         return label.lower()
     return label.encode("idna").decode("ascii").lower()
 
@@ -139,16 +155,17 @@ def _punycode_label(label: str) -> str:
 def normalise_name(name: str) -> str | None:
     """Convert one HSTS entry name to its stored form, or None to skip it.
 
-    Skips a name carrying whitespace anywhere (leading/trailing/internal --
-    Chromium never ships one) and a label the idna codec rejects (past the
-    63-octet DNS cap).
+    Skips a name carrying whitespace/format characters anywhere (see
+    _has_blank_or_format_char -- Chromium never ships one) and a label the idna
+    codec rejects (past the 63-octet DNS cap, ASCII or not -- issue #1306).
     """
-    if not name or any(c.isspace() for c in name):
+    if not name or _has_blank_or_format_char(name):
         return None
     try:
         return ".".join(_punycode_label(label) for label in name.split("."))
     except UnicodeError:
-        # idna refuses a label past the 63-octet DNS cap -- malformed, skip it.
+        # idna (or our own length check) refuses a label past the 63-octet DNS cap --
+        # malformed, skip it.
         return None
 
 
