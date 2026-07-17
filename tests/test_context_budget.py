@@ -288,7 +288,7 @@ def _settings_ups(capsule: str) -> str:
     )
 
 
-def test_extract_capsules_measures_payload_bytes() -> None:
+def test_extract_capsules_returns_event_text_and_measures_bytes() -> None:
     # extract_capsules now returns the capsule TEXT per event, not a precomputed
     # byte length — byte-length is derived by the caller where it matters.
     capsules, errors = ccb.extract_capsules(_settings("abc"))
@@ -387,6 +387,45 @@ def test_check_parity_segments_split_only_on_middle_dot_not_colon(tmp_path: Path
     violations = ccb.check_parity(root)
     assert len(violations) == 1
     assert "alpha: beta" in violations[0]
+
+
+def test_check_parity_overlong_label_flags_violation(tmp_path: Path) -> None:
+    # Everything before the first ": " is unchecked prose — without a bound it can
+    # smuggle arbitrary directives past the parity gate up to the capsule budget.
+    root = tmp_path
+    _write(root, "AGENTS.md", _PARITY_AGENTS)
+    label = "An alien preamble smuggled ahead of the first colon-space " + "x" * 40
+    _write(root, ".claude/settings.json", _settings_ups(label + ": genuine fork before building."))
+    violations = ccb.check_parity(root)
+    assert len(violations) == 1
+    assert "label" in violations[0]
+
+
+def test_check_parity_label_at_bound_passes(tmp_path: Path) -> None:
+    root = tmp_path
+    _write(root, "AGENTS.md", _PARITY_AGENTS)
+    _write(root, ".claude/settings.json", _settings_ups("D" * 80 + ": genuine fork before building."))
+    assert ccb.check_parity(root) == []
+
+
+def test_check_parity_empty_segment_flags_violation(tmp_path: Path) -> None:
+    # An empty string is a substring of everything — a trailing " · " (or a
+    # segments-free "Label: " capsule) must not pass as vacuously verbatim.
+    root = tmp_path
+    _write(root, "AGENTS.md", _PARITY_AGENTS)
+    _write(root, ".claude/settings.json", _settings_ups("DISCIPLINE: genuine fork before building. ·  "))
+    violations = ccb.check_parity(root)
+    assert len(violations) == 1
+    assert "empty" in violations[0]
+
+
+def test_check_parity_label_only_capsule_flags_violation(tmp_path: Path) -> None:
+    root = tmp_path
+    _write(root, "AGENTS.md", _PARITY_AGENTS)
+    _write(root, ".claude/settings.json", _settings_ups("DISCIPLINE: "))
+    violations = ccb.check_parity(root)
+    assert len(violations) == 1
+    assert "empty" in violations[0]
 
 
 def test_check_parity_live_repository_user_prompt_submit_clean() -> None:

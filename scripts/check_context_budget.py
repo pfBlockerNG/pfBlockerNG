@@ -19,8 +19,9 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 
 CONDITIONAL: in --staged / --diff mode the checks run IF AND ONLY IF the change
 touches a context surface (AGENTS.md, CLAUDE.md, .agents/policy/,
-.agents/context/, .claude/settings.json, any nested CLAUDE.md/AGENTS.md, or this
-checker); otherwise it reports the skip and exits 0. --all checks unconditionally.
+.agents/context/, docs/misc/, .claude/rules/, .claude/settings.json, any nested
+CLAUDE.md/AGENTS.md, or this checker); otherwise it reports the skip and exits 0.
+--all checks unconditionally.
 
 Usage:
     check_context_budget.py --staged        # pre-commit: staged diff decides, index content checked
@@ -46,6 +47,9 @@ ADAPTER_BUDGET = 8_192
 POLICY_BUDGET = 12_288
 STUB_BUDGET = 400
 CAPSULE_BUDGET = 1_800
+# The parity label (everything before the first ": ") is the one uncheckable part of
+# the UserPromptSubmit capsule; the bound keeps it a label, not a smuggling channel.
+PARITY_LABEL_MAX = 80
 
 # Grandfathered ratchet caps for files predating the taxonomy budgets: they may
 # shrink toward POLICY_BUDGET, never grow past their cap.
@@ -239,7 +243,8 @@ def _normalize(text: str) -> str:
 
 def check_parity(root: Path) -> list[str]:
     """Every UserPromptSubmit capsule's `label: seg · seg · ...` segments must each be a
-    normalized substring of AGENTS.md — the capsule paraphrases the bootstrap, never drifts."""
+    non-empty normalized substring of AGENTS.md, with the unchecked label bounded to
+    PARITY_LABEL_MAX chars — the capsule quotes the bootstrap verbatim, never drifts."""
     settings = root / SETTINGS
     agents = root / "AGENTS.md"
     if not settings.is_file() or not agents.is_file():
@@ -250,11 +255,19 @@ def check_parity(root: Path) -> list[str]:
     for event, text in capsules:
         if event != "UserPromptSubmit":
             continue
-        _label, sep, remainder = text.partition(": ")
+        label, sep, remainder = text.partition(": ")
         if not sep:
             violations.append(f"{SETTINGS}: UserPromptSubmit capsule has no '<label>: ' shape")
             continue
+        if len(label) > PARITY_LABEL_MAX:
+            violations.append(
+                f"{SETTINGS}: UserPromptSubmit capsule label {len(label)} chars > {PARITY_LABEL_MAX}"
+                " — invariant text belongs in the parity-checked segments"
+            )
         for segment in remainder.split(" · "):
+            if not _normalize(segment).strip():
+                violations.append(f"{SETTINGS}: UserPromptSubmit capsule has an empty parity segment")
+                continue
             if _normalize(segment) not in agents_norm:
                 snippet = segment if len(segment) <= 60 else segment[:60] + "..."
                 violations.append(f'{SETTINGS}: UserPromptSubmit capsule segment not in AGENTS.md: "{snippet}"')
