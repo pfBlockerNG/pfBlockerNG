@@ -9,9 +9,9 @@ policy annex. A nearer `AGENTS.md` or `AGENTS.override.md` may add subtree rules
 but it does not weaken the canonical policy unless it says so explicitly.
 
 Do not restate shared rules in this file. Shared behavior changes belong in
-`CLAUDE.md`, the referenced annexes, or the detailed `.agents/skills/` (skill
-content, canonical — `.claude/skills/` symlinks onto it for Claude Code's own
-discovery path) and `.claude/workflows/` sources. This file contains only the
+`CLAUDE.md`, the referenced annexes, or the detailed `.agents/skills/` sources
+(skill content, canonical — `.claude/skills/` symlinks onto it for Claude Code's
+own discovery path). This file contains only the
 Codex runtime mapping, so both vendors consume one maintained procedure
 without a synchronization pass.
 

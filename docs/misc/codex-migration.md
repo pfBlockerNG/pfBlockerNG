@@ -11,7 +11,7 @@ workflow edits.
 | --- | --- | --- | --- |
 | Repository policy | `CLAUDE.md` plus its linked annexes | `CLAUDE.md` loads directly | `AGENTS.md` loads automatically, requires the canonical policy, and maps runtime nouns |
 | Task procedures | `.claude/skills/*/SKILL.md` | Direct skill discovery | Same-name `.agents/skills/*/SKILL.md` adapter loads the detailed source |
-| Workflow schemas/prompts | `.claude/workflows/*.js` | Claude `Workflow` runtime | Same-name `.agents/skills/*/SKILL.md` adapter plus Codex subagents |
+| Workflow schemas/prompts | *(retired 2026-07-17, #1431)* — `.agents/policy/workflow.md` + `landing.md` | Fresh native sub-agents | Codex subagents per `.codex/agents/` |
 | Specialist roles | Planner/implementer/verifier declarations plus `.agents/model-tiers.conf` | Claude agents using `claude-fable-5` / `claude-opus-4-8` / `claude-sonnet-5` | Codex role TOMLs using `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` |
 | Lifecycle enforcement | Shared repository scripts and Git hooks | `.claude/settings.json` | `.codex/hooks.json` and `.codex/config.toml` |
 
@@ -35,9 +35,9 @@ Run:
 sh scripts/agent/check-agent-config-parity.sh
 ```
 
-The checker requires every canonical `.claude/skills/*/SKILL.md` and
-`.claude/workflows/*.js` source to have a same-name Codex adapter whose relative
-reference resolves to that exact file. It also rejects stale adapters whose
+The checker requires every canonical `.claude/skills/*/SKILL.md` source (the
+committed workflow inventory retired with #1431 and may be empty) to have a
+same-name Codex adapter whose relative reference resolves to that exact file. It also rejects stale adapters whose
 canonical source was deleted or renamed. The pre-commit hook runs it whenever
 either vendor's agent configuration is staged, including deletions; the
 shellspec suite also checks the real repository inventory in CI.

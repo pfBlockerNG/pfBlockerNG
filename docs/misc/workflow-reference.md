@@ -348,9 +348,10 @@ correctly attributed but read *Unverified*).
 
 What the calling session does with the fixed-field records a delegated implementer/verifier
 returns (the handoff + gate record of CLAUDE.md "The delegation contract").
-**Validate, don't re-derive**: the workflow's independent
+**Validate, don't re-derive**: the independent
 verifier just re-ran the gates, re-executed the red proof, and read the full diff, with
-pasted evidence — a third derivation is redundant spend.
+pasted evidence — that mandatory independent gate always executes; the calling session
+skips only a redundant third derivation on top of it.
 
 - Every fixed field non-empty and internally consistent — a missing/empty field rejects
   the record, never a judgment call.
