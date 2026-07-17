@@ -130,6 +130,7 @@ SEEDED_FILES = (FEED_A, FEED_B, FEED_PERMIT, FEED_MATCH, FEED_ET, FEED_GEO, ALIA
 class SeededFileBackup:
     path: str
     backup_path: str | None
+    kind: str
 
 
 def _seeded_file_kind(vm: Any, path: str) -> str:
@@ -147,6 +148,34 @@ def _seeded_file_kind(vm: Any, path: str) -> str:
     kind = result.stdout.strip()
     assert kind in {"absent", "file", "symlink", "unsupported"}, f"unexpected seeded path type for {path!r}: {kind!r}"
     return kind
+
+
+def _reconcile_seeded_restore(
+    vm: Any,
+    backup: SeededFileBackup,
+    exc: Exception,
+    action: str,
+) -> str | None:
+    assert backup.backup_path is not None
+    try:
+        path_kind = _seeded_file_kind(vm, backup.path)
+        backup_kind = _seeded_file_kind(vm, backup.backup_path)
+    except Exception as inspect_exc:
+        return (
+            f"{action} {backup.path!r} from {backup.backup_path!r} could not be reconciled after {exc}: "
+            f"inspection raised unexpectedly: {inspect_exc}; recorded backup retained if present"
+        )
+    if path_kind == backup.kind and backup_kind == "absent":
+        return None
+    recovery = (
+        f"recorded backup retained for recovery at {backup.backup_path!r}"
+        if backup_kind == backup.kind
+        else f"recorded backup unavailable for recovery at {backup.backup_path!r}"
+    )
+    return (
+        f"{action} {backup.path!r} from {backup.backup_path!r} unresolved after {exc}: "
+        f"path={path_kind} backup={backup_kind} expected={backup.kind}; {recovery}"
+    )
 
 
 def _restore_seeded_files(vm: Any, backups: list[SeededFileBackup]) -> list[str]:
@@ -167,7 +196,9 @@ def _restore_seeded_files(vm: Any, backups: list[SeededFileBackup]) -> list[str]
         try:
             restore = vm.ssh("mv", backup.backup_path, backup.path, timeout=15)
         except Exception as exc:
-            errors.append(f"restore seeded path {backup.path!r} from {backup.backup_path!r} raised unexpectedly: {exc}")
+            error = _reconcile_seeded_restore(vm, backup, exc, "restore seeded path")
+            if error is not None:
+                errors.append(error)
             continue
         if restore.returncode != 0:
             errors.append(
@@ -186,13 +217,13 @@ def _backup_seeded_files(vm: Any, paths: tuple[str, ...]) -> list[SeededFileBack
     planned: list[SeededFileBackup] = []
     for path, kind in kinds:
         if kind == "absent":
-            planned.append(SeededFileBackup(path, None))
+            planned.append(SeededFileBackup(path, None, kind))
             continue
         while True:
             backup_path = f"{path}.pfb-alerts-backup-{uuid.uuid4().hex}"
             if _seeded_file_kind(vm, backup_path) == "absent":
                 break
-        planned.append(SeededFileBackup(path, backup_path))
+        planned.append(SeededFileBackup(path, backup_path, kind))
 
     current: SeededFileBackup | None = None
     try:
@@ -216,10 +247,14 @@ def _backup_seeded_files(vm: Any, paths: tuple[str, ...]) -> list[SeededFileBack
                     try:
                         restore = vm.ssh("mv", current.backup_path, current.path, timeout=15)
                     except Exception as restore_exc:
-                        rollback_errors.append(
-                            f"restore ambiguous seeded path {current.path!r} from {current.backup_path!r} "
-                            f"raised unexpectedly: {restore_exc}"
+                        error = _reconcile_seeded_restore(
+                            vm,
+                            current,
+                            restore_exc,
+                            "restore ambiguous seeded path",
                         )
+                        if error is not None:
+                            rollback_errors.append(error)
                     else:
                         if restore.returncode != 0:
                             rollback_errors.append(

@@ -7,6 +7,7 @@ import os
 import shlex
 import stat
 import subprocess
+import traceback
 import uuid
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -249,9 +250,19 @@ def test_fixture_preserves_body_error_when_cleanup_also_fails(tmp_path: Path, mo
     fixture, _events = _fixture_harness(monkeypatch, paths, "post_yield_cleanup")
     next(fixture)
 
-    with pytest.raises(RuntimeError, match="post_yield") as caught:
-        fixture.throw(RuntimeError("post_yield"))
+    original: RuntimeError | None = None
+    try:
+        raise RuntimeError("post_yield")
+    except RuntimeError as exc:
+        original = exc
+    assert original is not None
+    original_tail = traceback.extract_tb(original.__traceback__)[-1]
 
+    with pytest.raises(RuntimeError, match="post_yield") as caught:
+        fixture.throw(original)
+
+    assert caught.value is original
+    assert traceback.extract_tb(caught.value.__traceback__)[-1] == original_tail
     assert any("teardown" in note for note in getattr(caught.value, "__notes__", []))
     assert _snapshots(paths) == before
 
@@ -334,6 +345,26 @@ def test_fixture_backup_timeout_after_ambiguous_move_restores_all_files(tmp_path
     assert set(tmp_path.iterdir()) == {first, second}
 
 
+def test_ambiguous_backup_rollback_timeout_after_success_is_confirmed(tmp_path: Path) -> None:
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_bytes(b"first original\n")
+    second.write_bytes(b"second original\n")
+    before = _snapshots([first, second])
+
+    def raise_after(remote: tuple[str, ...]) -> bool:
+        return len(remote) >= 3 and remote[0] == "mv" and (remote[1] == str(second) or remote[2] == str(second))
+
+    vm = _WrappedVM(_LocalVM(), raise_after=raise_after)
+
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        alerts._backup_seeded_files(vm, (str(first), str(second)))
+
+    assert getattr(caught.value, "__notes__", []) == []
+    assert _snapshots([first, second]) == before
+    assert set(tmp_path.iterdir()) == {first, second}
+
+
 def test_restore_remove_failure_keeps_backup_at_recorded_path(tmp_path: Path) -> None:
     target = tmp_path / "seed.txt"
     target.write_bytes(b"original\n")
@@ -404,6 +435,63 @@ def test_restore_timeout_keeps_affected_backup_and_continues_full_matrix(tmp_pat
         for backup in backups
         if backup.backup_path is not None
     )
+
+
+def test_restore_timeout_after_success_confirms_exact_original(tmp_path: Path) -> None:
+    paths, live_target, dangling_target = _matrix_paths(tmp_path)
+    _create_matrix(paths, live_target, dangling_target)
+    before = _snapshots(paths)
+    backups = alerts._backup_seeded_files(_LocalVM(), tuple(map(str, paths)))
+    affected = backups[-1]
+    _seed_replacements(paths)
+    vm = _WrappedVM(
+        _LocalVM(),
+        raise_after=lambda remote: (
+            len(remote) >= 3 and remote[0] == "mv" and remote[1] == affected.backup_path and remote[2] == affected.path
+        ),
+    )
+
+    errors = alerts._restore_seeded_files(vm, backups)
+
+    assert errors == []
+    assert _snapshots(paths) == before
+    assert all(not os.path.lexists(backup.backup_path) for backup in backups if backup.backup_path is not None)
+
+
+@pytest.mark.parametrize("destination_kind", ["absent", "unsupported"])
+def test_restore_timeout_with_unresolved_state_retains_exact_backup(
+    tmp_path: Path,
+    destination_kind: str,
+) -> None:
+    paths, live_target, dangling_target = _matrix_paths(tmp_path)
+    _create_matrix(paths, live_target, dangling_target)
+    before = _snapshots(paths)
+    backups = alerts._backup_seeded_files(_LocalVM(), tuple(map(str, paths)))
+    affected = backups[-1]
+    affected_backup = Path(affected.backup_path or "")
+    _seed_replacements(paths)
+
+    def raise_after(remote: tuple[str, ...]) -> bool:
+        if not (
+            len(remote) >= 3 and remote[0] == "mv" and remote[1] == affected.backup_path and remote[2] == affected.path
+        ):
+            return False
+        Path(affected.path).rename(affected_backup)
+        if destination_kind == "unsupported":
+            Path(affected.path).mkdir()
+        return True
+
+    errors = alerts._restore_seeded_files(_WrappedVM(_LocalVM(), raise_after=raise_after), backups)
+
+    assert len(errors) == 1
+    assert affected.path in errors[0]
+    assert "unresolved" in errors[0]
+    assert f"path={destination_kind}" in errors[0]
+    assert "backup=symlink" in errors[0]
+    assert "retained for recovery" in errors[0]
+    assert "timed out" in errors[0]
+    assert _snapshot(affected_backup) == before[affected.path]
+    assert _snapshots(paths[:-1]) == {path: state for path, state in before.items() if path != affected.path}
 
 
 @pytest.mark.parametrize("unsupported", ["directory", "fifo", "device"])
