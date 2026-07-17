@@ -28,9 +28,10 @@ Conversion
 Mirrors update_public_suffix_list.py: every non-ASCII label is punycode-encoded
 via the stdlib 'idna' codec (per-label); an already-ASCII label passes through
 verbatim (idempotent). Names are lowercased. A malformed name is skipped rather
-than emitted: whitespace or an RFC 3454 Table B.1 "commonly mapped to nothing"
-character (zero-width space, BOM, variation selectors, ...) anywhere, or a
-label past the 63-octet DNS cap, ASCII or not.
+than emitted: whitespace, an RFC 3454 Table B.1 "commonly mapped to nothing"
+character (zero-width space, BOM, variation selectors, ...) anywhere, a
+category-Cc control character (NUL, DEL, ...), or a label past the 63-octet
+DNS cap, ASCII or not.
 
 Output format
 -------------
@@ -60,6 +61,7 @@ import binascii
 import json
 import stringprep
 import sys
+import unicodedata
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -131,14 +133,17 @@ def extract_names(entries: list[dict[str, object]]) -> list[str]:
 
 
 def _has_blank_or_ignorable_char(text: str) -> bool:
-    """True if text carries a blank (str.isspace()) or an RFC 3454 Table B.1
+    """True if text carries a blank (str.isspace()), an RFC 3454 Table B.1
     "commonly mapped to nothing" character (zero-width space, BOM, word joiner,
     variation selectors, ...) -- the exact predicate the stdlib idna codec's
     nameprep step uses internally (stringprep.in_table_b1) to silently strip these
-    before punycode-encoding a label. A category-'Cf'-only check misses several
+    before punycode-encoding a label -- or a category-Cc control character (NUL,
+    DEL, ...): an ASCII-range Cc char takes the isascii() passthrough branch in
+    _punycode_label untouched, so it would otherwise be emitted verbatim instead
+    of being skipped (issue #1455). A category-'Cf'-only check misses several
     Table B.1 members that are category Mn/Pd (issue #1306 follow-up), letting
     idna's encoder silently coalesce them away instead of the name being skipped."""
-    return any(c.isspace() or stringprep.in_table_b1(c) for c in text)
+    return any(c.isspace() or stringprep.in_table_b1(c) or unicodedata.category(c) == "Cc" for c in text)
 
 
 def _punycode_label(label: str) -> str:

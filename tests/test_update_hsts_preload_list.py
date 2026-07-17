@@ -260,6 +260,29 @@ def test_normalise_name_skips_empty_name() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Coverage matrix row 8c (issue #1455): category-Cc control characters skipped,
+# not emitted verbatim -- an ASCII-range Cc char (e.g. NUL, DEL) is neither
+# str.isspace() nor stringprep.in_table_b1(), so it takes the isascii()
+# passthrough branch in _punycode_label untouched instead of being rejected.
+# --------------------------------------------------------------------------- #
+
+
+def test_normalise_name_skips_name_with_nul() -> None:
+    # issue #1455 repro: raw NUL was previously emitted verbatim into pfb_py_hsts.txt.
+    assert uhpl.normalise_name("a\x00b.example") is None
+
+
+def test_normalise_name_skips_name_with_del() -> None:
+    assert uhpl.normalise_name("a\x7fb.example") is None
+
+
+def test_normalise_name_skips_name_with_bell() -> None:
+    # U+0007 (BEL) -- not one of the two codepoints named in the issue, proves
+    # the fix catches the whole category-Cc class, not a hardcoded pair.
+    assert uhpl.normalise_name("a\x07b.example") is None
+
+
+# --------------------------------------------------------------------------- #
 # Coverage matrix row 9: header exact 4-line shape incl. License + SYNCED date
 # --------------------------------------------------------------------------- #
 
