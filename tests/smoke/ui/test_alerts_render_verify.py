@@ -56,8 +56,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import subprocess
+import sys
 import time
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -121,6 +124,84 @@ ALIAS_S8_A = f"{ALIASTABLES_DIR}/pfB_RVAliasA_v4.txt"
 ALIAS_S8_Z = f"{ALIASTABLES_DIR}/pfB_RVAliasZ_v4.txt"
 
 SEEDED_FILES = (FEED_A, FEED_B, FEED_PERMIT, FEED_MATCH, FEED_ET, FEED_GEO, ALIAS_S8_A, ALIAS_S8_Z)
+
+
+@dataclass(frozen=True)
+class SeededFileBackup:
+    path: str
+    backup_path: str | None
+
+
+def _seeded_file_kind(vm: Any, path: str) -> str:
+    quoted = shlex.quote(path)
+    result = vm.ssh(
+        f"if [ -L {quoted} ]; then printf symlink; "
+        f"elif [ -f {quoted} ]; then printf file; "
+        f"elif [ -e {quoted} ]; then printf unsupported; "
+        "else printf absent; fi",
+        timeout=15,
+    )
+    assert result.returncode == 0, (
+        f"failed to inspect seeded path {path!r}: rc={result.returncode} stderr={result.stderr!r}"
+    )
+    kind = result.stdout.strip()
+    assert kind in {"absent", "file", "symlink", "unsupported"}, f"unexpected seeded path type for {path!r}: {kind!r}"
+    return kind
+
+
+def _restore_seeded_files(vm: Any, backups: list[SeededFileBackup]) -> list[str]:
+    errors: list[str] = []
+    for backup in reversed(backups):
+        remove = vm.ssh("rm", "-f", backup.path, timeout=15)
+        if remove.returncode != 0:
+            errors.append(
+                f"remove seeded replacement {backup.path!r} failed: rc={remove.returncode} stderr={remove.stderr!r}"
+            )
+            continue
+        if backup.backup_path is None:
+            continue
+        restore = vm.ssh("mv", backup.backup_path, backup.path, timeout=15)
+        if restore.returncode != 0:
+            errors.append(
+                f"restore seeded path {backup.path!r} from {backup.backup_path!r} failed: "
+                f"rc={restore.returncode} stderr={restore.stderr!r}"
+            )
+    return errors
+
+
+def _backup_seeded_files(vm: Any, paths: tuple[str, ...]) -> list[SeededFileBackup]:
+    kinds = [(path, _seeded_file_kind(vm, path)) for path in paths]
+    unsupported = [path for path, kind in kinds if kind == "unsupported"]
+    assert not unsupported, f"unsupported seeded path type; refusing mutation: {unsupported!r}"
+
+    backups: list[SeededFileBackup] = []
+    planned: list[SeededFileBackup] = []
+    for path, kind in kinds:
+        if kind == "absent":
+            planned.append(SeededFileBackup(path, None))
+            continue
+        while True:
+            backup_path = f"{path}.pfb-alerts-backup-{uuid.uuid4().hex}"
+            if _seeded_file_kind(vm, backup_path) == "absent":
+                break
+        planned.append(SeededFileBackup(path, backup_path))
+
+    try:
+        for backup in planned:
+            if backup.backup_path is not None:
+                move = vm.ssh("mv", backup.path, backup.backup_path, timeout=15)
+                assert move.returncode == 0, (
+                    f"backup seeded path {backup.path!r} to {backup.backup_path!r} failed: "
+                    f"rc={move.returncode} stderr={move.stderr!r}"
+                )
+            backups.append(backup)
+    except AssertionError as exc:
+        rollback_errors = _restore_seeded_files(vm, backups)
+        detail = "\n".join([str(exc), *rollback_errors])
+        raise AssertionError(f"seeded path backup failed; rollback attempted:\n{detail}") from exc
+
+    return backups
+
 
 # --- ip_block.log scenarios (S1-S10) -- RFC 5737/3849 addresses. S3 and S8
 # deliberately pair an exact address with a longer textual prefix collision;
@@ -572,11 +653,19 @@ def _seed_feed_files(vm: helpers.SmokeVM) -> None:
 @pytest.fixture(scope="module")
 def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[str, dict[str, Capture]]]:
     vm = smoke_vm
-    error_log_guard = PhpErrorLogGuard(vm)
+    baseline: dict[str, Capture] = {}
+    captures: dict[str, Capture] = {}
+    seeded_backups: list[SeededFileBackup] = []
+    orig_sizes: dict[str, str] = {}
+    original_dnsbl_cfg: str | None = None
+    error_log_guard: PhpErrorLogGuard | None = None
+    error_log_snapshotted = False
 
-    original_dnsbl_cfg = helpers.config_get(vm, CFG_DNSBL_ENABLE)
-    orig_sizes = {
-        path: _ensure_log(vm, path)
+    try:
+        seeded_backups = _backup_seeded_files(vm, SEEDED_FILES)
+
+        error_log_guard = PhpErrorLogGuard(vm)
+        original_dnsbl_cfg = helpers.config_get(vm, CFG_DNSBL_ENABLE)
         for path in (
             IP_BLOCK_LOG,
             IP_PERMIT_LOG,
@@ -586,33 +675,21 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
             UNIFIED_LOG,
             PY_DATA_FILE,
             PY_ZONE_FILE,
-        )
-    }
+        ):
+            orig_sizes[path] = _ensure_log(vm, path)
 
-    # DNSBL must be EFFECTIVELY enabled for the alert view's DNSBL Python panel to
-    # render at all: the panel gate reads the runtime $pfb['dnsbl'], which pfb_global
-    # force-disables ("DNSBL disabled: no VIP configured") when no sinkhole VIP
-    # exists -- the config toggle alone is not enough (first live run proved it:
-    # every D-scenario row was absent). Seed the VIP first (idempotent, the standard
-    # harness fixture), then flip the toggle. The Block/Permit/Match panels are NOT
-    # gated by this toggle.
-    helpers.ensure_dnsbl_vip(vm)
-    helpers.set_dnsbl_enabled(vm, True)
-
-    baseline: dict[str, Capture] = {}
-    captures: dict[str, Capture] = {}
-
-    try:
-        # A prior hard-killed run (VM SIGKILL mid-module) can leave seeded
-        # feed/aliastable files on disk because teardown never ran. Clear them FIRST
-        # so the baseline before-state is provably clean and symmetric with teardown.
-        # (Appended log lines from such a crash cannot be
-        # excised without the lost original sizes; the baseline token assertion below
-        # stays the loud guard for that case.)
-        rm = vm.ssh("rm -f " + " ".join(SEEDED_FILES), timeout=15)
-        assert rm.returncode == 0, f"pre-baseline cleanup of seeded files failed: {rm.stderr!r}"
+        # DNSBL must be EFFECTIVELY enabled for the alert view's DNSBL Python panel to
+        # render at all: the panel gate reads the runtime $pfb['dnsbl'], which pfb_global
+        # force-disables ("DNSBL disabled: no VIP configured") when no sinkhole VIP
+        # exists -- the config toggle alone is not enough (first live run proved it:
+        # every D-scenario row was absent). Seed the VIP first (idempotent, the standard
+        # harness fixture), then flip the toggle. The Block/Permit/Match panels are NOT
+        # gated by this toggle.
+        helpers.ensure_dnsbl_vip(vm)
+        helpers.set_dnsbl_enabled(vm, True)
 
         error_log_guard.snapshot()
+        error_log_snapshotted = True
 
         # (1) BASELINE -- pre-seed captures, same fixed order, so "no rv809 tokens
         # yet" is PROVEN, not assumed (CLAUDE.md transition-test rule).
@@ -649,43 +726,58 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
         yield {"baseline": baseline, "captures": captures}
 
     finally:
+        original_error = sys.exception()
         errors: list[str] = []
 
-        rm = vm.ssh("rm -f " + " ".join(SEEDED_FILES), timeout=15)
-        if rm.returncode != 0:
-            errors.append(f"rm -f seeded feed files failed: rc={rm.returncode} stderr={rm.stderr!r}")
+        try:
+            errors.extend(_restore_seeded_files(vm, seeded_backups))
+        except Exception as exc:
+            errors.append(f"restore seeded files raised unexpectedly: {exc}")
 
         for path, size in orig_sizes.items():
-            result = subprocess.run(
-                vm.ssh_argv("/usr/bin/truncate", "-s", size, path),
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-            if result.returncode != 0:
-                errors.append(f"truncate {path!r} to size={size!r} failed: {result.stderr!r}")
+            try:
+                result = subprocess.run(
+                    vm.ssh_argv("/usr/bin/truncate", "-s", size, path),
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    errors.append(f"truncate {path!r} to size={size!r} failed: {result.stderr!r}")
+            except Exception as exc:
+                errors.append(f"truncate {path!r} to size={size!r} raised unexpectedly: {exc}")
 
-        restore = helpers.php_eval(
-            vm,
-            f"config_set_path({helpers._php_str(CFG_DNSBL_ENABLE)}, {helpers._php_str(original_dnsbl_cfg)});\n"
-            "write_config('pfBlockerNG smoke: restore pfb_dnsbl after render-diff harness');\n"
-            "echo 'OK';",
-        )
-        if restore.returncode != 0 or "OK" not in restore.stdout:
-            errors.append(
-                f"restore pfb_dnsbl failed: rc={restore.returncode} stdout={restore.stdout!r} stderr={restore.stderr!r}"
-            )
+        if original_dnsbl_cfg is not None:
+            try:
+                restore = helpers.php_eval(
+                    vm,
+                    f"config_set_path({helpers._php_str(CFG_DNSBL_ENABLE)}, {helpers._php_str(original_dnsbl_cfg)});\n"
+                    "write_config('pfBlockerNG smoke: restore pfb_dnsbl after render-diff harness');\n"
+                    "echo 'OK';",
+                )
+                if restore.returncode != 0 or "OK" not in restore.stdout:
+                    errors.append(
+                        f"restore pfb_dnsbl failed: rc={restore.returncode} "
+                        f"stdout={restore.stdout!r} stderr={restore.stderr!r}"
+                    )
+            except Exception as exc:
+                errors.append(f"restore pfb_dnsbl raised unexpectedly: {exc}")
 
-        try:
-            error_log_guard.assert_no_growth()
-        except AssertionError as exc:
-            errors.append(str(exc))
+        if error_log_guard is not None and error_log_snapshotted:
+            try:
+                error_log_guard.assert_no_growth()
+            except Exception as exc:
+                errors.append(str(exc))
 
         if errors:
             detail = "\n".join(errors)
+            message = f"render_diff_state teardown left the VM polluted:\n{detail}"
             print(f"render_diff_state teardown FAILED to fully restore VM state:\n{detail}")
-            raise AssertionError(f"render_diff_state teardown left the VM polluted:\n{detail}")
+            if original_error is not None and not isinstance(original_error, GeneratorExit):
+                original_error.add_note(message)
+            else:
+                raise AssertionError(message)
 
 
 # --------------------------------------------------------------------------- #
