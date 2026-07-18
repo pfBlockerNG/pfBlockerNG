@@ -16,6 +16,7 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 - nested `CLAUDE.md`/`AGENTS.md` dir stubs            400 B
 - `.claude/rules/*.md` (Claude soft routing backstops) 400 B
 - each hook-capsule `additionalContext` payload     1,800 B
+- any single hook command (pre-tokenization cap)   11,000 B
 
 A hook command may also invoke a repo helper script (under scripts/ or
 .claude/hooks/, both trigger surfaces). A helper whose content could emit
@@ -57,6 +58,10 @@ CAPSULE_BUDGET = 1_800
 # The parity label (everything before the first ": ") is the one uncheckable part of
 # the UserPromptSubmit capsule; the bound keeps it a label, not a smuggling channel.
 PARITY_LABEL_MAX = 80
+# Ceiling for any hook command: decoded 1,800 B capsule budget × 6 (worst-case \uXXXX
+# JSON escaping) + envelope/quoting slack. shlex is nonlinear on huge quoted strings
+# (~25 s at 1 MB — issue #1504), so longer commands are rejected before tokenization.
+COMMAND_BYTES_MAX = CAPSULE_BUDGET * 6 + 200
 
 # Grandfathered ratchet caps for files predating the taxonomy budgets: they may
 # shrink toward POLICY_BUDGET, never grow past their cap.
@@ -238,6 +243,10 @@ def extract_capsules(settings_text: str) -> tuple[list[tuple[str, str]], list[st
                     command = hook.get("command", "")
                     if "additionalContext" not in command:
                         continue
+                    size = len(command.encode("utf-8"))
+                    if size > COMMAND_BYTES_MAX:
+                        errors.append(f"{SETTINGS}: {event} capsule command {size} bytes > cap {COMMAND_BYTES_MAX}")
+                        continue
                     try:
                         argv = shlex.split(command)
                         if len(argv) != 2 or argv[0] != "echo" or shlex.join(argv) != command:
@@ -356,6 +365,13 @@ def check_indirect_producers(root: Path) -> list[str]:
                     command = hook.get("command", "")
                     if "additionalContext" in command:
                         continue  # the canonical inline-capsule path (extract_capsules) owns it
+                    size = len(command.encode("utf-8"))
+                    if size > COMMAND_BYTES_MAX:
+                        violations.append(
+                            f"{SETTINGS}: {event} hook command {size} bytes > cap {COMMAND_BYTES_MAX}"
+                            " — cannot rule out a capsule"
+                        )
+                        continue
                     refs = _script_refs(command)
                     if refs is None:
                         violations.append(
