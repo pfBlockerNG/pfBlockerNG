@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -44,8 +45,8 @@ def fixture(
     return tmp_path
 
 
-def run_checker(root: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(SCRIPT), str(root)], capture_output=True, text=True, check=False)
+def run_checker(root: Path, executable: str = sys.executable) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([executable, str(SCRIPT), str(root)], capture_output=True, text=True, check=False)
 
 
 def assert_failure(result: subprocess.CompletedProcess[str], *needles: str) -> None:
@@ -271,3 +272,23 @@ def test_valid_json_numbers_remain_accepted(tmp_path: Path, relative_path: str) 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
     assert result.stderr == ""
+
+
+@pytest.mark.parametrize("relative_path", ["composer.lock", "vendor/composer/installed.json"])
+def test_deeply_nested_json_fails_closed(tmp_path: Path, relative_path: str) -> None:
+    python311 = shutil.which("python3.11")
+    if python311 is None:
+        pytest.skip("python3.11 unavailable")
+    assert python311 is not None
+    root = fixture(tmp_path, [package()])
+    nested = "[" * 2000 + "]" * 2000
+    if relative_path == "composer.lock":
+        payload = '{"packages": ' + nested + ', "packages-dev": []}'
+        needle = "malformed composer.lock"
+    else:
+        payload = '{"packages": ' + nested + "}"
+        needle = "malformed vendor/composer/installed.json"
+    (root / relative_path).write_text(payload, encoding="utf-8")
+    result = run_checker(root, python311)
+    assert_failure(result, needle)
+    assert "Traceback" not in result.stderr, result.stderr
