@@ -145,17 +145,16 @@ $options_blacklist_lang		= ['EN' => 'English', 'DE' => 'German', 'FR' => 'French
 $options_blacklist_freq		= ['Never' => 'Never', 'EveryDay' => 'Once a day (Random hour)', 'Weekly' => 'Weekly (Sunday)'];
 $options_blacklist_logging	= ['enabled' => 'Enabled', 'disabled' => 'Disabled'];
 
+// Unconditional (not just inside the $_POST branch below): $input_errors is read
+// at print_input_errors() on every GET page load too (issue #1496).
+$savemsg = '';
+$input_errors = array();
+
 if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 
 	$rowid		= 0;
 	$a_list		= array();
 	$config_mod	= FALSE;
-	if (isset($input_errors)) {
-		unset($input_errors);
-	}
-	if (isset($savemsg)) {
-		unset($savemsg);
-	}
 
 	if (isset($_POST['blacklist_enable'])) {
 		if (!array_key_exists($_POST['blacklist_enable'], $options_blacklist_enable)) {
@@ -289,7 +288,10 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 		}
 	}
 
-	if ($config_mod && !isset($input_errors)) {
+	// issue #1496: $input_errors is now unconditionally an array (see top-of-file
+	// init) -- isset() would always be TRUE and permanently block save; empty()
+	// preserves the original "no errors were recorded" semantics.
+	if ($config_mod && empty($input_errors)) {
 
 		write_config('[ pfBlockerNG ] save DNSBL Category settings');
 		pfb_mark_pending_changes();	// applies on the next Update, not on save

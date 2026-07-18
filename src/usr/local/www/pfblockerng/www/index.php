@@ -38,6 +38,10 @@ foreach (array('HTTP_HOST', 'HTTP_REFERER', 'HTTP_USER_AGENT', 'REMOTE_ADDR') as
 }
 
 $ptype['type'] = $ptype['group'] = $ptype['evald'] = $ptype['feed'] = '-';
+// issue #1496: the included dnsbl_default.php template interpolates $ts
+// unconditionally; the file_exists() block below is the only assigner, so a
+// fresh install (no log yet) hit this undefined on every DNSBL block-page.
+$ts = '';
 if (file_exists('/var/log/pfblockerng/dnsbl.log')) {
 	for ($i=0; $i <= 5; $i++) {
 

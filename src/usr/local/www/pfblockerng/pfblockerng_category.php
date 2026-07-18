@@ -175,9 +175,10 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 			exit;
 
 		case 'update':
-			if (isset($input_errors)) {
-				unset($input_errors);
-			}
+			// issue #1496: reads at 251/286/300 hit undefined on normal AJAX
+			// act=update/reorder flows with no init (the old idiom was a no-op).
+			// No isset($input_errors) consumer downstream -- safe unconditional init.
+			$input_errors = array();
 			if (is_array($rowdata)) {
 				$cron_values = array(	'Never',
 							'01hour',
@@ -213,6 +214,10 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 								$variable = $k_field[0];
 							} else {
 								$input_errors[] = "Failed Variable: " . htmlspecialchars($k_field[0]);
+								// issue #1496: mirrors the sibling continue below (!is_string($value))
+								// -- without it, switch ($variable) runs with $variable undefined on
+								// an invalid prefix, producing a warning plus a second garbled error.
+								continue;
 							}
 
 							// Validate Rowid

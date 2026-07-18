@@ -77,6 +77,10 @@ $rowdata	= array();
 $rowid		= 0;
 $id		= 0;
 $action		= $gtype = $atype = $chg_state = '';
+// issue #1496: unconditional -- read on save (752) and every GET render (940).
+$input_errors	= array();
+// issue #1496: default for the unconditional JS interpolation near the page bottom.
+$geoip_isos	= '';
 
 if (isset($_GET)) {
 	if (isset($_GET['rowid']) && !empty($_GET['rowid'])) {
@@ -191,6 +195,9 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 
 	$pfb_found	= FALSE;
 	$all_group	= $new_group = array();
+	// issue #1496: reads at 275-284/319-321 when a stale-atype add/addgroup
+	// (bookmarked link after a catalog change) finds no matching feed/alias below.
+	$a_aliasname	= $a_description = $a_cron = $a_url = $a_header = '';
 
 	$rowdata	= PfbConfig::readSection("installedpackages/{$conf_type}/config");
 
@@ -446,9 +453,9 @@ if ($_POST && isset($_POST['save'])) {
 
 	$pconfig = $_POST;
 	$line = 1;
-	if (isset($input_errors)) {
-		unset($input_errors);
-	}
+	// issue #1496: $input_errors is now unconditionally initialised top-of-file
+	// (array()); the old unset() here would have undone that. Nothing appends to
+	// it before this point, so no reset is needed.
 	if (isset($savemsg)) {
 		unset($savemsg);
 	}
@@ -624,8 +631,8 @@ if ($_POST && isset($_POST['save'])) {
 	// Existence + type are resolved from the configuration (pfb_alias_type), NOT is_alias()
 	// (empty $aliastable cache here) nor alias_get_type() (reserved system tables would
 	// wrongly pass) — see pfb_adv_alias_field_errors().
-	// Append (not array_merge): $input_errors is left unset until the first error so the
-	// later isset($input_errors) checks hold — appending auto-vivifies only on a real error.
+	// Append (not array_merge): keeps $input_errors as a flat, growing list --
+	// this loop's errors must not clobber ones already recorded above.
 	foreach (pfb_adv_alias_field_errors($_POST) as $pfb_alias_error) {
 		$input_errors[] = $pfb_alias_error;
 	}
@@ -1047,8 +1054,11 @@ if (empty($rowdata[$rowid]['row'])) {
 							'header'	=> '' ) );
 }
 
+// issue #1496: $input_errors is now unconditionally an array -- isset() would
+// always be TRUE and permanently disable the sort/rebuild below; empty()
+// preserves the original "no errors were recorded" semantics.
 // Sort row by Header/Label field followed by Enabled/Disabled State settings
-if (!isset($input_errors) && (empty($rowdata[$rowid]['sort']) || $rowdata[$rowid]['sort'] == 'sort')) {
+if (empty($input_errors) && (empty($rowdata[$rowid]['sort']) || $rowdata[$rowid]['sort'] == 'sort')) {
 	$new_disabled = $new_enabled = array();
 	foreach ($rowdata[$rowid]['row'] as $key => $data) {
 		if ($data['state'] == 'Disabled') {
