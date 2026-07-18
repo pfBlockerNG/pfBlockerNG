@@ -1505,10 +1505,10 @@ function pfblockerng_get_countries() {
 	$log = " Creating pfBlockerNG Continent PHP files\n";
 	pfb_logger("{$log}", 4);
 
-	$continent = $continent_en = '';
 	$roptions4 = array();
 
 	foreach ($geoip_files as $cont => $file) {
+		$continent = $continent_en = '';
 
 		// issue #1507: $ftotal4/$ftotal6 are assigned only when a continent has
 		// data -- reset per continent so a data-less one renders 0, not the
