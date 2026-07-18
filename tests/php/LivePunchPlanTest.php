@@ -195,4 +195,27 @@ final class LivePunchPlanTest extends TestCase
 			);
 		}
 	}
+
+	// --- Nested containing entries must not emit duplicate remainders --
+	// wasted execs downstream in pfb_live_punch_apply(). Two containing
+	// entries whose remainders overlap near the punched host (a /16 AND a
+	// /24 both containing it) carve the SAME near-host covering CIDRs twice,
+	// once per containing entry. ---
+
+	public function testNestedV4ContainingEntriesProduceNoDuplicatePlanEntries(): void
+	{
+		$plan = pfb_live_punch_plan('198.18.0.5', ['198.18.0.0/16', '198.18.0.0/24']);
+
+		$this->assertSame(['198.18.0.0/16', '198.18.0.0/24'], $plan['delete']);
+		$this->assertSame(
+			count($plan['add']),
+			count(array_unique($plan['add'])),
+			'the /16 and /24 remainders overlap near the punched host -- the add list must not repeat a covering CIDR'
+		);
+		$this->assertSame(
+			count($plan['delete']),
+			count(array_unique($plan['delete'])),
+			'the delete list must not repeat a containing entry either'
+		);
+	}
 }
