@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import inspect
 import os
 import shlex
@@ -15,6 +16,19 @@ from typing import Any, Callable, cast
 import pytest
 
 from . import test_alerts_render_verify as alerts
+
+
+def test_alert_fixture_ip_rows_match_current_csv_schema() -> None:
+    direct_lines = alerts._ip_scenarios() + alerts._permit_lines() + alerts._match_lines()
+    direct_rows = list(csv.reader(direct_lines))
+    unified_rows = [
+        row for row in csv.reader(alerts._unified_lines()) if row and row[0] in {"Block", "Permit", "Match"}
+    ]
+
+    direct_counts = {len(row) for row in direct_rows}
+    unified_counts = {len(row) for row in unified_rows}
+    assert direct_counts == {23}, f"raw direct IP field counts: expected {{23}}, got {direct_counts}"
+    assert unified_counts == {24}, f"raw Unified IP field counts: expected {{24}}, got {unified_counts}"
 
 
 class _LocalVM:

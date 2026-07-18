@@ -1552,25 +1552,25 @@ def test_alerts_rows_render_suppress_icons_for_v6_and_broad_v4(
     supp_entry = "203.0.113.0/28"
 
     ts = time.strftime("%b %d %H:%M:%S")  # e.g. "Jun 18 12:00:00"
-    # ip_block.log CSV format (21 fields, see the issue #361 test above):
+    # ip_block.log CSV format (23 fields, see the issue #361 test above):
     # ts,rule,real_iface,friendly_iface,action,ipv,proto_id,proto,
-    # src_ip,dst_ip,src_port,dst_port,dir,geoip,alias,ip_eval,feed,rhost,chost,asn,dup
+    # src_ip,dst_ip,src_port,dst_port,dir,geoip,alias,ip_eval,feed,rhost,chost,asn,asn_domain,asn_name,dup
     csv_lines = (
         # (a) v6, inbound -> $host = SRC = the foreign v6 address; ip_eval /48.
         f"{ts},100,em0,WAN,block,6,58,ICMPV6,"
         f"{v6_host},{v6_local},,"
         f",in,US,pfB_Deny_v6,"
-        "2001:db8:dead::/48,pfB_TestFeed_v6,Unknown,Unknown,Unknown,+\n"
+        "2001:db8:dead::/48,pfB_TestFeed_v6,Unknown,Unknown,Unknown,,,+\n"
         # (b) v4, inbound -> $host = SRC = the broad-mask host; ip_eval mask /16.
         f"{ts},100,em0,WAN,block,4,6,TCP,"
         f"{v4_broad_host},10.0.0.5,12345,443,"
         "in,US,pfB_Deny_v4,"
-        "198.51.0.0/16,pfB_TestFeed_v4,Unknown,Unknown,Unknown,+\n"
+        "198.51.0.0/16,pfB_TestFeed_v4,Unknown,Unknown,Unknown,,,+\n"
         # (c) v4, inbound -> $host covered by the seeded v4suppression /28.
         f"{ts},100,em0,WAN,block,4,6,TCP,"
         f"{v4_supp_host},10.0.0.6,12345,443,"
         "in,US,pfB_Deny_v4,"
-        "203.0.113.0/28,pfB_TestFeed_v4,Unknown,Unknown,Unknown,+\n"
+        "203.0.113.0/28,pfB_TestFeed_v4,Unknown,Unknown,Unknown,,,+\n"
     )
 
     ip_block_log = helpers.IP_BLOCK_LOG
@@ -1786,20 +1786,20 @@ def test_alerts_rows_render_whitelist_icons_oracle(
     plus_host = "203.0.113.88"  # same block, NOT in the seeded Permit alias
 
     ts = time.strftime("%b %d %H:%M:%S")  # e.g. "Jun 18 12:00:00"
-    # ip_block.log CSV format (21 fields, see the suppress-icon
+    # ip_block.log CSV format (23 fields, see the suppress-icon
     # test above): ts,rule,real_iface,friendly_iface,action,ipv,proto_id,proto,
-    # src_ip,dst_ip,src_port,dst_port,dir,geoip,alias,ip_eval,feed,rhost,chost,asn,dup
+    # src_ip,dst_ip,src_port,dst_port,dir,geoip,alias,ip_eval,feed,rhost,chost,asn,asn_domain,asn_name,dup
     block_csv = (
         f"{ts},100,em0,WAN,block,4,6,TCP,"
         f"{trash_host},10.0.0.10,12345,443,"
         "in,US,pfB_798AliasDeny_v4,"
-        f"{trash_host}/32,pfB_798BlockFeed_v4,Unknown,Unknown,Unknown,+\n"
+        f"{trash_host}/32,pfB_798BlockFeed_v4,Unknown,Unknown,Unknown,,,+\n"
     )
     geo_csv = (
         f"{ts},100,em0,WAN,block,4,6,TCP,"
         f"{plus_host},10.0.0.11,12345,443,"
         "in,US,pfB_Europe_v4,"
-        "203.0.113.0/23,798GeoFeed,Unknown,Unknown,Unknown,+\n"
+        "203.0.113.0/23,798GeoFeed,Unknown,Unknown,Unknown,,,+\n"
     )
 
     ip_block_log = helpers.IP_BLOCK_LOG
@@ -2147,16 +2147,16 @@ def test_ipv6_alert_external_host_attribution(
     foreign = helpers.IPV6_FOREIGN  # 2001:db8:dead:beef::1 — outside the /64
     local = helpers.IPV6_LOCAL_HOST  # 2001:db8:51:1::1234   — inside the /64
 
-    # ip_block.log IPv6 CSV format (21 fields):
+    # ip_block.log IPv6 CSV format (23 fields):
     # ts,rule,real_iface,friendly_iface,action,ipv,proto_id,proto,
     # src_ip,dst_ip,src_port,dst_port,
-    # dir,geoip,alias,ip_eval,feed,rhost,chost,asn,dup
+    # dir,geoip,alias,ip_eval,feed,rhost,chost,asn,asn_domain,asn_name,dup
     # ip_eval is the evaluated (blocked) host = the foreign address in both cases.
     csv_line = (
         f"{ts},100,em0,WAN,block,6,58,ICMPV6,"
         f"{src_ip},{dst_ip},,"
         f",{direction},US,pfB_Deny_v6,"
-        f"{foreign},pfB_TestFeed_v6,Unknown,Unknown,Unknown,+\n"
+        f"{foreign},pfB_TestFeed_v6,Unknown,Unknown,Unknown,,,+\n"
     )
 
     ip_block_log = helpers.IP_BLOCK_LOG
