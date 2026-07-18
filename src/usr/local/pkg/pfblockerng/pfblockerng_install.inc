@@ -412,6 +412,9 @@ if ($ufound) {
 // Upgrade OpenVPN and IPSec 'checkbox options' to pfBlockerNG In/Out interface selections
 update_status(" OpenVPN/IPSec interface selections...");
 $ufound = FALSE;
+// INIT-GAP (#1497): only assigned inside the nested !empty($pfb['config'])
+// block below, but read again (unconditionally, once $ufound) further down.
+$u_msg = '';
 
 $pfb_interfaces = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 if (!empty($pfb_interfaces)) {
