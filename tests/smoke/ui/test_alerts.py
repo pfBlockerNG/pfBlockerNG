@@ -1112,6 +1112,291 @@ def test_ip_unlock_rejects_invalid_ip_no_mutation(
 
 
 # --------------------------------------------------------------------------- #
+# Live-punch redesign (issues #1467/#1470/#1471): pfb_live_table_snapshot() now
+# reads live ``pfctl -T show`` as its SOLE source (the stale ADR-40 mirror file
+# is never consulted), so a SECOND punch inside the same containing entry sees
+# the FIRST punch's already-applied result instead of silently reverting it;
+# and pfb_live_punch_apply() (#1470) computes the punch PLAN before writing the
+# unlock store, so an unlock of a host nothing live blocks records NOTHING and
+# says so, instead of claiming success it never performed.
+# --------------------------------------------------------------------------- #
+
+
+def test_ip_unlock_double_punch_v4_second_punch_keeps_first_carved(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A second unlock in the same containing /16 must not silently re-lock the first (issue #1467).
+
+    Before this fix, ``pfb_live_table_snapshot()`` preferred the stale ADR-40
+    mirror file over a live ``pfctl -T show`` capture. A live punch never
+    rewrites that mirror, so a SECOND unlock inside the same containing entry
+    read the mirror's PRE-first-punch membership, recomputed the covering-CIDR
+    remainder from scratch, and re-added CIDRs that re-covered the FIRST
+    unlocked host -- silently re-locking it without ever touching
+    ``ip_remove=lock``. The fix makes live ``pfctl -T show`` the sole snapshot
+    source, so the second punch's plan is always computed against the table as
+    it stands AFTER the first punch.
+
+    Given: a local IPv4 feed lists an RFC 2544 /16 (``198.18.0.0/16``) plus a
+        separate sibling entry outside it; both punch targets, a third inside
+        host, and the sibling all match the live pf table.
+    When: the FIRST host is unlocked -- asserted carved before continuing (the
+        before-state gate for the second punch). Then, WITHOUT any reload in
+        between, the SECOND host (same /16) is unlocked too.
+    Then: the second host no longer matches (its own punch worked); the FIRST
+        host STILL does not match -- pre-fix this is exactly where the second
+        punch's stale-mirror remainder re-covers it (the regression trap); a
+        third, untouched host inside the /16 still matches (remainder
+        integrity -- discriminates a delete-only regression the outside
+        sibling below cannot see); the outside sibling is untouched; the
+        unlock store records BOTH exact hosts mapped to the table.
+    """
+    vm = smoke_vm
+    first = "198.18.6.9"  # inside 198.18.0.0/16 -- unlocked FIRST
+    second = "198.18.200.7"  # inside the SAME /16 -- unlocked SECOND, no reload between
+    third_inside = "198.18.90.1"  # inside the SAME /16, never unlocked -- remainder integrity
+    sibling = "198.19.51.6"  # a SEPARATE feed entry, RFC 2544 space, outside the /16 hole
+
+    feed_url = helpers.write_local_feed(vm, "ui_ipunlock4dp.txt", f"198.18.0.0/16\n{sibling}\n")
+    spec = helpers.IpCase(aliasname="uiipunlock4dp", feed_url=feed_url, header="uiipunlock4dp")
+    table = spec.alias
+
+    helpers.inject(vm, spec)
+    helpers.reload(vm, "updateip")
+    try:
+        # BEFORE: the table is populated and every address matches it live.
+        members = helpers.wait_pfctl_table(vm, table)
+        assert members, f"pf table {table} never populated after the settling update"
+        for host in (first, second, third_inside, sibling):
+            matched, raw = helpers.pfctl_table_test_raw(vm, table, host)
+            assert matched, f"{host} expected to match pf table {table} before any unlock; pfctl said: {raw!r}"
+        assert first not in _ip_unlock_hosts(vm), f"{first} already in {IP_UNLOCK_STORE} before the test"
+        assert second not in _ip_unlock_hosts(vm), f"{second} already in {IP_UNLOCK_STORE} before the test"
+
+        # WHEN: unlock the FIRST host -- carved out of the /16.
+        resp = _post_action(webui, {"ip_remove": "unlock", "ip": first, "table": table})
+        assert not looks_like_login_page(resp.text), (
+            "first ip_remove=unlock POST returned the login form (session lost)"
+        )
+        # THEN (before-state gate for the second punch): the first host is carved.
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, first)
+        assert not matched, (
+            f"{first} still matches pf table {table} after the FIRST unlock -- the live punch did not "
+            f"take effect; pfctl said: {raw!r}"
+        )
+
+        # WHEN: WITHOUT any reload, unlock the SECOND host -- same containing /16.
+        resp = _post_action(webui, {"ip_remove": "unlock", "ip": second, "table": table})
+        assert not looks_like_login_page(resp.text), (
+            "second ip_remove=unlock POST returned the login form (session lost)"
+        )
+
+        # THEN (issue #1467's oracle set):
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, second)
+        assert not matched, (
+            f"{second} still matches pf table {table} after the SECOND unlock -- the live punch did not "
+            f"take effect; pfctl said: {raw!r}"
+        )
+        # The FIRST host must STILL be carved -- pre-fix, the second punch's
+        # stale-mirror snapshot re-added covering CIDRs that silently re-locked it.
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, first)
+        assert not matched, (
+            f"{first} matches pf table {table} again after the SECOND unlock -- the second punch's plan "
+            f"was computed against a stale snapshot and re-covered the first carve (issue #1467 regression); "
+            f"pfctl said: {raw!r}"
+        )
+        # A third, untouched host inside the /16 still matches -- only the
+        # re-added remainder CIDRs can cover it, discriminating a delete-only punch.
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, third_inside)
+        assert matched, (
+            f"{third_inside} no longer matches pf table {table} after the double unlock -- the "
+            f"covering-CIDR remainder was not re-added (delete-only punch); pfctl said: {raw!r}"
+        )
+        # The outside sibling -- a distinct feed entry entirely outside the hole -- is untouched.
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, sibling)
+        assert matched, (
+            f"{sibling} no longer matches pf table {table} after the double unlock -- an unrelated "
+            f"sibling was punched; pfctl said: {raw!r}"
+        )
+        # The unlock store records BOTH exact hosts mapped to the table.
+        unlocked = _ip_unlock_hosts(vm)
+        assert unlocked.get(first) == table, (
+            f"expected {IP_UNLOCK_STORE} to record the exact host {first!r} -> {table!r}, got {unlocked!r}"
+        )
+        assert unlocked.get(second) == table, (
+            f"expected {IP_UNLOCK_STORE} to record the exact host {second!r} -> {table!r}, got {unlocked!r}"
+        )
+    finally:
+        helpers.reset(vm)
+
+
+def test_ip_unlock_double_punch_v6_second_punch_keeps_first_carved(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A second v6 unlock in the same containing /64 must not silently re-lock the first (issue #1467).
+
+    Same regression shape as the v4 case above, over the same RFC 3849 v6
+    geometry the sibling carve/relock test (``test_ip_unlock_v6_carves_...``)
+    uses: ``2001:db8:19:1::/64`` as the containing entry, with the earlier
+    test's ``target`` (``::42``) and ``inside_sibling`` (``::43``) reused here
+    as the first and second punch targets respectively, plus a third,
+    never-unlocked host in the same /64 and the earlier test's outside
+    sibling /64 (``2001:db8:19:2::/64``, host ``::9``).
+
+    Given/When/Then mirror the v4 double-punch exactly, over v6 addresses.
+    """
+    vm = smoke_vm
+    first = "2001:db8:19:1::42"  # inside 2001:db8:19:1::/64 -- unlocked FIRST
+    second = "2001:db8:19:1::43"  # inside the SAME /64 -- unlocked SECOND, no reload between
+    third_inside = "2001:db8:19:1::90"  # inside the SAME /64, never unlocked -- remainder integrity
+    sibling = "2001:db8:19:2::9"  # a SEPARATE feed entry, a different /64, outside the hole
+
+    feed_url = helpers.write_local_feed(vm, "ui_ipunlock6dp.txt", f"2001:db8:19:1::/64\n{sibling}\n")
+    spec = helpers.IpCase(aliasname="uiipunlock6dp", feed_url=feed_url, header="uiipunlock6dp", family="v6")
+    table = spec.alias
+
+    helpers.inject(vm, spec)
+    helpers.reload(vm, "updateip")
+    try:
+        members = helpers.wait_pfctl_table(vm, table)
+        assert members, f"pf table {table} never populated after the settling update"
+        for host in (first, second, third_inside, sibling):
+            matched, raw = helpers.pfctl_table_test_raw(vm, table, host)
+            assert matched, f"{host} expected to match pf table {table} before any unlock; pfctl said: {raw!r}"
+        assert first not in _ip_unlock_hosts(vm), f"{first} already in {IP_UNLOCK_STORE} before the test"
+        assert second not in _ip_unlock_hosts(vm), f"{second} already in {IP_UNLOCK_STORE} before the test"
+
+        resp = _post_action(webui, {"ip_remove": "unlock", "ip": first, "table": table})
+        assert not looks_like_login_page(resp.text), (
+            "first ip_remove=unlock POST returned the login form (session lost)"
+        )
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, first)
+        assert not matched, (
+            f"{first} still matches pf table {table} after the FIRST unlock -- the live punch did not "
+            f"take effect; pfctl said: {raw!r}"
+        )
+
+        resp = _post_action(webui, {"ip_remove": "unlock", "ip": second, "table": table})
+        assert not looks_like_login_page(resp.text), (
+            "second ip_remove=unlock POST returned the login form (session lost)"
+        )
+
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, second)
+        assert not matched, (
+            f"{second} still matches pf table {table} after the SECOND unlock -- the live punch did not "
+            f"take effect; pfctl said: {raw!r}"
+        )
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, first)
+        assert not matched, (
+            f"{first} matches pf table {table} again after the SECOND unlock -- the second punch's plan "
+            f"was computed against a stale snapshot and re-covered the first carve (issue #1467 regression); "
+            f"pfctl said: {raw!r}"
+        )
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, third_inside)
+        assert matched, (
+            f"{third_inside} no longer matches pf table {table} after the double unlock -- the "
+            f"covering-CIDR remainder was not re-added (delete-only punch); pfctl said: {raw!r}"
+        )
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, sibling)
+        assert matched, (
+            f"{sibling} no longer matches pf table {table} after the double unlock -- an unrelated "
+            f"sibling was punched; pfctl said: {raw!r}"
+        )
+        unlocked = _ip_unlock_hosts(vm)
+        assert unlocked.get(first) == table, (
+            f"expected {IP_UNLOCK_STORE} to record the exact host {first!r} -> {table!r}, got {unlocked!r}"
+        )
+        assert unlocked.get(second) == table, (
+            f"expected {IP_UNLOCK_STORE} to record the exact host {second!r} -> {table!r}, got {unlocked!r}"
+        )
+    finally:
+        helpers.reset(vm)
+
+
+def test_ip_unlock_not_currently_blocked_records_nothing(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """ip_remove=unlock on a host nothing live blocks records NO unlock (issue #1470).
+
+    Before this fix, an unlock POST for a host the table does not cover still
+    called ``pfb_unlock()`` and claimed success. The handler now computes the
+    live punch PLAN first (``pfb_live_punch_plan()``); an empty ``delete`` set
+    means nothing live blocks the host, so NO store write happens and the
+    savemsg says so instead of claiming an unlock that never occurred.
+
+    Given: a local IPv4 feed populates a live pf table (``198.18.0.0/16``,
+        represented by an in-range host, ``member``); the target host
+        (RFC 5737 TEST-NET-3 -- in NO feed entry, never RFC 1918) does not
+        match the table.
+    When: ip_remove=unlock is posted for that host.
+    Then: the unlock store gains no entry for it and is otherwise BYTE-FOR-BYTE
+        unchanged (the primary oracle -- pre-fix it gains an entry); the
+        table's actual member is unchanged (still matches); the response is
+        not the login page and its savemsg names the "not currently blocked"
+        case (the same resp.text savemsg idiom the covered-host addsuppress
+        test above uses).
+    """
+    vm = smoke_vm
+    member = "198.18.1.1"  # inside 198.18.0.0/16 -- proves the table itself is untouched
+    target = "203.0.113.5"  # RFC 5737 TEST-NET-3 -- in NO feed entry, never currently blocked
+
+    feed_url = helpers.write_local_feed(vm, "ui_ipunlock_notblocked.txt", "198.18.0.0/16\n")
+    spec = helpers.IpCase(aliasname="uiipunlocknb", feed_url=feed_url, header="uiipunlocknb")
+    table = spec.alias
+
+    helpers.inject(vm, spec)
+    helpers.reload(vm, "updateip")
+    try:
+        # BEFORE: the table is populated; the member matches, the target does not
+        # (the before-state gate -- "not currently blocked" must be genuinely true).
+        members = helpers.wait_pfctl_table(vm, table)
+        assert members, f"pf table {table} never populated after the settling update"
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, member)
+        assert matched, f"{member} expected to match pf table {table} before the test; pfctl said: {raw!r}"
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert not matched, (
+            f"{target} unexpectedly matches pf table {table} before the test -- it must be genuinely "
+            f"unblocked for this to be a true not-currently-blocked case; pfctl said: {raw!r}"
+        )
+        store_before = _ip_unlock_hosts(vm)
+        assert target not in store_before, f"{target} already in {IP_UNLOCK_STORE} before the test"
+
+        # WHEN: unlock is posted for a host nothing live blocks.
+        resp = _post_action(webui, {"ip_remove": "unlock", "ip": target, "table": table})
+        assert not looks_like_login_page(resp.text), "ip_remove=unlock POST returned the login form (session lost)"
+
+        # THEN: no unlock was recorded -- the store is BYTE-FOR-BYTE unchanged,
+        # not merely missing the target (pre-fix it gains a "target,table" line).
+        after = _ip_unlock_hosts(vm)
+        assert target not in after, f"{target} recorded in {IP_UNLOCK_STORE} after an unlock of an unblocked host"
+        assert after == store_before, (
+            f"{IP_UNLOCK_STORE} changed after an unlock POST for a not-currently-blocked host: "
+            f"before={store_before!r} after={after!r}"
+        )
+        # THEN: the table is unchanged (the member still matches; the target still doesn't).
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, member)
+        assert matched, (
+            f"{member} no longer matches pf table {table} after the not-currently-blocked unlock POST -- "
+            f"the live table was unexpectedly mutated; pfctl said: {raw!r}"
+        )
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert not matched, (
+            f"{target} unexpectedly matches pf table {table} after the not-currently-blocked unlock POST; "
+            f"pfctl said: {raw!r}"
+        )
+        # THEN: the savemsg names the "not currently blocked" case, not a claimed unlock.
+        assert "is not currently blocked" in resp.text, (
+            "expected the 'is not currently blocked' savemsg after an unlock POST for a host nothing live "
+            "blocks; response body did not contain it"
+        )
+    finally:
+        helpers.reset(vm)
+
+
+# --------------------------------------------------------------------------- #
 # Suppression-icon render eligibility (convert_ip_log, alerts.php:3057 -- issue
 # #422, ADR-53 follow-up). Before this fix the gate was
 # ``$pfb_ipv4 && !$pfb_geoip && $mask_suppression`` -- TRUE only for a v4 host
