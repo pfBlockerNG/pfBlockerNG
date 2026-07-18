@@ -1886,6 +1886,17 @@ if ($alert_summary) {
 				case 'replysrcipd':
 					exec("{$cut_cmd},8 {$alert_log} | {$su_cmd} | sort -nr 2>&1", $stats);
 					break;
+				case 'ipasn':
+					// issue #1369 (ADR-38 Amendment 3): no back-compat for log entries --
+					// only the new 23-field schema carries a plain ASN token at column 20
+					// (unchanged position: the 2 new columns were appended AFTER it). A
+					// pre-upgrade 21-field legacy row's column 20 is still the old
+					// pipe-blob text, and any other field count is malformed either way --
+					// gate on the exact new field count before extracting, so a legacy/
+					// malformed row is skipped silently instead of polluting the Top ASN
+					// count with blob noise.
+					exec("{$pfb['awk']} -F',' 'NF == 23' {$alert_log} | {$cut_cmd} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
+					break;
 				default:
 					exec("{$cut_cmd} {$alert_log} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
 					break;
@@ -2818,6 +2829,16 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		return array(TRUE, '');
 	}
 
+	// issue #1369 (ADR-38 Amendment 3): only the current 23-field feature-row /
+	// 24-field Unified-row schema is supported on the read path -- no back-compat
+	// for log entries (owner decision). ANY other field count, including every
+	// pre-upgrade legacy row still on disk, is skipped here silently (no PHP
+	// warnings/notices) BEFORE the timestamp shift below or any indexed field
+	// access -- see pfb_ip_log_row_schema_ok() (pfblockerng_extra.inc).
+	if (!pfb_ip_log_row_schema_ok($fields, $mode)) {
+		return array(FALSE, '');
+	}
+
 	// issue #809: page-scope memos (pfb_render_memo(), pfblockerng.inc) live for one
 	// render. $memos['validate'] caches the "still in its logged feed file" validate
 	// exec, keyed by the exact command; $memos['miss'] caches the "where does this
@@ -2857,7 +2878,9 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		[15]	= Feed Name
 		[16]	= gethostbyaddr resolved hostname
 		[17]	= Client Hostname
-		[18]	= ASN					*/
+		[18]	= ASN
+		[19]	= ASN Domain	(issue #1369)
+		[20]	= ASN Name	(issue #1369)		*/
 
 	// If alerts filtering is selected, process filters as required.
 	if ($pfb['filterlogentries']) {
@@ -2937,16 +2960,15 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		});
 	}
 
-	// ASN - Add to GeoIP column
-	if ($pfb['asn_reporting'] != 'disabled' && !empty($fields[18]) && $fields[18] != 'Unknown') {
-
-		if (strpos($fields[18], '|') !== FALSE) {
-			$fields[18]	= str_replace('ASN:', '', $fields[18]);
-			$asn		= explode('|', $fields[18], 3);
-			$fields[18] = "<span title=\"|" . pfb_hsc($asn[2]) . "\">" . pfb_hsc($asn[1]) . "</span>";
-		} else {
-			$fields[18] = '';
-		}
+	// ASN - Add to GeoIP column. issue #1369 (ADR-38 Amendment 3): the ASN
+	// number renders directly from its own plain CSV column ([18]); the
+	// tooltip is built from the separate ASN Domain/Name columns ([19]/[20])
+	// -- no more pipe-blob explode()/label-stripping.
+	if ($pfb['asn_reporting'] != 'disabled' && !empty($fields[18]) && $fields[18] != 'Unknown' && $fields[18] != 'null') {
+		$asn_domain = $fields[19] ?? '';
+		$asn_name   = $fields[20] ?? '';
+		$asn_title  = "domain:  {$asn_domain} | name:  {$asn_name}";
+		$fields[18] = "<span title=\"" . pfb_hsc($asn_title) . "\">" . pfb_hsc($fields[18]) . "</span>";
 	}
 	else {
 		$fields[18] = '';
@@ -4255,8 +4277,14 @@ if (!$alert_summary):
 			// convert_ip_log()) can render another row -- see that helper for the exact
 			// non-filter/filter mode conditions. If any per-type filter-limit knob is 0
 			// (unlimited) its flag never sets and this still scans to EOF, exactly as before.
+			// issue #1369: every fgetcsv() call reading these logs (all 5 sites in this
+			// file) passes an explicit empty escape argument, matching the writer's
+			// pfb_asn_csv_fields()/fputcsv() -- a bare fgetcsv() defaults to a backslash
+			// escape char, which would mis-parse a literal backslash inside a quoted ASN
+			// domain/name field (RFC4180 has no escape char at all; PHP's default is a
+			// non-standard extension the two sides must agree on to round-trip).
 			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
-				while (($fields = @fgetcsv($handle)) !== FALSE) {
+				while (($fields = @fgetcsv($handle, 0, ',', '"', '')) !== FALSE) {
 
 					if (pfb_alerts_unified_scan_done($pfb['filterlogentries'], $counter['Unified'], $pfbentries, $ipfilterlimit, $dnsblfilterlimit, $dnsfilterlimit)) {
 						break;
@@ -4325,7 +4353,7 @@ if (!$alert_summary):
 			// ADR-65: a single streaming pass -- rows render straight from their own
 			// logged fields now, so there is nothing left to batch-prefetch between passes.
 			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
-				while (($fields = @fgetcsv($handle)) !== FALSE) {
+				while (($fields = @fgetcsv($handle, 0, ',', '"', '')) !== FALSE) {
 
 					// Remove and record duplicate entries
 					if ($fields[9] == '-') {
@@ -4363,7 +4391,7 @@ if (!$alert_summary):
 			<tbody>
 	<?php
 			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
-				while (($fields = @fgetcsv($handle)) !== FALSE) {
+				while (($fields = @fgetcsv($handle, 0, ',', '"', '')) !== FALSE) {
 
 					// Suppress user-defined reply types
 					if (isset($pfbreplytypes) && isset($pfbreplytypes[$fields[2]])) {
@@ -4421,7 +4449,7 @@ if (!$alert_summary):
 
 			if (!$ip_two_pass) {
 				if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
-					while (($fields = @fgetcsv($handle)) !== FALSE) {
+					while (($fields = @fgetcsv($handle, 0, ',', '"', '')) !== FALSE) {
 						$last_fld = array_pop($fields);
 
 						// Remove and record duplicate entries
@@ -4452,12 +4480,23 @@ if (!$alert_summary):
 				$ip_buffered	  = array();
 				$ip_accepted_seen = 0;
 				if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
-					while (($fields = @fgetcsv($handle)) !== FALSE) {
+					while (($fields = @fgetcsv($handle, 0, ',', '"', '')) !== FALSE) {
 						$last_fld = array_pop($fields);
 
 						// Duplicate-marker line: extend the current run.
 						if ($last_fld == '-') {
 							pfb_alerts_ip_buffer_push($ip_buffered, 'dup');
+							continue;
+						}
+
+						// issue #1369: a legacy/malformed row's field count never matches
+						// the current schema -- fold it into the SAME gap-marker path as a
+						// filtered row, so it is never buffered and never reaches Pass 1.5's
+						// pfb_ip_render_query() (which assumes the current schema's fixed
+						// indices) or pfb_match_filter_field() below. convert_ip_log()'s own
+						// guard is a backstop for the OTHER two callers, not the only one here.
+						if (!pfb_ip_log_row_schema_ok($fields, 'non_unified')) {
+							pfb_alerts_ip_buffer_push($ip_buffered, 'reject');
 							continue;
 						}
 
