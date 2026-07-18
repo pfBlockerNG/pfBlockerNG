@@ -953,6 +953,9 @@ def test_syslog_off_no_new_records(deployed_vm: SmokeVM, client_vm: SmokeVM) -> 
     assert seed_line, (
         f"Seeding failed: no export record for {domain} with export ON.\n{syslog_export_state_snapshot(vm)}"
     )
+    # Let any trailing export from the seed probe land before baselining — a duplicate
+    # in-flight event would otherwise read as a spurious "OFF gate" failure below.
+    time.sleep(FILTERLOG_SETTLE_SECS)
 
     count_while_on = len(_pfb_event_lines(vm))
 
