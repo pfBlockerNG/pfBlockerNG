@@ -17,13 +17,17 @@
  *     pfb_dnsbl_abp_extract_ip depend on their precise accept/reject behaviour.
  *     NOTE on v4: PHP's ip2long() delegates to libc inet_pton(AF_INET), whose
  *     handling of leading-zero octets like '192.000.002.005' is
- *     PLATFORM-DEPENDENT: FreeBSD (the pfSense/CE target; inet_pton4's
- *     leading-zero guard) and glibc reject them, but macOS ACCEPTS them
- *     (probed 2026-07-18, PHP 8.5.8 on Darwin: ip2long('192.000.002.005')
- *     === 3221225989 — issue #1468). A bare ip2long() double is therefore
- *     platform-dependent on a Mac dev box, so is_ipaddrv4 adds an explicit
- *     leading-zero reject after the ip2long() check: a no-op where libc
- *     already rejects, and a pin to the appliance verdict where it doesn't.
+ *     PLATFORM-DEPENDENT. All three verdicts executed 2026-07-18 via
+ *     php -r 'var_dump(ip2long("192.000.002.005"));' (issue #1468):
+ *       - macOS (Darwin, PHP 8.5.8): int(3221225989) — ACCEPTED;
+ *       - glibc (Debian bookworm container, PHP 8.3): bool(false) — rejected;
+ *       - FreeBSD (live pfSense CE guest, PHP 8.4.23): bool(false) —
+ *         rejected (inet_pton4's leading-zero guard).
+ *     A bare ip2long() double is therefore platform-dependent on a Mac dev
+ *     box, so is_ipaddrv4 adds an explicit leading-zero reject after the
+ *     ip2long() check: a no-op where libc already rejects, and a pin to the
+ *     appliance verdict where it doesn't. Single-zero octets ('0.0.0.0',
+ *     '0.1.2.3') stay accepted on all three platforms (probed same day).
  *     Verdict fidelity to the appliance beats verbatim control-flow
  *     mirroring for a double. The v6 %zone fix IS a real verdict flip — see
  *     IpAddrDoublesTest.
