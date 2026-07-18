@@ -98,3 +98,41 @@ if (!function_exists('step3_submitphpaction')) {
 	}
 	unset($pfb_wizard_src, $pfb_fn_pos);
 }
+
+// 7. Parity snapshot of the package's loaded function surface (#1122 phase 0),
+//    taken here so it reflects exactly what the umbrella + extra load defines,
+//    before any test can add or shadow symbols (order-independent by
+//    construction). The defining file selects package functions only — it
+//    excludes the doubles, vendor code, and the wizard eval above — but the
+//    snapshot records no file-of-origin, so relocating a function between
+//    package files (the #1122 split) leaves it byte-identical.
+$pfb_pkg_dir = realpath(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng') . DIRECTORY_SEPARATOR;
+$pfb_inventory = [];
+foreach (get_defined_functions()['user'] as $pfb_fn_name) {
+	$pfb_fn_ref = new ReflectionFunction($pfb_fn_name);
+	$pfb_fn_file = $pfb_fn_ref->getFileName();
+	if ($pfb_fn_file === false
+	    || strncmp((string) realpath($pfb_fn_file), $pfb_pkg_dir, strlen($pfb_pkg_dir)) !== 0) {
+		continue;
+	}
+	$pfb_fn_params = [];
+	foreach ($pfb_fn_ref->getParameters() as $pfb_fn_param) {
+		$pfb_fn_params[] = [
+			'name'     => $pfb_fn_param->getName(),
+			'byRef'    => $pfb_fn_param->isPassedByReference(),
+			'variadic' => $pfb_fn_param->isVariadic(),
+			'type'     => $pfb_fn_param->hasType() ? (string) $pfb_fn_param->getType() : null,
+			'default'  => $pfb_fn_param->isDefaultValueAvailable()
+				? var_export($pfb_fn_param->getDefaultValue(), true)
+				: null,
+		];
+	}
+	$pfb_inventory[$pfb_fn_ref->getName()] = [
+		'returnsRef'  => $pfb_fn_ref->returnsReference(),
+		'returnType'  => $pfb_fn_ref->hasReturnType() ? (string) $pfb_fn_ref->getReturnType() : null,
+		'params'      => $pfb_fn_params,
+	];
+}
+ksort($pfb_inventory, SORT_STRING);
+$GLOBALS['pfb_function_inventory'] = $pfb_inventory;
+unset($pfb_pkg_dir, $pfb_inventory, $pfb_fn_name, $pfb_fn_ref, $pfb_fn_file, $pfb_fn_params, $pfb_fn_param);
