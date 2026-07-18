@@ -19,10 +19,11 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 - any single hook command (pre-tokenization cap)   11,000 B
 
 A hook command may also invoke a repo helper script (under scripts/ or
-.claude/hooks/, both trigger surfaces). A helper whose content could emit
+.claude/hooks/, both trigger surfaces). Detection recognizes `*.sh`/`*.py`
+command tokens; a recognized helper whose content could emit
 `hookSpecificOutput.additionalContext` must be a registered
-DYNAMIC_CAPSULE_PRODUCERS entry; any other indirect producer — or a helper
-reference the checker cannot statically resolve and read — fails closed (#1501).
+DYNAMIC_CAPSULE_PRODUCERS entry, and a recognized reference the checker cannot
+statically resolve and read fails closed (#1501).
 
 CONDITIONAL: in --staged / --diff mode the checks run IF AND ONLY IF the change
 touches a context surface (AGENTS.md, CLAUDE.md, .agents/policy/,

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -467,6 +468,15 @@ def test_indirect_missing_helper_fails_closed(tmp_path: Path) -> None:
     root = _indirect_root(tmp_path, "sh scripts/ghost.sh")
     violations = ccb.check_indirect_producers(root)
     assert len(violations) == 1 and "`scripts/ghost.sh` not found" in violations[0], violations
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses file permissions — denial cannot be simulated")
+def test_indirect_unreadable_helper_fails_closed(tmp_path: Path) -> None:
+    root = _indirect_root(tmp_path, "sh scripts/locked.sh")
+    helper = _write(root, "scripts/locked.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
+    helper.chmod(0)
+    violations = ccb.check_indirect_producers(root)
+    assert len(violations) == 1 and "unreadable" in violations[0], violations
 
 
 @pytest.mark.parametrize(
