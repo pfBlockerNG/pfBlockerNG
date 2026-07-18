@@ -79,9 +79,20 @@ $pfbmatchstat	= explode(',', $pfb['aglobal']['pfbmatchstat'])	?: array();
 $pfbdnsblstat	= explode(',', $pfb['aglobal']['pfbdnsblstat'])	?: array();
 $pfbdnsblreplystat = explode(',', $pfb['aglobal']['pfbdnsblreplystat']) ?: array();
 
-foreach ($aglobal_array as $type => $value) {
-	${"$type"} = $pfb['aglobal'][$type] != '' ? $pfb['aglobal'][$type] : $value;
-}
+// issue #1497: explicit assignments (was a ${"$type"} variable-variable loop
+// over $aglobal_array) -- PHPStan can't trace a variable-variable target, so
+// every read of these 9 names was flagged as undefined despite always being
+// set here. $aglobal_array itself stays (the save-handler loop below at
+// ~line 592 is a separate consumer that still iterates it).
+$pfbunicnt               = $pfb['aglobal']['pfbunicnt']               != '' ? $pfb['aglobal']['pfbunicnt']               : $aglobal_array['pfbunicnt'];
+$pfbdenycnt              = $pfb['aglobal']['pfbdenycnt']              != '' ? $pfb['aglobal']['pfbdenycnt']              : $aglobal_array['pfbdenycnt'];
+$pfbpermitcnt            = $pfb['aglobal']['pfbpermitcnt']            != '' ? $pfb['aglobal']['pfbpermitcnt']            : $aglobal_array['pfbpermitcnt'];
+$pfbmatchcnt             = $pfb['aglobal']['pfbmatchcnt']             != '' ? $pfb['aglobal']['pfbmatchcnt']             : $aglobal_array['pfbmatchcnt'];
+$pfbdnscnt               = $pfb['aglobal']['pfbdnscnt']               != '' ? $pfb['aglobal']['pfbdnscnt']              : $aglobal_array['pfbdnscnt'];
+$pfbdnsreplycnt          = $pfb['aglobal']['pfbdnsreplycnt']          != '' ? $pfb['aglobal']['pfbdnsreplycnt']          : $aglobal_array['pfbdnsreplycnt'];
+$ipfilterlimitentries    = $pfb['aglobal']['ipfilterlimitentries']    != '' ? $pfb['aglobal']['ipfilterlimitentries']    : $aglobal_array['ipfilterlimitentries'];
+$dnsblfilterlimitentries = $pfb['aglobal']['dnsblfilterlimitentries'] != '' ? $pfb['aglobal']['dnsblfilterlimitentries'] : $aglobal_array['dnsblfilterlimitentries'];
+$dnsfilterlimitentries   = $pfb['aglobal']['dnsfilterlimitentries']   != '' ? $pfb['aglobal']['dnsfilterlimitentries']   : $aglobal_array['dnsfilterlimitentries'];
 
 $alert_view	= 'alert';
 $alert_title	= '';
@@ -1232,6 +1243,12 @@ if (isset($_POST) && !empty($_POST)) {
 
 		$entry = '';
 		$table = '';
+		// issue #1497: every case that reaches the $pfb_found gate below sets $type
+		// unconditionally before any read of it; this file-scope name used to be
+		// masked by the top-of-file ${"$type"} counter loop's leftover PHP
+		// foreach-variable-persists value, which the #1497 explicit-assignment
+		// rewrite removed. Same hand-crafted-only class as $table above.
+		$type = '';
 
 		// IPv4/IPv6 validation
 		if ($entry = pfb_filter($_POST['domain'], PFB_FILTER_IP, 'alerts entry_delete', '', TRUE)) {
@@ -4476,10 +4493,9 @@ if (!$alert_summary):
 			// per-row limit ($ipfilterlimitentries != 0) AND real filter fields set.
 			// Otherwise the log genuinely scans to EOF (unbounded buffer unsafe), so both
 			// cases keep the single-pass streaming loop. See docs/misc/alerts-reports-pipeline.md.
-			// $ipfilterlimitentries is always genuinely set by this point (the dynamic
-			// ${"$type"} assignment near the top of this file, which PHPStan can't trace);
-			// this coalesce is a runtime no-op that keeps every read below provably defined.
-			$ipfilterlimitentries = $ipfilterlimitentries ?? 0;
+			// issue #1497: $ipfilterlimitentries is now an explicit top-of-page
+			// assignment (was a ${"$type"} variable-variable loop PHPStan couldn't
+			// trace), so it is provably defined here -- no coalesce needed.
 			$ip_two_pass = !$pfb['filterlogentries'] || ($ipfilterlimitentries != 0 && !empty($filterfieldsarray[0]));
 
 			if (!$ip_two_pass) {
