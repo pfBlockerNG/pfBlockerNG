@@ -347,7 +347,7 @@ final class DnsblQueryClientTest extends TestCase
 
 	/**
 	 * Spawn a background PHP process that plays the Python side of the
-	 * channel: it polls for the request (up to ~3s, 20ms steps), records
+	 * channel: it polls for the request (3s locally, 12s in CI; 20ms steps), records
 	 * the decoded request JSON + the request file's permission bits into
 	 * observed.json, substitutes the request's real id for the literal
 	 * "__ID__" placeholder in $replyTemplateJson, and writes the reply.
