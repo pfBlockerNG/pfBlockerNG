@@ -17,7 +17,8 @@ final class GroupActionWiringTest extends TestCase
 	public static function setUpBeforeClass(): void
 	{
 		$root = dirname(__DIR__, 2);
-		self::$inc = (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng.inc");
+		self::$inc = (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng.inc")
+			. "\n" . (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc");
 		self::$category = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category.php");
 		self::$alerts = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_alerts.php");
 		self::$categoryEdit = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php");

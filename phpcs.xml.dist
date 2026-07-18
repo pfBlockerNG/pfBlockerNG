@@ -5,7 +5,7 @@
         custom PfBlockerNG standard:
 
         - PFBL-01 RequirePfbFilter: input-validation contract gate scoped to
-          pfblockerng.inc (the ADR-06/07/10/13 surfaces).
+          pfblockerng.inc + pfblockerng_apply.inc (the ADR-06/07/10/13 surfaces).
         - ADR-28 UppercaseBooleanLiteral: uppercase TRUE/FALSE value literals,
           applied across all src/ PHP (pfblockerng.inc + pfblockerng_extra.inc
           + pfblockerng_install.inc + pfb_unbound_include.inc + www/).
@@ -23,11 +23,12 @@
     <arg name="extensions" value="php,inc"/>
 
     <!-- ================================================================
-         PFBL-01 RequirePfbFilter — scoped to pfblockerng.inc only.
-         The in-scope surface (ADR-06/07/10/13 input paths) lives there.
+         PFBL-01 RequirePfbFilter — scoped to pfblockerng.inc +
+         pfblockerng_apply.inc. The in-scope surface (ADR-06/07/10/13 input
+         paths) lives there.
          ================================================================ -->
     <rule ref="./tests/phpcs/PfBlockerNG/Sniffs/Validation/RequirePfbFilterSniff.php">
-        <include-pattern>pfblockerng\.inc$</include-pattern>
+        <include-pattern>pfblockerng(?:_apply)?\.inc$</include-pattern>
     </rule>
 
     <!-- ================================================================

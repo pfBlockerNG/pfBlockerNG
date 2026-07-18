@@ -194,8 +194,8 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		// keying on $header would silently drop the link for every entry. The DNSBL
 		// download loop has no PHPUnit harness of its own (too heavy to invoke), so
 		// this pins the exact call-site argument via source inspection.
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertNotFalse($source, 'pfblockerng_apply.inc must be readable');
 
 		$this->assertMatchesRegularExpression(
 			'/pfb_dnsbl_download_ledger_update\(FALSE, \$alias,/',
@@ -218,8 +218,8 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	 */
 	public function testDnsblDownloadCloseFiresOncePerAliasPassNotPerRow(): void
 	{
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertNotFalse($source, 'pfblockerng_apply.inc must be readable');
 
 		$this->assertDoesNotMatchRegularExpression(
 			'/unlink_if_exists\("\{\$pfbfolder\}\/\{\$header\}\.fail"\);\s*\n\s*pfb_dnsbl_download_ledger_update\(TRUE,/',

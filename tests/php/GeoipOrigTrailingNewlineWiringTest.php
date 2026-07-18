@@ -17,10 +17,10 @@ final class GeoipOrigTrailingNewlineWiringTest extends TestCase
 	public static function setUpBeforeClass(): void
 	{
 		$source = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc'
+			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc'
 		);
 		if ($source === false) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng.inc');
+			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
 		}
 		self::$source = $source;
 	}

@@ -154,8 +154,8 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 		// rather than a functional call: narrow, but it catches a regression of this
 		// specific defect, which the function-level unit tests above cannot (they call
 		// the helper directly with an already-correct item name).
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertNotFalse($source, 'pfblockerng_apply.inc must be readable');
 
 		$this->assertMatchesRegularExpression(
 			'/pfb_ip_download_ledger_update\(FALSE, \$alias,/',
@@ -178,8 +178,8 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 	 */
 	public function testIpDownloadCloseFiresOncePerAliasPassNotPerRow(): void
 	{
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertNotFalse($source, 'pfblockerng_apply.inc must be readable');
 
 		$this->assertDoesNotMatchRegularExpression(
 			'/unlink_if_exists\("\{\$pfbfolder\}\/\{\$header\}\.fail"\);\s*\n\s*pfb_ip_download_ledger_update\(TRUE,/',

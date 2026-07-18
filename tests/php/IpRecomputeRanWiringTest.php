@@ -5,7 +5,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1084 review — pfblockerng.inc source tripwires for wiring that cannot be driven
+ * issue #1084 review — pfblockerng_apply.inc source tripwires for wiring that cannot be driven
  * as a unit under PHPUnit (the reload pass is thousands of lines of top-level script code,
  * not a callable function): the recompute-invocation loop must record, per family, whether
  * the batch recompute verb actually ran THIS pass, and both the v4/v6 suppression-body
@@ -19,12 +19,12 @@ use PHPUnit\Framework\TestCase;
  */
 final class IpRecomputeRanWiringTest extends TestCase
 {
-	private const PFBLOCKERNG_INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
+	private const PFBLOCKERNG_APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 
 	private function source(): string
 	{
 		$source = '';
-		foreach (token_get_all((string) file_get_contents(self::PFBLOCKERNG_INC)) as $token) {
+		foreach (token_get_all((string) file_get_contents(self::PFBLOCKERNG_APPLY)) as $token) {
 			if (is_array($token)) {
 				if (in_array($token[0], [T_COMMENT, T_DOC_COMMENT], TRUE)) {
 					continue;
@@ -96,7 +96,7 @@ final class IpRecomputeRanWiringTest extends TestCase
 		$source = $this->source();
 		$needle = 'pfb_ip_recompute_write_snapshot("{$pfbfolder}/{$cc_alias}.txt", $cc_alias, $pfb[\'snapdir\'], $pfb[\'origdir\']);';
 		$pos    = strpos($source, $needle);
-		$this->assertNotFalse($pos, "continent snapshot call site not found -- update this oracle if it moved/changed shape\nsource file: " . self::PFBLOCKERNG_INC);
+		$this->assertNotFalse($pos, "continent snapshot call site not found -- update this oracle if it moved/changed shape\nsource file: " . self::PFBLOCKERNG_APPLY);
 
 		// The gating "if" immediately precedes the call; a v6 continent's live .txt IS
 		// regenerated every GeoIP change (unconditional on $vtype -- see the sibling
