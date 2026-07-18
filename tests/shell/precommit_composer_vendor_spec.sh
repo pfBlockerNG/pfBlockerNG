@@ -1,0 +1,39 @@
+#shellcheck shell=sh
+# .githooks/pre-commit Composer vendor guard: a failed guard blocks Composer tools.
+
+Describe '.githooks/pre-commit Composer vendor guard'
+  gitc() { git -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
+  make_repo() {
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommitphp.XXXXXX")"
+    git -C "$repo" init -q
+    gitc config commit.gpgsign false
+    mkdir -p "$repo/.githooks" "$repo/src" "$repo/vendor/bin"
+    cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
+    printf '<?php echo 1;\n' > "$repo/src/a.php"
+    gitc add src/a.php
+
+    stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommitphpstub.XXXXXX")"
+    php_marker="$stubdir/php-ran"
+    phpstan_marker="$stubdir/phpstan-ran"
+    phpcs_marker="$stubdir/phpcs-ran"
+    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$php_marker" > "$stubdir/php"
+    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpstan_marker" > "$repo/vendor/bin/phpstan"
+    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpcs_marker" > "$repo/vendor/bin/phpcs"
+    chmod +x "$stubdir/php" "$repo/vendor/bin/phpstan" "$repo/vendor/bin/phpcs"
+    PATH="$stubdir:$PATH"
+  }
+  cleanup() { rm -rf "$repo" "$stubdir"; }
+  Before 'make_repo'
+  After 'cleanup'
+
+  It 'fails closed before PHPStan and PHPCS when the checker is unavailable'
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 1
+    The output should not include '[pre-commit] phpstan'
+    The output should not include '[pre-commit] phpcs'
+    The stderr should include '[pre-commit] FAILED: composer vendor'
+    Assert [ ! -e "$phpstan_marker" ]
+    Assert [ ! -e "$phpcs_marker" ]
+  End
+End

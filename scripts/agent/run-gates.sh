@@ -45,6 +45,7 @@ gates_for() {
 		out="${out}python3 -m pytest${nl}ruff check .${nl}ruff format --check .${nl}mypy tests/${nl}"
 	fi
 	if printf '%s\n' "$files" | grep -Eq '\.(php|inc)$'; then
+		out="${out}python3 scripts/check_composer_vendor.py${nl}"
 		for f in $(printf '%s\n' "$files" | grep -E '\.(php|inc)$'); do
 			out="${out}php -l $f${nl}"
 		done
@@ -71,6 +72,11 @@ run_gate() {
 	# $1 = command line
 	tool=${1%% *}
 	if ! (cd "$worktree" && { command -v "$tool" >/dev/null 2>&1 || [ -x "$tool" ]; }); then
+		if [ "$1" = 'python3 scripts/check_composer_vendor.py' ]; then
+			printf 'GATE FAIL: %s (TOOL-MISSING: %s)\n' "$1" "$tool"
+			overall=1
+			return 1
+		fi
 		printf 'GATE SKIP: %s (TOOL-MISSING: %s)\n' "$1" "$tool"
 		[ "$allow_missing" -eq 1 ] || overall=1
 		return 0
@@ -82,6 +88,7 @@ run_gate() {
 	else
 		printf 'GATE FAIL: %s\n' "$1"
 		overall=1
+		[ "$1" = 'python3 scripts/check_composer_vendor.py' ] && return 1
 	fi
 }
 
@@ -126,7 +133,8 @@ main() {
 	report=$(printf '%s\n' "$cmds" | {
 		overall=0
 		while IFS= read -r c; do
-			[ -n "$c" ] && run_gate "$c"
+			[ -n "$c" ] || continue
+			run_gate "$c" || break
 		done
 		echo "OVERALL=$overall"
 	})
