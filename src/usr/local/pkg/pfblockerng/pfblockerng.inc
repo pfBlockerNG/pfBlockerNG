@@ -14675,6 +14675,7 @@ function pfb_daemon_dnsbl() {
 		$checkpos	= 3; 	// Pre Lighttpd v1.4.47
 		// INIT-GAP (#1497): assigned per-line further down, read again (via
 		// pfb_filter()) on a LATER line under a checkpos-gated branch.
+		$domain		= '';
 		$src_ip		= '';
 
 		while (!feof($h_handle)) {
