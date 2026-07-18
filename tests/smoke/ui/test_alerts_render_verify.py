@@ -377,16 +377,16 @@ def _ip_line(
     proto: str = "TCP",
     dup: str = "+",
 ) -> str:
-    """One ip_block.log/ip_permit.log/ip_match.log CSV line (21 fields).
+    """One ip_block.log/ip_permit.log/ip_match.log CSV line (23 fields).
 
     ts,rule,real_iface,friendly_iface,action,ipv,proto_id,proto,src_ip,dst_ip,
-    src_port,dst_port,dir,geoip,alias,ip_eval,feed,rhost,chost,asn,dup
+    src_port,dst_port,dir,geoip,alias,ip_eval,feed,rhost,chost,asn,asn_domain,asn_name,dup
     """
     ports = ",," if proto in ("ICMP", "ICMPV6") else ",12345,443"
     return (
         f"{FIXED_TS},100,em0,WAN,{action},{ipv},{proto_id},{proto},"
         f"{src_ip},{dst_ip}{ports},"
-        f"{direction},US,{alias},{ip_eval},{feed},Unknown,Unknown,Unknown,{dup}\n"
+        f"{direction},US,{alias},{ip_eval},{feed},Unknown,Unknown,Unknown,,,{dup}\n"
     )
 
 

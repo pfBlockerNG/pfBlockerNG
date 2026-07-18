@@ -1792,7 +1792,7 @@ def test_corrupt_group_actions_render_repairably(
     unified_rows = (
         f"Block,{fixed_ts},100,em0,WAN,block,4,6,TCP,"
         f"{ip_host},10.0.0.134,12345,443,in,US,{ip_logged_alias},{ip_eval},"
-        f"{ip_feed_name},Unknown,Unknown,Unknown,+\n"
+        f"{ip_feed_name},Unknown,Unknown,Unknown,,,+\n"
         f"DNS-reply,{fixed_ts},cache,,A,30,{dns_domain},127.0.0.1,203.0.113.134,US\n"
     )
 
