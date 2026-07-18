@@ -1368,23 +1368,29 @@ if (isset($_POST) && !empty($_POST)) {
 				// the old /32-before-/24 precedence.
 				$match = pfb_ip_suppressed_match($ip, array_keys($clists[$supp_key]['data']));
 				if ($match !== NULL) {
-					unset($clists[$supp_key]['data'][$match]);
+					// issue #1505: check the re-add before touching the customlist --
+					// a failed re-add must leave the suppression entry in place.
+					$apply = pfb_pfctl_checked_op($pfb['pfctl'], trim($table, "'"), 'add', $match);
+					if ($apply['ok']) {
+						unset($clists[$supp_key]['data'][$match]);
 
-					exec("{$pfb['pfctl']} -t {$table} -T add " . escapeshellarg($match) . ' 2>&1');
+						$data = '';
+						foreach ($clists[$supp_key]['data'] as $line) {
+							$data .= "{$line}";
+						}
+						$clists[$supp_key]['base64'] = base64_encode($data);
+						PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
 
-					$data = '';
-					foreach ($clists[$supp_key]['data'] as $line) {
-						$data .= "{$line}";
+						// Keep pfbsuppression(_v6).txt in step with the config edit --
+						// same in-memory refresh the addsuppress handler applies.
+						$pfb['ipconfig'][$cfg_key] = $clists[$supp_key]['base64'];
+						pfb_create_suppression_file();
+
+						$savemsg = "Removed [ {$match} ] from {$type} customlist and re-added it back into the aliastable [ {$table} ]";
+					} else {
+						$pfb_found = FALSE;
+						$savemsg = "The re-add of [ {$match} ] into aliastable [ {$table} ] failed [ {$apply['fail']} ] -- the {$type} customlist entry was kept; see the pfBlockerNG log.";
 					}
-					$clists[$supp_key]['base64'] = base64_encode($data);
-					PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
-
-					// Keep pfbsuppression(_v6).txt in step with the config edit --
-					// same in-memory refresh the addsuppress handler applies.
-					$pfb['ipconfig'][$cfg_key] = $clists[$supp_key]['base64'];
-					pfb_create_suppression_file();
-
-					$savemsg = "Removed [ {$match} ] from {$type} customlist and re-added it back into the aliastable [ {$table} ]";
 				}
 				else {
 					$pfb_found = FALSE;
@@ -1402,20 +1408,27 @@ if (isset($_POST) && !empty($_POST)) {
 				$ix	= ip_explode(trim($entry, "'"));	// Explode IP into evaluation strings
 
 				if (isset($clists['ipwhitelist' . $vtype][$table_2]['data'][$ix[0]])) {
-					unset($clists['ipwhitelist' . $vtype][$table_2]['data'][$ix[0]]);
-					exec("{$pfb['pfctl']} -t {$table} -T delete {$entry} 2>&1");
+					// issue #1505: check the delete before touching the customlist --
+					// a failed delete must leave the Permit entry in place.
+					$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table_2, 'delete', trim($entry, "'"));
+					if ($apply['ok']) {
+						unset($clists['ipwhitelist' . $vtype][$table_2]['data'][$ix[0]]);
 
-					$data = '';
-					foreach ($clists['ipwhitelist' . $vtype][$table_2]['data'] as $line) {
-						$data .= "{$line}";
+						$data = '';
+						foreach ($clists['ipwhitelist' . $vtype][$table_2]['data'] as $line) {
+							$data .= "{$line}";
+						}
+
+						$clists['ipwhitelist' . $vtype][$table_2]['base64'] = base64_encode($data);
+						// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not in registry
+						config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$clists['ipwhitelist' . $vtype][$table_2]['base64_idx']}/custom", $clists['ipwhitelist' . $vtype][$table_2]['base64']);
+						$aname = substr(substr($table_2, 4),0, -3);					// Remove 'pfB_' and '_v4'
+						touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");			// Set Flag for Cron/Update process
+						$savemsg = "The IP [ {$entry} ] has been deleted from the [ {$table} ] Permit Alias customlist.";
+					} else {
+						$pfb_found = FALSE;
+						$savemsg = "The delete of [ {$entry} ] from aliastable [ {$table} ] failed [ {$apply['fail']} ] -- the {$type} customlist entry was kept; see the pfBlockerNG log.";
 					}
-
-					$clists['ipwhitelist' . $vtype][$table_2]['base64'] = base64_encode($data);
-					// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not in registry
-					config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$clists['ipwhitelist' . $vtype][$table_2]['base64_idx']}/custom", $clists['ipwhitelist' . $vtype][$table_2]['base64']);
-					$aname = substr(substr($table_2, 4),0, -3);					// Remove 'pfB_' and '_v4'
-					touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");			// Set Flag for Cron/Update process
-					$savemsg = "The IP [ {$entry} ] has been deleted from the [ {$table} ] Permit Alias customlist.";
 				}
 				else {
 					$savemsg = "IP: [ {$entry} ] was not found in {$type} customlist!";
@@ -1532,8 +1545,6 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		$table_esc = escapeshellarg($table);
-
 		// Unlock IP -- ADR-53 covering-CIDR live punch (pfb_live_punch_run(),
 		// pfblockerng_extra.inc), the same mechanism the Suppression "+" uses:
 		// carve exactly this host out of whichever table entr(y/ies) currently
@@ -1569,9 +1580,15 @@ if (isset($_POST) && !empty($_POST)) {
 		// un-suppress 'delete_ip' handler's direct re-add: no covering-CIDR
 		// remainder to compute, only the single host that was carved out).
 		elseif ($_POST['ip_remove'] == 'lock') {
-			exec("{$pfb['pfctl']} -t {$table_esc} -T add " . escapeshellarg($ip) . ' 2>&1');
-			pfb_unlock('lock', 'ip', $ip, $table, $ip_unlock);
-			$savemsg = "The IP [ {$ip} ] has been re-locked into table [ {$table} ]!";
+			// issue #1505: check the re-add before recording the re-lock -- a
+			// failed re-add must leave the IP genuinely unlocked in the store.
+			$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
+			if ($apply['ok']) {
+				pfb_unlock('lock', 'ip', $ip, $table, $ip_unlock);
+				$savemsg = "The IP [ {$ip} ] has been re-locked into table [ {$table} ]!";
+			} else {
+				$savemsg = "The live re-lock of IP [ {$ip} ] failed [ {$apply['fail']} ] -- table [ {$table} ] does not block it; see the pfBlockerNG log.";
+			}
 		}
 
 		else {
@@ -1612,36 +1629,39 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		$ip_esc		= escapeshellarg($ip);
-		$table_esc	= escapeshellarg($table);
-
 		if (!isset($clists['ipwhitelist' . $vtype][$table]['data'][$ip])) {
-			exec("{$pfb['pfctl']} -t {$table_esc} -T add {$ip_esc} 2>&1");
-			@file_put_contents("{$pfb['aliasdir']}/{$table}.txt", "\n{$ip}", LOCK_EX);
+			// issue #1505: check the add before touching the customlist/config --
+			// a failed add must leave every write undone.
+			$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
+			if ($apply['ok']) {
+				@file_put_contents("{$pfb['aliasdir']}/{$table}.txt", "\n{$ip}", LOCK_EX);
 
-			if (!empty($descr)) {
-				$whitelist_string = "{$ip} # {$descr}\r\n";
-			} else {
-				$whitelist_string = "{$ip}\r\n";
-			}
-
-			$data = '';
-			if (isset($clists['ipwhitelist' . $vtype][$table]['data']) && is_array($clists['ipwhitelist' . $vtype][$table]['data'])) {
-				foreach ($clists['ipwhitelist' . $vtype][$table]['data'] as $line) {
-					$data .= "{$line}";
+				if (!empty($descr)) {
+					$whitelist_string = "{$ip} # {$descr}\r\n";
+				} else {
+					$whitelist_string = "{$ip}\r\n";
 				}
+
+				$data = '';
+				if (isset($clists['ipwhitelist' . $vtype][$table]['data']) && is_array($clists['ipwhitelist' . $vtype][$table]['data'])) {
+					foreach ($clists['ipwhitelist' . $vtype][$table]['data'] as $line) {
+						$data .= "{$line}";
+					}
+				}
+				$data .= "{$whitelist_string}";
+
+				$clists['ipwhitelist' . $vtype][$table]['base64'] = base64_encode($data);
+				// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not in registry
+				config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$clists['ipwhitelist' . $vtype][$table]['base64_idx']}/custom", $clists['ipwhitelist' . $vtype][$table]['base64']);
+				write_config("pfBlockerNG: Added [ {$ip} ] to [ {$table} ] Whitelist", FALSE);
+
+				$aname = substr(substr($table, 4),0, -3);					// Remove 'pfB_' and '_v4'
+				touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");			// Set Flag for Cron/Update process
+
+				$savemsg = "The IP [ {$ip} ] has been added to the [ {$table} ] Permit Alias customlist.";
+			} else {
+				$savemsg = "The add of [ {$ip} ] to aliastable [ {$table} ] failed [ {$apply['fail']} ] -- see the pfBlockerNG log.";
 			}
-			$data .= "{$whitelist_string}";
-
-			$clists['ipwhitelist' . $vtype][$table]['base64'] = base64_encode($data);
-			// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not in registry
-			config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$clists['ipwhitelist' . $vtype][$table]['base64_idx']}/custom", $clists['ipwhitelist' . $vtype][$table]['base64']);
-			write_config("pfBlockerNG: Added [ {$ip} ] to [ {$table} ] Whitelist", FALSE);
-
-			$aname = substr(substr($table, 4),0, -3);					// Remove 'pfB_' and '_v4'
-			touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");			// Set Flag for Cron/Update process
-
-			$savemsg = "The IP [ {$ip} ] has been added to the [ {$table} ] Permit Alias customlist.";
 			header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 			exit;
 		}

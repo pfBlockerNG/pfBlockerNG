@@ -4034,6 +4034,29 @@ function pfb_live_punch_apply(string $pfctl, string $table, array $plan): array 
 }
 
 /**
+ * pfb_pfctl_checked_op -- issue #1505: fail-closed single-entry `pfctl -T
+ * add|delete` for the four Alerts page mutation sites (delete_ip,
+ * delete_ipwhitelist, ip_remove=lock, ip_white) that used to ignore exec()'s
+ * status outright. Builds a one-entry plan and runs it through the SAME
+ * fail-closed executor pfb_live_punch_apply() -- never pfb_pfctl_table_op():
+ * see that function's docblock (ADR-61 ledger).
+ *
+ * $op is a fixed caller literal 'add'|'delete', never request-supplied
+ * (mirrors pfb_pfctl_table_op()'s $op contract).
+ *
+ * @param  string $pfctl Absolute path to the pfctl binary ($pfb['pfctl']).
+ * @param  string $table The pf table name (caller-validated, unescaped).
+ * @param  string $op    'add' or 'delete' -- a fixed caller literal.
+ * @param  string $entry The single table entry to add/delete.
+ * @return array{ok: bool, fail: ?string} see pfb_live_punch_apply().
+ */
+function pfb_pfctl_checked_op(string $pfctl, string $table, string $op, string $entry): array {
+	$plan = ['delete' => [], 'add' => []];
+	$plan[$op][] = $entry;
+	return pfb_live_punch_apply($pfctl, $table, $plan);
+}
+
+/**
  * pfb_live_punch_run -- issue #1467 (CWE-362): orchestrates one Alerts "+" /
  * Unlock live punch (snapshot -> plan -> apply) under the feed-pass lock
  * (pfblockerng.inc's pfb_feed_pass_acquire()/_release()), so a concurrent
