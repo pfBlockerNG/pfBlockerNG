@@ -1511,6 +1511,11 @@ function pfblockerng_get_countries() {
 
 	foreach ($geoip_files as $cont => $file) {
 
+		// issue #1507: $ftotal4/$ftotal6 are assigned only when a continent has
+		// data -- reset per continent so a data-less one renders 0, not the
+		// previous continent's count.
+		$ftotal4 = $ftotal6 = 0;
+
 		// Process the following for IPv4 and IPv6
 		foreach (array('4', '6') as $type) {
 
