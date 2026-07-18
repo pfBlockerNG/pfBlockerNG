@@ -6,20 +6,32 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * ADR-38 Amendment 1 — DNSBL syslog + unified.log formatter tests.
+ * ADR-38 Amendment 3 (issue #1369) — ASN CSV-column helper tests.
  *
  * Pins the behaviour of:
  *   pfb_syslog_format_dnsbl(array $fields): string
  *   pfb_unified_format_ip(array $fields): string
  *   pfb_unified_format_dnsbl(array $fields): string
  *   pfb_unified_format_dnsreply(array $fields): string
+ *   pfb_asn_blob_split(string $blob): array
+ *   pfb_asn_csv_fields(string $blob): string
  *
- * All four functions are PURE (no I/O, no globals).  These tests are the only
+ * All six functions are PURE (no I/O, no globals -- pfb_asn_csv_fields()'s
+ * only I/O is an in-memory php://temp stream). These tests are the only
  * callers during this phase.
  *
  * Coverage mandate (CLAUDE.md):
  *   - pfb_syslog_format_dnsbl: all fields; group absent; feed absent; both
  *     absent; a value with a space is double-quoted; NULL b_type + CNAME q_type.
  *   - pfb_unified_format_ip/dnsbl/dnsreply: exact golden-string fidelity.
+ *   - pfb_asn_blob_split/pfb_asn_csv_fields (issue #1369): the real pipe-blob
+ *     shape from the issue's own pasted example; bare 'Unknown'/'null'/''
+ *     states; comma/quote/colon/Unicode/CR/LF in domain or name (fputcsv()
+ *     also quotes any value containing a space -- stricter than bare
+ *     RFC4180, still valid); the encoded 3-field tail round-trips through
+ *     fgetcsv() with no bespoke escaping, including when spliced into a full
+ *     unified.log row via pfb_unified_format_ip() (field-local CSV quoting
+ *     composes).
  *
  * All assertions are against EXACT golden strings.
  */
@@ -473,5 +485,279 @@ final class UnifiedFormatTest extends TestCase
 			$result,
 			'the new ISO-8601 datetime must pass through unmodified -- zero further change needed'
 		);
+	}
+
+	// -----------------------------------------------------------------------
+	// pfb_asn_blob_split (issue #1369 / ADR-38 Amendment 3)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * The real blob shape from issue #1369's own pasted example line, verbatim
+	 * (not re-derived): "|ASN:  AS50360 | domain:  4vendeta.com | name:
+	 * Tamatiya EOOD |". Confirms the label/value split at the FIRST ':' per
+	 * segment, trimming the padding whitespace mmdblookup's flattening leaves.
+	 */
+	public function testAsnBlobSplitRealExampleFromIssue(): void
+	{
+		$blob = '|ASN:  AS50360 | domain:  4vendeta.com | name:  Tamatiya EOOD |';
+
+		$result = pfb_asn_blob_split($blob);
+
+		$this->assertSame(
+			['asn' => 'AS50360', 'domain' => '4vendeta.com', 'name' => 'Tamatiya EOOD'],
+			$result,
+			'the real issue #1369 example blob must split into these exact 3 parts'
+		);
+	}
+
+	/**
+	 * A bare 'Unknown' state literal (the lookup found nothing) has no '|' or
+	 * ':' -- passed through verbatim as 'asn', domain/name empty.
+	 */
+	public function testAsnBlobSplitUnknownStateLiteral(): void
+	{
+		$result = pfb_asn_blob_split('Unknown');
+
+		$this->assertSame(['asn' => 'Unknown', 'domain' => '', 'name' => ''], $result);
+	}
+
+	/**
+	 * A bare 'null' state literal (ASN reporting was off at write time) --
+	 * same bare-literal handling as 'Unknown'.
+	 */
+	public function testAsnBlobSplitNullStateLiteral(): void
+	{
+		$result = pfb_asn_blob_split('null');
+
+		$this->assertSame(['asn' => 'null', 'domain' => '', 'name' => ''], $result);
+	}
+
+	/**
+	 * An empty blob coerces to the 'Unknown' state (never a blank asn value).
+	 */
+	public function testAsnBlobSplitEmptyStringCoercesToUnknown(): void
+	{
+		$result = pfb_asn_blob_split('');
+
+		$this->assertSame(['asn' => 'Unknown', 'domain' => '', 'name' => ''], $result);
+	}
+
+	/**
+	 * A domain/name carrying a comma, a double quote, a colon, and a
+	 * Unicode codepoint all split correctly -- the label split only ever
+	 * consumes the segment's FIRST ':', so a colon inside the VALUE (not
+	 * just the label) is preserved verbatim.
+	 */
+	public function testAsnBlobSplitPreservesCommaQuoteColonAndUnicodeInValues(): void
+	{
+		$blob = '|ASN:  AS64500 | domain:  ex,ample.com | name:  Ünïcödé "Org", Ltd: EMEA |';
+
+		$result = pfb_asn_blob_split($blob);
+
+		$this->assertSame('AS64500', $result['asn']);
+		$this->assertSame('ex,ample.com', $result['domain']);
+		$this->assertSame('Ünïcödé "Org", Ltd: EMEA', $result['name']);
+	}
+
+	// -----------------------------------------------------------------------
+	// pfb_asn_csv_fields (issue #1369 / ADR-38 Amendment 3)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Single-token domain/name (no comma/quote/space anywhere) renders as 3
+	 * fully unquoted CSV fields -- nothing forces fputcsv() to quote.
+	 */
+	public function testAsnCsvFieldsSingleTokenValuesRenderFullyUnquoted(): void
+	{
+		$blob = '|ASN:  AS64599 | domain:  example.com | name:  ExampleOrg |';
+
+		$result = pfb_asn_csv_fields($blob);
+
+		$this->assertSame('AS64599,example.com,ExampleOrg', $result);
+	}
+
+	/**
+	 * The real blob shape from issue #1369's own pasted example. PHP's
+	 * fputcsv() quotes ANY field containing a space -- a stricter guarantee
+	 * than the bare RFC4180 minimum (delimiter/enclosure/newline only), still
+	 * valid CSV that round-trips identically (proved by the fgetcsv
+	 * round-trip tests below), so the multi-word org name comes back quoted.
+	 */
+	public function testAsnCsvFieldsRealExampleFromIssueQuotesTheSpaceContainingName(): void
+	{
+		$blob = '|ASN:  AS50360 | domain:  4vendeta.com | name:  Tamatiya EOOD |';
+
+		$result = pfb_asn_csv_fields($blob);
+
+		$this->assertSame('AS50360,4vendeta.com,"Tamatiya EOOD"', $result);
+	}
+
+	/**
+	 * A comma inside the org name forces RFC4180 double-quoting of THAT field
+	 * only -- native fputcsv() behaviour with an explicit empty escape arg
+	 * (never PHP's default backslash-escape quirk).
+	 */
+	public function testAsnCsvFieldsCommaInNameIsDoubleQuoted(): void
+	{
+		$blob = '|ASN:  AS64500 | domain:  example.com | name:  Example, Inc |';
+
+		$result = pfb_asn_csv_fields($blob);
+
+		$this->assertSame('AS64500,example.com,"Example, Inc"', $result);
+	}
+
+	/**
+	 * A double quote inside the org name is doubled per RFC4180 (never
+	 * backslash-escaped) -- exercises fputcsv()'s explicit empty escape arg.
+	 */
+	public function testAsnCsvFieldsQuoteInNameIsRfc4180Doubled(): void
+	{
+		$blob = '|ASN:  AS64501 | domain:  example.net | name:  "Quoted" Org |';
+
+		$result = pfb_asn_csv_fields($blob);
+
+		$this->assertSame('AS64501,example.net,"""Quoted"" Org"', $result);
+	}
+
+	/**
+	 * A colon inside the org name (not just the label) survives -- the
+	 * blob-split only consumes the segment's FIRST ':', and CSV has no
+	 * quoting rule for ':' at all (the surrounding quotes here are the same
+	 * space-triggered quoting as the real-example test above, not a colon
+	 * escaping rule).
+	 */
+	public function testAsnCsvFieldsColonInNamePassesThroughUnescaped(): void
+	{
+		$blob = '|ASN:  AS64502 | domain:  example.org | name:  Org: EMEA Division |';
+
+		$result = pfb_asn_csv_fields($blob);
+
+		$this->assertSame('AS64502,example.org,"Org: EMEA Division"', $result);
+	}
+
+	/**
+	 * A Unicode codepoint in the org name passes through byte-identical --
+	 * fputcsv() is byte-oriented, not charset-aware, so UTF-8 needs no
+	 * special handling (quoted here because the value also contains spaces).
+	 */
+	public function testAsnCsvFieldsUnicodeInNamePassesThroughUnmodified(): void
+	{
+		$blob = '|ASN:  AS64503 | domain:  xn--ls8h.example | name:  Ünïcödé Örg 日本 |';
+
+		$result = pfb_asn_csv_fields($blob);
+
+		$this->assertSame('AS64503,xn--ls8h.example,"Ünïcödé Örg 日本"', $result);
+	}
+
+	/**
+	 * An empty domain/name (label present, value empty) renders as an empty
+	 * CSV segment, never a stray placeholder.
+	 */
+	public function testAsnCsvFieldsEmptyDomainAndNameRenderAsEmptySegments(): void
+	{
+		$blob = '|ASN:  AS64504 | domain:   | name:   |';
+
+		$result = pfb_asn_csv_fields($blob);
+
+		$this->assertSame('AS64504,,', $result);
+	}
+
+	/**
+	 * CR/LF embedded in the org name is normalized to a single space BEFORE
+	 * CSV-encoding -- so a written row always stays exactly one physical
+	 * line (reverse-tail readers rely on this), per the issue #1369
+	 * amendment's explicit contract.
+	 */
+	public function testAsnCsvFieldsCrLfInNameNormalizedToSpace(): void
+	{
+		$blob = "|ASN:  AS64505 | domain:  example.io | name:  Line One\r\nLine Two |";
+
+		$result = pfb_asn_csv_fields($blob);
+
+		$this->assertSame('AS64505,example.io,"Line One Line Two"', $result);
+		$this->assertStringNotContainsString("\n", $result, 'the encoded fragment must never contain a raw newline');
+		$this->assertStringNotContainsString("\r", $result, 'the encoded fragment must never contain a raw carriage return');
+	}
+
+	/**
+	 * A bare 'Unknown'/'null' state blob renders as a single unquoted token
+	 * plus two empty segments -- exactly the writer's "no metadata" shape.
+	 */
+	public function testAsnCsvFieldsUnknownAndNullStatesRenderBareToken(): void
+	{
+		$this->assertSame('Unknown,,', pfb_asn_csv_fields('Unknown'));
+		$this->assertSame('null,,', pfb_asn_csv_fields('null'));
+		$this->assertSame('Unknown,,', pfb_asn_csv_fields(''));
+	}
+
+	/**
+	 * End-to-end round trip: the encoded 3-field tail, spliced into a full
+	 * comma-joined row exactly as pfb_daemon_filterlog() builds $details,
+	 * parses back via fgetcsv() (matching escape argument) into the SAME 3
+	 * values -- "round-trips through CSV without bespoke escaping" for a
+	 * value carrying every awkward character in the coverage matrix at once.
+	 */
+	public function testAsnCsvFieldsRoundTripsThroughFgetcsv(): void
+	{
+		$blob = '|ASN:  AS64506 | domain:  ex,am"ple.com | name:  Ünïcödé "Org", Ltd: EMEA |';
+		$asnCsv = pfb_asn_csv_fields($blob);
+
+		// Mirrors pfb_daemon_filterlog()'s $details construction: the 3-field
+		// tail is spliced onto the end of an otherwise plain comma-joined row.
+		$line = "2026-07-18 00:00:00,rule1,em0,WAN,block,4,tcp,TCP,192.0.2.1,198.51.100.1,1,2,in,US,Alias,192.0.2.1,Feed,,," . $asnCsv;
+
+		$fh = fopen('php://temp', 'r+');
+		$this->assertNotFalse($fh);
+		fwrite($fh, $line . "\n");
+		rewind($fh);
+		$parsed = fgetcsv($fh, 0, ',', '"', '');
+		fclose($fh);
+
+		$this->assertNotFalse($parsed, 'the spliced row must parse as valid CSV');
+		// Indices 0-18 are the 19 plain fields (timestamp through Client
+		// Hostname) before the ASN triplet at 19/20/21.
+		$this->assertSame('AS64506', $parsed[19] ?? null, 'asn column');
+		$this->assertSame('ex,am"ple.com', $parsed[20] ?? null, 'asn_domain column, comma+quote intact');
+		$this->assertSame('Ünïcödé "Org", Ltd: EMEA', $parsed[21] ?? null, 'asn_name column, comma+quote+colon+unicode intact');
+		$this->assertCount(22, $parsed, 'exactly 22 fields: 19 plain (incl. timestamp) + asn + asn_domain + asn_name');
+	}
+
+	/**
+	 * Same round trip, but the encoded tail is spliced through
+	 * pfb_unified_format_ip() itself (the 'details' key) -- proving
+	 * field-local CSV quoting composes: pre-escaping the 3-field tail with
+	 * fputcsv() and then string-joining it into the simple l_type/log/
+	 * details/dup concat is equivalent to escaping the whole row at once,
+	 * because RFC4180 quoting never depends on neighbouring fields.
+	 */
+	public function testAsnCsvFieldsSurviveThroughPfbUnifiedFormatIpAndFgetcsv(): void
+	{
+		$blob = '|ASN:  AS64507 | domain:  4vendeta.com | name:  Tamatiya, EOOD |';
+		$asnCsv = pfb_asn_csv_fields($blob);
+
+		$log = '2026-07-18 00:00:00,rule1,em0,WAN,block,4,tcp,TCP,192.0.2.1,198.51.100.1,1,2';
+		$details = 'in,US,Alias,192.0.2.1,Feed,ResolvedHost,ClientHost,' . $asnCsv;
+
+		$unified = pfb_unified_format_ip([
+			'l_type'  => 'Block',
+			'log'     => $log,
+			'details' => $details,
+			'dup'     => '+',
+		]);
+
+		$fh = fopen('php://temp', 'r+');
+		$this->assertNotFalse($fh);
+		fwrite($fh, $unified . "\n");
+		rewind($fh);
+		$parsed = fgetcsv($fh, 0, ',', '"', '');
+		fclose($fh);
+
+		$this->assertNotFalse($parsed);
+		$this->assertSame('Block', $parsed[0] ?? null, 'unified row keeps its leading event-type prefix');
+		$this->assertCount(24, $parsed, 'l_type + 19 plain fields (incl. timestamp) + asn + asn_domain + asn_name + dup = 24');
+		$this->assertSame('AS64507', $parsed[20] ?? null, 'asn column');
+		$this->assertSame('4vendeta.com', $parsed[21] ?? null, 'asn_domain column');
+		$this->assertSame('Tamatiya, EOOD', $parsed[22] ?? null, 'asn_name column, comma intact');
+		$this->assertSame('+', $parsed[23] ?? null, 'trailing duplicate-marker column unaffected');
 	}
 }
