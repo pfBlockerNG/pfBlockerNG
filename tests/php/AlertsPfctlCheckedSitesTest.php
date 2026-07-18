@@ -84,6 +84,7 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 				. ' switch (1) { case 1:'
 				. $m[1]
 				. ' }'
+				. ' if ($pfb_found) { write_config("pfBlockerNG: Deleted [ {$entry} ] from {$type} customlist", FALSE); }'
 				. ' return [\'pfb_found\' => $pfb_found, \'savemsg\' => $savemsg]; }'
 			);
 		}
@@ -289,6 +290,20 @@ SH
 	// delete_ipwhitelist
 	// =====================================================================
 
+	public function testDeleteIpWhitelistV4NotFoundSkipsWrite(): void
+	{
+		$clists = ['ipwhitelist4' => ['pfB_Permit_v4' => ['base64_idx' => 0, 'data' => []]]];
+
+		$result = pfb_alerts_oracle_delete_ipwhitelist("'198.51.100.9'", "'pfB_Permit_v4'", $clists);
+
+		$this->assertEmpty(
+			$GLOBALS['pfb_test_write_config_calls'] ?? [],
+			'a missing Permit entry must NOT call write_config()'
+		);
+		$this->assertFalse($result['pfb_found']);
+		$this->assertStringContainsString('not found', $result['savemsg']);
+	}
+
 	public function testDeleteIpWhitelistV4FailureKeepsEntryAndSkipsWrite(): void
 	{
 		$this->scriptFailure('delete', '198.51.100.9');
@@ -319,6 +334,7 @@ SH
 			$this->lastLogRow(),
 			'the delete must reach pfctl as -t pfB_Permit_v4 -T delete 198.51.100.9'
 		);
+		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 	}
 
 	public function testDeleteIpWhitelistV6FailureKeepsEntryAndSkipsWrite(): void
