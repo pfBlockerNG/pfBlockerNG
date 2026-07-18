@@ -30,6 +30,7 @@ session-scoped VM for the sibling flows -- exercises the reverse branch too.
 from __future__ import annotations
 
 import base64
+import hashlib
 import subprocess
 import time
 from typing import TYPE_CHECKING, Any
@@ -870,17 +871,17 @@ def test_delete_ip_v6_unsuppresses_entry_and_restores_block(
 
 
 # --------------------------------------------------------------------------- #
-# entry_delete=delete_ipwhitelist (alerts.php:1400 -- issue #1505): fail-closed
+# entry_delete=delete_ipwhitelist (alerts.php:1400 -- issues #1505, #1514): fail-closed
 # invariant -- every customlist/config write and the cron `.update` flag gate on
-# the checked pfctl delete outcome; a failed delete must change nothing.
+# a real customlist deletion; a failed or missing delete must change nothing.
 # --------------------------------------------------------------------------- #
 
 
-def test_delete_ipwhitelist_pfctl_failure_keeps_customlist_entry(
+def test_delete_ipwhitelist_noop_paths_skip_config_write(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """A failed pfctl delete must not drop the Permit customlist entry (#1505).
+    """Failed and missing Permit deletes must not persist a config change (#1505, #1514).
 
     Scenario: fail-closed store/table consistency for entry_delete=delete_ipwhitelist.
 
@@ -893,7 +894,8 @@ def test_delete_ipwhitelist_pfctl_failure_keeps_customlist_entry(
     Then: (1) the failure savemsg is surfaced, (2) the alias's customlist
     STILL holds the host -- the config write never ran, (3) no
     ``Wl1505_custom_v4.update`` cron flag was touched -- the write-gate never
-    fired.
+    fired, and (4) deleting a different host absent from the customlist leaves
+    the raw config.xml unchanged.
     """
     vm = smoke_vm
     host = "192.0.2.150"  # RFC 5737 TEST-NET-1 -- unused elsewhere in this module
@@ -956,6 +958,15 @@ def test_delete_ipwhitelist_pfctl_failure_keeps_customlist_entry(
             == "YES"
         )
         assert not flag_present, f"{update_flag} unexpectedly exists after a failed delete_ipwhitelist POST"
+
+        # THEN (4): a missing entry is also a no-op -- no write_config revision.
+        missing_host = "192.0.2.151"
+        config_before = hashlib.sha256(helpers.read_log_file(vm, "/conf/config.xml").encode("utf-8")).hexdigest()
+        resp = _post_action(webui, {"entry_delete": "delete_ipwhitelist", "domain": missing_host, "table": table})
+        assert not looks_like_login_page(resp.text), "missing delete_ipwhitelist POST returned the login form"
+        assert "was not found" in resp.text, f"missing-entry savemsg absent from response: {resp.text!r}"
+        config_after = hashlib.sha256(helpers.read_log_file(vm, "/conf/config.xml").encode("utf-8")).hexdigest()
+        assert config_after == config_before, "missing Permit entry unexpectedly created a config.xml revision"
     finally:
         _del_list_row(vm, CFG_IPV4_LISTS, rowid)
         helpers.php_eval(vm, f"@unlink({helpers._php_str(update_flag)}); echo 'OK';")
