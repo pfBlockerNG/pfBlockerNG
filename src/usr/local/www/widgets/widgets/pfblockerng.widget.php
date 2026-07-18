@@ -478,6 +478,11 @@ function pfBlockerNG_get_failed() {
 		$tab6 = "\t\t\t\t\t";
 		$tab7 = "\t\t\t\t\t\t";
 		$counter = 1;
+		// issue #1497: read at the link build below only when $pfb_found is TRUE,
+		// which is set in the same loop iteration that assigns both -- provably
+		// paired, but PHPStan can't correlate that across the nested foreach/break 2.
+		$key = '';
+		$type = '';
 
 		foreach ($entries as $entry) {
 			$text = htmlspecialchars($entry['message']);
