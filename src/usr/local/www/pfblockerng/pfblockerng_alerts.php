@@ -1431,6 +1431,7 @@ if (isset($_POST) && !empty($_POST)) {
 					}
 				}
 				else {
+					$pfb_found = FALSE;
 					$savemsg = "IP: [ {$entry} ] was not found in {$type} customlist!";
 				}
 				break;
