@@ -29,14 +29,14 @@ def _package_tuple(package: Any) -> tuple[str, tuple[str, str | None, str | None
         return None
     refs: list[str | None] = []
     for field in ("source", "dist"):
-        value = package.get(field)
-        if value is None:
+        if field not in package:
             refs.append(None)
             continue
+        value = package[field]
         if not isinstance(value, dict):
             return None
         reference = value.get("reference")
-        if reference is not None and not isinstance(reference, str):
+        if not isinstance(reference, str) or not reference:
             return None
         refs.append(reference)
     return name, (version, refs[0], refs[1])

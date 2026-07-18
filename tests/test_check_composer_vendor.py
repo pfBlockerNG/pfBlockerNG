@@ -70,6 +70,32 @@ def test_absent_source_references_are_normalized_to_null(tmp_path: Path) -> None
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(
+    ("field", "metadata"),
+    [
+        ("source", {}),
+        ("source", {"reference": None}),
+        ("source", {"reference": ""}),
+        ("dist", {}),
+        ("dist", {"reference": None}),
+        ("dist", {"reference": ""}),
+    ],
+)
+def test_present_reference_metadata_must_be_non_empty_string(
+    tmp_path: Path, field: str, metadata: dict[str, Any]
+) -> None:
+    locked = package()
+    locked[field] = metadata
+    installed = package()
+    installed[field] = metadata
+    result = run_checker(fixture(tmp_path, [locked], [installed]))
+    assert_failure(
+        result,
+        "malformed composer.lock packages package 0",
+        "malformed vendor/composer/installed.json package 0",
+    )
+
+
 def test_symlinked_vendor_fails_before_metadata(tmp_path: Path) -> None:
     (tmp_path / "composer.lock").write_text("not json", encoding="utf-8")
     target = tmp_path / "shared-vendor"
