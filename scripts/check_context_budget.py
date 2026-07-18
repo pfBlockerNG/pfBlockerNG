@@ -47,6 +47,7 @@ ADAPTER_BUDGET = 8_192
 POLICY_BUDGET = 12_288
 STUB_BUDGET = 400
 CAPSULE_BUDGET = 1_800
+CAPSULE_COMMAND_TIMEOUT = 5
 # The parity label (everything before the first ": ") is the one uncheckable part of
 # the UserPromptSubmit capsule; the bound keeps it a label, not a smuggling channel.
 PARITY_LABEL_MAX = 80
@@ -69,7 +70,7 @@ HEADER_WINDOW = 12
 _SCOPE_RE = re.compile(r"\*\*Scope:?\*\*|^Scope:|\bScope: ", re.MULTILINE)
 _LOADWHEN_RE = re.compile(r"Load[- ]when:", re.IGNORECASE)
 
-_MD_TOKEN_RE = re.compile(r"`([^`\s]+\.md)`")
+_MD_TOKEN_RE = re.compile(r"`([^`]*\.md)`")
 _RESOLVE_DIRS = (".agents/policy", ".agents/context", "docs/misc")
 
 # A single well-formed `<a|b|c>` alternation group: prefix/suffix may not carry
@@ -88,6 +89,8 @@ def _expand_template(tok: str) -> list[str] | None:
     """
     match = _TEMPLATE_RE.fullmatch(tok)
     if match is None:
+        return None
+    if any(char.isspace() for char in tok):
         return None
     alts = match["body"].replace("\\", "").split("|")
     if len(alts) < 2 or any(alt == "" for alt in alts):
@@ -180,12 +183,16 @@ def check_headers(root: Path) -> list[str]:
     bootstrap = root / "AGENTS.md"
     if not bootstrap.is_file():
         return ["AGENTS.md: bootstrap missing — nothing to route from"]
-    tokens, _ = routing_targets(bootstrap.read_text(encoding="utf-8"))
+    tokens, skipped = routing_targets(bootstrap.read_text(encoding="utf-8"))
+    violations = [
+        f"AGENTS.md: malformed routing target `{token}` skipped"
+        for token in skipped
+        if any(char.isspace() for char in token)
+    ]
     if not tokens:
         # A renamed/removed "## Routing table" heading would otherwise disarm
         # the whole header gate silently (zero targets = vacuous pass).
-        return ["AGENTS.md: no routing-table targets extracted — heading renamed or table removed?"]
-    violations = []
+        return violations or ["AGENTS.md: no routing-table targets extracted — heading renamed or table removed?"]
     for token in dict.fromkeys(tokens):
         rel = resolve_target(root, token)
         if rel is None:
@@ -212,11 +219,19 @@ def extract_capsules(settings_text: str) -> tuple[list[tuple[str, str]], list[st
                     command = hook.get("command", "")
                     if "additionalContext" not in command:
                         continue
-                    start, end = command.find("'"), command.rfind("'")
                     try:
-                        payload = json.loads(command[start + 1 : end])
+                        stdout = subprocess.run(
+                            ["sh", "-c", command],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                            timeout=CAPSULE_COMMAND_TIMEOUT,
+                        ).stdout
+                        payload = json.loads(stdout)
                         text = payload["hookSpecificOutput"]["additionalContext"]
-                    except (ValueError, KeyError, TypeError):
+                        if not isinstance(text, str):
+                            raise TypeError("additionalContext is not text")
+                    except (subprocess.SubprocessError, OSError, UnicodeError, ValueError, KeyError, TypeError):
                         errors.append(f"{SETTINGS}: {event} capsule payload is not extractable JSON")
                         continue
                     capsules.append((event, text))
