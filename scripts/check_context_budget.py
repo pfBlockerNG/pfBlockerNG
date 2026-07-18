@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -47,7 +48,6 @@ ADAPTER_BUDGET = 8_192
 POLICY_BUDGET = 12_288
 STUB_BUDGET = 400
 CAPSULE_BUDGET = 1_800
-CAPSULE_COMMAND_TIMEOUT = 5
 # The parity label (everything before the first ": ") is the one uncheckable part of
 # the UserPromptSubmit capsule; the bound keeps it a label, not a smuggling channel.
 PARITY_LABEL_MAX = 80
@@ -70,7 +70,7 @@ HEADER_WINDOW = 12
 _SCOPE_RE = re.compile(r"\*\*Scope:?\*\*|^Scope:|\bScope: ", re.MULTILINE)
 _LOADWHEN_RE = re.compile(r"Load[- ]when:", re.IGNORECASE)
 
-_MD_TOKEN_RE = re.compile(r"`([^`]*\.md)`")
+_MD_TOKEN_RE = re.compile(r"`([^`]*\.md[^`]*)`")
 _RESOLVE_DIRS = (".agents/policy", ".agents/context", "docs/misc")
 
 # A single well-formed `<a|b|c>` alternation group: prefix/suffix may not carry
@@ -220,18 +220,14 @@ def extract_capsules(settings_text: str) -> tuple[list[tuple[str, str]], list[st
                     if "additionalContext" not in command:
                         continue
                     try:
-                        stdout = subprocess.run(
-                            ["sh", "-c", command],
-                            capture_output=True,
-                            text=True,
-                            check=True,
-                            timeout=CAPSULE_COMMAND_TIMEOUT,
-                        ).stdout
-                        payload = json.loads(stdout)
+                        argv = shlex.split(command)
+                        if len(argv) != 2 or argv[0] != "echo" or shlex.join(argv) != command:
+                            raise ValueError("noncanonical capsule command")
+                        payload = json.loads(argv[1])
                         text = payload["hookSpecificOutput"]["additionalContext"]
                         if not isinstance(text, str):
                             raise TypeError("additionalContext is not text")
-                    except (subprocess.SubprocessError, OSError, UnicodeError, ValueError, KeyError, TypeError):
+                    except (OSError, UnicodeError, ValueError, KeyError, TypeError):
                         errors.append(f"{SETTINGS}: {event} capsule payload is not extractable JSON")
                         continue
                     capsules.append((event, text))

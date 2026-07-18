@@ -249,6 +249,14 @@ def test_check_headers_reports_spaced_template_token(tmp_path: Path) -> None:
     assert violations == ["AGENTS.md: malformed routing target `lang-<php | python>.md` skipped"]
 
 
+def test_check_headers_reports_spaced_template_token_with_trailing_text(tmp_path: Path) -> None:
+    root = _scratch_repo(tmp_path)
+    bootstrap = _BOOTSTRAP.replace("lang-<php\\|python\\|shell>.md", "lang-<php | python>.md trailing")
+    _write(root, "AGENTS.md", bootstrap)
+    violations = ccb.check_headers(root)
+    assert violations == ["AGENTS.md: malformed routing target `lang-<php | python>.md trailing` skipped"]
+
+
 # --- both header shapes accepted; window enforced ------------------------------
 
 
@@ -297,6 +305,10 @@ def _settings_ups(capsule: str) -> str:
     )
 
 
+def _settings_command(command: str, event: str = "SessionStart") -> str:
+    return json.dumps({"hooks": {event: [{"hooks": [{"type": "command", "command": command}]}]}})
+
+
 def test_extract_capsules_returns_event_text_and_measures_bytes() -> None:
     # extract_capsules returns the capsule TEXT per event; byte length is
     # derived by the caller where it matters.
@@ -324,6 +336,40 @@ def test_extract_capsules_reports_unextractable_payload() -> None:
 
 def test_extract_capsules_rejects_shell_broken_apostrophe() -> None:
     capsules, errors = ccb.extract_capsules(_settings("repo's"))
+    assert capsules == []
+    assert errors == [".claude/settings.json: SessionStart capsule payload is not extractable JSON"]
+
+
+def test_extract_capsules_rejects_appended_command_without_execution(tmp_path: Path) -> None:
+    marker = tmp_path / "MARKER"
+    payload = json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "abc"}})
+    settings = _settings_command(f"echo '{payload}'; touch {marker}")
+    capsules, errors = ccb.extract_capsules(settings)
+    assert capsules == []
+    assert errors == [".claude/settings.json: SessionStart capsule payload is not extractable JSON"]
+    assert not marker.exists(), f"capsule validation executed side effect: {marker}"
+
+
+def test_extract_capsules_keeps_single_quoted_shell_metacharacters_literal(tmp_path: Path) -> None:
+    marker = tmp_path / "MARKER"
+    capsule = f"literal $(touch {marker})"
+    payload = json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": capsule}})
+    capsules, errors = ccb.extract_capsules(_settings_command(f"echo '{payload}'"))
+    assert capsules == [("SessionStart", capsule)]
+    assert errors == []
+    assert not marker.exists(), f"single-quoted capsule text expanded: {marker}"
+
+
+@pytest.mark.parametrize("shape", ["double-quoted", "printf", "extra-arg", "multiple-commands"])
+def test_extract_capsules_rejects_noncanonical_commands(shape: str) -> None:
+    payload = json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "abc"}})
+    command = {
+        "double-quoted": f'echo "{payload}"',
+        "printf": f"printf '%s' '{payload}'",
+        "extra-arg": f"echo '{payload}' ''",
+        "multiple-commands": f"echo '{payload}'; true",
+    }[shape]
+    capsules, errors = ccb.extract_capsules(_settings_command(command))
     assert capsules == []
     assert errors == [".claude/settings.json: SessionStart capsule payload is not extractable JSON"]
 
