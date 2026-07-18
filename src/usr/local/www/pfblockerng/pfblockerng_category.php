@@ -385,6 +385,10 @@ if (isset($savemsg)) {
 	<div id="<?=$pageid;?>" class="panel-body">
 
 		<?php
+			// issue #1497: read at 565, reachable only when $gtype == 'geoip' (same
+			// guard as below) -- but that guard is far enough away, across a table
+			// render loop, that PHPStan can't correlate the two.
+			$maxmind_verify = FALSE;
 			// Maxmind credential verification
 			if ($gtype == 'geoip') {
 				$maxmind_verify = TRUE;
@@ -419,7 +423,12 @@ if (isset($savemsg)) {
 			</thead>
 			<tbody>
 
-				<?php if (!empty($rowdata) && !empty($rowdata[0])):
+				<?php
+				// issue #1497: read at 594 ($r_id +1, the "Add" link). Both branches
+				// below provably assign it (foreach over a proven non-empty $rowdata,
+				// or the else's explicit -1); this default changes nothing at runtime.
+				$r_id = -1;
+				if (!empty($rowdata) && !empty($rowdata[0])):
 					foreach ($rowdata as $r_id => $row): ?>
 
 				<tr style="vertical-align: top"<?php if ($gtype != 'geoip'): ?> class="sortable"<?php endif; ?> id="pfb_r<?=$r_id;?>">

@@ -1071,6 +1071,10 @@ if (empty($input_errors) && (empty($rowdata[$rowid]['sort']) || $rowdata[$rowid]
 	ksort($new_enabled, SORT_NATURAL | SORT_FLAG_CASE);
 
 	$new = $new_enabled + $new_disabled;
+	// issue #1497: read at 1077; $new is never empty here ($rowdata[$rowid]['row']
+	// always has at least the placeholder row added above), but PHPStan can't
+	// prove that -- array() (not '': $final[] appends, which fatals on a string).
+	$final = array();
 	foreach ($new as $key => $data) {
 		$final[] = $data;
 	}

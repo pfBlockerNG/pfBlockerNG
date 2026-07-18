@@ -312,6 +312,10 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 	$p_type = '';
 	foreach ($info as $aliasname => $data):
 		$p_aliasname = '';
+		// issue #1497: read at 396 on the first alt-URL row; only ever assigned at
+		// the loop tail (606, previous-row tracking) -- a malformed-data edge on
+		// the very first iteration otherwise leaves it undefined.
+		$p_tr_style = '';
 		if (!isset($data['feeds'])) {
 			continue;
 		}
