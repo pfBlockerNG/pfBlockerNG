@@ -178,6 +178,20 @@ def deployed_vm(
     yield smoke_vm
 
 
+@pytest.fixture(autouse=True)
+def _syslog_export_off(deployed_vm: SmokeVM) -> None:
+    """Per-test isolation (#1396): every test starts with syslog export OFF.
+
+    A test that needs export ON seeds it itself — no test may inherit the toggle
+    (or prior export records) from a sibling, so each node passes alone through
+    the filtered smoke path and in any order. Fails loudly if the reset does not
+    take (a module-scoped baseline is NOT per-test isolation).
+    """
+    _set_syslog_enabled(deployed_vm, on=False)
+    val = h.config_get(deployed_vm, CFG_GENERAL + "/log_syslog")
+    assert val == "", f"syslog-export OFF reset did not take: log_syslog={val!r}"
+
+
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -501,8 +515,9 @@ def test_syslog_routing_and_rotation_registered(deployed_vm: SmokeVM) -> None:
 def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """OFF ⇒ no export record; ON ⇒ a pfblockerng record per DNSBL block, host-side, no restart.
 
-    Given: DNSBL blocking TWO distinct domains (VIP); syslog export OFF (fixture default),
-           so NO event line exists in pfblockerng_syslog.log yet.
+    Given: DNSBL blocking TWO distinct domains (VIP); syslog export OFF (per-test
+           reset, #1396). The OFF/ON proof is baseline-relative, so records left by
+           sibling tests (any order) don't matter.
     When:  domain_off is probed WHILE export is STILL OFF (no restart) — the DNSBL block
            itself still fires (proven via the CSV dnsbl.log marker), but must export
            nothing. THEN log_syslog is enabled (write_config ONLY — no restart) and the
@@ -520,7 +535,7 @@ def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM
     domain_on: str = vm._pfb_dnsbl_domain_on  # type: ignore[attr-defined]
     civm_ip: str = vm._pfb_civm_ip  # type: ignore[attr-defined]
 
-    # Given: syslog export OFF (fixture default) — no event lines recorded yet.
+    # Given: syslog export OFF (per-test reset) — baseline whatever is already there.
     before = _pfb_event_lines(vm)
     sys_leak_before = len(_system_log_export_leaks(vm))
 
@@ -601,7 +616,8 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
     """ON ⇒ a pfblockerng record per IP Block event in the dedicated file.
 
     Given: a floating Deny_Outbound rule covering TEST_IP_BLOCK_RANGE; syslog export
-           ON (from the DNSBL test); the filterlog daemon running; the civm client
+           ON (seeded by THIS test — LIVE toggle, no restart, never inherited from a
+           sibling, #1396); the filterlog daemon running; the civm client
            behind the firewall.
     When:  the civm client curls the blocked WAN IP (pass-through traffic pf blocks
            + logs on WAN-out — NOT pfSense's own traffic, which the rule misses).
@@ -613,8 +629,10 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
     """
     vm = deployed_vm
 
+    # Seed our own ON state LIVE (no restart) — never inherited from a sibling (#1396).
+    _set_syslog_enabled(vm, on=True)
     val = h.config_get(vm, CFG_GENERAL + "/log_syslog")
-    assert val == "on", f"Precondition: expected log_syslog='on' from prior test, got {val!r}"
+    assert val == "on", f"seeded log_syslog did not take: expected 'on', got {val!r}"
 
     before = _pfb_event_lines(vm)
     ip_block_before = h.read_log_file(vm, IP_BLOCK_LOG)
@@ -909,11 +927,13 @@ def test_ip_attribution_cache_invalidated_after_feed_ownership_change(deployed_v
 def test_syslog_off_no_new_records(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """OFF ⇒ zero export; CSV logging unchanged — LIVE toggle, no restart.
 
-    Before/after proof: first assert ON produced records (true from prior tests),
-    then disable LIVE and assert the count does NOT increase. Exercised via the
-    DNSBL leg (a re-probe of the blocked domain from civm).
+    Before/after proof: first seed export ON and prove ONE exported record in-test
+    (never inherited from a sibling, #1396), then disable LIVE and assert the count
+    does NOT increase. Exercised via the DNSBL leg (probes of the blocked domain
+    from civm).
 
-    Given: syslog export ON (from prior tests), records already in the dedicated file.
+    Given: syslog export ON (seeded by THIS test) with a verified export record of
+           its own in the dedicated file.
     When:  log_syslog set OFF (write_config ONLY — no restart); the blocked domain is
            probed again from civm.
     Then:  the export-record count does NOT increase — the daemon honored the LIVE off.
@@ -921,12 +941,20 @@ def test_syslog_off_no_new_records(deployed_vm: SmokeVM, client_vm: SmokeVM) -> 
     """
     vm = deployed_vm
     domain: str = vm._pfb_dnsbl_domain  # type: ignore[attr-defined]
+    civm_ip: str = vm._pfb_civm_ip  # type: ignore[attr-defined]
+
+    # Seed our own ON record (#1396): enable LIVE, probe, and prove ONE exported event —
+    # the before-state for the OFF flip is created here, never inherited from a sibling.
+    seed_baseline = len(_pfb_event_lines(vm))
+    _set_syslog_enabled(vm, on=True)
+    ans = h.dns_probe_client(client_vm, domain, "A")
+    assert h.is_vip(ans), f"DNSBL block should fire while seeding the ON record, got {ans}"
+    seed_line = _wait_for_event(vm, baseline_len=seed_baseline, want=("act=dnsbl", f"qname={domain}", f"qip={civm_ip}"))
+    assert seed_line, (
+        f"Seeding failed: no export record for {domain} with export ON.\n{syslog_export_state_snapshot(vm)}"
+    )
 
     count_while_on = len(_pfb_event_lines(vm))
-    assert count_while_on > 0, (
-        f"Precondition: expected export records from prior ON tests, but {PFB_SYSLOG_LOG} has "
-        f"{count_while_on}.\n{syslog_export_state_snapshot(vm)}"
-    )
 
     dnsbl_csv_before = h.count_log_marker(vm, DNSBL_LOG, domain)
 
