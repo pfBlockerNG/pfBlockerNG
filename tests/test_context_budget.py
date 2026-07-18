@@ -399,6 +399,49 @@ def test_run_checks_reports_size_violations_despite_malformed_settings(tmp_path:
     assert any("not a parseable hooks structure" in v for v in violations)
 
 
+def test_extract_capsules_rejects_over_cap_command_before_tokenization() -> None:
+    # issue #1504: shlex is nonlinear on huge quoted strings (~25 s at 1 MB), so a
+    # command beyond the derived ceiling (decoded 1,800 B budget × worst-case JSON
+    # escaping + envelope) must be rejected on byte length alone, never tokenized.
+    payload = json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "X" * 11_000}})
+    capsules, errors = ccb.extract_capsules(_settings_command(f"echo '{payload}'"))
+    assert capsules == []
+    assert len(errors) == 1 and "SessionStart" in errors[0] and "cap" in errors[0], errors
+
+
+def _canonical_command_padded_to(nbytes: int) -> str:
+    """A canonical `echo '<JSON>'` capsule command of exactly nbytes UTF-8 bytes."""
+    empty = json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ""}})
+    pad = nbytes - len(f"echo '{empty}'".encode())
+    payload = json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "X" * pad}})
+    command = f"echo '{payload}'"
+    assert len(command.encode("utf-8")) == nbytes
+    return command
+
+
+def test_extract_capsules_command_at_cap_is_tokenized() -> None:
+    # The boundary itself passes the cap: an at-ceiling command still reaches
+    # tokenization and extraction (its payload then answers to the 1,800 B budget).
+    capsules, errors = ccb.extract_capsules(_settings_command(_canonical_command_padded_to(ccb.COMMAND_BYTES_MAX)))
+    assert errors == []
+    assert len(capsules) == 1 and capsules[0][0] == "SessionStart"
+    assert len(capsules[0][1].encode("utf-8")) > 1_800  # the cap never replaces the budget
+
+
+def test_extract_capsules_command_one_byte_over_cap_rejected() -> None:
+    over = ccb.COMMAND_BYTES_MAX + 1
+    capsules, errors = ccb.extract_capsules(_settings_command(_canonical_command_padded_to(over)))
+    assert capsules == []
+    assert errors == [f".claude/settings.json: SessionStart capsule command {over} bytes > cap {ccb.COMMAND_BYTES_MAX}"]
+
+
+def test_indirect_over_cap_command_fails_closed(tmp_path: Path) -> None:
+    # A non-capsule command over the cap is never tokenized for script refs either.
+    root = _indirect_root(tmp_path, "true " + "x" * 11_000)
+    violations = ccb.check_indirect_producers(root)
+    assert len(violations) == 1 and "cannot rule out a capsule" in violations[0], violations
+
+
 # --- indirect capsule producers (#1501) ------------------------------------------
 
 
