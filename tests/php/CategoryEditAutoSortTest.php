@@ -33,7 +33,7 @@ final class CategoryEditAutoSortTest extends TestCase
 		if (!function_exists('pfb_category_oracle_auto_sort')) {
 			if (!preg_match(
 				'/\/\/ Sort row by Header\/Label field followed by Enabled\/Disabled State settings\n'
-				. '(if \(!isset\(\$input_errors\).*?\$rowdata\[\$rowid\]\[\'row\'\] = \$final;\n)/s',
+				. '(if \(empty\(\$input_errors\).*?\$rowdata\[\$rowid\]\[\'row\'\] = \$final;\n)/s',
 				$src,
 				$m
 			)) {

@@ -824,6 +824,9 @@ print ($section);
 			<tbody>
 
 				<?php
+				// issue #1496: read at 848 on the first row of every render; only ever
+				// assigned at the tail of the loop below (previous-row tracking).
+				$p_type = '';
 				$p_aliasname = '';
 				// Only the active type's custom (unmatched user-defined) feeds (type-scoped body).
 				if (!empty($ex_feeds)):
