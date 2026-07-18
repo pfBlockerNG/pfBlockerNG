@@ -581,14 +581,16 @@ def test_indirect_delegating_helper_without_literal_still_detected(tmp_path: Pat
     assert any("scripts/delegate.sh" in v for v in violations), violations
 
 
-def test_indirect_extensionless_helper_still_detected(tmp_path: Path) -> None:
-    # issue found in review (B1): a committed helper with no .sh/.py extension is
-    # never collected by the suffix-gated tokenizer, so an emitting helper named
-    # e.g. `scripts/emit-context` slips the fail-closed gate entirely (#1501).
-    root = _indirect_root(tmp_path, "sh scripts/emit-context")
-    _write(root, "scripts/emit-context", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
+@pytest.mark.parametrize("name", ["emit-context", "emit+context", "emit@context"])
+def test_indirect_extensionless_helper_still_detected(tmp_path: Path, name: str) -> None:
+    # A committed helper with no .sh/.py extension — including a name with valid
+    # unquoted path characters such as + or @ — must still be resolved and checked;
+    # the suffix-gated tokenizer drops it entirely, so the path scan must cover the
+    # full unquoted filename, not a truncated prefix (#1501).
+    root = _indirect_root(tmp_path, f"sh scripts/{name}")
+    _write(root, f"scripts/{name}", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
     violations = ccb.check_indirect_producers(root)
-    assert any("scripts/emit-context" in v for v in violations), violations
+    assert any(f"scripts/{name}" in v for v in violations), violations
 
 
 @pytest.mark.parametrize("glue", ["$()", "``"])

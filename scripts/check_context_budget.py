@@ -111,7 +111,13 @@ _DELEGATES_RE = re.compile(r"(?m)^\s*exec\b|\bsubprocess\.\w+\(|\bos\.exec\w*\(|
 # (a non-.sh/.py extension) or stripped by a shell metacharacter glued to the path
 # (`x.sh$()`, backtick) — both still run the file. This finds the path regardless;
 # derived from _HELPER_DIRS so the two never drift.
-_HELPER_PATH_RE = re.compile(r"(?:" + "|".join(re.escape(d.rstrip("/")) for d in _HELPER_DIRS) + r")/[\w./-]+")
+# The path token runs to the next shell metacharacter/quote/whitespace, so it
+# captures the whole unquoted filename — including valid path chars the shell
+# keeps but a `\w` class drops (`+`, `@`, `~`, `=`, `,`) — while still stopping at
+# a glued `$()`/backtick. Over-matching is harmless: the result is existence-gated.
+_HELPER_PATH_RE = re.compile(
+    r"(?:" + "|".join(re.escape(d.rstrip("/")) for d in _HELPER_DIRS) + r")/[^\s'\"()|&;<>$`]+"
+)
 
 # Accepts both header shapes in the first HEADER_WINDOW lines: the plain
 # "Scope: ... Load when: ..." prose and the bulleted "- **Scope:** / - **Load-when:**".
