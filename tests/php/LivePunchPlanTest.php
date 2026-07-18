@@ -20,6 +20,13 @@ use PHPUnit\Framework\TestCase;
  * land. The counts below are cross-checked against ADR-53 §1.2's measured
  * covering-CIDR bounds ("/16 - /32 = 16", "/64 (v6) - /128 = 64",
  * "/24 - /32 = 8"), not guessed.
+ *
+ * Issue #1471: $table_entries widens from `array` to `iterable` -- the
+ * membership snapshot pfb_live_table_snapshot() hands in is now a streamed
+ * \Generator, not a fully materialised array. The tests below prove both
+ * shapes work: the existing tests above pass a plain array unchanged, and
+ * the generator-input tests below pass a \Generator through the same
+ * foreach-driven body.
  */
 #[CoversFunction('pfb_live_punch_plan')]
 #[CoversFunction('pfb_v4_carve_single')]
@@ -145,5 +152,47 @@ final class LivePunchPlanTest extends TestCase
 		$plan = pfb_live_punch_plan('10.0.0.1', ['', '# a comment', '10.0.0.0/24']);
 
 		$this->assertSame(['10.0.0.0/24'], $plan['delete']);
+	}
+
+	// --- generator input (issue #1471): the table membership snapshot is
+	// now a streamed \Generator, not just an array -- the plan must accept
+	// any iterable and consume it correctly in a single pass. ---
+
+	public function testV4GeneratorInputIsCarvedCorrectlyWithNonContainingSiblingConsumed(): void
+	{
+		$entries = (function (): \Generator {
+			yield '198.18.0.0/16';   // containing entry
+			yield '198.51.100.0/24'; // sibling, does not contain the host
+		})();
+
+		$plan = pfb_live_punch_plan('198.18.6.9', $entries);
+
+		$this->assertSame(['198.18.0.0/16'], $plan['delete']);
+		$this->assertCount(16, $plan['add']);
+		foreach ($plan['add'] as $cidr) {
+			$this->assertFalse(
+				ip_in_subnet('198.18.6.9', $cidr),
+				"the carved-out host must not fall inside any re-added covering CIDR [ {$cidr} ]"
+			);
+		}
+	}
+
+	public function testV6GeneratorInputIsCarvedCorrectlyWithNonContainingSiblingConsumed(): void
+	{
+		$entries = (function (): \Generator {
+			yield '2001:db8::/64'; // containing entry
+			yield '2001:db9::/64'; // sibling, does not contain the host
+		})();
+
+		$plan = pfb_live_punch_plan('2001:db8::9', $entries);
+
+		$this->assertSame(['2001:db8::/64'], $plan['delete']);
+		$this->assertCount(64, $plan['add']);
+		foreach ($plan['add'] as $cidr) {
+			$this->assertFalse(
+				ip_in_subnet('2001:db8::9', $cidr),
+				"the carved-out v6 host must not fall inside any re-added covering CIDR [ {$cidr} ]"
+			);
+		}
 	}
 }
