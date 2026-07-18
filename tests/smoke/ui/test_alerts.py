@@ -30,7 +30,6 @@ session-scoped VM for the sibling flows -- exercises the reverse branch too.
 from __future__ import annotations
 
 import base64
-import hashlib
 import subprocess
 import time
 from typing import TYPE_CHECKING, Any
@@ -142,6 +141,16 @@ def _ip_unlock_hosts(vm: helpers.SmokeVM) -> dict[str, str]:
         if len(parts) == 2:
             entries[parts[0]] = parts[1]
     return entries
+
+
+def _config_sha256(vm: helpers.SmokeVM) -> str:
+    """Return the guest config.xml byte digest, failing loudly on a bad read."""
+    result = vm.ssh("/sbin/sha256", "-q", "/conf/config.xml")
+    digest = result.stdout.strip()
+    assert result.returncode == 0 and digest, (
+        f"sha256 /conf/config.xml failed: rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    return digest
 
 
 # --------------------------------------------------------------------------- #
@@ -961,11 +970,11 @@ def test_delete_ipwhitelist_noop_paths_skip_config_write(
 
         # THEN (4): a missing entry is also a no-op -- no write_config revision.
         missing_host = "192.0.2.151"
-        config_before = hashlib.sha256(helpers.read_log_file(vm, "/conf/config.xml").encode("utf-8")).hexdigest()
+        config_before = _config_sha256(vm)
         resp = _post_action(webui, {"entry_delete": "delete_ipwhitelist", "domain": missing_host, "table": table})
         assert not looks_like_login_page(resp.text), "missing delete_ipwhitelist POST returned the login form"
         assert "was not found" in resp.text, f"missing-entry savemsg absent from response: {resp.text!r}"
-        config_after = hashlib.sha256(helpers.read_log_file(vm, "/conf/config.xml").encode("utf-8")).hexdigest()
+        config_after = _config_sha256(vm)
         assert config_after == config_before, "missing Permit entry unexpectedly created a config.xml revision"
     finally:
         _del_list_row(vm, CFG_IPV4_LISTS, rowid)
