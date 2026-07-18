@@ -4,6 +4,15 @@
   the DNSBL-matching design targets the legacy CSV view and must be redesigned around the
   manifest-built matcher + allow layer before implementation: see the **§2.0 open fork**,
   which also re-scopes Phase 1)
+- **Migration note (2026-07-18):** migrated to
+  [`docs/specs/adr-34-triangulator.md`](../../docs/specs/adr-34-triangulator.md) under
+  wayfinder map #1383 (map ticket #1484). The spec is the live requirements document;
+  this ADR is historical. The §6 phase plan and phase-prompt `.txt` files are obsolete
+  under the fresh-session workflow. Fork resolutions (#1484): the §2.0 matcher fork is
+  decided as option (b) — a request/response `explain` op on `python_control`; the
+  query-time verdicts scope per entry path via optional context on `explain`; the UI is
+  a card on the ADR-52 top-level Diagnostics page (the "under Reports" placement here is
+  superseded, per #1441).
 - **Date:** 2026-06-20
 - **Branch:** `adr/34-triangulator-tool` (off `devel`)
 - **Folds in:** issue #294 ("Add Triangulator Tool")
