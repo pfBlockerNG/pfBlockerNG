@@ -106,6 +106,10 @@ if (!function_exists('step3_submitphpaction')) {
 //    excludes the doubles, vendor code, and the wizard eval above — but the
 //    snapshot records no file-of-origin, so relocating a function between
 //    package files (the #1122 split) leaves it byte-identical.
+//    Coupling caveat: extra.inc's function_exists()-guarded CE-compat shims
+//    (localize_text, logger) are in the inventory only while
+//    pfsense_doubles.php defines no double for them — adding such a double
+//    later flips the parity test red with zero production change.
 $pfb_pkg_dir = realpath(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng') . DIRECTORY_SEPARATOR;
 $pfb_inventory = [];
 foreach (get_defined_functions()['user'] as $pfb_fn_name) {

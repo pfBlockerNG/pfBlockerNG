@@ -38,6 +38,9 @@ final class FunctionInventoryParityTest extends TestCase
 				JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
 			);
 			self::assertNotFalse(file_put_contents(self::GOLDEN, $encoded . "\n"));
+			// A regeneration run must never read as a plain PASS: if the env var
+			// ever leaked into CI, the oracle would be silently disabled.
+			self::markTestIncomplete('golden regenerated from the live capture — commit it and re-run without PFB_UPDATE_FUNCTION_INVENTORY');
 		}
 
 		self::assertFileExists(self::GOLDEN);
