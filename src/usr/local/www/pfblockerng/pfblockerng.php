@@ -197,7 +197,7 @@ $pfb['extras'][4]['type']       = 'asn';
 // Next Available Extras Key value for Blacklist Category Downloads
 $next_key = $next_key_start = 5;
 
-if ($argv[1] == 'bl' || $argv[1] == 'bls') {
+if (isset($argv[1]) && ($argv[1] == 'bl' || $argv[1] == 'bls')) {
 
 	if (empty(pfb_filter($argv[2], PFB_FILTER_CSV, 'php'))) {
 		$argv[2] = '';
@@ -241,7 +241,7 @@ if ($argv[1] == 'bl' || $argv[1] == 'bls') {
 }
 
 // Call include file and collect updated Global settings
-if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', 'bu', 'uc', 'gc', 'al', 'asn', 'asn_shell', 'bl', 'bls', 'cron', 'ugc', 'pfb_trigger', 'tick', 'forcecheck'))) {
+if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', 'bu', 'uc', 'gc', 'al', 'asn', 'asn_shell', 'bl', 'bls', 'cron', 'ugc', 'pfb_trigger', 'tick', 'forcecheck'))) {
 	pfb_global();
 
 	$pfb['extras_update'] = FALSE;  // Flag when Extras (MaxMind/TOP1M) are updateded via cron job
@@ -1661,6 +1661,11 @@ function pfblockerng_get_countries() {
 			unset(${'coptions' . $type});
 		}
 
+		$options4 ??= '';
+		$options6 ??= '';
+		$ftotal4 ??= 0;
+		$ftotal6 ??= 0;
+
 $php_data = <<<EOF
 <?php
 /*
@@ -2217,7 +2222,7 @@ EOF;
 
 	sort($roptions4, SORT_STRING);
 	$eoa = count($roptions4);
-	$etoptions = '';
+	$et_options = '';
 	$count = 1;
 
 	foreach ($roptions4 as $option4) {
