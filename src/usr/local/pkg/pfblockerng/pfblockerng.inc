@@ -1339,10 +1339,6 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			// permit — the validation-time and fetch-time verdicts agree (pinned by
 			// FeedFilterParityTest).
 			$is_RSYNC = FALSE;
-			// INIT-GAP (#1497): $is_RSYNC is only ever TRUE via the branch below
-			// that assigns $rsync, but that correlation isn't visible to static
-			// analysis at the $rsync[0]/[1] read further down.
-			$rsync = array();
 			if (strpos($input, '::') !== FALSE && !$escape) {
 				$rsync = explode('::', $input);
 				if (count($rsync) == 2 && !empty($rsync[0]) && filter_var($rsync[0], FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
