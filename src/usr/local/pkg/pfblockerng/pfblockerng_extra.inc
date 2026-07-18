@@ -3807,6 +3807,13 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
  * materialising them all as a PHP string array would exhaust the web-UI PHP
  * process's memory.
  *
+ * A capture failure (scratch file, pfctl exit, or reopen) throws
+ * \RuntimeException rather than yielding an empty result -- an empty result
+ * is otherwise indistinguishable from a genuinely empty table, and a caller
+ * (pfb_live_punch_run()) acting on that false "empty" would misreport a
+ * capture failure as "not currently blocked". The throw fires lazily, on the
+ * generator's first iteration.
+ *
  * NOT pure -- execs pfctl.
  *
  * @param  string $pfctl    Absolute path to the pfctl binary ($pfb['pfctl']).
@@ -3815,28 +3822,39 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
  * @param  string $dbdir    Scratch-file directory for the pfctl-show capture ($pfb['dbdir']).
  * @param  string $table    The pf table name (caller-validated, e.g. via PFB_FILTER_WORD).
  * @return \Generator<string> Raw membership lines (bare host or CIDR tokens; blank/'#'-comment lines tolerated).
+ * @throws \RuntimeException On a scratch-file, pfctl-exit, or reopen failure.
  */
 function pfb_live_table_snapshot(string $pfctl, string $aliasdir, string $dbdir, string $table): \Generator
 {
 	$table_esc = escapeshellarg($table);
 	$scan_tmp  = tempnam($dbdir, 'pfb_punch_');
+	if ($scan_tmp === FALSE) {
+		throw new \RuntimeException("table={$table}: tempnam() failed in dbdir={$dbdir}");
+	}
+
 	// ADR-53: stderr -> /dev/null, NOT 2>&1 -- the
 	// capture file is parsed line-by-line as membership entries below;
 	// merging stderr into it would feed any pfctl diagnostic line into
 	// that parse as if it were a table member.
-	exec("{$pfctl} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>/dev/null');
+	$exec_out = [];
+	$rc       = 0;
+	exec("{$pfctl} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>/dev/null', $exec_out, $rc);
+	if ($rc !== 0) {
+		@unlink($scan_tmp);
+		throw new \RuntimeException("table={$table}: pfctl -T show exited rc={$rc}");
+	}
 
 	$handle = @fopen($scan_tmp, 'r');
+	if ($handle === FALSE) {
+		@unlink($scan_tmp);
+		throw new \RuntimeException("table={$table}: fopen() failed on the pfctl-show capture");
+	}
 	try {
-		if ($handle !== FALSE) {
-			while (($line = @fgets($handle)) !== FALSE) {
-				yield trim($line);
-			}
+		while (($line = @fgets($handle)) !== FALSE) {
+			yield trim($line);
 		}
 	} finally {
-		if ($handle !== FALSE) {
-			fclose($handle);
-		}
+		fclose($handle);
 		@unlink($scan_tmp);
 	}
 }
@@ -3900,11 +3918,17 @@ function pfb_v4_carve_single(string $cidr, string $host_ip): array
  * \Generator pfb_live_table_snapshot() returns -- see the alerts page call
  * site) and applies the returned plan.
  *
+ * Two containing entries whose remainders overlap near the punched host
+ * (e.g. a /16 and a nested /24, both containing it) can each carve the same
+ * near-host covering CIDR -- the returned lists are deduplicated so a
+ * duplicate remainder never costs a wasted exec in pfb_live_punch_apply().
+ *
  * @param  string            $ip             The host to carve out (v4 or v6).
  * @param  iterable<string>  $table_entries  Raw table membership lines.
  * @return array{delete: string[], add: string[]} 'delete' = every containing
  *         entry to remove; 'add' = the covering-CIDR remainder to re-add
- *         (empty when every containing entry was an exact host match).
+ *         (empty when every containing entry was an exact host match);
+ *         both deduplicated.
  */
 function pfb_live_punch_plan(string $ip, iterable $table_entries): array
 {
@@ -3937,7 +3961,7 @@ function pfb_live_punch_plan(string $ip, iterable $table_entries): array
 		}
 	}
 
-	return ['delete' => $delete, 'add' => $add];
+	return ['delete' => array_values(array_unique($delete)), 'add' => array_values(array_unique($add))];
 }
 
 /**
@@ -3962,6 +3986,12 @@ function pfb_live_punch_plan(string $ip, iterable $table_entries): array
  * sync-status 'apply' ledger entry on failure, and the tick's retry sweep
  * (pfb_ip_apply_retry() -> `-T replace` from the aliasdir mirror) would
  * revert OTHER valid live punches whose stores still claim carved.
+ *
+ * Rollback neutrality: the best-effort rollback above may delete a remainder
+ * that happens to coincide with an independent, pre-existing table member --
+ * harmless, since rollback only ever runs before any delete, so a still-
+ * present containing entry still covers that member until the next reload
+ * restores the canonical set.
  *
  * NOT pure -- execs pfctl.
  *
@@ -4001,6 +4031,69 @@ function pfb_live_punch_apply(string $pfctl, string $table, array $plan): array 
 	}
 
 	return ['ok' => TRUE, 'fail' => NULL];
+}
+
+/**
+ * pfb_live_punch_run -- issue #1467 (CWE-362): orchestrates one Alerts "+" /
+ * Unlock live punch (snapshot -> plan -> apply) under the feed-pass lock
+ * (pfblockerng.inc's pfb_feed_pass_acquire()/_release()), so a concurrent
+ * ADR-40 replace can never interleave mid-punch -- a replace between our
+ * adds and our delete would wipe the adds (restoring the canonical set) and
+ * leave the delete alone to open the WHOLE containing entry until the next
+ * reload.
+ *
+ * $was_held is captured BEFORE acquiring: pfb_feed_pass_acquire() is
+ * reentrant (a nested call while this process already holds the lock is a
+ * no-op success), so an unconditional release here would drop an OUTER
+ * caller's hold. This call releases only when IT was the one that
+ * transitioned the lock from free to held.
+ *
+ * The snapshot and its consumption by pfb_live_punch_plan() both happen
+ * inside the lock scope (the plan call fully drains the generator before
+ * returning) -- a plan computed before a concurrent replace must never be
+ * applied after one.
+ *
+ * NOT pure -- execs pfctl, touches the feed-pass lock.
+ *
+ * @param  string $pfctl    Absolute path to the pfctl binary ($pfb['pfctl']).
+ * @param  string $aliasdir Passed through to pfb_live_table_snapshot() (unused there).
+ * @param  string $dbdir    Scratch-file directory ($pfb['dbdir']).
+ * @param  string $table    The pf table name (caller-validated).
+ * @param  string $ip       The host to carve out (v4 or v6).
+ * @return array{status: string, fail: ?string, del_cnt: int, add_cnt: int}
+ *         status is one of 'applied'|'not_blocked'|'busy'|'failed'; 'fail'
+ *         names the cause for 'failed' (NULL otherwise, prefixed
+ *         "snapshot: " for a capture failure); the counts are 0 outside
+ *         'applied'.
+ */
+function pfb_live_punch_run(string $pfctl, string $aliasdir, string $dbdir, string $table, string $ip): array {
+	$was_held = isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock']);
+
+	if (!pfb_feed_pass_acquire()) {
+		return ['status' => 'busy', 'fail' => NULL, 'del_cnt' => 0, 'add_cnt' => 0];
+	}
+
+	try {
+		$plan = pfb_live_punch_plan($ip, pfb_live_table_snapshot($pfctl, $aliasdir, $dbdir, $table));
+
+		if (empty($plan['delete'])) {
+			return ['status' => 'not_blocked', 'fail' => NULL, 'del_cnt' => 0, 'add_cnt' => 0];
+		}
+
+		$apply = pfb_live_punch_apply($pfctl, $table, $plan);
+		if (!$apply['ok']) {
+			return ['status' => 'failed', 'fail' => $apply['fail'], 'del_cnt' => 0, 'add_cnt' => 0];
+		}
+
+		return ['status' => 'applied', 'fail' => NULL, 'del_cnt' => count($plan['delete']), 'add_cnt' => count($plan['add'])];
+	} catch (\RuntimeException $e) {
+		pfb_logger("[pfb_live_punch_run] snapshot: {$e->getMessage()}\n", 2);
+		return ['status' => 'failed', 'fail' => 'snapshot: ' . $e->getMessage(), 'del_cnt' => 0, 'add_cnt' => 0];
+	} finally {
+		if (!$was_held) {
+			pfb_feed_pass_release();
+		}
+	}
 }
 
 /**

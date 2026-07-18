@@ -799,34 +799,30 @@ if (isset($_POST) && !empty($_POST)) {
 			$descr = pfb_filter($_POST['descr'], PFB_FILTER_HTML, 'alerts addsuppress');
 		}
 
-		// Read the table's current membership (pfb_live_table_snapshot(),
-		// pfblockerng_extra.inc -- shared with the Unlock icon's live punch, #1412).
-		$table_entries	= pfb_live_table_snapshot($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table);
+		// Snapshot + carve + apply, serialized against a concurrent feed pass
+		// (pfb_live_punch_run(), pfblockerng_extra.inc -- shared with the
+		// Unlock icon's live punch, #1412/#1467). An empty plan ('not_blocked')
+		// is NOT a refusal -- the customlist add below always proceeds, exactly
+		// as the old /24 branch already did unconditionally: suppression is a
+		// standing exemption for FUTURE loads, not contingent on today's live
+		// table snapshot.
+		$apply = pfb_live_punch_run($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table, $ip);
 
-		// Locate + carve every containing table entry (any mask, both
-		// families). Unlike the old /32 branch, an empty plan (nothing
-		// currently matches live) is NOT a refusal -- the customlist add below
-		// always proceeds, exactly as the old /24 branch already did
-		// unconditionally: suppression is a standing exemption for FUTURE
-		// loads, not contingent on today's live table snapshot.
-		$plan = pfb_live_punch_plan($ip, $table_entries);
-
-		// issue #1470: pfb_live_punch_apply() -- adds before deletes, rolled
-		// back on an add failure -- replaces the old delete-then-add loops
-		// that ignored exec() status and could unblock the whole containing
-		// entry on a failed re-add.
-		$apply = pfb_live_punch_apply($pfb['pfctl'], $table, $plan);
-
-		$del_cnt = count($plan['delete']);
 		$savemsg1 = "Host IP address {$ip}";
-		if (!$apply['ok']) {
-			$savemsg2 = " : Live punch failed [ {$apply['fail']} ], suppression will still apply at the next reload";
-		} elseif ($del_cnt > 0) {
-			$add_cnt = count($plan['add']);
-			$savemsg2 = ' : Removed ' . $del_cnt . ' entr' . ($del_cnt == 1 ? 'y' : 'ies')
-				. ', added ' . $add_cnt . ' covering CIDR' . ($add_cnt == 1 ? '' : 's');
-		} else {
-			$savemsg2 = " : Not currently blocked by Table [ {$table} ]";
+		switch ($apply['status']) {
+			case 'applied':
+				$savemsg2 = ' : Removed ' . $apply['del_cnt'] . ' entr' . ($apply['del_cnt'] == 1 ? 'y' : 'ies')
+					. ', added ' . $apply['add_cnt'] . ' covering CIDR' . ($apply['add_cnt'] == 1 ? '' : 's');
+				break;
+			case 'not_blocked':
+				$savemsg2 = " : Not currently blocked by Table [ {$table} ]";
+				break;
+			case 'busy':
+				$savemsg2 = ' : An update/reload pass is currently in progress, suppression will apply at the next reload';
+				break;
+			default: // 'failed'
+				$savemsg2 = " : Live punch failed [ {$apply['fail']} ], suppression will still apply at the next reload";
+				break;
 		}
 
 		$supp_key	= $is_v6 ? 'ipsuppression_v6' : 'ipsuppression';
@@ -1506,33 +1502,34 @@ if (isset($_POST) && !empty($_POST)) {
 
 		$table_esc = escapeshellarg($table);
 
-		// Unlock IP -- ADR-53 covering-CIDR live punch (pfb_live_punch_plan(),
+		// Unlock IP -- ADR-53 covering-CIDR live punch (pfb_live_punch_run(),
 		// pfblockerng_extra.inc), the same mechanism the Suppression "+" uses:
 		// carve exactly this host out of whichever table entr(y/ies) currently
 		// block it live, any mask, either family, instead of deleting the
 		// whole containing entry (the old direct single-token delete unblocked
-		// every sibling in that entry too).
+		// every sibling in that entry too). Serialized against a concurrent
+		// feed pass (issue #1467).
 		if ($_POST['ip_remove'] == 'unlock') {
-			$table_entries = pfb_live_table_snapshot($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table);
-			$plan = pfb_live_punch_plan($ip, $table_entries);
+			$apply = pfb_live_punch_run($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table, $ip);
 
-			if (empty($plan['delete'])) {
-				// Nothing live currently blocks this host -- no store write, no unlock recorded.
-				$savemsg = "The IP [ {$ip} ] is not currently blocked by table [ {$table} ] -- no unlock was recorded.";
-			} else {
-				// issue #1470: pfb_live_punch_apply() -- adds before deletes, rolled
-				// back on an add failure -- replaces the old delete-then-add loops
-				// that ignored exec() status and could unblock the whole containing
-				// entry on a failed re-add.
-				$apply = pfb_live_punch_apply($pfb['pfctl'], $table, $plan);
-				if ($apply['ok']) {
+			switch ($apply['status']) {
+				case 'applied':
 					pfb_unlock('unlock', 'ip', $ip, $table, $ip_unlock);
 					$savemsg = "The IP [ {$ip} ] has been temporarily Unlocked from table [ {$table} ]!";
-				} else {
+					break;
+				case 'not_blocked':
+					// Nothing live currently blocks this host -- no store write, no unlock recorded.
+					$savemsg = "The IP [ {$ip} ] is not currently blocked by table [ {$table} ] -- no unlock was recorded.";
+					break;
+				case 'busy':
+					// An update/reload pass is running -- no store write; ask the user to retry.
+					$savemsg = "Table [ {$table} ] is mid-update -- please retry the Unlock once the current run finishes.";
+					break;
+				default: // 'failed'
 					// No pfb_unlock() store write -- the table still blocks the IP, so the
 					// unlock store must not claim otherwise.
 					$savemsg = "The live unlock of IP [ {$ip} ] failed [ {$apply['fail']} ] -- table [ {$table} ] still blocks it; see the pfBlockerNG log.";
-				}
+					break;
 			}
 		}
 
