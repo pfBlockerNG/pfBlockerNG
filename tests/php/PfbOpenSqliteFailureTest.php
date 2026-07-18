@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
+
 /**
  * pfb_open_sqlite() -- both connection attempts throwing (issue #1494 defect 3;
  * #1497 red-proof). A database path nested under a directory that never exists
