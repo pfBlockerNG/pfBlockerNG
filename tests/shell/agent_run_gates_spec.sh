@@ -24,12 +24,13 @@ Describe 'run-gates.sh gates_for()'
       #|src/b.php
     End
     When call gates_for
-    The line 1 of output should equal 'php -l src/a.inc'
-    The line 2 of output should equal 'php -l src/b.php'
-    The line 3 of output should equal 'vendor/bin/phpunit'
-    The line 4 of output should equal 'composer phpstan'
-    The line 5 of output should equal 'composer phpcs -- --standard=phpcs.xml.dist src/'
-    The lines of output should equal 5
+    The line 1 of output should equal 'python3 scripts/check_composer_vendor.py'
+    The line 2 of output should equal 'php -l src/a.inc'
+    The line 3 of output should equal 'php -l src/b.php'
+    The line 4 of output should equal 'vendor/bin/phpunit'
+    The line 5 of output should equal 'composer phpstan'
+    The line 6 of output should equal 'composer phpcs -- --standard=phpcs.xml.dist src/'
+    The lines of output should equal 6
   End
 
   It 'maps shell files to per-file sh -n + shellcheck plus the dash-pinned shellspec'
@@ -118,6 +119,52 @@ Describe 'run-gates.sh gates_for()'
     Data "src/usr/local/pkg/pfblockerng/info.xml"
     When call gates_for
     The output should equal ''
+  End
+End
+
+Describe 'run-gates.sh Composer vendor guard'
+  gitc() { git -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
+  make_repo() {
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesphp.XXXXXX")"
+    git -C "$repo" init -q
+    gitc config commit.gpgsign false
+    mkdir -p "$repo/src" "$repo/vendor/bin" "$repo/scripts"
+    printf 'base\n' > "$repo/README"
+    gitc add -A; gitc commit -qm base
+    base_sha=$(gitc rev-parse HEAD)
+    printf '<?php echo 1;\n' > "$repo/src/a.php"
+    gitc add -A; gitc commit -qm php
+
+    stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesphpstub.XXXXXX")"
+    checker_marker="$stubdir/checker-ran"
+    php_marker="$stubdir/php-ran"
+    composer_marker="$stubdir/composer-ran"
+    phpunit_marker="$stubdir/phpunit-ran"
+    printf '#!/bin/sh\ntouch "%s"\nexit 1\n' "$checker_marker" > "$stubdir/python3"
+    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$php_marker" > "$stubdir/php"
+    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$composer_marker" > "$stubdir/composer"
+    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpunit_marker" > "$repo/vendor/bin/phpunit"
+    chmod +x "$stubdir/python3" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
+    PATH="$stubdir:$PATH"
+  }
+  cleanup() { rm -rf "$repo" "$stubdir"; }
+  Before 'make_repo'
+  After 'cleanup'
+  script="scripts/agent/run-gates.sh"
+
+  It 'stops before PHP analysis when the Composer vendor checker fails'
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The output should include 'GATE FAIL: python3 scripts/check_composer_vendor.py'
+    The output should not include 'GATE PASS: php -l src/a.php'
+    The output should not include 'GATE PASS: vendor/bin/phpunit'
+    The output should not include 'GATE PASS: composer phpstan'
+    The output should not include 'GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/'
+    Assert [ -e "$checker_marker" ]
+    Assert [ ! -e "$php_marker" ]
+    Assert [ ! -e "$composer_marker" ]
+    Assert [ ! -e "$phpunit_marker" ]
   End
 End
 

@@ -44,6 +44,8 @@ git worktree remove <path>            # run from any directory OUTSIDE <path>
   outside the tree being removed (the primary checkout works; so does a session worktree).
   `gh pr merge --delete-branch` can't check out a base another worktree holds — verify the
   merge landed, then `git push origin --delete <branch>`.
+- Each worktree owns its Composer `vendor/` tree; never share or symlink `vendor/` between
+  worktrees. Run `composer install --no-interaction` in the current worktree.
 
 ## Git hooks
 

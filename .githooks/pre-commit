@@ -11,7 +11,8 @@
 #      (a PHP-only commit doesn't pay for the markdown/python/shell linters, etc.).
 #
 # Each check also runs only when its tool is available: a contributor missing a
-# tool is warned and that check is skipped, never blocked (CI is the hard gate).
+# tool is warned and that check is skipped, never blocked (CI is the hard gate),
+# except the mandatory Composer vendor guard for staged PHP.
 # All applicable checks run even after one fails, so every problem is reported in
 # a single pass. Bypass in an emergency with `git commit --no-verify`.
 #
@@ -313,6 +314,23 @@ fi
 
 # =============================== PHP (*.php, *.inc) ========================== #
 if [ "$staged_php" = 1 ]; then
+	composer_vendor_ok=1
+	if [ -n "$py_bin" ]; then
+		step 'composer vendor'
+		"$py_bin" scripts/check_composer_vendor.py || {
+			failed 'composer vendor'
+			composer_vendor_ok=0
+		}
+	else
+		failed 'composer vendor (python interpreter unavailable)'
+		composer_vendor_ok=0
+	fi
+
+	# Composer PHP tools are unsafe against a missing, shared, or stale vendor tree.
+	# The guard is fail-closed and runs before every PHP analysis gate.
+	if [ "$composer_vendor_ok" != 1 ]; then
+		printf '[pre-commit] Composer vendor check failed; skipping PHP analysis gates.\n' >&2
+	else
 	# php -l syntax check (output shown only for files that fail).
 	if have php; then
 		step 'php -l'
@@ -340,6 +358,7 @@ if [ "$staged_php" = 1 ]; then
 		vendor/bin/phpcs -d memory_limit=1G || failed 'phpcs'
 	else
 		skip phpcs
+	fi
 	fi
 fi
 
