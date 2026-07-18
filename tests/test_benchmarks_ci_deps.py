@@ -33,9 +33,10 @@ def test_no_ad_hoc_install_of_pinned_benchmark_deps() -> None:
     pinned = _pinned_benchmark_packages()
     assert pinned, "benchmarks/requirements.txt must pin at least one package"
     for line in (ROOT / ".github/workflows/test.yml").read_text().splitlines():
-        if "pip install" not in line or "-r " in line:
+        code = line.split(" #", 1)[0]
+        if "pip install" not in code or "-r" in code.split():
             continue
-        offending = pinned & {arg.lower() for arg in line.split()}
+        offending = pinned & {arg.lower() for arg in code.split()}
         assert not offending, (
             f"ad-hoc install of pinned benchmark dep(s) {sorted(offending)} bypasses "
             f"benchmarks/requirements.txt: {line.strip()!r}"
