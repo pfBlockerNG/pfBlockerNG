@@ -1487,6 +1487,10 @@ function pfblockerng_uc_countries() {
 function pfblockerng_get_countries() {
 	global $g, $pfb;
 
+	$coptions4 = $coptions6 = array();
+	$options4 = $options6 = '';
+	$ftotal4 = $ftotal6 = 0;
+
 	$geoip_files = array (	'Africa'		=> "{$pfb['ccdir']}/Africa_v4.txt",
 				'Antarctica'		=> "{$pfb['ccdir']}/Antarctica_v4.txt",
 				'Asia'			=> "{$pfb['ccdir']}/Asia_v4.txt",
@@ -1660,11 +1664,6 @@ function pfblockerng_get_countries() {
 			}
 			unset(${'coptions' . $type});
 		}
-
-		$options4 ??= '';
-		$options6 ??= '';
-		$ftotal4 ??= 0;
-		$ftotal6 ??= 0;
 
 $php_data = <<<EOF
 <?php
