@@ -399,6 +399,107 @@ def test_run_checks_reports_size_violations_despite_malformed_settings(tmp_path:
     assert any("not a parseable hooks structure" in v for v in violations)
 
 
+# --- indirect capsule producers (#1501) ------------------------------------------
+
+
+def _indirect_root(tmp_path: Path, command: str, event: str = "SessionStart") -> Path:
+    _write(tmp_path, ".claude/settings.json", _settings_command(command, event))
+    return tmp_path
+
+
+def test_indirect_helper_without_capsule_output_clean(tmp_path: Path) -> None:
+    # Nearest clean sibling of the bypass: same hook shape, helper emits no capsule.
+    root = _indirect_root(tmp_path, 'sh "${CLAUDE_PROJECT_DIR:-.}/scripts/quiet.sh"')
+    _write(root, "scripts/quiet.sh", "#!/bin/sh\nexit 0\n")
+    assert ccb.check_indirect_producers(root) == []
+
+
+def test_indirect_empty_helper_clean(tmp_path: Path) -> None:
+    root = _indirect_root(tmp_path, "sh scripts/empty.sh")
+    _write(root, "scripts/empty.sh", "")
+    assert ccb.check_indirect_producers(root) == []
+
+
+def test_indirect_missing_helper_fails_closed(tmp_path: Path) -> None:
+    root = _indirect_root(tmp_path, "sh scripts/ghost.sh")
+    violations = ccb.check_indirect_producers(root)
+    assert len(violations) == 1 and "`scripts/ghost.sh` not found" in violations[0], violations
+
+
+@pytest.mark.parametrize(
+    ("command", "marker"),
+    [
+        ('sh "scripts/broken.sh', "unparseable quoting"),
+        ('sh "$HOME/x.sh"', "unresolvable script"),
+        ("sh /tmp/x.sh", "unresolvable script"),
+        ("sh scripts/../x.sh", "unresolvable script"),
+    ],
+)
+def test_indirect_unresolvable_command_shapes_fail_closed(tmp_path: Path, command: str, marker: str) -> None:
+    root = _indirect_root(tmp_path, command)
+    violations = ccb.check_indirect_producers(root)
+    assert len(violations) == 1 and marker in violations[0], violations
+
+
+def test_indirect_helper_outside_checked_roots_fails_closed(tmp_path: Path) -> None:
+    # A helper outside scripts//.claude/hooks/ dodges the trigger surfaces: editing
+    # it would never re-run this gate, so its location alone is a violation.
+    root = _indirect_root(tmp_path, "sh tests/helper.sh")
+    _write(root, "tests/helper.sh", "#!/bin/sh\nexit 0\n")
+    violations = ccb.check_indirect_producers(root)
+    assert len(violations) == 1 and "outside the checked roots" in violations[0], violations
+
+
+def test_indirect_registered_dynamic_producer_clean(tmp_path: Path) -> None:
+    root = _indirect_root(tmp_path, 'sh "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-branch-sync.sh"')
+    _write(root, ".claude/hooks/session-branch-sync.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
+    assert ccb.check_indirect_producers(root) == []
+
+
+def test_indirect_registered_script_at_other_event_fails_closed(tmp_path: Path) -> None:
+    # Registration is per (event, script) pair: rewiring a registered producer to a
+    # different event is a new, unreviewed capsule surface.
+    command = 'sh "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-branch-sync.sh"'
+    root = _indirect_root(tmp_path, command, event="UserPromptSubmit")
+    _write(root, ".claude/hooks/session-branch-sync.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
+    violations = ccb.check_indirect_producers(root)
+    assert len(violations) == 1 and "cannot validate" in violations[0], violations
+
+
+def test_indirect_registered_retired_tokens_compound_command_clean(tmp_path: Path) -> None:
+    command = 'cd "${CLAUDE_PROJECT_DIR:-.}" && python3 scripts/check_retired_tokens.py --claude-hook || true'
+    root = _indirect_root(tmp_path, command, event="PreToolUse")
+    _write(root, "scripts/check_retired_tokens.py", "REPORT_KEY = 'additionalContext'\n")
+    assert ccb.check_indirect_producers(root) == []
+
+
+def test_indirect_no_script_reference_command_clean(tmp_path: Path) -> None:
+    command = (
+        "command -v zstd >/dev/null 2>&1 || python3 -c 'import zstandard' 2>/dev/null"
+        " || pip3 install -q zstandard >/dev/null 2>&1 || true"
+    )
+    root = _indirect_root(tmp_path, command)
+    assert ccb.check_indirect_producers(root) == []
+
+
+def test_indirect_wrong_shape_settings_defers_to_capsule_check(tmp_path: Path) -> None:
+    # check_capsules already fails closed on the whole file; no duplicate violation here.
+    _write(tmp_path, ".claude/settings.json", '{"hooks": ["not", "a", "dict"]}')
+    assert ccb.check_indirect_producers(tmp_path) == []
+
+
+def test_run_checks_flags_helper_script_capsule_bypass(tmp_path: Path) -> None:
+    # issue #1501: the hook command carries no `additionalContext` literal, but the
+    # repo helper script it invokes emits a valid oversized capsule Claude consumes —
+    # the checker must flag the indirect producer, never skip the hook silently.
+    root = _scratch_repo(tmp_path)
+    payload = json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "X" * 5_000}})
+    _write(root, "scripts/emit-context.sh", f"#!/bin/sh\nprintf '%s\\n' '{payload}'\n")
+    _write(root, ".claude/settings.json", _settings_command('sh "${CLAUDE_PROJECT_DIR:-.}/scripts/emit-context.sh"'))
+    violations = ccb.run_checks(root, _tracked(root))
+    assert any("scripts/emit-context.sh" in v for v in violations), violations
+
+
 # --- UserPromptSubmit capsule <-> AGENTS.md parity ------------------------------
 
 
@@ -509,6 +610,8 @@ def test_check_parity_live_repository_user_prompt_submit_clean() -> None:
         "docs/misc/architecture-notes.md",
         "tests/smoke/CLAUDE.md",
         ".claude/rules/smoke.md",
+        ".claude/hooks/rtk-hook.sh",
+        "scripts/ts-hook.sh",
     ],
 )
 def test_touches_context_surface_true(rel: str) -> None:

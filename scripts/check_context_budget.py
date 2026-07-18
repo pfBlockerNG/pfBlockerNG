@@ -17,11 +17,17 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 - `.claude/rules/*.md` (Claude soft routing backstops) 400 B
 - each hook-capsule `additionalContext` payload     1,800 B
 
+A hook command may also invoke a repo helper script (under scripts/ or
+.claude/hooks/, both trigger surfaces). A helper whose content could emit
+`hookSpecificOutput.additionalContext` must be a registered
+DYNAMIC_CAPSULE_PRODUCERS entry; any other indirect producer — or a helper
+reference the checker cannot statically resolve and read — fails closed (#1501).
+
 CONDITIONAL: in --staged / --diff mode the checks run IF AND ONLY IF the change
 touches a context surface (AGENTS.md, CLAUDE.md, .agents/policy/,
-.agents/context/, docs/misc/, .claude/rules/, .claude/settings.json, any nested
-CLAUDE.md/AGENTS.md, or this checker); otherwise it reports the skip and exits 0.
---all checks unconditionally.
+.agents/context/, docs/misc/, .claude/rules/, .claude/hooks/, scripts/,
+.claude/settings.json, any nested CLAUDE.md/AGENTS.md, or this checker);
+otherwise it reports the skip and exits 0. --all checks unconditionally.
 
 Usage:
     check_context_budget.py --staged        # pre-commit: staged diff decides, index content checked
@@ -63,6 +69,19 @@ FILE_BUDGETS = {
 }
 
 SETTINGS = ".claude/settings.json"
+
+# Registered (event, script) hook helpers whose additionalContext is a RUNTIME-computed
+# diagnostic — no static payload exists to budget/parity-check. Any unregistered helper
+# that could emit a capsule fails closed (inline as canonical `echo '<JSON>'` or register).
+DYNAMIC_CAPSULE_PRODUCERS = {
+    ("SessionStart", ".claude/hooks/session-branch-sync.sh"),
+    ("PreToolUse", "scripts/check_retired_tokens.py"),
+}
+
+# Helper scripts must live under these roots: both are trigger surfaces
+# (_TRIGGER_DIRS), so editing a helper re-runs this gate.
+_HELPER_DIRS = ("scripts/", ".claude/hooks/")
+_PROJECT_DIR_PREFIXES = ("${CLAUDE_PROJECT_DIR:-.}/", "${CLAUDE_PROJECT_DIR}/")
 
 # Accepts both header shapes in the first HEADER_WINDOW lines: the plain
 # "Scope: ... Load when: ..." prose and the bulleted "- **Scope:** / - **Load-when:**".
@@ -286,8 +305,79 @@ def check_parity(root: Path) -> list[str]:
     return violations
 
 
+def _script_refs(command: str) -> list[str] | None:
+    """Repo-script tokens (*.sh / *.py) of a hook command, or None when untokenizable."""
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return None
+    refs = []
+    for tok in argv:
+        if not tok.endswith((".sh", ".py")):
+            continue
+        for prefix in _PROJECT_DIR_PREFIXES:
+            tok = tok.removeprefix(prefix)
+        refs.append(tok.removeprefix("./"))
+    return refs
+
+
+def _check_helper(root: Path, event: str, ref: str) -> list[str]:
+    """Fail-closed verdicts for one helper-script reference of a hook command."""
+    if "$" in ref or ref.startswith("/") or ".." in ref.split("/"):
+        return [f"{SETTINGS}: {event} hook references unresolvable script `{ref}` — cannot verify capsule emission"]
+    if not ref.startswith(_HELPER_DIRS):
+        return [f"{SETTINGS}: {event} hook helper `{ref}` outside the checked roots {'/'.join(_HELPER_DIRS)}"]
+    path = root / ref
+    if not path.is_file():
+        return [f"{SETTINGS}: {event} hook helper `{ref}` not found — cannot verify capsule emission"]
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return [f"{SETTINGS}: {event} hook helper `{ref}` unreadable ({exc.strerror or exc})"]
+    if "additionalContext" not in text or (event, ref) in DYNAMIC_CAPSULE_PRODUCERS:
+        return []
+    return [
+        f"{SETTINGS}: {event} hook helper `{ref}` may emit additionalContext the checker cannot validate — "
+        "inline it as a canonical echo '<JSON>' capsule or register it in DYNAMIC_CAPSULE_PRODUCERS"
+    ]
+
+
+def check_indirect_producers(root: Path) -> list[str]:
+    """Flag hook helper scripts that could emit a capsule the budget/parity gate never sees (#1501)."""
+    settings = root / SETTINGS
+    if not settings.is_file():
+        return []
+    violations: list[str] = []
+    try:
+        parsed = json.loads(settings.read_text(encoding="utf-8"))
+        for event, entries in parsed.get("hooks", {}).items():
+            for entry in entries:
+                for hook in entry.get("hooks", []):
+                    command = hook.get("command", "")
+                    if "additionalContext" in command:
+                        continue  # the canonical inline-capsule path (extract_capsules) owns it
+                    refs = _script_refs(command)
+                    if refs is None:
+                        violations.append(
+                            f"{SETTINGS}: {event} hook command has unparseable quoting — cannot rule out a capsule"
+                        )
+                        continue
+                    for ref in refs:
+                        violations.extend(_check_helper(root, event, ref))
+    except (ValueError, AttributeError, TypeError):
+        # Unparseable/wrong-shape settings: check_capsules already fails closed on the file.
+        return []
+    return violations
+
+
 def run_checks(root: Path, tracked: list[str]) -> list[str]:
-    return check_sizes(root, tracked) + check_headers(root) + check_capsules(root) + check_parity(root)
+    return (
+        check_sizes(root, tracked)
+        + check_headers(root)
+        + check_capsules(root)
+        + check_parity(root)
+        + check_indirect_producers(root)
+    )
 
 
 def _git(root: Path, *args: str) -> str:
@@ -298,7 +388,7 @@ def _git(root: Path, *args: str) -> str:
 # The CI workflow (.github/workflows/context-budget.yml) path-filters on these same
 # surfaces; pinned by tests/test_context_budget.py::test_ci_workflow_paths_match_checker_triggers.
 _TRIGGER_FILES = ("AGENTS.md", "CLAUDE.md", SETTINGS, "scripts/check_context_budget.py")
-_TRIGGER_DIRS = (".agents/policy/", ".agents/context/", "docs/misc/", ".claude/rules/")
+_TRIGGER_DIRS = (".agents/policy/", ".agents/context/", "docs/misc/", ".claude/rules/", ".claude/hooks/", "scripts/")
 
 
 def touches_context_surface(changed: list[str]) -> bool:
