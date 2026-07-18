@@ -135,8 +135,8 @@ that consume them, are **unaffected** — they stay the old bare-domain/verbatim
 
 **Emit/parse primitives** (`pfblockerng.inc`): `pfb_dnsbl_ndjson_emit_row()` is the only
 writer — its typed `PfbDnsblRowKind` argument serializes directly through `json_encode()`
-with a **fixed element order** (tag, payload),
-`JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`, no pretty-printing,
+with a **fixed element order** (tag, payload), `JSON_UNESCAPED_SLASHES |`
+`JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE`, no pretty-printing,
 exactly one trailing `"\n"`. `pfb_dnsbl_ndjson_parse_row()` is the strict reader every PHP
 consumer shares: it normalizes current compact arrays and accepted legacy objects to the same
 enum-valued `kind` plus `domain`/`raw` shape, and rejects (returns `NULL`) every other shape.
