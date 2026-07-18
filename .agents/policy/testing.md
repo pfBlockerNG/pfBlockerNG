@@ -57,6 +57,14 @@ NOT done, no matter what the line-coverage number says.**
 - **Specify complex behaviour BDD-style; keep trivial tests trivial.** Non-trivial behaviour
   (state transitions, precedence, multi-step flows) gets Scenario / Given–When–Then
   structure.
+- **Synchronize — a duration is never an assertion.** A test waits by consuming the event it
+  needs (a marker, an observed condition, a join) and asserts on THAT — never "the work
+  completed within N seconds", never a fixed sleep as coordination. The only time bound
+  allowed is a generous salvage cap whose sole job is reaping a stuck run; its expiry
+  reports "stuck/environment", loudly and distinguishably from the behaviour under test.
+  Widening a deadline or scaling it by a CI factor is never a flake fix: the deadline is
+  doing assertion work and no constant is large enough (PR #1499 widened 4 s → 16 s;
+  the same test flaked at 16 s five hours later — #1459; class removal tracked in #1517).
 - **On failure, print expected vs actual — no guessing.** Every assertion/poll that can fail
   puts the comparison on the terminal (AssertJ-style, redacted against the usual secrets); a
   bare "False" matcher is not acceptable; a diagnostic filtering by token must match the
