@@ -100,8 +100,8 @@ run_gate() {
 	else
 		printf 'GATE FAIL: %s\n' "$1"
 		overall=1
-		[ "$1" = 'python3 scripts/check_composer_vendor.py' ] && return 1
 	fi
+	return 0
 }
 
 main() {
@@ -146,15 +146,18 @@ main() {
 		overall=0
 		while IFS= read -r c; do
 			[ -n "$c" ] || continue
-			run_gate "$c" || break
+			if ! run_gate "$c"; then
+				[ "$c" = 'python3 scripts/check_composer_vendor.py' ] && break
+			fi
 		done
 		echo "OVERALL=$overall"
 	})
+	overall_status=${report##*OVERALL=}
 	printf '%s\n' "$report" | grep -v '^OVERALL='
 	if printf '%s\n' "$files" | grep -q '^src/usr/local/www/'; then
 		printf 'REMINDER: www/ touched -- Tier-A ui_render coverage is required and cannot be script-checked (test mandate #4)\n'
 	fi
-	if printf '%s\n' "$report" | grep -q 'OVERALL=0'; then
+	if [ "$overall_status" = 0 ]; then
 		printf 'GATES: PASS\n'
 		exit 0
 	fi
