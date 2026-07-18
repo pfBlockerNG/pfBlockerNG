@@ -1224,6 +1224,7 @@ if (isset($_POST) && !empty($_POST)) {
 	elseif (isset($_POST['entry_delete']) && !empty($_POST['entry_delete'])) {
 
 		$entry = '';
+		$table = '';
 
 		// IPv4/IPv6 validation
 		if ($entry = pfb_filter($_POST['domain'], PFB_FILTER_IP, 'alerts entry_delete', '', TRUE)) {
@@ -1269,6 +1270,12 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 			case 'delete_domainwildcard':
 				$type = 'DNSBL Whitelist';
+				// $savemsg is always set below when this case is reached directly (the
+				// condition is a tautology on that path) or already set by the
+				// 'delete_domain' fallthrough above; PHPStan can't trace either
+				// correlation, so this coalesce is a runtime no-op that keeps the
+				// post-switch read provably defined.
+				$savemsg = $savemsg ?? '';
 				if ($_POST['entry_delete'] == 'delete_domainwildcard') {
 					$savemsg = "The Wildcard Domain [ .{$entry} ] has been deleted from the {$type} customlist!";
 					if (isset($clists['dnsblwhitelist']['data']['.' . $entry]) ||
@@ -1392,6 +1399,7 @@ if (isset($_POST) && !empty($_POST)) {
 				break;
 			default:
 				$pfb_found = FALSE;
+				$savemsg = gettext('Cannot Delete this entry, invalid delete action.');
 				break;
 		}
 
@@ -1540,6 +1548,10 @@ if (isset($_POST) && !empty($_POST)) {
 			exec("{$pfb['pfctl']} -t {$table_esc} -T add " . escapeshellarg($ip) . ' 2>&1');
 			pfb_unlock('lock', 'ip', $ip, $table, $ip_unlock);
 			$savemsg = "The IP [ {$ip} ] has been re-locked into table [ {$table} ]!";
+		}
+
+		else {
+			$savemsg = gettext('Cannot Lock/Unlock - Invalid action.');
 		}
 
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
@@ -2913,6 +2925,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// Cleanup port output
 	if ($fields[6] == 'ICMP' || $fields[6] == 'ICMPV6') {
 		$srcport = '';
+		$dstport = '';
 	} else {
 		$srcport = ":" . pfb_hsc($fields[9]);
 		$dstport = ":" . pfb_hsc($fields[10]);
@@ -3449,7 +3462,6 @@ if ($alert_summary && strpos($alert_view, 'ip_') !== FALSE) {
 		. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Alias</a>&emsp;'
 		. '<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;'
 		. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
-		. "{$extra_txt}"
 	));
 	$form->add($section);
 }
@@ -4260,6 +4272,7 @@ if (!$alert_summary):
 	<?php
 		// Create Unified Report
 		$handle = FALSE;
+		$p_query_port = '';
 		if ($logtype == 'Unified' && file_exists("{$pfb_log}")) {
 	?>
 			<thead>
@@ -4623,11 +4636,13 @@ if (!$alert_summary):
 					if ($ipfilterlimit && $dnsblfilterlimit && $dnsfilterlimit) {
 						$pfbfilterlimit = TRUE;
 					}
+					$fcounter = 0;
 					foreach ($counter as $c) {
 						$fcounter += $c;
 					}
 				}
 				else {
+					$pfbfilterlimit = FALSE;
 					$fcounter = $counter['Unified'];
 				}
 				break;
@@ -4868,10 +4883,13 @@ foreach ($stats as $stat_type => $stype):
 				</thead>
 				<tbody>
 					<?php
+					// issue #1495: default FALSE -- when the first non-chart stat category
+					// has no data (routine on a fresh install), the block below never runs,
+					// and $max_table_entries must still be defined for the tfoot check.
+					$max_table_entries = FALSE;
 					if (!empty($alert_stats[$alert_view][$stat_type])) {
 
 						$table_entries = 0;
-						$max_table_entries = FALSE;
 						foreach ($alert_stats[$alert_view][$stat_type] as $data => $data_count) {
 
 							if ($pfbmaxtable != 'max') {
