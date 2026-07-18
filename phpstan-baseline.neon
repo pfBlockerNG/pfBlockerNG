@@ -31,12 +31,6 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$domain follows optional parameter \$mode\.$#'
-			identifier: parameter.requiredAfterOptional
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Deprecated in PHP 8\.0\: Required parameter \$filename_unlock follows optional parameter \$r_type\.$#'
 			identifier: parameter.requiredAfterOptional
 			count: 1
@@ -55,31 +49,7 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$logfile follows optional parameter \$line\.$#'
-			identifier: parameter.requiredAfterOptional
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Deprecated in PHP 8\.0\: Required parameter \$logtype follows optional parameter \$pflex\.$#'
-			identifier: parameter.requiredAfterOptional
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$oline follows optional parameter \$line\.$#'
-			identifier: parameter.requiredAfterOptional
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$req_agent follows optional parameter \$mode\.$#'
-			identifier: parameter.requiredAfterOptional
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$src_ip follows optional parameter \$mode\.$#'
 			identifier: parameter.requiredAfterOptional
 			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
@@ -127,30 +97,6 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Undefined variable\: \$logtype$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Undefined variable\: \$src_ip$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$alias might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$asn might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Variable \$asn_ex in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
@@ -163,68 +109,8 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$db_handle might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$details might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$dir might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$folder might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$geoip might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$int might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$iplog might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$l_type might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Variable \$labels in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$lastdnsblclear might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$lastipclear might not be defined\.$#'
-			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
@@ -235,62 +121,14 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$log might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$logtab might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$new_rules_nocreated might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$orig_rules_nocreated might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$pfb_alias might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Variable \$pfb_include in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$pfb_query might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Variable \$pfb_tables in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$pfbfolder might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$resolved_host might not be defined\.$#'
-			identifier: variable.undefined
 			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
@@ -307,69 +145,9 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$u_msg might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng_install.inc
-
-		-
 			message: '#^Parameter \#1 \$string of function str_pad expects string, int given\.$#'
 			identifier: argument.type
 			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Undefined variable\: \$coptions4$#'
-			identifier: variable.undefined
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Undefined variable\: \$coptions6$#'
-			identifier: variable.undefined
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Undefined variable\: \$et_options$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Variable \$ftotal4 might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Variable \$ftotal6 might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Variable \$options4 might not be defined\.$#'
-			identifier: variable.undefined
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Variable \$options6 might not be defined\.$#'
-			identifier: variable.undefined
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Variable \$argv might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-
-		-
-			message: '#^Variable \$et_options might not be defined\.$#'
-			identifier: variable.undefined
-			count: 3
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
@@ -391,51 +169,9 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
-			message: '#^Variable \$alert_stats might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
 			message: '#^Variable \$alert_view in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$bg might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$colspan might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$column_title might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$dnsblfilterlimitentries might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$dnsfilterlimitentries might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$dstport might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
@@ -445,75 +181,9 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
-			message: '#^Variable \$extra_txt might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$fcounter might not be defined\.$#'
-			identifier: variable.undefined
-			count: 4
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
 			message: '#^Variable \$filter_unified in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$ipfilterlimitentries might not be defined\.$#'
-			identifier: variable.undefined
-			count: 4
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$max_table_entries might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$p_query_port might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$pfbdenycnt might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$pfbdnscnt might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$pfbdnsreplycnt might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$pfbfilterlimit might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$pfbmatchcnt might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$pfbpermitcnt might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
@@ -529,51 +199,9 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
-			message: '#^Variable \$pfbunicnt might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$rtype might not be defined\.$#'
-			identifier: variable.undefined
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$savemsg might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$table might not be defined\.$#'
-			identifier: variable.undefined
-			count: 6
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
 			message: '#^Variable \$blacklist_types in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
 			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
-
-		-
-			message: '#^Variable \$cat might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
-
-		-
-			message: '#^Variable \$input_errors might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
-
-		-
-			message: '#^Variable \$savemsg might not be defined\.$#'
-			identifier: variable.undefined
-			count: 3
 			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
 
 		-
@@ -589,33 +217,9 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
 
 		-
-			message: '#^Variable \$input_errors might not be defined\.$#'
-			identifier: variable.undefined
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
-
-		-
-			message: '#^Variable \$maxmind_verify might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
-
-		-
-			message: '#^Variable \$r_id might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
-
-		-
 			message: '#^Variable \$rowid in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
 			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
-
-		-
-			message: '#^Variable \$variable might not be defined\.$#'
-			identifier: variable.undefined
-			count: 6
 			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
 
 		-
@@ -637,57 +241,9 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
-			message: '#^Variable \$a_aliasname might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$a_cron might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$a_description might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$a_header might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$a_url might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
 			message: '#^Variable \$customlist in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$final might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$geoip_isos might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$input_errors might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
@@ -707,84 +263,6 @@ parameters:
 			identifier: parameter.requiredAfterOptional
 			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
-
-		-
-			message: '#^Variable \$p_tr_style might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
-
-		-
-			message: '#^Variable \$p_type might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
-
-		-
-			message: '#^Variable \$options_log_max_dnsbl_parse_err might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Variable \$options_log_max_dnslog might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Variable \$options_log_max_dnsreplylog might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Variable \$options_log_max_errlog might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Variable \$options_log_max_extraslog might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Variable \$options_log_max_ip_blocklog might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Variable \$options_log_max_ip_matchlog might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Variable \$options_log_max_ip_parse_err might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Variable \$options_log_max_ip_permitlog might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Variable \$options_log_max_log might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
-
-		-
-			message: '#^Variable \$options_log_max_unilog might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
 
 		-
 			message: '#^Variable \$v4suppression in empty\(\) always exists and is not falsy\.$#'
@@ -829,18 +307,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
 
 		-
-			message: '#^Variable \$ptype might not be defined\.$#'
-			identifier: variable.undefined
-			count: 8
-			path: src/usr/local/www/pfblockerng/www/dnsbl_default.php
-
-		-
-			message: '#^Variable \$ts might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/www/dnsbl_default.php
-
-		-
 			message: '#^Parameter \#2 \$timestamp of function date expects int\|null, string given\.$#'
 			identifier: argument.type
 			count: 1
@@ -867,23 +333,5 @@ parameters:
 		-
 			message: '#^Parameter \#2 \.\.\.\$arg1 of function min expects non\-empty\-array, 100 given\.$#'
 			identifier: argument.type
-			count: 1
-			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-
-		-
-			message: '#^Variable \$key might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-
-		-
-			message: '#^Variable \$type might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-
-		-
-			message: '#^Variable \$widgetname might not be defined\.$#'
-			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
