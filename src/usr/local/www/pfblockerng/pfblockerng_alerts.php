@@ -86,6 +86,13 @@ foreach ($aglobal_array as $type => $value) {
 $alert_view	= 'alert';
 $alert_title	= '';
 $alert_summary	= FALSE;
+// The 'Collect Alert Statistics' block below (reached only when $alert_summary
+// is TRUE) always assigns this fresh; the stats-render section far below reads
+// it only under the identical $alert_summary condition. PHPStan can't trace
+// that two separate `if ($alert_summary)` blocks thousands of lines apart
+// agree, so this default keeps both reads provably defined without changing
+// which branch runs.
+$alert_stats	= array();
 $active		= array('alerts' => TRUE, 'unified' => FALSE, 'ip_block' => FALSE, 'ip_permit' => FALSE, 'ip_match' => FALSE,
 			'dnsbl' => FALSE, 'reply' => FALSE, 'dnsbl_reply_stat' => FALSE);
 
@@ -3326,6 +3333,9 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			case 'Match':
 				$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['unimatch2'] : $pfb['unimatch'];
 				break;
+			default:
+				$bg = '';
+				break;
 		}
 
 		if ($bg == 'none') {
@@ -4454,6 +4464,12 @@ if (!$alert_summary):
 	<?php
 
 			$p_query_port = '';
+			// $rtype is set above (case 'alert' of the switch($alert_view) block, same
+			// $logtype iteration) whenever this Block/Permit/Match section is reached;
+			// PHPStan can't trace that correlation, so this coalesce is a runtime no-op
+			// that keeps every read below provably defined -- same idiom the two-pass
+			// branch below already uses.
+			$rtype = $rtype ?? '';
 
 			// issue #809 scope guard: batching below only runs when a finite row bound
 			// exists -- non-filter mode (bound $pfbentries), or filter mode with a real
@@ -4580,9 +4596,8 @@ if (!$alert_summary):
 				// pfb_alerts_ip_replay_step() (pfblockerng.inc; decode contract documented
 				// there), unit-pinned by AlertsBufferReplayTest -- 'render' rows replay through
 				// the unchanged convert_ip_log() loop body, consulting the batched prefetch via
-				// pfb_ip_render_memos() first. $rtype is always set here (see the
-				// $ipfilterlimitentries coalesce note above; PHPStan can't trace it).
-				$rtype = $rtype ?? '';
+				// pfb_ip_render_memos() first. $rtype was already coalesced above (the
+				// $ipfilterlimitentries coalesce note), so it is provably defined here.
 				foreach ($ip_buffered as $ip_entry) {
 					$ip_step = pfb_alerts_ip_replay_step($ip_entry);
 					if (isset($ip_step['dup_add'])) {
@@ -4609,6 +4624,20 @@ if (!$alert_summary):
 		</tbody>
 		<tfoot>
 	<?php
+		// $logtype only ever takes the seven literal keys of the foreach array above
+		// (issue #809's same reasoning as $pfbentries's default), so every case below
+		// is exhaustive in practice -- but PHPStan can't narrow the switch subject to
+		// that literal union, so it treats the (unreachable) default as leaving these
+		// unset. Behaviour-neutral defaults keep the post-switch reads provably defined.
+		$colspan = '';
+		$fcounter = 0;
+		$pfbfilterlimit = FALSE;
+		// $rtype is set above (case 'alert' of the switch($alert_view) block) whenever
+		// $logtype is 'Block'/'Permit'/'Match' -- the only way the case below is
+		// reached -- but the tbody's own coalesce above only runs when file_exists()
+		// gates it TRUE (a fresh-install log-not-yet-created iteration skips it), so
+		// this file-scope read needs its own no-op coalesce.
+		$rtype = $rtype ?? '';
 		switch ($logtype) {
 			case 'Block':
 			case 'Permit':
@@ -4867,7 +4896,7 @@ foreach ($stats as $stat_type => $stype):
 
 						<?php if ($stype[3]): ?>
 						<th style="width: 2%; text-align: center;">
-							<?
+							<?php
 							$column_title = 'GeoIP';
 							if ($stat_type == 'dnsbldomain' || $stat_type == 'dnsblevald') {
 								$column_title = 'Type';
