@@ -40,8 +40,10 @@ Describe '.githooks/pre-commit Composer vendor guard'
   End
 
   It 'runs every PHP analysis gate when the Composer vendor checker succeeds'
-    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$checker_marker" > "$stubdir/python3"
-    chmod +x "$stubdir/python3"
+    for interpreter in python python3; do
+      printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$checker_marker" > "$stubdir/$interpreter"
+    done
+    chmod +x "$stubdir/python" "$stubdir/python3"
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"
     The status should equal 0
     The output should include '[pre-commit] php -l'

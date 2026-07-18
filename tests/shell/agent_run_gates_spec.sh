@@ -188,6 +188,25 @@ Describe 'run-gates.sh Composer vendor guard'
     Assert [ ! -e "$composer_marker" ]
     Assert [ ! -e "$phpunit_marker" ]
   End
+
+  It 'suppresses successful Composer checker diagnostics while running PHP gates'
+    printf '#!/bin/sh\ntouch "%s"\nprintf "checker stdout\\n"\nprintf "checker stderr\\n" >&2\nexit 0\n' "$checker_marker" > "$stubdir/python3"
+    chmod +x "$stubdir/python3"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 0
+    The output should not include 'checker stdout'
+    The output should not include 'checker stderr'
+    The output should include 'GATE PASS: python3 scripts/check_composer_vendor.py'
+    The output should include 'GATE PASS: php -l src/a.php'
+    The output should include 'GATE PASS: vendor/bin/phpunit'
+    The output should include 'GATE PASS: composer phpstan'
+    The output should include 'GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/'
+    The output should include 'GATES: PASS'
+    Assert [ -e "$checker_marker" ]
+    Assert [ -e "$php_marker" ]
+    Assert [ -e "$composer_marker" ]
+    Assert [ -e "$phpunit_marker" ]
+  End
 End
 
 Describe 'run-gates.sh main (fixture repo, stubbed tools)'
