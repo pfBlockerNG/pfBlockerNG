@@ -46,9 +46,11 @@ require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
  *          block, so without a per-continent reset a data-less continent
  *          renders the PREVIOUS continent's count beside an empty list
  *
- *   Scenario: continent 1 has one IPv4 entry (count 1), continent 2 has
+ *   Scenario: continent 1 has one IPv4 entry AND one IPv6 entry (count 1
+ *             each -- both types populated, so a reset dropped for either
+ *             type alone is independently falsifiable), continent 2 has
  *             none -> continent 2's heredoc-equivalent count must render
- *             "0", not continent 1's stale "1"
+ *             "0" for BOTH types, not continent 1's stale "1"
  */
 final class PfbOptionsHeredocMultiContinentTest extends TestCase
 {
@@ -110,10 +112,10 @@ final class PfbOptionsHeredocMultiContinentTest extends TestCase
 			. ' $ftotal4 = $ftotal6 = 0;'
 			. ' $cont = "TestCont";'
 			. ' $rendered = [];'
-			. ' foreach ([TRUE, FALSE] as $continentHasV4Data) {'
+			. ' foreach ([TRUE, FALSE] as $continentHasData) {'
 			. '   ' . $loopTop
 			. '   foreach (array("4", "6") as $type) {'
-			. '     if ($type === "4" && $continentHasV4Data) {'
+			. '     if ($continentHasData) {'
 			. '       ${"coptions" . $type}[] = \'x|"US" => "Test US (1)"\';'
 			. '     }'
 			. '     ' . $typeBlock
@@ -148,7 +150,7 @@ final class PfbOptionsHeredocMultiContinentTest extends TestCase
 		});
 
 		$this->assertSame('1', $rendered[0]['cnt4'], 'before-state anchor: continent 1 (one IPv4 entry) must render count 1 -- the very value a stale carry would leak into continent 2');
-		$this->assertSame('0', $rendered[0]['cnt6'], 'sanity: continent 1 has no IPv6 data, so its IPv6 count must render 0');
+		$this->assertSame('1', $rendered[0]['cnt6'], 'before-state anchor: continent 1 (one IPv6 entry) must render count 1 -- the very value a stale carry would leak into continent 2 (non-vacuity: without this, cnt6 is 0 on every continent regardless of the reset, and the continent-2 assertion below can never fail)');
 		$this->assertSame(
 			'0',
 			$rendered[1]['cnt4'],
