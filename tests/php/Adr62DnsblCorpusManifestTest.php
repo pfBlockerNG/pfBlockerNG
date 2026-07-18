@@ -57,15 +57,17 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 			'dnsdir'             => "{$this->tmp}/dnsbl",
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
 			'dbdir'              => "{$this->tmp}/db",
-			'dnsbl_top1m'        => 'off',
+			'dnsbl_top1m'        => 'on',
+			'dnsbl_tld_wildcard' => 'on',
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsblconfig'        => [
-				'tldblacklist' => '',
-				'tldexclusion' => '',
-				'suppression'  => '',
+				'tldblacklist' => base64_encode("zip"),
+				'tldexclusion' => base64_encode("excluded.com"),
+				'suppression'  => base64_encode("www.adblock.com\r\n.wildwhite.org\r\nphishing.net"),
 			],
 		]);
+		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", "popularcdn.com\n");
 
 		$json = file_get_contents(self::CORPUS_DIR . '/feeds.json');
 		$this->assertNotFalse($json, 'corpus feeds.json must be readable');
@@ -97,6 +99,9 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 			];
 			if (isset($f['mode'])) {
 				$row['mode'] = $f['mode'];
+			}
+			if ($f['header'] === 'abp_feed') {
+				$row['group'] = "\xFF";
 			}
 			$rows[] = $row;
 		}
@@ -151,6 +156,47 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 				$this->assertArrayNotHasKey('mode', $row, "unexpected mode key for [ {$f['header']} ]");
 			}
 		}
+	}
+
+	/** The real PHP writer publishes the checked-in v1 fixture shape and raw bytes. */
+	public function testPublishedManifestMatchesV1Fixture(): void
+	{
+		$fixturePath = self::CORPUS_DIR . '/manifest-v1.json';
+		$fixtureJson = file_get_contents($fixturePath);
+		$this->assertNotFalse($fixtureJson, 'manifest-v1 fixture must be readable');
+		$fixture = json_decode($fixtureJson, TRUE);
+		$this->assertIsArray($fixture, 'manifest-v1 fixture must decode');
+
+		$published = pfb_unbound_python_sources($this->feedRows());
+		$this->assertIsArray($published);
+		$publishedJson = file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
+		$this->assertNotFalse($publishedJson, 'published manifest must be readable');
+		$publishedDecoded = json_decode($publishedJson, TRUE);
+		$this->assertIsArray($publishedDecoded, 'published manifest must decode');
+		$normalized = $publishedDecoded;
+		foreach ($normalized['feeds'] as &$row) {
+			$row['raw'] = 'raw/' . basename($row['raw']);
+		}
+		unset($row);
+		$this->assertSame($fixture, $normalized);
+
+		foreach ($fixture['feeds'] as $expected) {
+			$actual = null;
+			foreach ($publishedDecoded['feeds'] as $row) {
+				if ($row['feed'] === $expected['feed']) {
+					$actual = $row;
+					break;
+				}
+			}
+			$this->assertIsArray($actual, "fixture feed [ {$expected['feed']} ] must be published");
+			$rawPath = dirname($GLOBALS['pfb']['unbound_py_sources']) . '/' . $actual['raw'];
+			$this->assertSame(
+				file_get_contents(self::CORPUS_DIR . '/' . $expected['raw']),
+				file_get_contents($rawPath),
+				"published raw bytes drifted for [ {$expected['feed']} ]"
+			);
+		}
+		$this->assertSame("\u{FFFD}", $normalized['feeds'][8]['group']);
 	}
 
 	// --- #752/#753 divergence: the PHP-side half (pfb_filter is a pure, --
