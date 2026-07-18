@@ -5258,18 +5258,61 @@ class _DnsblGenerationError(Exception):
 
 
 def _dnsbl_validate_manifest_raws(manifest: dict[str, Any], base_dir: str) -> None:
-    if "feeds" not in manifest or not isinstance(manifest["feeds"], list):
-        raise _DnsblGenerationError("DNSBL manifest feeds is not a list")
-    feeds = manifest["feeds"]
-    for feed in feeds:
-        if not isinstance(feed, dict) or not isinstance(feed.get("raw"), str) or not feed["raw"]:
-            raise _DnsblGenerationError("DNSBL manifest feed has no valid raw reference")
+    if not isinstance(manifest, dict):
+        raise _DnsblGenerationError("DNSBL manifest/v1 root must be an object")
+    if type(manifest.get("version")) is not int or manifest["version"] != 1:
+        raise _DnsblGenerationError("DNSBL manifest/v1 version must be integer 1")
+
+    config = manifest.get("config")
+    if not isinstance(config, dict):
+        raise _DnsblGenerationError("DNSBL manifest/v1 config must be an object")
+    list_fields = (
+        "tld_wildcard_blacklist",
+        "tld_wildcard_exclusion",
+        "user_whitelist",
+        "user_unlock",
+        "top1m_list",
+    )
+    for config_field in list_fields:
+        value = config.get(config_field)
+        if config_field in config and (not isinstance(value, list) or any(not isinstance(item, str) for item in value)):
+            raise _DnsblGenerationError("DNSBL manifest/v1 config.{} must be list[str]".format(config_field))
+    for flag_field in ("top1m_enabled", "regex_cap"):
+        if flag_field in config and not isinstance(config[flag_field], bool):
+            raise _DnsblGenerationError("DNSBL manifest/v1 config.{} must be bool".format(flag_field))
+
+    feeds = manifest.get("feeds")
+    if not isinstance(feeds, list):
+        raise _DnsblGenerationError("DNSBL manifest/v1 feeds must be a list")
+    required_fields = ("raw", "feed", "group", "log_flag")
+    for index, feed in enumerate(feeds):
+        prefix = "DNSBL manifest/v1 feeds[{}]".format(index)
+        if not isinstance(feed, dict):
+            raise _DnsblGenerationError("{} must be an object".format(prefix))
+        for row_field in required_fields:
+            if row_field not in feed or not isinstance(feed[row_field], str):
+                raise _DnsblGenerationError("{}.{} must be a string".format(prefix, row_field))
+        for row_field in ("raw", "feed"):
+            if not feed[row_field]:
+                raise _DnsblGenerationError("{}.{} must be a non-empty string".format(prefix, row_field))
+        if "provenance" in feed and (
+            not isinstance(feed["provenance"], str) or feed["provenance"] not in {"feed", "user"}
+        ):
+            raise _DnsblGenerationError("{}.provenance must be feed or user".format(prefix))
+        if "mode" in feed and (not isinstance(feed["mode"], str) or feed["mode"] not in {"deny", "permit"}):
+            raise _DnsblGenerationError("{}.mode must be deny or permit".format(prefix))
+
+    for index, feed in enumerate(feeds):
         raw = feed["raw"]
         path = raw if os.path.isabs(raw) else os.path.join(base_dir, raw)
         if not _dnsbl_path_within_base(path, base_dir):
-            raise _DnsblGenerationError("DNSBL feed escapes manifest base: '{}'".format(path))
+            raise _DnsblGenerationError(
+                "DNSBL manifest/v1 feeds[{}].raw resolves outside manifest base: '{}'".format(index, path)
+            )
         if not os.path.isfile(path):
-            raise _DnsblGenerationError("DNSBL feed is missing or not a regular file: '{}'".format(path))
+            raise _DnsblGenerationError(
+                "DNSBL manifest/v1 feeds[{}].raw is missing or not a regular file: '{}'".format(index, path)
+            )
 
 
 def _dnsbl_file_line_reader(base_dir: str, *, fail_closed: bool = False) -> Callable[[str], Iterable[str]]:
@@ -5388,12 +5431,10 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
 
     try:
         if not isinstance(manifest, dict):
-            raise _DnsblGenerationError("DNSBL manifest root is not an object")
+            raise _DnsblGenerationError("DNSBL manifest/v1 root must be an object")
         base_dir = os.path.dirname(os.path.abspath(manifest_path))
-        if "config" not in manifest or not isinstance(manifest["config"], dict):
-            raise _DnsblGenerationError("DNSBL manifest config is not an object")
-        manifest_config = manifest["config"]
         _dnsbl_validate_manifest_raws(manifest, base_dir)
+        manifest_config = manifest["config"]
         config = _dnsbl_config_from_manifest(manifest, base_dir)
         top1m_enabled = bool(manifest_config.get("top1m_enabled", False))
         result = build(
