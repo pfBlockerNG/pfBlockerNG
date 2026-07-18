@@ -1465,14 +1465,24 @@ fix reaches all of them with zero consumer-side changes. Killstates' suppression
 prefix-aware via `pfb_ip_suppressed()` (both families), replacing the old exact-IP hashmap +
 `subnetv4_expand` host-materialisation.
 
-**Alerts "+" live punch — a SEPARATE mechanism, not this engine.** `pfb_live_punch_plan()`
-(`pfblockerng_extra.inc`) mutates the LIVE pf table directly from a single web click (locate the
-containing table entr(y/ies) via the ADR-40 mirror/`pfctl -T show` fallback, `pfctl -T delete` +
-`-T add` the covering-CIDR difference), independent of any reload — the update-time engines above
-never run for it. Covered by `tests/smoke/ui/test_alerts.py`'s
-`test_addsuppress_{v4,v6}_carves_containing_range_and_spares_sibling`; the update-time proof lives
+**Alerts "+" live punch — a SEPARATE mechanism, not this engine.** `pfb_live_punch_run()`
+(`pfblockerng_extra.inc`) mutates the LIVE pf table directly from a single web click, independent
+of any reload — the update-time engines above never run for it. Since PR #1503 (ADR-53
+Amendment 1; issues #1467/#1470/#1471): the snapshot is live `pfctl -T show` ONLY (the ADR-40
+mirror is never read — it goes stale on every punch and made a second same-entry punch revert the
+first), streamed as a lazy `\Generator` into `pfb_live_punch_plan()` so the web-UI process never
+materializes the table; `pfb_live_punch_apply()` adds the covering-CIDR remainders FIRST and
+deletes the containing entr(y/ies) LAST with every exec status checked via
+`pfb_pfctl_op_failed()` (fail-closed; never via `pfb_pfctl_table_op()` — its ADR-61 ledger entry
+would let the retry sweep mirror-replace the table and revert other valid punches); the whole
+sequence is serialized under the issue-#1175 feed-pass lock so a concurrent ADR-40 replace cannot
+interleave. An unlock of a not-currently-blocked host, a mid-update punch, or a failed punch
+records nothing and says so. Covered by `tests/smoke/ui/test_alerts.py`'s
+`test_addsuppress_{v4,v6}_carves_containing_range_and_spares_sibling`, the
+`test_ip_unlock_double_punch_{v4,v6}_second_punch_keeps_first_carved` pair, and
+`test_ip_unlock_not_currently_blocked_records_nothing`; the update-time proof lives
 in `tests/smoke/test_smoke_suppression.py` and is a genuinely different code path, not duplicate
-coverage.
+coverage. Remaining unchecked `pfctl` exec sites outside the punch path: issue #1505.
 
 **Alerts un-suppress + row icons (issue #422 follow-up).** The trash-can revert (`delete_ip`)
 matches the covering suppression entry prefix-aware via `pfb_ip_suppressed_match()`
@@ -1490,7 +1500,8 @@ the exact `/16 − /32 = 16` / `/24 − /32 = 8` vectors the smoke module's asse
 in), `tests/php/V6CidrSubtractTest.php` (the pure-PHP engine, incl. the `/64 − /128 = 64` vector),
 `tests/php/SuppressionValidatorTest.php` (mask floors: v4 `/8`–`/32`, v6 `/32`–`/128`),
 `tests/php/CreateSuppressionFileTest.php`, `tests/php/KillstatesSuppressionTest.php`,
-`tests/php/LivePunchPlanTest.php`. Live-VM (ADR-04, dispatch-only):
+`tests/php/LivePunchPlanTest.php`, `tests/php/LiveTableSnapshotTest.php`,
+`tests/php/AlertsLivePunchApplyTest.php`, `tests/php/LivePunchRunTest.php`. Live-VM (ADR-04, dispatch-only):
 `tests/smoke/test_smoke_suppression.py` (this section's headline acceptance proof — both families,
 before-state asserted first, plus the whole-token/mask-agnostic upgrade-parity scenarios) and the
 Alerts "+" Tier B e2e above. Per CLAUDE.md "ADR acceptance", ADR-53 moves to Accepted on the green

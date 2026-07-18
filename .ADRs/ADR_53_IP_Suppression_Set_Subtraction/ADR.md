@@ -395,3 +395,44 @@ Prompt: `09_Smoke_Docs_DoD.txt`
     via iprange-style tooling, or a pre-partitioned diff) before Phase 6.
   - If the live smoke shows consumer drift (aggregate/HAProxy/report reading a different set than
     pf), the content-level premise itself is violated — halt and re-audit before acceptance.
+
+## Amendment 1 (2026-07-18, issues #1467/#1470/#1471, PR #1503) — live punch: live-only snapshot, streaming plan, fail-closed serialized apply
+
+Three decisions in the "Alerts \"+\" / widget" row of §2.1 (and the §3 scan-cost note) are
+superseded by the live-punch redesign landed in PR #1503:
+
+1. **Snapshot source.** "Locate the containing table entr(y/ies) by streaming the ADR-40 mirror
+   (`/var/db/aliastables/<table>.txt`; fallback `pfctl -T show`)" no longer holds: live
+   `pfctl -t <table> -T show` is the SOLE snapshot source and the mirror is never read
+   (`pfb_live_table_snapshot()`, `$aliasdir` parameter retained unused). A live punch never
+   rewrites the mirror, so the mirror-first read made a SECOND punch inside the same containing
+   entry plan against pre-first-punch state and silently revert the first carve (issue #1467).
+   The original "kernel/mirror drift self-heals at the next update" note remains true but is no
+   longer relied on for punch planning. A snapshot capture failure (temp-file creation, non-zero
+   pfctl exit, unreadable capture) now throws instead of reading as an empty table, so "not
+   currently blocked" is only ever reported from a successfully captured empty plan.
+2. **Streaming.** The §3 note "streams the mirror file … with `ip_in_subnet` per line" is
+   strengthened: the snapshot is a lazy `\Generator` (temp file cleaned in `finally`, including
+   abandoned iteration) and `pfb_live_punch_plan()` consumes any `iterable`, retaining only the
+   containing entries — the web-UI process no longer materializes the table membership
+   (issue #1471; the pre-#1503 code buffered every line into an array).
+3. **Apply.** The punch is applied by `pfb_live_punch_run()`/`pfb_live_punch_apply()`
+   (issue #1470): covering-CIDR remainders are added FIRST and containing entries deleted LAST
+   (every intermediate state blocks a superset of the target — a mid-sequence pfctl failure can
+   never unblock the containing range), every exec's status is checked via
+   `pfb_pfctl_op_failed()`, an add failure rolls back best-effort and reports, and the whole
+   snapshot→plan→apply sequence is serialized under the issue-#1175 feed-pass lock so a
+   concurrent ADR-40 replace cannot interleave (add phase → replace → delete phase would
+   otherwise open the full containing CIDR until the next reload). The punch deliberately does
+   NOT route through `pfb_pfctl_table_op()`: its ADR-61 sync-status ledger entry would let the
+   retry sweep mirror-replace the table and revert other valid live punches. The temporary
+   Unlock records nothing (and says so) when the host is not currently blocked, when a pass is
+   mid-update, or when the punch fails; the Suppression "+" keeps its standing-exemption
+   semantics (the customlist write proceeds; a live failure is surfaced and heals at the next
+   reload).
+
+Pinning tests: `tests/php/LiveTableSnapshotTest.php`, `tests/php/LivePunchPlanTest.php`,
+`tests/php/AlertsLivePunchApplyTest.php`, `tests/php/LivePunchRunTest.php`; live Tier-B
+`tests/smoke/ui/test_alerts.py` double-punch (v4+v6) and not-blocked-honesty e2e (executed red
+on the pre-fix tree and green on the fix, plus the pre-existing carve/relock suite on the final
+tip). Sibling unchecked-exec sites outside the punch path are tracked in issue #1505.
