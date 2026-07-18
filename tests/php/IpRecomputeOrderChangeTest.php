@@ -171,7 +171,7 @@ final class IpRecomputeOrderChangeTest extends TestCase
 
 	private function source(): string
 	{
-		return (string) file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+		return (string) file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
 	}
 
 	public function testDetectionGuardCombinesTheSaveEnableGateWithCrossListScope(): void

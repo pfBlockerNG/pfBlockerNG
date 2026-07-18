@@ -9,11 +9,11 @@ use PHPUnit\Framework\TestCase;
  * Issue #1323 -- pins the invariant pfb_dnsbl_hold_stale_rebuild_skip()'s
  * safety rests on: a synthesized custom-DNSBL row can never be Hold. The
  * guard's single call site ($row['state'] == 'Hold' paired with
- * pfb_dnsbl_hold_stale_rebuild_skip(), pfblockerng.inc ~:17326) consumes
+ * pfb_dnsbl_hold_stale_rebuild_skip(), pfblockerng_apply.inc ~:1377) consumes
  * rows built by ONE synthesis site: the DNSBL download loop's $lists
- * (~:17158). The other two custom-row sites never reach it -- ~:16403 feeds
+ * (~:1256). The other two custom-row sites never reach it -- ~:501 feeds
  * a per-type normalization pass whose $lists is discarded after use, and
- * ~:18580 feeds the separate IP-alias download loop -- and are pinned as
+ * ~:2682 feeds the separate IP-alias download loop -- and are pinned as
  * defense-in-depth: every custom-row literal in the file keeps the same
  * hardcoded-Enabled shape. All three live inside sync_package_pfblockerng(),
  * which has no PHPUnit harness (issue #993, confirmed by
@@ -29,8 +29,8 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 {
 	private function pfblockerngSource(): string
 	{
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertNotFalse($source, 'pfblockerng_apply.inc must be readable');
 		return $source;
 	}
 
@@ -63,8 +63,8 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 
 	/**
 	 * Site-count tripwire: issue #1323 (re-derived by grepping the tree this
-	 * session) enumerates exactly 3 synthesis sites (~pfblockerng.inc:16403,
-	 * 17158, 18580). A different count means a site was added or removed --
+	 * session) enumerates exactly 3 synthesis sites (~pfblockerng_apply.inc:501,
+	 * 1256, 2682). A different count means a site was added or removed --
 	 * this test's coverage matrix (and SITE_BLOCK_PATTERN below) needs a look
 	 * before the block-shape assertion can be trusted.
 	 */
@@ -73,7 +73,7 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 		$lines = $this->matchLines("/'url'\\s*=>\\s*'custom'/");
 		$this->assertCount(3, $lines,
 			'expected exactly 3 custom-DNSBL row synthesis sites (issue #1323 enumeration), '
-			. 'found matches at pfblockerng.inc lines [' . implode(', ', $lines) . '] -- '
+			. 'found matches at pfblockerng_apply.inc lines [' . implode(', ', $lines) . '] -- '
 			. 'update this test\'s coverage matrix if a site was added or removed');
 	}
 
@@ -88,14 +88,14 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 		$lines = $this->matchLines(self::SITE_BLOCK_PATTERN);
 		$this->assertCount(3, $lines,
 			"every custom-DNSBL row synthesis site must build 'header'/'custom'/'state'/'url' in that exact "
-			. "order with 'state' hardcoded to 'Enabled'; Enabled-shaped blocks found at pfblockerng.inc "
+			. "order with 'state' hardcoded to 'Enabled'; Enabled-shaped blocks found at pfblockerng_apply.inc "
 			. 'lines [' . implode(', ', $lines) . '] -- the site missing from that list diverged (dropped, '
 			. "reordered, or flipped the 'state' => 'Enabled' literal)");
 	}
 
 	/**
 	 * Guard linkage: because 'state' is always 'Enabled' (pinned above), the
-	 * real call-site expression $row['state'] == 'Hold' (pfblockerng.inc:17326)
+	 * real call-site expression $row['state'] == 'Hold' (pfblockerng_apply.inc:1377)
 	 * can never be TRUE for a custom row, so the pure guard
 	 * pfb_dnsbl_hold_stale_rebuild_skip() -- called directly here, no
 	 * refactoring needed -- can never fire its skip branch for one, regardless
@@ -104,7 +104,7 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 	public function testCustomRowStateEnabledNeverTriggersHoldStaleRebuildSkip(): void
 	{
 		$customRow = ['header' => 'Some_custom', 'custom' => 'example.com', 'state' => 'Enabled', 'url' => 'custom'];
-		$isHold = $customRow['state'] == 'Hold'; // exact call-site expression, pfblockerng.inc:17326
+		$isHold = $customRow['state'] == 'Hold'; // exact call-site expression, pfblockerng_apply.inc:1377
 		$this->assertFalse($isHold, 'a synthesized custom row must never read as Hold');
 
 		foreach ([TRUE, FALSE] as $staleGenerationRebuild) {

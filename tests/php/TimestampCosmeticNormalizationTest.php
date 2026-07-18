@@ -15,7 +15,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class TimestampCosmeticNormalizationTest extends TestCase
 {
-	private const PFBLOCKERNG_INC    = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
+	private const PFBLOCKERNG_APPLY  = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const PFBLOCKERNG_PHP    = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php';
 	private const INDEX_PHP          = __DIR__ . '/../../src/usr/local/www/pfblockerng/www/index.php';
 
@@ -35,12 +35,12 @@ final class TimestampCosmeticNormalizationTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// pfblockerng.inc:16486 -- the /tmp debug-snapshot filename ('M_j' -> 'Y-m-d')
+	// pfblockerng_apply.inc:1791 -- the /tmp debug-snapshot filename ('M_j' -> 'Y-m-d')
 	// -----------------------------------------------------------------------
 
 	public function testDebugFilenameSourceUsesFixedWidthFormat(): void
 	{
-		$source = (string) file_get_contents(self::PFBLOCKERNG_INC);
+		$source = (string) file_get_contents(self::PFBLOCKERNG_APPLY);
 		$this->assertStringContainsString(
 			"\$ts = date('Y-m-d', time());",
 			$source,

@@ -11,6 +11,7 @@ use PHPUnit\Framework\TestCase;
 final class DnsblPlaintextSummaryRetirementTest extends TestCase
 {
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
+	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const INSTALL = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_install.inc';
 
 	private string $source;
@@ -18,11 +19,13 @@ final class DnsblPlaintextSummaryRetirementTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$source = file_get_contents(self::INC);
+		$umbrella = file_get_contents(self::INC);
+		$apply = file_get_contents(self::APPLY);
 		$installSource = file_get_contents(self::INSTALL);
-		$this->assertNotFalse($source, 'failed to read pfblockerng.inc');
+		$this->assertNotFalse($umbrella, 'failed to read pfblockerng.inc');
 		$this->assertNotFalse($installSource, 'failed to read pfblockerng_install.inc');
-		$this->assertNotSame('', trim($source), 'pfblockerng.inc must be nonempty');
+		$source = $umbrella . "\n" . $apply;
+		$this->assertNotSame('', trim($source), 'pfblockerng.inc + pfblockerng_apply.inc must be nonempty');
 		$this->assertStringContainsString('function dnsbl_save_stats(', $source);
 		$this->assertStringContainsString("\$pfb['changed_dnsbl_groups'][] = \$alias", $source);
 		$this->assertStringContainsString('function pfb_update_unbound(', $source);

@@ -6,7 +6,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * IP regex prefilter guards (pfblockerng.inc, inside sync_package_pfblockerng,
+ * IP regex prefilter guards (pfblockerng_apply.inc, inside sync_package_pfblockerng,
  * not unit-reachable directly — pinned here against the real regex literals
  * extracted from the production file).
  *
@@ -15,8 +15,8 @@ use PHPUnit\Framework\TestCase;
  * necessary-condition prefilter that skips the regex engine when the line cannot
  * possibly contain a match:
  *
- *   IPv4 (~:12602):  substr_count($oline, '.') >= 3 && preg_match_all($pfb['ipv4'], ...)
- *   IPv6 (~:12675):  strpos($oline, ':') !== FALSE && preg_match_all($pfb['ipv6'], ...)
+ *   IPv4:  substr_count($oline, '.') >= 3 && preg_match_all($pfb['ipv4'], ...)
+ *   IPv6:  strpos($oline, ':') !== FALSE && preg_match_all($pfb['ipv6'], ...)
  *
  * The guards must be necessary conditions of a match — a line the guard rejects
  * can NEVER match the regex — so the guarded path returns the byte-identical set
@@ -27,7 +27,7 @@ use PHPUnit\Framework\TestCase;
  *
  * Scenario: the prefilter never changes the parser's output.
  *   Background:
- *     Given the production IPv4/IPv6 regex literals read from pfblockerng.inc
+ *     Given the production IPv4/IPv6 regex literals read from pfblockerng_apply.inc
  *     And a corpus spanning clean addresses, embedded-in-noise addresses, and
  *         negatives that fail the dot-count / colon necessary condition.
  *     When each line is run through the unguarded regex and the guarded predicate.
@@ -41,7 +41,7 @@ final class IpRegexPrefilterGuardTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
+		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 		self::$src = (string) file_get_contents($path);
 
 		// Extract the real regex literals (single-line, single-quoted) so the
