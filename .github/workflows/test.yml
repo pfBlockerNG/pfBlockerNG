@@ -576,9 +576,9 @@ jobs:
 
       - name: Install benchmark dependencies
         # pympler drives the retained-bytes/entry RAM gate in spike_adr06_build.py;
-        # without it that gate is skipped (treated as PASS), so install it to keep
-        # the RAM kill-gate live in CI.
-        run: pip install pympler
+        # without it that gate is skipped (treated as PASS). Install the pinned set
+        # from benchmarks/requirements.txt so its pins govern resolution (#1337).
+        run: pip install -r benchmarks/requirements.txt
 
       - name: ReDoS / regex-latency kill-gate
         # Non-zero exit on NO-GO (reduction-floor / per-pattern-latency / worst
