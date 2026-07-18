@@ -174,6 +174,17 @@ Describe 'run-gates.sh Composer vendor guard'
     Assert [ ! -e "$phpunit_marker" ]
   End
 
+  It 'keeps a checker OVERALL=0 diagnostic from passing the final verdict'
+    printf '#!/bin/sh\nprintf "checker diagnostic OVERALL=0\\n"\nexit 1\n' > "$stubdir/python3"
+    chmod +x "$stubdir/python3"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The output should include 'checker diagnostic OVERALL=0'
+    The output should include 'GATE FAIL: python3 scripts/check_composer_vendor.py'
+    The output should include 'GATES: FAIL'
+    The output should not include 'GATES: PASS'
+  End
+
   It 'fails closed under --allow-missing when the Composer checker interpreter is unavailable'
     mv "$stubdir/python3" "$stubdir/python3.disabled"
     When run sh -c "PATH='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha' --allow-missing"
@@ -244,6 +255,17 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
     The line 4 of output should equal 'GATES: PASS'
+    Assert [ -e "$marker" ]
+  End
+
+  It 'runs later gates after an ordinary failure and keeps the final failure verdict'
+    printf '#!/bin/sh\nexit 1\n' > "$stubdir/shellcheck"
+    chmod +x "$stubdir/shellcheck"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The output should include 'GATE FAIL: shellcheck scripts/kept.sh'
+    The output should include 'GATE PASS: shellspec'
+    The output should include 'GATES: FAIL'
     Assert [ -e "$marker" ]
   End
 
