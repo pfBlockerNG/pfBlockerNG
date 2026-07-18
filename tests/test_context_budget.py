@@ -577,6 +577,28 @@ def test_indirect_delegating_helper_without_literal_still_detected(tmp_path: Pat
     assert any("scripts/delegate.sh" in v for v in violations), violations
 
 
+def test_indirect_extensionless_helper_still_detected(tmp_path: Path) -> None:
+    # issue found in review (B1): a committed helper with no .sh/.py extension is
+    # never collected by the suffix-gated tokenizer, so an emitting helper named
+    # e.g. `scripts/emit-context` slips the fail-closed gate entirely (#1501).
+    root = _indirect_root(tmp_path, "sh scripts/emit-context")
+    _write(root, "scripts/emit-context", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
+    violations = ccb.check_indirect_producers(root)
+    assert any("scripts/emit-context" in v for v in violations), violations
+
+
+@pytest.mark.parametrize("glue", ["$()", "``"])
+def test_indirect_glued_substitution_helper_still_detected(tmp_path: Path, glue: str) -> None:
+    # issue found in review (B1): an empty command substitution glued with no
+    # whitespace right after a .sh/.py helper (`x.sh$()`, `x.sh` + backticks) is a
+    # shell no-op that still runs the file, yet it strips the recognizable suffix
+    # off every surviving shlex token, so the reference goes invisible (#1501).
+    root = _indirect_root(tmp_path, f"sh scripts/emit.sh{glue}")
+    _write(root, "scripts/emit.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
+    violations = ccb.check_indirect_producers(root)
+    assert any("scripts/emit.sh" in v for v in violations), violations
+
+
 def test_indirect_registered_dynamic_producer_clean(tmp_path: Path) -> None:
     root = _indirect_root(tmp_path, 'sh "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-branch-sync.sh"')
     _write(root, ".claude/hooks/session-branch-sync.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
