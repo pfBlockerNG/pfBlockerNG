@@ -337,27 +337,27 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
-			message: '#^Undefined variable\: \$ftotal4$#'
+			message: '#^Variable \$ftotal4 might not be defined\.$#'
 			identifier: variable.undefined
-			count: 2
+			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
-			message: '#^Undefined variable\: \$ftotal6$#'
+			message: '#^Variable \$ftotal6 might not be defined\.$#'
 			identifier: variable.undefined
-			count: 2
+			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
-			message: '#^Undefined variable\: \$options4$#'
+			message: '#^Variable \$options4 might not be defined\.$#'
 			identifier: variable.undefined
-			count: 4
+			count: 3
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
-			message: '#^Undefined variable\: \$options6$#'
+			message: '#^Variable \$options6 might not be defined\.$#'
 			identifier: variable.undefined
-			count: 4
+			count: 3
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
