@@ -20,7 +20,7 @@ def _load_json(path: Path, label: str) -> tuple[Any | None, list[str]]:
         return json.loads(path.read_text(encoding="utf-8"), parse_constant=_reject_json_constant), []
     except FileNotFoundError:
         return None, [f"missing {label}: {path}"]
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
         return None, [f"malformed {label}: {exc}"]
 
 
