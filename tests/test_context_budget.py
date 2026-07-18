@@ -493,6 +493,32 @@ def test_indirect_helper_outside_checked_roots_fails_closed(tmp_path: Path) -> N
     assert len(violations) == 1 and "outside the checked roots" in violations[0], violations
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sh scripts/x.sh;sh scripts/quiet.sh",
+        "sh scripts/x.sh>/tmp/out.log",
+        "sh scripts/x.sh|cat",
+        "sh scripts/x.sh&&true",
+    ],
+)
+def test_indirect_metachar_glued_helper_still_detected(tmp_path: Path, command: str) -> None:
+    # Shell operators glued to the path (no whitespace) must not make an emitting
+    # helper invisible: `scripts/x.sh;sh` is a ref plus an operator, not a non-ref token.
+    root = _indirect_root(tmp_path, command)
+    _write(root, "scripts/x.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
+    _write(root, "scripts/quiet.sh", "#!/bin/sh\nexit 0\n")
+    violations = ccb.check_indirect_producers(root)
+    assert any("scripts/x.sh" in v for v in violations), violations
+
+
+def test_indirect_uppercase_extension_helper_still_detected(tmp_path: Path) -> None:
+    root = _indirect_root(tmp_path, "sh scripts/LOUD.SH")
+    _write(root, "scripts/LOUD.SH", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
+    violations = ccb.check_indirect_producers(root)
+    assert any("scripts/LOUD.SH" in v for v in violations), violations
+
+
 def test_indirect_registered_dynamic_producer_clean(tmp_path: Path) -> None:
     root = _indirect_root(tmp_path, 'sh "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-branch-sync.sh"')
     _write(root, ".claude/hooks/session-branch-sync.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
