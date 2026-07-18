@@ -3941,6 +3941,69 @@ function pfb_live_punch_plan(string $ip, iterable $table_entries): array
 }
 
 /**
+ * pfb_live_punch_apply -- issue #1470: fail-closed executor for a
+ * pfb_live_punch_plan() plan. Order is INVERTED vs the naive shape: every
+ * $plan['add'] remainder execs FIRST, every $plan['delete'] containing entry
+ * LAST. Every remainder is a covering-CIDR SUBSET of a still-present
+ * containing entry (the plan's contract), so adding it first never changes
+ * live match behaviour; deleting the containing entr(y/ies) only once every
+ * remainder is already in place means no intermediate state ever unblocks
+ * the host or a sibling.
+ *
+ * On an add failure: stop (no further adds, no deletes), best-effort
+ * `-T delete` every remainder THIS call already added (its own rc is
+ * ignored -- those leftovers are subsets of the still-present containing
+ * entry, harmless), and return ok=FALSE. On a delete failure: stop at the
+ * first failure (no rollback -- entries already deleted had their remainder
+ * carved in the add phase; the failed entry still blocks the host, which is
+ * the fail-closed outcome).
+ *
+ * NEVER routes through pfb_pfctl_table_op(): that opens an ADR-61
+ * sync-status 'apply' ledger entry on failure, and the tick's retry sweep
+ * (pfb_ip_apply_retry() -> `-T replace` from the aliasdir mirror) would
+ * revert OTHER valid live punches whose stores still claim carved.
+ *
+ * NOT pure -- execs pfctl.
+ *
+ * @param  string $pfctl Absolute path to the pfctl binary ($pfb['pfctl']).
+ * @param  string $table The pf table name (caller-validated).
+ * @param  array{delete: string[], add: string[]} $plan pfb_live_punch_plan()'s output.
+ * @return array{ok: bool, fail: ?string} ok=TRUE iff every op succeeded (or the
+ *         plan was empty, zero execs); 'fail' names the first failing op as
+ *         "<op> <entry>", NULL when ok.
+ */
+function pfb_live_punch_apply(string $pfctl, string $table, array $plan): array {
+	$table_esc = escapeshellarg($table);
+	$applied   = [];
+
+	foreach ($plan['add'] as $entry) {
+		$out = [];
+		$rc  = 0;
+		exec("{$pfctl} -t {$table_esc} -T add " . escapeshellarg($entry) . ' 2>&1', $out, $rc);
+		if (pfb_pfctl_op_failed('add', $rc, implode(' ', $out))) {
+			foreach ($applied as $rollback_entry) {
+				exec("{$pfctl} -t {$table_esc} -T delete " . escapeshellarg($rollback_entry) . ' 2>&1');
+			}
+			pfb_logger('[pfb_live_punch_apply] ' . pfb_pfctl_error_message($table, 'add', $rc, implode(' ', $out)) . " entry={$entry}\n", 2);
+			return ['ok' => FALSE, 'fail' => "add {$entry}"];
+		}
+		$applied[] = $entry;
+	}
+
+	foreach ($plan['delete'] as $entry) {
+		$out = [];
+		$rc  = 0;
+		exec("{$pfctl} -t {$table_esc} -T delete " . escapeshellarg($entry) . ' 2>&1', $out, $rc);
+		if (pfb_pfctl_op_failed('delete', $rc, implode(' ', $out))) {
+			pfb_logger('[pfb_live_punch_apply] ' . pfb_pfctl_error_message($table, 'delete', $rc, implode(' ', $out)) . " entry={$entry}\n", 2);
+			return ['ok' => FALSE, 'fail' => "delete {$entry}"];
+		}
+	}
+
+	return ['ok' => TRUE, 'fail' => NULL];
+}
+
+/**
  * ADR-65 SS2.1: ask the live DNSBL matcher whether $domain is blocked, via the
  * read-only query channel (pfb_py_query / pfb_py_query.reply) -- no counter/
  * log/cache sink is touched, only the decision-cache LRU may warm.
