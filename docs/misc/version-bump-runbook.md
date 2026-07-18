@@ -52,7 +52,13 @@ entry — no new shipped file, no extra deploy wiring.
    **never** the matrix — and the harness redacts it from diagnostics. Adding the entry + letting
    **version-tracker** (`version-tracker.yml`) run (or dispatching it) triggers
    `build-pkg-linux.yml`, `image-refresh.yml` (CE **and** Plus — see step 2), `smoke.yml`
-   automatically — **no workflow YAML edit needed**.
+   automatically — **no workflow YAML edit needed**. When the bump **drops the old minimum**,
+   do not delete its matrix entry while boxes still run it — in the same `ci-metadata` PR flip
+   its `role` to `"route-only"` (ADR-27 Part 2): the version leaves build/CI/smoke
+   (`--print-build`/`--print-ci`/`--print-test` exclude it) but its release catalog keeps being
+   served, regenerated from its **last released `.pkg`**, so existing installs keep a route
+   instead of a Worker 404. Delete the entry outright only for a deliberate clean 404.
+   Semantics + lifecycle table: `scripts/README.md`.
 2. **Refresh the smoke images** (ADR-04 + ADR-09) — `image-refresh.yml` (`Upgrade pfSense smoke
    images`) is a **CE + Plus matrix fan-out**: a `plan` job reads `ci-metadata`, and each
    `ci:true` variant is refreshed **only when its `upgrade.available` flag is set** (a curated
