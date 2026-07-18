@@ -870,6 +870,102 @@ def test_delete_ip_v6_unsuppresses_entry_and_restores_block(
 
 
 # --------------------------------------------------------------------------- #
+# entry_delete=delete_ipwhitelist (alerts.php:1400 -- issue #1505): before this
+# fix the handler ran `pfctl -T delete` and ignored exec()'s exit status, so a
+# FAILED live delete still unset the customlist entry, wrote it to config, and
+# touched the cron `.update` flag -- a fail-OPEN divergence between the config
+# store and the live pf table. pfb_pfctl_checked_op() now gates every one of
+# those writes on the pfctl outcome: a failed delete must leave the Permit
+# alias customlist entry (and the pf table) exactly as they were.
+# --------------------------------------------------------------------------- #
+
+
+def test_delete_ipwhitelist_pfctl_failure_keeps_customlist_entry(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A failed pfctl delete must not drop the Permit customlist entry (#1505).
+
+    Scenario: fail-closed store/table consistency for entry_delete=delete_ipwhitelist.
+
+    Given: a Permit v4 alias (``Wl1505``) whose only customlist host is
+    ``192.0.2.150``, and NO update/reload has ever run for it -- so its pf
+    table ``pfB_Wl1505_v4`` genuinely does not exist on the box, and
+    ``pfctl -t pfB_Wl1505_v4 -T delete`` fails with "Table does not exist"
+    (the non-kill-op failure class ``pfb_pfctl_op_failed()`` documents).
+    When: ``entry_delete=delete_ipwhitelist`` is posted for that host.
+    Then: (1) the failure savemsg is surfaced, (2) the alias's customlist
+    STILL holds the host -- the config write never ran, (3) no
+    ``Wl1505_custom_v4.update`` cron flag was touched -- the write-gate never
+    fired.
+    """
+    vm = smoke_vm
+    host = "192.0.2.150"  # RFC 5737 TEST-NET-1 -- unused elsewhere in this module
+    aliasname = "Wl1505"
+    table = f"pfB_{aliasname}_v4"
+
+    rowid = _free_list_rowid(vm, CFG_IPV4_LISTS)
+    base = f"{CFG_IPV4_LISTS}/{rowid}"
+    custom_path = f"{base}/custom"
+    permit_row = {
+        "aliasname": aliasname,
+        "action": "Permit_Inbound",
+        "custom": helpers._b64_textarea([host]),
+    }
+    update_flag = f"{helpers.PFB_DBDIR}/permit/{aliasname}_custom_v4.update"
+
+    try:
+        setup_result = helpers.php_eval(
+            vm,
+            f"config_set_path({helpers._php_str(base)}, {helpers._php_kv_array(permit_row)});\n"
+            "write_config('pfBlockerNG smoke: seed #1505 delete_ipwhitelist pfctl-failure Permit alias');\n"
+            "echo 'OK';",
+        )
+        assert setup_result.returncode == 0 and "OK" in setup_result.stdout, (
+            f"Failed to seed the Permit alias row: rc={setup_result.returncode}, stdout={setup_result.stdout!r}"
+        )
+
+        # GIVEN: the seeded customlist already holds the host ...
+        entries = _suppression_entries(vm, custom_path)
+        assert host in entries, f"{host} not present in the seeded {table} customlist before the delete POST: {entries}"
+        # ... and the pf table genuinely does not exist (no update/reload ever ran for it).
+        tables = helpers.pfctl_tables(vm)
+        assert table not in tables, f"{table} unexpectedly already exists on the box before the delete POST: {tables}"
+
+        # WHEN: entry_delete=delete_ipwhitelist for the host -- the checked
+        # pfctl delete must fail against the never-built table.
+        resp = _post_action(webui, {"entry_delete": "delete_ipwhitelist", "domain": host, "table": table})
+        assert not looks_like_login_page(resp.text), "delete_ipwhitelist POST returned the login form (session lost)"
+
+        # THEN (1): the failure savemsg is surfaced (pfblockerng_alerts.php:1430).
+        for marker in ("failed [", "customlist entry was kept"):
+            assert marker in resp.text, (
+                f"expected the pfctl-failure savemsg fragment {marker!r} after a failed delete_ipwhitelist POST; "
+                f"response body did not contain it"
+            )
+
+        # THEN (2): the customlist entry was KEPT -- no config_set_path ran.
+        entries_after = _suppression_entries(vm, custom_path)
+        assert host in entries_after, (
+            f"{host} was dropped from the {table} customlist despite the pfctl delete failing; entries={entries_after}"
+        )
+
+        # THEN (3): no cron '.update' flag was touched -- the write-gate never fired.
+        flag_present = (
+            helpers._php_read_scalar(
+                vm,
+                f"$e = file_exists({helpers._php_str(update_flag)}) ? 'YES' : 'NO';",
+                "$e",
+            )
+            == "YES"
+        )
+        assert not flag_present, f"{update_flag} unexpectedly exists after a failed delete_ipwhitelist POST"
+    finally:
+        _del_list_row(vm, CFG_IPV4_LISTS, rowid)
+        helpers.php_eval(vm, f"@unlink({helpers._php_str(update_flag)}); echo 'OK';")
+
+
+# --------------------------------------------------------------------------- #
 # ip_remove (alerts.php:1490 -- ADR-53 parity, issue #1412): the temporary IP
 # Unlock/Re-Lock action. The retired handler deleted/added a SINGLE token
 # directly via pfctl -- for a bare-host table entry that matched (the ONE
