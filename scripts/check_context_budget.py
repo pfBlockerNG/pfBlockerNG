@@ -20,10 +20,13 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 
 A hook command may also invoke a repo helper script (under scripts/ or
 .claude/hooks/, both trigger surfaces). Detection recognizes `*.sh`/`*.py`
-command tokens; a recognized helper whose content could emit
-`hookSpecificOutput.additionalContext` must be a registered
-DYNAMIC_CAPSULE_PRODUCERS entry, and a recognized reference the checker cannot
-statically resolve and read fails closed (#1501).
+command tokens, including one nested inside a quoted compound shell fragment
+(`sh -c '...'`); a recognized helper whose content could emit
+`hookSpecificOutput.additionalContext` — directly (the literal string) or by
+delegating execution to another program/module the checker cannot read (a
+shell `exec`, a `subprocess`/`os.exec*`/`os.system` call) — must be a
+registered DYNAMIC_CAPSULE_PRODUCERS entry, and a recognized reference the
+checker cannot statically resolve and read fails closed (#1501).
 
 CONDITIONAL: in --staged / --diff mode the checks run IF AND ONLY IF the change
 touches a context surface (AGENTS.md, CLAUDE.md, .agents/policy/,
@@ -59,9 +62,10 @@ CAPSULE_BUDGET = 1_800
 # The parity label (everything before the first ": ") is the one uncheckable part of
 # the UserPromptSubmit capsule; the bound keeps it a label, not a smuggling channel.
 PARITY_LABEL_MAX = 80
-# Ceiling for any hook command: decoded 1,800 B capsule budget × 6 (worst-case \uXXXX
-# JSON escaping) + envelope/quoting slack. shlex is nonlinear on huge quoted strings
-# (~25 s at 1 MB — issue #1504), so longer commands are rejected before tokenization.
+# Ceiling for any hook command: decoded 1,800 B capsule budget × 6 (generous safety
+# margin over the ×3 worst-case \uXXXX JSON-escaping ratio) + envelope/quoting slack.
+# shlex is nonlinear on huge quoted strings (~25 s at 1 MB — issue #1504), so longer
+# commands are rejected before tokenization.
 COMMAND_BYTES_MAX = CAPSULE_BUDGET * 6 + 200
 
 # Grandfathered ratchet caps for files predating the taxonomy budgets: they may
@@ -79,15 +83,25 @@ SETTINGS = ".claude/settings.json"
 # Registered (event, script) hook helpers whose additionalContext is a RUNTIME-computed
 # diagnostic — no static payload exists to budget/parity-check. Any unregistered helper
 # that could emit a capsule fails closed (inline as canonical `echo '<JSON>'` or register).
+# ts-hook.sh delegates to a token-savior module (`exec "$py" -m "token_savior.hooks.$1"`)
+# that emits a runtime additionalContext diagnostic — a known, first-party delegatee.
 DYNAMIC_CAPSULE_PRODUCERS = {
     ("SessionStart", ".claude/hooks/session-branch-sync.sh"),
     ("PreToolUse", "scripts/check_retired_tokens.py"),
+    ("PostToolUse", "scripts/ts-hook.sh"),
 }
 
 # Helper scripts must live under these roots: both are trigger surfaces
 # (_TRIGGER_DIRS), so editing a helper re-runs this gate.
 _HELPER_DIRS = ("scripts/", ".claude/hooks/")
 _PROJECT_DIR_PREFIXES = ("${CLAUDE_PROJECT_DIR:-.}/", "${CLAUDE_PROJECT_DIR}/")
+
+# A helper that hands execution off to another program/module the checker cannot
+# read (a POSIX shell `exec` re-invocation, a `subprocess` call, an `os.exec*`/
+# `os.system` call) is exactly as unverifiable as one that contains the
+# `additionalContext` literal directly — the delegation-mediated bypass #1501's
+# own fix would otherwise still miss (e.g. `exec "$py" -m "token_savior.hooks.$1"`).
+_DELEGATES_RE = re.compile(r"(?m)^\s*exec\b|\bsubprocess\.\w+\(|\bos\.exec\w*\(|\bos\.system\(")
 
 # Accepts both header shapes in the first HEADER_WINDOW lines: the plain
 # "Scope: ... Load when: ..." prose and the bulleted "- **Scope:** / - **Load-when:**".
@@ -244,7 +258,14 @@ def extract_capsules(settings_text: str) -> tuple[list[tuple[str, str]], list[st
                     command = hook.get("command", "")
                     if "additionalContext" not in command:
                         continue
-                    size = len(command.encode("utf-8"))
+                    try:
+                        size = len(command.encode("utf-8"))
+                    except UnicodeEncodeError:
+                        # A lone/unpaired surrogate (valid in a JSON \uXXXX escape,
+                        # invalid UTF-8) must not crash out to the file-level catch
+                        # and discard every other hook's already-found violations.
+                        errors.append(f"{SETTINGS}: {event} capsule command has an unencodable character")
+                        continue
                     if size > COMMAND_BYTES_MAX:
                         errors.append(f"{SETTINGS}: {event} capsule command {size} bytes > cap {COMMAND_BYTES_MAX}")
                         continue
@@ -315,8 +336,16 @@ def check_parity(root: Path) -> list[str]:
     return violations
 
 
-def _script_refs(command: str) -> list[str] | None:
-    """Repo-script tokens (*.sh / *.py) of a hook command, or None when untokenizable."""
+def _script_refs(command: str, _depth: int = 0) -> list[str] | None:
+    """Repo-script tokens (*.sh / *.py) of a hook command, or None when untokenizable.
+
+    A token that itself contains embedded whitespace after tokenization is a quoted
+    compound shell fragment (`sh -c 'python3 scripts/emit.py --flag'` collapses to
+    one opaque token) — its script reference would otherwise hide inside that one
+    token, so it is recursively re-tokenized. Depth is bounded (nested quoting is
+    finite, and the caller already caps the command's raw byte length before this
+    ever runs) purely as a defensive limit, not because it is reachable in practice.
+    """
     try:
         # punctuation_chars: split glued shell operators (`x.sh;sh`, `x.sh>log`) into
         # their own tokens so an operator can never hide a script reference.
@@ -328,6 +357,11 @@ def _script_refs(command: str) -> list[str] | None:
     refs = []
     for tok in argv:
         if not tok.lower().endswith((".sh", ".py")):
+            if _depth < 4 and any(char.isspace() for char in tok):
+                nested = _script_refs(tok, _depth + 1)
+                if nested is None:
+                    return None
+                refs.extend(nested)
             continue
         for prefix in _PROJECT_DIR_PREFIXES:
             tok = tok.removeprefix(prefix)
@@ -340,7 +374,7 @@ def _check_helper(root: Path, event: str, ref: str) -> list[str]:
     if "$" in ref or ref.startswith("/") or ".." in ref.split("/"):
         return [f"{SETTINGS}: {event} hook references unresolvable script `{ref}` — cannot verify capsule emission"]
     if not ref.startswith(_HELPER_DIRS):
-        return [f"{SETTINGS}: {event} hook helper `{ref}` outside the checked roots {'/'.join(_HELPER_DIRS)}"]
+        return [f"{SETTINGS}: {event} hook helper `{ref}` outside the checked roots {', '.join(_HELPER_DIRS)}"]
     path = root / ref
     if not path.is_file():
         return [f"{SETTINGS}: {event} hook helper `{ref}` not found — cannot verify capsule emission"]
@@ -348,7 +382,9 @@ def _check_helper(root: Path, event: str, ref: str) -> list[str]:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return [f"{SETTINGS}: {event} hook helper `{ref}` unreadable ({exc.strerror or exc})"]
-    if "additionalContext" not in text or (event, ref) in DYNAMIC_CAPSULE_PRODUCERS:
+    if (event, ref) in DYNAMIC_CAPSULE_PRODUCERS:
+        return []
+    if "additionalContext" not in text and not _DELEGATES_RE.search(text):
         return []
     return [
         f"{SETTINGS}: {event} hook helper `{ref}` may emit additionalContext the checker cannot validate — "
@@ -370,7 +406,16 @@ def check_indirect_producers(root: Path) -> list[str]:
                     command = hook.get("command", "")
                     if "additionalContext" in command:
                         continue  # the canonical inline-capsule path (extract_capsules) owns it
-                    size = len(command.encode("utf-8"))
+                    try:
+                        size = len(command.encode("utf-8"))
+                    except UnicodeEncodeError:
+                        # Same fail-closed-per-command discipline as extract_capsules:
+                        # one hostile command must not crash out and silently drop
+                        # every other hook's already-found indirect-producer violations.
+                        violations.append(
+                            f"{SETTINGS}: {event} hook command has an unencodable character — cannot rule out a capsule"
+                        )
+                        continue
                     if size > COMMAND_BYTES_MAX:
                         violations.append(
                             f"{SETTINGS}: {event} hook command {size} bytes > cap {COMMAND_BYTES_MAX}"
