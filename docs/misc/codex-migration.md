@@ -16,9 +16,10 @@ fresh-session policy replaced the workflow-era orchestration.
 | Specialist roles | `.agents/policy/agent-roles.md` + `.agents/model-tiers.conf` | Claude agents (`claude-fable-5` / `claude-opus-4-8` / `claude-sonnet-5`) | Role TOMLs in `.codex/agents/` (`gpt-5.6-sol` / `-terra` / `-luna`) |
 | Lifecycle enforcement | Shared `.githooks/` + repository scripts | `.claude/settings.json` | `.codex/hooks.json` + `.codex/config.toml` |
 
-`AGENTS.md` deliberately carries only a thin Codex adapter table (its "Vendor
-adapters" section): detailed procedure lives once, in the routed policy/context
-files, because summaries drift.
+`AGENTS.md` stays vendor-neutral: its "Vendor adapters" section is a short pointer
+to each vendor's own adapter — `CLAUDE.md` for Claude, `.agents/context/codex-adapter.md`
+for Codex (the canonical-noun → Codex translation table plus Codex specifics). Detailed
+procedure still lives once, in the routed policy/context files, because summaries drift.
 
 ## Automatic parity enforcement
 
@@ -42,7 +43,7 @@ symlink; a provider-specific runtime change stays in that provider's adapter.
 
 | Claude Code surface | Codex equivalent | Notes |
 | --- | --- | --- |
-| `CLAUDE.md` adapter | native `AGENTS.md` | Same canonical bootstrap; Codex needs no adapter file. |
+| `CLAUDE.md` adapter | native `AGENTS.md` + `.agents/context/codex-adapter.md` | Same canonical bootstrap; Codex's vendor adapter is `.agents/context/codex-adapter.md`, mirroring `CLAUDE.md`. |
 | `.claude/skills/*` symlinks | `.agents/skills/*` | One shared detailed procedure per skill. |
 | `.claude/workflows/*.js` | *(retired 2026-07-17, #1431)* | Superseded by the fresh-session policy: `.agents/policy/workflow.md` + `landing.md`; both clients use fresh native sub-agents. |
 | Top / mid / small model tier | GPT-5.6-Sol / GPT-5.6-Terra / GPT-5.6-Luna | `.agents/model-tiers.conf` is the shared mapping; reasoning effort remains independent. |
