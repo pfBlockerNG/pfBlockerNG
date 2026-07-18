@@ -241,6 +241,14 @@ def test_check_headers_hostile_templates_skip_silently_no_crash(tmp_path: Path) 
     assert ccb.check_headers(root) == []
 
 
+def test_check_headers_reports_spaced_template_token(tmp_path: Path) -> None:
+    root = _scratch_repo(tmp_path)
+    bootstrap = _BOOTSTRAP.replace("lang-<php\\|python\\|shell>.md", "lang-<php | python>.md")
+    _write(root, "AGENTS.md", bootstrap)
+    violations = ccb.check_headers(root)
+    assert violations == ["AGENTS.md: malformed routing target `lang-<php | python>.md` skipped"]
+
+
 # --- both header shapes accepted; window enforced ------------------------------
 
 
@@ -310,6 +318,12 @@ def test_extract_capsules_reports_unextractable_payload() -> None:
         {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "emit-additionalContext.sh 'oops"}]}]}}
     )
     capsules, errors = ccb.extract_capsules(settings)
+    assert capsules == []
+    assert errors == [".claude/settings.json: SessionStart capsule payload is not extractable JSON"]
+
+
+def test_extract_capsules_rejects_shell_broken_apostrophe() -> None:
+    capsules, errors = ccb.extract_capsules(_settings("repo's"))
     assert capsules == []
     assert errors == [".claude/settings.json: SessionStart capsule payload is not extractable JSON"]
 
