@@ -14213,9 +14213,9 @@ function pfb_daemon_filterlog() {
 						$iplog	= "{$pfb['ip_matchlog']}";
 						$l_type = 'Match';
 					}
-					// INIT-GAP (#1497): $d[6] is always one of block/pass/unkn(%u) in
-					// practice, but the chain above has no else -- default these so
-					// they are defined for any other value. Behaviour-preserving.
+					// INIT-GAP (#1497): defined defaults for an out-of-format action
+					// (unreachable per the kernel filterlog format: $d[6] is always
+					// block/pass/unkn(%u)).
 					else {
 						$folder = '';
 						$iplog	= '';
