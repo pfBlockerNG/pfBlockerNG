@@ -76,14 +76,21 @@ final class LiveTableSnapshotTest extends TestCase
 	}
 
 	/**
-	 * A pfctl invocation that cannot run at all (nonexistent binary/missing
-	 * table) fails SOFT -- an empty result, never a warning or fatal.
+	 * A pfctl invocation that cannot run at all (nonexistent binary) is no
+	 * longer indistinguishable from an empty table -- it throws
+	 * \RuntimeException instead of failing soft, so an orchestrator can tell
+	 * "genuinely empty" from "snapshot capture failed" (a fail-soft empty
+	 * result here used to read as -- and be acted on as -- "not currently
+	 * blocked"). Supersedes the prior fail-soft spec. The throw fires
+	 * lazily, on the generator's first iteration.
 	 */
-	public function testBrokenPfctlFailsSoftAndYieldsNothing(): void
+	public function testBrokenPfctlThrowsRuntimeException(): void
 	{
-		$entries = self::collect(pfb_live_table_snapshot('/nonexistent/pfctl-binary-xyz', $this->aliasdir, $this->dbdir, 'pfB_NoTable_v4'));
+		$this->expectException(\RuntimeException::class);
 
-		$this->assertSame([], $entries);
+		foreach (pfb_live_table_snapshot('/nonexistent/pfctl-binary-xyz', $this->aliasdir, $this->dbdir, 'pfB_NoTable_v4') as $entry) {
+			// the throw fires lazily -- iterating is what triggers the generator body
+		}
 	}
 
 	/**
@@ -140,6 +147,10 @@ final class LiveTableSnapshotTest extends TestCase
 			"awk 'BEGIN { for (i = 0; i < 200000; i++) printf \"10.%d.%d.%d/32\\n\", int(i / 65536) % 256, int(i / 256) % 256, i % 256 }'"
 		);
 
+		// Reset the process-wide peak immediately before the measured consumption
+		// (CountLinesTest precedent) -- otherwise an earlier test's higher peak in
+		// this same process can mask a regression here.
+		memory_reset_peak_usage();
 		$before = memory_get_peak_usage();
 		$count  = 0;
 		foreach (pfb_live_table_snapshot($shim, $this->aliasdir, $this->dbdir, 'pfB_Big_v4') as $entry) {

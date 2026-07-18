@@ -1162,9 +1162,11 @@ def test_ip_unlock_double_punch_v4_second_punch_keeps_first_carved(
     spec = helpers.IpCase(aliasname="uiipunlock4dp", feed_url=feed_url, header="uiipunlock4dp")
     table = spec.alias
 
-    helpers.inject(vm, spec)
-    helpers.reload(vm, "updateip")
     try:
+        # Inject/reload live INSIDE the try -- a failed setup
+        # must still hit `finally: helpers.reset(vm)`.
+        helpers.inject(vm, spec)
+        helpers.reload(vm, "updateip")
         # BEFORE: the table is populated and every address matches it live.
         members = helpers.wait_pfctl_table(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
@@ -1257,9 +1259,11 @@ def test_ip_unlock_double_punch_v6_second_punch_keeps_first_carved(
     spec = helpers.IpCase(aliasname="uiipunlock6dp", feed_url=feed_url, header="uiipunlock6dp", family="v6")
     table = spec.alias
 
-    helpers.inject(vm, spec)
-    helpers.reload(vm, "updateip")
     try:
+        # Inject/reload live INSIDE the try -- a failed setup
+        # must still hit `finally: helpers.reset(vm)`.
+        helpers.inject(vm, spec)
+        helpers.reload(vm, "updateip")
         members = helpers.wait_pfctl_table(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         for host in (first, second, third_inside, sibling):
@@ -1347,9 +1351,11 @@ def test_ip_unlock_not_currently_blocked_records_nothing(
     spec = helpers.IpCase(aliasname="uiipunlocknb", feed_url=feed_url, header="uiipunlocknb")
     table = spec.alias
 
-    helpers.inject(vm, spec)
-    helpers.reload(vm, "updateip")
     try:
+        # Inject/reload live INSIDE the try -- a failed setup
+        # must still hit `finally: helpers.reset(vm)`.
+        helpers.inject(vm, spec)
+        helpers.reload(vm, "updateip")
         # BEFORE: the table is populated; the member matches, the target does not
         # (the before-state gate -- "not currently blocked" must be genuinely true).
         members = helpers.wait_pfctl_table(vm, table)
