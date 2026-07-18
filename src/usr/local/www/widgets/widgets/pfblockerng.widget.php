@@ -1085,6 +1085,10 @@ function pfBlockerNG_get_table($mode='', $pfb_table) {
 
 <!-- Widget customization settings wrench -->
 </div>
+<?php
+// issue #1497: pfSense dashboard widget-include convention provides $widgetname.
+/** @var string $widgetname */
+?>
 <div id="widget-<?=$widgetname?>_panel-footer" class="panel-footer collapse">
 
 <form action="/widgets/widgets/pfblockerng.widget.php" method="post" class="form-horizontal">
