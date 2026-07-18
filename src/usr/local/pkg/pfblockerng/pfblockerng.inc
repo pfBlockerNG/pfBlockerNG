@@ -14899,6 +14899,11 @@ function pfb_open_sqlite($table, $message) {
 	// ADR-60: these writes bypass pfb_logger() entirely, so they stamp themselves.
 	$now = pfb_log_iso_timestamp();
 
+	// issue #1494: both connection attempts below can throw, leaving $db_handle
+	// unset at the `if ($db_handle)` check -- init here so that path returns
+	// FALSE cleanly instead of reading an undefined variable.
+	$db_handle = NULL;
+
 	try {
 		$db_handle = new SQLite3($database);
 		$db_handle->busyTimeout("{$pfb['sqlite_timeout']}");
@@ -17185,6 +17190,10 @@ function sync_package_pfblockerng($cron='') {
 				}
 			}
 
+			// issue #1494: the empty-header skip message below reads $logtab before
+			// its per-row assignment when the very first row hits that branch.
+			$logtab = '';
+
 			foreach ($lists as $list) {
 
 				// Reset variables once per alias
@@ -18679,7 +18688,9 @@ function sync_package_pfblockerng($cron='') {
 						if ($asn_run_once && $row['format'] == 'asn') {
 							$mmsg = 'To utilize the ASN functionality, you must register for a free IPinfo Account. Review IP Tab for more information.';
 							if (empty($pfb['asn_token'])) {
-								pfb_logger($mmsg, $logtype);
+								// issue #1494: $logtype had zero assignments in this function;
+								// sibling credential-notice call (MaxMind, above) uses level 1.
+								pfb_logger($mmsg, 1);
 								file_notice('pfBlockerNG ASN', $mmsg, 'pfBlockerNG', '/pfblockerng/pfblockerng_ip.php', 2);
 							}
 							$asn_run_once = FALSE;
@@ -19848,7 +19859,7 @@ function sync_package_pfblockerng($cron='') {
 	// If 'Rule Changes' are found, utilize the 'filter_configure()' function, if not, utilize 'pfctl replace' command
 	// Captured here (before the if/else) so it is always defined at the post-hook emit.
 	$pfb_ip_unlock_forced = FALSE;
-	if ($pfb['autorules'] && $orig_rules_nocreated != $new_rules_nocreated || $pfb['enable'] == '' || $pfb['remove']) {
+	if ($pfb['autorules'] && ($orig_rules_nocreated ?? []) != ($new_rules_nocreated ?? []) || $pfb['enable'] == '' || $pfb['remove']) {
 
 		if (!$pfb['save']) {
 			$log = "\n===[  Aliastables / Rules  ]================================\n\n";
