@@ -14437,8 +14437,14 @@ function pfb_daemon_filterlog() {
 					$ts_formatted = pfb_filterlog_timestamp($f, $log_type, time());
 					$log = "{$ts_formatted},{$d[3]},{$d[4]},{$int},{$d[6]},{$d[8]},";
 
-					// Details:	"Direction/GeoIP/Aliasname/IP evaluated/Feed Name/Resolved Hostname/Client Hostname/ASN/Duplicate status"
-					$details	= "{$dir},{$geoip},{$pfb_alias},{$pfb_query[1]},{$pfb_query[0]},{$resolved_host},{$hostname},{$asn}";
+					// Details:	"Direction/GeoIP/Aliasname/IP evaluated/Feed Name/Resolved Hostname/Client Hostname/ASN,ASN Domain,ASN Name/Duplicate status"
+					// issue #1369: the single pipe-blob ASN field is replaced by 3 plain
+					// CSV columns (asn, asn_domain, asn_name), CSV-escaped by
+					// pfb_asn_csv_fields() (native fputcsv(), explicit empty escape arg,
+					// CR/LF normalized to spaces first) -- see ADR-38 Amendment 3. The raw
+					// $asn blob itself is untouched and still feeds the syslog asn= value
+					// below + the asncache.asn row.
+					$details	= "{$dir},{$geoip},{$pfb_alias},{$pfb_query[1]},{$pfb_query[0]},{$resolved_host},{$hostname}," . pfb_asn_csv_fields($asn);
 
 					// Reverse Match text
 					if ($d[6] == 'match') {

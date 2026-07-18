@@ -2154,6 +2154,119 @@ function pfb_unified_format_dnsreply(array $fields): string
 }
 
 // ---------------------------------------------------------------------------
+// issue #1369 (ADR-38 Amendment 3) -- ASN CSV-column helpers. The internal
+// pipe-delimited ASN blob (mmdblookup output flattened by pfblockerng.sh's
+// iptoasn(), e.g. "|ASN:  AS50360 | domain:  4vendeta.com | name:  Tamatiya
+// EOOD |") stays the wire/cache format for iptoasn()/asncache.asn/the syslog
+// asn= value -- these two helpers are the ONLY place that blob is decoded
+// into the three plain CSV columns (asn, asn_domain, asn_name) the IP log
+// writer now emits, replacing the single blob field in ip_block/permit/
+// match.log + unified.log. PURE -- no globals; pfb_asn_csv_fields()'s only
+// I/O is an in-memory stream.
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_asn_blob_split — split the internal ASN blob into its three labelled
+ * parts. The blob is either a bare state literal ('null' when ASN reporting
+ * was off at write time, 'Unknown' when the lookup found nothing, or empty)
+ * or the pipe-delimited "label:  value" shape above: split on '|' into
+ * segments, each segment split at its FIRST ':' into label/value. A blob
+ * with no '|' or no ':' (unrecognised shape) is treated as a bare ASN state
+ * literal, verbatim.
+ *
+ * @param string $blob Raw internal ASN value ($asn as pfb_daemon_filterlog builds it).
+ * @return array{asn: string, domain: string, name: string}
+ */
+function pfb_asn_blob_split(string $blob): array
+{
+	$blob = trim($blob);
+
+	if ($blob === '' || strpos($blob, '|') === FALSE || strpos($blob, ':') === FALSE) {
+		return ['asn' => ($blob === '' ? 'Unknown' : $blob), 'domain' => '', 'name' => ''];
+	}
+
+	$parts = ['asn' => '', 'domain' => '', 'name' => ''];
+	foreach (explode('|', $blob) as $segment) {
+		$segment = trim($segment);
+		if ($segment === '') {
+			continue;
+		}
+		$colon = strpos($segment, ':');
+		if ($colon === FALSE) {
+			continue;
+		}
+		$label = strtolower(trim(substr($segment, 0, $colon)));
+		$value = trim(substr($segment, $colon + 1));
+		if (array_key_exists($label, $parts) && $value !== '') {
+			$parts[$label] = $value;
+		}
+	}
+
+	if ($parts['asn'] === '') {
+		$parts['asn'] = 'Unknown';
+	}
+
+	return $parts;
+}
+
+/**
+ * pfb_asn_csv_fields — render the 3 new ASN CSV columns (asn, asn_domain,
+ * asn_name) from the internal blob (pfb_asn_blob_split()), CSV-escaped via
+ * native fputcsv() with an explicit empty escape argument -- RFC4180
+ * double-quote doubling, never PHP's default backslash-escape quirk -- so a
+ * comma/quote/colon/Unicode value in the domain or organisation name
+ * round-trips through fgetcsv() with no bespoke escaping. CR/LF is
+ * normalized to a single space FIRST so the written row always stays one
+ * physical line (reverse-tail readers rely on this).
+ *
+ * @param string $blob Raw internal ASN blob/state.
+ * @return string Three comma-joined, CSV-escaped fields (no trailing newline).
+ */
+function pfb_asn_csv_fields(string $blob): string
+{
+	$split = pfb_asn_blob_split($blob);
+
+	$row = array_map(
+		static function (string $v): string {
+			return str_replace(["\r\n", "\r", "\n"], ' ', $v);
+		},
+		[$split['asn'], $split['domain'], $split['name']]
+	);
+
+	$fh = fopen('php://temp', 'r+');
+	fputcsv($fh, $row, ',', '"', '');
+	rewind($fh);
+	$line = (string) stream_get_contents($fh);
+	fclose($fh);
+
+	return rtrim($line, "\r\n");
+}
+
+/**
+ * pfb_ip_log_row_schema_ok — exact field-count schema gate for a raw
+ * (pre-timestamp-shift) IP feature-log row as delivered to convert_ip_log().
+ * Only the current 23-field feature-row / 24-field Unified-row schema (see
+ * .ADRs/ADR_38_System_Log_Integration/ Amendment 3) is supported; ANY other
+ * count -- including every pre-upgrade legacy (21-field feature / 22-field
+ * Unified) row still on disk -- must be rejected BEFORE a single indexed
+ * field access, so a short/garbage row never trips an "undefined array key"
+ * notice downstream.
+ *
+ * $mode distinguishes 'Unified' (leading event-type field already stripped
+ * by the caller, trailing duplicate marker still attached -- 23 raw fields)
+ * from every other caller (duplicate marker already popped -- 22 raw fields).
+ *
+ * @param array<int,mixed> $fields Raw fgetcsv() row, before convert_ip_log()'s
+ *                                 own timestamp-shift reorder.
+ * @param string            $mode  'Unified' or 'non_unified'.
+ * @return bool
+ */
+function pfb_ip_log_row_schema_ok(array $fields, string $mode): bool
+{
+	return count($fields) === ($mode === 'Unified' ? 23 : 22);
+}
+
+// ---------------------------------------------------------------------------
 // ADR-38 — PHP syslog event emitter. pfb_syslog_event(string $body) emits ONE record with
 // ident 'pfblockerng' at a FIXED facility (LOG_LOCAL6) and severity (LOG_INFO) — not
 // user-configurable: the package <logging> PROGRAM-name filter routes events regardless of
