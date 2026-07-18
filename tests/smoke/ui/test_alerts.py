@@ -870,13 +870,9 @@ def test_delete_ip_v6_unsuppresses_entry_and_restores_block(
 
 
 # --------------------------------------------------------------------------- #
-# entry_delete=delete_ipwhitelist (alerts.php:1400 -- issue #1505): before this
-# fix the handler ran `pfctl -T delete` and ignored exec()'s exit status, so a
-# FAILED live delete still unset the customlist entry, wrote it to config, and
-# touched the cron `.update` flag -- a fail-OPEN divergence between the config
-# store and the live pf table. pfb_pfctl_checked_op() now gates every one of
-# those writes on the pfctl outcome: a failed delete must leave the Permit
-# alias customlist entry (and the pf table) exactly as they were.
+# entry_delete=delete_ipwhitelist (alerts.php:1400 -- issue #1505): fail-closed
+# invariant -- every customlist/config write and the cron `.update` flag gate on
+# the checked pfctl delete outcome; a failed delete must change nothing.
 # --------------------------------------------------------------------------- #
 
 

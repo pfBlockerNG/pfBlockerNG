@@ -5695,7 +5695,8 @@ function pfb_ip_recompute_forget_header(string $header, string $snapdir, string 
 
 // Format a single log line for a failed pfctl table operation.  Pure function:
 // no side-effects, fully unit-testable without a live pfctl binary.
-// Callers: pfb_pfctl_table_op() (below) — which is the only exec() wrapper for
+// Callers: pfb_pfctl_table_op() (below), plus pfb_live_punch_apply() and
+// pfb_pfctl_checked_op() (pfblockerng_extra.inc) — the exec() routes for
 // pfctl -T mutation ops.  The message names every field so "Table does not exist"
 // floods carry table/op attribution in the log.
 function pfb_pfctl_error_message(string $table, string $op, int $rc, string $stderr): string {

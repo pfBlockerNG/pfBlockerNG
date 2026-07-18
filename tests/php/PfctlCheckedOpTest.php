@@ -135,6 +135,15 @@ SH
 		$this->assertSame([['delete', $this->table, '198.18.0.1/32']], $this->readLog());
 	}
 
+	public function testInvalidOpThrowsInsteadOfSilentSuccess(): void
+	{
+		// A plan keyed by any verb pfb_live_punch_apply() does not iterate would
+		// return ok=TRUE with zero execs -- the guard must refuse it loudly.
+		$this->expectException(InvalidArgumentException::class);
+
+		pfb_pfctl_checked_op($this->shim, $this->table, 'kill', '198.18.0.1/32');
+	}
+
 	public function testScriptedFailureReturnsOkFalseWithFailString(): void
 	{
 		$this->scriptFailure('add', '198.18.0.1/32', 1, 'pfctl: forced failure');
