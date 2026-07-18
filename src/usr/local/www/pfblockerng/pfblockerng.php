@@ -1489,7 +1489,6 @@ function pfblockerng_get_countries() {
 
 	$coptions4 = $coptions6 = array();
 	$options4 = $options6 = '';
-	$ftotal4 = $ftotal6 = 0;
 
 	$geoip_files = array (	'Africa'		=> "{$pfb['ccdir']}/Africa_v4.txt",
 				'Antarctica'		=> "{$pfb['ccdir']}/Antarctica_v4.txt",
