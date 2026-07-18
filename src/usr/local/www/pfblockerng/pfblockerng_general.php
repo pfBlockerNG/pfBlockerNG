@@ -149,6 +149,7 @@ if ($_POST) {
 			if (strpos($s_option, 'log_max_') !== FALSE) {
 				$query = $options_log_types;
 			} else {
+				// @phpstan-ignore variable.undefined, variable.undefined, variable.undefined, variable.undefined, variable.undefined, variable.undefined, variable.undefined, variable.undefined, variable.undefined, variable.undefined, variable.undefined (11x: the strpos guard above consumes all log_max_* keys before this line runs; PHPStan doesn't narrow the literal union, so it still considers all 11 log_max_* completions reachable here)
 				$query = ${"options_$s_option"};
 			}
 
