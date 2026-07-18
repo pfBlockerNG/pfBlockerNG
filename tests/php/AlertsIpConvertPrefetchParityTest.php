@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
+
 /**
  * End-to-end producer<->consumer parity for the issue #809 Phase 3b Alerts IP-table
  * prefetch (PR #825 review nitpick T3): IpPrefetchTest.php pins pfb_ip_prefetch() and
@@ -37,6 +39,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_render_memo')]
 final class AlertsIpConvertPrefetchParityTest extends TestCase
 {
+	use PfbNoPhpWarningTrait;
+
 	private string $tmpDir;
 	private string $denydir;
 	private string $nativedir;
@@ -594,6 +598,31 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 			$html,
 			"expected the rendered row to still attribute this match event to the matchdir feed "
 				. "'Ads_v4', got:\n{$html}"
+		);
+	}
+
+	/**
+	 * Issue #1495 defect 1: an ICMP/ICMPv6 row never assigns $dstport (only
+	 * $srcport is cleared in that branch, ~line 2915), so the non-Unified row
+	 * template's "{$fields[98]}{$dstport}" interpolation (~line 3299) reads an
+	 * undefined variable -- a PHP E_WARNING on every rendered ICMP block/permit/
+	 * match event. Routine on any firewall logging ICMP blocks (#1495 evidence).
+	 */
+	public function test_icmp_row_renders_without_undefined_dstport_warning(): void
+	{
+		file_put_contents("{$this->denydir}/DenyFeedIcmp.txt", "192.0.2.99\n");
+
+		$fields = $this->rawFields([
+			7 => 'ICMP', 8 => '192.0.2.99', 15 => '192.0.2.99',
+			14 => 'pfB_Icmp_v4', 16 => 'DenyFeedIcmp',
+		]);
+
+		[, $html] = $this->assertNoPhpWarning(fn () => $this->render($fields, 'Block'));
+
+		$this->assertStringContainsString(
+			'192.0.2.99',
+			$html,
+			"expected the ICMP row to still render the evaluated IP, got:\n{$html}"
 		);
 	}
 }
