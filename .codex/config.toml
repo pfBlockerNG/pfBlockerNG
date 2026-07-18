@@ -1,8 +1,6 @@
 # Repository-scoped Codex defaults. This layer is loaded only after the project
 # is trusted; keep machine-specific authentication and notification settings in
 # ~/.codex/config.toml.
-model_reasoning_effort = "xhigh"
-
 [agents]
 max_threads = 4
 max_depth = 2

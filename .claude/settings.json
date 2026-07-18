@@ -1,5 +1,4 @@
 {
-  "effortLevel": "xhigh",
   "env": {
     "SHELL": "bash",
     "MCP_TIMEOUT": "120000"
