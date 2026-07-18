@@ -317,12 +317,16 @@ def check_parity(root: Path) -> list[str]:
 def _script_refs(command: str) -> list[str] | None:
     """Repo-script tokens (*.sh / *.py) of a hook command, or None when untokenizable."""
     try:
-        argv = shlex.split(command)
+        # punctuation_chars: split glued shell operators (`x.sh;sh`, `x.sh>log`) into
+        # their own tokens so an operator can never hide a script reference.
+        lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        argv = list(lex)
     except ValueError:
         return None
     refs = []
     for tok in argv:
-        if not tok.endswith((".sh", ".py")):
+        if not tok.lower().endswith((".sh", ".py")):
             continue
         for prefix in _PROJECT_DIR_PREFIXES:
             tok = tok.removeprefix(prefix)
