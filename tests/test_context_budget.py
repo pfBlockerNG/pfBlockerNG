@@ -436,11 +436,38 @@ def test_extract_capsules_command_one_byte_over_cap_rejected() -> None:
     assert errors == [f".claude/settings.json: SessionStart capsule command {over} bytes > cap {ccb.COMMAND_BYTES_MAX}"]
 
 
+def test_extract_capsules_unencodable_command_fails_closed() -> None:
+    # A lone/unpaired UTF-16 surrogate is valid inside a JSON \uXXXX escape but
+    # cannot be UTF-8 encoded; the byte-cap check's .encode("utf-8") must not
+    # crash out to the file-level catch and discard every other capsule's result.
+    capsules, errors = ccb.extract_capsules(_settings_command("echo additionalContext \ud800"))
+    assert capsules == []
+    assert len(errors) == 1 and "SessionStart" in errors[0] and "unencodable" in errors[0], errors
+
+
 def test_indirect_over_cap_command_fails_closed(tmp_path: Path) -> None:
     # A non-capsule command over the cap is never tokenized for script refs either.
     root = _indirect_root(tmp_path, "true " + "x" * 11_000)
     violations = ccb.check_indirect_producers(root)
     assert len(violations) == 1 and "cannot rule out a capsule" in violations[0], violations
+
+
+def test_indirect_unencodable_command_fails_closed_without_masking_others(tmp_path: Path) -> None:
+    # issue found in review: a lone/unpaired surrogate in ONE hook command must not
+    # crash check_indirect_producers's per-file try and silently drop every OTHER
+    # hook's already-found violation in the same settings file.
+    root = tmp_path
+    _write(root, "scripts/real_emit.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
+    settings_text = (
+        '{"hooks": {'
+        '"SessionStart": [{"hooks": [{"type": "command", "command": "sh scripts/real_emit.sh \\ud800"}]}],'
+        '"PreToolUse": [{"hooks": [{"type": "command", "command": "sh scripts/real_emit.sh"}]}]'
+        "}}"
+    )
+    _write(root, ".claude/settings.json", settings_text)
+    violations = ccb.check_indirect_producers(root)
+    assert any("unencodable" in v for v in violations), violations
+    assert any("PreToolUse" in v and "scripts/real_emit.sh" in v for v in violations), violations
 
 
 # --- indirect capsule producers (#1501) ------------------------------------------
@@ -527,6 +554,27 @@ def test_indirect_uppercase_extension_helper_still_detected(tmp_path: Path) -> N
     _write(root, "scripts/LOUD.SH", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
     violations = ccb.check_indirect_producers(root)
     assert any("scripts/LOUD.SH" in v for v in violations), violations
+
+
+def test_indirect_quoted_compound_script_ref_still_detected(tmp_path: Path) -> None:
+    # issue found in review: `sh -c '...'` (an ordinary shell idiom) collapses its
+    # whole quoted body to ONE shlex token after quote removal — a script ref
+    # embedded inside that merged token must not go invisible to _script_refs.
+    root = _indirect_root(tmp_path, "sh -c 'python3 scripts/emit.py --flag'")
+    _write(root, "scripts/emit.py", "print('additionalContext')\n")
+    violations = ccb.check_indirect_producers(root)
+    assert any("scripts/emit.py" in v for v in violations), violations
+
+
+def test_indirect_delegating_helper_without_literal_still_detected(tmp_path: Path) -> None:
+    # issue found in review: a helper that delegates emission to another module
+    # (`exec "$PY" -m "pkg.hooks.$1"`, the live ts-hook.sh shape) carries no
+    # "additionalContext" literal itself — the substring-only check would
+    # otherwise miss it entirely and never require registration (#1501).
+    root = _indirect_root(tmp_path, "sh scripts/delegate.sh")
+    _write(root, "scripts/delegate.sh", '#!/bin/sh\nexec "$PY" -m "pkg.hooks.$1"\n')
+    violations = ccb.check_indirect_producers(root)
+    assert any("scripts/delegate.sh" in v for v in violations), violations
 
 
 def test_indirect_registered_dynamic_producer_clean(tmp_path: Path) -> None:
