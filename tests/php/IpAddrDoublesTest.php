@@ -19,11 +19,12 @@ use PHPUnit\Framework\TestCase;
  *     PHP's ip2long() delegates to libc inet_pton(AF_INET), whose treatment of
  *     leading-zero octets ('192.000.002.005') is PLATFORM-DEPENDENT: FreeBSD
  *     (the pfSense/CE target; inet_pton4's leading-zero guard) and glibc
- *     reject them, but macOS ACCEPTS them (probed 2026-07-18, PHP 8.5.8 on
- *     Darwin: ip2long('192.000.002.005') === 3221225989 — issue #1468). The
- *     double therefore pins the APPLIANCE verdict with an explicit
- *     leading-zero reject after the bare ip2long() check, so its answers are
- *     identical on every dev platform (see the pinned v4Provider rows).
+ *     reject them, but macOS ACCEPTS them (all three verdicts executed
+ *     2026-07-18 — full probe matrix in pfsense_doubles.php's header NOTE;
+ *     issue #1468). The double therefore pins the APPLIANCE verdict with an
+ *     explicit leading-zero reject after the bare ip2long() check, so its
+ *     answers are identical on every dev platform (see the pinned
+ *     v4Provider rows).
  *   - is_ipaddrv6() stripped ANY '%zone' suffix before validating. Real
  *     pfSense strips it ONLY when the address is link-local (is_linklocal()),
  *     so a non-link-local zoned address ('2001:db8::1%em0') was wrongly
@@ -43,20 +44,26 @@ final class IpAddrDoublesTest extends TestCase
 		return [
 			// Leading-zero octets are LIBC-DEPENDENT (#723): FreeBSD (the
 			// pfSense target) and glibc (CI) reject them at inet_pton(), but
-			// macOS accepts them (probed — see the header, #1468). The double
-			// pins the FreeBSD/appliance verdict with an explicit leading-zero
-			// reject, so these rows are CONSTANT on every dev platform —
-			// including a Mac dev box, where a bare ip2long() double would
-			// wrongly accept them.
-			'plain dotted-quad accepted'   => ['192.0.2.5', true],
-			'leading-zero octets rejected (pinned)'      => ['192.000.002.005', false],
-			'leading-zero first octet rejected (pinned)' => ['010.0.0.1', false],
-			'three-octet form rejected'    => ['1.2.3', false],
-			'out-of-range octet rejected'  => ['256.1.1.1', false],
-			'empty string rejected'        => ['', false],
-			'non-string int rejected'      => [42, false],
-			'non-string null rejected'     => [null, false],
-			'non-string array rejected'    => [['192.0.2.5'], false],
+			// macOS accepts them (all three probed — see the header NOTE in
+			// pfsense_doubles.php, #1468). The double pins the FreeBSD/appliance
+			// verdict with an explicit leading-zero reject, so these rows are
+			// CONSTANT on every dev platform — including a Mac dev box, where a
+			// bare ip2long() double would wrongly accept them. The single-zero
+			// rows pin the guard's boundary: a '0' octet with no second digit is
+			// canonical and must stay accepted (probed accepted on all three
+			// platforms); they fail if the reject is ever widened past
+			// leading-zero shapes.
+			'plain dotted-quad accepted'                  => ['192.0.2.5', true],
+			'single-zero octets accepted (boundary)'      => ['0.0.0.0', true],
+			'single-zero first octet accepted (boundary)' => ['0.1.2.3', true],
+			'leading-zero octets rejected (pinned)'       => ['192.000.002.005', false],
+			'leading-zero first octet rejected (pinned)'  => ['010.0.0.1', false],
+			'three-octet form rejected'                   => ['1.2.3', false],
+			'out-of-range octet rejected'                 => ['256.1.1.1', false],
+			'empty string rejected'                       => ['', false],
+			'non-string int rejected'                     => [42, false],
+			'non-string null rejected'                    => [null, false],
+			'non-string array rejected'                   => [['192.0.2.5'], false],
 		];
 	}
 
