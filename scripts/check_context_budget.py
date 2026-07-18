@@ -20,8 +20,11 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 
 A hook command may also invoke a repo helper script (under scripts/ or
 .claude/hooks/, both trigger surfaces). Detection recognizes `*.sh`/`*.py`
-command tokens, including one nested inside a quoted compound shell fragment
-(`sh -c '...'`); a recognized helper whose content could emit
+command tokens (including one nested inside a quoted compound fragment,
+`sh -c '...'`) plus any helper-dir-rooted path that resolves to a committed
+file regardless of extension, even when a glued shell metacharacter
+(`x.sh$()`, backtick) would strip the recognizable suffix off the token; a
+recognized helper whose content could emit
 `hookSpecificOutput.additionalContext` — directly (the literal string) or by
 delegating execution to another program/module the checker cannot read (a
 shell `exec`, a `subprocess`/`os.exec*`/`os.system` call) — must be a
@@ -102,6 +105,13 @@ _PROJECT_DIR_PREFIXES = ("${CLAUDE_PROJECT_DIR:-.}/", "${CLAUDE_PROJECT_DIR}/")
 # `additionalContext` literal directly — the delegation-mediated bypass #1501's
 # own fix would otherwise still miss (e.g. `exec "$py" -m "token_savior.hooks.$1"`).
 _DELEGATES_RE = re.compile(r"(?m)^\s*exec\b|\bsubprocess\.\w+\(|\bos\.exec\w*\(|\bos\.system\(")
+
+# Helper-dir-rooted path candidates in a raw hook command. Suffix-gated
+# tokenization misses a helper whose recognizable .sh/.py suffix is either absent
+# (a non-.sh/.py extension) or stripped by a shell metacharacter glued to the path
+# (`x.sh$()`, backtick) — both still run the file. This finds the path regardless;
+# derived from _HELPER_DIRS so the two never drift.
+_HELPER_PATH_RE = re.compile(r"(?:" + "|".join(re.escape(d.rstrip("/")) for d in _HELPER_DIRS) + r")/[\w./-]+")
 
 # Accepts both header shapes in the first HEADER_WINDOW lines: the plain
 # "Scope: ... Load when: ..." prose and the bulleted "- **Scope:** / - **Load-when:**".
@@ -336,8 +346,8 @@ def check_parity(root: Path) -> list[str]:
     return violations
 
 
-def _script_refs(command: str, _depth: int = 0) -> list[str] | None:
-    """Repo-script tokens (*.sh / *.py) of a hook command, or None when untokenizable.
+def _script_refs(root: Path, command: str, _depth: int = 0) -> list[str] | None:
+    """Repo-script references of a hook command, or None when untokenizable.
 
     A token that itself contains embedded whitespace after tokenization is a quoted
     compound shell fragment (`sh -c 'python3 scripts/emit.py --flag'` collapses to
@@ -358,7 +368,7 @@ def _script_refs(command: str, _depth: int = 0) -> list[str] | None:
     for tok in argv:
         if not tok.lower().endswith((".sh", ".py")):
             if _depth < 4 and any(char.isspace() for char in tok):
-                nested = _script_refs(tok, _depth + 1)
+                nested = _script_refs(root, tok, _depth + 1)
                 if nested is None:
                     return None
                 refs.extend(nested)
@@ -366,6 +376,17 @@ def _script_refs(command: str, _depth: int = 0) -> list[str] | None:
         for prefix in _PROJECT_DIR_PREFIXES:
             tok = tok.removeprefix(prefix)
         refs.append(tok.removeprefix("./"))
+    # Suffix-gated tokenization misses two real references (#1501): a helper with a
+    # non-.sh/.py extension is never matched, and a metacharacter glued to a helper
+    # path (`x.sh$()`, backtick) strips the recognizable suffix off every surviving
+    # token though the shell still runs the file. Union in any helper-dir-rooted
+    # path in the raw command that resolves to a committed file, regardless of
+    # extension. Existence-gated, so a spurious fragment never adds a false
+    # fail-closed violation (the live tree stays clean).
+    for match in _HELPER_PATH_RE.finditer(command):
+        cand = match.group(0)
+        if cand not in refs and (root / cand).is_file():
+            refs.append(cand)
     return refs
 
 
@@ -422,7 +443,7 @@ def check_indirect_producers(root: Path) -> list[str]:
                             " — cannot rule out a capsule"
                         )
                         continue
-                    refs = _script_refs(command)
+                    refs = _script_refs(root, command)
                     if refs is None:
                         violations.append(
                             f"{SETTINGS}: {event} hook command has unparseable quoting — cannot rule out a capsule"
