@@ -38,7 +38,7 @@ behind.
 | --- | ------ | -------------------------------- |
 | `dnsbl.log` | `pfb_unbound.py` (`_log_dnsbl` path) | full verdict: block type, group, evaluated domain/zone, feed, query type |
 | `dns_reply.log` | `pfb_unbound.py` | reply type/record, TTL, resolved address, GeoIP iso code |
-| `ip_block/permit/match.log` | filterlog daemon (`pfb_daemon_filterlog`, `pfblockerng.inc`) | pf tracker → pfB rule/alias, matching feed + IP/CIDR entry (`find_reported_header()`), GeoIP (`mmdblookup`), rDNS, ASN |
+| `ip_block/permit/match.log` | filterlog daemon (`pfb_daemon_filterlog`, `pfblockerng.inc`) | pf tracker → pfB rule/alias, matching feed + IP/CIDR entry (`find_reported_header()`), GeoIP (`mmdblookup`), rDNS, ASN (3 CSV columns, issue #1369 — see below) |
 | `unified.log` | filterlog daemon (sole writer, ADR-38 Amendment 1) | reformatted copies of the three streams above |
 
 The daemon reconstructs the bare pf event into a fully attributed record **once**, at
@@ -52,6 +52,29 @@ group/feed to build the `dnsbl.log` line it appends, and increments the per-grou
 counter (`UPDATE dnsbl SET counter = counter + 1`). A miss (`NULL` or `blocked=false`)
 renders every field `Unknown` rather than guessing. Issue #1349 retired the unconsumed
 reports-cache SQLite writer/table; the event log is the sole durable per-block record.
+
+### ASN CSV columns, no back-compat for log entries (issue #1369, ADR-38 Amendment 3)
+
+The IP feature logs and `unified.log` used to embed ASN metadata as a single pipe-delimited
+blob field (`|ASN:  AS50360 | domain:  4vendeta.com | name:  Tamatiya EOOD |` — flattened
+`mmdblookup` output, `pfblockerng.sh`'s `iptoasn()`). That field is now **three plain CSV
+columns** — `asn`, `asn_domain`, `asn_name` — written via `fputcsv()` with an explicit empty
+escape argument (RFC4180 quoting, never PHP's default backslash-escape quirk) and CR/LF
+normalized to a space first, so a row always stays one physical line. Feature-log rows go
+from 21 to 23 fields; `unified.log` IP rows (leading event-type field included) go from 22
+to 24. The internal pipe blob itself is **unchanged** — `iptoasn()`, the `asncache.asn`
+SQLite column, and the syslog `asn=` value (ADR-38 §2.1) all keep it; only the *log-line*
+representation changed. `pfb_asn_blob_split()`/`pfb_asn_csv_fields()`
+(`pfblockerng_extra.inc`) are the pure helpers bridging the two.
+
+**No back-compat for log entries** (owner decision, 2026-07-18): `convert_ip_log()`, the Top
+ASN statistics pipeline, and the Unified view parse **only** the current field-count schema.
+Any other count — including every pre-upgrade legacy row still on disk — is skipped
+silently, zero PHP warnings, until log rotation removes it (`pfb_ip_log_row_schema_ok()`,
+checked before the timestamp-shift reorder in every one of `convert_ip_log()`'s three call
+sites, plus the two-pass buffer's Pass 1). See ADR-38 Amendment 3 for the full contract,
+the reader `fgetcsv()` escape-parameter correction it required, and the Top ASN `awk`
+field-count gate's known comma-in-name limitation.
 
 ## Read path — the Alerts page
 
