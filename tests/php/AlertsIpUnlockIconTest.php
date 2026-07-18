@@ -132,6 +132,9 @@ final class AlertsIpUnlockIconTest extends TestCase
 	/**
 	 * Build a raw, PRE-reorder $fields row -- same shape/reference as
 	 * AlertsIpConvertPrefetchParityTest::rawFields().
+	 *
+	 * issue #1369: 22 elements (0-21) -- see that file's rawFields() docblock;
+	 * convert_ip_log() silently skips any other field count.
 	 */
 	private function rawFields(array $overrides): array
 	{
@@ -156,6 +159,8 @@ final class AlertsIpUnlockIconTest extends TestCase
 			17 => '',			// gethostbyaddr resolved hostname
 			18 => '',			// Client Hostname
 			19 => 'Unknown',		// ASN
+			20 => '',			// ASN Domain (issue #1369)
+			21 => '',			// ASN Name (issue #1369)
 		];
 		return array_replace($base, $overrides);
 	}

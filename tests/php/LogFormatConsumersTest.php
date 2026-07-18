@@ -528,4 +528,81 @@ EOT;
 			$this->assertSame($expected, $data, "{$label}: unexpected rendered bucket label");
 		}
 	}
+
+	// -----------------------------------------------------------------------
+	// issue #1369 (ADR-38 Amendment 3) -- Top ASN stats: the shell (cut/awk)
+	// pipeline behind pfblockerng_alerts.php's 'ipasn' stat is inline
+	// top-level page code (the $stat_info/switch block), not a callable
+	// function -- same reproduce-and-exec convention this file already uses
+	// for the day-bucket/chart pipelines above.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Source tripwire: the 'ipasn' case must gate on the exact new-schema
+	 * field count (NF == 23) BEFORE cutting column 20, so this oracle goes
+	 * red the moment the gate or the column position drifts.
+	 */
+	public function testTopAsnStatPipelineSourceHasSchemaGate(): void
+	{
+		$source = (string) file_get_contents(self::ALERTS_PHP);
+		$needle = "{\$pfb['awk']} -F',' 'NF == 23' {\$alert_log} | {\$cut_cmd} | {\$agent_cmd} {\$su_cmd} | sort -nr 2>&1";
+		$this->assertStringContainsString($needle, $source, "pfblockerng_alerts.php's Top ASN ('ipasn') pipeline changed -- update this oracle");
+		$this->assertStringContainsString("'ipasn'\t\t=> 20", $source, "the 'ipasn' cut-column position changed -- update this oracle (must stay 20: the 2 new columns were appended AFTER it)");
+	}
+
+	/**
+	 * A synthetic ip_block.log with 2 new-schema (23-field) rows sharing one
+	 * ASN plus 1 pre-upgrade legacy (21-field, single pipe-blob ASN column)
+	 * row. Green: the NEW (NF==23-gated) pipeline counts only the 2 new-
+	 * schema rows under their plain ASN token; the legacy row's blob-shaped
+	 * column 20 never appears at all.
+	 */
+	private function mixedAsnFixture(): string
+	{
+		$fixture = $this->tempFile('pfb_alerts_asn_mixed_');
+		$new1 = '2026-07-18 09:00:00,rule1,em0,WAN,block,4,tcp,TCP,192.0.2.1,198.51.100.1,1,2,in,US,Alias,192.0.2.1,Feed,,,AS50360,4vendeta.com,Tamatiya EOOD,+';
+		$new2 = '2026-07-18 09:05:00,rule1,em0,WAN,block,4,tcp,TCP,192.0.2.2,198.51.100.1,1,2,in,US,Alias,192.0.2.2,Feed,,,AS50360,4vendeta.com,Tamatiya EOOD,+';
+		$legacy = '2026-07-18 09:10:00,rule1,em0,WAN,block,4,tcp,TCP,192.0.2.9,198.51.100.1,1,2,in,US,Alias,192.0.2.9,Feed,,,|ASN:  AS99999 | domain:  legacy.example | name:  Legacy Org |,+';
+		$this->assertCount(23, explode(',', $new1), 'fixture sanity: new1 must be the 23-field schema');
+		$this->assertCount(23, explode(',', $new2), 'fixture sanity: new2 must be the 23-field schema');
+		$this->assertCount(21, explode(',', $legacy), 'fixture sanity: legacy must be the OLD 21-field schema');
+		file_put_contents($fixture, "{$new1}\n{$new2}\n{$legacy}\n");
+		return $fixture;
+	}
+
+	public function testTopAsnNewPipelineSkipsLegacyRowAndCountsNewSchemaRows(): void
+	{
+		$fixture = $this->mixedAsnFixture();
+
+		// Reproduces the 'ipasn' case body verbatim (tripwired above) against
+		// the synthetic fixture instead of a real alert_log.
+		exec("/usr/bin/awk -F',' 'NF == 23' {$fixture} | /usr/bin/cut -d ',' -f20 | sort | uniq -c | sort -nr 2>&1", $stats);
+
+		$joined = implode(', ', $stats);
+		$this->assertStringNotContainsString('ASN:', $joined, "the legacy row's pipe-blob text must never appear in the Top ASN stat; got: {$joined}");
+		$this->assertStringNotContainsString('AS99999', $joined, "the legacy row's ASN must never be counted; got: {$joined}");
+		$this->assertCount(1, $stats, 'the 2 new-schema rows sharing one ASN must collapse into exactly one bucket');
+		$this->assertStringContainsString('AS50360', $stats[0], "expected the new-schema ASN bucket; got: {$stats[0]}");
+		$this->assertMatchesRegularExpression('/^\s*2\s+AS50360$/', $stats[0], "expected a count of 2 for AS50360; got: {$stats[0]}");
+	}
+
+	/**
+	 * Red proof: the PRE-#1369 (ungated) pipeline -- a bare `cut -d ',' -f20`
+	 * with no NF filter -- pollutes the Top ASN count with the legacy row's
+	 * raw pipe-blob text as if it were a real ASN bucket (the live breakage
+	 * the owner's no-back-compat amendment requires this gate to prevent).
+	 */
+	public function testTopAsnOldUngatedPipelinePollutesWithLegacyBlobText(): void
+	{
+		$fixture = $this->mixedAsnFixture();
+
+		exec("/usr/bin/cut -d ',' -f20 {$fixture} | sort | uniq -c | sort -nr 2>&1", $stats);
+
+		$joined = implode(', ', $stats);
+		$this->assertStringContainsString(
+			'ASN:',
+			$joined,
+			"the OLD ungated pipeline must surface the legacy row's raw blob text as a bucket (the live breakage); got: {$joined}"
+		);
+	}
 }

@@ -161,6 +161,12 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 	 * per convert_ip_log()'s own "(Removed and re-ordered)" + "(Final $fields array
 	 * reference)" doc comment: index 0 is the timestamp that gets shifted out, and
 	 * every field from convert_ip_log()'s reference list follows shifted up by one.
+	 *
+	 * issue #1369: 22 elements (0-21), the current post-timestamp-shift-plus-one
+	 * schema -- indices 20/21 (ASN Domain/ASN Name) are new; convert_ip_log() now
+	 * silently skips any OTHER field count (pfb_ip_log_row_schema_ok()), so every
+	 * fixture in this file must carry the full 22-element shape or every case here
+	 * would render nothing at all.
 	 */
 	private function rawFields(array $overrides): array
 	{
@@ -185,6 +191,8 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 			17 => '',			// gethostbyaddr resolved hostname
 			18 => '',			// Client Hostname
 			19 => 'Unknown',		// ASN
+			20 => '',			// ASN Domain (issue #1369)
+			21 => '',			// ASN Name (issue #1369)
 		];
 		return array_replace($base, $overrides);
 	}
