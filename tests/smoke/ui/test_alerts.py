@@ -880,9 +880,8 @@ def test_delete_ip_v6_unsuppresses_entry_and_restores_block(
 
 
 # --------------------------------------------------------------------------- #
-# entry_delete=delete_ipwhitelist (alerts.php:1400 -- issues #1505, #1514): fail-closed
-# invariant -- every customlist/config write and the cron `.update` flag gate on
-# a real customlist deletion; a failed or missing delete must change nothing.
+# entry_delete=delete_ipwhitelist: failed or missing Permit deletes must not
+# mutate persisted state.
 # --------------------------------------------------------------------------- #
 
 
@@ -890,7 +889,7 @@ def test_delete_ipwhitelist_noop_paths_skip_config_write(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """Failed and missing Permit deletes must not persist a config change (#1505, #1514).
+    """Failed and missing Permit deletes must not persist a config change.
 
     Scenario: fail-closed store/table consistency for entry_delete=delete_ipwhitelist.
 
