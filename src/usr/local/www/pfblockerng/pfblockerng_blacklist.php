@@ -456,7 +456,7 @@ foreach ($blacklist_types as $type => $setting) {
 	$data = array();
 	// issue #1497: read at 469/474 if a malformed feed ever orders a DESC/NAME
 	// line before its NAME: line; every real feed has NAME: first per line.
-	$cat = '';
+	$cat = array();
 	if (isset($blacklist_types[$type]['CONTENTS']) && !empty($blacklist_types[$type]['CONTENTS'])) {
 		foreach ($blacklist_types[$type]['CONTENTS'] as $line) {
 
