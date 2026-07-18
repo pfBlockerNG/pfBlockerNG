@@ -1339,6 +1339,10 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			// permit — the validation-time and fetch-time verdicts agree (pinned by
 			// FeedFilterParityTest).
 			$is_RSYNC = FALSE;
+			// INIT-GAP (#1497): $is_RSYNC is only ever TRUE via the branch below
+			// that assigns $rsync, but that correlation isn't visible to static
+			// analysis at the $rsync[0]/[1] read further down.
+			$rsync = array();
 			if (strpos($input, '::') !== FALSE && !$escape) {
 				$rsync = explode('::', $input);
 				if (count($rsync) == 2 && !empty($rsync[0]) && filter_var($rsync[0], FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
@@ -13982,6 +13986,21 @@ function pfb_daemon_filterlog() {
 	$line_cnt	= 0;
 	$rule_list	= $rule_list['other'] = array();
 
+	// INIT-GAP (#1497): each of these is assigned per-line inside the
+	// `if ($dup_entry == '+')` branch below, but read again OUTSIDE that
+	// branch (unconditional write/syslog emit) -- init here so a duplicate
+	// (or the very first) stdin line never reads an undefined variable.
+	$details	= '';
+	$iplog		= '';
+	$log		= '';
+	$dir		= '';
+	$int		= '';
+	$geoip		= '';
+	$pfb_alias	= '';
+	$pfb_query	= array();
+	$resolved_host	= '';
+	$asn		= '';
+
 	if (file_exists('/usr/local/sbin/clog_pfb')) {
 
 		// Parse full filter.log on first run, otherwise only parse new filter.log events
@@ -14197,6 +14216,14 @@ function pfb_daemon_filterlog() {
 						$folder = pfb_ip_match_folders() . " {$pfb['nativedir']}/*";
 						$iplog	= "{$pfb['ip_matchlog']}";
 						$l_type = 'Match';
+					}
+					// INIT-GAP (#1497): $d[6] is always one of block/pass/unkn(%u) in
+					// practice, but the chain above has no else -- default these so
+					// they are defined for any other value. Behaviour-preserving.
+					else {
+						$folder = '';
+						$iplog	= '';
+						$l_type = 'Unknown';
 					}
 
 					if ($d[8] == 4) {
@@ -14646,6 +14673,9 @@ function pfb_daemon_dnsbl() {
 		$lighty_58	= FALSE;
 		$lighty_59	= FALSE;
 		$checkpos	= 3; 	// Pre Lighttpd v1.4.47
+		// INIT-GAP (#1497): assigned per-line further down, read again (via
+		// pfb_filter()) on a LATER line under a checkpos-gated branch.
+		$src_ip		= '';
 
 		while (!feof($h_handle)) {
 			$pfb_buffer = @fgets($h_handle);
@@ -15501,6 +15531,11 @@ function pfBlockerNG_clearsqlite($mode, $totalqueries = 0) {
 
 	// Format of todo array: database, error message, SQLite command
 	$todo = array();
+
+	// INIT-GAP (#1497): each is assigned only in its own $mode branch below,
+	// but read again in the $todo processing loop's matching $mode branch.
+	$lastipclear = '';
+	$lastdnsblclear = '';
 
 	// Clear SQLite database 'queries' entry and update totalqueries (+queries), if Unbound Resolver PID changed (Reload)
 	if ($mode == 'update_totalqueries') {
