@@ -560,10 +560,14 @@ def test_indirect_quoted_compound_script_ref_still_detected(tmp_path: Path) -> N
     # issue found in review: `sh -c '...'` (an ordinary shell idiom) collapses its
     # whole quoted body to ONE shlex token after quote removal — a script ref
     # embedded inside that merged token must not go invisible to _script_refs.
-    root = _indirect_root(tmp_path, "sh -c 'python3 scripts/emit.py --flag'")
-    _write(root, "scripts/emit.py", "print('additionalContext')\n")
+    # The ref sits OUTSIDE the helper dirs on purpose: _HELPER_PATH_RE is helper-dir
+    # scoped and structurally cannot reach it, so only the compound-fragment
+    # recursion surfaces it — keeping this a live mutant for the recursion rather
+    # than a shadow of the extension-agnostic path scan.
+    root = _indirect_root(tmp_path, "sh -c 'python3 tools/emit.py --flag'")
+    _write(root, "tools/emit.py", "print('additionalContext')\n")
     violations = ccb.check_indirect_producers(root)
-    assert any("scripts/emit.py" in v for v in violations), violations
+    assert any("tools/emit.py" in v and "outside the checked roots" in v for v in violations), violations
 
 
 def test_indirect_delegating_helper_without_literal_still_detected(tmp_path: Path) -> None:
