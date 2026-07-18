@@ -11,12 +11,16 @@ from typing import Any
 REMEDIATION = "remediation: composer install --no-interaction"
 
 
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
 def _load_json(path: Path, label: str) -> tuple[Any | None, list[str]]:
     try:
-        return json.loads(path.read_text(encoding="utf-8")), []
+        return json.loads(path.read_text(encoding="utf-8"), parse_constant=_reject_json_constant), []
     except FileNotFoundError:
         return None, [f"missing {label}: {path}"]
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         return None, [f"malformed {label}: {exc}"]
 
 
