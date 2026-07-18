@@ -3794,48 +3794,51 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
 // ---------------------------------------------------------------------------
 
 /**
- * pfb_live_table_snapshot -- read a live pf table's current membership: the
- * ADR-40 mirror file when present (freshest applied set), else a live
- * `pfctl -T show` fallback -- both streamed line-by-line (fgets), never
- * slurped whole (a Deny table mirror can hold millions of entries, ADR-53
- * §3). Extracted from the Alerts "+" (addsuppress) handler (issue #1412) so
- * the temporary Unlock icon's live punch shares the exact same read instead
- * of re-deriving it.
+ * pfb_live_table_snapshot -- stream a live pf table's current membership via
+ * `pfctl -T show`, the SOLE source (issue #1467: the ADR-40 mirror file is
+ * never read here -- a live punch never rewrites the mirror, so a second
+ * punch inside the same containing entry would read a stale set and
+ * silently revert the first punch). Extracted from the Alerts "+"
+ * (addsuppress) handler (issue #1412) so the temporary Unlock icon's live
+ * punch shares the exact same read instead of re-deriving it.
  *
- * NOT pure -- reads the mirror file / execs pfctl.
+ * Issue #1471: streamed as a \Generator (yielded line-by-line via fgets),
+ * never slurped whole -- a Deny table can hold millions of entries, and
+ * materialising them all as a PHP string array would exhaust the web-UI PHP
+ * process's memory.
+ *
+ * NOT pure -- execs pfctl.
  *
  * @param  string $pfctl    Absolute path to the pfctl binary ($pfb['pfctl']).
- * @param  string $aliasdir Alias mirror directory ($pfb['aliasdir']).
- * @param  string $dbdir    Scratch-file directory for the pfctl-show fallback ($pfb['dbdir']).
+ * @param  string $aliasdir Unused since #1467 -- the mirror is never read;
+ *                           kept for call-site signature compatibility.
+ * @param  string $dbdir    Scratch-file directory for the pfctl-show capture ($pfb['dbdir']).
  * @param  string $table    The pf table name (caller-validated, e.g. via PFB_FILTER_WORD).
- * @return string[] Raw membership lines (bare host or CIDR tokens; blank/'#'-comment lines tolerated).
+ * @return \Generator<string> Raw membership lines (bare host or CIDR tokens; blank/'#'-comment lines tolerated).
  */
-function pfb_live_table_snapshot(string $pfctl, string $aliasdir, string $dbdir, string $table): array
+function pfb_live_table_snapshot(string $pfctl, string $aliasdir, string $dbdir, string $table): \Generator
 {
 	$table_esc = escapeshellarg($table);
-	$mirror    = "{$aliasdir}/{$table}.txt";
-	$scan_file = is_readable($mirror) ? $mirror : NULL;
-	$scan_tmp  = NULL;
-	if ($scan_file === NULL) {
-		$scan_tmp = tempnam($dbdir, 'pfb_punch_');
-		// ADR-53: stderr -> /dev/null, NOT 2>&1 -- the
-		// capture file is parsed line-by-line as membership entries below;
-		// merging stderr into it would feed any pfctl diagnostic line into
-		// that parse as if it were a table member.
-		exec("{$pfctl} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>/dev/null');
-		$scan_file = $scan_tmp;
-	}
-	$table_entries = array();
-	if (($handle = @fopen($scan_file, 'r')) !== FALSE) {
-		while (($line = @fgets($handle)) !== FALSE) {
-			$table_entries[] = trim($line);
+	$scan_tmp  = tempnam($dbdir, 'pfb_punch_');
+	// ADR-53: stderr -> /dev/null, NOT 2>&1 -- the
+	// capture file is parsed line-by-line as membership entries below;
+	// merging stderr into it would feed any pfctl diagnostic line into
+	// that parse as if it were a table member.
+	exec("{$pfctl} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>/dev/null');
+
+	$handle = @fopen($scan_tmp, 'r');
+	try {
+		if ($handle !== FALSE) {
+			while (($line = @fgets($handle)) !== FALSE) {
+				yield trim($line);
+			}
 		}
-		fclose($handle);
-	}
-	if ($scan_tmp !== NULL) {
+	} finally {
+		if ($handle !== FALSE) {
+			fclose($handle);
+		}
 		@unlink($scan_tmp);
 	}
-	return $table_entries;
 }
 
 /**
@@ -3884,24 +3887,26 @@ function pfb_v4_carve_single(string $cidr, string $host_ip): array
  * replace them (to `pfctl -T add`) -- a genuine set-subtraction, replacing
  * the retired /24-only 254-host re-add loop.
  *
- * $table_entries are raw lines from the table's membership snapshot (the
- * ADR-40 mirror file, or a `pfctl -T show` fallback) -- bare host tokens
- * ("1.2.3.4") or CIDR tokens ("1.2.3.0/24"), either family; blank/'#'-comment
- * lines are tolerated (skipped). A bare host token is treated as an exact
- * /32 or /128 -- containing ONLY itself, so punching it needs no
- * covering-CIDR add (delete only, same as the old exact-/32-match case).
+ * $table_entries are raw lines from the table's live membership snapshot
+ * (pfb_live_table_snapshot(), issue #1467: `pfctl -T show`, the sole
+ * source) -- bare host tokens ("1.2.3.4") or CIDR tokens ("1.2.3.0/24"),
+ * either family; blank/'#'-comment lines are tolerated (skipped). A bare
+ * host token is treated as an exact /32 or /128 -- containing ONLY itself,
+ * so punching it needs no covering-CIDR add (delete only, same as the old
+ * exact-/32-match case).
  *
  * PURE -- no pfctl/pf-table access; the caller supplies the already-read
- * membership snapshot (streamed, never slurped whole -- see the alerts page
- * call site) and applies the returned plan.
+ * membership snapshot (issue #1471: any iterable, including the streamed
+ * \Generator pfb_live_table_snapshot() returns -- see the alerts page call
+ * site) and applies the returned plan.
  *
- * @param  string   $ip             The host to carve out (v4 or v6).
- * @param  string[] $table_entries  Raw table membership lines.
+ * @param  string            $ip             The host to carve out (v4 or v6).
+ * @param  iterable<string>  $table_entries  Raw table membership lines.
  * @return array{delete: string[], add: string[]} 'delete' = every containing
  *         entry to remove; 'add' = the covering-CIDR remainder to re-add
  *         (empty when every containing entry was an exact host match).
  */
-function pfb_live_punch_plan(string $ip, array $table_entries): array
+function pfb_live_punch_plan(string $ip, iterable $table_entries): array
 {
 	$delete    = [];
 	$add       = [];
