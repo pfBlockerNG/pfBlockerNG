@@ -497,3 +497,117 @@ smoke. Findings (live, on the local two-VM box) that shaped the working recipe:
 Net recipe: WAN-subnet victim + `enable_float` + `enable_log`, with the civm trigger pinning a host route
 for the victim via pfSense so the SYN takes the LAN→WAN path. This leg now runs in the CI smoke fan-out;
 the §7 manual-SIEM checklist remains the only out-of-CI item.
+
+## Amendment 3 (2026-07-18, issue #1369) — IP feature/Unified log ASN CSV columns; no back-compat
+
+**Scope.** Corrects A1.6's fidelity claim "own Reports/Alerts UI is unaffected — it reads the CSVs,
+whose content is unchanged" for the **ASN column only**: that content changes, on the IP feature logs
+(`ip_block.log`/`ip_permit.log`/`ip_match.log`) and `unified.log`, as of this amendment. Every other
+A1/A2 claim stands untouched — the syslog `key=value` body, the `pfb_syslog_format_ip`/`_dnsbl`
+formatters, the `<logging>` block, the live toggle, the dedicated file, and the IP/DNSBL syslog legs are
+all **unaffected** by this change; ASN is not a syslog-emitted field's *shape*, only a value it carries
+(§A3.4).
+
+### A3.1 What changed
+
+The single pipe-delimited ASN blob field (`|ASN:  AS50360 | domain:  4vendeta.com | name:  Tamatiya
+EOOD |` — `mmdblookup` output flattened by `pfblockerng.sh`'s `iptoasn()`) is **replaced, in the IP
+feature logs and `unified.log` only**, by three plain CSV columns: `asn`, `asn_domain`, `asn_name`.
+Feature-log rows go from **21 to 23 fields**; `unified.log` IP rows (which carry a leading event-type
+field) go from **22 to 24 fields**. The new columns are written via native PHP `fputcsv()` with an
+**explicit empty escape argument** (`fputcsv($fh, $row, ',', '"', '')` — RFC4180 double-quote doubling,
+never PHP's default backslash-escape quirk), and CR/LF inside a value is normalized to a space **first**
+so a written row always stays exactly one physical line (the reverse-tail readers' load-bearing
+assumption). No header row, no schema-version column, no config/dependency change.
+
+### A3.2 No back-compat for log entries (owner decision, 2026-07-18)
+
+The owner's authorizing decision on issue #1369, quoted verbatim: *"For 1369, we won't care about
+back-compat for the log entries."* Concretely:
+
+- Readers — `convert_ip_log()` (Alerts table + tooltip + ASN filter), the Top ASN statistics pipeline,
+  and the Unified view — parse **only** the current 23-field feature-row / 24-field Unified-row schema.
+- **Any other post-timestamp-shift field count — including every pre-upgrade legacy row still on disk —
+  is skipped silently**, with **zero** PHP warnings/notices. A skipped row does not consume a
+  render-limit slot and is never partially rendered.
+- Old entries simply disappear from the Alerts/Reports UI until log rotation removes them; this is
+  **accepted**, not a defect. There is no row-normalization, no mixed-schema rendering, and no
+  mixed-legacy/new Top ASN aggregation — all dropped from the original issue packet by this decision.
+
+### A3.3 Unchanged: the internal pipe blob
+
+`iptoasn()` (`pfblockerng.sh`), the `asncache.asn` SQLite column, and the syslog `asn=` value emitted by
+`pfb_syslog_format_ip()` (§2.1/A1 — unaffected by this amendment) **all keep the existing internal
+pipe-blob format** — none of those three are log *entries* in the CSV-schema sense this amendment
+covers. `pfb_asn_blob_split(string $blob): array{asn,domain,name}` (`pfblockerng_extra.inc`) is the one
+new pure helper that decodes that blob — splitting on `|` into segments, each split at its **first**
+`:` into label/value — so the writer's three new CSV columns and the untouched internal consumers derive
+from the exact same source value without a second, drifting parser.
+
+### A3.4 New pure helpers (PHPUnit-pinned, `tests/php/UnifiedFormatTest.php`)
+
+- `pfb_asn_blob_split(string $blob): array{asn: string, domain: string, name: string}` — §A3.3.
+- `pfb_asn_csv_fields(string $blob): string` — the three CSV-escaped columns for one row (§A3.1);
+  CR/LF-normalizes each value first, then `fputcsv()`s to an in-memory stream. Spliced into the
+  existing `$log`/`$details` string-concatenation the filterlog daemon already builds — RFC4180 field
+  quoting is local per field, so pre-escaping this one fragment and string-joining it with the
+  unchanged surrounding fields is equivalent to escaping the whole row at once (round-trip-proven,
+  `UnifiedFormatTest.php`'s `testAsnCsvFieldsSurviveThroughPfbUnifiedFormatIpAndFgetcsv`).
+- `pfb_ip_log_row_schema_ok(array $fields, string $mode): bool` (`pfblockerng_extra.inc`) — the exact
+  field-count gate behind §A3.2, checked **before** `convert_ip_log()`'s timestamp-shift reorder and
+  before any indexed field access, in all three places a raw row reaches that function (the single-pass
+  Block/Permit/Match loop, the two-pass prefetch buffer's Pass 1, and the Unified loop) — the two-pass
+  buffer path folds a schema-invalid row into the same gap-marker path a filtered-out row takes, so it
+  never reaches `pfb_ip_render_query()`'s fixed-index reads in Pass 1.5 either.
+
+**Reader escape-parameter correction.** `fgetcsv()`'s default `$escape` is a backslash — PHP's own
+non-standard extension to RFC4180, which has no escape character at all. A value written with
+`fputcsv(..., '')` and read back with a *mismatched* default-escape `fgetcsv()` can corrupt a field
+containing a literal backslash (the closing quote gets escape-consumed). All five `fgetcsv()` call sites
+in `pfblockerng_alerts.php` (DNSBL, DNS-reply, Unified, and both Block/Permit/Match read loops) now pass
+the same explicit empty escape argument as the writer, for symmetry — a no-op for the three log types
+this amendment does not touch (none of their fields are ever quoted), and the fix that makes the new
+ASN columns round-trip correctly for every character class in the coverage matrix, including backslash.
+
+### A3.5 Top ASN statistics
+
+The `ipasn` stat's shell pipeline (`pfblockerng_alerts.php`, `cut -d ',' -f20` — the ASN column's
+1-based position, **unchanged** by this amendment since the two new columns were appended *after* it)
+gains an `awk -F',' 'NF == 23'` gate before the cut, so a pre-upgrade legacy row — whose column 20 is
+still the old pipe-blob text — is excluded rather than counted as a bogus "ASN" bucket. This is a
+coarser, field-count-only gate (not full CSV-aware parsing): a valid new-schema row whose `asn_name`
+happens to contain a literal comma inflates the raw `awk` field count and is (silently) excluded from
+this one statistic — a known, accepted limitation of the pre-existing `cut`/`awk` pipeline, which was
+never CSV-quote-aware for *any* column. The Alerts table/tooltip/filter (which read via real
+`fgetcsv()`) are unaffected by this limitation.
+
+### A3.6 Test coverage
+
+- `tests/php/UnifiedFormatTest.php` — `pfb_asn_blob_split`/`pfb_asn_csv_fields` pure-function pins:
+  the real blob shape from issue #1369's own pasted example; bare `Unknown`/`null`/`''` states;
+  comma/quote/colon/Unicode/CR/LF in domain or name; round-trip through `fgetcsv()`, including spliced
+  through `pfb_unified_format_ip()`.
+- `tests/php/AlertsAsnCsvTest.php` (new) — `convert_ip_log()` end-to-end: new-schema rows render;
+  legacy/malformed rows are skipped silently with zero warnings, in both `non_unified` and `Unified`
+  mode; ASN state axis (found/`Unknown`/`null`/reporting-disabled); IPv4 and IPv6; the ASN filter still
+  matches the new plain field and never evaluates against a legacy row; the full write→CSV-parse→render
+  pipeline for every text-handling case, not hand-typed array literals.
+- `tests/php/LogFormatConsumersTest.php` — the Top ASN `awk`/`cut` pipeline (§A3.5): a source tripwire
+  on the exact gated command, plus green/red pipeline-reproduction pairs proving the gate excludes a
+  legacy row's blob text and the pre-amendment ungated pipeline would have counted it.
+- `tests/php/AlertsIpConvertPrefetchParityTest.php` / `AlertsIpUnlockIconTest.php` — pre-existing
+  fixtures widened from the old 20-element `non_unified` row shape to the new 22-element shape (the 2
+  new trailing columns); behaviour-neutral for the OLD code (extra elements were already ignored), and
+  required for these tests to keep passing once the schema gate (§A3.2/A3.4) lands.
+- `tests/smoke/ui/test_alerts_asn_csv.py` (new, `ui_render`) — live-VM Tier-A: a new-schema row (with a
+  comma in both `asn_domain` and `asn_name`) renders its visible ASN and a tooltip built from the domain
+  and name; a legacy-schema row renders nothing at all; the Tier-A render oracle (200, no PHP diagnostic
+  in the body, page marker present) passes, and the server's own `php_error.log` gains no bytes.
+
+### A3.7 Reconciling ADR-32 (Proposed, IPinfo GeoIP/ASN provider)
+
+Checked: ADR-32 operates entirely at the **provider/lookup** seam (`GeoipProvider`/`AsnProvider`
+returning a normalized `asn`/`as_org` record) and makes no claim about the IP-log **CSV serialization**
+this amendment changes — its one relevant bullet ("Phase 4 ... Keep block shapes/log formats stable")
+is a forward-looking instruction that will simply apply to *this* (post-#1369) log format once that
+Proposed phase is eventually implemented. **No edit needed**; ADR-32 is not stale.
