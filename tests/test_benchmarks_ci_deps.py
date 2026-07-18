@@ -36,7 +36,8 @@ def test_no_ad_hoc_install_of_pinned_benchmark_deps() -> None:
         code = line.split(" #", 1)[0]
         if "pip install" not in code or "-r" in code.split():
             continue
-        offending = pinned & {arg.lower() for arg in code.split()}
+        args = {re.split(r"[=<>!~\[]", arg, maxsplit=1)[0].lower() for arg in code.split()}
+        offending = pinned & args
         assert not offending, (
             f"ad-hoc install of pinned benchmark dep(s) {sorted(offending)} bypasses "
             f"benchmarks/requirements.txt: {line.strip()!r}"
