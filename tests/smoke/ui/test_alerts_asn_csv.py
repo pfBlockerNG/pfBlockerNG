@@ -20,6 +20,7 @@ the sweep-level oracle condition ``(d)`` a body-only check would miss).
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from typing import TYPE_CHECKING
@@ -62,19 +63,29 @@ def _asn_reporting_enabled(smoke_vm: SmokeVM) -> Iterator[None]:
     """
     vm = smoke_vm
     original = helpers.config_get(vm, ASN_REPORTING_CFG)
-    helpers.php_eval(
+    enable = helpers.php_eval(
         vm,
         f"config_set_path('{ASN_REPORTING_CFG}', 'week');\n"
         "write_config('pfBlockerNG smoke: enable asn_reporting for issue #1369 ASN CSV test');\n"
         "echo 'OK';",
     )
-    yield
-    helpers.php_eval(
-        vm,
-        f"config_set_path('{ASN_REPORTING_CFG}', '{original}');\n"
-        "write_config('pfBlockerNG smoke: restore asn_reporting after issue #1369 ASN CSV test');\n"
-        "echo 'OK';",
+    assert enable.returncode == 0 and "OK" in enable.stdout, (
+        f"failed to enable asn_reporting (rc={enable.returncode}, stdout={enable.stdout!r}) -- "
+        "config may be partially mutated"
     )
+    try:
+        yield
+    finally:
+        restore = helpers.php_eval(
+            vm,
+            f"config_set_path('{ASN_REPORTING_CFG}', '{original}');\n"
+            "write_config('pfBlockerNG smoke: restore asn_reporting after issue #1369 ASN CSV test');\n"
+            "echo 'OK';",
+        )
+        assert restore.returncode == 0 and "OK" in restore.stdout, (
+            f"failed to restore asn_reporting={original!r} (rc={restore.returncode}, "
+            f"stdout={restore.stdout!r}) -- config state leaked to sibling smoke modules"
+        )
 
 
 @pytest.fixture
@@ -87,13 +98,12 @@ def _seeded_ip_block_log(smoke_vm: SmokeVM) -> Iterator[None]:
     a clean, focused assertion).
     """
     vm = smoke_vm
-    ts = time.strftime("%b %d %H:%M:%S")
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
 
     # NEW schema (23 raw fields incl. timestamp): ...,feed,rhost,chost,
     # asn,asn_domain,asn_name,dup -- the comma-bearing domain/name are
-    # RFC4180-quoted exactly as pfb_asn_csv_fields()/fputcsv() would encode
-    # them (UnifiedFormatTest.php pins the encoder itself off-box; this
-    # proves the SAME shape renders correctly through the real page).
+    # RFC4180-quoted (double-quote wrapping, no escape character), the
+    # exact bytes pfb_asn_csv_fields()/fputcsv() emit for these values.
     new_row = (
         f"{ts},100,em0,WAN,block,4,6,TCP,"
         f"{NEW_SCHEMA_HOST},10.0.0.5,12345,443,"
@@ -111,41 +121,55 @@ def _seeded_ip_block_log(smoke_vm: SmokeVM) -> Iterator[None]:
     )
 
     log_dir = IP_BLOCK_LOG.rsplit("/", 1)[0]
-    ensure = vm.ssh(f"mkdir -p {log_dir} && touch {IP_BLOCK_LOG}", timeout=15)
-    assert ensure.returncode == 0, f"failed to ensure {IP_BLOCK_LOG} exists: {ensure.stderr!r}"
-
     deny_feed_new = "/var/db/pfblockerng/deny/pfB_AsnFeedNew.txt"
     deny_feed_legacy = "/var/db/pfblockerng/deny/pfB_AsnFeedLegacy.txt"
-    seed = vm.ssh(
-        f"printf '{NEW_SCHEMA_HOST}\\n' > {deny_feed_new} && printf '{LEGACY_SCHEMA_HOST}\\n' > {deny_feed_legacy}",
-        timeout=15,
-    )
-    assert seed.returncode == 0, f"failed to seed deny-folder feed files: stderr={seed.stderr!r}"
 
-    size_before = vm.ssh("stat", "-f", "%z", IP_BLOCK_LOG, timeout=15)
-    assert size_before.returncode == 0, f"failed to stat {IP_BLOCK_LOG}: stderr={size_before.stderr!r}"
-    original_size = size_before.stdout.strip()
+    # Every mutation registers its undo BEFORE the next fallible step runs, so
+    # a failure anywhere mid-setup still tears down what already landed
+    # instead of leaking feed files / log rows into sibling smoke modules.
+    feeds_seeded = False
+    original_size: str | None = None
+    try:
+        ensure = vm.ssh(f"mkdir -p {log_dir} && touch {IP_BLOCK_LOG}", timeout=15)
+        assert ensure.returncode == 0, f"failed to ensure {IP_BLOCK_LOG} exists: {ensure.stderr!r}"
 
-    append = subprocess.run(
-        vm.ssh_argv("tee", "-a", IP_BLOCK_LOG),
-        input=new_row + legacy_row,
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
-    assert append.returncode == 0, f"failed to append fixture rows to {IP_BLOCK_LOG}: stderr={append.stderr!r}"
+        seed = vm.ssh(
+            f"printf '{NEW_SCHEMA_HOST}\\n' > {deny_feed_new} && printf '{LEGACY_SCHEMA_HOST}\\n' > {deny_feed_legacy}",
+            timeout=15,
+        )
+        feeds_seeded = True
+        assert seed.returncode == 0, f"failed to seed deny-folder feed files: stderr={seed.stderr!r}"
 
-    yield
+        size_before = vm.ssh("stat", "-f", "%z", IP_BLOCK_LOG, timeout=15)
+        assert size_before.returncode == 0, f"failed to stat {IP_BLOCK_LOG}: stderr={size_before.stderr!r}"
 
-    restore = vm.ssh(f"truncate -s {original_size} {IP_BLOCK_LOG}", timeout=15)
-    assert restore.returncode == 0, f"failed to restore {IP_BLOCK_LOG} size: stderr={restore.stderr!r}"
-    size_after = vm.ssh("stat", "-f", "%z", IP_BLOCK_LOG, timeout=15)
-    assert size_after.returncode == 0 and size_after.stdout.strip() == original_size, (
-        f"{IP_BLOCK_LOG} restore did not take (before={original_size!r}, after={size_after.stdout.strip()!r}) "
-        "-- synthetic rows leaked to sibling tests"
-    )
-    vm.ssh(f"rm -f {deny_feed_new} {deny_feed_legacy}", timeout=15)
+        append = subprocess.run(
+            vm.ssh_argv("tee", "-a", IP_BLOCK_LOG),
+            input=new_row + legacy_row,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        original_size = size_before.stdout.strip()
+        assert append.returncode == 0, f"failed to append fixture rows to {IP_BLOCK_LOG}: stderr={append.stderr!r}"
+
+        yield
+    finally:
+        if original_size is not None:
+            restore = vm.ssh(f"truncate -s {original_size} {IP_BLOCK_LOG}", timeout=15)
+            assert restore.returncode == 0, f"failed to restore {IP_BLOCK_LOG} size: stderr={restore.stderr!r}"
+            size_after = vm.ssh("stat", "-f", "%z", IP_BLOCK_LOG, timeout=15)
+            assert size_after.returncode == 0 and size_after.stdout.strip() == original_size, (
+                f"{IP_BLOCK_LOG} restore did not take (before={original_size!r}, after={size_after.stdout.strip()!r}) "
+                "-- synthetic rows leaked to sibling tests"
+            )
+        if feeds_seeded:
+            removed = vm.ssh(f"rm -f {deny_feed_new} {deny_feed_legacy}", timeout=15)
+            assert removed.returncode == 0, (
+                f"failed to remove seeded deny-folder feed files: stderr={removed.stderr!r} "
+                "-- feed state leaked to sibling smoke modules"
+            )
 
 
 def test_alerts_asn_csv_new_schema_renders_legacy_schema_silently_absent(
@@ -182,13 +206,21 @@ def test_alerts_asn_csv_new_schema_renders_legacy_schema_silently_absent(
 
     body = resp.text
 
-    # THEN: the new-schema row's ASN renders visibly...
-    assert NEW_SCHEMA_ASN in body, f"visible ASN {NEW_SCHEMA_ASN!r} did not render for the new-schema row"
-    # ...with a tooltip built from domain + name (HTML-encoded; the comma
-    # itself is not an HTML metacharacter, so it appears verbatim in the
-    # title attribute even though it required CSV quoting on the wire).
-    assert NEW_SCHEMA_DOMAIN in body, f"ASN tooltip domain {NEW_SCHEMA_DOMAIN!r} missing from the rendered page"
-    assert "Example, Org" in body, "ASN tooltip name (with its comma intact) missing from the rendered page"
+    # THEN: the new-schema row's ASN renders visibly, inside ITS OWN span --
+    # scoped to the ASN cell so a stray occurrence of the same strings
+    # elsewhere on the page cannot satisfy these assertions.
+    asn_span = re.search(r'<span title="([^"]*)">' + re.escape(NEW_SCHEMA_ASN) + r"</span>", body)
+    assert asn_span, f"no ASN span rendering {NEW_SCHEMA_ASN!r} found in the page"
+    # The tooltip is built from the domain + name columns (the comma itself is
+    # not an HTML metacharacter, so it appears verbatim in the title attribute
+    # even though it required CSV quoting on the wire).
+    asn_title = asn_span.group(1)
+    assert NEW_SCHEMA_DOMAIN in asn_title, (
+        f"ASN tooltip domain {NEW_SCHEMA_DOMAIN!r} missing from the ASN span title {asn_title!r}"
+    )
+    assert "Example, Org" in asn_title, (
+        f"ASN tooltip name (with its comma intact) missing from the ASN span title {asn_title!r}"
+    )
     assert NEW_SCHEMA_HOST in body, "the new-schema row's host itself did not render at all"
 
     # THEN: the legacy row is COMPLETELY absent -- not a garbled/partial

@@ -282,6 +282,12 @@ final class AlertsAsnCsvTest extends TestCase
 		$this->assertTrue(pfb_ip_log_row_schema_ok(array_fill(0, 23, ''), 'Unified'), '23 elements = new Unified schema');
 		$this->assertFalse(pfb_ip_log_row_schema_ok(array_fill(0, 21, ''), 'Unified'), '21 elements = old legacy Unified count, must reject');
 		$this->assertFalse(pfb_ip_log_row_schema_ok(array_fill(0, 0, ''), 'non_unified'), 'empty row must reject');
+		// The gate is an EXACT count, not a minimum -- an over-long row (extra
+		// commas from any source) is just as unsupported as a short one.
+		$this->assertFalse(pfb_ip_log_row_schema_ok(array_fill(0, 23, ''), 'non_unified'), '23 elements = one field too many for non_unified, must reject');
+		$this->assertFalse(pfb_ip_log_row_schema_ok(array_fill(0, 24, ''), 'non_unified'), '24 elements = over-long non_unified row, must reject');
+		$this->assertFalse(pfb_ip_log_row_schema_ok(array_fill(0, 24, ''), 'Unified'), '24 elements = one field too many for Unified, must reject');
+		$this->assertFalse(pfb_ip_log_row_schema_ok(array_fill(0, 25, ''), 'Unified'), '25 elements = over-long Unified row, must reject');
 	}
 
 	// -----------------------------------------------------------------------
