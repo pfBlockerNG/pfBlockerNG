@@ -4049,8 +4049,13 @@ function pfb_live_punch_apply(string $pfctl, string $table, array $plan): array 
  * @param  string $op    'add' or 'delete' -- a fixed caller literal.
  * @param  string $entry The single table entry to add/delete.
  * @return array{ok: bool, fail: ?string} see pfb_live_punch_apply().
+ * @throws InvalidArgumentException on an $op outside add|delete -- a plan keyed
+ *         by any other verb would silently succeed with zero execs.
  */
 function pfb_pfctl_checked_op(string $pfctl, string $table, string $op, string $entry): array {
+	if (!in_array($op, ['add', 'delete'], TRUE)) {
+		throw new InvalidArgumentException("pfb_pfctl_checked_op: op must be 'add' or 'delete', got [ {$op} ]");
+	}
 	$plan = ['delete' => [], 'add' => []];
 	$plan[$op][] = $entry;
 	return pfb_live_punch_apply($pfctl, $table, $plan);

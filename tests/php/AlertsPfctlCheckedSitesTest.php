@@ -108,7 +108,7 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 				. ' global $pfb; $_POST[\'ip_remove\'] = \'lock\';'
 				. ' $table_esc = escapeshellarg($table); $savemsg = \'\';'
 				. $body
-				. ' return $savemsg; }'
+				. ' unset($_POST[\'ip_remove\']); return $savemsg; }'
 			);
 		}
 
@@ -438,6 +438,9 @@ SH
 		$this->assertStringContainsString('added', $result['savemsg']);
 		$this->assertFileExists("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt");
 		$this->assertStringContainsString('198.51.100.31', file_get_contents("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt"));
+		// Non-vacuity anchor for the failure tests' assertArrayNotHasKey: prove
+		// config_set_path() IS observable through this seam on success.
+		$this->assertArrayHasKey('installedpackages', $GLOBALS['config'] ?? [], 'the success path must persist via config_set_path()');
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 		$this->assertFileExists("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update");
 	}
