@@ -196,6 +196,7 @@ Describe 'run-gates.sh Composer vendor guard'
     The status should equal 0
     The output should not include 'checker stdout'
     The output should not include 'checker stderr'
+    The stderr should equal ''
     The output should include 'GATE PASS: python3 scripts/check_composer_vendor.py'
     The output should include 'GATE PASS: php -l src/a.php'
     The output should include 'GATE PASS: vendor/bin/phpunit'
