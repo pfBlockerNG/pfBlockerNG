@@ -81,6 +81,18 @@ run_gate() {
 		[ "$allow_missing" -eq 1 ] || overall=1
 		return 0
 	fi
+	if [ "$1" = 'python3 scripts/check_composer_vendor.py' ]; then
+		checker_output=$(cd "$worktree" && sh -c "$1" </dev/null 2>&1)
+		checker_status=$?
+		if [ "$checker_status" -eq 0 ]; then
+			printf 'GATE PASS: %s\n' "$1"
+			return 0
+		fi
+		printf '%s\n' "$checker_output"
+		printf 'GATE FAIL: %s\n' "$1"
+		overall=1
+		return 1
+	fi
 	# issue #1194: </dev/null -- a stdin-reading gate (full PHPUnit) otherwise eats
 	# the command loop's remaining gate lines, silently skipping those gates.
 	if (cd "$worktree" && sh -c "$1" </dev/null >/dev/null 2>&1); then

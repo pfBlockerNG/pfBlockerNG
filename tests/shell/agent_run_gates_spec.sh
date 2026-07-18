@@ -141,11 +141,15 @@ Describe 'run-gates.sh Composer vendor guard'
     php_marker="$stubdir/php-ran"
     composer_marker="$stubdir/composer-ran"
     phpunit_marker="$stubdir/phpunit-ran"
-    printf '#!/bin/sh\ntouch "%s"\nexit 1\n' "$checker_marker" > "$stubdir/python3"
+    printf '#!/bin/sh\ntouch "%s"\nprintf "version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)\\nremediation: composer install --no-interaction\\n"\nexit 1\n' "$checker_marker" > "$stubdir/python3"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$php_marker" > "$stubdir/php"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$composer_marker" > "$stubdir/composer"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpunit_marker" > "$repo/vendor/bin/phpunit"
     chmod +x "$stubdir/python3" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
+    ln -s "$(command -v git)" "$stubdir/git"
+    for tool in cat dirname grep sh sort; do
+      ln -s "$(command -v "$tool")" "$stubdir/$tool"
+    done
     PATH="$stubdir:$PATH"
   }
   cleanup() { rm -rf "$repo" "$stubdir"; }
@@ -156,12 +160,30 @@ Describe 'run-gates.sh Composer vendor guard'
   It 'stops before PHP analysis when the Composer vendor checker fails'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
+    The line 1 of output should equal 'version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)'
+    The line 2 of output should equal 'remediation: composer install --no-interaction'
     The output should include 'GATE FAIL: python3 scripts/check_composer_vendor.py'
     The output should not include 'GATE PASS: php -l src/a.php'
     The output should not include 'GATE PASS: vendor/bin/phpunit'
     The output should not include 'GATE PASS: composer phpstan'
     The output should not include 'GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/'
+    The lines of output should equal 4
     Assert [ -e "$checker_marker" ]
+    Assert [ ! -e "$php_marker" ]
+    Assert [ ! -e "$composer_marker" ]
+    Assert [ ! -e "$phpunit_marker" ]
+  End
+
+  It 'fails closed under --allow-missing when the Composer checker interpreter is unavailable'
+    mv "$stubdir/python3" "$stubdir/python3.disabled"
+    When run sh -c "PATH='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha' --allow-missing"
+    The status should equal 1
+    The output should include 'GATE FAIL: python3 scripts/check_composer_vendor.py (TOOL-MISSING: python3)'
+    The output should not include 'GATE SKIP: python3 scripts/check_composer_vendor.py'
+    The output should not include 'GATE PASS: php -l src/a.php'
+    The output should not include 'GATE PASS: vendor/bin/phpunit'
+    The output should not include 'GATE PASS: composer phpstan'
+    The output should not include 'GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/'
     Assert [ ! -e "$php_marker" ]
     Assert [ ! -e "$composer_marker" ]
     Assert [ ! -e "$phpunit_marker" ]

@@ -129,6 +129,13 @@ def test_stale_version_source_and_dist_references_are_named(tmp_path: Path) -> N
     )
 
 
+def test_stale_phpstan_fixture_reports_versions_and_remediation(tmp_path: Path) -> None:
+    locked = package("phpstan/phpstan", "2.2.5")
+    installed = package("phpstan/phpstan", "2.2.1")
+    result = run_checker(fixture(tmp_path, [locked], [installed]))
+    assert_failure(result, "version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)")
+
+
 def test_failed_check_does_not_mutate_fixture(tmp_path: Path) -> None:
     root = fixture(tmp_path, [package(version="2.2.5")], [package(version="2.2.1")])
     paths = [root / "composer.lock", root / "vendor" / "composer" / "installed.json"]
@@ -183,3 +190,84 @@ def test_malformed_lock_fails_closed(tmp_path: Path) -> None:
     fixture(tmp_path, [package()])
     (tmp_path / "composer.lock").write_text(json.dumps({"packages": "wrong", "packages-dev": []}), encoding="utf-8")
     assert_failure(run_checker(tmp_path), "malformed composer.lock packages: packages must be a list")
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "payload", "needle"),
+    [
+        (
+            "composer.lock",
+            '{"packages": [], "packages-dev": [], "ignored": NaN}',
+            "malformed composer.lock",
+        ),
+        (
+            "vendor/composer/installed.json",
+            '{"packages": [], "ignored": NaN}',
+            "malformed vendor/composer/installed.json",
+        ),
+        (
+            "composer.lock",
+            '{"packages": [], "packages-dev": [], "ignored": Infinity}',
+            "malformed composer.lock",
+        ),
+        (
+            "vendor/composer/installed.json",
+            '{"packages": [], "ignored": Infinity}',
+            "malformed vendor/composer/installed.json",
+        ),
+        (
+            "composer.lock",
+            '{"packages": [], "packages-dev": [], "ignored": -Infinity}',
+            "malformed composer.lock",
+        ),
+        (
+            "vendor/composer/installed.json",
+            '{"packages": [], "ignored": -Infinity}',
+            "malformed vendor/composer/installed.json",
+        ),
+    ],
+)
+def test_nonstandard_json_constants_fail_closed(tmp_path: Path, relative_path: str, payload: str, needle: str) -> None:
+    root = fixture(tmp_path, [package()])
+    (root / relative_path).write_text(payload, encoding="utf-8")
+    result = run_checker(root)
+    assert_failure(result, needle)
+    assert "Traceback" not in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "payload", "needle"),
+    [
+        (
+            "composer.lock",
+            '{"packages": [], "packages-dev": [], "ignored": ' + ("9" * 5000) + "}",
+            "malformed composer.lock",
+        ),
+        (
+            "vendor/composer/installed.json",
+            '{"packages": [], "ignored": ' + ("9" * 5000) + "}",
+            "malformed vendor/composer/installed.json",
+        ),
+    ],
+)
+def test_oversized_json_integer_fails_closed(tmp_path: Path, relative_path: str, payload: str, needle: str) -> None:
+    root = fixture(tmp_path, [package()])
+    (root / relative_path).write_text(payload, encoding="utf-8")
+    result = run_checker(root)
+    assert_failure(result, needle)
+    assert "Traceback" not in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("relative_path", ["composer.lock", "vendor/composer/installed.json"])
+def test_valid_json_numbers_remain_accepted(tmp_path: Path, relative_path: str) -> None:
+    root = fixture(tmp_path, [package()])
+    path = root / relative_path
+    if relative_path == "composer.lock":
+        payload = {"packages": [package()], "packages-dev": [], "ignored": 123}
+    else:
+        payload = {"packages": [package()], "ignored": 123}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = run_checker(root)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
