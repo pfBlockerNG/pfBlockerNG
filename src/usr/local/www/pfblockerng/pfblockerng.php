@@ -1665,6 +1665,14 @@ function pfblockerng_get_countries() {
 			unset(${'coptions' . $type});
 		}
 
+		// #1493 defect 2: the heredoc below reads $options4/$options6 once per
+		// continent, but the per-continent tail unconditionally unsets them
+		// (~2216) -- a continent whose coptions4/6 stayed empty (fopen failure,
+		// or genuinely no data) never re-enters the guarded block above to
+		// reassign them, so anything after the first continent needs this fill.
+		$options4 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options4'} unset at the previous continent's tail is invisible to PHPStan)
+		$options6 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options6'} unset at the previous continent's tail is invisible to PHPStan)
+
 $php_data = <<<EOF
 <?php
 /*
