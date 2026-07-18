@@ -579,7 +579,11 @@ coarser, field-count-only gate (not full CSV-aware parsing): a valid new-schema 
 happens to contain a literal comma inflates the raw `awk` field count and is (silently) excluded from
 this one statistic — a known, accepted limitation of the pre-existing `cut`/`awk` pipeline, which was
 never CSV-quote-aware for *any* column. The Alerts table/tooltip/filter (which read via real
-`fgetcsv()`) are unaffected by this limitation.
+`fgetcsv()`) are unaffected by this limitation. The limitation is currently unreachable from the real
+writer: `pfblockerng.sh`'s `iptoasn()` strips `"`/`{`/`}`/`,` from every mmdblookup value (`tr -d`)
+before the blob is cached or written, so no comma can reach `asn_name` today — if a future ASN
+provider path (ADR-32) ever bypasses that shell sanitization, this stat starts silently dropping
+those rows and the pipeline must become CSV-aware (e.g. PHP-side `fgetcsv()` aggregation).
 
 ### A3.6 Test coverage
 
