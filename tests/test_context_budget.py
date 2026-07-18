@@ -453,8 +453,8 @@ def test_indirect_over_cap_command_fails_closed(tmp_path: Path) -> None:
 
 
 def test_indirect_unencodable_command_fails_closed_without_masking_others(tmp_path: Path) -> None:
-    # issue found in review: a lone/unpaired surrogate in ONE hook command must not
-    # crash check_indirect_producers's per-file try and silently drop every OTHER
+    # A lone/unpaired surrogate in ONE hook command must not crash
+    # check_indirect_producers's per-file try and silently drop every OTHER
     # hook's already-found violation in the same settings file.
     root = tmp_path
     _write(root, "scripts/real_emit.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
@@ -557,9 +557,9 @@ def test_indirect_uppercase_extension_helper_still_detected(tmp_path: Path) -> N
 
 
 def test_indirect_quoted_compound_script_ref_still_detected(tmp_path: Path) -> None:
-    # issue found in review: `sh -c '...'` (an ordinary shell idiom) collapses its
-    # whole quoted body to ONE shlex token after quote removal — a script ref
-    # embedded inside that merged token must not go invisible to _script_refs.
+    # `sh -c '...'` (an ordinary shell idiom) collapses its whole quoted body to
+    # ONE shlex token after quote removal — a script ref embedded inside that
+    # merged token must not go invisible to _script_refs.
     # The ref sits OUTSIDE the helper dirs on purpose: _HELPER_PATH_RE is helper-dir
     # scoped and structurally cannot reach it, so only the compound-fragment
     # recursion surfaces it — keeping this a live mutant for the recursion rather
@@ -571,7 +571,7 @@ def test_indirect_quoted_compound_script_ref_still_detected(tmp_path: Path) -> N
 
 
 def test_indirect_delegating_helper_without_literal_still_detected(tmp_path: Path) -> None:
-    # issue found in review: a helper that delegates emission to another module
+    # A helper that delegates emission to another module
     # (`exec "$PY" -m "pkg.hooks.$1"`, the live ts-hook.sh shape) carries no
     # "additionalContext" literal itself — the substring-only check would
     # otherwise miss it entirely and never require registration (#1501).
@@ -595,10 +595,10 @@ def test_indirect_extensionless_helper_still_detected(tmp_path: Path, name: str)
 
 @pytest.mark.parametrize("glue", ["$()", "``"])
 def test_indirect_glued_substitution_helper_still_detected(tmp_path: Path, glue: str) -> None:
-    # issue found in review (B1): an empty command substitution glued with no
-    # whitespace right after a .sh/.py helper (`x.sh$()`, `x.sh` + backticks) is a
-    # shell no-op that still runs the file, yet it strips the recognizable suffix
-    # off every surviving shlex token, so the reference goes invisible (#1501).
+    # An empty command substitution glued with no whitespace right after a
+    # .sh/.py helper (`x.sh$()`, `x.sh` + backticks) is a shell no-op that still
+    # runs the file, yet it strips the recognizable suffix off every surviving
+    # shlex token, so the reference goes invisible (#1501).
     root = _indirect_root(tmp_path, f"sh scripts/emit.sh{glue}")
     _write(root, "scripts/emit.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
     violations = ccb.check_indirect_producers(root)
