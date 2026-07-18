@@ -1,9 +1,9 @@
 # pfBlockerNG — agent bootstrap (canonical)
 
 This file is the **canonical, vendor-neutral agent policy bootstrap**. Claude Code loads it
-through the thin [`CLAUDE.md`](CLAUDE.md) adapter (`@AGENTS.md` import); Codex reads it
-natively. Detailed policy lives in [`.agents/policy/`](.agents/policy/), domain context in
-[`.agents/context/`](.agents/context/) and `docs/misc/` — loaded per the routing table
+through the thin `CLAUDE.md` adapter (`@AGENTS.md` import); Codex reads it
+natively. Detailed policy lives in `.agents/policy/`, domain context in
+`.agents/context/` and `docs/misc/` — loaded per the routing table
 below, never all at once. Shared behavior changes land there, never in a vendor copy.
 
 ## Scope — the pfBlockerNG-org default
@@ -103,7 +103,8 @@ pfBlockerNG/
 │       ├── pkg/pfblockerng/   # pfblockerng.inc/.sh, pfb_unbound.py, list_scripts/, installers
 │       ├── share/             # info.xml
 │       └── www/               # Web UI (PHP pages, JS, widgets, wizards)
-├── tests/                 # pytest suite; tests/php/ (PHPUnit); tests/smoke/ (+ ui/); tests/phpcs/
+├── tests/                 # pytest; php/ (PHPUnit); smoke/ (+ui/); phpcs/; shell/; js/
+├── .ADRs/                 # Historical ADR corpus (plans = wayfinder maps)
 ├── .agents/               # policy/ + context/ + skills/ (canonical) + model-tiers.conf
 ├── docs/misc/             # Dev-only notes: architecture-notes, runbooks; docs/history/ = incidents
 ├── scripts/               # Dev tooling: deploy.sh, setup-hooks.sh, policy checkers, agent/ ops
@@ -125,7 +126,7 @@ one-line status marker `<emoji> ***ID***(***#PR***): ***Title***` (~28 chars; �
 
 ## Vendor adapters
 
-**Claude Code:** [`CLAUDE.md`](CLAUDE.md) (imports this file; Claude-only surfaces: hooks in
+**Claude Code:** `CLAUDE.md` (imports this file; Claude-only surfaces: hooks in
 `.claude/settings.json`, skills at `.claude/skills/` symlinked from `.agents/skills/`,
 git-hook marker `CLAUDECODE=1`).
 

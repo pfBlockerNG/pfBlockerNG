@@ -178,14 +178,15 @@ staging-generation-guard's rebuild-from-`.orig` pattern again, not a new mechani
 `custom_php_resync_config_command` (`pfblockerng.xml`) calls `sync_package_pfblockerng()`, but
 `pfblockerng_install.inc` sets `$g['pfblockerng_install'] = TRUE` for the whole install/upgrade
 process, and `sync_package_pfblockerng()` early-returns on that flag before reaching the DNSBL
-loop (`pfblockerng.inc:15197`, "Sync terminated during boot process").
+loop (logging "Sync terminated during boot process.").
 
 The window does **not** reliably close at the first `cron` tick, either. `pfblockerng_sync_cron()`
 (`pfblockerng.php`) only calls `sync_package_pfblockerng('cron')` when at least one in-scope feed's
 own Update Frequency check actually ran `pfb_update_check()` this tick (`$pfb['update_cron']`); a
 tick where every feed is still within its own frequency window — or simply has nothing new to
 fetch — instead calls `sync_package_pfblockerng('noupdates')`, which sets `$pfb['save'] = TRUE` and
-skips the entire DNSBL loop (`pfblockerng.inc:15902`'s `!$pfb['save']` gate) as a save-only pass.
+skips the entire DNSBL loop (the `!$pfb['save']` gate inside `sync_package_pfblockerng()`) as a
+save-only pass.
 The window actually closes at the **first pass that enters the DNSBL loop**: a tick where some
 feed's frequency is due, an explicit Force (Run Now), or any config-edit-driven sync. On a box
 where every DNSBL row is `Hold`/`Never` (or simply never redue), the window can persist
@@ -205,7 +206,7 @@ manifest, which never emits it); `dnsbl_build_from_manifest()`'s own `except Exc
 that and returns `None` (fail-closed — no matcher swap). Under a pre-#1083 build the next step
 would have been the legacy CSV loaders over `pfb_py_data`/`pfb_py_zone`; ADR-65 retired those
 files end-to-end, so on current code they are never written and get opportunistically swept by
-`pfb_unbound_clear_work_files()` (`pfblockerng.inc:9155-9156`) — the downgraded build's fallback
+`pfb_unbound_clear_work_files()` (`pfblockerng.inc`) — the downgraded build's fallback
 loaders find nothing on disk and load `dataDB`/`zoneDB` EMPTY, same net outcome as the old
 CSV-vs-NDJSON mismatch (nothing crashes, nothing bogus loads). Net effect is unchanged: DNSBL
 blocking on a downgraded box goes silently ineffective (fail-open — the resolver itself stays up,
@@ -245,8 +246,8 @@ This compact representation is staging-only; the final manifest and `.raw` files
 readable and unchanged.
 
 `benchmarks/spike_adr06_build.py` (the ADR-06 Phase-1 spike) is unaffected: it drives a
-self-contained synthetic corpus (`benchmarks/_corpus_raw.py:59`) and never imports
-`pfb_unbound.py` or touches the interchange format (`benchmarks/spike_adr06_build.py:53`).
+self-contained synthetic corpus (`benchmarks/_corpus_raw.py`) and never imports
+`pfb_unbound.py` or touches the interchange format.
 
 ### ADR-10 — zero-downtime DNSBL data swap
 
@@ -549,8 +550,10 @@ matrix-parametric on image-ref/version and tier-selectable, **one GH job per (ti
 (`fail-fast: false` → "Re-run failed jobs" re-runs only a flaky leg). Tier A gates PHP/JS PRs
 (folded into "All tests passed"); Tier B is schedule/dispatch only (non-PR-blocking);
 `release.yml` `needs:` the full suite (`tier: all`, the `ui-suite` job) before publishing, each
-leg re-runnable in isolation. The version axis is parametric but runs the **single CE image**
-today (B1) — adding one is a one-line `DEFAULT_VERSIONS` append + image-ref wire (IMAGE_RUNBOOK).
+leg re-runnable in isolation. The version axis is read from the ci-metadata CI
+matrix (the `read-version-matrix` action — the same source `smoke.yml` fans out over), so the
+tiers run across every `ci:true` leg (CE + Plus); adding a version is a ci-metadata matrix
+change, not a workflow edit (IMAGE_RUNBOOK).
 Diagnostics (screenshots + VM logs + smoke snapshot) upload `if: always()` as
 `ui-diagnostics-<tier>-<variant>-<version>` (variant = ce/plus, e.g. `ui-diagnostics-browser-ce-2.8`).
 The §7 browser reliability numbers are **CI-pending**; the
@@ -1066,37 +1069,34 @@ Live-VM smoke: `tests/smoke/test_dot_doq_block.py` (marker `smoke`).
 
 pfBlockerNG can export IP Block/Permit/Match and DNSBL block events to syslog in `key=value`
 form, tagged `pfblockerng`. The feature is **opt-in** (default off) via the **Log Settings →
-Send Security Events to System Log** toggle (`log_syslog`), with companion selects for facility
-(`log_syslog_facility`, default `local6`) and severity (`log_syslog_priority`, default `notice`).
+Send Security Events to System Log** toggle (`log_syslog` — the only syslog config key,
+registered in `PfbConfig` / `pfb_cfg_registry()` as a `PfbToggle`). Facility and severity are
+**fixed constants** in `pfb_syslog_event()` (`pfblockerng_extra.inc`):
+`openlog('pfblockerng', LOG_PID, LOG_LOCAL6)` + `syslog(LOG_INFO, …)` — the old
+facility/priority selects are retired and no longer stored in config.
 
-**Dedicated log** — pfSense's `<logging>` block in `pfblockerng.xml` routes `!pfblockerng`
-tagged messages to `/var/log/pfblockerng_syslog.log` exclusively, keeping them out of
-`/var/log/system.log`. The logsocket entry (`/var/unbound/var/run/log`) gives the Unbound
-Python module a chroot-local socket path to deliver DNSBL records.
+**Dedicated log** — a syslog.d drop-in (managed by `pfblockerng.xml` install/uninstall) routes
+`!pfblockerng`-tagged messages to `/var/log/pfblockerng_syslog.log` exclusively, keeping them
+out of `/var/log/system.log`. There is **no `<logsocket>` entry**: both emit legs run host-side
+in PHP, so nothing needs a chroot-local socket any more.
 
-**Two emit paths:**
+**Both emit paths live in `pfb_daemon_filterlog()`** (`pfblockerng.inc`) — the single writer of
+`unified.log` and the host-side DNSBL syslog emitter — each gated by
+`PfbConfig::read('log_syslog') === PfbToggle::On`, with the daemon's config refreshed first so
+a LIVE toggle takes effect without a restart:
 
-- **IP events** — `pfblockerng.inc` calls `pfb_syslog_event(pfb_syslog_format_ip($fields))` at
-  the CSV write site when `log_syslog = PfbToggle::On`. PHP `openlog()` / `syslog()` with the
-  resolved facility + severity constants. Fields: `act`, `dir`, `if`, `proto`, `src`, `dst`,
-  `sport`, `dport`, `ipver`, `geoip`, `alias`, `feed`.
-- **DNSBL events** — `pfb_unbound.py` calls `_emit_dnsbl_syslog(msg)` at the DNSBL match site
-  when `syslog_enable = on` (written to `py_unbound.ini` by `pfblockerng.inc` at reload time).
-  Uses stdlib `logging.handlers.SysLogHandler` with `address="/var/run/log"` (resolves in the
-  Unbound chroot to `/var/unbound/var/run/log`). The handler degrades silently on socket failure
-  — it never raises into the Unbound request path. Fields: `act=dnsbl`, `qname`, `qip`, `qtype`,
-  `group`, `feed`, `btype` (VIP or NULL), `eval`.
+- **IP events** — `pfb_syslog_event(pfb_syslog_format_ip($fields))` at the pf-filter CSV write
+  site. Fields: `act`, `dir`, `if`, `proto`, `src`, `dst`, `sport`, `dport`, `ipver`, plus
+  optional enrichment `geoip`, `alias`, `feed`, `host`, `asn` (omitted when absent).
+- **DNSBL events** — `pfb_syslog_event(pfb_syslog_format_dnsbl($fields))` on the
+  `DNSBL-python,`-prefixed feature-log rows the same stdin carries
+  (`tail_pfb -F dnsbl.log dns_reply.log`). `pfb_syslog_format_dnsbl()` is the PHP port of the
+  retired Python `syslog_format_dnsbl()` (ADR-38 Amendment 1 — the in-resolver
+  `SysLogHandler` emitter is gone). Fixed key order: `act=dnsbl`, `qname`, `qip`, `qtype`,
+  `group`/`feed` (omitted when empty), `btype`, `eval`.
 
 **Remote delivery** — no in-package remote syslog target. Use pfSense
 *Status → System Logs → Settings → Remote Logging → "Everything"* to forward the facility.
-
-**Config keys** (all registered in `PfbConfig` / `pfb_cfg_registry()`):
-
-| Key | Type | Default | Notes |
-| --- | ---- | ------- | ----- |
-| `log_syslog` | `toggle` | `''` (off) | PfbToggle; `'on'` enables both paths |
-| `log_syslog_facility` | `plain` | `'log_local6'` | Maps to PHP `LOG_LOCAL6` constant |
-| `log_syslog_priority` | `plain` | `'log_notice'` | Maps to PHP `LOG_NOTICE` constant |
 
 Live-VM smoke: `tests/smoke/test_syslog_export.py` (marker `smoke`).
 
@@ -1450,7 +1450,7 @@ atomic tmp+rename publish, same fail-safe-keep-previous contract as v4. Measured
 
 **Wiring gotcha (flagged for the maintainer, not fixed in Phase 9):** `$pfb['supp_update']` — the
 flag that unlocks BOTH the v4 and v6 suppression sub-passes for a given reload pass — is set
-`TRUE` only by a **v4** Deny alias's own genuine reparse (`pfblockerng.inc` ~16550-16558, inside
+`TRUE` only by a **v4** Deny alias's own genuine reparse (in `sync_package_pfblockerng()`, inside
 `if ($pfbadv && $list['vtype'] == '_v4')`). An install with **only** v6 Deny lists configured
 would never flip it, so v6 suppression would never fire in isolation even with `v6suppression`
 non-empty and a v6 alias genuinely changing. `tests/smoke/test_smoke_suppression.py`'s v6 scenario
