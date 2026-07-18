@@ -15,13 +15,18 @@
  *     strip + double-"::" reject, via filter_var() standing in for
  *     Net_IPv6::checkIPv6 (no PEAR off-appliance). pfb_filter (IP/IPV4) and
  *     pfb_dnsbl_abp_extract_ip depend on their precise accept/reject behaviour.
- *     NOTE on v4: PHP's ip2long() delegates to libc inet_pton(AF_INET), which
- *     accepts only the canonical dotted-quad — leading-zero octets like
- *     '192.000.002.005' are rejected on BOTH FreeBSD (the pfSense/CE target;
- *     inet_pton4's leading-zero guard) and glibc. Consequently the old
- *     round-trip was behaviourally equivalent for v4; dropping it is a
- *     control-flow-fidelity fix (mirror upstream verbatim), not a verdict
- *     flip. The v6 %zone fix IS a real verdict flip — see IpAddrDoublesTest.
+ *     NOTE on v4: PHP's ip2long() delegates to libc inet_pton(AF_INET), whose
+ *     handling of leading-zero octets like '192.000.002.005' is
+ *     PLATFORM-DEPENDENT: FreeBSD (the pfSense/CE target; inet_pton4's
+ *     leading-zero guard) and glibc reject them, but macOS ACCEPTS them
+ *     (probed 2026-07-18, PHP 8.5.8 on Darwin: ip2long('192.000.002.005')
+ *     === 3221225989 — issue #1468). A bare ip2long() double is therefore
+ *     platform-dependent on a Mac dev box, so is_ipaddrv4 adds an explicit
+ *     leading-zero reject after the ip2long() check: a no-op where libc
+ *     already rejects, and a pin to the appliance verdict where it doesn't.
+ *     Verdict fidelity to the appliance beats verbatim control-flow
+ *     mirroring for a double. The v6 %zone fix IS a real verdict flip — see
+ *     IpAddrDoublesTest.
  *
  * Everything else is a minimal no-op/throwaway double: it exists only so the
  * symbol resolves. Functions reached only by code paths the seed suite does NOT
@@ -32,13 +37,16 @@
  */
 
 if (!function_exists('is_ipaddrv4')) {
-	// pfSense util.inc verbatim: a bare ip2long() check, NO long2ip() round-trip.
-	// Rejects '1.2.3' / out-of-range / leading-zero octets / non-strings —
-	// ip2long() (libc inet_pton) accepts only the canonical dotted-quad, on
-	// FreeBSD and glibc alike (see the file-header NOTE), so this double now
-	// runs the exact same control flow as the real function.
+	// pfSense util.inc: a bare ip2long() check, NO long2ip() round-trip —
+	// rejects '1.2.3' / out-of-range / non-strings. Leading-zero octets are
+	// libc-dependent (macOS accepts, FreeBSD/glibc reject — file-header NOTE,
+	// #1468), so the trailing preg pins the FreeBSD/appliance verdict: it
+	// only ever fires on a platform whose inet_pton accepted the shape.
 	function is_ipaddrv4($ipaddr) {
 		if (!is_string($ipaddr) || empty($ipaddr) || ip2long($ipaddr) === FALSE) {
+			return false;
+		}
+		if (preg_match('/(?:^|\.)0\d/', $ipaddr) === 1) {
 			return false;
 		}
 		return true;

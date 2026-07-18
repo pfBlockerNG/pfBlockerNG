@@ -16,12 +16,14 @@ use PHPUnit\Framework\TestCase;
  * Regression for two doubles that modeled util.inc wrongly (issue #721):
  *   - is_ipaddrv4() did an ip2long()/long2ip() ROUND-TRIP that real pfSense
  *     never does; real pfSense is a bare `ip2long($ipaddr) === FALSE` check.
- *     PHP's ip2long() delegates to libc inet_pton(AF_INET), which accepts only
- *     the canonical dotted-quad — leading-zero octets ('192.000.002.005') are
- *     rejected on BOTH FreeBSD (the pfSense/CE target; inet_pton4's
- *     leading-zero guard) and glibc — so the old round-trip was behaviourally
- *     equivalent for v4 and this is a control-flow-fidelity fix (mirror
- *     upstream verbatim, prevent future drift), not a verdict flip.
+ *     PHP's ip2long() delegates to libc inet_pton(AF_INET), whose treatment of
+ *     leading-zero octets ('192.000.002.005') is PLATFORM-DEPENDENT: FreeBSD
+ *     (the pfSense/CE target; inet_pton4's leading-zero guard) and glibc
+ *     reject them, but macOS ACCEPTS them (probed 2026-07-18, PHP 8.5.8 on
+ *     Darwin: ip2long('192.000.002.005') === 3221225989 — issue #1468). The
+ *     double therefore pins the APPLIANCE verdict with an explicit
+ *     leading-zero reject after the bare ip2long() check, so its answers are
+ *     identical on every dev platform (see the pinned v4Provider rows).
  *   - is_ipaddrv6() stripped ANY '%zone' suffix before validating. Real
  *     pfSense strips it ONLY when the address is link-local (is_linklocal()),
  *     so a non-link-local zoned address ('2001:db8::1%em0') was wrongly
@@ -41,12 +43,14 @@ final class IpAddrDoublesTest extends TestCase
 		return [
 			// Leading-zero octets are LIBC-DEPENDENT (#723): FreeBSD (the
 			// pfSense target) and glibc (CI) reject them at inet_pton(), but
-			// macOS accepts them — so the verdict cannot be pinned as a
-			// constant without failing on a Mac dev box. The invariant that
-			// matters is MECHANISM parity: the double must agree with this
-			// platform's ip2long(), whatever it says (asserted in
-			// testIsIpaddrv4MatchesLocalIp2long below).
+			// macOS accepts them (probed — see the header, #1468). The double
+			// pins the FreeBSD/appliance verdict with an explicit leading-zero
+			// reject, so these rows are CONSTANT on every dev platform —
+			// including a Mac dev box, where a bare ip2long() double would
+			// wrongly accept them.
 			'plain dotted-quad accepted'   => ['192.0.2.5', true],
+			'leading-zero octets rejected (pinned)'      => ['192.000.002.005', false],
+			'leading-zero first octet rejected (pinned)' => ['010.0.0.1', false],
 			'three-octet form rejected'    => ['1.2.3', false],
 			'out-of-range octet rejected'  => ['256.1.1.1', false],
 			'empty string rejected'        => ['', false],
@@ -62,13 +66,15 @@ final class IpAddrDoublesTest extends TestCase
 		$this->assertSame($expected, is_ipaddrv4($input));
 	}
 
-	public function testIsIpaddrv4MatchesLocalIp2long(): void
+	public function testIsIpaddrv4LeadingZeroVerdictIsPlatformIndependent(): void
 	{
-		// Mechanism parity with real pfSense (bare ip2long check): whatever this
-		// platform's libc says about a leading-zero octet, the double says the same.
-		$expected = (ip2long('192.000.002.005') !== false);
-		$this->assertSame($expected, is_ipaddrv4('192.000.002.005'),
-			'expected: double verdict identical to local ip2long() for a leading-zero octet');
+		// The #1468 pin: even where the LOCAL libc accepts a leading-zero octet
+		// (macOS), the double must still return the appliance verdict (reject).
+		// Replaces the old mechanism-parity assertion, which followed the local
+		// ip2long() and so gave a different verdict on a Mac dev box.
+		$this->assertFalse(is_ipaddrv4('192.000.002.005'),
+			'expected: leading-zero octet rejected regardless of local ip2long() verdict '
+			. '(local ip2long acceptance: ' . var_export(ip2long('192.000.002.005') !== false, true) . ')');
 	}
 
 	// --- is_ipaddrv6() --------------------------------------------------------
