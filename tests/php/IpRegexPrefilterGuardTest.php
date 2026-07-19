@@ -195,10 +195,10 @@ final class IpRegexPrefilterGuardTest extends TestCase
 	public function testProductionGuardsArePresenceChecks(): void
 	{
 		$this->assertStringContainsString(
-			"substr_count(\$oline, '.') >= 3 && preg_match_all(\$pfb['ipv4'], \$oline, \$matches)",
+			"substr_count(\$raw_line, '.') >= 3 && preg_match_all(\$config['ipv4'], \$raw_line, \$matches)",
 			self::$src, 'IPv4 dot-count prefilter guard missing or altered');
 		$this->assertStringContainsString(
-			"strpos(\$oline, ':') !== FALSE && preg_match_all(\$pfb['ipv6'], \$oline, \$matches)",
+			"strpos(\$raw_line, ':') !== FALSE && preg_match_all(\$config['ipv6'], \$raw_line, \$matches)",
 			self::$src, 'IPv6 colon prefilter guard missing or altered');
 	}
 }
