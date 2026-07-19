@@ -11,19 +11,19 @@ require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
  * End-to-end producer<->consumer parity for the issue #809 Phase 3b Alerts IP-table
  * prefetch (PR #825 review nitpick T3): IpPrefetchTest.php pins pfb_ip_prefetch() and
  * its helpers in isolation, but nothing drives convert_ip_log() itself (the page
- * consumer) to prove the batched producer and the per-row consumer actually agree on
+ * caller) to prove the batched producer and the attribution seam actually agree on
  * the memo keys -- a wrong validate/miss key would either silently discard the
  * prefetch (falling back to per-row exec, still correct but unbatched) or, worse,
- * hand convert_ip_log() the WRONG cached value for a different row.
+ * hand pfb_ip_render_attribution() the WRONG cached value for a different row.
  *
- * Feature: pfb_ip_prefetch()'s seeded memos are consumed by convert_ip_log() through
- *          the exact same keys, so a render is byte-identical whether or not the
+ * Feature: pfb_ip_prefetch()'s seeded memos are consumed by pfb_ip_render_attribution()
+ *          through the exact same keys, so a render is byte-identical whether or not the
  *          batched prefetch ran first
  *
  *   Scenario: for every reported-IP shape convert_ip_log() renders, seeding
  *             pfb_ip_render_memos() via pfb_ip_prefetch() (as the page's Pass 1.5
  *             does) and then rendering must produce IDENTICAL output to resetting the
- *             memos (forcing convert_ip_log()'s own per-row exec fallback) and
+ *             memos (forcing pfb_ip_render_attribution()'s per-row exec fallback) and
  *             rendering again -- that parity IS the contract PR #825 claims.
  *
  * Every case drives REAL fixture files on disk through REAL find/grep exec() calls
@@ -263,14 +263,14 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 
 		$seededMemos = &pfb_ip_render_memos();
 
-		// Guard against a vacuous pass: prove the EXACT key convert_ip_log() will
+		// Guard against a vacuous pass: prove the EXACT key pfb_ip_render_attribution() will
 		// consult was actually seeded by this prefetch call -- the producer<->consumer
 		// memo-key wiring itself -- not merely that the store is non-empty.
 		$this->assertArrayHasKey(
 			$row['validate_cmd'],
 			$seededMemos['validate'],
 			"[{$scenario}] expected pfb_ip_prefetch() to seed the exact validate_cmd key "
-				. "convert_ip_log() will look up: " . var_export($row['validate_cmd'], TRUE)
+				. "pfb_ip_render_attribution() will look up: " . var_export($row['validate_cmd'], TRUE)
 		);
 		if (empty($seededMemos['validate'][$row['validate_cmd']])) {
 			$missKey = $row['host'] . '|' . $row['folder'];
@@ -285,8 +285,8 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 		// When: convert_ip_log() renders while the prefetch memos are seeded.
 		[$retSeeded, $htmlSeeded] = $this->render($fields, $rtype);
 
-		// Given: a COLD render -- the memo store reset, so convert_ip_log() must take
-		// its own per-row exec fallback for every lookup this row needs.
+		// Given: a COLD render -- the memo store reset, so pfb_ip_render_attribution()
+		// must take its per-row exec fallback for every lookup this row needs.
 		pfb_ip_render_memos_reset();
 		$coldMemos = &pfb_ip_render_memos();
 		$this->assertSame(

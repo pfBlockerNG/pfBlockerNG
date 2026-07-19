@@ -39,7 +39,7 @@ use PHPUnit\Framework\TestCase;
  *     fixture dir/geoip=TRUE case proves the ccdir-redirect branch too.
  *
  *   Scenario: pfb_ip_prefetch() end-to-end -- seeding pfb_ip_render_memos() for real rows
- *     Rows built via pfb_ip_render_query() (the SAME helper convert_ip_log() itself calls)
+ *     Rows built via pfb_ip_render_query() (the SAME helper pfb_ip_render_attribution() calls)
  *     over real fixture dirs. Asserts the validate round, the miss round (find_reported_
  *     header() result), and the aliastables round (including the genuine "no match ->
  *     empty string" case) all seed the exact values a per-row exec would have produced.
@@ -784,8 +784,8 @@ final class IpPrefetchTest extends TestCase
 		// string in the alias fixture -- exactly what a per-row exec would have produced.
 		// issue #833: the alias fixture dir (fixtures/ip_prefetch/alias) holds exactly
 		// ONE .txt file, so the aliastables grep is now forced (via /dev/null) to emit
-		// its "path:" prefix -- the shape convert_ip_log()'s own alias-name parse chain
-		// (pfblockerng_alerts.php ltrim/strrchr/strstr) requires.
+		// its "path:" prefix -- the shape pfb_ip_render_attribution()'s alias-name parse
+		// chain requires.
 		$missKey = "{$rq['host']}|{$rq['folder']}";
 		$this->assertArrayHasKey($missKey, $memos['miss'], "expected the miss round to seed key '{$missKey}'");
 		$expectedRawValidate = "{$GLOBALS['pfb']['aliasdir']}/pfB_SomeAlias_v4.txt:192.0.2.0/24";
@@ -1221,7 +1221,7 @@ final class IpPrefetchTest extends TestCase
 	 *
 	 * Given: a real etdir fixture file containing the reported IP.
 	 * When: the row's validate_cmd (built by pfb_ip_render_query()) is actually
-	 * exec()'d, exactly as convert_ip_log() does.
+	 * exec()'d, exactly as pfb_ip_render_attribution() does.
 	 * Then: the still-listed line comes back. Pre-fix, `find`'s primary-operator
 	 * error left the pipe with nothing for `xargs grep` to search, so this always
 	 * came back empty (a false "no longer listed") regardless of the real feed

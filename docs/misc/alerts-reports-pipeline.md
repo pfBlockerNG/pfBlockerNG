@@ -150,13 +150,13 @@ streamed-loop effect is constant and field-independent (the `$dup = 0` reset plu
 rendered row's badge. That bounds the buffer at ≤ (limit + 1) field arrays plus
 ≤ (limit + 2) scalar/marker entries regardless of log size or filter selectivity —
 O(rows rendered), never O(rows scanned). Pass 1.5 derives every accepted row's query
-(`pfb_ip_render_query()` — the SAME derivation `convert_ip_log()` itself uses) and hands
+(`pfb_ip_render_query()` — the SAME derivation `pfb_ip_render_attribution()` uses) and hands
 them to `pfb_ip_prefetch()`, which runs, in a bounded number of `grep -f <patternfile>`
 passes: the validate round (grouped by the shared file-listing pipeline), the miss round
 (`pfb_find_reported_headers()`, a batched exact + prefix/CIDR sibling of
 `find_reported_header()` sharing `pfb_match_reported_cidr()` with it), and the aliastables
 round (one pass across every still-missing row). Pass 2 replays the buffer through the
-unchanged per-row loop body, which transparently consults the seeded results
+unchanged per-row loop body; its attribution seam transparently consults the seeded results
 (`pfb_ip_render_memos()`) instead of re-`exec`'ing. Filter mode with
 `$ipfilterlimitentries == 0` (genuinely unbounded — the log is scanned to EOF regardless)
 and the degenerate `empty($filterfieldsarray[0])` case both keep the single-pass streaming

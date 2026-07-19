@@ -4513,7 +4513,7 @@ if (!$alert_summary):
 				}
 
 				// Pass 1.5 (derive + batch): every ACCEPTED buffered row's lookups, via the
-				// SAME helper (pfb_ip_render_query()) convert_ip_log() itself calls in Pass 2
+				// SAME helper (pfb_ip_render_query()) the Pass 2 attribution seam calls
 				// -- so the two passes can never derive a different answer for the same row.
 				// int runs and gap markers carry no fields and are never looked up.
 				$ip_prefetch_rows = array();
@@ -4540,8 +4540,8 @@ if (!$alert_summary):
 				// Pass 2 (render): replay the buffer in the same (reversed) order via
 				// pfb_alerts_ip_replay_step() (pfblockerng.inc; decode contract documented
 				// there), unit-pinned by AlertsBufferReplayTest -- 'render' rows replay through
-				// the unchanged convert_ip_log() loop body, consulting the batched prefetch via
-				// pfb_ip_render_memos() first. $rtype was already coalesced above (the
+				// the unchanged convert_ip_log() loop body, whose attribution seam consults the
+				// batched pfb_ip_render_memos() first. $rtype was already coalesced above (the
 				// $ipfilterlimitentries coalesce note), so it is provably defined here.
 				foreach ($ip_buffered as $ip_entry) {
 					$ip_step = pfb_alerts_ip_replay_step($ip_entry);
