@@ -100,13 +100,12 @@ rows, and the IP filter-match ordering constraint (below) still applies.
 
 ### IP filter/lookup ordering
 
-The IP-side expensive lookups run **before** the filter/limit gates, and that order is
-load-bearing: the Alert-filter match runs against the **corrected** fields (post
-re-check), so a user filtering on a feed name matches the IP's *current* feed, not the
-stale logged one. The filter gate therefore cannot be hoisted above the lookup without
-changing filter semantics. The **counter/limit** gate is independent of the lookup and can
-move (issue #809 Phase 1). Consequence of today's order: with filtering enabled, every
-line of the whole log pays the full lookup, matching or not.
+`convert_ip_log()` filters and applies its counter/limit gates to the raw, timestamp-
+reordered fields before attribution. Accepted rows then call the package seam
+`pfb_ip_render_attribution()`, which owns the per-row validate/miss/alias fallback and
+returns the values needed for rendering. The bounded Block/Permit/Match path derives the
+same queries in Pass 1.5 for `pfb_ip_prefetch()`; the page remains the consumer and keeps
+the filter, counter, icon, and HTML decisions.
 
 ## The IP report cache
 
@@ -127,7 +126,7 @@ the external `drill` CNAME chase that used to run per DNSBL row are all gone (th
 is likewise no DNSBL-side batched prefetch pass anymore: the `pfb_dnsbl_prefetch()` family
 was removed in issue #1349 too.
 
-IP row (`convert_ip_log`):
+IP row (`convert_ip_log` via `pfb_ip_render_attribution`):
 
 - validate: `find <feed dirs> | xargs grep '^<ip>'` (narrowed to the logged feed's file
   in the common case; the whole dir for GeoIP/ET rows) — **unless** the row was already

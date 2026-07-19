@@ -34,6 +34,7 @@ require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
 #[CoversFunction('convert_ip_log')]
 #[CoversFunction('pfb_ip_prefetch')]
 #[CoversFunction('pfb_ip_render_query')]
+#[CoversFunction('pfb_ip_render_attribution')]
 #[CoversFunction('pfb_ip_render_memos')]
 #[CoversFunction('pfb_ip_render_memos_reset')]
 #[CoversFunction('pfb_render_memo')]
@@ -433,6 +434,20 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 			8 => '192.0.2.77', 15 => '192.0.2.77',
 			14 => 'pfB_OldAlias_v4', 16 => 'DenyFeedOldG',
 		]);
+		$reordered = $fields;
+		$reordered[99] = array_shift($reordered);
+		$attribution = pfb_ip_render_attribution($reordered);
+		$this->assertSame([
+			'host' => '192.0.2.77',
+			'field15' => 'DenyFeedOldG',
+			'mask' => '/32',
+			'feed_new' => 'DenyFeedNewG',
+			'eval_new' => '192.0.2.77',
+			'alias_new' => 'pfB_NewAlias_v4',
+			'pfb_matchtitle' => '',
+		], array_intersect_key($attribution, array_flip([
+			'host', 'field15', 'mask', 'feed_new', 'eval_new', 'alias_new', 'pfb_matchtitle',
+		])), 'expected the attribution seam to preserve moved-feed and alias relocation values');
 
 		$this->assertParity($fields, 'Block', 'aliastable-changed v4');
 	}

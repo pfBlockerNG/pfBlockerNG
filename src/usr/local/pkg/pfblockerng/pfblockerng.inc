@@ -10342,6 +10342,79 @@ function pfb_ip_render_query(array $fields): array {
 }
 
 
+// Render-time attribution for one POST-timestamp-reorder IP row. The page keeps
+// filtering, counters, icons, and HTML; this seam owns the per-row lookup fallback.
+function pfb_ip_render_attribution(array $fields): array {
+	global $pfb;
+
+	$rq = pfb_ip_render_query($fields);
+	$memos = &pfb_ip_render_memos();
+	$mask = '';
+	if ($fields[4] == 4) {
+		$mask = strstr($fields[14], '/', FALSE) ?: '/32';
+	}
+
+	$feed_new = $eval_new = $alias_new = $pfb_matchtitle = '';
+	$validate = '';
+	if ($rq['validate_cmd'] !== NULL) {
+		$validate_cmd = $rq['validate_cmd'];
+		$validate = pfb_render_memo($memos['validate'], $validate_cmd, function () use ($validate_cmd) {
+			return exec($validate_cmd);
+		});
+	}
+
+	if (empty($validate)) {
+		$miss_key = "{$rq['host']}|{$rq['folder']}";
+		list($pfb_query, $validate) = pfb_render_memo($memos['miss'], $miss_key, function () use ($rq, $pfb) {
+			$pfb_query = find_reported_header($rq['host'], $rq['folder']);
+			$eval_new = ($pfb_query[1] == 'Unknown') ? 'Not listed!' : $pfb_query[1];
+			$raw_validate = '';
+			$q_ip = pfb_ip_exact_entry_pattern($eval_new);
+			if ($q_ip !== NULL) {
+				$q_ip_esc = escapeshellarg($q_ip);
+				$raw_validate = exec("/usr/bin/find {$pfb['aliasdir']}/*.txt -type f | xargs {$pfb['grep']} {$q_ip_esc} /dev/null 2>&1");
+			}
+			return array($pfb_query, $raw_validate);
+		});
+
+		if ($pfb_query[0] == 'Unknown') {
+			$feed_new = 'Not listed!';
+			$pfb_matchtitle = 'This IP is not currently listed!';
+		} else {
+			$feed_new = $pfb_query[0];
+		}
+
+		if ($pfb_query[1] == 'Unknown') {
+			$mask = '';
+			$eval_new = 'Not listed!';
+		} else {
+			if ($fields[4] == 4) {
+				$mx = explode('/', $pfb_query[1]);
+				$mask = empty($mx[1]) ? '/32' : "/{$mx[1]}";
+			}
+			$eval_new = $pfb_query[1];
+		}
+
+		$validate = ltrim(strrchr(strstr(strstr($validate, ':', TRUE), '.txt', TRUE), '/'), '/');
+		if ($validate != $fields[13]) {
+			$alias_new = $validate;
+		}
+	}
+
+	return array(
+		'host' => $rq['host'],
+		'hostname' => $rq['hostname'],
+		'pfb_geoip' => $rq['pfb_geoip'],
+		'field15' => $rq['field15'],
+		'mask' => $mask,
+		'feed_new' => $feed_new,
+		'eval_new' => $eval_new,
+		'alias_new' => $alias_new,
+		'pfb_matchtitle' => $pfb_matchtitle,
+	);
+}
+
+
 // issue #809: promotes convert_ip_log()'s two function-static memo stores ($validate_memo /
 // $ip_miss_memo, pfblockerng_alerts.php) to a reference-returning accessor so the batched
 // prefetch pass below (pfb_ip_prefetch()) can seed them from OUTSIDE convert_ip_log(). Same
