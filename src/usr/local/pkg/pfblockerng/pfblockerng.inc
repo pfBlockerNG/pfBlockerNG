@@ -9849,6 +9849,21 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 	global $pfb;
 
+	$result = pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, $pfb['supp']);
+	foreach ($result['messages'] as $message) {
+		pfb_logger($message, 1);
+	}
+	return $result['address'];
+}
+
+/**
+ * Normalize one IPv4 entry without reading global state or emitting logs.
+ *
+ * @return array{address: ?string, messages: list<string>}
+ */
+function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, $supp): array {
+	$messages = [];
+
 	$parts	= explode('/', $ipaddr);
 	$subnet	= $parts[0];
 	$mask	= $parts[1] ?? '';	// '' (not undef) when no CIDR
@@ -9857,7 +9872,7 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 	// strip here (str_replace('32', '')) used to rewrite an invalid mask into a
 	// valid, far broader one (/132 -> /1 = half of IPv4) (issue #719).
 	if ($mask !== '' && (!ctype_digit($mask) || (int)$mask > 32)) {
-		return;
+		return ['address' => NULL, 'messages' => $messages];
 	}
 
 	// An explicit /0 covers the entire IPv4 space and is never honored from a
@@ -9867,7 +9882,7 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 	if ($mask !== '' && (int)$mask === 0 && !$custom) {
 		// Unlike the v6 sibling, callers reach this before validate_ipv4(), so
 		// $ipaddr is raw feed text — strip control chars to keep the log clean.
-		pfb_logger("\n  Feed /0 CIDR clamped to single host: " . preg_replace('/[[:cntrl:]]/', '', $ipaddr), 1);
+		$messages[] = "\n  Feed /0 CIDR clamped to single host: " . preg_replace('/[[:cntrl:]]/', '', $ipaddr);
 		$mask = '';
 	}
 	$iparr = explode('.', $subnet);
@@ -9898,21 +9913,21 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 	$ip_final = implode('.', $ip);
 
 	// Exclude private/reserved IPs (bypass exclusion for custom lists)
-	if ($pfb['supp'] == 'on' && !$custom) {
+	if ($supp == 'on' && !$custom) {
 
 		// Remove 'loopback' and '0.0.0.0' IPs
 		if ($ip[0] == 127 || $ip[0] == 0 || empty($ip[0])) {
-			return;
+			return ['address' => NULL, 'messages' => $messages];
 		}
 
 		// Advanced IPv4 Tunable (Set CIDR Block size limit)
 		if ($pfbcidr != 'Disabled' && !empty($mask) && $mask < $pfbcidr) {
-			pfb_logger("\n  Suppression CIDR Limit: {$ip_final}/{$mask}", 1);
+			$messages[] = "\n  Suppression CIDR Limit: {$ip_final}/{$mask}";
 			$mask = '32';
 		}
 
 		if (!filter_var($ip_final, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== FALSE) {
-			return;
+			return ['address' => NULL, 'messages' => $messages];
 		}
 
 		// FILTER_FLAG_NO_PRIV_RANGE|NO_RES_RANGE keep documentation (RFC 5737),
@@ -9930,16 +9945,16 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 			($long & 0xfffe0000) === 0xc6120000 ||	// 198.18.0.0/15 benchmarking
 			($long & 0xffffff00) === 0xc0586300	// 192.88.99.0/24 6to4 relay anycast
 		)) {
-			return;
+			return ['address' => NULL, 'messages' => $messages];
 		}
 	}
 
 	// '!== '' (not !empty()): empty('0') is TRUE, which silently collapsed a
 	// custom list's honored /0 to a bare host (issue #744).
 	if ($mask !== '') {
-		return "{$ip_final}/{$mask}";
+		return ['address' => "{$ip_final}/{$mask}", 'messages' => $messages];
 	}
-	return "{$ip_final}";
+	return ['address' => "{$ip_final}", 'messages' => $messages];
 }
 
 
@@ -9955,6 +9970,21 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 	global $pfb;
 
+	$result = pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, $pfb['supp']);
+	foreach ($result['messages'] as $message) {
+		pfb_logger($message, 1);
+	}
+	return $result['address'];
+}
+
+/**
+ * Normalize one IPv6 entry without reading global state or emitting logs.
+ *
+ * @return array{address: ?string, messages: list<string>}
+ */
+function pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, $supp): array {
+	$messages = [];
+
 	// Extract the address part (before '/' for a CIDR like 'fc00::/7')
 	$parts	= explode('/', $ipaddr);
 	$s_ip	= $parts[0];
@@ -9965,11 +9995,11 @@ function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 	// form is dropped explicitly first -- inet_pton()'s handling of it is
 	// platform-dependent (FreeBSD/glibc reject it, macOS strips the zone).
 	if (strpos($s_ip, '%') !== FALSE) {
-		return;
+		return ['address' => NULL, 'messages' => $messages];
 	}
 	$bin = inet_pton($s_ip);
 	if ($bin === FALSE) {
-		return;
+		return ['address' => NULL, 'messages' => $messages];
 	}
 
 	// An explicit /0 covers the entire IPv6 space and is never honored from a
@@ -9978,12 +10008,12 @@ function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 	// kept as written.
 	$mask_clamped = FALSE;
 	if ($mask !== '' && ctype_digit($mask) && (int)$mask === 0 && !$custom) {
-		pfb_logger("\n  Feed /0 CIDR clamped to single host: {$ipaddr}", 1);
+		$messages[] = "\n  Feed /0 CIDR clamped to single host: {$ipaddr}";
 		$mask_clamped = TRUE;
 	}
 
 	// Exclude private/reserved IPs (bypass exclusion for custom lists)
-	if ($pfb['supp'] == 'on' && !$custom) {
+	if ($supp == 'on' && !$custom) {
 
 		// Advanced IPv6 Tunable (Set CIDR Block size limit) (issue #760 §3).
 		// A /0 was already clamped above (mask stays '0', never > 0, so this
@@ -9992,7 +10022,7 @@ function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 		// 0-128 here; the ctype_digit()/range checks are defensive redundancy
 		// for any direct caller that skips that guard.
 		if ($pfbcidr != 'Disabled' && $mask !== '' && ctype_digit($mask) && (int)$mask > 0 && (int)$mask < (int)$pfbcidr) {
-			pfb_logger("\n  Suppression CIDR Limit: {$s_ip}/{$mask}", 1);
+			$messages[] = "\n  Suppression CIDR Limit: {$s_ip}/{$mask}";
 			$mask_clamped = TRUE;
 		}
 
@@ -10000,7 +10030,7 @@ function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 		// IPv4-mapped and the reserved set (mirrors inc:7118-7119).
 		if (!filter_var($s_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) ||
 		    !filter_var($s_ip, FILTER_CALLBACK, array('options' => 'FILTER_FLAG_NO_LOOPBACK_RANGE'))) {
-			return;
+			return ['address' => NULL, 'messages' => $messages];
 		}
 
 		// The filter flags above keep documentation (2001:db8::/32), multicast
@@ -10012,16 +10042,16 @@ function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 			substr($bin, 0, 1) === "\xff" ||								// ff00::/8 multicast
 			substr($bin, 0, 12) === "\x00\x64\xff\x9b" . str_repeat("\x00", 8)	// 64:ff9b::/96 NAT64
 		) {
-			return;
+			return ['address' => NULL, 'messages' => $messages];
 		}
 	}
 
 	// issue #1084: canonical inet_ntop() form; mask re-appended only when
 	// neither clamp above dropped it.
 	if ($mask !== '' && !$mask_clamped) {
-		return inet_ntop($bin) . '/' . $mask;
+		return ['address' => inet_ntop($bin) . '/' . $mask, 'messages' => $messages];
 	}
-	return inet_ntop($bin);
+	return ['address' => inet_ntop($bin), 'messages' => $messages];
 }
 
 
