@@ -10241,8 +10241,8 @@ function pfb_ip_match_folders(): string {
 }
 
 
-// issue #809: the exact per-row query derivation convert_ip_log() (pfblockerng_alerts.php)
-// needs before validating/re-locating a reported IP — extracted VERBATIM so the batched
+// issue #809: the exact per-row query derivation pfb_ip_render_attribution() needs before
+// validating/re-locating a reported IP — extracted VERBATIM so the batched
 // prefetch pass (pfb_ip_prefetch()) derives IDENTICAL lookup groups from the same $fields.
 // $fields must already be in convert_ip_log()'s POST-REORDER shape (called AFTER
 // `$fields[99] = array_shift($fields);`).

@@ -98,7 +98,7 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 		// ccdir/etdir/aliasdir each need a SECOND, non-matching file: grep only
 		// prefixes a matched line with "path:" when >1 file is searched, and
 		// find_reported_header()'s pfb_parse_query() (feed/alias name split) and
-		// convert_ip_log()'s own alias-name ltrim/strrchr/strstr chain both depend on
+		// pfb_ip_render_attribution()'s alias-name ltrim/strrchr/strstr chain both depend on
 		// that "path:content" shape. A lone-file dir would silently break the parse
 		// for cases E/G/H regardless of prefetch -- not what this test is about.
 		file_put_contents("{$this->ccdir}/OtherRegionPlaceholder.txt", "10.0.0.1\n");
@@ -206,7 +206,7 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 	 * Build the SAME prefetch-row shape pfblockerng_alerts.php's Pass 1.5 builds
 	 * (pfblockerng_alerts.php, the $ip_prefetch_rows loop) from a RAW pre-reorder
 	 * $fields row: a page-copy reorder, then pfb_ip_render_query() -- the identical
-	 * derivation convert_ip_log() itself runs on its own copy.
+	 * derivation pfb_ip_render_attribution() runs.
 	 */
 	private function prefetchRowFor(array $rawFields): array
 	{
@@ -521,8 +521,8 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 	 * #833 reports as broken.
 	 *
 	 * Given: pre-fix, `find aliasdir/*.txt | xargs grep` hands grep a single file,
-	 * so its match comes back UNPREFIXED; convert_ip_log()'s alias-name parse chain
-	 * (pfblockerng_alerts.php ltrim(strrchr(strstr(strstr(...))))) requires the
+	 * so its match comes back UNPREFIXED; pfb_ip_render_attribution()'s alias-name parse
+	 * chain requires the
 	 * "path:content" shape and silently collapses to '' without it -- the rendered
 	 * row would show NO "moved to a new alias" cell at all, even though the IP
 	 * genuinely moved.

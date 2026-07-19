@@ -634,7 +634,7 @@ final class IpPrefetchTest extends TestCase
 	 * pfb_parse_query() returns a 1-element array (no [1]) -- find_reported_
 	 * header()'s exact-match branch returns that 1-element array VERBATIM (it has
 	 * no Unknown/Unknown fallback of its own), corrupting every caller that reads
-	 * result[1] (e.g. convert_ip_log() builds a degenerate '^' aliastables
+	 * result[1] (e.g. pfb_ip_render_attribution() builds a degenerate '^' aliastables
 	 * pattern from the resulting NULL).
 	 * When: the per-row AND batched lookups both run against the single-file
 	 * folder.
@@ -755,7 +755,7 @@ final class IpPrefetchTest extends TestCase
 		$rq     = pfb_ip_render_query($fields);
 
 		// Given: pfb_ip_render_query() derives the folder/validate command this row's
-		// convert_ip_log() call would use -- the deny+native glob, block-branch folder.
+		// pfb_ip_render_attribution() call would use -- the deny+native glob, block-branch folder.
 		$this->assertSame("{$GLOBALS['pfb']['denydir']}/*.txt {$GLOBALS['pfb']['nativedir']}/*.txt", $rq['folder']);
 		$this->assertNotNull($rq['validate_cmd'], 'expected a validate command to be built (fields[14]/[15] are not Unknown)');
 
@@ -947,7 +947,7 @@ final class IpPrefetchTest extends TestCase
 	 * EXACT match unreachable via Round A silently resolved to Unknown/Unknown and was
 	 * then CACHED as a definitive miss, a true false negative for a host that DOES have
 	 * a real match. GREEN after: the miss round leaves the row entirely unseeded so
-	 * convert_ip_log()'s per-row fallback (unaffected by the sandbox -- it never uses a
+	 * pfb_ip_render_attribution()'s per-row fallback (unaffected by the sandbox -- it never uses a
 	 * pattern file) resolves it live instead.
 	 */
 	public function test_prefetch_leaves_the_miss_round_unseeded_when_round_a_pattern_file_cannot_be_created(): void
@@ -1066,7 +1066,7 @@ final class IpPrefetchTest extends TestCase
 			);
 
 			// Then: pfb_render_memo(), consulting the ALREADY-seeded store (exactly as
-			// convert_ip_log() does on every render), still returns the correct cached
+			// pfb_ip_render_attribution() does on every render), still returns the correct cached
 			// result -- it never re-execs against the now-missing directories.
 			list($cachedQuery, $cachedValidate) = pfb_render_memo(
 				$memos['miss'],
@@ -1118,7 +1118,7 @@ final class IpPrefetchTest extends TestCase
 	 * When: pfb_ip_prefetch() runs its miss + aliastables rounds for that row.
 	 * Then: the prefetch completes WITHOUT the issue #831 TypeError, AND the row
 	 * is now correctly SEEDED with the real (feed, value) pair -- no longer left
-	 * to convert_ip_log()'s per-row fallback.
+	 * to pfb_ip_render_attribution()'s per-row fallback.
 	 */
 	public function test_single_file_folder_miss_row_is_correctly_seeded_after_the_833_fix(): void
 	{
