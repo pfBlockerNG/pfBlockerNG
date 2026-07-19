@@ -43,7 +43,7 @@ filter_head=$(git -C "$project_root" rev-parse "HEAD:$filter_rel" 2>/dev/null) |
 filter_stage=$(git -C "$project_root" ls-files --stage -- "$filter_rel" 2>/dev/null) || exit 0
 filter_expected=$(printf '100644 %s 0\t%s' "$filter_head" "$filter_rel")
 [ "$filter_stage" = "$filter_expected" ] || exit 0
-filter_work=$(git -C "$project_root" hash-object -- "$filter_rel" 2>/dev/null) || exit 0
+filter_work=$(git -C "$project_root" hash-object --no-filters -- "$filter_rel" 2>/dev/null) || exit 0
 [ "$filter_work" = "$filter_head" ] || exit 0
 (CDPATH='' cd "$project_root" && "$rtk_bin" trust >/dev/null 2>&1) || exit 0
 exit 0
