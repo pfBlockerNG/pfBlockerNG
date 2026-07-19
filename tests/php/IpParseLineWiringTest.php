@@ -50,11 +50,21 @@ final class IpParseLineWiringTest extends TestCase
 		foreach ($replayContract as $effect => $needle) {
 			$this->assertStringContainsString($needle, $loop, "missing parser replay effect: {$effect}");
 		}
-		$this->assertStringContainsString('$ip_lineno++;', $loop);
+		$lineNumber = strpos($loop, '$ip_lineno++;');
+		$parseCall = strpos($loop, '$parsed_line = pfb_ip_parse_line(');
+		$this->assertNotFalse($lineNumber, 'line-number increment missing');
+		$this->assertNotFalse($parseCall, 'parser invocation missing');
+		$this->assertLessThan($parseCall, $lineNumber, 'line number must increment before parsing and diagnostics');
 		$this->assertStringContainsString('pfb_ip_parse_fail_warn($parse_fail, $header);', self::$source);
-		$this->assertStringContainsString(
-			"if (empty(\$ip_data) && \$ip_suppressed && \$list['vtype'] == '_v6')",
-			self::$source
-		);
+
+		$placeholderStart = strpos(self::$source, "if (empty(\$ip_data) && \$ip_suppressed && \$list['vtype'] == '_v6')");
+		$this->assertNotFalse($placeholderStart, 'suppressed-IPv6 placeholder gate missing');
+		$placeholderEnd = strpos(self::$source, 'if (!empty($ip_data))', (int) $placeholderStart);
+		$this->assertNotFalse($placeholderEnd, 'suppressed-IPv6 placeholder block end missing');
+		$placeholder = substr(self::$source, (int) $placeholderStart, (int) $placeholderEnd - (int) $placeholderStart);
+		$this->assertStringContainsString('$p_ip     = "::{$pfb[\'ip_ph\']}";', $placeholder);
+		$this->assertStringContainsString('$ip_data  = "{$p_ip}\\n";', $placeholder);
+		$this->assertStringContainsString('All IPv6 entries suppressed', $placeholder);
+		$this->assertStringContainsString('pfb_logger(', $placeholder);
 	}
 }
