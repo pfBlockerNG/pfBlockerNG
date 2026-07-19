@@ -60,4 +60,36 @@ EOF
     The status should be success
     The file "${log}" should not be exist
   End
+
+  It 'does not trust metadata redirected through an inherited Git directory'
+    evil="${work}/evil"
+    mkdir -p "${evil}/.rtk"
+    git init -q "${evil}"
+    git -C "${evil}" config user.email test@example.com
+    git -C "${evil}" config user.name Test
+    git -C "${evil}" config commit.gpgsign false
+    printf '[local]\n' > "${evil}/.rtk/filters.toml"
+    git -C "${evil}" add .rtk/filters.toml
+    git -C "${evil}" commit -q -m filters
+    printf '[local]\n' > "${project}/.rtk/filters.toml"
+    When run env PATH="${shim}:${PATH}" RTK_LOG="${log}" CLAUDE_PROJECT_DIR="${project}" \
+      GIT_DIR="${evil}/.git" sh "${hook}"
+    The status should be success
+    The file "${log}" should not be exist
+  End
+
+  It 'does not trust a filter while its index entry is unmerged'
+    base_oid=$(printf 'base\n' | git -C "${project}" hash-object -w --stdin)
+    ours_oid=$(printf 'ours\n' | git -C "${project}" hash-object -w --stdin)
+    theirs_oid=$(printf 'theirs\n' | git -C "${project}" hash-object -w --stdin)
+    git -C "${project}" update-index --index-info <<EOF
+0 0000000000000000000000000000000000000000	.rtk/filters.toml
+100644 ${base_oid} 1	.rtk/filters.toml
+100644 ${ours_oid} 2	.rtk/filters.toml
+100644 ${theirs_oid} 3	.rtk/filters.toml
+EOF
+    When run run_hook
+    The status should be success
+    The file "${log}" should not be exist
+  End
 End
