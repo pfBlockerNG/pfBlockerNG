@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/.claude/hooks/rtk-install.sh\" 13ea127116e5201b5689e77cf91260fa5845e869f559988b4d5c089f30bcf990 && exec sh \"$root/.claude/hooks/rtk-install.sh\"",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/.claude/hooks/rtk-install.sh\" aec3bdb067de21bc012d8c6a47352277bd096166818c11bf94e68b50bb783c2d && exec sh \"$root/.claude/hooks/rtk-install.sh\"",
             "timeout": 120,
             "statusMessage": "Preparing RTK filters"
           },
