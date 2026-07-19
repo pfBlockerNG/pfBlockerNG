@@ -77,10 +77,17 @@ Describe 'work-branch.sh --worktree anchors at the primary checkout'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'defaults the path under the primary root when run from a linked worktree'
-    When run sh -c 'cd "$1" && exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs"
+  It 'defaults the path under the primary root outside Codex'
+    When run sh -c 'cd "$1" && CODEX_THREAD_ID= exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs"
     The status should equal 0
     The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
+    The stderr should include 'Preparing worktree'
+  End
+
+  It 'defaults the path under TMPDIR when run from Codex'
+    When run sh -c 'cd "$1" && CODEX_THREAD_ID=thread TMPDIR="$3" exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs" "$fixture"
+    The status should equal 0
+    The output should equal "$(printf 'issue/7-tld\t%s/pfblockerng-issue-7' "$fixture")"
     The stderr should include 'Preparing worktree'
   End
 
@@ -92,7 +99,7 @@ Describe 'work-branch.sh --worktree anchors at the primary checkout'
   End
 
   It 'keeps the primary-checkout default placement unchanged'
-    When run sh -c 'cd "$1" && exec sh "$2" issue 9 tld --worktree --base HEAD' _ "$primary" "$script_abs"
+    When run sh -c 'cd "$1" && CODEX_THREAD_ID= exec sh "$2" issue 9 tld --worktree --base HEAD' _ "$primary" "$script_abs"
     The status should equal 0
     The output should equal "$(printf 'issue/9-tld\t%s/.claude/worktrees/issue-9' "$primary")"
     The stderr should include 'Preparing worktree'
@@ -101,7 +108,7 @@ Describe 'work-branch.sh --worktree anchors at the primary checkout'
   It 'is immune to an inherited CDPATH when resolving the primary root'
     # A CDPATH hit makes cd echo the destination AND resolve relative to the
     # CDPATH entry instead of $PWD — either corrupts the derived root.
-    When run sh -c 'mkdir -p "$3/.git" && cd "$1" && CDPATH=$3 exec sh "$2" issue 10 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$fixture/decoy"
+    When run sh -c 'mkdir -p "$3/.git" && cd "$1" && CODEX_THREAD_ID= CDPATH=$3 exec sh "$2" issue 10 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$fixture/decoy"
     The status should equal 0
     The output should equal "$(printf 'issue/10-tld\t%s/.claude/worktrees/issue-10' "$primary")"
     The stderr should include 'Preparing worktree'
