@@ -126,6 +126,7 @@ hook_commands = [
     for hook in group["hooks"]
 ]
 for relative in (
+    ".claude/hooks/rtk-install.sh",
     ".claude/hooks/session-branch-sync.sh",
     "scripts/claude-bash-guard.sh",
     "scripts/check_retired_tokens.py",
