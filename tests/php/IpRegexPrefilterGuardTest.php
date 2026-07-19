@@ -6,17 +6,16 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * IP regex prefilter guards (pfblockerng_apply.inc, inside sync_package_pfblockerng,
- * not unit-reachable directly — pinned here against the real regex literals
- * extracted from the production file).
+ * IP regex prefilter guards in pfb_ip_parse_line() (pfblockerng_apply.inc),
+ * pinned here against the real regex literals extracted from the production file.
  *
- * The two preg_match_all fallback parsers run on $oline (the original feed line,
+ * The two preg_match_all fallback parsers run on $raw_line (the original feed line,
  * which may carry IPs embedded in mid-line noise) and are gated by a cheap
  * necessary-condition prefilter that skips the regex engine when the line cannot
  * possibly contain a match:
  *
- *   IPv4:  substr_count($oline, '.') >= 3 && preg_match_all($pfb['ipv4'], ...)
- *   IPv6:  strpos($oline, ':') !== FALSE && preg_match_all($pfb['ipv6'], ...)
+ *   IPv4:  substr_count($raw_line, '.') >= 3 && preg_match_all($config['ipv4'], ...)
+ *   IPv6:  strpos($raw_line, ':') !== FALSE && preg_match_all($config['ipv6'], ...)
  *
  * The guards must be necessary conditions of a match — a line the guard rejects
  * can NEVER match the regex — so the guarded path returns the byte-identical set
