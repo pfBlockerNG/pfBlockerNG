@@ -991,7 +991,9 @@ def test_s8_alias_changed_cell_renders(render_diff_state: dict[str, dict[str, Ca
     feed_change = (
         f"<s>{FEED_C8_NAME}</s><br /><small><s>{S8_IP}</s></small><br />{FEED_A_NAME}<br /><small>{S8_IP}</small>"
     )
-    assert feed_change in row, f"S8 ({S8_IP}) expected the stale-to-current feed transition {feed_change!r}: {row!r}"
+    cells = re.findall(r"<td(?:\s[^>]*)?>(.*?)</td>", row, re.DOTALL)
+    assert cells, f"S8 ({S8_IP}) row has no table cells: {row!r}"
+    assert cells[-1] == feed_change, f"S8 ({S8_IP}) expected Feed cell {feed_change!r}, got {cells[-1]!r}"
 
 
 def test_s9_outbound_direction_still_listed(render_diff_state: dict[str, dict[str, Capture]]) -> None:

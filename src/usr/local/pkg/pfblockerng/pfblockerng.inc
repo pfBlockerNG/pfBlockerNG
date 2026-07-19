@@ -10301,7 +10301,7 @@ function pfb_ip_render_query(array $fields): array {
 	}
 
 	// Determine if event IP still exists in Feed Aliastable -- builds the exact validate
-	// command convert_ip_log() execs (via its page-scope memo); NULL reproduces today's
+	// command pfb_ip_render_attribution() execs (via its page-scope memo); NULL reproduces today's
 	// `$validate = '';` no-exec guard (an 'Unknown' evaluated IP or feed name never ran a
 	// validate exec at all).
 	$validate_file_cmd = NULL;
@@ -10415,9 +10415,9 @@ function pfb_ip_render_attribution(array $fields): array {
 }
 
 
-// issue #809: promotes convert_ip_log()'s two function-static memo stores ($validate_memo /
-// $ip_miss_memo, pfblockerng_alerts.php) to a reference-returning accessor so the batched
-// prefetch pass below (pfb_ip_prefetch()) can seed them from OUTSIDE convert_ip_log(). Same
+// issue #809: exposes the render-attribution memo stores ($validate_memo / $ip_miss_memo)
+// through a reference-returning accessor so the batched prefetch pass below
+// (pfb_ip_prefetch()) can seed them before pfb_ip_render_attribution() consumes them. Same
 // one-page-load lifetime as before (a static local, just declared here). No reset is needed
 // between the three per-type IP tables rendered on one page load: every key is content-derived
 // (the exact validate command string, or "$host|$folder") and therefore stable regardless of
@@ -10640,8 +10640,9 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 // table's replay pass: the validate round (is the logged IP/CIDR still in its feed file), the
 // miss round (find_reported_header()'s exact + prefix/CIDR search), and the aliastables round
 // (which alias table now holds the resolved IP), each collapsed from one exec() per row to at
-// most one grep pass per distinct group. Seeds pfb_ip_render_memos() — convert_ip_log()
-// consults the same memo stores, falling back to its own per-row exec for anything unseeded.
+// most one grep pass per distinct group. Seeds pfb_ip_render_memos() —
+// pfb_ip_render_attribution() consults the same stores, falling back to a per-row exec for
+// anything unseeded.
 // $rows: one entry per buffered, filter-accepted row — 'host', 'folder', 'eval_ip_raw',
 // 'validate_file_cmd'/'validate_cmd' from pfb_ip_render_query() (both NULL when unused).
 function pfb_ip_prefetch(array $rows): void {
@@ -10657,7 +10658,7 @@ function pfb_ip_prefetch(array $rows): void {
 	$validate_groups = array();
 	foreach ($rows as $row) {
 		if ($row['validate_cmd'] === NULL) {
-			continue;	// mirrors convert_ip_log()'s own no-exec guard -- never validated
+			continue;	// mirrors pfb_ip_render_attribution()'s no-exec guard -- never validated
 		}
 		if (array_key_exists($row['validate_cmd'], $memos['validate'])) {
 			continue;	// already resolved (this row, or an identical earlier one)
@@ -10683,7 +10684,7 @@ function pfb_ip_prefetch(array $rows): void {
 		if ($lines === NULL) {
 			// B3 (issue #809 review): this group's pattern file could not be created/
 			// written -- leave every row in it UNSEEDED (never cache a false ''/no-hit)
-			// so convert_ip_log()'s own per-row exec fallback runs for them instead.
+			// so pfb_ip_render_attribution()'s per-row exec fallback runs for them instead.
 			continue;
 		}
 
@@ -10711,7 +10712,7 @@ function pfb_ip_prefetch(array $rows): void {
 	}
 
 	// Round A/B (batched find_reported_header()), grouped by folder. NOTE -- quirk
-	// PRESERVED, not introduced by this phase: convert_ip_log()'s own miss-round call is
+	// PRESERVED, not introduced by this phase: pfb_ip_render_attribution()'s miss-round call is
 	// `find_reported_header($host, $folder)`, no third argument, so it ALWAYS runs with
 	// $geoip=FALSE even for a GeoIP row (whose $folder already points at ccdir on its own,
 	// so the exact-match round is unaffected either way -- only the prefix round's
@@ -10763,8 +10764,8 @@ function pfb_ip_prefetch(array $rows): void {
 
 	// issue #833: '/dev/null' rides ahead of xargs's own appended file list, so
 	// grep always has >=2 files and always emits the "path:" prefix, matching
-	// convert_ip_log()'s own per-row aliastables exec (pfblockerng_alerts.php)
-	// which needs that same forced-prefix fix for its downstream alias-name parse.
+	// pfb_ip_render_attribution()'s per-row aliastables exec, which needs that same
+	// forced-prefix fix for its downstream alias-name parse.
 	$alias_lines = pfb_ip_prefetch_grep_lines(
 		"/usr/bin/find {$pfb['aliasdir']}/*.txt -type f | xargs {$pfb['grep']} -f",
 		'/dev/null 2>&1',
