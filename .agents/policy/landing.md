@@ -19,6 +19,8 @@ follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
 
 ## Fixed floors (never weaken)
 
+- **Landing means merged.** Commit, push, non-draft PR, reviews resolved, rebase-merge
+  (dev-only: push to `devel`). A commit alone is not a landing.
 - **Review before merge.** The merge step never starts until the review step has
   completed cleanly — the sequencing is load-bearing, not stylistic.
 - **Rebase-only merges.** Never a merge commit, never squash; history across

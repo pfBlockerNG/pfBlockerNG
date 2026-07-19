@@ -37,6 +37,12 @@ worktrees, landing, tests, issues, commits) carries over; *this package's mechan
   `src/`, `tests/`, or CI takes the full rebase-only-PR flow with independent review.
 - Merge PRs by rebase only; history stays strictly linear; rebase onto the latest base
   before every push, PR, or CI/smoke dispatch; clean the diff before you push.
+- Push every green, final commit to its remote branch immediately; work never stays only on
+  a local branch. Dev-only commits push to `devel`; code branches push to their own remote
+  branch.
+- Landing a change is not committing it: it means commit, push, open a non-draft PR, address
+  every review round, and rebase-merge it (dev-only classes land at the push to `devel`).
+  Report work as landed only after that completes; otherwise report its real state.
 - A behaviour change needs its test-first red→green proof: reproduction test executed RED
   before any production edit, frozen byte-identical, re-run GREEN unchanged — executed
   runs, never reasoned through.

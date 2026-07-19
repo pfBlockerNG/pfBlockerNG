@@ -84,6 +84,11 @@ what the change requires — strip debug logging, dead/commented-out experiments
 churned-then-reverted code, introduced-then-unused symbols, gratuitous reformatting, scratch
 files. Cheapest before the PR exists.
 
+**Push as soon as a commit is green and final.** A commit that exists only on this
+workstation is invisible and unbacked-up work; never let commits pile up locally waiting for
+some later batch push. Dev-only commits push straight to `devel`; code branches push to
+their own remote branch and carry on into the PR flow ([`landing.md`](landing.md)).
+
 ## Branch naming (ADRs and issues)
 
 **ADR** `adr/{NN}-{slug}`, **issue** `issue/{NN}-{slug}`; `{slug}` derives from the title
