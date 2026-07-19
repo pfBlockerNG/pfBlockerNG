@@ -41,7 +41,7 @@ final class PfbDownloadEntryVettingSkipLogTest extends TestCase
 	/** @var string[] temp files to remove in tearDown */
 	private array $tmpfiles = [];
 
-	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
+	/** @var array<string,array{bool,mixed}> saved $GLOBALS['pfb'] keys (key => [existed, value]) */
 	private array $saved = [];
 
 	protected function setUp(): void
@@ -49,8 +49,8 @@ final class PfbDownloadEntryVettingSkipLogTest extends TestCase
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_resolve_map'] = [];
 		$GLOBALS['pfb_test_configured_ips'] = [];
-		foreach (['log', 'errlog', 'pnow', 'runlog', 'runlog_active'] as $k) {
-			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
+		foreach (['log', 'errlog', 'pnow', 'runlog', 'runlog_active', 'cron_update'] as $k) {
+			$this->saved[$k] = [array_key_exists($k, $GLOBALS['pfb'] ?? []), $GLOBALS['pfb'][$k] ?? null];
 		}
 		// A stray 'runlog_active' from an earlier test must not mirror our writes
 		// into a third file this test never provisions.
@@ -60,11 +60,11 @@ final class PfbDownloadEntryVettingSkipLogTest extends TestCase
 	protected function tearDown(): void
 	{
 		unset($GLOBALS['config'], $GLOBALS['pfb_test_resolve_map'], $GLOBALS['pfb_test_configured_ips']);
-		foreach ($this->saved as $k => $prev) {
-			if ($prev === false) {
+		foreach ($this->saved as $k => [$existed, $value]) {
+			if (!$existed) {
 				unset($GLOBALS['pfb'][$k]);
 			} else {
-				$GLOBALS['pfb'][$k] = $prev;
+				$GLOBALS['pfb'][$k] = $value;
 			}
 		}
 		foreach ($this->tmpfiles as $f) {

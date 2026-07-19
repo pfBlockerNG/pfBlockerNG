@@ -699,6 +699,9 @@ def test_geoip_pages_render_the_seeded_csv_rows(
         return int(result.stdout.strip())
 
     failures_before = append_failure_count()
+    cron_include = "/usr/local/pkg/pfblockerng/pfblockerng_cron.inc"
+    installed = smoke_vm.ssh("test", "-f", cron_include)
+    assert installed.returncode == 0, f"installed cron include missing at {cron_include}: {installed.stderr!r}"
     ugc = smoke_vm.ssh(helpers.PHP_BIN, helpers.PFB_CLI, "ugc", timeout=600)
     assert ugc.returncode == 0, f"fresh local ugc failed: rc={ugc.returncode} {ugc.stderr!r} {ugc.stdout!r}"
     failures_after = append_failure_count()
@@ -724,8 +727,9 @@ def test_geoip_pages_render_the_seeded_csv_rows(
     }
     for path, needles in expected.items():
         resp = webui.get(path)
-        assert resp.status_code == 200, f"{path}: status {resp.status_code} != 200"
         body = resp.text
+        result = evaluate_render(path, resp.status_code, body, needles)
+        assert result.ok, f"{path}: generated GeoIP page failed the render oracle: {result.detail}"
         for needle in needles:
             assert needle in body, (
                 f"{path} is missing the seeded-data needle {needle!r} — the GeoIP fixture row it "
