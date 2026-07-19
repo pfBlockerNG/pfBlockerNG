@@ -988,8 +988,8 @@ def test_s8_alias_changed_cell_renders(render_diff_state: dict[str, dict[str, Ca
     assert f"<s>{S8_ALIAS_LOGGED}</s>" in row, f"S8 ({S8_IP}) expected the stale alias struck: {row!r}"
     assert "pfB_RVAliasA_v4" in row, f"S8 ({S8_IP}) expected the exact current alias pfB_RVAliasA_v4: {row!r}"
     assert "pfB_RVAliasZ_v4" not in row, f"S8 ({S8_IP}) unexpectedly attributed the longer Z decoy: {row!r}"
-    assert f"<s>{FEED_C8_NAME}</s>" in row, f"S8 ({S8_IP}) expected the stale feed {FEED_C8_NAME!r} struck: {row!r}"
-    assert FEED_A_NAME in row, f"S8 ({S8_IP}) expected the current feed {FEED_A_NAME!r}: {row!r}"
+    feed_change = f"<s>{FEED_C8_NAME}</s><br />{FEED_A_NAME}<br /><small>{S8_IP}</small>"
+    assert feed_change in row, f"S8 ({S8_IP}) expected the stale-to-current feed transition {feed_change!r}: {row!r}"
 
 
 def test_s9_outbound_direction_still_listed(render_diff_state: dict[str, dict[str, Capture]]) -> None:
