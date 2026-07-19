@@ -30,13 +30,17 @@ if [ -z "$project_root" ]; then
 	project_root=$(CDPATH='' cd "${git_cdup:-.}" && pwd -L) || exit 0
 fi
 filter_rel='.rtk/filters.toml'
-filter_path="$project_root/$filter_rel"
-[ -n "$project_root" ] && [ -f "$filter_path" ] && [ ! -L "$filter_path" ] || exit 0
+filter_dir="$project_root/.rtk"
+filter_path="$filter_dir/filters.toml"
+[ -n "$project_root" ] && [ -d "$filter_dir" ] && [ ! -L "$filter_dir" ] || exit 0
+[ -f "$filter_path" ] && [ ! -L "$filter_path" ] || exit 0
 filter_stage=$(git -C "$project_root" ls-files --stage -- "$filter_rel" 2>/dev/null) || exit 0
 case "$filter_stage" in
 	'100644 '*) ;;
 	*) exit 0 ;;
 esac
-git -C "$project_root" diff --quiet HEAD -- "$filter_rel" 2>/dev/null || exit 0
+filter_head=$(git -C "$project_root" rev-parse "HEAD:$filter_rel" 2>/dev/null) || exit 0
+filter_work=$(git -C "$project_root" hash-object -- "$filter_rel" 2>/dev/null) || exit 0
+[ "$filter_work" = "$filter_head" ] || exit 0
 (CDPATH='' cd "$project_root" && "$rtk_bin" trust >/dev/null 2>&1) || exit 0
 exit 0
