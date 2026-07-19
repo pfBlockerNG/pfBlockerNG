@@ -15,31 +15,6 @@ final class TickChildDeferralOrderingTest extends TestCase
 	private array $originalPfb = [];
 	private $lockFp = NULL;
 
-	public static function setUpBeforeClass(): void
-	{
-		$src = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php'
-		);
-		if ($src === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng.php');
-		}
-		if (!preg_match('/function pfblockerng_sync_cron\b.*?(?=\nfunction )/s', $src, $match)) {
-			throw new RuntimeException('test bootstrap: pfblockerng_sync_cron() body not found');
-		}
-
-		$function = preg_replace(
-			'/^function pfblockerng_sync_cron\b/',
-			'function pfb_issue_1315_ordering_sync_cron',
-			$match[0],
-			1,
-			$count
-		);
-		if ($function === NULL || $count !== 1) {
-			throw new RuntimeException('test bootstrap: failed to load pfblockerng_sync_cron() body');
-		}
-		eval($function);
-	}
-
 	protected function setUp(): void
 	{
 		$this->originalPfb = $GLOBALS['pfb'];
@@ -96,7 +71,7 @@ final class TickChildDeferralOrderingTest extends TestCase
 
 		$operations = [
 			$launchPos => static function (): void {
-				pfb_issue_1315_ordering_sync_cron();
+				pfblockerng_sync_cron();
 			},
 			$markPos => function () use ($interval, $now): void {
 				pfb_due_ledger_mark_ran_anchored('cron', $interval, $now, 'test-seed', 0, $this->dbdir);

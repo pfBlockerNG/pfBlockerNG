@@ -13,17 +13,16 @@ use PHPUnit\Framework\TestCase;
  * main log is statically unreachable (the caller returns before any download).
  * #811's shared helper pfb_log_feed_host_reject() re-runs the SAME guard
  * (pfb_feed_host_allowed) at every entry-reject site -- pfb_download()'s entry
- * branch AND pfb_update_check()'s upstream reject (pfblockerng.php, the site
- * the update flow actually hits; the live #811 fixup) -- landing the line in
+ * branch AND pfb_update_check()'s upstream reject -- landing the line in
  * the MAIN log iff the guard is why vetting failed.
  *
  * pfb_download()'s post-download stages (MIME/decompress) are not off-appliance
  * unit-testable (exec); the entry early-return path needs none of that, so it is
  * exercised directly here (the cURL loop itself is driven for real by
  * DownloadRetryBodyResetTest against a loopback fixture server).
- * pfb_update_check() lives in a www script the harness cannot load -- its call
- * site is covered by the helper-direct tests plus the live smoke test
- * (test_feed_internal_filter_blocks_then_allowlist_exempts).
+ * pfb_update_check() is loaded through the package umbrella and has a direct
+ * invalid-URL test below; the helper-direct tests retain guard-specific
+ * coverage.
  *
  * Scenario: an internal-resolving feed host rejected at entry vetting becomes
  * ALSO visible in the main log, header-scoped and reason-bearing -- but only
@@ -34,6 +33,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_log_feed_host_reject')]
 #[CoversFunction('pfb_download')]
+#[CoversFunction('pfb_update_check')]
 #[CoversFunction('pfb_feed_host_allowed')]
 #[CoversFunction('pfb_feed_filter_enabled')]
 final class PfbDownloadEntryVettingSkipLogTest extends TestCase
@@ -250,8 +250,8 @@ final class PfbDownloadEntryVettingSkipLogTest extends TestCase
 
 	/**
 	 * Helper-direct (the #811 live fixup): pfb_log_feed_host_reject() is what
-	 * every entry-reject site calls -- including pfb_update_check() in the www
-	 * script the harness cannot load. An internal-resolving URL logs the exact
+	 * every entry-reject site calls -- including pfb_update_check(). An
+	 * internal-resolving URL logs the exact
 	 * header-scoped, reason-bearing line at the caller's logtype.
 	 */
 	public function testHelperLogsHeaderScopedSkipLineForInternalHost(): void
@@ -274,6 +274,33 @@ final class PfbDownloadEntryVettingSkipLogTest extends TestCase
 			$logged,
 			"expected the header-scoped skip line in the main log, got <{$logged}>"
 		);
+	}
+
+	public function testUpdateCheckInvalidUrlLogsAndReturnsBeforeDownload(): void
+	{
+		$GLOBALS['pfb_test_resolve_map']['public.update.check.'] = [
+			['type' => 'A', 'data' => '203.0.113.22'],
+		];
+		$log = $this->tempFile('pfb_update_check_log_');
+		$GLOBALS['pfb']['log'] = $log;
+		$GLOBALS['pfb']['errlog'] = $this->tempFile('pfb_update_check_errlog_');
+		$GLOBALS['pfb']['cron_update'] = TRUE;
+
+		pfb_update_check(
+			'updatechecktest',
+			'gopher://public.update.check/list.txt',
+			sys_get_temp_dir(),
+			sys_get_temp_dir(),
+			FALSE,
+			'',
+			'_v4',
+			FALSE
+		);
+
+		$logged = (string) file_get_contents($log);
+		$this->assertFalse($GLOBALS['pfb']['cron_update'], 'invalid URL must leave cron_update disabled');
+		$this->assertStringContainsString('[ updatechecktest ]', $logged);
+		$this->assertStringContainsString('Invalid URL. Terminating Download!', $logged);
 	}
 
 	/**

@@ -14,13 +14,10 @@ use PHPUnit\Framework\TestCase;
  * $pflex use), so this pins warning hygiene and the per-row invariant,
  * not a TLS behaviour change.
  *
- * pfblockerng.php carries top-level execution and is never require()'d
- * off-appliance (the PHPUnit bootstrap doesn't load www/ dispatcher
- * scripts), and pfb_update_check() performs real network downloads, so
- * driving pfblockerng_sync_cron() behaviourally is infeasible here. This suite
- * instead reads the function's source text and pins the ORDER of the two
- * statements: the first `$pflex = FALSE` derivation line must precede the
- * first `pfb_update_check(` call site (the .fail retry) textually.
+ * The cron module is loaded through the package umbrella; this suite reads
+ * its source text and pins the ORDER of the two statements: the first
+ * `$pflex = FALSE` derivation line must precede the first `pfb_update_check(`
+ * call site (the .fail retry) textually.
  * Whole-line comments are stripped before scanning so a comment mentioning
  * either token cannot satisfy or break the ordering assertion.
  */
@@ -31,14 +28,14 @@ final class SyncCronPflexOrderTest extends TestCase
 	public static function setUpBeforeClass(): void
 	{
 		$src = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php'
+			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc'
 		);
 		if ($src === false) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng.php');
+			throw new RuntimeException('test bootstrap: failed to read pfblockerng_cron.inc');
 		}
 
 		if (!preg_match(
-			'/function pfblockerng_sync_cron\b.*?(?=\nfunction )/s',
+			'/function pfblockerng_sync_cron\b.*?(?=\nfunction |\z)/s',
 			$src,
 			$m
 		)) {

@@ -1166,7 +1166,8 @@ FreeBSD-ports RUN_DEPENDS so its presence is contractual, not incidental. PHP ne
 
 **Where it lives:** the detector + download (`pfblockerng.inc` `pfb_content_hash` / `pfb_hash_read`
 / `pfb_hash_write` / `pfb_local_feed_changed` / `pfb_validator_read` / `pfb_validator_write` /
-`pfb_conditional_get_decision`; `pfb_download`) and `pfblockerng.php` (`pfb_update_check`).
+`pfb_conditional_get_decision`; `pfb_download`) and `pfblockerng_cron.inc`
+(`pfb_update_check`; `pfblockerng_sync_cron`).
 Off-appliance pinned by `tests/php/FeedChangeHashHelpersTest.php` +
 `tests/php/ConditionalGetHelpersTest.php`; the live `304`/ETag + same-second detection legs are
 ADR-04 smoke (`tests/smoke/test_smoke_feeds.py`).
