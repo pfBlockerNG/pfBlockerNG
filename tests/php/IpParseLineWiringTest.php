@@ -35,5 +35,26 @@ final class IpParseLineWiringTest extends TestCase
 		$this->assertStringNotContainsString("if (\$list['vtype'] == '_v6'", $loop);
 		$this->assertStringNotContainsString('preg_match_all($pfb[\'ipv4\']', $loop);
 		$this->assertStringNotContainsString('preg_match_all($pfb[\'ipv6\']', $loop);
+
+		$replayContract = [
+			'normalized line'       => '$line = $parsed_line[\'line\'];',
+			'ordered messages'      => 'foreach ($parsed_line[\'messages\'] as $message)',
+			'message logging'       => 'pfb_logger($message, 1);',
+			'ordered entries'       => 'foreach ($parsed_line[\'entries\'] as $entry)',
+			'newline-delimited data' => '$ip_data .= $entry . "\\n";',
+			'suppression state'     => '$ip_suppressed = $ip_suppressed || $parsed_line[\'suppressed\'];',
+			'parse-failure count'   => '$parse_fail += $parsed_line[\'parse_fail_delta\'];',
+			'detailed-failure gate' => 'if ($parsed_line[\'detailed_parse_fail\'])',
+			'detailed-failure data' => 'pfb_parse_fail_log($header, $line, $raw_line, $pfb[\'ip_parse_err\'], $ip_lineno, TRUE);',
+		];
+		foreach ($replayContract as $effect => $needle) {
+			$this->assertStringContainsString($needle, $loop, "missing parser replay effect: {$effect}");
+		}
+		$this->assertStringContainsString('$ip_lineno++;', $loop);
+		$this->assertStringContainsString('pfb_ip_parse_fail_warn($parse_fail, $header);', self::$source);
+		$this->assertStringContainsString(
+			"if (empty(\$ip_data) && \$ip_suppressed && \$list['vtype'] == '_v6')",
+			self::$source
+		);
 	}
 }
