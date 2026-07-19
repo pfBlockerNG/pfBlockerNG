@@ -1,8 +1,8 @@
 #!/bin/sh
 # rtk-install.sh — SessionStart hook: make RTK available, then trust the checked-in filters
-# from the current worktree. When absent, install the checksum-verified upstream binary to
-# ~/.local/bin, best-effort symlink it into /usr/local/bin, and update shell profiles for the
-# next shell. Never fails session start. RTK_VERSION pins a release.
+# from the current worktree. When absent, verify the immutable upstream installer pinned below,
+# use it to install the pinned release to ~/.local/bin, best-effort symlink it into
+# /usr/local/bin, and update shell profiles for the next shell. Never fails session start.
 set -u
 
 hook_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd -L) || exit 0
@@ -16,7 +16,24 @@ if [ -z "$rtk_bin" ] && [ -x "$HOME/.local/bin/rtk" ]; then
 fi
 
 if [ -z "$rtk_bin" ]; then
-	{ curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh; } >/dev/null 2>&1 || exit 0
+	rtk_version='v0.43.0'
+	rtk_installer_commit='5a7880d404db8364d602f2ecdc41dd790f64013f'
+	rtk_installer_sha256='d6eb73a772903e13ff34ee1be8a8b24e896ba9a978f20d2279a08b4083ea6f77'
+	rtk_installer=$(mktemp "${TMPDIR:-/tmp}/rtk-install.XXXXXX") || exit 0
+	trap 'rm -f "$rtk_installer"' 0
+	trap 'exit 0' HUP INT TERM
+	curl -fsSL "https://raw.githubusercontent.com/rtk-ai/rtk/${rtk_installer_commit}/install.sh" \
+		-o "$rtk_installer" >/dev/null 2>&1 || exit 0
+	if command -v sha256sum >/dev/null 2>&1; then
+		rtk_installer_actual=$(sha256sum "$rtk_installer" 2>/dev/null) || exit 0
+	elif command -v shasum >/dev/null 2>&1; then
+		rtk_installer_actual=$(shasum -a 256 "$rtk_installer" 2>/dev/null) || exit 0
+	else
+		exit 0
+	fi
+	rtk_installer_actual=${rtk_installer_actual%% *}
+	[ "$rtk_installer_actual" = "$rtk_installer_sha256" ] || exit 0
+	{ RTK_VERSION="$rtk_version" RTK_SKIP_CHECKSUM=0 sh "$rtk_installer"; } >/dev/null 2>&1 || exit 0
 
 	[ -x "$HOME/.local/bin/rtk" ] || exit 0
 	rtk_bin="$HOME/.local/bin/rtk"

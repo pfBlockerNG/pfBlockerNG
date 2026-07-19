@@ -48,6 +48,81 @@ EOF
   End
 End
 
+Describe 'rtk fallback installer integrity'
+  hook="${PFB_ROOT}/.claude/hooks/rtk-install.sh"
+  fixture="${PFB_ROOT}/tests/shell/fixtures/rtk-install-v0.43.0.sh"
+
+  setup() {
+    scrub_git_env
+    work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rtk-fallback.XXXXXX")"
+    home="${work}/home"
+    shim="${work}/shim"
+    curl_log="${work}/curl.log"
+    executed="${work}/executed"
+    mkdir -p "${home}" "${shim}"
+    cat > "${shim}/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RTK_CURL_LOG"
+out=''
+url=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o)
+      shift
+      out="$1"
+      ;;
+    http*) url="$1" ;;
+  esac
+  shift
+done
+
+case "$url" in
+  *raw.githubusercontent.com/rtk-ai/rtk/*/install.sh)
+    if [ "${RTK_HOSTILE:-0}" = 1 ]; then
+      payload='touch "$RTK_EXECUTED_MARKER"'
+      if [ -n "$out" ]; then
+        printf '%s\n' "$payload" > "$out"
+      else
+        printf '%s\n' "$payload"
+      fi
+    elif [ -n "$out" ]; then
+      cp "$RTK_INSTALLER_FIXTURE" "$out"
+    else
+      cat "$RTK_INSTALLER_FIXTURE"
+    fi
+    exit 0
+    ;;
+  *) exit 22 ;;
+esac
+EOF
+    chmod +x "${shim}/curl"
+  }
+
+  cleanup() {
+    rm -rf "${work}"
+  }
+
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'executes the verified immutable installer with a pinned release'
+    When run env HOME="${home}" PATH="${shim}:/usr/bin:/bin" RTK_CURL_LOG="${curl_log}" \
+      RTK_INSTALLER_FIXTURE="${fixture}" RTK_EXECUTED_MARKER="${executed}" \
+      CLAUDE_PROJECT_DIR="${work}" sh "${hook}"
+    The status should be success
+    The contents of file "${curl_log}" should include 'rtk/5a7880d404db8364d602f2ecdc41dd790f64013f/install.sh'
+    The contents of file "${curl_log}" should include '/releases/download/v0.43.0/rtk-'
+  End
+
+  It 'rejects changed installer bytes without executing them'
+    When run env HOME="${home}" PATH="${shim}:/usr/bin:/bin" RTK_CURL_LOG="${curl_log}" \
+      RTK_INSTALLER_FIXTURE="${fixture}" RTK_EXECUTED_MARKER="${executed}" RTK_HOSTILE=1 \
+      CLAUDE_PROJECT_DIR="${work}" sh "${hook}"
+    The status should be success
+    The file "${executed}" should not be exist
+  End
+End
+
 verify_vendor_rtk_bootstrap() {
   python3 - "$PFB_ROOT" <<'PY'
 import hashlib
