@@ -3773,6 +3773,26 @@
             }
         ]
     },
+    "pfb_ip_parse_line": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "raw_line",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "config",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_ip_prefetch": {
         "returnsRef": false,
         "returnType": "void",

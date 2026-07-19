@@ -55,6 +55,193 @@ function pfb_sync_run_plan(array $request, bool $no_updates, bool $cron_tick, st
 	return $plan;
 }
 
+/**
+ * Parse one generic IP-feed line without touching run state or emitting output.
+ * @param array{vtype:string,pftype:string,custom:bool,cidr_floor_v4:int|string,cidr_floor_v6:int|string,suppression:string,range:string,ipv4:string,ipv6:string} $config
+ * @return array{entries:list<string>,line:string,suppressed:bool,parse_fail_delta:int,detailed_parse_fail:bool,messages:list<string>}
+ */
+function pfb_ip_parse_line(string $raw_line, array $config): array {
+	$line = trim($raw_line);
+	$result = [
+		'entries'             => [],
+		'line'                => $line,
+		'suppressed'          => FALSE,
+		'parse_fail_delta'    => 0,
+		'detailed_parse_fail' => FALSE,
+		'messages'            => [],
+	];
+	if (pfb_is_blank_or_comment_line($line)) {
+		return $result;
+	}
+
+	$vtype       = $config['vtype'];
+	$pftype      = $config['pftype'];
+	$custom      = $config['custom'];
+	$pfbcidr     = $config['cidr_floor_v4'];
+	$pfbcidr_v6  = $config['cidr_floor_v6'];
+	$suppression = $config['suppression'];
+	$parse_error = FALSE;
+
+	if ($vtype == '_v4' && $pftype == 'auto') {
+		if (strpos($line, '-') !== FALSE && strpos($line, ':') !== FALSE) {
+			$line = str_replace(':', '', strstr($line, ':', FALSE));
+		}
+		if (strpos($line, ' ') !== FALSE) {
+			$line = strstr($line, ' ', TRUE);
+		}
+		if (strpos($line, '#') !== FALSE) {
+			$line = str_replace('#', '', strstr($line, '#', TRUE));
+		}
+		$line = trim($line);
+
+		if (strpos($line, '-') !== FALSE) {
+			$matches = explode('-', $line);
+			if (count($matches) == 2) {
+				$a_cidr = ip_range_to_subnet_array($matches[0], $matches[1]);
+				if (!empty($a_cidr)) {
+					foreach ($a_cidr as $cidr) {
+						$sanitized = pfb_sanitize_ipaddr($cidr, $custom, $pfbcidr, $suppression);
+						$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
+						if (!empty($sanitized['address'])) {
+							if (validate_ipv4($sanitized['address'])) {
+								$result['entries'][] = $sanitized['address'];
+							} else {
+								$parse_error = TRUE;
+							}
+						}
+					}
+					if (!$parse_error) {
+						$result['line'] = $line;
+						return $result;
+					}
+				}
+			} else {
+				$parse_error = TRUE;
+			}
+		}
+
+		if (!$parse_error) {
+			$sanitized = pfb_sanitize_ipaddr($line, $custom, $pfbcidr, $suppression);
+			$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
+			if (!empty($sanitized['address']) && validate_ipv4($sanitized['address'])) {
+				$result['entries'][] = $sanitized['address'];
+				$result['line'] = $line;
+				return $result;
+			}
+			$parse_error = TRUE;
+		}
+	}
+
+	if ($vtype == '_v4' && ($pftype == 'regex' || $parse_error)) {
+		if (strpos($raw_line, '-') !== FALSE && strpos($raw_line, '.') !== FALSE &&
+			preg_match($config['range'], $raw_line, $matches)) {
+			$a_cidr = ip_range_to_subnet_array($matches[1], $matches[2]);
+			if (!empty($a_cidr)) {
+				foreach ($a_cidr as $cidr) {
+					$sanitized = pfb_sanitize_ipaddr($cidr, $custom, $pfbcidr, $suppression);
+					$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
+					if (!empty($sanitized['address']) && validate_ipv4($sanitized['address'])) {
+						$result['entries'][] = $sanitized['address'];
+					} else {
+						$result['parse_fail_delta']++;
+					}
+				}
+			}
+			$result['line'] = $line;
+			return $result;
+		}
+
+		if (substr_count($raw_line, '.') >= 3 && preg_match_all($config['ipv4'], $raw_line, $matches)) {
+			foreach (array_unique($matches[0]) as $match) {
+				if (strpos($raw_line, 'cf-footer-item') === FALSE) {
+					$sanitized = pfb_sanitize_ipaddr($match, $custom, $pfbcidr, $suppression);
+					$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
+					if (!empty($sanitized['address']) && validate_ipv4($sanitized['address'])) {
+						$result['entries'][] = $sanitized['address'];
+					}
+				}
+			}
+			$result['line'] = $line;
+			return $result;
+		}
+	}
+
+	if ($vtype == '_v6') {
+		if ($pftype == 'auto' && strpos($line, ':') !== FALSE) {
+			if (strpos($line, '#') !== FALSE) {
+				$line = str_replace('#', '', strstr($line, '#', TRUE));
+			}
+			if (validate_ipv6($line)) {
+				$sanitized = pfb_sanitize_ipaddr_v6($line, $custom, $pfbcidr_v6, $suppression);
+				$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
+				if (!empty($sanitized['address'])) {
+					$result['entries'][] = $sanitized['address'];
+				} else {
+					$result['suppressed'] = TRUE;
+				}
+				$result['line'] = $line;
+				return $result;
+			}
+		}
+
+		if (strpos($line, '-') !== FALSE && strpos($line, ':') !== FALSE) {
+			$matches = explode('-', $line);
+			if (count($matches) == 2) {
+				$a_cidr = ip_range_to_subnet_array($matches[0], $matches[1]);
+				if (!empty($a_cidr)) {
+					foreach ($a_cidr as $cidr) {
+						if (!empty($cidr)) {
+							if (validate_ipv6($cidr)) {
+								$sanitized = pfb_sanitize_ipaddr_v6($cidr, $custom, $pfbcidr_v6, $suppression);
+								$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
+								if (!empty($sanitized['address'])) {
+									$result['entries'][] = $sanitized['address'];
+								} else {
+									$result['suppressed'] = TRUE;
+								}
+							} else {
+								$parse_error = TRUE;
+							}
+						}
+					}
+				}
+				if (!$parse_error) {
+					$result['line'] = $line;
+					return $result;
+				}
+			} else {
+				$parse_error = TRUE;
+			}
+		}
+
+		if (strpos($raw_line, ':') !== FALSE && preg_match_all($config['ipv6'], $raw_line, $matches)) {
+			foreach (array_unique($matches[0]) as $match) {
+				if (strpos($match, '#') !== FALSE) {
+					$match = str_replace('#', '', strstr($match, '#', TRUE));
+				}
+				if (strpos($raw_line, 'cf-footer-item') === FALSE && validate_ipv6($match)) {
+					$sanitized = pfb_sanitize_ipaddr_v6($match, $custom, $pfbcidr_v6, $suppression);
+					$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
+					if (!empty($sanitized['address'])) {
+						$result['entries'][] = $sanitized['address'];
+					} else {
+						$result['suppressed'] = TRUE;
+					}
+				}
+			}
+			$result['line'] = $line;
+			return $result;
+		}
+	}
+
+	if (!empty($line) && !preg_match('/[a-zA-Z,;|\"\'?]/', $line) && !pfb_ip_is_opposite_family($line, $vtype)) {
+		$result['parse_fail_delta']++;
+		$result['detailed_parse_fail'] = TRUE;
+	}
+	$result['line'] = $line;
+	return $result;
+}
+
 // Main pfBlockerNG function
 function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
@@ -3025,225 +3212,29 @@ function sync_package_pfblockerng($cron='') {
 									// issue #1004: incremented every iteration, regardless of outcome
 									$ip_lineno++;
 
-									// Record original line for regex matching, if required.
-									$oline = $line;
-
-									// Remove any leading/trailing whitespaces
-									$line = trim($line);
-
-									// Remove commentlines and blank lines (mirrors the DNSBL hosts-
-									// format skip -- feeds mix '#'/'!'/'//' comment conventions
-									// regardless of the list's own declared format).
-									if (pfb_is_blank_or_comment_line($line)) {
-										continue;
+									$raw_line = $line;
+									$parsed_line = pfb_ip_parse_line($raw_line, [
+										'vtype'         => $list['vtype'],
+										'pftype'        => $pftype,
+										'custom'        => $custom,
+										'cidr_floor_v4' => $pfbcidr,
+										'cidr_floor_v6' => $pfbcidr_v6,
+										'suppression'   => $pfb['supp'],
+										'range'         => $pfb['range'],
+										'ipv4'          => $pfb['ipv4'],
+										'ipv6'          => $pfb['ipv6'],
+									]);
+									$line = $parsed_line['line'];
+									foreach ($parsed_line['messages'] as $message) {
+										pfb_logger($message, 1);
 									}
-
-									$parse_error = FALSE;
-									if ($list['vtype'] == '_v4' && $pftype == 'auto') {
-
-										// IBlock - parser sample ( JKS Media, LLC:4.53.2.12-4.53.2.15 )
-										// Remove leading domain name details
-										if (strpos($line, '-') !== FALSE && strpos($line, ':') !== FALSE) {
-											$line = str_replace(':', '', strstr($line, ':', FALSE));
-										}
-
-										// If 'space' character found, remove characters after space
-										if (strpos($line, ' ') !== FALSE) {
-											$line = strstr($line, ' ', TRUE);
-										}
-
-										// If '#' character found, remove characters after '#'
-										if (strpos($line, '#') !== FALSE) {
-											$line = str_replace('#', '', strstr($line, '#', TRUE));
-										}
-
-										// Remove any leading/trailing whitespaces
-										$line = trim($line);
-
-										// Range parser
-										if (strpos($line, '-') !== FALSE) {
-											$matches = explode('-', $line);
-											if (count($matches) == 2) {
-												$a_cidr = ip_range_to_subnet_array($matches[0],$matches[1]);
-												if (!empty($a_cidr)) {
-													foreach ($a_cidr as $cidr) {
-														$cidr = sanitize_ipaddr($cidr, $custom, $pfbcidr);
-														if (!empty($cidr)) {
-															if (validate_ipv4($cidr)) {
-																$ip_data .= $cidr . "\n";
-															}
-															else {
-																$parse_error = TRUE;
-															}
-														}
-													}
-													if (!$parse_error) {
-														continue;
-													}
-												}
-											}
-											else {
-												$parse_error = TRUE;
-											}
-										}
-
-										if (!$parse_error) {
-											// Single address parser
-											$parsed = sanitize_ipaddr($line, $custom, $pfbcidr);
-											if (validate_ipv4($parsed)) {
-												$ip_data .= $parsed . "\n";
-												continue;
-											}
-											else {
-												$parse_error = TRUE;
-											}
-										}
+									foreach ($parsed_line['entries'] as $entry) {
+										$ip_data .= $entry . "\n";
 									}
-
-									if ($list['vtype'] == '_v4' && ($pftype == 'regex' || $parse_error)) {
-
-										// Use regex as last alternative.
-
-										if (strpos($oline, '-') !== FALSE && strpos($oline, '.') !== FALSE) {
-											// Network range 192.168.0.0-192.168.0.254
-											if (preg_match($pfb['range'], $oline, $matches)) {
-												$a_cidr = ip_range_to_subnet_array($matches[1], $matches[2]);
-												if (!empty($a_cidr)) {
-													foreach ($a_cidr as $cidr) {
-														$cidr = sanitize_ipaddr($cidr, $custom, $pfbcidr);
-														if (validate_ipv4($cidr)) {
-															$ip_data .= $cidr . "\n";
-														}
-														else {
-															// issue #1004: detail sink deliberately Site-B-only (per-line);
-															// this per-CIDR path can fire many times per source line.
-															$parse_fail++;
-														}
-													}
-												}
-												continue;
-											}
-										}
-
-										// IPv4/CIDR format 192.168.0.0 | 192.168.0.0/16
-										// A match requires 3 literal dots; skip the regex engine on lines that cannot contain one.
-										if (substr_count($oline, '.') >= 3 && preg_match_all($pfb['ipv4'], $oline, $matches)) {
-											$matches = array_unique($matches[0]);
-											foreach ($matches as $match) {
-
-												// Workaround to skip cloudflare error pages
-												if (strpos($oline, 'cf-footer-item') === FALSE) {
-													$parsed = sanitize_ipaddr($match, $custom, $pfbcidr);
-													if (validate_ipv4($parsed)) {
-														$ip_data .= $parsed . "\n";
-													}
-												}
-											}
-											continue;
-										}
-									}
-
-									if ($list['vtype'] == '_v6') {
-										// Auto IPv6 parser
-										if ($pftype == 'auto') {
-											if (strpos($line, ':') !== FALSE) {
-
-												// Remove any comments
-												if (strpos($line, '#') !== FALSE) {
-													$line = str_replace('#', '', strstr($line, '#', TRUE));
-												}
-
-												if (validate_ipv6($line)) {
-													$parsed = sanitize_ipaddr_v6($line, $custom, $pfbcidr_v6);
-													if (!empty($parsed)) {
-														$ip_data .= $parsed . "\n";
-													}
-													else {
-														$ip_suppressed = TRUE;
-													}
-													continue;
-												}
-											}
-										}
-
-										// Range parser
-										if (strpos($line, '-') !== FALSE && strpos($line, ':') !== FALSE) {
-											$matches = explode('-', $line);
-											if (count($matches) == 2) {
-												$a_cidr = ip_range_to_subnet_array($matches[0],$matches[1]);
-												if (!empty($a_cidr)) {
-													foreach ($a_cidr as $cidr) {
-														if (!empty($cidr)) {
-															if (validate_ipv6($cidr)) {
-																$parsed = sanitize_ipaddr_v6($cidr, $custom, $pfbcidr_v6);
-																if (!empty($parsed)) {
-																	$ip_data .= $parsed . "\n";
-																}
-																else {
-																	$ip_suppressed = TRUE;
-																}
-															}
-															else {
-																$parse_error = TRUE;
-															}
-														}
-													}
-												}
-												if (!$parse_error) {
-													continue;
-												}
-											}
-											else {
-												$parse_error = TRUE;
-											}
-										}
-
-										// IPv6 Regex parser
-										// A match requires a literal colon; skip the regex engine on colon-less lines.
-										if (strpos($oline, ':') !== FALSE && preg_match_all($pfb['ipv6'], $oline, $matches)) {
-											$matches = array_unique($matches[0]);
-											foreach ($matches as $match) {
-
-												// Remove any comments
-												if (strpos($match, '#') !== FALSE) {
-													$match = str_replace('#', '', strstr($match, '#', TRUE));
-												}
-
-												// Workaround to skip cloudflare error pages
-												if (strpos($oline, 'cf-footer-item') === FALSE) {
-													if (validate_ipv6($match)) {
-														$parsed = sanitize_ipaddr_v6($match, $custom, $pfbcidr_v6);
-														if (!empty($parsed)) {
-															$ip_data .= $parsed . "\n";
-														}
-														else {
-															$ip_suppressed = TRUE;
-														}
-													}
-												}
-											}
-											// Mirrors the IPv4 regex-parser sibling block above: without this,
-											// a line the regex already matched and collected still falls
-											// through to the parse-fail heuristic below and is double-counted.
-											continue;
-										}
-									}
-
-									// Check for parse failures
-									if (!empty($line) && !preg_match('/[a-zA-Z,;|\"\'?]/', $line)) {
-
-										// A syntactically valid address of the list's OTHER family (a
-										// hex-letter-free IPv6 line in a '_v4' list, or an IPv4 line in
-										// a '_v6' list) is not a parse failure -- mixed-family feeds are
-										// common, and the family this list doesn't collect is silently
-										// skipped either way (same as any hex-lettered opposite-family
-										// address already is, uncounted). Only flag genuine garbage.
-										$other_family_addr = pfb_ip_is_opposite_family($line, $list['vtype']);
-
-										if (!$other_family_addr) {
-											$parse_fail++;
-											pfb_parse_fail_log($header, $line, $oline, $pfb['ip_parse_err'], $ip_lineno, TRUE);
-										}
+									$ip_suppressed = $ip_suppressed || $parsed_line['suppressed'];
+									$parse_fail += $parsed_line['parse_fail_delta'];
+									if ($parsed_line['detailed_parse_fail']) {
+										pfb_parse_fail_log($header, $line, $raw_line, $pfb['ip_parse_err'], $ip_lineno, TRUE);
 									}
 								}
 							}
