@@ -19,6 +19,7 @@
                  warning per test, and warnings fail the run). Coverage itself stays
                  informational for now (no enforced floor — see issue #39 / #38). -->
             <file>src/usr/local/pkg/pfblockerng/pfblockerng.inc</file>
+            <file>src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc</file>
             <file>src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc</file>
             <file>src/usr/local/www/pfblockerng/pfblockerng_alerts.php</file>
             <file>src/usr/local/www/pfblockerng/pfblockerng_log.php</file>
