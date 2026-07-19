@@ -20,6 +20,7 @@ printf '%s\n' "${INCLUDE_PATTERNS:-UNSET}"
 printf '%s\n' "${TOKEN_SAVIOR_MAX_FILE_SIZE:-UNSET}"
 printf '%s\n' "${TOKEN_SAVIOR_CLIENT:-UNSET}"
 printf '%s\n' "${WORKSPACE_ROOTS:-UNSET}"
+printf '%s\n' "${CLAUDE_PROJECT_ROOT:-UNSET}"
 EOF
     chmod +x "${WORK}/venv/bin/token-savior"
     default_source="$(sed -n 's/^TS_SOURCE="\${TS_SOURCE:-\(.*\)}"$/\1/p' "${SCRIPT}")"
@@ -27,6 +28,7 @@ EOF
     # silently send every example down the slow venv-rebuild path.
     [ -n "${default_source}" ] || { echo "TS_SOURCE extraction failed — launcher line reformatted?" >&2; return 1; }
     printf '%s\n' "${default_source}" > "${WORK}/venv/.pfb-ts-source"
+    ln -s "$(command -v python3)" "${WORK}/venv/bin/python3"
   }
 
   cleanup() { [ -n "${WORK}" ] && rm -rf "${WORK}"; [ ! -d "${WORK}" ] || return 1; }
@@ -72,10 +74,40 @@ EOF
     The line 3 of output should equal 'codex'
   End
 
-  It 'uses the Git worktree root when launched from a subdirectory'
+  It 'registers every usable worktree and makes the current worktree active'
+    mkdir -p "${WORK}/repo root" "${WORK}/detached tree" "${WORK}/prunable tree" "${WORK}/shim"
+    cat > "${WORK}/shim/git" << 'EOF'
+#!/bin/sh
+case "$*" in
+  'rev-parse --show-toplevel') printf '%s\n' "${FAKE_DETACHED}" ;;
+  'worktree list --porcelain -z')
+    printf 'worktree %s\0HEAD 1111111\0branch refs/heads/main\0\0' "${FAKE_PRIMARY}"
+    printf 'worktree %s\0HEAD 2222222\0detached\0\0' "${FAKE_DETACHED}"
+    printf 'worktree %s\0HEAD 3333333\0detached\0\0' "${FAKE_MISSING}"
+    printf 'worktree %s\0HEAD 4444444\0detached\0prunable gitdir file points to non-existent location\0\0' "${FAKE_PRUNABLE}"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+    chmod +x "${WORK}/shim/git"
+    When run env PATH="${WORK}/shim:${PATH}" FAKE_PRIMARY="${WORK}/repo root" FAKE_DETACHED="${WORK}/detached tree" FAKE_MISSING="${WORK}/missing tree" FAKE_PRUNABLE="${WORK}/prunable tree" TS_VENV="${WORK}/venv" sh "${SCRIPT}"
+    The status should be success
+    The line 4 of output should equal "${WORK}/repo root,${WORK}/detached tree"
+    The line 5 of output should equal "${WORK}/detached tree"
+  End
+
+  It 'preserves explicit workspace roots and active-root hints'
+    When run env WORKSPACE_ROOTS='/custom/one,/custom/two' CLAUDE_PROJECT_ROOT='/custom/two' TS_VENV="${WORK}/venv" sh "${SCRIPT}"
+    The status should be success
+    The line 4 of output should equal '/custom/one,/custom/two'
+    The line 5 of output should equal '/custom/two'
+  End
+
+  It 'uses the Git worktree root as the active root when launched from a subdirectory'
     When run sh -c 'unset WORKSPACE_ROOTS GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX; cd "$1" && TS_VENV="$2" exec sh "$3"' _ "${PFB_ROOT}/tests" "${WORK}/venv" "${SCRIPT}"
     The status should be success
-    The line 4 of output should equal "${PFB_ROOT}"
+    The line 4 of output should include "${PFB_ROOT}"
+    The line 5 of output should equal "${PFB_ROOT}"
   End
 End
 

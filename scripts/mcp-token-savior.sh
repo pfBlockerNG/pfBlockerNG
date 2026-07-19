@@ -9,8 +9,10 @@
 # a mkdir lock serializes concurrent sessions racing that rebuild (the venv is one shared
 # per-user cache). Requires python3 >= 3.11 and git (pip installs from a git URL).
 # Env (all optional):
-#   WORKSPACE_ROOTS        comma-separated project roots (default: Git worktree root
-#                          when resolvable, otherwise current directory)
+#   WORKSPACE_ROOTS        comma-separated project roots (default: every usable worktree
+#                          of the current Git repository, otherwise current directory)
+#   CLAUDE_PROJECT_ROOT    active root hint understood by Token Savior (default: current
+#                          Git worktree; applies to Claude and Codex clients)
 #   TOKEN_SAVIOR_CLIENT    telemetry client label (default: claude-code; Codex config
 #                          passes codex explicitly)
 #   TOKEN_SAVIOR_PROFILE   server tool profile (default: optimized)
@@ -82,10 +84,33 @@ if command -v git >/dev/null 2>&1; then
 	repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
 	[ -z "$repo_root" ] || workspace_root=$repo_root
 fi
-WORKSPACE_ROOTS="${WORKSPACE_ROOTS:-$workspace_root}"
+if [ -z "${WORKSPACE_ROOTS:-}" ]; then
+	WORKSPACE_ROOTS=$workspace_root
+	if command -v git >/dev/null 2>&1 && [ -x "$venv/bin/python3" ]; then
+		worktree_roots=$(git worktree list --porcelain -z 2>/dev/null | "$venv/bin/python3" -c '
+import os
+import sys
+
+roots = []
+for record in sys.stdin.buffer.read().split(b"\0\0"):
+    fields = record.split(b"\0")
+    if any(field.startswith(b"prunable") for field in fields):
+        continue
+    path = next((field[9:] for field in fields if field.startswith(b"worktree ")), None)
+    if path is None:
+        continue
+    root = os.path.abspath(os.fsdecode(path))
+    if os.path.isdir(root):
+        roots.append(root)
+sys.stdout.write(",".join(roots))
+' || true)
+		[ -z "$worktree_roots" ] || WORKSPACE_ROOTS=$worktree_roots
+	fi
+fi
+CLAUDE_PROJECT_ROOT="${CLAUDE_PROJECT_ROOT:-$workspace_root}"
 TOKEN_SAVIOR_CLIENT="${TOKEN_SAVIOR_CLIENT:-claude-code}"
 TOKEN_SAVIOR_PROFILE="${TOKEN_SAVIOR_PROFILE:-optimized}"
 INCLUDE_PATTERNS="${INCLUDE_PATTERNS:-**/*.py:**/*.php:**/*.inc:**/*.sh:**/*.js:**/*.md:**/*.txt:**/*.json:**/*.jsonc:**/*.yml:**/*.yaml:**/*.xml:**/*.conf:**/*.toml:**/*.neon}"
 TOKEN_SAVIOR_MAX_FILE_SIZE="${TOKEN_SAVIOR_MAX_FILE_SIZE:-2000000}"
-export WORKSPACE_ROOTS TOKEN_SAVIOR_CLIENT TOKEN_SAVIOR_PROFILE INCLUDE_PATTERNS TOKEN_SAVIOR_MAX_FILE_SIZE
+export WORKSPACE_ROOTS CLAUDE_PROJECT_ROOT TOKEN_SAVIOR_CLIENT TOKEN_SAVIOR_PROFILE INCLUDE_PATTERNS TOKEN_SAVIOR_MAX_FILE_SIZE
 exec "$bin"
