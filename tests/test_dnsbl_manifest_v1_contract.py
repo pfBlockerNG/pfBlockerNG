@@ -63,7 +63,9 @@ def test_fixture_manifest_v1_builds_and_config_affects_result(tmp_path: Path) ->
     assert result.white_db["adblock.com"]["wildcard"] is False
     assert result.white_db["wildwhite.org"]["wildcard"] is True
     assert result.white_db["allowme.example"]["band"] == pfb_unbound.PRIO_FEED_ALLOW
-    assert {entry["group"] for entry in result.feed_group_index_db.values()} >= {
+    observed_groups = {entry["group"] for entry in result.feed_group_index_db.values()}
+    assert "\ufffd" in observed_groups
+    assert observed_groups >= {
         "grp_custom",
         "grp_permit",
     }
@@ -94,6 +96,20 @@ def test_empty_feeds_are_valid(tmp_path: Path) -> None:
     assert result.zone_db == {}
 
 
+def test_empty_group_and_log_flag_are_valid(tmp_path: Path) -> None:
+    path, manifest = _stage_fixture(tmp_path)
+    manifest["feeds"] = [dict(manifest["feeds"][0])]
+    manifest["feeds"][0]["group"] = ""
+    manifest["feeds"][0]["log_flag"] = ""
+    _write_manifest(path, manifest)
+
+    result = pfb_unbound.dnsbl_build_from_manifest(str(path))
+
+    assert result is not None
+    assert {entry["group"] for entry in result.feed_group_index_db.values()} >= {""}
+    assert result.data_db["plainhost1.example"]["log"] == ""
+
+
 @pytest.mark.parametrize(
     ("mutate", "field"),
     [
@@ -116,9 +132,11 @@ def test_empty_feeds_are_valid(tmp_path: Path) -> None:
         (lambda m: m["feeds"].__setitem__(0, "row"), "feeds[0]"),
         (lambda m: m["feeds"][0].pop("raw"), "feeds[0].raw"),
         (lambda m: m["feeds"][0].__setitem__("raw", ""), "feeds[0].raw"),
+        (lambda m: m["feeds"][0].pop("feed"), "feeds[0].feed"),
         (lambda m: m["feeds"][0].__setitem__("feed", 1), "feeds[0].feed"),
         (lambda m: m["feeds"][0].__setitem__("feed", ""), "feeds[0].feed"),
         (lambda m: m["feeds"][0].pop("group"), "feeds[0].group"),
+        (lambda m: m["feeds"][0].pop("log_flag"), "feeds[0].log_flag"),
         (lambda m: m["feeds"][0].__setitem__("log_flag", False), "feeds[0].log_flag"),
         (lambda m: m["feeds"][0].__setitem__("provenance", "other"), "feeds[0].provenance"),
         (lambda m: m["feeds"][0].__setitem__("provenance", []), "feeds[0].provenance"),
