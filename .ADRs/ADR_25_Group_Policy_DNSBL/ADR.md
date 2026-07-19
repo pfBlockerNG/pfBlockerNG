@@ -63,6 +63,33 @@ ranges, TZ-explicit); the **manifest emission** of groups/masks/client-map/sched
 legacy `pfb_gp` bypass **handover and retirement**; the dnsbl-binding **UI unlock** in
 ADR-55's pages.
 
+### 0.1 Wayfinder conversion gate (2026-07-19)
+
+This Proposed ADR predates the discovery that one Unbound mesh state can carry replies for
+multiple requesters. When Wayfinder converts ADR-25 into a map and spec, it **must**:
+
+1. Treat §1.2's scalar-client premise ("the client IP is already in hand" and no additional
+   Unbound plumbing is needed) as falsified by
+   [Choose client-IP precedence across Unbound reply-list nodes](https://github.com/pfBlockerNG/pfBlockerNG/issues/1536).
+   Neither the reply-list head nor its first valid address is a canonical client for policy.
+2. Resolve and incorporate
+   [Research Unbound mesh partitioning by pfBlockerNG Group Policy](https://github.com/pfBlockerNG/pfBlockerNG/issues/1549)
+   before inheriting §2.1, §2.2, or the Phase-1 cache strategy. That research must prove the
+   supported pre-resolution seam for making effective Group Policy part of mesh-state
+   equivalence on supported pfSense CE and Plus versions.
+3. Preserve the owner direction that same-policy requesters may share Unbound mesh/cache
+   work, while requesters with different effective policies must receive distinct query
+   states before `operate()` installs a qstate-wide synthetic DNSBL response. A late
+   `inplace_cb_reply*` rewrite is not an equivalent default: it cannot restore an allowed
+   response when normal resolution never ran.
+4. Re-specify
+   [pfb_unbound.py: make requester identity policy-partition aware](https://github.com/pfBlockerNG/pfBlockerNG/issues/1406)
+   only after #1549 names and verifies that mechanism. Do not mechanically translate this
+   ADR's historical phase prompts into implementation tickets.
+
+This gate records the dependency and invalidated premise; it deliberately does not select
+the Unbound mechanism ahead of the research.
+
 **Per-phase gating:** every phase is executed by a Sonnet 5 implementer and adversarially
 gate-reviewed by the orchestrator at reasoning effort `xhigh` against the phase kill-gates
 before the next phase starts (CLAUDE.md planner/implementer flow — mandatory).
