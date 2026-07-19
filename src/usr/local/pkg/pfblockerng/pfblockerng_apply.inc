@@ -20,6 +20,41 @@
  * limitations under the License.
  */
 
+/** @return array{reuse:string,reuse_dnsbl:string,updatednsbl:bool,save:bool,clear_masterfiles:bool} */
+function pfb_sync_run_plan(array $request, bool $no_updates, bool $cron_tick, string $configured_reuse): array {
+	$plan = [
+		'reuse'             => $configured_reuse,
+		'reuse_dnsbl'       => '',
+		'updatednsbl'       => FALSE,
+		'save'              => $no_updates,
+		'clear_masterfiles' => FALSE,
+	];
+	if ($no_updates) {
+		return $plan;
+	}
+
+	$scope = $request['scope'] ?? '';
+	$force = !empty($request['force']);
+	if ($scope === 'both' && $force) {
+		$plan['reuse']             = 'on';
+		$plan['reuse_dnsbl']       = 'on';
+		$plan['updatednsbl']       = TRUE;
+		$plan['clear_masterfiles'] = TRUE;
+	} elseif ($scope === 'ip' && $force) {
+		$plan['reuse']             = 'on';
+		$plan['clear_masterfiles'] = TRUE;
+	} elseif ($scope === 'dnsbl' && $force) {
+		$plan['reuse']       = '';
+		$plan['reuse_dnsbl'] = 'on';
+		$plan['updatednsbl'] = TRUE;
+	} elseif ($cron_tick && $configured_reuse === 'on') {
+		$plan['reuse_dnsbl']       = 'on';
+		$plan['clear_masterfiles'] = TRUE;
+	}
+
+	return $plan;
+}
+
 // Main pfBlockerNG function
 function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
@@ -145,43 +180,24 @@ function sync_package_pfblockerng($cron='') {
 	// 'pre' hook => pfb_run_hooks() returns immediately (byte-identical pass).
 	pfb_run_hooks('pre', array('TRIGGER' => $pfb_hook_val));
 
-	// Reloads existing lists without downloading new lists when defined 'on'
-	$pfb['reuse'] = $pfb['config']['pfb_reuse'];
-	$pfb['reuse_dnsbl'] = '';
-
-	// Define update process (update or reload)
-	if ($pfb_is_noups) {
-		// Cron pass with no feed changes: save the configuration; nothing to reload.
+	$pfb_run_plan = pfb_sync_run_plan(
+		$pfb_req,
+		$pfb_is_noups,
+		$pfb_cron_tick,
+		(string) $pfb['config']['pfb_reuse']
+	);
+	$pfb['reuse']       = $pfb_run_plan['reuse'];
+	$pfb['reuse_dnsbl'] = $pfb_run_plan['reuse_dnsbl'];
+	if ($pfb_run_plan['save']) {
 		$pfb['save'] = TRUE;
-	} elseif ($pfb_req['scope'] === 'both' && $pfb_req['force']) {
-		// Force Reload BOTH (Update page Run-now with force on, and the wizard reload):
-		// apply IP tables AND DNSBL from cached lists, no re-download — the union of the
-		// scope=ip and scope=dnsbl force branches. Without this, scope=both + force fell
-		// through with no adjustment (identical to force=false), so the most prominent
-		// "Force" control did nothing beyond a plain detector-respecting pass.
-		$pfb['reuse']        = 'on';
-		$pfb['reuse_dnsbl']  = 'on';
-		$pfb['updatednsbl']  = TRUE;
-		unlink_if_exists("{$pfb['dbdir']}/masterfile");
-		unlink_if_exists("{$pfb['dbdir']}/mastercat");
-	} elseif ($pfb_req['scope'] === 'ip' && $pfb_req['force']) {
-		// updateip: Force Reload IP — apply IP tables from cached lists, no re-download.
-		$pfb['reuse']       = 'on';
-		$pfb['reuse_dnsbl'] = '';
-		unlink_if_exists("{$pfb['dbdir']}/masterfile");
-		unlink_if_exists("{$pfb['dbdir']}/mastercat");
-	} elseif ($pfb_req['scope'] === 'dnsbl' && $pfb_req['force']) {
-		// updatednsbl: Force Reload DNSBL — apply from cached data, always reload Unbound.
-		$pfb['reuse']        = '';
-		$pfb['reuse_dnsbl']  = 'on';
-		$pfb['updatednsbl']  = TRUE;
-	} elseif ($pfb_cron_tick && $pfb['reuse'] == 'on') {
-		// Scheduled cron tick with global Reload toggle on: propagate reuse to DNSBL side.
-		$pfb['reuse_dnsbl'] = 'on';
+	}
+	if ($pfb_run_plan['updatednsbl']) {
+		$pfb['updatednsbl'] = TRUE;
+	}
+	if ($pfb_run_plan['clear_masterfiles']) {
 		unlink_if_exists("{$pfb['dbdir']}/masterfile");
 		unlink_if_exists("{$pfb['dbdir']}/mastercat");
 	}
-	// manual / '' (settings save / de-install) and any other non-cron path: no scope adjustment.
 
 	// Start of pfBlockerNG logging to 'pfblockerng.log'
 	if ($pfb['enable'] == 'on' && !$pfb['save']) {
