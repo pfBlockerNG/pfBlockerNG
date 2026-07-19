@@ -156,7 +156,7 @@ download) converges staging to empty (`pfb_dnsbl_stale_rebuild_converge_txt()`) 
 leaving the stale `.txt` in place — otherwise the guard would re-detect stale-generation and
 re-log `Rebuild` on every subsequent pass, forever, with the stale lines silently double-counted.
 This runs regardless of the row's `state` (`Hold`/`Flex`/`Enabled`) — a `Hold` row only skips
-`pfblockerng.php`'s own change-detector pre-check (`pfblockerng_sync_cron()`, which bypasses a
+`pfblockerng_cron.inc`'s own change-detector pre-check (`pfblockerng_sync_cron()`, which bypasses a
 Held row with an existing `.txt` outright), never the DNSBL loop's rebuild fork inside
 `sync_package_pfblockerng()`, which has no `Hold` special case. Pinned live-VM
 (`tests/smoke/test_smoke_adr62.py`): `test_adr62_stale_generation_rebuild_hold_row_orig_present`
@@ -181,7 +181,7 @@ process, and `sync_package_pfblockerng()` early-returns on that flag before reac
 loop (logging "Sync terminated during boot process.").
 
 The window does **not** reliably close at the first `cron` tick, either. `pfblockerng_sync_cron()`
-(`pfblockerng.php`) only calls `sync_package_pfblockerng('cron')` when at least one in-scope feed's
+(`pfblockerng_cron.inc`) only calls `sync_package_pfblockerng('cron')` when at least one in-scope feed's
 own Update Frequency check actually ran `pfb_update_check()` this tick (`$pfb['update_cron']`); a
 tick where every feed is still within its own frequency window — or simply has nothing new to
 fetch — instead calls `sync_package_pfblockerng('noupdates')`, which sets `$pfb['save'] = TRUE` and
