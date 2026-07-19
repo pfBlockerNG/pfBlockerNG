@@ -7800,6 +7800,68 @@
             }
         ]
     },
+    "pfb_update_check": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "header",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "list_url",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "pfbfolder",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "pfborig",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "pflex",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "format",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "vtype",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "srcint",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "false"
+            }
+        ]
+    },
     "pfb_update_pass_running": {
         "returnsRef": false,
         "returnType": "bool",
@@ -8551,6 +8613,26 @@
         "returnsRef": false,
         "returnType": null,
         "params": []
+    },
+    "pfblockerng_sync_cron": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "force_all",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "false"
+            },
+            {
+                "name": "scope",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "'both'"
+            }
+        ]
     },
     "pfblockerng_sync_on_changes": {
         "returnsRef": false,

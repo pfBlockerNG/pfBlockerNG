@@ -14,31 +14,6 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 	private array $originalPfb = [];
 	private $lockFp = NULL;
 
-	public static function setUpBeforeClass(): void
-	{
-		$src = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php'
-		);
-		if ($src === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng.php');
-		}
-		if (!preg_match('/function pfblockerng_sync_cron\b.*?(?=\nfunction )/s', $src, $match)) {
-			throw new RuntimeException('test bootstrap: pfblockerng_sync_cron() body not found');
-		}
-
-		$function = preg_replace(
-			'/^function pfblockerng_sync_cron\b/',
-			'function pfb_issue_1315_sync_cron',
-			$match[0],
-			1,
-			$count
-		);
-		if ($function === NULL || $count !== 1) {
-			throw new RuntimeException('test bootstrap: failed to load pfblockerng_sync_cron() body');
-		}
-		eval($function);
-	}
-
 	protected function setUp(): void
 	{
 		$this->originalPfb = $GLOBALS['pfb'];
@@ -78,7 +53,7 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 		$before = pfb_due_ledger_read_entry('cron', $this->dbdir);
 		$this->assertSame($nextDue, $before['next_due'], 'test setup: future next_due must be seeded');
 
-		pfb_issue_1315_sync_cron();
+		pfblockerng_sync_cron();
 
 		$after = pfb_due_ledger_read_entry('cron', $this->dbdir);
 		$this->assertSame($nextDue, $after['next_due'], 'lost lock must preserve next_due');

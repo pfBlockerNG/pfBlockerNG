@@ -12,9 +12,9 @@ use PHPUnit\Framework\TestCase;
  * (parameter names, by-ref flags, variadics, types, defaults, return type),
  * against the committed golden snapshot in fixtures/function_inventory.json.
  * Any extraction phase that drops, renames, duplicates (PHP fatals), or
- * re-signatures a function fails here loudly; a pure byte-for-byte move
- * between package files stays green, because the snapshot records no
- * file-of-origin.
+ * re-signatures a function fails here loudly; once a function is in the
+ * package, a pure byte-for-byte move between package files stays green
+ * because the snapshot records no file-of-origin.
  *
  * The snapshot is captured at the end of tests/php/bootstrap.php (before any
  * test runs), so this oracle is independent of test ordering.

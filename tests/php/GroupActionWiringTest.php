@@ -18,15 +18,13 @@ final class GroupActionWiringTest extends TestCase
 	{
 		$root = dirname(__DIR__, 2);
 		self::$inc = (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng.inc")
-			. "\n" . (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc");
+			. "\n" . (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc")
+			. "\n" . (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc");
 		self::$category = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category.php");
 		self::$alerts = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_alerts.php");
 		self::$categoryEdit = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php");
 		self::$www = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng.php");
-		if (!preg_match('/function pfblockerng_sync_cron\b.*?(?=\nfunction )/s', self::$www, $match)) {
-			throw new RuntimeException('test bootstrap: pfblockerng_sync_cron() body not found');
-		}
-		self::$cron = $match[0];
+		self::$cron = (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc");
 	}
 
 	private function assertGuardBeforeActionUse(
