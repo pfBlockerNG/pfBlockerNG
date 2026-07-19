@@ -4102,6 +4102,19 @@
             }
         ]
     },
+    "pfb_ip_render_attribution": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "fields",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_ip_render_memos": {
         "returnsRef": true,
         "returnType": "array",

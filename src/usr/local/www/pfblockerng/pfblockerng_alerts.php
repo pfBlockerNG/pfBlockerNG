@@ -2902,15 +2902,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		return array(FALSE, '');
 	}
 
-	// issue #809: page-scope memos (pfb_render_memo(), pfblockerng.inc) live for one
-	// render. $memos['validate'] caches the "still in its logged feed file" validate
-	// exec, keyed by the exact command; $memos['miss'] caches the "where does this
-	// host live NOW" path (find_reported_header() + raw aliastables grep), keyed by
-	// host+folder. pfb_ip_render_memos() is a shared accessor so pfb_ip_prefetch()
-	// can seed both from outside this function.
-	$memos = &pfb_ip_render_memos();
-
-	$alert_ip = $pfb_query = $pfb_matchtitle = '';
+	$alert_ip = '';
 	$src_icons = $dst_icons = $feed_new = $eval_new = $alias_new = '';
 
 	// Reorder timestamp field for Filter fields functionality
@@ -2984,45 +2976,20 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$vtype = 4;
 	}
 
-	// IPv4 IP address mask -- relocated up from its original position (issue #809):
-	// it depends only on $pfb_ipv4/$fields[14], neither of which the derivation below
-	// touches, and nothing between here and its original site reads $mask, so this is
-	// behaviour-identical.
-	$mask = '';
-	if ($pfb_ipv4) {
-		$mask = strstr($fields[14], '/', FALSE) ?: '/32';
-	}
-
-	// issue #809: the GeoIP/host-selection/ET-header/folder/validate-command derivation
-	// is extracted to pfb_ip_render_query() (pfblockerng.inc) -- a verbatim-motion
-	// refactor so the batched prefetch pass (pfb_ip_prefetch(), called from this page's
-	// two-pass IP table render below) derives the IDENTICAL lookup groups from a copy
-	// of the same $fields, with no separate re-derivation to drift from this one.
-	$rq = pfb_ip_render_query($fields);
-
-	$host		= $rq['host'];
-	$hostname	= $rq['hostname'];
-	$pfb_geoip	= $rq['pfb_geoip'];
-	$fields[15]	= $rq['field15'];	// ET-header 'Category:Feed' prefix strip -- render-visible
-	$folder		= $rq['folder'];
+	$attribution = pfb_ip_render_attribution($fields);
+	$host = $attribution['host'];
+	$hostname = $attribution['hostname'];
+	$pfb_geoip = $attribution['pfb_geoip'];
+	$fields[15] = $attribution['field15'];
+	$mask = $attribution['mask'];
+	$feed_new = $attribution['feed_new'];
+	$eval_new = $attribution['eval_new'];
+	$alias_new = $attribution['alias_new'];
+	$pfb_matchtitle = $attribution['pfb_matchtitle'];
 
 	// HTML-encode the resolved/DHCP hostnames before they are printed as cell text.
 	$hostname['src'] = pfb_hsc($hostname['src']);
 	$hostname['dst'] = pfb_hsc($hostname['dst']);
-
-	// Determine if event IP still exists in Feed Aliastable. Per-row pipeline with no
-	// render-time cache (the daemon's ipcache is event-time only); a miss falls into
-	// find_reported_header() -- full grep sweeps of the feed dirs -- plus a whole-
-	// aliastables grep below (alerts-reports-pipeline.md, issue #809). Memoized by the
-	// exact command about to run; in non-filter/bounded-filter mode this key is usually
-	// pre-seeded by pfb_ip_prefetch(), so the closure below is the per-row fallback.
-	$validate = '';
-	if ($rq['validate_cmd'] !== NULL) {
-		$validate_cmd = $rq['validate_cmd'];
-		$validate = pfb_render_memo($memos['validate'], $validate_cmd, function () use ($validate_cmd) {
-			return exec($validate_cmd);
-		});
-	}
 
 	// ASN - Add to GeoIP column. issue #1369 (ADR-38 Amendment 3): the ASN
 	// number renders directly from its own plain CSV column ([18]); the
@@ -3036,65 +3003,6 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	}
 	else {
 		$fields[18] = '';
-	}
-
-	// Determine if a different IP/CIDR is now alerting on this host
-	// issue #809: find_reported_header($host, $folder) and the raw aliastables grep
-	// below are both pure functions of ($host, $folder) -- find_reported_header()'s
-	// result decides $eval_new, which is the only input to the aliastables grep -- so
-	// they are memoized together as one unit, keyed on "$host|$folder". Everything
-	// that depends on THIS row ($mask needs $pfb_ipv4, the post-processed $validate
-	// needs the ltrim/strrchr/strstr chain, and the $validate != $fields[13] compare)
-	// stays outside the memo and is recomputed every row from the cached raw values.
-	if (empty($validate)) {
-		$miss_key = "{$host}|{$folder}";
-		list($pfb_query, $validate) = pfb_render_memo($memos['miss'], $miss_key, function () use ($host, $folder, $pfb) {
-			$pfb_query = find_reported_header($host, $folder);
-
-			// $eval_new here mirrors the outer derivation below exactly (including the
-			// 'Not listed!' substitution on an 'Unknown' match) because it is what
-			// builds the aliastables grep command -- the exec must stay byte-identical
-			// to today's regardless of which branch produced it.
-			$eval_new = ($pfb_query[1] == 'Unknown') ? 'Not listed!' : $pfb_query[1];
-
-			// Determine if IP is in a new Aliastable
-			$raw_validate = '';
-			$q_ip = pfb_ip_exact_entry_pattern($eval_new);
-			if ($q_ip !== NULL) {
-				$q_ip_esc = escapeshellarg($q_ip);
-				// issue #833: '/dev/null' gives xargs a permanent extra file arg, so
-				// grep always emits a "path:" prefix even when aliasdir holds exactly
-				// one .txt file -- the ltrim(strrchr(strstr(strstr(...)))) alias-name
-				// parse below requires that shape.
-				$raw_validate = exec("/usr/bin/find {$pfb['aliasdir']}/*.txt -type f | xargs {$pfb['grep']} {$q_ip_esc} /dev/null 2>&1");
-			}
-
-			return array($pfb_query, $raw_validate);
-		});
-
-		if ($pfb_query[0] == 'Unknown') {
-			$feed_new	= 'Not listed!';
-			$pfb_matchtitle = 'This IP is not currently listed!';
-		} else {
-			$feed_new	= $pfb_query[0];
-		}
-
-		if ($pfb_query[1] == 'Unknown') {
-			$mask		= '';
-			$eval_new	= 'Not listed!';
-		}
-		else {
-			if ($pfb_ipv4) {
-				$mx	= explode('/', $pfb_query[1]);
-				$mask	= empty($mx[1]) ? '/32' : "/{$mx[1]}";
-			}
-			$eval_new	= $pfb_query[1];
-		}
-
-		$validate = ltrim(strrchr(strstr(strstr($validate, ':', TRUE), '.txt', TRUE), '/'), '/');
-		if ($validate != $fields[13]) {
-			$alias_new = $validate;
-		}
 	}
 
 	// v4-only, /32|/24 -- ADR-53 (issue #422) narrowed this to feed ONLY the
@@ -3119,7 +3027,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	}
 
 	// HTML-encoded copies of the IP/alias tokens that get folded into the icon
-	// id/title/href markup below (the raw values stay for lookups + exec paths).
+	// id/title/href markup below (the raw values stay for lookup paths).
 	$h_host		= pfb_hsc($host);
 	$h_eval_ip	= pfb_hsc($eval_ip);
 	$h_table	= pfb_hsc($table);
