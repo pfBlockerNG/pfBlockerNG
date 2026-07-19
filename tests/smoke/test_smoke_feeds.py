@@ -1852,7 +1852,7 @@ def test_cron_304_skips_unchanged_remote_feed(
         assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
 
         # Feed unchanged; ETag still matches. #811 header-scopes the "( 304 not modified )"
-        # verdict line itself (pfblockerng.php's pfb_update_check now prefixes it "[ header ] ",
+        # verdict line itself (pfblockerng_cron.inc's pfb_update_check now prefixes it "[ header ] ",
         # matching the fetch-time gates' format), so the marker below is scoped by header AND
         # verdict — no separate global count + "fast guard" needed.
         h.pin_cron_due(deployed_vm)
