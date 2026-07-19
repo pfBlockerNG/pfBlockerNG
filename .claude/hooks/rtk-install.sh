@@ -5,6 +5,11 @@
 # next shell. Never fails session start. RTK_VERSION pins a release.
 set -u
 
+hook_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd -L) || exit 0
+# shellcheck source=../../scripts/lib/git-env-scrub.sh
+. "$hook_dir/../../scripts/lib/git-env-scrub.sh"
+pfb_scrub_git_env
+
 rtk_bin=$(command -v rtk 2>/dev/null) || rtk_bin=''
 if [ -z "$rtk_bin" ] && [ -x "$HOME/.local/bin/rtk" ]; then
 	rtk_bin="$HOME/.local/bin/rtk"
@@ -34,12 +39,10 @@ filter_dir="$project_root/.rtk"
 filter_path="$filter_dir/filters.toml"
 [ -n "$project_root" ] && [ -d "$filter_dir" ] && [ ! -L "$filter_dir" ] || exit 0
 [ -f "$filter_path" ] && [ ! -L "$filter_path" ] || exit 0
-filter_stage=$(git -C "$project_root" ls-files --stage -- "$filter_rel" 2>/dev/null) || exit 0
-case "$filter_stage" in
-	'100644 '*) ;;
-	*) exit 0 ;;
-esac
 filter_head=$(git -C "$project_root" rev-parse "HEAD:$filter_rel" 2>/dev/null) || exit 0
+filter_stage=$(git -C "$project_root" ls-files --stage -- "$filter_rel" 2>/dev/null) || exit 0
+filter_expected=$(printf '100644 %s 0\t%s' "$filter_head" "$filter_rel")
+[ "$filter_stage" = "$filter_expected" ] || exit 0
 filter_work=$(git -C "$project_root" hash-object -- "$filter_rel" 2>/dev/null) || exit 0
 [ "$filter_work" = "$filter_head" ] || exit 0
 (CDPATH='' cd "$project_root" && "$rtk_bin" trust >/dev/null 2>&1) || exit 0
