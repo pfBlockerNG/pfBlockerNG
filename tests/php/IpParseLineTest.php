@@ -2,12 +2,14 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Direct matrix for the pure generic IP-feed line parser extracted from the
  * sync loop.  The result array is the complete handoff contract to that loop.
  */
+#[CoversFunction('pfb_ip_parse_line')]
 final class IpParseLineTest extends TestCase
 {
 	private const RANGE = '/((?:\d{1,3}\.){3}\d{1,3})-((?:\d{1,3}\.){3}\d{1,3})/';
