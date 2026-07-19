@@ -92,4 +92,15 @@ EOF
     The status should be success
     The file "${log}" should not be exist
   End
+
+  It 'does not trust changed bytes normalized by a Git clean filter'
+    git -C "${project}" config filter.upper.clean "tr '[:lower:]' '[:upper:]'"
+    git -C "${project}" config filter.upper.smudge cat
+    printf '*.toml filter=upper\n' > "${project}/.gitattributes"
+    git -C "${project}" add .gitattributes .rtk/filters.toml
+    git -C "${project}" commit -q -m clean-filter
+    When run run_hook
+    The status should be success
+    The file "${log}" should not be exist
+  End
 End
