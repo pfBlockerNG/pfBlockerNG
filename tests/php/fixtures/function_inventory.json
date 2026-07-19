@@ -6611,6 +6611,40 @@
             }
         ]
     },
+    "pfb_sync_run_plan": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "request",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "no_updates",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "cron_tick",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "configured_reuse",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_sync_status_close": {
         "returnsRef": false,
         "returnType": "void",
