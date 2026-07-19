@@ -5,9 +5,9 @@
 # Usage: work-branch.sh <issue|adr> <NN> [TITLE ...] [--worktree] [--path PATH] [--base REF]
 #   Prints the branch name (`issue/NN-slug` / `adr/NN-slug`; empty slug -> bare `type/NN`).
 #   --worktree  also `git fetch origin` + `git worktree add -b BRANCH PATH BASE` at an
-#               ABSOLUTE path (default <primary checkout>/.claude/worktrees/<type>-<NN>;
-#               a relative --path anchors there too, even when invoked from a linked
-#               worktree); an existing branch or path gets a `-<epoch>` suffix
+#               ABSOLUTE path (default <primary checkout>/.claude/worktrees/<type>-<NN>,
+#               or <TMPDIR>/pfblockerng-<type>-<NN> under Codex; a relative --path anchors
+#               at the primary checkout); an existing branch or path gets a `-<epoch>` suffix
 #               (collision rule). Prints `BRANCH<TAB>PATH` instead.
 #   --base REF  worktree base (default origin/devel)
 #
@@ -80,7 +80,13 @@ main() {
 	   git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
 		branch="$branch-$(date +%s)"
 	fi
-	[ -n "$path" ] || path="$root/.claude/worktrees/$kind-$nn"
+	if [ -z "$path" ]; then
+		case "${CODEX_THREAD_ID:-}" in
+			'') path="$root/.claude/worktrees/$kind-$nn" ;;
+			*) tmp_root=$(CDPATH='' cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P) || tmp_root=/tmp
+				path="$tmp_root/pfblockerng-$kind-$nn" ;;
+		esac
+	fi
 	case "$path" in /*) ;; *) path="$root/$path" ;; esac   # worktree add needs ABSOLUTE paths
 	[ -e "$path" ] && path="$path-$(date +%s)"
 	git worktree add -b "$branch" "$path" "$base" >/dev/null || exit 1
