@@ -58,6 +58,7 @@ Describe 'rtk fallback installer integrity'
     home="${work}/home"
     shim="${work}/shim"
     curl_log="${work}/curl.log"
+    sh_log="${work}/sh.log"
     executed="${work}/executed"
     mkdir -p "${home}" "${shim}"
     cat > "${shim}/curl" <<'EOF'
@@ -95,7 +96,13 @@ case "$url" in
   *) exit 22 ;;
 esac
 EOF
+    cat > "${shim}/sh" <<'EOF'
+#!/bin/sh
+printf '%s|%s\n' "${RTK_VERSION:-}" "${RTK_SKIP_CHECKSUM:-}" >> "$RTK_SH_LOG"
+exec /bin/sh "$@"
+EOF
     chmod +x "${shim}/curl"
+    chmod +x "${shim}/sh"
   }
 
   cleanup() {
@@ -107,17 +114,18 @@ EOF
 
   It 'executes the verified immutable installer with a pinned release'
     When run env HOME="${home}" PATH="${shim}:/usr/bin:/bin" RTK_CURL_LOG="${curl_log}" \
-      RTK_INSTALLER_FIXTURE="${fixture}" RTK_EXECUTED_MARKER="${executed}" \
-      CLAUDE_PROJECT_DIR="${work}" sh "${hook}"
+      RTK_INSTALLER_FIXTURE="${fixture}" RTK_EXECUTED_MARKER="${executed}" RTK_SH_LOG="${sh_log}" \
+      RTK_VERSION=v999.0.0 RTK_SKIP_CHECKSUM=1 CLAUDE_PROJECT_DIR="${work}" /bin/sh "${hook}"
     The status should be success
     The contents of file "${curl_log}" should include 'rtk/5a7880d404db8364d602f2ecdc41dd790f64013f/install.sh'
     The contents of file "${curl_log}" should include '/releases/download/v0.43.0/rtk-'
+    The contents of file "${sh_log}" should equal 'v0.43.0|0'
   End
 
   It 'rejects changed installer bytes without executing them'
     When run env HOME="${home}" PATH="${shim}:/usr/bin:/bin" RTK_CURL_LOG="${curl_log}" \
-      RTK_INSTALLER_FIXTURE="${fixture}" RTK_EXECUTED_MARKER="${executed}" RTK_HOSTILE=1 \
-      CLAUDE_PROJECT_DIR="${work}" sh "${hook}"
+      RTK_INSTALLER_FIXTURE="${fixture}" RTK_EXECUTED_MARKER="${executed}" RTK_SH_LOG="${sh_log}" \
+      RTK_HOSTILE=1 CLAUDE_PROJECT_DIR="${work}" /bin/sh "${hook}"
     The status should be success
     The file "${executed}" should not be exist
   End
