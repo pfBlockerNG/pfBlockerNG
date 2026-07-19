@@ -84,7 +84,9 @@ if command -v git >/dev/null 2>&1; then
 	repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
 	[ -z "$repo_root" ] || workspace_root=$repo_root
 fi
-if [ -z "${WORKSPACE_ROOTS:-}" ]; then
+# '+x' (not ':-') so an explicitly empty override survives: WORKSPACE_ROOTS=''
+# means "index nothing", a caller decision, not an unset variable.
+if [ "${WORKSPACE_ROOTS+x}" != x ]; then
 	WORKSPACE_ROOTS=$workspace_root
 	if command -v git >/dev/null 2>&1 && [ -x "$venv/bin/python3" ]; then
 		worktree_roots=$(git worktree list --porcelain -z 2>/dev/null | "$venv/bin/python3" -c '
@@ -107,7 +109,9 @@ sys.stdout.write(",".join(roots))
 		[ -z "$worktree_roots" ] || WORKSPACE_ROOTS=$worktree_roots
 	fi
 fi
-CLAUDE_PROJECT_ROOT="${CLAUDE_PROJECT_ROOT:-$workspace_root}"
+if [ "${CLAUDE_PROJECT_ROOT+x}" != x ]; then
+	CLAUDE_PROJECT_ROOT=$workspace_root
+fi
 TOKEN_SAVIOR_CLIENT="${TOKEN_SAVIOR_CLIENT:-claude-code}"
 TOKEN_SAVIOR_PROFILE="${TOKEN_SAVIOR_PROFILE:-optimized}"
 INCLUDE_PATTERNS="${INCLUDE_PATTERNS:-**/*.py:**/*.php:**/*.inc:**/*.sh:**/*.js:**/*.md:**/*.txt:**/*.json:**/*.jsonc:**/*.yml:**/*.yaml:**/*.xml:**/*.conf:**/*.toml:**/*.neon}"

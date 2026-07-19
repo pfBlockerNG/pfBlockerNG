@@ -21,6 +21,11 @@ printf '%s\n' "${TOKEN_SAVIOR_MAX_FILE_SIZE:-UNSET}"
 printf '%s\n' "${TOKEN_SAVIOR_CLIENT:-UNSET}"
 printf '%s\n' "${WORKSPACE_ROOTS:-UNSET}"
 printf '%s\n' "${CLAUDE_PROJECT_ROOT:-UNSET}"
+# Lines 6-7 use '-' (not ':-') to tell an exported-but-empty override apart
+# from a variable the launcher never exported; the brackets keep an empty
+# value observable, since a bare trailing blank line is not addressable.
+printf '[%s]\n' "${WORKSPACE_ROOTS-UNSET}"
+printf '[%s]\n' "${CLAUDE_PROJECT_ROOT-UNSET}"
 EOF
     chmod +x "${WORK}/venv/bin/token-savior"
     default_source="$(sed -n 's/^TS_SOURCE="\${TS_SOURCE:-\(.*\)}"$/\1/p' "${SCRIPT}")"
@@ -101,6 +106,18 @@ EOF
     The status should be success
     The line 4 of output should equal '/custom/one,/custom/two'
     The line 5 of output should equal '/custom/two'
+  End
+
+  It 'preserves an explicitly empty workspace-roots override'
+    When run env WORKSPACE_ROOTS='' TS_VENV="${WORK}/venv" sh "${SCRIPT}"
+    The status should be success
+    The line 6 of output should equal '[]'
+  End
+
+  It 'preserves an explicitly empty active-root override'
+    When run env CLAUDE_PROJECT_ROOT='' TS_VENV="${WORK}/venv" sh "${SCRIPT}"
+    The status should be success
+    The line 7 of output should equal '[]'
   End
 
   It 'uses the Git worktree root as the active root when launched from a subdirectory'

@@ -7,6 +7,6 @@ max_depth = 2
 
 [mcp_servers.token-savior-recall]
 command = "sh"
-args = ["-c", '''root=$(git rev-parse --show-toplevel) && python3 -c "import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)" "$root/scripts/mcp-token-savior.sh" 81ab5456446f80702821e01227a19ebf1666a4ddb480599e89e98aaa4b941423 && exec sh "$root/scripts/mcp-token-savior.sh"''']
+args = ["-c", '''root=$(git rev-parse --show-toplevel) && python3 -c "import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)" "$root/scripts/mcp-token-savior.sh" d949669f21131d436844d8565f98c4401a7630524e64fa68763d7c3585053091 && exec sh "$root/scripts/mcp-token-savior.sh"''']
 env = { TOKEN_SAVIOR_CLIENT = "codex" }
 startup_timeout_sec = 120
