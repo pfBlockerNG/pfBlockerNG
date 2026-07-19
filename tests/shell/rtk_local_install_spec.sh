@@ -14,6 +14,11 @@ Describe 'rtk local-install bootstrap'
     mkdir -p "${project}/.rtk" "${home}/.local/bin"
     git init -q "${project}"
     printf '[filters]\n' > "${project}/.rtk/filters.toml"
+    git -C "${project}" config user.email test@example.com
+    git -C "${project}" config user.name Test
+    git -C "${project}" config commit.gpgsign false
+    git -C "${project}" add .rtk/filters.toml
+    git -C "${project}" commit -q -m filters
     cat > "${home}/.local/bin/rtk" <<'EOF'
 #!/bin/sh
 printf '%s|%s\n' "$PWD" "$*" >> "$RTK_LOG"

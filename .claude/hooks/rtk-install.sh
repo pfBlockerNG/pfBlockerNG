@@ -29,6 +29,14 @@ if [ -z "$project_root" ]; then
 	git_cdup=$(git rev-parse --show-cdup 2>/dev/null) || exit 0
 	project_root=$(CDPATH='' cd "${git_cdup:-.}" && pwd -L) || exit 0
 fi
-[ -n "$project_root" ] && [ -f "$project_root/.rtk/filters.toml" ] || exit 0
+filter_rel='.rtk/filters.toml'
+filter_path="$project_root/$filter_rel"
+[ -n "$project_root" ] && [ -f "$filter_path" ] && [ ! -L "$filter_path" ] || exit 0
+filter_stage=$(git -C "$project_root" ls-files --stage -- "$filter_rel" 2>/dev/null) || exit 0
+case "$filter_stage" in
+	'100644 '*) ;;
+	*) exit 0 ;;
+esac
+git -C "$project_root" diff --quiet HEAD -- "$filter_rel" 2>/dev/null || exit 0
 (CDPATH='' cd "$project_root" && "$rtk_bin" trust >/dev/null 2>&1) || exit 0
 exit 0
