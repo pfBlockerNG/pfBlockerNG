@@ -1,6 +1,7 @@
 #shellcheck shell=sh
-# Supplemental dnsbl_cache boundary coverage: save archives generated chroot files plus
-# exact TOP1M detector sidecars, never prefix decoys, transient DB files, or outside paths.
+# pfblockerng_dnsbl_cache_spec.sh's generated-only header predates issue #1542.
+# Current save set: generated chroot files plus exact TOP1M detector sidecars; never prefix
+# decoys, transient DB files, or outside paths.
 
 pfb_sidecar_archive_path() {
   for _e in zst bz2; do
