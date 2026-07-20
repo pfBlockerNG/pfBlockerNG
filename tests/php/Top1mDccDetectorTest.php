@@ -87,38 +87,38 @@ final class Top1mDccDetectorTest extends TestCase
 
 	public function testExtractedDetectorDecisionPreservesExistingProbeMatrix(): void
 	{
-		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '304', FALSE, 'ignored'));
-		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '200', 'same', 'same'));
-		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '200', 'new', 'old'));
-		$this->assertSame('failed', pfb_top1m_detector_decision(FALSE, '', FALSE, 'old'));
+		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '304', FALSE, 'ignored', NULL, TRUE, FALSE));
+		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '200', 'same', 'same', NULL, TRUE, FALSE));
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '200', 'new', 'old', NULL, TRUE, FALSE));
+		$this->assertSame('failed', pfb_top1m_detector_decision(FALSE, '', FALSE, 'old', NULL, TRUE, FALSE));
 	}
 
 	public function testDetectorRequiresUsableRawBaselineBeforeUnchangedDecision(): void
 	{
 		$base = $this->dir . '/top-1m.csv.zip';
 		$raw = "{$base}.orig";
-		$body = "rank,example.test\n";
+		$body = "1,example.test\n";
 		$body_hash = pfb_content_hash($body, FALSE);
 		file_put_contents($raw, $body);
 		$this->assertTrue(pfb_hash_write($base, $raw));
 		$persisted_hash = pfb_hash_read($base)['digest'];
 
-		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '304', FALSE, $persisted_hash, $base, TRUE));
-		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '200', $body_hash, $persisted_hash, $base, TRUE));
+		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '304', FALSE, $persisted_hash, $base, TRUE, FALSE));
+		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '200', $body_hash, $persisted_hash, $base, TRUE, FALSE));
 
 		// A matching hash without a regular raw source cannot make a 304 safe.
 		unlink($raw);
-		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '304', FALSE, $persisted_hash, $base, TRUE));
-		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '200', $body_hash, $persisted_hash, $base, TRUE));
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '304', FALSE, $persisted_hash, $base, TRUE, FALSE));
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '200', $body_hash, $persisted_hash, $base, TRUE, FALSE));
 
 		file_put_contents($raw, $body);
 		unlink("{$base}.xxhash128");
-		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '304', FALSE, '', $base, TRUE));
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '304', FALSE, '', $base, TRUE, FALSE));
 		file_put_contents("{$base}.xxhash128", 'not-a-digest');
-		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '200', $body_hash, $persisted_hash, $base, TRUE));
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '200', $body_hash, $persisted_hash, $base, TRUE, FALSE));
 
-		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '304', FALSE, $persisted_hash, $base, FALSE));
-		$this->assertSame('failed', pfb_top1m_detector_decision(FALSE, '', FALSE, $persisted_hash, $base, TRUE));
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '304', FALSE, $persisted_hash, $base, FALSE, FALSE));
+		$this->assertSame('failed', pfb_top1m_detector_decision(FALSE, '', FALSE, $persisted_hash, $base, TRUE, FALSE));
 	}
 
 	public function testProviderIdentityCoversAllFiveProvidersAndAuth(): void
@@ -395,7 +395,7 @@ final class Top1mDccDetectorTest extends TestCase
 	public function testTop1mFirstPersistenceFailureLeavesNoActiveOrBaseline(): void
 	{
 		$source = $this->dir . '/first-failure.gz';
-		file_put_contents($source, gzencode("rank,first.test\n"));
+		file_put_contents($source, gzencode("1,first.test\n"));
 		$base = $this->dir . '/first-failure.csv.gz';
 		$active = $this->dir . '/first-failure.csv';
 		$this->assertTrue(mkdir("{$base}.xxhash128"));

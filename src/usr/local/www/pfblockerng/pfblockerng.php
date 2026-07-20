@@ -430,9 +430,9 @@ function pfb_top1m_detector_decision(
 	$http_status,
 	$body_hash,
 	$persisted_hash,
-	$base = NULL,
-	$identity_matches = TRUE,
-	$require_validator = FALSE
+	$base,
+	$identity_matches,
+	$require_validator
 ) {
 	if ($base !== NULL) {
 		$raw_path = "{$base}.orig";
