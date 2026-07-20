@@ -39,7 +39,7 @@ final class Top1mDccDetectorTest extends TestCase
 		self::loadWwwDccHelpers();
 		$this->dir = sys_get_temp_dir() . '/pfb_top1m_dcc_' . getmypid() . '_' . uniqid();
 		$this->assertTrue(mkdir($this->dir, 0777, TRUE));
-		foreach (['log', 'errlog', 'pnow'] as $key) {
+		foreach (['log', 'errlog', 'pnow', 'dbdir'] as $key) {
 			$this->saved_pfb_exists[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? []);
 			$this->saved_pfb[$key] = $GLOBALS['pfb'][$key] ?? NULL;
 		}
@@ -509,11 +509,14 @@ final class Top1mDccDetectorTest extends TestCase
 		$saved_runlog = $GLOBALS['pfb']['runlog'] ?? NULL;
 		$had_changed = array_key_exists('top1m_changed', $GLOBALS['pfb']);
 		$saved_changed = $GLOBALS['pfb']['top1m_changed'] ?? NULL;
+		$had_done = array_key_exists('top1m_dispatch_done', $GLOBALS['pfb']);
+		$saved_done = $GLOBALS['pfb']['top1m_dispatch_done'] ?? NULL;
 		try {
 			$GLOBALS['argv'] = ['pfblockerng.php', 'dcc'];
 			$GLOBALS['pfb']['php'] = $fake_php;
 			$GLOBALS['pfb']['runlog'] = '/dev/null';
 			$GLOBALS['pfb']['top1m_changed'] = TRUE;
+			unset($GLOBALS['pfb']['top1m_dispatch_done']);
 
 			$this->assertTrue(pfb_top1m_dispatch_if_changed(TRUE));
 			$this->assertEventually(static function () use ($dispatch_log): bool {
@@ -539,6 +542,11 @@ final class Top1mDccDetectorTest extends TestCase
 				unset($GLOBALS['pfb']['top1m_changed']);
 			} else {
 				$GLOBALS['pfb']['top1m_changed'] = $saved_changed;
+			}
+			if (!$had_done) {
+				unset($GLOBALS['pfb']['top1m_dispatch_done']);
+			} else {
+				$GLOBALS['pfb']['top1m_dispatch_done'] = $saved_done;
 			}
 		}
 	}
