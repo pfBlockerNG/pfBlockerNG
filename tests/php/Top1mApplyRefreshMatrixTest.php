@@ -7,6 +7,7 @@ use PHPUnit\Framework\TestCase;
 
 #[CoversFunction('pfb_top1m_refresh_needed')]
 #[CoversFunction('pfb_top1m_fetch_if_needed')]
+#[CoversFunction('pfb_top1m_reprocess_needed')]
 #[CoversFunction('pfb_dnsbl_publish_result')]
 #[CoversFunction('pfb_dnsbl_reload_needed')]
 final class Top1mApplyRefreshMatrixTest extends TestCase
@@ -51,6 +52,66 @@ final class Top1mApplyRefreshMatrixTest extends TestCase
 			'update marker with complete source must stay on local reprocess path'
 		);
 		$this->assertSame(0, $attempts, 'local reprocess marker must not invoke provider fetch');
+	}
+
+	public function testFailedIdentityReplacementDefersCombinedSettingsReprocess(): void
+	{
+		$base = "{$this->dbdir}/top-1m.csv.zip";
+		$active = "{$this->dbdir}/top-1m.csv";
+		$whitelist = "{$this->dbdir}/pfbalexawhitelist.txt";
+		$marker = "{$this->dbdir}/top-1m.update";
+		$oldActive = "1,old.example\n";
+		$oldWhitelist = "old-derived\n";
+		$this->assertNotFalse(file_put_contents($active, $oldActive));
+		$this->assertNotFalse(file_put_contents($whitelist, $oldWhitelist));
+		$this->assertNotFalse(file_put_contents($marker, 'pending-combined-change'));
+
+		$attempts = 0;
+		$this->assertTrue(pfb_top1m_fetch_if_needed(
+			$this->dbdir,
+			static function () use (&$attempts): bool {
+				$attempts++;
+				return FALSE;
+			}
+		), 'missing identity baseline must attempt the replacement provider fetch');
+		$this->assertSame(1, $attempts);
+		$this->assertFalse(
+			pfb_top1m_reprocess_needed($this->dbdir),
+			'provider identity failure must defer a simultaneous count/TLD reprocess'
+		);
+		$this->assertSame($oldActive, file_get_contents($active));
+		$this->assertSame($oldWhitelist, file_get_contents($whitelist));
+		$this->assertSame('pending-combined-change', file_get_contents($marker),
+			'deferred reprocess marker must survive for recovery');
+
+		$raw = "{$this->dbdir}/replacement.raw";
+		$this->assertTrue(pfb_top1m_fetch_if_needed(
+			$this->dbdir,
+			static function () use (&$attempts, $active, $base, $raw): bool {
+				$attempts++;
+				if (file_put_contents($active, "1,new.example\n") === FALSE ||
+				    file_put_contents($raw, "replacement raw\n") === FALSE) {
+					return FALSE;
+				}
+				return pfb_top1m_persist_baseline($base, $raw);
+			}
+		));
+		$this->assertSame(2, $attempts);
+		$this->assertTrue(pfb_top1m_reprocess_needed($this->dbdir),
+			'successful replacement must release the deferred rebuild exactly once');
+		$this->assertSame('pending-combined-change', file_get_contents($marker));
+	}
+
+	public function testApplyWiresTheIdentityGateBeforeTop1mConversion(): void
+	{
+		$source = (string) file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc'
+		);
+		$gate = strpos($source, "if (pfb_top1m_reprocess_needed(\$pfb['dbdir']))");
+		$this->assertNotFalse($gate, 'apply path must gate TOP1M conversion on current identity');
+		$converter = strpos($source, 'pfblockerng_top1m();', $gate);
+		$this->assertNotFalse($converter);
+		$this->assertLessThan($converter, $gate);
 	}
 
 	public function testPublishResultLogsOnlyTheTruthfulOutcome(): void

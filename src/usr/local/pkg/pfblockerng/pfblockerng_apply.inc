@@ -78,6 +78,12 @@ function pfb_top1m_fetch_if_needed(string $dbdir, ?callable $fetch = NULL): bool
 	return TRUE;
 }
 
+/** Rebuild only from an active TOP1M source whose detector baseline is current. */
+function pfb_top1m_reprocess_needed(string $dbdir): bool {
+	return !pfb_top1m_refresh_needed($dbdir) &&
+		(!file_exists("{$dbdir}/pfbalexawhitelist.txt") || file_exists("{$dbdir}/top-1m.update"));
+}
+
 /** Record the manifest publication outcome without logging a false completion. */
 function pfb_dnsbl_publish_result(bool $published, ?callable $logger = NULL): bool {
 	global $pfb;
@@ -1336,8 +1342,7 @@ function sync_package_pfblockerng($cron='') {
 				}
 
 				// Process TOP1M database
-				if (!file_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt") ||
-				    file_exists("{$pfb['dbdir']}/top-1m.update")) {
+				if (pfb_top1m_reprocess_needed($pfb['dbdir'])) {
 					pfblockerng_top1m();
 					$pfb['reuse_dnsbl'] = 'on';
 					touch("{$pfb['dnsbl_file']}.reload");
