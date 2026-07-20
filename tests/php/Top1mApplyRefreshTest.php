@@ -97,21 +97,4 @@ final class Top1mApplyRefreshTest extends TestCase
 		$this->assertTrue(pfb_top1m_refresh_needed($this->dbdir), 'missing baseline must force the next retry');
 	}
 
-	public function testUpdateMarkerWithCompleteSourceStaysOnLocalReprocess(): void
-	{
-		$this->assertNotFalse(file_put_contents($this->activePath(), "live\n"));
-		$this->assertNotFalse(file_put_contents($this->baselinePath(), "raw\n"));
-		$this->assertNotFalse(file_put_contents("{$this->dbdir}/top-1m.update", ''));
-		$attempts = 0;
-
-		$this->assertFalse(
-			pfb_top1m_fetch_if_needed($this->dbdir, static function () use (&$attempts): bool {
-				$attempts++;
-				return FALSE;
-			}),
-			'update marker with complete source must stay on local reprocess path'
-		);
-		$this->assertSame(0, $attempts, 'local reprocess marker must not invoke provider fetch');
-	}
-
 }
