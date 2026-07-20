@@ -9811,6 +9811,9 @@ function pfb_top1m_parse_source_row(string $line, array $provider): ?string
 		return NULL;
 	}
 	$csvline = str_getcsv($line, ',', '"', "\\");
+	if (isset($provider['columns']) && count($csvline) !== (int) $provider['columns']) {
+		return NULL;
+	}
 	if (($provider['parse'] ?? 'rank_domain') === 'rank_domain'
 		&& !ctype_digit((string) ($csvline[0] ?? ''))) {
 		return NULL;

@@ -74,12 +74,37 @@ final class Top1mSemanticMatrixTest extends TestCase
 	public function testAllProviderDescriptorsAcceptValidRowsAndRejectHostileRows(): void
 	{
 		$providers = pfb_top1m_providers();
-		$validRows = [
-			'tranco' => ["7,Example.COM\n", 'example.com'],
-			'cisco' => ["42,Mixed.Example\n", 'mixed.example'],
-			'openpagerank' => ["rank,domain,com,10,5\n1,Example.COM,com,10,5\n", 'example.com'],
-			'majestic' => ["rank,ref_subnets,domain,tld,position\n1,1,Example.COM,com,1\n", 'example.com'],
-			'cloudflare' => ["domain\nExample.COM\n", 'example.com'],
+		$fixtures = [
+			'tranco' => [
+				'header' => '',
+				'fields' => ['7', 'Example.COM'],
+				'domain' => 'example.com',
+				'columns' => 2,
+			],
+			'cisco' => [
+				'header' => '',
+				'fields' => ['42', 'Mixed.Example'],
+				'domain' => 'mixed.example',
+				'columns' => 2,
+			],
+			'openpagerank' => [
+				'header' => "Rank,Domain,Extension,Open Page Rank,Referring Domains\n",
+				'fields' => ['1', 'Example.COM', 'com', '10', '5'],
+				'domain' => 'example.com',
+				'columns' => 5,
+			],
+			'majestic' => [
+				'header' => "GlobalRank,TldRank,Domain,TLD,RefSubNets,RefIPs,IDN_Domain,IDN_TLD,PrevGlobalRank,PrevTldRank,PrevRefSubNets,PrevRefIPs\n",
+				'fields' => ['1', '1', 'Example.COM', 'com', '10', '20', '', '', '2', '2', '9', '19'],
+				'domain' => 'example.com',
+				'columns' => 12,
+			],
+			'cloudflare' => [
+				'header' => "domain\n",
+				'fields' => ['Example.COM'],
+				'domain' => 'example.com',
+				'columns' => 1,
+			],
 		];
 		$wrongRows = [
 			'tranco' => "rank,Example.COM\n",
@@ -90,16 +115,16 @@ final class Top1mSemanticMatrixTest extends TestCase
 		];
 
 		foreach ($providers as $id => $provider) {
+			$validDataLine = implode(',', $fixtures[$id]['fields']) . "\n";
+			$validBody = $fixtures[$id]['header'] . $validDataLine;
 			$validPath = "{$this->dir}/{$id}-valid.csv";
-			$this->assertNotFalse(file_put_contents($validPath, $validRows[$id][0]));
+			$this->assertNotFalse(file_put_contents($validPath, $validBody));
 			$this->assertTrue(
 				pfb_top1m_candidate_valid($validPath, $provider),
 				"{$id}: valid provider-shaped feed must pass"
 			);
-			$validLines = preg_split('/\r\n|\r|\n/', trim($validRows[$id][0]));
-			$validDataLine = $provider['header'] ? ($validLines[1] ?? '') : ($validLines[0] ?? '');
 			$this->assertSame(
-				$validRows[$id][1],
+				$fixtures[$id]['domain'],
 				pfb_top1m_parse_source_row($validDataLine, $provider),
 				"{$id}: parsed domain must be canonical lowercase"
 			);
@@ -108,7 +133,7 @@ final class Top1mSemanticMatrixTest extends TestCase
 				"<!doctype html>\n<html><body>503 Service Unavailable</body></html>\n",
 				"\x00binary\n",
 				"# feed unavailable\n",
-				$provider['header'] ? (string) strtok($validRows[$id][0], "\n") . "\n" : "domain\n",
+				$provider['header'] ? $fixtures[$id]['header'] : "domain\n",
 				$wrongRows[$id],
 			];
 			foreach ($hostile as $n => $body) {
@@ -119,6 +144,76 @@ final class Top1mSemanticMatrixTest extends TestCase
 					"{$id}: hostile candidate {$n} must fail closed"
 				);
 			}
+
+			$shapeRows = [
+				'extra' => array_merge($fixtures[$id]['fields'], ['extra']),
+				'truncated' => array_slice($fixtures[$id]['fields'], 0, -1),
+			];
+			foreach ($shapeRows as $shape => $fields) {
+				$dataLine = implode(',', $fields) . "\n";
+				$path = "{$this->dir}/{$id}-{$shape}.csv";
+				$this->assertNotFalse(file_put_contents($path, $fixtures[$id]['header'] . $dataLine));
+				$this->assertNull(
+					pfb_top1m_parse_source_row($dataLine, $provider),
+					"{$id}: {$shape} data row must fail exact-column parsing"
+				);
+				$this->assertFalse(
+					pfb_top1m_candidate_valid($path, $provider),
+					"{$id}: valid header plus {$shape} data row must fail closed"
+				);
+			}
+
+			$domainCol = (int) $provider['domain_col'];
+			$invalidUtf8Fields = $fixtures[$id]['fields'];
+			$invalidUtf8Fields[$domainCol] = "bad\xFF.example";
+			$invalidUtf8Line = implode(',', $invalidUtf8Fields) . "\n";
+			$invalidUtf8Path = "{$this->dir}/{$id}-invalid-utf8.csv";
+			$this->assertNotFalse(file_put_contents($invalidUtf8Path, $fixtures[$id]['header'] . $invalidUtf8Line));
+			$this->assertNull(pfb_top1m_parse_source_row($invalidUtf8Line, $provider), "{$id}: invalid UTF-8 domain rejected");
+			$this->assertFalse(pfb_top1m_candidate_valid($invalidUtf8Path, $provider), "{$id}: invalid UTF-8 candidate rejected");
+
+			$unterminatedPrefix = array_slice($fixtures[$id]['fields'], 0, $domainCol);
+			$unterminatedLine = ($unterminatedPrefix === [] ? '' : implode(',', $unterminatedPrefix) . ',') . "\"Example.COM\n";
+			$unterminatedPath = "{$this->dir}/{$id}-unterminated.csv";
+			$this->assertNotFalse(file_put_contents($unterminatedPath, $fixtures[$id]['header'] . $unterminatedLine));
+			$this->assertNull(pfb_top1m_parse_source_row($unterminatedLine, $provider), "{$id}: unterminated quoted domain rejected");
+			$this->assertFalse(pfb_top1m_candidate_valid($unterminatedPath, $provider), "{$id}: unterminated candidate rejected");
+
+			$this->assertSame($fixtures[$id]['columns'], $provider['columns'] ?? NULL, "{$id}: exact column count descriptor");
+		}
+	}
+
+	public function testSyntheticDescriptorWithoutColumnCountKeepsMinimumShapeBehavior(): void
+	{
+		$provider = ['parse' => 'csv', 'header' => FALSE, 'domain_col' => 1];
+		$path = "{$this->dir}/synthetic.csv";
+		$this->assertNotFalse(file_put_contents($path, "rank,Example.COM,extra\n"));
+		$this->assertSame('example.com', pfb_top1m_parse_source_row("rank,Example.COM,extra\n", $provider));
+		$this->assertTrue(pfb_top1m_candidate_valid($path, $provider));
+	}
+
+	public function testCandidateRejectsEmptyAndMissingFiles(): void
+	{
+		$provider = pfb_top1m_providers()['tranco'];
+		$empty = "{$this->dir}/empty.csv";
+		$this->assertNotFalse(file_put_contents($empty, ''));
+		$this->assertFalse(pfb_top1m_candidate_valid($empty, $provider));
+		$this->assertFalse(pfb_top1m_candidate_valid("{$this->dir}/missing.csv", $provider));
+	}
+
+	public function testCandidateRejectsUnreadableFile(): void
+	{
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('root bypasses file permissions');
+		}
+		$provider = pfb_top1m_providers()['tranco'];
+		$path = "{$this->dir}/unreadable.csv";
+		$this->assertNotFalse(file_put_contents($path, "1,Example.COM\n"));
+		$this->assertTrue(chmod($path, 0000));
+		try {
+			$this->assertFalse(pfb_top1m_candidate_valid($path, $provider));
+		} finally {
+			chmod($path, 0600);
 		}
 	}
 
@@ -141,6 +236,7 @@ final class Top1mSemanticMatrixTest extends TestCase
 		foreach ($fixtures as $label => [$source, $base, $active]) {
 			$before = $this->seedPublication($base, $active, $label);
 			$this->assertFalse($this->downloadSource($source, $base, $active), "{$label}: semantic-invalid candidate must fail");
+			$this->assertSame([], glob(dirname($base) . '/.pfbtop1m_*') ?: [], "{$label}: rejected download left staging artifacts");
 			$this->assertSame($before, $this->snapshotPublication($base, $active), "{$label}: rejected candidate changed last-good state");
 		}
 	}

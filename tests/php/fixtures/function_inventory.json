@@ -7054,6 +7054,11 @@
         "returnType": "string",
         "params": []
     },
+    "pfb_top1m_active_provider": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_top1m_auth_headers": {
         "returnsRef": false,
         "returnType": "array",
@@ -7070,6 +7075,26 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_top1m_candidate_valid": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "provider",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
                 "default": null
             }
         ]
@@ -7130,6 +7155,26 @@
                 "byRef": false,
                 "variadic": false,
                 "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfb_top1m_parse_source_row": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "line",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "provider",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
                 "default": null
             }
         ]

@@ -208,7 +208,7 @@ enum PfbTop1mSource: string implements PfbStoredEnum
 // column (no rank) -> 0. 'auth' is read by pfb_download()'s header-auth path via
 // pfb_top1m_auth_headers() below: 'none' or {header, scheme} (Cloudflare's Bearer token).
 //
-// @return array<string, array{url: string, container: string, parse: string, header: bool, domain_col: int, auth: string|array{header: string, scheme: string}, label: string, licence: string}>
+// @return array<string, array{url: string, container: string, parse: string, header: bool, domain_col: int, columns: int, auth: string|array{header: string, scheme: string}, label: string, licence: string}>
 function pfb_top1m_providers(): array
 {
 	return array(
@@ -218,6 +218,7 @@ function pfb_top1m_providers(): array
 			'parse'		=> 'rank_domain',
 			'header'	=> FALSE,
 			'domain_col'	=> 1,
+			'columns'	=> 2,
 			'auth'		=> 'none',
 			'label'		=> 'Tranco',
 			'licence'	=> '',
@@ -228,6 +229,7 @@ function pfb_top1m_providers(): array
 			'parse'		=> 'rank_domain',
 			'header'	=> FALSE,
 			'domain_col'	=> 1,
+			'columns'	=> 2,
 			'auth'		=> 'none',
 			'label'		=> 'Cisco Umbrella',
 			'licence'	=> '',
@@ -243,6 +245,7 @@ function pfb_top1m_providers(): array
 			'parse'		=> 'csv',
 			'header'	=> TRUE,
 			'domain_col'	=> 1,
+			'columns'	=> 5,
 			'auth'		=> 'none',
 			'label'		=> 'OpenPageRank',
 			'licence'	=> '',
@@ -255,6 +258,7 @@ function pfb_top1m_providers(): array
 			'parse'		=> 'csv',
 			'header'	=> TRUE,
 			'domain_col'	=> 2,
+			'columns'	=> 12,
 			'auth'		=> 'none',
 			'label'		=> 'Majestic Million',
 			'licence'	=> 'CC BY 3.0 — attribution required',
@@ -285,6 +289,7 @@ function pfb_top1m_providers(): array
 			'parse'		=> 'csv',
 			'header'	=> TRUE,
 			'domain_col'	=> 0,
+			'columns'	=> 1,
 			'auth'		=> array('header' => 'Authorization', 'scheme' => 'Bearer'),
 			'label'		=> 'Cloudflare Radar',
 			'licence'	=> 'CC BY-NC 4.0 — non-commercial use, attribution required',
