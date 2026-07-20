@@ -8048,6 +8048,28 @@ function pfb_unbound_py_teardown_raw_set(): bool {
 		foreach (pfb_unbound_py_raw_artifacts($pfb) as $artifact) {
 			$ok = pfb_unbound_py_remove_raw_artifact($artifact) && $ok;
 		}
+		$top1m_base = "{$pfb['dbdir']}/top-1m.csv.zip";
+		foreach (array(
+			$pfb['unbound_py_top1m'] ?? '/var/unbound/pfb_py_top1m.txt',
+			"{$top1m_base}.orig",
+			"{$top1m_base}.xxhash128",
+			"{$top1m_base}.md5",
+			"{$top1m_base}.source",
+			"{$top1m_base}.orig.etag",
+			"{$top1m_base}.orig.lastmod",
+		) as $artifact) {
+			if (file_exists($artifact) || is_link($artifact)) {
+				$ok = unlink_if_exists($artifact) && $ok;
+			}
+		}
+		foreach (array(
+			"{$pfb['dbdir']}/.pfbtop1m_*",
+			dirname($pfb['unbound_py_top1m'] ?? '/var/unbound/pfb_py_top1m.txt') . '/.pfbtop1m_*',
+		) as $pattern) {
+			foreach (glob($pattern) ?: array() as $artifact) {
+				$ok = unlink_if_exists($artifact) && $ok;
+			}
+		}
 		return $ok;
 	} finally {
 		pfb_unbound_py_publication_unlock($lock);
@@ -16617,6 +16639,7 @@ function pfblockerng_php_pre_deinstall_command() {
 
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();
+	pfb_unbound_py_teardown_raw_set();
 
 	// Live-object teardown always runs regardless of $pfb['keep'], so that uninstalling
 	// with the default keep=on still removes active pf tables, boot hooks, owned firewall

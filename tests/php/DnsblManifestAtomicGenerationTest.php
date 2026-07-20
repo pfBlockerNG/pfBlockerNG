@@ -30,6 +30,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			'unbound_py_rawdir'  => "{$this->tmp}/pfb_py_raw",
 			'dnsdir'             => "{$this->tmp}/dnsbl",
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
+			'unbound_py_top1m'   => "{$this->tmp}/pfb_py_top1m.txt",
 			'dbdir'              => "{$this->tmp}/db",
 			'dnsbl_top1m'        => 'off',
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
@@ -453,5 +454,40 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$this->assertDirectoryDoesNotExist($GLOBALS['pfb']['unbound_py_rawdir']);
 		$this->assertSame([], glob("{$this->tmp}/pfb_py_raw.stage.*") ?: []);
 		$this->assertDirectoryExists("{$this->tmp}/pfb_py_raw.neighbor");
+	}
+
+	public function testTeardownRemovesOnlyTop1mRuntimeArtifacts(): void
+	{
+		$base = "{$GLOBALS['pfb']['dbdir']}/top-1m.csv.zip";
+		$artifacts = [
+			$GLOBALS['pfb']['unbound_py_top1m'],
+			"{$base}.orig",
+			"{$base}.xxhash128",
+			"{$base}.md5",
+			"{$base}.source",
+			"{$base}.orig.etag",
+			"{$base}.orig.lastmod",
+			"{$GLOBALS['pfb']['dbdir']}/.pfbtop1m_stage",
+			"{$this->tmp}/.pfbtop1m_fixed",
+		];
+		foreach ($artifacts as $artifact) {
+			file_put_contents($artifact, 'owned');
+		}
+		$decoys = [
+			"{$GLOBALS['pfb']['dbdir']}/top-1m.csv.zip.orig.neighbor",
+			"{$GLOBALS['pfb']['dbdir']}/pfbtop1m_stage",
+			"{$this->tmp}/pfb_py_neighbor.txt",
+		];
+		foreach ($decoys as $decoy) {
+			file_put_contents($decoy, 'keep');
+		}
+
+		$this->assertTrue(pfb_unbound_py_teardown_raw_set());
+		foreach ($artifacts as $artifact) {
+			$this->assertFileDoesNotExist($artifact);
+		}
+		foreach ($decoys as $decoy) {
+			$this->assertSame('keep', file_get_contents($decoy));
+		}
 	}
 }
