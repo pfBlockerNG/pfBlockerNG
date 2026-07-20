@@ -3754,6 +3754,125 @@ def test_adr46_legit_multifile_zip_still_imports(deployed_vm: SmokeVM, mock_feed
 
 
 @pytest.mark.timeout(120)
+def test_top1m_file_target_rejects_multifile_and_retains_active(
+    deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """TOP1M file targets accept one payload only; rejected archives leave state untouched."""
+    workdir = f"{_ADR46_WORKDIR}_file_reject"
+    target = f"{workdir}/top-1m.csv"
+    base = f"{workdir}/top-1m.csv.zip"
+    marker = f"{h.PFB_DBDIR}/top-1m.update"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("d/top_a.csv", "new-a\n")
+        z.writestr("d/top_b.csv", "new-b\n")
+    feed_url = mock_feeds.register("top1m_file_reject.zip", buf.getvalue())
+    try:
+        deployed_vm.ssh(
+            f"/bin/rm -rf {workdir} {marker} && /bin/mkdir -p {workdir} && "
+            f"/bin/echo 'old active' > {target} && /bin/echo 'old raw' > {base}.orig"
+        )
+        out = _adr46_download(deployed_vm, feed_url, base, target, "top1m")
+        assert "PFB_DL_FALSE" in out, f"multi-member ZIP must reject a file target: {out!r}"
+        state = (
+            deployed_vm.ssh(
+                f"/bin/cat {target}; /bin/cat {base}.orig; "
+                f"test -e {marker} && echo MARKER; test -e {base}.raw && echo RAW"
+            )
+            .stdout.strip()
+            .splitlines()
+        )
+        assert state == ["old active", "old raw"], f"rejected download changed active/baseline: {state!r}"
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {marker}")
+
+
+@pytest.mark.timeout(120)
+def test_top1m_file_target_single_member_publishes_atomically(
+    deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """A single regular ZIP member replaces the active file and records raw/hash after publish."""
+    workdir = f"{_ADR46_WORKDIR}_file_single"
+    target = f"{workdir}/top-1m.csv"
+    base = f"{workdir}/top-1m.csv.zip"
+    marker = f"{h.PFB_DBDIR}/top-1m.update"
+    body = "1,example.test\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("d/top.csv", body)
+    feed_url = mock_feeds.register("top1m_file_single.zip", buf.getvalue())
+    try:
+        deployed_vm.ssh(  # fmt: skip
+            f"/bin/rm -rf {workdir} {marker} && /bin/mkdir -p {workdir} && /bin/echo 'old active' > {target}"
+        )
+        out = _adr46_download(deployed_vm, feed_url, base, target, "top1m")
+        assert "PFB_DL_TRUE" in out, f"single-member ZIP must publish: {out!r}"
+        state = (
+            deployed_vm.ssh(
+                f"/bin/cat {target}; test -s {base}.orig && echo ORIG; "
+                f"test -s {base}.xxhash128 && echo HASH; test -e {marker} && echo MARKER"
+            )
+            .stdout.strip()
+            .splitlines()
+        )
+        assert state == [body.rstrip("\n"), "ORIG", "HASH", "MARKER"], (
+            f"active/raw/hash/marker publication state unexpected: {state!r}"
+        )
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {marker}")
+
+
+@pytest.mark.timeout(120)
+def test_top1m_file_target_hostile_and_truncated_archives_retain_active(
+    deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """Traversal, absolute, symlink-like, empty, and truncated ZIPs never reach active state."""
+    workdir = f"{_ADR46_WORKDIR}_file_hostile"
+    target = f"{workdir}/top-1m.csv"
+    base = f"{workdir}/top-1m.csv.zip"
+    marker = f"{h.PFB_DBDIR}/top-1m.update"
+    archives: list[tuple[str, bytes]] = []
+    for name, member in (("traversal.zip", "../escape.csv"), ("absolute.zip", "/absolute.csv")):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(member, "escape\n")
+        archives.append((name, buf.getvalue()))
+    symlink = io.BytesIO()
+    with zipfile.ZipFile(symlink, "w") as z:
+        info = zipfile.ZipInfo("d/link.csv")
+        info.create_system = 3
+        info.external_attr = (0o120777 << 16) | 0xA000
+        z.writestr(info, "../outside.csv")
+    archives.append(("symlink.zip", symlink.getvalue()))
+    empty = io.BytesIO()
+    with zipfile.ZipFile(empty, "w"):
+        pass
+    archives.append(("empty.zip", empty.getvalue()))
+    valid = io.BytesIO()
+    with zipfile.ZipFile(valid, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("d/top.csv", "ok\n")
+    archives.append(("truncated.zip", valid.getvalue()[:-8]))
+    try:
+        deployed_vm.ssh(
+            f"/bin/rm -rf {workdir} {marker} && /bin/mkdir -p {workdir} && "
+            f"/bin/echo 'old active' > {target} && /bin/echo 'old raw' > {base}.orig"
+        )
+        for name, payload in archives:
+            feed_url = mock_feeds.register(name, payload)
+            out = _adr46_download(deployed_vm, feed_url, base, target, "top1m")
+            assert "PFB_DL_FALSE" in out, f"hostile {name} unexpectedly published: {out!r}"
+            active = deployed_vm.ssh(f"/bin/cat {target}").stdout.strip()
+            assert active == "old active", f"hostile {name} changed active file: {active!r}"
+        html_url = mock_feeds.register("top1m_html_error.html", b"<html><body>upstream error</body></html>")
+        out = _adr46_download(deployed_vm, html_url, f"{workdir}/html.csv", target, "top1m")
+        assert "PFB_DL_FALSE" in out, f"HTML error body unexpectedly published: {out!r}"
+        active = deployed_vm.ssh(f"/bin/cat {target}").stdout.strip()
+        assert active == "old active", f"HTML error changed active file: {active!r}"
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {marker}")
+
+
+@pytest.mark.timeout(120)
 def test_adr46_hostile_member_geoip_gz_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-46: the gzip GeoIP branch rejects a hostile-member tar.gz BEFORE extraction.
 
