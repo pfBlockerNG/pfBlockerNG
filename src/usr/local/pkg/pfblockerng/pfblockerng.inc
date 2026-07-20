@@ -12227,7 +12227,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// ADR-42 / issue #713 bug 5: refresh the content-hash sidecar at every
 			// successful ingest so pfb_local_feed_changed() / the probe's conditional-GET
 			// compare always land on the SAME domain of bytes the probe hashed.  The probe
-			// (pfb_update_check -> pfb_download($type='change_detect')) hashes the RAW
+			// (pfb_update_check -> pfb_download(PfbDownloadRequest(type: 'change_detect'))) hashes the RAW
 			// fetched body (it returns before any decompression), so the persisted digest
 			// here must cover those same raw bytes too -- not the decompressed '.orig' --
 			// or a compressed feed (gz/bz2/zip/7z) never matches and re-ingests every cron.

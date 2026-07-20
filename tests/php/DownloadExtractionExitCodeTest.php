@@ -22,12 +22,12 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$source = file_get_contents(
 			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc'
 		);
-		if ($source === false) {
+		if ($source === FALSE) {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng.inc');
 		}
 
 		$start = strpos($source, 'function pfb_download(');
-		if ($start === false) {
+		if ($start === FALSE) {
 			throw new RuntimeException('test bootstrap: function pfb_download( not found');
 		}
 
@@ -73,7 +73,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 				&& $tokens[$i + 4] === array('id' => T_LNUMBER, 'text' => '0')
 				&& $tokens[$i + 5]['text'] === ')') {
 				return $tokens[$i + 6]['text'] === '{'
-					&& self::hasDirectFalseReturn($tokens, $i + 6);
+					&& self::hasDirectFailureResult($tokens, $i + 6);
 			}
 		}
 
@@ -81,7 +81,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
-	 * @return array{bound: bool, directReturn: bool}
+	 * @return array{bound: bool, directFailureResult: bool}
 	 */
 	private static function analyzeRenameGuard(string $segment, string $destination, int $outerDepth = 0): array
 	{
@@ -114,7 +114,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 				|| ($depths[$assignment] ?? NULL) !== $outerDepth
 				|| ($depths[$lhs] ?? NULL) !== $outerDepth
 				|| ($boundary !== NULL && !in_array($boundary, [';', '{', '}'], TRUE))) {
-				return array('bound' => FALSE, 'directReturn' => FALSE);
+				return array('bound' => FALSE, 'directFailureResult' => FALSE);
 			}
 
 			$args = array(array());
@@ -144,7 +144,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 				$args
 			);
 			if ($close === NULL || $argumentText !== ['"{$file_download}"', '"{' . $destination . '}"']) {
-				return array('bound' => FALSE, 'directReturn' => FALSE);
+				return array('bound' => FALSE, 'directFailureResult' => FALSE);
 			}
 
 			$guard = $close + 2;
@@ -158,16 +158,16 @@ final class DownloadExtractionExitCodeTest extends TestCase
 				&& ($tokens[$guard + 4]['text'] ?? '') === ')'
 				&& ($tokens[$guard + 5]['text'] ?? '') === '{';
 			if (!$bound) {
-				return array('bound' => FALSE, 'directReturn' => FALSE);
+				return array('bound' => FALSE, 'directFailureResult' => FALSE);
 			}
 
 			return array(
 				'bound' => TRUE,
-				'directReturn' => self::hasDirectFalseReturn($tokens, $guard + 5)
+				'directFailureResult' => self::hasDirectFailureResult($tokens, $guard + 5)
 			);
 		}
 
-		return array('bound' => FALSE, 'directReturn' => FALSE);
+		return array('bound' => FALSE, 'directFailureResult' => FALSE);
 	}
 
 	/**
@@ -206,7 +206,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	/**
 	 * @param list<array{id: int|null, text: string}> $tokens
 	 */
-	private static function hasDirectFalseReturn(array $tokens, int $openingBrace): bool
+	private static function hasDirectFailureResult(array $tokens, int $openingBrace): bool
 	{
 		$depth = 1;
 		$interpolationDepth = 0;
@@ -237,29 +237,79 @@ final class DownloadExtractionExitCodeTest extends TestCase
 					&& ($tokens[$i + 3] ?? NULL) === array('id' => T_STRING, 'text' => 'failure')
 					&& ($tokens[$i + 4]['text'] ?? '') === '('
 					&& ($tokens[$i + 5]['text'] ?? '') === ')'
-					&& ($tokens[$i + 6]['text'] ?? '') === ';')
-					|| (($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'FALSE')
-						&& ($tokens[$i + 2]['text'] ?? '') === ';');
+					&& ($tokens[$i + 6]['text'] ?? '') === ';');
 			}
 		}
 
 		return FALSE;
 	}
 
+	public function testEveryPfbDownloadReturnUsesTypedResultExceptHeaderCallback(): void
+	{
+		$tokens = self::significantTokens(self::$body);
+		$typedResultCount = 0;
+		$headerCallbackCount = 0;
+		$unexpectedReturns = array();
+
+		for ($i = 0, $count = count($tokens); $i < $count; $i++) {
+			if ($tokens[$i]['id'] !== T_RETURN) {
+				continue;
+			}
+
+			$isTypedResult = ($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'PfbDownloadResult')
+				&& ($tokens[$i + 2]['id'] ?? NULL) === T_DOUBLE_COLON
+				&& in_array($tokens[$i + 3] ?? NULL, [
+					array('id' => T_STRING, 'text' => 'success'),
+					array('id' => T_STRING, 'text' => 'failure'),
+				], TRUE)
+				&& ($tokens[$i + 4]['text'] ?? '') === '(';
+			if ($isTypedResult) {
+				$typedResultCount++;
+				continue;
+			}
+
+			$isHeaderCallback = ($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'strlen')
+				&& ($tokens[$i + 2]['text'] ?? '') === '('
+				&& ($tokens[$i + 3] ?? NULL) === array('id' => T_VARIABLE, 'text' => '$hdr_line')
+				&& ($tokens[$i + 4]['text'] ?? '') === ')'
+				&& ($tokens[$i + 5]['text'] ?? '') === ';';
+			if ($isHeaderCallback) {
+				$headerCallbackCount++;
+				continue;
+			}
+
+			$expression = '';
+			for ($j = $i; $j < min($i + 8, $count); $j++) {
+				$expression .= $tokens[$j]['text'];
+			}
+			$unexpectedReturns[] = $expression;
+		}
+
+		$this->assertStringContainsString('function ($curl_handle, $hdr_line)', self::$body,
+			'vacuity: the sole non-result return must remain the cURL header callback');
+		$this->assertSame(44, $typedResultCount,
+			'pfb_download() must expose exactly 44 PfbDownloadResult success/failure returns');
+		$this->assertSame(1, $headerCallbackCount,
+			'pfb_download() may have only the header callback strlen return outside PfbDownloadResult');
+		$this->assertSame(array(), $unexpectedReturns,
+			'pfb_download() has an untyped return; every return must be PfbDownloadResult success/failure '
+			. 'except the header callback strlen: ' . json_encode($unexpectedReturns));
+	}
+
 	// -----------------------------------------------------------------------
 	// Row 1 -- gzip geoip: /usr/bin/tar -xzf site.
 	// -----------------------------------------------------------------------
 
-	public function testGzipGeoipTarCapturesRetvalAndIsCheckedBeforeReturnTrue(): void
+	public function testGzipGeoipTarCapturesRetvalAndIsCheckedBeforeSuccessResult(): void
 	{
 		$tarPos = strpos(self::$body, "/usr/bin/tar -xzf {\$file_dwn_esc} --strip=1 -C {\$pfb['geoipshare']}");
 		$this->assertNotFalse($tarPos, 'vacuity: the gzip-geoip tar -xzf site must exist for this test to mean anything');
 
-		$returnTrue = strpos(self::$body, 'return PfbDownloadResult::success();', $tarPos);
-		$this->assertNotFalse($returnTrue, 'vacuity: gzip-geoip site must reach a success result;');
+		$successResult = strpos(self::$body, 'return PfbDownloadResult::success();', $tarPos);
+		$this->assertNotFalse($successResult, 'vacuity: gzip-geoip site must reach a success result;');
 		$segmentStart = strrpos(substr(self::$body, 0, $tarPos), "\n");
 		$segmentStart = $segmentStart === FALSE ? 0 : $segmentStart + 1;
-		$segment = substr(self::$body, $segmentStart, $returnTrue + strlen('return PfbDownloadResult::success();') - $segmentStart);
+		$segment = substr(self::$body, $segmentStart, $successResult + strlen('return PfbDownloadResult::success();') - $segmentStart);
 
 		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segment,
 			'gzip-geoip tar -xzf must capture $output, $retval -- a corrupt archive currently reports success unconditionally');
@@ -297,7 +347,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	// Row 3 -- gzip top1m: same gunzip-capture-but-ignored shape as asn.
 	// -----------------------------------------------------------------------
 
-	public function testGzipTop1mChecksRetvalBeforeReturnTrue(): void
+	public function testGzipTop1mChecksRetvalBeforeSuccessResult(): void
 	{
 		$top1mAnchor = strpos(self::$body, "\$type == 'top1m'");
 		$this->assertNotFalse($top1mAnchor, 'vacuity: the gzip-top1m branch must exist');
@@ -305,9 +355,9 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$gunzip = strpos(self::$body, 'exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}"', $top1mAnchor);
 		$this->assertNotFalse($gunzip, 'vacuity: gzip-top1m gunzip exec must exist');
 
-		$returnTrue = strpos(self::$body, 'return PfbDownloadResult::success();', $gunzip);
-		$this->assertNotFalse($returnTrue, 'vacuity: gzip-top1m site must reach a success result;');
-		$segment = substr(self::$body, $gunzip, $returnTrue + strlen('return PfbDownloadResult::success();') - $gunzip);
+		$successResult = strpos(self::$body, 'return PfbDownloadResult::success();', $gunzip);
+		$this->assertNotFalse($successResult, 'vacuity: gzip-top1m site must reach a success result;');
+		$segment = substr(self::$body, $gunzip, $successResult + strlen('return PfbDownloadResult::success();') - $gunzip);
 
 		$this->assertTrue(self::hasNonzeroRetvalGuard($segment),
 			'gzip-top1m must check nonzero $retval before its success result -- a nonzero gunzip exit must not report success; '
@@ -350,10 +400,10 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	// -----------------------------------------------------------------------
 	// Row 5 & 6 -- zip extras: both the multi-member (-xf) and single-member
 	// (-xOf) tar sites must capture $retval; a check must gate their shared
-	// return TRUE.
+	// success result.
 	// -----------------------------------------------------------------------
 
-	public function testZipExtrasBothTarSitesCaptureRetvalAndAreCheckedBeforeReturnTrue(): void
+	public function testZipExtrasBothTarSitesCaptureRetvalAndAreCheckedBeforeSuccessResult(): void
 	{
 		$multi = strpos(self::$body, 'exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc}');
 		$this->assertNotFalse($multi, 'vacuity: the zip multi-member tar -xf site must exist');
@@ -361,18 +411,18 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$single = strpos(self::$body, 'exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}"', $multi);
 		$this->assertNotFalse($single, 'vacuity: the zip single-member tar -xOf site must exist');
 
-		$returnTrue = strpos(self::$body, 'return PfbDownloadResult::success();', $single);
-		$this->assertNotFalse($returnTrue, 'vacuity: zip extras must reach a shared success result;');
+		$successResult = strpos(self::$body, 'return PfbDownloadResult::success();', $single);
+		$this->assertNotFalse($successResult, 'vacuity: zip extras must reach a shared success result;');
 
 		$segMulti = substr(self::$body, $multi, $single - $multi);
 		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segMulti,
 			'zip multi-member tar -xf must capture $output, $retval; segment: ' . json_encode($segMulti));
 
-		$segSingleToReturn = substr(self::$body, $single, $returnTrue + strlen('return PfbDownloadResult::success();') - $single);
+		$segSingleToReturn = substr(self::$body, $single, $successResult + strlen('return PfbDownloadResult::success();') - $single);
 		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segSingleToReturn,
 			'zip single-member tar -xOf must capture $output, $retval; segment: ' . json_encode($segSingleToReturn));
 		$this->assertTrue(self::hasNonzeroRetvalGuard($segSingleToReturn),
-			'zip extras must check nonzero $retval before their shared return TRUE; segment: '
+			'zip extras must check nonzero $retval before their shared success result; segment: '
 			. json_encode($segSingleToReturn));
 	}
 
@@ -392,7 +442,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$analysis = self::analyzeRenameGuard($segment, '$head_download', 1);
 		$this->assertTrue($analysis['bound'],
 			'uncompressed extras must check !$renamed before success result; segment: ' . json_encode($segment));
-		$this->assertTrue($analysis['directReturn'],
+		$this->assertTrue($analysis['directFailureResult'],
 			'a failed rename() must have a failure result path; segment: ' . json_encode($segment));
 	}
 
@@ -418,7 +468,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertTrue($analysis['bound'],
 			'generic uncompressed feeds must check !$renamed before the $retval == 0 success gate; segment: '
 			. json_encode($segment));
-		$this->assertTrue($analysis['directReturn'],
+		$this->assertTrue($analysis['directFailureResult'],
 			'a failed rename() must have a failure result path before the success gate; segment: ' . json_encode($segment));
 	}
 }

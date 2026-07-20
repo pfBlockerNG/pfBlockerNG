@@ -3623,7 +3623,7 @@ _ADR46_WORKDIR = f"{h.PFB_DBDIR}/adr46_guard"
 
 
 def _adr46_download(vm: SmokeVM, feed_url: str, file_dwn: str, header: str, dl_type: str) -> str:
-    """Run pfb_download(<feed_url>, <file_dwn>, ..., type=<dl_type>) on the box; return stdout.
+    """Run pfb_download(PfbDownloadRequest(..., type=<dl_type>)) on the box; return stdout.
 
     ``header`` is the request's extraction/log field: the ``tar -C`` target for the
     ZIP geoip/top1m branch, and the ``feed=`` token of the canonical reject line at

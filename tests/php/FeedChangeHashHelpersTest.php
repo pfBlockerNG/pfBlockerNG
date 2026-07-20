@@ -691,7 +691,7 @@ final class FeedChangeHashHelpersTest extends TestCase
 
 	/**
 	 * The bug (issue #713 bug 5): the change-detection probe (pfb_update_check ->
-	 * pfb_download($type='change_detect')) hashes the RAW fetched body — it returns
+	 * pfb_download(PfbDownloadRequest(type: 'change_detect'))) hashes the RAW fetched body — it returns
 	 * before any decompression. For a compressed feed, ingest used to persist the
 	 * sidecar from the DECOMPRESSED .orig instead, so the two hashes covered different
 	 * bytes and could never match — every cron re-ingested a compressed feed even when
@@ -739,7 +739,7 @@ final class FeedChangeHashHelpersTest extends TestCase
 		);
 
 		// WHEN: a later cron probe re-fetches the SAME compressed bytes (server unchanged
-		// — pfb_download($type='change_detect') writes the raw body to {header}.md5.raw
+		// — pfb_download(PfbDownloadRequest(type: 'change_detect')) writes the raw body to {header}.md5.raw
 		// and returns before decompressing).
 		$probe_raw = $this->dir . '/feed.md5.raw';
 		file_put_contents($probe_raw, $raw_bytes);
