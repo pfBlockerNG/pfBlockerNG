@@ -7101,6 +7101,26 @@
             }
         ]
     },
+    "pfb_top1m_fetch_if_needed": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "fetch",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_top1m_invalidate_baseline": {
         "returnsRef": false,
         "returnType": null,
@@ -7172,6 +7192,19 @@
         "returnsRef": false,
         "returnType": "array",
         "params": []
+    },
+    "pfb_top1m_refresh_needed": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
     },
     "pfb_top1m_settings_reprocess": {
         "returnsRef": false,

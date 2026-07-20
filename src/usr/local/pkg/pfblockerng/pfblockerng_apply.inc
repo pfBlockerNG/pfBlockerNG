@@ -56,6 +56,29 @@ function pfb_sync_run_plan(array $request, bool $no_updates, bool $cron_tick, st
 }
 
 /**
+ * TOP1M's live CSV is usable only while its raw detector baseline is present too.
+ */
+function pfb_top1m_refresh_needed(string $dbdir): bool {
+	return !file_exists("{$dbdir}/top-1m.csv");
+}
+
+/**
+ * Attempt the TOP1M provider fetch when either live source file is absent.
+ * The optional fetcher is a no-network test seam; production uses the CLI command.
+ */
+function pfb_top1m_fetch_if_needed(string $dbdir, ?callable $fetch = NULL): bool {
+	if (!pfb_top1m_refresh_needed($dbdir)) {
+		return FALSE;
+	}
+	if ($fetch !== NULL) {
+		$fetch();
+	} else {
+		exec('/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php al');
+	}
+	return TRUE;
+}
+
+/**
  * Parse one generic IP-feed line without touching run state or emitting output.
  * @param array{vtype:string,pftype:string,custom:bool,cidr_floor_v4:int|string,cidr_floor_v6:int|string,suppression:string,range:string,ipv4:string,ipv6:string} $config
  * @return array{entries:list<string>,line:string,suppressed:bool,parse_fail_delta:int,detailed_parse_fail:bool,messages:list<string>}
@@ -1266,14 +1289,14 @@ function sync_package_pfblockerng($cron='') {
 			if ($pfb['dnsbl_top1m'] == 'on') {
 				pfb_logger("\n Loading TOP1M Whitelist...", 1);
 
-				// Check if TOP1M database exists
-				if (!file_exists("{$pfb['dbdir']}/top-1m.csv")) {
+				// Check if TOP1M database and the detector's raw baseline exist.
+				if (pfb_top1m_refresh_needed($pfb['dbdir'])) {
 					// Check if TOP1M download already in progress
 					exec('/bin/ps -wax', $result_cron);
 					if (!preg_grep("/pfblockerng[.]php\s+al/", $result_cron)) {
 						$log = "\n TOP1M Database downloading ( approx 21MB ) ... Please wait ...\n";
 						pfb_logger("{$log}", 1);
-						exec('/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php al');
+						pfb_top1m_fetch_if_needed($pfb['dbdir']);
 
 						// Download attempted above (blocking exec) -- top-1m.csv still
 						// missing means the fetch failed (404/timeout/invalid). Warn
