@@ -339,9 +339,8 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 
 			// Download Database updates
 			$extras_ok = pfblockerng_download_extras(600, $logtype);
+			pfb_top1m_dispatch_if_changed($extras_ok);
 			if ($extras_ok) {
-				pfb_top1m_dispatch_if_changed($extras_ok);
-
 				// Proceed with conversion of MaxMind files on download success
 				if (empty($pfb['cc']) || !empty($pfb['maxmind_key']) || !empty($pfb['maxmind_account'])) {
 					if (pfblockerng_uc_countries()) {
@@ -426,15 +425,47 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 }
 
 
-function pfb_top1m_detector_decision($probe_ok, $http_status, $body_hash, $persisted_hash) {
+function pfb_top1m_detector_decision(
+	$probe_ok,
+	$http_status,
+	$body_hash,
+	$persisted_hash,
+	$base = NULL,
+	$identity_matches = TRUE,
+	$require_validator = FALSE
+) {
+	if ($base !== NULL) {
+		$raw_path = "{$base}.orig";
+		if (!$identity_matches || !is_file($raw_path) || !is_readable($raw_path)) {
+			return $probe_ok ? 'changed' : 'failed';
+		}
+		$sidecar = pfb_hash_read($base);
+		if (($sidecar['algo'] ?? '') !== 'xxh128') {
+			return $probe_ok ? 'changed' : 'failed';
+		}
+		$baseline_hash = pfb_content_hash($raw_path, TRUE);
+		if ($baseline_hash === FALSE || $baseline_hash !== $sidecar['digest']) {
+			return $probe_ok ? 'changed' : 'failed';
+		}
+		if ($require_validator && $http_status === '304') {
+			$validators = pfb_validator_read("{$base}.orig");
+			$has_validator = (is_string($validators['etag']) && $validators['etag'] !== '')
+				|| (is_int($validators['lastmod']) && $validators['lastmod'] > 0);
+			if (!$has_validator) {
+				return $probe_ok ? 'changed' : 'failed';
+			}
+		}
+		$persisted_hash = $sidecar['digest'];
+	}
 	return pfb_top1m_probe_decision($probe_ok, $http_status, $body_hash, $persisted_hash);
 }
 
 function pfb_top1m_dispatch_if_changed($extras_ok) {
 	global $argv, $pfb;
-	if (!$extras_ok || ($argv[1] ?? '') !== 'dcc' || empty($pfb['top1m_changed'])) {
+	if (($argv[1] ?? '') !== 'dcc' || empty($pfb['top1m_changed']) || !empty($pfb['top1m_dispatch_done'])) {
 		return FALSE;
 	}
+	$pfb['top1m_dispatch_done'] = TRUE;
 	exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=dnsbl force=false trigger=cron >> {$pfb['runlog']} 2>&1 &");
 	return TRUE;
 }
@@ -516,9 +547,15 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 			$probe_status = $top1m_probe_meta['status'] ?? '';
 			$probe_hash = ($probe_status === '200')
 				? pfb_content_hash("{$file_dwn}.md5.raw", TRUE) : FALSE;
-			$sidecar = $identity_matches ? pfb_hash_read($top1m_base) : array('algo' => 'changed', 'digest' => '');
-			$persisted_hash = ($sidecar['algo'] === 'xxh128') ? $sidecar['digest'] : '';
-			$probe_decision = pfb_top1m_detector_decision($probe_ok, $probe_status, $probe_hash, $persisted_hash);
+			$probe_decision = pfb_top1m_detector_decision(
+				$probe_ok,
+				$probe_status,
+				$probe_hash,
+				'',
+				$top1m_base,
+				$identity_matches,
+				$probe_status === '304'
+			);
 			if ($probe_decision === 'failed') {
 				unlink_if_exists("{$file_dwn}.md5.raw");
 				pfb_top1m_download_ledger_update(FALSE, $pfb['dbdir'], 'TOP1M probe failed');
