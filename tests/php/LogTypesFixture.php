@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 /**
  * Canonical log-type vocabulary, derived from pfb_cfg_registry()'s
- * log_max_<type> keys (pfblockerng_extra.inc) so CfgGatewayTest and
- * RollbackContractTest's log_max_days_<type> coverage can never silently
- * drift from the production registry (issue #1037).
+ * log_max_<type> keys (pfblockerng_extra.inc) so CfgGatewayTest's
+ * log_max_days_<type> coverage can never silently drift from the production
+ * registry (issue #1037).
  *
  * @return list<string>
  */

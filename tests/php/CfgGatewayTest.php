@@ -1394,7 +1394,7 @@ final class CfgGatewayTest extends TestCase
 	 *
 	 * ADR-28 reframe: PfbIdnMode::All backing value is 'on' — the original
 	 * pre-ADR-08 block-all token.  This reuse means 'on' round-trips losslessly
-	 * AND old releases reading 'on' still block all IDN (downgrade-safe).
+	 * AND the established block-all-IDN behaviour remains unchanged.
 	 *
 	 * Scenario:
 	 *   Background: pfb_idn stored as 'on' (canonical, = All).
@@ -1453,12 +1453,12 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * Every registry entry has the required shape: section, default, read_adapter,
-	 * write_adapter, since — and adapters are callable|null.
+	 * write_adapter — and adapters are callable|null.
 	 */
 	public function testRegistryEntriesHaveRequiredShape(): void
 	{
 		$registry       = pfb_cfg_registry();
-		$required_keys  = ['section', 'default', 'read_adapter', 'write_adapter', 'since'];
+		$required_keys  = ['section', 'default', 'read_adapter', 'write_adapter'];
 
 		$this->assertNotEmpty($registry, 'Registry must not be empty');
 
@@ -1497,9 +1497,6 @@ final class CfgGatewayTest extends TestCase
 				"'{$field_key}': read_adapter and write_adapter must both be NULL or both callable"
 			);
 
-			// since must be a non-empty string.
-			$this->assertIsString($entry['since'],    "'{$field_key}'.since must be a string");
-			$this->assertNotEmpty($entry['since'],    "'{$field_key}'.since must not be empty");
 		}
 	}
 

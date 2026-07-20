@@ -260,7 +260,7 @@ class RequireConfigGatewaySniff implements Sniff
 				'ADR-29: raw %s() call targeting registered key "%s" '
 				. 'must be replaced by PfbConfig::read/write/delete(). '
 				. 'Direct config_*_path access to registered keys bypasses '
-				. 'the gateway (defaults, adapters, rollback contract).',
+				. 'the gateway (defaults, adapters, canonical storage).',
 				$name,
 				$path
 			),

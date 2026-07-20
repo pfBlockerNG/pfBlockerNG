@@ -25,9 +25,9 @@
 // ---------------------------------------------------------------------------
 // ADR-28 — config field enums (PfbStoredEnum contract): read = EnumClass::fromStored($raw)
 // (registry default applied first; '' / legacy / junk resolved by the enum), write =
-// $enum->toStored(). Goal: preserve upgrade behaviour, not byte-identical storage — a
-// downgrade-unknown token falls through to the safe default.
-// Tests: tests/php/CfgAdaptersTest.php, tests/php/RollbackContractTest.php.
+// $enum->toStored(). Goal: preserve forward-upgrade behaviour while keeping current
+// canonical storage; an unknown token falls through to the safe default.
+// Tests: tests/php/CfgAdaptersTest.php.
 // ---------------------------------------------------------------------------
 
 // PfbStoredEnum — the contract every config-backed enum implements. Keeps the
@@ -119,16 +119,16 @@ enum PfbLenient: string implements PfbStoredEnum
 // PfbIdnMode — ADR-08 IDN-feature mode selector, adopted into the PfbConfig gateway.
 // Used by pfb_idn / $pfb['dnsbl_idn']. Canonical tokens (config.xml, py_unbound.ini, and
 // the Python IdnMode enum share one vocabulary): 'on' (=All), 'confusable', 'off'; '' /
-// unknown -> Off. Reusing 'on' for All keeps pre-4.0.0 installs migration-free and
-// downgrade-safe (an older release reading 'on' still blocks all IDN).
+// unknown -> Off. Reusing 'on' for All keeps existing installs migration-free and
+// preserves the established block-all-IDN behaviour.
 enum PfbIdnMode: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
 
 	// All reuses the original 'on' token (pre-ADR-08 block-all-IDN) as its backing value:
-	// it round-trips with ZERO migration AND is downgrade-safe — an older release reading
-	// 'on' still blocks all IDN. Only Confusable is a genuinely new token (an old release
-	// treats it as off, which is acceptable). The SAME token feeds config.xml, py_unbound.ini,
+	// it round-trips with ZERO migration and preserves the established block-all-IDN
+	// behaviour. Only Confusable is a genuinely new token (unknown values are
+	// treated as off, which is acceptable). The SAME token feeds config.xml, py_unbound.ini,
 	// and the Python IdnMode enum — one canonical vocabulary, no per-consumer serialisation.
 	case All        = 'on';
 	case Confusable = 'confusable';
@@ -169,7 +169,7 @@ enum PfbAliasDeltaMode: string implements PfbStoredEnum
 // 'tranco' (default), 'cisco', 'openpagerank' (#928, replacing ADR-59's 'domcop'),
 // 'majestic' (ADR-59), 'cloudflare' (ADR-59, token-authenticated). 'alexa' (#872) and
 // 'domcop' (#928) are READ-ONLY legacy tokens, coalesced to their replacement on read — the
-// write vocabulary only ever emits live tokens, so it is downgrade-safe.
+// write vocabulary only ever emits live canonical tokens.
 enum PfbTop1mSource: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
@@ -415,7 +415,7 @@ function pfb_cfg_top1m_source_write(PfbTop1mSource|string $source): string
  * Write adapter: callable(<enum|string> $value): string — runtime value -> stored string.
  * null adapter = plain string (identity; no conversion).
  *
- * @return array<string,array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null,since:string}>
+ * @return array<string,array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null}>
  */
 function pfb_cfg_registry(): array
 {
@@ -456,7 +456,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '1.0.0',
 		],
 
 		// Keep blocklists when pfBlockerNG is disabled: 'on' | 'off' | ''.
@@ -465,14 +464,12 @@ function pfb_cfg_registry(): array
 		// explicit 'off' token, distinguishable from a never-configured install
 		// (key absent) which the registry default returns as 'on'. The empty-string
 		// '' is a LEGACY READ token for installs written before this fix; it maps
-		// to Off on read, same as 'off'. Write always emits 'off' (backward-safe:
-		// older releases that read 'off' for pfb_keep treat it as "disabled").
+		// to Off on read, same as 'off'. Write always emits canonical 'off'.
 		'pfb_keep' => [
 			'section'       => $gen,
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_lenient_read',
 			'write_adapter' => 'pfb_cfg_lenient_write',
-			'since'         => '2.1.0',
 		],
 
 		// Update interval: numeric hour string | 'Disabled'. Default '1'.
@@ -481,7 +478,6 @@ function pfb_cfg_registry(): array
 			'default'       => '1',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// Cron start minute ('0'|'15'|'30'|'45'). Default '0'.
@@ -490,7 +486,6 @@ function pfb_cfg_registry(): array
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// Cron start hour (0-23 as string). Default '0'.
@@ -499,7 +494,6 @@ function pfb_cfg_registry(): array
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// Once-a-day start hour (0-23 as string). Default '0'.
@@ -508,7 +502,6 @@ function pfb_cfg_registry(): array
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// Max daily download failure threshold ('0' = unlimited). Default '0'.
@@ -517,7 +510,6 @@ function pfb_cfg_registry(): array
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// ADR-11: CSV of active aggregate alias types (e.g. 'Deny,Permit'). Default ''.
@@ -526,7 +518,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.2.0',
 		],
 
 		// Log rotation limits (all numeric strings; default '20000').
@@ -535,77 +526,66 @@ function pfb_cfg_registry(): array
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 		'log_max_errlog' => [
 			'section'       => $gen,
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 		'log_max_extraslog' => [
 			'section'       => $gen,
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 		'log_max_ip_blocklog' => [
 			'section'       => $gen,
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 		'log_max_ip_permitlog' => [
 			'section'       => $gen,
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 		'log_max_ip_matchlog' => [
 			'section'       => $gen,
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 		'log_max_ip_parse_err' => [
 			'section'       => $gen,
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 		'log_max_dnslog' => [
 			'section'       => $gen,
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 		'log_max_dnsbl_parse_err' => [
 			'section'       => $gen,
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 		'log_max_dnsreplylog' => [
 			'section'       => $gen,
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 		'log_max_unilog' => [
 			'section'       => $gen,
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 	];
 
@@ -622,7 +602,6 @@ function pfb_cfg_registry(): array
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		];
 	}
 
@@ -635,7 +614,6 @@ function pfb_cfg_registry(): array
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 
 		// Software update check last-seen version (string or null). Default ''.
@@ -644,7 +622,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 
 		// Internal-address feed-host filter toggle: 'on'|'off'. Default 'on' (new install).
@@ -653,7 +630,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.1.0',
 		],
 
 		// Allowlist for internal-feed hosts (base64-encoded). Default ''.
@@ -662,7 +638,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.1.0',
 		],
 
 		// ADR-49: opt-in plain-text feed sanity scan. Checkbox 'on'|''(off).
@@ -672,7 +647,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',                       // absent -> Off (new-install default too)
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '4.0.0',
 		],
 
 		// Reuse blocklists across updates: 'on' | '' (checkbox). Default ''.
@@ -681,7 +655,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '2.0.0',
 		],
 
 		// ADR-40: alias-table apply mode: 'auto' | 'delta' | 'replace'. New-install default 'auto'.
@@ -695,7 +668,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'auto',
 			'read_adapter'  => 'pfb_cfg_alias_delta_mode_read',
 			'write_adapter' => 'pfb_cfg_alias_delta_mode_write',
-			'since'         => '4.0.0',
 		],
 
 		// ADR-40: alias-table delta batch size (integer as string). Default '512'.
@@ -706,7 +678,6 @@ function pfb_cfg_registry(): array
 			'default'       => '512',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 
 		// ADR-43: tick-cron dispatch interval in minutes (1–60). Default '15'.
@@ -717,7 +688,6 @@ function pfb_cfg_registry(): array
 			'default'       => '15',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 
 		// ADR-43: optional apply-on-change maintenance window ("HH:MM-HH:MM", local time).
@@ -729,7 +699,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 
 		// -------------------------------------------------------------------
@@ -742,7 +711,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '1.0.0',
 		],
 
 		// ADR-13: auto-create/remove DNSBL sinkhole VIPs: 'on' | '' (checkbox).
@@ -751,7 +719,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '3.0.0',
 		],
 
 		// [ #381 ] Opt out of automatic DNSBL sinkhole NAT rule generation: 'on' | '' (checkbox).
@@ -761,7 +728,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '4.0.0',
 		],
 
 		// VIP interface for DNSBL sinkhole. Default 'lo0'.
@@ -770,7 +736,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'lo0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// DNSBL IPv4 sinkhole VIP id string. Default ''.
@@ -779,7 +744,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// DNSBL IPv6 sinkhole VIP id string. Default ''.
@@ -788,7 +752,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// DNSBL lighttpd HTTP port. Default '' (system default).
@@ -797,7 +760,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// DNSBL lighttpd HTTPS port. Default ''.
@@ -806,7 +768,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// TOP1M whitelist enable. Default ''.
@@ -815,7 +776,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// TOP1M type selector: 'tranco' | 'cisco' | 'openpagerank' | 'majestic' | 'cloudflare'.
@@ -827,7 +787,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'tranco',
 			'read_adapter'  => 'pfb_cfg_top1m_source_read',
 			'write_adapter' => 'pfb_cfg_top1m_source_write',
-			'since'         => '2.0.0',
 		],
 
 		// TOP1M domain count (numeric string). Default '1000'.
@@ -836,7 +795,6 @@ function pfb_cfg_registry(): array
 			'default'       => '1000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// TOP1M TLD inclusions for whitelisting. Default ''.
@@ -845,7 +803,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// ADR-59: masked, write-only Cloudflare Radar Bearer token -- consumed only
@@ -860,7 +817,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 
 		// Resolver cache backup/restore option. Default ''.
@@ -869,7 +825,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// Global logging/blocking mode. Default ''.
@@ -878,7 +833,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// ADR-22: scheme-parsing leniency: 'on' | 'off' | ''. Default 'off'.
@@ -888,7 +842,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'off',
 			'read_adapter'  => 'pfb_cfg_lenient_read',
 			'write_adapter' => 'pfb_cfg_lenient_write',
-			'since'         => '3.1.0',
 		],
 
 		// Python DNS reply logging. Default ''.
@@ -897,7 +850,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// HSTS null-blocking mode: 'on' | ''. Default ''.
@@ -906,7 +858,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '3.0.0',
 		],
 
 		// ADR-08: IDN mode — adopted into the gateway as a PfbIdnMode enum (ADR-28
@@ -914,15 +865,13 @@ function pfb_cfg_registry(): array
 		// normalises legacy 'on' -> All; write persists the canonical token
 		// ('on'=All | 'confusable' | 'off'), reusing the pre-4.0.0 'on' token so All
 		// round-trips with zero migration. Legacy '' and the 4.0.0-alpha 'all' token
-		// read as Off. Downgrade-safe: older releases string-compared these tokens,
-		// so an unknown token falls through to their off default.
-		// See ADR-28 §2.2 + CfgAdaptersTest + RollbackContractTest.
+		// read as Off; unknown tokens also fall through to Off.
+		// See ADR-28 §2.2 + CfgAdaptersTest.
 		'pfb_idn' => [
 			'section'       => $dnsbl,
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_idn_mode_read',
 			'write_adapter' => 'pfb_cfg_idn_mode_write',
-			'since'         => '3.0.0',
 		],
 
 		// Confusable: block malicious homoglyphs (default on). Default 'on'.
@@ -931,7 +880,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// Confusable: escalate suspicious mixed-script to block (opt-in). Default ''.
@@ -940,7 +888,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// Python regex: 'on' | ''. Default ''.
@@ -949,7 +896,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// Python regex list (textarea). Default ''.
@@ -958,7 +904,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// Python regex static cap ('on'|''). Default ''.
@@ -967,7 +912,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// CNAME validation. Default ''.
@@ -976,7 +920,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// TLD Allow option. Default ''.
@@ -985,7 +928,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// Log events via DNSBL Webserver vs python. Default ''.
@@ -994,7 +936,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// No AAAA blocking: 'on' | ''. Default ''.
@@ -1003,7 +944,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// No AAAA list (textarea). Default ''.
@@ -1012,7 +952,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// DNSBL bypass enable: 'on' | ''. Default ''.
@@ -1021,7 +960,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// DNSBL bypass local IP list (textarea). Default ''.
@@ -1030,7 +968,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// TLD blacklist (textarea). Default ''.
@@ -1039,7 +976,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// TLD exclusion (textarea). Default ''.
@@ -1048,7 +984,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// DNSBL suppression/whitelist (base64). Default ''.
@@ -1057,7 +992,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// DNSBL action for IP blocking. Default 'Disabled'.
@@ -1066,7 +1000,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'Disabled',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// Auto-create floating pass rule. Default 'Disabled'.
@@ -1075,7 +1008,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'Disabled',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// Allow-interface for DNSBL (multi-select). Default ''.
@@ -1084,7 +1016,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// Python control integration. Default ''.
@@ -1093,7 +1024,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// Legacy DNS-TXT control transport (deprecated). Default ''.
@@ -1102,7 +1032,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// Python cache max (numeric string). Default '' (unlimited).
@@ -1111,7 +1040,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '3.0.0',
 		],
 
 		// TLD blocking enable. Default ''.
@@ -1120,7 +1048,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// Aliaslog (logging mode). Default ''.
@@ -1129,7 +1056,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// ADR-36: NAT DNS-redirect enable: 'on' | '' (checkbox). Default '' (off).
@@ -1138,7 +1064,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '4.0.0',
 		],
 
 		// ADR-36: NAT DNS-redirect interface multi-select (comma-joined string). Default ''.
@@ -1147,7 +1072,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 
 		// ADR-36: NAT DNS-redirect exception alias/IP string. Default ''.
@@ -1156,7 +1080,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 
 		// ADR-37: DoT/DoQ block enable: 'on' | '' (checkbox). Default '' (off).
@@ -1165,7 +1088,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '4.0.0',
 		],
 
 		// ADR-37: DoT/DoQ block interface multi-select (comma-joined string). Default ''.
@@ -1174,7 +1096,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 
 		// ADR-37: DoT/DoQ block exception alias/IP string. Default ''.
@@ -1183,7 +1104,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 
 		// ADR-37: DoT/DoQ block rule action: 'reject' (default) | 'block'.
@@ -1194,7 +1114,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'reject',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 
 		// ADR-37: DoT/DoQ block floating mode: 'on' | '' (checkbox). Default '' (off).
@@ -1205,7 +1124,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '4.0.0',
 		],
 
 		// -------------------------------------------------------------------
@@ -1224,7 +1142,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'since'         => '4.0.0',
 		],
 
 		// -------------------------------------------------------------------
@@ -1237,7 +1154,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'Disable',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 
 		// YouTube SafeSearch mode. Default 'Disable'.
@@ -1246,7 +1162,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'Disable',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 
 		// DNS-over-HTTPS blocking mode. Default 'Disable'.
@@ -1255,7 +1170,6 @@ function pfb_cfg_registry(): array
 			'default'       => 'Disable',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 
 		// DoH domain exclusion list (CSV). Default ''.
@@ -1264,7 +1178,6 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '2.0.0',
 		],
 
 		// -------------------------------------------------------------------
@@ -1282,19 +1195,15 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '1.0.0',
 		],
 
 		// ADR-53: IPv6 suppression customlist -- the v4 blob's v6 sibling
-		// (same base64/newline-separated shape). Genuinely new (no pre-registry
-		// era to inherit from v4suppression's), so 'since' is the current
-		// development version rather than a legacy '1.0.0'. Default ''.
+		// (same base64/newline-separated shape). Default ''.
 		'v6suppression' => [
 			'section'       => $ip,
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'since'         => '4.0.0',
 		],
 	];
 
@@ -1417,9 +1326,8 @@ final class PfbConfig
 	 * array), or junk input to the field's canonical stored form, exactly as
 	 * a single-key PfbConfig::write() would. Unregistered keys and
 	 * adapter-less (plain-string) registered keys pass through byte-identical.
-	 * Consequence: the RollbackContract "never re-emitted" legacy-token
-	 * guarantee (see class docblock / ADR-29 §2.3) now holds on section
-	 * writes too — a legacy token riding a readSection()->writeSection()
+	 * Consequence: canonical storage is enforced on section writes too — a
+	 * legacy token riding a readSection()->writeSection()
 	 * round-trip (a restored backup, an HA sync, a hand-edited config.xml)
 	 * is coalesced to canonical on the next save. Does NOT call
 	 * write_config() — callers persist.
@@ -1472,7 +1380,7 @@ final class PfbConfig
 	 * Look up a registry entry, throwing on an unregistered key.
 	 *
 	 * @param  string $key
-	 * @return array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null,since:string}
+	 * @return array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null}
 	 * @throws InvalidArgumentException
 	 */
 	private static function entry(string $key): array
@@ -1566,124 +1474,6 @@ function pfb_run_migrations(): void
 			write_config($migration['message']);
 		}
 	}
-}
-
-// ---------------------------------------------------------------------------
-// ADR-29 §2.3 — Rollback / backward-compat contract. pfb_cfg_field_vocab() documents the
-// FULL STORED VOCABULARY per field adapter; RollbackContractTest.php asserts the FORWARD
-// invariant (every legacy token yields a sane runtime value) and the BACKWARD invariant
-// (every write emits ONLY a legacy-vocabulary token, never a novel on-disk one — a write may
-// normalise to a behaviour-equivalent canonical token, e.g. pfb_idn All persisting 'on').
-// SINCE-VERSION: 'since' records the release that introduced the key; pre-registry keys use
-// the earliest release still shipping that key's line (no config-version migration exists).
-// ---------------------------------------------------------------------------
-
-/**
- * pfb_cfg_field_vocab — the legacy stored vocabulary for each adapter type.
- *
- * Returns a map of adapter-type label => array of ALL strings a pre-ADR-29
- * release might have persisted for a field of that type.  Tests iterate over
- * each registered field's adapter to select the matching vocabulary, then
- * assert:
- *
- *   FORWARD: read_adapter($stored) does not crash and returns a well-formed
- *            runtime value for EVERY token in the vocabulary.
- *   BACKWARD: write_adapter(read_adapter($stored)) ∈ vocabulary for every
- *             canonical stored token (i.e. the gateway never emits a novel
- *             on-disk string an older release would not recognise).
- *
- * Adapter types:
- *   'toggle'  — PfbToggle fields: 'on' | '' (checked/unchecked checkbox).
- *   'lenient' — PfbLenient fields: 'on' | 'off' | '' ('' = pre-ADR-22 absent).
- *   'plain'   — null/null adapters: any string; identity through (no novel token).
- *
- * The idn-mode adapter (pfb_cfg_idn_mode_read/write) IS wired at PfbConfig level
- * for pfb_idn. All canonicalises to the legacy 'on' token, so writes only emit the
- * idn vocabulary ('on'|'confusable'|'off'); the dropped 4.0.0-alpha 'all' token is
- * read as Off and never written.
- *
- * The top1m_source adapter (pfb_cfg_top1m_source_read/write, issue #877) is wired
- * for alexa_type and returns a PfbTop1mSource enum. Legacy 'alexa' (dead service,
- * #872) coalesces to Tranco on read, and legacy 'domcop' (list moved hosting,
- * #928) coalesces to OpenPageRank on read; neither is ever re-emitted by a write.
- * The write vocabulary is 'tranco'|'cisco'|'openpagerank'|'majestic'|'cloudflare'
- * (majestic added ADR-59, cloudflare added ADR-59; openpagerank replaced
- * ADR-59's domcop in #928).
- *
- * @return array<string,list<string>>
- */
-function pfb_cfg_field_vocab(): array
-{
-	return [
-		// Toggle checkbox: 'on' (enabled) | '' (disabled / absent). No novel tokens.
-		'toggle'  => ['on', ''],
-
-		// Lenient flag: 'on' (enabled) | 'off' (disabled) | '' (pre-ADR-22 absent).
-		// '' is a legacy stored value that maps to Off on read; write emits 'off'.
-		// 'off' is a legacy token (predates ADR-22 — the migration only runs when
-		// the key is entirely absent, not when it is 'off'). Backward-safe: any
-		// older release that reads 'off' treats it as "disabled", which is correct.
-		'lenient' => ['on', 'off', ''],
-
-		// IDN mode (PfbIdnMode): the tokens a write can emit. 'on' = All (reuses the
-		// pre-4.0.0 block-all token, so it round-trips and an older release still blocks
-		// all IDN), 'confusable', 'off'. Legacy reads '' / 'all' (4.0.0-alpha) -> Off, but
-		// neither is ever WRITTEN, so they are not in the backward (write) vocabulary.
-		'idn'     => ['on', 'confusable', 'off'],
-
-		// Alias-table apply mode (PfbAliasDeltaMode, ADR-40): tokens a write can emit.
-		// 'auto' (default), 'delta', 'replace'. Unknown tokens read as 'auto' (default()).
-		// An older release (pre-4.0.0) has no knowledge of these fields; they simply
-		// do not exist in config.xml, and the feature falls back to full replace.
-		'alias_delta_mode' => ['auto', 'delta', 'replace'],
-
-		// TOP1M source selector (PfbTop1mSource, issue #877): the tokens a write can
-		// emit. 'tranco' (default) | 'cisco' | 'openpagerank' | 'majestic' | 'cloudflare'
-		// (majestic added ADR-59, cloudflare added ADR-59; openpagerank
-		// replaced ADR-59's domcop in #928). Two
-		// tokens are READ-ONLY legacy values — 'alexa' (dead service, #872) and
-		// 'domcop' (list moved hosting, #928) — pfb_cfg_top1m_source_read() coalesces
-		// them to PfbTop1mSource::Tranco / ::OpenPageRank respectively and neither is
-		// ever re-emitted by a write.
-		'top1m_source' => ['tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare'],
-
-		// Plain string (null/null adapters): identity. Backward-safe by construction.
-		// The 'plain' vocabulary contains the sentinel empty string; individual
-		// field values are arbitrary strings (numeric, named option, etc.) but the
-		// contract only requires that no novel token is INTRODUCED by the adapter.
-		'plain'   => [''],
-	];
-}
-
-/**
- * pfb_cfg_field_adapter_type — return the adapter type label for a registry entry.
- *
- * Returns 'toggle', 'lenient', or 'plain' — matching the keys in pfb_cfg_field_vocab().
- * Used by RollbackContractTest to look up the vocabulary for each registered field.
- *
- * @param  array $entry  A registry entry from pfb_cfg_registry().
- * @return string        Adapter type label.
- */
-function pfb_cfg_field_adapter_type(array $entry): string
-{
-	$read = $entry['read_adapter'];
-	if ($read === NULL) {
-		return 'plain';
-	}
-	if ($read === 'pfb_cfg_lenient_read') {
-		return 'lenient';
-	}
-	if ($read === 'pfb_cfg_idn_mode_read') {
-		return 'idn';
-	}
-	if ($read === 'pfb_cfg_alias_delta_mode_read') {
-		return 'alias_delta_mode';
-	}
-	if ($read === 'pfb_cfg_top1m_source_read') {
-		return 'top1m_source';
-	}
-	// All other adapters are toggle (pfb_cfg_toggle_read).
-	return 'toggle';
 }
 
 // ---------------------------------------------------------------------------
