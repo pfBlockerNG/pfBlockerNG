@@ -134,7 +134,6 @@ def _build_from_raw(
             "tld_wildcard_exclusion": [],
             "user_whitelist": [],
             "user_unlock": [],
-            "top1m_list": [],
             "top1m_enabled": False,
         },
         "feeds": [row],

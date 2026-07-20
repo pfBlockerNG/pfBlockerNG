@@ -83,7 +83,6 @@ def _build(
         "tld_wildcard_exclusion": [],
         "user_whitelist": list(user_whitelist),
         "user_unlock": [],
-        "top1m_list": [],
     }
 
     def reader(raw: str) -> Iterable[str]:

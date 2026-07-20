@@ -110,7 +110,6 @@ _BASE_CONFIG: dict[str, Any] = {
     "tld_wildcard_blacklist": [],
     "tld_wildcard_exclusion": [],
     "user_whitelist": [],
-    "top1m_list": [],
 }
 
 

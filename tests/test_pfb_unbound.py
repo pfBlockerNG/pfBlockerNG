@@ -4154,7 +4154,6 @@ class TestAbpWildcardUnaffectedByTldWildcardToggle:
             "tld_wildcard_blacklist": [],
             "tld_wildcard_exclusion": [],
             "user_whitelist": [],
-            "top1m_list": [],
         }
         return pfb_unbound.build(manifest, config, line_reader=lambda raw: ["||evil.com^"])
 
@@ -4260,7 +4259,6 @@ class TestTldWildcardClassifyTwoLabelPublicSuffixViaBuild:
             "tld_wildcard_blacklist": [],
             "tld_wildcard_exclusion": [],
             "user_whitelist": [],
-            "top1m_list": [],
         }
         return pfb_unbound.build(manifest, config, line_reader=lambda raw: raw_lines)
 

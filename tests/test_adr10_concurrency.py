@@ -320,7 +320,6 @@ def _manifest_json(tld_master: str, plain_raw: str, user_raw: str, abp_raw: str,
                 "tld_wildcard_exclusion": [],
                 "user_whitelist": spec.user_whitelist,
                 "user_unlock": spec.user_unlock,
-                "top1m_list": [],
                 "top1m_enabled": False,
             },
             "feeds": [

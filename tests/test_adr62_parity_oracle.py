@@ -75,7 +75,6 @@ def _run_corpus_build() -> P.BuildResult:
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": [],
-        "top1m_list": [],
     }
     return P.build(_corpus_manifest(), config, line_reader=_corpus_line_reader())
 
@@ -168,7 +167,6 @@ def _build_synthetic(feeds: list[dict[str, Any]], lines_by_header: dict[str, lis
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": [],
-        "top1m_list": [],
     }
     return P.build(manifest, config, line_reader=lambda raw: lines_by_header[raw])
 
