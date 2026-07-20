@@ -862,15 +862,11 @@ if ($_POST) {
 			$pfb['dconfig']['tldexclusion']		= base64_encode($_POST['tldexclusion'])					?: '';
 			$pfb['dconfig']['tldblacklist']		= base64_encode($_POST['tldblacklist'])					?: '';
 
-			// A provider/auth identity change invalidates only the download detector
-			// baseline. Keep the active source and derived whitelist available until
-			// the replacement download has been validated and published.
-			$pfb_top1m_provider = $_POST['alexa_type'] ?: 'tranco';
-			$pfb_top1m_identity_changed =
-				(($pfb['dconfig']['alexa_type'] ?? '') !== $pfb_top1m_provider) ||
-				($pfb_top1m_token_post !== '' &&
-					($pfb['dconfig']['top1m_token'] ?? '') !== $pfb_top1m_token_post);
-			$pfb['dconfig']['alexa_type'] = $pfb_top1m_provider;
+			// Reset TOP1M Database/Whitelist on user changes
+			if ($pfb['dconfig']['alexa_type'] != $_POST['alexa_type']) {
+				unlink_if_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt");
+			}
+			$pfb['dconfig']['alexa_type']		= $_POST['alexa_type']							?: 'tranco';
 
 			// top1m_token: masked/write-only -- blank means "keep the existing stored
 			// token" (never clear it via a blank submit, e.g. an unrelated settings
@@ -881,10 +877,12 @@ if ($_POST) {
 			if ($pfb_top1m_token_post !== '') {
 				$pfb['dconfig']['top1m_token'] = $pfb_top1m_token_post;
 			}
-			if ($pfb_top1m_identity_changed) {
-				pfb_top1m_invalidate_baseline("{$pfb['dbdir']}/top-1m.csv.zip");
-			}
 
+			// Reset TOP1M Whitelist on user changes
+			if ($pfb['dconfig']['alexa_count'] != $_POST['alexa_count'] ||
+				explode(',', $pfb['dconfig']['alexa_inclusion']) != $_POST['alexa_inclusion']) {
+				unlink_if_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt");
+			}
 			$pfb['dconfig']['alexa_count']		= $_POST['alexa_count']							?: '1000';
 			$pfb['dconfig']['alexa_inclusion']	= implode(',', (array) $_POST['alexa_inclusion']);
 			$pfb_top1m_settings_after = array(
