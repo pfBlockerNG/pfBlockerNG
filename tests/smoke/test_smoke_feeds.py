@@ -3851,7 +3851,7 @@ def test_top1m_file_target_hostile_and_truncated_archives_retain_active(
     valid = io.BytesIO()
     with zipfile.ZipFile(valid, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("d/top.csv", "ok\n")
-    archives.append(("truncated.zip", valid.getvalue()[:-8]))
+    archives.append(("truncated.zip", valid.getvalue()[:20]))
     try:
         deployed_vm.ssh(
             f"/bin/rm -rf {workdir} {marker} && /bin/mkdir -p {workdir} && "
