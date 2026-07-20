@@ -10,8 +10,8 @@ use PHPUnit\Framework\TestCase;
  * stderr into the continent `.txt` data file. A cat failure (any cause --
  * a TOCTOU race, permission denial, etc.) writes stderr text (e.g.
  * "cat: <path>: Is a directory") into the file as if it were feed data;
- * pfblockerng_get_countries()'s reparse (`elseif (!str_starts_with($line,
- * '#'))`, line ~1572) then treats that line as real network data and
+ * the package-owned pfblockerng_get_countries() reparse
+ * (`elseif (!str_starts_with($line, '#'))`) then treats that line as real network data and
  * persists it verbatim. This is the corruption sibling of issue
  * #1261/PR #1268, which fixed only the "blanking" half (`?? 0` ->
  * `?? 'ERROR'`), not this half.

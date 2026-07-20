@@ -9,7 +9,9 @@
 - **Blocks:** **ADR-32** (IPinfo as an alternative GeoIP/ASN provider) — this ADR is a
   **hard prerequisite for ADR-32 Phase 2**; ADR-32 §2.5 records why.
 - **Component(s):** `src/usr/local/www/pfblockerng/pfblockerng.php`
-  (`pfblockerng_uc_countries()` / `pfblockerng_get_countries()`, `$pfb_geoip_all`, `$top_20`),
+  (`pfblockerng_uc_countries()`, `$pfb_geoip_all`, `$top_20`),
+  `src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc`
+  (`pfblockerng_get_countries()`, `pfb_build_reputation_tab()`),
   `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (`$pfb['continents']`,
   `$pfb['continent_list']`), a NEW committed table under
   `src/usr/local/pkg/pfblockerng/`, a NEW generator under `scripts/`, a NEW scheduled tracker
@@ -222,7 +224,8 @@ checksum drift, a provider code absent from ISO → `XK`).
 
 ### Phase 3 — Wire the build onto the table (behaviour-CHANGING: deltas D1 + D2 only)
 
-`pfblockerng_uc_countries()` / `pfblockerng_get_countries()` read identity from the table; the
+`pfblockerng_uc_countries()` / `pfblockerng_get_countries()` (web dispatcher plus package-owned
+generator) read identity from the table; the
 provider's Locations CSV degrades to `geoname_id → ISO`. Red→green against the Phase-1 oracle: the
 diff must be **exactly** D1 + D2. Delete `$pfb_geoip_all`; keep `$top_20` (validated).
 

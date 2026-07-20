@@ -29,9 +29,11 @@ REQUIRED READING
   record this ADR was distilled from. Read it, not just the ADR summary.
 - CLAUDE.md in full -- PHP standards, Test coverage mandate, the delegation contract.
 - src/usr/local/www/pfblockerng/pfblockerng.php -- pfblockerng_uc_countries() (~:855-1460),
-  pfblockerng_get_countries(), $pfb_geoip_all (~:941-1191), $top_20 (~:883), the two hardcoded
+  $pfb_geoip_all (~:941-1191), $top_20 (~:883), the two hardcoded
   continent-level buckets (~:935-938), the Locations parse gate (~:898), the Blocks parse
   (~:1223-1330).
+- src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc -- pfblockerng_get_countries(),
+  pfb_build_reputation_tab() (package-owned generated-page writers).
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc -- $pfb['continents'] / $pfb['continent_list']
   (~:160-171): the FROZEN structural bindings (alias prefixes, config-section roots).
 
