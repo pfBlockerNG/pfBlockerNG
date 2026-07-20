@@ -12165,66 +12165,28 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 
-			// Extras - MaxMind downloads. Keep GeoIP's existing extraction contract.
+			// Extras - MaxMind downloads. GeoIP publishes directly to its caller
+			// target; TOP1M's staged/atomic branch is kept separate below.
 			if ($type == 'geoip') {
+				// Determine if the Zip contains multiple files. A NULL list
+				// (unlistable) falls through to stdout extraction exactly as before.
 				$archive_members = pfb_archive_member_names($file_download);
 				if ($archive_members !== NULL && count($archive_members) > 1) {
+					// ADR-46: disk-writing extraction -- reject hostile member names first.
 					$unsafe_member = pfb_archive_unsafe_member($archive_members);
 					if ($unsafe_member !== NULL) {
 						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
-					$top1m_stage = @tempnam(dirname($head_download), '.pfbtop1m_');
-					if ($top1m_stage === FALSE || !@unlink($top1m_stage) || !@mkdir($top1m_stage, 0700)) {
-						unlink_if_exists($file_download);
-						return PfbDownloadResult::failure();
-					}
-					$header_esc = escapeshellarg($top1m_stage);
 					exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1", $output, $retval);
 				} else {
-					$top1m_stage = @tempnam(dirname($head_download), '.pfbtop1m_');
-					if ($top1m_stage === FALSE) {
-						unlink_if_exists($file_download);
-						return PfbDownloadResult::failure();
-					}
-					$header_esc = escapeshellarg($top1m_stage);
+					// ADR-46: stdout extraction -- member names never reach the filesystem.
 					exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}", $output, $retval);
 				}
 				if ($retval != 0) {
 					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
-					if (is_dir($top1m_stage)) {
-						rmdir_recursive($top1m_stage);
-					} else {
-						unlink_if_exists($top1m_stage);
-					}
 					unlink_if_exists($file_download);
-					return PfbDownloadResult::failure();
-				}
-				if (!pfb_top1m_persist_baseline($file_dwn, $file_download)) {
-					if (is_dir($top1m_stage)) {
-						rmdir_recursive($top1m_stage);
-					} else {
-						unlink_if_exists($top1m_stage);
-					}
-					unlink_if_exists($file_download);
-					pfb_top1m_invalidate_baseline($file_dwn);
-					return PfbDownloadResult::failure();
-				}
-				if (is_dir($top1m_stage)) {
-					$staged_files = glob("{$top1m_stage}/*") ?: array();
-					$top1m_stage_file = $staged_files[0] ?? FALSE;
-					if ($top1m_stage_file === FALSE || !@rename($top1m_stage_file, $head_download)) {
-						rmdir_recursive($top1m_stage);
-						unlink_if_exists($file_download);
-						pfb_top1m_invalidate_baseline($file_dwn);
-						return PfbDownloadResult::failure();
-					}
-					rmdir_recursive($top1m_stage);
-				} elseif (!@rename($top1m_stage, $head_download)) {
-					unlink_if_exists($top1m_stage);
-					unlink_if_exists($file_download);
-					pfb_top1m_invalidate_baseline($file_dwn);
 					return PfbDownloadResult::failure();
 				}
 				unlink_if_exists($file_download);
