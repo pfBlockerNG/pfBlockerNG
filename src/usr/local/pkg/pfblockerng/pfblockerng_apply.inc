@@ -1011,6 +1011,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['alias_dnsbl_all']		= array();	// Array of all DNSBL aliases
 	$dnsbl_tld_group_counts		= array();	// Deferred DNSBL group counts for TLD-mode statistics
 	$pfb['domain_update']		= FALSE;	// Flag to signal update Unbound
+	$pfb['dnsbl_publish_failed']	= FALSE;	// Fixed TOP1M/manifest publication failed; suppress reload
 	$pfb['updateip']		= FALSE;	// Flag to signal updates to DNSBL IP lists
 	$pfb_py_feeds			= array();	// ADR-06: per-feed manifest rows [header,group,log] for pfb_unbound_python_sources()
 	$safesearch_update		= FALSE;	// Flag: SafeSearch CSV changed -> force an Unbound restart (issue #149)
@@ -2235,7 +2236,9 @@ function sync_package_pfblockerng($cron='') {
 			// plugin's init builds the DNSBL structures from. Python then owns
 			// parse/normalise/classify (the dropped shell/PHP passes) and emits
 			// pfb_py_count itself.
-			pfb_unbound_python_sources($pfb_py_feeds);
+			if (pfb_unbound_python_sources($pfb_py_feeds) === FALSE) {
+				$pfb['dnsbl_publish_failed'] = TRUE;
+			}
 			pfb_logger("... completed", 1);
 		}
 
@@ -2264,7 +2267,9 @@ function sync_package_pfblockerng($cron='') {
 				// loaded→empty transition still diverges on the first pass (one reload), then
 				// stabilises. DO NOT delete pfb_py_wh: pfb_unbound_python() reads it to detect
 				// a whitelist change; missing=FALSE !== '' triggers $pfbpython=TRUE every pass.
-				pfb_unbound_python_sources(array());		// valid feeds:[] manifest + empty rawdir
+				if (pfb_unbound_python_sources(array()) === FALSE) {
+					$pfb['dnsbl_publish_failed'] = TRUE;
+				}		// valid feeds:[] manifest + empty rawdir
 				unlink_if_exists($pfb['unbound_py_count']);
 				unlink_if_exists($pfb['unbound_py_regex_count']);		// ADR-07
 			}
@@ -2586,8 +2591,8 @@ function sync_package_pfblockerng($cron='') {
 	// user_unlock. Captured BEFORE the reload: pfb_update_unbound() unlinks the file,
 	// so a post-reload file_exists() would always return false (issue #517).
 	$pfb_dnsbl_unlock_forced = file_exists($pfb['dnsbl_unlock']);
-	if ($pfb_data_changed || $pfbupdate || $pfbpython || $safesearch_update ||
-	    $pfb_dnsbl_unlock_forced) {
+	if (empty($pfb['dnsbl_publish_failed']) && ($pfb_data_changed || $pfbupdate || $pfbpython || $safesearch_update ||
+	    $pfb_dnsbl_unlock_forced)) {
 
 		// Create backup of existing DNSBL Unbound database
 

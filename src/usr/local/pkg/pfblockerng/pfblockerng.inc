@@ -137,6 +137,7 @@ $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted ADMITTED (cap-filtered) feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
+$pfb['unbound_py_top1m']= '/var/unbound/pfb_py_top1m.txt';	// issue #1542: fixed TOP1M sidecar consumed by pfb_unbound.py
 $pfb['unbound_py_rawdir']= '/var/unbound/pfb_py_raw';		// #1357: basename for immutable per-feed raw generations
 
 $pfb['dnsbl_safesearch']		= '/usr/local/pkg/pfblockerng/pfb_dnsbl.safesearch.conf';
@@ -1964,8 +1965,11 @@ function pfb_unbound_py_manifest_raw_paths(string $manifest_path, bool $deduplic
 
 function pfb_dnsbl_loaded_input_paths(array $pfb): array {
 	$raw_files = pfb_unbound_py_manifest_raw_paths((string) ($pfb['unbound_py_sources'] ?? ''));
+	$top1m_files = (($pfb['dnsbl_top1m'] ?? '') === 'on')
+		? array($pfb['unbound_py_top1m'] ?? '/var/unbound/pfb_py_top1m.txt') : array();
 	return array_merge(
 		array($pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts'], $pfb['unbound_py_tld']),
+		$top1m_files,
 		$raw_files
 	);
 }
@@ -7820,6 +7824,76 @@ function pfb_unbound_py_atomic_write($path, $content, array $stream_ops=array())
 	return TRUE;
 }
 
+// Issue #1542: stream the generated TOP1M whitelist into a same-directory
+// temporary file, then publish it with the same fsync + atomic rename contract
+// as the manifest. The fixed sidecar is deliberately not represented in JSON.
+function pfb_unbound_py_atomic_copy(string $source, string $path, array $stream_ops=array()): bool {
+	$source_h = @fopen($source, 'rb');
+	if ($source_h === FALSE) {
+		return FALSE;
+	}
+	$tmp = @tempnam(dirname($path), '.pfbtop1m_');
+	if ($tmp === FALSE) {
+		@fclose($source_h);
+		return FALSE;
+	}
+	$target_h = @fopen($tmp, 'wb');
+	if ($target_h === FALSE) {
+		@fclose($source_h);
+		@unlink($tmp);
+		return FALSE;
+	}
+	$write_fn = $stream_ops['write'] ?? static fn($stream, $bytes) => @fwrite($stream, $bytes);
+	$flush_fn = $stream_ops['flush'] ?? static fn($stream) => @fflush($stream);
+	$fsync_fn = $stream_ops['fsync'] ?? static fn($stream) => @fsync($stream);
+	$ok = TRUE;
+	while (!feof($source_h)) {
+		$chunk = @fread($source_h, 1048576);
+		if ($chunk === FALSE) {
+			$ok = FALSE;
+			break;
+		}
+		if ($chunk !== '') {
+			$written = $write_fn($target_h, $chunk);
+			if ($written === FALSE || $written !== strlen($chunk)) {
+				$ok = FALSE;
+				break;
+			}
+		}
+	}
+	$ok = $ok && $flush_fn($target_h) && $fsync_fn($target_h);
+	$ok = @fclose($target_h) && $ok;
+	@fclose($source_h);
+	if (!$ok) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	$chown_fn = $stream_ops['chown'] ?? static fn($file, $owner) => @chown($file, $owner);
+	$chgrp_fn = $stream_ops['chgrp'] ?? static fn($file, $group) => @chgrp($file, $group);
+	$chmod_fn = $stream_ops['chmod'] ?? static fn($file, $mode) => @chmod($file, $mode);
+	if (array_key_exists('chown', $stream_ops) && !$chown_fn($tmp, 'root') ||
+		array_key_exists('chgrp', $stream_ops) && !$chgrp_fn($tmp, 'unbound') ||
+		array_key_exists('chmod', $stream_ops) && !$chmod_fn($tmp, 0640)) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	if (!array_key_exists('chown', $stream_ops)) {
+		@chown($tmp, 'root');
+	}
+	if (!array_key_exists('chgrp', $stream_ops)) {
+		@chgrp($tmp, 'unbound');
+	}
+	if (!array_key_exists('chmod', $stream_ops)) {
+		@chmod($tmp, 0640);
+	}
+	$rename_fn = $stream_ops['rename'] ?? static fn($from, $to) => @rename($from, $to);
+	if (!$rename_fn($tmp, $path)) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 // #1357: one exclusive lock serializes full-set publication, scalar manifest patches,
 // convergence-gated generation GC, and teardown. Python readers never take this lock.
 function pfb_unbound_py_publication_lock(?float $timeout_s=NULL) {
@@ -8381,6 +8455,13 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	if (!is_array($feeds)) {
 		$feeds = array();
 	}
+	$top1m_enabled = (($pfb['dnsbl_top1m'] ?? '') === 'on');
+	$top1m_source = "{$pfb['dbdir']}/pfbalexawhitelist.txt";
+	$top1m_target = $pfb['unbound_py_top1m'] ?? '/var/unbound/pfb_py_top1m.txt';
+	if ($top1m_enabled && (is_link($top1m_source) || !is_file($top1m_source) || !is_readable($top1m_source))) {
+		pfb_logger("\nTOP1M fixed-file source unavailable: {$top1m_source}", 2);
+		return FALSE;
+	}
 
 	$raw_parent = dirname($pfb['unbound_py_rawdir']);
 	$raw_base = basename($pfb['unbound_py_rawdir']);
@@ -8535,16 +8616,48 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	// Synthetic whole-TLD blacklist feed (DNSBL_TLD): the Python build emits these
 	// as whole-TLD ZONE entries from config.tld_wildcard_blacklist, so no raw file is needed.
 
-	// TOP1M (Tranco/Cisco) popularity whitelist -> query-time whiteDB only when on.
-	// ponytail: pfbalexawhitelist.txt keeps its on-disk name -- renaming a generated
-	// artifact needs old-file cleanup for zero user benefit (#877 triage decision).
-	$top1m_enabled	= ($pfb['dnsbl_top1m'] == 'on' &&
-			   file_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt"));
-	$top1m_list	= array();
+	// TOP1M (Tranco/Cisco) popularity whitelist is a fixed sidecar. Publish it
+	// before the manifest so a durable manifest always names a complete snapshot.
+	$top1m_backup = FALSE;
+	$top1m_had_previous = file_exists($top1m_target) || is_link($top1m_target);
+	$restore_top1m = static function () use (&$top1m_backup, $top1m_target, $top1m_had_previous): void {
+		if ($top1m_backup === FALSE) {
+			return;
+		}
+		if (file_exists($top1m_target) || is_link($top1m_target)) {
+			is_dir($top1m_target) && !is_link($top1m_target)
+				? rmdir_recursive($top1m_target)
+				: @unlink($top1m_target);
+		}
+		if ($top1m_had_previous && $top1m_backup !== FALSE) {
+			@rename($top1m_backup, $top1m_target);
+		} elseif ($top1m_backup !== FALSE) {
+			@unlink($top1m_backup);
+		}
+		$top1m_backup = FALSE;
+	};
 	if ($top1m_enabled) {
-		$top1m_lines = @file("{$pfb['dbdir']}/pfbalexawhitelist.txt", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-		if (is_array($top1m_lines)) {
-			$top1m_list = $top1m_lines;
+		$top1m_backup = @tempnam(dirname($top1m_target), '.pfbtop1m_prev_');
+		if ($top1m_backup !== FALSE) {
+			@unlink($top1m_backup);
+		}
+		$top1m_backup_ok = $top1m_backup !== FALSE &&
+			(!$top1m_had_previous || @link($top1m_target, $top1m_backup) || @copy($top1m_target, $top1m_backup));
+		if (!$top1m_backup_ok) {
+			if ($top1m_backup !== FALSE) {
+				@unlink($top1m_backup);
+			}
+			$discard_unpublished_generation();
+			pfb_logger("\nTOP1M fixed-file staging failed: {$top1m_target}", 2);
+			return FALSE;
+		}
+		$top1m_atomic_ops = isset($publication_ops['top1m_atomic']) && is_array($publication_ops['top1m_atomic'])
+			? $publication_ops['top1m_atomic'] : array();
+		if (!pfb_unbound_py_atomic_copy($top1m_source, $top1m_target, $top1m_atomic_ops)) {
+			$restore_top1m();
+			$discard_unpublished_generation();
+			pfb_logger("\nTOP1M fixed-file publication failed: {$top1m_target}", 2);
+			return FALSE;
 		}
 	}
 
@@ -8576,7 +8689,6 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 			// "re-locked on Cron/Force" semantic. Only pfb_unbound_python_sources_unlock()
 			// (the incremental alerts dnsbl_remove path) repopulates user_unlock.
 			'user_unlock'	=> array(),
-			'top1m_list'	=> array_values($top1m_list),
 			'top1m_enabled'	=> $top1m_enabled
 		),
 		'feeds'		=> $manifest_feeds
@@ -8592,6 +8704,7 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 		$manifest_atomic_ops = isset($publication_ops['manifest_atomic'])
 			&& is_array($publication_ops['manifest_atomic']) ? $publication_ops['manifest_atomic'] : array();
 		if (!pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json, $manifest_atomic_ops)) {
+			$restore_top1m();
 			$discard_unpublished_generation();
 			// ADR-65: a swallowed publish failure left Python running on a stale/absent
 			// manifest with no operator-visible signal -- surface it like the existing
@@ -8599,10 +8712,17 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 			$manifest_notice = "DNSBL manifest publish failed: {$pfb['unbound_py_sources']}";
 			pfb_logger("\n{$manifest_notice}", 2);
 			file_notice('pfBlockerNG DNSBL', $manifest_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
+			return FALSE;
+		}
+		if ($top1m_enabled && $top1m_backup !== FALSE) {
+			@unlink($top1m_backup);
+			$top1m_backup = FALSE;
 		}
 	} else {
+		$restore_top1m();
 		$discard_unpublished_generation();
 		pfb_logger("\nDNSBL manifest JSON encoding failed: " . json_last_error_msg(), 2);
+		return FALSE;
 	}
 
 	return $manifest;
