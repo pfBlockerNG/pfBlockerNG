@@ -5364,7 +5364,7 @@ def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
     """Stream the fixed TOP1M sidecar; any source failure aborts the build."""
     path = os.path.join(base_dir, "pfb_py_top1m.txt")
     nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
+    if not nofollow:
         raise _DnsblGenerationError("TOP1M sidecar cannot be opened without symlink protection: '{}'".format(path))
     try:
         path_stat = os.lstat(path)
