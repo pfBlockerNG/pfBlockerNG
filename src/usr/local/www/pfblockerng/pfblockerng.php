@@ -338,12 +338,9 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 			}
 
 			// Download Database updates
-			if (pfblockerng_download_extras(600, $logtype)) {
-				// A changed TOP1M source uses the existing DNSBL apply path;
-				// unchanged or failed probes never dispatch it.
-				if ($argv[1] == 'dcc' && !empty($pfb['top1m_changed'])) {
-					exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=dnsbl force=false trigger=cron >> {$pfb['runlog']} 2>&1 &");
-				}
+			$extras_ok = pfblockerng_download_extras(600, $logtype);
+			if ($extras_ok) {
+				pfb_top1m_dispatch_if_changed($extras_ok);
 
 				// Proceed with conversion of MaxMind files on download success
 				if (empty($pfb['cc']) || !empty($pfb['maxmind_key']) || !empty($pfb['maxmind_account'])) {
@@ -429,6 +426,20 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 }
 
 
+function pfb_top1m_detector_decision($probe_ok, $http_status, $body_hash, $persisted_hash) {
+	return pfb_top1m_probe_decision($probe_ok, $http_status, $body_hash, $persisted_hash);
+}
+
+function pfb_top1m_dispatch_if_changed($extras_ok) {
+	global $argv, $pfb;
+	if (!$extras_ok || ($argv[1] ?? '') !== 'dcc' || empty($pfb['top1m_changed'])) {
+		return FALSE;
+	}
+	exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=dnsbl force=false trigger=cron >> {$pfb['runlog']} 2>&1 &");
+	return TRUE;
+}
+
+
 // Download Extras - MaxMind/TOP1M/Category feeds via cURL
 function pfblockerng_download_extras($timeout=600, $type='') {
 	global $pfb;
@@ -507,7 +518,7 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 				? pfb_content_hash("{$file_dwn}.md5.raw", TRUE) : FALSE;
 			$sidecar = $identity_matches ? pfb_hash_read($top1m_base) : array('algo' => 'changed', 'digest' => '');
 			$persisted_hash = ($sidecar['algo'] === 'xxh128') ? $sidecar['digest'] : '';
-			$probe_decision = pfb_top1m_probe_decision($probe_ok, $probe_status, $probe_hash, $persisted_hash);
+			$probe_decision = pfb_top1m_detector_decision($probe_ok, $probe_status, $probe_hash, $persisted_hash);
 			if ($probe_decision === 'failed') {
 				unlink_if_exists("{$file_dwn}.md5.raw");
 				pfb_top1m_download_ledger_update(FALSE, $pfb['dbdir'], 'TOP1M probe failed');
