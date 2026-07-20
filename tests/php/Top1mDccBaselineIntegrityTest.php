@@ -2,13 +2,11 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Issue #1542 — TOP1M detector must not trust an incomplete or stale baseline.
  */
-#[CoversFunction('pfb_top1m_detector_decision')]
 final class Top1mDccBaselineIntegrityTest extends TestCase
 {
 	private string $dir;

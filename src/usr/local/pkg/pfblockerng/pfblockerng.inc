@@ -12184,7 +12184,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					return PfbDownloadResult::failure();
 				}
 				$header_esc = escapeshellarg($top1m_stage);
-				exec("/usr/bin/gunzip -c {$file_download} > {$header_esc}", $output, $retval);
+				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
 				if ($retval != 0) {
 					unlink_if_exists($file_download);
 					unlink_if_exists($top1m_stage);

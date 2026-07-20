@@ -19,15 +19,19 @@ final class GeoipZipPublicationTest extends TestCase
 
 	/** @var array<string,mixed> */
 	private array $saved_pfb = [];
+	/** @var array<string,bool> */
+	private array $saved_pfb_exists = [];
 
 	protected function setUp(): void
 	{
 		$this->dir = sys_get_temp_dir() . '/pfb_geoip_zip_' . getmypid() . '_' . uniqid();
 		$this->assertTrue(mkdir($this->dir, 0777, TRUE));
 		foreach (['log', 'errlog', 'pnow', 'dbdir'] as $key) {
-			$this->saved_pfb[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$key] : FALSE;
+			$this->saved_pfb_exists[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? []);
+			$this->saved_pfb[$key] = $GLOBALS['pfb'][$key] ?? NULL;
 		}
-		$this->saved_pfb['mime_types'] = $GLOBALS['pfb']['mime_types'] ?? FALSE;
+		$this->saved_pfb_exists['mime_types'] = array_key_exists('mime_types', $GLOBALS['pfb'] ?? []);
+		$this->saved_pfb['mime_types'] = $GLOBALS['pfb']['mime_types'] ?? NULL;
 		$GLOBALS['pfb']['mime_types'] = $GLOBALS['pfb_shipped_mime_types'] ?? $GLOBALS['pfb']['mime_types'] ?? [];
 		$GLOBALS['pfb']['log'] = "{$this->dir}/pfblockerng.log";
 		$GLOBALS['pfb']['errlog'] = "{$this->dir}/error.log";
@@ -43,7 +47,7 @@ final class GeoipZipPublicationTest extends TestCase
 			proc_close($this->server);
 		}
 		foreach ($this->saved_pfb as $key => $value) {
-			if ($value === FALSE) {
+			if (!$this->saved_pfb_exists[$key]) {
 				unset($GLOBALS['pfb'][$key]);
 			} else {
 				$GLOBALS['pfb'][$key] = $value;

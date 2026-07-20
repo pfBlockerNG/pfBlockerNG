@@ -12,8 +12,6 @@ use PHPUnit\Framework\TestCase;
  * fixtures, so active-file and baseline contracts run off-appliance.
  */
 #[CoversFunction('pfb_top1m_probe_decision')]
-#[CoversFunction('pfb_top1m_detector_decision')]
-#[CoversFunction('pfb_top1m_dispatch_if_changed')]
 #[CoversFunction('pfb_top1m_source_identity')]
 #[CoversFunction('pfb_top1m_invalidate_baseline')]
 #[CoversFunction('pfb_top1m_persist_baseline')]
@@ -33,6 +31,8 @@ final class Top1mDccDetectorTest extends TestCase
 
 	/** @var array<string,mixed> */
 	private array $saved_pfb = [];
+	/** @var array<string,bool> */
+	private array $saved_pfb_exists = [];
 
 	protected function setUp(): void
 	{
@@ -40,9 +40,11 @@ final class Top1mDccDetectorTest extends TestCase
 		$this->dir = sys_get_temp_dir() . '/pfb_top1m_dcc_' . getmypid() . '_' . uniqid();
 		$this->assertTrue(mkdir($this->dir, 0777, TRUE));
 		foreach (['log', 'errlog', 'pnow'] as $key) {
-			$this->saved_pfb[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$key] : FALSE;
+			$this->saved_pfb_exists[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? []);
+			$this->saved_pfb[$key] = $GLOBALS['pfb'][$key] ?? NULL;
 		}
-		$this->saved_pfb['mime_types'] = $GLOBALS['pfb']['mime_types'] ?? FALSE;
+		$this->saved_pfb_exists['mime_types'] = array_key_exists('mime_types', $GLOBALS['pfb'] ?? []);
+		$this->saved_pfb['mime_types'] = $GLOBALS['pfb']['mime_types'] ?? NULL;
 		$GLOBALS['pfb']['mime_types'] = $GLOBALS['pfb_shipped_mime_types'] ?? $GLOBALS['pfb']['mime_types'] ?? [];
 		$GLOBALS['pfb']['log'] = "{$this->dir}/pfblockerng.log";
 		$GLOBALS['pfb']['errlog'] = "{$this->dir}/error.log";
@@ -51,12 +53,9 @@ final class Top1mDccDetectorTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		if (is_resource($this->server)) {
-			proc_terminate($this->server);
-			proc_close($this->server);
-		}
+		$this->stopServer();
 		foreach ($this->saved_pfb as $key => $value) {
-			if ($value === FALSE) {
+			if (!$this->saved_pfb_exists[$key]) {
 				unset($GLOBALS['pfb'][$key]);
 			} else {
 				$GLOBALS['pfb'][$key] = $value;
@@ -437,6 +436,7 @@ final class Top1mDccDetectorTest extends TestCase
 
 	private function downloadTop1m(string $source, string $base, string $target): bool
 	{
+		$this->stopServer();
 		$GLOBALS['pfb']['dbdir'] = $this->dir . '/db';
 		$this->assertTrue(is_dir($GLOBALS['pfb']['dbdir']) || mkdir($GLOBALS['pfb']['dbdir']));
 		$router = $this->dir . '/router.php';
@@ -485,6 +485,15 @@ final class Top1mDccDetectorTest extends TestCase
 		))->success;
 	}
 
+	private function stopServer(): void
+	{
+		if (is_resource($this->server)) {
+			proc_terminate($this->server);
+			proc_close($this->server);
+			$this->server = NULL;
+		}
+	}
+
 	public function testExtractedDispatchSeamRunsExistingCronCommand(): void
 	{
 		$dispatch_log = "{$this->dir}/dispatch.log";
@@ -494,9 +503,12 @@ final class Top1mDccDetectorTest extends TestCase
 		$this->assertTrue(chmod($fake_php, 0755));
 
 		$saved_argv = $GLOBALS['argv'];
-		$saved_php = $GLOBALS['pfb']['php'] ?? FALSE;
-		$saved_runlog = $GLOBALS['pfb']['runlog'] ?? FALSE;
-		$saved_changed = $GLOBALS['pfb']['top1m_changed'] ?? FALSE;
+		$had_php = array_key_exists('php', $GLOBALS['pfb']);
+		$saved_php = $GLOBALS['pfb']['php'] ?? NULL;
+		$had_runlog = array_key_exists('runlog', $GLOBALS['pfb']);
+		$saved_runlog = $GLOBALS['pfb']['runlog'] ?? NULL;
+		$had_changed = array_key_exists('top1m_changed', $GLOBALS['pfb']);
+		$saved_changed = $GLOBALS['pfb']['top1m_changed'] ?? NULL;
 		try {
 			$GLOBALS['argv'] = ['pfblockerng.php', 'dcc'];
 			$GLOBALS['pfb']['php'] = $fake_php;
@@ -513,17 +525,17 @@ final class Top1mDccDetectorTest extends TestCase
 			$this->assertStringContainsString('pfb_trigger scope=dnsbl force=false trigger=cron', $lines[0]);
 		} finally {
 			$GLOBALS['argv'] = $saved_argv;
-			if ($saved_php === FALSE) {
+			if (!$had_php) {
 				unset($GLOBALS['pfb']['php']);
 			} else {
 				$GLOBALS['pfb']['php'] = $saved_php;
 			}
-			if ($saved_runlog === FALSE) {
+			if (!$had_runlog) {
 				unset($GLOBALS['pfb']['runlog']);
 			} else {
 				$GLOBALS['pfb']['runlog'] = $saved_runlog;
 			}
-			if ($saved_changed === FALSE) {
+			if (!$had_changed) {
 				unset($GLOBALS['pfb']['top1m_changed']);
 			} else {
 				$GLOBALS['pfb']['top1m_changed'] = $saved_changed;
@@ -540,10 +552,14 @@ final class Top1mDccDetectorTest extends TestCase
 		$this->assertTrue(chmod($fake_php, 0755));
 
 		$saved_argv = $GLOBALS['argv'];
-		$saved_php = $GLOBALS['pfb']['php'] ?? FALSE;
-		$saved_runlog = $GLOBALS['pfb']['runlog'] ?? FALSE;
-		$saved_changed = $GLOBALS['pfb']['top1m_changed'] ?? FALSE;
-		$saved_done = $GLOBALS['pfb']['top1m_dispatch_done'] ?? FALSE;
+		$had_php = array_key_exists('php', $GLOBALS['pfb']);
+		$saved_php = $GLOBALS['pfb']['php'] ?? NULL;
+		$had_runlog = array_key_exists('runlog', $GLOBALS['pfb']);
+		$saved_runlog = $GLOBALS['pfb']['runlog'] ?? NULL;
+		$had_changed = array_key_exists('top1m_changed', $GLOBALS['pfb']);
+		$saved_changed = $GLOBALS['pfb']['top1m_changed'] ?? NULL;
+		$had_done = array_key_exists('top1m_dispatch_done', $GLOBALS['pfb']);
+		$saved_done = $GLOBALS['pfb']['top1m_dispatch_done'] ?? NULL;
 		try {
 			$GLOBALS['argv'] = ['pfblockerng.php', 'dcc'];
 			$GLOBALS['pfb']['php'] = $fake_php;
@@ -566,22 +582,22 @@ final class Top1mDccDetectorTest extends TestCase
 			$this->assertCount(1, $lines, 'changed TOP1M must dispatch exactly once');
 		} finally {
 			$GLOBALS['argv'] = $saved_argv;
-			if ($saved_php === FALSE) {
+			if (!$had_php) {
 				unset($GLOBALS['pfb']['php']);
 			} else {
 				$GLOBALS['pfb']['php'] = $saved_php;
 			}
-			if ($saved_runlog === FALSE) {
+			if (!$had_runlog) {
 				unset($GLOBALS['pfb']['runlog']);
 			} else {
 				$GLOBALS['pfb']['runlog'] = $saved_runlog;
 			}
-			if ($saved_changed === FALSE) {
+			if (!$had_changed) {
 				unset($GLOBALS['pfb']['top1m_changed']);
 			} else {
 				$GLOBALS['pfb']['top1m_changed'] = $saved_changed;
 			}
-			if ($saved_done === FALSE) {
+			if (!$had_done) {
 				unset($GLOBALS['pfb']['top1m_dispatch_done']);
 			} else {
 				$GLOBALS['pfb']['top1m_dispatch_done'] = $saved_done;

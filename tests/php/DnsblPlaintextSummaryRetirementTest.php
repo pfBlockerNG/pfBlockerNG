@@ -156,7 +156,7 @@ final class DnsblPlaintextSummaryRetirementTest extends TestCase
 
 		$reloadPredicate = strpos(
 			$this->source,
-			"if (empty(\$pfb['dnsbl_publish_failed']) && (\$pfb_data_changed || \$pfbupdate || \$pfbpython || \$safesearch_update ||"
+			"if (pfb_dnsbl_reload_needed(!empty(\$pfb['dnsbl_publish_failed']), !empty(\$pfb_data_changed), !empty(\$pfbupdate),"
 		);
 		$reloadInvocation = strpos($this->source, 'pfb_update_unbound($mode, $pfbupdate, $pfbpython, $dnsbl_tld_group_counts);', $reloadPredicate);
 		$this->assertNotFalse($reloadPredicate);
