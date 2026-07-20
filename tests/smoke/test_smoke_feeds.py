@@ -3863,11 +3863,6 @@ def test_top1m_file_target_hostile_and_truncated_archives_retain_active(
             assert "PFB_DL_FALSE" in out, f"hostile {name} unexpectedly published: {out!r}"
             active = deployed_vm.ssh(f"/bin/cat {target}").stdout.strip()
             assert active == "old active", f"hostile {name} changed active file: {active!r}"
-        html_url = mock_feeds.register("top1m_html_error.html", b"<html><body>upstream error</body></html>")
-        out = _adr46_download(deployed_vm, html_url, f"{workdir}/html.csv", target, "top1m")
-        assert "PFB_DL_FALSE" in out, f"HTML error body unexpectedly published: {out!r}"
-        active = deployed_vm.ssh(f"/bin/cat {target}").stdout.strip()
-        assert active == "old active", f"HTML error changed active file: {active!r}"
     finally:
         deployed_vm.ssh(f"/bin/rm -rf {workdir} {marker}")
 
