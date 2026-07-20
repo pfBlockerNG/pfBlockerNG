@@ -2937,8 +2937,8 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// the retired $mask_unlock were v4-only /24|/32 restrictions), and the
 	// SAME exact-host token the Suppression "+" posts ($host), never the
 	// possibly-CIDR $eval_ip a feed match can report; $ip_unlock is keyed by
-	// that same exact host (pfb_unlock() is called with $ip = the posted
-	// host in the ip_remove handler above). The stored table must match THIS
+	// that same exact host (the package seam calls pfb_unlock() with $ip = the
+	// posted host). The stored table must match THIS
 	// row's table -- a host unlocked in another alias still shows the Unlock
 	// icon here.
 	if ($rtype == 'Block' && !$pfb_geoip) {

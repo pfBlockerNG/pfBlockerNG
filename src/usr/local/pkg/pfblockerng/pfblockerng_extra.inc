@@ -4225,8 +4225,12 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 	if ($action === 'ip_white') {
 		$vtype = strpos($table, '_v4') !== FALSE ? '4' : '6';
 		$list_key = 'ipwhitelist' . $vtype;
-		$data = isset($clists[$list_key][$table]['data']) && is_array($clists[$list_key][$table]['data'])
-			? $clists[$list_key][$table]['data'] : [];
+		$metadata = $clists[$list_key][$table] ?? NULL;
+		if (!is_array($metadata) || !isset($metadata['base64_idx'])) {
+			$result['savemsg'] = "Cannot Whitelist - Permit alias [ {$table} ] metadata missing.";
+			return $result;
+		}
+		$data = isset($metadata['data']) && is_array($metadata['data']) ? $metadata['data'] : [];
 		if (isset($data[$ip])) {
 			$result['redirect'] = FALSE;
 			return $result;
@@ -4246,7 +4250,8 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 		}
 		$custom .= $whitelist_string;
 		$clists[$list_key][$table]['base64'] = base64_encode($custom);
-		$base64_idx = $clists[$list_key][$table]['base64_idx'] ?? 0;
+		$base64_idx = $metadata['base64_idx'];
+		// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not a registered config field
 		config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$base64_idx}/custom", $clists[$list_key][$table]['base64']);
 		write_config("pfBlockerNG: Added [ {$ip} ] to [ {$table} ] Whitelist", FALSE);
 		$aname = substr(substr($table, 4), 0, -3);
