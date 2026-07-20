@@ -41,8 +41,6 @@ final class Top1mDccDetectorTest extends TestCase
 		foreach (['log', 'errlog', 'pnow'] as $key) {
 			$this->saved_pfb[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$key] : FALSE;
 		}
-		$this->saved_pfb['mime_types'] = $GLOBALS['pfb']['mime_types'] ?? FALSE;
-		$GLOBALS['pfb']['mime_types'] = $GLOBALS['pfb_shipped_mime_types'] ?? $GLOBALS['pfb']['mime_types'] ?? [];
 		$GLOBALS['pfb']['log'] = "{$this->dir}/pfblockerng.log";
 		$GLOBALS['pfb']['errlog'] = "{$this->dir}/error.log";
 		$GLOBALS['pfb']['pnow'] = 'now';
