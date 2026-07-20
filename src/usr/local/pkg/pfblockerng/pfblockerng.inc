@@ -14194,7 +14194,7 @@ function pfb_file_mtime($path) {
 //
 // Hash convention: PHP uses hash('xxh128')/hash_file('xxh128'); shell uses xxh128sum + the
 // .xxhash128 extension. Legacy .md5 sidecars are read but never written (they are replaced
-// on the first write). An unknown tag → sentinel 'changed' so an older release always
+// on the first write). An unknown tag → sentinel 'changed' so the current consumer
 // re-ingests rather than falsely skipping.
 //
 // Sidecar naming: {base}.xxhash128  (new),  {base}.md5  (legacy read-only).
@@ -14219,7 +14219,7 @@ function pfb_content_hash($path_or_data, $is_file = TRUE) {
 // Returns an array: ['algo' => 'xxh128'|'md5', 'digest' => <hex string>].
 // Returns ['algo' => 'changed', 'digest' => ''] as a sentinel when the sidecar is
 // unreadable, has an unknown extension tag, or has no content — so any consumer that
-// cannot read the sidecar treats the file as changed and re-ingests (fail-safe / downgrade).
+// cannot read the sidecar treats the file as changed and re-ingests (fail-safe).
 function pfb_hash_read($base) {
 	$sentinel = array('algo' => 'changed', 'digest' => '');
 

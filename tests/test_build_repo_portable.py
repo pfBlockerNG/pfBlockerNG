@@ -946,7 +946,7 @@ def test_retain_by_channel_devel_retains_prerelease_stages_in_pkg_order(tmp_path
     only be right via the VERSION key, never via _retain_newest's mtime tie-break falling back
     on file-creation order.
       Given 4 devel .pkg spanning the alpha/beta/rc lifecycle of one series
-        And keep_devel=3 (rollback retention, --release-keep-devel > 1)
+        And keep_devel=3 (artifact retention, --release-keep-devel > 1)
         And mtimes DELIBERATELY inverted vs. stage order (alpha.1 is newest-on-disk)
       When retain_by_channel is called
       Then the 3 NEWEST BY VERSION survive: alpha.2, beta.1, rc.1
@@ -1502,7 +1502,7 @@ def _names_versions_in_release(catalog_pkg: Path) -> set[tuple[str, str]]:
 
 def test_release_default_is_latest_only(tmp_path: Path) -> None:
     """Defaults (release_keep_devel=1, release_keep_stable=1) produce exactly one devel +
-    one stable in the release catalog — the BEFORE state (inert change, no rollback).
+    one stable in the release catalog — the BEFORE state (latest-only retention).
 
     Scenario: default keep values with devel + stable
       Given build_repo_matrix with NO release_extra_pkgs and default keep values
@@ -1535,7 +1535,7 @@ def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
     """With release_keep_devel=3, release_keep_stable=3 and 4 of each provided,
     the catalog lists the newest 3 of each channel — the 4th (oldest) is absent.
 
-    Scenario: rollback depth 3, 4 candidates per channel
+    Scenario: retention depth 3, 4 candidates per channel
       Given 4 pre-built devel pkgs (versions 3.0.1..3.0.4)
         And 4 pre-built stable pkgs (versions 2.0.1..2.0.4)
         And release_keep_devel=3, release_keep_stable=3
@@ -1753,12 +1753,12 @@ def test_cli_release_extra_pkgs_default_is_latest_only(tmp_path: Path, monkeypat
 def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The CLI correctly prunes to newest N/M when --release-keep-devel/stable are set.
 
-    Scenario: rollback depth 3, 4 candidates per channel via CLI
+    Scenario: retention depth 3, 4 candidates per channel via CLI
       Given 4 pre-built devel extras (3.0.1..3.0.4) passed as --release-extra-pkgs
         And 4 pre-built stable extras (2.0.1..2.0.4) passed as --release-extra-pkgs
         And --release-keep-devel 3, --release-keep-stable 3
       When brp.main([--build-matrix, ...]) is called
-      Then the release catalog has exactly 3 devel entries (AFTER state: rollback enabled)
+      Then the release catalog has exactly 3 devel entries (AFTER state: retention enabled)
        And the release catalog has exactly 3 stable entries
        And the oldest devel (3.0.1) is absent from the catalog
        And the oldest stable (2.0.1) is absent from the catalog
@@ -2135,7 +2135,7 @@ def test_route_only_missing_frozen_pkg_raises_build_repo_error(tmp_path: Path) -
 def test_route_only_multiple_frozen_pkgs_all_indexed(tmp_path: Path) -> None:
     """Multiple frozen .pkg files in route_only_pkgs are ALL indexed in the release catalog.
 
-    This is the rollback use-case: a route-only entry can carry more than one frozen
+    This is the retention use-case: a route-only entry can carry more than one frozen
     version (e.g. the last two builds before EOL) — both appear in the catalog.
     """
     out = tmp_path / "site"
@@ -2285,7 +2285,7 @@ def test_cli_route_only_pkgs_flag_builds_frozen_catalog(tmp_path: Path) -> None:
 def test_cli_route_only_pkgs_flag_repeatable_for_multiple_frozen(tmp_path: Path) -> None:
     """``--route-only-pkgs`` is repeatable: two flags for the same varver fold both .pkg files in.
 
-    Scenario: same varver supplied twice — the rollback use-case (last two frozen builds).
+    Scenario: same varver supplied twice — the retention use-case (last two frozen builds).
       Given two frozen .pkg files for ce-2.7
         And --route-only-pkgs ce-2.7:<a> --route-only-pkgs ce-2.7:<b> on the CLI
       When brp.main is called

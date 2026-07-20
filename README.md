@@ -203,31 +203,21 @@ fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh -s -- --nightly
 pkg install pfSense-pkg-pfBlockerNG-nightly
 ```
 
-The nightly package **replaces** a stable or `-devel` install (they conflict);
-switch back any time by re-running the bootstrap without `--nightly` and
-`pkg install`-ing the release package you want. Recent nightly builds stay in
-the catalog, so a regression can be undone by installing an older build
-explicitly.
+The nightly package **replaces** a stable or `-devel` install (they conflict).
+Recent nightly builds remain in the catalog for diagnostics and reproducibility.
 
-### Rolling back a release
+### Retained package versions
 
 The catalog keeps several recent versions of the stable and devel packages.
-You can pin any retained version by naming it explicitly:
-
-```sh
-pkg install -f pfSense-pkg-pfBlockerNG-devel-<version>   # pin to an older devel build
-pkg install -f pfSense-pkg-pfBlockerNG-<version>         # pin to an older stable build
-```
-
-The `-f` (force) flag is **required to roll back** — without it `pkg` refuses
-to downgrade. The
 [repository landing page](https://pfblockerng.github.io/pkg) lists the
 retained versions per pfSense edition, with their commit and date.
 
 > [!CAUTION]
-> Rolling back across a schema-changing release may leave the stored
-> `config.xml` in a format the older code cannot read. Test first in a
-> non-production VM.
+> Package downgrade is unsupported. Older package artifacts remain available,
+> but may not understand state written by a newer package; configuration or
+> enforcement may fail. Back up the pfSense
+> configuration before upgrading. Recover by restoring that pre-upgrade backup
+> or reinstalling the current package and continuing forward.
 
 ### Building from the FreeBSD ports tree
 

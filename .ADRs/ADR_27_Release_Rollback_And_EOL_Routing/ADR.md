@@ -360,3 +360,12 @@ Prompt: `10_EOL_Smoke_And_Publish.txt`.
     resolution (i.e. rollback needs `pkg add` of a raw URL with no dep resolution) — then "rollback via catalog"
     is false and only the GitHub-Release-asset path remains (downgrade Part 1 to docs-only).
   - Multi-version `release/` catalogs are rejected/mis-resolved by a real `pkg update` (fidelity break).
+
+## Amendment — 2026-07-20: retention and routing preserved; downgrade unsupported (issue #1593)
+
+Release retention, the multi-version catalog, the landing-page version inventory, and EOL
+route-only delivery remain unchanged. The original supported-rollback premise is superseded:
+retained artifacts provide availability, diagnostics, and reproducibility, not a supported package
+downgrade contract. No config/runtime backward-compatibility work, downgrade preparation, or
+downgrade smoke is required. Recovery across incompatible state is restore of a pre-upgrade pfSense
+configuration backup or reinstallation of the current package followed by forward operation.

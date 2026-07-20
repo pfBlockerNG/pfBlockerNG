@@ -297,3 +297,9 @@ to override the operator's manual whitelist or manual `$important` block (§2.2.
 absent-`mode` back-compat (§2.2.1/§2.2.5) cannot be guaranteed byte-identical. (The three forks —
 band 2, per-row `Deny`/`Permit` action, every-host-allow — are **settled** maintainer decisions for
 issue #324.)
+
+## Amendment — 2026-07-20: rollback-suite reference superseded (issue #1593)
+
+DNSWL semantics are unchanged. The inherited `RollbackContractTest` requirement is superseded;
+current round trips and supported forward-upgrade reads remain required. Package downgrade is
+unsupported.

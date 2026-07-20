@@ -301,3 +301,9 @@ behaviour changes; Phase 4 generalises the convention to shell + docs; Phase 5 i
 - If the tagged-format migration cannot be shown **downgrade-safe** (an old release crashing on a
   `.xxhash128`) → revert to md5-on-disk with xxh128 used only in-memory; convention narrows, no data
   risk.
+
+## Amendment — 2026-07-20: fail-safe state is not downgrade support (issue #1593)
+
+Tagged hashes, legacy-md5 reads by current code, and changed-on-unknown fail-safe behaviour remain
+unchanged. Requirements and reject gates whose sole purpose is proving an older package can consume
+new sidecars are superseded. Package downgrade is unsupported.

@@ -284,9 +284,8 @@ final class FeedChangeHashHelpersTest extends TestCase
 	}
 
 	/**
-	 * No sidecar found → "changed" sentinel (fail-safe / downgrade-safe).
-	 * ADR-42 §2: "An older release meeting an unknown .xxhash128 it cannot read must
-	 * fail safe → treat as changed → re-ingest."
+	 * No sidecar found → "changed" sentinel (fail-safe).
+	 * ADR-42 §2: unknown or absent hash state must be treated as changed and re-ingested.
 	 *
 	 *  GIVEN neither .xxhash128 nor .md5 exists for the base;
 	 *   WHEN pfb_hash_read($base) is called;
@@ -318,7 +317,7 @@ final class FeedChangeHashHelpersTest extends TestCase
 
 	/**
 	 * .xxhash128 sidecar with invalid/truncated content → "changed" sentinel.
-	 * Downgrade-safety: an unreadable or malformed sidecar must trigger re-ingest,
+	 * Fail-safe rule: an unreadable or malformed sidecar must trigger re-ingest,
 	 * never a false "unchanged" skip.
 	 *
 	 *  GIVEN a .xxhash128 sidecar containing non-hex garbage;

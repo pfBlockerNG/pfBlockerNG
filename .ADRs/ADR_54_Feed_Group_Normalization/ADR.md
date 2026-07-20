@@ -184,9 +184,10 @@ behaviour-preserving while letting the UI ship the full vocabulary once.
   its own ADR-40 membership gate (a less-frequent group simply sees fresher content — same
   end-state invariant). Rides the existing ADR-43 `cron` verb; **no new ledger jobs**.
 
-### 2.4 Migration (one-time, idempotent, `write_config` backup)
+### 2.4 Migration (one-time, atomic, idempotent, `write_config` backup)
 
-1. Each legacy group `config/{N}` → a `pfblockerngfeedgroups` row (fields copied verbatim;
+1. Preflight the complete legacy graph and stage the normalized graph in memory. Each legacy
+   group `config/{N}` → a `pfblockerngfeedgroups` row (fields copied verbatim;
    `action` → `default_action`).
 2. Each nested `row/{M}` → a `pfblockerngfeeds` row + a `member` ref. **Collapse** duplicates
    (same family+header+url found in several groups → one feed, several memberships).
@@ -195,14 +196,13 @@ behaviour-preserving while letting the UI ship the full vocabulary once.
 3. `pfblockerngglobal/feed_<alias>` rename/merge keys → applied as the migrated group's
    actual `name`; `feed_alt_<header>` selections → applied as the feed's `url`; both key
    families then deleted (they exist only to patch the catalog view).
-4. Legacy sections (`pfblockernglistsv4/v6`, `pfblockerngdnsbl` group rows) are then
-   **replaced** by the new sections — and a **frozen legacy mirror** of the pre-migration
-   sections is written once (verbatim copy under `installedpackages/pfblockerngmigrated54`),
-   so a package **downgrade** reads its old sections from the last pre-migration state
-   instead of nothing (ADR-28 posture: behaviour preserved on upgrade; downgrade
-   fail-safe-not-fresh). The mirror is write-once, never maintained.
+4. Validate the entire staged graph and all exact byte/semantic oracles before persistence.
+   Any failure leaves the legacy sections active and untouched. On success, commit the new
+   sections and retire the legacy sections in one configuration transaction; the normalized
+   graph becomes authoritative.
 5. GeoIP continent sections: **untouched** (ADR-57 will fold them in).
-6. Re-running the migration is a no-op (presence of `pfblockerngfeedgroups` short-circuits).
+6. Re-running the migration is a no-op after a valid committed normalized root. A partial or
+   invalid normalized root never suppresses migration; it fails closed to untouched legacy state.
 
 ### 2.5 DNSBL Category (Blacklist page) joins the model
 
@@ -256,8 +256,9 @@ Component rules: `Form_Section`/`Form_Group`/`Form_Select` (incl. `multiple`)/
   sections they replace): section helpers / direct `config_*_path`, NOT the `PfbConfig`
   registry. Add them to the documented foreign-key exclusion list in
   `docs/misc/config-gateway.md`.
-- **Downgrade**: the §2.4 frozen mirror restores pre-migration behaviour on downgrade; a
-  downgraded release never sees a novel token in *its* sections.
+- **Upgrade only**: the §2.4 transaction preserves the legacy graph unless the complete normalized
+  graph validates and commits. Package downgrade is unsupported; no frozen legacy mirror or inverse
+  conversion is maintained.
 
 ### 2.8 Explicitly out of scope
 
@@ -284,21 +285,23 @@ Component rules: `Form_Section`/`Form_Group`/`Form_Select` (incl. `multiple`)/
 ### Negative / risks
 
 - **Biggest schema migration this package has attempted** — every download/parse/table/rule
-  path reads these sections. Mitigated by phase order (oracles first) and the frozen mirror.
+  path reads these sections. Mitigated by phase order, whole-graph staging, validation, and an
+  atomic commit behind the oracles.
 - Per-(feed, group) materialization touches the class-folder derivation that ADR-11/53
   consume — the re-seam must keep `pfb_aggregate_member_list()` and suppression semantics
   bit-stable (oracle-pinned).
 - A shared feed's most-frequent-cadence download changes *when* a less-frequent group's
   content refreshes (fresher, never staler). Documented; ADR-40's gate keeps applies
   correct.
-- The frozen mirror is a one-shot snapshot: a downgrade after months sees stale lists until
-  its own cron refreshes them — acceptable and documented.
+- A package downgrade cannot consume the normalized graph safely and is unsupported. Recovery is
+  restore of a pre-upgrade configuration backup or re-upgrade to the current package.
 
 ## 4. Requirements (acceptance)
 
 - All §2.7 oracles green off-appliance and on the live-VM CE+Plus fan-out.
-- Migration: legacy → new is idempotent, collapses duplicates, suffixes conflicts, writes
-  the mirror, absorbs `pfblockerngglobal` patch keys; absent legacy config ⇒ no-op.
+- Migration: legacy → new is atomic and idempotent, collapses duplicates, suffixes conflicts,
+  absorbs `pfblockerngglobal` patch keys, and leaves legacy state byte-identical on any failure;
+  absent legacy config ⇒ no-op.
 - Feeds/groups editable per §2.6 with per-family header uniqueness + orphan validation.
 - Blacklist page emits feed entities per §2.5 with identical zero-config behaviour.
 - `python -m pytest`, `ruff`, `mypy tests/`, `php -l`, PHPStan, PHPUnit, PHPCS, markdownlint
@@ -333,8 +336,8 @@ by the orchestrator at `xhigh` before the next phase** (§0). Prompts in this di
 ### Phase 2 — Schema + migration + read adapters (behaviour-preserving)
 
 - Prompt: `02_Schema_Migration_Adapters.txt`
-- New sections, migration per §2.4 (mirror included), read adapters so every consumer reads
-  the new sections; oracles byte-identical pre/post migration.
+- New sections, atomic migration per §2.4, and read adapters so every consumer reads the new
+  sections; oracles byte-identical pre/post migration and legacy state byte-identical on failure.
 
 ### Phase 3 — Single-download + per-(feed,group) materialization (behaviour-preserving)
 
@@ -357,7 +360,8 @@ by the orchestrator at `xhigh` before the next phase** (§0). Prompts in this di
 - [ ] Zero-change oracles green at every phase boundary (the per-phase gate reviews attest
       this explicitly).
 - [ ] Migration fixtures: duplicate-collapse, SWC suffix, `pfblockerngglobal` absorption,
-      idempotent re-run, absent-legacy no-op, mirror written once.
+      idempotent re-run, absent-legacy no-op, injected failure leaves legacy state byte-identical,
+      and success exposes only a complete validated normalized graph.
 - [ ] Tier A + Tier B UI gates green (`ui_render` all pages; `ui_e2e` new-page + membership
       flow).
 - [ ] `docs/misc/architecture-notes.md` gains the normalization section;

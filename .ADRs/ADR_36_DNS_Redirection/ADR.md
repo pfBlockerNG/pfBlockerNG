@@ -371,3 +371,9 @@ a documented limitation (the associated filter rule is created manually or via a
 hook on package apply). If the ADR-35 registration seam cannot cover both the NAT and associated
 filter rule atomically, **reduce** to a single-marker sweep with a documented atomicity caveat
 and a verify-both-exist assertion on every reconcile.
+
+## Amendment — 2026-07-20: package rollback promise superseded (issue #1593)
+
+DNS-redirection behaviour and current configuration round trips are unchanged. The old-package
+ignore/preserve promise and inherited `RollbackContractTest` requirement are superseded. Package
+downgrade is unsupported; forward upgrade and grandfathering remain supported.

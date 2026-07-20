@@ -615,3 +615,9 @@ returning a normalized `asn`/`as_org` record) and makes no claim about the IP-lo
 this amendment changes — its one relevant bullet ("Phase 4 ... Keep block shapes/log formats stable")
 is a forward-looking instruction that will simply apply to *this* (post-#1369) log format once that
 Proposed phase is eventually implemented. **No edit needed**; ADR-32 is not stale.
+
+## Amendment — 2026-07-20: legacy-safe write requirement superseded (issue #1593)
+
+Syslog behaviour is unchanged. The requirement to emit tokens consumable by older packages and the
+inherited `RollbackContractTest` requirement are superseded. Current canonical storage and
+supported forward-upgrade legacy reads remain required; package downgrade is unsupported.

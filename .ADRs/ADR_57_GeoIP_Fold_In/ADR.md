@@ -32,8 +32,9 @@ ADR-55 CG bindings do not apply to GeoIP.
 - Continent groups then get M:N membership (a custom "Sanctioned countries" group mixing
   countries across continents becomes possible) and **CG policy bindings** like any other
   group — per-client GeoIP enforcement.
-- Migration: per-continent sections → groups + country feeds, one-time, mirrored (the
-  ADR-54 §2.4 downgrade posture), Category-page GeoIP special case retired.
+- Migration: per-continent sections → groups + country feeds through ADR-54 §2.4's atomic
+  forward-migration seam; Category-page GeoIP special case retired. Package downgrade is
+  unsupported.
 
 ## 3. Risks flagged now
 

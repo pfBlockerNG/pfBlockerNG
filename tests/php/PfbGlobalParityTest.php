@@ -489,8 +489,8 @@ final class PfbGlobalParityTest extends TestCase
 	 * this into config.xml for existing installs; the runtime default is identical.
 	 *
 	 * #484 FIX: pfb_keep now uses the lenient adapter (PfbLenient) so the GUI stores
-	 * 'off' for unchecked-save — distinguishable from absent (default 'on'). The legacy
-	 * '' token (written by old GUI) still reads as PfbLenient::Off — backward-safe.
+	 * 'off' for unchecked-save — distinguishable from absent (default 'on'). Current code
+	 * reads the legacy '' token (written by the old GUI) as PfbLenient::Off.
 	 */
 	public function testRepair281PfbKeepDefaultIsFormallyOn(): void
 	{

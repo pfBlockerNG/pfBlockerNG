@@ -307,3 +307,9 @@ through `PfbConfig` (`write(read(v)) == v`, absent ⇒ `'0'`).
   chroot + `chown unbound` the off-box runner cannot assert. Niche/opt-in, so this is the one added
   live leg; the §7 manual checklist gains a "set `log_reset_keep_*`, confirm the last K survive a real
   boundary" step.
+
+## Amendment — 2026-07-20: inherited rollback requirements superseded (issue #1593)
+
+Scheduled reset and retention behaviour is unchanged. References to ADR-29's rollback contract,
+scalar `since-version` metadata, and `RollbackContractTest` are superseded. Current canonical
+round trips and supported forward-upgrade legacy reads remain required; package downgrade does not.

@@ -185,7 +185,6 @@ in `read-version-matrix.sh`.
 | --- | --- |
 | [`install-from-repo.sh`](install-from-repo.sh) | **First-time install** onto a clean pfSense from `src/` — no Netgate pkg. |
 | [`deploy.sh`](deploy.sh) | Fast code update of an **already-installed** pfBlockerNG: rsync `src/` + restart unbound/nginx. |
-| [`pfb-downgrade-prep.sh`](pfb-downgrade-prep.sh) | **Before rolling the package back** to a pre-4.0.x release: run on the box as root to reverse the three non-self-healing 4.0.x changes — restore custom `list_scripts/` pre/post scripts to the package root, restore the machine match artifacts from `match/generated/` to their pre-4.0.x names, and remove the ADR-43 `tick` cron. |
 | [`setup-hooks.sh`](setup-hooks.sh) | Point git at `.githooks` (run once after cloning). |
 | [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`.ADRs/`, `docs/`) excluded from its pathspec. |
 | [`update-pfsense-stubs.py`](update-pfsense-stubs.py) | Regenerate `stubs/pfsense/` after a CE bump. |
@@ -396,15 +395,15 @@ set `NO_ARCH`, so the package is ABI-tagged `FreeBSD:<major>:<arch>` (e.g.
 Artifacts = **one per distinct FreeBSD major**; CI smoke = every `ci: true` image, CE **and** Plus.
 The scheduled version-tracking + release-automation design is its own ADR.
 
-## Catalog generator — release retention and rollback
+## Catalog generator — release retention
 
 `build-repo-portable.py --build-matrix` generates the self-hosted `pkg` repository tree
 (ADR-17). By default it keeps only the **latest** release of each channel per
-`(version, arch)` — identical to the pre-ADR-27 behaviour. Three flags enable rollback:
+`(version, arch)` — identical to the pre-ADR-27 behaviour. Three flags control retention:
 
 | Flag | Default | Purpose |
 | ---- | ------- | ------- |
-| `--release-keep-devel N` | `1` (latest-only) | Retain the N newest devel releases per `(version, arch)` in the `release/` catalog. Set `>1` to list older versions so users can pin to them. |
+| `--release-keep-devel N` | `1` (latest-only) | Retain the N newest devel releases per `(version, arch)` in the `release/` catalog. |
 | `--release-keep-stable M` | `1` (latest-only) | Same for the stable channel. |
 | `--release-extra-pkgs PATH` | (none) | Pre-built older-release `.pkg` to fold into the release pool alongside the fresh build (repeatable — pass one per file). The generator prunes the merged pool to `N` / `M` after folding. |
 
@@ -422,23 +421,13 @@ The scheduled version-tracking + release-automation design is its own ADR.
 The generator is the backstop: even if `publish.yml` passes more `.pkg` files than the
 retention depth, it prunes to the newest N/M before writing the catalog.
 
-### Rolling back a release or devel install
+### Retained-version boundary
 
-When the retention depth is `>1`, the catalog lists multiple versions. A user can pin:
-
-```sh
-# Roll back to a specific devel build (-f forces the downgrade over a newer installed build)
-pkg install -f pfSense-pkg-pfBlockerNG-devel-3.2.15
-
-# Roll back to a specific stable build
-pkg install -f pfSense-pkg-pfBlockerNG-3.2.14
-```
-
-`-f` is required: `pkg install` never downgrades over a newer already-installed build, so the
-pin is a no-op without it (deps still resolve from the catalog, unlike `pkg add <url>`).
 `pkg install <name>` (no version) still resolves the **highest** listed version
-(newest-wins, `pkg` version ordering). Rollback is available **only for the N/M most recent
-releases** — releases older than the retention window are absent from the catalog.
+(newest-wins, `pkg` version ordering). Versions older than the N/M retention window are absent
+from the catalog.
 
-> **Config-schema note:** rolling back across a schema-changing release may leave the stored
-> `config.xml` in a format the older code cannot read. Test first in a non-production VM.
+> **Compatibility note:** retention is artifact availability, not supported downgrade. Older
+> packages may not understand current state; configuration or enforcement may fail. Restore a
+> pre-upgrade configuration backup or
+> reinstall the current package and continue forward if recovery is needed.

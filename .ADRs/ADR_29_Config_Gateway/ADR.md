@@ -348,3 +348,11 @@ Prompt: `10_Smoke_And_Validation.txt` — the acceptance gate.
     maintainability premise) → stop at the infra + seam and reassess.
 
 See the ordered `NN_*.txt` phase prompts in this directory.
+
+## Amendment — 2026-07-20: rollback contract retired (issue #1593)
+
+`PfbConfig`, field adapters, canonical current storage, ordered forward migrations, legacy reads
+needed by supported upgrades, and grandfathering remain authoritative. Package downgrade is
+unsupported. The backward/rollback contract, scalar-field `since-version` metadata, per-field
+rollback suite, downgrade smoke leg, and downgrade-only tooling requirements are superseded.
+Migration-registry version gates remain because they order supported forward migrations.
