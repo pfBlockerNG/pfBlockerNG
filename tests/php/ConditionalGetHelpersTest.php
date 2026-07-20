@@ -403,65 +403,6 @@ final class ConditionalGetHelpersTest extends TestCase
 		);
 	}
 
-	// -------------------------------------------------------------------------
-	// pfb_download() fill-guard contract — NULL vs array()
-	// -------------------------------------------------------------------------
-
-	/**
-	 * The fill guard inside pfb_download uses `$response_meta !== NULL`.
-	 * Callers MUST pass array() (not NULL) to activate the fill.
-	 * This test pins the PHP identity contract that makes that guard work:
-	 *   - NULL !== NULL  is FALSE  → the sync callers (passing no 13th arg → default NULL)
-	 *                                 silently skip the fill block (correct).
-	 *   - array() !== NULL is TRUE → the probe caller (pfb_update_check) gets the block
-	 *                                 filled (required for change detection to function).
-	 *
-	 * Context: pfb_download itself cannot be exercised off-appliance (its localfile
-	 * branch requires paths under the hardcoded allowed dirs — /var/db/pfblockerng/* —
-	 * which are not writable in CI; the curl branch needs a network peer).  This test
-	 * pins the guard contract at the PHP-identity level so the blocker (NULL init in
-	 * pfblockerng.php that silently disabled all remote change detection) cannot regress
-	 * without a RED test.
-	 *
-	 * RED on a pre-fix codebase where pfblockerng.php initialised $probe_meta = NULL
-	 * instead of $probe_meta = array(): see FIX 1 in the ADR-42 review findings.
-	 */
-	public function test_probe_meta_fill_guard_requires_array_not_null(): void
-	{
-		// NULL !== NULL → FALSE: the fill block is SKIPPED (sync-caller sentinel).
-		$this->assertFalse(
-			NULL !== NULL,
-			'NULL !== NULL must be FALSE — the fill-guard skip-sentinel contract'
-		);
-
-		// array() !== NULL → TRUE: the fill block FIRES (probe-caller contract).
-		$this->assertTrue(
-			array() !== NULL,
-			'array() !== NULL must be TRUE — the probe caller must pass array(), not NULL, '
-			. 'to activate the pfb_download fill block; passing NULL silently disables change detection'
-		);
-
-		// Simulate the pre-fix bug: $probe_meta = NULL stays NULL after a hypothetical
-		// fill attempt (the guard would have been skipped).  The post-fix $probe_meta = array()
-		// would be replaced with the filled array.  We assert the guard distinction here
-		// rather than calling pfb_download (not exercisable off-appliance — see above).
-		$probe_meta_broken = NULL;
-		$probe_meta_fixed  = array();
-		$fills_on_broken   = ($probe_meta_broken !== NULL);	// FALSE — fill skipped
-		$fills_on_fixed    = ($probe_meta_fixed  !== NULL);	// TRUE  — fill fires
-
-		$this->assertFalse(
-			$fills_on_broken,
-			'Pre-fix NULL init: the fill guard evaluates to FALSE → fill is skipped → '
-			. '$probe_meta stays NULL → caller sees NULL and treats every probe as failed'
-		);
-		$this->assertTrue(
-			$fills_on_fixed,
-			'Post-fix array() init: the fill guard evaluates to TRUE → fill fires → '
-			. '$probe_meta is populated → change detection works correctly'
-		);
-	}
-
 	/**
 	 * ADR-42 §3 — the probe must read validators from the detector's {header}.orig
 	 * baseline, NOT the infixed {header}.md5.orig.  The detector hands pfb_download

@@ -232,8 +232,14 @@ final class DownloadExtractionExitCodeTest extends TestCase
 					break;
 				}
 			} elseif ($depth === 1 && $tokens[$i]['id'] === T_RETURN) {
-				return ($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'FALSE')
-					&& ($tokens[$i + 2]['text'] ?? '') === ';';
+				return (($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'PfbDownloadResult')
+					&& ($tokens[$i + 2]['id'] ?? NULL) === T_DOUBLE_COLON
+					&& ($tokens[$i + 3] ?? NULL) === array('id' => T_STRING, 'text' => 'failure')
+					&& ($tokens[$i + 4]['text'] ?? '') === '('
+					&& ($tokens[$i + 5]['text'] ?? '') === ')'
+					&& ($tokens[$i + 6]['text'] ?? '') === ';')
+					|| (($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'FALSE')
+						&& ($tokens[$i + 2]['text'] ?? '') === ';');
 			}
 		}
 
@@ -249,16 +255,16 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$tarPos = strpos(self::$body, "/usr/bin/tar -xzf {\$file_dwn_esc} --strip=1 -C {\$pfb['geoipshare']}");
 		$this->assertNotFalse($tarPos, 'vacuity: the gzip-geoip tar -xzf site must exist for this test to mean anything');
 
-		$returnTrue = strpos(self::$body, 'return TRUE;', $tarPos);
-		$this->assertNotFalse($returnTrue, 'vacuity: gzip-geoip site must reach a return TRUE;');
+		$returnTrue = strpos(self::$body, 'return PfbDownloadResult::success();', $tarPos);
+		$this->assertNotFalse($returnTrue, 'vacuity: gzip-geoip site must reach a success result;');
 		$segmentStart = strrpos(substr(self::$body, 0, $tarPos), "\n");
 		$segmentStart = $segmentStart === FALSE ? 0 : $segmentStart + 1;
-		$segment = substr(self::$body, $segmentStart, $returnTrue + strlen('return TRUE;') - $segmentStart);
+		$segment = substr(self::$body, $segmentStart, $returnTrue + strlen('return PfbDownloadResult::success();') - $segmentStart);
 
 		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segment,
 			'gzip-geoip tar -xzf must capture $output, $retval -- a corrupt archive currently reports success unconditionally');
 		$this->assertTrue(self::hasNonzeroRetvalGuard($segment),
-			'gzip-geoip must check nonzero $retval before its return TRUE -- a nonzero exit must not report success');
+			'gzip-geoip must check nonzero $retval before its success result -- a nonzero exit must not report success');
 	}
 
 	// -----------------------------------------------------------------------
@@ -283,8 +289,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			'gzip-asn must check $retval and bail BEFORE the asn_table exec -- else a failed decompress '
 			. 'rebuilds the ASN table from a stale/partial file; found between gunzip and asn_table: '
 			. json_encode($segment));
-		$this->assertStringContainsString('return FALSE', $segment,
-			'gzip-asn nonzero-retval path must return FALSE before asn_table runs');
+		$this->assertStringContainsString('PfbDownloadResult::failure()', $segment,
+			'gzip-asn nonzero-retval path must return failure before asn_table runs');
 	}
 
 	// -----------------------------------------------------------------------
@@ -299,12 +305,12 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$gunzip = strpos(self::$body, 'exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}"', $top1mAnchor);
 		$this->assertNotFalse($gunzip, 'vacuity: gzip-top1m gunzip exec must exist');
 
-		$returnTrue = strpos(self::$body, 'return TRUE;', $gunzip);
-		$this->assertNotFalse($returnTrue, 'vacuity: gzip-top1m site must reach a return TRUE;');
-		$segment = substr(self::$body, $gunzip, $returnTrue + strlen('return TRUE;') - $gunzip);
+		$returnTrue = strpos(self::$body, 'return PfbDownloadResult::success();', $gunzip);
+		$this->assertNotFalse($returnTrue, 'vacuity: gzip-top1m site must reach a success result;');
+		$segment = substr(self::$body, $gunzip, $returnTrue + strlen('return PfbDownloadResult::success();') - $gunzip);
 
 		$this->assertTrue(self::hasNonzeroRetvalGuard($segment),
-			'gzip-top1m must check nonzero $retval before its return TRUE -- a nonzero gunzip exit must not report success; '
+			'gzip-top1m must check nonzero $retval before its success result -- a nonzero gunzip exit must not report success; '
 			. 'segment: ' . json_encode($segment));
 	}
 
@@ -355,14 +361,14 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$single = strpos(self::$body, 'exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}"', $multi);
 		$this->assertNotFalse($single, 'vacuity: the zip single-member tar -xOf site must exist');
 
-		$returnTrue = strpos(self::$body, 'return TRUE;', $single);
-		$this->assertNotFalse($returnTrue, 'vacuity: zip extras must reach a shared return TRUE;');
+		$returnTrue = strpos(self::$body, 'return PfbDownloadResult::success();', $single);
+		$this->assertNotFalse($returnTrue, 'vacuity: zip extras must reach a shared success result;');
 
 		$segMulti = substr(self::$body, $multi, $single - $multi);
 		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segMulti,
 			'zip multi-member tar -xf must capture $output, $retval; segment: ' . json_encode($segMulti));
 
-		$segSingleToReturn = substr(self::$body, $single, $returnTrue + strlen('return TRUE;') - $single);
+		$segSingleToReturn = substr(self::$body, $single, $returnTrue + strlen('return PfbDownloadResult::success();') - $single);
 		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segSingleToReturn,
 			'zip single-member tar -xOf must capture $output, $retval; segment: ' . json_encode($segSingleToReturn));
 		$this->assertTrue(self::hasNonzeroRetvalGuard($segSingleToReturn),
@@ -385,9 +391,9 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 		$analysis = self::analyzeRenameGuard($segment, '$head_download', 1);
 		$this->assertTrue($analysis['bound'],
-			'uncompressed extras must check !$renamed before return TRUE; segment: ' . json_encode($segment));
+			'uncompressed extras must check !$renamed before success result; segment: ' . json_encode($segment));
 		$this->assertTrue($analysis['directReturn'],
-			'a failed rename() must have a return FALSE path; segment: ' . json_encode($segment));
+			'a failed rename() must have a failure result path; segment: ' . json_encode($segment));
 	}
 
 	// -----------------------------------------------------------------------
@@ -413,6 +419,6 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			'generic uncompressed feeds must check !$renamed before the $retval == 0 success gate; segment: '
 			. json_encode($segment));
 		$this->assertTrue($analysis['directReturn'],
-			'a failed rename() must have a return FALSE path before the success gate; segment: ' . json_encode($segment));
+			'a failed rename() must have a failure result path before the success gate; segment: ' . json_encode($segment));
 	}
 }

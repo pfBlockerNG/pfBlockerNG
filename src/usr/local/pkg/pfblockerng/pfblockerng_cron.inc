@@ -146,10 +146,23 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			// decided by pfb_conditional_get_decision() (decision matrix documented
 			// there). The SSRF guard + redirect revalidation loop stay intact because the
 			// probe goes through pfb_download(), not a bare curl_init().
-			$probe_meta = array();
-			$probe_ok = pfb_download("{$list_download}", "{$pfborig}/{$header}.md5", $pflex, $header, '', 1, '', 300, 'change_detect', '', '', $srcint, $probe_meta);
+			$probe_result = pfb_download(new PfbDownloadRequest(
+				listUrl: "{$list_download}",
+				downloadPath: "{$pfborig}/{$header}.md5",
+				flex: $pflex,
+				header: $header,
+				format: '',
+				logType: 1,
+				versionType: '',
+				timeout: 300,
+				type: 'change_detect',
+				username: '',
+				password: '',
+				sourceInterface: $srcint,
+				extraHeaders: array(),
+			));
 
-			if (!$probe_ok || $probe_meta === NULL) {
+			if (!$probe_result->success || $probe_result->responseMeta === NULL) {
 				// Probe failed entirely (connection error, bad URL, etc.) → fail-safe.
 				$log = "\n\tFailed to probe feed for change detection!\tUpdate skipped\n";
 				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
@@ -158,6 +171,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 				return;
 			}
 
+			$probe_meta = $probe_result->responseMeta;
 			$probe_status = $probe_meta['status'];
 
 			if ($probe_status === '304') {

@@ -1644,8 +1644,21 @@ function sync_package_pfblockerng($cron='') {
 										pfb_logger(' completed .', 1);
 									} else {
 										// Download file
-										if (!pfb_download($row['url'], $file_dwn, $pflex, $header,
-											$row['format'], 1, '', 300, '', '', '', $srcint)) {
+										if (!(pfb_download(new PfbDownloadRequest(
+											listUrl: $row['url'],
+											downloadPath: $file_dwn,
+											flex: $pflex,
+											header: $header,
+											format: $row['format'],
+											logType: 1,
+											versionType: '',
+											timeout: 300,
+											type: '',
+											username: '',
+											password: '',
+											sourceInterface: $srcint,
+											extraHeaders: array(),
+										))->success)) {
 
 											// Determine reason for download failure
 											pfb_download_failure($alias, $header, $pfbfolder, $row['url'], $row['format'], '');
@@ -3109,8 +3122,21 @@ function sync_package_pfblockerng($cron='') {
 								}
 								else {
 									// Download list
-									if (!pfb_download($row['url'], $file_dwn, $pflex, $header, $row['format'],
-										1, $list['vtype'], 300, '', '', '', $srcint)) {
+									if (!(pfb_download(new PfbDownloadRequest(
+										listUrl: $row['url'],
+										downloadPath: $file_dwn,
+										flex: $pflex,
+										header: $header,
+										format: $row['format'],
+										logType: 1,
+										versionType: $list['vtype'],
+										timeout: 300,
+										type: '',
+										username: '',
+										password: '',
+										sourceInterface: $srcint,
+										extraHeaders: array(),
+									))->success)) {
 
 										// Determine reason for download failure
 										pfb_download_failure($alias, $header, $pfbfolder, $row['url'], $row['format'], $list['vtype']);

@@ -2290,105 +2290,14 @@
     },
     "pfb_download": {
         "returnsRef": false,
-        "returnType": null,
+        "returnType": "PfbDownloadResult",
         "params": [
             {
-                "name": "list_url",
+                "name": "request",
                 "byRef": false,
                 "variadic": false,
-                "type": null,
+                "type": "PfbDownloadRequest",
                 "default": null
-            },
-            {
-                "name": "file_dwn",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            },
-            {
-                "name": "pflex",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            },
-            {
-                "name": "header",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            },
-            {
-                "name": "format",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            },
-            {
-                "name": "logtype",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            },
-            {
-                "name": "vtype",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "''"
-            },
-            {
-                "name": "timeout",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "300"
-            },
-            {
-                "name": "type",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "''"
-            },
-            {
-                "name": "username",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "''"
-            },
-            {
-                "name": "password",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "''"
-            },
-            {
-                "name": "srcint",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "false"
-            },
-            {
-                "name": "response_meta",
-                "byRef": true,
-                "variadic": false,
-                "type": null,
-                "default": "NULL"
-            },
-            {
-                "name": "extra_headers",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": "array (\n)"
             }
         ]
     },

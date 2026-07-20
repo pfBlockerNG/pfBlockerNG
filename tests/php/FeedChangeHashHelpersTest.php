@@ -587,7 +587,7 @@ final class FeedChangeHashHelpersTest extends TestCase
 	 *   THEN both return FALSE (the sidecar is correct, no re-ingest triggered).
 	 *
 	 * RED on pre-Phase-2 code: if pfb_local_feed_changed writes the sidecar (instead of
-	 * pfb_download), the second call would see a stale sidecar and return TRUE.
+	 * the download ingest path), the second call would see a stale sidecar and return TRUE.
 	 */
 	public function test_local_feed_changed_idempotent_after_ingest_with_sidecar(): void
 	{
