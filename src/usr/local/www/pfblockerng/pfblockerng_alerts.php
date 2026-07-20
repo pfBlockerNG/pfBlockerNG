@@ -784,21 +784,8 @@ if (isset($_POST) && !empty($_POST)) {
 		$filterfieldsarray = array();
 	}
 
-	// Add a host (v4 or v6, ANY containing mask) to the suppression customlist,
-	// carving it out of whichever table entr(y/ies) currently block it live
-	// (ADR-53 §2.1 fork 3 -- full rework). The old /24-only 254-host re-add
-	// loop + "blocked by a CIDR other than /24" refusal are retired: any
-	// containing entry is now punched via pfb_live_punch_plan()'s
-	// covering-CIDR set-subtraction, mirroring the persisted v4/v6 engines
-	// (Phases 3/5).
+	// Add a host to the suppression customlist.
 	elseif (isset($_POST['addsuppress']) && !empty($_POST['addsuppress'])) {
-
-		// NOTE: no $escape flag — pfb_filter(..., TRUE) returns an escapeshellarg()'d
-		// token (quotes included), which the legacy flow interpolated into exec()
-		// directly. This flow escapes at each exec sink instead, and $ip feeds
-		// non-shell consumers (the punch plan, the stored customlist entry) that
-		// must see the raw address — the quoted form corrupted the stored config
-		// entry ('1.2.3.4'/32), caught live by the Tier B addsuppress e2e.
 		$ip	= pfb_filter($_POST['ip'], PFB_FILTER_IP, 'alerts addsuppress');
 		$table	= pfb_filter($_POST['table'], PFB_FILTER_WORD, 'alerts addsuppress');
 
@@ -809,94 +796,12 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		$is_v6 = strpos($ip, ':') !== FALSE;
-		$family = $is_v6 ? 6 : 4;
-
 		$descr = '';
 		if (isset($_POST['descr']) && !empty($_POST['descr'])) {
 			$descr = pfb_filter($_POST['descr'], PFB_FILTER_HTML, 'alerts addsuppress');
 		}
-
-		// Snapshot + carve + apply, serialized against a concurrent feed pass
-		// (pfb_live_punch_run(), pfblockerng_extra.inc -- shared with the
-		// Unlock icon's live punch, #1412/#1467). An empty plan ('not_blocked')
-		// is NOT a refusal -- the customlist add below always proceeds, exactly
-		// as the old /24 branch already did unconditionally: suppression is a
-		// standing exemption for FUTURE loads, not contingent on today's live
-		// table snapshot.
-		$apply = pfb_live_punch_run($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table, $ip);
-
-		$savemsg1 = "Host IP address {$ip}";
-		switch ($apply['status']) {
-			case 'applied':
-				$savemsg2 = ' : Removed ' . $apply['del_cnt'] . ' entr' . ($apply['del_cnt'] == 1 ? 'y' : 'ies')
-					. ', added ' . $apply['add_cnt'] . ' covering CIDR' . ($apply['add_cnt'] == 1 ? '' : 's');
-				break;
-			case 'not_blocked':
-				$savemsg2 = " : Not currently blocked by Table [ {$table} ]";
-				break;
-			case 'busy':
-				$savemsg2 = ' : An update/reload pass is currently in progress, suppression will apply at the next reload';
-				break;
-			default: // 'failed'
-				$savemsg2 = " : Live punch failed [ {$apply['fail']} ], suppression will still apply at the next reload";
-				break;
-		}
-
-		$supp_key	= $is_v6 ? 'ipsuppression_v6' : 'ipsuppression';
-		$cfg_key	= $is_v6 ? 'v6suppression' : 'v4suppression';
-		$host_line	= $is_v6 ? "{$ip}/128" : "{$ip}/32";
-
-		// Save the host to the correct-family Suppression List (bare-host dedup
-		// unchanged UX from the original v4-only code -- the "+" always
-		// suppresses the exact reported host, never the whole containing entry).
-		$pfbupdate        = FALSE;
-		$refresh_suppfile = FALSE;
-		if (isset($clists[$supp_key]['data'][$host_line])) {
-			$savemsg = gettext("Host IP address {$ip} already exists in the IPv{$family} Suppression customlist.");
-		} elseif (pfb_ip_suppressed($ip, array_keys($clists[$supp_key]['data']))) {
-			// ADR-53 review finding H6: the old flow also recognised a host
-			// already covered by a BROADER manual suppression entry (e.g. a
-			// /24 already covers this /32) -- appending the exact host on top
-			// would be a redundant customlist entry. Reuses the same
-			// prefix-aware predicate killstates uses (ADR-53) rather than
-			// re-deriving containment here. The live punch above already ran
-			// (unaffected by this dedup); the suppression file is still
-			// refreshed below so it reflects the covering entry.
-			$savemsg          = gettext("Host IP address {$ip} is already covered by an existing IPv{$family} Suppression entry.");
-			$refresh_suppfile = TRUE;
-		} else {
-			$supp_dat = $host_line;
-			if (!empty($descr)) {
-				$supp_dat .= " # {$descr}";
-			}
-
-			$savemsg          = gettext($savemsg1) . gettext($savemsg2) . gettext(" and added to the IPv{$family} Suppression customlist.");
-			$pfbupdate        = TRUE;
-			$refresh_suppfile = TRUE;
-		}
-
-		if ($pfbupdate) {
-			$data = '';
-			foreach ($clists[$supp_key]['data'] as $line) {
-				$data .= "{$line}";
-			}
-			$data .= "{$supp_dat}\r\n";
-			$clists[$supp_key]['base64'] = base64_encode($data);
-			PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
-			write_config("pfBlockerNG: Added {$ip} to the IPv{$family} Suppression customlist", FALSE);
-		}
-		if ($refresh_suppfile) {
-			// pfb_create_suppression_file() reads $pfb['ipconfig'][...], a
-			// snapshot taken at pfb_global() time -- refresh it in-memory so the
-			// suppression file this request writes reflects either the entry
-			// just appended, or (the "already covered" branch above) the
-			// pre-existing broader entry, keeping pfbsuppression(_v6).txt in
-			// step with the live punch that already ran.
-			$pfb['ipconfig'][$cfg_key] = $clists[$supp_key]['base64'];
-			pfb_create_suppression_file();	// Refresh pfbsuppression(_v6).txt
-		}
-		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
+		$result = pfb_alerts_ip_action('addsuppress', $ip, $table, $descr, $clists, $ip_unlock);
+		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$result['savemsg']}");
 		exit;
 	}
 
@@ -1546,58 +1451,11 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		// Unlock IP -- ADR-53 covering-CIDR live punch (pfb_live_punch_run(),
-		// pfblockerng_extra.inc), the same mechanism the Suppression "+" uses:
-		// carve exactly this host out of whichever table entr(y/ies) currently
-		// block it live, any mask, either family, instead of deleting the
-		// whole containing entry (the old direct single-token delete unblocked
-		// every sibling in that entry too). Serialized against a concurrent
-		// feed pass (issue #1467).
-		if ($_POST['ip_remove'] == 'unlock') {
-			$apply = pfb_live_punch_run($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table, $ip);
-
-			switch ($apply['status']) {
-				case 'applied':
-					pfb_unlock('unlock', 'ip', $ip, $table, $ip_unlock);
-					$savemsg = "The IP [ {$ip} ] has been temporarily Unlocked from table [ {$table} ]!";
-					break;
-				case 'not_blocked':
-					// Nothing live currently blocks this host -- no store write, no unlock recorded.
-					$savemsg = "The IP [ {$ip} ] is not currently blocked by table [ {$table} ] -- no unlock was recorded.";
-					break;
-				case 'busy':
-					// An update/reload pass is running -- no store write; ask the user to retry.
-					$savemsg = "Table [ {$table} ] is mid-update -- please retry the Unlock once the current run finishes.";
-					break;
-				default: // 'failed'
-					// No pfb_unlock() store write -- the table still blocks the IP, so the
-					// unlock store must not claim otherwise.
-					$savemsg = "The live unlock of IP [ {$ip} ] failed [ {$apply['fail']} ] -- table [ {$table} ] still blocks it; see the pfBlockerNG log.";
-					break;
-			}
+		$result = pfb_alerts_ip_action($_POST['ip_remove'], $ip, $table, '', $clists, $ip_unlock);
+		if ($result['redirect']) {
+			header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$result['savemsg']}");
+			exit;
 		}
-
-		// Lock IP -- restores exactly the alerted host (mirrors the
-		// un-suppress 'delete_ip' handler's direct re-add: no covering-CIDR
-		// remainder to compute, only the single host that was carved out).
-		elseif ($_POST['ip_remove'] == 'lock') {
-			// issue #1505: check the re-add before recording the re-lock -- a
-			// failed re-add must leave the IP genuinely unlocked in the store.
-			$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
-			if ($apply['ok']) {
-				pfb_unlock('lock', 'ip', $ip, $table, $ip_unlock);
-				$savemsg = "The IP [ {$ip} ] has been re-locked into table [ {$table} ]!";
-			} else {
-				$savemsg = "The live re-lock of IP [ {$ip} ] failed [ {$apply['fail']} ] -- table [ {$table} ] does not block it; see the pfBlockerNG log.";
-			}
-		}
-
-		else {
-			$savemsg = gettext('Cannot Lock/Unlock - Invalid action.');
-		}
-
-		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
-		exit;
 	}
 
 	// Whitelist IP events
@@ -1630,40 +1488,9 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		if (!isset($clists['ipwhitelist' . $vtype][$table]['data'][$ip])) {
-			// issue #1505: check the add before touching the customlist/config --
-			// a failed add must leave every write undone.
-			$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
-			if ($apply['ok']) {
-				@file_put_contents("{$pfb['aliasdir']}/{$table}.txt", "\n{$ip}", LOCK_EX);
-
-				if (!empty($descr)) {
-					$whitelist_string = "{$ip} # {$descr}\r\n";
-				} else {
-					$whitelist_string = "{$ip}\r\n";
-				}
-
-				$data = '';
-				if (isset($clists['ipwhitelist' . $vtype][$table]['data']) && is_array($clists['ipwhitelist' . $vtype][$table]['data'])) {
-					foreach ($clists['ipwhitelist' . $vtype][$table]['data'] as $line) {
-						$data .= "{$line}";
-					}
-				}
-				$data .= "{$whitelist_string}";
-
-				$clists['ipwhitelist' . $vtype][$table]['base64'] = base64_encode($data);
-				// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not in registry
-				config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$clists['ipwhitelist' . $vtype][$table]['base64_idx']}/custom", $clists['ipwhitelist' . $vtype][$table]['base64']);
-				write_config("pfBlockerNG: Added [ {$ip} ] to [ {$table} ] Whitelist", FALSE);
-
-				$aname = substr(substr($table, 4),0, -3);					// Remove 'pfB_' and '_v4'
-				touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");			// Set Flag for Cron/Update process
-
-				$savemsg = "The IP [ {$ip} ] has been added to the [ {$table} ] Permit Alias customlist.";
-			} else {
-				$savemsg = "The add of [ {$ip} ] to aliastable [ {$table} ] failed [ {$apply['fail']} ] -- see the pfBlockerNG log.";
-			}
-			header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
+		$result = pfb_alerts_ip_action('ip_white', $ip, $table, $descr, $clists, $ip_unlock);
+		if ($result['redirect']) {
+			header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$result['savemsg']}");
 			exit;
 		}
 	}

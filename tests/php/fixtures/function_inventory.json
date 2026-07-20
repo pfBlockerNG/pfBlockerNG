@@ -199,6 +199,54 @@
         "returnType": null,
         "params": []
     },
+    "pfb_alerts_ip_action": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "action",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "ip",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "table",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "descr",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "clists",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "ip_unlock",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_alerts_ip_buffer_push": {
         "returnsRef": false,
         "returnType": "void",

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * issue #1505: four `pfctl -T add/delete` exec() calls in
@@ -14,19 +15,10 @@ use PHPUnit\Framework\TestCase;
  * fail-closed pfb_live_punch_apply()) and gates every store write + the
  * success savemsg on the outcome.
  *
- * The four handlers live in top-level script code (a switch/if chain inside
- * pfblockerng_alerts.php's `if (isset($_POST))` block), not functions, so
- * each region is eval-extracted verbatim from the REAL source -- same
- * technique as CategoryEditPostGuardTest -- anchored on text stable across
- * both the pre-fix and post-fix code, so this one file proves red on the old
- * code and green on the new. delete_ip/delete_ipwhitelist keep their case's
- * own trailing `break;`, so those two are wrapped in a `switch (1) { case 1:
- * ... }` shell; the lock/ip_white regions are plain statement lists and are
- * eval'd directly. ip_white's extraction stops BEFORE the header() call
- * (calling header()/exit() inside a test would kill the process) -- this
- * only works because the fix hoists header()+exit() to run once after the
- * if/else (never duplicated per-branch), which is also why the SAME
- * extraction anchor resolves in both the pre-fix and post-fix source.
+ * delete_ip/delete_ipwhitelist remain top-level page code and keep their
+ * source-evaluated oracle coverage. Alerts IP mutations use the package seam
+ * directly so store/config ordering and explicit redirect results are tested
+ * without executing page headers or exits.
  *
  * Uses the same injectable pfctl shim pattern as AlertsLivePunchApplyTest
  * (writeShim() + PFB_TEST_LOG argv log + PFB_TEST_RULES scripted per-op
@@ -89,50 +81,6 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 			);
 		}
 
-		// Region 3: the ip_remove=='lock' elseif branch (its own open+close braces).
-		// The anchor is `elseif (...) {` since it sits alongside an `if ($_POST[
-		// 'ip_remove'] == 'unlock')` sibling -- rewritten to `if` so it evals as a
-		// standalone statement. The end anchor skips over the trailing catch-all
-		// `else { ... }` (invalid ip_remove action) to the shared header() call
-		// after the whole if/elseif/else chain (2-tab indent, blank line before it).
-		if (!function_exists('pfb_alerts_oracle_ip_lock')) {
-			if (!preg_match(
-				'/(elseif \(\$_POST\[\'ip_remove\'\] == \'lock\'\) \{\n.*?\n\t\t\})\n\n\t\telse \{\n.*?\n\t\t\}\n\n\t\theader\(/s',
-				$src,
-				$m
-			)) {
-				throw new RuntimeException('test bootstrap: ip_remove lock region not found');
-			}
-			$body = preg_replace('/^elseif\b/', 'if', $m[1], 1);
-			eval(
-				'function pfb_alerts_oracle_ip_lock(string $ip, string $table, array $ip_unlock = []): string {'
-				. ' global $pfb; $_POST[\'ip_remove\'] = \'lock\';'
-				. ' $table_esc = escapeshellarg($table); $savemsg = \'\';'
-				. $body
-				. ' unset($_POST[\'ip_remove\']); return $savemsg; }'
-			);
-		}
-
-		// Region 4: the ip_white if(!isset(...)) body -- captured WITHOUT its
-		// enclosing braces (the wrapper always wants this branch to run) and
-		// stopping BEFORE the header() call (3-tab indent, no blank line before
-		// it): calling header()/exit() inside PHPUnit would abort the process.
-		if (!function_exists('pfb_alerts_oracle_ip_white')) {
-			if (!preg_match(
-				'/if \(!isset\(\$clists\[\'ipwhitelist\' \. \$vtype\]\[\$table\]\[\'data\'\]\[\$ip\]\)\) \{\n(.*?)\n\t\t\theader\(/s',
-				$src,
-				$m
-			)) {
-				throw new RuntimeException('test bootstrap: ip_white region not found');
-			}
-			eval(
-				'function pfb_alerts_oracle_ip_white(string $ip, string $table, string $vtype, string $descr, array &$clists): array {'
-				. ' global $pfb; $ip_esc = escapeshellarg($ip); $table_esc = escapeshellarg($table);'
-				. ' $savemsg = \'\';'
-				. $m[1]
-				. ' return [\'savemsg\' => $savemsg, \'clists\' => $clists]; }'
-			);
-		}
 	}
 
 	protected function setUp(): void
@@ -143,6 +91,7 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 		mkdir($this->tmp, 0777, TRUE);
 		mkdir("{$this->tmp}/alias", 0777, TRUE);
 		mkdir("{$this->tmp}/permit", 0777, TRUE);
+		mkdir("{$this->tmp}/db", 0777, TRUE);
 
 		$this->logPath   = "{$this->tmp}/calls.log";
 		$this->rulesPath = "{$this->tmp}/rules.tsv";
@@ -152,6 +101,7 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 
 		$pfb['pfctl']     = $this->shim;
 		$pfb['aliasdir']  = "{$this->tmp}/alias";
+		$pfb['dbdir']     = "{$this->tmp}/db";
 		$pfb['permitdir'] = "{$this->tmp}/permit";
 		$pfb['ip_unlock'] = "{$this->tmp}/ip_unlock.txt";
 		$pfb['supptxt']    = "{$this->tmp}/pfbsuppression.txt";
@@ -175,6 +125,7 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 	{
 		putenv('PFB_TEST_LOG');
 		putenv('PFB_TEST_RULES');
+		putenv('PFB_TEST_SHOW_ENTRY');
 		rmdir_recursive($this->tmp);
 		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['config']);
 	}
@@ -196,9 +147,12 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 printf '%s|%s|%s\n' "$op" "$table" "$entry" >> "$PFB_TEST_LOG"
-if [ -z "$entry" ]; then
+if [ "$op" != "show" ] && [ -z "$entry" ]; then
 	printf 'pfctl: no address specified\n' >&2
 	exit 1
+fi
+if [ "$op" = "show" ] && [ -n "$PFB_TEST_SHOW_ENTRY" ]; then
+	printf '%s\n' "$PFB_TEST_SHOW_ENTRY"
 fi
 if [ -f "$PFB_TEST_RULES" ]; then
 	while IFS='|' read -r r_op r_entry r_rc r_err; do
@@ -374,7 +328,8 @@ SH
 		$this->scriptFailure('add', '198.51.100.20');
 		$ip_unlock = ['198.51.100.20' => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4'];
 
-		$savemsg = pfb_alerts_oracle_ip_lock('198.51.100.20', 'pfB_Deny_v4', $ip_unlock);
+		$clists = [];
+		$savemsg = pfb_alerts_ip_action('lock', '198.51.100.20', 'pfB_Deny_v4', '', $clists, $ip_unlock)['savemsg'];
 
 		$this->assertStringContainsString('failed', $savemsg);
 		$this->assertFileDoesNotExist(
@@ -387,13 +342,27 @@ SH
 	{
 		$ip_unlock = ['198.51.100.20' => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4'];
 
-		$savemsg = pfb_alerts_oracle_ip_lock('198.51.100.20', 'pfB_Deny_v4', $ip_unlock);
+		$clists = [];
+		$savemsg = pfb_alerts_ip_action('lock', '198.51.100.20', 'pfB_Deny_v4', '', $clists, $ip_unlock)['savemsg'];
 
 		$this->assertStringContainsString('re-locked', $savemsg);
 		$this->assertFileExists($GLOBALS['pfb']['ip_unlock'], 'a successful re-lock must apply the unlock store write');
 		$content = file_get_contents($GLOBALS['pfb']['ip_unlock']);
 		$this->assertStringContainsString('keepme.example', $content, 'the untouched leftover entry must survive the rewrite');
 		$this->assertStringNotContainsString('198.51.100.20', $content, 'the re-locked IP must be removed from the unlock store');
+	}
+
+	public function testIpRemoveLockV6SuccessRemovesExactHostOnly(): void
+	{
+		$ip_unlock = ['2001:db8::20' => 'pfB_Deny_v6', 'keepme.example' => 'pfB_Keep_v4'];
+		$clists = [];
+
+		$result = pfb_alerts_ip_action('lock', '2001:db8::20', 'pfB_Deny_v6', '', $clists, $ip_unlock);
+
+		$this->assertStringContainsString('re-locked', $result['savemsg']);
+		$content = file_get_contents($GLOBALS['pfb']['ip_unlock']);
+		$this->assertStringContainsString('keepme.example', $content);
+		$this->assertStringNotContainsString('2001:db8::20', $content);
 	}
 
 	public function testIpRemoveLockZoneIdHostileEntryFailureSkipsStoreWrite(): void
@@ -403,9 +372,85 @@ SH
 		$this->scriptFailure('add', 'fe80::1%em0');
 		$ip_unlock = ['fe80::1%em0' => 'pfB_Deny_v6', 'keepme.example' => 'pfB_Keep_v4'];
 
-		$savemsg = pfb_alerts_oracle_ip_lock('fe80::1%em0', 'pfB_Deny_v6', $ip_unlock);
+		$clists = [];
+		$savemsg = pfb_alerts_ip_action('lock', 'fe80::1%em0', 'pfB_Deny_v6', '', $clists, $ip_unlock)['savemsg'];
 
 		$this->assertStringContainsString('failed', $savemsg);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
+	}
+
+	#[DataProvider('invalidActionProvider')]
+	public function testUnexpectedAlertActionIsInert(mixed $action): void
+	{
+		$clists = [];
+		$result = pfb_alerts_ip_action($action, '198.51.100.21', 'pfB_Deny_v4', '', $clists, []);
+
+		$this->assertTrue($result['redirect']);
+		$this->assertSame('Cannot Lock/Unlock - Invalid action.', $result['savemsg']);
+		$this->assertSame([], $clists);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/pfB_Deny_v4.txt");
+	}
+
+	public static function invalidActionProvider(): array
+	{
+		return [['bogus'], [''], [[]]];
+	}
+
+	public function testIpRemoveUnlockAppliedRecordsV4Host(): void
+	{
+		putenv('PFB_TEST_SHOW_ENTRY=198.51.100.22');
+		$clists = [];
+		$result = pfb_alerts_ip_action('unlock', '198.51.100.22', 'pfB_Deny_v4', '', $clists, []);
+
+		$this->assertStringContainsString('temporarily Unlocked', $result['savemsg']);
+		$this->assertFileExists($GLOBALS['pfb']['ip_unlock']);
+		$this->assertStringContainsString('198.51.100.22,pfB_Deny_v4', file_get_contents($GLOBALS['pfb']['ip_unlock']));
+	}
+
+	public function testIpRemoveUnlockAppliedRecordsV6Host(): void
+	{
+		putenv('PFB_TEST_SHOW_ENTRY=2001:db8::22');
+		$clists = [];
+		$result = pfb_alerts_ip_action('unlock', '2001:db8::22', 'pfB_Deny_v6', '', $clists, []);
+
+		$this->assertStringContainsString('temporarily Unlocked', $result['savemsg']);
+		$this->assertStringContainsString('2001:db8::22,pfB_Deny_v6', file_get_contents($GLOBALS['pfb']['ip_unlock']));
+	}
+
+	public function testIpRemoveUnlockNotBlockedRecordsNothing(): void
+	{
+		$clists = [];
+		$result = pfb_alerts_ip_action('unlock', '198.51.100.23', 'pfB_Deny_v4', '', $clists, []);
+
+		$this->assertStringContainsString('not currently blocked', $result['savemsg']);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
+	}
+
+	public function testIpRemoveUnlockFailedRecordsNothing(): void
+	{
+		$this->scriptFailure('show', '');
+		$clists = [];
+		$result = pfb_alerts_ip_action('unlock', '198.51.100.24', 'pfB_Deny_v4', '', $clists, []);
+
+		$this->assertStringContainsString('live unlock', $result['savemsg']);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
+	}
+
+	public function testIpRemoveUnlockBusyRecordsNothing(): void
+	{
+		$lock = fopen("{$GLOBALS['pfb']['dbdir']}/pfb_feed_pass.lock", 'c');
+		$this->assertNotFalse($lock);
+		$this->assertTrue(flock($lock, LOCK_EX | LOCK_NB));
+		try {
+			$clists = [];
+			$result = pfb_alerts_ip_action('unlock', '198.51.100.25', 'pfB_Deny_v4', '', $clists, []);
+		} finally {
+			flock($lock, LOCK_UN);
+			fclose($lock);
+		}
+
+		$this->assertStringContainsString('mid-update', $result['savemsg']);
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
 	}
 
@@ -418,12 +463,12 @@ SH
 		$this->scriptFailure('add', '198.51.100.30');
 		$clists = ['ipwhitelist4' => ['pfB_Whitelist_v4' => ['base64_idx' => 0, 'data' => []]]];
 
-		$result = pfb_alerts_oracle_ip_white('198.51.100.30', 'pfB_Whitelist_v4', '4', '', $clists);
+		$result = pfb_alerts_ip_action('ip_white', '198.51.100.30', 'pfB_Whitelist_v4', '', $clists, []);
 
 		$this->assertStringContainsString('failed', $result['savemsg']);
 		$this->assertArrayNotHasKey(
 			'198.51.100.30',
-			$result['clists']['ipwhitelist4']['pfB_Whitelist_v4']['data'],
+			$clists['ipwhitelist4']['pfB_Whitelist_v4']['data'],
 			'a failed add must not update the in-memory customlist'
 		);
 		$this->assertFileDoesNotExist(
@@ -449,7 +494,7 @@ SH
 	{
 		$clists = ['ipwhitelist4' => ['pfB_Whitelist_v4' => ['base64_idx' => 0, 'data' => []]]];
 
-		$result = pfb_alerts_oracle_ip_white('198.51.100.31', 'pfB_Whitelist_v4', '4', '', $clists);
+		$result = pfb_alerts_ip_action('ip_white', '198.51.100.31', 'pfB_Whitelist_v4', '', $clists, []);
 
 		$this->assertStringContainsString('added', $result['savemsg']);
 		$this->assertFileExists("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt");
@@ -466,10 +511,10 @@ SH
 		$this->scriptFailure('add', '2001:db8::30');
 		$clists = ['ipwhitelist6' => ['pfB_Whitelist_v6' => ['base64_idx' => 0, 'data' => []]]];
 
-		$result = pfb_alerts_oracle_ip_white('2001:db8::30', 'pfB_Whitelist_v6', '6', '', $clists);
+		$result = pfb_alerts_ip_action('ip_white', '2001:db8::30', 'pfB_Whitelist_v6', '', $clists, []);
 
 		$this->assertStringContainsString('failed', $result['savemsg']);
-		$this->assertArrayNotHasKey('2001:db8::30', $result['clists']['ipwhitelist6']['pfB_Whitelist_v6']['data']);
+		$this->assertArrayNotHasKey('2001:db8::30', $clists['ipwhitelist6']['pfB_Whitelist_v6']['data']);
 		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v6.txt");
 		$this->assertEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 	}
@@ -478,11 +523,108 @@ SH
 	{
 		$clists = ['ipwhitelist6' => ['pfB_Whitelist_v6' => ['base64_idx' => 0, 'data' => []]]];
 
-		$result = pfb_alerts_oracle_ip_white('2001:db8::31', 'pfB_Whitelist_v6', '6', '', $clists);
+		$result = pfb_alerts_ip_action('ip_white', '2001:db8::31', 'pfB_Whitelist_v6', '', $clists, []);
 
 		$this->assertStringContainsString('added', $result['savemsg']);
 		$this->assertFileExists("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v6.txt");
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
+	}
+
+	public function testIpWhiteDuplicateSkipsPfctlAndRedirect(): void
+	{
+		$clists = ['ipwhitelist4' => ['pfB_Whitelist_v4' => ['base64_idx' => 0, 'data' => ['198.51.100.32' => "198.51.100.32\r\n"]]]];
+
+		$result = pfb_alerts_ip_action('ip_white', '198.51.100.32', 'pfB_Whitelist_v4', '', $clists, []);
+
+		$this->assertFalse($result['redirect']);
+		$this->assertSame('', $result['savemsg']);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt");
+		$this->assertSame('', (string) @file_get_contents($this->logPath));
+	}
+
+	public function testAddSuppressNotBlockedPersistsExactV4Host(): void
+	{
+		$clists = ['ipsuppression' => ['data' => []]];
+
+		$result = pfb_alerts_ip_action('addsuppress', '198.51.100.40', 'pfB_Deny_v4', 'note', $clists, []);
+
+		$this->assertStringContainsString('Not currently blocked', $result['savemsg']);
+		$this->assertSame("198.51.100.40/32 # note\r\n", base64_decode(PfbConfig::read('v4suppression')));
+		$this->assertFileExists($GLOBALS['pfb']['supptxt']);
+	}
+
+	public function testAddSuppressNotBlockedPersistsExactV6Host(): void
+	{
+		$clists = ['ipsuppression_v6' => ['data' => []]];
+
+		$result = pfb_alerts_ip_action('addsuppress', '2001:db8::40', 'pfB_Deny_v6', '', $clists, []);
+
+		$this->assertStringContainsString('Not currently blocked', $result['savemsg']);
+		$this->assertSame("2001:db8::40/128\r\n", base64_decode(PfbConfig::read('v6suppression')));
+		$this->assertFileExists($GLOBALS['pfb']['supptxt_v6']);
+	}
+
+	public function testAddSuppressAppliedPersistsAfterLivePunch(): void
+	{
+		putenv('PFB_TEST_SHOW_ENTRY=198.51.100.42');
+		$clists = ['ipsuppression' => ['data' => []]];
+
+		$result = pfb_alerts_ip_action('addsuppress', '198.51.100.42', 'pfB_Deny_v4', '', $clists, []);
+
+		$this->assertStringContainsString('Removed 1 entry, added 0 covering CIDRs', $result['savemsg']);
+		$this->assertSame("198.51.100.42/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
+	}
+
+	public function testAddSuppressFailedStillPersistsStandingSuppression(): void
+	{
+		$this->scriptFailure('show', '');
+		$clists = ['ipsuppression' => ['data' => []]];
+
+		$result = pfb_alerts_ip_action('addsuppress', '198.51.100.43', 'pfB_Deny_v4', '', $clists, []);
+
+		$this->assertStringContainsString('Live punch failed', $result['savemsg']);
+		$this->assertSame("198.51.100.43/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
+	}
+
+	public function testAddSuppressBusyStillPersistsStandingSuppression(): void
+	{
+		$lock = fopen("{$GLOBALS['pfb']['dbdir']}/pfb_feed_pass.lock", 'c');
+		$this->assertNotFalse($lock);
+		$this->assertTrue(flock($lock, LOCK_EX | LOCK_NB));
+		try {
+			$clists = ['ipsuppression' => ['data' => []]];
+			$result = pfb_alerts_ip_action('addsuppress', '198.51.100.44', 'pfB_Deny_v4', '', $clists, []);
+		} finally {
+			flock($lock, LOCK_UN);
+			fclose($lock);
+		}
+
+		$this->assertStringContainsString('update/reload pass', $result['savemsg']);
+		$this->assertSame("198.51.100.44/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
+	}
+
+	public function testAddSuppressExactDuplicateSkipsConfigRefresh(): void
+	{
+		$clists = ['ipsuppression' => ['data' => ['198.51.100.41/32' => "198.51.100.41/32\r\n"], 'base64' => base64_encode("198.51.100.41/32\r\n")]];
+
+		$result = pfb_alerts_ip_action('addsuppress', '198.51.100.41', 'pfB_Deny_v4', '', $clists, []);
+
+		$this->assertStringContainsString('already exists', $result['savemsg']);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
+		$this->assertSame('', (string) @file_get_contents($GLOBALS['pfb']['supptxt']));
+	}
+
+	public function testAddSuppressBroaderEntryRefreshesSuppressionFileWithoutAppend(): void
+	{
+		$line = "198.51.100.0/24\r\n";
+		$clists = ['ipsuppression' => ['data' => ['198.51.100.0/24' => $line], 'base64' => base64_encode($line)]];
+
+		$result = pfb_alerts_ip_action('addsuppress', '198.51.100.41', 'pfB_Deny_v4', '', $clists, []);
+
+		$this->assertStringContainsString('already covered', $result['savemsg']);
+		$this->assertSame("198.51.100.0/24\n", file_get_contents($GLOBALS['pfb']['supptxt']));
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
 	}
 
 	/** @return string[] the last [op, table, entry] row the shim logged. */
