@@ -242,11 +242,11 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$this->assertFalse($this->publish([
 			'generation_rename' => static fn(string $from, string $to): bool => FALSE,
 		]), 'generation rename failure must abort');
-		$this->assertIsArray($this->publish([
+		$this->assertFalse($this->publish([
 			'manifest_atomic' => [
 				'rename' => static fn(string $from, string $to): bool => FALSE,
 			],
-		]), 'manifest rename failure still returns the generated in-memory manifest');
+		]), 'manifest rename failure must abort publication');
 
 		$this->assertSame($oldJson, file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
 		$this->assertSame($oldRaw, file_get_contents($this->manifestRaw($old)));
@@ -267,7 +267,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			$generated = pfb_unbound_python_sources([
 				['header' => 'feed1', 'group' => NAN, 'log' => '1', 'provenance' => 'feed'],
 			]);
-			$this->assertIsArray($generated);
+			$this->assertFalse($generated, 'manifest encode failure must abort publication');
 			$this->assertSame($oldJson, file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
 			$this->assertSame($oldRaw, file_get_contents($this->manifestRaw($old)));
 			$this->assertSame($oldDirs, $this->versionDirs(), 'encode failure leaked a raw generation');
