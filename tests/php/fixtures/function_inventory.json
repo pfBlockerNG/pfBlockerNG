@@ -7319,6 +7319,19 @@
             }
         ]
     },
+    "pfb_top1m_reprocess_needed": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_top1m_settings_reprocess": {
         "returnsRef": false,
         "returnType": null,
