@@ -12,6 +12,9 @@
             <directory>tests/php</directory>
         </testsuite>
     </testsuites>
+    <php>
+        <ini name="memory_limit" value="1G"/>
+    </php>
     <source>
         <include>
             <!-- Every file defining a #[CoversFunction]/#[CoversClass] target must be
