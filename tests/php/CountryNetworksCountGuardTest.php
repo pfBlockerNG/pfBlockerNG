@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * $networks / $total / $lastline -- the per-ISO "Total Networks" line counts
- * in pfblockerng.php's continent-file rebuild (issue #1261).
+ * in pfblockerng_geoip.inc's continent-file rebuild (issue #1261).
  *
  * $networks (line ~1414) is NOT display-only: it is written into a header
  * line that is later re-parsed, and "Total Networks: 0" or "...: NA" trips a

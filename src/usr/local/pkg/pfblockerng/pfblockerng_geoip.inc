@@ -208,7 +208,7 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 
 		// #1493 defect 2: the heredoc below reads $options4/$options6 once per
 		// continent, but the per-continent tail unconditionally unsets them
-		// (~2216) -- a continent whose coptions4/6 stayed empty (fopen failure,
+		// below -- a continent whose coptions4/6 stayed empty (fopen failure,
 		// or genuinely no data) never re-enters the guarded block above to
 		// reassign them, so anything after the first continent needs this fill.
 		$options4 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options4'} unset at the previous continent's tail is invisible to PHPStan)
@@ -1086,6 +1086,7 @@ $section->addInput(new Form_StaticText(
 	. 'perform on all Lists together.'
 	. '</div>'
 ));
+__PFB_REPUTATION_TAB_ONLY__
 $section->addInput(new Form_Checkbox(
 	'enable_pdup',
 	'pMAX',
@@ -1231,6 +1232,7 @@ EOF;
 	}
 
 	// Save pfBlockerng_reputation.php file
+	$php_rep = str_replace('__PFB_REPUTATION_TAB_ONLY__', "\t", $php_rep);
 	@file_put_contents("{$output_root}/pfblockerng_reputation.php", $php_rep, LOCK_EX);
 	unset($php_rep);
 }

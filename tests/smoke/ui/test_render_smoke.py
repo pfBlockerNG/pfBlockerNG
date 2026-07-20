@@ -17,8 +17,8 @@ Hermeticity (ADR §2 "Hermetic where it claims to be"): every page in the table
 renders from local config alone -- none triggers a feed download to produce its
 chrome. The GeoIP/Reputation per-continent pages ``pfblockerng_geoip.inc`` WRITES
 when invoked by the ``pfblockerng.php`` CLI dispatcher via its credential-free,
-network-free `ugc` verb (issue #1219) are seeded with MaxMind's own
-public test corpus (:func:`~tests.smoke.helpers.seed_geoip_dataset`, wired into
+network-free `ugc` verb are generated after MaxMind's public test corpus is seeded
+(:func:`~tests.smoke.helpers.seed_geoip_dataset`, wired into
 :data:`~tests.smoke.ui.conftest.deployed_vm`) and included in the table below. Only
 the DNSBL-VIP sinkhole pages (served by a separate lighttpd, unreachable from this
 authenticated session) are recorded in :data:`EXCLUDED_FROM_TIER_A` with the reason
@@ -212,20 +212,9 @@ PAGE_TABLE: tuple[Page, ...] = (
         "/widgets/widgets/pfblockerng.widget.php",
         ('id="pfblockerngack"', "Alias", "Show Aggregated Aliases"),
     ),
-    # issue #1219/#1228: pfblockerng.php is a CLI dispatcher; pfblockerng_geoip.inc is the
-    # TEMPLATE that WRITES these 9
-    # continent/category pages (+ Reputation, below) via `ugc` (pfblockerng_uc_countries()
-    # + pfblockerng_get_countries()) -- a credential-free, network-free LOCAL conversion of
-    # MaxMind-schema CSVs (dispatcher pfblockerng.php:398-406; generator module owns writes;
-    # the MaxMind key/account gate lives in
-    # the DOWNLOAD verbs `dc`/`dcc`/`bu` only). The UI session seeds MaxMind's official test
-    # corpus and runs `ugc` once (helpers.seed_geoip_dataset, wired into the `deployed_vm`
-    # fixture) so these pages exist and render hermetically, same as every other Tier-A page.
-    # Each Form_Section title is "Continent - {continent_display}" (generated template in
-    # pfblockerng_geoip.inc). The
-    # second marker of each pair is a seeded country's <option> text, but the oracle matches
-    # with any(), so it is documentation, NOT a gate — the seeded data is pinned by
-    # test_geoip_pages_render_the_seeded_csv_rows.
+    # pfblockerng.php dispatches `ugc`; pfblockerng_geoip.inc writes these nine
+    # continent/category pages and the Reputation page from local MaxMind-schema CSVs.
+    # The deployed_vm fixture seeds the corpus and runs `ugc` before rendering them.
     # Libya is the corpus's ONLY African country, and it has v6 networks only -- its v4 select
     # renders (0) and its v6 select (1).
     Page(
@@ -2600,11 +2589,11 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     """Guard: the table (plus the recorded exclusions) covers the on-disk page set.
 
     A new pfBlockerNG .php page added to src/ without a Tier-A entry should fail
-    this -- the count is asserted so the sweep can't silently skip a page. 15
+    this -- the count is asserted so the sweep can't silently skip a page. 14
     servable main pages: general, ip, dnsbl, feeds, alerts, log, sync,
     safesearch, update, blacklist, category, category_edit, threats, hooks, plus
-    the pfblockerng.php CLI dispatcher (never served directly, see below). The widget
-    rounds it out. issue #1219: the 9 GeoIP continent/category pages + Reputation
+    the widget. The non-servable pfblockerng.php CLI dispatcher is excluded. The
+    9 GeoIP continent/category pages + Reputation
     (all WRITTEN by pfblockerng_geoip.inc via `ugc`) are ALSO covered now that a seeded
     synthetic dataset makes them hermetically renderable -- only the DNSBL-VIP
     sinkhole pages remain a recorded exclusion.
