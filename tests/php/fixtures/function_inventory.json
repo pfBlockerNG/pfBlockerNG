@@ -1795,6 +1795,26 @@
             }
         ]
     },
+    "pfb_dnsbl_publish_result": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "published",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "logger",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_dnsbl_python_migrate": {
         "returnsRef": false,
         "returnType": null,
@@ -1844,6 +1864,54 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_reload_needed": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "publish_failed",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "data_changed",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "update",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "python",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "safesearch_update",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "unlock_forced",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
                 "default": null
             }
         ]
