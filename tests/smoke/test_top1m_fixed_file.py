@@ -22,10 +22,17 @@ pytestmark = pytest.mark.smoke
 TOP1M_CSV = f"{h.PFB_DBDIR}/top-1m.csv"
 TOP1M_WHITELIST = f"{h.PFB_DBDIR}/pfbalexawhitelist.txt"
 TOP1M_BASE = f"{h.PFB_DBDIR}/top-1m.csv.zip"
+TOP1M_UPDATE = f"{h.PFB_DBDIR}/top-1m.update"
 TOP1M_FIXED = "/var/unbound/pfb_py_top1m.txt"
 MANIFEST = "/var/unbound/pfb_py_sources.json"
 CACHE_BASE = "/usr/local/etc/pfb_dnsbl_cache.tar"
 LOCAL_FEED = f"{h.PFB_DBDIR}/top1m_fixed_file_feed.txt"
+TEMP_PATHS = (
+    f"{h.PFB_DBDIR}/.pfbtop1m_smoke_file",
+    f"{h.PFB_DBDIR}/.pfbtop1m_smoke_dir",
+    "/var/unbound/.pfbtop1m_smoke_file",
+    "/var/unbound/.pfbtop1m_smoke_dir",
+)
 SIDECAR_SUFFIXES = ("orig", "xxhash128", "md5", "source", "orig.etag", "orig.lastmod")
 SIDECARS = tuple(f"{TOP1M_BASE}.{suffix}" for suffix in SIDECAR_SUFFIXES)
 NEIGHBOR = f"{TOP1M_BASE}.orig.neighbor"
@@ -40,6 +47,8 @@ _SNAPSHOT_TARGETS = (
     f"{CACHE_BASE}.zst",
     f"{CACHE_BASE}.bz2",
     LOCAL_FEED,
+    TOP1M_UPDATE,
+    *TEMP_PATHS,
 )
 
 
@@ -51,8 +60,9 @@ def _require_ok(result: object, operation: str) -> None:
         )
 
 
-def _copy_if_present(vm: SmokeVM, source: str, target: str) -> None:
-    result = vm.ssh(f"if [ -e {source} ] || [ -L {source} ]; then /bin/cp -pP {source} {target}; fi")
+def _archive_if_present(vm: SmokeVM, source: str, archive: str) -> None:
+    relative = source.removeprefix("/")
+    result = vm.ssh(f"if [ -e {source} ] || [ -L {source} ]; then /usr/bin/tar -cpf {archive} -C / {relative}; fi")
     _require_ok(result, f"snapshot {source}")
 
 
@@ -60,7 +70,7 @@ def _snapshot_box(vm: SmokeVM, root: str) -> None:
     _require_ok(vm.ssh("/bin/mkdir", "-p", f"{root}/files"), "create TOP1M smoke snapshot")
     _require_ok(vm.ssh("/bin/cp", "-p", "/conf/config.xml", f"{root}/config.xml"), "snapshot config.xml")
     for index, target in enumerate(_SNAPSHOT_TARGETS):
-        _copy_if_present(vm, target, f"{root}/files/{index}")
+        _archive_if_present(vm, target, f"{root}/files/{index}.tar")
     runtime_snapshot = vm.ssh(
         "cd / && set --; "
         "for _path in var/unbound/pfb_unbound* var/unbound/pfb_py_*; do "
@@ -102,6 +112,21 @@ def _remove_snapshot_root(vm: SmokeVM, root: str) -> None:
         raise RuntimeError(f"remove TOP1M smoke snapshot failed: {result.stdout!r}")
 
 
+def _remove_exact_paths(vm: SmokeVM, paths: tuple[str, ...], operation: str) -> None:
+    php_paths = "array(" + ",".join(h._php_str(path) for path in paths) + ")"
+    result = h.php_eval(
+        vm,
+        f"$ok = TRUE; foreach ({php_paths} as $path) {{\n"
+        "  if (is_link($path) || is_file($path)) { $ok = @unlink($path) && $ok; }\n"
+        "  elseif (is_dir($path)) { rmdir_recursive($path); $ok = !file_exists($path) && $ok; }\n"
+        "}\n"
+        "echo $ok ? 'OK' : 'FAILED';",
+    )
+    _require_ok(result, operation)
+    if "OK" not in result.stdout:
+        raise RuntimeError(f"{operation} failed: {result.stdout!r}")
+
+
 def _restore_box(vm: SmokeVM, root: str) -> tuple[dict, dict, dict]:
     """Restore config and every persistent file this module can replace."""
     errors: list[Exception] = []
@@ -117,9 +142,9 @@ def _restore_box(vm: SmokeVM, root: str) -> tuple[dict, dict, dict]:
         errors.append(exc)
     for index, target in enumerate(_SNAPSHOT_TARGETS):
         try:
-            _require_ok(vm.ssh("/bin/rm", "-f", target), f"remove test-owned {target}")
-            saved = f"{root}/files/{index}"
-            result = vm.ssh(f"if [ -e {saved} ] || [ -L {saved} ]; then /bin/cp -pP {saved} {target}; fi")
+            _remove_exact_paths(vm, (target,), f"remove test-owned {target}")
+            archive = f"{root}/files/{index}.tar"
+            result = vm.ssh(f"if [ -f {archive} ]; then /usr/bin/tar -xpf {archive} -C /; fi")
             _require_ok(result, f"restore {target}")
         except Exception as exc:  # noqa: BLE001 -- continue the remaining cleanup, then fail loudly
             errors.append(exc)
@@ -166,9 +191,7 @@ def top1m_fixed_file_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator
     h.deploy(smoke_vm)
     _snapshot_box(smoke_vm, snapshot)
     runtime_before = _runtime_state(smoke_vm, root=f"{snapshot}/expected")
-    saved_paths = tuple(f"{snapshot}/files/{index}" for index in range(len(_SNAPSHOT_TARGETS)))
-    saved_files = _file_state(smoke_vm, saved_paths)
-    files_before = {target: saved_files[saved] for target, saved in zip(_SNAPSHOT_TARGETS, saved_paths, strict=True)}
+    files_before = _file_state(smoke_vm, _SNAPSHOT_TARGETS)
     saved_config = f"{snapshot}/config.xml"
     config_before = {"/conf/config.xml": _file_state(smoke_vm, (saved_config,))[saved_config]}
     try:
@@ -259,13 +282,27 @@ def _file_state(vm: SmokeVM, paths: tuple[str, ...]) -> dict:
     php_paths = "array(" + ",".join(h._php_str(path) for path in paths) + ")"
     return _json_eval(
         vm,
+        "$describe = static function ($path) {\n"
+        "  if (is_link($path)) { return array('type' => 'link', 'target' => readlink($path)); }\n"
+        "  if (is_file($path)) { return array('type' => 'file',\n"
+        "    'sha256' => hash_file('sha256', $path), 'size' => filesize($path)); }\n"
+        "  if (is_dir($path)) { return array('type' => 'dir'); }\n"
+        "  return NULL;\n"
+        "};\n"
         f"$out = array(); foreach ({php_paths} as $path) {{\n"
-        "  if (is_link($path)) { $out[$path] = array('type' => 'link', 'target' => readlink($path)); }\n"
-        "  elseif (is_file($path)) {\n"
-        "    $out[$path] = array('type' => 'file',\n"
-        "      'sha256' => hash_file('sha256', $path), 'size' => filesize($path));\n"
-        "  } elseif (is_dir($path)) { $out[$path] = array('type' => 'dir'); }\n"
-        "  else { $out[$path] = NULL; }\n"
+        "  $out[$path] = $describe($path);\n"
+        "  if (is_dir($path) && !is_link($path)) {\n"
+        "    $entries = array();\n"
+        "    $iterator = new RecursiveIteratorIterator(\n"
+        "      new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),\n"
+        "      RecursiveIteratorIterator::SELF_FIRST);\n"
+        "    foreach ($iterator as $entry) {\n"
+        "      $relative = substr($entry->getPathname(), strlen($path) + 1);\n"
+        "      $entries[$relative] = $describe($entry->getPathname());\n"
+        "    }\n"
+        "    ksort($entries, SORT_STRING);\n"
+        "    $out[$path]['entries'] = $entries;\n"
+        "  }\n"
         "}",
         "PFB1542FILES",
     )
@@ -380,6 +417,30 @@ def _complete_detector_sidecars(vm: SmokeVM) -> dict:
     )
 
 
+def _activate_domain_only_top1m(vm: SmokeVM, domain: str) -> dict:
+    """Publish one reader-valid domain and wait for the shipped watcher to apply it."""
+    body = f"{domain}\n"
+    return _json_eval(
+        vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "pfb_global();\n"
+        f"$fixture = {h._php_str(TEMP_PATHS[0])};\n"
+        f"$body = {h._php_str(body)};\n"
+        "$staged = @file_put_contents($fixture, $body, LOCK_EX) !== FALSE;\n"
+        f"$published = $staged && pfb_unbound_py_atomic_copy($fixture, '{TOP1M_FIXED}');\n"
+        "@unlink($fixture);\n"
+        "$generation = $published ? pfb_unbound_py_flip_sentinel() : FALSE;\n"
+        "$applied = is_int($generation) && pfb_unbound_py_wait_applied($generation, 60);\n"
+        "$out = array(\n"
+        "  'staged' => $staged, 'published' => $published, 'applied' => $applied,\n"
+        "  'generation' => $generation,\n"
+        f"  'fixed_regular' => is_file('{TOP1M_FIXED}') && !is_link('{TOP1M_FIXED}'),\n"
+        f"  'fixed_bytes' => @file_get_contents('{TOP1M_FIXED}'),\n"
+        ");",
+        "PFB1542READER",
+    )
+
+
 def _assert_vip(vm: SmokeVM, domain: str, stage: str) -> None:
     answer = h.dns_probe(vm, domain, "A")
     assert h.is_vip(answer), f"{stage}: {domain} should resolve to DNSBL VIP; got {answer}"
@@ -398,8 +459,9 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     replacement = h.unique_domain("top1m-fixed-replacement")
 
     # Start from this test's own TOP1M state; the module fixture restores every path later.
-    _require_ok(
-        vm.ssh("/bin/rm", "-f", TOP1M_CSV, TOP1M_WHITELIST, TOP1M_FIXED, *SIDECARS, NEIGHBOR),
+    _remove_exact_paths(
+        vm,
+        (TOP1M_CSV, TOP1M_WHITELIST, TOP1M_FIXED, *SIDECARS, NEIGHBOR, TOP1M_UPDATE, *TEMP_PATHS),
         "clear TOP1M fixture paths",
     )
     feed = h.write_local_feed(vm, os.path.basename(LOCAL_FEED), f"{allowed}\n{sibling}\n{replacement}\n")
@@ -430,6 +492,20 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     assert allowed not in first["manifest_raw"], "manifest embeds TOP1M domain data instead of naming the fixed file"
     assert first["raw_identity"] is not None and first["raw_dir_identity"] is not None
 
+    # The legacy PHP generator currently comma-frames whitelist rows.  That is a
+    # separate pre-existing defect (#1569): preserve the publisher bytes above, then feed
+    # this change's stable-path reader the domain-only format it accepts.
+    reader_first = _activate_domain_only_top1m(vm, allowed)
+    reader_first_generation = reader_first.pop("generation")
+    assert isinstance(reader_first_generation, int) and reader_first_generation > 0
+    assert reader_first == {
+        "staged": True,
+        "published": True,
+        "applied": True,
+        "fixed_regular": True,
+        "fixed_bytes": f"{allowed}\n",
+    }, reader_first
+
     h.flush_unbound_name(vm, allowed)
     _assert_stub(vm, allowed, "TOP1M allow")
     _assert_vip(vm, sibling, "TOP1M sibling")
@@ -438,7 +514,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     # data reload while leaving the unrelated content-addressed feed generation intact.
     pid_before = h.unbound_pid(vm)
     _stage_top1m_source(vm, f"1,{replacement}\n2,{sibling}\n")
-    _require_ok(vm.ssh("/usr/bin/touch", f"{h.PFB_DBDIR}/top-1m.update"), "mark TOP1M source changed")
+    _require_ok(vm.ssh("/usr/bin/touch", TOP1M_UPDATE), "mark TOP1M source changed")
     h.reload(vm, "update", data_path=True)
     second = _publication_state(vm)
 
@@ -456,6 +532,18 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     assert second["raw_identity"] == first["raw_identity"], "TOP1M-only update regenerated unrelated feed raw"
     assert second["raw_dir_identity"] == first["raw_dir_identity"], "TOP1M-only update replaced unrelated generation"
     assert h.unbound_pid(vm) == pid_before, "TOP1M-only data change restarted Unbound instead of swapping"
+
+    reader_second = _activate_domain_only_top1m(vm, replacement)
+    reader_second_generation = reader_second.pop("generation")
+    assert isinstance(reader_second_generation, int)
+    assert reader_second == {
+        "staged": True,
+        "published": True,
+        "applied": True,
+        "fixed_regular": True,
+        "fixed_bytes": f"{replacement}\n",
+    }, reader_second
+    assert reader_second_generation > reader_first_generation
 
     h.flush_unbound_name(vm, allowed)
     h.flush_unbound_name(vm, replacement)
@@ -478,7 +566,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     )
     archives = _file_state(vm, (f"{CACHE_BASE}.zst", f"{CACHE_BASE}.bz2"))
     assert any(value is not None for value in archives.values()), f"dnsbl_cache save produced no archive: {archives!r}"
-    _require_ok(vm.ssh("/bin/rm", "-f", TOP1M_FIXED, *SIDECARS, NEIGHBOR), "delete cached TOP1M artifacts")
+    _remove_exact_paths(vm, (TOP1M_FIXED, *SIDECARS, NEIGHBOR), "delete cached TOP1M artifacts")
     _require_ok(
         vm.ssh("/usr/local/pkg/pfblockerng/pfblockerng.sh", "dnsbl_cache", "restore", timeout=180.0),
         "restore DNSBL cache",
@@ -490,15 +578,11 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     # provider/derived whitelist data remains, runtime derived files and narrow
     # TOP1M detector/staging artifacts disappear.  No destructive pkg uninstall.
     h.write_local_feed(vm, os.path.basename(NEIGHBOR), "preserve-neighbor\n")
-    temp_paths = (
-        f"{h.PFB_DBDIR}/.pfbtop1m_smoke_file",
-        f"{h.PFB_DBDIR}/.pfbtop1m_smoke_dir",
-        "/var/unbound/.pfbtop1m_smoke_file",
-        "/var/unbound/.pfbtop1m_smoke_dir",
-    )
-    _require_ok(vm.ssh("/usr/bin/touch", temp_paths[0], temp_paths[2]), "seed TOP1M temp files")
+    _remove_exact_paths(vm, TEMP_PATHS, "clear TOP1M temp fixture paths")
+    _require_ok(vm.ssh("/usr/bin/touch", TEMP_PATHS[0], TEMP_PATHS[2]), "seed TOP1M temp files")
     _require_ok(
-        vm.ssh("/bin/mkdir", "-p", f"{temp_paths[1]}/nested", f"{temp_paths[3]}/nested"), "seed TOP1M temp directories"
+        vm.ssh("/bin/mkdir", "-p", f"{TEMP_PATHS[1]}/nested", f"{TEMP_PATHS[3]}/nested"),
+        "seed TOP1M temp directories",
     )
     active_before = _file_state(vm, (TOP1M_CSV, TOP1M_WHITELIST, NEIGHBOR))
     raw_path = f"/var/unbound/{second['raw_rel']}"
@@ -516,7 +600,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     )
     assert teardown == {"ok": True, "keep": "on"}, teardown
 
-    removed = (TOP1M_FIXED, *SIDECARS, MANIFEST, raw_path, *temp_paths)
+    removed = (TOP1M_FIXED, *SIDECARS, MANIFEST, raw_path, *TEMP_PATHS)
     assert all(value is None for value in _file_state(vm, removed).values()), "teardown left derived TOP1M artifacts"
     assert _file_state(vm, (TOP1M_CSV, TOP1M_WHITELIST, NEIGHBOR)) == active_before, (
         "keep-on teardown changed active provider/whitelist data or an unrelated sidecar neighbor"
