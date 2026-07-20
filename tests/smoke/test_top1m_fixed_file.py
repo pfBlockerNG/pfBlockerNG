@@ -446,8 +446,8 @@ def _assert_vip(vm: SmokeVM, domain: str, stage: str) -> None:
     assert h.is_vip(answer), f"{stage}: {domain} should resolve to DNSBL VIP; got {answer}"
 
 
-def _assert_stub(vm: SmokeVM, domain: str, stage: str) -> None:
-    answer = h.dns_probe_until(vm, domain, lambda current: h.resolves_to(current, h.STUB_DNS_A), timeout=60.0)
+def _assert_stub_once(vm: SmokeVM, domain: str, stage: str) -> None:
+    answer = h.dns_probe(vm, domain, "A")
     assert h.resolves_to(answer, h.STUB_DNS_A), f"{stage}: {domain} should pass to stub upstream; got {answer}"
 
 
@@ -461,7 +461,16 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     # Start from this test's own TOP1M state; the module fixture restores every path later.
     _remove_exact_paths(
         vm,
-        (TOP1M_CSV, TOP1M_WHITELIST, TOP1M_FIXED, *SIDECARS, NEIGHBOR, TOP1M_UPDATE, *TEMP_PATHS),
+        (
+            TOP1M_CSV,
+            TOP1M_WHITELIST,
+            TOP1M_FIXED,
+            *SIDECARS,
+            NEIGHBOR,
+            LOCAL_FEED,
+            TOP1M_UPDATE,
+            *TEMP_PATHS,
+        ),
         "clear TOP1M fixture paths",
     )
     feed = h.write_local_feed(vm, os.path.basename(LOCAL_FEED), f"{allowed}\n{sibling}\n{replacement}\n")
@@ -507,7 +516,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     }, reader_first
 
     h.flush_unbound_name(vm, allowed)
-    _assert_stub(vm, allowed, "TOP1M allow")
+    _assert_stub_once(vm, allowed, "TOP1M allow")
     _assert_vip(vm, sibling, "TOP1M sibling")
 
     # A TOP1M-only source transition must replace fixed bytes and advance the
@@ -524,9 +533,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     assert second["fingerprint"] != first["fingerprint"], (
         "TOP1M fixed-file replacement did not change reload fingerprint"
     )
-    assert second["reload_generation"] > first["reload_generation"], (
-        "TOP1M-only update did not advance reload generation"
-    )
+    assert second["reload_generation"] > reader_first_generation, "TOP1M-only update did not advance reload generation"
     assert second["applied_generation"] == second["reload_generation"], "TOP1M reload was not applied before return"
     assert second["raw_rel"] == first["raw_rel"]
     assert second["raw_identity"] == first["raw_identity"], "TOP1M-only update regenerated unrelated feed raw"
@@ -548,7 +555,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     h.flush_unbound_name(vm, allowed)
     h.flush_unbound_name(vm, replacement)
     _assert_vip(vm, allowed, "replaced TOP1M allow")
-    _assert_stub(vm, replacement, "replacement TOP1M allow")
+    _assert_stub_once(vm, replacement, "replacement TOP1M allow")
     _assert_vip(vm, sibling, "replacement TOP1M sibling")
 
     # Cache preserves the fixed file and exactly six detector sidecars.  A prefix
