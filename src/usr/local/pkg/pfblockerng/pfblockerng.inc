@@ -8067,7 +8067,7 @@ function pfb_unbound_py_teardown_raw_set(): bool {
 			dirname($pfb['unbound_py_top1m'] ?? '/var/unbound/pfb_py_top1m.txt') . '/.pfbtop1m_*',
 		) as $pattern) {
 			foreach (glob($pattern) ?: array() as $artifact) {
-				$ok = unlink_if_exists($artifact) && $ok;
+				$ok = pfb_unbound_py_remove_raw_artifact($artifact) && $ok;
 			}
 		}
 		return $ok;
