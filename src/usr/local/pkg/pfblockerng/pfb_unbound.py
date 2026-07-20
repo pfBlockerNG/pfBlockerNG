@@ -5404,18 +5404,32 @@ def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
                 yield line.strip()
             consumed = os.lseek(handle.fileno(), 0, os.SEEK_CUR)
             finished = os.fstat(handle.fileno())
-            if consumed != finished.st_size or (
-                opened.st_dev,
-                opened.st_ino,
-                opened.st_mode,
-                opened.st_size,
-                opened.st_mtime_ns,
-            ) != (
-                finished.st_dev,
-                finished.st_ino,
-                finished.st_mode,
-                finished.st_size,
-                finished.st_mtime_ns,
+            pathname = os.lstat(path)
+            pathname_regular = stat.S_ISREG(pathname.st_mode)
+            pathname_same = pathname_regular and (pathname.st_dev, pathname.st_ino) == (opened.st_dev, opened.st_ino)
+            pathname_replaced = pathname_regular and not pathname_same and finished.st_nlink < opened.st_nlink
+            fd_metadata_changed = (finished.st_ctime_ns, finished.st_nlink) != (
+                opened.st_ctime_ns,
+                opened.st_nlink,
+            )
+            if (
+                consumed != finished.st_size
+                or (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_mode,
+                    opened.st_size,
+                    opened.st_mtime_ns,
+                )
+                != (
+                    finished.st_dev,
+                    finished.st_ino,
+                    finished.st_mode,
+                    finished.st_size,
+                    finished.st_mtime_ns,
+                )
+                or not (pathname_same or pathname_replaced)
+                or (fd_metadata_changed and not pathname_replaced)
             ):
                 raise _DnsblGenerationError("TOP1M sidecar changed while reading: '{}'".format(path))
     except _DnsblGenerationError:

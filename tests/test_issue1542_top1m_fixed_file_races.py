@@ -54,6 +54,7 @@ def test_enabled_read_oserror_fixed_file_fails_closed(monkeypatch: pytest.Monkey
     path = tmp_path / "pfb_py_top1m.txt"
     path.write_text("first.example\nsecond.example\n", encoding="utf-8")
     real_open = open
+    failed = False
 
     class FailingReader:
         def __init__(self, handle: Any) -> None:
@@ -70,7 +71,9 @@ def test_enabled_read_oserror_fixed_file_fails_closed(monkeypatch: pytest.Monkey
             return self._handle.fileno()
 
         def __iter__(self) -> Any:
+            nonlocal failed
             yield "first.example\n"
+            failed = True
             raise OSError("injected mid-read")
 
     def injected_open(name: str | os.PathLike[str], *args: Any, **kwargs: Any) -> Any:
@@ -79,6 +82,7 @@ def test_enabled_read_oserror_fixed_file_fails_closed(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("builtins.open", injected_open)
     assert P.dnsbl_build_from_manifest(str(manifest)) is None
+    assert failed
 
 
 def test_enabled_in_place_truncation_during_iteration_fails_closed(
@@ -88,11 +92,11 @@ def test_enabled_in_place_truncation_during_iteration_fails_closed(
     path = tmp_path / "pfb_py_top1m.txt"
     path.write_text("".join("domain-{}.example\n".format(index) for index in range(10_000)), encoding="utf-8")
     real_open = open
+    truncated = False
 
     class TruncatingReader:
         def __init__(self, handle: Any) -> None:
             self._handle = handle
-            self._truncated = False
 
         def __enter__(self) -> TruncatingReader:
             self._handle.__enter__()
@@ -105,10 +109,11 @@ def test_enabled_in_place_truncation_during_iteration_fails_closed(
             return self._handle.fileno()
 
         def __iter__(self) -> Any:
+            nonlocal truncated
             for line in self._handle:
-                if not self._truncated:
+                if not truncated:
                     os.truncate(path, 0)
-                    self._truncated = True
+                    truncated = True
                 yield line
 
     def injected_open(name: str | os.PathLike[str], *args: Any, **kwargs: Any) -> Any:
@@ -117,6 +122,7 @@ def test_enabled_in_place_truncation_during_iteration_fails_closed(
 
     monkeypatch.setattr("builtins.open", injected_open)
     assert P.dnsbl_build_from_manifest(str(manifest)) is None
+    assert truncated
 
 
 def test_enabled_atomic_rename_after_open_allows_old_complete_inode(
@@ -144,3 +150,88 @@ def test_enabled_atomic_rename_after_open_allows_old_complete_inode(
     assert renamed
     assert result is not None
     assert set(result.white_db) == {"old.example"}
+
+
+def test_enabled_same_size_rewrite_with_restored_mtime_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manifest = _manifest(tmp_path)
+    path = tmp_path / "pfb_py_top1m.txt"
+    path.write_bytes(b"old.example\n")
+    original = path.stat()
+    real_open = open
+    rewritten = False
+
+    class RewritingReader:
+        def __init__(self, handle: Any) -> None:
+            self._handle = handle
+
+        def __enter__(self) -> RewritingReader:
+            self._handle.__enter__()
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+            return bool(self._handle.__exit__(exc_type, exc, traceback))
+
+        def fileno(self) -> int:
+            return self._handle.fileno()
+
+        def __iter__(self) -> Any:
+            nonlocal rewritten
+            for line in self._handle:
+                if not rewritten:
+                    fd = os.open(path, os.O_WRONLY | os.O_TRUNC)
+                    try:
+                        os.write(fd, b"new.example\n")
+                    finally:
+                        os.close(fd)
+                    os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+                    rewritten = True
+                yield line
+
+    def injected_open(name: str | os.PathLike[str], *args: Any, **kwargs: Any) -> Any:
+        handle = real_open(name, *args, **kwargs)
+        return RewritingReader(handle) if os.fspath(name) == os.fspath(path) else handle
+
+    monkeypatch.setattr("builtins.open", injected_open)
+    assert P.dnsbl_build_from_manifest(str(manifest)) is None
+    assert rewritten
+    assert path.stat().st_mtime_ns == original.st_mtime_ns
+
+
+def test_enabled_unlink_during_iteration_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    path = tmp_path / "pfb_py_top1m.txt"
+    path.write_text("old.example\n", encoding="utf-8")
+    real_open = open
+    unlinked = False
+
+    class UnlinkingReader:
+        def __init__(self, handle: Any) -> None:
+            self._handle = handle
+
+        def __enter__(self) -> UnlinkingReader:
+            self._handle.__enter__()
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+            return bool(self._handle.__exit__(exc_type, exc, traceback))
+
+        def fileno(self) -> int:
+            return self._handle.fileno()
+
+        def __iter__(self) -> Any:
+            nonlocal unlinked
+            for line in self._handle:
+                if not unlinked:
+                    path.unlink()
+                    unlinked = True
+                yield line
+
+    def injected_open(name: str | os.PathLike[str], *args: Any, **kwargs: Any) -> Any:
+        handle = real_open(name, *args, **kwargs)
+        return UnlinkingReader(handle) if os.fspath(name) == os.fspath(path) else handle
+
+    monkeypatch.setattr("builtins.open", injected_open)
+    assert P.dnsbl_build_from_manifest(str(manifest)) is None
+    assert unlinked
