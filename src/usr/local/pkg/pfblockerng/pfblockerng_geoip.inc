@@ -1086,7 +1086,6 @@ $section->addInput(new Form_StaticText(
 	. 'perform on all Lists together.'
 	. '</div>'
 ));
-	
 $section->addInput(new Form_Checkbox(
 	'enable_pdup',
 	'pMAX',
