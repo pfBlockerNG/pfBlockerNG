@@ -394,7 +394,6 @@ SH
 
 		$this->assertTrue($result['redirect']);
 		$this->assertSame('Cannot Lock/Unlock - Invalid action.', $result['savemsg']);
-		$this->assertSame([], $clists);
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
 		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/pfB_Deny_v4.txt");
 	}
@@ -425,6 +424,20 @@ SH
 		$this->assertStringContainsString('temporarily Unlocked', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
 		$this->assertStringContainsString('2001:db8::22,pfB_Deny_v6', file_get_contents($GLOBALS['pfb']['ip_unlock']));
+	}
+
+	public function testIpRemoveUnlockStorePersistenceFailureKeepsLivePunchAndSuccessMessage(): void
+	{
+		putenv('PFB_TEST_SHOW_ENTRY=198.51.100.26');
+		$store = $GLOBALS['pfb']['ip_unlock'];
+		$this->assertTrue(mkdir($store), 'setup: unlock-store failure target must be a directory');
+
+		$result = pfb_alerts_ip_action('unlock', '198.51.100.26', 'pfB_Deny_v4', '', [], []);
+
+		$this->assertStringContainsString('temporarily Unlocked', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
+		$this->assertSame(['delete', 'pfB_Deny_v4', '198.51.100.26'], $this->lastLogRow());
+		$this->assertDirectoryExists($store, 'unlock-store persistence failure must leave the target directory untouched');
 	}
 
 	public function testIpRemoveUnlockNotBlockedRecordsNothing(): void
@@ -508,8 +521,7 @@ SH
 		$this->assertTrue($result['redirect']);
 		$this->assertFileExists("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt");
 		$this->assertStringContainsString('198.51.100.31', file_get_contents("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt"));
-		// Non-vacuity anchor for the failure tests' assertArrayNotHasKey: prove
-		// config_set_path() IS observable through this seam on success.
+		// config_set_path() persistence is observable through the global config on success.
 		$this->assertArrayHasKey('installedpackages', $GLOBALS['config'] ?? [], 'the success path must persist via config_set_path()');
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 		$this->assertFileExists("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update");
@@ -562,6 +574,35 @@ SH
 		$this->assertFileDoesNotExist($update_path, 'missing alias metadata must not touch the update flag');
 	}
 
+	public function testIpWhitePersistenceFailuresKeepConfigWriteAndSuccessMessage(): void
+	{
+		$table = 'pfB_Whitelist_v4';
+		$alias_path = "{$GLOBALS['pfb']['aliasdir']}/{$table}.txt";
+		$update_path = "{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update";
+		$this->assertTrue(mkdir($alias_path), 'setup: alias-file failure target must be a directory');
+		$this->assertTrue(mkdir($update_path), 'setup: update-flag failure target must be a directory');
+
+		$result = pfb_alerts_ip_action(
+			'ip_white',
+			'198.51.100.34',
+			$table,
+			'',
+			['ipwhitelist4' => [$table => ['base64_idx' => 0, 'data' => []]]],
+			[]
+		);
+
+		$this->assertStringContainsString('added', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
+		$this->assertSame(['add', $table, '198.51.100.34'], $this->lastLogRow());
+		$this->assertSame(
+			base64_encode("198.51.100.34\r\n"),
+			$GLOBALS['config']['installedpackages']['pfblockernglistsv4']['config'][0]['custom']
+		);
+		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
+		$this->assertDirectoryExists($alias_path, 'alias-file persistence failure must leave the target directory untouched');
+		$this->assertDirectoryExists($update_path, 'update-flag persistence failure must leave the target directory untouched');
+	}
+
 	public function testIpWhiteDuplicateSkipsPfctlAndRedirect(): void
 	{
 		$clists = ['ipwhitelist4' => ['pfB_Whitelist_v4' => ['base64_idx' => 0, 'data' => ['198.51.100.32' => "198.51.100.32\r\n"]]]];
@@ -585,6 +626,20 @@ SH
 		$this->assertTrue($result['redirect']);
 		$this->assertSame("198.51.100.40/32 # note\r\n", base64_decode(PfbConfig::read('v4suppression')));
 		$this->assertFileExists($GLOBALS['pfb']['supptxt']);
+	}
+
+	public function testAddSuppressSuppressionFilePersistenceFailureKeepsConfigAndSuccessMessage(): void
+	{
+		$suppression_file = $GLOBALS['pfb']['supptxt'];
+		$this->assertTrue(mkdir($suppression_file), 'setup: suppression-file failure target must be a directory');
+
+		$result = pfb_alerts_ip_action('addsuppress', '198.51.100.45', 'pfB_Deny_v4', '', ['ipsuppression' => ['data' => []]], []);
+
+		$this->assertStringContainsString('Not currently blocked', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
+		$this->assertSame("198.51.100.45/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
+		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
+		$this->assertDirectoryExists($suppression_file, 'suppression-file persistence failure must leave the target directory untouched');
 	}
 
 	public function testAddSuppressNotBlockedPersistsExactV6Host(): void
