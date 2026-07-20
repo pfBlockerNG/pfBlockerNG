@@ -10,7 +10,7 @@ use PHPUnit\Framework\TestCase;
  * Rule (ADR-28 §2.2 reframe): for every adapted field, every existing stored value
  * (incl. empty / unset / any legacy variant) must satisfy write(read(v)) == v for
  * canonical values, or must map to a behaviour-equivalent canonical token for legacy
- * migration values (behaviour preserved on upgrade, downgrade-safe).  Fields that
+ * migration values (behaviour preserved on forward upgrade).  Fields that
  * cannot satisfy this are excluded (documented in 01_Results.txt).
  *
  * Scenario A — PfbToggle (pfb_dnsvip_auto): 'on' / '' checkbox.
@@ -27,8 +27,8 @@ use PHPUnit\Framework\TestCase;
  *
  * Scenario C — PfbIdnMode (pfb_idn / dnsbl_idn): backing values 'on'/'confusable'/'off'.
  *   Background: config.xml stores 'on' (= All, block-all-IDN), 'confusable', 'off'. 'on'
- *     reuses the pre-4.0.0 block-all token, so older releases reading it still block all
- *     IDN (downgrade-safe). The 4.0.0-alpha-only 'all' token is dropped (unrecognised ->
+ *     reuses the pre-4.0.0 block-all token, preserving established block-all-IDN
+ *     behaviour. The 4.0.0-alpha-only 'all' token is dropped (unrecognised ->
  *     Off), and '' (absent/disabled) is Off.
  *     Given a raw stored value v.
  *     When pfb_cfg_idn_mode_read(v) -> enum, pfb_cfg_idn_mode_write(enum) -> stored.
@@ -365,8 +365,8 @@ final class CfgAdaptersTest extends TestCase
 		// 'on' is now the CANONICAL stored token for PfbIdnMode::All (the backing
 		// value). It reads back as All and writes as 'on' — perfect identity.
 		// (Previously 'on' was treated as "legacy" and normalised to 'all'; the
-		// ADR-28 reframe reclaimed 'on' as the canonical token: older releases reading
-		// 'on' still block all IDN, so this is behaviour-preserving + downgrade-safe.)
+		// ADR-28 reframe reclaimed 'on' as the canonical token while preserving the
+		// established block-all-IDN behaviour.)
 		// Before: raw canonical value.
 		$raw = 'on';
 		$this->assertSame('on', $raw);
@@ -394,7 +394,7 @@ final class CfgAdaptersTest extends TestCase
 	public function testIdnModeWriteValues(): void
 	{
 		// PfbIdnMode::All backing value is 'on' (the original pre-ADR-08 block-all
-		// token, reused for round-trip correctness + downgrade safety).
+		// token, reused for current canonical round-trip correctness).
 		$this->assertSame('on', pfb_cfg_idn_mode_write(PfbIdnMode::All));
 		$this->assertSame('confusable', pfb_cfg_idn_mode_write(PfbIdnMode::Confusable));
 		$this->assertSame('off', pfb_cfg_idn_mode_write(PfbIdnMode::Off));

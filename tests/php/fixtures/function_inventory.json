@@ -793,24 +793,6 @@
             }
         ]
     },
-    "pfb_cfg_field_adapter_type": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "entry",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            }
-        ]
-    },
-    "pfb_cfg_field_vocab": {
-        "returnsRef": false,
-        "returnType": "array",
-        "params": []
-    },
     "pfb_cfg_idn_mode_read": {
         "returnsRef": false,
         "returnType": "PfbIdnMode",
