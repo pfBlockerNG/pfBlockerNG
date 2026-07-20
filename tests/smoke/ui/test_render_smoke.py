@@ -1259,8 +1259,11 @@ def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_gu
         "OpenPageRank TOP1M",
         "Majestic Million TOP1M",
         "Cloudflare Radar",
+        'name="alexa_enable"',
+        'name="alexa_count"',
+        'name="alexa_inclusion[]"',
     ):
-        assert needle in body, f"DNSBL page is missing the TOP1M source option {needle!r}"
+        assert needle in body, f"DNSBL page is missing the TOP1M settings marker {needle!r}"
     # Self-coupled to Majestic specifically (#892 review) -- the bare substrings "CC BY"
     # and "3.0" are also individually satisfied by Cloudflare's "(CC BY-NC) 4.0" note, so
     # this would pass even if Majestic's own note vanished.
@@ -1278,9 +1281,9 @@ def test_dnsbl_top1m_type_help_says_update_not_force_reload(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
     """The TOP1M 'Type' select's help text says an Update suffices after a type change,
-    not the stale 'Force Reload - DNSBL' instruction (#886) — the Save handler already
-    clears the cached CSV/whitelist on a type change, so a plain Update re-fetches and
-    rebuilds them; a Force Reload was never actually required.
+    not the stale 'Force Reload - DNSBL' instruction (#886) — the Save handler preserves
+    the cached source and marks TOP1M for reprocessing, so a plain Update reuses or refreshes
+    it; a Force Reload was never actually required.
 
     Asserts the page passes the clean-render oracle AND that the field's help text
     mentions 'Update' while no longer telling the user to run a Force Reload.
