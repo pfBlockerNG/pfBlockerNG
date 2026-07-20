@@ -10,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -148,3 +149,54 @@ def test_timed_timeout_kills_descendant_process_group(tmp_path: Path) -> None:
         if child_state and not child_state.startswith("Z"):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(child_pid, signal.SIGKILL)
+
+
+def test_timed_parent_signal_kills_worker_process_group(tmp_path: Path) -> None:
+    worker_pid_path = tmp_path / "signal-worker.pid"
+    driver_code = "\n".join(
+        (
+            "import importlib.util, os, pathlib, signal, subprocess, sys",
+            "spec = importlib.util.spec_from_file_location('bench_signal_driver', sys.argv[1])",
+            "bench = importlib.util.module_from_spec(spec)",
+            "sys.modules[spec.name] = bench",
+            "spec.loader.exec_module(bench)",
+            "def interrupted(signum, frame):",
+            "    raise KeyboardInterrupt(f'signal {signum}')",
+            "signal.signal(signal.SIGTERM, interrupted)",
+            "worker = 'import os,pathlib,sys,time; "
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(300)'",
+            "time_bin = '/usr/bin/time'",
+            "try:",
+            "    bench._run_timed([sys.executable, '-c', worker, sys.argv[2]], "
+            "300, time_bin, bench._time_flag(time_bin, 10))",
+            "except KeyboardInterrupt:",
+            "    raise SystemExit(77)",
+        )
+    )
+    driver = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-c", driver_code, str(_SCRIPT), str(worker_pid_path)]
+    )
+    worker_pid: int | None = None
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not worker_pid_path.exists():
+            time.sleep(0.05)
+        assert worker_pid_path.exists(), "timed worker did not start"
+        worker_pid = int(worker_pid_path.read_text())
+
+        os.kill(driver.pid, signal.SIGTERM)
+        assert driver.wait(timeout=10) == 77
+        worker_state = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(worker_pid)], capture_output=True, text=True, check=False
+        ).stdout.strip()
+        assert not worker_state or worker_state.startswith("Z"), (
+            f"worker survived benchmark driver signal: pid={worker_pid} state={worker_state}"
+        )
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(driver.pid, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            driver.wait(timeout=2)
+        if worker_pid is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(worker_pid, signal.SIGKILL)
