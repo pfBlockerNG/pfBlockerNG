@@ -10,6 +10,11 @@ use PHPUnit\Framework\TestCase;
  */
 final class BootstrapSmokeTest extends TestCase
 {
+	public function testPhpUnitRunsWithOneGigabyteMemoryLimit(): void
+	{
+		$this->assertSame('1G', ini_get('memory_limit'));
+	}
+
 	public function testProductionFunctionsAreDefined(): void
 	{
 		foreach ([
