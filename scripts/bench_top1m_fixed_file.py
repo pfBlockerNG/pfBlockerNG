@@ -274,6 +274,27 @@ def _copy_contract(manifest: Path, fixed: Path | None, sandbox: Path) -> Path:
     return target_manifest
 
 
+def _php_worker_command(
+    php: str,
+    phase: str,
+    contract: str,
+    worktree: Path,
+    sandbox: Path,
+    expected_lines: int,
+) -> list[str]:
+    return [
+        php,
+        "-d",
+        "memory_limit=-1",
+        str(PHP_WORKER),
+        phase,
+        contract,
+        str(worktree),
+        str(sandbox),
+        str(expected_lines),
+    ]
+
+
 def _run_php_phase(
     phase: str,
     contract: str,
@@ -289,7 +310,7 @@ def _run_php_phase(
         raise RuntimeError("php executable not found")
     return [
         _run_timed(
-            [php, str(PHP_WORKER), phase, contract, str(worktree), str(sandbox), str(expected_lines)],
+            _php_worker_command(php, phase, contract, worktree, sandbox, expected_lines),
             timeout_seconds,
             time_bin,
             time_flag,
@@ -493,6 +514,7 @@ def run(args: argparse.Namespace) -> int:
             f"host: {platform.platform()} machine={platform.machine()} logical_cpus={os.cpu_count()}",
             f"python: {platform.python_version()} ({sys.executable})",
             f"php: {_runtime_line([shutil.which('php') or 'php', '-r', 'echo PHP_VERSION;'])}",
+            "php_worker_memory_limit: -1 (disabled so peak RSS remains measurable)",
             f"time: {time_bin} {time_flag}",
             f"fixture: deterministic unique domains={args.lines} generated_bytes={generated_bytes}",
             f"base_contract: embedded manifest_bytes={manifest_bytes['base']} fixed_file_bytes=0",
