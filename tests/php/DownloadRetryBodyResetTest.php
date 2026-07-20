@@ -153,17 +153,29 @@ PHP;
 	{
 		$file_dwn = "{$this->workdir}/feed.txt";
 		$url      = "http://flaky-feed.example:{$this->port}/feed.txt";
-		$meta     = [];
-
 		// When: the first attempt is cut mid-body (curl error 18) and the retry
 		// succeeds. (The production retry path sleeps 5s once here.)
-		$result = pfb_download($url, $file_dwn, false, 'RetryFeed', '', 1, '', 30, 'change_detect', '', '', false, $meta);
+		$result = pfb_download(new PfbDownloadRequest(
+			listUrl: $url,
+			downloadPath: $file_dwn,
+			flex: FALSE,
+			header: 'RetryFeed',
+			format: '',
+			logType: 1,
+			versionType: '',
+			timeout: 30,
+			type: 'change_detect',
+			username: '',
+			password: '',
+			sourceInterface: FALSE,
+			extraHeaders: array(),
+		));
 
 		// Then: the download succeeds and the file holds EXACTLY the final
 		// response body -- before the fix it held the 16 partial bytes with the
 		// full body appended after them (80 bytes of corrupted concatenation).
-		$this->assertTrue($result, 'retry download must succeed');
-		$this->assertSame('200', $meta['status'] ?? '', 'probe metadata must carry the final 200');
+		$this->assertTrue($result->success, 'retry download must succeed');
+		$this->assertSame('200', $result->responseMeta['status'] ?? '', 'probe metadata must carry the final 200');
 		// pfb_download() writes the body to {file_dwn}.raw.
 		$got = file_get_contents("{$file_dwn}.raw");
 		$this->assertNotFalse($got);

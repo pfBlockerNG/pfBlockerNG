@@ -102,25 +102,24 @@ final class PfbDownloadEntryVettingSkipLogTest extends TestCase
 
 		// When pfb_download() is called on that URL (a plain remote format, so
 		// entry vetting takes the PFB_FILTER_URL elseif branch).
-		$response_meta = null;
-		$result = pfb_download(
-			'https://internal.entry.vet/list.txt',
-			'/tmp/pfb_entry_vet_test',
-			FALSE,
-			'entryvettest',
-			'',
-			2,
-			'',
-			300,
-			'',
-			'',
-			'',
-			FALSE,
-			$response_meta
-		);
+		$result = pfb_download(new PfbDownloadRequest(
+			listUrl: 'https://internal.entry.vet/list.txt',
+			downloadPath: '/tmp/pfb_entry_vet_test',
+			flex: FALSE,
+			header: 'entryvettest',
+			format: '',
+			logType: 2,
+			versionType: '',
+			timeout: 300,
+			type: '',
+			username: '',
+			password: '',
+			sourceInterface: FALSE,
+			extraHeaders: array(),
+		));
 
 		// Then the download is refused ...
-		$this->assertFalse($result, 'pfb_download must refuse a URL rejected at entry vetting');
+		$this->assertFalse($result->success, 'pfb_download must refuse a URL rejected at entry vetting');
 
 		// ... and the MAIN log carries the header-scoped, reason-bearing skip
 		// line (issue #811), alongside the pre-existing bare failure line.
@@ -157,25 +156,24 @@ final class PfbDownloadEntryVettingSkipLogTest extends TestCase
 		// When pfb_download() is called with a disallowed scheme (gopher) --
 		// pfb_filter() rejects on the scheme check, before ever consulting the
 		// feed-host guard for its own verdict.
-		$response_meta = null;
-		$result = pfb_download(
-			'gopher://public.entry.vet/list.txt',
-			'/tmp/pfb_entry_vet_test2',
-			FALSE,
-			'entryvettest2',
-			'',
-			2,
-			'',
-			300,
-			'',
-			'',
-			'',
-			FALSE,
-			$response_meta
-		);
+		$result = pfb_download(new PfbDownloadRequest(
+			listUrl: 'gopher://public.entry.vet/list.txt',
+			downloadPath: '/tmp/pfb_entry_vet_test2',
+			flex: FALSE,
+			header: 'entryvettest2',
+			format: '',
+			logType: 2,
+			versionType: '',
+			timeout: 300,
+			type: '',
+			username: '',
+			password: '',
+			sourceInterface: FALSE,
+			extraHeaders: array(),
+		));
 
 		// Then the download is refused ...
-		$this->assertFalse($result, 'pfb_download must refuse an invalid-scheme URL');
+		$this->assertFalse($result->success, 'pfb_download must refuse an invalid-scheme URL');
 
 		// ... but the main log carries NO guard skip line -- the guard itself
 		// would have allowed this host, so #811's re-check must not fire.
@@ -213,25 +211,24 @@ final class PfbDownloadEntryVettingSkipLogTest extends TestCase
 
 		// When pfb_download() is called with a disallowed scheme on that host --
 		// pfb_filter() rejects on the scheme check, never reaching the guard.
-		$response_meta = null;
-		$result = pfb_download(
-			'gopher://internal.scheme.vet/list.txt',
-			'/tmp/pfb_entry_vet_test3',
-			FALSE,
-			'entryvettest3',
-			'',
-			2,
-			'',
-			300,
-			'',
-			'',
-			'',
-			FALSE,
-			$response_meta
-		);
+		$result = pfb_download(new PfbDownloadRequest(
+			listUrl: 'gopher://internal.scheme.vet/list.txt',
+			downloadPath: '/tmp/pfb_entry_vet_test3',
+			flex: FALSE,
+			header: 'entryvettest3',
+			format: '',
+			logType: 2,
+			versionType: '',
+			timeout: 300,
+			type: '',
+			username: '',
+			password: '',
+			sourceInterface: FALSE,
+			extraHeaders: array(),
+		));
 
 		// Then the download is refused ...
-		$this->assertFalse($result, 'pfb_download must refuse an invalid-scheme URL');
+		$this->assertFalse($result->success, 'pfb_download must refuse an invalid-scheme URL');
 
 		// ... and the main log carries NO guard skip line even though the host
 		// is internal -- the guard was not why vetting failed.

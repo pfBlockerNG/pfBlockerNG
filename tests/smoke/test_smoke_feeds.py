@@ -2472,7 +2472,7 @@ def test_corrupt_zip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
     file(1) still reports ``application/zip`` (it reads the EOCD), so the feed
     enters the ZIP branch; ``bsdtar -tf`` then fails to parse the broken local
     header and exits non-zero. pfb_validate_archive() catches that; pfb_download()
-    returns FALSE; the alias is never created.
+    result success flag is FALSE; the alias is never created.
 
     NB: a *tail-truncated* ZIP is NOT a reliable corruption — libarchive streams
     local headers without needing the EOCD, so ``tar -tf`` on the first half still
@@ -2486,7 +2486,7 @@ def test_corrupt_zip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
     Given the alias does not exist (the feed has never been successfully loaded).
     When the case injects + Force-Updates over the corrupt ZIP bytes,
     Then the alias remains absent — the structural probe rejected the corrupt archive
-      before extraction and pfb_download() returned FALSE.
+      before extraction and pfb_download() result success flag was FALSE.
     """
     # FreeBSD-verified corpus fixture (fixtures/archive_corrupt.zip; see
     # fixtures/README.md "Archive corpus"): leading PK\x03\x04 signature clobbered,
@@ -2501,7 +2501,7 @@ def test_corrupt_zip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
 
     with h.CaseContext(deployed_vm, spec):
         # When — Force Update fetches corrupt ZIP; structural probe (bsdtar) fails.
-        # Then — alias still absent; pfb_download returned FALSE; table never created.
+        # Then — alias still absent; pfb_download result success flag was FALSE; table never created.
         tables_after = h.pfctl_tables(deployed_vm)
         assert spec.alias not in tables_after, (
             f"expected {spec.alias!r} absent after corrupt ZIP (structural probe must reject), "
@@ -2515,7 +2515,7 @@ def test_corrupt_gzip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
 
     Scenario: the corpus fixture is a valid gzip stream truncated past its header —
     the deflate payload and CRC/ISIZE trailer are gone, so ``gunzip -t`` exits
-    non-zero. pfb_validate_archive() catches the failure; pfb_download() returns
+    non-zero. pfb_validate_archive() catches the failure; pfb_download() result success flag is
     FALSE; the alias is never created. (Unlike ZIP, a truncated gzip IS reliably
     corrupt to the codec — gzip is a single stream with no streamable directory.)
 
@@ -2552,7 +2552,7 @@ def test_corrupt_bzip2_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServe
 
     Scenario: the corpus fixture is a valid bzip2 stream truncated mid-block, so
     ``bzip2 -t`` exits non-zero. pfb_validate_archive() rejects it; pfb_download()
-    returns FALSE; the alias is never created.
+    result success flag is FALSE; the alias is never created.
 
     Paired with ``test_bzip2_feed_imports`` (healthy bzip2 imports) to prove the probe
     is a real branch.
@@ -3625,15 +3625,20 @@ _ADR46_WORKDIR = f"{h.PFB_DBDIR}/adr46_guard"
 def _adr46_download(vm: SmokeVM, feed_url: str, file_dwn: str, header: str, dl_type: str) -> str:
     """Run pfb_download(<feed_url>, <file_dwn>, ..., type=<dl_type>) on the box; return stdout.
 
-    ``header`` is pfb_download()'s 4th arg: the ``tar -C`` extraction target for the
+    ``header`` is the request's extraction/log field: the ``tar -C`` target for the
     ZIP geoip/top1m branch, and the ``feed=`` token of the canonical reject line at
     every wired site.
     """
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
         "pfb_global();\n"
-        f"$ok = pfb_download({h._php_str(feed_url)}, {h._php_str(file_dwn)}, FALSE, "  # noqa: SLF001
-        f"{h._php_str(header)}, '', 1, '', 60, {h._php_str(dl_type)});\n"  # noqa: SLF001
+        "$ok = pfb_download(new PfbDownloadRequest("
+        f"listUrl: {h._php_str(feed_url)}, "  # noqa: SLF001
+        f"downloadPath: {h._php_str(file_dwn)}, flex: FALSE, "  # noqa: SLF001
+        f"header: {h._php_str(header)}, format: '', logType: 1, versionType: '', "  # noqa: SLF001
+        f"timeout: 60, type: {h._php_str(dl_type)}, username: '', password: '', "  # noqa: SLF001
+        "sourceInterface: FALSE, extraHeaders: array()));"
+        "$ok = $ok->success;\n"
         "echo $ok ? 'PFB_DL_TRUE' : 'PFB_DL_FALSE';"
     )
     res = h.php_eval(vm, snippet, timeout=120.0)
@@ -3650,13 +3655,13 @@ def test_adr46_hostile_member_zip_rejected(deployed_vm: SmokeVM, mock_feeds: _Mo
     `../pfb_adr46_escape.txt`.
 
     Pre-ADR-46 behaviour is SILENT PARTIAL SUCCESS -- bsdtar's default refusal just
-    skips the `..` member (extraction stderr is discarded) and the branch returns
-    TRUE -- so this test FAILS on pre-guard code (pfb_download returns TRUE, no
+    skips the `..` member (extraction stderr is discarded) and the result success flag is
+    TRUE -- so this test FAILS on pre-guard code (pfb_download reported success, no
     canonical line) and PASSES with the guard (explicit stage=member reject).
 
     Given a clean work dir and the delta baseline for the stage=member line,
     When  pfb_download() fetches the traversal ZIP as a top-1M extra,
-    Then  it returns FALSE, a canonical "stage=member reason=unsafe_member_name
+    Then  its result success flag is FALSE, a canonical "stage=member reason=unsafe_member_name
       detected=../pfb_adr46_escape.txt" line is logged, the downloaded archive is
       unlinked, and NOTHING was extracted (no benign member, no escape file).
     """
@@ -3676,8 +3681,8 @@ def test_adr46_hostile_member_zip_rejected(deployed_vm: SmokeVM, mock_feeds: _Mo
 
         # Then -- explicit reject, not silent partial success.
         assert "PFB_DL_FALSE" in out, (
-            f"expected pfb_download to return FALSE on a '..'-member archive "
-            f"(pre-ADR-46 it silently returned TRUE); got stdout: {out!r}"
+            f"expected pfb_download success flag FALSE on a '..'-member archive "
+            f"(pre-ADR-46 it silently reported success); got stdout: {out!r}"
         )
         after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
         if not (after > before):
@@ -3708,7 +3713,7 @@ def test_adr46_legit_multifile_zip_still_imports(deployed_vm: SmokeVM, mock_feed
 
     Given a clean pre-created target dir (asserted empty) and the stage=member baseline,
     When  pfb_download() fetches a benign two-member ZIP as a top-1M extra,
-    Then  it returns TRUE, both members land in the target dir (--strip=1 applied),
+    Then  its result success flag is TRUE, both members land in the target dir (--strip=1 applied),
       and NO stage=member line was added.
     """
     workdir = f"{_ADR46_WORKDIR}_legit"
@@ -3731,7 +3736,7 @@ def test_adr46_legit_multifile_zip_still_imports(deployed_vm: SmokeVM, mock_feed
 
         # Then -- import succeeds and the guard stayed silent.
         assert "PFB_DL_TRUE" in out, (
-            f"expected pfb_download to return TRUE for a benign multi-member zip "
+            f"expected pfb_download success flag TRUE for a benign multi-member zip "
             f"(the guard must be a pass-through); got stdout: {out!r}"
         )
         extracted = deployed_vm.ssh(f"/bin/ls -A {target}").stdout.split()
@@ -3763,7 +3768,7 @@ def test_adr46_hostile_member_geoip_gz_rejected(deployed_vm: SmokeVM, mock_feeds
     Given a clean work dir, no escape file beside the geoipshare dir, and the
       stage=member delta baseline,
     When  pfb_download() fetches the traversal tar.gz as type='geoip',
-    Then  it returns FALSE, the canonical stage=member line names the hostile
+    Then  its result success flag is FALSE, the canonical stage=member line names the hostile
       member, the archive is unlinked, and no escape file appeared.
     """
     marker = "stage=member reason=unsafe_member_name detected=../pfb_adr46_escape.txt"
@@ -3786,8 +3791,8 @@ def test_adr46_hostile_member_geoip_gz_rejected(deployed_vm: SmokeVM, mock_feeds
 
         # Then -- explicit reject before any disk write.
         assert "PFB_DL_FALSE" in out, (
-            f"expected pfb_download to return FALSE on a '..'-member tar.gz via the gzip GeoIP "
-            f"branch (pre-guard it silently returned TRUE); got stdout: {out!r}"
+            f"expected pfb_download success flag FALSE on a '..'-member tar.gz via the gzip GeoIP "
+            f"branch (pre-guard it silently reported success); got stdout: {out!r}"
         )
         after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
         if not (after > before):
@@ -3821,7 +3826,7 @@ def test_adr46_hostile_member_blacklist_rejected(deployed_vm: SmokeVM, mock_feed
     Given a clean work dir and category dir, and the stage=member delta baseline,
     When  pfb_download() fetches the traversal tar.gz as type='blacklist' with a
       file_dwn ending .tar.gz (the branch's naming contract),
-    Then  it returns FALSE, the canonical stage=member line is logged, the renamed
+    Then  its result success flag is FALSE, the canonical stage=member line is logged, the renamed
       archive is unlinked, and the category dir contains no extracted files.
     """
     marker = "stage=member reason=unsafe_member_name detected=../pfb_adr46_escape.txt"
@@ -3844,8 +3849,8 @@ def test_adr46_hostile_member_blacklist_rejected(deployed_vm: SmokeVM, mock_feed
 
         # Then -- explicit reject; the renamed archive is gone; nothing extracted.
         assert "PFB_DL_FALSE" in out, (
-            f"expected pfb_download to return FALSE on a '..'-member tar.gz via the blacklist "
-            f"branch (pre-guard it silently returned TRUE); got stdout: {out!r}"
+            f"expected pfb_download success flag FALSE on a '..'-member tar.gz via the blacklist "
+            f"branch (pre-guard it silently reported success); got stdout: {out!r}"
         )
         after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
         if not (after > before):

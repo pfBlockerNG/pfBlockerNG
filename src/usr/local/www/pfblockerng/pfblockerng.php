@@ -467,8 +467,21 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 		// (Cloudflare Radar's Bearer token; array() for every keyless provider) --
 		// every other feed leaves it unset, so ?? array() keeps their downloads
 		// unaffected.
-		if (!pfb_download($feed['url'], $file_dwn, FALSE, "{$feed['folder']}/{$feed['file']}", '', $logtype, '', $timeout, $feed['type'],
-		    $feed['username'], $feed['password'], extra_headers: $feed['headers'] ?? array())) {
+		if (!(pfb_download(new PfbDownloadRequest(
+			listUrl: $feed['url'],
+			downloadPath: $file_dwn,
+			flex: FALSE,
+			header: "{$feed['folder']}/{$feed['file']}",
+			format: '',
+			logType: $logtype,
+			versionType: '',
+			timeout: $timeout,
+			type: $feed['type'],
+			username: $feed['username'],
+			password: $feed['password'],
+			sourceInterface: FALSE,
+			extraHeaders: $feed['headers'] ?? array(),
+		))->success)) {
 
 			$log = "\nFailed to Download {$feed['file']}\n";
 			pfb_logger("{$log}", $logtype);

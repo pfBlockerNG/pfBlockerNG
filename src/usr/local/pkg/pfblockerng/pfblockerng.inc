@@ -11430,14 +11430,60 @@ function pfb_download_http_headers(array $extra_headers, string $conditional_hea
 }
 
 
-// Function to download feeds. Optional $response_meta — when a non-NULL reference is passed
-// (detector probe mode), filled with ['status' => <http_status_string>, 'etag' => <ETag or
-// ''>, 'lastmod' => <epoch or 0>]; the two sync callers in this file do NOT pass it, so their
-// behaviour is unchanged. Optional $extra_headers (ADR-59) — caller-supplied HTTP header
-// strings (e.g. a Cloudflare Radar 'Authorization: Bearer <token>'), merged with the
-// conditional-GET header via pfb_download_http_headers(). The TOP1M provider is the first
-// caller; every other feed still passes none, so its CURLOPT_HTTPHEADER behaviour is unchanged.
-function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $logtype, $vtype='', $timeout=300, $type='', $username='', $password='', $srcint=FALSE, &$response_meta=NULL, array $extra_headers=array()) {
+final class PfbDownloadRequest
+{
+	public function __construct(
+		public readonly string $listUrl,
+		public readonly string $downloadPath,
+		public readonly bool $flex,
+		public readonly string $header,
+		public readonly string $format,
+		public readonly int $logType,
+		public readonly string $versionType = '',
+		public readonly int $timeout = 300,
+		public readonly string $type = '',
+		public readonly string $username = '',
+		public readonly string $password = '',
+		public readonly string|false $sourceInterface = FALSE,
+		public readonly array $extraHeaders = array(),
+	) {
+	}
+}
+
+final class PfbDownloadResult
+{
+	private function __construct(
+		public readonly bool $success,
+		public readonly ?array $responseMeta,
+	) {
+	}
+
+	public static function success(?array $responseMeta = NULL): self
+	{
+		return new self(TRUE, $responseMeta);
+	}
+
+	public static function failure(?array $responseMeta = NULL): self
+	{
+		return new self(FALSE, $responseMeta);
+	}
+}
+
+// Function to download feeds.
+function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
+	$list_url = $request->listUrl;
+	$file_dwn = $request->downloadPath;
+	$pflex = $request->flex;
+	$header = $request->header;
+	$format = $request->format;
+	$logtype = $request->logType;
+	$vtype = $request->versionType;
+	$timeout = $request->timeout;
+	$type = $request->type;
+	$username = $request->username;
+	$password = $request->password;
+	$srcint = $request->sourceInterface;
+	$extra_headers = $request->extraHeaders;
 	global $pfb;
 	$http_status = '';
 	$elog = ">> {$pfb['log']} 2>&1";
@@ -11449,13 +11495,13 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 	if ($format == 'whois') {
 		if (empty(pfb_filter($list_url, PFB_FILTER_DOMAIN, 'pfb_download'))) {
 			pfb_logger("\n Failed", 2);
-			return FALSE;
+			return PfbDownloadResult::failure();
 		}
 	}
 	elseif ($format == 'asn') {
 		if (empty(pfb_filter($list_url, PFB_FILTER_ALNUM, 'pfb_download'))) {
 			pfb_logger("\n Failed", 2);
-			return FALSE;
+			return PfbDownloadResult::failure();
 		}
 	}
 	elseif (!pfb_filter($list_url, PFB_FILTER_URL, 'pfb_download_failure')) {
@@ -11464,7 +11510,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		// line goes to error.log only). See pfb_log_feed_host_reject().
 		pfb_log_feed_host_reject($list_url, $header, $logtype);
 		pfb_logger("\n Failed", 2);
-		return FALSE;
+		return PfbDownloadResult::failure();
 	}
 
 	// Cron change-detection probe (conditional GET + content hash; legacy name was 'md5')
@@ -11515,7 +11561,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			if (!pfb_feed_host_allowed($rsync_host, $rsync_reason, $rsync_pinned)) {
 				$log = "\n[ {$header} ] {$rsync_reason} \xe2\x80\x94 skipped\n";
 				pfb_logger("{$log}", "{$logtype}");
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 
 			// Pin the connection to the vetted IP (substitute it for the host in the
@@ -11524,7 +11570,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			if ($rsync_src === '') {
 				$log = "\n[ {$header} ] feed host could not be pinned \xe2\x80\x94 skipped\n";
 				pfb_logger("{$log}", "{$logtype}");
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 		}
 		$rsync_src_esc = escapeshellarg("{$rsync_src}");
@@ -11539,13 +11585,13 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			$rsync_msg = trim(implode(' ', $rsync_output));
 			$log = "\n  RSYNC Failed (exit {$rsync_rc})" . ($rsync_msg !== '' ? ": {$rsync_msg}" : '') . "...\n";
 			pfb_logger("{$log}", "{$logtype}");
-			return FALSE;
+			return PfbDownloadResult::failure();
 		}
 	}
 	elseif ($format == 'whois' || $format == 'asn') {
 		// Convert a Domain name/AS into its respective IP addresses
 		exec("{$pfb['script']} whoisconvert {$header_esc} {$vtype} {$list_url_esc} {$elog}");
-		return TRUE;
+		return PfbDownloadResult::success();
 	}
 	else {
 		// Determine if URL is a pfSense localfile
@@ -11561,7 +11607,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				$error = error_get_last();
 				$log = "\n[ {$header} ] {$error['message']}\n";
 				pfb_logger("{$log}", "{$logtype}");
-				return FALSE;
+				return PfbDownloadResult::failure();
 			} else {
 				// Save original downloaded file
 				@file_put_contents("{$file_download}", $file_data, LOCK_EX);
@@ -11596,14 +11642,14 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			    !pfb_feed_host_allowed($feed_host, $feed_reason, $feed_pinned)) {
 				$log = "\n[ {$header} ] {$feed_reason} \xe2\x80\x94 skipped\n";
 				pfb_logger("{$log}", "{$logtype}");
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 
 			if (($fhandle = @fopen("{$file_download}", 'w')) !== FALSE) {
 				if (!($ch = curl_init("{$list_download}"))) {
 					$log = "\nFailed to create cURL resource... Exiting...\n";
 					pfb_logger("{$log}", "{$logtype}");
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
 
 				// Load curl default settings — incl. the CURLOPT_PROTOCOLS scheme allow-list
@@ -11776,7 +11822,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 						if ($fhandle) {
 							@fclose($fhandle);
 						}
-						return FALSE;
+						return PfbDownloadResult::failure();
 					}
 
 					$rdr_reason	= '';
@@ -11791,7 +11837,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 						if ($fhandle) {
 							@fclose($fhandle);
 						}
-						return FALSE;
+						return PfbDownloadResult::failure();
 					}
 
 					// Discard the redirect-page body so only the final hop's body
@@ -11832,28 +11878,23 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		}
 	}
 
-	// Probe mode for the cron detector (type='change_detect'): fill $response_meta when
-	// the caller requested it (ADR-42 conditional-GET path), then return.
+	// Probe mode for the cron detector (type='change_detect'): return response metadata
+	// (ADR-42 conditional-GET path), then return.
 	// A 304 means "not modified" — the server confirmed the feed unchanged; the
 	// caller (pfb_update_check detector) handles the 304 via pfb_conditional_get_decision.
 	// Any 200 means the body was downloaded to {file_dwn}.raw; the caller hashes it.
 	// Any other status means the probe failed; the caller fails-safe to re-ingest.
 	//
-	// CONTRACT: the caller MUST pass $response_meta = array() (not NULL) to activate
-	// the fill block.  NULL is the sentinel for the two sync callers that do NOT want
-	// the block filled; NULL !== NULL is always FALSE, so NULL silently skips the fill.
 	if ($type == 'change_detect') {
-		if ($response_meta !== NULL) {
-			$response_meta = array(
-				'status'  => (string) $http_status,
-				'etag'    => isset($response_etag) ? $response_etag : '',
-				'lastmod' => isset($remote_stamp) && $remote_stamp > 0 ? (int) $remote_stamp : 0,
-			);
-		}
+		$probe_meta = array(
+			'status'  => (string) $http_status,
+			'etag'    => isset($response_etag) ? $response_etag : '',
+			'lastmod' => isset($remote_stamp) && $remote_stamp > 0 ? (int) $remote_stamp : 0,
+		);
 		if ($http_status == '304' || $http_status == '200') {
-			return TRUE;
+			return PfbDownloadResult::success($probe_meta);
 		}
-		return FALSE;
+		return PfbDownloadResult::failure($probe_meta);
 	}
 
 	// Remove any downloaded files with md5 extension
@@ -11861,7 +11902,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 	// '304 not modified' - Utilize previously downloaded file if available
 	if ($http_status == '304' && file_exists("{$orig_download}")) {
-		return TRUE;
+		return PfbDownloadResult::success();
 	}
 
 	if (file_exists($file_download) && ($http_status == '200' || $http_status == '221' || $http_status == '226')) {
@@ -11875,7 +11916,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		$file_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail);
 		if (!$file_type) {
 			pfb_validate_log($header, 'mime', 'mime_not_allowed', pfb_reject_detail_summary($reject_detail));
-			return FALSE;
+			return PfbDownloadResult::failure();
 		}
 
 		// ADR-49: opt-in plain-text sanity scan on accepted text feeds. The flag is
@@ -11901,7 +11942,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				if ($pfb_sanity !== NULL) {
 					pfb_validate_log($header, 'plaintext', $pfb_sanity, basename($file_download));
 					unlink_if_exists($file_download);
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
 			}
 		}
@@ -11931,7 +11972,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			if (!pfb_validate_archive($file_download, $file_type)) {
 				pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
 				unlink_if_exists($file_download);
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 			if ($type == 'geoip') {
 				// Extras - MaxMind downloads
@@ -11941,29 +11982,29 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				if ($unsafe_member !== NULL) {
 					pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
 					unlink_if_exists($file_download);
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
 				exec("/usr/bin/tar -xzf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1", $output, $retval);
 				unlink_if_exists($file_download);
 				if ($retval != 0) {
 					pfb_logger("\n[pfb_download] geoip extraction failed (tar exit {$retval})", 2);
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
-				return TRUE;
+				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'asn') {
 				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
 				if ($retval != 0) {
 					pfb_logger("\n[pfb_download] asn extraction failed (gunzip exit {$retval})", 2);
 					unlink_if_exists($file_download);
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
 
 				// Update ASN Lookup table definitions
 				exec("{$pfb['script']} asn_table {$elog}");
 
 				unlink_if_exists($file_download);
-				return TRUE;
+				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'top1m') {
 				// ADR-59: a gz-container TOP1M provider decompresses straight to
@@ -11972,9 +12013,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				unlink_if_exists($file_download);
 				if ($retval != 0) {
 					pfb_logger("\n[pfb_download] top1m extraction failed (gunzip exit {$retval})", 2);
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
-				return TRUE;
+				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'blacklist') {
 				// Extras - Blacklist downloads
@@ -11993,7 +12034,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					if ($unsafe_member !== NULL) {
 						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
 						unlink_if_exists($file_dwn);
-						return FALSE;
+						return PfbDownloadResult::failure();
 					}
 
 					// Extract Blacklist categories from sub-folders into a single folder structure
@@ -12021,14 +12062,14 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				}
 				else {
 					pfb_logger("\n Invalid filename [{$filename}]", 1);
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
 			}
 			else {
 				$reject_detail = array();
 				if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail)) {
 					pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
 				pfb_logger('.', 1);
 				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$file_org_esc}", $output, $retval);
@@ -12038,12 +12079,12 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			if (!pfb_validate_archive($file_download, $file_type)) {
 				pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
 				unlink_if_exists($file_download);
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 			$reject_detail = array();
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail)) {
 				pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 			pfb_logger('.', 1);
 			exec("/usr/bin/bzip2 -dkc {$file_dwn_esc} > {$file_org_esc}", $output, $retval);
@@ -12052,7 +12093,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			if (!pfb_validate_archive($file_download, $file_type)) {
 				pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
 				unlink_if_exists($file_download);
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 
 			// Extras - MaxMind/TOP1M downloads
@@ -12067,7 +12108,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					if ($unsafe_member !== NULL) {
 						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
 						unlink_if_exists($file_download);
-						return FALSE;
+						return PfbDownloadResult::failure();
 					}
 					exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1", $output, $retval);
 				} else {
@@ -12078,9 +12119,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				if ($retval != 0) {
 					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
 					unlink_if_exists($file_download);
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
-				return TRUE;
+				return PfbDownloadResult::success();
 			}
 
 			pfb_logger('.', 1);
@@ -12094,7 +12135,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			   the post-extraction PFB_FILTER_FILE_MIME re-check below is the ZIP
 			   inner-content gate (issue #808).
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download')) {
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 			*/
 	
@@ -12124,7 +12165,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			if (!pfb_filter(array("{$file_org_esc}", "{$orig_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail)) {
 				pfb_validate_log($header, 'inner', 'inner_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 				unlink_if_exists($file_download);
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 		}
 		elseif ($file_type == 'application/x-7z-compressed') {
@@ -12135,17 +12176,17 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			if ($missing_7z !== NULL) {
 				pfb_logger("\n[pfb_download] Cannot process {$file_type} feed: '{$missing_7z}' is not installed. Install the 7-Zip package (pkg install 7-zip) to use 7z-compressed feeds. Skipping [" . htmlspecialchars(pfb_redact_url($list_url)) . "]", 2);
 				unlink_if_exists($file_download);
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 			if (!pfb_validate_archive($file_download, $file_type)) {
 				pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
 				unlink_if_exists($file_download);
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 			$reject_detail = array();
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail)) {
 				pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
-				return FALSE;
+				return PfbDownloadResult::failure();
 			}
 			pfb_logger('.', 1);
 			exec("/usr/local/bin/7z e -so {$file_dwn_esc} > {$file_org_esc}", $output, $retval);
@@ -12159,9 +12200,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				$renamed = @rename("{$file_download}", "{$head_download}");
 				if (!$renamed) {
 					pfb_logger("\n[pfb_download] {$type} rename to destination failed", 2);
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
-				return TRUE;
+				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'blacklist') {
 				$retval = 0;
@@ -12171,7 +12212,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				$renamed = @rename("{$file_download}", "{$orig_download}");
 				if (!$renamed) {
 					pfb_logger("\n[pfb_download] {$header} rename to .orig failed", 2);
-					return FALSE;
+					return PfbDownloadResult::failure();
 				}
 				$retval = 0;
 			}
@@ -12216,19 +12257,19 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
 				exec("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}");
 			}
-			return TRUE;
+				return PfbDownloadResult::success();
 		}
 		else {
 			$log = "   Decompression Failed\n";
 			pfb_logger("{$log}", 2);
-			return FALSE;
+				return PfbDownloadResult::failure();
 		}
 	}
 	else {
 		// Download failed
 		unlink_if_exists("{$file_download}");
 	}
-	return FALSE;
+	return PfbDownloadResult::failure();
 }
 
 
