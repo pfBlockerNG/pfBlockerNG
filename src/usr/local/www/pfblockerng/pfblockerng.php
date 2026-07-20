@@ -486,11 +486,22 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 			if (!$identity_matches) {
 				pfb_top1m_invalidate_baseline($top1m_base);
 			}
-			$probe_ok = pfb_download(
-				$feed['url'], "{$file_dwn}.md5", FALSE, $file_dwn, '', $logtype, '', $timeout,
-				'change_detect', $feed['username'], $feed['password'], FALSE,
-				$top1m_probe_meta, $feed['headers'] ?? array()
-			);
+			$probe_result = pfb_download(new PfbDownloadRequest(
+				listUrl: $feed['url'],
+				downloadPath: "{$file_dwn}.md5",
+				flex: FALSE,
+				header: $file_dwn,
+				format: '',
+				logType: $logtype,
+				timeout: $timeout,
+				type: 'change_detect',
+				username: $feed['username'],
+				password: $feed['password'],
+				sourceInterface: FALSE,
+				extraHeaders: $feed['headers'] ?? array(),
+			));
+			$probe_ok = $probe_result->success;
+			$top1m_probe_meta = $probe_result->responseMeta ?? array();
 			$probe_status = $top1m_probe_meta['status'] ?? '';
 			$probe_hash = ($probe_status === '200')
 				? pfb_content_hash("{$file_dwn}.md5.raw", TRUE) : FALSE;
