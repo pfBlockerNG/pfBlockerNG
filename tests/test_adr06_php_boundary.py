@@ -106,13 +106,18 @@ def _write_plain_boundary_manifest(tmp_path: Any, *, top1m_enabled: bool) -> tup
     pfb_unbound.pfb["python_tld_wildcard"] = True
     pfb_unbound.pfb["pfb_py_tld"] = oracle
 
+    if top1m_enabled:
+        top1m_path = os.path.join(str(tmp_path), "pfb_py_top1m.txt")
+        with open(top1m_path, "w", encoding="utf-8", newline="") as fh:
+            for domain in src_config.get("top1m_list", []):
+                fh.write(f"{domain}\n")
+
     manifest = {
         "version": 1,
         "config": {
             "tld_wildcard_blacklist": src_config.get("tld_wildcard_blacklist", []),
             "tld_wildcard_exclusion": src_config.get("tld_wildcard_exclusion", []),
             "user_whitelist": src_config.get("user_whitelist", []),
-            "top1m_list": src_config.get("top1m_list", []),
             "top1m_enabled": top1m_enabled,
         },
         "feeds": feeds,
