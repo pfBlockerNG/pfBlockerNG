@@ -78,6 +78,25 @@ function pfb_top1m_fetch_if_needed(string $dbdir, ?callable $fetch = NULL): bool
 	return TRUE;
 }
 
+/** Record the manifest publication outcome without logging a false completion. */
+function pfb_dnsbl_publish_result(bool $published, ?callable $logger = NULL): bool {
+	global $pfb;
+	$logger = $logger ?? 'pfb_logger';
+	if (!$published) {
+		$pfb['dnsbl_publish_failed'] = TRUE;
+		$logger('... FAILED (publication error)', 2);
+		return FALSE;
+	}
+	$logger('... completed', 1);
+	return TRUE;
+}
+
+/** Keep the reload and ADR-12 post-hook change signal on one predicate. */
+function pfb_dnsbl_reload_needed(bool $publish_failed, bool $data_changed, bool $update, bool $python,
+    bool $safesearch_update, bool $unlock_forced): bool {
+	return !$publish_failed && ($data_changed || $update || $python || $safesearch_update || $unlock_forced);
+}
+
 /**
  * Parse one generic IP-feed line without touching run state or emitting output.
  * @param array{vtype:string,pftype:string,custom:bool,cidr_floor_v4:int|string,cidr_floor_v6:int|string,suppression:string,range:string,ipv4:string,ipv6:string} $config
@@ -2259,10 +2278,7 @@ function sync_package_pfblockerng($cron='') {
 			// plugin's init builds the DNSBL structures from. Python then owns
 			// parse/normalise/classify (the dropped shell/PHP passes) and emits
 			// pfb_py_count itself.
-			if (pfb_unbound_python_sources($pfb_py_feeds) === FALSE) {
-				$pfb['dnsbl_publish_failed'] = TRUE;
-			}
-			pfb_logger("... completed", 1);
+			pfb_dnsbl_publish_result(pfb_unbound_python_sources($pfb_py_feeds) !== FALSE);
 		}
 
 		else {
@@ -2614,8 +2630,8 @@ function sync_package_pfblockerng($cron='') {
 	// user_unlock. Captured BEFORE the reload: pfb_update_unbound() unlinks the file,
 	// so a post-reload file_exists() would always return false (issue #517).
 	$pfb_dnsbl_unlock_forced = file_exists($pfb['dnsbl_unlock']);
-	if (empty($pfb['dnsbl_publish_failed']) && ($pfb_data_changed || $pfbupdate || $pfbpython || $safesearch_update ||
-	    $pfb_dnsbl_unlock_forced)) {
+	if (pfb_dnsbl_reload_needed(!empty($pfb['dnsbl_publish_failed']), !empty($pfb_data_changed), !empty($pfbupdate),
+	    !empty($pfbpython), !empty($safesearch_update), !empty($pfb_dnsbl_unlock_forced))) {
 
 		// Create backup of existing DNSBL Unbound database
 
@@ -4369,8 +4385,9 @@ function sync_package_pfblockerng($cron='') {
 	pfb_run_hooks('post', array(
 		'TRIGGER'		=> $pfb_hook_val,
 		'IP_CHANGED'		=> (!empty($pfb['filter_configure']) || !empty($pfb_ip_unlock_forced)) ? '1' : '0',
-		'DNSBL_CHANGED'		=> (!empty($pfb_data_changed) || !empty($pfbupdate) || !empty($pfbpython) ||
-						!empty($safesearch_update) || !empty($pfb_dnsbl_unlock_forced)) ? '1' : '0',
+		'DNSBL_CHANGED'		=> pfb_dnsbl_reload_needed(!empty($pfb['dnsbl_publish_failed']),
+						!empty($pfb_data_changed), !empty($pfbupdate), !empty($pfbpython),
+						!empty($safesearch_update), !empty($pfb_dnsbl_unlock_forced)) ? '1' : '0',
 		'STATUS'		=> 'ok',
 		'CHANGED_IP_ALIASES'	=> implode(' ', array_unique($pfb['changed_ip_aliases'])),
 		'CHANGED_DNSBL_GROUPS'	=> implode(' ', array_unique($pfb['changed_dnsbl_groups'])),
