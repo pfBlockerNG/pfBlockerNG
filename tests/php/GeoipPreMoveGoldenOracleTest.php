@@ -82,6 +82,17 @@ final class GeoipPreMoveGoldenOracleTest extends TestCase
 		);
 	}
 
+	public function testPopulatedReputationPreservesLiteralTabMarkerInCountryOptions(): void
+	{
+		$this->seed();
+		$hostile = "\t\"__PFB_REPUTATION_TAB_ONLY__\" => \"Hostile (1)\"\n\t";
+
+		pfb_build_reputation_tab($hostile, $this->output);
+
+		$page = (string) file_get_contents("{$this->output}/pfblockerng_reputation.php");
+		$this->assertStringContainsString($hostile, $page);
+	}
+
 	public function testUnreadableContinentInputUsesSafeContinuation(): void
 	{
 		$this->seed();

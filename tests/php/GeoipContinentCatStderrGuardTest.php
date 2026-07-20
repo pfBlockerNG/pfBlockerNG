@@ -5,9 +5,9 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1299: the continent-file ISO-append `exec("cat ... 2>&1")` in
- * pfblockerng.php's pfblockerng_uc_countries() (line ~1423) merges cat's
- * stderr into the continent `.txt` data file. A cat failure (any cause --
+ * issue #1299: the web-owned pfblockerng_uc_countries() continent-file ISO
+ * append `exec("cat ... 2>&1")` merges cat's stderr into the continent `.txt`
+ * data file. A cat failure (any cause --
  * a TOCTOU race, permission denial, etc.) writes stderr text (e.g.
  * "cat: <path>: Is a directory") into the file as if it were feed data;
  * the package-owned pfblockerng_get_countries() reparse
@@ -140,14 +140,14 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 
 	public function testCatFailureOnUnreadableIsoDoesNotCorruptContinentFile(): void
 	{
-		// A directory: file_exists() is TRUE (passes the guard at line 1412
-		// unchanged), but cat fails to read it -- a real, unmocked failure,
+		// A directory: file_exists() is TRUE (passes the source guard unchanged),
+		// but cat fails to read it -- a real, unmocked failure,
 		// not chmod-based (chmod denial is meaningless under root; a
 		// directory fails identically root or not).
 		$isoDir = self::$tmpDir . '/unreadable_iso_v4';
 		@mkdir($isoDir, 0777, TRUE);
 		$this->assertTrue(is_dir($isoDir), 'fixture must be a real directory to reproduce "cat: ...: Is a directory"');
-		$this->assertTrue(file_exists($isoDir), 'fixture must pass the file_exists() guard at line 1412 unchanged');
+		$this->assertTrue(file_exists($isoDir), 'fixture must pass the source file_exists() guard unchanged');
 
 		$pfbFile = self::$tmpDir . '/continent_v4.txt';
 		file_put_contents($pfbFile, "# partial continent output\n");
@@ -162,7 +162,7 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 	{
 		// Assert against the single extracted exec() line, not the whole
 		// source string -- keeps the failure diff readable (the whole-source
-		// form dumps ~2700 lines on failure).
+		// form dumps the full source on failure).
 		if (!preg_match(
 			'/exec\("\{\$pfb\[\'cat\'\]\} \{\$iso_file_esc\} >> \{\$pfb_file_esc\}( 2>&1)?"'
 			. '(?:,\s*\$cat_output,\s*\$cat_status)?\);/',

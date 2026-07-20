@@ -9,13 +9,13 @@ use PHPUnit\Framework\TestCase;
  * $networks / $total / $lastline -- the per-ISO "Total Networks" line counts
  * in pfblockerng_geoip.inc's continent-file rebuild (issue #1261).
  *
- * $networks (line ~1414) is NOT display-only: it is written into a header
- * line that is later re-parsed, and "Total Networks: 0" or "...: NA" trips a
- * placeholder branch that BLANKS the country's IP list (transient read
- * failure treated as "genuinely empty" is silent data loss). $total (line
- * ~1574) only ever renders as "(N)" in a dropdown -- display-only, so its
- * `?? 0` NULL fallback is the safe, correct direction and needs no fix, only
- * a mirror test (house precedent: tests/php/AliasCntGrepCountGuardTest.php).
+ * `$networks` is NOT display-only: it is written into a header line that is
+ * later re-parsed, and "Total Networks: 0" or "...: NA" trips a placeholder
+ * branch that BLANKS the country's IP list (transient read failure treated as
+ * "genuinely empty" is silent data loss). `$total` only ever renders as "(N)"
+ * in a dropdown -- display-only, so its `?? 0` NULL fallback is the safe,
+ * correct direction and needs no fix, only a mirror test (house precedent:
+ * tests/php/AliasCntGrepCountGuardTest.php).
  *
  * The file carries top-level execution and cannot be require()d
  * off-appliance. The $networks header block is eval-extracted verbatim into a
@@ -164,7 +164,7 @@ final class CountryNetworksCountGuardTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Rows 3+4: $total (line ~1574) -- display-only, `?? 0` is correct as-is.
+	// Rows 3+4: $total -- display-only, `?? 0` is correct as-is.
 	// -----------------------------------------------------------------------
 
 	public function testTotalAssignedFromPfbCountLinesWithZeroFallback(): void
@@ -186,7 +186,7 @@ final class CountryNetworksCountGuardTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Rows 5+6: $lastline (line ~1514) -- the EOF-flush trigger
+	// Rows 5+6: $lastline -- the EOF-flush trigger
 	// (`$linenum == $lastline`). `?? 0` preserves the exec()-era `?: 0`: a
 	// failed count yields 0, which $linenum (starts at 1) can never equal, so
 	// the flush stays unreachable -- and the fopen() of the same file fails
