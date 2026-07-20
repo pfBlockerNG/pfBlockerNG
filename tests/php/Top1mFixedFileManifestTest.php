@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /** Issue #1542: TOP1M is a fixed sidecar file, not manifest-embedded data. */
 final class Top1mFixedFileManifestTest extends TestCase
@@ -122,6 +123,7 @@ final class Top1mFixedFileManifestTest extends TestCase
 		$this->assertFalse($restore_called);
 		$this->assertSame("old.example\n", file_get_contents($target));
 		$this->assertSame('{"old":true}', file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
+		$this->assertSame([], glob("{$this->tmp}/.pfbtop1m_prev_*") ?: []);
 	}
 
 	public function testManifestFailureRollsBackTop1mViaAtomicRename(): void
@@ -151,13 +153,37 @@ final class Top1mFixedFileManifestTest extends TestCase
 		$this->assertSame('{"old":true}', file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
 	}
 
-	public function testDefaultOwnershipFailureAbortsFixedFilePublication(): void
+	public function testMetadataFailureAbortsFixedFilePublication(): void
 	{
 		$source = "{$this->tmp}/source.txt";
 		$target = "{$this->tmp}/target.txt";
 		file_put_contents($source, "source.example\n");
+		$ops = $this->successfulOwnershipOps();
+		$ops['metadata'] = static fn(string $file): bool => FALSE;
 
-		$this->assertFalse(pfb_unbound_py_atomic_copy($source, $target));
+		$this->assertFalse(pfb_unbound_py_atomic_copy($source, $target, $ops));
+		$this->assertFileDoesNotExist($target);
+	}
+
+	public static function ownershipFailureCallbacks(): array
+	{
+		return [
+			'chown' => ['chown'],
+			'chgrp' => ['chgrp'],
+			'chmod' => ['chmod'],
+		];
+	}
+
+	#[DataProvider('ownershipFailureCallbacks')]
+	public function testOwnershipFailureAbortsFixedFilePublication(string $failed_callback): void
+	{
+		$source = "{$this->tmp}/source.txt";
+		$target = "{$this->tmp}/target.txt";
+		file_put_contents($source, "source.example\n");
+		$ops = $this->successfulOwnershipOps();
+		$ops[$failed_callback] = static fn(string $file, $value): bool => FALSE;
+
+		$this->assertFalse(pfb_unbound_py_atomic_copy($source, $target, $ops));
 		$this->assertFileDoesNotExist($target);
 	}
 

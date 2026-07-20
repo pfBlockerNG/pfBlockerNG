@@ -7871,7 +7871,10 @@ function pfb_unbound_py_atomic_copy(string $source, string $path, array $stream_
 	$chown_fn = $stream_ops['chown'] ?? static fn($file, $owner) => @chown($file, $owner);
 	$chgrp_fn = $stream_ops['chgrp'] ?? static fn($file, $group) => @chgrp($file, $group);
 	$chmod_fn = $stream_ops['chmod'] ?? static fn($file, $mode) => @chmod($file, $mode);
-	if (!$chown_fn($tmp, 'root') || !$chgrp_fn($tmp, 'unbound') || !$chmod_fn($tmp, 0640)) {
+	$metadata_fn = $stream_ops['metadata'] ?? static function ($file) use ($chown_fn, $chgrp_fn, $chmod_fn): bool {
+		return $chown_fn($file, 'root') && $chgrp_fn($file, 'unbound') && $chmod_fn($file, 0640);
+	};
+	if (!$metadata_fn($tmp)) {
 		@unlink($tmp);
 		return FALSE;
 	}
@@ -8644,6 +8647,10 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 			return FALSE;
 		}
 		if (!pfb_unbound_py_atomic_copy($top1m_source, $top1m_target, $top1m_atomic_ops)) {
+			if ($top1m_backup !== FALSE) {
+				@unlink($top1m_backup);
+				$top1m_backup = FALSE;
+			}
 			$discard_unpublished_generation();
 			pfb_logger("\nTOP1M fixed-file publication failed: {$top1m_target}", 2);
 			return FALSE;
