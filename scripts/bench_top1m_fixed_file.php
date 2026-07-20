@@ -5,14 +5,17 @@ declare(strict_types=1);
 // Issue #1542 dev-host benchmark worker. The Python driver starts one fresh
 // process per trial and wraps it with /usr/bin/time for peak RSS.
 
-if ($argc !== 5 || !in_array($argv[1], ['write', 'patch'], TRUE)) {
-	fwrite(STDERR, "usage: php bench_top1m_fixed_file.php write|patch WORKTREE SANDBOX EXPECTED_LINES\n");
+if ($argc !== 6 || !in_array($argv[1], ['write', 'patch'], TRUE)
+	|| !in_array($argv[2], ['embedded', 'fixed'], TRUE)) {
+	fwrite(STDERR,
+		"usage: php bench_top1m_fixed_file.php write|patch embedded|fixed WORKTREE SANDBOX EXPECTED_LINES\n");
 	exit(2);
 }
 
-[$script, $phase, $worktree, $sandbox, $expected_arg] = $argv;
+[$script, $phase, $contract, $worktree, $sandbox, $expected_arg] = $argv;
 $expected_lines = (int) $expected_arg;
 $sample_domain = 'top1m-0000000.benchmark.invalid';
+$last_domain = sprintf('top1m-%07d.benchmark.invalid', $expected_lines - 1);
 
 require_once "{$worktree}/tests/php/bootstrap.php";
 
@@ -51,20 +54,26 @@ function benchmark_manifest_contains_key(array $value, string $needle): bool
 	return FALSE;
 }
 
-function benchmark_read_manifest(string $path, string $sample_domain): array
+function benchmark_read_manifest(string $path, string $contract, int $expected_lines,
+	string $sample_domain, string $last_domain): array
 {
 	$json = @file_get_contents($path);
 	$manifest = is_string($json) ? json_decode($json, TRUE) : NULL;
 	if (!is_array($manifest)) {
 		throw new RuntimeException("manifest missing or invalid: {$path}");
 	}
-	foreach (['top1m_list', 'top1m_ref'] as $retired_key) {
-		if (benchmark_manifest_contains_key($manifest, $retired_key)) {
-			throw new RuntimeException("manifest contains retired key: {$retired_key}");
-		}
+	if (benchmark_manifest_contains_key($manifest, 'top1m_ref')) {
+		throw new RuntimeException('manifest contains unsupported key: top1m_ref');
 	}
-	if (str_contains($json, $sample_domain)) {
-		throw new RuntimeException('manifest contains sampled TOP1M domain');
+	$top1m_list = $manifest['config']['top1m_list'] ?? NULL;
+	if ($contract === 'embedded') {
+		if (!is_array($top1m_list) || count($top1m_list) !== $expected_lines
+			|| ($top1m_list[0] ?? NULL) !== $sample_domain
+			|| ($top1m_list[$expected_lines - 1] ?? NULL) !== $last_domain) {
+			throw new RuntimeException('embedded TOP1M contract missing exact deterministic domain list');
+		}
+	} elseif (benchmark_manifest_contains_key($manifest, 'top1m_list') || str_contains($json, $sample_domain)) {
+		throw new RuntimeException('fixed-file TOP1M contract leaked list or sampled domain into manifest');
 	}
 	return $manifest;
 }
@@ -90,29 +99,36 @@ try {
 		if (!is_array($result)) {
 			throw new RuntimeException('pfb_unbound_python_sources returned failure');
 		}
-		$manifest = benchmark_read_manifest($GLOBALS['pfb']['unbound_py_sources'], $sample_domain);
+		$manifest = benchmark_read_manifest($GLOBALS['pfb']['unbound_py_sources'], $contract,
+			$expected_lines, $sample_domain, $last_domain);
 		if (($manifest['config']['top1m_enabled'] ?? NULL) !== TRUE) {
-			throw new RuntimeException('manifest did not enable fixed-file TOP1M');
+			throw new RuntimeException('manifest did not enable TOP1M');
 		}
 
 		$fixed = $GLOBALS['pfb']['unbound_py_top1m'];
-		$handle = @fopen($fixed, 'rb');
-		if ($handle === FALSE) {
-			throw new RuntimeException("fixed TOP1M output missing: {$fixed}");
-		}
-		$line_count = 0;
-		while (fgets($handle) !== FALSE) {
-			$line_count++;
-		}
-		fclose($handle);
-		if ($line_count !== $expected_lines) {
-			throw new RuntimeException("fixed TOP1M line count {$line_count}; expected {$expected_lines}");
+		$fixed_bytes = 0;
+		if ($contract === 'fixed') {
+			$handle = @fopen($fixed, 'rb');
+			if ($handle === FALSE) {
+				throw new RuntimeException("fixed TOP1M output missing: {$fixed}");
+			}
+			$line_count = 0;
+			while (fgets($handle) !== FALSE) {
+				$line_count++;
+			}
+			fclose($handle);
+			if ($line_count !== $expected_lines) {
+				throw new RuntimeException("fixed TOP1M line count {$line_count}; expected {$expected_lines}");
+			}
+			$fixed_bytes = (int) filesize($fixed);
+		} elseif (file_exists($fixed)) {
+			throw new RuntimeException('embedded TOP1M writer unexpectedly published fixed sidecar');
 		}
 
 		printf("wall_seconds=%.9f\n", $elapsed);
 		printf("manifest_bytes=%d\n", filesize($GLOBALS['pfb']['unbound_py_sources']));
-		printf("fixed_bytes=%d\n", filesize($fixed));
-		printf("fixed_lines=%d\n", $line_count);
+		printf("fixed_bytes=%d\n", $fixed_bytes);
+		printf("top1m_lines=%d\n", $expected_lines);
 		exit(0);
 	}
 
@@ -122,7 +138,8 @@ try {
 	if (!$ok) {
 		throw new RuntimeException('pfb_unbound_python_sources_patch returned failure');
 	}
-	$manifest = benchmark_read_manifest($GLOBALS['pfb']['unbound_py_sources'], $sample_domain);
+	$manifest = benchmark_read_manifest($GLOBALS['pfb']['unbound_py_sources'], $contract,
+		$expected_lines, $sample_domain, $last_domain);
 	if (($manifest['config']['user_unlock'] ?? NULL) !== ['benchmark-unlock.invalid']) {
 		throw new RuntimeException('scalar manifest patch was not observable');
 	}

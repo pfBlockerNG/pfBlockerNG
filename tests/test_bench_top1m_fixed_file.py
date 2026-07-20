@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import json
+import os
+import shutil
+import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,3 +58,72 @@ def test_report_line_carries_fresh_process_trials_wall_and_rss() -> None:
     assert "wall_median=2.000000s" in line
     assert "wall_range=1.000000..3.000000s" in line
     assert "peak_rss_max=20000B" in line
+
+
+def test_each_native_manifest_contract_is_validated_without_cross_feeding(tmp_path: Path) -> None:
+    embedded_dir = tmp_path / "embedded"
+    embedded_dir.mkdir()
+    embedded_manifest = embedded_dir / "pfb_py_sources.json"
+    embedded_manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "config": {"top1m_enabled": True, "top1m_list": [_BENCH.domain_for(i) for i in range(3)]},
+                "feeds": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fixed_dir = tmp_path / "fixed"
+    fixed_dir.mkdir()
+    fixed_manifest = fixed_dir / "pfb_py_sources.json"
+    fixed_manifest.write_text(
+        json.dumps({"version": 1, "config": {"top1m_enabled": True}, "feeds": []}), encoding="utf-8"
+    )
+    _BENCH.generate_top1m(fixed_dir / "pfb_py_top1m.txt", 3)
+
+    assert _BENCH._assert_native_contract(embedded_manifest, "embedded", 3) == (embedded_manifest.stat().st_size, 0)
+    assert _BENCH._assert_native_contract(fixed_manifest, "fixed", 3) == (
+        fixed_manifest.stat().st_size,
+        (fixed_dir / "pfb_py_top1m.txt").stat().st_size,
+    )
+    with pytest.raises(RuntimeError, match="embedded TOP1M contract"):
+        _BENCH._assert_native_contract(fixed_manifest, "embedded", 3)
+    with pytest.raises(RuntimeError, match="fixed-file TOP1M contract"):
+        _BENCH._assert_native_contract(embedded_manifest, "fixed", 3)
+
+
+def test_timed_timeout_kills_descendant_process_group(tmp_path: Path) -> None:
+    child_pid_path = tmp_path / "child.pid"
+    child_code = "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)"
+    parent_code = (
+        "import pathlib,subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c',sys.argv[2]]); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); "
+        "time.sleep(300)"
+    )
+    time_bin = shutil.which("time") or "/usr/bin/time"
+    time_flag = _BENCH._time_flag(time_bin, 10)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _BENCH._run_timed(
+            [sys.executable, "-c", parent_code, str(child_pid_path), child_code],
+            2,
+            time_bin,
+            time_flag,
+            kill_grace_seconds=0.2,
+        )
+
+    child_pid = int(child_pid_path.read_text())
+    child_state = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(child_pid)], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    try:
+        assert not child_state or child_state.startswith("Z"), (
+            f"timed-out child survived: pid={child_pid} state={child_state}"
+        )
+    finally:
+        if child_state and not child_state.startswith("Z"):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child_pid, signal.SIGKILL)
