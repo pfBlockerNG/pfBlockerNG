@@ -9795,6 +9795,62 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 }
 
 
+function pfb_top1m_active_provider(): array
+{
+	global $pfb;
+	$source = $pfb['dnsbl_top1m_type'] ?? PfbTop1mSource::Tranco;
+	$key = $source instanceof PfbTop1mSource ? $source->value : (string) $source;
+	return pfb_top1m_providers()[$key] ?? pfb_top1m_providers()[PfbTop1mSource::Tranco->value];
+}
+
+function pfb_top1m_parse_source_row(string $line, array $provider): ?string
+{
+	$domain_col = (int) ($provider['domain_col'] ?? 1);
+	if ($line === '' || strpos($line, '.') === FALSE
+		|| ($domain_col > 0 && strpos($line, ',') === FALSE)) {
+		return NULL;
+	}
+	$csvline = str_getcsv($line, ',', '"', "\\");
+	if (($provider['parse'] ?? 'rank_domain') === 'rank_domain'
+		&& !ctype_digit((string) ($csvline[0] ?? ''))) {
+		return NULL;
+	}
+	$domain = strtolower($csvline[$domain_col] ?? '');
+	if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9][A-Za-z0-9-]+)$/D', $domain)) {
+		return NULL;
+	}
+	return $domain;
+}
+
+function pfb_top1m_candidate_valid(string $path, array $provider): bool
+{
+	if (!is_file($path) || !is_readable($path)) {
+		return FALSE;
+	}
+	$sample = @file_get_contents($path, FALSE, NULL, 0, 65536);
+	if ($sample === FALSE || pfb_text_sanity($sample) !== NULL) {
+		return FALSE;
+	}
+	$handle = @fopen($path, 'r');
+	if ($handle === FALSE) {
+		return FALSE;
+	}
+	$pending_header = !empty($provider['header']);
+	$valid = FALSE;
+	while (($line = @fgets($handle)) !== FALSE) {
+		if ($pending_header) {
+			$pending_header = FALSE;
+			continue;
+		}
+		if (pfb_top1m_parse_source_row($line, $provider) !== NULL) {
+			$valid = TRUE;
+			break;
+		}
+	}
+	fclose($handle);
+	return $valid;
+}
+
 // Process TOP1M database
 // $provider_override (ADR-59 test seam): when given, its 'parse'/'header'/
 // 'domain_col' knobs drive the builder directly instead of resolving through
@@ -9816,9 +9872,7 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 	// the registry itself uses, so the resolved shape stays rank_domain/zip.
 	$top1m_type	= $pfb['dnsbl_top1m_type'] ?? PfbTop1mSource::Tranco;
 	$top1m_provider	= $provider_override ?? (pfb_top1m_providers()[$top1m_type->value] ?? array());
-	$top1m_parse	= $top1m_provider['parse'] ?? 'rank_domain';
 	$top1m_header	= $top1m_provider['header'] ?? FALSE;
-	$top1m_domcol	= $top1m_provider['domain_col'] ?? 1;
 
 	// Array of TLDs to include in Whitelist
 	$pfb_include = explode(',', $pfb['dnsbl_top1m_inc']);
@@ -9869,18 +9923,6 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 					continue;
 				}
 
-				// ADR-59: Cloudflare's dataset is a SINGLE 'domain' column (domain_col
-				// 0) -- a real data line has no comma at all (no column to split), so the
-				// comma requirement below would wrongly reject every line. Only demand a
-				// comma when a real multi-column split is expected (domain_col > 0, every
-				// other provider today); domain_col 0 still requires a '.' (every domain
-				// has one).
-				$top1m_needs_comma = $top1m_domcol > 0;
-				if (strpos($line, '.') === FALSE || empty($line) ||
-				    ($top1m_needs_comma && strpos($line, ',') === FALSE)) {
-					continue;
-				}
-
 				// Display progress indicator
 				if ($linecnt % 100000 == 0) {
 					pfb_logger('.', 1);
@@ -9900,21 +9942,8 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 				// "1,garbage,extra.dot") used to satisfy the rank-only guard and reach the
 				// TLD-extraction strrpos() below with a garbage result, wrongly counting the
 				// row as valid (#954 review) -- the SAME garbage-body-wipe class as #886/#892.
-				$csvline = str_getcsv($line, ',', '"', "\\");
-				// #920: fold once here -- the GUI's inclusion keys are always lowercase
-				// (pfblockerng_dnsbl.php's $options_alexa_inclusion), so an uppercase/
-				// mixed-case feed domain otherwise passes every guard below but silently
-				// fails the isset($pfb_include[$tld]) compare; folding here also feeds
-				// the 'www.' strip and the write, so every downstream use is canonical.
-				$domain = strtolower($csvline[$top1m_domcol] ?? '');
-				if ($top1m_parse === 'rank_domain' && !ctype_digit((string) ($csvline[0] ?? ''))) {
-					continue;
-				}
-				// #920: the `D` modifier anchors '$' to the true string end -- without it, a
-				// quoted-unterminated CSV field (str_getcsv() retains its trailing "\n", unlike
-				// every other field shape) wrongly passes and can flip a garbage-only feed from
-				// dead (preserve) to valid (wipe), the same class of bug the #886/#892 guards fix.
-				if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9][A-Za-z0-9-]+)$/D', $domain)) {
+				$domain = pfb_top1m_parse_source_row($line, $top1m_provider);
+				if ($domain === NULL) {
 					continue;
 				}
 				// Count every valid CSV row BEFORE the match/break below, so a
@@ -11622,6 +11651,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 	$password = $request->password;
 	$srcint = $request->sourceInterface;
 	$extra_headers = $request->extraHeaders;
+	$top1m_provider = ($type === 'top1m') ? pfb_top1m_active_provider() : array();
 	global $pfb;
 	$http_status = '';
 	$elog = ">> {$pfb['log']} 2>&1";
@@ -12158,6 +12188,12 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					pfb_logger("\n[pfb_download] top1m extraction failed (gunzip exit {$retval})", 2);
 					return PfbDownloadResult::failure();
 				}
+				if (!pfb_top1m_candidate_valid($top1m_stage, $top1m_provider)) {
+					pfb_validate_log($header, 'top1m', 'semantic_invalid', basename($top1m_stage));
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
+					return PfbDownloadResult::failure();
+				}
 				$top1m_base_backup = @tempnam(dirname($file_dwn), '.pfbtop1m_base_');
 				if ($top1m_base_backup === FALSE || !@unlink($top1m_base_backup) || !@mkdir($top1m_base_backup, 0700)) {
 					unlink_if_exists($file_download);
@@ -12389,6 +12425,12 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
+					if (!pfb_top1m_candidate_valid($top1m_staged_files[0], $top1m_provider)) {
+						pfb_validate_log($header, 'top1m', 'semantic_invalid', basename($top1m_staged_files[0]));
+						rmdir_recursive($top1m_stage);
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
+					}
 				}
 				$top1m_base_backup = @tempnam(dirname($file_dwn), '.pfbtop1m_base_');
 				if ($top1m_base_backup === FALSE || !@unlink($top1m_base_backup) || !@mkdir($top1m_base_backup, 0700)) {
@@ -12551,6 +12593,12 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						unlink_if_exists($top1m_stage);
 					}
 					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				if (!pfb_top1m_candidate_valid($top1m_stage, $top1m_provider)) {
+					pfb_validate_log($header, 'top1m', 'semantic_invalid', basename($top1m_stage));
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
 					return PfbDownloadResult::failure();
 				}
 				$top1m_base_backup = @tempnam(dirname($file_dwn), '.pfbtop1m_base_');

@@ -261,14 +261,14 @@ final class Top1mDccDetectorTest extends TestCase
 
 	public function testTop1mZipFileTargetPublishesSingleRegularMemberAndThenPersistsBaseline(): void
 	{
-		$archive = $this->zipFixture('single.zip', ['feed/top.csv' => "rank,example.test\n"]);
+		$archive = $this->zipFixture('single.zip', ['feed/top.csv' => "1,example.test\n"]);
 		$this->requireZipTarSupport($archive);
 		$base = $this->dir . '/top-1m.csv.zip';
 		$active = $this->dir . '/top-1m.csv';
 		file_put_contents($active, 'old active');
 
 		$this->assertTrue($this->downloadTop1m($archive, $base, $active));
-		$this->assertSame("rank,example.test\n", file_get_contents($active));
+		$this->assertSame("1,example.test\n", file_get_contents($active));
 		$this->assertSame(file_get_contents($archive), file_get_contents("{$base}.orig"));
 		$this->assertSame(pfb_content_hash($archive, TRUE), pfb_hash_read($base)['digest']);
 		$this->assertFileExists($GLOBALS['pfb']['dbdir'] . '/top-1m.update');
@@ -305,11 +305,11 @@ final class Top1mDccDetectorTest extends TestCase
 		$base = $this->dir . '/top-1m.csv.gz';
 		$active = $this->dir . '/top-1m.csv';
 		file_put_contents($active, 'old active');
-		$gzip = gzencode("rank,example.test\n");
+		$gzip = gzencode("1,example.test\n");
 		$gzip_path = $this->dir . '/feed.gz';
 		file_put_contents($gzip_path, $gzip);
 		$this->assertTrue($this->downloadTop1m($gzip_path, $base, $active));
-		$this->assertSame("rank,example.test\n", file_get_contents($active));
+		$this->assertSame("1,example.test\n", file_get_contents($active));
 
 		$broken_base = $this->dir . '/broken.csv.gz';
 		$broken_active = $this->dir . '/broken.csv';
@@ -323,9 +323,9 @@ final class Top1mDccDetectorTest extends TestCase
 		$plain_active = $this->dir . '/plain.active.csv';
 		file_put_contents($plain_active, 'old plain');
 		$plain = $this->dir . '/plain.txt';
-		file_put_contents($plain, "rank,plain.test\n");
+		file_put_contents($plain, "1,plain.test\n");
 		$this->assertTrue($this->downloadTop1m($plain, $plain_base, $plain_active));
-		$this->assertSame("rank,plain.test\n", file_get_contents($plain_active));
+		$this->assertSame("1,plain.test\n", file_get_contents($plain_active));
 	}
 
 	public function testTop1mPersistenceFailureRollsBackActiveAndEveryBaselineAcrossFormats(): void
@@ -334,28 +334,28 @@ final class Top1mDccDetectorTest extends TestCase
 			'gzip' => [
 				'source' => (function (): string {
 					$path = $this->dir . '/persist.gz';
-					file_put_contents($path, gzencode("rank,gzip.test\n"));
+					file_put_contents($path, gzencode("1,gzip.test\n"));
 					return $path;
 				})(),
 				'base' => $this->dir . '/persist-gzip.csv.gz',
 				'active' => $this->dir . '/persist-gzip.csv',
-				'body' => "rank,gzip.test\n",
+				'body' => "1,gzip.test\n",
 			],
 			'zip' => [
-				'source' => $this->zipFixture('persist.zip', ['feed/top.csv' => "rank,zip.test\n"]),
+				'source' => $this->zipFixture('persist.zip', ['feed/top.csv' => "1,zip.test\n"]),
 				'base' => $this->dir . '/persist-zip.csv.zip',
 				'active' => $this->dir . '/persist-zip.csv',
-				'body' => "rank,zip.test\n",
+				'body' => "1,zip.test\n",
 			],
 			'plain' => [
 				'source' => (function (): string {
 					$path = $this->dir . '/persist.txt';
-					file_put_contents($path, "rank,plain.test\n");
+					file_put_contents($path, "1,plain.test\n");
 					return $path;
 				})(),
 				'base' => $this->dir . '/persist-plain.csv',
 				'active' => $this->dir . '/persist-plain.active.csv',
-				'body' => "rank,plain.test\n",
+				'body' => "1,plain.test\n",
 			],
 		];
 		if (!$this->tarReadsZip($fixtures['zip']['source'])) {
