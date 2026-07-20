@@ -568,7 +568,7 @@ def build_repo_matrix(
         folded with pre-built older-release .pkg from ``release_extra_pkgs``, pruned to
         the ``release_keep_devel`` newest devel + ``release_keep_stable`` newest stable.
         Defaults (1/1) reproduce today's latest-only behaviour; setting higher values
-        enables rollback by retaining older releases in the catalog.
+        retains older artifacts in the catalog for diagnostics and reproducibility.
       * NIGHTLY subtree ``nightly/<varver>/<arch>/`` — the freshly built nightly folded in
         with any pre-existing nightlies in that subtree (cache-restored by the caller),
         pruned to the ``nightly_keep`` newest. Skipped when ``build_nightly`` is False.
@@ -857,9 +857,8 @@ def main(argv: list[str]) -> int:
         dest="release_keep_devel",
         help=(
             "devel releases retained per (version, arch) in the release catalog (default 1 = latest-only). "
-            "Set >1 to enable rollback: the release/ catalog then carries multiple devel versions so a user "
-            "can pkg install <name>-devel-<older-version>. The publish job must supply the older .pkg via "
-            "--release-extra-pkgs."
+            "Set >1 to retain multiple devel artifacts for diagnostics and reproducibility. "
+            "The publish job must supply the older .pkg via --release-extra-pkgs."
         ),
     )
     g_matrix.add_argument(
@@ -869,7 +868,7 @@ def main(argv: list[str]) -> int:
         dest="release_keep_stable",
         help=(
             "stable releases retained per (version, arch) in the release catalog (default 1 = latest-only). "
-            "Set >1 to enable rollback: the release/ catalog then carries multiple stable versions. "
+            "Set >1 to retain multiple stable artifacts for diagnostics and reproducibility. "
             "The publish job must supply the older .pkg via --release-extra-pkgs."
         ),
     )

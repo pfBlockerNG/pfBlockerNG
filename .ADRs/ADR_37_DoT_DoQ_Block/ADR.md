@@ -430,3 +430,9 @@ mirroring ADR-36's split) with updated tests and docs. If the ADR-35 registratio
 cover a pure filter-block rule (vs NAT + filter atomicity required by ADR-36), **reduce** to a
 direct `pfB_`-prefix filter rebuild (the existing rebuild-each-sync model) with a documented
 seam limitation.
+
+## Amendment — 2026-07-20: package rollback promise superseded (issue #1593)
+
+DoT/DoQ blocking behaviour and current configuration round trips are unchanged. The old-package
+ignore/preserve promise and inherited `RollbackContractTest` requirement are superseded. Package
+downgrade is unsupported; forward upgrade and grandfathering remain supported.

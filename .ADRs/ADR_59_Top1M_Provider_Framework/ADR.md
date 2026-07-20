@@ -178,3 +178,9 @@ Add an `$extra_headers = array()` param + a per-feed `$feed['headers']` field. W
 - **Tier-A (P4–P5):** the DNSBL page renders the new options + licence notes + the masked token field; **Tier-B** for the token save→reload persistence.
 - **CI health-check (P6):** keyless validated; token skipped-with-reason / secret-checked.
 - **Manual smoke (§7):** the live per-provider download + resolve + no-token-in-log, on a real box.
+
+## Amendment — 2026-07-20: inherited rollback-suite references superseded (issue #1593)
+
+TOP1M provider behaviour, credential handling, current canonical round trips, and supported
+forward-upgrade legacy reads remain unchanged. Completed phase references to
+`RollbackContractTest` are historical; that downgrade-only suite is retired.

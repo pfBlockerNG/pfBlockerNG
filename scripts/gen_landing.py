@@ -534,7 +534,7 @@ def older_releases(pkgs: list[dict]) -> list[dict]:
 
     The per-edition tables surface only the latest devel and stable versions (the
     "install now" view); release retention (ADR-27) keeps several older releases in the
-    catalog, reachable here so a human can find a rollback target. Sorted newest-first
+    catalog, surfaced here for diagnostics and reproducibility. Sorted newest-first
     within each channel, then by ABI. Empty when no older versions are retained.
     """
     latest = latest_versions(pkgs)

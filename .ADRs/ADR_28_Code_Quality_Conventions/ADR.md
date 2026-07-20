@@ -343,3 +343,10 @@ Prompt: `11_Smoke_And_Validation.txt` — the acceptance gate.
     bounded audit" posture) rather than forcing the full sweep.
 
 See the ordered `NN_*.txt` phase prompts in this directory.
+
+## Amendment — 2026-07-20: downgrade tolerance superseded (issue #1593)
+
+Behaviour-preserving forward upgrades, legacy-token reads needed by supported upgrades,
+grandfather defaults, enum boundaries, and canonical round-trip tests remain required. Package
+downgrade is unsupported. Requirements that current writes remain understandable to older package
+versions, plus tests or engineering performed solely to prove that direction, are superseded.

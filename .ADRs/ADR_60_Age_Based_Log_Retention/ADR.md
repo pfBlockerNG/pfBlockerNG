@@ -622,3 +622,9 @@ Issue #1349 renamed the DNSBL group-statistics helper from
 plaintext-summary I/O. The year-bearing timestamp behavior implemented and tested by
 this ADR is unchanged. All accepted-body and Phase 10 references to
 `dnsbl_alias_update()` remain historical names for that same timestamp writer.
+
+## Amendment — 2026-07-20: inherited rollback-suite references superseded (issue #1593)
+
+Log timestamp and retention behaviour is unchanged. Completed phase references to
+`RollbackContractTest` are historical; that downgrade-only suite is retired. Current canonical
+round trips and supported forward-upgrade legacy reads remain required.

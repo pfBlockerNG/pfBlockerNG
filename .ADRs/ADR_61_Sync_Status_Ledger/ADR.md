@@ -492,3 +492,9 @@ section is the authoritative correction.**
    the security surface (#1050).** The exemption predates this ADR, but the widget
    rewrite widened what the exempt endpoint mutates (the whole ledger). Corrected:
    cross-site-shaped requests are rejected on the mutating handlers.
+
+## Amendment — 2026-07-20: fail-safe ledger reads clarified (issue #1593)
+
+Absent/corrupt-ledger reads remain fail-safe current-runtime behaviour. Historical
+"downgrade-safe" wording does not establish an older-package compatibility requirement. Package
+downgrade is unsupported; no inverse ledger conversion or downgrade-only test is required.

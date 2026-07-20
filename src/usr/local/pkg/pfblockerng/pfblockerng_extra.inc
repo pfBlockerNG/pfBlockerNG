@@ -398,9 +398,9 @@ function pfb_cfg_top1m_source_write(PfbTop1mSource|string $source): string
 // ADR-29 — PfbConfig gateway: the single sanctioned gateway for config.xml reads/writes of
 // registered installedpackages/pfblockerng* keys, wrapping config_get/set/del_path with the
 // registered default + field adapter (ADR-28) at the boundary.
-// CONSTRAINTS (ADR-29 §5, ADR-28 §2.2): registry keys are the EXACT existing config.xml keys
-// (no renames); stored values NEVER change (adapters map to the legacy stored string on
-// write); round-trip identity write(read(v)) == v for every canonical stored value.
+// CONSTRAINTS (ADR-29 §5, ADR-28 §2.2 + 2026-07-20 amendments): registry keys are the EXACT
+// existing config.xml keys (no renames); adapters accept supported forward-upgrade legacy
+// tokens and write the current canonical string; write(read(v)) == v for every canonical value.
 // Tests: tests/php/CfgGatewayTest.php (round-trip, default, inventory).
 // ---------------------------------------------------------------------------
 

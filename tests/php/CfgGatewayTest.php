@@ -198,7 +198,7 @@ final class CfgGatewayTest extends TestCase
 	 *   Background: pfb_keep stored as 'on', 'off', or '' (pre-#484-fix legacy empty).
 	 *     Given v.  When read/write.
 	 *     Then 'on' round-trips to 'on'; 'off' round-trips to 'off'.
-	 *     And '' (legacy) normalises to 'off' on write (backward-safe).
+	 *     And '' (legacy) normalises to the current canonical 'off' on write.
 	 */
 	public function testPfbKeepLenientRoundTripOn(): void
 	{

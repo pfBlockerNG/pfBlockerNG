@@ -1,11 +1,12 @@
 # Config gateway (PfbConfig) — reference
 
 Scope: PfbConfig gateway contract, storage adapters, field inventory. Load when:
-touching config fields, `PfbConfig`, or rollback/downgrade behaviour.
+touching config fields, `PfbConfig`, or forward-upgrade behaviour.
 
 Deep reference for the ADR-28/29 config-storage adapters and the `PfbConfig` gateway: the
 operative gateway contract, the storage adapter rule, and the mechanics a change needs when
-adding a field, reasoning about rollback/downgrade, or checking the foreign-key exclusions.
+adding a field, preserving existing behaviour through an upgrade, or checking the foreign-key
+exclusions.
 
 ## Gateway contract (ADR-29)
 
@@ -23,7 +24,7 @@ adding a field, reasoning about rollback/downgrade, or checking the foreign-key 
 
 ## Storage adapter rule (ADR-28 §2.2)
 
-- **Storage is NOT frozen — consistent for back-compat where practical, not byte-for-byte.**
+- **Storage is NOT frozen — forward-upgrade compatible where practical, not byte-for-byte.**
   No versioned migration routine. New options add new stored strings; read-boundary adapters
   absorb legacy tokens and writes emit a canonical token (which may differ from the legacy one
   when behaviour-equivalent). The goal is to preserve *behaviour* on upgrade, not bytes.
@@ -32,10 +33,9 @@ adding a field, reasoning about rollback/downgrade, or checking the foreign-key 
   default. When those differ, a one-time grandfather seed sets the key for existing installs
   at upgrade (e.g. `pfb_rdns_seed_value`, `pfb_feed_filter_install_default`) so the
   absent-default never silently changes an existing user's behaviour.
-- **Downgrade-tolerant.** Older releases string-compared these values, so an unknown token
-  falls through to that release's safe default. Reusing a legacy token as the canonical value
-  (see `pfb_idn`) keeps downgrade behaviour intact; a genuinely new token simply reads as off
-  on an old release — acceptable, the feature didn't exist there.
+- **Canonical current storage.** Read adapters accept legacy tokens needed by supported forward
+  upgrades; writes emit the current canonical token. They do not constrain new storage to what an
+  older package understands.
 - Enums/booleans are the **internal runtime representation**; conversion at the boundary:
   stored string → enum on read; enum → canonical stored string on write.
 - **The enum owns its stored-value semantics** via the `PfbStoredEnum` interface +
@@ -44,16 +44,15 @@ adding a field, reasoning about rollback/downgrade, or checking the foreign-key 
   `PfbConfig::read()` *before* the adapter); the enum's `default()` is only the
   **parse-fallback** for unknown/non-scalar tokens, never the absent-default. A field's `''`
   vs `'off'` off-value is handled by its own enum.
-- **Round-trip pinned by tests** (`CfgAdaptersTest`, `RollbackContractTest`): every canonical
+- **Round-trip pinned by tests** (`CfgAdaptersTest`): every canonical
   token round-trips (`write(read(v)) == v`); a legacy token reads to the right runtime value
-  and writes to its behaviour-equivalent canonical token (itself legacy-valid, so no novel
-  on-disk value reaches an older release).
+  and writes to its behaviour-equivalent canonical token.
 - **Explicitly out of scope (ADR-28 §2.4):** `config.xml` versioned schema/migrations;
   `py_unbound.ini` and any manifest/serialized/wire value read by Python or shell; ADR-26
   locale prefixes; genuine boolean predicates (return `bool`, not an enum); mass realignment
   of untouched lines; `stubs/`, generated artifacts, vendored code.
-- Per-field adapter inventory, field-vocabulary table, since-version convention, and rollback
-  invariants: the sections below.
+- Per-field adapter inventory, field-vocabulary table, and forward-upgrade invariants: the
+  sections below.
 
 ## Adapter inventory (field → enum)
 
@@ -67,14 +66,14 @@ adding a field, reasoning about rollback/downgrade, or checking the foreign-key 
     install is pinned to `'replace'` (pre-ADR-40 full `-T replace`) at install/upgrade by
     `pfb_alias_delta_mode_install_default()` + `pfblockerng_install.inc` — run-once via its `!isset`
     guard — so only a brand-new install takes the `'auto'` absent-default; an upgrade keeps full
-    replace. Absent on a pre-4.0.0 (downgrade) install → feature silently absent (full replace).
+    replace.
     `pfb_alias_delta_batch` (plain string, `NULL`/`NULL` adapters) is the batch-size companion
     field; its stored value is a decimal integer string, clamped to `[64, 4096]` at read time by
     `pfb_alias_delta_batch_clamp()`.
   - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): tokens
     `'on'` (= All) / `'confusable'` / `'off'`. `All` **reuses the original `'on'`** block-all
-    token, so a pre-4.0.0 install round-trips with no migration *and* an older release reading
-    `'on'` still blocks all IDN. `PfbConfig::read('pfb_idn')` returns the enum;
+    token, so current code reading a pre-4.0.0 configuration preserves block-all with no
+    migration. `PfbConfig::read('pfb_idn')` returns the enum;
     `PfbConfig::write()` and the `py_unbound.ini` build both emit `toStored()`; consumers compare
     `=== PfbIdnMode::All` / `::Confusable`. The 4.0.0-alpha-only `'all'` token is **not** carried
     (alpha compatibility is intentionally not maintained) — it reads as Off. One canonical
@@ -107,43 +106,32 @@ adding a field, reasoning about rollback/downgrade, or checking the foreign-key 
 
 1. Add an entry to `pfb_cfg_registry()` with the exact `config.xml` key, its section path,
    the default stored string, and the adapter pair (or `NULL`/`NULL` for plain string).
-2. Set the `since` value to the package release that first introduced the key to `config.xml`
-   (format: `'X.Y.Z'`; for legacy keys the earliest still-shipped release is acceptable).
-3. Verify round-trip: `write(read(v)) == v` for every canonical stored vocabulary value.
-4. Add a test in `tests/php/CfgGatewayTest.php` (round-trip + default-absent cases).
-5. Update the `$inventory` in `testInventoryCompletenessAllKnownKeysAccountedFor()`.
+2. Verify round-trip: `write(read(v)) == v` for every canonical stored vocabulary value.
+3. Add a test in `tests/php/CfgGatewayTest.php` (round-trip + default-absent cases).
+4. Update the `$inventory` in `testInventoryCompletenessAllKnownKeysAccountedFor()`.
 
 When adding a registered key, also add its full path to the `$registeredPaths` property in
 `tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php` (the enforcement sniff).
 
-## Rollback / backward-compat contract (ADR-29 Phase 3)
+## Forward-upgrade contract
 
-The gateway is the enforcement mechanism for downgrade safety. Two invariants hold for every
-registered field, asserted per-field by `tests/php/RollbackContractTest.php`:
+The gateway preserves existing behaviour while configurations move forward:
 
-- **FORWARD invariant** (old store → new code): `PfbConfig::read($key)` on any legacy stored
-  token returns a well-formed runtime value — no crash, correct type, sane default for absent.
-- **BACKWARD invariant** (new code → old store → old code): `PfbConfig::write($key, $v)` only
-  ever emits a token from the field's **known vocabulary** — never a novel on-disk token an
-  older release wouldn't understand. A write **may normalise** a legacy token to a
-  behaviour-equivalent canonical one (e.g. `pfb_idn`: `All` persists as the legacy-understood
-  `'on'`, and the dropped `'all'` normalises to `'off'`); the emitted token is always one an
-  older release string-compares correctly. Guaranteed by construction: backed enums emit
-  `toStored()` (a member of the vocabulary), and plain-string fields use identity adapters.
+- **Legacy-read invariant** (old store → new code): `PfbConfig::read($key)` on any supported
+  legacy stored token returns a well-formed runtime value — no crash, correct type, sane default
+  for absent.
+- **Grandfather invariant**: when an absent current default would change established behaviour,
+  the install/upgrade path writes a one-time seed for existing installations.
+- **Canonical-write invariant**: current code writes the current canonical representation.
 
-### Scope limit (no versioned schema)
-
-This is *not* full backward compatibility — that needs a versioned config schema this package
-deliberately lacks (ADR-28 §1.3). The invariants cover the **vocabulary of existing registered
-fields** only. A genuinely **new option added in a later release** is unknown to an older one:
-on rollback the old code **ignores** the key (inert, not misread or corrupting) and its value is
-**preserved** in `config.xml` for roll-forward — the new feature is simply unusable on the old
-version (inherent, out of scope). `since-version` bounds each field's rollback claim to releases
-at/after that version; it is a per-field scope marker, not a migration.
+Package downgrade is unsupported. Current normalized state is not rewritten for an older
+package, and adapters need not emit old-package-compatible tokens. Before upgrading, keep a
+pfSense configuration backup. If an older package cannot consume the upgraded state, restore the
+pre-upgrade backup or reinstall the current package and continue forward.
 
 ### Section writes are normalised too (issue #930)
 
-`PfbConfig::writeSection($section, $data)` applies the **same** BACKWARD-invariant normalisation
+`PfbConfig::writeSection($section, $data)` applies the **same** canonical normalisation
 as a single-key `PfbConfig::write()` — for every key in `$data` that is registered to the EXACT
 target `$section` (a same-named key registered to a *different* section is foreign data and is
 left untouched) and carries **both** a read and a write adapter, the value is round-tripped
@@ -155,8 +143,7 @@ Before this fix, `writeSection()` called `config_set_path($section, $data)` dire
 every adapter — a legacy read-only token (`alexa_type` `'domcop'`/`'alexa'`, `pfb_idn` alpha-only
 `'all'`) or a hostile/junk value riding **any** section-blob write (a `www/` save handler, an
 install seed, a migration) persisted raw into `config.xml` instead of being coalesced to its
-canonical form. The consequence: the RollbackContract's "never re-emitted" guarantee above now
-holds on section writes too, and a legacy token riding a `readSection()` → `writeSection()`
+canonical form. Consequently, a legacy token riding a `readSection()` → `writeSection()`
 round-trip (a restored backup, an HA sync, a hand-edited `config.xml`) is coalesced to canonical
 on the next save — it does not perpetually re-emit itself just because the write went through the
 section-level helper instead of the per-key one.
@@ -167,7 +154,7 @@ Coverage: `tests/php/CfgGatewayTest.php` — a property test iterating `pfb_cfg_
 tokens, alpha-only `pfb_idn`, a non-scalar/`NULL`/enum-instance/int value, an unadapted key,
 a same-named key in a foreign section, a mixed realistic section blob).
 
-## Field vocabularies (`pfb_cfg_field_vocab()`)
+## Field vocabularies
 
 | Adapter type | Stored vocabulary |
 | ------------ | ----------------- |
@@ -180,76 +167,8 @@ a same-named key in a foreign section, a mixed realistic section blob).
 
 **Excluded fields** — none. `pfb_idn` was previously excluded (`NULL`/`NULL` identity adapters);
 it is now adopted as `PfbIdnMode` (see ADR-28 §2.2). `All` reuses the legacy `'on'` token, so the
-adoption is migration-free and downgrade-safe. `alexa_type` similarly moved off a plain-string
+adoption is migration-free for supported upgrades. `alexa_type` similarly moved off a plain-string
 read-boundary coalesce onto the `PfbTop1mSource` enum (issue #877 review) — same shape, no migration.
-
-## Since-version convention
-
-Every registry entry carries a `'since'` field (`'X.Y.Z'` pattern). It records the first
-package release that introduced the key to `config.xml`. For legacy keys that pre-date the
-registry, the earliest still-shipped release is the baseline (`'1.0.0'` for original-era keys,
-`'2.0.0'` for Python-mode era, `'3.x.y'` for ADR additions). Required format verified by
-`RollbackContractTest::testSinceVersionFollowsVersionPattern`.
-
-## Off-VM downgrade gate
-
-`tests/smoke/test_upgrade_config_stability.py::test_pkg_downgrade_preserves_config_values`
-carries the `repo` marker (deselected from `-m smoke`). Install HIGHER build → write config →
-downgrade to LOWER build via `pkg delete` + reinstall → assert the stored config values are
-preserved (sane reads, behaviour intact) AND the DNSBL probe still returns VIP. Skips cleanly
-when `SMOKE_PKG`/`repo_vm` is absent.
-
-## Downgrade-preparation tool — structural reversals the config layer can't cover
-
-The adapter/rollback contract above covers **config.xml scalar values**. A 4.0.x → pre-4.0.x
-downgrade also has three **structural** (filesystem / cron) changes that a config adapter cannot
-reverse and that do **not** self-heal on an older release:
-
-1. **Relocated custom list scripts.** On upgrade, `pfblockerng_install.inc` moves a user's
-   `{ip,dnsbl}_{pre,post}_*.{sh,py}` scripts from the package root into `list_scripts/`. A
-   pre-4.0.x release resolves list scripts against the package **root only**, so a moved script
-   silently stops running after a downgrade.
-2. **Relocated machine match artifacts (issue #1250).** On upgrade, `pfblockerng_install.inc`
-   moves the machine-owned match artifacts into `match/generated/` under `pfB_Match_*` names. A
-   pre-4.0.x release knows only the old names in the match-folder root, and the leftover
-   `generated/` subdirectory pollutes its alerts glob and permanently satisfies its `ls -A`
-   matchdir presence check.
-3. **The ADR-43 tick cron.** The `pfblockerng.php cron-tick` entry (issue #1204; `pfblockerng.php
-   tick` on a pre-#1204 build) replaced the older `cron`/`dcc`/`ss_refresh`/`bl` fleet; an older
-   release has neither verb, so the entry becomes an orphan and the update fleet is absent until
-   the older release re-syncs.
-
-Everything else the upgrade changed is already downgrade-safe: new-in-4.0.x config keys are
-**ignored** by an older release (inert, preserved for roll-forward), and the `.md5` →
-`.xxhash128` feed sidecars and the `.tar.bz2` → `.tar.zst` MFS archive **self-heal** on the next
-feed update / rebuild.
-
-**`scripts/pfb-downgrade-prep.sh`** reverses exactly those three non-self-healing changes. It is a
-**dev/ops-only** POSIX-sh tool — **not shipped** in the package (release archives are `src/` only) —
-that an operator copies to the appliance and runs as **root, before** the `pkg` downgrade (never
-fired automatically — a normal upgrade or uninstall must not trigger it):
-
-- Moves custom list scripts back to the package root, **skipping shipped scripts by name**
-  (`ip_pre_AWS_*.sh`, `aws_region_prefixes.sh` — the only files pfBlockerNG ships in `list_scripts/`),
-  so a shipped AWS wrapper is never moved. No pkg query is involved. Caveat: a user script named
-  exactly like a shipped wrapper is treated as shipped and left in place — the shipped namespace is
-  reserved.
-- Restores the machine match artifacts to their pre-4.0.x names in the match-folder root
-  (`pfB_Match_ET_v4.txt` → `ETMatch.txt`, `pfB_Match_Exempt_v4.txt` → `matchdedup_v4.txt`,
-  `pfB_Match_Rep_<H>_<fam>.txt` → `match<H>_<fam>.txt`), never clobbering a same-named user file,
-  deletes `*.txt.new` strays, and removes `generated/` once emptied (a blocked removal is reported,
-  not forced).
-- Removes the `tick` cron via `pfSsh.php` (the shipped `install_cron_job()`), so config.xml and the
-  live crontab are rewritten cleanly.
-
-It is **idempotent** (a second run restores nothing and reports the tick cron already gone) and
-prints a short report of what it did.
-
-Coverage: `tests/shell/pfb_downgrade_prep_spec.sh` (shellspec — the file-move logic, the shipped-name
-gate, the matchgen reverse-rename map with its no-clobber/stray/rmdir rules, before/after,
-idempotency, skip-shipped, skip-existing, and the tick-cron output parsing via a fake `pfSsh.php`)
-and `tests/smoke/test_downgrade_prepare.py` (the tool end-to-end on a live VM, `repo` marker — real
-file moves, the matchgen reversal, + real `install_cron_job` tick removal).
 
 ## Foreign-key exclusion list (use `config_*_path` directly — NOT via `PfbConfig`)
 

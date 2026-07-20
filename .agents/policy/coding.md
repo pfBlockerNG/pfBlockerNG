@@ -43,7 +43,7 @@ lands); escape a genuine need inline with `# narration-ok: <reason>`.
 | 4 — string-ops over regex | `str_*` over `preg_*` where equivalent; hot loops first | `str` methods over `re` in per-line paths | parameter-expansion / `case` over `grep -E`/`sed` | `String.prototype` over `RegExp` |
 | 5 — boolean literals | **uppercase `TRUE`/`FALSE`** (PHPCS-enforced) | `True`/`False` | N/A | lowercase |
 
-Storage adapter rule (behaviour-preserving upgrades, grandfather seeds, downgrade tolerance,
+Storage adapter rule (behaviour-preserving upgrades, grandfather seeds, canonical current storage,
 `PfbStoredEnum` mechanics) + per-field inventory:
 [`docs/misc/config-gateway.md`](../../docs/misc/config-gateway.md).
 

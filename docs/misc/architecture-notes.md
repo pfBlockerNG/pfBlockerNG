@@ -1142,9 +1142,8 @@ digest length.
 **Migration — read legacy md5, write xxh128** (mirrors the ADR-28 read-boundary adapter): on read
 an `.md5`/untagged digest compares with md5; any new write computes xxh128, writes `.xxhash128`,
 and **deletes the superseded `.md5`**. No `config.xml` schema or migration — the digest is a
-sidecar file next to `.orig`. **Downgrade-safe / fail-safe:** an unreadable/unknown tag (e.g. an
-older release meeting a `.xxhash128` it cannot parse) is treated as **changed → re-ingest**, never
-a crash and never a false "unchanged".
+sidecar file next to `.orig`. **Fail-safe:** an unreadable/unknown tag is treated as
+**changed → re-ingest**, never a crash and never a false "unchanged".
 
 **Pre-download rule — conditional GET first.** A remote feed fetch sends a conditional request:
 `If-None-Match` (persisted `ETag`, primary) and, when no ETag is stored, `If-Modified-Since`
@@ -1318,7 +1317,7 @@ The PHP-owned ledger is `{$pfb['dbdir']}/pfb_sync_status.json`, a nested
 (temp-write → `rename`, no `fsync` — same as `pfb_due_ledger_*`) read/write/open/close/
 list-open helpers live in `pfblockerng_extra.inc` (`pfb_sync_status_*`), mirroring
 `pfb_due_ledger_*`'s exact persistence idiom (ADR-43) — same sidecar-file convention, same
-downgrade-safe-on-corrupt/absent-file contract, same "no config.xml involvement" shape.
+fail-safe-on-corrupt/absent-file contract, same "no config.xml involvement" shape.
 
 `pfb_unbound.py` runs chrooted inside Unbound's Python loader, a separate process from PHP —
 it cannot safely co-write the PHP file (write contention, and PHP is not chrooted so the paths

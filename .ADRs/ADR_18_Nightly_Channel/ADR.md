@@ -548,3 +548,10 @@ pfSense CE VM:
   (PR #166) installs `-nightly` from the served `pfblockerng.github.io/pkg/nightly`
   catalog (gated on `SMOKE_NIGHTLY_LIVE_URL`; triggers via `smoke_nightly_live_url`
   workflow input).
+
+## Amendment — 2026-07-20: retention is not downgrade support (issue #1593)
+
+Nightly publication, the nightly channel, and last-14 nightly retention remain unchanged.
+Retained nightlies provide artifact availability, diagnostics, and reproducibility; they do not
+promise that package state written by a newer build is consumable by an older build. Package
+downgrade is unsupported, and no backward-compatibility engineering follows from retention.

@@ -168,7 +168,7 @@ final class PfbSyncStatusLedgerTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Downgrade-safe reads: absent / corrupt file -> empty ledger, never throw.
+	// Fail-safe reads: absent / corrupt file -> empty ledger, never throw.
 	// -----------------------------------------------------------------------
 
 	public function testAbsentFileReadsAsEmpty(): void
