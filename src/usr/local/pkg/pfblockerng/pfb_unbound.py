@@ -5363,18 +5363,64 @@ def _dnsbl_file_line_reader(base_dir: str, *, fail_closed: bool = False) -> Call
 def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
     """Stream the fixed TOP1M sidecar; any source failure aborts the build."""
     path = os.path.join(base_dir, "pfb_py_top1m.txt")
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise _DnsblGenerationError("TOP1M sidecar cannot be opened without symlink protection: '{}'".format(path))
     try:
-        if not stat.S_ISREG(os.lstat(path).st_mode):
+        path_stat = os.lstat(path)
+        if not stat.S_ISREG(path_stat.st_mode):
             raise _DnsblGenerationError("TOP1M sidecar is not a regular file: '{}'".format(path))
-        handle = open(path, encoding="utf-8", errors="strict", newline="")
+    except OSError as e:
+        raise _DnsblGenerationError("TOP1M sidecar unavailable: '{}'".format(path)) from e
+
+    def opener(file_path: str, flags: int) -> int:
+        return os.open(file_path, flags | nofollow | getattr(os, "O_NONBLOCK", 0))
+
+    try:
+        handle = open(path, encoding="utf-8", errors="strict", newline="", opener=opener)
     except (OSError, UnicodeError) as e:
         raise _DnsblGenerationError("TOP1M sidecar unavailable: '{}'".format(path)) from e
 
     try:
         with handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                raise _DnsblGenerationError("TOP1M sidecar is not a regular file: '{}'".format(path))
+            if (
+                path_stat.st_dev,
+                path_stat.st_ino,
+                path_stat.st_mode,
+                path_stat.st_size,
+                path_stat.st_mtime_ns,
+            ) != (
+                opened.st_dev,
+                opened.st_ino,
+                opened.st_mode,
+                opened.st_size,
+                opened.st_mtime_ns,
+            ):
+                raise _DnsblGenerationError("TOP1M sidecar changed before reading: '{}'".format(path))
             for line in handle:
                 yield line.strip()
-    except (OSError, UnicodeError) as e:
+            consumed = os.lseek(handle.fileno(), 0, os.SEEK_CUR)
+            finished = os.fstat(handle.fileno())
+            if consumed != finished.st_size or (
+                opened.st_dev,
+                opened.st_ino,
+                opened.st_mode,
+                opened.st_size,
+                opened.st_mtime_ns,
+            ) != (
+                finished.st_dev,
+                finished.st_ino,
+                finished.st_mode,
+                finished.st_size,
+                finished.st_mtime_ns,
+            ):
+                raise _DnsblGenerationError("TOP1M sidecar changed while reading: '{}'".format(path))
+    except _DnsblGenerationError:
+        raise
+    except (AttributeError, OSError, UnicodeError, ValueError) as e:
         raise _DnsblGenerationError("TOP1M sidecar read failed: '{}'".format(path)) from e
 
 
