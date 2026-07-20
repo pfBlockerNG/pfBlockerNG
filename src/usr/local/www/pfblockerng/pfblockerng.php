@@ -170,6 +170,7 @@ $pfb['extras'][2]['file_dwn']	= 'top-1m.csv.zip';
 $pfb['extras'][2]['file']	= 'top-1m.csv';
 $pfb['extras'][2]['folder']	= "{$pfb['dbdir']}";
 $pfb['extras'][2]['type']	= 'top1m';
+$pfb['extras'][2]['provider']	= $pfb['dnsbl_top1m_type']->value;
 
 // ADR-59: header auth (Cloudflare Radar's Bearer token) via the $feed['headers']
 // plumbing. A keyless provider's 'auth' is 'none', so pfb_top1m_auth_headers() returns
@@ -338,6 +339,11 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 
 			// Download Database updates
 			if (pfblockerng_download_extras(600, $logtype)) {
+				// A changed TOP1M source uses the existing DNSBL apply path;
+				// unchanged or failed probes never dispatch it.
+				if ($argv[1] == 'dcc' && !empty($pfb['top1m_changed'])) {
+					exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=dnsbl force=false trigger=cron >> {$pfb['runlog']} 2>&1 &");
+				}
 
 				// Proceed with conversion of MaxMind files on download success
 				if (empty($pfb['cc']) || !empty($pfb['maxmind_key']) || !empty($pfb['maxmind_account'])) {
@@ -430,6 +436,7 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 
 	$pfb_return	= '';
 	$pfb_error	= FALSE;
+	$pfb['top1m_changed'] = FALSE;
 
 	$logtype = 3;
 	if ($type == 4) {
@@ -461,6 +468,49 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 		}
 
 		$file_dwn = "{$feed['folder']}/{$feed['file_dwn']}";
+		$is_top1m_detector = ($feed['type'] == 'top1m' && (int) $type === 3 && ($GLOBALS['argv'][1] ?? '') === 'dcc');
+		$top1m_base = $file_dwn;
+		$top1m_identity = '';
+		$top1m_probe_meta = array();
+		if ($feed['type'] == 'top1m') {
+			$top1m_identity = pfb_top1m_source_identity(
+				$feed['provider'] ?? '',
+				$feed['url'],
+				$feed['headers'] ?? array()
+			);
+		}
+
+		if ($is_top1m_detector) {
+			$stored_identity = @file_get_contents("{$top1m_base}.source");
+			$identity_matches = ($stored_identity !== FALSE && $stored_identity === $top1m_identity);
+			if (!$identity_matches) {
+				pfb_top1m_invalidate_baseline($top1m_base);
+			}
+			$probe_ok = pfb_download(
+				$feed['url'], "{$file_dwn}.md5", FALSE, $file_dwn, '', $logtype, '', $timeout,
+				'change_detect', $feed['username'], $feed['password'], FALSE,
+				$top1m_probe_meta, $feed['headers'] ?? array()
+			);
+			$probe_status = $top1m_probe_meta['status'] ?? '';
+			$probe_hash = ($probe_status === '200')
+				? pfb_content_hash("{$file_dwn}.md5.raw", TRUE) : FALSE;
+			$sidecar = $identity_matches ? pfb_hash_read($top1m_base) : array('algo' => 'changed', 'digest' => '');
+			$persisted_hash = ($sidecar['algo'] === 'xxh128') ? $sidecar['digest'] : '';
+			$probe_decision = pfb_top1m_probe_decision($probe_ok, $probe_status, $probe_hash, $persisted_hash);
+			if ($probe_decision === 'failed') {
+				unlink_if_exists("{$file_dwn}.md5.raw");
+				pfb_top1m_download_ledger_update(FALSE, $pfb['dbdir'], 'TOP1M probe failed');
+				$pfb_error = TRUE;
+				continue;
+			}
+			if ($probe_decision === 'unchanged') {
+				unlink_if_exists("{$file_dwn}.md5.raw");
+				pfb_validator_write("{$top1m_base}.orig", $top1m_probe_meta['etag'] ?? FALSE, $top1m_probe_meta['lastmod'] ?? 0);
+				@file_put_contents("{$top1m_base}.source", $top1m_identity, LOCK_EX);
+				pfb_top1m_download_ledger_update(TRUE, $pfb['dbdir']);
+				continue;
+			}
+		}
 
 		// ADR-59: thread the per-feed 'headers' field through as caller-supplied HTTP
 		// headers. The TOP1M provider sets it above via pfb_top1m_auth_headers()
@@ -495,8 +545,20 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 			if ($type == 'blacklist') {
 				$pfb_return .= "\t{$feed['name']} ... Failed\n";
 			}
+			if ($feed['type'] == 'top1m') {
+				unlink_if_exists("{$file_dwn}.md5.raw");
+				pfb_top1m_download_ledger_update(FALSE, $pfb['dbdir'], 'TOP1M download failed');
+			}
 		}
 		else {
+			if ($feed['type'] == 'top1m') {
+				@file_put_contents("{$top1m_base}.source", $top1m_identity, LOCK_EX);
+				if ($is_top1m_detector) {
+					pfb_validator_write("{$top1m_base}.orig", $top1m_probe_meta['etag'] ?? FALSE, $top1m_probe_meta['lastmod'] ?? 0);
+					$pfb['top1m_changed'] = TRUE;
+					pfb_top1m_download_ledger_update(TRUE, $pfb['dbdir']);
+				}
+			}
 			if ($type == 'blacklist') {
 				$pfb_return .= "\t{$feed['name']} ... Completed\n";
 			}

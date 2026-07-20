@@ -771,6 +771,12 @@ if ($_POST) {
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
 		if (!$input_errors) {
+			$pfb_top1m_settings_before = array(
+				'enable'   => $pfb['dconfig']['alexa_enable'] ?? '',
+				'count'    => $pfb['dconfig']['alexa_count'] ?? '',
+				'tld'      => $pfb['dconfig']['alexa_inclusion'] ?? '',
+				'provider' => $pfb['dconfig']['alexa_type'] ?? '',
+			);
 
 			$pfb['dconfig']['pfb_dnsbl']		= pfb_filter($_POST['pfb_dnsbl'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_tld']		= pfb_filter($_POST['pfb_tld'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
@@ -858,7 +864,6 @@ if ($_POST) {
 
 			// Reset TOP1M Database/Whitelist on user changes
 			if ($pfb['dconfig']['alexa_type'] != $_POST['alexa_type']) {
-				unlink_if_exists("{$pfb['dbdir']}/top-1m.csv");
 				unlink_if_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt");
 			}
 			$pfb['dconfig']['alexa_type']		= $_POST['alexa_type']							?: 'tranco';
@@ -879,6 +884,16 @@ if ($_POST) {
 				unlink_if_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt");
 			}
 			$pfb['dconfig']['alexa_count']		= $_POST['alexa_count']							?: '1000';
+			$pfb['dconfig']['alexa_inclusion']	= implode(',', (array) $_POST['alexa_inclusion']);
+			$pfb_top1m_settings_after = array(
+				'enable'   => $pfb['dconfig']['alexa_enable'],
+				'count'    => $pfb['dconfig']['alexa_count'],
+				'tld'      => $pfb['dconfig']['alexa_inclusion'],
+				'provider' => $pfb['dconfig']['alexa_type'],
+			);
+			if (pfb_top1m_settings_reprocess($pfb_top1m_settings_before, $pfb_top1m_settings_after)) {
+				touch("{$pfb['dbdir']}/top-1m.update");
+			}
 			// 0 (unlimited) is meaningful; ctype_digit keeps "0", else fall back to the default.
 			$pfb['dconfig']['pfb_py_cache_max']	= ctype_digit((string) $_POST['pfb_py_cache_max']) ? (string) ((int) $_POST['pfb_py_cache_max']) : '10000';
 
@@ -3285,7 +3300,7 @@ $section->addInput(new Form_Select(
 	gettext('Type'),
 	$pconfig['alexa_type'],
 	$options_alexa_type
-))->setHelp('Default: Tranco TOP1M. To change the TOP1M type, select the type and Save, then run an Update -- this clears and re-fetches the list.');
+))->setHelp('Default: Tranco TOP1M. To change the TOP1M type, select the type and Save, then run an Update -- this marks the source for reprocessing.');
 
 // ADR-59: masked, write-only token for a token-authenticated provider (currently only
 // Cloudflare Radar). Never populated from the stored value -- $pconfig['top1m_token'] is

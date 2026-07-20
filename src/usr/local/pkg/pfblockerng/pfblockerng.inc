@@ -11952,9 +11952,6 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			case 'geoip':
 				touch("{$pfb['dbdir']}/geoip.update");
 				break;
-			case 'top1m':
-				touch("{$pfb['dbdir']}/top-1m.update");
-				break;
 			case 'asn':
 				touch("{$pfb['dbdir']}/asn.update");
 				break;
@@ -12007,14 +12004,34 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'top1m') {
-				// ADR-59: a gz-container TOP1M provider decompresses straight to
-				// the destination CSV pfblockerng_top1m() reads (no rename/staging).
+				// Issue #1542: stage the derived CSV so a failed extraction never
+				// destroys the previous active whitelist source.
+				$top1m_stage = @tempnam(dirname($head_download), '.pfbtop1m_');
+				if ($top1m_stage === FALSE) {
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				$header_esc = escapeshellarg($top1m_stage);
 				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
-				unlink_if_exists($file_download);
 				if ($retval != 0) {
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
 					pfb_logger("\n[pfb_download] top1m extraction failed (gunzip exit {$retval})", 2);
 					return PfbDownloadResult::failure();
 				}
+				if (!pfb_top1m_persist_baseline($file_dwn, $file_download)) {
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
+					pfb_top1m_invalidate_baseline($file_dwn);
+					return PfbDownloadResult::failure();
+				}
+				unlink_if_exists($file_download);
+				if (!@rename($top1m_stage, $head_download)) {
+					unlink_if_exists($top1m_stage);
+					pfb_top1m_invalidate_baseline($file_dwn);
+					return PfbDownloadResult::failure();
+				}
+				touch("{$pfb['dbdir']}/top-1m.update");
 				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'blacklist') {
@@ -12110,17 +12127,61 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
+					$top1m_stage = @tempnam(dirname($head_download), '.pfbtop1m_');
+					if ($top1m_stage === FALSE || !@unlink($top1m_stage) || !@mkdir($top1m_stage, 0700)) {
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
+					}
+					$header_esc = escapeshellarg($top1m_stage);
 					exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1", $output, $retval);
 				} else {
 					// ADR-46: stdout extraction -- member names never reach the
 					// filesystem, so no member-name guard is needed here.
+					$top1m_stage = @tempnam(dirname($head_download), '.pfbtop1m_');
+					if ($top1m_stage === FALSE) {
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
+					}
+					$header_esc = escapeshellarg($top1m_stage);
 					exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}", $output, $retval);
 				}
 				if ($retval != 0) {
 					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
+					if (is_dir($top1m_stage)) {
+						rmdir_recursive($top1m_stage);
+					} else {
+						unlink_if_exists($top1m_stage);
+					}
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
 				}
+				if (!pfb_top1m_persist_baseline($file_dwn, $file_download)) {
+					if (is_dir($top1m_stage)) {
+						rmdir_recursive($top1m_stage);
+					} else {
+						unlink_if_exists($top1m_stage);
+					}
+					unlink_if_exists($file_download);
+					pfb_top1m_invalidate_baseline($file_dwn);
+					return PfbDownloadResult::failure();
+				}
+				if (is_dir($top1m_stage)) {
+					$staged_files = glob("{$top1m_stage}/*") ?: array();
+					$top1m_stage_file = $staged_files[0] ?? FALSE;
+					if ($top1m_stage_file === FALSE || !@rename($top1m_stage_file, $head_download)) {
+						rmdir_recursive($top1m_stage);
+						unlink_if_exists($file_download);
+						pfb_top1m_invalidate_baseline($file_dwn);
+						return PfbDownloadResult::failure();
+					}
+					rmdir_recursive($top1m_stage);
+				} elseif (!@rename($top1m_stage, $head_download)) {
+					unlink_if_exists($top1m_stage);
+					unlink_if_exists($file_download);
+					pfb_top1m_invalidate_baseline($file_dwn);
+					return PfbDownloadResult::failure();
+				}
+				touch("{$pfb['dbdir']}/top-1m.update");
 				return PfbDownloadResult::success();
 			}
 
@@ -12193,15 +12254,35 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 		}
 		else {
 			// Uncompressed file format.
-			if ($type == 'geoip' || $type == 'asn' || $type == 'top1m') {
-				// Extras - MaxMind/TOP1M/ASN downloads. ADR-59: a 'plain' container
-				// provider's body IS the destination CSV -- rename straight to it, same
-				// as geoip/asn (no intermediate '.orig' staging needed).
+			if ($type == 'geoip' || $type == 'asn') {
+				// Existing MaxMind/ASN path: preserve the direct rename contract.
 				$renamed = @rename("{$file_download}", "{$head_download}");
 				if (!$renamed) {
 					pfb_logger("\n[pfb_download] {$type} rename to destination failed", 2);
 					return PfbDownloadResult::failure();
 				}
+				return PfbDownloadResult::success();
+			}
+			if ($type == 'top1m') {
+				// Stage TOP1M's plain body before publishing so a failed rename
+				// preserves the active source.
+				$top1m_stage = @tempnam(dirname($head_download), '.pfbtop1m_');
+				if ($top1m_stage === FALSE) {
+					pfb_logger("\n[pfb_download] {$type} rename to destination failed", 2);
+					return PfbDownloadResult::failure();
+				}
+				if (!pfb_top1m_persist_baseline($file_dwn, $file_download)) {
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
+					pfb_top1m_invalidate_baseline($file_dwn);
+					return PfbDownloadResult::failure();
+				}
+				if (!@rename($file_download, $top1m_stage) || !@rename($top1m_stage, $head_download)) {
+					unlink_if_exists($top1m_stage);
+					pfb_top1m_invalidate_baseline($file_dwn);
+					return PfbDownloadResult::failure();
+				}
+				touch("{$pfb['dbdir']}/top-1m.update");
 				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'blacklist') {
@@ -13964,6 +14045,74 @@ function pfb_conditional_get_decision($http_status, $body_hash, $persisted_hash)
 		return TRUE;	// No usable comparison — fail-safe.
 	}
 	return ($body_hash !== $persisted_hash);	// TRUE = changed, FALSE = spurious 200 (same bytes).
+}
+
+// Issue #1542: TOP1M's dcc detector keeps the existing conditional-GET decision
+// matrix but adds an explicit failed-probe state for its download ledger.
+function pfb_top1m_probe_decision($probe_ok, $http_status, $body_hash, $persisted_hash) {
+	if (!$probe_ok) {
+		return 'failed';
+	}
+	return pfb_conditional_get_decision($http_status, $body_hash, $persisted_hash)
+		? 'changed' : 'unchanged';
+}
+
+// Issue #1542: provider/URL/auth identity is stored beside the raw baseline.
+// A changed identity clears the detector baseline and validators; the active
+// derived whitelist remains available until a replacement download succeeds.
+function pfb_top1m_source_identity($provider, $url, array $headers = array()) {
+	$header_identity = array_map(static function ($header) {
+		return hash('sha256', (string) $header);
+	}, array_values($headers));
+	$encoded = json_encode(array(
+		'provider' => (string) $provider,
+		'url'      => (string) $url,
+		'headers'  => $header_identity,
+	), JSON_UNESCAPED_SLASHES);
+	return $encoded === FALSE ? '' : $encoded;
+}
+
+function pfb_top1m_invalidate_baseline($base) {
+	$validator_base = "{$base}.orig";
+	foreach (array(
+		"{$base}.orig",
+		"{$base}.xxhash128",
+		"{$base}.md5",
+		"{$base}.source",
+		"{$validator_base}.etag",
+		"{$validator_base}.lastmod",
+	) as $path) {
+		unlink_if_exists($path);
+	}
+}
+
+// Settings that affect TOP1M filtering reuse the cached source and trigger
+// a local rebuild; provider identity changes take the download detector path.
+function pfb_top1m_settings_reprocess(array $before, array $after) {
+	foreach (array('enable', 'count', 'tld') as $key) {
+		if (($before[$key] ?? '') !== ($after[$key] ?? '')) {
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+function pfb_top1m_persist_baseline($base, $raw_path) {
+	if (!is_file($raw_path)) {
+		return FALSE;
+	}
+	$tmp = @tempnam(dirname($base), '.pfbtop1m_raw_');
+	if ($tmp === FALSE || !@copy($raw_path, $tmp) || !@rename($tmp, "{$base}.orig")) {
+		if ($tmp !== FALSE) {
+			@unlink($tmp);
+		}
+		return FALSE;
+	}
+	return pfb_hash_write($base, "{$base}.orig");
+}
+
+function pfb_top1m_download_ledger_update($download_ok, $ledger_dir, $message = '') {
+	pfb_dnsbl_download_ledger_update((bool) $download_ok, 'top1m', (string) $message, $ledger_dir);
 }
 
 // Extract the local-feed change decision from pfb_update_check() as a named, off-appliance-
