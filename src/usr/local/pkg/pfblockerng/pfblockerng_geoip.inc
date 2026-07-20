@@ -1086,7 +1086,14 @@ $section->addInput(new Form_StaticText(
 	. 'perform on all Lists together.'
 	. '</div>'
 ));
-__PFB_REPUTATION_TAB_ONLY__
+EOF;
+	$tab_only_line = "\t";
+	$php_rep .= <<<EOF
+
+{$tab_only_line}
+
+EOF;
+	$php_rep .= <<<'EOF'
 $section->addInput(new Form_Checkbox(
 	'enable_pdup',
 	'pMAX',
@@ -1232,7 +1239,6 @@ EOF;
 	}
 
 	// Save pfBlockerng_reputation.php file
-	$php_rep = str_replace('__PFB_REPUTATION_TAB_ONLY__', "\t", $php_rep);
 	@file_put_contents("{$output_root}/pfblockerng_reputation.php", $php_rep, LOCK_EX);
 	unset($php_rep);
 }
