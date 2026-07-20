@@ -56,6 +56,7 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 			'unbound_py_rawdir'  => "{$this->tmp}/pfb_py_raw",
 			'dnsdir'             => "{$this->tmp}/dnsbl",
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
+			'unbound_py_top1m'   => "{$this->tmp}/pfb_py_top1m.txt",
 			'dbdir'              => "{$this->tmp}/db",
 			'dnsbl_top1m'        => 'on',
 			'dnsbl_tld_wildcard' => 'on',
@@ -108,6 +109,17 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 		return $rows;
 	}
 
+	private function publishCorpus(): array|false
+	{
+		return pfb_unbound_python_sources($this->feedRows(), [
+			'top1m_atomic' => [
+				'chown' => static fn(string $file, string $owner): bool => TRUE,
+				'chgrp' => static fn(string $file, string $group): bool => TRUE,
+				'chmod' => static fn(string $file, int $mode): bool => TRUE,
+			],
+		]);
+	}
+
 	/**
 	 * Byte-identity oracle: every corpus feed's produced .raw matches its
 	 * committed golden fixture exactly. A single parametrised assertion loop
@@ -115,7 +127,7 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 	 */
 	public function testEveryCorpusFeedRawMatchesGolden(): void
 	{
-		$manifest = pfb_unbound_python_sources($this->feedRows());
+		$manifest = $this->publishCorpus();
 		$this->assertIsArray($manifest);
 		$rawByHeader = array_column($manifest['feeds'], 'raw', 'feed');
 
@@ -138,7 +150,7 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 	 * caller may reintroduce it under any name without this assertion catching it). */
 	public function testManifestTaggingMatchesFeedsJson(): void
 	{
-		$m = pfb_unbound_python_sources($this->feedRows());
+		$m = $this->publishCorpus();
 		$byHeader = [];
 		foreach ($m['feeds'] as $row) {
 			$byHeader[$row['feed']] = $row;
@@ -167,7 +179,7 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 		$fixture = json_decode($fixtureJson, TRUE);
 		$this->assertIsArray($fixture, 'manifest-v1 fixture must decode');
 
-		$published = pfb_unbound_python_sources($this->feedRows());
+		$published = $this->publishCorpus();
 		$this->assertIsArray($published);
 		$publishedJson = file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
 		$this->assertNotFalse($publishedJson, 'published manifest must be readable');

@@ -7871,20 +7871,9 @@ function pfb_unbound_py_atomic_copy(string $source, string $path, array $stream_
 	$chown_fn = $stream_ops['chown'] ?? static fn($file, $owner) => @chown($file, $owner);
 	$chgrp_fn = $stream_ops['chgrp'] ?? static fn($file, $group) => @chgrp($file, $group);
 	$chmod_fn = $stream_ops['chmod'] ?? static fn($file, $mode) => @chmod($file, $mode);
-	if (array_key_exists('chown', $stream_ops) && !$chown_fn($tmp, 'root') ||
-		array_key_exists('chgrp', $stream_ops) && !$chgrp_fn($tmp, 'unbound') ||
-		array_key_exists('chmod', $stream_ops) && !$chmod_fn($tmp, 0640)) {
+	if (!$chown_fn($tmp, 'root') || !$chgrp_fn($tmp, 'unbound') || !$chmod_fn($tmp, 0640)) {
 		@unlink($tmp);
 		return FALSE;
-	}
-	if (!array_key_exists('chown', $stream_ops)) {
-		@chown($tmp, 'root');
-	}
-	if (!array_key_exists('chgrp', $stream_ops)) {
-		@chgrp($tmp, 'unbound');
-	}
-	if (!array_key_exists('chmod', $stream_ops)) {
-		@chmod($tmp, 0640);
 	}
 	$rename_fn = $stream_ops['rename'] ?? static fn($from, $to) => @rename($from, $to);
 	if (!$rename_fn($tmp, $path)) {
@@ -8618,20 +8607,23 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 
 	// TOP1M (Tranco/Cisco) popularity whitelist is a fixed sidecar. Publish it
 	// before the manifest so a durable manifest always names a complete snapshot.
+	$top1m_atomic_ops = isset($publication_ops['top1m_atomic']) && is_array($publication_ops['top1m_atomic'])
+		? $publication_ops['top1m_atomic'] : array();
+	$top1m_restore_fn = $top1m_atomic_ops['restore'] ?? static fn($from, $to) => @rename($from, $to);
 	$top1m_backup = FALSE;
 	$top1m_had_previous = file_exists($top1m_target) || is_link($top1m_target);
-	$restore_top1m = static function () use (&$top1m_backup, $top1m_target, $top1m_had_previous): void {
+	$restore_top1m = static function () use (&$top1m_backup, $top1m_target, $top1m_had_previous, $top1m_restore_fn): void {
 		if ($top1m_backup === FALSE) {
 			return;
 		}
-		if (file_exists($top1m_target) || is_link($top1m_target)) {
-			is_dir($top1m_target) && !is_link($top1m_target)
-				? rmdir_recursive($top1m_target)
-				: @unlink($top1m_target);
-		}
 		if ($top1m_had_previous && $top1m_backup !== FALSE) {
-			@rename($top1m_backup, $top1m_target);
+			$top1m_restore_fn($top1m_backup, $top1m_target);
 		} elseif ($top1m_backup !== FALSE) {
+			if (file_exists($top1m_target) || is_link($top1m_target)) {
+				is_dir($top1m_target) && !is_link($top1m_target)
+					? rmdir_recursive($top1m_target)
+					: @unlink($top1m_target);
+			}
 			@unlink($top1m_backup);
 		}
 		$top1m_backup = FALSE;
@@ -8651,10 +8643,7 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 			pfb_logger("\nTOP1M fixed-file staging failed: {$top1m_target}", 2);
 			return FALSE;
 		}
-		$top1m_atomic_ops = isset($publication_ops['top1m_atomic']) && is_array($publication_ops['top1m_atomic'])
-			? $publication_ops['top1m_atomic'] : array();
 		if (!pfb_unbound_py_atomic_copy($top1m_source, $top1m_target, $top1m_atomic_ops)) {
-			$restore_top1m();
 			$discard_unpublished_generation();
 			pfb_logger("\nTOP1M fixed-file publication failed: {$top1m_target}", 2);
 			return FALSE;
