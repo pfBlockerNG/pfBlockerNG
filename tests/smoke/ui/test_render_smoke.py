@@ -2646,6 +2646,35 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     assert "dnsbl_vip_sinkhole_pages" in excluded_names
 
 
+def test_pfblockerng_download_extras_uses_typed_download_result() -> None:
+    """Pin the CLI-only download contract that Tier-A HTTP rendering cannot execute.
+
+    ``pfblockerng.php`` is never served directly: it is the CLI dispatcher and
+    template for the generated GeoIP pages.  Keep this source assertion in the
+    ``ui_render`` module so the changed PHP call shape still has a front-end
+    coverage pairing without pretending an HTTP render reaches this function.
+    """
+    source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng.php"
+    source = source_path.read_text(encoding="utf-8")
+
+    declaration = "function pfblockerng_download_extras("
+    start = source.index(declaration)
+    remainder = source[start + len(declaration) :]
+    next_function = re.search(r"^function\s+\w+\s*\(", remainder, flags=re.MULTILINE)
+    assert next_function is not None, "pfblockerng_download_extras() must be followed by another function"
+    function_source = source[start : start + len(declaration) + next_function.start()]
+
+    assert re.search(r"pfb_download\(\s*new\s+PfbDownloadRequest\(", function_source, flags=re.DOTALL), (
+        "pfblockerng_download_extras() must construct PfbDownloadRequest"
+    )
+    assert re.search(r"\)\s*\)\s*->\s*success\b", function_source, flags=re.DOTALL), (
+        "pfblockerng_download_extras() must consume PfbDownloadResult->success"
+    )
+    assert not re.search(r"pfb_download\(\s*(?!new\s+PfbDownloadRequest\b)", function_source, flags=re.DOTALL), (
+        "retired positional pfb_download() call shape must not return"
+    )
+
+
 def test_reputation_page_help_text_names_relocated_matchgen_paths(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:  # noqa: ARG001
