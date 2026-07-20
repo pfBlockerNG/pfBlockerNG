@@ -14,15 +14,15 @@ use PHPUnit\Framework\TestCase;
  */
 final class GeoipDocLinkTest extends TestCase
 {
-	private const PFBLOCKERNG_PHP = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php';
+	private const PFBLOCKERNG_GEOIP = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc';
 
 	private const LIVE_DOC_URL    = 'https://dev.maxmind.com/geoip/whats-new-in-geoip2/';
 	private const RETIRED_DOC_URL = 'https://dev.maxmind.com/geoip/geoip2/whats-new-in-geoip2/';
 
 	private function pageSource(): string
 	{
-		$source = file_get_contents(self::PFBLOCKERNG_PHP);
-		$this->assertNotFalse($source, 'failed to read pfblockerng.php');
+		$source = file_get_contents(self::PFBLOCKERNG_GEOIP);
+		$this->assertNotFalse($source, 'failed to read pfblockerng_geoip.inc');
 		return $source;
 	}
 

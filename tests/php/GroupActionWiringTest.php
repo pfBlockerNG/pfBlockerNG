@@ -24,7 +24,7 @@ final class GroupActionWiringTest extends TestCase
 		self::$category = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category.php");
 		self::$alerts = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_alerts.php");
 		self::$categoryEdit = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php");
-		self::$www = (string) file_get_contents("{$root}/src/usr/local/www/pfblockerng/pfblockerng.php");
+		self::$www = (string) file_get_contents("{$root}/src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc");
 	}
 
 	private function assertGuardBeforeActionUse(

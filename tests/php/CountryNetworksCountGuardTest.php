@@ -36,6 +36,7 @@ use PHPUnit\Framework\TestCase;
 final class CountryNetworksCountGuardTest extends TestCase
 {
 	private static string $src;
+	private static string $geoipSrc;
 	private static string $tmpDir;
 
 	public static function setUpBeforeClass(): void
@@ -46,6 +47,12 @@ final class CountryNetworksCountGuardTest extends TestCase
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng.php');
 		}
 		self::$src = $src;
+		$geoipPath = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc';
+		$geoipSrc = file_get_contents($geoipPath);
+		if ($geoipSrc === FALSE) {
+			throw new RuntimeException('test bootstrap: failed to read pfblockerng_geoip.inc');
+		}
+		self::$geoipSrc = $geoipSrc;
 
 		self::$tmpDir = sys_get_temp_dir() . '/pfb_country_networks_' . getmypid();
 		@mkdir(self::$tmpDir, 0777, TRUE);
@@ -74,10 +81,10 @@ final class CountryNetworksCountGuardTest extends TestCase
 		if (!function_exists('pfb_placeholder_branch_fires_oracle')) {
 			if (!preg_match(
 				'/strpos\(\$line, \'Total Networks: 0\'\) !== FALSE \|\| strpos\(\$line, \'Total Networks: NA\'\) !== FALSE/',
-				$src,
+				self::$geoipSrc,
 				$m2
 			)) {
-				throw new RuntimeException('oracle extraction failed: the placeholder-blank condition was not found in pfblockerng.php');
+				throw new RuntimeException('oracle extraction failed: the placeholder-blank condition was not found in pfblockerng_geoip.inc');
 			}
 			eval('function pfb_placeholder_branch_fires_oracle(string $line): bool { return (' . $m2[0] . '); }');
 		}
@@ -164,7 +171,7 @@ final class CountryNetworksCountGuardTest extends TestCase
 	{
 		$this->assertMatchesRegularExpression(
 			'/\$total\s*=\s*pfb_count_lines\([^;]*\)\s*\?\?\s*0\s*;/',
-			self::$src,
+			self::$geoipSrc,
 			'$total must be assigned from pfb_count_lines(...) ?? 0 (display-only, issue #1261)'
 		);
 	}
@@ -173,7 +180,7 @@ final class CountryNetworksCountGuardTest extends TestCase
 	{
 		$this->assertDoesNotMatchRegularExpression(
 			'/\$total\s*=\s*exec\(/',
-			self::$src,
+			self::$geoipSrc,
 			'a $total = exec(...) fork survives -- issue #1261 must replace it with pfb_count_lines()'
 		);
 	}
@@ -190,7 +197,7 @@ final class CountryNetworksCountGuardTest extends TestCase
 	{
 		$this->assertMatchesRegularExpression(
 			'/\$lastline\s*=\s*pfb_count_lines\(\$file\)\s*\?\?\s*0\s*;/',
-			self::$src,
+			self::$geoipSrc,
 			'$lastline must be assigned from pfb_count_lines($file) ?? 0 (EOF-flush trigger, issue #1261)'
 		);
 	}
@@ -199,7 +206,7 @@ final class CountryNetworksCountGuardTest extends TestCase
 	{
 		$this->assertDoesNotMatchRegularExpression(
 			'/\$lastline\s*=\s*exec\(/',
-			self::$src,
+			self::$geoipSrc,
 			'a $lastline = exec(...) fork survives -- issue #1261 must replace it with pfb_count_lines()'
 		);
 	}

@@ -25,6 +25,7 @@
             <file>src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc</file>
             <file>src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc</file>
             <file>src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc</file>
+            <file>src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc</file>
             <file>src/usr/local/www/pfblockerng/pfblockerng_alerts.php</file>
             <file>src/usr/local/www/pfblockerng/pfblockerng_log.php</file>
             <file>src/usr/local/www/widgets/include/widget-pfblockerng.inc</file>

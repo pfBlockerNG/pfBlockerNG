@@ -16657,6 +16657,7 @@ function pfb_build_autorule_list(
 
 require_once __DIR__ . '/pfblockerng_apply.inc';
 require_once __DIR__ . '/pfblockerng_cron.inc';
+require_once __DIR__ . '/pfblockerng_geoip.inc';
 
 
 // Function to De-Install pfBlockerNG

@@ -734,6 +734,26 @@
             }
         ]
     },
+    "pfb_build_reputation_tab": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "et_options",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "''"
+            },
+            {
+                "name": "output_root",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "'/usr/local/www/pfblockerng'"
+            }
+        ]
+    },
     "pfb_canonical_alias_set": {
         "returnsRef": false,
         "returnType": "array",
@@ -8880,6 +8900,19 @@
                 "variadic": false,
                 "type": null,
                 "default": null
+            }
+        ]
+    },
+    "pfblockerng_get_countries": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "output_root",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "'/usr/local/www/pfblockerng'"
             }
         ]
     },
