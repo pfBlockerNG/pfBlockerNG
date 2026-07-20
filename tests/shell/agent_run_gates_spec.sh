@@ -47,11 +47,11 @@ Describe 'run-gates.sh gates_for()'
     # The hook + CI shellcheck only src/, scripts/ and .claude/hooks/; tests/ specs and
     # vendored skill scripts trip SC2034 false-positives, so the runner must skip them too.
     Data
-      #|tests/shell/pfb_downgrade_prep_spec.sh
+      #|tests/shell/agent_work_branch_spec.sh
       #|.claude/skills/ponytail/hooks/ponytail-statusline.sh
     End
     When call gates_for
-    The line 1 of output should equal 'sh -n tests/shell/pfb_downgrade_prep_spec.sh'
+    The line 1 of output should equal 'sh -n tests/shell/agent_work_branch_spec.sh'
     The line 2 of output should equal 'sh -n .claude/skills/ponytail/hooks/ponytail-statusline.sh'
     # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
     The line 3 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
