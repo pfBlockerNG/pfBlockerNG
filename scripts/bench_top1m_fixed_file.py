@@ -227,6 +227,9 @@ def _run_timed(
     except subprocess.TimeoutExpired:
         stdout, stderr = _terminate_process_group(proc, timed_cmd, kill_grace_seconds)
         raise subprocess.TimeoutExpired(timed_cmd, timeout_seconds, output=stdout, stderr=stderr)
+    except BaseException:
+        _terminate_process_group(proc, timed_cmd, kill_grace_seconds)
+        raise
 
     if proc.returncode != 0:
         raise RuntimeError(
