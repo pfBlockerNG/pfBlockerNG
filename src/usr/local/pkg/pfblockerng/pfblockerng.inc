@@ -12004,8 +12004,9 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'top1m') {
-				// Issue #1542: stage the derived CSV so a failed extraction never
-				// destroys the previous active whitelist source.
+				// Issue #1542: stage the derived CSV and commit active plus raw/hash
+				// baseline together. Backups stay beside the feed for same-filesystem
+				// rename rollback; GeoIP/ASN paths above remain unchanged.
 				$top1m_stage = @tempnam(dirname($head_download), '.pfbtop1m_');
 				if ($top1m_stage === FALSE) {
 					unlink_if_exists($file_download);
@@ -12019,18 +12020,69 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					pfb_logger("\n[pfb_download] top1m extraction failed (gunzip exit {$retval})", 2);
 					return PfbDownloadResult::failure();
 				}
-				if (!pfb_top1m_persist_baseline($file_dwn, $file_download)) {
+				$top1m_base_backup = @tempnam(dirname($file_dwn), '.pfbtop1m_base_');
+				if ($top1m_base_backup === FALSE || !@unlink($top1m_base_backup) || !@mkdir($top1m_base_backup, 0700)) {
 					unlink_if_exists($file_download);
 					unlink_if_exists($top1m_stage);
-					pfb_top1m_invalidate_baseline($file_dwn);
 					return PfbDownloadResult::failure();
 				}
-				unlink_if_exists($file_download);
-				if (!@rename($top1m_stage, $head_download)) {
+				$top1m_base_backups = array();
+				foreach (array("{$file_dwn}.orig", "{$file_dwn}.xxhash128", "{$file_dwn}.md5") as $top1m_base_path) {
+					if (is_file($top1m_base_path)) {
+						$top1m_base_copy = "{$top1m_base_backup}/" . basename($top1m_base_path);
+						if (!@copy($top1m_base_path, $top1m_base_copy)) {
+							rmdir_recursive($top1m_base_backup);
+							unlink_if_exists($file_download);
+							unlink_if_exists($top1m_stage);
+							return PfbDownloadResult::failure();
+						}
+						$top1m_base_backups[$top1m_base_path] = $top1m_base_copy;
+					}
+				}
+				$top1m_active_backup = @tempnam(dirname($head_download), '.pfbtop1m_active_');
+				if ($top1m_active_backup === FALSE || !@unlink($top1m_active_backup)) {
+					rmdir_recursive($top1m_base_backup);
+					unlink_if_exists($file_download);
 					unlink_if_exists($top1m_stage);
-					pfb_top1m_invalidate_baseline($file_dwn);
 					return PfbDownloadResult::failure();
 				}
+				$top1m_had_active = file_exists($head_download) || is_link($head_download);
+				if ($top1m_had_active && !@rename($head_download, $top1m_active_backup)) {
+					rmdir_recursive($top1m_base_backup);
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
+					return PfbDownloadResult::failure();
+				}
+				if (!@rename($top1m_stage, $head_download)) {
+					if ($top1m_had_active) {
+						@rename($top1m_active_backup, $head_download);
+					}
+					rmdir_recursive($top1m_base_backup);
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
+					return PfbDownloadResult::failure();
+				}
+				if (!pfb_top1m_persist_baseline($file_dwn, $file_download)) {
+					unlink_if_exists($head_download);
+					if ($top1m_had_active) {
+						@rename($top1m_active_backup, $head_download);
+					}
+					foreach (array("{$file_dwn}.orig", "{$file_dwn}.xxhash128", "{$file_dwn}.md5") as $top1m_base_path) {
+						if (isset($top1m_base_backups[$top1m_base_path])) {
+							@copy($top1m_base_backups[$top1m_base_path], $top1m_base_path);
+						} elseif (is_file($top1m_base_path)) {
+							@unlink($top1m_base_path);
+						}
+					}
+					rmdir_recursive($top1m_base_backup);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				if ($top1m_had_active) {
+					is_dir($top1m_active_backup) ? rmdir_recursive($top1m_active_backup) : unlink_if_exists($top1m_active_backup);
+				}
+				rmdir_recursive($top1m_base_backup);
+				unlink_if_exists($file_download);
 				touch("{$pfb['dbdir']}/top-1m.update");
 				return PfbDownloadResult::success();
 			}
@@ -12113,14 +12165,10 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 
-			// Extras - MaxMind/TOP1M downloads
-			if ($type == 'geoip' || $type == 'top1m') {
-				// Determine if the Zip contains multiple files. A NULL list (unlistable)
-				// falls through to the stdout branch below -- no disk write, no traversal
-				// surface -- and the extraction fails on its own exactly as before.
+			// Extras - MaxMind downloads. Keep GeoIP's existing extraction contract.
+			if ($type == 'geoip') {
 				$archive_members = pfb_archive_member_names($file_download);
 				if ($archive_members !== NULL && count($archive_members) > 1) {
-					// ADR-46: disk-writing extraction -- reject hostile member names first.
 					$unsafe_member = pfb_archive_unsafe_member($archive_members);
 					if ($unsafe_member !== NULL) {
 						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
@@ -12135,8 +12183,6 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					$header_esc = escapeshellarg($top1m_stage);
 					exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1", $output, $retval);
 				} else {
-					// ADR-46: stdout extraction -- member names never reach the
-					// filesystem, so no member-name guard is needed here.
 					$top1m_stage = @tempnam(dirname($head_download), '.pfbtop1m_');
 					if ($top1m_stage === FALSE) {
 						unlink_if_exists($file_download);
@@ -12181,6 +12227,138 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					pfb_top1m_invalidate_baseline($file_dwn);
 					return PfbDownloadResult::failure();
 				}
+				unlink_if_exists($file_download);
+				return PfbDownloadResult::success();
+			}
+
+			if ($type == 'top1m') {
+				$archive_members = pfb_archive_member_names($file_download);
+				$unsafe_member = pfb_archive_unsafe_member($archive_members);
+				if ($unsafe_member !== NULL || $archive_members === NULL || count($archive_members) === 0) {
+					if ($unsafe_member !== NULL) {
+						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
+					}
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				$top1m_target_dir = is_dir($head_download);
+				if (!$top1m_target_dir && count($archive_members) !== 1) {
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				$top1m_stage = @tempnam(dirname($head_download), '.pfbtop1m_');
+				if ($top1m_stage === FALSE || !@unlink($top1m_stage) || !@mkdir($top1m_stage, 0700)) {
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				$header_esc = escapeshellarg($top1m_stage);
+				$strip = $top1m_target_dir ? ' --strip=1' : '';
+				exec("/usr/bin/tar -xf {$file_dwn_esc}{$strip} -C {$header_esc} >/dev/null 2>&1", $output, $retval);
+				if ($retval != 0) {
+					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
+					rmdir_recursive($top1m_stage);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				$top1m_staged_files = array();
+				$top1m_staged_link = FALSE;
+				$top1m_iterator = new RecursiveIteratorIterator(
+					new RecursiveDirectoryIterator($top1m_stage, FilesystemIterator::SKIP_DOTS),
+					RecursiveIteratorIterator::LEAVES_ONLY
+				);
+				foreach ($top1m_iterator as $top1m_entry) {
+					if ($top1m_entry->isLink()) {
+						$top1m_staged_link = TRUE;
+					} elseif ($top1m_entry->isFile()) {
+						$top1m_staged_files[] = $top1m_entry->getPathname();
+					}
+				}
+				if ($top1m_staged_link || ($top1m_target_dir && count($top1m_staged_files) === 0) || (!$top1m_target_dir && count($top1m_staged_files) !== 1)) {
+					rmdir_recursive($top1m_stage);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				if (!$top1m_target_dir) {
+					$top1m_inner_type = pfb_filter(
+						array(escapeshellarg($top1m_staged_files[0]), $top1m_staged_files[0], $list_download),
+						PFB_FILTER_FILE_MIME,
+						'pfb_download'
+					);
+					if ($top1m_inner_type === 'text/html') {
+						rmdir_recursive($top1m_stage);
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
+					}
+				}
+				$top1m_base_backup = @tempnam(dirname($file_dwn), '.pfbtop1m_base_');
+				if ($top1m_base_backup === FALSE || !@unlink($top1m_base_backup) || !@mkdir($top1m_base_backup, 0700)) {
+					rmdir_recursive($top1m_stage);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				$top1m_base_backups = array();
+				foreach (array("{$file_dwn}.orig", "{$file_dwn}.xxhash128", "{$file_dwn}.md5") as $top1m_base_path) {
+					if (is_file($top1m_base_path)) {
+						$top1m_base_copy = "{$top1m_base_backup}/" . basename($top1m_base_path);
+						if (!@copy($top1m_base_path, $top1m_base_copy)) {
+							rmdir_recursive($top1m_base_backup);
+							rmdir_recursive($top1m_stage);
+							unlink_if_exists($file_download);
+							return PfbDownloadResult::failure();
+						}
+						$top1m_base_backups[$top1m_base_path] = $top1m_base_copy;
+					}
+				}
+				$top1m_active_backup = @tempnam(dirname($head_download), '.pfbtop1m_active_');
+				if ($top1m_active_backup === FALSE || !@unlink($top1m_active_backup)) {
+					rmdir_recursive($top1m_base_backup);
+					rmdir_recursive($top1m_stage);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				$top1m_had_active = file_exists($head_download) || is_link($head_download);
+				if ($top1m_had_active && !@rename($head_download, $top1m_active_backup)) {
+					rmdir_recursive($top1m_base_backup);
+					rmdir_recursive($top1m_stage);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				$top1m_published = $top1m_target_dir
+					? @rename($top1m_stage, $head_download)
+					: @rename($top1m_staged_files[0], $head_download);
+				if (!$top1m_published) {
+					if ($top1m_had_active) {
+						@rename($top1m_active_backup, $head_download);
+					}
+					rmdir_recursive($top1m_stage);
+					rmdir_recursive($top1m_base_backup);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				if (!$top1m_target_dir) {
+					rmdir_recursive($top1m_stage);
+				}
+				if (!pfb_top1m_persist_baseline($file_dwn, $file_download)) {
+					is_dir($head_download) ? rmdir_recursive($head_download) : unlink_if_exists($head_download);
+					if ($top1m_had_active) {
+						@rename($top1m_active_backup, $head_download);
+					}
+					foreach (array("{$file_dwn}.orig", "{$file_dwn}.xxhash128", "{$file_dwn}.md5") as $top1m_base_path) {
+						if (isset($top1m_base_backups[$top1m_base_path])) {
+							@copy($top1m_base_backups[$top1m_base_path], $top1m_base_path);
+						} elseif (is_file($top1m_base_path)) {
+							@unlink($top1m_base_path);
+						}
+					}
+					rmdir_recursive($top1m_base_backup);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				if ($top1m_had_active) {
+					is_dir($top1m_active_backup) ? rmdir_recursive($top1m_active_backup) : unlink_if_exists($top1m_active_backup);
+				}
+				rmdir_recursive($top1m_base_backup);
+				unlink_if_exists($file_download);
 				touch("{$pfb['dbdir']}/top-1m.update");
 				return PfbDownloadResult::success();
 			}
@@ -12264,24 +12442,80 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::success();
 			}
 			if ($type == 'top1m') {
-				// Stage TOP1M's plain body before publishing so a failed rename
-				// preserves the active source.
+				// Stage TOP1M's plain body before publishing; baseline persistence
+				// commits after active publication and rolls both back on failure.
 				$top1m_stage = @tempnam(dirname($head_download), '.pfbtop1m_');
-				if ($top1m_stage === FALSE) {
+				if ($top1m_stage === FALSE || !@copy($file_download, $top1m_stage)) {
 					pfb_logger("\n[pfb_download] {$type} rename to destination failed", 2);
+					if ($top1m_stage !== FALSE) {
+						unlink_if_exists($top1m_stage);
+					}
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
+				$top1m_base_backup = @tempnam(dirname($file_dwn), '.pfbtop1m_base_');
+				if ($top1m_base_backup === FALSE || !@unlink($top1m_base_backup) || !@mkdir($top1m_base_backup, 0700)) {
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
+					return PfbDownloadResult::failure();
+				}
+				$top1m_base_backups = array();
+				foreach (array("{$file_dwn}.orig", "{$file_dwn}.xxhash128", "{$file_dwn}.md5") as $top1m_base_path) {
+					if (is_file($top1m_base_path)) {
+						$top1m_base_copy = "{$top1m_base_backup}/" . basename($top1m_base_path);
+						if (!@copy($top1m_base_path, $top1m_base_copy)) {
+							rmdir_recursive($top1m_base_backup);
+							unlink_if_exists($file_download);
+							unlink_if_exists($top1m_stage);
+							return PfbDownloadResult::failure();
+						}
+						$top1m_base_backups[$top1m_base_path] = $top1m_base_copy;
+					}
+				}
+				$top1m_active_backup = @tempnam(dirname($head_download), '.pfbtop1m_active_');
+				if ($top1m_active_backup === FALSE || !@unlink($top1m_active_backup)) {
+					rmdir_recursive($top1m_base_backup);
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
+					return PfbDownloadResult::failure();
+				}
+				$top1m_had_active = file_exists($head_download) || is_link($head_download);
+				if ($top1m_had_active && !@rename($head_download, $top1m_active_backup)) {
+					rmdir_recursive($top1m_base_backup);
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
+					return PfbDownloadResult::failure();
+				}
+				if (!@rename($top1m_stage, $head_download)) {
+					if ($top1m_had_active) {
+						@rename($top1m_active_backup, $head_download);
+					}
+					rmdir_recursive($top1m_base_backup);
+					unlink_if_exists($file_download);
+					unlink_if_exists($top1m_stage);
 					return PfbDownloadResult::failure();
 				}
 				if (!pfb_top1m_persist_baseline($file_dwn, $file_download)) {
+					unlink_if_exists($head_download);
+					if ($top1m_had_active) {
+						@rename($top1m_active_backup, $head_download);
+					}
+					foreach (array("{$file_dwn}.orig", "{$file_dwn}.xxhash128", "{$file_dwn}.md5") as $top1m_base_path) {
+						if (isset($top1m_base_backups[$top1m_base_path])) {
+							@copy($top1m_base_backups[$top1m_base_path], $top1m_base_path);
+						} elseif (is_file($top1m_base_path)) {
+							@unlink($top1m_base_path);
+						}
+					}
+					rmdir_recursive($top1m_base_backup);
 					unlink_if_exists($file_download);
-					unlink_if_exists($top1m_stage);
-					pfb_top1m_invalidate_baseline($file_dwn);
 					return PfbDownloadResult::failure();
 				}
-				if (!@rename($file_download, $top1m_stage) || !@rename($top1m_stage, $head_download)) {
-					unlink_if_exists($top1m_stage);
-					pfb_top1m_invalidate_baseline($file_dwn);
-					return PfbDownloadResult::failure();
+				if ($top1m_had_active) {
+					is_dir($top1m_active_backup) ? rmdir_recursive($top1m_active_backup) : unlink_if_exists($top1m_active_backup);
 				}
+				rmdir_recursive($top1m_base_backup);
+				unlink_if_exists($file_download);
 				touch("{$pfb['dbdir']}/top-1m.update");
 				return PfbDownloadResult::success();
 			}
