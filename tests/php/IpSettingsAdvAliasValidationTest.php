@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
  * Tests for the Advanced Inbound/Outbound alias handling on the IP settings page
  * (issue #676, sibling of #636).
  *
- * pfblockerng.php is a TEMPLATE: it generates the per-continent settings pages
+ * pfblockerng_geoip.inc is the TEMPLATE: it generates the per-continent settings pages
  * (pfblockerng_<Continent>.php) via file_put_contents. On a POST save those pages
  * process the four Advanced alias fields (aliasports_in / aliasaddr_in /
  * aliasports_out / aliasaddr_out) in TWO steps that this suite exercises together,
@@ -51,9 +51,9 @@ final class IpSettingsAdvAliasValidationTest extends TestCase
 	public static function setUpBeforeClass(): void
 	{
 		$src = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php'
+			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc'
 		);
-		self::assertNotFalse($src, 'could not read pfblockerng.php');
+		self::assertNotFalse($src, 'could not read pfblockerng_geoip.inc');
 
 		// Slice 1: build $options_aliasports_* / $options_aliasaddr_* from config.
 		$ok = preg_match(
@@ -61,7 +61,7 @@ final class IpSettingsAdvAliasValidationTest extends TestCase
 			$src,
 			$m
 		);
-		self::assertSame(1, $ok, 'could not locate the alias-options block in pfblockerng.php');
+		self::assertSame(1, $ok, 'could not locate the alias-options block in pfblockerng_geoip.inc');
 		self::$optionsBlock = $m[0];
 
 		// Slice 2: the select-option normalization foreach(es) + the Advanced In/Out
@@ -72,7 +72,7 @@ final class IpSettingsAdvAliasValidationTest extends TestCase
 			$src,
 			$m
 		);
-		self::assertSame(1, $ok, 'could not locate the alias normalization/validation block in pfblockerng.php');
+		self::assertSame(1, $ok, 'could not locate the alias normalization/validation block in pfblockerng_geoip.inc');
 		self::$processBlock = $m[0];
 	}
 

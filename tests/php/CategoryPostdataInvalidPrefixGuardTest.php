@@ -17,7 +17,7 @@ require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
  * correct "Failed Variable:" one.
  *
  * The file carries top-level execution and cannot be require()d off-appliance
- * (house precedent: CountryNetworksCountGuardTest.php, PfbOptionsHeredocMultiContinentTest.php).
+ * (house precedent: CountryNetworksCountGuardTest.php, GeoipPackageGenerationTest.php).
  * This test eval-extracts the postdata foreach fragment VERBATIM and POSITIONALLY
  * (anchored on the foreach's own open/close braces plus the next statement's
  * comment as an end-anchor) from the real shipped source, so it drives the actual

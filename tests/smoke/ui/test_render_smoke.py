@@ -15,8 +15,9 @@ passes -- proven by ``test_render_oracle.py`` feeding the oracle a broken body.
 
 Hermeticity (ADR §2 "Hermetic where it claims to be"): every page in the table
 renders from local config alone -- none triggers a feed download to produce its
-chrome. The GeoIP/Reputation per-continent pages ``pfblockerng.php`` WRITES via its
-credential-free, network-free `ugc` verb (issue #1219) are seeded with MaxMind's own
+chrome. The GeoIP/Reputation per-continent pages ``pfblockerng_geoip.inc`` WRITES
+when invoked by the ``pfblockerng.php`` CLI dispatcher via its credential-free,
+network-free `ugc` verb (issue #1219) are seeded with MaxMind's own
 public test corpus (:func:`~tests.smoke.helpers.seed_geoip_dataset`, wired into
 :data:`~tests.smoke.ui.conftest.deployed_vm`) and included in the table below. Only
 the DNSBL-VIP sinkhole pages (served by a separate lighttpd, unreachable from this
@@ -211,14 +212,17 @@ PAGE_TABLE: tuple[Page, ...] = (
         "/widgets/widgets/pfblockerng.widget.php",
         ('id="pfblockerngack"', "Alias", "Show Aggregated Aliases"),
     ),
-    # issue #1219/#1228: pfblockerng.php is a CLI dispatcher + a TEMPLATE that WRITES these 9
+    # issue #1219/#1228: pfblockerng.php is a CLI dispatcher; pfblockerng_geoip.inc is the
+    # TEMPLATE that WRITES these 9
     # continent/category pages (+ Reputation, below) via `ugc` (pfblockerng_uc_countries()
     # + pfblockerng_get_countries()) -- a credential-free, network-free LOCAL conversion of
-    # MaxMind-schema CSVs (pfblockerng.php:398-406; the MaxMind key/account gate lives in
+    # MaxMind-schema CSVs (dispatcher pfblockerng.php:398-406; generator module owns writes;
+    # the MaxMind key/account gate lives in
     # the DOWNLOAD verbs `dc`/`dcc`/`bu` only). The UI session seeds MaxMind's official test
     # corpus and runs `ugc` once (helpers.seed_geoip_dataset, wired into the `deployed_vm`
     # fixture) so these pages exist and render hermetically, same as every other Tier-A page.
-    # Each Form_Section title is "Continent - {continent_display}" (pfblockerng.php:1919). The
+    # Each Form_Section title is "Continent - {continent_display}" (generated template in
+    # pfblockerng_geoip.inc). The
     # second marker of each pair is a seeded country's <option> text, but the oracle matches
     # with any(), so it is documentation, NOT a gate — the seeded data is pinned by
     # test_geoip_pages_render_the_seeded_csv_rows.
@@ -277,8 +281,8 @@ PAGE_TABLE: tuple[Page, ...] = (
         "/pfblockerng/pfblockerng_Top_Spammers.php",
         ("Continent - Top Spammers", "United Kingdom (2635167) GB (5)"),
     ),
-    # Reputation is written unconditionally by pfb_build_reputation_tab() at the end of
-    # pfblockerng_get_countries() -- no MaxMind/network dependency either.
+    # Reputation is written unconditionally by pfb_build_reputation_tab() in
+    # pfblockerng_geoip.inc -- no MaxMind/network dependency either.
     Page(
         "geoip_reputation",
         "/pfblockerng/pfblockerng_reputation.php",
@@ -2599,15 +2603,16 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     this -- the count is asserted so the sweep can't silently skip a page. 15
     servable main pages: general, ip, dnsbl, feeds, alerts, log, sync,
     safesearch, update, blacklist, category, category_edit, threats, hooks, plus
-    the pfblockerng.php template (never served directly, see below). The widget
+    the pfblockerng.php CLI dispatcher (never served directly, see below). The widget
     rounds it out. issue #1219: the 9 GeoIP continent/category pages + Reputation
-    (all WRITTEN by pfblockerng.php's `ugc` verb) are ALSO covered now that a seeded
+    (all WRITTEN by pfblockerng_geoip.inc via `ugc`) are ALSO covered now that a seeded
     synthetic dataset makes them hermetically renderable -- only the DNSBL-VIP
     sinkhole pages remain a recorded exclusion.
     """
     covered_paths = {p.path.split("?", 1)[0] for p in PAGE_TABLE}
     # 14 distinct main .php files are render-smoked here (pfblockerng.php is never
-    # served directly -- it is the CLI dispatcher + template for the GeoIP pages
+    # served directly -- it is the CLI dispatcher; pfblockerng_geoip.inc is the template for
+    # the GeoIP pages
     # below), plus the widget = 15 distinct paths.
     expected_main = {
         "/pfblockerng/pfblockerng_general.php",
@@ -2652,8 +2657,8 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
 def test_pfblockerng_download_extras_uses_typed_download_result() -> None:
     """Pin the CLI-only download contract that Tier-A HTTP rendering cannot execute.
 
-    ``pfblockerng.php`` is never served directly: it is the CLI dispatcher and
-    template for the generated GeoIP pages.  Keep this source assertion in the
+    ``pfblockerng.php`` is never served directly: it is the CLI dispatcher; the
+    ``pfblockerng_geoip.inc`` module owns generated GeoIP pages. Keep this source assertion in the
     ``ui_render`` module so the changed PHP call shape still has a front-end
     coverage pairing without pretending an HTTP render reaches this function.
     """
@@ -2685,7 +2690,7 @@ def test_reputation_page_help_text_names_relocated_matchgen_paths(
     artifacts' OLD matchdir names/location; both moved under matchdir/generated with new names.
 
     Scenario: Reputation page help text names the relocated matchgen paths.
-      Given the Reputation page (written by pfblockerng.php's `ugc`, pfblockerng.php:2562/2614)
+            Given the Reputation page (written by pfblockerng_geoip.inc via `ugc`)
             renders cleanly
       When  the body is inspected
       Then  it names the NEW matchgendir paths for the ccwhite exempt file and the ET match
