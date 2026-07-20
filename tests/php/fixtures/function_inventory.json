@@ -7078,34 +7078,94 @@
         "returnsRef": false,
         "returnType": null,
         "params": [
-            {"name": "download_ok", "byRef": false, "variadic": false, "type": null, "default": null},
-            {"name": "ledger_dir", "byRef": false, "variadic": false, "type": null, "default": null},
-            {"name": "message", "byRef": false, "variadic": false, "type": null, "default": "''"}
+            {
+                "name": "download_ok",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "message",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "''"
+            }
         ]
     },
     "pfb_top1m_invalidate_baseline": {
         "returnsRef": false,
         "returnType": null,
         "params": [
-            {"name": "base", "byRef": false, "variadic": false, "type": null, "default": null}
+            {
+                "name": "base",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
         ]
     },
     "pfb_top1m_persist_baseline": {
         "returnsRef": false,
         "returnType": null,
         "params": [
-            {"name": "base", "byRef": false, "variadic": false, "type": null, "default": null},
-            {"name": "raw_path", "byRef": false, "variadic": false, "type": null, "default": null}
+            {
+                "name": "base",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "raw_path",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
         ]
     },
     "pfb_top1m_probe_decision": {
         "returnsRef": false,
         "returnType": null,
         "params": [
-            {"name": "probe_ok", "byRef": false, "variadic": false, "type": null, "default": null},
-            {"name": "http_status", "byRef": false, "variadic": false, "type": null, "default": null},
-            {"name": "body_hash", "byRef": false, "variadic": false, "type": null, "default": null},
-            {"name": "persisted_hash", "byRef": false, "variadic": false, "type": null, "default": null}
+            {
+                "name": "probe_ok",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "http_status",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "body_hash",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "persisted_hash",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
         ]
     },
     "pfb_top1m_providers": {
@@ -7117,17 +7177,47 @@
         "returnsRef": false,
         "returnType": null,
         "params": [
-            {"name": "before", "byRef": false, "variadic": false, "type": "array", "default": null},
-            {"name": "after", "byRef": false, "variadic": false, "type": "array", "default": null}
+            {
+                "name": "before",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "after",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
         ]
     },
     "pfb_top1m_source_identity": {
         "returnsRef": false,
         "returnType": null,
         "params": [
-            {"name": "provider", "byRef": false, "variadic": false, "type": null, "default": null},
-            {"name": "url", "byRef": false, "variadic": false, "type": null, "default": null},
-            {"name": "headers", "byRef": false, "variadic": false, "type": "array", "default": "array (\n)"}
+            {
+                "name": "provider",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "url",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "headers",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            }
         ]
     },
     "pfb_tracker": {
@@ -7192,6 +7282,33 @@
         "returnsRef": false,
         "returnType": "bool",
         "params": []
+    },
+    "pfb_unbound_py_atomic_copy": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "source",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "stream_ops",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            }
+        ]
     },
     "pfb_unbound_py_atomic_write": {
         "returnsRef": false,
