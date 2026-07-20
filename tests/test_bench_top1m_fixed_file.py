@@ -23,6 +23,23 @@ sys.modules[_SPEC.name] = _BENCH
 _SPEC.loader.exec_module(_BENCH)
 
 
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _wait_pid_gone(pid: int, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_exists(pid):
+            return True
+        time.sleep(0.05)
+    return not _pid_exists(pid)
+
+
 def test_benchmark_default_is_exactly_one_million() -> None:
     assert _BENCH.DEFAULT_LINES == 1_000_000
 
@@ -138,15 +155,10 @@ def test_timed_timeout_kills_descendant_process_group(tmp_path: Path) -> None:
         )
 
     child_pid = int(child_pid_path.read_text())
-    child_state = subprocess.run(
-        ["ps", "-o", "stat=", "-p", str(child_pid)], capture_output=True, text=True, check=False
-    ).stdout.strip()
     try:
-        assert not child_state or child_state.startswith("Z"), (
-            f"timed-out child survived: pid={child_pid} state={child_state}"
-        )
+        assert _wait_pid_gone(child_pid), f"timed-out child survived: pid={child_pid}"
     finally:
-        if child_state and not child_state.startswith("Z"):
+        if _pid_exists(child_pid):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(child_pid, signal.SIGKILL)
 
@@ -186,12 +198,7 @@ def test_timed_parent_signal_kills_worker_process_group(tmp_path: Path) -> None:
 
         os.kill(driver.pid, signal.SIGTERM)
         assert driver.wait(timeout=10) == 77
-        worker_state = subprocess.run(
-            ["ps", "-o", "stat=", "-p", str(worker_pid)], capture_output=True, text=True, check=False
-        ).stdout.strip()
-        assert not worker_state or worker_state.startswith("Z"), (
-            f"worker survived benchmark driver signal: pid={worker_pid} state={worker_state}"
-        )
+        assert _wait_pid_gone(worker_pid), f"worker survived benchmark driver signal: pid={worker_pid}"
     finally:
         with contextlib.suppress(ProcessLookupError):
             os.kill(driver.pid, signal.SIGKILL)
