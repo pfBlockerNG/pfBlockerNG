@@ -4125,6 +4125,141 @@ function pfb_live_punch_run(string $pfctl, string $aliasdir, string $dbdir, stri
 }
 
 /**
+ * Apply an Alerts IP mutation after the page has filtered its inputs.
+ *
+ * @return array{redirect: bool, savemsg: string}
+ */
+function pfb_alerts_ip_action($action, string $ip, string $table, string $descr, array $clists, array $ip_unlock): array
+{
+	global $pfb;
+
+	$result = ['redirect' => TRUE, 'savemsg' => ''];
+
+	if ($action === 'addsuppress') {
+		$is_v6  = strpos($ip, ':') !== FALSE;
+		$family = $is_v6 ? 6 : 4;
+		$apply  = pfb_live_punch_run($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table, $ip);
+
+		switch ($apply['status']) {
+			case 'applied':
+				$savemsg2 = ' : Removed ' . $apply['del_cnt'] . ' entr' . ($apply['del_cnt'] == 1 ? 'y' : 'ies')
+					. ', added ' . $apply['add_cnt'] . ' covering CIDR' . ($apply['add_cnt'] == 1 ? '' : 's');
+				break;
+			case 'not_blocked':
+				$savemsg2 = " : Not currently blocked by Table [ {$table} ]";
+				break;
+			case 'busy':
+				$savemsg2 = ' : An update/reload pass is currently in progress, suppression will apply at the next reload';
+				break;
+			default:
+				$savemsg2 = " : Live punch failed [ {$apply['fail']} ], suppression will still apply at the next reload";
+				break;
+		}
+
+		$supp_key       = $is_v6 ? 'ipsuppression_v6' : 'ipsuppression';
+		$cfg_key        = $is_v6 ? 'v6suppression' : 'v4suppression';
+		$host_line      = $is_v6 ? "{$ip}/128" : "{$ip}/32";
+		$supp_data      = isset($clists[$supp_key]['data']) && is_array($clists[$supp_key]['data'])
+			? $clists[$supp_key]['data'] : [];
+		$refresh_suppfile = FALSE;
+		if (isset($supp_data[$host_line])) {
+			$result['savemsg'] = gettext("Host IP address {$ip} already exists in the IPv{$family} Suppression customlist.");
+		} elseif (pfb_ip_suppressed($ip, array_keys($supp_data))) {
+			$result['savemsg'] = gettext("Host IP address {$ip} is already covered by an existing IPv{$family} Suppression entry.");
+			$refresh_suppfile = TRUE;
+		} else {
+			$supp_dat = $host_line;
+			if (!empty($descr)) {
+				$supp_dat .= " # {$descr}";
+			}
+			$result['savemsg'] = gettext("Host IP address {$ip}") . gettext($savemsg2) . gettext(" and added to the IPv{$family} Suppression customlist.");
+			$data = '';
+			foreach ($supp_data as $line) {
+				$data .= "{$line}";
+			}
+			$data .= "{$supp_dat}\r\n";
+			$clists[$supp_key]['base64'] = base64_encode($data);
+			PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
+			write_config("pfBlockerNG: Added {$ip} to the IPv{$family} Suppression customlist", FALSE);
+			$refresh_suppfile = TRUE;
+		}
+
+		if ($refresh_suppfile) {
+			$pfb['ipconfig'][$cfg_key] = $clists[$supp_key]['base64'] ?? '';
+			pfb_create_suppression_file();
+		}
+		return $result;
+	}
+
+	if ($action === 'unlock') {
+		$apply = pfb_live_punch_run($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table, $ip);
+		switch ($apply['status']) {
+			case 'applied':
+				pfb_unlock('unlock', 'ip', $ip, $table, $ip_unlock);
+				$result['savemsg'] = "The IP [ {$ip} ] has been temporarily Unlocked from table [ {$table} ]!";
+				break;
+			case 'not_blocked':
+				$result['savemsg'] = "The IP [ {$ip} ] is not currently blocked by table [ {$table} ] -- no unlock was recorded.";
+				break;
+			case 'busy':
+				$result['savemsg'] = "Table [ {$table} ] is mid-update -- please retry the Unlock once the current run finishes.";
+				break;
+			default:
+				$result['savemsg'] = "The live unlock of IP [ {$ip} ] failed [ {$apply['fail']} ] -- table [ {$table} ] still blocks it; see the pfBlockerNG log.";
+				break;
+		}
+		return $result;
+	}
+
+	if ($action === 'lock') {
+		$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
+		if ($apply['ok']) {
+			pfb_unlock('lock', 'ip', $ip, $table, $ip_unlock);
+			$result['savemsg'] = "The IP [ {$ip} ] has been re-locked into table [ {$table} ]!";
+		} else {
+			$result['savemsg'] = "The live re-lock of IP [ {$ip} ] failed [ {$apply['fail']} ] -- table [ {$table} ] does not block it; see the pfBlockerNG log.";
+		}
+		return $result;
+	}
+
+	if ($action === 'ip_white') {
+		$vtype = strpos($table, '_v4') !== FALSE ? '4' : '6';
+		$list_key = 'ipwhitelist' . $vtype;
+		$data = isset($clists[$list_key][$table]['data']) && is_array($clists[$list_key][$table]['data'])
+			? $clists[$list_key][$table]['data'] : [];
+		if (isset($data[$ip])) {
+			$result['redirect'] = FALSE;
+			return $result;
+		}
+
+		$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
+		if (!$apply['ok']) {
+			$result['savemsg'] = "The add of [ {$ip} ] to aliastable [ {$table} ] failed [ {$apply['fail']} ] -- see the pfBlockerNG log.";
+			return $result;
+		}
+
+		@file_put_contents("{$pfb['aliasdir']}/{$table}.txt", "\n{$ip}", LOCK_EX);
+		$whitelist_string = !empty($descr) ? "{$ip} # {$descr}\r\n" : "{$ip}\r\n";
+		$custom = '';
+		foreach ($data as $line) {
+			$custom .= "{$line}";
+		}
+		$custom .= $whitelist_string;
+		$clists[$list_key][$table]['base64'] = base64_encode($custom);
+		$base64_idx = $clists[$list_key][$table]['base64_idx'] ?? 0;
+		config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$base64_idx}/custom", $clists[$list_key][$table]['base64']);
+		write_config("pfBlockerNG: Added [ {$ip} ] to [ {$table} ] Whitelist", FALSE);
+		$aname = substr(substr($table, 4), 0, -3);
+		touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");
+		$result['savemsg'] = "The IP [ {$ip} ] has been added to the [ {$table} ] Permit Alias customlist.";
+		return $result;
+	}
+
+	$result['savemsg'] = gettext('Cannot Lock/Unlock - Invalid action.');
+	return $result;
+}
+
+/**
  * ADR-65 SS2.1: ask the live DNSBL matcher whether $domain is blocked, via the
  * read-only query channel (pfb_py_query / pfb_py_query.reply) -- no counter/
  * log/cache sink is touched, only the decision-cache LRU may warm.
