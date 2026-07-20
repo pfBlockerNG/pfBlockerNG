@@ -311,7 +311,7 @@ final class Top1mTldCaseFoldTest extends TestCase
 	public function testCsvDomainCol2MajesticShapeMixedCaseDomainMatchesAndFolds(): void
 	{
 		$csv = "GlobalRank,TldRank,Domain,TLD,RefSubNets,RefIPs,IDN_Domain,IDN_TLD,PrevGlobalRank,PrevTldRank,PrevRefSubNets,PrevRefIPs\n"
-			. "1,1,Example.CoM,extra\n";
+			. "1,1,Example.CoM,com,10,20,,,2,2,9,19\n";
 		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: Majestic-shaped mixed-case Domain row');
 
 		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::Majestic->value]);
