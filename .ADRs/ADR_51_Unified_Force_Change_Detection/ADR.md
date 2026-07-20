@@ -1,9 +1,12 @@
 # ADR-51: Unify the Force modes on sidecar-driven change detection (drop the reuse flag)
 
-- **Status:** **Proposed** (2026-06-29; anchors + facts refreshed 2026-07-03 against `devel` —
-  two design forks were found open, see §1.5, and they block phase-prompt authoring). Builds
-  directly on the contained Force-mode work shipped in PR #624 (Update-page `pfb_force_mode` =
-  None/Parse/Download/Both) and on the ADR-42 change-detector. Not yet implemented.
+- **Status:** **Retired** (2026-07-20; [issue #1443](https://github.com/pfBlockerNG/pfBlockerNG/issues/1443)).
+  No concrete, reproducible Force×feed-class contract failure was identified. Current `devel`
+  centralizes and test-pins the existing force/reuse run plan; `pfb_reuse` remains a registered,
+  one-shot request. Replacing `pfb_download()`'s interface does not change those semantics. This
+  proposal would add detector branching, per-feed signaling, self-heal, and feed-class exceptions
+  without removing cached-reparse machinery. No replacement spec is warranted without defect
+  evidence.
 - **Date:** 2026-06-29
 - **Branch:** `adr/51-unified-force-change-detection` (off **`devel`**; `{slug}` = sanitised
   ADR-title slug per CLAUDE.md "Branch naming"). / **Component(s):** the change-detector and the
