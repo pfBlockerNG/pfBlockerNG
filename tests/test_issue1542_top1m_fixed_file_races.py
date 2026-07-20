@@ -49,6 +49,38 @@ def test_enabled_invalid_utf8_fixed_file_fails_closed(tmp_path: Path) -> None:
     assert P.dnsbl_build_from_manifest(str(manifest)) is None
 
 
+def test_enabled_read_oserror_fixed_file_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    path = tmp_path / "pfb_py_top1m.txt"
+    path.write_text("first.example\nsecond.example\n", encoding="utf-8")
+    real_open = open
+
+    class FailingReader:
+        def __init__(self, handle: Any) -> None:
+            self._handle = handle
+
+        def __enter__(self) -> FailingReader:
+            self._handle.__enter__()
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+            return bool(self._handle.__exit__(exc_type, exc, traceback))
+
+        def fileno(self) -> int:
+            return self._handle.fileno()
+
+        def __iter__(self) -> Any:
+            yield "first.example\n"
+            raise OSError("injected mid-read")
+
+    def injected_open(name: str | os.PathLike[str], *args: Any, **kwargs: Any) -> Any:
+        handle = real_open(name, *args, **kwargs)
+        return FailingReader(handle) if os.fspath(name) == os.fspath(path) else handle
+
+    monkeypatch.setattr("builtins.open", injected_open)
+    assert P.dnsbl_build_from_manifest(str(manifest)) is None
+
+
 def test_enabled_in_place_truncation_during_iteration_fails_closed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
