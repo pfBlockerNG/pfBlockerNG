@@ -12,6 +12,8 @@ use PHPUnit\Framework\TestCase;
  * fixtures, so active-file and baseline contracts run off-appliance.
  */
 #[CoversFunction('pfb_top1m_probe_decision')]
+#[CoversFunction('pfb_top1m_detector_decision')]
+#[CoversFunction('pfb_top1m_dispatch_if_changed')]
 #[CoversFunction('pfb_top1m_source_identity')]
 #[CoversFunction('pfb_top1m_invalidate_baseline')]
 #[CoversFunction('pfb_top1m_persist_baseline')]
@@ -34,6 +36,7 @@ final class Top1mDccDetectorTest extends TestCase
 
 	protected function setUp(): void
 	{
+		self::loadWwwDccHelpers();
 		$this->dir = sys_get_temp_dir() . '/pfb_top1m_dcc_' . getmypid() . '_' . uniqid();
 		$this->assertTrue(mkdir($this->dir, 0777, TRUE));
 		foreach (['log', 'errlog', 'pnow'] as $key) {
@@ -80,6 +83,14 @@ final class Top1mDccDetectorTest extends TestCase
 		$this->assertSame('changed', pfb_top1m_probe_decision(TRUE, '200', FALSE, 'old'));
 		$this->assertSame('changed', pfb_top1m_probe_decision(TRUE, '500', FALSE, 'old'));
 		$this->assertSame('failed', pfb_top1m_probe_decision(FALSE, '', FALSE, 'old'));
+	}
+
+	public function testExtractedDetectorDecisionPreservesExistingProbeMatrix(): void
+	{
+		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '304', FALSE, 'ignored'));
+		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '200', 'same', 'same'));
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '200', 'new', 'old'));
+		$this->assertSame('failed', pfb_top1m_detector_decision(FALSE, '', FALSE, 'old'));
 	}
 
 	public function testProviderIdentityCoversAllFiveProvidersAndAuth(): void
@@ -451,5 +462,80 @@ final class Top1mDccDetectorTest extends TestCase
 		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
 		$this->assertIsString($source);
 		$this->assertStringContainsString('pfb_trigger scope=dnsbl force=false trigger=cron', $source);
+	}
+
+	public function testExtractedDispatchSeamRunsExistingCronCommand(): void
+	{
+		$dispatch_log = "{$this->dir}/dispatch.log";
+		$fake_php = "{$this->dir}/fake-php";
+		$script = "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> " . escapeshellarg($dispatch_log) . "\n";
+		$this->assertNotFalse(file_put_contents($fake_php, $script));
+		$this->assertTrue(chmod($fake_php, 0755));
+
+		$saved_argv = $GLOBALS['argv'];
+		$saved_php = $GLOBALS['pfb']['php'] ?? FALSE;
+		$saved_runlog = $GLOBALS['pfb']['runlog'] ?? FALSE;
+		$saved_changed = $GLOBALS['pfb']['top1m_changed'] ?? FALSE;
+		try {
+			$GLOBALS['argv'] = ['pfblockerng.php', 'dcc'];
+			$GLOBALS['pfb']['php'] = $fake_php;
+			$GLOBALS['pfb']['runlog'] = '/dev/null';
+			$GLOBALS['pfb']['top1m_changed'] = TRUE;
+
+			$this->assertTrue(pfb_top1m_dispatch_if_changed(TRUE));
+			$this->assertEventually(static function () use ($dispatch_log): bool {
+				return is_file($dispatch_log);
+			}, 'TOP1M dispatch command did not run');
+			$lines = file($dispatch_log, FILE_IGNORE_NEW_LINES);
+			$this->assertIsArray($lines);
+			$this->assertCount(1, $lines);
+			$this->assertStringContainsString('pfb_trigger scope=dnsbl force=false trigger=cron', $lines[0]);
+		} finally {
+			$GLOBALS['argv'] = $saved_argv;
+			if ($saved_php === FALSE) {
+				unset($GLOBALS['pfb']['php']);
+			} else {
+				$GLOBALS['pfb']['php'] = $saved_php;
+			}
+			if ($saved_runlog === FALSE) {
+				unset($GLOBALS['pfb']['runlog']);
+			} else {
+				$GLOBALS['pfb']['runlog'] = $saved_runlog;
+			}
+			if ($saved_changed === FALSE) {
+				unset($GLOBALS['pfb']['top1m_changed']);
+			} else {
+				$GLOBALS['pfb']['top1m_changed'] = $saved_changed;
+			}
+		}
+	}
+
+	private static function loadWwwDccHelpers(): void
+	{
+		if (function_exists('pfb_top1m_detector_decision')) {
+			return;
+		}
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
+		if ($source === FALSE) {
+			self::fail('failed to read pfblockerng.php');
+		}
+		$start = strpos($source, "\nfunction pfb_top1m_detector_decision");
+		$end = strpos($source, "\nfunction pfblockerng_download_extras", $start === FALSE ? 0 : $start);
+		if ($start === FALSE || $end === FALSE || $end <= $start) {
+			self::fail('could not locate extracted TOP1M helper block');
+		}
+		eval("\n" . substr($source, $start + 1, $end - $start - 1));
+	}
+
+	private static function assertEventually(callable $condition, string $message): void
+	{
+		$deadline = microtime(TRUE) + 2.0;
+		do {
+			if ($condition()) {
+				return;
+			}
+			usleep(10000);
+		} while (microtime(TRUE) < $deadline);
+		self::fail($message);
 	}
 }
