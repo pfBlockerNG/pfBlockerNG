@@ -59,7 +59,7 @@ function pfb_sync_run_plan(array $request, bool $no_updates, bool $cron_tick, st
  * TOP1M's live CSV is usable only while its raw detector baseline is present too.
  */
 function pfb_top1m_refresh_needed(string $dbdir): bool {
-	return !file_exists("{$dbdir}/top-1m.csv");
+	return !file_exists("{$dbdir}/top-1m.csv") || !file_exists("{$dbdir}/top-1m.csv.zip.orig");
 }
 
 /**

@@ -46,11 +46,10 @@ final class Top1mApplyRefreshTest extends TestCase
 	public function testActiveCsvSkipsRefreshRegardlessOfBaseline(): void
 	{
 		$this->assertNotFalse(file_put_contents($this->activePath(), "live\n"));
-		$this->assertFalse(pfb_top1m_refresh_needed($this->dbdir), 'existing active CSV must skip provider fetch');
 		$this->assertNotFalse(file_put_contents($this->baselinePath(), "raw\n"));
 		$this->assertFalse(pfb_top1m_refresh_needed($this->dbdir), 'existing active CSV with baseline must still skip');
 		unlink($this->baselinePath());
-		$this->assertFalse(pfb_top1m_refresh_needed($this->dbdir), 'existing active CSV without baseline preserves old behavior');
+		$this->assertTrue(pfb_top1m_refresh_needed($this->dbdir), 'missing detector baseline must force provider retry');
 	}
 
 	public function testFetchSeamOnlyRunsWhenActiveCsvMissing(): void
@@ -65,6 +64,7 @@ final class Top1mApplyRefreshTest extends TestCase
 		);
 		$this->assertSame(1, $attempts, 'failed fetch must be observable as one attempt');
 		$this->assertNotFalse(file_put_contents($this->activePath(), "live\n"));
+		$this->assertNotFalse(file_put_contents($this->baselinePath(), "raw\n"));
 		$this->assertFalse(
 			pfb_top1m_fetch_if_needed($this->dbdir, static function () use (&$attempts): bool {
 				$attempts++;
@@ -73,6 +73,45 @@ final class Top1mApplyRefreshTest extends TestCase
 			'existing active CSV must skip provider fetch'
 		);
 		$this->assertSame(1, $attempts, 'active CSV must suppress a second fetch attempt');
+	}
+
+	public function testFailedFetchPreservesLiveOutputsAndRemainsRetryable(): void
+	{
+		$active = "live\n";
+		$whitelist = ".example.com,,\n,example.com,,\n,www.example.com,,\n";
+		$whitelistPath = "{$this->dbdir}/pfbalexawhitelist.txt";
+		$this->assertNotFalse(file_put_contents($this->activePath(), $active));
+		$this->assertNotFalse(file_put_contents($whitelistPath, $whitelist));
+		$attempts = 0;
+
+		$this->assertTrue(
+			pfb_top1m_fetch_if_needed($this->dbdir, static function () use (&$attempts): bool {
+				$attempts++;
+				return FALSE;
+			}),
+			'missing detector baseline must attempt provider fetch'
+		);
+		$this->assertSame(1, $attempts, 'failed fetch must be observable as one attempt');
+		$this->assertSame($active, file_get_contents($this->activePath()), 'failed fetch must preserve active CSV');
+		$this->assertSame($whitelist, file_get_contents($whitelistPath), 'failed fetch must preserve whitelist');
+		$this->assertTrue(pfb_top1m_refresh_needed($this->dbdir), 'missing baseline must force the next retry');
+	}
+
+	public function testUpdateMarkerWithCompleteSourceStaysOnLocalReprocess(): void
+	{
+		$this->assertNotFalse(file_put_contents($this->activePath(), "live\n"));
+		$this->assertNotFalse(file_put_contents($this->baselinePath(), "raw\n"));
+		$this->assertNotFalse(file_put_contents("{$this->dbdir}/top-1m.update", ''));
+		$attempts = 0;
+
+		$this->assertFalse(
+			pfb_top1m_fetch_if_needed($this->dbdir, static function () use (&$attempts): bool {
+				$attempts++;
+				return FALSE;
+			}),
+			'update marker with complete source must stay on local reprocess path'
+		);
+		$this->assertSame(0, $attempts, 'local reprocess marker must not invoke provider fetch');
 	}
 
 }
