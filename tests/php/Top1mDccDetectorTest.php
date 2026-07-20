@@ -205,6 +205,7 @@ final class Top1mDccDetectorTest extends TestCase
 	public function testTop1mZipFileTargetRejectsMultipleMembersAndRetainsActiveAndBaseline(): void
 	{
 		$archive = $this->zipFixture('multiple.zip', ['feed/a.csv' => "new-a\n", 'feed/b.csv' => "new-b\n"]);
+		$this->requireZipTarSupport($archive);
 		$base = $this->dir . '/top-1m.csv.zip';
 		$active = $this->dir . '/top-1m.csv';
 		file_put_contents($active, 'old active');
@@ -222,6 +223,7 @@ final class Top1mDccDetectorTest extends TestCase
 	public function testTop1mZipFileTargetPublishesSingleRegularMemberAndThenPersistsBaseline(): void
 	{
 		$archive = $this->zipFixture('single.zip', ['feed/top.csv' => "rank,example.test\n"]);
+		$this->requireZipTarSupport($archive);
 		$base = $this->dir . '/top-1m.csv.zip';
 		$active = $this->dir . '/top-1m.csv';
 		file_put_contents($active, 'old active');
@@ -236,6 +238,7 @@ final class Top1mDccDetectorTest extends TestCase
 	public function testTop1mZipDirectoryTargetExtractsEveryMember(): void
 	{
 		$archive = $this->zipFixture('directory.zip', ['feed/a.csv' => "a\n", 'feed/b.csv' => "b\n"]);
+		$this->requireZipTarSupport($archive);
 		$base = $this->dir . '/top-1m.csv.zip';
 		$target = $this->dir . '/out';
 		$this->assertTrue(mkdir($target));
@@ -248,6 +251,7 @@ final class Top1mDccDetectorTest extends TestCase
 	public function testTop1mZipUnsafeMemberMakesNoActiveOrStagingWrite(): void
 	{
 		$archive = $this->zipFixture('unsafe.zip', ['feed/good.csv' => "good\n", '../escape.csv' => "escape\n"]);
+		$this->requireZipTarSupport($archive);
 		$base = $this->dir . '/top-1m.csv.zip';
 		$active = $this->dir . '/top-1m.csv';
 		file_put_contents($active, 'old active');
@@ -315,6 +319,9 @@ final class Top1mDccDetectorTest extends TestCase
 				'body' => "rank,plain.test\n",
 			],
 		];
+		if (!$this->tarReadsZip($fixtures['zip']['source'])) {
+			unset($fixtures['zip']);
+		}
 
 		foreach ($fixtures as $label => $fixture) {
 			$base = $fixture['base'];
@@ -374,6 +381,19 @@ final class Top1mDccDetectorTest extends TestCase
 		}
 		$this->assertTrue($zip->close());
 		return $path;
+	}
+
+	private function requireZipTarSupport(string $archive): void
+	{
+		if (!$this->tarReadsZip($archive)) {
+			$this->markTestSkipped('/usr/bin/tar cannot read ZIP on this host; pfSense uses bsdtar');
+		}
+	}
+
+	private function tarReadsZip(string $archive): bool
+	{
+		exec('/usr/bin/tar -tf ' . escapeshellarg($archive) . ' >/dev/null 2>&1', $output, $status);
+		return $status === 0;
 	}
 
 	private function downloadTop1m(string $source, string $base, string $target): bool
