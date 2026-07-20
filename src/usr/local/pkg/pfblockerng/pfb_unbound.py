@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import errno
+import hashlib
 import itertools
 import json
 import logging
@@ -5377,7 +5378,7 @@ def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
         return os.open(file_path, flags | nofollow | getattr(os, "O_NONBLOCK", 0))
 
     try:
-        handle = open(path, encoding="utf-8", errors="strict", newline="", opener=opener)
+        handle = open(path, "rb", opener=opener)
     except (OSError, UnicodeError) as e:
         raise _DnsblGenerationError("TOP1M sidecar unavailable: '{}'".format(path)) from e
 
@@ -5400,7 +5401,19 @@ def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
                 opened.st_mtime_ns,
             ):
                 raise _DnsblGenerationError("TOP1M sidecar changed before reading: '{}'".format(path))
-            for line in handle:
+            expected_digest = hashlib.sha256()
+            while chunk := os.read(handle.fileno(), 64 * 1024):
+                expected_digest.update(chunk)
+            os.lseek(handle.fileno(), 0, os.SEEK_SET)
+            consumed_digest = hashlib.sha256()
+            for raw_line in handle:
+                if isinstance(raw_line, str):
+                    line_bytes = raw_line.encode("utf-8", errors="strict")
+                    line = raw_line
+                else:
+                    line_bytes = raw_line
+                    line = raw_line.decode("utf-8", errors="strict")
+                consumed_digest.update(line_bytes)
                 yield line.strip()
             consumed = os.lseek(handle.fileno(), 0, os.SEEK_CUR)
             finished = os.fstat(handle.fileno())
@@ -5428,6 +5441,7 @@ def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
                     finished.st_size,
                     finished.st_mtime_ns,
                 )
+                or consumed_digest.digest() != expected_digest.digest()
                 or not (pathname_same or pathname_replaced)
                 or (fd_metadata_changed and not pathname_replaced)
             ):
