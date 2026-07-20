@@ -426,17 +426,20 @@ def test_addwhitelistdom_exclude_writes_tld_exclusion_and_entry_delete_removes_i
 # --------------------------------------------------------------------------- #
 
 
-def test_addsuppress_writes_exact_host_and_invalid_ip_rejected(
+@pytest.mark.ui_render
+def test_alerts_invalid_actions_leave_state_unchanged_and_addsuppress_writes_exact_host(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """addsuppress writes the EXACT host (never a network line) and rejects a bad IP.
+    """Reject hostile action values, then add the EXACT host (never a network line).
 
-    Branch coverage for the any-mask/v4+v6 suppression validator, with
-    ``v4suppression`` as oracle:
+    Branch coverage for strict Alerts action dispatch and the any-mask/v4+v6
+    suppression validator, with config, pf, and IP unlock state as oracles:
 
     * REJECT first (proves the node's before-value): an invalid IPv4 makes the
       handler exit before any write -- the node is UNCHANGED.
+    * REJECT a hostile valid-word action: ``ip_remove=ip_white`` with a valid
+      IP/table must not reach another action seam or change any effective state.
     * ACCEPT with no live table match: a valid IPv4 against a table with no
       matching entry still writes the ``ip/32`` line -- the retired mechanism's
       "blocked by a CIDR other than /24" refusal is gone, and the ADR-53
@@ -463,6 +466,20 @@ def test_addsuppress_writes_exact_host_and_invalid_ip_rejected(
         assert helpers.config_get(vm, CFG_V4SUPPRESSION) == original, (
             "v4suppression config node changed after a REJECTED (invalid IP) addsuppress POST"
         )
+
+        # REJECT: a valid IP/table paired with another action word must stay
+        # inert; page-owned strict dispatch must never pass ``ip_white`` to the
+        # package seam used by ip_remove.
+        config_before = _config_sha256(vm)
+        pf_before = helpers.pfctl_table_test_raw(vm, table, valid_ip)
+        unlock_before = _ip_unlock_hosts(vm)
+        resp = _post_action(webui, {"ip_remove": "ip_white", "ip": valid_ip, "table": table})
+        assert not looks_like_login_page(resp.text), "hostile ip_remove POST returned the login form"
+        assert _config_sha256(vm) == config_before, "hostile ip_remove action changed config.xml"
+        assert helpers.pfctl_table_test_raw(vm, table, valid_ip) == pf_before, (
+            "hostile ip_remove action changed pf state"
+        )
+        assert _ip_unlock_hosts(vm) == unlock_before, "hostile ip_remove action changed IP unlock state"
 
         # ACCEPT: a valid IPv4 against a table with no live match -> still writes
         # the exact host (no mask choice exists any more; no refusal either).

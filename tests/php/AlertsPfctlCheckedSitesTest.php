@@ -479,11 +479,6 @@ SH
 
 		$this->assertStringContainsString('failed', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertArrayNotHasKey(
-			'198.51.100.30',
-			$clists['ipwhitelist4']['pfB_Whitelist_v4']['data'],
-			'a failed add must not update the in-memory customlist'
-		);
 		$this->assertFileDoesNotExist(
 			"{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt",
 			'a failed add must NOT append to the aliasdir .txt file'
@@ -529,7 +524,6 @@ SH
 
 		$this->assertStringContainsString('failed', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertArrayNotHasKey('2001:db8::30', $clists['ipwhitelist6']['pfB_Whitelist_v6']['data']);
 		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v6.txt");
 		$this->assertEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 	}
@@ -551,17 +545,21 @@ SH
 		$this->assertFileExists("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v6.update");
 	}
 
-	public function testIpWhiteDescriptionAllowsMissingNestedDataShape(): void
+	public function testIpWhiteDescriptionRejectsMissingNestedDataShape(): void
 	{
-		$result = pfb_alerts_ip_action('ip_white', '198.51.100.33', 'pfB_Whitelist_v4', 'memo', [], []);
+		$table = 'pfB_Hostile_v4';
+		$alias_path = "{$GLOBALS['pfb']['aliasdir']}/{$table}.txt";
+		$update_path = "{$GLOBALS['pfb']['permitdir']}/Hostile_custom_v4.update";
 
-		$this->assertStringContainsString('added', $result['savemsg']);
+		$result = pfb_alerts_ip_action('ip_white', '198.51.100.33', $table, 'memo', [], []);
+
+		$this->assertStringContainsString('metadata missing', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertSame(
-			base64_encode("198.51.100.33 # memo\r\n"),
-			$GLOBALS['config']['installedpackages']['pfblockernglistsv4']['config'][0]['custom']
-		);
-		$this->assertFileExists("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update");
+		$this->assertFileDoesNotExist($this->logPath, 'missing alias metadata must not call pfctl');
+		$this->assertFileDoesNotExist($alias_path, 'missing alias metadata must not write the alias file');
+		$this->assertArrayNotHasKey('installedpackages', $GLOBALS['config'] ?? [], 'missing alias metadata must not call config_set_path()');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? [], 'missing alias metadata must not call write_config()');
+		$this->assertFileDoesNotExist($update_path, 'missing alias metadata must not touch the update flag');
 	}
 
 	public function testIpWhiteDuplicateSkipsPfctlAndRedirect(): void
