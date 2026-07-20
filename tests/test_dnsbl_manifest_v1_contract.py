@@ -22,6 +22,7 @@ def _stage_fixture(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(CORPUS / relative, destination)
+    shutil.copyfile(CORPUS / "pfb_py_top1m.txt", tmp_path / "pfb_py_top1m.txt")
     path = tmp_path / "pfb_py_sources.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
     return path, manifest
