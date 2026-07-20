@@ -56,6 +56,8 @@ final class Top1mFixedFileManifestTest extends TestCase
 		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
 		$manifest = pfb_unbound_python_sources([
 			['header' => 'feed', 'group' => 'g', 'log' => '1', 'provenance' => 'feed'],
+		], [
+			'top1m_atomic' => $this->successfulOwnershipOps(),
 		]);
 
 		$this->assertIsArray($manifest);
@@ -78,12 +80,94 @@ final class Top1mFixedFileManifestTest extends TestCase
 				'write' => static fn($stream, string $bytes): int => strlen($bytes),
 				'flush' => static fn($stream): bool => FALSE,
 				'fsync'  => static fn($stream): bool => TRUE,
-			],
+			] + $this->successfulOwnershipOps(),
 		]);
 
 		$this->assertFalse($manifest);
 		$this->assertSame("old.example\n", file_get_contents($target));
 		$this->assertSame('{"old":true}', file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
+	}
+
+	public function testCopyFailureKeepsOldTargetVisibleAndDoesNotRestore(): void
+	{
+		$target = $GLOBALS['pfb']['unbound_py_top1m'];
+		file_put_contents($target, "old.example\n");
+		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"old":true}');
+		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", "new.example\n");
+		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+		$copy_observed = [];
+		$restore_called = FALSE;
+
+		$result = pfb_unbound_python_sources([], [
+			'top1m_atomic' => [
+				'write' => static fn($stream, string $bytes): int => strlen($bytes),
+				'flush' => static fn($stream): bool => TRUE,
+				'fsync'  => static fn($stream): bool => TRUE,
+				'rename' => function (string $from, string $to) use (&$copy_observed): bool {
+					$copy_observed[] = [file_exists($to), file_get_contents($to)];
+					return FALSE;
+				},
+				'restore' => static function (string $from, string $to) use (&$restore_called): bool {
+					$restore_called = TRUE;
+					return FALSE;
+				},
+			] + $this->successfulOwnershipOps(),
+			'manifest_atomic' => [
+				'rename' => static fn(string $from, string $to): bool => FALSE,
+			],
+		]);
+
+		$this->assertFalse($result);
+		$this->assertSame([[TRUE, "old.example\n"]], $copy_observed);
+		$this->assertFalse($restore_called);
+		$this->assertSame("old.example\n", file_get_contents($target));
+		$this->assertSame('{"old":true}', file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
+	}
+
+	public function testManifestFailureRollsBackTop1mViaAtomicRename(): void
+	{
+		$target = $GLOBALS['pfb']['unbound_py_top1m'];
+		file_put_contents($target, "old.example\n");
+		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"old":true}');
+		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", "new.example\n");
+		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+		$restore_observed = [];
+
+		$result = pfb_unbound_python_sources([], [
+			'top1m_atomic' => [
+				'restore' => function (string $from, string $to) use (&$restore_observed): bool {
+					$restore_observed[] = [file_exists($to), file_get_contents($to)];
+					return rename($from, $to);
+				},
+			] + $this->successfulOwnershipOps(),
+			'manifest_atomic' => [
+				'rename' => static fn(string $from, string $to): bool => FALSE,
+			],
+		]);
+
+		$this->assertFalse($result);
+		$this->assertSame([[TRUE, "new.example\n"]], $restore_observed);
+		$this->assertSame("old.example\n", file_get_contents($target));
+		$this->assertSame('{"old":true}', file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
+	}
+
+	public function testDefaultOwnershipFailureAbortsFixedFilePublication(): void
+	{
+		$source = "{$this->tmp}/source.txt";
+		$target = "{$this->tmp}/target.txt";
+		file_put_contents($source, "source.example\n");
+
+		$this->assertFalse(pfb_unbound_py_atomic_copy($source, $target));
+		$this->assertFileDoesNotExist($target);
+	}
+
+	private function successfulOwnershipOps(): array
+	{
+		return [
+			'chown' => static fn(string $file, string $owner): bool => TRUE,
+			'chgrp' => static fn(string $file, string $group): bool => TRUE,
+			'chmod' => static fn(string $file, int $mode): bool => TRUE,
+		];
 	}
 
 	private function removeTree(string $dir): void

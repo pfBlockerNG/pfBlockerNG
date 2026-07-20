@@ -57,6 +57,7 @@ final class UnboundPythonSourcesTest extends TestCase
 			'unbound_py_rawdir'  => "{$this->tmp}/pfb_py_raw",
 			'dnsdir'             => "{$this->tmp}/dnsbl",
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
+			'unbound_py_top1m'   => "{$this->tmp}/pfb_py_top1m.txt",
 			'dbdir'              => "{$this->tmp}/db",
 			'dnsbl_top1m'        => 'off',
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
@@ -414,7 +415,7 @@ final class UnboundPythonSourcesTest extends TestCase
 			file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", $top1m);
 		}
 
-		$manifest = pfb_unbound_python_sources([]);
+		$manifest = pfb_unbound_python_sources([], $enabled === 'on' ? $this->top1mPublicationOps() : []);
 		$published = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
 		$legacy = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 
@@ -440,14 +441,15 @@ final class UnboundPythonSourcesTest extends TestCase
 		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
 		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", $invalid . "\n");
 
-		pfb_unbound_python_sources([]);
+		pfb_unbound_python_sources([], $this->top1mPublicationOps());
 
 		$published = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
 		$decoded = json_decode($published, TRUE);
 		$this->assertSame(JSON_ERROR_NONE, json_last_error(), 'the replacement manifest must be valid JSON');
 		$this->assertNotSame($old, $published, 'the stale manifest must be replaced');
-		$this->assertSame(["\u{FFFD}"], $decoded['config']['top1m_list']);
-		$this->assertSame(1, substr_count($published, '\\ufffd'), 'one malformed sequence must emit one replacement');
+		$this->assertTrue($decoded['config']['top1m_enabled']);
+		$this->assertArrayNotHasKey('top1m_list', $decoded['config']);
+		$this->assertSame($invalid . "\n", file_get_contents($GLOBALS['pfb']['unbound_py_top1m']));
 		$this->assertSame(
 			'old-raw-secret',
 			file_get_contents("{$old_generation}/old.raw"),
@@ -467,7 +469,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		]);
 		$error = json_last_error_msg();
 
-		$this->assertTrue(is_nan($manifest['feeds'][0]['group']), 'the full writer must keep returning the generated manifest');
+		$this->assertFalse($manifest, 'the full writer must reject an unencodable manifest');
 		$this->assertSame($old, file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
 		$this->assertSame('old-raw-secret', file_get_contents("{$old_generation}/old.raw"));
 		$published = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE);
@@ -487,6 +489,17 @@ final class UnboundPythonSourcesTest extends TestCase
 			$this->assertStringNotContainsString('user_whitelist', $log);
 			$this->assertStringNotContainsString('group', $log);
 		}
+	}
+
+	private function top1mPublicationOps(): array
+	{
+		return [
+			'top1m_atomic' => [
+				'chown' => static fn(string $file, string $owner): bool => TRUE,
+				'chgrp' => static fn(string $file, string $group): bool => TRUE,
+				'chmod' => static fn(string $file, int $mode): bool => TRUE,
+			],
+		];
 	}
 
 	public static function validPatchValues(): array
