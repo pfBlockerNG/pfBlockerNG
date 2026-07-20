@@ -70,7 +70,6 @@ def _build_config(config: dict[str, Any]) -> dict[str, Any]:
         "tld_wildcard_blacklist": config.get("tld_wildcard_blacklist", []),
         "tld_wildcard_exclusion": config.get("tld_wildcard_exclusion", []),
         "user_whitelist": config.get("user_whitelist", []),
-        "top1m_list": config.get("top1m_list", []),
     }
 
 
@@ -82,6 +81,7 @@ def _run_build(*, top1m_enabled: bool) -> tuple[pfb_unbound.BuildResult, dict[st
         _build_config(config),
         line_reader=_read_lines,
         top1m_enabled=top1m_enabled,
+        top1m_lines=config.get("top1m_list", []),
     )
     return result, config
 
