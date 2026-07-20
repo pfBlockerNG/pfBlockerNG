@@ -1451,7 +1451,12 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		$result = pfb_alerts_ip_action($_POST['ip_remove'], $ip, $table, '', $clists, $ip_unlock);
+		$ip_remove_action = NULL;
+		if (is_string($_POST['ip_remove']) &&
+		    ($_POST['ip_remove'] === 'unlock' || $_POST['ip_remove'] === 'lock')) {
+			$ip_remove_action = $_POST['ip_remove'];
+		}
+		$result = pfb_alerts_ip_action($ip_remove_action, $ip, $table, '', $clists, $ip_unlock);
 		if ($result['redirect']) {
 			header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$result['savemsg']}");
 			exit;

@@ -327,15 +327,17 @@ SH
 	{
 		$this->scriptFailure('add', '198.51.100.20');
 		$ip_unlock = ['198.51.100.20' => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4'];
+		$before = "198.51.100.20,pfB_Deny_v4\nkeepme.example,pfB_Keep_v4\n";
+		file_put_contents($GLOBALS['pfb']['ip_unlock'], $before);
 
 		$clists = [];
-		$savemsg = pfb_alerts_ip_action('lock', '198.51.100.20', 'pfB_Deny_v4', '', $clists, $ip_unlock)['savemsg'];
+		$result = pfb_alerts_ip_action('lock', '198.51.100.20', 'pfB_Deny_v4', '', $clists, $ip_unlock);
+		$savemsg = $result['savemsg'];
 
 		$this->assertStringContainsString('failed', $savemsg);
-		$this->assertFileDoesNotExist(
-			$GLOBALS['pfb']['ip_unlock'],
-			'a failed re-lock must NOT write the unlock store -- the IP genuinely stays unlocked'
-		);
+		$this->assertTrue($result['redirect']);
+		$this->assertFileExists($GLOBALS['pfb']['ip_unlock']);
+		$this->assertSame($before, file_get_contents($GLOBALS['pfb']['ip_unlock']));
 	}
 
 	public function testIpRemoveLockSuccessAppliesUnlockStoreWrite(): void
@@ -343,9 +345,11 @@ SH
 		$ip_unlock = ['198.51.100.20' => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4'];
 
 		$clists = [];
-		$savemsg = pfb_alerts_ip_action('lock', '198.51.100.20', 'pfB_Deny_v4', '', $clists, $ip_unlock)['savemsg'];
+		$result = pfb_alerts_ip_action('lock', '198.51.100.20', 'pfB_Deny_v4', '', $clists, $ip_unlock);
+		$savemsg = $result['savemsg'];
 
 		$this->assertStringContainsString('re-locked', $savemsg);
+		$this->assertTrue($result['redirect']);
 		$this->assertFileExists($GLOBALS['pfb']['ip_unlock'], 'a successful re-lock must apply the unlock store write');
 		$content = file_get_contents($GLOBALS['pfb']['ip_unlock']);
 		$this->assertStringContainsString('keepme.example', $content, 'the untouched leftover entry must survive the rewrite');
@@ -360,6 +364,7 @@ SH
 		$result = pfb_alerts_ip_action('lock', '2001:db8::20', 'pfB_Deny_v6', '', $clists, $ip_unlock);
 
 		$this->assertStringContainsString('re-locked', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$content = file_get_contents($GLOBALS['pfb']['ip_unlock']);
 		$this->assertStringContainsString('keepme.example', $content);
 		$this->assertStringNotContainsString('2001:db8::20', $content);
@@ -373,9 +378,11 @@ SH
 		$ip_unlock = ['fe80::1%em0' => 'pfB_Deny_v6', 'keepme.example' => 'pfB_Keep_v4'];
 
 		$clists = [];
-		$savemsg = pfb_alerts_ip_action('lock', 'fe80::1%em0', 'pfB_Deny_v6', '', $clists, $ip_unlock)['savemsg'];
+		$result = pfb_alerts_ip_action('lock', 'fe80::1%em0', 'pfB_Deny_v6', '', $clists, $ip_unlock);
+		$savemsg = $result['savemsg'];
 
 		$this->assertStringContainsString('failed', $savemsg);
+		$this->assertTrue($result['redirect']);
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
 	}
 
@@ -404,6 +411,7 @@ SH
 		$result = pfb_alerts_ip_action('unlock', '198.51.100.22', 'pfB_Deny_v4', '', $clists, []);
 
 		$this->assertStringContainsString('temporarily Unlocked', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertFileExists($GLOBALS['pfb']['ip_unlock']);
 		$this->assertStringContainsString('198.51.100.22,pfB_Deny_v4', file_get_contents($GLOBALS['pfb']['ip_unlock']));
 	}
@@ -415,6 +423,7 @@ SH
 		$result = pfb_alerts_ip_action('unlock', '2001:db8::22', 'pfB_Deny_v6', '', $clists, []);
 
 		$this->assertStringContainsString('temporarily Unlocked', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertStringContainsString('2001:db8::22,pfB_Deny_v6', file_get_contents($GLOBALS['pfb']['ip_unlock']));
 	}
 
@@ -424,6 +433,7 @@ SH
 		$result = pfb_alerts_ip_action('unlock', '198.51.100.23', 'pfB_Deny_v4', '', $clists, []);
 
 		$this->assertStringContainsString('not currently blocked', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
 	}
 
@@ -434,6 +444,7 @@ SH
 		$result = pfb_alerts_ip_action('unlock', '198.51.100.24', 'pfB_Deny_v4', '', $clists, []);
 
 		$this->assertStringContainsString('live unlock', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
 	}
 
@@ -451,6 +462,7 @@ SH
 		}
 
 		$this->assertStringContainsString('mid-update', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
 	}
 
@@ -466,6 +478,7 @@ SH
 		$result = pfb_alerts_ip_action('ip_white', '198.51.100.30', 'pfB_Whitelist_v4', '', $clists, []);
 
 		$this->assertStringContainsString('failed', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertArrayNotHasKey(
 			'198.51.100.30',
 			$clists['ipwhitelist4']['pfB_Whitelist_v4']['data'],
@@ -497,6 +510,7 @@ SH
 		$result = pfb_alerts_ip_action('ip_white', '198.51.100.31', 'pfB_Whitelist_v4', '', $clists, []);
 
 		$this->assertStringContainsString('added', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertFileExists("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt");
 		$this->assertStringContainsString('198.51.100.31', file_get_contents("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v4.txt"));
 		// Non-vacuity anchor for the failure tests' assertArrayNotHasKey: prove
@@ -514,6 +528,7 @@ SH
 		$result = pfb_alerts_ip_action('ip_white', '2001:db8::30', 'pfB_Whitelist_v6', '', $clists, []);
 
 		$this->assertStringContainsString('failed', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertArrayNotHasKey('2001:db8::30', $clists['ipwhitelist6']['pfB_Whitelist_v6']['data']);
 		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v6.txt");
 		$this->assertEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
@@ -526,8 +541,27 @@ SH
 		$result = pfb_alerts_ip_action('ip_white', '2001:db8::31', 'pfB_Whitelist_v6', '', $clists, []);
 
 		$this->assertStringContainsString('added', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertFileExists("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v6.txt");
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
+		$this->assertSame(
+			base64_encode("2001:db8::31\r\n"),
+			$GLOBALS['config']['installedpackages']['pfblockernglistsv6']['config'][0]['custom']
+		);
+		$this->assertFileExists("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v6.update");
+	}
+
+	public function testIpWhiteDescriptionAllowsMissingNestedDataShape(): void
+	{
+		$result = pfb_alerts_ip_action('ip_white', '198.51.100.33', 'pfB_Whitelist_v4', 'memo', [], []);
+
+		$this->assertStringContainsString('added', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
+		$this->assertSame(
+			base64_encode("198.51.100.33 # memo\r\n"),
+			$GLOBALS['config']['installedpackages']['pfblockernglistsv4']['config'][0]['custom']
+		);
+		$this->assertFileExists("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update");
 	}
 
 	public function testIpWhiteDuplicateSkipsPfctlAndRedirect(): void
@@ -550,6 +584,7 @@ SH
 		$result = pfb_alerts_ip_action('addsuppress', '198.51.100.40', 'pfB_Deny_v4', 'note', $clists, []);
 
 		$this->assertStringContainsString('Not currently blocked', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertSame("198.51.100.40/32 # note\r\n", base64_decode(PfbConfig::read('v4suppression')));
 		$this->assertFileExists($GLOBALS['pfb']['supptxt']);
 	}
@@ -561,6 +596,7 @@ SH
 		$result = pfb_alerts_ip_action('addsuppress', '2001:db8::40', 'pfB_Deny_v6', '', $clists, []);
 
 		$this->assertStringContainsString('Not currently blocked', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertSame("2001:db8::40/128\r\n", base64_decode(PfbConfig::read('v6suppression')));
 		$this->assertFileExists($GLOBALS['pfb']['supptxt_v6']);
 	}
@@ -573,6 +609,7 @@ SH
 		$result = pfb_alerts_ip_action('addsuppress', '198.51.100.42', 'pfB_Deny_v4', '', $clists, []);
 
 		$this->assertStringContainsString('Removed 1 entry, added 0 covering CIDRs', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertSame("198.51.100.42/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
 	}
 
@@ -584,6 +621,7 @@ SH
 		$result = pfb_alerts_ip_action('addsuppress', '198.51.100.43', 'pfB_Deny_v4', '', $clists, []);
 
 		$this->assertStringContainsString('Live punch failed', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertSame("198.51.100.43/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
 	}
 
@@ -601,6 +639,7 @@ SH
 		}
 
 		$this->assertStringContainsString('update/reload pass', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertSame("198.51.100.44/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
 	}
 
@@ -611,8 +650,21 @@ SH
 		$result = pfb_alerts_ip_action('addsuppress', '198.51.100.41', 'pfB_Deny_v4', '', $clists, []);
 
 		$this->assertStringContainsString('already exists', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
 		$this->assertSame('', (string) @file_get_contents($GLOBALS['pfb']['supptxt']));
+	}
+
+	public function testAddSuppressV6ExactDuplicateSkipsConfigRefresh(): void
+	{
+		$clists = ['ipsuppression_v6' => ['data' => ['2001:db8::41/128' => "2001:db8::41/128\r\n"], 'base64' => base64_encode("2001:db8::41/128\r\n")]];
+
+		$result = pfb_alerts_ip_action('addsuppress', '2001:db8::41', 'pfB_Deny_v6', '', $clists, []);
+
+		$this->assertSame('Host IP address 2001:db8::41 already exists in the IPv6 Suppression customlist.', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['supptxt_v6']);
 	}
 
 	public function testAddSuppressBroaderEntryRefreshesSuppressionFileWithoutAppend(): void
@@ -625,6 +677,36 @@ SH
 		$this->assertStringContainsString('already covered', $result['savemsg']);
 		$this->assertSame("198.51.100.0/24\n", file_get_contents($GLOBALS['pfb']['supptxt']));
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
+	}
+
+	public function testAlertsPageDispatchKeepsFiltersNavigationAndStrictIpActions(): void
+	{
+		$src = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php');
+		$this->assertNotFalse($src);
+
+		$this->assertStringContainsString("pfb_filter(\$_POST['ip'], PFB_FILTER_IP, 'alerts addsuppress')", $src);
+		$this->assertStringContainsString("pfb_filter(\$_POST['table'], PFB_FILTER_WORD, 'alerts addsuppress')", $src);
+		$this->assertStringContainsString("pfb_filter(\$_POST['descr'], PFB_FILTER_HTML, 'alerts ip_white')", $src);
+		$this->assertStringContainsString("str_starts_with(\$table, 'NEW_')", $src);
+		$this->assertStringContainsString("pfb_alerts_ip_action('ip_white'", $src);
+		$this->assertStringContainsString("pfb_filter(\$_POST['ip'], PFB_FILTER_IP, 'alerts ip_remove')", $src);
+		$this->assertStringContainsString("pfb_filter(\$_POST['table'], PFB_FILTER_WORD, 'alerts ip_remove')", $src);
+		$this->assertStringContainsString('header("Location: /pfblockerng/pfblockerng_category_edit.php?type=ipv{$vtype}&act=addgroup', $src);
+
+		$remove_start = strpos($src, "\telseif (isset(\$_POST['ip_remove'])");
+		$remove_end = strpos($src, "\n\t// Whitelist IP events", $remove_start);
+		$this->assertNotFalse($remove_start);
+		$this->assertNotFalse($remove_end);
+		$remove = substr($src, $remove_start, $remove_end - $remove_start);
+		$this->assertStringNotContainsString("pfb_alerts_ip_action(\$_POST['ip_remove']", $remove);
+		$this->assertStringContainsString("is_string(\$_POST['ip_remove'])", $remove);
+		$this->assertStringContainsString("=== 'unlock'", $remove);
+		$this->assertStringContainsString("=== 'lock'", $remove);
+		$this->assertStringNotContainsString('pfb_live_punch_run(', $remove);
+		$this->assertStringNotContainsString('pfb_pfctl_checked_op(', $remove);
+		$this->assertStringNotContainsString('pfb_unlock(', $remove);
+		$this->assertStringContainsString('header(', $remove);
+		$this->assertStringContainsString('exit;', $remove);
 	}
 
 	/** @return string[] the last [op, table, entry] row the shim logged. */
