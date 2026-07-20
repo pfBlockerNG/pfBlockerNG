@@ -80,5 +80,5 @@ def test_enabled_mid_read_failure_discards_candidate(monkeypatch: pytest.MonkeyP
             return FailingReader()
         return real_open(name, *args, **kwargs)
 
-    monkeypatch.setattr(P, "open", injected_open)
+    monkeypatch.setattr("builtins.open", injected_open)
     assert P.dnsbl_build_from_manifest(str(manifest)) is None

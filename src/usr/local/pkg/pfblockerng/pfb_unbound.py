@@ -32,7 +32,6 @@ import select
 import stat
 import sys
 import time
-from builtins import open  # noqa: A001 - injectable seam for fail-closed file reads
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass, field
