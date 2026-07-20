@@ -113,7 +113,6 @@ def _build_abp(feeds: dict[str, list[str]], *, user_whitelist: Iterable[str] = (
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": list(user_whitelist),
-        "top1m_list": [],
     }
 
     def reader(raw: str) -> Iterable[str]:

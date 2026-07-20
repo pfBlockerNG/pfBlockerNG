@@ -37,7 +37,7 @@ def _build(
     *,
     user_whitelist: Iterable[str] = (),
     user_unlock: Iterable[str] = (),
-    top1m_list: Iterable[str] = (),
+    top1m_lines: Iterable[str] = (),
     top1m_enabled: bool = False,
     user_feeds: Iterable[str] = (),
 ) -> P.BuildResult:
@@ -70,13 +70,18 @@ def _build(
         "tld_wildcard_exclusion": [],
         "user_whitelist": list(user_whitelist),
         "user_unlock": list(user_unlock),
-        "top1m_list": list(top1m_list),
     }
 
     def reader(raw: str) -> Iterable[str]:
         return list(raw_store.get(raw, []))
 
-    return P.build(manifest, config, line_reader=reader, top1m_enabled=top1m_enabled)
+    return P.build(
+        manifest,
+        config,
+        line_reader=reader,
+        top1m_enabled=top1m_enabled,
+        top1m_lines=top1m_lines,
+    )
 
 
 def _cfg_from_result(result: P.BuildResult) -> dict[str, Any]:
@@ -376,7 +381,7 @@ class TestUserSovereignty:
 
     def test_top1m_behaves_as_user_allow(self) -> None:
         feeds = {"f": ["||cdn.example.com^$important"]}
-        res = _build(feeds, top1m_list=["cdn.example.com"], top1m_enabled=True)
+        res = _build(feeds, top1m_lines=["cdn.example.com"], top1m_enabled=True)
         assert _live_label(res, "cdn.example.com") == "resolve"
 
     def test_user_whitelist_not_pruned_by_feed_badfilter(self) -> None:

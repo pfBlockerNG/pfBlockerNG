@@ -255,9 +255,9 @@ class TestAllowBlockPrecedenceArms:
 
 
 # --------------------------------------------------------------------------- #
-# A7 -- TOP1M whitelist (manifest config top1m_enabled + top1m_list), through
+# A7 -- TOP1M whitelist (manifest config top1m_enabled + fixed sidecar), through
 # the REAL manifest build (reused tests/fixtures/adr06_golden/ -- the adr06
-# exemplar classes, config.json's top1m_list=["popularcdn.com"]).
+# exemplar config's historical top1m_list seeds pfb_py_top1m.txt).
 # --------------------------------------------------------------------------- #
 
 

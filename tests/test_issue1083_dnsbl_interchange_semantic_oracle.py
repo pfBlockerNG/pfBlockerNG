@@ -85,7 +85,6 @@ def _run_corpus_build() -> P.BuildResult:
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": [],
-        "top1m_list": [],
     }
     return P.build(_corpus_manifest(), config, line_reader=_corpus_line_reader())
 
