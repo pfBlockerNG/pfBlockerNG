@@ -93,6 +93,34 @@ final class Top1mDccDetectorTest extends TestCase
 		$this->assertSame('failed', pfb_top1m_detector_decision(FALSE, '', FALSE, 'old'));
 	}
 
+	public function testDetectorRequiresUsableRawBaselineBeforeUnchangedDecision(): void
+	{
+		$base = $this->dir . '/top-1m.csv.zip';
+		$raw = "{$base}.orig";
+		$body = "rank,example.test\n";
+		$body_hash = pfb_content_hash($body, FALSE);
+		file_put_contents($raw, $body);
+		$this->assertTrue(pfb_hash_write($base, $raw));
+		$persisted_hash = pfb_hash_read($base)['digest'];
+
+		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '304', FALSE, $persisted_hash, $base, TRUE));
+		$this->assertSame('unchanged', pfb_top1m_detector_decision(TRUE, '200', $body_hash, $persisted_hash, $base, TRUE));
+
+		// A matching hash without a regular raw source cannot make a 304 safe.
+		unlink($raw);
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '304', FALSE, $persisted_hash, $base, TRUE));
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '200', $body_hash, $persisted_hash, $base, TRUE));
+
+		file_put_contents($raw, $body);
+		unlink("{$base}.xxhash128");
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '304', FALSE, '', $base, TRUE));
+		file_put_contents("{$base}.xxhash128", 'not-a-digest');
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '200', $body_hash, $persisted_hash, $base, TRUE));
+
+		$this->assertSame('changed', pfb_top1m_detector_decision(TRUE, '304', FALSE, $persisted_hash, $base, FALSE));
+		$this->assertSame('failed', pfb_top1m_detector_decision(FALSE, '', FALSE, $persisted_hash, $base, TRUE));
+	}
+
 	public function testProviderIdentityCoversAllFiveProvidersAndAuth(): void
 	{
 		foreach (pfb_top1m_providers() as $provider => $descriptor) {
@@ -457,13 +485,6 @@ final class Top1mDccDetectorTest extends TestCase
 		))->success;
 	}
 
-	public function testDccDispatchUsesExistingDnsblTriggerApi(): void
-	{
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
-		$this->assertIsString($source);
-		$this->assertStringContainsString('pfb_trigger scope=dnsbl force=false trigger=cron', $source);
-	}
-
 	public function testExtractedDispatchSeamRunsExistingCronCommand(): void
 	{
 		$dispatch_log = "{$this->dir}/dispatch.log";
@@ -506,6 +527,64 @@ final class Top1mDccDetectorTest extends TestCase
 				unset($GLOBALS['pfb']['top1m_changed']);
 			} else {
 				$GLOBALS['pfb']['top1m_changed'] = $saved_changed;
+			}
+		}
+	}
+
+	public function testDispatchSuppressesFailedAndUnchangedButRunsChangedOnce(): void
+	{
+		$dispatch_log = "{$this->dir}/dispatch-matrix.log";
+		$fake_php = "{$this->dir}/fake-php-matrix";
+		$script = "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> " . escapeshellarg($dispatch_log) . "\n";
+		$this->assertNotFalse(file_put_contents($fake_php, $script));
+		$this->assertTrue(chmod($fake_php, 0755));
+
+		$saved_argv = $GLOBALS['argv'];
+		$saved_php = $GLOBALS['pfb']['php'] ?? FALSE;
+		$saved_runlog = $GLOBALS['pfb']['runlog'] ?? FALSE;
+		$saved_changed = $GLOBALS['pfb']['top1m_changed'] ?? FALSE;
+		$saved_done = $GLOBALS['pfb']['top1m_dispatch_done'] ?? FALSE;
+		try {
+			$GLOBALS['argv'] = ['pfblockerng.php', 'dcc'];
+			$GLOBALS['pfb']['php'] = $fake_php;
+			$GLOBALS['pfb']['runlog'] = '/dev/null';
+			$GLOBALS['pfb']['top1m_changed'] = FALSE;
+			unset($GLOBALS['pfb']['top1m_dispatch_done']);
+
+			$this->assertFalse(pfb_top1m_dispatch_if_changed(TRUE), 'unchanged TOP1M must not dispatch');
+			$this->assertFalse(pfb_top1m_dispatch_if_changed(FALSE), 'failed extras pass must not dispatch without a TOP1M change');
+			$this->assertFileDoesNotExist($dispatch_log);
+
+			$GLOBALS['pfb']['top1m_changed'] = TRUE;
+			$this->assertTrue(pfb_top1m_dispatch_if_changed(FALSE), 'TOP1M change must dispatch despite unrelated extras failure');
+			$this->assertFalse(pfb_top1m_dispatch_if_changed(FALSE), 'the same TOP1M change must not dispatch twice');
+			$this->assertEventually(static function () use ($dispatch_log): bool {
+				return is_file($dispatch_log);
+			}, 'TOP1M dispatch command did not run');
+			$lines = file($dispatch_log, FILE_IGNORE_NEW_LINES);
+			$this->assertIsArray($lines);
+			$this->assertCount(1, $lines, 'changed TOP1M must dispatch exactly once');
+		} finally {
+			$GLOBALS['argv'] = $saved_argv;
+			if ($saved_php === FALSE) {
+				unset($GLOBALS['pfb']['php']);
+			} else {
+				$GLOBALS['pfb']['php'] = $saved_php;
+			}
+			if ($saved_runlog === FALSE) {
+				unset($GLOBALS['pfb']['runlog']);
+			} else {
+				$GLOBALS['pfb']['runlog'] = $saved_runlog;
+			}
+			if ($saved_changed === FALSE) {
+				unset($GLOBALS['pfb']['top1m_changed']);
+			} else {
+				$GLOBALS['pfb']['top1m_changed'] = $saved_changed;
+			}
+			if ($saved_done === FALSE) {
+				unset($GLOBALS['pfb']['top1m_dispatch_done']);
+			} else {
+				$GLOBALS['pfb']['top1m_dispatch_done'] = $saved_done;
 			}
 		}
 	}
