@@ -1,0 +1,35 @@
+ISSUE #1542 -- FIXED-FILE TOP1M BENCHMARK
+==========================================
+command: python3 scripts/bench_top1m_fixed_file.py run --base-ref a67d3efe680e99de5d5e7b5743029c29ef2cfd25 --lines 1000000 --trials 3 --timeout-seconds 900
+base_sha: a67d3efe680e99de5d5e7b5743029c29ef2cfd25
+branch_sha: 8d62179b75616344cf7e50139642066aee4a0899
+branch_worktree_dirty: no
+branch_pfblockerng_inc_sha256: a7f3421e7ab703070992eb87119dbce6192109c342e1bd594d6b8e1a1ba54e60
+branch_pfb_unbound_py_sha256: aaceb3b2ef2220f268d529b1b4b2181798e5bb9ab163067ab24d996e996bd9c7
+host: macOS-26.5.2-arm64-arm-64bit-Mach-O machine=arm64 logical_cpus=10
+python: 3.14.6 (/opt/homebrew/opt/python@3.14/bin/python3.14)
+php: 8.5.8
+time: /usr/bin/time -l
+fixture: deterministic unique domains=1000000 generated_bytes=32000000
+manifest_bytes: 223
+fixed_file_bytes: 32000000
+trials_per_phase_ref: 3
+per_process_deadline_seconds: 900
+
+Measurements (isolated seam wall time; whole fresh-process peak RSS)
+------------------------------------------------------------------
+phase1.php_full_writer base: N/A -- old contract embeds TOP1M and has no fixed-file writer
+phase1.php_full_writer branch: trials=3 wall_median=0.014126s wall_range=0.014028..0.015189s peak_rss_max=35586048B (33.94MiB)
+phase2.php_scalar_patch base: trials=3 wall_median=0.001122s wall_range=0.001107..0.001218s peak_rss_max=33062912B (31.53MiB)
+phase2.php_scalar_patch branch: trials=3 wall_median=0.001450s wall_range=0.001285..0.002073s peak_rss_max=33406976B (31.86MiB)
+phase3.python_json_validate base: trials=3 wall_median=0.000106s wall_range=0.000106..0.000205s peak_rss_max=48005120B (45.78MiB)
+phase3.python_json_validate branch: trials=3 wall_median=0.000132s wall_range=0.000125..0.000133s peak_rss_max=32079872B (30.59MiB)
+phase4.python_full_build base: N/A -- old contract cannot consume the fixed TOP1M file
+phase4.python_full_build branch: trials=3 wall_median=0.637509s wall_range=0.636580..0.645256s peak_rss_max=366985216B (349.98MiB)
+
+Contract assertions executed in every applicable trial
+------------------------------------------------------
+manifest has no top1m_list, top1m_ref, or sampled TOP1M domain: PASS
+fixed file has exactly 1000000 lines: PASS
+full build exposes exactly 1000000 unique TOP1M white_db domains: PASS
+thresholds: none (measurements only; no invented pass/fail gate)
