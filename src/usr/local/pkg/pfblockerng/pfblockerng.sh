@@ -329,6 +329,7 @@ dnsbl_cache() {
 	# Overridable for unit tests; default to the live locations.
 	pfbchroot="${pfbchroot:-/var/unbound}"
 	pfbpkgdir="${pfbpkgdir:-/usr/local/pkg/pfblockerng}"
+	pfbdb="${pfbdb:-/var/db/pfblockerng}"
 	dnsblarchive="${dnsblarchive:-/usr/local/etc/pfb_dnsbl_cache.tar}"
 	pathtar="${pathtar:-/usr/bin/tar}"
 
@@ -382,6 +383,13 @@ dnsbl_cache() {
 				# generated, so it is excluded the same way.
 				[ "${_g}" = "${pfbchroot}/pfb_py_tld.txt" ] && _skip=1
 				[ -z "${_skip}" ] && set -- "$@" "${_g}"
+			done
+			# issue #1542: preserve only the TOP1M detector baseline sidecars;
+			# transient and unrelated /var/db/pfblockerng files stay out.
+			_top1m_base="${pfbdb%/}/top-1m.csv.zip"
+			for _s in orig xxhash128 md5 source orig.etag orig.lastmod; do
+				_f="${_top1m_base}.${_s}"
+				[ -f "${_f}" ] && set -- "$@" "${_f}"
 			done
 			if [ "$#" -gt 0 ]; then
 				# The helper appends .zst/.bz2 to the base and picks the codec.

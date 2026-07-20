@@ -37,9 +37,10 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # Overridable locations the sourced dnsbl_cache() reads.
     pfbchroot="${sandbox}/chroot"
     pfbpkgdir="${sandbox}/pkg"
+    pfbdb="${sandbox}/db"
     dnsblarchive="${sandbox}/pfb_dnsbl_cache.tar"   # extension-less BASE
     pathtar="/usr/bin/tar"
-    mkdir -p "${pfbpkgdir}"
+    mkdir -p "${pfbpkgdir}" "${pfbdb}"
     # The shipped files (current code in /usr/local).
     echo 'PY-CODE-v1' > "${pfbpkgdir}/pfb_unbound.py"
     echo 'INC-CODE-v1' > "${pfbpkgdir}/pfb_unbound_include.inc"
@@ -66,6 +67,18 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
 
   tar_list_full() {
     /usr/bin/tar -tf "$(pfb_spec_archive_path "${dnsblarchive}")" 2>/dev/null
+  }
+
+  top1m_cksum() {
+    cksum "${1}" 2>/dev/null || echo 'MISSING'
+  }
+
+  save_restore_top1m() {
+    dc save
+    echo "ARCHIVE:$(pfb_spec_archive_path "${dnsblarchive}")"
+    tar_list_full
+    rm -rf "${pfbchroot}" "${pfbdb}"
+    dc restore
   }
 
   It 'stage copies the shipped files and creates the nullfs/devfs mount-point dirs'
@@ -131,6 +144,58 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # ... nor the name-mapped TLD oracle (issue #1255: matches the pfb_py_* glob
     # but is shipped, not generated -- archiving it would reinstate a stale oracle).
     The result of "tar_list()" should not include 'pfb_py_tld.txt'
+    cleanup_sandbox
+  End
+
+  It 'save and restore preserves TOP1M detector sidecars and excludes transient DB files'
+    setup_sandbox
+    pfbdb="${sandbox}/db path [top1m]"
+    mkdir -p "${pfbdb}" "${pfbchroot}"
+    for _suffix in orig xxhash128 md5 source orig.etag orig.lastmod; do
+      printf 'TOP1M-%s\n' "${_suffix}" > "${pfbdb}/top-1m.csv.zip.${_suffix}"
+    done
+    printf 'transient\n' > "${pfbdb}/.pfbtop1m_stage"
+    printf 'unrelated\n' > "${pfbdb}/other.db"
+    printf 'TOP1M-GENERATED\n' > "${pfbchroot}/pfb_py_top1m.txt"
+    top1m_orig_cksum="$(cksum "${pfbdb}/top-1m.csv.zip.orig")"
+    top1m_xxh_cksum="$(cksum "${pfbdb}/top-1m.csv.zip.xxhash128")"
+    top1m_md5_cksum="$(cksum "${pfbdb}/top-1m.csv.zip.md5")"
+    top1m_source_cksum="$(cksum "${pfbdb}/top-1m.csv.zip.source")"
+    top1m_etag_cksum="$(cksum "${pfbdb}/top-1m.csv.zip.orig.etag")"
+    top1m_lastmod_cksum="$(cksum "${pfbdb}/top-1m.csv.zip.orig.lastmod")"
+    When call save_restore_top1m
+    The output should include 'ARCHIVE:'
+    The output should include "${pfbdb}/top-1m.csv.zip.orig"
+    The output should include "${pfbdb}/top-1m.csv.zip.xxhash128"
+    The output should include "${pfbdb}/top-1m.csv.zip.md5"
+    The output should include "${pfbdb}/top-1m.csv.zip.source"
+    The output should include "${pfbdb}/top-1m.csv.zip.orig.etag"
+    The output should include "${pfbdb}/top-1m.csv.zip.orig.lastmod"
+    The output should include "${pfbchroot}/pfb_py_top1m.txt"
+    The output should not include "${pfbdb}/.pfbtop1m_stage"
+    The output should not include "${pfbdb}/other.db"
+    The contents of file "${pfbchroot}/pfb_py_top1m.txt" should equal 'TOP1M-GENERATED'
+    The value "$(top1m_cksum "${pfbdb}/top-1m.csv.zip.orig")" should equal "${top1m_orig_cksum}"
+    The value "$(top1m_cksum "${pfbdb}/top-1m.csv.zip.xxhash128")" should equal "${top1m_xxh_cksum}"
+    The value "$(top1m_cksum "${pfbdb}/top-1m.csv.zip.md5")" should equal "${top1m_md5_cksum}"
+    The value "$(top1m_cksum "${pfbdb}/top-1m.csv.zip.source")" should equal "${top1m_source_cksum}"
+    The value "$(top1m_cksum "${pfbdb}/top-1m.csv.zip.orig.etag")" should equal "${top1m_etag_cksum}"
+    The value "$(top1m_cksum "${pfbdb}/top-1m.csv.zip.orig.lastmod")" should equal "${top1m_lastmod_cksum}"
+    The path "${pfbdb}/.pfbtop1m_stage" should not be exist
+    The path "${pfbdb}/other.db" should not be exist
+    cleanup_sandbox
+  End
+
+  It 'save archives only existing TOP1M detector sidecars'
+    setup_sandbox
+    printf 'TOP1M-ORIG\n' > "${pfbdb}/top-1m.csv.zip.orig"
+    When call dc save
+    The result of "tar_list_full()" should include "${pfbdb}/top-1m.csv.zip.orig"
+    The result of "tar_list_full()" should not include "${pfbdb}/top-1m.csv.zip.xxhash128"
+    The result of "tar_list_full()" should not include "${pfbdb}/top-1m.csv.zip.md5"
+    The result of "tar_list_full()" should not include "${pfbdb}/top-1m.csv.zip.source"
+    The result of "tar_list_full()" should not include "${pfbdb}/top-1m.csv.zip.orig.etag"
+    The result of "tar_list_full()" should not include "${pfbdb}/top-1m.csv.zip.orig.lastmod"
     cleanup_sandbox
   End
 
