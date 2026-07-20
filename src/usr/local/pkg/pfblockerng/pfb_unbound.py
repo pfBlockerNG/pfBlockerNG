@@ -29,10 +29,8 @@ import logging.handlers
 import os
 import re
 import select
-import stat
 import sys
 import time
-from builtins import open  # noqa: A001 - injectable seam for fail-closed file reads
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -1296,7 +1294,6 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["pfb_py_zone"] = "pfb_py_zone.txt"
     pfb["pfb_py_data"] = "pfb_py_data.txt"
     pfb["pfb_py_hsts"] = "pfb_py_hsts.txt"
-    pfb["pfb_py_top1m"] = "pfb_py_top1m.txt"
     # issue #1255: shipped TLD-Wildcard public-suffix oracle -- staged by
     # dnsbl_cache_stage() exactly like pfb_py_hsts above.
     pfb["pfb_py_tld"] = "pfb_py_tld.txt"
@@ -4613,7 +4610,7 @@ def reconcile(
 
 def _dnsbl_normalise_whitelist(
     user_whitelist: Iterable[str],
-    top1m_lines: Iterable[str],
+    top1m_list: Iterable[str],
     top1m_enabled: bool,
 ) -> dict[str, dict[str, Any]]:
     """User-whitelist normalisation (mirrors PHP's pfb_unbound_python_whitelist()) into the
@@ -4641,7 +4638,7 @@ def _dnsbl_normalise_whitelist(
             white_db[line] = {"wildcard": False, "important": True, "band": PRIO_USER_ALLOW}
 
     if top1m_enabled:
-        for raw in top1m_lines:
+        for raw in top1m_list:
             dom = raw.strip()
             if dom:
                 # TOP1M behaves as a user allow (sovereign, band 6) -- fact 7.
@@ -4969,7 +4966,6 @@ def build(
     *,
     line_reader: Callable[[str], Iterable[str]],
     top1m_enabled: bool = False,
-    top1m_lines: Iterable[str] = (),
 ) -> BuildResult:
     """Pure, reentrant DNSBL build: raw feeds + config -> matcher structure-set.
 
@@ -4977,8 +4973,7 @@ def build(
     raw feed file mapping it to ``{raw, feed, group, log_flag}``.
     ``config`` carries the classification + whitelist inputs (``tld_wildcard_master``
     suffix lines, ``tld_wildcard_blacklist``, ``tld_wildcard_exclusion``,
-    ``user_whitelist``, ``user_unlock``). TOP1M is streamed from the fixed
-    ``pfb_py_top1m.txt`` sidecar by ``dnsbl_build_from_manifest``.
+    ``user_whitelist``, ``user_unlock``, ``top1m_list``).
     ``line_reader`` yields the raw lines for a feed's ``raw`` reference -- injected so
     this stays pure and side-effect-free (no filesystem coupling, unit-testable; the
     init wiring supplies a file-backed reader).
@@ -5044,7 +5039,7 @@ def build(
     # dnsbl_remove handler populates it.
     white_db = _dnsbl_normalise_whitelist(
         config.get("user_whitelist", []),
-        top1m_lines,
+        config.get("top1m_list", []),
         top1m_enabled,
     )
     # Merge the unlock set WITHOUT narrowing an existing permanent allow: a domain may be
@@ -5276,13 +5271,12 @@ def _dnsbl_validate_manifest_raws(manifest: dict[str, Any], base_dir: str) -> No
         "tld_wildcard_exclusion",
         "user_whitelist",
         "user_unlock",
+        "top1m_list",
     )
     for config_field in list_fields:
         value = config.get(config_field)
         if config_field in config and (not isinstance(value, list) or any(not isinstance(item, str) for item in value)):
             raise _DnsblGenerationError("DNSBL manifest/v1 config.{} must be list[str]".format(config_field))
-    if "top1m_list" in config:
-        raise _DnsblGenerationError("DNSBL manifest/v1 config.top1m_list is retired")
     for flag_field in ("top1m_enabled", "regex_cap"):
         if flag_field in config and not isinstance(config[flag_field], bool):
             raise _DnsblGenerationError("DNSBL manifest/v1 config.{} must be bool".format(flag_field))
@@ -5361,24 +5355,6 @@ def _dnsbl_file_line_reader(base_dir: str, *, fail_closed: bool = False) -> Call
     return reader
 
 
-def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
-    """Stream the fixed TOP1M sidecar; any source failure aborts the build."""
-    path = os.path.join(base_dir, "pfb_py_top1m.txt")
-    try:
-        if not stat.S_ISREG(os.lstat(path).st_mode):
-            raise _DnsblGenerationError("TOP1M sidecar is not a regular file: '{}'".format(path))
-        handle = open(path, encoding="utf-8", errors="strict", newline="")
-    except (OSError, UnicodeError) as e:
-        raise _DnsblGenerationError("TOP1M sidecar unavailable: '{}'".format(path)) from e
-
-    try:
-        with handle:
-            for line in handle:
-                yield line.strip()
-    except (OSError, UnicodeError) as e:
-        raise _DnsblGenerationError("TOP1M sidecar read failed: '{}'".format(path)) from e
-
-
 def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict[str, Any]:
     """Shape the manifest's ``config`` block into the build() config blob.
 
@@ -5388,7 +5364,7 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
     ``pfb["python_hsts"]``. A manifest ``config.tld_master`` key (a stale pre-#1255
     shape) is ignored entirely -- an absent oracle is expected, not a warning.
     ``tld_wildcard_blacklist`` / ``tld_wildcard_exclusion`` / ``user_whitelist`` /
-    ``user_unlock`` are passed through as lists. Missing keys
+    ``user_unlock`` / ``top1m_list`` are passed through as lists. Missing keys
     within the required ``config`` object default empty.
     """
     config = manifest.get("config", {})
@@ -5416,6 +5392,7 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
         "user_whitelist": list(config.get("user_whitelist", [])),
         # ADR-06 (#51): the temporary per-alert unlock set -> band-6 whiteDB allows.
         "user_unlock": list(config.get("user_unlock", [])),
+        "top1m_list": list(config.get("top1m_list", [])),
         "regex_cap": regex_cap,
     }
 
@@ -5460,13 +5437,11 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
         manifest_config = manifest["config"]
         config = _dnsbl_config_from_manifest(manifest, base_dir)
         top1m_enabled = bool(manifest_config.get("top1m_enabled", False))
-        top1m_lines = _dnsbl_fixed_top1m_lines(base_dir) if top1m_enabled else ()
         result = build(
             manifest,
             config,
             line_reader=_dnsbl_file_line_reader(base_dir, fail_closed=True),
             top1m_enabled=top1m_enabled,
-            top1m_lines=top1m_lines,
         )
     except Exception as e:
         sys.stderr.write("[pfBlockerNG]: Failed to build DNSBL structures from raw: {}".format(e))
