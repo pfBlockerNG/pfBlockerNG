@@ -478,12 +478,27 @@ def test_alerts_invalid_actions_leave_state_unchanged_and_addsuppress_writes_exa
             aliasname="uihostile",
             feed_url=feed_path,
             header="uihostile",
-            action="Permit_Inbound",
         )
         hostile_table = spec.alias
         custom_path = f"{CFG_IPV4_LISTS}/0/custom"
         helpers.inject(vm, spec)
         helpers.reload(vm, "updateip")
+        # Build the live table under Deny_Both first, then change only the
+        # persisted row classification. Permit_Inbound with the harness's
+        # default protocol does not declare a live table, while Alerts derives
+        # whitelist metadata from the current config row. Avoiding a second
+        # reload leaves one real table plus matching Permit metadata: exactly
+        # the two preconditions raw ip_white forwarding needs to mutate state.
+        classify_result = helpers.php_eval(
+            vm,
+            f"config_set_path({helpers._php_str(f'{CFG_IPV4_LISTS}/0/action')}, 'Permit_Inbound');\n"
+            "write_config('pfBlockerNG smoke: classify hostile-dispatch alias as Permit');\n"
+            "echo 'OK';",
+        )
+        assert classify_result.returncode == 0 and "OK" in classify_result.stdout, (
+            "failed to classify hostile-dispatch alias as Permit: "
+            f"rc={classify_result.returncode} stdout={classify_result.stdout!r}"
+        )
         table_before = sorted(helpers.pfctl_table_members(vm, hostile_table))
         assert table_before, f"{hostile_table} did not populate before hostile action"
         assert not helpers.pfctl_table_test(vm, hostile_table, hostile_ip), (
