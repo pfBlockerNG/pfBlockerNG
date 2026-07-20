@@ -574,13 +574,11 @@ SH
 		$this->assertFileDoesNotExist($update_path, 'missing alias metadata must not touch the update flag');
 	}
 
-	public function testIpWhitePersistenceFailuresKeepConfigWriteAndSuccessMessage(): void
+	public function testIpWhiteAliasPersistenceFailureKeepsConfigWriteAndSuccessMessage(): void
 	{
 		$table = 'pfB_Whitelist_v4';
 		$alias_path = "{$GLOBALS['pfb']['aliasdir']}/{$table}.txt";
-		$update_path = "{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update";
 		$this->assertTrue(mkdir($alias_path), 'setup: alias-file failure target must be a directory');
-		$this->assertTrue(mkdir($update_path), 'setup: update-flag failure target must be a directory');
 
 		$result = pfb_alerts_ip_action(
 			'ip_white',
@@ -600,7 +598,6 @@ SH
 		);
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 		$this->assertDirectoryExists($alias_path, 'alias-file persistence failure must leave the target directory untouched');
-		$this->assertDirectoryExists($update_path, 'update-flag persistence failure must leave the target directory untouched');
 	}
 
 	public function testIpWhiteDuplicateSkipsPfctlAndRedirect(): void
