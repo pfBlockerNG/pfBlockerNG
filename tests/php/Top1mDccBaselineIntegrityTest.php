@@ -38,12 +38,11 @@ final class Top1mDccBaselineIntegrityTest extends TestCase
 	{
 		$base = $this->dir . '/top-1m.csv.zip';
 		$raw = "{$base}.orig";
-		$body = "rank,example.test\n";
+		$body = "1,example.test\n";
 		$this->assertNotFalse(file_put_contents($raw, $body));
 		$this->assertTrue(pfb_hash_write($base, $raw));
-		$persisted_hash = pfb_hash_read($base)['digest'];
 
-		$this->assertNotFalse(file_put_contents($raw, "rank,changed.test\n"));
+		$this->assertNotFalse(file_put_contents($raw, "1,changed.test\n"));
 		$this->assertSame(
 			'changed',
 			pfb_top1m_detector_decision(TRUE, '304', FALSE, '', $base, TRUE, TRUE),
@@ -56,16 +55,20 @@ final class Top1mDccBaselineIntegrityTest extends TestCase
 	{
 		$base = $this->dir . '/top-1m.csv.zip';
 		$raw = "{$base}.orig";
-		$body = "rank,example.test\n";
+		$body = "1,example.test\n";
 		$body_hash = pfb_content_hash($body, FALSE);
 		$this->assertNotFalse(file_put_contents($raw, $body));
 		$this->assertTrue(pfb_hash_write($base, $raw));
-		$persisted_hash = pfb_hash_read($base)['digest'];
 
 		$this->assertSame(
 			'unchanged',
-			pfb_top1m_detector_decision(TRUE, '200', $body_hash, $persisted_hash, $base, TRUE, FALSE),
+			pfb_top1m_detector_decision(TRUE, '200', $body_hash, '', $base, TRUE, FALSE),
 			'200 same body may remain unchanged without HTTP validators'
+		);
+		$this->assertSame(
+			'changed',
+			pfb_top1m_detector_decision(TRUE, '200', pfb_content_hash("1,changed.example\n", FALSE), '', $base, TRUE, FALSE),
+			'200 changed body must trigger re-ingest even without HTTP validators'
 		);
 		$this->assertSame(
 			'changed',
