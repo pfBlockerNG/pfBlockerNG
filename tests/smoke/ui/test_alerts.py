@@ -483,12 +483,16 @@ def test_alerts_invalid_actions_leave_state_unchanged_and_addsuppress_writes_exa
         custom_path = f"{CFG_IPV4_LISTS}/0/custom"
         helpers.inject(vm, spec)
         helpers.reload(vm, "updateip")
+        table_before = sorted(helpers.wait_pfctl_table(vm, hostile_table))
+        assert table_before, f"{hostile_table} did not populate before hostile action"
         # Build the live table under Deny_Both first, then change only the
         # persisted row classification. Permit_Inbound with the harness's
         # default protocol does not declare a live table, while Alerts derives
-        # whitelist metadata from the current config row. Avoiding a second
-        # reload leaves one real table plus matching Permit metadata: exactly
-        # the two preconditions raw ip_white forwarding needs to mutate state.
+        # whitelist metadata from the current config row. The bounded table
+        # wait must finish before this write because filter_configure can land
+        # asynchronously after updateip returns. Avoiding a second reload then
+        # leaves one real table plus matching Permit metadata: exactly the two
+        # preconditions raw ip_white forwarding needs to mutate state.
         classify_result = helpers.php_eval(
             vm,
             f"config_set_path({helpers._php_str(f'{CFG_IPV4_LISTS}/0/action')}, 'Permit_Inbound');\n"
@@ -499,8 +503,9 @@ def test_alerts_invalid_actions_leave_state_unchanged_and_addsuppress_writes_exa
             "failed to classify hostile-dispatch alias as Permit: "
             f"rc={classify_result.returncode} stdout={classify_result.stdout!r}"
         )
-        table_before = sorted(helpers.pfctl_table_members(vm, hostile_table))
-        assert table_before, f"{hostile_table} did not populate before hostile action"
+        assert sorted(helpers.pfctl_table_members(vm, hostile_table)) == table_before, (
+            "config-only Permit classification unexpectedly changed live table state"
+        )
         assert not helpers.pfctl_table_test(vm, hostile_table, hostile_ip), (
             f"{hostile_ip} unexpectedly matched {hostile_table} before hostile action"
         )
