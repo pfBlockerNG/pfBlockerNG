@@ -319,9 +319,9 @@ aliastables() {
 # wiped on reboot, so DNSBL comes up dead; this keeps it alive across reboot with PURE FILE
 # OPS (no reload/restart), kept SEPARATE from the IP aliastables flow above (different
 # lifecycles). stage = copy the SHIPPED set (PFB_PY_SHIPPED) from /usr/local into the chroot
-# (re-run on every save/restore, never restored stale); save = stage then archive ONLY the
-# GENERATED set (pfb_unbound*/pfb_py_*/pfb_unbound.ini); restore = boot earlyshellcmd, untar
-# the generated set THEN stage. Naming contract: a new generated file MUST keep the
+# (re-run on every save/restore, never restored stale); save = stage then archive the
+# GENERATED set plus exact TOP1M detector sidecars; restore = boot earlyshellcmd, untar
+# the cached files THEN stage. Naming contract: a new generated file MUST keep the
 # pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED + pkg-plist wiring
 # (a NAME-MAPPED shipped file -- source basename != chroot basename -- is the sole
 # exception: it needs its own explicit stage/save handling instead; see pfb_py_tld.txt).
@@ -364,8 +364,8 @@ dnsbl_cache() {
 			;;
 		save)
 			dnsbl_cache_stage
-			# Archive ONLY the generated set: pfb_unbound* + pfb_py_* + pfb_unbound.ini,
-			# EXCLUDING the shipped files (PFB_PY_SHIPPED) -- those are re-staged from
+			# Archive the generated chroot set plus exact TOP1M detector sidecars,
+			# EXCLUDING shipped files (PFB_PY_SHIPPED) -- those are re-staged from
 			# /usr/local on restore, so archiving them would reinstate stale code (e.g.
 			# pfb_py_hsts.txt matches the pfb_py_* glob but is shipped, not generated).
 			set --
