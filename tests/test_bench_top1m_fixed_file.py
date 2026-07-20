@@ -60,6 +60,27 @@ def test_report_line_carries_fresh_process_trials_wall_and_rss() -> None:
     assert "peak_rss_max=20000B" in line
 
 
+def test_php_worker_disables_host_memory_ceiling_for_rss_measurement() -> None:
+    command = _BENCH._php_worker_command(
+        "/usr/bin/php",
+        "write",
+        "embedded",
+        Path("/base"),
+        Path("/sandbox"),
+        1_000_000,
+    )
+
+    assert command[:3] == ["/usr/bin/php", "-d", "memory_limit=-1"]
+    assert command[3:] == [
+        str(_BENCH.PHP_WORKER),
+        "write",
+        "embedded",
+        "/base",
+        "/sandbox",
+        "1000000",
+    ]
+
+
 def test_each_native_manifest_contract_is_validated_without_cross_feeding(tmp_path: Path) -> None:
     embedded_dir = tmp_path / "embedded"
     embedded_dir.mkdir()
