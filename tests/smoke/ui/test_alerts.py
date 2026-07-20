@@ -469,17 +469,40 @@ def test_alerts_invalid_actions_leave_state_unchanged_and_addsuppress_writes_exa
 
         # REJECT: a valid IP/table paired with another action word must stay
         # inert; page-owned strict dispatch must never pass ``ip_white`` to the
-        # package seam used by ip_remove.
+        # package seam used by ip_remove. The Permit row and live table make a
+        # raw-forward regression observable through both config and pf state.
+        feed_host = "198.51.100.47"
+        hostile_ip = "198.51.100.46"
+        feed_path = helpers.write_local_feed(vm, "ui_hostile_ip.txt", f"{feed_host}\n")
+        spec = helpers.IpCase(
+            aliasname="uihostile",
+            feed_url=feed_path,
+            header="uihostile",
+            action="Permit_Inbound",
+        )
+        hostile_table = spec.alias
+        custom_path = f"{CFG_IPV4_LISTS}/0/custom"
+        helpers.inject(vm, spec)
+        helpers.reload(vm, "updateip")
+        table_before = sorted(helpers.pfctl_table_members(vm, hostile_table))
+        assert table_before, f"{hostile_table} did not populate before hostile action"
+        assert not helpers.pfctl_table_test(vm, hostile_table, hostile_ip), (
+            f"{hostile_ip} unexpectedly matched {hostile_table} before hostile action"
+        )
         config_before = _config_sha256(vm)
-        pf_before = helpers.pfctl_table_test_raw(vm, table, valid_ip)
+        custom_before = helpers.config_get(vm, custom_path)
         unlock_before = _ip_unlock_hosts(vm)
-        resp = _post_action(webui, {"ip_remove": "ip_white", "ip": valid_ip, "table": table})
+        resp = _post_action(webui, {"ip_remove": "ip_white", "ip": hostile_ip, "table": hostile_table})
         assert not looks_like_login_page(resp.text), "hostile ip_remove POST returned the login form"
         assert _config_sha256(vm) == config_before, "hostile ip_remove action changed config.xml"
-        assert helpers.pfctl_table_test_raw(vm, table, valid_ip) == pf_before, (
+        assert helpers.config_get(vm, custom_path) == custom_before, (
+            "hostile ip_remove action changed the Permit customlist"
+        )
+        assert sorted(helpers.pfctl_table_members(vm, hostile_table)) == table_before, (
             "hostile ip_remove action changed pf state"
         )
         assert _ip_unlock_hosts(vm) == unlock_before, "hostile ip_remove action changed IP unlock state"
+        helpers.reset(vm)
 
         # ACCEPT: a valid IPv4 against a table with no live match -> still writes
         # the exact host (no mask choice exists any more; no refusal either).
