@@ -728,8 +728,12 @@ if (!empty(PfbConfig::readSection('installedpackages/pfblockerngdnsbleasylist'))
 
 	// Load all pfBlockerNG Feeds
 	if (!empty($enabled)) {
-		$feed_info_raw = json_decode(@file_get_contents("{$pfb['feeds']}"), TRUE);
-		if (json_last_error() === JSON_ERROR_NONE && is_array($feed_info_raw)) {
+		try {
+			$feed_info_raw = PfbRegistry::legacyCatalog(PfbRegistry::catalog($pfb['feeds']));
+		} catch (PfbRegistryException $exception) {
+			$feed_info_raw = NULL;
+		}
+		if (is_array($feed_info_raw)) {
 
 			$add			= array();
 			$add['aliasname']	= $ex_easylists['aliasname']	?: 'EasyList';

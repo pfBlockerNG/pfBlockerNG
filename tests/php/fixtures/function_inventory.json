@@ -850,6 +850,11 @@
         "returnType": "array",
         "params": []
     },
+    "pfb_cfg_structural_registry": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_cfg_toggle_read": {
         "returnsRef": false,
         "returnType": "PfbToggle",

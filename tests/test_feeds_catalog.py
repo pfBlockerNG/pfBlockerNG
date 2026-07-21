@@ -27,8 +27,14 @@ def catalog() -> dict:  # type: ignore[type-arg]
 
 
 def _all_headers(catalog: dict) -> list[str]:  # type: ignore[type-arg]
-    """Collect every 'header' value from ipv4, ipv6, and dnsbl sections."""
+    """Collect every retained legacy header from the normalized catalog."""
     headers: list[str] = []
+    if isinstance(catalog.get("feeds"), list):
+        for feed in catalog["feeds"]:
+            for locator in feed.get("legacy_locators", []):
+                if header := locator.get("legacy_header"):
+                    headers.append(header)
+        return headers
     for section in ("ipv4", "ipv6"):
         for grp in catalog.get(section, {}).values():
             for feed in grp.get("feeds", []):
@@ -46,12 +52,30 @@ def _all_headers(catalog: dict) -> list[str]:  # type: ignore[type-arg]
 
 def _find_feed_by_url(catalog: dict, url: str) -> dict | None:  # type: ignore[type-arg]
     """Return the first feed object whose 'url' equals url, across all sections."""
+    if isinstance(catalog.get("feeds"), list):
+        return next((feed for feed in catalog["feeds"] if feed.get("latest_url") == url), None)
     for section in ("ipv4", "ipv6", "dnsbl"):
         for grp in catalog.get(section, {}).values():
             for feed in grp.get("feeds", []):
                 if feed.get("url") == url:
                     return feed  # type: ignore[return-value]
     return None
+
+
+def _urls_for_legacy_key(catalog: dict, legacy_type: str, key: str) -> set[str]:  # type: ignore[type-arg]
+    """Return normalized Feed URLs linked from one retained legacy category key."""
+    category = next(
+        (
+            category
+            for category in catalog.get("categories", [])
+            if any(row.get("type") == legacy_type and row.get("key") == key for row in category.get("legacy_keys", []))
+        ),
+        None,
+    )
+    if category is None:
+        return set()
+    feeds = {feed.get("id"): feed for feed in catalog.get("feeds", [])}
+    return {feeds[feed_id]["latest_url"] for feed_id in category.get("feed_ids", []) if feed_id in feeds}
 
 
 def test_catalog_is_valid_json() -> None:
@@ -62,12 +86,14 @@ def test_catalog_is_valid_json() -> None:
 
 def test_ipv4_blocklist_de_group_exists(catalog: dict) -> None:  # type: ignore[type-arg]
     """ipv4 BlockListDE group must be present (baseline for the ipv6 mirror)."""
-    assert "BlockListDE" in catalog.get("ipv4", {}), "ipv4 BlockListDE group missing from pfblockerng_feeds.json"
+    assert _urls_for_legacy_key(catalog, "ipv4", "BlockListDE"), (
+        "ipv4 BlockListDE group missing from pfblockerng_feeds.json"
+    )
 
 
 def test_ipv6_blocklist_de_6_group_exists(catalog: dict) -> None:  # type: ignore[type-arg]
     """ipv6 BlockListDE_6 group must exist (issue #318: was missing before fix)."""
-    assert "BlockListDE_6" in catalog.get("ipv6", {}), (
+    assert _urls_for_legacy_key(catalog, "ipv6", "BlockListDE_6"), (
         "ipv6 BlockListDE_6 group missing from pfblockerng_feeds.json — "
         "BlockList.DE feeds contain IPv6 addresses but no IPv6 group was shipped"
     )
@@ -75,8 +101,8 @@ def test_ipv6_blocklist_de_6_group_exists(catalog: dict) -> None:  # type: ignor
 
 def test_ipv6_blocklist_de_6_urls_match_ipv4(catalog: dict) -> None:  # type: ignore[type-arg]
     """BlockListDE_6 feed URLs must equal BlockListDE's URLs (same sources)."""
-    urls4 = {f["url"] for f in catalog["ipv4"]["BlockListDE"]["feeds"]}
-    urls6 = {f["url"] for f in catalog["ipv6"]["BlockListDE_6"]["feeds"]}
+    urls4 = _urls_for_legacy_key(catalog, "ipv4", "BlockListDE")
+    urls6 = _urls_for_legacy_key(catalog, "ipv6", "BlockListDE_6")
     assert urls4 == urls6, (
         f"ipv6 BlockListDE_6 URLs differ from ipv4 BlockListDE URLs.\n"
         f"  Only in ipv4: {urls4 - urls6}\n"
@@ -93,8 +119,7 @@ def test_blocklist_de_6_headers_unique_across_catalog(catalog: dict) -> None:  #
     all_headers = _all_headers(catalog)
     counts = Counter(all_headers)
 
-    ipv6_group = catalog["ipv6"]["BlockListDE_6"]
-    colliding = [f["header"] for f in ipv6_group.get("feeds", []) if counts.get(f.get("header", ""), 0) > 1]
+    colliding = [header for header in _all_headers(catalog) if header.endswith("_6") and counts.get(header, 0) > 1]
     assert not colliding, f"BlockListDE_6 headers collide with other catalog entries: {colliding}"
 
 
