@@ -230,6 +230,39 @@ final class StructuralRegistryTest extends TestCase
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
 	}
 
+	public function testProvenanceRowsAreImmutableAndAppendOnlyAcrossWrites(): void
+	{
+		$feed = PfbConfig::readStructure('feed_model');
+		$feed['provenance'][] = [
+			'id' => 'provenance.append_0123456789ab4def8123456789abcdef', 'subject_type' => 'group', 'subject_id' => 'group.ip.default',
+			'origin' => 'test', 'event' => 'created', 'catalog_revision' => $feed['catalog_revision_seen'], 'config_revision' => '1',
+			'trigger' => 'test', 'source_locator' => 'fixture', 'immutable' => 'true', 'before' => [], 'after' => [],
+		];
+		$this->assertSame([], PfbConfig::writeStructure('feed_model', $feed));
+		$stored = config_get_path(self::FEED_PATH);
+
+		$mutated = $stored;
+		$mutated['provenance'][0]['event'] = 'updated';
+		$diagnostics = PfbConfig::writeStructure('feed_model', $mutated);
+		$this->assertContains('provenance.append', array_column($diagnostics, 'code'));
+		$this->assertSame($stored, config_get_path(self::FEED_PATH));
+
+		$deleted = $stored;
+		$deleted['provenance'] = [];
+		$diagnostics = PfbConfig::writeStructure('feed_model', $deleted);
+		$this->assertContains('provenance.append', array_column($diagnostics, 'code'));
+		$this->assertSame($stored, config_get_path(self::FEED_PATH));
+
+		$appended = $stored;
+		$appended['provenance'][] = [
+			'id' => 'provenance.append-two_0123456789ab4def8123456789abcdef', 'subject_type' => 'group', 'subject_id' => 'group.ip.default',
+			'origin' => 'test', 'event' => 'updated', 'catalog_revision' => $feed['catalog_revision_seen'], 'config_revision' => '2',
+			'trigger' => 'test', 'source_locator' => 'fixture', 'immutable' => 'true', 'before' => [], 'after' => [],
+		];
+		$this->assertSame([], PfbConfig::writeStructure('feed_model', $appended));
+		$this->assertSame($appended, config_get_path(self::FEED_PATH));
+	}
+
 	public function testScheduleReferenceAndResolvedNoticeAreValidatedAtGateway(): void
 	{
 		$feed = PfbConfig::readStructure('feed_model');

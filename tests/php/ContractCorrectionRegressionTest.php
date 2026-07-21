@@ -261,6 +261,61 @@ final class ContractCorrectionRegressionTest extends TestCase
 		$this->assertSame([], PfbRegistry::validateCatalog($distinct, $prior));
 	}
 
+	public function testCatalogTransitionRejectsIdentityChurnWhenMutableEvidenceChanges(): void
+	{
+		$prior = $this->transitionCatalog();
+		$oldFeed = $prior['feeds'][0];
+		$candidate = $prior;
+		$candidate['categories'][0]['feed_ids'] = ['feed.ip.replacement'];
+		$candidate['feeds'][0]['id'] = 'feed.ip.replacement';
+		$candidate['feeds'][0]['name'] = 'Renamed replacement';
+		$candidate['feeds'][0]['family'] = 'both';
+		$candidate['feeds'][0]['latest_url'] = 'https://example.test/replacement';
+		$candidate['feeds'][0]['past_urls'] = ['https://example.test/one'];
+		$candidate['tombstones'][] = [
+			'id' => $oldFeed['id'], 'kind' => 'feed', 'type' => $oldFeed['type'], 'name' => $oldFeed['name'], 'status' => 'tombstoned',
+			'family' => $oldFeed['family'], 'latest_url' => $oldFeed['latest_url'], 'past_urls' => $oldFeed['past_urls'],
+			'category_ids' => $oldFeed['category_ids'], 'legacy_locators' => $oldFeed['legacy_locators'],
+		];
+		$codes = array_column(PfbRegistry::validateCatalog($candidate, $prior), 'code');
+		$this->assertContains('transition.identity', $codes);
+	}
+
+	public function testPercentDecodedCredentialQueryKeysAreRejectedButMonkeyIsAccepted(): void
+	{
+		foreach ([
+			'https://example.test/request?apikey=LEAK_CANARY',
+			'https://example.test/request?apiKey=LEAK_CANARY',
+			'https://example.test/request?API.KEY=LEAK_CANARY',
+			'https://example.test/request?api+key=LEAK_CANARY',
+			'https://example.test/request%3Fapi_key%3DLEAK_CANARY',
+			'https://example.test/request%26API%2DKEY%3DLEAK_CANARY',
+			'https://example.test/request?API%5FKEY=LEAK_CANARY',
+		] as $details) {
+			[, $policy, $catalog] = $this->graph();
+			$GLOBALS['config'] = [];
+			$GLOBALS['pfb_test_write_config_calls'] = [];
+			$policy['notices'][] = [
+				'id' => 'notice.encoded-secret_0123456789ab4def8123456789abcdef', 'code' => 'test.secret', 'severity' => 'error',
+				'subject_type' => 'policy', 'subject_id' => $policy['baseline']['id'], 'status' => 'open', 'details' => $details, 'resolution' => '',
+			];
+			$diagnostics = PfbConfig::writeStructure('group_policy', $policy);
+			$this->assertContains('notice.secret', array_column($diagnostics, 'code'));
+			$this->assertStringNotContainsString('LEAK_CANARY', json_encode($diagnostics, JSON_THROW_ON_ERROR));
+			$this->assertNull(config_get_path('installedpackages/pfblockernggrouppolicy/config/0', NULL));
+		}
+
+		[, $policy] = $this->graph();
+		$policy['notices'][] = [
+			'id' => 'notice.encoded-monkey_0123456789ab4def8123456789abcdef', 'code' => 'test.query', 'severity' => 'info',
+			'subject_type' => 'policy', 'subject_id' => $policy['baseline']['id'], 'status' => 'open',
+			'details' => 'https://example.test/request%3Fmonkey=value', 'resolution' => '',
+		];
+		$GLOBALS['config'] = [];
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+		$this->assertSame([], PfbConfig::writeStructure('group_policy', $policy));
+	}
+
 	/** @return array{array<string,mixed>,array<string,mixed>,array<string,mixed>} */
 	private function graph(): array
 	{

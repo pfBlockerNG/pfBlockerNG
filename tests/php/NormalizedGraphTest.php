@@ -363,6 +363,23 @@ final class NormalizedGraphTest extends TestCase
 		$this->assertContains('field.unknown', $codes);
 	}
 
+	public function testAcquisitionFieldsHaveFeedOwnership(): void
+	{
+		[$feed_model, $group_policy, $catalog] = $this->defaultGraph();
+		$feed = $this->runtimeFeed('feed-instance.ip.owned_0123456789ab4def8123456789abcdef', [
+			'source_interface' => 'wan', 'pre_script' => 'pre', 'post_script' => 'post',
+		]);
+		$feed_model['feeds'] = [$feed];
+		$codes = array_column(PfbRegistry::validateGraph($feed_model, $group_policy, $catalog), 'code');
+		$this->assertNotContains('field.unknown', $codes);
+
+		$feed_model['groups'][0]['source_interface'] = 'wan';
+		$feed_model['groups'][0]['pre_script'] = 'pre';
+		$feed_model['groups'][0]['post_script'] = 'post';
+		$codes = array_column(PfbRegistry::validateGraph($feed_model, $group_policy, $catalog), 'code');
+		$this->assertContains('field.unknown', $codes);
+	}
+
 	public function testStrictRuntimeIdentityAndDnsblMembershipMode(): void
 	{
 		[$feed_model, $group_policy, $catalog] = $this->defaultGraph();
@@ -402,6 +419,34 @@ final class NormalizedGraphTest extends TestCase
 		$this->assertSame([], PfbRegistry::validateGraph($feed_model, $group_policy, $catalog));
 		$feed_model['groups'][2]['memberships'][] = ['feed_id' => $feed['id'], 'enabled' => 'true', 'grandfathered_overlap' => 'false', 'legacy_rows' => [], 'order' => 0];
 		$this->assertContains('membership.duplicate', array_column(PfbRegistry::validateGraph($feed_model, $group_policy, $catalog), 'code'));
+	}
+
+	public function testNewCrossGroupFamilyOverlapNeedsGrandfatheredEvidence(): void
+	{
+		[$feed_model, $group_policy, $catalog] = $this->defaultGraph();
+		$feed = $this->runtimeFeed('feed-instance.ip.cross-group_0123456789ab4def8123456789abcdef', ['family' => 'both']);
+		$feed_model['feeds'] = [$feed];
+		$second = $feed_model['groups'][0];
+		$second['id'] = 'group.ip.cross-group_0123456789ab4def8123456789abcdef';
+		$second['name'] = 'Cross Group';
+		$second['alias'] = 'cross_group';
+		$second['family_override'] = 'ipv6';
+		$feed_model['groups'][0]['family_override'] = 'ipv4';
+		$feed_model['groups'][0]['memberships'] = [[
+			'feed_id' => $feed['id'], 'enabled' => 'true', 'grandfathered_overlap' => 'false', 'legacy_rows' => [],
+		]];
+		$second['memberships'] = [[
+			'feed_id' => $feed['id'], 'enabled' => 'true', 'grandfathered_overlap' => 'false', 'legacy_rows' => [],
+		]];
+		$feed_model['groups'][] = $second;
+		$this->assertSame([], PfbRegistry::validateGraph($feed_model, $group_policy, $catalog));
+		$feed_model['groups'][2]['family_override'] = 'ipv4';
+		$codes = array_column(PfbRegistry::validateGraph($feed_model, $group_policy, $catalog), 'code');
+		$this->assertContains('membership.overlap', $codes);
+
+		$feed_model['groups'][2]['memberships'][0]['grandfathered_overlap'] = 'true';
+		$feed_model['groups'][2]['memberships'][0]['legacy_rows'] = [['section' => 'legacy', 'group_index' => 0, 'row_index' => 0, 'header' => 'CrossGroup']];
+		$this->assertSame([], PfbRegistry::validateGraph($feed_model, $group_policy, $catalog));
 	}
 
 	public function testNewDuplicateAndGrandfatheredIpOverlapAreDistinct(): void
@@ -469,6 +514,21 @@ final class NormalizedGraphTest extends TestCase
 		$this->assertContains('policy.audience', $codes);
 	}
 
+	public function testMembershipNoticeSubjectUsesGroupAndFeedComposite(): void
+	{
+		[$feed_model, $group_policy, $catalog] = $this->defaultGraph();
+		$feed = $this->runtimeFeed('feed-instance.ip.subject_0123456789ab4def8123456789abcdef');
+		$feed_model['feeds'] = [$feed];
+		$feed_model['groups'][0]['memberships'] = [[
+			'feed_id' => $feed['id'], 'enabled' => 'true', 'grandfathered_overlap' => 'false', 'legacy_rows' => [],
+		]];
+		$group_policy['notices'][] = [
+			'id' => 'notice.membership_0123456789ab4def8123456789abcdef', 'code' => 'membership.notice', 'severity' => 'info',
+			'subject_type' => 'membership', 'subject_id' => 'group.ip.default|' . $feed['id'], 'status' => 'open', 'details' => 'redacted', 'resolution' => '',
+		];
+		$this->assertSame([], PfbRegistry::validateGraph($feed_model, $group_policy, $catalog));
+	}
+
 	public function testFeedAcquisitionAndPreparedCredentialsAreRejected(): void
 	{
 		[$feed_model, $group_policy, $catalog] = $this->defaultGraph();
@@ -520,6 +580,20 @@ final class NormalizedGraphTest extends TestCase
 		]);
 		$diagnostics = PfbRegistry::validateGraph($feed_model, $group_policy, $catalog);
 		$this->assertContains('graph.list.limit', array_column($diagnostics, 'code'));
+	}
+
+	public function testPolicyAudienceRejectsEmptyDraftUserGroup(): void
+	{
+		[$feed_model, $group_policy, $catalog] = $this->defaultGraph();
+		$draftId = 'user-group.draft_0123456789ab4def8123456789abcdef';
+		$group_policy['user_groups'][] = ['id' => $draftId, 'name' => 'Draft', 'description' => '', 'selectors' => []];
+		$policy = $group_policy['baseline'];
+		$policy['id'] = 'group-policy.dnsbl.draft_0123456789ab4def8123456789abcdef';
+		$policy['name'] = 'Draft policy';
+		$policy['audience'] = [$draftId];
+		$group_policy['policies'] = [$policy];
+		$codes = array_column(PfbRegistry::validateGraph($feed_model, $group_policy, $catalog), 'code');
+		$this->assertContains('policy.audience', $codes);
 	}
 
 	/** @return array{array<string,mixed>,array<string,mixed>,array<string,mixed>} */
