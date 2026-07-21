@@ -16094,8 +16094,9 @@ function convert_feeds_json() {
 	$aconfig		= config_get_path('installedpackages/pfblockerngglobal', []);
 	$pfb['feeds_list']	= $merge_feeds = $feed_info = array();
 
-	$feed_info_raw = json_decode(@file_get_contents("{$pfb['feeds']}"), TRUE);
-	if (json_last_error() !== JSON_ERROR_NONE || !is_array($feed_info_raw)) {
+	try {
+		$feed_info_raw = PfbRegistry::legacyCatalog(PfbRegistry::catalog($pfb['feeds']));
+	} catch (PfbRegistryException $exception) {
 		return array('blank' => '');
 	}
 

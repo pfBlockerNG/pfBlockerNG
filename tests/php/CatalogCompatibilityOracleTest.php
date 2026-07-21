@@ -56,13 +56,13 @@ final class CatalogCompatibilityOracleTest extends TestCase
 	}
 
 	/** @param array<string, mixed> $patches */
-	private function convert(array $patches = [], bool $assertNoWarnings = true): array
+	private function convert(array $patches = [], bool $assertNoWarnings = TRUE): array
 	{
 		$GLOBALS['config']['installedpackages']['pfblockerngglobal'] = $patches;
 		$warnings = [];
 		set_error_handler(static function (int $errno, string $message) use (&$warnings): bool {
 			$warnings[] = $message;
-			return true;
+			return TRUE;
 		}, E_WARNING | E_NOTICE);
 		try {
 			$result = convert_feeds_json();
@@ -118,7 +118,7 @@ final class CatalogCompatibilityOracleTest extends TestCase
 
 	public function testRootFeedAliasesRenameAndMergeWithoutChangingRows(): void
 	{
-		$feeds = $this->convert(['feed_pri1' => 'MergedIP', 'feed_mail' => 'MergedIP'], false);
+		$feeds = $this->convert(['feed_pri1' => 'MergedIP', 'feed_mail' => 'MergedIP'], FALSE);
 
 		$this->assertSame('MergedIP', $GLOBALS['pfb']['feeds_list']['ipv4']['PRI1']);
 		$this->assertSame('MergedIP', $GLOBALS['pfb']['feeds_list']['ipv4']['MAIL']);
@@ -176,7 +176,7 @@ final class CatalogCompatibilityOracleTest extends TestCase
 
 	public function testWizardDefaultsSelectLiteralPri1AndAdsBasicRows(): void
 	{
-		set_error_handler(static fn (): bool => true, E_WARNING | E_NOTICE);
+		set_error_handler(static fn (): bool => TRUE, E_WARNING | E_NOTICE);
 		try {
 			$selected = pfb_catalog_oracle_wizard_defaults();
 		} finally {
@@ -199,7 +199,7 @@ final class CatalogCompatibilityOracleTest extends TestCase
 	/** @return array<string, mixed> */
 	private function catalog(): array
 	{
-		$catalog = json_decode((string) file_get_contents($GLOBALS['pfb']['feeds']), true);
+		$catalog = json_decode((string) file_get_contents($GLOBALS['pfb']['feeds']), TRUE);
 		$this->assertIsArray($catalog);
 		return $catalog;
 	}
@@ -226,7 +226,7 @@ final class CatalogCompatibilityOracleTest extends TestCase
 	private static function loadFeedAltSelection(): void
 	{
 		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_feeds.php');
-		if ($source === false || !preg_match('/\/\/ Collect all \'selected\' Alternative URL selections\.\n(.*?)\n\n\/\/ \$input_errors/s', $source, $match)) {
+		if ($source === FALSE || !preg_match('/\/\/ Collect all \'selected\' Alternative URL selections\.\n(.*?)\n\n\/\/ \$input_errors/s', $source, $match)) {
 			throw new RuntimeException('feeds page selection block not found');
 		}
 		eval('function pfb_catalog_oracle_feed_alt_selection(array $fconfig): array { ' . $match[1] . ' return $feed_alt_selected; }');
@@ -235,7 +235,7 @@ final class CatalogCompatibilityOracleTest extends TestCase
 	private static function loadEasyListConversion(): void
 	{
 		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
-		if ($source === false || !preg_match('/\/\/ Collect all enabled EasyLists\n(.*?)\n}\n\nif \(\$ufound\)/s', $source, $match)) {
+		if ($source === FALSE || !preg_match('/\/\/ Collect all enabled EasyLists\n(.*?)\n}\n\nif \(\$ufound\)/s', $source, $match)) {
 			throw new RuntimeException('EasyList conversion block not found');
 		}
 		eval('function pfb_catalog_oracle_easylist_conversion(): array { global $pfb; $ufound = FALSE; if (!empty(PfbConfig::readSection(\'installedpackages/pfblockerngdnsbleasylist\'))) { ' . $match[1] . ' } return PfbConfig::readSection(\'installedpackages/pfblockerngdnsbl/config\'); }');
@@ -244,7 +244,7 @@ final class CatalogCompatibilityOracleTest extends TestCase
 	private static function loadWizardDefaults(): void
 	{
 		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/wizards/pfblockerng_wizard.inc');
-		if ($source === false || !preg_match('/\/\/ Selected Alias\/Groups to add to default installation\n(.*?)\n\n\t\/\/ foreign structure: bulk wizard init/s', $source, $match)) {
+		if ($source === FALSE || !preg_match('/\/\/ Selected Alias\/Groups to add to default installation\n(.*?)\n\n\t\/\/ foreign structure: bulk wizard init/s', $source, $match)) {
 			throw new RuntimeException('wizard default-selection block not found');
 		}
 		eval('function pfb_catalog_oracle_wizard_defaults(): array { global $pfb; $feed_info_raw = json_decode(@file_get_contents("{$pfb[\'feeds\']}"), TRUE); $new_config = []; ' . $match[1] . ' return [\'ipv4\' => [\'alias\' => $new_config[\'pfblockernglistsv4\'][\'config\'][0][\'aliasname\'], \'feeds\' => $new_config[\'pfblockernglistsv4\'][\'config\'][0][\'row\']], \'dnsbl\' => [\'alias\' => $new_config[\'pfblockerngdnsbl\'][\'config\'][0][\'aliasname\'], \'feeds\' => $new_config[\'pfblockerngdnsbl\'][\'config\'][0][\'row\']]]; }');
