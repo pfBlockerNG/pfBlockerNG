@@ -272,6 +272,12 @@ final class ContractCorrectionRegressionTest extends TestCase
 		$candidate['feeds'][0]['family'] = 'both';
 		$candidate['feeds'][0]['latest_url'] = 'https://example.test/replacement';
 		$candidate['feeds'][0]['past_urls'] = ['https://example.test/one'];
+		$candidate['feeds'][0]['legacy_locators'][0]['legacy_order'] = 1000;
+		$candidate['feeds'][0]['legacy_locators'][0]['metadata']['feed'] = 'Mutable label';
+		$additionalLocator = $candidate['feeds'][0]['legacy_locators'][0];
+		$additionalLocator['legacy_header'] = 'ReplacementAdditional';
+		$additionalLocator['legacy_order'] = 1;
+		$candidate['feeds'][0]['legacy_locators'][] = $additionalLocator;
 		$candidate['tombstones'][] = [
 			'id' => $oldFeed['id'], 'kind' => 'feed', 'type' => $oldFeed['type'], 'name' => $oldFeed['name'], 'status' => 'tombstoned',
 			'family' => $oldFeed['family'], 'latest_url' => $oldFeed['latest_url'], 'past_urls' => $oldFeed['past_urls'],

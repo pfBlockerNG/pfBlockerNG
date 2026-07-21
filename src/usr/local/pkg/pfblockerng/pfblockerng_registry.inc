@@ -644,7 +644,7 @@ final class PfbRegistry
 					$feedFamily = $feedIndex[$idRef]['family'] ?? NULL;
 					$membershipFamilies = ($group['family_override'] ?? NULL) ?: $feedFamily;
 					$membershipFamilies = $membershipFamilies === 'both' ? ['ipv4', 'ipv6'] : (in_array($membershipFamilies, ['ipv4', 'ipv6'], TRUE) ? [$membershipFamilies] : []);
-					foreach ($crossGroupMemberships[$idRef] ?? [] as $priorMembership) if ($priorMembership['group_id'] !== $groupId && array_intersect($priorMembership['families'], $membershipFamilies) !== [] && !$grandfathered && !$priorMembership['grandfathered']) {
+					foreach ($crossGroupMemberships[$idRef] ?? [] as $priorMembership) if ($priorMembership['group_id'] !== $groupId && array_intersect($priorMembership['families'], $membershipFamilies) !== [] && (!$grandfathered || !$priorMembership['grandfathered'])) {
 						$errors[] = self::diagnostic('membership.overlap', "{$memberPath}/feed_id", 'enabled feed memberships overlap across groups');
 					}
 					$crossGroupMemberships[$idRef][] = ['group_id' => $groupId, 'families' => $membershipFamilies, 'grandfathered' => $grandfathered];
@@ -1217,12 +1217,19 @@ final class PfbRegistry
 		}
 		foreach ($newFeeds as $id => $feed) foreach ($tombstones as $tombstoneId => $tombstone) {
 			if ($id === $tombstoneId || ($tombstone['kind'] ?? $tombstone['type'] ?? NULL) !== 'feed' || ($feed['type'] ?? NULL) !== ($tombstone['type'] ?? NULL)) continue;
-			$sameIdentity = TRUE;
-			foreach (['type', 'legacy_locators'] as $field) if (($feed[$field] ?? NULL) !== ($tombstone[$field] ?? NULL)) { $sameIdentity = FALSE; break; }
+			$sameIdentity = FALSE;
+			foreach ($feed['legacy_locators'] ?? [] as $locator) foreach ($tombstone['legacy_locators'] ?? [] as $priorLocator) if (self::sameStableLocator($locator, $priorLocator)) { $sameIdentity = TRUE; break 2; }
 			if ($sameIdentity) $errors[] = self::diagnostic('transition.identity', "feeds/{$id}/id", 'feed identity evidence cannot move to a new id');
 		}
 		foreach ($newFeeds as $id => $_feed) if (isset($oldTombstones[$id])) $errors[] = self::diagnostic('transition.revive', "feeds/{$id}", 'tombstone cannot be revived');
 		foreach ($newCategories as $id => $_category) if (isset($oldTombstones[$id])) $errors[] = self::diagnostic('transition.revive', "categories/{$id}", 'tombstone cannot be revived');
+	}
+
+	private static function sameStableLocator(mixed $left, mixed $right): bool
+	{
+		if (!self::isMap($left) || !self::isMap($right)) return FALSE;
+		foreach (['role', 'legacy_type', 'legacy_category', 'legacy_header'] as $field) if (($left[$field] ?? NULL) !== ($right[$field] ?? NULL)) return FALSE;
+		return TRUE;
 	}
 
 	private static function validId(mixed $value, string $kind): bool

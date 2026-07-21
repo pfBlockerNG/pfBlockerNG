@@ -446,6 +446,10 @@ final class NormalizedGraphTest extends TestCase
 
 		$feed_model['groups'][2]['memberships'][0]['grandfathered_overlap'] = 'true';
 		$feed_model['groups'][2]['memberships'][0]['legacy_rows'] = [['section' => 'legacy', 'group_index' => 0, 'row_index' => 0, 'header' => 'CrossGroup']];
+		$codes = array_column(PfbRegistry::validateGraph($feed_model, $group_policy, $catalog), 'code');
+		$this->assertContains('membership.overlap', $codes);
+		$feed_model['groups'][0]['memberships'][0]['grandfathered_overlap'] = 'true';
+		$feed_model['groups'][0]['memberships'][0]['legacy_rows'] = [['section' => 'legacy', 'group_index' => 1, 'row_index' => 0, 'header' => 'DefaultGroup']];
 		$this->assertSame([], PfbRegistry::validateGraph($feed_model, $group_policy, $catalog));
 	}
 
