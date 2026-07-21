@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE — pfBlockerNG settings transition</title>
+<!--
+Question: Which Software-page interaction best communicates exact-target downgrade,
+snapshot restoration or first-entry clearing, journal recovery, and divergence?
+Run: php -S 127.0.0.1:8016 -t src/usr/local/www/pfblockerng
+Open: http://127.0.0.1:8016/pfblockerng_software_transition_prototype.html
+-->
+<style>
+:root { color-scheme: light; font: 14px/1.45 Arial, sans-serif; color: #263238; background: #eef1f4; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+header { background: #172734; color: white; padding: 12px 24px; }
+header strong { font-size: 18px; }
+nav { background: white; border-bottom: 1px solid #ccd3d8; padding: 0 24px; }
+nav span { display: inline-block; padding: 12px 14px; color: #436173; }
+nav .active { border-bottom: 3px solid #d9534f; color: #222; font-weight: bold; }
+main { max-width: 1120px; margin: 20px auto 90px; padding: 0 18px; }
+h1 { font-size: 24px; margin-bottom: 4px; }
+h2 { font-size: 18px; }
+h3 { font-size: 15px; margin-top: 0; }
+.muted { color: #65737c; }
+.card, .panel { background: white; border: 1px solid #ccd3d8; border-radius: 4px; padding: 18px; margin: 14px 0; }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.spread { justify-content: space-between; }
+.status { border-left: 5px solid #4b88a2; padding: 12px 15px; background: #eef7fb; margin: 14px 0; }
+.warning { border-color: #e4a11b; background: #fff8e7; }
+.danger { border-color: #c9302c; background: #fff0ef; }
+.success { border-color: #3c9a5f; background: #edf8f1; }
+.choice { display: block; border: 2px solid #ccd3d8; border-radius: 5px; padding: 14px; margin: 8px 0; cursor: pointer; }
+.choice:has(input:checked) { border-color: #337ab7; background: #eef7ff; }
+button, select, input[type="text"] { font: inherit; padding: 8px 11px; }
+button { border: 1px solid #286090; border-radius: 4px; background: #337ab7; color: white; cursor: pointer; }
+button.secondary { background: white; color: #334b59; border-color: #9aa8b0; }
+button.danger-button { background: #c9302c; border-color: #ac2925; }
+button:disabled { cursor: not-allowed; opacity: .5; }
+fieldset { border: 0; padding: 0; margin: 0; }
+legend { font-weight: bold; margin-bottom: 7px; }
+label { font-weight: bold; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; border-bottom: 1px solid #e1e5e8; padding: 9px; vertical-align: top; }
+.steps { counter-reset: step; }
+.step { position: relative; margin-left: 22px; padding: 0 0 24px 30px; border-left: 3px solid #ccd3d8; }
+.step::before { counter-increment: step; content: counter(step); position: absolute; left: -15px; top: -2px; width: 27px; height: 27px; border-radius: 50%; background: #337ab7; color: white; text-align: center; line-height: 27px; font-weight: bold; }
+.console { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(360px, 2fr); gap: 18px; }
+.timeline { list-style: none; padding: 0; }
+.timeline li { border-left: 3px solid #ccd3d8; padding: 4px 0 18px 16px; }
+.timeline .current { border-color: #e4a11b; font-weight: bold; }
+.workspace-tabs { display: flex; border-bottom: 1px solid #ccd3d8; margin: 14px 0 18px; }
+.workspace-tabs button { background: transparent; border: 0; border-bottom: 3px solid transparent; border-radius: 0; color: #436173; padding: 11px 16px; }
+.workspace-tabs button.active { border-bottom-color: #d9534f; color: #222; font-weight: bold; }
+.prototype-controls { position: fixed; z-index: 10; left: 50%; bottom: 15px; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; background: #111c24; color: white; padding: 9px 12px; border-radius: 24px; box-shadow: 0 3px 14px #0008; }
+.prototype-controls button { border-radius: 50%; width: 34px; height: 34px; padding: 0; }
+.prototype-controls select { color: #222; padding: 5px; }
+.prototype-label { min-width: 175px; text-align: center; font-weight: bold; }
+.prototype-only { color: #ffd86a; font-size: 11px; text-transform: uppercase; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+@media (max-width: 720px) { .console { grid-template-columns: 1fr; } nav span { padding: 9px 7px; } .prototype-controls { width: calc(100% - 20px); justify-content: center; } }
+</style>
+</head>
+<body>
+<header><strong>pfSense</strong> &nbsp; Firewall / pfBlockerNG / Software</header>
+<nav aria-label="pfBlockerNG sections"><span>General</span><span>IP</span><span>DNSBL</span><span>Update</span><span>Reports</span><span>Feeds</span><span>Logs</span><span>Sync</span><span class="active">Software</span></nav>
+<main>
+  <div class="row spread"><div><h1>Software</h1><div class="muted">Installed: pfBlockerNG-devel 4.0.0 · Devel channel</div></div><span class="prototype-only">Throwaway prototype</span></div>
+  <div id="app"></div>
+</main>
+<div class="prototype-controls" aria-label="Prototype controls">
+  <button id="previous" type="button" aria-label="Previous variant">←</button>
+  <span class="prototype-label" id="variant-label"></span>
+  <button id="next" type="button" aria-label="Next variant">→</button>
+  <label for="scenario" class="sr-only">Scenario</label>
+  <select id="scenario">
+    <option value="ready">Ready</option>
+    <option value="fresh">No v3 snapshot</option>
+    <option value="recovering">Recovery</option>
+    <option value="manual">Manual recovery</option>
+    <option value="diverged">Divergence</option>
+  </select>
+</div>
+<script>
+const variants = [
+  { key: 'A', name: 'One decision panel' },
+  { key: 'B', name: 'Guided checklist' },
+  { key: 'C', name: 'Operations console' },
+  { key: 'D', name: 'Maintenance workspace' }
+];
+const state = { channel: 'devel', scenario: 'ready', acknowledged: false, launched: false, workspace: 'operations' };
+
+function target() { return state.channel === 'stable' ? 'pfBlockerNG 3.2.15' : 'pfBlockerNG-devel 3.2.16'; }
+function actionText() { return `Downgrade to ${target()}`; }
+function outcome() {
+  if (state.scenario === 'fresh') return 'No v3.2 snapshot exists. v4 settings will be preserved, active pfBlockerNG settings cleared, and v3.2 will start unconfigured.';
+  return 'The verified v3.2 family-head snapshot will replace active pfBlockerNG settings. Current v4 settings remain saved for re-upgrade.';
+}
+function notice() {
+  if (state.scenario === 'recovering') return '<div class="status warning" role="status"><strong>Recovery in progress.</strong> Journal phase: settings-applied. The existing migrations and resync will resume; settings will not be restored again.</div>';
+  if (state.scenario === 'manual') return '<div class="status danger" role="alert"><strong>Manual recovery required.</strong> Live settings match neither journaled source nor target. Downgrade actions are locked. <button class="secondary" data-action="logs">View recovery details</button></div>';
+  if (state.scenario === 'diverged' && !state.acknowledged) return '<div class="status warning" role="alert"><strong>Settings diverged during the last transition.</strong> Both versions are preserved as separate snapshots; nothing was merged. <button class="secondary" data-action="ack">Acknowledge this event</button> <button class="secondary" data-action="logs">View warnings</button></div>';
+  if (state.scenario === 'diverged') return '<div class="status success" role="status"><strong>Divergence event acknowledged.</strong> This exact snapshot pair will not notify again. <button class="secondary" data-action="logs">View warnings</button></div>';
+  return '';
+}
+function channelChoices() {
+  return `<fieldset><legend>Target channel and exact package</legend>
+    <label class="choice"><input type="radio" name="channel" value="stable" ${state.channel === 'stable' ? 'checked' : ''}> Stable — pfBlockerNG 3.2.15</label>
+    <label class="choice"><input type="radio" name="channel" value="devel" ${state.channel === 'devel' ? 'checked' : ''}> Devel — pfBlockerNG-devel 3.2.16 <span class="muted">(current channel)</span></label>
+  </fieldset>`;
+}
+function confirmation(id) {
+  return `<label for="${id}">Type <strong>${target()}</strong> to confirm</label><br>
+    <input id="${id}" class="confirm" type="text" autocomplete="off" aria-describedby="impact" style="width:min(100%,360px)">
+    <button type="button" class="danger-button launch" disabled>${actionText()}</button>`;
+}
+function progress() {
+  return state.launched ? '<div class="status success" role="status"><strong>Transition runner started.</strong> It prepared recovery state and delegated the exact frozen package install to the native package flow; output remains visible.</div>' : '';
+}
+function variantA() {
+  return `${notice()}${progress()}<section class="panel"><h2>Downgrade to v3.2</h2><p>Choose one frozen package. Your current channel is selected by default.</p>
+    <div class="grid"><div>${channelChoices()}</div><div><h3>What will happen</h3><p id="impact">${outcome()}</p><table><tr><th>Current settings</th><td>Saved as verified v4.0 snapshot</td></tr><tr><th>Execution</th><td>Shipped transition runner; exact package only</td></tr><tr><th>Recovery</th><td>Durable journal resumes after interruption</td></tr></table></div></div>
+    <hr>${confirmation('confirm-a')}</section>`;
+}
+function variantB() {
+  return `${notice()}${progress()}<section class="card"><h2>Guided downgrade</h2><p>Complete all three checks. Nothing changes before the final action.</p><div class="steps">
+    <div class="step"><h3>Choose destination</h3>${channelChoices()}</div>
+    <div class="step"><h3>Review settings outcome</h3><div id="impact" class="status ${state.scenario === 'fresh' ? 'warning' : ''}">${outcome()}</div><p class="muted">Snapshot validation and journal publication must succeed before any mutation.</p></div>
+    <div class="step"><h3>Confirm exact target</h3>${confirmation('confirm-b')}<p class="muted">After confirmation, progress moves to the native Package Manager page.</p></div>
+  </div></section>`;
+}
+function phaseClass(phase) { return state.scenario === phase ? 'current' : ''; }
+function variantC() {
+  const locked = state.scenario === 'manual';
+  return `${notice()}${progress()}<div class="console"><aside class="card"><h2>Transition journal</h2><ul class="timeline">
+    <li>Prepared<br><span class="muted">Source snapshot and target verified</span></li>
+    <li class="${phaseClass('recovering')}">Settings applying<br><span class="muted">Atomic restore or clear</span></li>
+    <li class="${phaseClass('recovering')}">Settings applied<br><span class="muted">Migration and resync may resume</span></li>
+    <li>Complete<br><span class="muted">Baseline recorded; journal cleared</span></li></ul>
+    <button class="secondary" data-action="logs">Open transition log</button></aside>
+    <section class="card"><h2>Exact-package downgrade</h2>${channelChoices()}<div id="impact" class="status ${state.scenario === 'fresh' ? 'warning' : ''}"><strong>Settings action</strong><br>${outcome()}</div>
+    ${locked ? '<button type="button" disabled>Downgrade locked</button>' : confirmation('confirm-c')}</section></div>`;
+}
+function workspaceTabs() {
+  return `<div class="workspace-tabs" role="tablist" aria-label="Maintenance sections">
+    <button type="button" role="tab" data-workspace="operations" class="${state.workspace === 'operations' ? 'active' : ''}" aria-selected="${state.workspace === 'operations'}">Operations</button>
+    <button type="button" role="tab" data-workspace="downgrade" class="${state.workspace === 'downgrade' ? 'active' : ''}" aria-selected="${state.workspace === 'downgrade'}">Downgrade</button>
+  </div>`;
+}
+function variantD() {
+  let content;
+  if (state.workspace === 'downgrade') {
+    content = `${notice()}${progress()}<section class="panel"><h2>Downgrade to v3.2</h2><p>Choose one frozen package. Your current channel is selected by default.</p>
+      <div class="grid"><div>${channelChoices()}</div><div><h3>What will happen</h3><p id="impact">${outcome()}</p><table><tr><th>Current settings</th><td>Saved as verified v4.0 snapshot</td></tr><tr><th>Runner</th><td>Prepares snapshot, journal, restore, and exact install</td></tr><tr><th>Package output</th><td>Continues in native package flow</td></tr></table></div></div><hr>${confirmation('confirm-d')}</section>
+      <div class="grid"><aside class="card"><h2>Transition journal</h2><ul class="timeline"><li>Prepared<br><span class="muted">Source snapshot and target verified</span></li><li class="${phaseClass('recovering')}">Settings applying<br><span class="muted">Atomic restore or clear</span></li><li class="${phaseClass('recovering')}">Settings applied<br><span class="muted">Migration and resync may resume</span></li><li>Complete<br><span class="muted">Baseline recorded; journal cleared</span></li></ul><button class="secondary" data-action="logs">Open transition log</button></aside>
+      <section class="card"><h2>Saved settings</h2><table><tr><th>Family</th><th>Source</th><th>State</th></tr><tr><td>3.2</td><td>pfBlockerNG-devel 3.2.16</td><td>Verified head</td></tr><tr><td>4.0</td><td>pfBlockerNG-devel 4.0.0</td><td>Active</td></tr></table><p class="muted">Older distinct snapshots remain recovery history; only the verified family head is selected automatically.</p></section></div>`;
+  } else {
+    content = '<section class="panel"><h2>Configuration export</h2><p>Export pfBlockerNG-owned settings for diagnostics. Sensitive values and appliance-identifying data are always removed; no unsanitized export is offered.</p><button type="button">Export sanitized settings</button></section><section class="panel"><h2>More operations</h2><p class="muted">Additional maintenance actions can live here without mixing them into downgrade state.</p></section>';
+  }
+  return `<section class="card"><h2>Maintenance</h2><p class="muted">Settings transitions, recovery, and diagnostic tools.</p>${workspaceTabs()}${content}</section>`;
+}
+function currentVariant() {
+  const key = new URLSearchParams(location.search).get('variant') || 'A';
+  return variants.find(v => v.key === key) || variants[0];
+}
+function render() {
+  const variant = currentVariant();
+  document.getElementById('variant-label').textContent = `${variant.key} — ${variant.name}`;
+  document.getElementById('app').innerHTML = variant.key === 'A' ? variantA() : variant.key === 'B' ? variantB() : variant.key === 'C' ? variantC() : variantD();
+  document.querySelectorAll('input[name="channel"]').forEach(input => input.addEventListener('change', event => { state.channel = event.target.value; state.launched = false; render(); }));
+  document.querySelectorAll('.confirm').forEach(input => input.addEventListener('input', event => { document.querySelector('.launch').disabled = event.target.value !== target(); }));
+  document.querySelectorAll('[data-action="ack"]').forEach(button => button.addEventListener('click', () => { state.acknowledged = true; render(); }));
+  document.querySelectorAll('[data-action="logs"]').forEach(button => button.addEventListener('click', () => alert('Prototype: opens persistent pfSense notification details and transition log.')));
+  document.querySelectorAll('[data-workspace]').forEach(button => button.addEventListener('click', () => { state.workspace = button.dataset.workspace; render(); }));
+  document.querySelectorAll('.launch').forEach(button => button.addEventListener('click', () => { state.launched = true; render(); }));
+}
+function cycle(delta) {
+  const current = currentVariant();
+  const index = variants.findIndex(v => v.key === current.key);
+  const next = variants[(index + delta + variants.length) % variants.length];
+  const params = new URLSearchParams(location.search); params.set('variant', next.key); history.replaceState({}, '', `${location.pathname}?${params}`); render();
+}
+document.getElementById('previous').addEventListener('click', () => cycle(-1));
+document.getElementById('next').addEventListener('click', () => cycle(1));
+document.getElementById('scenario').addEventListener('change', event => { state.scenario = event.target.value; state.acknowledged = false; state.launched = false; render(); });
+document.addEventListener('keydown', event => {
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) || document.activeElement.isContentEditable) return;
+  if (event.key === 'ArrowLeft') cycle(-1);
+  if (event.key === 'ArrowRight') cycle(1);
+});
+render();
+</script>
+</body>
+</html>
