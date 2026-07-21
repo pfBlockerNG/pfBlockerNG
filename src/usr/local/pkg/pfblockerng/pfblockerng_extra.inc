@@ -1467,6 +1467,10 @@ final class PfbConfig
 		if ($diagnostics === []) {
 			$diagnostics = self::structuralGraphDiagnostics($name, $candidate, $nativeRefs);
 		}
+		if ($diagnostics === []) {
+			$existing = config_get_path($entry['path'], NULL);
+			if (is_array($existing)) $diagnostics = self::structuralProvenanceTransition($name, $existing, $candidate);
+		}
 		if ($diagnostics !== []) {
 			return $diagnostics;
 		}
@@ -1531,6 +1535,20 @@ final class PfbConfig
 		return $registry[$name];
 	}
 
+	/** @return list<array{code:string,path:string,severity:string,message:string}> */
+	private static function structuralProvenanceTransition(string $name, array $prior, array $candidate): array
+	{
+		$old = $prior['provenance'] ?? NULL;
+		$new = $candidate['provenance'] ?? NULL;
+		if (!is_array($old) || !array_is_list($old) || !is_array($new) || !array_is_list($new)) return [];
+		foreach ($old as $index => $row) {
+			if (!array_key_exists($index, $new) || $new[$index] !== $row) {
+				return [self::structuralDiagnostic('provenance.append', "{$name}/provenance/{$index}", 'provenance rows are immutable and append-only')];
+			}
+		}
+		return [];
+	}
+
 	private static function structuralDefault(string $name): array
 	{
 		return match ($name) {
@@ -1569,10 +1587,7 @@ final class PfbConfig
 			'description' => '',
 			'enabled' => 'false',
 			'action' => $action,
-			'source_interface' => '',
 			'sort_entries' => 'true',
-			'pre_script' => '',
-			'post_script' => '',
 			'memberships' => [],
 		];
 		if ($type === 'ip') {

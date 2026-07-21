@@ -113,13 +113,21 @@ def test_ipv6_blocklist_de_6_urls_match_ipv4(catalog: dict) -> None:  # type: ig
 def test_blocklist_de_6_headers_unique_across_catalog(catalog: dict) -> None:  # type: ignore[type-arg]
     """BlockListDE_6 headers must not collide with any other header in the catalog.
 
-    The _6 suffix is the uniqueness mechanism: guards against a future edit that
-    reintroduces a non-suffixed or wrong-suffix header for the IPv6 group.
+    Derive the headers from retained category locators rather than assuming a
+    particular suffix spelling.
     """
     all_headers = _all_headers(catalog)
     counts = Counter(all_headers)
-
-    colliding = [header for header in _all_headers(catalog) if header.endswith("_6") and counts.get(header, 0) > 1]
+    category_headers = [
+        locator["legacy_header"]
+        for feed in catalog.get("feeds", [])
+        for locator in feed.get("legacy_locators", [])
+        if locator.get("legacy_type") == "ipv6"
+        and locator.get("legacy_category") == "BlockListDE_6"
+        and locator.get("legacy_header")
+    ]
+    assert category_headers, "BlockListDE_6 has no retained IPv6 headers"
+    colliding = [header for header in category_headers if counts.get(header, 0) > 1]
     assert not colliding, f"BlockListDE_6 headers collide with other catalog entries: {colliding}"
 
 

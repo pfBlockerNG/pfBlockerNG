@@ -424,6 +424,7 @@ final class PfbRegistry
 			$path = "feed_model/feeds/{$number}";
 			if (!self::isMap($feed)) { $errors[] = self::diagnostic('field.type', $path, 'feed must be an object'); continue; }
 			$allowed = ['id', 'type', 'name', 'alias', 'url', 'custom_url', 'family', 'parser', 'update_policy', 'schedule', 'provenance'];
+			$allowed = array_merge($allowed, ['source_interface', 'pre_script', 'post_script']);
 			foreach (array_keys($feed) as $key) if (!is_string($key) || !in_array($key, $allowed, TRUE)) $errors[] = self::diagnostic('field.unknown', $path, 'feed contains an unknown field');
 			$id = $feed['id'] ?? NULL;
 			if (!self::runtimeId($id, 'feed-instance')) $errors[] = self::diagnostic('field.value', "{$path}/id", 'feed id is invalid');
@@ -436,6 +437,7 @@ final class PfbRegistry
 			else self::validateText($feed['name'], "{$path}/name", 'field.value', $errors);
 			if (!is_string($feed['alias'] ?? NULL) || trim((string)$feed['alias']) === '') $errors[] = self::diagnostic('field.required', "{$path}/alias", 'feed alias is required');
 			elseif (preg_match('/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/D', $feed['alias']) !== 1) $errors[] = self::diagnostic('field.value', "{$path}/alias", 'feed alias is invalid');
+			foreach (['source_interface', 'pre_script', 'post_script'] as $field) if (isset($feed[$field]) && (!is_string($feed[$field]) || strlen($feed[$field]) > self::MAX_TEXT)) $errors[] = self::diagnostic('field.value', "{$path}/{$field}", 'feed field must be bounded text');
 			if ($type === 'ip' && !in_array($feed['family'] ?? NULL, ['ipv4', 'ipv6', 'both'], TRUE)) $errors[] = self::diagnostic('field.value', "{$path}/family", 'IP feed family is invalid');
 			if ($type === 'dnsbl' && array_key_exists('family', $feed)) $errors[] = self::diagnostic('field.value', "{$path}/family", 'DNSBL feed cannot carry an IP family');
 			$parser = $feed['parser'] ?? NULL;
@@ -568,17 +570,19 @@ final class PfbRegistry
 		if (!self::isList($rawGroups)) { $errors[] = self::diagnostic('field.type', 'feed_model/groups', 'groups must be a list'); return []; }
 		if (count($rawGroups) > self::MAX_GRAPH_ITEMS) $errors[] = self::diagnostic('field.limit', 'feed_model/groups', 'groups exceed the maximum count');
 		$index = [];
+		$crossGroupMemberships = [];
 		$userTypes = ['ip' => FALSE, 'dnsbl' => FALSE];
 		foreach (self::boundedList($rawGroups) as $number => $group) {
 			$path = "feed_model/groups/{$number}";
 			if (!self::isMap($group)) { $errors[] = self::diagnostic('field.type', $path, 'group must be an object'); continue; }
-			$allowed = ['id', 'type', 'managed_by', 'source_group_id', 'name', 'alias', 'description', 'enabled', 'action', 'source_interface', 'sort_entries', 'pre_script', 'post_script', 'memberships', 'log_firewall', 'remove_states', 'whois_convert', 'suppression_prefix', 'family_override', 'inbound', 'outbound', 'custom', 'order', 'response_mode', 'log_queries', 'filter_top1m'];
+			$allowed = ['id', 'type', 'managed_by', 'source_group_id', 'name', 'alias', 'description', 'enabled', 'action', 'sort_entries', 'memberships', 'log_firewall', 'remove_states', 'whois_convert', 'suppression_prefix', 'family_override', 'inbound', 'outbound', 'custom', 'order', 'response_mode', 'log_queries', 'filter_top1m'];
 			foreach (array_keys($group) as $key) if (!is_string($key) || !in_array($key, $allowed, TRUE)) $errors[] = self::diagnostic('field.unknown', $path, 'group contains an unknown field');
 			$id = $group['id'] ?? NULL;
 			if (!self::runtimeId($id, 'group')) $errors[] = self::diagnostic('field.value', "{$path}/id", 'group id is invalid');
 			if (is_string($id) && isset($index[$id])) $errors[] = self::diagnostic('reference.duplicate', "{$path}/id", 'group id is duplicated');
 			if (!is_string($id)) $id = "#{$number}";
 			$index[$id] = $group;
+			$groupId = $id;
 			$type = $group['type'] ?? NULL;
 			if (!in_array($type, ['ip', 'dnsbl'], TRUE)) $errors[] = self::diagnostic('field.value', "{$path}/type", 'group type is invalid');
 			$managedBy = $group['managed_by'] ?? NULL;
@@ -590,7 +594,6 @@ final class PfbRegistry
 			} elseif (($group['source_group_id'] ?? '') !== '') $errors[] = self::diagnostic('group.source', "{$path}/source_group_id", 'user groups cannot carry a source group');
 			if (!is_string($group['name'] ?? NULL) || trim((string)$group['name']) === '') $errors[] = self::diagnostic('field.required', "{$path}/name", 'group name is required');
 			if (!is_string($group['alias'] ?? NULL) || trim((string)$group['alias']) === '') $errors[] = self::diagnostic('field.required', "{$path}/alias", 'group alias is required');
-			foreach (['source_interface', 'pre_script', 'post_script'] as $field) if (isset($group[$field]) && (!is_string($group[$field]) || strlen($group[$field]) > self::MAX_TEXT)) $errors[] = self::diagnostic('field.value', "{$path}/{$field}", 'group field must be bounded text');
 			self::validateBoolean($group['enabled'] ?? NULL, "{$path}/enabled", $errors);
 			$action = $group['action'] ?? NULL;
 			$actions = $type === 'dnsbl' ? ['unbound'] : ['deny_inbound', 'deny_outbound', 'deny_both', 'permit_inbound', 'permit_outbound', 'permit_both', 'match_inbound', 'match_outbound', 'match_both', 'alias_deny', 'alias_permit', 'alias_match', 'alias_native'];
@@ -636,6 +639,15 @@ final class PfbRegistry
 				if ($grandfathered && (!self::isList($membership['legacy_rows'] ?? NULL) || $membership['legacy_rows'] === [])) $errors[] = self::diagnostic('membership.grandfathered.evidence', "{$memberPath}/legacy_rows", 'grandfathered overlap requires migrated legacy row evidence');
 				if (isset($group['family_override']) && $group['family_override'] !== NULL && $type === 'ip' && ($feedIndex[$idRef]['family'] ?? NULL) !== 'both' && $feedIndex[$idRef]['family'] !== $group['family_override']) {
 					$errors[] = self::diagnostic('family.intersection', "{$memberPath}/feed_id", 'feed and group families do not intersect');
+				}
+				if ($type === 'ip' && ($membership['enabled'] ?? NULL) === 'true') {
+					$feedFamily = $feedIndex[$idRef]['family'] ?? NULL;
+					$membershipFamilies = ($group['family_override'] ?? NULL) ?: $feedFamily;
+					$membershipFamilies = $membershipFamilies === 'both' ? ['ipv4', 'ipv6'] : (in_array($membershipFamilies, ['ipv4', 'ipv6'], TRUE) ? [$membershipFamilies] : []);
+					foreach ($crossGroupMemberships[$idRef] ?? [] as $priorMembership) if ($priorMembership['group_id'] !== $groupId && array_intersect($priorMembership['families'], $membershipFamilies) !== [] && !$grandfathered && !$priorMembership['grandfathered']) {
+						$errors[] = self::diagnostic('membership.overlap', "{$memberPath}/feed_id", 'enabled feed memberships overlap across groups');
+					}
+					$crossGroupMemberships[$idRef][] = ['group_id' => $groupId, 'families' => $membershipFamilies, 'grandfathered' => $grandfathered];
 				}
 			}
 		}
@@ -756,6 +768,7 @@ final class PfbRegistry
 				$audience = self::policyAudience($policy);
 				if (self::isList($audience)) foreach (self::boundedList($audience) as $audienceNumber => $userId) {
 					if (!is_string($userId) || !isset($userIndex[$userId])) $errors[] = self::diagnostic('reference.dangling', "{$path}/audience/{$audienceNumber}", 'policy audience reference is dangling');
+					elseif (($userIndex[$userId]['selectors'] ?? NULL) === []) $errors[] = self::diagnostic('policy.audience', "{$path}/audience/{$audienceNumber}", 'policy audience cannot target a draft user group');
 				}
 			}
 		}
@@ -952,7 +965,16 @@ final class PfbRegistry
 			}
 			return FALSE;
 		}
-		return is_string($value) && preg_match('/(?:authorization\s*:|cookie\s*:|(?:token|password|secret|credential)\s*=|[?&](?:api_key|api-key)\s*=|https?:\/\/[^\s\/@:]+:[^\s\/@]+@)/i', $value) === 1;
+		if (!is_string($value)) return FALSE;
+		$value = urldecode($value);
+		$queryParts = preg_split('/[?&;]/', $value) ?: [];
+		array_shift($queryParts);
+		foreach ($queryParts as $pair) {
+			$key = urldecode(explode('=', $pair, 2)[0]);
+			$normalized = preg_replace('/[^a-z0-9]+/', '', strtolower($key));
+			if (in_array($normalized, ['apikey', 'authorization', 'cookie', 'credential', 'password', 'secret', 'token'], TRUE)) return TRUE;
+		}
+		return preg_match('/(?:authorization\s*:|cookie\s*:|(?:token|password|secret|credential)\s*=|https?:\/\/[^\s\/@:]+:[^\s\/@]+@)/i', $value) === 1;
 	}
 
 	/** @param list<array{code:string,path:string,severity:string,message:string}> $errors */
@@ -1028,6 +1050,11 @@ final class PfbRegistry
 
 	private static function membershipSubjectExists(string $id, array $groupIndex): bool
 	{
+		$parts = explode('|', $id, 2);
+		if (count($parts) !== 2 || $parts[0] === '' || $parts[1] === '' || !isset($groupIndex[$parts[0]])) return FALSE;
+		foreach (self::boundedList($groupIndex[$parts[0]]['memberships'] ?? NULL) as $membership) {
+			if (self::isMap($membership) && ($membership['feed_id'] ?? NULL) === $parts[1]) return TRUE;
+		}
 		return FALSE;
 	}
 
@@ -1191,7 +1218,7 @@ final class PfbRegistry
 		foreach ($newFeeds as $id => $feed) foreach ($tombstones as $tombstoneId => $tombstone) {
 			if ($id === $tombstoneId || ($tombstone['kind'] ?? $tombstone['type'] ?? NULL) !== 'feed' || ($feed['type'] ?? NULL) !== ($tombstone['type'] ?? NULL)) continue;
 			$sameIdentity = TRUE;
-			foreach (['type', 'latest_url', 'past_urls', 'category_ids', 'legacy_locators'] as $field) if (($feed[$field] ?? NULL) !== ($tombstone[$field] ?? NULL)) { $sameIdentity = FALSE; break; }
+			foreach (['type', 'legacy_locators'] as $field) if (($feed[$field] ?? NULL) !== ($tombstone[$field] ?? NULL)) { $sameIdentity = FALSE; break; }
 			if ($sameIdentity) $errors[] = self::diagnostic('transition.identity', "feeds/{$id}/id", 'feed identity evidence cannot move to a new id');
 		}
 		foreach ($newFeeds as $id => $_feed) if (isset($oldTombstones[$id])) $errors[] = self::diagnostic('transition.revive', "feeds/{$id}", 'tombstone cannot be revived');
