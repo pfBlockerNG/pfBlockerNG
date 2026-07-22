@@ -389,7 +389,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		};
 
 		try {
-			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, []);
+			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
 		} finally {
 			chmod($this->dir, 0777);
 			foreach (glob("{$writable}/*") ?: [] as $file) {
@@ -478,7 +478,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			return $calls <= 2;
 		};
 
-		pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, []);
+		pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
 
 		$this->assertSame(2, $calls,
 			"the success path must call is_process_running('unbound') exactly twice (eligibility check + pfb_dnsbl_converged()); any other count means the restart path ran instead");
@@ -486,6 +486,119 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			'a converged zero-downtime swap must close the dnsbl apply entry via its own early return');
 		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.sync",
 			'the success early-return must clear its own daemon-suppression marker before returning');
+	}
+
+	public function testGenericSwapReturnsAppliedAndLeavesFullFlushToCaller(): void
+	{
+		$this->writeUnboundConf(TRUE);
+		$GLOBALS['pfb']['dnsbl_file']            = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count']      = "{$this->dir}/unbound_py_count";
+		$GLOBALS['pfb']['chroot_cmd']            = "{$this->dir}/chroot-control-recorder";
+		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
+		$GLOBALS['config']['unbound']            = ['python' => 'on', 'python_script' => 'pfb_unbound'];
+		file_put_contents($GLOBALS['pfb']['unbound_py_count'], '10');
+		$this->writeApplied(1);
+
+		$commands = "{$this->dir}/control-commands.log";
+		$marker = escapeshellarg("{$this->dir}/pfb_py_reload.applied");
+		file_put_contents(
+			$GLOBALS['pfb']['chroot_cmd'],
+			"#!/bin/sh\nprintf '%s|applied=%s\\n' \"\$*\" \"\$(cat {$marker})\" >> " . escapeshellarg($commands) . "\n"
+		);
+		chmod($GLOBALS['pfb']['chroot_cmd'], 0755);
+
+		$calls = 0;
+		$GLOBALS['pfb_test_process_running']['unbound'] = function () use (&$calls) {
+			$calls++;
+			return $calls <= 2;
+		};
+
+		$swapped = pfb_reload_unbound('enabled', TRUE, FALSE, TRUE);
+
+		$this->assertSame(2, $calls, 'bulk apply must return through the zero-downtime success path');
+		$this->assertTrue($swapped, 'successful applied-generation swap must return TRUE to its bulk caller');
+		$this->assertSame(
+			[],
+			file_exists($commands) ? file($commands, FILE_IGNORE_NEW_LINES) : [],
+			'generic reload must leave the full-cache policy to its bulk caller'
+		);
+	}
+
+	public function testReloadApiAndBulkCachePolicyHaveNoTargetedDelta(): void
+	{
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+		$start = strpos($source, 'function pfb_reload_unbound(');
+		$end = strpos($source, 'function pfb_unbound_clear_work_files(', $start);
+		$this->assertNotFalse($start, 'pfb_reload_unbound() must exist');
+		$this->assertNotFalse($end, 'pfb_reload_unbound() end boundary must exist');
+		$region = substr($source, $start, $end - $start);
+
+		$this->assertMatchesRegularExpression(
+			'/function pfb_reload_unbound\(\$mode, \$cache=FALSE, \$pfbpython=FALSE, \$datapath=FALSE\)/',
+			$region,
+			'generic reload must accept no targeted newly-blocked delta'
+		);
+		$this->assertStringNotContainsString('$newly_blocked', $region);
+		$this->assertStringNotContainsString('pfb_unbound_py_ccache_flush(', $region);
+		$this->assertStringNotContainsString('flush_zone +c .', $region);
+		$this->assertStringContainsString(
+			'if ($cache && $pfb[\'dnsbl_res_cache\'] == \'on\')',
+			$region,
+			'generic reload keeps existing cache preservation policy for config restarts'
+		);
+		$this->assertStringContainsString(
+			'if ($cache && $pfb[\'dnsbl_res_cache\'] == \'on\' && file_exists($cache_dumpfile)',
+			$region,
+			'generic reload restores cache only when its caller preserves it'
+		);
+		$this->assertStringContainsString('return TRUE;', $region,
+			'applied-generation success must be distinguishable from restart fallback');
+		$this->assertStringContainsString('return FALSE;', $region,
+			'restart fallback must report that no zero-downtime swap completed');
+
+		$update_start = strpos($source, 'function pfb_update_unbound(');
+		$update_end = strpos($source, 'function pfb_top1m_active_provider()', $update_start);
+		$this->assertNotFalse($update_start, 'pfb_update_unbound() must exist');
+		$this->assertNotFalse($update_end, 'pfb_update_unbound() end boundary must exist');
+		$update_region = substr($source, $update_start, $update_end - $update_start);
+		$this->assertStringContainsString(
+			'$swapped = pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath);',
+			$update_region,
+			'bulk caller must disable restart cache preservation for datapath updates'
+		);
+		$this->assertStringContainsString(
+			"if (\$datapath && \$swapped) {\n\t\t\texec(\"{\$pfb['chroot_cmd']} flush_zone +c . 2>&1\");\n\t\t}",
+			$update_region,
+			'bulk caller must full-flush only after a successful applied-generation swap'
+		);
+	}
+
+	public function testLockCallerTargetsOnlyAfterGenericReloadReturns(): void
+	{
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php');
+		$this->assertNotFalse($source, 'pfblockerng_alerts.php must be readable');
+		$start = strpos($source, '// Unlock/Lock DNSBL events');
+		$end = strpos($source, "\n\t\t// sprintf with the (domain-filtered", $start);
+		$this->assertNotFalse($start, 'Lock/Unlock handler must exist');
+		$this->assertNotFalse($end, 'Lock/Unlock handler end boundary must exist');
+		$region = substr($source, $start, $end - $start);
+
+		$this->assertStringNotContainsString('$newly_blocked', $region);
+		$reload = "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);";
+		$targeted = 'pfb_unbound_py_ccache_flush(array($domain));';
+		$reload_pos = strpos($region, $reload);
+		$targeted_pos = strpos($region, $targeted);
+		$this->assertNotFalse($reload_pos, 'Lock/Unlock must call the four-argument generic reload');
+		$this->assertNotFalse($targeted_pos, 'Lock must retain the validated targeted flush in its caller');
+		$this->assertGreaterThan($reload_pos, $targeted_pos,
+			'targeted Lock flush must run only after generic reload returns');
+		$this->assertMatchesRegularExpression(
+			'/if \(\$ua\[\x27mode\x27\] === \x27lock\x27\) \{\s*'
+			. 'pfb_unbound_py_ccache_flush\(array\(\$domain\)\);/s',
+			$region,
+			'only Lock, not Unlock, may invoke the targeted helper'
+		);
 	}
 
 	// -----------------------------------------------------------------------

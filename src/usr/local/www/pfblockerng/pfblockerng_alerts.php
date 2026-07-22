@@ -896,10 +896,9 @@ if (isset($_POST) && !empty($_POST)) {
 
 		// Reload if the Custom_List grew or the domain was stripped from the whitelist.
 		// ADR-10: this is a #51 user custom-list DATA edit -- take the zero-downtime
-		// fast path (no restart). It is an allow->block transition (the domain becomes
-		// blocked), so pass it as the newly-blocked delta for the targeted C-cache flush.
+		// fast path (no restart).
 		if ($cl_added || $wl_removed) {
-			pfb_reload_unbound('enabled', FALSE, TRUE, TRUE, array($domain));
+			pfb_reload_unbound('enabled', FALSE, TRUE, TRUE);
 		}
 
 		$return_page = pfb_filter($_POST['alert_view'], PFB_FILTER_HTML, 'alerts dnsbl_add');
@@ -1071,7 +1070,7 @@ if (isset($_POST) && !empty($_POST)) {
 			pfb_unbound_python_sources_whitelist();
 			// ADR-10: #51 whitelist add is a block->allow DATA edit -> zero-downtime
 			// fast path (no restart). block->allow is immediate (blocks were never
-			// C-cached since #43), so no newly-blocked delta is passed.
+			// C-cached since #43).
 			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
 
 			// Flush any Domain/CNAME(s) entries in Unbound Resolver Cache.
@@ -1395,13 +1394,16 @@ if (isset($_POST) && !empty($_POST)) {
 			// ADR-10: #51 Lock/Unlock is a user custom-list DATA edit -> zero-downtime
 			// fast path (no restart). pfb_dnsbl_unlock_action() collapses the four icons
 			// onto two store modes: 'lock' (lock/reunlock) REMOVES the domain from the
-			// unlock store -> it returns to feed-blocked = allow->block -> targeted C-cache
-			// flush of the now-blocked name; 'unlock' (unlock/relock) ADDS it -> allowed =
-			// block->allow -> immediate, no flush (blocks were never C-cached since #43).
+			// unlock store -> it returns to feed-blocked = allow->block; 'unlock'
+			// (unlock/relock) ADDS it -> allowed = block->allow -> immediate, no flush
+			// (blocks were never C-cached since #43).
 			// The store toggle (re-lock on Force/Cron) is unchanged -- only the apply
 			// mechanism (swap, not restart) changed.
-			$newly_blocked = ($ua['mode'] === 'lock') ? array($domain) : array();
-			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, $newly_blocked);
+			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+
+			if ($ua['mode'] === 'lock') {
+				pfb_unbound_py_ccache_flush(array($domain));
+			}
 
 			// On an Unlock, flush the now-allowed name (and any CNAME targets) from the
 			// resolver cache so a previously-cached block is not served. (Largely

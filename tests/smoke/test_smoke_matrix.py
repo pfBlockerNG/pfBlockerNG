@@ -494,11 +494,8 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
         h.unblock_egress()  # the allowed probes (a-shape) must reach the controlled stub
         # Listing the name is the feed/swap allow->block direction: the module already
         # mounted (a prior case), so first-enable applies via the no-restart swap, which
-        # by design does NOT flush the C-cache for a feed/cron delta (TTL-bounded,
-        # RESULTS/05 SS3). Step (a) above pre-resolved the name (stub TTL 60s), so that
-        # cached real answer would serve past the swap; clear that one name (mirroring a
-        # #51 Lock's targeted delta-flush) then poll until the swapped VIP block lands.
-        h.flush_unbound_name(deployed_vm, domain)
+        # Bulk data applies flush Unbound's full message + RRset caches after the
+        # applied-generation handshake, so the pre-resolved answer cannot survive.
         blocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after block: {blocked}"
 
@@ -515,8 +512,8 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
         assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked (the #51 no-op): {unlocked}"
 
         # (d) Re-Lock -> the temporary allow is removed: blocked again (VIP). allow->block
-        #     here clears the prior resolved answer via the production targeted C-cache
-        #     delta-flush inside pfb_reload_unbound, so the VIP block is observable.
+        #     here clears the prior resolved answer via the caller-owned targeted C-cache
+        #     flush, so the VIP block is observable.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "lock")
         relocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
@@ -634,8 +631,7 @@ def test_dnsbl_sentinel_flip_failure_clears_sync_marker(deployed_vm: SmokeVM, mo
                 "$u = pfb_unlock('read', 'dnsbl', '', '', '');\n"
                 f"pfb_unlock($ua['mode'], 'dnsbl', {h._php_str(domain)}, 'python', $u);\n"
                 "pfb_unbound_python_sources_unlock();\n"
-                f"$newly_blocked = ($ua['mode'] === 'lock') ? array({h._php_str(domain)}) : array();\n"
-                "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, $newly_blocked);\n"
+                "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
                 "echo 'OK';"
             )
             result = h.php_eval(deployed_vm, snippet, timeout=150.0)
@@ -748,11 +744,8 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         # forces the reload + clears the manifest's user_unlock. It is a config-clean
         # DNSBL-data update -> the no-restart fast path (data_path=True waits on the swap).
         h.reload(deployed_vm, "update", data_path=True)
-        # The Force-update re-lock is the feed/cron allow->block direction: PHP passes no
-        # targeted C-cache flush (TTL-bounded by design, RESULTS/05 SS3), so the domain's
-        # prior resolved answer (cached by the unlock probe above) would serve until TTL.
-        # Clear it, then observe the swapped re-block (mirrors test_dnsbl_feed_update).
-        h.flush_unbound_name(deployed_vm, domain)
+        # The Force-update re-lock is a bulk data apply; its post-handshake full cache
+        # flush clears the prior resolved answer before the swapped re-block is observed.
         relocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
 
@@ -787,18 +780,17 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
       are cached and re-fetched only on a force (the ``reset``/force-update precedent —
       see ``test_dnsbl_temp_unlock_cleared_by_force_update``). A config-clean feed/cron
       update in python mode routes through the no-restart data fast path
-      (``pfb_update_unbound`` -> ``pfb_reload_unbound($mode, TRUE, $pfbpython, !$pfbpython)``,
-      inc:4151), so PHP flips the sentinel and the watcher swaps the snapshot.
+      (``pfb_update_unbound`` -> ``pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath)``,
+      inc:4151), so PHP flips the sentinel and the watcher swaps the snapshot. The bulk
+      caller then clears the full resolver cache after the applied-generation handshake.
     * AFTER: the name is BLOCKED (VIP), Unbound's pid is UNCHANGED (no restart), and the
       pfBlockerNG log gained a ``zero-downtime swap`` fast-path line.
 
     NO-FALLBACK NOTE: a config-clean feed-content re-fetch IS reliably the no-restart path
     (the brief's primary route), so this exercises a genuine feed update — not the #51 lock
-    substitute. The feed/cron allow->block direction passes no targeted C-cache flush (it is
-    TTL-bounded by design, RESULTS/05 SS3), so the name's prior resolved answer is explicitly
-    flushed (``flush_unbound_name`` — the same targeted clear a #51 Lock does on the box)
+    substitute. The post-handshake full cache flush removes the name's prior resolved answer
     before observing the swapped block within the test window; ``dns_probe_until`` then polls
-    until the VIP decision lands (the swap is async — "briefly stale by design").
+    until the VIP decision lands.
     """
     domain = h.unique_domain("feedupd")
     other = h.unique_domain("feedupd-filler")
@@ -870,9 +862,8 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
         assert generation["missing"] == [], f"published manifest has missing raw refs: {generation!r}"
         assert generation["staged"] == [], f"published manifest references staging: {generation!r}"
 
-        # Clear the target's TTL-bounded prior resolved answer (feed/cron allow->block is
-        # not targeted-flushed by PHP — RESULTS/05 SS3), then observe the swapped block.
-        h.flush_unbound_name(deployed_vm, domain)
+        # The bulk post-handshake full cache flush clears the target's prior resolved answer;
+        # observe the swapped block without a caller-side targeted flush.
         blocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after the feed block: {blocked}"
 
