@@ -33,6 +33,9 @@ unchanged as the rationale record.
   permitted.
 - Provider adapters supply observations. The truth artifact owns all supported
   country identities, names, and structural-continent placement.
+- `Top Spammers` is a fixed, provider-independent system group. Its exact
+  ordered country membership is pfBlockerNG-owned; every active GeoIP provider
+  supplies only the networks for those countries.
 - Failed truth loading, provider parsing, validation, generation, or publication
   leaves the complete last-known-good output set active. Partial or mixed
   generations are never accepted as success.
@@ -49,6 +52,9 @@ unchanged as the rationale record.
 - **Provider observation:** normalized network, country, continent, represented
   country, and provider-trait data emitted by an adapter.
 - **Unknown bucket:** synthetic `UNK_*` selection identity. It is not a country.
+- **System GeoIP group:** pfBlockerNG-owned ordered membership projected onto
+  the active provider's normalized country outputs. It is not provider data or
+  a truth-artifact continent.
 - **Output generation:** the mutually consistent `geoip.txt`, country files,
   continent files, generated pages, aliases, and notification-state snapshot
   produced from one truth artifact and one complete provider input set.
@@ -124,7 +130,34 @@ The remaining continent bindings are fixed:
 | South America | `SA` | `South_America` | `pfblockerngsouthamerica` | `pfB_SAmerica` | `UNK_SA` |
 
 `Top Spammers` and `Proxy and Satellite` retain their current structural pages
-and aliases but are not truth-artifact continents.
+and aliases but are not truth-artifact continents. `Proxy and Satellite`
+remains provider-trait output; `Top Spammers` follows the fixed system-group
+contract below.
+
+### Fixed Top Spammers group
+
+`Top Spammers` is an ordered, provider-independent system group with this exact
+country membership:
+
+```text
+CN RU JP UA GB DE BR FR IN TR IT KR PL ES VN AR CO TW MX CL
+```
+
+This list is a stable pfBlockerNG product contract, not a provider ranking or
+capability. It is not stored in `geoip_truth.json` and no upstream refresh may
+change it. Runtime validates that all 20 codes exist in truth, obtains their
+localized names from truth, and projects each selected member onto that
+country's ordinary and represented-country outputs from the active provider.
+
+The group, its `Top_Spammers_v4.info`/`Top_Spammers_v6.info` files, generated
+page, existing config, and `pfB_Top` alias binding remain available for every
+GeoIP provider. Existing `countries4`/`countries6` selections continue to
+choose which of the 20 members are enforced per family. Switching providers
+rebuilds the group inside the same complete output generation: membership and
+configuration stay fixed while network content may change with the provider.
+A provider-absent member keeps its selection and renders empty under the normal
+country-absence contract. Failed or partial provider input preserves the whole
+last-known-good generation; networks from two providers are never mixed.
 
 ### Generator interface
 
@@ -211,6 +244,10 @@ represented-country, and continent GeoNames IDs. Numeric locators never enter
 the truth module, headers, UI, file names, or config. A later IPinfo adapter must
 emit the same row shape; no caller changes.
 
+Adapters do not emit or advertise a `Top Spammers` capability. After normalized
+country outputs are complete, runtime projects the fixed system-group membership
+onto those outputs. The same projection runs for every provider.
+
 An adapter must reject its whole input set on a missing header, missing required
 column, duplicate header, wrong field count, invalid CIDR/family, malformed or
 ambiguous locator join, conflicting duplicate network, unsupported encoding,
@@ -227,6 +264,7 @@ Routing is exact:
 | Represented country | Preserve current represented-country output in addition to the direct/registered route |
 | Anonymous proxy or satellite | Preserve current `A1`/`A2` provider-specific output outside truth |
 | Configured country absent from provider family | Empty country file and `(0)` option; selection unchanged |
+| Selected `Top Spammers` member | Reuse that country's ordinary and represented outputs from the active provider; fixed group membership and selection remain unchanged |
 
 Unknown provider country codes are nonfatal observations only after the adapter
 has proved the input structurally complete. They route by usable continent or
@@ -290,10 +328,10 @@ ledger advances only with the output generation it describes.
 ### Publication transaction
 
 All output is built beneath a private staging root. Before publication the
-pipeline validates file inventory, byte oracles, country membership, every
-country/bucket family file, continent totals, page parseability, coverage
-complements, `geoip.txt`, and the notice ledger. No live target is touched before
-all checks pass.
+pipeline validates file inventory, byte oracles, country and fixed-system-group
+membership, every country/bucket family file, both `Top_Spammers` info files,
+continent totals, page parseability, coverage complements, `geoip.txt`, and the
+notice ledger. No live target is touched before all checks pass.
 
 Publication runs under the existing GeoIP update exclusion mechanism, snapshots
 every replaced target, replaces targets with same-filesystem `rename()`, and
@@ -345,7 +383,9 @@ Only these observable differences are allowed:
 
 All network lines, ordering, existing country/continent membership, existing
 filenames, existing alias names, existing config roots, and existing generated
-page names remain byte-identical for identical provider input.
+page names remain byte-identical for identical provider input. The fixed
+`Top Spammers` membership, order, selections, files, page, and alias binding are
+also unchanged.
 
 ## Hostile-input and invariant matrix
 
@@ -354,6 +394,7 @@ page names remain byte-identical for identical provider input.
 | Truth JSON | missing/unreadable; malformed/truncated; invalid UTF-8; duplicate JSON key; unknown/missing key; wrong type; unsupported schema; invalid provenance; each fails before output publication |
 | CLDR archive | invalid archive; missing required file/locale/licence; draft/prerelease tag; checksum mismatch; altered licence; inheritance cycle/missing parent; each exits generator `2` |
 | Country set | exactly 249 reviewed ISO codes plus `XK`; `AN`/`CS` rejected; missing/extra/duplicate code rejected; `$top_20` must be a subset |
+| Fixed system group | exact ordered `Top Spammers` 20-code membership; every code exists in truth; same membership and config under every provider; provider-specific v4/v6 and represented outputs; provider-absent member remains selected and empty |
 | Names | seven locales; Unicode/diacritics; `pt-BR`/`zh-CN` mapping; four short forms; missing requested form; missing locale default; English fallback; missing English fails |
 | Continents | six recursive CLDR roots; ten frozen overrides; Antarctica country versus `UNK_AN`; zero/multiple membership; unknown override; provider disagreement ignored for supported countries |
 | Provider rows | v4/v6; direct/registered/represented; proxy/satellite; supported/unsupported/missing code; known/unknown/missing continent; bad CIDR; duplicate/conflicting network; ambiguous/missing join; truncated/read failure |
@@ -376,6 +417,11 @@ corresponding adversarial rows test-first.
 - A full pre-swap oracle and post-swap run prove exact `geoip.txt`, country,
   continent, represented/proxy, page, alias, and log bytes except Approved
   deltas.
+- `Top Spammers` always exposes the exact fixed 20-country order, preserves its
+  per-family selections and `pfB_Top` binding, and derives member networks from
+  the active provider. Two normalized provider fixtures with different country
+  CIDRs produce the same group definition and their respective network content,
+  with no stale or mixed-provider output.
 - Exactly 250 countries render under the fixed structural continents. `XK`
   works for selection, both families, localization, provider presence/absence,
   and rendering.
@@ -419,7 +465,8 @@ The native issue graph is the execution source.
 - Selecting or implementing IPinfo. ADR-32 owns its adapter after this graph
   lands.
 - Changing provider network-to-country membership, GeoIP firewall semantics,
-  reputation/dedup behavior, `Top Spammers`, or `Proxy and Satellite`.
+  reputation/dedup behavior, the fixed `Top Spammers` membership/order/selection
+  semantics, or `Proxy and Satellite`.
 - Adding locales or replacing pfSense localization.
 - Automatic truth merges, runtime truth downloads, appliance Python, or raw
   CLDR vendoring.

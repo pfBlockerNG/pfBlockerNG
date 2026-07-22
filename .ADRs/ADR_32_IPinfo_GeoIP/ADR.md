@@ -64,6 +64,9 @@ Load-bearing facts:
 - Real DB downloads need **vendor credentials** (a MaxMind account+key / an IPinfo token),
   so the end-to-end download+convert path **cannot run in CI** — a documented out-of-CI
   limitation (per CLAUDE.md "ADR acceptance"), validated on a maintainer box.
+- **`Top Spammers` is not supplied by MaxMind.** pfBlockerNG owns one fixed ordered set of
+  20 ISO codes and currently uses MaxMind's country outputs to materialize their networks.
+  Provider selection changes those networks, never the group definition or availability.
 
 ## 2. Decision
 
@@ -116,6 +119,7 @@ support "MaxMind for logs but IPinfo for reputation". Concretely:
 | GeoIP source | MaxMind only | `geoip_provider` setting selects one provider for **all** GeoIP consumers |
 | ASN source | IPinfo only | `asn_provider` setting selects one provider for ASN (default `ipinfo` = today) |
 | Country/continent build | MaxMind `geoname` | **ADR-64 owns it** — identity (which countries exist, their names, their continent) comes from the in-tree truth table; the provider supplies only **network → ISO**. See §2.5. |
+| `Top Spammers` | fixed 20-code pfBlockerNG group materialized from MaxMind country files | always-available, provider-independent system group; exact membership stays pfBlockerNG-owned and is projected onto the active provider's country outputs; no provider capability flag |
 | Deprecated MaxMind flags | `is_anonymous_proxy`/`is_satellite_provider`/`is_anycast` | provider-adapter concern, never the truth table (ADR-64 §2.5); exposed only when the active provider supplies them — absent providers report "unavailable", never a fatal. Note #1221: real GeoLite2 ships **zero** flagged rows. |
 | Locale country names | MaxMind only | **ADR-64 owns it** — names and locales come from the truth table, so the UI language does not depend on the provider. The `supports_locale` capability flag is therefore **dropped**. |
 | `config.xml` deprecated fields | n/a | **kept inert, never migrated** (ADR-28); a GUI/`file_notice` flags settings that the active provider can't honour |
@@ -130,6 +134,11 @@ support "MaxMind for logs but IPinfo for reputation". Concretely:
   `maxmind_account`/`maxmind_key`/`asn_token` keep their exact stored vocabulary.
 - **Absent/unsupported capability degrades, never crashes** — a provider that lacks a flag,
   locale, or field reports "unavailable"; consumers fall back to a neutral value.
+- **`Top Spammers` is never an absent capability.** Its exact ordered country membership,
+  existing per-family selections, page/config, and `pfB_Top` binding stay fixed; each
+  provider supplies the selected countries' v4/v6 networks through the ordinary normalized
+  country outputs. A provider switch atomically replaces the network content without mixing
+  providers or rewriting configuration.
 - **No live DB download in CI** — the abstraction is unit-tested against committed sample
   fixtures; real downloads are manual smoke.
 
@@ -181,7 +190,10 @@ truth table**, keyed by ISO 3166-1 alpha-2.
    the same surface.
 4. **`A1`/`A2` (anonymous proxy / satellite) are provider constructs, not countries** — they live in
    the MaxMind adapter, not the table (and per #1221 they are provably empty on real GeoLite2 data).
-5. **Phase ordering:** ADR-64 lands first. Any phase of this ADR that touches the country build
+5. **`Top Spammers` is a fixed system group, not provider data.** Its 20 ISO codes are validated
+   against truth and projected onto whichever provider supplies the normalized country outputs.
+   MaxMind and IPinfo therefore expose the same group definition with provider-specific networks.
+6. **Phase ordering:** ADR-64 lands first. Any phase of this ADR that touches the country build
    must read ADR-64's "Accepted user-visible deltas" — those deltas are ADR-64's to produce, and a
    further change to a country name, alias name or config key from *this* ADR is a defect.
 
@@ -211,6 +223,9 @@ truth table**, keyed by ISO 3166-1 alpha-2.
   uniformly to all consumers of its domain; no per-consumer mixing.
 - `geoip_provider = maxmind` is byte-identical to today (oracle test green).
 - IPinfo GeoIP ingests its CIDR v4/v6 DB and serves all five consumers.
+- `Top Spammers` remains available under both providers with the exact same ordered country
+  membership and existing configuration; fixture-specific country CIDRs prove that only its
+  network content changes when the provider changes.
 - Deprecated/unsupported capabilities degrade with a `file_notice`; `config.xml` is never
   mutated.
 - All gates green (§5); manual smoke (§7) covers the credentialed download path.
