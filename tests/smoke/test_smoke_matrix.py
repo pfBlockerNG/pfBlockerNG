@@ -468,8 +468,8 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
     Unlock/Lock sequence — proving the #51 flips apply with no restart. (Before the #51 fix
     step (c) was a NO-OP — it wrote files the manifest build no longer reads — so the domain
     stayed VIP-blocked; here it must resolve again.) The helper returns only after the
-    applied-generation handshake and caller-owned cache flush, so each following DNS probe
-    is authoritative without a restart.
+    applied-generation handshake; its targeted cache flush is conditional on Lock, so each
+    following DNS probe is authoritative without a restart.
 
     NOTE: NO ``control_local_data`` host override on the name. A host override is served
     by Unbound as ``local-data`` BEFORE the python module runs, so it would shadow the
@@ -497,7 +497,7 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
         # Bulk data applies flush Unbound's full message + RRset caches after the
         # applied-generation handshake, so the pre-resolved answer cannot survive.
         blocked = h.dns_probe_client(client_vm, domain, "A")
-        assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after block: {blocked}"
+        assert h.is_vip(blocked), f"{domain} still resolving after block: {blocked}"
 
         # NO-RESTART invariant: capture Unbound's pid before the #51 Unlock/Lock flips.
         # Each flip takes the ADR-10 zero-downtime fast path, so the pid must NOT change.
@@ -508,14 +508,16 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
         #     The helper returns only after the applied-generation handshake.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
         unlocked = h.dns_probe_client(client_vm, domain, "A")
-        assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked (the #51 no-op): {unlocked}"
+        assert not h.is_vip(unlocked) and not h.is_null_ip(unlocked), (
+            f"unlocked {domain} still VIP-blocked (the #51 no-op): {unlocked}"
+        )
 
         # (d) Re-Lock -> the temporary allow is removed: blocked again (VIP). allow->block
         #     here clears the prior resolved answer via the caller-owned targeted C-cache
         #     flush, so the VIP block is observable.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "lock")
         relocked = h.dns_probe_client(client_vm, domain, "A")
-        assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
+        assert h.is_vip(relocked), f"re-locked {domain} still resolving: {relocked}"
 
         # The whole Unlock/Lock sequence applied with NO restart: pid unchanged.
         pid_after = h.unbound_pid(deployed_vm)
@@ -734,11 +736,11 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         # NO-RESTART invariant: capture pid before the Unlock + Force-update re-lock.
         pid_before = h.unbound_pid(deployed_vm)
 
-        # Unlock -> resolves again (forwarded to the stub sentinel). The helper returns
-        # only after the applied-generation handshake and its cache flush.
+        # Unlock -> resolves again through the stub sentinel. The helper waits for the
+        # applied-generation handshake but flushes the native cache only for Lock.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
         unlocked = h.dns_probe_client(client_vm, domain, "A")
-        assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked: {unlocked}"
+        assert not h.is_vip(unlocked) and not h.is_null_ip(unlocked), f"unlocked {domain} still VIP-blocked: {unlocked}"
 
         # A Cron/Force update over the UNCHANGED feed re-locks it: the pending unlock store
         # forces the reload + clears the manifest's user_unlock. It is a config-clean
@@ -747,7 +749,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         # The Force-update re-lock is a bulk data apply; its post-handshake full cache
         # flush clears the prior resolved answer before the swapped re-block is observed.
         relocked = h.dns_probe_client(client_vm, domain, "A")
-        assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
+        assert h.is_vip(relocked), f"re-locked {domain} still resolving: {relocked}"
 
         # Both the Unlock and the Force-update re-lock applied with NO restart: pid unchanged.
         pid_after = h.unbound_pid(deployed_vm)
