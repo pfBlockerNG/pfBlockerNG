@@ -194,8 +194,8 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
     * BEFORE: ``domain`` is VIP-BLOCKED (the deterministic local block shape, the
       authoritative first answer after the restart-class reload).
     * UNLOCK via the form (``dnsbl_remove=unlock``): the handler toggles the unlock
-      store, patches the manifest's ``user_unlock``, applies the generation, and
-      flushes the domain/CNAME cache entries -> the name stops being sinkholed.
+      store, patches the manifest's ``user_unlock``, and applies the generation; blocked
+      answers are not cached, so the name stops being sinkholed without a native flush.
     * RE-LOCK via the form (``dnsbl_remove=lock``): the temporary allow is removed,
       the applied generation is targeted-flushed, and the name is VIP-blocked again.
 
@@ -223,8 +223,8 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
         # the value the production helper sends.
         resp = _post_action(webui, {"dnsbl_remove": "unlock", "domain": domain, "dnsbl_type": "python"})
         assert not looks_like_login_page(resp.text), "unlock POST returned the login form (session lost)"
-        # The handler returns only after the applied-generation handshake and its
-        # Unlock cache flush, so this first query is authoritative.
+        # The handler returns only after the applied-generation handshake. Blocked
+        # answers are not cached, so Unlock needs no native-cache flush.
         unlocked = helpers.dns_probe(vm, domain, "A")
         assert not helpers.is_vip(unlocked), f"unlocked {domain} still VIP-blocked via the alerts handler: {unlocked}"
 
@@ -302,6 +302,7 @@ def test_dnsbl_remove_rejects_missing_type(
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.ui_render
 def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
@@ -314,9 +315,10 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
     * ADD via the form (``addwhitelistdom`` + ``dnsbl_exclude`` not 'true'): the
       handler appends ``domain`` (and ``www.domain``) and writes the base64 node.
     * AFTER: ``domain`` is present in the decoded node.
-    * RESTORE via ``entry_delete=delete_domain``: the handler removes it; the decoded
-      node no longer contains ``domain`` (the reverse transition AND entry_delete
-      coverage). Belt-and-suspenders config reset in ``finally``.
+    * RESTORE via ``entry_delete=delete_domain``: the handler removes it.
+    * Repeat with a wildcard entry and ``entry_delete=delete_domainwildcard`` so the
+      broad allow→block cache-policy branch executes. Belt-and-suspenders config reset
+      in ``finally``.
     """
     vm = smoke_vm
     domain = helpers.unique_domain("uiwl")
@@ -349,6 +351,29 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
         assert not looks_like_login_page(resp.text), "entry_delete POST returned the login form (session lost)"
         assert domain not in _suppression_entries(vm, CFG_SUPPRESSION), (
             f"{domain} still in the DNSBL Whitelist after entry_delete=delete_domain"
+        )
+
+        # Repeat through the wildcard branch. Removing this entry can re-block any
+        # cached subdomain, so production performs its full post-swap cache flush.
+        resp = _post_action(
+            webui,
+            {
+                "addwhitelistdom": "Add",
+                "domain": domain,
+                "table": "DNSBL",
+                "dnsbl_wildcard": "true",
+                "dnsbl_exclude": "false",
+            },
+        )
+        assert not looks_like_login_page(resp.text), "wildcard whitelist POST returned the login form"
+        assert f".{domain}" in _suppression_entries(vm, CFG_SUPPRESSION), (
+            f".{domain} not written to the DNSBL Whitelist after wildcard add"
+        )
+
+        resp = _post_action(webui, {"entry_delete": "delete_domainwildcard", "domain": domain, "table": "DNSBL"})
+        assert not looks_like_login_page(resp.text), "wildcard whitelist delete returned the login form"
+        assert f".{domain}" not in _suppression_entries(vm, CFG_SUPPRESSION), (
+            f".{domain} still in the DNSBL Whitelist after entry_delete=delete_domainwildcard"
         )
     finally:
         helpers.php_eval(

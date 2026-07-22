@@ -17,7 +17,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 	private array $savedPfb = [];
 	private array $savedG = [];
 	private array $savedConfig = [];
-	private bool $hadConfig = false;
+	private bool $hadConfig = FALSE;
 
 	protected function setUp(): void
 	{
@@ -115,6 +115,18 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 		chmod($GLOBALS['pfb']['chroot_cmd'], 0755);
 	}
 
+	private function runUpdateIgnoringMacOsTempnamNotice(): void
+	{
+		set_error_handler(static function (int $severity, string $message): bool {
+			return $severity === E_NOTICE && str_contains($message, 'tempnam(): file created in the system');
+		});
+		try {
+			pfb_update_unbound('enabled', FALSE, FALSE);
+		} finally {
+			restore_error_handler();
+		}
+	}
+
 	public function testSuccessfulBulkSwapFlushesOnlyAfterAppliedGeneration(): void
 	{
 		$log = "{$this->dir}/control.log";
@@ -123,7 +135,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 		$this->assertTrue(pfb_unbound_py_swap_fits_ram(), 'test setup must allow the data swap');
 		$this->assertTrue(is_process_running('unbound'), 'test setup must keep Unbound running');
 
-		pfb_update_unbound('enabled', FALSE, FALSE);
+		$this->runUpdateIgnoringMacOsTempnamNotice();
 
 		$lines = file($log, FILE_IGNORE_NEW_LINES);
 		$this->assertNotFalse($lines, 'bulk update must invoke the configured control command');
@@ -142,7 +154,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 			return in_array($checks, [1, 3, 5], TRUE);
 		};
 
-		pfb_update_unbound('enabled', FALSE, FALSE);
+		$this->runUpdateIgnoringMacOsTempnamNotice();
 
 		$this->assertStringContainsString('RAM-constrained box', file_get_contents($GLOBALS['pfb']['log']) ?: '',
 			'low-RAM data update must take the restart fallback');

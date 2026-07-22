@@ -4075,14 +4075,9 @@ def wait_zero_downtime_swap(vm: SmokeVM, *, since: int, timeout: float = 60.0, i
 def flush_unbound_name(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None:
     """Flush a SINGLE name from Unbound's C message cache (``unbound-control flush <name>``).
 
-    The targeted analog of :func:`flush_unbound_cache`. ADR-10 only flushes the
-    allow->block delta where it is cheaply known (the #51 alerts paths — one domain);
-    a feed/cron allow->block is TTL-bounded by design (the prior resolved answer serves
-    until its TTL — RESULTS/05 SS3, explicitly NOT a regression vs today's restart,
-    which preserves the resolved cache too). A test that pre-resolved such a name (to
-    assert the before-state) then lists it must clear that one cached real answer to
-    OBSERVE the swapped block within the test window — mirroring exactly what a #51
-    Lock's targeted delta-flush does on the box.
+    Generic smoke-test utility for cases that need independent probes. Production bulk
+    swaps clear the full cache after the applied-generation handshake; exact Alerts
+    allow-to-block edits use the targeted equivalent for their validated domain.
     """
     result = vm.ssh("/usr/local/sbin/unbound-control", "-c", UNBOUND_CONF, "flush", name, timeout=timeout)
     if result.returncode != 0:
@@ -4149,8 +4144,8 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
     four-argument ``pfb_reload_unbound('enabled', FALSE, FALSE, TRUE)``. ``$datapath=TRUE``
     routes a #51 custom-list edit through the no-restart swap: PHP publishes the patched
     manifest and flips the generation sentinel. The handler then targeted-flushes the validated
-    domain only for Lock (allow->block); Unlock (block->allow) keeps its existing domain/CNAME
-    flush. Unbound's pid is UNCHANGED. The helper waits on the SWAP-APPLIED signal (the
+    domain only for Lock (allow->block); Unlock needs no flush because blocked answers are not
+    cached. Unbound's pid is UNCHANGED. The helper waits on the SWAP-APPLIED signal (the
     fast-path log line), NOT on a restart.
 
     ``action`` is one of the four icon labels: ``'unlock'`` / ``'relock'`` (temporarily
@@ -4173,7 +4168,6 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
         "pfb_global();\n"
         f"$action = {_php_str(action)};\n"
         "$ua = pfb_dnsbl_unlock_action($action);\n"
-        f"$action = {_php_str(action)};\n"
         "$u = pfb_unlock('read', 'dnsbl', '', '', '');\n"
         f"pfb_unlock($ua['mode'], 'dnsbl', {_php_str(domain)}, 'python', $u);\n"
         "pfb_unbound_python_sources_unlock();\n"
@@ -4181,22 +4175,6 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
         "if ($swapped) {\n"
         "if ($ua['mode'] === 'lock') {\n"
         f"pfb_unbound_py_ccache_flush(array({_php_str(domain)}));\n"
-        "}\n"
-        "if ($action == 'unlock') {\n"
-        f"$domain_esc = escapeshellarg({_php_str(domain)});\n"
-        "$extdns = pfb_filter($pfb['extdns'], PFB_FILTER_IP, 'alerts dnsbl_remove');\n"
-        "exec(\"{$pfb['chroot_cmd']} flush {$domain_esc} 2>&1\");\n"
-        "if (!empty($extdns)) {\n"
-        '$ext_dns = escapeshellarg("@{$extdns}");\n'
-        'exec("/usr/bin/drill {$domain_esc} {$ext_dns} | /usr/bin/awk \'/CNAME/ {sub("\\.\\$", "", \\$5); '
-        "print \\$5;}' 2>&1\", $cname_list);\n"
-        "if (!empty($cname_list)) {\n"
-        "foreach ($cname_list as $cname) {\n"
-        "$cname = pfb_filter($cname, PFB_FILTER_DOMAIN, 'alerts dnsbl_remove', '', TRUE);\n"
-        "if (empty($cname)) { continue; }\n"
-        "exec(\"{$pfb['chroot_cmd']} flush {$cname} 2>&1\");\n"
-        "}\n"
-        "}\n"
         "}\n"
         "}\n"
         "echo 'OK';"
