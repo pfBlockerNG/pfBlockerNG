@@ -6,9 +6,9 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfb_update_unbound() owns the bulk DNSBL cache policy. A successful data swap
- * flushes the full cache only after the applied-generation handshake; a restart
- * fallback does not restore a stale dump and does not issue a post-swap flush.
+ * pfb_update_unbound() owns the opt-in bulk DNSBL cache policy. A successful data
+ * swap retains the cache by default; when enabled, the full flush happens only after
+ * the applied-generation handshake. Restart fallback never issues a post-swap flush.
  */
 #[CoversFunction('pfb_update_unbound')]
 final class PfbUpdateUnboundCachePolicyTest extends TestCase
@@ -27,6 +27,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 			'dnsbldir', 'dbdir', 'dnsbl_file', 'dnsdir', 'dnsbl_cache', 'unbound_py_count',
 			'unbound_py_sources', 'unbound_py_rawdir', 'unbound_py_data', 'unbound_py_zone',
 			'unbound_py_reject_stats', 'chroot_cmd', 'dnsbl_python_unmount', 'dnsbl_res_cache',
+			'dnsbl_cache_flush',
 			'enable', 'dnsbl', 'save', 'dnsbl_tld_wildcard', 'domain_update', 'reuse_dnsbl',
 			'dnsbl_unlock', 'keep', 'install', 'errlog', 'log',
 		] as $key) {
@@ -54,6 +55,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 			'chroot_cmd' => "{$this->dir}/unbound-control-recorder",
 			'dnsbl_python_unmount' => FALSE,
 			'dnsbl_res_cache' => 'on',
+			'dnsbl_cache_flush' => '',
 			'enable' => 'on',
 			'dnsbl' => 'on',
 			'save' => TRUE,
@@ -127,10 +129,23 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 		}
 	}
 
-	public function testSuccessfulBulkSwapFlushesOnlyAfterAppliedGeneration(): void
+	public function testDefaultDisabledBulkSwapRetainsResolverCache(): void
 	{
 		$log = "{$this->dir}/control.log";
 		$this->installRecorder($log);
+
+		$this->runUpdateIgnoringMacOsTempnamNotice();
+
+		$lines = file_exists($log) ? (file($log, FILE_IGNORE_NEW_LINES) ?: []) : [];
+		$this->assertSame([], $lines,
+			'default-disabled bulk cache clearing must retain Unbound cache after a successful swap');
+	}
+
+	public function testEnabledBulkSwapFlushesOnlyAfterAppliedGeneration(): void
+	{
+		$log = "{$this->dir}/control.log";
+		$this->installRecorder($log);
+		$GLOBALS['pfb']['dnsbl_cache_flush'] = 'on';
 		$this->assertTrue(pfb_unbound_py_mode_active(), 'test setup must enable live Python mode');
 		$this->assertTrue(pfb_unbound_py_swap_fits_ram(), 'test setup must allow the data swap');
 		$this->assertTrue(is_process_running('unbound'), 'test setup must keep Unbound running');
@@ -147,6 +162,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 	{
 		$log = "{$this->dir}/control.log";
 		$this->installRecorder($log);
+		$GLOBALS['pfb']['dnsbl_cache_flush'] = 'on';
 		$checks = 0;
 		$GLOBALS['pfb_test_sysctl']['hw.usermem'] = '1';
 		$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&$checks): bool {

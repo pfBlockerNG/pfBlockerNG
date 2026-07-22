@@ -77,6 +77,7 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
 			'pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
@@ -107,6 +108,7 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
 			'pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
@@ -297,6 +299,14 @@ final class CfgGatewayTest extends TestCase
 		// When/Then: returns Off (default '').
 		$result = PfbConfig::read('pfb_feed_sanity');
 		$this->assertSame(PfbToggle::Off, $result, 'pfb_feed_sanity absent -> Off (default)');
+	}
+
+	public function testReadReturnsOffDefaultForDnsblCacheFlushAbsentKey(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush';
+		$this->assertNull(config_get_path($path));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_cache_flush'),
+			'pfb_cache_flush absent -> Off (default)');
 	}
 
 	public function testReadReturnsRegisteredDefaultForPfbKeepAbsentKey(): void
@@ -1070,6 +1080,7 @@ final class CfgGatewayTest extends TestCase
 			'alexa_inclusion',
 			'top1m_token', // ADR-59 P5
 			'pfb_cache',
+			'pfb_cache_flush',
 			'global_log',
 			'pfb_dnsbl_lenient',
 			'pfb_py_reply',

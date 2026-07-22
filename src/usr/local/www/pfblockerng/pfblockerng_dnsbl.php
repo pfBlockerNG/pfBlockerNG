@@ -55,6 +55,7 @@ $pconfig['dnsbl_allow_int']	= explode(',', $pfb['dconfig']['dnsbl_allow_int'])	?
 $pconfig['global_log']		= $pfb['dconfig']['global_log']				?: '';
 $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default.php';
 $pconfig['pfb_cache']		= isset($pfb['dconfig']['pfb_cache'])			? $pfb['dconfig']['pfb_cache'] : 'on';
+$pconfig['pfb_cache_flush']	= PfbConfig::read('pfb_cache_flush');
 
 $pconfig['pfb_py_reply']	= isset($pfb['dconfig']['pfb_py_reply'])		? $pfb['dconfig']['pfb_py_reply'] : 'on';
 $pconfig['pfb_hsts']		= isset($pfb['dconfig']['pfb_hsts'])			? $pfb['dconfig']['pfb_hsts'] : 'on';
@@ -800,6 +801,7 @@ if ($_POST) {
 			$pfb['dconfig']['dnsbl_allow_int']	= implode(',', (array)$_POST['dnsbl_allow_int'])			?: '';
 			$pfb['dconfig']['global_log']		= $_POST['global_log']							?: '';
 			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			$pfb['dconfig']['pfb_py_reply']		= pfb_filter($_POST['pfb_py_reply'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
@@ -3210,6 +3212,16 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_cache']) === PfbToggle::On,
 	'on'
 ))->setHelp('Default: <strong>Enabled</strong><br />Enable the backup and restore of the DNS Resolver Cache on DNSBL Update|Reload|Cron events');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_cache_flush',
+	gettext('Clear Resolver Cache'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_cache_flush']) === PfbToggle::On,
+	'on'
+))->setHelp('Default: <strong>Disabled</strong><br />When enabled, clear Unbound\'s full resolver cache after a DNSBL data update is applied without restarting Unbound. '
+	. 'This makes newly blocked domains take effect immediately when an allowed answer was already cached, but also discards unrelated answers and can temporarily increase DNS latency and upstream queries. '
+	. 'When disabled, cached allowed answers remain until their DNS TTL expires. Resolver restarts already clear the cache; exact Alerts actions use targeted flushing.');
 
 $section->addInput(new Form_Input(
 	'pfb_py_cache_max',

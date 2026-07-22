@@ -2780,6 +2780,7 @@ function pfb_global() {
 	$pfb['dnsbl_top1m']	= $pfb['dnsblconfig']['alexa_enable'];							// TOP1M whitelist
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('alexa_type');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_res_cache']	= $pfb['dnsblconfig']['pfb_cache'];							// DNSBL Option to backup/restore Resolver cache
+	$pfb['dnsbl_cache_flush']	= PfbConfig::read('pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
 	$pfb['dnsbl_global_log']= PfbConfig::read('global_log');							// Global Logging/Blocking mode (default '')
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
 	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
@@ -9734,11 +9735,12 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 		// unchanged). The manifest + per-feed raw were already published atomically by
 		// pfb_unbound_python_sources() above; flip the sentinel, no restart. A config
 		// change ($pfbpython TRUE) -> $datapath FALSE -> the restart path. The bulk
-		// fast path flushes the full resolver cache after the applied-generation handshake;
-		// config restarts preserve cache, data fallback clears it by passing FALSE.
+		// fast path optionally flushes the full resolver cache after the applied-generation
+		// handshake; config restarts preserve cache, data fallback clears it by passing FALSE.
 		$datapath = !$pfbpython;
 		$swapped = pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath);
-		if ($datapath && $swapped) {
+		if ($datapath && $swapped &&
+		    pfb_cfg_toggle_read($pfb['dnsbl_cache_flush'] ?? '') === PfbToggle::On) {
 			exec("{$pfb['chroot_cmd']} flush_zone +c . 2>&1");
 		}
 	}

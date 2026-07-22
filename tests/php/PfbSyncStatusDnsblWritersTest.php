@@ -568,9 +568,14 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			'bulk caller must disable restart cache preservation for datapath updates'
 		);
 		$this->assertStringContainsString(
-			"if (\$datapath && \$swapped) {\n\t\t\texec(\"{\$pfb['chroot_cmd']} flush_zone +c . 2>&1\");\n\t\t}",
+			"pfb_cfg_toggle_read(\$pfb['dnsbl_cache_flush'] ?? '') === PfbToggle::On",
 			$update_region,
-			'bulk caller must full-flush only after a successful applied-generation swap'
+			'bulk caller must gate the full flush on the default-off DNSBL option'
+		);
+		$this->assertStringContainsString(
+			'exec("{$pfb[\'chroot_cmd\']} flush_zone +c . 2>&1");',
+			$update_region,
+			'bulk caller must retain the post-handshake full-flush command'
 		);
 	}
 
