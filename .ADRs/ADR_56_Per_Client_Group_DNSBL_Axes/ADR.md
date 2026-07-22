@@ -44,3 +44,16 @@ Per-CG TLD/IDN/noAAAA axes (assess separately); MAC/hostname identity; IP-side a
 Authored when picked up (after ADR-25 acceptance). Expected shape: (1) config + manifest
 emission (axis flags per CG, divergent-set extension), (2) python enforcement + tests per
 axis/branch, (3) UI + Tier A/B, (4) smoke reusing `client_source(ip)`.
+
+## Migration note — 2026-07-23
+
+Retired before implementation by [issue #1629](https://github.com/pfBlockerNG/pfBlockerNG/issues/1629).
+ADR-55's unified DNS Policy Layer contract now owns SafeSearch, DoH-hostname NXDOMAIN,
+No-AAAA, TLD/TOP1M/IDN, CNAME, domain/regex decisions, native Schedules, recipient
+selection, provenance, UI, and forward migration. ADR-25's
+[recipient-safe enforcement specification](../../docs/specs/adr-25-recipient-safe-dnsbl-enforcement.md)
+owns policy-scoped compilation/publication, actual-recipient enforcement, cache safety,
+generation invalidation, and CE/Plus acceptance. The per-Client-Group toggles and direct
+`gpClientGroups` checks sketched above are superseded by complete ordered DNS Policy Layers
+and deterministic recipient policy classes. No residual requirement, replacement spec,
+implementation graph, or Wayfinder map remains.
