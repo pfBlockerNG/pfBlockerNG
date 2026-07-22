@@ -1584,8 +1584,17 @@ class DnsblCacheFlushEnabled:
         set_dnsbl_cache_flush(self.vm, True)
         return self
 
-    def __exit__(self, *_exc: object) -> None:
-        set_dnsbl_cache_flush(self.vm, False)
+    def __exit__(self, *exc: object) -> None:
+        try:
+            set_dnsbl_cache_flush(self.vm, False)
+        except Exception as reset_exc:  # noqa: BLE001
+            if exc and exc[0] is not None:
+                print(
+                    "[smoke] cache-flush option restore failed during teardown "
+                    f"(suppressed; original error stands): {reset_exc!r}"
+                )
+            else:
+                raise
 
 
 def set_package_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:

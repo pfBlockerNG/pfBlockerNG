@@ -359,6 +359,7 @@ final class WwwGroupAGatewayTest extends TestCase
 			'global_log'                 => '',
 			'dnsbl_webpage'              => 'dnsbl_default.php',
 			'pfb_cache'                  => 'on',
+			'pfb_cache_flush'            => 'on',
 			'pfb_py_reply'               => 'on',
 			'pfb_hsts'                   => 'on',
 			'pfb_idn'                    => 'off',

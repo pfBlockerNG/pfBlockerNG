@@ -99,7 +99,11 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 		} else {
 			unset($GLOBALS['config']['unbound']);
 		}
-		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_sysctl']);
+		unset(
+			$GLOBALS['pfb_test_process_running'],
+			$GLOBALS['pfb_test_sysctl'],
+			$GLOBALS['pfb_test_unbound_py_sentinel_published']
+		);
 		foreach (glob("{$this->dir}/*") ?: [] as $file) {
 			@unlink($file);
 		}
@@ -110,11 +114,28 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 	private function installRecorder(string $log): void
 	{
 		$marker = escapeshellarg("{$this->dir}/pfb_py_reload.applied");
+		$runtime_log = escapeshellarg($GLOBALS['pfb']['log']);
 		file_put_contents(
 			$GLOBALS['pfb']['chroot_cmd'],
-			"#!/bin/sh\nprintf '%s|applied=%s\\n' \"\$*\" \"\$(cat {$marker})\" >> " . escapeshellarg($log) . "\n"
+			"#!/bin/sh\n"
+			. "if grep -q 'zero-downtime swap.*completed' {$runtime_log}; then completed=1; else completed=0; fi\n"
+			. "printf '%s|applied=%s|completed=%s\\n' \"\$*\" \"\$(cat {$marker})\" \"\$completed\" >> "
+			. escapeshellarg($log) . "\n"
 		);
 		chmod($GLOBALS['pfb']['chroot_cmd'], 0755);
+	}
+
+	private function installAppliedMarkerWatcher(): void
+	{
+		$sentinel = "{$this->dir}/pfb_py_reload";
+		$applied = "{$this->dir}/pfb_py_reload.applied";
+		file_put_contents($sentinel, "1\n");
+		file_put_contents($applied, "1\n");
+		$GLOBALS['pfb_test_unbound_py_sentinel_published'] = static function (string $path, int $generation) use ($sentinel, $applied): void {
+			if ($path === $sentinel) {
+				file_put_contents($applied, "{$generation}\n");
+			}
+		};
 	}
 
 	private function runUpdateIgnoringMacOsTempnamNotice(): void
@@ -133,9 +154,16 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 	{
 		$log = "{$this->dir}/control.log";
 		$this->installRecorder($log);
+		$this->installAppliedMarkerWatcher();
 
 		$this->runUpdateIgnoringMacOsTempnamNotice();
 
+		$this->assertSame("2\n", file_get_contents("{$this->dir}/pfb_py_reload.applied"),
+			'default-disabled assertion must follow a fresh generation application');
+		$runtime_log = file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertNotFalse($runtime_log, 'bulk update must write its successful reload path');
+		$this->assertStringContainsString('[ zero-downtime swap ] completed', $runtime_log,
+			'default-disabled assertion must follow a completed data swap');
 		$lines = file_exists($log) ? (file($log, FILE_IGNORE_NEW_LINES) ?: []) : [];
 		$this->assertSame([], $lines,
 			'default-disabled bulk cache clearing must retain Unbound cache after a successful swap');
@@ -145,6 +173,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 	{
 		$log = "{$this->dir}/control.log";
 		$this->installRecorder($log);
+		$this->installAppliedMarkerWatcher();
 		$GLOBALS['pfb']['dnsbl_cache_flush'] = 'on';
 		$this->assertTrue(pfb_unbound_py_mode_active(), 'test setup must enable live Python mode');
 		$this->assertTrue(pfb_unbound_py_swap_fits_ram(), 'test setup must allow the data swap');
@@ -152,9 +181,11 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 
 		$this->runUpdateIgnoringMacOsTempnamNotice();
 
+		$this->assertSame("2\n", file_get_contents("{$this->dir}/pfb_py_reload.applied"),
+			'cache flush must follow a fresh generation application');
 		$lines = file($log, FILE_IGNORE_NEW_LINES);
 		$this->assertNotFalse($lines, 'bulk update must invoke the configured control command');
-		$this->assertSame(['flush_zone +c .|applied=1'], $lines,
+		$this->assertSame(['flush_zone +c .|applied=2|completed=1'], $lines,
 			'full cache flush must be issued by the bulk caller after the applied marker is live');
 	}
 

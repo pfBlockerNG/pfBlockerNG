@@ -789,10 +789,9 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
     * AFTER: the name is BLOCKED (VIP), Unbound's pid is UNCHANGED (no restart), and the
       pfBlockerNG log gained a ``zero-downtime swap`` fast-path line.
 
-    NO-FALLBACK NOTE: a config-clean feed-content re-fetch IS reliably the no-restart path
-    (the brief's primary route), so this exercises a genuine feed update — not the #51 lock
-    substitute. The enabled post-handshake full cache flush removes the name's prior resolved
-    answer before the first post-reload probe observes the swapped block.
+    NO-FALLBACK NOTE: a config-clean feed-content re-fetch reliably takes the no-restart
+    path. The enabled post-handshake full cache flush removes the name's prior resolved answer
+    before the first post-reload probe observes the swapped block.
     """
     domain = h.unique_domain("feedupd")
     other = h.unique_domain("feedupd-filler")
