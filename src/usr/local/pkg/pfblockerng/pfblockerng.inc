@@ -8110,6 +8110,10 @@ function pfb_unbound_py_flip_sentinel() {
 	if (!pfb_unbound_py_atomic_write($sentinel, "{$next}\n")) {
 		return FALSE;
 	}
+	$published_hook = $GLOBALS['pfb_test_unbound_py_sentinel_published'] ?? NULL;
+	if (is_callable($published_hook)) {
+		$published_hook($sentinel, $next);
+	}
 
 	// Return the generation just published (>= 1) so the caller can wait for the
 	// watcher's applied-generation marker to reach it -- the readiness handshake that
