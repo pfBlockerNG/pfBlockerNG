@@ -280,9 +280,11 @@ manifest and excludes stages; legacy fixed `pfb_py_raw/` manifests remain readab
   staged config change, or a prior swap/sentinel error.
 - **Cache on swap:** `decisionDB` cleared (no stale decision); **block→allow
   immediate** (blocks not C-cached since #43). After the applied-generation handshake, bulk
-  feed/cron updates clear Unbound's full message and RRset caches with `flush_zone +c .`; a Lock
-  action instead flushes its validated domain and `www.` sibling from the Alerts caller after the
-  reload returns. Restart fallback never restores a pre-update bulk cache.
+  feed/cron data updates clear Unbound's full message and RRset caches with `flush_zone +c .`.
+  Alerts Custom_List add, exact whitelist deletion, and Lock instead flush the validated domain
+  plus `www.`; wildcard whitelist deletion clears the full cache; whitelist add and Unlock need
+  no flush. Normal settings-page whitelist changes remain config-class updates and restart
+  Unbound. A data-path restart fallback never restores the pre-update cache.
 - **Fail-closed:** a bad/partial build keeps the last-good snapshot serving.
 
 Pinned by `tests/test_adr10_*` (snapshot equivalence, fail-closed swap, watcher); idle

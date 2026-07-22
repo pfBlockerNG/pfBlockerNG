@@ -896,9 +896,12 @@ if (isset($_POST) && !empty($_POST)) {
 
 		// Reload if the Custom_List grew or the domain was stripped from the whitelist.
 		// ADR-10: this is a #51 user custom-list DATA edit -- take the zero-downtime
-		// fast path (no restart).
+		// fast path (no restart), then flush this exact allow-to-block change.
 		if ($cl_added || $wl_removed) {
-			pfb_reload_unbound('enabled', FALSE, TRUE, TRUE);
+			$swapped = pfb_reload_unbound('enabled', FALSE, TRUE, TRUE);
+			if ($swapped) {
+				pfb_unbound_py_ccache_flush(array($domain));
+			}
 		}
 
 		$return_page = pfb_filter($_POST['alert_view'], PFB_FILTER_HTML, 'alerts dnsbl_add');
@@ -1072,22 +1075,6 @@ if (isset($_POST) && !empty($_POST)) {
 			// fast path (no restart). block->allow is immediate (blocks were never
 			// C-cached since #43).
 			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
-
-			// Flush any Domain/CNAME(s) entries in Unbound Resolver Cache.
-			// (Largely redundant post-#43: the block reply was never cached, so the
-			// now-allowed name resolves immediately once decisionDB is cleared by the
-			// swap. Kept for the resolved-CNAME edge and parity with prior behaviour.)
-			$domain_esc	= escapeshellarg($domain);
-			$domain_esc2	= escapeshellarg("www.{$domain}");
-
-			exec("{$pfb['chroot_cmd']} flush {$domain_esc} 2>&1");
-			exec("{$pfb['chroot_cmd']} flush {$domain_esc2} 2>&1");
-			if (!empty($cname_list)) {
-				foreach ($cname_list as $cname) {
-					$cname_esc = escapeshellarg($cname);
-					exec("{$pfb['chroot_cmd']} flush {$cname_esc} 2>&1");
-				}
-			}
 		}
 
 		// Save Domain/CNAME(s) to the TLD Exclusion customlist
@@ -1350,10 +1337,17 @@ if (isset($_POST) && !empty($_POST)) {
 			if ($dnsbl_py_changes) {
 				pfb_unbound_python_whitelist('alerts');
 				pfb_unbound_python_sources_whitelist();
-				// ADR-10: #51 customlist delete is a DATA edit -> zero-downtime fast
-				// path (no restart). Removing a block is block->allow (immediate, no
-				// C-cache flush needed since blocks are not cached, #43).
-				pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+				// ADR-10: whitelist removal is allow->block. Exact entries get one
+				// targeted flush; wildcard removal can affect an unknown set of cached
+				// subdomains, so flush the full cache after the applied-generation wait.
+				$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+				if ($swapped) {
+					if ($_POST['entry_delete'] == 'delete_domainwildcard') {
+						exec("{$pfb['chroot_cmd']} flush_zone +c . 2>&1");
+					} else {
+						pfb_unbound_py_ccache_flush(array($entry));
+					}
+				}
 			}
 		}
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
@@ -1366,7 +1360,6 @@ if (isset($_POST) && !empty($_POST)) {
 		$domain		= pfb_filter($_POST['domain'], PFB_FILTER_DOMAIN, 'alerts dnsbl_remove');
 		$dnsbl_type	= pfb_filter($_POST['dnsbl_type'], PFB_FILTER_WORD, 'alerts dnsbl_remove');
 
-		$domain_esc	= escapeshellarg($domain);
 		$action		= pfb_filter($_POST['dnsbl_remove'], PFB_FILTER_WORD, 'alerts dnsbl_remove');
 
 		// If Domain or DNSBL type field is empty, exit.
@@ -1399,32 +1392,11 @@ if (isset($_POST) && !empty($_POST)) {
 			// (blocks were never C-cached since #43).
 			// The store toggle (re-lock on Force/Cron) is unchanged -- only the apply
 			// mechanism (swap, not restart) changed.
-			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+			$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
 
-			if ($ua['mode'] === 'lock') {
-				pfb_unbound_py_ccache_flush(array($domain));
-			}
-
-			// On an Unlock, flush the now-allowed name (and any CNAME targets) from the
-			// resolver cache so a previously-cached block is not served. (Largely
-			// redundant post-#43 -- blocks were never cached -- but kept for the
-			// resolved-CNAME edge and parity with prior behaviour.)
-			if ($action == 'unlock') {
-				exec("{$pfb['chroot_cmd']} flush {$domain_esc} 2>&1");
-
-				// Query for CNAME(s)
-				if (!empty(pfb_filter($pfb['extdns'], PFB_FILTER_IP, 'alerts dnsbl_remove'))) {
-					$ext_dns = escapeshellarg("@{$pfb['extdns']}");
-					exec("/usr/bin/drill {$domain_esc} {$ext_dns} | /usr/bin/awk '/CNAME/ {sub(\"\.\$\", \"\", \$5); print \$5;}' 2>&1", $cname_list);
-					if (!empty($cname_list)) {
-						foreach ($cname_list as $cname) {
-							$cname = pfb_filter($cname, PFB_FILTER_DOMAIN, 'alerts dnsbl_remove', '', TRUE);
-							if (empty($cname)) {
-								continue;
-							}
-							exec("{$pfb['chroot_cmd']} flush {$cname} 2>&1");
-						}
-					}
+			if ($swapped) {
+				if ($ua['mode'] === 'lock') {
+					pfb_unbound_py_ccache_flush(array($domain));
 				}
 			}
 		}

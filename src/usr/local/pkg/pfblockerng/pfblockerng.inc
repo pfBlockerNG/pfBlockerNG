@@ -9287,8 +9287,8 @@ function pfb_unbound_py_mode_active() {
 }
 
 
-// Targeted C-cache flush for a Lock allow->block transition. block->allow needs NO flush
-// (decisionDB.clear() suffices); the caller supplies the domain only after reload returns.
+// Targeted C-cache flush for an exact Alerts allow->block transition. block->allow needs NO
+// flush (decisionDB.clear() suffices); the caller supplies domains only after reload returns.
 // Each name is VALIDATED as a domain (issue #153) before interpolation, dropped otherwise
 // — defence in depth atop
 // escapeshellarg(). Pure; coalesced into ONE chroot session, de-duped per name + 'www.' sibling.
@@ -9298,8 +9298,7 @@ function pfb_unbound_py_ccache_flush_cmds($names, $chroot_cmd) {
 		return $cmds;
 	}
 
-	// One control session: flush each name + its 'www.' sibling (the alerts unlock path
-	// flushes the same pair) so the prior resolved A/AAAA cannot keep serving.
+	// Flush each name + its 'www.' sibling so the prior resolved A/AAAA cannot keep serving.
 	$seen = array();
 	foreach ($names as $name) {
 		// Drop anything that is not a valid domain BEFORE it can reach the command.
@@ -9327,8 +9326,7 @@ function pfb_unbound_py_ccache_flush($names) {
 		return;
 	}
 
-	// Lock calls this after the applied-generation reload returns; coalesce the validated
-	// names into one control sequence.
+	// Alerts callers invoke this after the applied-generation reload returns.
 	foreach ($cmds as $cmd) {
 		exec($cmd);
 	}

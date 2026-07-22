@@ -40,8 +40,8 @@ For a data-only update, the running Python module remains loaded:
 4. Python atomically replaces the live snapshot and clears its `decisionDB` memo.
 5. Python publishes an applied-generation marker.
 6. PHP waits for that marker before returning.
-7. A bulk update clears Unbound's full message and RRset caches; a Lock action instead flushes
-   only the validated domain and its `www.` sibling from the Alerts caller.
+7. A bulk update clears Unbound's full message and RRset caches; exact Alerts allow→block edits
+   instead flush only their validated domain and `www.` sibling.
 
 The implementation and fallback gates are in
 [`pfb_reload_unbound()`](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L9465-L9554).
@@ -137,12 +137,14 @@ Bulk feed updates do not have a cheap exact effective delta because wildcard rul
 expressions, ABP priority, TLD/IDN policy, and allow rules can all change the result. After the
 Python applied-generation handshake succeeds, the bulk caller therefore runs
 `unbound-control flush_zone +c .`, which clears the full message and RRset caches without pausing
-or restarting Unbound. A restart fallback does not restore the pre-update cache.
+or restarting Unbound. A data-path restart fallback does not restore the pre-update cache; normal
+settings-page whitelist changes remain config-class updates and restart Unbound.
 
-When the Alerts Lock action identifies one exact newly blocked domain, its caller instead flushes
-that validated domain and its `www.` sibling with `unbound-control flush` after
-`pfb_reload_unbound()` returns. Lock/Unlock does not request the bulk full-cache policy. Targeted
-commands retain domain validation plus shell escaping.
+Alerts cache treatment follows transition direction after `pfb_reload_unbound()` returns.
+Custom_List add, exact whitelist deletion, and Lock flush the validated domain and its `www.`
+sibling. Wildcard whitelist deletion clears the full cache because it can re-block an unknown set
+of subdomains. Whitelist add and Unlock need no flush because blocked answers are not cached.
+Targeted commands retain domain validation plus shell escaping.
 
 ## Candidate future routing
 
@@ -166,8 +168,9 @@ Cache choice depends on semantics:
 | Change class | Suggested cache treatment |
 | --- | --- |
 | Logging, telemetry, or other answer-neutral setting | Keep cache |
-| Exact known allow-to-block domains | Keep cache and flush those names |
-| Bulk feed update | Clear the full message and RRset caches after the snapshot is confirmed applied |
+| Exact Alerts allow→block edit | Keep cache and flush the validated single-domain set after the snapshot is confirmed applied |
+| Alerts wildcard-whitelist removal | Clear the full message and RRset caches after the snapshot is confirmed applied |
+| Bulk generation load | Clear the full message and RRset caches after the snapshot is confirmed applied |
 | Regex, TLD, IDN, SafeSearch, response-shape, or other broad DNS-policy change | Clear the native cache |
 | Python module inclusion/removal | Clear the native cache unless live testing proves retained entries cannot violate the new policy |
 

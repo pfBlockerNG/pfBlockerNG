@@ -250,12 +250,14 @@ shared atomic-write helper does not fsync the parent directory after rename.
 
 ## Post-acceptance amendment (2026-07-22 — issue #1615)
 
-Bulk feed/cron updates no longer accept TTL-bounded allow→block staleness. After the Python
+Bulk feed/cron data updates no longer accept TTL-bounded native-cache staleness. After the Python
 applied-generation handshake succeeds, the bulk caller clears Unbound's full message and RRset
-caches with `flush_zone +c .`; a restart fallback does not restore the pre-update cache.
+caches with `flush_zone +c .`; a restart fallback does not restore the pre-update cache. Normal
+settings-page whitelist changes remain config-class updates and restart Unbound.
 
 The generic `pfb_reload_unbound()` API no longer carries a newly-blocked-name delta. The Alerts
-Lock/Unlock caller retains the exact-name policy: after reload returns, Lock flushes the validated
-domain and its `www.` sibling; Lock/Unlock never requests the bulk full-cache policy. This
-amendment supersedes the C-cache policy in the accepted body and the 2026-07-15 addendum without
-altering either historical record.
+callers apply directional policy after reload returns: Custom_List add, exact whitelist deletion,
+and Lock flush the validated domain plus its `www.` sibling; wildcard whitelist deletion flushes
+the full cache because it can re-block an unknown set of subdomains; whitelist add and Unlock need
+no flush because blocked answers are not cached. This amendment supersedes the C-cache policy in
+the accepted body and the 2026-07-15 addendum without altering either historical record.
