@@ -3109,7 +3109,7 @@ def reload(
       either way (it just doesn't PROVE no-restart).
     * ``data_path=True``: this is a pure DNSBL-DATA update in python mode that the package
       routes through the ADR-10 zero-downtime fast path — ``pfb_update_unbound`` calls
-      ``pfb_reload_unbound($mode, TRUE, $pfbpython, !$pfbpython)`` (inc:4151), so a
+      ``pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath)`` (inc:4151), so a
       config-clean feed/cron update flips the sentinel and swaps with NO restart. We
       capture the fast-path log baseline BEFORE the verb runs and afterwards wait on
       :func:`wait_zero_downtime_swap` (the swap-applied signal). The caller is asserting
@@ -4145,17 +4145,13 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
     pfSense shell) with ``pfblockerng.inc`` loaded — driving the SAME functions the
     handler calls, so the smoke test exercises the real #51 path end-to-end.
 
-    ZERO-DOWNTIME (ADR-10, #51): the handler reloads via the data fast path — it computes
-    the allow->block delta exactly as the page does (``$newly_blocked = ($ua['mode'] ===
-    'lock') ? array($domain) : array()``) and calls ``pfb_reload_unbound('enabled', FALSE,
-    FALSE, TRUE, $newly_blocked)`` (alerts.php:1410-1411). ``$datapath=TRUE`` routes a #51
-    custom-list edit through the no-restart swap: PHP publishes the patched manifest, flips
-    the generation sentinel, and (for a Lock) targeted-flushes that one name from the
-    C-cache — Unbound's pid is UNCHANGED. So the helper waits on the SWAP-APPLIED signal
-    (the fast-path log line), NOT on a restart. The old unlock-only cache flush is gone:
-    block->allow (Unlock) is immediate since #43 stopped C-caching blocks, and a Lock's
-    prior resolved answer is cleared by the production targeted delta-flush inside
-    ``pfb_reload_unbound`` itself — no belt-and-suspenders flush is needed here.
+    ZERO-DOWNTIME (ADR-10, #51): the handler reloads via the data fast path — it calls the
+    four-argument ``pfb_reload_unbound('enabled', FALSE, FALSE, TRUE)``. ``$datapath=TRUE``
+    routes a #51 custom-list edit through the no-restart swap: PHP publishes the patched
+    manifest and flips the generation sentinel. The handler then targeted-flushes the validated
+    domain only for Lock (allow->block); Unlock (block->allow) keeps its existing domain/CNAME
+    flush. Unbound's pid is UNCHANGED. The helper waits on the SWAP-APPLIED signal (the
+    fast-path log line), NOT on a restart.
 
     ``action`` is one of the four icon labels: ``'unlock'`` / ``'relock'`` (temporarily
     allow — ADD to the store, block->allow) or ``'lock'`` / ``'reunlock'`` (re-block —
@@ -4170,7 +4166,7 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER)
     # Mirror the handler exactly: resolve the action -> store-mode via the production
     # pfb_dnsbl_unlock_action(), read the store, toggle it, regenerate user_unlock, then
-    # reload through the ADR-10 data fast path with the allow->block delta. pfb_global()
+    # reload through the ADR-10 data fast path. pfb_global()
     # populates $pfb (paths + config) as the page/CLI bootstrap.
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
@@ -4179,8 +4175,10 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
         "$u = pfb_unlock('read', 'dnsbl', '', '', '');\n"
         f"pfb_unlock($ua['mode'], 'dnsbl', {_php_str(domain)}, 'python', $u);\n"
         "pfb_unbound_python_sources_unlock();\n"
-        f"$newly_blocked = ($ua['mode'] === 'lock') ? array({_php_str(domain)}) : array();\n"
-        "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, $newly_blocked);\n"
+        "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
+        "if ($ua['mode'] === 'lock') {\n"
+        f"pfb_unbound_py_ccache_flush(array({_php_str(domain)}));\n"
+        "}\n"
         "echo 'OK';"
     )
     deadline = time.monotonic() + timeout

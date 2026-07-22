@@ -9287,13 +9287,10 @@ function pfb_unbound_py_mode_active() {
 }
 
 
-// ADR-10: C-cache flip for a zero-downtime swap. Staleness is ONE-DIRECTIONAL: since #43
-// DNSBL blocks set qstate.no_cache_store=1, a block reply is NEVER cached. block->allow needs
-// NO flush (decisionDB.clear() suffices); allow->block leaves the previously-resolved answer
-// cached until TTL, so ONLY that direction needs a flush, ONLY for newly-blocked names. $names:
-// the allow->block delta (alerts Lock passes one domain; feed/cron pass none, accepting
-// TTL-bounded staleness — no regression, a restart is equally stale). Each name is VALIDATED as
-// a domain (issue #153) before interpolation, dropped otherwise — defence in depth atop
+// Targeted C-cache flush for a Lock allow->block transition. block->allow needs NO flush
+// (decisionDB.clear() suffices); the caller supplies the domain only after reload returns.
+// Each name is VALIDATED as a domain (issue #153) before interpolation, dropped otherwise
+// — defence in depth atop
 // escapeshellarg(). Pure; coalesced into ONE chroot session, de-duped per name + 'www.' sibling.
 function pfb_unbound_py_ccache_flush_cmds($names, $chroot_cmd) {
 	$cmds = array();
@@ -9330,9 +9327,8 @@ function pfb_unbound_py_ccache_flush($names) {
 		return;
 	}
 
-	// The '.sync' marker (touched at the start of the data fast path / pfb_update_unbound)
-	// tells the DNSBL Queries daemon to stand off the control socket; run the flushes
-	// while it is set, coalesced, then let the normal work-file cleanup clear it.
+	// Lock calls this after the applied-generation reload returns; coalesce the validated
+	// names into one control sequence.
 	foreach ($cmds as $cmd) {
 		exec($cmd);
 	}
@@ -9465,10 +9461,10 @@ function pfb_dnsbl_manifest_failure_notice(): bool {
 // Reload Resolver. ADR-10: $datapath signals a pure DNSBL-DATA update (feed/cron or a #51
 // custom-list edit) already published atomically to the manifest. When python is live, unbound
 // is running, no config change is pending, and the RAM gate fits, this takes the ZERO-DOWNTIME
-// fast path (flip the reload sentinel, no restart). $newly_blocked carries the allow->block
-// delta to flush from the C-cache after the swap. Any other case falls back to the restart
-// (fail-safe; PHP is the PRIMARY gate — never "flip and hope").
-function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FALSE, $newly_blocked=array()) {
+// fast path (flip the reload sentinel, no restart). Any other case falls back to the restart
+// (fail-safe; PHP is the PRIMARY gate — never "flip and hope"). Returns TRUE only after the
+// applied-generation handshake; restart fallback returns FALSE.
+function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FALSE) {
 	global $g, $pfb;
 
 	$final = array();
@@ -9503,10 +9499,6 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 				// post hook + the #51 alert page then see the new state, not a pending
 				// async swap. Queries keep flowing on the old snapshot during the wait.
 				if (pfb_unbound_py_wait_applied($gen)) {
-					// allow->block C-cache flush (block->allow needs none, #43), now that
-					// the block is LIVE. Coalesced, gated behind the '.sync' marker above.
-					pfb_unbound_py_ccache_flush($newly_blocked);
-
 					pfb_logger(" completed", 1);
 					// Clear the daemon-suppression marker before this early return: the
 					// alert/#51 path (pfb_reload_unbound called from pfblockerng_alerts.php)
@@ -9518,7 +9510,7 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 					// independent convergence point besides the restart path's completion.
 					$converged = pfb_dnsbl_apply_ledger_update();
 					pfb_unbound_py_gc($converged);
-					return;
+					return TRUE;
 				}
 
 				// The swap did not confirm within the budget (watcher stuck / declined
@@ -9628,6 +9620,7 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 	}
 
 	unlink_if_exists($cache_dumpfile);
+	return FALSE;
 }
 
 
@@ -9742,12 +9735,14 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 		// reload introduces NO config change ($pfbpython FALSE -> unbound.conf/ini/mounts
 		// unchanged). The manifest + per-feed raw were already published atomically by
 		// pfb_unbound_python_sources() above; flip the sentinel, no restart. A config
-		// change ($pfbpython TRUE) -> $datapath FALSE -> the restart path. The feed delta
-		// (allow->block names) is not cheaply computable here, so no targeted C-cache
-		// flush is passed -> accepted TTL-bounded staleness (no worse than the restart,
-		// which preserves the resolved cache too).
+		// change ($pfbpython TRUE) -> $datapath FALSE -> the restart path. The bulk
+		// fast path flushes the full resolver cache after the applied-generation handshake;
+		// config restarts preserve cache, data fallback clears it by passing FALSE.
 		$datapath = !$pfbpython;
-		pfb_reload_unbound($mode, TRUE, $pfbpython, $datapath);
+		$swapped = pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath);
+		if ($datapath && $swapped) {
+			exec("{$pfb['chroot_cmd']} flush_zone +c . 2>&1");
+		}
 	}
 
 	// Start Unbound Service with new DNSBL Updates

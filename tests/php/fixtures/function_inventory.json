@@ -5976,13 +5976,6 @@
                 "variadic": false,
                 "type": null,
                 "default": "false"
-            },
-            {
-                "name": "newly_blocked",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "array (\n)"
             }
         ]
     },
