@@ -40,8 +40,9 @@ For a data-only update, the running Python module remains loaded:
 4. Python atomically replaces the live snapshot and clears its `decisionDB` memo.
 5. Python publishes an applied-generation marker.
 6. PHP waits for that marker before returning.
-7. A bulk update clears Unbound's full message and RRset caches; exact Alerts allow→block edits
-   instead flush only their validated domain and `www.` sibling.
+7. When the default-off **Clear Resolver Cache** option is enabled, a bulk update clears
+   Unbound's full message and RRset caches. Exact Alerts allow→block edits instead flush only
+   their validated domain and `www.` sibling regardless of that option.
 
 The implementation and fallback gates are in
 [`pfb_reload_unbound()`](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L9465-L9554).
@@ -134,11 +135,13 @@ one-directional:
 - Allow to block may keep serving the previously resolved real answer until its TTL expires.
 
 Bulk feed updates do not have a cheap exact effective delta because wildcard rules, regular
-expressions, ABP priority, TLD/IDN policy, and allow rules can all change the result. After the
-Python applied-generation handshake succeeds, the bulk caller therefore runs
-`unbound-control flush_zone +c .`, which clears the full message and RRset caches without pausing
-or restarting Unbound. A data-path restart fallback does not restore the pre-update cache; normal
-settings-page whitelist changes remain config-class updates and restart Unbound.
+expressions, ABP priority, TLD/IDN policy, and allow rules can all change the result. The
+default-off **Clear Resolver Cache** option therefore lets the operator choose between retaining
+cached PASS answers until TTL expiry and immediate allow→block enforcement. When enabled, the
+bulk caller runs `unbound-control flush_zone +c .` after the Python applied-generation handshake
+succeeds, clearing the full message and RRset caches without pausing or restarting Unbound. A
+data-path restart fallback does not restore the pre-update cache; normal settings-page whitelist
+changes remain config-class updates and restart Unbound.
 
 Alerts cache treatment follows transition direction after `pfb_reload_unbound()` returns.
 Custom_List add, exact whitelist deletion, and Lock flush the validated domain and its `www.`
@@ -170,7 +173,7 @@ Cache choice depends on semantics:
 | Logging, telemetry, or other answer-neutral setting | Keep cache |
 | Exact Alerts allow→block edit | Keep cache and flush the validated single-domain set after the snapshot is confirmed applied |
 | Alerts wildcard-whitelist removal | Clear the full message and RRset caches after the snapshot is confirmed applied |
-| Bulk generation load | Clear the full message and RRset caches after the snapshot is confirmed applied |
+| Bulk generation load | User-selected: retain caches by default, or clear the full message and RRset caches after the snapshot is confirmed applied |
 | Regex, TLD, IDN, SafeSearch, response-shape, or other broad DNS-policy change | Clear the native cache |
 | Python module inclusion/removal | Clear the native cache unless live testing proves retained entries cannot violate the new policy |
 

@@ -490,12 +490,12 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
     # (b) Now put it on a DNSBL feed -> the SAME domain is now BLOCKED (VIP).
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlock.txt", f"{domain}\n")
     spec = h.DnsblCase(aliasname="smokeunlock", feed_url=feed_url, header="smokeunlock", mode=h.DnsblMode.VIP)
-    with h.CaseContext(deployed_vm, spec):
+    with h.DnsblCacheFlushEnabled(deployed_vm), h.CaseContext(deployed_vm, spec):
         h.unblock_egress()  # the allowed probes (a-shape) must reach the controlled stub
         # Listing the name is the feed/swap allow->block direction: the module already
-        # mounted (a prior case), so first-enable applies via the no-restart swap, which
-        # Bulk data applies flush Unbound's full message + RRset caches after the
-        # applied-generation handshake, so the pre-resolved answer cannot survive.
+        # mounted (a prior case), so first-enable applies via the no-restart swap. The
+        # opt-in bulk policy flushes Unbound's full message + RRset caches after
+        # the applied-generation handshake, so the pre-resolved answer cannot survive.
         blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} still resolving after block: {blocked}"
 
@@ -724,7 +724,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
     # No host override on the name — it would shadow the DNSBL block (served as
     # local-data before the python module); an allowed name resolves via the stub.
     spec = h.DnsblCase(aliasname="smokeunlocktmp", feed_url=feed_url, header="smokeunlocktmp", mode=h.DnsblMode.VIP)
-    with h.CaseContext(deployed_vm, spec):
+    with h.DnsblCacheFlushEnabled(deployed_vm), h.CaseContext(deployed_vm, spec):
         # Egress OPEN: the update path deadlocks under a dark egress, and the allowed
         # (unlock) probe must reach the controlled stub. The block probes return the VIP
         # locally, so there is no false-green from leaving egress open.
@@ -746,8 +746,8 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         # forces the reload + clears the manifest's user_unlock. It is a config-clean
         # DNSBL-data update -> the no-restart fast path (data_path=True waits on the swap).
         h.reload(deployed_vm, "update", data_path=True)
-        # The Force-update re-lock is a bulk data apply; its post-handshake full cache
-        # flush clears the prior resolved answer before the swapped re-block is observed.
+        # The enabled post-handshake full-cache flush clears the prior resolved answer
+        # before the swapped re-block is observed.
         relocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(relocked), f"re-locked {domain} still resolving: {relocked}"
 
@@ -784,14 +784,15 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
       update in python mode routes through the no-restart data fast path
       (``pfb_update_unbound`` -> ``pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath)``,
       inc:4151), so PHP flips the sentinel and the watcher swaps the snapshot. The bulk
-      caller then clears the full resolver cache after the applied-generation handshake.
+      caller then clears the full resolver cache after the applied-generation handshake
+      because this test explicitly enables the default-off cache-flush option.
     * AFTER: the name is BLOCKED (VIP), Unbound's pid is UNCHANGED (no restart), and the
       pfBlockerNG log gained a ``zero-downtime swap`` fast-path line.
 
     NO-FALLBACK NOTE: a config-clean feed-content re-fetch IS reliably the no-restart path
     (the brief's primary route), so this exercises a genuine feed update — not the #51 lock
-    substitute. The post-handshake full cache flush removes the name's prior resolved answer
-    before the first post-reload probe observes the swapped block.
+    substitute. The enabled post-handshake full cache flush removes the name's prior resolved
+    answer before the first post-reload probe observes the swapped block.
     """
     domain = h.unique_domain("feedupd")
     other = h.unique_domain("feedupd-filler")
@@ -800,7 +801,7 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
     feed_name = "smoke_dnsbl_feedupd.txt"
     feed_url = h.write_local_feed(deployed_vm, feed_name, f"{other}\n")
     spec = h.DnsblCase(aliasname="smokefeedupd", feed_url=feed_url, header="smokefeedupd", mode=h.DnsblMode.VIP)
-    with h.CaseContext(deployed_vm, spec):
+    with h.DnsblCacheFlushEnabled(deployed_vm), h.CaseContext(deployed_vm, spec):
         h.unblock_egress()  # the allowed (before-state) probe must reach the controlled stub
 
         # BEFORE: the target is not on the feed yet -> it RESOLVES via the stub sentinel.

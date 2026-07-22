@@ -121,6 +121,7 @@ class RequireConfigGatewaySniff implements Sniff
 		// ADR-59 P5: masked Cloudflare Radar Bearer token
 		'installedpackages/pfblockerngdnsblsettings/config/0/top1m_token',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply',

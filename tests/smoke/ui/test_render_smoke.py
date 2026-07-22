@@ -1580,6 +1580,18 @@ def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: P
     )
 
 
+def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """DNSBL page exposes the default-off full-cache trade-off without PHP diagnostics."""
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    assert result.ok, f"DNSBL cache-flush render oracle failed: {result.detail}"
+    assert 'name="pfb_cache_flush"' in resp.text, "DNSBL page is missing the cache-flush checkbox"
+    assert "When disabled, cached allowed answers remain until their DNS TTL expires" in resp.text, (
+        "DNSBL cache-flush help must explain the default-disabled TTL trade-off"
+    )
+
+
 def test_states_removal_help_references_ip_tab(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The category-edit 'States Removal' help points at the IP tab, where 'Kill States' lives.
 

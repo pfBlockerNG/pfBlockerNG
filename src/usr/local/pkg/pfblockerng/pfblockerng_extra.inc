@@ -873,6 +873,14 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 		],
 
+		// Full resolver-cache flush after a successful DNSBL data swap. Default off.
+		'pfb_cache_flush' => [
+			'section'       => $dnsbl,
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+		],
+
 		// Global logging/blocking mode. Default ''.
 		'global_log' => [
 			'section'       => $dnsbl,

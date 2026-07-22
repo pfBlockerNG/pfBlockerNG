@@ -60,6 +60,8 @@ exclusions.
   `pfb_cfg_*_read/write` delegations) in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`:
   - `dnsbl_lenient` / `pfb_keep` → `PfbLenient` (`'on'`/`'off'`); `dnsbl_vip_auto` and ~76 other
     `'on'`/`''` checkbox fields → `PfbToggle` (off-value `''`).
+  - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables the post-handshake full Unbound
+    cache flush for bulk zero-downtime DNSBL data swaps.
   - **`pfb_alias_delta_mode` → `PfbAliasDeltaMode`** (ADR-40, registry adapters
     `pfb_cfg_alias_delta_mode_read/write`): tokens `'auto'` (new-install default) / `'delta'` /
     `'replace'`. Unknown or absent token reads as `Auto`. **Grandfather seed:** an already-configured

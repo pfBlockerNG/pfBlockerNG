@@ -225,6 +225,12 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache",
     ),
     ToggleFlow(
+        name="dnsbl_cache_flush",
+        page="/pfblockerng/pfblockerng_dnsbl.php",
+        field="pfb_cache_flush",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush",
+    ),
+    ToggleFlow(
         name="dnsbl_py_nolog",
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_py_nolog",
