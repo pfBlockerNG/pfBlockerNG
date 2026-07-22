@@ -291,6 +291,25 @@ validated against both the provider coverage and exclusions before publication.
 ### Unknown identities and configuration
 
 The continent pages expose their matching `UNK_AF` through `UNK_SA` selections.
+Their UI labels are fixed:
+
+| Identity | UI label |
+| --- | --- |
+| `UNK_AF` | `Unknown (Africa)` |
+| `UNK_AN` | `Unknown (Antarctica)` |
+| `UNK_AS` | `Unknown (Asia)` |
+| `UNK_EU` | `Unknown (Europe)` |
+| `UNK_NA` | `Unknown (North America)` |
+| `UNK_OC` | `Unknown (Oceania)` |
+| `UNK_SA` | `Unknown (South America)` |
+
+Each continent page renders its unknown selection first, followed by ordinary
+countries sorted by display name. Ordering is explicit; label text is never a
+sort key. This deliberately replaces the current `AA ASIA UNDEFINED` and
+`AA EUROPE UNDEFINED` labels, whose `AA` prefix exists only to force that sort
+position. `UNK_*` is the internal selection/config identity and is never the
+display label.
+
 Reads translate legacy `6255147` to `UNK_AS` and `6255148` to `UNK_EU`; the next
 save writes only canonical keys. Existing alias behavior is preserved before
 that save. No migration, legacy-value notice, or downgrade guarantee is added.
@@ -376,8 +395,10 @@ Only these observable differences are allowed:
 1. CLDR names for all seven locales, with short-form selection for `HK`, `MO`,
    `MM`, and `PN` and the fixed fallback order.
 2. Removal of ordinary-country numeric GeoNames IDs from headers and UI rows.
-3. Canonical `UNK_*` identities, five new continent-unknown selections, and
-   canonical writes for legacy Asia/Europe values.
+3. Canonical `UNK_*` identities; five new continent-unknown selections; explicit
+   unknown-first ordering; replacement of `AA ASIA/EUROPE UNDEFINED` with
+   `Unknown (Asia)`/`Unknown (Europe)`; and canonical writes for legacy
+   Asia/Europe values.
 4. The new `Unknown (World)` editor and aliases.
 5. The notification setting and edge-triggered notices.
 
@@ -427,8 +448,10 @@ corresponding adversarial rows test-first.
   and rendering.
 - Every supported locale produces localized display names while structural
   file, alias, page, and config bindings remain English and byte-stable.
-- All eight unknown identities work for both families. Legacy Asia/Europe reads
-  preserve behavior and save canonically.
+- All eight unknown identities work for both families. Every continent page
+  renders its exact `Unknown (<Continent>)` selection first, then ordinary
+  countries alphabetically. Legacy Asia/Europe reads preserve behavior while
+  saving canonically.
 - World-unknown contains explicit unknown rows and the public coverage
   complement, and contains no provider-covered/private/reserved/bogon address.
 - A configured provider-absent country stays selected, emits empty output, and
