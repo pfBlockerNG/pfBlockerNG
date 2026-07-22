@@ -279,9 +279,10 @@ manifest and excludes stages; legacy fixed `pfb_py_raw/` manifests remain readab
   `benchmarks/spike_adr10_swap.py`'s kill-gate), the feature/python mode off, Unbound down, a
   staged config change, or a prior swap/sentinel error.
 - **Cache on swap:** `decisionDB` cleared (no stale decision); **block→allow
-  immediate** (blocks not C-cached since #43); **allow→block** flushes the prior resolved answer
-  — a targeted delta flush for the #51 single-domain case, TTL-bounded for feed/cron (not a
-  regression — the restart is TTL-stale there too).
+  immediate** (blocks not C-cached since #43). After the applied-generation handshake, bulk
+  feed/cron updates clear Unbound's full message and RRset caches with `flush_zone +c .`; a Lock
+  action instead flushes its validated domain and `www.` sibling from the Alerts caller after the
+  reload returns. Restart fallback never restores a pre-update bulk cache.
 - **Fail-closed:** a bad/partial build keeps the last-good snapshot serving.
 
 Pinned by `tests/test_adr10_*` (snapshot equivalence, fail-closed swap, watcher); idle

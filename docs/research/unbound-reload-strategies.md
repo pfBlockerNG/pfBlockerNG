@@ -40,6 +40,8 @@ For a data-only update, the running Python module remains loaded:
 4. Python atomically replaces the live snapshot and clears its `decisionDB` memo.
 5. Python publishes an applied-generation marker.
 6. PHP waits for that marker before returning.
+7. A bulk update clears Unbound's full message and RRset caches; a Lock action instead flushes
+   only the validated domain and its `www.` sibling from the Alerts caller.
 
 The implementation and fallback gates are in
 [`pfb_reload_unbound()`](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L9465-L9554).
@@ -131,12 +133,16 @@ one-directional:
 - Block to allow is immediate after `decisionDB` is cleared because no cached block exists.
 - Allow to block may keep serving the previously resolved real answer until its TTL expires.
 
-When an interactive action identifies an exact newly blocked domain, PHP flushes that domain and
-its `www.` sibling with `unbound-control flush`
-([source](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L9290-L9339)). Bulk feed updates do
-not have a cheap exact effective delta because wildcard rules, regular expressions, ABP priority,
-TLD/IDN policy, and allow rules can all change the result. Those updates currently accept
-TTL-bounded allow-to-block staleness.
+Bulk feed updates do not have a cheap exact effective delta because wildcard rules, regular
+expressions, ABP priority, TLD/IDN policy, and allow rules can all change the result. After the
+Python applied-generation handshake succeeds, the bulk caller therefore runs
+`unbound-control flush_zone +c .`, which clears the full message and RRset caches without pausing
+or restarting Unbound. A restart fallback does not restore the pre-update cache.
+
+When the Alerts Lock action identifies one exact newly blocked domain, its caller instead flushes
+that validated domain and its `www.` sibling with `unbound-control flush` after
+`pfb_reload_unbound()` returns. Lock/Unlock does not request the bulk full-cache policy. Targeted
+commands retain domain validation plus shell escaping.
 
 ## Candidate future routing
 
@@ -161,7 +167,7 @@ Cache choice depends on semantics:
 | --- | --- |
 | Logging, telemetry, or other answer-neutral setting | Keep cache |
 | Exact known allow-to-block domains | Keep cache and flush those names |
-| Bulk feed update | Keep current TTL-bounded behavior unless an effective delta becomes available |
+| Bulk feed update | Clear the full message and RRset caches after the snapshot is confirmed applied |
 | Regex, TLD, IDN, SafeSearch, response-shape, or other broad DNS-policy change | Clear the native cache |
 | Python module inclusion/removal | Clear the native cache unless live testing proves retained entries cannot violate the new policy |
 
