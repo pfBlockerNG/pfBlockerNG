@@ -226,7 +226,7 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
         # The handler returns only after the applied-generation handshake. Blocked
         # answers are not cached, so Unlock needs no native-cache flush.
         unlocked = helpers.dns_probe(vm, domain, "A")
-        assert not helpers.is_vip(unlocked), f"unlocked {domain} still VIP-blocked via the alerts handler: {unlocked}"
+        assert _not_blocked(unlocked), f"unlocked {domain} still VIP-blocked via the alerts handler: {unlocked}"
 
         # RE-LOCK via the handler -> blocked again (allow->block; the handler's
         # targeted delta-flush clears the prior resolved answer).
