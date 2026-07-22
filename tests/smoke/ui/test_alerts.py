@@ -180,6 +180,7 @@ def _not_blocked(answer: helpers.DnsAnswer) -> bool:
     return not helpers.is_vip(answer) and not helpers.is_null_ip(answer)
 
 
+@pytest.mark.ui_render
 def test_dnsbl_lock_unlock_lifecycle_via_alerts(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
@@ -193,10 +194,10 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
     * BEFORE: ``domain`` is VIP-BLOCKED (the deterministic local block shape, the
       authoritative first answer after the restart-class reload).
     * UNLOCK via the form (``dnsbl_remove=unlock``): the handler toggles the unlock
-      store, patches the manifest's ``user_unlock`` and reloads -> the name stops
-      being sinkholed. Poll until it is no longer a block shape (the swap is async).
-    * RE-LOCK via the form (``dnsbl_remove=lock``): the temporary allow is removed ->
-      the name is VIP-blocked again. Poll until the block shape returns.
+      store, patches the manifest's ``user_unlock``, applies the generation, and
+      flushes the domain/CNAME cache entries -> the name stops being sinkholed.
+    * RE-LOCK via the form (``dnsbl_remove=lock``): the temporary allow is removed,
+      the applied generation is targeted-flushed, and the name is VIP-blocked again.
 
     Oracle = the on-box DNS answer shape, never the HTTP body. ``reset(vm)`` in
     ``finally`` drops the derived state (tables/sqlite + a filter sync) so the session VM
@@ -222,15 +223,18 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
         # the value the production helper sends.
         resp = _post_action(webui, {"dnsbl_remove": "unlock", "domain": domain, "dnsbl_type": "python"})
         assert not looks_like_login_page(resp.text), "unlock POST returned the login form (session lost)"
-        # The swap is async -> poll until the name is no longer a block shape.
-        unlocked = helpers.dns_probe_until(vm, domain, _not_blocked)
+        # The handler returns only after the applied-generation handshake and its
+        # Unlock cache flush, so this first query is authoritative.
+        unlocked = helpers.dns_probe(vm, domain, "A")
         assert not helpers.is_vip(unlocked), f"unlocked {domain} still VIP-blocked via the alerts handler: {unlocked}"
 
         # RE-LOCK via the handler -> blocked again (allow->block; the handler's
         # targeted delta-flush clears the prior resolved answer).
         resp = _post_action(webui, {"dnsbl_remove": "lock", "domain": domain, "dnsbl_type": "python"})
         assert not looks_like_login_page(resp.text), "re-lock POST returned the login form (session lost)"
-        relocked = helpers.dns_probe_until(vm, domain, helpers.is_vip)
+        # Lock likewise returns after the applied-generation handshake and targeted
+        # domain/www cache flush.
+        relocked = helpers.dns_probe(vm, domain, "A")
         assert helpers.is_vip(relocked), f"re-locked {domain} not VIP-blocked again: {relocked}"
     finally:
         # Drop the test feed/alias and rebuild from baseline so the unlock store and
