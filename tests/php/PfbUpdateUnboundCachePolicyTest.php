@@ -1,0 +1,158 @@
+<?php
+
+declare(strict_types=1);
+
+use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * pfb_update_unbound() owns the bulk DNSBL cache policy. A successful data swap
+ * flushes the full cache only after the applied-generation handshake; a restart
+ * fallback does not restore a stale dump and does not issue a post-swap flush.
+ */
+#[CoversFunction('pfb_update_unbound')]
+final class PfbUpdateUnboundCachePolicyTest extends TestCase
+{
+	private string $dir;
+	private array $savedPfb = [];
+	private array $savedG = [];
+	private array $savedConfig = [];
+	private bool $hadConfig = false;
+
+	protected function setUp(): void
+	{
+		$this->dir = sys_get_temp_dir() . '/pfb_update_unbound_cache_' . getmypid() . '_' . uniqid();
+		mkdir($this->dir, 0777, TRUE);
+		foreach ([
+			'dnsbldir', 'dbdir', 'dnsbl_file', 'dnsdir', 'dnsbl_cache', 'unbound_py_count',
+			'unbound_py_sources', 'unbound_py_rawdir', 'unbound_py_data', 'unbound_py_zone',
+			'unbound_py_reject_stats', 'chroot_cmd', 'dnsbl_python_unmount', 'dnsbl_res_cache',
+			'enable', 'dnsbl', 'save', 'dnsbl_tld_wildcard', 'domain_update', 'reuse_dnsbl',
+			'dnsbl_unlock', 'keep', 'install', 'errlog', 'log',
+		] as $key) {
+			$this->savedPfb[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$key] : FALSE;
+		}
+		$this->savedG['varrun_path'] = array_key_exists('varrun_path', $GLOBALS['g'] ?? [])
+			? $GLOBALS['g']['varrun_path'] : FALSE;
+		$this->hadConfig = array_key_exists('unbound', $GLOBALS['config'] ?? []);
+		$this->savedConfig = $GLOBALS['config']['unbound'] ?? [];
+
+		$dnsdir = "{$this->dir}/dnsdir";
+		mkdir($dnsdir);
+		$GLOBALS['pfb'] = array_replace($GLOBALS['pfb'], [
+			'dnsbldir' => $this->dir,
+			'dbdir' => $this->dir,
+			'dnsbl_file' => "{$this->dir}/pfb_dnsbl",
+			'dnsdir' => $dnsdir,
+			'dnsbl_cache' => "{$this->dir}/pfb_py_cache.sqlite",
+			'unbound_py_count' => "{$this->dir}/pfb_py_count",
+			'unbound_py_sources' => "{$this->dir}/pfb_py_sources.json",
+			'unbound_py_rawdir' => "{$this->dir}/pfb_py_raw",
+			'unbound_py_data' => "{$this->dir}/pfb_py_data",
+			'unbound_py_zone' => "{$this->dir}/pfb_py_zone",
+			'unbound_py_reject_stats' => "{$this->dir}/pfb_py_reject_stats.json",
+			'chroot_cmd' => "{$this->dir}/unbound-control-recorder",
+			'dnsbl_python_unmount' => FALSE,
+			'dnsbl_res_cache' => 'on',
+			'enable' => 'on',
+			'dnsbl' => 'on',
+			'save' => TRUE,
+			'dnsbl_tld_wildcard' => FALSE,
+			'domain_update' => FALSE,
+			'reuse_dnsbl' => '',
+			'dnsbl_unlock' => "{$this->dir}/dnsbl_unlock",
+			'keep' => 'on',
+			'install' => FALSE,
+			'errlog' => "{$this->dir}/error.log",
+			'log' => "{$this->dir}/pfblockerng.log",
+		]);
+		$GLOBALS['g']['varrun_path'] = $this->dir;
+		$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];
+		$GLOBALS['pfb_test_process_running'] = ['unbound' => TRUE];
+		file_put_contents($GLOBALS['pfb']['unbound_py_count'], "1\n");
+		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"feeds":[]}');
+		file_put_contents($GLOBALS['pfb']['unbound_py_reject_stats'], '[]');
+		file_put_contents("{$this->dir}/unbound.conf", "python-script: pfb_unbound.py\n");
+		file_put_contents("{$this->dir}/pfb_py_reload.applied", "1\n");
+	}
+
+	protected function tearDown(): void
+	{
+		foreach ($this->savedPfb as $key => $value) {
+			if ($value === FALSE) {
+				unset($GLOBALS['pfb'][$key]);
+			} else {
+				$GLOBALS['pfb'][$key] = $value;
+			}
+		}
+		foreach ($this->savedG as $key => $value) {
+			if ($value === FALSE) {
+				unset($GLOBALS['g'][$key]);
+			} else {
+				$GLOBALS['g'][$key] = $value;
+			}
+		}
+		if ($this->hadConfig) {
+			$GLOBALS['config']['unbound'] = $this->savedConfig;
+		} else {
+			unset($GLOBALS['config']['unbound']);
+		}
+		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_sysctl']);
+		foreach (glob("{$this->dir}/*") ?: [] as $file) {
+			@unlink($file);
+		}
+		@rmdir("{$this->dir}/dnsdir");
+		@rmdir($this->dir);
+	}
+
+	private function installRecorder(string $log): void
+	{
+		$marker = escapeshellarg("{$this->dir}/pfb_py_reload.applied");
+		file_put_contents(
+			$GLOBALS['pfb']['chroot_cmd'],
+			"#!/bin/sh\nprintf '%s|applied=%s\\n' \"\$*\" \"\$(cat {$marker})\" >> " . escapeshellarg($log) . "\n"
+		);
+		chmod($GLOBALS['pfb']['chroot_cmd'], 0755);
+	}
+
+	public function testSuccessfulBulkSwapFlushesOnlyAfterAppliedGeneration(): void
+	{
+		$log = "{$this->dir}/control.log";
+		$this->installRecorder($log);
+		$this->assertTrue(pfb_unbound_py_mode_active(), 'test setup must enable live Python mode');
+		$this->assertTrue(pfb_unbound_py_swap_fits_ram(), 'test setup must allow the data swap');
+		$this->assertTrue(is_process_running('unbound'), 'test setup must keep Unbound running');
+
+		pfb_update_unbound('enabled', FALSE, FALSE);
+
+		$lines = file($log, FILE_IGNORE_NEW_LINES);
+		$this->assertNotFalse($lines, 'bulk update must invoke the configured control command');
+		$this->assertSame(['flush_zone +c .|applied=1'], $lines,
+			'full cache flush must be issued by the bulk caller after the applied marker is live');
+	}
+
+	public function testRestartFallbackDoesNotRestoreOrBulkFlushCache(): void
+	{
+		$log = "{$this->dir}/control.log";
+		$this->installRecorder($log);
+		$checks = 0;
+		$GLOBALS['pfb_test_sysctl']['hw.usermem'] = '1';
+		$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&$checks): bool {
+			$checks++;
+			return in_array($checks, [1, 3, 5], TRUE);
+		};
+
+		pfb_update_unbound('enabled', FALSE, FALSE);
+
+		$this->assertStringContainsString('RAM-constrained box', file_get_contents($GLOBALS['pfb']['log']) ?: '',
+			'low-RAM data update must take the restart fallback');
+		$lines = file_exists($log) ? (file($log, FILE_IGNORE_NEW_LINES) ?: []) : [];
+		$commands = implode('\n', $lines);
+		$this->assertStringNotContainsString('dump_cache', $commands,
+			'data-path fallback must not dump the old cache before restart');
+		$this->assertStringNotContainsString('load_cache', $commands,
+			'data-path fallback must not restore stale cache after restart');
+		$this->assertStringNotContainsString('flush_zone +c .', $commands,
+			'a failed data swap must not issue the post-load bulk flush');
+	}
+}

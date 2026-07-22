@@ -467,9 +467,9 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
     restarted, so its **pid is captured before and asserted UNCHANGED after** the whole
     Unlock/Lock sequence — proving the #51 flips apply with no restart. (Before the #51 fix
     step (c) was a NO-OP — it wrote files the manifest build no longer reads — so the domain
-    stayed VIP-blocked; here it must resolve again.) The unlock/lock transitions use
-    ``dns_probe_until`` (the async-swap analog of the authoritative probe): the swapped
-    decision lands within a bounded window without a restart.
+    stayed VIP-blocked; here it must resolve again.) The helper returns only after the
+    applied-generation handshake and caller-owned cache flush, so each following DNS probe
+    is authoritative without a restart.
 
     NOTE: NO ``control_local_data`` host override on the name. A host override is served
     by Unbound as ``local-data`` BEFORE the python module runs, so it would shadow the
@@ -496,7 +496,7 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
         # mounted (a prior case), so first-enable applies via the no-restart swap, which
         # Bulk data applies flush Unbound's full message + RRset caches after the
         # applied-generation handshake, so the pre-resolved answer cannot survive.
-        blocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
+        blocked = h.dns_probe_client(client_vm, domain, "A")
         assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after block: {blocked}"
 
         # NO-RESTART invariant: capture Unbound's pid before the #51 Unlock/Lock flips.
@@ -505,17 +505,16 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
 
         # (c) Temporary Unlock -> resolves again (forwarded to the stub sentinel).
         #     A VIP here would be the #51 no-op (unlock never reaching the build).
-        #     The swap is async, so poll until the decision flips (bounded; raises on
-        #     timeout) — the block->allow direction is immediate (blocks not cached, #43).
+        #     The helper returns only after the applied-generation handshake.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
-        unlocked = h.dns_probe_client_until(client_vm, domain, lambda a: h.resolves_to(a, STUB_DNS_A))
+        unlocked = h.dns_probe_client(client_vm, domain, "A")
         assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked (the #51 no-op): {unlocked}"
 
         # (d) Re-Lock -> the temporary allow is removed: blocked again (VIP). allow->block
         #     here clears the prior resolved answer via the caller-owned targeted C-cache
         #     flush, so the VIP block is observable.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "lock")
-        relocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
+        relocked = h.dns_probe_client(client_vm, domain, "A")
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
 
         # The whole Unlock/Lock sequence applied with NO restart: pid unchanged.
@@ -714,8 +713,9 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
     before and asserted UNCHANGED after** both operations — proving the re-lock applies with
     no restart. The Force update is driven with ``data_path=True`` so the helper waits on
     the swap-applied log line (not restart readiness), and the re-lock decision is observed
-    via ``dns_probe_until`` (the Force update's allow->block re-lock clears the prior
-    resolved answer because the pending-unlock-store reload path re-applies the feed block).
+    via the first DNS probe after the helper's applied-generation return (the Force update's
+    allow->block re-lock clears the prior resolved answer because the pending-unlock-store
+    reload path re-applies the feed block).
     """
     domain = h.unique_domain("unlocktmp")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlocktmp.txt", f"{domain}\n")
@@ -734,10 +734,10 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         # NO-RESTART invariant: capture pid before the Unlock + Force-update re-lock.
         pid_before = h.unbound_pid(deployed_vm)
 
-        # Unlock -> resolves again (forwarded to the stub sentinel). Async swap: poll until
-        # the block->allow flip lands (immediate direction since blocks aren't C-cached, #43).
+        # Unlock -> resolves again (forwarded to the stub sentinel). The helper returns
+        # only after the applied-generation handshake and its cache flush.
         h.dnsbl_alert_lock_toggle(deployed_vm, domain, "unlock")
-        unlocked = h.dns_probe_client_until(client_vm, domain, lambda a: h.resolves_to(a, STUB_DNS_A))
+        unlocked = h.dns_probe_client(client_vm, domain, "A")
         assert not h.is_vip(unlocked), f"unlocked {domain} still VIP-blocked: {unlocked}"
 
         # A Cron/Force update over the UNCHANGED feed re-locks it: the pending unlock store
@@ -746,7 +746,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         h.reload(deployed_vm, "update", data_path=True)
         # The Force-update re-lock is a bulk data apply; its post-handshake full cache
         # flush clears the prior resolved answer before the swapped re-block is observed.
-        relocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
+        relocked = h.dns_probe_client(client_vm, domain, "A")
         assert not h.resolves_to(relocked, STUB_DNS_A), f"re-locked {domain} still resolving: {relocked}"
 
         # Both the Unlock and the Force-update re-lock applied with NO restart: pid unchanged.
@@ -789,8 +789,7 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
     NO-FALLBACK NOTE: a config-clean feed-content re-fetch IS reliably the no-restart path
     (the brief's primary route), so this exercises a genuine feed update — not the #51 lock
     substitute. The post-handshake full cache flush removes the name's prior resolved answer
-    before observing the swapped block within the test window; ``dns_probe_until`` then polls
-    until the VIP decision lands.
+    before the first post-reload probe observes the swapped block.
     """
     domain = h.unique_domain("feedupd")
     other = h.unique_domain("feedupd-filler")
@@ -820,6 +819,12 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
         # manifest and no swap fires). This is the config-clean data update the swap targets.
         h.force_dnsbl_refetch(deployed_vm, spec.header)
         h.reload(deployed_vm, "update", data_path=True)
+
+        # Reload returns only after the generation is applied. Probe FIRST so this
+        # assertion cannot wait through a DNS TTL while unrelated probes run.
+        blocked = h.dns_probe_client(client_vm, domain, "A")
+        assert h.is_vip(blocked), f"{domain} still not VIP-blocked after feed update: {blocked}"
+        assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after the feed block: {blocked}"
 
         fsync_probe = h.php_eval(
             deployed_vm,
@@ -861,11 +866,6 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
         assert re.fullmatch(r"pfb_py_raw\.[0-9a-f]{32}", generation["dirs"][0]), generation
         assert generation["missing"] == [], f"published manifest has missing raw refs: {generation!r}"
         assert generation["staged"] == [], f"published manifest references staging: {generation!r}"
-
-        # The bulk post-handshake full cache flush clears the target's prior resolved answer;
-        # observe the swapped block without a caller-side targeted flush.
-        blocked = h.dns_probe_client_until(client_vm, domain, h.is_vip)
-        assert not h.resolves_to(blocked, STUB_DNS_A), f"{domain} still resolving after the feed block: {blocked}"
 
         # AFTER: pid unchanged (no restart) AND a fresh fast-path swap line was logged.
         pid_after = h.unbound_pid(deployed_vm)
