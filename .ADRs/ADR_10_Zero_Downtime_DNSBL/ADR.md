@@ -245,3 +245,17 @@ collection may remove unreferenced generations and stages.
 The implementation claims runtime rename atomicity, not power-loss durability. The
 live FreeBSD probe confirmed that directory-stream `fsync()` is supported, but the
 shared atomic-write helper does not fsync the parent directory after rename.
+
+---
+
+## Post-acceptance amendment (2026-07-22 — issue #1615)
+
+Bulk feed/cron updates no longer accept TTL-bounded allow→block staleness. After the Python
+applied-generation handshake succeeds, the bulk caller clears Unbound's full message and RRset
+caches with `flush_zone +c .`; a restart fallback does not restore the pre-update cache.
+
+The generic `pfb_reload_unbound()` API no longer carries a newly-blocked-name delta. The Alerts
+Lock/Unlock caller retains the exact-name policy: after reload returns, Lock flushes the validated
+domain and its `www.` sibling; Lock/Unlock never requests the bulk full-cache policy. This
+amendment supersedes the C-cache policy in the accepted body and the 2026-07-15 addendum without
+altering either historical record.
