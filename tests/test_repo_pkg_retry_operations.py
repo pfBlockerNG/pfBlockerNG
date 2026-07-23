@@ -40,6 +40,31 @@ class _NoopThenInstalledVM:
         return subprocess.CompletedProcess(remote, 0, "4.0.0\n", "")
 
 
+class _QueryErrorVM:
+    def __init__(self) -> None:
+        self.installs = 0
+
+    def ssh(self, *remote: str, timeout: float) -> subprocess.CompletedProcess[str]:
+        if remote[:4] == ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install"):
+            self.installs += 1
+            return subprocess.CompletedProcess(remote, 0, "", "")
+        assert remote == ("pkg", "query", "%v", repo.PKG_NAME)
+        return subprocess.CompletedProcess(remote, 2, "", "query unavailable")
+
+
+class _InstalledTooLateVM:
+    def __init__(self) -> None:
+        self.installs = 0
+        self.queries = 0
+
+    def ssh(self, *remote: str, timeout: float) -> subprocess.CompletedProcess[str]:
+        if remote[:4] == ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install"):
+            self.installs += 1
+            return subprocess.CompletedProcess(remote, 0, "", "")
+        self.queries += 1
+        return subprocess.CompletedProcess(remote, 0, "4.0.0\n", "")
+
+
 @pytest.mark.parametrize(
     ("operation", "verb"),
     [
@@ -54,7 +79,7 @@ def test_pkg_write_operations_retry_lock_contention(
 ) -> None:
     vm = _LockedThenReadyVM()
     expected = ("env", "ASSUME_ALWAYS_YES=yes", "pkg", verb, "-y", repo.PKG_NAME)
-    clock = iter((0.0, 1.0, 2.0, 3.0))
+    clock = iter((0.0, 1.0, 2.0, 3.0, 4.0))
     monkeypatch.setattr(repo.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(repo.time, "sleep", lambda _: None)
 
@@ -74,3 +99,24 @@ def test_pkg_install_retries_success_without_registration(monkeypatch: pytest.Mo
     assert result.returncode == 0
     assert vm.installs == 2
     assert vm.queries == 2
+
+
+def test_pkg_install_does_not_retry_unrelated_query_error() -> None:
+    vm = _QueryErrorVM()
+
+    with pytest.raises(RuntimeError, match="query unavailable"):
+        repo.pkg_install_from_repo(vm, timeout=0.01)  # type: ignore[arg-type]
+
+    assert vm.installs == 1
+
+
+def test_pkg_install_does_not_query_after_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    vm = _InstalledTooLateVM()
+    clock = iter((0.0, 1.0, 5.0))
+    monkeypatch.setattr(repo.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        repo.pkg_install_from_repo(vm, timeout=5.0)  # type: ignore[arg-type]
+
+    assert vm.installs == 1
+    assert vm.queries == 0
