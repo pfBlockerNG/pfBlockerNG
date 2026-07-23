@@ -7736,6 +7736,33 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_unbound_py_top1m_atomic_copy": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "source",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "stream_ops",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            }
+        ]
+    },
     "pfb_unbound_py_wait_applied": {
         "returnsRef": false,
         "returnType": null,

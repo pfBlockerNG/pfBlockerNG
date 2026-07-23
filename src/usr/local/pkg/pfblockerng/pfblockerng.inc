@@ -7887,6 +7887,146 @@ function pfb_unbound_py_atomic_copy(string $source, string $path, array $stream_
 	return TRUE;
 }
 
+// Issue #1569: preserve canonical TOP1M bytes while projecting either retired
+// three-line wire family to the strict one-domain-per-line Python sidecar.
+function pfb_unbound_py_top1m_atomic_copy(string $source, string $path, array $stream_ops=array()): bool {
+	if (is_link($source) || !is_file($source) || !is_readable($source)) {
+		return FALSE;
+	}
+	$source_h = @fopen($source, 'rb');
+	if ($source_h === FALSE) {
+		return FALSE;
+	}
+	$first_byte = @fread($source_h, 1);
+	if ($first_byte === FALSE) {
+		@fclose($source_h);
+		return FALSE;
+	}
+	if ($first_byte !== '.') {
+		@fclose($source_h);
+		return pfb_unbound_py_atomic_copy($source, $path, $stream_ops);
+	}
+	if (!@rewind($source_h)) {
+		@fclose($source_h);
+		return FALSE;
+	}
+
+	$tmp = @tempnam(dirname($path), '.pfbtop1m_');
+	if ($tmp === FALSE) {
+		@fclose($source_h);
+		return FALSE;
+	}
+	$target_h = @fopen($tmp, 'wb');
+	if ($target_h === FALSE) {
+		@fclose($source_h);
+		@unlink($tmp);
+		return FALSE;
+	}
+	$write_fn = $stream_ops['write'] ?? static fn($stream, $bytes) => @fwrite($stream, $bytes);
+	$flush_fn = $stream_ops['flush'] ?? static fn($stream) => @fflush($stream);
+	$fsync_fn = $stream_ops['fsync'] ?? static fn($stream) => @fsync($stream);
+	$patterns = array(
+		'comma' => array(
+			'/\A\.([A-Za-z0-9.-]+),,\n\z/D',
+			'/\A,([A-Za-z0-9.-]+),,\n\z/D',
+			'/\A,www\.([A-Za-z0-9.-]+),,\n\z/D',
+		),
+		'native' => array(
+			'/\A\.([A-Za-z0-9.-]+) 60\n\z/D',
+			'/\A"([A-Za-z0-9.-]+) 60\n\z/D',
+			'/\A"www\.([A-Za-z0-9.-]+) 60\n\z/D',
+		),
+	);
+	$validate_domain = static function (string $domain): bool {
+		if (strlen($domain) > 253 || !str_contains($domain, '.')) {
+			return FALSE;
+		}
+		foreach (explode('.', $domain) as $label) {
+			$length = strlen($label);
+			if ($length < 1 || $length > 63 ||
+			    preg_match('/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/D', $label) !== 1) {
+				return FALSE;
+			}
+		}
+		return TRUE;
+	};
+	$family = NULL;
+	$ok = TRUE;
+	while (TRUE) {
+		$lines = array(@fgets($source_h, 1024));
+		if ($lines[0] === FALSE) {
+			$ok = feof($source_h);
+			break;
+		}
+		$lines[] = @fgets($source_h, 1024);
+		$lines[] = @fgets($source_h, 1024);
+		if ($lines[1] === FALSE || $lines[2] === FALSE) {
+			$ok = FALSE;
+			break;
+		}
+
+		$record_family = NULL;
+		$domains = array();
+		foreach ($patterns as $candidate_family => $candidate_patterns) {
+			$matches = array();
+			if (preg_match($candidate_patterns[0], $lines[0], $matches) !== 1) {
+				continue;
+			}
+			$record_family = $candidate_family;
+			$domains[] = $matches[1];
+			for ($index = 1; $index < 3; $index++) {
+				$matches = array();
+				if (preg_match($candidate_patterns[$index], $lines[$index], $matches) !== 1) {
+					$ok = FALSE;
+					break 2;
+				}
+				$domains[] = $matches[1];
+			}
+			break;
+		}
+		if (!$ok || $record_family === NULL || ($family !== NULL && $family !== $record_family)) {
+			$ok = FALSE;
+			break;
+		}
+		$family = $record_family;
+		$domain = strtolower($domains[0]);
+		if (strtolower($domains[1]) !== $domain || strtolower($domains[2]) !== $domain ||
+		    !$validate_domain($domain)) {
+			$ok = FALSE;
+			break;
+		}
+		$output = "{$domain}\n";
+		$written = $write_fn($target_h, $output);
+		if ($written === FALSE || $written !== strlen($output)) {
+			$ok = FALSE;
+			break;
+		}
+	}
+	$ok = @fclose($source_h) && $ok;
+	$ok = $ok && $flush_fn($target_h) && $fsync_fn($target_h);
+	$ok = @fclose($target_h) && $ok;
+	if (!$ok) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	$chown_fn = $stream_ops['chown'] ?? static fn($file, $owner) => @chown($file, $owner);
+	$chgrp_fn = $stream_ops['chgrp'] ?? static fn($file, $group) => @chgrp($file, $group);
+	$chmod_fn = $stream_ops['chmod'] ?? static fn($file, $mode) => @chmod($file, $mode);
+	$metadata_fn = $stream_ops['metadata'] ?? static function ($file) use ($chown_fn, $chgrp_fn, $chmod_fn): bool {
+		return $chown_fn($file, 'root') && $chgrp_fn($file, 'unbound') && $chmod_fn($file, 0640);
+	};
+	if (!$metadata_fn($tmp)) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	$rename_fn = $stream_ops['rename'] ?? static fn($from, $to) => @rename($from, $to);
+	if (!$rename_fn($tmp, $path)) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 // #1357: one exclusive lock serializes full-set publication, scalar manifest patches,
 // convergence-gated generation GC, and teardown. Python readers never take this lock.
 function pfb_unbound_py_publication_lock(?float $timeout_s=NULL) {
@@ -8673,7 +8813,7 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 			pfb_logger("\nTOP1M fixed-file staging failed: {$top1m_target}", 2);
 			return FALSE;
 		}
-		if (!pfb_unbound_py_atomic_copy($top1m_source, $top1m_target, $top1m_atomic_ops)) {
+		if (!pfb_unbound_py_top1m_atomic_copy($top1m_source, $top1m_target, $top1m_atomic_ops)) {
 			if ($top1m_backup !== FALSE) {
 				@unlink($top1m_backup);
 				$top1m_backup = FALSE;
