@@ -1,5 +1,6 @@
 """Ticket creators must set descriptive labels and native issue types together."""
 
+import shlex
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,13 +17,18 @@ def _continued_command(lines: list[str], start: int) -> str:
     return "\n".join(command)
 
 
+def _option_values(command: str, option: str) -> list[str]:
+    tokens = shlex.split(command.replace("\\\n", " "))
+    return [tokens[index + 1] for index, token in enumerate(tokens[:-1]) if token == option]
+
+
 def test_automated_issue_creators_set_label_and_type() -> None:
     expected = {
-        "nightly-failure-alert.yml": [('--label "nightly-red,bug"', "--type Bug")],
-        "top1m-healthcheck.yml": [('--label "top1m-provider,bug"', "--type Bug")],
+        "nightly-failure-alert.yml": [("nightly-red,bug", "Bug")],
+        "top1m-healthcheck.yml": [("top1m-provider,bug", "Bug")],
         "version-tracker.yml": [
-            ('--label "version-tracker,enhancement"', "--type Task"),
-            ('--label "version-tracker,enhancement"', "--type Task"),
+            ("version-tracker,enhancement", "Task"),
+            ("version-tracker,enhancement", "Task"),
         ],
     }
     commands: dict[str, list[str]] = {}
@@ -41,8 +47,8 @@ def test_automated_issue_creators_set_label_and_type() -> None:
     for filename, expected_commands in expected.items():
         assert len(commands[filename]) == len(expected_commands)
         for command, (label, issue_type) in zip(commands[filename], expected_commands, strict=True):
-            assert label in command
-            assert issue_type in command
+            assert _option_values(command, "--label") == [label]
+            assert _option_values(command, "--type") == [issue_type]
 
 
 def test_issue_forms_set_label_and_type_and_disable_blank_issues() -> None:
@@ -51,6 +57,11 @@ def test_issue_forms_set_label_and_type_and_disable_blank_issues() -> None:
         "feature_request.yml": ('labels: ["enhancement"]', "type: feature"),
         "task_request.yml": ('labels: ["enhancement"]', "type: task"),
     }
+    template_dir = ROOT / ".github/ISSUE_TEMPLATE"
+    form_files = {
+        path.name for path in template_dir.iterdir() if path.suffix in {".yml", ".yaml"} and path.name != "config.yml"
+    }
+    assert form_files == forms.keys()
     for filename, (label, issue_type) in forms.items():
         form = _read(f".github/ISSUE_TEMPLATE/{filename}")
         assert f"\n{label}\n" in form
@@ -84,3 +95,6 @@ def test_human_ticket_procedures_require_both_metadata_axes() -> None:
 
     refactor = _read(".agents/skills/request-refactor-plan/SKILL.md")
     assert "`gh issue create --label architecture --type Task`" in refactor
+
+    security = _read(".agents/skills/caveman-compress/SECURITY.md")
+    assert "label `security` and native type `Bug`" in security
