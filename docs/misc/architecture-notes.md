@@ -150,8 +150,8 @@ enum-valued `kind` plus `domain`/`raw` shape, and rejects (returns `NULL`) every
 alone is not proof (a truncated/corrupt line rejects too). A feed whose `.txt` predates the #1083 flip (a
 pkg-upgrade leftover, never redownloaded since) fails that check and is **never verbatim-reused**
 — the sync loop instead reparses from the existing `.orig` download cache via the same machinery a
-Reload uses (logged `Rebuild`). For an Enabled or Flex row, the loop refetches over the network
-when `.orig` itself is absent too. A Hold row never takes that network fallback: Hold means
+Reload uses (logged `Rebuild`). A Hold row never takes the missing-baseline network fallback:
+Hold means
 "download once, never again," so a missing baseline logs `Hold: staying held, no baseline to
 reparse`, preserves staging, and retries on a later pass. A rebuild that reparses `.orig` and finds
 ZERO domains (e.g. a corrupted/HTML-error-page
@@ -162,8 +162,8 @@ The stale-generation guard runs for every row state, but the missing-baseline ne
 honors Hold inside `sync_package_pfblockerng()`. Pinned live-VM
 (`tests/smoke/test_smoke_adr62.py`): `test_adr62_stale_generation_rebuild_hold_row_orig_present`
 (`.orig` present → byte-identical reuse, no refetch) and its
-Enabled `test_adr62_stale_generation_rebuild_orig_absent_triggers_download` sibling
-(`.orig` absent → genuine refetch); off-appliance reproduction:
+`test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging` sibling
+(`.orig` absent → no refetch, byte-identical stale staging preserved); off-appliance reproduction:
 `tests/php/DnsblStagingGenerationGuardTest.php`
 (`sync_package_pfblockerng()` itself has no PHPUnit harness, issue #993 — the zero-domain
 convergence is proven by driving the real guard functions through the loop's exact decision
