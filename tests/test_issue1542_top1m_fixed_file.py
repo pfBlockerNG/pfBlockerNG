@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 import json
 import os
+import subprocess
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,6 +13,8 @@ import pytest
 
 import pfb_unbound as P
 from tests.test_adr06_golden_oracle import _build_cfg, _decision_label
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _manifest(tmp_path: Path, *, enabled: bool = True) -> Path:
@@ -29,6 +32,64 @@ def _manifest(tmp_path: Path, *, enabled: bool = True) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def test_legacy_whitelist_reprocesses_to_python_exact_allow(tmp_path: Path) -> None:
+    (tmp_path / "top-1m.csv").write_text("1,LEGACY.COM\n", encoding="utf-8")
+    (tmp_path / "top-1m.csv.zip.orig").write_text("detector baseline\n", encoding="utf-8")
+    (tmp_path / "pfbalexawhitelist.txt").write_text(
+        ".legacy.com,,\n,legacy.com,,\n,www.legacy.com,,\n", encoding="utf-8"
+    )
+    php = r"""
+require 'tests/php/bootstrap.php';
+require_once 'src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+$dbdir = getenv('PFB_TOP1M_PROBE_DIR');
+mkdir($dbdir . '/dnsbl');
+$GLOBALS['pfb']['dbdir'] = $dbdir;
+$GLOBALS['pfb']['dnsdir'] = $dbdir . '/dnsbl';
+$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+$GLOBALS['pfb']['dnsbl_top1m_inc'] = 'com';
+$GLOBALS['pfb']['dnsbl_top1m_cnt'] = '1000';
+$GLOBALS['pfb']['dnsblconfig'] = ['tldblacklist' => '', 'tldexclusion' => '', 'suppression' => ''];
+$GLOBALS['pfb']['unbound_py_rawdir'] = $dbdir . '/raw';
+$GLOBALS['pfb']['unbound_py_sources'] = $dbdir . '/pfb_py_sources.json';
+$GLOBALS['pfb']['unbound_py_top1m'] = $dbdir . '/pfb_py_top1m.txt';
+$GLOBALS['pfb']['log'] = $dbdir . '/pfblockerng.log';
+$GLOBALS['pfb']['errlog'] = $dbdir . '/pfblockerng_error.log';
+$reprocess = pfb_top1m_reprocess_needed($dbdir);
+if ($reprocess) {
+    pfblockerng_top1m();
+    $published = pfb_unbound_python_sources([], ['top1m_atomic' => [
+        'chown' => static fn(string $file, string $owner): bool => TRUE,
+        'chgrp' => static fn(string $file, string $group): bool => TRUE,
+        'chmod' => static fn(string $file, int $mode): bool => TRUE,
+    ]]);
+    if ($published === FALSE) {
+        throw new RuntimeException('TOP1M fixed-file publication failed');
+    }
+}
+echo json_encode(['reprocess' => $reprocess], JSON_THROW_ON_ERROR);
+"""
+    env = os.environ.copy()
+    env["PFB_TOP1M_PROBE_DIR"] = str(tmp_path)
+    proc = subprocess.run(
+        ["php", "-r", php],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"reprocess": True}
+    assert (tmp_path / "pfbalexawhitelist.txt").read_bytes() == b"legacy.com\n"
+
+    result = P.dnsbl_build_from_manifest(str(_manifest(tmp_path)))
+    assert result is not None
+    assert result.white_db["legacy.com"]["wildcard"] is False
+    assert P.whitelist_check_domain("legacy.com", result.white_db, 1)
+    assert P.whitelist_check_domain("www.legacy.com", result.white_db, 1)
+    assert not P.whitelist_check_domain("deep.legacy.com", result.white_db, 1)
 
 
 def test_disabled_does_not_require_fixed_file(tmp_path: Path) -> None:
