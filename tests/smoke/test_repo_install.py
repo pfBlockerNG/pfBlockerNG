@@ -229,6 +229,22 @@ def _ssh_check(vm: SmokeVM, *remote: str, timeout: float = 180.0) -> subprocess.
     return result
 
 
+def _wait_for_pkg_quiescence(vm: SmokeVM, *, deadline_s: float = 120.0, poll_s: float = 1.0) -> None:
+    """Wait until pfSense's boot-time package work releases the shared pkg database."""
+    deadline = time.monotonic() + deadline_s
+    probe = "pgrep -x 'pkg|pkg-static|pfSense-upgrade' >/dev/null"
+    while True:
+        active = vm.ssh("/bin/sh", "-c", probe, timeout=30.0)
+        if active.returncode == 1:
+            return
+        if active.returncode != 0:
+            raise RuntimeError(f"package-manager probe failed: rc={active.returncode} {active.stderr!r}")
+        if time.monotonic() >= deadline:
+            processes = vm.ssh("ps", "axww", "-o", "pid,ppid,command", timeout=30.0)
+            raise RuntimeError(f"package manager still active after {deadline_s:g}s: {processes.stdout.strip()}")
+        time.sleep(poll_s)
+
+
 def build_guest_repo(vm: SmokeVM, repo_dir: str, pkg_files: list[Path]) -> None:
     """Lay ``pkg_files`` into a fresh ``repo_dir`` on the guest and ``pkg repo`` it.
 
@@ -683,6 +699,7 @@ def repo_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     assert pkg  # for the type-checker: pytest.skip above is NoReturn
     src = Path(pkg)
     _ensure_egress_open()
+    _wait_for_pkg_quiescence(smoke_vm)
     # Build BOTH catalogs from the same branch .pkg: ours and a controlled decoy that
     # serves the identical package, so the precedence cases compare two genuine
     # providers and the winner is decided purely by `priority:`.
