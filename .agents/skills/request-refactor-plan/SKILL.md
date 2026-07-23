@@ -19,7 +19,10 @@ This skill will be invoked when the user wants to create a refactor request. You
 
 7. Break the implementation into a plan of tiny commits. Remember Martin Fowler's advice to "make each refactoring step as small as possible, so that you can always see the program working."
 
-8. Create a GitHub issue with the refactor plan. Use the following template for the issue description:
+8. Create a GitHub issue with the refactor plan, the descriptive `architecture`
+   label, and native `Task` type
+   (`gh issue create --label architecture --type Task`). Use the following template
+   for the issue description:
 
 <refactor-plan-template>
 
