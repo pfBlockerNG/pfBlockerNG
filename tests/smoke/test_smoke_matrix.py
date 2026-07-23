@@ -490,7 +490,7 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
     # (b) Now put it on a DNSBL feed -> the SAME domain is now BLOCKED (VIP).
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlock.txt", f"{domain}\n")
     spec = h.DnsblCase(aliasname="smokeunlock", feed_url=feed_url, header="smokeunlock", mode=h.DnsblMode.VIP)
-    with h.DnsblCacheFlushEnabled(deployed_vm), h.CaseContext(deployed_vm, spec):
+    with h.CaseContext(deployed_vm, spec), h.DnsblCacheFlushEnabled(deployed_vm):
         h.unblock_egress()  # the allowed probes (a-shape) must reach the controlled stub
         # Listing the name is the feed/swap allow->block direction: the module already
         # mounted (a prior case), so first-enable applies via the no-restart swap. The
@@ -724,7 +724,7 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
     # No host override on the name — it would shadow the DNSBL block (served as
     # local-data before the python module); an allowed name resolves via the stub.
     spec = h.DnsblCase(aliasname="smokeunlocktmp", feed_url=feed_url, header="smokeunlocktmp", mode=h.DnsblMode.VIP)
-    with h.DnsblCacheFlushEnabled(deployed_vm), h.CaseContext(deployed_vm, spec):
+    with h.CaseContext(deployed_vm, spec), h.DnsblCacheFlushEnabled(deployed_vm):
         # Egress OPEN: the update path deadlocks under a dark egress, and the allowed
         # (unlock) probe must reach the controlled stub. The block probes return the VIP
         # locally, so there is no false-green from leaving egress open.
@@ -800,7 +800,7 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
     feed_name = "smoke_dnsbl_feedupd.txt"
     feed_url = h.write_local_feed(deployed_vm, feed_name, f"{other}\n")
     spec = h.DnsblCase(aliasname="smokefeedupd", feed_url=feed_url, header="smokefeedupd", mode=h.DnsblMode.VIP)
-    with h.DnsblCacheFlushEnabled(deployed_vm), h.CaseContext(deployed_vm, spec):
+    with h.CaseContext(deployed_vm, spec), h.DnsblCacheFlushEnabled(deployed_vm):
         h.unblock_egress()  # the allowed (before-state) probe must reach the controlled stub
 
         # BEFORE: the target is not on the feed yet -> it RESOLVES via the stub sentinel.
