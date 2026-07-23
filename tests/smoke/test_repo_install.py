@@ -548,7 +548,10 @@ def repo_priority(vm: SmokeVM, name: str, *, timeout: float = 60.0) -> int:
 def _pkg_retry(vm: SmokeVM, *remote: str, timeout: float) -> subprocess.CompletedProcess[str]:
     """Retry a pkg operation while another pkg process owns its SQLite database."""
     deadline = time.monotonic() + timeout
-    result = vm.ssh(*remote, timeout=deadline - time.monotonic())
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired(remote, timeout)
+    result = vm.ssh(*remote, timeout=remaining)
     while result.returncode != 0 and any(
         message in result.stdout + result.stderr
         for message in ("Waiting for another process to update repository", "database is locked")
