@@ -319,7 +319,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
 		$this->assertStringNotContainsString('stale.com', $got, 'the stale build must be replaced, not appended to');
-		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got);
+		$this->assertSame("example.com\n", $got);
 		$this->assertSame([], $this->tempFilesLeftBehind(), 'no temp build file left behind');
 		$this->assertStringContainsString('Parsed 3 lines | Found 1 of 1000', $this->readMainLog());
 	}
@@ -345,7 +345,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
 		$this->assertStringNotContainsString('stale.com', $got, 'a valid small-count feed must replace the stale whitelist');
-		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got);
+		$this->assertSame("example.com\n", $got);
 		$this->assertStringNotContainsString('keeping the previous TOP1M whitelist', $this->readErrLog(),
 			'a valid feed must NOT emit the dead-feed warning');
 		$this->assertStringContainsString('Parsed 1 lines | Found 1 of 1', $this->readMainLog());
@@ -399,7 +399,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		// matched nothing).
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
-		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
+		$this->assertSame("example.com\n", $got,
 			'the domain must come from domain_col (index 2), and the header row must not count as data');
 		$this->assertStringContainsString('Parsed 1 lines | Found 1 of 1000', $this->readMainLog());
 	}
@@ -454,7 +454,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 
 		// Then (GREEN): both real domains are correctly extracted from index 2.
 		$this->assertSame(
-			".google.com,,\n,google.com,,\n,www.google.com,,\n.facebook.com,,\n,facebook.com,,\n,www.facebook.com,,\n",
+			"google.com\nfacebook.com\n",
 			file_get_contents($this->whitelistPath()),
 			'the registered Majestic descriptor must extract Domain from index 2'
 		);
@@ -519,8 +519,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		// Then (GREEN): both real domains are correctly extracted from index 1
 		// ('www.' stripped per the existing whitelist-building convention).
 		$this->assertSame(
-			".facebook.com,,\n,facebook.com,,\n,www.facebook.com,,\n"
-			. ".fonts.googleapis.com,,\n,fonts.googleapis.com,,\n,www.fonts.googleapis.com,,\n",
+			"facebook.com\nfonts.googleapis.com\n",
 			file_get_contents($this->whitelistPath()),
 			'the registered OpenPageRank descriptor must extract Domain from index 1'
 		);
@@ -560,7 +559,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		// Then: both real domains are correctly extracted from the single column despite
 		// carrying no comma -- proves the comma-requirement relaxation for domain_col 0.
 		$this->assertSame(
-			".google.com,,\n,google.com,,\n,www.google.com,,\n.facebook.com,,\n,facebook.com,,\n,www.facebook.com,,\n",
+			"google.com\nfacebook.com\n",
 			file_get_contents($this->whitelistPath()),
 			'the registered Cloudflare descriptor must extract the single-column domain despite no comma in the data'
 		);
@@ -723,7 +722,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		// Then: the punycode-TLD row is counted as valid data and whitelisted
 		// -- not silently dropped by the final-label guard.
 		$this->assertSame(
-			".example.xn--p1ai,,\n,example.xn--p1ai,,\n,www.example.xn--p1ai,,\n",
+			"example.xn--p1ai\n",
 			file_get_contents($this->whitelistPath()),
 			'a punycode TLD (xn--p1ai) row must be accepted by the csv-mode hostname guard, not dropped'
 		);
@@ -925,7 +924,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		// Then: the punycode-TLD row is counted as valid data and whitelisted -- not
 		// wrongly dropped by the newly-applied hostname-shape guard.
 		$this->assertSame(
-			".example.xn--p1ai,,\n,example.xn--p1ai,,\n,www.example.xn--p1ai,,\n",
+			"example.xn--p1ai\n",
 			file_get_contents($this->whitelistPath()),
 			'a punycode TLD (xn--p1ai) rank_domain row must be accepted by the hostname-shape guard, not dropped'
 		);

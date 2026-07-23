@@ -34,7 +34,7 @@ def test_enabled_multibyte_final_line_without_newline_consumes_exact_bytes(tmp_p
 
     result = P.dnsbl_build_from_manifest(str(manifest))
     assert result is not None
-    assert set(result.white_db) == {"éxample.test", "last.example"}
+    assert set(result.white_db) == {"last.example"}
 
 
 def test_enabled_uses_bounded_prepass_and_streaming_iterator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

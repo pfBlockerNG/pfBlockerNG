@@ -130,7 +130,7 @@ final class Top1mTldCaseFoldTest extends TestCase
 
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
-		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
+		$this->assertSame("example.com\n", $got,
 			'an uppercase domain must fold to lowercase before the TLD compare and the write');
 	}
 
@@ -148,7 +148,7 @@ final class Top1mTldCaseFoldTest extends TestCase
 
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
-		$this->assertSame(".example.xn--p1ai,,\n,example.xn--p1ai,,\n,www.example.xn--p1ai,,\n", $got,
+		$this->assertSame("example.xn--p1ai\n", $got,
 			'a mixed-case punycode TLD must fold to lowercase before the TLD compare');
 	}
 
@@ -165,7 +165,7 @@ final class Top1mTldCaseFoldTest extends TestCase
 
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
-		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
+		$this->assertSame("example.com\n", $got,
 			"the 'www.' strip must run against the FOLDED domain, not the raw uppercase value");
 	}
 
@@ -201,7 +201,7 @@ final class Top1mTldCaseFoldTest extends TestCase
 
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
-		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
+		$this->assertSame("example.com\n", $got,
 			'an already-lowercase domain must match exactly as before -- no regression from the fold');
 	}
 
@@ -223,7 +223,7 @@ final class Top1mTldCaseFoldTest extends TestCase
 
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
-		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
+		$this->assertSame("example.com\n", $got,
 			'domain_col 0 (real Cloudflare descriptor) must fold an uppercase single-column domain the same as every other column shape');
 	}
 
@@ -299,7 +299,7 @@ final class Top1mTldCaseFoldTest extends TestCase
 
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
-		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
+		$this->assertSame("example.com\n", $got,
 			'an uppercase Domain field at domain_col 1 (real OpenPageRank descriptor) must still fold and match');
 	}
 
@@ -318,7 +318,7 @@ final class Top1mTldCaseFoldTest extends TestCase
 
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
-		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
+		$this->assertSame("example.com\n", $got,
 			'a mixed-case Domain field at a non-default column (Majestic, index 2) must still fold and match');
 	}
 }

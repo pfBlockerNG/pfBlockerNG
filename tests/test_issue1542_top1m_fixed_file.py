@@ -11,6 +11,7 @@ from typing import Any, Literal
 import pytest
 
 import pfb_unbound as P
+from tests.test_adr06_golden_oracle import _build_cfg, _decision_label
 
 
 def _manifest(tmp_path: Path, *, enabled: bool = True) -> Path:
@@ -38,11 +39,76 @@ def test_disabled_does_not_require_fixed_file(tmp_path: Path) -> None:
 
 def test_enabled_streams_fixed_file_with_crlf_blanks_and_first_writer_duplicates(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
-    (tmp_path / "pfb_py_top1m.txt").write_bytes(b"first.example\r\n\r\n second.example \r\nfirst.example\r\n")
+    (tmp_path / "pfb_py_top1m.txt").write_bytes(b"first.example\r\n\r\n SECOND.EXAMPLE \r\nfirst.example\r\n")
     result = P.dnsbl_build_from_manifest(str(manifest))
     assert result is not None
     assert set(result.white_db) == {"first.example", "second.example"}
     assert result.white_db["first.example"]["important"] is True
+
+
+@pytest.mark.parametrize("legacy", [".legacy.example,,\n", ",legacy.example,,\n", ",www.legacy.example,,\n"])
+def test_enabled_rejects_retired_comma_framed_top1m_lines(tmp_path: Path, legacy: str) -> None:
+    manifest = _manifest(tmp_path)
+    (tmp_path / "pfb_py_top1m.txt").write_text(legacy, encoding="utf-8")
+
+    result = P.dnsbl_build_from_manifest(str(manifest))
+
+    assert result is not None
+    assert result.white_db == {}, f"retired TOP1M record became a whitelist key: {result.white_db!r}"
+    assert all("," not in key for key in result.white_db)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "dotless\n",
+        "a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 63 + ".com\n",
+    ],
+)
+def test_enabled_rejects_invalid_top1m_domain_shape_and_wire_cap(tmp_path: Path, invalid: str) -> None:
+    manifest = _manifest(tmp_path)
+    (tmp_path / "pfb_py_top1m.txt").write_text(invalid, encoding="utf-8")
+
+    result = P.dnsbl_build_from_manifest(str(manifest))
+
+    assert result is not None
+    assert result.white_db == {}
+
+
+def test_enabled_top1m_is_exact_allow_with_www_fallback_not_deeper_wildcard(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    (tmp_path / "feed.raw").write_text("blocked.example\nwww.blocked.example\n", encoding="utf-8")
+    (tmp_path / "pfb_py_top1m.txt").write_text("blocked.example\nblocked.example\n", encoding="utf-8")
+
+    result = P.dnsbl_build_from_manifest(str(manifest))
+
+    assert result is not None
+    assert result.white_db["blocked.example"]["wildcard"] is False
+    assert P.whitelist_check_domain("blocked.example", result.white_db, 1)
+    assert P.whitelist_check_domain("www.blocked.example", result.white_db, 1)
+    assert not P.whitelist_check_domain("deep.blocked.example", result.white_db, 1)
+
+    containers = {
+        "dataDB": result.data_db,
+        "zoneDB": result.zone_db,
+        "whiteDB": result.white_db,
+        "regexDB": {},
+        "feedGroupIndexDB": result.feed_group_index_db,
+        "hstsDB": {},
+    }
+    cfg = _build_cfg({}, has_white=True)
+    assert (
+        _decision_label(P.evaluate_domain("blocked.example", "blocked.example", "example", False, cfg, containers))
+        == "whitelist"
+    )
+    assert (
+        _decision_label(
+            P.evaluate_domain("www.blocked.example", "www.blocked.example", "example", False, cfg, containers)
+        )
+        == "whitelist"
+    )
+    deep_decision = P.evaluate_domain("deep.blocked.example", "deep.blocked.example", "example", False, cfg, containers)
+    assert deep_decision.in_whitelist is False
 
 
 @pytest.mark.parametrize("kind", ["missing", "directory", "unreadable"])
