@@ -1009,7 +1009,7 @@ def test_reorder_composition_add_delete_field_edit_then_save_persists_all(
         )
 
         # EDIT a field: the row holding 'a' (names[0]) gets a new header value.
-        edited_value = f"{names[0]}-edited"
+        edited_value = f"{names[0]}_edited"
         page.locator(f"#sourcedefinitions .panel-body input[value='{names[0]}']").fill(edited_value)
 
         # DELETE the row holding 'b' (names[1]) via core's delete button. Locate by
