@@ -2090,6 +2090,18 @@ def test_corrupt_group_actions_render_repairably(
         assert not restore_errors, f"corrupt-action fixture restore failed: {restore_errors}"
 
 
+# The V4 wizard submit path reads the shipped legacy feed catalog directly. This source
+# assertion lives in the Tier-A module because step4_submitphpaction() is a POST-only path
+# that the authenticated GET sweep cannot execute.
+def test_wizard_uses_legacy_feed_catalog() -> None:
+    """Keep V5's normalized registry out of the V4 setup-wizard submit path."""
+    source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/wizards/pfblockerng_wizard.inc"
+    source = source_path.read_text(encoding="utf-8")
+
+    assert "json_decode(@file_get_contents(\"{$pfb['feeds']}\"), TRUE)" in source
+    assert "PfbRegistry::" not in source
+
+
 # ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP
 # toggle. Core wizard.php renders ONE step per GET, indexed by a 0-based `stepid` (verified
 # against pfSense upstream wizard.php: `$stepid` defaults to "0" and indexes $pkg['step']
