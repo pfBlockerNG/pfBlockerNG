@@ -39,14 +39,10 @@ final class FeedsDiscontinuedTest extends TestCase
 		$feeds = $this->loadFeeds();
 
 		$alienvault = NULL;
-		foreach ($feeds['feeds'] ?? [] as $feed) {
-			foreach ($feed['legacy_locators'] ?? [] as $locator) {
-				if (($locator['legacy_type'] ?? '') === 'ipv4'
-					&& ($locator['legacy_category'] ?? '') === 'PRI2'
-					&& ($locator['legacy_header'] ?? '') === 'Alienvault') {
-					$alienvault = $feed;
-					break 2;
-				}
+		foreach ($feeds['ipv4']['PRI2']['feeds'] as $feed) {
+			if (($feed['feed'] ?? '') === 'Alienvault') {
+				$alienvault = $feed;
+				break;
 			}
 		}
 

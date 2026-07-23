@@ -145,12 +145,8 @@ function step4_submitphpaction() {
 	pfb_wizard_skip_check();
 
 	// Load all pfBlockerNG Feeds
-	try {
-		$feed_info_raw = PfbRegistry::legacyCatalog(PfbRegistry::catalog($pfb['feeds']));
-	} catch (PfbRegistryException $exception) {
-		$feed_info_raw = NULL;
-	}
-	if (!is_array($feed_info_raw)) {
+	$feed_info_raw = json_decode(@file_get_contents("{$pfb['feeds']}"), TRUE);
+	if (json_last_error() !== JSON_ERROR_NONE || !is_array($feed_info_raw)) {
 		$input_errors[] = 'pfBlockerNG: Feeds database missing. Cannot continue - Reinstall package.';
 		return;
 	}
@@ -231,7 +227,6 @@ ZXRnYXRlLmNvbQ0K
 	}
 
 	// Selected Alias/Groups to add to default installation
-	$feed_info_raw = PfbRegistry::legacyCatalog(PfbRegistry::catalog($pfb['feeds']));
 	$new = array();
 	$new['pfblockernglistsv4']		= $new['pfblockerngdnsbl'] = array();
 	$new['pfblockernglistsv4']['PRI1']	= $feed_info_raw['ipv4']['PRI1'];
