@@ -85,18 +85,21 @@ function pfb_top1m_reprocess_needed(string $dbdir): bool {
 	}
 
 	$whitelist = "{$dbdir}/pfbalexawhitelist.txt";
-	if (!file_exists($whitelist) || file_exists("{$dbdir}/top-1m.update")) {
+	if ((!file_exists($whitelist) && !is_link($whitelist)) || file_exists("{$dbdir}/top-1m.update")) {
 		return TRUE;
+	}
+	if (is_link($whitelist) || !is_file($whitelist)) {
+		return FALSE;
 	}
 
 	$handle = @fopen($whitelist, 'r');
 	if ($handle === FALSE) {
 		return FALSE;
 	}
-	$first_line = @fgets($handle);
+	$first_byte = @fread($handle, 1);
 	@fclose($handle);
 
-	return $first_line !== FALSE && str_contains($first_line, ',,');
+	return $first_byte === '.';
 }
 
 /** Record the manifest publication outcome without logging a false completion. */
