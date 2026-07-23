@@ -19,8 +19,8 @@ class _LockedVM:
 @pytest.mark.parametrize(
     ("ticks", "expected_sleeps"),
     [
-        ((0.0, 5.0), []),
-        ((0.0, 0.0, 5.0), [1.0]),
+        ((0.0, 0.0, 5.0), []),
+        ((0.0, 0.0, 0.0, 5.0), [1.0]),
     ],
 )
 def test_pkg_lock_retry_stops_at_deadline(
