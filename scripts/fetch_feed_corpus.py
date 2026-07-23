@@ -83,32 +83,6 @@ def _walk(node: object, section: str, out: list[dict[str, str]]) -> None:
             _walk(item, section, out)
 
 
-def _catalog_entries(catalogue: dict[str, object]) -> list[dict[str, str]]:
-    """Return one corpus entry per retained legacy feed locator."""
-    feeds = catalogue.get("feeds")
-    if isinstance(feeds, list):
-        entries: list[dict[str, str]] = []
-        for feed in feeds:
-            if not isinstance(feed, dict) or not isinstance(feed.get("latest_url"), str):
-                continue
-            locators = feed.get("legacy_locators")
-            if not isinstance(locators, list):
-                continue
-            for locator in locators:
-                if not isinstance(locator, dict):
-                    continue
-                section = locator.get("legacy_type")
-                header = locator.get("legacy_header")
-                if isinstance(section, str) and isinstance(header, str):
-                    entries.append({"section": section, "header": header, "url": feed["latest_url"]})
-        return entries
-
-    entries = []
-    for section in ("ipv4", "ipv6", "dnsbl"):
-        _walk(catalogue.get(section, {}), section, entries)
-    return entries
-
-
 def _fetch_sample(url: str) -> tuple[int, str, bytes]:
     req = urllib.request.Request(
         url,
@@ -122,7 +96,9 @@ def _fetch_sample(url: str) -> tuple[int, str, bytes]:
 
 def main() -> int:
     catalogue = json.loads(FEEDS_JSON.read_text())
-    entries = _catalog_entries(catalogue)
+    entries: list[dict[str, str]] = []
+    for section in ("ipv4", "ipv6", "dnsbl"):
+        _walk(catalogue.get(section, {}), section, entries)
 
     # Wipe first so regeneration is idempotent: a header renamed/removed in the catalogue
     # must not leave its stale sample orphaned on disk (the manifest would no longer name
