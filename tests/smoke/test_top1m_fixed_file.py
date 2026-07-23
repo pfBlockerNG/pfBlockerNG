@@ -417,30 +417,6 @@ def _complete_detector_sidecars(vm: SmokeVM) -> dict:
     )
 
 
-def _activate_domain_only_top1m(vm: SmokeVM, domain: str) -> dict:
-    """Publish one reader-valid domain and wait for the shipped watcher to apply it."""
-    body = f"{domain}\n"
-    return _json_eval(
-        vm,
-        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
-        "pfb_global();\n"
-        f"$fixture = {h._php_str(TEMP_PATHS[0])};\n"
-        f"$body = {h._php_str(body)};\n"
-        "$staged = @file_put_contents($fixture, $body, LOCK_EX) !== FALSE;\n"
-        f"$published = $staged && pfb_unbound_py_atomic_copy($fixture, '{TOP1M_FIXED}');\n"
-        "@unlink($fixture);\n"
-        "$generation = $published ? pfb_unbound_py_flip_sentinel() : FALSE;\n"
-        "$applied = is_int($generation) && pfb_unbound_py_wait_applied($generation, 60);\n"
-        "$out = array(\n"
-        "  'staged' => $staged, 'published' => $published, 'applied' => $applied,\n"
-        "  'generation' => $generation,\n"
-        f"  'fixed_regular' => is_file('{TOP1M_FIXED}') && !is_link('{TOP1M_FIXED}'),\n"
-        f"  'fixed_bytes' => @file_get_contents('{TOP1M_FIXED}'),\n"
-        ");",
-        "PFB1542READER",
-    )
-
-
 def _assert_vip(vm: SmokeVM, domain: str, stage: str) -> None:
     answer = h.dns_probe(vm, domain, "A")
     assert h.is_vip(answer), f"{stage}: {domain} should resolve to DNSBL VIP; got {answer}"
@@ -496,24 +472,14 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     first = _publication_state(vm)
     assert first["fixed_regular"], f"publisher did not create regular {TOP1M_FIXED}: {first!r}"
     assert first["fixed_bytes"] == first["whitelist_bytes"], "fixed file did not preserve publisher bytes"
+    assert first["fixed_bytes"] == f"{allowed}\n", f"TOP1M publisher did not emit canonical bytes: {first!r}"
     assert first["top1m_enabled"] is True
     assert first["top1m_keys"] == ["top1m_enabled"], f"manifest embeds retired TOP1M fields: {first!r}"
     assert allowed not in first["manifest_raw"], "manifest embeds TOP1M domain data instead of naming the fixed file"
     assert first["raw_identity"] is not None and first["raw_dir_identity"] is not None
 
-    # The legacy PHP generator currently comma-frames whitelist rows.  That is a
-    # separate pre-existing defect (#1569): preserve the publisher bytes above, then feed
-    # this change's stable-path reader the domain-only format it accepts.
-    reader_first = _activate_domain_only_top1m(vm, allowed)
-    reader_first_generation = reader_first.pop("generation")
+    reader_first_generation = first["reload_generation"]
     assert isinstance(reader_first_generation, int) and reader_first_generation > 0
-    assert reader_first == {
-        "staged": True,
-        "published": True,
-        "applied": True,
-        "fixed_regular": True,
-        "fixed_bytes": f"{allowed}\n",
-    }, reader_first
 
     h.flush_unbound_name(vm, allowed)
     _assert_stub_once(vm, allowed, "TOP1M allow")
@@ -540,16 +506,9 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     assert second["raw_dir_identity"] == first["raw_dir_identity"], "TOP1M-only update replaced unrelated generation"
     assert h.unbound_pid(vm) == pid_before, "TOP1M-only data change restarted Unbound instead of swapping"
 
-    reader_second = _activate_domain_only_top1m(vm, replacement)
-    reader_second_generation = reader_second.pop("generation")
+    assert second["fixed_bytes"] == f"{replacement}\n", f"replacement TOP1M bytes not canonical: {second!r}"
+    reader_second_generation = second["reload_generation"]
     assert isinstance(reader_second_generation, int)
-    assert reader_second == {
-        "staged": True,
-        "published": True,
-        "applied": True,
-        "fixed_regular": True,
-        "fixed_bytes": f"{replacement}\n",
-    }, reader_second
     assert reader_second_generation > reader_first_generation
 
     h.flush_unbound_name(vm, allowed)
