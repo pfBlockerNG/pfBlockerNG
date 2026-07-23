@@ -5,6 +5,81 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
+final class Top1mChangingSourceStream
+{
+	public $context;
+	public static int $opens = 0;
+	private string $bytes = '';
+	private int $offset = 0;
+
+	public static function reset(): void
+	{
+		self::$opens = 0;
+	}
+
+	public function stream_open(string $path, string $mode, int $options, ?string &$opened_path): bool
+	{
+		self::$opens++;
+		$this->bytes = self::$opens === 1
+			? "canonical.example\n"
+			: ".legacy.example,,\n,legacy.example,,\n,www.legacy.example,,\n";
+		$this->offset = 0;
+		return TRUE;
+	}
+
+	public function stream_read(int $count): string
+	{
+		$bytes = substr($this->bytes, $this->offset, $count);
+		$this->offset += strlen($bytes);
+		return $bytes;
+	}
+
+	public function stream_eof(): bool
+	{
+		return $this->offset >= strlen($this->bytes);
+	}
+
+	public function stream_seek(int $offset, int $whence=SEEK_SET): bool
+	{
+		$next = match ($whence) {
+			SEEK_SET => $offset,
+			SEEK_CUR => $this->offset + $offset,
+			SEEK_END => strlen($this->bytes) + $offset,
+			default => -1,
+		};
+		if ($next < 0 || $next > strlen($this->bytes)) {
+			return FALSE;
+		}
+		$this->offset = $next;
+		return TRUE;
+	}
+
+	public function stream_tell(): int
+	{
+		return $this->offset;
+	}
+
+	public function stream_stat(): array
+	{
+		return self::regularStat(strlen($this->bytes));
+	}
+
+	public function url_stat(string $path, int $flags): array
+	{
+		return self::regularStat(strlen("canonical.example\n"));
+	}
+
+	private static function regularStat(int $size): array
+	{
+		return [
+			2 => 0100644,
+			7 => $size,
+			'mode' => 0100644,
+			'size' => $size,
+		];
+	}
+}
+
 /** Issue #1542: TOP1M is a fixed sidecar file, not manifest-embedded data. */
 final class Top1mFixedFileManifestTest extends TestCase
 {
@@ -66,6 +141,27 @@ final class Top1mFixedFileManifestTest extends TestCase
 		$this->assertArrayNotHasKey('top1m_list', $manifest['config']);
 		$this->assertSame($source, file_get_contents($GLOBALS['pfb']['unbound_py_top1m']));
 		$this->assertFileExists($GLOBALS['pfb']['unbound_py_sources']);
+	}
+
+	public function testCanonicalPublicationUsesTheClassifiedSourceSnapshot(): void
+	{
+		$scheme = 'pfbtop1mrace';
+		$this->assertTrue(stream_wrapper_register($scheme, Top1mChangingSourceStream::class));
+		Top1mChangingSourceStream::reset();
+		$target = "{$this->tmp}/classified.txt";
+		try {
+			$result = pfb_unbound_py_top1m_atomic_copy(
+				"{$scheme}://source",
+				$target,
+				$this->successfulOwnershipOps()
+			);
+		} finally {
+			$this->assertTrue(stream_wrapper_unregister($scheme));
+		}
+
+		$this->assertTrue($result);
+		$this->assertSame(1, Top1mChangingSourceStream::$opens);
+		$this->assertSame("canonical.example\n", file_get_contents($target));
 	}
 
 	public static function legacyProjectionCases(): array
