@@ -28,7 +28,7 @@ NDJSON interchange format (issues #1083/#1177): per-feed staging '.txt' files us
 tagged NDJSON; translated '.raw' files remain plain domain/ABP lines
 (docs/misc/architecture-notes.md "DNSBL interchange format").
 test_adr62_stale_generation_rebuild_hold_row_orig_present pins a Held row's local
-rebuild-from-'.orig' path; its Enabled, '.orig'-absent sibling pins the network fallback.
+rebuild-from-'.orig' path; its '.orig'-absent sibling pins Hold's no-refetch fallback.
 A pre-#1083 '.txt' is never verbatim-reused in either case.
 
 These need the booted ``smoke_vm`` fixture, the branch ``.pkg`` (``SMOKE_PKG``), and
@@ -510,9 +510,9 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
 # a pkg upgrade is NEVER verbatim-reused: pfb_dnsbl_staging_is_current_generation
 # rejects it, and the sync loop rebuilds from '.orig' via the same machinery a
 # Reload uses. The first row is Held with '.orig' present, proving the rebuild
-# stays local. The second remains Enabled and removes '.orig', proving the
-# network fallback; Hold intentionally never refetches when its baseline is
-# missing (issue #1278). Both stage the exact #1083/#1105 old-dialect mix: a
+# stays local. The second remains Held and removes '.orig', proving that Hold
+# preserves stale staging rather than refetching when its baseline is missing
+# (issue #1278). Both stage the exact #1083/#1105 old-dialect mix: a
 # 6-col CSV line plus a bare-domain line (the shape a comma-less verbatim-ABP
 # line took pre-#1083 — issue #1105) so a regression that drops the bare line on
 # rebuild is caught here.
@@ -630,21 +630,20 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
 
 
 @pytest.mark.timeout(300)
-def test_adr62_stale_generation_rebuild_orig_absent_triggers_download(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """#1083 stale-generation rebuild: with '.orig' absent, the rebuild fork downloads fresh.
+def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
+    deployed_vm: SmokeVM, client_vm: SmokeVM
+) -> None:
+    """#1083 stale-generation rebuild: Hold with no '.orig' preserves staging without refetch.
 
-    Given the SAME stale-'.txt' setup as the '.orig'-present sibling case, but
-      with the row left Enabled and '.orig' removed before the pass (a download
-      cache that never existed, or was purged, alongside a stale pre-#1083
-      '.txt'). Hold is intentionally excluded: its "download once, never again"
-      contract must not refetch a missing baseline (issue #1278).
+    Given the SAME Held-row + stale-'.txt' setup as the '.orig'-present sibling
+      case, except '.orig' is removed before the pass (a download cache that was
+      purged alongside a stale pre-#1083 '.txt').
     When the cron pass runs and the staging-generation guard rejects the stale
       '.txt' the same way,
-    Then a NEW 'Rebuild' log line appears for the header, '.orig' — ABSENT
-      beforehand — is genuinely refetched (present afterwards: the rebuild fork
-      falls back to a real download when there is nothing in the cache to
-      reuse), the rebuilt '.txt' is NDJSON, and both domains from the live feed
-      are blocked.
+    Then a NEW 'Rebuild' plus 'Hold: staying held, no baseline to reparse' log
+      appears for the header, '.orig' remains absent, and the stale '.txt'
+      remains BYTE-IDENTICAL. The sibling still updates, proving the pass ran;
+      the Held row never reaches outside for a missing baseline.
     """
     header = "adr62rebuildb"
     sib_header = "adr62rebuildbsib"
@@ -680,13 +679,17 @@ def test_adr62_stale_generation_rebuild_orig_absent_triggers_download(deployed_v
             ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
             assert not h.resolves_to(ans, STUB_DNS_A), f"baseline domain {name} still resolving: {ans}"
 
+        _set_dnsbl_row_state(deployed_vm, header, "Hold")
+
         deployed_vm.ssh("/bin/rm", "-f", orig_path)
         orig_gone = deployed_vm.ssh("/bin/test", "-e", orig_path)
         assert orig_gone.returncode != 0, f"test setup failed: '.orig' {orig_path} still present after rm"
 
         rebuild_before = _feed_log_count(deployed_vm, header, "Rebuild")
+        hold_skip_before = _feed_log_count(deployed_vm, header, "Hold: staying held, no baseline to reparse")
 
-        h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", f",{domain_csv},,1,{header},{header}\n{domain_bare}\n")
+        stale_txt = f",{domain_csv},,1,{header},{header}\n{domain_bare}\n"
+        h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", stale_txt)
         h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
 
         pinned_hour = h.pin_cron_due(deployed_vm)
@@ -702,26 +705,25 @@ def test_adr62_stale_generation_rebuild_orig_absent_triggers_download(deployed_v
             f"expected a NEW 'Rebuild' log line for {header} (before={rebuild_before}, after={rebuild_after})"
         )
 
+        hold_skip_after = _feed_log_count(deployed_vm, header, "Hold: staying held, no baseline to reparse")
+        assert hold_skip_after > hold_skip_before, (
+            f"expected a NEW Hold missing-baseline skip for {header} "
+            f"(before={hold_skip_before}, after={hold_skip_after})"
+        )
+
         orig_now = deployed_vm.ssh("/bin/test", "-e", orig_path)
-        assert orig_now.returncode == 0, (
-            f"'.orig' {orig_path} still absent after the rebuild pass — the no-cache fallback should have refetched it"
+        assert orig_now.returncode != 0, (
+            f"'.orig' {orig_path} reappeared after a Held missing-baseline pass — Hold must not refetch"
         )
 
         txt_content = deployed_vm.ssh("cat", txt_path)
-        assert txt_content.returncode == 0 and txt_content.stdout.startswith('["d",'), (
-            f"rebuilt staging {txt_path} does not start with compact domain NDJSON: {txt_content.stdout[:80]!r}"
+        assert txt_content.returncode == 0 and txt_content.stdout == stale_txt, (
+            f"Held staging changed despite missing '.orig': expected={stale_txt!r} actual={txt_content.stdout!r}"
         )
 
         h.flush_unbound_name(deployed_vm, sib2_domain)
         ans_sib2 = h.dns_probe_client_until(client_vm, sib2_domain, h.is_vip)
         assert not h.resolves_to(ans_sib2, STUB_DNS_A), f"sibling {sib2_domain} not re-ingested: {ans_sib2}"
-
-        for name in (domain_csv, domain_bare):
-            h.flush_unbound_name(deployed_vm, name)
-            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
-            assert not h.resolves_to(ans, STUB_DNS_A), (
-                f"{name} not blocked after the no-cache rebuild (fresh download + reparse): {ans}"
-            )
 
 
 # --------------------------------------------------------------------------- #
