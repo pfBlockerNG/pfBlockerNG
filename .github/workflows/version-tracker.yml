@@ -401,6 +401,7 @@ jobs:
               --title "$TITLE" \
               --body-file "$BODY_FILE" \
               --label "version-tracker,enhancement" \
+              --type Task \
               || echo "  ::warning::Could not open nudge issue for ${CHANNEL} ${VERSION}"
             rm -f "$BODY_FILE"
           done
@@ -481,6 +482,7 @@ jobs:
                 --title "$TITLE" \
                 --body-file "$BODY_FILE" \
                 --label "version-tracker,enhancement" \
+                --type Task \
                 || echo "  ::warning::Could not create tracking issue for ${CHANNEL} ${VERSION}"
             fi
             rm -f "$BODY_FILE"
