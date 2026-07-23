@@ -46,7 +46,8 @@ Keep as a single issue when:
 
 ### 4. File the GitHub issue(s)
 
-Create issues with `gh issue create`. Do NOT ask the user to review first — just file and share URLs.
+Create bugs with `gh issue create --label bug --type Bug`. Do NOT ask the user to
+review first — just file and share URLs.
 
 Issues must be **durable** — they should still make sense after major refactors. Write from the user's perspective.
 

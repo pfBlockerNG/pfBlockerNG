@@ -31,6 +31,24 @@ string-typed sink — the array-`$_POST` family: #1070/#1106/#1128/#1139) gets i
 is linked as a sub-issue of tracker #1143 (GraphQL `addSubIssue`); never fold it into an older
 issue. HARDENING-ONLY findings do not become tracker children.
 
+## Classification at creation
+
+Every issue creation path — human, agent, issue form, or automation — sets both:
+
+1. at least one descriptive label appropriate to the work (`bug`, `enhancement`,
+   `documentation`, `CI`, `wayfinder:*`, etc.); and
+2. exactly one native GitHub issue type, chosen from this table:
+
+| Issue type | Use for |
+| --- | --- |
+| `Bug` | Unexpected or regressed existing behaviour, including defects in CI tooling |
+| `Feature` | A new user-facing capability |
+| `Task` | Improvements to existing behaviour; implementation slices; maintenance, testing, CI, documentation, research, and process work |
+
+Labels remain orthogonal metadata and are never replaced by the type. When categories
+overlap, a defect is `Bug`; otherwise an improvement is `Task`, not `Feature`. Set both
+at creation (`gh issue create --label bug --type Bug`), not as a later cleanup pass.
+
 ## Issue state (lifecycle — native signals, #1388)
 
 Native GitHub signals replace the retired `WIP`/`Waiting PR` labels (adopted 2026-07-17 from

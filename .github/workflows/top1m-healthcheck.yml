@@ -202,5 +202,6 @@ jobs:
               --repo "$REPO" \
               --title "$TITLE" \
               --body-file "${{ steps.report.outputs.body_file }}" \
-              --label "top1m-provider,bug"
+              --label "top1m-provider,bug" \
+              --type Bug
           fi

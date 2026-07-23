@@ -24,7 +24,7 @@
 
 ### Map
 
-An issue labelled `wayfinder:map` with sections **Destination**, **Notes**,
+An issue labelled `wayfinder:map` and typed `Task`, with sections **Destination**, **Notes**,
 **Decisions so far**, **Not yet specified** (the fog), **Out of scope**. Tickets are
 native sub-issues. The body is edited in place as current truth; each resolved ticket
 appends one pointer line to Decisions so far.
@@ -39,8 +39,9 @@ implementable — the forks are tickets.
 
 ### Task packet
 
-The issue body IS the packet: a fresh session must be able to execute from it plus its
-linked references alone. Required fields:
+The issue body IS the packet, and the issue carries both its descriptive label(s) and
+the native type defined by `issues.md`. A fresh session must be able to execute from it
+plus its linked references alone. Required fields:
 
 - **Objective** — the one outcome.
 - **Required reading** — `file:line` and doc pointers (bootstrap routing rows), never
