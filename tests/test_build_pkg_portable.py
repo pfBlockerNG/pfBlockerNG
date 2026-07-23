@@ -303,6 +303,82 @@ def test_recipe_install_modes_mv_sed(tmp_path: Path) -> None:
     assert (stage / "usr/local/etc/tpl.xml").read_text() == "v=9.9\n"  # reinplace applied to staged file
 
 
+def test_recipe_copytree_share_then_script_glob_preserves_payload_and_modes(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    (src / "usr/local/pkg/app").mkdir(parents=True)
+    (src / "usr/local/pkg/app/app.inc").write_text("<?php\n")
+    (src / "usr/local/pkg/app/helper.sh").write_text("#!/bin/sh\n")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+
+    mk = make_mk(
+        tmp_path,
+        (
+            f"WRKSRC=\t{src}\nSTAGEDIR=\t{stage}\nPREFIX=\t/usr/local\n"
+            "do-install:\n"
+            "\t(cd ${WRKSRC} && ${COPYTREE_SHARE} . ${STAGEDIR})\n"
+            "\t${INSTALL_SCRIPT} ${WRKSRC}${PREFIX}/pkg/app/*.sh ${STAGEDIR}${PREFIX}/pkg/app\n"
+        ),
+    )
+    recipe = bpp.Recipe(mk)
+    recipe.run("do-install")
+
+    assert (stage / "usr/local/pkg/app/app.inc").read_text() == "<?php\n"
+    assert (stage / "usr/local/pkg/app/helper.sh").read_text() == "#!/bin/sh\n"
+    assert recipe.modes["/usr/local/pkg/app/app.inc"] == "0644"
+    assert recipe.modes["/usr/local/pkg/app/helper.sh"] == "0555"
+
+
+def test_recipe_copytree_share_excludes_local_artifacts(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    (src / "usr/local/pkg/app/__pycache__").mkdir(parents=True)
+    (src / "usr/local/pkg/app/app.inc").write_text("<?php\n")
+    (src / "usr/local/pkg/app/.DS_Store").write_text("finder")
+    (src / "usr/local/pkg/app/__pycache__/app.pyc").write_bytes(b"cache")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+
+    mk = make_mk(
+        tmp_path,
+        (
+            f"WRKSRC=\t{src}\nSTAGEDIR=\t{stage}\n"
+            "do-install:\n"
+            "\t(cd ${WRKSRC} && ${COPYTREE_SHARE} . ${STAGEDIR} "
+            "\"! -name .DS_Store ! -name '*.pyc' ! -path '*/__pycache__/*'\")\n"
+        ),
+    )
+
+    bpp.Recipe(mk).run("do-install")
+
+    assert (stage / "usr/local/pkg/app/app.inc").is_file()
+    assert not (stage / "usr/local/pkg/app/.DS_Store").exists()
+    assert not (stage / "usr/local/pkg/app/__pycache__/app.pyc").exists()
+
+
+def test_recipe_install_can_overwrite_a_readonly_staged_file(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "helper.sh").write_text("#!/bin/sh\necho first\n")
+    stage = tmp_path / "stage"
+    (stage / "usr/local/bin").mkdir(parents=True)
+
+    mk = make_mk(
+        tmp_path,
+        (
+            f"SRC=\t{src}\nSTAGEDIR=\t{stage}\nPREFIX=\t/usr/local\n"
+            "do-install:\n"
+            "\t${INSTALL_SCRIPT} ${SRC}/helper.sh ${STAGEDIR}${PREFIX}/bin\n"
+            "\t${INSTALL_SCRIPT} ${SRC}/helper.sh ${STAGEDIR}${PREFIX}/bin\n"
+        ),
+    )
+
+    recipe = bpp.Recipe(mk)
+    recipe.run("do-install")
+
+    assert (stage / "usr/local/bin/helper.sh").read_text() == "#!/bin/sh\necho first\n"
+    assert recipe.modes["/usr/local/bin/helper.sh"] == "0555"
+
+
 def test_recipe_bare_mv_and_unknown_command(tmp_path: Path) -> None:
     src = tmp_path / "w"
     (src / "a").mkdir(parents=True)
@@ -626,6 +702,51 @@ def test_end_to_end_classic_build(tmp_path: Path) -> None:
     # info.xml %%PKGVERSION%% substituted in the staged payload
     info = _extract(tf, "/usr/local/share/testpkg/info.xml").decode()
     assert info == "<version>1.0_2</version>\n"
+
+
+def test_end_to_end_dynamic_plist_uses_the_staged_payload(tmp_path: Path) -> None:
+    ports, portdir = _make_classic_port(tmp_path)
+    portdir.joinpath("pkg-plist").unlink()
+    makefile = portdir / "Makefile"
+    makefile.write_text(
+        makefile.read_text().replace(
+            "NO_BUILD=\tyes\n",
+            "NO_BUILD=\tyes\nPLIST_DIRS=\t/etc/inc/priv /etc/inc\n",
+        )
+        + "post-install:\n"
+        + "\t@${FIND} -s ${STAGEDIR}${PREFIX} -type f -print | "
+        + '${SED} -e "s#${STAGEDIR}${PREFIX}/##g" >> ${TMPPLIST}\n'
+    )
+    out = tmp_path / "out"
+
+    rc = bpp.main(
+        [
+            "--ports",
+            str(ports),
+            "--port-dir",
+            str(portdir),
+            "--abi",
+            "FreeBSD:15:amd64",
+            "--py-flavor",
+            "py311",
+            "--compression",
+            "xz",
+            "--freebsd-version",
+            "1500068",
+            "--out",
+            str(out),
+        ]
+    )
+
+    assert rc == 0
+    full, _, _ = _read_pkg(out / "testpkg-1.0_2.pkg")
+    assert set(full["files"]) == {
+        "/etc/inc/priv/test.priv.inc",
+        "/usr/local/bin/hello.sh",
+        "/usr/local/etc/testpkg.conf",
+        "/usr/local/share/testpkg/info.xml",
+    }
+    assert set(full["directories"]) == {"/etc/inc/priv", "/etc/inc"}
 
 
 def test_end_to_end_plist_drift_aborts(tmp_path: Path) -> None:

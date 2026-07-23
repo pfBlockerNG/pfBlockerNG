@@ -7,9 +7,9 @@
 # port's textual substitutions, and (c) emitting a libpkg-format archive with the
 # right manifest. This tool replicates exactly that, portably (Linux + macOS),
 # by *executing the port's own do-extract/post-extract/do-install recipe* and
-# *reading its pkg-plist* — never a hardcoded, pfBlockerNG-specific file list. So
-# when the port gains files or changes dependencies, this tool keeps up: it reads
-# the same Makefile/plist the real `make package` reads.
+# consuming either its static pkg-plist or its staged dynamic plist — never a
+# hardcoded, pfBlockerNG-specific file list. So when the port gains files or
+# changes dependencies, this tool keeps up with the real `make package` inputs.
 #
 # It supports BOTH port layouts:
 #   * USE_GITHUB  (FreeBSD-ports branch pfblockerng/use-github): source fetched
@@ -43,6 +43,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import hashlib
 import io
 import json
@@ -377,6 +378,20 @@ class Recipe:
             line = line[1:].lstrip()
         if not line:
             return
+        copytree = re.fullmatch(
+            r'\(cd\s+(.+?)\s+&&\s+\$\{COPYTREE_SHARE\}\s+\.\s+(\S+)(?:\s+"([^"]*)")?\)',
+            line,
+        )
+        if copytree:
+            args = [self.mk.expand(copytree.group(1)), self.mk.expand(copytree.group(2))]
+            if copytree.group(3) is not None:
+                args.append(self.mk.expand(copytree.group(3)))
+            self._cmd_copytree_share(args)
+            return
+        # A dynamic plist's FIND|SED pipeline only describes the staged files.
+        # The portable builder derives that same manifest directly from STAGEDIR.
+        if line.startswith("${FIND} ") and "${SED}" in line and "${TMPPLIST}" in line and ">>" in line:
+            return
         # A recipe command is either a ${MACRO} (e.g. ${INSTALL_DATA}) or a bare
         # command word (e.g. post-extract's literal `mv`). Both map to _cmd_<name>.
         m = re.match(r"^\$[{(]([A-Za-z_][A-Za-z0-9_]*)[})]\s*(.*)$", line)
@@ -426,7 +441,15 @@ class Recipe:
         if len(positional) < 2:
             raise BuildError(f"INSTALL with too few paths: {args!r}")
         dest = positional[-1]
-        srcs = positional[:-1]
+        srcs: list[str] = []
+        for source in positional[:-1]:
+            matches = glob.glob(source)
+            if glob.has_magic(source):
+                if not matches:
+                    raise BuildError(f"install source glob matched nothing: {source}")
+                srcs.extend(matches)
+            else:
+                srcs.append(source)
         dest_p = Path(dest)
         dest_is_dir = dest_p.is_dir() or dest.endswith("/") or len(srcs) > 1
         for s in srcs:
@@ -435,6 +458,8 @@ class Recipe:
                 raise BuildError(f"install source missing: {s}")
             target = dest_p / sp.name if dest_is_dir else dest_p
             target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                target.unlink()
             shutil.copyfile(sp, target)
             os.chmod(target, int(perm, 8))
             self.modes[self._install_path(target)] = perm
@@ -446,6 +471,33 @@ class Recipe:
         # INSTALL_SCRIPT installs with ${BINMODE}, which is 0555 on FreeBSD
         # (installed scripts/binaries are not writable) — NOT 0755.
         self._install(args, "0555")
+
+    def _cmd_copytree_share(self, args: list[str]) -> None:
+        if len(args) not in (2, 3):
+            raise BuildError(f"COPYTREE_SHARE expects source, destination, and optional filter: {args!r}")
+        source, destination = (Path(arg) for arg in args[:2])
+        artifact_filter = ["!", "-name", ".DS_Store", "!", "-name", "*.pyc", "!", "-path", "*/__pycache__/*"]
+        if len(args) == 3 and shlex.split(args[2]) != artifact_filter:
+            raise BuildError(f"unsupported COPYTREE_SHARE filter: {args[2]!r}")
+        if not source.is_dir():
+            raise BuildError(f"COPYTREE_SHARE source is not a directory: {source}")
+        for item in source.rglob("*"):
+            if item.is_symlink():
+                raise BuildError(f"COPYTREE_SHARE symlinks are not supported: {item}")
+            relative = item.relative_to(source)
+            if len(args) == 3 and (
+                item.name == ".DS_Store" or item.suffix == ".pyc" or "__pycache__" in relative.parts
+            ):
+                continue
+            target = destination / relative
+            if item.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                os.chmod(target, 0o755)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(item, target)
+            os.chmod(target, 0o644)
+            self.modes[self._install_path(target)] = "0644"
 
     def _cmd_mv(self, args: list[str]) -> None:
         # Drop flags (e.g. -f), then split into (sources, dest).
@@ -1481,18 +1533,25 @@ def run_build(args: argparse.Namespace) -> Build:
     stagedir = Path(seed["STAGEDIR"])
     staged_paths = {"/" + os.path.relpath(p, stagedir): p for p in stagedir.rglob("*") if p.is_file()}
 
-    plist_path = portdir / "pkg-plist"
-    plist_sub = {"DATADIR": "share/" + portname, "PORTNAME": portname, "PORTVERSION": mk.get("PORTVERSION")}
-    plist_files, plist_dirs = parse_plist(plist_path.read_text(), plist_sub, prefix)
-
-    plist_set = set(plist_files)
     staged_set = set(staged_paths)
-    missing = plist_set - staged_set
-    extra = staged_set - plist_set
-    if missing:
-        raise BuildError("plist lists files the recipe did not stage:\n  " + "\n  ".join(sorted(missing)))
-    if extra:
-        raise BuildError("recipe staged files not in the plist:\n  " + "\n  ".join(sorted(extra)))
+    plist_path = portdir / "pkg-plist"
+    if plist_path.is_file():
+        plist_sub = {
+            "DATADIR": "share/" + portname,
+            "PORTNAME": portname,
+            "PORTVERSION": mk.get("PORTVERSION"),
+        }
+        plist_files, plist_dirs = parse_plist(plist_path.read_text(), plist_sub, prefix)
+        plist_set = set(plist_files)
+        missing = plist_set - staged_set
+        extra = staged_set - plist_set
+        if missing:
+            raise BuildError("plist lists files the recipe did not stage:\n  " + "\n  ".join(sorted(missing)))
+        if extra:
+            raise BuildError("recipe staged files not in the plist:\n  " + "\n  ".join(sorted(extra)))
+    else:
+        plist_set = staged_set
+        plist_dirs = [_abspath(path, prefix) for path in shlex.split(mk.get("PLIST_DIRS"))]
 
     for ip in sorted(plist_set):
         perm = recipe.modes.get(ip, "0644")
