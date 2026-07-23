@@ -329,32 +329,6 @@ def test_recipe_copytree_share_then_script_glob_preserves_payload_and_modes(tmp_
     assert recipe.modes["/usr/local/pkg/app/helper.sh"] == "0555"
 
 
-def test_recipe_copytree_share_excludes_local_artifacts(tmp_path: Path) -> None:
-    src = tmp_path / "src"
-    (src / "usr/local/pkg/app/__pycache__").mkdir(parents=True)
-    (src / "usr/local/pkg/app/app.inc").write_text("<?php\n")
-    (src / "usr/local/pkg/app/.DS_Store").write_text("finder")
-    (src / "usr/local/pkg/app/__pycache__/app.pyc").write_bytes(b"cache")
-    stage = tmp_path / "stage"
-    stage.mkdir()
-
-    mk = make_mk(
-        tmp_path,
-        (
-            f"WRKSRC=\t{src}\nSTAGEDIR=\t{stage}\n"
-            "do-install:\n"
-            "\t(cd ${WRKSRC} && ${COPYTREE_SHARE} . ${STAGEDIR} "
-            "\"! -name .DS_Store ! -name '*.pyc' ! -path '*/__pycache__/*'\")\n"
-        ),
-    )
-
-    bpp.Recipe(mk).run("do-install")
-
-    assert (stage / "usr/local/pkg/app/app.inc").is_file()
-    assert not (stage / "usr/local/pkg/app/.DS_Store").exists()
-    assert not (stage / "usr/local/pkg/app/__pycache__/app.pyc").exists()
-
-
 def test_recipe_install_can_overwrite_a_readonly_staged_file(tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()
@@ -417,6 +391,29 @@ def test_safe_extract_rejects_traversal(tmp_path: Path) -> None:
     buf.seek(0)
     with tarfile.open(fileobj=buf) as tf2, pytest.raises(bpp.BuildError):
         bpp._safe_extract(tf2, tmp_path / "dest")
+
+
+def test_local_source_acquisition_excludes_untracked_artifacts(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    source = checkout / "src/usr/local/pkg/app"
+    (source / "__pycache__").mkdir(parents=True)
+    (source / "app.inc").write_text("<?php\n")
+    (source / ".DS_Store").write_text("finder")
+    (source / "__pycache__/app.pyc").write_bytes(b"cache")
+    workdir = tmp_path / "work"
+    wrksrc = workdir / "source/src"
+    mk = make_mk(tmp_path, f"USE_GITHUB=\tyes\nWRKSRC=\t{wrksrc}\n")
+
+    result = bpp.acquire_source(
+        mk,
+        workdir,
+        bpp.argparse.Namespace(local_src=str(checkout), gh_tagname=None),
+    )
+
+    assert result == wrksrc
+    assert (wrksrc / "usr/local/pkg/app/app.inc").is_file()
+    assert not (wrksrc / "usr/local/pkg/app/.DS_Store").exists()
+    assert not (wrksrc / "usr/local/pkg/app/__pycache__").exists()
 
 
 # --------------------------------------------------------------------------- #
