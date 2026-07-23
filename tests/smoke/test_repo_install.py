@@ -232,20 +232,15 @@ def _ssh_check(vm: SmokeVM, *remote: str, timeout: float = 180.0) -> subprocess.
 def _wait_for_pkg_quiescence(vm: SmokeVM, *, deadline_s: float = 120.0, poll_s: float = 1.0) -> None:
     """Wait until pfSense's boot-time package work releases the shared pkg database."""
     deadline = time.monotonic() + deadline_s
-    probe = (
-        "out=$(env ASSUME_ALWAYS_YES=yes pkg update -f 2>&1); rc=$?; "
-        'if [ "$rc" -eq 0 ]; then exit 1; fi; '
-        'printf "%s\\n" "$out" >&2; '
-        'case "$out" in *"Waiting for another process to update repository"*) exit 0;; *) exit 2;; esac'
-    )
+    lock_message = "Waiting for another process to update repository"
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        attempt = vm.ssh("/bin/sh", "-c", probe, timeout=remaining)
-        if attempt.returncode == 1:
+        attempt = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-f", timeout=remaining)
+        if attempt.returncode == 0:
             return
-        if attempt.returncode != 0:
+        if lock_message not in attempt.stdout + attempt.stderr:
             raise RuntimeError(f"pkg readiness check failed: rc={attempt.returncode} {attempt.stderr!r}")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
