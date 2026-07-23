@@ -229,30 +229,6 @@ def _ssh_check(vm: SmokeVM, *remote: str, timeout: float = 180.0) -> subprocess.
     return result
 
 
-def _wait_for_pkg_quiescence(vm: SmokeVM, *, deadline_s: float = 120.0, poll_s: float = 1.0) -> None:
-    """Wait until pfSense's boot-time package work releases the shared pkg database."""
-    deadline = time.monotonic() + deadline_s
-    lock_message = "Waiting for another process to update repository"
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        attempt = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-f", timeout=remaining)
-        if attempt.returncode == 0:
-            return
-        if lock_message not in attempt.stdout + attempt.stderr:
-            raise RuntimeError(f"pkg readiness check failed: rc={attempt.returncode} {attempt.stderr!r}")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        time.sleep(min(poll_s, remaining))
-    processes = vm.ssh("ps", "axww", "-o", "pid,ppid,command", timeout=30.0)
-    raise RuntimeError(
-        f"package manager still active after {deadline_s:g}s: ps rc={processes.returncode}; "
-        f"stdout={processes.stdout.strip()!r}; stderr={processes.stderr.strip()!r}"
-    )
-
-
 def build_guest_repo(vm: SmokeVM, repo_dir: str, pkg_files: list[Path]) -> None:
     """Lay ``pkg_files`` into a fresh ``repo_dir`` on the guest and ``pkg repo`` it.
 
@@ -569,6 +545,25 @@ def repo_priority(vm: SmokeVM, name: str, *, timeout: float = 60.0) -> int:
     return int(pr.group(1)) if pr else 0
 
 
+def _pkg_retry(vm: SmokeVM, *remote: str, timeout: float) -> subprocess.CompletedProcess[str]:
+    """Retry a pkg operation while another pkg process owns its SQLite database."""
+    deadline = time.monotonic() + timeout
+    result = vm.ssh(*remote, timeout=timeout)
+    while result.returncode != 0 and any(
+        message in result.stdout + result.stderr
+        for message in ("Waiting for another process to update repository", "database is locked")
+    ):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(1.0, remaining))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        result = vm.ssh(*remote, timeout=remaining)
+    return result
+
+
 def pkg_update(vm: SmokeVM, *, timeout: float = 240.0) -> None:
     """``pkg update -f`` so the freshly-written catalog is re-read.
 
@@ -578,7 +573,12 @@ def pkg_update(vm: SmokeVM, *, timeout: float = 240.0) -> None:
     A clean update of our repo is itself evidence pfSense accepts the unsigned
     third-party repo.
     """
-    _ssh_check(vm, "env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-f", timeout=timeout)
+    remote = ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-f")
+    result = _pkg_retry(vm, *remote, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"guest cmd {remote!r} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
 
 
 def pkg_installed_version(vm: SmokeVM, *, timeout: float = 60.0) -> str | None:
@@ -601,7 +601,7 @@ def pkg_install_from_repo(vm: SmokeVM, *, timeout: float = 600.0) -> subprocess.
     version). Returns the completed process so the caller can read the "Missing
     dependency" line (deps-resolved evidence) off stderr/stdout.
     """
-    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", PKG_NAME, timeout=timeout)
+    result = _pkg_retry(vm, "env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", PKG_NAME, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
             f"pkg install {PKG_NAME} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -618,7 +618,7 @@ def pkg_upgrade(vm: SmokeVM, *, timeout: float = 600.0) -> subprocess.CompletedP
     ``priority:``). NO ``-f`` (a forced reinstall would mask a real version move).
     Returns the completed process so the caller can read "Missing dependency" off it.
     """
-    result = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "upgrade", "-y", PKG_NAME, timeout=timeout)
+    result = _pkg_retry(vm, "env", "ASSUME_ALWAYS_YES=yes", "pkg", "upgrade", "-y", PKG_NAME, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
             f"pkg upgrade {PKG_NAME} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -707,7 +707,6 @@ def repo_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     assert pkg  # for the type-checker: pytest.skip above is NoReturn
     src = Path(pkg)
     _ensure_egress_open()
-    _wait_for_pkg_quiescence(smoke_vm)
     # Build BOTH catalogs from the same branch .pkg: ours and a controlled decoy that
     # serves the identical package, so the precedence cases compare two genuine
     # providers and the winner is decided purely by `priority:`.
