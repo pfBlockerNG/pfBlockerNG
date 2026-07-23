@@ -4618,8 +4618,9 @@ def _dnsbl_normalise_whitelist(
 ) -> dict[str, dict[str, Any]]:
     """User-whitelist normalisation (mirrors PHP's pfb_unbound_python_whitelist()) into the
     query-time whiteDB shape: www-strip; leading-dot -> wildcard True else False.
-    TOP1M entries are loaded ONLY when enabled (bare domains -> exact). No build-time
-    list pruning -- this only populates whiteDB.
+    TOP1M entries are loaded ONLY when enabled as validated canonical bare domains;
+    retired comma-framed records and invalid domains are explicitly rejected by normalise().
+    No build-time list pruning -- this only populates whiteDB.
 
     ADR-07: the whiteDB value widens from a bare ``bool`` (wildcard?) to
     ``{"wildcard": bool, "important": bool}``. User whitelist + TOP1M load as
@@ -4642,8 +4643,8 @@ def _dnsbl_normalise_whitelist(
 
     if top1m_enabled:
         for raw in top1m_lines:
-            dom = raw.strip()
-            if dom:
+            dom = normalise(raw)
+            if dom is not None:
                 # TOP1M behaves as a user allow (sovereign, band 6) -- fact 7.
                 white_db.setdefault(dom, {"wildcard": False, "important": True, "band": PRIO_USER_ALLOW})
 

@@ -9962,8 +9962,9 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 					}
 					$x++;
 
-					// Create three whitelist options per TOP1M whitelisted Domain
-					@fwrite($pfb_output, ".{$domain},,\n,{$domain},,\n,www.{$domain},,\n");
+					// Canonical TOP1M wire: one bare domain per line; exact lookup also allows only www.
+					// Deeper subdomains remain unallowed.
+					@fwrite($pfb_output, "{$domain}\n");
 				}
 
 				if ($x >= $pfb['dnsbl_top1m_cnt']) {
