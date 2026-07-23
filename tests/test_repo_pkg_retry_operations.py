@@ -17,9 +17,27 @@ class _LockedThenReadyVM:
         self.timeouts: list[float] = []
 
     def ssh(self, *remote: str, timeout: float) -> subprocess.CompletedProcess[str]:
+        if remote == ("pkg", "query", "%v", repo.PKG_NAME):
+            return subprocess.CompletedProcess(remote, 0, "4.0.0\n", "")
         self.commands.append(remote)
         self.timeouts.append(timeout)
         return next(self.results)
+
+
+class _NoopThenInstalledVM:
+    def __init__(self) -> None:
+        self.installs = 0
+        self.queries = 0
+
+    def ssh(self, *remote: str, timeout: float) -> subprocess.CompletedProcess[str]:
+        if remote[:4] == ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install"):
+            self.installs += 1
+            return subprocess.CompletedProcess(remote, 0, "", "")
+        assert remote == ("pkg", "query", "%v", repo.PKG_NAME)
+        self.queries += 1
+        if self.queries == 1:
+            return subprocess.CompletedProcess(remote, 1, "", "")
+        return subprocess.CompletedProcess(remote, 0, "4.0.0\n", "")
 
 
 @pytest.mark.parametrize(
@@ -45,3 +63,14 @@ def test_pkg_write_operations_retry_lock_contention(
     assert result.returncode == 0
     assert vm.commands == [expected, expected]
     assert vm.timeouts == [4.0, 2.0]
+
+
+def test_pkg_install_retries_success_without_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    vm = _NoopThenInstalledVM()
+    monkeypatch.setattr(repo.time, "sleep", lambda _: None)
+
+    result = repo.pkg_install_from_repo(vm, timeout=5.0)  # type: ignore[arg-type]
+
+    assert result.returncode == 0
+    assert vm.installs == 2
+    assert vm.queries == 2
