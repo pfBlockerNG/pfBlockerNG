@@ -379,13 +379,11 @@ class Recipe:
         if not line:
             return
         copytree = re.fullmatch(
-            r'\(cd\s+(.+?)\s+&&\s+\$\{COPYTREE_SHARE\}\s+\.\s+(\S+)(?:\s+"([^"]*)")?\)',
+            r"\(cd\s+(.+?)\s+&&\s+\$\{COPYTREE_SHARE\}\s+\.\s+(\S+)\)",
             line,
         )
         if copytree:
             args = [self.mk.expand(copytree.group(1)), self.mk.expand(copytree.group(2))]
-            if copytree.group(3) is not None:
-                args.append(self.mk.expand(copytree.group(3)))
             self._cmd_copytree_share(args)
             return
         # A dynamic plist's FIND|SED pipeline only describes the staged files.
@@ -473,22 +471,15 @@ class Recipe:
         self._install(args, "0555")
 
     def _cmd_copytree_share(self, args: list[str]) -> None:
-        if len(args) not in (2, 3):
-            raise BuildError(f"COPYTREE_SHARE expects source, destination, and optional filter: {args!r}")
-        source, destination = (Path(arg) for arg in args[:2])
-        artifact_filter = ["!", "-name", ".DS_Store", "!", "-name", "*.pyc", "!", "-path", "*/__pycache__/*"]
-        if len(args) == 3 and shlex.split(args[2]) != artifact_filter:
-            raise BuildError(f"unsupported COPYTREE_SHARE filter: {args[2]!r}")
+        if len(args) != 2:
+            raise BuildError(f"COPYTREE_SHARE expects source and destination: {args!r}")
+        source, destination = (Path(arg) for arg in args)
         if not source.is_dir():
             raise BuildError(f"COPYTREE_SHARE source is not a directory: {source}")
         for item in source.rglob("*"):
             if item.is_symlink():
                 raise BuildError(f"COPYTREE_SHARE symlinks are not supported: {item}")
             relative = item.relative_to(source)
-            if len(args) == 3 and (
-                item.name == ".DS_Store" or item.suffix == ".pyc" or "__pycache__" in relative.parts
-            ):
-                continue
             target = destination / relative
             if item.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
@@ -998,7 +989,12 @@ def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Pat
                 f"--local-src {local} does not look like a pfBlockerNG checkout (expected a src/ tree containing usr/)"
             )
         # Copy into WRKSRC so post-extract's sed/mv never mutate the working tree.
-        shutil.copytree(src_root, wrksrc, dirs_exist_ok=True)
+        shutil.copytree(
+            src_root,
+            wrksrc,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(".DS_Store", "*.pyc", "__pycache__"),
+        )
         sys.stderr.write(f"==> source: local working tree {src_root}\n")
         return wrksrc
 
