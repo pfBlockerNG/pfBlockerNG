@@ -16,6 +16,32 @@ from tests.test_adr06_golden_oracle import _build_cfg, _decision_label
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+REPROCESS_PROBE = r"""
+require 'tests/php/bootstrap.php';
+require_once 'src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+memory_reset_peak_usage();
+$before = memory_get_usage();
+$reprocess = pfb_top1m_reprocess_needed(getenv('PFB_TOP1M_PROBE_DIR'));
+echo json_encode([
+    'reprocess' => $reprocess,
+    'peak_delta' => memory_get_peak_usage() - $before,
+], JSON_THROW_ON_ERROR);
+"""
+
+
+def _run_reprocess_probe(tmp_path: Path, *, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["PFB_TOP1M_PROBE_DIR"] = str(tmp_path)
+    return subprocess.run(
+        ["php", "-r", REPROCESS_PROBE],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+
 
 def _manifest(tmp_path: Path, *, enabled: bool = True) -> Path:
     raw = tmp_path / "feed.raw"
@@ -32,6 +58,34 @@ def _manifest(tmp_path: Path, *, enabled: bool = True) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def test_refresh_needed_short_circuits_without_opening_whitelist(tmp_path: Path) -> None:
+    (tmp_path / "top-1m.csv").write_text("1,current.example\n", encoding="utf-8")
+    os.mkfifo(tmp_path / "pfbalexawhitelist.txt")
+
+    try:
+        proc = _run_reprocess_probe(tmp_path, timeout=1)
+    except subprocess.TimeoutExpired:
+        pytest.fail("refresh-needed predicate opened the whitelist FIFO")
+
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["reprocess"] is False
+
+
+def test_current_canonical_whitelist_check_has_bounded_peak_memory(tmp_path: Path) -> None:
+    (tmp_path / "top-1m.csv").write_text("1,current.example\n", encoding="utf-8")
+    (tmp_path / "top-1m.csv.zip.orig").write_text("detector baseline\n", encoding="utf-8")
+    with (tmp_path / "pfbalexawhitelist.txt").open("w", encoding="utf-8") as handle:
+        for index in range(200_000):
+            handle.write(f"domain-{index:06d}.example\n")
+
+    proc = _run_reprocess_probe(tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["reprocess"] is False
+    assert result["peak_delta"] < 1024 * 1024
 
 
 def test_legacy_whitelist_reprocesses_to_python_exact_allow(tmp_path: Path) -> None:
@@ -79,6 +133,7 @@ echo json_encode(['reprocess' => $reprocess], JSON_THROW_ON_ERROR);
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout) == {"reprocess": True}
