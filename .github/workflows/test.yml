@@ -169,7 +169,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Ruff
-        run: pip install ruff
+        run: pip install ruff==0.15.22
 
       - name: Ruff lint
         # Config in pyproject.toml.
