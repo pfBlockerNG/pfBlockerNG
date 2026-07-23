@@ -68,6 +68,146 @@ final class Top1mFixedFileManifestTest extends TestCase
 		$this->assertFileExists($GLOBALS['pfb']['unbound_py_sources']);
 	}
 
+	public static function legacyProjectionCases(): array
+	{
+		return [
+			'python-mode' => [
+				".Example.COM,,\n,example.com,,\n,www.EXAMPLE.COM,,\n" .
+				".Duplicate.Example,,\n,DUPLICATE.example,,\n,www.duplicate.EXAMPLE,,\n" .
+				".duplicate.example,,\n,Duplicate.Example,,\n,www.DUPLICATE.EXAMPLE,,\n",
+			],
+			'native-mode' => [
+				".Example.COM 60\n\"example.com 60\n\"www.EXAMPLE.COM 60\n" .
+				".Duplicate.Example 60\n\"DUPLICATE.example 60\n\"www.duplicate.EXAMPLE 60\n" .
+				".duplicate.example 60\n\"Duplicate.Example 60\n\"www.DUPLICATE.EXAMPLE 60\n",
+			],
+		];
+	}
+
+	#[DataProvider('legacyProjectionCases')]
+	public function testEnabledProjectsCompleteLegacyRecordsAndPreservesCachedSource(string $source): void
+	{
+		$source_path = "{$this->tmp}/db/pfbalexawhitelist.txt";
+		file_put_contents($source_path, $source);
+
+		$result = $this->publishTop1m();
+
+		$this->assertIsArray($result);
+		$this->assertSame($source, file_get_contents($source_path));
+		$this->assertSame(
+			"example.com\nduplicate.example\nduplicate.example\n",
+			file_get_contents($GLOBALS['pfb']['unbound_py_top1m'])
+		);
+		$this->assertFileExists($GLOBALS['pfb']['unbound_py_sources']);
+	}
+
+	public static function malformedLegacySources(): array
+	{
+		$comma = static fn(string $domain): string =>
+			".{$domain},,\n,{$domain},,\n,www.{$domain},,\n";
+		$native = static fn(string $domain): string =>
+			".{$domain} 60\n\"{$domain} 60\n\"www.{$domain} 60\n";
+		$overlong_domain = 'aa.' . implode('.', array_fill(0, 126, 'a'));
+
+		return [
+			'mixed families'       => [$comma('one.example') . $native('two.example')],
+			'CRLF'                 => [str_replace("\n", "\r\n", $comma('bad.example'))],
+			'blank'                => [$comma('bad.example') . "\n"],
+			'header'               => [$comma('bad.example') . "header\n"],
+			'extra line'           => [$comma('bad.example') . ".extra.example,,\n"],
+			'incomplete triple'    => [".bad.example,,\n,bad.example,,\n"],
+			'missing final LF'     => [rtrim($comma('bad.example'), "\n")],
+			'mismatched domains'   => [".one.example,,\n,two.example,,\n,www.one.example,,\n"],
+			'mixed triple'         => [".bad.example,,\n\"bad.example 60\n\"www.bad.example 60\n"],
+			'underscore'           => [$comma('bad_name.example')],
+			'Unicode'              => [$comma('tést.example')],
+			'dotless'              => [$comma('dotless')],
+			'overlong label'       => [$comma(str_repeat('a', 64) . '.example')],
+			'overlong domain'      => [$comma($overlong_domain)],
+			'leading hyphen'       => [$comma('-bad.example')],
+			'trailing hyphen'      => [$comma('bad-.example')],
+			'overlong source line' => ['.' . str_repeat('a', 1100) . ",,\n"],
+		];
+	}
+
+	#[DataProvider('malformedLegacySources')]
+	public function testMalformedLegacySourceRollsBackTargetAndManifest(string $source): void
+	{
+		$this->seedPreviousPublication();
+		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", $source);
+
+		$result = $this->publishTop1m();
+
+		$this->assertFalse($result);
+		$this->assertPreviousPublication();
+		$this->assertSame([], glob("{$this->tmp}/.pfbtop1m_*") ?: []);
+	}
+
+	public static function publicationFailureOperations(): array
+	{
+		return [
+			'write'    => ['write'],
+			'flush'    => ['flush'],
+			'fsync'    => ['fsync'],
+			'metadata' => ['metadata'],
+			'rename'   => ['rename'],
+		];
+	}
+
+	#[DataProvider('publicationFailureOperations')]
+	public function testLegacyProjectionFailureRollsBackTargetAndManifest(string $operation): void
+	{
+		$this->seedPreviousPublication();
+		file_put_contents(
+			"{$this->tmp}/db/pfbalexawhitelist.txt",
+			".legacy.example,,\n,legacy.example,,\n,www.legacy.example,,\n"
+		);
+		$ops = match ($operation) {
+			'write' => ['write' => static fn($stream, string $bytes): int => max(0, strlen($bytes) - 1)],
+			'flush' => ['flush' => static fn($stream): bool => FALSE],
+			'fsync' => ['fsync' => static fn($stream): bool => FALSE],
+			'metadata' => ['metadata' => static fn(string $file): bool => FALSE],
+			'rename' => ['rename' => static fn(string $from, string $to): bool => FALSE],
+		};
+
+		$result = $this->publishTop1m($ops);
+
+		$this->assertFalse($result);
+		$this->assertPreviousPublication();
+		$this->assertSame([], glob("{$this->tmp}/.pfbtop1m_*") ?: []);
+	}
+
+	public static function nonregularSourceKinds(): array
+	{
+		return [
+			'directory' => ['directory'],
+			'FIFO'      => ['FIFO'],
+			'symlink'   => ['symlink'],
+		];
+	}
+
+	#[DataProvider('nonregularSourceKinds')]
+	public function testEnabledRejectsNonregularOrSymlinkedSource(string $kind): void
+	{
+		$this->seedPreviousPublication();
+		$source = "{$this->tmp}/db/pfbalexawhitelist.txt";
+		if ($kind === 'directory') {
+			mkdir($source);
+		} elseif ($kind === 'FIFO') {
+			$this->assertTrue(posix_mkfifo($source, 0600));
+		} else {
+			$linked = "{$this->tmp}/legacy-source.txt";
+			file_put_contents($linked, ".legacy.example,,\n,legacy.example,,\n,www.legacy.example,,\n");
+			symlink($linked, $source);
+		}
+
+		$result = $this->publishTop1m();
+
+		$this->assertFalse($result);
+		$this->assertPreviousPublication();
+		$this->assertSame([], glob("{$this->tmp}/.pfbtop1m_*") ?: []);
+	}
+
 	public function testEnabledPublicationFailureLeavesPreviousFileAndManifest(): void
 	{
 		$target = $GLOBALS['pfb']['unbound_py_top1m'];
@@ -194,6 +334,26 @@ final class Top1mFixedFileManifestTest extends TestCase
 			'chgrp' => static fn(string $file, string $group): bool => TRUE,
 			'chmod' => static fn(string $file, int $mode): bool => TRUE,
 		];
+	}
+
+	private function publishTop1m(array $ops=array())
+	{
+		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+		return pfb_unbound_python_sources([], [
+			'top1m_atomic' => $ops + $this->successfulOwnershipOps(),
+		]);
+	}
+
+	private function seedPreviousPublication(): void
+	{
+		file_put_contents($GLOBALS['pfb']['unbound_py_top1m'], "old.example\n");
+		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"old":true}');
+	}
+
+	private function assertPreviousPublication(): void
+	{
+		$this->assertSame("old.example\n", file_get_contents($GLOBALS['pfb']['unbound_py_top1m']));
+		$this->assertSame('{"old":true}', file_get_contents($GLOBALS['pfb']['unbound_py_sources']));
 	}
 
 	private function removeTree(string $dir): void
