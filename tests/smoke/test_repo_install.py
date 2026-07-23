@@ -545,9 +545,10 @@ def repo_priority(vm: SmokeVM, name: str, *, timeout: float = 60.0) -> int:
     return int(pr.group(1)) if pr else 0
 
 
-def _pkg_retry(vm: SmokeVM, *remote: str, timeout: float) -> subprocess.CompletedProcess[str]:
-    """Retry a pkg operation while another pkg process owns its SQLite database."""
-    deadline = time.monotonic() + timeout
+def _pkg_retry_until(
+    vm: SmokeVM, *remote: str, deadline: float, timeout: float
+) -> tuple[subprocess.CompletedProcess[str], float]:
+    """Retry a pkg operation until an existing absolute deadline."""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise subprocess.TimeoutExpired(remote, timeout)
@@ -564,6 +565,12 @@ def _pkg_retry(vm: SmokeVM, *remote: str, timeout: float) -> subprocess.Complete
         if remaining <= 0:
             break
         result = vm.ssh(*remote, timeout=remaining)
+    return result, remaining
+
+
+def _pkg_retry(vm: SmokeVM, *remote: str, timeout: float) -> subprocess.CompletedProcess[str]:
+    """Retry a pkg operation while another pkg process owns its SQLite database."""
+    result, _ = _pkg_retry_until(vm, *remote, deadline=time.monotonic() + timeout, timeout=timeout)
     return result
 
 
@@ -601,15 +608,27 @@ def pkg_install_from_repo(vm: SmokeVM, *, timeout: float = 600.0) -> subprocess.
     This is the exact shape ``pkg_install()`` uses (ADR-17 §1 Context 3): resolve
     the name over every enabled repo and install the winner. The VM proved repo
     PRIORITY decides the winner (a higher-priority repo wins even at a lower
-    version). Returns the completed process so the caller can read the "Missing
-    dependency" line (deps-resolved evidence) off stderr/stdout.
+    version). A successful exit is accepted only after ``pkg query`` sees the
+    registration; the Plus VM's boot-time package lifecycle can otherwise make
+    ``pkg install`` return 0 without leaving the package installed. Returns the
+    completed process so the caller can read the "Missing dependency" line
+    (deps-resolved evidence) off stderr/stdout.
     """
-    result = _pkg_retry(vm, "env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", PKG_NAME, timeout=timeout)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"pkg install {PKG_NAME} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
-    return result
+    remote = ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", PKG_NAME)
+    deadline = time.monotonic() + timeout
+    while True:
+        result, remaining = _pkg_retry_until(vm, *remote, deadline=deadline, timeout=timeout)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"pkg install {PKG_NAME} failed: rc={result.returncode}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if pkg_installed_version(vm, timeout=min(60.0, remaining)) is not None:
+            return result
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(remote, timeout)
+        time.sleep(min(1.0, remaining))
 
 
 def pkg_upgrade(vm: SmokeVM, *, timeout: float = 600.0) -> subprocess.CompletedProcess[str]:
