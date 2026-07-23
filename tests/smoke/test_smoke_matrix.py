@@ -490,12 +490,12 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
     # (b) Now put it on a DNSBL feed -> the SAME domain is now BLOCKED (VIP).
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_unlock.txt", f"{domain}\n")
     spec = h.DnsblCase(aliasname="smokeunlock", feed_url=feed_url, header="smokeunlock", mode=h.DnsblMode.VIP)
-    with h.CaseContext(deployed_vm, spec), h.DnsblCacheFlushEnabled(deployed_vm):
+    with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()  # the allowed probes (a-shape) must reach the controlled stub
         # Listing the name is the feed/swap allow->block direction: the module already
-        # mounted (a prior case), so first-enable applies via the no-restart swap. The
-        # opt-in bulk policy flushes Unbound's full message + RRset caches after
-        # the applied-generation handshake, so the pre-resolved answer cannot survive.
+        # mounted (a prior case), so first-enable applies via the no-restart swap. Flush
+        # the pre-resolved answer before observing the new block.
+        h.flush_unbound_name(deployed_vm, domain)
         blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} still resolving after block: {blocked}"
 
