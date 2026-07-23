@@ -27,9 +27,9 @@ Row -> test map (ADR.md §7):
 NDJSON interchange format (issues #1083/#1177): per-feed staging '.txt' files use compact
 tagged NDJSON; translated '.raw' files remain plain domain/ABP lines
 (docs/misc/architecture-notes.md "DNSBL interchange format").
-test_adr62_stale_generation_rebuild_hold_row_orig_present and its '.orig'-absent sibling
-below pin the staging-generation guard's rebuild-from-'.orig' fallback (a pre-#1083 '.txt'
-is never verbatim-reused, even on a Held row).
+test_adr62_stale_generation_rebuild_hold_row_orig_present pins a Held row's local
+rebuild-from-'.orig' path; its Enabled, '.orig'-absent sibling pins the network fallback.
+A pre-#1083 '.txt' is never verbatim-reused in either case.
 
 These need the booted ``smoke_vm`` fixture, the branch ``.pkg`` (``SMOKE_PKG``), and
 the smoke deps; without them they skip cleanly.
@@ -509,12 +509,13 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
 # Stale-generation rebuild (issue #1083) — a pre-#1083 '.txt' left over across
 # a pkg upgrade is NEVER verbatim-reused: pfb_dnsbl_staging_is_current_generation
 # rejects it, and the sync loop rebuilds from '.orig' via the same machinery a
-# Reload uses — refetching over the network only when '.orig' itself is absent.
-# Both rows stage a HOLD row (state='Hold') to prove the rebuild reaches even a
-# row pfblockerng_sync_cron()'s own change-detector pass skips outright, and both
-# stage the exact #1083/#1105 old-dialect mix: a 6-col CSV line plus a bare-
-# domain line (the shape a comma-less verbatim-ABP line took pre-#1083 — issue
-# #1105) so a regression that drops the bare line on rebuild is caught here.
+# Reload uses. The first row is Held with '.orig' present, proving the rebuild
+# stays local. The second remains Enabled and removes '.orig', proving the
+# network fallback; Hold intentionally never refetches when its baseline is
+# missing (issue #1278). Both stage the exact #1083/#1105 old-dialect mix: a
+# 6-col CSV line plus a bare-domain line (the shape a comma-less verbatim-ABP
+# line took pre-#1083 — issue #1105) so a regression that drops the bare line on
+# rebuild is caught here.
 # --------------------------------------------------------------------------- #
 
 
@@ -632,9 +633,11 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
 def test_adr62_stale_generation_rebuild_orig_absent_triggers_download(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """#1083 stale-generation rebuild: with '.orig' absent, the rebuild fork downloads fresh.
 
-    Given the SAME Hold-row + stale-'.txt' setup as the '.orig'-present sibling
-      case, except '.orig' is removed before the pass (a download cache that
-      never existed, or was purged, alongside a stale pre-#1083 '.txt').
+    Given the SAME stale-'.txt' setup as the '.orig'-present sibling case, but
+      with the row left Enabled and '.orig' removed before the pass (a download
+      cache that never existed, or was purged, alongside a stale pre-#1083
+      '.txt'). Hold is intentionally excluded: its "download once, never again"
+      contract must not refetch a missing baseline (issue #1278).
     When the cron pass runs and the staging-generation guard rejects the stale
       '.txt' the same way,
     Then a NEW 'Rebuild' log line appears for the header, '.orig' — ABSENT
@@ -676,8 +679,6 @@ def test_adr62_stale_generation_rebuild_orig_absent_triggers_download(deployed_v
             h.flush_unbound_name(deployed_vm, name)
             ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
             assert not h.resolves_to(ans, STUB_DNS_A), f"baseline domain {name} still resolving: {ans}"
-
-        _set_dnsbl_row_state(deployed_vm, header, "Hold")
 
         deployed_vm.ssh("/bin/rm", "-f", orig_path)
         orig_gone = deployed_vm.ssh("/bin/test", "-e", orig_path)
