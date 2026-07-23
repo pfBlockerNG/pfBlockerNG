@@ -80,15 +80,23 @@ function pfb_top1m_fetch_if_needed(string $dbdir, ?callable $fetch = NULL): bool
 
 /** Rebuild only from an active TOP1M source whose detector baseline is current. */
 function pfb_top1m_reprocess_needed(string $dbdir): bool {
-	$whitelist = "{$dbdir}/pfbalexawhitelist.txt";
-	$legacy = FALSE;
-	if (file_exists($whitelist)) {
-		$contents = @file_get_contents($whitelist);
-		$legacy = $contents !== FALSE && str_contains($contents, ',,');
+	if (pfb_top1m_refresh_needed($dbdir)) {
+		return FALSE;
 	}
 
-	return !pfb_top1m_refresh_needed($dbdir) &&
-		(!file_exists($whitelist) || $legacy || file_exists("{$dbdir}/top-1m.update"));
+	$whitelist = "{$dbdir}/pfbalexawhitelist.txt";
+	if (!file_exists($whitelist) || file_exists("{$dbdir}/top-1m.update")) {
+		return TRUE;
+	}
+
+	$handle = @fopen($whitelist, 'r');
+	if ($handle === FALSE) {
+		return FALSE;
+	}
+	$first_line = @fgets($handle);
+	@fclose($handle);
+
+	return $first_line !== FALSE && str_contains($first_line, ',,');
 }
 
 /** Record the manifest publication outcome without logging a false completion. */
