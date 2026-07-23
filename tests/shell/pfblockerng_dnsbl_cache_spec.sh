@@ -97,6 +97,23 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     cleanup_sandbox
   End
 
+  stage_root_chown() (
+    setup_sandbox
+    # shellcheck disable=SC2329  # invoked indirectly by dnsbl_cache
+    chown() {
+      if [ "$3" = "${pfbchroot}" ]; then
+        printf '%s %s CHROOT\n' "$1" "$2"
+      fi
+    }
+    dnsbl_cache stage
+    cleanup_sandbox
+  )
+
+  It 'stage gives unbound the chroot directory without recursive ownership changes'
+    When call stage_root_chown
+    The output should equal '-f unbound:unbound CHROOT'
+  End
+
   It 'stage copies the TLD oracle from dnsbl_tld to pfb_py_tld.txt (name-mapped, issue #1255)'
     setup_sandbox
     When call dc stage
