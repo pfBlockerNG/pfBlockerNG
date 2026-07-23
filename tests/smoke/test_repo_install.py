@@ -232,17 +232,30 @@ def _ssh_check(vm: SmokeVM, *remote: str, timeout: float = 180.0) -> subprocess.
 def _wait_for_pkg_quiescence(vm: SmokeVM, *, deadline_s: float = 120.0, poll_s: float = 1.0) -> None:
     """Wait until pfSense's boot-time package work releases the shared pkg database."""
     deadline = time.monotonic() + deadline_s
-    probe = "pgrep -x 'pkg|pkg-static|pfSense-upgrade' >/dev/null"
+    probe = (
+        "out=$(env ASSUME_ALWAYS_YES=yes pkg update -f 2>&1); rc=$?; "
+        'if [ "$rc" -eq 0 ]; then exit 1; fi; '
+        'printf "%s\\n" "$out" >&2; '
+        'case "$out" in *"Waiting for another process to update repository"*) exit 0;; *) exit 2;; esac'
+    )
     while True:
-        active = vm.ssh("/bin/sh", "-c", probe, timeout=30.0)
-        if active.returncode == 1:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        attempt = vm.ssh("/bin/sh", "-c", probe, timeout=remaining)
+        if attempt.returncode == 1:
             return
-        if active.returncode != 0:
-            raise RuntimeError(f"package-manager probe failed: rc={active.returncode} {active.stderr!r}")
-        if time.monotonic() >= deadline:
-            processes = vm.ssh("ps", "axww", "-o", "pid,ppid,command", timeout=30.0)
-            raise RuntimeError(f"package manager still active after {deadline_s:g}s: {processes.stdout.strip()}")
-        time.sleep(poll_s)
+        if attempt.returncode != 0:
+            raise RuntimeError(f"pkg readiness check failed: rc={attempt.returncode} {attempt.stderr!r}")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll_s, remaining))
+    processes = vm.ssh("ps", "axww", "-o", "pid,ppid,command", timeout=30.0)
+    raise RuntimeError(
+        f"package manager still active after {deadline_s:g}s: ps rc={processes.returncode}; "
+        f"stdout={processes.stdout.strip()!r}; stderr={processes.stderr.strip()!r}"
+    )
 
 
 def build_guest_repo(vm: SmokeVM, repo_dir: str, pkg_files: list[Path]) -> None:
