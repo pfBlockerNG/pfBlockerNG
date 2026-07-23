@@ -28,6 +28,25 @@ echo json_encode([
 ], JSON_THROW_ON_ERROR);
 """
 
+OFFLINE_PUBLICATION_PROBE = r"""
+require 'tests/php/bootstrap.php';
+$root = getenv('PFB_TOP1M_PROBE_DIR');
+$GLOBALS['pfb']['dbdir'] = $root . '/db';
+$GLOBALS['pfb']['dnsdir'] = $root . '/dnsbl';
+$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';
+$GLOBALS['pfb']['dnsblconfig'] = ['tldblacklist' => '', 'tldexclusion' => '', 'suppression' => ''];
+$GLOBALS['pfb']['unbound_py_rawdir'] = $root . '/pfb_py_raw';
+$GLOBALS['pfb']['unbound_py_sources'] = $root . '/pfb_py_sources.json';
+$GLOBALS['pfb']['unbound_py_top1m'] = $root . '/pfb_py_top1m.txt';
+$result = pfb_unbound_python_sources([], ['top1m_atomic' => [
+    'chown' => static fn(string $file, string $owner): bool => TRUE,
+    'chgrp' => static fn(string $file, string $group): bool => TRUE,
+    'chmod' => static fn(string $file, int $mode): bool => TRUE,
+]]);
+echo json_encode(['published' => is_array($result)], JSON_THROW_ON_ERROR);
+"""
+
 
 def _run_reprocess_probe(tmp_path: Path, *, timeout: int = 30) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
@@ -60,14 +79,20 @@ def _manifest(tmp_path: Path, *, enabled: bool = True) -> Path:
     return path
 
 
-def test_refresh_needed_short_circuits_without_opening_whitelist(tmp_path: Path) -> None:
+@pytest.mark.parametrize("current_baseline", [False, True], ids=["missing-baseline", "current-baseline"])
+def test_nonregular_whitelist_never_triggers_reprocessing(tmp_path: Path, current_baseline: bool) -> None:
     (tmp_path / "top-1m.csv").write_text("1,current.example\n", encoding="utf-8")
-    os.mkfifo(tmp_path / "pfbalexawhitelist.txt")
+    if current_baseline:
+        (tmp_path / "top-1m.csv.zip.orig").write_text("detector baseline\n", encoding="utf-8")
+    whitelist = tmp_path / "pfbalexawhitelist.txt"
+    os.mkfifo(whitelist)
+    fifo = os.open(whitelist, os.O_RDWR | os.O_NONBLOCK)
 
     try:
-        proc = _run_reprocess_probe(tmp_path, timeout=1)
-    except subprocess.TimeoutExpired:
-        pytest.fail("refresh-needed predicate opened the whitelist FIFO")
+        os.write(fifo, b".legacy.example,,\n")
+        proc = _run_reprocess_probe(tmp_path)
+    finally:
+        os.close(fifo)
 
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["reprocess"] is False
@@ -88,12 +113,59 @@ def test_current_canonical_whitelist_check_has_bounded_peak_memory(tmp_path: Pat
     assert result["peak_delta"] < 1024 * 1024
 
 
-def test_legacy_whitelist_reprocesses_to_python_exact_allow(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "legacy_wire",
+    [
+        b".offline.example,,\n,offline.example,,\n,www.offline.example,,\n",
+        b'.offline.example 60\n"offline.example 60\n"www.offline.example 60\n',
+    ],
+    ids=["python-mode", "native-mode"],
+)
+def test_offline_legacy_publication_projects_strict_exact_allow(tmp_path: Path, legacy_wire: bytes) -> None:
+    dbdir = tmp_path / "db"
+    dbdir.mkdir()
+    (tmp_path / "dnsbl").mkdir()
+    source = dbdir / "pfbalexawhitelist.txt"
+    source.write_bytes(legacy_wire)
+    env = os.environ.copy()
+    env["PFB_TOP1M_PROBE_DIR"] = str(tmp_path)
+
+    proc = subprocess.run(
+        ["php", "-r", OFFLINE_PUBLICATION_PROBE],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"published": True}
+    assert not (dbdir / "top-1m.csv.zip.orig").exists()
+    assert source.read_bytes() == legacy_wire
+    assert (tmp_path / "pfb_py_top1m.txt").read_bytes() == b"offline.example\n"
+
+    result = P.dnsbl_build_from_manifest(str(tmp_path / "pfb_py_sources.json"))
+    assert result is not None
+    assert result.white_db["offline.example"]["wildcard"] is False
+    assert P.whitelist_check_domain("offline.example", result.white_db, 1)
+    assert P.whitelist_check_domain("www.offline.example", result.white_db, 1)
+    assert not P.whitelist_check_domain("deep.offline.example", result.white_db, 1)
+
+
+@pytest.mark.parametrize(
+    "legacy_wire",
+    [
+        b".legacy.com,,\n,legacy.com,,\n,www.legacy.com,,\n",
+        b'.legacy.com 60\n"legacy.com 60\n"www.legacy.com 60\n',
+    ],
+    ids=["python-mode", "native-mode"],
+)
+def test_legacy_whitelist_reprocesses_to_python_exact_allow(tmp_path: Path, legacy_wire: bytes) -> None:
     (tmp_path / "top-1m.csv").write_text("1,LEGACY.COM\n", encoding="utf-8")
     (tmp_path / "top-1m.csv.zip.orig").write_text("detector baseline\n", encoding="utf-8")
-    (tmp_path / "pfbalexawhitelist.txt").write_text(
-        ".legacy.com,,\n,legacy.com,,\n,www.legacy.com,,\n", encoding="utf-8"
-    )
+    (tmp_path / "pfbalexawhitelist.txt").write_bytes(legacy_wire)
     php = r"""
 require 'tests/php/bootstrap.php';
 require_once 'src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
