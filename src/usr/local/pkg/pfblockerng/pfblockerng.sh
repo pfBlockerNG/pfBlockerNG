@@ -338,6 +338,7 @@ dnsbl_cache() {
 
 	dnsbl_cache_stage() {
 		mkdir -p "${pfbchroot}"
+		chown -f unbound:unbound "${pfbchroot}"
 		# The nullfs/devfs mount-point dirs pfb_python_mount expects (fresh-MFS safety).
 		for _d in lib dev var/log/pfblockerng usr/local/share/GeoIP; do
 			mkdir -p "${pfbchroot}/${_d}"
