@@ -9,16 +9,20 @@ from tests.smoke import test_repo_install as repo
 
 
 class _BrokenProbeVM:
+    def __init__(self) -> None:
+        self.probes = 0
+
     def ssh(self, *remote: str, timeout: float) -> subprocess.CompletedProcess[str]:
-        assert remote[:2] == ("/bin/sh", "-c")
-        assert "pkg update -f" in remote[2]
-        assert "Waiting for another process to update repository" in remote[2]
-        return subprocess.CompletedProcess(remote, 2, "", "pgrep failed")
+        self.probes += 1
+        assert remote == ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "update", "-f")
+        return subprocess.CompletedProcess(remote, 2, "", "repository unavailable")
 
 
 def test_pkg_quiescence_probe_error_fails_loudly() -> None:
-    with pytest.raises(RuntimeError, match=r"pkg readiness check failed: rc=2 'pgrep failed'"):
-        repo._wait_for_pkg_quiescence(_BrokenProbeVM())  # type: ignore[arg-type]
+    vm = _BrokenProbeVM()
+    with pytest.raises(RuntimeError, match=r"pkg readiness check failed: rc=2 'repository unavailable'"):
+        repo._wait_for_pkg_quiescence(vm)  # type: ignore[arg-type]
+    assert vm.probes == 1
 
 
 class _ActiveVM:
@@ -30,7 +34,7 @@ class _ActiveVM:
         if remote[0] == "ps":
             return subprocess.CompletedProcess(remote, self.ps_rc, "", "ps failed")
         self.probe_timeouts.append(timeout)
-        return subprocess.CompletedProcess(remote, 0, "", "")
+        return subprocess.CompletedProcess(remote, 1, "Waiting for another process to update repository pfSense\n", "")
 
 
 def test_pkg_quiescence_caps_probe_and_sleep_to_deadline(monkeypatch: pytest.MonkeyPatch) -> None:

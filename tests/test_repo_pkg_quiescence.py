@@ -16,7 +16,10 @@ class _FakeVM:
         if remote[0] == "ps":
             return subprocess.CompletedProcess(remote, 0, "123 pkg update -f\n", "")
         self.probes += 1
-        return subprocess.CompletedProcess(remote, 0 if next(self.busy) else 1, "", "")
+        if next(self.busy):
+            stdout = "Waiting for another process to update repository pfSense\n"
+            return subprocess.CompletedProcess(remote, 1, stdout, "")
+        return subprocess.CompletedProcess(remote, 0, "", "")
 
 
 def test_pkg_quiescence_waits_and_times_out_loudly() -> None:
