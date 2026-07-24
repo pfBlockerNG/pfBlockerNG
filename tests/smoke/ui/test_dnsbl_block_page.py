@@ -27,8 +27,13 @@ from .. import helpers
 
 pytestmark = pytest.mark.ui_e2e
 
+DNSBL_LOG = "/var/log/pfblockerng/dnsbl.log"
 
-def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.SmokeVM) -> None:
+
+def test_dnsbl_block_page_shows_real_correlation_detail(
+    deployed_vm: helpers.SmokeVM,
+    request: pytest.FixtureRequest,
+) -> None:
     """Scenario: a real DNSBL block correlates into the sinkhole page's detail row.
 
     Given a DNSBL feed listing one unique test domain (VIP mode).
@@ -58,6 +63,43 @@ def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.Smo
         # HTTP probe below only makes sense once this is asserted true.
         answer = helpers.dns_probe(deployed_vm, domain)
         assert helpers.is_vip(answer), f"expected VIP block for {domain!r}, got answer: {answer!r}"
+
+        # issue #1652: append a later lookalike row that the old BRE grep also
+        # matched (a domain '.' acted as a wildcard for '-'). The page must keep
+        # correlating the genuine row, not tail-select this forged attribution.
+        lookalike = domain.replace(".", "-", 1)
+        before_size = deployed_vm.ssh("stat", "-f", "%z", DNSBL_LOG)
+        assert before_size.returncode == 0 and before_size.stdout.strip().isdigit(), (
+            f"could not size {DNSBL_LOG} before lookalike append: "
+            f"rc={before_size.returncode} out={before_size.stdout!r} err={before_size.stderr!r}"
+        )
+
+        def restore_log() -> None:
+            restored = deployed_vm.ssh("truncate", "-s", before_size.stdout.strip(), DNSBL_LOG)
+            assert restored.returncode == 0, (
+                f"could not truncate {DNSBL_LOG} after lookalike test: rc={restored.returncode} err={restored.stderr!r}"
+            )
+
+        request.addfinalizer(restore_log)
+        guest_now = deployed_vm.ssh("date", "+%Y-%m-%d %H:%M:%S")
+        assert guest_now.returncode == 0 and guest_now.stdout.strip(), (
+            f"could not read guest timestamp: rc={guest_now.returncode} err={guest_now.stderr!r}"
+        )
+        lookalike_row = (
+            f"DNSBL-python,{guest_now.stdout.strip()},{lookalike},203.0.113.9,Python,"
+            f"DNSBL-Full,LookalikeGroup,{lookalike},LookalikeFeed,+,A\n"
+        )
+        appended = subprocess.run(
+            deployed_vm.ssh_argv("tee", "-a", DNSBL_LOG),
+            input=lookalike_row,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert appended.returncode == 0, (
+            f"could not append lookalike row to {DNSBL_LOG}: rc={appended.returncode} err={appended.stderr!r}"
+        )
 
         # THEN: an on-box curl to the sinkhole (the DNSBL VIP is a loopback-scoped
         # lo0 IP-alias, unreachable from the runner) with Host set to the
