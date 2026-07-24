@@ -91,6 +91,12 @@ $pconfig['log_syslog']			= PfbConfig::read('log_syslog')->value;
 // the registered default ('0') applies when the key is absent (new install / upgrade).
 $pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('pfb_log_trim_margin_pct');
 
+// issue #1669 slice C: client-side syntax highlighting toggle (default on). Read via
+// PfbConfig::read so the registered default applies; pfb_syntax_highlight uses the
+// LENIENT adapter (default-on checkbox, mirrors pfb_keep) -- extract the scalar .value
+// for pfb_cfg_lenient_read() at render.
+$pconfig['pfb_syntax_highlight']	= PfbConfig::read('pfb_syntax_highlight')->value;
+
 // Select field options
 $options_pfb_interval	= [	'1' => 'Every hour',
 				'2' => 'Every 2 hours',
@@ -224,6 +230,14 @@ if ($_POST) {
 			// service restart is needed when the toggle changes.
 			$pfb['gconfig']['log_syslog']	= pfb_filter($_POST['log_syslog'], PFB_FILTER_ON_OFF, 'general', '');
 
+			// issue #1669 slice C: persist the syntax-highlight toggle as an explicit
+			// 'on'/'off' (not '' for unchecked) so an unchecked save is distinguishable
+			// from a never-configured install (key absent => default on) -- mirrors the
+			// pfb_keep precedent (lenient adapter). Written into $pfb['gconfig'] so the
+			// writeSection() call below includes it -- a bare PfbConfig::write() before
+			// writeSection() would be clobbered by the section-level write.
+			$pfb['gconfig']['pfb_syntax_highlight']	= (($_POST['pfb_syntax_highlight'] ?? '') === 'on') ? 'on' : 'off';
+
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
 
@@ -324,6 +338,19 @@ $section->addInput(new Form_Textarea(
 ))->setHelp('IP addresses or CIDR ranges (one per line) that are exempt from the '
 		. 'internal-address check &mdash; e.g. an internal mirror. '
 		. 'Leave empty to block all feeds that resolve to an internal/private address.'
+);
+
+// issue #1669 slice C: client-side syntax highlighting for regex list fields.
+$section->addInput(new Form_Checkbox(
+	'pfb_syntax_highlight',
+	'Syntax Highlighting',
+	gettext('Enable'),
+	pfb_cfg_lenient_read($pconfig['pfb_syntax_highlight']) === PfbLenient::On,
+	'on'
+))->setHelp('Client-side syntax highlighting for regex list fields (e.g. the DNSBL '
+		. 'Regex List). Unchecking this disables it and skips loading the editor assets '
+		. '&mdash; useful for low-end client machines. Validation always stays '
+		. 'server-side either way.'
 );
 
 $group = new Form_Group('CRON Settings');

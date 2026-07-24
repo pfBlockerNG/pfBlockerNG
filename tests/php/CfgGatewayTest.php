@@ -257,6 +257,54 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('off', config_get_path($path), "write(read(''))==off for pfb_keep");
 	}
 
+	/**
+	 * issue #1669 slice C: pfb_syntax_highlight (lenient adapter, default on):
+	 * 'on'/'off' round-trip losslessly. Mirrors testPfbKeepLenientRoundTripOn/Off --
+	 * this field is the same default-on-checkbox shape as pfb_keep, using the LENIENT
+	 * adapter (not PfbToggle) for the same #484-class reason (see the registry comment
+	 * and CfgGatewayTest::testNoToggleFieldDefaultsToOn).
+	 *
+	 * Scenario:
+	 *   Background: pfb_syntax_highlight stored as 'on' or 'off'.
+	 *     Given v.  When read/write.
+	 *     Then 'on' round-trips to 'on'; 'off' round-trips to 'off'.
+	 */
+	public function testPfbSyntaxHighlightLenientRoundTripOn(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_syntax_highlight';
+
+		// Given: canonical 'on'.
+		$this->seedConfig($path, 'on');
+
+		// Before: raw 'on'.
+		$this->assertSame('on', config_get_path($path), 'before: pfb_syntax_highlight seed is on');
+
+		// When/After: read -> PfbLenient::On; write -> 'on'.
+		$enum = PfbConfig::read('pfb_syntax_highlight');
+		$this->assertSame(PfbLenient::On, $enum, "read: pfb_syntax_highlight 'on' -> PfbLenient::On");
+
+		PfbConfig::write('pfb_syntax_highlight', $enum);
+		$this->assertSame('on', config_get_path($path), "write(read('on'))==on for pfb_syntax_highlight");
+	}
+
+	public function testPfbSyntaxHighlightLenientRoundTripOff(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_syntax_highlight';
+
+		// Given: canonical 'off' (the explicit unchecked-save token).
+		$this->seedConfig($path, 'off');
+
+		// Before: raw 'off'.
+		$this->assertSame('off', config_get_path($path), 'before: pfb_syntax_highlight seed is off');
+
+		// When/After: read -> PfbLenient::Off; write -> 'off'.
+		$enum = PfbConfig::read('pfb_syntax_highlight');
+		$this->assertSame(PfbLenient::Off, $enum, "read: pfb_syntax_highlight 'off' -> PfbLenient::Off");
+
+		PfbConfig::write('pfb_syntax_highlight', $enum);
+		$this->assertSame('off', config_get_path($path), "write(read('off'))==off for pfb_syntax_highlight");
+	}
+
 	// -----------------------------------------------------------------------
 	// B — Default on absent key
 	// -----------------------------------------------------------------------
@@ -307,6 +355,29 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path));
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_cache_flush'),
 			'pfb_cache_flush absent -> Off (default)');
+	}
+
+	/**
+	 * issue #1669 slice C: pfb_syntax_highlight absent key returns On — the
+	 * registry default is 'on' (NEW feature, no prior behaviour to preserve, so
+	 * both fresh installs and upgraders read the same default; no grandfather
+	 * seed is needed per docs/misc/config-gateway.md's two-case forward-compat
+	 * rule). Uses the LENIENT adapter (mirrors pfb_keep) -- see the registry
+	 * comment and testNoToggleFieldDefaultsToOn for why PfbToggle cannot be used
+	 * for a default-on field.
+	 *
+	 * Scenario:
+	 *   Background: config[.../pfb_syntax_highlight] is unset.
+	 *     Given no seed.
+	 *     When PfbConfig::read('pfb_syntax_highlight').
+	 *     Then PfbLenient::On is returned (default 'on').
+	 */
+	public function testReadReturnsOnDefaultForPfbSyntaxHighlightAbsentKey(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_syntax_highlight';
+		$this->assertNull(config_get_path($path));
+		$this->assertSame(PfbLenient::On, PfbConfig::read('pfb_syntax_highlight'),
+			'pfb_syntax_highlight absent -> On (default)');
 	}
 
 	public function testReadReturnsRegisteredDefaultForPfbKeepAbsentKey(): void
@@ -1064,6 +1135,8 @@ final class CfgGatewayTest extends TestCase
 			'pfb_log_trim_margin_pct',
 			// ADR-38: syslog export toggle
 			'log_syslog',
+			// issue #1669 slice C: CodeMirror 6 live syntax-highlight toggle (default on)
+			'pfb_syntax_highlight',
 
 			// pfblockerngdnsblsettings/config/0 scalars
 			'pfb_dnsbl',

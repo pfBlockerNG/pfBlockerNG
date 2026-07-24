@@ -29,6 +29,14 @@ pfb_global();
 
 $pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
 
+// issue #1669 slice C: General-settings toggle gating the CodeMirror 6 live-highlight
+// overlay for the pfb_regex_list field below (registered in the general section,
+// default on, LENIENT adapter -- mirrors pfb_keep; owned/rendered by
+// pfblockerng_general.php). Read via the PfbConfig gateway -- matches this page's
+// pfb_cache_flush precedent (PfbConfig::read() returns the enum directly here,
+// compared with ===, not ->value).
+$pfb_syntaxhl_on = (PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On);
+
 // Collect local domain TLD for Python TLD Allow array
 // foreign key — out of ADR-29 gateway scope (system/domain is not a pfblockerng* path)
 if (strpos(config_get_path('system/domain'), '.') !== FALSE) {
@@ -3573,6 +3581,10 @@ print ($form);
 print_callout('<strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong>');
 
 ?>
+<?php if ($pfb_syntaxhl_on): ?>
+<!-- issue #1669 slice C: live syntax highlighting for the pfb_regex_list field -->
+<script src="vendor/codemirror/cm-regex.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-regex.min.js')?>"></script>
+<?php endif; ?>
 <script type="text/javascript">
 //<![CDATA[
 
@@ -3740,6 +3752,18 @@ function enable_dnsblip() {
 }
 
 events.push(function(){
+<?php if ($pfb_syntaxhl_on): ?>
+	// issue #1669 slice C: progressively enhance pfb_regex_list into a CodeMirror 6
+	// live-highlight editor. window.pfbCM is the global the vendored bundle exposes
+	// (IIFE --global-name=pfbCM); fromTextarea() hides the textarea, mounts the editor
+	// before it, and keeps name/value synced so the save handler's $_POST read is
+	// unaffected.
+	var pfbRegexListEl = document.getElementById('pfb_regex_list');
+	if (pfbRegexListEl && window.pfbCM) {
+		window.pfbCM.fromTextarea(pfbRegexListEl);
+	}
+<?php endif; ?>
+
 	$('#pfb_tld').click(function() {
 		enable_tld();
 	});

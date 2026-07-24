@@ -701,6 +701,22 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 		],
 
+		// issue #1669 slice C: client-side syntax highlighting for regex list fields
+		// (CodeMirror 6), gating asset emission on pfblockerng_dnsbl.php. NEW feature --
+		// no prior behaviour to preserve, so both fresh installs and upgraders take the
+		// same 'on' absent-default; no grandfather seed is needed (config-gateway.md's
+		// two-case forward-compat rule). Uses the LENIENT adapter, not PfbToggle -- a
+		// TOGGLE field's '' off-value cannot survive the live config round-trip when the
+		// default is 'on' (absent collapses back to the default, silently re-enabling a
+		// deliberate off; the #484 pfb_keep bug class, enforced by
+		// CfgGatewayTest::testNoToggleFieldDefaultsToOn). Mirrors pfb_keep exactly.
+		'pfb_syntax_highlight' => [
+			'section'       => $gen,
+			'default'       => 'on',
+			'read_adapter'  => 'pfb_cfg_lenient_read',
+			'write_adapter' => 'pfb_cfg_lenient_write',
+		],
+
 		// -------------------------------------------------------------------
 		// DNSBL settings section (pfblockerngdnsblsettings/config/0)
 		// -------------------------------------------------------------------

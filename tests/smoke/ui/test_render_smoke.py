@@ -113,6 +113,10 @@ PAGE_TABLE: tuple[Page, ...] = (
             # "...to access<br />the DNSBL Webserver", so this space-joined phrase is the
             # red→green guard (absent with the <br />, present once it is a space).
             "Selected Interface(s) to access the ",
+            # issue #1669 slice C: the vendored CodeMirror 6 bundle include -- proves the
+            # pfb_regex_list live-highlighting asset is wired on the page. Present because
+            # the gating pfb_syntax_highlight toggle defaults on for a fresh box.
+            "vendor/codemirror/cm-regex.min.js",
         ),
     ),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
