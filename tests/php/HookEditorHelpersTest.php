@@ -17,6 +17,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_hook_editor_compose_filename')]
 #[CoversFunction('pfb_hook_editor_path')]
 #[CoversFunction('pfb_hook_editor_template')]
+#[CoversFunction('pfb_hook_editor_lang_for')]
 final class HookEditorHelpersTest extends TestCase
 {
 	private string $dir = '';
@@ -258,5 +259,45 @@ final class HookEditorHelpersTest extends TestCase
 		$this->assertStringContainsString('CONTINUES', $tpl);
 		$this->assertStringContainsString('SIGTERM', $tpl);
 		$this->assertStringContainsString('SIGKILL', $tpl);
+	}
+
+	// ------------------------------------------------------------------
+	// pfb_hook_editor_lang_for() -- issue #1669 Part B slice B2: picks the CodeMirror 6
+	// hook-editor mode ('py' | 'sh') from the loaded script's own extension, falling
+	// back to the create-flow's typed Language choice when nothing is loaded yet.
+	// ------------------------------------------------------------------
+
+	public function testLangForReturnsPyForADotPyScript(): void
+	{
+		$this->assertSame('py', pfb_hook_editor_lang_for('hook_pre_myhook.py', 'sh'));
+	}
+
+	public function testLangForReturnsShForADotShScript(): void
+	{
+		$this->assertSame('sh', pfb_hook_editor_lang_for('hook_post_myhook.sh', 'py'));
+	}
+
+	public function testLangForFallsBackToTheFallbackWhenScriptIsEmpty(): void
+	{
+		$this->assertSame('py', pfb_hook_editor_lang_for('', 'py'));
+		$this->assertSame('sh', pfb_hook_editor_lang_for('', 'sh'));
+	}
+
+	/**
+	 * A fallback value outside {'py', 'sh'} (e.g. a stray '' default) must never leak
+	 * through as the JS-facing lang value -- the helper coerces it to 'sh' the same
+	 * way pfb_eh_new_lang_val is coerced on the page itself.
+	 */
+	public function testLangForCoercesAnUnrecognisedFallbackToSh(): void
+	{
+		$this->assertSame('sh', pfb_hook_editor_lang_for('', 'anything-else'));
+	}
+
+	public function testLangForUsesFallbackForAnUnknownScriptExtension(): void
+	{
+		// An extension outside {py, sh} (defensive -- pfb_hook_script_valid() already
+		// gates $script to the real allow-list before this is ever called) falls back
+		// rather than propagating an unrecognised mode string to the JS side.
+		$this->assertSame('py', pfb_hook_editor_lang_for('hook_pre_myhook.txt', 'py'));
 	}
 }

@@ -4417,6 +4417,25 @@ function pfb_hook_editor_template(string $when, string $lang): string {
 	return $header . $comment . "\n" . $body;
 }
 
+/*
+ * Picks the CodeMirror 6 hook-editor mode ('py' | 'sh', issue #1669 Part B slice B2 --
+ * python + shell only, no PHP per the ADR-12 addendum) from $script's own extension --
+ * the same basename pfb_hook_scripts()/pfb_hook_script_valid() already gate to
+ * hook_<when>_*.{sh,py}. $fallback (itself coerced to 'py'|'sh', default 'sh') is used
+ * when $script is empty (nothing loaded yet -- a fresh page load or a failed create
+ * POST) or carries an unrecognised extension, so this never returns anything outside
+ * {'py', 'sh'} for the page to echo into the JS init.
+ */
+function pfb_hook_editor_lang_for(string $script, string $fallback): string {
+	if ($script !== '') {
+		$ext = strtolower(pathinfo($script, PATHINFO_EXTENSION));
+		if ($ext === 'py' || $ext === 'sh') {
+			return $ext;
+		}
+	}
+	return ($fallback === 'py') ? 'py' : 'sh';
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:

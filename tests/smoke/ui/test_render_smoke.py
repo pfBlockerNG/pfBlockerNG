@@ -219,7 +219,16 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page(
         "edit_hooks",
         "/pfblockerng/pfblockerng_edit_hooks.php",
-        ("Advanced Users Only", "Edit Hooks", "Load an Existing Hook Script"),
+        (
+            "Advanced Users Only",
+            "Edit Hooks",
+            "Load an Existing Hook Script",
+            # issue #1669 Part B slice B2: the vendored CodeMirror 6 hook-editor bundle
+            # include -- proves the pfb_hook_editor_content live-highlighting asset is
+            # wired on the page. Present because the gating pfb_syntax_highlight toggle
+            # defaults on for a fresh box (same rationale as the "dnsbl" entry above).
+            "vendor/codemirror/cm-hooks.min.js",
+        ),
     ),
     # The dashboard widget (auth-gated; $nocsrf=true). A direct GET renders the alias-table panel
     # whose hidden inputs (id="pfblockerngack") are a stable marker; the AJAX getNew* paths need a

@@ -50,6 +50,12 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
+// issue #1669 Part B slice B2: General-settings toggle gating the CodeMirror 6
+// live-highlight overlay for the #pfb_hook_editor_content field below (same toggle,
+// same PfbConfig/PfbLenient idiom, as pfblockerng_dnsbl.php's $pfb_syntaxhl_on --
+// registered in the general section, default on, rendered by pfblockerng_general.php).
+$pfb_syntaxhl_on = (PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On);
+
 // SECONDARY PRIVILEGE GATE (issue #1669 Part B / ADR-12 addendum). Placed
 // immediately after the includes -- before any request superglobal is read -- so
 // this ONE check guards the picker/render path AND the create/save POST handlers
@@ -177,6 +183,12 @@ if (!$_POST && isset($_GET['when'], $_GET['script'])) {
 		$input_errors[] = gettext('That script is not a valid hook file for the selected Pre/Post.');
 	}
 }
+
+// issue #1669 Part B slice B2: the CM6 editor mode -- follows the loaded script's own
+// extension (pfb_eh_sel_script, populated by the picker/create-redirect above), falling
+// back to the create-flow's typed Language choice (pfb_eh_new_lang_val) when nothing is
+// loaded yet.
+$pfb_eh_lang = pfb_hook_editor_lang_for($pfb_eh_sel_script, $pfb_eh_new_lang_val);
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Update'), gettext('Edit Hooks'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_update.php', '@self');
@@ -355,9 +367,26 @@ $form->add($section);
 
 print($form);
 ?>
+<?php if ($pfb_syntaxhl_on): ?>
+<!-- issue #1669 Part B slice B2: live syntax highlighting for the pfb_eh_content field -->
+<script src="vendor/codemirror/cm-hooks.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-hooks.min.js')?>"></script>
+<?php endif; ?>
 <script type="text/javascript">
 //<![CDATA[
 events.push(function() {
+<?php if ($pfb_syntaxhl_on): ?>
+	// issue #1669 Part B slice B2: progressively enhance pfb_eh_content into a
+	// CodeMirror 6 live-highlight editor (python or shell mode, per $pfb_eh_lang).
+	// window.pfbHooksCM is the global the vendored bundle exposes (IIFE
+	// --global-name=pfbHooksCM); fromTextarea() hides the textarea, mounts the editor
+	// before it, and keeps name/value synced so the save handler's $_POST read is
+	// unaffected.
+	var pfbHookEditorEl = document.getElementById('pfb_hook_editor_content');
+	if (pfbHookEditorEl && window.pfbHooksCM) {
+		window.pfbHooksCM.fromTextarea(pfbHookEditorEl, '<?=$pfb_eh_lang?>');
+	}
+<?php endif; ?>
+
 	// Two distinct POST actions share this ONE form (house pattern:
 	// pfblockerng_software.php's 'Check now' button) -- a click injects a hidden
 	// field naming the action, then submits the same form. The server-side handler
