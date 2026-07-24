@@ -13,9 +13,11 @@ vendor/bin/phpunit     # config: phpunit.xml at the repo root
 ```
 
 Requires PHP 8.3+ (CE 2.8 baseline) with the `curl`, `intl`, `mbstring`,
-`ctype` and `filter` extensions. The pre-commit hook and CI (`test.yml`,
-`php-unit` job) run the same command; CI additionally prints an informational
-`--coverage-text` summary (no enforced floor yet — see issues #38/#39).
+`ctype` and `filter` extensions. Run `vendor/bin/phpunit` explicitly while
+iterating. The pre-commit hook does not run unit suites; for staged PHP it runs
+the Composer vendor guard, syntax checks, PHPStan and PHPCS. CI (`test.yml`,
+`php-unit` job) runs PHPUnit with an informational `--coverage-text` summary
+(no enforced floor yet — see issues #38/#39).
 
 ## How it works — testing the *real* code, no live box
 
