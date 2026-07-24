@@ -391,6 +391,9 @@ if (!function_exists('parse_xml_config')) {
 
 if (!function_exists('safe_write_file')) {
 	function safe_write_file(string $file, string $content, bool $force_binary = false): bool {
+		if (($GLOBALS['pfb_test_journal_write_failure'] ?? false) && str_contains(basename($file), '.transition-journal.')) {
+			return false;
+		}
 		if (($GLOBALS['pfb_test_corrupt_head_write'] ?? false) && str_contains(basename($file), '.head.')) {
 			$content = '{}';
 		}

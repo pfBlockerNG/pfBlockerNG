@@ -38,6 +38,189 @@
             }
         ]
     },
+    "_pfb_settings_journal_artifact": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_journal_decode": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "bytes",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_journal_fields": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "_pfb_settings_journal_hash": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "allow_empty",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
+            }
+        ]
+    },
+    "_pfb_settings_journal_identity": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "allow_empty",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
+            }
+        ]
+    },
+    "_pfb_settings_journal_path": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_journal_publish": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "journal",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_journal_read_locked": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_journal_rename": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "source",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_journal_root": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            },
+            {
+                "name": "create",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "true"
+            }
+        ]
+    },
+    "_pfb_settings_journal_sync_directory": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "directory",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_journal_validate": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "journal",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "_pfb_settings_mkdir": {
         "returnsRef": false,
         "returnType": "void",
@@ -6693,6 +6876,79 @@
         "returnsRef": false,
         "returnType": "array",
         "params": []
+    },
+    "pfb_settings_journal_advance": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "expected_phase",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "next_phase",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_journal_clear": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_journal_create": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "journal",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_journal_read": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_settings_snapshot_create": {
         "returnsRef": false,

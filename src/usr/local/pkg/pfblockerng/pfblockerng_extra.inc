@@ -1505,6 +1505,275 @@ function _pfb_settings_path(string $root, string $family, string $path): void
 	}
 }
 
+function _pfb_settings_journal_fields(): array
+{
+	return [
+		'journal_version', 'phase', 'action', 'source_family', 'source_package_name',
+		'source_package_version', 'source_snapshot_sha256', 'source_live_sha256',
+		'target_family', 'target_package_name', 'target_package_version',
+		'target_snapshot_sha256', 'target_artifact', 'target_artifact_sha256',
+		'target_abi', 'target_source_identity', 'authorization_sha256',
+	];
+}
+
+function _pfb_settings_journal_identity(mixed $value, bool $allow_empty = FALSE): string
+{
+	if (!is_string($value) || (!$allow_empty && $value === '') || strlen($value) > 255
+		|| preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
+		throw new InvalidArgumentException('invalid settings transition journal identity');
+	}
+	return $value;
+}
+
+function _pfb_settings_journal_hash(mixed $value, bool $allow_empty = FALSE): string
+{
+	if (!is_string($value) || ($allow_empty && $value === '' ? FALSE : preg_match('/^[a-f0-9]{64}$/D', $value) !== 1)) {
+		throw new InvalidArgumentException('invalid settings transition journal hash');
+	}
+	return $value;
+}
+
+function _pfb_settings_journal_artifact(mixed $value): string
+{
+	$value = _pfb_settings_journal_identity($value);
+	if ($value[0] !== '/' || strlen($value) === 1 || str_contains($value, '//')
+		|| preg_match('~/(?:\.{1,2})(?:/|$)~', $value) === 1) {
+		throw new InvalidArgumentException('invalid settings transition journal artifact');
+	}
+	if (dirname($value) !== '/') {
+		try {
+			_pfb_settings_root(dirname($value));
+		} catch (InvalidArgumentException) {
+			throw new InvalidArgumentException('invalid settings transition journal artifact');
+		}
+	}
+	if (is_link($value) || (file_exists($value) && realpath($value) !== $value)) {
+		throw new InvalidArgumentException('invalid settings transition journal artifact');
+	}
+	return $value;
+}
+
+function _pfb_settings_journal_validate(array $journal): array
+{
+	if (array_keys($journal) !== _pfb_settings_journal_fields() || $journal['journal_version'] !== 1
+		|| !in_array($journal['phase'], ['prepared', 'settings-applying', 'settings-applied', 'complete'], TRUE)
+		|| !in_array($journal['action'], ['preserve', 'restore', 'clear'], TRUE)) {
+		throw new InvalidArgumentException('invalid settings transition journal');
+	}
+	if (!is_string($journal['source_family']) || !is_string($journal['target_family'])) {
+		throw new InvalidArgumentException('invalid settings transition journal family');
+	}
+	_pfb_settings_family($journal['source_family']);
+	_pfb_settings_family($journal['target_family']);
+	foreach (['source_package_name', 'source_package_version', 'target_package_name', 'target_package_version', 'target_abi', 'target_source_identity'] as $field) {
+		_pfb_settings_journal_identity($journal[$field]);
+	}
+	foreach (['source_snapshot_sha256', 'source_live_sha256', 'target_artifact_sha256'] as $field) {
+		_pfb_settings_journal_hash($journal[$field]);
+	}
+	_pfb_settings_journal_hash($journal['target_snapshot_sha256'], TRUE);
+	_pfb_settings_journal_hash($journal['authorization_sha256'], TRUE);
+	_pfb_settings_journal_artifact($journal['target_artifact']);
+	return $journal;
+}
+
+function _pfb_settings_journal_root(?string $root, bool $create = TRUE): string
+{
+	$root = _pfb_settings_root($root);
+	if ($create) {
+		_pfb_settings_mkdir($root);
+	} else {
+		_pfb_settings_validate_dir($root);
+	}
+	return $root;
+}
+
+function _pfb_settings_journal_path(string $root): string
+{
+	$path = $root . '/transition-journal.json';
+	if (is_link($path)) {
+		throw new RuntimeException('unsafe settings transition journal');
+	}
+	return $path;
+}
+
+function _pfb_settings_journal_decode(string $bytes): array
+{
+	try {
+		$journal = json_decode($bytes, TRUE, 512, JSON_THROW_ON_ERROR);
+		if (!is_array($journal) || json_encode($journal, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) !== $bytes) {
+			throw new InvalidArgumentException('non-canonical settings transition journal');
+		}
+	} catch (JsonException) {
+		throw new InvalidArgumentException('invalid settings transition journal');
+	}
+	return _pfb_settings_journal_validate($journal);
+}
+
+function _pfb_settings_journal_read_locked(string $root): array
+{
+	$path = _pfb_settings_journal_path($root);
+	$stat = lstat($path);
+	$uid = function_exists('posix_geteuid') ? posix_geteuid() : getmyuid();
+	if ($stat === FALSE || !is_file($path) || is_link($path) || $stat['nlink'] !== 1
+		|| ($stat['mode'] & 0777) !== 0600 || $stat['uid'] !== $uid) {
+		throw new InvalidArgumentException('unsafe settings transition journal');
+	}
+	$bytes = file_get_contents($path);
+	if ($bytes === FALSE) {
+		throw new RuntimeException('unable to read settings transition journal');
+	}
+	return _pfb_settings_journal_decode($bytes);
+}
+
+function _pfb_settings_journal_rename(string $source, string $target): bool
+{
+	if (($GLOBALS['pfb_test_journal_rename_failure'] ?? FALSE) === TRUE) {
+		return FALSE;
+	}
+	return rename($source, $target);
+}
+
+function _pfb_settings_journal_sync_directory(string $directory): bool
+{
+	if (($GLOBALS['pfb_test_journal_dir_open_failure'] ?? FALSE) === TRUE
+		|| ($GLOBALS['pfb_test_journal_dir_fsync_failure'] ?? FALSE) === TRUE) {
+		return FALSE;
+	}
+	$handle = @fopen($directory, 'r');
+	if ($handle === FALSE) {
+		return FALSE;
+	}
+	try {
+		return function_exists('fsync') && @fsync($handle);
+	} finally {
+		fclose($handle);
+	}
+}
+
+function _pfb_settings_journal_publish(array $journal, string $root): void
+{
+	$path = _pfb_settings_journal_path($root);
+	$bytes = json_encode($journal, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+	$temp = $root . '/.transition-journal.' . bin2hex(random_bytes(8)) . '.tmp';
+	try {
+		if (!safe_write_file($temp, $bytes, TRUE) || !chmod($temp, 0600)) {
+			throw new RuntimeException('unable to write settings transition journal');
+		}
+		$stat = lstat($temp);
+		$uid = function_exists('posix_geteuid') ? posix_geteuid() : getmyuid();
+		if ($stat === FALSE || !is_file($temp) || is_link($temp) || $stat['nlink'] !== 1
+			|| ($stat['mode'] & 0777) !== 0600 || $stat['uid'] !== $uid) {
+			throw new RuntimeException('unsafe settings transition journal');
+		}
+		$readback = file_get_contents($temp);
+		if (($GLOBALS['pfb_test_journal_readback_failure'] ?? FALSE) === TRUE || $readback !== $bytes) {
+			throw new RuntimeException('settings transition journal readback mismatch');
+		}
+		if (!_pfb_settings_journal_rename($temp, $path)) {
+			throw new RuntimeException('unable to publish settings transition journal');
+		}
+		if (!_pfb_settings_journal_sync_directory($root)) {
+			throw new RuntimeException('unable to sync settings transition journal');
+		}
+	} catch (JsonException) {
+		throw new RuntimeException('invalid settings transition journal');
+	} finally {
+		if (is_file($temp)) {
+			@unlink($temp);
+		}
+	}
+}
+
+function pfb_settings_journal_create(array $journal, ?string $artifact_root = NULL): array
+{
+	$journal = _pfb_settings_journal_validate($journal);
+	if ($journal['phase'] !== 'prepared') {
+		throw new InvalidArgumentException('settings transition journal must start prepared');
+	}
+	$root = _pfb_settings_journal_root($artifact_root);
+	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
+	if ($lock_key === FALSE) {
+		throw new RuntimeException('settings transition lock unavailable');
+	}
+	try {
+		$path = _pfb_settings_journal_path($root);
+		if (file_exists($path) || is_link($path)) {
+			throw new RuntimeException('settings transition journal already exists');
+		}
+		_pfb_settings_journal_publish($journal, $root);
+		return $journal;
+	} finally {
+		unlock($lock_key);
+	}
+}
+
+function pfb_settings_journal_read(?string $artifact_root = NULL): array
+{
+	$root = _pfb_settings_journal_root($artifact_root, FALSE);
+	$lock_key = lock('pfblockerng-settings-transition', LOCK_SH);
+	if ($lock_key === FALSE) {
+		throw new RuntimeException('settings transition lock unavailable');
+	}
+	try {
+		return _pfb_settings_journal_read_locked($root);
+	} finally {
+		unlock($lock_key);
+	}
+}
+
+function pfb_settings_journal_advance(string $expected_phase, string $next_phase, ?string $artifact_root = NULL): array
+{
+	$legal = [
+		'prepared' => 'settings-applying',
+		'settings-applying' => 'settings-applied',
+		'settings-applied' => 'complete',
+	];
+	if (!array_key_exists($expected_phase, $legal) || $legal[$expected_phase] !== $next_phase) {
+		throw new InvalidArgumentException('illegal settings transition journal phase');
+	}
+	$root = _pfb_settings_journal_root($artifact_root, FALSE);
+	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
+	if ($lock_key === FALSE) {
+		throw new RuntimeException('settings transition lock unavailable');
+	}
+	try {
+		$journal = _pfb_settings_journal_read_locked($root);
+		if ($journal['phase'] !== $expected_phase) {
+			throw new InvalidArgumentException('unexpected settings transition journal phase');
+		}
+		$journal['phase'] = $next_phase;
+		_pfb_settings_journal_publish($journal, $root);
+		return $journal;
+	} finally {
+		unlock($lock_key);
+	}
+}
+
+function pfb_settings_journal_clear(?string $artifact_root = NULL): void
+{
+	$root = _pfb_settings_journal_root($artifact_root, FALSE);
+	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
+	if ($lock_key === FALSE) {
+		throw new RuntimeException('settings transition lock unavailable');
+	}
+	try {
+		$journal = _pfb_settings_journal_read_locked($root);
+		if ($journal['phase'] !== 'complete') {
+			throw new InvalidArgumentException('settings transition journal is not complete');
+		}
+		$path = _pfb_settings_journal_path($root);
+		if (!unlink($path)) {
+			throw new RuntimeException('unable to clear settings transition journal');
+		}
+		if (!_pfb_settings_journal_sync_directory($root)) {
+			throw new RuntimeException('unable to sync settings transition journal clear');
+		}
+	} finally {
+		unlock($lock_key);
+	}
+}
+
 function _pfb_settings_gzip_read(string $path): string
 {
 	$bytes = file_get_contents($path);
