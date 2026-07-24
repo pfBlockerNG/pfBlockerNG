@@ -105,7 +105,7 @@ blocking finding. One reviewer covers all three lenses — none may be skipped:
 3. **Test honesty** — every new/changed test carries an assertion that fails on
    regression; negative assertions have fixtures that could fail them (vacuity); no
    red run manufactured via a fault production cannot produce; red→green evidence
-   re-executed, not read; `www/` changes carry Tier-A coverage.
+   re-executed, not read; `www/` changes carry coverage required by `testing.md`.
 
 Mechanics that hold for every pass:
 
@@ -276,8 +276,8 @@ still gets its reply, pointing at the shared resolution. Then per finding:
   *retires* a literal token, a zero-hit tree grep for it is part of done (the #1047
   class; mechanical backstop `scripts/check_retired_tokens.py`, #1059).
 - **A fix that changes behaviour carries its own test** (fail-before/pass-after per
-  the repo test policy; Tier-A coverage for a `www/` change). Pure comment/lint nits
-  need none.
+  repo test policy, including `www/` coverage per `testing.md`). Pure comment/lint
+  nits need none.
 - Re-run the canonical gates for whatever the fixes touched
   (`scripts/agent/run-gates.sh --diff <base>`); nothing red.
 - Commit (`<scope>: <imperative summary>`) and push to the PR head branch — batched

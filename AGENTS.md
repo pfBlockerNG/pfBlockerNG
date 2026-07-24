@@ -47,7 +47,8 @@ worktrees, landing, tests, issues, commits) carries over; *this package's mechan
   before any production edit, frozen byte-identical, re-run GREEN unchanged — executed
   runs, never reasoned through.
 - Every change ships WITH its tests; no coverage theater (every test carries an assertion
-  that fails on regression); a `www/` change carries Tier-A `ui_render` coverage.
+  that fails on regression); a `www/` change carries the reachable UI coverage required by
+  `.agents/policy/testing.md`.
 - No Python interpreter ON the appliance (PHP or POSIX sh; `pfb_unbound.py` is the sole
   exception); shell is POSIX sh under strict ash/dash semantics.
 - Every registered config field goes through `PfbConfig` — never direct `config_*_path`.

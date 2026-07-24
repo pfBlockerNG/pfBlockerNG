@@ -56,7 +56,9 @@ documented in architecture-notes. Operative facts:
 
 - **Tier A `ui_render` is the PR gate**: GET each page → 200, body free of PHP
   errors/warnings, a page-specific marker present, AND no new on-box `php_error.log` line —
-  never HTTP 200 alone. Tiers B are schedule/dispatch-only. Run:
+  never HTTP 200 alone. A surface recorded in `test_render_smoke.py`'s
+  `EXCLUDED_FROM_TIER_A` uses that exclusion's named live tier plus focused hermetic
+  coverage instead. Tiers B are otherwise schedule/dispatch-only. Run:
   `python3 -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="`
   (`SMOKE_ADMIN_PASSWORD` must be set — the UI fixtures FAIL without it; a skip is not a
   pass).

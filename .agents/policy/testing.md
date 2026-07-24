@@ -32,7 +32,10 @@ NOT done, no matter what the line-coverage number says.**
    carries an assertion that would **fail on a regression**. Green at 100% line coverage with
    no failable assertion is **rejected**.
 4. **Front-end changes REQUIRE front-end tests.** A change touching `www/` must carry UI tests
-   (ADR-14). **Tier A (`ui_render`) is always required.** **Tier B (`ui_e2e`/`ui_browser`) is
+   (ADR-14). A webConfigurator-reachable surface requires **Tier A (`ui_render`)**. A surface
+   recorded in `test_render_smoke.py`'s `EXCLUDED_FROM_TIER_A` because Tier A cannot reach it
+   requires the live tier named by that exclusion plus focused hermetic coverage; never
+   relabel an unreachable Tier-B flow as Tier A. **Tier B (`ui_e2e`/`ui_browser`) is also
    REQUIRED IFF the change is observable *only* in Tier B** — which explicitly includes a
    **new page**, a **multi-step flow** (anything spanning more than one request/interaction),
    and **visual/structural** changes (element positioning/addition/removal, layout). When in
