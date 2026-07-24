@@ -28,6 +28,11 @@ Two **category** roles:
 - `bug` — something is broken
 - `enhancement` — new feature or improvement
 
+Category is expressed with the issue's native **type**, not a label: `bug` maps to
+type **Bug** (`gh issue edit <n> --type Bug`, or `gh issue create --type Bug`). The `bug`
+label has been retired — do not add it. `enhancement` still maps to the `enhancement`
+label until it is likewise migrated to a type.
+
 Five **state** roles:
 
 - `needs-triage` — maintainer needs to evaluate
