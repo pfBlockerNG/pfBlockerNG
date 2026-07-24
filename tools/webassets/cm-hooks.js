@@ -1,4 +1,4 @@
-// CM6 bundle entry for the pfBlockerNG hook-script editor (issue #1669 Part B slice B2).
+// CM6 bundle entry for the pfBlockerNG hook-script editor (issue #1669).
 // Bundled by scripts/build-webassets.sh (esbuild --global-name=pfbHooksCM) into
 // src/usr/local/www/pfblockerng/vendor/codemirror/cm-hooks.min.js. Kept a SEPARATE
 // bundle from cm-regex.min.js (owner decision: keep the regex-list bundle small) --

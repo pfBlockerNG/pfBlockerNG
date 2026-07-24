@@ -41,7 +41,7 @@ echo "==> Bundling cm-regex.min.js"
 "$ESBUILD" "${TOOLS_DIR}/cm-regex.js" --bundle --minify --format=iife --global-name=pfbCM \
     --outfile="${VENDOR_DIR}/cm-regex.min.js"
 
-# issue #1669 Part B slice B2 -- a SEPARATE bundle from cm-regex.min.js (owner
+# issue #1669 -- a SEPARATE bundle from cm-regex.min.js (owner
 # decision: keep the regex-list bundle small), python + shell modes only.
 echo "==> Bundling cm-hooks.min.js"
 "$ESBUILD" "${TOOLS_DIR}/cm-hooks.js" --bundle --minify --format=iife --global-name=pfbHooksCM \

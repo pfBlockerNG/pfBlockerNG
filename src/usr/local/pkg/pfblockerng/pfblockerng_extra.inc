@@ -4251,7 +4251,7 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 }
 
 // ---------------------------------------------------------------------------
-// issue #1669 Part B / ADR-12 post-acceptance addendum (2026-07-24) — pure
+// issue #1669 — pure
 // decision helpers for the gated "Edit Hooks" GUI hook-script editor
 // (pfblockerng_edit_hooks.php). Pure logic lives here (house precedent: the
 // setup-wizard decision helpers, pfblockerng.inc:3763) so it is covered by the
@@ -4293,8 +4293,8 @@ function pfb_hook_editor_compose_filename(string $when, string $core, string $la
 	// \A...\z, never bare ^...$: PCRE's bare '$' matches not only at the true end of
 	// the subject but also just BEFORE a single trailing "\n" -- so a core of
 	// "x\n" would pass '^[A-Za-z0-9_]+$' and compose 'hook_pre_x\n.sh', letting the
-	// create flow write a basename with an embedded LF (coordinator gate finding F1,
-	// 2026-07-24). '\A' and '\z' anchor to the absolute start/end only, with no such
+	// create flow write a basename with an embedded LF. '\A' and '\z' anchor to the
+	// absolute start/end only, with no such
 	// special case, so a trailing newline (or anything else outside the class) is
 	// rejected outright. The length bound is folded into the same pattern via
 	// {1,200} rather than a separate strlen() check, so there is exactly one
@@ -4314,8 +4314,8 @@ function pfb_hook_editor_compose_filename(string $when, string $core, string $la
  * Containment (mirrors the runner's own checks, pfblockerng.inc pfb_hook_scripts()
  * / the pfb_run_hooks() exec path):
  *   0. $basename must not carry a NUL byte -- basename() does not strip one
- *      (coordinator gate finding F2, 2026-07-24: a NUL is not a path-separator
- *      character to basename(), so it survives step 1's equality check unchanged
+ *      (a NUL is not a path-separator character to basename(), so it survives
+ *      step 1's equality check unchanged
  *      and would otherwise reach the filesystem calls below, where it is silently
  *      truncated -- returning a bogus non-existent-file PATH instead of NULL).
  *      Defense-in-depth only: unreachable via the page's own flows today, since
@@ -4426,7 +4426,7 @@ function pfb_hook_editor_template(string $when, string $lang): string {
 }
 
 /*
- * Picks the CodeMirror 6 hook-editor mode ('py' | 'sh', issue #1669 Part B slice B2 --
+ * Picks the CodeMirror 6 hook-editor mode ('py' | 'sh', issue #1669 --
  * python + shell only, no PHP per the ADR-12 addendum) from $script's own extension --
  * the same basename pfb_hook_scripts()/pfb_hook_script_valid() already gate to
  * hook_<when>_*.{sh,py}. $fallback (itself coerced to 'py'|'sh', default 'sh') is used
@@ -4445,9 +4445,9 @@ function pfb_hook_editor_lang_for(string $script, string $fallback): string {
 }
 
 /*
- * Normalizes a hook-script SAVE's content to bare LF line endings (second-pass
- * review finding S1, 2026-07-24): the HTML5 forms spec requires a browser
- * to normalize a <textarea>'s value to CRLF before including it in a form submission,
+ * Normalizes a hook-script SAVE's content to bare LF line endings: the HTML5 forms
+ * spec requires a browser to normalize a <textarea>'s value to CRLF before including
+ * it in a form submission,
  * regardless of what line ending the on-disk file or the user's editor originally
  * used -- so writing $_POST['pfb_eh_content'] straight to disk turns EVERY GUI save
  * into a CRLF file, including a no-edit load->save of the freshly created (LF)

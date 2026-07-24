@@ -20,7 +20,7 @@
  * limitations under the License.
  */
 
-// issue #1669 Part B / ADR-12 post-acceptance addendum (2026-07-24): this page lets a
+// issue #1669: this page lets a
 // gated admin AUTHOR hook-script file content from the GUI -- a reversal of the
 // original ADR-12 decision that hook content is picked, never typed/edited, in the web
 // UI (pfblockerng_hooks.php remains pick-only and untouched). The reversal is safe
@@ -50,7 +50,7 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
-// issue #1669 Part B slice B2: General-settings toggle gating the CodeMirror 6
+// issue #1669: General-settings toggle gating the CodeMirror 6
 // live-highlight overlay for the #pfb_hook_editor_content field below (same toggle,
 // same PfbConfig/PfbLenient idiom, as pfblockerng_dnsbl.php's $pfb_syntaxhl_on --
 // registered in the general section, default on, rendered by pfblockerng_general.php).
@@ -102,19 +102,20 @@ if ($_POST) {
 			$input_errors[] = gettext('Invalid new-hook fields: When must be Pre/Post, Name must be letters, ' .
 				'digits, and underscores only, and Language must be Shell or Python.');
 		} else {
-			// Mode 0755: the runner execs the vetted script directly under timeout(1)
+			// Mode 0700: the runner execs the vetted script directly under timeout(1)
 			// via its own shebang (pfb_run_hooks()), so a freshly created file must be
-			// executable to ever actually run, same as a shell-access admin would chmod
-			// it after authoring it by hand.
+			// executable to ever actually run -- but the runner always execs as root,
+			// and pfb_hook_scripts() has no is_executable filter, so nothing else on
+			// the system needs the group/other bits; owner-only is least privilege.
 			//
 			// 'x' mode: atomic create-exclusive open -- fails outright if the target
 			// already exists, closing the TOCTOU race a separate file_exists() check
-			// followed by a plain write left open (coordinator gate finding F3,
-			// 2026-07-24): two concurrent creates racing the same composed name could
-			// otherwise both pass the existence check and one clobber the other.
+			// followed by a plain write left open: two concurrent creates racing the
+			// same composed name could otherwise both pass the existence check and one
+			// clobber the other.
 			$pfb_eh_new_handle = @fopen($path, 'x');
 			if ($pfb_eh_new_handle === FALSE) {
-				// Second-pass review finding S4 (2026-07-24): fopen(..., 'x') returns FALSE
+				// fopen(..., 'x') returns FALSE
 				// for EVERY failure reason (name collision, unwritable directory, etc.) --
 				// the prior message named only the collision case, which misled an admin
 				// hitting a permissions problem into repeatedly retyping a "different Name"
@@ -125,7 +126,7 @@ if ($_POST) {
 				$pfb_eh_new_template = pfb_hook_editor_template($post_when, $post_lang);
 				$pfb_eh_new_written  = @fwrite($pfb_eh_new_handle, $pfb_eh_new_template);
 				@fclose($pfb_eh_new_handle);
-				if ($pfb_eh_new_written !== strlen($pfb_eh_new_template) || !@chmod($path, 0755)) {
+				if ($pfb_eh_new_written !== strlen($pfb_eh_new_template) || !@chmod($path, 0700)) {
 					// Partial/failed write or chmod -- never leave a half-written file
 					// behind for a later create attempt (with a different name) to trip
 					// over, or for the picker to ever list.
@@ -155,7 +156,7 @@ if ($_POST) {
 		// or a crafted POST can never write outside a file the picker already offers.
 		$post_when    = (string) ($_POST['pfb_eh_cur_when'] ?? '');
 		$post_script  = (string) ($_POST['pfb_eh_cur_script'] ?? '');
-		// Second-pass review finding S1 (2026-07-24): normalize BEFORE anything else
+		// Normalize BEFORE anything else
 		// touches the content -- see pfb_hook_editor_normalize_content()'s own doc
 		// comment for why an un-normalized save breaks every saved hook's shebang.
 		$post_content = pfb_hook_editor_normalize_content((string) ($_POST['pfb_eh_content'] ?? ''));
@@ -168,7 +169,7 @@ if ($_POST) {
 			if ($path === NULL || !is_file($path)) {
 				$input_errors[] = gettext('The selected hook script could not be resolved on disk.');
 			} else {
-				// Second-pass review finding S2 (2026-07-24): pfb_run_hooks() may exec
+				// pfb_run_hooks() may exec
 				// this exact file as root concurrently with a save -- an in-place
 				// truncate-and-write straight to the live target leaves a window where a
 				// concurrent reader/exec sees an empty or partial script. Stage to a temp
@@ -182,7 +183,7 @@ if ($_POST) {
 				if (
 					$pfb_eh_tmp === FALSE ||
 					$pfb_eh_written !== strlen($post_content) ||
-					!@chmod($pfb_eh_tmp, 0755) ||
+					!@chmod($pfb_eh_tmp, 0700) ||
 					!@rename($pfb_eh_tmp, $path)
 				) {
 					if ($pfb_eh_tmp !== FALSE) {
@@ -220,7 +221,7 @@ if (!$_POST && isset($_GET['when'], $_GET['script'])) {
 		if ($body === FALSE) {
 			$input_errors[] = gettext('Failed to read the selected hook script.');
 		} elseif (!mb_check_encoding($body, 'UTF-8')) {
-			// Second-pass review finding S3 (2026-07-24): htmlspecialchars(ENT_SUBSTITUTE)
+			// htmlspecialchars(ENT_SUBSTITUTE)
 			// (used by Form_Textarea::_getInput() at render) silently replaces every
 			// invalid byte with U+FFFD -- loading an invalid-UTF-8 file into this editor
 			// would corrupt it, and re-saving would persist that corruption to disk.
@@ -239,7 +240,7 @@ if (!$_POST && isset($_GET['when'], $_GET['script'])) {
 	}
 }
 
-// issue #1669 Part B slice B2: the CM6 editor mode -- follows the loaded script's own
+// issue #1669: the CM6 editor mode -- follows the loaded script's own
 // extension (pfb_eh_sel_script, populated by the picker/create-redirect above), falling
 // back to the create-flow's typed Language choice (pfb_eh_new_lang_val) when nothing is
 // loaded yet.
@@ -352,7 +353,7 @@ $group->add(new Form_Input(
 	NULL,
 	'text',
 	// RAW value: Form_Input::_getInput() already HTML-escapes it at render
-	// (coordinator gate finding F1, 2026-07-24) -- escaping it again at the page
+	// -- escaping it again at the page
 	// level would double-escape it.
 	$pfb_eh_new_core_val,
 	array('placeholder' => 'name_core')
@@ -365,7 +366,7 @@ $group->add(new Form_Select(
 ))->setHelp('Language')->setWidth(2);
 $section->add($group);
 
-// Named pfb_eh_create directly (coordinator gate finding F4, 2026-07-24): a clicked
+// Named pfb_eh_create directly: a clicked
 // <button type="submit" name="pfb_eh_create"> is included in the browser's OWN POST
 // natively -- exactly what isset($_POST['pfb_eh_create']) above keys on -- so no
 // click-handler JS is needed to make this submit as the create action.
@@ -395,7 +396,7 @@ $pfb_eh_loaded_label = ($pfb_eh_sel_script !== '')
 $section->addInput(new Form_StaticText('Now editing', $pfb_eh_loaded_label));
 
 // RAW values: Form_Element/Form_Input already HTML-escape every attribute at
-// render (coordinator gate finding F1, 2026-07-24) -- escaping them again at the
+// render -- escaping them again at the
 // page level would double-escape them.
 $form->addGlobal(new Form_Input('pfb_eh_cur_when', 'pfb_eh_cur_when', 'hidden', $pfb_eh_sel_when));
 $form->addGlobal(new Form_Input('pfb_eh_cur_script', 'pfb_eh_cur_script', 'hidden', $pfb_eh_sel_script));
@@ -404,13 +405,13 @@ $pfb_eh_textarea = new Form_Textarea(
 	'pfb_eh_content',
 	NULL,
 	// Displayed/re-loaded verbatim here -- the only transformation the save handler
-	// ever applies is line-ending normalization to LF (pfb_hook_editor_normalize_content(),
-	// second-pass review finding S1), which happens later, on $_POST, not to this
+	// ever applies is line-ending normalization to LF (pfb_hook_editor_normalize_content()),
+	// which happens later, on $_POST, not to this
 	// loaded value. Passed RAW: Form_Textarea::_getInput() already HTML-escapes the
 	// value exactly once at render (verified against pfSense master and
 	// RELENG_2_7_2), so escaping it again here would double-escape it: the browser
 	// decodes only ONE layer, leaving mangled entities (e.g. "&quot;") in what the
-	// user sees and re-saves (coordinator gate finding F1, 2026-07-24).
+	// user sees and re-saves.
 	$pfb_eh_content
 );
 $pfb_eh_textarea->setAttribute('id', 'pfb_hook_editor_content');
@@ -426,7 +427,7 @@ $pfb_eh_textarea->removeClass('form-control')
 $section->addInput($pfb_eh_textarea);
 
 // Named pfb_eh_save directly -- same native-submit reasoning as the Create button
-// above (coordinator gate finding F4, 2026-07-24).
+// above.
 $pfb_eh_save_btn = new Form_Button(
 	'pfb_eh_save',
 	gettext('Save'),
@@ -442,14 +443,14 @@ $form->add($section);
 print($form);
 ?>
 <?php if ($pfb_syntaxhl_on): ?>
-<!-- issue #1669 Part B slice B2: live syntax highlighting for the pfb_eh_content field -->
+<!-- issue #1669: live syntax highlighting for the pfb_eh_content field -->
 <script src="vendor/codemirror/cm-hooks.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-hooks.min.js')?>"></script>
 <?php endif; ?>
 <script type="text/javascript">
 //<![CDATA[
 events.push(function() {
 <?php if ($pfb_syntaxhl_on): ?>
-	// issue #1669 Part B slice B2: progressively enhance pfb_eh_content into a
+	// issue #1669: progressively enhance pfb_eh_content into a
 	// CodeMirror 6 live-highlight editor (python or shell mode, per $pfb_eh_lang).
 	// window.pfbHooksCM is the global the vendored bundle exposes (IIFE
 	// --global-name=pfbHooksCM); fromTextarea() hides the textarea, mounts the editor
