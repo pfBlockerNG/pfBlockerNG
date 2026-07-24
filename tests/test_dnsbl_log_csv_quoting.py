@@ -23,6 +23,8 @@ Writers under test (all four emitters of these logs):
 from __future__ import annotations
 
 import csv
+import json
+import subprocess
 import types
 from typing import Any
 
@@ -46,6 +48,25 @@ def _parse(line: str) -> list[str]:
     # Same grammar as the PHP read side: fgetcsv($h, 0, ',', '"', '') —
     # RFC4180 quoting, no escape char (csv "excel" dialect).
     return next(csv.reader([line]))
+
+
+def _parse_with_php(line: str) -> list[str]:
+    """Parse one row with the exact PHP reader grammar used by log consumers."""
+    script = (
+        "$row = fgetcsv(STDIN, 0, ',', '\"', '');"
+        "if ($row === false) { fwrite(STDERR, 'fgetcsv failed'); exit(1); }"
+        "echo json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);"
+    )
+    result = subprocess.run(
+        ["php", "-r", script],
+        input=f"{line}\n",
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    fields = json.loads(result.stdout)
+    assert isinstance(fields, list), f"PHP fgetcsv returned unexpected JSON: {result.stdout!r}"
+    return fields
 
 
 def _dnsbl_lines(lines: list[tuple[str, str]]) -> list[str]:
@@ -169,3 +190,47 @@ class TestPlainNameRowStaysBareCsv:
         (raw,) = _dnsbl_lines(lines)
         assert '"' not in raw, f"comma-free row must stay unquoted, got {raw!r}"
         assert raw.split(",")[2] == "plain.example.com", f"unexpected row shape: {raw!r}"
+
+
+@pytest.mark.parametrize(
+    ("label", "hostile_name"),
+    [
+        ("quote-doubling", 'a,"quoted".example.com'),
+        ("crlf-normalization", "a\r\nquoted.example.com"),
+        ("cr-normalization", "a\rquoted.example.com"),
+        ("lf-normalization", "a\nquoted.example.com"),
+    ],
+)
+def test_hostile_qname_is_one_php_csv_row(
+    label: str,
+    hostile_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Quotes and line breaks cannot forge columns or split a physical log row."""
+    lines = _capture_log(monkeypatch)
+
+    _log_idn_alert(hostile_name, "192.0.2.7", ("real_feed", "real_group", "xn--eval"), "A")
+
+    (raw,) = _dnsbl_lines(lines)
+    expected_name = hostile_name.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    assert raw.count("\n") == 0, f"{label}: row contains a physical newline: {raw!r}"
+    assert raw.count("\r") == 0, f"{label}: row contains a carriage return: {raw!r}"
+    if label == "quote-doubling":
+        assert '""' in raw, f"{label}: embedded quote was not doubled: {raw!r}"
+
+    expected = _parse(raw)
+    actual = _parse_with_php(raw)
+    assert actual == expected, f"{label}: PHP/Python CSV parsers disagree: {actual!r} != {expected!r}"
+    assert actual == [
+        "DNSBL-python",
+        actual[1],
+        expected_name,
+        "192.0.2.7",
+        "Python",
+        "Homoglyph_Alert",
+        "real_group",
+        "xn--eval",
+        "real_feed",
+        "+",
+        "A",
+    ], f"{label}: PHP fgetcsv fields shifted or changed: {actual!r}"
