@@ -122,7 +122,7 @@ test_smoke_download_loop.py 41.17
 test_smoke_download_loop.py::test_709_invert_v4_list_members_reach_pf_table 14.49
 test_smoke_download_loop.py::test_710_dnsblip_auto_rule_keeps_configured_invert 6.17
 test_smoke_download_loop.py::test_712_dnsbl_source_interface_used_on_download 20.51
-test_smoke_feeds.py 579.80
+test_smoke_feeds.py 559.65
 test_smoke_feeds.py::test_abp_bom_header_still_detected 18.55
 test_smoke_feeds.py::test_abp_perline_detection_in_plain_feed 4.05
 test_smoke_feeds.py::test_abp_perline_path_anchor_not_overblocked 19.05
