@@ -10012,7 +10012,8 @@ function pfb_top1m_candidate_valid(string $path, array $provider): bool
 // pfb_top1m_providers()[$pfb['dnsbl_top1m_type']->value] -- lets a unit test
 // exercise a synthetic descriptor's knobs without a live provider. Production
 // never passes it, so the resolved-provider path is exactly today's behaviour.
-function pfblockerng_top1m(?array $provider_override = NULL) {
+// $stream_ops is the filesystem-boundary test seam; production uses fwrite().
+function pfblockerng_top1m(?array $provider_override = NULL, array $stream_ops=array()) {
 	global $pfb;
 
 	if (empty($pfb['dnsbl_top1m_inc'])) {
@@ -10065,6 +10066,9 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 			pfb_logger("\n  TOP1M: could not create the temp whitelist file -- keeping the previous TOP1M whitelist.\n", 2);
 		}
 		else {
+			$write_fn = $stream_ops['write'] ?? static fn($stream, $bytes) => @fwrite($stream, $bytes);
+			$write_failed = FALSE;
+
 			// ADR-59: skip exactly the first physical line unconditionally when
 			// the provider ships a header row -- before the content filter below, so
 			// a header line's shape (which may not even contain a '.'/',') never
@@ -10117,7 +10121,12 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 
 					// Canonical TOP1M wire: one bare domain per line; exact lookup also allows only www.
 					// Deeper subdomains remain unallowed.
-					@fwrite($pfb_output, "{$domain}\n");
+					$record = "{$domain}\n";
+					$written = $write_fn($pfb_output, $record);
+					if ($written === FALSE || $written !== strlen($record)) {
+						$write_failed = TRUE;
+						break;
+					}
 				}
 
 				if ($x >= $pfb['dnsbl_top1m_cnt']) {
@@ -10127,7 +10136,14 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 			@fclose($pfb_output);
 			@fclose($handle);
 
-			if ($linecnt === 0) {
+			if ($write_failed) {
+				unlink_if_exists($tmp_file);
+				$preservation = $had_previous
+					? 'keeping the previous TOP1M whitelist.'
+					: 'no TOP1M whitelist available.';
+				pfb_logger("\n  TOP1M: failed to write the new whitelist build -- {$preservation}\n", 2);
+			}
+			else if ($linecnt === 0) {
 				// Dead feed (empty/invalid top-1m.csv) -- discard the temp build and
 				// keep whatever whitelist was already on disk instead of wiping it.
 				unlink_if_exists($tmp_file);
