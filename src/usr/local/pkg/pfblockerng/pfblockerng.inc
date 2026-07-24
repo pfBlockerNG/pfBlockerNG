@@ -11701,6 +11701,7 @@ final class PfbDownloadRequest
 		public readonly string $password = '',
 		public readonly string|false $sourceInterface = FALSE,
 		public readonly array $extraHeaders = array(),
+		public readonly bool $cookies = FALSE,
 	) {
 	}
 }
@@ -11739,6 +11740,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 	$password = $request->password;
 	$srcint = $request->sourceInterface;
 	$extra_headers = $request->extraHeaders;
+	$cookies = $request->cookies;
 	$top1m_provider = ($type === 'top1m') ? pfb_top1m_active_provider() : array();
 	global $pfb;
 	$http_status = '';
@@ -11911,6 +11913,9 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				// Load curl default settings — incl. the CURLOPT_PROTOCOLS scheme allow-list
 				// (an independent libcurl-layer backstop to PFB_FILTER_URL) and gzip encoding.
 				curl_setopt_array($ch, $pfb['curl_defaults']);
+				if ($cookies) {
+					curl_setopt($ch, CURLOPT_COOKIEFILE, '');
+				}
 
 				curl_setopt($ch, CURLOPT_FILE, $fhandle);	// Add $fhandle setting to cURL
 				curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);	// Set cURL download timeout

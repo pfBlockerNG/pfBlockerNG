@@ -767,6 +767,26 @@
             }
         ]
     },
+    "pfb_cct_ip_parse_record": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "raw_record",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "lenient",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_cfg_alias_delta_mode_read": {
         "returnsRef": false,
         "returnType": "PfbAliasDeltaMode",

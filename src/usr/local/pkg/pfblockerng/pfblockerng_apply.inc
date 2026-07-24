@@ -121,6 +121,45 @@ function pfb_dnsbl_reload_needed(bool $publish_failed, bool $data_changed, bool 
 	return !$publish_failed && ($data_changed || $update || $python || $safesearch_update || $unlock_forced);
 }
 
+/** Extract one built-in Cybercrime Tracker CSV record into a bare IP candidate. */
+function pfb_cct_ip_parse_record(string $raw_record, bool $lenient): ?string {
+	if (strlen($raw_record) > 16384) {
+		return NULL;
+	}
+
+	$record = trim($raw_record);
+	if ($record === '' || $record === 'TYPE,URL,IP') {
+		return NULL;
+	}
+
+	$fields = str_getcsv($record, ',', '"', '"');
+	if (count($fields) !== 3) {
+		return NULL;
+	}
+
+	$ip = trim($fields[2]);
+	if (($ip !== '') && (is_ipaddrv4($ip) || is_ipaddrv6($ip))) {
+		return $ip;
+	}
+	if (!$lenient) {
+		return NULL;
+	}
+
+	$url = trim($fields[1]);
+	$url = preg_replace('#^[a-z][a-z0-9+.-]*://#i', '', $url) ?? '';
+	$slash = strpos($url, '/');
+	if ($slash !== FALSE) {
+		$url = substr($url, 0, $slash);
+	}
+	$colon = strpos($url, ':');
+	if ($colon !== FALSE) {
+		$url = substr($url, 0, $colon);
+	}
+	$url = trim($url);
+
+	return is_ipaddrv4($url) ? $url : NULL;
+}
+
 /**
  * Parse one generic IP-feed line without touching run state or emitting output.
  * @param array{vtype:string,pftype:string,custom:bool,cidr_floor_v4:int|string,cidr_floor_v6:int|string,suppression:string,range:string,ipv4:string,ipv6:string} $config
@@ -1724,6 +1763,7 @@ function sync_package_pfblockerng($cron='') {
 											password: '',
 											sourceInterface: $srcint,
 											extraHeaders: array(),
+											cookies: $header === 'CCT_IP',
 										))->success)) {
 
 											// Determine reason for download failure
@@ -3203,6 +3243,7 @@ function sync_package_pfblockerng($cron='') {
 										password: '',
 										sourceInterface: $srcint,
 										extraHeaders: array(),
+										cookies: $header === 'CCT_IP',
 									))->success)) {
 
 										// Determine reason for download failure
@@ -3306,9 +3347,14 @@ function sync_package_pfblockerng($cron='') {
 									$ip_lineno++;
 
 									$raw_line = $line;
-									$parsed_line = pfb_ip_parse_line($raw_line, [
+									$parse_line = $raw_line;
+									if ($header === 'CCT_IP') {
+										$parse_line = pfb_cct_ip_parse_record($raw_line,
+											$pfb['dnsbl_lenient'] === PfbLenient::On) ?? '';
+									}
+									$parsed_line = pfb_ip_parse_line($parse_line, [
 										'vtype'         => $list['vtype'],
-										'pftype'        => $pftype,
+										'pftype'        => $header === 'CCT_IP' ? 'auto' : $pftype,
 										'custom'        => $custom,
 										'cidr_floor_v4' => $pfbcidr,
 										'cidr_floor_v6' => $pfbcidr_v6,

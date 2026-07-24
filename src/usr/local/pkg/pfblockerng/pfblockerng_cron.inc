@@ -160,6 +160,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 				password: '',
 				sourceInterface: $srcint,
 				extraHeaders: array(),
+				cookies: $header === 'CCT_IP',
 			));
 
 			if (!$probe_result->success || $probe_result->responseMeta === NULL) {

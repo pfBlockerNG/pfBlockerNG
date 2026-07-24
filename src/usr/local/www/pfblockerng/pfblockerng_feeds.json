@@ -371,7 +371,7 @@
 				{
 					"feed":		"Cyber Crime WHQ",
 					"website":	"https://cybercrime-tracker.net/about.php",
-					"url":		"https://cybercrime-tracker.net/fuckerz.php",
+					"url":		"https://cybercrime-tracker.net/csv.php",
 					"header":	"CCT_IP"
 				},
 				{
