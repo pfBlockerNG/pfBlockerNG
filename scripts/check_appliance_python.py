@@ -55,9 +55,22 @@ from pathlib import Path
 _FORBIDDEN = "/usr/local/bin/python"
 _DERIVED_CONSTRUCTION = "$interpreter = '/usr/local/bin/python' . $version; // appliance-python-ok: dependency-derived"
 _RESOLVER_PATH = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Tracked-tree roots that run ON the appliance.
 _SCAN_ROOTS = ("src", "tests")
+
+
+def _is_resolver_path(path: Path) -> bool:
+    """True iff *path* IS the sole exempted resolver file, compared as a
+    normalized repo-relative path — not merely a string/suffix match, so a
+    same-named file nested elsewhere (e.g. ``nested/`` + this path) does not
+    inherit the exemption."""
+    try:
+        relative = path.resolve().relative_to(_REPO_ROOT)
+    except (OSError, ValueError):
+        return False
+    return relative.as_posix() == _RESOLVER_PATH
 
 
 def _tracked_files(roots: tuple[str, ...]) -> list[Path]:
@@ -81,7 +94,7 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
         except (OSError, UnicodeError):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            allowed = path.as_posix().endswith(_RESOLVER_PATH) and line.strip() == _DERIVED_CONSTRUCTION
+            allowed = _is_resolver_path(path) and line.strip() == _DERIVED_CONSTRUCTION
             if _FORBIDDEN in line and not allowed:
                 violations.append((path, lineno, line.strip()))
     return violations
