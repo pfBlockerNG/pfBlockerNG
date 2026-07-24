@@ -39,10 +39,12 @@ Each flow RESTORES the box (removes the seeded file / leaves the cleared file
 gone) in a ``finally`` so a mid-test failure cannot poison the session-scoped VM
 for the sibling flows.
 
-THROWAWAY filenames, never the real production logs: ``pfb_validate_filepath()``
-(pfblockerng_log.php:207-222) validates only the DIRECTORY (``pathinfo(...,
-PATHINFO_DIRNAME)``), never the basename -- so ANY file directly under
-``/var/log/pfblockerng`` passes. These flows used to seed/clear the box's REAL
+THROWAWAY filenames, never the real production logs: for a ``logs``-list logtype
+like ``defaultlogs`` (no ``ext`` whitelist), ``pfb_validate_filepath()`` is
+directory-scoped -- ANY file directly under ``/var/log/pfblockerng`` passes
+(issue #1649 tightened ext-based logtypes to their own ``ext`` whitelist +
+capability flags, but a ``logs``-list type stays dir-scoped). These flows used to
+seed/clear the box's REAL
 ``pfblockerng.log`` / ``error.log`` / ``ip_block.log`` / ``py_error.log`` /
 ``dnsbl.log`` directly, clobbering real content a live box would have
 accumulated. Every target is now a unique, uuid-prefixed basename under the same
@@ -88,6 +90,20 @@ LOG_DIR = "/var/log/pfblockerng"
 # traversal escapes the allow-set). ``/etc/passwd`` is the canonical "would be a
 # disaster if it leaked / got truncated" target -- the handler must refuse it.
 EVIL_PATH = "/etc/passwd"
+
+# issue #1649: ``/usr/local/pkg/pfblockerng/`` IS a whitelisted logdir (the
+# ``dnsbl_tld`` / ``dnsbl_safe`` logtypes, both ``clear => FALSE``). The dir-union
+# validator therefore admitted ANY file here -- so package source such as
+# ``pfblockerng.inc`` (an existing, shipped file) could be download=-read or
+# clear=-unlinked by a holder of the grantable ``WebCfg - Firewall: pfBlockerNG``
+# privilege. The per-logtype fix must reject a file that matches no pkg-dir
+# logtype's ``ext`` whitelist, and reject ``clear`` for the pkg-dir logtypes even
+# on a file they DO match (their flag is ``clear => FALSE``).
+PKG_DIR = "/usr/local/pkg/pfblockerng"
+PKG_SOURCE = f"{PKG_DIR}/pfblockerng.inc"
+# A file the ``dnsbl_tld`` logtype legitimately owns (ext whitelist ``dnsbl_tld``),
+# shipped in the package dir -- download must still pass, clear must still refuse.
+DNSBL_TLD_FILE = f"{PKG_DIR}/dnsbl_tld"
 
 
 def _csrf(webui: WebUI) -> str:
@@ -492,6 +508,107 @@ def test_download_streams_file_with_attachment_header(webui: WebUI, smoke_vm: he
         assert _cat(vm, target) == payload, "download altered the source file (must be read-only)"
     finally:
         _rm(vm, target)
+
+
+def test_download_rejects_package_source_in_whitelisted_dir(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """Download of ``pfblockerng.inc`` under the whitelisted pkg dir is refused (issue #1649).
+
+    The dir-union validator admitted every file under ``/usr/local/pkg/pfblockerng/``
+    because ``dnsbl_tld`` / ``dnsbl_safe`` whitelist that logdir -- so package
+    source could be read out. ``pfblockerng.inc`` matches no pkg-dir logtype's
+    ``ext`` whitelist, so the per-logtype validator must reject it with the ``|3|``
+    envelope and stream no source bytes. Transition rigor: snapshot the file BEFORE
+    and assert it is byte-for-byte UNCHANGED after (a refused read touches nothing).
+    """
+    vm = smoke_vm
+    before = _cat(vm, PKG_SOURCE)
+    assert before, "could not read pfblockerng.inc to snapshot the before-state"
+
+    token = _csrf(webui)
+    resp = _post_download(webui, token, PKG_SOURCE)
+    assert not looks_like_login_page(resp.text), "download POST returned the login form (session lost)"
+    assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+    code, _ = _decode_load_body(resp.text)
+    assert code == "3", f"package source download was not rejected with code 3: {resp.text!r}"
+    # The source itself must not have leaked into the response body.
+    assert "<?php" not in resp.text, f"download leaked pfblockerng.inc source: {resp.text[:200]!r}"
+    assert _cat(vm, PKG_SOURCE) == before, "pfblockerng.inc changed after a rejected download (must be untouched)"
+
+
+def test_clear_rejects_package_source_in_whitelisted_dir(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """Clear of ``pfblockerng.inc`` under the whitelisted pkg dir is refused (issue #1649).
+
+    The most dangerous escalation: the dir-union validator would let ``clear=``
+    ``unlink`` package source, breaking the install. The per-logtype validator must
+    reject it (no pkg-dir logtype both matches the file AND allows clear) with the
+    ``|3|`` envelope, leaving the file wholly intact.
+
+    Transition rigor: snapshot content + size BEFORE, POST the rejected clear, then
+    assert the file still EXISTS, is the SAME size, and the SAME bytes.
+    """
+    vm = smoke_vm
+    before = _cat(vm, PKG_SOURCE)
+    assert before, "could not read pfblockerng.inc to snapshot the before-state"
+    before_size = _size(vm, PKG_SOURCE)
+    assert before_size > 0, "pfblockerng.inc unexpectedly empty before the rejected clear"
+
+    token = _csrf(webui)
+    resp = _post_clear(webui, token, PKG_SOURCE)
+    assert not looks_like_login_page(resp.text), "clear POST returned the login form (session lost)"
+    assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+    code, _ = _decode_load_body(resp.text)
+    assert code == "3", f"package source clear was not rejected with code 3: {resp.text!r}"
+    # AFTER (oracle): the package source is wholly intact -- not unlinked, not truncated.
+    assert _exists(vm, PKG_SOURCE), "pfblockerng.inc was removed by a rejected clear (validator failed!)"
+    assert _size(vm, PKG_SOURCE) == before_size, "pfblockerng.inc was truncated by a rejected clear (validator failed!)"
+    assert _cat(vm, PKG_SOURCE) == before, "pfblockerng.inc content changed after a rejected clear"
+
+
+def test_clear_rejects_dnsbl_tld_whose_logtype_forbids_clear(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """Clear of a file the ``dnsbl_tld`` logtype OWNS is still refused -- its flag is ``clear => FALSE`` (issue #1649).
+
+    Unlike the pfblockerng.inc case (rejected on the ext whitelist), this file
+    matches ``dnsbl_tld``'s ext whitelist exactly; it is refused purely because
+    that logtype carries ``clear => FALSE``. Proves the capability flag binds to the
+    matching logtype, not the union. The file must remain byte-for-byte intact.
+    """
+    vm = smoke_vm
+    before = _cat(vm, DNSBL_TLD_FILE)
+    assert before, "could not read the dnsbl_tld file to snapshot the before-state"
+    before_size = _size(vm, DNSBL_TLD_FILE)
+
+    token = _csrf(webui)
+    resp = _post_clear(webui, token, DNSBL_TLD_FILE)
+    assert not looks_like_login_page(resp.text), "clear POST returned the login form (session lost)"
+    assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+    code, _ = _decode_load_body(resp.text)
+    assert code == "3", f"dnsbl_tld clear was not rejected with code 3: {resp.text!r}"
+    assert _exists(vm, DNSBL_TLD_FILE), "dnsbl_tld file removed by a clear its logtype forbids (validator failed!)"
+    assert _size(vm, DNSBL_TLD_FILE) == before_size, "dnsbl_tld file truncated by a forbidden clear (validator failed!)"
+
+
+def test_download_allows_dnsbl_tld_file_its_logtype_owns(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """The legitimate path still works: ``dnsbl_tld``'s own file downloads (issue #1649).
+
+    Guards that the per-logtype tightening did not over-reject: the ``dnsbl_tld``
+    logtype matches this file (its ext whitelist) AND allows download, so the
+    handler must stream its bytes with an attachment header naming the basename.
+    Read-only -- the file is unchanged after.
+    """
+    vm = smoke_vm
+    before = _cat(vm, DNSBL_TLD_FILE)
+    assert before, "could not read the dnsbl_tld file to snapshot the before-state"
+
+    token = _csrf(webui)
+    resp = _post_download(webui, token, DNSBL_TLD_FILE)
+    assert not looks_like_login_page(resp.text), "download POST returned the login form (session lost)"
+    assert "Invalid filename/path" not in resp.text, f"legit dnsbl_tld download was rejected: {resp.text!r}"
+    assert resp.text == _cat(vm, DNSBL_TLD_FILE), (
+        "download body != on-box dnsbl_tld file (handler must stream the real file)"
+    )
+    disp = resp.headers.get("Content-Disposition", "")
+    assert 'attachment; filename="dnsbl_tld"' in disp, f"unexpected Content-Disposition: {disp!r}"
+    assert _cat(vm, DNSBL_TLD_FILE) == before, "download altered the dnsbl_tld file (must be read-only)"
 
 
 def test_download_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:

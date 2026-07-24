@@ -197,13 +197,12 @@ if ($pfb['blconfig'] &&
 	}
 }
 
-// Function to validate file/path
-function pfb_validate_filepath($validate, $pfb_logtypes) {
-
-	$allowed_path = array();
-	foreach ($pfb_logtypes as $type) {
-		$allowed_path[$type['logdir']] = '';
-	}
+/*	Function to validate file/path for a requested action ('load'/'download'/'clear').
+	issue #1649: authorize against each logtype's OWN tuple -- its logdir, its 'ext'
+	filename whitelist (glob "*<ext>", mirroring getlogs()), and the capability flag
+	for the requested action -- never the union of every logtype's logdir. A logtype
+	with an inline 'logs' list has no 'ext' and stays directory-scoped.	*/
+function pfb_validate_filepath($validate, $pfb_logtypes, $action) {
 
 	$path = pathinfo($validate, PATHINFO_DIRNAME) . '/';
 	$file = basename($validate);
@@ -212,7 +211,28 @@ function pfb_validate_filepath($validate, $pfb_logtypes) {
 		return FALSE;
 	}
 
-	return isset($allowed_path[$path]);
+	foreach ($pfb_logtypes as $type) {
+		if ($type['logdir'] != $path) {
+			continue;
+		}
+
+		// The requested action must be enabled for this logtype ('load' has no flag).
+		if (($action == 'clear' && empty($type['clear'])) ||
+		    ($action == 'download' && empty($type['download']))) {
+			continue;
+		}
+
+		if (!isset($type['ext'])) {
+			return TRUE;
+		}
+		foreach ((array)$type['ext'] as $extention) {
+			if ($extention == '*' || fnmatch("*{$extention}", $file)) {
+				return TRUE;
+			}
+		}
+	}
+
+	return FALSE;
 }
 
 $pconfig = array();
@@ -232,7 +252,7 @@ if (isset($_REQUEST) && isset($_REQUEST['ajax'])) {
 
 	clearstatcache();
 	$pfb_logfilename = htmlspecialchars($_REQUEST['file']);
-	if (!pfb_validate_filepath($pfb_logfilename, $pfb_logtypes)) {
+	if (!pfb_validate_filepath($pfb_logfilename, $pfb_logtypes, 'load')) {
 		print ("|3|" . gettext('Invalid filename/path') . "|IA==|");
 		exit;
 	}
@@ -300,7 +320,10 @@ if (isset($_REQUEST) && isset($_REQUEST['ajax'])) {
 if (isset($pconfig['logFile']) && !empty($pconfig['logFile']) && (isset($pconfig['download']) || isset($pconfig['clear']))) {
 	
 	$s_logfile = htmlspecialchars($pconfig['logFile']);
-	if (!pfb_validate_filepath($s_logfile, $pfb_logtypes)) {
+	// issue #1649: validate against the capability actually requested (clear wins,
+	// mirroring the clear-then-download branch order below).
+	$pfb_log_action = !empty($pconfig['clear']) ? 'clear' : 'download';
+	if (!pfb_validate_filepath($s_logfile, $pfb_logtypes, $pfb_log_action)) {
 		print ("|3|" . gettext('Invalid filename/path') . "|IA==|");
 		exit;
 	}
