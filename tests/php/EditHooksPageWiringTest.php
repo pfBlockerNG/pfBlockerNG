@@ -475,15 +475,20 @@ final class EditHooksPageWiringTest extends TestCase
 	{
 		$block = $this->extractSaveFlowBlock($this->readSource(self::PAGE_PATH));
 
-		$this->assertStringContainsString(
-			'pfb_hook_editor_normalize_content(',
-			$block,
-			'the save flow must route $_POST content through pfb_hook_editor_normalize_content() -- writing the ' .
+		// Delta re-review round 2 (2026-07-24): pin the CALL-shape assignment, not the
+		// bare function-name token -- the save block's own comment names the helper, so
+		// a substring assertion passes even with the call stripped (coverage theater;
+		// the mutant survived 19/19). A comment can never satisfy this assignment regex.
+		$callShape = '/\\$post_content\\s*=\\s*pfb_hook_editor_normalize_content\\(/';
+		$this->assertSame(
+			1,
+			preg_match($callShape, $block, $m, PREG_OFFSET_CAPTURE),
+			'the save flow must ASSIGN $post_content through pfb_hook_editor_normalize_content() -- writing the ' .
 				"raw \$_POST value persists the browser's CRLF textarea normalization straight into the hook " .
 				"script file, breaking its shebang exec (e.g. \"#!/bin/sh\\r\" -> ENOENT)"
 		);
 
-		$normalizePos = strpos($block, 'pfb_hook_editor_normalize_content(');
+		$normalizePos = $m[0][1];
 		$writePos = strpos($block, 'file_put_contents(');
 		$this->assertNotFalse($writePos, 'test oracle: no file_put_contents( call found in the save-flow block');
 		$this->assertLessThan(
