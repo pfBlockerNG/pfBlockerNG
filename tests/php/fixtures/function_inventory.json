@@ -3510,6 +3510,26 @@
             }
         ]
     },
+    "pfb_hook_editor_lang_for": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "script",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "fallback",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_hook_editor_path": {
         "returnsRef": false,
         "returnType": "?string",

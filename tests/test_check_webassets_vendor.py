@@ -28,6 +28,7 @@ MANIFEST = VENDOR_DIR / "MANIFEST.sha256"
 
 EXPECTED_FILES = (
     "cm-regex.min.js",
+    "cm-hooks.min.js",
     "LICENSES.md",
 )
 
