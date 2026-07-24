@@ -114,7 +114,7 @@ final class LogFormatConsumersTest extends TestCase
 			"www/index.php's outer timestamp build changed -- update this oracle"
 		);
 		$this->assertStringContainsString(
-			'/usr/bin/tail -n50 /var/log/pfblockerng/dnsbl.log | /usr/bin/grep {$domain} | /usr/bin/grep {$now} | /usr/bin/tail -1',
+			'/usr/bin/tail -n50 /var/log/pfblockerng/dnsbl.log | /usr/bin/grep -F -- {$domain} | /usr/bin/grep {$now} | /usr/bin/tail -1',
 			$source,
 			"www/index.php's correlation exec() pipeline changed -- update this oracle"
 		);
@@ -139,7 +139,7 @@ final class LogFormatConsumersTest extends TestCase
 		$domain = escapeshellarg(',' . $host . ',');
 
 		$data = [];
-		exec("/usr/bin/tail -n50 {$log} | /usr/bin/grep {$domain} | /usr/bin/grep {$now} | /usr/bin/tail -1", $data, $retval);
+		exec("/usr/bin/tail -n50 {$log} | /usr/bin/grep -F -- {$domain} | /usr/bin/grep {$now} | /usr/bin/tail -1", $data, $retval);
 		$this->assertSame(0, $retval, 'the reproduced pipeline must exit 0');
 		$this->assertNotEmpty($data, 'the ISO-format log line must be found by the rebuilt grep key (green)');
 
@@ -178,6 +178,60 @@ final class LogFormatConsumersTest extends TestCase
 		$this->assertEmpty(
 			$data,
 			'the OLD 3-space-token key must NOT match a NEW ISO-format log line -- this is the live breakage Phase 5 fixes'
+		);
+	}
+
+	/**
+	 * issue #1652: the correlation grep embedded the host as an unanchored
+	 * Basic Regular Expression, so '.' wildcard-matched any character and a
+	 * blocked host could correlate to a DIFFERENT entry's row --
+	 * `ads.example.com` matching `ads-example.com`'s line -- rendering the
+	 * wrong Group/Feed/Evaluated-Domain on the block page. Runs the CURRENT
+	 * source's exec() pipeline (extracted from www/index.php, not
+	 * hand-copied, so this test goes red on the unfixed BRE grep and pins
+	 * the fixed-string `-F` match against regression) with index.php's exact
+	 * key construction, against a log holding ONLY the lookalike host's row.
+	 */
+	public function testBlockPageCorrelationNeverMatchesLookalikeHostRow(): void
+	{
+		$source = (string) file_get_contents(self::INDEX_PHP);
+		$matched = preg_match(
+			'#exec\("(/usr/bin/tail -n50 /var/log/pfblockerng/dnsbl\.log[^"]+)", \$data, \$retval\);#',
+			$source,
+			$m
+		);
+		$this->assertSame(1, $matched, 'could not extract the correlation exec() pipeline from www/index.php');
+
+		$log = $this->tempFile('pfb_dnsbl_lookalike_');
+		// ONLY the lookalike's row: '-' exactly where the victim host has '.'.
+		file_put_contents(
+			$log,
+			"DNSBL-python,2026-07-08 14:30:15,ads-example.com,203.0.113.9,Python,DNSBL-Full,LookalikeGroup,ads-example.com,LookalikeFeed,+,A\n"
+		);
+
+		$ts = '2026-07-08 14:30';
+		$now = escapeshellarg($ts);
+		// index.php's exact key construction, per host queried.
+		$pipelineFor = static fn (string $host): string => str_replace(
+			['/var/log/pfblockerng/dnsbl.log', '{$domain}', '{$now}'],
+			[$log, escapeshellarg(',' . $host . ','), $now],
+			$m[1]
+		);
+
+		// Control (before-state discipline): the lookalike host itself DOES
+		// correlate to its own row, proving the fixture, key construction, and
+		// extracted pipeline find a genuine match.
+		$ownData = [];
+		exec($pipelineFor('ads-example.com'), $ownData);
+		$this->assertNotEmpty($ownData, "control: the lookalike host must correlate to its OWN row");
+
+		$data = [];
+		exec($pipelineFor('ads.example.com'), $data);
+		$this->assertSame(
+			[],
+			$data,
+			"a blocked host must never correlate to a DIFFERENT entry's row ('.' must not wildcard-match '-'); matched: "
+			. implode(' | ', $data)
 		);
 	}
 
