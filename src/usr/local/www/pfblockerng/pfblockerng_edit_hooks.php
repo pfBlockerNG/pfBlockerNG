@@ -114,7 +114,13 @@ if ($_POST) {
 			// otherwise both pass the existence check and one clobber the other.
 			$pfb_eh_new_handle = @fopen($path, 'x');
 			if ($pfb_eh_new_handle === FALSE) {
-				$input_errors[] = gettext('A hook script with that composed name already exists -- pick a different Name.');
+				// Second-pass review finding S4 (2026-07-24): fopen(..., 'x') returns FALSE
+				// for EVERY failure reason (name collision, unwritable directory, etc.) --
+				// the prior message named only the collision case, which misled an admin
+				// hitting a permissions problem into repeatedly retyping a "different Name"
+				// that would never help.
+				$input_errors[] = gettext('A hook script with that composed name already exists, or the ' .
+					'hook-script directory is not writable -- pick a different Name.');
 			} else {
 				$pfb_eh_new_template = pfb_hook_editor_template($post_when, $post_lang);
 				$pfb_eh_new_written  = @fwrite($pfb_eh_new_handle, $pfb_eh_new_template);
@@ -149,7 +155,10 @@ if ($_POST) {
 		// or a crafted POST can never write outside a file the picker already offers.
 		$post_when    = (string) ($_POST['pfb_eh_cur_when'] ?? '');
 		$post_script  = (string) ($_POST['pfb_eh_cur_script'] ?? '');
-		$post_content = (string) ($_POST['pfb_eh_content'] ?? '');
+		// Second-pass review finding S1 (2026-07-24): normalize BEFORE anything else
+		// touches the content -- see pfb_hook_editor_normalize_content()'s own doc
+		// comment for why an un-normalized save breaks every saved hook's shebang.
+		$post_content = pfb_hook_editor_normalize_content((string) ($_POST['pfb_eh_content'] ?? ''));
 
 		if (!pfb_hook_script_valid($post_script, $post_when)) {
 			$input_errors[] = gettext('Select a valid, existing hook script for this Pre/Post before saving ' .
@@ -158,13 +167,34 @@ if ($_POST) {
 			$path = pfb_hook_editor_path($post_script);
 			if ($path === NULL || !is_file($path)) {
 				$input_errors[] = gettext('The selected hook script could not be resolved on disk.');
-			} elseif (@file_put_contents($path, $post_content) === FALSE || !@chmod($path, 0755)) {
-				$input_errors[] = gettext('Failed to save the hook script file -- check that the ' .
-					'hook-script directory is writable.');
 			} else {
-				header('Location: /pfblockerng/pfblockerng_edit_hooks.php?' .
-					http_build_query(array('when' => $post_when, 'script' => $post_script, 'saved' => '1')));
-				exit;
+				// Second-pass review finding S2 (2026-07-24): pfb_run_hooks() may exec
+				// this exact file as root concurrently with a save -- an in-place
+				// truncate-and-write straight to the live target leaves a window where a
+				// concurrent reader/exec sees an empty or partial script. Stage to a temp
+				// file in the SAME directory (same idiom as pfb_utf16_transcode_file() /
+				// pfb_apply_publish() in pfblockerng.inc), verify the full byte count
+				// landed, chmod, then rename() over the target -- rename() is atomic on
+				// the same filesystem, so a concurrent exec always observes either the
+				// old or the new content in full, never a partial write.
+				$pfb_eh_tmp = @tempnam(dirname($path), '.pfbeh_');
+				$pfb_eh_written = ($pfb_eh_tmp !== FALSE) ? @file_put_contents($pfb_eh_tmp, $post_content) : FALSE;
+				if (
+					$pfb_eh_tmp === FALSE ||
+					$pfb_eh_written !== strlen($post_content) ||
+					!@chmod($pfb_eh_tmp, 0755) ||
+					!@rename($pfb_eh_tmp, $path)
+				) {
+					if ($pfb_eh_tmp !== FALSE) {
+						@unlink($pfb_eh_tmp);
+					}
+					$input_errors[] = gettext('Failed to save the hook script file -- check that the ' .
+						'hook-script directory is writable.');
+				} else {
+					header('Location: /pfblockerng/pfblockerng_edit_hooks.php?' .
+						http_build_query(array('when' => $post_when, 'script' => $post_script, 'saved' => '1')));
+					exit;
+				}
 			}
 		}
 
@@ -187,12 +217,22 @@ if (!$_POST && isset($_GET['when'], $_GET['script'])) {
 	if (pfb_hook_script_valid($get_script, $get_when)) {
 		$path = pfb_hook_editor_path($get_script);
 		$body = ($path !== NULL && is_file($path)) ? @file_get_contents($path) : FALSE;
-		if ($body !== FALSE) {
+		if ($body === FALSE) {
+			$input_errors[] = gettext('Failed to read the selected hook script.');
+		} elseif (!mb_check_encoding($body, 'UTF-8')) {
+			// Second-pass review finding S3 (2026-07-24): htmlspecialchars(ENT_SUBSTITUTE)
+			// (used by Form_Textarea::_getInput() at render) silently replaces every
+			// invalid byte with U+FFFD -- loading an invalid-UTF-8 file into this editor
+			// would corrupt it, and re-saving would persist that corruption to disk.
+			// Refuse to populate the editor for this load; leaving $pfb_eh_sel_script
+			// empty also disables the Save path (pfb_hook_script_valid('', ...) fails),
+			// so there is nothing to click that could write the corrupted view back.
+			$input_errors[] = gettext('The selected hook script file is not valid UTF-8 -- fix it on disk before ' .
+				'editing it here (loading it into this editor would corrupt invalid byte sequences on display).');
+		} else {
 			$pfb_eh_sel_when   = $get_when;
 			$pfb_eh_sel_script = $get_script;
 			$pfb_eh_content    = $body;
-		} else {
-			$input_errors[] = gettext('Failed to read the selected hook script.');
 		}
 	} else {
 		$input_errors[] = gettext('That script is not a valid hook file for the selected Pre/Post.');
@@ -363,12 +403,14 @@ $form->addGlobal(new Form_Input('pfb_eh_cur_script', 'pfb_eh_cur_script', 'hidde
 $pfb_eh_textarea = new Form_Textarea(
 	'pfb_eh_content',
 	NULL,
-	// Content is saved verbatim (no transformation), and passed RAW here --
-	// Form_Textarea::_getInput() already HTML-escapes the value exactly once at
-	// render (verified against pfSense master and RELENG_2_7_2), so escaping it
-	// again here would double-escape it: the browser decodes only ONE layer,
-	// leaving mangled entities (e.g. "&quot;") in what the user sees and re-saves
-	// (coordinator gate finding F1, 2026-07-24).
+	// Displayed/re-loaded verbatim here -- the only transformation the save handler
+	// ever applies is line-ending normalization to LF (pfb_hook_editor_normalize_content(),
+	// second-pass review finding S1), which happens later, on $_POST, not to this
+	// loaded value. Passed RAW: Form_Textarea::_getInput() already HTML-escapes the
+	// value exactly once at render (verified against pfSense master and
+	// RELENG_2_7_2), so escaping it again here would double-escape it: the browser
+	// decodes only ONE layer, leaving mangled entities (e.g. "&quot;") in what the
+	// user sees and re-saves (coordinator gate finding F1, 2026-07-24).
 	$pfb_eh_content
 );
 $pfb_eh_textarea->setAttribute('id', 'pfb_hook_editor_content');
@@ -379,7 +421,8 @@ $pfb_eh_textarea->removeClass('form-control')
 	->setAttribute('wrap', 'off')
 	->setAttribute('spellcheck', 'false')
 	->setAttribute('style', 'background:#fafafa; width: 100%; font-family: monospace;')
-	->setHelp(gettext('Saved verbatim -- no transformation is applied to the content.'));
+	->setHelp(gettext('Saved as typed, except line endings are normalized to LF -- nothing else about the ' .
+		'content is transformed.'));
 $section->addInput($pfb_eh_textarea);
 
 // Named pfb_eh_save directly -- same native-submit reasoning as the Create button

@@ -450,4 +450,99 @@ final class EditHooksPageWiringTest extends TestCase
 			);
 		}
 	}
+
+	// ------------------------------------------------------------------
+	// Second-pass review (PR #1686, 2026-07-24) findings S1/S2/S3: the save flow
+	// must (S1) normalize $_POST content to LF before it is ever written, and (S2)
+	// stage the write to a temp file in the same directory and rename() it into
+	// place atomically -- never truncate+write the live target in place, since
+	// pfb_run_hooks() may exec it as root concurrently with a save. S3: the GET
+	// picker-load path must reject invalid-UTF-8 file content before populating the
+	// editor. Structural oracles (same shape as the F3/F4 tests above): the page
+	// cannot run off-appliance, so these pin the source-text shape of the blocks.
+	// ------------------------------------------------------------------
+
+	private function extractSaveFlowBlock(string $src): string
+	{
+		$blockStart = strpos($src, "isset(\$_POST['pfb_eh_save'])");
+		$this->assertNotFalse($blockStart, 'test oracle: save-flow block start marker not found');
+		$blockEnd = strpos($src, '// GET picker load', $blockStart);
+		$this->assertNotFalse($blockEnd, 'test oracle: save-flow block end marker not found');
+		return substr($src, $blockStart, $blockEnd - $blockStart);
+	}
+
+	public function testSavePathNormalizesContentBeforeWrite(): void
+	{
+		$block = $this->extractSaveFlowBlock($this->readSource(self::PAGE_PATH));
+
+		$this->assertStringContainsString(
+			'pfb_hook_editor_normalize_content(',
+			$block,
+			'the save flow must route $_POST content through pfb_hook_editor_normalize_content() -- writing the ' .
+				"raw \$_POST value persists the browser's CRLF textarea normalization straight into the hook " .
+				"script file, breaking its shebang exec (e.g. \"#!/bin/sh\\r\" -> ENOENT)"
+		);
+
+		$normalizePos = strpos($block, 'pfb_hook_editor_normalize_content(');
+		$writePos = strpos($block, 'file_put_contents(');
+		$this->assertNotFalse($writePos, 'test oracle: no file_put_contents( call found in the save-flow block');
+		$this->assertLessThan(
+			$writePos,
+			$normalizePos,
+			'content must be normalized BEFORE it is written to the temp file, not after'
+		);
+	}
+
+	public function testSaveFlowWritesAtomicallyViaTempFileAndRename(): void
+	{
+		$block = $this->extractSaveFlowBlock($this->readSource(self::PAGE_PATH));
+
+		$this->assertStringContainsString(
+			'tempnam(dirname($path)',
+			$block,
+			'the save flow must stage the new content to a temp file in the SAME directory as the target ' .
+				'(tempnam(dirname($path), ...)) -- a cross-filesystem temp file would break the atomic rename() below'
+		);
+		$this->assertMatchesRegularExpression(
+			'/@?rename\\(/',
+			$block,
+			'the save flow must atomically rename() the temp file over the target -- an in-place truncate+write ' .
+				'lets a concurrent pfb_run_hooks() exec see an empty/partial script'
+		);
+		$this->assertDoesNotMatchRegularExpression(
+			"/file_put_contents\\(\\\$path,/",
+			$block,
+			'the save flow must never file_put_contents() the live target path directly (in-place truncate) -- ' .
+				'it must write the temp file and rename() it into place instead'
+		);
+	}
+
+	public function testLoadPathRejectsInvalidUtf8ContentBeforePopulatingEditor(): void
+	{
+		$src = $this->readSource(self::PAGE_PATH);
+
+		$this->assertStringContainsString(
+			'mb_check_encoding(',
+			$src,
+			'the GET picker-load path must validate the loaded file is valid UTF-8 before populating the editor ' .
+				'-- htmlspecialchars(ENT_SUBSTITUTE) silently mangles invalid bytes to U+FFFD on display, and a ' .
+				'subsequent save would persist that corruption back to disk'
+		);
+
+		$blockStart = strpos($src, "if (!\$_POST && isset(\$_GET['when'], \$_GET['script']))");
+		$this->assertNotFalse($blockStart, 'test oracle: GET picker-load block start marker not found');
+		$blockEnd = strpos($src, '$pfb_eh_lang = pfb_hook_editor_lang_for(', $blockStart);
+		$this->assertNotFalse($blockEnd, 'test oracle: GET picker-load block end marker not found');
+		$block = substr($src, $blockStart, $blockEnd - $blockStart);
+
+		$checkPos = strpos($block, 'mb_check_encoding(');
+		$assignPos = strpos($block, '$pfb_eh_content    = $body;');
+		$this->assertNotFalse($checkPos, 'test oracle: mb_check_encoding( not found inside the picker-load block');
+		$this->assertNotFalse($assignPos, 'test oracle: $pfb_eh_content assignment not found inside the picker-load block');
+		$this->assertLessThan(
+			$assignPos,
+			$checkPos,
+			'the UTF-8 validity check must gate the $pfb_eh_content assignment, not follow it'
+		);
+	}
 }
