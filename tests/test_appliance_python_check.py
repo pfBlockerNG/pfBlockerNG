@@ -54,7 +54,7 @@ def test_dependency_derived_interpreter_construction_is_allowed(
 ) -> None:
     # The exemption is repo-root-anchored, not a suffix match, so anchor _REPO_ROOT at
     # tmp_path to exercise it without touching the real repo tree.
-    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path.resolve())
     prefix = "/usr/local/bin/" + "python"
     line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
     relative_path = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
@@ -64,12 +64,16 @@ def test_dependency_derived_interpreter_construction_is_allowed(
 def test_resolver_path_with_dot_segments_still_exempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Normalization must not break the legitimate case: an absolute path to the real
     # resolver file, spelled with "./" and "../" segments, still resolves to it.
-    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path.resolve())
     prefix = "/usr/local/bin/" + "python"
     line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
     real = tmp_path / "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
     real.parent.mkdir(parents=True, exist_ok=True)
     real.write_text(line, encoding="utf-8")
+    # "other" must exist for the OS to traverse the literal path: without it the read
+    # raises FileNotFoundError, find_violations skips the file, and the assertion below
+    # would pass without the exemption ever being consulted.
+    (tmp_path / "src/usr/local/pkg/other").mkdir(parents=True, exist_ok=True)
     non_normalized = tmp_path / "src/usr/local/pkg/other/../pfblockerng/./pfblockerng.inc"
     assert cap.find_violations([non_normalized]) == [], (
         "a non-normalized (./,../) path to the resolver must stay exempt"
@@ -81,9 +85,12 @@ def test_annotation_does_not_allow_literal_interpreter(tmp_path: Path) -> None:
     assert _find(tmp_path, line), "annotation must not permit a literal interpreter invocation"
 
 
-def test_nested_copy_of_resolver_path_is_not_exempt(tmp_path: Path) -> None:
-    # A file whose path merely ENDS WITH the resolver's path string (but lives
-    # somewhere else entirely) must NOT inherit the resolver's exemption.
+def test_nested_copy_of_resolver_path_is_not_exempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A file whose path merely ENDS WITH the resolver's path string must NOT inherit the
+    # exemption. _REPO_ROOT is anchored at tmp_path so the nested copy sits INSIDE the
+    # anchored root: without that, any path under tmp_path is outside the real root and
+    # the assertion would hold for a reason unrelated to nesting.
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path.resolve())
     prefix = "/usr/local/bin/" + "python"
     line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
     relative_path = "nested/src/usr/local/pkg/pfblockerng/pfblockerng.inc"
@@ -101,7 +108,7 @@ def test_resolver_path_used_as_a_directory_component_is_not_exempt(
 ) -> None:
     # A path that merely CONTAINS the resolver path (as a directory, with another
     # file inside it) is not the resolver file itself and must still be flagged.
-    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path.resolve())
     prefix = "/usr/local/bin/" + "python"
     line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
     relative_path = "src/usr/local/pkg/pfblockerng/pfblockerng.inc/other.inc"
@@ -111,7 +118,7 @@ def test_resolver_path_used_as_a_directory_component_is_not_exempt(
 def test_other_line_in_real_resolver_file_is_still_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The resolver file's exemption covers only the exact derived-construction line;
     # any other forbidden-literal line in that same file is still a violation.
-    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path.resolve())
     line = f'    vm.ssh(f"{_APPLIANCE_PY} -c {{snippet}}")\n'
     relative_path = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
     assert _find(tmp_path, line, relative_path), "a non-exempt line in the resolver file must still be flagged"
