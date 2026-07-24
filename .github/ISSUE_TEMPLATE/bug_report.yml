@@ -1,6 +1,5 @@
 name: Bug report
 description: Report a problem with pfBlockerNG so we can reproduce and fix it.
-labels: ["bug"]
 type: bug
 body:
   - type: markdown
