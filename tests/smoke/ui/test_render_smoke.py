@@ -127,7 +127,11 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page(
         "feeds_ipv4",
         "/pfblockerng/pfblockerng_feeds.php?type=ipv4",
-        ("Pre-defined Alias/Group/Feeds", "IPv4 Alias name(s):"),
+        (
+            "Pre-defined Alias/Group/Feeds",
+            "IPv4 Alias name(s):",
+            "https://cybercrime-tracker.net/csv.php",
+        ),
     ),
     Page(
         "feeds_ipv6",
