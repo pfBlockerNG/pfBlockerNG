@@ -10138,10 +10138,7 @@ function pfblockerng_top1m(?array $provider_override = NULL, array $stream_ops=a
 
 			if ($write_failed) {
 				unlink_if_exists($tmp_file);
-				$preservation = $had_previous
-					? 'keeping the previous TOP1M whitelist.'
-					: 'no TOP1M whitelist available.';
-				pfb_logger("\n  TOP1M: failed to write the new whitelist build -- {$preservation}\n", 2);
+				pfb_logger("\n  TOP1M: failed to write the new whitelist build -- publication aborted.\n", 2);
 			}
 			else if ($linecnt === 0) {
 				// Dead feed (empty/invalid top-1m.csv) -- discard the temp build and
