@@ -2102,6 +2102,61 @@ function _pfb_settings_snapshot_head_locked(
 	];
 }
 
+function _pfb_settings_replace_owned_locked(array $owned): void
+{
+	foreach ($owned as $key => $_value) {
+		if (!is_string($key) || !str_starts_with($key, 'pfblockerng')) {
+			throw new InvalidArgumentException('settings snapshot owned key mismatch');
+		}
+	}
+	$before_installed = config_get_path('installedpackages', []);
+	if (!is_array($before_installed)) {
+		throw new RuntimeException('invalid installedpackages structure');
+	}
+	$after_installed = [];
+	$inserted = FALSE;
+	foreach ($before_installed as $key => $value) {
+		if (is_string($key) && str_starts_with($key, 'pfblockerng')) {
+			if (!$inserted) {
+				foreach ($owned as $target_key => $target_value) {
+					$after_installed[$target_key] = $target_value;
+				}
+				$inserted = TRUE;
+			}
+			continue;
+		}
+		$after_installed[$key] = $value;
+	}
+	if (!$inserted) {
+		foreach ($owned as $target_key => $target_value) {
+			$after_installed[$target_key] = $target_value;
+		}
+	}
+	$had_installed = array_key_exists('installedpackages', $GLOBALS['config'] ?? []);
+	config_set_path('installedpackages', $after_installed);
+	$write_succeeded = FALSE;
+	try {
+		if (write_config('pfBlockerNG: restored settings snapshot') === FALSE) {
+			throw new RuntimeException('unable to persist settings snapshot restore');
+		}
+		$write_succeeded = TRUE;
+		config_read_file(FALSE, TRUE);
+		$readback = config_get_path('installedpackages', []);
+		if (!is_array($readback) || $readback !== $after_installed) {
+			throw new RuntimeException('settings snapshot restore readback mismatch');
+		}
+	} catch (Throwable $error) {
+		if (!$write_succeeded) {
+			if ($had_installed) {
+				config_set_path('installedpackages', $before_installed);
+			} else {
+				config_del_path('installedpackages');
+			}
+		}
+		throw $error;
+	}
+}
+
 /** Atomically replace only direct pfBlockerNG installedpackages children from the head. */
 function pfb_settings_snapshot_restore(
 	string $family,
@@ -2120,58 +2175,106 @@ function pfb_settings_snapshot_restore(
 	}
 	try {
 		$target = _pfb_settings_snapshot_head_locked($family, $package_name, $package_version, $root);
-		foreach ($target['owned'] as $key => $_value) {
-			if (!is_string($key) || !str_starts_with($key, 'pfblockerng')) {
-				throw new InvalidArgumentException('settings snapshot owned key mismatch');
-			}
-		}
-		$before_installed = config_get_path('installedpackages', []);
-		if (!is_array($before_installed)) {
-			throw new RuntimeException('invalid installedpackages structure');
-		}
-		$after_installed = [];
-		$inserted = FALSE;
-		foreach ($before_installed as $key => $value) {
-			if (is_string($key) && str_starts_with($key, 'pfblockerng')) {
-				if (!$inserted) {
-					foreach ($target['owned'] as $target_key => $target_value) {
-						$after_installed[$target_key] = $target_value;
-					}
-					$inserted = TRUE;
-				}
-				continue;
-			}
-			$after_installed[$key] = $value;
-		}
-		if (!$inserted) {
-			foreach ($target['owned'] as $target_key => $target_value) {
-				$after_installed[$target_key] = $target_value;
-			}
-		}
-		$had_installed = array_key_exists('installedpackages', $GLOBALS['config'] ?? []);
-		config_set_path('installedpackages', $after_installed);
-		$write_succeeded = FALSE;
-		try {
-			if (write_config('pfBlockerNG: restored settings snapshot') === FALSE) {
-				throw new RuntimeException('unable to persist settings snapshot restore');
-			}
-			$write_succeeded = TRUE;
-			config_read_file(FALSE, TRUE);
-			$readback = config_get_path('installedpackages', []);
-			if (!is_array($readback) || $readback !== $after_installed) {
-				throw new RuntimeException('settings snapshot restore readback mismatch');
-			}
-		} catch (Throwable $error) {
-			if (!$write_succeeded) {
-				if ($had_installed) {
-					config_set_path('installedpackages', $before_installed);
-				} else {
-					config_del_path('installedpackages');
-				}
-			}
-			throw $error;
-		}
+		_pfb_settings_replace_owned_locked($target['owned']);
 		return $target;
+	} finally {
+		unlock($lock_key);
+	}
+}
+
+function pfb_settings_transition_apply(
+	string $target_family,
+	string $target_package_name,
+	string $target_package_version,
+	?string $artifact_root = NULL
+): array {
+	$target_family = _pfb_settings_family($target_family);
+	if ($target_package_name === '' || $target_package_version === '') {
+		throw new InvalidArgumentException('invalid settings transition target identity');
+	}
+	$root = _pfb_settings_journal_root($artifact_root, FALSE);
+	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
+	if ($lock_key === FALSE) {
+		throw new RuntimeException('settings transition lock unavailable');
+	}
+	try {
+		$journal = _pfb_settings_journal_read_locked($root);
+		if ($journal['target_family'] !== $target_family
+			|| $journal['target_package_name'] !== $target_package_name
+			|| $journal['target_package_version'] !== $target_package_version) {
+			throw new InvalidArgumentException('settings transition target identity mismatch');
+		}
+		$source_head = _pfb_settings_snapshot_head_locked(
+			$journal['source_family'],
+			$journal['source_package_name'],
+			$journal['source_package_version'],
+			$root
+		);
+		if ($source_head['payload_sha256'] !== $journal['source_snapshot_sha256']
+			|| $source_head['source_package_name'] !== $journal['source_package_name']
+			|| $source_head['source_package_version'] !== $journal['source_package_version']) {
+			throw new InvalidArgumentException('settings transition source head mismatch');
+		}
+		if ($journal['phase'] === 'complete' || $journal['phase'] === 'settings-applied') {
+			return $journal;
+		}
+		if (($journal['action'] === 'restore' && $journal['target_snapshot_sha256'] === '')
+			|| ($journal['action'] === 'preserve' && $journal['target_snapshot_sha256'] !== $journal['source_live_sha256'])
+			|| ($journal['action'] === 'preserve' && $journal['source_family'] !== $journal['target_family'])
+			|| ($journal['action'] === 'clear' && $journal['target_snapshot_sha256'] !== '')
+			|| (in_array($journal['action'], ['restore', 'clear'], TRUE) && $journal['source_family'] === $journal['target_family'])
+			|| !in_array($journal['action'], ['preserve', 'restore', 'clear'], TRUE)) {
+			throw new InvalidArgumentException('settings transition action endpoint mismatch');
+		}
+		if ($journal['phase'] === 'prepared') {
+			$journal['phase'] = 'settings-applying';
+			_pfb_settings_journal_publish($journal, $root);
+		}
+		if ($journal['phase'] !== 'settings-applying') {
+			throw new InvalidArgumentException('invalid settings transition phase');
+		}
+		$selected = NULL;
+		if ($journal['action'] === 'restore') {
+			$selected = $source_head;
+			if ($journal['target_snapshot_sha256'] !== $journal['source_snapshot_sha256']) {
+				$selected = _pfb_settings_snapshot_head_locked(
+					$journal['target_family'],
+					$journal['target_package_name'],
+					$journal['target_package_version'],
+					$root
+				);
+				if ($selected['payload_sha256'] !== $journal['target_snapshot_sha256']) {
+					throw new InvalidArgumentException('settings transition target head mismatch');
+				}
+			}
+		}
+		$live_hash = hash('sha256', serialize(pfb_settings_capture_owned()));
+		$source_live = hash_equals($journal['source_live_sha256'], $live_hash);
+		$target_endpoint_hash = $journal['target_snapshot_sha256'] !== ''
+			? $journal['target_snapshot_sha256']
+			: hash('sha256', serialize([]));
+		$target_live = hash_equals($target_endpoint_hash, $live_hash);
+		if (!$source_live && !$target_live) {
+			throw new RuntimeException('settings transition live state mismatch');
+		}
+		if (!$target_live && $source_live) {
+			switch ($journal['action']) {
+				case 'preserve':
+					break;
+				case 'clear':
+					_pfb_settings_replace_owned_locked([]);
+					break;
+				case 'restore':
+					if (!is_array($selected)) {
+						throw new InvalidArgumentException('settings transition target head mismatch');
+					}
+					_pfb_settings_replace_owned_locked($selected['owned']);
+					break;
+			}
+		}
+		$journal['phase'] = 'settings-applied';
+		_pfb_settings_journal_publish($journal, $root);
+		return $journal;
 	} finally {
 		unlock($lock_key);
 	}

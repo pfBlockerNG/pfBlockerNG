@@ -309,6 +309,19 @@
             }
         ]
     },
+    "_pfb_settings_replace_owned_locked": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "owned",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "_pfb_settings_root": {
         "returnsRef": false,
         "returnType": "string",
@@ -7079,6 +7092,40 @@
             },
             {
                 "name": "package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_transition_apply": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "target_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_package_version",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
