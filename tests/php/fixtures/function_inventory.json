@@ -139,6 +139,40 @@
             }
         ]
     },
+    "_pfb_settings_snapshot_head_locked": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "_pfb_settings_validate_dir": {
         "returnsRef": false,
         "returnType": "void",
@@ -6694,6 +6728,40 @@
             }
         ]
     },
+    "pfb_settings_snapshot_head": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_settings_snapshot_read": {
         "returnsRef": false,
         "returnType": "array",
@@ -6707,6 +6775,40 @@
             },
             {
                 "name": "snapshot_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_snapshot_restore": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "family",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",

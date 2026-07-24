@@ -1498,8 +1498,9 @@ function _pfb_settings_path(string $root, string $family, string $path): void
 	}
 	_pfb_settings_validate_dir($dir);
 	$stat = lstat($path);
+	$uid = function_exists('posix_geteuid') ? posix_geteuid() : getmyuid();
 	if ($stat === FALSE || !is_file($path) || is_link($path) || $stat['nlink'] !== 1
-		|| (($stat['mode'] & 0777) !== 0600)) {
+		|| (($stat['mode'] & 0777) !== 0600) || $stat['uid'] !== $uid) {
 		throw new RuntimeException('unsafe settings snapshot artifact');
 	}
 }
@@ -1754,6 +1755,149 @@ function pfb_settings_snapshot_read(
 		$package_version,
 		dirname($snapshot_path)
 	);
+}
+
+/** Read and verify the family head and its referenced direct-XML snapshot. */
+function pfb_settings_snapshot_head(
+	string $family,
+	string $package_name,
+	string $package_version,
+	?string $artifact_root = null
+): array {
+	$family = _pfb_settings_family($family);
+	if ($package_name === '' || $package_version === '') {
+		throw new InvalidArgumentException('invalid settings snapshot package identity');
+	}
+	$root = _pfb_settings_root($artifact_root);
+	$lock_key = lock('pfblockerng-settings-transition', LOCK_SH);
+	if ($lock_key === FALSE) {
+		throw new RuntimeException('settings transition lock unavailable');
+	}
+	try {
+		return _pfb_settings_snapshot_head_locked($family, $package_name, $package_version, $root);
+	} finally {
+		unlock($lock_key);
+	}
+}
+
+function _pfb_settings_snapshot_head_locked(
+	string $family,
+	string $package_name,
+	string $package_version,
+	string $root
+): array {
+	$head_path = $root . '/' . $family . '/head.json';
+	_pfb_settings_path($root, $family, $head_path);
+	try {
+		$head = json_decode((string) file_get_contents($head_path), TRUE, 512, JSON_THROW_ON_ERROR);
+	} catch (JsonException) {
+		throw new InvalidArgumentException('invalid settings snapshot head');
+	}
+	if (!is_array($head) || array_keys($head) !== ['family', 'snapshot', 'payload_sha256']
+		|| $head['family'] !== $family || !is_string($head['snapshot'])
+		|| basename($head['snapshot']) !== $head['snapshot']
+		|| !preg_match('/^[a-f0-9]{64}\.xml\.gz$/D', $head['snapshot'])
+		|| !is_string($head['payload_sha256']) || !preg_match('/^[a-f0-9]{64}$/D', $head['payload_sha256'])
+		|| substr($head['snapshot'], 0, 64) !== $head['payload_sha256']) {
+		throw new InvalidArgumentException('settings snapshot head metadata mismatch');
+	}
+	$path = dirname($head_path) . '/' . $head['snapshot'];
+	_pfb_settings_path($root, $family, $path);
+	$record = _pfb_settings_parse(
+		_pfb_settings_gzip_read($path),
+		$family,
+		NULL,
+		NULL,
+		dirname($path),
+		TRUE
+	);
+	if ($record['source_package_name'] === '' || $record['source_package_version'] === ''
+		|| !hash_equals($head['payload_sha256'], hash('sha256', serialize($record['owned'])))) {
+		throw new InvalidArgumentException('settings snapshot head provenance mismatch');
+	}
+	return [
+		'path'                  => $path,
+		'family'                => $family,
+		'payload_sha256'        => $head['payload_sha256'],
+		'source_package_name'   => $record['source_package_name'],
+		'source_package_version'=> $record['source_package_version'],
+		'owned'                 => $record['owned'],
+	];
+}
+
+/** Atomically replace only direct pfBlockerNG installedpackages children from the head. */
+function pfb_settings_snapshot_restore(
+	string $family,
+	string $package_name,
+	string $package_version,
+	?string $artifact_root = null
+): array {
+	$family = _pfb_settings_family($family);
+	if ($package_name === '' || $package_version === '') {
+		throw new InvalidArgumentException('invalid settings snapshot package identity');
+	}
+	$root = _pfb_settings_root($artifact_root);
+	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
+	if ($lock_key === FALSE) {
+		throw new RuntimeException('settings transition lock unavailable');
+	}
+	try {
+		$target = _pfb_settings_snapshot_head_locked($family, $package_name, $package_version, $root);
+		foreach ($target['owned'] as $key => $_value) {
+			if (!is_string($key) || !str_starts_with($key, 'pfblockerng')) {
+				throw new InvalidArgumentException('settings snapshot owned key mismatch');
+			}
+		}
+		$before_installed = config_get_path('installedpackages', []);
+		if (!is_array($before_installed)) {
+			throw new RuntimeException('invalid installedpackages structure');
+		}
+		$after_installed = [];
+		$inserted = FALSE;
+		foreach ($before_installed as $key => $value) {
+			if (is_string($key) && str_starts_with($key, 'pfblockerng')) {
+				if (!$inserted) {
+					foreach ($target['owned'] as $target_key => $target_value) {
+						$after_installed[$target_key] = $target_value;
+					}
+					$inserted = TRUE;
+				}
+				continue;
+			}
+			$after_installed[$key] = $value;
+		}
+		if (!$inserted) {
+			foreach ($target['owned'] as $target_key => $target_value) {
+				$after_installed[$target_key] = $target_value;
+			}
+		}
+		$had_installed = array_key_exists('installedpackages', $GLOBALS['config'] ?? []);
+		config_set_path('installedpackages', $after_installed);
+		$write_succeeded = FALSE;
+		try {
+			if (write_config('pfBlockerNG: restored settings snapshot') === FALSE) {
+				throw new RuntimeException('unable to persist settings snapshot restore');
+			}
+			$write_succeeded = TRUE;
+			config_read_file(FALSE, TRUE);
+			$readback = config_get_path('installedpackages', []);
+			if (!is_array($readback) || $readback !== $after_installed) {
+				throw new RuntimeException('settings snapshot restore readback mismatch');
+			}
+		} catch (Throwable $error) {
+			if (!$write_succeeded) {
+				if ($had_installed) {
+					config_set_path('installedpackages', $before_installed);
+				} else {
+					config_del_path('installedpackages');
+				}
+			}
+			throw $error;
+		}
+		return $target;
+	} finally {
+		unlock($lock_key);
+	}
 }
 
 // ---------------------------------------------------------------------------

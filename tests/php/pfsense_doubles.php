@@ -464,8 +464,13 @@ if (!function_exists('config_read_file')) {
 	// lives in $GLOBALS['config'] (seeded per test) — no disk file exists, so
 	// this is a deliberate no-op: pfb_global() calls it to pick up any in-flight
 	// changes, but in tests the caller already seeded $GLOBALS['config'] before
-	// calling pfb_global(). Returning [] matches the stub's declared return type.
+	// calling pfb_global(). Restore tests opt in to persisted/readback seams below.
 	function config_read_file(bool $use_backup = false, bool $use_cache = true): array {
+		if (array_key_exists('pfb_test_readback_config', $GLOBALS)) {
+			$GLOBALS['config'] = $GLOBALS['pfb_test_readback_config'];
+		} elseif (array_key_exists('pfb_test_persisted_config', $GLOBALS)) {
+			$GLOBALS['config'] = $GLOBALS['pfb_test_persisted_config'];
+		}
 		return [];
 	}
 }
@@ -475,6 +480,12 @@ if (!function_exists('write_config')) {
 	// assert whether a code path wrote config) and report success like pfSense.
 	function write_config($desc = 'Unknown', $backup = true, $write_config_only = false) {
 		$GLOBALS['pfb_test_write_config_calls'][] = $desc;
+		if (($GLOBALS['pfb_test_write_config_failure'] ?? false) === true) {
+			return false;
+		}
+		if (array_key_exists('pfb_test_persisted_config', $GLOBALS)) {
+			$GLOBALS['pfb_test_persisted_config'] = $GLOBALS['config'];
+		}
 		return true;
 	}
 }
