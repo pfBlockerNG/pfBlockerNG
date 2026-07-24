@@ -131,7 +131,7 @@ final class FeedCorpusSurveyTest extends TestCase
 	/**
 	 * Corpus samples that are NOT real feed bodies, so a non-null verdict on them is
 	 * the scanner working correctly, NOT a false positive. Keyed by feed header ->
-	 * the documented reason. The one-time PR #827 capture caught these five: two are
+	 * the documented reason. The one-time PR #827 capture caught these six: three are
 	 * catalogue-marked `discontinued`, and three are dead/gated feeds whose captured
 	 * body is a header-only stub or an auth wall. Each is asserted below to STILL be
 	 * flagged, so a stale entry (a feed that came back to life) fails loudly rather
@@ -141,20 +141,9 @@ final class FeedCorpusSurveyTest extends TestCase
 		'MaxMind_BD_Proxy' => 'catalogue status=discontinued — the url is MaxMind\'s HTML sample-list webpage, not a raw feed (html_error_page)',
 		'Abuse_SSLBL'      => 'catalogue status=discontinued — abuse.ch retired the SSLBL IP blacklist; the body is header-only, zero data rows (below_min_content)',
 		'Abuse_SSLBL_Agr'  => 'the retired SSLBL aggressive list — sibling of the discontinued Abuse_SSLBL (catalogue status unset); header-only, zero data rows (below_min_content)',
+		'CCT_IP'           => 'catalogue status=discontinued — the provider replaced the captured HTML endpoint with a cookie-backed CSV feed',
 		'Darklist'         => 'header-only at capture — darklist.de/raw.php returned its 2-line header with zero IP rows (below_min_content)',
 		'MPatrol'          => 'API-key gated — the catalogue url is an _API_KEY_ template; the capture hit the "access denied" auth wall, not the feed (below_min_content)',
-	];
-
-	/**
-	 * Corpus samples whose feed is REAL but whose 8 KiB capture is all leading HTML
-	 * boilerplate — the data starts past the capture cap, so a non-null verdict on
-	 * the TRUNCATED sample is expected and NOT representative of production, where
-	 * pfb_download() samples up to 64 KiB and sees the data. Same stay-flagged +
-	 * completeness guards as KNOWN_NON_FEED: an entry that starts passing means the
-	 * capture (or the scanner) changed and the entry must be re-checked/removed.
-	 */
-	private const KNOWN_TRUNCATED_FEED = [
-		'CCT_IP' => 'HTML-wrapped IP feed; first IP ~12 KiB into a 650+ KiB page (verified live 2026-07-04), past the 8 KiB corpus capture',
 	];
 
 	public function testCatalogueSurveyHasZeroFalsePositives(): void
@@ -172,14 +161,7 @@ final class FeedCorpusSurveyTest extends TestCase
 		$flagged = [];
 		$stale = [];
 		$matched = [];
-		// '+' keeps the LEFT value on a key collision with no error -- assert the
-		// classes stay disjoint so a duplicated header fails loudly instead.
-		$this->assertSame(
-			[],
-			array_intersect_key(self::KNOWN_NON_FEED, self::KNOWN_TRUNCATED_FEED),
-			'a feed header must appear in only ONE exclusion class'
-		);
-		$exclusions = self::KNOWN_NON_FEED + self::KNOWN_TRUNCATED_FEED;
+		$exclusions = self::KNOWN_NON_FEED;
 		foreach (self::textSamples() as $feed) {
 			$sample = (string) file_get_contents(self::CORPUS_DIR . '/' . $feed['sample_file']);
 			$verdict = pfb_text_sanity($sample);
@@ -205,7 +187,7 @@ final class FeedCorpusSurveyTest extends TestCase
 		$this->assertSame(
 			[],
 			$stale,
-			"exclusions (KNOWN_NON_FEED / KNOWN_TRUNCATED_FEED) that are no longer flagged (stale — re-check the feed and remove the entry):\n"
+			"KNOWN_NON_FEED exclusions that are no longer flagged (stale — re-check the feed and remove the entry):\n"
 			. implode("\n", $stale)
 		);
 		// Completeness: every exclusion key must have been encountered in the corpus.

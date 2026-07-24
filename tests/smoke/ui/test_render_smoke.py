@@ -1578,6 +1578,7 @@ def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: P
     result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Alias/Group/Feeds",))
     assert result.ok, f"Feeds render oracle failed: {result.detail}"
     body = resp.text
+    assert "CCT_IP" not in body, "Feeds page still offers the discontinued CCT_IP feed"
     assert "Custom Feeds" in body, "Feeds page is missing the 'Custom Feeds' panel heading"
     assert "Unknown user defined Feeds" not in body, (
         "Feeds page still shows the old 'Unknown user defined Feeds' heading"

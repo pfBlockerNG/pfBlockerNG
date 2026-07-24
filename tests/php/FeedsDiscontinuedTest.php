@@ -49,4 +49,31 @@ final class FeedsDiscontinuedTest extends TestCase
 		$this->assertNotNull($alienvault, 'Alienvault feed must still be present in ipv4/PRI2 (flagged, not deleted)');
 		$this->assertSame('discontinued', $alienvault['status'] ?? NULL, 'Alienvault feed must be marked discontinued (#319)');
 	}
+
+	public function testCctIpFeedIsDiscontinuedWithReason(): void
+	{
+		$feeds = $this->loadFeeds();
+		$cctHeaders = [];
+		array_walk_recursive($feeds, static function (mixed $value, string|int $key) use (&$cctHeaders): void {
+			if ($key === 'header' && $value === 'CCT_IP') {
+				$cctHeaders[] = $value;
+			}
+		});
+		$this->assertCount(1, $cctHeaders, 'CCT_IP must have exactly one catalogue identity');
+
+		$cct = NULL;
+		foreach ($feeds['ipv4']['PRI4']['feeds'] as $feed) {
+			if (($feed['header'] ?? '') === 'CCT_IP') {
+				$cct = $feed;
+				break;
+			}
+		}
+
+		$this->assertNotNull($cct, 'CCT_IP must remain in the catalogue as a discontinued feed');
+		$this->assertSame('discontinued', $cct['status'] ?? NULL);
+		$this->assertSame('https://cybercrime-tracker.net/csv.php', $cct['url'] ?? NULL);
+		$this->assertStringContainsString('requires cookies', $cct['info'] ?? '');
+		$this->assertStringContainsString('TYPE,URL,IP CSV', $cct['info'] ?? '');
+		$this->assertStringContainsString('#1679', $cct['info'] ?? '');
+	}
 }

@@ -369,9 +369,11 @@
 					"header":	"CoinBlocker"
 				},
 				{
+					"status":	"discontinued",
 					"feed":		"Cyber Crime WHQ",
 					"website":	"https://cybercrime-tracker.net/about.php",
-					"url":		"https://cybercrime-tracker.net/fuckerz.php",
+					"url":		"https://cybercrime-tracker.net/csv.php",
+					"info":		"Discontinued in pfBlockerNG: the upstream feed now requires cookies and returns TYPE,URL,IP CSV. Configurable request/parser support is tracked in #1679.",
 					"header":	"CCT_IP"
 				},
 				{
