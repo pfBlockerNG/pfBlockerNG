@@ -118,12 +118,25 @@ final class EditHooksPageWiringTest extends TestCase
 			$m
 		);
 		$this->assertGreaterThan(0, $matchCount, 'test oracle: no match[] entries found at all -- priv file shape changed?');
+
+		$target = 'pfblockerng/pfblockerng_edit_hooks.php';
 		foreach ($m[1] as $matchValue) {
-			$this->assertStringNotContainsString(
-				'pfblockerng_edit_hooks.php',
-				$matchValue,
-				'pfblockerng.priv.inc must NOT match() the edit-hooks page -- the isAllowedPage() ' .
-					'secondary gate is the only thing that may govern access to it'
+			// Coordinator gate finding F5 (2026-07-24, test-oracle defect): a bare
+			// assertStringNotContainsString($matchValue) misses a FUTURE glob entry (e.g.
+			// "pfblockerng/pfblockerng_*") that would cover this page at RUNTIME under
+			// pfSense's own match semantics while never literally containing its filename
+			// as a substring. Reimplements pfSense's OWN cmp_page_matches() wildcard
+			// algorithm (src/etc/inc/auth_func.inc, verified against pfSense master):
+			// '.' -> '\.', '*' -> '.*', '?' -> '\?', anchored @^/{$match}$@ against
+			// '/{$page}' -- so this asserts the same MATCH SEMANTICS pfSense applies, not
+			// a substring proxy for them.
+			$regex = str_replace(['.', '*', '?'], ['\.', '.*', '\?'], $matchValue);
+			$this->assertSame(
+				0,
+				preg_match("@^/{$regex}\$@", "/{$target}"),
+				"pfblockerng.priv.inc match entry \"{$matchValue}\" matches {$target} under pfSense's own " .
+					'cmp_page_matches() wildcard semantics -- the isAllowedPage() secondary gate must be the only ' .
+					'thing that can ever govern access to it'
 			);
 		}
 	}
@@ -163,14 +176,183 @@ final class EditHooksPageWiringTest extends TestCase
 		);
 	}
 
-	public function testContentRenderedThroughHtmlspecialchars(): void
+	// ------------------------------------------------------------------
+	// Coordinator gate finding F1 (2026-07-24, behaviour bug): pfSense's own
+	// Form_Textarea::_getInput() / Form_Input::_getInput() ALREADY call
+	// htmlspecialchars() on the value at render (verified against pfSense master and
+	// RELENG_2_7_2) -- wrapping the value in htmlspecialchars() again at the PAGE
+	// level double-escapes it. The browser then decodes only ONE layer of entities,
+	// so the user sees the still-escaped remainder (e.g. "&quot;" instead of a
+	// literal double quote), and Save writes that mangled text straight back -- the
+	// very first load->save of the shipped hook template (which contains literal
+	// double quotes) corrupts it. Fixed by passing the RAW php variable into every
+	// Form_Textarea/Form_Input constructor call here and letting the framework
+	// escape exactly once, at render.
+	// ------------------------------------------------------------------
+
+	/**
+	 * Locates the constructor call whose head matches $pattern and returns the
+	 * position of its OWN opening '(' -- not the first ");" after it, which a
+	 * multi-line comment inside the argument list (e.g. "(no transformation);")
+	 * can trip: a balanced-paren scan (extractBalancedParens()) is what actually
+	 * finds the matching close, regardless of what stray "(" / ")" pairs a comment
+	 * carries.
+	 */
+	private function locateCallOpenParen(string $src, string $pattern, string $label): int
+	{
+		$this->assertMatchesRegularExpression($pattern, $src, "{$label}: call site not found");
+		preg_match($pattern, $src, $m, PREG_OFFSET_CAPTURE);
+		$callPos = $m[0][1];
+		$openParenPos = strpos($src, '(', $callPos);
+		$this->assertNotFalse($openParenPos, "{$label}: call site has no opening (");
+		return $openParenPos;
+	}
+
+	private function extractBalancedParens(string $src, int $openParenPos): string
+	{
+		$depth = 0;
+		$len = strlen($src);
+		for ($i = $openParenPos; $i < $len; $i++) {
+			if ($src[$i] === '(') {
+				$depth++;
+			} elseif ($src[$i] === ')') {
+				$depth--;
+				if ($depth === 0) {
+					return substr($src, $openParenPos, $i - $openParenPos + 1);
+				}
+			}
+		}
+		$this->fail('test oracle: unbalanced parentheses while scanning a call site');
+	}
+
+	private function assertConstructorPassesRawVariable(string $src, string $pattern, string $variable, string $label): void
+	{
+		$openParenPos = $this->locateCallOpenParen($src, $pattern, $label);
+		$block = $this->extractBalancedParens($src, $openParenPos);
+
+		$this->assertStringNotContainsString(
+			'htmlspecialchars(',
+			$block,
+			"{$label}: must pass the RAW {$variable} -- pfSense's Form_Input/Form_Textarea framework classes already " .
+				'htmlspecialchars() the value at render, so a page-level call here double-escapes it'
+		);
+		$this->assertStringContainsString($variable, $block, "{$label}: expected the raw {$variable} in the call site");
+	}
+
+	public function testTextareaContentPassedRawNotDoubleEscaped(): void
+	{
+		$this->assertConstructorPassesRawVariable(
+			$this->readSource(self::PAGE_PATH),
+			"/new Form_Textarea\\(/",
+			'$pfb_eh_content',
+			'pfb_eh_content Form_Textarea'
+		);
+	}
+
+	public function testNewCoreInputValuePassedRaw(): void
+	{
+		$this->assertConstructorPassesRawVariable(
+			$this->readSource(self::PAGE_PATH),
+			"/new Form_Input\\(\\s*'pfb_eh_new_core',/",
+			'$pfb_eh_new_core_val',
+			'pfb_eh_new_core Form_Input'
+		);
+	}
+
+	public function testHiddenCurrentWhenAndScriptFieldsPassedRaw(): void
 	{
 		$src = $this->readSource(self::PAGE_PATH);
-		$this->assertStringContainsString(
-			'htmlspecialchars($pfb_eh_content)',
+
+		$this->assertConstructorPassesRawVariable(
 			$src,
-			'the loaded/edited hook content must be rendered through htmlspecialchars()'
+			"/new Form_Input\\('pfb_eh_cur_when',/",
+			'$pfb_eh_sel_when',
+			'pfb_eh_cur_when hidden Form_Input'
 		);
+		$this->assertConstructorPassesRawVariable(
+			$src,
+			"/new Form_Input\\('pfb_eh_cur_script',/",
+			'$pfb_eh_sel_script',
+			'pfb_eh_cur_script hidden Form_Input'
+		);
+	}
+
+	/**
+	 * The MANDATORY red/green proof for finding F1: simulates the real rendering
+	 * chain end to end using PHP's own htmlspecialchars()/html_entity_decode() --
+	 * page value -> ONE framework htmlspecialchars() at render -> ONE browser decode
+	 * -- and asserts it reproduces a real hook-script template byte-for-byte.
+	 * Whether the page currently double-escapes is read from the ACTUAL source text
+	 * (not hardcoded), so this goes red again if the page-level htmlspecialchars()
+	 * wrapper around $pfb_eh_content is ever reintroduced.
+	 */
+	public function testTextareaRoundTripFidelityThroughFrameworkEscapeAndBrowserDecode(): void
+	{
+		$src = $this->readSource(self::PAGE_PATH);
+
+		$openParenPos = $this->locateCallOpenParen($src, "/new Form_Textarea\\(/", 'pfb_eh_content Form_Textarea');
+		$block = $this->extractBalancedParens($src, $openParenPos);
+		$pageDoublesEscape = str_contains($block, 'htmlspecialchars(');
+
+		$original = pfb_hook_editor_template('pre', 'sh');
+		$this->assertStringContainsString(
+			'"',
+			$original,
+			'test oracle: the template fixture must contain a literal double quote for this round-trip to be meaningful'
+		);
+
+		// The real chain: page hands a value to Form_Textarea -> Form_Textarea::_getInput()
+		// calls htmlspecialchars() on it EXACTLY ONCE at render (pfSense master +
+		// RELENG_2_7_2) -> the browser parses that markup and decodes entities exactly
+		// once when the textarea's value is read back out (displayed, or re-POSTed by
+		// a same-page Save).
+		$pageValue      = $pageDoublesEscape ? htmlspecialchars($original) : $original;
+		$rendered       = htmlspecialchars($pageValue);
+		$browserDecoded = html_entity_decode($rendered);
+
+		$this->assertSame(
+			$original,
+			$browserDecoded,
+			'page value -> one framework htmlspecialchars() -> one browser decode must reproduce the original ' .
+				'template byte-for-byte; a page-level htmlspecialchars() wrapper around $pfb_eh_content double-escapes ' .
+				'it, so the first load->save of the shipped template corrupts it'
+		);
+	}
+
+	// ------------------------------------------------------------------
+	// Coordinator gate finding F4 (2026-07-24): the Create/Save buttons post the
+	// action fields the server keys on DIRECTLY as their own submit name -- a
+	// clicked <button type="submit" name="pfb_eh_create"|"pfb_eh_save"> is included
+	// in the browser's OWN POST natively (no separate click-handler JS needed to
+	// inject a same-named hidden field first).
+	// ------------------------------------------------------------------
+
+	public function testSubmitButtonsUseNativeNamesWithNoJsInjection(): void
+	{
+		$src = $this->readSource(self::PAGE_PATH);
+
+		$this->assertMatchesRegularExpression(
+			"/new Form_Button\\(\\s*'pfb_eh_create',/",
+			$src,
+			'the Create button must be named pfb_eh_create directly so the browser posts it natively'
+		);
+		$this->assertMatchesRegularExpression(
+			"/new Form_Button\\(\\s*'pfb_eh_save',/",
+			$src,
+			'the Save button must be named pfb_eh_save directly so the browser posts it natively'
+		);
+
+		// Quoted literals, not bare substrings: the PHP local variables
+		// $pfb_eh_create_btn/$pfb_eh_save_btn are kept as-is (only the Form_Button
+		// NAME/submit-field string argument changed), so a bare substring check would
+		// false-positive on those unrelated variable names.
+		foreach (["'pfb_eh_create_btn'", "'pfb_eh_save_btn'", 'pfbEhSubmitAs'] as $stale) {
+			$this->assertStringNotContainsString(
+				$stale,
+				$src,
+				"the old JS-injection wiring ({$stale}) must be fully removed now the buttons post natively"
+			);
+		}
 	}
 
 	// ------------------------------------------------------------------

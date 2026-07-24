@@ -168,6 +168,22 @@ final class HookEditorHelpersTest extends TestCase
 		$this->assertNull(pfb_hook_editor_path('', $this->dir));
 	}
 
+	/**
+	 * Coordinator gate finding F2 (2026-07-24, defense-in-depth): basename() keeps a
+	 * NUL byte in a PHP string (it is not a path-separator character), so
+	 * 'hook_pre_x\0.sh' passes the basename($b) === $b equality check unchanged and
+	 * would previously fall through to file_exists(), which silently returns false
+	 * on a NUL-bearing path -- returning a bogus non-existent-file PATH instead of
+	 * NULL. Unreachable via the page's own flows today (pfb_hook_editor_compose_filename()
+	 * and pfb_hook_script_valid() both already reject a NUL-bearing name earlier),
+	 * but this is the LAST function that turns a name into a filesystem path, so the
+	 * NUL rejection is tested directly here too.
+	 */
+	public function testPathRejectsNulByteInBasename(): void
+	{
+		$this->assertNull(pfb_hook_editor_path("hook_pre_x\0.sh", $this->dir));
+	}
+
 	public function testPathAcceptsPlainBasenameInRealDir(): void
 	{
 		$target = "{$this->dir}/hook_pre_x.sh";

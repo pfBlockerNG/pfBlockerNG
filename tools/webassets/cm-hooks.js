@@ -82,9 +82,11 @@ export function fromTextarea(textarea, lang) {
   view.dom.style.height = height;
   textarea.insertAdjacentElement("beforebegin", view.dom);
   // The textarea stays in the form (its name/value are the POST source) but is hidden --
-  // updateListener above keeps its value synced on every doc change, so any submit path
-  // (including a plain HTML form submit with JS otherwise disabled) still sees the
-  // CURRENT editor content, not just the value as of page load.
+  // updateListener above keeps its value synced on every doc change, so the browser's own
+  // native form submit (no submit-time JS of ours needed) still posts the CURRENT editor
+  // content, not just the value as of page load. (This file itself requires JS to run at
+  // all -- CodeMirror has no no-JS fallback -- so "submits even with JS disabled" was never
+  // an accurate framing; the point is only that no separate onsubmit handler is needed.)
   textarea.style.display = "none";
 
   // Clicking the <label> that used to focus the (now-hidden) textarea should focus the

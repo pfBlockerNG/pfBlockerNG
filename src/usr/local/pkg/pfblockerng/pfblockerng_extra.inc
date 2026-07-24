@@ -4313,6 +4313,14 @@ function pfb_hook_editor_compose_filename(string $when, string $core, string $la
  *
  * Containment (mirrors the runner's own checks, pfblockerng.inc pfb_hook_scripts()
  * / the pfb_run_hooks() exec path):
+ *   0. $basename must not carry a NUL byte -- basename() does not strip one
+ *      (coordinator gate finding F2, 2026-07-24: a NUL is not a path-separator
+ *      character to basename(), so it survives step 1's equality check unchanged
+ *      and would otherwise reach the filesystem calls below, where it is silently
+ *      truncated -- returning a bogus non-existent-file PATH instead of NULL).
+ *      Defense-in-depth only: unreachable via the page's own flows today, since
+ *      pfb_hook_editor_compose_filename() and pfb_hook_script_valid() both already
+ *      reject a NUL-bearing name earlier in every real call chain.
  *   1. $basename must equal basename($basename) -- rejects any path separator,
  *      '../' traversal, or an absolute path BEFORE touching the filesystem.
  *   2. $dir must resolve (realpath()) to a real directory.
@@ -4325,7 +4333,7 @@ function pfb_hook_editor_compose_filename(string $when, string $core, string $la
  *      the only defence needed there, and the not-yet-existing path is returned.
  */
 function pfb_hook_editor_path(string $basename, ?string $dir = null): ?string {
-	if ($basename === '' || basename($basename) !== $basename) {
+	if ($basename === '' || str_contains($basename, "\0") || basename($basename) !== $basename) {
 		return NULL;
 	}
 	if ($dir === NULL) {

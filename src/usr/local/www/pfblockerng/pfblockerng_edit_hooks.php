@@ -101,23 +101,38 @@ if ($_POST) {
 		if ($filename === NULL || $path === NULL) {
 			$input_errors[] = gettext('Invalid new-hook fields: When must be Pre/Post, Name must be letters, ' .
 				'digits, and underscores only, and Language must be Shell or Python.');
-		} elseif (file_exists($path)) {
-			$input_errors[] = gettext('A hook script with that composed name already exists -- pick a different Name.');
 		} else {
 			// Mode 0755: the runner execs the vetted script directly under timeout(1)
 			// via its own shebang (pfb_run_hooks()), so a freshly created file must be
 			// executable to ever actually run, same as a shell-access admin would chmod
 			// it after authoring it by hand.
-			if (@file_put_contents($path, pfb_hook_editor_template($post_when, $post_lang)) === FALSE
-			    || !@chmod($path, 0755)) {
-				$input_errors[] = gettext('Failed to create the hook script file -- check that the ' .
-					'hook-script directory is writable.');
+			//
+			// 'x' mode: atomic create-exclusive open -- fails outright if the target
+			// already exists, closing the TOCTOU race a separate file_exists() check
+			// followed by a plain write left open (coordinator gate finding F3,
+			// 2026-07-24): two concurrent creates racing the same composed name could
+			// otherwise both pass the existence check and one clobber the other.
+			$pfb_eh_new_handle = @fopen($path, 'x');
+			if ($pfb_eh_new_handle === FALSE) {
+				$input_errors[] = gettext('A hook script with that composed name already exists -- pick a different Name.');
 			} else {
-				// PRG: redirect straight into the picker-load state for the new file so
-				// the admin lands in the editor, ready to fill in the hello-world stub.
-				header('Location: /pfblockerng/pfblockerng_edit_hooks.php?' .
-					http_build_query(array('when' => $post_when, 'script' => $filename)));
-				exit;
+				$pfb_eh_new_template = pfb_hook_editor_template($post_when, $post_lang);
+				$pfb_eh_new_written  = @fwrite($pfb_eh_new_handle, $pfb_eh_new_template);
+				@fclose($pfb_eh_new_handle);
+				if ($pfb_eh_new_written !== strlen($pfb_eh_new_template) || !@chmod($path, 0755)) {
+					// Partial/failed write or chmod -- never leave a half-written file
+					// behind for a later create attempt (with a different name) to trip
+					// over, or for the picker to ever list.
+					@unlink($path);
+					$input_errors[] = gettext('Failed to write the hook script file -- check that the ' .
+						'hook-script directory is writable.');
+				} else {
+					// PRG: redirect straight into the picker-load state for the new file so
+					// the admin lands in the editor, ready to fill in the hello-world stub.
+					header('Location: /pfblockerng/pfblockerng_edit_hooks.php?' .
+						http_build_query(array('when' => $post_when, 'script' => $filename)));
+					exit;
+				}
 			}
 		}
 
@@ -296,7 +311,10 @@ $group->add(new Form_Input(
 	'pfb_eh_new_core',
 	NULL,
 	'text',
-	htmlspecialchars($pfb_eh_new_core_val),
+	// RAW value: Form_Input::_getInput() already HTML-escapes it at render
+	// (coordinator gate finding F1, 2026-07-24) -- escaping it again at the page
+	// level would double-escape it.
+	$pfb_eh_new_core_val,
 	array('placeholder' => 'name_core')
 ))->setHelp('Name (letters, digits, underscore only)')->setWidth(4);
 $group->add(new Form_Select(
@@ -307,8 +325,12 @@ $group->add(new Form_Select(
 ))->setHelp('Language')->setWidth(2);
 $section->add($group);
 
+// Named pfb_eh_create directly (coordinator gate finding F4, 2026-07-24): a clicked
+// <button type="submit" name="pfb_eh_create"> is included in the browser's OWN POST
+// natively -- exactly what isset($_POST['pfb_eh_create']) above keys on -- so no
+// click-handler JS is needed to make this submit as the create action.
 $pfb_eh_create_btn = new Form_Button(
-	'pfb_eh_create_btn',
+	'pfb_eh_create',
 	gettext('Create'),
 	NULL,
 	'fa-solid fa-plus'
@@ -332,15 +354,22 @@ $pfb_eh_loaded_label = ($pfb_eh_sel_script !== '')
 	: gettext('Load an existing script above, or create a new one, to start editing.');
 $section->addInput(new Form_StaticText('Now editing', $pfb_eh_loaded_label));
 
-$form->addGlobal(new Form_Input('pfb_eh_cur_when', 'pfb_eh_cur_when', 'hidden', htmlspecialchars($pfb_eh_sel_when)));
-$form->addGlobal(new Form_Input('pfb_eh_cur_script', 'pfb_eh_cur_script', 'hidden', htmlspecialchars($pfb_eh_sel_script)));
+// RAW values: Form_Element/Form_Input already HTML-escape every attribute at
+// render (coordinator gate finding F1, 2026-07-24) -- escaping them again at the
+// page level would double-escape them.
+$form->addGlobal(new Form_Input('pfb_eh_cur_when', 'pfb_eh_cur_when', 'hidden', $pfb_eh_sel_when));
+$form->addGlobal(new Form_Input('pfb_eh_cur_script', 'pfb_eh_cur_script', 'hidden', $pfb_eh_sel_script));
 
 $pfb_eh_textarea = new Form_Textarea(
 	'pfb_eh_content',
 	NULL,
-	// Content is saved verbatim (no transformation); it is only htmlspecialchars()'d
-	// for THIS render so it can never break out of the <textarea> as markup.
-	htmlspecialchars($pfb_eh_content)
+	// Content is saved verbatim (no transformation), and passed RAW here --
+	// Form_Textarea::_getInput() already HTML-escapes the value exactly once at
+	// render (verified against pfSense master and RELENG_2_7_2), so escaping it
+	// again here would double-escape it: the browser decodes only ONE layer,
+	// leaving mangled entities (e.g. "&quot;") in what the user sees and re-saves
+	// (coordinator gate finding F1, 2026-07-24).
+	$pfb_eh_content
 );
 $pfb_eh_textarea->setAttribute('id', 'pfb_hook_editor_content');
 $pfb_eh_textarea->removeClass('form-control')
@@ -353,8 +382,10 @@ $pfb_eh_textarea->removeClass('form-control')
 	->setHelp(gettext('Saved verbatim -- no transformation is applied to the content.'));
 $section->addInput($pfb_eh_textarea);
 
+// Named pfb_eh_save directly -- same native-submit reasoning as the Create button
+// above (coordinator gate finding F4, 2026-07-24).
 $pfb_eh_save_btn = new Form_Button(
-	'pfb_eh_save_btn',
+	'pfb_eh_save',
 	gettext('Save'),
 	NULL,
 	'fa-solid fa-floppy-disk'
@@ -386,29 +417,6 @@ events.push(function() {
 		window.pfbHooksCM.fromTextarea(pfbHookEditorEl, '<?=$pfb_eh_lang?>');
 	}
 <?php endif; ?>
-
-	// Two distinct POST actions share this ONE form (house pattern:
-	// pfblockerng_software.php's 'Check now' button) -- a click injects a hidden
-	// field naming the action, then submits the same form. The server-side handler
-	// keys off isset($_POST['pfb_eh_create'|'pfb_eh_save']), never the button label.
-	function pfbEhSubmitAs(fieldName) {
-		var f = document.forms[0];
-		var i = document.createElement('input');
-		i.type = 'hidden';
-		i.name = fieldName;
-		i.value = '1';
-		f.appendChild(i);
-		f.submit();
-	}
-
-	$('#pfb_eh_create_btn').click(function(e) {
-		e.preventDefault();
-		pfbEhSubmitAs('pfb_eh_create');
-	});
-	$('#pfb_eh_save_btn').click(function(e) {
-		e.preventDefault();
-		pfbEhSubmitAs('pfb_eh_save');
-	});
 });
 //]]>
 </script>
