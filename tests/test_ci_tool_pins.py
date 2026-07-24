@@ -9,5 +9,5 @@ def test_ruff_ci_install_is_pinned() -> None:
     install_step = ruff_job.split("      - name: Install Ruff\n", 1)[1].split("\n      - name:", 1)[0].strip()
     ruff_installs = [line.strip() for line in ruff_job.splitlines() if "pip install" in line and "ruff" in line]
 
-    assert install_step == "run: pip install ruff==0.15.22"
-    assert ruff_installs == ["run: pip install ruff==0.15.22"]
+    assert install_step == "run: pip install ruff==0.16.0"
+    assert ruff_installs == ["run: pip install ruff==0.16.0"]
