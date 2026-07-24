@@ -18,6 +18,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_hook_editor_path')]
 #[CoversFunction('pfb_hook_editor_template')]
 #[CoversFunction('pfb_hook_editor_lang_for')]
+#[CoversFunction('pfb_hook_editor_normalize_content')]
 final class HookEditorHelpersTest extends TestCase
 {
 	private string $dir = '';
@@ -315,5 +316,40 @@ final class HookEditorHelpersTest extends TestCase
 		// gates $script to the real allow-list before this is ever called) falls back
 		// rather than propagating an unrecognised mode string to the JS side.
 		$this->assertSame('py', pfb_hook_editor_lang_for('hook_pre_myhook.txt', 'py'));
+	}
+
+	// ------------------------------------------------------------------
+	// pfb_hook_editor_normalize_content() -- second-pass review finding S1
+	// (2026-07-24): browser <textarea> form submission normalizes line endings to
+	// CRLF before POSTing, regardless of what the on-disk file or the user's editor
+	// used -- so the save handler must fold CRLF (and a lone CR) back to bare LF
+	// before persisting, or every GUI save turns the hook script's shebang line into
+	// "#!/bin/sh\r", which the kernel execs as a literal (nonexistent) "/bin/sh\r"
+	// interpreter path (ENOENT) -- the hook then silently never fires again.
+	// ------------------------------------------------------------------
+
+	public function testNormalizeContentConvertsCrlfToLf(): void
+	{
+		$this->assertSame("#!/bin/sh\necho hi\n", pfb_hook_editor_normalize_content("#!/bin/sh\r\necho hi\r\n"));
+	}
+
+	public function testNormalizeContentConvertsLoneCarriageReturnToLf(): void
+	{
+		$this->assertSame("a\nb\nc", pfb_hook_editor_normalize_content("a\rb\rc"));
+	}
+
+	public function testNormalizeContentPassesBareLfThrough(): void
+	{
+		$this->assertSame("a\nb\nc\n", pfb_hook_editor_normalize_content("a\nb\nc\n"));
+	}
+
+	public function testNormalizeContentHandlesMixedLineEndings(): void
+	{
+		$this->assertSame("a\nb\nc\nd\n", pfb_hook_editor_normalize_content("a\r\nb\nc\rd\r\n"));
+	}
+
+	public function testNormalizeContentHandlesEmptyString(): void
+	{
+		$this->assertSame('', pfb_hook_editor_normalize_content(''));
 	}
 }
