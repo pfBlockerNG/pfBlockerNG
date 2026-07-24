@@ -1691,6 +1691,64 @@ function pfb_adv_alias_field_errors(array $post): array
 }
 
 /**
+ * pfb_dnsbl_regex_entry_error — save-time mirror of the DNSBL resolver's
+ * load-time user-regex guards (issue #1656): the resolver (pfb_unbound.py)
+ * silently DROPS a REGEX-ini pattern that has a structurally catastrophic
+ * backtracking shape (_regex_is_catastrophic_shape) or that fails re.compile,
+ * so without this check a bad entry saves fine and then vanishes at reload
+ * with no user feedback. The shape checks below are 1:1 ports of the Python
+ * ones; keep them in sync.
+ *
+ * The resolver receives the pattern LOWERCASED (pfbng_text_area_decode ->
+ * pfb_strtolower feeds the [REGEX] ini section), so the lowercased pattern is
+ * what is judged here — e.g. '(?P<x>a)' reaches Python as '(?p<x>a)', a
+ * compile error, and must be rejected at save too.
+ *
+ * Deliberately NOT mirrored: the opt-in static length cap (regex_cap /
+ * REGEX_STATIC_LEN_CAP — a tunable convenience cap, not a safety gate) and the
+ * always-on runtime timing eviction (needs execution; unknowable at save).
+ * PCRE stands in for Python re at the compile probe — the engines' accepted
+ * syntax differs at the margins, so this is a best-effort save-time filter
+ * while the resolver's own guards stay authoritative.
+ *
+ * @param  string $pattern  One custom-list regex entry (comment part already
+ *                           stripped by the caller).
+ * @return string           Human-readable error, or '' when the entry is fine.
+ */
+function pfb_dnsbl_regex_entry_error(string $pattern): string
+{
+	$pattern = strtolower($pattern);
+
+	// Ports of pfb_unbound.py's structural shape checks (same order):
+	// nested quantifier (a+)+, alternation overlap (a|ab)+, adjacent
+	// quantified groups (a+)(a+)+, stacked bounded repeats a{1000}{1000}.
+	$catastrophic_shapes = array(
+		'/\([^()]*[+*][^()]*\)\s*[+*{]/',
+		'/\([^()]*\|[^()]*\)\s*[+*{]/',
+		'/\([^()]*[+*][^()]*\)\([^()]*\)\s*[+*]/',
+		'/(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?:,\d*)?\}/',
+	);
+	foreach ($catastrophic_shapes as $shape) {
+		if (preg_match($shape, $pattern)) {
+			return 'Regex has a catastrophic-backtracking shape (the DNSBL resolver would drop it)';
+		}
+	}
+
+	// Budget backstop: unescaped unbounded quantifiers + alternations combined
+	// over the resolver's _REGEX_BUDGET_MAX (12).
+	$budget = preg_match_all('/(?<!\\\\)[+*]/', $pattern) + preg_match_all('/(?<!\\\\)\|/', $pattern);
+	if ($budget > 12) {
+		return 'Regex has too many quantifiers/alternations (the DNSBL resolver would drop it)';
+	}
+
+	// Compile probe — the resolver drops a pattern re.compile rejects.
+	if (@preg_match('/' . str_replace('/', '\/', $pattern) . '/', '') === FALSE) {
+		return 'Regex does not compile (the DNSBL resolver would drop it)';
+	}
+	return '';
+}
+
+/**
  * pfb_header_reserved_error — reject a source Header that collides with a
  * package-synthesized name (issue #1270): DNSBL-IP and the 9 GeoIP continent
  * aliases write to the SAME <header><vtype>.txt path a user list's Header
