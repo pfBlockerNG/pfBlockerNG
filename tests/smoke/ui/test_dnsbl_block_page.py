@@ -69,12 +69,25 @@ def test_dnsbl_block_page_shows_real_correlation_detail(
         answer = helpers.dns_probe(deployed_vm, domain)
         assert helpers.is_vip(answer), f"expected VIP block for {domain!r}, got answer: {answer!r}"
 
+        # The ssh default (60s) outruns wait_until's 12s deadline, so a post-connect stall
+        # burns the whole poll without ever reporting why. Cap each probe just under that
+        # deadline and poll THROUGH a stall (ConnectTimeout is 10s, so a shorter hard
+        # failure would trade one flake for another), keeping the rc/stderr that grep rc=2
+        # (unreadable log) and ssh rc=255 (transport) would otherwise hide behind a bare
+        # "row not found".
+        last_probe: dict[str, object] = {}
+
         def log_contains(blocked_domain: str) -> bool:
-            result = deployed_vm.ssh("grep", "-Fq", "--", f",{blocked_domain},", DNSBL_LOG)
+            try:
+                result = deployed_vm.ssh("grep", "-Fq", "--", f",{blocked_domain},", DNSBL_LOG, timeout=11.0)
+            except subprocess.TimeoutExpired:
+                last_probe.update(rc="ssh timed out after 11.0s", stderr="")
+                return False
+            last_probe.update(rc=result.returncode, stderr=result.stderr)
             return result.returncode == 0
 
         assert helpers.wait_until(lambda: log_contains(domain), timeout=12.0, interval=0.5), (
-            f"genuine DNSBL log row for {domain!r} did not arrive"
+            f"genuine DNSBL log row for {domain!r} did not arrive ({last_probe})"
         )
 
         # issue #1652: create a genuine, later lookalike event that the old BRE
@@ -86,7 +99,7 @@ def test_dnsbl_block_page_shows_real_correlation_detail(
             f"expected VIP block for lookalike {lookalike!r}, got answer: {lookalike_answer!r}"
         )
         assert helpers.wait_until(lambda: log_contains(lookalike), timeout=12.0, interval=0.5), (
-            f"genuine DNSBL log row for lookalike {lookalike!r} did not arrive"
+            f"genuine DNSBL log row for lookalike {lookalike!r} did not arrive ({last_probe})"
         )
 
         # THEN: an on-box curl to the sinkhole (the DNSBL VIP is a loopback-scoped
