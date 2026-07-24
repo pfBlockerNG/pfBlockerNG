@@ -1509,15 +1509,14 @@ def test_dnsbl_regex_list_runtime_dropped_entry_rejected_on_save(
 
     The DNSBL resolver (``pfb_unbound.py``) silently drops a user regex whose
     pattern has a catastrophic-backtracking shape (``_regex_is_catastrophic_shape``)
-    or that fails ``re.compile``. Before #1656 the ``case 'regex'`` custom-list
-    validation was an empty TODO stub, so such an entry SAVED fine and then
-    vanished at reload with no user feedback. Now the save handler mirrors those
-    load-time guards: the bad entry -> ``$input_errors`` -> the WHOLE save aborts
-    -> the ``pfb_regex_list`` node is UNCHANGED (the same hard-abort contract the
-    sibling custom-list formats already had).
+    or that fails ``re.compile``. The save handler mirrors those load-time guards:
+    such an entry -> ``$input_errors`` -> the WHOLE save aborts -> the
+    ``pfb_regex_list`` node is UNCHANGED (the same hard-abort contract the sibling
+    custom-list formats already have), so the user gets feedback instead of an
+    entry that vanishes at reload.
 
     BEFORE-state: a benign regex saves (proves the field itself accepts regex
-    entries, so the reject leg fails only because of the new validation). STORED
+    entries, so the reject leg fails only because of the validation). STORED
     AS BASE64 (same oracle as the non-ASCII test above). NO egress.
     """
     import base64
@@ -1527,6 +1526,10 @@ def test_dnsbl_regex_list_runtime_dropped_entry_rejected_on_save(
     benign = "^ads\\."
     benign_b64 = base64.b64encode(benign.encode()).decode()
     original = helpers.config_get(vm, cfg)
+    # Decode the restore text BEFORE mutating anything: an undecodable nonempty
+    # original fails the test up front instead of silently leaking a mutated
+    # pfb_regex_list into later tests via a swallowed cleanup error.
+    restore_text = base64.b64decode(original).decode() if original else ""
     try:
         # BEFORE: the benign save below is a real transition.
         assert original != benign_b64, f"pfb_regex_list already holds {benign!r} (base64) before the valid POST"
@@ -1539,13 +1542,10 @@ def test_dnsbl_regex_list_runtime_dropped_entry_rejected_on_save(
             f"(config unchanged at base64({benign!r})), got {got!r}"
         )
     finally:
-        restore = ""
-        if original:
-            try:
-                restore = base64.b64decode(original).decode()
-            except Exception:
-                restore = ""
-        webui.post(DNSBL_PAGE, {"pfb_regex_list": restore}, timeout=SAVE_TIMEOUT)
+        got_restored = _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_regex_list": restore_text}, cfg)
+        assert got_restored == original, (
+            f"cleanup must restore pfb_regex_list to its original value {original!r}, got {got_restored!r}"
+        )
 
 
 def test_dnsbl_adv_inbound_proto_any_guard(
