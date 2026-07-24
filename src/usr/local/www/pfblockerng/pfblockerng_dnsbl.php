@@ -697,8 +697,13 @@ if ($_POST) {
 					}
 				}
 		}
-		foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_list'] ?? ''), pfb_python_interpreter()) as $regex_error) {
-			$input_errors[] = 'Customlist pfb_regex_list: ' . htmlspecialchars($regex_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+		// pfb_unbound.py only loads Regex List patterns when this toggle is on -- validating
+		// an unloaded list must never make the whole page unsavable (e.g. on an unresolvable
+		// interpreter).
+		if (($_POST['pfb_regex'] ?? '') === 'on') {
+			foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_list'] ?? ''), pfb_python_interpreter()) as $regex_error) {
+				$input_errors[] = 'Customlist pfb_regex_list: ' . htmlspecialchars($regex_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+			}
 		}
 
 		// Validate DNSBL VIP address
