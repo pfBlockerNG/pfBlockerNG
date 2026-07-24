@@ -187,11 +187,8 @@ final class LogFormatConsumersTest extends TestCase
 	 * Basic Regular Expression, so '.' wildcard-matched any character and a
 	 * blocked host could correlate to a DIFFERENT entry's row --
 	 * `ads.example.com` matching `ads-example.com`'s line -- rendering the
-	 * wrong Group/Feed/Evaluated-Domain on the block page. Runs the CURRENT
-	 * source's exec() pipeline (extracted from www/index.php, not
-	 * hand-copied, so this test goes red on the unfixed BRE grep and pins
-	 * the fixed-string `-F` match against regression) with index.php's exact
-	 * key construction, against a log holding ONLY the lookalike host's row.
+	 * wrong Group/Feed/Evaluated-Domain on the block page. A log containing
+	 * only the lookalike host's row must not correlate to the blocked host.
 	 */
 	public function testBlockPageCorrelationNeverMatchesLookalikeHostRow(): void
 	{
