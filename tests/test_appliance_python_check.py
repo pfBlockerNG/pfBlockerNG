@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_appliance_python.py"
 _spec = importlib.util.spec_from_file_location("check_appliance_python", _TOOL)
 assert _spec is not None and _spec.loader is not None
@@ -47,11 +49,31 @@ def test_flags_any_literal_interpreter_path(tmp_path: Path) -> None:
         assert _find(tmp_path, line), f"/usr/local/bin/{suffix} should be flagged"
 
 
-def test_dependency_derived_interpreter_construction_is_allowed(tmp_path: Path) -> None:
+def test_dependency_derived_interpreter_construction_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The exemption is repo-root-anchored, not a suffix match, so anchor _REPO_ROOT at
+    # tmp_path to exercise it without touching the real repo tree.
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path)
     prefix = "/usr/local/bin/" + "python"
     line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
     relative_path = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
     assert _find(tmp_path, line, relative_path) == [], "resolver's dependency-derived construction must be allowed"
+
+
+def test_resolver_path_with_dot_segments_still_exempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Normalization must not break the legitimate case: an absolute path to the real
+    # resolver file, spelled with "./" and "../" segments, still resolves to it.
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path)
+    prefix = "/usr/local/bin/" + "python"
+    line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
+    real = tmp_path / "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
+    real.parent.mkdir(parents=True, exist_ok=True)
+    real.write_text(line, encoding="utf-8")
+    non_normalized = tmp_path / "src/usr/local/pkg/other/../pfblockerng/./pfblockerng.inc"
+    assert cap.find_violations([non_normalized]) == [], (
+        "a non-normalized (./,../) path to the resolver must stay exempt"
+    )
 
 
 def test_annotation_does_not_allow_literal_interpreter(tmp_path: Path) -> None:
@@ -59,10 +81,40 @@ def test_annotation_does_not_allow_literal_interpreter(tmp_path: Path) -> None:
     assert _find(tmp_path, line), "annotation must not permit a literal interpreter invocation"
 
 
+def test_nested_copy_of_resolver_path_is_not_exempt(tmp_path: Path) -> None:
+    # A file whose path merely ENDS WITH the resolver's path string (but lives
+    # somewhere else entirely) must NOT inherit the resolver's exemption.
+    prefix = "/usr/local/bin/" + "python"
+    line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
+    relative_path = "nested/src/usr/local/pkg/pfblockerng/pfblockerng.inc"
+    assert _find(tmp_path, line, relative_path), "a path merely ending with the resolver path must not be exempt"
+
+
 def test_derived_construction_is_forbidden_outside_resolver_file(tmp_path: Path) -> None:
     prefix = "/usr/local/bin/" + "python"
     line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
     assert _find(tmp_path, line), "dependency-derived construction must be confined to the resolver file"
+
+
+def test_resolver_path_used_as_a_directory_component_is_not_exempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A path that merely CONTAINS the resolver path (as a directory, with another
+    # file inside it) is not the resolver file itself and must still be flagged.
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path)
+    prefix = "/usr/local/bin/" + "python"
+    line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
+    relative_path = "src/usr/local/pkg/pfblockerng/pfblockerng.inc/other.inc"
+    assert _find(tmp_path, line, relative_path), "resolver path used as a directory component must not be exempt"
+
+
+def test_other_line_in_real_resolver_file_is_still_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The resolver file's exemption covers only the exact derived-construction line;
+    # any other forbidden-literal line in that same file is still a violation.
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path)
+    line = f'    vm.ssh(f"{_APPLIANCE_PY} -c {{snippet}}")\n'
+    relative_path = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
+    assert _find(tmp_path, line, relative_path), "a non-exempt line in the resolver file must still be flagged"
 
 
 def test_clean_php_is_not_flagged(tmp_path: Path) -> None:
