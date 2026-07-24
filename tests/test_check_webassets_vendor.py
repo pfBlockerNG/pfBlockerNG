@@ -14,6 +14,7 @@ files, the license doc names the CodeMirror/Lezer projects, and a fresh
 from __future__ import annotations
 
 import hashlib
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +76,15 @@ def test_licenses_md_names_codemirror_and_lezer_and_their_license() -> None:
     assert text.count("MIT") >= 2
 
 
+@pytest.mark.skipif(
+    shutil.which("npm") is None,
+    reason=(
+        "npm not on PATH -- this rebuild proof needs a real `npm ci` + esbuild run "
+        "(network required) and is not authoritative here anyway; the "
+        "webassets-vendor CI job (.github/workflows/test.yml) is the gate that "
+        "actually enforces vendor-tree drift on every PR"
+    ),
+)
 def test_build_webassets_reproduces_the_committed_vendor_tree() -> None:
     """The sync guard: a fresh, real `scripts/build-webassets.sh` run from the
     pinned tools/webassets/ source (npm ci + esbuild, network required) must

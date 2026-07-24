@@ -18,6 +18,7 @@ import { highlightTree } from "@lezer/highlight";
 import { EditorState } from "@codemirror/state";
 import { syntaxTree, defaultHighlightStyle } from "@codemirror/language";
 import { parser, mixedParser, pfbRegexListLanguage, pfbRegexList } from "../src/index.js";
+import { pfbHighlightStyle } from "../../pfb-highlight-style.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const casesPath = path.join(__dirname, "cases.txt");
@@ -125,4 +126,33 @@ test("mixed-nesting: highlightTree actually emits distinct classes for anchors/e
   // outer Comment tag are actually different highlight categories, not one catch-all.
   const classes = new Set([anchorSpans[0].cls, escapeSpan.cls, commentSpan.cls]);
   assert.equal(classes.size, 3, `expected 3 distinct highlight classes, got: ${JSON.stringify([...classes])}`);
+});
+
+test("mixed-nesting: pfbHighlightStyle covers the tags defaultHighlightStyle drops (quantifier, alternation)", () => {
+  // @codemirror/language's defaultHighlightStyle has no rule for t.operator (which kills
+  // t.logicOperator too, since logicOperator is a child tag of operator) -- so a bare
+  // Quantifier ("*") and the alternation operator ("|") render with zero spans under
+  // defaultHighlightStyle alone. pfb-highlight-style.js (installed by cm-regex.js
+  // ALONGSIDE defaultHighlightStyle) is what actually covers them in the shipped editor;
+  // this pins that against the real bundle-facing style object, not a private copy.
+  const input = "fo*|bar";
+  const tree = pfbRegexListLanguage.parser.parse(input);
+
+  const defaultSpans = [];
+  highlightTree(tree, defaultHighlightStyle, (from, to, cls) => {
+    defaultSpans.push({ from, to, cls, text: input.slice(from, to) });
+  });
+  assert.ok(
+    !defaultSpans.some((s) => s.text === "*" || s.text === "|"),
+    `expected defaultHighlightStyle to leave "*"/"|" unstyled (documents the gap this fix closes), got: ${JSON.stringify(defaultSpans)}`,
+  );
+
+  const pfbSpans = [];
+  highlightTree(tree, pfbHighlightStyle, (from, to, cls) => {
+    pfbSpans.push({ from, to, cls, text: input.slice(from, to) });
+  });
+  const quantifierSpan = pfbSpans.find((s) => s.text === "*");
+  const altSpan = pfbSpans.find((s) => s.text === "|");
+  assert.ok(quantifierSpan, `expected a highlighted "*" quantifier span, got: ${JSON.stringify(pfbSpans)}`);
+  assert.ok(altSpan, `expected a highlighted "|" alternation span, got: ${JSON.stringify(pfbSpans)}`);
 });
