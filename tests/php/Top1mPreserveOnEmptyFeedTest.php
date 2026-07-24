@@ -326,7 +326,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 			'a failed record write must not publish a new TOP1M whitelist');
 		$this->assertSame([], $this->tempFilesLeftBehind(), 'no staging file left after a failed first publication');
 		$this->assertStringContainsString('failed to write the new whitelist build', $this->readErrLog());
-		$this->assertStringContainsString('no TOP1M whitelist available', $this->readErrLog());
+		$this->assertStringContainsString('publication aborted', $this->readErrLog());
 		$this->assertStringNotContainsString('Parsed 1 lines', $this->readMainLog(),
 			'a failed first publication must not report success');
 	}
