@@ -1,0 +1,81 @@
+"""Vendor-tree proof for the Prism + code-input static assets (issue #1669).
+
+pfBlockerNG is a NO_BUILD FreeBSD port: the Prism/code-input bundles under
+``src/usr/local/www/pfblockerng/vendor/prism/`` must be committed static
+files matching their pinned ``tools/webassets/`` source -- there is no build
+step on the appliance to regenerate them. These tests pin that: the
+committed files match their own ``MANIFEST.sha256`` (fails if a vendor file
+is hand-edited without regenerating the manifest), the vendor dir carries no
+stray extra files, the license doc names both upstream projects, and a fresh
+``scripts/build-webassets.sh`` run reproduces the committed tree byte-for-byte
+(the CI drift guard, ``scripts/check_webassets_vendor.py``, run for real).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).parents[1]
+SCRIPT = ROOT / "scripts/check_webassets_vendor.py"
+VENDOR_DIR = ROOT / "src/usr/local/www/pfblockerng/vendor/prism"
+MANIFEST = VENDOR_DIR / "MANIFEST.sha256"
+
+EXPECTED_FILES = (
+    "prism-regex.min.js",
+    "prism-code.min.js",
+    "prism.min.css",
+    "code-input.min.js",
+    "code-input.min.css",
+    "LICENSES.md",
+)
+
+
+def _manifest_entries() -> dict[str, str]:
+    assert MANIFEST.is_file(), f"missing manifest: {MANIFEST}"
+    entries: dict[str, str] = {}
+    for line in MANIFEST.read_text(encoding="utf-8").splitlines():
+        digest, name = line.split("  ", 1)
+        entries[name] = digest
+    return entries
+
+
+def test_manifest_lists_exactly_the_expected_vendor_files() -> None:
+    assert set(_manifest_entries()) == set(EXPECTED_FILES)
+
+
+@pytest.mark.parametrize("name", EXPECTED_FILES)
+def test_committed_vendor_file_matches_its_manifest_digest(name: str) -> None:
+    entries = _manifest_entries()
+    path = VENDOR_DIR / name
+    assert path.is_file(), f"missing vendor file: {path}"
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == entries[name], f"{name} content does not match its MANIFEST.sha256 entry"
+
+
+def test_vendor_dir_has_no_untracked_extra_files() -> None:
+    assert VENDOR_DIR.is_dir(), f"missing vendor dir: {VENDOR_DIR}"
+    on_disk = {p.name for p in VENDOR_DIR.iterdir() if p.is_file()}
+    assert on_disk == set(EXPECTED_FILES) | {"MANIFEST.sha256"}
+
+
+def test_licenses_md_names_both_upstream_projects_and_their_license() -> None:
+    text = (VENDOR_DIR / "LICENSES.md").read_text(encoding="utf-8")
+    assert "Prism" in text
+    assert "code-input" in text
+    assert text.count("MIT") >= 2
+
+
+def test_build_webassets_reproduces_the_committed_vendor_tree() -> None:
+    """The sync guard: a fresh, real `scripts/build-webassets.sh` run from the
+    pinned tools/webassets/ source (npm ci + esbuild, network required) must
+    leave the committed vendor tree byte-identical -- exactly what CI's drift
+    guard checks. A stale/hand-edited vendor tree, or a pin bump that wasn't
+    rebuilt, fails this."""
+    assert SCRIPT.is_file(), f"missing checker: {SCRIPT}"
+    result = subprocess.run([sys.executable, str(SCRIPT)], cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr

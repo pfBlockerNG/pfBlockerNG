@@ -549,6 +549,32 @@ jobs:
         # DOM insertion and that server-rendered markup columns pass through verbatim.
         run: node --test tests/js/*.test.js
 
+  webassets-vendor:
+    name: Webassets vendor drift guard (Prism + code-input, issue #1669)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
+        # 503s for whole hours (2026-07-16). On failure the job proceeds on the
+        # runner image's preinstalled Node, which satisfies npm/esbuild here.
+        continue-on-error: true
+        uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+
+      - name: Rebuild the vendor tree and diff against what's committed
+        # Node/npm are dev+CI-only (never shipped to the appliance): this
+        # re-runs scripts/build-webassets.sh from the pinned tools/webassets/
+        # source (prismjs + @webcoder49/code-input + esbuild, all exact-pinned
+        # in package-lock.json) and fails if the committed
+        # src/usr/local/www/pfblockerng/vendor/prism/ tree has drifted.
+        # ubuntu-latest ships python3.
+        run: python3 scripts/check_webassets_vendor.py
+
   benchmarks:
     name: Benchmark kill-gates (ReDoS + build RAM)
     # MANUAL-ONLY (issue #76). The spikes carry their GO/NO-GO verdict in their EXIT
@@ -776,7 +802,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, ui-suite, coverage-pairing, comment-narration, retired-tokens]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration, retired-tokens]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -827,6 +853,10 @@ jobs:
           fi
           if [ "${{ needs.widget-js-tests.result }}" != "success" ]; then
             echo "Widget JS unit tests (node --test) failed or were cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.webassets-vendor.result }}" != "success" ]; then
+            echo "Webassets vendor drift guard (Prism + code-input) failed or was cancelled."
             exit 1
           fi
           # ADR-14 UI suite (label-gated): 'skipped' (unlabeled PR / push) is a
