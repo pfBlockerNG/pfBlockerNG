@@ -62,10 +62,17 @@ final class DnsblRegexHighlightWiringTest extends TestCase
 		// The script tag must be textually gated by the same $pfb_syntaxhl_on boolean,
 		// i.e. an `if ($pfb_syntaxhl_on)` PHP block wrapping the <script> tag -- toggle
 		// off must emit zero new bytes (no script tag at all).
+		// Tempered-dot gaps ((?:(?!endif).)*?), not bare .*? -- a bare .*? (even
+		// non-greedy, under /s) can consume a literal "endif" substring, letting the
+		// match bridge PAST this gate's own close and land on a DIFFERENT, later
+		// if($pfb_syntaxhl_on):...endif block's content -- a false pass if the script
+		// tag were ever accidentally moved out of this gate to sit between the two
+		// gates in the real file. Tempered dot forbids consuming "endif", so the match
+		// can't cross this gate's boundary.
 		$this->assertMatchesRegularExpression(
-			'#if\s*\(\s*\$pfb_syntaxhl_on\s*\)\s*:.*?'
+			'#if\s*\(\s*\$pfb_syntaxhl_on\s*\)\s*:(?:(?!endif).)*?'
 			. '<script src="vendor/codemirror/cm-regex\.min\.js\?v=<\?=pfb_file_mtime\(\'/usr/local/www/pfblockerng/vendor/codemirror/cm-regex\.min\.js\'\)\?>"></script>'
-			. '.*?endif#s',
+			. '(?:(?!endif).)*?endif#s',
 			self::$src,
 			'expected the cm-regex.min.js include, with mtime cache-busting, wrapped inside an if ($pfb_syntaxhl_on) gate'
 		);
@@ -95,9 +102,12 @@ final class DnsblRegexHighlightWiringTest extends TestCase
 		// The JS init must live inside the existing events.push(function(){...}) block
 		// and be gated by the same $pfb_syntaxhl_on boolean as the asset include -- not
 		// a second, independently-computed condition.
+		// Tempered-dot gaps here too (see testCmRegexScriptIsIncludedWithCacheBustingInsideTheGate's
+		// comment) -- same bridging-past-this-gate's-endif risk applies to the
+		// events.push()/getElementById/fromTextarea chain.
 		$this->assertMatchesRegularExpression(
-			'#events\.push\(function\(\)\{.*?if\s*\(\s*\$pfb_syntaxhl_on\s*\)\s*:.*?'
-			. "getElementById\\('pfb_regex_list'\\).*?pfbCM\\.fromTextarea\\(.*?endif#s",
+			'#events\.push\(function\(\)\{(?:(?!endif).)*?if\s*\(\s*\$pfb_syntaxhl_on\s*\)\s*:(?:(?!endif).)*?'
+			. "getElementById\\('pfb_regex_list'\\)(?:(?!endif).)*?pfbCM\\.fromTextarea\\((?:(?!endif).)*?endif#s",
 			self::$src,
 			'expected the pfb_regex_list CM6 init inside events.push(), gated by if ($pfb_syntaxhl_on)'
 		);

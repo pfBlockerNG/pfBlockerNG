@@ -79,3 +79,11 @@ RegexList
 ==>
 
 RegexList(Pattern)
+
+# escaped-hash-still-splits-mid-pattern
+
+a\#b
+
+==>
+
+RegexList(Pattern,Comment)

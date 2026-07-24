@@ -552,6 +552,7 @@ jobs:
   webassets-vendor:
     name: Webassets vendor drift guard + Lezer grammar tests (issue #1669)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -590,6 +591,7 @@ jobs:
           npm ci --no-audit --no-fund
           npm run test:grammar
           npm run test:listgrammar
+          npm run test:bundle
 
   benchmarks:
     name: Benchmark kill-gates (ReDoS + build RAM)
