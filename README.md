@@ -154,19 +154,9 @@ A hook receives what changed in environment variables:
 > `PFB_CHANGED_IP_ALIASES`, not `PFB_IP_CHANGED=1` — the latter fires only on
 > a rule change and misses content-only feed refreshes.
 
-Example — reload HAProxy gracefully after an IP update. Save as
-`/usr/local/pkg/pfblockerng/hooks/hook_post_haproxy.sh` (`chmod +x`), then
-pick it as a `post` hook:
-
-```sh
-#!/bin/sh
-# hook_post_haproxy.sh — reload HAProxy after an IP update
-[ "$PFB_IP_CHANGED" -gt 0 ] && /usr/local/etc/rc.d/haproxy.sh restart
-```
-
-More recipes (e.g. notifying a webhook), the trust model, and the full
-contract are in
-[CONTRIBUTING.md](CONTRIBUTING.md#update-hooks-prepost-update-scripts-adr-12).
+For a worked example — a `post` hook that reloads HAProxy when pfBlockerNG's
+aggregated aliases change — see
+[this gist](https://gist.github.com/andrebrait/ee3a39dac388db0f2581be3a19449a7c).
 
 ### DNSBL Control (CLI)
 

@@ -296,6 +296,33 @@ Pinned by `tests/test_adr10_*` (snapshot equivalence, fail-closed swap, watcher)
 decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. See
 `.ADRs/ADR_10_Zero_Downtime_DNSBL/`.
 
+### ADR-08 — IDN homoglyph protection
+
+DNSBL settings carry an **IDN Blocking** mode — Off | All-IDN | Confusable (replaces the old
+on/off checkbox; a stored `pfb_idn='on'` maps to All-IDN, byte-identical). Off takes no IDN
+action; All-IDN blocks every `xn--` domain (the blunt legacy behaviour); Confusable runs a TR39
+mixed-script analyzer that decodes each `xn--` label and blocks only the deceptive cross-script
+ones:
+
+- **Catches:** a single label mixing ≥2 of {Latin, Cyrillic, Greek} (all three pairs), e.g.
+  `xn--pple-43d` = `аpple` (Cyrillic `а`) → blocked by default (sub-toggle, default-on). Other
+  non-restrictive multi-script mixes (e.g. Latin+Armenian/Cherokee/Coptic) → suspicious →
+  alerted (opt-in sub-toggle escalates them to block).
+- **Does NOT catch (documented limitation):** whole-script confusables (an all-Cyrillic
+  look-alike passes restriction analysis) and pure-ASCII typosquats (`g00gle`) — those need a
+  confusables + protected-brand table, deliberately out of scope.
+- **Legit IDNs untouched:** single-script (incl. all-Latin/Cyrillic/Greek) and Latin+CJK.
+  Analysis is per-label, never unioned across the dot, so a legit ASCII/Latin SLD under an IDN
+  ccTLD (`example.рф`, `site.中国`) resolves. Decode runs only on `xn--` queries; malformed
+  labels are flagged, never crash the resolver.
+
+The analyzer (inlined in `pfb_unbound.py`) resolves each code point's script from the stdlib
+`unicodedata.name()` leading token — no shipped Unicode table, no runtime dependency; the script
+names are stable across UCD versions for the in-scope scripts, so the FP/TP result holds across
+Python 3.11–3.14. Measured on `tests/fixtures/adr08_corpus/`: 0 false positives on the
+legitimate set, 6/6 homographs caught. Guards: the `tests/test_adr08_*` suite. See
+[`.ADRs/ADR_08_Homoglyph_Protection/`](../../.ADRs/ADR_08_Homoglyph_Protection/).
+
 ### ADR-12 — update hooks (PHP/shell, no Python)
 
 Admin-VETTED `pre`/`post` **scripts** run once per update pass from
@@ -343,10 +370,12 @@ Exported env (only these are promised):
 
 The `post` hook sees the new DNSBL state live (ADR-10's bounded wait-for-apply runs before the
 pass returns). Hooks live in config ⇒ replicate to a CARP/HA secondary and run on whichever node
-updates. The shipped **HAProxy recipe** (README) is a `post` hook guarded on
-`[ "$PFB_IP_CHANGED" = "1" ]` whose command pipes `haproxy_check_run(1)` (graceful reload)
-through `/usr/local/sbin/pfSsh.php`; validation = `php -l`/PHPStan/ShellCheck + a maintainer
-manual smoke (no pytest oracle). See `.ADRs/ADR_12_Update_Hooks/`.
+updates. The **HAProxy recipe** linked from the README is a user-convenience example (an external
+gist, not shipped): a `post` hook guarded on `[ "$PFB_IP_CHANGED" -gt 0 ]` that runs
+`/usr/local/etc/rc.d/haproxy.sh restart` — the package rc-script's graceful cycle (its stop
+signals `SIGUSR1`, HAProxy's soft-stop, which drains in-flight sessions before the fresh process
+re-reads the on-disk ACL files). See
+[`.ADRs/ADR_12_Update_Hooks/`](../../.ADRs/ADR_12_Update_Hooks/).
 
 ### ADR-11 — aggregate ("Uber") aliases live smoke — `tests/smoke/test_smoke_aggregate.py`
 
@@ -420,6 +449,36 @@ additional harness helpers not yet in the fixture set, and real lock-hold measur
 live traffic on production hardware.
 
 ---
+
+## DNSBL sinkhole VIP (ADR-13)
+
+A DNSBL "VIP" block sinks the queried name to a **sinkhole Virtual IP** that the DNSBL web server
+(lighttpd) listens on. The VIP must exist before DNSBL can be enabled; `pfb_validate_vips()`
+force-disables DNSBL if it is missing or invalid.
+
+**Create VIPs automatically** (`pfb_dnsvip_auto`, default off): when set, pfBlockerNG owns the
+sinkhole VIP(s) end-to-end — no manual Firewall > Virtual IPs entry.
+
+- **Address scheme.** Preferred `10.10.10.53/32` (v4) and `fd00::53/128` (v6, ULA). On conflict
+  it sweeps `10.10.X.53` / `fd00:X::53` (X = 0..15) and picks the first that overlaps no existing
+  VIP or configured subnet.
+- **Ownership marker.** Auto-created VIPs carry the description `pfB_AUTO_VIP_v4` /
+  `pfB_AUTO_VIP_v6`; only VIPs with that exact marker are ever managed or removed — a
+  manually-created VIP is never touched.
+- **Lifecycle.** Created when DNSBL is enabled (`pfb_create_dnsbl('enabled')`), removed when DNSBL
+  or pfBlockerNG is disabled (incl. uninstall). The setting and the stored address survive
+  disable/re-enable; the VIP is re-created on the next enable pass.
+- **Range full.** If the flag is on and the candidate range later fills, the checkbox renders
+  disabled+unchecked with a warning while `pfb_dnsvip_auto` stays `on` until the next save; the
+  lifecycle manager no-ops safely (logs, leaves config untouched).
+- **IPv6.** When the resolver listens on IPv6, AAAA blocks should sink to a v6 VIP. Auto mode
+  provisions `fd00::53`; manual mode is recommended-but-not-required — with no v6 VIP,
+  pfBlockerNG logs a non-blocking warning and keeps running on IPv4 (AAAA simply not sinkholed),
+  never force-disabling DNSBL.
+- **HA/CARP.** `pfb_dnsvip_auto` and the address live in `config.xml` and replicate; each node
+  creates/removes its own node-local `lo0` IP-Alias VIP on its own enable/disable pass.
+
+See [`.ADRs/ADR_13_Auto_DNSBL_VIP/`](../../.ADRs/ADR_13_Auto_DNSBL_VIP/).
 
 ## IP dedup + reputation: batch recompute (issue #1084)
 
