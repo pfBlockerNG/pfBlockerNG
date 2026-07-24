@@ -709,18 +709,6 @@ function pfb_dnsblip_action_value(mixed $action): string {
 	return pfb_group_action_valid($action, 'ipv4') ? (string) $action : 'Disabled';
 }
 
-// Normalise the user-supplied 'Force Reload' option to one of its only
-// legitimate values — 'All', 'IP', 'DNSBL' — returning 'All' for any absent,
-// non-string, or unexpected input. Used to validate $_POST['pfb_reload_option']
-// at the pfblockerng_update.php input boundary before it reaches the status
-// display, the reload-type switch, or the log line. Exact-match only.
-function pfb_reload_option_value($value) {
-	if (is_string($value) && in_array($value, array('All', 'IP', 'DNSBL'), TRUE)) {
-		return $value;
-	}
-	return 'All';
-}
-
 // Entry count for a pfBlockerNG alias file, excluding the '1.1.1.1' placeholder
 // (used for an empty alias). $grep_lines is the output array of
 // `grep -cv '^1.1.1.1$' <file>` — a single line holding the count in element 0.
@@ -7825,68 +7813,6 @@ function pfb_unbound_py_atomic_write($path, $content, array $stream_ops=array())
 	return TRUE;
 }
 
-// Issue #1542: stream the generated TOP1M whitelist into a same-directory
-// temporary file, then publish it with the same fsync + atomic rename contract
-// as the manifest. The fixed sidecar is deliberately not represented in JSON.
-function pfb_unbound_py_atomic_copy(string $source, string $path, array $stream_ops=array()): bool {
-	$source_h = @fopen($source, 'rb');
-	if ($source_h === FALSE) {
-		return FALSE;
-	}
-	$tmp = @tempnam(dirname($path), '.pfbtop1m_');
-	if ($tmp === FALSE) {
-		@fclose($source_h);
-		return FALSE;
-	}
-	$target_h = @fopen($tmp, 'wb');
-	if ($target_h === FALSE) {
-		@fclose($source_h);
-		@unlink($tmp);
-		return FALSE;
-	}
-	$write_fn = $stream_ops['write'] ?? static fn($stream, $bytes) => @fwrite($stream, $bytes);
-	$flush_fn = $stream_ops['flush'] ?? static fn($stream) => @fflush($stream);
-	$fsync_fn = $stream_ops['fsync'] ?? static fn($stream) => @fsync($stream);
-	$ok = TRUE;
-	while (!feof($source_h)) {
-		$chunk = @fread($source_h, 1048576);
-		if ($chunk === FALSE) {
-			$ok = FALSE;
-			break;
-		}
-		if ($chunk !== '') {
-			$written = $write_fn($target_h, $chunk);
-			if ($written === FALSE || $written !== strlen($chunk)) {
-				$ok = FALSE;
-				break;
-			}
-		}
-	}
-	$ok = $ok && $flush_fn($target_h) && $fsync_fn($target_h);
-	$ok = @fclose($target_h) && $ok;
-	@fclose($source_h);
-	if (!$ok) {
-		@unlink($tmp);
-		return FALSE;
-	}
-	$chown_fn = $stream_ops['chown'] ?? static fn($file, $owner) => @chown($file, $owner);
-	$chgrp_fn = $stream_ops['chgrp'] ?? static fn($file, $group) => @chgrp($file, $group);
-	$chmod_fn = $stream_ops['chmod'] ?? static fn($file, $mode) => @chmod($file, $mode);
-	$metadata_fn = $stream_ops['metadata'] ?? static function ($file) use ($chown_fn, $chgrp_fn, $chmod_fn): bool {
-		return $chown_fn($file, 'root') && $chgrp_fn($file, 'unbound') && $chmod_fn($file, 0640);
-	};
-	if (!$metadata_fn($tmp)) {
-		@unlink($tmp);
-		return FALSE;
-	}
-	$rename_fn = $stream_ops['rename'] ?? static fn($from, $to) => @rename($from, $to);
-	if (!$rename_fn($tmp, $path)) {
-		@unlink($tmp);
-		return FALSE;
-	}
-	return TRUE;
-}
-
 // Issue #1569: preserve canonical TOP1M bytes while projecting either retired
 // three-line wire family to the strict one-domain-per-line Python sidecar.
 function pfb_unbound_py_top1m_atomic_copy(string $source, string $path, array $stream_ops=array()): bool {
@@ -10294,27 +10220,19 @@ function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, $supp): array {
 }
 
 
-// IPv6 sibling of sanitize_ipaddr(): excludes private/reserved/loopback IPv6 from loaded block
-// lists when Suppression is enabled; a feed's explicit /0 clamps to a single host (issue #744).
-// Also drops documentation (RFC 3849), multicast, and the NAT64 prefix (RFC 6052), which PHP's
-// filter flags leave routable (issue #760) — explicit prefix checks so behaviour is independent
-// of PHP's patch level (RFC 6890 moved 2001:db8::/32 between filter sets in 8.3.16/8.4.3).
-// $pfbcidr: per-category Advanced "Suppression CIDR Limit" floor (issue #760 §3).
-// Returns the canonical inet_ntop() form (issue #1084): textual variants of one
-// address (case, zero-run, leading zeros) collapse to one string, and an
-// unparseable address is dropped rather than passed through.
-function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
-	global $pfb;
-
-	$result = pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, $pfb['supp']);
-	foreach ($result['messages'] as $message) {
-		pfb_logger($message, 1);
-	}
-	return $result['address'];
-}
-
 /**
- * Normalize one IPv6 entry without reading global state or emitting logs.
+ * Normalize one IPv6 entry without reading global state or emitting logs —
+ * the IPv6 sibling of pfb_sanitize_ipaddr(). Excludes private/reserved/loopback
+ * IPv6 from loaded block lists when Suppression is enabled ($supp); a feed's
+ * explicit /0 clamps to a single host (issue #744). Also drops documentation
+ * (RFC 3849), multicast, and the NAT64 prefix (RFC 6052), which PHP's filter
+ * flags leave routable (issue #760) — explicit prefix checks so behaviour is
+ * independent of PHP's patch level (RFC 6890 moved 2001:db8::/32 between
+ * filter sets in 8.3.16/8.4.3). $pfbcidr: per-category Advanced "Suppression
+ * CIDR Limit" floor (issue #760 §3). The returned address is the canonical
+ * inet_ntop() form (issue #1084): textual variants of one address (case,
+ * zero-run, leading zeros) collapse to one string, and an unparseable address
+ * is dropped rather than passed through.
  *
  * @return array{address: ?string, messages: list<string>}
  */

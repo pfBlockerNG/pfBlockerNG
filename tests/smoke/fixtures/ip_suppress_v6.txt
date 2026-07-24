@@ -1,7 +1,7 @@
 # ADR-53 smoke fixture: the containing-range carve target
 # (tests/smoke/test_smoke_suppression.py). Since issue #760 (every test in this
 # module runs with the global Suppression checkbox ON), never RFC 3849
-# documentation space -- sanitize_ipaddr_v6() now drops it unconditionally
+# documentation space -- pfb_sanitize_ipaddr_v6() now drops it unconditionally
 # under Suppression, which would silently empty this fixture before it ever
 # reached the pf table. Public, non-reserved space instead (arbitrary hextets
 # under a real GUA /32, chosen only as inert content -- never dialed).

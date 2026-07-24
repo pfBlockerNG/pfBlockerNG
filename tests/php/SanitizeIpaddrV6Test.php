@@ -6,8 +6,8 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * sanitize_ipaddr_v6() — IPv6 sibling of sanitize_ipaddr(): when
- * $pfb['supp']=='on' and not a custom list, drop private (ULA fc00::/7),
+ * pfb_sanitize_ipaddr_v6() — IPv6 sibling of pfb_sanitize_ipaddr(): when
+ * $supp=='on' and not a custom list, drop private (ULA fc00::/7),
  * link-local (fe80::/10), loopback (::1) and the reserved set (::/128) from
  * loaded block lists; keep a genuinely public address. Suppression off, or a
  * custom list, keeps the entry unchanged. A downloaded feed's explicit /0 is
@@ -15,68 +15,58 @@ use PHPUnit\Framework\TestCase;
  * Returns the canonical inet_ntop() form (issue #1084): textual variants of
  * one address (case, zero-run, leading zeros) collapse to one string, and an
  * unparseable address is dropped rather than passed through.
+ *
+ * (Originally pinned through the sanitize_ipaddr_v6() wrapper; the wrapper was
+ * dead in production — pfblockerng_apply.inc calls the pure function directly —
+ * and was removed in issue #1654. Every assertion here pins the same address
+ * verdict on the pure function.)
  */
-#[CoversFunction('sanitize_ipaddr_v6')]
+#[CoversFunction('pfb_sanitize_ipaddr_v6')]
 final class SanitizeIpaddrV6Test extends TestCase
 {
-	private bool $hadSupp;
-	private mixed $savedSupp;
-
-	protected function setUp(): void
+	/**
+	 * Address verdict of the pure sanitizer — the view every assertion below
+	 * pins. $supp mirrors the retired wrapper's $pfb['supp'] global; $pfbcidr
+	 * mirrors its 'Disabled' default.
+	 */
+	private static function sanitize(string $ipaddr, bool $custom, string|int $pfbcidr = 'Disabled', string $supp = 'off'): ?string
 	{
-		$this->hadSupp   = array_key_exists('supp', $GLOBALS['pfb'] ?? []);
-		$this->savedSupp = $GLOBALS['pfb']['supp'] ?? null;
-		// Default: suppression OFF (no reserved/private filtering).
-		$GLOBALS['pfb']['supp'] = 'off';
-	}
-
-	protected function tearDown(): void
-	{
-		if ($this->hadSupp) {
-			$GLOBALS['pfb']['supp'] = $this->savedSupp;
-		} else {
-			unset($GLOBALS['pfb']['supp']);
-		}
+		return pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, $supp)['address'];
 	}
 
 	// --- Suppression on: reserved/private/loopback dropped -------------------
 
 	public function testSuppressionDropsUla(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
 		// ULA fc00::/7
-		$this->assertNull(sanitize_ipaddr_v6('fc00::1', false));
+		$this->assertNull(self::sanitize('fc00::1', false, supp: 'on'));
 	}
 
 	public function testSuppressionDropsLinkLocal(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
 		// Link-local fe80::/10
-		$this->assertNull(sanitize_ipaddr_v6('fe80::1', false));
+		$this->assertNull(self::sanitize('fe80::1', false, supp: 'on'));
 	}
 
 	public function testSuppressionDropsLoopback(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
 		// Loopback ::1
-		$this->assertNull(sanitize_ipaddr_v6('::1', false));
+		$this->assertNull(self::sanitize('::1', false, supp: 'on'));
 	}
 
 	public function testSuppressionDropsReserved(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
 		// Reserved ::/128 (unspecified) — part of the NO_RES_RANGE set.
-		$this->assertNull(sanitize_ipaddr_v6('::', false));
+		$this->assertNull(self::sanitize('::', false, supp: 'on'));
 	}
 
 	// --- Suppression on: a genuinely public address is kept ------------------
 
 	public function testSuppressionKeepsPublicIp(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
 		// Routable address (Cloudflare resolver) — genuinely public space, so
 		// it must survive independently of the flag-coverage question below.
-		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700::1111', false));
+		$this->assertSame('2606:4700:4700::1111', self::sanitize('2606:4700:4700::1111', false, supp: 'on'));
 	}
 
 	// --- Classes the PHP filter flags do NOT drop (issue #760) ---------------
@@ -84,7 +74,7 @@ final class SanitizeIpaddrV6Test extends TestCase
 	// FILTER_FLAG_NO_PRIV_RANGE|NO_RES_RANGE keep documentation
 	// (2001:db8::/32), multicast (ff00::/8) and NAT64 (64:ff9b::/96) space
 	// routable — the same permissiveness as the v4 flags (192.0.2.0/24 and
-	// 224.0.0.0/4 are kept too). Issue #760 resolved the policy: sanitize_
+	// 224.0.0.0/4 are kept too). Issue #760 resolved the policy: pfb_sanitize_
 	// ipaddr_v6() now drops these classes explicitly under Suppression via
 	// direct prefix checks rather than another filter flag, so the behaviour
 	// is independent of PHP's patch level (the RFC 6890 refactor in PHP
@@ -93,36 +83,31 @@ final class SanitizeIpaddrV6Test extends TestCase
 
 	public function testSuppressionDropsDocumentationRange(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertNull(sanitize_ipaddr_v6('2001:db8::1', false), 'documentation (RFC 3849) is dropped');
+		$this->assertNull(self::sanitize('2001:db8::1', false, supp: 'on'), 'documentation (RFC 3849) is dropped');
 	}
 
 	public function testSuppressionDropsMulticastRange(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertNull(sanitize_ipaddr_v6('ff02::1', false), 'multicast (ff00::/8) is dropped');
+		$this->assertNull(self::sanitize('ff02::1', false, supp: 'on'), 'multicast (ff00::/8) is dropped');
 	}
 
 	public function testSuppressionDropsNat64Range(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertNull(sanitize_ipaddr_v6('64:ff9b::1', false), 'NAT64 (RFC 6052) is dropped');
+		$this->assertNull(self::sanitize('64:ff9b::1', false, supp: 'on'), 'NAT64 (RFC 6052) is dropped');
 	}
 
 	// Suppression off keeps the same documentation-range address — proves the
 	// new drop is gated on Suppression, not an unconditional block.
 	public function testSuppressionOffKeepsDocumentationRange(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:db8::1', false));
+		$this->assertSame('2001:db8::1', self::sanitize('2001:db8::1', false, supp: 'off'));
 	}
 
 	// A custom list bypasses the new drop, same as every other suppressed
 	// class.
 	public function testCustomListBypassesSuppressionForDocumentationRange(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:db8::1', true));
+		$this->assertSame('2001:db8::1', self::sanitize('2001:db8::1', true, supp: 'on'));
 	}
 
 	// --- Suppression toggle is the cause (assert before-state, then flip) ----
@@ -130,38 +115,33 @@ final class SanitizeIpaddrV6Test extends TestCase
 	public function testSuppressionTogglesReservedDrop(): void
 	{
 		// Given suppression OFF, a reserved v6 entry is KEPT (before-state).
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('fc00::1', sanitize_ipaddr_v6('fc00::1', false));
+		$this->assertSame('fc00::1', self::sanitize('fc00::1', false, supp: 'off'));
 
 		// When suppression is flipped ON, the same entry is now DROPPED —
 		// so green proves suppression caused the change.
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertNull(sanitize_ipaddr_v6('fc00::1', false));
+		$this->assertNull(self::sanitize('fc00::1', false, supp: 'on'));
 	}
 
 	// --- Custom list bypasses suppression ------------------------------------
 
 	public function testCustomListBypassesSuppression(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
 		// $custom = true -> reserved v6 retained.
-		$this->assertSame('fc00::1', sanitize_ipaddr_v6('fc00::1', true));
+		$this->assertSame('fc00::1', self::sanitize('fc00::1', true, supp: 'on'));
 	}
 
 	// --- CIDR form: address part extracted before the filter -----------------
 
 	public function testSuppressionDropsReservedCidr(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
 		// 'fc00::/7' — address part 'fc00::' is ULA -> dropped.
-		$this->assertNull(sanitize_ipaddr_v6('fc00::/7', false));
+		$this->assertNull(self::sanitize('fc00::/7', false, supp: 'on'));
 	}
 
 	public function testSuppressionKeepsPublicCidr(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
 		// A routable v6 CIDR survives unchanged (returned as-is, mask intact).
-		$this->assertSame('2606:4700:4700::/48', sanitize_ipaddr_v6('2606:4700:4700::/48', false));
+		$this->assertSame('2606:4700:4700::/48', self::sanitize('2606:4700:4700::/48', false, supp: 'on'));
 	}
 
 	// --- Explicit /0 masks (issue #744) ---------------------------------------
@@ -171,30 +151,28 @@ final class SanitizeIpaddrV6Test extends TestCase
 	// instead of the line loading as a block-everything table entry.
 	public function testFeedSlashZeroClampedToSingleHost(): void
 	{
-		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700::1111/0', false));
+		$this->assertSame('2606:4700:4700::1111', self::sanitize('2606:4700:4700::1111/0', false));
 	}
 
 	// Same clamp with suppression ON: the public address survives the
 	// reserved/private filter and is kept as a single host, not a /0.
 	public function testFeedSlashZeroUnderSuppressionClampedToSingleHost(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700::1111/0', false));
+		$this->assertSame('2606:4700:4700::1111', self::sanitize('2606:4700:4700::1111/0', false, supp: 'on'));
 	}
 
 	// The clamp keys on the numeric mask value, not the '0' literal — a
 	// multi-zero spelling (/00) is clamped the same way.
 	public function testFeedMultiZeroMaskClampedToSingleHost(): void
 	{
-		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700::1111/00', false));
+		$this->assertSame('2606:4700:4700::1111', self::sanitize('2606:4700:4700::1111/00', false));
 	}
 
 	// Custom-list entries are user-authored: an explicit /0 is honored as
 	// written (::/0 stays ::/0).
 	public function testCustomListSlashZeroHonored(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('::/0', sanitize_ipaddr_v6('::/0', true));
+		$this->assertSame('::/0', self::sanitize('::/0', true, supp: 'on'));
 	}
 
 	// --- Suppression CIDR floor (issue #760 §3) -------------------------------
@@ -202,45 +180,40 @@ final class SanitizeIpaddrV6Test extends TestCase
 	// $pfbcidr is the per-category Advanced "Suppression CIDR Limit": under
 	// Suppression, a downloaded feed's CIDR narrower than the floor is clamped
 	// to a single host (bare address, no mask -- loads as /128), the v6 sibling
-	// of sanitize_ipaddr()'s Advanced IPv4 Tunable floor.
+	// of pfb_sanitize_ipaddr()'s Advanced IPv4 Tunable floor.
 
 	public function testAdvancedCidrFloorClampsToSingleHost(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
 		// mask 32 < floor 48 -> clamped to a bare host (public address survives
 		// the reserved/private filter).
-		$this->assertSame('2606:4700:4700::', sanitize_ipaddr_v6('2606:4700:4700::/32', false, 48));
+		$this->assertSame('2606:4700:4700::', self::sanitize('2606:4700:4700::/32', false, 48, supp: 'on'));
 	}
 
 	// The paired branch: a mask AT OR ABOVE the floor is kept, mask intact --
 	// proves the floor is a real threshold, not an unconditional clamp.
 	public function testMaskAtOrAboveFloorKeptUnchanged(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('2606:4700:4700::/48', sanitize_ipaddr_v6('2606:4700:4700::/48', false, 48));
-		$this->assertSame('2606:4700:4700::/64', sanitize_ipaddr_v6('2606:4700:4700::/64', false, 48));
+		$this->assertSame('2606:4700:4700::/48', self::sanitize('2606:4700:4700::/48', false, 48, supp: 'on'));
+		$this->assertSame('2606:4700:4700::/64', self::sanitize('2606:4700:4700::/64', false, 48, supp: 'on'));
 	}
 
 	// Floor 'Disabled' (the default) never clamps, regardless of mask width.
 	public function testFloorDisabledKeepsWideMaskUnchanged(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('2606:4700:4700::/32', sanitize_ipaddr_v6('2606:4700:4700::/32', false, 'Disabled'));
+		$this->assertSame('2606:4700:4700::/32', self::sanitize('2606:4700:4700::/32', false, 'Disabled', supp: 'on'));
 	}
 
 	// Suppression OFF bypasses the floor entirely, even when one is configured --
 	// the floor is a sub-clause of the Suppression block, not a standalone check.
 	public function testSuppressionOffBypassesFloor(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('2606:4700:4700::/32', sanitize_ipaddr_v6('2606:4700:4700::/32', false, 48));
+		$this->assertSame('2606:4700:4700::/32', self::sanitize('2606:4700:4700::/32', false, 48, supp: 'off'));
 	}
 
 	// A custom list bypasses the floor, same as every other Suppression sub-check.
 	public function testCustomListBypassesFloor(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('2606:4700:4700::/32', sanitize_ipaddr_v6('2606:4700:4700::/32', true, 48));
+		$this->assertSame('2606:4700:4700::/32', self::sanitize('2606:4700:4700::/32', true, 48, supp: 'on'));
 	}
 
 	// --- Floor is the cause (assert before-state, then flip) ------------------
@@ -248,12 +221,11 @@ final class SanitizeIpaddrV6Test extends TestCase
 	public function testFloorTogglesClampOfTheSameCidr(): void
 	{
 		// Given the floor Disabled, a narrow mask is KEPT (before-state).
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('2606:4700:4700::/32', sanitize_ipaddr_v6('2606:4700:4700::/32', false, 'Disabled'));
+		$this->assertSame('2606:4700:4700::/32', self::sanitize('2606:4700:4700::/32', false, 'Disabled', supp: 'on'));
 
 		// When a floor narrower than the mask is set, the SAME entry is now
 		// CLAMPED -- so green proves the floor caused the change.
-		$this->assertSame('2606:4700:4700::', sanitize_ipaddr_v6('2606:4700:4700::/32', false, 48));
+		$this->assertSame('2606:4700:4700::', self::sanitize('2606:4700:4700::/32', false, 48, supp: 'on'));
 	}
 
 	// --- Interplay with the issue #760 documentation-range drop ---------------
@@ -265,8 +237,7 @@ final class SanitizeIpaddrV6Test extends TestCase
 	// not survive as a clamped single host.
 	public function testDocumentationRangeCidrStillDroppedUnderFloor(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertNull(sanitize_ipaddr_v6('2001:db8::1/16', false, 24));
+		$this->assertNull(self::sanitize('2001:db8::1/16', false, 24, supp: 'on'));
 	}
 
 	// --- Suppression on: IPv4-mapped is also dropped -------------------------
@@ -276,31 +247,27 @@ final class SanitizeIpaddrV6Test extends TestCase
 
 	public function testSuppressionDropsV4Mapped(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertNull(sanitize_ipaddr_v6('::ffff:1.2.3.4', false));
+		$this->assertNull(self::sanitize('::ffff:1.2.3.4', false, supp: 'on'));
 	}
 
 	// --- Canonicalization at parse (issue #1084) ------------------------------
 	//
-	// sanitize_ipaddr_v6() now returns the inet_ntop(inet_pton()) round-trip, so
+	// pfb_sanitize_ipaddr_v6() returns the inet_ntop(inet_pton()) round-trip, so
 	// every textual spelling of one address collapses to a single string.
 
 	public function testCanonicalizesUppercaseHex(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:DB8::1', false));
+		$this->assertSame('2001:db8::1', self::sanitize('2001:DB8::1', false, supp: 'off'));
 	}
 
 	public function testCanonicalizesZeroRunExpansion(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:db8:0:0:0:0:0:1', false));
+		$this->assertSame('2001:db8::1', self::sanitize('2001:db8:0:0:0:0:0:1', false, supp: 'off'));
 	}
 
 	public function testCanonicalizesLeadingZerosInHextet(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('2001:db8:aa:bb00::5', sanitize_ipaddr_v6('2001:0db8:00aa:bb00::5', false));
+		$this->assertSame('2001:db8:aa:bb00::5', self::sanitize('2001:0db8:00aa:bb00::5', false, supp: 'off'));
 	}
 
 	// An already-canonical address is a no-op round-trip, not merely "no visible
@@ -308,76 +275,66 @@ final class SanitizeIpaddrV6Test extends TestCase
 	// related interferes when suppression is off.
 	public function testAlreadyCanonicalAddressReturnedUnchanged(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('fd12:3456::1', sanitize_ipaddr_v6('fd12:3456::1', false));
+		$this->assertSame('fd12:3456::1', self::sanitize('fd12:3456::1', false, supp: 'off'));
 	}
 
 	public function testCanonicalizesCidrAddressPartMaskPreserved(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('2001:db8::/32', sanitize_ipaddr_v6('2001:DB8::/32', false));
+		$this->assertSame('2001:db8::/32', self::sanitize('2001:DB8::/32', false, supp: 'off'));
 	}
 
 	// The feed /0 clamp (issue #744) and canonicalization compose: the mask is
 	// dropped by the clamp, and the surviving host is still canonical text.
 	public function testFeedSlashZeroEmitsCanonicalHost(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('2001:db8::5', sanitize_ipaddr_v6('2001:DB8::5/0', false));
+		$this->assertSame('2001:db8::5', self::sanitize('2001:DB8::5/0', false, supp: 'off'));
 	}
 
 	// A custom list's /0 is honored as written (issue #744): the mask survives,
 	// only the address text is canonicalized.
 	public function testCustomSlashZeroKeepsMaskCanonicalizesAddress(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('2001:db8::5/0', sanitize_ipaddr_v6('2001:DB8::5/0', true));
+		$this->assertSame('2001:db8::5/0', self::sanitize('2001:DB8::5/0', true, supp: 'off'));
 	}
 
 	// The Suppression CIDR floor clamp (issue #760 §3) and canonicalization
 	// compose the same way as the /0 clamp above.
 	public function testAdvancedCidrFloorClampEmitsCanonicalHost(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('2606:4700:4700::ab', sanitize_ipaddr_v6('2606:4700:4700::AB/32', false, 48));
+		$this->assertSame('2606:4700:4700::ab', self::sanitize('2606:4700:4700::AB/32', false, 48, supp: 'on'));
 	}
 
 	// A public address that survives Suppression's reserved/private filter is
 	// still canonicalized, not merely passed through as-written.
 	public function testSuppressionSurvivingPublicAddressCanonicalized(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700:0:0:0:0:1111', false));
+		$this->assertSame('2606:4700:4700::1111', self::sanitize('2606:4700:4700:0:0:0:0:1111', false, supp: 'on'));
 	}
 
 	// Canonicalization is independent of the Suppression flag -- Suppression off
 	// still collapses non-canonical text to the canonical form.
 	public function testCanonicalizationAppliesWithSuppressionOff(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:DB8:0:0::1', false));
+		$this->assertSame('2001:db8::1', self::sanitize('2001:DB8:0:0::1', false, supp: 'off'));
 	}
 
 	// --- Hostile input (issue #1084) ------------------------------------------
 
 	public function testGarbageAddressDropped(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertNull(sanitize_ipaddr_v6('nonsense', false));
+		$this->assertNull(self::sanitize('nonsense', false, supp: 'off'));
 	}
 
 	public function testEmptyStringDropped(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertNull(sanitize_ipaddr_v6('', false));
+		$this->assertNull(self::sanitize('', false, supp: 'off'));
 	}
 
 	// v4-mapped survives inet_pton()/inet_ntop() as mixed notation on this
 	// platform -- pinning the actual round-trip text, not an assumed one.
 	public function testV4MappedAddressCanonicalFormPinned(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertSame('::ffff:1.2.3.4', sanitize_ipaddr_v6('::ffff:1.2.3.4', false));
+		$this->assertSame('::ffff:1.2.3.4', self::sanitize('::ffff:1.2.3.4', false, supp: 'off'));
 	}
 
 	// issue #1084: a %zone form is dropped explicitly -- inet_pton()'s handling
@@ -385,7 +342,6 @@ final class SanitizeIpaddrV6Test extends TestCase
 	// zone), so the guard makes the verdict identical everywhere.
 	public function testZoneIdSuffixDropped(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'off';
-		$this->assertNull(sanitize_ipaddr_v6('fe80::1%igb0', false));
+		$this->assertNull(self::sanitize('fe80::1%igb0', false, supp: 'off'));
 	}
 }
