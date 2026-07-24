@@ -287,10 +287,18 @@ final class Top1mFixedFileManifestTest extends TestCase
 	{
 		$this->seedPreviousPublication();
 		$source = "{$this->tmp}/db/pfbalexawhitelist.txt";
+		$fifo_guard = NULL;
+		$fifo_payload = '';
 		if ($kind === 'directory') {
 			mkdir($source);
 		} elseif ($kind === 'FIFO') {
 			$this->assertTrue(posix_mkfifo($source, 0600));
+			$fifo_guard = fopen($source, 'r+');
+			$this->assertIsResource($fifo_guard);
+			$this->assertTrue(stream_set_blocking($fifo_guard, FALSE));
+			$fifo_payload = ".one.example,,\n,two.example,,\n,www.one.example,,\n";
+			$this->assertSame(strlen($fifo_payload), fwrite($fifo_guard, $fifo_payload));
+			$this->assertTrue(fflush($fifo_guard));
 		} else {
 			$linked = "{$this->tmp}/legacy-source.txt";
 			file_put_contents($linked, ".legacy.example,,\n,legacy.example,,\n,www.legacy.example,,\n");
@@ -300,6 +308,10 @@ final class Top1mFixedFileManifestTest extends TestCase
 		$result = $this->publishTop1m();
 
 		$this->assertFalse($result);
+		if (is_resource($fifo_guard)) {
+			$this->assertSame($fifo_payload, fread($fifo_guard, strlen($fifo_payload)));
+			fclose($fifo_guard);
+		}
 		$this->assertPreviousPublication();
 		$this->assertSame([], glob("{$this->tmp}/.pfbtop1m_*") ?: []);
 	}
