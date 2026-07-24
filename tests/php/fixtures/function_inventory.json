@@ -1837,6 +1837,19 @@
             }
         ]
     },
+    "pfb_dnsbl_regex_entry_error": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "pattern",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_reload_fingerprint": {
         "returnsRef": false,
         "returnType": "string",

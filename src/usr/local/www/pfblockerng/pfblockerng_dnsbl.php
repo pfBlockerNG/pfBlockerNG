@@ -669,7 +669,15 @@ if ($_POST) {
 
 							switch ($custom_format) {
 								case 'regex':
-									// TODO (See non-ascii validation above)
+									// Issue #1656: mirror the resolver's load-time guards so an
+									// entry pfb_unbound.py would silently drop (catastrophic
+									// backtracking shape / compile failure) is rejected on save
+									// instead. Non-ASCII is already validated above; a comment-only
+									// line yields an empty pattern and writes no [REGEX] ini entry.
+									$regex_error = ($value[0] !== '') ? pfb_dnsbl_regex_entry_error($value[0]) : '';
+									if ($regex_error !== '') {
+										$input_errors[] = "Customlist {$custom_type}: {$regex_error}: [ " . htmlspecialchars($line) . " ]";
+									}
 									break;
 								case 'hostname':
 									$value[0] = trim($value[0], '.');
