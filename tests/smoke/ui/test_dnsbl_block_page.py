@@ -32,7 +32,6 @@ DNSBL_LOG = "/var/log/pfblockerng/dnsbl.log"
 
 def test_dnsbl_block_page_shows_real_correlation_detail(
     deployed_vm: helpers.SmokeVM,
-    request: pytest.FixtureRequest,
 ) -> None:
     """Scenario: a real DNSBL block correlates into the sinkhole page's detail row.
 
@@ -46,8 +45,14 @@ def test_dnsbl_block_page_shows_real_correlation_detail(
     ``dnsbl.log`` match -- never the ``-`` fallback -- with the Evaluated Domain
     cell equal to the queried name.
     """
-    domain = helpers.unique_domain("dnsblpage")
-    feed_path = helpers.write_local_feed(deployed_vm, "ui_dnsbl_block_page.txt", f"{domain}\n")
+    base_domain = helpers.unique_domain("dnsblpage")
+    domain = f"target.{base_domain}"
+    lookalike = f"target-{base_domain}"
+    feed_path = helpers.write_local_feed(
+        deployed_vm,
+        "ui_dnsbl_block_page.txt",
+        f"{domain}\n{lookalike}\n",
+    )
     spec = helpers.DnsblCase(
         aliasname="uidnsblpage", feed_url=feed_path, header="uidnsblpage", mode=helpers.DnsblMode.VIP
     )
@@ -64,41 +69,24 @@ def test_dnsbl_block_page_shows_real_correlation_detail(
         answer = helpers.dns_probe(deployed_vm, domain)
         assert helpers.is_vip(answer), f"expected VIP block for {domain!r}, got answer: {answer!r}"
 
-        # issue #1652: append a later lookalike row that the old BRE grep also
-        # matched (a domain '.' acted as a wildcard for '-'). The page must keep
-        # correlating the genuine row, not tail-select this forged attribution.
-        lookalike = domain.replace(".", "-", 1)
-        before_size = deployed_vm.ssh("stat", "-f", "%z", DNSBL_LOG)
-        assert before_size.returncode == 0 and before_size.stdout.strip().isdigit(), (
-            f"could not size {DNSBL_LOG} before lookalike append: "
-            f"rc={before_size.returncode} out={before_size.stdout!r} err={before_size.stderr!r}"
+        def log_contains(blocked_domain: str) -> bool:
+            result = deployed_vm.ssh("grep", "-Fq", "--", f",{blocked_domain},", DNSBL_LOG)
+            return result.returncode == 0
+
+        assert helpers.wait_until(lambda: log_contains(domain), timeout=12.0, interval=0.5), (
+            f"genuine DNSBL log row for {domain!r} did not arrive"
         )
 
-        def restore_log() -> None:
-            restored = deployed_vm.ssh("truncate", "-s", before_size.stdout.strip(), DNSBL_LOG)
-            assert restored.returncode == 0, (
-                f"could not truncate {DNSBL_LOG} after lookalike test: rc={restored.returncode} err={restored.stderr!r}"
-            )
-
-        request.addfinalizer(restore_log)
-        guest_now = deployed_vm.ssh("date", "+%Y-%m-%d %H:%M:%S")
-        assert guest_now.returncode == 0 and guest_now.stdout.strip(), (
-            f"could not read guest timestamp: rc={guest_now.returncode} err={guest_now.stderr!r}"
+        # issue #1652: create a genuine, later lookalike event that the old BRE
+        # grep also matched (the target's '.' acted as a wildcard for '-').
+        # Synchronizing on both asynchronous logger writes makes their ordering
+        # authoritative without modifying or truncating the active log.
+        lookalike_answer = helpers.dns_probe(deployed_vm, lookalike)
+        assert helpers.is_vip(lookalike_answer), (
+            f"expected VIP block for lookalike {lookalike!r}, got answer: {lookalike_answer!r}"
         )
-        lookalike_row = (
-            f"DNSBL-python,{guest_now.stdout.strip()},{lookalike},203.0.113.9,Python,"
-            f"DNSBL-Full,LookalikeGroup,{lookalike},LookalikeFeed,+,A\n"
-        )
-        appended = subprocess.run(
-            deployed_vm.ssh_argv("tee", "-a", DNSBL_LOG),
-            input=lookalike_row,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-        assert appended.returncode == 0, (
-            f"could not append lookalike row to {DNSBL_LOG}: rc={appended.returncode} err={appended.stderr!r}"
+        assert helpers.wait_until(lambda: log_contains(lookalike), timeout=12.0, interval=0.5), (
+            f"genuine DNSBL log row for lookalike {lookalike!r} did not arrive"
         )
 
         # THEN: an on-box curl to the sinkhole (the DNSBL VIP is a loopback-scoped
