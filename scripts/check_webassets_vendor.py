@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Verify the committed Prism/code-input vendor tree matches its pinned source.
+"""Verify the committed CodeMirror 6 vendor tree matches its pinned source.
 
 PROBLEM
 -------
 pfBlockerNG is a NO_BUILD FreeBSD port: ``make package`` / build-pkg-portable.py
-/ ``deploy.sh`` copy ``src/`` verbatim, so the Prism + code-input bundles under
-``src/usr/local/www/pfblockerng/vendor/prism/`` (issue #1669) must be committed,
-built static files -- there is no build step on the appliance or in the package
-build to regenerate them. ``tools/webassets/`` (its ``package-lock.json`` and
-the two esbuild entry files) is the pinned source; ``scripts/build-webassets.sh``
-is the only thing that may write that vendor tree.
+/ ``deploy.sh`` copy ``src/`` verbatim, so the CodeMirror 6 regex-list editor
+bundle under ``src/usr/local/www/pfblockerng/vendor/codemirror/`` (issue #1669)
+must be a committed, built static file -- there is no build step on the
+appliance or in the package build to regenerate it. ``tools/webassets/`` (its
+``package-lock.json``, the two Lezer grammar packages, and the ``cm-regex.js``
+esbuild entry) is the pinned source; ``scripts/build-webassets.sh`` is the only
+thing that may write that vendor tree.
 
 This mirrors ``scripts/check_composer_vendor.py``'s role for the PHP vendor/
-tree, but the drift can only be proven by actually rebuilding (Prism's
-per-component npm files aren't a single file to hash-compare) -- so this
-checker re-runs the build script and diffs its output, rather than comparing
-lockfile metadata.
+tree, but the drift can only be proven by actually rebuilding (there's no
+single upstream file to hash-compare -- the bundle is esbuild's own output) --
+so this checker re-runs the build script and diffs its output, rather than
+comparing lockfile metadata.
 
 Exit status: 0 = the vendor tree matches its pinned source, 1 = it has
 drifted (regenerate with ``scripts/build-webassets.sh`` and commit the
@@ -28,7 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-VENDOR_DIR = "src/usr/local/www/pfblockerng/vendor/prism"
+VENDOR_DIR = "src/usr/local/www/pfblockerng/vendor/codemirror"
 REMEDIATION = "remediation: sh scripts/build-webassets.sh, then commit the result"
 
 

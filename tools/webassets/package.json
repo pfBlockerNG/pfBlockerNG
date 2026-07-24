@@ -1,17 +1,21 @@
 {
   "name": "pfblockerng-webassets",
   "private": true,
-  "description": "Dev/CI-only build for vendored Prism + code-input static assets (issue #1669). Never shipped to the appliance -- scripts/build-webassets.sh emits the built .js/.css under src/.",
+  "description": "Dev/CI-only build for the vendored CodeMirror 6 regex-list editor bundle (issue #1669). Never shipped to the appliance -- scripts/build-webassets.sh emits the built .js under src/.",
   "scripts": {
     "build": "sh ../../scripts/build-webassets.sh",
-    "test:grammar": "npm --prefix lezer-regexp test"
+    "test:grammar": "npm --prefix lezer-regexp test",
+    "test:listgrammar": "npm --prefix lezer-pfb-regex-list test"
   },
   "devDependencies": {
+    "@codemirror/commands": "6.10.4",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/state": "6.7.1",
+    "@codemirror/view": "6.43.6",
+    "@lezer/common": "1.5.2",
     "@lezer/generator": "1.8.0",
     "@lezer/highlight": "1.2.3",
     "@lezer/lr": "1.4.10",
-    "@webcoder49/code-input": "2.8.3",
-    "esbuild": "0.28.1",
-    "prismjs": "1.30.0"
+    "esbuild": "0.28.1"
   }
 }

@@ -1,0 +1,81 @@
+# pattern-only
+
+foo
+
+==>
+
+RegexList(Pattern)
+
+# comment-only
+
+#comment
+
+==>
+
+RegexList(Comment)
+
+# comment-only-bare-hash
+
+#
+
+==>
+
+RegexList(Comment)
+
+# leading-ws-comment-line
+
+  # leading ws comment
+
+==>
+
+RegexList(Comment)
+
+# pattern-plus-trailing-comment
+
+abc#def
+
+==>
+
+RegexList(Pattern,Comment)
+
+# hash-mid-charclass-splits-mid-pattern
+
+[a#b]x
+
+==>
+
+RegexList(Pattern,Comment)
+
+# multiple-lines
+
+foo
+bar#baz
+#c
+
+==>
+
+RegexList(Pattern,Pattern,Comment,Comment)
+
+# empty-lines-between-content
+
+a
+
+b
+
+==>
+
+RegexList(Pattern,Pattern)
+
+# blank-document
+
+==>
+
+RegexList
+
+# pattern-containing-regex-metachars-stays-one-token-without-hash
+
+^[a-z]+\d{2,4}$
+
+==>
+
+RegexList(Pattern)
