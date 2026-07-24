@@ -73,14 +73,14 @@
                 "name": "package_name",
                 "byRef": false,
                 "variadic": false,
-                "type": "string",
+                "type": "?string",
                 "default": null
             },
             {
                 "name": "package_version",
                 "byRef": false,
                 "variadic": false,
-                "type": "string",
+                "type": "?string",
                 "default": null
             },
             {
@@ -89,6 +89,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "return_document",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
             }
         ]
     },
@@ -128,6 +135,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "?string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_validate_dir": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
                 "default": null
             }
         ]

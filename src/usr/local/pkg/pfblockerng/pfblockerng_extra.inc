@@ -1442,7 +1442,33 @@ function _pfb_settings_root(?string $root): string
 	if ($root === '' || $root[0] !== '/' || str_contains($root, "\0")) {
 		throw new InvalidArgumentException('invalid settings snapshot root');
 	}
-	return rtrim($root, '/');
+	if (is_link($root)) {
+		throw new InvalidArgumentException('unsafe settings snapshot root');
+	}
+	if (is_link('/var') && str_starts_with($root, '/var/')) {
+		$root = (string) realpath('/var') . substr($root, 4);
+	}
+	$components = explode('/', substr($root, 1));
+	if ($components === [] || in_array('', $components, TRUE) || in_array('.', $components, TRUE) || in_array('..', $components, TRUE)) {
+		throw new InvalidArgumentException('invalid settings snapshot root');
+	}
+	$cursor = '';
+	foreach ($components as $component) {
+		$cursor .= '/' . $component;
+		if (is_link($cursor) || (file_exists($cursor) && !is_dir($cursor))) {
+			throw new InvalidArgumentException('unsafe settings snapshot root');
+		}
+	}
+	return $root;
+}
+
+function _pfb_settings_validate_dir(string $path): void
+{
+	$stat = lstat($path);
+	$uid = function_exists('posix_geteuid') ? posix_geteuid() : getmyuid();
+	if ($stat === FALSE || is_link($path) || !is_dir($path) || ($stat['mode'] & 0777) !== 0700 || $stat['uid'] !== $uid) {
+		throw new RuntimeException('unsafe settings snapshot directory mode');
+	}
 }
 
 function _pfb_settings_mkdir(string $path): void
@@ -1453,19 +1479,24 @@ function _pfb_settings_mkdir(string $path): void
 	if (!is_dir($path) && !mkdir($path, 0700, TRUE) && !is_dir($path)) {
 		throw new RuntimeException('unable to create settings snapshot directory');
 	}
-	if (!chmod($path, 0700) || (fileperms($path) & 0777) !== 0700) {
-		throw new RuntimeException('unsafe settings snapshot directory mode');
-	}
+	_pfb_settings_validate_dir($path);
 }
 
 function _pfb_settings_path(string $root, string $family, string $path): void
 {
 	$dir = $root . '/' . $family;
+	$components = $path === '' ? [] : explode('/', ltrim($path, '/'));
+	if ($path === '' || $path[0] !== '/' || str_contains($path, "\0") || in_array('', $components, TRUE)
+		|| in_array('.', $components, TRUE) || in_array('..', $components, TRUE) || is_link($dir)) {
+		throw new InvalidArgumentException('unsafe settings snapshot path');
+	}
+	_pfb_settings_validate_dir($root);
 	$real_dir = realpath($dir);
 	$real_path = realpath($path);
 	if ($real_dir === FALSE || $real_path === FALSE || !str_starts_with($real_path, $real_dir . '/')) {
 		throw new InvalidArgumentException('unsafe settings snapshot path');
 	}
+	_pfb_settings_validate_dir($dir);
 	$stat = lstat($path);
 	if ($stat === FALSE || !is_file($path) || is_link($path) || $stat['nlink'] !== 1
 		|| (($stat['mode'] & 0777) !== 0600)) {
@@ -1487,7 +1518,14 @@ function _pfb_settings_gzip_read(string $path): string
 	return $xml;
 }
 
-function _pfb_settings_parse(string $xml, string $family, string $package_name, string $package_version, string $scratch_dir): array
+function _pfb_settings_parse(
+	string $xml,
+	string $family,
+	?string $package_name,
+	?string $package_version,
+	string $scratch_dir,
+	bool $return_document = FALSE
+): array
 {
 	if (preg_match('/<!DOCTYPE|<!ENTITY|XInclude|<\?(?!xml\b)/i', $xml) === 1) {
 		throw new InvalidArgumentException('unsafe settings snapshot XML');
@@ -1497,8 +1535,33 @@ function _pfb_settings_parse(string $xml, string $family, string $package_name, 
 		@unlink($parse_path);
 		throw new RuntimeException('unable to stage settings snapshot XML');
 	}
+	$owned_is_empty = FALSE;
 	try {
 		try {
+			$dom = new DOMDocument();
+			if (!@$dom->loadXML($xml, LIBXML_NONET | LIBXML_NOBLANKS) || $dom->documentElement?->nodeName !== 'pfblockerng-settings') {
+				throw new InvalidArgumentException('invalid settings snapshot XML');
+			}
+			$outer_keys = [];
+			foreach ($dom->documentElement->childNodes as $child) {
+				if ($child->nodeType === XML_ELEMENT_NODE) {
+					$outer_keys[] = $child->nodeName;
+					if ($child->nodeName === 'owned') {
+						$owned_is_empty = TRUE;
+						foreach ($child->childNodes as $owned_child) {
+							if ($owned_child->nodeType === XML_ELEMENT_NODE
+								|| ($owned_child->nodeType === XML_TEXT_NODE && trim($owned_child->nodeValue) !== '')) {
+								$owned_is_empty = FALSE;
+							}
+						}
+					}
+				} elseif ($child->nodeType === XML_TEXT_NODE && trim($child->nodeValue) !== '') {
+					throw new InvalidArgumentException('invalid settings snapshot XML');
+				}
+			}
+			if ($outer_keys !== ['format_version', 'family', 'source_package_name', 'source_package_version', 'created_utc', 'payload_sha256', 'owned']) {
+				throw new InvalidArgumentException('settings snapshot metadata mismatch');
+			}
 			$document = parse_xml_config($parse_path, 'pfblockerng-settings');
 		} catch (Throwable) {
 			throw new InvalidArgumentException('invalid settings snapshot XML');
@@ -1506,22 +1569,31 @@ function _pfb_settings_parse(string $xml, string $family, string $package_name, 
 	} finally {
 		@unlink($parse_path);
 	}
-	$keys = ['format_version', 'family', 'source_package_name', 'source_package_version', 'created_utc', 'payload_sha256', 'payload_encoding', 'owned_payload'];
+	$keys = ['format_version', 'family', 'source_package_name', 'source_package_version', 'created_utc', 'payload_sha256', 'owned'];
 	if (!is_array($document) || array_keys($document) !== $keys || $document['format_version'] !== '1'
-		|| $document['family'] !== $family || $document['source_package_name'] !== $package_name
-		|| $document['source_package_version'] !== $package_version || !is_string($document['created_utc'])
+		|| $document['family'] !== $family || !is_string($document['source_package_name'])
+		|| $document['source_package_name'] === '' || !is_string($document['source_package_version'])
+		|| $document['source_package_version'] === '' || ($package_name !== NULL && $document['source_package_name'] !== $package_name)
+		|| ($package_version !== NULL && $document['source_package_version'] !== $package_version)
+		|| !is_string($document['created_utc'])
 		|| !preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', $document['created_utc'])
-		|| $document['payload_encoding'] !== 'base64' || !is_string($document['payload_sha256'])
-		|| !preg_match('/^[a-f0-9]{64}$/', $document['payload_sha256']) || !is_string($document['owned_payload'])) {
+		|| !is_string($document['payload_sha256']) || !preg_match('/^[a-f0-9]{64}$/', $document['payload_sha256'])
+		|| (!is_array($document['owned']) && !($document['owned'] === '' && $owned_is_empty))) {
 		throw new InvalidArgumentException('settings snapshot metadata mismatch');
 	}
-	$payload = base64_decode($document['owned_payload'], TRUE);
-	if ($payload === FALSE || !hash_equals($document['payload_sha256'], hash('sha256', $payload))) {
+	$owned = $document['owned'];
+	if ($owned === '') {
+		$owned = [];
+	}
+	if (!hash_equals($document['payload_sha256'], hash('sha256', serialize($owned)))) {
 		throw new InvalidArgumentException('settings snapshot checksum mismatch');
 	}
-	$owned = @unserialize($payload, ['allowed_classes' => FALSE]);
-	if (!is_array($owned)) {
-		throw new InvalidArgumentException('invalid settings snapshot payload');
+	if ($return_document) {
+		return [
+			'owned' => $owned,
+			'source_package_name' => $document['source_package_name'],
+			'source_package_version' => $document['source_package_version'],
+		];
 	}
 	return $owned;
 }
@@ -1558,15 +1630,30 @@ function pfb_settings_snapshot_create(
 	$owned = pfb_settings_capture_owned();
 	$checksum = hash('sha256', serialize($owned));
 	$path = $dir . '/' . $checksum . '.xml.gz';
+	$stored_package_name = $package_name;
+	$stored_package_version = $package_version;
 	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
 	if ($lock_key === FALSE) {
 		throw new RuntimeException('settings transition lock unavailable');
 	}
 	try {
+		_pfb_settings_mkdir($root);
 		_pfb_settings_mkdir($dir);
 		if (is_file($path)) {
 			_pfb_settings_path($root, $family, $path);
-			pfb_settings_snapshot_read($family, $path, $package_name, $package_version, $root);
+			$existing = _pfb_settings_parse(
+				_pfb_settings_gzip_read($path),
+				$family,
+				NULL,
+				NULL,
+				$dir,
+				TRUE
+			);
+			if ($existing['owned'] !== $owned) {
+				throw new RuntimeException('settings snapshot payload mismatch');
+			}
+			$stored_package_name = $existing['source_package_name'];
+			$stored_package_version = $existing['source_package_version'];
 		} else {
 			$document = [
 				'format_version'         => '1',
@@ -1575,8 +1662,7 @@ function pfb_settings_snapshot_create(
 				'source_package_version' => $package_version,
 				'created_utc'            => gmdate('Y-m-d\TH:i:s\Z'),
 				'payload_sha256'         => $checksum,
-				'payload_encoding'       => 'base64',
-				'owned_payload'          => base64_encode(serialize($owned)),
+				'owned'                  => $owned,
 			];
 			$xml = dump_xml_config($document, 'pfblockerng-settings');
 			$compressed = gzencode($xml, 9);
@@ -1627,7 +1713,7 @@ function pfb_settings_snapshot_create(
 			}
 			$head_snapshot = $dir . '/' . $head_data['snapshot'];
 			_pfb_settings_path($root, $family, $head_snapshot);
-			pfb_settings_snapshot_read($family, $head_snapshot, $package_name, $package_version, $root);
+			pfb_settings_snapshot_read($family, $head_snapshot, $stored_package_name, $stored_package_version, $root);
 			if (!rename($head_temp, $dir . '/head.json')) {
 				throw new RuntimeException('unable to publish settings snapshot head');
 			}
@@ -1642,6 +1728,8 @@ function pfb_settings_snapshot_create(
 			'path' => $path,
 			'family' => $family,
 			'payload_sha256' => $checksum,
+			'source_package_name' => $stored_package_name,
+			'source_package_version' => $stored_package_version,
 		];
 	} finally {
 		unlock($lock_key);

@@ -315,14 +315,30 @@ if (!function_exists('dump_xml_config')) {
 		$xml->openMemory();
 		$xml->startDocument('1.0', 'UTF-8');
 		$xml->startElement((string) $rootobj);
-		$write = static function (XMLWriter $xml, array $value) use (&$write): void {
+		$listtags = ['config', 'row', 'item'];
+		$write = static function (XMLWriter $xml, array $value) use (&$write, $listtags): void {
 			foreach ($value as $key => $item) {
-				$xml->startElement((string) $key);
-				if (is_array($item)) {
-					$write($xml, $item);
-				} else {
-					$xml->text((string) $item);
+				$name = (string) $key;
+				if (is_array($item) && array_is_list($item)) {
+					if (in_array($name, $listtags, true)) {
+						foreach ($item as $list_item) {
+							$xml->startElement($name);
+							is_array($list_item) ? $write($xml, $list_item) : $xml->text((string) $list_item);
+							$xml->endElement();
+						}
+					} else {
+						$xml->startElement($name);
+						foreach ($item as $list_item) {
+							$xml->startElement('item');
+							is_array($list_item) ? $write($xml, $list_item) : $xml->text((string) $list_item);
+							$xml->endElement();
+						}
+						$xml->endElement();
+					}
+					continue;
 				}
+				$xml->startElement($name);
+				is_array($item) ? $write($xml, $item) : $xml->text((string) $item);
 				$xml->endElement();
 			}
 		};
@@ -345,20 +361,29 @@ if (!function_exists('parse_xml_config')) {
 		if ($document === false) {
 			throw new RuntimeException('invalid XML');
 		}
-		$read = static function (SimpleXMLElement $node) use (&$read): array {
+		$listtags = ['config', 'row', 'item'];
+		$read = static function (SimpleXMLElement $node) use (&$read, $listtags): array {
 			$result = [];
 			foreach ($node->children() as $entry) {
 				$key = $entry->getName();
-				if ($entry->count() > 0) {
-					$result[$key] = $read($entry);
+				$value = $entry->count() > 0 ? $read($entry) : (string) $entry;
+				if ($key === 'item') {
+					$result[] = $value;
+				} elseif (in_array($key, $listtags, true)) {
+					$result[$key][] = $value;
+				} elseif (array_key_exists($key, $result)) {
+					throw new RuntimeException('duplicate non-list XML tag');
 				} else {
-					$result[$key] = (string) $entry;
+					$result[$key] = $value;
 				}
 			}
 			return $result;
 		};
 		if ((string) $rootobj !== $document->getName()) {
 			throw new RuntimeException('unexpected XML root');
+		}
+		if ($document->count() === 0) {
+			return [];
 		}
 		return $read($document);
 	}
