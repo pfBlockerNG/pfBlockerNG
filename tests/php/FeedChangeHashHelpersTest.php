@@ -619,7 +619,7 @@ final class FeedChangeHashHelpersTest extends TestCase
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Compressed feed: the raw '.raw' download is still on disk (gunzip/bzip2/tar/7z
+	 * Compressed feed: the raw '.raw' download is still on disk (gunzip/bzip2/tar
 	 * never delete their source archive) — it must be preferred, since it holds the
 	 * SAME bytes the probe hashes (pfb_download() in change_detect mode returns before
 	 * any decompression).

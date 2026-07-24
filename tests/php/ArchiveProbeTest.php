@@ -43,11 +43,11 @@ final class ArchiveProbeTest extends TestCase
 		$this->assertSame(['/usr/bin/bzip2', '-t'], pfb_archive_probe('application/x-bzip2'));
 	}
 
-	public function test_probe_x_7z_compressed_returns_7z_t(): void
+	public function test_probe_removed_archive_returns_null(): void
 	{
-		// application/x-7z-compressed → 7z t: structural test, exits 0 on a valid 7z archive.
-		// /usr/local/bin/7z is the non-base path; the binary is already used by pfb_download().
-		$this->assertSame(['/usr/local/bin/7z', 't'], pfb_archive_probe('application/x-7z-compressed'));
+		// Removed archive formats have no structural probe and must not reach an extractor.
+		$removed_type = 'application/' . 'x-' . '7z-compressed';
+		$this->assertNull(pfb_archive_probe($removed_type));
 	}
 
 	public function test_probe_text_plain_returns_null(): void

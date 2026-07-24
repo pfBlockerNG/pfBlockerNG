@@ -95,22 +95,13 @@ on-box verdict and why it matters.
 | `archive_corrupt.bz2` | `application/x-bzip2` | `bzip2 -t` → **rc≠0** | Valid bzip2 truncated mid-block; `bzip2 -t` fails. |
 | `archive_octet_recover.zip` | `application/octet-stream` | `tar -tf` → **rc=0**, extracts the IP list | The #581 recovery case: a valid ZIP behind a short text SFX-stub preamble (`#!/bin/false …`). FreeBSD `file(1)` cannot classify the text-then-binary stream → `application/octet-stream` (not allow-listed), triggering `pfb_octet_recover_type()`, which probes with `bsdtar` (rc=0) → recovers `application/zip` → imports. **Why not a raw `\x00\x01…` prefix:** FreeBSD libmagic misreads that as `image/x-tga` (a non-allow-listed type rejected outright, never reaching recovery), even though macOS/Linux read it as octet-stream. The text preamble avoids every magic rule. |
 | `archive_junk_octet.bin` | `application/octet-stream` | none (not an archive) | The ADR §7 "never blanket-accept octet-stream" branch: pure NUL/control bytes → `octet-stream`, no archive type passes any probe → `pfb_octet_recover_type()` returns NULL → rejected. |
-| `archive_valid.7z` | `application/x-7z-compressed` | `7z t` → **rc=0**, extracts the IP list | First-class 7z import: `file(1)` reports the canonical 7z MIME (allow-listed), the 7z branch runs `7z t` then `7z e -so`. **Created on a real FreeBSD box — there is no stdlib 7z writer**, so this cannot be built inline. Drives `test_7z_feed_imports` and (with the binary hidden) `test_7z_missing_binary_rejected`. |
-| `archive_corrupt.7z` | `application/x-7z-compressed` | `7z t` → **rc≠0** | Truncated 7z; `7z t` fails → the probe rejects (`test_corrupt_7z_rejected`). |
 | `archive_traversal.zip` | `application/zip` (expected — verify on-box in the fan-out) | `tar -tf` → **rc=0**, lists both members | ADR-46 member-name guard: a structurally VALID two-member ZIP whose second member is `../pfb_adr46_escape.txt` (parent-dir escape). Stock `zip`/`bsdtar` refuse to *create* such a member, so it is crafted as raw bytes via Python `zipfile` and committed. Two members are required to steer the GeoIP/top-1M branch into the disk-writing `tar -xf -C` path (a single member takes the guard-free `-xOf` stdout path). Pre-guard behaviour is SILENT partial success (bsdtar skips the `..` member and the branch returns TRUE); the guard turns it into an explicit `stage=member` reject (`test_adr46_hostile_member_zip_rejected`). |
 | `archive_traversal.tar.gz` | `application/gzip` (expected — verify on-box in the fan-out) | `gunzip -t` → **rc=0** (valid stream); `tar -tf` → **rc=0**, lists both members | The tar.gz sibling of `archive_traversal.zip` for the OTHER two disk-writing sites: the gzip GeoIP branch (`tar -xzf --strip=1 -C {geoipshare}`) and the UT1/blacklist branch (`tar -xf … -C {dbdir}/…`). Members `cat/domains` (benign, the UT1 layout) + `../pfb_adr46_escape.txt` (hostile). Crafted via Python `tarfile` (stock tar refuses `..` members) with zeroed mtimes so regeneration is byte-stable. Note the ADR-45 probe for these branches is only `gunzip -t` (gzip-stream integrity — it never inspects the inner tar), which is exactly why the member guard fails CLOSED on an unlistable archive. Drives `test_adr46_hostile_member_geoip_gz_rejected` and `test_adr46_hostile_member_blacklist_rejected`. |
 
-**7-Zip is opportunistic, not shipped** — `/usr/local/bin/7z` is an add-on, not a
-pfBlockerNG `RUN_DEPEND`. The CI smoke image bakes it in so the import/corrupt 7z cases
-run; on a box without it they SKIP. The missing-binary case always runs (it hides the
-binary when present) and asserts the clear "Install the 7-Zip package" log line — so the
-default "no 7-Zip → safe reject + guidance" reality stays covered even on the 7z-baked image.
-
-All bodies are inert (RFC 5737 IPs). The recoverable ZIP and the 7z fixtures extract to
+All bodies are inert (RFC 5737 IPs). The recoverable ZIP fixture extracts to
 `203.0.113.11` (`_ADR45_MEMBER`). Regenerate + re-verify on a FreeBSD box if
-libmagic/libarchive (or the 7z build) behaviour ever shifts; the tests read each file's
-exact bytes for the on-box `file(1)` guard (`_fixture_bytes`), so the served feed and the
-guard never drift.
+libmagic/libarchive behaviour ever shifts; the tests read each file's exact bytes for the
+on-box `file(1)` guard (`_fixture_bytes`), so the served feed and the guard never drift.
 
 ## IP suppression carve fixtures (ADR-53, `IpCase`, `test_smoke_suppression.py`)
 

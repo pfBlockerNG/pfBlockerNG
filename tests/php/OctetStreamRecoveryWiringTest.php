@@ -66,7 +66,7 @@ final class OctetStreamRecoveryWiringTest extends TestCase
 		unlink($tmpZip);
 
 		// Structured binary blob with NUL bytes — reliably classified as application/octet-stream
-		// by file(1) on both macOS and Linux; not a ZIP/gzip/bzip2/7z.
+		// by file(1) on both macOS and Linux; not a ZIP/gzip/bzip2 archive.
 		file_put_contents($this->junkBlob, str_repeat("\x00\x01\x02\x03", 256));
 
 		// Allow-list: application/zip present; application/octet-stream absent (it is

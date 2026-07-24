@@ -554,26 +554,6 @@
             }
         ]
     },
-    "pfb_archive_missing_tool": {
-        "returnsRef": false,
-        "returnType": "?string",
-        "params": [
-            {
-                "name": "canonical_type",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "checker",
-                "byRef": false,
-                "variadic": false,
-                "type": "?callable",
-                "default": "NULL"
-            }
-        ]
-    },
     "pfb_archive_probe": {
         "returnsRef": false,
         "returnType": "?array",

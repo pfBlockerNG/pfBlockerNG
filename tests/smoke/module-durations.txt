@@ -123,8 +123,6 @@ test_smoke_download_loop.py::test_709_invert_v4_list_members_reach_pf_table 14.4
 test_smoke_download_loop.py::test_710_dnsblip_auto_rule_keeps_configured_invert 6.17
 test_smoke_download_loop.py::test_712_dnsbl_source_interface_used_on_download 20.51
 test_smoke_feeds.py 579.80
-test_smoke_feeds.py::test_7z_feed_imports 3.04
-test_smoke_feeds.py::test_7z_missing_binary_rejected 14.54
 test_smoke_feeds.py::test_abp_bom_header_still_detected 18.55
 test_smoke_feeds.py::test_abp_perline_detection_in_plain_feed 4.05
 test_smoke_feeds.py::test_abp_perline_path_anchor_not_overblocked 19.05
@@ -133,7 +131,6 @@ test_smoke_feeds.py::test_adr46_hostile_member_geoip_gz_rejected 7.63
 test_smoke_feeds.py::test_adr46_hostile_member_zip_rejected 0.96
 test_smoke_feeds.py::test_adr46_legit_multifile_zip_still_imports 1.03
 test_smoke_feeds.py::test_bzip2_feed_imports 16.27
-test_smoke_feeds.py::test_corrupt_7z_rejected 2.57
 test_smoke_feeds.py::test_corrupt_bzip2_rejected 2.51
 test_smoke_feeds.py::test_corrupt_gzip_rejected 2.48
 test_smoke_feeds.py::test_corrupt_zip_rejected 2.43
