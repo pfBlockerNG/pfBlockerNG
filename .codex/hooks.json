@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/ts-hook.sh\" 545f9fd2662557af9a9fb0a32cde9d95fcbe19857784d674088876c066c4cde9 && exec sh \"$root/scripts/ts-hook.sh\" tool_capture_hook",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/ts-hook.sh\" ec01454721e79045d957a1828cc91847f39fdbaa43aa8d77bb92baf2064e7f6e && exec sh \"$root/scripts/ts-hook.sh\" tool_capture_hook",
             "timeout": 5,
             "statusMessage": "Capturing large tool output with Token Savior"
           }
