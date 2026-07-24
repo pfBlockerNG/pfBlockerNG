@@ -17,17 +17,37 @@ use PHPUnit\Framework\TestCase;
  * Intent pinned here: a request is authorized only when SOME logtype's whole
  * tuple authorizes it -- its logdir matches the file's directory, the requested
  * action's capability flag is enabled for that logtype, and the filename matches
- * that logtype's 'ext' whitelist (glob "*<ext>", mirroring getlogs()). A logtype
- * carrying an inline 'logs' list has no 'ext' and stays directory-scoped -- the
- * pre-existing behaviour the Tier-B flows (tests/smoke/ui/test_log.py) pin by
- * seeding throwaway basenames under the defaultlogs dir.
+ * that logtype's exact 'logs' basename or 'ext' whitelist (glob "*<ext>",
+ * mirroring getlogs()). Live Tier-B flows use only the inactive listed wizard.log;
+ * clear-shape coverage for active log basenames stays hermetic below.
  */
 final class LogValidateFilepathTest extends TestCase
 {
+	private string $tmpDir;
+
 	public static function setUpBeforeClass(): void
 	{
 		require_once __DIR__ . '/LogPageLoader.php';
 		pfb_test_load_log_page_functions();
+	}
+
+	protected function setUp(): void
+	{
+		$this->tmpDir = sys_get_temp_dir() . '/pfb_log_clear_' . getmypid() . '_' . bin2hex(random_bytes(4));
+		mkdir($this->tmpDir, 0700, TRUE);
+	}
+
+	protected function tearDown(): void
+	{
+		foreach (glob($this->tmpDir . '/*') ?: [] as $path) {
+			@unlink($path);
+		}
+		@rmdir($this->tmpDir);
+	}
+
+	private function tempLog(string $basename): string
+	{
+		return $this->tmpDir . '/' . $basename;
 	}
 
 	/**
@@ -202,7 +222,7 @@ final class LogValidateFilepathTest extends TestCase
 		);
 	}
 
-	// --- issue #1649 (CodeRabbit CWE-863): a no-ext logtype's enumerated 'logs'
+	// A no-ext logtype's enumerated 'logs'
 	// list must not lend blanket access to unlisted files in a SHARED dir. The
 	// dbdir (/var/db/pfblockerng/) holds masterfile/mastercat (masterfiles),
 	// pfbalexawhitelist.txt (top1m), and sensitive siblings (asn_cache.sqlite,
@@ -263,5 +283,56 @@ final class LogValidateFilepathTest extends TestCase
 			pfb_validate_filepath('/var/unbound/pfb_py_error.txt', $this->logtypes(), 'download'),
 			'a pfb_py*.txt file under /var/unbound/ must pass via the python logtype'
 		);
+	}
+
+	// Clear behavior is hermetic here; Tier-B smoke coverage stays read-only on active logs.
+	public function testClearOfPlainLogUnlinksIt(): void
+	{
+		$path = $this->tempLog('ip_block.log');
+		file_put_contents($path, "plain\n");
+		$this->assertFileExists($path, 'plain log must exist before clear');
+		$this->assertGreaterThan(0, filesize($path), 'plain log must be non-empty before clear');
+
+		pfb_clear_logfile($path);
+
+		$this->assertFileDoesNotExist($path, 'plain log clear must unlink the file');
+	}
+
+	public function testClearOfNonemptyPyErrorLogTruncatesInPlace(): void
+	{
+		$path = $this->tempLog('py_error.log');
+		file_put_contents($path, "python error\n");
+		$inode = fileinode($path);
+		$this->assertFileExists($path, 'py_error.log must exist before clear');
+		$this->assertGreaterThan(0, filesize($path), 'py_error.log must be non-empty before clear');
+
+		pfb_clear_logfile($path);
+
+		$this->assertFileExists($path, 'py_error.log clear must keep the file');
+		$this->assertSame(0, filesize($path), 'py_error.log clear must truncate to zero bytes');
+		$this->assertSame($inode, fileinode($path), 'py_error.log clear must truncate in place');
+	}
+
+	public function testClearOfAbsentPyErrorLogDoesNotCreateOrFatal(): void
+	{
+		$path = $this->tempLog('py_error.log');
+		$this->assertFileDoesNotExist($path, 'py_error.log must be absent before clear');
+
+		pfb_clear_logfile($path);
+
+		$this->assertFileDoesNotExist($path, 'clearing an absent py_error.log must remain a no-op');
+	}
+
+	public function testClearOfDnsblLogRetouchesEmptyFile(): void
+	{
+		$path = $this->tempLog('dnsbl.log');
+		file_put_contents($path, "dnsbl\n");
+		$this->assertFileExists($path, 'dnsbl.log must exist before clear');
+		$this->assertGreaterThan(0, filesize($path), 'dnsbl.log must be non-empty before clear');
+
+		pfb_clear_logfile($path);
+
+		$this->assertFileExists($path, 'dnsbl.log clear must retouch the file');
+		$this->assertSame(0, filesize($path), 'dnsbl.log clear must leave an empty file');
 	}
 }

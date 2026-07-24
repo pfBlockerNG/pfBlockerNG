@@ -2,17 +2,7 @@
 
 declare(strict_types=1);
 
-/**
- * Shared off-appliance loader for pfb_validate_filepath() (pfblockerng_log.php).
- *
- * Unlike AlertsPageLoader.php/UpdatePageLoader.php, this function takes
- * $pfb_logtypes as a plain PARAMETER (not a global read) and calls no pfSense
- * runtime function -- so no surrounding top-level wiring or fixture is needed:
- * extract just the function's own span (its `function` line up to the next
- * top-level statement, `$pconfig = ...`) and eval it. The end marker stops at the
- * assignment operator, like AlertsPageLoader's, so rewriting the initialiser
- * (array() -> []) cannot strand it.
- */
+/** Shared off-appliance loader for log page file-operation helpers. */
 function pfb_test_load_log_page_functions(): void
 {
 	// issue #1207: getlogs() (pfblockerng_log.php:45) is defined ABOVE pfb_validate_filepath
