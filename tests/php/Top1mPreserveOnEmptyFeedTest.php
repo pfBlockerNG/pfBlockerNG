@@ -312,8 +312,8 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		];
 	}
 
-	/** Issue #1646: a write failure without a prior whitelist reports that none is available. */
-	public function testRecordWriteFailureWithoutPriorWhitelistWarnsNoListAvailable(): void
+	/** Issue #1646: a write failure without a prior whitelist aborts without publishing. */
+	public function testRecordWriteFailureWithoutPriorWhitelistAbortsPublication(): void
 	{
 		$this->assertFileDoesNotExist($this->whitelistPath(), 'before-state: no prior whitelist');
 		$this->assertNotFalse(file_put_contents($this->csvPath(), "1,example.com\n"), 'setup: valid top-1m.csv');
