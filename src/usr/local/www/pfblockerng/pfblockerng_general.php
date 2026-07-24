@@ -32,14 +32,10 @@ $pfb_wizard = TRUE;
 
 $wizard_action = pfb_wizard_get_action($_GET ?: array());
 
-// "Do not show this again": persist the choice so the setup wizard never auto-launches
-// again. Stored outside config/0 so a fresh, unconfigured install still reads as
-// unconfigured (config/0 == null) for the upgrade-migration paths in pfblockerng_install.inc.
-if ($wizard_action === 'disable') {
-	// foreign key — out of ADR-29 gateway scope (pfb_wizard_skip is not a /config/0 scalar)
-	config_set_path('installedpackages/pfblockerng/pfb_wizard_skip', 'on');
-	write_config('[pfBlockerNG] Disable setup wizard auto-launch');
-}
+// The ?wizard= GET is STATE-FREE: the "Do not show this again" persist happens in
+// the wizard's csrf-magic-validated POST (pfb_wizard_persist_disable, called from
+// pfb_wizard_skip_check) BEFORE the redirect here — a state-changing GET would be
+// CSRF-forgeable, csrf-magic validates POSTs only (issue #1651).
 
 // Skip the auto-launch for this request ('skip'), permanently ('disable' persisted),
 // or once the package has been configured.

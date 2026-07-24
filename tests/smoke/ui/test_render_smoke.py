@@ -2162,6 +2162,44 @@ def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: P
         assert needle in body, f"wizard DNSBL step is missing the Auto VIP marker {needle!r}"
 
 
+def test_general_wizard_disable_get_is_state_free(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """Issue #1651: a plain GET of ?wizard=disable writes NO config and still renders General.
+
+    Scenario: forged cross-site request against the wizard-disable action.
+    Given:   an authenticated session (the webui fixture already dismissed the wizard
+             through the csrf-protected wizard POST, so General renders directly)
+    When:    general.php is GET with ?wizard=disable -- the request an attacker page can
+             forge, since csrf-magic attaches no token to a GET
+    Then:    /conf/config.xml is BYTE-identical before and after (the old handler called
+             write_config on every such GET, bumping <revision> even with the flag already
+             'on'), and the response still renders the General settings page cleanly
+
+    The raw sha256 (not helpers.pfb_config_digest) is deliberate: the digest helper
+    strips the volatile <revision> block, which is exactly where a same-value
+    write_config shows up -- stripping it would blind this assertion.
+    """
+    before = smoke_vm.ssh("sha256", "-q", "/conf/config.xml")
+    assert before.returncode == 0 and before.stdout, (
+        f"config digest (before) failed: rc={before.returncode} stderr={before.stderr!r}"
+    )
+
+    path = _GENERAL_PAGE + "?wizard=disable"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("General Settings",))
+    assert result.ok, f"?wizard=disable render oracle failed: {result.detail}"
+
+    after = smoke_vm.ssh("sha256", "-q", "/conf/config.xml")
+    assert after.returncode == 0 and after.stdout, (
+        f"config digest (after) failed: rc={after.returncode} stderr={after.stderr!r}"
+    )
+    assert before.stdout == after.stdout, (
+        "a plain GET of ?wizard=disable must not write config (issue #1651): "
+        f"config.xml changed {before.stdout.strip()!r} -> {after.stdout.strip()!r}"
+    )
+
+
 # threats.php's NEGATIVE branches: each malformed/absent param print_info_box()es
 # a specific message and exit()s BEFORE the "$pgtitle" lookup-page chrome. These
 # pair with the positive threats_{domain,host,port} entries above (CLAUDE.md
