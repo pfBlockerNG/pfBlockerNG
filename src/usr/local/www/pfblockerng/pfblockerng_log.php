@@ -244,6 +244,27 @@ function pfb_validate_filepath($validate, $pfb_logtypes, $action) {
 	return FALSE;
 }
 
+function pfb_clear_logfile($path) {
+	// Keep the Python error log in place while clearing its contents.
+	if (strpos($path, 'py_error.log') !== FALSE) {
+		if (($fp = @fopen("{$path}", 'r+')) !== FALSE) {
+			@ftruncate($fp, 0);
+			@fclose($fp);
+		}
+		return;
+	}
+
+	unlink_if_exists($path);
+
+	if (strpos($path, 'dnsbl.log') !== FALSE ||
+	    strpos($path, 'unified.log') !== FALSE ||
+	    strpos($path, 'dns_reply.log') !== FALSE) {
+		touch($path);
+		@chown($path, 'unbound');
+		@chgrp($path, 'unbound');
+	}
+}
+
 $pconfig = array();
 if ($_POST) {
 	$pconfig = $_POST;
@@ -339,26 +360,7 @@ if (isset($pconfig['logFile']) && !empty($pconfig['logFile']) && (isset($pconfig
 
 	// Clear selected file
 	if ($pconfig['clear']) {
-
-		// Python log file must be truncated to not lose python file pointer
-		if (strpos($s_logfile, 'py_error.log') !== FALSE) {
-			// issue #1097: 'r+' never creates -- ftruncate(FALSE) throws TypeError on PHP 8, '@' only silences warnings
-			if (($fp = @fopen("{$s_logfile}", 'r+')) !== FALSE) {
-				@ftruncate($fp, 0);
-				@fclose($fp);
-			}
-		} else {
-			unlink_if_exists($s_logfile);
-
-			if (strpos($s_logfile, 'dnsbl.log') !== FALSE ||
-			    strpos($s_logfile, 'unified.log') !== FALSE ||
-			    strpos($s_logfile, 'dns_reply.log') !== FALSE) {
-
-				touch($s_logfile);
-				@chown($s_logfile, 'unbound');
-				@chgrp($s_logfile, 'unbound');
-			}
-		}
+		pfb_clear_logfile($s_logfile);
 	}
 
 	// Download log
