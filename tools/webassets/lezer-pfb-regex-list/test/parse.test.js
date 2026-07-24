@@ -1,0 +1,128 @@
+// node:test runner for the pfb regex-list outer grammar (issue #1669 slice B). Mirrors
+// lezer-regexp/test/parse.test.js's harness. Cases live in test/cases.txt (fileTests
+// format) and exercise the BARE parser (`parser`, no parseMixed wrap) -- pure
+// Pattern/Comment line splitting, independent of the mounted regex grammar's tree shape.
+//
+// fileTests' input capture trims leading/trailing whitespace on the whole case body
+// (@lezer/generator/dist/test.js `m[2].trim()`), so a case whose entire content is
+// whitespace (a bare trailing newline, a whitespace-only line) silently collapses to the
+// empty-string case and can't be pinned that way -- those get dedicated node:test cases
+// below instead, calling `parser.parse()` directly on an exact string.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { fileTests } from "@lezer/generator/test";
+import { highlightTree } from "@lezer/highlight";
+import { EditorState } from "@codemirror/state";
+import { syntaxTree, defaultHighlightStyle } from "@codemirror/language";
+import { parser, mixedParser, pfbRegexListLanguage, pfbRegexList } from "../src/index.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const casesPath = path.join(__dirname, "cases.txt");
+const casesText = readFileSync(casesPath, "utf8");
+
+const cases = fileTests(casesText, "cases.txt");
+
+test("cases.txt has the expected minimum coverage", () => {
+  assert.ok(
+    cases.length >= 8,
+    `expected >= 8 cases, got ${cases.length} -- issue #1669 slice B coverage list requires >= 8 rows`,
+  );
+});
+
+for (const testCase of cases) {
+  test(testCase.name, () => {
+    testCase.run(parser);
+  });
+}
+
+function names(tree) {
+  const out = [];
+  tree.iterate({
+    enter(node) {
+      out.push(node.name);
+    },
+  });
+  return out;
+}
+
+// Dedicated cases fileTests' trim() can't express (see file header).
+test("dedicated: a single trailing newline adds no spurious empty final line", () => {
+  assert.deepEqual(names(parser.parse("foo\n")), ["RegexList", "Pattern"]);
+});
+
+test("dedicated: two trailing newlines add exactly one empty final line (no node)", () => {
+  assert.deepEqual(names(parser.parse("foo\n\n")), ["RegexList", "Pattern"]);
+});
+
+test("dedicated: a whitespace-only line with no '#' is a Pattern, not a Comment", () => {
+  assert.deepEqual(names(parser.parse("   ")), ["RegexList", "Pattern"]);
+});
+
+// parseMixed nesting: the wrapped parser re-parses a Pattern node's contents with
+// @pfblockerng/lezer-regexp's Python-re grammar (slice A), mounted as an OVERLAY (see
+// index.js's comment on `overlay: [{from, to}]` -- required, and NOT the brief's literal
+// no-overlay form, to keep the Pattern node itself in the tree). Overlay mounts are
+// invisible to a plain `tree.iterate()` walk (@lezer/common: cursor-style iteration only
+// splices in NON-overlay mounts; overlays need position-based `resolveInner()`/`enter()`
+// lookups, same as `@lezer/highlight`'s own mount-following code) -- probed this session,
+// see index.js and the handoff. `chainAt()` below mirrors that lookup.
+function chainAt(tree, pos) {
+  const chain = [];
+  let node = tree.resolveInner(pos, 1);
+  while (node) {
+    chain.push(node.name);
+    node = node.parent;
+  }
+  return chain;
+}
+
+test("mixed-nesting: mixedParser nests a RegExp subtree inside Pattern (position-resolved)", () => {
+  const input = "ab[c-f]#trailing comment";
+  const tree = mixedParser.parse(input);
+  // Position 3 sits inside "[c-f]" -- resolveInner must walk Literal/CharacterClass-class
+  // descendants, through RegExp, through Pattern, up to RegexList.
+  const chain = chainAt(tree, 3);
+  assert.deepEqual(chain, ["ClassLiteral", "ClassRange", "CharacterClass", "RegExp", "Pattern", "RegexList"]);
+  // A position inside the trailing Comment must NOT resolve through Pattern/RegExp at all.
+  const commentChain = chainAt(tree, 10);
+  assert.deepEqual(commentChain, ["Comment", "RegexList"]);
+});
+
+test("mixed-nesting: pfbRegexList() wires the nested grammar through a real CM6 EditorState", () => {
+  const state = EditorState.create({
+    doc: "^foo\\d+$#a real DNSBL regex pattern\nbareword\n",
+    extensions: [pfbRegexList()],
+  });
+  const tree = syntaxTree(state);
+  // Position 4 sits inside "\d" (the Escape) on line 1; position 40 sits inside the
+  // bareword Pattern-only second line, which has no "#" and must resolve to a bare
+  // RegExp/Literal with no Comment ancestor.
+  assert.deepEqual(chainAt(tree, 4), ["Escape", "RegExp", "Pattern", "RegexList"]);
+  const line2Pos = state.doc.line(2).from + 2;
+  assert.deepEqual(chainAt(tree, line2Pos), ["Literal", "RegExp", "Pattern", "RegexList"]);
+});
+
+test("mixed-nesting: highlightTree actually emits distinct classes for anchors/escapes/comments (end-to-end proof)", () => {
+  // Real proof the overlay mount feeds CM6's highlighter, not just the raw tree shape --
+  // `highlightTree` is what `syntaxHighlighting()` (the extension cm-regex.js installs)
+  // calls under the hood.
+  const input = "^foo\\d+$#a comment";
+  const tree = pfbRegexListLanguage.parser.parse(input);
+  const spans = [];
+  highlightTree(tree, defaultHighlightStyle, (from, to, cls) => {
+    spans.push({ from, to, cls, text: input.slice(from, to) });
+  });
+  const anchorSpans = spans.filter((s) => s.text === "^" || s.text === "$");
+  const escapeSpan = spans.find((s) => s.text === "\\d");
+  const commentSpan = spans.find((s) => s.text === "#a comment");
+  assert.equal(anchorSpans.length, 2, `expected 2 anchor spans, got: ${JSON.stringify(spans)}`);
+  assert.ok(escapeSpan, `expected a highlighted "\\d" escape span, got: ${JSON.stringify(spans)}`);
+  assert.ok(commentSpan, `expected a highlighted comment span, got: ${JSON.stringify(spans)}`);
+  // The three classes must be pairwise distinct -- proof the nested regex tags and the
+  // outer Comment tag are actually different highlight categories, not one catch-all.
+  const classes = new Set([anchorSpans[0].cls, escapeSpan.cls, commentSpan.cls]);
+  assert.equal(classes.size, 3, `expected 3 distinct highlight classes, got: ${JSON.stringify([...classes])}`);
+});

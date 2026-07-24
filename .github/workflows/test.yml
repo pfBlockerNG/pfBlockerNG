@@ -550,7 +550,7 @@ jobs:
         run: node --test tests/js/*.test.js
 
   webassets-vendor:
-    name: Webassets vendor drift guard + Lezer regexp grammar tests (issue #1669)
+    name: Webassets vendor drift guard + Lezer grammar tests (issue #1669)
     runs-on: ubuntu-latest
 
     steps:
@@ -569,22 +569,27 @@ jobs:
       - name: Rebuild the vendor tree and diff against what's committed
         # Node/npm are dev+CI-only (never shipped to the appliance): this
         # re-runs scripts/build-webassets.sh from the pinned tools/webassets/
-        # source (prismjs + @webcoder49/code-input + esbuild, all exact-pinned
-        # in package-lock.json) and fails if the committed
-        # src/usr/local/www/pfblockerng/vendor/prism/ tree has drifted.
+        # source (the two Lezer grammar packages, the CodeMirror 6 + Lezer
+        # devDependency pins, and the cm-regex.js esbuild entry, all
+        # exact-pinned in package-lock.json) and fails if the committed
+        # src/usr/local/www/pfblockerng/vendor/codemirror/ tree has drifted.
         # ubuntu-latest ships python3.
         run: python3 scripts/check_webassets_vendor.py
 
-      - name: Lezer regexp grammar parse tests
+      - name: Lezer grammar parse tests (regexp + pfb regex-list)
         # tools/webassets/lezer-regexp/ (issue #1669 slice A): a Lezer grammar
-        # for Python 3.11 `re`, the foundation for replacing the Prism overlay
-        # with CodeMirror 6. The drift-guard step above already ran `npm ci`
-        # in tools/webassets/ via build-webassets.sh, so this repeat is a
-        # fast no-op; kept explicit so this step runs standalone too.
+        # for Python 3.11 `re`. tools/webassets/lezer-pfb-regex-list/ (slice
+        # B): the outer pfBlockerNG list-format grammar (pattern + "#"
+        # description per line) that mounts the regexp grammar via
+        # parseMixed -- together they back the CodeMirror 6 editor bundle
+        # that replaced the Prism overlay. The drift-guard step above already
+        # ran `npm ci` in tools/webassets/ via build-webassets.sh, so this
+        # repeat is a fast no-op; kept explicit so this step runs standalone too.
         run: |
           cd tools/webassets
           npm ci --no-audit --no-fund
           npm run test:grammar
+          npm run test:listgrammar
 
   benchmarks:
     name: Benchmark kill-gates (ReDoS + build RAM)
@@ -867,7 +872,7 @@ jobs:
             exit 1
           fi
           if [ "${{ needs.webassets-vendor.result }}" != "success" ]; then
-            echo "Webassets vendor drift guard (Prism + code-input) failed or was cancelled."
+            echo "Webassets vendor drift guard (CodeMirror 6 + Lezer) failed or was cancelled."
             exit 1
           fi
           # ADR-14 UI suite (label-gated): 'skipped' (unlabeled PR / push) is a

@@ -1,0 +1,42 @@
+// Lezer grammar for the pfBlockerNG regex-list textarea format (issue #1669 slice B).
+// Mirrors pfblockerng.inc's pfbng_text_area_decode() (the custom-entry textarea decoder)
+// EXACTLY: per line, a line whose TRIMMED start is "#" is a whole-line Comment (dropped
+// by the decoder, never stored); otherwise the FIRST "#" anywhere in the line splits it
+// into Pattern (mounts the Python-re grammar from @pfblockerng/lezer-regexp via
+// parseMixed -- see src/index.js) and a trailing Comment running to end-of-line. A line
+// with no "#" at all is Pattern-only. A mid-pattern "#" therefore visibly becomes a
+// Comment in the editor -- that is intended, it surfaces the decoder's real split.
+//
+// This is a HIGHLIGHTER grammar, not a validator: server-side validation
+// (pfbng_text_area_decode() itself, plus preg_match/re.compile on the split pattern half)
+// stays authoritative.
+//
+// A trailing @precedence { Comment, Pattern } (below) is still required: lezer-generator
+// flags Comment/Pattern as "overlapping tokens used in same context" (a leading whitespace
+// run is a viable prefix of both) even though longest-match alone already picks the right
+// one at runtime -- the generator can't prove that statically, so the precedence
+// declaration just states the same fact explicitly (Comment wins the tie when both are
+// reachable, which is exactly the trimmed-# case: Comment's match is then strictly longer,
+// swallowing the whole line, vs Pattern stopping at the "#").
+@skip {}
+
+@top RegexList { line (newline line)* }
+
+line { (Pattern Comment? | Comment)? }
+
+@tokens {
+  newline { "\n" }
+
+  // A run of optional leading whitespace then "#" to end-of-line. Reached mid-line (right
+  // after a Pattern) it can never carry a leading-whitespace run -- Pattern already
+  // consumed any leading non-"#" characters -- so in practice this token's ws* prefix only
+  // ever fires at line-start, exactly the "trim($line) starts with '#'" case.
+  Comment { $[ \t]* "#" ![\n]* }
+
+  // Everything up to the first "#" or newline. Whitespace is significant here (it's part
+  // of the regex pattern the outer grammar mounts inside via parseMixed).
+  Pattern { patternChar+ }
+  patternChar { ![#\n] }
+
+  @precedence { Comment, Pattern }
+}
