@@ -246,3 +246,32 @@ summary writer. Hook semantics are unchanged: changed DNSBL groups are still cap
 at the per-group `aliasupdate` site before the TLD routing split, never from the stats
 helper. References in the accepted Phase 6 correction to `dnsbl_alias_update()` name
 the implementation that existed at acceptance.
+
+## Post-acceptance addendum (2026-07-24 — issue #1669 Part B)
+
+Issue #1669 Part B adds a GUI **hook-script editor** (an "Edit Hooks" sub-tab on the
+Update page), which reverses one absolute in the 2026-06-14 amendment above: hook
+content is no longer *exclusively* authored by a shell-access admin. The recorded
+argument for the reversal:
+
+- **The editor is gated at Command-Prompt-equivalent privilege** — an explicit
+  `isAllowedPage('diag_command.php')` check on **both** the render and the save
+  handler (the in-repo pattern of `pfblockerng_software.php`), and the page is left
+  out of the blanket `page-firewall-pfblockerng` privilege match. Anyone who passes
+  that gate already holds root-equivalent access through pfSense Diagnostics →
+  Command Prompt / Edit File, so the editor adds **no new capability and no privilege
+  escalation**. The `standard-warning-root` banner is mirrored on the page.
+- **The picker trust boundary for scoped operators is unchanged**: a user with only
+  the pfBlockerNG page privileges still cannot author or edit hook content — they
+  select vetted files exactly as amended above, and the save-handler/runner
+  allow-list gates (`pfb_hook_scripts()` / `pfb_hook_script_valid()`) are untouched.
+- **The file contract is unchanged**: the editor writes only basenames resolved
+  inside `PFB_HOOK_SCRIPT_DIR` (realpath containment, mirroring the runner's own
+  checks); hook content never enters `config.xml` and is not exportable. Languages
+  remain **`.sh` / `.py` only** — the owner resolved the open fork against adding
+  PHP (issue #1669, 2026-07-24), so the runner's accepted-extension contract is not
+  widened.
+
+The GUI design (tab placement, server-composed `hook_<when>_<core>.<ext>` filenames
+from a `^[A-Za-z0-9_]+$` name core, pre-filled contract header) is recorded on
+issue #1669 (design comment, 2026-07-24).
