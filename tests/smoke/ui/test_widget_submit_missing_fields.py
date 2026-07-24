@@ -68,7 +68,14 @@ def test_widget_save_missing_per_field_keys_does_not_warn(
         del payload[key]
     payload["pfb_submit"] = "save"
 
-    resp = webui.session.post(webui.url(WIDGET_PAGE), data=payload, timeout=30)
+    # issue #1650: pfb_widget_post_allowed() is default-deny on an absent
+    # Sec-Fetch-Site; emulate the modern browser's same-origin form POST.
+    resp = webui.session.post(
+        webui.url(WIDGET_PAGE),
+        data=payload,
+        headers={"Sec-Fetch-Site": "same-origin"},
+        timeout=30,
+    )
 
     assert resp.status_code == 200, (
         f"POST {WIDGET_PAGE} pfb_submit (fields omitted) -> HTTP {resp.status_code} "

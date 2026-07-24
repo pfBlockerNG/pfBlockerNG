@@ -84,13 +84,19 @@ def _dismiss(webui: WebUI, headers: dict[str, str] | None = None) -> None:
     ``Sec-Fetch-Site`` to drive ``pfb_widget_post_allowed()``'s gate -- the response
     is still a normal 200 either way (blocked = the mutation is skipped and the
     page falls through to its normal render, never a login bounce or a 4xx).
+
+    Default ``Sec-Fetch-Site: same-origin`` (issue #1650): the guard is now
+    default-deny on an absent header, and ``requests`` (unlike a browser) sends
+    no fetch metadata at all -- so the legitimate-path tests must emulate the
+    modern browser's same-origin form POST; ``headers`` overrides it.
     """
     page = webui.get(WIDGET_PAGE)
     assert page.status_code == 200, f"GET {WIDGET_PAGE} -> HTTP {page.status_code} (expected 200)"
     assert not looks_like_login_page(page.text), "pre-dismiss GET bounced to the login page -- not authenticated"
     payload = scrape_form_fields(page.text)
     payload["pfblockerngack"] = "1"
-    resp = webui.session.post(webui.url(WIDGET_PAGE), data=payload, headers=headers, timeout=30)
+    send_headers = {"Sec-Fetch-Site": "same-origin", **(headers or {})}
+    resp = webui.session.post(webui.url(WIDGET_PAGE), data=payload, headers=send_headers, timeout=30)
     assert resp.status_code == 200, f"POST {WIDGET_PAGE} pfblockerngack=1 -> HTTP {resp.status_code} (expected 200)"
     assert not looks_like_login_page(resp.text), "dismiss POST bounced to the login page -- session not authenticated"
 
