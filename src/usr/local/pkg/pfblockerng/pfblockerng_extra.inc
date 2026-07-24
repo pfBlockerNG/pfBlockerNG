@@ -1951,6 +1951,10 @@ function pfb_settings_snapshot_create(
 				if (!rename($temp, $path)) {
 					throw new RuntimeException('unable to publish settings snapshot');
 				}
+				if (($GLOBALS['pfb_test_snapshot_artifact_dir_sync_failure'] ?? FALSE) === TRUE
+					|| !_pfb_settings_journal_sync_directory($dir)) {
+					throw new RuntimeException('unable to sync settings snapshot directory');
+				}
 			} finally {
 				if (is_file($temp)) {
 					@unlink($temp);
@@ -1986,6 +1990,10 @@ function pfb_settings_snapshot_create(
 			pfb_settings_snapshot_read($family, $head_snapshot, $stored_package_name, $stored_package_version, $root);
 			if (!rename($head_temp, $dir . '/head.json')) {
 				throw new RuntimeException('unable to publish settings snapshot head');
+			}
+			if (($GLOBALS['pfb_test_snapshot_head_dir_sync_failure'] ?? FALSE) === TRUE
+				|| !_pfb_settings_journal_sync_directory($dir)) {
+				throw new RuntimeException('unable to sync settings snapshot head directory');
 			}
 		} catch (JsonException) {
 			throw new RuntimeException('invalid settings snapshot head');
