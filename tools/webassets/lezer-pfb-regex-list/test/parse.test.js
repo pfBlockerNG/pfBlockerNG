@@ -156,3 +156,39 @@ test("mixed-nesting: pfbHighlightStyle covers the tags defaultHighlightStyle dro
   assert.ok(quantifierSpan, `expected a highlighted "*" quantifier span, got: ${JSON.stringify(pfbSpans)}`);
   assert.ok(altSpan, `expected a highlighted "|" alternation span, got: ${JSON.stringify(pfbSpans)}`);
 });
+
+test("character-class OPENERS get the squareBracket span, all four ClassOpen* variants (issue #1681)", () => {
+  // The grammar tokenizes the class opener as one of four NAMED nodes
+  // (ClassOpen "[", ClassOpenNeg "[^", ClassOpenLit "[]", ClassOpenNegLit "[^]")
+  // while the closer is a literal "]" node -- so the '"[ ]": t.squareBracket'
+  // shorthand styled only the closer and every opener rendered unstyled.
+  // One case per variant; each asserts BOTH the opener and its closer span so
+  // the pair renders symmetrically under the shipped style.
+  for (const [input, opener] of [
+    ["(a)[bc]", "["],
+    ["a[^xy]", "[^"],
+    ["a[]b]", "[]"], // leading "]" is a literal member: "[]" is the opener
+    ["a[^]b]", "[^]"],
+  ]) {
+    const tree = pfbRegexListLanguage.parser.parse(input);
+    const spans = [];
+    highlightTree(tree, pfbHighlightStyle, (from, to, cls) => {
+      spans.push({ from, to, cls, text: input.slice(from, to) });
+    });
+    const openerSpan = spans.find((s) => s.text === opener);
+    const closerSpan = spans.find((s) => s.text === "]" && s.from > (openerSpan ? openerSpan.to : 0));
+    assert.ok(
+      openerSpan,
+      `input ${JSON.stringify(input)}: expected a highlighted ${JSON.stringify(opener)} class-opener span, got: ${JSON.stringify(spans)}`,
+    );
+    assert.ok(
+      closerSpan,
+      `input ${JSON.stringify(input)}: expected a highlighted "]" class-closer span after the opener, got: ${JSON.stringify(spans)}`,
+    );
+    assert.equal(
+      openerSpan.cls,
+      closerSpan.cls,
+      `input ${JSON.stringify(input)}: opener and closer must share one highlight class`,
+    );
+  }
+});

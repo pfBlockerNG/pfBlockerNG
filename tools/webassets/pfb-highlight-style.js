@@ -5,7 +5,8 @@
 // node_modules/@lezer/highlight/dist/index.js's tag hierarchy and
 // node_modules/@codemirror/language/dist/index.js's defaultHighlightStyle table. Those four
 // tags are exactly what lezer-regexp/src/highlight.js assigns to quantifiers (`*`, `+`,
-// `?`, `{m,n}`), the alternation operator (`|`), group/class delimiters (`()`, `[]`), and
+// `?`, `{m,n}`), the alternation operator (`|`), group/class delimiters (`()`, `[]` --
+// the class OPENER is a named ClassOpen* node, mapped explicitly, issue #1681), and
 // backreferences (`\1`, `(?P=name)`) -- so all of them render unstyled with only
 // defaultHighlightStyle installed. cm-regex.js installs this ALONGSIDE (not instead of)
 // defaultHighlightStyle via a second `syntaxHighlighting()` call.
