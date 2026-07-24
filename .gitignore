@@ -25,6 +25,10 @@ venv
 vendor
 .phpunit.cache/
 .phpunit.result.cache
+# Committed vendored web assets (issue #1669) are static content, not a Composer
+# vendor/ dir -- unignore this one path despite the bare `vendor` rule above.
+!src/usr/local/www/pfblockerng/vendor/
+!src/usr/local/www/pfblockerng/vendor/**
 
 # ── Python coverage (pytest-cov / coverage.py; issue #38) ─────────────────────
 .coverage
