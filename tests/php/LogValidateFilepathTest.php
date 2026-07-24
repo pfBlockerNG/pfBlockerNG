@@ -52,9 +52,9 @@ final class LogValidateFilepathTest extends TestCase
 
 	/**
 	 * A $pfb_logtypes fixture mirroring the real page's entries for every shape
-	 * involved: inline 'logs' lists, scalar and array 'ext', glob patterns, the
-	 * shared-package-dir pair (both clear => FALSE), and two logtypes sharing one
-	 * logdir with opposite clear flags (masterfiles vs top1m).
+	 * involved: inline 'logs' lists, scalar ('txt', '.*', '*') and array 'ext',
+	 * glob patterns, the shared-package-dir pair (both clear => FALSE), and two
+	 * logtypes sharing one logdir with opposite clear flags (masterfiles vs top1m).
 	 */
 	private function logtypes(): array
 	{
@@ -100,6 +100,28 @@ final class LogValidateFilepathTest extends TestCase
 				'ext'      => ['pfbalexawhitelist.txt'],
 				'download' => TRUE,
 				'clear'    => TRUE,
+			],
+			// The page's scalar-'ext' shapes, which outnumber the array ones:
+			// denylogs ('txt'), etiprep ('.*') and the dynamically appended DNSBL
+			// category feeds ('*'). They reach the same (array) cast, so a fixture
+			// of arrays alone leaves the dominant production shape unexercised.
+			'denylogs' => [
+				'logdir'   => '/var/db/pfblockerng/deny/',
+				'ext'      => 'txt',
+				'download' => TRUE,
+				'clear'    => TRUE,
+			],
+			'etiprep' => [
+				'logdir'   => '/var/db/pfblockerng/et/',
+				'ext'      => '.*',
+				'download' => TRUE,
+				'clear'    => FALSE,
+			],
+			'feedlogs' => [
+				'logdir'   => '/var/db/pfblockerng/feed/',
+				'ext'      => '*',
+				'download' => TRUE,
+				'clear'    => FALSE,
 			],
 		];
 	}
@@ -160,6 +182,63 @@ final class LogValidateFilepathTest extends TestCase
 		$this->assertTrue(
 			pfb_validate_filepath('/usr/local/pkg/pfblockerng/dnsbl_tld', $this->logtypes(), 'download'),
 			'download of dnsbl_tld must pass: its own logtype matches and allows download'
+		);
+	}
+
+	public function testDownloadOfDenyFileIsAllowedByItsScalarExt(): void
+	{
+		$this->assertTrue(
+			pfb_validate_filepath('/var/db/pfblockerng/deny/pfb_deny.txt', $this->logtypes(), 'download'),
+			'download of a deny .txt file must pass: denylogs carries the scalar ext "txt"'
+		);
+	}
+
+	public function testDownloadUnderAScalarExtLogdirStillHonoursThatExt(): void
+	{
+		// Same logdir as denylogs, but the file matches no "*txt" pattern: the
+		// scalar shape must whitelist by extension, never by directory alone.
+		$this->assertFalse(
+			pfb_validate_filepath('/var/db/pfblockerng/deny/pfb_deny.conf', $this->logtypes(), 'download'),
+			'download of a .conf under the deny logdir must be rejected by the scalar ext "txt"'
+		);
+	}
+
+	public function testDownloadUnderTheDotStarExtRequiresADot(): void
+	{
+		// etiprep's '.*' becomes fnmatch("*.*", ...), so a dotless name misses.
+		$this->assertTrue(
+			pfb_validate_filepath('/var/db/pfblockerng/et/rep.list', $this->logtypes(), 'download'),
+			'download of a dotted etiprep file must pass its ".*" ext'
+		);
+		$this->assertFalse(
+			pfb_validate_filepath('/var/db/pfblockerng/et/dotless', $this->logtypes(), 'download'),
+			'download of a dotless etiprep file must be rejected by the ".*" ext'
+		);
+	}
+
+	public function testDownloadUnderTheStarExtAcceptsAnyNameInThatLogdirOnly(): void
+	{
+		$this->assertTrue(
+			pfb_validate_filepath('/var/db/pfblockerng/feed/anything', $this->logtypes(), 'download'),
+			'download of any file in a category-feed logdir must pass its "*" ext'
+		);
+		$this->assertFalse(
+			pfb_validate_filepath('/var/db/pfblockerng/feed/sub/anything', $this->logtypes(), 'download'),
+			'a "*" ext must not reach below its own logdir'
+		);
+	}
+
+	public function testLoadIsAllowedRegardlessOfTheClearAndDownloadFlags(): void
+	{
+		// 'load' has no capability flag of its own: matching the logtype's file
+		// whitelist is the whole gate, even where clear => FALSE.
+		$this->assertTrue(
+			pfb_validate_filepath('/var/db/pfblockerng/et/rep.list', $this->logtypes(), 'load'),
+			'load must pass on etiprep despite clear => FALSE: load carries no flag'
+		);
+		$this->assertTrue(
+			pfb_validate_filepath('/usr/local/pkg/pfblockerng/dnsbl_tld', $this->logtypes(), 'load'),
+			'load must pass on dnsbl_tld despite clear => FALSE: load carries no flag'
 		);
 	}
 
