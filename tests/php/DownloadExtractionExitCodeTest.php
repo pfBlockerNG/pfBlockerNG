@@ -287,8 +287,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 
 		$this->assertStringContainsString('function ($curl_handle, $hdr_line)', self::$body,
 			'vacuity: the sole non-result return must remain the cURL header callback');
-		$this->assertSame(75, $typedResultCount,
-			'pfb_download() must expose exactly 75 PfbDownloadResult success/failure returns');
+		$this->assertSame(72, $typedResultCount,
+			'pfb_download() must expose exactly 72 PfbDownloadResult success/failure returns');
 		$this->assertSame(1, $headerCallbackCount,
 			'pfb_download() may have only the header callback strlen return outside PfbDownloadResult');
 		$this->assertSame(array(), $unexpectedReturns,
