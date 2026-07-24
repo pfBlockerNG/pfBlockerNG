@@ -323,7 +323,7 @@ Python 3.11–3.14. Measured on `tests/fixtures/adr08_corpus/`: 0 false positive
 legitimate set, 6/6 homographs caught. Guards: the `tests/test_adr08_*` suite. See
 [`.ADRs/ADR_08_Homoglyph_Protection/`](../../.ADRs/ADR_08_Homoglyph_Protection/).
 
-### ADR-12 — update hooks (PHP/shell, no Python)
+### ADR-12 — update hooks (PHP/shell, dependency-derived Python)
 
 Admin-VETTED `pre`/`post` **scripts** run once per update pass from
 `sync_package_pfblockerng` in `pfblockerng.inc` — `pfb_run_hooks($when, $ctx)` reads enabled
@@ -335,6 +335,10 @@ NOT a GUI-typed command — it is a `hook_<when>_*.{sh,py}` file a shell-access 
 the dedicated `hooks/` dir (`PFB_HOOK_SCRIPT_DIR`, created at install, separate from the per-feed
 `list_scripts/`); the picker/save/runner all gate on the same allow-list
 (`pfb_hook_script_valid()`), so a GUI user can only *select* a vetted file, never inject shell.
+Shell hooks execute directly through their shebang and still require an executable bit.
+Python hooks execute through the dependency-derived versioned interpreter and do not
+require an executable bit or shebang (for example `/usr/local/bin/python3.11`); no
+unversioned `python3` symlink is assumed.
 Admin-only **Update Hooks** settings tab (`www/pfblockerng/pfblockerng_hooks.php`, same WebCfg
 priv as the other settings).
 

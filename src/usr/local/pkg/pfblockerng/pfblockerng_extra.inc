@@ -1691,61 +1691,120 @@ function pfb_adv_alias_field_errors(array $post): array
 }
 
 /**
- * pfb_dnsbl_regex_entry_error — save-time mirror of the DNSBL resolver's
- * load-time user-regex guards (issue #1656): the resolver (pfb_unbound.py)
- * silently DROPS a REGEX-ini pattern that has a structurally catastrophic
- * backtracking shape (_regex_is_catastrophic_shape) or that fails re.compile,
- * so without this check a bad entry saves fine and then vanishes at reload
- * with no user feedback. The shape checks below are 1:1 ports of the Python
- * ones; keep them in sync.
+ * pfb_dnsbl_regex_validation_errors — validate the DNSBL regex form in one
+ * bounded Python pass, preserving source line numbers and resolver semantics.
  *
- * The resolver receives the pattern LOWERCASED (pfbng_text_area_decode ->
- * pfb_strtolower feeds the [REGEX] ini section), so the lowercased pattern is
- * what is judged here — e.g. '(?P<x>a)' reaches Python as '(?p<x>a)', a
- * compile error, and must be rejected at save too.
- *
- * Deliberately NOT mirrored: the opt-in static length cap (regex_cap /
- * REGEX_STATIC_LEN_CAP — a tunable convenience cap, not a safety gate) and the
- * always-on runtime timing eviction (needs execution; unknowable at save).
- * PCRE stands in for Python re at the compile probe — the engines' accepted
- * syntax differs at the margins, so this is a best-effort save-time filter
- * while the resolver's own guards stay authoritative.
- *
- * @param  string $pattern  One custom-list regex entry (comment part already
- *                           stripped by the caller).
- * @return string           Human-readable error, or '' when the entry is fine.
+ * @return array<int, string> Non-empty validation or infrastructure diagnostics.
  */
-function pfb_dnsbl_regex_entry_error(string $pattern): string
+function pfb_dnsbl_regex_validation_errors(string $contents, string $python, string $timeout_bin = '/usr/bin/timeout'): array
 {
-	$pattern = strtolower($pattern);
+	if ($contents === '') {
+		return [];
+	}
+	if ($python === '' || !is_executable($python)) {
+		return ['Python regex validator: interpreter unavailable'];
+	}
+	if ($timeout_bin === '' || !is_executable($timeout_bin)) {
+		return ['Python regex validator: timeout launcher unavailable'];
+	}
+	$stderr = tmpfile();
+	if ($stderr === FALSE) {
+		return ['Python regex validator: unable to create diagnostics file'];
+	}
+	$stderr_path = stream_get_meta_data($stderr)['uri'];
+	$probe = <<<'PYTHON'
+import re
+import sys
 
-	// Ports of pfb_unbound.py's structural shape checks (same order):
-	// nested quantifier (a+)+, alternation overlap (a|ab)+, adjacent
-	// quantified groups (a+)(a+)+, stacked bounded repeats a{1000}{1000}.
-	$catastrophic_shapes = array(
-		'/\([^()]*[+*][^()]*\)\s*[+*{]/',
-		'/\([^()]*\|[^()]*\)\s*[+*{]/',
-		'/\([^()]*[+*][^()]*\)\([^()]*\)\s*[+*]/',
-		'/(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?:,\d*)?\}/',
+shapes = (
+    re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]"),
+    re.compile(r"\([^()]*\|[^()]*\)\s*[+*{]"),
+    re.compile(r"\([^()]*[+*][^()]*\)\([^()]*\)\s*[+*]"),
+    re.compile(r"(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?:,\d*)?\}"),
+)
+
+failed = False
+
+def report(line_number, pattern, message):
+    print(f"line {line_number}: {pattern!r}: {message}", file=sys.stderr)
+
+for line_number, line in enumerate(sys.stdin, start=1):
+    line = line.rstrip("\r\n")
+    if not line.strip() or line.lstrip().startswith("#"):
+        continue
+    pattern = line.split("#", 1)[0].strip().lower()
+    if not pattern:
+        continue
+    if any(ord(character) < 0x20 or ord(character) == 0x7f for character in pattern):
+        report(line_number, pattern, "contains ASCII control character")
+        failed = True
+        continue
+    if any(shape.search(pattern) is not None for shape in shapes):
+        report(line_number, pattern, "catastrophic-backtracking shape")
+        failed = True
+        continue
+    budget = len(re.findall(r"(?<!\\)[+*]", pattern)) + len(re.findall(r"(?<!\\)\|", pattern))
+    if budget > 12:
+        report(line_number, pattern, "too many quantifiers/alternations")
+        failed = True
+        continue
+    try:
+        re.compile(pattern)
+    except Exception as error:
+        report(line_number, pattern, f"Python regex compile error: {error}")
+        failed = True
+
+raise SystemExit(1 if failed else 0)
+PYTHON;
+	$command = array($timeout_bin, '-s', 'TERM', '-k', '1', '5', $python, '-c', $probe);
+	$descriptors = array(
+		0 => array('pipe', 'r'),
+		1 => array('file', '/dev/null', 'w'),
+		2 => array('file', $stderr_path, 'a'),
 	);
-	foreach ($catastrophic_shapes as $shape) {
-		if (preg_match($shape, $pattern)) {
-			return 'Regex has a catastrophic-backtracking shape (the DNSBL resolver would drop it)';
+	$pipes = array();
+	$process = @proc_open($command, $descriptors, $pipes);
+	if (!is_resource($process)) {
+		fclose($stderr);
+		return ['Python regex validator: launcher failed'];
+	}
+	if (!isset($pipes[0]) || !is_resource($pipes[0])) {
+		proc_close($process);
+		fclose($stderr);
+		return ['Python regex validator: stdin unavailable'];
+	}
+	$write_ok = TRUE;
+	$offset = 0;
+	$length = strlen($contents);
+	while ($offset < $length) {
+		$written = @fwrite($pipes[0], substr($contents, $offset, 8192));
+		if ($written === FALSE || $written === 0) {
+			$write_ok = FALSE;
+			break;
 		}
+		$offset += $written;
 	}
-
-	// Budget backstop: unescaped unbounded quantifiers + alternations combined
-	// over the resolver's _REGEX_BUDGET_MAX (12).
-	$budget = preg_match_all('/(?<!\\\\)[+*]/', $pattern) + preg_match_all('/(?<!\\\\)\|/', $pattern);
-	if ($budget > 12) {
-		return 'Regex has too many quantifiers/alternations (the DNSBL resolver would drop it)';
+	if (isset($pipes[0]) && is_resource($pipes[0])) {
+		fclose($pipes[0]);
 	}
-
-	// Compile probe — the resolver drops a pattern re.compile rejects.
-	if (@preg_match('/' . str_replace('/', '\/', $pattern) . '/', '') === FALSE) {
-		return 'Regex does not compile (the DNSBL resolver would drop it)';
+	$exit_code = proc_close($process);
+	fflush($stderr);
+	rewind($stderr);
+	$diagnostics = (string) stream_get_contents($stderr);
+	fclose($stderr);
+	$diagnostics = str_replace("\0", '\\0', $diagnostics);
+	$lines = array_values(array_filter(array_map('trim', preg_split('/\R/', $diagnostics)), static fn(string $line): bool => $line !== ''));
+	if (!$write_ok) {
+		return ['Python regex validator: stdin write failed'];
 	}
-	return '';
+	if ($exit_code === 1 && $lines !== []) {
+		return $lines;
+	}
+	if ($exit_code !== 0) {
+		$detail = $lines[0] ?? 'no diagnostic';
+		return ["Python regex validator: process failed with exit {$exit_code}: {$detail}"];
+	}
+	return [];
 }
 
 /**

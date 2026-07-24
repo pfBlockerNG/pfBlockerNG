@@ -1837,16 +1837,30 @@
             }
         ]
     },
-    "pfb_dnsbl_regex_entry_error": {
+    "pfb_dnsbl_regex_validation_errors": {
         "returnsRef": false,
-        "returnType": "string",
+        "returnType": "array",
         "params": [
             {
-                "name": "pattern",
+                "name": "contents",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "python",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "timeout_bin",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/bin/timeout'"
             }
         ]
     },
@@ -3605,6 +3619,33 @@
                 "byRef": false,
                 "variadic": false,
                 "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfb_hook_script_command": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "script",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "python",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
                 "default": null
             }
         ]
@@ -5931,6 +5972,19 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            }
+        ]
+    },
+    "pfb_python_interpreter": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "dependencies",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },

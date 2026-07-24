@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Forbid invoking a Python interpreter ON the pfSense appliance.
+"""Forbid invoking an unapproved Python interpreter ON the pfSense appliance.
 
 PROBLEM
 -------
@@ -15,11 +15,11 @@ no-ops and the surrounding logic proceeds on stale/empty state. This bit the
 ``apply_on_change`` and ``tick`` smoke modules — their ledger writes silently did
 nothing, leaving the tests passing or failing by accident of unrelated state.
 
-The right tool on the appliance is **PHP** (``/usr/local/bin/php`` / ``pfSsh.php``,
-which pfSense ships and which already owns the package's data structures) or
-**POSIX sh**. Python on the appliance is reserved for ``pfb_unbound.py`` alone —
-and that runs inside Unbound's *embedded* Python loader (configured via
-``python-script:``), never spawned through ``/usr/local/bin/python``.
+The package dependency does provide a versioned interpreter. Package code may
+construct that exact path only through the dependency resolver; all other
+appliance paths remain forbidden. Tests and ad-hoc appliance commands should use
+**PHP** (``/usr/local/bin/php`` / ``pfSsh.php``) or **POSIX sh** unless they are
+exercising the dependency-derived launcher.
 
 This check is the mechanical backstop for that rule (CLAUDE.md, "Python"). It is
 PREVENTATIVE — there are no offenders in shipped code today; it guards against
@@ -32,7 +32,9 @@ SCOPE (deliberately low false-positive)
   ``scripts/`` is dev/CI-host tooling (it runs on the developer's box, which DOES
   have ``python3``) and is intentionally NOT scanned.
 * Flags the literal appliance interpreter path ``/usr/local/bin/python`` (covers
-  ``python``, ``python3``, ``python3.11``, ...). Bare ``python3`` is NOT flagged:
+  ``python``, ``python3``, ``python3.11``, ...). The sole spawn-path exception is
+  the annotated dependency-derived construction in ``pfb_python_interpreter()``.
+  Bare ``python3`` is NOT flagged:
   it legitimately names the dev-host / client-VM interpreter, and the appliance
   footgun has always used the full path. The CLAUDE.md rule covers the rest as
   human discipline.
@@ -51,6 +53,8 @@ from pathlib import Path
 # for this per-line scan (ADR-28). This file lives under scripts/, which is not
 # scanned, so the literal here is harmless.
 _FORBIDDEN = "/usr/local/bin/python"
+_DERIVED_CONSTRUCTION = "$interpreter = '/usr/local/bin/python' . $version; // appliance-python-ok: dependency-derived"
+_RESOLVER_PATH = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
 
 # Tracked-tree roots that run ON the appliance.
 _SCAN_ROOTS = ("src", "tests")
@@ -77,7 +81,8 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
         except (OSError, UnicodeError):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if _FORBIDDEN in line:
+            allowed = path.as_posix().endswith(_RESOLVER_PATH) and line.strip() == _DERIVED_CONSTRUCTION
+            if _FORBIDDEN in line and not allowed:
                 violations.append((path, lineno, line.strip()))
     return violations
 
@@ -91,12 +96,9 @@ def main(argv: list[str]) -> int:
     for path, lineno, line in violations:
         print(f"  {path}:{lineno}: {line}", file=sys.stderr)
     print(
-        "\nThe appliance ships python3.11 with no `python3` symlink, so "
-        "`/usr/local/bin/python*` is rc=127 (and silent under check=False ssh).\n"
-        "Use PHP (php / pfSsh.php / h.php_eval — it owns the package's data structures) "
-        "or POSIX sh instead.\n"
-        "Only pfb_unbound.py may be Python, and it runs in Unbound's embedded loader, "
-        'not via /usr/local/bin/python. See CLAUDE.md ("Python").',
+        "\nThe appliance has no `python` or `python3` symlink. Use PHP/POSIX sh, "
+        "or the exact versioned interpreter returned by pfb_python_interpreter(). "
+        'See AGENTS.md ("Python").',
         file=sys.stderr,
     )
     return 1

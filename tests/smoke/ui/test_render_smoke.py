@@ -205,7 +205,11 @@ PAGE_TABLE: tuple[Page, ...] = (
     # the markers are the Form_Section titles ('Update Hooks (Pre/Post Update Scripts)' + 'Hook
     # Entries'), stable regardless of the tab restructure. The sub-tab nav itself is pinned by
     # test_update_hooks_subtab_relocation.
-    Page("hooks", "/pfblockerng/pfblockerng_hooks.php", ("Update Hooks", "Hook Entries")),
+    Page(
+        "hooks",
+        "/pfblockerng/pfblockerng_hooks.php",
+        ("Update Hooks", "Hook Entries", "dependency-derived", "versioned interpreter"),
+    ),
     # issue #1669 Part B / ADR-12 post-acceptance addendum: the gated "Edit Hooks" hook-script
     # authoring editor, the Update sub-tab directly after Hooks. The smoke session is always
     # authenticated as admin, so the in-page isAllowedPage('diag_command.php') secondary gate's
@@ -595,6 +599,22 @@ def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
     assert "Update Hooks" not in body, "'Update Hooks' top-level tab is still present on the General page"
     assert ">Update</a>" in body, "the 'Update' top-level tab was wrongly removed from the General page"
     assert _UPDATE_PAGE in body, "the General page no longer links the Update tab"
+
+
+def test_update_hooks_help_describes_python_launcher(webui: WebUI) -> None:
+    """Hook help distinguishes dependency-derived Python dispatch from shell shebangs.
+
+    Python hooks are launched by the package's versioned interpreter, so their files
+    need neither an executable bit nor a usable shebang. Shell hooks still execute
+    directly and retain both requirements. This is Tier-A render proof for the
+    operator-facing contract; the hook execution behavior is pinned in PHPUnit.
+    """
+    body = webui.get(_HOOKS_PAGE).text.lower()
+    assert "dependency-derived" in body, "hooks help omits dependency-derived Python runtime"
+    assert "versioned interpreter" in body, "hooks help omits versioned Python interpreter"
+    assert "python hooks do not require" in body, "hooks help does not explain Python executable/shebang exemption"
+    assert "shell hooks still require" in body, "hooks help does not preserve shell executable/shebang requirement"
+    assert "chmod +x" not in body, "stale blanket chmod +x guidance still claims all hooks need executable bit"
 
 
 def test_update_page_cron_status_reports_harness_disable_flag(
