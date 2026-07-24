@@ -23,6 +23,7 @@ from __future__ import annotations
 import csv
 import errno
 import hashlib
+import io
 import itertools
 import json
 import logging
@@ -2799,9 +2800,8 @@ def get_details_dnsbl(
 
         timestamp = make_timestamp()
 
-        csv_line = ",".join(
-            "{}".format(v)
-            for v in (
+        csv_line = _csv_row(
+            (
                 "DNSBL-python",
                 timestamp,
                 q_name,
@@ -2832,9 +2832,8 @@ def _log_idn_alert(q_name: str, q_ip: str, idn_alert: tuple[Any, Any, str], q_ty
     feed, group, b_eval = idn_alert
     if q_ip == "Unknown":
         q_ip = "127.0.0.1"
-    csv_line = ",".join(
-        "{}".format(v)
-        for v in (
+    csv_line = _csv_row(
+        (
             "DNSBL-python",
             make_timestamp(),
             q_name,
@@ -2862,9 +2861,8 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
     """
     if q_ip == "Unknown":
         q_ip = "127.0.0.1"
-    csv_line = ",".join(
-        "{}".format(v)
-        for v in (
+    csv_line = _csv_row(
+        (
             "DNSBL-python",
             make_timestamp(),
             q_name,
@@ -2886,6 +2884,27 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
 
 def make_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _csv_row(fields: tuple[Any, ...]) -> str:
+    """Render one log row as an RFC4180 CSV line (no trailing newline).
+
+    issue #1648: ``q_name`` is attacker-influenced and may legally contain a
+    comma (0x2C is isgraph, left unescaped by the sldns presentation
+    encoding); a plain ``",".join()`` lets it shift every downstream column
+    when the PHP readers (``fgetcsv($h, 0, ',', '"', '')``) parse the line —
+    field/attribution forgery in Alerts/Reports. Mirror the PHP writer
+    ``pfb_asn_csv_fields()``: the csv "excel" dialect (QUOTE_MINIMAL,
+    double-quote doubling, no escape char) is the exact grammar those readers
+    parse, and CR/LF is normalized to a space FIRST so a row always stays ONE
+    physical line (the fgets/tail -r readers rely on this). Comma-free rows
+    are byte-identical to the historical bare-join format.
+    """
+    buf = io.StringIO()
+    csv.writer(buf, lineterminator="\n").writerow(
+        "{}".format(v).replace("\r\n", " ").replace("\r", " ").replace("\n", " ") for v in fields
+    )
+    return buf.getvalue()[:-1]
 
 
 def _log_entry_direct(line: str, log: str) -> None:
@@ -3139,9 +3158,7 @@ def get_details_reply(
 
     timestamp = make_timestamp()
 
-    csv_line = ",".join(
-        "{}".format(v) for v in ("DNS-reply", timestamp, m_type, o_type, q_type, ttl, q_name, q_ip, r_addr, iso_code)
-    )
+    csv_line = _csv_row(("DNS-reply", timestamp, m_type, o_type, q_type, ttl, q_name, q_ip, r_addr, iso_code))
     pfb_log("/var/log/pfblockerng/dns_reply.log", csv_line)
 
     return True
