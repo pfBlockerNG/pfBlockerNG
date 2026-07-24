@@ -206,6 +206,21 @@ PAGE_TABLE: tuple[Page, ...] = (
     # Entries'), stable regardless of the tab restructure. The sub-tab nav itself is pinned by
     # test_update_hooks_subtab_relocation.
     Page("hooks", "/pfblockerng/pfblockerng_hooks.php", ("Update Hooks", "Hook Entries")),
+    # issue #1669 Part B / ADR-12 post-acceptance addendum: the gated "Edit Hooks" hook-script
+    # authoring editor, the Update sub-tab directly after Hooks. The smoke session is always
+    # authenticated as admin, so the in-page isAllowedPage('diag_command.php') secondary gate's
+    # uid-0 short-circuit passes and the page renders (the gate's OWN behaviour -- redirecting a
+    # non-privileged user -- is pinned off-box by EditHooksPageWiringTest, not here; building a
+    # restricted-user smoke session is disproportionate, same call as SoftwareAddTabTest's
+    # documented limitation). Markers: the "Advanced Users Only" root-warning banner heading (the
+    # load-bearing manual equivalent of diag_command.php's own callout, since this page is
+    # deliberately absent from pfblockerng.priv.inc so the generic WARN-tag mechanism never fires
+    # here) and the "Edit Hooks" tab/breadcrumb label plus the picker section title.
+    Page(
+        "edit_hooks",
+        "/pfblockerng/pfblockerng_edit_hooks.php",
+        ("Advanced Users Only", "Edit Hooks", "Load an Existing Hook Script"),
+    ),
     # The dashboard widget (auth-gated; $nocsrf=true). A direct GET renders the alias-table panel
     # whose hidden inputs (id="pfblockerngack") are a stable marker; the AJAX getNew* paths need a
     # query param, so the plain GET exercises the full-render branch. "Show Aggregated Aliases" is

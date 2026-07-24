@@ -1,0 +1,262 @@
+<?php
+
+declare(strict_types=1);
+
+use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * issue #1669 Part B / ADR-12 post-acceptance addendum (2026-07-24) — behavioural
+ * coverage for the three PURE decision helpers behind the gated "Edit Hooks" GUI
+ * hook-script editor (pfblockerng_edit_hooks.php): pfb_hook_editor_compose_filename(),
+ * pfb_hook_editor_path(), pfb_hook_editor_template(). The page uses ONLY these for
+ * every validation/path decision, so this is the load-bearing test class for the
+ * slice's hostile-input rows (this is SECURITY-SURFACE work: a new privilege gate
+ * plus a file-write path, so every row here is a tested contract, not a nicety).
+ */
+#[CoversFunction('pfb_hook_editor_compose_filename')]
+#[CoversFunction('pfb_hook_editor_path')]
+#[CoversFunction('pfb_hook_editor_template')]
+final class HookEditorHelpersTest extends TestCase
+{
+	private string $dir = '';
+
+	protected function setUp(): void
+	{
+		$this->dir = sys_get_temp_dir() . '/pfb_hook_editor_' . uniqid('', TRUE);
+		mkdir($this->dir, 0755, TRUE);
+	}
+
+	protected function tearDown(): void
+	{
+		foreach (glob("{$this->dir}/*") ?: [] as $path) {
+			is_link($path) ? unlink($path) : @unlink($path);
+		}
+		@rmdir($this->dir);
+		// The symlink-escape test also creates a sibling "outside" dir.
+		$outside = "{$this->dir}_outside";
+		if (is_dir($outside)) {
+			foreach (glob("{$outside}/*") ?: [] as $path) {
+				unlink($path);
+			}
+			rmdir($outside);
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// pfb_hook_editor_compose_filename()
+	// ------------------------------------------------------------------
+
+	public function testComposeRejectsPathTraversalCore(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', '../../etc/rc', 'sh'));
+	}
+
+	public function testComposeRejectsEmptyCore(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', '', 'sh'));
+	}
+
+	public function testComposeRejectsDottedCore(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', 'a.b', 'sh'));
+	}
+
+	public function testComposeRejectsUnicodeCore(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', "na\u{00EF}ve", 'sh'));
+	}
+
+	public function testComposeRejectsSpaceInCore(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', 'my hook', 'sh'));
+	}
+
+	/**
+	 * Coordinator gate finding F1 (2026-07-24, security-surface hostile-input miss):
+	 * a bare '/^[A-Za-z0-9_]+$/' anchors '$' before a single trailing "\n" in PCRE
+	 * (not just at the true end of the subject), so 'x' . "\n" WOULD PASS the old
+	 * regex — composing 'hook_pre_x\n.sh' and letting the create-flow write a file
+	 * whose basename carries an embedded LF. '\A...\z' has no such special case, so
+	 * every row here must be rejected once the helper uses '\A[A-Za-z0-9_]{1,200}\z'.
+	 */
+	public function testComposeRejectsTrailingNewlineCore(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', "x\n", 'sh'));
+	}
+
+	public function testComposeRejectsLeadingNewlineCore(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', "\nx", 'sh'));
+	}
+
+	public function testComposeRejectsTrailingCarriageReturnCore(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', "x\r", 'sh'));
+	}
+
+	public function testComposeRejectsTrailingCrlfCore(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', "x\r\n", 'sh'));
+	}
+
+	public function testComposeRejectsInvalidWhen(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('both', 'myhook', 'sh'));
+		$this->assertNull(pfb_hook_editor_compose_filename('other', 'myhook', 'sh'));
+	}
+
+	/**
+	 * EXPLICIT: PHP is never an offered hook language (ADR-12 addendum -- the owner
+	 * resolved the issue #1669 language fork against widening the runner's
+	 * accepted-extension contract to .php).
+	 */
+	public function testComposeRejectsPhpLanguage(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', 'myhook', 'php'));
+	}
+
+	public function testComposeRejectsUnknownLanguage(): void
+	{
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', 'myhook', 'rb'));
+	}
+
+	public function testComposeAccepts200CharCore(): void
+	{
+		$core = str_repeat('a', 200);
+		$this->assertSame('hook_pre_' . $core . '.sh', pfb_hook_editor_compose_filename('pre', $core, 'sh'));
+	}
+
+	public function testComposeRejectsCoreOver200Chars(): void
+	{
+		$core = str_repeat('a', 201);
+		$this->assertNull(pfb_hook_editor_compose_filename('pre', $core, 'sh'));
+	}
+
+	public function testComposeAcceptsUppercaseCore(): void
+	{
+		$this->assertSame('hook_post_MyHook.py', pfb_hook_editor_compose_filename('post', 'MyHook', 'py'));
+	}
+
+	public function testComposeAcceptsUnderscoreCore(): void
+	{
+		$this->assertSame('hook_pre_my_hook_1.sh', pfb_hook_editor_compose_filename('pre', 'my_hook_1', 'sh'));
+	}
+
+	// ------------------------------------------------------------------
+	// pfb_hook_editor_path()
+	// ------------------------------------------------------------------
+
+	public function testPathRejectsParentTraversal(): void
+	{
+		$this->assertNull(pfb_hook_editor_path('../hook_pre_x.sh', $this->dir));
+	}
+
+	public function testPathRejectsNestedSubdirectory(): void
+	{
+		$this->assertNull(pfb_hook_editor_path('hooks2/hook_pre_x.sh', $this->dir));
+	}
+
+	public function testPathRejectsAbsolutePath(): void
+	{
+		$this->assertNull(pfb_hook_editor_path('/etc/passwd', $this->dir));
+	}
+
+	public function testPathRejectsEmptyBasename(): void
+	{
+		$this->assertNull(pfb_hook_editor_path('', $this->dir));
+	}
+
+	public function testPathAcceptsPlainBasenameInRealDir(): void
+	{
+		$target = "{$this->dir}/hook_pre_x.sh";
+		file_put_contents($target, "#!/bin/sh\necho hi\n");
+
+		$resolved = pfb_hook_editor_path('hook_pre_x.sh', $this->dir);
+		$this->assertNotNull($resolved);
+		$this->assertSame(realpath($target), $resolved);
+	}
+
+	public function testPathAcceptsNotYetExistingBasenameForCreateFlow(): void
+	{
+		$resolved = pfb_hook_editor_path('hook_pre_new.sh', $this->dir);
+		$this->assertSame(realpath($this->dir) . '/hook_pre_new.sh', $resolved);
+	}
+
+	public function testPathRejectsSymlinkEscapingTheDirectory(): void
+	{
+		$outside = "{$this->dir}_outside";
+		mkdir($outside, 0755, TRUE);
+		$real_target = "{$outside}/secret.sh";
+		file_put_contents($real_target, "#!/bin/sh\necho leaked\n");
+
+		$link = "{$this->dir}/hook_pre_escape.sh";
+		$this->assertTrue(symlink($real_target, $link), 'test setup: failed to create escape symlink');
+
+		$this->assertNull(pfb_hook_editor_path('hook_pre_escape.sh', $this->dir));
+	}
+
+	public function testPathRejectsWhenDirectoryDoesNotExist(): void
+	{
+		$this->assertNull(pfb_hook_editor_path('hook_pre_x.sh', "{$this->dir}/does-not-exist"));
+	}
+
+	// ------------------------------------------------------------------
+	// pfb_hook_editor_template()
+	// ------------------------------------------------------------------
+
+	/**
+	 * The full PFB_* inventory pfb_run_hooks() actually exports, pinned here from the
+	 * source (pfblockerng.inc pfb_run_hooks()/pfb_hook_lifecycle_ctx(), the pre/post
+	 * call sites in pfblockerng_apply.inc, and the "Environment" help text on
+	 * pfblockerng_hooks.php) — NOT copied from memory/the issue body, which listed
+	 * only 7 of these 10. A future runner var added without a template update fails
+	 * this test because it is pinned independently here, not derived from production.
+	 */
+	private const EXPECTED_ENV_VARS = [
+		'PFB_WHEN', 'PFB_TRIGGER', 'PFB_POST_INSTALL', 'PFB_PRE_UNINSTALL', 'PFB_PKG_OP',
+		'PFB_IP_CHANGED', 'PFB_DNSBL_CHANGED', 'PFB_STATUS', 'PFB_CHANGED_IP_ALIASES', 'PFB_CHANGED_DNSBL_GROUPS',
+	];
+
+	public function testShellTemplateContainsEveryEnvVar(): void
+	{
+		$tpl = pfb_hook_editor_template('pre', 'sh');
+		foreach (self::EXPECTED_ENV_VARS as $var) {
+			$this->assertStringContainsString($var, $tpl, "sh template is missing {$var}");
+		}
+	}
+
+	public function testPythonTemplateContainsEveryEnvVar(): void
+	{
+		$tpl = pfb_hook_editor_template('post', 'py');
+		foreach (self::EXPECTED_ENV_VARS as $var) {
+			$this->assertStringContainsString($var, $tpl, "py template is missing {$var}");
+		}
+	}
+
+	public function testShellTemplateHasShShebangAndHelloWorldUsesVar(): void
+	{
+		$tpl = pfb_hook_editor_template('pre', 'sh');
+		$this->assertStringStartsWith("#!/bin/sh\n", $tpl);
+		$this->assertStringContainsString('${PFB_WHEN}', $tpl);
+		$this->assertStringContainsString('${PFB_TRIGGER}', $tpl);
+	}
+
+	public function testPythonTemplateHasPythonShebangAndHelloWorldUsesVar(): void
+	{
+		$tpl = pfb_hook_editor_template('post', 'py');
+		$this->assertStringStartsWith('#!', $tpl);
+		$this->assertStringContainsString('import os', $tpl);
+		$this->assertStringContainsString("os.environ.get('PFB_WHEN')", $tpl);
+	}
+
+	public function testTemplateDocumentsFailureSemantics(): void
+	{
+		$tpl = pfb_hook_editor_template('pre', 'sh');
+		$this->assertStringContainsString('non-zero exit', $tpl);
+		$this->assertStringContainsString('timeout', $tpl);
+		$this->assertStringContainsString('CONTINUES', $tpl);
+		$this->assertStringContainsString('SIGTERM', $tpl);
+		$this->assertStringContainsString('SIGKILL', $tpl);
+	}
+}

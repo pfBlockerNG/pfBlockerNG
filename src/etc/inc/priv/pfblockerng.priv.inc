@@ -22,6 +22,18 @@
 
 global $priv_list;
 
+// issue #1669 Part B / ADR-12 post-acceptance addendum (2026-07-24): DELIBERATELY do
+// NOT add "pfblockerng/pfblockerng_edit_hooks.php*" to page-firewall-pfblockerng's
+// match list below. That page (the gated "Edit Hooks" hook-script authoring editor)
+// is guarded by its own in-page isAllowedPage('diag_command.php') check instead --
+// only 'page-all' / a full admin can ever reach it, because with no match entry here
+// no scoped pfBlockerNG-page privilege routes a request to that URL through pfSense's
+// own framework guard at all. This keeps the ADR-12 addendum's picker-trust-boundary
+// guarantee: a user holding only the ordinary pfBlockerNG page privileges stays unable
+// to author or edit hook content -- they can still PICK a vetted file on the Hooks tab
+// (pfblockerng_hooks.php, matched below, unchanged). Pinned by
+// EditHooksPageWiringTest::testPrivIncDoesNotMatchThisPage() -- do not "complete" this
+// list by adding the edit-hooks page.
 $priv_list['page-firewall-pfblockerng'] = array();
 $priv_list['page-firewall-pfblockerng']['name'] = gettext("WebCfg - Firewall: pfBlockerNG");
 $priv_list['page-firewall-pfblockerng']['descr'] = gettext("Allow access to pfBlockerNG package gui");

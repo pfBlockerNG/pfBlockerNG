@@ -4250,6 +4250,173 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 	}
 }
 
+// ---------------------------------------------------------------------------
+// issue #1669 Part B / ADR-12 post-acceptance addendum (2026-07-24) — pure
+// decision helpers for the gated "Edit Hooks" GUI hook-script editor
+// (pfblockerng_edit_hooks.php). Pure logic lives here (house precedent: the
+// setup-wizard decision helpers, pfblockerng.inc:3763) so it is covered by the
+// fast PHPUnit tier (tests/php/HookEditorHelpersTest.php) instead of only the
+// page. The page uses ONLY these three functions for every validation/path
+// decision -- it never inlines a regex or a path check of its own.
+// ---------------------------------------------------------------------------
+
+/*
+ * Compose the on-disk filename for a NEW hook script from the create-flow's three
+ * fields, or return NULL if any of them is invalid. Never trusts a client-supplied
+ * filename -- the caller only ever gets a name THIS function built.
+ *
+ *   $when -- 'pre' | 'post' (the fire point / file-prefix), anything else -> NULL.
+ *   $core -- the user-chosen name core, word characters only (^[A-Za-z0-9_]+$,
+ *            issue #1669 design comment). Empty, containing anything outside that
+ *            class (including whitespace or non-ASCII), or longer than 200 bytes
+ *            -> NULL. The 200-byte bound is a sanity cap, not a filesystem limit:
+ *            FreeBSD NAME_MAX is 255 bytes and the composed name's fixed overhead
+ *            ('hook_pre_' + '.py') is at most 12 bytes, so 200 leaves headroom
+ *            while still rejecting a pathological value.
+ *   $lang -- 'sh' | 'py' (also the file extension). ADR-12 addendum: PHP is NOT
+ *            offered (the owner resolved the issue #1669 language fork against
+ *            widening the runner's accepted-extension contract) -- 'php' or any
+ *            other value -> NULL.
+ *
+ * On success returns 'hook_<when>_<core>.<lang>' -- a bare basename, matching
+ * exactly the hook_<when>_*.{sh,py} pattern pfb_hook_scripts()/
+ * pfb_hook_script_valid() already gate on, so a composed name is always one the
+ * picker will also offer once it exists on disk.
+ */
+function pfb_hook_editor_compose_filename(string $when, string $core, string $lang): ?string {
+	if ($when !== 'pre' && $when !== 'post') {
+		return NULL;
+	}
+	if ($lang !== 'sh' && $lang !== 'py') {
+		return NULL;
+	}
+	// \A...\z, never bare ^...$: PCRE's bare '$' matches not only at the true end of
+	// the subject but also just BEFORE a single trailing "\n" -- so a core of
+	// "x\n" would pass '^[A-Za-z0-9_]+$' and compose 'hook_pre_x\n.sh', letting the
+	// create flow write a basename with an embedded LF (coordinator gate finding F1,
+	// 2026-07-24). '\A' and '\z' anchor to the absolute start/end only, with no such
+	// special case, so a trailing newline (or anything else outside the class) is
+	// rejected outright. The length bound is folded into the same pattern via
+	// {1,200} rather than a separate strlen() check, so there is exactly one
+	// anchored match to reason about.
+	if ($core === '' || preg_match('/\A[A-Za-z0-9_]{1,200}\z/', $core) !== 1) {
+		return NULL;
+	}
+	return "hook_{$when}_{$core}.{$lang}";
+}
+
+/*
+ * Resolve $basename to a safe absolute path inside $dir (default
+ * PFB_HOOK_SCRIPT_DIR), or return NULL if it is not safe. $dir is overridable so
+ * the off-appliance unit tests can point at a fixture directory (mirrors
+ * pfb_hook_scripts()'s own $dir seam).
+ *
+ * Containment (mirrors the runner's own checks, pfblockerng.inc pfb_hook_scripts()
+ * / the pfb_run_hooks() exec path):
+ *   1. $basename must equal basename($basename) -- rejects any path separator,
+ *      '../' traversal, or an absolute path BEFORE touching the filesystem.
+ *   2. $dir must resolve (realpath()) to a real directory.
+ *   3. If a file already exists at the candidate path, it must realpath() to
+ *      something that is STILL directly inside the resolved directory
+ *      (dirname($real) === $real_dir) and be a regular file -- a symlink that
+ *      escapes the directory resolves elsewhere and is rejected. A candidate that
+ *      does not exist yet (the create flow, writing a brand-new file) has nothing
+ *      on disk to walk a symlink through, so step 1's basename-equality check is
+ *      the only defence needed there, and the not-yet-existing path is returned.
+ */
+function pfb_hook_editor_path(string $basename, ?string $dir = null): ?string {
+	if ($basename === '' || basename($basename) !== $basename) {
+		return NULL;
+	}
+	if ($dir === NULL) {
+		$dir = PFB_HOOK_SCRIPT_DIR;
+	}
+	$real_dir = realpath($dir);
+	if ($real_dir === FALSE) {
+		return NULL;
+	}
+	$candidate = $real_dir . '/' . $basename;
+	if (!file_exists($candidate)) {
+		return $candidate;
+	}
+	$real = realpath($candidate);
+	if ($real === FALSE || dirname($real) !== $real_dir || !is_file($real)) {
+		return NULL;
+	}
+	return $real;
+}
+
+/*
+ * The PFB_* env-var names pfb_run_hooks() exports, as pinned by the runner source
+ * (pfblockerng.inc pfb_run_hooks() + pfb_hook_lifecycle_ctx() + the pre/post call
+ * sites in pfblockerng_apply.inc) and documented verbatim on the Hooks tab
+ * (pfblockerng_hooks.php "Environment" help section). Fired on EVERY hook (pre and
+ * post): WHEN, TRIGGER, POST_INSTALL, PRE_UNINSTALL, PKG_OP. Fired on POST hooks
+ * only (nothing has changed yet when a pre hook runs): IP_CHANGED, DNSBL_CHANGED,
+ * STATUS, CHANGED_IP_ALIASES, CHANGED_DNSBL_GROUPS. Kept as one flat list here (the
+ * template does not need the pre/post split) -- do NOT touch the runner to make
+ * this "generated"; it is a pinned enumeration reviewed against the source above.
+ */
+const PFB_HOOK_EDITOR_ENV_VARS = [
+	'PFB_WHEN', 'PFB_TRIGGER', 'PFB_POST_INSTALL', 'PFB_PRE_UNINSTALL', 'PFB_PKG_OP',
+	'PFB_IP_CHANGED', 'PFB_DNSBL_CHANGED', 'PFB_STATUS', 'PFB_CHANGED_IP_ALIASES', 'PFB_CHANGED_DNSBL_GROUPS',
+];
+
+/*
+ * Pre-filled template body for a NEW hook script, language-appropriate ($lang
+ * 'sh' | 'py'; an unrecognised value falls back to the 'sh' shape so this never
+ * throws). Documents the hook contract (env vars + failure semantics) as a
+ * reminder, then a hello-world body that fires the log using one of the vars
+ * (issue #1669 design comment). $when is folded into the header text only (which
+ * fire point this particular file is being created as); it does not change which
+ * vars are documented -- the full contract applies to every hook file.
+ */
+function pfb_hook_editor_template(string $when, string $lang): string {
+	$when_label = ($when === 'pre' || $when === 'post') ? $when : 'pre|post';
+
+	$contract = "pfBlockerNG update hook (ADR-12) -- created as a '{$when_label}' hook.\n" .
+		"\n" .
+		"Fires as root during the pfBlockerNG update pass. A non-zero exit OR a timeout\n" .
+		"is LOGGED and the update CONTINUES -- a hook can never abort or stall an\n" .
+		"update. A hook that hangs is SIGTERM'd at its configured timeout, then\n" .
+		"SIGKILL'd after a short grace period.\n" .
+		"\n" .
+		"Environment (set on every hook):\n" .
+		"  PFB_WHEN               -- fire point: pre | post\n" .
+		"  PFB_TRIGGER            -- cron | update | force-reload\n" .
+		"  PFB_POST_INSTALL       -- 1 on the post-install/upgrade resync, else 0\n" .
+		"  PFB_PRE_UNINSTALL      -- 1 on the pre-deinstall teardown, else 0\n" .
+		"  PFB_PKG_OP             -- install|upgrade|reinstall|delete, or '' outside a pkg op\n" .
+		"\n" .
+		"Set on 'post' hooks only (nothing has changed yet when 'pre' runs):\n" .
+		"  PFB_IP_CHANGED         -- 1 if the IP/firewall side changed this pass, else 0\n" .
+		"  PFB_DNSBL_CHANGED      -- 1 if the DNSBL side changed this pass, else 0\n" .
+		"  PFB_STATUS             -- overall pass status (currently always 'ok')\n" .
+		"  PFB_CHANGED_IP_ALIASES   -- space-separated pfB_* aliases updated this pass\n" .
+		"  PFB_CHANGED_DNSBL_GROUPS -- space-separated DNSBL_* groups updated this pass\n";
+
+	if ($lang === 'py') {
+		// env-based, versioned shebang: pfSense ships python3.11 with NO unversioned
+		// 'python3' symlink, so a bare '#!/usr/bin/env python3' is an rc=127 footgun
+		// here -- the version must be spelled out. (This is a template string for a
+		// hook SCRIPT the OS execs directly via its own shebang -- not this package
+		// invoking an appliance interpreter itself; see scripts/check_appliance_python.py.)
+		$header = "#!/usr/bin/env python3.11\n" .
+			"# NOTE: verify the interpreter version above matches this box's installed python3\n" .
+			"# (pfSense CE ships python3.11 with no unversioned 'python3' symlink).\n";
+		$comment = "#\n# " . str_replace("\n", "\n# ", rtrim($contract)) . "\n#\n";
+		$body = "import os\n" .
+			"\n" .
+			"print(\"Firing {} hook (trigger: {})\".format(os.environ.get('PFB_WHEN'), os.environ.get('PFB_TRIGGER')))\n";
+		return $header . $comment . "\n" . $body;
+	}
+
+	$header = "#!/bin/sh\n";
+	$comment = "#\n# " . str_replace("\n", "\n# ", rtrim($contract)) . "\n#\n";
+	$body = "echo \"Firing \${PFB_WHEN} hook (trigger: \${PFB_TRIGGER})\"\n";
+	return $header . $comment . "\n" . $body;
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:
