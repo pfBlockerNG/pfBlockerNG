@@ -139,7 +139,8 @@ final class LogFormatConsumersTest extends TestCase
 		$domain = escapeshellarg(',' . $host . ',');
 
 		$data = [];
-		exec("/usr/bin/tail -n50 {$log} | /usr/bin/grep -F -- {$domain} | /usr/bin/grep {$now} | /usr/bin/tail -1", $data, $retval);
+		$logArg = escapeshellarg($log);
+		exec("/usr/bin/tail -n50 {$logArg} | /usr/bin/grep -F -- {$domain} | /usr/bin/grep {$now} | /usr/bin/tail -1", $data, $retval);
 		$this->assertSame(0, $retval, 'the reproduced pipeline must exit 0');
 		$this->assertNotEmpty($data, 'the ISO-format log line must be found by the rebuilt grep key (green)');
 
@@ -214,7 +215,7 @@ final class LogFormatConsumersTest extends TestCase
 		// index.php's exact key construction, per host queried.
 		$pipelineFor = static fn (string $host): string => str_replace(
 			['/var/log/pfblockerng/dnsbl.log', '{$domain}', '{$now}'],
-			[$log, escapeshellarg(',' . $host . ','), $now],
+			[escapeshellarg($log), escapeshellarg(',' . $host . ','), $now],
 			$m[1]
 		);
 
