@@ -6,7 +6,7 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1669 Part B / ADR-12 post-acceptance addendum (2026-07-24) — behavioural
+ * issue #1669 — behavioural
  * coverage for the three PURE decision helpers behind the gated "Edit Hooks" GUI
  * hook-script editor (pfblockerng_edit_hooks.php): pfb_hook_editor_compose_filename(),
  * pfb_hook_editor_path(), pfb_hook_editor_template(). The page uses ONLY these for
@@ -75,8 +75,7 @@ final class HookEditorHelpersTest extends TestCase
 	}
 
 	/**
-	 * Coordinator gate finding F1 (2026-07-24, security-surface hostile-input miss):
-	 * a bare '/^[A-Za-z0-9_]+$/' anchors '$' before a single trailing "\n" in PCRE
+	 * A bare '/^[A-Za-z0-9_]+$/' anchors '$' before a single trailing "\n" in PCRE
 	 * (not just at the true end of the subject), so 'x' . "\n" WOULD PASS the old
 	 * regex — composing 'hook_pre_x\n.sh' and letting the create-flow write a file
 	 * whose basename carries an embedded LF. '\A...\z' has no such special case, so
@@ -170,7 +169,7 @@ final class HookEditorHelpersTest extends TestCase
 	}
 
 	/**
-	 * Coordinator gate finding F2 (2026-07-24, defense-in-depth): basename() keeps a
+	 * basename() keeps a
 	 * NUL byte in a PHP string (it is not a path-separator character), so
 	 * 'hook_pre_x\0.sh' passes the basename($b) === $b equality check unchanged and
 	 * would previously fall through to file_exists(), which silently returns false
@@ -279,7 +278,7 @@ final class HookEditorHelpersTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------
-	// pfb_hook_editor_lang_for() -- issue #1669 Part B slice B2: picks the CodeMirror 6
+	// pfb_hook_editor_lang_for() -- issue #1669: picks the CodeMirror 6
 	// hook-editor mode ('py' | 'sh') from the loaded script's own extension, falling
 	// back to the create-flow's typed Language choice when nothing is loaded yet.
 	// ------------------------------------------------------------------
@@ -319,10 +318,9 @@ final class HookEditorHelpersTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------
-	// pfb_hook_editor_normalize_content() -- second-pass review finding S1
-	// (2026-07-24): browser <textarea> form submission normalizes line endings to
-	// CRLF before POSTing, regardless of what the on-disk file or the user's editor
-	// used -- so the save handler must fold CRLF (and a lone CR) back to bare LF
+	// pfb_hook_editor_normalize_content() -- browser <textarea> form submission
+	// normalizes line endings to CRLF before POSTing, regardless of what the on-disk
+	// file or the user's editor used -- so the save handler must fold CRLF (and a lone CR) back to bare LF
 	// before persisting, or every GUI save turns the hook script's shebang line into
 	// "#!/bin/sh\r", which the kernel execs as a literal (nonexistent) "/bin/sh\r"
 	// interpreter path (ENOENT) -- the hook then silently never fires again.

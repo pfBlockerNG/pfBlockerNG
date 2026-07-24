@@ -5,7 +5,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1669 Part B / ADR-12 post-acceptance addendum (2026-07-24) — literal-source
+ * issue #1669 — literal-source
  * pins for the gated "Edit Hooks" hook-script editor page
  * (pfblockerng_edit_hooks.php). This is SECURITY-SURFACE work (a new privilege gate
  * plus a file-write path), so the gate SHAPE itself is pinned here at the source-text
@@ -39,7 +39,7 @@ final class EditHooksPageWiringTest extends TestCase
 	// ------------------------------------------------------------------
 
 	/**
-	 * Coordinator gate finding F2 (2026-07-24, test-oracle defect): the prior version
+	 * The prior version
 	 * of this oracle only scanned for '$_POST' occurrences AFTER the located gate, so
 	 * a mutant with a $_POST read BEFORE the gate (the gate moved below the
 	 * create-branch reads) still passed -- the "before any POST handling" requirement
@@ -121,7 +121,7 @@ final class EditHooksPageWiringTest extends TestCase
 
 		$target = 'pfblockerng/pfblockerng_edit_hooks.php';
 		foreach ($m[1] as $matchValue) {
-			// Coordinator gate finding F5 (2026-07-24, test-oracle defect): a bare
+			// A bare
 			// assertStringNotContainsString($matchValue) misses a FUTURE glob entry (e.g.
 			// "pfblockerng/pfblockerng_*") that would cover this page at RUNTIME under
 			// pfSense's own match semantics while never literally containing its filename
@@ -177,7 +177,7 @@ final class EditHooksPageWiringTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------
-	// Coordinator gate finding F1 (2026-07-24, behaviour bug): pfSense's own
+	// pfSense's own
 	// Form_Textarea::_getInput() / Form_Input::_getInput() ALREADY call
 	// htmlspecialchars() on the value at render (verified against pfSense master and
 	// RELENG_2_7_2) -- wrapping the value in htmlspecialchars() again at the PAGE
@@ -320,7 +320,7 @@ final class EditHooksPageWiringTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------
-	// Coordinator gate finding F4 (2026-07-24): the Create/Save buttons post the
+	// The Create/Save buttons post the
 	// action fields the server keys on DIRECTLY as their own submit name -- a
 	// clicked <button type="submit" name="pfb_eh_create"|"pfb_eh_save"> is included
 	// in the browser's OWN POST natively (no separate click-handler JS needed to
@@ -356,10 +356,10 @@ final class EditHooksPageWiringTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------
-	// Coordinator gate finding F3 (2026-07-24): the create flow must open the target
+	// The create flow must open the target
 	// with fopen 'x' (atomic create-exclusive, closing the file_exists/write TOCTOU),
 	// check the write byte count, and unlink the partial file on a failed write/chmod.
-	// Structural oracle (same shape as the F4 test): the page cannot run off-appliance,
+	// Structural oracle: the page cannot run off-appliance,
 	// so pin the source text of the create block instead.
 	// ------------------------------------------------------------------
 
@@ -385,6 +385,13 @@ final class EditHooksPageWiringTest extends TestCase
 			'/@?unlink\\(\\$path\\)/',
 			$src,
 			'a failed write/chmod must unlink the partial file so it never lingers for the picker or a retry'
+		);
+		$this->assertMatchesRegularExpression(
+			"/@?chmod\\(\\\$path,\\s*0700\\)/",
+			$src,
+			'the create flow must chmod the new hook file to 0700, not a laxer mode -- the runner always execs ' .
+				'it as root and pfb_hook_scripts() has no is_executable filter, so no group/other bits are ever ' .
+				'needed (owner-only is least privilege)'
 		);
 	}
 
@@ -452,13 +459,13 @@ final class EditHooksPageWiringTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------
-	// Second-pass review (PR #1686, 2026-07-24) findings S1/S2/S3: the save flow
-	// must (S1) normalize $_POST content to LF before it is ever written, and (S2)
+	// The save flow
+	// must normalize $_POST content to LF before it is ever written, and
 	// stage the write to a temp file in the same directory and rename() it into
 	// place atomically -- never truncate+write the live target in place, since
-	// pfb_run_hooks() may exec it as root concurrently with a save. S3: the GET
+	// pfb_run_hooks() may exec it as root concurrently with a save. The GET
 	// picker-load path must reject invalid-UTF-8 file content before populating the
-	// editor. Structural oracles (same shape as the F3/F4 tests above): the page
+	// editor. Structural oracles: the page
 	// cannot run off-appliance, so these pin the source-text shape of the blocks.
 	// ------------------------------------------------------------------
 
@@ -475,7 +482,7 @@ final class EditHooksPageWiringTest extends TestCase
 	{
 		$block = $this->extractSaveFlowBlock($this->readSource(self::PAGE_PATH));
 
-		// Delta re-review round 2 (2026-07-24): pin the CALL-shape assignment, not the
+		// Pin the CALL-shape assignment, not the
 		// bare function-name token -- the save block's own comment names the helper, so
 		// a substring assertion passes even with the call stripped (coverage theater;
 		// the mutant survived 19/19). A comment can never satisfy this assignment regex.
@@ -519,6 +526,12 @@ final class EditHooksPageWiringTest extends TestCase
 			$block,
 			'the save flow must never file_put_contents() the live target path directly (in-place truncate) -- ' .
 				'it must write the temp file and rename() it into place instead'
+		);
+		$this->assertMatchesRegularExpression(
+			'/@?chmod\\(\\$pfb_eh_tmp,\\s*0700\\)/',
+			$block,
+			'the save flow must chmod the temp file to 0700, not a laxer mode, before rename() -- same ' .
+				'least-privilege rationale as the create flow (root-only exec, no is_executable filter)'
 		);
 	}
 
