@@ -312,6 +312,25 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		];
 	}
 
+	/** Issue #1646: a write failure without a prior whitelist reports that none is available. */
+	public function testRecordWriteFailureWithoutPriorWhitelistWarnsNoListAvailable(): void
+	{
+		$this->assertFileDoesNotExist($this->whitelistPath(), 'before-state: no prior whitelist');
+		$this->assertNotFalse(file_put_contents($this->csvPath(), "1,example.com\n"), 'setup: valid top-1m.csv');
+
+		pfblockerng_top1m(NULL, [
+			'write' => static fn($stream, string $bytes) => FALSE,
+		]);
+
+		$this->assertFileDoesNotExist($this->whitelistPath(),
+			'a failed record write must not publish a new TOP1M whitelist');
+		$this->assertSame([], $this->tempFilesLeftBehind(), 'no staging file left after a failed first publication');
+		$this->assertStringContainsString('failed to write the new whitelist build', $this->readErrLog());
+		$this->assertStringContainsString('no TOP1M whitelist available', $this->readErrLog());
+		$this->assertStringNotContainsString('Parsed 1 lines', $this->readMainLog(),
+			'a failed first publication must not report success');
+	}
+
 	/** Issue #1646: the injected full-write boundary still publishes canonical bytes. */
 	public function testCompleteRecordWritePublishesCanonicalBytes(): void
 	{
