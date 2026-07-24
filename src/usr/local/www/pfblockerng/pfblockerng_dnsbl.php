@@ -650,7 +650,7 @@ if ($_POST) {
 		}
 
 		// Validate customlists
-		foreach (array(	'pfb_regex_list'	=> 'regex',
+		foreach (array(
 				'pfb_noaaaa_list'	=> 'domain',
 				'pfb_gp_bypass_list'	=> 'ip',
 				'suppression'		=> 'domain',
@@ -668,17 +668,6 @@ if ($_POST) {
 							$value = array_map('trim', preg_split('/(?=#)/', $line));
 
 							switch ($custom_format) {
-								case 'regex':
-									// Issue #1656: mirror the resolver's load-time guards so an
-									// entry pfb_unbound.py would silently drop (catastrophic
-									// backtracking shape / compile failure) is rejected on save
-									// instead. Non-ASCII is already validated above; a comment-only
-									// line yields an empty pattern and writes no [REGEX] ini entry.
-									$regex_error = ($value[0] !== '') ? pfb_dnsbl_regex_entry_error($value[0]) : '';
-									if ($regex_error !== '') {
-										$input_errors[] = "Customlist {$custom_type}: {$regex_error}: [ " . htmlspecialchars($line) . " ]";
-									}
-									break;
 								case 'hostname':
 									$value[0] = trim($value[0], '.');
 									if (empty(pfb_filter($value[0], PFB_FILTER_HOSTNAME, 'dnsbl'))) {
@@ -707,6 +696,9 @@ if ($_POST) {
 						}
 					}
 				}
+		}
+		foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_list'] ?? ''), pfb_python_interpreter()) as $regex_error) {
+			$input_errors[] = 'Customlist pfb_regex_list: ' . htmlspecialchars($regex_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 		}
 
 		// Validate DNSBL VIP address

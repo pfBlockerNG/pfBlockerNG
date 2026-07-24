@@ -227,8 +227,9 @@ $section->addInput(new Form_StaticText(
 	. sprintf(gettext('For security, a hook runs a script <strong>file you place on the firewall</strong>, not a command '
 		. 'typed here &mdash; this picker only selects from that folder. Create the script over SSH/console (root '
 		. 'shell) in <code>%1$s</code>, name it <code>hook_pre_<em>name</em>.sh</code> or '
-		. '<code>hook_post_<em>name</em>.sh</code> (<code>.sh</code> or <code>.py</code>), and make it executable '
-		. '(<code>chmod +x</code>, with a <code>#!</code> shebang). Only files matching that naming appear in the '
+		. '<code>hook_post_<em>name</em>.sh</code> (<code>.sh</code> or <code>.py</code>). The dependency-derived '
+		. 'versioned interpreter runs Python hooks; <strong>Python hooks do not require</strong> an executable bit or shebang; '
+		. '<strong>Shell hooks still require</strong> both. Only files matching that naming appear in the '
 		. 'list below for the matching Pre/Post. (Same picker model as the per-feed list scripts.)'), PFB_HOOK_SCRIPT_DIR)
 	. '</small>'
 ));

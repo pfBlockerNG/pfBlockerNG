@@ -26,8 +26,9 @@ _spec.loader.exec_module(cap)
 _APPLIANCE_PY = "/usr/local/bin/" + "python3"
 
 
-def _find(tmp_path: Path, content: str) -> list[Any]:
-    f = tmp_path / "sample.py"
+def _find(tmp_path: Path, content: str, relative_path: str = "sample.py") -> list[Any]:
+    f = tmp_path / relative_path
+    f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(content, encoding="utf-8")
     return cap.find_violations([f])
 
@@ -40,11 +41,28 @@ def test_flags_appliance_python_minus_c(tmp_path: Path) -> None:
     assert violations[0][1] == 1
 
 
-def test_flags_any_suffix(tmp_path: Path) -> None:
-    # python / python3 / python3.11 under the appliance bindir are all the same footgun.
-    for suffix in ("python", "python3", "python3.11"):
+def test_flags_any_literal_interpreter_path(tmp_path: Path) -> None:
+    for suffix in ("python", "python3", "python3.11", "python311", "python3x"):
         line = f'    vm.ssh("/usr/local/bin/{suffix} /tmp/x.py")\n'
         assert _find(tmp_path, line), f"/usr/local/bin/{suffix} should be flagged"
+
+
+def test_dependency_derived_interpreter_construction_is_allowed(tmp_path: Path) -> None:
+    prefix = "/usr/local/bin/" + "python"
+    line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
+    relative_path = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
+    assert _find(tmp_path, line, relative_path) == [], "resolver's dependency-derived construction must be allowed"
+
+
+def test_annotation_does_not_allow_literal_interpreter(tmp_path: Path) -> None:
+    line = f'    exec("{_APPLIANCE_PY}.11 /tmp/x.py"); // appliance-python-ok: dependency-derived\n'
+    assert _find(tmp_path, line), "annotation must not permit a literal interpreter invocation"
+
+
+def test_derived_construction_is_forbidden_outside_resolver_file(tmp_path: Path) -> None:
+    prefix = "/usr/local/bin/" + "python"
+    line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
+    assert _find(tmp_path, line), "dependency-derived construction must be confined to the resolver file"
 
 
 def test_clean_php_is_not_flagged(tmp_path: Path) -> None:

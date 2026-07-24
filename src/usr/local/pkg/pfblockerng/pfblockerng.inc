@@ -3947,6 +3947,54 @@ function pfb_pkg_installed_name(): string {
 }
 
 /*
+ * Resolve the package-provided Python interpreter. Direct dependencies use either
+ * py311 or python311 naming; module dependencies such as py311-sqlite3 are ignored.
+ * A supplied dependency list is a pure off-box/test path. The live path reads the
+ * installed package's direct dependencies once and fails closed when the resulting
+ * versioned interpreter is not executable.
+ */
+function pfb_python_interpreter(?array $dependencies = null): string {
+	$live_lookup = $dependencies === null;
+	static $live_result = null;
+	if ($live_lookup) {
+		if ($live_result !== null) {
+			return $live_result;
+		}
+		$pkgname = pfb_pkg_installed_name();
+		if ($pkgname === '') {
+			return $live_result = '';
+		}
+		$dependencies = array();
+		$ret = -1;
+		exec(escapeshellarg(PFB_PKG_BIN) . " query '%dn' " . escapeshellarg($pkgname) . ' 2>/dev/null', $dependencies, $ret);
+		if ($ret !== 0) {
+			return $live_result = '';
+		}
+	}
+
+	$versions = array();
+	foreach ($dependencies as $dependency) {
+		if (!is_string($dependency)
+			|| preg_match('/^(?:py|python)([0-9]+)$/', trim($dependency), $match) !== 1
+			|| strlen($match[1]) < 2) {
+			continue;
+		}
+		$version = $match[1][0] . '.' . substr($match[1], 1);
+		$versions[$version] = TRUE;
+	}
+	if (count($versions) !== 1) {
+		return $live_lookup ? ($live_result = '') : '';
+	}
+
+	$version = (string) array_key_first($versions);
+	$interpreter = '/usr/local/bin/python' . $version; // appliance-python-ok: dependency-derived
+	if ($live_lookup && !is_executable($interpreter)) {
+		return $live_result = '';
+	}
+	return $interpreter;
+}
+
+/*
  * The installed version of $pkgname via `pkg query '%v'`; '' when absent/failed.
  */
 function pfb_pkg_installed_version(string $pkgname): string {
@@ -4400,9 +4448,9 @@ function pfb_hook_scripts($when, $dir = null) {
 		// equal $real_dir so a symlink pointing outside the hook dir is excluded.
 		// is_file($real) rejects symlinks-to-directories.
 		// Executable bit is intentionally NOT gated here: presence as a regular
-		// file in the allowed dir is the authorization. A non-executable script
-		// will fail at run time (timeout(1) non-zero exit, logged by pfb_run_hooks),
-		// so the picker/validator authorize on containment + regular-file only.
+		// file in the allowed dir is the authorization. Python hooks run through
+		// the dependency-derived interpreter even when non-executable; a shell hook
+		// without its executable bit fails at run time and is logged by pfb_run_hooks.
 		$real = realpath($path);
 		if ($real === FALSE || dirname($real) !== $real_dir || !is_file($real)) {
 			continue;
@@ -4433,6 +4481,21 @@ function pfb_hook_script_valid($script, $when, $dir = null) {
 		return FALSE;
 	}
 	return array_key_exists($script, pfb_hook_scripts($when, $dir));
+}
+
+/*
+ * Build the command for an allow-listed hook. Python hooks are dispatched through
+ * the package's versioned interpreter because appliances do not promise a python3
+ * symlink; shell hooks retain their direct execution/shebang behavior.
+ */
+function pfb_hook_script_command(string $script, string $path, string $python): string {
+	if (str_ends_with($script, '.py')) {
+		return $python !== '' ? escapeshellarg($python) . ' ' . escapeshellarg($path) : '';
+	}
+	if (str_ends_with($script, '.sh')) {
+		return escapeshellarg($path);
+	}
+	return '';
 }
 
 /*
@@ -4691,6 +4754,7 @@ function pfb_run_hooks($when, $ctx = array()) {
 	if (empty($hooks)) {
 		return;	// No enabled hooks for this fire point: byte-identical no-op.
 	}
+	$python = null;
 
 	// Build the PFB_* env-var prefix shared by every hook of this run.
 	if (!is_array($ctx)) {
@@ -4741,6 +4805,14 @@ function pfb_run_hooks($when, $ctx = array()) {
 			continue;
 		}
 		$path = PFB_HOOK_SCRIPT_DIR . '/' . basename($script);
+		if (str_ends_with($script, '.py') && $python === null) {
+			$python = pfb_python_interpreter();
+		}
+		$hookcmd = pfb_hook_script_command($script, $path, (string) $python);
+		if ($hookcmd === '') {
+			pfb_logger("[ pfB Hook ] {$when} {$label} script '{$script}' has no usable Python interpreter; skipping\n", 2);
+			continue;
+		}
 
 		// The script basename is safe to log (a filename, not a command line that
 		// could carry inline secrets); it aids correlating the log to the file.
@@ -4749,8 +4821,8 @@ function pfb_run_hooks($when, $ctx = array()) {
 
 		// Run the vetted script as root under timeout(1): SIGTERM at $timeout,
 		// SIGKILL after the grace period. The PFB_* context rides the env prefix
-		// (the script reads it from the environment). The script runs via its own
-		// shebang + execute bit (the hook-script dir convention).
+		// (the script reads it from the environment). Shell scripts run via their own
+		// shebang + execute bit; Python scripts use the dependency-derived interpreter.
 		//
 		// Two independent reasons a hook that (re)starts a daemon -- e.g. the documented
 		// HAProxy graceful-reload recipe -- would otherwise hang the WHOLE pass for the
@@ -4782,7 +4854,7 @@ function pfb_run_hooks($when, $ctx = array()) {
 		$logtarget = pfb_run_log_target();
 		$logf = escapeshellarg($logtarget);
 		$cmd = "{$envprefix} /usr/bin/timeout --foreground -s TERM -k " . PFB_HOOK_KILL_GRACE .
-			" {$timeout} " . escapeshellarg($path) . " >> {$logf} 2>&1 < /dev/null";
+			" {$timeout} {$hookcmd} >> {$logf} 2>&1 < /dev/null";
 
 		// #693: the hook's own stdout/stderr goes to the log FILE above (never a pipe -- a hook
 		// that restarts a daemon would otherwise hang exec(), #662), so on the pkg Software page
@@ -4816,7 +4888,7 @@ function pfb_run_hooks($when, $ctx = array()) {
 				2 => array('file', $logtarget, 'a'),
 			);
 			$proccmd = "{$envprefix} /usr/bin/timeout --foreground -s TERM -k " .
-				PFB_HOOK_KILL_GRACE . " {$timeout} " . escapeshellarg($path);
+				PFB_HOOK_KILL_GRACE . " {$timeout} {$hookcmd}";
 			$pipes = array();
 			$proc  = @proc_open($proccmd, $descriptors, $pipes);
 
