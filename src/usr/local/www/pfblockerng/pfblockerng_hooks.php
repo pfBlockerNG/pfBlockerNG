@@ -197,11 +197,13 @@ $tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php'
 pfb_software_add_tab($tab_array);
 display_top_tabs($tab_array, TRUE);
 
-// Update sub-tabs: Run (update page) and Hooks (this page).
+// Update sub-tabs: Run (update page), Hooks (this page), and Edit Hooks (issue #1669
+// Part B: the gated hook-script authoring editor, directly after Hooks).
 // Second display_top_tabs row, matching the Feeds page IPv4/IPv6/DNSBL sub-tab idiom.
 $tab_array_sub	= array();
 $tab_array_sub[]	= array(gettext('Run'),		FALSE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array_sub[]	= array(gettext('Hooks'),	TRUE,	'/pfblockerng/pfblockerng_hooks.php');
+$tab_array_sub[]	= array(gettext('Edit Hooks'),	FALSE,	'/pfblockerng/pfblockerng_edit_hooks.php');
 display_top_tabs($tab_array_sub, TRUE);
 pfb_print_pending_changes_box();
 

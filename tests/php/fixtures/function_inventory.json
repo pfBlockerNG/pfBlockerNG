@@ -3483,6 +3483,73 @@
             }
         ]
     },
+    "pfb_hook_editor_compose_filename": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "when",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "core",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "lang",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_hook_editor_path": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "basename",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_hook_editor_template": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "when",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "lang",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_hook_lifecycle_ctx": {
         "returnsRef": false,
         "returnType": "array",
