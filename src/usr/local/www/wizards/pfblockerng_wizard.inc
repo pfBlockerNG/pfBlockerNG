@@ -31,15 +31,36 @@ global $pfb_wizard;
 $pfb_wizard['interface_list']		= pfb_build_if_list(TRUE, FALSE);
 $pfb_wizard['interface_list_cnt']	= count($pfb_wizard['interface_list']) ?: '1';
 
+// Persist the 'Do not show this again' choice ('disable' only; 'skip' is
+// session-only) so the setup wizard never auto-launches again. Stored outside
+// config/0 so a fresh, unconfigured install still reads as unconfigured
+// (config/0 == null) for the upgrade-migration paths in pfblockerng_install.inc.
+// Called only from pfb_wizard_skip_check(), inside the wizard's csrf-magic-
+// validated POST — the ?wizard= GET on pfblockerng_general.php must never
+// write config (issue #1651: csrf-magic validates POSTs only, so a
+// state-changing GET is CSRF-forgeable).
+function pfb_wizard_persist_disable(?string $action): void {
+	if ($action !== 'disable') {
+		return;
+	}
+	// foreign key — out of ADR-29 gateway scope (pfb_wizard_skip is not a /config/0 scalar)
+	config_set_path('installedpackages/pfblockerng/pfb_wizard_skip', 'on');
+	write_config('[pfBlockerNG] Disable setup wizard auto-launch');
+}
+
 // Exit the wizard when the 'Skip' button is pressed on any step. If the
-// 'Do not show this again' checkbox is ticked, persist the choice so the
-// wizard never auto-launches again ('disable'); otherwise skip for this
-// session only ('skip'). pfblockerng_general.php applies both actions.
+// 'Do not show this again' checkbox is ticked, persist the choice HERE — in
+// the csrf-magic-validated POST — so the wizard never auto-launches again
+// ('disable'); otherwise skip for this session only ('skip'). The redirect is
+// a plain GET and stays state-free (issue #1651); pfblockerng_general.php
+// only reads ?wizard= to suppress the auto-launch for that request.
 function pfb_wizard_skip_check() {
 	$action = pfb_wizard_skip_action($_POST ?: array());
 	if ($action === null) {
 		return;
 	}
+
+	pfb_wizard_persist_disable($action);
 
 	header("Location: /pfblockerng/pfblockerng_general.php?wizard={$action}");
 	exit;

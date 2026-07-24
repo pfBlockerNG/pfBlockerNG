@@ -3781,8 +3781,9 @@ function pfb_wizard_skip_action(array $post): ?string {
 
 /*
  * Normalise the ?wizard=<action> query parameter to the recognised set ('skip' |
- * 'disable'); NULL for anything else. Drives the persist-on-'disable' write and the
- * auto-launch suppression.
+ * 'disable'); NULL for anything else. Drives the auto-launch suppression only —
+ * the GET is state-free; the 'disable' persist happens in the wizard's
+ * csrf-magic-validated POST (pfb_wizard_persist_disable, issue #1651).
  */
 function pfb_wizard_get_action(array $get): ?string {
 	$action = $get['wizard'] ?? '';
