@@ -1609,9 +1609,34 @@ function pfb_settings_snapshot_create(
 			'payload_sha256' => $checksum,
 		], JSON_THROW_ON_ERROR);
 		$head_temp = $dir . '/.head.' . bin2hex(random_bytes(8)) . '.tmp';
-		if (!safe_write_file($head_temp, $head, TRUE) || !chmod($head_temp, 0600) || !rename($head_temp, $dir . '/head.json')) {
-			@unlink($head_temp);
-			throw new RuntimeException('unable to publish settings snapshot head');
+		try {
+			if (!safe_write_file($head_temp, $head, TRUE) || !chmod($head_temp, 0600)) {
+				throw new RuntimeException('unable to publish settings snapshot head');
+			}
+			$head_stat = lstat($head_temp);
+			if ($head_stat === FALSE || !is_file($head_temp) || is_link($head_temp) || $head_stat['nlink'] !== 1
+				|| (($head_stat['mode'] & 0777) !== 0600)) {
+				throw new RuntimeException('unsafe settings snapshot head');
+			}
+			$head_data = json_decode((string) file_get_contents($head_temp), TRUE, 512, JSON_THROW_ON_ERROR);
+			if (!is_array($head_data) || array_keys($head_data) !== ['family', 'snapshot', 'payload_sha256']
+				|| $head_data['family'] !== $family || !is_string($head_data['snapshot'])
+				|| basename($head_data['snapshot']) !== $head_data['snapshot'] || $head_data['snapshot'] !== basename($path)
+				|| $head_data['payload_sha256'] !== $checksum) {
+				throw new RuntimeException('settings snapshot head metadata mismatch');
+			}
+			$head_snapshot = $dir . '/' . $head_data['snapshot'];
+			_pfb_settings_path($root, $family, $head_snapshot);
+			pfb_settings_snapshot_read($family, $head_snapshot, $package_name, $package_version, $root);
+			if (!rename($head_temp, $dir . '/head.json')) {
+				throw new RuntimeException('unable to publish settings snapshot head');
+			}
+		} catch (JsonException) {
+			throw new RuntimeException('invalid settings snapshot head');
+		} finally {
+			if (is_file($head_temp)) {
+				@unlink($head_temp);
+			}
 		}
 		return [
 			'path' => $path,
