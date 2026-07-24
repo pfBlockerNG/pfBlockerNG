@@ -84,7 +84,7 @@ final class DownloadRetvalFailsafeTest extends TestCase
 	{
 		$count = substr_count(self::$body, ', $output, $retval)');
 		$this->assertGreaterThanOrEqual(4, $count,
-			"expected >= 4 exec(...,\$output,\$retval) sites (gzip-default/asn/top1m, bzip2, zip-pipeline, 7z); found {$count}");
+			"expected >= 4 exec(...,\$output,\$retval) sites (gzip-default/asn/top1m, bzip2, zip-pipeline); found {$count}");
 	}
 
 	// -----------------------------------------------------------------------
