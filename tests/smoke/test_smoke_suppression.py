@@ -29,7 +29,7 @@ in the same pass), not working around the fixed bug.
 
 Scenarios D and E cover a THIRD mechanism gated by the same Suppression checkbox
 (``$pfb['supp'] == 'on'``) but otherwise unrelated to the carve engines above --
-``sanitize_ipaddr()``/``sanitize_ipaddr_v6()``'s per-line reserved-class drop and
+``sanitize_ipaddr()``/``pfb_sanitize_ipaddr_v6()``'s per-line reserved-class drop and
 the per-category IPv6 CIDR floor (issue #760 §1/§3). They reuse this module's
 ``deployed_vm``/``_clean_suppression`` infra (the Suppression checkbox + the
 ``IpCase``/``inject_ip_lists`` plumbing) rather than a new module, since that
@@ -67,7 +67,7 @@ DENYDIR = f"{h.PFB_DBDIR}/deny"
 # NOTE (issue #760): these used to be RFC 5737/3849 documentation addresses, matching
 # the smoke-fixture convention (tests/smoke/fixtures/README.md). Every test in this
 # module runs with the global Suppression checkbox ON (``_set_suppression``), and
-# issue #760 §1 made ``sanitize_ipaddr()``/``sanitize_ipaddr_v6()`` drop documentation
+# issue #760 §1 made ``sanitize_ipaddr()``/``pfb_sanitize_ipaddr_v6()`` drop documentation
 # space UNCONDITIONALLY whenever Suppression is on -- so RFC 5737/3849 fixture data
 # would now be silently dropped before ever reaching the pf table, breaking every
 # BEFORE-state assertion in this module. Switched to public, non-reserved space
@@ -468,7 +468,7 @@ def test_suppression_drops_reserved_classes_keeps_public(deployed_vm: SmokeVM) -
     """Under Suppression, a feed's RESERVED-CLASS entries (documentation, multicast,
     NAT64, CGN) are dropped OUTRIGHT at parse time -- issue #760 §1's "IPv6
     suppression is thinner" gap. Unlike Scenarios A-C, this is not the
-    suppression-LIST carve engine: ``sanitize_ipaddr()``/``sanitize_ipaddr_v6()``
+    suppression-LIST carve engine: ``sanitize_ipaddr()``/``pfb_sanitize_ipaddr_v6()``
     (``pfblockerng.inc`` ~8018-8028 v4, ~8090-8097 v6) drop these classes
     unconditionally whenever Suppression is on, with no suppression-list entry
     needed.

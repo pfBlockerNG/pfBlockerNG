@@ -14,7 +14,7 @@ shadow them) and NEVER HSTS-preload names (HSTS forces a VIP block to NULL).
 **Exception (issue #760):** a fixture exercised under the global Suppression
 checkbox ON (`tests/smoke/test_smoke_suppression.py`) must NOT use RFC
 5737/3849/2544/6598 (or any other reserved-class) address — `sanitize_ipaddr()`/
-`sanitize_ipaddr_v6()` drop those classes unconditionally whenever Suppression is
+`pfb_sanitize_ipaddr_v6()` drop those classes unconditionally whenever Suppression is
 on, which would silently empty the fixture before it ever reached the pf table.
 Those fixtures use public, non-reserved space instead — arbitrary octets/hextets
 (e.g. `81.169.0.0/16`, `2606:4700::/32`), chosen only as inert content, never
@@ -134,7 +134,7 @@ throughout, per the issue #760 exception above.
 ## IP reserved-class / CIDR-floor fixtures (issue #760, `IpCase`, `test_smoke_suppression.py`)
 
 Scenarios D/E of the same module -- a THIRD Suppression-gated mechanism, distinct from the
-carve engine above: `sanitize_ipaddr()`/`sanitize_ipaddr_v6()`'s unconditional reserved-class
+carve engine above: `sanitize_ipaddr()`/`pfb_sanitize_ipaddr_v6()`'s unconditional reserved-class
 drop (§1) and the per-category IPv6 CIDR floor `suppression_cidr_v6` (§3).
 
 | File | Contents | Purpose |

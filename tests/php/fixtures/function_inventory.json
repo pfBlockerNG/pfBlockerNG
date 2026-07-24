@@ -5927,19 +5927,6 @@
             }
         ]
     },
-    "pfb_reload_option_value": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": [
-            {
-                "name": "value",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            }
-        ]
-    },
     "pfb_reload_unbound": {
         "returnsRef": false,
         "returnType": null,
@@ -7436,33 +7423,6 @@
         "returnsRef": false,
         "returnType": "bool",
         "params": []
-    },
-    "pfb_unbound_py_atomic_copy": {
-        "returnsRef": false,
-        "returnType": "bool",
-        "params": [
-            {
-                "name": "source",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "path",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "stream_ops",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": "array (\n)"
-            }
-        ]
     },
     "pfb_unbound_py_atomic_write": {
         "returnsRef": false,
@@ -9067,33 +9027,6 @@
                 "variadic": false,
                 "type": null,
                 "default": null
-            }
-        ]
-    },
-    "sanitize_ipaddr_v6": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": [
-            {
-                "name": "ipaddr",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            },
-            {
-                "name": "custom",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            },
-            {
-                "name": "pfbcidr",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "'Disabled'"
             }
         ]
     },
