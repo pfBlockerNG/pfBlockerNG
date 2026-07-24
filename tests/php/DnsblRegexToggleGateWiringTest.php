@@ -22,11 +22,12 @@ use PHPUnit\Framework\TestCase;
  * cannot exercise directly (list contents x interpreter availability) already lives in
  * DnsblRegexEntryErrorTest against pfb_dnsbl_regex_validation_errors() itself
  * (testMissingPythonAndTimeoutFailClosed = fail-closed proof, the malformed/benign
- * pattern tests = invalid/valid proof); composed with this test's proof that the call
- * site is now wrapped in the toggle gate, that covers: toggle off -> validator never
- * runs (no Customlist pfb_regex_list error, regardless of pattern/interpreter); toggle
- * on -> validator runs exactly as it always has (invalid pattern blocks, valid pattern
- * doesn't, unresolvable interpreter still blocks -- fail-closed preserved).
+ * pattern tests = invalid/valid proof); composed with this test's proof of the guard's
+ * shape, that covers: interpreter usable -> validator runs whatever the toggle says
+ * (invalid pattern blocks, valid one does not), so an entry that would vanish at load
+ * is still reported while the feature is off; interpreter unusable + toggle on ->
+ * blocked, fail-closed preserved; interpreter unusable + toggle off -> skipped, which
+ * is the availability leg this fix exists for.
  */
 final class DnsblRegexToggleGateWiringTest extends TestCase
 {
@@ -42,25 +43,37 @@ final class DnsblRegexToggleGateWiringTest extends TestCase
 		self::$src = $src;
 	}
 
-	public function testRegexValidationCallIsGatedByTheSubmittedPfbRegexToggle(): void
+	public function testRegexValidationRunsWheneverTheInterpreterIsUsable(): void
 	{
-		// The whole foreach/error-append block must sit inside
-		// if ((($_POST['pfb_regex'] ?? '') === 'on') { ... } -- the same raw-$_POST
-		// on/off idiom this codebase already uses for toggle gates that read the
-		// submitted form value directly (see pfb_syntax_highlight's save ternary in
-		// GeneralSyntaxHighlightToggleWiringTest). Anything that isn't a literal 'on'
-		// (absent key, '', 'off', '0', an array, whitespace-padded junk) must fall to
-		// the else side of this comparison without a warning/TypeError -- === against a
-		// non-scalar (e.g. an array from pfb_regex[]=on) is always false, never a crash.
+		// A usable interpreter is sufficient on its own: an entry the resolver would drop
+		// is reported at save even while the feature is still off, which is the feedback
+		// contract issue #1656 exists for.
 		$this->assertMatchesRegularExpression(
-			"#if\\s*\\(\\s*\\(\\s*\\\$_POST\\['pfb_regex'\\]\\s*\\?\\?\\s*''\\s*\\)\\s*===\\s*'on'\\s*\\)\\s*\\{\\s*"
+			"#if\\s*\\(\\s*\\(\\s*\\\$pfb_regex_python\\s*!==\\s*''\\s*&&\\s*"
+			. "is_executable\\(\\\$pfb_regex_python\\)\\s*\\)\\s*\\|\\|#",
+			self::$src,
+			'expected the validation guard to run whenever the resolved interpreter is executable'
+		);
+	}
+
+	public function testUnusableInterpreterOnlyBlocksTheSaveWhileTheFeatureIsOn(): void
+	{
+		// The second disjunct is the fail-closed leg: with no usable interpreter the
+		// validator can only report "interpreter unavailable", so it must apply solely
+		// when pfb_regex is submitted as the literal 'on' -- otherwise an unresolvable
+		// interpreter would make the whole DNSBL page unsavable, unrelated fields
+		// included. Anything that is not literally 'on' (absent key, '', 'off', '0', an
+		// array from pfb_regex[]=on, whitespace-padded junk) falls to the else side:
+		// === against a non-scalar is false in PHP, never a warning or TypeError.
+		$this->assertMatchesRegularExpression(
+			"#\\|\\|\\s*\\(\\s*\\(\\s*\\\$_POST\\['pfb_regex'\\]\\s*\\?\\?\\s*''\\s*\\)\\s*===\\s*'on'\\s*\\)\\s*\\)\\s*\\{\\s*"
 			. "foreach\\s*\\(pfb_dnsbl_regex_validation_errors\\(\\(string\\)\\s*\\(\\s*\\\$_POST\\['pfb_regex_list'\\]\\s*\\?\\?\\s*''\\s*\\),\\s*"
-			. "pfb_python_interpreter\\(\\)\\)\\s*as\\s*\\\$regex_error\\)\\s*\\{\\s*"
+			. "\\\$pfb_regex_python\\)\\s*as\\s*\\\$regex_error\\)\\s*\\{\\s*"
 			. "\\\$input_errors\\[\\]\\s*=\\s*'Customlist pfb_regex_list:\\s*'\\s*\\.\\s*"
 			. "htmlspecialchars\\(\\\$regex_error,\\s*ENT_QUOTES\\s*\\|\\s*ENT_SUBSTITUTE,\\s*'UTF-8'\\);\\s*\\}\\s*\\}#",
 			self::$src,
-			'expected the pfb_dnsbl_regex_validation_errors() call and its error-append to be '
-			. "wrapped in if ((\$_POST['pfb_regex'] ?? '') === 'on') { ... }"
+			"expected the toggle disjunct to gate only the fail-closed leg, with the "
+			. 'validation call and its error-append inside that guard'
 		);
 	}
 
