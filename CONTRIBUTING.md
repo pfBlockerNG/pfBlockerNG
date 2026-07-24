@@ -492,6 +492,9 @@ no other value is promised):
 | `PFB_STATUS` | post | reserved placeholder — currently always `ok` |
 | `PFB_CHANGED_IP_ALIASES` | post | space-separated list of IP firewall aliases (`pfB_*`) whose **contents** changed this pass; empty when none |
 | `PFB_CHANGED_DNSBL_GROUPS` | post | space-separated list of DNSBL groups (`DNSBL_*`) genuinely updated this pass; empty when none |
+| `PFB_POST_INSTALL` | pre, post | `0` \| `1` — `1` only when the pass is the package install/upgrade resync (turn ON), else `0` (issue #684/#695) |
+| `PFB_PRE_UNINSTALL` | pre, post | `0` \| `1` — `1` only when the pass is the package pre-uninstall teardown (turn OFF), else `0` (issue #684/#695) |
+| `PFB_PKG_OP` | pre, post | package-manager operation read from the `pkg` ancestor process — `install` \| `upgrade` \| `reinstall` \| `delete`, or empty (`''`) when the pass is not run under `pkg` (a normal cron/manual update); context only (issue #697) |
 
 `PFB_TRIGGER` emits exactly `cron | update | force-reload`: `update` is a settings
 save, `force-reload` is a GUI IP-only / DNSBL-only Force Reload, and `cron` covers
@@ -518,6 +521,18 @@ whose feed was actually (re)parsed this pass; the always-rebuilt internal specia
 Reputation-mode-independent and are **not** a byte-level membership diff. `PFB_STATUS`
 remains a stable reserved placeholder (no pass-wide error accumulator exists); its
 **name** is stable, but do not branch a recipe on its value.
+
+**Package-lifecycle context** (`PFB_POST_INSTALL` / `PFB_PRE_UNINSTALL` / `PFB_PKG_OP`,
+issues #684/#695/#697) is emitted on **both** `pre` and `post`. A package
+install/upgrade/uninstall fires the hooks like any other enable/disable pass; these vars
+tell a hook **which** lifecycle transition it is so its owner can react or no-op.
+`PFB_POST_INSTALL=1` marks the install/upgrade resync (turn ON) and `PFB_PRE_UNINSTALL=1`
+the pre-deinstall teardown (turn OFF) — both `0` on a normal cron/manual/force update, so a
+hook can guard them with the same `1`/`0` test as `PFB_IP_CHANGED`. `PFB_PKG_OP` is the raw
+`pkg` subcommand (`install` \| `upgrade` \| `reinstall` \| `delete`, empty off `pkg`) and
+is **context only** — e.g. to distinguish a fresh install from an upgrade — never a
+change signal.
+
 Hooks live in `config.xml`, so they **replicate to a CARP/HA secondary and run on
 whichever node performs the update** — correct for the HAProxy recipe (the
 secondary's HAProxy needs its own reload), but be aware a hook with an external
@@ -554,26 +569,24 @@ aggregate still validates and reloads — **no `/../../` path trick or dummy-IP 
 is needed (the old workarounds are gone).
 
 **2. The post hook.** Save this as
-`/usr/local/pkg/pfblockerng/list_scripts/hook_post_haproxy.sh` (`chmod +x`), then on
+`/usr/local/pkg/pfblockerng/hooks/hook_post_haproxy.sh` (`chmod +x`), then on
 the **Update Hooks** tab add one entry — `when=post`, enabled — and pick it. The
-script is POSIX-sh-safe and guards on the accurate flag so it only reloads when IP
-data actually changed:
+script is POSIX-sh-safe and guards on the rule-change flag so it only reloads when
+pfBlockerNG's firewall rules actually changed:
 
 ```sh
 #!/bin/sh
-# hook_post_haproxy.sh — reload HAProxy after a pfBlockerNG IP update
-[ "$PFB_IP_CHANGED" = "1" ] && echo 'require_once("haproxy/haproxy.inc"); haproxy_check_run(1);' | /usr/local/sbin/pfSsh.php
+# hook_post_haproxy.sh — reload HAProxy after an IP update
+[ "$PFB_IP_CHANGED" -gt 0 ] && /usr/local/etc/rc.d/haproxy.sh restart
 ```
 
-`haproxy_check_run(1)` (wrapped by `haproxy_configure()`, `haproxy.inc:1347-1350`;
-the reload core is `haproxy.inc:2491`) is the package's **graceful** reload: it
-re-writes the config — re-emitting `ipalias_pfB_Deny_Aggregated_v4.lst` from the current
-alias — and restarts with `-sf` (finish existing connections; hitless), **not** a
-hard restart. `pfSsh.php` (`/usr/local/sbin/pfSsh.php`) is used rather than a bare
-`php -r` because it bootstraps the pfSense environment (`globals.inc`/`functions.inc`/
-`config.inc`/`util.inc`) so the `include_path` resolves `haproxy/haproxy.inc` and its
-own `require_once` chain; it `eval`s the PHP piped on stdin. The hook runs on the
-node that performs the update — on a CARP pair each node reloads its own HAProxy.
+`/usr/local/etc/rc.d/haproxy.sh restart` is the HAProxy package's rc-script cycle, and it
+is **graceful**: the stop leg signals the running process with `SIGUSR1` — HAProxy's
+*soft-stop*, which closes the listeners and lets in-flight sessions finish before the
+process exits (`net/haproxy-devel/files/haproxy.in`, `sig_stop=SIGUSR1`) — then a fresh
+process starts against the current on-disk config, re-reading the
+`ipalias_pfB_Deny_Aggregated_v4.lst` file. The hook runs on the node that performs the
+update — on a CARP pair each node restarts its own HAProxy.
 
 See [ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md) for the full design and the
 maintainer smoke checklist.
@@ -582,7 +595,7 @@ maintainer smoke checklist.
 
 To notify an external service of what a pass updated, save a `post` hook script that
 `POST`s the changed-alias context to your endpoint (e.g.
-`/usr/local/pkg/pfblockerng/list_scripts/hook_post_webhook.sh`, `chmod +x`), then pick
+`/usr/local/pkg/pfblockerng/hooks/hook_post_webhook.sh`, `chmod +x`), then pick
 it on the tab. Guard on a **non-empty changed list** so the hook fires whenever the
 blocklist **data** changed — including content-only refreshes that leave
 `PFB_IP_CHANGED=0` (see the note above):
@@ -590,12 +603,14 @@ blocklist **data** changed — including content-only refreshes that leave
 ```sh
 #!/bin/sh
 # hook_post_webhook.sh — forward the changed-alias context to a webhook
-{ [ -n "$PFB_CHANGED_IP_ALIASES" ] || [ -n "$PFB_CHANGED_DNSBL_GROUPS" ]; } && /usr/local/bin/curl -sS -m 5 \
-  --data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" \
-  --data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" \
-  --data-urlencode "ip_changed=$PFB_IP_CHANGED" \
-  --data-urlencode "dnsbl_changed=$PFB_DNSBL_CHANGED" \
-  https://example.invalid/pfblockerng-update
+if [ -n "$PFB_CHANGED_IP_ALIASES" ] || [ -n "$PFB_CHANGED_DNSBL_GROUPS" ]; then
+    /usr/local/bin/curl -sS -m 5 \
+        --data-urlencode "ip_aliases=$PFB_CHANGED_IP_ALIASES" \
+        --data-urlencode "dnsbl_groups=$PFB_CHANGED_DNSBL_GROUPS" \
+        --data-urlencode "ip_changed=$PFB_IP_CHANGED" \
+        --data-urlencode "dnsbl_changed=$PFB_DNSBL_CHANGED" \
+        https://example.invalid/pfblockerng-update
+fi
 ```
 
 `curl` lives at `/usr/local/bin/curl` on pfSense. The guard above fires on **either**

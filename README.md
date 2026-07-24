@@ -145,6 +145,9 @@ A hook receives what changed in environment variables:
 | `PFB_CHANGED_IP_ALIASES` | space-separated IP aliases (`pfB_*`) whose contents changed (empty when none) |
 | `PFB_CHANGED_DNSBL_GROUPS` | space-separated DNSBL groups (`DNSBL_*`) updated (empty when none) |
 | `PFB_STATUS` | reserved — currently always `ok` |
+| `PFB_POST_INSTALL` | `1` when this pass is the install/upgrade resync, else `0` |
+| `PFB_PRE_UNINSTALL` | `1` when this pass is the pre-uninstall teardown, else `0` |
+| `PFB_PKG_OP` | package-manager operation driving the pass — `install`, `upgrade`, `reinstall`, `delete`, or empty on a normal cron/manual update |
 
 > [!TIP]
 > To act when the blocklist **data** changed, guard on a **non-empty**
@@ -158,7 +161,7 @@ pick it as a `post` hook:
 ```sh
 #!/bin/sh
 # hook_post_haproxy.sh — reload HAProxy after an IP update
-[ "$PFB_IP_CHANGED" = "1" ] && /usr/local/etc/rc.d/haproxy.sh restart
+[ "$PFB_IP_CHANGED" -gt 0 ] && /usr/local/etc/rc.d/haproxy.sh restart
 ```
 
 More recipes (e.g. notifying a webhook), the trust model, and the full
