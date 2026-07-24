@@ -43,6 +43,7 @@ function pfb_wizard_persist_disable(?string $action): void {
 	if ($action !== 'disable') {
 		return;
 	}
+	config_del_path('pfblockerng_wizard');
 	// foreign key — out of ADR-29 gateway scope (pfb_wizard_skip is not a /config/0 scalar)
 	config_set_path('installedpackages/pfblockerng/pfb_wizard_skip', 'on');
 	write_config('[pfBlockerNG] Disable setup wizard auto-launch');

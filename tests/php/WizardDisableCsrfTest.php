@@ -129,12 +129,20 @@ final class WizardDisableCsrfTest extends TestCase
 	 */
 	public function testPostPathDisablePersistsFlag(): void
 	{
+		$GLOBALS['config']['pfblockerng_wizard'] = [
+			'step2' => ['inbound_interface' => 'lan'],
+		];
+
 		pfb_wizard_persist_disable('disable');
 
 		$this->assertSame(
 			'on',
 			config_get_path('installedpackages/pfblockerng/pfb_wizard_skip'),
 			'the wizard POST path must persist pfb_wizard_skip'
+		);
+		$this->assertNull(
+			config_get_path('pfblockerng_wizard'),
+			'the persisted disable choice must remove the temporary wizard config'
 		);
 		$this->assertCount(
 			1,
