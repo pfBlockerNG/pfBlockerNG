@@ -11,10 +11,11 @@ use PHPUnit\Framework\TestCase;
  *
  * pfblockerng.widget.php sets $nocsrf=TRUE for the whole endpoint (its read-only
  * AJAX GETs need no token), so its mutating POST handlers (pfb_submit,
- * pfblockerngack, and the three packet-count clears) gate on this instead: reject a cross-site-shaped POST via the
- * Sec-Fetch-Site fetch metadata header, allow everything else -- including an
- * ABSENT header (a legacy browser sending none at all), a deliberate fail-open
- * documented at the call site.
+ * pfblockerngack, and the three packet-count clears) gate on this instead: allow
+ * a POST only when the Sec-Fetch-Site fetch metadata header proves it is
+ * same-origin (or a direct navigation, 'none'). An ABSENT header is DENIED
+ * (issue #1650): the earlier fail-open let any header-less/legacy client bypass
+ * the guard entirely, so the gate is default-deny.
  *
  * widget-pfblockerng.inc carries no top-level pfSense-dependent execution (just
  * two title-string assignments plus this function), so it is require_once()d
@@ -41,7 +42,7 @@ final class WidgetPostAllowedTest extends TestCase
 	public static function truthTableProvider(): array
 	{
 		return [
-			'absent header -- fail-open (legacy browser)' => [[], true],
+			'absent header -- denied (default-deny, issue #1650)' => [[], false],
 			"'same-origin' -- allowed"                     => [['HTTP_SEC_FETCH_SITE' => 'same-origin'], true],
 			"'none' -- allowed (direct navigation/bookmark)" => [['HTTP_SEC_FETCH_SITE' => 'none'], true],
 			"'cross-site' -- blocked"                       => [['HTTP_SEC_FETCH_SITE' => 'cross-site'], false],

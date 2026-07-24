@@ -25,11 +25,13 @@ $pfblockerng_title = '<span title="Click to open Unified Log tab">pfBlockerNG</s
 $pfblockerng_title_link = 'pfblockerng/pfblockerng_alerts.php?view=unified';
 
 // issue #1050: the widget sets $nocsrf=TRUE (csrf-magic never runs here), so a
-// mutating POST handler gates on this instead. Fails OPEN on an absent header
-// (a legacy browser sending no Sec-Fetch-Site at all) -- session auth still applies.
+// mutating POST handler gates on this instead. DEFAULT-DENY on an absent header
+// (issue #1650): a header-less/legacy client would otherwise bypass the guard
+// entirely; every modern browser sends Sec-Fetch-Site, so the legitimate
+// same-origin widget POST still passes.
 function pfb_widget_post_allowed(array $server): bool {
 	if (!isset($server['HTTP_SEC_FETCH_SITE'])) {
-		return TRUE;
+		return FALSE;
 	}
 	return in_array($server['HTTP_SEC_FETCH_SITE'], array('same-origin', 'none'), TRUE);
 }
