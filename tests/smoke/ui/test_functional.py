@@ -1490,6 +1490,64 @@ def test_dnsbl_regex_list_ascii_base64_and_reject_unchanged(
         webui.post(DNSBL_PAGE, {"pfb_regex_list": restore}, timeout=SAVE_TIMEOUT)
 
 
+@pytest.mark.parametrize(
+    ("bad", "why"),
+    [
+        ("(a+)+$", "catastrophic-backtracking shape (nested quantifier)"),
+        ("(unclosed", "malformed (does not compile)"),
+    ],
+    ids=["catastrophic-shape", "malformed"],
+)
+def test_dnsbl_regex_list_runtime_dropped_entry_rejected_on_save(
+    bad: str,
+    why: str,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """A regex entry the resolver would DROP at load is REJECTED at save (issue #1656).
+
+    The DNSBL resolver (``pfb_unbound.py``) silently drops a user regex whose
+    pattern has a catastrophic-backtracking shape (``_regex_is_catastrophic_shape``)
+    or that fails ``re.compile``. Before #1656 the ``case 'regex'`` custom-list
+    validation was an empty TODO stub, so such an entry SAVED fine and then
+    vanished at reload with no user feedback. Now the save handler mirrors those
+    load-time guards: the bad entry -> ``$input_errors`` -> the WHOLE save aborts
+    -> the ``pfb_regex_list`` node is UNCHANGED (the same hard-abort contract the
+    sibling custom-list formats already had).
+
+    BEFORE-state: a benign regex saves (proves the field itself accepts regex
+    entries, so the reject leg fails only because of the new validation). STORED
+    AS BASE64 (same oracle as the non-ASCII test above). NO egress.
+    """
+    import base64
+
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_list"
+    benign = "^ads\\."
+    benign_b64 = base64.b64encode(benign.encode()).decode()
+    original = helpers.config_get(vm, cfg)
+    try:
+        # BEFORE: the benign save below is a real transition.
+        assert original != benign_b64, f"pfb_regex_list already holds {benign!r} (base64) before the valid POST"
+        # BASELINE: a benign regex is ACCEPTED -> base64 of the text is stored.
+        assert _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_regex_list": benign}, cfg) == benign_b64
+        # REJECT: a runtime-dropped pattern aborts the whole save -> config UNCHANGED.
+        got = _post_and_get(webui, vm, DNSBL_PAGE, {"pfb_regex_list": bad}, cfg)
+        assert got == benign_b64, (
+            f"{bad!r} ({why}) is dropped by the resolver at load, so the save must reject it "
+            f"(config unchanged at base64({benign!r})), got {got!r}"
+        )
+    finally:
+        restore = ""
+        if original:
+            try:
+                restore = base64.b64decode(original).decode()
+            except Exception:
+                restore = ""
+        webui.post(DNSBL_PAGE, {"pfb_regex_list": restore}, timeout=SAVE_TIMEOUT)
+
+
 def test_dnsbl_adv_inbound_proto_any_guard(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
