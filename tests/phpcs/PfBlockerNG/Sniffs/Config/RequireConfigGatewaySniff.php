@@ -162,6 +162,8 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_floating',
 		// ADR-38: syslog export toggle
 		'installedpackages/pfblockerng/config/0/log_syslog',
+		// issue #1669 slice C: CodeMirror 6 live syntax-highlight toggle (default on)
+		'installedpackages/pfblockerng/config/0/pfb_syntax_highlight',
 		// installedpackages/pfblockerngsafesearch (flat section, no /config/0)
 		'installedpackages/pfblockerngsafesearch/safesearch_enable',
 		'installedpackages/pfblockerngsafesearch/safesearch_youtube',
