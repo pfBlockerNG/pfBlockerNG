@@ -356,6 +356,39 @@ final class EditHooksPageWiringTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------
+	// Coordinator gate finding F3 (2026-07-24): the create flow must open the target
+	// with fopen 'x' (atomic create-exclusive, closing the file_exists/write TOCTOU),
+	// check the write byte count, and unlink the partial file on a failed write/chmod.
+	// Structural oracle (same shape as the F4 test): the page cannot run off-appliance,
+	// so pin the source text of the create block instead.
+	// ------------------------------------------------------------------
+
+	public function testCreateFlowUsesAtomicOpenWithPartialWriteCleanup(): void
+	{
+		$src = $this->readSource(self::PAGE_PATH);
+
+		$this->assertMatchesRegularExpression(
+			"/@?fopen\\(\\\$path,\\s*'x'\\)/",
+			$src,
+			"the create flow must open the hook file with fopen(..., 'x') -- atomic create-exclusive -- " .
+				'not a separate file_exists() check followed by a plain write (TOCTOU)'
+		);
+		// NOTE: no blanket "no file_put_contents" assertion -- the SAVE path (line ~161)
+		// legitimately overwrites an existing vetted file in place; only the CREATE flow
+		// needs create-exclusive semantics, pinned by the fopen 'x' assertion above.
+		$this->assertMatchesRegularExpression(
+			'/\\$pfb_eh_new_written\\s*!==\\s*strlen\\(\\$pfb_eh_new_template\\)/',
+			$src,
+			'the create flow must compare the fwrite() return against the full template length (partial-write detection)'
+		);
+		$this->assertMatchesRegularExpression(
+			'/@?unlink\\(\\$path\\)/',
+			$src,
+			'a failed write/chmod must unlink the partial file so it never lingers for the picker or a retry'
+		);
+	}
+
+	// ------------------------------------------------------------------
 	// "Edit Hooks" sub-tab: directly after "Hooks", on every page that declares the
 	// Update sub-tab row (coverage matrix: pfblockerng_update.php, pfblockerng_hooks.php,
 	// and this page itself, each re-declaring the full row with its own tab active).
