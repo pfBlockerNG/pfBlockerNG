@@ -17,10 +17,12 @@ use PHPUnit\Framework\TestCase;
  * to compile is silently DROPPED at resolver load, so the form must reject it
  * on save instead of persisting a dead entry.
  *
- * The sample patterns below were verdict-checked against the REAL Python
- * implementation (_regex_is_catastrophic_shape / re.compile) in-session, so
- * these tests pin PHP<->Python parity for the ported checks, not just the PHP
- * port's self-consistency.
+ * The contract pinned here is PARITY: each sample's expected verdict is the
+ * one the resolver's own guards produce for the same (lowercased) pattern —
+ * the form rejects exactly what the resolver drops, including the resolver's
+ * deliberately conservative choices (e.g. ANY quantified single-group
+ * alternation, disjoint or not). Loosening the form below the resolver's drop
+ * set would reintroduce the save-accepted/runtime-dropped divergence.
  */
 #[CoversFunction('pfb_dnsbl_regex_entry_error')]
 final class DnsblRegexEntryErrorTest extends TestCase
@@ -37,6 +39,11 @@ final class DnsblRegexEntryErrorTest extends TestCase
 			'nested quantifier (a+)+'           => ['(a+)+$'],
 			'nested quantifier (\w+\.)+'        => ['(\w+\.)+bad'],
 			'alternation overlap (a|ab)*'       => ['(a|ab)*'],
+			// The resolver's alternation guard is deliberately conservative:
+			// it drops ANY quantified single-group alternation, disjoint
+			// alternatives included — so the form must reject these too.
+			'disjoint quantified alternation'   => ['(foo|bar)+'],
+			'disjoint bounded alternation'      => ['(a|b){3}'],
 			'adjacent quantified groups'        => ['(a+)(a+)+'],
 			'stacked bounded repeats'           => ['a{1000}{1000}'],
 		];
@@ -140,6 +147,7 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		return [
 			'simple anchor'                  => ['^ads\.'],
 			'realistic domain pattern'       => ['^(.+\.)?ads?[0-9]*\.example\.(com|net|org)$'],
+			'unquantified alternation'       => ['^(ads|track)\.example\.com$'],
 			'contains a slash (delimiter)'   => ['foo/bar'],
 			'bounded repeat, single'         => ['[a-z]{2,10}\.example\.com'],
 		];
