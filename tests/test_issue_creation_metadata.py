@@ -1,4 +1,4 @@
-"""Ticket creators must set descriptive labels and native issue types together."""
+"""Ticket creators must set a native issue type plus each path's required labels."""
 
 import shlex
 from pathlib import Path
@@ -51,9 +51,11 @@ def test_automated_issue_creators_set_label_and_type() -> None:
             assert _option_values(command, "--type") == [issue_type]
 
 
-def test_issue_forms_set_label_and_type_and_disable_blank_issues() -> None:
+def test_issue_forms_declare_native_type_and_disable_blank_issues() -> None:
+    # The bug form carries no label: its category rides solely on the native
+    # issue type (a81fc030 dropped the redundant `bug` label).
     forms = {
-        "bug_report.yml": ('labels: ["bug"]', "type: bug"),
+        "bug_report.yml": ("type: bug",),
         "feature_request.yml": ('labels: ["enhancement"]', "type: feature"),
         "task_request.yml": ('labels: ["enhancement"]', "type: task"),
     }
@@ -62,10 +64,10 @@ def test_issue_forms_set_label_and_type_and_disable_blank_issues() -> None:
         path.name for path in template_dir.iterdir() if path.suffix in {".yml", ".yaml"} and path.name != "config.yml"
     }
     assert form_files == forms.keys()
-    for filename, (label, issue_type) in forms.items():
+    for filename, expected_lines in forms.items():
         form = _read(f".github/ISSUE_TEMPLATE/{filename}")
-        assert f"\n{label}\n" in form
-        assert f"\n{issue_type}\n" in form
+        for expected in expected_lines:
+            assert f"\n{expected}\n" in form
 
     config = _read(".github/ISSUE_TEMPLATE/config.yml")
     assert "blank_issues_enabled: false" in config
