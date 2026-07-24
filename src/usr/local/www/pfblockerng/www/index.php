@@ -65,7 +65,10 @@ if (file_exists('/var/log/pfblockerng/dnsbl.log')) {
 			$now = escapeshellarg($ts);
 			$domain = escapeshellarg(',' . $ptype['HTTP_HOST'] . ',');
 
-			exec("/usr/bin/tail -n50 /var/log/pfblockerng/dnsbl.log | /usr/bin/grep {$domain} | /usr/bin/grep {$now} | /usr/bin/tail -1", $data, $retval);
+			// issue #1652: -F -- the host is data, not a pattern; as a BRE its
+			// '.' wildcard-matched any char and could select a DIFFERENT
+			// entry's row (ads.example.com matching ads-example.com).
+			exec("/usr/bin/tail -n50 /var/log/pfblockerng/dnsbl.log | /usr/bin/grep -F -- {$domain} | /usr/bin/grep {$now} | /usr/bin/tail -1", $data, $retval);
 			if (isset($data[0]) && !empty($data[0])) {
 				$data = explode(',', $data[0]);
 				if (is_array($data) && !empty($data)) {
