@@ -46,8 +46,7 @@ A trie keyed by DNS label, inserted **TLD-first** (`ads.example.com` â†’ `com` â
 
 ```python
 class TrieNode:
-    __slots__ = ('children', 'data', 'zone', 'white', 'white_wild',
-                 'noaaaa', 'noaaaa_wild', 'hsts')
+    __slots__ = ("children", "data", "zone", "white", "white_wild", "noaaaa", "noaaaa_wild", "hsts")
     # children: dict[str, TrieNode] | None  (lazy)
     # data:  exact-match payload {log, index} or None
     # zone:  wildcard payload {log, index} or None

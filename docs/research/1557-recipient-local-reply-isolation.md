@@ -279,10 +279,13 @@ It exposes no supported setter for RR payload bytes or RRset references:
 ```python
 class RRSetData_RRData:
     def __getitem__(self, index): ...
+
     # no __setitem__
+
 
 class ReplyInfo_RRSet:
     def __getitem__(self, index): ...
+
     # no __setitem__
 ```
 

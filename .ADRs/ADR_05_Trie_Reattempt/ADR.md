@@ -186,8 +186,11 @@ def bench_queries(dbs, corpus, n_iter=200_000):
 
 
 def main():
-    print("CURRENT DICT MATCHER — absolute baseline (CPython {}.{}, {})".format(
-        sys.version_info.major, sys.version_info.minor, sys.platform))
+    print(
+        "CURRENT DICT MATCHER — absolute baseline (CPython {}.{}, {})".format(
+            sys.version_info.major, sys.version_info.minor, sys.platform
+        )
+    )
     for n in SIZES:
         corpus, dbs, total, size, peak = measure_mem(n)
         print("\nfeed entries (deduped): {:,}".format(total))
