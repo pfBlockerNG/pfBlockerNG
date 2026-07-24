@@ -8999,6 +8999,13 @@
                 "variadic": false,
                 "type": "?array",
                 "default": "NULL"
+            },
+            {
+                "name": "stream_ops",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },
