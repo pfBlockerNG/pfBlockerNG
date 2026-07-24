@@ -265,7 +265,7 @@ def test_enabled_rejects_invalid_top1m_domain_shape_and_wire_cap(tmp_path: Path,
 
 def test_enabled_top1m_is_exact_allow_with_www_fallback_not_deeper_wildcard(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
-    (tmp_path / "feed.raw").write_text("blocked.example\nwww.blocked.example\n.blocked.example\n", encoding="utf-8")
+    (tmp_path / "feed.raw").write_text("||blocked.example^\n", encoding="utf-8")
     (tmp_path / "pfb_py_top1m.txt").write_text("blocked.example\nblocked.example\n", encoding="utf-8")
 
     result = P.dnsbl_build_from_manifest(str(manifest))
@@ -296,7 +296,9 @@ def test_enabled_top1m_is_exact_allow_with_www_fallback_not_deeper_wildcard(tmp_
         == "whitelist"
     )
     deep_decision = P.evaluate_domain("deep.blocked.example", "deep.blocked.example", "example", False, cfg, containers)
+    assert deep_decision.is_found is True
     assert deep_decision.in_whitelist is False
+    assert _decision_label(deep_decision) == "block-null"
 
 
 @pytest.mark.parametrize("kind", ["missing", "directory", "unreadable"])
