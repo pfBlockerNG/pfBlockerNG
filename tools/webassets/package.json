@@ -3,9 +3,13 @@
   "private": true,
   "description": "Dev/CI-only build for vendored Prism + code-input static assets (issue #1669). Never shipped to the appliance -- scripts/build-webassets.sh emits the built .js/.css under src/.",
   "scripts": {
-    "build": "sh ../../scripts/build-webassets.sh"
+    "build": "sh ../../scripts/build-webassets.sh",
+    "test:grammar": "npm --prefix lezer-regexp test"
   },
   "devDependencies": {
+    "@lezer/generator": "1.8.0",
+    "@lezer/highlight": "1.2.3",
+    "@lezer/lr": "1.4.10",
     "@webcoder49/code-input": "2.8.3",
     "esbuild": "0.28.1",
     "prismjs": "1.30.0"

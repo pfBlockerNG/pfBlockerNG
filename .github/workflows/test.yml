@@ -550,7 +550,7 @@ jobs:
         run: node --test tests/js/*.test.js
 
   webassets-vendor:
-    name: Webassets vendor drift guard (Prism + code-input, issue #1669)
+    name: Webassets vendor drift guard + Lezer regexp grammar tests (issue #1669)
     runs-on: ubuntu-latest
 
     steps:
@@ -574,6 +574,17 @@ jobs:
         # src/usr/local/www/pfblockerng/vendor/prism/ tree has drifted.
         # ubuntu-latest ships python3.
         run: python3 scripts/check_webassets_vendor.py
+
+      - name: Lezer regexp grammar parse tests
+        # tools/webassets/lezer-regexp/ (issue #1669 slice A): a Lezer grammar
+        # for Python 3.11 `re`, the foundation for replacing the Prism overlay
+        # with CodeMirror 6. The drift-guard step above already ran `npm ci`
+        # in tools/webassets/ via build-webassets.sh, so this repeat is a
+        # fast no-op; kept explicit so this step runs standalone too.
+        run: |
+          cd tools/webassets
+          npm ci --no-audit --no-fund
+          npm run test:grammar
 
   benchmarks:
     name: Benchmark kill-gates (ReDoS + build RAM)

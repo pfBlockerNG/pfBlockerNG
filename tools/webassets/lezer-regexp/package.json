@@ -1,0 +1,11 @@
+{
+  "name": "@pfblockerng/lezer-regexp",
+  "private": true,
+  "type": "module",
+  "description": "Lezer grammar for Python 3.11 `re` regular expressions (issue #1669 slice A). Resolves the PARENT tools/webassets/ node_modules -- carries no dependencies of its own.",
+  "scripts": {
+    "generate": "lezer-generator src/regexp.grammar -o src/parser.js",
+    "pretest": "npm run generate",
+    "test": "node --test test/parse.test.js"
+  }
+}
