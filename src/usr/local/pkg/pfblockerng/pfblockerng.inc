@@ -303,12 +303,7 @@ $pfb['mime_types'] = array_flip(array(	'inode/x-empty',
 					'application/gzip',
 					'application/x-gzip',
 					'application/x-bzip2',
-					'application/zip',
-					// ADR-45: first-class 7-Zip feeds. The pfb_download() 7z branch
-					// extracts via /usr/local/bin/7z; the ADR-45 structural probe
-					// (pfb_validate_archive '7z t') guards it, so a box without the
-					// 7-Zip binary cleanly rejects rather than failing mid-extract.
-					'application/x-7z-compressed'));
+					'application/zip'));
 
 // pfb_filter constants
 define('PFB_FILTER_HTML', 1);
@@ -836,8 +831,6 @@ function pfb_archive_probe(string $canonical_type): ?array {
 			return array('/usr/bin/gunzip', '-t');
 		case 'application/x-bzip2':
 			return array('/usr/bin/bzip2', '-t');
-		case 'application/x-7z-compressed':
-			return array('/usr/local/bin/7z', 't');
 		default:
 			return NULL;
 	}
@@ -877,23 +870,6 @@ function pfb_octet_recover_type(string $file, array $supported_types, callable $
 		}
 	}
 	return NULL;
-}
-
-// ADR-45: which structural-probe extractor a feed type needs WHEN that extractor is
-// missing — returns the binary path, else NULL (tool present, or non-archive type).
-// Lets pfb_download() emit a clear "install <tool>" message instead of a misleading
-// "corrupt archive" when an OPTIONAL extractor is absent. In practice only 7-Zip is
-// optional (/usr/local/bin/7z is an add-on package); gunzip/bzip2/tar are FreeBSD base
-// and always present. $checker is injectable (defaults to is_executable) for unit tests.
-function pfb_archive_missing_tool(string $canonical_type, ?callable $checker = NULL): ?string {
-	$argv = pfb_archive_probe($canonical_type);
-	if ($argv === NULL) {
-		return NULL;        // non-archive: no extractor needed
-	}
-	if ($checker === NULL) {
-		$checker = 'is_executable';
-	}
-	return $checker($argv[0]) ? NULL : $argv[0];
 }
 
 // ADR-48: pure formatter for the canonical download-validation reject line — a single
@@ -1653,7 +1629,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 					if ($output[0] === 'application/octet-stream' || empty($output[0])) {
 						$recovered = pfb_octet_recover_type(
 							$input[1],
-							array('application/zip', 'application/gzip', 'application/x-bzip2', 'application/x-7z-compressed'),
+							array('application/zip', 'application/gzip', 'application/x-bzip2'),
 							'pfb_validate_archive'
 						);
 					}
@@ -12637,29 +12613,6 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 		}
-		elseif ($file_type == 'application/x-7z-compressed') {
-			// 7-Zip is an OPTIONAL add-on (not in the FreeBSD base, unlike gunzip/bzip2/tar),
-			// so a 7z feed on a box without it must say "install 7-zip" — not the misleading
-			// "corrupt archive" the structural probe would otherwise report (ADR-45).
-			$missing_7z = pfb_archive_missing_tool($file_type);
-			if ($missing_7z !== NULL) {
-				pfb_logger("\n[pfb_download] Cannot process {$file_type} feed: '{$missing_7z}' is not installed. Install the 7-Zip package (pkg install 7-zip) to use 7z-compressed feeds. Skipping [" . htmlspecialchars(pfb_redact_url($list_url)) . "]", 2);
-				unlink_if_exists($file_download);
-				return PfbDownloadResult::failure();
-			}
-			if (!pfb_validate_archive($file_download, $file_type)) {
-				pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
-				unlink_if_exists($file_download);
-				return PfbDownloadResult::failure();
-			}
-			$reject_detail = array();
-			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail)) {
-				pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
-				return PfbDownloadResult::failure();
-			}
-			pfb_logger('.', 1);
-			exec("/usr/local/bin/7z e -so {$file_dwn_esc} > {$file_org_esc}", $output, $retval);
-		}
 		else {
 			// Uncompressed file format.
 			if ($type == 'geoip' || $type == 'asn') {
@@ -12781,7 +12734,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// (pfb_update_check -> pfb_download(PfbDownloadRequest(type: 'change_detect'))) hashes the RAW
 			// fetched body (it returns before any decompression), so the persisted digest
 			// here must cover those same raw bytes too -- not the decompressed '.orig' --
-			// or a compressed feed (gz/bz2/zip/7z) never matches and re-ingests every cron.
+			// or a compressed feed (gz/bz2/zip) never matches and re-ingests every cron.
 			// pfb_source_hash_target() resolves to $file_download (the raw '.raw' download,
 			// still on disk for every compressed format) or falls back to $orig_download for
 			// an uncompressed feed, where $file_download was already renamed away (above)

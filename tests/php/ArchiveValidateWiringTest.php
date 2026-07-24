@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * Live-tool wiring test for pfb_validate_archive(): proves the function accepts
  * a real valid archive and rejects a truncated/corrupt one per format, using the
- * actual host tools (gunzip -t, bzip2 -t, tar -tf, 7z t).
+ * actual host tools (gunzip -t, bzip2 -t, tar -tf).
  *
  * Each format is guarded with markTestSkipped when the required host tool is
  * absent, so CI hosts without every tool do not fail instead of skip.
@@ -210,54 +210,6 @@ final class ArchiveValidateWiringTest extends TestCase
 		);
 		$this->assertFalse($corruptResult,
 			"Expected pfb_validate_archive(corrupt.zip) === FALSE; got TRUE.\n"
-			. 'File size: ' . filesize($corruptPath) . ' bytes (truncated)'
-		);
-	}
-
-	// -----------------------------------------------------------------------
-	// 7z (skipped when /usr/local/bin/7z is absent — not on CI hosts by default)
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Scenario: 7z — valid archive accepted, truncated rejected (if 7z available)
-	 *
-	 * Given  a real 7z archive built via the host 7z binary and a copy truncated
-	 *        to 20 bytes (7z signature header; omits block data)
-	 * When   pfb_validate_archive() is called on each with
-	 *        'application/x-7z-compressed'
-	 * Then   the valid file returns TRUE and the truncated file returns FALSE,
-	 *        proving the '7z t' probe is wired and distinguishes them.
-	 */
-	public function test_7z_valid_accepted_and_corrupt_rejected(): void
-	{
-		if (!is_executable('/usr/local/bin/7z')) {
-			$this->markTestSkipped('/usr/local/bin/7z not available on this host — skipping 7z wiring test');
-		}
-
-		$inputPath   = $this->dir . '/input.txt';
-		$validPath   = $this->dir . '/test.7z';
-		$corruptPath = $this->dir . '/corrupt.7z';
-
-		file_put_contents($inputPath, 'pfblockerng 7z wiring test ' . uniqid('', TRUE));
-		exec('/usr/local/bin/7z a ' . escapeshellarg($validPath) . ' ' . escapeshellarg($inputPath) . ' >/dev/null 2>&1', $out, $rc);
-		if ($rc !== 0 || !file_exists($validPath)) {
-			$this->markTestSkipped('Could not create a 7z archive with the host 7z binary — skipping');
-		}
-
-		$raw = file_get_contents($validPath);
-		$this->assertNotFalse($raw, 'Could not read created 7z file');
-		// Truncate: keep only 20 bytes (7z signature + header; omits block data).
-		file_put_contents($corruptPath, substr((string) $raw, 0, 20));
-
-		$validResult   = pfb_validate_archive($validPath, 'application/x-7z-compressed');
-		$corruptResult = pfb_validate_archive($corruptPath, 'application/x-7z-compressed');
-
-		$this->assertTrue($validResult,
-			"Expected pfb_validate_archive(valid.7z) === TRUE; got FALSE.\n"
-			. 'File size: ' . filesize($validPath) . ' bytes'
-		);
-		$this->assertFalse($corruptResult,
-			"Expected pfb_validate_archive(corrupt.7z) === FALSE; got TRUE.\n"
 			. 'File size: ' . filesize($corruptPath) . ' bytes (truncated)'
 		);
 	}

@@ -84,7 +84,7 @@ final class OctetRecoverTypeTest extends TestCase
 
 		$result = pfb_octet_recover_type(
 			'/tmp/test.bin',
-			array('application/zip', 'application/gzip', 'application/x-bzip2', 'application/x-7z-compressed'),
+			array('application/zip', 'application/gzip', 'application/x-bzip2'),
 			$validator
 		);
 
