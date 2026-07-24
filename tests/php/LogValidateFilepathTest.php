@@ -187,14 +187,52 @@ final class LogValidateFilepathTest extends TestCase
 		);
 	}
 
-	public function testLogsListLogtypeStaysDirectoryScopedForThrowawayBasenames(): void
+	public function testLogsListLogtypeAdmitsOnlyItsEnumeratedBasenames(): void
 	{
-		// Pins the behaviour the Tier-B flows (tests/smoke/ui/test_log.py) rely
-		// on: a 'logs'-list logtype has no 'ext' whitelist and admits any file
-		// directly under its own logdir.
+		// A 'logs'-list logtype (defaultlogs) authorizes ONLY the exact basenames
+		// it enumerates -- the same set its dropdown offers -- never an arbitrary
+		// basename in its dir.
 		$this->assertTrue(
+			pfb_validate_filepath('/var/log/pfblockerng/py_error.log', $this->logtypes(), 'clear'),
+			'an enumerated defaultlogs basename must be admitted'
+		);
+		$this->assertFalse(
 			pfb_validate_filepath('/var/log/pfblockerng/0af1b2c3-py_error.log', $this->logtypes(), 'clear'),
-			'an arbitrary basename under the defaultlogs dir must stay admitted (logs-list types are dir-scoped)'
+			'an UNlisted basename under the defaultlogs dir must be rejected (logs-list is a basename whitelist, not a dir grant)'
+		);
+	}
+
+	// --- issue #1649 (CodeRabbit CWE-863): a no-ext logtype's enumerated 'logs'
+	// list must not lend blanket access to unlisted files in a SHARED dir. The
+	// dbdir (/var/db/pfblockerng/) holds masterfile/mastercat (masterfiles),
+	// pfbalexawhitelist.txt (top1m), and sensitive siblings (asn_cache.sqlite,
+	// pfbsuppression.txt, ...). masterfiles is download-capable with no ext, so
+	// the pre-fix blanket grant admitted download of ANY of them. -----------------
+
+	public function testDownloadOfArbitraryFileUnderSharedDbdirIsRejected(): void
+	{
+		$this->assertFalse(
+			pfb_validate_filepath('/var/db/pfblockerng/random_unlisted_file.txt', $this->logtypes(), 'download'),
+			'download of an unlisted basename under a shared dbdir must be rejected, not admitted via masterfiles\' blanket grant'
+		);
+	}
+
+	public function testDownloadOfSensitiveSqliteUnderSharedDbdirIsRejected(): void
+	{
+		// The concrete disclosure: masterfiles' blanket grant used to expose the
+		// on-box SQLite caches sitting beside masterfile in the dbdir.
+		$this->assertFalse(
+			pfb_validate_filepath('/var/db/pfblockerng/asn_cache.sqlite', $this->logtypes(), 'download'),
+			'download of asn_cache.sqlite must be rejected: no dbdir logtype enumerates or ext-matches it'
+		);
+	}
+
+	public function testDownloadOfMastercatUnderSharedDbdirIsAllowed(): void
+	{
+		// The legit counter: masterfiles' OTHER enumerated file must still work.
+		$this->assertTrue(
+			pfb_validate_filepath('/var/db/pfblockerng/mastercat', $this->logtypes(), 'download'),
+			'download of mastercat must pass: it is one of masterfiles\' enumerated basenames'
 		);
 	}
 

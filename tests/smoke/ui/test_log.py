@@ -39,20 +39,17 @@ Each flow RESTORES the box (removes the seeded file / leaves the cleared file
 gone) in a ``finally`` so a mid-test failure cannot poison the session-scoped VM
 for the sibling flows.
 
-THROWAWAY filenames, never the real production logs: for a ``logs``-list logtype
-like ``defaultlogs`` (no ``ext`` whitelist), ``pfb_validate_filepath()`` is
-directory-scoped -- ANY file directly under ``/var/log/pfblockerng`` passes
-(issue #1649 tightened ext-based logtypes to their own ``ext`` whitelist +
-capability flags, but a ``logs``-list type stays dir-scoped). These flows used to
-seed/clear the box's REAL
-``pfblockerng.log`` / ``error.log`` / ``ip_block.log`` / ``py_error.log`` /
-``dnsbl.log`` directly, clobbering real content a live box would have
-accumulated. Every target is now a unique, uuid-prefixed basename under the same
-allowed directory instead (:func:`_throwaway_log`). The clear handler's
-py_error.log/dnsbl.log special cases are themselves SUBSTRING matches
-(``strpos($s_logfile, 'py_error.log')`` etc., :308,315-317), so a suffix-preserving
-throwaway name (e.g. ``<uuid>-py_error.log``) still exercises the exact same
-branch without ever touching the real file.
+Real listed log names, content preserved: ``pfb_validate_filepath()`` binds a
+``logs``-list logtype like ``defaultlogs`` to its EXACT enumerated basenames
+(issue #1649 -- the same set its dropdown offers; a uuid-prefixed throwaway no
+longer validates, and neither does an arbitrary basename under a shared dir).
+These flows therefore target the real listed names (``pfblockerng.log`` /
+``error.log`` / ``ip_block.log`` / ``py_error.log`` / ``dnsbl.log`` / ...), and
+:func:`_preserve_log` snapshots each file's pre-existing content (or absence) and
+restores it afterwards so a live box's accumulated logs survive the seed/clear.
+The clear handler's py_error.log/dnsbl.log special cases key on a SUBSTRING match
+of the basename (``strpos($s_logfile, 'py_error.log')`` etc.), which the exact
+listed names satisfy.
 """
 
 from __future__ import annotations
@@ -60,7 +57,6 @@ from __future__ import annotations
 import base64
 import os
 import subprocess
-import uuid
 from typing import TYPE_CHECKING
 
 import pytest
@@ -205,16 +201,32 @@ def _rm(vm: helpers.SmokeVM, path: str) -> None:
     vm.ssh("/bin/rm", "-f", path)
 
 
-def _throwaway_log(basename_suffix: str) -> str:
-    """A collision-proof ``LOG_DIR`` path that still ends in ``basename_suffix``.
+def _listed_log(vm: helpers.SmokeVM, basename: str) -> tuple[str, str | None]:
+    """Return ``(LOG_DIR/<basename>, snapshot)`` and clear the file for the test.
 
-    ``pfb_validate_filepath`` admits every file under ``LOG_DIR`` regardless of
-    basename, and the clear handler's special-case branches key on a SUBSTRING
-    match of the basename (``strpos($s_logfile, 'py_error.log')`` / ``'dnsbl.log'``
-    / ...). Keeping the interesting suffix means a throwaway name still hits the
-    SAME branch as the real production log -- without ever touching it.
+    issue #1649: ``pfb_validate_filepath`` now binds ``defaultlogs`` (a
+    ``logs``-list logtype) to its EXACT enumerated basenames -- the same set its
+    dropdown offers -- so a uuid-prefixed throwaway name no longer validates, and
+    neither does an arbitrary basename under a shared dir. These flows therefore
+    target the real listed names (``basename`` MUST be one of ``defaultlogs``'
+    ``logs`` entries). To keep the old non-clobber guarantee, the file's
+    pre-existing content (or ``None`` if absent) is snapshotted and the file is
+    removed so each flow starts from a known state (the clear/load-absent
+    preconditions depend on it); pass the snapshot to :func:`_restore_log` in a
+    ``finally`` to put it back.
     """
-    return f"{LOG_DIR}/{uuid.uuid4().hex[:12]}-{basename_suffix}"
+    path = f"{LOG_DIR}/{basename}"
+    original = _cat(vm, path) if _exists(vm, path) else None
+    _rm(vm, path)
+    return path, original
+
+
+def _restore_log(vm: helpers.SmokeVM, path: str, original: str | None) -> None:
+    """Put back what :func:`_listed_log` snapshotted (content, or absence)."""
+    if original is not None:
+        _seed_file(vm, path, original)
+    else:
+        _rm(vm, path)
 
 
 def _decode_load_body(body: str) -> tuple[str, str]:
@@ -251,7 +263,7 @@ def test_load_returns_real_file_content(webui: WebUI, smoke_vm: helpers.SmokeVM)
     removing the seed file in finally.
     """
     vm = smoke_vm
-    target = _throwaway_log("pfblockerng.log")
+    target, _orig = _listed_log(vm, "pfblockerng.log")
     marker = f"pfb-ui-load-{helpers.unique_domain('load')}"
     expected = f"{marker}\n"
     _seed_file(vm, target, expected)
@@ -270,7 +282,7 @@ def test_load_returns_real_file_content(webui: WebUI, smoke_vm: helpers.SmokeVM)
         )
         assert marker in decoded, f"seeded marker missing from the loaded content: {decoded!r}"
     finally:
-        _rm(vm, target)
+        _restore_log(vm, target, _orig)
 
 
 def test_load_does_not_html_escape_content(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -284,7 +296,7 @@ def test_load_does_not_html_escape_content(webui: WebUI, smoke_vm: helpers.Smoke
     body is byte-identical to the on-box file, not an escaped variant.
     """
     vm = smoke_vm
-    target = _throwaway_log("pfblockerng.log")
+    target, _orig = _listed_log(vm, "pfblockerng.log")
     marker = helpers.unique_domain("esc")
     expected = f"<{marker}> & \"quoted\" 'single'\n"
     _seed_file(vm, target, expected)
@@ -304,7 +316,7 @@ def test_load_does_not_html_escape_content(webui: WebUI, smoke_vm: helpers.Smoke
             f"load body still HTML-escaped: {decoded!r}"
         )
     finally:
-        _rm(vm, target)
+        _restore_log(vm, target, _orig)
 
 
 def test_load_does_not_double_escape_write_time_escaped_lines(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -320,7 +332,7 @@ def test_load_does_not_double_escape_write_time_escaped_lines(webui: WebUI, smok
     never re-escape text that merely LOOKS pre-escaped, regardless of its source.
     """
     vm = smoke_vm
-    target = _throwaway_log("error.log")
+    target, _orig = _listed_log(vm, "error.log")
     marker = helpers.unique_domain("dblesc")
     # Synthetic: shaped like pfb_validate_log_line's OLD write-time-escaped output (a REJECT
     # line whose detail field originally contained '<' '>' '&') -- see docstring above.
@@ -342,7 +354,7 @@ def test_load_does_not_double_escape_write_time_escaped_lines(webui: WebUI, smok
             f"load body double-escaped the write-time-escaped line: {decoded!r}"
         )
     finally:
-        _rm(vm, target)
+        _restore_log(vm, target, _orig)
 
 
 def test_load_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -373,19 +385,23 @@ def test_load_reports_failure_for_nonexistent_file(webui: WebUI, smoke_vm: helpe
 
     Regression pin (issue #978): the ``file_exists`` false branch used to print
     code ``"0"`` -- the same code the page JS (``loadComplete()``) treats as
-    success -- even though the info text says the file is missing. Picks a
-    throwaway path under the allowed dir and never creates it.
+    success -- even though the info text says the file is missing. Uses a listed
+    ``defaultlogs`` basename that the validator admits, cleared to absent so the
+    file-missing branch is the one under test.
     """
     vm = smoke_vm
-    target = _throwaway_log("missing.log")
-    assert not _exists(vm, target), "throwaway target unexpectedly exists before the test"
+    target, _orig = _listed_log(vm, "maxmind_ver")
+    try:
+        assert not _exists(vm, target), "listed target unexpectedly present after clear (precondition)"
 
-    token = _csrf(webui)
-    resp = _post_load(webui, token, target)
-    assert not looks_like_login_page(resp.text), "load POST returned the login form (session lost)"
-    code, _ = _decode_load_body(resp.text)
-    assert code != "0", f"missing-file load reported success: envelope={resp.text!r}"
-    assert "Log file does not exist" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+        token = _csrf(webui)
+        resp = _post_load(webui, token, target)
+        assert not looks_like_login_page(resp.text), "load POST returned the login form (session lost)"
+        code, _ = _decode_load_body(resp.text)
+        assert code != "0", f"missing-file load reported success: envelope={resp.text!r}"
+        assert "Log file does not exist" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+    finally:
+        _restore_log(vm, target, _orig)
 
 
 def test_load_reports_failure_for_unopenable_socket_node(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -401,7 +417,9 @@ def test_load_reports_failure_for_unopenable_socket_node(webui: WebUI, smoke_vm:
     (success) despite the message saying the read failed.
     """
     vm = smoke_vm
-    target = _throwaway_log("asock")
+    # A listed defaultlogs basename (validator-admitted), cleared first so nc can
+    # bind a socket node there.
+    target, _orig = _listed_log(vm, "wizard.log")
     # Bind+listen a UNIX-domain socket at `target` via FreeBSD base nc(1) (`-lU`),
     # detached exactly like the update-hook launcher (test_smoke_hooks.py): all
     # three std streams redirected away from the SSH channel so the call returns
@@ -422,6 +440,7 @@ def test_load_reports_failure_for_unopenable_socket_node(webui: WebUI, smoke_vm:
     finally:
         vm.ssh("kill", pid)
         _rm(vm, target)
+        _restore_log(vm, target, _orig)
 
 
 def test_load_reports_correct_line_count_for_literal_zero_content(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -434,7 +453,7 @@ def test_load_reports_correct_line_count_for_literal_zero_content(webui: WebUI, 
     sequence the quirk requires.
     """
     vm = smoke_vm
-    target = _throwaway_log("zero-content.log")
+    target, _orig = _listed_log(vm, "extras.log")
     _seed_file(vm, target, "0")
     try:
         assert _cat(vm, target) == "0", "seed content not present on the box before load"
@@ -447,7 +466,7 @@ def test_load_reports_correct_line_count_for_literal_zero_content(webui: WebUI, 
         assert decoded == "0", f"load body {decoded!r} != raw seeded content '0'"
         assert "Total Lines: 1" in resp.text, f"expected 'Total Lines: 1', got: {resp.text!r}"
     finally:
-        _rm(vm, target)
+        _restore_log(vm, target, _orig)
 
 
 def test_load_reports_zero_lines_for_empty_file(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -461,7 +480,7 @@ def test_load_reports_zero_lines_for_empty_file(webui: WebUI, smoke_vm: helpers.
     its siblings above it is expected to pass on both pre-fix and post-fix code.
     """
     vm = smoke_vm
-    target = _throwaway_log("empty.log")
+    target, _orig = _listed_log(vm, "unified.log")
     _seed_file(vm, target, "")
     try:
         assert _cat(vm, target) == "", "seed content not empty on the box before load"
@@ -473,7 +492,7 @@ def test_load_reports_zero_lines_for_empty_file(webui: WebUI, smoke_vm: helpers.
         assert code == "0", f"load of empty file did not report success: envelope={resp.text!r}"
         assert "Total Lines: 0" in resp.text, f"expected 'Total Lines: 0', got: {resp.text!r}"
     finally:
-        _rm(vm, target)
+        _restore_log(vm, target, _orig)
 
 
 # --------------------------------------------------------------------------- #
@@ -489,7 +508,7 @@ def test_download_streams_file_with_attachment_header(webui: WebUI, smoke_vm: he
     basename as an attachment. Restored in finally.
     """
     vm = smoke_vm
-    target = _throwaway_log("error.log")
+    target, _orig = _listed_log(vm, "error.log")
     payload = f"pfb-ui-download-{helpers.unique_domain('dl')}\n"
     _seed_file(vm, target, payload)
     try:
@@ -507,7 +526,7 @@ def test_download_streams_file_with_attachment_header(webui: WebUI, smoke_vm: he
         # The file is read-only on download -- it must remain on the box, unchanged.
         assert _cat(vm, target) == payload, "download altered the source file (must be read-only)"
     finally:
-        _rm(vm, target)
+        _restore_log(vm, target, _orig)
 
 
 def test_download_rejects_package_source_in_whitelisted_dir(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -585,6 +604,7 @@ def test_clear_rejects_dnsbl_tld_whose_logtype_forbids_clear(webui: WebUI, smoke
     assert code == "3", f"dnsbl_tld clear was not rejected with code 3: {resp.text!r}"
     assert _exists(vm, DNSBL_TLD_FILE), "dnsbl_tld file removed by a clear its logtype forbids (validator failed!)"
     assert _size(vm, DNSBL_TLD_FILE) == before_size, "dnsbl_tld file truncated by a forbidden clear (validator failed!)"
+    assert _cat(vm, DNSBL_TLD_FILE) == before, "dnsbl_tld file content changed after a clear its logtype forbids"
 
 
 def test_download_allows_dnsbl_tld_file_its_logtype_owns(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -651,7 +671,7 @@ def test_clear_plain_log_unlinks_file(webui: WebUI, smoke_vm: helpers.SmokeVM) -
     POST clear, assert the file is now ABSENT (AFTER). Restore: ensure it's gone.
     """
     vm = smoke_vm
-    target = _throwaway_log("ip_block.log")
+    target, _orig = _listed_log(vm, "ip_block.log")
     _seed_file(vm, target, f"pfb-ui-clear-plain-{helpers.unique_domain('clr')}\n")
     try:
         # BEFORE: present and non-empty.
@@ -664,7 +684,7 @@ def test_clear_plain_log_unlinks_file(webui: WebUI, smoke_vm: helpers.SmokeVM) -
         # AFTER (oracle): unlink_if_exists removed it.
         assert not _exists(vm, target), "plain log still present after clear (expected unlink)"
     finally:
-        _rm(vm, target)
+        _restore_log(vm, target, _orig)
 
 
 def test_clear_py_error_truncates_in_place(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -679,7 +699,7 @@ def test_clear_py_error_truncates_in_place(webui: WebUI, smoke_vm: helpers.Smoke
     size 0 (AFTER) -- proving truncate, not unlink. Restore: remove the file.
     """
     vm = smoke_vm
-    target = _throwaway_log("py_error.log")
+    target, _orig = _listed_log(vm, "py_error.log")
     _seed_file(vm, target, f"pfb-ui-clear-py-{helpers.unique_domain('py')}\n")
     try:
         assert _exists(vm, target), "seeded py_error.log missing before clear"
@@ -692,7 +712,7 @@ def test_clear_py_error_truncates_in_place(webui: WebUI, smoke_vm: helpers.Smoke
         assert _exists(vm, target), "py_error.log was unlinked (expected ftruncate -> file kept)"
         assert _size(vm, target) == 0, f"py_error.log not truncated to 0 after clear (size={_size(vm, target)})"
     finally:
-        _rm(vm, target)
+        _restore_log(vm, target, _orig)
 
 
 def test_clear_absent_py_error_log_degrades_without_php_fatal(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -704,27 +724,30 @@ def test_clear_absent_py_error_log_degrades_without_php_fatal(webui: WebUI, smok
     a TypeError on PHP 8 (``@`` only silences warnings/notices, not a thrown
     exception), producing a PHP fatal in the POST response.
 
-    Transition: BEFORE-state asserts the throwaway target is absent (never seeded),
-    POST clear, then AFTER asserts no PHP diagnostic rendered into the response,
-    the file is still absent (silent no-op, not a crash), and the page still
-    renders on a follow-up GET (the fatal did not wedge the session/handler).
+    Transition: BEFORE-state asserts the listed target is absent (cleared, never
+    seeded), POST clear, then AFTER asserts no PHP diagnostic rendered into the
+    response, the file is still absent (silent no-op, not a crash), and the page
+    still renders on a follow-up GET (the fatal did not wedge the session/handler).
     """
     vm = smoke_vm
-    target = _throwaway_log("py_error.log")
-    # BEFORE: never seeded -- the absent-file precondition this test exercises.
-    assert not _exists(vm, target), "throwaway py_error.log target unexpectedly exists before clear"
+    target, _orig = _listed_log(vm, "py_error.log")
+    try:
+        # BEFORE: cleared, never seeded -- the absent-file precondition this test exercises.
+        assert not _exists(vm, target), "py_error.log target unexpectedly present after clear (precondition)"
 
-    token = _csrf(webui)
-    resp = _post_clear(webui, token, target)
-    assert not looks_like_login_page(resp.text), "clear POST returned the login form (session lost)"
-    assert resp.status_code == 200, f"clear of an absent py_error.log did not return 200: {resp.status_code}"
-    # AFTER (oracle): no rendered PHP diagnostic -- the pre-#1097 TypeError fatal is gone.
-    diagnostic = body_has_php_error(resp.text)
-    assert diagnostic is None, f"clear of an absent py_error.log rendered a PHP diagnostic: {diagnostic!r}"
-    # AFTER: silent no-op -- nothing to clear, nothing created.
-    assert not _exists(vm, target), "clearing an absent py_error.log unexpectedly created the file"
-    # AFTER: the handler did not wedge the session -- the page still renders normally.
-    _csrf(webui)
+        token = _csrf(webui)
+        resp = _post_clear(webui, token, target)
+        assert not looks_like_login_page(resp.text), "clear POST returned the login form (session lost)"
+        assert resp.status_code == 200, f"clear of an absent py_error.log did not return 200: {resp.status_code}"
+        # AFTER (oracle): no rendered PHP diagnostic -- the pre-#1097 TypeError fatal is gone.
+        diagnostic = body_has_php_error(resp.text)
+        assert diagnostic is None, f"clear of an absent py_error.log rendered a PHP diagnostic: {diagnostic!r}"
+        # AFTER: silent no-op -- nothing to clear, nothing created.
+        assert not _exists(vm, target), "clearing an absent py_error.log unexpectedly created the file"
+        # AFTER: the handler did not wedge the session -- the page still renders normally.
+        _csrf(webui)
+    finally:
+        _restore_log(vm, target, _orig)
 
 
 def test_clear_dnsbl_log_unlinks_then_retouches_empty(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
@@ -741,7 +764,7 @@ def test_clear_dnsbl_log_unlinks_then_retouches_empty(webui: WebUI, smoke_vm: he
     Restore: remove the file.
     """
     vm = smoke_vm
-    target = _throwaway_log("dnsbl.log")
+    target, _orig = _listed_log(vm, "dnsbl.log")
     _seed_file(vm, target, f"pfb-ui-clear-dnsbl-{helpers.unique_domain('dns')}\n")
     try:
         assert _exists(vm, target), "seeded dnsbl.log missing before clear"
@@ -754,7 +777,7 @@ def test_clear_dnsbl_log_unlinks_then_retouches_empty(webui: WebUI, smoke_vm: he
         assert _exists(vm, target), "dnsbl.log absent after clear (expected re-touch)"
         assert _size(vm, target) == 0, f"dnsbl.log not empty after clear (size={_size(vm, target)})"
     finally:
-        _rm(vm, target)
+        _restore_log(vm, target, _orig)
 
 
 def test_clear_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:

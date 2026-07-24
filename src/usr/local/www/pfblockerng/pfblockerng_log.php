@@ -198,10 +198,13 @@ if ($pfb['blconfig'] &&
 }
 
 /*	Function to validate file/path for a requested action ('load'/'download'/'clear').
-	issue #1649: authorize against each logtype's OWN tuple -- its logdir, its 'ext'
-	filename whitelist (glob "*<ext>", mirroring getlogs()), and the capability flag
-	for the requested action -- never the union of every logtype's logdir. A logtype
-	with an inline 'logs' list has no 'ext' and stays directory-scoped.	*/
+	issue #1649: authorize against each logtype's OWN tuple -- its logdir, the capability
+	flag for the requested action, and its filename whitelist -- never the union of every
+	logtype's logdir. The whitelist is the logtype's enumerated 'logs' basenames (exact
+	match, as the page's own dropdown offers) or its 'ext' patterns (glob "*<ext>",
+	mirroring getlogs()). A logtype must carry one or the other; a bare logdir match never
+	authorizes, so a sibling logtype sharing a directory (e.g. masterfiles + top1m both
+	under /var/db/pfblockerng/) cannot lend blanket access to unlisted files there.	*/
 function pfb_validate_filepath($validate, $pfb_logtypes, $action) {
 
 	$path = pathinfo($validate, PATHINFO_DIRNAME) . '/';
@@ -222,12 +225,18 @@ function pfb_validate_filepath($validate, $pfb_logtypes, $action) {
 			continue;
 		}
 
-		if (!isset($type['ext'])) {
-			return TRUE;
-		}
-		foreach ((array)$type['ext'] as $extention) {
-			if ($extention == '*' || fnmatch("*{$extention}", $file)) {
+		// Enumerated logs list: authorize only its exact basenames.
+		if (isset($type['logs'])) {
+			if (in_array($file, (array)$type['logs'], TRUE)) {
 				return TRUE;
+			}
+			continue;
+		}
+		if (isset($type['ext'])) {
+			foreach ((array)$type['ext'] as $extention) {
+				if ($extention == '*' || fnmatch("*{$extention}", $file)) {
+					return TRUE;
+				}
 			}
 		}
 	}
