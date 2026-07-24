@@ -47,6 +47,7 @@ STUB_SOURCE_VERSION = "2.7.2"
 # as a full src-relative path (e.g. usr/local/www/guiconfig.inc).
 STUB_MODULES: dict[str, list[str]] = {
     "config.php": ["config.lib.inc"],
+    "xmlparse.php": ["xmlparse.inc"],
     "util.php": ["util.inc", "pfsense-utils.inc", "globals.inc"],
     "services.php": ["services.inc", "service-utils.inc", "pkg-utils.inc"],
     "system.php": ["functions.inc", "filter.inc", "system.inc"],

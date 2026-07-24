@@ -12,6 +12,126 @@
             }
         ]
     },
+    "_pfb_settings_family": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_gzip_read": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_mkdir": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_parse": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "xml",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "scratch_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_path": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_root": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            }
+        ]
+    },
     "convert_feeds_json": {
         "returnsRef": false,
         "returnType": null,
@@ -6511,6 +6631,86 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "?array",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_capture_owned": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_settings_snapshot_create": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_snapshot_read": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "snapshot_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
                 "default": "NULL"
             }
         ]

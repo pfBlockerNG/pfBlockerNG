@@ -309,6 +309,79 @@ if (!function_exists('config_get_path')) {
 	}
 }
 
+if (!function_exists('dump_xml_config')) {
+	function dump_xml_config(array $data, $rootobj): string {
+		$xml = new XMLWriter();
+		$xml->openMemory();
+		$xml->startDocument('1.0', 'UTF-8');
+		$xml->startElement((string) $rootobj);
+		$write = static function (XMLWriter $xml, array $value) use (&$write): void {
+			foreach ($value as $key => $item) {
+				$xml->startElement((string) $key);
+				if (is_array($item)) {
+					$write($xml, $item);
+				} else {
+					$xml->text((string) $item);
+				}
+				$xml->endElement();
+			}
+		};
+		$write($xml, $data);
+		$xml->endElement();
+		$xml->endDocument();
+		return $xml->outputMemory();
+	}
+}
+
+if (!function_exists('parse_xml_config')) {
+	function parse_xml_config(string $cffile, $rootobj, $isstring = 'false'): array {
+		$xml = ($isstring === 'true') ? $cffile : file_get_contents($cffile);
+		if ($xml === false) {
+			throw new RuntimeException('unable to read XML path');
+		}
+		$previous = libxml_use_internal_errors(true);
+		$document = simplexml_load_string($xml, SimpleXMLElement::class, LIBXML_NONET | LIBXML_NOCDATA);
+		libxml_use_internal_errors($previous);
+		if ($document === false) {
+			throw new RuntimeException('invalid XML');
+		}
+		$read = static function (SimpleXMLElement $node) use (&$read): array {
+			$result = [];
+			foreach ($node->children() as $entry) {
+				$key = $entry->getName();
+				if ($entry->count() > 0) {
+					$result[$key] = $read($entry);
+				} else {
+					$result[$key] = (string) $entry;
+				}
+			}
+			return $result;
+		};
+		if ((string) $rootobj !== $document->getName()) {
+			throw new RuntimeException('unexpected XML root');
+		}
+		return $read($document);
+	}
+}
+
+if (!function_exists('safe_write_file')) {
+	function safe_write_file(string $file, string $content, bool $force_binary = false): bool {
+		return file_put_contents($file, $content, LOCK_EX) === strlen($content);
+	}
+}
+
+if (!function_exists('lock')) {
+	function lock($lock, $op = LOCK_SH): int {
+		return 1;
+	}
+}
+
+if (!function_exists('unlock')) {
+	function unlock($cfglckkey = 0): bool {
+		return true;
+	}
+}
+
 if (!function_exists('config_set_path')) {
 	// pfSense config.lib.inc: set the value at a '/'-separated path (creating
 	// intermediate arrays), returning the value set.
