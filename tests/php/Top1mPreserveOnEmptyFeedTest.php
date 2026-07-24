@@ -276,6 +276,56 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertStringContainsString('failed to publish the new whitelist build', $this->readErrLog());
 	}
 
+	/**
+	 * Issue #1646: a failed or short record write must abort publication instead of
+	 * renaming a truncated staging file over the previous valid whitelist.
+	 */
+	#[DataProvider('recordWriteFailures')]
+	public function testRecordWriteFailurePreservesPriorWhitelistAndWarns(string $failure): void
+	{
+		$priorContent = "kept.example\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
+		$this->assertNotFalse(file_put_contents($this->csvPath(), "1,example.com\n"), 'setup: valid top-1m.csv');
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
+
+		$write = match ($failure) {
+			'false' => static fn($stream, string $bytes) => FALSE,
+			'short' => static fn($stream, string $bytes) => strlen($bytes) - 1,
+		};
+
+		pfblockerng_top1m(NULL, ['write' => $write]);
+
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
+			"a {$failure} record write must preserve the previous TOP1M whitelist");
+		$this->assertSame([], $this->tempFilesLeftBehind(), "no staging file left after a {$failure} write");
+		$this->assertStringContainsString('failed to write the new whitelist build', $this->readErrLog());
+		$this->assertStringNotContainsString('Parsed 1 lines', $this->readMainLog(),
+			"a {$failure} write must not report successful publication");
+	}
+
+	/** @return array<string, array{string}> */
+	public static function recordWriteFailures(): array
+	{
+		return [
+			'fwrite false' => ['false'],
+			'fwrite short' => ['short'],
+		];
+	}
+
+	/** Issue #1646: the injected full-write boundary still publishes canonical bytes. */
+	public function testCompleteRecordWritePublishesCanonicalBytes(): void
+	{
+		$this->assertNotFalse(file_put_contents($this->csvPath(), "1,example.com\n"), 'setup: valid top-1m.csv');
+
+		pfblockerng_top1m(NULL, [
+			'write' => static fn($stream, string $bytes) => fwrite($stream, $bytes),
+		]);
+
+		$this->assertSame("example.com\n", file_get_contents($this->whitelistPath()));
+		$this->assertSame([], $this->tempFilesLeftBehind(), 'no staging file left after a complete write');
+		$this->assertStringContainsString('Parsed 1 lines | Found 1 of 1000', $this->readMainLog());
+	}
+
 	/** Same dead-feed path, but with NO prior whitelist -- says so, and still no wipe/creation. */
 	public function testEmptyFeedWithNoPriorWhitelistWarnsNoListAvailable(): void
 	{
