@@ -158,7 +158,7 @@ pick it as a `post` hook:
 ```sh
 #!/bin/sh
 # hook_post_haproxy.sh — reload HAProxy after an IP update
-[ "$PFB_IP_CHANGED" = "1" ] && echo 'require_once("haproxy/haproxy.inc"); haproxy_check_run(1);' | /usr/local/sbin/pfSsh.php
+[ "$PFB_IP_CHANGED" = "1" ] && /usr/local/etc/rc.d/haproxy.sh restart
 ```
 
 More recipes (e.g. notifying a webhook), the trust model, and the full
