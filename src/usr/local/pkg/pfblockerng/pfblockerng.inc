@@ -7902,10 +7902,6 @@ function pfb_unbound_py_top1m_atomic_copy(string $source, string $path, array $s
 		@fclose($source_h);
 		return FALSE;
 	}
-	if ($first_byte !== '.') {
-		@fclose($source_h);
-		return pfb_unbound_py_atomic_copy($source, $path, $stream_ops);
-	}
 	if (!@rewind($source_h)) {
 		@fclose($source_h);
 		return FALSE;
@@ -7925,6 +7921,24 @@ function pfb_unbound_py_top1m_atomic_copy(string $source, string $path, array $s
 	$write_fn = $stream_ops['write'] ?? static fn($stream, $bytes) => @fwrite($stream, $bytes);
 	$flush_fn = $stream_ops['flush'] ?? static fn($stream) => @fflush($stream);
 	$fsync_fn = $stream_ops['fsync'] ?? static fn($stream) => @fsync($stream);
+	$ok = TRUE;
+	if ($first_byte !== '.') {
+		while (!feof($source_h)) {
+			$chunk = @fread($source_h, 1048576);
+			if ($chunk === FALSE) {
+				$ok = FALSE;
+				break;
+			}
+			if ($chunk !== '') {
+				$written = $write_fn($target_h, $chunk);
+				if ($written === FALSE || $written !== strlen($chunk)) {
+					$ok = FALSE;
+					break;
+				}
+			}
+		}
+	}
+
 	$patterns = array(
 		'comma' => array(
 			'/\A\.([A-Za-z0-9.-]+),,\n\z/D',
@@ -7951,8 +7965,7 @@ function pfb_unbound_py_top1m_atomic_copy(string $source, string $path, array $s
 		return TRUE;
 	};
 	$family = NULL;
-	$ok = TRUE;
-	while (TRUE) {
+	while ($first_byte === '.') {
 		$lines = array(@fgets($source_h, 1024));
 		if ($lines[0] === FALSE) {
 			$ok = feof($source_h);
