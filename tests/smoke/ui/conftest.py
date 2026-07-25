@@ -30,6 +30,7 @@ import pytest
 from ..conftest import SmokeVM
 from ..helpers import REDACTED, parse_redact_values
 from .credgate import admin_password_decision
+from .render_oracle import observed_baseline_entries, stale_baseline_entries
 from .webui import SESSION_COOKIE, WebUI
 
 if TYPE_CHECKING:
@@ -486,6 +487,34 @@ def browser_context(webui: WebUI, smoke_vm: SmokeVM) -> Iterator[BrowserContext]
         finally:
             context.close()
             browser.close()
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Fail a FULL sweep that never observed some grandfathered diagnostics (#1218).
+
+    A baseline entry nobody sees any more is a site that got fixed: leaving it in
+    ``php_diagnostic_baseline.txt`` would silently forgive that diagnostic if it ever
+    came back, which is the same blindness the whole issue is about. So the list has to
+    shed entries as the burn-down (#1712) lands them.
+
+    Only a full sweep may judge this -- a ``--filter``ed or sharded run visits a subset of
+    the pages, so nearly every entry would look stale. ``run-smoke.sh`` exports
+    ``PFB_SMOKE_FULL_SWEEP=1`` exactly when it runs a whole marker unsliced and unfiltered;
+    absent that, this reports nothing.
+    """
+    if os.environ.get("PFB_SMOKE_FULL_SWEEP") != "1" or exitstatus != 0:
+        # A red run already has a verdict, and its aborted tests make "unobserved" a lie.
+        return
+    stale = stale_baseline_entries(observed_baseline_entries())
+    if not stale:
+        return
+    listed = "\n".join(f"  {entry}" for entry in stale)
+    print(
+        f"\nERROR: {len(stale)} php_diagnostic_baseline.txt entries were never observed in this "
+        f"full sweep — the sites are fixed, so DELETE these lines (the baseline only shrinks):\n"
+        f"{listed}"
+    )
+    session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture

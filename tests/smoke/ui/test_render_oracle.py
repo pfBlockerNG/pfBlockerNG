@@ -41,6 +41,8 @@ from .render_oracle import (
     evaluate_render,
     gating_log_lines,
     load_baseline,
+    observed_baseline_entries,
+    stale_baseline_entries,
 )
 
 if TYPE_CHECKING:
@@ -353,6 +355,46 @@ def test_the_shipped_baseline_parses_and_is_burning_down() -> None:
         assert level in PHP_ERROR_LEVELS, f"baseline entry has an unknown PHP level: {entry!r}"
         assert message.strip(), f"baseline entry has an empty message: {entry!r}"
         assert "on line" not in message, f"baseline entry pins a line number (it will rot): {entry!r}"
+
+
+def test_stale_baseline_entries_names_what_a_full_sweep_never_saw() -> None:
+    """A grandfathered site nobody observes any more is a FIXED site -- and its entry has
+    to go, or a regression there would be silently forgiven again.
+
+    That is the failure mode the whole issue is about, reintroduced through the back door
+    by a baseline nobody prunes.
+    """
+    baseline = frozenset({"a|Warning|gone", "b|Warning|still here"})
+    assert stale_baseline_entries(frozenset({"b|Warning|still here"}), baseline=baseline) == ("a|Warning|gone",)
+
+
+def test_stale_baseline_entries_is_empty_when_every_entry_was_observed() -> None:
+    """The off branch: nothing to prune while the backlog is genuinely still there."""
+    baseline = frozenset({"a|Warning|one", "b|Warning|two"})
+    assert stale_baseline_entries(baseline, baseline=baseline) == ()
+
+
+def test_a_shipped_baseline_hit_is_recorded_as_observed() -> None:
+    """Matching a shipped entry records the observation the staleness check consumes.
+
+    Without this the sweep would report every entry as stale and demand deleting a
+    backlog that is still very much present.
+    """
+    entry = sorted(load_baseline())[0]
+    file, level, message = entry.split("|", 2)
+    line = f"[25-Jul-2026 10:00:00 UTC] PHP {level}:  {message} in {file} on line 1"
+    gating_log_lines(line)
+    assert entry in observed_baseline_entries()
+
+
+def test_a_unit_test_baseline_hit_is_not_recorded_as_observed() -> None:
+    """A caller-supplied baseline is a fixture, not a live sweep: its hits must not
+    count as observations, or a unit run would mark real entries alive."""
+    invented = '/usr/local/www/pfblockerng/never_shipped.php|Warning|Undefined array key "invented"'
+    file, level, message = invented.split("|", 2)
+    line = f"[25-Jul-2026 10:00:00 UTC] PHP {level}:  {message} in {file} on line 1"
+    gating_log_lines(line, baseline=frozenset({invented}))
+    assert invented not in observed_baseline_entries()
 
 
 def test_our_warning_still_gates_when_mixed_with_core_noise() -> None:

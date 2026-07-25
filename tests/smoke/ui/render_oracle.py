@@ -223,6 +223,28 @@ def load_baseline(path: Path | None = None) -> frozenset[str]:
     return frozenset(line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#"))
 
 
+# Fingerprints from the SHIPPED baseline actually seen during this session. A baseline
+# entry nobody observes any more is a site that got FIXED, and leaving it in the file
+# would silently forgive that diagnostic if it ever came back -- so a full sweep fails on
+# unobserved entries and the fix is to delete them (see stale_baseline_entries).
+_observed_baseline: set[str] = set()
+
+
+def observed_baseline_entries() -> frozenset[str]:
+    """Shipped-baseline fingerprints matched so far in this session."""
+    return frozenset(_observed_baseline)
+
+
+def stale_baseline_entries(observed: frozenset[str], baseline: frozenset[str] | None = None) -> tuple[str, ...]:
+    """Baseline entries never observed -- fixed sites whose grandfathering must go.
+
+    Only meaningful after a FULL sweep: a filtered or sharded run visits a subset of the
+    pages, so almost every entry would read as stale. The caller owns that condition.
+    """
+    grandfathered = load_baseline() if baseline is None else baseline
+    return tuple(sorted(grandfathered - observed))
+
+
 def gating_log_lines(appended: str, baseline: frozenset[str] | None = None) -> tuple[str, ...]:
     """The lines of an appended ``php_error.log`` chunk that must FAIL the sweep.
 
@@ -250,7 +272,12 @@ def gating_log_lines(appended: str, baseline: frozenset[str] | None = None) -> t
             origin = _LOG_ORIGIN_RE.search(line)
             if origin is None or PFB_PATH_MARKER not in origin.group("file").lower():
                 continue
-        if diagnostic_fingerprint(line) in grandfathered:
+        fingerprint = diagnostic_fingerprint(line)
+        if fingerprint in grandfathered:
+            # Record the hit only for the SHIPPED baseline: a caller passing its own set
+            # is a unit test, and its fixtures must not look like live observations.
+            if baseline is None and fingerprint is not None:
+                _observed_baseline.add(fingerprint)
             continue
         gating.append(line)
     return tuple(gating)

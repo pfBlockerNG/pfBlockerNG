@@ -492,4 +492,46 @@ RCEOF
     End
   End
 
+  # ── PFB_SMOKE_FULL_SWEEP: only a COMPLETE run may judge the baseline (#1218) ─ #
+  # tests/smoke/ui/conftest.py deletes-or-fails on grandfathered php_error.log entries
+  # it never observed. A narrowed run visits a subset of the pages, so exporting the
+  # flag there would demand deleting entries that are merely unvisited. The fake python
+  # echoes the variable, so each case reads the value run-smoke.sh actually exported.
+  sweep_flag() {
+    cat > "${FAKE_BIN}/python-sweep" << 'SWEEPEOF'
+#!/bin/sh
+printf '%s' "${PFB_SMOKE_FULL_SWEEP:-unset}"
+SWEEPEOF
+    chmod +x "${FAKE_BIN}/python-sweep"
+    PYTHON="${FAKE_BIN}/python-sweep" sh "$SCRIPT" "$@"
+  }
+
+  Describe 'PFB_SMOKE_FULL_SWEEP'
+    It 'is exported for an unfiltered, unsharded, whole-marker run'
+      When call sweep_flag --paths tests/smoke/ui -m ui_render
+      The output should equal "1"
+    End
+
+    It 'is NOT exported when --filter narrows the run'
+      When call sweep_flag --paths tests/smoke/ui -m ui_render --filter "test_one"
+      The output should equal "unset"
+    End
+
+    It 'is NOT exported when the caller passes pytest -k through'
+      When call sweep_flag --paths tests/smoke/ui -m ui_render -k test_one
+      The output should equal "unset"
+    End
+
+    It 'is NOT exported when the caller deselects tests'
+      When call sweep_flag --paths tests/smoke/ui -m ui_render --deselect tests/smoke/ui/test_x.py::test_y
+      The output should equal "unset"
+    End
+
+    It 'is NOT exported for a shard slice'
+      make_shard_fixture
+      When call sweep_flag --paths "${WORK}/mods" --shard 0 --shard-total 2
+      The output should equal "unset"
+    End
+  End
+
 End
