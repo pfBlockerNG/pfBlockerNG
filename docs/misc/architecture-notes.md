@@ -612,13 +612,12 @@ to drive the live webConfigurator. It is off the default `pytest` like the rest 
   What gates is scoped twice. By **originating file**: pfSense-core diagnostics land in the
   same log and never gate (`gating_log_lines`). And by **class**: the defect-smelling ones —
   `Undefined variable`, null passed to a string parameter (deprecated in 8.1, a **TypeError in
-  PHP 9**), array-offset-on-null, optional-parameter order — plus every fatal/parse level. The
-  endemic `Undefined array key` class is **reported, not gated**: it is emitted at ~488
-  distinct sites, so freezing them all would buy a gate whose next instance is
+  PHP 9**), array-offset-on-null, optional-parameter order — plus the fatal/parse/recoverable levels. The
+  endemic `Undefined array key` class is **reported, not gated**: it is emitted at 469 distinct sites, so freezing them all would buy a gate whose next instance is
   indistinguishable from the ones already forgiven. #1712 burns that class down; when it hits
   zero, delete `ENDEMIC_MESSAGE_PREFIXES` and it gates like the rest.
 
-  Pre-existing gated-class sites live in `tests/smoke/ui/php_diagnostic_baseline.txt` (27
+  Pre-existing gated-class sites live in `tests/smoke/ui/php_diagnostic_baseline.txt` (33
   entries, keyed `file|level|message` with no line numbers so edits don't resurrect them). The
   list may only SHRINK: fix the site and delete its line in the same commit — the sweep goes
   red if the diagnostic is still emitted, which is the deletion's own proof. A full sweep also

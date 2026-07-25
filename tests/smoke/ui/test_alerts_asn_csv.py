@@ -189,7 +189,7 @@ def test_alerts_asn_csv_new_schema_renders_legacy_schema_silently_absent(
             table) is GET-ted.
       Then  the Tier-A render oracle passes (200, no PHP diagnostic in the
             body, page marker present) AND the server's own php_error.log
-            gained no bytes (oracle condition (d) -- a logged-but-not-echoed
+            gained no gated-class diagnostic (oracle condition (d) -- a logged-but-not-echoed
             warning would still fail this)
         AND the new-schema row's ASN renders visibly, with a tooltip built
             from its domain + name

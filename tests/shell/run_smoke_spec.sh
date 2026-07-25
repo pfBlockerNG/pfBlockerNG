@@ -493,8 +493,8 @@ RCEOF
   End
 
   # ── PFB_SMOKE_FULL_SWEEP: only a COMPLETE run may judge the baseline (#1218) ─ #
-  # tests/smoke/ui/conftest.py deletes-or-fails on grandfathered php_error.log entries
-  # it never observed. A narrowed run visits a subset of the pages, so exporting the
+  # tests/smoke/ui/conftest.py REPORTS grandfathered php_error.log entries it never
+  # observed. A narrowed run visits a subset of the pages, so exporting the
   # flag there would demand deleting entries that are merely unvisited. The fake python
   # echoes the variable, so each case reads the value run-smoke.sh actually exported.
   sweep_flag() {
@@ -530,6 +530,34 @@ SWEEPEOF
     It 'is NOT exported for a shard slice'
       make_shard_fixture
       When call sweep_flag --paths "${WORK}/mods" --shard 0 --shard-total 2
+      The output should equal "unset"
+    End
+
+    # The baseline the flag unlocks is the UI sweep's. A run under a DIFFERENT marker
+    # never visits those pages, so trusting it would list every entry as unobserved and
+    # invite deleting live ones.
+    It 'is NOT exported for a different marker'
+      When call sweep_flag --paths tests/smoke -m smoke
+      The output should equal "unset"
+    End
+
+    It 'is NOT exported for a compound marker expression that narrows the sweep'
+      When call sweep_flag --paths tests/smoke/ui -m "ui_render and not slow"
+      The output should equal "unset"
+    End
+
+    It 'is NOT exported when --paths narrows below the full tree'
+      When call sweep_flag --paths tests/smoke/ui/test_alerts_asn_csv.py -m ui_render
+      The output should equal "unset"
+    End
+
+    It 'is NOT exported when the caller ignores part of the tree'
+      When call sweep_flag --paths tests/smoke/ui -m ui_render --ignore=tests/smoke/ui/test_render_smoke.py
+      The output should equal "unset"
+    End
+
+    It 'is NOT exported for a collect-only run'
+      When call sweep_flag --paths tests/smoke/ui -m ui_render --collect-only
       The output should equal "unset"
     End
   End

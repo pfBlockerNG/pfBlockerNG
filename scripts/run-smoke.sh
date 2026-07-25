@@ -148,6 +148,8 @@ for _a in "$@"; do
         -m) _CALLER_GAVE_M=1 ;;
         -k|-k*|--deselect|--deselect=*|--lf|--last-failed|--ff|--failed-first)
             _CALLER_NARROWED=1 ;;
+        --ignore|--ignore=*|--ignore-glob|--ignore-glob=*|--co|--collect-only)
+            _CALLER_NARROWED=1 ;;
         -*) : ;;
         */*|*.py|*::*) _CALLER_GAVE_PATH=1 ;;
         *) : ;;
@@ -243,13 +245,22 @@ fi
 # so PFB_DIAG_DIR stays unset there — timing is terminal-only, no stray file.
 export PFB_DIAG_DIR="${PFB_DIAG_DIR:-smoke-diag}"
 
-# issue #1218: only a COMPLETE run may judge the php_error.log baseline stale. A
-# --filter'ed or sharded run visits a subset of the pages, so almost every grandfathered
-# entry would read as "never observed" and the sweep would demand deleting live ones.
-# Unfiltered + unsharded + no caller-supplied path/-k is the one shape that sees
-# everything the marker covers; tests/smoke/ui/conftest.py reads this at session end.
+# issue #1218: only a COMPLETE ui_render run may judge the php_error.log baseline stale.
+# The baseline describes the UI sweep's pages, so anything that visits fewer of them --
+# a --filter, a shard, a caller path/-k/--deselect/--ignore, a collect-only run, a
+# DIFFERENT marker, a compound marker expression that narrows within ui_render, or a
+# --paths below the full tree -- would report live entries as "never observed" and invite
+# deleting them, reddening the next genuine sweep. Exact-match the marker and the tree:
+# every other shape leaves the flag unset and the report silent (tests/smoke/ui/conftest.py).
+_FULL_SWEEP=0
 if [ -z "$_FILTER" ] && [ "$_SHARD_TOTAL" -eq 1 ] && [ "$_CALLER_GAVE_PATH" -eq 0 ] &&
-    [ "$_CALLER_NARROWED" -eq 0 ]; then
+    [ "$_CALLER_NARROWED" -eq 0 ] && [ "$_MARKER" = "ui_render" ]; then
+    case "$_PATHS" in
+        tests/smoke|tests/smoke/ui) _FULL_SWEEP=1 ;;
+        *) _FULL_SWEEP=0 ;;
+    esac
+fi
+if [ "$_FULL_SWEEP" -eq 1 ]; then
     export PFB_SMOKE_FULL_SWEEP=1
 fi
 

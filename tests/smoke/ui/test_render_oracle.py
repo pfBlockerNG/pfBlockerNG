@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from . import render_oracle
 from .render_oracle import (
     PFB_PATH_MARKER,
     PHP_ERROR_LEVELS,
@@ -50,6 +51,25 @@ if TYPE_CHECKING:
     from ..conftest import SmokeVM
 
 pytestmark = pytest.mark.ui_render
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_observation_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep this module's fixtures out of the LIVE sweep's reporting state.
+
+    These tests carry ``ui_render``, so they run in the same pytest session as the live
+    sweep, and ``pytest_sessionfinish`` reports on module-level sets shared with it. A
+    fixture fingerprint leaking in would mark a real site "still emitting" and hide it from
+    the removal report for good. ``record=True`` is restricted to the guard for the same
+    reason; this is the belt to that suspenders, per testing.md's "reset per-test state
+    explicitly" rule -- and it fails loudly rather than silently if the swap ever stops
+    taking.
+    """
+    monkeypatch.setattr(render_oracle, "_observed_baseline", set())
+    monkeypatch.setattr(render_oracle, "_endemic_seen", set())
+    assert render_oracle.observed_baseline_entries() == frozenset(), "observation state did not reset"
+    assert render_oracle.endemic_diagnostics() == frozenset(), "endemic state did not reset"
+
 
 # A minimal "healthy" page body: HTTP-200-shaped, carries the page marker, is NOT
 # the login form, and has no PHP diagnostic. This is the body the oracle MUST pass.
@@ -181,7 +201,15 @@ _LOG = "/tmp/PHP_errors.log"
 _SEEDED = "[25-Jul-2026 09:59:00 UTC] PHP Warning:  pre-existing in /etc/inc/config.inc on line 1\n"
 
 # Real error_log line shapes, one per class the guard must tell apart.
+# NOT an "Undefined array key": that class is exempt by MESSAGE regardless of file, so a
+# core fixture using it would pass even with file scoping deleted -- the branch would be
+# untested (proved by mutation: PFB_PATH_MARKER = "" left the whole suite green).
 CORE_WARNING = (
+    "[25-Jul-2026 10:00:00 UTC] PHP Warning:  Invalid argument supplied for foreach() in "
+    "/etc/inc/pfsense-utils.inc on line 4211\n"
+)
+# The same core file emitting the ENDEMIC class -- exempt for a second, independent reason.
+CORE_ENDEMIC_WARNING = (
     '[25-Jul-2026 10:00:00 UTC] PHP Warning:  Undefined array key "descr" in /etc/inc/pfsense-utils.inc on line 4211\n'
 )
 PFB_PAGE_WARNING = (
@@ -245,7 +273,9 @@ class _FakeVM:
             # The post-mortem dump the guard prints alongside a failure: a deduped view of
             # the same file. Answer it so the fake stays a faithful guest, but keep every
             # assertion on the VERDICT -- this output is diagnostics, never the oracle.
-            body = self.files.get(argv[0].split()[-5], "")
+            # The probe is one shell string; the log path is its 4th word (`grep -F <marker>
+            # <path> | ...`). Splitting from the END lands on a word of the sed script.
+            body = self.files.get(argv[0].split()[3], "")
             matched = sorted({line for line in body.splitlines() if PFB_PATH_MARKER in line})
             return _FakeSSHResult(0, "\n".join(matched))
         raise AssertionError(f"unexpected guest command: {argv!r}")
@@ -301,9 +331,10 @@ def test_pfblockerng_undefined_array_key_does_not_gate_the_sweep() -> None:
 def test_the_endemic_class_is_still_observed_and_reported() -> None:
     """Not gating is not the same as not seeing: the fingerprint is recorded.
 
-    A silent skip would leave #1712 with no measurement of what is left to fix.
+    A silent skip would leave #1712 with no measurement of what is left to fix. Recorded
+    through the guard, like a real sweep -- a direct call deliberately records nothing.
     """
-    gating_log_lines(PFB_PAGE_WARNING)
+    _guard_after_appending(PFB_PAGE_WARNING).assert_no_growth()
     assert any("pfblockerng_feeds.php" in entry for entry in endemic_diagnostics())
 
 
@@ -326,6 +357,32 @@ def test_core_warning_does_not_gate_the_sweep() -> None:
     before. The guard scopes by ORIGINATING file instead, so core noise passes.
     """
     _guard_after_appending(CORE_WARNING).assert_no_growth()
+
+
+def test_core_endemic_warning_does_not_gate_either() -> None:
+    """(d) the endemic class from a core file is exempt twice over -- file AND class.
+
+    Paired with the case above, this separates the two reasons: that one is core-owned but
+    a GATED class, so only file scoping can excuse it; this one would be excused by either
+    rule alone. Without the pair, deleting the ownership check entirely left the suite
+    green (proved by mutation) because every core fixture was endemic-class.
+    """
+    _guard_after_appending(CORE_ENDEMIC_WARNING).assert_no_growth()
+
+
+def test_a_message_embedding_a_path_cannot_hijack_attribution() -> None:
+    """Origin is the LAST ``in <file> on line N`` -- PHP appends the real one at the end.
+
+    A message that itself quotes ``in <path> on line <N>`` (an include error, say) would
+    otherwise be attributed to the path in its own text: a core-raised diagnostic could
+    gate as ours, and an OUR-raised one could escape as core. The latter is the dangerous
+    direction, so it is asserted here.
+    """
+    ours_but_message_names_core = (
+        "[25-Jul-2026 10:00:00 UTC] PHP Warning:  failed to open in /etc/inc/config.inc on line 9 in "
+        "/usr/local/www/pfblockerng/pfblockerng_alerts.php on line 77\n"
+    )
+    assert gating_log_lines(ours_but_message_names_core), "our diagnostic escaped by quoting a core path"
 
 
 def test_core_fatal_still_gates_the_sweep() -> None:
@@ -431,16 +488,26 @@ def test_stale_baseline_entries_is_empty_when_every_entry_was_observed() -> None
     assert stale_baseline_entries(baseline, baseline=baseline) == ()
 
 
-def test_a_shipped_baseline_hit_is_recorded_as_observed() -> None:
-    """Matching a shipped entry records the observation the staleness check consumes.
+def test_a_shipped_baseline_hit_is_recorded_only_through_the_guard() -> None:
+    """A live sweep records the observation the staleness check consumes -- a direct
+    classification call does NOT.
 
-    Without this the sweep would report every entry as stale and demand deleting a
-    backlog that is still very much present.
+    Both halves matter. Without recording, the sweep would report every entry as stale and
+    demand deleting a backlog that is still very much present. Without the restriction, any
+    off-box unit test that classifies a synthetic line would mark a REAL entry observed and
+    permanently hide it from the removal report — the same "forgiven diagnostic nobody ever
+    re-examines" blindness this whole issue exists to remove.
     """
     entry = sorted(load_baseline())[0]
     file, level, message = entry.split("|", 2)
-    line = f"[25-Jul-2026 10:00:00 UTC] PHP {level}:  {message} in {file} on line 1"
-    gating_log_lines(line)
+    line = f"[25-Jul-2026 10:00:00 UTC] PHP {level}:  {message} in {file} on line 1\n"
+
+    # Direct classification: the shipped entry is forgiven, but nothing is recorded.
+    assert gating_log_lines(line) == ()
+    assert entry not in observed_baseline_entries(), "a direct call must never record a live observation"
+
+    # Through the guard (what a real sweep does): recorded.
+    _guard_after_appending(line).assert_no_growth()
     assert entry in observed_baseline_entries()
 
 
@@ -450,7 +517,7 @@ def test_a_unit_test_baseline_hit_is_not_recorded_as_observed() -> None:
     invented = '/usr/local/www/pfblockerng/never_shipped.php|Warning|Undefined array key "invented"'
     file, level, message = invented.split("|", 2)
     line = f"[25-Jul-2026 10:00:00 UTC] PHP {level}:  {message} in {file} on line 1"
-    gating_log_lines(line, baseline=frozenset({invented}))
+    gating_log_lines(line, baseline=frozenset({invented}), record=True)
     assert invented not in observed_baseline_entries()
 
 
