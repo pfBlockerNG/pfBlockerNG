@@ -21,11 +21,17 @@
 /usr/local/www/pfblockerng/pfblockerng_Asia.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
 /usr/local/www/pfblockerng/pfblockerng_Asia.php|Warning|Undefined variable $input_errors
 /usr/local/www/pfblockerng/pfblockerng_Europe.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Europe.php|Warning|Undefined variable $input_errors
 /usr/local/www/pfblockerng/pfblockerng_North_America.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_North_America.php|Warning|Undefined variable $input_errors
 /usr/local/www/pfblockerng/pfblockerng_Oceania.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Oceania.php|Warning|Undefined variable $input_errors
 /usr/local/www/pfblockerng/pfblockerng_Proxy_and_Satellite.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Proxy_and_Satellite.php|Warning|Undefined variable $input_errors
 /usr/local/www/pfblockerng/pfblockerng_South_America.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_South_America.php|Warning|Undefined variable $input_errors
 /usr/local/www/pfblockerng/pfblockerng_Top_Spammers.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Top_Spammers.php|Warning|Undefined variable $input_errors
 /usr/local/www/pfblockerng/pfblockerng_alerts.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
 /usr/local/www/pfblockerng/pfblockerng_blacklist.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
 /usr/local/www/pfblockerng/pfblockerng_category_edit.php|Deprecated|str_replace(): Passing null to parameter #3 ($subject) of type array|string is deprecated

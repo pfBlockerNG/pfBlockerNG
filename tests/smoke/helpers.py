@@ -1245,18 +1245,25 @@ def php_fpm_probe(vm: SmokeVM, get: Callable[[str], Any], *, warn_tag: str, time
             )
 
 
-def php_trigger_undefined_key_warning(vm: SmokeVM, *, path: str, tag: str, timeout: float = 30.0) -> None:
-    """Raise a real ``E_WARNING`` (``Undefined array key``) from a PHP file AT ``path``.
+def php_trigger_undefined_variable_warning(vm: SmokeVM, *, path: str, tag: str, timeout: float = 30.0) -> None:
+    """Raise a real ``E_WARNING`` (``Undefined variable``) from a PHP file AT ``path``.
 
     The runtime ``E_WARNING`` / ``E_NOTICE`` / ``E_DEPRECATED`` class is the one issue
     #1218 made observable, and the sweep's log guard scopes it by the file the diagnostic
     was raised in — so a proof of that scoping needs the warning to come from a CHOSEN
     file, which ``php -r`` (origin ``Command line code``) cannot give. The file is written,
     executed at the box's CONFIGURED level (no ``-d`` override, so the ini is under test
-    too), and removed again; ``tag`` becomes the array key, hence the logged message, so a
-    caller can grep the log for exactly this trigger.
+    too), and removed again; ``tag`` becomes the variable name, hence the logged message, so
+    a caller can grep the log for exactly this trigger.
+
+    ``Undefined variable`` deliberately, NOT ``Undefined array key``: the latter is the
+    endemic class the guard reports rather than gates (``ENDEMIC_MESSAGE_PREFIXES``), so a
+    probe using it would prove nothing about gating. ``tag`` must therefore be a valid PHP
+    identifier.
     """
-    code = f"<?php $a = []; echo $a[{_php_str(tag)}];"
+    if not tag.isidentifier():
+        raise ValueError(f"tag must be a PHP identifier (it becomes a variable name): {tag!r}")
+    code = f"<?php echo ${tag};"
     write = vm.ssh(f"printf '%s' {shlex.quote(code)} > {shlex.quote(path)}", timeout=timeout)
     if write.returncode != 0:
         raise RuntimeError(f"writing php warning probe {path} failed: {(write.stderr or write.stdout).strip()!r}")

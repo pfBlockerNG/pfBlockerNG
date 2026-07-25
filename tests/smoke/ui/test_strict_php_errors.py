@@ -89,7 +89,7 @@ def test_render_log_guard_gates_on_our_files_only(deployed_vm: SmokeVM) -> None:
     Scenario: the sweep fails on a pfBlockerNG diagnostic and ignores pfSense-core noise.
 
       Given the guest's effective ``ini_get('error_log')`` is a file the guard watches
-      When a real ``E_WARNING`` is raised from a file OUTSIDE the package
+      When a real ``E_WARNING`` (undefined variable) is raised from a file OUTSIDE the package
       Then it IS logged, and the guard passes — core noise never gates (off branch)
       When the same ``E_WARNING`` is raised from a file inside the package directory
       Then the guard fails, naming that line — our regression gates (on branch)
@@ -104,8 +104,8 @@ def test_render_log_guard_gates_on_our_files_only(deployed_vm: SmokeVM) -> None:
     The path assertion is the anti-no-op guard: if PHP logged somewhere unwatched neither
     branch could fire, so this pins ``error_log`` INTO the candidate set.
     """
-    outside_tag = "pfb-smoke-warn-outside"
-    owned_tag = "pfb-smoke-warn-owned"
+    outside_tag = "pfb_smoke_warn_outside"
+    owned_tag = "pfb_smoke_warn_owned"
     # A path with no "pfblockerng" in it stands in for pfSense core; the package dir is
     # the real shipped root, so the owned probe proves ownership the way a page would.
     outside_probe = "/tmp/smoke_core_warn_probe.php"
@@ -121,9 +121,9 @@ def test_render_log_guard_gates_on_our_files_only(deployed_vm: SmokeVM) -> None:
     # When/Then (off branch): a warning from outside the package is logged but ignored.
     guard = PhpErrorLogGuard(deployed_vm)
     guard.snapshot()
-    helpers.php_trigger_undefined_key_warning(deployed_vm, path=outside_probe, tag=outside_tag)
+    helpers.php_trigger_undefined_variable_warning(deployed_vm, path=outside_probe, tag=outside_tag)
     assert helpers.guest_file_contains(deployed_vm, log_path, outside_tag), (
-        f"E_WARNING {outside_tag!r} from {outside_probe} never reached {log_path} — the guest is not "
+        f"E_WARNING for ${outside_tag} from {outside_probe} never reached {log_path} — the guest is not "
         f"logging the runtime warning class, so the 'core noise does not gate' half proves nothing"
     )
     guard.assert_no_growth()
@@ -132,7 +132,7 @@ def test_render_log_guard_gates_on_our_files_only(deployed_vm: SmokeVM) -> None:
     # failure names the offending line so a real red is actionable from the message alone.
     guard = PhpErrorLogGuard(deployed_vm)
     guard.snapshot()
-    helpers.php_trigger_undefined_key_warning(deployed_vm, path=owned_probe, tag=owned_tag)
+    helpers.php_trigger_undefined_variable_warning(deployed_vm, path=owned_probe, tag=owned_tag)
     with pytest.raises(AssertionError, match="pfBlockerNG PHP diagnostics") as caught:
         guard.assert_no_growth()
     assert owned_tag in str(caught.value), (
