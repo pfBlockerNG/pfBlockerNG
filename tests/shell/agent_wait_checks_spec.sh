@@ -50,6 +50,178 @@ Describe 'wait-checks.sh evaluate_checks()'
   End
 End
 
+# checks_to_buckets(): maps the two SHA-addressed REST reads (check-runs + commit status,
+# each possibly several `--paginate` pages concatenated) to the {name, bucket} shape
+# evaluate_checks() consumes. Unrecognised conclusion/state values fall to "pending", never
+# "pass" (#1690: an unmapped value must surface as a TIMEOUT a human looks at).
+Describe 'wait-checks.sh checks_to_buckets()'
+  AGENT_SOURCE_ONLY=1
+  Include scripts/agent/wait-checks.sh
+
+  It 'maps a queued check run to pending'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"queued","conclusion":null}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"pending"}]'
+  End
+
+  It 'maps an in_progress check run to pending'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"in_progress","conclusion":null}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"pending"}]'
+  End
+
+  It 'maps a completed/success check run to pass'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"pass"}]'
+  End
+
+  It 'maps a completed/neutral check run to pass'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":"neutral"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"pass"}]'
+  End
+
+  It 'maps a completed/skipped check run to skipping'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":"skipped"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"skipping"}]'
+  End
+
+  It 'maps a completed/cancelled check run to cancel'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":"cancelled"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"cancel"}]'
+  End
+
+  It 'maps a completed/failure check run to fail'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":"failure"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"fail"}]'
+  End
+
+  It 'maps a completed/timed_out check run to fail'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":"timed_out"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"fail"}]'
+  End
+
+  It 'maps a completed/action_required check run to fail'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":"action_required"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"fail"}]'
+  End
+
+  It 'maps a completed/stale check run to fail'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":"stale"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"fail"}]'
+  End
+
+  It 'maps a completed/startup_failure check run to fail'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":"startup_failure"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"fail"}]'
+  End
+
+  It 'maps a completed check run with a null conclusion to pending, never pass'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":null}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"pending"}]'
+  End
+
+  It 'maps a completed check run with an unrecognised conclusion to pending, never pass'
+    When call checks_to_buckets '{"check_runs":[{"name":"pytest","status":"completed","conclusion":"weird_future_value"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"pytest","bucket":"pending"}]'
+  End
+
+  It 'maps a success commit status to pass'
+    When call checks_to_buckets '{"check_runs":[]}' '{"statuses":[{"context":"legacy-ci","state":"success"}]}'
+    The output should equal '[{"name":"legacy-ci","bucket":"pass"}]'
+  End
+
+  It 'maps a pending commit status to pending'
+    When call checks_to_buckets '{"check_runs":[]}' '{"statuses":[{"context":"legacy-ci","state":"pending"}]}'
+    The output should equal '[{"name":"legacy-ci","bucket":"pending"}]'
+  End
+
+  It 'maps an error commit status to fail'
+    When call checks_to_buckets '{"check_runs":[]}' '{"statuses":[{"context":"legacy-ci","state":"error"}]}'
+    The output should equal '[{"name":"legacy-ci","bucket":"fail"}]'
+  End
+
+  It 'maps a failure commit status to fail'
+    When call checks_to_buckets '{"check_runs":[]}' '{"statuses":[{"context":"legacy-ci","state":"failure"}]}'
+    The output should equal '[{"name":"legacy-ci","bucket":"fail"}]'
+  End
+
+  It 'maps an unrecognised commit-status state to pending, never pass'
+    When call checks_to_buckets '{"check_runs":[]}' '{"statuses":[{"context":"legacy-ci","state":"weird"}]}'
+    The output should equal '[{"name":"legacy-ci","bucket":"pending"}]'
+  End
+
+  It 'takes the status name from .context, ignoring any .name field on the status object'
+    When call checks_to_buckets '{"check_runs":[]}' '{"statuses":[{"name":"WRONG","context":"right-name","state":"success"}]}'
+    The output should equal '[{"name":"right-name","bucket":"pass"}]'
+  End
+
+  It 'concatenates check-run and status entries from both payloads, dropping nothing'
+    cr='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    st='{"statuses":[{"context":"legacy-ci","state":"success"}]}'
+    When call checks_to_buckets "$cr" "$st"
+    The output should equal '[{"name":"pytest","bucket":"pass"},{"name":"legacy-ci","bucket":"pass"}]'
+  End
+
+  It 'reads every page when --paginate concatenates multiple JSON documents in one payload'
+    cr=$(printf '%s\n%s\n' \
+      '{"check_runs":[{"name":"page1","status":"completed","conclusion":"success"}]}' \
+      '{"check_runs":[{"name":"page2","status":"completed","conclusion":"success"}]}')
+    When call checks_to_buckets "$cr" '{"statuses":[]}'
+    The output should equal '[{"name":"page1","bucket":"pass"},{"name":"page2","bucket":"pass"}]'
+  End
+
+  It 'contributes zero entries from a page missing its check_runs/statuses key, without a jq error'
+    cr=$(printf '%s\n%s\n' '{"total_count":0}' '{"check_runs":[{"name":"only-one","status":"completed","conclusion":"success"}]}')
+    When call checks_to_buckets "$cr" '{"total_count":0}'
+    The output should equal '[{"name":"only-one","bucket":"pass"}]'
+  End
+
+  It 'maps a null check-run name to an empty string instead of crashing downstream'
+    When call checks_to_buckets '{"check_runs":[{"name":null,"status":"completed","conclusion":"success"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"","bucket":"pass"}]'
+  End
+
+  It 'maps a missing check-run name field to an empty string'
+    When call checks_to_buckets '{"check_runs":[{"status":"completed","conclusion":"success"}]}' '{"statuses":[]}'
+    The output should equal '[{"name":"","bucket":"pass"}]'
+  End
+
+  It 'evaluate_checks does not crash on a checks_to_buckets result carrying an empty name'
+    exclude='coderabbit|snyk'
+    buckets=$(checks_to_buckets '{"check_runs":[{"name":null,"status":"completed","conclusion":"success"}]}' '{"statuses":[]}')
+    When call evaluate_checks "$buckets"
+    The output should equal 'PASS'
+  End
+
+  It 'preserves a check-run name containing quotes and backslashes through the jq round-trip'
+    cr='{"check_runs":[{"name":"weird \"quoted\" \\ name","status":"completed","conclusion":"success"}]}'
+    When call checks_to_buckets "$cr" '{"statuses":[]}'
+    The output should equal '[{"name":"weird \"quoted\" \\ name","bucket":"pass"}]'
+  End
+
+  It 'treats an empty check-runs payload as zero entries, not a jq error'
+    When call checks_to_buckets '' '{"statuses":[{"context":"x","state":"success"}]}'
+    The output should equal '[{"name":"x","bucket":"pass"}]'
+  End
+
+  It 'treats both payloads empty as zero entries, not a jq error'
+    When call checks_to_buckets '' ''
+    The output should equal '[]'
+  End
+
+  It 'treats an unexpected-shape payload (e.g. a Not-Found error body) as zero entries, not a crash'
+    When call checks_to_buckets '{"message":"Not Found"}' '{"message":"Not Found"}'
+    The output should equal '[]'
+  End
+
+  It 'excludes a failing CodeRabbit commit status beside a passing check run, across both payload classes'
+    exclude='coderabbit|snyk'
+    cr='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    st='{"statuses":[{"context":"CodeRabbit","state":"failure"}]}'
+    buckets=$(checks_to_buckets "$cr" "$st")
+    When call evaluate_checks "$buckets"
+    The output should equal 'PASS'
+  End
+End
+
 Describe 'agent_env.sh bounded gh execution'
   AGENT_SOURCE_ONLY=1
   Include scripts/agent/agent_env.sh
@@ -156,6 +328,9 @@ Describe 'wait-checks.sh tool contracts'
 End
 
 Describe 'wait-checks.sh loop verdicts (stub gh)'
+  # gh now serves 3 call shapes: `pr view` (SHA arm/re-verify), `.../check-runs`,
+  # `.../status` -- GH_STUB_CHECK_RUNS / GH_STUB_STATUS_PAYLOAD replace the old
+  # single-shape GH_STUB_CHECKS fixture (#1690: checks moved SHA-addressed).
   setup_stub() {
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/ghstub.XXXXXX")"
     cat > "$stubdir/gh" <<'STUB'
@@ -167,7 +342,11 @@ count=$((count + 1))
 case " ${GH_STUB_FAIL_CALLS:-} " in
 	*" $count "*) printf '%s\n' "${GH_STUB_FAIL_OUTPUT:-HTTP 404}"; exit 1 ;;
 esac
-printf '%s\n' "$GH_STUB_CHECKS"
+case "$*" in
+	*"pr view "*) printf '%s\n' "${GH_STUB_SHA:-deadbeef}" ;;
+	*"/check-runs"*) printf '%s\n' "$GH_STUB_CHECK_RUNS" ;;
+	*"/status"*) printf '%s\n' "$GH_STUB_STATUS_PAYLOAD" ;;
+esac
 STUB
     chmod +x "$stubdir/gh"
     PATH="$stubdir:$PATH"
@@ -176,6 +355,11 @@ STUB
   Before 'setup_stub'
   After 'cleanup_stub'
   script="scripts/agent/wait-checks.sh"
+
+  pending_fixture() {
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"in_progress","conclusion":null}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+  }
 
   setup_near_deadline() {
     cat > "$stubdir/date" <<'STUB'
@@ -191,22 +375,44 @@ STUB
   }
 
   It 'reports TIMEOUT when checks stay pending through the cap'
-    export GH_STUB_CHECKS='[{"name":"pytest","bucket":"pending"}]'
+    pending_fixture
     When run sh "$script" --repo o/r --pr 1 --interval 0 --max-iter 2
     The line 1 of output should equal 'TIMEOUT'
   End
 
   It 'honours the wall-clock deadline even when a verdict would be reached'
-    export GH_STUB_CHECKS='[{"name":"pytest","bucket":"pass"}]'
-    export PFB_WAIT_DEADLINE=1
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    # date returns "100" for the arm-time gh_bounded call (deadline 101 still ahead of
+    # it) then "200" for the loop's own check -- the loop must break on ITS deadline
+    # check even though the (unfetched) checks would otherwise pass.
+    cat > "$stubdir/date" <<'STUB'
+#!/bin/sh
+n=0
+[ ! -f "${DATE_COUNT_FILE:-}" ] || n=$(cat "$DATE_COUNT_FILE")
+n=$((n + 1))
+[ -z "${DATE_COUNT_FILE:-}" ] || printf '%s\n' "$n" > "$DATE_COUNT_FILE"
+if [ "$n" -le 1 ]; then
+	printf '100\n'
+else
+	printf '200\n'
+fi
+STUB
+    chmod +x "$stubdir/date"
+    export DATE_COUNT_FILE="$stubdir/date-count"
+    export PFB_WAIT_DEADLINE=101
     When run sh "$script" --repo o/r --pr 1 --interval 0 --max-iter 3
     The line 1 of output should equal 'TIMEOUT'
   End
 
   It 'resets the failure streak after a successful pending snapshot'
+    pending_fixture
     export GH_STUB_COUNT_FILE="$stubdir/count"
-    export GH_STUB_FAIL_CALLS='1 2 4 5'
-    export GH_STUB_CHECKS='[{"name":"pytest","bucket":"pending"}]'
+    # call 1 = arm `pr view` (must succeed); each iteration is 1 call when check-runs
+    # fails (short-circuits the status read) or 2 when it succeeds: iters 1-2 fail
+    # (calls 2,3), iter 3 succeeds (calls 4,5) and resets the streak, iters 4-5 fail
+    # (calls 6,7) -- never 3 consecutive, so TIMEOUT not GH-ERROR.
+    export GH_STUB_FAIL_CALLS='2 3 6 7'
     When run sh "$script" --repo o/r --pr 1 --interval 0 --max-iter 5
     The status should equal 0
     The line 1 of output should equal 'TIMEOUT'
@@ -214,7 +420,7 @@ STUB
 
   It 'caps sleep after a successful pending poll at the remaining deadline'
     setup_near_deadline
-    export GH_STUB_CHECKS='[{"name":"pytest","bucket":"pending"}]'
+    pending_fixture
     When run sh "$script" --repo o/r --pr 1 --interval 99 --max-iter 1
     The line 1 of output should equal 'TIMEOUT'
     The contents of file "$WAIT_SLEEP_FILE" should equal '3'
@@ -223,7 +429,9 @@ STUB
   It 'caps sleep after a failed poll at the remaining deadline'
     setup_near_deadline
     export GH_STUB_COUNT_FILE="$stubdir/count"
-    export GH_STUB_FAIL_CALLS='1'
+    # call 1 = arm `pr view` (must succeed so the loop is reached at all); call 2 =
+    # the single iteration's check-runs read, which fails.
+    export GH_STUB_FAIL_CALLS='2'
     When run sh "$script" --repo o/r --pr 1 --interval 99 --max-iter 1
     The line 1 of output should equal 'TIMEOUT'
     The contents of file "$WAIT_SLEEP_FILE" should equal '3'
@@ -246,5 +454,164 @@ Describe 'wait-checks.sh gh-failure detection'
     The status should equal 1
     The line 1 of output should equal 'GH-ERROR'
     The output should include 'HTTP 404'
+  End
+End
+
+Describe 'wait-checks.sh SHA pinning (#1690 regression)'
+  setup_stub() {
+    stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/ghstub.XXXXXX")"
+    cat > "$stubdir/gh" <<'STUB'
+#!/bin/sh
+argv="$*"
+[ -z "${ARGV_LOG:-}" ] || printf '%s\n' "$argv" >> "$ARGV_LOG"
+case "$argv" in
+	*"pr checks"*)
+		printf '%s\n' "$GH_STUB_PR_CHECKS_LEGACY"
+		;;
+	*"pr view "*)
+		count=0
+		[ ! -f "${GH_STUB_PRVIEW_COUNT_FILE:-/nonexistent}" ] || count=$(cat "$GH_STUB_PRVIEW_COUNT_FILE")
+		count=$((count + 1))
+		[ -z "${GH_STUB_PRVIEW_COUNT_FILE:-}" ] || printf '%s\n' "$count" > "$GH_STUB_PRVIEW_COUNT_FILE"
+		case " ${GH_STUB_PRVIEW_FAIL_CALLS:-} " in
+			*" $count "*) printf '%s\n' "${GH_STUB_PRVIEW_FAIL_OUTPUT:-pr view failed}" >&2; exit 1 ;;
+		esac
+		if [ "$count" -eq 1 ]; then
+			printf '%s\n' "$GH_STUB_HEAD_SHA_1"
+		else
+			printf '%s\n' "${GH_STUB_HEAD_SHA_2:-$GH_STUB_HEAD_SHA_1}"
+		fi
+		;;
+	*"/check-runs"*)
+		if [ -z "${GH_STUB_EXPECT_SHA:-}" ]; then
+			printf '%s\n' "$GH_STUB_CHECK_RUNS"
+		else
+			case "$argv" in
+				*"/commits/$GH_STUB_EXPECT_SHA/check-runs"*) printf '%s\n' "$GH_STUB_CHECK_RUNS" ;;
+				*) exit 1 ;;
+			esac
+		fi
+		;;
+	*"/status"*)
+		if [ -z "${GH_STUB_EXPECT_SHA:-}" ]; then
+			printf '%s\n' "$GH_STUB_STATUS_PAYLOAD"
+		else
+			case "$argv" in
+				*"/commits/$GH_STUB_EXPECT_SHA/status"*) printf '%s\n' "$GH_STUB_STATUS_PAYLOAD" ;;
+				*) exit 1 ;;
+			esac
+		fi
+		;;
+	*)
+		exit 1
+		;;
+esac
+STUB
+    chmod +x "$stubdir/gh"
+    PATH="$stubdir:$PATH"
+  }
+  cleanup_stub() { rm -rf "$stubdir"; }
+  Before 'setup_stub'
+  After 'cleanup_stub'
+
+  It 'never reports PASS for a force-pushed head with zero registered checks, even though the previous commit was green (#1690)'
+    export GH_STUB_PR_CHECKS_LEGACY='[{"name":"pytest","bucket":"pass"}]'
+    export GH_STUB_HEAD_SHA_1='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 2
+    The output should include 'TIMEOUT'
+    The output should not include 'PASS'
+  End
+
+  It 'reports STALE, never PASS, when the head moves after the pinned checks went green'
+    export GH_STUB_PR_CHECKS_LEGACY='[{"name":"pytest","bucket":"pass"}]'
+    export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
+    export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    export GH_STUB_HEAD_SHA_2='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The output should include 'STALE'
+    The output should not include 'PASS'
+    The output should include 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    The output should include 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    The status should equal 0
+  End
+
+  It 'reports PASS when the pinned SHA is all-green and the head has not moved'
+    export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 0
+    The line 1 of output should equal '[{"name":"pytest","bucket":"pass"}]'
+    The line 2 of output should equal 'PASS'
+  End
+
+  It 'reports FAIL when the pinned SHA has a failing check and the head has not moved'
+    export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"failure"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 0
+    The line 1 of output should equal '[{"name":"pytest","bucket":"fail"}]'
+    The line 2 of output should equal 'FAIL'
+  End
+
+  It '--sha skips arm-time resolution (never calls pr view to resolve) but still re-verifies before the verdict'
+    explicit_sha='cccccccccccccccccccccccccccccccccccccccc'
+    export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
+    export GH_STUB_HEAD_SHA_1="$explicit_sha"
+    export GH_STUB_EXPECT_SHA="$explicit_sha"
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --sha "$explicit_sha" --interval 0 --max-iter 1
+    The status should equal 0
+    The line 2 of output should equal 'PASS'
+    The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '1'
+  End
+
+  It 'fails loudly with GH-ERROR when arm-time SHA resolution itself errors (gh exits nonzero)'
+    export GH_STUB_PRVIEW_FAIL_CALLS='1'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 1
+    The line 1 of output should equal 'GH-ERROR'
+  End
+
+  It 'fails loudly with GH-ERROR when arm-time SHA resolution yields an empty value'
+    export GH_STUB_HEAD_SHA_1=''
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 1
+    The line 1 of output should equal 'GH-ERROR'
+  End
+
+  It 'fails loudly with GH-ERROR when the pre-verdict head re-read fails, never emitting a verdict'
+    export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
+    export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    export GH_STUB_PRVIEW_FAIL_CALLS='2'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 1
+    The line 1 of output should equal 'GH-ERROR'
+  End
+
+  It 'rejects an explicit empty --sha as a usage error, never falling through to an unpinned poll'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --sha '' --interval 0 --max-iter 1
+    The status should equal 2
+    The stderr should include 'usage:'
+  End
+
+  It 'passes a metacharacter-laden --sha through to gh as inert opaque data, never evaluated'
+    canary="$stubdir/injected"
+    weird='sha; touch '"$canary"'; $(touch '"$canary"')'
+    export GH_STUB_HEAD_SHA_1="$weird"
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --sha "$weird" --interval 0 --max-iter 1
+    The status should equal 0
+    The line 2 of output should equal 'PASS'
+    The file "$canary" should not be exist
   End
 End
