@@ -76,6 +76,8 @@ jobs:
     steps:
       - name: Checkout (for scripts/read-version-matrix.sh + the action)
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Fetch the ci-metadata orphan ref
         # The reader reads origin/ci-metadata; checkout doesn't bring orphan refs.
@@ -101,6 +103,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -140,6 +144,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -162,6 +168,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -185,6 +193,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install ShellCheck
         run: sudo apt-get install -y shellcheck
@@ -267,6 +277,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install jq and dash
         # jq drives the ip_pre_AWS_*.sh region filters (required). dash is
@@ -398,6 +410,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up PHP ${{ matrix.php-version }}
         uses: shivammathur/setup-php@v2
@@ -422,6 +436,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up PHP ${{ matrix.php-version }}
         uses: shivammathur/setup-php@v2
@@ -452,6 +468,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up PHP ${{ matrix.php-version }}
         uses: shivammathur/setup-php@v2
@@ -482,6 +500,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up PHP ${{ matrix.php-version }}
         uses: shivammathur/setup-php@v2
@@ -510,6 +530,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
@@ -531,6 +553,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
@@ -555,6 +579,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
@@ -610,6 +636,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -679,6 +707,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0 # need the merge-base with the PR base ref for the three-dot diff
 
       - name: Compute changed files vs base
@@ -757,6 +786,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0 # need the merge-base with the PR base ref for the three-dot diff
 
       - name: Forbid process narration in added comments
@@ -786,6 +816,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0 # need the merge-base with the PR base ref for the three-dot diff
 
       - name: Report stragglers of retired tokens (advisory)

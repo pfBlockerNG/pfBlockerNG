@@ -30,6 +30,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0 # need the merge-base with the PR base ref for the three-dot diff
 
       - name: Validate the role registry against vendor role definitions

@@ -109,6 +109,8 @@ jobs:
         # This checkout IS --local-src: the builder packages this exact tree
         # (the way the FreeBSD path pins the port's USE_GITHUB fetch to the SHA).
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python (match the target runtime, py 3.11+)
         uses: actions/setup-python@v6

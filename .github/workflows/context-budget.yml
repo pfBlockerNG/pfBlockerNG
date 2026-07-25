@@ -49,6 +49,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Enforce context byte budgets + routing headers
         # ubuntu-latest ships python3. --all: the workflow's own path filter
