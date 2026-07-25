@@ -5357,6 +5357,15 @@ def dump_diagnostics(vm: SmokeVM) -> None:
         ),
         ("unbound pfb includes", "ls -l /var/unbound/pfb_dnsbl* /var/unbound/pfb_py* 2>/dev/null || true"),
         (
+            # The guest runs a true E_ALL (#1218), so this log carries every pfBlockerNG
+            # diagnostic the run provoked — the Tier-A sweep's own evidence. Timestamps
+            # are stripped and the list deduped, so a page emitting one warning 500 times
+            # costs one line: what matters post-mortem is WHICH sites fired, not how often.
+            "pfBlockerNG diagnostics in php_error.log (deduped)",
+            "grep -F pfblockerng /tmp/PHP_errors.log 2>/dev/null | sed 's/^\\[[^]]*\\] //' | "
+            "sort -u | head -500 || true",
+        ),
+        (
             # Direct before/after: what pfBlockerNG's DNSBL reload changed in
             # unbound.conf — crucially whether it dropped any access-control.
             "unbound.conf DNSBL diff (before -> after)",
