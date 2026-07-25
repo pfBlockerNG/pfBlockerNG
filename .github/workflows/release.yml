@@ -13,7 +13,7 @@ name: Release
 #      modes, gated on prepare-release succeeding (or being skipped in dry-run).
 #
 #   3. attach-pkgs / repo-publish / sync-ports-fork: real-publish only
-#      (dry_run != 'true'), same ordering as before.
+#      (dry_run == 'false', fail-closed — issue #1661), same ordering as before.
 #
 # dry_run=true (default): validate + build off HEAD; publish NOTHING (no commit, no
 # tag, no Release, no port bump, no pkg-repo poke).
@@ -37,7 +37,8 @@ on:
       dry_run:
         description: "true (default) = validate + build, publish NOTHING. false = cut the real release."
         required: false
-        default: "true"
+        default: true
+        type: boolean
 
 # Least-privilege default; jobs that need more elevate explicitly below
 # (release: contents:write to publish; prepare-release: contents:write to commit +
@@ -58,7 +59,10 @@ jobs:
   prepare-release:
     name: Commit changelog + create the release tag
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.dry_run != 'true' }}
+    # Fail-closed (issue #1661): only an EXACT 'false' takes the real-publish path;
+    # anything else (true, empty, or a typo'd value) skips — see the `release` job's
+    # metadata step for the loud, explicit rejection of anything that isn't true/false.
+    if: ${{ github.event.inputs.dry_run == 'false' }}
     permissions:
       contents: write
       models: read    # actions/ai-inference for the changelog draft
@@ -437,7 +441,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.tag || github.ref }}
+          # Fail-closed (issue #1661): only an exact 'false' checks out the tag; anything
+          # else (true, empty, a typo) falls back to HEAD, same as the mutation gates.
+          ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
           fetch-depth: 0
       - name: Resolve stamp
         id: stamp
@@ -472,7 +478,8 @@ jobs:
         with:
           # dry_run=true: validate off the dispatch ref (HEAD); no tag exists yet.
           # dry_run=false: check out the just-created tag (contains the changelog).
-          ref: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.tag || github.ref }}
+          # Fail-closed (issue #1661): only an exact 'false' checks out the tag.
+          ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
           fetch-depth: 0   # need full history for changelog
 
       - name: Gather release metadata
@@ -485,7 +492,16 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           INPUT_DRY: ${{ github.event.inputs.dry_run }}
         run: |
+          # Empty/omitted stays the safe default (dry-run, publish nothing) — the
+          # `type: boolean` input normally guarantees exactly "true"/"false" from the
+          # dispatch UI, but an API-triggered dispatch can still hand this an arbitrary
+          # string, so reject anything else LOUDLY and EARLY (issue #1661), before any
+          # $GITHUB_OUTPUT is written and before the tag/branch validation below runs.
           DRY_RUN="${INPUT_DRY:-true}"
+          case "$DRY_RUN" in
+            true|false) ;;
+            *) echo "::error::dry_run input must be exactly 'true' or 'false' (got: '${INPUT_DRY}')"; exit 1 ;;
+          esac
           TAG="$INPUT_TAG"
           [ -n "$TAG" ] || { echo "::error::tag input is required"; exit 1; }
 
@@ -754,7 +770,7 @@ jobs:
         # .pkg assets to the same draft, then the publish-release job flips it to
         # published — at which point immutability locks it with ALL assets present.
         # (draft: true defers the release.published event to the publish-release step.)
-        if: ${{ steps.meta.outputs.dry_run != 'true' }}
+        if: ${{ steps.meta.outputs.dry_run == 'false' }}
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
@@ -797,7 +813,8 @@ jobs:
           # dry_run=true: build off the dispatch ref (HEAD); no tag exists yet.
           # dry_run=false: check out the just-created tag so .pkg is stamped from the
           #   tagged tree (which includes the committed changelog).
-          ref: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.tag || github.ref }}
+          # Fail-closed (issue #1661): only an exact 'false' checks out the tag.
+          ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
@@ -908,7 +925,7 @@ jobs:
     # Run whenever release succeeded AND it was a real publish (not a dry-run);
     # regardless of the build outcome. A build-pkgs-portable failure surfaces as a
     # red leg but does not prevent attach-pkgs from completing with a warning.
-    if: always() && needs.release.result == 'success' && needs.release.outputs.dry_run != 'true'
+    if: always() && needs.release.result == 'success' && needs.release.outputs.dry_run == 'false'
     permissions:
       contents: write
 
@@ -966,7 +983,7 @@ jobs:
     name: Health-check + publish the draft Release
     runs-on: ubuntu-latest
     needs: [prepare-release, release, attach-pkgs, read-matrix]
-    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.release.outputs.dry_run != 'true'
+    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.release.outputs.dry_run == 'false'
     permissions:
       contents: write
     steps:
@@ -1061,7 +1078,7 @@ jobs:
     name: Trigger pkg repository publish
     runs-on: ubuntu-latest
     needs: [prepare-release, release, attach-pkgs, publish-release, sync-ports-fork]
-    if: always() && needs.release.result == 'success' && needs.publish-release.result == 'success' && needs.release.outputs.dry_run != 'true'
+    if: always() && needs.release.result == 'success' && needs.publish-release.result == 'success' && needs.release.outputs.dry_run == 'false'
     permissions:
       contents: read
     steps:
@@ -1096,7 +1113,7 @@ jobs:
     name: Sync port on FreeBSD-ports fork
     runs-on: ubuntu-latest
     needs: [prepare-release, release, publish-release]
-    if: always() && needs.publish-release.result == 'success' && needs.release.outputs.dry_run != 'true'
+    if: always() && needs.publish-release.result == 'success' && needs.release.outputs.dry_run == 'false'
     permissions:
       contents: read
 
