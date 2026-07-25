@@ -10,6 +10,7 @@ quietly. Pinned off-VM with the ``_FakeVM`` pattern (precedent:
 
 from __future__ import annotations
 
+import ast
 import inspect
 import re
 from dataclasses import dataclass, field
@@ -63,15 +64,25 @@ def test_probe_transport_failure_fails_distinctly() -> None:
 
 
 def test_the_only_skip_left_is_the_missing_package_one() -> None:
-    """Row 4 regression guard: the module keeps exactly ONE ``pytest.skip``, the
-    no-package-to-deploy fixture guard.
+    """Row 4 regression guard: the module keeps exactly ONE ``pytest.skip`` call, the
+    no-package-to-deploy fixture guard, and its message is that guard's.
 
-    Whitelisting the one legitimate skip beats blacklisting a keyword: a future skip for
-    a missing shipped file worded without "shim" would pass a keyword check, while any new
-    skip at all trips this one.
+    Read the AST rather than the source text, so a comment that merely mentions
+    ``pytest.skip(`` cannot fail this and, more importantly, a deleted skip whose wording
+    survives as a comment cannot satisfy it: the message has to sit INSIDE the one
+    surviving call, not merely somewhere in the file.
     """
-    src = inspect.getsource(tsar)
-    # Count call sites rather than matching whole source lines: a harmless line-wrap of
-    # the legitimate skip must not fail this, while any ADDED skip still does.
-    assert len(re.findall(r"pytest\.skip\(", src)) == 1, "exactly one pytest.skip must remain"
-    assert "SMOKE_PKG not set" in src, "the surviving skip must be the no-package-to-deploy guard"
+    calls = [
+        node
+        for node in ast.walk(ast.parse(inspect.getsource(tsar)))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "skip"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "pytest"
+    ]
+    assert len(calls) == 1, f"exactly one pytest.skip call must remain, found {len(calls)}"
+    reason = calls[0].args[0] if calls[0].args else None
+    assert isinstance(reason, ast.Constant) and "SMOKE_PKG not set" in str(reason.value), (
+        "the surviving skip must be the no-package-to-deploy guard"
+    )
