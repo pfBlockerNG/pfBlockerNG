@@ -112,3 +112,70 @@ Describe 'aws_region_prefixes.sh v6 dedup (issue #1079)'
     The lines of contents of file "$awswork" should equal 2
   End
 End
+
+# issue #714: aws_region_prefixes.sh used to invoke jq/iprange by bare name, so
+# whatever came first on PATH decided which binary ran. It now resolves both
+# through pathjq/pathaggregate (spec_helper points these at the real jq and the
+# iprange shim); a hostile same-named binary placed earlier on PATH must never run.
+Describe 'aws_region_prefixes.sh ignores hostile PATH entries (issue #714)'
+  hostiledir=""
+  awswork=""
+  setup() {
+    hostiledir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/awshostile.XXXXXX")"
+    awswork="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/awshostilein.XXXXXX")"
+    cp "${PFB_FIXTURES}/aws-ip-ranges.json" "${awswork}"
+  }
+  cleanup() { rm -rf "${hostiledir}"; rm -f "${awswork}"; }
+  Before 'setup'
+  After 'cleanup'
+
+  write_hostile_shim() {
+    cat > "$1" <<'EOF'
+#!/bin/sh
+echo "HOSTILE $(basename "$0") INVOKED" >&2
+exit 1
+EOF
+    chmod +x "$1"
+  }
+
+  It 'never invokes a hostile jq placed earlier in PATH'
+    write_hostile_shim "${hostiledir}/jq"
+    When run env PATH="${hostiledir}:${PATH}" sh "${PFB_PKGDIR}/list_scripts/ip_pre_AWS_AF.sh" "${awswork}" _v4
+    The status should be success
+    The stderr should not include "HOSTILE"
+    The contents of file "${awswork}" should equal "10.10.0.0/24"
+  End
+
+  It 'never invokes a hostile iprange placed earlier in PATH'
+    write_hostile_shim "${hostiledir}/iprange"
+    When run env PATH="${hostiledir}:${PATH}" sh "${PFB_PKGDIR}/list_scripts/ip_pre_AWS_AF.sh" "${awswork}" _v4
+    The status should be success
+    The stderr should not include "HOSTILE"
+    The contents of file "${awswork}" should equal "10.10.0.0/24"
+  End
+End
+
+# A resolved pathjq/pathaggregate that doesn't exist/isn't executable must fail
+# loudly naming the path, never silently run an empty command.
+Describe 'aws_region_prefixes.sh fails loudly on a missing resolved binary (issue #714)'
+  awswork=""
+  setup() {
+    awswork="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/awsmissing.XXXXXX")"
+    cp "${PFB_FIXTURES}/aws-ip-ranges.json" "${awswork}"
+  }
+  cleanup() { rm -f "${awswork}"; }
+  Before 'setup'
+  After 'cleanup'
+
+  It 'fails naming the path when pathjq does not resolve to an executable'
+    When run env pathjq="/nonexistent/pfb-test-jq" sh "${PFB_PKGDIR}/list_scripts/ip_pre_AWS_AF.sh" "${awswork}" _v4
+    The status should be failure
+    The output should include "/nonexistent/pfb-test-jq"
+  End
+
+  It 'fails naming the path when pathaggregate does not resolve to an executable'
+    When run env pathaggregate="/nonexistent/pfb-test-iprange" sh "${PFB_PKGDIR}/list_scripts/ip_pre_AWS_AF.sh" "${awswork}" _v4
+    The status should be failure
+    The output should include "/nonexistent/pfb-test-iprange"
+  End
+End
