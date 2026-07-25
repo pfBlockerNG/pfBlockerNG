@@ -212,7 +212,7 @@ _LOG_DIAGNOSTIC_RE = re.compile(rf"PHP\s+(?P<level>{_LEVELS_ALT})\s*:\s*(?P<mess
 _LOG_ORIGIN_RE = re.compile(r"\bin (?P<file>\S+) on line \d+")
 
 # The burn-down baseline of diagnostics that ALREADY existed when the guest was raised
-# to E_ALL (#1218 measured 33 across 27 files on a live sweep; cleanup tracked in #1712). Each
+# to E_ALL (#1218 measured 33 across 17 files on a live sweep; cleanup tracked in #1712). Each
 # entry is "<origin file>|<level>|<message>" -- deliberately WITHOUT the line number, so
 # an unrelated edit above a known site does not resurrect it as a new diagnostic and fail
 # innocent code. The list may only ever SHRINK: a new diagnostic gates, and the fix is to

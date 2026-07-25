@@ -560,6 +560,14 @@ SWEEPEOF
       When call sweep_flag --paths tests/smoke/ui -m ui_render --collect-only
       The output should equal "unset"
     End
+
+    # pytest merges PYTEST_ADDOPTS into its own argv, so a -k hiding there narrows the
+    # run without ever passing through this script's argument scan.
+    It 'is NOT exported when PYTEST_ADDOPTS could narrow the run'
+      export PYTEST_ADDOPTS="-k something"
+      When call sweep_flag --paths tests/smoke/ui -m ui_render
+      The output should equal "unset"
+    End
   End
 
 End

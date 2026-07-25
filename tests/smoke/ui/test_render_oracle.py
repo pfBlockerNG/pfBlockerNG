@@ -316,10 +316,10 @@ def test_pfblockerng_null_to_string_parameter_gates_the_sweep() -> None:
 def test_pfblockerng_undefined_array_key_does_not_gate_the_sweep() -> None:
     """(d) the endemic class is REPORTED, not gated (#1712 owns burning it down).
 
-    ``Undefined array key`` on an unset config read is emitted at 488 distinct sites in
+    ``Undefined array key`` on an unset config read is emitted at 469 distinct sites in
     this package: freezing every one of them would buy a gate whose next new instance is
-    indistinguishable from the 488 already forgiven, at the cost of a 515-line list edited
-    by every burn-down PR. So the class is observed and counted, and the gate spends its
+    indistinguishable from the ones already forgiven, at the cost of a list edited by every
+    burn-down PR. So the class is observed and counted, and the gate spends its
     credibility on the classes that still smell like defects.
 
     It is NOT invisible: :func:`endemic_diagnostics` collects it for the end-of-sweep
@@ -383,6 +383,24 @@ def test_a_message_embedding_a_path_cannot_hijack_attribution() -> None:
         "/usr/local/www/pfblockerng/pfblockerng_alerts.php on line 77\n"
     )
     assert gating_log_lines(ours_but_message_names_core), "our diagnostic escaped by quoting a core path"
+
+
+def test_a_failure_prints_the_whole_deduped_diagnostic_set(capsys: pytest.CaptureFixture[str]) -> None:
+    """A gating failure dumps every pfBlockerNG diagnostic in the log, deduped.
+
+    The assertion message quotes only the sweep's own appended lines, capped. This dump is
+    the whole picture, printed at the one moment it exists: a module-scoped guard fails in
+    TEARDOWN, which ``conftest._failure_report`` does not cover, and the guest is destroyed
+    at the end of the run — so without it the full set costs another 4-minute sweep to
+    recover. Asserting on the printed text is what keeps the guest-probe wiring honest;
+    hand-tracing it once is not coverage.
+    """
+    with pytest.raises(AssertionError):
+        _guard_after_appending(PFB_PAGE_UNDEF_VAR + PFB_PAGE_WARNING).assert_no_growth()
+    dumped = capsys.readouterr().out
+    assert "pfBlockerNG diagnostics in /tmp/PHP_errors.log" in dumped, f"no dump printed: {dumped!r}"
+    assert "pfblockerng_brand_new.php" in dumped, "the gating line is missing from the dump"
+    assert "pfblockerng_feeds.php" in dumped, "the endemic line is missing from the dump"
 
 
 def test_core_fatal_still_gates_the_sweep() -> None:

@@ -61,7 +61,7 @@ documented in architecture-notes. Operative facts:
   `E_WARNING`/`E_NOTICE`/`E_DEPRECATED`. Core noise never gates: `gating_log_lines` scopes by
   originating file, never by re-masking a class. Gated classes are the defect-smelling ones —
   `Undefined variable`, null-to-string-parameter (a PHP 9 TypeError in waiting),
-  array-offset-on-null, optional-parameter order — plus the fatal/parse/recoverable levels. The endemic
+  array-offset-on-null, optional-parameter order — plus the fatal/parse/recoverable/strict levels. The endemic
   `Undefined array key` class (469 sites measured) is REPORTED at the end of a full sweep, not gated;
   #1712 burns it down. Pre-existing gated-class sites are grandfathered in
   `tests/smoke/ui/php_diagnostic_baseline.txt`, a 33-entry list that may only SHRINK — fix the
