@@ -162,6 +162,20 @@ def test_dry_run_input_is_declared_boolean() -> None:
     )
 
 
+def test_dry_run_input_defaults_to_the_safe_value() -> None:
+    """An omitted input must default to a dry run.
+
+    The default carries as much of the fail-closed contract as the type does: flip it to
+    false and a dispatch that simply omits the input publishes for real.
+    """
+    workflow_text = WORKFLOW.read_text(encoding="utf-8")
+    dispatch = workflow_text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    dry_run_block = dispatch.split("      dry_run:\n", 1)[1].split("\n\n", 1)[0]
+    assert re.search(r"^        default:\s*(true|'true'|\"true\")\s*$", dry_run_block, re.MULTILINE), (
+        f"dry_run input must default to true (a dry run); block was:\n{dry_run_block}"
+    )
+
+
 def test_metadata_step_rejects_non_boolean_dry_run() -> None:
     """The `release` job's metadata step must hard-reject anything but true/false.
 
