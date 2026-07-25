@@ -45,9 +45,9 @@ native GitHub issue type, chosen from this table:
 Labels are optional. Add one only when it contributes orthogonal routing, subsystem, risk,
 or workflow metadata not already conveyed by the native type (`CI`, `dnsbl`, `security`,
 `wayfinder:*`, etc.). Never add `bug` or `enhancement` solely to duplicate `Bug`, `Feature`,
-or `Task`. When categories overlap, a defect is `Bug`; otherwise an improvement is `Task`,
-not `Feature`. Set the type at creation (`gh issue create --type Bug`); set any useful
-additive labels at creation too.
+or `Task`. A defect is `Bug`; a new user-facing capability is `Feature`; an improvement to
+existing behaviour or maintenance is `Task`. Set the type at creation
+(`gh issue create --type Bug`); set any useful additive labels at creation too.
 
 ## Issue state (lifecycle — native signals, #1388)
 

@@ -32,7 +32,8 @@ For issues, category is expressed with the native **type**, not a label: `bug` m
 to **Bug**; `enhancement` maps to **Feature** for a new user-facing capability or
 **Task** for an improvement to existing behaviour or maintenance work. Do not add a
 category label that merely duplicates the type. For PRs, use the linked issue's type
-when one exists; PR-only labels remain additive metadata.
+when one exists; an unlinked PR still uses `bug` or `enhancement` because PRs have no
+native type. Other PR-only labels remain additive metadata.
 
 Five **state** roles:
 
