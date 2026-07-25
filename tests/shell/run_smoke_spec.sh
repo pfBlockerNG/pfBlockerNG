@@ -568,6 +568,14 @@ SWEEPEOF
       When call sweep_flag --paths tests/smoke/ui -m ui_render
       The output should equal "unset"
     End
+
+    # The caller's environment may already carry the flag; a narrowed run must never
+    # inherit completeness it does not have.
+    It 'is UNSET for a narrowed run even when inherited from the environment'
+      export PFB_SMOKE_FULL_SWEEP=1
+      When call sweep_flag --paths tests/smoke/ui -m ui_render --filter narrow
+      The output should equal "unset"
+    End
   End
 
 End

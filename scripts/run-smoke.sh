@@ -265,6 +265,10 @@ if [ -z "$_FILTER" ] && [ "$_SHARD_TOTAL" -eq 1 ] && [ "$_CALLER_GAVE_PATH" -eq 
 fi
 if [ "$_FULL_SWEEP" -eq 1 ]; then
     export PFB_SMOKE_FULL_SWEEP=1
+else
+    # The caller's environment may already carry it; a narrowed run must never inherit
+    # completeness it does not have.
+    unset PFB_SMOKE_FULL_SWEEP || :
 fi
 
 # Sharded runs (N>1): pytest exit 5 ("no tests ran") is a PARTITION ARTIFACT, not

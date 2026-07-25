@@ -403,6 +403,23 @@ def test_a_failure_prints_the_whole_deduped_diagnostic_set(capsys: pytest.Captur
     assert "pfblockerng_feeds.php" in dumped, "the endemic line is missing from the dump"
 
 
+def test_a_rotated_log_does_not_disarm_the_guard() -> None:
+    """A log rotated or truncated mid-sweep must not swallow the diagnostics after it.
+
+    ``newsyslog`` can rotate a candidate between the snapshot and the check. Treating a
+    SHRUNK file as "nothing appended" would skip every diagnostic written after the
+    rotation -- silently, for the rest of a module-scoped sweep, since the baseline offset
+    is never refreshed. The offset is meaningless once the file shrank, so the whole file
+    is classified instead.
+    """
+    vm = _FakeVM({_LOG: "x" * 500 + "\n"})
+    guard = PhpErrorLogGuard(cast("SmokeVM", vm), candidates=(_LOG,))
+    guard.snapshot()
+    vm.files[_LOG] = PFB_PAGE_UNDEF_VAR  # rotated: smaller, and carrying OUR diagnostic
+    with pytest.raises(AssertionError, match="Undefined variable"):
+        guard.assert_no_growth()
+
+
 def test_core_fatal_still_gates_the_sweep() -> None:
     """(d): the file filter applies to the maskable classes ONLY -- a fatal always fails.
 
@@ -532,7 +549,7 @@ def test_a_shipped_baseline_hit_is_recorded_only_through_the_guard() -> None:
 def test_a_unit_test_baseline_hit_is_not_recorded_as_observed() -> None:
     """A caller-supplied baseline is a fixture, not a live sweep: its hits must not
     count as observations, or a unit run would mark real entries alive."""
-    invented = '/usr/local/www/pfblockerng/never_shipped.php|Warning|Undefined array key "invented"'
+    invented = "/usr/local/www/pfblockerng/never_shipped.php|Warning|Undefined variable $invented"
     file, level, message = invented.split("|", 2)
     line = f"[25-Jul-2026 10:00:00 UTC] PHP {level}:  {message} in {file} on line 1"
     gating_log_lines(line, baseline=frozenset({invented}), record=True)
