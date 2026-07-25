@@ -504,11 +504,9 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           INPUT_DRY: ${{ github.event.inputs.dry_run }}
         run: |
-          # Empty/omitted stays the safe default (dry-run, publish nothing) — the
-          # `type: boolean` input normally guarantees exactly "true"/"false" from the
-          # dispatch UI, but an API-triggered dispatch can still hand this an arbitrary
-          # string, so reject anything else loudly and early, before any
-          # $GITHUB_OUTPUT is written and before the tag/branch validation below runs.
+          # An API dispatch can hand this an arbitrary string despite the boolean input
+          # type, so reject anything but true/false before any $GITHUB_OUTPUT is written.
+          # Empty stays the safe default.
           DRY_RUN="${INPUT_DRY:-true}"
           case "$DRY_RUN" in
             true|false) ;;
