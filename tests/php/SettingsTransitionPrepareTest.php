@@ -61,15 +61,15 @@ final class SettingsTransitionPrepareTest extends TestCase
 		}
 	}
 
-	public function testFirstThreeTwoToFourPublishesSourceRestoreJournal(): void
+	public function testFirstThreeTwoToFourPublishesSourceMigrateJournal(): void
 	{
 		$this->seedConfig(['pfblockerng' => ['config' => ['0' => ['value' => 'v3']]]], '3.2');
 		$sourceLive = hash('sha256', serialize(pfb_settings_capture_owned()));
 		$result = $this->prepare(['target_family' => '4.0']);
 
 		$this->assertSame('prepared', $result['phase']);
-		$this->assertSame('restore', $result['action']);
-		$this->assertSame($result['source_snapshot_sha256'], $result['target_snapshot_sha256']);
+		$this->assertSame('migrate', $result['action']);
+		$this->assertSame('', $result['target_snapshot_sha256']);
 		$this->assertSame($sourceLive, $result['source_live_sha256']);
 		$this->assertSame($result, pfb_settings_journal_read($this->root));
 		$this->assertSame($result['source_snapshot_sha256'], pfb_settings_snapshot_head('3.2', 'source-pkg', '1', $this->root)['payload_sha256']);

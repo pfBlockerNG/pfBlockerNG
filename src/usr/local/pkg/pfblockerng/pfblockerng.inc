@@ -4054,6 +4054,403 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	return ($ret === 0 && isset($out[0])) ? trim($out[0]) : '';
 }
 
+function pfb_settings_transition_downgrade_authorize(
+	string $target,
+	string $artifact_sha256,
+	?string $artifact_root = NULL
+): string {
+	if (!in_array($target, [
+		'pfSense-pkg-pfBlockerNG-3.2.15',
+		'pfSense-pkg-pfBlockerNG-devel-3.2.16',
+	], TRUE) || preg_match('/^[a-f0-9]{64}$/D', $artifact_sha256) !== 1) {
+		throw new InvalidArgumentException('invalid settings transition downgrade authorization target');
+	}
+	$root = _pfb_settings_journal_root($artifact_root, TRUE);
+	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
+	if ($lock_key === FALSE) {
+		throw new RuntimeException('settings transition lock unavailable');
+	}
+	try {
+		$path = $root . '/downgrade-authorization.json';
+		if (is_link($path)) {
+			throw new InvalidArgumentException('unsafe settings transition downgrade authorization');
+		}
+		$authorization = bin2hex(random_bytes(32));
+		$bytes = json_encode([
+			'target' => $target,
+			'artifact_sha256' => $artifact_sha256,
+			'authorization_sha256' => $authorization,
+		], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+		$temp = $root . '/.downgrade-authorization.' . bin2hex(random_bytes(8)) . '.tmp';
+		try {
+			if (!safe_write_file($temp, $bytes, TRUE) || !chmod($temp, 0600)
+				|| file_get_contents($temp) !== $bytes || !rename($temp, $path)
+				|| !_pfb_settings_journal_sync_directory($root)) {
+				throw new RuntimeException('unable to publish settings transition downgrade authorization');
+			}
+		} finally {
+			if (is_file($temp)) {
+				@unlink($temp);
+			}
+		}
+		return $authorization;
+	} finally {
+		unlock($lock_key);
+	}
+}
+
+/*
+ * Run the shipped, exact v4 -> v3.2 downgrade. The package operation is deliberately kept in
+ * this already-loaded PHP process: installing the target may replace this package's files while
+ * the transition journal still needs to be completed with the old function definitions.
+ *
+ * $io is an off-box seam. Production resolves/fetches the normal-catalog package and reads its
+ * manifest with pkg; tests provide the same descriptor and an install callback. The callback is
+ * passed the exact argv and stdio contract, never a shell command string.
+ */
+function pfb_settings_transition_downgrade(string $target, ?array $io = NULL): int {
+	$io = is_array($io) ? $io : array();
+	$frozen = array(
+		'pfSense-pkg-pfBlockerNG-3.2.15' => array(
+			'name' => 'pfSense-pkg-pfBlockerNG',
+			'version' => '3.2.15',
+			'source_identity' => 'git:0846aa7c090f96e62b5322d7dea70e80b1f31b63',
+		),
+		'pfSense-pkg-pfBlockerNG-devel-3.2.16' => array(
+			'name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'version' => '3.2.16',
+			'source_identity' => 'git:0676cd1c7ed79d49a0644070151c4fffa39ea409',
+		),
+	);
+	if (!isset($frozen[$target])) {
+		throw new InvalidArgumentException('unsupported settings transition downgrade target');
+	}
+	$selected = $frozen[$target];
+	$target_family = '3.2';
+	$artifact_root = array_key_exists('artifact_root', $io) ? (string) $io['artifact_root'] : '/cf/conf/pfblockerng';
+	$artifact_root = _pfb_settings_journal_root($artifact_root, TRUE);
+
+	$run_capture = isset($io['run_capture']) && is_callable($io['run_capture'])
+		? $io['run_capture']
+		: static function (array $argv): array {
+		$stderr_file = tempnam(sys_get_temp_dir(), 'pfb_downgrade_stderr_');
+		if ($stderr_file === FALSE) {
+			throw new RuntimeException('unable to create package metadata stderr file');
+		}
+		$descriptors = array(
+			0 => array('file', '/dev/null', 'r'),
+			1 => array('pipe', 'w'),
+			2 => array('file', $stderr_file, 'w'),
+		);
+		$process = proc_open($argv, $descriptors, $pipes);
+		if (!is_resource($process)) {
+			@unlink($stderr_file);
+			throw new RuntimeException('unable to start package metadata command');
+		}
+		$stdout = stream_get_contents($pipes[1]);
+		fclose($pipes[1]);
+		$status = proc_get_status($process);
+		$close = proc_close($process);
+		$stderr = @file_get_contents($stderr_file);
+		@unlink($stderr_file);
+		$exit = ($status['exitcode'] ?? -1) >= 0 ? (int) $status['exitcode'] : (int) $close;
+		return array(
+			'exit' => $exit,
+			'signaled' => !empty($status['signaled']),
+			'signal' => (int) ($status['termsig'] ?? 0),
+			'stdout' => is_string($stdout) ? $stdout : '',
+			'stderr' => is_string($stderr) ? $stderr : '',
+		);
+		};
+	$bounded = static function (array $argv): array {
+		return array_merge(array('/usr/bin/timeout', '-s', 'TERM', '-k', '5', '60'), $argv);
+	};
+
+	$descriptor = array_key_exists('artifact', $io) && is_array($io['artifact'])
+		? $io['artifact']
+		: array();
+	if ($descriptor === array()) {
+		$catalog_result = $run_capture($bounded(array(
+			PFB_PKG_BIN, 'rquery', '-r', 'pfblockerng', '%n|%v|%q|%X', $target,
+		)));
+		$catalog_rows = array_values(array_filter(
+			preg_split('/\r?\n/', $catalog_result['stdout']) ?: array(),
+			static fn(string $row): bool => trim($row) !== ''
+		));
+		if ($catalog_result['exit'] !== 0 || count($catalog_rows) !== 1) {
+			throw new RuntimeException('normal-catalog downgrade target lookup failed');
+		}
+		$catalog_parts = explode('|', trim($catalog_rows[0]));
+		$catalog_abi = trim((string) ($catalog_parts[2] ?? ''));
+		$catalog_hash = strtolower(trim((string) ($catalog_parts[3] ?? '')));
+		if (str_starts_with($catalog_hash, 'sha256:')) {
+			$catalog_hash = substr($catalog_hash, 7);
+		}
+		if (count($catalog_parts) !== 4
+			|| trim((string) $catalog_parts[0]) !== $selected['name']
+			|| trim((string) $catalog_parts[1]) !== $selected['version']
+			|| $catalog_abi === ''
+			|| !preg_match('/^[a-f0-9]{64}$/D', $catalog_hash)) {
+			throw new InvalidArgumentException('normal-catalog downgrade target identity mismatch');
+		}
+		$fetch_dir = $artifact_root . '/downgrade-artifacts';
+		_pfb_settings_mkdir($fetch_dir);
+		$fetch = $run_capture($bounded(array(PFB_PKG_BIN, 'fetch', '-r', 'pfblockerng', '-y', '-o', $fetch_dir, $target)));
+		if ($fetch['exit'] !== 0) {
+			throw new RuntimeException('normal-catalog downgrade artifact fetch failed');
+		}
+		$path = $fetch_dir . '/All/' . $target . '.pkg';
+		if (!is_file($path)) {
+			throw new RuntimeException('normal-catalog downgrade artifact missing after fetch');
+		}
+		$info = $run_capture($bounded(array(PFB_PKG_BIN, 'query', '-F', $path, '%n|%v|%q')));
+		if ($info['exit'] !== 0) {
+			throw new RuntimeException('downgrade artifact manifest lookup failed');
+		}
+		$parts = explode('|', trim((string) (preg_split('/\r?\n/', $info['stdout'])[0] ?? '')));
+		$manifest = array(
+			'name' => trim((string) ($parts[0] ?? '')),
+			'version' => trim((string) ($parts[1] ?? '')),
+			'abi' => trim((string) ($parts[2] ?? '')),
+			'annotations' => array(),
+		);
+		$annotations = $run_capture($bounded(array(PFB_PKG_BIN, 'query', '-F', $path, '%An=%Av')));
+		if ($annotations['exit'] !== 0) {
+			throw new RuntimeException('downgrade artifact annotation lookup failed');
+		}
+		foreach (preg_split('/\r?\n/', $annotations['stdout']) ?: array() as $annotation) {
+			$pair = explode('=', trim($annotation), 2);
+			if (count($pair) === 2 && trim($pair[0]) !== '') {
+				$manifest['annotations'][trim($pair[0])] = trim($pair[1]);
+			}
+		}
+		$commit = (string) ($manifest['annotations']['commit'] ?? '');
+		$source_identity = (string) ($manifest['annotations']['source_identity'] ?? '');
+		if ($source_identity === '' && preg_match('/^[a-f0-9]{40}$/i', $commit) === 1) {
+			$source_identity = 'git:' . strtolower($commit);
+		}
+		$descriptor = array(
+			'path' => $path,
+			'name' => (string) ($manifest['name'] ?? ''),
+			'version' => (string) ($manifest['version'] ?? ''),
+			'abi' => (string) ($manifest['abi'] ?? ''),
+			'source_identity' => $source_identity,
+			'catalog' => 'pfblockerng',
+			'catalog_abi' => $catalog_abi,
+			'sha256' => is_file($path) ? hash_file('sha256', $path) : FALSE,
+			'catalog_sha256' => $catalog_hash,
+			'manifest' => $manifest,
+		);
+	}
+
+	$path = isset($descriptor['path']) && is_string($descriptor['path']) ? $descriptor['path'] : '';
+	$name = isset($descriptor['name']) && is_string($descriptor['name']) ? $descriptor['name'] : '';
+	$version = isset($descriptor['version']) && is_string($descriptor['version']) ? $descriptor['version'] : '';
+	$abi = isset($descriptor['abi']) && is_string($descriptor['abi']) ? $descriptor['abi'] : '';
+	$source_identity = isset($descriptor['source_identity']) && is_string($descriptor['source_identity'])
+		? $descriptor['source_identity']
+		: '';
+	$catalog = isset($descriptor['catalog']) && is_string($descriptor['catalog']) ? $descriptor['catalog'] : '';
+	$declared_hash = isset($descriptor['sha256']) && is_string($descriptor['sha256']) ? strtolower($descriptor['sha256']) : '';
+	$catalog_hash = isset($descriptor['catalog_sha256']) && is_string($descriptor['catalog_sha256'])
+		? strtolower($descriptor['catalog_sha256'])
+		: $declared_hash;
+	$catalog_abi = isset($descriptor['catalog_abi']) && is_string($descriptor['catalog_abi'])
+		? $descriptor['catalog_abi']
+		: $abi;
+	$manifest = isset($descriptor['manifest']) && is_array($descriptor['manifest']) ? $descriptor['manifest'] : array();
+	$manifest_name = isset($manifest['name']) && is_string($manifest['name']) ? $manifest['name'] : '';
+	$manifest_version = isset($manifest['version']) && is_string($manifest['version']) ? $manifest['version'] : '';
+	$manifest_abi = isset($manifest['abi']) && is_string($manifest['abi'])
+		? $manifest['abi']
+		: (isset($manifest['architecture']) && is_string($manifest['architecture']) ? $manifest['architecture'] : '');
+	$annotations = isset($manifest['annotations']) && is_array($manifest['annotations']) ? $manifest['annotations'] : array();
+	$manifest_commit = isset($annotations['commit']) && is_string($annotations['commit']) ? $annotations['commit'] : '';
+	$manifest_identity = isset($annotations['source_identity']) && is_string($annotations['source_identity'])
+		? $annotations['source_identity']
+		: '';
+	if ($manifest_identity === '' && preg_match('/^[a-f0-9]{40}$/i', $manifest_commit) === 1) {
+		$manifest_identity = 'git:' . strtolower($manifest_commit);
+	}
+	if ($path === '' || $name !== $selected['name'] || $version !== $selected['version']
+		|| $manifest_name !== $name || $manifest_version !== $version || $abi === '' || $manifest_abi !== $abi
+		|| $source_identity !== $selected['source_identity'] || $manifest_identity !== $source_identity
+		|| $catalog !== 'pfblockerng' || $catalog_abi !== $abi
+		|| !is_file($path) || !is_readable($path)) {
+		throw new InvalidArgumentException('downgrade artifact identity mismatch');
+	}
+	$actual_hash = hash_file('sha256', $path);
+	if (!is_string($actual_hash) || !preg_match('/^[a-f0-9]{64}$/D', $declared_hash)
+		|| !preg_match('/^[a-f0-9]{64}$/D', $catalog_hash)
+		|| !hash_equals($declared_hash, strtolower($actual_hash))
+		|| !hash_equals($catalog_hash, strtolower($actual_hash))) {
+		throw new InvalidArgumentException('downgrade artifact checksum mismatch');
+	}
+
+	$current_abi = array_key_exists('current_abi', $io) ? (string) $io['current_abi'] : '';
+	if ($current_abi === '' && !array_key_exists('artifact', $io)) {
+		$abi_result = $run_capture($bounded(array(PFB_PKG_BIN, 'config', 'ABI')));
+		if ($abi_result['exit'] !== 0) {
+			throw new RuntimeException('unable to resolve current package ABI');
+		}
+		$current_abi = trim($abi_result['stdout']);
+	}
+	if ($current_abi === '' || $current_abi !== $abi) {
+		throw new InvalidArgumentException('downgrade artifact ABI mismatch');
+	}
+
+	$source_name = array_key_exists('source_package_name', $io)
+		? (string) $io['source_package_name']
+		: pfb_pkg_installed_name();
+	$source_version = array_key_exists('source_package_version', $io)
+		? (string) $io['source_package_version']
+		: pfb_pkg_installed_version($source_name);
+	if ($source_name === '' || $source_version === '') {
+		throw new RuntimeException('unable to resolve installed pfBlockerNG package identity');
+	}
+	$authorization = array_key_exists('authorization_sha256', $io) ? (string) $io['authorization_sha256'] : '';
+	if (!preg_match('/^[a-f0-9]{64}$/D', $authorization)) {
+		throw new InvalidArgumentException('downgrade authorization is not bound to target artifact');
+	}
+	$journal_path = $artifact_root . '/transition-journal.json';
+	if (file_exists($journal_path) || is_link($journal_path)) {
+		$existing = pfb_settings_journal_read($artifact_root);
+		if ($existing['target_package_name'] !== $name || $existing['target_package_version'] !== $version
+			|| $existing['target_artifact_sha256'] !== strtolower($actual_hash)
+			|| !hash_equals($existing['authorization_sha256'], $authorization)) {
+			throw new InvalidArgumentException('settings transition downgrade recovery authorization mismatch');
+		}
+	} else {
+		if (PfbConfig::read('pfb_schema_family') !== '4.0') {
+			throw new InvalidArgumentException('settings transition downgrade requires live v4 settings');
+		}
+		$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
+		if ($lock_key === FALSE) {
+			throw new RuntimeException('settings transition lock unavailable');
+		}
+		try {
+			$authorization_path = $artifact_root . '/downgrade-authorization.json';
+			$stat = @lstat($authorization_path);
+			$uid = function_exists('posix_geteuid') ? posix_geteuid() : getmyuid();
+			if ($stat === FALSE || !is_file($authorization_path) || is_link($authorization_path)
+				|| $stat['nlink'] !== 1 || ($stat['mode'] & 0777) !== 0600 || $stat['uid'] !== $uid) {
+				throw new InvalidArgumentException('unsafe settings transition downgrade authorization');
+			}
+			$bytes = file_get_contents($authorization_path);
+			try {
+				$record = json_decode((string) $bytes, TRUE, 512, JSON_THROW_ON_ERROR);
+			} catch (JsonException) {
+				throw new InvalidArgumentException('invalid settings transition downgrade authorization');
+			}
+			if (!is_array($record) || array_keys($record) !== [
+				'target', 'artifact_sha256', 'authorization_sha256',
+			] || json_encode($record, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) !== $bytes
+				|| $record['target'] !== $target || $record['artifact_sha256'] !== strtolower($actual_hash)
+				|| !hash_equals((string) $record['authorization_sha256'], $authorization)) {
+				throw new InvalidArgumentException('downgrade authorization is not bound to target artifact');
+			}
+			if (!unlink($authorization_path) || !_pfb_settings_journal_sync_directory($artifact_root)) {
+				throw new RuntimeException('unable to consume settings transition downgrade authorization');
+			}
+		} finally {
+			unlock($lock_key);
+		}
+	}
+
+	$journal = pfb_settings_transition_prepare(
+		$source_name,
+		$source_version,
+		$target_family,
+		$name,
+		$version,
+		$path,
+		strtolower($actual_hash),
+		$abi,
+		$source_identity,
+		strtolower($authorization),
+		$artifact_root
+	);
+	if ($journal !== array()) {
+		pfb_settings_transition_apply($target_family, $name, $version, $artifact_root);
+	}
+	if (PfbConfig::read('pfb_schema_family') !== $target_family) {
+		PfbConfig::write('pfb_schema_family', $target_family);
+		if (write_config('pfBlockerNG: downgrade schema family') === FALSE) {
+			throw new RuntimeException('unable to persist downgrade schema family');
+		}
+		config_read_file(FALSE, TRUE);
+		if (PfbConfig::read('pfb_schema_family') !== $target_family) {
+			throw new RuntimeException('downgrade schema family readback mismatch');
+		}
+	}
+
+	$argv = array(PFB_PKG_BIN, 'install', '-y', '-f', $path);
+	if (isset($io['install']) && is_callable($io['install'])) {
+		$status = $io['install']($argv, array('stdin' => '/dev/null', 'stdout' => 'inherit', 'stderr' => 'inherit'));
+		if (!is_int($status)) {
+			throw new RuntimeException('invalid package runner status');
+		}
+		if ($status !== 0) {
+			return $status;
+		}
+	} else {
+		$descriptors = array(
+			0 => array('file', '/dev/null', 'r'),
+			1 => array('file', 'php://stdout', 'w'),
+			2 => array('file', 'php://stderr', 'w'),
+		);
+		$process_open = isset($io['process_open']) && is_callable($io['process_open'])
+			? $io['process_open']
+			: static fn(array $command, array $spec, array &$opened): mixed => proc_open($command, $spec, $opened);
+		$process_close = isset($io['process_close']) && is_callable($io['process_close'])
+			? $io['process_close']
+			: static fn(mixed $handle): int => proc_close($handle);
+		$pipes = array();
+		$process = $process_open(
+			array_merge(array('/usr/bin/timeout', '-s', 'TERM', '-k', '5', '3600'), $argv),
+			$descriptors,
+			$pipes
+		);
+		if ($process === FALSE || $process === NULL) {
+			throw new RuntimeException('unable to start package downgrade');
+		}
+		$status = $process_close($process);
+		if ($status !== 0) {
+			return $status > 0 ? $status : 1;
+		}
+	}
+	$installed = isset($io['installed']) && is_array($io['installed']) ? $io['installed'] : array();
+	if ($installed === array()) {
+		$installed_info = $run_capture($bounded(array(PFB_PKG_BIN, 'query', '%n|%v|%q', $name)));
+		$installed_annotations = $run_capture($bounded(array(PFB_PKG_BIN, 'query', '%An=%Av', $name)));
+		if (($installed_info['exit'] ?? -1) !== 0 || ($installed_annotations['exit'] ?? -1) !== 0) {
+			throw new RuntimeException('installed downgrade package identity lookup failed');
+		}
+		$parts = explode('|', trim((string) (preg_split('/\r?\n/', (string) $installed_info['stdout'])[0] ?? '')));
+		$annotations = array();
+		foreach (preg_split('/\r?\n/', (string) $installed_annotations['stdout']) ?: array() as $annotation) {
+			$pair = explode('=', trim($annotation), 2);
+			if (count($pair) === 2 && trim($pair[0]) !== '') {
+				$annotations[trim($pair[0])] = trim($pair[1]);
+			}
+		}
+		$installed = array(
+			'name' => trim((string) ($parts[0] ?? '')),
+			'version' => trim((string) ($parts[1] ?? '')),
+			'abi' => trim((string) ($parts[2] ?? '')),
+			'source_identity' => isset($annotations['source_identity'])
+				? (string) $annotations['source_identity']
+				: 'git:' . strtolower((string) ($annotations['commit'] ?? '')),
+		);
+	}
+	if (($installed['name'] ?? '') !== $name || ($installed['version'] ?? '') !== $version
+		|| ($installed['abi'] ?? '') !== $abi || ($installed['source_identity'] ?? '') !== $source_identity) {
+		throw new RuntimeException('installed downgrade package identity mismatch');
+	}
+	pfb_settings_transition_complete($target_family, $name, $version, $artifact_root);
+	return 0;
+}
+
 /*
  * Absolute path of the software-update cache (the page reads it; the cron writes it).
  */

@@ -11,7 +11,7 @@ final class SettingsTransitionSnapshotPathTest extends TestCase
 	protected function setUp(): void
 	{
 		$this->root = sys_get_temp_dir() . '/pfb_path_' . bin2hex(random_bytes(5));
-		mkdir($this->root, 0700, true);
+		mkdir($this->root, 0700, TRUE);
 		$GLOBALS['config'] = [
 			'installedpackages' => [
 				'pfblockerng' => ['config' => ['0' => ['secret' => 'snapshot-secret']]],
@@ -30,11 +30,11 @@ final class SettingsTransitionSnapshotPathTest extends TestCase
 		mkdir($target, 0700);
 		$link = $this->root . '/link';
 		$this->assertTrue(symlink($target, $link));
-		$failed = false;
+		$failed = FALSE;
 		try {
 			pfb_settings_snapshot_create('3.2', 'pkg', '1', $link);
 		} catch (Throwable) {
-			$failed = true;
+			$failed = TRUE;
 		}
 		$this->assertTrue($failed);
 		$this->assertDirectoryDoesNotExist($target . '/3.2');
@@ -48,18 +48,18 @@ final class SettingsTransitionSnapshotPathTest extends TestCase
 		chmod($this->root, 0755);
 		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['changed'] = 'yes';
 		$config = $GLOBALS['config'];
-		$read_failed = false;
+		$read_failed = FALSE;
 		try {
 			pfb_settings_snapshot_read('3.2', $record['path'], 'pkg', '1', $this->root);
 		} catch (Throwable) {
-			$read_failed = true;
+			$read_failed = TRUE;
 		}
 		$this->assertTrue($read_failed);
-		$failed = false;
+		$failed = FALSE;
 		try {
 			pfb_settings_snapshot_create('3.2', 'pkg', '2', $this->root);
 		} catch (Throwable) {
-			$failed = true;
+			$failed = TRUE;
 		}
 		$this->assertTrue($failed);
 		$this->assertSame($head, file_get_contents($head_path));
@@ -67,18 +67,18 @@ final class SettingsTransitionSnapshotPathTest extends TestCase
 
 		chmod($this->root, 0700);
 		chmod(dirname($record['path']), 0755);
-		$read_failed = false;
+		$read_failed = FALSE;
 		try {
 			pfb_settings_snapshot_read('3.2', $record['path'], 'pkg', '1', $this->root);
 		} catch (Throwable) {
-			$read_failed = true;
+			$read_failed = TRUE;
 		}
 		$this->assertTrue($read_failed);
-		$failed = false;
+		$failed = FALSE;
 		try {
 			pfb_settings_snapshot_create('3.2', 'pkg', '3', $this->root);
 		} catch (Throwable) {
-			$failed = true;
+			$failed = TRUE;
 		}
 		$this->assertTrue($failed);
 		$this->assertSame($head, file_get_contents($head_path));
@@ -98,6 +98,21 @@ final class SettingsTransitionSnapshotPathTest extends TestCase
 		}
 		$this->assertNotSame('', $message);
 		$this->assertStringNotContainsString('snapshot-secret', $message);
+	}
+
+	public function testDuplicateWrapperMetadataIsRejected(): void
+	{
+		$record = pfb_settings_snapshot_create('3.2', 'pkg', '1', $this->root);
+		$xml = '<?xml version="1.0"?><pfblockerng-settings>'
+			. '<format_version>1</format_version><family>3.2</family><family>3.2</family>'
+			. '<source_package_name>pkg</source_package_name><source_package_version>1</source_package_version>'
+			. '<created_utc>2026-01-01T00:00:00Z</created_utc><payload_sha256>'
+			. str_repeat('0', 64) . '</payload_sha256><owned/></pfblockerng-settings>';
+		file_put_contents($record['path'], gzencode($xml));
+		chmod($record['path'], 0600);
+
+		$this->expectException(InvalidArgumentException::class);
+		pfb_settings_snapshot_read('3.2', $record['path'], 'pkg', '1', $this->root);
 	}
 
 	private function removeTree(string $path): void

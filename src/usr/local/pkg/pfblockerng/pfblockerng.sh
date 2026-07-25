@@ -2210,6 +2210,33 @@ case "${1}" in
 		/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dnsbl-control "$@"
 		exitnow "$?"
 		;;
+	downgrade)
+		# #1675: keep the transition and exact native pkg argv in one long-lived PHP process.
+		shift
+		# shellcheck disable=SC2016
+		/usr/local/bin/php -r '
+require_once("util.inc");
+require_once("functions.inc");
+require_once("pkg-utils.inc");
+require_once("globals.inc");
+require_once("services.inc");
+require_once("/usr/local/pkg/pfblockerng/pfblockerng.inc");
+require_once("/usr/local/pkg/pfblockerng/pfblockerng_extra.inc");
+global $g, $pfb;
+pfb_global();
+try {
+	$status = pfb_settings_transition_downgrade(
+		$argv[1] ?? "",
+		["authorization_sha256" => $argv[2] ?? ""]
+	);
+	exit(is_int($status) ? $status : 1);
+} catch (Throwable $error) {
+	fwrite(STDERR, "pfBlockerNG downgrade failed\n");
+	exit(1);
+}
+' -- "$@"
+		exitnow "$?"
+		;;
 	closing)
 		emptyfiles
 		closingprocess

@@ -1572,7 +1572,7 @@ function _pfb_settings_journal_validate(array $journal): array
 {
 	if (array_keys($journal) !== _pfb_settings_journal_fields() || $journal['journal_version'] !== 1
 		|| !in_array($journal['phase'], ['prepared', 'settings-applying', 'settings-applied', 'complete'], TRUE)
-		|| !in_array($journal['action'], ['preserve', 'restore', 'clear'], TRUE)) {
+		|| !in_array($journal['action'], ['preserve', 'restore', 'migrate', 'clear'], TRUE)) {
 		throw new InvalidArgumentException('invalid settings transition journal');
 	}
 	if (!is_string($journal['source_family']) || !is_string($journal['target_family'])) {
@@ -1881,24 +1881,14 @@ function pfb_settings_transition_state_record_divergence(
 	}
 	try {
 		$state = _pfb_settings_transition_state_read_locked($root);
-		$found = FALSE;
-		foreach ($state['divergences'] as $divergence) {
-			if ($divergence['source_snapshot_sha256'] === $source_snapshot_sha256
-				&& $divergence['target_snapshot_sha256'] === $target_snapshot_sha256) {
-				$found = TRUE;
-				break;
-			}
-		}
-		if (!$found) {
-			$state['divergences'][] = [
-				'source_family' => $source_family,
-				'target_family' => $target_family,
-				'source_snapshot_sha256' => $source_snapshot_sha256,
-				'target_snapshot_sha256' => $target_snapshot_sha256,
-				'acknowledged' => FALSE,
-			];
-			_pfb_settings_transition_state_publish($state, $root);
-		}
+		_pfb_settings_transition_prepare_divergence_locked(
+			$state,
+			$source_family,
+			$target_family,
+			$source_snapshot_sha256,
+			$target_snapshot_sha256,
+			$root
+		);
 		return $state;
 	} finally {
 		unlock($lock_key);
@@ -2200,7 +2190,6 @@ function _pfb_settings_snapshot_create_locked(
 			}
 			try {
 				_pfb_settings_path($root, $family, $temp);
-				_pfb_settings_gzip_read($temp);
 				_pfb_settings_parse(_pfb_settings_gzip_read($temp), $family, $package_name, $package_version, $dir);
 				if (!rename($temp, $path)) {
 					throw new RuntimeException('unable to publish settings snapshot');
@@ -2494,9 +2483,11 @@ function pfb_settings_transition_apply(
 		if (($journal['action'] === 'restore' && $journal['target_snapshot_sha256'] === '')
 			|| ($journal['action'] === 'preserve' && $journal['target_snapshot_sha256'] !== $journal['source_live_sha256'])
 			|| ($journal['action'] === 'preserve' && $journal['source_family'] !== $journal['target_family'])
+			|| ($journal['action'] === 'migrate' && ($journal['source_family'] !== '3.2'
+				|| $journal['target_family'] !== '4.0' || $journal['target_snapshot_sha256'] !== ''))
 			|| ($journal['action'] === 'clear' && $journal['target_snapshot_sha256'] !== '')
 			|| (in_array($journal['action'], ['restore', 'clear'], TRUE) && $journal['source_family'] === $journal['target_family'])
-			|| !in_array($journal['action'], ['preserve', 'restore', 'clear'], TRUE)) {
+			|| !in_array($journal['action'], ['preserve', 'restore', 'migrate', 'clear'], TRUE)) {
 			throw new InvalidArgumentException('settings transition action endpoint mismatch');
 		}
 		if ($journal['phase'] === 'prepared') {
@@ -2521,12 +2512,49 @@ function pfb_settings_transition_apply(
 				}
 			}
 		}
-		$live_hash = hash('sha256', serialize(pfb_settings_capture_owned()));
+		$live_owned = pfb_settings_capture_owned();
+		$live_hash = hash('sha256', serialize($live_owned));
 		$source_live = hash_equals($journal['source_live_sha256'], $live_hash);
-		$target_endpoint_hash = $journal['target_snapshot_sha256'] !== ''
-			? $journal['target_snapshot_sha256']
-			: hash('sha256', serialize([]));
-		$target_live = hash_equals($target_endpoint_hash, $live_hash);
+		$target_live = FALSE;
+		if ($journal['action'] === 'migrate') {
+			$normalized = $source_head['owned'];
+			if (!isset($normalized['pfblockerng'])) {
+				$normalized['pfblockerng'] = ['config' => [0 => []]];
+			} elseif (!is_array($normalized['pfblockerng'])) {
+				throw new RuntimeException('settings transition source General section invalid');
+			} elseif (!isset($normalized['pfblockerng']['config'])) {
+				$normalized['pfblockerng']['config'] = [0 => []];
+			} elseif (!is_array($normalized['pfblockerng']['config'])) {
+				throw new RuntimeException('settings transition source General config invalid');
+			} elseif (!isset($normalized['pfblockerng']['config'][0])) {
+				$normalized['pfblockerng']['config'][0] = [];
+			} elseif (!is_array($normalized['pfblockerng']['config'][0])) {
+				throw new RuntimeException('settings transition source General config invalid');
+			}
+			$source_config = $normalized['pfblockerng']['config'][0];
+			$source_keep = array_key_exists('pfb_keep', $source_config) ? $source_config['pfb_keep'] : NULL;
+			if ($source_keep !== NULL && !in_array($source_keep, ['on', 'off'], TRUE)) {
+				throw new RuntimeException('settings transition source keep setting invalid');
+			}
+			$source_marker = $source_config['pfb_schema_family'] ?? NULL;
+			if ($source_marker !== NULL && $source_marker !== '3.2') {
+				throw new RuntimeException('settings transition source schema marker mismatch');
+			}
+			$normalized['pfblockerng']['config'][0]['pfb_schema_family'] = '3.2';
+			$normalized_hash = hash('sha256', serialize($normalized));
+			$protected = $normalized;
+			$protected['pfblockerng']['config'][0]['pfb_keep'] = 'on';
+			$protected_hash = hash('sha256', serialize($protected));
+			$journal_source_matches = hash_equals($journal['source_live_sha256'], $normalized_hash)
+				|| hash_equals($journal['source_live_sha256'], $protected_hash);
+			$source_live = $journal_source_matches && hash_equals($live_hash, $protected_hash);
+			$target_live = hash_equals($live_hash, $normalized_hash);
+		} else {
+			$target_endpoint_hash = $journal['target_snapshot_sha256'] !== ''
+				? $journal['target_snapshot_sha256']
+				: hash('sha256', serialize([]));
+			$target_live = hash_equals($target_endpoint_hash, $live_hash);
+		}
 		if (!$source_live && !$target_live) {
 			throw new RuntimeException('settings transition live state mismatch');
 		}
@@ -2542,6 +2570,24 @@ function pfb_settings_transition_apply(
 						throw new InvalidArgumentException('settings transition target head mismatch');
 					}
 					_pfb_settings_replace_owned_locked($selected['owned']);
+					break;
+				case 'migrate':
+					if ($source_keep === NULL) {
+						PfbConfig::delete('pfb_keep');
+					} else {
+						PfbConfig::write('pfb_keep', $source_keep);
+					}
+					$expected_owned = pfb_settings_capture_owned();
+					if ($expected_owned !== $live_owned) {
+						if (write_config('pfBlockerNG: normalize transition keep setting') === FALSE) {
+							PfbConfig::write('pfb_keep', 'on');
+							throw new RuntimeException('unable to persist transition keep normalization');
+						}
+						config_read_file(FALSE, TRUE);
+						if (pfb_settings_capture_owned() !== $expected_owned) {
+							throw new RuntimeException('transition keep normalization readback mismatch');
+						}
+					}
 					break;
 			}
 		}
@@ -2678,7 +2724,9 @@ function pfb_settings_transition_prepare(
 		}
 		$journal_action = 'restore';
 		$authorization = '';
-		if ($target_snapshot_sha256 === '' && $source_family === '4.0' && $target_family === '3.2') {
+		if ($target_snapshot_sha256 === '' && $source_family === '3.2' && $target_family === '4.0') {
+			$journal_action = 'migrate';
+		} elseif ($target_snapshot_sha256 === '' && $source_family === '4.0' && $target_family === '3.2') {
 			if ($authorization_sha256 === '') {
 				throw new InvalidArgumentException('settings transition downgrade authorization required');
 			}

@@ -7353,6 +7353,53 @@
             }
         ]
     },
+    "pfb_settings_transition_downgrade": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "target",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_transition_downgrade_authorize": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "target",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_sha256",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_settings_transition_prepare": {
         "returnsRef": false,
         "returnType": "array",
