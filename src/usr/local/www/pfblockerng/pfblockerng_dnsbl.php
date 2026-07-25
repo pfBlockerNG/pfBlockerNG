@@ -704,7 +704,7 @@ if ($_POST) {
 		$pfb_regex_python = pfb_python_interpreter();
 		if (($pfb_regex_python !== '' && is_executable($pfb_regex_python)) ||
 		    (($_POST['pfb_regex'] ?? '') === 'on')) {
-			foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_list'] ?? ''), $pfb_regex_python) as $regex_error) {
+			foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_list'] ?? ''), $pfb_regex_python, ($_POST['pfb_regex_cap'] ?? '') === 'on') as $regex_error) {
 				$input_errors[] = 'Customlist pfb_regex_list: ' . htmlspecialchars($regex_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 			}
 		}
