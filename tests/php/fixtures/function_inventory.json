@@ -6515,6 +6515,86 @@
             }
         ]
     },
+    "pfb_settings_downgrade_context_consume": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
+    },
+    "pfb_settings_downgrade_context_target": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "current_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_settings_family_current": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": []
+    },
+    "pfb_settings_family_from_version": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_settings_family_pre_uninstall": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
+    },
+    "pfb_settings_family_record": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_settings_family_replace": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_settings_family_save": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_should_notify": {
         "returnsRef": false,
         "returnType": "bool",
