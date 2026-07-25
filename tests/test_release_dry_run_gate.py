@@ -42,6 +42,8 @@ _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
 # Any string-compared fail-open shape: dry_run != 'true' / != "true", regardless
 # of which context reads it (github.event.inputs / steps.*.outputs / needs.*.outputs).
 _FAIL_OPEN_RE = re.compile(r"dry_run\s*!=\s*['\"]true['\"]")
+# A step starts at a `- ` list item at step indent (6 spaces inside a job body).
+_STEP_HEADER_RE = re.compile(r"^      - ")
 
 
 def _jobs_section_lines(workflow_text: str) -> list[str]:
@@ -81,6 +83,18 @@ def _dry_run_expressions(job_lines: list[str]) -> list[str]:
     exists to check.
     """
     return [line.strip() for line in job_lines if "dry_run" in line and not line.strip().startswith("#")]
+
+
+def _split_into_steps(job_lines: list[str]) -> list[list[str]]:
+    """Group a job body into its steps, so a per-step assertion is bounded by the step
+    itself rather than by a line count that rots as comments are added around it."""
+    steps: list[list[str]] = []
+    for line in job_lines:
+        if _STEP_HEADER_RE.match(line):
+            steps.append([])
+        if steps:
+            steps[-1].append(line)
+    return steps
 
 
 def _parsed_jobs() -> dict[str, list[str]]:
@@ -143,11 +157,10 @@ def test_every_mutation_job_gates_on_an_explicit_false() -> None:
 def test_the_release_draft_step_is_gated_on_an_explicit_false() -> None:
     """The draft-creation step sits inside the `release` job, which carries other
     dry_run references, so a per-job check cannot tell that THIS step lost its gate."""
-    lines = _parsed_jobs()["release"]
-    draft = [i for i, line in enumerate(lines) if "softprops/action-gh-release" in line]
+    steps = _split_into_steps(_parsed_jobs()["release"])
+    draft = [step for step in steps if any("softprops/action-gh-release" in line for line in step)]
     assert draft, "the release job no longer creates a draft via softprops/action-gh-release"
-    window = "\n".join(lines[max(0, draft[0] - 12) : draft[0]])
-    assert re.search(r"dry_run\s*==\s*'false'", window), (
+    assert re.search(r"dry_run\s*==\s*'false'", "\n".join(draft[0])), (
         "the draft-creation step must be gated on an explicit dry_run == 'false'"
     )
 
