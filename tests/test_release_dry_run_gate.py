@@ -125,6 +125,33 @@ def test_every_mutation_job_gates_on_dry_run() -> None:
     assert not missing, f"mutation job(s) with no dry_run reference at all: {missing}"
 
 
+def test_every_mutation_job_gates_on_an_explicit_false() -> None:
+    """Each mutation job must carry a positive `dry_run == 'false'` comparison.
+
+    Merely mentioning dry_run is not enough: a polarity flip to `== 'true'` would make
+    every DRY RUN publish -- the mirror of the bug this file exists for -- while still
+    referencing dry_run, so the previous test cannot see it.
+    """
+    positive = re.compile(r"dry_run\s*==\s*'false'")
+    jobs = _parsed_jobs()
+    unpinned = {
+        job for job in MUTATION_JOBS if not any(positive.search(line) for line in _dry_run_expressions(jobs[job]))
+    }
+    assert not unpinned, f"mutation job(s) not gated on an explicit == 'false': {unpinned}"
+
+
+def test_the_release_draft_step_is_gated_on_an_explicit_false() -> None:
+    """The draft-creation step sits inside the `release` job, which carries other
+    dry_run references, so a per-job check cannot tell that THIS step lost its gate."""
+    lines = _parsed_jobs()["release"]
+    draft = [i for i, line in enumerate(lines) if "softprops/action-gh-release" in line]
+    assert draft, "the release job no longer creates a draft via softprops/action-gh-release"
+    window = "\n".join(lines[max(0, draft[0] - 12) : draft[0]])
+    assert re.search(r"dry_run\s*==\s*'false'", window), (
+        "the draft-creation step must be gated on an explicit dry_run == 'false'"
+    )
+
+
 def test_dry_run_input_is_declared_boolean() -> None:
     """The dispatch form itself must only offer two values, not free-form text."""
     workflow_text = WORKFLOW.read_text(encoding="utf-8")
