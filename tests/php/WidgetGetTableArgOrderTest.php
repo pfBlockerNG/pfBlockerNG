@@ -6,42 +6,85 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Pins the pfBlockerNG_get_table($pfb_table, $mode='') argument-order
- * contract between its declaration and both call sites in
- * pfblockerng.widget.php, established by issue #1693's reorder of
- * $mode/$pfb_table (matching the #1657 shape for the same PHP 8
- * optional-before-required-parameter defect class).
+ * contract in two complementary halves, established by issue #1693's
+ * reorder of $mode/$pfb_table (matching the #1657 shape for the same PHP 8
+ * optional-before-required-parameter defect class):
  *
- * SrcPhpDeprecationLintTest's `php -l` sweep can only inspect the
- * declaration in isolation -- it structurally cannot see a
- * declaration/call-site positional drift, because a caller is never part of
- * what `php -l` parses. If the declaration's parameter order is ever
- * reverted, or either call site's arguments are ever swapped, the first
- * positional argument stops landing in $pfb_table and this test must fail.
+ *   - testJsModeCallPathEmitsPipeDelimitedFieldsInOrder /
+ *     testDefaultModeCallPathEmitsTableMarkupWithFieldsInTheRightCells
+ *     (runtime, DECLARATION pin): eval-extract the REAL function body --
+ *     same idiom PfbWidgetOracleTest already uses for
+ *     pfBlockerNG_get_failed()/pfBlockerNG_clearfailed() -- and invoke it
+ *     directly the same two ways the widget does (js mode with both
+ *     positional args, default mode relying on $mode's default). A
+ *     reverted declaration (optional $mode moved back before required
+ *     $pfb_table) then throws before producing output -- TypeError from
+ *     reset() on the js-mode call, ArgumentCountError on the default-mode
+ *     call, both proven by mutation -- and a silent field-order corruption
+ *     inside the function body is caught by asserting the exact rendered
+ *     output, not merely that the call did not throw. This half pins ONLY
+ *     the declaration's own argument contract: it hand-writes its own call
+ *     expressions and cannot see a mistake in the widget's actual call-site
+ *     source.
  *
- * Same eval-extraction idiom already used in PfbWidgetOracleTest for
- * pfBlockerNG_get_failed()/pfBlockerNG_clearfailed(): pull the function body
- * verbatim out of the real shipped widget source and eval() it, rather than
- * reimplementing the logic or asserting on source text. No new shim needed.
+ *   - testEveryCallSitePassesPfbTableFirstArgument (source pin, CALL-SITE
+ *     pin): closes exactly the gap the runtime half leaves open --
+ *     a declaration/call-site positional drift where the declaration stays
+ *     correct but a call site in pfblockerng.widget.php is edited to pass
+ *     its arguments in the wrong order. `php -l` cannot see that either
+ *     (SrcPhpDeprecationLintTest), for the identical reason: a caller is
+ *     never part of what -l parses. This test extracts every literal
+ *     `pfBlockerNG_get_table(` call expression from the widget source and
+ *     asserts each one's first argument is literally `$pfb_table`, with an
+ *     `assertCount(2, ...)` vacuity guard so a second, unpinned call site
+ *     cannot appear silently -- same shape as
+ *     DnsblRegexToggleGateWiringTest's `substr_count(...) === 1` guard.
+ *
+ * Together the two halves close the finding SrcPhpDeprecationLintTest
+ * structurally cannot: a declaration reorder is caught by the runtime half,
+ * a call-site-only argument swap is caught by the source-pin half.
  */
 final class WidgetGetTableArgOrderTest extends TestCase
 {
+	private static string $src;
+
+	/** Saved $GLOBALS['pfb'], restored in tearDown (repo convention, PfbWidgetOracleTest). */
+	private bool $hadPfb = false;
+	private mixed $savedPfb = null;
+
 	public static function setUpBeforeClass(): void
 	{
-		if (function_exists('pfBlockerNG_get_table')) {
-			return;
-		}
-
 		$src = file_get_contents(
 			dirname(__DIR__, 2) . '/src/usr/local/www/widgets/widgets/pfblockerng.widget.php'
 		);
 		if ($src === false) {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng.widget.php');
 		}
+		self::$src = $src;
+
+		if (function_exists('pfBlockerNG_get_table')) {
+			return;
+		}
 
 		if (!preg_match('/function\s+pfBlockerNG_get_table\s*\([^)]*\).*?\n\}/s', $src, $m)) {
 			throw new RuntimeException('test bootstrap: pfBlockerNG_get_table() not found in widget source');
 		}
 		eval($m[0]);
+	}
+
+	protected function setUp(): void
+	{
+		$this->hadPfb   = array_key_exists('pfb', $GLOBALS);
+		$this->savedPfb = $GLOBALS['pfb'] ?? null;
+	}
+
+	protected function tearDown(): void
+	{
+		if ($this->hadPfb) {
+			$GLOBALS['pfb'] = $this->savedPfb;
+		} else {
+			unset($GLOBALS['pfb']);
+		}
 	}
 
 	/**
@@ -64,18 +107,11 @@ final class WidgetGetTableArgOrderTest extends TestCase
 	}
 
 	/**
-	 * The Ajax refresh path: pfBlockerNG_get_table($pfb_table, 'js') (:66).
-	 *
-	 * If the declaration or this call site's argument order drifted, the
-	 * fixture array would no longer land in $pfb_table -- e.g. under the OLD
-	 * declaration order ($mode='', $pfb_table) with this SAME call site, the
-	 * fixture array binds to $mode and the literal string 'js' binds to the
-	 * required $pfb_table, and reset('js') throws
-	 * "TypeError: reset(): Argument #1 ($array) must be of type array,
-	 * string given" before any output is produced -- proven by mutation
-	 * below. A silent field-order corruption is equally detectable: this
-	 * assertion pins count/packets/update/img in their exact pipe-delimited
-	 * slots, not merely that the call did not throw.
+	 * The Ajax refresh path, invoked the same way pfblockerng.widget.php:66 does:
+	 * pfBlockerNG_get_table($pfb_table, 'js'). Declaration pin only -- see class
+	 * docblock; this hand-writes its own call and cannot see a call-site-only
+	 * argument swap in the widget source (testEveryCallSitePassesPfbTableFirstArgument
+	 * covers that).
 	 */
 	public function testJsModeCallPathEmitsPipeDelimitedFieldsInOrder(): void
 	{
@@ -93,12 +129,12 @@ final class WidgetGetTableArgOrderTest extends TestCase
 	}
 
 	/**
-	 * The default HTML-render path: pfBlockerNG_get_table($pfb_table) (:1080),
-	 * relying on $mode's default ''. Under the OLD declaration order
-	 * ($mode='', $pfb_table required, no default), this single-argument call
-	 * would bind the fixture array to $mode and leave $pfb_table -- required,
-	 * no default -- unsatisfied, throwing an ArgumentCountError before any
-	 * output is produced -- proven by mutation below.
+	 * The default HTML-render path, invoked the same way pfblockerng.widget.php:1080
+	 * does: pfBlockerNG_get_table($pfb_table), relying on $mode's default ''.
+	 * Declaration pin only -- see class docblock. Asserts the exact rendered
+	 * fragment (byte-for-byte, like the js-mode sibling's assertSame) so a swap
+	 * between two columns inside the function body -- which a presence-only
+	 * assertStringContainsString per column cannot catch -- fails here.
 	 */
 	public function testDefaultModeCallPathEmitsTableMarkupWithFieldsInTheRightCells(): void
 	{
@@ -108,14 +144,52 @@ final class WidgetGetTableArgOrderTest extends TestCase
 		pfBlockerNG_get_table($this->fixture());
 		$out = ob_get_clean();
 
-		$this->assertStringContainsString('<td><small>pfB_Example_v4</small></td>', $out, 'alias must land in the 1st column');
-		$this->assertStringContainsString('<td><small>7</small></td>', $out, 'count must land in the 2nd column');
-		$this->assertStringContainsString('<td><small>0</small></td>', $out, 'packets must land in the 3rd column');
-		$this->assertStringContainsString('<td><small>2024-06-01</small></td>', $out, 'update must land in the 4th column');
-		$this->assertStringContainsString(
-			'<td><i class="fa-solid fa-check"></i><span title="Alias Firewall Rule count"></span></td>',
+		$expected = "<tr>\n"
+			. "\t\t\t\t\t\t<td><small>pfB_Example_v4</small></td>\n"
+			. "\t\t\t\t\t\t<td><small>7</small></td>\n"
+			. "\t\t\t\t\t\t<td><small>0</small></td>\n"
+			. "\t\t\t\t\t\t<td><small>2024-06-01</small></td>\n"
+			. "\t\t\t\t\t\t<td><i class=\"fa-solid fa-check\"></i><span title=\"Alias Firewall Rule count\"></span></td>\n"
+			. "\t\t\t\t</tr>\n"
+			. "\t\t\t\t";
+
+		$this->assertSame(
+			$expected,
 			$out,
-			'img must land in the 5th column'
+			'default-mode call path must emit alias/count/packets/update/img in exactly those column positions'
 		);
+	}
+
+	/**
+	 * Call-site pin -- see class docblock. Extracts every literal
+	 * `pfBlockerNG_get_table(` call expression from the widget source (the
+	 * negative lookbehind excludes the `function pfBlockerNG_get_table(...)`
+	 * declaration line itself) and asserts each call's first positional
+	 * argument is literally `$pfb_table`. Robust to whitespace/reformatting
+	 * and to the second argument's presence/value -- it pins only the
+	 * property that actually matters: which parameter slot gets $pfb_table.
+	 */
+	public function testEveryCallSitePassesPfbTableFirstArgument(): void
+	{
+		preg_match_all('/(?<!function )pfBlockerNG_get_table\(([^)]*)\)/', self::$src, $m);
+		$calls = $m[1];
+
+		// Vacuity-safe: proves the extraction found the real call sites (not zero,
+		// not a broken regex) AND that no third, unpinned call site has appeared.
+		$this->assertCount(
+			2,
+			$calls,
+			'expected exactly 2 pfBlockerNG_get_table( call sites in the widget source -- '
+				. 'a new, unpinned call site must not appear silently. Found: ' . implode(' | ', $calls)
+		);
+
+		foreach ($calls as $i => $args) {
+			$firstArg = trim(explode(',', $args, 2)[0]);
+			$this->assertSame(
+				'$pfb_table',
+				$firstArg,
+				"call site #{$i} (pfBlockerNG_get_table({$args})) must pass \$pfb_table as its first positional argument"
+			);
+		}
 	}
 }
