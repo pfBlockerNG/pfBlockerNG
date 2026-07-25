@@ -6,6 +6,13 @@ This is the deliberately-broken-page proof, done as PURE LOGIC against
 :func:`~tests.smoke.ui.render_oracle.evaluate_render` -- no VM, so it actually
 executes (it needs no ``smoke_vm``).
 
+Oracle condition (d) -- the sweep-level ``php_error.log`` check -- is proved here
+too (issue #1218): with the guest raised to a true ``E_ALL`` the log carries
+pfSense-core diagnostics that are none of our business, so the guard gates on the
+*originating file*, not on the file growing. Those cases drive
+:class:`~tests.smoke.ui.render_oracle.PhpErrorLogGuard` over a fake guest
+filesystem, so they run off-box like the rest of this module.
+
 It lives under ``tests/smoke/ui/`` so it is excluded from the default
 ``python -m pytest`` collection (``--ignore=tests/smoke`` keeps that run
 byte-identical at 1019), and runs under the smoke/ui override
@@ -21,9 +28,14 @@ green proves the condition is a real, load-bearing branch, not an always-pass.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 import pytest
 
-from .render_oracle import PHP_ERROR_LEVELS, body_has_php_error, evaluate_render
+from .render_oracle import PHP_ERROR_LEVELS, PhpErrorLogGuard, body_has_php_error, evaluate_render
+
+if TYPE_CHECKING:
+    from ..conftest import SmokeVM
 
 pytestmark = pytest.mark.ui_render
 
@@ -146,3 +158,134 @@ def test_multiple_failures_are_all_reported() -> None:
     assert any("404" in r for r in result.reasons)
     assert any("Warning" in r for r in result.reasons)
     assert any("no page marker" in r for r in result.reasons)
+
+
+# --------------------------------------------------------------------------- #
+# (d) the sweep-level php_error.log guard -- OUR diagnostics gate, core noise
+#     does not (issue #1218: the guest now runs a true E_ALL)
+# --------------------------------------------------------------------------- #
+
+_LOG = "/tmp/PHP_errors.log"
+_SEEDED = "[25-Jul-2026 09:59:00 UTC] PHP Warning:  pre-existing in /etc/inc/config.inc on line 1\n"
+
+# Real error_log line shapes, one per class the guard must tell apart.
+CORE_WARNING = (
+    '[25-Jul-2026 10:00:00 UTC] PHP Warning:  Undefined array key "descr" in /etc/inc/pfsense-utils.inc on line 4211\n'
+)
+PFB_PAGE_WARNING = (
+    "[25-Jul-2026 10:00:01 UTC] PHP Warning:  Undefined array key 0 in "
+    "/usr/local/www/pfblockerng/pfblockerng_feeds.php on line 377\n"
+)
+PFB_INC_DEPRECATED = (
+    "[25-Jul-2026 10:00:02 UTC] PHP Deprecated:  Optional parameter $x declared before required $y in "
+    "/usr/local/pkg/pfblockerng/pfblockerng.inc on line 90\n"
+)
+CORE_FATAL = (
+    "[25-Jul-2026 10:00:03 UTC] PHP Fatal error:  Uncaught TypeError: bad in /etc/inc/config.lib.inc on line 9\n"
+)
+FPM_POOL_CHATTER = "[25-Jul-2026 10:00:04] NOTICE: [pool nginx] child 41027 started\n"
+
+
+class _FakeSSHResult:
+    """The ``subprocess``-shaped result :class:`PhpErrorLogGuard` reads."""
+
+    def __init__(self, returncode: int, stdout: str) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
+class _FakeVM:
+    """A guest filesystem (``{path: text}``) answering the guard's two ssh calls.
+
+    The guard shells out only for ``stat -f %z <path>`` (byte size, rc 1 when the
+    file is absent) and ``tail -c <n> <path>`` (the bytes appended since the
+    snapshot), so a dict of file bodies is a faithful stand-in -- and keeps this
+    proof off-box, where it can run on every push instead of only on a leased VM.
+    """
+
+    def __init__(self, files: dict[str, str]) -> None:
+        self.files = files
+
+    def ssh(self, *argv: str, timeout: float = 30.0) -> _FakeSSHResult:  # noqa: ARG002 - signature parity
+        path = argv[-1]
+        body = self.files.get(path)
+        if argv[0] == "/usr/bin/stat":
+            return _FakeSSHResult(0, str(len(body.encode()))) if body is not None else _FakeSSHResult(1, "")
+        if argv[0] == "/usr/bin/tail":
+            assert body is not None, f"tail on an absent guest file: {path}"
+            return _FakeSSHResult(0, body.encode()[-int(argv[2]) :].decode())
+        raise AssertionError(f"unexpected guest command: {argv!r}")
+
+
+def _guard_after_appending(appended: str) -> PhpErrorLogGuard:
+    """A guard snapshotted over a seeded log, then ``appended`` written to it."""
+    vm = _FakeVM({_LOG: _SEEDED})
+    guard = PhpErrorLogGuard(cast("SmokeVM", vm), candidates=(_LOG,))
+    guard.snapshot()
+    vm.files[_LOG] = _SEEDED + appended
+    return guard
+
+
+def test_pfblockerng_warning_gates_the_sweep() -> None:
+    """(d) on-branch: a runtime ``E_WARNING`` from one of OUR pages fails the sweep.
+
+    This is the class the Tier-A mandate names and #1211 could not obtain a red for
+    (the harness masked ``E_WARNING`` before it reached the log). With the guest at
+    ``E_ALL`` the line lands in the log and the guard must fail on it, naming the
+    offending line so the failure is actionable without opening the artifact.
+    """
+    with pytest.raises(AssertionError, match="pfblockerng_feeds.php"):
+        _guard_after_appending(PFB_PAGE_WARNING).assert_no_growth()
+
+
+def test_pfblockerng_deprecated_from_the_package_dir_gates_the_sweep() -> None:
+    """(d) on-branch, second owned root: ``/usr/local/pkg/pfblockerng/`` counts as ours too.
+
+    Our code ships to two trees (the package dir and the ``www`` pages/widgets); a
+    filter that only recognised one of them would silently ignore half the package.
+    """
+    with pytest.raises(AssertionError, match="pfblockerng.inc"):
+        _guard_after_appending(PFB_INC_DEPRECATED).assert_no_growth()
+
+
+def test_core_warning_does_not_gate_the_sweep() -> None:
+    """(d) off-branch: a pfSense-CORE ``E_WARNING`` is noise the sweep must ignore.
+
+    Raising the guest to ``E_ALL`` makes every core ``Undefined array key`` visible in
+    the same log. Those are not our regressions and gating on them would redden every
+    PR on unrelated upstream code -- the reason the harness masked the whole class
+    before. The guard scopes by ORIGINATING file instead, so core noise passes.
+    """
+    _guard_after_appending(CORE_WARNING).assert_no_growth()
+
+
+def test_core_fatal_still_gates_the_sweep() -> None:
+    """(d): the file filter applies to the maskable classes ONLY -- a fatal always fails.
+
+    ``E_ERROR``/``E_PARSE``-class diagnostics were never masked and are catastrophic
+    wherever they are raised (a core fatal reached through our page is still a broken
+    page), so scoping by file must never quiet them.
+    """
+    with pytest.raises(AssertionError, match="Fatal error"):
+        _guard_after_appending(CORE_FATAL).assert_no_growth()
+
+
+def test_non_diagnostic_log_growth_does_not_gate_the_sweep() -> None:
+    """(d): a line that is not a PHP diagnostic at all (fpm pool chatter) does not fail.
+
+    php-fpm writes its own lifecycle lines into the same watched candidates. The guard
+    reads DIAGNOSTICS, not bytes, so a worker respawn during a sweep cannot redden a
+    run that emitted no PHP error.
+    """
+    _guard_after_appending(FPM_POOL_CHATTER).assert_no_growth()
+
+
+def test_our_warning_still_gates_when_mixed_with_core_noise() -> None:
+    """(d): one of OUR lines buried among core lines is still found and reported.
+
+    A real sweep appends many lines at once; the guard must scan the whole appended
+    chunk rather than classifying it by its first line.
+    """
+    with pytest.raises(AssertionError, match="pfblockerng_feeds.php"):
+        _guard_after_appending(CORE_WARNING + PFB_PAGE_WARNING + FPM_POOL_CHATTER).assert_no_growth()

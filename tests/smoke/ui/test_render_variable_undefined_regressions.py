@@ -82,7 +82,7 @@ def test_alerts_unified_view_renders_clean(smoke_vm: SmokeVM, webui: WebUI) -> N
         does not skip it; no log content needs seeding).
       When  GET ``pfblockerng_alerts.php?view=unified``.
       Then  the Tier-A oracle passes (200, no PHP diagnostic shape, the Unified
-            panel marker present) AND ``php_error.log`` gains no new bytes --
+            panel marker present) AND ``php_error.log`` gains no pfBlockerNG diagnostic --
             the two ways a suppressed ``variable.undefined`` regression would
             surface (#1495: ``$p_query_port``/``$colspan``/``$fcounter``/
             ``$pfbfilterlimit``/the ``$rtype`` coalesce all execute on this
@@ -113,7 +113,7 @@ def test_category_edit_add_dnsbl_stale_atype_renders_clean(smoke_vm: SmokeVM, we
         scenario the fix's comment names).
       When  GET the category-edit page with that link.
       Then  the Tier-A oracle passes (200, no PHP diagnostic shape, the page's
-            marker present) AND ``php_error.log`` gains no new bytes -- the
+            marker present) AND ``php_error.log`` gains no pfBlockerNG diagnostic -- the
             page falls through to the ``!$pfb_found`` branch
             (category_edit.php:277-291), reading ``$a_aliasname``/
             ``$a_description``/``$a_cron``/``$a_url``/``$a_header`` before any

@@ -13,9 +13,11 @@ body. So a page PASSES Tier A only when ALL of:
   in legitimate page copy;
 * **(c)** a **page-specific content marker** is present (so a blank body, a
   redirect to the dashboard, or the login form cannot false-pass a 200);
-* **(d)** the on-box ``php_error.log`` gained **no new bytes** across the sweep
-  (the source-of-truth log; checked once at sweep level, not per page -- see
-  :class:`PhpErrorLogGuard`).
+* **(d)** the on-box ``php_error.log`` gained **no pfBlockerNG diagnostic** across
+  the sweep (the source-of-truth log; checked once at sweep level, not per page --
+  see :class:`PhpErrorLogGuard`). The guest runs a true ``E_ALL`` (#1218), so the
+  runtime ``E_WARNING``/``E_NOTICE``/``E_DEPRECATED`` class IS observable here; the
+  guard scopes those to our own files so pfSense-core noise does not gate.
 
 This module is the reusable pure-logic core: :func:`evaluate_render` decides
 (a)-(c) for one fetched page and returns a structured :class:`RenderResult`;
@@ -156,16 +158,72 @@ PHP_ERROR_LOG_CANDIDATES: tuple[str, ...] = (
     "/var/log/php-fpm.log",
 )
 
+# Issue #1218: the guest runs a TRUE E_ALL (helpers.STRICT_PHP_ERROR_REPORTING), so the
+# runtime E_WARNING / E_NOTICE / E_DEPRECATED class finally reaches the log and a
+# "this page no longer warns" assertion can be red before its fix. The cost is that
+# pfSense CORE emits that class too, on code we do not own; gating on it would redden
+# every PR on upstream noise (the reason the mask existed). So the guard gates on the
+# ORIGINATING FILE: those three levels fail the sweep only when raised inside a
+# pfBlockerNG-owned file. Every OTHER level (fatal / parse / recoverable / user-*)
+# fails wherever it is raised -- those were never masked and a core fatal reached
+# through our page is still a broken page.
+_MASKABLE_LEVELS = frozenset({"Warning", "Notice", "Deprecated"})
+
+# Every file this package ships carries "pfblockerng" in its path (the package dir
+# /usr/local/pkg/pfblockerng/, the www pages, the widget, the shortcut, the wizard) --
+# verified against src/, which has no shipped file without it. A substring test is
+# therefore the whole ownership rule, with no path list to keep from rotting.
+PFB_PATH_MARKER = "pfblockerng"
+
+# An error_log diagnostic line: "[<ts>] PHP <Level>:  <message> in <file> on line <N>".
+# The level is anchored to the "PHP " prefix PHP itself writes, so php-fpm's own
+# lifecycle chatter ("NOTICE: [pool nginx] child N started") is not a diagnostic.
+_LOG_DIAGNOSTIC_RE = re.compile(rf"PHP\s+(?P<level>{_LEVELS_ALT})\s*:")
+_LOG_ORIGIN_RE = re.compile(r"\bin (?P<file>\S+) on line \d+")
+
+
+def gating_log_lines(appended: str) -> tuple[str, ...]:
+    """The lines of an appended ``php_error.log`` chunk that must FAIL the sweep.
+
+    A line gates when it is a PHP diagnostic AND either its level is not one of the
+    core-noisy :data:`_MASKABLE_LEVELS` or it was raised in a pfBlockerNG-owned file
+    (:data:`PFB_PATH_MARKER`). Anything else -- core warnings/notices/deprecations,
+    fpm pool chatter, stack-trace continuation lines -- is ignored.
+
+    ponytail: ownership is decided by the file the diagnostic was RAISED in, which is
+    what ``errfile`` reports. A warning raised inside a pfSense core function that our
+    page called therefore reads as core noise and does not gate; catching that class
+    needs a call-stack, which no log line carries. Deliberate: it is the same scoping
+    the issue's design settled on, and the body oracle (b) still catches it whenever
+    the diagnostic is rendered.
+    """
+    gating: list[str] = []
+    for line in appended.splitlines():
+        diagnostic = _LOG_DIAGNOSTIC_RE.search(line)
+        if diagnostic is None:
+            continue
+        if diagnostic.group("level") not in _MASKABLE_LEVELS:
+            gating.append(line)
+            continue
+        origin = _LOG_ORIGIN_RE.search(line)
+        if origin is not None and PFB_PATH_MARKER in origin.group("file").lower():
+            gating.append(line)
+    return tuple(gating)
+
 
 class PhpErrorLogGuard:
     """Sweep-level ``php_error.log`` diff (oracle condition (d)), read over SSH.
 
     Snapshot the byte size of every existing candidate log ONCE before the
-    parametrized sweep (:meth:`snapshot`), then assert no growth ONCE after
-    (:meth:`assert_no_growth`). A new line written by ANY page in the sweep grows
-    the file and fails -- this is the source-of-truth check that catches a PHP
-    diagnostic logged but not echoed into a body (e.g. a Notice on a path that
-    output-buffers, or an error_log() call).
+    parametrized sweep (:meth:`snapshot`), then read back everything appended and
+    assert none of it is OURS ONCE after (:meth:`assert_no_growth`) -- the
+    source-of-truth check that catches a PHP diagnostic logged but not echoed into
+    a body (e.g. a Notice on a path that output-buffers, or an error_log() call).
+
+    The size is the read offset, not the verdict: since #1218 the verdict comes
+    from :func:`gating_log_lines` over the appended text, so a sweep that only
+    stirred up pfSense-core noise or an fpm worker respawn stays green while one
+    of our own warnings fails.
 
     Sizes are read with ``stat -f %z`` (BSD/pfSense ``stat``); a missing file
     reports size 0 (``|| echo 0``), so a log created mid-sweep also registers as
@@ -212,18 +270,28 @@ class PhpErrorLogGuard:
         self._baseline = self._sizes()
 
     def assert_no_growth(self) -> None:
-        """Fail if any candidate ``php_error.log`` grew since :meth:`snapshot`.
+        """Fail if any candidate ``php_error.log`` gained a pfBlockerNG diagnostic.
 
-        Raises :class:`AssertionError` naming the file and its size delta, plus
-        the appended tail (best-effort) so the diagnostic is in the failure
-        message, not only the uploaded artifact.
+        Reads the bytes appended since :meth:`snapshot` and classifies them with
+        :func:`gating_log_lines`: our-file ``Warning``/``Notice``/``Deprecated``
+        and any non-maskable level fail; core noise and non-diagnostic lines do
+        not (issue #1218 -- the guest runs a true ``E_ALL`` now, so the log carries
+        upstream diagnostics we neither own nor can fix).
+
+        Raises :class:`AssertionError` naming the file and the offending lines, so
+        the diagnostic is in the failure message, not only the uploaded artifact.
         """
         after = self._sizes()
-        grew: list[str] = []
+        offending: list[str] = []
         for path, before in self._baseline.items():
             now = after.get(path, 0)
-            if now > before:
-                tail = self._vm.ssh("/usr/bin/tail", "-c", str(now - before), path).stdout
-                grew.append(f"{path} grew {before}->{now} bytes; appended:\n{tail}")
-        if grew:
-            raise AssertionError("php_error.log gained new lines during the render sweep:\n" + "\n".join(grew))
+            if now <= before:
+                continue
+            appended = self._vm.ssh("/usr/bin/tail", "-c", str(now - before), path).stdout
+            gating = gating_log_lines(appended)
+            if gating:
+                offending.append(f"{path} ({before}->{now} bytes):\n" + "\n".join(gating))
+        if offending:
+            raise AssertionError(
+                "pfBlockerNG PHP diagnostics were logged during the render sweep:\n" + "\n".join(offending)
+            )

@@ -599,8 +599,14 @@ to drive the live webConfigurator. It is off the default `pytest` like the rest 
 
 - **Tier A — `ui_render`** (cheap/hermetic, the **PR gate**): authenticated-HTTP GET of every
   pfBlockerNG page → 200, body free of `Fatal error`/`Parse error`/`Warning`/`Notice`/`Uncaught`,
-  a page-specific marker present, **and** no new on-box `php_error.log` line. **Never HTTP 200
-  alone** — body + marker + `php_error.log` is the oracle.
+  a page-specific marker present, **and** no new on-box `php_error.log` diagnostic from a
+  pfBlockerNG file. **Never HTTP 200 alone** — body + marker + `php_error.log` is the oracle.
+  The guest runs a true `E_ALL` (#1218), so the runtime `E_WARNING`/`E_NOTICE`/`E_DEPRECATED`
+  class reaches the log and a "this page no longer warns" test can be red before its fix;
+  pfSense-core diagnostics land in the same log but do not gate, because the guard scopes by
+  the diagnostic's **originating file** (`ui/render_oracle.py` `gating_log_lines`). Never
+  re-mask a class in `helpers.STRICT_PHP_ERROR_REPORTING` to quiet a noisy log — that blinds
+  the gate for our code too; scope it in the guard.
 - **Tier B — `ui_e2e`** (daily/on-demand): CSRF-POST flows asserting the **effective**
   `config.xml`/`pfctl`/unbound state via `helpers.config_get`, not the HTTP response.
 - **Tier B — `ui_browser`** (daily/on-demand): headless Playwright/Chromium reusing the auth

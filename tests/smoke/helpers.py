@@ -1117,17 +1117,23 @@ def guest_hour(vm: SmokeVM) -> int:
 
 # pfSense's rc.php_ini_setup selects error_reporting by build channel: the low
 # ``E_ERROR | E_PARSE`` on ``-RELEASE`` images (our smoke base) vs the wider
-# ``E_ALL ^ (E_WARNING | E_NOTICE | E_DEPRECATED)`` on beta/dev builds. Netgate raises it
-# on their betas to surface latent PHP issues; we run the smoke + UI VM at that SAME beta
-# level (BBcan177) so a page or reload emitting a structural diagnostic (E_STRICT /
-# E_RECOVERABLE / E_CORE_* / E_COMPILE_* / E_USER_*) trips the guard, plus arg-rich traces
-# (zend.exception_ignore_args=0). It deliberately KEEPS Netgate's mask of the runtime
-# E_WARNING / E_NOTICE / E_DEPRECATED: a plain E_ALL would also flag the pre-existing
-# undefined-array-key / deprecated lines in pfBlockerNG (``?:`` on absent keys) and pfSense
-# core, reddening the gate on issues out of scope for this change.
+# ``E_ALL ^ (E_WARNING | E_NOTICE | E_DEPRECATED)`` on beta/dev builds. We run the smoke +
+# UI VM ABOVE both, at a true E_ALL, so a page or reload emitting ANY diagnostic -- the
+# structural classes (E_STRICT / E_RECOVERABLE / E_CORE_* / E_COMPILE_* / E_USER_*) AND the
+# runtime E_WARNING / E_NOTICE / E_DEPRECATED -- reaches the log, plus arg-rich traces
+# (zend.exception_ignore_args=0).
+#
+# Issue #1218: this level used to keep Netgate's beta mask of the runtime classes, because
+# a plain E_ALL also surfaces pre-existing undefined-array-key / deprecated lines from
+# pfSense CORE. The cost was that every "this page no longer warns" assertion was vacuous
+# -- the class it named could not be observed at all, so the test passed identically before
+# and after its fix. The noise is now filtered where it belongs, in the sweep's log guard
+# (``ui.render_oracle.gating_log_lines``), which gates on the diagnostic's ORIGINATING file:
+# core noise is ignored, our own warnings fail. Never re-mask a class here to quiet a log --
+# that blinds the gate; scope it in the guard instead.
 _GUEST_PHP_INI = "/usr/local/etc/php.ini"
-# The exact error_reporting Netgate's beta php.ini uses (a PHP ini expression).
-STRICT_PHP_ERROR_REPORTING = "E_ALL ^ (E_WARNING | E_NOTICE | E_DEPRECATED)"
+# A PHP ini expression: every diagnostic class is generated and logged.
+STRICT_PHP_ERROR_REPORTING = "E_ALL"
 
 
 def php_effective_error_reporting(vm: SmokeVM, *, timeout: float = 30.0) -> int:
@@ -1230,23 +1236,35 @@ def php_fpm_probe(vm: SmokeVM, get: Callable[[str], Any], *, warn_tag: str, time
             )
 
 
-def php_trigger_user_warning(vm: SmokeVM, *, level: str, tag: str, timeout: float = 30.0) -> None:
-    """Fire one ``E_USER_WARNING`` under a chosen ``error_reporting`` level (bare ``php``).
+def php_trigger_undefined_key_warning(vm: SmokeVM, *, path: str, tag: str, timeout: float = 30.0) -> None:
+    """Raise a real ``E_WARNING`` (``Undefined array key``) from a PHP file AT ``path``.
 
-    Proves the level GATES logging: the same trigger is suppressed under the minimal
-    ``E_ERROR | E_PARSE`` and logged under ``E_ALL`` (``log_errors=on`` → ``error_log``).
-    ``level`` is a PHP ini value (``"E_ALL"`` / ``"E_ERROR | E_PARSE"``) applied via
-    ``php -d error_reporting=<level>`` at INI-LOAD — NOT a runtime ``error_reporting()``
-    call — so the process has no E_ALL startup window that could log unrelated startup
-    noise before a runtime downgrade takes effect (the box php.ini is now E_ALL). ``tag``
-    is the logged message, so a caller can grep the log for exactly this trigger.
+    The runtime ``E_WARNING`` / ``E_NOTICE`` / ``E_DEPRECATED`` class is the one issue
+    #1218 made observable, and the sweep's log guard scopes it by the file the diagnostic
+    was raised in — so a proof of that scoping needs the warning to come from a CHOSEN
+    file, which ``php -r`` (origin ``Command line code``) cannot give. The file is written,
+    executed at the box's CONFIGURED level (no ``-d`` override, so the ini is under test
+    too), and removed again; ``tag`` becomes the array key, hence the logged message, so a
+    caller can grep the log for exactly this trigger.
     """
-    code = f"trigger_error({_php_str(tag)}, E_USER_WARNING);"
-    res = vm.ssh(PHP_BIN, "-d", f"error_reporting={level}", "-r", code, timeout=timeout)
-    # php exits 0 even after emitting a warning; a nonzero code is a real invocation
-    # failure (bad binary / syntax), not the warning itself — surface it.
-    if res.returncode != 0:
-        raise RuntimeError(f"php user-warning trigger failed: {(res.stderr or res.stdout).strip()!r}")
+    code = f"<?php $a = []; echo $a[{_php_str(tag)}];"
+    write = vm.ssh(f"printf '%s' {shlex.quote(code)} > {shlex.quote(path)}", timeout=timeout)
+    if write.returncode != 0:
+        raise RuntimeError(f"writing php warning probe {path} failed: {(write.stderr or write.stdout).strip()!r}")
+    try:
+        res = vm.ssh(PHP_BIN, path, timeout=timeout)
+        # php exits 0 after a warning; nonzero is a real invocation failure (bad binary,
+        # unreadable probe), not the warning itself — surface it rather than assert on a
+        # trigger that never ran.
+        if res.returncode != 0:
+            raise RuntimeError(f"php warning probe {path} failed: {(res.stderr or res.stdout).strip()!r}")
+    finally:
+        rm = vm.ssh("/bin/rm", "-f", path, timeout=timeout)
+        if rm.returncode != 0:
+            print(
+                f"[smoke] WARNING: failed to remove php warning probe {path} "
+                f"(rc={rm.returncode}): {(rm.stderr or rm.stdout).strip()!r} — stray file left on the guest"
+            )
 
 
 def enable_strict_php_error_reporting(vm: SmokeVM, *, timeout: float = 30.0) -> None:
