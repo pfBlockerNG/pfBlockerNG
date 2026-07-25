@@ -6,9 +6,7 @@ merge gate, CI waits, post-merge. Load when: landing a PR or applying review fin
 - **Scope:** vendor-neutral mechanics for landing a pull request — review feedback
   first, then rebase-merge — extracted from the `pr-merge`, `pr-merge-flow`, and
   `pr-comments` skills and the `review-single` reviewer contract (all since retired,
-  [#1431](https://github.com/pfBlockerNG/pfBlockerNG/issues/1431); ticket
-  [#1428](https://github.com/pfBlockerNG/pfBlockerNG/issues/1428), map
-  [#1383](https://github.com/pfBlockerNG/pfBlockerNG/issues/1383)).
+  #1431; ticket #1428, map #1383).
 - **Load-when:** reviewing, resolving review feedback on, or merging a pull request.
 - **Owner:** repo owner. **Last-verified:** 2026-07-17.
 
@@ -354,8 +352,9 @@ The base advances out of band (parallel agents). In the dedicated worktree:
 Poll until every **required** check completes, excluding checks matching
 `coderabbit|snyk` (case-insensitive; both advisory) — via
 `scripts/agent/wait-checks.sh`, the single implementation (self-exiting background
-task, ~40-minute cap, result file's LAST line is the verdict). CLI transport
-unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
+task, ~40-minute cap, result file's LAST line is the verdict; `--sha` pins the
+commit). CLI transport unavailable → the client's GitHub MCP tools with
+wakeup-paced bounded checks.
 
 - **Early-verdict reuse:** a CI wait armed at review start that already returned
   `PASS` may replace this wait IFF the SHA it watched still equals the PR head AND
@@ -367,6 +366,7 @@ unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
 - **FAIL** → a real check failed: do not merge; report the failing checks and run
   URLs and stop.
 - **TIMEOUT** → report and ask whether to keep waiting; never merge on a timeout.
+- **STALE** → head moved after arming: re-arm and retry; never merge.
 
 ### Merge and clean up
 
