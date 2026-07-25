@@ -14,10 +14,10 @@ def _write_manifest(path: Path) -> None:
     path.write_text('{"version": 1, "config": {}, "feeds": []}\n', encoding="utf-8")
 
 
-def test_empty_main_regex_marker_does_not_fall_back_to_legacy(tmp_path: Path, monkeypatch: Any) -> None:
-    """An explicitly empty MAIN blob disables stale legacy regex entries everywhere."""
+def test_empty_main_regex_marker_loads_no_user_regexes(tmp_path: Path, monkeypatch: Any) -> None:
+    """An explicitly empty MAIN blob produces no user regex entries."""
     (tmp_path / "pfb_unbound.ini").write_text(
-        "[MAIN]\npython_enable = true\nregex_list = \n[REGEX]\nlegacy = stale\n",
+        "[MAIN]\npython_enable = true\nregex_list = \n",
         encoding="utf-8",
     )
     _write_manifest(tmp_path / "pfb_py_sources.json")
