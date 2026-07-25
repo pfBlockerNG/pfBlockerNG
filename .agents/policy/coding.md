@@ -47,6 +47,27 @@ Storage adapter rule (behaviour-preserving upgrades, grandfather seeds, canonica
 `PfbStoredEnum` mechanics) + per-field inventory:
 [`docs/misc/config-gateway.md`](../../docs/misc/config-gateway.md).
 
+## Normalize once — bind derived values, never re-derive
+
+Derive a normalized form of a value **once**, bind it to a variable, and evaluate every
+subsequent condition and use against that binding — never re-run the same pure operation
+(`strip`/`trim`, `lower`/`strtolower`, `split`/`explode`, decode, `basename`, …) on the
+same input across successive expressions, and never compute a value only to throw it away
+and recompute it later in the same scope. Canonical smell (Python):
+
+```python
+if not line.strip() or line.lstrip().startswith("#"):   # strips twice…
+    continue
+pattern = line.partition("#")[0].strip()                # …then strips again
+```
+
+Right shape: `line = line.strip()` at loop entry, then test and slice `line`. Same rule in
+PHP (`trim($x)` repeated across an `if` chain), shell (re-running the same
+`${var%...}`/`sed` derivation), and JS. Hot per-line paths (DNSBL/feed parsing) matter
+most, but the rule is about clarity as much as cost — one binding names the invariant
+("`line` is stripped from here on") instead of making the reader re-verify it per use.
+Applies to new code and to any touched block; fix the redundancy when you edit one.
+
 ## Linting
 
 Run linters while working; the `.githooks/pre-commit` hook blocks failing commits
