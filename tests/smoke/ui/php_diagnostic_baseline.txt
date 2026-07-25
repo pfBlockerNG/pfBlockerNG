@@ -114,6 +114,12 @@
 /usr/local/www/pfblockerng/pfblockerng_Antarctica.php|Warning|Undefined array key "countries4"
 /usr/local/www/pfblockerng/pfblockerng_Antarctica.php|Warning|Undefined array key "countries6"
 /usr/local/www/pfblockerng/pfblockerng_Antarctica.php|Warning|Undefined variable $input_errors
+/usr/local/www/pfblockerng/pfblockerng_Asia.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Asia.php|Warning|Undefined array key "aliaslog"
+/usr/local/www/pfblockerng/pfblockerng_Asia.php|Warning|Undefined array key "autoaddrnot_in"
+/usr/local/www/pfblockerng/pfblockerng_Asia.php|Warning|Undefined array key "autoports_in"
+/usr/local/www/pfblockerng/pfblockerng_Asia.php|Warning|Undefined array key "countries4"
+/usr/local/www/pfblockerng/pfblockerng_Asia.php|Warning|Undefined array key "countries6"
 /usr/local/www/pfblockerng/pfblockerng_alerts.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
 /usr/local/www/pfblockerng/pfblockerng_alerts.php|Warning|Undefined array key "alerts"
 /usr/local/www/pfblockerng/pfblockerng_alerts.php|Warning|Undefined array key "dnsbl"
@@ -172,6 +178,12 @@
 /usr/local/www/pfblockerng/pfblockerng_alerts.php|Warning|Undefined array key 87
 /usr/local/www/pfblockerng/pfblockerng_alerts.php|Warning|Undefined array key 88
 /usr/local/www/pfblockerng/pfblockerng_alerts.php|Warning|Undefined array key 89
+/usr/local/www/pfblockerng/pfblockerng_blacklist.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_blacklist.php|Warning|Undefined array key "blacklist_enable"
+/usr/local/www/pfblockerng/pfblockerng_blacklist.php|Warning|Undefined array key "blacklist_freq"
+/usr/local/www/pfblockerng/pfblockerng_blacklist.php|Warning|Undefined array key "blacklist_lang"
+/usr/local/www/pfblockerng/pfblockerng_blacklist.php|Warning|Undefined array key "blacklist_logging"
+/usr/local/www/pfblockerng/pfblockerng_blacklist.php|Warning|Undefined array key "blacklist_selected"
 /usr/local/www/pfblockerng/pfblockerng_category_edit.php|Deprecated|str_replace(): Passing null to parameter #3 ($subject) of type array|string is deprecated
 /usr/local/www/pfblockerng/pfblockerng_category_edit.php|Warning|Undefined array key "format"
 /usr/local/www/pfblockerng/pfblockerng_category_edit.php|Warning|Undefined array key "row"
@@ -271,6 +283,13 @@
 /usr/local/www/pfblockerng/pfblockerng_ip.php|Warning|Undefined array key "outbound_interface"
 /usr/local/www/pfblockerng/pfblockerng_ip.php|Warning|Undefined array key "pass_order"
 /usr/local/www/pfblockerng/pfblockerng_ip.php|Warning|Undefined array key "v4suppression"
+/usr/local/www/pfblockerng/pfblockerng_safesearch.php|Warning|Undefined array key "safesearch_enable"
+/usr/local/www/pfblockerng/pfblockerng_safesearch.php|Warning|Undefined array key "safesearch_youtube"
+/usr/local/www/pfblockerng/pfblockerng_sync.php|Warning|Undefined array key "row"
+/usr/local/www/pfblockerng/pfblockerng_sync.php|Warning|Undefined array key "syncinterfaces"
+/usr/local/www/pfblockerng/pfblockerng_sync.php|Warning|Undefined array key "varsynconchanges"
+/usr/local/www/pfblockerng/pfblockerng_sync.php|Warning|Undefined array key "varsynctimeout"
+/usr/local/www/pfblockerng/pfblockerng_threats.php|Warning|Undefined array key "domain"
 /usr/local/www/widgets/widgets/pfblockerng.widget.php|Deprecated|htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated
 /usr/local/www/widgets/widgets/pfblockerng.widget.php|Warning|Undefined array key "DNSBL"
 /usr/local/www/widgets/widgets/pfblockerng.widget.php|Warning|Undefined array key "rule"
