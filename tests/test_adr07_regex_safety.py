@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 import pfb_unbound
@@ -262,6 +263,21 @@ class TestStaticCapAtLoad:
         cap_off = pfb_unbound.build(manifest, {"regex_cap": False}, line_reader=reader)
         # The long-but-benign irreducible regex is dropped only when the length cap is on.
         assert cap_on.regex_count < cap_off.regex_count
+
+
+def test_save_time_probe_length_cap_matches_runtime_constant() -> None:
+    """Issue #1688 parity: pfblockerng_extra.inc's embedded save-time probe rejects a
+    pattern the SAME length that this module's REGEX_STATIC_LEN_CAP drops at load, so
+    the save-time verdict cannot silently drift from the resolver's."""
+    inc_path = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
+    source = inc_path.read_text()
+    match = re.search(r"len\(pattern\)\s*>\s*(\d+):\s*#\s*REGEX_STATIC_LEN_CAP", source)
+    assert match is not None, (
+        "expected the PHP probe's length-cap comparison, tagged '# REGEX_STATIC_LEN_CAP', in pfblockerng_extra.inc"
+    )
+    php_cap = int(match.group(1))
+    runtime_cap = pfb_unbound.REGEX_STATIC_LEN_CAP
+    assert php_cap == runtime_cap, f"probe cap={php_cap} != pfb_unbound.REGEX_STATIC_LEN_CAP={runtime_cap}"
 
 
 # --------------------------------------------------------------------------- #

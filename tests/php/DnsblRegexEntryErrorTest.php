@@ -54,6 +54,31 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		return $errors[0] ?? 'missing validator diagnostic';
 	}
 
+	private static function anchoredPattern(int $length): string
+	{
+		if ($length < 2) {
+			throw new InvalidArgumentException('length must be >= 2 to hold both anchors');
+		}
+		return '^' . str_repeat('a', $length - 2) . '$';
+	}
+
+	// issue #1688 red-before proof: the save-time validator has no length-cap concept
+	// yet, so an over-length-but-otherwise-safe pattern is silently accepted here even
+	// though pfb_unbound.py drops it at load once "Limit long/complex regex" is on.
+	public function testOverLengthPatternIsRejectedOnceTheSaveTimeCapExists(): void
+	{
+		$pattern = self::anchoredPattern(201);
+		$error = self::oneError($pattern . "\n", TRUE);
+		$this->assertStringContainsString('line 1:', $error);
+		$this->assertStringContainsString('200-character length cap', $error);
+	}
+
+	public function testOverLengthPatternAloneIsAcceptedWithoutACapConcept(): void
+	{
+		$pattern = self::anchoredPattern(201);
+		$this->assertSame([], self::errors($pattern . "\n"), 'over-length alone is not a rejection reason yet');
+	}
+
 	/** @return array<string, array{string}> */
 	public static function catastrophicShapeProvider(): array
 	{
@@ -253,5 +278,151 @@ final class DnsblRegexEntryErrorTest extends TestCase
 	public function testBenignPatternIsAccepted(string $pattern): void
 	{
 		$this->assertSame([], self::errors($pattern . "\n"), "{$pattern} must be accepted");
+	}
+
+	// --- issue #1688: save-time length cap matches the resolver's REGEX_STATIC_LEN_CAP ---
+
+	public function testExactlyTwoHundredCharactersIsAcceptedWhenTheCapIsOn(): void
+	{
+		$pattern = self::anchoredPattern(200);
+		$this->assertSame([], self::errors($pattern . "\n", TRUE), 'the cap compares with >, so exactly 200 is still admissible');
+	}
+
+	public function testExactlyTwoHundredOneCharactersIsRejectedWhenTheCapIsOn(): void
+	{
+		$pattern = self::anchoredPattern(201);
+		$error = self::oneError($pattern . "\n", TRUE);
+		$this->assertStringContainsString('line 1:', $error);
+		$this->assertStringContainsString('200-character length cap', $error);
+	}
+
+	/** @return array<string, array{string}> */
+	public static function preStrippingLengthProvider(): array
+	{
+		return [
+			'long trailing comment, short pattern' => ['^ads$ # ' . str_repeat('x', 250)],
+			'leading whitespace padding' => [str_repeat(' ', 250) . '^ads$'],
+		];
+	}
+
+	#[DataProvider('preStrippingLengthProvider')]
+	public function testLengthIsMeasuredAfterCommentStripAndTrim(string $line): void
+	{
+		$this->assertGreaterThan(200, strlen($line), 'fixture must be over-length before stripping, to prove parity');
+		$this->assertSame(
+			[],
+			self::errors($line . "\n", TRUE),
+			'the resolver measures the stripped/trimmed/lowercased pattern, not the raw line'
+		);
+	}
+
+	public function testOverLengthAndCatastrophicShapeReportsTheShapeFirst(): void
+	{
+		$pattern = '(' . str_repeat('a', 250) . '+)+';
+		$this->assertGreaterThan(200, strlen($pattern));
+		$error = self::oneError($pattern . "\n", TRUE);
+		$this->assertStringContainsString('catastrophic-backtracking shape', $error);
+		$this->assertStringNotContainsString('length cap', $error);
+	}
+
+	public function testOverLengthAndOverBudgetReportsTheBudgetFirst(): void
+	{
+		$labels = array_map(static fn (int $i): string => str_repeat(chr(97 + $i), 15), range(0, 13));
+		$pattern = implode('|', $labels);
+		$this->assertGreaterThan(200, strlen($pattern));
+		$error = self::oneError($pattern . "\n", TRUE);
+		$this->assertStringContainsString('too many quantifiers/alternations', $error);
+		$this->assertStringNotContainsString('length cap', $error);
+	}
+
+	public function testOverLengthAndMalformedReportsTheLengthCapFirst(): void
+	{
+		$pattern = '(unclosed' . str_repeat('a', 200);
+		$this->assertGreaterThan(200, strlen($pattern));
+		$error = self::oneError($pattern . "\n", TRUE);
+		$this->assertStringContainsString('200-character length cap', $error);
+		$this->assertStringNotContainsString('compile error', $error);
+	}
+
+	public function testOnlyTheOverLengthLineIsReportedAmongMultipleLines(): void
+	{
+		$contents = "^short1$\n" . self::anchoredPattern(201) . "\n^short2$\n";
+		$errors = self::errors($contents, TRUE);
+		$this->assertCount(1, $errors);
+		$this->assertStringContainsString('line 2:', $errors[0]);
+		$this->assertStringContainsString('200-character length cap', $errors[0]);
+	}
+
+	#[DataProvider('catastrophicShapeProvider')]
+	public function testCatastrophicShapeIsRejectedRegardlessOfTheCapSetting(string $pattern): void
+	{
+		$error = self::oneError($pattern . "\n", TRUE);
+		$this->assertStringContainsString('line 1:', $error);
+		$this->assertStringContainsString('catastrophic-backtracking shape', $error);
+	}
+
+	#[DataProvider('benignProvider')]
+	public function testBenignPatternIsAcceptedRegardlessOfTheCapSetting(string $pattern): void
+	{
+		$this->assertSame([], self::errors($pattern . "\n", TRUE), "{$pattern} must be accepted even with the cap on");
+	}
+
+	public function testEmptyContentsShortCircuitsWithoutSpawningAPythonProcess(): void
+	{
+		$errors = pfb_dnsbl_regex_validation_errors('', '/path/that/does/not/exist/python', TRUE);
+		$this->assertSame([], $errors, 'an unusable python path would surface as an error if the short-circuit did not fire first');
+	}
+
+	public function testOverLengthPatternWithShellMetacharactersIsRejectedSafely(): void
+	{
+		$hostile = 'ads$(rm -rf /)`id`\'"\\' . str_repeat('a', 200);
+		$this->assertGreaterThan(200, strlen($hostile));
+		$error = self::oneError($hostile . "\n", TRUE);
+		$this->assertStringContainsString('line 1:', $error);
+		$this->assertStringContainsString('200-character length cap', $error);
+	}
+
+	public function testControlCharacterWinsOverLengthWhenBothPresent(): void
+	{
+		$pattern = "^ads\x00" . str_repeat('a', 210) . '$';
+		$this->assertGreaterThan(200, strlen($pattern));
+		$error = self::oneError($pattern . "\n", TRUE);
+		$this->assertStringContainsString('control', strtolower($error));
+		$this->assertStringNotContainsString('length cap', $error);
+	}
+
+	public function testHundredThousandCharacterLineIsRejectedWithoutHanging(): void
+	{
+		$pattern = self::anchoredPattern(100000);
+		$start = microtime(TRUE);
+		$error = self::oneError($pattern . "\n", TRUE);
+		$elapsed = microtime(TRUE) - $start;
+		$this->assertLessThan(5.0, $elapsed, 'must resolve well within the 5s timeout wrapper');
+		$this->assertStringContainsString('200-character length cap', $error);
+	}
+
+	public function testProbeDefaultsCapOffWhenTheArgvFlagIsAbsent(): void
+	{
+		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
+		$source = file_get_contents($path);
+		$this->assertNotFalse($source);
+		$this->assertMatchesRegularExpression("/\\\$probe = <<<'PYTHON'\\n(.*?)\\nPYTHON;/s", $source);
+		preg_match("/\\\$probe = <<<'PYTHON'\\n(.*?)\\nPYTHON;/s", $source, $matches);
+		$probe = $matches[1];
+
+		$descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+		$process = proc_open([self::$python, '-c', $probe], $descriptors, $pipes);
+		$this->assertIsResource($process);
+		fwrite($pipes[0], self::anchoredPattern(300) . "\n");
+		fclose($pipes[0]);
+		$stdout = stream_get_contents($pipes[1]);
+		$stderr = stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		$exitCode = proc_close($process);
+
+		$this->assertSame(0, $exitCode, "probe must not crash on a missing argv flag; stderr: {$stderr}");
+		$this->assertSame('', trim($stderr));
+		$this->assertSame('', trim($stdout));
 	}
 }
