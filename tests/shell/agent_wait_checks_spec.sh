@@ -586,6 +586,33 @@ STUB
     The line 1 of output should equal 'GH-ERROR'
   End
 
+  It 'recovers from transient arm-time pr-view failures within the retry budget, reaching a normal verdict'
+    # A blip on the very first call (right after a force-push, when the API is
+    # least settled) must not kill the whole wait: 2 failures then a success is
+    # inside the same 3-strike tolerance the poll loop already has.
+    export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
+    export GH_STUB_PRVIEW_FAIL_CALLS='1 2'
+    export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 0
+    The line 2 of output should equal 'PASS'
+    The output should not include 'GH-ERROR'
+    The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '4'
+  End
+
+  It 'still fails loudly with GH-ERROR once the arm-time retry budget (3 attempts) is exhausted'
+    export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
+    export GH_STUB_PRVIEW_FAIL_CALLS='1 2 3'
+    export GH_STUB_PRVIEW_FAIL_OUTPUT='HTTP 503'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 1
+    The line 1 of output should equal 'GH-ERROR'
+    The output should include 'HTTP 503'
+    The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '3'
+  End
+
   It 'fails loudly with GH-ERROR when the pre-verdict head re-read fails, never emitting a verdict'
     export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
     export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'

@@ -93,16 +93,29 @@ main() {
 	# PFB_WAIT_DEADLINE (epoch seconds) overrides for tests/ops.
 	deadline=${PFB_WAIT_DEADLINE:-$(( $(date +%s) + max_iter * interval + 300 ))}
 
+	ghfail=0
 	if [ "$sha_set" -eq 0 ]; then
-		# A wait that cannot pin a SHA must fail loudly, never poll blind.
-		if ! sha=$(gh_bounded pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) || [ -z "$sha" ]; then
-			printf 'GH-ERROR\n%s\n' "$sha"
-			exit 1
-		fi
+		# Bounded retry (same 3-strike tolerance as the poll loop below) before
+		# failing loud: a single transient blip on the very first call -- right
+		# after a force-push, exactly when this wait is armed and the API is
+		# least settled -- must not kill the whole wait. Still capped by the
+		# wall-clock deadline via gh_bounded; a wait that still cannot pin a SHA
+		# after that tolerance is exhausted must fail loudly, never poll blind.
+		while :; do
+			if sha=$(gh_bounded pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) && [ -n "$sha" ]; then
+				break
+			fi
+			ghfail=$((ghfail + 1))
+			if [ "$ghfail" -ge 3 ]; then
+				printf 'GH-ERROR\n%s\n' "$sha"
+				exit 1
+			fi
+			sleep_bounded "$interval" || { printf 'GH-ERROR\n%s\n' "$sha"; exit 1; }
+		done
+		ghfail=0
 	fi
 
 	i=0
-	ghfail=0
 	while [ "$i" -lt "$max_iter" ]; do
 		if [ "$(date +%s)" -ge "$deadline" ]; then
 			break
