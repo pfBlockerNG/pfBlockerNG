@@ -3015,10 +3015,9 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # from CFG_DNSBL_SETTINGS/action; != 'Disabled' enables it).
         settings["action"] = spec.dnsbl_ip_action
     if spec.user_regex:
-        # The user "Python Regex List" (inc:849-850,2711). pfb_regex must be 'on' AND
-        # pfb_regex_list non-empty for MAIN.regex_list to be written. The value remains
-        # a base64 TEXTAREA payload; Python decodes it at the shared INI boundary.
-        # User regex are sovereign block patterns (band 5).
+        # User "Python Regex List" is emitted only when pfb_regex=on and
+        # pfb_regex_list is non-empty; value remains a base64 MAIN.regex_list payload
+        # decoded by Python at the shared INI boundary (sovereign block, band 5).
         settings["pfb_regex"] = "on"
         settings["pfb_regex_list"] = _b64_textarea(spec.user_regex)
     if spec.regex_cap:

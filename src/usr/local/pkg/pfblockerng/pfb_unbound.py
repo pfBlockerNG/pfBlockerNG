@@ -1128,7 +1128,7 @@ def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
                 continue
             row_number += 1
             pattern, separator, description = line.partition("#")
-            pattern = pattern.strip().lower()
+            pattern = pattern.strip().encode("utf-8").lower().decode("utf-8")
             if not pattern:
                 continue
             if separator:
@@ -1696,8 +1696,8 @@ def init_standard(id: int, env: module_env) -> bool:
                 feedGroupIndexDB = build_result.feed_group_index_db
                 whiteDB = build_result.white_db
 
-                # ADR-07: MERGE the ABP feed block-regex into regexDB (preserving the
-                # user-regex patterns compiled from the REGEX ini section above) and load
+                # ADR-07: MERGE the ABP feed block-regex into regexDB, preserving user-regex
+                # patterns compiled from MAIN.regex_list (legacy [REGEX] fallback) above, and load
                 # the @@/re/ allow-regex into allowRegexDB. Feed regex carry an explicit
                 # band + $important; user regex are the {re, band: PRIO_USER_BLOCK (5)}
                 # payload (sovereign over feed allows -- loaded above).
@@ -5260,7 +5260,7 @@ def build(
 
         # Irreducible regex -> regexDB (block) / allowRegexDB (allow). Compile here;
         # a broken pattern is logged + skipped, mirroring the init regex load
-        # (pfb_unbound.py REGEX section). The runtime warn/evict guard (ADR-07)
+        # (MAIN.regex_list, with legacy [REGEX] fallback). The runtime warn/evict guard (ADR-07)
         # applies later, at query time in evaluate_domain, not during this compile.
         # Iterate over a stable list so the emit order is deterministic.
         regex_db, block_admitted = _dnsbl_compile_regex_rules(result.block_regex_irreducible, static_cap=static_cap)
