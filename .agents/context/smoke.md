@@ -58,7 +58,9 @@ documented in architecture-notes. Operative facts:
   errors/warnings, a page-specific marker present, AND no new on-box `php_error.log`
   diagnostic **from a pfBlockerNG file** (#1218: the guest runs a true `E_ALL`, so runtime
   `E_WARNING`/`E_NOTICE`/`E_DEPRECATED` IS observable; core noise is filtered by originating
-  file in `render_oracle.gating_log_lines`, never by re-masking a class) —
+  file in `render_oracle.gating_log_lines`, never by re-masking a class; pre-existing our-file
+  sites are grandfathered in `tests/smoke/ui/php_diagnostic_baseline.txt`, a list that may only
+  SHRINK — fix the site and delete its entry, never append, burn-down tracked in #1712) —
   never HTTP 200 alone. A surface recorded in `test_render_smoke.py`'s
   `EXCLUDED_FROM_TIER_A` uses that exclusion's named live tier plus focused hermetic
   coverage instead. Tiers B are otherwise schedule/dispatch-only. Run:
