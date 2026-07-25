@@ -497,8 +497,8 @@ def _build_swap_snapshot() -> Snapshot | None:
     regex_db: dict[str, Any] = dict(build_result.regex_db)
     allow_regex_db: dict[str, Any] = dict(build_result.allow_regex_db)
 
-    # USER regex patterns from MAIN.regex_list (legacy REGEX fallback) merged on top of
-    # the feed block-regex, mirroring init's load (incl. the opt-in static cap).
+    # USER regex patterns from MAIN.regex_list merged on top of the feed block-regex,
+    # mirroring init's load (incl. the opt-in static cap).
     if os.path.isfile(pfb["pfb_unbound.ini"]):
         config = ConfigParser()
         try:
@@ -1111,7 +1111,7 @@ def _load_ini_config() -> ConfigParser | None:
 
 
 def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
-    """Load normalized user regex rows from MAIN.regex_list or legacy REGEX."""
+    """Load normalized user regex rows from MAIN.regex_list."""
     if config.has_option("MAIN", "regex_list"):
         encoded = config.get("MAIN", "regex_list", raw=True)
         try:
@@ -1144,8 +1144,6 @@ def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
             entries.append((name, pattern))
         return entries
 
-    if config.has_section("REGEX"):
-        return list(config.items("REGEX"))
     return []
 
 
@@ -1698,7 +1696,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 whiteDB = build_result.white_db
 
                 # ADR-07: MERGE the ABP feed block-regex into regexDB, preserving user-regex
-                # patterns compiled from MAIN.regex_list (legacy [REGEX] fallback) above, and load
+                # patterns compiled from MAIN.regex_list above, and load
                 # the @@/re/ allow-regex into allowRegexDB. Feed regex carry an explicit
                 # band + $important; user regex are the {re, band: PRIO_USER_BLOCK (5)}
                 # payload (sovereign over feed allows -- loaded above).
@@ -5262,8 +5260,8 @@ def build(
                 }
 
         # Irreducible regex -> regexDB (block) / allowRegexDB (allow). Compile here;
-        # a broken pattern is logged + skipped, mirroring the init regex load
-        # (MAIN.regex_list, with legacy [REGEX] fallback). The runtime warn/evict guard (ADR-07)
+        # a broken pattern is logged + skipped, mirroring the MAIN.regex_list init load.
+        # The runtime warn/evict guard (ADR-07)
         # applies later, at query time in evaluate_domain, not during this compile.
         # Iterate over a stable list so the emit order is deterministic.
         regex_db, block_admitted = _dnsbl_compile_regex_rules(result.block_regex_irreducible, static_cap=static_cap)
