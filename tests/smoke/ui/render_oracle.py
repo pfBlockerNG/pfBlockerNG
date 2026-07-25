@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from fnmatch import fnmatch
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -172,6 +171,28 @@ PHP_ERROR_LOG_CANDIDATES: tuple[str, ...] = (
 # through our page is still a broken page.
 _MASKABLE_LEVELS = frozenset({"Warning", "Notice", "Deprecated"})
 
+# The ENDEMIC class: observed and counted, never gated. `Undefined array key` on an unset
+# config read is emitted at ~488 distinct sites in this package (measured on a live sweep,
+# #1218), so gating it would mean freezing all 488 in a list edited by every burn-down PR,
+# for a gate whose next new instance is indistinguishable from the ones already forgiven.
+# The gate spends its credibility on the classes that still smell like a defect --
+# `Undefined variable`, a null reaching a string parameter (a PHP 9 TypeError in waiting),
+# `Trying to access array offset on null` -- plus every non-maskable level.
+#
+# This is a DEFERRAL, not a dismissal: #1712 burns the class down, and the end-of-sweep
+# report keeps its size visible. When it reaches zero, delete this tuple and the class
+# gates like everything else.
+ENDEMIC_MESSAGE_PREFIXES: tuple[str, ...] = ("Undefined array key",)
+
+# Endemic fingerprints seen this session -- the burn-down's measurement, not a verdict.
+_endemic_seen: set[str] = set()
+
+
+def endemic_diagnostics() -> frozenset[str]:
+    """Endemic-class fingerprints observed so far (reported at session end, never gating)."""
+    return frozenset(_endemic_seen)
+
+
 # Every file this package ships carries "pfblockerng" in its path (the package dir
 # /usr/local/pkg/pfblockerng/, the www pages, the widget, the shortcut, the wizard) --
 # verified against src/, which has no shipped file without it. A substring test is
@@ -264,7 +285,6 @@ def gating_log_lines(appended: str, baseline: frozenset[str] | None = None) -> t
     the diagnostic is rendered.
     """
     grandfathered = load_baseline() if baseline is None else baseline
-    patterns = tuple(entry for entry in grandfathered if "*" in entry)
     gating: list[str] = []
     for line in appended.splitlines():
         diagnostic = _LOG_DIAGNOSTIC_RE.search(line)
@@ -274,35 +294,22 @@ def gating_log_lines(appended: str, baseline: frozenset[str] | None = None) -> t
             origin = _LOG_ORIGIN_RE.search(line)
             if origin is None or PFB_PATH_MARKER not in origin.group("file").lower():
                 continue
+            if diagnostic.group("message").lstrip().startswith(ENDEMIC_MESSAGE_PREFIXES):
+                # Counted for the burn-down report (#1712), never gated -- see
+                # ENDEMIC_MESSAGE_PREFIXES for why this class alone is deferred.
+                fingerprint = diagnostic_fingerprint(line)
+                if baseline is None and fingerprint is not None:
+                    _endemic_seen.add(fingerprint)
+                continue
         fingerprint = diagnostic_fingerprint(line)
-        matched = fingerprint if fingerprint in grandfathered else _matching_pattern(fingerprint, patterns)
-        if matched is not None:
+        if fingerprint in grandfathered:
             # Record the hit only for the SHIPPED baseline: a caller passing its own set
             # is a unit test, and its fixtures must not look like live observations.
-            if baseline is None:
-                _observed_baseline.add(matched)
+            if baseline is None and fingerprint is not None:
+                _observed_baseline.add(fingerprint)
             continue
         gating.append(line)
     return tuple(gating)
-
-
-def _matching_pattern(fingerprint: str | None, patterns: tuple[str, ...]) -> str | None:
-    """The wildcard baseline entry covering ``fingerprint``, if any.
-
-    A site whose message varies by DATA rather than by defect -- the Feeds page reads
-    ``$fconfig['feed_' . $alias]`` for every alias in the catalogue, so which keys are
-    absent depends on which aliases exist right then -- cannot be enumerated key by key:
-    each sweep would surface a different slice and the file would never converge. One
-    ``*`` entry stands for that whole family. Everything else stays exact, so a wildcard
-    can never quietly forgive a different defect: the file and level still match exactly,
-    and only the message part globs.
-    """
-    if fingerprint is None:
-        return None
-    for pattern in patterns:
-        if fnmatch(fingerprint, pattern):
-            return pattern
-    return None
 
 
 class PhpErrorLogGuard:
