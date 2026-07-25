@@ -16775,6 +16775,9 @@ function pfblockerng_php_pre_deinstall_command() {
 	require_once('config.inc');
 	global $g, $pfb;
 
+	// Keep Settings remains governed by the existing pfb_keep boundary.
+	pfb_settings_family_pre_uninstall();
+
 	// #697: tear down ONLY on a genuine removal; keep pfBlockerNG live across a package upgrade.
 	// pfSense reaches the pre-deinstall for both, but with a different pkg operation (read from the
 	// pkg ancestor's argv): a real uninstall -- and a MAJOR OS upgrade's mass-removal -- is

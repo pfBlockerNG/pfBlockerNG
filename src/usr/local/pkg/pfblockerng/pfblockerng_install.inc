@@ -26,6 +26,21 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $g, $pfb;
 pfb_global();
 
+// Capture the surviving live source family before restoring the package target family. Missing
+// markers resolve to the legacy 3.2 family through PfbConfig's registered default.
+$pfb_source_family = pfb_settings_family_current();
+if ($pfb_source_family === NULL || !pfb_settings_family_save($pfb_source_family)) {
+	throw new RuntimeException('pfBlockerNG: unable to save source settings family');
+}
+
+// Restore exact-family settings before legacy migrations read their sections. Missing slot is a
+// valid fresh install; unsupported package versions or corrupt slots fail closed.
+$pfb_installed_family = pfb_settings_family_from_version((string) pfb_pkg_ver());
+if ($pfb_installed_family === NULL || !pfb_settings_family_replace($pfb_installed_family)) {
+	throw new RuntimeException('pfBlockerNG: unable to restore settings family');
+}
+pfb_global();
+
 // Set 'Install flag' to skip sync process during installations.
 $g['pfblockerng_install'] = TRUE;
 
@@ -117,6 +132,10 @@ if (
 // writes back and calls write_config() only when a change is needed. Replaces the four
 // hand-wired blocks (ADR-02, PFBL-03, ADR-22, issue #281) with a single ordered registry.
 pfb_run_migrations();
+
+if (!pfb_settings_family_record($pfb_installed_family)) {
+	throw new RuntimeException('pfBlockerNG: unable to record settings family');
+}
 
 // MaxMind Database is no longer pre-installed during package installation
 if (empty($pfb['maxmind_key'])) {

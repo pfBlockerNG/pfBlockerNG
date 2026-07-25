@@ -450,6 +450,14 @@ function pfb_cfg_registry(): array
 		// General section (pfblockerng/config/0)
 		// -------------------------------------------------------------------
 
+		// Settings snapshot schema marker. Missing installs are the legacy 3.2 family.
+		'settings_family' => [
+			'section'       => $gen,
+			'default'       => '3.2',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+		],
+
 		// Master enable/disable: 'on' | '' (checkbox).
 		'enable_cb' => [
 			'section'       => $gen,
@@ -1418,6 +1426,320 @@ final class PfbConfig
 		}
 		return $registry[$key];
 	}
+}
+
+// Settings-family snapshots capture only pfBlockerNG-owned installedpackages sections. Foreign
+// config remains live while the registered marker records the exact schema family.
+const PFB_SETTINGS_FAMILY_RANK = ['3.2' => 0, '4.0' => 1, '4.1' => 2];
+
+function pfb_settings_family_from_version(string $version): ?string
+{
+	$version = ltrim(trim($version), 'vV');
+	if (preg_match('/^(\d+\.\d+)(?:\.\d+)?(?:[.-].*)?$/', $version, $match) !== 1
+		|| !isset(PFB_SETTINGS_FAMILY_RANK[$match[1]])) {
+		return NULL;
+	}
+	return $match[1];
+}
+
+function pfb_settings_family_current(): ?string
+{
+	$value = PfbConfig::read('settings_family');
+	return is_string($value) && isset(PFB_SETTINGS_FAMILY_RANK[$value]) ? $value : NULL;
+}
+
+function pfb_settings_family_save(string $family): bool
+{
+	if (!isset(PFB_SETTINGS_FAMILY_RANK[$family])) {
+		return FALSE;
+	}
+	$installed = config_get_path('installedpackages', []);
+	if (!is_array($installed)) {
+		return TRUE;
+	}
+	$owned = [];
+	foreach ($installed as $section => $value) {
+		if (str_starts_with((string) $section, 'pfblockerng')) {
+			$owned[(string) $section] = $value;
+		}
+	}
+	if ($owned === []) {
+		return TRUE;
+	}
+
+	global $pfb;
+	$root = (string) ($pfb['dbdir'] ?? '/var/db/pfblockerng');
+	$effective_owner = function_exists('posix_geteuid') ? posix_geteuid() : 0;
+	$expected_owner = ($root === '/var/db/pfblockerng') ? 0 : $effective_owner;
+	$root_stat = @lstat($root);
+	if ($root_stat !== FALSE && (($root_stat['mode'] & 0170000) !== 0040000 || is_link($root)
+		|| (($root_stat['mode'] & 0022) !== 0) || $root_stat['uid'] !== $expected_owner)) {
+		return FALSE;
+	}
+	if ($root_stat === FALSE && !@mkdir($root, 0755, TRUE)) {
+		return FALSE;
+	}
+	$root_stat = @lstat($root);
+	if ($root_stat === FALSE || (($root_stat['mode'] & 0170000) !== 0040000) || is_link($root)
+		|| (($root_stat['mode'] & 0022) !== 0) || $root_stat['uid'] !== $expected_owner) {
+		return FALSE;
+	}
+
+	$slot = $root . '/settings-' . $family . '.xml';
+	$slot_stat = @lstat($slot);
+	if ($slot_stat !== FALSE && (($slot_stat['mode'] & 0170000) !== 0100000 || is_link($slot)
+		|| ($slot_stat['mode'] & 07777) !== 0600 || $slot_stat['uid'] !== $expected_owner)) {
+		return FALSE;
+	}
+	$payload = base64_encode(serialize($owned));
+	if (function_exists('dump_xml_config')) {
+		$xml = dump_xml_config(['family' => $family, 'payload' => $payload], 'pfblockerng-settings');
+	} else {
+		$doc = new SimpleXMLElement('<pfblockerng-settings/>');
+		$doc->addChild('family', $family);
+		$doc->addChild('payload', $payload);
+		$xml = $doc->asXML();
+	}
+	if (!is_string($xml) || $xml === '') {
+		return FALSE;
+	}
+
+	$tmp = @tempnam($root, '.settings-');
+	if (!is_string($tmp)) {
+		return FALSE;
+	}
+	$written = @file_put_contents($tmp, $xml, LOCK_EX);
+	$exact = ($written === strlen($xml) && @file_get_contents($tmp) === $xml);
+	if (!$exact || !@chmod($tmp, 0600)) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	$tmp_stat = @lstat($tmp);
+	if ($tmp_stat === FALSE
+		|| (($tmp_stat['mode'] & 0170000) !== 0100000)
+		|| (($tmp_stat['mode'] & 07777) !== 0600)
+		|| $tmp_stat['uid'] !== $expected_owner || !@rename($tmp, $slot)) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	clearstatcache(TRUE, $slot);
+	$slot_stat = @lstat($slot);
+	return $slot_stat !== FALSE
+		&& (($slot_stat['mode'] & 0170000) === 0100000)
+		&& (($slot_stat['mode'] & 07777) === 0600)
+		&& $slot_stat['uid'] === $expected_owner
+		&& @file_get_contents($slot) === $xml;
+}
+
+function pfb_settings_family_replace(string $family): bool
+{
+	if (!isset(PFB_SETTINGS_FAMILY_RANK[$family])) {
+		return FALSE;
+	}
+	global $pfb;
+	$root = (string) ($pfb['dbdir'] ?? '/var/db/pfblockerng');
+	$effective_owner = function_exists('posix_geteuid') ? posix_geteuid() : 0;
+	$expected_owner = ($root === '/var/db/pfblockerng') ? 0 : $effective_owner;
+	$slot = $root . '/settings-' . $family . '.xml';
+	$slot_stat = @lstat($slot);
+	if ($slot_stat === FALSE) {
+		return TRUE;
+	}
+	$root_stat = @lstat($root);
+	if ($root_stat === FALSE || is_link($root) || (($root_stat['mode'] & 0170000) !== 0040000)
+		|| (($root_stat['mode'] & 0022) !== 0) || $root_stat['uid'] !== $expected_owner
+		|| (($slot_stat['mode'] & 0170000) !== 0100000)
+		|| is_link($slot) || (($slot_stat['mode'] & 07777) !== 0600)
+		|| $slot_stat['uid'] !== $expected_owner) {
+		return FALSE;
+	}
+	$parsed = NULL;
+	if (function_exists('parse_xml_config')) {
+		$parsed = parse_xml_config($slot, 'pfblockerng-settings');
+	} else {
+		$doc = @simplexml_load_file($slot, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOBLANKS);
+		if ($doc !== FALSE && $doc->getName() === 'pfblockerng-settings') {
+			$parsed = [
+				'family'  => (string) ($doc->family ?? ''),
+				'payload' => (string) ($doc->payload ?? ''),
+			];
+		}
+	}
+	if (!is_array($parsed)
+		|| !isset($parsed['family'], $parsed['payload'])
+		|| !is_string($parsed['family'])
+		|| $parsed['family'] !== $family
+		|| !is_string($parsed['payload'])) {
+		return FALSE;
+	}
+	$encoded = base64_decode($parsed['payload'], TRUE);
+	if ($encoded === FALSE) {
+		return FALSE;
+	}
+	try {
+		$owned = @unserialize($encoded, ['allowed_classes' => FALSE]);
+	} catch (Throwable) {
+		return FALSE;
+	}
+	if (!is_array($owned) || $owned === []) {
+		return FALSE;
+	}
+	foreach ($owned as $section => $_value) {
+		if (!is_string($section) || !str_starts_with($section, 'pfblockerng')) {
+			return FALSE;
+		}
+	}
+	$validate_value = static function (mixed $value, array &$active_references) use (&$validate_value): bool {
+		if (!is_array($value)) {
+			return is_scalar($value) || $value === NULL;
+		}
+		foreach ($value as $key => $nested) {
+			$reference = ReflectionReference::fromArrayElement($value, $key);
+			if ($reference !== NULL) {
+				$reference_id = $reference->getId();
+				if (isset($active_references[$reference_id])) {
+					return FALSE;
+				}
+				$active_references[$reference_id] = TRUE;
+				$valid = $validate_value($nested, $active_references);
+				unset($active_references[$reference_id]);
+				if (!$valid) {
+					return FALSE;
+				}
+			} elseif (!$validate_value($nested, $active_references)) {
+				return FALSE;
+			}
+		}
+		return TRUE;
+	};
+	$active_references = [];
+	if (!$validate_value($owned, $active_references)) {
+		return FALSE;
+	}
+	$installed = config_get_path('installedpackages', []);
+	if (!is_array($installed)) {
+		$installed = [];
+	}
+	$rebuilt = [];
+	$owned_sections = array_keys($owned);
+	$owned_index = 0;
+	foreach ($installed as $section => $value) {
+		if (str_starts_with((string) $section, 'pfblockerng')) {
+			if (isset($owned_sections[$owned_index])) {
+				$owned_section = $owned_sections[$owned_index++];
+				$rebuilt[$owned_section] = $owned[$owned_section];
+				unset($owned[$owned_section]);
+			}
+			continue;
+		}
+		$rebuilt[$section] = $value;
+	}
+	foreach ($owned as $section => $value) {
+		$rebuilt[$section] = $value;
+	}
+	// Whole-tree write deliberately bypasses field adapters so unknown and empty snapshot values,
+	// along with owned-section ordering, are restored exactly.
+	config_set_path('installedpackages', $rebuilt);
+	write_config('pfBlockerNG: restore settings family');
+	return TRUE;
+}
+
+function pfb_settings_family_record(string $family): bool
+{
+	if (!isset(PFB_SETTINGS_FAMILY_RANK[$family])) {
+		return FALSE;
+	}
+	try {
+		PfbConfig::write('settings_family', $family);
+		write_config('pfBlockerNG: record settings family');
+		return TRUE;
+	} catch (Throwable) {
+		return FALSE;
+	}
+}
+
+function pfb_settings_downgrade_context_target(string $current_family): ?string
+{
+	if (!isset(PFB_SETTINGS_FAMILY_RANK[$current_family])) {
+		return NULL;
+	}
+	global $pfb;
+	$override = isset($pfb['downgrade_context_path']);
+	$path = $override ? (string) $pfb['downgrade_context_path'] : '/var/run/pfblockerng-downgrade-context.json';
+	$stat = $path === '' ? FALSE : @lstat($path);
+	if ($stat === FALSE || (($stat['mode'] & 0170000) !== 0100000)
+		|| (($stat['mode'] & 07777) !== 0600)) {
+		return NULL;
+	}
+	$owner = @fileowner($path);
+	if ((!$override && $owner !== 0) || ($override && function_exists('posix_geteuid') && $owner !== posix_geteuid())) {
+		return NULL;
+	}
+	$size = @filesize($path);
+	if ($size === FALSE || $size > 512) {
+		return NULL;
+	}
+	$raw = @file_get_contents($path);
+	if (!is_string($raw)) {
+		return NULL;
+	}
+	try {
+		$context = json_decode($raw, TRUE, 512, JSON_THROW_ON_ERROR);
+	} catch (Throwable) {
+		return NULL;
+	}
+	$keys = is_array($context) ? array_keys($context) : [];
+	sort($keys);
+	if (!is_array($context)
+		|| $keys !== ['created_at', 'source_family', 'target_family', 'version']
+		|| !isset($context['version'], $context['source_family'], $context['target_family'], $context['created_at'])
+		|| $context['version'] !== 1
+		|| !is_string($context['source_family'])
+		|| !is_string($context['target_family'])
+		|| !is_int($context['created_at'])
+		|| $context['source_family'] !== $current_family
+		|| !isset(PFB_SETTINGS_FAMILY_RANK[$context['source_family']])
+		|| !isset(PFB_SETTINGS_FAMILY_RANK[$context['target_family']])) {
+		return NULL;
+	}
+	$now = time();
+	if ($context['created_at'] > $now || $now - $context['created_at'] > 300
+		|| PFB_SETTINGS_FAMILY_RANK[$context['target_family']]
+			>= PFB_SETTINGS_FAMILY_RANK[$context['source_family']]) {
+		return NULL;
+	}
+	return $context['target_family'];
+}
+
+function pfb_settings_downgrade_context_consume(): void
+{
+	global $pfb;
+	$path = isset($pfb['downgrade_context_path'])
+		? (string) $pfb['downgrade_context_path']
+		: '/var/run/pfblockerng-downgrade-context.json';
+	$stat = $path === '' ? FALSE : @lstat($path);
+	if ($stat !== FALSE && (($stat['mode'] & 0170000) === 0100000)) {
+		@unlink($path);
+	}
+}
+
+function pfb_settings_family_pre_uninstall(): void
+{
+	$current_family = pfb_settings_family_current();
+	if ($current_family === NULL) {
+		pfb_settings_downgrade_context_consume();
+		throw new RuntimeException('pfBlockerNG: settings-family marker invalid');
+	}
+	if (!pfb_settings_family_save($current_family)) {
+		pfb_settings_downgrade_context_consume();
+		throw new RuntimeException('pfBlockerNG: settings-family snapshot failed');
+	}
+	$restore_family = pfb_settings_downgrade_context_target($current_family);
+	if ($restore_family !== NULL && !pfb_settings_family_replace($restore_family)) {
+		pfb_settings_downgrade_context_consume();
+		throw new RuntimeException('pfBlockerNG: settings-family restore failed');
+	}
+	pfb_settings_downgrade_context_consume();
 }
 
 // ---------------------------------------------------------------------------
