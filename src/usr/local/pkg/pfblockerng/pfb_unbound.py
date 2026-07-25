@@ -1005,7 +1005,7 @@ def parse_tld_allow(raw: str) -> list[str]:
     against the lowercased qname label (RFC 4343) -- so normalise the config side
     at the same read boundary.
     """
-    return [t.strip().lower() for t in raw.split(",") if t.strip()]
+    return [t.lower() for t in (part.strip() for part in raw.split(",")) if t]
 
 
 def _parse_ini_int(config: ConfigParser, section: str, option: str) -> int | None:
@@ -1124,11 +1124,12 @@ def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
         names: set[str] = set()
         row_number = 0
         for line in re.split(r"[\r\n]+", text):
-            if not line.strip() or line.lstrip().startswith("#"):
+            line = line.strip()
+            if not line or line.startswith("#"):
                 continue
             row_number += 1
             pattern, separator, description = line.partition("#")
-            pattern = pattern.strip().encode("utf-8").lower().decode("utf-8")
+            pattern = pattern.rstrip().encode("utf-8").lower().decode("utf-8")
             if not pattern:
                 continue
             if separator:
@@ -2247,10 +2248,11 @@ def idn_confusable_action(
 def get_q_name_qstate(qstate: module_qstate | None) -> str:
     q_name = ""
     try:
-        if qstate and qstate.qinfo and qstate.qinfo.qname_str and qstate.qinfo.qname_str.strip():
-            q_name = qstate.qinfo.qname_str.rstrip(".")
-        elif qstate and qstate.return_msg and qstate.return_msg.qinfo and qstate.return_msg.qinfo.qname_str.strip():
-            q_name = qstate.return_msg.qinfo.qname_str.rstrip(".")
+        name = qstate.qinfo.qname_str if qstate and qstate.qinfo else None
+        if not (name and name.strip()) and qstate and qstate.return_msg and qstate.return_msg.qinfo:
+            name = qstate.return_msg.qinfo.qname_str
+        if name and name.strip():
+            q_name = name.rstrip(".")
     except Exception as e:
         sys.stderr.write("[pfBlockerNG]: Failed get_q_name_qstate: {}".format(e))
         pass
@@ -2260,8 +2262,9 @@ def get_q_name_qstate(qstate: module_qstate | None) -> str:
 def get_q_name_qinfo(qinfo: query_info | None) -> str:
     q_name = ""
     try:
-        if qinfo and qinfo.qname_str and qinfo.qname_str.strip():
-            q_name = qinfo.qname_str.rstrip(".")
+        name = qinfo.qname_str if qinfo else None
+        if name and name.strip():
+            q_name = name.rstrip(".")
     except Exception as e:
         sys.stderr.write("[pfBlockerNG]: Failed get_q_name_qinfo: {}".format(e))
         pass
@@ -5197,7 +5200,7 @@ def build(
                 if rule is not None:
                     abp_rules.append(rule)
                 continue
-            entry = parse(raw_line)
+            entry = parse(stripped)
             if entry is None:
                 continue
             domain, bucket = _normalise_verdict(entry.value)
