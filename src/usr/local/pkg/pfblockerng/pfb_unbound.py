@@ -497,8 +497,8 @@ def _build_swap_snapshot() -> Snapshot | None:
     regex_db: dict[str, Any] = dict(build_result.regex_db)
     allow_regex_db: dict[str, Any] = dict(build_result.allow_regex_db)
 
-    # USER REGEX-ini patterns (sovereign band) merged on top of the feed block-regex,
-    # mirroring init's REGEX-section load (incl. the opt-in static cap).
+    # USER regex patterns from MAIN.regex_list (legacy REGEX fallback) merged on top of
+    # the feed block-regex, mirroring init's load (incl. the opt-in static cap).
     if os.path.isfile(pfb["pfb_unbound.ini"]):
         config = ConfigParser()
         try:
@@ -1132,6 +1132,7 @@ def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
             if not pattern:
                 continue
             if separator:
+                description = description.partition("#")[0]
                 name = re.sub(r"\W", "", description.strip().replace(" ", "_"), flags=re.ASCII)
             else:
                 name = "Regex_{}".format(row_number)

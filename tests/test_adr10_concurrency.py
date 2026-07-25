@@ -25,7 +25,7 @@ BLOCK (gen1 blocked, gen2 allowed -- except the per-mechanism CONTROL, still blo
   m3 abp anchored    -> dataDB  band 1  (||sub.d.com^, 3-part -> DATA)
   m4 abp regex       -> regexDB band 1  (irreducible /re/)
   m5 abp $important  -> dataDB  band 3  (||sub.d.com^$important)
-  m6 user regex      -> regexDB band 5  (ini [REGEX] pattern -- lives in the ini)
+  m6 user regex      -> regexDB band 5  (base64 MAIN.regex_list row -- lives in the ini)
   m7 user block      -> dataDB  band 5  (feed provenance=user, plain exact line)
 ALLOW (gen1 allowed via an allow out-ranking a co-listed block; gen2 blocked -- except
 the per-mechanism CONTROL, still allowed):
@@ -113,7 +113,7 @@ LANES_BLOCK: dict[str, Lane] = {
     "m4_abpre": Lane("m4_abpre", _stems("m4abpre", _N_FLIP), "m4abprectl"),
     # m5 abp $important (DATA band 3): ||sub.d.com^$important, 3-part -> DATA.
     "m5_imp": Lane("m5_imp", _d3("m5imp", _N_FLIP), _d3_ctl("m5imp")),
-    # m6 user regex (regexDB band 5): ini [REGEX] (probe = <stem>7.com).
+    # m6 user regex (regexDB band 5): base64 MAIN.regex_list row (probe = <stem>7.com).
     "m6_userre": Lane("m6_userre", _stems("m6userre", _N_FLIP), "m6userrectl"),
     # m7 user block (DATA band 5): feed provenance=user, plain exact 3-part line -> DATA.
     "m7_userblk": Lane("m7_userblk", _d3("m7ublk", _N_FLIP), _d3_ctl("m7ublk")),
@@ -152,7 +152,7 @@ def _abp_regex_line(stem: str, *, allow: bool, important: bool) -> str:
 
 
 def _ini_regex_pattern(stem: str) -> str:
-    # User-regex (ini [REGEX]) -- irreducible, matches ``<stem><digit>.com``.
+    # User-regex row encoded in MAIN.regex_list -- irreducible, matches ``<stem><digit>.com``.
     return "{}[0-9]\\.com".format(stem)
 
 
@@ -165,7 +165,7 @@ class GenSpec:
     abp_feed: list[str]  # ABP feed lines (m3/m4/m5 + allow lanes a11/a12/a13)
     user_whitelist: list[str]  # config.user_whitelist (a9)
     user_unlock: list[str]  # config.user_unlock (a10)
-    ini_regex: list[str]  # ini [REGEX] patterns (m6)
+    ini_regex: list[str]  # MAIN.regex_list patterns before base64 encoding (m6)
 
 
 def _gen1_spec() -> GenSpec:
