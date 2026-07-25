@@ -453,8 +453,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # Only an exact 'false' checks out the tag; anything
-          # else (true, empty, a typo) falls back to HEAD, same as the mutation gates.
           ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
           fetch-depth: 0
       - name: Resolve stamp
