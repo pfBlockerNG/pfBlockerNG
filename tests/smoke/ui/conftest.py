@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import os
 import time
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,7 +31,7 @@ import pytest
 from ..conftest import SmokeVM
 from ..helpers import REDACTED, parse_redact_values
 from .credgate import admin_password_decision
-from .render_oracle import observed_baseline_entries, stale_baseline_entries
+from .render_oracle import endemic_diagnostics, observed_baseline_entries, stale_baseline_entries
 from .webui import SESSION_COOKIE, WebUI
 
 if TYPE_CHECKING:
@@ -512,6 +513,17 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:  # n
     if os.environ.get("PFB_SMOKE_FULL_SWEEP") != "1" or exitstatus != 0:
         # A red run already has a verdict, and its aborted tests make "unobserved" a lie.
         return
+    # The endemic class the gate deliberately does not fail on (#1712 burns it down): report
+    # its size every full sweep, so "deferred" cannot quietly become "forgotten".
+    endemic = endemic_diagnostics()
+    if endemic:
+        by_file = Counter(entry.split("|", 1)[0] for entry in endemic)
+        worst = "; ".join(f"{path.rsplit('/', 1)[-1]}:{count}" for path, count in by_file.most_common(5))
+        print(
+            f"\n[smoke] {len(endemic)} distinct Undefined-array-key sites observed in pfBlockerNG files "
+            f"(reported, not gated — burn-down: #1712). Worst: {worst}"
+        )
+
     stale = stale_baseline_entries(observed_baseline_entries())
     if not stale:
         return

@@ -56,11 +56,16 @@ documented in architecture-notes. Operative facts:
 
 - **Tier A `ui_render` is the PR gate**: GET each page → 200, body free of PHP
   errors/warnings, a page-specific marker present, AND no new on-box `php_error.log`
-  diagnostic **from a pfBlockerNG file** (#1218: the guest runs a true `E_ALL`, so runtime
-  `E_WARNING`/`E_NOTICE`/`E_DEPRECATED` IS observable; core noise is filtered by originating
-  file in `render_oracle.gating_log_lines`, never by re-masking a class; pre-existing our-file
-  sites are grandfathered in `tests/smoke/ui/php_diagnostic_baseline.txt`, a list that may only
-  SHRINK — fix the site and delete its entry, never append, burn-down tracked in #1712) —
+  diagnostic **in a gated class from a pfBlockerNG file** (#1218: the guest runs a true
+  `E_ALL` — above every level pfSense itself ships, since even its dev builds mask
+  `E_WARNING`/`E_NOTICE`/`E_DEPRECATED`. Core noise never gates: `gating_log_lines` scopes by
+  originating file, never by re-masking a class. Gated classes are the defect-smelling ones —
+  `Undefined variable`, null-to-string-parameter (a PHP 9 TypeError in waiting),
+  array-offset-on-null, optional-parameter order — plus every fatal/parse level. The endemic
+  `Undefined array key` class (~488 sites) is REPORTED at the end of a full sweep, not gated;
+  #1712 burns it down. Pre-existing gated-class sites are grandfathered in
+  `tests/smoke/ui/php_diagnostic_baseline.txt`, a 27-entry list that may only SHRINK — fix the
+  site and delete its entry, never append) —
   never HTTP 200 alone. A surface recorded in `test_render_smoke.py`'s
   `EXCLUDED_FROM_TIER_A` uses that exclusion's named live tier plus focused hermetic
   coverage instead. Tiers B are otherwise schedule/dispatch-only. Run:

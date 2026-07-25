@@ -1112,18 +1112,27 @@ def guest_hour(vm: SmokeVM) -> int:
 
 
 # --------------------------------------------------------------------------- #
-# Strict PHP error reporting (BBcan177) — run the VM the way Netgate runs betas
+# Strict PHP error reporting — run the VM above every level pfSense itself ships
 # --------------------------------------------------------------------------- #
 
-# pfSense's rc.php_ini_setup selects error_reporting by build channel: the low
-# ``E_ERROR | E_PARSE`` on ``-RELEASE`` images (our smoke base) vs the wider
-# ``E_ALL ^ (E_WARNING | E_NOTICE | E_DEPRECATED)`` on beta/dev builds. We run the smoke +
-# UI VM ABOVE both, at a true E_ALL, so a page or reload emitting ANY diagnostic -- the
-# structural classes (E_STRICT / E_RECOVERABLE / E_CORE_* / E_COMPILE_* / E_USER_*) AND the
-# runtime E_WARNING / E_NOTICE / E_DEPRECATED -- reaches the log, plus arg-rich traces
-# (zend.exception_ignore_args=0).
+# pfSense's rc.php_ini_setup selects error_reporting by build channel (verified against
+# upstream master + RELENG_2_7_2):
 #
-# Issue #1218: this level used to keep Netgate's beta mask of the runtime classes, because
+#   RELEASE ("reduce error reporting")     -> E_ERROR | E_PARSE          <- PRODUCTION
+#   non-RELEASE ("increase error reporting") -> E_ALL ^ (E_WARNING | E_NOTICE | E_DEPRECATED)
+#
+# The wider one is the DEVELOPMENT / pre-release level, the one that exists so package
+# maintainers see problems during a testing phase -- and note what it still masks: the
+# runtime E_WARNING / E_NOTICE / E_DEPRECATED class. Even upstream's maintainer-facing
+# level cannot show an "Undefined array key" warning.
+#
+# We run the smoke + UI VM ABOVE BOTH, at a true E_ALL, so a page or reload emitting ANY
+# diagnostic -- the structural classes (E_STRICT / E_RECOVERABLE / E_CORE_* / E_COMPILE_* /
+# E_USER_*) AND that runtime class -- reaches the log, plus arg-rich traces
+# (zend.exception_ignore_args=0). This is a level pfSense ships nowhere, so it is confined
+# to the disposable smoke guest: nothing here touches a shipped file or a user's appliance.
+#
+# Issue #1218: this level used to keep upstream's dev-build mask of the runtime classes, because
 # a plain E_ALL also surfaces pre-existing undefined-array-key / deprecated lines from
 # pfSense CORE. The cost was that every "this page no longer warns" assertion was vacuous
 # -- the class it named could not be observed at all, so the test passed identically before
@@ -1268,12 +1277,14 @@ def php_trigger_undefined_key_warning(vm: SmokeVM, *, path: str, tag: str, timeo
 
 
 def enable_strict_php_error_reporting(vm: SmokeVM, *, timeout: float = 30.0) -> None:
-    """Set ``error_reporting`` to Netgate's beta mask in the guest php.ini and reload php-fpm.
+    """Set ``error_reporting`` to a true ``E_ALL`` in the guest php.ini and reload php-fpm.
 
     Called ONCE per session from the ``smoke_vm`` fixture, before any test, so both
-    the CLI / ``pfSsh.php`` paths AND the webConfigurator (php-fpm) run at the strict
-    level — the way Netgate runs their betas. Fails LOUDLY (expected vs actual) if the
-    level does not take, so the suite never runs believing it is strict when it is not.
+    the CLI / ``pfSsh.php`` paths AND the webConfigurator (php-fpm) run at that level —
+    higher than pfSense's own development builds, which still mask the runtime
+    E_WARNING / E_NOTICE / E_DEPRECATED class (see the channel table above). Fails LOUDLY
+    (expected vs actual) if the level does not take, so the suite never runs believing it
+    is strict when it is not.
 
     ponytail: ``rc.php_ini_setup`` regenerates php.ini only at BOOT, so this single
     edit survives the session (deploy / reload never re-run it). If some future path

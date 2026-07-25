@@ -38,6 +38,7 @@ from .render_oracle import (
     PhpErrorLogGuard,
     body_has_php_error,
     diagnostic_fingerprint,
+    endemic_diagnostics,
     evaluate_render,
     gating_log_lines,
     load_baseline,
@@ -191,6 +192,20 @@ PFB_INC_DEPRECATED = (
     "[25-Jul-2026 10:00:02 UTC] PHP Deprecated:  Optional parameter $x declared before required $y in "
     "/usr/local/pkg/pfblockerng/pfblockerng.inc on line 90\n"
 )
+# The classes that still SMELL like a defect once the endemic one is set aside: an
+# undefined variable, and a null reaching a string parameter (a PHP 8.1 deprecation that
+# becomes a TypeError in PHP 9 -- a forward-compat signal, not cosmetics).
+# Both name a page that does not exist, so these cases assert the CLASS is gated and can
+# never be quietly satisfied (or defeated) by whatever the shipped baseline happens to
+# grandfather -- the baseline's own behaviour has its own cases below.
+_NEW_PAGE = "/usr/local/www/pfblockerng/pfblockerng_brand_new.php"
+PFB_PAGE_UNDEF_VAR = (
+    f"[25-Jul-2026 10:00:05 UTC] PHP Warning:  Undefined variable $colspan in {_NEW_PAGE} on line 100\n"
+)
+PFB_PAGE_NULL_ARG = (
+    "[25-Jul-2026 10:00:06 UTC] PHP Deprecated:  explode(): Passing null to parameter #2 ($string) of type "
+    f"string is deprecated in {_NEW_PAGE} on line 44\n"
+)
 CORE_FATAL = (
     "[25-Jul-2026 10:00:03 UTC] PHP Fatal error:  Uncaught TypeError: bad in /etc/inc/config.lib.inc on line 9\n"
 )
@@ -245,16 +260,51 @@ def _guard_after_appending(appended: str) -> PhpErrorLogGuard:
     return guard
 
 
-def test_pfblockerng_warning_gates_the_sweep() -> None:
-    """(d) on-branch: a runtime ``E_WARNING`` from one of OUR pages fails the sweep.
+def test_pfblockerng_undefined_variable_gates_the_sweep() -> None:
+    """(d) on-branch: an ``Undefined variable`` from one of OUR pages fails the sweep.
 
-    This is the class the Tier-A mandate names and #1211 could not obtain a red for
-    (the harness masked ``E_WARNING`` before it reached the log). With the guest at
-    ``E_ALL`` the line lands in the log and the guard must fail on it, naming the
-    offending line so the failure is actionable without opening the artifact.
+    This is a class the Tier-A mandate names and #1211 could not obtain a red for (the
+    harness masked ``E_WARNING`` before it reached the log). With the guest at ``E_ALL``
+    the line lands in the log and the guard must fail on it, naming the offending line so
+    the failure is actionable without opening the artifact.
     """
-    with pytest.raises(AssertionError, match="pfblockerng_feeds.php"):
-        _guard_after_appending(PFB_PAGE_WARNING).assert_no_growth()
+    with pytest.raises(AssertionError, match="Undefined variable"):
+        _guard_after_appending(PFB_PAGE_UNDEF_VAR).assert_no_growth()
+
+
+def test_pfblockerng_null_to_string_parameter_gates_the_sweep() -> None:
+    """(d) on-branch: a null reaching a string parameter fails the sweep.
+
+    Deprecated in PHP 8.1 and a TypeError in PHP 9, so this one is a forward-compat
+    break in waiting, not a cosmetic notice -- exactly what a live gate should catch
+    while there is still time to fix it.
+    """
+    with pytest.raises(AssertionError, match="Passing null"):
+        _guard_after_appending(PFB_PAGE_NULL_ARG).assert_no_growth()
+
+
+def test_pfblockerng_undefined_array_key_does_not_gate_the_sweep() -> None:
+    """(d) the endemic class is REPORTED, not gated (#1712 owns burning it down).
+
+    ``Undefined array key`` on an unset config read is emitted at 488 distinct sites in
+    this package: freezing every one of them would buy a gate whose next new instance is
+    indistinguishable from the 488 already forgiven, at the cost of a 515-line list edited
+    by every burn-down PR. So the class is observed and counted, and the gate spends its
+    credibility on the classes that still smell like defects.
+
+    It is NOT invisible: :func:`endemic_diagnostics` collects it for the end-of-sweep
+    report, which is what keeps the burn-down honest.
+    """
+    _guard_after_appending(PFB_PAGE_WARNING).assert_no_growth()
+
+
+def test_the_endemic_class_is_still_observed_and_reported() -> None:
+    """Not gating is not the same as not seeing: the fingerprint is recorded.
+
+    A silent skip would leave #1712 with no measurement of what is left to fix.
+    """
+    gating_log_lines(PFB_PAGE_WARNING)
+    assert any("pfblockerng_feeds.php" in entry for entry in endemic_diagnostics())
 
 
 def test_pfblockerng_deprecated_from_the_package_dir_gates_the_sweep() -> None:
@@ -311,9 +361,9 @@ def test_a_baselined_diagnostic_does_not_gate() -> None:
 
     The before-state is the case above: this exact line gates with an empty baseline.
     """
-    assert gating_log_lines(PFB_PAGE_WARNING, baseline=frozenset()), "the un-baselined line must gate"
-    baseline = frozenset(diagnostic_fingerprint(line) or "" for line in [PFB_PAGE_WARNING])
-    assert gating_log_lines(PFB_PAGE_WARNING, baseline=baseline) == ()
+    assert gating_log_lines(PFB_PAGE_UNDEF_VAR, baseline=frozenset()), "the un-baselined line must gate"
+    baseline = frozenset(diagnostic_fingerprint(line) or "" for line in [PFB_PAGE_UNDEF_VAR])
+    assert gating_log_lines(PFB_PAGE_UNDEF_VAR, baseline=baseline) == ()
 
 
 def test_a_baselined_diagnostic_stays_baselined_when_its_line_moves() -> None:
@@ -323,8 +373,8 @@ def test_a_baselined_diagnostic_stays_baselined_when_its_line_moves() -> None:
     This is the whole reason the baseline is not keyed by ``(file, line)``: those keys
     rot on the first unrelated edit, and a rotted baseline fails closed on innocent code.
     """
-    baseline = frozenset({diagnostic_fingerprint(PFB_PAGE_WARNING) or ""})
-    moved = PFB_PAGE_WARNING.replace("on line 377", "on line 412")
+    baseline = frozenset({diagnostic_fingerprint(PFB_PAGE_UNDEF_VAR) or ""})
+    moved = PFB_PAGE_UNDEF_VAR.replace("on line 100", "on line 412")
     assert gating_log_lines(moved, baseline=baseline) == ()
 
 
@@ -334,63 +384,17 @@ def test_a_new_key_in_a_baselined_file_still_gates() -> None:
     Excluding whole files would blind the pages the issue cares about most; only the
     exact known diagnostics are forgiven.
     """
-    baseline = frozenset({diagnostic_fingerprint(PFB_PAGE_WARNING) or ""})
-    fresh = PFB_PAGE_WARNING.replace("Undefined array key 0", 'Undefined array key "brand_new"')
+    baseline = frozenset({diagnostic_fingerprint(PFB_PAGE_UNDEF_VAR) or ""})
+    fresh = PFB_PAGE_UNDEF_VAR.replace("$colspan", "$brand_new_var")
     assert gating_log_lines(fresh, baseline=baseline), "a new diagnostic in a baselined file must gate"
 
 
 def test_the_same_message_from_another_file_still_gates() -> None:
     """The fingerprint includes the originating file, so a baseline entry cannot
     accidentally forgive the identical warning somewhere else."""
-    baseline = frozenset({diagnostic_fingerprint(PFB_PAGE_WARNING) or ""})
-    elsewhere = PFB_PAGE_WARNING.replace("pfblockerng_feeds.php", "pfblockerng_alerts.php")
+    baseline = frozenset({diagnostic_fingerprint(PFB_PAGE_UNDEF_VAR) or ""})
+    elsewhere = PFB_PAGE_UNDEF_VAR.replace("pfblockerng_brand_new.php", "pfblockerng_alerts.php")
     assert gating_log_lines(elsewhere, baseline=baseline), "a baselined message must not forgive another file"
-
-
-_FEEDS_FAMILY = '/usr/local/www/pfblockerng/pfblockerng_feeds.php|Warning|Undefined array key "feed_*"'
-
-
-def _feeds_warning(key: str) -> str:
-    return (
-        f'[25-Jul-2026 10:00:00 UTC] PHP Warning:  Undefined array key "{key}" in '
-        "/usr/local/www/pfblockerng/pfblockerng_feeds.php on line 65\n"
-    )
-
-
-@pytest.mark.parametrize("key", ["feed_ads", "feed_pri1", "feed_vpn_6"])
-def test_a_wildcard_entry_covers_a_data_varying_family(key: str) -> None:
-    """A ``*`` entry forgives the whole family whose message varies by DATA.
-
-    The Feeds page reads ``$fconfig['feed_' . $alias]`` per catalogue alias, so each sweep
-    surfaces a different slice of keys and a key-by-key list never converges -- three
-    different members of that family are forgiven by the one entry.
-    """
-    assert gating_log_lines(_feeds_warning(key), baseline=frozenset({_FEEDS_FAMILY})) == ()
-
-
-def test_a_wildcard_entry_does_not_forgive_a_different_key_shape() -> None:
-    """The glob is scoped to its family: a neighbouring defect on the same page gates.
-
-    Without this the wildcard would be a blanket file exclusion, which is exactly what the
-    baseline design refuses -- and it is what would hide #1702 (`Undefined array key 0` on
-    this very page), so this asserts that specific diagnostic still fails.
-    """
-    baseline = frozenset({_FEEDS_FAMILY})
-    assert gating_log_lines(_feeds_warning("alexa_count"), baseline=baseline), "unrelated key must gate"
-    unfixed_1702 = (
-        "[25-Jul-2026 10:00:00 UTC] PHP Warning:  Undefined array key 0 in "
-        "/usr/local/www/pfblockerng/pfblockerng_feeds.php on line 200\n"
-    )
-    assert gating_log_lines(unfixed_1702, baseline=baseline), "#1702's diagnostic must still gate"
-
-
-def test_a_wildcard_entry_does_not_forgive_another_file_or_level() -> None:
-    """File and level still match EXACTLY -- only the message part globs."""
-    baseline = frozenset({_FEEDS_FAMILY})
-    other_file = _feeds_warning("feed_ads").replace("pfblockerng_feeds.php", "pfblockerng_alerts.php")
-    other_level = _feeds_warning("feed_ads").replace("PHP Warning:", "PHP Deprecated:")
-    assert gating_log_lines(other_file, baseline=baseline), "another file must gate"
-    assert gating_log_lines(other_level, baseline=baseline), "another level must gate"
 
 
 def test_the_shipped_baseline_parses_and_is_burning_down() -> None:
@@ -456,5 +460,5 @@ def test_our_warning_still_gates_when_mixed_with_core_noise() -> None:
     A real sweep appends many lines at once; the guard must scan the whole appended
     chunk rather than classifying it by its first line.
     """
-    with pytest.raises(AssertionError, match="pfblockerng_feeds.php"):
-        _guard_after_appending(CORE_WARNING + PFB_PAGE_WARNING + FPM_POOL_CHATTER).assert_no_growth()
+    with pytest.raises(AssertionError, match="Undefined variable"):
+        _guard_after_appending(CORE_WARNING + PFB_PAGE_UNDEF_VAR + FPM_POOL_CHATTER).assert_no_growth()

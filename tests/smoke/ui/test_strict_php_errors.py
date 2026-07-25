@@ -74,7 +74,7 @@ def test_webconfigurator_php_fpm_logs_diagnostic_to_watched_path(webui: WebUI, d
     tag = "pfb-fpm-smoke-diag"
     level = helpers.php_fpm_probe(deployed_vm, webui.get, warn_tag=tag)
     assert level == expected, (
-        f"php-fpm (GUI) error_reporting is {level}, expected the beta mask ({expected}) — "
+        f"php-fpm (GUI) error_reporting is {level}, expected a true E_ALL ({expected}) — "
         f"the SIGUSR2 reload did not move fpm workers to the strict level"
     )
     assert any(helpers.guest_file_contains(deployed_vm, c, tag) for c in PHP_ERROR_LOG_CANDIDATES), (
