@@ -476,6 +476,9 @@ case "$argv" in
 		case " ${GH_STUB_PRVIEW_FAIL_CALLS:-} " in
 			*" $count "*) printf '%s\n' "${GH_STUB_PRVIEW_FAIL_OUTPUT:-pr view failed}" >&2; exit 1 ;;
 		esac
+		case " ${GH_STUB_PRVIEW_EMPTY_CALLS:-} " in
+			*" $count "*) exit 0 ;;
+		esac
 		if [ "$count" -eq 1 ]; then
 			printf '%s\n' "$GH_STUB_HEAD_SHA_1"
 		else
@@ -545,8 +548,9 @@ STUB
     export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
     When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
     The status should equal 0
-    The line 1 of output should equal '[{"name":"pytest","bucket":"pass"}]'
-    The line 2 of output should equal 'PASS'
+    The line 1 of output should equal 'pinned=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    The line 2 of output should equal '[{"name":"pytest","bucket":"pass"}]'
+    The line 3 of output should equal 'PASS'
   End
 
   It 'reports FAIL when the pinned SHA has a failing check and the head has not moved'
@@ -555,8 +559,9 @@ STUB
     export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
     When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
     The status should equal 0
-    The line 1 of output should equal '[{"name":"pytest","bucket":"fail"}]'
-    The line 2 of output should equal 'FAIL'
+    The line 1 of output should equal 'pinned=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    The line 2 of output should equal '[{"name":"pytest","bucket":"fail"}]'
+    The line 3 of output should equal 'FAIL'
   End
 
   It '--sha skips arm-time resolution (never calls pr view to resolve) but still re-verifies before the verdict'
@@ -568,7 +573,7 @@ STUB
     export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
     When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --sha "$explicit_sha" --interval 0 --max-iter 1
     The status should equal 0
-    The line 2 of output should equal 'PASS'
+    The line 3 of output should equal 'PASS'
     The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '1'
   End
 
@@ -597,7 +602,7 @@ STUB
     export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
     When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
     The status should equal 0
-    The line 2 of output should equal 'PASS'
+    The line 3 of output should equal 'PASS'
     The output should not include 'GH-ERROR'
     The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '4'
   End
@@ -613,15 +618,61 @@ STUB
     The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '3'
   End
 
-  It 'fails loudly with GH-ERROR when the pre-verdict head re-read fails, never emitting a verdict'
+  It 'recovers from a transient pre-verdict re-read blip, reaching a normal verdict'
+    # Same 3-strike tolerance as arm-time: a single blip on the re-read -- e.g. at
+    # minute 39 of a 40-minute wait -- must not discard an otherwise-completed wait.
     export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
     export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     export GH_STUB_PRVIEW_FAIL_CALLS='2'
     export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
     export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
     When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 0
+    The line 3 of output should equal 'PASS'
+    The output should not include 'GH-ERROR'
+    The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '3'
+  End
+
+  It 'still fails loudly with GH-ERROR once the pre-verdict re-read retry budget (3 attempts) is exhausted, never emitting a verdict'
+    export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
+    export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    export GH_STUB_PRVIEW_FAIL_CALLS='2 3 4'
+    export GH_STUB_PRVIEW_FAIL_OUTPUT='HTTP 503'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
     The status should equal 1
     The line 1 of output should equal 'GH-ERROR'
+    The output should include 'HTTP 503'
+    The output should not include 'PASS'
+    The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '4'
+  End
+
+  It 'recovers from a single transient EMPTY pre-verdict re-read (not just a hard gh failure), reaching a normal verdict'
+    export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
+    export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    export GH_STUB_PRVIEW_EMPTY_CALLS='2'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 0
+    The line 3 of output should equal 'PASS'
+    The output should not include 'GH-ERROR'
+    The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '3'
+  End
+
+  It 'treats a sustained empty pre-verdict re-read as GH-ERROR, never STALE (an empty read is not proof the head moved)'
+    export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
+    export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    export GH_STUB_PRVIEW_EMPTY_CALLS='2 3 4'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 1
+    The line 1 of output should equal 'GH-ERROR'
+    The output should not include 'STALE'
+    The output should not include 'PASS'
+    The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '4'
   End
 
   It 'rejects an explicit empty --sha as a usage error, never falling through to an unpinned poll'
@@ -638,7 +689,7 @@ STUB
     export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
     When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --sha "$weird" --interval 0 --max-iter 1
     The status should equal 0
-    The line 2 of output should equal 'PASS'
+    The line 3 of output should equal 'PASS'
     The file "$canary" should not be exist
   End
 End

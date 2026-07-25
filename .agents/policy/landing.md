@@ -345,16 +345,16 @@ The base advances out of band (parallel agents). In the dedicated worktree:
 - Conflicts that are non-trivial or ambiguous → stop and hand back; never guess a
   resolution just to land the PR.
 - Push `--force-with-lease` (a no-op rebase pushes nothing — fine). The force-push
-  re-triggers CI; the wait below watches THAT run, never a stale one.
+  re-triggers CI; arm the wait below with `--sha "$(git rev-parse HEAD)"` (closes
+  a post-push lag).
 
 ### CI wait (excluding advisory bots)
 
 Poll until every **required** check completes, excluding checks matching
 `coderabbit|snyk` (case-insensitive; both advisory) — via
 `scripts/agent/wait-checks.sh`, the single implementation (self-exiting background
-task, ~40-minute cap, result file's LAST line is the verdict; `--sha` pins the
-commit). CLI transport unavailable → the client's GitHub MCP tools with
-wakeup-paced bounded checks.
+task, ~40-minute cap, result file's LAST line is the verdict). CLI transport
+unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
 
 - **Early-verdict reuse:** a CI wait armed at review start that already returned
   `PASS` may replace this wait IFF the SHA it watched still equals the PR head AND
@@ -367,6 +367,7 @@ wakeup-paced bounded checks.
   URLs and stop.
 - **TIMEOUT** → report and ask whether to keep waiting; never merge on a timeout.
 - **STALE** → head moved after arming: re-arm and retry; never merge.
+- **GH-ERROR** → mechanism failure, not a verdict (exit 1): re-arm; never merge.
 
 ### Merge and clean up
 
