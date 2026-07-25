@@ -4,7 +4,7 @@ Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all op
 
 ## Conventions
 
-- **Create an issue**: `gh issue create --title "..." --body "..." --label "<label>" --type "<type>"`. Use a heredoc for multi-line bodies. Both `--label` and `--type` are mandatory.
+- **Create an issue**: `gh issue create --title "..." --body "..." --type "<type>"`. Use a heredoc for multi-line bodies. `--type` is mandatory; `--label` is optional and used only for metadata the type does not already convey.
 - **Read an issue**: `gh issue view <number> --comments`, filtering comments by `jq` and also fetching labels.
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
@@ -15,8 +15,9 @@ Infer the repo from `git remote -v` — `gh` does this automatically when run in
 
 Issue types are single-valued: `Bug` for defects, `Feature` for new user-facing
 capabilities, and `Task` for improvements, implementation work, maintenance, tests,
-CI, documentation, research, and process work. Keep descriptive labels alongside the
-type; a defect wins when categories overlap.
+CI, documentation, research, and process work. Add labels only for orthogonal metadata
+such as subsystem, risk, workstream, or lifecycle; never duplicate the type. A defect
+wins when categories overlap.
 
 ## Pull requests as a triage surface
 
