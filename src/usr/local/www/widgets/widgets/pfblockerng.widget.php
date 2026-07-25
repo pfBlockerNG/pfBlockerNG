@@ -699,7 +699,7 @@ function pfBlockerNG_get_header($mode='') {
 			elseif ($type == 'Suppression' || $type == 'Whitelist') {
 
 				$gcount = 0;
-				foreach (pfbng_text_area_decode($config_path, TRUE, FALSE, TRUE) as $cline) {
+				foreach (pfb_text_area_decode($config_path, TRUE, FALSE, TRUE) as $cline) {
 					if (!str_starts_with(trim($cline), '#') && !empty($cline)) {
 						$gcount++;
 					}
@@ -712,7 +712,7 @@ function pfBlockerNG_get_header($mode='') {
 				if ($type == 'Suppression') {
 					// ADR-53 review finding B: '?? ""' -- same absent-key guard
 					// as the v4 read above.
-					foreach (pfbng_text_area_decode($pfb['ipconfig']['v6suppression'] ?? '', TRUE, FALSE, TRUE) as $cline) {
+					foreach (pfb_text_area_decode($pfb['ipconfig']['v6suppression'] ?? '', TRUE, FALSE, TRUE) as $cline) {
 						if (!str_starts_with(trim($cline), '#') && !empty($cline)) {
 							$gcount++;
 						}

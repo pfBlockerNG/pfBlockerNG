@@ -54,7 +54,7 @@ for test execution.
 | Test file | Function under test |
 | --------- | ------------------- |
 | `PfbFilterTest` | `pfb_filter` (DOMAIN/IP/IPV4/WORD/HEX_COLOR/ON_OFF/NUM) |
-| `TextAreaDecodeTest` | `pfbng_text_area_decode` (base64/CRLF/comment/IDN) |
+| `TextAreaDecodeTest` | `pfb_text_area_decode` (base64/CRLF/comment/IDN) |
 | `AbpExtractIpTest` | `pfb_dnsbl_abp_extract_ip` (ADR-07 DNSBL-IP extraction) |
 | `SanitizeIpaddrTest` | `sanitize_ipaddr` (IPv4 normalise + suppression) |
 | `ValidateDomainLabelsTest` | `pfb_validate_domain_labels` (63-char labels) |

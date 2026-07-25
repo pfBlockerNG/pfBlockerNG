@@ -14,10 +14,10 @@ so a pattern gets full regex highlighting and its trailing description gets styl
 comment.
 
 **This is a highlighter, not a validator.** The server-side decoder
-(`pfbng_text_area_decode()` in `src/usr/local/pkg/pfblockerng/pfblockerng.inc`) stays
+(`pfb_text_area_decode()` in `src/usr/local/pkg/pfblockerng/pfblockerng.inc`) stays
 authoritative for what actually gets stored.
 
-## Line format (mirrors `pfbng_text_area_decode()` exactly)
+## Line format (mirrors `pfb_text_area_decode()` exactly)
 
 - A line whose **trimmed** start is `#` is a whole-line `Comment` -- the decoder drops
   these lines entirely, never storing them.

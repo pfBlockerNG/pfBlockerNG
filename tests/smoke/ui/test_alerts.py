@@ -104,7 +104,7 @@ def _suppression_entries(vm: helpers.SmokeVM, cfg_path: str) -> set[str]:
     """Return the ENTRY TOKENS of a pfBlockerNG textarea config node.
 
     The alerts handlers store the whitelist / TLD-exclusion / IP-suppression lists
-    base64-encoded (``base64_encode`` in the handler; ``pfbng_text_area_decode``
+    base64-encoded (``base64_encode`` in the handler; ``pfb_text_area_decode``
     base64-decodes on read), one entry per CRLF line as ``<token> [# comment]``. The
     handler keys its in-memory store by the FIRST whitespace-delimited token of each
     line (``$clists[...]['data'][$line[0]]``), so an exact-token set is the faithful

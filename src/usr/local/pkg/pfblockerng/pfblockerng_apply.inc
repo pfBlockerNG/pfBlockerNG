@@ -867,7 +867,7 @@ function sync_package_pfblockerng($cron='') {
 
 		// If 'TLD' enabled and TLD Blacklists are defined, add to enabled DNSBL lists
 		if ($pfb['dnsbl_tld_wildcard']) {
-			$tld_wildcard_blacklist = pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE);
+			$tld_wildcard_blacklist = pfb_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE);
 			if (!empty($tld_wildcard_blacklist)) {
 				$pfb['existing']['dnsbl'][] = 'DNSBL_TLD';
 			}
@@ -1296,7 +1296,7 @@ function sync_package_pfblockerng($cron='') {
 
 			// Collect Whitelist, create string, and save to file (for grep -vF -f cmd)
 			pfb_logger("\n Loading DNSBL Whitelist...", 1);
-			$pfb_white = pfbng_text_area_decode($pfb['dnsblconfig']['suppression'], TRUE, FALSE, TRUE);
+			$pfb_white = pfb_text_area_decode($pfb['dnsblconfig']['suppression'], TRUE, FALSE, TRUE);
 			if (!empty($pfb_white)) {
 				foreach ($pfb_white as $line) {
 					if (!empty($line)) {
@@ -1752,7 +1752,7 @@ function sync_package_pfblockerng($cron='') {
 								}
 								else {
 									// Collect custom list data.
-									$custom_list = pfbng_text_area_decode($row['custom'], FALSE, TRUE, TRUE);
+									$custom_list = pfb_text_area_decode($row['custom'], FALSE, TRUE, TRUE);
 									@file_put_contents("{$file_dwn}.orig", $custom_list, LOCK_EX);
 									unset($custom_list);
 								}
@@ -2209,7 +2209,7 @@ function sync_package_pfblockerng($cron='') {
 			} else {
 				$regex_cnt = 0;
 				if (isset($pfb['dnsbl_regex_list'])) {
-					$regex_cnt = count(pfbng_text_area_decode($pfb['dnsbl_regex_list'], TRUE, FALSE, FALSE)) ?: 0;
+					$regex_cnt = count(pfb_text_area_decode($pfb['dnsbl_regex_list'], TRUE, FALSE, FALSE)) ?: 0;
 				}
 			}
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Regex';
@@ -3245,7 +3245,7 @@ function sync_package_pfblockerng($cron='') {
 							else {
 								if ($list['whois_convert'] == 'on') {
 									// Process Domain/AS based custom list
-									$custom_list = str_replace("\n", ',', pfbng_text_area_decode($list['custom'], FALSE, TRUE, TRUE));
+									$custom_list = str_replace("\n", ',', pfb_text_area_decode($list['custom'], FALSE, TRUE, TRUE));
 									if (!empty(pfb_filter($custom_list, PFB_FILTER_CSV_WHOIS, 'Process Domain/AS based custom list'))) {
 										exec("{$pfb['script']} whoisconvert {$header_esc} {$list['vtype']} {$custom_list} {$elog}");
 									} else {
@@ -3254,7 +3254,7 @@ function sync_package_pfblockerng($cron='') {
 								}
 								else {
 									// Process IP based custom list
-									$custom_list = pfbng_text_area_decode($list['custom'], FALSE, TRUE, FALSE);
+									$custom_list = pfb_text_area_decode($list['custom'], FALSE, TRUE, FALSE);
 									@file_put_contents("{$file_dwn}.orig", $custom_list, LOCK_EX);
 								}
 								pfb_logger(' . completed .', 1);

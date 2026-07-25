@@ -1,5 +1,5 @@
 // Lezer grammar for the pfBlockerNG regex-list textarea format (issue #1669 slice B).
-// Mirrors pfblockerng.inc's pfbng_text_area_decode() (the custom-entry textarea decoder)
+// Mirrors pfblockerng.inc's pfb_text_area_decode() (the custom-entry textarea decoder)
 // EXACTLY: per line, a line whose TRIMMED start is "#" is a whole-line Comment (dropped
 // by the decoder, never stored); otherwise the FIRST "#" anywhere in the line splits it
 // into Pattern (mounts the Python-re grammar from @pfblockerng/lezer-regexp via
@@ -8,7 +8,7 @@
 // Comment in the editor -- that is intended, it surfaces the decoder's real split.
 //
 // This is a HIGHLIGHTER grammar, not a validator: server-side validation
-// (pfbng_text_area_decode() itself, plus preg_match/re.compile on the split pattern half)
+// (pfb_text_area_decode() itself, plus preg_match/re.compile on the split pattern half)
 // stays authoritative.
 //
 // A trailing @precedence { Comment, Pattern } (below) is still required: lezer-generator

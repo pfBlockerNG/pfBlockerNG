@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  * red->green proof: both FAIL (undefined array key / missing file) against the pre-Phase-6
  * function and PASS once the v6 branch lands.
  *
- * pfbng_text_area_decode(text, FALSE, TRUE) (the mode pfb_create_suppression_file() uses)
+ * pfb_text_area_decode(text, FALSE, TRUE) (the mode pfb_create_suppression_file() uses)
  * lowercases + trims each non-comment, non-blank line and joins with a single "\n" --
  * NOT the original "\r\n" -- so the expected file content below reflects that shape.
  */
