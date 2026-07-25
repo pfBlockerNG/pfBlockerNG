@@ -862,6 +862,17 @@ class TestGetQNameQstate:
             f"expected 'Unknown', got {pfb_unbound.get_q_name_qstate(qstate)!r}"
         )
 
+    def test_none_qname_on_fallback_returns_unknown(self) -> None:
+        # qname_str=None on both the primary and the return_msg fallback: the bound
+        # read returns "Unknown" without raising (no caught-AttributeError path).
+        qstate = types.SimpleNamespace(
+            qinfo=types.SimpleNamespace(qname_str=None),
+            return_msg=types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_str=None)),
+        )
+        assert pfb_unbound.get_q_name_qstate(qstate) == "Unknown", (
+            f"expected 'Unknown', got {pfb_unbound.get_q_name_qstate(qstate)!r}"
+        )
+
 
 class TestGetQNameQinfo:
     def test_present_stripped(self) -> None:
