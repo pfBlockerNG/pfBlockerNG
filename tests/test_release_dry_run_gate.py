@@ -224,49 +224,68 @@ GUARD_VARS = ("INPUT_DRY", "DRY_RUN")
 
 
 def _guard_scripts() -> list[str]:
+    """Every guard, lifted from the workflow verbatim.
+
+    For the metadata guard the slice starts at its `DRY_RUN=` assignment, so the
+    default-fallback ships INTO the test. Reconstructing that line here instead would
+    shadow the one piece of logic that decides what an omitted input means.
+    """
     workflow_text = WORKFLOW.read_text(encoding="utf-8")
     scripts = [
         textwrap.dedent(match.group(1))
         for var in GUARD_VARS
-        for match in [re.search(rf'(case "\${var}" in\n.*?\n[ \t]*esac)', workflow_text, re.DOTALL)]
+        for match in [
+            re.search(
+                rf'((?:^[ \t]*{var}="[^"\n]*"\n)?[ \t]*case "\${var}" in\n.*?\n[ \t]*esac)',
+                workflow_text,
+                re.DOTALL | re.MULTILINE,
+            )
+        ]
         if match is not None
     ]
     assert len(scripts) == len(GUARD_VARS), f"expected a case/esac guard per {GUARD_VARS}, found {len(scripts)}"
     return scripts
 
 
-def _run_guard(value: str) -> list[int]:
-    """Execute EVERY dry_run case/esac guard under sh with the value, returning each rc."""
+def _run_guard(value: str) -> list[tuple[int, str]]:
+    """Execute EVERY dry_run guard under sh, returning each (exit status, resolved value).
+
+    Only `INPUT_DRY` is supplied -- whatever a guard derives from it comes from the
+    workflow's own text.
+    """
     results = []
     for script in _guard_scripts():
-        body = f'INPUT_DRY="$1"\nDRY_RUN="${{INPUT_DRY:-true}}"\n{script}\n'
-        results.append(
-            subprocess.run(  # noqa: S603
-                ["sh", "-c", body, "sh", value],
-                env={"PATH": os.environ.get("PATH", "")},
-                capture_output=True,
-                text=True,
-            ).returncode
+        body = f'INPUT_DRY="$1"\n{script}\nprintf %s "${{DRY_RUN-$INPUT_DRY}}"\n'
+        completed = subprocess.run(  # noqa: S603
+            ["sh", "-c", body, "sh", value],
+            env={"PATH": os.environ.get("PATH", "")},
+            capture_output=True,
+            text=True,
         )
+        results.append((completed.returncode, completed.stdout))
     return results
 
 
 @pytest.mark.parametrize("value", ["true", "false"])
 def test_the_guard_accepts_exactly_the_safe_values(value: str) -> None:
     """Executed, not pattern-matched: these must survive the real guard."""
-    assert all(rc == 0 for rc in _run_guard(value)), f"a guard rejected the legitimate value {value!r}"
+    assert all(rc == 0 for rc, _ in _run_guard(value)), f"a guard rejected the legitimate value {value!r}"
 
 
-def test_an_omitted_value_is_safe_under_both_guards() -> None:
-    """The two guards treat an omitted value differently, and both outcomes are safe.
+def test_an_omitted_value_resolves_to_a_dry_run() -> None:
+    """An omitted value must RESOLVE to "true", not merely survive a guard.
 
-    The metadata guard defaults it to a dry run; the pre-tag guard checks the raw input
-    and rejects it outright. Neither can publish, which is what matters -- an omitted
-    value cannot reach prepare-release anyway, since its job-level expression requires
-    'false'. Pinned so that a future edit which makes either one ACCEPT-and-publish is
-    caught rather than reasoned about.
+    Checking exit status alone cannot see this: the guards accept both "true" and
+    "false", so a default flipped to false would pass every acceptance check while
+    turning an omitted input into a real publish. Assert the value each guard actually
+    produces. The pre-tag guard has no default and rejects a raw empty string, which is
+    equally safe -- it simply never runs for an omitted value, since its job-level
+    expression requires 'false'.
     """
-    assert _run_guard("") != [0, 0], "an omitted dry_run must not sail through every guard as a publish"
+    outcomes = _run_guard("")
+    resolved = [value for rc, value in outcomes if rc == 0]
+    assert resolved, "no guard accepted an omitted value; at least the metadata guard must"
+    assert all(value == "true" for value in resolved), f"an omitted dry_run must resolve to a dry run, got {outcomes!r}"
 
 
 @pytest.mark.parametrize("value", ["TRUE", "True", "FALSE", "False", "tru", "yes", "1", "0", " false"])
@@ -275,6 +294,6 @@ def test_the_guard_rejects_case_variants_and_malformed_values(value: str) -> Non
     handled. Running the guard is the only way to catch a regression that widens it --
     an assertion on the guard's source text passes happily against `TRUE|true|false)`.
     """
-    assert all(rc != 0 for rc in _run_guard(value)), (
+    assert all(rc != 0 for rc, _ in _run_guard(value)), (
         f"a guard accepted {value!r}, which must never reach a publish gate"
     )
