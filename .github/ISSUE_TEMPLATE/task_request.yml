@@ -1,6 +1,5 @@
 name: Improvement or maintenance task
 description: Propose an improvement to existing behavior or project maintenance.
-labels: ["enhancement"]
 type: task
 body:
   - type: textarea

@@ -39,9 +39,9 @@ implementable — the forks are tickets.
 
 ### Task packet
 
-The issue body IS the packet, and the issue carries both its descriptive label(s) and
-the native type defined by `issues.md`. A fresh session must be able to execute from it
-plus its linked references alone. Required fields:
+The issue body IS the packet, and the issue carries the native type defined by `issues.md`
+plus optional additive labels when they contribute information beyond that type. A fresh
+session must be able to execute from it plus its linked references alone. Required fields:
 
 - **Objective** — the one outcome.
 - **Required reading** — `file:line` and doc pointers (bootstrap routing rows), never

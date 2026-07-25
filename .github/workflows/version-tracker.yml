@@ -403,7 +403,7 @@ jobs:
               --repo "$REPO" \
               --title "$TITLE" \
               --body-file "$BODY_FILE" \
-              --label "version-tracker,enhancement" \
+              --label "version-tracker" \
               --type Task \
               || echo "  ::warning::Could not open nudge issue for ${CHANNEL} ${VERSION}"
             rm -f "$BODY_FILE"
@@ -484,7 +484,7 @@ jobs:
                 --repo "$REPO" \
                 --title "$TITLE" \
                 --body-file "$BODY_FILE" \
-                --label "version-tracker,enhancement" \
+                --label "version-tracker" \
                 --type Task \
                 || echo "  ::warning::Could not create tracking issue for ${CHANNEL} ${VERSION}"
             fi

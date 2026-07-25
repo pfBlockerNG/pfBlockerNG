@@ -1,6 +1,5 @@
 name: Feature request
 description: Propose a new user-facing pfBlockerNG capability.
-labels: ["enhancement"]
 type: feature
 body:
   - type: textarea

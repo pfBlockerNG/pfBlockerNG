@@ -1,4 +1,4 @@
-"""Ticket creators must set a native issue type plus each path's required labels."""
+"""Ticket creators use native issue types; labels add only orthogonal metadata."""
 
 import shlex
 from pathlib import Path
@@ -22,13 +22,13 @@ def _option_values(command: str, option: str) -> list[str]:
     return [tokens[index + 1] for index, token in enumerate(tokens[:-1]) if token == option]
 
 
-def test_automated_issue_creators_set_label_and_type() -> None:
+def test_automated_issue_creators_set_type_and_only_additive_labels() -> None:
     expected = {
-        "nightly-failure-alert.yml": [("nightly-red,bug", "Bug")],
-        "top1m-healthcheck.yml": [("top1m-provider,bug", "Bug")],
+        "nightly-failure-alert.yml": [("nightly-red", "Bug")],
+        "top1m-healthcheck.yml": [("top1m-provider", "Bug")],
         "version-tracker.yml": [
-            ("version-tracker,enhancement", "Task"),
-            ("version-tracker,enhancement", "Task"),
+            ("version-tracker", "Task"),
+            ("version-tracker", "Task"),
         ],
     }
     commands: dict[str, list[str]] = {}
@@ -56,8 +56,8 @@ def test_issue_forms_declare_native_type_and_disable_blank_issues() -> None:
     # issue type (a81fc030 dropped the redundant `bug` label).
     forms = {
         "bug_report.yml": ("type: bug",),
-        "feature_request.yml": ('labels: ["enhancement"]', "type: feature"),
-        "task_request.yml": ('labels: ["enhancement"]', "type: task"),
+        "feature_request.yml": ("type: feature",),
+        "task_request.yml": ("type: task",),
     }
     template_dir = ROOT / ".github/ISSUE_TEMPLATE"
     form_files = {
@@ -73,17 +73,19 @@ def test_issue_forms_declare_native_type_and_disable_blank_issues() -> None:
     assert "blank_issues_enabled: false" in config
 
 
-def test_human_ticket_procedures_require_both_metadata_axes() -> None:
+def test_human_ticket_procedures_make_labels_optional() -> None:
     policy = _read(".agents/policy/issues.md")
     for issue_type in ("Bug", "Feature", "Task"):
         assert f"| `{issue_type}` |" in policy
-    assert "`gh issue create --label bug --type Bug`" in policy
+    assert "Labels are optional" in policy
+    assert "`gh issue create --type Bug`" in policy
 
     qa = _read(".agents/skills/qa/SKILL.md")
-    assert "`gh issue create --label bug --type Bug`" in qa
+    assert "`gh issue create --type Bug`" in qa
 
     tracker = _read(".agents/skills/setup-matt-pocock-skills/issue-tracker-github.md")
-    assert '--label "<label>" --type "<type>"' in tracker
+    assert '--type "<type>"' in tracker
+    assert "`--label` is optional" in tracker
     assert "gh issue create --label wayfinder:map --type Task" in tracker
 
     wayfinder = _read(".agents/skills/wayfinder/SKILL.md")
@@ -92,7 +94,7 @@ def test_human_ticket_procedures_require_both_metadata_axes() -> None:
 
     workflow = _read(".agents/policy/workflow.md")
     assert "`wayfinder:map` and typed `Task`" in workflow
-    assert "descriptive label(s)" in workflow
+    assert "optional additive labels" in workflow
     assert "native type defined by `issues.md`" in workflow
 
     refactor = _read(".agents/skills/request-refactor-plan/SKILL.md")

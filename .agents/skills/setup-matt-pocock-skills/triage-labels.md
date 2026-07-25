@@ -18,10 +18,10 @@ Edit the right-hand column to match whatever vocabulary you actually use.
 
 The two **category** roles map to the issue's native **type**, not a label:
 
-| Category role | Our tracker      | How to set                        |
-| ------------- | ---------------- | --------------------------------- |
-| `bug`         | type **Bug**     | `gh issue edit <n> --type Bug`    |
-| `enhancement` | `enhancement` label | `gh issue edit <n> --add-label enhancement` |
+| Category role | Our tracker             | How to set                                      |
+| ------------- | ----------------------- | ----------------------------------------------- |
+| `bug`         | type **Bug**            | `gh issue edit <n> --type Bug`                  |
+| `enhancement` | type **Feature**/**Task** | `gh issue edit <n> --type Feature` or `--type Task` |
 
-The `bug` label has been retired — categorise bugs with the type only. Migrate
-`enhancement` to a type the same way if/when you retire that label.
+Category labels have been retired for issues. Use `Feature` for a new user-facing
+capability and `Task` for an improvement to existing behaviour or maintenance work.

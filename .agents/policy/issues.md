@@ -33,11 +33,8 @@ issue. HARDENING-ONLY findings do not become tracker children.
 
 ## Classification at creation
 
-Every issue creation path — human, agent, issue form, or automation — sets both:
-
-1. at least one descriptive label appropriate to the work (`bug`, `enhancement`,
-   `documentation`, `CI`, `wayfinder:*`, etc.); and
-2. exactly one native GitHub issue type, chosen from this table:
+Every issue creation path — human, agent, issue form, or automation — sets exactly one
+native GitHub issue type, chosen from this table:
 
 | Issue type | Use for |
 | --- | --- |
@@ -45,16 +42,19 @@ Every issue creation path — human, agent, issue form, or automation — sets b
 | `Feature` | A new user-facing capability |
 | `Task` | Improvements to existing behaviour; implementation slices; maintenance, testing, CI, documentation, research, and process work |
 
-Labels remain orthogonal metadata and are never replaced by the type. When categories
-overlap, a defect is `Bug`; otherwise an improvement is `Task`, not `Feature`. Set both
-at creation (`gh issue create --label bug --type Bug`), not as a later cleanup pass.
+Labels are optional. Add one only when it contributes orthogonal routing, subsystem, risk,
+or workflow metadata not already conveyed by the native type (`CI`, `dnsbl`, `security`,
+`wayfinder:*`, etc.). Never add `bug` or `enhancement` solely to duplicate `Bug`, `Feature`,
+or `Task`. When categories overlap, a defect is `Bug`; otherwise an improvement is `Task`,
+not `Feature`. Set the type at creation (`gh issue create --type Bug`); set any useful
+additive labels at creation too.
 
 ## Issue state (lifecycle — native signals, #1388)
 
 Native GitHub signals replace the retired `WIP`/`Waiting PR` labels (adopted 2026-07-17 from
 the probe evidence in issue #1388). Applies to all work going forward; old issues keep their
 legacy labels — no bulk migration, but clear a legacy label whenever a transition you perform
-would have cleared it. Descriptive labels (`bug`, `enhancement`, …) stay.
+would have cleared it. Additive labels (`CI`, `dnsbl`, `security`, …) stay.
 
 - **Pick up (claimed)** → `gh issue edit <N> --add-assignee @me`.
 - **PR open (waiting-PR)** → `Fixes #N` in the PR body; the state is **derived** from the
