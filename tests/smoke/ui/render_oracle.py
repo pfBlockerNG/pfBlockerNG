@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .webui import looks_like_login_page
@@ -178,17 +180,58 @@ PFB_PATH_MARKER = "pfblockerng"
 # An error_log diagnostic line: "[<ts>] PHP <Level>:  <message> in <file> on line <N>".
 # The level is anchored to the "PHP " prefix PHP itself writes, so php-fpm's own
 # lifecycle chatter ("NOTICE: [pool nginx] child N started") is not a diagnostic.
-_LOG_DIAGNOSTIC_RE = re.compile(rf"PHP\s+(?P<level>{_LEVELS_ALT})\s*:")
+_LOG_DIAGNOSTIC_RE = re.compile(rf"PHP\s+(?P<level>{_LEVELS_ALT})\s*:\s*(?P<message>.*)")
 _LOG_ORIGIN_RE = re.compile(r"\bin (?P<file>\S+) on line \d+")
 
+# The burn-down baseline of diagnostics that ALREADY existed when the guest was raised
+# to E_ALL (#1218 measured ~230 across 8 files; the cleanup is tracked separately). Each
+# entry is "<origin file>|<level>|<message>" -- deliberately WITHOUT the line number, so
+# an unrelated edit above a known site does not resurrect it as a new diagnostic and fail
+# innocent code. The list may only ever SHRINK: a new diagnostic gates, and the fix is to
+# fix it, not to append. A failing sweep prints the exact entries, so no generator script
+# is needed to grow one.
+BASELINE_FILENAME = "php_diagnostic_baseline.txt"
 
-def gating_log_lines(appended: str) -> tuple[str, ...]:
+# Cap on distinct offending lines quoted in one failure message (the rest are counted).
+_MAX_REPORTED_LINES = 20
+
+
+def diagnostic_fingerprint(line: str) -> str | None:
+    """The line-number-free identity of one logged diagnostic, or ``None`` if not one."""
+    diagnostic = _LOG_DIAGNOSTIC_RE.search(line)
+    if diagnostic is None:
+        return None
+    origin = _LOG_ORIGIN_RE.search(line)
+    file = origin.group("file") if origin is not None else "?"
+    # Drop the " in <file> on line <N>" trailer and collapse PHP's double spaces, so the
+    # fingerprint is stable across line moves and formatting.
+    message = " ".join(_LOG_ORIGIN_RE.sub("", diagnostic.group("message")).split())
+    return f"{file}|{diagnostic.group('level')}|{message}"
+
+
+@lru_cache(maxsize=None)
+def load_baseline(path: Path | None = None) -> frozenset[str]:
+    """The grandfathered fingerprints (blank lines and ``#`` comments ignored).
+
+    A missing file reads as an empty baseline: nothing is forgiven, which fails LOUD
+    rather than silently disabling the gate.
+    """
+    baseline_path = path if path is not None else Path(__file__).with_name(BASELINE_FILENAME)
+    if not baseline_path.exists():
+        return frozenset()
+    lines = baseline_path.read_text(encoding="utf-8").splitlines()
+    return frozenset(line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#"))
+
+
+def gating_log_lines(appended: str, baseline: frozenset[str] | None = None) -> tuple[str, ...]:
     """The lines of an appended ``php_error.log`` chunk that must FAIL the sweep.
 
     A line gates when it is a PHP diagnostic AND either its level is not one of the
     core-noisy :data:`_MASKABLE_LEVELS` or it was raised in a pfBlockerNG-owned file
-    (:data:`PFB_PATH_MARKER`). Anything else -- core warnings/notices/deprecations,
-    fpm pool chatter, stack-trace continuation lines -- is ignored.
+    (:data:`PFB_PATH_MARKER`) -- unless its fingerprint is grandfathered by ``baseline``
+    (the shipped :data:`BASELINE_FILENAME` when not given). Anything else -- core
+    warnings/notices/deprecations, fpm pool chatter, stack-trace continuation lines --
+    is ignored.
 
     ponytail: ownership is decided by the file the diagnostic was RAISED in, which is
     what ``errfile`` reports. A warning raised inside a pfSense core function that our
@@ -197,17 +240,19 @@ def gating_log_lines(appended: str) -> tuple[str, ...]:
     the issue's design settled on, and the body oracle (b) still catches it whenever
     the diagnostic is rendered.
     """
+    grandfathered = load_baseline() if baseline is None else baseline
     gating: list[str] = []
     for line in appended.splitlines():
         diagnostic = _LOG_DIAGNOSTIC_RE.search(line)
         if diagnostic is None:
             continue
-        if diagnostic.group("level") not in _MASKABLE_LEVELS:
-            gating.append(line)
+        if diagnostic.group("level") in _MASKABLE_LEVELS:
+            origin = _LOG_ORIGIN_RE.search(line)
+            if origin is None or PFB_PATH_MARKER not in origin.group("file").lower():
+                continue
+        if diagnostic_fingerprint(line) in grandfathered:
             continue
-        origin = _LOG_ORIGIN_RE.search(line)
-        if origin is not None and PFB_PATH_MARKER in origin.group("file").lower():
-            gating.append(line)
+        gating.append(line)
     return tuple(gating)
 
 
@@ -290,8 +335,20 @@ class PhpErrorLogGuard:
             appended = self._vm.ssh("/usr/bin/tail", "-c", str(now - before), path).stdout
             gating = gating_log_lines(appended)
             if gating:
-                offending.append(f"{path} ({before}->{now} bytes):\n" + "\n".join(gating))
+                # A raised E_ALL can append thousands of lines; report the distinct ones
+                # (capped) rather than a wall of repeats -- the full log is in the
+                # uploaded diagnostics snapshot either way.
+                distinct = list(dict.fromkeys(gating))
+                shown = distinct[:_MAX_REPORTED_LINES]
+                elided = len(distinct) - len(shown)
+                report = f"{path} ({before}->{now} bytes), {len(distinct)} distinct:\n" + "\n".join(shown)
+                if elided:
+                    report += f"\n... and {elided} more distinct line(s)"
+                offending.append(report)
         if offending:
             raise AssertionError(
-                "pfBlockerNG PHP diagnostics were logged during the render sweep:\n" + "\n".join(offending)
+                "pfBlockerNG PHP diagnostics were logged during the render sweep:\n"
+                + "\n".join(offending)
+                + f"\n\nIf a line is a KNOWN pre-existing site, its {BASELINE_FILENAME} entry is "
+                "'<file>|<level>|<message>' — but the baseline only ever shrinks: fix the site instead."
             )
