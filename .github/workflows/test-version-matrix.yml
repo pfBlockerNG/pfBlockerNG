@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout (for scripts/read-version-matrix.sh)
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Read matrices via composite action
         id: matrices

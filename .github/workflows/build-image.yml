@@ -108,6 +108,8 @@ jobs:
     steps:
       - name: Checkout (for scripts/read-version-matrix.sh)
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Look up pfsense_ce_version in the supported-version matrix
         id: lookup
@@ -157,6 +159,8 @@ jobs:
     steps:
       - name: Checkout (for scripts/)
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Validate inputs
         env:
@@ -287,6 +291,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Enable KVM access for the runner user
         run: |

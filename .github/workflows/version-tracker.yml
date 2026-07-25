@@ -67,6 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0   # need history to reach the ci-metadata orphan ref
 
       - name: Read matrix from ci-metadata
@@ -121,6 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Plan reactions (dry-run log or live dispatch)
@@ -273,6 +275,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Check if probe is disabled via repo label

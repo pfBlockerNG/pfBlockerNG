@@ -61,6 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: true   # need to push the automation branch via git push --force
           ref: devel
 
       # Automated commits must hit the same local gates as a human commit.

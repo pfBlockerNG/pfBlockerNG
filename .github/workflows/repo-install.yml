@@ -107,6 +107,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0   # reach the ci-metadata orphan ref
 
       - name: Read CI matrix from ci-metadata
