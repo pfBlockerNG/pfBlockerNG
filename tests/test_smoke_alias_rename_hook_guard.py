@@ -62,9 +62,14 @@ def test_probe_transport_failure_fails_distinctly() -> None:
         tsar._require_hook_shim(vm)  # type: ignore[arg-type]
 
 
-def test_no_skip_for_missing_hook_shim_condition() -> None:
-    """Row 4 regression guard: grep the module source -- no ``pytest.skip`` call mentions
-    the hook shim. All four call sites must route through ``_require_hook_shim`` instead."""
+def test_the_only_skip_left_is_the_missing_package_one() -> None:
+    """Row 4 regression guard: the module keeps exactly ONE ``pytest.skip``, the
+    no-package-to-deploy fixture guard.
+
+    Whitelisting the one legitimate skip beats blacklisting a keyword: a future skip for
+    a missing shipped file worded without "shim" would pass a keyword check, while any new
+    skip at all trips this one.
+    """
     src = inspect.getsource(tsar)
-    skip_lines = [ln for ln in src.splitlines() if "pytest.skip" in ln]
-    assert not any("shim" in ln.lower() for ln in skip_lines), skip_lines
+    skip_lines = [ln.strip() for ln in src.splitlines() if "pytest.skip" in ln]
+    assert skip_lines == ['pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")'], skip_lines
