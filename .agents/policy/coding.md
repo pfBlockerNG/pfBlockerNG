@@ -56,9 +56,9 @@ same input across successive expressions, and never compute a value only to thro
 and recompute it later in the same scope. Canonical smell (Python):
 
 ```python
-if not line.strip() or line.lstrip().startswith("#"):   # strips twice…
+if not line.strip() or line.lstrip().startswith("#"):  # strips twice…
     continue
-pattern = line.partition("#")[0].strip()                # …then strips again
+pattern = line.partition("#")[0].strip()  # …then strips again
 ```
 
 Right shape: `line = line.strip()` at loop entry, then test and slice `line`. Same rule in
