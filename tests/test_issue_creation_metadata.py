@@ -1,5 +1,6 @@
 """Ticket creators use native issue types; labels add only orthogonal metadata."""
 
+import re
 import shlex
 from pathlib import Path
 
@@ -68,6 +69,7 @@ def test_issue_forms_declare_native_type_and_disable_blank_issues() -> None:
         form = _read(f".github/ISSUE_TEMPLATE/{filename}")
         for expected in expected_lines:
             assert f"\n{expected}\n" in form
+        assert not re.search(r"(?mi)^labels:.*\b(?:bug|enhancement)\b", form)
 
     config = _read(".github/ISSUE_TEMPLATE/config.yml")
     assert "blank_issues_enabled: false" in config
