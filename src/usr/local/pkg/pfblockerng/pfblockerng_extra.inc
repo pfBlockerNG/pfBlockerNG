@@ -1694,9 +1694,11 @@ function pfb_adv_alias_field_errors(array $post): array
  * pfb_dnsbl_regex_validation_errors — validate the DNSBL regex form in one
  * bounded Python pass, preserving source line numbers and resolver semantics.
  *
+ * @param bool $regex_cap Mirrors the "Limit long/complex regex" toggle; threaded
+ *     through to the probe for a save-time length-cap check landing separately.
  * @return array<int, string> Non-empty validation or infrastructure diagnostics.
  */
-function pfb_dnsbl_regex_validation_errors(string $contents, string $python, string $timeout_bin = '/usr/bin/timeout'): array
+function pfb_dnsbl_regex_validation_errors(string $contents, string $python, bool $regex_cap, string $timeout_bin = '/usr/bin/timeout'): array
 {
 	if ($contents === '') {
 		return [];
@@ -1728,6 +1730,8 @@ failed = False
 def report(line_number, pattern, message):
     print(f"line {line_number}: {pattern!r}: {message}", file=sys.stderr)
 
+regex_cap = len(sys.argv) > 1 and sys.argv[1] == "1"
+
 for line_number, line in enumerate(sys.stdin, start=1):
     line = line.rstrip("\r\n")
     if not line.strip() or line.lstrip().startswith("#"):
@@ -1756,7 +1760,7 @@ for line_number, line in enumerate(sys.stdin, start=1):
 
 raise SystemExit(1 if failed else 0)
 PYTHON;
-	$command = array($timeout_bin, '-s', 'TERM', '-k', '1', '5', $python, '-c', $probe);
+	$command = array($timeout_bin, '-s', 'TERM', '-k', '1', '5', $python, '-c', $probe, $regex_cap ? '1' : '0');
 	$descriptors = array(
 		0 => array('pipe', 'r'),
 		1 => array('file', '/dev/null', 'w'),

@@ -1856,6 +1856,13 @@
                 "default": null
             },
             {
+                "name": "regex_cap",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
                 "name": "timeout_bin",
                 "byRef": false,
                 "variadic": false,

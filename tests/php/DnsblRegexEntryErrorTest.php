@@ -38,18 +38,19 @@ final class DnsblRegexEntryErrorTest extends TestCase
 	}
 
 	/** @return array<int, string> */
-	private static function errors(string $contents, ?string $python = null, ?string $timeout = null): array
+	private static function errors(string $contents, bool $regexCap = FALSE, ?string $python = null, ?string $timeout = null): array
 	{
 		return pfb_dnsbl_regex_validation_errors(
 			$contents,
 			$python ?? self::$python,
+			$regexCap,
 			$timeout ?? self::$timeout
 		);
 	}
 
-	private static function oneError(string $contents): string
+	private static function oneError(string $contents, bool $regexCap = FALSE): string
 	{
-		$errors = self::errors($contents);
+		$errors = self::errors($contents, $regexCap);
 		return $errors[0] ?? 'missing validator diagnostic';
 	}
 
@@ -202,8 +203,8 @@ final class DnsblRegexEntryErrorTest extends TestCase
 	public function testMissingPythonAndTimeoutFailClosed(): void
 	{
 		$contents = "^ads\\.\n(?u)\\w+\n";
-		$missingPython = self::errors($contents, '', self::$timeout);
-		$missingTimeout = self::errors($contents, self::$python, '/path/that/does/not/exist/timeout');
+		$missingPython = self::errors($contents, FALSE, '', self::$timeout);
+		$missingTimeout = self::errors($contents, FALSE, self::$python, '/path/that/does/not/exist/timeout');
 
 		$this->assertNotSame([], $missingPython);
 		$this->assertNotSame([], $missingTimeout);
@@ -221,7 +222,7 @@ final class DnsblRegexEntryErrorTest extends TestCase
 			"\nexec " . escapeshellarg(self::$python) . ' "$@"' . "\n");
 		chmod($wrapper, 0700);
 		try {
-			$this->assertSame([], self::errors("^one$\n^two$\n(?u)\\w+\n", $wrapper));
+			$this->assertSame([], self::errors("^one$\n^two$\n(?u)\\w+\n", FALSE, $wrapper));
 			$this->assertSame("launch\n", file_get_contents($marker));
 		} finally {
 			@unlink($wrapper);

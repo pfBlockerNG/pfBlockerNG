@@ -68,12 +68,12 @@ final class DnsblRegexToggleGateWiringTest extends TestCase
 		$this->assertMatchesRegularExpression(
 			"#\\|\\|\\s*\\(\\s*\\(\\s*\\\$_POST\\['pfb_regex'\\]\\s*\\?\\?\\s*''\\s*\\)\\s*===\\s*'on'\\s*\\)\\s*\\)\\s*\\{\\s*"
 			. "foreach\\s*\\(pfb_dnsbl_regex_validation_errors\\(\\(string\\)\\s*\\(\\s*\\\$_POST\\['pfb_regex_list'\\]\\s*\\?\\?\\s*''\\s*\\),\\s*"
-			. "\\\$pfb_regex_python\\)\\s*as\\s*\\\$regex_error\\)\\s*\\{\\s*"
+			. "\\\$pfb_regex_python,\\s*\\(\\s*\\\$_POST\\['pfb_regex_cap'\\]\\s*\\?\\?\\s*''\\s*\\)\\s*===\\s*'on'\\)\\s*as\\s*\\\$regex_error\\)\\s*\\{\\s*"
 			. "\\\$input_errors\\[\\]\\s*=\\s*'Customlist pfb_regex_list:\\s*'\\s*\\.\\s*"
 			. "htmlspecialchars\\(\\\$regex_error,\\s*ENT_QUOTES\\s*\\|\\s*ENT_SUBSTITUTE,\\s*'UTF-8'\\);\\s*\\}\\s*\\}#",
 			self::$src,
 			"expected the toggle disjunct to gate only the fail-closed leg, with the "
-			. 'validation call and its error-append inside that guard'
+			. 'validation call (including the pfb_regex_cap third argument, issue #1688) and its error-append inside that guard'
 		);
 	}
 
