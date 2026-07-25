@@ -13,7 +13,7 @@ name: Release
 #      modes, gated on prepare-release succeeding (or being skipped in dry-run).
 #
 #   3. attach-pkgs / repo-publish / sync-ports-fork: real-publish only
-#      (dry_run == 'false', fail-closed — issue #1661), same ordering as before.
+#      (dry_run == 'false'), same ordering as before.
 #
 # dry_run=true (default): validate + build off HEAD; publish NOTHING (no commit, no
 # tag, no Release, no port bump, no pkg-repo poke).
@@ -59,9 +59,8 @@ jobs:
   prepare-release:
     name: Commit changelog + create the release tag
     runs-on: ubuntu-latest
-    # Fail-closed (issue #1661): only 'false' takes the real-publish path; true, empty
-    # and typo'd values skip. This expression is NOT the whole guard — GitHub compares
-    # strings case-INSENSITIVELY, so 'FALSE' satisfies it too; the first step below
+    # Only 'false' takes the real-publish path. NOT the whole guard: GitHub compares
+    # strings case-insensitively, so 'FALSE' satisfies this too and the first step below
     # re-checks case-sensitively before anything is pushed.
     if: ${{ github.event.inputs.dry_run == 'false' }}
     permissions:
@@ -77,10 +76,9 @@ jobs:
       sha:         ${{ steps.push-tag.outputs.sha }}
 
     steps:
-      # The job-level `if:` above admits any case-variant of 'false', so re-check here
-      # case-sensitively BEFORE the checkout that can push a commit and a tag. Without
-      # this, a 'FALSE' dispatch would push both and only then die at the `release`
-      # job's identical guard, stranding a half-cut release.
+      # The job-level `if:` admits any case-variant of 'false'; re-check case-sensitively
+      # BEFORE the checkout that pushes a commit and a tag, so a 'FALSE' dispatch cannot
+      # push both and then die at the `release` job's guard, stranding a half-cut release.
       - name: Reject a dry_run that is not exactly true or false
         env:
           INPUT_DRY: ${{ github.event.inputs.dry_run }}
@@ -455,7 +453,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # Fail-closed (issue #1661): only an exact 'false' checks out the tag; anything
+          # Only an exact 'false' checks out the tag; anything
           # else (true, empty, a typo) falls back to HEAD, same as the mutation gates.
           ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
           fetch-depth: 0
@@ -492,7 +490,7 @@ jobs:
         with:
           # dry_run=true: validate off the dispatch ref (HEAD); no tag exists yet.
           # dry_run=false: check out the just-created tag (contains the changelog).
-          # Fail-closed (issue #1661): only an exact 'false' checks out the tag.
+          # Only an exact 'false' checks out the tag.
           ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
           fetch-depth: 0   # need full history for changelog
 
@@ -509,7 +507,7 @@ jobs:
           # Empty/omitted stays the safe default (dry-run, publish nothing) — the
           # `type: boolean` input normally guarantees exactly "true"/"false" from the
           # dispatch UI, but an API-triggered dispatch can still hand this an arbitrary
-          # string, so reject anything else LOUDLY and EARLY (issue #1661), before any
+          # string, so reject anything else loudly and early, before any
           # $GITHUB_OUTPUT is written and before the tag/branch validation below runs.
           DRY_RUN="${INPUT_DRY:-true}"
           case "$DRY_RUN" in
@@ -827,7 +825,7 @@ jobs:
           # dry_run=true: build off the dispatch ref (HEAD); no tag exists yet.
           # dry_run=false: check out the just-created tag so .pkg is stamped from the
           #   tagged tree (which includes the committed changelog).
-          # Fail-closed (issue #1661): only an exact 'false' checks out the tag.
+          # Only an exact 'false' checks out the tag.
           ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
 
       - name: Set up Python 3.11
