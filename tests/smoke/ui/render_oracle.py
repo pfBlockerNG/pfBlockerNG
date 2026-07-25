@@ -363,6 +363,26 @@ class PhpErrorLogGuard:
         """Record the pre-sweep byte size of every candidate log."""
         self._baseline = self._sizes()
 
+    def _print_all_pfb_diagnostics(self) -> None:
+        """Print every pfBlockerNG diagnostic in the watched logs, deduped (best-effort).
+
+        The assertion message quotes only what the SWEEP appended, capped. This dumps the
+        whole picture once, at the moment it exists: the guest is torn down at the end of
+        the run, and ``conftest._failure_report`` reads the call/setup reports only -- a
+        module-scoped guard failing in TEARDOWN triggers no VM dump at all, so without
+        this the full set is unrecoverable without another run.
+
+        Timestamps are stripped and the list sorted unique: what matters post-mortem is
+        WHICH sites fired, not how often each repeated.
+        """
+        for path in self._baseline:
+            probe = f"grep -F {PFB_PATH_MARKER} {path} 2>/dev/null | sed 's/^\\[[^]]*\\] //' | sort -u | head -500"
+            result = self._vm.ssh(probe)
+            if result.returncode == 0 and result.stdout.strip():
+                print(f"\n===== pfBlockerNG diagnostics in {path} (deduped) =====")
+                print(result.stdout.rstrip())
+                print(f"===== END {path} =====")
+
     def assert_no_growth(self) -> None:
         """Fail if any candidate ``php_error.log`` gained a pfBlockerNG diagnostic.
 
@@ -395,6 +415,7 @@ class PhpErrorLogGuard:
                     report += f"\n... and {elided} more distinct line(s)"
                 offending.append(report)
         if offending:
+            self._print_all_pfb_diagnostics()
             raise AssertionError(
                 "pfBlockerNG PHP diagnostics were logged during the render sweep:\n"
                 + "\n".join(offending)

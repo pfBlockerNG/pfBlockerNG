@@ -226,6 +226,13 @@ class _FakeVM:
         if argv[0] == "/usr/bin/tail":
             assert body is not None, f"tail on an absent guest file: {path}"
             return _FakeSSHResult(0, body.encode()[-int(argv[2]) :].decode())
+        if argv[0].startswith("grep -F"):
+            # The post-mortem dump the guard prints alongside a failure: a deduped view of
+            # the same file. Answer it so the fake stays a faithful guest, but keep every
+            # assertion on the VERDICT -- this output is diagnostics, never the oracle.
+            body = self.files.get(argv[0].split()[-5], "")
+            matched = sorted({line for line in body.splitlines() if PFB_PATH_MARKER in line})
+            return _FakeSSHResult(0, "\n".join(matched))
         raise AssertionError(f"unexpected guest command: {argv!r}")
 
 
