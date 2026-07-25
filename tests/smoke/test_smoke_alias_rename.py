@@ -9,8 +9,9 @@ across all three list sections (v4, v6, DNSBL).
 
 This test exercises the FULL path on a live pfSense VM:
 
-1. Assert the hook shim file exists (skip if the build does not ship it yet —
-   this decouples a ports pkg-plist update that may land separately).
+1. Assert the hook shim file exists. The build CI runs (``-devel``/``-nightly``)
+   always package it — its absence is a packaging regression, so this FAILS
+   rather than skips (issue #1658).
 2. Seed a test IPv4 list row with a known alias name in two fields.
 3. Trigger the rename via ``php_eval`` (simulate the shim invocation from
    ``saveAlias()``) and assert the rewrite landed in config.xml.
@@ -67,6 +68,25 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+
+def _require_hook_shim(vm: SmokeVM) -> None:
+    """Fail (never skip) unless the pre_write_config hook shim is deployed.
+
+    ``test -f`` returns 1 for a clean "does not exist" and 0 for "exists". Any
+    other rc means the SSH probe itself did not complete (e.g. a transport
+    fault) — that must not be read as "present", nor conflated with the clean
+    "absent" case; it gets its own rc-bearing failure message (issue #1658).
+    """
+    result = vm.ssh("test", "-f", HOOK_SHIM, timeout=30)
+    if result.returncode == 0:
+        return
+    if result.returncode == 1:
+        pytest.fail(
+            f"pfBlockerNG is expected to ship {HOOK_SHIM} but this build does not have it "
+            "— packaging regression, not a skip"
+        )
+    pytest.fail(f"probe for {HOOK_SHIM} did not complete cleanly (rc={result.returncode}, stderr={result.stderr!r})")
 
 
 def _free_rowid(vm: SmokeVM, cfg_root: str) -> int:
@@ -134,18 +154,11 @@ def _invoke_rename_shim(vm: SmokeVM, old_name: str, new_name: str) -> None:
 def test_hook_shim_file_exists_on_deployed_build(deployed_vm: SmokeVM) -> None:
     """The pre_write_config hook shim is present on the deployed build.
 
-    This is the prerequisite for all alias-rename tests: if the shim is not
-    shipped in this build's pkg-plist, skip the remaining tests rather than
-    failing on a known-absent file.  The skip is recorded in the first test so
-    the module-level ``deployed_vm`` fixture only runs once.
+    This is the prerequisite for all alias-rename tests: pfBlockerNG is
+    expected to ship this file, so its absence is a packaging regression —
+    fail loudly rather than skip (issue #1658).
     """
-    vm = deployed_vm
-    result = vm.ssh("test", "-f", HOOK_SHIM, timeout=30)
-    if result.returncode != 0:
-        pytest.skip(
-            f"alias-rename hook shim not present on this build ({HOOK_SHIM}); "
-            "pkg-plist update pending — skipping alias-rename smoke"
-        )
+    _require_hook_shim(deployed_vm)
 
 
 def test_alias_rename_followup_rewrites_addr_and_port_keys(deployed_vm: SmokeVM) -> None:
@@ -172,10 +185,8 @@ def test_alias_rename_followup_rewrites_addr_and_port_keys(deployed_vm: SmokeVM)
         - aliasports_in is rewritten to 'PfbRenameDst'.
     """
     vm = deployed_vm
-    # Skip here too in case test ordering bypasses the shim-exists test.
-    shim_check = vm.ssh("test", "-f", HOOK_SHIM, timeout=30)
-    if shim_check.returncode != 0:
-        pytest.skip(f"alias-rename hook shim absent ({HOOK_SHIM}) — skip")
+    # Re-check here too in case test ordering bypasses the prerequisite test.
+    _require_hook_shim(vm)
 
     old_name = "PfbRenameSrc"
     new_name = "PfbRenameDst"
@@ -236,9 +247,8 @@ def test_alias_rename_followup_leaves_unrelated_alias_unchanged(deployed_vm: Smo
         - aliasaddr_out stays 'PfbUnrelated' (unrelated — no touch).
     """
     vm = deployed_vm
-    shim_check = vm.ssh("test", "-f", HOOK_SHIM, timeout=30)
-    if shim_check.returncode != 0:
-        pytest.skip(f"alias-rename hook shim absent ({HOOK_SHIM}) — skip")
+    # Re-check here too in case test ordering bypasses the prerequisite test.
+    _require_hook_shim(vm)
 
     old_name = "PfbRenameSrc2"
     new_name = "PfbRenameDst2"
@@ -293,9 +303,8 @@ def test_alias_rename_same_name_is_noop(deployed_vm: SmokeVM) -> None:
         aliasaddr_in remains 'PfbRenameNoop' (no write occurred).
     """
     vm = deployed_vm
-    shim_check = vm.ssh("test", "-f", HOOK_SHIM, timeout=30)
-    if shim_check.returncode != 0:
-        pytest.skip(f"alias-rename hook shim absent ({HOOK_SHIM}) — skip")
+    # Re-check here too in case test ordering bypasses the prerequisite test.
+    _require_hook_shim(vm)
 
     name = "PfbRenameNoop"
     rowid = _free_rowid(vm, CFG_IPV4)
