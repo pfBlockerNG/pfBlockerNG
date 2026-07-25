@@ -71,5 +71,7 @@ def test_the_only_skip_left_is_the_missing_package_one() -> None:
     skip at all trips this one.
     """
     src = inspect.getsource(tsar)
-    skip_lines = [ln.strip() for ln in src.splitlines() if "pytest.skip" in ln]
-    assert skip_lines == ['pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")'], skip_lines
+    # Count call sites rather than matching whole source lines: a harmless line-wrap of
+    # the legitimate skip must not fail this, while any ADDED skip still does.
+    assert len(re.findall(r"pytest\.skip\(", src)) == 1, "exactly one pytest.skip must remain"
+    assert "SMOKE_PKG not set" in src, "the surviving skip must be the no-package-to-deploy guard"
