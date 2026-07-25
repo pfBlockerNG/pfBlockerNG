@@ -172,12 +172,18 @@ PHP_ERROR_LOG_CANDIDATES: tuple[str, ...] = (
 _MASKABLE_LEVELS = frozenset({"Warning", "Notice", "Deprecated"})
 
 # The ENDEMIC class: observed and counted, never gated. `Undefined array key` on an unset
-# config read is emitted at ~488 distinct sites in this package (measured on a live sweep,
-# #1218), so gating it would mean freezing all 488 in a list edited by every burn-down PR,
+# config read is emitted at 469 distinct sites in this package (measured on a live sweep,
+# #1218), so gating it would mean freezing all 469 in a list edited by every burn-down PR,
 # for a gate whose next new instance is indistinguishable from the ones already forgiven.
 # The gate spends its credibility on the classes that still smell like a defect --
 # `Undefined variable`, a null reaching a string parameter (a PHP 9 TypeError in waiting),
 # `Trying to access array offset on null` -- plus every non-maskable level.
+#
+# "Non-maskable" means fatal / parse / recoverable / strict ONLY. E_USER_WARNING,
+# E_USER_NOTICE and E_USER_DEPRECATED are logged by PHP as plain `PHP Warning:` /
+# `Notice:` / `Deprecated:`, indistinguishable from the runtime classes, so they are
+# file-scoped and class-scoped like any other maskable diagnostic; only E_USER_ERROR
+# ("Fatal error") gates wherever it is raised.
 #
 # This is a DEFERRAL, not a dismissal: #1712 burns the class down, and the end-of-sweep
 # report keeps its size visible. When it reaches zero, delete this tuple and the class
@@ -206,7 +212,7 @@ _LOG_DIAGNOSTIC_RE = re.compile(rf"PHP\s+(?P<level>{_LEVELS_ALT})\s*:\s*(?P<mess
 _LOG_ORIGIN_RE = re.compile(r"\bin (?P<file>\S+) on line \d+")
 
 # The burn-down baseline of diagnostics that ALREADY existed when the guest was raised
-# to E_ALL (#1218 measured ~230 across 8 files; the cleanup is tracked separately). Each
+# to E_ALL (#1218 measured 33 across 27 files on a live sweep; cleanup tracked in #1712). Each
 # entry is "<origin file>|<level>|<message>" -- deliberately WITHOUT the line number, so
 # an unrelated edit above a known site does not resurrect it as a new diagnostic and fail
 # innocent code. The list may only ever SHRINK: a new diagnostic gates, and the fix is to
@@ -218,12 +224,24 @@ BASELINE_FILENAME = "php_diagnostic_baseline.txt"
 _MAX_REPORTED_LINES = 20
 
 
+def _origin_match(line: str) -> re.Match[str] | None:
+    """The LAST ``in <file> on line <N>`` in ``line`` -- PHP appends the real origin at the
+    end, and a message may itself contain that shape (an include error quoting a path).
+    Taking the first match would let a message hijack attribution in either direction, and
+    even forge a fingerprint that matches a baseline entry.
+    """
+    last = None
+    for last in _LOG_ORIGIN_RE.finditer(line):  # noqa: B007 - the loop IS the "take last"
+        pass
+    return last
+
+
 def diagnostic_fingerprint(line: str) -> str | None:
     """The line-number-free identity of one logged diagnostic, or ``None`` if not one."""
     diagnostic = _LOG_DIAGNOSTIC_RE.search(line)
     if diagnostic is None:
         return None
-    origin = _LOG_ORIGIN_RE.search(line)
+    origin = _origin_match(line)
     file = origin.group("file") if origin is not None else "?"
     # Drop the " in <file> on line <N>" trailer and collapse PHP's double spaces, so the
     # fingerprint is stable across line moves and formatting.
@@ -267,7 +285,7 @@ def stale_baseline_entries(observed: frozenset[str], baseline: frozenset[str] | 
     return tuple(sorted(grandfathered - observed))
 
 
-def gating_log_lines(appended: str, baseline: frozenset[str] | None = None) -> tuple[str, ...]:
+def gating_log_lines(appended: str, baseline: frozenset[str] | None = None, *, record: bool = False) -> tuple[str, ...]:
     """The lines of an appended ``php_error.log`` chunk that must FAIL the sweep.
 
     A line gates when it is a PHP diagnostic AND either its level is not one of the
@@ -276,6 +294,16 @@ def gating_log_lines(appended: str, baseline: frozenset[str] | None = None) -> t
     (the shipped :data:`BASELINE_FILENAME` when not given). Anything else -- core
     warnings/notices/deprecations, fpm pool chatter, stack-trace continuation lines --
     is ignored.
+
+    ``record`` is what makes an observation count as LIVE, and only
+    :meth:`PhpErrorLogGuard.assert_no_growth` passes it: a fingerprint seen here is fed to
+    the staleness and burn-down reports, so a unit test classifying a synthetic line must
+    never mark a real site "still emitting" (it would hide that site from the removal
+    report forever -- the same blindness this issue exists to remove).
+
+    Note the classifier is per-LINE: a diagnostic whose message wraps across physical lines
+    loses its origin trailer and is skipped, as are stack-trace continuation lines. Runtime
+    warnings are single-line, so this bounds the design rather than the coverage.
 
     ponytail: ownership is decided by the file the diagnostic was RAISED in, which is
     what ``errfile`` reports. A warning raised inside a pfSense core function that our
@@ -291,21 +319,22 @@ def gating_log_lines(appended: str, baseline: frozenset[str] | None = None) -> t
         if diagnostic is None:
             continue
         if diagnostic.group("level") in _MASKABLE_LEVELS:
-            origin = _LOG_ORIGIN_RE.search(line)
+            origin = _origin_match(line)
             if origin is None or PFB_PATH_MARKER not in origin.group("file").lower():
                 continue
             if diagnostic.group("message").lstrip().startswith(ENDEMIC_MESSAGE_PREFIXES):
                 # Counted for the burn-down report (#1712), never gated -- see
                 # ENDEMIC_MESSAGE_PREFIXES for why this class alone is deferred.
                 fingerprint = diagnostic_fingerprint(line)
-                if baseline is None and fingerprint is not None:
+                if record and baseline is None and fingerprint is not None:
                     _endemic_seen.add(fingerprint)
                 continue
         fingerprint = diagnostic_fingerprint(line)
         if fingerprint in grandfathered:
-            # Record the hit only for the SHIPPED baseline: a caller passing its own set
-            # is a unit test, and its fixtures must not look like live observations.
-            if baseline is None and fingerprint is not None:
+            # Record the hit only for a LIVE sweep against the SHIPPED baseline: a caller
+            # passing its own set, or not asking to record, is a unit test, and its
+            # fixtures must never look like live observations.
+            if record and baseline is None and fingerprint is not None:
                 _observed_baseline.add(fingerprint)
             continue
         gating.append(line)
@@ -319,7 +348,9 @@ class PhpErrorLogGuard:
     parametrized sweep (:meth:`snapshot`), then read back everything appended and
     assert none of it is OURS ONCE after (:meth:`assert_no_growth`) -- the
     source-of-truth check that catches a PHP diagnostic logged but not echoed into
-    a body (e.g. a Notice on a path that output-buffers, or an error_log() call).
+    a body (e.g. a Notice on a path that output-buffers). A bare ``error_log()``
+    line is NOT caught: it carries no ``PHP <Level>:`` prefix, so the classifier
+    does not see a diagnostic. Inherent to reading diagnostics rather than bytes.
 
     The size is the read offset, not the verdict: since #1218 the verdict comes
     from :func:`gating_log_lines` over the appended text, so a sweep that only
@@ -409,7 +440,7 @@ class PhpErrorLogGuard:
             if now <= before:
                 continue
             appended = self._vm.ssh("/usr/bin/tail", "-c", str(now - before), path).stdout
-            gating = gating_log_lines(appended)
+            gating = gating_log_lines(appended, record=True)
             if gating:
                 # A raised E_ALL can append thousands of lines; report the distinct ones
                 # (capped) rather than a wall of repeats -- the full log is in the

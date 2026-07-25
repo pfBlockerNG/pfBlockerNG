@@ -5380,8 +5380,8 @@ def dump_diagnostics(vm: SmokeVM) -> None:
             # are stripped and the list deduped, so a page emitting one warning 500 times
             # costs one line: what matters post-mortem is WHICH sites fired, not how often.
             "pfBlockerNG diagnostics in php_error.log (deduped)",
-            "grep -F pfblockerng /tmp/PHP_errors.log 2>/dev/null | sed 's/^\\[[^]]*\\] //' | "
-            "sort -u | head -500 || true",
+            "grep -hF pfblockerng /tmp/PHP_errors.log /var/log/php_error.log /var/log/php-fpm.log "
+            "2>/dev/null | sed 's/^\\[[^]]*\\] //' | sort -u | head -500 || true",
         ),
         (
             # Direct before/after: what pfBlockerNG's DNSBL reload changed in

@@ -53,8 +53,11 @@ def test_widget_save_missing_per_field_keys_does_not_warn(
 
     Then the response is a save success (the handler redirects to ``/``; never a
       server error), the session is still authenticated (no bounce to the login
-      form), AND no candidate ``php_error.log`` gained a byte during the request
-      (the guard that catches a logged-but-not-echoed PHP warning).
+      form), AND no candidate ``php_error.log`` gained a gated-class diagnostic
+      during the request (the guard that catches a logged-but-not-echoed PHP
+      warning). #1218: the ``Undefined array key`` class this fault emitted is
+      REPORTED rather than gated, so the save-success and session assertions are
+      what this test rests on, not the log guard.
     """
     guard = PhpErrorLogGuard(smoke_vm)
     guard.snapshot()

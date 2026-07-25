@@ -51,7 +51,7 @@ def _post_with_array_field(
         ``url-N``/``header-N`` are read),
       Then the handler answers HTTP 200 (a normal validation reject, never a
         TypeError-driven 500), the session survives, and no candidate
-        ``php_error.log`` gained a byte during the request. Every crafted
+        ``php_error.log`` gained a gated-class diagnostic during the request. Every crafted
         aliasname/custom/url-0 case here is rejected by validation before
         ``write_config()`` (an empty/invalid aliasname at rowid 0), so the
         box is never mutated.
@@ -122,8 +122,10 @@ def test_unknown_scalar_logtype_rejected_gracefully(webui: WebUI, smoke_vm: help
     When 'logtype' is resubmitted as the plain scalar 'zzz', which has no
       entry in $pfb_logtypes,
     Then the page still answers HTTP 200, the session survives, and no
-      candidate php_error.log gains a byte (pre-fix: 6 E_WARNINGs per
-      request from the unguarded $pfb_logtypes[$selected] offset).
+      candidate php_error.log gains a gated-class diagnostic (#1218: the
+      pre-fix fault here emitted 6 E_WARNINGs of the `Undefined array key`
+      class, which the guard now REPORTS rather than gates — so the HTTP,
+      session and body assertions are what this test rests on, not the log).
     """
     guard = PhpErrorLogGuard(smoke_vm)
     guard.snapshot()
@@ -160,7 +162,7 @@ def test_get_query_array_value_rejected_gracefully(webui: WebUI, smoke_vm: helpe
     Given a page normally read with a scalar 'savemsg'/'atype' query value,
     When the param is sent in PHP array syntax ('param[]=x'),
     Then the page still answers HTTP 200 (never a TypeError 500), the session
-      survives, and no candidate ``php_error.log`` gained a byte.
+      survives, and no candidate ``php_error.log`` gained a gated-class diagnostic.
     """
     guard = PhpErrorLogGuard(smoke_vm)
     guard.snapshot()
