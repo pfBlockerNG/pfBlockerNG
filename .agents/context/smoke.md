@@ -55,7 +55,10 @@ Web-UI tiers (ADR-14, `tests/smoke/ui/`) + the mock-feed load smoke (ADR-16 Part
 documented in architecture-notes. Operative facts:
 
 - **Tier A `ui_render` is the PR gate**: GET each page → 200, body free of PHP
-  errors/warnings, a page-specific marker present, AND no new on-box `php_error.log` line —
+  errors/warnings, a page-specific marker present, AND no new on-box `php_error.log`
+  diagnostic **from a pfBlockerNG file** (#1218: the guest runs a true `E_ALL`, so runtime
+  `E_WARNING`/`E_NOTICE`/`E_DEPRECATED` IS observable; core noise is filtered by originating
+  file in `render_oracle.gating_log_lines`, never by re-masking a class) —
   never HTTP 200 alone. A surface recorded in `test_render_smoke.py`'s
   `EXCLUDED_FROM_TIER_A` uses that exclusion's named live tier plus focused hermetic
   coverage instead. Tiers B are otherwise schedule/dispatch-only. Run:
