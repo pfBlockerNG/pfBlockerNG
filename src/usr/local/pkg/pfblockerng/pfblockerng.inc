@@ -16936,6 +16936,11 @@ function pfblockerng_php_pre_deinstall_command() {
 	// Maintain pfBlockerNG settings and database files if $pfb['keep'] is ON.
 	if ($pfb['keep'] != 'on') {
 		update_status(" Removing all customizations/data...");
+		$pfb_transition_root = '/cf/conf/pfblockerng';
+		if (file_exists($pfb_transition_root) || is_link($pfb_transition_root)) {
+			_pfb_settings_validate_dir($pfb_transition_root);
+			rmdir_recursive($pfb_transition_root);
+		}
 		// Remove pfBlockerNG log and DB folder
 		rmdir_recursive("{$pfb['dbdir']}");
 		rmdir_recursive("{$pfb['logdir']}");

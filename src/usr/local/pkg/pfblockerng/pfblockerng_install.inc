@@ -118,6 +118,11 @@ if (
 // hand-wired blocks (ADR-02, PFBL-03, ADR-22, issue #281) with a single ordered registry.
 pfb_run_migrations();
 
+if (PfbConfig::read('pfb_schema_family') !== '4.0') {
+	PfbConfig::write('pfb_schema_family', '4.0');
+	write_config('pfBlockerNG: record settings schema family');
+}
+
 // MaxMind Database is no longer pre-installed during package installation
 if (empty($pfb['maxmind_key'])) {
 	update_status("\nMaxMind GeoIP databases are not pre-installed during installation.\nTo utilize the MaxMind GeoIP functionalities, you will be required to register for a free MaxMind user account and access key. Review the IP tab: MaxMind Settings for more details.\n\n");
