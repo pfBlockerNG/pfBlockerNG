@@ -9,12 +9,16 @@
 #   --interval SECONDS poll interval (default 30)
 #   --max-iter N       hard iteration cap (default 80, ~40 min at 30s)
 #
-# The LAST stdout line is the verdict: PASS | FAIL | TIMEOUT | STALE. On PASS/FAIL the
-# relevant checks JSON precedes it as detail. `bucket` semantics: skipping counts as done-
-# not-failed; PASS requires at least one relevant check registered (never green-by-absence).
-# Checks are read SHA-addressed (commits/<sha>/check-runs + /status) rather than via the
-# PR's current head, and the head is re-verified against the pinned SHA immediately before
-# any PASS/FAIL, so a force-push can never be reported PASS for a commit it didn't run on.
+# The LAST stdout line is the verdict: PASS | FAIL | TIMEOUT | STALE. On PASS/FAIL a
+# `pinned=<sha>` line and the relevant checks JSON precede it as detail. `bucket`
+# semantics: skipping counts as done-not-failed; PASS requires at least one relevant
+# check registered (never green-by-absence). Checks are read SHA-addressed
+# (commits/<sha>/check-runs + /status) rather than via the PR's current head, and the
+# head is re-verified against the pinned SHA (same bounded retry as arm-time; an empty
+# re-read is GH-ERROR, never STALE) immediately before any PASS/FAIL, so a force-push
+# can never be reported PASS for a commit it didn't run on.
+# GH-ERROR (exit 1) is a mechanism failure, not a checks verdict: its FIRST line is
+# GH-ERROR, diagnostic follows -- it does not participate in the last-line contract.
 # Exit codes: see agent_env.sh. Self-terminating: iteration cap AND wall-clock deadline
 # (max-iter x interval + 300 s slack; PFB_WAIT_DEADLINE overrides) per CLAUDE.md
 # "No orphaned waits" #1.
@@ -146,15 +150,27 @@ main() {
 		case "$v" in
 			PASS|FAIL)
 				# The pinned SHA may no longer be the PR head (fix push, force-push
-				# mid-wait) -- confirm before handing out a terminal verdict.
-				if ! live=$(gh_bounded pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid); then
-					printf 'GH-ERROR\n%s\n' "$live"
-					exit 1
-				fi
+				# mid-wait) -- confirm before handing out a terminal verdict. Same
+				# bounded retry as arm-time resolution: a blip here must not discard
+				# an otherwise-completed wait. An empty read is a hard failure, same
+				# as arm-time -- it is never proof the head moved, only that this
+				# read didn't land, so it is GH-ERROR, not STALE.
+				while :; do
+					if live=$(gh_bounded pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) && [ -n "$live" ]; then
+						break
+					fi
+					ghfail=$((ghfail + 1))
+					if [ "$ghfail" -ge 3 ]; then
+						printf 'GH-ERROR\n%s\n' "$live"
+						exit 1
+					fi
+					sleep_bounded "$interval" || { printf 'GH-ERROR\n%s\n' "$live"; exit 1; }
+				done
 				if [ "$live" != "$sha" ]; then
 					printf 'pinned=%s observed=%s\nSTALE\n' "$sha" "$live"
 					exit 0
 				fi
+				printf 'pinned=%s\n' "$sha"
 				printf '%s' "$json" | jq -c "[.[] | select((.name|ascii_downcase|test(\"$exclude\"))|not)]"
 				printf '%s\n' "$v"
 				exit 0
