@@ -281,7 +281,7 @@ function url_compare($ftype, $key, $rowid, $aliasname, $row_aliasname, $row_url,
 		}
 	}
 	else {
-		if ($alternate && isset($alt_feeds[$ftype]) && isset($alt_feeds[$ftype][$aliasname]) && !$alt_feeds[$ftype][$aliasname][$alt_header]) {
+		if ($alternate && isset($alt_feeds[$ftype]) && isset($alt_feeds[$ftype][$aliasname]) && empty($alt_feeds[$ftype][$aliasname][$alt_header])) {
 			$alt_feeds[$ftype][$aliasname][$feed_header][$a_key] = array(	'icon' => $x_icon, 'url' => $feed_url, 'header' => $alt_header,
 											'info' => $alt_info, 'register' => !empty($alt_register) ? TRUE : FALSE );
 		}
