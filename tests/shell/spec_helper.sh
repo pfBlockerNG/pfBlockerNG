@@ -17,11 +17,18 @@ PFB_SHIMS="${PFB_ROOT}/tests/shell/bin"
 . "${PFB_ROOT}/scripts/lib/git-env-scrub.sh"
 scrub_git_env() { pfb_scrub_git_env; }
 
-# Put the iprange shim ahead of the real PATH so the AWS pre-scripts (which call
-# `iprange` by bare name) pick up the deterministic stand-in. jq stays the real
-# system binary.
+# Put the iprange shim ahead of the real PATH -- pfb_real_iprange() (see
+# pfblockerng_suppress_spec.sh) strips PFB_SHIMS back off to find a genuine
+# system iprange when one is present.
 PATH="${PFB_SHIMS}:${PATH}"
-export PATH PFB_ROOT PFB_PKGDIR PFB_FIXTURES PFB_SHIMS
+
+# issue #714: aws_region_prefixes.sh resolves jq/iprange via pathjq/pathaggregate
+# (absolute path, no bare-name PATH lookup) instead of calling them by bare name.
+# Point those at the real system jq and at the deterministic iprange shim.
+pathjq="$(command -v jq)"
+pathaggregate="${PFB_SHIMS}/iprange"
+
+export PATH PFB_ROOT PFB_PKGDIR PFB_FIXTURES PFB_SHIMS pathjq pathaggregate
 
 # Run one ip_pre_AWS_*.sh over a private copy of the fixture (the script
 # overwrites its input file in place) and echo the resulting prefixes, sorted and

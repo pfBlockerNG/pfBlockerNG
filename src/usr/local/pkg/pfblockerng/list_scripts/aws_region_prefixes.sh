@@ -25,8 +25,18 @@ alias="${1}"
 prefix="${2}"
 region="${3}"
 
+# issue #714: resolve privileged binaries to absolute paths (override-with-default,
+# matching pfblockerng.sh's pathaggregate naming) instead of bare-name PATH lookup.
+pathjq="${pathjq:-/usr/local/bin/jq}"
+pathaggregate="${pathaggregate:-/usr/local/bin/iprange}"
+
 if [ -z "${alias}" ] || [ ! -f "${alias}" ]; then
 	echo "AWS pre-script: input file not found: ${alias}"
+	exit 1
+fi
+
+if [ ! -x "${pathjq}" ]; then
+	echo "AWS pre-script: jq not found or not executable: ${pathjq}"
 	exit 1
 fi
 
@@ -52,15 +62,20 @@ fi
 # pipeline hid a jq failure (POSIX sh has no pipefail): a malformed/truncated
 # download could emit a partial set that iprange happily passed through, silently
 # overwriting the alias with bad data. Parse to a temp, verify, THEN publish.
-if ! jq -r "${jqfilter}" "${alias}" > "${rawfile}"; then
+if ! "${pathjq}" -r "${jqfilter}" "${alias}" > "${rawfile}"; then
 	echo "AWS pre-script: jq failed to parse ${alias}"
 	rm -f "${rawfile}" "${tempfile}"
 	exit 1
 fi
 
 if [ "${prefix}" = '_v4' ]; then
+	if [ ! -x "${pathaggregate}" ]; then
+		echo "AWS pre-script: iprange not found or not executable: ${pathaggregate}"
+		rm -f "${rawfile}" "${tempfile}"
+		exit 1
+	fi
 	# iprange aggregates the IPv4 CIDRs (reads stdin, as the original pipeline did).
-	if ! iprange < "${rawfile}" > "${tempfile}"; then
+	if ! "${pathaggregate}" < "${rawfile}" > "${tempfile}"; then
 		echo "AWS pre-script: iprange aggregation failed"
 		rm -f "${rawfile}" "${tempfile}"
 		exit 1
