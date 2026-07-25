@@ -1968,8 +1968,9 @@ function sync_package_pfblockerng($cron='') {
 												}
 											}
 
-											// Remove leading/trailing dots
-											$line = trim(trim($line), '.');
+											// Remove leading/trailing dots ($line is already
+											// whitespace-trimmed above)
+											$line = trim($line, '.');
 
 											// Domain Validation
 											if (empty(pfb_filter($line, PFB_FILTER_DOMAIN, 'DNSBL_Download'))) {
