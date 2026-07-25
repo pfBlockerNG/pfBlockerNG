@@ -1694,8 +1694,8 @@ function pfb_adv_alias_field_errors(array $post): array
  * pfb_dnsbl_regex_validation_errors — validate the DNSBL regex form in one
  * bounded Python pass, preserving source line numbers and resolver semantics.
  *
- * @param bool $regex_cap Mirrors the "Limit long/complex regex" toggle; threaded
- *     through to the probe for a save-time length-cap check landing separately.
+ * @param bool $regex_cap Mirrors the "Limit long/complex regex" toggle: gates the
+ *     save-time length-cap diagnostic so it agrees with the resolver's load-time drop.
  * @return array<int, string> Non-empty validation or infrastructure diagnostics.
  */
 function pfb_dnsbl_regex_validation_errors(string $contents, string $python, bool $regex_cap, string $timeout_bin = '/usr/bin/timeout'): array
@@ -1750,6 +1750,10 @@ for line_number, line in enumerate(sys.stdin, start=1):
     budget = len(re.findall(r"(?<!\\)[+*]", pattern)) + len(re.findall(r"(?<!\\)\|", pattern))
     if budget > 12:
         report(line_number, pattern, "too many quantifiers/alternations")
+        failed = True
+        continue
+    if regex_cap and len(pattern) > 200:  # REGEX_STATIC_LEN_CAP mirror (pfb_unbound.py)
+        report(line_number, pattern, 'over the 200-character length cap ("Limit long/complex regex")')
         failed = True
         continue
     try:
