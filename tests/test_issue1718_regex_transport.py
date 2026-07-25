@@ -6,6 +6,7 @@ import base64
 from pathlib import Path
 from typing import Any
 
+import pytest
 import unboundmodule
 
 import pfb_unbound as P
@@ -71,11 +72,15 @@ def test_swap_load_matches_initial(tmp_path: Path, monkeypatch: Any) -> None:
         P.deinit(0)
 
 
-def test_present_malformed_or_non_utf8_marker_fails_closed(tmp_path: Path, monkeypatch: Any) -> None:
+def test_present_malformed_or_non_utf8_marker_fails_closed(
+    tmp_path: Path, monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     for payload in ("%%%", base64.b64encode(b"\xff").decode("ascii")):
+        caplog.clear()
         try:
             _initial_load(tmp_path, monkeypatch, _ini(payload))
             assert P.regexDB == {}
+            assert "Failed to decode MAIN.regex_list" in caplog.text
         finally:
             P.deinit(0)
 
