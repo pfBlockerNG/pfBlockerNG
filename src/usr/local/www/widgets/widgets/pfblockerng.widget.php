@@ -63,7 +63,7 @@ if ($_GET) {
 	// Called by Ajax to update widget contents
 	elseif ($_GET['getNewWidget']) {
 		$pfb_table = pfBlockerNG_get_header('js');
-		pfBlockerNG_get_table('js', $pfb_table);
+		pfBlockerNG_get_table($pfb_table, 'js');
 		return;
 	}
 }
@@ -950,7 +950,7 @@ function pfBlockerNG_get_header($mode='') {
 
 
 // Update table contents
-function pfBlockerNG_get_table($mode='', $pfb_table) {
+function pfBlockerNG_get_table($pfb_table, $mode='') {
 	global $pfb;
 
 	if (!empty($pfb_table)) {
@@ -1077,7 +1077,7 @@ function pfBlockerNG_get_table($mode='', $pfb_table) {
 			</thead>
 			<tbody id="pfBNG-table">
 				<!-- Print table contents, subsequent refresh by javascript function -->
-				<?=pfBlockerNG_get_table('', $pfb_table);?>
+				<?=pfBlockerNG_get_table($pfb_table);?>
 			</tbody>
 		</table>
 	</div>
