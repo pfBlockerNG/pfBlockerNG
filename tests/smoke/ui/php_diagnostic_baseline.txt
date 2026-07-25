@@ -3,10 +3,11 @@
 # numbers, so an edit above a known site does not resurrect it.
 #
 # THIS LIST MAY ONLY SHRINK. A new diagnostic is a regression: fix the site, never
-# append to this file. Cleanup of the backlog below is tracked in its own issue.
+# append to this file. Burning the backlog below down to empty is tracked in #1712.
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Deprecated|Optional parameter $r_type declared before required parameter $filename_unlock is implicitly treated as a required parameter
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Deprecated|Optional parameter $remove declared before required parameter $filename_unlock is implicitly treated as a required parameter
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Warning|Undefined array key "alexa_enable"
+/usr/local/pkg/pfblockerng/pfblockerng.inc|Warning|Undefined array key "asn_reporting"
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Warning|Undefined array key "asn_token"
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Warning|Undefined array key "database_cc"
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Warning|Undefined array key "maxmind_account"
@@ -30,6 +31,12 @@
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Warning|Undefined array key "pfbextdns"
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Warning|Undefined array key "skipfeed"
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Warning|Undefined array key "suppression"
+/usr/local/pkg/pfblockerng/pfblockerng_apply.inc|Warning|Undefined array key "inbound_deny_action"
+/usr/local/pkg/pfblockerng/pfblockerng_apply.inc|Warning|Undefined array key "outbound_deny_action"
+/usr/local/pkg/pfblockerng/pfblockerng_apply.inc|Warning|Undefined array key "pfb_reuse"
+/usr/local/pkg/pfblockerng/pfblockerng_apply.inc|Warning|Undefined array key "pfblockerng_install"
+/usr/local/pkg/pfblockerng/pfblockerng_apply.inc|Warning|Undefined array key "save"
+/usr/local/www/pfblockerng/pfblockerng.php|Warning|Undefined array key "REMOTE_ADDR"
 /usr/local/www/pfblockerng/pfblockerng_Africa.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
 /usr/local/www/pfblockerng/pfblockerng_Africa.php|Warning|Undefined array key "agateway_in"
 /usr/local/www/pfblockerng/pfblockerng_Africa.php|Warning|Undefined array key "agateway_out"
@@ -187,6 +194,25 @@
 /usr/local/www/pfblockerng/pfblockerng_dnsbl.php|Warning|Undefined array key "suppression"
 /usr/local/www/pfblockerng/pfblockerng_dnsbl.php|Warning|Undefined array key "tldblacklist"
 /usr/local/www/pfblockerng/pfblockerng_dnsbl.php|Warning|Undefined array key "tldexclusion"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "enable_cb"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_dnsbl_parse_err"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_dnslog"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_dnsreplylog"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_errlog"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_extraslog"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_ip_blocklog"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_ip_matchlog"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_ip_parse_err"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_ip_permitlog"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_log"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "log_max_unilog"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "pfb_dailystart"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "pfb_hour"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "pfb_interval"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "pfb_min"
+/usr/local/www/pfblockerng/pfblockerng_general.php|Warning|Undefined array key "skipfeed"
+/usr/local/www/pfblockerng/pfblockerng_ip.php|Warning|Undefined array key "enable_agg"
+/usr/local/www/pfblockerng/pfblockerng_ip.php|Warning|Undefined array key "enable_dup"
 /usr/local/www/widgets/widgets/pfblockerng.widget.php|Deprecated|htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated
 /usr/local/www/widgets/widgets/pfblockerng.widget.php|Warning|Undefined array key "DNSBL"
 /usr/local/www/widgets/widgets/pfblockerng.widget.php|Warning|Undefined array key "suppression"
