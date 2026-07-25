@@ -11,16 +11,22 @@ that the input itself is declared as a two-value boolean and that the
 `release` job's metadata step rejects anything else loudly before emitting
 any output.
 
-The job/step enumeration is built from the parsed YAML *structure* (job
-headers), never from hardcoded line numbers, so it keeps working as the file
+The job/step enumeration scans for job and step headers by indentation rather
+than parsing YAML, but it keys off that structure instead of hardcoded line
+numbers, so it keeps working as the file
 is edited and a mutation job that quietly loses its dry_run gate — or a new
 one added without picking it up — is caught rather than silently unguarded.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import textwrap
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
@@ -203,10 +209,72 @@ def test_metadata_step_rejects_non_boolean_dry_run() -> None:
         f"metadata step must validate $DRY_RUN with a case/esac guard; step was:\n{meta_step}"
     )
     guard = guard_match.group(1)
-    assert re.search(r"true\|false\)\s*;;", guard), f"guard must accept only true/false, got:\n{guard}"
     assert "::error::" in guard, f"guard must emit ::error:: on rejection, got:\n{guard}"
     assert "exit 1" in guard, f"guard must exit non-zero on rejection, got:\n{guard}"
-
     output_marker = meta_step.index('>> "$GITHUB_OUTPUT"')
     guard_pos = meta_step.index(guard_match.group(0))
     assert guard_pos < output_marker, "the dry_run guard must run BEFORE any $GITHUB_OUTPUT write"
+
+
+# Both case/esac guards, keyed by the variable each one validates. There are two on
+# purpose -- prepare-release re-checks before the tag push because the job-level
+# expression compares case-insensitively -- so both must be executed, not just the one
+# a reviewer happened to name.
+GUARD_VARS = ("INPUT_DRY", "DRY_RUN")
+
+
+def _guard_scripts() -> list[str]:
+    workflow_text = WORKFLOW.read_text(encoding="utf-8")
+    scripts = [
+        textwrap.dedent(match.group(1))
+        for var in GUARD_VARS
+        for match in [re.search(rf'(case "\${var}" in\n.*?\n[ \t]*esac)', workflow_text, re.DOTALL)]
+        if match is not None
+    ]
+    assert len(scripts) == len(GUARD_VARS), f"expected a case/esac guard per {GUARD_VARS}, found {len(scripts)}"
+    return scripts
+
+
+def _run_guard(value: str) -> list[int]:
+    """Execute EVERY dry_run case/esac guard under sh with the value, returning each rc."""
+    results = []
+    for script in _guard_scripts():
+        body = f'INPUT_DRY="$1"\nDRY_RUN="${{INPUT_DRY:-true}}"\n{script}\n'
+        results.append(
+            subprocess.run(  # noqa: S603
+                ["sh", "-c", body, "sh", value],
+                env={"PATH": os.environ.get("PATH", "")},
+                capture_output=True,
+                text=True,
+            ).returncode
+        )
+    return results
+
+
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_the_guard_accepts_exactly_the_safe_values(value: str) -> None:
+    """Executed, not pattern-matched: these must survive the real guard."""
+    assert all(rc == 0 for rc in _run_guard(value)), f"a guard rejected the legitimate value {value!r}"
+
+
+def test_an_omitted_value_is_safe_under_both_guards() -> None:
+    """The two guards treat an omitted value differently, and both outcomes are safe.
+
+    The metadata guard defaults it to a dry run; the pre-tag guard checks the raw input
+    and rejects it outright. Neither can publish, which is what matters -- an omitted
+    value cannot reach prepare-release anyway, since its job-level expression requires
+    'false'. Pinned so that a future edit which makes either one ACCEPT-and-publish is
+    caught rather than reasoned about.
+    """
+    assert _run_guard("") != [0, 0], "an omitted dry_run must not sail through every guard as a publish"
+
+
+@pytest.mark.parametrize("value", ["TRUE", "True", "FALSE", "False", "tru", "yes", "1", "0", " false"])
+def test_the_guard_rejects_case_variants_and_malformed_values(value: str) -> None:
+    """Issue #1661 asks that case variants and malformed values be PINNED, not merely
+    handled. Running the guard is the only way to catch a regression that widens it --
+    an assertion on the guard's source text passes happily against `TRUE|true|false)`.
+    """
+    assert all(rc != 0 for rc in _run_guard(value)), (
+        f"a guard accepted {value!r}, which must never reach a publish gate"
+    )
