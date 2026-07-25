@@ -140,9 +140,14 @@ fi
 #   path — so neither position nor option-arity needs to be tracked.
 _CALLER_GAVE_M=0
 _CALLER_GAVE_PATH=0
+# Anything that NARROWS the selection (issue #1218): such a run must not be trusted to
+# decide that a php_error.log baseline entry is stale, because it never visits every page.
+_CALLER_NARROWED=0
 for _a in "$@"; do
     case "$_a" in
         -m) _CALLER_GAVE_M=1 ;;
+        -k|-k*|--deselect|--deselect=*|--lf|--last-failed|--ff|--failed-first)
+            _CALLER_NARROWED=1 ;;
         -*) : ;;
         */*|*.py|*::*) _CALLER_GAVE_PATH=1 ;;
         *) : ;;
@@ -237,6 +242,16 @@ fi
 # never join the uploaded smoke-diag/. The unit suite runs plain pytest (not this script),
 # so PFB_DIAG_DIR stays unset there — timing is terminal-only, no stray file.
 export PFB_DIAG_DIR="${PFB_DIAG_DIR:-smoke-diag}"
+
+# issue #1218: only a COMPLETE run may judge the php_error.log baseline stale. A
+# --filter'ed or sharded run visits a subset of the pages, so almost every grandfathered
+# entry would read as "never observed" and the sweep would demand deleting live ones.
+# Unfiltered + unsharded + no caller-supplied path/-k is the one shape that sees
+# everything the marker covers; tests/smoke/ui/conftest.py reads this at session end.
+if [ -z "$_FILTER" ] && [ "$_SHARD_TOTAL" -eq 1 ] && [ "$_CALLER_GAVE_PATH" -eq 0 ] &&
+    [ "$_CALLER_NARROWED" -eq 0 ]; then
+    export PFB_SMOKE_FULL_SWEEP=1
+fi
 
 # Sharded runs (N>1): pytest exit 5 ("no tests ran") is a PARTITION ARTIFACT, not
 # a failure — a module slice can legitimately contain zero tests matching the
