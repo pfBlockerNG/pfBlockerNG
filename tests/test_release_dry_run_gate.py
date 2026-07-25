@@ -1,22 +1,4 @@
-"""release.yml's `dry_run` must fail CLOSED (issue #1661).
-
-`dry_run` gates every mutating step of the release pipeline (tag creation, the
-GitHub Release, .pkg attachment, publish, the pkg-repo dispatch, and the
-FreeBSD-ports bump). The workflow used to gate every one of those with the
-fail-OPEN shape `dry_run != 'true'`: anything that is not the exact string
-"true" -- "TRUE", "True", "tru", "yes", "1", an empty string via a bad
-dispatch -- published for real. This module parses the live workflow (never a
-copy) and enforces the fail-CLOSED shape everywhere `dry_run` is read, plus
-that the input itself is declared as a two-value boolean and that the
-`release` job's metadata step rejects anything else loudly before emitting
-any output.
-
-The job/step enumeration scans for job and step headers by indentation rather
-than parsing YAML, but it keys off that structure instead of hardcoded line
-numbers, so it keeps working as the file
-is edited and a mutation job that quietly loses its dry_run gate — or a new
-one added without picking it up — is caught rather than silently unguarded.
-"""
+"""Pin fail-closed `dry_run` handling for the current release mutation jobs."""
 
 from __future__ import annotations
 
@@ -31,10 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
 
-# Jobs that perform a real-world mutation gated by dry_run (issue #1661 evidence
-# table): prepare-release creates+pushes the tag; release creates the GitHub
-# Release; attach-pkgs/publish-release/repo-publish/sync-ports-fork publish,
-# flip the release live, poke the pkg repo, and push the ports-fork bump.
+# Current jobs that create or publish release artifacts.
 MUTATION_JOBS = {
     "prepare-release",
     "release",
@@ -133,12 +112,7 @@ def test_no_fail_open_dry_run_gate_anywhere() -> None:
 
 
 def test_every_mutation_job_gates_on_dry_run() -> None:
-    """Every publish-mutating job must reference `dry_run` somewhere in its body.
-
-    Built from the parsed job bodies (never a hardcoded line number), so a
-    mutation job whose gate is deleted outright -- or a newly added mutation
-    job that forgets to reference dry_run at all -- fails here.
-    """
+    """Every listed mutation job must reference `dry_run` somewhere in its body."""
     jobs = _parsed_jobs()
     gated_jobs = {job for job, lines in jobs.items() if _dry_run_expressions(lines)}
     missing = MUTATION_JOBS - gated_jobs
@@ -216,10 +190,8 @@ def test_metadata_step_rejects_non_boolean_dry_run() -> None:
     assert guard_pos < output_marker, "the dry_run guard must run BEFORE any $GITHUB_OUTPUT write"
 
 
-# Both case/esac guards, keyed by the variable each one validates. There are two on
-# purpose -- prepare-release re-checks before the tag push because the job-level
-# expression compares case-insensitively -- so both must be executed, not just the one
-# a reviewer happened to name.
+# The pre-tag guard blocks case variants before mutation; the metadata guard
+# protects downstream outputs. Both shipped guards must execute.
 GUARD_VARS = ("INPUT_DRY", "DRY_RUN")
 
 
@@ -266,10 +238,21 @@ def _run_guard(value: str) -> list[tuple[int, str]]:
     return results
 
 
+def test_pre_tag_guard_is_the_first_prepare_release_step() -> None:
+    """Case-variant false must be rejected before any release mutation."""
+    steps = _split_into_steps(_parsed_jobs()["prepare-release"])
+    assert steps, "prepare-release must contain the pre-tag dry_run guard"
+    first_step = "\n".join(steps[0])
+    assert 'case "$INPUT_DRY" in' in first_step, (
+        f"prepare-release must validate $INPUT_DRY in its first step; first step was:\n{first_step}"
+    )
+
+
 @pytest.mark.parametrize("value", ["true", "false"])
 def test_the_guard_accepts_exactly_the_safe_values(value: str) -> None:
     """Executed, not pattern-matched: these must survive the real guard."""
-    assert all(rc == 0 for rc, _ in _run_guard(value)), f"a guard rejected the legitimate value {value!r}"
+    outcomes = _run_guard(value)
+    assert all(rc == 0 for rc, _ in outcomes), f"all guards must accept {value!r}; actual outcomes were {outcomes!r}"
 
 
 def test_an_omitted_value_resolves_to_a_dry_run() -> None:
@@ -294,6 +277,5 @@ def test_the_guard_rejects_case_variants_and_malformed_values(value: str) -> Non
     handled. Running the guard is the only way to catch a regression that widens it --
     an assertion on the guard's source text passes happily against `TRUE|true|false)`.
     """
-    assert all(rc != 0 for rc, _ in _run_guard(value)), (
-        f"a guard accepted {value!r}, which must never reach a publish gate"
-    )
+    outcomes = _run_guard(value)
+    assert all(rc != 0 for rc, _ in outcomes), f"all guards must reject {value!r}; actual outcomes were {outcomes!r}"
