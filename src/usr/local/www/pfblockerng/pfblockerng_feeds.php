@@ -207,7 +207,7 @@ function pfb_feeds_render_aliasname_inputs($section, $type, $feeds_list, $pconfi
 // as this function's former direct `global $icon` mutation. Empty string means "no
 // match, leave $icon as the caller already has it" -- never a request to clear it.
 function url_compare($ftype, $key, $rowid, $aliasname, $row_aliasname, $row_url, $feed_url, $row_state,
-	    $feed_header, $alternate=FALSE, $alt_header='', $alt_info='', $alt_register='', $a_key) {
+	    $feed_header, $a_key, $alternate=FALSE, $alt_header='', $alt_info='', $alt_register='') {
 
 	global $ex_feeds, $alt_feeds;
 	$x_icon = '';
@@ -352,7 +352,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 
 					// Determine all Aliases that reference the Feed URL
 					$row_icon = url_compare($ftype, $key, $row['rowid'], $aliasname, $row['aliasname'], $row['url'], $feed['url'],
-							$row['state'], $feed['header'], FALSE, '', '', '', 0);
+							$row['state'], $feed['header'], 0, FALSE, '', '', '');
 					if (!empty($row_icon)) {
 						$icon = $row_icon;
 					}
@@ -361,8 +361,8 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 					if (isset($feed['alternate'])) {
 						foreach ($feed['alternate'] as $a_key => $alt) {
 							url_compare($ftype, $key, $row['rowid'], $aliasname, $row['aliasname'], $row['url'],
-								$alt['url'], $row['state'], $feed['header'], TRUE, $alt['header'],
-								isset($alt['info']) ? $alt['info'] : '', isset($alt['register']) ? 'register' : '', $a_key);
+								$alt['url'], $row['state'], $feed['header'], $a_key, TRUE, $alt['header'],
+								isset($alt['info']) ? $alt['info'] : '', isset($alt['register']) ? 'register' : '');
 						}
 					}
 				}

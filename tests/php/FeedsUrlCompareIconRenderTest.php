@@ -183,4 +183,63 @@ final class FeedsUrlCompareIconRenderTest extends TestCase
 		$this->assertStringContainsString('fa-solid fa-plus-circle', $cell, 'a feed with no existing alias match must render the add icon');
 		$this->assertStringNotContainsString('fa-solid fa-check', $cell, 'a feed with no existing alias match must NOT render the checkmark icon');
 	}
+
+	// Issue #1657 coverage-matrix row 5: url_compare()'s $a_key moved from
+	// trailing (after $alternate/$alt_header/$alt_info/$alt_register) to just
+	// before $alternate, so the required parameter no longer sits after four
+	// optional ones. $a_key is the literal array key url_compare() stores an
+	// alternate's match state under, at
+	// $alt_feeds[$ftype][$aliasname][$feed_header][$a_key] (:272, :285) -- so
+	// this pins the STORED KEY ITSELF, not just the rendered icon, which is
+	// what makes it sensitive to a one-slot shift at the alternates call site
+	// (:363-365) that the three render-pin tests above are not (proven by
+	// mutation: swapping the $a_key/$alternate argument order there leaves all
+	// three green, because $alternate silently receives $a_key's value (0,
+	// int-falsy) instead of TRUE, which skips the alt_feeds store entirely
+	// without touching the primary-URL row those tests inspect).
+	//
+	// A single alternate ($a_key === 0 from `foreach ($feed['alternate'] as
+	// $a_key => $alt)` on a one-element array) that matches an existing row
+	// must be stored under array key 0 specifically: if the reorder shifts
+	// $a_key into $alternate's slot, $alternate becomes falsy and the whole
+	// store is skipped -- array_key_exists(0, ...) then fails against a
+	// missing parent array, not merely a wrong key.
+	public function testAlternateMatchIsStoredUnderItsForeachKey(): void
+	{
+		$primaryUrl = 'https://example.test/pin-a-key/list.txt';
+		$altUrl     = 'https://alt.example.test/pin-a-key-secondary.txt';
+		$primaryHeader = 'PinFeedAKey';
+		$feed = $this->buildFeed($primaryHeader, $primaryUrl, 'https://example.test/pin-a-key/', [
+			'alternate' => [
+				['url' => $altUrl, 'header' => 'PinFeedAKeyAlt'],
+			],
+		]);
+		$info = ['PinAlias5' => ['action' => 'permit', 'info' => 'Pin alias info', 'feeds' => [$feed]]];
+		$exFeeds = [[
+			'aliasname' => 'PinAlias5',
+			'action'    => 'permit',
+			'state'     => 'Enabled',
+			'url'       => $altUrl,
+			'header'    => 'PinFeedAKeyAlt',
+			'rowid'     => 501,
+		]];
+
+		$this->renderType('ipv4', $info, $exFeeds);
+
+		$this->assertArrayHasKey('ipv4', $GLOBALS['alt_feeds']);
+		$this->assertArrayHasKey('PinAlias5', $GLOBALS['alt_feeds']['ipv4']);
+		$this->assertArrayHasKey($primaryHeader, $GLOBALS['alt_feeds']['ipv4']['PinAlias5']);
+		$this->assertArrayHasKey(
+			0,
+			$GLOBALS['alt_feeds']['ipv4']['PinAlias5'][$primaryHeader],
+			'the single alternate must be stored under its foreach key (0), the $a_key argument -- '
+				. 'if $a_key landed in $alternate\'s call-site slot instead, $alternate would be falsy '
+				. 'and this store would be skipped entirely'
+		);
+		$this->assertStringContainsString(
+			'fa-solid fa-check',
+			$GLOBALS['alt_feeds']['ipv4']['PinAlias5'][$primaryHeader][0]['icon'],
+			'the stored alternate entry must carry the checkmark match icon'
+		);
+	}
 }
