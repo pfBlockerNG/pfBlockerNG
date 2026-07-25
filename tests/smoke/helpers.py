@@ -1356,12 +1356,10 @@ def _b64_textarea(lines: list[str]) -> str:
     """Base64-encode a CRLF-joined textarea value — the shape pfBlockerNG stores.
 
     pfBlockerNG TEXTAREA settings (``suppression``, ``pfb_regex_list``, ``custom``, …)
-    are kept base64-encoded in config (the GUI base64_encodes on save) and decoded by
-    ``pfb_text_area_decode()`` (``base64_decode`` then ``explode("\\r\\n", …)``). A
-    PLAIN value injected here would be base64_decoded into GARBAGE — invalid bytes that
-    crash the python module's INI load (``Failed to load ini configuration: 'utf-8'
-    codec can't decode byte``) and silently disable DNSBL. Encode with CRLF separators
-    so the decode splits into the right lines. Empty list -> '' (no entries)."""
+    are kept base64-encoded in config (the GUI base64_encodes on save). Python regex
+    transport decodes ``pfb_regex_list`` from MAIN.regex_list; other textareas use
+    ``pfb_text_area_decode()``. Encode with CRLF separators so every consumer sees
+    the intended rows. Empty list -> '' (no entries)."""
     return base64.b64encode("\r\n".join(lines).encode()).decode()
 
 
@@ -3018,9 +3016,9 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         settings["action"] = spec.dnsbl_ip_action
     if spec.user_regex:
         # The user "Python Regex List" (inc:849-850,2711). pfb_regex must be 'on' AND
-        # pfb_regex_list non-empty for the [REGEX] ini section to be written. Like
-        # suppression it is a base64 TEXTAREA field — a PLAIN value decodes to garbage
-        # and crashes the ini load. User regex are sovereign block patterns (band 5).
+        # pfb_regex_list non-empty for MAIN.regex_list to be written. The value remains
+        # a base64 TEXTAREA payload; Python decodes it at the shared INI boundary.
+        # User regex are sovereign block patterns (band 5).
         settings["pfb_regex"] = "on"
         settings["pfb_regex_list"] = _b64_textarea(spec.user_regex)
     if spec.regex_cap:

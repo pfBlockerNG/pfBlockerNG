@@ -9158,35 +9158,7 @@ forwarding	= {$forwarding}
 
 EOF;
 		if ($pfb['dnsbl_regex'] == 'on' && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {
-			$regex = '';
-			$regex_list = pfb_text_area_decode($pfb['dnsbl_regex_list'], TRUE, TRUE, FALSE);
-			if (!empty($regex_list)) {
-				$counter = 1;
-				$key_index = array();
-				foreach ($regex_list as $key => $list) {
-					if (!isset($list[1])) {
-						$list[1] = "Regex_{$counter}";
-					} else {
-						$list[1] = trim(ltrim($list[1], '#'));
-						$list[1] = preg_replace("/\W/", '', str_replace(' ', '_', $list[1]));
-					}
-
-					// Check if key exists
-					if (!isset($key_index[$list[1]])) {
-						$regex .= "{$list[1]} = {$list[0]}\n";
-						$key_index[$list[1]] = '';
-					} else {
-						$regex .= "{$list[1]}_{$counter} = {$list[0]}\n";
-						$key_index["{$list[1]}_{$counter}"] = '';
-					}
-					$counter++;
-				}
-				$pfb_py_conf .= <<<EOF
-
-[REGEX]
-{$regex}
-EOF;
-			}
+			$pfb_py_conf .= "regex_list = {$pfb['dnsbl_regex_list']}\n";
 		}
 
 		if ($pfb['dnsbl_noaaaa'] == 'on' && isset($pfb['dnsbl_noaaaa_list']) && !empty($pfb['dnsbl_noaaaa_list'])) {

@@ -43,6 +43,7 @@ repo's branch + before/after coverage rules.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -340,9 +341,8 @@ def _manifest_json(tld_master: str, plain_raw: str, user_raw: str, abp_raw: str,
 def _ini_text(spec: GenSpec) -> str:
     lines = ["[MAIN]", ""]
     if spec.ini_regex:
-        lines.append("[REGEX]")
-        for i, pat in enumerate(spec.ini_regex):
-            lines.append("r{} = {}".format(i, pat))
+        payload = base64.b64encode("\r\n".join(spec.ini_regex).encode("utf-8")).decode("ascii")
+        lines.append("regex_list = {}".format(payload))
     return "\n".join(lines) + "\n"
 
 
