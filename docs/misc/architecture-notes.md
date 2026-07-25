@@ -612,7 +612,7 @@ to drive the live webConfigurator. It is off the default `pytest` like the rest 
   What gates is scoped twice. By **originating file**: pfSense-core diagnostics land in the
   same log and never gate (`gating_log_lines`). And by **class**: the defect-smelling ones —
   `Undefined variable`, null passed to a string parameter (deprecated in 8.1, a **TypeError in
-  PHP 9**), array-offset-on-null, optional-parameter order — plus the fatal/parse/recoverable levels. The
+  PHP 9**), array-offset-on-null, optional-parameter order — plus the fatal/parse/recoverable/strict levels. The
   endemic `Undefined array key` class is **reported, not gated**: it is emitted at 469 distinct sites, so freezing them all would buy a gate whose next instance is
   indistinguishable from the ones already forgiven. #1712 burns that class down; when it hits
   zero, delete `ENDEMIC_MESSAGE_PREFIXES` and it gates like the rest.

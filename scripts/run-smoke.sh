@@ -252,9 +252,12 @@ export PFB_DIAG_DIR="${PFB_DIAG_DIR:-smoke-diag}"
 # --paths below the full tree -- would report live entries as "never observed" and invite
 # deleting them, reddening the next genuine sweep. Exact-match the marker and the tree:
 # every other shape leaves the flag unset and the report silent (tests/smoke/ui/conftest.py).
+# PYTEST_ADDOPTS is merged into pytest's argv independently of our --override-ini, so a
+# `-k`/`--deselect` hiding there narrows the run without ever passing the scan above. Any
+# non-empty value disqualifies the run rather than trying to parse it.
 _FULL_SWEEP=0
 if [ -z "$_FILTER" ] && [ "$_SHARD_TOTAL" -eq 1 ] && [ "$_CALLER_GAVE_PATH" -eq 0 ] &&
-    [ "$_CALLER_NARROWED" -eq 0 ] && [ "$_MARKER" = "ui_render" ]; then
+    [ "$_CALLER_NARROWED" -eq 0 ] && [ -z "${PYTEST_ADDOPTS:-}" ] && [ "$_MARKER" = "ui_render" ]; then
     case "$_PATHS" in
         tests/smoke|tests/smoke/ui) _FULL_SWEEP=1 ;;
         *) _FULL_SWEEP=0 ;;
