@@ -490,7 +490,6 @@ jobs:
         with:
           # dry_run=true: validate off the dispatch ref (HEAD); no tag exists yet.
           # dry_run=false: check out the just-created tag (contains the changelog).
-          # Only an exact 'false' checks out the tag.
           ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
           fetch-depth: 0   # need full history for changelog
 
@@ -823,7 +822,6 @@ jobs:
           # dry_run=true: build off the dispatch ref (HEAD); no tag exists yet.
           # dry_run=false: check out the just-created tag so .pkg is stamped from the
           #   tagged tree (which includes the committed changelog).
-          # Only an exact 'false' checks out the tag.
           ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
 
       - name: Set up Python 3.11
