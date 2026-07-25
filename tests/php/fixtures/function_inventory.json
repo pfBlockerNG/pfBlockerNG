@@ -51,6 +51,19 @@
             }
         ]
     },
+    "_pfb_settings_journal_clear_locked": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "_pfb_settings_journal_decode": {
         "returnsRef": false,
         "returnType": "array",
@@ -365,6 +378,70 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_transition_state_empty": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "_pfb_settings_transition_state_path": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_transition_state_publish": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_transition_state_read_locked": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_transition_state_validate": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
                 "default": null
             }
         ]
@@ -7126,6 +7203,162 @@
             },
             {
                 "name": "target_package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_transition_complete": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "target_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_transition_state_acknowledge_divergence": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "source_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "source_snapshot_sha256",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_snapshot_sha256",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_transition_state_read": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_transition_state_record_activation": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "payload_sha256",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_transition_state_record_divergence": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "source_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "source_snapshot_sha256",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_snapshot_sha256",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",

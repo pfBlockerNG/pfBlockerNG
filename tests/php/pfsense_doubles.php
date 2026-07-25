@@ -394,6 +394,9 @@ if (!function_exists('safe_write_file')) {
 		if (($GLOBALS['pfb_test_journal_write_failure'] ?? false) && str_contains(basename($file), '.transition-journal.')) {
 			return false;
 		}
+		if (($GLOBALS['pfb_test_transition_state_write_failure'] ?? false) && str_contains(basename($file), '.transition-state.')) {
+			return false;
+		}
 		if (($GLOBALS['pfb_test_corrupt_head_write'] ?? false) && str_contains(basename($file), '.head.')) {
 			$content = '{}';
 		}
