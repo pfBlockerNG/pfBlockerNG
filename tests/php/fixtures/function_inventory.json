@@ -7186,6 +7186,40 @@
         "returnType": null,
         "params": []
     },
+    "pfb_text_area_decode": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "text",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "mode",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "false"
+            },
+            {
+                "name": "type",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "true"
+            },
+            {
+                "name": "idn",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "false"
+            }
+        ]
+    },
     "pfb_text_sanity": {
         "returnsRef": false,
         "returnType": "?string",
@@ -9120,40 +9154,6 @@
                 "variadic": false,
                 "type": "array",
                 "default": "array (\n)"
-            }
-        ]
-    },
-    "pfbng_text_area_decode": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": [
-            {
-                "name": "text",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            },
-            {
-                "name": "mode",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "false"
-            },
-            {
-                "name": "type",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "true"
-            },
-            {
-                "name": "idn",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": "false"
             }
         ]
     },

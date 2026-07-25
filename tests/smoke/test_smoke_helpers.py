@@ -517,7 +517,7 @@ def test_stub_set_records_families_multi_and_nodata() -> None:
 
 
 def test_b64_textarea_matches_pfblockerng_decode() -> None:
-    """``_b64_textarea`` produces what ``pfbng_text_area_decode`` expects: base64 of a
+    """``_b64_textarea`` produces what ``pfb_text_area_decode`` expects: base64 of a
     CRLF-joined list (so base64_decode + explode("\\r\\n") returns the lines back)."""
     import base64
 

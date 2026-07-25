@@ -3702,7 +3702,7 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
 		if ($entry === '' || str_starts_with($entry, '#')) {
 			continue;
 		}
-		// Strip a trailing inline '#' comment, same as pfbng_text_area_decode().
+		// Strip a trailing inline '#' comment, same as pfb_text_area_decode().
 		$stripped = trim(strstr($entry, '#', TRUE) ?: $entry);
 
 		// Bare host -> exact single-host CIDR BEFORE the containment test:

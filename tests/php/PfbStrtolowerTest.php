@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * pfb_strtolower() — lower-case + trim a line UNLESS it contains a '#', in which
  * case only trim (comment text is preserved verbatim). Used by the array-map in
- * pfbng_text_area_decode()'s comment-split path.
+ * pfb_text_area_decode()'s comment-split path.
  */
 #[CoversFunction('pfb_strtolower')]
 final class PfbStrtolowerTest extends TestCase

@@ -253,7 +253,7 @@ if (!$alert_summary) {
 
 					$clists[$type]['options'][] = $lname;	// List of all Permit Aliases/DNSBL Customlists
 
-					$decoded = pfbng_text_area_decode($data['custom'], TRUE, TRUE);
+					$decoded = pfb_text_area_decode($data['custom'], TRUE, TRUE);
 					if (!empty($decoded)) {
 						foreach ($decoded as $line) {
 
@@ -311,7 +311,7 @@ if (!$alert_summary) {
 
 		$clists[$type]['data']		= array();
 		if (isset($clists[$type]['base64']) && !empty($clists[$type]['base64'])) {
-			$decoded = pfbng_text_area_decode($clists[$type]['base64'], TRUE, TRUE);
+			$decoded = pfb_text_area_decode($clists[$type]['base64'], TRUE, TRUE);
 			if (!empty($decoded)) {
 				foreach ($decoded as $line) {
 

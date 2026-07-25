@@ -1321,7 +1321,7 @@ def _b64_textarea(lines: list[str]) -> str:
 
     pfBlockerNG TEXTAREA settings (``suppression``, ``pfb_regex_list``, ``custom``, …)
     are kept base64-encoded in config (the GUI base64_encodes on save) and decoded by
-    ``pfbng_text_area_decode()`` (``base64_decode`` then ``explode("\\r\\n", …)``). A
+    ``pfb_text_area_decode()`` (``base64_decode`` then ``explode("\\r\\n", …)``). A
     PLAIN value injected here would be base64_decoded into GARBAGE — invalid bytes that
     crash the python module's INI load (``Failed to load ini configuration: 'utf-8'
     codec can't decode byte``) and silently disable DNSBL. Encode with CRLF separators
@@ -2227,7 +2227,7 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
 
     # Recursive mode: no unbound/forwarding, but route every query to the stub
     # via a catch-all forward-zone in custom_options.  pfSense stores
-    # custom_options base64-encoded (pfbng_text_area_decode / base64_encode on
+    # custom_options base64-encoded (pfb_text_area_decode / base64_encode on
     # save), so encode before writing.
     forward_zone = f'forward-zone:\n    name: "."\n    forward-addr: {GUEST_TO_HOST_ALIAS}\n'
     encoded = base64.b64encode(forward_zone.encode()).decode()
@@ -2972,7 +2972,7 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     settings["pfb_dnsbl"] = "on"
     if spec.whitelist:
         # suppression is a pfBlockerNG TEXTAREA field: config stores it base64-encoded
-        # (GUI pfblockerng_dnsbl.php:555) and pfbng_text_area_decode() base64_decodes +
+        # (GUI pfblockerng_dnsbl.php:555) and pfb_text_area_decode() base64_decodes +
         # splits on CRLF. A PLAIN value here decodes to GARBAGE — so encode it.
         settings["suppression"] = _b64_textarea(spec.whitelist)
     if spec.dnsbl_ip_action:
@@ -3040,7 +3040,7 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         "order": "primary",
     }
     # The DNSBL Group Custom_List: a base64 'custom' field (CRLF-joined domains, the
-    # exact shape pfbng_text_area_decode expects, inc:1120). A non-empty 'custom'
+    # exact shape pfb_text_area_decode expects, inc:1120). A non-empty 'custom'
     # makes pfBlockerNG auto-generate the sovereign '{aliasname}_custom' row.
     custom_line = ""
     if spec.custom_domains:

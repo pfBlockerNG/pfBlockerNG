@@ -10,7 +10,7 @@ import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language"
 import { pfbRegexList } from "./lezer-pfb-regex-list/src/index.js";
 import { pfbHighlightStyle } from "./pfb-highlight-style.js";
 
-// Server-side validation (pfbng_text_area_decode(), preg_match/re.compile) stays
+// Server-side validation (pfb_text_area_decode(), preg_match/re.compile) stays
 // authoritative -- this is a highlighter, not a validator.
 
 // Derives an accessible name for the replacement editor from the textarea it's replacing --

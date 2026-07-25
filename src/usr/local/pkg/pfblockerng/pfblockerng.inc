@@ -3040,7 +3040,7 @@ function pfb_strtolower($line) {
 
 // Function to decode alias custom entry box.
 // Default (False, True): Return as string with comments
-function pfbng_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
+function pfb_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 
 	if ($mode) {
 		$custom = array();
@@ -6470,7 +6470,7 @@ function pfb_create_suppression_file() {
 	// install migration only seeds v4suppression when a legacy
 	// pfBlockerNGSuppress alias existed; v6suppression is never migrated), so
 	// a direct array read here throws a PHP8 "undefined array key" warning.
-	$v4suppression = pfbng_text_area_decode($pfb['ipconfig']['v4suppression'] ?? '', FALSE, TRUE);
+	$v4suppression = pfb_text_area_decode($pfb['ipconfig']['v4suppression'] ?? '', FALSE, TRUE);
 	if (!empty($v4suppression)) {
 		@file_put_contents("{$pfb['supptxt']}", $v4suppression, LOCK_EX);
 	} else {
@@ -6478,7 +6478,7 @@ function pfb_create_suppression_file() {
 	}
 
 	// ADR-53: v6 sibling -- same decode/write/unlink-when-empty shape as v4 above.
-	$v6suppression = pfbng_text_area_decode($pfb['ipconfig']['v6suppression'] ?? '', FALSE, TRUE);
+	$v6suppression = pfb_text_area_decode($pfb['ipconfig']['v6suppression'] ?? '', FALSE, TRUE);
 	if (!empty($v6suppression)) {
 		@file_put_contents("{$pfb['supptxt_v6']}", $v6suppression, LOCK_EX);
 	} else {
@@ -7287,7 +7287,7 @@ function pfb_unbound_python_whitelist($mode='') {
 	pfb_global();
 
 	$dnsbl_whitelist = '';
-	$dnsbl_white = pfbng_text_area_decode($pfb['dnsblconfig']['suppression'], TRUE, FALSE, TRUE);
+	$dnsbl_white = pfb_text_area_decode($pfb['dnsblconfig']['suppression'], TRUE, FALSE, TRUE);
 	if (!empty($dnsbl_white)) {
 		foreach ($dnsbl_white as $key => $line) {
 			if (!empty($line)) {
@@ -7322,7 +7322,7 @@ function pfb_unbound_python_whitelist($mode='') {
 function pfb_dnsbl_whitelist_lines() {
 	global $pfb;
 
-	$lines = pfbng_text_area_decode($pfb['dnsblconfig']['suppression'], TRUE, FALSE, TRUE);
+	$lines = pfb_text_area_decode($pfb['dnsblconfig']['suppression'], TRUE, FALSE, TRUE);
 	$out = array();
 	if (!empty($lines)) {
 		foreach ($lines as $line) {
@@ -8822,8 +8822,8 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	$tld_wildcard_blacklist = array();
 	$tld_wildcard_exclusion = array();
 	if (!empty($pfb['dnsbl_tld_wildcard'])) {
-		$tld_wildcard_blacklist = pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE) ?: array();
-		$tld_wildcard_exclusion = pfbng_text_area_decode($pfb['dnsblconfig']['tldexclusion'], TRUE, FALSE, TRUE) ?: array();
+		$tld_wildcard_blacklist = pfb_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE) ?: array();
+		$tld_wildcard_exclusion = pfb_text_area_decode($pfb['dnsblconfig']['tldexclusion'], TRUE, FALSE, TRUE) ?: array();
 	}
 
 	$manifest = array(
@@ -9159,7 +9159,7 @@ forwarding	= {$forwarding}
 EOF;
 		if ($pfb['dnsbl_regex'] == 'on' && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {
 			$regex = '';
-			$regex_list = pfbng_text_area_decode($pfb['dnsbl_regex_list'], TRUE, TRUE, FALSE);
+			$regex_list = pfb_text_area_decode($pfb['dnsbl_regex_list'], TRUE, TRUE, FALSE);
 			if (!empty($regex_list)) {
 				$counter = 1;
 				$key_index = array();
@@ -9191,7 +9191,7 @@ EOF;
 
 		if ($pfb['dnsbl_noaaaa'] == 'on' && isset($pfb['dnsbl_noaaaa_list']) && !empty($pfb['dnsbl_noaaaa_list'])) {
 			$noaaaa = '';
-			$noaaaa_list = pfbng_text_area_decode($pfb['dnsbl_noaaaa_list'], TRUE, TRUE, TRUE);
+			$noaaaa_list = pfb_text_area_decode($pfb['dnsbl_noaaaa_list'], TRUE, TRUE, TRUE);
 			if (!empty($noaaaa_list)) {
 				foreach ($noaaaa_list as $key => $list) {
 					if (str_starts_with($list[0], '.')) {
@@ -9211,7 +9211,7 @@ EOF;
 
 		if ($pfb['dnsbl_gp'] == 'on' && isset($pfb['dnsbl_gp_bypass_list']) && !empty($pfb['dnsbl_gp_bypass_list'])) {
 			$gp_bypass = '';
-			$gp_bypass_list = pfbng_text_area_decode($pfb['dnsbl_gp_bypass_list'], TRUE, TRUE, FALSE);
+			$gp_bypass_list = pfb_text_area_decode($pfb['dnsbl_gp_bypass_list'], TRUE, TRUE, FALSE);
 			if (!empty($gp_bypass_list)) {
 				foreach ($gp_bypass_list as $key => $list) {
 					$gp_bypass .= "{$key} = {$list[0]}\n";
@@ -9329,7 +9329,7 @@ function pfb_dnsbl_tld_stats_finalize(array $group_counts): void {
 	}
 
 	// Collect TLD Blacklist(s). If configured the whole TLD will be blocked
-	$tld_blacklist = pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE);
+	$tld_blacklist = pfb_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE);
 	if (!empty($tld_blacklist)) {
 		$tld_blacklist = array_flip($tld_blacklist);
 	}
@@ -11203,7 +11203,7 @@ function pfb_feed_internal_allowlist($ignored = NULL) {
 	}
 
 	// The allowlist is stored base64-encoded, like every other pfBlockerNG textarea
-	// (suppression / whitelist / custom; see pfbng_text_area_decode). Decode before
+	// (suppression / whitelist / custom; see pfb_text_area_decode). Decode before
 	// parsing; an undecodable value yields no entries, so the filter stays fail-closed.
 	$raw = (string) base64_decode($raw);
 
@@ -13692,8 +13692,8 @@ function pfb_remove_states() {
 	// ADR-53 review finding B: '?? ""' -- same absent-key guard as
 	// pfb_create_suppression_file() (both keys are absent from config.xml
 	// until their first save on an upgraded or fresh install).
-	$v4suppression = pfbng_text_area_decode($pfb['ipconfig']['v4suppression'] ?? '', TRUE, FALSE);
-	$v6suppression = pfbng_text_area_decode($pfb['ipconfig']['v6suppression'] ?? '', TRUE, FALSE);
+	$v4suppression = pfb_text_area_decode($pfb['ipconfig']['v4suppression'] ?? '', TRUE, FALSE);
+	$v6suppression = pfb_text_area_decode($pfb['ipconfig']['v6suppression'] ?? '', TRUE, FALSE);
 
 	// Collect Interface list that have pfB Rules assigned
 	$data		= pfb_filterrules();
@@ -13724,7 +13724,7 @@ function pfb_remove_states() {
 				continue;
 			}
 			if (!empty($list['custom']) && strpos($list['action'], 'Permit_') !== FALSE) {
-				$custom		= pfbng_text_area_decode($list['custom'], TRUE, FALSE);
+				$custom		= pfb_text_area_decode($list['custom'], TRUE, FALSE);
 				$custom_supp	= array_merge($custom_supp, $custom);
 			}
 		}
