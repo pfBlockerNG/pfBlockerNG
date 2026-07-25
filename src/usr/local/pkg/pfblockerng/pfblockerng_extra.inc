@@ -1553,6 +1553,21 @@ function _pfb_settings_journal_artifact(mixed $value): string
 	return $value;
 }
 
+function _pfb_settings_validate_target_artifact(string $path, string $checksum): void
+{
+	_pfb_settings_journal_artifact($path);
+	$stat = @lstat($path);
+	$uid = function_exists('posix_geteuid') ? posix_geteuid() : getmyuid();
+	if ($stat === FALSE || !is_file($path) || is_link($path) || $stat['nlink'] !== 1
+		|| $stat['uid'] !== $uid || (($stat['mode'] & 0022) !== 0)) {
+		throw new InvalidArgumentException('invalid settings transition target artifact');
+	}
+	$actual = hash_file('sha256', $path);
+	if ($actual === FALSE || !hash_equals($checksum, $actual)) {
+		throw new InvalidArgumentException('settings transition target artifact checksum mismatch');
+	}
+}
+
 function _pfb_settings_journal_validate(array $journal): array
 {
 	if (array_keys($journal) !== _pfb_settings_journal_fields() || $journal['journal_version'] !== 1
@@ -2134,30 +2149,20 @@ function pfb_settings_capture_owned(): array
 }
 
 /** Create, verify, deduplicate, and publish a gzip settings snapshot and family head. */
-function pfb_settings_snapshot_create(
+function _pfb_settings_snapshot_create_locked(
 	string $family,
 	string $package_name,
 	string $package_version,
-	?string $artifact_root = null
+	string $root
 ): array {
-	$family = _pfb_settings_family($family);
-	if ($package_name === '' || $package_version === '') {
-		throw new InvalidArgumentException('invalid settings snapshot package identity');
-	}
-	$root = _pfb_settings_root($artifact_root);
 	$dir = $root . '/' . $family;
 	$owned = pfb_settings_capture_owned();
 	$checksum = hash('sha256', serialize($owned));
 	$path = $dir . '/' . $checksum . '.xml.gz';
 	$stored_package_name = $package_name;
 	$stored_package_version = $package_version;
-	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
-	if ($lock_key === FALSE) {
-		throw new RuntimeException('settings transition lock unavailable');
-	}
-	try {
-		_pfb_settings_mkdir($root);
-		_pfb_settings_mkdir($dir);
+	_pfb_settings_mkdir($root);
+	_pfb_settings_mkdir($dir);
 		if (is_file($path)) {
 			_pfb_settings_path($root, $family, $path);
 			$existing = _pfb_settings_parse(
@@ -2258,6 +2263,25 @@ function pfb_settings_snapshot_create(
 			'source_package_name' => $stored_package_name,
 			'source_package_version' => $stored_package_version,
 		];
+}
+
+function pfb_settings_snapshot_create(
+	string $family,
+	string $package_name,
+	string $package_version,
+	?string $artifact_root = null
+): array {
+	$family = _pfb_settings_family($family);
+	if ($package_name === '' || $package_version === '') {
+		throw new InvalidArgumentException('invalid settings snapshot package identity');
+	}
+	$root = _pfb_settings_root($artifact_root);
+	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
+	if ($lock_key === FALSE) {
+		throw new RuntimeException('settings transition lock unavailable');
+	}
+	try {
+		return _pfb_settings_snapshot_create_locked($family, $package_name, $package_version, $root);
 	} finally {
 		unlock($lock_key);
 	}
@@ -2529,6 +2553,188 @@ function pfb_settings_transition_apply(
 	}
 }
 
+function _pfb_settings_transition_prepare_divergence_locked(
+	array &$state,
+	string $source_family,
+	string $target_family,
+	string $source_snapshot_sha256,
+	string $target_snapshot_sha256,
+	string $root
+): void {
+	foreach ($state['divergences'] as $divergence) {
+		if ($divergence['source_snapshot_sha256'] === $source_snapshot_sha256
+			&& $divergence['target_snapshot_sha256'] === $target_snapshot_sha256) {
+			return;
+		}
+	}
+	$state['divergences'][] = [
+		'source_family' => $source_family,
+		'target_family' => $target_family,
+		'source_snapshot_sha256' => $source_snapshot_sha256,
+		'target_snapshot_sha256' => $target_snapshot_sha256,
+		'acknowledged' => FALSE,
+	];
+	_pfb_settings_transition_state_publish($state, $root);
+}
+
+function pfb_settings_transition_prepare(
+	string $source_package_name,
+	string $source_package_version,
+	string $target_family,
+	string $target_package_name,
+	string $target_package_version,
+	string $target_artifact,
+	string $target_artifact_sha256,
+	string $target_abi,
+	string $target_source_identity,
+	string $authorization_sha256 = '',
+	?string $artifact_root = NULL
+): array {
+	$source_package_name = _pfb_settings_journal_identity($source_package_name);
+	$source_package_version = _pfb_settings_journal_identity($source_package_version);
+	$target_family = _pfb_settings_family($target_family);
+	$target_package_name = _pfb_settings_journal_identity($target_package_name);
+	$target_package_version = _pfb_settings_journal_identity($target_package_version);
+	$target_artifact = _pfb_settings_journal_artifact($target_artifact);
+	$target_artifact_sha256 = _pfb_settings_journal_hash($target_artifact_sha256);
+	$target_abi = _pfb_settings_journal_identity($target_abi);
+	$target_source_identity = _pfb_settings_journal_identity($target_source_identity);
+	$authorization_sha256 = _pfb_settings_journal_hash($authorization_sha256, TRUE);
+	_pfb_settings_validate_target_artifact($target_artifact, $target_artifact_sha256);
+	$root = _pfb_settings_root($artifact_root);
+	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
+	if ($lock_key === FALSE) {
+		throw new RuntimeException('settings transition lock unavailable');
+	}
+	try {
+		$journal_path = _pfb_settings_journal_path($root);
+		if (file_exists($journal_path) || is_link($journal_path)) {
+			$journal = _pfb_settings_journal_read_locked($root);
+			$expected = [
+				'target_family' => $target_family,
+				'target_package_name' => $target_package_name,
+				'target_package_version' => $target_package_version,
+				'target_artifact' => $target_artifact,
+				'target_artifact_sha256' => $target_artifact_sha256,
+				'target_abi' => $target_abi,
+				'target_source_identity' => $target_source_identity,
+				'authorization_sha256' => $authorization_sha256,
+			];
+			foreach ($expected as $field => $value) {
+				if ($journal[$field] !== $value) {
+					throw new InvalidArgumentException('settings transition journal identity mismatch');
+				}
+			}
+			$source_head = _pfb_settings_snapshot_head_locked(
+				$journal['source_family'],
+				$journal['source_package_name'],
+				$journal['source_package_version'],
+				$root
+			);
+			if ($source_head['payload_sha256'] !== $journal['source_snapshot_sha256']
+				|| $source_head['source_package_name'] !== $journal['source_package_name']
+				|| $source_head['source_package_version'] !== $journal['source_package_version']) {
+				throw new InvalidArgumentException('settings transition source head mismatch');
+			}
+			$state = _pfb_settings_transition_state_read_locked($root);
+			if ($journal['source_family'] !== $journal['target_family']
+				&& $state['activations'][$journal['source_family']] !== ''
+				&& $state['activations'][$journal['source_family']] !== $journal['source_live_sha256']
+				&& $journal['target_snapshot_sha256'] !== '') {
+				_pfb_settings_transition_prepare_divergence_locked(
+					$state,
+					$journal['source_family'],
+					$journal['target_family'],
+					$journal['source_snapshot_sha256'],
+					$journal['target_snapshot_sha256'],
+					$root
+				);
+			}
+			return $journal;
+		}
+		$source_family = PfbConfig::read('pfb_schema_family');
+		$owned = pfb_settings_capture_owned();
+		if ($source_family === '') {
+			if ($owned !== []) {
+				throw new InvalidArgumentException('owned settings require schema family marker');
+			}
+			return [];
+		}
+		$source_family = _pfb_settings_family($source_family);
+		if ($source_family === $target_family) {
+			return [];
+		}
+		$state = _pfb_settings_transition_state_read_locked($root);
+		$target_snapshot_sha256 = $state['activations'][$target_family];
+		$target_head = NULL;
+		if ($target_snapshot_sha256 !== '') {
+			$target_head = _pfb_settings_snapshot_head_locked(
+				$target_family,
+				$target_package_name,
+				$target_package_version,
+				$root
+			);
+			$target_snapshot_sha256 = $target_head['payload_sha256'];
+		}
+		$journal_action = 'restore';
+		$authorization = '';
+		if ($target_snapshot_sha256 === '' && $source_family === '4.0' && $target_family === '3.2') {
+			if ($authorization_sha256 === '') {
+				throw new InvalidArgumentException('settings transition downgrade authorization required');
+			}
+			$journal_action = 'clear';
+			$authorization = $authorization_sha256;
+		}
+		$source_live_sha256 = hash('sha256', serialize($owned));
+		$source_snapshot = _pfb_settings_snapshot_create_locked(
+			$source_family,
+			$source_package_name,
+			$source_package_version,
+			$root
+		);
+		$source_snapshot_sha256 = $source_snapshot['payload_sha256'];
+		if ($target_snapshot_sha256 === '' && $journal_action === 'restore') {
+			$target_snapshot_sha256 = $source_snapshot_sha256;
+		}
+		$journal = [
+			'journal_version' => 1,
+			'phase' => 'prepared',
+			'action' => $journal_action,
+			'source_family' => $source_family,
+			'source_package_name' => $source_snapshot['source_package_name'],
+			'source_package_version' => $source_snapshot['source_package_version'],
+			'source_snapshot_sha256' => $source_snapshot_sha256,
+			'source_live_sha256' => $source_live_sha256,
+			'target_family' => $target_family,
+			'target_package_name' => $target_package_name,
+			'target_package_version' => $target_package_version,
+			'target_snapshot_sha256' => $target_snapshot_sha256,
+			'target_artifact' => $target_artifact,
+			'target_artifact_sha256' => $target_artifact_sha256,
+			'target_abi' => $target_abi,
+			'target_source_identity' => $target_source_identity,
+			'authorization_sha256' => $authorization,
+		];
+		_pfb_settings_journal_publish($journal, $root);
+		if ($source_family !== $target_family
+			&& $state['activations'][$source_family] !== ''
+			&& $state['activations'][$source_family] !== $source_live_sha256
+			&& $target_snapshot_sha256 !== '') {
+			_pfb_settings_transition_prepare_divergence_locked(
+				$state,
+				$source_family,
+				$target_family,
+				$source_snapshot_sha256,
+				$target_snapshot_sha256,
+				$root
+			);
+		}
+		return $journal;
+	} finally {
+		unlock($lock_key);
+	}
+}
+
 function pfb_settings_transition_complete(
 	string $target_family,
 	string $target_package_name,
@@ -2540,19 +2746,40 @@ function pfb_settings_transition_complete(
 		throw new InvalidArgumentException('invalid settings transition target identity');
 	}
 	$root = _pfb_settings_root($artifact_root);
-	if (!is_dir($root)) {
-		return [];
-	}
-	_pfb_settings_validate_dir($root);
-	$journal_path = $root . '/transition-journal.json';
-	if (!file_exists($journal_path) && !is_link($journal_path)) {
-		return [];
-	}
 	$lock_key = lock('pfblockerng-settings-transition', LOCK_EX);
 	if ($lock_key === FALSE) {
 		throw new RuntimeException('settings transition lock unavailable');
 	}
 	try {
+		$journal_path = _pfb_settings_journal_path($root);
+		$has_journal = file_exists($journal_path) || is_link($journal_path);
+		if ($has_journal) {
+			_pfb_settings_journal_root($root, FALSE);
+		} elseif (is_dir($root)) {
+			_pfb_settings_validate_dir($root);
+		}
+		$owned = pfb_settings_capture_owned();
+		$marker = PfbConfig::read('pfb_schema_family');
+		if (!$has_journal) {
+			if ($marker === '' && $owned === []) {
+				return [];
+			}
+			if ($marker === '') {
+				throw new InvalidArgumentException('owned settings require schema family marker');
+			}
+			if ($marker !== $target_family) {
+				throw new InvalidArgumentException('settings transition schema family mismatch');
+			}
+		}
+		if (!$has_journal) {
+			_pfb_settings_mkdir($root);
+			$state = _pfb_settings_transition_state_read_locked($root);
+			if ($state['activations'][$target_family] === '') {
+				$state['activations'][$target_family] = hash('sha256', serialize(pfb_settings_capture_owned()));
+				_pfb_settings_transition_state_publish($state, $root);
+			}
+			return [];
+		}
 		$journal = _pfb_settings_journal_read_locked($root);
 		if ($journal['target_family'] !== $target_family
 			|| $journal['target_package_name'] !== $target_package_name

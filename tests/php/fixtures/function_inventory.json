@@ -348,6 +348,40 @@
             }
         ]
     },
+    "_pfb_settings_snapshot_create_locked": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "_pfb_settings_snapshot_head_locked": {
         "returnsRef": false,
         "returnType": "array",
@@ -368,6 +402,54 @@
             },
             {
                 "name": "package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "root",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_transition_prepare_divergence_locked": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "state",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "source_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "source_snapshot_sha256",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_snapshot_sha256",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
@@ -452,6 +534,26 @@
         "params": [
             {
                 "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "_pfb_settings_validate_target_artifact": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "checksum",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
@@ -7241,6 +7343,89 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "artifact_root",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_settings_transition_prepare": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "source_package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "source_package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_package_name",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_package_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_artifact",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_artifact_sha256",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_abi",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target_source_identity",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "authorization_sha256",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "''"
             },
             {
                 "name": "artifact_root",

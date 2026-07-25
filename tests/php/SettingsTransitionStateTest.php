@@ -118,7 +118,12 @@ final class SettingsTransitionStateTest extends TestCase
 
 	public function testCompletionNoJournalIsNoOpAndAppliedRecordsActivationBeforeComplete(): void
 	{
+		$GLOBALS['config']['installedpackages'] = [];
 		$this->assertSame([], pfb_settings_transition_complete('4.0', 'pkg', '2', $this->root));
+		$this->assertFileDoesNotExist($this->root . '/transition-state.json');
+		$GLOBALS['config']['installedpackages'] = [
+			'pfblockerng' => ['config' => ['0' => ['marker' => 'state-secret']]],
+		];
 		PfbConfig::write('pfb_schema_family', '4.0');
 		$owned_hash = hash('sha256', serialize(pfb_settings_capture_owned()));
 		$this->createJournal('settings-applied', '4.0', 'pkg', '2');
