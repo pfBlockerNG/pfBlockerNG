@@ -5,7 +5,7 @@
 # Scope: the gate covers the classes that still smell like a defect -- Undefined variable,
 # a null reaching a string parameter (a PHP 9 TypeError in waiting), array-offset-on-null,
 # optional-parameter order -- plus every fatal/parse level. The endemic
-# `Undefined array key` class (~488 sites) is REPORTED at the end of a full sweep, not
+# `Undefined array key` class (469 sites measured) is REPORTED at the end of a full sweep, not
 # gated, and is not listed here; #1712 burns it down and then it gates like the rest.
 #
 # THIS LIST MAY ONLY SHRINK. A new diagnostic is a regression: fix the site, never append

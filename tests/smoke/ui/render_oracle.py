@@ -437,9 +437,16 @@ class PhpErrorLogGuard:
         offending: list[str] = []
         for path, before in self._baseline.items():
             now = after.get(path, 0)
-            if now <= before:
+            if now == before:
                 continue
-            appended = self._vm.ssh("/usr/bin/tail", "-c", str(now - before), path).stdout
+            # A file that SHRANK was rotated or truncated mid-sweep (newsyslog), so the
+            # snapshot offset is meaningless: read all of it rather than skipping, which
+            # would silently drop every diagnostic written after the rotation for the rest
+            # of a module-scoped sweep.
+            read_bytes = now - before if now > before else now
+            if read_bytes <= 0:
+                continue
+            appended = self._vm.ssh("/usr/bin/tail", "-c", str(read_bytes), path).stdout
             gating = gating_log_lines(appended, record=True)
             if gating:
                 # A raised E_ALL can append thousands of lines; report the distinct ones
