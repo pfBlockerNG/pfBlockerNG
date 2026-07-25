@@ -340,6 +340,52 @@ def test_the_same_message_from_another_file_still_gates() -> None:
     assert gating_log_lines(elsewhere, baseline=baseline), "a baselined message must not forgive another file"
 
 
+_FEEDS_FAMILY = '/usr/local/www/pfblockerng/pfblockerng_feeds.php|Warning|Undefined array key "feed_*"'
+
+
+def _feeds_warning(key: str) -> str:
+    return (
+        f'[25-Jul-2026 10:00:00 UTC] PHP Warning:  Undefined array key "{key}" in '
+        "/usr/local/www/pfblockerng/pfblockerng_feeds.php on line 65\n"
+    )
+
+
+@pytest.mark.parametrize("key", ["feed_ads", "feed_pri1", "feed_vpn_6"])
+def test_a_wildcard_entry_covers_a_data_varying_family(key: str) -> None:
+    """A ``*`` entry forgives the whole family whose message varies by DATA.
+
+    The Feeds page reads ``$fconfig['feed_' . $alias]`` per catalogue alias, so each sweep
+    surfaces a different slice of keys and a key-by-key list never converges -- three
+    different members of that family are forgiven by the one entry.
+    """
+    assert gating_log_lines(_feeds_warning(key), baseline=frozenset({_FEEDS_FAMILY})) == ()
+
+
+def test_a_wildcard_entry_does_not_forgive_a_different_key_shape() -> None:
+    """The glob is scoped to its family: a neighbouring defect on the same page gates.
+
+    Without this the wildcard would be a blanket file exclusion, which is exactly what the
+    baseline design refuses -- and it is what would hide #1702 (`Undefined array key 0` on
+    this very page), so this asserts that specific diagnostic still fails.
+    """
+    baseline = frozenset({_FEEDS_FAMILY})
+    assert gating_log_lines(_feeds_warning("alexa_count"), baseline=baseline), "unrelated key must gate"
+    unfixed_1702 = (
+        "[25-Jul-2026 10:00:00 UTC] PHP Warning:  Undefined array key 0 in "
+        "/usr/local/www/pfblockerng/pfblockerng_feeds.php on line 200\n"
+    )
+    assert gating_log_lines(unfixed_1702, baseline=baseline), "#1702's diagnostic must still gate"
+
+
+def test_a_wildcard_entry_does_not_forgive_another_file_or_level() -> None:
+    """File and level still match EXACTLY -- only the message part globs."""
+    baseline = frozenset({_FEEDS_FAMILY})
+    other_file = _feeds_warning("feed_ads").replace("pfblockerng_feeds.php", "pfblockerng_alerts.php")
+    other_level = _feeds_warning("feed_ads").replace("PHP Warning:", "PHP Deprecated:")
+    assert gating_log_lines(other_file, baseline=baseline), "another file must gate"
+    assert gating_log_lines(other_level, baseline=baseline), "another level must gate"
+
+
 def test_the_shipped_baseline_parses_and_is_burning_down() -> None:
     """Every shipped baseline entry is a well-formed fingerprint of one of OUR files.
 

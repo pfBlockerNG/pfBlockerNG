@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -263,6 +264,7 @@ def gating_log_lines(appended: str, baseline: frozenset[str] | None = None) -> t
     the diagnostic is rendered.
     """
     grandfathered = load_baseline() if baseline is None else baseline
+    patterns = tuple(entry for entry in grandfathered if "*" in entry)
     gating: list[str] = []
     for line in appended.splitlines():
         diagnostic = _LOG_DIAGNOSTIC_RE.search(line)
@@ -273,14 +275,34 @@ def gating_log_lines(appended: str, baseline: frozenset[str] | None = None) -> t
             if origin is None or PFB_PATH_MARKER not in origin.group("file").lower():
                 continue
         fingerprint = diagnostic_fingerprint(line)
-        if fingerprint in grandfathered:
+        matched = fingerprint if fingerprint in grandfathered else _matching_pattern(fingerprint, patterns)
+        if matched is not None:
             # Record the hit only for the SHIPPED baseline: a caller passing its own set
             # is a unit test, and its fixtures must not look like live observations.
-            if baseline is None and fingerprint is not None:
-                _observed_baseline.add(fingerprint)
+            if baseline is None:
+                _observed_baseline.add(matched)
             continue
         gating.append(line)
     return tuple(gating)
+
+
+def _matching_pattern(fingerprint: str | None, patterns: tuple[str, ...]) -> str | None:
+    """The wildcard baseline entry covering ``fingerprint``, if any.
+
+    A site whose message varies by DATA rather than by defect -- the Feeds page reads
+    ``$fconfig['feed_' . $alias]`` for every alias in the catalogue, so which keys are
+    absent depends on which aliases exist right then -- cannot be enumerated key by key:
+    each sweep would surface a different slice and the file would never converge. One
+    ``*`` entry stands for that whole family. Everything else stays exact, so a wildcard
+    can never quietly forgive a different defect: the file and level still match exactly,
+    and only the message part globs.
+    """
+    if fingerprint is None:
+        return None
+    for pattern in patterns:
+        if fnmatch(fingerprint, pattern):
+            return pattern
+    return None
 
 
 class PhpErrorLogGuard:

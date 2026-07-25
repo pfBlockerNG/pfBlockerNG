@@ -489,18 +489,25 @@ def browser_context(webui: WebUI, smoke_vm: SmokeVM) -> Iterator[BrowserContext]
             browser.close()
 
 
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Fail a FULL sweep that never observed some grandfathered diagnostics (#1218).
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:  # noqa: ARG001 - pytest hook signature
+    """Report grandfathered diagnostics a FULL sweep never observed (#1218).
 
-    A baseline entry nobody sees any more is a site that got fixed: leaving it in
-    ``php_diagnostic_baseline.txt`` would silently forgive that diagnostic if it ever
-    came back, which is the same blindness the whole issue is about. So the list has to
-    shed entries as the burn-down (#1712) lands them.
+    A baseline entry nobody sees any more is a site that got fixed, and leaving it in
+    ``php_diagnostic_baseline.txt`` would silently forgive that diagnostic if it ever came
+    back -- the same blindness this issue exists to remove. So the list has to shed entries
+    as the burn-down (#1712) lands them, and this names the candidates.
 
-    Only a full sweep may judge this -- a ``--filter``ed or sharded run visits a subset of
-    the pages, so nearly every entry would look stale. ``run-smoke.sh`` exports
+    It REPORTS rather than fails, because one green sweep does not prove a fix: several
+    pages read config keys that exist only in some states (the Feeds catalogue loop is the
+    worst), so a given entry legitimately goes unobserved in a run that did not reach its
+    state. Deletion is confirmed the honest way instead -- a burn-down PR removes the entry
+    and the sweep goes RED if the diagnostic is still emitted, which is a stronger proof
+    than any single run's silence.
+
+    Only a full sweep may report at all -- a ``--filter``ed or sharded run visits a subset
+    of the pages, so nearly every entry would look stale. ``run-smoke.sh`` exports
     ``PFB_SMOKE_FULL_SWEEP=1`` exactly when it runs a whole marker unsliced and unfiltered;
-    absent that, this reports nothing.
+    absent that, this says nothing.
     """
     if os.environ.get("PFB_SMOKE_FULL_SWEEP") != "1" or exitstatus != 0:
         # A red run already has a verdict, and its aborted tests make "unobserved" a lie.
@@ -510,11 +517,10 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         return
     listed = "\n".join(f"  {entry}" for entry in stale)
     print(
-        f"\nERROR: {len(stale)} php_diagnostic_baseline.txt entries were never observed in this "
-        f"full sweep — the sites are fixed, so DELETE these lines (the baseline only shrinks):\n"
-        f"{listed}"
+        f"\n[smoke] {len(stale)} php_diagnostic_baseline.txt entries were not observed in this full "
+        f"sweep. If a site below is FIXED, delete its line (the baseline only shrinks); if it is "
+        f"merely unreached in this state, leave it:\n{listed}"
     )
-    session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture
