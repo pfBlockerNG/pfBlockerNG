@@ -17,6 +17,17 @@ use PHPUnit\Framework\TestCase;
  * here to every tracked src/*.php file, so this whole defect class -- not
  * just one file at a time -- stays pinned tree-wide.
  *
+ * Enumeration is the CANONICAL TRACKED SET (`git ls-files 'src/*.php'`), not
+ * a directory walk: a walk would also lint an ignored or generated file if
+ * one happened to exist on disk in some checkout, and a hardcoded minimum
+ * file count is a maintenance trap in the deletion direction (legitimately
+ * removing a src/*.php file would turn the guard red for no reason). The
+ * non-vacuity guard is instead `assertNotEmpty()` -- an empty list is the
+ * only vacuous case, and it can no longer be reached by a legitimate
+ * deletion. `git ls-files` itself is asserted to succeed so a missing git
+ * binary or a checkout outside a repo cannot silently produce that empty
+ * list -- the exact fail-open shape this guard exists to prevent.
+ *
  * Scope: src/*.php only. src/*.inc is NOT yet covered by this sweep: the same
  * E_ALL lint extended to src/*.inc finds a separate, pre-existing offender --
  * pfb_unlock() in src/usr/local/pkg/pfblockerng/pfblockerng.inc, declaring an
@@ -25,23 +36,18 @@ use PHPUnit\Framework\TestCase;
  */
 final class SrcPhpDeprecationLintTest extends TestCase
 {
-	private const MIN_EXPECTED_FILE_COUNT = 21;
-
 	public function testEverySrcPhpFileLintsCleanUnderErrorReportingEAll(): void
 	{
 		$root = dirname(__DIR__, 2);
 		$srcDir = $root . '/src';
 		$this->assertDirectoryExists($srcDir);
 
-		$files = self::findPhpFiles($srcDir);
-		sort($files);
+		$files = self::trackedPhpFiles($root);
 
-		$this->assertGreaterThanOrEqual(
-			self::MIN_EXPECTED_FILE_COUNT,
-			count($files),
-			'Directory walk under src/ must discover at least ' . self::MIN_EXPECTED_FILE_COUNT
-				. ' tracked *.php files -- a broken walk must never pass by finding zero.'
-				. ' Found ' . count($files) . ":\n" . implode("\n", $files)
+		$this->assertNotEmpty(
+			$files,
+			'git ls-files must discover at least one tracked src/*.php file --'
+				. ' a broken enumeration must never pass by finding zero.'
 		);
 
 		$failures = [];
@@ -73,21 +79,45 @@ final class SrcPhpDeprecationLintTest extends TestCase
 	}
 
 	/**
-	 * @return string[] absolute paths of every *.php file found under $dir
+	 * Enumerate the tracked src/*.php set via `git ls-files -z`, NUL-split so a
+	 * tracked path containing a space or a newline can never corrupt the list.
+	 * A non-zero exit (git missing, $root not a repo, etc.) throws rather than
+	 * silently returning an empty/partial list -- a silent empty list here is
+	 * exactly the fail-open shape this guard exists to prevent.
+	 *
+	 * @return string[] absolute paths of every tracked src/*.php file
 	 */
-	private static function findPhpFiles(string $dir): array
+	private static function trackedPhpFiles(string $root): array
 	{
-		$found = [];
-		$iterator = new RecursiveIteratorIterator(
-			new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)
-		);
+		$cmd = ['git', '-C', $root, 'ls-files', '-z', '--', 'src/*.php'];
+		$descriptors = [
+			0 => ['pipe', 'r'],
+			1 => ['pipe', 'w'],
+			2 => ['pipe', 'w'],
+		];
 
-		foreach ($iterator as $file) {
-			if ($file->isFile() && substr($file->getFilename(), -4) === '.php') {
-				$found[] = $file->getPathname();
-			}
+		$proc = proc_open($cmd, $descriptors, $pipes);
+		if (!is_resource($proc)) {
+			throw new RuntimeException('test bootstrap: failed to spawn `' . implode(' ', $cmd) . '`');
 		}
 
-		return $found;
+		fclose($pipes[0]);
+		$stdout = (string) stream_get_contents($pipes[1]);
+		$stderr = (string) stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		$exitCode = proc_close($proc);
+
+		if ($exitCode !== 0) {
+			throw new RuntimeException(
+				'test bootstrap: `' . implode(' ', $cmd) . "` exited {$exitCode}: {$stderr}"
+			);
+		}
+
+		$relative = array_filter(explode("\0", $stdout), static fn(string $p): bool => $p !== '');
+		$absolute = array_map(static fn(string $p): string => $root . '/' . $p, $relative);
+		sort($absolute);
+
+		return $absolute;
 	}
 }
