@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import errno
 import hashlib
@@ -502,36 +503,35 @@ def _build_swap_snapshot() -> Snapshot | None:
         config = ConfigParser()
         try:
             config.read(pfb["pfb_unbound.ini"])
-            if config.has_section("REGEX"):
-                r_count = 1
-                for name, pattern in config.items("REGEX"):
-                    if _regex_is_catastrophic_shape(pattern):
-                        sys.stderr.write(
-                            "[pfBlockerNG]: dropping pathological user regex [ {} ] pattern [ {} ] "
-                            "on line #{} (catastrophic shape)".format(name, pattern, r_count)
-                        )
-                        r_count += 1
-                        continue
-                    if pfb["regex_cap"] and len(pattern) > REGEX_STATIC_LEN_CAP:
-                        sys.stderr.write(
-                            "[pfBlockerNG]: dropping over-length user regex [ {} ] pattern [ {} ] "
-                            "on line #{} (static length cap)".format(name, pattern, r_count)
-                        )
-                        r_count += 1
-                        continue
-                    try:
-                        regex_db[name] = {
-                            "re": re.compile(pattern),
-                            "important": False,
-                            "band": PRIO_USER_BLOCK,
-                        }
-                    except Exception as e:
-                        sys.stderr.write(
-                            "[pfBlockerNG]: Regex [ {} ] compile error pattern [  {}  ] on line #{}: {}".format(
-                                name, pattern, r_count, e
-                            )
-                        )
+            r_count = 1
+            for name, pattern in _load_user_regex_entries(config):
+                if _regex_is_catastrophic_shape(pattern):
+                    sys.stderr.write(
+                        "[pfBlockerNG]: dropping pathological user regex [ {} ] pattern [ {} ] "
+                        "on line #{} (catastrophic shape)".format(name, pattern, r_count)
+                    )
                     r_count += 1
+                    continue
+                if pfb["regex_cap"] and len(pattern) > REGEX_STATIC_LEN_CAP:
+                    sys.stderr.write(
+                        "[pfBlockerNG]: dropping over-length user regex [ {} ] pattern [ {} ] "
+                        "on line #{} (static length cap)".format(name, pattern, r_count)
+                    )
+                    r_count += 1
+                    continue
+                try:
+                    regex_db[name] = {
+                        "re": re.compile(pattern),
+                        "important": False,
+                        "band": PRIO_USER_BLOCK,
+                    }
+                except Exception as e:
+                    sys.stderr.write(
+                        "[pfBlockerNG]: Regex [ {} ] compile error pattern [  {}  ] on line #{}: {}".format(
+                            name, pattern, r_count, e
+                        )
+                    )
+                r_count += 1
         except Exception as e:
             sys.stderr.write("[pfBlockerNG]: reload: failed to load user REGEX ini: {}".format(e))
 
@@ -1110,6 +1110,43 @@ def _load_ini_config() -> ConfigParser | None:
     return config
 
 
+def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
+    """Load normalized user regex rows from MAIN.regex_list or legacy REGEX."""
+    if config.has_option("MAIN", "regex_list"):
+        encoded = config.get("MAIN", "regex_list", raw=True)
+        try:
+            text = base64.b64decode(encoded.encode("ascii"), validate=True).decode("utf-8")
+        except (UnicodeError, ValueError) as e:
+            sys.stderr.write("[pfBlockerNG]: Failed to decode MAIN.regex_list: {}".format(e))
+            return []
+
+        entries: list[tuple[str, str]] = []
+        names: set[str] = set()
+        row_number = 0
+        for line in re.split(r"[\r\n]+", text):
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            row_number += 1
+            pattern, separator, description = line.partition("#")
+            pattern = pattern.strip().lower()
+            if not pattern:
+                continue
+            if separator:
+                name = re.sub(r"\W", "", description.strip().replace(" ", "_"), flags=re.ASCII)
+            else:
+                name = "Regex_{}".format(row_number)
+            name = name.lower()
+            if name in names:
+                name = "{}_{}".format(name, row_number)
+            names.add(name)
+            entries.append((name, pattern))
+        return entries
+
+    if config.has_section("REGEX"):
+        return list(config.items("REGEX"))
+    return []
+
+
 def init_standard(id: int, env: module_env) -> bool:
     global \
         pfb, \
@@ -1570,55 +1607,41 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_blacklist"] = True
 
             # Collect user-defined Regex patterns
-            if config.has_section("REGEX"):
-                regex_config = config.items("REGEX")
-                if regex_config:
-                    r_count = 1
-                    for name, pattern in regex_config:
-                        # ADR-07: a catastrophic SHAPE in the un-vetted USER regex
-                        # list is dropped at load UNCONDITIONALLY (logged, not compiled)
-                        # -- the always-on safety gate. The opt-in length ceiling (the
-                        # "Limit long/complex regex" setting) is the separate tunable
-                        # half: it drops over-length-but-safe user patterns only when on.
-                        if _regex_is_catastrophic_shape(pattern):
-                            sys.stderr.write(
-                                "[pfBlockerNG]: dropping pathological user regex [ {} ] pattern [ {} ] "
-                                "on line #{} (catastrophic shape)".format(name, pattern, r_count)
-                            )
-                            r_count += 1
-                            continue
-                        if pfb["regex_cap"] and len(pattern) > REGEX_STATIC_LEN_CAP:
-                            sys.stderr.write(
-                                "[pfBlockerNG]: dropping over-length user regex [ {} ] pattern [ {} ] "
-                                "on line #{} (static length cap)".format(name, pattern, r_count)
-                            )
-                            r_count += 1
-                            continue
-                        try:
-                            # ADR-07: a USER regex is SOVEREIGN -- band 5 (user block),
-                            # so it beats ANY feed allow (@@ band 2 / @@$important band 4),
-                            # matching the decision oracle's Provenance.USER block. Stored
-                            # as the {"re","important","band"} payload the matcher scores
-                            # via _block_entry_band; a bare compiled pattern would score the
-                            # feed-block band 1 and be overridden by a feed @@. ($badfilter-
-                            # immunity is inherent: user regex never enter the feed reconcile
-                            # rule list.) A user regex never loses to a feed allow, only to
-                            # the user whitelist (band 6) -- preserved by the fast path.
-                            regexDB[name] = {
-                                "re": re.compile(pattern),
-                                "important": False,
-                                "band": PRIO_USER_BLOCK,
-                            }
-                            pfb["regexDB"] = True
-                            pfb["python_blacklist"] = True
-                        except Exception as e:
-                            sys.stderr.write(
-                                "[pfBlockerNG]: Regex [ {} ] compile error pattern [  {}  ] on line #{}: {}".format(
-                                    name, pattern, r_count, e
-                                )
-                            )
-                            pass
-                        r_count += 1
+            r_count = 1
+            for name, pattern in _load_user_regex_entries(config):
+                # ADR-07: a catastrophic SHAPE in the un-vetted USER regex
+                # list is dropped at load UNCONDITIONALLY (logged, not compiled).
+                if _regex_is_catastrophic_shape(pattern):
+                    sys.stderr.write(
+                        "[pfBlockerNG]: dropping pathological user regex [ {} ] pattern [ {} ] "
+                        "on line #{} (catastrophic shape)".format(name, pattern, r_count)
+                    )
+                    r_count += 1
+                    continue
+                if pfb["regex_cap"] and len(pattern) > REGEX_STATIC_LEN_CAP:
+                    sys.stderr.write(
+                        "[pfBlockerNG]: dropping over-length user regex [ {} ] pattern [ {} ] "
+                        "on line #{} (static length cap)".format(name, pattern, r_count)
+                    )
+                    r_count += 1
+                    continue
+                try:
+                    # ADR-07: a USER regex is SOVEREIGN -- band 5 (user block),
+                    # so it beats feed allows and remains user-owned.
+                    regexDB[name] = {
+                        "re": re.compile(pattern),
+                        "important": False,
+                        "band": PRIO_USER_BLOCK,
+                    }
+                    pfb["regexDB"] = True
+                    pfb["python_blacklist"] = True
+                except Exception as e:
+                    sys.stderr.write(
+                        "[pfBlockerNG]: Regex [ {} ] compile error pattern [  {}  ] on line #{}: {}".format(
+                            name, pattern, r_count, e
+                        )
+                    )
+                r_count += 1
 
             # Collect user-defined no AAAA domains
             if config.has_section("noAAAA"):
