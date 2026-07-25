@@ -32,7 +32,16 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from .render_oracle import PHP_ERROR_LEVELS, PhpErrorLogGuard, body_has_php_error, evaluate_render
+from .render_oracle import (
+    PFB_PATH_MARKER,
+    PHP_ERROR_LEVELS,
+    PhpErrorLogGuard,
+    body_has_php_error,
+    diagnostic_fingerprint,
+    evaluate_render,
+    gating_log_lines,
+    load_baseline,
+)
 
 if TYPE_CHECKING:
     from ..conftest import SmokeVM
@@ -279,6 +288,71 @@ def test_non_diagnostic_log_growth_does_not_gate_the_sweep() -> None:
     run that emitted no PHP error.
     """
     _guard_after_appending(FPM_POOL_CHATTER).assert_no_growth()
+
+
+# --------------------------------------------------------------------------- #
+# The burn-down baseline: pre-existing our-file diagnostics are grandfathered by
+# FINGERPRINT (file + level + message, never a line number), so the gate is live
+# on every file for NEW diagnostics while the known backlog burns down (#1712).
+# --------------------------------------------------------------------------- #
+
+
+def test_a_baselined_diagnostic_does_not_gate() -> None:
+    """A grandfathered site stays green -- otherwise the whole suite is red on day one.
+
+    The before-state is the case above: this exact line gates with an empty baseline.
+    """
+    assert gating_log_lines(PFB_PAGE_WARNING, baseline=frozenset()), "the un-baselined line must gate"
+    baseline = frozenset(diagnostic_fingerprint(line) or "" for line in [PFB_PAGE_WARNING])
+    assert gating_log_lines(PFB_PAGE_WARNING, baseline=baseline) == ()
+
+
+def test_a_baselined_diagnostic_stays_baselined_when_its_line_moves() -> None:
+    """The fingerprint carries no line number, so editing the file above a known site
+    does not resurrect it as a "new" diagnostic.
+
+    This is the whole reason the baseline is not keyed by ``(file, line)``: those keys
+    rot on the first unrelated edit, and a rotted baseline fails closed on innocent code.
+    """
+    baseline = frozenset({diagnostic_fingerprint(PFB_PAGE_WARNING) or ""})
+    moved = PFB_PAGE_WARNING.replace("on line 377", "on line 412")
+    assert gating_log_lines(moved, baseline=baseline) == ()
+
+
+def test_a_new_key_in_a_baselined_file_still_gates() -> None:
+    """A file with grandfathered sites is NOT excluded -- a new warning in it still fails.
+
+    Excluding whole files would blind the pages the issue cares about most; only the
+    exact known diagnostics are forgiven.
+    """
+    baseline = frozenset({diagnostic_fingerprint(PFB_PAGE_WARNING) or ""})
+    fresh = PFB_PAGE_WARNING.replace("Undefined array key 0", 'Undefined array key "brand_new"')
+    assert gating_log_lines(fresh, baseline=baseline), "a new diagnostic in a baselined file must gate"
+
+
+def test_the_same_message_from_another_file_still_gates() -> None:
+    """The fingerprint includes the originating file, so a baseline entry cannot
+    accidentally forgive the identical warning somewhere else."""
+    baseline = frozenset({diagnostic_fingerprint(PFB_PAGE_WARNING) or ""})
+    elsewhere = PFB_PAGE_WARNING.replace("pfblockerng_feeds.php", "pfblockerng_alerts.php")
+    assert gating_log_lines(elsewhere, baseline=baseline), "a baselined message must not forgive another file"
+
+
+def test_the_shipped_baseline_parses_and_is_burning_down() -> None:
+    """Every shipped baseline entry is a well-formed fingerprint of one of OUR files.
+
+    A typo'd entry would silently forgive nothing (it matches no line), so this pins the
+    file's shape; the ownership check pins that nobody grandfathers pfSense core here,
+    which the guard ignores anyway and which would hide the intent of the list.
+    """
+    entries = load_baseline()
+    assert entries, "the shipped baseline is empty -- regenerate it from a sweep or delete the file"
+    for entry in entries:
+        origin, level, message = entry.split("|", 2)
+        assert PFB_PATH_MARKER in origin.lower(), f"baseline entry is not a pfBlockerNG file: {entry!r}"
+        assert level in PHP_ERROR_LEVELS, f"baseline entry has an unknown PHP level: {entry!r}"
+        assert message.strip(), f"baseline entry has an empty message: {entry!r}"
+        assert "on line" not in message, f"baseline entry pins a line number (it will rot): {entry!r}"
 
 
 def test_our_warning_still_gates_when_mixed_with_core_noise() -> None:
