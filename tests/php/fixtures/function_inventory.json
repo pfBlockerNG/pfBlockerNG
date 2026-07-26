@@ -6481,6 +6481,32 @@
             }
         ]
     },
+    "pfb_sanitize_text": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "text",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_sanitize_text_area": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "text",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_select_reload_aliases": {
         "returnsRef": false,
         "returnType": "array",

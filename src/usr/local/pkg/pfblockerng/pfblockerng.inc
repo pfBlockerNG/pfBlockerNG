@@ -3038,6 +3038,40 @@ function pfb_strtolower($line) {
 }
 
 
+/**
+ * Sanitize a single-line/scalar text field: converts legacy encodings to
+ * UTF-8, strips every Unicode control character (Cc) -- including CR/LF/TAB,
+ * since this contract is single-line -- and the BOM, then trims. Unicode
+ * format characters (ZWJ/ZWNJ/bidi marks) are NOT Cc and survive.
+ */
+function pfb_sanitize_text(string $text): string {
+	if (!mb_check_encoding($text, 'UTF-8')) {
+		$text = mb_convert_encoding($text, 'UTF-8',
+			mb_detect_encoding($text, 'UTF-8, ASCII, ISO-8859-1'));
+	}
+	$text = preg_replace('/[\p{Cc}\x{FEFF}]+/u', '', $text);
+	return trim($text);
+}
+
+
+/**
+ * Sanitize a multi-line textarea blob: converts legacy encodings to UTF-8,
+ * normalizes CRLF/CR/LF line endings to LF, strips every Unicode control
+ * character except \n/\t (plus the BOM) -- so VT/FF/NEL/etc. never become row
+ * separators or survive as data -- then right-strips trailing whitespace per
+ * line. Does NOT drop blank lines; that is the caller's job (issue #1707).
+ */
+function pfb_sanitize_text_area(string $text): string {
+	if (!mb_check_encoding($text, 'UTF-8')) {
+		$text = mb_convert_encoding($text, 'UTF-8',
+			mb_detect_encoding($text, 'UTF-8, ASCII, ISO-8859-1'));
+	}
+	$text = str_replace(array("\r\n", "\r"), "\n", $text);
+	$text = preg_replace('/(?:[^\P{Cc}\n\t]|\x{FEFF})+/u', '', $text);
+	return preg_replace('/[ \t]+$/m', '', $text);
+}
+
+
 // Function to decode alias custom entry box.
 // Default (False, True): Return as string with comments
 function pfb_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
@@ -3048,10 +3082,12 @@ function pfb_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 		$custom = '';	// string accumulator; '' (not undef) when no lines match
 	}
 
-	$customlist = explode("\r\n", base64_decode($text));
+	// issue #1710/#1707: split on any line ending, drop whitespace-only rows, keep '0'.
+	$customlist = explode("\n", pfb_sanitize_text_area(base64_decode($text)));
 	if (!empty($customlist)) {
 		foreach ($customlist as $line) {
-			if (!str_starts_with(trim($line), '#') && !empty($line)) {
+			$trimmed_line = trim($line);
+			if (!str_starts_with($trimmed_line, '#') && ($trimmed_line !== '')) {
 				if ($idn && !ctype_print($line)) {
 					$line_old = $line;
 					// Convert encodings to UTF-8

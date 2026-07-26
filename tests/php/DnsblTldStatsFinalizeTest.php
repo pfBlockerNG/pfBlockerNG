@@ -46,10 +46,17 @@ final class DnsblTldStatsFinalizeTest extends TestCase
 		$this->assertNoTldBookkeeping();
 	}
 
-	public function testWhitespaceHeaderBlankAndZeroRemainIgnored(): void
+	public function testWhitespaceHeaderAndBlankRemainIgnored(): void
 	{
-		$this->runFinalize("   \r\n# header\r\n\r\n0\r\n");
+		$this->runFinalize("   \r\n# header\r\n\r\n");
 		$this->assertNoTldBookkeeping();
+	}
+
+	public function testZeroRowCountsAsEntry(): void
+	{
+		// issue #1707: "0" is a valid row -- the old !empty() guard silently dropped it
+		$this->runFinalize("0\r\n");
+		$this->assertTldCount(1);
 	}
 
 	public function testLeadingDotsAndPlainValidTldsRemainRawDistinctBeforeTrim(): void
