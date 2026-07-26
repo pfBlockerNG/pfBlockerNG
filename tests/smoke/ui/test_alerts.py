@@ -223,6 +223,10 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
         # the value the production helper sends.
         resp = _post_action(webui, {"dnsbl_remove": "unlock", "domain": domain, "dnsbl_type": "python"})
         assert not looks_like_login_page(resp.text), "unlock POST returned the login form (session lost)"
+        unlock_lines = set(helpers.read_log_file(vm, DNSBL_UNLOCK_STORE).splitlines())
+        assert f"{domain},python" in unlock_lines, (
+            f"unlock store must record {domain!r} with type 'python', got {sorted(unlock_lines)!r}"
+        )
         # The handler returns only after the applied-generation handshake. Blocked
         # answers are not cached, so Unlock needs no native-cache flush.
         unlocked = helpers.dns_probe(vm, domain, "A")
@@ -232,6 +236,10 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
         # targeted delta-flush clears the prior resolved answer).
         resp = _post_action(webui, {"dnsbl_remove": "lock", "domain": domain, "dnsbl_type": "python"})
         assert not looks_like_login_page(resp.text), "re-lock POST returned the login form (session lost)"
+        relock_lines = set(helpers.read_log_file(vm, DNSBL_UNLOCK_STORE).splitlines())
+        assert not any(line.startswith(f"{domain},") for line in relock_lines), (
+            f"re-lock must remove {domain!r} from the unlock store, got {sorted(relock_lines)!r}"
+        )
         # Lock likewise returns after the applied-generation handshake and targeted
         # domain/www cache flush.
         relocked = helpers.dns_probe(vm, domain, "A")
