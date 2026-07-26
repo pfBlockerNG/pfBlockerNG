@@ -4,8 +4,14 @@
 #
 # Usage: wait-checks.sh --repo OWNER/REPO --pr N [options]
 #   --sha SHA           pin polling to this commit (default: PR's head SHA at arm time)
-#   --exclude REGEX    case-insensitive check-name exclusion (default 'coderabbit|snyk' --
-#                      both are advisory and must never gate a merge)
+#   --exclude REGEX    check-name exclusion, matched against the LOWERCASED check name
+#                      (so an all-lowercase pattern is effectively case-insensitive; an
+#                      uppercase one matches nothing). The default is ANCHORED to the
+#                      exact advisory contexts -- CodeRabbit, snyk, code/snyk,
+#                      code/snyk (pfBlockerNG) -- which are advisory and must never gate a
+#                      merge (#1706: an unanchored default silently dropped required checks
+#                      such as `security/snyk-policy-check`). A caller-supplied REGEX is
+#                      passed to jq verbatim and stays unanchored on purpose.
 #   --interval SECONDS poll interval (default 30)
 #   --max-iter N       hard iteration cap (default 80, ~40 min at 30s)
 #
@@ -23,7 +29,8 @@
 # (max-iter x interval + 300 s slack; PFB_WAIT_DEADLINE overrides) per CLAUDE.md
 # "No orphaned waits" #1.
 
-repo='' pr='' sha='' sha_set=0 exclude='coderabbit|snyk' interval=30 max_iter=80
+repo='' pr='' sha='' sha_set=0 interval=30 max_iter=80
+exclude='^(coderabbit|snyk|code/snyk( [(][^)]*[)])?)$'
 
 usage() {
 	echo "usage: wait-checks.sh --repo O/R --pr N [--sha SHA] [--exclude REGEX] [--interval S] [--max-iter N]" >&2
