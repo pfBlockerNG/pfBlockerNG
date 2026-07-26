@@ -4891,6 +4891,219 @@ function pfb_hook_editor_lang_for(string $script, string $fallback): string {
 	return ($fallback === 'py') ? 'py' : 'sh';
 }
 
+/*
+ * issue #1732: the lint endpoint's sh stderr extractor. Mirrors
+ * tests/smoke/test_smoke_lint_probe.py's _SH_DIAG_RE (`/bin/sh -n /dev/stdin` on the
+ * appliance emits "/dev/stdin: <line>: Syntax error: <detail>") -- keep the two in
+ * sync. A non-empty stderr that matches nothing degrades to one line-1 diagnostic
+ * carrying the raw text rather than being dropped silently.
+ */
+function pfb_lint_parse_sh_stderr(string $stderr): array {
+	if ($stderr === '') {
+		return [];
+	}
+	$diagnostics = [];
+	foreach (preg_split('/\R/', $stderr) as $line) {
+		if ($line === '' || preg_match('/(\d+): Syntax error: (.+)$/', $line, $match) !== 1) {
+			continue;
+		}
+		$diagnostics[] = ['line' => (int) $match[1], 'message' => 'Syntax error: ' . $match[2], 'severity' => 'error'];
+	}
+	if ($diagnostics === []) {
+		return [['line' => 1, 'message' => trim($stderr), 'severity' => 'error']];
+	}
+	return $diagnostics;
+}
+
+/*
+ * issue #1732: the lint endpoint's Python stderr extractor. Mirrors the
+ * compile-probe's own "line N: msg" format (SyntaxError.lineno/.msg, kept in sync with
+ * tests/smoke/test_smoke_lint_probe.py's _PY_PROBE). Same unmatched-line degradation as
+ * pfb_lint_parse_sh_stderr().
+ */
+function pfb_lint_parse_py_stderr(string $stderr): array {
+	if ($stderr === '') {
+		return [];
+	}
+	$diagnostics = [];
+	foreach (preg_split('/\R/', $stderr) as $line) {
+		if ($line === '' || preg_match('/^line (\d+): (.*)$/', $line, $match) !== 1) {
+			continue;
+		}
+		$diagnostics[] = ['line' => (int) $match[1], 'message' => $match[2], 'severity' => 'error'];
+	}
+	if ($diagnostics === []) {
+		return [['line' => 1, 'message' => trim($stderr), 'severity' => 'error']];
+	}
+	return $diagnostics;
+}
+
+/*
+ * issue #1732: reshapes pfb_dnsbl_regex_validation_errors()'s return (each entry either
+ * a "line N: ..." content diagnostic or a bare infra-failure string) into the lint
+ * endpoint's line-mapped diagnostic shape. An infra string carries no line of its own,
+ * so it surfaces as a line-1 warning rather than a false line-1 error.
+ */
+function pfb_lint_parse_regex_errors(array $errors): array {
+	$diagnostics = [];
+	foreach ($errors as $error) {
+		if (preg_match('/^line (\d+): (.*)$/s', $error, $match) === 1) {
+			$diagnostics[] = ['line' => (int) $match[1], 'message' => $match[2], 'severity' => 'error'];
+		} else {
+			$diagnostics[] = ['line' => 1, 'message' => $error, 'severity' => 'warning'];
+		}
+	}
+	return $diagnostics;
+}
+
+/*
+ * issue #1732: the shared no-shell launcher for the sh/py lint probes -- same argv-array
+ * proc_open() shape as pfb_dnsbl_regex_validation_errors() (tmpfile stderr, 8192-byte
+ * stdin write loop, NUL-scrubbed stderr), generalised to an arbitrary $command so both
+ * probes share one launch path. Content is piped on stdin only -- never written to disk,
+ * never executed by a shell (proc_open() with an argv array never spawns one). Returns
+ * ['exit' => int, 'stderr' => string, 'failure' => string], failure '' on a clean launch.
+ */
+function pfb_lint_probe_run(array $command, string $content): array {
+	$stderr = tmpfile();
+	if ($stderr === FALSE) {
+		return ['exit' => -1, 'stderr' => '', 'failure' => 'unable to create diagnostics file'];
+	}
+	$stderr_path = stream_get_meta_data($stderr)['uri'];
+	$descriptors = array(
+		0 => array('pipe', 'r'),
+		1 => array('file', '/dev/null', 'w'),
+		2 => array('file', $stderr_path, 'a'),
+	);
+	$pipes = array();
+	$process = @proc_open($command, $descriptors, $pipes);
+	if (!is_resource($process)) {
+		fclose($stderr);
+		return ['exit' => -1, 'stderr' => '', 'failure' => 'launcher failed'];
+	}
+	if (!isset($pipes[0]) || !is_resource($pipes[0])) {
+		proc_close($process);
+		fclose($stderr);
+		return ['exit' => -1, 'stderr' => '', 'failure' => 'stdin unavailable'];
+	}
+	$write_ok = TRUE;
+	$offset = 0;
+	$length = strlen($content);
+	while ($offset < $length) {
+		$written = @fwrite($pipes[0], substr($content, $offset, 8192));
+		if ($written === FALSE || $written === 0) {
+			$write_ok = FALSE;
+			break;
+		}
+		$offset += $written;
+	}
+	if (isset($pipes[0]) && is_resource($pipes[0])) {
+		fclose($pipes[0]);
+	}
+	$exit_code = proc_close($process);
+	fflush($stderr);
+	rewind($stderr);
+	$stderr_contents = (string) stream_get_contents($stderr);
+	fclose($stderr);
+	$stderr_contents = str_replace("\0", '\\0', $stderr_contents);
+	if (!$write_ok) {
+		return ['exit' => $exit_code, 'stderr' => $stderr_contents, 'failure' => 'stdin write failed'];
+	}
+	return ['exit' => $exit_code, 'stderr' => $stderr_contents, 'failure' => ''];
+}
+
+/*
+ * issue #1732: `[$timeout_bin] $sh -n /dev/stdin` lint runner -- the /dev/stdin operand
+ * is load-bearing (tests/smoke/test_smoke_lint_probe.py: bare stdin loses the line
+ * number on the appliance). '' content and a missing/non-executable interpreter/timeout
+ * short-circuit before any process is launched; a nonzero exit with empty stderr (e.g. a
+ * timeout SIGTERM) degrades to a line-1 warning naming the exit code instead of silently
+ * reporting nothing.
+ */
+function pfb_lint_sh_diagnostics(string $content, string $sh = '/bin/sh', string $timeout_bin = '/usr/bin/timeout'): array {
+	if ($content === '') {
+		return [];
+	}
+	if ($sh === '' || !is_executable($sh) || $timeout_bin === '' || !is_executable($timeout_bin)) {
+		return [['line' => 1, 'message' => 'sh syntax checker unavailable', 'severity' => 'warning']];
+	}
+	$command = array($timeout_bin, '-s', 'TERM', '-k', '1', '5', $sh, '-n', '/dev/stdin');
+	$result = pfb_lint_probe_run($command, $content);
+	if ($result['failure'] !== '') {
+		return [['line' => 1, 'message' => 'sh syntax checker launch failed: ' . $result['failure'], 'severity' => 'warning']];
+	}
+	if ($result['exit'] === 0) {
+		return [];
+	}
+	if (trim($result['stderr']) === '') {
+		return [['line' => 1, 'message' => "sh syntax checker exited {$result['exit']} with no diagnostic", 'severity' => 'warning']];
+	}
+	return pfb_lint_parse_sh_stderr($result['stderr']);
+}
+
+/*
+ * issue #1732: `[$timeout_bin] $python -c PROBE` lint runner. PROBE below MUST stay
+ * byte-identical to _PY_PROBE in tests/smoke/test_smoke_lint_probe.py -- that smoke test
+ * pins the live appliance's SyntaxError.lineno/.msg semantics for this exact script.
+ * Same short-circuit/degradation shape as pfb_lint_sh_diagnostics().
+ */
+function pfb_lint_py_diagnostics(string $content, string $python, string $timeout_bin = '/usr/bin/timeout'): array {
+	if ($content === '') {
+		return [];
+	}
+	if ($python === '' || !is_executable($python) || $timeout_bin === '' || !is_executable($timeout_bin)) {
+		return [['line' => 1, 'message' => 'python syntax checker unavailable', 'severity' => 'warning']];
+	}
+	$probe = <<<'PYTHON'
+import sys
+try:
+    compile(sys.stdin.read(), '<hook>', 'exec')
+except SyntaxError as error:
+    print('line {}: {}'.format(error.lineno or 1, error.msg), file=sys.stderr)
+    raise SystemExit(1)
+raise SystemExit(0)
+PYTHON;
+	$command = array($timeout_bin, '-s', 'TERM', '-k', '1', '5', $python, '-c', $probe);
+	$result = pfb_lint_probe_run($command, $content);
+	if ($result['failure'] !== '') {
+		return [['line' => 1, 'message' => 'python syntax checker launch failed: ' . $result['failure'], 'severity' => 'warning']];
+	}
+	if ($result['exit'] === 0) {
+		return [];
+	}
+	if ($result['exit'] === 1 && trim($result['stderr']) !== '') {
+		return pfb_lint_parse_py_stderr($result['stderr']);
+	}
+	return [['line' => 1, 'message' => "python syntax checker exited {$result['exit']} with no diagnostic", 'severity' => 'warning']];
+}
+
+/*
+ * issue #1732: the pfblockerng_lint.php dispatcher -- one lang-keyed entry point over
+ * the three validators above. CodeMirror ships LF-only content; the CRLF/CR -> LF fold
+ * runs first so a hand-crafted CRLF POST can never shift a reported line number relative
+ * to the editor gutter. $python/$sh/$timeout_bin default to the live appliance paths
+ * (null) and exist as parameters only so tests can substitute fixture interpreters.
+ */
+function pfb_lint_diagnostics(
+	string $lang,
+	string $content,
+	bool $cap,
+	?string $python = null,
+	?string $sh = null,
+	?string $timeout_bin = null
+): array {
+	$content = str_replace(["\r\n", "\r"], "\n", $content);
+	$timeout_bin ??= '/usr/bin/timeout';
+	return match ($lang) {
+		'regex' => pfb_lint_parse_regex_errors(
+			pfb_dnsbl_regex_validation_errors($content, $python ?? pfb_python_interpreter(), $cap, $timeout_bin)
+		),
+		'sh' => pfb_lint_sh_diagnostics($content, $sh ?? '/bin/sh', $timeout_bin),
+		'py' => pfb_lint_py_diagnostics($content, $python ?? pfb_python_interpreter(), $timeout_bin),
+		default => [],
+	};
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:

@@ -4512,6 +4512,167 @@
             }
         ]
     },
+    "pfb_lint_diagnostics": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "lang",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "content",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "cap",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "python",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "sh",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "timeout_bin",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_lint_parse_py_stderr": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "stderr",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_lint_parse_regex_errors": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "errors",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_lint_parse_sh_stderr": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "stderr",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_lint_probe_run": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "command",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "content",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_lint_py_diagnostics": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "content",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "python",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "timeout_bin",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/bin/timeout'"
+            }
+        ]
+    },
+    "pfb_lint_sh_diagnostics": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "content",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "sh",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/bin/sh'"
+            },
+            {
+                "name": "timeout_bin",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/bin/timeout'"
+            }
+        ]
+    },
     "pfb_list_section_for_vtype": {
         "returnsRef": false,
         "returnType": "string",

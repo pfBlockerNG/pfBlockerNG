@@ -41,6 +41,10 @@ $priv_list['page-firewall-pfblockerng']['match'] = array();
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_general.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_ip.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_dnsbl.php*";
+// issue #1732: scoped operators need framework reach for lang=regex; the sh/py langs
+// are refused by the endpoint's own diag_command.php gate (deliberately unlike
+// pfblockerng_edit_hooks.php above, which stays out of this list entirely).
+$priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_lint.php";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_update.php*";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_software.php";
 $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_hooks.php";
