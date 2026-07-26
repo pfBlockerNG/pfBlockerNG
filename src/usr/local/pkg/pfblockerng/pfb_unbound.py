@@ -1781,8 +1781,8 @@ def init_standard(id: int, env: module_env) -> bool:
     # ADR-10: BUNDLE the loaded matcher strata into ONE immutable Snapshot and
     # install it through the shared fail-closed rebuild_and_swap(). Up to here init
     # populated the scratch globals (dataDB/zoneDB/whiteDB/regexDB/allowRegexDB/
-    # feedGroupIndexDB/hstsDB) exactly as before -- from the manifest build() OR the
-    # legacy CSV fallback, plus the user REGEX ini and the HSTS file; the
+    # feedGroupIndexDB/hstsDB) exactly as before -- from the manifest build(), plus
+    # the user REGEX ini and the HSTS file; the
     # ``important_rules`` fast-path gate sits in pfb["important_rules"]. The builder
     # closure wraps those SAME dict objects into a fresh Snapshot (no copy, no shape
     # change), and rebuild_and_swap is the SINGLE place the ``_snapshot`` ref is bound
@@ -1793,10 +1793,11 @@ def init_standard(id: int, env: module_env) -> bool:
     # oracles). Net init behaviour is UNCHANGED: this builder never returns None (so the
     # swap always succeeds at init), the decisionDB.clear() is a no-op on the cache init
     # just re-created empty, and
-    # ``emit_counts=False`` keeps init's existing path-specific inline count emits (the
-    # manifest-path pfb_py_count + the always-on pfb_py_regex_count above) -- the swap
-    # must NOT re-emit here or the CSV-fallback/else paths would gain count writes they
-    # do not make today. The background reload-watcher caller uses the default emit_counts=True.
+    # ``emit_counts=False`` keeps init's existing path-specific inline count emits
+    # (pfb_py_count after a successful manifest build + pfb_py_regex_count on the
+    # enabled path) -- the swap must NOT re-emit here or the manifest-failure/disabled
+    # paths would gain count writes they do not make today. The background reload-watcher
+    # caller uses the default emit_counts=True.
     def _init_build_snapshot() -> Snapshot:
         return Snapshot(
             data_db=dataDB,
