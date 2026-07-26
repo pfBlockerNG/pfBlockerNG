@@ -454,15 +454,18 @@ print($form);
 //<![CDATA[
 events.push(function() {
 <?php if ($pfb_syntaxhl_on): ?>
-	// issue #1669: progressively enhance pfb_eh_content into a
-	// CodeMirror 6 live-highlight editor (python or shell mode, per $pfb_eh_lang).
-	// window.pfbHooksCM is the global the vendored bundle exposes (IIFE
-	// --global-name=pfbHooksCM); fromTextarea() hides the textarea, mounts the editor
-	// before it, and keeps name/value synced so the save handler's $_POST read is
-	// unaffected.
+	// issue #1669 / #1732 step 2: progressively enhance pfb_eh_content into a
+	// CodeMirror 6 live-highlight editor (python or shell mode, per $pfb_eh_lang)
+	// with advisory server lint. window.pfbHooksCM is the global the vendored
+	// bundle exposes (IIFE --global-name=pfbHooksCM); fromTextarea() hides the
+	// textarea, mounts the editor before it, keeps name/value synced so the save
+	// handler's $_POST read is unaffected, and (via opts.lintUrl) wires an async
+	// POST to pfblockerng_lint.php.
 	var pfbHookEditorEl = document.getElementById('pfb_hook_editor_content');
 	if (pfbHookEditorEl && window.pfbHooksCM) {
-		window.pfbHooksCM.fromTextarea(pfbHookEditorEl, '<?=$pfb_eh_lang?>');
+		window.pfbHooksCM.fromTextarea(pfbHookEditorEl, '<?=$pfb_eh_lang?>', {
+			lintUrl: '/pfblockerng/pfblockerng_lint.php'
+		});
 	}
 <?php endif; ?>
 });

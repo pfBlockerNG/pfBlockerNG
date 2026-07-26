@@ -20,6 +20,7 @@ import { StreamLanguage, syntaxHighlighting, defaultHighlightStyle } from "@code
 import { pythonLanguage } from "@codemirror/lang-python";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { pfbHighlightStyle } from "./pfb-highlight-style.js";
+import { serverLint } from "./cm-lint.js";
 
 // No official @codemirror/lang-shell package exists -- shell is only offered as a
 // legacy CodeMirror-5-style StreamParser (@codemirror/legacy-modes), wrapped here via
@@ -49,33 +50,43 @@ function languageFor(lang) {
   return lang === "py" ? pythonLanguage : shellLanguage;
 }
 
-export function fromTextarea(textarea, lang) {
+export function fromTextarea(textarea, lang, opts) {
   const rows = parseInt(textarea.getAttribute("rows"), 10);
   const height = Number.isFinite(rows) && rows > 0 ? `${rows * 1.4}em` : "20em";
   const ariaLabel = accessibleNameFor(textarea);
 
+  const extensions = [
+    history(),
+    drawSelection(),
+    keymap.of([...defaultKeymap, ...historyKeymap]),
+    syntaxHighlighting(defaultHighlightStyle),
+    syntaxHighlighting(pfbHighlightStyle),
+    languageFor(lang),
+    EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
+    EditorView.theme({
+      "&": { border: "1px solid #b7b7b7", backgroundColor: "#fff" },
+      ".cm-scroller": { fontFamily: "monospace", overflow: "auto" },
+      ".cm-content": { whiteSpace: "pre" },
+    }),
+    EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        textarea.value = update.state.doc.toString();
+      }
+    }),
+  ];
+
+  // issue #1732 step 2: advisory server lint (POST pfblockerng_lint.php), opt-in via
+  // opts.lintUrl -- no opts means no lintUrl means byte-identical behaviour to before
+  // this slice. No bracket lint here: shell mode is a StreamLanguage with no meaningful
+  // Lezer error nodes (scope C is the regex editor only, see cm-regex.js).
+  if (opts && opts.lintUrl) {
+    extensions.push(...serverLint(opts.lintUrl, lang === "py" ? "py" : "sh", opts.lintExtraParams));
+  }
+
   const view = new EditorView({
     state: EditorState.create({
       doc: textarea.value,
-      extensions: [
-        history(),
-        drawSelection(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
-        syntaxHighlighting(defaultHighlightStyle),
-        syntaxHighlighting(pfbHighlightStyle),
-        languageFor(lang),
-        EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
-        EditorView.theme({
-          "&": { border: "1px solid #b7b7b7", backgroundColor: "#fff" },
-          ".cm-scroller": { fontFamily: "monospace", overflow: "auto" },
-          ".cm-content": { whiteSpace: "pre" },
-        }),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            textarea.value = update.state.doc.toString();
-          }
-        }),
-      ],
+      extensions,
     }),
   });
 

@@ -3785,14 +3785,23 @@ function enable_dnsblip() {
 
 events.push(function(){
 <?php if ($pfb_syntaxhl_on): ?>
-	// issue #1669 slice C: progressively enhance pfb_regex_list into a CodeMirror 6
-	// live-highlight editor. window.pfbCM is the global the vendored bundle exposes
-	// (IIFE --global-name=pfbCM); fromTextarea() hides the textarea, mounts the editor
-	// before it, and keeps name/value synced so the save handler's $_POST read is
-	// unaffected.
+	// issue #1669 slice C / #1732 step 2: progressively enhance pfb_regex_list into a
+	// CodeMirror 6 live-highlight editor with advisory server lint. window.pfbCM is
+	// the global the vendored bundle exposes (IIFE --global-name=pfbCM);
+	// fromTextarea() hides the textarea, mounts the editor before it, keeps
+	// name/value synced so the save handler's $_POST read is unaffected, and (via
+	// opts.lintUrl) wires an async POST to pfblockerng_lint.php plus the offline
+	// bracket lint. lintExtraParams reads the cap checkbox's LIVE state so the lint
+	// agrees with what save would enforce right now.
 	var pfbRegexListEl = document.getElementById('pfb_regex_list');
 	if (pfbRegexListEl && window.pfbCM) {
-		window.pfbCM.fromTextarea(pfbRegexListEl);
+		window.pfbCM.fromTextarea(pfbRegexListEl, {
+			lintUrl: '/pfblockerng/pfblockerng_lint.php',
+			lintExtraParams: function() {
+				var capEl = document.getElementById('pfb_regex_cap');
+				return { cap: (capEl && capEl.checked) ? '1' : '0' };
+			}
+		});
 	}
 <?php endif; ?>
 

@@ -9,6 +9,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { pfbRegexList } from "./lezer-pfb-regex-list/src/index.js";
 import { pfbHighlightStyle } from "./pfb-highlight-style.js";
+import { serverLint, lezerErrorLint } from "./cm-lint.js";
 
 // Server-side validation (pfb_text_area_decode(), preg_match/re.compile) stays
 // authoritative -- this is a highlighter, not a validator.
@@ -26,33 +27,42 @@ function accessibleNameFor(textarea) {
   return "Code editor";
 }
 
-export function fromTextarea(textarea) {
+export function fromTextarea(textarea, opts) {
   const rows = parseInt(textarea.getAttribute("rows"), 10);
   const height = Number.isFinite(rows) && rows > 0 ? `${rows * 1.4}em` : "20em";
   const ariaLabel = accessibleNameFor(textarea);
 
+  const extensions = [
+    history(),
+    drawSelection(),
+    keymap.of([...defaultKeymap, ...historyKeymap]),
+    syntaxHighlighting(defaultHighlightStyle),
+    syntaxHighlighting(pfbHighlightStyle),
+    pfbRegexList(),
+    EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
+    EditorView.theme({
+      "&": { border: "1px solid #b7b7b7", backgroundColor: "#fff" },
+      ".cm-scroller": { fontFamily: "monospace", overflow: "auto" },
+      ".cm-content": { whiteSpace: "pre" },
+    }),
+    EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        textarea.value = update.state.doc.toString();
+      }
+    }),
+  ];
+
+  // issue #1732 step 2: advisory server lint (POST pfblockerng_lint.php) + the offline
+  // Lezer bracket lint, both opt-in via opts.lintUrl -- no opts means no lintUrl means
+  // byte-identical behaviour to before this slice.
+  if (opts && opts.lintUrl) {
+    extensions.push(...serverLint(opts.lintUrl, "regex", opts.lintExtraParams), lezerErrorLint());
+  }
+
   const view = new EditorView({
     state: EditorState.create({
       doc: textarea.value,
-      extensions: [
-        history(),
-        drawSelection(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
-        syntaxHighlighting(defaultHighlightStyle),
-        syntaxHighlighting(pfbHighlightStyle),
-        pfbRegexList(),
-        EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
-        EditorView.theme({
-          "&": { border: "1px solid #b7b7b7", backgroundColor: "#fff" },
-          ".cm-scroller": { fontFamily: "monospace", overflow: "auto" },
-          ".cm-content": { whiteSpace: "pre" },
-        }),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            textarea.value = update.state.doc.toString();
-          }
-        }),
-      ],
+      extensions,
     }),
   });
 

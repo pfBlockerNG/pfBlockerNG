@@ -20,6 +20,7 @@ import assert from "node:assert/strict";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcPath = path.join(__dirname, "..", "cm-regex.js");
 const src = readFileSync(srcPath, "utf8");
+const cmLintSrc = readFileSync(path.join(__dirname, "..", "cm-lint.js"), "utf8");
 
 test("fromTextarea is exported (the --global-name=pfbCM bundle-facing entry point)", () => {
   assert.match(src, /export function fromTextarea\(/);
@@ -67,4 +68,48 @@ test("EditorView.contentAttributes carries an aria-label derived from the textar
     src.includes("textarea.labels"),
     "expected a fallback to the textarea's associated <label> (textarea.labels) when it carries no aria-label",
   );
+});
+
+// ------------------------------------------------------------------
+// issue #1732 step 2: advisory server lint + offline bracket lint, wired behind an
+// opts.lintUrl guard so a caller that passes no opts gets byte-identical behaviour.
+// ------------------------------------------------------------------
+
+test("fromTextarea accepts an optional opts argument", () => {
+  assert.match(src, /export function fromTextarea\(textarea,\s*opts\)/);
+});
+
+test("serverLint and lezerErrorLint are imported from the shared cm-lint.js module", () => {
+  assert.match(src, /import\s*\{[^}]*serverLint[^}]*\}\s*from\s*"\.\/cm-lint\.js"/);
+  assert.match(src, /import\s*\{[^}]*lezerErrorLint[^}]*\}\s*from\s*"\.\/cm-lint\.js"/);
+});
+
+test("serverLint is wired with lang 'regex' behind an opts.lintUrl guard", () => {
+  assert.match(src, /opts\s*&&\s*opts\.lintUrl/);
+  assert.match(src, /serverLint\(\s*opts\.lintUrl,\s*["']regex["'],\s*opts\.lintExtraParams\s*\)/);
+});
+
+test("lezerErrorLint is added alongside serverLint behind the same opts.lintUrl guard", () => {
+  const guardIdx = src.indexOf("opts && opts.lintUrl");
+  const lezerIdx = src.indexOf("lezerErrorLint()");
+  assert.notEqual(guardIdx, -1, "expected the opts.lintUrl guard to be present");
+  assert.notEqual(lezerIdx, -1, "expected a lezerErrorLint() call to be present");
+  assert.ok(guardIdx < lezerIdx, "expected lezerErrorLint() to be wired inside/after the opts.lintUrl guard");
+});
+
+test("cm-lint.js uses a plain XMLHttpRequest, never fetch() or FormData (csrf-magic constraint)", () => {
+  // pfSense's csrf-magic.js patches XMLHttpRequest.prototype.open/send globally and
+  // PREPENDS the CSRF token to any STRING POST body. fetch() is unhooked (the token is
+  // never attached) and a FormData body isn't a string (the prepend would corrupt it) --
+  // pinned here so a refactor to fetch() fails a test that names exactly why, instead of
+  // silently breaking every save on a live pfSense box. Scans CODE lines only (strips
+  // full-line "//" comments) -- the module's own header comment explains this constraint
+  // in prose and legitimately names both "fetch(" and "FormData".
+  const codeLines = cmLintSrc
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("//"))
+    .join("\n");
+  assert.match(codeLines, /new XMLHttpRequest\(\)/);
+  assert.ok(!/\bfetch\(/.test(codeLines), "expected no fetch( call in cm-lint.js code");
+  assert.ok(!/\bFormData\b/.test(codeLines), "expected no FormData usage in cm-lint.js code");
 });

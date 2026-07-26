@@ -87,8 +87,11 @@ final class EditHooksSyntaxHighlightWiringTest extends TestCase
 		// pfb_hook_editor_lang_for(), rendered as fromTextarea()'s second argument (a
 		// quoted 'py'|'sh' literal echoed from PHP), never re-derived in JS.
 		$this->assertStringContainsString('pfb_hook_editor_lang_for(', self::$src, 'expected the page to call pfb_hook_editor_lang_for()');
+		// [,)] after the language literal, not a bare `\)`: issue #1732 step 2 added a
+		// third (opts) argument, so the call no longer necessarily closes right after
+		// the language literal -- the second-argument contract itself is unchanged.
 		$this->assertMatchesRegularExpression(
-			"/pfbHooksCM\\.fromTextarea\\([^)]*,\\s*'<\\?=\\\$pfb_eh_lang\\?>'\\s*\\)/",
+			"/pfbHooksCM\\.fromTextarea\\([^)]*,\\s*'<\\?=\\\$pfb_eh_lang\\?>'\\s*[,)]/",
 			self::$src,
 			'expected fromTextarea() to be called with a second argument echoing $pfb_eh_lang'
 		);
@@ -123,6 +126,34 @@ final class EditHooksSyntaxHighlightWiringTest extends TestCase
 			substr_count(self::$src, 'pfbHooksCM.fromTextarea('),
 			'expected exactly one pfbHooksCM.fromTextarea( call in the whole file (the gated events.push init) -- '
 			. 'a second, unguarded call would defeat the off-emits-nothing contract'
+		);
+	}
+
+	/**
+	 * issue #1732 step 2: the Edit Hooks page's fromTextarea() call now also wires the
+	 * advisory server-lint endpoint, still inside the SAME $pfb_syntaxhl_on gate --
+	 * toggling syntax highlighting off must keep emitting zero lint bytes too.
+	 */
+	public function testEditorInitPassesTheLintUrlInsideTheSameGate(): void
+	{
+		$this->assertMatchesRegularExpression(
+			"#events\\.push\\(function\\(\\)\\s*\\{(?:(?!endif).)*?if\\s*\\(\\s*\\\$pfb_syntaxhl_on\\s*\\)\\s*:(?:(?!endif).)*?"
+			. "pfbHooksCM\\.fromTextarea\\([^;]*?lintUrl:\\s*'/pfblockerng/pfblockerng_lint\\.php'(?:(?!endif).)*?endif#s",
+			self::$src,
+			"expected pfbHooksCM.fromTextarea(...) to pass lintUrl: '/pfblockerng/pfblockerng_lint.php' inside the \$pfb_syntaxhl_on gate"
+		);
+	}
+
+	/**
+	 * Vacuity-safe count for the new lintUrl wiring, same rationale as
+	 * testCmHooksAssetAndFromTextareaCallEachAppearExactlyOnceInTheWholeFile.
+	 */
+	public function testLintUrlAppearsExactlyOnceInTheWholeFile(): void
+	{
+		$this->assertSame(
+			1,
+			substr_count(self::$src, "lintUrl: '/pfblockerng/pfblockerng_lint.php'"),
+			'expected exactly one lintUrl wiring in the whole file (the gated events.push init)'
 		);
 	}
 
