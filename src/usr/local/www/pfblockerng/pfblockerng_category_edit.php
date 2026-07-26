@@ -721,7 +721,7 @@ if ($_POST && isset($_POST['save'])) {
 								if (!ctype_print($value[0]) && (is_string($value[0]) && (strlen($value[0]) > 0))) {
 									$value[0] = mb_convert_encoding($value[0], 'UTF-8',
 										mb_detect_encoding($value[0], 'UTF-8, ASCII, ISO-8859-1'));
-									$value[0] = idn_to_ascii($value[0]);
+									$value[0] = pfb_idn_to_ascii_wildcard($value[0]);
 								}
 
 								if (empty(pfb_filter($value[0], PFB_FILTER_DOMAIN, 'Category_edit'))) {
@@ -761,7 +761,7 @@ if ($_POST && isset($_POST['save'])) {
 						if (!ctype_print($value[0]) && (is_string($value[0]) && (strlen($value[0]) > 0))) {
 							$value[0] = mb_convert_encoding($value[0], 'UTF-8',
 								mb_detect_encoding($value[0], 'UTF-8, ASCII, ISO-8859-1'));
-							$value[0] = idn_to_ascii($value[0]);
+							$value[0] = pfb_idn_to_ascii_wildcard($value[0]);
 						}
 
 						if (empty(pfb_filter($value[0], PFB_FILTER_DOMAIN, 'Category_edit'))) {
