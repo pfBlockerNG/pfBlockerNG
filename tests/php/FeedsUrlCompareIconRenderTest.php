@@ -250,9 +250,8 @@ final class FeedsUrlCompareIconRenderTest extends TestCase
 		$primaryHeader = 'NonContiguousPrimary';
 		$feed = $this->buildFeed($primaryHeader, $primaryUrl, 'https://example.test/non-contiguous/', [
 			'alternate' => [
-				['url' => 'https://example.test/non-contiguous/unmatched.txt', 'header' => 'UnmatchedAlternate'],
-				['url' => $matchedUrl, 'header' => 'FirstRenderedAlternate'],
-				['url' => 'https://example.test/non-contiguous/later.txt', 'header' => 'SecondRenderedAlternate'],
+				1 => ['url' => $matchedUrl, 'header' => 'FirstRenderedAlternate'],
+				2 => ['url' => 'https://example.test/non-contiguous/later.txt', 'header' => 'SecondRenderedAlternate'],
 			],
 		]);
 		$info = ['NonContiguousAlias' => [
@@ -260,14 +259,24 @@ final class FeedsUrlCompareIconRenderTest extends TestCase
 			'info'   => 'Non-contiguous alias info',
 			'feeds'  => [$feed],
 		]];
-		$exFeeds = [[
-			'aliasname' => 'NonContiguousAlias',
-			'action'    => 'permit',
-			'state'     => 'Enabled',
-			'url'       => $matchedUrl,
-			'header'    => 'FirstRenderedAlternate',
-			'rowid'     => 601,
-		]];
+		$exFeeds = [
+			[
+				'aliasname' => 'NonContiguousAlias',
+				'action'    => 'permit',
+				'state'     => 'Enabled',
+				'url'       => 'https://example.test/non-contiguous/later.txt',
+				'header'    => 'SecondRenderedAlternate',
+				'rowid'     => 602,
+			],
+			[
+				'aliasname' => 'NonContiguousAlias',
+				'action'    => 'permit',
+				'state'     => 'Enabled',
+				'url'       => $matchedUrl,
+				'header'    => 'FirstRenderedAlternate',
+				'rowid'     => 601,
+			],
+		];
 		$diagnostics = [];
 		set_error_handler(
 			static function (int $errno, string $errstr) use (&$diagnostics): bool {
@@ -283,9 +292,9 @@ final class FeedsUrlCompareIconRenderTest extends TestCase
 		}
 
 		$this->assertSame(
-			[1, 2],
+			[2, 1],
 			array_keys($GLOBALS['alt_feeds']['ipv4']['NonContiguousAlias'][$primaryHeader]),
-			'test setup must exercise the non-contiguous alternate bucket'
+			'test setup must exercise a non-contiguous bucket inserted out of source order'
 		);
 		$undefinedKeyDiagnostics = array_values(array_filter(
 			$diagnostics,
