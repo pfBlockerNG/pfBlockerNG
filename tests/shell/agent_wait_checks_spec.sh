@@ -432,6 +432,52 @@ STUB
     The line 1 of output should equal 'TIMEOUT'
   End
 
+  # #1756: the exclusion pattern is DATA. A pattern jq cannot compile used to make the
+  # whole filter collapse -- empty counts, `[: : integer expected`, verdict PENDING --
+  # so a hard FAIL was polled past and surfaced as a blind TIMEOUT. Reject it at the
+  # boundary (exit 2, usage/precondition) instead.
+  failing_fixture() {
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"failure"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+  }
+
+  # A quote is a literal regex character: `sn"yk` is a perfectly valid pattern and must
+  # be MATCHED, not rejected. It only ever broke because it terminated the jq string.
+  It 'matches an --exclude regex containing a quote as a literal pattern, gating the failing check'
+    failing_fixture
+    When run sh "$script" --repo o/r --pr 1 --exclude 'sn"yk' --interval 0 --max-iter 2
+    The status should equal 0
+    The line 2 of output should equal '[{"name":"pytest","bucket":"fail"}]'
+    The line 3 of output should equal 'FAIL'
+    The output should not include 'TIMEOUT'
+  End
+
+  It 'rejects an --exclude regex ending in a dangling backslash'
+    failing_fixture
+    When run sh "$script" --repo o/r --pr 1 --exclude 'snyk\' --interval 0 --max-iter 2
+    The status should equal 2
+    The stderr should include 'not a valid regex'
+    The output should not include 'TIMEOUT'
+  End
+
+  It 'treats a jq-injecting --exclude value as a pattern, never as program text'
+    failing_fixture
+    When run sh "$script" --repo o/r --pr 1 --exclude 'a") or true or ("' --interval 0 --max-iter 2
+    The status should equal 2
+    The stderr should include 'not a valid regex'
+    The output should not include 'TIMEOUT'
+    The output should not include 'PASS'
+  End
+
+  It 'accepts a valid custom --exclude regex carrying anchors and a character class'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"},{"name":"code/snyk (BBcan177)","status":"completed","conclusion":"failure"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh "$script" --repo o/r --pr 1 --exclude '^code/snyk( [(][^)]*[)])?$' --interval 0 --max-iter 2
+    The status should equal 0
+    The line 2 of output should equal '[{"name":"pytest","bucket":"pass"}]'
+    The line 3 of output should equal 'PASS'
+  End
+
   It 'honours the wall-clock deadline even when a verdict would be reached'
     export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
     export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'

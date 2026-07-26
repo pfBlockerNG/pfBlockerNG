@@ -10,8 +10,9 @@
 #                      exact advisory contexts -- CodeRabbit, snyk, code/snyk,
 #                      code/snyk (pfBlockerNG) -- which are advisory and must never gate a
 #                      merge (#1706: an unanchored default silently dropped required checks
-#                      such as `security/snyk-policy-check`). A caller-supplied REGEX is
-#                      passed to jq verbatim and stays unanchored on purpose.
+#                      such as `security/snyk-policy-check`). A caller-supplied REGEX
+#                      stays unanchored on purpose; it reaches jq as DATA, and one
+#                      Oniguruma cannot compile exits 2 rather than polling blind (#1756).
 #   --interval SECONDS poll interval (default 30)
 #   --max-iter N       hard iteration cap (default 80, ~40 min at 30s)
 #
@@ -40,7 +41,7 @@ usage() {
 # Reduce one checks-JSON snapshot to PASS / FAIL / PENDING / EMPTY (prints verdict).
 evaluate_checks() {
 	# $1 = checks JSON array of {name, bucket}
-	rel=$(printf '%s' "$1" | jq -c "[.[] | select((.name|ascii_downcase|test(\"$exclude\"))|not)]")
+	rel=$(printf '%s' "$1" | jq -c --arg ex "$exclude" '[.[] | select((.name|ascii_downcase|test($ex))|not)]')
 	total=$(printf '%s' "$rel" | jq 'length')
 	fail=$(printf '%s' "$rel" | jq '[.[] | select(.bucket=="fail" or .bucket=="cancel")] | length')
 	pend=$(printf '%s' "$rel" | jq '[.[] | select(.bucket=="pending")] | length')
@@ -99,6 +100,15 @@ main() {
 	require_gh
 	require_tool timeout
 	require_tool jq
+
+	# A pattern Oniguruma cannot compile must die here, at the boundary (#1756): the
+	# filter would otherwise yield nothing, the counts would be empty, and the verdict
+	# would silently fall through to PENDING -- polling a real FAIL past to a blind
+	# TIMEOUT. Same exit 2 as any other usage/precondition error.
+	if ! printf '""' | jq -e --arg ex "$exclude" 'test($ex) | true' >/dev/null 2>&1; then
+		echo "usage: --exclude is not a valid regex: $exclude" >&2
+		exit 2
+	fi
 
 	# Wall-clock deadline alongside the cap (CLAUDE.md "No orphaned waits" #1);
 	# PFB_WAIT_DEADLINE (epoch seconds) overrides for tests/ops.
@@ -178,7 +188,7 @@ main() {
 					exit 0
 				fi
 				printf 'pinned=%s\n' "$sha"
-				printf '%s' "$json" | jq -c "[.[] | select((.name|ascii_downcase|test(\"$exclude\"))|not)]"
+				printf '%s' "$json" | jq -c --arg ex "$exclude" '[.[] | select((.name|ascii_downcase|test($ex))|not)]'
 				printf '%s\n' "$v"
 				exit 0
 				;;
