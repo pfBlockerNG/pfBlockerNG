@@ -39,6 +39,7 @@ pytestmark = pytest.mark.ui_e2e
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 IP_PAGE = "/pfblockerng/pfblockerng_ip.php"
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
+PFB_INC_PATH = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 
 # Generous POST timeouts: DNSBL/IP saves only write_config() (fast); General's
 # save additionally runs sync_package_pfblockerng() (a full config-rebuild
@@ -62,6 +63,22 @@ def dnsbl_vip_ready(smoke_vm: helpers.SmokeVM) -> None:
 def _decoded(b64_value: str) -> str:
     """UTF-8-decode a base64 config blob (empty string decodes to '')."""
     return base64.b64decode(b64_value).decode("utf-8") if b64_value else ""
+
+
+def _dnsbl_folder(vm: helpers.SmokeVM) -> str:
+    """The DNSBL feed folder (``$pfb['dnsdir']``) the box resolves at runtime.
+
+    Mirrors ``pfb_determine_list_detail('unbound', ...)``'s folder mapping
+    (pfblockerng.inc ~5257) -- read live rather than hardcoded so this test
+    stays correct across ``$g['vardb_path']`` layouts.
+    """
+    pre = f"require_once({helpers._php_str(PFB_INC_PATH)});\nglobal $pfb; pfb_global();\n$e = $pfb['dnsdir'];"
+    return helpers._php_read_scalar(vm, pre, "$e", timeout=120.0)
+
+
+def _flag_exists(vm: helpers.SmokeVM, path: str) -> bool:
+    pre = f"$e = file_exists({helpers._php_str(path)}) ? 'YES' : 'NO';"
+    return helpers._php_read_scalar(vm, pre, "$e", timeout=120.0) == "YES"
 
 
 def test_dnsbl_textarea_save_normalizes_line_endings_and_controls(
@@ -337,4 +354,63 @@ def test_category_edit_custom_list_accepts_idn_row(
             f"got {_decoded(helpers.config_get(vm, f'{base}/custom'))!r}"
         )
     finally:
+        tce._del_rowid(vm, tce.CFG_DNSBL, rowid)
+
+
+def test_category_edit_noop_resave_does_not_touch_update_flag(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A no-op custom-list resave must not touch the list's ``.update`` flag (#1729 review).
+
+    The change detector at ``pfblockerng_category_edit.php`` ~829 compared the
+    RAW ``$_POST['custom']`` (CRLF, exactly as a browser submits a textarea)
+    against the STORED blob -- which ``pfb_text_area_encode()`` persists
+    LF-only. An unchanged custom list therefore always compared unequal, so
+    every no-op save touched
+    ``{$pfbarr['folder']}/{$aname}_custom{$suffix}.update``, forcing a
+    spurious custom-list reprocess/WHOIS re-query on the next cron pass.
+
+    Given a DNSBL alias (``action='unbound'`` -> ``pfb_determine_list_detail``
+    resolves a real folder, mirroring a normal DNSBL group) saved once with a
+    CRLF-joined custom list, its ``.update`` flag then removed,
+    When the IDENTICAL (CRLF) form is re-POSTed unchanged,
+    Then the persisted ``custom`` value must be unchanged AND the flag file
+    must NOT reappear.
+
+    RED (before the fix): the second save's raw-vs-sanitized compare is
+    always unequal -> the flag is touched every time.
+    GREEN (after): compare sanitized-vs-sanitized -> a no-op resave never
+    touches the flag.
+    """
+    vm = smoke_vm
+    rowid = tce._free_rowid(vm, tce.CFG_DNSBL)
+    base = f"{tce.CFG_DNSBL}/{rowid}"
+    aliasname = "smokenoopresave"
+    folder = _dnsbl_folder(vm)
+    flag = f"{folder}/{aliasname}_custom.update"
+    raw_custom = "\r\n".join([helpers.unique_domain("pfbnoopa"), helpers.unique_domain("pfbnoopb")])
+    try:
+        assert helpers.config_get(vm, f"{base}/aliasname") == "", f"rowid {rowid} not free (aliasname already set)"
+
+        tce._post_form(webui, tce._dnsbl_payload(rowid, aliasname, custom=raw_custom))
+        assert helpers.config_get(vm, f"{base}/aliasname") == aliasname, "first save did not persist the alias"
+        first_custom = helpers.config_get(vm, f"{base}/custom")
+        assert first_custom, "first save did not persist a custom list"
+
+        # Sweep the flag the first (necessarily change-detected) save touched, and
+        # confirm its absence before the no-op resave under test.
+        helpers.php_eval(vm, f"@unlink({helpers._php_str(flag)}); echo 'OK';", timeout=120.0)
+        assert not _flag_exists(vm, flag), f"precondition: {flag} must be absent before the no-op resave"
+
+        tce._post_form(webui, tce._dnsbl_payload(rowid, aliasname, custom=raw_custom))
+
+        assert helpers.config_get(vm, f"{base}/custom") == first_custom, (
+            "an identical (CRLF) resave must not change the persisted custom list"
+        )
+        assert not _flag_exists(vm, flag), (
+            f"a no-op custom-list resave must not touch {flag} (raw-vs-sanitized compare bug)"
+        )
+    finally:
+        helpers.php_eval(vm, f"@unlink({helpers._php_str(flag)}); echo 'OK';", timeout=120.0)
         tce._del_rowid(vm, tce.CFG_DNSBL, rowid)
