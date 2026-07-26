@@ -108,6 +108,14 @@ if ($_POST) {
 
 		unset($savemsg);
 
+		// issue #1723: sanitize single-line free-text fields before any existing
+		// filter/validation below reads them (autorule_suffix is select-coerced
+		// right after this -- sanitizing first is a no-op for its 3 valid keys).
+		$_POST['ip_placeholder']	= pfb_sanitize_text($_POST['ip_placeholder'] ?? '');
+		$_POST['asn_token']		= pfb_sanitize_text($_POST['asn_token'] ?? '');
+		$_POST['autorule_suffix']	= pfb_sanitize_text($_POST['autorule_suffix'] ?? '');
+		$_POST['maxmind_account']	= pfb_sanitize_text($_POST['maxmind_account'] ?? '');
+
 		// Validate Select field options
 		$select_options = array(	'asn_reporting'		=> 'disabled',
 						'maxmind_locale'	=> 'en',
@@ -144,7 +152,7 @@ if ($_POST) {
 		// issue #924: maxmind_key is masked/write-only -- a blank POST keeps the stored key, so
 		// validate only a non-empty submission. Reference 'maxmind_key' suppresses pfb_filter()'s
 		// failed-validation log line so the secret never reaches a log, even when rejected.
-		$pfb_maxmind_key_post = trim((string) ($_POST['maxmind_key'] ?? ''));
+		$pfb_maxmind_key_post = pfb_sanitize_text((string) ($_POST['maxmind_key'] ?? ''));
 		if ($pfb_maxmind_key_post !== '' && empty(pfb_filter($pfb_maxmind_key_post, PFB_FILTER_WORD, 'maxmind_key'))) {
 			$input_errors[] = 'MaxMind License key Invalid';
 		}
@@ -230,8 +238,8 @@ if ($_POST) {
 			$pfb['iconfig']['pass_order']		= $_POST['pass_order']						?: 'order_0';
 			$pfb['iconfig']['autorule_suffix']	= $_POST['autorule_suffix']					?: 'autorule';
 			$pfb['iconfig']['killstates']		= pfb_filter($_POST['killstates'], PFB_FILTER_ON_OFF, 'ip')	?: '';
-			$pfb['iconfig']['v4suppression']	= base64_encode($_POST['v4suppression'])			?: '';
-			$pfb['iconfig']['v6suppression']	= base64_encode($_POST['v6suppression'])			?: '';
+			$pfb['iconfig']['v4suppression']	= pfb_text_area_encode($_POST['v4suppression'] ?? '')		?: '';
+			$pfb['iconfig']['v6suppression']	= pfb_text_area_encode($_POST['v6suppression'] ?? '')		?: '';
 
 			// ADR-11: per-type aggregate aliases multi-select -> CSV scalar (sanitised to the
 			// known option keys; default none). Gateway-registered in the general section, so

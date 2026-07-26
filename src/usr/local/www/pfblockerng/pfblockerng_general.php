@@ -195,7 +195,7 @@ if ($_POST) {
 			// browser does not submit it. Preserve the previously stored value in that
 			// case rather than overwriting it with the absent POST field.
 			if ($pfb['gconfig']['pfb_feed_internal_filter'] === 'on') {
-				$pfb['gconfig']['pfb_feed_internal_allowlist']	= base64_encode(str_replace("\r\n", "\n", trim($_POST['pfb_feed_internal_allowlist'] ?? '')));
+				$pfb['gconfig']['pfb_feed_internal_allowlist']	= pfb_text_area_encode(trim($_POST['pfb_feed_internal_allowlist'] ?? ''));
 			}
 			$pfb['gconfig']['pfb_interval']			= $_POST['pfb_interval']			?: 1;
 			$pfb['gconfig']['pfb_min']			= $_POST['pfb_min']				?: 0;

@@ -319,9 +319,10 @@ final class PfbFilterContractTest extends TestCase
 	{
 		// issue #1723: the control-character gate narrowed from \p{C} (Cc+Cf+Co+
 		// Cs+Cn) to \p{Cc}+BOM only. U+200B (ZERO WIDTH SPACE) is Cf, not Cc, so
-		// it no longer makes a whole free-text field a reject; homoglyph/
-		// zero-width defense for domain-shaped fields now lives in the
-		// type-specific validators below (ASCII regex / IDNA), not this gate.
+		// it no longer makes a whole free-text field a reject. Mixed-script/
+		// homoglyph domains are ACCEPTED by design (admins block typosquat
+		// domains in their own lists); zero-width chars in domain-shaped input
+		// are rejected by UTS46, free-text keeps them.
 		$this->assertSame("\xE2\x80\x8B", pfb_filter("\xE2\x80\x8B", PFB_FILTER_HTML, 'ref', 'DEF'));
 	}
 

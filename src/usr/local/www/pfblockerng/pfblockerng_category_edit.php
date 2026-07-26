@@ -318,7 +318,7 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 			} else {
 				$custom_line = "{$data[1]}";
 			}
-			$rowdata[$rowid]['custom'] = base64_encode("{$custom_line}");
+			$rowdata[$rowid]['custom'] = pfb_text_area_encode("{$custom_line}");
 		}
 
 		// Create new Alias via Feeds Tab
@@ -507,6 +507,11 @@ if ($_POST && isset($_POST['save'])) {
 			$_POST[$pfb_post_key] = '';
 		}
 	}
+
+	// issue #1723: sanitize the single-line free-text field BEFORE the \W /
+	// length validation below reads it (trims stray whitespace that would
+	// otherwise false-trip the \W reject; strips control chars).
+	$_POST['aliasname'] = pfb_sanitize_text($_POST['aliasname'] ?? '');
 
 	if (empty($_POST['aliasname'])) {
 		$input_errors[] = 'Info: Name field must be defined.';
@@ -768,7 +773,10 @@ if ($_POST && isset($_POST['save'])) {
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", $_POST['aliasname'] ?: '');
 
 		if (isset($_POST['description']) && !empty($_POST['description'])) {
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/description", pfb_filter($_POST['description'], PFB_FILTER_HTML, 'Category_edit') ?: '');
+			// issue #1723: sanitize BEFORE pfb_filter() -- its own universal
+			// control-char gate would otherwise reject the whole value (not just
+			// the control char) and silently store '' instead.
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/description", pfb_filter(pfb_sanitize_text($_POST['description']), PFB_FILTER_HTML, 'Category_edit') ?: '');
 		} else {
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/description", '');
 		}
@@ -778,9 +786,9 @@ if ($_POST && isset($_POST['save'])) {
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/dow", $_POST['dow'] ?: '');
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/sort", $_POST['sort'] ?: 'sort');
 
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/srcint", $_POST['srcint'] ?: '');
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_pre", $_POST['script_pre'] ?: '');
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_post", $_POST['script_post'] ?: '');
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/srcint", pfb_sanitize_text($_POST['srcint'] ?? '') ?: '');
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_pre", pfb_sanitize_text($_POST['script_pre'] ?? '') ?: '');
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_post", pfb_sanitize_text($_POST['script_post'] ?? '') ?: '');
 
 		if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliaslog", $_POST['aliaslog'] ?: 'enabled');
@@ -830,7 +838,7 @@ if ($_POST && isset($_POST['save'])) {
 			}
 		}
 
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/custom", base64_encode($_POST['custom']) ?: '');
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/custom", pfb_text_area_encode($_POST['custom'] ?? '') ?: '');
 
 		$rowhelper_exist = array();
 		foreach ($_POST as $key => $value) {
@@ -841,6 +849,14 @@ if ($_POST && isset($_POST['save'])) {
 
 				// Collect all rowhelper keys
 				$rowhelper_exist[$k_field[1]] = '';
+
+				// issue #1723: sanitize the header/url single-line text columns
+				// before their existing PFB_FILTER_HTML/htmlentities handling below
+				// (state-N/format-N stay untouched -- they are select values, not
+				// free text).
+				if (in_array($k_field[0], array('header', 'url'), TRUE)) {
+					$value = pfb_sanitize_text((string) $value);
+				}
 
 				if (!empty($value) && $k_field[0] != 'url') {
 					$value = pfb_filter($value, PFB_FILTER_HTML, 'Category_edit save');

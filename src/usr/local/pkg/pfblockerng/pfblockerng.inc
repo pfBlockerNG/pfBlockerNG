@@ -7287,7 +7287,7 @@ function pfb_unbound_dnsbl($mode) {
 	// Update config.xml, if changes required
 	if ($pfbupdate) {
 		pfb_logger("{$log}", 1);
-		$unbound_custom = base64_encode(str_replace("\r\n", "\n", $unbound_custom));
+		$unbound_custom = pfb_text_area_encode($unbound_custom);
 		$pfb['unboundconfig'] = "{$unbound_custom}";
 		config_set_path('unbound/custom_options', $pfb['unboundconfig']);
 		write_config('pfBlockerNG: saving Unbound custom options');

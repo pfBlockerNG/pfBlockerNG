@@ -591,7 +591,7 @@ if ($_POST) {
 
 		// Validate DNSBL webserver block page
 		$dnsbl_webpage		= FALSE;
-		$dnsbl_webpage_file	= pfb_filter(basename($_POST['dnsbl_webpage']), PFB_FILTER_WORD_DOT, 'dnsbl', 'dnsbl_default.php');
+		$dnsbl_webpage_file	= pfb_filter(basename(pfb_sanitize_text($_POST['dnsbl_webpage'] ?? '')), PFB_FILTER_WORD_DOT, 'dnsbl', 'dnsbl_default.php');
 		if (file_exists("/usr/local/www/pfblockerng/www/{$dnsbl_webpage_file}") &&
 		    @filesize("/usr/local/www/pfblockerng/www/{$dnsbl_webpage_file}") > 0 &&
 		    pfb_filter(array("/usr/local/www/pfblockerng/www/{$dnsbl_webpage_file}", 'text/html'), PFB_FILTER_FILE_MIME_COMPARE, 'dnsbl')) {
@@ -720,6 +720,9 @@ if ($_POST) {
 		// error (ADR-13 §7 pivot — it is a non-blocking runtime warning from pfb_global).
 		$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
 		if (!$pfb_auto) {
+			// issue #1723: sanitize before the 'none' compare / VIP validation below.
+			$_POST['pfb_dnsvip4'] = pfb_sanitize_text($_POST['pfb_dnsvip4'] ?? '');
+			$_POST['pfb_dnsvip6'] = pfb_sanitize_text($_POST['pfb_dnsvip6'] ?? '');
 			if (($_POST['pfb_dnsvip4'] ?? '') == 'none') {
 				$_POST['pfb_dnsvip4'] = '';
 			}
@@ -767,7 +770,7 @@ if ($_POST) {
 
 		// Validate DNS Redirect fields.
 		$redir_ifaces_raw = (array)($_POST['dnsbl_redir_int'] ?? []);
-		$redir_alias_raw  = trim((string)($_POST['dnsbl_redir_exclude'] ?? ''));
+		$redir_alias_raw  = pfb_sanitize_text((string)($_POST['dnsbl_redir_exclude'] ?? ''));
 		$redir_errors     = pfb_validate_dns_redirect_post(
 			$redir_ifaces_raw,
 			array_keys($options_dnsbl_redir_int),
@@ -777,7 +780,7 @@ if ($_POST) {
 
 		// Validate DoT/DoQ Block fields.
 		$dot_block_ifaces_raw = (array)($_POST['dnsbl_dot_block_int'] ?? []);
-		$dot_block_alias_raw  = trim((string)($_POST['dnsbl_dot_block_exclude'] ?? ''));
+		$dot_block_alias_raw  = pfb_sanitize_text((string)($_POST['dnsbl_dot_block_exclude'] ?? ''));
 		$dot_block_action_raw = (string)($_POST['dnsbl_dot_block_action'] ?? 'reject');
 		$dot_block_errors     = pfb_validate_dot_block_post(
 			$dot_block_ifaces_raw,
@@ -873,12 +876,12 @@ if ($_POST) {
 
 			$pfb['dconfig']['alexa_enable']		= pfb_filter($_POST['alexa_enable'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
-			$pfb['dconfig']['pfb_regex_list']	= base64_encode($_POST['pfb_regex_list'])				?: '';
-			$pfb['dconfig']['pfb_noaaaa_list']	= base64_encode($_POST['pfb_noaaaa_list'])				?: '';
-			$pfb['dconfig']['pfb_gp_bypass_list']	= base64_encode($_POST['pfb_gp_bypass_list'])				?: '';
-			$pfb['dconfig']['suppression']		= base64_encode($_POST['suppression'])					?: '';
-			$pfb['dconfig']['tldexclusion']		= base64_encode($_POST['tldexclusion'])					?: '';
-			$pfb['dconfig']['tldblacklist']		= base64_encode($_POST['tldblacklist'])					?: '';
+			$pfb['dconfig']['pfb_regex_list']	= pfb_text_area_encode($_POST['pfb_regex_list'] ?? '')			?: '';
+			$pfb['dconfig']['pfb_noaaaa_list']	= pfb_text_area_encode($_POST['pfb_noaaaa_list'] ?? '')			?: '';
+			$pfb['dconfig']['pfb_gp_bypass_list']	= pfb_text_area_encode($_POST['pfb_gp_bypass_list'] ?? '')			?: '';
+			$pfb['dconfig']['suppression']		= pfb_text_area_encode($_POST['suppression'] ?? '')				?: '';
+			$pfb['dconfig']['tldexclusion']		= pfb_text_area_encode($_POST['tldexclusion'] ?? '')				?: '';
+			$pfb['dconfig']['tldblacklist']		= pfb_text_area_encode($_POST['tldblacklist'] ?? '')				?: '';
 
 			// A provider/auth identity change invalidates only the download detector
 			// baseline. Keep the active source and derived whitelist available until
