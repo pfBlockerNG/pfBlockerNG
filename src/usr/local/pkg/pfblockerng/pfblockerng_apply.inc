@@ -1957,7 +1957,7 @@ function sync_package_pfblockerng($cron='') {
 													mb_detect_encoding($line, 'UTF-8, ASCII, ISO-8859-1'));
 
 												$log = "\n  IDN converted: [ {$line} ]\t";
-												$line = idn_to_ascii($line);
+												$line = pfb_idn_to_ascii_wildcard($line);
 												if (!empty($line)) {
 													pfb_logger("{$log} [ {$line} ]", 1);
 												}

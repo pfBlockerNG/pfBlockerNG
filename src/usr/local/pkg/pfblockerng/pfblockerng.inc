@@ -1201,6 +1201,27 @@ function pfb_text_sanity(string $sample): ?string {
 	return 'below_min_content';
 }
 
+// Punycode-convert a domain, preserving a leading '.' wildcard marker; returns '' when the
+// conversion fails. idn_to_ascii() rejects a leading dot, so strip exactly ONE and re-prefix
+// it (issue #1730/#1740: ltrim() would promote an invalid '..host' row to the wildcard form).
+function pfb_idn_to_ascii_wildcard(string $host): string {
+
+	$wildcard = str_starts_with($host, '.');
+	$host = $wildcard ? substr($host, 1) : $host;
+	// No label left to convert: idn_to_ascii() raises on an empty domain. The value is
+	// converted UNTRIMMED -- trimming it here would launder a padded domain past
+	// pfb_filter()'s charset check, which is fail-closed on purpose.
+	if (pfb_is_blank($host)) {
+		return '';
+	}
+	$ascii = idn_to_ascii($host);
+	if (empty($ascii)) {
+		return '';
+	}
+	return $wildcard ? ".{$ascii}" : $ascii;
+}
+
+
 // Function to filter/sanitize user input.
 //
 // ADR-48: $reject_detail is an optional by-ref out-param for the PFB_FILTER_FILE_MIME /
@@ -1525,18 +1546,8 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			// read time, so what is returned on success must not change.
 			$candidate = $input;
 			if (preg_match('/[^\x00-\x7F]/', $input)) {
-				if (str_starts_with($input, '.')) {
-					// idn_to_ascii() returns an empty string on a leading dot;
-					// strip exactly ONE -- ltrim() would strip every leading dot,
-					// collapsing a double leading dot to a single legal label --
-					// convert, then re-prefix on success (mirrors
-					// pfb_text_area_decode()'s IDN branch).
-					$candidate = idn_to_ascii(substr($input, 1));
-					$candidate = empty($candidate) ? FALSE : ('.' . $candidate);
-				} else {
-					$candidate = idn_to_ascii($input);
-					$candidate = empty($candidate) ? FALSE : $candidate;
-				}
+				$candidate = pfb_idn_to_ascii_wildcard($input);
+				$candidate = ($candidate === '') ? FALSE : $candidate;
 			}
 			if (($candidate !== FALSE) &&
 			    (strpos($candidate, '.') !== FALSE) &&			// Exclude no dots
@@ -3086,6 +3097,20 @@ function pfb_preg_replace_safe($pattern, $replacement, string $subject): string 
 
 
 /**
+ * TRUE iff $value is absent, empty, or nothing but whitespace -- ASCII, Unicode
+ * (\p{Z}), or the BOM. Unlike empty(), the row "0" is NOT blank: it is a valid
+ * list entry (issue #1707). A pathological preg_replace() failure degrades
+ * fail-open, reading as non-blank rather than blank.
+ */
+function pfb_is_blank(?string $value): bool {
+	if ($value === NULL || trim($value) === '') {
+		return TRUE;
+	}
+	return pfb_preg_replace_safe('/[\s\p{Z}\x{FEFF}]+/u', '', $value) === '';
+}
+
+
+/**
  * Sanitize a single-line/scalar text field: converts legacy encodings to
  * UTF-8, strips every Unicode control character (Cc) -- including CR/LF/TAB,
  * since this contract is single-line -- and the BOM, then trims (Unicode
@@ -3164,34 +3189,16 @@ function pfb_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 						mb_detect_encoding($line, 'UTF-8, ASCII, ISO-8859-1'));
 					if (strpos($line, '#') !== FALSE) {
 						$tmpline = preg_split('/(?=#)/', $line);
-						if (str_starts_with($tmpline[0], '.')) {
-							// issue #1730: idn_to_ascii() rejects a leading dot -- strip
-							// exactly ONE, re-prefix on success; ltrim() would promote
-							// an invalid '..host' row to the legal wildcard form.
-							$tmpline[0] = idn_to_ascii(substr($tmpline[0], 1));
-							if (!empty($tmpline[0])) {
-								$tmpline[0] = '.' . $tmpline[0];
-							}
-						} elseif (is_string($tmpline[0]) && (strlen($tmpline[0]) > 0)) {
-							$tmpline[0] = idn_to_ascii($tmpline[0]);
-						}
-						if (empty($tmpline[0])) {
+						$tmpline[0] = pfb_idn_to_ascii_wildcard($tmpline[0]);
+						if (pfb_is_blank($tmpline[0])) {
 							$log = "\nError converting IDN line '{$line_old}'\n";
 							pfb_logger($log, 2);
 							continue;
 						}
 						$line = implode(' ', $tmpline);
 					} else {
-						if (str_starts_with($line, '.')) {
-							// issue #1730: strip exactly ONE leading dot, as above.
-							$line = idn_to_ascii(substr($line, 1));
-							if (!empty($line)) {
-								$line = '.' . $line;
-							}
-						} elseif (is_string($line) && (strlen($line) > 0)) {
-							$line = idn_to_ascii($line);
-						}
-						if (empty($line)) {
+						$line = pfb_idn_to_ascii_wildcard($line);
+						if (pfb_is_blank($line)) {
 							$log = "\nError converting IDN line '{$line_old}'\n";
 							pfb_logger($log, 2);
 							continue;

@@ -3730,6 +3730,19 @@
             }
         ]
     },
+    "pfb_idn_to_ascii_wildcard": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "host",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_ip_apply_retry": {
         "returnsRef": false,
         "returnType": "void",
@@ -4430,6 +4443,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_is_blank": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
                 "default": null
             }
         ]
