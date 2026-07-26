@@ -3165,8 +3165,11 @@ function pfb_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 					if (strpos($line, '#') !== FALSE) {
 						$tmpline = preg_split('/(?=#)/', $line);
 						if (str_starts_with($tmpline[0], '.')) {
-							// idn_to_ascii() returns empty string if it starts with '.' 
-							$tmpline[0] = idn_to_ascii(ltrim($tmpline[0], '.'));
+							// idn_to_ascii() returns an empty string on a leading dot;
+							// strip exactly ONE (issue #1730) -- ltrim() would strip every
+							// leading dot, promoting an invalid '..host' row to the legal
+							// single-dot wildcard form -- convert, then re-prefix on success.
+							$tmpline[0] = idn_to_ascii(substr($tmpline[0], 1));
 							if (!empty($tmpline[0])) {
 								$tmpline[0] = '.' . $tmpline[0];
 							}
@@ -3181,7 +3184,8 @@ function pfb_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 						$line = implode(' ', $tmpline);
 					} else {
 						if (str_starts_with($line, '.')) {
-							$line = idn_to_ascii(ltrim($line, '.'));
+							// Strip exactly ONE leading dot, as above (issue #1730).
+							$line = idn_to_ascii(substr($line, 1));
 							if (!empty($line)) {
 								$line = '.' . $line;
 							}
