@@ -125,6 +125,12 @@ final class PfbFilterContractTest extends TestCase
 			// acceptance above.
 			'ZWNJ inside a label'       => ["exam\xE2\x80\x8Cple.com"],
 			'ZWJ inside a label'        => ["exam\xE2\x80\x8Dple.com"],
+			// Mid-label U+200B (ZWSP) is silently MAPPED AWAY by UTS46 --
+			// probed: idn_to_ascii("exam\u{200B}ple.com") === 'example.com' --
+			// so the row is accepted and blocks the mapped target; an invisible
+			// copy-paste artifact cannot make a row silently miss. Only a ZWSP
+			// standing as an entire label is rejected (hostile provider below).
+			'ZWSP inside a label (mapped away)' => ["exam\xE2\x80\x8Bple.com"],
 		];
 	}
 
