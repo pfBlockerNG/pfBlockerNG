@@ -201,8 +201,9 @@ if ($_POST) {
 			}
 		}
 
-		// Preserve exactly what the user was editing so a validation/write error
-		// doesn't lose their in-progress content.
+		// Re-render the sanitized content so a validation/write error doesn't lose the
+		// user's in-progress work -- it is what a retry would persist, so echoing the
+		// raw typed bytes back would misreport what Save is about to write.
 		$pfb_eh_sel_when   = $post_when;
 		$pfb_eh_sel_script = $post_script;
 		$pfb_eh_content    = $post_content;
