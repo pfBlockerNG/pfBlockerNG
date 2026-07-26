@@ -30,6 +30,10 @@ def _issue_creation_steps(path: Path) -> list[str]:
     return [step for step in path.read_text(encoding="utf-8").split("\n      - name:") if "gh issue create " in step]
 
 
+def _script(step: str) -> str:
+    return "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+
+
 def _run_script(
     path: Path,
     step_name: str,
@@ -41,7 +45,7 @@ def _run_script(
 ) -> list[str]:
     source = path.read_text(encoding="utf-8")
     step = source.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
-    script = "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+    script = _script(step).replace("${{ steps.report.outputs.body_file }}", str(tmp_path / "body.md"))
     log = tmp_path / "gh.log"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
@@ -79,13 +83,14 @@ def test_issue_creation_steps_keep_exact_open_deduplication() -> None:
 
     for step in steps:
         commands = _commands(step)
+        code = "\n".join(line for line in _script(step).splitlines() if not line.lstrip().startswith("#"))
         creates = [command for command in commands if command.startswith("gh issue create ")]
         dedups = [
             command for command in commands if "gh issue list " in command and "--json number,title,state" in command
         ]
         assert len(dedups) == len(creates), f"expected one dedup lookup per issue create: {step}"
-        assert "set -euo pipefail" in step, f"issue dedup must fail closed on lookup errors: {step}"
-        assert step.count("select(.title == $t)") == len(creates), f"issue dedup must use exact titles: {step}"
+        assert "set -euo pipefail" in code, f"issue dedup must fail closed on lookup errors: {step}"
+        assert code.count("select(.title == $t)") == len(creates), f"issue dedup must use exact titles: {step}"
 
         for create, dedup in zip(creates, dedups, strict=True):
             assert "--state open" in dedup, f"issue dedup must query open issues only: {dedup}"
@@ -100,6 +105,7 @@ def test_issue_creation_steps_keep_exact_open_deduplication() -> None:
     [
         ('[{"number":42,"title":"[nightly-red] Smoke failing on devel","state":"OPEN"}]', ["edit 42"]),
         ("[]", ["create"]),
+        ('[{"number":42,"title":"different","state":"OPEN"}]', ["create"]),
     ],
 )
 def test_nightly_open_match_updates_and_closed_only_creates(tmp_path: Path, opened: str, expected: list[str]) -> None:
@@ -122,6 +128,26 @@ def test_nightly_open_match_updates_and_closed_only_creates(tmp_path: Path, open
 
 
 @pytest.mark.parametrize(
+    ("opened", "expected"),
+    [
+        ('[{"number":42,"title":"[top1m-healthcheck] provider URL unhealthy","state":"OPEN"}]', ["edit 42"]),
+        ("[]", ["create"]),
+        ('[{"number":42,"title":"different","state":"OPEN"}]', ["create"]),
+    ],
+)
+def test_top1m_open_match_updates_and_closed_only_creates(tmp_path: Path, opened: str, expected: list[str]) -> None:
+    assert (
+        _run_script(
+            WORKFLOWS / "top1m-healthcheck.yml",
+            "Open or update the tracking issue",
+            tmp_path,
+            opened=opened,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
     ("opened", "closed", "expected"),
     [
         (
@@ -131,6 +157,7 @@ def test_nightly_open_match_updates_and_closed_only_creates(tmp_path: Path, open
             [],
         ),
         ("[]", "[]", ["create"]),
+        ('[{"number":42,"title":"different","state":"OPEN"}]', "[]", ["create"]),
         ("[]", '[{"title":"wontfix pfSense 2.8"}]', []),
     ],
 )
@@ -148,6 +175,33 @@ def test_supported_missing_open_skips_closed_only_creates_and_wontfix_suppresses
             tmp_path,
             opened=opened,
             closed=closed,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("opened", "expected"),
+    [
+        (
+            '[{"number":42,"title":"[version-tracker] pfSense CE 2.8 — upcoming version tracking","state":"OPEN"}]',
+            ["edit 42"],
+        ),
+        ("[]", ["create"]),
+        ('[{"number":42,"title":"different","state":"OPEN"}]', ["create"]),
+    ],
+)
+def test_upcoming_open_match_updates_and_closed_only_creates(tmp_path: Path, opened: str, expected: list[str]) -> None:
+    (tmp_path / "probe_result.json").write_text(
+        '{"future":[{"version":"2.8","channel":"CE","released":"TBD","freebsd_major":"15"}]}',
+        encoding="utf-8",
+    )
+    assert (
+        _run_script(
+            WORKFLOWS / "version-tracker.yml",
+            "Open or update tracking issues for upcoming/TBD versions",
+            tmp_path,
+            opened=opened,
         )
         == expected
     )
