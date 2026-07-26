@@ -68,6 +68,31 @@ most, but the rule is about clarity as much as cost — one binding names the in
 ("`line` is stripped from here on") instead of making the reader re-verify it per use.
 Applies to new code and to any touched block; fix the redundancy when you edit one.
 
+## Text-field sanitization — shared helpers at the persist boundary (issue #1723)
+
+Every user-entered text field is sanitized through the shared helpers in
+`pfblockerng.inc` before it is persisted or parsed — never an ad-hoc
+`trim`/`str_replace` chain:
+
+- **Single-line fields:** `pfb_sanitize_text()` — legacy-encoding→UTF-8 scrub, strips
+  control characters (Cc) + BOM, Unicode-aware trim. Unicode format characters
+  (ZWJ/ZWNJ, bidi marks) survive: fields accept Unicode text, especially comments.
+- **Multi-line textarea fields:** persist through `pfb_text_area_encode()`
+  (`base64_encode(pfb_sanitize_text_area(...))`) — CRLF/CR normalized to LF, control
+  characters stripped except `\n`/`\t`, each line right-stripped (indentation
+  survives). Parse through `pfb_text_area_decode()`, which drops blank and
+  whitespace-only rows and preserves the valid row `"0"`.
+- **Validation stays fail-closed:** `pfb_filter()` remains the backstop gate (rejects
+  Cc/BOM and invalid UTF-8; type-specific checks after). `PFB_FILTER_DOMAIN` /
+  `PFB_FILTER_TLD` accept IDN input by validating its `idn_to_ascii()` punycode form
+  and returning the original text; mixed-script domains are accepted by design
+  (admins block typosquats in their own lists).
+
+A new field MUST route through these helpers; a persist path that deliberately stays
+narrower documents why (exemplar fork: the hook-script editor, issue #1728). Contracts
+pinned by `PfbSanitizeTextTest`, `TextAreaDecodeTest`, `PfbFilterContractTest`, and
+`tests/smoke/ui/test_sanitize_persist.py`.
+
 ## Linting
 
 Run linters while working; the `.githooks/pre-commit` hook blocks failing commits
