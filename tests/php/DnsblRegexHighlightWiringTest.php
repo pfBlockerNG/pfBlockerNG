@@ -146,6 +146,53 @@ final class DnsblRegexHighlightWiringTest extends TestCase
 		);
 	}
 
+	/**
+	 * issue #1732 step 2: the DNSBL page's fromTextarea() call now also wires the
+	 * advisory server-lint endpoint, still inside the SAME $pfb_syntaxhl_on gate --
+	 * toggling syntax highlighting off must keep emitting zero lint bytes too.
+	 */
+	public function testRegexListInitPassesTheLintUrlInsideTheSameGate(): void
+	{
+		$this->assertMatchesRegularExpression(
+			"#events\\.push\\(function\\(\\)\\{(?:(?!endif).)*?if\\s*\\(\\s*\\\$pfb_syntaxhl_on\\s*\\)\\s*:(?:(?!endif).)*?"
+			. "pfbCM\\.fromTextarea\\([^;]*?lintUrl:\\s*'/pfblockerng/pfblockerng_lint\\.php'(?:(?!endif).)*?endif#s",
+			self::$src,
+			"expected pfbCM.fromTextarea(...) to pass lintUrl: '/pfblockerng/pfblockerng_lint.php' inside the \$pfb_syntaxhl_on gate"
+		);
+	}
+
+	/**
+	 * The cap diagnostic must reflect the LIVE checkbox state (what save would enforce
+	 * right now), not the page-load value -- the lintExtraParams function reads
+	 * pfb_regex_cap's checked state at lint time and maps it to '1'/'0'.
+	 */
+	public function testRegexListLintExtraParamsReadsTheLiveCapCheckboxState(): void
+	{
+		$this->assertMatchesRegularExpression(
+			"#lintExtraParams:\\s*function\\s*\\(\\)\\s*\\{[^}]*getElementById\\('pfb_regex_cap'\\)[^}]*\\}#s",
+			self::$src,
+			"expected lintExtraParams to be a function reading getElementById('pfb_regex_cap')"
+		);
+		$this->assertMatchesRegularExpression(
+			"#capEl\\s*&&\\s*capEl\\.checked\\)\\s*\\?\\s*'1'\\s*:\\s*'0'#",
+			self::$src,
+			"expected the cap checkbox's checked state to map to '1'/'0'"
+		);
+	}
+
+	/**
+	 * Vacuity-safe count for the new lintUrl wiring, same rationale as
+	 * testCmRegexAssetAndFromTextareaCallEachAppearExactlyOnceInTheWholeFile.
+	 */
+	public function testLintUrlAppearsExactlyOnceInTheWholeFile(): void
+	{
+		$this->assertSame(
+			1,
+			substr_count(self::$src, "lintUrl: '/pfblockerng/pfblockerng_lint.php'"),
+			'expected exactly one lintUrl wiring in the whole file (the gated events.push init)'
+		);
+	}
+
 	public function testOriginalRegexTextareaFieldIsUnchanged(): void
 	{
 		// The save handler's mb_detect_encoding()/base64_encode() calls key off this exact

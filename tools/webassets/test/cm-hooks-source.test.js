@@ -14,7 +14,7 @@ const srcPath = path.join(__dirname, "..", "cm-hooks.js");
 const src = readFileSync(srcPath, "utf8");
 
 test("fromTextarea is exported (the --global-name=pfbHooksCM bundle-facing entry point)", () => {
-  assert.match(src, /export function fromTextarea\(textarea, lang\)/);
+  assert.match(src, /export function fromTextarea\(textarea,\s*lang,\s*opts\)/);
 });
 
 test("an EditorView.updateListener is installed", () => {
@@ -75,4 +75,31 @@ test("no PHP language package is imported", () => {
 
 test("language selection keys off lang === 'py', defaulting everything else to shell", () => {
   assert.match(src, /lang === "py" \? pythonLanguage : shellLanguage/);
+});
+
+// ------------------------------------------------------------------
+// issue #1732 step 2: advisory server lint, wired behind an opts.lintUrl guard so a
+// caller that passes no opts gets byte-identical behaviour. No bracket lint here --
+// shell mode is a StreamLanguage with no meaningful Lezer error nodes (scope C is the
+// regex editor only).
+// ------------------------------------------------------------------
+
+test("fromTextarea accepts an optional third opts argument", () => {
+  assert.match(src, /export function fromTextarea\(textarea,\s*lang,\s*opts\)/);
+});
+
+test("serverLint is imported from the shared cm-lint.js module", () => {
+  assert.match(src, /import\s*\{[^}]*serverLint[^}]*\}\s*from\s*"\.\/cm-lint\.js"/);
+});
+
+test("serverLint is wired with the py/sh ternary behind an opts.lintUrl guard", () => {
+  assert.match(src, /opts\s*&&\s*opts\.lintUrl/);
+  assert.match(
+    src,
+    /serverLint\(\s*opts\.lintUrl,\s*lang === ["']py["']\s*\?\s*["']py["']\s*:\s*["']sh["'],\s*opts\.lintExtraParams\s*\)/,
+  );
+});
+
+test("no bracket/lezer-error lint is referenced (regex editor only)", () => {
+  assert.ok(!/lezerErrorLint/.test(src), "expected cm-hooks.js to never reference lezerErrorLint");
 });
