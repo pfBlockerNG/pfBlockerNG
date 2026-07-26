@@ -422,6 +422,42 @@ def test_pfblockerng_new_tab_link_renders_with_noopener_rel(path: str, url: str,
     )
 
 
+# issue #1734: the hook editor's help text is the admin's only signal that the save
+# rewrites their script, so it must name every transformation the shared sanitizer
+# applies -- not just the line-ending fold it described while the save still used the
+# narrower pfb_hook_editor_normalize_content(). A help text that outlives the behaviour
+# it describes is how an admin ends up debugging a silently rewritten hook. Substrings
+# verified against the real setHelp() copy in pfblockerng_edit_hooks.php.
+_EDIT_HOOKS_PAGE = "/pfblockerng/pfblockerng_edit_hooks.php"
+_EDIT_HOOKS_SAVE_PROMISE = (
+    "line endings are normalized to LF",
+    "trailing whitespace is stripped from each line",
+    "control characters other than tab are removed",
+)
+
+
+def test_edit_hooks_help_text_names_every_save_transformation(webui: WebUI) -> None:
+    """The hook editor's help text names all three transformations the save applies.
+
+    Tier-A render-layer proof, hermetic (the page renders from local state alone).
+    Asserts the editor textarea itself rendered (non-vacuity: a page that failed to
+    emit the field would otherwise make the substring checks pass trivially on some
+    unrelated body), then EACH clause of the promise separately, so dropping any one
+    of them fails here rather than degrading silently to a partial description.
+    """
+    resp = webui.get(_EDIT_HOOKS_PAGE)
+    assert resp.status_code == 200, f"GET {_EDIT_HOOKS_PAGE} -> HTTP {resp.status_code} (expected 200)"
+    body = resp.text
+    assert 'id="pfb_hook_editor_content"' in body, (
+        f"the hook-editor textarea did not render on {_EDIT_HOOKS_PAGE} -- its help text cannot be pinned"
+    )
+    for clause in _EDIT_HOOKS_SAVE_PROMISE:
+        assert clause in body, (
+            f"the hook-editor help text does not state {clause!r} -- the save applies it "
+            "(pfb_sanitize_text_area), so an admin reading this page would not know their script is rewritten"
+        )
+
+
 # ADR-11: the IP page's pfb_agg_types multi-select must render with ALL FOUR
 # option branches (Deny/Permit/Match/Native) AND its no-rule help caveat. Asserting
 # every option proves each branch of the select is emitted (not just the label), and the

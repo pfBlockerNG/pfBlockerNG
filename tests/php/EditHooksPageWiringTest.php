@@ -460,7 +460,8 @@ final class EditHooksPageWiringTest extends TestCase
 
 	// ------------------------------------------------------------------
 	// The save flow
-	// must normalize $_POST content to LF before it is ever written, and
+	// must sanitize $_POST content through the shared persist-boundary helper
+	// before it is ever written, and
 	// stage the write to a temp file in the same directory and rename() it into
 	// place atomically -- never truncate+write the live target in place, since
 	// pfb_run_hooks() may exec it as root concurrently with a save. The GET
@@ -478,7 +479,15 @@ final class EditHooksPageWiringTest extends TestCase
 		return substr($src, $blockStart, $blockEnd - $blockStart);
 	}
 
-	public function testSavePathNormalizesContentBeforeWrite(): void
+	/**
+	 * issue #1734: the save path joins the #1723 persist-boundary standard -- the shared
+	 * pfb_sanitize_text_area() replaces the hand-rolled pfb_hook_editor_normalize_content().
+	 * The shared helper still performs the identical CRLF/CR -> LF collapse first, so the
+	 * shebang-corruption regression the old helper existed for stays fixed, and it
+	 * additionally scrubs legacy encodings, control characters, the BOM, and per-line
+	 * trailing whitespace before the content ever reaches disk.
+	 */
+	public function testSavePathSanitizesContentBeforeWrite(): void
 	{
 		$block = $this->extractSaveFlowBlock($this->readSource(self::PAGE_PATH));
 
@@ -486,22 +495,38 @@ final class EditHooksPageWiringTest extends TestCase
 		// bare function-name token -- the save block's own comment names the helper, so
 		// a substring assertion passes even with the call stripped (coverage theater;
 		// the mutant survived 19/19). A comment can never satisfy this assignment regex.
-		$callShape = '/\\$post_content\\s*=\\s*pfb_hook_editor_normalize_content\\(/';
+		$callShape = '/\\$post_content\\s*=\\s*pfb_sanitize_text_area\\(/';
 		$this->assertSame(
 			1,
 			preg_match($callShape, $block, $m, PREG_OFFSET_CAPTURE),
-			'the save flow must ASSIGN $post_content through pfb_hook_editor_normalize_content() -- writing the ' .
+			'the save flow must ASSIGN $post_content through the shared pfb_sanitize_text_area() -- writing the ' .
 				"raw \$_POST value persists the browser's CRLF textarea normalization straight into the hook " .
-				"script file, breaking its shebang exec (e.g. \"#!/bin/sh\\r\" -> ENOENT)"
+				"script file, breaking its shebang exec (e.g. \"#!/bin/sh\\r\" -> ENOENT), and leaves control " .
+				'characters and trailing per-line whitespace in the saved script'
 		);
 
-		$normalizePos = $m[0][1];
+		$sanitizePos = $m[0][1];
 		$writePos = strpos($block, 'file_put_contents(');
 		$this->assertNotFalse($writePos, 'test oracle: no file_put_contents( call found in the save-flow block');
 		$this->assertLessThan(
 			$writePos,
-			$normalizePos,
-			'content must be normalized BEFORE it is written to the temp file, not after'
+			$sanitizePos,
+			'content must be sanitized BEFORE it is written to the temp file, not after'
+		);
+	}
+
+	/**
+	 * issue #1734: the hand-rolled helper is removed, not merely bypassed -- a surviving
+	 * call would mean the content is sanitized twice, or (worse) that a later edit
+	 * silently reverted the save path to the narrower normalization.
+	 */
+	public function testSavePathNoLongerUsesTheHandRolledNormalizer(): void
+	{
+		$this->assertStringNotContainsString(
+			'pfb_hook_editor_normalize_content',
+			$this->readSource(self::PAGE_PATH),
+			'pfb_hook_editor_normalize_content() was retired by #1734 -- the page must not reference it at all, ' .
+				'in code or in a comment that would outlive it'
 		);
 	}
 
