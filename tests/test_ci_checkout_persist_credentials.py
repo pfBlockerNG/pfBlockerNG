@@ -34,6 +34,7 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 _WORKFLOW_GLOBS = ("*.yml", "*.yaml")
 
 _STEP_ITEM_RE = re.compile(r"^(?P<indent>[ ]*)-\s")
+_STEP_MARKER_RE = re.compile(r"^[ ]*-[ ]+")  # the sequence marker only, never the key that follows
 _CHECKOUT_RE = re.compile(r"uses:\s*actions/checkout@")
 _PERSIST_RE = re.compile(r"^[ ]*persist-credentials:\s*(?P<value>true|false)\b(?P<comment>.*)$")
 _JOB_KEY_RE = re.compile(r"^ {2}[A-Za-z0-9_.-]+:\s*(#.*)?$")
@@ -94,7 +95,9 @@ def _with_inputs(block: list[str]) -> list[str]:
     another key's block scalar, and a block scalar's content is always
     indented deeper than the key owning it, so it can never sit at the step's
     key indent."""
-    key_indent = len(block[0]) - len(block[0].lstrip(" -"))
+    marker = _STEP_MARKER_RE.match(block[0])
+    assert marker is not None  # block[0] is a step item by construction
+    key_indent = len(marker.group())
     for i, line in enumerate(block):
         with_match = _WITH_KEY_RE.match(line)
         if not with_match or len(with_match.group("indent")) != key_indent:
@@ -312,4 +315,26 @@ def test_a_decoy_with_block_inside_another_keys_scalar_is_not_the_input_mapping(
     assert not site.persist_declared, (
         "a `with:` mapping quoted inside another key's block scalar is not the step's input "
         "mapping -- this step declares nothing and actions/checkout persists GITHUB_TOKEN."
+    )
+
+    # Same decoy, but the step's first key itself starts with a dash. The step
+    # key indent has to be measured off the sequence marker alone; a dash-eating
+    # scan mistakes the key's own dash for part of the marker, shifts the indent
+    # by one, and the decoy lands exactly on it.
+    dash_key = tmp_path / "dash-key.yml"
+    dash_key.write_text(
+        "jobs:\n"
+        "  demo:\n"
+        "    steps:\n"
+        "      - -weird: x\n"
+        "        uses: actions/checkout@v6\n"
+        "        env: |\n"
+        "         with:\n"
+        "           persist-credentials: false\n",
+        encoding="utf-8",
+    )
+    (dash_site,) = _find_checkout_sites(dash_key)
+    assert not dash_site.persist_declared, (
+        "the step key indent is measured off the sequence marker, never off a key name that "
+        "happens to start with a dash."
     )
