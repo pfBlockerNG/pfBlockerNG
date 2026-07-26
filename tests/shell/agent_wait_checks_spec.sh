@@ -52,6 +52,13 @@ Describe 'wait-checks.sh evaluate_checks()'
     The output should equal 'PASS'
   End
 
+  # The org qualifier is whatever Snyk's project is named -- the only context this repo
+  # has ever actually served is `code/snyk (BBcan177)` (probed across PRs #450-#850).
+  It 'ignores the code/snyk context under the org qualifier this repo really serves'
+    When call evaluate_checks '[{"name":"code/snyk (BBcan177)","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
+    The output should equal 'PASS'
+  End
+
   It 'ignores the unqualified code/snyk context'
     When call evaluate_checks '[{"name":"code/snyk","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
     The output should equal 'PASS'
