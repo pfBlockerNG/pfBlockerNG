@@ -22,6 +22,12 @@ final class TextAreaDecodeTest extends TestCase
 		return base64_encode(implode("\r\n", $lines));
 	}
 
+	/** Encode a raw payload verbatim (no CRLF-join) — for line-ending/control-char tests. */
+	private static function rawEnc(string $raw): string
+	{
+		return base64_encode($raw);
+	}
+
 	public function testStringModeLowercasesJoinsAndStripsComments(): void
 	{
 		$in = self::enc('EXAMPLE.COM', 'foo.com', '# whole-line comment', 'bar.com # inline');
@@ -77,5 +83,66 @@ final class TextAreaDecodeTest extends TestCase
 		// base64('') => '' => explode gives [''] => nothing appended. String mode
 		// initialises $custom to '' up front, so empty input yields '' (not null).
 		$this->assertSame('', pfb_text_area_decode(''));
+	}
+
+	// --- issue #1710: split on any line ending, not just CRLF ---
+
+	public function testLfOnlySplitsIntoRows(): void
+	{
+		$in = self::rawEnc("alpha\nbeta");
+		$this->assertSame("alpha\nbeta\n", pfb_text_area_decode($in));
+		$this->assertSame(['alpha', 'beta'], pfb_text_area_decode($in, true, false));
+		$this->assertSame([['alpha'], ['beta']], pfb_text_area_decode($in, true, true));
+	}
+
+	public function testCrOnlySplitsIntoRows(): void
+	{
+		$in = self::rawEnc("alpha\rbeta");
+		$this->assertSame("alpha\nbeta\n", pfb_text_area_decode($in));
+		$this->assertSame(['alpha', 'beta'], pfb_text_area_decode($in, true, false));
+		$this->assertSame([['alpha'], ['beta']], pfb_text_area_decode($in, true, true));
+	}
+
+	public function testMixedLineEndingsSplitInSourceOrder(): void
+	{
+		$in = self::rawEnc("alpha\r\nbeta\ngamma\rdelta");
+		$this->assertSame("alpha\nbeta\ngamma\ndelta\n", pfb_text_area_decode($in));
+	}
+
+	public function testTrailingSeparatorYieldsNoTrailingEmptyRow(): void
+	{
+		$in = self::rawEnc("a.com\n");
+		$this->assertSame("a.com\n", pfb_text_area_decode($in));
+		$this->assertSame(['a.com'], pfb_text_area_decode($in, true, false));
+	}
+
+	public function testControlCharsRemovedNotTreatedAsSeparators(): void
+	{
+		// VT (\x0B), FF (\x0C), NEL (U+0085, UTF-8 \xC2\x85) must be stripped from
+		// the row and must NOT act as row separators.
+		$in = self::rawEnc("al\x0Bpha\nbe\x0Cta\ngam\xC2\x85ma");
+		$this->assertSame("alpha\nbeta\ngamma\n", pfb_text_area_decode($in));
+	}
+
+	// --- issue #1707 (PHP half): drop whitespace-only rows, keep literal "0" ---
+
+	public function testWhitespaceOnlyRowsDropped(): void
+	{
+		$in = self::rawEnc("a.com\n   \nb.com\n\t\t\nc.com");
+		$this->assertSame("a.com\nb.com\nc.com\n", pfb_text_area_decode($in));
+		$this->assertSame(['a.com', 'b.com', 'c.com'], pfb_text_area_decode($in, true, false));
+		$this->assertSame(
+			[['a.com'], ['b.com'], ['c.com']],
+			pfb_text_area_decode($in, true, true)
+		);
+	}
+
+	public function testZeroRowPreserved(): void
+	{
+		// '0' is falsy in PHP; the old !empty($line) guard wrongly dropped it.
+		$in = self::rawEnc('0');
+		$this->assertSame("0\n", pfb_text_area_decode($in));
+		$this->assertSame(['0'], pfb_text_area_decode($in, true, false));
+		$this->assertSame([['0']], pfb_text_area_decode($in, true, true));
 	}
 }
