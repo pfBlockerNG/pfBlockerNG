@@ -382,8 +382,10 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 
 				// Print table/row of Feeds and consecutive rows for all 'Alternate' URLs available.
 				$counter = 0;
+				$alt_feed_rows = array();
 				if (isset($alt_feeds[$ftype][$aliasname][$feed['header']])) {
-					$counter = count($alt_feeds[$ftype][$aliasname][$feed['header']]);
+					$alt_feed_rows = array_values($alt_feeds[$ftype][$aliasname][$feed['header']]);
+					$counter = count($alt_feed_rows);
 				}
 
 				for ($i=0; $i <= $counter; $i++):
@@ -515,7 +517,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 						// Extract 'Alternate Feed' details from alt_feed array.
 						else {
 							$status = '';
-							$alt_feed	= $alt_feeds[$ftype][$aliasname][$feed['header']][$i -1];
+							$alt_feed	= $alt_feed_rows[$i -1];
 							$icon 		= $alt_feed['icon'];
 
 							if (in_array($alt_feed['header'], $feed_alt_selected)) {
