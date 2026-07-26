@@ -34,6 +34,7 @@ import subprocess
 
 import pytest
 
+from . import helpers as h
 from .conftest import SmokeVM
 
 pytestmark = pytest.mark.smoke
@@ -100,23 +101,34 @@ def test_sh_n_syntax_error_format_is_line_mapped(smoke_vm: SmokeVM, content: str
     )
 
 
+_PY_PATH_OPEN = "<<<PFBPY>>>"
+_PY_PATH_CLOSE = "<<<PFBPYEND>>>"
+
+
 def _guest_python(vm: SmokeVM) -> str:
     """The package Python on the guest, via the canonical dependency resolver.
 
     ``pfb_python_interpreter()`` is the SAME resolver the lint endpoint uses —
     the appliance ships no unversioned ``python3``, and the no-appliance-python
-    rule forbids constructing the path any other way.
+    rule forbids constructing the path any other way.  Runs through
+    ``helpers.php_eval`` (pfSsh.php, the fully-bootstrapped pfSense shell): a
+    bare ``php -r`` require of ``pfblockerng.inc`` dies in pfSense's own error
+    handler with exit 0 (probed live 2026-07-27), so the path is delimited the
+    same way ``helpers.config_get`` delimits values past the pfSsh banner.
     """
-    result = vm.ssh(
-        "/usr/local/bin/php -r "
-        + shlex.quote('require_once("/usr/local/pkg/pfblockerng/pfblockerng.inc"); echo pfb_python_interpreter();'),
-        timeout=60,
+    snippet = (
+        'require_once("/usr/local/pkg/pfblockerng/pfblockerng.inc"); '
+        f'echo "{_PY_PATH_OPEN}" . pfb_python_interpreter() . "{_PY_PATH_CLOSE}";'
     )
-    path = result.stdout.strip()
-    assert path and result.returncode == 0, (
-        f"pfb_python_interpreter() resolution failed: rc={result.returncode} "
-        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    result = h.php_eval(vm, snippet, timeout=120)
+    out = result.stdout
+    start = out.find(_PY_PATH_OPEN)
+    end = out.find(_PY_PATH_CLOSE)
+    assert result.returncode == 0 and start != -1 and end != -1, (
+        f"pfb_python_interpreter() resolution failed: rc={result.returncode} stdout={out!r} stderr={result.stderr!r}"
     )
+    path = out[start + len(_PY_PATH_OPEN) : end].strip()
+    assert path, f"pfb_python_interpreter() returned an empty path: stdout={out!r}"
     return path
 
 
