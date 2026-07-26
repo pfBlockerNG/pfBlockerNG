@@ -2,12 +2,15 @@
 #shellcheck disable=SC2034 # spec-set globals are consumed by the Included evaluate_checks()
 # wait-checks.sh evaluate_checks(): the CI-wait verdict reduction. Pins: fail/cancel win,
 # skipping counts as done-not-failed, PASS requires at least one relevant check (never
-# green-by-absence), and the coderabbit|snyk exclusion is honoured.
+# green-by-absence), and the advisory-bot exclusion is honoured.
+#
+# #1706: these specs deliberately do NOT set `exclude` -- they run on the production
+# default the Included script assigns, so an over-broad default cannot hide behind a
+# spec-local override.
 
 Describe 'wait-checks.sh evaluate_checks()'
   AGENT_SOURCE_ONLY=1
   Include scripts/agent/wait-checks.sh
-  exclude='coderabbit|snyk'
 
   It 'reports PASS when every relevant check passed'
     When call evaluate_checks '[{"name":"pytest","bucket":"pass"},{"name":"ShellCheck","bucket":"pass"}]'
@@ -41,6 +44,50 @@ Describe 'wait-checks.sh evaluate_checks()'
 
   It 'ignores a Snyk error status the same way'
     When call evaluate_checks '[{"name":"code/snyk (pfBlockerNG)","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
+    The output should equal 'PASS'
+  End
+
+  It 'ignores the bare snyk context'
+    When call evaluate_checks '[{"name":"snyk","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
+    The output should equal 'PASS'
+  End
+
+  It 'ignores the unqualified code/snyk context'
+    When call evaluate_checks '[{"name":"code/snyk","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
+    The output should equal 'PASS'
+  End
+
+  # #1706: the default exclusion names exact advisory contexts. A required check is not
+  # advisory merely because its name contains "snyk" or "coderabbit" -- excluding it by
+  # substring turns a failing gate into a false green.
+  It 'gates on a failing required check whose name merely starts with snyk'
+    When call evaluate_checks '[{"name":"snyk-adjacent-but-required","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
+    The output should equal 'FAIL'
+  End
+
+  It 'gates on a failing required check whose path segment merely contains snyk'
+    When call evaluate_checks '[{"name":"security/snyk-policy-check","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
+    The output should equal 'FAIL'
+  End
+
+  It 'gates on a failing required check whose name merely ends with coderabbit'
+    When call evaluate_checks '[{"name":"not-coderabbit","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
+    The output should equal 'FAIL'
+  End
+
+  It 'gates on a failing required check whose name merely starts with coderabbit'
+    When call evaluate_checks '[{"name":"coderabbit-required","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
+    The output should equal 'FAIL'
+  End
+
+  It 'gates on a failing required check embedding Snyk in mixed case'
+    When call evaluate_checks '[{"name":"MySnykRequired","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
+    The output should equal 'FAIL'
+  End
+
+  It 'keeps a caller-supplied --exclude regex broad (substring, unanchored)'
+    exclude='snyk'
+    When call evaluate_checks '[{"name":"snyk-adjacent-but-required","bucket":"fail"},{"name":"pytest","bucket":"pass"}]'
     The output should equal 'PASS'
   End
 
@@ -185,7 +232,6 @@ Describe 'wait-checks.sh checks_to_buckets()'
   End
 
   It 'evaluate_checks does not crash on a checks_to_buckets result carrying an empty name'
-    exclude='coderabbit|snyk'
     buckets=$(checks_to_buckets '{"check_runs":[{"name":null,"status":"completed","conclusion":"success"}]}' '{"statuses":[]}')
     When call evaluate_checks "$buckets"
     The output should equal 'PASS'
@@ -213,7 +259,6 @@ Describe 'wait-checks.sh checks_to_buckets()'
   End
 
   It 'excludes a failing CodeRabbit commit status beside a passing check run, across both payload classes'
-    exclude='coderabbit|snyk'
     cr='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
     st='{"statuses":[{"context":"CodeRabbit","state":"failure"}]}'
     buckets=$(checks_to_buckets "$cr" "$st")
@@ -562,6 +607,27 @@ STUB
     The line 1 of output should equal 'pinned=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     The line 2 of output should equal '[{"name":"pytest","bucket":"fail"}]'
     The line 3 of output should equal 'FAIL'
+  End
+
+  It 'reports FAIL, retaining the hostile required check in the terminal JSON, when a snyk-named required check fails (#1706)'
+    export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"},{"name":"snyk-adjacent-but-required","status":"completed","conclusion":"failure"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[{"context":"code/snyk (pfBlockerNG)","state":"failure"}]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 1
+    The status should equal 0
+    The line 1 of output should equal 'pinned=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    The line 2 of output should equal '[{"name":"pytest","bucket":"pass"},{"name":"snyk-adjacent-but-required","bucket":"fail"}]'
+    The line 3 of output should equal 'FAIL'
+  End
+
+  It 'honours a caller-supplied broad --exclude regex unchanged (documented escape hatch)'
+    export GH_STUB_HEAD_SHA_1='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"},{"name":"snyk-adjacent-but-required","status":"completed","conclusion":"failure"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --exclude snyk --interval 0 --max-iter 1
+    The status should equal 0
+    The line 2 of output should equal '[{"name":"pytest","bucket":"pass"}]'
+    The line 3 of output should equal 'PASS'
   End
 
   It '--sha skips arm-time resolution (never calls pr view to resolve) but still re-verifies before the verdict'

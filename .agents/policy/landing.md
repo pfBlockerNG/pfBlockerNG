@@ -350,8 +350,10 @@ The base advances out of band (parallel agents). In the dedicated worktree:
 
 ### CI wait (excluding advisory bots)
 
-Poll until every **required** check completes, excluding checks matching
-`coderabbit|snyk` (case-insensitive; both advisory) — via
+Poll until every **required** check completes, excluding only four advisory contexts —
+`CodeRabbit`, `snyk`, `code/snyk`, `code/snyk (pfBlockerNG)` — matched
+case-insensitively on the WHOLE name, never a substring: a required check merely
+containing one of them still gates. `--exclude REGEX` overrides it, unanchored. Via
 `scripts/agent/wait-checks.sh`, the single implementation (self-exiting background
 task, ~40-minute cap, result file's LAST line is the verdict). CLI transport
 unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
@@ -359,10 +361,7 @@ unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
 - **Early-verdict reuse:** a CI wait armed at review start that already returned
   `PASS` may replace this wait IFF the SHA it watched still equals the PR head AND
   the rebase was a no-op. Any push, rebase, or SHA mismatch invalidates it.
-- **PASS** → one post-pass read of the excluded Snyk status: a terminal `failure`
-  with a real finding (not quota/infra `error`) → stop and route it through the
-  review gate instead of merging; quota / error / pending / absent → proceed, noting
-  the skipped scan.
+- **PASS** → still do the Snyk post-hoc read (merge gate) before merging.
 - **FAIL** → a real check failed: do not merge; report the failing checks and run
   URLs and stop.
 - **TIMEOUT** → report and ask whether to keep waiting; never merge on a timeout.
