@@ -63,19 +63,30 @@ final class TextAreaDecodeTest extends TestCase
 		$this->assertSame([['bar.com', '# note']], pfb_text_area_decode($in, true, true));
 	}
 
-	public function testIdnConversionToPunycode(): void
+	/**
+	 * Run $fn under the C locale.
+	 *
+	 * The IDN branch is gated on !ctype_print(), which is locale-sensitive.
+	 * pfSense's PHP CLI runs under the C locale (high bytes non-printable),
+	 * so pin that to make the conversion deterministic on any host.
+	 */
+	private static function underCLocale(callable $fn): void
 	{
-		// The IDN branch is gated on !ctype_print(), which is locale-sensitive.
-		// pfSense's PHP CLI runs under the C locale (high bytes non-printable),
-		// so pin that to make the conversion deterministic on any host.
 		$prev = setlocale(LC_CTYPE, '0');
 		setlocale(LC_CTYPE, 'C');
 		try {
-			$in = self::enc('bücher.de');
-			$this->assertSame("xn--bcher-kva.de\n", pfb_text_area_decode($in, false, true, true));
+			$fn();
 		} finally {
 			setlocale(LC_CTYPE, $prev);
 		}
+	}
+
+	public function testIdnConversionToPunycode(): void
+	{
+		self::underCLocale(function (): void {
+			$in = self::enc('bücher.de');
+			$this->assertSame("xn--bcher-kva.de\n", pfb_text_area_decode($in, false, true, true));
+		});
 	}
 
 	public function testEmptyInputReturnsEmptyString(): void
@@ -169,5 +180,67 @@ final class TextAreaDecodeTest extends TestCase
 		// A pathological all-NUL row must not wipe the flanking good rows.
 		$in = self::rawEnc("a.com\n" . str_repeat("\x00", 20000) . "\nb.com");
 		$this->assertSame(['a.com', 'b.com'], pfb_text_area_decode($in, true, false));
+	}
+
+	// --- issue #1730: the IDN branch strips exactly ONE leading dot ---
+
+	public function testSingleLeadingDotIdnRowKeepsWildcardForm(): void
+	{
+		// The legal wildcard form survives the round trip unchanged: one
+		// leading dot in, one leading dot out, punycode body.
+		self::underCLocale(function (): void {
+			$in = self::enc('.bücher.de');
+			$this->assertSame(".xn--bcher-kva.de\n", pfb_text_area_decode($in, false, true, true));
+			$this->assertSame(['.xn--bcher-kva.de'], pfb_text_area_decode($in, true, false, true));
+		});
+	}
+
+	public function testSingleLeadingDotIdnRowWithCommentKeepsWildcardForm(): void
+	{
+		// Same, through the '#'-comment branch, which converts the value token
+		// separately from the comment token.
+		self::underCLocale(function (): void {
+			$in = self::enc('.bücher.de # note');
+			$this->assertSame(".xn--bcher-kva.de\n", pfb_text_area_decode($in, false, true, true));
+			$this->assertSame(
+				[['.xn--bcher-kva.de', '# note']],
+				pfb_text_area_decode($in, true, true, true)
+			);
+		});
+	}
+
+	public function testDoubleLeadingDotIdnRowIsNotPromotedToWildcard(): void
+	{
+		// '..bücher.de' is not a wildcard row: an ASCII '..example.com' row is
+		// left as the invalid double-dot string it is, so the IDN row must not
+		// be silently rewritten into the legal single-dot wildcard form. With
+		// exactly one dot stripped, idn_to_ascii() rejects the remainder and
+		// the row is logged and dropped instead.
+		self::underCLocale(function (): void {
+			$in = self::enc('..bücher.de');
+			$this->assertSame('', pfb_text_area_decode($in, false, true, true));
+			$this->assertSame([], pfb_text_area_decode($in, true, false, true));
+		});
+	}
+
+	public function testDoubleLeadingDotIdnRowWithCommentIsNotPromotedToWildcard(): void
+	{
+		// Same guarantee through the '#'-comment branch.
+		self::underCLocale(function (): void {
+			$in = self::enc('..bücher.de # note');
+			$this->assertSame('', pfb_text_area_decode($in, false, true, true));
+			$this->assertSame([], pfb_text_area_decode($in, true, true, true));
+		});
+	}
+
+	public function testDoubleLeadingDotIdnRowDroppedWithoutTakingNeighboursDown(): void
+	{
+		// A dropped '..' IDN row is a per-row skip, not a batch abort: the rows
+		// flanking it still decode.
+		self::underCLocale(function (): void {
+			$in = self::enc('a.com', '..bücher.de', 'b.com');
+			$this->assertSame("a.com\nb.com\n", pfb_text_area_decode($in, false, true, true));
+			$this->assertSame(['a.com', 'b.com'], pfb_text_area_decode($in, true, false, true));
+		});
 	}
 }
