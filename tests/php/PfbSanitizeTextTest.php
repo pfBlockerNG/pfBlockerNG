@@ -14,6 +14,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_sanitize_text')]
 #[CoversFunction('pfb_sanitize_text_area')]
+#[CoversFunction('pfb_text_area_encode')]
 final class PfbSanitizeTextTest extends TestCase
 {
 	// --- pfb_sanitize_text() ---
@@ -190,5 +191,42 @@ final class PfbSanitizeTextTest extends TestCase
 	{
 		// Trailing NBSP / U+3000 must right-strip like ASCII space/tab.
 		$this->assertSame("a\nb\n", pfb_sanitize_text_area("a\xC2\xA0\nb\xE3\x80\x80\n"));
+	}
+
+	public function testSanitizeTextSurvivesHugeWhitespaceRun(): void
+	{
+		// A >1,000,000-char space run defeats the trim regex's backtrack limit
+		// the same way testSanitizeTextAreaSurvivesHugeSpaceRunMidLine() pins for
+		// the textarea helper. Probed (issue #1723): pfb_preg_replace_safe()
+		// degrades to the UNSTRIPPED input byte-for-byte (leading/trailing NBSP
+		// included) rather than fatal-ing or wiping data -- a fail-open pin, not
+		// a design goal: under this load the Unicode-whitespace trim may not
+		// apply for the call.
+		$in = "\xC2\xA0x" . str_repeat(' ', 1100000) . "y\xC2\xA0";
+		$out = pfb_sanitize_text($in);
+		$this->assertIsString($out);
+		$this->assertStringContainsString('x', $out);
+		$this->assertStringContainsString('y', $out);
+		$this->assertSame($in, $out);
+	}
+
+	// --- pfb_text_area_encode() ---
+
+	public function testTextAreaEncodeEmptyInputReturnsEmptyString(): void
+	{
+		$this->assertSame('', pfb_text_area_encode(''));
+	}
+
+	public function testTextAreaEncodeDecodeRoundTrip(): void
+	{
+		// Persist-boundary (encode) feeding the read-boundary (decode): the
+		// decoder lowercases, strips \x07 (Cc, stripped by
+		// pfb_sanitize_text_area()), and right-strips the trailing NBSP+space
+		// off the 'B' row. Probed exact result (issue #1723): three rows,
+		// 'a'/'b'/'c' -- not two, the \x07 does not merge 'B' and 'C' into one
+		// row since it sits immediately after the '\n' it does not remove.
+		$raw = "A\r\nB\xC2\xA0 \n\x07C";
+		$encoded = pfb_text_area_encode($raw);
+		$this->assertSame(['a', 'b', 'c'], pfb_text_area_decode($encoded, TRUE, FALSE));
 	}
 }

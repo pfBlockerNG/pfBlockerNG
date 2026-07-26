@@ -1232,7 +1232,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		return $return_type;
 	}
 
-	// Check for control characters. The /u modifier is required: without it, \p{C}
+	// Check for control characters. The /u modifier is required: without it, \p{Cc}
 	// classifies each raw BYTE as a Latin-1 codepoint, so a valid multibyte UTF-8
 	// character (e.g. "€", "日") whose continuation byte falls in 0x80-0x9F is
 	// falsely rejected while other non-ASCII bytes pass through unexamined -- and a
@@ -1241,9 +1241,15 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 	// to fail closed (this is a PFBL-01 input-sanitisation gate) rather than open.
 	// The reject above already returned for every non-FILE_MIME type, so this array
 	// branch only ever sees FILE_MIME's flat literal-string arrays (ADR-48).
+	// issue #1723: narrowed from \p{C} (Cc+Cf+Co+Cs+Cn) to \p{Cc}+BOM (\x{FEFF}).
+	// Unicode format characters (Cf: ZWJ/ZWNJ, bidi marks, zero-width) are no
+	// longer grounds to reject a whole field -- free-text fields must accept
+	// Unicode; domain-shaped fields still exclude them via their type-specific
+	// validation below (ASCII regex or IDNA). Cc and the BOM stay rejected;
+	// invalid UTF-8 stays fail-closed.
 	if (is_array($input)) {
 		foreach ($input as $vline) {
-			if (preg_match("/[\p{C}]+/u", $vline) !== 0) {
+			if (preg_match("/[\p{Cc}\x{FEFF}]+/u", $vline) !== 0) {
 				pfb_logger("{$header} Control characters found [ " . htmlspecialchars($vline) . " ]", 6);
 				// ADR-48: this early return precedes the switch, so it also rejects
 				// the FILE_MIME types -- fill the out-param for an opted-in caller
@@ -1257,7 +1263,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		}
 	}
 	else {
-		if (preg_match("/[\p{C}]+/u", $input) !== 0) {
+		if (preg_match("/[\p{Cc}\x{FEFF}]+/u", $input) !== 0) {
 			pfb_logger("{$header} Control characters found [ " . htmlspecialchars($input) . " ]", 6);
 			if (is_array($reject_detail)) {
 				$reject_detail = array('mime_raw' => 'control-characters', 'mime' => '', 'retval' => -1);
@@ -1497,18 +1503,45 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			}
 			break;
 		case PFB_FILTER_TLD:
-			// Validate TLD
-			if (preg_match("/^[a-zA-Z0-9_\.\-]+$/", $input)) {
+			// Validate TLD. issue #1723: a non-ASCII (IDN) TLD is converted to its
+			// punycode candidate before the charset check; on success the ORIGINAL
+			// input is returned (the read path IDN-converts separately).
+			$candidate = $input;
+			if (preg_match('/[^\x00-\x7F]/', $input)) {
+				$candidate = idn_to_ascii($input);
+				$candidate = empty($candidate) ? FALSE : $candidate;
+			}
+			if (($candidate !== FALSE) && preg_match("/^[a-zA-Z0-9_\.\-]+$/", $candidate)) {
 				$result = htmlspecialchars($input);
 			}
 			break;
 		case PFB_FILTER_DOMAIN:
-			// Validate domain
-			if ((strpos($input, '.') !== FALSE) &&			// Exclude no dots
-			    (strpos($input, '..') === FALSE) &&			// Exclude double dot
-			    (strlen($input) < 255) &&				// Validate length of domain (Max 255 chars)
-			    (pfb_validate_domain_labels($input) !== FALSE) &&	// Validate length of labels (Max of 63 chars)
-			    (preg_match("/^[a-zA-Z0-9_\.\-]+$/", $input))) {  	// Exclude any other characters
+			// Validate domain. issue #1723: a non-ASCII (Unicode/IDN) domain is
+			// converted to its punycode candidate before the existing dots/length/
+			// labels/charset checks run below; on success the ORIGINAL (Unicode)
+			// input is returned (htmlspecialchars'd) -- callers use the return as
+			// a pass/fail gate and persist the raw text, the read path
+			// (pfb_text_area_decode()'s IDN branch) IDN-converts separately at
+			// read time, so what is returned on success must not change.
+			$candidate = $input;
+			if (preg_match('/[^\x00-\x7F]/', $input)) {
+				if (str_starts_with($input, '.')) {
+					// idn_to_ascii() returns an empty string on a leading dot;
+					// strip it, convert, then re-prefix on success (mirrors
+					// pfb_text_area_decode()'s IDN branch).
+					$candidate = idn_to_ascii(ltrim($input, '.'));
+					$candidate = empty($candidate) ? FALSE : ('.' . $candidate);
+				} else {
+					$candidate = idn_to_ascii($input);
+					$candidate = empty($candidate) ? FALSE : $candidate;
+				}
+			}
+			if (($candidate !== FALSE) &&
+			    (strpos($candidate, '.') !== FALSE) &&			// Exclude no dots
+			    (strpos($candidate, '..') === FALSE) &&			// Exclude double dot
+			    (strlen($candidate) < 255) &&				// Validate length of domain (Max 255 chars)
+			    (pfb_validate_domain_labels($candidate) !== FALSE) &&	// Validate length of labels (Max of 63 chars)
+			    (preg_match("/^[a-zA-Z0-9_\.\-]+$/", $candidate))) {  	// Exclude any other characters
 				$result = TRUE;
 			}
 			if ($result) {
@@ -3057,6 +3090,9 @@ function pfb_preg_replace_safe($pattern, $replacement, string $subject): string 
  * whitespace \p{Z}/tab, then the ASCII trim() backstop). Unicode format
  * characters (ZWJ/ZWNJ/bidi marks) are NOT Cc and survive. A pathological
  * preg_replace() failure degrades to the unstripped input, never to NULL.
+ * Under a pathological (~1M-char) whitespace run the guarded preg pass
+ * degrades fail-open the same way, so Unicode-whitespace stripping may not
+ * apply for that call.
  */
 function pfb_sanitize_text(string $text): string {
 	if (!mb_check_encoding($text, 'UTF-8')) {
@@ -3080,6 +3116,9 @@ function pfb_sanitize_text(string $text): string {
  * NOT drop blank lines; that is the caller's job (issue #1707). A
  * pathological preg_replace() failure degrades to the unstripped input (or,
  * per line, the ASCII-rtrim'd line) instead of wiping rows or fatal-ing.
+ * Under a pathological (~1M-char) whitespace run the guarded preg pass
+ * degrades fail-open the same way, so Unicode-whitespace stripping may not
+ * apply for that call.
  */
 function pfb_sanitize_text_area(string $text): string {
 	if (!mb_check_encoding($text, 'UTF-8')) {
@@ -3188,6 +3227,16 @@ function pfb_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 		}
 		return $custom;
 	}
+}
+
+
+/**
+ * Persist-boundary counterpart to pfb_text_area_decode(): sanitizes a raw
+ * textarea blob (pfb_sanitize_text_area()) and base64-encodes it for config
+ * storage. Every textarea save routes through it (issue #1723).
+ */
+function pfb_text_area_encode(string $raw): string {
+	return base64_encode(pfb_sanitize_text_area($raw));
 }
 
 

@@ -102,6 +102,74 @@ final class PfbFilterContractTest extends TestCase
 		$this->assertSame('', pfb_filter($input, PFB_FILTER_DOMAIN, 'PFBL-01 contract'));
 	}
 
+	// --- PFB_FILTER_DOMAIN / PFB_FILTER_TLD: Unicode/IDN acceptance (issue #1723) --
+	//
+	// Non-ASCII input is converted to its punycode candidate for validation
+	// (dots/length/labels/charset), but on success the ORIGINAL Unicode input is
+	// returned (htmlspecialchars'd) -- matching the read path
+	// (pfb_text_area_decode()'s IDN branch), which also IDNA-converts at read
+	// time, and preserving the pass/fail-gate contract callers rely on.
+
+	/** @return array<string, array{0: string}> label => Unicode domain returned unchanged */
+	public static function domainUnicodeAcceptedProvider(): array
+	{
+		return [
+			'IDN domain (latin)'        => ['bücher.de'],
+			'IDN domain (CJK)'          => ['日本語.example'],
+			'IDN leading-dot wildcard'  => ['.bücher.de'],
+		];
+	}
+
+	#[DataProvider('domainUnicodeAcceptedProvider')]
+	public function testDomainFilterAcceptsUnicodeIdnUnchanged(string $domain): void
+	{
+		$this->assertSame($domain, pfb_filter($domain, PFB_FILTER_DOMAIN, 'PFBL-01 contract'));
+	}
+
+	public function testTldFilterAcceptsUnicodeIdnUnchanged(): void
+	{
+		$this->assertSame('рф', pfb_filter('рф', PFB_FILTER_TLD, 'PFBL-01 contract'));
+	}
+
+	/** @return array<string, array{0: string}> label => hostile/boundary value the DOMAIN filter must still reject */
+	public static function domainUnicodeHostileProvider(): array
+	{
+		return [
+			// No dot -- same rule as the ASCII case (pin: rejected before and
+			// after via the "Exclude no dots" check on the converted candidate).
+			'IDN no dot'                  => ['bücher'],
+			// Embedded space, pure ASCII -- unaffected by the IDN branch (pin).
+			'space (ascii, unaffected)'   => ['exa mple.com'],
+			// Double dot inside an IDN label -- idn_to_ascii() itself refuses
+			// the malformed input (probed: returns FALSE), so it never reaches
+			// the label check; still rejected either way.
+			'IDN double dot'              => ["b\xC3\xBCcher..de"],
+			// Punycode form of a 60-char single label exceeds the 63-char
+			// label cap once 'xn--...-' is added -- probed: idn_to_ascii()
+			// itself returns FALSE for the whole domain (UTS46 refuses an
+			// over-length label before we ever run pfb_validate_domain_labels()).
+			'IDN label overlong in punycode' => [str_repeat('ü', 60) . '.de'],
+			// U+200B (ZERO WIDTH SPACE) leading a label -- probed: idn_to_ascii()
+			// returns FALSE (UTS46 rejects it), so the candidate stays FALSE and
+			// the domain is rejected before the charset/label checks run.
+			'zero-width leading label'    => ["\xE2\x80\x8B.com"],
+		];
+	}
+
+	#[DataProvider('domainUnicodeHostileProvider')]
+	public function testDomainFilterRejectsUnicodeHostileInput(string $input): void
+	{
+		$this->assertSame('', pfb_filter($input, PFB_FILTER_DOMAIN, 'PFBL-01 contract'));
+	}
+
+	public function testDomainFilterAsciiPathUnaffectedByIdnBranch(): void
+	{
+		// Unchanged ASCII accept/reject pins -- must stay green throughout the
+		// IDN-acceptance change (no regression on the plain-ASCII path).
+		$this->assertSame('example.com', pfb_filter('example.com', PFB_FILTER_DOMAIN, 'PFBL-01 contract'));
+		$this->assertSame('', pfb_filter('exam!ple.com', PFB_FILTER_DOMAIN, 'PFBL-01 contract'));
+	}
+
 	// --- PFB_FILTER_WORD (feed headers + friendly interface names) ---------------
 
 	/** @return array<string, array{0: string}> label => valid \w-only value returned unchanged */
@@ -247,11 +315,34 @@ final class PfbFilterContractTest extends TestCase
 		$this->assertSame('DEF', pfb_filter("abc\x07def", PFB_FILTER_HTML, 'ref', 'DEF'));
 	}
 
-	public function testScalarFilterRejectsZeroWidthSpaceAsFormatControl(): void
+	public function testScalarFilterAcceptsZeroWidthFormatCharacter(): void
 	{
-		// U+200B (ZERO WIDTH SPACE, Unicode category Cf) is a genuine \p{C} member --
-		// a homoglyph/zero-width hardening pin, distinct from the false-positive fix.
-		$this->assertSame('DEF', pfb_filter("\xE2\x80\x8B", PFB_FILTER_HTML, 'ref', 'DEF'));
+		// issue #1723: the control-character gate narrowed from \p{C} (Cc+Cf+Co+
+		// Cs+Cn) to \p{Cc}+BOM only. U+200B (ZERO WIDTH SPACE) is Cf, not Cc, so
+		// it no longer makes a whole free-text field a reject; homoglyph/
+		// zero-width defense for domain-shaped fields now lives in the
+		// type-specific validators below (ASCII regex / IDNA), not this gate.
+		$this->assertSame("\xE2\x80\x8B", pfb_filter("\xE2\x80\x8B", PFB_FILTER_HTML, 'ref', 'DEF'));
+	}
+
+	public function testScalarFilterAcceptsZeroWidthJoinerInsideText(): void
+	{
+		// U+200D (ZERO WIDTH JOINER) is Cf -- must survive embedded in text too.
+		$this->assertSame("a\xE2\x80\x8Db", pfb_filter("a\xE2\x80\x8Db", PFB_FILTER_HTML, 'ref', 'DEF'));
+	}
+
+	public function testScalarFilterAcceptsBidiOverrideMark(): void
+	{
+		// U+202E (RIGHT-TO-LEFT OVERRIDE) is Cf -- free-text fields must accept
+		// Unicode; bidi-spoofing defense is out of scope for this gate.
+		$this->assertSame("a\xE2\x80\xAEb", pfb_filter("a\xE2\x80\xAEb", PFB_FILTER_HTML, 'ref', 'DEF'));
+	}
+
+	public function testScalarFilterStillRejectsByteOrderMark(): void
+	{
+		// U+FEFF (BOM) is not \p{Cc} but is explicitly named in the narrowed
+		// class (\x{FEFF}) -- must keep being rejected.
+		$this->assertSame('DEF', pfb_filter("a\xEF\xBB\xBFb", PFB_FILTER_HTML, 'ref', 'DEF'));
 	}
 
 	public function testScalarFilterRejectsInvalidUtf8FailClosed(): void
