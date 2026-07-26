@@ -1,5 +1,7 @@
 """Preserve safe deduplication around issue creation (issue #1735)."""
 
+from __future__ import annotations
+
 import os
 import re
 import subprocess

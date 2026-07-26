@@ -1,5 +1,7 @@
 """Issue-opening workflows deduplicate against open issues only (issue #1735)."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
