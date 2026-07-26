@@ -550,8 +550,9 @@ SH
 		$this->assertTrue($result['redirect']);
 		$this->assertFileExists("{$GLOBALS['pfb']['aliasdir']}/pfB_Whitelist_v6.txt");
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
+		// issue #1723: pfb_text_area_encode() normalizes the trailing CRLF to LF.
 		$this->assertSame(
-			base64_encode("2001:db8::31\r\n"),
+			base64_encode("2001:db8::31\n"),
 			$GLOBALS['config']['installedpackages']['pfblockernglistsv6']['config'][0]['custom']
 		);
 		$this->assertFileExists("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v6.update");
@@ -592,8 +593,9 @@ SH
 		$this->assertStringContainsString('added', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
 		$this->assertSame(['add', $table, '198.51.100.34'], $this->lastLogRow());
+		// issue #1723: pfb_text_area_encode() normalizes the trailing CRLF to LF.
 		$this->assertSame(
-			base64_encode("198.51.100.34\r\n"),
+			base64_encode("198.51.100.34\n"),
 			$GLOBALS['config']['installedpackages']['pfblockernglistsv4']['config'][0]['custom']
 		);
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
@@ -621,7 +623,8 @@ SH
 
 		$this->assertStringContainsString('Not currently blocked', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertSame("198.51.100.40/32 # note\r\n", base64_decode(PfbConfig::read('v4suppression')));
+		// issue #1723: pfb_text_area_encode() normalizes the trailing CRLF to LF.
+		$this->assertSame("198.51.100.40/32 # note\n", base64_decode(PfbConfig::read('v4suppression')));
 		$this->assertFileExists($GLOBALS['pfb']['supptxt']);
 	}
 
@@ -634,7 +637,8 @@ SH
 
 		$this->assertStringContainsString('Not currently blocked', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertSame("198.51.100.45/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
+		// issue #1723: pfb_text_area_encode() normalizes the trailing CRLF to LF.
+		$this->assertSame("198.51.100.45/32\n", base64_decode(PfbConfig::read('v4suppression')));
 		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
 		$this->assertDirectoryExists($suppression_file, 'suppression-file persistence failure must leave the target directory untouched');
 	}
@@ -647,7 +651,8 @@ SH
 
 		$this->assertStringContainsString('Not currently blocked', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertSame("2001:db8::40/128\r\n", base64_decode(PfbConfig::read('v6suppression')));
+		// issue #1723: pfb_text_area_encode() normalizes the trailing CRLF to LF.
+		$this->assertSame("2001:db8::40/128\n", base64_decode(PfbConfig::read('v6suppression')));
 		$this->assertFileExists($GLOBALS['pfb']['supptxt_v6']);
 	}
 
@@ -660,7 +665,8 @@ SH
 
 		$this->assertStringContainsString('Removed 1 entry, added 0 covering CIDRs', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertSame("198.51.100.42/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
+		// issue #1723: pfb_text_area_encode() normalizes the trailing CRLF to LF.
+		$this->assertSame("198.51.100.42/32\n", base64_decode(PfbConfig::read('v4suppression')));
 	}
 
 	public function testAddSuppressFailedStillPersistsStandingSuppression(): void
@@ -672,7 +678,8 @@ SH
 
 		$this->assertStringContainsString('Live punch failed', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertSame("198.51.100.43/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
+		// issue #1723: pfb_text_area_encode() normalizes the trailing CRLF to LF.
+		$this->assertSame("198.51.100.43/32\n", base64_decode(PfbConfig::read('v4suppression')));
 	}
 
 	public function testAddSuppressBusyStillPersistsStandingSuppression(): void
@@ -690,7 +697,8 @@ SH
 
 		$this->assertStringContainsString('update/reload pass', $result['savemsg']);
 		$this->assertTrue($result['redirect']);
-		$this->assertSame("198.51.100.44/32\r\n", base64_decode(PfbConfig::read('v4suppression')));
+		// issue #1723: pfb_text_area_encode() normalizes the trailing CRLF to LF.
+		$this->assertSame("198.51.100.44/32\n", base64_decode(PfbConfig::read('v4suppression')));
 	}
 
 	public function testAddSuppressExactDuplicateSkipsConfigRefresh(): void

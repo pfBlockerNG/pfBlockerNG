@@ -853,7 +853,7 @@ if (isset($_POST) && !empty($_POST)) {
 					$data .= "{$line}";
 				}
 			}
-			$clists['dnsblwhitelist']['base64'] = base64_encode($data);
+			$clists['dnsblwhitelist']['base64'] = pfb_text_area_encode($data);
 			PfbConfig::write('suppression', $clists['dnsblwhitelist']['base64']);
 			write_config("pfBlockerNG: Removed [ {$wl_base} ] from DNSBL Whitelist (added to Custom_List)", FALSE);
 
@@ -879,7 +879,7 @@ if (isset($_POST) && !empty($_POST)) {
 			} else {
 				$data .= "{$domain}\r\n";
 			}
-			$clists['dnsbl'][$list]['base64'] = base64_encode($data);
+			$clists['dnsbl'][$list]['base64'] = pfb_text_area_encode($data);
 			// foreign structure: pfblockerngdnsbl/config/{row}/custom is a dynamic per-row key, not in registry
 			config_set_path("installedpackages/pfblockerngdnsbl/config/{$clists['dnsbl'][$list]['base64_idx']}/custom", $clists['dnsbl'][$list]['base64']);
 			write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Group [ {$list} ] customlist", FALSE);
@@ -1020,7 +1020,7 @@ if (isset($_POST) && !empty($_POST)) {
 					}
 				}
 				$data .= "{$whitelist}\r\n";
-				$clists['dnsblwhitelist']['base64'] = base64_encode($data);
+				$clists['dnsblwhitelist']['base64'] = pfb_text_area_encode($data);
 				PfbConfig::write('suppression', $clists['dnsblwhitelist']['base64']);
 				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Whitelist", FALSE);
 			}
@@ -1057,7 +1057,7 @@ if (isset($_POST) && !empty($_POST)) {
 				foreach ($clists['dnsbl'][$lname]['data'] as $line) {
 					$data .= "{$line}";
 				}
-				$clists['dnsbl'][$lname]['base64'] = base64_encode($data);
+				$clists['dnsbl'][$lname]['base64'] = pfb_text_area_encode($data);
 				// foreign structure: pfblockerngdnsbl/config/{row}/custom is a dynamic per-row key, not in registry
 				config_set_path("installedpackages/pfblockerngdnsbl/config/{$clists['dnsbl'][$lname]['base64_idx']}/custom", $clists['dnsbl'][$lname]['base64']);
 				write_config("pfBlockerNG: Removed [ {$domain} ] from DNSBL Group [ {$lname} ] customlist (whitelisted)", FALSE);
@@ -1120,7 +1120,7 @@ if (isset($_POST) && !empty($_POST)) {
 					$data .= "{$line}";
 				}
 				$data .= "{$exclude_string}\r\n";
-				$clists['tldexclusion']['base64'] = base64_encode($data);
+				$clists['tldexclusion']['base64'] = pfb_text_area_encode($data);
 				PfbConfig::write('tldexclusion', $clists['tldexclusion']['base64']);
 				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL TLD Exclusion customlist.", FALSE);
 			}
@@ -1221,7 +1221,7 @@ if (isset($_POST) && !empty($_POST)) {
 						$data .= "{$line}";
 					}
 				}
-				$clists['dnsblwhitelist']['base64'] = base64_encode($data);
+				$clists['dnsblwhitelist']['base64'] = pfb_text_area_encode($data);
 				PfbConfig::write('suppression', $clists['dnsblwhitelist']['base64']);
 				break;
 			case 'delete_exclusion':
@@ -1234,7 +1234,7 @@ if (isset($_POST) && !empty($_POST)) {
 				foreach ($clists['tldexclusion']['data'] as $line) {
 					$data .= "{$line}";
 				}
-				$clists['tldexclusion']['base64'] = base64_encode($data);
+				$clists['tldexclusion']['base64'] = pfb_text_area_encode($data);
 				PfbConfig::write('tldexclusion', $clists['tldexclusion']['base64']);
 				break;
 			case 'delete_ip':
@@ -1269,7 +1269,7 @@ if (isset($_POST) && !empty($_POST)) {
 						foreach ($clists[$supp_key]['data'] as $line) {
 							$data .= "{$line}";
 						}
-						$clists[$supp_key]['base64'] = base64_encode($data);
+						$clists[$supp_key]['base64'] = pfb_text_area_encode($data);
 						PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
 
 						// Keep pfbsuppression(_v6).txt in step with the config edit --
@@ -1310,7 +1310,7 @@ if (isset($_POST) && !empty($_POST)) {
 							$data .= "{$line}";
 						}
 
-						$clists['ipwhitelist' . $vtype][$table_2]['base64'] = base64_encode($data);
+						$clists['ipwhitelist' . $vtype][$table_2]['base64'] = pfb_text_area_encode($data);
 						// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not in registry
 						config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$clists['ipwhitelist' . $vtype][$table_2]['base64_idx']}/custom", $clists['ipwhitelist' . $vtype][$table_2]['base64']);
 						$aname = substr(substr($table_2, 4),0, -3);					// Remove 'pfB_' and '_v4'

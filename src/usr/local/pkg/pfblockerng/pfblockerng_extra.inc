@@ -4444,7 +4444,7 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 				$data .= "{$line}";
 			}
 			$data .= "{$supp_dat}\r\n";
-			$clists[$supp_key]['base64'] = base64_encode($data);
+			$clists[$supp_key]['base64'] = pfb_text_area_encode($data);
 			PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
 			write_config("pfBlockerNG: Added {$ip} to the IPv{$family} Suppression customlist", FALSE);
 			$refresh_suppfile = TRUE;
@@ -4515,7 +4515,7 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 			$custom .= "{$line}";
 		}
 		$custom .= $whitelist_string;
-		$clists[$list_key][$table]['base64'] = base64_encode($custom);
+		$clists[$list_key][$table]['base64'] = pfb_text_area_encode($custom);
 		$base64_idx = $metadata['base64_idx'];
 		// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not a registered config field
 		config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$base64_idx}/custom", $clists[$list_key][$table]['base64']);

@@ -630,7 +630,7 @@ if (!isset($pfb_ip_cfg['v4suppression'])) {
 			}
 			// ADR-53: write via the same section array read above (a bulk migration
 			// write alongside the rest of $pfb_ip_cfg, not a lone per-field save).
-			$pfb_ip_cfg['v4suppression'] = base64_encode($customlist) ?: '';
+			$pfb_ip_cfg['v4suppression'] = pfb_text_area_encode($customlist) ?: '';
 			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb_ip_cfg);
 			// unset($config['aliases']['alias'][$key]);
 			$ufound = TRUE;
