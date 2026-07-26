@@ -5,8 +5,9 @@ Issue #1691 (CWE-522): actions/checkout defaults to persisting GITHUB_TOKEN in
 operation afterwards (no push, no cross-repo git fetch requiring auth) should
 disable that persistence; a job that DOES need it (a git push/tag) must say so
 explicitly with a comment naming the operation -- the house convention set by
-release.yml:78 (`persist-credentials: true   # need to push branch + tag via
-GITHUB_TOKEN`). This guard enumerates every checkout site straight out of
+release.yml's prepare-release checkout (`persist-credentials: true   # need to
+push branch + tag via GITHUB_TOKEN`). This guard enumerates every checkout site
+straight out of
 .github/workflows/*.yml itself -- never a hardcoded line-number list, which
 rots on the first edit -- and fails, naming the offending sites, the moment
 one regresses to the implicit (persisting) default.
@@ -31,16 +32,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 _WORKFLOW_GLOBS = ("*.yml", "*.yaml")
-
-# PENDING: files intentionally left non-compliant by issue #1691's fix. Both
-# are owned by a parallel lane out of this change's reach (release.yml: the
-# tag/publish pushes; ui-tests.yml: a UI-only lane). Anti-rot:
-# test_pending_set_is_still_noncompliant re-asserts each file still has an
-# undeclared site every run, so fixing them elsewhere trips this test and
-# forces the entry's removal -- a pending list must never silently outlive
-# its reason.
-# Tracking issue: #1700
-PENDING_FILES = frozenset({"release.yml", "ui-tests.yml"})
 
 _STEP_ITEM_RE = re.compile(r"^(?P<indent>[ ]*)-\s")
 _CHECKOUT_RE = re.compile(r"uses:\s*actions/checkout@")
@@ -198,9 +189,9 @@ def test_walker_count_matches_raw_checkout_line_count() -> None:
     )
 
 
-def test_every_non_pending_site_declares_persist_credentials() -> None:
+def test_every_site_declares_persist_credentials() -> None:
     sites = _all_sites()
-    offenders = [s for s in sites if s.file not in PENDING_FILES and not s.persist_declared]
+    offenders = [s for s in sites if not s.persist_declared]
     assert not offenders, (
         "these actions/checkout sites rely on the implicit (persisting) default instead of "
         "declaring persist-credentials explicitly (issue #1691, CWE-522):\n" + _format(offenders)
@@ -209,24 +200,9 @@ def test_every_non_pending_site_declares_persist_credentials() -> None:
 
 def test_every_needs_auth_site_has_a_justifying_comment() -> None:
     sites = _all_sites()
-    offenders = [s for s in sites if s.file not in PENDING_FILES and s.persist_value == "true" and not s.comment]
+    offenders = [s for s in sites if s.persist_value == "true" and not s.comment]
     assert not offenders, (
         "these sites declare persist-credentials: true with no comment naming the git "
-        "operation that needs it (house convention: release.yml:78's "
+        "operation that needs it (house convention: release.yml prepare-release's "
         "`persist-credentials: true   # need to push branch + tag via GITHUB_TOKEN`):\n" + _format(offenders)
     )
-
-
-def test_pending_set_is_still_noncompliant() -> None:
-    """Anti-rot: PENDING_FILES exists only because release.yml and ui-tests.yml are
-    owned by a parallel lane outside this change's reach. If either is fixed later,
-    this assertion goes red -- a pending list must never silently outlive its reason."""
-    sites = _all_sites()
-    for pending_file in PENDING_FILES:
-        file_sites = [s for s in sites if s.file == pending_file]
-        assert file_sites, f"PENDING file {pending_file} has zero checkout sites -- update PENDING_FILES"
-        assert any(not s.persist_declared for s in file_sites), (
-            f"PENDING file {pending_file} now declares persist-credentials at every "
-            f"checkout site -- it is compliant. Remove it from PENDING_FILES "
-            f"(tracking issue #1700)."
-        )
