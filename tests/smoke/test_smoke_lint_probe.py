@@ -5,13 +5,12 @@ interpreters and parses their stderr into line-mapped CodeMirror diagnostics:
 
 * ``/bin/sh -n /dev/stdin`` for shell hook scripts — content on stdin, never
   executed, never written to disk.  The ``/dev/stdin`` operand is load-bearing:
-  probed live (FreeBSD 16-CURRENT, 2026-07-26), FreeBSD sh prints NO line
-  number at all when parsing bare stdin (``/bin/sh: Syntax error: <detail>``),
-  but names the operand and the line when given a file path — and ``/dev/stdin``
-  is enough to trigger the file-shaped, line-numbered format
-  (``/dev/stdin: <line>: Syntax error: <detail>``) while the content still
-  arrives down the pipe.  (Linux dash, the ash sibling the issue's local probe
-  used, line-numbers bare stdin too — the appliance does not.)
+  FreeBSD sh prints NO line number at all when parsing bare stdin
+  (``/bin/sh: Syntax error: <detail>``), but names the operand and the line
+  when given a file path — and ``/dev/stdin`` is enough to trigger the
+  file-shaped, line-numbered format (``/dev/stdin: <line>: Syntax error:
+  <detail>``) while the content still arrives down the pipe.  (Linux dash,
+  the ash sibling, line-numbers bare stdin too — FreeBSD does not.)
 * ``compile(sys.stdin.read(), '<hook>', 'exec')`` under the package Python for
   Python hook scripts — the probe script prints its OWN ``line N: msg`` format,
   so only ``SyntaxError.lineno``/``.msg`` semantics are pinned here, not any
@@ -23,7 +22,7 @@ fails loudly on the appliance instead of the lint gutter silently degrading to
 file-level diagnostics.
 
 ``_SH_DIAG_RE`` mirrors the PHP-side extraction regex in
-``pfb_lint_sh_diagnostics()`` (pfblockerng_extra.inc) — keep the two in sync.
+``pfb_lint_parse_sh_stderr()`` (pfblockerng_extra.inc) — keep the two in sync.
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ from .conftest import SmokeVM
 
 pytestmark = pytest.mark.smoke
 
-# Mirrors the PHP parser's per-line extraction (pfb_lint_sh_diagnostics):
+# Mirrors the PHP parser's per-line extraction (pfb_lint_parse_sh_stderr):
 # "/dev/stdin: <line>: Syntax error: <detail>" — operand name free-form, the
 # line number and the literal "Syntax error:" marker are the load-bearing parts.
 _SH_DIAG_RE = re.compile(r"(\d+): Syntax error: (.+)$")
@@ -81,7 +80,7 @@ def test_sh_n_valid_script_is_silent_and_zero(smoke_vm: SmokeVM) -> None:
         # EOF-unexpected: the diagnostic points at the EOF line (2), not the if line.
         pytest.param("if true; then\n", 2, id="unterminated-if"),
         # FreeBSD sh reports the OPENING line for an unterminated quote (dash
-        # reports the EOF line) — live-probed, and exactly why this pin exists.
+        # reports the EOF line) — exactly why this pin exists.
         pytest.param('echo "unterminated\n', 1, id="unterminated-quote"),
         pytest.param("do\n", 1, id="stray-keyword"),
         # Error mid-file: line numbers must track the real source line, not reset.
@@ -126,8 +125,8 @@ def _guest_python(vm: SmokeVM) -> str:
     rule forbids constructing the path any other way.  Runs through
     ``helpers.php_eval`` (pfSsh.php, the fully-bootstrapped pfSense shell): a
     bare ``php -r`` require of ``pfblockerng.inc`` dies in pfSense's own error
-    handler with exit 0 (probed live 2026-07-27), so the path is delimited the
-    same way ``helpers.config_get`` delimits values past the pfSsh banner.
+    handler with exit 0, so the path is delimited the same way
+    ``helpers.config_get`` delimits values past the pfSsh banner.
     """
     snippet = (
         'require_once("/usr/local/pkg/pfblockerng/pfblockerng.inc"); '

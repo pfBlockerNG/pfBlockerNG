@@ -23,10 +23,8 @@ one independently:
   Test 3 types a bare ``do`` (FreeBSD ``/bin/sh -n`` syntax error, whose stderr
   ``pfb_lint_parse_sh_stderr()`` turns into a ``"Syntax error: ..."`` message), asserts
   the marker + tooltip, then replaces it with valid content and asserts the marker
-  clears -- folding the brief's separate "valid content shows no marker" row into this
-  same test's tail (identical two-way sequence to test 1/2's clear-back-to-valid step;
-  a standalone function would just re-run it, so it lives here instead, noted here per
-  the brief's fold-preference).
+  clears -- the same two-way clear-back-to-valid sequence as tests 1/2, folded into
+  this test's tail rather than a separate function that would just re-run it.
 
 DEFERRED (not built here): the Edit Hooks page's ``lang='py'`` variant. The gutter path
 is client-side and language-agnostic (same ``serverLint()`` wiring regardless of which
@@ -39,8 +37,8 @@ is already covered by the endpoint's PHPUnit tests and the appliance-format prob
 Never mutates persisted config: neither test clicks Save or issues a POST -- the DNSBL
 ``#pfb_regex`` checkbox flip is the same client-side show/hide already exercised
 without saving in ``test_browser_dnsbl.py``, and typing into a CM editor only updates
-its own in-memory doc (+ the hidden mirror textarea's ``.value``, per ``cm-lint.js``'s
-``updateListener``) -- nothing is ever submitted.
+its own in-memory doc (+ the hidden mirror textarea's ``.value``, per ``cm-regex.js``/
+``cm-hooks.js``'s ``updateListener``) -- nothing is ever submitted.
 
 CM class names are pinned against the SHIPPED vendor bundle, not the upstream package
 docs: ``grep -o 'cm-lint-marker[a-zA-Z-]*\\|cm-tooltip-lint\\|cm-gutter-lint'
@@ -215,9 +213,11 @@ def test_regex_editor_offline_bracket_lint_marks_instantly(
     ``lezerErrorLint()`` (``cm-lint.js``) walks the ``pfb-regex-list`` grammar's own
     Lezer error nodes -- a bare ``"("`` parses to an error node immediately (the exact
     doc ``tools/webassets/test/cm-lint.test.js`` pins), no round-trip to
-    ``pfblockerng_lint.php`` required. Two-way: type ``(`` -> marker appears, clear back
-    to empty -> marker disappears (proves the assertion is a real branch, not
-    always-green).
+    ``pfblockerng_lint.php`` required. The server also rejects a lone ``"("``, so without
+    blocking the endpoint the marker's source is ambiguous -- ``page.route(...).abort()``
+    on ``pfblockerng_lint.php`` before typing is the proof the marker comes from
+    ``lezerErrorLint()`` alone. Two-way: type ``(`` -> marker appears, clear back to empty
+    -> marker disappears (proves the assertion is a real branch, not always-green).
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
@@ -226,6 +226,8 @@ def test_regex_editor_offline_bracket_lint_marks_instantly(
 
     expect(markers).to_have_count(0, timeout=LINT_TIMEOUT_MS)
     _shot(page, screenshot_dir, "lint_regex_offline_before_empty")
+
+    page.route("**/pfblockerng_lint.php", lambda route: route.abort())
 
     _clear_and_type(content, "(")
     expect(markers).to_have_count(1, timeout=LINT_TIMEOUT_MS)
@@ -286,9 +288,8 @@ def test_hook_editor_server_lint_marks_sh_syntax_error(
     screenshot_dir: Path,
 ) -> None:
     """A bare shell keyword gets a gutter marker via the server round-trip; a valid
-    replacement clears it (folds the brief's separate "valid content -> no marker" row
-    into this same two-way sequence -- a standalone function would only repeat this
-    test's own tail, so it is not split out).
+    replacement clears it in the same two-way sequence (a standalone function would
+    only repeat this test's own tail, so it is not split out).
 
     ``do`` alone is a FreeBSD ``/bin/sh -n`` syntax error. ``pfb_lint_sh_diagnostics()``/
     ``pfb_lint_parse_sh_stderr()`` turn its stderr into a message literally prefixed

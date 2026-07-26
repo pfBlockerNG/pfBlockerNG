@@ -92,11 +92,33 @@ test("serverLint is imported from the shared cm-lint.js module", () => {
   assert.match(src, /import\s*\{[^}]*serverLint[^}]*\}\s*from\s*"\.\/cm-lint\.js"/);
 });
 
+// Extracts the brace-bounded body of `if (opts && opts.lintUrl) { ... }` so the test
+// below can assert the serverLint call happens INSIDE the guard, not merely somewhere
+// later in the file (a call moved outside the guard, after its closing brace, still
+// passes an indexOf-order check but never actually runs unguarded).
+function lintUrlGuardBlock(source) {
+  const markerIdx = source.indexOf("if (opts && opts.lintUrl) {");
+  assert.notEqual(markerIdx, -1, "expected the opts.lintUrl guard to be present");
+  const openIdx = source.indexOf("{", markerIdx);
+  let depth = 0;
+  let i = openIdx;
+  for (; i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+  assert.equal(depth, 0, "expected a balanced closing brace for the opts.lintUrl guard");
+  return source.slice(openIdx, i + 1);
+}
+
 test("serverLint is wired with the py/sh ternary behind an opts.lintUrl guard", () => {
-  assert.match(src, /opts\s*&&\s*opts\.lintUrl/);
+  const block = lintUrlGuardBlock(src);
   assert.match(
-    src,
+    block,
     /serverLint\(\s*opts\.lintUrl,\s*lang === ["']py["']\s*\?\s*["']py["']\s*:\s*["']sh["'],\s*opts\.lintExtraParams\s*\)/,
+    "expected the serverLint(...) call INSIDE the opts.lintUrl guard block",
   );
 });
 

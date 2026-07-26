@@ -52,26 +52,33 @@ export function serverLintSource(url, lang, extraParams) {
         resolve([]);
         return;
       }
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", url, true);
-      xhr.timeout = 10000;
-      xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
-      const fail = () => resolve([]);
-      xhr.onerror = fail;
-      xhr.ontimeout = fail;
-      xhr.onload = () => {
-        if (xhr.status !== 200) {
-          resolve([]);
-          return;
-        }
-        try {
-          const parsed = JSON.parse(xhr.responseText);
-          resolve(diagnosticsToCm(view.state.doc, parsed.diagnostics));
-        } catch {
-          resolve([]);
-        }
-      };
-      xhr.send(buildLintBody(lang, content, typeof extraParams === "function" ? extraParams() : extraParams));
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url, true);
+        xhr.timeout = 10000;
+        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+        const fail = () => resolve([]);
+        xhr.onerror = fail;
+        xhr.ontimeout = fail;
+        xhr.onload = () => {
+          if (xhr.status !== 200) {
+            resolve([]);
+            return;
+          }
+          try {
+            const parsed = JSON.parse(xhr.responseText);
+            resolve(diagnosticsToCm(view.state.doc, parsed.diagnostics));
+          } catch {
+            resolve([]);
+          }
+        };
+        xhr.send(buildLintBody(lang, content, typeof extraParams === "function" ? extraParams() : extraParams));
+      } catch {
+        // e.g. encodeURIComponent() throwing on a lone surrogate in the doc -- resolve
+        // [] rather than reject the linter's promise (a Promise executor's synchronous
+        // throw auto-rejects, which @codemirror/lint's linter() must never see).
+        resolve([]);
+      }
     });
 }
 

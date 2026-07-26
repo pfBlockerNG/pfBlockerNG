@@ -84,17 +84,39 @@ test("serverLint and lezerErrorLint are imported from the shared cm-lint.js modu
   assert.match(src, /import\s*\{[^}]*lezerErrorLint[^}]*\}\s*from\s*"\.\/cm-lint\.js"/);
 });
 
+// Extracts the brace-bounded body of `if (opts && opts.lintUrl) { ... }` so the tests
+// below can assert a call happens INSIDE the guard, not merely somewhere later in the
+// file (a call moved outside the guard, after its closing brace, still passes an
+// indexOf-order check but never actually runs unguarded).
+function lintUrlGuardBlock(source) {
+  const markerIdx = source.indexOf("if (opts && opts.lintUrl) {");
+  assert.notEqual(markerIdx, -1, "expected the opts.lintUrl guard to be present");
+  const openIdx = source.indexOf("{", markerIdx);
+  let depth = 0;
+  let i = openIdx;
+  for (; i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+  assert.equal(depth, 0, "expected a balanced closing brace for the opts.lintUrl guard");
+  return source.slice(openIdx, i + 1);
+}
+
 test("serverLint is wired with lang 'regex' behind an opts.lintUrl guard", () => {
-  assert.match(src, /opts\s*&&\s*opts\.lintUrl/);
-  assert.match(src, /serverLint\(\s*opts\.lintUrl,\s*["']regex["'],\s*opts\.lintExtraParams\s*\)/);
+  const block = lintUrlGuardBlock(src);
+  assert.match(
+    block,
+    /serverLint\(\s*opts\.lintUrl,\s*["']regex["'],\s*opts\.lintExtraParams\s*\)/,
+    "expected the serverLint(...) call INSIDE the opts.lintUrl guard block",
+  );
 });
 
 test("lezerErrorLint is added alongside serverLint behind the same opts.lintUrl guard", () => {
-  const guardIdx = src.indexOf("opts && opts.lintUrl");
-  const lezerIdx = src.indexOf("lezerErrorLint()");
-  assert.notEqual(guardIdx, -1, "expected the opts.lintUrl guard to be present");
-  assert.notEqual(lezerIdx, -1, "expected a lezerErrorLint() call to be present");
-  assert.ok(guardIdx < lezerIdx, "expected lezerErrorLint() to be wired inside/after the opts.lintUrl guard");
+  const block = lintUrlGuardBlock(src);
+  assert.ok(block.includes("lezerErrorLint()"), "expected the lezerErrorLint() call INSIDE the opts.lintUrl guard block");
 });
 
 test("cm-lint.js uses a plain XMLHttpRequest, never fetch() or FormData (csrf-magic constraint)", () => {
