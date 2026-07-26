@@ -39,6 +39,7 @@ pytestmark = pytest.mark.ui_e2e
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 IP_PAGE = "/pfblockerng/pfblockerng_ip.php"
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
+EDIT_HOOKS_PAGE = "/pfblockerng/pfblockerng_edit_hooks.php"
 PFB_INC_PATH = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 
 # Generous POST timeouts: DNSBL/IP saves only write_config() (fast); General's
@@ -79,6 +80,18 @@ def _dnsbl_folder(vm: helpers.SmokeVM) -> str:
 def _flag_exists(vm: helpers.SmokeVM, path: str) -> bool:
     pre = f"$e = file_exists({helpers._php_str(path)}) ? 'YES' : 'NO';"
     return helpers._php_read_scalar(vm, pre, "$e", timeout=120.0) == "YES"
+
+
+def _hook_script_bytes(vm: helpers.SmokeVM, path: str) -> str:
+    """Return an on-box hook script's EXACT content, control characters intact.
+
+    Read base64-encoded over the pfSsh.php channel rather than ``cat``: the
+    payload under test deliberately carries a vertical tab and CR bytes, and a
+    plain SSH text read would let the transport (or a shell) rewrite exactly
+    the bytes the assertion is about.
+    """
+    pre = f"$e = base64_encode((string) @file_get_contents({helpers._php_str(path)}));"
+    return base64.b64decode(helpers._php_read_scalar(vm, pre, "$e", timeout=120.0)).decode("utf-8")
 
 
 def test_dnsbl_textarea_save_normalizes_line_endings_and_controls(
@@ -522,3 +535,65 @@ def test_dnsbl_suppression_rejects_double_dot_row(
         f"the multi-dot row was saved -- suppression changed from {_decoded(before)!r} "
         f"to {_decoded(after)!r}; the validator must refuse it"
     )
+
+
+def test_edit_hooks_save_sanitizes_the_written_script(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """The Edit Hooks save writes the shared-sanitizer form of the typed script (issue #1734).
+
+    Scenario: the gated hook-script editor is the one persist boundary that was
+    deliberately left narrower than the #1723 standard -- it only collapsed line
+    endings. The #1728 owner decision routes it through the shared
+    ``pfb_sanitize_text_area()`` instead, so a saved script picks up the same
+    control-character strip and per-line right-strip every other multi-line field
+    already gets.
+
+    Given an existing, picker-vetted hook script on the box,
+    When the editor saves a body that mixes CRLF, a bare CR row separator,
+    trailing space+tab, an embedded vertical tab, and a blank line,
+    Then the file on disk holds bare-LF rows with the trailing whitespace and
+    the vertical tab gone, and the blank line still there.
+
+    The line-ending half is asserted alongside the new behaviour on purpose: it
+    is the regression the retired ``pfb_hook_editor_normalize_content()`` existed
+    to prevent (a saved ``"#!/bin/sh\\r"`` shebang execs a nonexistent
+    ``/bin/sh\\r`` and the hook silently stops firing), and the replacement must
+    keep it fixed.
+
+    RED (before the change): the narrower helper only folds CR/CRLF to LF, so the
+    trailing ``"   \\t"`` and the ``\\x0b`` persist into the executable script.
+    GREEN (after): ``pfb_sanitize_text_area()`` folds the line endings first, then
+    strips the control character and right-strips each line, preserving the blank
+    line so script formatting survives.
+    """
+    vm = smoke_vm
+    script = f"hook_pre_smoke{uuid.uuid4().hex[:12]}.sh"
+    path = f"{helpers.HOOK_SCRIPT_DIR}/{script}"
+    seed = "#!/bin/sh\necho seed\n"
+    raw = "#!/bin/sh\r\necho 'edited'   \t\rprintf '\x0bvt'\n\nexit 0\n"
+    expected = "#!/bin/sh\necho 'edited'\nprintf 'vt'\n\nexit 0\n"
+
+    helpers.install_hook_script(vm, script, seed)
+    try:
+        before = _hook_script_bytes(vm, path)
+        assert before == seed, f"seed script not installed verbatim, got {before!r}"
+
+        resp = webui.post(
+            EDIT_HOOKS_PAGE,
+            {
+                "pfb_eh_cur_when": "pre",
+                "pfb_eh_cur_script": script,
+                "pfb_eh_content": raw,
+            },
+            submit=("pfb_eh_save", "Save"),
+            timeout=SETTINGS_SAVE_TIMEOUT,
+        )
+        assert not looks_like_login_page(resp.text), "Edit Hooks POST returned the login form (session lost)"
+
+        after = _hook_script_bytes(vm, path)
+        assert after != before, "the hook script did not change -- the save did not take (POST must CAUSE the change)"
+        assert after == expected, f"hook script not sanitized on save: expected {expected!r}, got {after!r}"
+    finally:
+        vm.ssh("/bin/rm", "-f", path, timeout=60.0)
