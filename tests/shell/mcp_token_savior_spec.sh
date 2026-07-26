@@ -232,12 +232,12 @@ EOF
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'installs exact upstream Token Savior 4.18.1 on first run'
+  It 'installs exact upstream Token Savior 4.19.0 on first run'
     When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}/venv" sh "${SCRIPT}"
     The status should be success
     The output should equal 'INSTALLED'
     The stderr should equal ''
-    The contents of file "${WORK}/venv/pip-args.log" should equal 'token-savior-recall[mcp,memory-vector]==4.18.1'
+    The contents of file "${WORK}/venv/pip-args.log" should equal 'token-savior-recall[mcp,memory-vector]==4.19.0'
   End
 
   It 'rebuilds the venv when the recorded TS_SOURCE stamp no longer matches'
