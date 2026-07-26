@@ -7,10 +7,10 @@ disable that persistence; a job that DOES need it (a git push/tag) must say so
 explicitly with a comment naming the operation -- the house convention set by
 release.yml's prepare-release checkout (`persist-credentials: true   # need to
 push branch + tag via GITHUB_TOKEN`). This guard enumerates every checkout site
-straight out of
-.github/workflows/*.yml itself -- never a hardcoded line-number list, which
-rots on the first edit -- and fails, naming the offending sites, the moment
-one regresses to the implicit (persisting) default.
+straight out of .github/workflows/*.yml itself -- never a hardcoded
+line-number list, which rots on the first edit -- and fails, naming the
+offending sites, the moment one regresses to the implicit (persisting)
+default.
 
 Text-parsed rather than PyYAML: the `test` job's "Install test dependencies"
 step (test.yml) installs only pytest/pytest-cov/dnspython -- no PyYAML -- and
@@ -37,6 +37,7 @@ _STEP_ITEM_RE = re.compile(r"^(?P<indent>[ ]*)-\s")
 _CHECKOUT_RE = re.compile(r"uses:\s*actions/checkout@")
 _PERSIST_RE = re.compile(r"^[ ]*persist-credentials:\s*(?P<value>true|false)\b(?P<comment>.*)$")
 _JOB_KEY_RE = re.compile(r"^ {2}[A-Za-z0-9_.-]+:\s*(#.*)?$")
+_WITH_KEY_RE = re.compile(r"^(?P<indent>[ ]*)with:\s*(#.*)?$")
 
 
 def _is_comment_line(line: str) -> bool:
@@ -78,6 +79,36 @@ def _step_block_end(lines: list[str], start_idx: int, indent: int) -> int:
     return len(lines)
 
 
+def _with_inputs(block: list[str]) -> list[str]:
+    """The direct children of the step's `with:` mapping -- the only lines
+    actions/checkout ever reads as inputs. Scoping matters for a security
+    guard: a scan of the whole step block also matches `persist-credentials:`
+    inside ANOTHER key's block scalar (a `ref: |` whose content happens to
+    read `persist-credentials: false`), which the action never sees, so the
+    site would score compliant while the token stays persisted. A flow-style
+    `with: {...}` yields nothing here and the site reads as undeclared --
+    over-strict, which for this guard is the safe direction."""
+    for i, line in enumerate(block):
+        with_match = _WITH_KEY_RE.match(line)
+        if not with_match:
+            continue
+        with_indent = len(with_match.group("indent"))
+        inputs: list[str] = []
+        key_indent: int | None = None
+        for candidate in block[i + 1 :]:
+            if not candidate.strip():
+                continue
+            indent = len(candidate) - len(candidate.lstrip(" "))
+            if indent <= with_indent:
+                break
+            if key_indent is None:
+                key_indent = indent
+            if indent == key_indent:
+                inputs.append(candidate)
+        return inputs
+    return []
+
+
 def _enclosing_job(lines: list[str], idx: int) -> str:
     for j in range(idx, -1, -1):
         if _JOB_KEY_RE.match(lines[j]):
@@ -109,7 +140,7 @@ def _find_checkout_sites(path: Path) -> list[CheckoutSite]:
         persist_declared = False
         persist_value: str | None = None
         comment = ""
-        for block_line in block:
+        for block_line in _with_inputs(block):
             persist_match = _PERSIST_RE.match(block_line)
             if persist_match:
                 persist_declared = True
@@ -206,3 +237,46 @@ def test_every_needs_auth_site_has_a_justifying_comment() -> None:
         "operation that needs it (house convention: release.yml prepare-release's "
         "`persist-credentials: true   # need to push branch + tag via GITHUB_TOKEN`):\n" + _format(offenders)
     )
+
+
+def test_only_a_direct_child_of_the_with_block_counts_as_a_declaration(tmp_path: Path) -> None:
+    """A guard that scans the whole step block for the text
+    `persist-credentials:` also matches it inside SOME OTHER key's block
+    scalar, where Actions never reads it as an input -- the site would score
+    compliant while the token stays persisted. Only a line at the `with:`
+    mapping's own key indent is a real declaration. The compliant fixture
+    rides along so the negative case cannot pass by the parser simply
+    finding nothing."""
+    smuggled = tmp_path / "smuggled.yml"
+    smuggled.write_text(
+        "jobs:\n"
+        "  demo:\n"
+        "    steps:\n"
+        "      - name: Checkout\n"
+        "        uses: actions/checkout@v6\n"
+        "        with:\n"
+        "          ref: |\n"
+        "            persist-credentials: false\n",
+        encoding="utf-8",
+    )
+    (site,) = _find_checkout_sites(smuggled)
+    assert not site.persist_declared, (
+        "`persist-credentials: false` sitting inside another key's block scalar is not an "
+        "input to actions/checkout -- the action still persists GITHUB_TOKEN, so the guard "
+        "must not read it as a declaration."
+    )
+
+    declared = tmp_path / "declared.yml"
+    declared.write_text(
+        "jobs:\n"
+        "  demo:\n"
+        "    steps:\n"
+        "      - name: Checkout\n"
+        "        uses: actions/checkout@v6\n"
+        "        with:\n"
+        "          ref: main\n"
+        "          persist-credentials: false\n",
+        encoding="utf-8",
+    )
+    (real_site,) = _find_checkout_sites(declared)
+    assert real_site.persist_declared and real_site.persist_value == "false"
