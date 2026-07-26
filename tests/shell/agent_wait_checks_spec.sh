@@ -370,6 +370,34 @@ Describe 'wait-checks.sh tool contracts'
     The stderr should include 'GH-UNAVAILABLE'
   End
 
+  # A flag whose value is missing used to reach a bare `shift 2`: fatal under dash (with
+  # a raw "can't shift that many" instead of the usage text), but merely non-zero under
+  # a bash-provided /bin/sh, where `$1` stayed put and the parse loop SPUN FOREVER --
+  # a hang that never reaches the deadline logic at all.
+  It 'exits 2 with usage when --exclude is given no value'
+    When run timeout 10 sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --exclude
+    The status should equal 2
+    The stderr should include 'usage:'
+  End
+
+  It 'exits 2 with usage when --sha is given no value'
+    When run timeout 10 sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --sha
+    The status should equal 2
+    The stderr should include 'usage:'
+  End
+
+  It 'exits 2 with usage when --repo is given no value'
+    When run timeout 10 sh scripts/agent/wait-checks.sh --repo
+    The status should equal 2
+    The stderr should include 'usage:'
+  End
+
+  It 'exits 2 with usage when --max-iter is given no value'
+    When run timeout 10 sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --max-iter
+    The status should equal 2
+    The stderr should include 'usage:'
+  End
+
   It 'exits 4 when timeout is absent'
     printf '#!/bin/sh\nexit 0\n' > "$toolpath/gh"
     chmod +x "$toolpath/gh"
@@ -450,6 +478,18 @@ STUB
     The line 2 of output should equal '[{"name":"pytest","bucket":"fail"}]'
     The line 3 of output should equal 'FAIL'
     The output should not include 'TIMEOUT'
+  End
+
+  # The negative case above only proves the pattern does not blow up. Pin the positive
+  # half too: a check whose name really does contain the quote is excluded BY it, so the
+  # pattern is demonstrably being matched rather than merely tolerated.
+  It 'excludes the check a quote-bearing --exclude regex actually matches'
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"},{"name":"sn\"yk-advisory","status":"completed","conclusion":"failure"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh "$script" --repo o/r --pr 1 --exclude 'sn"yk' --interval 0 --max-iter 2
+    The status should equal 0
+    The line 2 of output should equal '[{"name":"pytest","bucket":"pass"}]'
+    The line 3 of output should equal 'PASS'
   End
 
   It 'rejects an --exclude regex ending in a dangling backslash'
