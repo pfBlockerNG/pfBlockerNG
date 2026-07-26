@@ -463,6 +463,29 @@ if ($_POST && isset($_POST['save'])) {
 		unset($_REQUEST['savemsg']);
 	}
 
+	// issue #1106: reject an array-valued field ('aliasname[]=x') before any string
+	// sink below TypeErrors on it. Every field is scalar in normal use; no field is exempt.
+	// Runs before the #1723 sanitize prologue below (which itself string-casts every
+	// target field) and before the select-options coercion below (several of the
+	// #1723 target fields -- aliasports_in/out, aliasaddr_in/out, srcint, script_pre/
+	// post -- are ALSO select_options entries, so the sanitize prologue must run
+	// before that coercion too, not just before the free-text-specific checks).
+	foreach ($_POST as $pfb_post_key => $pfb_post_value) {
+		if (!is_scalar($pfb_post_value)) {
+			$input_errors[] = gettext('Invalid value submitted for field:') . ' ' . htmlspecialchars((string) $pfb_post_key);
+			$_POST[$pfb_post_key] = '';
+		}
+	}
+
+	// issue #1723: sanitize at ingestion -- first step, before any evaluation
+	// (trims stray whitespace that would otherwise false-trip the \W reject
+	// below; strips control chars).
+	foreach (array('aliasname', 'description', 'srcint', 'script_pre', 'script_post',
+			'aliasports_in', 'aliasports_out', 'aliasaddr_in', 'aliasaddr_out') as $pfb_text_field) {
+		$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
+	}
+	$_POST['custom'] = pfb_sanitize_text_area((string) ($_POST['custom'] ?? ''));
+
 	// Validate Select field options
 	$select_options = array(	'action'		=> 'Disabled',
 					'cron'			=> 'Never',
@@ -498,20 +521,6 @@ if ($_POST && isset($_POST['save'])) {
 			$_POST[$s_option] = $s_default;
 		}
 	}
-
-	// issue #1106: reject an array-valued field ('aliasname[]=x') before any string
-	// sink below TypeErrors on it. Every field is scalar in normal use; no field is exempt.
-	foreach ($_POST as $pfb_post_key => $pfb_post_value) {
-		if (!is_scalar($pfb_post_value)) {
-			$input_errors[] = gettext('Invalid value submitted for field:') . ' ' . htmlspecialchars((string) $pfb_post_key);
-			$_POST[$pfb_post_key] = '';
-		}
-	}
-
-	// issue #1723: sanitize the single-line free-text field BEFORE the \W /
-	// length validation below reads it (trims stray whitespace that would
-	// otherwise false-trip the \W reject; strips control chars).
-	$_POST['aliasname'] = pfb_sanitize_text($_POST['aliasname'] ?? '');
 
 	if (empty($_POST['aliasname'])) {
 		$input_errors[] = 'Info: Name field must be defined.';
@@ -690,7 +699,10 @@ if ($_POST && isset($_POST['save'])) {
 
 	// Validate Custom List
 	if (!empty($_POST['custom'])) {
-		$customlist = explode("\r\n", $_POST['custom']);
+		// issue #1723: the ingestion prologue already normalized CRLF/CR to LF, so
+		// per-line validation now splits on "\n" (the pre-#1723 "\r\n" split matched
+		// a browser's raw CRLF submission; that separator no longer survives ingestion).
+		$customlist = explode("\n", $_POST['custom']);
 		if (!empty($customlist)) {
 			foreach ($customlist as $line) {
 
@@ -773,10 +785,10 @@ if ($_POST && isset($_POST['save'])) {
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", $_POST['aliasname'] ?: '');
 
 		if (isset($_POST['description']) && !empty($_POST['description'])) {
-			// issue #1723: sanitize BEFORE pfb_filter() -- its own universal
-			// control-char gate would otherwise reject the whole value (not just
-			// the control char) and silently store '' instead.
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/description", pfb_filter(pfb_sanitize_text($_POST['description']), PFB_FILTER_HTML, 'Category_edit') ?: '');
+			// issue #1723: already sanitized by the ingestion prologue above -- pfb_filter()'s
+			// own universal control-char gate would otherwise reject the whole (unsanitized)
+			// value instead of just the control char, and silently store '' instead.
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/description", pfb_filter($_POST['description'], PFB_FILTER_HTML, 'Category_edit') ?: '');
 		} else {
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/description", '');
 		}
@@ -786,9 +798,10 @@ if ($_POST && isset($_POST['save'])) {
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/dow", $_POST['dow'] ?: '');
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/sort", $_POST['sort'] ?: 'sort');
 
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/srcint", pfb_sanitize_text($_POST['srcint'] ?? '') ?: '');
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_pre", pfb_sanitize_text($_POST['script_pre'] ?? '') ?: '');
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_post", pfb_sanitize_text($_POST['script_post'] ?? '') ?: '');
+		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/srcint", $_POST['srcint'] ?: '');
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_pre", $_POST['script_pre'] ?: '');
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_post", $_POST['script_post'] ?: '');
 
 		if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliaslog", $_POST['aliaslog'] ?: 'enabled');
@@ -838,7 +851,7 @@ if ($_POST && isset($_POST['save'])) {
 			}
 		}
 
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/custom", pfb_text_area_encode($_POST['custom'] ?? '') ?: '');
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/custom", base64_encode($_POST['custom'] ?? '') ?: '');
 
 		$rowhelper_exist = array();
 		foreach ($_POST as $key => $value) {

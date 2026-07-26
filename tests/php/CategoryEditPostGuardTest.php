@@ -51,9 +51,21 @@ final class CategoryEditPostGuardTest extends TestCase
 			}
 		}
 
-		// Region 1: select_options-normalisation close through the ingress guard,
-		// the aliasname checks and the CIDR checks -- up to the state-loop foreach.
+		// Region 1: the #1106 ingress guard + #1723 sanitize prologue (issue #1723
+		// moved these ahead of the select_options-normalisation loop so sanitize
+		// runs before ANY evaluation, including that loop's coercion of
+		// aliasports_in/srcint/etc -- two non-adjacent stretches of source,
+		// concatenated here), THEN (unchanged position) the select_options loop's
+		// close through the aliasname checks and the CIDR checks -- up to the
+		// state-loop foreach.
 		if (!function_exists('pfb_category_oracle_aliasname_region')) {
+			if (!preg_match(
+				'/(\t\/\/ issue #1106: reject an array-valued field.*?)\n\n\t\/\/ Validate Select field options/s',
+				$src,
+				$guard
+			)) {
+				throw new RuntimeException('test bootstrap: #1106/#1723 guard region not found');
+			}
 			if (!preg_match(
 				'/\$_POST\[\$s_option\] = \$s_default;\n\t\t\}\n\t\}\n(.*?)(?=\n\tforeach \(\$_POST as \$key => \$value\) \{)/s',
 				$src,
@@ -64,6 +76,7 @@ final class CategoryEditPostGuardTest extends TestCase
 			eval(
 				'function pfb_category_oracle_aliasname_region(string $gtype): array {'
 				. ' $input_errors = array();'
+				. $guard[1]
 				. $m[1]
 				. ' return $input_errors; }'
 			);

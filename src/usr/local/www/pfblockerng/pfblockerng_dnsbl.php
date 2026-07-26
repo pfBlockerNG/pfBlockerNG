@@ -542,6 +542,15 @@ $savemsg = '';
 if ($_POST) {
 	if (isset($_POST['save'])) {
 
+		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
+		foreach (array('pfb_dnsvip4', 'pfb_dnsvip6', 'dnsbl_webpage', 'dnsbl_redir_exclude', 'dnsbl_dot_block_exclude',
+				'top1m_token', 'aliasaddr_in', 'aliasaddr_out', 'aliasports_in', 'aliasports_out') as $pfb_text_field) {
+			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
+		}
+		foreach (array('pfb_regex_list', 'pfb_noaaaa_list', 'pfb_gp_bypass_list', 'suppression', 'tldexclusion', 'tldblacklist') as $pfb_text_area_field) {
+			$_POST[$pfb_text_area_field] = pfb_sanitize_text_area((string) ($_POST[$pfb_text_area_field] ?? ''));
+		}
+
 		// Validate Select field options
 		$select_options = array(						'dnsbl_interface'	=> 'lo0',
 						'global_log'		=> '',
@@ -591,7 +600,8 @@ if ($_POST) {
 
 		// Validate DNSBL webserver block page
 		$dnsbl_webpage		= FALSE;
-		$dnsbl_webpage_file	= pfb_filter(basename(pfb_sanitize_text($_POST['dnsbl_webpage'] ?? '')), PFB_FILTER_WORD_DOT, 'dnsbl', 'dnsbl_default.php');
+		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
+		$dnsbl_webpage_file	= pfb_filter(basename($_POST['dnsbl_webpage'] ?? ''), PFB_FILTER_WORD_DOT, 'dnsbl', 'dnsbl_default.php');
 		if (file_exists("/usr/local/www/pfblockerng/www/{$dnsbl_webpage_file}") &&
 		    @filesize("/usr/local/www/pfblockerng/www/{$dnsbl_webpage_file}") > 0 &&
 		    pfb_filter(array("/usr/local/www/pfblockerng/www/{$dnsbl_webpage_file}", 'text/html'), PFB_FILTER_FILE_MIME_COMPARE, 'dnsbl')) {
@@ -644,7 +654,8 @@ if ($_POST) {
 		// reject a real base64url/JWT token -- PFB_FILTER_TOKEN accepts that charset.
 		// Reference 'top1m_token' suppresses pfb_filter()'s failed-validation log line
 		// -- the token itself must never reach a log, even a rejected one.
-		$pfb_top1m_token_post = pfb_sanitize_text((string) ($_POST['top1m_token'] ?? ''));
+		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
+		$pfb_top1m_token_post = (string) ($_POST['top1m_token'] ?? '');
 		if ($pfb_top1m_token_post !== '' && empty(pfb_filter($pfb_top1m_token_post, PFB_FILTER_TOKEN, 'top1m_token'))) {
 			$input_errors[] = 'DNSBL TOP1M Token is invalid!';
 		}
@@ -658,7 +669,11 @@ if ($_POST) {
 				'tldblacklist'		=> 'tld' ) as $custom_type => $custom_format) {
 
 				if (!empty($_POST[$custom_type])) {
-					$customlist = explode("\r\n", $_POST[$custom_type]);
+					// issue #1723: the ingestion prologue already normalized CRLF/CR to LF,
+					// so per-line validation now splits on "\n" (the pre-#1723 "\r\n" split
+					// matched a browser's raw CRLF submission; that separator no longer
+					// survives ingestion).
+					$customlist = explode("\n", $_POST[$custom_type]);
 					if (!empty($customlist)) {
 						foreach ($customlist as $line) {
 
@@ -720,9 +735,7 @@ if ($_POST) {
 		// error (ADR-13 §7 pivot — it is a non-blocking runtime warning from pfb_global).
 		$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
 		if (!$pfb_auto) {
-			// issue #1723: sanitize before the 'none' compare / VIP validation below.
-			$_POST['pfb_dnsvip4'] = pfb_sanitize_text($_POST['pfb_dnsvip4'] ?? '');
-			$_POST['pfb_dnsvip6'] = pfb_sanitize_text($_POST['pfb_dnsvip6'] ?? '');
+			// issue #1723: already sanitized by the ingestion prologue above.
 			if (($_POST['pfb_dnsvip4'] ?? '') == 'none') {
 				$_POST['pfb_dnsvip4'] = '';
 			}
@@ -770,7 +783,8 @@ if ($_POST) {
 
 		// Validate DNS Redirect fields.
 		$redir_ifaces_raw = (array)($_POST['dnsbl_redir_int'] ?? []);
-		$redir_alias_raw  = pfb_sanitize_text((string)($_POST['dnsbl_redir_exclude'] ?? ''));
+		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
+		$redir_alias_raw  = (string)($_POST['dnsbl_redir_exclude'] ?? '');
 		$redir_errors     = pfb_validate_dns_redirect_post(
 			$redir_ifaces_raw,
 			array_keys($options_dnsbl_redir_int),
@@ -780,7 +794,8 @@ if ($_POST) {
 
 		// Validate DoT/DoQ Block fields.
 		$dot_block_ifaces_raw = (array)($_POST['dnsbl_dot_block_int'] ?? []);
-		$dot_block_alias_raw  = pfb_sanitize_text((string)($_POST['dnsbl_dot_block_exclude'] ?? ''));
+		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
+		$dot_block_alias_raw  = (string)($_POST['dnsbl_dot_block_exclude'] ?? '');
 		$dot_block_action_raw = (string)($_POST['dnsbl_dot_block_action'] ?? 'reject');
 		$dot_block_errors     = pfb_validate_dot_block_post(
 			$dot_block_ifaces_raw,
@@ -858,33 +873,33 @@ if ($_POST) {
 
 			$pfb['dconfig']['autoaddrnot_in']	= pfb_filter($_POST['autoaddrnot_in'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['autoports_in']		= pfb_filter($_POST['autoports_in'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			// issue #1723 review: aliasaddr_in/out, aliasports_in/out are free-text
-			// fields with no pfb_filter() gate -- sanitize at the persist boundary
-			// like the other single-line fields in this file.
-			$pfb['dconfig']['aliasports_in']	= pfb_sanitize_text((string) ($_POST['aliasports_in'] ?? ''))		?: '';
+			// issue #1723: aliasaddr_in/out, aliasports_in/out already sanitized by the
+			// ingestion prologue above -- plain read.
+			$pfb['dconfig']['aliasports_in']	= $_POST['aliasports_in']						?: '';
 			$pfb['dconfig']['autoaddr_in']		= pfb_filter($_POST['autoaddr_in'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['autonot_in']		= pfb_filter($_POST['autonot_in'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['aliasaddr_in']		= pfb_sanitize_text((string) ($_POST['aliasaddr_in'] ?? ''))		?: '';
+			$pfb['dconfig']['aliasaddr_in']		= $_POST['aliasaddr_in']						?: '';
 			$pfb['dconfig']['autoproto_in']		= $_POST['autoproto_in']						?: 'any';
 			$pfb['dconfig']['agateway_in']		= $_POST['agateway_in']							?: 'default';
 
 			$pfb['dconfig']['autoaddrnot_out']	= pfb_filter($_POST['autoaddrnot_out'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['autoports_out']	= pfb_filter($_POST['autoports_out'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['aliasports_out']	= pfb_sanitize_text((string) ($_POST['aliasports_out'] ?? ''))	?: '';
+			$pfb['dconfig']['aliasports_out']	= $_POST['aliasports_out']						?: '';
 			$pfb['dconfig']['autoaddr_out']		= pfb_filter($_POST['autoaddr_out'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['autonot_out']		= pfb_filter($_POST['autonot_out'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['aliasaddr_out']	= pfb_sanitize_text((string) ($_POST['aliasaddr_out'] ?? ''))		?: '';
+			$pfb['dconfig']['aliasaddr_out']	= $_POST['aliasaddr_out']						?: '';
 			$pfb['dconfig']['autoproto_out']	= $_POST['autoproto_out']						?: 'any';
 			$pfb['dconfig']['agateway_out']		= $_POST['agateway_out']						?: 'default';
 
 			$pfb['dconfig']['alexa_enable']		= pfb_filter($_POST['alexa_enable'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
-			$pfb['dconfig']['pfb_regex_list']	= pfb_text_area_encode($_POST['pfb_regex_list'] ?? '')			?: '';
-			$pfb['dconfig']['pfb_noaaaa_list']	= pfb_text_area_encode($_POST['pfb_noaaaa_list'] ?? '')			?: '';
-			$pfb['dconfig']['pfb_gp_bypass_list']	= pfb_text_area_encode($_POST['pfb_gp_bypass_list'] ?? '')			?: '';
-			$pfb['dconfig']['suppression']		= pfb_text_area_encode($_POST['suppression'] ?? '')				?: '';
-			$pfb['dconfig']['tldexclusion']		= pfb_text_area_encode($_POST['tldexclusion'] ?? '')				?: '';
-			$pfb['dconfig']['tldblacklist']		= pfb_text_area_encode($_POST['tldblacklist'] ?? '')				?: '';
+			// issue #1723: already sanitized by the ingestion prologue above -- plain encode.
+			$pfb['dconfig']['pfb_regex_list']	= base64_encode($_POST['pfb_regex_list'] ?? '')				?: '';
+			$pfb['dconfig']['pfb_noaaaa_list']	= base64_encode($_POST['pfb_noaaaa_list'] ?? '')				?: '';
+			$pfb['dconfig']['pfb_gp_bypass_list']	= base64_encode($_POST['pfb_gp_bypass_list'] ?? '')				?: '';
+			$pfb['dconfig']['suppression']		= base64_encode($_POST['suppression'] ?? '')					?: '';
+			$pfb['dconfig']['tldexclusion']		= base64_encode($_POST['tldexclusion'] ?? '')					?: '';
+			$pfb['dconfig']['tldblacklist']		= base64_encode($_POST['tldblacklist'] ?? '')					?: '';
 
 			// A provider/auth identity change invalidates only the download detector
 			// baseline. Keep the active source and derived whitelist available until
