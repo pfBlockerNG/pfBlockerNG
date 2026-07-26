@@ -690,7 +690,10 @@ if ($_POST) {
 									}
 									break;
 								case 'domain':
-									$value[0] = trim($value[0], '.');
+									// issue #1741: only the trailing dot(s) come off -- pfb_filter()
+									// takes the leading-dot wildcard form itself, and stripping that
+									// here would validate an invalid '..host' row as a legal one.
+									$value[0] = rtrim($value[0], '.');
 									if (empty(pfb_filter($value[0], PFB_FILTER_DOMAIN, 'dnsbl'))) {
 										$input_errors[] = "Customlist {$custom_type}: Invalid Domain name entry: [ " . htmlspecialchars($line) . " ]";
 									}
