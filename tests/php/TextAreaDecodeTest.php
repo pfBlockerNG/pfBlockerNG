@@ -233,6 +233,20 @@ final class TextAreaDecodeTest extends TestCase
 		});
 	}
 
+	public function testDoubleLeadingDotIdnCommentRowDroppedWithoutTakingNeighboursDown(): void
+	{
+		// Same per-row guarantee for the '#'-comment branch: a singleton row
+		// alone cannot tell a dropped row from an aborted batch.
+		self::underCLocale(function (): void {
+			$in = self::enc('a.com', '..bücher.de # note', 'b.com');
+			$this->assertSame("a.com\nb.com\n", pfb_text_area_decode($in, false, true, true));
+			$this->assertSame(
+				[['a.com'], ['b.com']],
+				pfb_text_area_decode($in, true, true, true)
+			);
+		});
+	}
+
 	public function testDoubleLeadingDotIdnRowDroppedWithoutTakingNeighboursDown(): void
 	{
 		// A dropped '..' IDN row is a per-row skip, not a batch abort: the rows
