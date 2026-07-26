@@ -414,3 +414,103 @@ def test_category_edit_noop_resave_does_not_touch_update_flag(
     finally:
         helpers.php_eval(vm, f"@unlink({helpers._php_str(flag)}); echo 'OK';", timeout=120.0)
         tce._del_rowid(vm, tce.CFG_DNSBL, rowid)
+
+
+def test_category_edit_custom_list_accepts_wildcard_idn_row(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A leading-dot (wildcard) Unicode custom-list row saves cleanly (issue #1740).
+
+    ``.example.com`` is pfBlockerNG's wildcard form. The custom-list validator
+    punycode-converts a non-ASCII row BEFORE handing it to ``pfb_filter()``,
+    and ``idn_to_ascii()`` rejects a leading dot outright -- so the wildcard
+    IDN row was emptied and then reported as ``Invalid Domain name entry``,
+    while its ASCII twin and the read path both accept it.
+
+    Live counterpart of ``tests/php/CategoryEditIdnWildcardTest.php``: the
+    aliasname is written in the SAME ``if (!$input_errors)`` block as the
+    custom row, so its landing proves the row did not abort the save, and the
+    row itself must persist byte-for-byte (no CR/LF/control chars in it, so
+    the encode-time sanitizer is a no-op).
+    """
+    vm = smoke_vm
+    rowid = tce._free_rowid(vm, tce.CFG_DNSBL)
+    base = f"{tce.CFG_DNSBL}/{rowid}"
+    aliasname = "smokeidnwildcard"
+    custom_row = ".bü" + helpers.unique_domain("pfbidnw")
+    try:
+        assert helpers.config_get(vm, f"{base}/aliasname") == "", f"rowid {rowid} not free (aliasname already set)"
+
+        tce._post_form(
+            webui,
+            tce._dnsbl_payload(rowid, aliasname, custom=custom_row),
+        )
+
+        assert helpers.config_get(vm, f"{base}/aliasname") == aliasname, (
+            "wildcard IDN custom-list row aborted the whole save (aliasname did not persist) -- "
+            "the custom-list validator rejected the leading-dot Unicode label"
+        )
+        assert _decoded(helpers.config_get(vm, f"{base}/custom")) == custom_row, (
+            f"wildcard IDN custom-list row: 'custom' field does not match the typed row, "
+            f"got {_decoded(helpers.config_get(vm, f'{base}/custom'))!r}"
+        )
+    finally:
+        tce._del_rowid(vm, tce.CFG_DNSBL, rowid)
+
+
+def test_dnsbl_suppression_accepts_single_dot_wildcard_row(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,  # noqa: ARG001
+) -> None:
+    """The Suppression list keeps taking the single-dot wildcard row (issue #1741).
+
+    The before-state half of the pair below: ``.example.com`` is the legal
+    wildcard form and must still save, so the rejection of ``..example.com``
+    is proven to be about the SECOND dot and not about leading dots at all.
+    """
+    vm = smoke_vm
+    domain = helpers.unique_domain("pfbwild")
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/suppression"
+
+    before = helpers.config_get(vm, cfg)
+    resp = webui.post(DNSBL_PAGE, {"suppression": f".{domain}"}, timeout=SETTINGS_SAVE_TIMEOUT)
+    assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
+
+    after = helpers.config_get(vm, cfg)
+    assert after != before, "suppression did not change -- the save did not take (POST must CAUSE the change)"
+    assert _decoded(after) == f".{domain}", (
+        f"the single-dot wildcard row must persist verbatim, got {_decoded(after)!r}"
+    )
+
+
+def test_dnsbl_suppression_rejects_double_dot_row(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,  # noqa: ARG001
+) -> None:
+    """The Suppression list refuses a multi-dot row (issue #1741).
+
+    ``..example.com`` is not a wildcard row. The page validated a
+    ``trim($value[0], '.')`` copy, which drops EVERY leading dot, so the row
+    validated as the bare domain and was saved -- and the build path then
+    ltrim'd it into ``example.com,1``, a whitelist entry covering the whole
+    domain and every subdomain the operator never wrote.
+
+    Live counterpart of ``tests/php/DnsblCustomListWildcardValidationTest.php``:
+    the save must abort, leaving the persisted field untouched.
+    """
+    vm = smoke_vm
+    domain = helpers.unique_domain("pfbdotdot")
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/suppression"
+
+    before = helpers.config_get(vm, cfg)
+    resp = webui.post(DNSBL_PAGE, {"suppression": f"..{domain}"}, timeout=SETTINGS_SAVE_TIMEOUT)
+    assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
+
+    after = helpers.config_get(vm, cfg)
+    assert after == before, (
+        f"the multi-dot row was saved -- suppression changed from {_decoded(before)!r} "
+        f"to {_decoded(after)!r}; the validator must refuse it"
+    )
