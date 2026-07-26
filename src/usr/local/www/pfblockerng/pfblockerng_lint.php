@@ -42,8 +42,11 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
  */
 function pfb_lint_reply(int $status, array $payload): never {
 	http_response_code($status);
-	header('Content-Type: application/json');
-	echo json_encode($payload);
+	header('Content-Type: application/json; charset=utf-8');
+	// JSON_INVALID_UTF8_SUBSTITUTE: a diagnostic message carrying invalid UTF-8 (e.g. a
+	// mis-decoded stderr byte) would otherwise make json_encode() return FALSE, shipping
+	// a 200 with an empty body instead of a diagnostic.
+	echo json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE);
 	exit;
 }
 

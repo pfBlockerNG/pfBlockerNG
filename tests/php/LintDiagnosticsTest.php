@@ -232,6 +232,27 @@ final class LintDiagnosticsTest extends TestCase
 		$this->assertSame([], pfb_lint_sh_diagnostics("echo ok\n", '/bin/sh', self::$timeout));
 	}
 
+	public function testShDiagnosticsStdinWriteFailurePrefersParseableStderr(): void
+	{
+		// sh exits at the FIRST syntax error -- a body over the OS pipe buffer (~64KiB)
+		// EPIPEs the stdin write loop while stderr already holds a line-mapped
+		// diagnostic. The fake "timeout_bin" closes stdin immediately and writes that
+		// diagnostic before exiting; $shFixture is never actually exec'd (ignored argv,
+		// same technique as the pinned-fixture tests above).
+		$timeoutFixture = $this->fixture(
+			'exec 0<&-' . "\n" .
+			'printf "/dev/stdin: 1: Syntax error: early exit\n" 1>&2' . "\n" .
+			'exit 2'
+		);
+		$shFixture = $this->fixture('exit 0');
+		// ~256KiB: over the OS pipe buffer, under the endpoint's 1MiB cap.
+		$content = str_repeat('x', 300000) . "\n";
+		$this->assertSame(
+			[['line' => 1, 'message' => 'Syntax error: early exit', 'severity' => 'error']],
+			pfb_lint_sh_diagnostics($content, $shFixture, $timeoutFixture)
+		);
+	}
+
 	// --- pfb_lint_py_diagnostics -------------------------------------------
 
 	public function testPyDiagnosticsEmptyContentShortCircuits(): void
@@ -359,6 +380,42 @@ final class LintDiagnosticsTest extends TestCase
 		$this->assertSame(
 			[],
 			pfb_lint_diagnostics('sh', "do\r\n", false, null, $shFixture, $crDetector)
+		);
+	}
+
+	public function testDispatcherSanitizesControlBytesBeforeReachingTheShPath(): void
+	{
+		// Same fixture technique as the CRLF-fold test above: a fake "timeout_bin" that
+		// greps its stdin for a literal DEL (\x7F) byte and, if found, reports a marker
+		// diagnostic instead of running the real fixture. If the dispatcher's sanitizer
+		// ever regresses to the old CRLF-only fold, this fires -- proving the fold saw
+		// the raw control byte.
+		$delDetector = $this->fixture(
+			'del=$(printf \'\\177\')' . "\n" .
+			'if cat | grep -Fq "$del"; then' . "\n" .
+			'  printf "FOUND_DEL\n" 1>&2' . "\n" .
+			'  exit 2' . "\n" .
+			'fi' . "\n" .
+			'printf "/dev/stdin: 2: Syntax error: unexpected end of file\n" 1>&2' . "\n" .
+			'exit 2'
+		);
+		$shFixture = $this->fixture('exit 0');
+
+		// Control: calling the sh runner DIRECTLY (no sanitize) on control-byte content
+		// proves the detector fixture actually fires -- otherwise a silent false-negative
+		// below would prove nothing.
+		$this->assertSame(
+			[['line' => 1, 'message' => 'FOUND_DEL', 'severity' => 'error']],
+			pfb_lint_sh_diagnostics("foo\x7Fbar\ndo\n", $shFixture, $delDetector)
+		);
+
+		// The dispatcher sanitizes via the shared pfb_sanitize_text_area() helper before
+		// content ever reaches the sh runner -- the DEL byte never reaches the detector,
+		// and the line-2 diagnostic's line number stays 2 (the sanitizer preserves line
+		// count: it never joins/removes lines, only strips control bytes and right-trims).
+		$this->assertSame(
+			[['line' => 2, 'message' => 'Syntax error: unexpected end of file', 'severity' => 'error']],
+			pfb_lint_diagnostics('sh', "foo\x7Fbar\ndo\n", false, null, $shFixture, $delDetector)
 		);
 	}
 }

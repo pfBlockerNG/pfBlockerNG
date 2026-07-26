@@ -5030,6 +5030,12 @@ function pfb_lint_sh_diagnostics(string $content, string $sh = '/bin/sh', string
 	$command = array($timeout_bin, '-s', 'TERM', '-k', '1', '5', $sh, '-n', '/dev/stdin');
 	$result = pfb_lint_probe_run($command, $content);
 	if ($result['failure'] !== '') {
+		// sh exits at the FIRST syntax error -- an over-pipe-buffer body can EPIPE the
+		// stdin write loop (failure = 'stdin write failed') while stderr already holds a
+		// real line-mapped diagnostic; prefer that over the generic launch-failed warning.
+		if (trim($result['stderr']) !== '') {
+			return pfb_lint_parse_sh_stderr($result['stderr']);
+		}
 		return [['line' => 1, 'message' => 'sh syntax checker launch failed: ' . $result['failure'], 'severity' => 'warning']];
 	}
 	if ($result['exit'] === 0) {
@@ -5079,10 +5085,12 @@ PYTHON;
 
 /*
  * issue #1732: the pfblockerng_lint.php dispatcher -- one lang-keyed entry point over
- * the three validators above. CodeMirror ships LF-only content; the CRLF/CR -> LF fold
- * runs first so a hand-crafted CRLF POST can never shift a reported line number relative
- * to the editor gutter. $python/$sh/$timeout_bin default to the live appliance paths
- * (null) and exist as parameters only so tests can substitute fixture interpreters.
+ * the three validators above. Sanitizes via the shared pfb_sanitize_text_area() (issue
+ * #1723) helper first, the same idiom pfblockerng_dnsbl.php and
+ * pfblockerng_edit_hooks.php's save handlers run at ingestion -- lint must judge what
+ * save would persist, not the raw POST. $python/$sh/$timeout_bin default to the live
+ * appliance paths (null) and exist as parameters only so tests can substitute fixture
+ * interpreters.
  */
 function pfb_lint_diagnostics(
 	string $lang,
@@ -5092,7 +5100,7 @@ function pfb_lint_diagnostics(
 	?string $sh = null,
 	?string $timeout_bin = null
 ): array {
-	$content = str_replace(["\r\n", "\r"], "\n", $content);
+	$content = pfb_sanitize_text_area($content);
 	$timeout_bin ??= '/usr/bin/timeout';
 	return match ($lang) {
 		'regex' => pfb_lint_parse_regex_errors(

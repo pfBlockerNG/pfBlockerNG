@@ -150,3 +150,86 @@ test("serverLint's async source returns [] for an empty doc without touching XHR
     globalThis.XMLHttpRequest = realXHR;
   }
 });
+
+// A controllable fake XHR: open()/setRequestHeader() are no-ops, send() invokes
+// `driver(this)` synchronously so each test controls exactly which handler fires with
+// which status/responseText -- no real network, no timers.
+function installFakeXHR(driver) {
+  const realXHR = globalThis.XMLHttpRequest;
+  globalThis.XMLHttpRequest = function FakeXHR() {
+    this.open = () => {};
+    this.setRequestHeader = () => {};
+    this.send = () => driver(this);
+  };
+  return () => {
+    globalThis.XMLHttpRequest = realXHR;
+  };
+}
+
+test("serverLintSource resolves [] on a non-200 status", async () => {
+  const restore = installFakeXHR((xhr) => {
+    xhr.status = 500;
+    xhr.onload();
+  });
+  try {
+    const source = serverLintSource("/x", "regex", null);
+    const fakeView = { state: { doc: EditorState.create({ doc: "x" }).doc } };
+    assert.deepEqual(await source(fakeView), []);
+  } finally {
+    restore();
+  }
+});
+
+test("serverLintSource resolves [] on a 200 with unparseable JSON", async () => {
+  const restore = installFakeXHR((xhr) => {
+    xhr.status = 200;
+    xhr.responseText = "not json";
+    xhr.onload();
+  });
+  try {
+    const source = serverLintSource("/x", "regex", null);
+    const fakeView = { state: { doc: EditorState.create({ doc: "x" }).doc } };
+    assert.deepEqual(await source(fakeView), []);
+  } finally {
+    restore();
+  }
+});
+
+test("serverLintSource resolves [] on xhr.onerror", async () => {
+  const restore = installFakeXHR((xhr) => xhr.onerror());
+  try {
+    const source = serverLintSource("/x", "regex", null);
+    const fakeView = { state: { doc: EditorState.create({ doc: "x" }).doc } };
+    assert.deepEqual(await source(fakeView), []);
+  } finally {
+    restore();
+  }
+});
+
+test("serverLintSource resolves [] on xhr.ontimeout", async () => {
+  const restore = installFakeXHR((xhr) => xhr.ontimeout());
+  try {
+    const source = serverLintSource("/x", "regex", null);
+    const fakeView = { state: { doc: EditorState.create({ doc: "x" }).doc } };
+    assert.deepEqual(await source(fakeView), []);
+  } finally {
+    restore();
+  }
+});
+
+test("serverLintSource resolves [] (not a rejected promise) when the doc has a lone surrogate", async () => {
+  // encodeURIComponent() throws a URIError on a lone surrogate (e.g. "\uD800", no valid
+  // UTF-16 pairing) -- buildLintBody() calls it while constructing the POST body. A
+  // Promise executor's synchronous throw auto-rejects the promise; @codemirror/lint's
+  // linter() must never see that rejection.
+  const restore = installFakeXHR(() => {
+    throw new Error("xhr.send must not be reached -- encodeURIComponent throws first");
+  });
+  try {
+    const source = serverLintSource("/x", "regex", null);
+    const fakeView = { state: { doc: EditorState.create({ doc: "\uD800" }).doc } };
+    assert.deepEqual(await source(fakeView), []);
+  } finally {
+    restore();
+  }
+});

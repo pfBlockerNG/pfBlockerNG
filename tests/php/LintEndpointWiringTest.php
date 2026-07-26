@@ -114,6 +114,25 @@ final class LintEndpointWiringTest extends TestCase
 		$this->assertStringContainsString('Content-Type: application/json', self::$pageSrc);
 	}
 
+	public function testJsonContentTypeHeaderCarriesUtf8Charset(): void
+	{
+		$this->assertStringContainsString(
+			"Content-Type: application/json; charset=utf-8",
+			self::$pageSrc,
+			'the JSON reply header must declare charset=utf-8'
+		);
+	}
+
+	public function testJsonEncodeCarriesInvalidUtf8Substitute(): void
+	{
+		$this->assertMatchesRegularExpression(
+			'/json_encode\([^)]*JSON_INVALID_UTF8_SUBSTITUTE/',
+			self::$pageSrc,
+			'json_encode(...) must pass JSON_INVALID_UTF8_SUBSTITUTE -- else a diagnostic ' .
+				'message carrying invalid UTF-8 makes json_encode() return false (200 with an empty body)'
+		);
+	}
+
 	public function testPostOnlyCheckPresent(): void
 	{
 		$this->assertStringContainsString('REQUEST_METHOD', self::$pageSrc);
