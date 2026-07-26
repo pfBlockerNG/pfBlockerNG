@@ -2,8 +2,10 @@
 
 Marker ``ui_e2e`` -- see :mod:`tests.smoke.ui.test_functional` for the tier's
 general shape. Every test here drives a real CSRF POST (``requests``, never a
-browser) and asserts the box's EFFECTIVE ``config.xml`` state (via
-:func:`tests.smoke.helpers.config_get`), never the HTTP response body --
+browser) and asserts the box's EFFECTIVE persisted state -- ``config.xml`` (via
+:func:`tests.smoke.helpers.config_get`) for the config-backed fields, or the
+on-disk artifact for the hook editor, whose script content never enters
+``config.xml`` by design -- never the HTTP response body --
 ``requests``' ``session.post(data=...)`` sends the Python string's bytes
 UNCHANGED (no browser-side CRLF canonicalization of textarea content), so a
 raw payload mixing LF/CR-only/control chars reaches the server byte-for-byte.
