@@ -87,23 +87,29 @@ def _with_inputs(block: list[str]) -> list[str]:
     read `persist-credentials: false`), which the action never sees, so the
     site would score compliant while the token stays persisted. A flow-style
     `with: {...}` yields nothing here and the site reads as undeclared --
-    over-strict, which for this guard is the safe direction."""
+    over-strict, which for this guard is the safe direction.
+
+    The `with:` line itself is anchored at the step's own key indent for the
+    same reason one level up: a whole `with:` mapping can be quoted inside
+    another key's block scalar, and a block scalar's content is always
+    indented deeper than the key owning it, so it can never sit at the step's
+    key indent."""
+    key_indent = len(block[0]) - len(block[0].lstrip(" -"))
     for i, line in enumerate(block):
         with_match = _WITH_KEY_RE.match(line)
-        if not with_match:
+        if not with_match or len(with_match.group("indent")) != key_indent:
             continue
-        with_indent = len(with_match.group("indent"))
         inputs: list[str] = []
-        key_indent: int | None = None
+        input_indent: int | None = None
         for candidate in block[i + 1 :]:
             if not candidate.strip():
                 continue
             indent = len(candidate) - len(candidate.lstrip(" "))
-            if indent <= with_indent:
+            if indent <= key_indent:
                 break
-            if key_indent is None:
-                key_indent = indent
-            if indent == key_indent:
+            if input_indent is None:
+                input_indent = indent
+            if indent == input_indent:
                 inputs.append(candidate)
         return inputs
     return []
@@ -280,3 +286,30 @@ def test_only_a_direct_child_of_the_with_block_counts_as_a_declaration(tmp_path:
     )
     (real_site,) = _find_checkout_sites(declared)
     assert real_site.persist_declared and real_site.persist_value == "false"
+
+
+def test_a_decoy_with_block_inside_another_keys_scalar_is_not_the_input_mapping(tmp_path: Path) -> None:
+    """The companion to the vector above, one level up: a whole `with:` mapping
+    can be smuggled inside another key's block scalar. `env:` values legitimately
+    hold block scalars, so this is runnable YAML, and here the step has no real
+    `with:` at all -- actions/checkout takes every default, GITHUB_TOKEN included.
+    Only a `with:` at the step's own key indent is the input mapping; a block
+    scalar's content is always indented deeper than the key that owns it."""
+    decoy = tmp_path / "decoy.yml"
+    decoy.write_text(
+        "jobs:\n"
+        "  demo:\n"
+        "    steps:\n"
+        "      - name: Checkout\n"
+        "        uses: actions/checkout@v6\n"
+        "        env:\n"
+        "          NOTES: |\n"
+        "            with:\n"
+        "              persist-credentials: false\n",
+        encoding="utf-8",
+    )
+    (site,) = _find_checkout_sites(decoy)
+    assert not site.persist_declared, (
+        "a `with:` mapping quoted inside another key's block scalar is not the step's input "
+        "mapping -- this step declares nothing and actions/checkout persists GITHUB_TOKEN."
+    )
