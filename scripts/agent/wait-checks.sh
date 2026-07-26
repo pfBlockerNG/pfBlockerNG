@@ -105,10 +105,17 @@ main() {
 	require_tool timeout
 	require_tool jq
 
-	# A pattern Oniguruma cannot compile must die here, at the boundary (#1756): the
-	# filter would otherwise yield nothing, the counts would be empty, and the verdict
-	# would silently fall through to PENDING -- polling a real FAIL past to a blind
-	# TIMEOUT. Same exit 2 as any other usage/precondition error.
+	# Two patterns must die here, at the boundary (#1756), because both end the same way
+	# -- a real FAIL polled past to a blind TIMEOUT -- with exit 2 like any other
+	# usage/precondition error:
+	#   - one Oniguruma cannot compile: the filter yields nothing, the counts come back
+	#     empty, and the verdict falls through to PENDING;
+	#   - the empty one: it compiles and matches EVERY name, so every check is excluded,
+	#     `total` is 0 and the verdict is EMPTY. Match nothing with `^$`, never ''.
+	if [ -z "$exclude" ]; then
+		echo "usage: --exclude must not be empty (it would exclude every check)" >&2
+		exit 2
+	fi
 	if ! printf '""' | jq -e --arg ex "$exclude" 'test($ex) | true' >/dev/null 2>&1; then
 		echo "usage: --exclude is not a valid regex: $exclude" >&2
 		exit 2
