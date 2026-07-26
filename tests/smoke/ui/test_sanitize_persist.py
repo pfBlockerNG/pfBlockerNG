@@ -509,6 +509,14 @@ def test_dnsbl_suppression_rejects_double_dot_row(
     resp = webui.post(DNSBL_PAGE, {"suppression": f"..{domain}"}, timeout=SETTINGS_SAVE_TIMEOUT)
     assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
 
+    # The rejection must be THIS row's, not an unrelated save-wide abort: assert the
+    # page's own per-row message before asserting that nothing persisted.
+    expected_error = f"Customlist suppression: Invalid Domain name entry: [ ..{domain} ]"
+    assert expected_error in resp.text, (
+        f"the page did not report the multi-dot row as invalid (expected {expected_error!r}) -- "
+        "an unrelated validation failure would abort the save too"
+    )
+
     after = helpers.config_get(vm, cfg)
     assert after == before, (
         f"the multi-dot row was saved -- suppression changed from {_decoded(before)!r} "
