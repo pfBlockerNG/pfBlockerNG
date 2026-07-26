@@ -1302,7 +1302,10 @@ function sync_package_pfblockerng($cron='') {
 					if (!empty($line)) {
 						$wildcard = FALSE;
 						if (str_starts_with($line, '.')) {
-							$line = ltrim($line, '.');
+							$line = pfb_strip_wildcard_marker($line, 'DNSBL Whitelist');
+							if (pfb_is_blank($line)) {
+								continue;
+							}
 							$wildcard = TRUE;
 						}
 

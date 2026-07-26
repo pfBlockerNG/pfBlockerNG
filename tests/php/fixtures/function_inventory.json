@@ -6966,6 +6966,26 @@
             }
         ]
     },
+    "pfb_strip_wildcard_marker": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "row",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "reference",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_strtolower": {
         "returnsRef": false,
         "returnType": null,

@@ -1222,6 +1222,22 @@ function pfb_idn_to_ascii_wildcard(string $host): string {
 }
 
 
+// Strip the leading '.' DNSBL wildcard marker from a row whose first character is a dot;
+// returns '' (after logging the skip) when more than one leading dot is present. issue #1741:
+// ltrim() strips them all, promoting an invalid '..host' row into the legal wildcard form and
+// whitelisting a whole domain the operator never wrote.
+function pfb_strip_wildcard_marker(string $row, string $reference): string {
+
+	$stripped = substr($row, 1);
+	if (str_starts_with($stripped, '.')) {
+		pfb_logger("\n{$reference}: Row is not a wildcard entry [ " .
+			substr(htmlspecialchars($row), 0, 100) . " ] *skipping*", 2);
+		return '';
+	}
+	return $stripped;
+}
+
+
 // Function to filter/sanitize user input.
 //
 // ADR-48: $reject_detail is an optional by-ref out-param for the PFB_FILTER_FILE_MIME /
@@ -7421,7 +7437,10 @@ function pfb_unbound_python_whitelist($mode='') {
 				}
 
 				if (str_starts_with($line, '.')) {
-					$line = ltrim($line, '.');
+					$line = pfb_strip_wildcard_marker($line, 'pfb_unbound_python_whitelist');
+					if (pfb_is_blank($line)) {
+						continue;
+					}
 					$dnsbl_whitelist .= "{$line},1\n";
 				} else {
 					$dnsbl_whitelist .= "{$line},0\n";
@@ -9292,17 +9311,22 @@ EOF;
 			if (!empty($noaaaa_list)) {
 				foreach ($noaaaa_list as $key => $list) {
 					if (str_starts_with($list[0], '.')) {
-						$list[0] = ltrim($list[0], '.');
+						$list[0] = pfb_strip_wildcard_marker($list[0], 'pfb_unbound_python noAAAA');
+						if (pfb_is_blank($list[0])) {
+							continue;
+						}
 						$noaaaa .= "{$key} = {$list[0]},1\n";
 					} else {
 						$noaaaa .= "{$key} = {$list[0]},0\n";
 					}
 				}
-				$pfb_py_conf .= <<<EOF
+				if (!pfb_is_blank($noaaaa)) {
+					$pfb_py_conf .= <<<EOF
 
 [noAAAA]
 {$noaaaa}
 EOF;
+				}
 			}
 		}
 
