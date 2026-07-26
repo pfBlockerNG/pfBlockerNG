@@ -101,6 +101,19 @@ def test_sh_n_syntax_error_format_is_line_mapped(smoke_vm: SmokeVM, content: str
     )
 
 
+@pytest.fixture(scope="module")
+def deployed_vm(smoke_vm: SmokeVM) -> SmokeVM:
+    """The smoke VM WITH the branch package installed.
+
+    The session ``smoke_vm`` fixture only boots the deps-baked image —
+    ``pfblockerng.inc`` (and the package dependency the python resolver reads)
+    exists only after ``helpers.deploy()``. The sh rows need no package, so
+    only the python-probe rows depend on this.
+    """
+    h.deploy(smoke_vm)
+    return smoke_vm
+
+
 _PY_PATH_OPEN = "<<<PFBPY>>>"
 _PY_PATH_CLOSE = "<<<PFBPYEND>>>"
 
@@ -132,9 +145,9 @@ def _guest_python(vm: SmokeVM) -> str:
     return path
 
 
-def test_py_compile_probe_valid_script_is_silent_and_zero(smoke_vm: SmokeVM) -> None:
-    python = _guest_python(smoke_vm)
-    result = _stdin_probe(smoke_vm, f"{python} -c {shlex.quote(_PY_PROBE)}", "print('ok')\n")
+def test_py_compile_probe_valid_script_is_silent_and_zero(deployed_vm: SmokeVM) -> None:
+    python = _guest_python(deployed_vm)
+    result = _stdin_probe(deployed_vm, f"{python} -c {shlex.quote(_PY_PROBE)}", "print('ok')\n")
     assert _rc_of(result) == 0, f"compile probe rejected valid code: stderr={result.stderr!r}"
     assert result.stderr.strip() == "", f"compile probe emitted noise: {result.stderr!r}"
 
@@ -146,9 +159,9 @@ def test_py_compile_probe_valid_script_is_silent_and_zero(smoke_vm: SmokeVM) -> 
         pytest.param("x = 1\ndef f(:\n", 2, id="line-number-tracks-source"),
     ],
 )
-def test_py_compile_probe_reports_lineno_and_msg(smoke_vm: SmokeVM, content: str, expected_line: int) -> None:
-    python = _guest_python(smoke_vm)
-    result = _stdin_probe(smoke_vm, f"{python} -c {shlex.quote(_PY_PROBE)}", content)
+def test_py_compile_probe_reports_lineno_and_msg(deployed_vm: SmokeVM, content: str, expected_line: int) -> None:
+    python = _guest_python(deployed_vm)
+    result = _stdin_probe(deployed_vm, f"{python} -c {shlex.quote(_PY_PROBE)}", content)
     assert _rc_of(result) == 1, (
         f"compile probe rc != 1 on a syntax error: stdout={result.stdout!r} stderr={result.stderr!r}"
     )

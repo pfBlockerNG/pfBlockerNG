@@ -171,6 +171,19 @@ def _regex_editor(page: Page) -> Locator:
     section = page.locator("#Python_regex_list")
     expect(section).to_be_visible(timeout=JS_TIMEOUT_MS)
 
+    # The section is COLLAPSIBLE|SEC_CLOSED (pfblockerng_dnsbl.php:3056): the checkbox
+    # .show()s the panel, but its BODY renders as `<id>_panel-body.panel-body.collapse`
+    # and stays collapsed (zero-size, so nothing inside is Playwright-visible) until the
+    # panel-title toggle anchor is clicked — Form/Section.class.php's COLLAPSIBLE
+    # markup. Expanding here is also exactly the "CM6 re-measure on first expansion of
+    # the collapsed Python-regex section" concern issue #1669 left for this tier: the
+    # typing + gutter assertions below fail if CM never becomes usable after expansion.
+    body = page.locator("#Python_regex_list_panel-body")
+    expect(body).to_be_attached(timeout=JS_TIMEOUT_MS)
+    if "in" not in (body.get_attribute("class") or ""):
+        page.locator('a[data-toggle="collapse"][href="#Python_regex_list_panel-body"]').click()
+    expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
+
     content = section.locator(".cm-content")
     expect(content).to_be_visible(timeout=JS_TIMEOUT_MS)
     _clear_and_type(content, "")
