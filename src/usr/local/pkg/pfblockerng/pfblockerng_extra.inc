@@ -4461,7 +4461,7 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 		$apply = pfb_live_punch_run($pfb['pfctl'], $pfb['aliasdir'], $pfb['dbdir'], $table, $ip);
 		switch ($apply['status']) {
 			case 'applied':
-				pfb_unlock('unlock', 'ip', $ip, $table, $ip_unlock);
+				pfb_unlock('unlock', 'ip', $ip_unlock, $ip, $table);
 				$result['savemsg'] = "The IP [ {$ip} ] has been temporarily Unlocked from table [ {$table} ]!";
 				break;
 			case 'not_blocked':
@@ -4480,7 +4480,7 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 	if ($action === 'lock') {
 		$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
 		if ($apply['ok']) {
-			pfb_unlock('lock', 'ip', $ip, $table, $ip_unlock);
+			pfb_unlock('lock', 'ip', $ip_unlock, $ip, $table);
 			$result['savemsg'] = "The IP [ {$ip} ] has been re-locked into table [ {$table} ]!";
 		} else {
 			$result['savemsg'] = "The live re-lock of IP [ {$ip} ] failed [ {$apply['fail']} ] -- table [ {$table} ] does not block it; see the pfBlockerNG log.";

@@ -8331,25 +8331,25 @@
                 "default": null
             },
             {
-                "name": "remove",
+                "name": "filename_unlock",
                 "byRef": false,
                 "variadic": false,
                 "type": null,
                 "default": null
+            },
+            {
+                "name": "remove",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "''"
             },
             {
                 "name": "r_type",
                 "byRef": false,
                 "variadic": false,
                 "type": null,
-                "default": null
-            },
-            {
-                "name": "filename_unlock",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
+                "default": "''"
             }
         ]
     },
