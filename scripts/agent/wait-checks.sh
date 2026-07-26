@@ -84,14 +84,18 @@ checks_to_buckets() {
 main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
+	# Every value-taking flag checks that its value is actually there before `shift 2`
+	# (same guard work-branch.sh uses): a bare `shift 2` on a one-token tail is fatal
+	# under dash but merely non-zero under a bash-provided /bin/sh, where `$1` never
+	# advances and this loop spins forever -- a hang that never reaches the deadline.
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--repo) repo=$2; shift 2 ;;
-			--pr) pr=$2; shift 2 ;;
-			--sha) sha=$2; sha_set=1; shift 2 ;;
-			--exclude) exclude=$2; shift 2 ;;
-			--interval) interval=$2; shift 2 ;;
-			--max-iter) max_iter=$2; shift 2 ;;
+			--repo) [ $# -ge 2 ] || usage; repo=$2; shift 2 ;;
+			--pr) [ $# -ge 2 ] || usage; pr=$2; shift 2 ;;
+			--sha) [ $# -ge 2 ] || usage; sha=$2; sha_set=1; shift 2 ;;
+			--exclude) [ $# -ge 2 ] || usage; exclude=$2; shift 2 ;;
+			--interval) [ $# -ge 2 ] || usage; interval=$2; shift 2 ;;
+			--max-iter) [ $# -ge 2 ] || usage; max_iter=$2; shift 2 ;;
 			*) usage ;;
 		esac
 	done
