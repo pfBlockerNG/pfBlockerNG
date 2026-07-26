@@ -16421,7 +16421,7 @@ function pfBlockerNG_clearsqlite($mode, $totalqueries = 0) {
 
 
 // Function to read/lock/unlock IP/Domains from Aliastables/DNSBL (Called via Alerts Page)
-function pfb_unlock($mode, $type, $remove='', $r_type='', $filename_unlock) {
+function pfb_unlock($mode, $type, $filename_unlock, $remove='', $r_type='') {
 	global $pfb;
 
 	if ($type == 'ip') {

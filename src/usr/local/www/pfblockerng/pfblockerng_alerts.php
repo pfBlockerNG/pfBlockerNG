@@ -1212,7 +1212,7 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 
 				// Remove Domain from unlock file
-				pfb_unlock('lock', 'dnsbl', $entry, '', $dnsbl_unlock);
+				pfb_unlock('lock', 'dnsbl', $dnsbl_unlock, $entry, '');
 
 				$data = '';
 				foreach ($clists['dnsblwhitelist']['data'] as $line) {
@@ -1378,7 +1378,7 @@ if (isset($_POST) && !empty($_POST)) {
 		// Unbound. Dispatch: pfb_dnsbl_unlock_action() (unit-tested); unknown action = no-op.
 		$ua = pfb_dnsbl_unlock_action($action);
 		if ($ua['mode'] !== '') {
-			pfb_unlock($ua['mode'], 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
+			pfb_unlock($ua['mode'], 'dnsbl', $dnsbl_unlock, $domain, $dnsbl_type);
 
 			// Patch the manifest's config.user_unlock from the updated store, then
 			// reload Unbound so the query-time whiteDB picks up the change.

@@ -630,7 +630,7 @@ def test_dnsbl_sentinel_flip_failure_clears_sync_marker(deployed_vm: SmokeVM, mo
                 "pfb_global();\n"
                 "$ua = pfb_dnsbl_unlock_action('unlock');\n"
                 "$u = pfb_unlock('read', 'dnsbl', '', '', '');\n"
-                f"pfb_unlock($ua['mode'], 'dnsbl', {h._php_str(domain)}, 'python', $u);\n"
+                f"pfb_unlock($ua['mode'], 'dnsbl', $u, {h._php_str(domain)}, 'python');\n"
                 "pfb_unbound_python_sources_unlock();\n"
                 "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
                 "echo 'OK';"
