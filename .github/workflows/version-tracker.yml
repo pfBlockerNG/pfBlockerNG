@@ -347,39 +347,25 @@ jobs:
 
             TITLE="[version-tracker] pfSense ${CHANNEL} ${VERSION} still-supported — evaluate for matrix"
 
-            # Scope to the version-tracker label and lift the default 30-item cap:
-            # without an explicit --limit, gh issue list returns only the 30 newest
-            # open issues, so an older tracker issue beyond that window is invisible
-            # to the dedup and a duplicate is opened every run. Match across ALL
-            # states (issue #960): a recurrence after a closed tracker REOPENS it
-            # instead of filing a duplicate. Prefer an open match, then the lowest
-            # issue number.
-            MATCH=$(gh issue list --repo "$REPO" --state all \
+            # Scope to open version-tracker issues and lift the default 30-item
+            # cap so an older open tracker remains visible to deduplication.
+            MATCH=$(gh issue list --repo "$REPO" --state open \
               --label "version-tracker" --limit 500 --json number,title,state \
               | jq -r --arg t "$TITLE" \
-                  '[.[] | select(.title == $t)] | sort_by(.state != "OPEN", .number)
-                   | .[0] | if . then "\(.number) \(.state)" else empty end')
-            if [ -n "$MATCH" ] && [ "${MATCH#* }" = "OPEN" ]; then
+                  '[.[] | select(.title == $t)] | sort_by(.number)
+                   | .[0].number // empty')
+            if [ -n "$MATCH" ]; then
               echo "  [skip] open issue already exists for ${CHANNEL} ${VERSION}"
               continue
             fi
 
             # Skip if a closed issue with tracker-wontfix mentions this version.
-            # Checked BEFORE reopening: a wontfix'd version must never be
-            # reopened. --limit 500 lifts the default 30-item cap (see above).
+            # --limit 500 lifts the default 30-item cap (see above).
             WONTFIX=$(gh issue list --repo "$REPO" --state closed --label "tracker-wontfix" \
               --limit 500 --json title \
               | jq --arg v "$VERSION" '[.[] | select(.title | contains($v))] | length')
             if [ "${WONTFIX:-0}" -gt 0 ]; then
               echo "  [wontfix] suppressed for ${CHANNEL} ${VERSION}"
-              continue
-            fi
-
-            if [ -n "$MATCH" ] && [ "${MATCH#* }" = "CLOSED" ]; then
-              EXISTING_NUM=${MATCH% *}
-              echo "  [reopen] Reopening tracking issue #${EXISTING_NUM} for ${CHANNEL} ${VERSION}"
-              gh issue reopen "$EXISTING_NUM" --repo "$REPO" \
-                || echo "  ::warning::Could not reopen tracking issue #${EXISTING_NUM}"
               continue
             fi
 
@@ -454,30 +440,18 @@ jobs:
               printf '_the page signal changes (TBD → released date → GA)._\n'
             } > "$BODY_FILE"
 
-            # Update an existing tracking issue; create one if none exists.
-            # Scope to the version-tracker label and lift the default 30-item cap so
-            # an older tracking issue past the first page is still found and updated
-            # in place rather than re-created (the duplicate-issue bug). Match across
-            # ALL states (issue #960): a recurrence after a closed tracker REOPENS it
-            # instead of filing a duplicate. Prefer an open match, then the lowest
-            # issue number.
-            MATCH=$(gh issue list --repo "$REPO" --state all \
+            # Update an open tracking issue; create one if none exists. The
+            # explicit limit keeps older open trackers visible to deduplication.
+            MATCH=$(gh issue list --repo "$REPO" --state open \
               --label "version-tracker" --limit 500 --json number,title,state \
               | jq -r --arg t "$TITLE" \
-                  '[.[] | select(.title == $t)] | sort_by(.state != "OPEN", .number)
-                   | .[0] | if . then "\(.number) \(.state)" else empty end')
+                  '[.[] | select(.title == $t)] | sort_by(.number)
+                   | .[0].number // empty')
 
             if [ -n "$MATCH" ]; then
-              EXISTING_NUM=${MATCH% *}
-              EXISTING_STATE=${MATCH#* }
-              if [ "$EXISTING_STATE" = "CLOSED" ]; then
-                echo "  [reopen] Reopening tracking issue #${EXISTING_NUM} for ${CHANNEL} ${VERSION}"
-                gh issue reopen "$EXISTING_NUM" --repo "$REPO" \
-                  || echo "  ::warning::Could not reopen tracking issue #${EXISTING_NUM}"
-              fi
-              echo "  [update] Updating tracking issue #${EXISTING_NUM} for ${CHANNEL} ${VERSION}"
-              gh issue edit "$EXISTING_NUM" --repo "$REPO" --body-file "$BODY_FILE" \
-                || echo "  ::warning::Could not update tracking issue #${EXISTING_NUM}"
+              echo "  [update] Updating tracking issue #${MATCH} for ${CHANNEL} ${VERSION}"
+              gh issue edit "$MATCH" --repo "$REPO" --body-file "$BODY_FILE" \
+                || echo "  ::warning::Could not update tracking issue #${MATCH}"
             else
               echo "  [create] Opening tracking issue for ${CHANNEL} ${VERSION}"
               gh issue create \

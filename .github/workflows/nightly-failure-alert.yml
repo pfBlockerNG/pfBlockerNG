@@ -92,25 +92,17 @@ jobs:
             printf '_Opened automatically by the nightly-failure-alert workflow. Updated in place on every red nightly; closes manually with the fix._\n'
           } > "$BODY_FILE"
 
-          # Dedup by label + exact title (top1m-healthcheck pattern, incl. the
-          # >30-item page-cap lift) — but across ALL states: a recurrence after a
-          # fix REOPENS the closed tracker instead of filing a duplicate (PR #958
-          # review). Prefer an open match, then the lowest issue number.
-          MATCH=$(gh issue list --repo "$REPO" --state all \
+          # Dedup open issues by label + exact title (top1m-healthcheck pattern,
+          # including the >30-item page-cap lift). Closed issues stay closed.
+          MATCH=$(gh issue list --repo "$REPO" --state open \
             --label "nightly-red" --limit 500 --json number,title,state \
             | jq -r --arg t "$TITLE" \
-                '[.[] | select(.title == $t)] | sort_by(.state != "OPEN", .number)
-                 | .[0] | if . then "\(.number) \(.state)" else empty end')
+                '[.[] | select(.title == $t)] | sort_by(.number)
+                 | .[0].number // empty')
 
           if [ -n "$MATCH" ]; then
-            EXISTING_NUM=${MATCH% *}
-            EXISTING_STATE=${MATCH#* }
-            if [ "$EXISTING_STATE" = "CLOSED" ]; then
-              echo "[reopen] Reopening tracking issue #${EXISTING_NUM}"
-              gh issue reopen "$EXISTING_NUM" --repo "$REPO"
-            fi
-            echo "[update] Updating tracking issue #${EXISTING_NUM}"
-            gh issue edit "$EXISTING_NUM" --repo "$REPO" --body-file "$BODY_FILE"
+            echo "[update] Updating tracking issue #${MATCH}"
+            gh issue edit "$MATCH" --repo "$REPO" --body-file "$BODY_FILE"
           else
             echo "[create] Opening tracking issue"
             gh issue create \
