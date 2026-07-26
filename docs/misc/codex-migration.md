@@ -51,7 +51,7 @@ symlink; a provider-specific runtime change stays in that provider's adapter.
 | `PreToolUse` Git policy | `.codex/hooks.json` | Reuses the raw-payload-compatible shared guard for Codex `Bash` hook events; coverage remains subject to the client emitting that event for unified shell execution. |
 | `PreToolUse` retired-token notice | `.codex/hooks.json` | Reuses `check_retired_tokens.py --claude-hook` for the same supported `Bash` event surface. |
 | `SessionStart` branch synchronization | `.codex/hooks.json` | Runs on startup/resume/clear and shares the same branch script. |
-| Token Savior MCP and capture hook | `.codex/config.toml` plus `.codex/hooks.json` | Uses the same pinned `andrebrait/token-savior` launcher and capture wrapper as Claude, with the client label set to `codex`. Current Codex hooks expose `Bash`, `apply_patch`, and MCP tool-name matching, not Claude-style Read/Grep/WebFetch events, so this config requests best-effort capture for `Bash`, Playwright, and `token-savior-recall` MCP output only; it never captures unrelated MCP servers. |
+| Token Savior MCP and capture hook | `.codex/config.toml` plus `.codex/hooks.json` | Uses the same pinned upstream Token Savior launcher and capture wrapper as Claude, with the client label set to `codex`. Current Codex hooks expose `Bash`, `apply_patch`, and MCP tool-name matching, not Claude-style Read/Grep/WebFetch events, so this config requests best-effort capture for `Bash`, Playwright, and `token-savior-recall` MCP output only; it never captures unrelated MCP servers. |
 | Ponytail and Caveman | Real Codex plugins | Installed directly (`codex plugin marketplace add …` / `npx skills add … -a codex`), not vendored into the repo. |
 
 The shared Git hooks recognize both `CLAUDECODE=1` and Codex's
@@ -101,7 +101,7 @@ the worktree coherent (preferably committed) before closing the CLI, then
    until their new definitions are reviewed.
 3. Use `/skills` to verify the `.agents/skills` entries are discovered.
 4. Use `/mcp` to verify `token-savior-recall` is running. Its shared launcher
-   installs the repository-pinned fork into the per-user cache on first start.
+   installs the repository-pinned upstream release into the per-user cache on first start.
 5. Use `/agent` or a delegation request to select project roles.
 6. Run `sh scripts/agent/check-agent-config-parity.sh` for an explicit inventory
    audit; routine commits run it automatically when relevant configuration changes.

@@ -1,8 +1,8 @@
 #shellcheck shell=sh
-# mcp-token-savior.sh — env wiring + fork-pin install policy: the server's
+# mcp-token-savior.sh — env wiring + upstream-version install policy: the server's
 # built-in index globs lack .php/.inc/.sh and its 500 KB size cap skips
 # pfblockerng.inc (~844 KB), so the launcher must export repo-appropriate
-# defaults (caller-set values win); the package installs from the pinned
+# defaults (caller-set values win); the package installs from the exact upstream
 # TS_SOURCE and a TS_SOURCE change must trigger a clean venv rebuild.
 
 Describe 'mcp-token-savior.sh env exports'
@@ -202,7 +202,7 @@ Describe 'Codex repository-script integrity pins'
   End
 End
 
-Describe 'mcp-token-savior.sh fork-pin install policy'
+Describe 'mcp-token-savior.sh upstream install policy'
   SCRIPT="${PFB_ROOT}/scripts/mcp-token-savior.sh"
 
   setup() {
@@ -232,12 +232,12 @@ EOF
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'installs the pinned andrebrait/token-savior integration source on first run'
+  It 'installs exact upstream Token Savior 4.18.1 on first run'
     When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}/venv" sh "${SCRIPT}"
     The status should be success
     The output should equal 'INSTALLED'
     The stderr should equal ''
-    The contents of file "${WORK}/venv/pip-args.log" should include 'git+https://github.com/andrebrait/token-savior@'
+    The contents of file "${WORK}/venv/pip-args.log" should equal 'token-savior-recall[mcp,memory-vector]==4.18.1'
   End
 
   It 'rebuilds the venv when the recorded TS_SOURCE stamp no longer matches'

@@ -8,8 +8,8 @@ none of this ships in the release archive (which contains only `src/`).
 | Script | Use |
 | --- | --- |
 | [`agent/check-agent-config-parity.sh`](agent/check-agent-config-parity.sh) | Verify bidirectional Claude/Codex skill and workflow parity, resolvable adapter references, and Codex role models against `.agents/model-tiers.conf`. The pre-commit hook runs it for staged agent-configuration changes; shellspec pins the real inventory for CI. |
-| [`mcp-token-savior.sh`](mcp-token-savior.sh) | Install the pinned `andrebrait/token-savior` fork in a shared per-user venv and launch its MCP server for Claude or Codex. |
-| [`ts-hook.sh`](ts-hook.sh) | Run the pinned fork's shared tool-capture hook for Claude or Codex. |
+| [`mcp-token-savior.sh`](mcp-token-savior.sh) | Install the pinned upstream Token Savior release in a shared per-user venv and launch its MCP server for Claude or Codex. |
+| [`ts-hook.sh`](ts-hook.sh) | Run Token Savior's shared tool-capture hook for Claude or Codex. |
 
 ## Supported-version matrix
 
