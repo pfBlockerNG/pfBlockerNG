@@ -117,6 +117,14 @@ final class PfbFilterContractTest extends TestCase
 			'IDN domain (latin)'        => ['bücher.de'],
 			'IDN domain (CJK)'          => ['日本語.example'],
 			'IDN leading-dot wildcard'  => ['.bücher.de'],
+			// PR #1729 review: ZWNJ/ZWJ (U+200C/U+200D) are UTS46 CONTEXTJ/
+			// deviation characters, contextually legal in real IDNA labels
+			// (e.g. Persian); PHP's idn_to_ascii(IDNA_DEFAULT) has no
+			// CHECK_CONTEXTJ, so the punycode candidate validates and the
+			// original Unicode is returned -- same stance as mixed-script
+			// acceptance above.
+			'ZWNJ inside a label'       => ["exam\xE2\x80\x8Cple.com"],
+			'ZWJ inside a label'        => ["exam\xE2\x80\x8Dple.com"],
 		];
 	}
 
@@ -129,6 +137,13 @@ final class PfbFilterContractTest extends TestCase
 	public function testTldFilterAcceptsUnicodeIdnUnchanged(): void
 	{
 		$this->assertSame('рф', pfb_filter('рф', PFB_FILTER_TLD, 'PFBL-01 contract'));
+	}
+
+	public function testTldFilterAcceptsZeroWidthJoiner(): void
+	{
+		// PR #1729 review: same ZWJ-accepted-by-design stance as the domain
+		// pins above, pinned for PFB_FILTER_TLD too.
+		$this->assertSame("\xD1\x80\xE2\x80\x8D\xD1\x84", pfb_filter("\xD1\x80\xE2\x80\x8D\xD1\x84", PFB_FILTER_TLD, 'PFBL-01 contract'));
 	}
 
 	/** @return array<string, array{0: string}> label => hostile/boundary value the DOMAIN filter must still reject */
@@ -153,6 +168,12 @@ final class PfbFilterContractTest extends TestCase
 			// returns FALSE (UTS46 rejects it), so the candidate stays FALSE and
 			// the domain is rejected before the charset/label checks run.
 			'zero-width leading label'    => ["\xE2\x80\x8B.com"],
+			// U+202E (RIGHT-TO-LEFT OVERRIDE) inside a label -- probed:
+			// idn_to_ascii() returns FALSE (UTS46 disallows bidi control
+			// characters), so the candidate stays FALSE and the domain is
+			// rejected before the charset/label checks run. Contrast with the
+			// free-text PFB_FILTER_HTML gate above, which accepts it.
+			'bidi override inside a label' => ["exam\xE2\x80\xAEple.com"],
 		];
 	}
 
@@ -168,6 +189,19 @@ final class PfbFilterContractTest extends TestCase
 		// IDN-acceptance change (no regression on the plain-ASCII path).
 		$this->assertSame('example.com', pfb_filter('example.com', PFB_FILTER_DOMAIN, 'PFBL-01 contract'));
 		$this->assertSame('', pfb_filter('exam!ple.com', PFB_FILTER_DOMAIN, 'PFBL-01 contract'));
+	}
+
+	public function testDomainFilterRejectsIdnDoubleLeadingDot(): void
+	{
+		// PR #1729 review: the IDN leading-dot branch used ltrim($input, '.'),
+		// which strips ALL leading dots -- "..bücher.de" was wrongly ACCEPTED
+		// (ltrim leaves "bücher.de", a legal single label) while its ASCII
+		// sibling "..example.com" is correctly rejected (double-dot survives
+		// unmodified on the ASCII path). Strip exactly ONE leading dot so both
+		// paths reject a double leading dot identically.
+		$this->assertSame('DEF', pfb_filter("..b\xC3\xBCcher.de", PFB_FILTER_DOMAIN, 'ref', 'DEF'));
+		// Single leading dot must still be accepted unchanged (regression guard).
+		$this->assertSame(".b\xC3\xBCcher.de", pfb_filter(".b\xC3\xBCcher.de", PFB_FILTER_DOMAIN, 'PFBL-01 contract'));
 	}
 
 	// --- PFB_FILTER_WORD (feed headers + friendly interface names) ---------------
@@ -321,8 +355,17 @@ final class PfbFilterContractTest extends TestCase
 		// Cs+Cn) to \p{Cc}+BOM only. U+200B (ZERO WIDTH SPACE) is Cf, not Cc, so
 		// it no longer makes a whole free-text field a reject. Mixed-script/
 		// homoglyph domains are ACCEPTED by design (admins block typosquat
-		// domains in their own lists); zero-width chars in domain-shaped input
-		// are rejected by UTS46, free-text keeps them.
+		// domains in their own lists).
+		//
+		// PR #1729 review: in domain-shaped input, ZWSP as an entire label
+		// ("​.com") IS rejected -- idn_to_ascii() itself refuses it, UTS46
+		// disallows it (see 'zero-width leading label' below). ZWNJ/ZWJ
+		// (U+200C/U+200D) are ACCEPTED by design in domain-shaped input --
+		// both are UTS46 CONTEXTJ/deviation characters, contextually legal in
+		// real IDNA labels (e.g. Persian), and PHP's idn_to_ascii(IDNA_DEFAULT)
+		// has no CHECK_CONTEXTJ, so the punycode candidate is exactly what the
+		// resolver queries (same stance as mixed-script acceptance, see
+		// domainUnicodeAcceptedProvider). Free-text keeps all of them.
 		$this->assertSame("\xE2\x80\x8B", pfb_filter("\xE2\x80\x8B", PFB_FILTER_HTML, 'ref', 'DEF'));
 	}
 

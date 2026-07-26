@@ -1527,9 +1527,11 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			if (preg_match('/[^\x00-\x7F]/', $input)) {
 				if (str_starts_with($input, '.')) {
 					// idn_to_ascii() returns an empty string on a leading dot;
-					// strip it, convert, then re-prefix on success (mirrors
+					// strip exactly ONE -- ltrim() would strip every leading dot,
+					// collapsing a double leading dot to a single legal label --
+					// convert, then re-prefix on success (mirrors
 					// pfb_text_area_decode()'s IDN branch).
-					$candidate = idn_to_ascii(ltrim($input, '.'));
+					$candidate = idn_to_ascii(substr($input, 1));
 					$candidate = empty($candidate) ? FALSE : ('.' . $candidate);
 				} else {
 					$candidate = idn_to_ascii($input);
