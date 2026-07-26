@@ -1,0 +1,153 @@
+"""Preserve safe deduplication around issue creation (issue #1735)."""
+
+import os
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = ROOT / ".github" / "workflows"
+_LABEL = re.compile(r'--label "([^"]+)"')
+
+
+def _commands(source: str) -> list[str]:
+    commands: list[str] = []
+    command = ""
+    for line in source.splitlines():
+        stripped = line.strip()
+        command = f"{command} {stripped}".strip()
+        if stripped.endswith("\\"):
+            command = command[:-1].rstrip()
+        else:
+            commands.append(command)
+            command = ""
+    return commands
+
+
+def _issue_creation_steps(path: Path) -> list[str]:
+    return [step for step in path.read_text(encoding="utf-8").split("\n      - name:") if "gh issue create " in step]
+
+
+def _run_script(
+    path: Path,
+    step_name: str,
+    tmp_path: Path,
+    *,
+    opened: str,
+    closed: str = "[]",
+    extra_env: dict[str, str] | None = None,
+) -> list[str]:
+    source = path.read_text(encoding="utf-8")
+    step = source.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
+    script = "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+    log = tmp_path / "gh.log"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/bin/sh
+case "$*" in
+  "issue list "*"--state closed"*) printf '%s\\n' "$GH_CLOSED" ;;
+  "issue list "*) printf '%s\\n' "$GH_OPEN" ;;
+  "issue edit "*) printf 'edit %s\\n' "$3" >> "$GH_LOG" ;;
+  "issue create "*) printf 'create\\n' >> "$GH_LOG" ;;
+  "issue reopen "*) printf 'reopen %s\\n' "$3" >> "$GH_LOG" ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = os.environ | {
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "GH_CLOSED": closed,
+        "GH_LOG": str(log),
+        "GH_OPEN": opened,
+        "REPO": "owner/repo",
+    }
+    env.update(extra_env or {})
+    subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, check=True, capture_output=True, text=True)
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+def test_issue_creation_steps_keep_exact_open_deduplication() -> None:
+    steps = [
+        step
+        for path in sorted((*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")))
+        for step in _issue_creation_steps(path)
+    ]
+    assert steps, "found no issue-creation steps"
+
+    for step in steps:
+        commands = _commands(step)
+        creates = [command for command in commands if command.startswith("gh issue create ")]
+        dedups = [
+            command for command in commands if "gh issue list " in command and "--json number,title,state" in command
+        ]
+        assert len(dedups) == len(creates), f"expected one dedup lookup per issue create: {step}"
+        assert "set -euo pipefail" in step, f"issue dedup must fail closed on lookup errors: {step}"
+        assert step.count("select(.title == $t)") == len(creates), f"issue dedup must use exact titles: {step}"
+
+        for create, dedup in zip(creates, dedups, strict=True):
+            assert "--state open" in dedup, f"issue dedup must query open issues only: {dedup}"
+            assert "--limit 500" in dedup, f"issue dedup must lift the default page limit: {dedup}"
+            assert _LABEL.findall(dedup) == _LABEL.findall(create), (
+                f"dedup and create labels differ: dedup={dedup!r}, create={create!r}"
+            )
+
+
+@pytest.mark.parametrize(
+    ("opened", "expected"),
+    [
+        ('[{"number":42,"title":"[nightly-red] Smoke failing on devel","state":"OPEN"}]', ["edit 42"]),
+        ("[]", ["create"]),
+    ],
+)
+def test_nightly_open_match_updates_and_closed_only_creates(tmp_path: Path, opened: str, expected: list[str]) -> None:
+    assert (
+        _run_script(
+            WORKFLOWS / "nightly-failure-alert.yml",
+            "Open or update the tracking issue",
+            tmp_path,
+            opened=opened,
+            extra_env={
+                "WF_NAME": "Smoke",
+                "RUN_URL": "https://example.invalid/run",
+                "HEAD_SHA": "deadbeef",
+                "BRANCH": "devel",
+                "DRILL": "",
+            },
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("opened", "closed", "expected"),
+    [
+        (
+            '[{"number":42,"title":"[version-tracker] pfSense CE 2.8 still-supported — evaluate for matrix",'
+            '"state":"OPEN"}]',
+            "[]",
+            [],
+        ),
+        ("[]", "[]", ["create"]),
+        ("[]", '[{"title":"wontfix pfSense 2.8"}]', []),
+    ],
+)
+def test_supported_missing_open_skips_closed_only_creates_and_wontfix_suppresses(
+    tmp_path: Path, opened: str, closed: str, expected: list[str]
+) -> None:
+    (tmp_path / "probe_result.json").write_text(
+        '{"supported_missing":[{"version":"2.8","channel":"CE","freebsd_major":"15"}]}',
+        encoding="utf-8",
+    )
+    assert (
+        _run_script(
+            WORKFLOWS / "version-tracker.yml",
+            "Open nudge issues for supported-but-missing versions",
+            tmp_path,
+            opened=opened,
+            closed=closed,
+        )
+        == expected
+    )
