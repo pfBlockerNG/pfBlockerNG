@@ -10,8 +10,6 @@
 #
 # THIS LIST MAY ONLY SHRINK. A new diagnostic is a regression: fix the site, never append
 # to this file. Burning the backlog below down to empty is tracked in #1712.
-/usr/local/pkg/pfblockerng/pfblockerng.inc|Deprecated|Optional parameter $r_type declared before required parameter $filename_unlock is implicitly treated as a required parameter
-/usr/local/pkg/pfblockerng/pfblockerng.inc|Deprecated|Optional parameter $remove declared before required parameter $filename_unlock is implicitly treated as a required parameter
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Deprecated|base64_decode(): Passing null to parameter #1 ($string) of type string is deprecated
 /usr/local/pkg/pfblockerng/pfblockerng.inc|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
 /usr/local/www/pfblockerng/pfblockerng_Africa.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
