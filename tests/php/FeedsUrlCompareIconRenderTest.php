@@ -242,4 +242,64 @@ final class FeedsUrlCompareIconRenderTest extends TestCase
 			'the stored alternate entry must carry the checkmark match icon'
 		);
 	}
+
+	public function testNonContiguousAlternateBucketRendersEveryRowWithoutWarning(): void
+	{
+		$primaryUrl   = 'https://example.test/non-contiguous/primary.txt';
+		$matchedUrl   = 'https://example.test/non-contiguous/matched.txt';
+		$primaryHeader = 'NonContiguousPrimary';
+		$feed = $this->buildFeed($primaryHeader, $primaryUrl, 'https://example.test/non-contiguous/', [
+			'alternate' => [
+				['url' => 'https://example.test/non-contiguous/unmatched.txt', 'header' => 'UnmatchedAlternate'],
+				['url' => $matchedUrl, 'header' => 'FirstRenderedAlternate'],
+				['url' => 'https://example.test/non-contiguous/later.txt', 'header' => 'SecondRenderedAlternate'],
+			],
+		]);
+		$info = ['NonContiguousAlias' => [
+			'action' => 'permit',
+			'info'   => 'Non-contiguous alias info',
+			'feeds'  => [$feed],
+		]];
+		$exFeeds = [[
+			'aliasname' => 'NonContiguousAlias',
+			'action'    => 'permit',
+			'state'     => 'Enabled',
+			'url'       => $matchedUrl,
+			'header'    => 'FirstRenderedAlternate',
+			'rowid'     => 601,
+		]];
+		$diagnostics = [];
+		set_error_handler(
+			static function (int $errno, string $errstr) use (&$diagnostics): bool {
+				$diagnostics[] = [$errno, $errstr];
+				return TRUE;
+			},
+			E_ALL
+		);
+		try {
+			$html = $this->renderType('ipv4', $info, $exFeeds);
+		} finally {
+			restore_error_handler();
+		}
+
+		$this->assertSame(
+			[1, 2],
+			array_keys($GLOBALS['alt_feeds']['ipv4']['NonContiguousAlias'][$primaryHeader]),
+			'test setup must exercise the non-contiguous alternate bucket'
+		);
+		$undefinedKeyDiagnostics = array_values(array_filter(
+			$diagnostics,
+			static fn(array $diagnostic): bool => str_contains($diagnostic[1], 'Undefined array key')
+		));
+		$this->assertSame([], $undefinedKeyDiagnostics, var_export($diagnostics, TRUE));
+
+		$firstRow  = strpos($html, 'value="alt_FirstRenderedAlternate"');
+		$secondRow = strpos($html, 'value="alt_SecondRenderedAlternate"');
+		$this->assertNotFalse($firstRow, 'first alternate row must render');
+		$this->assertNotFalse($secondRow, 'second alternate row must render');
+		$this->assertTrue(
+			$firstRow < $secondRow,
+			"alternate rows must preserve source order; positions: {$firstRow}, {$secondRow}"
+		);
+	}
 }

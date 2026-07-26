@@ -1629,6 +1629,52 @@ def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: P
     )
 
 
+# Dual-marked ui_e2e because setup writes one config row; the module-level
+# ui_render marker keeps this live render regression in the Tier-A gate.
+@pytest.mark.ui_e2e
+def test_feeds_non_contiguous_alternate_bucket_renders_every_row(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
+    """A configured non-first SFS alternate renders it and every later alternate (#1702)."""
+    path = "/pfblockerng/pfblockerng_feeds.php?type=ipv4"
+    rowid = _free_rowid(smoke_vm, CFG_IPV4)
+    base = f"{CFG_IPV4}/{rowid}"
+    matched_url = "https://www.stopforumspam.com/downloads/listed_ip_7.zip"
+    headers = ("SFS_7d", "SFS_30d", "SFS_90d", "SFS_180d", "SFS_365d")
+    try:
+        seed = helpers.php_eval(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(f'{base}/aliasname')}, 'SFS');\n"
+            f"config_set_path({helpers._php_str(f'{base}/action')}, 'Deny_Both');\n"
+            f"config_set_path({helpers._php_str(f'{base}/row/0/state')}, 'Enabled');\n"
+            f"config_set_path({helpers._php_str(f'{base}/row/0/url')}, {helpers._php_str(matched_url)});\n"
+            f"config_set_path({helpers._php_str(f'{base}/row/0/header')}, 'SFS_7d');\n"
+            "write_config('pfBlockerNG smoke #1702: seed non-first alternate');\n"
+            "echo 'OK';",
+        )
+        assert seed.returncode == 0 and "OK" in seed.stdout, (
+            f"failed to seed SFS alternate row: rc={seed.returncode}, stdout={seed.stdout!r}, stderr={seed.stderr!r}"
+        )
+        assert helpers.config_get(smoke_vm, f"{base}/row/0/url") == matched_url, (
+            "non-first alternate setup did not persist"
+        )
+
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Alias/Group/Feeds",))
+        assert result.ok, f"Feeds render oracle failed: {result.detail}"
+
+        markers = [f'value="alt_{header}"' for header in headers]
+        positions = [resp.text.find(marker) for marker in markers]
+        assert all(position >= 0 for position in positions), (
+            f"configured alternate and later rows did not all render: {dict(zip(headers, positions, strict=True))}"
+        )
+        assert positions == sorted(positions), (
+            f"alternate rows did not preserve source order: {dict(zip(headers, positions, strict=True))}"
+        )
+    finally:
+        _del_rowid(smoke_vm, CFG_IPV4, rowid)
+
+
 def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """DNSBL page exposes the default-off full-cache trade-off without PHP diagnostics."""
     path = "/pfblockerng/pfblockerng_dnsbl.php"
