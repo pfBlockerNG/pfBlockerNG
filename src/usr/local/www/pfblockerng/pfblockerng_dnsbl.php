@@ -644,7 +644,7 @@ if ($_POST) {
 		// reject a real base64url/JWT token -- PFB_FILTER_TOKEN accepts that charset.
 		// Reference 'top1m_token' suppresses pfb_filter()'s failed-validation log line
 		// -- the token itself must never reach a log, even a rejected one.
-		$pfb_top1m_token_post = trim((string) ($_POST['top1m_token'] ?? ''));
+		$pfb_top1m_token_post = pfb_sanitize_text((string) ($_POST['top1m_token'] ?? ''));
 		if ($pfb_top1m_token_post !== '' && empty(pfb_filter($pfb_top1m_token_post, PFB_FILTER_TOKEN, 'top1m_token'))) {
 			$input_errors[] = 'DNSBL TOP1M Token is invalid!';
 		}
@@ -858,19 +858,22 @@ if ($_POST) {
 
 			$pfb['dconfig']['autoaddrnot_in']	= pfb_filter($_POST['autoaddrnot_in'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['autoports_in']		= pfb_filter($_POST['autoports_in'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['aliasports_in']	= $_POST['aliasports_in']						?: '';
+			// issue #1723 review: aliasaddr_in/out, aliasports_in/out are free-text
+			// fields with no pfb_filter() gate -- sanitize at the persist boundary
+			// like the other single-line fields in this file.
+			$pfb['dconfig']['aliasports_in']	= pfb_sanitize_text((string) ($_POST['aliasports_in'] ?? ''))		?: '';
 			$pfb['dconfig']['autoaddr_in']		= pfb_filter($_POST['autoaddr_in'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['autonot_in']		= pfb_filter($_POST['autonot_in'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['aliasaddr_in']		= $_POST['aliasaddr_in']						?: '';
+			$pfb['dconfig']['aliasaddr_in']		= pfb_sanitize_text((string) ($_POST['aliasaddr_in'] ?? ''))		?: '';
 			$pfb['dconfig']['autoproto_in']		= $_POST['autoproto_in']						?: 'any';
 			$pfb['dconfig']['agateway_in']		= $_POST['agateway_in']							?: 'default';
 
 			$pfb['dconfig']['autoaddrnot_out']	= pfb_filter($_POST['autoaddrnot_out'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['autoports_out']	= pfb_filter($_POST['autoports_out'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['aliasports_out']	= $_POST['aliasports_out']						?: '';
+			$pfb['dconfig']['aliasports_out']	= pfb_sanitize_text((string) ($_POST['aliasports_out'] ?? ''))	?: '';
 			$pfb['dconfig']['autoaddr_out']		= pfb_filter($_POST['autoaddr_out'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['autonot_out']		= pfb_filter($_POST['autonot_out'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['aliasaddr_out']	= $_POST['aliasaddr_out']						?: '';
+			$pfb['dconfig']['aliasaddr_out']	= pfb_sanitize_text((string) ($_POST['aliasaddr_out'] ?? ''))		?: '';
 			$pfb['dconfig']['autoproto_out']	= $_POST['autoproto_out']						?: 'any';
 			$pfb['dconfig']['agateway_out']		= $_POST['agateway_out']						?: 'default';
 

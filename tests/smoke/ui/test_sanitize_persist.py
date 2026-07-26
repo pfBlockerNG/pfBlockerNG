@@ -13,15 +13,16 @@ Tests 1-5 pin the persist-boundary sanitizers wired in commit 2 of #1723
 ``pfb_sanitize_text()`` for single-line fields) -- RED before that commit
 (raw bytes/control chars persist, or the field is dropped entirely by an
 unrelated pre-existing control-char gate), GREEN after. Test 6 is a LIVE PIN
-of step 1 (commit 57aa96e1, same branch): the DNSBL custom-list IDN
-acceptance is already GREEN at red time -- it never touches the encode
-wiring, it is here so the whole #1723 story has one CI-visible regression
-guard for the IDN half too.
+of step 1 (the pfb_filter IDN/Unicode commit, same branch): the DNSBL
+custom-list IDN acceptance is already GREEN at red time -- it never touches
+the encode wiring, it is here so the whole #1723 story has one CI-visible
+regression guard for the IDN half too.
 """
 
 from __future__ import annotations
 
 import base64
+import uuid
 from typing import TYPE_CHECKING
 
 import pytest
@@ -187,19 +188,29 @@ def test_ip_suppression_cr_only_rows_persist_as_lf(
     the bare ``\\r`` separators verbatim.
 
     GREEN (after): ``pfb_text_area_encode()`` normalizes them to ``\\n``.
+
+    The header comment carries a per-run UUID token (not just the fixed
+    RFC 5737 addresses) so the computed ``expected`` value is unique across
+    re-runs on an unreset box -- the persisted value is asserted EQUAL to
+    that computed expectation (not merely "changed from before"), and a
+    before-state read still guards against a stale box already holding this
+    run's exact expected value.
     """
     vm = smoke_vm
+    token = uuid.uuid4().hex[:12]
     addr1, addr2, addr3 = "198.51.100.1/32", "198.51.100.2/32", "198.51.100.3/32"
-    raw = f"# smoke cr-only header\r{addr1}\r{addr2}\r{addr3}"
-    expected = f"# smoke cr-only header\n{addr1}\n{addr2}\n{addr3}"
+    raw = f"# smoke cr-only header {token}\r{addr1}\r{addr2}\r{addr3}"
+    expected = f"# smoke cr-only header {token}\n{addr1}\n{addr2}\n{addr3}"
     cfg = "installedpackages/pfblockerngipsettings/config/0/v4suppression"
 
     before = helpers.config_get(vm, cfg)
+    assert _decoded(before) != expected, (
+        f"v4suppression already holds this run's expected value (stale/colliding state): {expected!r}"
+    )
     resp = webui.post(IP_PAGE, {"v4suppression": raw}, timeout=SETTINGS_SAVE_TIMEOUT)
     assert not looks_like_login_page(resp.text), "IP POST returned the login form (session lost)"
 
     after = helpers.config_get(vm, cfg)
-    assert after != before, "v4suppression did not change -- the save did not take (POST must CAUSE the change)"
     assert _decoded(after) == expected, f"v4suppression CR rows not normalized to LF: got {_decoded(after)!r}"
 
 
@@ -285,8 +296,9 @@ def test_category_edit_custom_list_accepts_idn_row(
 ) -> None:
     """A Unicode-label custom-list row saves cleanly (live pin of step 1's IDN change).
 
-    NOT a persist-boundary sanitization test -- step 1 (commit 57aa96e1, same
-    branch) already widened ``pfb_filter()``/the category-edit custom-list
+    NOT a persist-boundary sanitization test -- step 1 (the pfb_filter
+    IDN/Unicode commit, same branch) already widened ``pfb_filter()``/the
+    category-edit custom-list
     validator to accept IDN/Unicode domains; this is already GREEN at red
     time and stays green through commit 2 (the encode wiring never touches
     this validator). It exists so #1723 pins BOTH halves of the "standardize
@@ -316,8 +328,13 @@ def test_category_edit_custom_list_accepts_idn_row(
             "IDN custom-list row aborted the whole save (aliasname did not persist) -- "
             "the custom-list validator rejected the Unicode label"
         )
-        assert base64.b64decode(helpers.config_get(vm, f"{base}/custom")) != b"", (
-            "IDN custom-list row: 'custom' field is empty after a supposedly successful save"
+        # The single-line row carries no CR/LF/control chars/trailing whitespace, so
+        # pfb_text_area_encode()'s pfb_sanitize_text_area() pass is a no-op -- the
+        # decoded persisted value must equal the typed row exactly, not merely be
+        # non-empty.
+        assert _decoded(helpers.config_get(vm, f"{base}/custom")) == custom_row, (
+            f"IDN custom-list row: 'custom' field does not match the typed row, "
+            f"got {_decoded(helpers.config_get(vm, f'{base}/custom'))!r}"
         )
     finally:
         tce._del_rowid(vm, tce.CFG_DNSBL, rowid)
