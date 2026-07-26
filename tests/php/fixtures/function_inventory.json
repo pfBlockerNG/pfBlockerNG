@@ -3564,19 +3564,6 @@
             }
         ]
     },
-    "pfb_hook_editor_normalize_content": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "content",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            }
-        ]
-    },
     "pfb_hook_editor_path": {
         "returnsRef": false,
         "returnType": "?string",

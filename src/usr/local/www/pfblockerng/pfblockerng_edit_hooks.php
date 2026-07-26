@@ -156,10 +156,12 @@ if ($_POST) {
 		// or a crafted POST can never write outside a file the picker already offers.
 		$post_when    = (string) ($_POST['pfb_eh_cur_when'] ?? '');
 		$post_script  = (string) ($_POST['pfb_eh_cur_script'] ?? '');
-		// Normalize BEFORE anything else
-		// touches the content -- see pfb_hook_editor_normalize_content()'s own doc
-		// comment for why an un-normalized save breaks every saved hook's shebang.
-		$post_content = pfb_hook_editor_normalize_content((string) ($_POST['pfb_eh_content'] ?? ''));
+		// issue #1734: shared persist-boundary sanitizer (#1723), run at INGESTION.
+		// Its leading CRLF/CR -> LF fold is load-bearing: HTML5 makes the browser submit
+		// a <textarea> as CRLF, and a saved "#!/bin/sh\r" shebang execs the nonexistent
+		// path "/bin/sh\r" (ENOENT) -- the hook then silently never fires again. A
+		// literal control byte must be written as an escape (\033); issue #1728.
+		$post_content = pfb_sanitize_text_area((string) ($_POST['pfb_eh_content'] ?? ''));
 
 		if (!pfb_hook_script_valid($post_script, $post_when)) {
 			$input_errors[] = gettext('Select a valid, existing hook script for this Pre/Post before saving ' .
@@ -404,9 +406,9 @@ $form->addGlobal(new Form_Input('pfb_eh_cur_script', 'pfb_eh_cur_script', 'hidde
 $pfb_eh_textarea = new Form_Textarea(
 	'pfb_eh_content',
 	NULL,
-	// Displayed/re-loaded verbatim here -- the only transformation the save handler
-	// ever applies is line-ending normalization to LF (pfb_hook_editor_normalize_content()),
-	// which happens later, on $_POST, not to this
+	// Displayed/re-loaded verbatim here -- the save handler's sanitization
+	// (pfb_sanitize_text_area(): line endings to LF, control characters other than tab
+	// stripped, each line right-stripped) happens later, on $_POST, not to this
 	// loaded value. Passed RAW: Form_Textarea::_getInput() already HTML-escapes the
 	// value exactly once at render (verified against pfSense master and
 	// RELENG_2_7_2), so escaping it again here would double-escape it: the browser
@@ -422,8 +424,9 @@ $pfb_eh_textarea->removeClass('form-control')
 	->setAttribute('wrap', 'off')
 	->setAttribute('spellcheck', 'false')
 	->setAttribute('style', 'background:#fafafa; width: 100%; font-family: monospace;')
-	->setHelp(gettext('Saved as typed, except line endings are normalized to LF -- nothing else about the ' .
-		'content is transformed.'));
+	->setHelp(gettext('Saved as typed, except line endings are normalized to LF, trailing whitespace is ' .
+		'stripped from each line, and control characters other than tab are removed -- write a literal ' .
+		'control byte as an escape (e.g. \\033) instead.'));
 $section->addInput($pfb_eh_textarea);
 
 // Named pfb_eh_save directly -- same native-submit reasoning as the Create button
