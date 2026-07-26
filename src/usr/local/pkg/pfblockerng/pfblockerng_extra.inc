@@ -3595,7 +3595,7 @@ function pfb_py_sync_status_list_open(string $status_dir): array
  * PURE — no config access, no I/O; only the pfSense is_subnetv4()/is_subnetv6()
  * predicates.
  *
- * @param  string $line   One raw textarea line (as split on "\r\n"), untrimmed.
+ * @param  string $line   One raw textarea line (as split on "\n" post-ingestion-sanitize, issue #1723), untrimmed.
  * @param  string $family 'ipv4' or 'ipv6'.
  * @return string|null    NULL when the line is valid (or a comment/blank no-op);
  *                         otherwise the input_errors message for this line.

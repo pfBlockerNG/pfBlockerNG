@@ -108,13 +108,13 @@ if ($_POST) {
 
 		unset($savemsg);
 
-		// issue #1723: sanitize single-line free-text fields before any existing
-		// filter/validation below reads them (autorule_suffix is select-coerced
-		// right after this -- sanitizing first is a no-op for its 3 valid keys).
-		$_POST['ip_placeholder']	= pfb_sanitize_text($_POST['ip_placeholder'] ?? '');
-		$_POST['asn_token']		= pfb_sanitize_text($_POST['asn_token'] ?? '');
-		$_POST['autorule_suffix']	= pfb_sanitize_text($_POST['autorule_suffix'] ?? '');
-		$_POST['maxmind_account']	= pfb_sanitize_text($_POST['maxmind_account'] ?? '');
+		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
+		foreach (array('ip_placeholder', 'asn_token', 'autorule_suffix', 'maxmind_account', 'maxmind_key') as $pfb_text_field) {
+			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
+		}
+		foreach (array('v4suppression', 'v6suppression') as $pfb_text_area_field) {
+			$_POST[$pfb_text_area_field] = pfb_sanitize_text_area((string) ($_POST[$pfb_text_area_field] ?? ''));
+		}
 
 		// Validate Select field options
 		$select_options = array(	'asn_reporting'		=> 'disabled',
@@ -152,7 +152,8 @@ if ($_POST) {
 		// issue #924: maxmind_key is masked/write-only -- a blank POST keeps the stored key, so
 		// validate only a non-empty submission. Reference 'maxmind_key' suppresses pfb_filter()'s
 		// failed-validation log line so the secret never reaches a log, even when rejected.
-		$pfb_maxmind_key_post = pfb_sanitize_text((string) ($_POST['maxmind_key'] ?? ''));
+		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
+		$pfb_maxmind_key_post = (string) ($_POST['maxmind_key'] ?? '');
 		if ($pfb_maxmind_key_post !== '' && empty(pfb_filter($pfb_maxmind_key_post, PFB_FILTER_WORD, 'maxmind_key'))) {
 			$input_errors[] = 'MaxMind License key Invalid';
 		}
@@ -161,7 +162,10 @@ if ($_POST) {
 			$input_errors[] = 'IPinfo Token Invalid';
 		}
 
-		$v4suppression = explode("\r\n", $_POST['v4suppression']);
+		// issue #1723: the ingestion prologue already normalized CRLF/CR to LF, so
+		// per-line validation now splits on "\n" (the pre-#1723 "\r\n" split matched
+		// a browser's raw CRLF submission; that separator no longer survives ingestion).
+		$v4suppression = explode("\n", $_POST['v4suppression']);
 		if (!empty($v4suppression)) {
 			foreach ($v4suppression as $line) {
 				$suppression_error = pfb_validate_suppression_line($line, 'ipv4');
@@ -175,7 +179,7 @@ if ($_POST) {
 		// non-empty array, so (unlike the v4 block above) this skips the vestigial
 		// !empty() wrapper -- avoids replicating the pre-existing PHPStan
 		// empty.variable finding baselined for v4suppression at the same call shape.
-		foreach (explode("\r\n", $_POST['v6suppression']) as $line) {
+		foreach (explode("\n", $_POST['v6suppression']) as $line) {
 			$suppression_error = pfb_validate_suppression_line($line, 'ipv6');
 			if ($suppression_error !== NULL) {
 				$input_errors[] = $suppression_error;
@@ -238,8 +242,9 @@ if ($_POST) {
 			$pfb['iconfig']['pass_order']		= $_POST['pass_order']						?: 'order_0';
 			$pfb['iconfig']['autorule_suffix']	= $_POST['autorule_suffix']					?: 'autorule';
 			$pfb['iconfig']['killstates']		= pfb_filter($_POST['killstates'], PFB_FILTER_ON_OFF, 'ip')	?: '';
-			$pfb['iconfig']['v4suppression']	= pfb_text_area_encode($_POST['v4suppression'] ?? '')		?: '';
-			$pfb['iconfig']['v6suppression']	= pfb_text_area_encode($_POST['v6suppression'] ?? '')		?: '';
+			// issue #1723: already sanitized by the ingestion prologue -- plain encode.
+			$pfb['iconfig']['v4suppression']	= base64_encode($_POST['v4suppression'] ?? '')			?: '';
+			$pfb['iconfig']['v6suppression']	= base64_encode($_POST['v6suppression'] ?? '')			?: '';
 
 			// ADR-11: per-type aggregate aliases multi-select -> CSV scalar (sanitised to the
 			// known option keys; default none). Gateway-registered in the general section, so
