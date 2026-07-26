@@ -4891,28 +4891,6 @@ function pfb_hook_editor_lang_for(string $script, string $fallback): string {
 	return ($fallback === 'py') ? 'py' : 'sh';
 }
 
-/*
- * Normalizes a hook-script SAVE's content to bare LF line endings: the HTML5 forms
- * spec requires a browser to normalize a <textarea>'s value to CRLF before including
- * it in a form submission,
- * regardless of what line ending the on-disk file or the user's editor originally
- * used -- so writing $_POST['pfb_eh_content'] straight to disk turns EVERY GUI save
- * into a CRLF file, including a no-edit load->save of the freshly created (LF)
- * template. A kernel shebang line names a single interpreter path token: a saved
- * "#!/bin/sh\r\n" execs the literal, nonexistent path "/bin/sh\r" (ENOENT) -- the
- * hook then silently stops firing on every subsequent update pass, with nothing on
- * this page or in pfb_run_hooks() surfacing the cause.
- *
- * Collapses "\r\n" first, then any remaining lone "\r" -- same idiom as
- * pfblockerng_general.php's and pfblockerng.inc's own textarea-POST normalization
- * (both str_replace("\r\n", "\n", ...) only); this one additionally folds a lone
- * "\r" (old-Mac line endings a hand-crafted or non-browser POST could still carry).
- * A bare LF, or empty content, passes through unchanged.
- */
-function pfb_hook_editor_normalize_content(string $content): string {
-	return str_replace(array("\r\n", "\r"), "\n", $content);
-}
-
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:

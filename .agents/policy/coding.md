@@ -101,7 +101,10 @@ never an ad-hoc `trim`/`str_replace` chain and never re-sanitized downstream:
   are accepted by design (admins block typosquats in their own lists).
 
 A new field MUST route through these helpers; a persist path that deliberately stays
-narrower documents why (exemplar fork: the hook-script editor, issue #1728). Contracts
+narrower documents why. The one fork raised so far — the GUI hook-script editor, whose
+saved content is executable script source rather than list data (issue #1728) — was
+resolved *against* a carve-out: it joins the standard (issue #1734), so a literal control
+byte in a hook script must be written as an escape (`\033`). Contracts
 pinned by `PfbSanitizeTextTest`, `TextAreaDecodeTest`, `PfbFilterContractTest`, and
 `tests/smoke/ui/test_sanitize_persist.py`.
 
