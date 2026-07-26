@@ -82,6 +82,25 @@ final class PfbSanitizeTextTest extends TestCase
 		$this->assertSame('bücher', pfb_sanitize_text("b\xFCcher"));
 	}
 
+	public function testSanitizeTextRemovesC1ControlChars(): void
+	{
+		// NEL (U+0085, UTF-8 \xC2\x85) is a C1 control char, covered by \p{Cc}.
+		$this->assertSame('ab', pfb_sanitize_text("a\xC2\x85b"));
+	}
+
+	public function testSanitizeTextPreservesBidiMarks(): void
+	{
+		// RLO (U+202E) is a Unicode format char, not \p{Cc} -- must survive.
+		$this->assertSame("a\xE2\x80\xAEb", pfb_sanitize_text("a\xE2\x80\xAEb"));
+	}
+
+	public function testSanitizeTextTrimsUnicodeWhitespace(): void
+	{
+		// Leading U+3000 (ideographic space) and trailing NBSP must be trimmed,
+		// not just ASCII space/tab.
+		$this->assertSame('x', pfb_sanitize_text("\xE3\x80\x80x\xC2\xA0"));
+	}
+
 	// --- pfb_sanitize_text_area() ---
 
 	public function testSanitizeTextAreaNormalizesCrlfToLf(): void
@@ -149,5 +168,27 @@ final class PfbSanitizeTextTest extends TestCase
 	{
 		// The helper does not drop rows — that is the caller's job.
 		$this->assertSame("a\n\nb", pfb_sanitize_text_area("a\n\nb"));
+	}
+
+	public function testSanitizeTextAreaSurvivesHugeControlRun(): void
+	{
+		// A pathological run of control chars must not blow up the alternation
+		// pattern (JIT stack exhaustion -> NULL -> whole blob wiped to '').
+		$in = "keep\n" . str_repeat("\x00", 20000) . "\nalso";
+		$this->assertSame("keep\n\nalso", pfb_sanitize_text_area($in));
+	}
+
+	public function testSanitizeTextAreaSurvivesHugeSpaceRunMidLine(): void
+	{
+		// A >1,000,000-char space run mid-line (not at end-of-line) must not
+		// exhaust pcre.backtrack_limit and fatal via the : string return type.
+		$line = 'a' . str_repeat(' ', 1000001) . 'b';
+		$this->assertSame($line . "\n", pfb_sanitize_text_area($line . "\n"));
+	}
+
+	public function testSanitizeTextAreaStripsTrailingUnicodeWhitespace(): void
+	{
+		// Trailing NBSP / U+3000 must right-strip like ASCII space/tab.
+		$this->assertSame("a\nb\n", pfb_sanitize_text_area("a\xC2\xA0\nb\xE3\x80\x80\n"));
 	}
 }

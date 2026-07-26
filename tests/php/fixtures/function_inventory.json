@@ -5931,6 +5931,33 @@
             }
         ]
     },
+    "pfb_preg_replace_safe": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "pattern",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "replacement",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "subject",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_print_pending_changes_box": {
         "returnsRef": false,
         "returnType": "void",
