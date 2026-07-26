@@ -398,6 +398,18 @@ Describe 'wait-checks.sh tool contracts'
     The stderr should include 'usage:'
   End
 
+  It 'exits 2 with usage when --pr is given no value'
+    When run timeout 10 sh scripts/agent/wait-checks.sh --repo o/r --pr
+    The status should equal 2
+    The stderr should include 'usage:'
+  End
+
+  It 'exits 2 with usage when --interval is given no value'
+    When run timeout 10 sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval
+    The status should equal 2
+    The stderr should include 'usage:'
+  End
+
   It 'exits 4 when timeout is absent'
     printf '#!/bin/sh\nexit 0\n' > "$toolpath/gh"
     chmod +x "$toolpath/gh"
@@ -498,6 +510,19 @@ STUB
     The status should equal 2
     The stderr should include 'not a valid regex'
     The output should not include 'TIMEOUT'
+  End
+
+  # An empty pattern compiles fine and matches EVERY name, so it excluded every check:
+  # `total` fell to 0, the verdict became EMPTY, and the loop -- which only acts on
+  # PASS/FAIL -- drained to TIMEOUT with a hard failure sitting right there. Same silent
+  # class as an uncompilable pattern, so it dies at the same boundary.
+  It 'rejects an empty --exclude instead of excluding every check and draining to TIMEOUT'
+    failing_fixture
+    When run sh "$script" --repo o/r --pr 1 --exclude '' --interval 0 --max-iter 2
+    The status should equal 2
+    The stderr should include 'must not be empty'
+    The output should not include 'TIMEOUT'
+    The output should not include 'PASS'
   End
 
   It 'treats a jq-injecting --exclude value as a pattern, never as program text'
