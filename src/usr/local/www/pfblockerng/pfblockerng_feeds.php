@@ -384,7 +384,9 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 				$counter = 0;
 				$alt_feed_rows = array();
 				if (isset($alt_feeds[$ftype][$aliasname][$feed['header']])) {
-					$alt_feed_rows = array_values($alt_feeds[$ftype][$aliasname][$feed['header']]);
+					$alt_feed_rows = $alt_feeds[$ftype][$aliasname][$feed['header']];
+					ksort($alt_feed_rows, SORT_NUMERIC);
+					$alt_feed_rows = array_values($alt_feed_rows);
 					$counter = count($alt_feed_rows);
 				}
 
