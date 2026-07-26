@@ -107,6 +107,10 @@ final class TextAreaDecodeTest extends TestCase
 	{
 		$in = self::rawEnc("alpha\r\nbeta\ngamma\rdelta");
 		$this->assertSame("alpha\nbeta\ngamma\ndelta\n", pfb_text_area_decode($in));
+		$this->assertSame(
+			[['alpha'], ['beta'], ['gamma'], ['delta']],
+			pfb_text_area_decode($in, true, true)
+		);
 	}
 
 	public function testTrailingSeparatorYieldsNoTrailingEmptyRow(): void
@@ -114,6 +118,7 @@ final class TextAreaDecodeTest extends TestCase
 		$in = self::rawEnc("a.com\n");
 		$this->assertSame("a.com\n", pfb_text_area_decode($in));
 		$this->assertSame(['a.com'], pfb_text_area_decode($in, true, false));
+		$this->assertSame([['a.com']], pfb_text_area_decode($in, true, true));
 	}
 
 	public function testControlCharsRemovedNotTreatedAsSeparators(): void
@@ -144,5 +149,25 @@ final class TextAreaDecodeTest extends TestCase
 		$this->assertSame("0\n", pfb_text_area_decode($in));
 		$this->assertSame(['0'], pfb_text_area_decode($in, true, false));
 		$this->assertSame([['0']], pfb_text_area_decode($in, true, true));
+	}
+
+	public function testUnicodeWhitespaceOnlyRowsDropped(): void
+	{
+		// A row that is only NBSP or only U+3000 (ideographic space) must
+		// right-strip to '' and be dropped, same as an ASCII-whitespace row.
+		$in = self::rawEnc("a.com\n\xC2\xA0\nb.com\n\xE3\x80\x80\nc.com");
+		$this->assertSame("a.com\nb.com\nc.com\n", pfb_text_area_decode($in));
+		$this->assertSame(['a.com', 'b.com', 'c.com'], pfb_text_area_decode($in, true, false));
+		$this->assertSame(
+			[['a.com'], ['b.com'], ['c.com']],
+			pfb_text_area_decode($in, true, true)
+		);
+	}
+
+	public function testDecoderSurvivesHugeControlRunRow(): void
+	{
+		// A pathological all-NUL row must not wipe the flanking good rows.
+		$in = self::rawEnc("a.com\n" . str_repeat("\x00", 20000) . "\nb.com");
+		$this->assertSame(['a.com', 'b.com'], pfb_text_area_decode($in, true, false));
 	}
 }
