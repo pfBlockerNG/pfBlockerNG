@@ -7353,6 +7353,19 @@
             }
         ]
     },
+    "pfb_text_area_encode": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "raw",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_text_sanity": {
         "returnsRef": false,
         "returnType": "?string",
