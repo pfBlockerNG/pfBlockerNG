@@ -351,10 +351,12 @@ def _dnslog_line(ts: str, q_name: str, q_ip: str) -> str:
 # Case 1: host-side CSV log (ip_blocklog) — age cutoff trims only expired lines
 # --------------------------------------------------------------------------- #
 
-# issue #1769: the deferred-maintenance marker pfblockerng_tick() writes to
-# $pfb['log'] (h.PFB_LOG) when the pfb_update_pass_running() half of its gate
-# closes -- see the tail-gate comment in pfblockerng_extra.inc for why this one
-# (unlike the sibling $dispatched-skip message) stays on that surface.
+# issue #1769: the deferred-maintenance marker pfblockerng_tick() emits via
+# pfb_syslog_emit() (B3/B4: the openlog('pfblockerng') path is the only one that
+# reaches this file) when the pfb_update_pass_running() half of its gate closes
+# -- deliberately NOT $pfb['log'], which would grow the very file whose trim is
+# being deferred.
+_DEFERRED_LOG = "/var/log/pfblockerng_syslog.log"
 _DEFERRED_MARKER = "log maintenance deferred (an update pass is running)"
 
 
@@ -395,7 +397,7 @@ def test_age_cutoff_trims_expired_lines_host_path_ip_blocklog(deployed_vm: Smoke
         # first) so a failure can tell a NEW deferral (this tick's own gate closed)
         # apart from a stale line an earlier tick left behind -- a raw substring/tail
         # read can't make that distinction (see the failure branch below).
-        deferred_before = h.count_log_marker(vm, h.PFB_LOG, _DEFERRED_MARKER)
+        deferred_before = h.count_log_marker(vm, _DEFERRED_LOG, _DEFERRED_MARKER)
         _tick(vm)
 
         # --- Then ---
@@ -406,14 +408,14 @@ def test_age_cutoff_trims_expired_lines_host_path_ip_blocklog(deployed_vm: Smoke
             # baseline count (not a raw substring on a truncated tail, which
             # false-positives on a stale line and false-negatives once enough log has
             # accumulated since) tells whether THIS tick's own gate closed.
-            deferred_after = h.count_log_marker(vm, h.PFB_LOG, _DEFERRED_MARKER)
+            deferred_after = h.count_log_marker(vm, _DEFERRED_LOG, _DEFERRED_MARKER)
             deferred_seen = deferred_after > deferred_before
         else:
             deferred_seen = False
         assert content_after == kept, (
             f"AFTER: ip_blocklog should hold exactly the 2 non-expired lines.\n"
             f"  expected: {kept!r}\n  got: {content_after!r}\n"
-            f"  NEW '{_DEFERRED_MARKER}' line in {h.PFB_LOG} since this tick: {deferred_seen} "
+            f"  NEW '{_DEFERRED_MARKER}' line in {_DEFERRED_LOG} since this tick: {deferred_seen} "
             "(TRUE would mean an update pass held the gate closed despite the idle wait -- issue #1769)"
         )
         inode_after = _get_inode(vm, LOG_IP_BLOCKLOG)
