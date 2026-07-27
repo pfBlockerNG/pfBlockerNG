@@ -1777,6 +1777,54 @@
             }
         ]
     },
+    "pfb_dnsbl_norm_reuse_skip": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "downloaded_fresh",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "custom",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "orig_content_stale",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "norm_changed",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "txt_exists",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "staging_current_generation",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_publish_result": {
         "returnsRef": false,
         "returnType": "bool",
@@ -4020,6 +4068,54 @@
         "returnsRef": false,
         "returnType": "string",
         "params": []
+    },
+    "pfb_ip_norm_reuse_skip": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "downloaded_fresh",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "custom",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "orig_content_stale",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "norm_changed",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "txt_exists",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "has_user_script",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
     },
     "pfb_ip_parse_fail_warn": {
         "returnsRef": false,
