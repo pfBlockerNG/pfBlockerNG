@@ -617,15 +617,15 @@ final class CategoryEditPostGuardTest extends TestCase
 
 	// -- hostile-input rows -----------------------------------------------
 
-	// issue #1737 contract update: these two rows used to assert the
-	// state-loop's [\p{C}<>"] guard REJECTS an embedded Cc byte / tab. That
-	// shape is now stale -- pfb_sanitize_text() strips \p{Cc}+BOM at
-	// ingestion (before the state loop ever runs), the same #1723 standard
-	// already shipped for the Hooks tab (commit 66da925d) and for header-N/
-	// url-N whitespace elsewhere on this page. An embedded Cc byte is now
-	// silently cleaned, not rejected -- pinned below as sanitize-then-accept.
-	// The Cf/`<`/`"` rows further down prove the guard is still LIVE for
-	// what sanitize does NOT strip (\p{Cf}, `<`, `"`).
+	// issue #1737/#1795 contract update: these rows used to assert the
+	// state-loop's [\p{C}<>"] guard REJECTS an embedded Cc/Cf byte / tab.
+	// That shape is now stale -- pfb_sanitize_text() strips the full \p{C}
+	// set (Cc AND Cf, issue #1795) at ingestion (before the state loop ever
+	// runs), the same #1723 standard already shipped for the Hooks tab
+	// (commit 66da925d) and for header-N/url-N whitespace elsewhere on this
+	// page. An embedded Cc/Cf byte is now silently cleaned, not rejected --
+	// pinned below as sanitize-then-accept. The `<`/`"` rows further down
+	// prove the guard is still LIVE for what sanitize does NOT strip.
 
 	public function testUrlEmbeddedControlCharSanitizedAtIngestion(): void
 	{
@@ -659,9 +659,27 @@ final class CategoryEditPostGuardTest extends TestCase
 		$this->assertSame('USCA', $_POST['url-0'], 'the embedded tab must be stripped (merged, no replacement) at ingestion');
 	}
 
-	// issue #1737 vacuity guards: pfb_sanitize_text() strips only \p{Cc}+BOM
-	// -- never \p{Cf}, `<`, or `"` -- so the state-loop's [\p{C}<>"] character
-	// guard must still be provably live post-sanitize for those.
+	public function testUrlEmbeddedCfCharacterSanitizedAtIngestion(): void
+	{
+		// issue #1795: pfb_sanitize_text() widened from \p{Cc}+BOM to the
+		// full \p{C} set -- U+200D ZERO WIDTH JOINER (Cf) is now stripped at
+		// ingestion too, so the state-loop's [\p{C}<>"] guard never sees it.
+		$value = "http://192.0.2.1/x\u{200D}y";
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'auto',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame('http://192.0.2.1/xy', $_POST['url-0'], 'the zero-width joiner must be stripped at ingestion, not merely tolerated');
+	}
+
+	// issue #1795 vacuity guard: pfb_sanitize_text() strips the full \p{C}
+	// set now, but never `<` or `"` (ordinary printable text) -- so the
+	// state-loop's [\p{C}<>"] character guard must still be provably live
+	// post-sanitize for those.
 
 	public function testUrlSaveGuardStillRejectsRawLessThanAfterSanitize(): void
 	{
@@ -670,21 +688,6 @@ final class CategoryEditPostGuardTest extends TestCase
 			'state-0'   => 'Enabled',
 			'header-0'  => 'validheader',
 			'url-0'     => 'http://192.0.2.1/x<y',
-			'format-0'  => 'auto',
-		]);
-	}
-
-	public function testUrlSaveGuardStillRejectsCfCharacterAfterSanitize(): void
-	{
-		// U+200D ZERO WIDTH JOINER is Cf (format), not Cc -- pfb_sanitize_text()
-		// leaves it intact (issue #1723's "Unicode format characters survive"
-		// contract). \p{C} = \p{Cc} + \p{Cf}, so the state-loop's guard must
-		// still catch it even though ingestion-sanitize does not strip it.
-		$this->assertGuardRejects([
-			'aliasname' => 'validname',
-			'state-0'   => 'Enabled',
-			'header-0'  => 'validheader',
-			'url-0'     => "http://192.0.2.1/x\u{200D}y",
 			'format-0'  => 'auto',
 		]);
 	}

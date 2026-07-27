@@ -167,18 +167,20 @@ final class HooksSanitizeIngestionTest extends TestCase
 		$this->assertSame('', $result['hooks'][0]['description'], 'NBSP/em-space-only content must trim to the empty string');
 	}
 
-	// --- description: a Cf (format) char still trips the \p{C} validator ---
+	// --- description: a Cf (format) char is now stripped at ingestion ---
 
-	public function testDescriptionCfCharacterStillRejectedByValidator(): void
+	public function testDescriptionCfCharacterStrippedAndAcceptedAtIngestion(): void
 	{
-		// U+200D ZERO WIDTH JOINER -- category Cf, NOT stripped by
-		// pfb_sanitize_text() (only \p{Cc}+BOM are stripped there), but still
-		// inside \p{C} (the "Other" superset the page's own validator gates
-		// on). Pins that the validator stays live post-sanitize.
+		// issue #1795: pfb_sanitize_text() widened from \p{Cc}+BOM to the full
+		// \p{C} set, so U+200D ZERO WIDTH JOINER (category Cf) is now stripped
+		// BEFORE the page's own \p{C} validator ever runs -- the validator's
+		// reject branch is unreachable for this input; the row validates and
+		// the joined text persists without the ZWJ.
 		$result = $this->runSave([
 			'hook_description-0' => "a\u{200D}b",
 		]);
-		$this->assertNotEmpty($result['errors'], 'a Cf (zero-width-joiner) description must still be rejected by the \\p{C} validator');
+		$this->assertSame([], $result['errors'], 'a Cf (zero-width-joiner) description must not be rejected once sanitized');
+		$this->assertSame('ab', $result['hooks'][0]['description'], 'the zero-width joiner must not survive to the persisted description');
 	}
 
 	// --- array-valued field: scalar reject fires before sanitize, no TypeError ---

@@ -50,6 +50,7 @@ land the same value).
 
 from __future__ import annotations
 
+import unicodedata
 from typing import TYPE_CHECKING
 
 import pytest
@@ -93,6 +94,21 @@ def _install_test_scripts(vm: helpers.SmokeVM) -> None:
     """Place the pre/post test scripts in the hook-script dir so the picker accepts them."""
     helpers.install_hook_script(vm, SCRIPT_PRE, SCRIPT_BODY)
     helpers.install_hook_script(vm, SCRIPT_POST, SCRIPT_BODY)
+
+
+def _assert_no_p_c_codepoint(value: str) -> None:
+    """#756's actual guarantee (issue #1795): no ``\\p{C}`` codepoint reaches
+    config.xml through this field -- regardless of whether the page's own
+    validator ever runs, since pfb_sanitize_text() now strips the full
+    ``\\p{C}`` set (Cc/Cf/Co/Cs/Cn) at ingestion. stdlib
+    ``unicodedata.category()`` mirrors the PCRE ``\\p{C}`` superset 1:1: any
+    category starting with ``C`` is Cc/Cf/Co/Cs/Cn.
+    """
+    for ch in value:
+        category = unicodedata.category(ch)
+        assert not category.startswith("C"), (
+            f"a \\p{{C}} codepoint (category {category}, U+{ord(ch):04X}) reached config.xml: {value!r}"
+        )
 
 
 def _hooks_node_exists(vm: helpers.SmokeVM) -> bool:
@@ -351,32 +367,60 @@ def test_reject_invalid_script_leaves_config_unchanged(webui: WebUI, smoke_vm: h
         helpers.clear_update_hooks(vm)
 
 
-def test_reject_bad_description_leaves_config_unchanged(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """A control-char description is rejected on BOTH ways preg_match() can flag it (#756).
+def test_control_char_description_is_cleaned_and_saved(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """A \\p{C}-bearing description is sanitized at ingestion and SAVED, not rejected (#756/#1795).
 
-    Validator branch (pfblockerng_hooks.php, the 'hook_description' case): the
-    check must fail CLOSED on either outcome that means "control characters
-    present" -- a real match (``preg_match()`` returns ``1``) AND an unparseable
-    subject (``preg_match()`` returns ``FALSE``, ``PREG_BAD_UTF8_ERROR``) -- so
-    the condition is ``!== 0``, not a bare truthiness test. A bare
-    ``if (preg_match(...))`` treats ``FALSE`` as falsy and lets a malformed-UTF-8
-    description sail into config.xml unfiltered (issue #756).
+    issue #1795 widened ``pfb_sanitize_text()`` (single-line fields, called on
+    ``hook_description-N`` before any validation runs) from stripping only
+    ``\\p{Cc}``+BOM to the full ``\\p{C}`` set (Cc/Cf/Co/Cs/Cn). The page's own
+    validator (the ``hook_description`` case, ``preg_match('/[\\p{C}]+/u',
+    $value) !== 0``) now runs on an ALREADY-clean value, so its reject branch
+    is unreachable for POSTed data -- this test flips from asserting a reject
+    to asserting the cleaned value is what lands in config.xml.
 
-    Two reject sub-cases, both leaving the seeded description intact:
-      (a) a REAL control character (BEL, ``\\x07``) -- ``preg_match()`` returns
-          ``1``. Green under BOTH the pre-fix and post-fix code (a truthy ``1``
-          rejects either way) -- the regression guard for existing behaviour.
+    This is also the FLIP of the old red/green cell for issue #756 (the
+    validator's ``!== 0`` compare, which fails closed on a ``FALSE``
+    ``preg_match()`` return -- invalid UTF-8 under the ``/u`` modifier -- not
+    just a real match). Probed (issue #1795): after sanitize, the value handed
+    to the validator is ALWAYS well-formed UTF-8 (the legacy-encoding-recovery
+    step converts any invalid input via ISO-8859-1, which is total over the
+    byte range) and the ``\\p{C}+`` strip does not degrade under PCRE's
+    backtrack limit at any realistic size (tested to 10M chars) -- so no
+    POSTed input can make ``preg_match()`` return ``FALSE`` here anymore, and
+    fuzzing 20,000 random byte strings through the sanitizer found zero
+    residual matches either. #756's actual guarantee (no malformed/control
+    byte in config.xml) still holds -- strengthened, not weakened -- so this
+    test asserts it directly and end to end via :func:`_assert_no_p_c_codepoint`
+    instead of via a reject, for all three sub-cases below.
+
+    Three sub-cases, all now landing cleaned in config.xml -- NOTE (issue
+    #1795 finding): (a) and (b) already saved clean on the UNWIDENED
+    sanitizer too, since issue #1761 made ingestion-sanitize run before this
+    validator, and neither a real Cc byte nor invalid UTF-8 needs the
+    Cf/Co/Cs/Cn widening to be defused (Cc was always stripped; the
+    legacy-encoding recovery that neutralizes invalid UTF-8 predates #1795
+    and is untouched by it). They are pinned here as REGRESSION guards, not
+    #1795 discriminators. (c) is the actual #1795 red/green cell: a Cf
+    (format) character survives the unwidened sanitizer and trips the
+    validator's reject, RED on old code:
+      (a) a REAL control character (BEL, ``\\x07``) -- stripped with no
+          replacement, so ``"smoke\\x07desc"`` saves as ``"smokedesc"``.
       (b) INVALID UTF-8 -- the two raw bytes ``0xC3 0x28`` (a UTF-8 lead byte
-          followed by a non-continuation byte) -- ``preg_match()`` returns
-          ``FALSE``. THIS is the red/green cell: only ``!== 0`` rejects a
-          ``FALSE`` return; the old bare truthiness check accepted it and saved
-          the malformed bytes. ``requests`` would re-encode a Python ``str`` as
-          valid UTF-8 (the two bytes above would become ``%C3%83%28``, itself
-          valid UTF-8, never triggering the ``FALSE`` path) -- so, mirroring
+          followed by a non-continuation byte) -- legacy-encoding-recovered
+          (ISO-8859-1 -> UTF-8) to ``"Ã("``. ``requests`` would re-encode a
+          Python ``str`` as valid UTF-8 (the two bytes above would become
+          ``%C3%83%28``, itself already valid UTF-8, never exercising the
+          legacy-recovery path) -- so, mirroring
           ``test_remove_to_empty_deletes_node``'s manual-POST escape hatch, the
           request body is built and percent-encoded by hand to put the literal
           invalid bytes on the wire. The rest of the row stays VALID so the
-          description is the ONLY thing deciding accept-vs-reject.
+          description is the ONLY thing under test.
+      (c) U+200D ZERO WIDTH JOINER (category Cf) -- NOT stripped by the
+          unwidened sanitizer (only \\p{Cc}+BOM), so it reaches the
+          validator's ``\\p{C}`` gate intact and trips a real (``1``, not
+          ``FALSE``) reject on old code; issue #1795 strips it at ingestion,
+          so it never reaches the validator on new code. ``"a\\u200Db"``
+          saves as ``"ab"``.
     """
     vm = smoke_vm
     helpers.clear_update_hooks(vm)
@@ -386,20 +430,21 @@ def test_reject_bad_description_leaves_config_unchanged(webui: WebUI, smoke_vm: 
     try:
         # BEFORE: the seeded description is present.
         assert helpers.config_get(vm, ROW0_DESCRIPTION) == seed_description, (
-            f"seed description missing before the reject flow: got {helpers.config_get(vm, ROW0_DESCRIPTION)!r}"
+            f"seed description missing before the save flow: got {helpers.config_get(vm, ROW0_DESCRIPTION)!r}"
         )
 
-        # (a) A real control character -- preg_match() returns 1 either way.
+        # (a) A real control character -- stripped at ingestion, saved clean.
         resp = webui.post(HOOKS_PAGE, {"hook_description-0": "smoke\x07desc"}, timeout=120.0)
         assert not looks_like_login_page(resp.text), "control-char POST returned the login form"
-        assert helpers.config_get(vm, ROW0_DESCRIPTION) == seed_description, (
-            f"a real control character was NOT rejected -- expected {seed_description!r}, "
-            f"got {helpers.config_get(vm, ROW0_DESCRIPTION)!r}"
-        )
+        assert _hooks_node_exists(vm), "hooks node deleted by an ACCEPTED control-char-description save"
+        persisted_a = helpers.config_get(vm, ROW0_DESCRIPTION)
+        assert persisted_a == "smokedesc", f"control char was not cleanly stripped -- got {persisted_a!r}"
+        _assert_no_p_c_codepoint(persisted_a)
 
-        # (b) Invalid UTF-8 (0xC3 0x28) -- preg_match() returns FALSE. Build the
-        # raw percent-encoded body by hand (see docstring) so the literal invalid
-        # bytes reach the wire instead of a re-encoded valid-UTF-8 substitute.
+        # (b) Invalid UTF-8 (0xC3 0x28) -- legacy-recovered to valid UTF-8.
+        # Build the raw percent-encoded body by hand (see docstring) so the
+        # literal invalid bytes reach the wire instead of a re-encoded
+        # valid-UTF-8 substitute.
         from urllib.parse import quote
 
         from .webui import extract_csrf_token
@@ -427,14 +472,23 @@ def test_reject_bad_description_leaves_config_unchanged(webui: WebUI, smoke_vm: 
         )
         assert not looks_like_login_page(resp.text), "invalid-UTF-8 POST returned the login form"
 
-        # AFTER (reject): the node still exists and the description is UNCHANGED
-        # -- on unfixed code (a bare `if (preg_match(...))`) this save would have
-        # gone through, overwriting the description with the malformed bytes.
-        assert _hooks_node_exists(vm), "hooks node deleted by a REJECTED invalid-UTF-8-description save"
-        assert helpers.config_get(vm, ROW0_DESCRIPTION) == seed_description, (
-            f"invalid UTF-8 in the description was NOT rejected -- expected {seed_description!r}, "
-            f"got {helpers.config_get(vm, ROW0_DESCRIPTION)!r}"
-        )
+        # AFTER (accept): the node still exists and the description holds the
+        # legacy-recovered, control-byte-free text -- #756's guarantee (no
+        # malformed byte in config.xml) proven directly, not via a reject.
+        assert _hooks_node_exists(vm), "hooks node deleted by an ACCEPTED invalid-UTF-8-description save"
+        persisted_b = helpers.config_get(vm, ROW0_DESCRIPTION)
+        assert persisted_b == "Ã(", f"invalid UTF-8 was not legacy-recovered as expected -- got {persisted_b!r}"
+        _assert_no_p_c_codepoint(persisted_b)
+
+        # (c) A Cf (format) character -- the actual issue #1795 discriminator
+        # (see docstring): stripped at ingestion on new code, still reaches
+        # the validator's \p{C} gate unstripped on old code.
+        resp = webui.post(HOOKS_PAGE, {"hook_description-0": "a\u200db"}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "Cf-character POST returned the login form"
+        assert _hooks_node_exists(vm), "hooks node deleted by an ACCEPTED Cf-character-description save"
+        persisted_c = helpers.config_get(vm, ROW0_DESCRIPTION)
+        assert persisted_c == "ab", f"the zero-width joiner was not cleanly stripped -- got {persisted_c!r}"
+        _assert_no_p_c_codepoint(persisted_c)
     finally:
         helpers.clear_update_hooks(vm)
 
