@@ -4473,6 +4473,19 @@
             }
         ]
     },
+    "pfb_is_empty": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            }
+        ]
+    },
     "pfb_is_managed_obj": {
         "returnsRef": false,
         "returnType": "bool",
@@ -6524,6 +6537,19 @@
                 "variadic": false,
                 "type": "?callable",
                 "default": "NULL"
+            }
+        ]
+    },
+    "pfb_rstrip": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },
