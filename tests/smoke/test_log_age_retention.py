@@ -77,15 +77,28 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     Mirrors the retired ADR-30 ``test_log_rotate.py``'s own ``deployed_vm``: age-based
     log retention runs from ``pfblockerng_tick()`` and needs neither DNSBL nor feed
     infrastructure, only ``enable_cb=on`` (so the tick body executes) and every tick in
-    this module being idle-only (Disabled feed cron + not-due dcc/bl), so
-    ``pfb_update_pass_running()``'s "nothing dispatched" gate stays open and
-    ``pfb_log_mgmt()`` runs on every ``tick`` call below.
+    this module being idle-only, so ``pfb_log_mgmt()`` runs on every ``tick`` call below.
+
+    "Idle-only" needs BOTH halves of ``pfblockerng_tick()``'s log-maintenance gate
+    (``pfblockerng_extra.inc``) held open, not just the ``pfb_update_pass_running()``
+    half: ``Disabled`` feed cron + not-due ``dcc``/``bl`` looks sufficient, but a
+    PENDING manual apply (``pfb_due_ledger_set_pending('cron')``) bypasses
+    ``$cron_disabled`` entirely (``(!$cron_disabled && $due['cron']) || $cron_pending``)
+    and sets ``$dispatched`` -- issue #1769: ``h.deploy()``'s package reinstall can lose
+    the install-time feed pass's ``pfb_feed_pass_begin()`` race, which leaves exactly
+    such a pending 'cron' entry behind. Seeding a future, non-pending entry for 'cron'
+    too (alongside the existing 'dcc'/'bl' seeds) closes that gate as well, so every
+    tick in this module is genuinely idle -- see ``TickEntrypointTest::
+    testPendingCronApplyBypassesDisabledIntervalAndSkipsLogMaintenance`` /
+    ``testDisabledIntervalWithFutureSeededCronStaysIdleAndRunsLogMaintenance`` for the
+    PHPUnit-pinned mechanism this fixture relies on.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     _set_enable_cb(smoke_vm)
     _set_pfb_interval_disabled(smoke_vm)
+    _seed_future_ledger_entry(smoke_vm, "cron")
     _seed_future_ledger_entry(smoke_vm, "dcc")
     _seed_future_ledger_entry(smoke_vm, "bl")
     smoke_vm.ssh("/bin/mkdir", "-p", PFB_LOGDIR, timeout=30)
@@ -284,6 +297,19 @@ def _wait_update_pass_idle(vm: SmokeVM, *, timeout: float = 60.0, poll_interval:
     )
 
 
+def _tick(vm: SmokeVM) -> None:
+    """Run the maintenance-sensitive ``tick`` verb, synchronized on the real idle state.
+
+    issue #1769: EVERY call to ``h.reload(vm, "tick")`` in this module is
+    maintenance-sensitive (the assertions that follow depend on ``pfb_log_mgmt()``
+    actually running), so every one of them needs the same ``_wait_update_pass_idle()``
+    synchronization -- not just the first. Centralised here so a future case can't
+    reintroduce the same race by calling ``h.reload(vm, "tick")`` directly.
+    """
+    _wait_update_pass_idle(vm)
+    h.reload(vm, "tick")
+
+
 def _resolve_dnslog_path(vm: SmokeVM) -> str:
     """Return the effective dnslog path: chrooted if /var/unbound's log dir exists.
 
@@ -325,6 +351,12 @@ def _dnslog_line(ts: str, q_name: str, q_ip: str) -> str:
 # Case 1: host-side CSV log (ip_blocklog) — age cutoff trims only expired lines
 # --------------------------------------------------------------------------- #
 
+# issue #1769: the deferred-maintenance marker pfblockerng_tick() writes to
+# $pfb['log'] (h.PFB_LOG) when the pfb_update_pass_running() half of its gate
+# closes -- see the tail-gate comment in pfblockerng_extra.inc for why this one
+# (unlike the sibling $dispatched-skip message) stays on that surface.
+_DEFERRED_MARKER = "log maintenance deferred (an update pass is running)"
+
 
 def test_age_cutoff_trims_expired_lines_host_path_ip_blocklog(deployed_vm: SmokeVM) -> None:
     """Scenario 1 — host-path age cutoff: expired lines dropped, current lines kept, inode stable.
@@ -358,31 +390,31 @@ def test_age_cutoff_trims_expired_lines_host_path_ip_blocklog(deployed_vm: Smoke
         assert inode_before, "BEFORE: could not read ip_blocklog inode — file may not exist"
 
         # --- When ---
-        # issue #1769: synchronize on the real state before this maintenance-sensitive
-        # tick. pfblockerng_tick()'s log-maintenance gate silently skips pfb_log_mgmt()
-        # whenever ANY process matches pfb_update_pass_running()'s ps-scan (confirmed
-        # live: a stray matching process left a seeded log untrimmed with zero trace) --
-        # wait for idle first so this test's own trim assertion below isn't racing an
-        # unrelated process still in the table.
-        _wait_update_pass_idle(vm)
-        h.reload(vm, "tick")
+        # issue #1769: capture the deferred-maintenance marker count BEFORE this
+        # maintenance-sensitive tick (_tick() synchronizes on the real idle state
+        # first) so a failure can tell a NEW deferral (this tick's own gate closed)
+        # apart from a stale line an earlier tick left behind -- a raw substring/tail
+        # read can't make that distinction (see the failure branch below).
+        deferred_before = h.count_log_marker(vm, h.PFB_LOG, _DEFERRED_MARKER)
+        _tick(vm)
 
         # --- Then ---
         content_after = _read_file(vm, LOG_IP_BLOCKLOG)
         if content_after != kept:
             # issue #1769: self-diagnosing failure -- if the log-maintenance gate was
-            # closed by a running update pass, the product now says so; surface that
-            # (and the log tail) so a future starvation doesn't need a live-VM diagnosis.
-            pfb_log_tail = _read_file(vm, f"{PFB_LOGDIR}/pfblockerng.log")[-2000:]
-            deferred_seen = "log maintenance deferred" in pfb_log_tail
+            # closed by a running update pass, the product now says so; a NEW-since-
+            # baseline count (not a raw substring on a truncated tail, which
+            # false-positives on a stale line and false-negatives once enough log has
+            # accumulated since) tells whether THIS tick's own gate closed.
+            deferred_after = h.count_log_marker(vm, h.PFB_LOG, _DEFERRED_MARKER)
+            deferred_seen = deferred_after > deferred_before
         else:
-            pfb_log_tail, deferred_seen = "", False
+            deferred_seen = False
         assert content_after == kept, (
             f"AFTER: ip_blocklog should hold exactly the 2 non-expired lines.\n"
             f"  expected: {kept!r}\n  got: {content_after!r}\n"
-            f"  'log maintenance deferred' line present in pfblockerng.log tail: {deferred_seen} "
-            "(TRUE would mean an update pass held the gate closed despite the idle wait -- issue #1769)\n"
-            f"  pfblockerng.log tail: {pfb_log_tail!r}"
+            f"  NEW '{_DEFERRED_MARKER}' line in {h.PFB_LOG} since this tick: {deferred_seen} "
+            "(TRUE would mean an update pass held the gate closed despite the idle wait -- issue #1769)"
         )
         inode_after = _get_inode(vm, LOG_IP_BLOCKLOG)
         assert inode_after == inode_before, (
@@ -447,7 +479,7 @@ def test_age_cutoff_trims_expired_lines_chrooted_dnslog_preserves_ownership(
         assert owner_before == "unbound", f"BEFORE: dnslog owner should be 'unbound', got {owner_before!r}"
 
         # --- When ---
-        h.reload(vm, "tick")
+        _tick(vm)
 
         # --- Then ---
         content_after = _read_file(vm, dnslog_path)
@@ -504,7 +536,7 @@ def test_log_max_days_zero_leaves_only_line_count_trim(deployed_vm: SmokeVM) -> 
         assert inode_before, "BEFORE: could not read ip_blocklog inode — file may not exist"
 
         # --- When ---
-        h.reload(vm, "tick")
+        _tick(vm)
 
         # --- Then ---
         content_after = _read_file(vm, LOG_IP_BLOCKLOG)
