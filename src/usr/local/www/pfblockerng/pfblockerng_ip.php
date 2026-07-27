@@ -109,13 +109,20 @@ if ($_POST) {
 		unset($savemsg);
 
 		// issue #1777: reject an array-valued field ('asn_token[]=x') before any
-		// string sink below Array-to-string-converts on it -- same guard as
-		// pfblockerng_category_edit.php (issue #1106); every field here is
-		// scalar in normal use, no field is exempt.
-		foreach ($_POST as $pfb_post_key => $pfb_post_value) {
-			if (!is_scalar($pfb_post_value)) {
-				$input_errors[] = gettext('Invalid value submitted for field:') . ' ' . htmlspecialchars((string) $pfb_post_key);
-				$_POST[$pfb_post_key] = '';
+		// string sink below Array-to-string-converts on it -- same idea as
+		// pfblockerng_category_edit.php (issue #1106), but NOT the same guard
+		// shape: unlike category_edit, this page has genuine multi-select fields
+		// (inbound_interface, outbound_interface, pfb_agg_types -- pfSense's
+		// Form_Select(..., TRUE) appends '[]' to the POST name for those, so a
+		// real browser legitimately posts them as arrays). A guard over every
+		// $_POST key would reject and blank all three on every save. So this
+		// guard is scoped to exactly the fields the #1723 sanitize loops below
+		// cast to (string) -- those are always scalar in normal use.
+		foreach (array('ip_placeholder', 'asn_token', 'autorule_suffix', 'maxmind_account', 'maxmind_key',
+				'v4suppression', 'v6suppression') as $pfb_text_field) {
+			if (isset($_POST[$pfb_text_field]) && !is_scalar($_POST[$pfb_text_field])) {
+				$input_errors[] = gettext('Invalid value submitted for field:') . ' ' . htmlspecialchars($pfb_text_field);
+				$_POST[$pfb_text_field] = '';
 			}
 		}
 

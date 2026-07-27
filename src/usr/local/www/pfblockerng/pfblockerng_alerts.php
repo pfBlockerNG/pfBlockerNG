@@ -2497,11 +2497,28 @@ function convert_dns_reply_log($mode, $fields) {
 
 		// issue #1777: dnsbl_whitelist_type() unconditionally reads keys 5/7/8 too
 		// (DNSBL Mode / Evaluated Domain / Feed Name) -- a DNS reply row has no
-		// Mode or Feed, so '' preserves the pre-fix implicit-NULL branch selection
-		// (still != 'DNSBL_TLD') and leaves the (never-reached, group=='Unknown')
-		// Feed-name usage inert; the replied domain doubles as the "evaluated"
-		// domain, matching key 2 and the $qdomain argument below.
-		$dns_fields = array ('2' => $fields[6], '5' => '', '6' => 'Unknown', '7' => $fields[6], '8' => '');
+		// Mode, Evaluated Domain or Feed, so each key preserves the pre-fix
+		// implicit-NULL read at its own call site:
+		//   - key 5 (DNSBL Mode, gates the != 'DNSBL_TLD' branch split): '' keeps
+		//     the pre-fix branch selection byte-for-byte, since NULL != 'DNSBL_TLD'
+		//     is also TRUE.
+		//   - key 7 (Evaluated Domain): '' -- NOT $fields[6]. A prior fix set this
+		//     to $fields[6] (the replied domain) reasoning only about the
+		//     exclusion-icon id; it missed that dnsbl_whitelist_type() ALSO feeds
+		//     key 7 into the dot-prefixed wildcard-whitelist walk
+		//     (dnsbl_whitelist_type() ~:2056, `ltrim($fields[7], '.')`). A real
+		//     domain there enters that walk and can flip $isWhitelist_found to
+		//     TRUE for any dot-prefixed whitelist entry that is an ancestor
+		//     domain -- silently reclassifying an unrelated reply row as
+		//     already-whitelisted. '' is chosen because
+		//     ltrim(NULL, '.') === ltrim('', '.') === '', so it reproduces the
+		//     pre-fix NULL read exactly and never enters the walk.
+		//   - key 8 (Feed Name) is read only inside the `$fields[6] != 'Unknown'`
+		//     branch (dnsbl_whitelist_type() ~:2023), which the caller's own
+		//     hardcoded '6' => 'Unknown' provably never enters -- no reply-log
+		//     analogue exists and none is needed; '' is inert by construction.
+		// The replied domain doubles as key 2 and the $qdomain argument below.
+		$dns_fields = array ('2' => $fields[6], '5' => '', '6' => 'Unknown', '7' => '', '8' => '');
 		list($supp_dom, $ex_dom, $isWhitelist_found) = dnsbl_whitelist_type($dns_fields, $clists, $isExclusion, FALSE, $fields[6]);
 
 		// Threat Lookup Icon
