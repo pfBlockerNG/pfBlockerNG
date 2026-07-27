@@ -40,7 +40,7 @@ final class NoEmptyOnStringRule implements Rule
 		// with empty()'s '0' lie — strip the wrappers before deciding.
 		$bare = TypeCombinator::removeNull($type);
 		$bare = TypeCombinator::remove($bare, new ConstantBooleanType(false));
-		if ($bare instanceof NeverType || !$bare->isString()->yes()) {
+		if ($bare instanceof NeverType || !$this->hasStringConstituent($bare)) {
 			return [];
 		}
 		return [
@@ -49,5 +49,28 @@ final class NoEmptyOnStringRule implements Rule
 				"Use pfb_is_empty() for ''/NULL or pfb_is_blank() for whitespace-only (issue #1787)."
 			)->identifier('pfBlockerNG.emptyOnString')->build(),
 		];
+	}
+
+	/**
+	 * TRUE when the (null/false-stripped) type is a string, or a union with a
+	 * string member (issue #1792 N1: `string|int` etc. still hit empty()'s
+	 * '0' lie through the string member). Mixed stays exempt — it is not a
+	 * UnionType and isString() answers maybe(), never yes(), so the
+	 * deliberately-silent legacy surface is untouched.
+	 */
+	private function hasStringConstituent(\PHPStan\Type\Type $type): bool
+	{
+		if ($type->isString()->yes()) {
+			return true;
+		}
+		if (!$type instanceof \PHPStan\Type\UnionType) {
+			return false;
+		}
+		foreach ($type->getTypes() as $member) {
+			if ($member->isString()->yes()) {
+				return true;
+			}
+		}
+		return false;
 	}
 }

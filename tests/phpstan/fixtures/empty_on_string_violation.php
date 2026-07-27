@@ -16,3 +16,13 @@ function pfb_fixture_empty_on_string_or_false($haystack): bool {
 	$pos = strstr((string) $haystack, '/');
 	return empty($pos); // line 17: string|false — the false wrapper is stripped
 }
+
+/** @param string|int $value */
+function pfb_fixture_empty_on_string_int_union($value): bool {
+	return empty($value); // line 22: string|int — the string member still lies about '0' (issue #1792 N1)
+}
+
+/** @param 'a'|'b'|'' $value */
+function pfb_fixture_empty_on_string_literal_union(string $value): bool {
+	return empty($value); // line 27: literal-string union is still a string operand
+}

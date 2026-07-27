@@ -8214,6 +8214,10 @@ function pfb_dnsbl_is_skippable_control_line(string $line): bool {
 // convention, never '/re/' regex rules. A leading ',' is never valid ABP syntax (empty
 // first cosmetic domain-list entry), excluded up front. Kept in lockstep with
 // _dnsbl_is_abp_rule_line().
+// issue #1792: deliberately does NOT self-strip (unlike the pfb_is_blank_or_comment_line
+// family) -- its single caller sits in the parse loop after the per-line scrub, and the
+// Python mirror is pinned row-for-row by the ADR-62 parity oracle; a one-sided strip
+// here would be drift the oracle exists to prevent.
 function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 	// issue #1067: a leading comma is never valid ABP syntax (empty first cosmetic
 	// domain-list entry) -- excluded up front regardless of downstream encoding.

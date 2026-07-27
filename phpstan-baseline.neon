@@ -7,6 +7,12 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc
 
 		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 4
+			path: src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc
+
+		-
 			message: '#^Binary operation "\+" between string and 1 results in an error\.$#'
 			identifier: binaryOp.invalid
 			count: 2
@@ -28,30 +34,6 @@ parameters:
 			message: '#^Call to function unset\(\) contains undefined variable \$retval\.$#'
 			identifier: unset.variable
 			count: 3
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$filename_unlock follows optional parameter \$r_type\.$#'
-			identifier: parameter.requiredAfterOptional
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$format follows optional parameter \$pflex\.$#'
-			identifier: parameter.requiredAfterOptional
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$header follows optional parameter \$pflex\.$#'
-			identifier: parameter.requiredAfterOptional
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$logtype follows optional parameter \$pflex\.$#'
-			identifier: parameter.requiredAfterOptional
-			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -91,12 +73,6 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Parameter \#2 \$callback of function array_filter expects \(callable\(string\)\: bool\)\|null, ''strlen'' given\.$#'
-			identifier: argument.type
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc
-
-		-
 			message: '#^Parameter \#3 \$value of function curl_setopt expects 0\|2, false given\.$#'
 			identifier: argument.type
 			count: 1
@@ -123,7 +99,7 @@ parameters:
 		-
 			message: '#^Variable \$line in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
-			count: 2
+			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -139,12 +115,6 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$pfb_tables in isset\(\) always exists and is not nullable\.$#'
-			identifier: isset.variable
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc
-
-		-
 			message: '#^Variable \$rs in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
 			count: 1
@@ -157,9 +127,51 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 55
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#2 \$callback of function array_filter expects \(callable\(string\)\: bool\)\|null, ''strlen'' given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc
+
+		-
+			message: '#^Variable \$pfb_tables in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 22
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc
+
+		-
 			message: '#^Parameter \#1 \$string of function str_pad expects string, int given\.$#'
 			identifier: argument.type
 			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 27
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
@@ -211,8 +223,20 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 5
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
 			message: '#^Variable \$blacklist_types in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
 			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
 
@@ -232,6 +256,12 @@ parameters:
 			message: '#^Variable \$rowid in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
 			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
 
 		-
@@ -259,6 +289,12 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 6
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
 			message: '#^Parameter \#2 \$callback of function array_filter expects \(callable\(string\)\: bool\)\|null, ''strlen'' given\.$#'
 			identifier: argument.type
 			count: 1
@@ -271,15 +307,27 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
 
 		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$a_key follows optional parameter \$alt_register\.$#'
-			identifier: parameter.requiredAfterOptional
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
 			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 3
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
 
 		-
 			message: '#^Variable \$v4suppression in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
 
 		-
@@ -298,6 +346,12 @@ parameters:
 			message: '#^Variable \$_REQUEST in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
 			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_threats.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 3
 			path: src/usr/local/www/pfblockerng/pfblockerng_threats.php
 
 		-
@@ -331,10 +385,10 @@ parameters:
 			path: src/usr/local/www/pfblockerng/www/index.php
 
 		-
-			message: '#^Deprecated in PHP 8\.0\: Required parameter \$pfb_table follows optional parameter \$mode\.$#'
-			identifier: parameter.requiredAfterOptional
-			count: 1
-			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/www/pfblockerng/www/index.php
 
 		-
 			message: '#^Parameter \#1 \$num of function number_format expects float, string given\.$#'
@@ -347,78 +401,3 @@ parameters:
 			identifier: argument.type
 			count: 1
 			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 47
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 22
-			path: src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 27
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 7
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 5
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng_threats.php
-		-
-			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
-			identifier: pfBlockerNG.emptyOnString
-			count: 2
-			path: src/usr/local/www/pfblockerng/www/index.php
