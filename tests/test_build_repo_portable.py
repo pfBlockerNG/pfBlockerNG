@@ -1473,6 +1473,215 @@ def test_retain_by_channel_rejects_negative_keep(tmp_path: Path, keep_devel: int
 
 
 # --------------------------------------------------------------------------- #
+# Issue #1676 slice 1: per-major/minor line-pin retention in retain_by_channel
+#
+# Spec (docs/specs/reversible-settings-transitions-v3-v4.md:189-192): each channel
+# retains its newest-N rolling window PLUS the newest package of every major/minor
+# LINE, so a version like v3.2.15 stays available after it ages out of the window.
+# These tests cover: the union of window + pins, per-channel isolation (a devel
+# pin can't satisfy stable), multi-patch lines (only the newest patch pins),
+# prerelease version ordering, the keep=0/nightly no-op paths, and the malformed
+# major/minor fail-closed guard.
+# --------------------------------------------------------------------------- #
+
+
+def test_retain_by_channel_line_pin_survives_outside_window(tmp_path: Path) -> None:
+    """A line's newest package pins even after it ages out of the newest-N window.
+
+    Scenario: one channel, 13 versions across 3 lines (3.0.x x2, 3.2.x x3, 4.0.x x8),
+    keep=10 — the newest-10 window is by GLOBAL version order across all lines, so
+    it covers all of 4.0.x (8) plus the 2 newest 3.2.x (3.2.15, 3.2.14).
+      Given stable pkgs: 3.0.1, 3.0.2, 3.2.13, 3.2.14, 3.2.15, 4.0.0..4.0.7 (13 total)
+        And keep_stable=10
+      When retain_by_channel is called
+      Then the newest-10 window keeps 4.0.0..4.0.7 (8) + 3.2.15 + 3.2.14 (2) = 10
+       And 3.2.13 (aged out, NOT the newest of its line) is pruned
+       And 3.0.2 (aged out, but IS the newest of the 3.0 line) survives as the pin
+       And 3.0.1 (aged out, not the line's newest) is pruned
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    versions = ["3.0.1", "3.0.2", "3.2.13", "3.2.14", "3.2.15"] + [f"4.0.{i}" for i in range(8)]
+    assert len(versions) == 13
+    paths = {v: _make_pkg_channel(d, "pfBlockerNG", v) for v in versions}
+
+    kept = brp.retain_by_channel(list(paths.values()), keep_devel=0, keep_stable=10)
+    kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
+
+    # Window: newest 10 by global version order = 4.0.0..4.0.7, 3.2.15, 3.2.14.
+    for v in [f"4.0.{i}" for i in range(8)] + ["3.2.15", "3.2.14"]:
+        assert v in kept_versions, v
+    # 3.2.13 is aged out AND not its line's newest -> pruned.
+    assert "3.2.13" not in kept_versions
+    # 3.0.2 is aged out but IS its line's newest -> survives as the pin.
+    assert "3.0.2" in kept_versions
+    # 3.0.1 is aged out and not its line's newest -> pruned.
+    assert "3.0.1" not in kept_versions
+    assert len(kept_versions) == 11  # 10-window + 1 pin (3.2.15/3.2.14 already in window)
+
+
+def test_retain_by_channel_line_pin_is_channel_specific(tmp_path: Path) -> None:
+    """The spec's named case: v3.2.15 Stable and v3.2.16 Devel both pin, independently.
+
+    Scenario: Stable pfBlockerNG-3.2.15 and Devel pfBlockerNG-devel-3.2.16, both far
+    outside a keep=1 window built from many newer versions in each channel.
+      Given a Stable channel: 3.2.15 (old) + 5 newer 5.0.x releases; keep_stable=1
+        And a Devel channel: 3.2.16 (old) + 5 newer 5.0.x devel builds; keep_devel=1
+      When retain_by_channel is called
+      Then BOTH 3.2.15 (stable) and 3.2.16 (devel) survive as their channel's 3.2 pin
+       And neither channel's pin satisfies the other (no cross-channel leakage)
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    stable_old = _make_pkg_channel(d, "pfBlockerNG", "3.2.15")
+    stable_new = [_make_pkg_channel(d, "pfBlockerNG", f"5.0.{i}") for i in range(5)]
+    devel_old = _make_pkg_channel(d, "pfBlockerNG-devel", "3.2.16")
+    devel_new = [_make_pkg_channel(d, "pfBlockerNG-devel", f"5.0.{i}") for i in range(5)]
+
+    kept = brp.retain_by_channel([stable_old, *stable_new, devel_old, *devel_new], keep_devel=1, keep_stable=1)
+    kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
+
+    assert ("pfBlockerNG", "3.2.15") in kept_nv
+    assert ("pfBlockerNG-devel", "3.2.16") in kept_nv
+    # Each channel's window (newest 1) plus its own 3.2 pin only — no cross bleed.
+    assert ("pfBlockerNG", "5.0.4") in kept_nv
+    assert ("pfBlockerNG-devel", "5.0.4") in kept_nv
+    assert len(kept_nv) == 4
+
+
+def test_retain_by_channel_line_pin_keeps_only_newest_patch(tmp_path: Path) -> None:
+    """Multiple aged-out patches in one line: only the newest patch pins; older follow the window.
+
+    Scenario: 3.2.13, 3.2.14, 3.2.15 all in one old line, plus enough 5.0.x to push
+    all three out of a keep=2 window.
+      Given stable pkgs 3.2.13, 3.2.14, 3.2.15, 5.0.0, 5.0.1; keep_stable=2
+      When retain_by_channel is called
+      Then the window keeps 5.0.1, 5.0.0
+       And ONLY 3.2.15 (the line's newest) pins
+       And 3.2.14 and 3.2.13 are pruned (rolling policy, not the line's newest)
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    p13 = _make_pkg_channel(d, "pfBlockerNG", "3.2.13")
+    p14 = _make_pkg_channel(d, "pfBlockerNG", "3.2.14")
+    p15 = _make_pkg_channel(d, "pfBlockerNG", "3.2.15")
+    p50_0 = _make_pkg_channel(d, "pfBlockerNG", "5.0.0")
+    p50_1 = _make_pkg_channel(d, "pfBlockerNG", "5.0.1")
+
+    kept = brp.retain_by_channel([p13, p14, p15, p50_0, p50_1], keep_devel=0, keep_stable=2)
+    kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
+
+    assert kept_versions == {"5.0.1", "5.0.0", "3.2.15"}
+
+
+def test_retain_by_channel_line_pin_uses_pkg_version_order_for_prerelease(tmp_path: Path) -> None:
+    """The line pin picks the newest by pkg version order, not lexical order.
+
+    Scenario: an old 4.0 line with alpha.9 and alpha.10 (lexically "10" < "9"),
+    pushed out of the window by newer 5.0.x releases.
+      Given devel pkgs 4.0.0.alpha.9, 4.0.0.alpha.10, 5.0.0, 5.0.1; keep_devel=2
+      When retain_by_channel is called
+      Then the window keeps 5.0.1, 5.0.0
+       And the 4.0 pin is 4.0.0.alpha.10 (pkg version order), NOT alpha.9
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    a9 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.alpha.9")
+    a10 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.alpha.10")
+    n0 = _make_pkg_channel(d, "pfBlockerNG-devel", "5.0.0")
+    n1 = _make_pkg_channel(d, "pfBlockerNG-devel", "5.0.1")
+
+    kept = brp.retain_by_channel([a9, a10, n0, n1], keep_devel=2, keep_stable=0)
+    kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
+
+    assert kept_versions == {"5.0.1", "5.0.0", "4.0.0.alpha.10"}
+    assert "4.0.0.alpha.9" not in kept_versions
+
+
+def test_retain_by_channel_keep_zero_sentinel_unaffected_by_line_pins(tmp_path: Path) -> None:
+    """keep==0 (unbounded) still keeps everything; line pins are moot (nothing pruned).
+
+    Extends the existing sentinel coverage: a multi-line pool under keep=0 must not
+    trip the malformed-version guard or drop anything — the pin path is never entered
+    because nothing is pruned.
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    all_paths = [_make_pkg_channel(d, "pfBlockerNG", v) for v in ["3.0.1", "3.2.15", "5.0.0", "5.0.1"]]
+
+    kept = brp.retain_by_channel(all_paths, keep_devel=0, keep_stable=0)
+
+    assert len(kept) == 4
+
+
+def test_retain_by_channel_nightly_never_gets_line_pins(tmp_path: Path) -> None:
+    """Nightly is passed through untouched — no line-pin logic applies to it at all.
+
+    A nightly VERSION (<target>.YYYYMMDD.N) has no major/minor line concept; if pin
+    logic ever leaked into the nightly path it would either misbucket (numeric date
+    treated as a line) or crash on the malformed-version guard. Assert nightly count
+    is exactly the input count, unchanged, even with a devel/stable prune alongside.
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    dv = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    sv = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
+    nightlies = [_make_pkg_channel(d, "pfBlockerNG-nightly", f"amd64.2026060{i}.1") for i in range(1, 4)]
+
+    kept = brp.retain_by_channel([dv, sv, *nightlies], keep_devel=1, keep_stable=1)
+    kept_nightly_versions = {
+        brp.read_compact_manifest(p)["version"]
+        for p in kept
+        if brp.read_compact_manifest(p)["name"] == "pfBlockerNG-nightly"
+    }
+
+    assert kept_nightly_versions == {f"amd64.2026060{i}.1" for i in range(1, 4)}
+
+
+def test_retain_by_channel_malformed_line_version_raises(tmp_path: Path) -> None:
+    """A malformed major/minor version fails closed with BuildRepoError, never silent misbucketing.
+
+    ``_pkg_version_key``/``pkg_version_sort_key`` maps any non-numeric component to
+    ``0`` for SORT stability (never raises) — so a garbage version like "weird" would
+    otherwise silently land in some bucket rather than being rejected. The line-pin
+    parse is stricter: it must fail closed and name the offending package.
+
+    Scenario: a pool that needs pruning (so the line-pin path actually runs) contains
+    one package with an unparseable version.
+      Given stable pkgs 1.0.0, 2.0.0, 3.0.0 (valid) + "garbage-weird" (malformed); keep_stable=1
+      When retain_by_channel is called
+      Then BuildRepoError is raised, naming the malformed package
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    p1 = _make_pkg_channel(d, "pfBlockerNG", "1.0.0")
+    p2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.0")
+    p3 = _make_pkg_channel(d, "pfBlockerNG", "3.0.0")
+    bad = _make_pkg_channel(d, "pfBlockerNG", "weird")
+
+    with pytest.raises(brp.BuildRepoError, match="weird"):
+        brp.retain_by_channel([p1, p2, p3, bad], keep_devel=0, keep_stable=1)
+
+
+def test_retain_by_channel_line_pin_determinism(tmp_path: Path) -> None:
+    """Two runs over the same multi-line pool produce byte-identical (path-set) results.
+
+    Extends the existing version-order-determinism coverage to the line-pin path:
+    the pin selection must not depend on dict/set iteration order.
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    versions = ["3.0.1", "3.0.2", "3.2.13", "3.2.14", "3.2.15"] + [f"4.0.{i}" for i in range(8)]
+    paths = [_make_pkg_channel(d, "pfBlockerNG", v) for v in versions]
+
+    kept1 = brp.retain_by_channel(list(paths), keep_devel=0, keep_stable=10)
+    kept2 = brp.retain_by_channel(list(reversed(paths)), keep_devel=0, keep_stable=10)
+
+    assert {p.name for p in kept1} == {p.name for p in kept2}
+    assert len(kept1) == len(kept2) == 11
+
+
+# --------------------------------------------------------------------------- #
 # ADR-27 Phase 2: release-subtree retention in build_repo_matrix
 #
 # These tests pin the retention behaviour of the release subtree:
@@ -1571,7 +1780,10 @@ def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
     )
     rel_before = out_before / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
     objs_before = _catalog_objects(rel_before)
-    assert len(objs_before) == 2  # 1 devel + 1 stable with keep=1
+    # 1 window + 1 line pin per channel: the stub's fresh build is version "1.0_1",
+    # a major/minor line ("1.0") distinct from the 3.0.x/2.0.x extras, so it survives
+    # as that line's pin even though the 3.0.x/2.0.x window doesn't include it.
+    assert len(objs_before) == 4  # (1 window + 1 pin) devel + (1 window + 1 pin) stable
 
     # After-state: with keep=3, the newest 3 of each channel are retained.
     out = tmp_path / "site"
@@ -1636,13 +1848,16 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
     rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
     objs = _catalog_objects(rel)
 
-    # Exactly 4 catalog entries: 2 devel + 2 stable.
-    assert len(objs) == 4
+    # 6 catalog entries: (2-window + 1 line-pin) devel + (2-window + 1 line-pin) stable.
+    # The stub's fresh build ("1.0_1") is its own major/minor line ("1.0"), distinct
+    # from the 3.0.x/2.0.x extras, so it survives as that line's pin alongside the
+    # newest-2 window.
+    assert len(objs) == 6
 
     devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
     stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
-    assert len(devel_objs) == 2
-    assert len(stable_objs) == 2
+    assert len(devel_objs) == 3
+    assert len(stable_objs) == 3
 
     # No duplicate (name, version) pairs.
     nv_list = [(o["name"], o["version"]) for o in objs]
@@ -1741,12 +1956,16 @@ def test_cli_release_extra_pkgs_default_is_latest_only(tmp_path: Path, monkeypat
     devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
     stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
 
-    # Before-state (default keep=1): exactly one devel entry, one stable entry.
-    assert len(devel_objs) == 1, f"expected 1 devel, got {len(devel_objs)}"
+    # Before-state (default keep=1): devel gets the 1-window entry PLUS the stub's own
+    # fresh build as a line pin ("1.0_1" is major/minor line "1.0", distinct from the
+    # 3.0.x extras). No --stable-tag is passed on this CLI path, so no stable build is
+    # produced — stable stays a plain 1-window result (no phantom pin).
+    assert len(devel_objs) == 2, f"expected 2 devel (window + line pin), got {len(devel_objs)}"
     assert len(stable_objs) == 1, f"expected 1 stable, got {len(stable_objs)}"
 
-    # The retained entries are the highest-version ones (newest-wins).
-    assert devel_objs[0]["version"] >= "3.0.3"
+    # The window's retained entry is the highest-version one (newest-wins).
+    devel_versions = {o["version"] for o in devel_objs}
+    assert "3.0.3" in devel_versions
     assert stable_objs[0]["version"] >= "2.0.3"
 
 
@@ -1799,7 +2018,10 @@ def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pyte
     before_objs = _catalog_objects(out_before / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
     before_devel = [o for o in before_objs if o["name"] == "pfBlockerNG-devel"]
     before_stable = [o for o in before_objs if o["name"] == "pfBlockerNG"]
-    assert len(before_devel) == 1, "before-state: default keep=1 must yield exactly 1 devel"
+    # No --stable-tag on this CLI path, so only devel gets a fresh build: default
+    # keep=1 window + the stub fresh build's own line pin ("1.0_1" is line "1.0",
+    # distinct from the 3.0.x extras). Stable has no fresh build, so no phantom pin.
+    assert len(before_devel) == 2, "before-state: default keep=1 must yield 1 window + 1 line pin devel"
     assert len(before_stable) == 1, "before-state: default keep=1 must yield exactly 1 stable"
 
     # After-state: with keep=3 the catalog lists 3 devel + 3 stable.
@@ -1828,8 +2050,9 @@ def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pyte
     devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
     stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
 
-    # After-state: 3 devel + 3 stable.
-    assert len(devel_objs) == 3, f"expected 3 devel after, got {len(devel_objs)}"
+    # After-state: devel = 3-window + 1 line pin (the stub's "1.0_1" fresh build) = 4;
+    # stable has no fresh build on this CLI path, so it's a plain 3-window = 3.
+    assert len(devel_objs) == 4, f"expected 4 devel after (window + line pin), got {len(devel_objs)}"
     assert len(stable_objs) == 3, f"expected 3 stable after, got {len(stable_objs)}"
 
     # Oldest excluded.
@@ -1893,8 +2116,9 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
     devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
     stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
 
-    # Exactly 2 devel + 2 stable.
-    assert len(devel_objs) == 2
+    # devel = 2-window + 1 line pin (the stub's "1.0_1" fresh build, its own line "1.0") = 3.
+    # No --stable-tag on this CLI path, so stable has no fresh build: plain 2-window.
+    assert len(devel_objs) == 3
     assert len(stable_objs) == 2
 
     # No duplicate (name, version) pairs.

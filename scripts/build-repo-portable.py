@@ -443,30 +443,75 @@ def _non_negative_int(value: str) -> int:
     return iv
 
 
+def _line_key(version: str, pkg_name: str) -> str:
+    """The major/minor "line" grouping key for a pfBlockerNG pkg VERSION.
+
+    Split on the same ``[._,]`` separator set as ``pkg_version_sort_key`` (a port
+    revision like ``1.0_1`` is still major=1/minor=0), then take the first two
+    numeric components, e.g. ``3.2.15`` -> ``"3.2"``, ``4.0.0.alpha.3`` -> ``"4.0"``.
+    Unlike ``_pkg_version_key``/``pkg_version_sort_key`` (which maps any non-numeric
+    component to ``0`` — fine for a SORT tie-break, never raises), this parse FAILS
+    CLOSED: a version whose first two components aren't both plain digit strings can
+    never silently misbucket into some line or get dropped — it raises naming the
+    offending package instead.
+    """
+    parts = re.split(r"[._,]", version)
+    if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
+        raise BuildRepoError(f"{pkg_name}: malformed major/minor version {version!r} — cannot compute line pin")
+    return f"{parts[0]}.{parts[1]}"
+
+
+def _line_pins(bucket: list[Path]) -> list[Path]:
+    """The newest package of every major/minor VERSION line in ``bucket``.
+
+    ``bucket`` is already channel-scoped by the caller, so pins never cross channels.
+    Line key = ``_line_key`` (fails closed on a malformed major/minor). Tie-break
+    within a line mirrors ``_retain_newest``: version order, then mtime, then name.
+    Returns newest-first, deterministic regardless of input order.
+    """
+    lines: dict[str, tuple[Path, tuple]] = {}
+    for p in bucket:
+        m = read_compact_manifest(p)
+        version: str = m.get("version", "")
+        name: str = m.get("name", "")
+        line = _line_key(version, name)
+        rank = (_pkg_version_key(version), p.stat().st_mtime, name)
+        if line not in lines or rank > lines[line][1]:
+            lines[line] = (p, rank)
+    return [p for p, _rank in sorted(lines.values(), key=lambda pr: pr[1], reverse=True)]
+
+
 def retain_by_channel(
     pkg_paths: list[Path],
     *,
     keep_devel: int,
     keep_stable: int,
 ) -> list[Path]:
-    """Bucket paths by package-name channel and keep the newest ``keep_*`` per channel.
+    """Bucket paths by package-name channel and keep the newest ``keep_*`` per channel,
+    PLUS the newest package of every major/minor line (the "line pin").
 
     Channel detection (by the package ``name`` field in each path's manifest):
       * name ending ``-devel``   → devel channel
-      * name ending ``-nightly`` → nightly channel (left untouched: not pruned here)
+      * name ending ``-nightly`` → nightly channel (left untouched: not pruned here,
+        no line pins either)
       * anything else            → stable channel
 
     Pruning rules (reuses ``_retain_newest`` for version-sorted ordering):
       * ``keep == 0`` → keep ALL of that channel (the "unbounded / disabled" sentinel).
       * ``keep >= len(bucket)`` → keep all (no-op).
-      * ``keep < len(bucket)`` → prune to the ``keep`` newest.
+      * ``keep < len(bucket)`` → prune to the ``keep`` newest, THEN union in each
+        major/minor line's newest package (``_line_pins``) that isn't already in that
+        window — e.g. an aged-out v3.2.15 stays available after newer lines push it
+        out of the rolling window. Pins are per-channel: a devel pin can never satisfy
+        stable or vice versa. A malformed version in a bucket that needs pruning raises
+        ``BuildRepoError`` (fail closed, never silently misbucketed or dropped).
 
     ``keep_devel`` / ``keep_stable`` must be ``>= 0``; a negative value is rejected (it would
     otherwise flow into ``_retain_newest``'s ``[:keep]`` slice and silently drop the newest
     builds — fail fast instead).
 
     Returns the kept paths in a deterministic stable order (devel first, then stable, then
-    nightly; within each bucket newest-first as returned by ``_retain_newest``).
+    nightly; within each bucket the window newest-first, then any line pins newest-first).
     """
     if keep_devel < 0 or keep_stable < 0:
         raise BuildRepoError(
@@ -489,9 +534,13 @@ def retain_by_channel(
 
     def _prune(bucket: list[Path], keep: int) -> list[Path]:
         if keep == 0 or keep >= len(bucket):
-            # keep==0 is the "unbounded" sentinel; keep>=len is a no-op.
+            # keep==0 is the "unbounded" sentinel; keep>=len is a no-op — nothing is
+            # pruned, so line pins are moot (everything already survives).
             return _retain_newest(bucket, len(bucket)) if bucket else []
-        return _retain_newest(bucket, keep)
+        window = _retain_newest(bucket, keep)
+        seen = set(window)
+        pins = [p for p in _line_pins(bucket) if p not in seen]
+        return window + pins
 
     kept_devel = _prune(devel, keep_devel)
     kept_stable = _prune(stable, keep_stable)
