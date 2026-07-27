@@ -2041,10 +2041,10 @@ import re
 import sys
 
 shapes = (
-    re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]"),
-    re.compile(r"\([^()]*\|[^()]*\)\s*[+*{]"),
-    re.compile(r"\([^()]*[+*][^()]*\)\([^()]*\)\s*[+*]"),
-    re.compile(r"(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?:,\d*)?\}"),
+    re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]"),  # _REGEX_NESTED_QUANTIFIER mirror (pfb_unbound.py)
+    re.compile(r"\([^()]*\|[^()]*\)\s*[+*{]"),  # _REGEX_ALTERNATION_OVERLAP mirror (pfb_unbound.py)
+    re.compile(r"\([^()]*[+*][^()]*\)\([^()]*\)\s*[+*]"),  # _REGEX_ADJACENT_GROUP_QUANTIFIER mirror (pfb_unbound.py)
+    re.compile(r"(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?:,\d*)?\}"),  # _REGEX_STACKED_BOUNDED_REPEAT mirror (pfb_unbound.py)
 )
 
 failed = False
@@ -2069,8 +2069,8 @@ for line_number, line in enumerate(sys.stdin, start=1):
         report(line_number, pattern, "catastrophic-backtracking shape")
         failed = True
         continue
-    budget = len(re.findall(r"(?<!\\)[+*]", pattern)) + len(re.findall(r"(?<!\\)\|", pattern))
-    if budget > 12:
+    budget = len(re.findall(r"(?<!\\)[+*]", pattern)) + len(re.findall(r"(?<!\\)\|", pattern))  # _REGEX_UNBOUNDED_QUANTIFIER + _REGEX_ALTERNATION mirror (pfb_unbound.py)
+    if budget > 12:  # _REGEX_BUDGET_MAX mirror (pfb_unbound.py)
         report(line_number, pattern, "too many quantifiers/alternations")
         failed = True
         continue
