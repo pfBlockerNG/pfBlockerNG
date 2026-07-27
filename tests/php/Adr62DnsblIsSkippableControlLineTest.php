@@ -8,8 +8,9 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * pfb_dnsbl_is_skippable_control_line() -- ADR-62 P2 capture guard for the
- * (not-yet-wired) universal blank/comment/ABP-marker skip. Blank detection is an
- * exact '' match (caller trims first, mirroring pfb_is_blank_or_comment_line); a
+ * (not-yet-wired) universal blank/comment/ABP-marker skip. The helper strips the
+ * line itself (pfb_strip, Unicode class -- issue #1787; blank = exact '' match,
+ * mirroring pfb_is_blank_or_comment_line); a
  * bracketed IPv6 literal is never treated as an ABP section marker (ADR-62 Semantics
  * #3) -- it is an address, collected by pfb_dnsbl_collect_feed_ip() instead.
  */
@@ -51,21 +52,19 @@ final class Adr62DnsblIsSkippableControlLineTest extends TestCase
 		$this->assertFalse(pfb_dnsbl_is_skippable_control_line('[2001:db8::1]'));
 	}
 
-	public function testWhitespaceOnlyLineIsNotBlankPerThisHelpersContract(): void
+	public function testWhitespaceOnlyLineIsBlankPerThisHelpersContract(): void
 	{
-		// Probe (brief hostile row): the download loop trims $line (inc:~16389)
-		// BEFORE any capture-guard call, so a whitespace-only line never reaches a
-		// call site untrimmed in production. This helper follows the SAME contract
-		// as pfb_is_blank_or_comment_line -- the caller trims first; passed
-		// unTrimmed, three spaces is not the exact '' match, so it is NOT skippable.
-		$this->assertFalse(pfb_dnsbl_is_skippable_control_line('   '));
+		// Issue #1787 flipped the old caller-trims-first contract: the helper now
+		// strips the line itself (pfb_strip, Unicode class, mirroring
+		// pfb_is_blank_or_comment_line), so a whitespace-only line is blank and
+		// skippable even when a call site passes it untrimmed.
+		$this->assertTrue(pfb_dnsbl_is_skippable_control_line('   '));
 	}
 
-	public function testTabLedAbpAnchorIsNotSkippedUntrimmed(): void
+	public function testTabLedAbpAnchorIsNotSkipped(): void
 	{
-		// Probe (brief hostile row): a raw tab-led line, called directly (bypassing
-		// the loop's own trim at inc:~16389), does not start with '!'/'//'/'[' --
-		// consistent with the caller-trims-first contract, not a bug.
+		// A tab-led ABP anchor line self-strips to '||x^' -- an ABP rule, not a
+		// '!'/'//'/'[' control line, so it stays on the capture path.
 		$this->assertFalse(pfb_dnsbl_is_skippable_control_line("\t||x^"));
 	}
 

@@ -5504,6 +5504,19 @@
             }
         ]
     },
+    "pfb_lstrip": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_manage_dnsbl_vip": {
         "returnsRef": false,
         "returnType": "void",
@@ -7319,6 +7332,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfb_strip": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
                 "default": null
             }
         ]

@@ -3350,6 +3350,35 @@ function pfb_rstrip(string $value): string {
 
 
 /**
+ * Left-strip counterpart of pfb_rstrip() — same whitespace class (ASCII,
+ * Unicode \s/\p{Z}, BOM), leading side only. Lets a caller ask what a line's
+ * first NONBLANK character is (e.g. comment detection when '#' hides behind
+ * indentation). Same fail-open degradation to the ASCII-ltrim'd value.
+ */
+function pfb_lstrip(string $value): string {
+	$value = ltrim($value);
+	return pfb_preg_replace_safe('/^[\s\p{Z}\x{FEFF}]+/u', '', $value);
+}
+
+
+/**
+ * Double-sided pfb_lstrip()+pfb_rstrip(): trim() with the same Unicode
+ * whitespace class the other issue-#1787 helpers use. The value "0" survives.
+ * ASCII fast path: after trim(), ASCII bytes at both ends prove no Unicode
+ * whitespace remains there (every \p{Z}/BOM codepoint is multi-byte), so the
+ * hot per-line callers skip the two preg passes entirely.
+ */
+function pfb_strip(string $value): string {
+	$value = trim($value);
+	if ($value === '' ||
+	    (ord($value[0]) < 0x80 && ord($value[strlen($value) - 1]) < 0x80)) {
+		return $value;
+	}
+	return pfb_lstrip(pfb_rstrip($value));
+}
+
+
+/**
  * Sanitize a single-line/scalar text field: converts legacy encodings to
  * UTF-8, strips every \p{C} character (Cc/Cf/Co/Cs/Cn -- includes CR/LF/TAB
  * and the BOM, since this contract is single-line), then trims (Unicode
@@ -7911,11 +7940,13 @@ function pfb_dnsbl_unbracket_ip6(string $line): string {
 // '!' (ABP/uBlock), '//' (C-style) -- the three conventions feeds in this ecosystem mix
 // together regardless of the list's own declared format. Callers whose '#' handling
 // carries side effects (hpHosts/Spamhaus/CSV-header sniffing in the DNSBL hosts-format
-// branch) check '#' themselves first and do not route it through here. Blank detection is
-// an exact '' match (empty() would eat the valid line "0" -- issue #1787) -- callers MUST
-// trim() first, or a whitespace-only line won't match.
+// branch) check '#' themselves first and do not route it through here. The helper strips
+// the line itself (pfb_strip, Unicode class -- issue #1787), so indentation the caller's
+// ASCII trim() can't remove (NBSP et al.) never hides a marker; blank detection is
+// pfb_is_empty()'s exact '' match (empty() would eat the valid line "0").
 function pfb_is_blank_or_comment_line(string $line): bool {
-	return $line === '' ||
+	$line = pfb_strip($line);
+	return pfb_is_empty($line) ||
 		str_starts_with($line, '#') ||
 		str_starts_with($line, '!') ||
 		str_starts_with($line, '//');
@@ -8127,12 +8158,14 @@ function pfb_dnsbl_csv_extract(string $line, array $csvline, string $csv_type, b
 
 
 // ADR-62 §2 Decision 4: the universal plain-path control-line skip. Mirrors
-// pfb_is_blank_or_comment_line's contract: blank detection is an exact '' match, so
-// the CALLER must trim() first. Deliberately excludes '#' -- pfb_dnsbl_hash_line_
+// pfb_is_blank_or_comment_line's contract: the helper strips the line itself
+// (pfb_strip, Unicode class -- issue #1787; blank = pfb_is_empty()'s exact '' match,
+// so the line "0" is data). Deliberately excludes '#' -- pfb_dnsbl_hash_line_
 // classify() owns it (side effects). A bracketed IPv6 literal is an ADDRESS, never
 // skipped as an ABP section marker.
 function pfb_dnsbl_is_skippable_control_line(string $line): bool {
-	if ($line === '' || str_starts_with($line, '!') || str_starts_with($line, '//')) {
+	$line = pfb_strip($line);
+	if (pfb_is_empty($line) || str_starts_with($line, '!') || str_starts_with($line, '//')) {
 		return TRUE;
 	}
 	if (str_starts_with($line, '[') && str_ends_with($line, ']')) {

@@ -34,13 +34,13 @@ final class BlankOrCommentLineTest extends TestCase
 		$this->assertTrue(pfb_is_blank_or_comment_line(''));
 	}
 
-	public function testUntrimmedWhitespaceOnlyStringIsNotBlank(): void
+	public function testUntrimmedWhitespaceOnlyStringIsBlank(): void
 	{
-		// empty('   ') is FALSE in PHP -- this predicate relies on the caller having
-		// already trim()'d $line (its one call site does), matching every other
-		// empty($line) check in this file rather than reimplementing trim-and-check.
-		// Pins the contract explicitly instead of leaving it an unstated assumption.
-		$this->assertFalse(pfb_is_blank_or_comment_line('   '));
+		// Issue #1787 flipped the old caller-trims-first contract: the helper now
+		// strips the line itself (pfb_strip, Unicode class), so a whitespace-only
+		// line is blank whether or not the caller trimmed. Pins the contract
+		// explicitly instead of leaving it an unstated assumption.
+		$this->assertTrue(pfb_is_blank_or_comment_line('   '));
 	}
 
 	public function testHashCommentIsSkipped(): void
