@@ -63,7 +63,7 @@ final class AlertsPieBlockAndStatsGuardTest extends TestCase
 
 		if (!function_exists('pfb_alerts_oracle_stat_bucket_key')) {
 			if (!preg_match(
-				'/\$data = array_map\(\'trim\', explode\(\' \', trim\(\$line\), 2\)\);\n\t*'
+				'/\$data = array_map\(\'trim\', explode\(\' \', trim\(\$line\), 2\)\);\n(?:\t*\/\/[^\n]*\n)*\t*'
 				. '(\$alert_stats\[\$alert_view\]\[\$stat_type\]\[[^\n]*\n)/',
 				$src,
 				$m2
@@ -165,6 +165,7 @@ final class AlertsPieBlockAndStatsGuardTest extends TestCase
 		$this->assertSame([], self::undefinedKeyDiagnostics($diagnostics));
 		[$bucketKey, $bucketCount] = $result;
 		$this->assertSame('example.com', $bucketKey, 'a well-formed line must still bucket by its own key (behaviour-preserving)');
-		$this->assertSame('12', $bucketCount);
+		// issue #1792: the bucket count is a genuine int now ((int) cast at the site).
+		$this->assertSame(12, $bucketCount);
 	}
 }

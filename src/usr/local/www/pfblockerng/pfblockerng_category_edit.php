@@ -862,7 +862,7 @@ if ($_POST && isset($_POST['save'])) {
 			}
 		}
 
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/custom", base64_encode($_POST['custom'] ?? '') ?: '');
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/custom", base64_encode($_POST['custom'] ?? ''));
 
 		$rowhelper_exist = array();
 		foreach ($_POST as $key => $value) {
