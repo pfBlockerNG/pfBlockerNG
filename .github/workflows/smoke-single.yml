@@ -614,6 +614,25 @@ jobs:
           mkdir -p smoke-diag
           sh scripts/run-smoke.sh "$@" 2>&1 | tee smoke-diag/pytest-durations.log
 
+      # issue #1767: a tiny per-shard marker recording whether THIS shard's
+      # slice selected any tests ('selected') or hit the #855 empty-partition
+      # tolerance ('empty') -- scripts/run-smoke.sh writes it only for sharded
+      # (shard_total > 1) invocations, so a single-shard leg (shard_total=1)
+      # produces no file here and this step no-ops (if-no-files-found: ignore).
+      # smoke.yml's all-smoke-passed job downloads every shard's marker and
+      # fails the LEG unless at least one says 'selected' -- the per-shard
+      # #855 tolerance stays, but a whole-leg zero-selection (every shard
+      # empty -- a marker typo or collection bug) no longer silently passes
+      # the release gate (#1662).
+      - name: Upload shard selection-status marker (leg-level empty-selection gate, issue #1767)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-shard-status-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
+          path: smoke-diag/shard-selection-status
+          if-no-files-found: ignore
+          retention-days: 1
+
       # ADR-24 / ADR-47 P5: runner-side scrub delegated to the shared script.
       # resolve-legs.sh scrub --root smoke-diag handles: non-CE screenshot deletion,
       # literal-redaction of RESOLVED_REDACT values, and CE no-op (empty RESOLVED_REDACT).

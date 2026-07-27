@@ -353,10 +353,29 @@ jobs:
     needs: [prepare, smoke]
     if: always()   # run even if smoke failed/skipped/cancelled
     steps:
+      # issue #1767: download every shard's selection-status marker (see
+      # smoke-single.yml's "Upload shard selection-status marker" step) so the
+      # assert step below can catch a whole-leg zero-selection that the
+      # per-shard #855 tolerance would otherwise hide. continue-on-error: a run
+      # with NO multi-shard leg (every leg collapsed to shard_total=1) uploads
+      # no marker at all, so the pattern then matches nothing -- the assert
+      # step below fails CLOSED on any multi-shard leg it expected a marker
+      # for but can't find, so a genuine download outage still fails the leg
+      # rather than silently skipping the check.
+      - name: Download per-shard selection-status markers
+        if: needs.smoke.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: smoke-shard-status-*
+          path: shard-status
+
       - name: Assert every smoke leg passed
         env:
           SMOKE_RESULT: ${{ needs.smoke.result }}
           LEG_COUNT: ${{ needs.prepare.outputs.leg_count }}
+          CI_MATRIX: ${{ needs.prepare.outputs.ci_matrix }}
+          PYTEST_FILTER: ${{ needs.prepare.outputs.pytest_filter }}
         run: |
           set -eu
           echo "Smoke matrix result : ${SMOKE_RESULT}"
@@ -377,6 +396,54 @@ jobs:
           # 'cancelled' = run was cancelled (masks potential failures).
           case "$SMOKE_RESULT" in
             success)
+              # issue #1767: the per-shard exit-5 tolerance (#855) means a shard
+              # whose module slice legitimately carries no marker-matching test
+              # still reports 'success' even though it ran nothing — so the
+              # shard-level AND gate above can't see a whole-LEG zero-selection
+              # bug (marker typo, collection bug, path-filter regression) that
+              # empties EVERY shard of a full, unfiltered run. Assert, per
+              # multi-shard leg (shard_total != "1"), that at least ONE of its
+              # shards actually selected a test. PYTEST_FILTER non-empty means
+              # the caller deliberately narrowed the run (mirrors ui-tests.yml's
+              # PR #1766 selective exemption) — a selective run that legitimately
+              # selects nothing anywhere stays tolerated.
+              if [ -z "${PYTEST_FILTER:-}" ] && [ -n "${CI_MATRIX:-}" ]; then
+                MULTI_SHARD_LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c '
+                    [.[] | select(.shard_total != "1")]
+                    | group_by(.image_name + "|" + .pfsense_version)
+                    | map({
+                        image_name: .[0].image_name,
+                        pfsense_version: .[0].pfsense_version,
+                        shard_total: (.[0].shard_total | tonumber)
+                      })
+                ')"
+                LEG_N="$(printf '%s' "$MULTI_SHARD_LEGS" | jq 'length')"
+                BAD_LEGS=""
+                _i=0
+                while [ "$_i" -lt "$LEG_N" ]; do
+                    IMG="$(printf '%s' "$MULTI_SHARD_LEGS" | jq -r ".[$_i].image_name")"
+                    VER="$(printf '%s' "$MULTI_SHARD_LEGS" | jq -r ".[$_i].pfsense_version")"
+                    STOT="$(printf '%s' "$MULTI_SHARD_LEGS" | jq -r ".[$_i].shard_total")"
+                    FOUND_SELECTED=0
+                    _s=0
+                    while [ "$_s" -lt "$STOT" ]; do
+                        STATUS_FILE="shard-status/smoke-shard-status-${IMG}-${VER}-s${_s}/shard-selection-status"
+                        if [ -f "$STATUS_FILE" ] && [ "$(cat "$STATUS_FILE")" = "selected" ]; then
+                            FOUND_SELECTED=1
+                            break
+                        fi
+                        _s=$((_s + 1))
+                    done
+                    if [ "$FOUND_SELECTED" -eq 0 ]; then
+                        BAD_LEGS="${BAD_LEGS} ${IMG}-${VER}"
+                    fi
+                    _i=$((_i + 1))
+                done
+                if [ -n "$BAD_LEGS" ]; then
+                    echo "::error::AND gate FAIL — leg(s) selected ZERO tests across every shard (the #855 per-shard empty-partition tolerance masked a whole-leg zero-selection):${BAD_LEGS}"
+                    exit 1
+                fi
+              fi
               echo "AND gate PASS — all ${LEG_COUNT} smoke leg(s) succeeded."
               ;;
             failure)
