@@ -88,6 +88,12 @@ if ($_POST) {
 				continue;
 			}
 
+			// issue #1761: sanitize at ingestion -- before any validation below.
+			if ($field === 'hook_description' || $field === 'hook_timeout') {
+				$value = pfb_sanitize_text((string) $value);
+				$_POST[$key] = $value;
+			}
+
 			// Collect all rowhelper keys (so empty checkboxes still register a row).
 			$rowhelper_exist[$rowid] = '';
 
@@ -150,8 +156,8 @@ if ($_POST) {
 					'script'	=> (string) ($_POST["hook_script-{$rowid}"] ?? ''),
 					'when'		=> (string) ($_POST["hook_when-{$rowid}"] ?? 'pre'),
 					'enabled'	=> (isset($_POST["hook_enabled-{$rowid}"]) && $_POST["hook_enabled-{$rowid}"] === 'on') ? 'on' : '',
-					'description'	=> trim((string) ($_POST["hook_description-{$rowid}"] ?? '')),
-					'timeout'	=> trim((string) ($_POST["hook_timeout-{$rowid}"] ?? '')),
+					'description'	=> (string) ($_POST["hook_description-{$rowid}"] ?? ''),
+					'timeout'	=> (string) ($_POST["hook_timeout-{$rowid}"] ?? ''),
 				);
 				$hooks[] = $hook;
 			}

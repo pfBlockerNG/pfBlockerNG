@@ -31,6 +31,7 @@ import pytest
 
 from .. import helpers
 from . import test_category_edit as tce
+from . import test_hooks as th
 from .webui import looks_like_login_page
 
 if TYPE_CHECKING:
@@ -599,3 +600,49 @@ def test_edit_hooks_save_sanitizes_the_written_script(
         assert after == expected, f"hook script not sanitized on save: expected {expected!r}, got {after!r}"
     finally:
         vm.ssh("/bin/rm", "-f", path, timeout=60.0)
+
+
+def test_hooks_row_description_sanitized(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Hooks tab row ``description`` sanitizes BOM/control/trailing-NBSP at ingestion (#1761).
+
+    Companion to ``HooksSanitizeIngestionTest`` (PHPUnit oracle, off-appliance):
+    ``pfblockerng_hooks.php``'s rowhelper validation loop used a bare ``trim()``
+    at persist, so a BOM/control byte survived and a trailing Unicode (NBSP)
+    space did not. Routing ``hook_description-N`` through ``pfb_sanitize_text()``
+    at ingestion -- before the row's own ``\\p{C}`` control-char validator runs --
+    fixes both, and (per the PHPUnit oracle) the validator still gates a genuine
+    Cf/Cc character; this live pin proves the happy-path save persists the clean
+    string end to end through the real page/config.xml round trip.
+
+    RED (before the fix): the BOM (category Cf) is itself inside the row's own
+    ``\\p{C}`` description validator -- run on the RAW value, before any
+    sanitize -- so the save is REJECTED outright and the seeded description is
+    left unchanged (mirrors ``test_category_edit_description_sanitized``
+    above: "either way the assertion fails for the reason this change
+    addresses").
+    GREEN (after): ``pfb_sanitize_text()`` strips the BOM + control char and
+    Unicode-trims the trailing NBSP BEFORE the validator runs, so the row
+    validates and persists as ``"smokedesc"``.
+    """
+    vm = smoke_vm
+    helpers.clear_update_hooks(vm)
+    th._install_test_scripts(vm)
+    seed_description = "smoke-1761-seed"
+    th._seed_one_hook(vm, script=th.SCRIPT_POST, when="post", enabled="on", description=seed_description)
+    try:
+        assert helpers.config_get(vm, th.ROW0_DESCRIPTION) == seed_description, (
+            f"seed description missing before the save flow: got {helpers.config_get(vm, th.ROW0_DESCRIPTION)!r}"
+        )
+
+        raw = "\ufeffsmokedesc\x07\u00a0"
+        expected = "smokedesc"
+        resp = webui.post(th.HOOKS_PAGE, {"hook_description-0": raw}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "hooks description POST returned the login form (session lost)"
+
+        after = helpers.config_get(vm, th.ROW0_DESCRIPTION)
+        assert after == expected, f"description not sanitized at ingestion: expected {expected!r}, got {after!r}"
+    finally:
+        helpers.clear_update_hooks(vm)
