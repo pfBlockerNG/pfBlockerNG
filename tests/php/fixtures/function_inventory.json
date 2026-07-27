@@ -2007,6 +2007,19 @@
             }
         ]
     },
+    "pfb_dnsbl_scrub_line": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "line",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_service": {
         "returnsRef": false,
         "returnType": null,

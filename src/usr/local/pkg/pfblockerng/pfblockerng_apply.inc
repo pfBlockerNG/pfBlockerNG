@@ -1786,13 +1786,7 @@ function sync_package_pfblockerng($cron='') {
 											// harmless (Python's parser is byte-oriented too).
 											$line = pfb_dnsbl_strip_bom($line);
 
-											// Remove any '^M' characters
-											if (strpos($line, "\r") !== FALSE) {
-												$line = rtrim($line, "\x00..\x1F");
-											}
-
-											// Remove invalid charaters
-											$line = trim($line, " \t\n\r\0\x0B\xC2\xA0");
+											$line = pfb_dnsbl_scrub_line($line);
 
 											// ADR-06 fact 7 / ADR-62: an ABP network anchor or
 											// hosts-line target that is itself an IP address is
