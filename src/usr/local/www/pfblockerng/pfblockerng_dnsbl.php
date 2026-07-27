@@ -59,7 +59,7 @@ $pconfig['pfb_dnsport']		= $pfb['dconfig']['pfb_dnsport']			?: '8081';
 $pconfig['pfb_dnsport_ssl']	= $pfb['dconfig']['pfb_dnsport_ssl']			?: '8443';
 $pconfig['dnsbl_interface']	= $pfb['dconfig']['dnsbl_interface']			?: 'lo0';
 $pconfig['pfb_dnsbl_rule']	= $pfb['dconfig']['pfb_dnsbl_rule']			?: '';
-$pconfig['dnsbl_allow_int']	= explode(',', $pfb['dconfig']['dnsbl_allow_int'])	?: array();
+$pconfig['dnsbl_allow_int']	= explode(',', $pfb['dconfig']['dnsbl_allow_int'] ?? '')	?: array();
 $pconfig['global_log']		= $pfb['dconfig']['global_log']				?: '';
 $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default.php';
 $pconfig['pfb_cache']		= isset($pfb['dconfig']['pfb_cache'])			? $pfb['dconfig']['pfb_cache'] : 'on';
@@ -86,14 +86,14 @@ $pconfig['pfb_noaaaa']		= $pfb['dconfig']['pfb_noaaaa']				?: '';
 $pconfig['pfb_gp']		= $pfb['dconfig']['pfb_gp']				?: '';
 $pconfig['pfb_pytld']		= $pfb['dconfig']['pfb_pytld']				?: '';
 $pconfig['pfb_pytld_sort']	= $pfb['dconfig']['pfb_pytld_sort']			?: '';
-$pconfig['pfb_pytlds_gtld']	= explode(',', $pfb['dconfig']['pfb_pytlds_gtld'])	?: $default_tlds;
-$pconfig['pfb_pytlds_cctld']	= explode(',', $pfb['dconfig']['pfb_pytlds_cctld'])	?: array();
-$pconfig['pfb_pytlds_itld']	= explode(',', $pfb['dconfig']['pfb_pytlds_itld'])	?: array();
-$pconfig['pfb_pytlds_bgtld']	= explode(',', $pfb['dconfig']['pfb_pytlds_bgtld'])	?: array();
+$pconfig['pfb_pytlds_gtld']	= explode(',', $pfb['dconfig']['pfb_pytlds_gtld'] ?? '')	?: $default_tlds;
+$pconfig['pfb_pytlds_cctld']	= explode(',', $pfb['dconfig']['pfb_pytlds_cctld'] ?? '')	?: array();
+$pconfig['pfb_pytlds_itld']	= explode(',', $pfb['dconfig']['pfb_pytlds_itld'] ?? '')	?: array();
+$pconfig['pfb_pytlds_bgtld']	= explode(',', $pfb['dconfig']['pfb_pytlds_bgtld'] ?? '')	?: array();
 $pconfig['pfb_py_nolog']	= $pfb['dconfig']['pfb_py_nolog']			?: '';
-$pconfig['pfb_regex_list']	= base64_decode($pfb['dconfig']['pfb_regex_list'])	?: '';
-$pconfig['pfb_noaaaa_list']	= base64_decode($pfb['dconfig']['pfb_noaaaa_list'])	?: '';
-$pconfig['pfb_gp_bypass_list']	= base64_decode($pfb['dconfig']['pfb_gp_bypass_list'])	?: '';
+$pconfig['pfb_regex_list']	= base64_decode($pfb['dconfig']['pfb_regex_list'] ?? '')	?: '';
+$pconfig['pfb_noaaaa_list']	= base64_decode($pfb['dconfig']['pfb_noaaaa_list'] ?? '')	?: '';
+$pconfig['pfb_gp_bypass_list']	= base64_decode($pfb['dconfig']['pfb_gp_bypass_list'] ?? '')	?: '';
 $pconfig['action']		= $pfb['dconfig']['action']				?: 'Disabled';
 $pconfig['aliaslog']		= $pfb['dconfig']['aliaslog']				?: 'enabled';
 
@@ -115,7 +115,7 @@ $pconfig['aliasaddr_out']	= $pfb['dconfig']['aliasaddr_out']			?: '';
 $pconfig['autoproto_out']	= $pfb['dconfig']['autoproto_out']			?: 'any';
 $pconfig['agateway_out']	= $pfb['dconfig']['agateway_out']			?: 'default';
 
-$pconfig['suppression']		= base64_decode($pfb['dconfig']['suppression'])		?: '';
+$pconfig['suppression']		= base64_decode($pfb['dconfig']['suppression'] ?? '')		?: '';
 
 $pconfig['alexa_enable']	= $pfb['dconfig']['alexa_enable']			?: '';
 // Routed via the gateway (not the section array) so a stored legacy 'alexa'
@@ -126,10 +126,10 @@ $pconfig['alexa_type']		= PfbConfig::read('alexa_type')->toStored();
 $pconfig['alexa_count']		= $pfb['dconfig']['alexa_count']			?: '1000';
 // 0 (unlimited) is meaningful, so don't use the ?: idiom (0 is falsy -> would reset to default).
 $pconfig['pfb_py_cache_max']	= (isset($pfb['dconfig']['pfb_py_cache_max']) && $pfb['dconfig']['pfb_py_cache_max'] !== '') ? $pfb['dconfig']['pfb_py_cache_max'] : '10000';
-$pconfig['alexa_inclusion']	= explode(',', $pfb['dconfig']['alexa_inclusion'])	?: array('com','net','org','ca','co','io');
+$pconfig['alexa_inclusion']	= explode(',', $pfb['dconfig']['alexa_inclusion'] ?? '')	?: array('com','net','org','ca','co','io');
 
-$pconfig['tldexclusion']	= base64_decode($pfb['dconfig']['tldexclusion'])	?: '';
-$pconfig['tldblacklist']	= base64_decode($pfb['dconfig']['tldblacklist'])	?: '';
+$pconfig['tldexclusion']	= base64_decode($pfb['dconfig']['tldexclusion'] ?? '')	?: '';
+$pconfig['tldblacklist']	= base64_decode($pfb['dconfig']['tldblacklist'] ?? '')	?: '';
 
 // DoH/DoT/DoQ blocking — stored in pfblockerngsafesearch; read via gateway (registered keys)
 $pconfig['safesearch_doh']		= PfbConfig::read('safesearch_doh');

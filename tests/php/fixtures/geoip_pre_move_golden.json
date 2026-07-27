@@ -29,16 +29,16 @@
     "ZZ_v4.txt": "454debca5afcd37addd0dcca05094625dcde6402510f8fc664cd567893ec7096"
   },
   "continent_pages": {
-    "pfblockerng_Africa.php": "b840456e93df26b037e4f0546698a145e1fb4636e48ffba25804ca8ff0262170",
-    "pfblockerng_Antarctica.php": "33323a3ecb0afecdd3152ca92c562ec8255c0e670b109df0a84b218d75059146",
-    "pfblockerng_Asia.php": "8794cdb38c042926021de06d6feb823d1b5e7982f284ba90f3d1c78b6833e8f1",
-    "pfblockerng_Europe.php": "2c662ebf8a781a0888abc2d4a663335e875c6a9cb2633c1f8186ddef88550003",
-    "pfblockerng_North_America.php": "1365778df351ea7cec0a400f96d815a2d1f194a14b193e9c025a496589fe0ddd",
-    "pfblockerng_Oceania.php": "82ce0e433beeab561aeb9ddd479fd526349eb20a3d385676ba14e2bd4b8c41db",
-    "pfblockerng_South_America.php": "81c3d6c4e6d9fbbcaa488f0f31d9adc459dd418d170808ccf648be18f3d52dd7",
-    "pfblockerng_Proxy_and_Satellite.php": "530895710dad9fc39e44ce7e0b0f4f41296c2e4c512bb4dcf68218430d7bec9e",
-    "pfblockerng_Top_Spammers.php": "0e092bed5d860e5b7c81ebd79db0120676f5b044c23d3d2a1966cbddd979b27c"
+    "pfblockerng_Africa.php": "b4f26d783f460b37892d610761ce8693767a848d3be1ec679274e18f9be65f7a",
+    "pfblockerng_Antarctica.php": "16e2625fbe93cf2e7973c728c5b24281cc9cbca4c2b2c45dab41597366b216b9",
+    "pfblockerng_Asia.php": "b5e5de0487906eb6f17368e8647602e7f509467cbbeb629d8ab9c7ddd534b00c",
+    "pfblockerng_Europe.php": "790876fd8208cf8a90e4aab5fe6379375c43be9c927f8f5a7c08a437122eec25",
+    "pfblockerng_North_America.php": "fc0656d9437b8387d267fce68bd9bfc2e49063afdbcc8f7c4f0e9e3d20961dbb",
+    "pfblockerng_Oceania.php": "7abf871d9c53c2f1978ce8694ec34baa277ac29656eda3d3eaa885e306045d02",
+    "pfblockerng_South_America.php": "03914349dacb312772f60a7adc12fa712a2d6fc32400ef3f518ce64bffe7683b",
+    "pfblockerng_Proxy_and_Satellite.php": "99866f1ba3c274ff81708dc2b39fef714823af20dbd34e3bdb1d047d8a14c74c",
+    "pfblockerng_Top_Spammers.php": "e94e2be0d6579d53f806e9b62c4288424fea7c33c0a10ed068344c6888cb1aa2"
   },
-  "reputation_empty": "49a41197673a6ccbfb5b4600f0236deca79f0672ba5b7b4dd51bdbe52dd64669",
-  "reputation_populated": "e63bba64de32da7bf5507cfbc728b8a4fe293a8a2e957bc27407b094f721e6da"
+  "reputation_empty": "5a61a598cb8d1ac66db93a27e88338f7c28e627df9d3b606a8df7348a30c5984",
+  "reputation_populated": "7dced7a138426dc8dbef7fa5c8f1b740e1459d4ba79e4340b7b3683ed79a0266"
 }
