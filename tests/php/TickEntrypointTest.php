@@ -160,6 +160,11 @@ final class TickEntrypointTest extends TestCase
 		// issue #1769: pfsense_doubles.php's logger() double records every call here
 		// (real syslog() has no portable off-appliance read-back) -- fresh per test.
 		$GLOBALS['pfb_test_logger_calls'] = [];
+
+		// issue #1769 B3/B4: both log-maintenance skip arms emit via
+		// pfb_syslog_emit(); the shared syslog spy records those calls.
+		$GLOBALS['pfb_test_syslog_spy']   = TRUE;
+		$GLOBALS['pfb_test_syslog_calls'] = [];
 	}
 
 	protected function tearDown(): void
@@ -210,6 +215,7 @@ final class TickEntrypointTest extends TestCase
 			unset($GLOBALS['g']['unbound_chroot_path']);
 		}
 		unset($GLOBALS['pfb_test_logger_calls']);
+		unset($GLOBALS['pfb_test_syslog_spy'], $GLOBALS['pfb_test_syslog_calls']);
 		$this->rrmdir($this->dbdir);
 	}
 
@@ -691,14 +697,19 @@ final class TickEntrypointTest extends TestCase
 				. 'intact), got ' . var_export($linesAfter, TRUE)
 				. ' -- pfb_log_mgmt() must still be skipped while pfb_update_pass_running() is TRUE');
 
-			// (b) the skip is no longer silent -- a deferred-maintenance line was appended.
-			$deferredLines = array_values(array_filter(
-				$linesAfter,
-				static fn (string $l) => str_contains($l, 'log maintenance deferred')
+			// (b) the skip is no longer silent -- and (issue #1769 B4) it says so on
+			// the SYSLOG surface, leaving 'log' byte-identical: the old pfb_logger()
+			// line grew the very file whose trim it was deferring.
+			$this->assertSame(['l1', 'l2', 'l3', 'l4', 'l5'], $linesAfter,
+				"After tick with a running update pass: 'log' must be byte-identical (no deferred "
+				. 'line appended to the starved file itself), got ' . var_export($linesAfter, TRUE));
+			$deferred = array_values(array_filter(
+				$GLOBALS['pfb_test_syslog_calls'] ?? [],
+				static fn (array $c) => str_contains($c['body'], 'log maintenance deferred')
 			));
-			$this->assertNotEmpty($deferredLines,
-				"After tick with a running update pass: expected a 'log maintenance deferred' line "
-				. 'in \'log\', got ' . var_export($linesAfter, TRUE)
+			$this->assertNotEmpty($deferred,
+				'expected a "log maintenance deferred" pfb_syslog_emit() call, got '
+				. var_export($GLOBALS['pfb_test_syslog_calls'] ?? [], TRUE)
 				. ' -- the skip must be observable, not silent (issue #1769)');
 		} finally {
 			$this->killStrayUpdatePassProcess($proc, $pid, $stdin);
@@ -849,13 +860,15 @@ final class TickEntrypointTest extends TestCase
 			. " got {$cronEntry['next_due']} -- test setup did not actually dispatch the cron");
 
 		$skipped = array_values(array_filter(
-			$GLOBALS['pfb_test_logger_calls'] ?? [],
-			static fn (array $c) => str_contains($c['message'], 'log maintenance skipped')
+			$GLOBALS['pfb_test_syslog_calls'] ?? [],
+			static fn (array $c) => str_contains($c['body'], 'log maintenance skipped')
 		));
 		$this->assertNotEmpty($skipped,
-			'expected a "log maintenance skipped" logger() call after a dispatching tick, got '
-			. var_export($GLOBALS['pfb_test_logger_calls'] ?? [], TRUE)
-			. ' -- the $dispatched half of the log-maintenance gate must be observable, not silent (issue #1769)');
+			'expected a "log maintenance skipped" pfb_syslog_emit() call after a dispatching tick, got '
+			. var_export($GLOBALS['pfb_test_syslog_calls'] ?? [], TRUE)
+			. ' -- the $dispatched half of the log-maintenance gate must be observable, not silent (issue #1769; '
+			. 'B3 probe: a bare logger() reaches NO file on the appliance -- only the openlog(pfblockerng) '
+			. 'path lands in pfblockerng_syslog.log)');
 	}
 
 	// -----------------------------------------------------------------------

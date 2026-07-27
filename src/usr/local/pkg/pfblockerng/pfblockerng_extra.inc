@@ -2576,9 +2576,26 @@ function pfb_syslog_event(string $body): void
 		return;
 	}
 
-	// Production path: openlog / syslog / closelog via PHP built-ins.
-	// Test spy path: record the call in $GLOBALS['pfb_test_syslog_calls'] when a
-	// spy is installed (never calls the real built-ins in test mode).
+	pfb_syslog_emit($body);
+}
+
+
+/**
+ * pfb_syslog_emit — the raw pfblockerng-ident syslog emitter (issue #1769 B3).
+ *
+ * openlog('pfblockerng')/syslog/closelog is the ONLY mechanism that reaches
+ * /var/log/pfblockerng_syslog.log: the syslog.d routing is program-based
+ * (`!pfblockerng`), so a bare logger()/syslog() call without the ident lands
+ * in NO file at all (probed live on CE 2.8 — not system.log either, since
+ * user.info clears no selector there). Ungated — callers that need the
+ * log_syslog toggle gate go through pfb_syslog_event().
+ *
+ * TEST SEAM: same spy as pfb_syslog_event() — when
+ * $GLOBALS['pfb_test_syslog_spy'] is set, the call is recorded in
+ * $GLOBALS['pfb_test_syslog_calls'] instead of hitting the real built-ins.
+ */
+function pfb_syslog_emit(string $body): void
+{
 	if (isset($GLOBALS['pfb_test_syslog_spy'])) {
 		$GLOBALS['pfb_test_syslog_calls'][] = [
 			'ident'    => 'pfblockerng',
@@ -3207,28 +3224,15 @@ function pfblockerng_tick(): void
 	if (!$dispatched && !pfb_update_pass_running()) {
 		pfb_log_mgmt();
 	} elseif ($dispatched) {
-		// issue #1769: the OTHER half of this gate ($dispatched) was ALSO silent -- a
-		// tick that itself just dispatched an update pass read identically to
-		// "maintenance ran" from the log, with zero trace. Say so via logger() (like
-		// every other 'Tick: ...' message in this function) -> ADR-38's declarative
-		// syslog routing sends it to /var/log/pfblockerng_syslog.log, NOT $pfb['log']:
-		// TickEntrypointTest::testDispatchingTickSkipsLogMaintenanceThisTick (Case D)
-		// pins THIS tick's 'log' file byte-UNCHANGED, so pfb_logger()->$pfb['log']
-		// is not an option here regardless -- and syslog genuinely isn't a file
-		// pfb_log_mgmt() manages, so there is no feedback loop to accept.
-		logger(LOG_INFO, localize_text('Tick: log maintenance skipped (this tick dispatched an update pass).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+		// Skip is observable on the pfblockerng_syslog.log surface (issue #1769
+		// B3/B4: pfb_syslog_emit is the only mechanism that reaches it) -- never
+		// $pfb['log'], whose byte-identity on a dispatching tick is pinned and
+		// which pfb_log_mgmt() itself trims.
+		pfb_syslog_emit(localize_text('Tick: log maintenance skipped (this tick dispatched an update pass).'));
 	} else {
-		// issue #1769: the skip above was previously silent -- a running update pass
-		// reads identically to "maintenance ran" from the log, which cost a live-tier
-		// diagnosis. Say so. Deliberately KEPT on pfb_logger()/$pfb['log'] (not
-		// logger()/syslog like the branch above): TickEntrypointTest::
-		// testTickLogsDeferredMaintenanceWhenAPassIsRunning and the ADR-60 smoke
-		// suite's self-diagnosing failure output both assert on this exact surface.
-		// Accepted tradeoff, stated explicitly: a long-lived stray/leaked update pass
-		// would make this line accumulate in the very file it's deferring maintenance
-		// on -- bounded by how long that pass survives (transient in practice), not
-		// unbounded growth.
-		pfb_logger("\n" . localize_text('Tick: log maintenance deferred (an update pass is running).') . "\n", 1);
+		// Same surface as the $dispatched arm (issue #1769 B4): writing this to
+		// $pfb['log'] would grow the very file whose trim is being deferred.
+		pfb_syslog_emit(localize_text('Tick: log maintenance deferred (an update pass is running).'));
 	}
 }
 
