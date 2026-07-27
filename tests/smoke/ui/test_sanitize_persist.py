@@ -588,6 +588,34 @@ def test_dnsbl_suppression_rejects_double_dot_row(
     )
 
 
+def test_dnsbl_tld_exclusion_accepts_idn_row(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,  # noqa: ARG001
+) -> None:
+    """TLD Exclusion (hostname-typed) keeps taking a Unicode/IDN row (issue #1731).
+
+    TLD Exclusion (``tldexclusion``, PFB_FILTER_HOSTNAME) used to reject any
+    non-ASCII row outright -- bare ``is_hostname()``, no IDN branch -- while
+    the adjacent TLD Blacklist (``tldblacklist``, PFB_FILTER_TLD, issue #1723)
+    already accepted a punycode-convertible Unicode row. pfb_filter()'s
+    PFB_FILTER_HOSTNAME case now converts a non-ASCII input to its punycode
+    candidate before ``is_hostname()`` runs, matching PFB_FILTER_TLD.
+    """
+    vm = smoke_vm
+    idn_row = "bü" + helpers.unique_domain("pfbtldxidn")
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion"
+
+    before = helpers.config_get(vm, cfg)
+    resp = webui.post(DNSBL_PAGE, {"tldexclusion": idn_row}, timeout=SETTINGS_SAVE_TIMEOUT)
+    assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
+    assert "Invalid  Hostname entry" not in resp.text, f"the IDN row was rejected as an invalid hostname: {idn_row!r}"
+
+    after = helpers.config_get(vm, cfg)
+    assert after != before, "tldexclusion did not change -- the save did not take (POST must CAUSE the change)"
+    assert _decoded(after) == idn_row, f"the IDN row must persist verbatim, got {_decoded(after)!r}"
+
+
 def test_edit_hooks_save_sanitizes_the_written_script(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
