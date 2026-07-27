@@ -1261,6 +1261,16 @@ FreeBSD-ports RUN_DEPENDS so its presence is contractual, not incidental. PHP ne
 / `pfb_hash_write` / `pfb_local_feed_changed` / `pfb_validator_read` / `pfb_validator_write` /
 `pfb_conditional_get_decision`; `pfb_download`) and `pfblockerng_cron.inc`
 (`pfb_update_check`; `pfblockerng_sync_cron`).
+
+**Normalize layer (issue #1797)** — a second, *processing-level* change-detection point sits
+ABOVE the wire-byte sidecar: `pfb_feed_normalize()` derives `{header}.norm` from
+`{header}.orig` on demand (iconv UTF-8 validity gate → charset_normalizer conversion only for
+invalid files → one `C.UTF-8 sed` control-strip + per-line rtrim), keyed by
+`{header}.norm.src.xxhash128` (the xxh128 of the source `.orig`). Both parse loops read
+`.norm` (raw `.orig` on failure), and a fresh download whose `.norm` is byte-identical skips
+the reparse (`pfb_dnsbl_norm_reuse_skip` / `pfb_ip_norm_reuse_skip`). The wire-byte
+`.orig.xxhash128` sidecar and the #946 UTF-16 transcode are unchanged; the ADR-43 Force
+clear-hashes sweep also removes the `.norm.src` baselines so a forced pass always reprocesses.
 Off-appliance pinned by `tests/php/FeedChangeHashHelpersTest.php` +
 `tests/php/ConditionalGetHelpersTest.php`; the live `304`/ETag + same-second detection legs are
 ADR-04 smoke (`tests/smoke/test_smoke_feeds.py`).
