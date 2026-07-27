@@ -18,19 +18,21 @@
 set -eu
 
 # Package names map 1:1 to the port RUN_DEPENDS origins:
-#   libmaxminddb     net/libmaxminddb        (mmdblookup — GeoIP)
-#   py311-maxminddb  net/py-maxminddb        (GeoIP reader in pfb_unbound.py)
-#   py311-sqlite3    databases/py-sqlite3    (DNSBL / reports DB)
-#   lighttpd         www/lighttpd            (DNSBL sinkhole webserver)
-#   jq               textproc/jq             (feeds, AWS IP-prefix pre-scripts)
-#   rsync            net/rsync               (rsync-format feed lists)
-#   grepcidr         net-mgmt/grepcidr       (IP path)
-#   iprange          net-mgmt/iprange        (IP path)
-#   gnugrep          textproc/gnugrep        (ggrep — list pipeline)
+#   libmaxminddb             net/libmaxminddb              (mmdblookup — GeoIP)
+#   py311-maxminddb          net/py-maxminddb              (GeoIP reader in pfb_unbound.py)
+#   py311-sqlite3            databases/py-sqlite3          (DNSBL / reports DB)
+#   py311-charset-normalizer textproc/py-charset-normalizer (feed encoding detection, issue #1797)
+#   lighttpd                 www/lighttpd                  (DNSBL sinkhole webserver)
+#   jq                       textproc/jq                   (feeds, AWS IP-prefix pre-scripts)
+#   rsync                    net/rsync                     (rsync-format feed lists)
+#   grepcidr                 net-mgmt/grepcidr             (IP path)
+#   iprange                  net-mgmt/iprange              (IP path)
+#   gnugrep                  textproc/gnugrep              (ggrep — list pipeline)
 env ASSUME_ALWAYS_YES=yes pkg install -y \
     libmaxminddb \
     py311-maxminddb \
     py311-sqlite3 \
+    py311-charset-normalizer \
     lighttpd \
     jq \
     rsync \
