@@ -4,6 +4,11 @@
         "phpunit/phpunit": "^12.5",
         "squizlabs/php_codesniffer": "^3.10"
     },
+    "autoload-dev": {
+        "psr-4": {
+            "PfBlockerNG\\PHPStan\\": "tests/phpstan/"
+        }
+    },
     "config": {
         "sort-packages": true
     },
