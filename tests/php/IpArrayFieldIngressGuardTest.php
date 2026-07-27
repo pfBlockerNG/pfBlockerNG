@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -17,13 +18,14 @@ use PHPUnit\Framework\TestCase;
  * IN INTENT -- reject a non-scalar text field with an input error and blank
  * it, BEFORE the sanitize loop -- so no downstream (string) cast ever sees an
  * array. NOT in shape: category_edit has zero multi-selects, so its guard
- * covers every $_POST key; this page has three (inbound_interface,
- * outbound_interface, pfb_agg_types -- pfSense's Form_Select(..., TRUE) posts
- * those as arrays for real, browser-driven saves), so a blanket guard rejects
- * and blanks all three on every save (issue #1777 review, BLOCKING). The
- * guard here is scoped to exactly the fields the #1723 sanitize loops below
- * cast to (string). The (string) cast itself must stay: it is load-bearing
- * for genuinely scalar fields (int/bool/null POST values).
+ * covers every $_POST key unconditionally; this page has three
+ * (inbound_interface, outbound_interface, pfb_agg_types -- pfSense's
+ * Form_Select(..., TRUE) posts those as arrays for real, browser-driven
+ * saves), so an unconditional guard rejects and blanks all three on every
+ * save (issue #1777 review, BLOCKING). The guard here excludes those three
+ * and covers every other field, so scalar sinks outside the #1723 loops stay
+ * protected too. The (string) cast itself must stay: it is load-bearing for
+ * genuinely scalar fields (int/bool/null POST values).
  *
  * The ingress+sanitize loops are eval-extracted as a pure function of $_POST
  * (top-level page script, not require()-able off-appliance) -- matching
@@ -45,9 +47,9 @@ final class IpArrayFieldIngressGuardTest extends TestCase
 		// Anchored on the issue #1777 guard comment's stable opening line through
 		// to the stable "// Validate Select field options" comment that follows
 		// the whole ingress+sanitize prologue -- captures the region as raw text
-		// regardless of the guard's internal shape (unscoped pre-fix, field-list
-		// scoped post-fix), so the SAME oracle extraction works whether this
-		// runs before or after the #1777 review's scoping fix lands.
+		// regardless of the guard's internal shape (unconditional, allow-listed
+		// or multi-select-excluding), so the SAME oracle extraction works
+		// whichever shape the guard currently carries.
 		if (!preg_match(
 			'/(\t\t\/\/ issue #1777: reject an array-valued field \(\'asn_token\[\]=x\'\) before any\n.*?\n)'
 			. '\n\t\t\/\/ Validate Select field options\n/s',
@@ -162,5 +164,49 @@ final class IpArrayFieldIngressGuardTest extends TestCase
 		$this->assertSame('', $post['asn_token'], 'asn_token must still be blanked when array-valued');
 		$asnTokenErrors = array_values(array_filter($inputErrors, static fn (string $e): bool => str_contains($e, 'asn_token')));
 		$this->assertNotEmpty($asnTokenErrors, 'asn_token must still raise its own input error when array-valued');
+	}
+
+	/**
+	 * The guard must cover every scalar field on the page, not just the ones the
+	 * #1723 sanitize loops name. Scoping it to an allow-list of text fields left
+	 * the ADR-40 pair unguarded, and both have a scalar-only sink further down
+	 * the same save handler: pfb_alias_delta_mode reaches array_key_exists()
+	 * (:277), whose first parameter is int|string -- an array is a fatal
+	 * TypeError -- and pfb_alias_delta_batch reaches a (string) cast (:284),
+	 * which Array-to-string-converts and then silently resolves to the clamp
+	 * floor instead of the intended default. Same class for any scalar field
+	 * added to this page later, which is why the guard excludes the three known
+	 * multi-selects rather than enumerating the fields it protects.
+	 *
+	 */
+	#[DataProvider('provideUnlistedScalarFields')]
+	public function testScalarFieldsOutsideTheSanitizeLoopsAreAlsoRejectedWhenArrayValued(string $field): void
+	{
+		[$result, $diagnostics] = $this->runCapturing(static fn () => pfb_ip_oracle_sanitize_prologue([
+			'ip_placeholder'    => '198.51.100.1',
+			'asn_token'         => 'mytoken',
+			'inbound_interface' => ['wan'],
+			$field              => ['crafted'],
+		]));
+
+		$this->assertSame([], array_values(array_filter($diagnostics, static fn (string $d): bool => str_contains($d, 'Array to string conversion'))));
+
+		[$post, $inputErrors] = $result;
+		$this->assertSame('', $post[$field], "an array-valued {$field} must be blanked before it reaches its scalar-only sink");
+		$this->assertNotEmpty(
+			array_values(array_filter($inputErrors, static fn (string $e): bool => str_contains($e, $field))),
+			"an array-valued {$field} must raise its own input error"
+		);
+		$this->assertSame(['wan'], $post['inbound_interface'], 'a legitimate multi-select must still survive alongside the rejection');
+	}
+
+	/** @return array<string, array{string}> */
+	public static function provideUnlistedScalarFields(): array
+	{
+		return [
+			'ADR-40 apply mode (array_key_exists sink, fatal TypeError)' => ['pfb_alias_delta_mode'],
+			'ADR-40 batch size ((string) cast sink)'                     => ['pfb_alias_delta_batch'],
+			'single-select locale (never posted as an array by a browser)' => ['maxmind_locale'],
+		];
 	}
 }
