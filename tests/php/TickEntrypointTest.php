@@ -667,7 +667,7 @@ final class TickEntrypointTest extends TestCase
 		$logPath = $this->logPath('log');
 		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
 
-		[$proc, $pid] = $this->spawnStrayUpdatePassProcess();
+		[$proc, $pid, $stdin] = $this->spawnStrayUpdatePassProcess();
 		try {
 			// Prove the fixture BEFORE trusting the tick's own scan of it: a real,
 			// uninjected pfb_update_pass_running() call must see this process.
@@ -701,7 +701,7 @@ final class TickEntrypointTest extends TestCase
 				. 'in \'log\', got ' . var_export($linesAfter, TRUE)
 				. ' -- the skip must be observable, not silent (issue #1769)');
 		} finally {
-			$this->killStrayUpdatePassProcess($proc, $pid);
+			$this->killStrayUpdatePassProcess($proc, $pid, $stdin);
 		}
 	}
 
@@ -714,14 +714,26 @@ final class TickEntrypointTest extends TestCase
 	 * proc_open (no shell wrapper) so the tracked pid IS the /bin/sh process
 	 * `ps` actually reports, not an intermediary.
 	 *
-	 * @return array{0:resource,1:int} [$proc, $pid]
+	 * issue #1769 review: the sleeper blocks on `read x` (a shell BUILTIN, no
+	 * forked child) reading from its own stdin -- a piped descriptor the caller
+	 * holds open and never writes to -- instead of `sleep 30` (a SEPARATE forked
+	 * process). `sleep 30`'s fork meant killStrayUpdatePassProcess()'s
+	 * proc_terminate() SIGKILL only killed the /bin/sh parent, orphaning the
+	 * `sleep` grandchild (confirmed live via `pgrep -fl "sleep 30"` finding it
+	 * still alive after the suite). SIGKILL to the shell now ends the whole
+	 * fixture -- nothing left behind -- and the `ps` line the regex scans is
+	 * unchanged (still "/bin/sh <script> dcc").
+	 *
+	 * @return array{0:resource,1:int,2:resource} [$proc, $pid, $stdin] -- $stdin is
+	 *         the write end of the piped stdin descriptor; the caller must fclose()
+	 *         it (see killStrayUpdatePassProcess()).
 	 */
 	private function spawnStrayUpdatePassProcess(): array
 	{
 		$script = "{$this->dbdir}/pfblockerng.php";
-		file_put_contents($script, "#!/bin/sh\nsleep 30\n");
+		file_put_contents($script, "#!/bin/sh\nread x\n");
 
-		$descriptors = [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
+		$descriptors = [0 => ['pipe', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
 		$proc = proc_open(['/bin/sh', $script, 'dcc'], $descriptors, $pipes);
 		$this->assertIsResource($proc, 'failed to spawn the stray update-pass fixture process');
 
@@ -737,26 +749,48 @@ final class TickEntrypointTest extends TestCase
 			usleep(20000);
 		}
 
-		return [$proc, $pid];
+		return [$proc, $pid, $pipes[0]];
 	}
 
-	/** @param resource $proc */
-	private function killStrayUpdatePassProcess($proc, int $pid): void
+	/**
+	 * @param resource $proc
+	 * @param resource $stdin
+	 */
+	private function killStrayUpdatePassProcess($proc, int $pid, $stdin): void
 	{
+		if (is_resource($stdin)) {
+			fclose($stdin);
+		}
+		$reaped = false;
 		if (is_resource($proc)) {
 			proc_terminate($proc, 9);	// SIGKILL: no cleanup path runs in the child
+			// proc_close() BLOCKS until the process changes state (waitpid()
+			// under the hood) and reaps it -- must happen before any liveness
+			// probe below, or a not-yet-reaped zombie reads as "still alive"
+			// (kill(pid, 0) succeeds against a zombie; bit this fix once).
 			proc_close($proc);
+			$reaped = true;
 		}
-		// Assert it is actually gone -- posix_kill(pid, 0) is the standard
-		// "is this pid alive" probe (no signal sent, just an existence check).
-		for ($i = 0; $i < 50; $i++) {
-			if (!@posix_kill($pid, 0)) {
-				break;
+		// Assert it is actually gone. posix_kill(pid, 0) is the standard "is this
+		// pid alive" probe (no signal sent, just an existence check) -- guarded by
+		// function_exists(): posix is NOT in CI's installed extension list
+		// (.github/workflows/test.yml ~:511 installs curl/intl/mbstring/ctype/filter
+		// only), so this was an implicit dependency, not a guaranteed one. Without
+		// it, trust proc_close()'s own blocking wait above as the liveness proof --
+		// its resource is invalid now, so there is nothing left to poll.
+		if (function_exists('posix_kill')) {
+			for ($i = 0; $i < 50; $i++) {
+				if (!@posix_kill($pid, 0)) {
+					break;
+				}
+				usleep(20000);
 			}
-			usleep(20000);
+			$this->assertFalse(@posix_kill($pid, 0),
+				"stray fixture process {$pid} is still alive after kill -- see spawnStrayUpdatePassProcess()");
+		} else {
+			$this->assertTrue($reaped,
+				'expected the fixture process to have been terminated and reaped via proc_close()');
 		}
-		$this->assertFalse(@posix_kill($pid, 0),
-			"stray fixture process {$pid} is still alive after kill -- see spawnStrayUpdatePassProcess()");
 	}
 
 	// -----------------------------------------------------------------------
