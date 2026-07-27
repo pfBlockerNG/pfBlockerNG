@@ -627,14 +627,26 @@ jobs:
       - name: Assert every UI leg passed
         env:
           UI_RESULT: ${{ needs.ui.result }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
           RUN_GATE: ${{ needs.prepare.outputs.run }}
           LEG_COUNT: ${{ needs.prepare.outputs.leg_count }}
         run: |
           set -eu
+          echo "Prepare job result  : ${PREPARE_RESULT}"
           echo "Nightly run gate    : ${RUN_GATE}"
           echo "UI matrix result    : ${UI_RESULT}"
           echo "UI matrix leg count : ${LEG_COUNT}"
           echo ""
+
+          # Fail-closed FIRST (issue #1662 finding): if prepare itself did not
+          # genuinely succeed (crashed/cancelled/skipped), RUN_GATE is unset/empty
+          # -- the RUN_GATE check below would then read that as "scheduled idle,
+          # pass" even though nothing ran because prepare blew up, not because it
+          # declined the run on purpose. Must run BEFORE the RUN_GATE branch.
+          if [ "${PREPARE_RESULT}" != "success" ]; then
+            echo "::error::AND gate FAIL — prepare job did not succeed (result='${PREPARE_RESULT}')."
+            exit 1
+          fi
 
           # The nightly no-commit guard legitimately skips the whole run (an
           # idle scheduled night) -- that is a PASS, not a gate failure: the
