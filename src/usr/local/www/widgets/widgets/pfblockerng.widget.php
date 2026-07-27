@@ -756,9 +756,12 @@ function pfBlockerNG_get_header($mode='') {
 				// read below hits an undefined array key. Seed the same shape the
 				// SELECT above produces (row 0, both counters absent/zero).
 				// No off-appliance test: reaching here needs a real SQLite handle
-				// plus the enclosing stats walk, so the regression detector is the
-				// live functional-UI sweep plus the baseline entry this fix retires
-				// (a stale baseline line fails the render oracle by itself).
+				// plus the enclosing stats walk, so the named regression detector
+				// is the live functional-UI sweep (tests/smoke/ui) alone -- the
+				// baseline entry this fix retires is only REPORTED as stale by
+				// conftest.py's pytest_sessionfinish (tests/smoke/ui/conftest.py
+				// ~:501-506): a green sweep never proves a fix by itself, only a
+				// burn-down PR that deletes the entry and re-runs RED does.
 				if (!isset($resolver[0])) {
 					$resolver[0] = array('totalqueries' => 0, 'queries' => 0);
 				}
