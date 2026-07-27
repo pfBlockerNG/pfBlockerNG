@@ -648,6 +648,12 @@ jobs:
             exit 1
           fi
 
+          # From here PREPARE_RESULT=='success' is guaranteed, so RUN_GATE is only
+          # ever the literal true/false prepare emits and LEG_COUNT only ever a jq
+          # integer -- a garbage RUN_GATE or non-numeric LEG_COUNT below is
+          # unreachable in practice, defensive-only, mirroring all-smoke-passed's
+          # tolerant catch-all (`*)` arm).
+
           # The nightly no-commit guard legitimately skips the whole run (an
           # idle scheduled night) -- that is a PASS, not a gate failure: the
           # prepare/ui jobs never ran anything on purpose.

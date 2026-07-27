@@ -281,6 +281,16 @@ GUARD_VARS = ("INPUT_DRY", "DRY_RUN")
 _CASE_LINE_RE = re.compile(r'^([ \t]*)case "\$([A-Za-z_][A-Za-z0-9_]*)" in[ \t]*$')
 _TRUE_FALSE_ARM_RE = re.compile(r"^[ \t]*true\|false\)")
 
+# Two known blind spots in the shape match above, both accepted: (1) a braced
+# case subject, `case "${VAR}" in`, is invisible to _CASE_LINE_RE (only the
+# bare `$VAR` form is matched); (2) a guard born with an already-widened first
+# arm, e.g. `TRUE|true|false)`, is invisible to _TRUE_FALSE_ARM_RE (anchored on
+# `true|false)` starting the arm). Accepted because there is no live instance
+# of either shape in this workflow, the shop's shell style sticks to bare
+# `$VAR` + a plain `true|false)` first arm, and the GUARD_VARS floor below
+# still catches a shape-blind miss on either KNOWN guard -- it only misses a
+# brand-new guard written from the start in one of these two shapes.
+
 
 def _discover_guard_blocks(workflow_text: str) -> list[tuple[str, str]]:
     """Find every dry-run boolean guard by SHAPE, not by a fixed var-name list.
