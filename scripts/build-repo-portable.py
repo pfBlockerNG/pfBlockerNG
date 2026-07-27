@@ -907,7 +907,9 @@ def main(argv: list[str]) -> int:
         help=(
             "devel releases retained per (version, arch) in the release catalog (default 1 = latest-only). "
             "Set >1 to retain multiple devel artifacts for diagnostics and reproducibility. "
-            "The publish job must supply the older .pkg via --release-extra-pkgs."
+            "The publish job must supply the older .pkg via --release-extra-pkgs. "
+            "The newest package of every major/minor line is pinned on top of this window, "
+            "so the catalog can hold more than N devel packages."
         ),
     )
     g_matrix.add_argument(
@@ -918,7 +920,9 @@ def main(argv: list[str]) -> int:
         help=(
             "stable releases retained per (version, arch) in the release catalog (default 1 = latest-only). "
             "Set >1 to retain multiple stable artifacts for diagnostics and reproducibility. "
-            "The publish job must supply the older .pkg via --release-extra-pkgs."
+            "The publish job must supply the older .pkg via --release-extra-pkgs. "
+            "The newest package of every major/minor line is pinned on top of this window, "
+            "so the catalog can hold more than M stable packages."
         ),
     )
     g_matrix.add_argument(

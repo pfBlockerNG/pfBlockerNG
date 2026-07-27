@@ -409,6 +409,13 @@ The scheduled version-tracking + release-automation design is its own ADR.
 
 `--release-keep-devel 0` / `--release-keep-stable 0` is the **unbounded** sentinel (keep all).
 
+**Line pins are retained on top of the N/M window** (issue #1676): the newest package of
+every pfBlockerNG major/minor line survives per channel even when it falls outside the
+rolling window, so an aged-out release stays installable by exact version. A catalog can
+therefore hold more than `N` + `M` packages — budget for one extra per aged-out line per
+channel. Pins are per channel, so a devel pin never satisfies or evicts a stable one; the
+`0` sentinel and the nightly subtree are unaffected.
+
 ### How the publish pipeline uses these flags
 
 `pfBlockerNG/pkg`'s `publish.yml` passes:
