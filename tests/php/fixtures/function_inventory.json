@@ -619,6 +619,19 @@
             }
         ]
     },
+    "pfb_b64_text": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            }
+        ]
+    },
     "pfb_build_aggregate_aliases": {
         "returnsRef": false,
         "returnType": null,
@@ -1156,6 +1169,26 @@
                 "variadic": false,
                 "type": "bool",
                 "default": null
+            }
+        ]
+    },
+    "pfb_csv_list": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            },
+            {
+                "name": "default",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },
