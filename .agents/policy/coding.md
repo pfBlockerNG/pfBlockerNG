@@ -84,7 +84,8 @@ never an ad-hoc `trim`/`str_replace` chain and never re-sanitized downstream:
   `pfb_text_area_encode()` (`base64_encode(pfb_sanitize_text_area(...))`) remains only
   for programmatic writers whose encode call itself IS the ingestion point (the
   alerts.php/pfblockerng_extra.inc/pfblockerng_install.inc re-encoders, the Unbound
-  `custom_options` re-encode) — never a second pass after a `$_POST` field already went
+  `custom_options` re-encode, `pfblockerng_category_edit.php`'s Reports-tab whitelist-alias
+  `addgroup` branch) — never a second pass after a `$_POST` field already went
   through the ingestion prologue. Parse through `pfb_text_area_decode()`, which
   sanitizes once on read, drops blank/whitespace-only rows, and preserves the valid row
   `"0"`.
