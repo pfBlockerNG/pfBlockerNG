@@ -112,17 +112,19 @@ if ($_POST) {
 		// string sink below Array-to-string-converts on it -- same idea as
 		// pfblockerng_category_edit.php (issue #1106), but NOT the same guard
 		// shape: unlike category_edit, this page has genuine multi-select fields
-		// (inbound_interface, outbound_interface, pfb_agg_types -- pfSense's
-		// Form_Select(..., TRUE) appends '[]' to the POST name for those, so a
-		// real browser legitimately posts them as arrays). A guard over every
-		// $_POST key would reject and blank all three on every save. So this
-		// guard is scoped to exactly the fields the #1723 sanitize loops below
-		// cast to (string) -- those are always scalar in normal use.
-		foreach (array('ip_placeholder', 'asn_token', 'autorule_suffix', 'maxmind_account', 'maxmind_key',
-				'v4suppression', 'v6suppression') as $pfb_text_field) {
-			if (isset($_POST[$pfb_text_field]) && !is_scalar($_POST[$pfb_text_field])) {
-				$input_errors[] = gettext('Invalid value submitted for field:') . ' ' . htmlspecialchars($pfb_text_field);
-				$_POST[$pfb_text_field] = '';
+		// -- pfSense's Form_Select(..., TRUE) appends '[]' to the POST name, so a
+		// real browser legitimately posts those as arrays and a guard over every
+		// $_POST key would reject and blank them on every save. Excluding the
+		// multi-selects (a small, stable set this page owns) rather than listing
+		// the scalar fields keeps every present and future scalar field covered:
+		// beyond the #1723 sanitize loops below, pfb_alias_delta_mode reaches
+		// array_key_exists(), which is a fatal TypeError on an array, and
+		// pfb_alias_delta_batch reaches a (string) cast.
+		$pfb_multiselect_fields = array('inbound_interface', 'outbound_interface', 'pfb_agg_types');
+		foreach (array_keys($_POST) as $pfb_post_field) {
+			if (!is_scalar($_POST[$pfb_post_field]) && !in_array($pfb_post_field, $pfb_multiselect_fields, TRUE)) {
+				$input_errors[] = gettext('Invalid value submitted for field:') . ' ' . htmlspecialchars($pfb_post_field);
+				$_POST[$pfb_post_field] = '';
 			}
 		}
 
