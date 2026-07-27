@@ -7653,6 +7653,19 @@ function pfb_dnsbl_strip_bom(string $line): string {
 }
 
 
+// Per-line scrub for the DNSBL feed parse loop, extracted verbatim from the loop.
+// Contract pinned by DnsblScrubLineTest.
+function pfb_dnsbl_scrub_line(string $line): string {
+	// Remove any '^M' characters
+	if (strpos($line, "\r") !== FALSE) {
+		$line = rtrim($line, "\x00..\x1F");
+	}
+
+	// Remove invalid charaters
+	return trim($line, " \t\n\r\0\x0B\xC2\xA0");
+}
+
+
 // Issue #938: unwrap a bracketed IPv6 literal ('[2604:2dc0:100:4ed8::]' -> '2604:2dc0:100:4ed8::')
 // so the existing is_ipaddrv6($line) collection branch (feeding $domain_data_ip6) recognises it.
 // is_ipaddrv6() rejects the brackets outright and pfb_filter() rejects it as a domain, so today
