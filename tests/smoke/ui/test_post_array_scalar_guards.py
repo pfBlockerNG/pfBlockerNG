@@ -90,6 +90,11 @@ _ARRAY_FIELD_CASES: list[tuple[str, str, dict[str, str] | None]] = [
     ("/pfblockerng/pfblockerng_sync.php", "varsynctimeout", None),  # pfb_filter NUM (pre-loop)
     ("/pfblockerng/pfblockerng_ip.php", "enable_dup", None),  # pfb_filter ON_OFF
     ("/pfblockerng/pfblockerng_ip.php", "asn_token", None),  # pfb_filter WORD
+    # issue #1777: ip.php's own ingress guard, on the two ADR-40 fields whose
+    # sinks sit below the #1723 sanitize loops -- array_key_exists() (a fatal
+    # TypeError on an array) and a (string) cast.
+    ("/pfblockerng/pfblockerng_ip.php", "pfb_alias_delta_mode", None),
+    ("/pfblockerng/pfblockerng_ip.php", "pfb_alias_delta_batch", None),
     ("/pfblockerng/pfblockerng_general.php", "enable_cb", None),  # pfb_filter ON_OFF
     ("/pfblockerng/pfblockerng_general.php", "pfb_log_trim_margin_pct", None),  # is_array/ctype_digit
     # issue #1106: category_edit's own ingress guard (bypasses pfb_filter entirely).
