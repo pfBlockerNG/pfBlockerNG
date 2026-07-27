@@ -33,14 +33,19 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 	private string $rulesPath;
 
 	/**
-	 * issue #1666: setUp() below overrides $pfb['dbdir']/['logdir']/['log']/
-	 * ['errlog'] to point inside $this->tmp, and tearDown() deletes $this->tmp --
-	 * without a restore, every LATER test class inherits $pfb['log'] etc. pointing
-	 * at an already-deleted directory (mirrors the DnsblVipInterfaceValidationTest
-	 * save/restore idiom used elsewhere in this suite).
+	 * issue #1666: setUp() below overrides every $pfb['pfctl']/['aliasdir']/
+	 * ['dbdir']/['permitdir']/['ip_unlock']/['supptxt']/['supptxt_v6']/
+	 * ['ipconfig']/['logdir']/['log']/['errlog'] key (11 total) to point inside
+	 * $this->tmp, and tearDown() deletes $this->tmp -- without a restore, every
+	 * LATER test class inherits those keys pointing at an already-deleted
+	 * directory (mirrors the DnsblVipInterfaceValidationTest save/restore idiom
+	 * used elsewhere in this suite). $GLOBALS['config'] is likewise replaced and
+	 * must be restored (mirrors CollectLocalIpAliasTest's hadConfig/savedConfig).
 	 */
 	private array $savedPfb = [];
 	private array $hadPfb   = [];
+	private bool $hadConfig   = false;
+	private mixed $savedConfig = null;
 
 	public static function setUpBeforeClass(): void
 	{
@@ -109,13 +114,16 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 		putenv("PFB_TEST_RULES={$this->rulesPath}");
 		$this->shim = $this->writeShim();
 
-		// issue #1666: save the four $pfb path keys this test overrides below,
-		// before overriding them, so tearDown() can restore them once $this->tmp
-		// (which they all point inside) is deleted.
-		foreach (['dbdir', 'logdir', 'log', 'errlog'] as $k) {
+		// issue #1666: save every $pfb key this test overrides below, before
+		// overriding them, so tearDown() can restore them once $this->tmp (which
+		// most of them point inside) is deleted.
+		foreach (['pfctl', 'aliasdir', 'dbdir', 'permitdir', 'ip_unlock', 'supptxt',
+			  'supptxt_v6', 'ipconfig', 'logdir', 'log', 'errlog'] as $k) {
 			$this->hadPfb[$k]   = array_key_exists($k, $GLOBALS['pfb'] ?? []);
 			$this->savedPfb[$k] = $GLOBALS['pfb'][$k] ?? NULL;
 		}
+		$this->hadConfig   = array_key_exists('config', $GLOBALS);
+		$this->savedConfig = $GLOBALS['config'] ?? NULL;
 
 		$pfb['pfctl']     = $this->shim;
 		$pfb['aliasdir']  = "{$this->tmp}/alias";
@@ -145,11 +153,11 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 		putenv('PFB_TEST_RULES');
 		putenv('PFB_TEST_SHOW_ENTRY');
 		rmdir_recursive($this->tmp);
-		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['config']);
+		unset($GLOBALS['pfb_test_write_config_calls']);
 
-		// issue #1666: restore the four $pfb path keys -- otherwise every later
-		// test class inherits $pfb['log'] etc. pointing at the tree just deleted
-		// above.
+		// issue #1666: restore every $pfb key overridden in setUp() -- otherwise
+		// every later test class inherits $pfb['log'] etc. pointing at the tree
+		// just deleted above.
 		foreach ($this->savedPfb as $k => $value) {
 			if ($this->hadPfb[$k]) {
 				$GLOBALS['pfb'][$k] = $value;
@@ -159,6 +167,13 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 		}
 		$this->savedPfb = [];
 		$this->hadPfb   = [];
+
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->savedConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
+		$this->savedConfig = null;
 	}
 
 	/** Same shim shape as AlertsLivePunchApplyTest::writeShim(). */

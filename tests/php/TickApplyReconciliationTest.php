@@ -539,11 +539,38 @@ final class TickApplyReconciliationTest extends TestCase
 	 * setUp() ledger seeding makes this FAIL -- the absent 'dcc' entry reads
 	 * as due (pfb_due_ledger_is_due_from_entry(): NULL -> due now) and the
 	 * tick dispatches it through the recorder, populating the calls log.
+	 *
+	 * The calls log alone is race-blind: a fired dispatch backgrounds the
+	 * recorder exec (`&`), so its write can land AFTER this assertion runs,
+	 * letting a real dispatch pass undetected. The deterministic check is the
+	 * ledger entry itself -- each dispatch branch (cron/dcc/bl) synchronously
+	 * calls pfb_due_ledger_mark_ran*() BEFORE pfblockerng_tick() returns, so a
+	 * fired dispatch rewrites its own entry (last_run/next_due) before control
+	 * comes back here. Snapshot every entry before the tick and assert each is
+	 * byte-identical after.
 	 */
 	public function testTickDispatchesNothingWhenNoJobIsDue(): void
 	{
+		$before = [];
+		foreach (['cron', 'dcc', 'bl'] as $jobKey) {
+			$before[$jobKey] = pfb_due_ledger_read_entry($jobKey, $this->dir);
+		}
+
 		$this->tick();
 
+		foreach (['cron', 'dcc', 'bl'] as $jobKey) {
+			$this->assertSame($before[$jobKey], pfb_due_ledger_read_entry($jobKey, $this->dir),
+				"expected the '{$jobKey}' due-ledger entry to stay unchanged across a tick with every "
+				. 'ledger entry future-dated -- a rewritten entry means its dispatch branch fired '
+				. '(pfb_due_ledger_mark_ran*() runs synchronously before a fired branch returns) '
+				. "(issue #1666)");
+		}
+
+		// Best-effort secondary check: the recorder's write is backgrounded, so
+		// an absent calls log does NOT by itself prove nothing dispatched (the
+		// write can land after this assertion runs) -- the ledger asserts above
+		// are the deterministic proof. This only catches the case where a
+		// dispatch fired AND its write already landed.
 		$this->assertFileDoesNotExist($this->phpCallsLog(),
 			'expected no cron/dcc/bl dispatch branch to fire on a tick with every '
 			. 'ledger entry future-dated -- a populated calls log means this suite '

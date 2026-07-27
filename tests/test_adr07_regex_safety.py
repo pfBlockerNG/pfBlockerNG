@@ -304,13 +304,39 @@ _PROBE_SINGLE_TAG_RE = re.compile(r'r"((?:[^"\\]|\\.)*)"\s*\)?,?\s*#\s*(_REGEX_\
 _PROBE_COMBINED_TAG_RE = re.compile(r"#\s*(_REGEX_\w+)\s*\+\s*(_REGEX_\w+) mirror \(pfb_unbound\.py\)")
 
 
+def _runtime_admission_regex_names() -> set[str]:
+    """Issue #1711 completeness pin: the set of module-level `_REGEX_*` compiled
+    patterns actually used as admission checks inside `_regex_is_catastrophic_shape`
+    -- the shape patterns invoked via `.search(` plus the budget patterns invoked via
+    `.findall(` in that same function's complexity-budget backstop.
+
+    Extracted from the FUNCTION BODY TEXT (anchored on the `def` line, not a
+    hardcoded name list and not a line-number offset) so this stays robust to
+    unrelated edits elsewhere in the file: a NEW `_REGEX_*` pattern wired into the
+    guard via `.search(`/`.findall(` is picked up automatically, and the parity
+    test below then requires the probe to tag-mirror it too -- a 7th runtime shape
+    added without a matching probe tag makes this set diverge from the probe's
+    tagged literals and fails loudly instead of the previous hardcoded six staying
+    silently in sync with nothing."""
+    unbound_path = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/pfb_unbound.py"
+    source = unbound_path.read_text()
+    start = source.index("def _regex_is_catastrophic_shape")
+    next_def = re.search(r"\ndef ", source[start + 1 :])
+    body = source[start : start + 1 + next_def.start()] if next_def else source[start:]
+    names = set(re.findall(r"(_REGEX_\w+)\.(?:search|findall)\(", body))
+    assert names, "expected at least one _REGEX_*.search(/.findall( admission check in _regex_is_catastrophic_shape"
+    return names
+
+
 def test_probe_regex_literals_match_runtime_shape_and_budget_patterns() -> None:
     """Issue #1711: every regex LITERAL the save-time probe duplicates from the
     resolver's shape gate + complexity budget is tagged '<name> mirror (pfb_unbound.py)'
     in the probe source. Extract each tagged literal and assert it is byte-identical to
-    the runtime pattern of the same name -- and that the tagged set is EXACTLY the six
-    mirrored names, so a renamed/added/removed runtime pattern that forgets to update the
-    probe tag fails loudly instead of silently drifting."""
+    the runtime pattern of the same name -- and that the tagged set is EXACTLY the set
+    of `_REGEX_*` patterns `_regex_is_catastrophic_shape` actually consults (extracted
+    from source, not hardcoded -- see `_runtime_admission_regex_names()`), so a
+    renamed/added/removed runtime pattern that forgets to update the probe tag fails
+    loudly instead of silently drifting."""
     probe = _probe_source()
 
     literals: dict[str, str] = {}
@@ -327,14 +353,7 @@ def test_probe_regex_literals_match_runtime_shape_and_budget_patterns() -> None:
     literals[combined.group(1)] = raw_literals[0]
     literals[combined.group(2)] = raw_literals[1]
 
-    expected_names = {
-        "_REGEX_NESTED_QUANTIFIER",
-        "_REGEX_ALTERNATION_OVERLAP",
-        "_REGEX_ADJACENT_GROUP_QUANTIFIER",
-        "_REGEX_STACKED_BOUNDED_REPEAT",
-        "_REGEX_UNBOUNDED_QUANTIFIER",
-        "_REGEX_ALTERNATION",
-    }
+    expected_names = _runtime_admission_regex_names()
     assert set(literals) == expected_names, (
         f"probe mirror tags drifted: extracted={sorted(literals)} expected={sorted(expected_names)}"
     )

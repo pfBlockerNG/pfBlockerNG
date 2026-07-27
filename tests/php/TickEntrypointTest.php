@@ -202,6 +202,18 @@ final class TickEntrypointTest extends TestCase
 	 * this is the only lever available to keep that dispatch from forking a REAL
 	 * "pfblockerng.php cron" background process. Mirrors
 	 * TickFeedPassDeferralTest::installPhpArgvRecorder().
+	 *
+	 * Unavoidable residual race: pfblockerng_tick() execs the stub as
+	 * "{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php cron ... &" --
+	 * production builds that argv, so the stub's own `ps -wax` command line
+	 * still CONTAINS the literal substring "pfblockerng.php cron" for the
+	 * stub's brief (sub-ms to low-ms) lifetime. pfb_update_pass_running()'s
+	 * precondition assert below scans the real process table and cannot
+	 * distinguish this from a genuine dispatch, so a phpunit run of THIS suite
+	 * happening concurrently with another checkout's run through this same
+	 * dispatch path could cross-trip that precondition. Not fixable from the
+	 * test side without faking argv; accepted because suites are never run
+	 * concurrently against one checkout (see .agents/policy/testing.md).
 	 */
 	private function installPhpArgvRecorder(): string
 	{
@@ -415,6 +427,8 @@ final class TickEntrypointTest extends TestCase
 		// test's own tick() wrongly skip pfb_log_mgmt() below, exactly reproducing
 		// the flake. Assert the process table is clean BEFORE the tick so a leak
 		// fails loudly here instead of silently failing the trim assertion after.
+		// NOTE: this scan can also cross-trip on the recorder stub's own brief
+		// command line -- see installPhpArgvRecorder()'s docblock.
 		$this->assertFalse(pfb_update_pass_running(),
 			'a pfblockerng.php worker process leaked from an earlier test -- see issue #1666');
 
