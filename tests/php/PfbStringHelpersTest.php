@@ -117,4 +117,14 @@ final class PfbStringHelpersTest extends TestCase
 	{
 		$this->assertSame('0', pfb_strip(" 0\u{00A0}"));
 	}
+
+	public function testInvalidUtf8DegradesFailOpen(): void
+	{
+		// A truncated multibyte sequence makes the /u preg pass return NULL;
+		// the strips must degrade to the ASCII-trimmed bytes, never to NULL
+		// or wiped data (same fail-open contract as pfb_preg_replace_safe).
+		$this->assertSame("abc\xC2", pfb_rstrip("abc\xC2"));
+		$this->assertSame("abc\xC2", pfb_lstrip("abc\xC2"));
+		$this->assertSame("abc\xC2", pfb_strip("abc\xC2"));
+	}
 }
