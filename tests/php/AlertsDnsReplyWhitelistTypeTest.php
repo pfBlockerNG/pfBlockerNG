@@ -20,11 +20,19 @@ use PHPUnit\Framework\TestCase;
  *   - key 5 (DNSBL Mode, gates the != 'DNSBL_TLD' branch split) has no reply-
  *     log analogue; '' preserves the CURRENT (pre-fix, implicit-NULL) branch
  *     selection byte-for-byte, since NULL != 'DNSBL_TLD' is also true.
- *   - key 7 (Evaluated Domain, folded into the exclusion-icon id and the
- *     wildcard-whitelist walk) has no separate "evaluated" form for a reply
- *     row -- reused as $fields[6] (the replied domain), the SAME value
- *     already used for key 2 and the $qdomain argument, so all three referring
- *     to "the domain this row is about" agree instead of drifting.
+ *   - key 7 (Evaluated Domain): ''. A prior revision of this fix set key 7 to
+ *     $fields[6] (the replied domain), reasoning only about the
+ *     exclusion-icon id -- it missed that dnsbl_whitelist_type() ALSO feeds
+ *     key 7 into the dot-prefixed wildcard-whitelist walk
+ *     (dnsbl_whitelist_type() ~:2056, `ltrim($fields[7], '.')`). A real
+ *     domain there enters that walk and can flip $isWhitelist_found to TRUE
+ *     for any dot-prefixed whitelist entry that is an ancestor domain --
+ *     silently reclassifying an unrelated reply row as already-whitelisted
+ *     (issue #1777 review, BLOCKING; see
+ *     testConvertDnsReplyLogKeepsPreFixClassificationForDotPrefixedWhitelistEntry
+ *     below). '' is chosen because ltrim(NULL, '.') === ltrim('', '.') ===
+ *     '', so it reproduces the pre-fix NULL read exactly and never enters
+ *     the walk.
  *   - key 8 (Feed Name) is read only inside the `$fields[6] != 'Unknown'`
  *     branch (dnsbl_whitelist_type :2023), which the caller's own hardcoded
  *     `'6' => 'Unknown'` provably never enters -- no reply-log analogue
@@ -144,6 +152,54 @@ final class AlertsDnsReplyWhitelistTypeTest extends TestCase
 			$undefined,
 			"convert_dns_reply_log() -> dnsbl_whitelist_type() must emit zero 'Undefined array key' diagnostics, got:\n"
 			. implode("\n", $undefined)
+		);
+	}
+
+	/**
+	 * issue #1777 review (BLOCKING): a dot-prefixed DNSBL whitelist entry
+	 * ("[.]example.com") must NOT silently reclassify an unrelated DNS-reply
+	 * row for a descendant domain ("ads.example.com") as already-whitelisted.
+	 * Before this fix, $dns_fields['7'] was $fields[6] (the replied domain),
+	 * which entered dnsbl_whitelist_type()'s dot-prefixed wildcard-whitelist
+	 * walk (~:2054-2090) and matched "example.com" as an ancestor of
+	 * "ads.example.com", flipping $isWhitelist_found to TRUE and rendering
+	 * the "delete_domainwildcard" trash icon instead of the pre-fix
+	 * "add to DNSBL" icon (dnsbl_add).
+	 */
+	public function testConvertDnsReplyLogKeepsPreFixClassificationForDotPrefixedWhitelistEntry(): void
+	{
+		$GLOBALS['clists']['dnsblwhitelist']['data'] = ['.example.com' => 'entry'];
+
+		$fields = $this->replyFields('ads.example.com', '10.0.0.9');
+
+		$output = '';
+		$diagnostics = $this->runCapturing(function () use ($fields, &$output): void {
+			ob_start();
+			convert_dns_reply_log('Reports', $fields);
+			$output = ob_get_clean();
+		});
+
+		$undefined = array_values(array_filter(
+			$diagnostics,
+			static fn(string $d): bool => str_contains($d, 'Undefined array key')
+		));
+		$this->assertSame(
+			[],
+			$undefined,
+			"convert_dns_reply_log() -> dnsbl_whitelist_type() must emit zero 'Undefined array key' diagnostics, got:\n"
+			. implode("\n", $undefined)
+		);
+
+		$this->assertStringNotContainsString(
+			'delete_domainwildcard',
+			$output,
+			'a dot-prefixed DNSBL whitelist entry for "example.com" must not silently classify an unrelated '
+			. 'DNS-reply row for "ads.example.com" as already-whitelisted (isWhitelist_found must stay FALSE)'
+		);
+		$this->assertStringContainsString(
+			'dnsbl_add',
+			$output,
+			'the pre-fix classification renders the "Add Domain to DNSBL" icon, not the wildcard-whitelist delete icon'
 		);
 	}
 }
