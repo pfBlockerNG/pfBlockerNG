@@ -1789,6 +1789,7 @@ $tld_list['gTLD'] = array(
 'watch' => 'WATCH',
 'watches' => 'WATCHES',
 'weather' => 'WEATHER',
+'web' => 'WEB',
 'webcam' => 'WEBCAM',
 'website' => 'WEBSITE',
 'wed' => 'WED',
