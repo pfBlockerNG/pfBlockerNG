@@ -466,8 +466,9 @@ jobs:
   # Checks out the SAME ref as build-pkgs-portable so that `created` (epoch of the
   # tagged commit) and `commit` (the tagged SHA) are stamped from the right tree.
   # AMENDMENT 2: must NOT compute these in read-matrix (different checkout ref) or
-  # inline in build-pkgs-portable (the loop already calls build-leg.sh, can't also
-  # run git commands in a clean way per-entry). One job, one checkout, two outputs.
+  # inline in build-pkgs-portable (its matrix legs share ONE checkout per job via
+  # strategy.matrix, each running build-leg.sh once -- there's no loop to hang a
+  # git command off of). One job, one checkout, two outputs.
   resolve-stamp:
     name: Resolve build stamp (created + commit)
     runs-on: ubuntu-latest
@@ -879,9 +880,13 @@ jobs:
         id: leg
         # Variant slug == the pkg repo's catalog dir name (build-repo-portable.py
         # catalog_name_from_version): "<variant_lc>-<major.minor>", e.g. ce-2.8 /
-        # plus-26.03. The Release encodes it in the per-leg ARTIFACT NAME (issue
-        # #1662 exact-artifact contract) and the .pkg FILENAME; the pkg repo
-        # encodes the same identity as the FOLDER release/<varslug>/<arch>/.
+        # plus-26.03. VARSLUG (major.minor-truncated) drives the .pkg FILENAME and
+        # the catalog path; it stays untouched. ARTSLUG (issue #1662 M1) is the
+        # SAME lower(variant) but keyed on the FULL pfsense_version (no cut) and
+        # is used ONLY for the per-leg ARTIFACT NAME below -- both consumer sides
+        # (ui-tests.yml/smoke.yml) format their download name from the full
+        # matrix.pfsense_version, so a future 3-component version (e.g. 2.8.1)
+        # would otherwise truncate on the producer side only and 404 the download.
         env:
           VARIANT: ${{ matrix.variant }}
           CHANNEL_FALLBACK: ${{ matrix.channel }}
@@ -892,7 +897,9 @@ jobs:
           set -eu
           V="${VARIANT:-${CHANNEL_FALLBACK:-CE}}"
           MM=$(printf '%s' "$PFV" | cut -d. -f1-2)
-          VARSLUG="$(printf '%s' "$V" | tr '[:upper:]' '[:lower:]')-${MM}"
+          V_LC="$(printf '%s' "$V" | tr '[:upper:]' '[:lower:]')"
+          VARSLUG="${V_LC}-${MM}"
+          ARTSLUG="${V_LC}-${PFV}"
           ABI="FreeBSD:${MAJOR}:${ARCH}"
           # AMENDMENT 7: slug this leg from VARSLUG + major + arch so it lands in
           # a distinct RUN_ID-keyed out dir. Colons in ABI are path-unsafe; the
@@ -900,6 +907,7 @@ jobs:
           LEG="${VARSLUG}-${MAJOR}-${ARCH}"
           {
             echo "varslug=${VARSLUG}"
+            echo "artslug=${ARTSLUG}"
             echo "abi=${ABI}"
             echo "leg=${LEG}"
           } >> "$GITHUB_OUTPUT"
@@ -957,12 +965,16 @@ jobs:
         # Name MUST equal pfBlockerNG-relpkg-<variant_lc>-<pfsense_version>-<arch>
         # -- the EXACT name ui-tests.yml's/smoke.yml's pkg_artifact_prefix download
         # step composes when pkg_artifact_prefix: pfBlockerNG-relpkg is set (see
-        # ui-suite/smoke-suite below). Upload only on success: fail-fast: false
-        # already isolates a failed leg, so it simply uploads nothing and
-        # attach-pkgs/the publish healthcheck fail closed on the missing asset.
+        # ui-suite/smoke-suite below). Uses ARTSLUG (full pfsense_version, issue
+        # #1662 M1), NOT VARSLUG (major.minor-truncated) -- the consumer sides
+        # format the full matrix.pfsense_version into the name, so this must match
+        # byte-for-byte even once a 3-component version ships. Upload only on
+        # success: fail-fast: false already isolates a failed leg, so it simply
+        # uploads nothing and attach-pkgs/the publish healthcheck fail closed on
+        # the missing asset.
         uses: actions/upload-artifact@v7
         with:
-          name: pfBlockerNG-relpkg-${{ steps.leg.outputs.varslug }}-${{ matrix.arch }}
+          name: pfBlockerNG-relpkg-${{ steps.leg.outputs.artslug }}-${{ matrix.arch }}
           path: ${{ env.PKG_PATH }}
           if-no-files-found: error
           retention-days: 7
@@ -972,14 +984,15 @@ jobs:
   # skip missing downloads), renames each to embed the FreeBSD major for
   # unambiguity, and appends them to the already-published GitHub Release.
   #
-  # DEPENDENCY EDGES — WHY sync-ports-fork IS INTACT:
-  #   sync-ports-fork needs: [prepare-release, release]        ← never needs build-pkgs
-  #   attach-pkgs needs: [prepare-release, release, build-pkgs] ← waits for both, if: always()
+  # DEPENDENCY EDGES: sync-ports-fork needs [prepare-release, release, publish-release]
+  # and gates on publish-release succeeding (see build-pkgs-portable's header comment
+  # above, "A leg's build failure...", for the full transitive chain from a
+  # build-pkgs-portable leg failure through to sync-ports-fork skipping). attach-pkgs
+  # here needs [prepare-release, release, build-pkgs-portable, read-matrix] with
+  # if: always(), so it runs regardless of a build-pkgs-portable failure.
   #
-  # A build-pkgs failure makes attach-pkgs skip that leg's artifact but
-  # attach the rest (or skip entirely if release also failed). sync-ports-fork is
-  # completely unblocked by any build outcome — it runs as soon as `release`
-  # succeeds, in parallel with attach-pkgs.
+  # A build-pkgs-portable failure makes attach-pkgs skip that leg's artifact but
+  # attach the rest (or skip entirely if release also failed).
   attach-pkgs:
     name: Attach .pkg artifacts to Release
     runs-on: ubuntu-latest
@@ -1028,9 +1041,10 @@ jobs:
             exit 0
           fi
 
-          # Recurse: the portable builder uploads under out/major-<N>/, so the
-          # artifact downloads to pkgs/out/major-<N>/*.pkg (nested) — a flat
-          # pkgs/*.pkg glob would match nothing. Mirror the find above.
+          # Recurse: each build-pkgs-portable leg uploads its own single-file
+          # artifact, and merge-multiple downloads them all flat under pkgs/ --
+          # a non-recursive pkgs/*.pkg glob would already find them, but find
+          # -type f is used here (and above) to stay robust either way.
           find pkgs -type f -name "*.pkg" -print0 | while IFS= read -r -d '' f; do
             echo "Uploading: $(basename "$f")"
             gh release upload "$TAG" "$f" --clobber
@@ -1087,6 +1101,7 @@ jobs:
 
           FAIL=0
           [ "$SRC_COUNT" -ge 1 ] || { echo "::error::no source archive (.tar.gz) attached to the draft"; FAIL=1; }
+          [ "$EXPECTED_PKGS" -ge 1 ] || { echo "::error::build matrix is empty"; FAIL=1; }
           [ "$PKG_COUNT" -eq "$EXPECTED_PKGS" ] || { echo "::error::expected ${EXPECTED_PKGS} .pkg assets, found ${PKG_COUNT} — not publishing an incomplete release"; FAIL=1; }
           printf '%s' "$META" | jq -e '(.name // "") != "" and ((.body // "") | length) > 0' >/dev/null \
             || { echo "::error::release name or body is empty"; FAIL=1; }
