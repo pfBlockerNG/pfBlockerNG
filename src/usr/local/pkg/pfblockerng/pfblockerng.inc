@@ -1115,6 +1115,164 @@ function pfb_ensure_trailing_newline(string $path): bool {
 	return $written !== FALSE && $written === 1;
 }
 
+
+/**
+ * issue #1797: on-demand text normalization of a downloaded feed baseline.
+ * {base}.orig -> {base}.norm, regenerated ONLY when {base}.norm is missing or
+ * the recorded source digest ({base}.norm.src.xxhash128, the xxh128 of the
+ * .orig the .norm was built FROM) no longer matches the current .orig -- so
+ * custom-list re-synthesis, reload-without-refetch, user pre-script mutation
+ * and a first upgrade (populated orig dir, zero .norm) all converge without a
+ * download-time hook having to see them. Written tmp + atomic rename in the
+ * same directory; the #1263 trailing-newline guarantee is re-applied (the sed
+ * pass never adds one). The wire-byte ADR-42 sidecar ({base}.orig.xxhash128)
+ * is a DIFFERENT, untouched artifact.
+ *
+ * Returns array{path:string, changed:bool, normalized:bool}:
+ *   path       -- file the caller should parse: .norm, or .orig on any failure
+ *                 (fallback: a feed must degrade to raw parsing, never to empty).
+ *   changed    -- FALSE only when the normalized CONTENT is proven unchanged
+ *                 against a recorded baseline (fresh sidecar match, or a
+ *                 regeneration that produced byte-identical .norm). A missing/
+ *                 corrupt baseline reports TRUE (fail-safe, ADR-42 semantics;
+ *                 the Force clear-hashes sweep relies on this to defeat the
+ *                 downstream-skip gate).
+ *   normalized -- TRUE iff path points at a usable .norm.
+ *
+ * @return array{path:string, changed:bool, normalized:bool}
+ */
+function pfb_feed_normalize(string $orig_path, ?string $interpreter = NULL): array {
+	$fallback = array('path' => $orig_path, 'changed' => TRUE, 'normalized' => FALSE);
+	if (!str_ends_with($orig_path, '.orig') || !file_exists($orig_path)) {
+		return $fallback;
+	}
+	$base      = substr($orig_path, 0, -strlen('.orig'));
+	$norm_path = "{$base}.norm";
+	$src_base  = "{$base}.norm.src";
+
+	// Hash the source BEFORE generating: a mid-run .orig replacement then reads
+	// as stale next pass and re-normalizes (fail-safe), never as falsely fresh.
+	$src_digest = pfb_content_hash($orig_path, TRUE);
+	if ($src_digest === FALSE) {
+		return $fallback;
+	}
+
+	$sidecar = pfb_hash_read($src_base);
+	if ($sidecar['algo'] === 'xxh128' && $sidecar['digest'] === $src_digest && file_exists($norm_path)) {
+		return array('path' => $norm_path, 'changed' => FALSE, 'normalized' => TRUE);
+	}
+
+	$prev_digest  = file_exists($norm_path) ? pfb_content_hash($norm_path, TRUE) : FALSE;
+	$had_baseline = ($sidecar['algo'] === 'xxh128' && $prev_digest !== FALSE);
+
+	// Exclusive-create the tmp IN the target directory: tempnam() silently
+	// falls back to the system tmp dir when the target is unwritable, and a
+	// cross-filesystem rename() is not atomic (or fails outright).
+	$tmp = dirname($norm_path) . '/.pfbnorm_' . getmypid() . '_' . bin2hex(random_bytes(4));
+	$th  = @fopen($tmp, 'x');
+	if ($th === FALSE) {
+		return $fallback;
+	}
+	fclose($th);
+
+	if (!pfb_feed_normalize_generate($orig_path, $tmp, $interpreter)) {
+		@unlink($tmp);
+		pfb_logger("\n[ pfb_feed_normalize ] normalization failed for {$orig_path} -- parsing the raw .orig\n", 2);
+		return $fallback;
+	}
+	pfb_ensure_trailing_newline($tmp);
+
+	$new_digest = pfb_content_hash($tmp, TRUE);
+	if ($new_digest === FALSE || !@rename($tmp, $norm_path)) {
+		@unlink($tmp);
+		return $fallback;
+	}
+	@file_put_contents("{$src_base}.xxhash128", $src_digest, LOCK_EX);
+
+	return array(
+		'path'       => $norm_path,
+		'changed'    => !($had_baseline && $new_digest === $prev_digest),
+		'normalized' => TRUE,
+	);
+}
+
+
+// issue #1797: the normalize pipeline body -- $src (.orig bytes) -> $dst (UTF-8,
+// control-stripped, per-line right-trimmed). Ordering is load-bearing:
+//   (b) whole-file iconv validity gate first -- a server-declared charset is
+//       NOT trusted over provable UTF-8 validity (a wrong ISO-8859-1 label on
+//       a UTF-8 body would double-encode it), and iconv -c can never be the
+//       converter (it DELETES undecodable bytes silently, no signal);
+//   (c) only an invalid file reaches the Python detector/converter
+//       (charset_normalizer whole-file detection + errors='replace' decode,
+//       U+FFFD replacements counted and logged as the wrong-guess signal);
+//       if conversion is unavailable the raw bytes fall through to (d) --
+//       sed passes invalid sequences through untouched while still stripping
+//       controls, graceful degradation rather than an empty feed;
+//   (d) one C.UTF-8 sed pass strips every non-printable except tab (Cc, Cf
+//       incl. BOM/ZWJ, C1, NUL, mid-line CR) and right-trims [[:space:]] runs
+//       per line -- interior tabs (hosts/TSV) and interior NBSP survive as
+//       data. Membership probed on CE 2.8 (FreeBSD 15) and Plus (FreeBSD 16).
+function pfb_feed_normalize_generate(string $src, string $dst, ?string $interpreter = NULL): bool {
+	$src_esc = escapeshellarg($src);
+	$dst_esc = escapeshellarg($dst);
+
+	$ret = 1;
+	exec("/usr/bin/iconv -f UTF-8 -t UTF-8 < {$src_esc} > /dev/null 2>&1", $unused_out, $ret);
+
+	$strip_src = $src;
+	$conv_tmp  = '';
+	if ($ret !== 0) {
+		$conv_tmp = "{$dst}.conv";
+		if (pfb_feed_convert_encoding($src, $conv_tmp, $interpreter)) {
+			$strip_src = $conv_tmp;
+		} else {
+			pfb_logger("\n[ pfb_feed_normalize ] encoding conversion unavailable for {$src} -- stripping raw bytes\n", 2);
+		}
+	}
+
+	$sed_expr = "s/[^[:print:]\t]+|[[:space:]]+\$//g";
+	$ret2 = 1;
+	exec('LC_ALL=C.UTF-8 /usr/bin/sed -E ' . escapeshellarg($sed_expr) . ' < ' .
+		escapeshellarg($strip_src) . " > {$dst_esc} 2>/dev/null", $unused_out2, $ret2);
+	if ($conv_tmp !== '') {
+		@unlink($conv_tmp);
+	}
+	return $ret2 === 0 && file_exists($dst);
+}
+
+
+// issue #1797: detect + convert a non-UTF-8 feed file to UTF-8 via
+// pfb_feed_normalize.py (charset_normalizer, a RUN_DEPENDS). The interpreter
+// comes ONLY from pfb_python_interpreter() on the appliance ($interpreter is
+// a test seam). U+FFFD replacements reported by the script are logged: a high
+// count means the detection was probably wrong, and silence here would be
+// silent data corruption.
+function pfb_feed_convert_encoding(string $src, string $dst, ?string $interpreter = NULL): bool {
+	$py = $interpreter ?? pfb_python_interpreter();
+	if ($py === '') {
+		return FALSE;
+	}
+	$script = __DIR__ . '/pfb_feed_normalize.py';
+	$out = array();
+	$ret = 1;
+	exec(escapeshellarg($py) . ' ' . escapeshellarg($script) . ' ' .
+		escapeshellarg($src) . ' ' . escapeshellarg($dst) . ' 2>&1', $out, $ret);
+	if ($ret !== 0 || !file_exists($dst)) {
+		pfb_logger("\n[ pfb_feed_normalize ] encoding detection failed for {$src}: " . implode(' | ', $out) . "\n", 2);
+		return FALSE;
+	}
+	$fields   = explode(' ', trim((string) end($out)));
+	$encoding = $fields[0] ?? '?';
+	$replaced = (int) ($fields[1] ?? 0);
+	pfb_logger("\n[ pfb_feed_normalize ] converted {$src} from '{$encoding}' to UTF-8\n", 1);
+	if ($replaced > 0) {
+		pfb_logger("[ pfb_feed_normalize ] {$replaced} undecodable byte sequence(s) replaced with U+FFFD in {$src} -- the detected encoding '{$encoding}' may be wrong\n", 2);
+	}
+	return TRUE;
+}
+
+
 // ADR-49: content-sanity gate for a downloaded text feed's first 64-KiB chunk; pinned by
 // PfbTextSanityTest. Reason order (first hit wins): 'nul_bytes' (any NUL byte) >
 // 'html_error_page' (opens as HTML AND no line is blocklist-shaped: an IPv4/IPv6/CIDR
