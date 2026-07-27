@@ -253,7 +253,10 @@ if (!$alert_summary) {
 
 					$clists[$type]['options'][] = $lname;	// List of all Permit Aliases/DNSBL Customlists
 
-					$decoded = pfb_text_area_decode($data['custom'], TRUE, TRUE);
+					// issue #1782: $idn=TRUE -- matches pfblockerng_apply.inc:1758's decode of
+					// this SAME per-row 'custom' field; a Unicode key here would never match
+					// a $domain derived from a punycode log field.
+					$decoded = pfb_text_area_decode($data['custom'], TRUE, TRUE, TRUE);
 					if (!empty($decoded)) {
 						foreach ($decoded as $line) {
 
@@ -311,7 +314,10 @@ if (!$alert_summary) {
 
 		$clists[$type]['data']		= array();
 		if (isset($clists[$type]['base64']) && !empty($clists[$type]['base64'])) {
-			$decoded = pfb_text_area_decode($clists[$type]['base64'], TRUE, TRUE);
+			// issue #1782: $idn=TRUE -- 'suppression'/'tldexclusion' are decoded with
+			// $idn=TRUE by their runtime consumers (pfblockerng.inc); a Unicode key
+			// here would never match a $domain derived from a punycode log field.
+			$decoded = pfb_text_area_decode($clists[$type]['base64'], TRUE, TRUE, TRUE);
 			if (!empty($decoded)) {
 				foreach ($decoded as $line) {
 
