@@ -2520,6 +2520,24 @@ function pfb_asn_csv_fields(string $blob): string
 }
 
 /**
+ * pfb_csv_field — one CSV field under the same issue-#1369 contract
+ * pfb_asn_csv_fields() writes (fputcsv semantics, explicit empty escape,
+ * CR/LF normalized to spaces): quoted ONLY when the value needs it, so
+ * well-formed values serialize byte-identically to the bare join they
+ * replace. issue #1784: admin-authored descr/hostname values reach the
+ * comma-joined alert $details line unfiltered; quoting at the join is the
+ * single guard (every reader is already fgetcsv-quote-aware).
+ */
+function pfb_csv_field(string $value): string
+{
+	$value = str_replace(["\r\n", "\r", "\n"], ' ', $value);
+	if (strpbrk($value, ",\"") === FALSE) {
+		return $value;
+	}
+	return '"' . str_replace('"', '""', $value) . '"';
+}
+
+/**
  * pfb_ip_log_row_schema_ok — exact field-count schema gate for a raw
  * (pre-timestamp-shift) IP feature-log row as delivered to convert_ip_log().
  * Only the current 23-field feature-row / 24-field Unified-row schema (see

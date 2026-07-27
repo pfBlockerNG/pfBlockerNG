@@ -15713,7 +15713,11 @@ function pfb_daemon_filterlog() {
 					// CR/LF normalized to spaces first) -- see ADR-38 Amendment 3. The raw
 					// $asn blob itself is untouched and still feeds the syslog asn= value
 					// below + the asncache.asn row.
-					$details	= "{$dir},{$geoip},{$pfb_alias},{$pfb_query[1]},{$pfb_query[0]},{$resolved_host},{$hostname}," . pfb_asn_csv_fields($asn);
+					// issue #1784: $resolved_host/$hostname carry admin-authored
+					// descr/hostname text (NAT rules, host aliases, static maps) --
+					// CSV-quote them at the join (pfb_csv_field, the #1369 contract
+					// every reader parses under) so a comma never shifts the row.
+					$details	= "{$dir},{$geoip},{$pfb_alias},{$pfb_query[1]},{$pfb_query[0]}," . pfb_csv_field($resolved_host) . ',' . pfb_csv_field($hostname) . ',' . pfb_asn_csv_fields($asn);
 
 					// Reverse Match text
 					if ($d[6] == 'match') {
