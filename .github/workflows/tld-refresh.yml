@@ -68,9 +68,25 @@ jobs:
       - name: Activate git hooks
         run: sh scripts/setup-hooks.sh
 
-      # The refresh stages a .php file, so pre-commit enters its PHP block: the
-      # fail-closed `composer vendor` gate, then PHPStan and PHPCS out of
-      # vendor/bin (issue #1793). Ungated so every run exercises the install.
+      - name: Fetch the ci-metadata orphan ref
+        # The reader reads origin/ci-metadata; checkout doesn't bring orphan refs.
+        run: git fetch --no-tags --depth=1 origin ci-metadata:refs/remotes/origin/ci-metadata
+
+      - name: Read the supported PHP versions
+        id: matrix
+        uses: ./.github/actions/read-version-matrix
+
+      # The refresh stages a .php file, so pre-commit enters its PHP block: php -l,
+      # PHPStan and PHPCS out of vendor/bin (issue #1793). They run on the OLDEST
+      # supported PHP — the floor a diagnostic has to clear — never the runner default.
+      - name: Set up PHP ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
+          tools: composer
+
+      # Ungated so every run exercises the install: a lock or platform break then
+      # surfaces weekly instead of only on a drift week.
       - name: Install Composer dependencies for the pre-commit PHP gates
         run: composer install --no-interaction --prefer-dist --no-progress
 
