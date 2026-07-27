@@ -347,3 +347,78 @@ parameters:
 			identifier: argument.type
 			count: 1
 			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 47
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 22
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 27
+			path: src/usr/local/www/pfblockerng/pfblockerng.php
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 7
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 5
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_threats.php
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/www/pfblockerng/www/index.php

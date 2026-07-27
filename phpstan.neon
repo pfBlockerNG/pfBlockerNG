@@ -1,6 +1,11 @@
 includes:
     - phpstan-baseline.neon
 
+rules:
+    # Bans empty() on statically-string-typed operands (empty('0') is TRUE —
+    # issue #1787); the honest predicates are pfb_is_empty()/pfb_is_blank().
+    - PfBlockerNG\PHPStan\NoEmptyOnStringRule
+
 parameters:
     paths:
         - src
