@@ -1304,3 +1304,32 @@ if (!function_exists('install_cron_job')) {
 		configure_cron();
 	}
 }
+
+// --- xmlrpc_client.inc double (issue #1778) ---
+//
+// pfblockerng_do_xmlrpc_sync() require_once()s 'xmlrpc_client.inc' (empty shim,
+// tests/php/shims/) and instantiates pfSense's pfsense_xmlrpc_client to dial the
+// sync peer. This double captures setConnectionData()'s arguments into
+// $GLOBALS['pfb_test_xmlrpc_connection'] instead of making a real network call,
+// so XmlrpcSyncIdnTargetTest can call the REAL pfblockerng_sync_on_changes() end
+// to end and assert exactly what reaches the connection -- no eval-extraction of
+// the caller needed. xmlrpc_method() returns a truthy stub response so the
+// caller's isset($resp) success branch runs (pfb_logger " done." vs " Failed!").
+
+if (!class_exists('pfsense_xmlrpc_client')) {
+	class pfsense_xmlrpc_client {
+		public function setConnectionData($ip, $port, $username, $password, $protocol) {
+			$GLOBALS['pfb_test_xmlrpc_connection'] = [
+				'ip'       => $ip,
+				'port'     => $port,
+				'username' => $username,
+				'password' => $password,
+				'protocol' => $protocol,
+			];
+		}
+
+		public function xmlrpc_method($method, $params, $timeout = null) {
+			return ['status' => 'ok'];
+		}
+	}
+}
