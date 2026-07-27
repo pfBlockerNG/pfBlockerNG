@@ -99,18 +99,24 @@ final class PfbSanitizeTextTest extends TestCase
 		// excludes it) -- PCRE's /u modifier refuses to even run \p{C} over a
 		// subject containing raw surrogate-shaped bytes (probed: preg_replace()
 		// returns NULL, not a Cs match), so the \p{C} strip itself never sees
-		// one. The legacy-encoding recovery step upstream reinterprets the raw
-		// bytes \xED\xA0\x80 as ISO-8859-1 (-> U+00ED U+00A0 U+0080) first; the
-		// resulting U+0080 (a *different* char, category Cc) is then stripped
-		// by the same \p{C} pass -- so no Cs codepoint ever reaches the
-		// output, and the byte that came along with it does not survive
-		// either. Probed exact result (issue #1795), not predicted.
-		$this->assertSame("a\xC3\xAD\xC2\xA0b", pfb_sanitize_text("a\xED\xA0\x80b"));
+		// one. The issue #1797 (A6) deterministic scrub upstream substitutes
+		// each of the raw bytes \xED\xA0\x80 with '?' first -- so no Cs
+		// codepoint ever reaches the output, and the bytes that came along
+		// with it do not survive either. Probed exact result (issues
+		// #1795/#1797), not predicted.
+		$this->assertSame('a???b', pfb_sanitize_text("a\xED\xA0\x80b"));
 	}
 
-	public function testSanitizeTextConvertsInvalidUtf8FromIso88591(): void
+	public function testSanitizeTextScrubsInvalidUtf8Deterministically(): void
 	{
-		$this->assertSame('bücher', pfb_sanitize_text("b\xFCcher"));
+		// issue #1797 (A6): no ISO-8859-1 guessing -- mb_detect_encoding() can
+		// never fail (every byte sequence is valid ISO-8859-1), so the old
+		// branch silently produced mojibake. Invalid sequences are substituted
+		// deterministically instead; the output-is-valid-UTF-8 invariant is
+		// what pfb_preg_replace_safe()'s /u patterns depend on.
+		$out = pfb_sanitize_text("b\xFCcher");
+		$this->assertSame('b?cher', $out);
+		$this->assertTrue(mb_check_encoding($out, 'UTF-8'));
 	}
 
 	public function testSanitizeTextRemovesC1ControlChars(): void
@@ -197,6 +203,11 @@ final class PfbSanitizeTextTest extends TestCase
 
 	public function testSanitizeTextAreaConvertsInvalidUtf8FromIso88591(): void
 	{
+		// issue #1797 (A6): the textarea helper KEEPS its legacy-encoding
+		// conversion -- pfb_text_area_decode() feeds it config.xml blobs
+		// written by older versions / restores / XMLRPC sync, and its docblock
+		// promises legacy conversion. Only browser-fed pfb_sanitize_text()
+		// dropped the guessing branch.
 		$this->assertSame('bücher', pfb_sanitize_text_area("b\xFCcher"));
 	}
 

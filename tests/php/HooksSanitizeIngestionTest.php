@@ -140,20 +140,22 @@ final class HooksSanitizeIngestionTest extends TestCase
 		$this->assertSame('30', $result['hooks'][0]['timeout'], 'the sanitized timeout must persist as the plain digit string');
 	}
 
-	// --- description: legacy (ISO-8859-1) byte converts to valid UTF-8 ---
+	// --- description: an invalid UTF-8 byte is scrubbed, not guessed at ---
 
-	public function testDescriptionLegacyEncodingByteConvertsToUtf8(): void
+	public function testDescriptionInvalidUtf8ByteScrubsToValidUtf8(): void
 	{
-		// RED today: "caf\xE9" is invalid UTF-8, so preg_match(...,'/u') on the
-		// RAW value returns FALSE (not 0); the validator's `!== 0` fail-closed
-		// compare treats that as a reject too, so the row never reaches
-		// persist. GREEN: sanitize converts the legacy byte to UTF-8 first, so
-		// the validator sees valid text and passes.
+		// issue #1797 (A6): the sanitizer no longer guesses ISO-8859-1 for a
+		// browser-fed field (UI pages are UTF-8; the old recovery could only
+		// manufacture mojibake). The invalid byte is substituted
+		// deterministically, the value stays valid UTF-8, and the \p{C}
+		// validator passes on the already-clean text -- so the row persists
+		// the scrubbed value instead of being rejected.
 		$result = $this->runSave([
 			'hook_description-0' => "caf\xE9",
 		]);
-		$this->assertSame([], $result['errors'], 'a legacy-encoded description must not be rejected once sanitized to UTF-8');
-		$this->assertSame('café', $result['hooks'][0]['description'], 'an ISO-8859-1 byte must convert to valid UTF-8, not survive as invalid bytes');
+		$this->assertSame([], $result['errors'], 'a scrubbed description must not be rejected');
+		$this->assertSame('caf?', $result['hooks'][0]['description'], 'the invalid byte must be substituted, never guessed into mojibake');
+		$this->assertTrue(mb_check_encoding($result['hooks'][0]['description'], 'UTF-8'));
 	}
 
 	// --- description: an all-Unicode-whitespace value trims to '' ---

@@ -714,15 +714,16 @@ final class CategoryEditPostGuardTest extends TestCase
 		]);
 	}
 
-	public function testUrlInvalidUtf8LegacyConvertedAtIngestion(): void
+	public function testUrlInvalidUtf8ScrubbedToValidUtf8AtIngestion(): void
 	{
-		// issue #1737 contract update: pfb_sanitize_text() legacy-encoding-
-		// converts invalid UTF-8 to valid UTF-8 at ingestion, before the state
-		// loop's /u guard ever runs -- the raw bytes never reach the guard as
-		// invalid UTF-8. Downstream format validators (PFB_FILTER_URL, here)
-		// still run on the converted bytes -- an unrelated "Invalid URL" error
-		// from that check is not this guard's concern (assertGuardAccepts
-		// filters for the character guard's own message only).
+		// issue #1737/#1797 (A6) contract update: pfb_sanitize_text() scrubs
+		// invalid UTF-8 deterministically at ingestion (no ISO-8859-1
+		// guessing), before the state loop's /u guard ever runs -- the raw
+		// bytes never reach the guard as invalid UTF-8. Downstream format
+		// validators (PFB_FILTER_URL, here) still run on the scrubbed bytes --
+		// an unrelated "Invalid URL" error from that check is not this guard's
+		// concern (assertGuardAccepts filters for the character guard's own
+		// message only).
 		$value = "\xFF\xFE";
 		$post = [
 			'aliasname' => 'validname',
@@ -732,7 +733,8 @@ final class CategoryEditPostGuardTest extends TestCase
 			'format-0'  => 'auto',
 		];
 		$this->assertGuardAccepts($post);
-		$this->assertSame("\xC3\xBF\xC3\xBE", $_POST['url-0'], 'invalid UTF-8 must be legacy-converted (ISO-8859-1 -> UTF-8) at ingestion');
+		$this->assertSame('??', $_POST['url-0'], 'invalid UTF-8 must be scrubbed to valid UTF-8 at ingestion, never guessed into mojibake');
+		$this->assertTrue(mb_check_encoding((string) $_POST['url-0'], 'UTF-8'));
 	}
 
 	public function testUrlSaveGuardAcceptsSingleQuoteSubDelim(): void

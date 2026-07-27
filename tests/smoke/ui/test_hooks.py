@@ -368,7 +368,7 @@ def test_reject_invalid_script_leaves_config_unchanged(webui: WebUI, smoke_vm: h
 
 
 def test_control_char_description_is_cleaned_and_saved(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """A \\p{C}-bearing description is sanitized at ingestion and SAVED, not rejected (#756/#1795).
+    """A \\p{C}-bearing description is sanitized at ingestion and SAVED, not rejected (#756/#1795/#1797).
 
     issue #1795 widened ``pfb_sanitize_text()`` (single-line fields, called on
     ``hook_description-N`` before any validation runs) from stripping only
@@ -381,10 +381,10 @@ def test_control_char_description_is_cleaned_and_saved(webui: WebUI, smoke_vm: h
     This is also the FLIP of the old red/green cell for issue #756 (the
     validator's ``!== 0`` compare, which fails closed on a ``FALSE``
     ``preg_match()`` return -- invalid UTF-8 under the ``/u`` modifier -- not
-    just a real match). Probed (issue #1795): after sanitize, the value handed
-    to the validator is ALWAYS well-formed UTF-8 (the legacy-encoding-recovery
-    step converts any invalid input via ISO-8859-1, which is total over the
-    byte range) and the ``\\p{C}+`` strip does not degrade under PCRE's
+    just a real match). Probed (issues #1795/#1797): after sanitize, the value
+    handed to the validator is ALWAYS well-formed UTF-8 (the issue #1797 (A6)
+    deterministic scrub substitutes every invalid byte, total over any byte
+    sequence) and the ``\\p{C}+`` strip does not degrade under PCRE's
     backtrack limit at any realistic size (tested to 10M chars) -- so no
     POSTed input can make ``preg_match()`` return ``FALSE`` here anymore, and
     fuzzing 20,000 random byte strings through the sanitizer found zero
@@ -393,24 +393,22 @@ def test_control_char_description_is_cleaned_and_saved(webui: WebUI, smoke_vm: h
     test asserts it directly and end to end via :func:`_assert_no_p_c_codepoint`
     instead of via a reject, for all three sub-cases below.
 
-    Three sub-cases, all now landing cleaned in config.xml -- NOTE (issue
-    #1795 finding): (a) and (b) already saved clean on the UNWIDENED
-    sanitizer too, since issue #1761 made ingestion-sanitize run before this
-    validator, and neither a real Cc byte nor invalid UTF-8 needs the
-    Cf/Co/Cs/Cn widening to be defused (Cc was always stripped; the
-    legacy-encoding recovery that neutralizes invalid UTF-8 predates #1795
-    and is untouched by it). They are pinned here as REGRESSION guards, not
-    #1795 discriminators. (c) is the actual #1795 red/green cell: a Cf
-    (format) character survives the unwidened sanitizer and trips the
-    validator's reject, RED on old code:
+    Three sub-cases, all now landing cleaned in config.xml -- (a) is a pure
+    regression guard (already saved clean on the unwidened sanitizer, since
+    issue #1761 made ingestion-sanitize run before this validator and Cc was
+    always stripped); (c) is the issue #1795 red/green cell; (b) is the issue
+    #1797 (A6) red/green cell:
       (a) a REAL control character (BEL, ``\\x07``) -- stripped with no
           replacement, so ``"smoke\\x07desc"`` saves as ``"smokedesc"``.
       (b) INVALID UTF-8 -- the two raw bytes ``0xC3 0x28`` (a UTF-8 lead byte
-          followed by a non-continuation byte) -- legacy-encoding-recovered
-          (ISO-8859-1 -> UTF-8) to ``"Ã("``. ``requests`` would re-encode a
-          Python ``str`` as valid UTF-8 (the two bytes above would become
+          followed by a non-continuation byte). THIS is the #1797 (A6)
+          red/green cell: the old recovery guessed ISO-8859-1 (total over any
+          byte sequence) and persisted the mojibake ``Ã(``; the deterministic
+          scrub substitutes the invalid byte and persists ``?(`` -- valid
+          UTF-8 with the data loss made visible. ``requests`` would re-encode
+          a Python ``str`` as valid UTF-8 (the two bytes above would become
           ``%C3%83%28``, itself already valid UTF-8, never exercising the
-          legacy-recovery path) -- so, mirroring
+          scrub) -- so, mirroring
           ``test_remove_to_empty_deletes_node``'s manual-POST escape hatch, the
           request body is built and percent-encoded by hand to put the literal
           invalid bytes on the wire. The rest of the row stays VALID so the
@@ -418,8 +416,8 @@ def test_control_char_description_is_cleaned_and_saved(webui: WebUI, smoke_vm: h
       (c) U+200D ZERO WIDTH JOINER (category Cf) -- NOT stripped by the
           unwidened sanitizer (only \\p{Cc}+BOM), so it reaches the
           validator's ``\\p{C}`` gate intact and trips a real (``1``, not
-          ``FALSE``) reject on old code; issue #1795 strips it at ingestion,
-          so it never reaches the validator on new code. ``"a\\u200Db"``
+          ``FALSE``) reject on pre-#1795 code; issue #1795 strips it at
+          ingestion, so it never reaches the validator. ``"a\\u200Db"``
           saves as ``"ab"``.
     """
     vm = smoke_vm
@@ -441,10 +439,10 @@ def test_control_char_description_is_cleaned_and_saved(webui: WebUI, smoke_vm: h
         assert persisted_a == "smokedesc", f"control char was not cleanly stripped -- got {persisted_a!r}"
         _assert_no_p_c_codepoint(persisted_a)
 
-        # (b) Invalid UTF-8 (0xC3 0x28) -- legacy-recovered to valid UTF-8.
-        # Build the raw percent-encoded body by hand (see docstring) so the
-        # literal invalid bytes reach the wire instead of a re-encoded
-        # valid-UTF-8 substitute.
+        # (b) Invalid UTF-8 (0xC3 0x28) -- deterministically scrubbed to
+        # valid UTF-8 (issue #1797 A6). Build the raw percent-encoded body by
+        # hand (see docstring) so the literal invalid bytes reach the wire
+        # instead of a re-encoded valid-UTF-8 substitute.
         from urllib.parse import quote
 
         from .webui import extract_csrf_token
@@ -472,17 +470,18 @@ def test_control_char_description_is_cleaned_and_saved(webui: WebUI, smoke_vm: h
         )
         assert not looks_like_login_page(resp.text), "invalid-UTF-8 POST returned the login form"
 
-        # AFTER (accept): the node still exists and the description holds the
-        # legacy-recovered, control-byte-free text -- #756's guarantee (no
-        # malformed byte in config.xml) proven directly, not via a reject.
+        # AFTER: the node exists and the persisted value is the DETERMINISTIC
+        # scrub of the invalid byte -- '?(' -- never the ISO-8859-1 mojibake
+        # the old guessing recovery manufactured, and never raw bytes.
+        # #756's guarantee (no malformed byte in config.xml) proven directly.
         assert _hooks_node_exists(vm), "hooks node deleted by an ACCEPTED invalid-UTF-8-description save"
         persisted_b = helpers.config_get(vm, ROW0_DESCRIPTION)
-        assert persisted_b == "Ã(", f"invalid UTF-8 was not legacy-recovered as expected -- got {persisted_b!r}"
+        assert persisted_b == "?(", f"invalid UTF-8 must persist as the deterministic scrub '?(' -- got {persisted_b!r}"
         _assert_no_p_c_codepoint(persisted_b)
 
-        # (c) A Cf (format) character -- the actual issue #1795 discriminator
-        # (see docstring): stripped at ingestion on new code, still reaches
-        # the validator's \p{C} gate unstripped on old code.
+        # (c) A Cf (format) character -- the issue #1795 discriminator
+        # (see docstring): stripped at ingestion, never reaches the
+        # validator's \p{C} gate.
         resp = webui.post(HOOKS_PAGE, {"hook_description-0": "a\u200db"}, timeout=120.0)
         assert not looks_like_login_page(resp.text), "Cf-character POST returned the login form"
         assert _hooks_node_exists(vm), "hooks node deleted by an ACCEPTED Cf-character-description save"
