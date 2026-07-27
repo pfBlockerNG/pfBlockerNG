@@ -1578,8 +1578,16 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			}
 			break;
 		case PFB_FILTER_HOSTNAME:
-			// Validate hostname
-			if (is_hostname($input)) {
+			// Validate hostname. issue #1731: same punycode-candidate approach as
+			// PFB_FILTER_TLD -- a non-ASCII (IDN) hostname converts to its
+			// punycode candidate before is_hostname(); on success the ORIGINAL
+			// input is returned (the read path IDN-converts separately).
+			$candidate = $input;
+			if (preg_match('/[^\x00-\x7F]/', $input)) {
+				$candidate = idn_to_ascii($input);
+				$candidate = empty($candidate) ? FALSE : $candidate;
+			}
+			if (($candidate !== FALSE) && is_hostname($candidate)) {
 				$result = htmlspecialchars($input);
 			}
 			break;

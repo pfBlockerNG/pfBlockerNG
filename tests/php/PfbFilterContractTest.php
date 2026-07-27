@@ -210,6 +210,68 @@ final class PfbFilterContractTest extends TestCase
 		$this->assertSame(".b\xC3\xBCcher.de", pfb_filter(".b\xC3\xBCcher.de", PFB_FILTER_DOMAIN, 'PFBL-01 contract'));
 	}
 
+	// --- PFB_FILTER_HOSTNAME: Unicode/IDN acceptance (issue #1731) ----------------
+	//
+	// dnsbl.php's TLD Exclusion rows are hostname-typed (PFB_FILTER_HOSTNAME) but
+	// used to reject any non-ASCII input outright (bare is_hostname(), no IDN
+	// branch) while the adjacent TLD Blacklist (PFB_FILTER_TLD, issue #1723)
+	// already accepted punycode-convertible Unicode. Same fix, same shape: a
+	// non-ASCII input is converted to its punycode candidate before
+	// is_hostname() runs; on success the ORIGINAL Unicode input is returned
+	// (htmlspecialchars'd) -- the read path IDN-converts separately.
+
+	/** @return array<string, array{0: string}> label => Unicode hostname returned unchanged */
+	public static function hostnameUnicodeAcceptedProvider(): array
+	{
+		return [
+			'IDN hostname (latin)'   => ['bücher.example'],
+			'IDN mixed-label'        => ['münchen.test-host'],
+			// Already-punycode ASCII input: no non-ASCII byte, so the IDN branch
+			// never triggers -- pins the pre-existing (unchanged) accept path.
+			'already-punycode ASCII' => ['xn--bcher-kva.example'],
+			// Plain ASCII hostname -- before-state pin, must stay green both
+			// sides of the fix (no regression on the plain-ASCII path).
+			'plain ASCII hostname'   => ['example-host'],
+		];
+	}
+
+	#[DataProvider('hostnameUnicodeAcceptedProvider')]
+	public function testHostnameFilterAcceptsUnicodeIdnUnchanged(string $hostname): void
+	{
+		$this->assertSame($hostname, pfb_filter($hostname, PFB_FILTER_HOSTNAME, 'PFBL-01 contract'));
+	}
+
+	/** @return array<string, array{0: string}> label => value the HOSTNAME filter must reject */
+	public static function hostnameRejectedProvider(): array
+	{
+		return [
+			// Lone combining mark -- not a legal standalone label; idn_to_ascii()
+			// refuses it (UTS46), so the candidate stays FALSE.
+			'lone combining mark'         => ["\xCC\x81"],
+			// Punycode form of an overlong label exceeds the 63-char label cap
+			// once 'xn--...-' is added -- idn_to_ascii() itself returns FALSE.
+			'IDN label overlong in punycode' => [str_repeat('ü', 60)],
+			// Plain ASCII reject -- before-state pin (unaffected by the IDN branch).
+			'embedded space (ascii)'      => ['exam ple'],
+			// Unicode-whitespace/control: still caught by pfb_filter()'s universal
+			// \p{Cc}+BOM gate before the switch is even reached -- pin.
+			'embedded NUL'                => ["example\0host"],
+		];
+	}
+
+	#[DataProvider('hostnameRejectedProvider')]
+	public function testHostnameFilterRejectsToDefault(string $input): void
+	{
+		$this->assertSame('', pfb_filter($input, PFB_FILTER_HOSTNAME, 'PFBL-01 contract'));
+	}
+
+	public function testHostnameFilterAcceptsEmptyStringUnchanged(): void
+	{
+		// pfb_filter() short-circuits on empty() before the switch is ever
+		// reached for non-ON_OFF/NUM types -- unchanged before/after (pin).
+		$this->assertSame('', pfb_filter('', PFB_FILTER_HOSTNAME, 'PFBL-01 contract', ''));
+	}
+
 	// --- PFB_FILTER_WORD (feed headers + friendly interface names) ---------------
 
 	/** @return array<string, array{0: string}> label => valid \w-only value returned unchanged */
