@@ -755,6 +755,10 @@ function pfBlockerNG_get_header($mode='') {
 				// created) -- $resolver stays empty and every $resolver[0][...]
 				// read below hits an undefined array key. Seed the same shape the
 				// SELECT above produces (row 0, both counters absent/zero).
+				// No off-appliance test: reaching here needs a real SQLite handle
+				// plus the enclosing stats walk, so the regression detector is the
+				// live functional-UI sweep plus the baseline entry this fix retires
+				// (a stale baseline line fails the render oracle by itself).
 				if (!isset($resolver[0])) {
 					$resolver[0] = array('totalqueries' => 0, 'queries' => 0);
 				}
