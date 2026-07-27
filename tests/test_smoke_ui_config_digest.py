@@ -22,11 +22,15 @@ run 28900064099. ``tests.smoke.helpers`` is import-safe off-VM (precedent:
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
 from tests.smoke import helpers
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass
@@ -340,4 +344,30 @@ def test_restore_php_eval_failure_raises_and_skips_apply_filter_sync(
         helpers.restore_pfb_config_baseline(vm, snapshot_path=_SNAPSHOT_PATH)  # type: ignore[arg-type]
     assert apply_filter_sync_calls == [], (
         f"apply_filter_sync must not run after a failed php_eval, got calls={apply_filter_sync_calls!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# ui-tests.yml `ui` job budget (issue #1689: two sampled cancellations at
+# 30m18s/30m19s on the functional/plus-26.03 live-VM leg; identical commit
+# passed on rerun in 20m04s). Pins the budget high enough to cover the
+# observed leg, matching smoke-single.yml's live-VM precedent (45).
+# --------------------------------------------------------------------------- #
+
+
+def test_ui_job_budget_covers_live_vm_leg() -> None:
+    """The `ui` job's ``timeout-minutes`` must be >= 45 -- the live-VM budget
+    smoke-single.yml already uses -- so a slow-but-healthy leg (setup alone ran
+    ~23 of the observed 20m04s pass) isn't cancelled mid-run."""
+    workflow = (_REPO_ROOT / ".github/workflows/ui-tests.yml").read_text(encoding="utf-8")
+    ui_job = workflow.split("\n  ui:\n", 1)[1]
+    match = re.search(r"^\s*timeout-minutes:\s*(\S+)\s*$", ui_job, re.MULTILINE)
+    assert match, f"expected a timeout-minutes key under the `ui` job, found none in:\n{ui_job[:200]}"
+
+    raw = match.group(1)
+    assert re.fullmatch(r"-?\d+", raw), f"expected an int timeout-minutes value, got {raw!r} (YAML wiring bug)"
+    budget = int(raw)
+
+    assert budget >= 45, (
+        f"expected the `ui` job's timeout-minutes >= 45 (smoke-single.yml's live-VM budget), got {budget}"
     )
