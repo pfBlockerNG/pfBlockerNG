@@ -3328,9 +3328,14 @@ function pfb_is_blank(?string $value): bool {
  * same way, so Unicode-whitespace stripping may not apply for that call.
  */
 function pfb_sanitize_text(string $text): string {
+	// issue #1797 (A6): browser-fed input is UTF-8 by construction; the old
+	// mb_detect_encoding() recovery could never fail (every byte sequence is
+	// valid ISO-8859-1) and only manufactured mojibake. Scrub deterministically
+	// instead -- the valid-UTF-8 output invariant is load-bearing:
+	// pfb_preg_replace_safe()'s /u patterns return the subject UNCHANGED on
+	// invalid UTF-8, so without it the strips below silently degrade to trim().
 	if (!mb_check_encoding($text, 'UTF-8')) {
-		$text = mb_convert_encoding($text, 'UTF-8',
-			mb_detect_encoding($text, 'UTF-8, ASCII, ISO-8859-1'));
+		$text = mb_convert_encoding($text, 'UTF-8', 'UTF-8');
 	}
 	$text = pfb_preg_replace_safe('/\p{C}+/u', '', $text);
 	$text = pfb_preg_replace_safe('/^[\p{Z}\t]+|[\p{Z}\t]+$/u', '', $text);
