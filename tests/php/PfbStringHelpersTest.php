@@ -6,8 +6,8 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfb_is_empty() / pfb_rstrip() (issue #1787) — the honest "is this an empty
- * string?" answer and the Unicode-aware right-strip.
+ * pfb_is_empty() / pfb_rstrip() / pfb_lstrip() / pfb_strip() (issue #1787) —
+ * the honest "is this an empty string?" answer and the Unicode-aware strips.
  *
  * pfb_is_empty() exists because empty() lies: empty('0') is TRUE, but "0" is a
  * real value (issue #1707). Absent (NULL) and '' are empty; everything else —
@@ -16,11 +16,15 @@ use PHPUnit\Framework\TestCase;
  * pfb_rstrip() strips trailing ASCII whitespace like rtrim(), and additionally
  * the Unicode whitespace/separator class pfb_is_blank() calls blank (NBSP,
  * ideographic space, line/paragraph separators, the BOM). Leading whitespace
- * is preserved — it is a right-strip, not a trim.
+ * is preserved — it is a right-strip, not a trim. pfb_lstrip() is its leading
+ * mirror (so "what is the first NONBLANK character?" is answerable), and
+ * pfb_strip() is the double-sided combination — trim() over the same class.
  */
 #[CoversFunction('pfb_is_empty')]
 #[CoversFunction('pfb_rstrip')]
-final class PfbIsEmptyRstripTest extends TestCase
+#[CoversFunction('pfb_lstrip')]
+#[CoversFunction('pfb_strip')]
+final class PfbStringHelpersTest extends TestCase
 {
 	// --- pfb_is_empty -----------------------------------------------------
 
@@ -78,5 +82,39 @@ final class PfbIsEmptyRstripTest extends TestCase
 	{
 		// The issue-#1707 row: "0" is data, never stripped to nothing.
 		$this->assertSame('0', pfb_rstrip('0 '));
+	}
+
+	// --- pfb_lstrip -------------------------------------------------------
+
+	public function testLstripStripsLeadingAsciiAndUnicodeWhitespace(): void
+	{
+		$this->assertSame('value', pfb_lstrip(" \t\u{00A0}\u{3000}\u{FEFF}value"));
+	}
+
+	public function testLstripPreservesTrailingWhitespaceAndInnerContent(): void
+	{
+		// A left-strip, not a trim: the right side and inner whitespace stay.
+		$this->assertSame("a b \u{00A0}", pfb_lstrip("\u{00A0} a b \u{00A0}"));
+	}
+
+	public function testLstripExposesFirstNonblankCharacter(): void
+	{
+		// The comment-detection use: '#' hiding behind indentation is still
+		// the first nonblank character.
+		$this->assertTrue(str_starts_with(pfb_lstrip("\u{00A0} # comment"), '#'));
+		$this->assertSame('', pfb_lstrip(" \u{00A0}"));
+	}
+
+	// --- pfb_strip --------------------------------------------------------
+
+	public function testStripTrimsBothSidesAcrossAsciiAndUnicode(): void
+	{
+		$this->assertSame('a b', pfb_strip("\u{FEFF}\u{00A0} a b \t\u{3000}\r\n"));
+		$this->assertSame('', pfb_strip(" \u{00A0}\u{2029} "));
+	}
+
+	public function testStripZeroSurvives(): void
+	{
+		$this->assertSame('0', pfb_strip(" 0\u{00A0}"));
 	}
 }
