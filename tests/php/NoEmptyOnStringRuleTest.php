@@ -80,8 +80,9 @@ final class NoEmptyOnStringRuleTest extends TestCase
 	{
 		$flagged = array_column($this->findings()['empty_on_string_violation.php'] ?? [], 'line');
 		sort($flagged);
-		// string / ?string / string|false — one finding per fixture function.
-		$this->assertSame([8, 12, 17], $flagged);
+		// string / ?string / string|false, plus (issue #1792 N1) string|int and
+		// a literal-string union — one finding per fixture function.
+		$this->assertSame([8, 12, 17, 22, 27], $flagged);
 	}
 
 	public function testStaysSilentOnArraysUntypedAndExactComparison(): void
