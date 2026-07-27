@@ -227,6 +227,13 @@ if [ "$(printf '%s' "$BUILD_MATRIX" | jq 'length')" -gt 0 ]; then
   fi
 fi
 
+# Ordered by VERSION, not by string: `unique` alone puts "8.10" before "8.2",
+# handing a consumer that reads element [0] as the supported floor the newest
+# version instead of the oldest. Sorted AFTER the guards above, which own the
+# diagnostics for a null/empty version that split() would only crash on.
+PYTHON_VERSIONS="$(printf '%s' "$PYTHON_VERSIONS" | jq -c 'sort_by(split(".") | map(tonumber))')"
+PHP_VERSIONS="$(printf '%s' "$PHP_VERSIONS" | jq -c 'sort_by(split(".") | map(tonumber))')"
+
 if [ "$DO_GITHUB_OUTPUT" -eq 1 ]; then
   if [ -z "${GITHUB_OUTPUT:-}" ]; then
     printf '::error::GITHUB_OUTPUT is not set — cannot write step outputs\n' >&2

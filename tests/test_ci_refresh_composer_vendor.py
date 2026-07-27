@@ -40,7 +40,9 @@ _BROAD_PATHSPECS = frozenset({"-A", "--all", ".", "-u", "--update", "*", ":/"})
 
 # Both ways a workflow can put .githooks in front of its own commit.
 _HOOKS_RE = re.compile(r"scripts/setup-hooks\.sh|core\.hooksPath")
-_GIT_ADD_RE = re.compile(r"\bgit add\b(?P<paths>[^\n#]*)")
+# Pathspecs end at the first shell separator: a `.php` in the message of a
+# chained `git commit` is not a staged path.
+_GIT_ADD_RE = re.compile(r"\bgit add\b(?P<paths>[^\n#;|&]*)")
 _GIT_COMMIT_RE = re.compile(r"\bgit commit\b")
 _COMPOSER_INSTALL_RE = re.compile(r"\bcomposer install\b")
 
@@ -121,7 +123,11 @@ def _stages_php(lines: list[str]) -> bool:
                     continue
                 if token in _BROAD_PATHSPECS or token.endswith(_PHP_SUFFIXES):
                     return True
-                if token.endswith("/") or (ROOT / token).is_dir():
+                # An absolute pathspec points outside this checkout, so it can
+                # only be judged as broad -- never resolved against ROOT.
+                if token.startswith("/") or token.endswith("/"):
+                    return True
+                if (ROOT / token).is_dir():
                     return True
     return False
 
@@ -336,3 +342,33 @@ def test_guard_passes_a_job_that_installs_composer_first() -> None:
     )
     assert inspected == ["synthetic.yml:refresh"]
     assert offenders == []
+
+
+def test_guard_stops_reading_pathspecs_at_a_shell_separator() -> None:
+    """A `.php` mentioned in a chained commit message is not a staged path."""
+    offenders, inspected = _offenders(
+        "synthetic.yml",
+        "jobs:\n"
+        "  refresh:\n"
+        "    steps:\n"
+        "      - run: sh scripts/setup-hooks.sh\n"
+        '      - run: git add docs/notes.md && git commit -m "mention foo.php in the notes"\n',
+    )
+    assert inspected == []
+    assert offenders == []
+
+
+def test_guard_treats_an_absolute_pathspec_as_broad() -> None:
+    """An absolute pathspec is judged on its own terms, not against this checkout."""
+    offenders, inspected = _offenders(
+        "synthetic.yml",
+        "jobs:\n"
+        "  refresh:\n"
+        "    steps:\n"
+        "      - run: sh scripts/setup-hooks.sh\n"
+        "      - run: |\n"
+        "          git add /home/runner/work/pfBlockerNG/pfBlockerNG/src\n"
+        "          git commit -m 'x'\n",
+    )
+    assert inspected == ["synthetic.yml:refresh"]
+    assert offenders
