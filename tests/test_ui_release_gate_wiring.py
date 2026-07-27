@@ -14,6 +14,7 @@ publish-release (never `release`/`attach-pkgs` -- ADR-14 D1).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -390,10 +391,13 @@ def test_build_pkgs_portable_per_leg_upload_name_is_the_exact_contract() -> None
     step_text = "\n".join(upload_steps[0])
     name_line = next(line for line in upload_steps[0] if line.strip().startswith("name:"))
     assert "pfBlockerNG-relpkg-" in name_line, f"per-leg upload name must start pfBlockerNG-relpkg-, got: {name_line}"
-    assert "varslug" in name_line and "matrix.arch" in name_line, (
-        f"per-leg upload name must be pfBlockerNG-relpkg-<varslug>-<matrix.arch>, got: {name_line}"
+    # issue #1662 M1: the artifact NAME keys off artslug (full pfsense_version), not
+    # varslug (major.minor-truncated, reserved for the .pkg FILENAME/catalog path) --
+    # see test_release_side_artifact_name_matches_both_consumer_sides below for why.
+    assert "artslug" in name_line and "matrix.arch" in name_line, (
+        f"per-leg upload name must be pfBlockerNG-relpkg-<artslug>-<matrix.arch>, got: {name_line}"
     )
-    # varslug computation: lowercase(variant) + '-' + pfsense_version.
+    # variant-lowercasing (shared by varslug and artslug):
     assert "tr '[:upper:]' '[:lower:]'" in step_text or "tr '[:upper:]' '[:lower:]'" in "\n".join(
         jobs["build-pkgs-portable"]
     ), "varslug must lowercase the variant"
@@ -512,23 +516,277 @@ def test_publish_release_if_gates_on_both_suite_results_and_retains_dry_run_fals
 
 # --------------------------------------------------------------------------- #
 # Cross-contract consistency: release-side naming == part-1 consumer-side naming
+#
+# Issue #1662 B1: the old version of this test built BOTH "sides" as Python
+# literals in the test body (a tautology -- it could never fail on a workflow
+# mutation) and never modelled the producer's real `cut -d. -f1-2` truncation.
+# This replaces it with a test that LIFTS the leg-naming step's `run:` body
+# straight out of release.yml and executes it under sh for every row of the real
+# build matrix plus one synthetic 3-component-version row, comparing the emitted
+# artifact name against the consumer-side format(...) templates parsed out of the
+# real ui-tests.yml / smoke.yml text.
 # --------------------------------------------------------------------------- #
 
 
-def test_release_side_naming_matches_consumer_side_for_ce_2_8_amd64() -> None:
-    """Simulate both sides' naming formulas for (variant=CE, pfsense_version=2.8,
-    arch=amd64) and assert they land on the identical exact-artifact name that both
-    build-pkgs-portable (release.yml) and the ui/smoke download steps (part 1) use."""
-    variant, pfsense_version, arch = "CE", "2.8", "amd64"
-    prefix = "pfBlockerNG-relpkg"
+def _upload_artifact_name_line() -> str:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    steps = _split_into_steps(jobs["build-pkgs-portable"])
+    upload_steps = [s for s in steps if any("uses: actions/upload-artifact" in line for line in s)]
+    assert len(upload_steps) == 1, "expected exactly one upload-artifact step in build-pkgs-portable"
+    return next(line for line in upload_steps[0] if line.strip().startswith("name:"))
 
-    # release-side (build-pkgs-portable): VARSLUG = lower(variant)-pfsense_version;
-    # artifact name = <prefix>-<varslug>-<arch>.
-    varslug = f"{variant.lower()}-{pfsense_version}"
-    release_side_name = f"{prefix}-{varslug}-{arch}"
 
-    # consumer-side (part 1's contract -- ui-tests.yml download step / smoke.yml
-    # pkg_artifact expression): format('{0}-{1}-{2}-{3}', prefix, variant_lc, version, arch).
-    consumer_side_name = "{0}-{1}-{2}-{3}".format(prefix, variant.lower(), pfsense_version, arch)
+_UPLOAD_NAME_FIELD_RE = re.compile(r"steps\.leg\.outputs\.(\w+)")
 
-    assert release_side_name == consumer_side_name == "pfBlockerNG-relpkg-ce-2.8-amd64"
+
+def _upload_artifact_name_output_field() -> str:
+    """Which `steps.leg.outputs.<field>` the upload-artifact `name:` references --
+    read from the file, not assumed, so this test tracks whichever field the
+    producer actually uses (varslug pre-fix, artslug post-fix)."""
+    name_line = _upload_artifact_name_line()
+    m = _UPLOAD_NAME_FIELD_RE.search(name_line)
+    assert m is not None, f"upload-artifact name: must reference steps.leg.outputs.<field>, got: {name_line}"
+    return m.group(1)
+
+
+def test_build_pkgs_portable_upload_name_references_artslug_output() -> None:
+    """Structural pin (issue #1662 M1): the per-leg upload-artifact `name:` must key
+    off the FULL-pfsense_version artslug output, not the major.minor-truncated
+    varslug -- the consumer sides (ui-tests.yml/smoke.yml) format the full
+    matrix.pfsense_version into their download name, so a 3-component version would
+    otherwise silently desync the producer name from what they request."""
+    assert _upload_artifact_name_output_field() == "artslug", (
+        f"upload-artifact name: must reference steps.leg.outputs.artslug, got: {_upload_artifact_name_line()}"
+    )
+
+
+def _leg_step() -> list[str]:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    steps = _split_into_steps(jobs["build-pkgs-portable"])
+    target = [s for s in steps if any("Compute this leg's VARSLUG/ABI" in line for line in s)]
+    assert len(target) == 1, 'expected exactly one "Compute this leg\'s VARSLUG/ABI" step'
+    return target[0]
+
+
+def _run_leg_step(tmp_path: Path, variant: str, pfsense_version: str, freebsd_major: str, arch: str) -> dict[str, str]:
+    """Execute the REAL leg-naming step's `run:` body (lifted verbatim) under sh,
+    with a real $GITHUB_OUTPUT file, and return the parsed step outputs."""
+    script = _step_run_script(_leg_step())
+    output_file = tmp_path / f"github_output_{variant}_{pfsense_version}_{arch}".replace(".", "_")
+    output_file.write_text("")
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "VARIANT": variant,
+        "CHANNEL_FALLBACK": variant,
+        "PFV": pfsense_version,
+        "MAJOR": freebsd_major,
+        "ARCH": arch,
+        "GITHUB_OUTPUT": str(output_file),
+    }
+    completed = subprocess.run(  # noqa: S603
+        ["sh", "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    outputs: dict[str, str] = {}
+    for line in output_file.read_text().splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            outputs[key] = value
+    return outputs
+
+
+def _extract_first_format_call(text: str) -> tuple[str, list[str]]:
+    """Parse the FIRST `format('tmpl', arg, arg, ...)` GH-expression call out of
+    `text` (balanced-paren scan -- ui-tests.yml's download name: line has a SECOND
+    format(...) call in its blank-prefix fallback branch, so a naive regex greedy
+    match would swallow both). Returns (template, [arg-expr, ...])."""
+    start = text.index("format(") + len("format(")
+    depth = 1
+    i = start
+    while depth > 0:
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+        i += 1
+    inner = text[start : i - 1]
+    m = re.match(r"'([^']*)'\s*,\s*(.*)$", inner, re.DOTALL)
+    assert m is not None, f"cannot parse format(...) call args: {inner!r}"
+    template = m.group(1)
+    args = [a.strip() for a in m.group(2).split(",")]
+    return template, args
+
+
+def _resolve_matrix_arg(expr: str, row: dict[str, str]) -> str:
+    """Resolve one GH-expression argument -- as parsed out of the real
+    ui-tests.yml/smoke.yml text -- to the string it evaluates to for `row`."""
+    if expr == "inputs.pkg_artifact_prefix":
+        return "pfBlockerNG-relpkg"
+    if expr == "matrix.variant":
+        return row["variant"].lower()
+    if expr in ("matrix.version", "matrix.pfsense_version"):
+        return row["pfsense_version"]
+    if expr == "matrix.arch":
+        return row["arch"]
+    ternary = re.match(r"\(matrix\.image_name == '([^']*)' && '([^']*)' \|\| '([^']*)'\)$", expr)
+    if ternary is not None:
+        plus_image_name, when_true, when_false = ternary.groups()
+        image_name = "pfsense-" + row["variant"].lower()
+        return when_true if image_name == plus_image_name else when_false
+    raise AssertionError(f"unrecognised matrix arg expression in a consumer-side format(...) call: {expr!r}")
+
+
+def _consumer_side_names(row: dict[str, str]) -> tuple[str, str]:
+    """(ui-tests.yml download name, smoke.yml pkg_artifact) for `row`, computed
+    from the format(...) templates parsed out of the REAL workflow text -- never
+    a hardcoded literal."""
+    ui_jobs = _jobs(UI_WORKFLOW)
+    ui_steps = _split_into_steps(ui_jobs["ui"])
+    dl_step = next(s for s in ui_steps if any("Download the built pfBlockerNG package" in line for line in s))
+    ui_name_line = next(line for line in dl_step if line.strip().startswith("name:"))
+    ui_template, ui_args = _extract_first_format_call(ui_name_line)
+    ui_name = ui_template.format(*(_resolve_matrix_arg(a, row) for a in ui_args))
+
+    smoke_jobs = _jobs(SMOKE_WORKFLOW)
+    pkg_artifact_line = next(line for line in smoke_jobs["smoke"] if "pkg_artifact:" in line and "with" not in line)
+    smoke_template, smoke_args = _extract_first_format_call(pkg_artifact_line)
+    smoke_name = smoke_template.format(*(_resolve_matrix_arg(a, row) for a in smoke_args))
+
+    return ui_name, smoke_name
+
+
+def _cross_contract_rows() -> list[dict[str, str]] | None:
+    """Real BUILD-matrix rows (read-version-matrix.sh --print-build -- reads the
+    already-fetched origin/ci-metadata ref, no network needed once it's present)
+    PLUS one synthetic 3-component-version row that exercises the truncation bug
+    directly. Returns None when the ref is unreachable in this environment
+    (mirrors tests/test_matrix_collision_guard.py's _load_build_matrix skip
+    contract) -- callers must skip, never fabricate rows."""
+    try:
+        proc = subprocess.run(  # noqa: S603
+            ["sh", "scripts/read-version-matrix.sh", "--print-build"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    try:
+        matrix = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(matrix, list) or not matrix:
+        return None
+    rows = [
+        {
+            "variant": str(entry["variant"]),
+            "pfsense_version": str(entry["pfsense_version"]),
+            "freebsd_major": str(entry["freebsd_major"]),
+            "arch": str(entry["arch"]),
+        }
+        for entry in matrix
+    ]
+    # Synthetic row (issue #1662 M1): every REAL row today is 2-component
+    # (2.8, 26.03) so MM == pfsense_version and the truncation bug is invisible --
+    # this row is what makes it visible.
+    rows.append({"variant": "CE", "pfsense_version": "2.8.1", "freebsd_major": "15", "arch": "amd64"})
+    return rows
+
+
+def test_release_side_artifact_name_matches_both_consumer_sides(tmp_path: Path) -> None:
+    """For every real build-matrix row plus the synthetic 3-component-version row,
+    execute the REAL leg-naming step and assert the artifact name it emits equals
+    BOTH ui-tests.yml's download name AND smoke.yml's pkg_artifact -- computed from
+    the real format(...) templates in those files. Issue #1662 M1: this is RED
+    before the fix on the synthetic row (producer truncates to ce-2.8, both
+    consumers expect ce-2.8.1) and on every row if the upload step still points at
+    a field that never gets emitted."""
+    rows = _cross_contract_rows()
+    if rows is None:
+        pytest.skip("ci-metadata matrix not available in this environment -- skipping real-matrix rows")
+        return
+
+    field = _upload_artifact_name_output_field()
+    failures: list[str] = []
+    for row in rows:
+        outputs = _run_leg_step(tmp_path, row["variant"], row["pfsense_version"], row["freebsd_major"], row["arch"])
+        if field not in outputs:
+            failures.append(f"row {row}: leg step did not emit outputs.{field} (got {sorted(outputs)})")
+            continue
+        release_side_name = f"pfBlockerNG-relpkg-{outputs[field]}-{row['arch']}"
+        ui_name, smoke_name = _consumer_side_names(row)
+        if not (release_side_name == ui_name == smoke_name):
+            failures.append(f"row {row}: release={release_side_name!r} ui={ui_name!r} smoke={smoke_name!r}")
+    assert not failures, "producer/consumer artifact-name mismatch:\n" + "\n".join(failures)
+
+
+# --------------------------------------------------------------------------- #
+# publish-release healthcheck: EXPECTED_PKGS floor (issue #1662 I1)
+# --------------------------------------------------------------------------- #
+
+
+def _healthcheck_script() -> str:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    steps = _split_into_steps(jobs["publish-release"])
+    target = [s for s in steps if any("Health-check the draft release is complete" in line for line in s)]
+    assert len(target) == 1, "expected exactly one 'Health-check the draft release is complete' step"
+    script = _step_run_script(target[0])
+    # This step (uniquely among the ones lifted in this file) inlines
+    # `${{ github.repository }}` directly in its run: body instead of routing it
+    # through the step's env: block, so GH Actions would normally template it away
+    # before the shell ever runs. Substitute a fixed value -- the gh stub below
+    # never inspects REPO, so this has no bearing on the logic under test.
+    return script.replace("${{ github.repository }}", "owner/repo")
+
+
+def _run_healthcheck(tmp_path: Path, build_matrix: str, assets_json: str) -> subprocess.CompletedProcess[str]:
+    script = _healthcheck_script()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh_stub = bin_dir / "gh"
+    gh_stub.write_text(
+        f'#!/bin/sh\necho \'{{"isDraft":true,"name":"Test Release","body":"body text","assets":{assets_json}}}\'\n'
+    )
+    gh_stub.chmod(0o755)
+    env = {
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        "GH_TOKEN": "stub-token",
+        "TAG": "v0.0.0-test",
+        "BUILD_MATRIX": build_matrix,
+    }
+    return subprocess.run(  # noqa: S603
+        ["sh", "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_healthcheck_empty_build_matrix_fails_closed(tmp_path: Path) -> None:
+    """Issue #1662 I1: an empty build matrix (EXPECTED_PKGS=0) must fail the
+    healthcheck, not sail through because PKG_COUNT (also 0 -- no .pkg assets on
+    the draft) happens to equal EXPECTED_PKGS."""
+    completed = _run_healthcheck(
+        tmp_path,
+        build_matrix="[]",
+        assets_json='[{"name":"pfBlockerNG-src.tar.gz"}]',
+    )
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+
+
+def test_healthcheck_nonempty_matrix_with_matching_pkgs_still_passes(tmp_path: Path) -> None:
+    """The new floor must not disturb the healthy path: a non-empty matrix whose
+    .pkg count matches the draft's still passes."""
+    completed = _run_healthcheck(
+        tmp_path,
+        build_matrix='[{"variant":"CE","pfsense_version":"2.8"}]',
+        assets_json='[{"name":"pfBlockerNG-src.tar.gz"},{"name":"pfBlockerNG-relpkg-ce-2.8-amd64.pkg"}]',
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
