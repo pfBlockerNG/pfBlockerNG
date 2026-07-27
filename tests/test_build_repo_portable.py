@@ -1681,6 +1681,43 @@ def test_retain_by_channel_line_pin_determinism(tmp_path: Path) -> None:
     assert len(kept1) == len(kept2) == 11
 
 
+def test_retain_by_channel_duplicate_identity_resolves_to_one_path(tmp_path: Path) -> None:
+    """A same-(name, version) duplicate pair (tied mtime) must resolve to the SAME
+    file for both the window (_retain_newest) and the line pin (_line_pins) —
+    the retained set holds one path for that identity, never two.
+
+    Regression guard: both helpers dedup on a first-wins tie-break (`>`, strict).
+    They agree only because they iterate the same bucket in the same order with
+    the same strictness. If _line_pins' tie-break ever flips to `>=`, it keeps the
+    LAST-processed file on a tie while _retain_newest (unchanged) keeps the FIRST —
+    two distinct files for one (name, version) then both reach _check_collisions
+    (which runs before _emit_catalog_from_paths' own dedup), aborting the build
+    with a false FLAVOR COLLISION whenever the duplicates happen to differ in
+    php/py flavor.
+
+    Scenario: one (name, version) identity, two files, tied mtime
+      Given two .pkg files for pfBlockerNG-devel 3.0.1 with identical mtime
+        And keep_devel=1 (keep < bucket size, so the window+line-pin union runs)
+      When retain_by_channel is called
+      Then exactly one path is retained for that identity
+       And it is the first-processed file (deterministic first-wins tie-break)
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    first = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    duplicate = d / "pfBlockerNG-devel-3.0.1-dup.pkg"
+    make_pkg(duplicate, name="pfBlockerNG-devel", version="3.0.1", abi="FreeBSD:15:amd64")
+    # Force an exact tie: without it, the higher-mtime file would legitimately win
+    # in both helpers and the test would prove nothing about the tie-break itself.
+    tie_mtime = first.stat().st_mtime
+    os.utime(duplicate, (tie_mtime, tie_mtime))
+
+    kept = brp.retain_by_channel([first, duplicate], keep_devel=1, keep_stable=0)
+
+    assert len(kept) == 1, f"one (name, version) identity must resolve to one file, got {len(kept)}: {kept}"
+    assert kept[0] == first, "first-processed file must win the tie deterministically"
+
+
 # --------------------------------------------------------------------------- #
 # ADR-27 Phase 2: release-subtree retention in build_repo_matrix
 #
@@ -1821,7 +1858,10 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
         And a fresh devel build (the stub produces version "1.0_1")
         And the newest extras are 3.0.3 (devel) and 2.0.3 (stable)
       When build_repo_matrix runs
-      Then the catalog has exactly 4 objects (2 devel + 2 stable)
+      Then the catalog has exactly 6 objects: 2-window + 1 line-pin devel, and
+        2-window + 1 line-pin stable (the stub's fresh build "1.0_1" is its own
+        major/minor line "1.0", distinct from the 3.0.x/2.0.x extras, so it
+        survives as that line's pin alongside the newest-2 window)
        And the highest-version devel object is at least 3.0.3
        And the highest-version stable object is at least 2.0.3
        And every kept (name, version) pair appears exactly once (no duplicates)
@@ -1902,18 +1942,24 @@ def _with_stub_builder(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(brp, "build_repo_matrix", _patched)
 
 
-def test_cli_release_extra_pkgs_default_is_latest_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_release_extra_pkgs_default_keeps_latest_plus_line_pins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """CLI defaults (--release-keep-devel 1, --release-keep-stable 1) keep only the
-    latest release when --release-extra-pkgs carry older versions too.
+    latest release PER CHANNEL WINDOW when --release-extra-pkgs carry older versions
+    too — plus any major/minor line pin outside that window (issue #1676).
 
     Scenario: CLI latest-only default with older extras supplied
       Given 3 pre-built devel extras (3.0.1, 3.0.2, 3.0.3) passed via --release-extra-pkgs
         And 3 pre-built stable extras (2.0.1, 2.0.2, 2.0.3) passed via --release-extra-pkgs
         And no --release-keep-devel / --release-keep-stable override (default 1)
       When brp.main([--build-matrix, ...]) is called
-      Then the release catalog has exactly 1 devel entry (before-state: default is latest-only)
-       And the release catalog has exactly 1 stable entry
-       And the highest-version devel (3.0.3) is the one retained
+      Then the release catalog has exactly 2 devel entries: the 1-window entry
+        plus the stub's own fresh build as a line pin (its version "1.0_1" is
+        major/minor line "1.0", distinct from the 3.0.x extras)
+       And the release catalog has exactly 1 stable entry (no --stable-tag on this
+        CLI path, so no fresh build and no phantom pin)
+       And the highest-version devel (3.0.3) is the one retained by the window
        And the highest-version stable (2.0.3) is the one retained
     """
     _with_stub_builder(monkeypatch)
@@ -1977,8 +2023,10 @@ def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pyte
         And 4 pre-built stable extras (2.0.1..2.0.4) passed as --release-extra-pkgs
         And --release-keep-devel 3, --release-keep-stable 3
       When brp.main([--build-matrix, ...]) is called
-      Then the release catalog has exactly 3 devel entries (AFTER state: retention enabled)
-       And the release catalog has exactly 3 stable entries
+      Then the release catalog has exactly 4 devel entries: the 3-window plus
+        1 line pin (the stub's "1.0_1" fresh build, its own major/minor line)
+       And the release catalog has exactly 3 stable entries (no fresh build on
+        this CLI path, so a plain 3-window, no phantom pin)
        And the oldest devel (3.0.1) is absent from the catalog
        And the oldest stable (2.0.1) is absent from the catalog
        And the 3 newest devel versions (3.0.2, 3.0.3, 3.0.4) are present
@@ -2073,7 +2121,9 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
       Given 4 devel extras (3.0.1..3.0.4) and keep=2
         And 4 stable extras (2.0.1..2.0.4) and keep=2
       When brp.main([--build-matrix, ...]) is called
-      Then the catalog lists exactly 2 devel + 2 stable entries
+      Then the catalog lists exactly 3 devel entries (2-window + 1 line pin,
+        the stub's "1.0_1" fresh build on its own line) and 2 stable entries
+        (no fresh build on this CLI path, so a plain 2-window, no phantom pin)
        And the highest devel version in the catalog is >= 3.0.4 (newest-wins)
        And the highest stable version in the catalog is >= 2.0.4 (newest-wins)
        And no (name, version) pair is duplicated in the catalog
