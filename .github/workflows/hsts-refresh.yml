@@ -56,13 +56,23 @@ jobs:
       pull-requests: write    # open/label the PR
       actions: write          # dispatch the CI gate onto the branch head
     env:
-      GH_TOKEN: ${{ github.token }}
       BRANCH: hsts-refresh/auto
       DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
     steps:
+      # GITHUB_TOKEN cannot open a PR (the org disallows it) and the PRs it does
+      # open get no automatic CI. The CODE_BOT App is a distinct actor on both
+      # counts, so the push and the PR are made with its installation token.
+      - name: Mint the CODE_BOT installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CODE_BOT_APP_ID }}
+          private-key: ${{ secrets.CODE_BOT_PRIVATE_KEY }}
+
       - uses: actions/checkout@v6
         with:
           persist-credentials: true   # need to push the automation branch via git push --force
+          token: ${{ steps.app-token.outputs.token }}
           ref: devel
 
       # Automated commits must hit the same local gates as a human commit.
@@ -91,10 +101,17 @@ jobs:
 
       - name: Open or update the refresh PR
         if: steps.refresh.outputs.changed == 'true' && env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -eu
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Commit as the App that owns the push, so the branch's author matches
+          # its actor. The numeric id is what makes the address route to the bot.
+          APP_USER="${APP_SLUG}[bot]"
+          APP_UID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "$APP_USER"
+          git config user.email "${APP_UID}+${APP_USER}@users.noreply.github.com"
 
           # No pipeline: a missing header must fail loudly under set -e, not
           # yield an empty date in the commit message.
