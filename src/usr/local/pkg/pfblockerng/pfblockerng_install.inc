@@ -589,8 +589,11 @@ else {
 // Reverse DNS lookups (enable_rdns) default OFF for new installs; preserve the
 // historical always-on behaviour for existing installs with a one-time seed.
 update_status(" Reverse DNS lookup default...");
+// issue #1775: pfb_gconfig_operator_view() strips the installer's settings_family
+// marker so a marker-only section (General never saved -- genuine fresh install)
+// reads empty here too, same chokepoint as the #1770/#1771 grandfathers above.
 $pfb_rdns_seed = pfb_rdns_seed_value(
-	config_get_path('installedpackages/pfblockerng/config/0', []),
+	pfb_gconfig_operator_view(config_get_path('installedpackages/pfblockerng/config/0', [])),
 	config_get_path('installedpackages/pfblockerngipsettings/config/0', [])
 );
 if ($pfb_rdns_seed !== null) {

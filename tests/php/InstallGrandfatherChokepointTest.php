@@ -31,39 +31,61 @@ final class InstallGrandfatherChokepointTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		if (function_exists('pfb_install_oracle_grandfather_region')) {
-			return;
+		$src = null;
+		if (!function_exists('pfb_install_oracle_grandfather_region')
+			|| !function_exists('pfb_install_oracle_rdns_seed_region')) {
+			$src = file_get_contents(
+				dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc'
+			);
+			if ($src === false) {
+				throw new RuntimeException('test bootstrap: failed to read pfblockerng_install.inc');
+			}
 		}
 
-		$src = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc'
-		);
-		if ($src === false) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_install.inc');
+		if (!function_exists('pfb_install_oracle_grandfather_region')) {
+			// The shared grandfather region: from the $pfb_gcfg section read through
+			// the closing brace of the alias-delta-mode write. Both grandfather calls
+			// consume the same $pfb_gcfg local.
+			if (!preg_match(
+				'/(\$pfb_gcfg = PfbConfig::readSection\(\'installedpackages\/pfblockerng\/config\/0\'\);\n'
+				. '.*?'
+				. 'PfbConfig::write\(\'pfb_alias_delta_mode\', \$pfb_delta_default\);\n\}\n)/s',
+				$src,
+				$m
+			)) {
+				throw new RuntimeException('test bootstrap: install-default grandfather region not found');
+			}
+
+			eval(
+				'function pfb_install_oracle_grandfather_region(): array {'
+				. $m[1]
+				. ' return ['
+				. ' \'feed_default\' => $pfb_feed_default,'
+				. ' \'delta_default\' => $pfb_delta_default,'
+				. ' \'gcfg\' => $pfb_gcfg,'
+				. ' ]; }'
+			);
 		}
 
-		// The shared grandfather region: from the $pfb_gcfg section read through
-		// the closing brace of the alias-delta-mode write. Both grandfather calls
-		// consume the same $pfb_gcfg local.
-		if (!preg_match(
-			'/(\$pfb_gcfg = PfbConfig::readSection\(\'installedpackages\/pfblockerng\/config\/0\'\);\n'
-			. '.*?'
-			. 'PfbConfig::write\(\'pfb_alias_delta_mode\', \$pfb_delta_default\);\n\}\n)/s',
-			$src,
-			$m
-		)) {
-			throw new RuntimeException('test bootstrap: install-default grandfather region not found');
-		}
+		if (!function_exists('pfb_install_oracle_rdns_seed_region')) {
+			// issue #1775: the reverse-DNS seed region -- from the pfb_rdns_seed_value()
+			// call through the closing brace of its if/else write.
+			if (!preg_match(
+				'/(\$pfb_rdns_seed = pfb_rdns_seed_value\(\n'
+				. '.*?'
+				. 'update_status\(" no changes required \.\.\. done\.\\\\n"\);\n\} ?\n)/s',
+				$src,
+				$m2
+			)) {
+				throw new RuntimeException('test bootstrap: install-default rdns seed region not found');
+			}
 
-		eval(
-			'function pfb_install_oracle_grandfather_region(): array {'
-			. $m[1]
-			. ' return ['
-			. ' \'feed_default\' => $pfb_feed_default,'
-			. ' \'delta_default\' => $pfb_delta_default,'
-			. ' \'gcfg\' => $pfb_gcfg,'
-			. ' ]; }'
-		);
+			eval(
+				'function pfb_install_oracle_rdns_seed_region(): array {'
+				. $m2[1]
+				. ' return [ \'rdns_seed\' => $pfb_rdns_seed ]; }'
+			);
+		}
 	}
 
 	protected function setUp(): void
@@ -82,6 +104,20 @@ final class InstallGrandfatherChokepointTest extends TestCase
 			'installedpackages' => [
 				'pfblockerng' => [
 					'config' => [0 => $section],
+				],
+			],
+		];
+	}
+
+	private function seedGenAndIpSections(array $gen, array $ip): void
+	{
+		$GLOBALS['config'] = [
+			'installedpackages' => [
+				'pfblockerng' => [
+					'config' => [0 => $gen],
+				],
+				'pfblockerngipsettings' => [
+					'config' => [0 => $ip],
 				],
 			],
 		];
@@ -184,6 +220,48 @@ final class InstallGrandfatherChokepointTest extends TestCase
 			'replace',
 			$result['delta_default'],
 			'settings_family + pfb_keep is genuine pre-existing config -- alias delta mode must still pin replace'
+		);
+	}
+
+	// --- #1775: reverse-DNS lookup seed --------------------------------------
+
+	/**
+	 * Scenario: General section carries ONLY the installer's settings_family
+	 * marker (a genuine fresh install -- General never saved). enable_rdns
+	 * (issue #336) defaults OFF for new installs; the marker must not be read
+	 * as pre-existing operator config and force the legacy always-on seed.
+	 */
+	public function testFreshInstallMarkerOnlySectionLeavesRdnsSeedUnset(): void
+	{
+		$this->seedGenAndIpSections(['settings_family' => '4.0'], []);
+
+		$result = pfb_install_oracle_rdns_seed_region();
+
+		$this->assertNull(
+			$result['rdns_seed'],
+			'a marker-only section is a fresh install -- enable_rdns must stay unseeded (default OFF)'
+		);
+		$this->assertNull(
+			config_get_path('installedpackages/pfblockerngipsettings/config/0/enable_rdns'),
+			'the chokepoint must not have written enable_rdns on a fresh install'
+		);
+	}
+
+	/**
+	 * Before-state pin: a marker PLUS a genuine operator key is the true
+	 * upgrade path and must still seed enable_rdns='on' to preserve the
+	 * historical always-on behaviour.
+	 */
+	public function testGenuineUpgradeWithMarkerAndOperatorKeyStillSeedsRdnsOn(): void
+	{
+		$this->seedGenAndIpSections(['settings_family' => '4.0', 'pfb_interval' => '4'], []);
+
+		$result = pfb_install_oracle_rdns_seed_region();
+
+		$this->assertSame('on', $result['rdns_seed']);
+		$this->assertSame(
+			'on',
+			config_get_path('installedpackages/pfblockerngipsettings/config/0/enable_rdns')
 		);
 	}
 }
