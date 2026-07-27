@@ -101,6 +101,11 @@ on:
         required: false
         type: string
         default: ""
+      pkg_artifact_prefix:
+        description: "Name prefix of prebuilt per-leg package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<variant>-<version>-<arch>'. Empty = build internally (the build-pkg job runs as before)."
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       image_ref:
@@ -141,6 +146,10 @@ on:
         description: "FreeBSD-ports branch (blank = build-pkg-linux default pfblockerng/use-github)."
         required: false
         default: ""
+      pkg_artifact_prefix:
+        description: "Name prefix of prebuilt per-leg package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<variant>-<version>-<arch>'. Empty = build internally."
+        required: false
+        default: ""
   # Daily run: Tier A render + Tier B (functional + browser). Non-PR-blocking
   # by construction.
   # The `prepare` job guards it to SKIP when there were no commits in the last
@@ -168,7 +177,9 @@ jobs:
   # dispatch/call run `prepare` always emits run=true, so the build runs.
   build-pkg:
     needs: prepare
-    if: needs.prepare.outputs.run == 'true'
+    # Skipped when the caller supplies pkg_artifact_prefix -- prebuilt per-leg
+    # artifacts (e.g. release.yml) replace this job's own build.
+    if: needs.prepare.outputs.run == 'true' && inputs.pkg_artifact_prefix == ''
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
@@ -199,6 +210,8 @@ jobs:
       build_matrix: ${{ steps.gen.outputs.build_matrix }}
       run: ${{ steps.gen.outputs.run }}
       pytest_filter: ${{ steps.gen.outputs.pytest_filter }}
+      scope: ${{ steps.gen.outputs.scope }}
+      leg_count: ${{ steps.gen.outputs.leg_count }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -281,15 +294,27 @@ jobs:
             '($tiers | split(" ")) as $ts
              | [ $ts[] as $t | .[]
                  | {tier: $t, version: .pfsense_version, variant: (.image_name | ltrimstr("pfsense-")),
-                    image_name: .image_name, channel: .channel} ]')"
+                    image_name: .image_name, channel: .channel, arch: .arch} ]')"
           printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
+          # leg_count = the (tier x leg) matrix size, for the all-ui-passed AND
+          # gate's zero-leg guard (distinct from $LEGS' own leg count -- one
+          # leg fans out to len(TIERS) matrix entries).
+          printf 'leg_count=%s\n' "$(printf '%s' "$INCLUDE" | jq 'length')" >> "$GITHUB_OUTPUT"
           echo "tiers=[${TIERS}] legs=$(printf '%s' "$LEGS" | jq 'length') run=${RUN}"
 
   ui:
     name: ${{ matrix.tier }} / ${{ matrix.variant }}-${{ matrix.version }} (live pfSense VM)
     needs: [build-pkg, prepare]
-    # Skip the whole leg set when the nightly guard says there's nothing to run.
-    if: needs.prepare.outputs.run == 'true'
+    # !cancelled() (not the implicit success() `needs` would impose) so a
+    # cancelled/skipped build-pkg still lets a prefix-driven run through;
+    # prepare must have genuinely succeeded (a failed prepare yields no matrix
+    # to fromJSON); the nightly guard gates on run=='true'; build-pkg's result
+    # only matters when it actually ran (pkg_artifact_prefix empty) -- with a
+    # prefix set it is skipped by design and that is fine.
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      needs.prepare.outputs.run == 'true' &&
+      (inputs.pkg_artifact_prefix != '' || needs.build-pkg.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -437,9 +462,13 @@ jobs:
       - name: Download the built pfBlockerNG package
         uses: actions/download-artifact@v8
         with:
-          # The per-version artifact built for THIS leg's ABI (build-pkg is matrixed
-          # by version; this leg installs the package matching its own pfSense base).
-          name: pfBlockerNG-pkg-${{ matrix.version }}
+          # pkg_artifact_prefix set: download the prebuilt per-leg artifact a
+          # caller (e.g. release.yml) already published, named
+          # '<prefix>-<variant>-<version>-<arch>' (e.g. myprefix-ce-2.8-amd64).
+          # Blank: the per-version artifact THIS run's build-pkg job just built
+          # (matrix is by version; this leg installs the package matching its
+          # own pfSense base).
+          name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-{1}-{2}-{3}', inputs.pkg_artifact_prefix, matrix.variant, matrix.version, matrix.arch) || format('pfBlockerNG-pkg-{0}', matrix.version) }}
           path: pkg
 
       - name: Locate the .pkg + the pulled .qcow2
@@ -506,6 +535,11 @@ jobs:
           # Resolved by the prepare step: an explicit -k input, else the impacted
           # auto-derivation (UI tests changed vs origin/devel), else blank = whole tier.
           PYTEST_FILTER: ${{ needs.prepare.outputs.pytest_filter }}
+          # impacted | full -- gates whether an empty-selection exit 5 below is a
+          # benign no-op (a narrowed run legitimately has nothing to select) or a
+          # real failure (a full, unfiltered run finding literally zero tests for
+          # this tier's marker means the marker/tier wiring itself is broken).
+          SCOPE: ${{ needs.prepare.outputs.scope }}
           MARKER: ${{ steps.tier.outputs.marker }}
         run: |
           set -eu
@@ -518,13 +552,19 @@ jobs:
           [ -n "${PYTEST_FILTER:-}" ] && set -- "$@" --filter "${PYTEST_FILTER}"
           rc=0
           sh scripts/run-smoke.sh "$@" || rc=$?
-          # pytest exit 5 = the impacted/-k selection contains no test carrying
-          # this tier's marker — an empty (valid) selection, not a failure. An
-          # impacted dispatch whose changed modules hold only e2e tests would
-          # otherwise fail every browser-tier leg on "no tests ran".
+          # pytest exit 5 = no test carried this tier's marker under the
+          # requested selection. That is benign ONLY for a SELECTIVE run: a
+          # narrowed -k or an impacted-scope leg (whose changed modules may
+          # legitimately hold only e.g. e2e tests) can validly select nothing
+          # for this tier. A full-scope, unfiltered run selecting zero tests
+          # means the tier/marker wiring itself is broken -- stays a failure.
           if [ "$rc" -eq 5 ]; then
-            echo "No tests selected for marker ${MARKER} under this scope/filter — empty selection, success."
-            rc=0
+            if [ -n "${PYTEST_FILTER:-}" ] || [ "${SCOPE:-}" = "impacted" ]; then
+              echo "No tests selected for marker ${MARKER} under this scope/filter — empty selection, success."
+              rc=0
+            else
+              echo "::error::pytest exit 5 (no tests collected) for marker ${MARKER} on a full-scope, unfiltered run — treating as a failure."
+            fi
           fi
           exit "$rc"
 
@@ -570,3 +610,66 @@ jobs:
             smoke-diag/**
           if-no-files-found: ignore
           retention-days: 7
+
+  # ── AND-gate: green only if EVERY (tier x leg) UI job passed ────────────────
+  #
+  # Mirrors smoke.yml's all-smoke-passed, plus one extra pass-arm: the nightly
+  # no-commit guard (prepare.outputs.run) legitimately skips the WHOLE run on
+  # an idle scheduled night -- that must read as a pass (nothing was supposed
+  # to run), not a gate failure. When run=='true' the same AND-gate semantics
+  # as all-smoke-passed apply: needs.ui.result == 'success' is the only pass.
+  all-ui-passed:
+    name: All UI legs passed (AND gate)
+    runs-on: ubuntu-latest
+    needs: [prepare, ui]
+    if: always()   # run even if ui failed/skipped/cancelled, or prepare declined the run
+    steps:
+      - name: Assert every UI leg passed
+        env:
+          UI_RESULT: ${{ needs.ui.result }}
+          RUN_GATE: ${{ needs.prepare.outputs.run }}
+          LEG_COUNT: ${{ needs.prepare.outputs.leg_count }}
+        run: |
+          set -eu
+          echo "Nightly run gate    : ${RUN_GATE}"
+          echo "UI matrix result    : ${UI_RESULT}"
+          echo "UI matrix leg count : ${LEG_COUNT}"
+          echo ""
+
+          # The nightly no-commit guard legitimately skips the whole run (an
+          # idle scheduled night) -- that is a PASS, not a gate failure: the
+          # prepare/ui jobs never ran anything on purpose.
+          if [ "${RUN_GATE}" != "true" ]; then
+            echo "run gate declined (scheduled idle) — pass"
+            exit 0
+          fi
+
+          # Zero/empty-leg guard: run=='true' with no legs means the matrix
+          # itself broke -- fail closed rather than silently skip.
+          if [ -z "${LEG_COUNT:-}" ] || [ "${LEG_COUNT}" -eq 0 ]; then
+            echo "::error::AND gate FAIL — UI matrix was empty (leg_count=${LEG_COUNT:-<empty>}) despite run=true."
+            exit 1
+          fi
+
+          # Main gate: the ui job result must be 'success'.
+          case "$UI_RESULT" in
+            success)
+              echo "AND gate PASS — all ${LEG_COUNT} UI leg(s) succeeded."
+              ;;
+            failure)
+              echo "::error::AND gate FAIL — one or more UI legs failed (result='failure')."
+              exit 1
+              ;;
+            skipped)
+              echo "::error::AND gate FAIL — ui job was skipped despite leg_count=${LEG_COUNT}."
+              exit 1
+              ;;
+            cancelled)
+              echo "::error::AND gate FAIL — ui job was cancelled; result is indeterminate."
+              exit 1
+              ;;
+            *)
+              echo "::error::AND gate FAIL — unexpected ui result '${UI_RESULT}'."
+              exit 1
+              ;;
+          esac
