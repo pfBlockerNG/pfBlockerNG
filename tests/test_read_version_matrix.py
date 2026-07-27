@@ -454,3 +454,28 @@ def test_invalid_role_fails_closed(tmp_path: Path) -> None:
 
     assert proc.returncode != 0, f"reader must fail on an invalid role; stdout:\n{proc.stdout}"
     assert "invalid role" in proc.stderr, f"expected an 'invalid role' error; stderr:\n{proc.stderr}"
+
+
+# --------------------------------------------------------------------------- #
+# Scenario — the derived test matrices are ordered by VERSION, not by string.
+# --------------------------------------------------------------------------- #
+def test_test_matrices_sort_versions_numerically(tmp_path: Path) -> None:
+    """The oldest supported version is first, even once a minor reaches two digits.
+
+    Scenario: a consumer picks the supported floor as element [0].
+    Given a matrix shipping PHP 8.2 alongside 8.10 (and Python 3.9 alongside 3.11),
+    when the derived test matrices are read,
+    then 8.2 and 3.9 come first -- a string sort would put "8.10" and "3.11"
+    there instead and silently hand the consumer the newest version.
+    """
+    repo = _make_matrix_ref(
+        tmp_path,
+        [
+            _ce_entry(php_version="8.10", py_flavor="py311"),
+            _plus_entry(php_version="8.2", py_flavor="py39", ci=True),
+        ],
+    )
+    python_versions, php_versions = _test_matrices(repo)
+
+    assert php_versions == ["8.2", "8.10"], f"php_versions must be version-ordered; got {php_versions!r}"
+    assert python_versions == ["3.9", "3.11"], f"python_versions must be version-ordered; got {python_versions!r}"
