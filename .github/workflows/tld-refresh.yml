@@ -68,6 +68,14 @@ jobs:
       - name: Activate git hooks
         run: sh scripts/setup-hooks.sh
 
+      # The refresh stages a .php file, so the pre-commit hook enters its PHP
+      # block: the fail-closed `composer vendor` gate plus PHPStan and PHPCS out
+      # of vendor/bin. Without a vendor tree the gate aborts the commit and every
+      # step after it (issue #1793). Unconditional so a dry_run dispatch still
+      # proves the install works on the runner.
+      - name: Install Composer dependencies for the pre-commit PHP gates
+        run: composer install --no-interaction --prefer-dist --no-progress
+
       - name: Refresh arrays from IANA
         id: refresh
         run: |
