@@ -38,6 +38,13 @@ use PHPUnit\Framework\TestCase;
  *            (testDispatchingTickSkipsLogMaintenanceThisTick) must skip log
  *            maintenance THAT tick -- pfb_log_mgmt()'s tail-to-temp-then-cat-over
  *            trim would otherwise race the backgrounded pass it just exec()'d.
+ *   Case G — issue #1769 root cause: a PENDING 'cron' entry (pfb_due_ledger_set_pending)
+ *            bypasses $cron_disabled even with pfb_interval='Disabled', dispatches, and
+ *            skips log maintenance via $dispatched, NOT pfb_update_pass_running() --
+ *            (testPendingCronApplyBypassesDisabledIntervalAndSkipsLogMaintenance) with its
+ *            converse, a plain future-seeded 'cron' entry staying genuinely idle
+ *            (testDisabledIntervalWithFutureSeededCronStaysIdleAndRunsLogMaintenance) --
+ *            the ADR-60 smoke fixture's oracle (tests/smoke/test_log_age_retention.py).
  */
 final class TickEntrypointTest extends TestCase
 {
@@ -731,5 +738,140 @@ final class TickEntrypointTest extends TestCase
 		}
 		$this->assertFalse(@posix_kill($pid, 0),
 			"stray fixture process {$pid} is still alive after kill -- see spawnStrayUpdatePassProcess()");
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1769 root cause (Cases G/H) -- the ADR-60 smoke suite's
+	// log-age-retention module starved pfb_log_mgmt() on its FIRST tick after a
+	// fresh deploy through the $dispatched half of this SAME gate, not the
+	// pfb_update_pass_running() half Cases A-D/above cover: h.deploy()'s package
+	// reinstall loses the pfb_feed_pass_begin() race, pfblockerng_cron.inc calls
+	// pfb_due_ledger_set_pending('cron'), and the smoke fixture (before this fix)
+	// never cleared it for 'cron' (only 'dcc'/'bl') -- so even with
+	// pfb_interval='Disabled' (the module's whole "every tick is idle" premise),
+	// the dispatch condition `(!$cron_disabled && $due['cron']) || $cron_pending`
+	// (pfblockerng_extra.inc) still fires via $cron_pending, bypassing
+	// $cron_disabled entirely.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Documents the real cause in-suite (live smoke cannot run in this
+	 * environment): pins that a PENDING 'cron' entry dispatches even with
+	 * pfb_interval='Disabled', and that pfb_update_pass_running() is FALSE at
+	 * that moment -- ruling out the OTHER half of the gate as the cause of the
+	 * skip.
+	 *
+	 * Scenario:
+	 *   Given pfb_interval='Disabled' and a PENDING 'cron' ledger entry
+	 *   (pfb_due_ledger_set_pending -- e.g. left behind by an install-time feed
+	 *   pass that lost the pfb_feed_pass_begin() race); dcc/bl future-seeded; NO
+	 *   stray process anywhere.
+	 *   When  pfblockerng_tick() is called.
+	 *   Then  the pending 'cron' entry IS dispatched despite $cron_disabled (its
+	 *         pending_apply flag is cleared by the dispatch branch).
+	 *   And   'log' is NOT trimmed -- log maintenance was skipped this tick, caused
+	 *         by $dispatched (pfb_update_pass_running() was FALSE going in, per the
+	 *         precondition below -- not re-checked after the tick, since the
+	 *         dispatch's own recorder-stub argv line would then race the same regex;
+	 *         see installPhpArgvRecorder()'s docblock).
+	 */
+	public function testPendingCronApplyBypassesDisabledIntervalAndSkipsLogMaintenance(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		// Mirrors src/usr/local/www/pfblockerng/pfblockerng.php:63 -- see Case A.
+		pfb_global();
+		$this->ensureLogDir();
+
+		$now = time();
+		pfb_due_ledger_set_pending('cron', $GLOBALS['pfb']['dbdir']);
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl',  $now);
+
+		$this->assertFalse(pfb_update_pass_running(),
+			'precondition: no stray/leaked process may satisfy pfb_update_pass_running() -- '
+			. 'this test isolates to the $dispatched half of the gate (issue #1769)');
+
+		$logPath = $this->logPath('log');
+		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
+
+		// Before.
+		$linesBefore = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame(5, $linesBefore, "Before: expected 'log' to have 5 lines, got {$linesBefore}");
+
+		// Act.
+		pfblockerng_tick();
+
+		// The pending cron entry WAS dispatched despite pfb_interval='Disabled' --
+		// pending_apply bypasses $cron_disabled (pfblockerng_extra.inc).
+		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
+		$this->assertNotNull($cronEntry, 'cron ledger entry must exist after the tick');
+		$this->assertArrayNotHasKey('pending_apply', $cronEntry,
+			'pending_apply must have been cleared by the dispatch branch -- proves the pending '
+			. 'entry genuinely dispatched, not merely persisted untouched');
+
+		// NOT re-checked here: installPhpArgvRecorder()'s docblock above documents why --
+		// the recorder stub's OWN "pfblockerng.php pfb_trigger ..." argv line matches
+		// pfb_update_pass_running()'s regex for its brief post-exec() lifetime, so a
+		// check placed here races that stub, not a real update pass. The precondition
+		// assertion above (BEFORE the tick) is what proves this test isolates to the
+		// $dispatched half of the gate -- pfb_update_pass_running() was FALSE going in.
+		// After: log maintenance was skipped -- 'log' still has its original 5 lines.
+		clearstatcache(TRUE, $logPath);
+		$linesAfter = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame(5, $linesAfter,
+			"After a Disabled-interval tick with a PENDING 'cron' entry: expected 'log' UNTRIMMED "
+			. "at 5 lines (log maintenance skipped via \$dispatched, not pfb_update_pass_running()), "
+			. "got {$linesAfter} -- issue #1769 root cause");
+	}
+
+	/**
+	 * The converse / oracle for the ADR-60 smoke fixture's fix
+	 * (tests/smoke/test_log_age_retention.py): a plain FUTURE-seeded
+	 * (non-pending) 'cron' ledger entry does NOT bypass $cron_disabled, so a
+	 * pfb_interval='Disabled' tick stays genuinely idle and DOES run log
+	 * maintenance -- exactly what the fixed smoke fixture's deployed_vm now
+	 * seeds for 'cron' (mirroring the existing dcc/bl seeds).
+	 *
+	 * Scenario:
+	 *   Given pfb_interval='Disabled' and a FUTURE-seeded (non-pending) 'cron'
+	 *   ledger entry; dcc/bl future-seeded too; no stray process.
+	 *   When  pfblockerng_tick() is called.
+	 *   Then  'cron' is untouched (not dispatched) and 'log' IS trimmed --
+	 *         log maintenance ran on this genuinely idle tick.
+	 */
+	public function testDisabledIntervalWithFutureSeededCronStaysIdleAndRunsLogMaintenance(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		// Mirrors src/usr/local/www/pfblockerng/pfblockerng.php:63 -- see Case A.
+		pfb_global();
+		$this->ensureLogDir();
+
+		$now = time();
+		$this->seedFutureLedgerEntry('cron', $now);
+		$this->seedFutureLedgerEntry('dcc',  $now);
+		$this->seedFutureLedgerEntry('bl',   $now);
+
+		$logPath = $this->logPath('log');
+		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
+
+		$this->assertFalse(pfb_update_pass_running(),
+			'a pfblockerng.php worker process leaked from an earlier test -- see issue #1666');
+
+		// Act.
+		pfblockerng_tick();
+
+		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
+		$this->assertNotNull($cronEntry, 'cron ledger entry must still exist after the tick');
+		$this->assertSame($now + 3600, $cronEntry['next_due'],
+			'cron next_due must be unchanged (not dispatched): expected ' . ($now + 3600)
+			. " got {$cronEntry['next_due']} -- a future-seeded, non-pending 'cron' entry must "
+			. 'NOT bypass $cron_disabled');
+
+		clearstatcache(TRUE, $logPath);
+		$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame(['l3', 'l4', 'l5'], $linesAfter,
+			"After a Disabled-interval tick with a FUTURE-seeded (non-pending) 'cron' entry: "
+			. 'expected \'log\' trimmed to [l3,l4,l5] (genuinely idle tick), got '
+			. var_export($linesAfter, TRUE));
 	}
 }
