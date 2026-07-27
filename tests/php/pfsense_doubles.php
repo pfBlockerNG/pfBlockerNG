@@ -486,6 +486,11 @@ if (!function_exists('file_notice')) {
 	}
 }
 
+if (!function_exists('update_status')) {
+	// no-op: pfblockerng_install.inc progress-text only, never asserted on.
+	function update_status($status) {}
+}
+
 if (!function_exists('is_subsystem_dirty')) {
 	function is_subsystem_dirty($subsystem = '') {
 		if ($subsystem === 'pkg') {
