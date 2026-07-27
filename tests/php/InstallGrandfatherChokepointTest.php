@@ -158,4 +158,32 @@ final class InstallGrandfatherChokepointTest extends TestCase
 			config_get_path('installedpackages/pfblockerng/config/0/pfb_alias_delta_mode')
 		);
 	}
+
+	// --- #1770 follow-up: pfb_keep is genuine evidence, not a marker --------
+
+	/**
+	 * Before-state pin: pfb_keep is never operator-only-typed -- it can be
+	 * present on a box that already ran the (buggy) #281 migration, or via a
+	 * genuine General save. A section carrying {settings_family, pfb_keep}
+	 * must still be treated as a pre-existing install by BOTH grandfathers --
+	 * the chokepoint strips ONLY settings_family, never pfb_keep. Green on
+	 * both sides of the #1770-follow-up fix.
+	 */
+	public function testMarkerPlusPfbKeepStillPinsBothGrandfathers(): void
+	{
+		$this->seedSection(['settings_family' => '4.0', 'pfb_keep' => 'on']);
+
+		$result = pfb_install_oracle_grandfather_region();
+
+		$this->assertSame(
+			'off',
+			$result['feed_default'],
+			'settings_family + pfb_keep is genuine pre-existing config -- feed filter must still pin off'
+		);
+		$this->assertSame(
+			'replace',
+			$result['delta_default'],
+			'settings_family + pfb_keep is genuine pre-existing config -- alias delta mode must still pin replace'
+		);
+	}
 }

@@ -320,6 +320,35 @@ final class MigrationRegistryTest extends TestCase
 		);
 	}
 
+	/**
+	 * Scenario: General section carries ONLY the installer's own settings_family
+	 * marker (issue #1770 follow-up) -- e.g. a fresh install that never saved
+	 * General, then hit a second install/upgrade run. pfb_settings_family_replace()
+	 * seeds the marker before pfb_run_migrations() executes, so the #281 seed must
+	 * not treat a marker-only section as "pre-existing operator config".
+	 *   Given a General section holding only settings_family.
+	 *   When the driver runs.
+	 *   Then issue-#281 must NOT fire: pfb_keep stays unseeded and nothing is written.
+	 */
+	public function testDriverDoesNotSeedPfbKeepOnMarkerOnlyFreshInstall(): void
+	{
+		$this->seedGen(['settings_family' => '4.0']);
+
+		pfb_run_migrations();
+
+		$gen = $this->getGen();
+		$this->assertArrayNotHasKey(
+			'pfb_keep',
+			$gen,
+			'a marker-only General section is a fresh install -- pfb_keep must stay unseeded'
+		);
+		$this->assertSame(
+			[],
+			$this->writeConfigCalls(),
+			'a marker-only General section must not trigger any migration write'
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// E — Driver: already migrated (idempotency / run-once)
 	// -----------------------------------------------------------------------

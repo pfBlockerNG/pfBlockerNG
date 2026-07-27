@@ -11473,9 +11473,16 @@ function pfb_dnsbl_lenient_migrate($dconfig) {
 // A fresh install has no prior section -> NULL (no write); the runtime default in
 // pfb_global() covers it. An existing value (including an explicit '' = off) is never
 // overwritten. Returns the updated config array to persist, or NULL when nothing changes.
+// issue #1770 follow-up: "prior section" is decided over pfb_gconfig_operator_view()
+// -- the installer seeds settings_family before pfb_run_migrations() runs on EVERY
+// install, so a marker-only section (General never saved) must read as empty, not
+// as pre-existing config; otherwise the very next upgrade run seeds pfb_keep, which
+// re-arms the #1770/#1771 install-default grandfathers. The mutated/returned
+// $gconfig keeps settings_family (only the emptiness decision uses the stripped
+// view), so the migration write-back never drops the marker.
 function pfb_keep_migrate($gconfig) {
 
-	if (!is_array($gconfig) || empty($gconfig)) {
+	if (!is_array($gconfig) || empty(pfb_gconfig_operator_view($gconfig))) {
 		return NULL;
 	}
 	if (isset($gconfig['pfb_keep'])) {
