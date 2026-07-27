@@ -3613,7 +3613,10 @@ function pfb_py_sync_status_list_open(string $status_dir): array
  */
 function pfb_validate_suppression_line(string $line, string $family): ?string
 {
-	if (str_starts_with($line, '#') || pfb_is_blank($line)) {
+	// Blank/comment no-op: judge by the first NONBLANK character, so an
+	// indented '#' (ASCII or Unicode whitespace) is still a comment.
+	$stripped = pfb_strip($line);
+	if (pfb_is_empty($stripped) || str_starts_with($stripped, '#')) {
 		return NULL;
 	}
 

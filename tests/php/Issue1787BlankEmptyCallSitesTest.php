@@ -75,6 +75,33 @@ final class Issue1787BlankEmptyCallSitesTest extends TestCase
 		$this->assertTrue(pfb_is_blank_or_comment_line('# comment'));
 	}
 
+	public function testBlankOrCommentLineStripsItsOwnWhitespace(): void
+	{
+		// The helper strips the line itself (Unicode class included), so a
+		// whitespace-only line is blank and a comment marker behind
+		// indentation — which the caller's ASCII trim() cannot remove when
+		// the whitespace is NBSP — is still a comment.
+		$this->assertTrue(pfb_is_blank_or_comment_line('   '));
+		$this->assertTrue(pfb_is_blank_or_comment_line(self::NBSP));
+		$this->assertTrue(pfb_is_blank_or_comment_line(self::NBSP . '# comment'));
+		$this->assertTrue(pfb_is_blank_or_comment_line(self::NBSP . '! ABP comment'));
+		// Data behind the same indentation is still data.
+		$this->assertFalse(pfb_is_blank_or_comment_line(self::NBSP . 'example.com'));
+	}
+
+	public function testSkippableControlLineStripsItsOwnWhitespace(): void
+	{
+		// Same self-stripping contract for the ADR-62 mirror: blank lines,
+		// indented '!'/'//' comments, and an ABP section marker with trailing
+		// whitespace are all control lines; a bracketed IPv6 literal and a
+		// domain stay data.
+		$this->assertTrue(pfb_dnsbl_is_skippable_control_line('   '));
+		$this->assertTrue(pfb_dnsbl_is_skippable_control_line(self::NBSP . '! ABP comment'));
+		$this->assertTrue(pfb_dnsbl_is_skippable_control_line('[Adblock Plus 2.0]' . self::NBSP));
+		$this->assertFalse(pfb_dnsbl_is_skippable_control_line(self::NBSP . '[2604:2dc0::]'));
+		$this->assertFalse(pfb_dnsbl_is_skippable_control_line(self::NBSP . 'example.com'));
+	}
+
 	// --- pfb_validate_suppression_line -----------------------------------
 
 	public function testSuppressionLineOfOnlyUnicodeWhitespaceIsBlankNoOp(): void
@@ -85,6 +112,15 @@ final class Issue1787BlankEmptyCallSitesTest extends TestCase
 		// input error naming an "invalid subnet".
 		$this->assertNull(pfb_validate_suppression_line(self::NBSP, 'ipv4'));
 		$this->assertNull(pfb_validate_suppression_line(self::NBSP . "\u{3000}", 'ipv6'));
+	}
+
+	public function testSuppressionCommentBehindLeadingWhitespaceIsStillAComment(): void
+	{
+		// A comment line is one whose first NONBLANK character is '#' —
+		// leading whitespace (ASCII or Unicode) must not turn it into a
+		// malformed "address".
+		$this->assertNull(pfb_validate_suppression_line('  # ASCII-indented comment', 'ipv4'));
+		$this->assertNull(pfb_validate_suppression_line(self::NBSP . '# NBSP-indented comment', 'ipv4'));
 	}
 
 	// --- pfb_get_hooks ----------------------------------------------------
