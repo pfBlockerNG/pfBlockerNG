@@ -33,6 +33,8 @@ final class CategoryEditPostGuardTest extends TestCase
 	private array $savedGet = [];
 	private array $savedRequest = [];
 	private mixed $savedPfb = null;
+	private bool $hadConfig = false;
+	private mixed $savedConfig = null;
 
 	public static function setUpBeforeClass(): void
 	{
@@ -193,6 +195,12 @@ final class CategoryEditPostGuardTest extends TestCase
 		$this->savedGet     = $_GET;
 		$this->savedRequest = $_REQUEST;
 		$this->savedPfb     = $GLOBALS['pfb'] ?? null;
+		// The persist oracle writes config through the doubled config_set_path(),
+		// so $GLOBALS['config'] is test-mutated state like the superglobals above:
+		// restore it (absent stays absent) or it leaks into every later test in
+		// this process.
+		$this->hadConfig    = array_key_exists('config', $GLOBALS);
+		$this->savedConfig  = $GLOBALS['config'] ?? null;
 		$_POST = $_GET = $_REQUEST = [];
 		// Satisfied MaxMind credentials so the state-loop's geoip-format row
 		// doesn't also trip the (unrelated) credential-notice input error.
@@ -206,6 +214,11 @@ final class CategoryEditPostGuardTest extends TestCase
 		$_GET     = $this->savedGet;
 		$_REQUEST = $this->savedRequest;
 		$GLOBALS['pfb'] = $this->savedPfb;
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->savedConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
 	}
 
 	// --- R1/R2: atype (POST/GET) ------------------------------------------------
