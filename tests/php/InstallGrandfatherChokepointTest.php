@@ -126,4 +126,36 @@ final class InstallGrandfatherChokepointTest extends TestCase
 		);
 	}
 
+	// --- #1771: alias-apply mode ---------------------------------------------
+
+	public function testFreshInstallMarkerOnlySectionLeavesAliasDeltaModeKeyUnset(): void
+	{
+		$this->seedSection(['settings_family' => '4.0']);
+
+		$result = pfb_install_oracle_grandfather_region();
+
+		$this->assertNull(
+			$result['delta_default'],
+			'a marker-only section is a fresh install -- the alias-delta-mode key must stay unset (registry default auto)'
+		);
+		$this->assertNull(
+			config_get_path('installedpackages/pfblockerng/config/0/pfb_alias_delta_mode'),
+			'the chokepoint must not have written pfb_alias_delta_mode on a fresh install'
+		);
+	}
+
+	public function testGenuineUpgradeWithMarkerAndOperatorKeyStillPinsAliasDeltaModeToReplace(): void
+	{
+		// Before-state pin (ADR-40): a marker PLUS a genuine operator key is the
+		// true upgrade path and must still be grandfathered to 'replace'.
+		$this->seedSection(['settings_family' => '4.0', 'pfb_interval' => '4']);
+
+		$result = pfb_install_oracle_grandfather_region();
+
+		$this->assertSame('replace', $result['delta_default']);
+		$this->assertSame(
+			'replace',
+			config_get_path('installedpackages/pfblockerng/config/0/pfb_alias_delta_mode')
+		);
+	}
 }
