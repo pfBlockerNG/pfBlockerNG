@@ -209,6 +209,47 @@ def test_leg_fails_when_every_shard_of_a_full_scope_leg_is_empty(tmp_path: Path)
     assert "pfsense-ce-2.8" in (completed.stdout + completed.stderr)
 
 
+def _two_leg_ce_plus_matrix() -> list[dict[str, str]]:
+    """Production shape (scripts/read-version-matrix.sh --print-ci): TWO ci:true
+    amd64 legs, CE 2.8 + Plus 26.03, 3 shards each -- unlike every other row in
+    this file, which only ever builds a single-leg matrix. Plus listed first:
+    that ordering is what makes the mutation probe below (grouping collapsed
+    to one bucket) demonstrate a false PASS rather than an accidental correct
+    result -- see that test's docstring."""
+    legs = [("pfsense-plus", "26.03"), ("pfsense-ce", "2.8")]
+    return [
+        {"image_name": image_name, "pfsense_version": pfsense_version, "shard": str(i), "shard_total": "3"}
+        for image_name, pfsense_version in legs
+        for i in range(3)
+    ]
+
+
+# ── Required coverage row 1b: two production legs, only ONE fully empty ────── #
+
+
+def test_leg_fails_when_only_one_of_two_production_legs_is_fully_empty(tmp_path: Path) -> None:
+    """Pins the grouping key (`.image_name + "|" + .pfsense_version`) against the
+    REAL two-leg production shape, not just the single-leg matrix every other
+    case here uses. The reviewer hand-verified the two-leg case correct but it
+    was unpinned -- nothing stops a future edit from grouping wrongly (e.g.
+    collapsing every leg into one bucket) and only failing when EVERY leg is
+    empty, letting a healthy leg mask a genuinely empty one. Asserts the gate
+    fails AND that the error names only the bad leg -- that second half pins
+    the per-leg grouping itself, not just a blanket any-empty-anywhere check."""
+    _write_shard_status(tmp_path, "pfsense-plus", "26.03", "0", "selected")
+    _write_shard_status(tmp_path, "pfsense-plus", "26.03", "1", "empty")
+    _write_shard_status(tmp_path, "pfsense-plus", "26.03", "2", "empty")
+    for i in range(3):
+        _write_shard_status(tmp_path, "pfsense-ce", "2.8", str(i), "empty")
+    completed = _run_assert(
+        tmp_path, smoke_result="success", leg_count="6", ci_matrix=_two_leg_ce_plus_matrix(), pytest_filter=""
+    )
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+    output = completed.stdout + completed.stderr
+    assert "pfsense-ce-2.8" in output, output
+    assert "pfsense-plus-26.03" not in output, output
+
+
 # ── Required coverage row 2: #855's legitimate single-empty-shard, pinned ───── #
 
 

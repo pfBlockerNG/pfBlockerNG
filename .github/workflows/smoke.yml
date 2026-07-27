@@ -356,12 +356,13 @@ jobs:
       # issue #1767: download every shard's selection-status marker (see
       # smoke-single.yml's "Upload shard selection-status marker" step) so the
       # assert step below can catch a whole-leg zero-selection that the
-      # per-shard #855 tolerance would otherwise hide. continue-on-error: a run
-      # with NO multi-shard leg (every leg collapsed to shard_total=1) uploads
-      # no marker at all, so the pattern then matches nothing -- the assert
-      # step below fails CLOSED on any multi-shard leg it expected a marker
-      # for but can't find, so a genuine download outage still fails the leg
-      # rather than silently skipping the check.
+      # per-shard #855 tolerance would otherwise hide. continue-on-error:
+      # actions/download-artifact tolerates a zero-match `pattern` on its own
+      # (0 artifacts, exit 0) -- this guards a genuine transient download
+      # failure instead, so an empty shard-status/ tree (marker never
+      # uploaded, or the download itself broke) still reaches the assert step
+      # below, which fails CLOSED on any multi-shard leg it expected a marker
+      # for but can't find.
       - name: Download per-shard selection-status markers
         if: needs.smoke.result == 'success'
         continue-on-error: true
