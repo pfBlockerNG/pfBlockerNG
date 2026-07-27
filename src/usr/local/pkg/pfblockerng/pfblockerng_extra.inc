@@ -3613,7 +3613,7 @@ function pfb_py_sync_status_list_open(string $status_dir): array
  */
 function pfb_validate_suppression_line(string $line, string $family): ?string
 {
-	if (str_starts_with($line, '#') || trim($line) === '') {
+	if (str_starts_with($line, '#') || pfb_is_blank($line)) {
 		return NULL;
 	}
 
@@ -5044,7 +5044,7 @@ function pfb_lint_sh_diagnostics(string $content, string $sh = '/bin/sh', string
 		// sh exits at the FIRST syntax error -- an over-pipe-buffer body can EPIPE the
 		// stdin write loop (failure = 'stdin write failed') while stderr already holds a
 		// real line-mapped diagnostic; prefer that over the generic launch-failed warning.
-		if (trim($result['stderr']) !== '') {
+		if (!pfb_is_blank($result['stderr'])) {
 			return pfb_lint_parse_sh_stderr($result['stderr']);
 		}
 		return [['line' => 1, 'message' => 'sh syntax checker launch failed: ' . $result['failure'], 'severity' => 'warning']];
@@ -5052,7 +5052,7 @@ function pfb_lint_sh_diagnostics(string $content, string $sh = '/bin/sh', string
 	if ($result['exit'] === 0) {
 		return [];
 	}
-	if (trim($result['stderr']) === '') {
+	if (pfb_is_blank($result['stderr'])) {
 		return [['line' => 1, 'message' => "sh syntax checker exited {$result['exit']} with no diagnostic", 'severity' => 'warning']];
 	}
 	return pfb_lint_parse_sh_stderr($result['stderr']);
@@ -5088,7 +5088,7 @@ PYTHON;
 	if ($result['exit'] === 0) {
 		return [];
 	}
-	if ($result['exit'] === 1 && trim($result['stderr']) !== '') {
+	if ($result['exit'] === 1 && !pfb_is_blank($result['stderr'])) {
 		return pfb_lint_parse_py_stderr($result['stderr']);
 	}
 	return [['line' => 1, 'message' => "python syntax checker exited {$result['exit']} with no diagnostic", 'severity' => 'warning']];

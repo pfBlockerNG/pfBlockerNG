@@ -3325,6 +3325,31 @@ function pfb_is_blank(?string $value): bool {
 
 
 /**
+ * TRUE iff $value is absent or the empty string — the actual "is this an empty
+ * string?" answer (issue #1787). Unlike empty(), the string "0" is NOT empty:
+ * it is a real value. Whitespace is content here; use pfb_is_blank() for the
+ * "nothing but whitespace" question.
+ */
+function pfb_is_empty(?string $value): bool {
+	return $value === NULL || $value === '';
+}
+
+
+/**
+ * Right-strip trailing whitespace — ASCII (rtrim()'s default set) plus Unicode
+ * whitespace/separators (\s under /u, \p{Z}) and the BOM — the same character
+ * class pfb_is_blank() calls blank (issue #1787). Leading whitespace and the
+ * value "0" survive untouched. A pathological preg_replace() failure degrades
+ * fail-open to the ASCII-rtrim'd value, so Unicode stripping may not apply for
+ * that call.
+ */
+function pfb_rstrip(string $value): string {
+	$value = rtrim($value);
+	return pfb_preg_replace_safe('/[\s\p{Z}\x{FEFF}]+$/u', '', $value);
+}
+
+
+/**
  * Sanitize a single-line/scalar text field: converts legacy encodings to
  * UTF-8, strips every \p{C} character (Cc/Cf/Co/Cs/Cn -- includes CR/LF/TAB
  * and the BOM, since this contract is single-line), then trims (Unicode
@@ -3356,8 +3381,8 @@ function pfb_sanitize_text(string $text): string {
  * normalizes CRLF/CR/LF line endings to LF, strips every \p{C} character
  * (Cc/Cf/Co/Cs/Cn, plus the BOM) except \n/\t -- so VT/FF/NEL/ZWJ/etc. never
  * become row separators or survive as data (issue #1795) -- then
- * right-strips trailing whitespace per line. The right-strip is
- * Unicode-aware (\p{Z} + tab), so NBSP/ideographic
+ * right-strips trailing whitespace per line (pfb_rstrip). The right-strip is
+ * Unicode-aware, so NBSP/ideographic
  * space/line-separator runs are stripped like ASCII space/tab, and a row of
  * only Unicode whitespace right-strips to '' same as an ASCII-blank row. Does
  * NOT drop blank lines; that is the caller's job (issue #1707). A
@@ -3377,8 +3402,7 @@ function pfb_sanitize_text_area(string $text): string {
 
 	$lines = explode("\n", $text);
 	foreach ($lines as &$line) {
-		$line = rtrim($line, " \t");
-		$line = pfb_preg_replace_safe('/[\p{Z}\t]+$/u', '', $line);
+		$line = pfb_rstrip($line);
 	}
 	unset($line);
 	return implode("\n", $lines);
@@ -4744,7 +4768,7 @@ function pfb_get_hooks($pfbconfig, $when) {
 		if (($hook['when'] ?? '') !== $when) {
 			continue;
 		}
-		if (trim((string) ($hook['script'] ?? '')) === '') {
+		if (pfb_is_blank((string) ($hook['script'] ?? ''))) {
 			continue;
 		}
 		$hooks[] = $hook;
@@ -7888,9 +7912,10 @@ function pfb_dnsbl_unbracket_ip6(string $line): string {
 // together regardless of the list's own declared format. Callers whose '#' handling
 // carries side effects (hpHosts/Spamhaus/CSV-header sniffing in the DNSBL hosts-format
 // branch) check '#' themselves first and do not route it through here. Blank detection is
-// empty($line) -- callers MUST trim() first, or a whitespace-only line won't match.
+// an exact '' match (empty() would eat the valid line "0" -- issue #1787) -- callers MUST
+// trim() first, or a whitespace-only line won't match.
 function pfb_is_blank_or_comment_line(string $line): bool {
-	return empty($line) ||
+	return $line === '' ||
 		str_starts_with($line, '#') ||
 		str_starts_with($line, '!') ||
 		str_starts_with($line, '//');
@@ -11868,7 +11893,7 @@ function pfb_feed_redirect_target($location, $current_url, &$reason, &$pinned) {
 	$reason = '';
 	$pinned = '';
 
-	if (!is_string($location) || trim($location) === '') {
+	if (!is_string($location) || pfb_is_blank($location)) {
 		$reason = 'feed redirect has no target';
 		return FALSE;
 	}
