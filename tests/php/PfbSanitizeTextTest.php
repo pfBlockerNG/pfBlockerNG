@@ -7,10 +7,11 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * pfb_sanitize_text() / pfb_sanitize_text_area() — shared text-field
- * normalizers (issues #1710/#1707): scrub invalid encodings to UTF-8, strip
- * Unicode control characters (and the BOM), and normalize whitespace. The
- * single-line helper strips CR/LF/TAB too; the textarea helper normalizes
- * line endings to LF and right-strips per-line trailing whitespace instead.
+ * normalizers (issues #1710/#1707/#1795): scrub invalid encodings to UTF-8,
+ * strip every \p{C} character (Cc/Cf/Co/Cs/Cn, which subsumes the BOM), and
+ * normalize whitespace. The single-line helper strips CR/LF/TAB too; the
+ * textarea helper normalizes line endings to LF, keeps \n/\t, and
+ * right-strips per-line trailing whitespace instead.
  */
 #[CoversFunction('pfb_sanitize_text')]
 #[CoversFunction('pfb_sanitize_text_area')]
@@ -73,9 +74,38 @@ final class PfbSanitizeTextTest extends TestCase
 		$this->assertSame("a\xC2\xA0b", pfb_sanitize_text("a\xC2\xA0b"));
 	}
 
-	public function testSanitizeTextPreservesZeroWidthJoiner(): void
+	public function testSanitizeTextStripsZeroWidthJoiner(): void
 	{
-		$this->assertSame("a\xE2\x80\x8Db", pfb_sanitize_text("a\xE2\x80\x8Db"));
+		// issue #1795: widened from \p{Cc}+BOM to the full \p{C} set -- ZWJ
+		// (U+200D) is Cf, so it is now stripped like every other format char.
+		$this->assertSame('ab', pfb_sanitize_text("a\xE2\x80\x8Db"));
+	}
+
+	public function testSanitizeTextStripsPrivateUseChar(): void
+	{
+		// U+E000 (private-use area, category Co) -- issue #1795 widening.
+		$this->assertSame('ab', pfb_sanitize_text("a\xEE\x80\x80b"));
+	}
+
+	public function testSanitizeTextStripsUnassignedCodepoint(): void
+	{
+		// U+0378 is unassigned (category Cn) -- issue #1795 widening.
+		$this->assertSame('ab', pfb_sanitize_text("a\xCD\xB8b"));
+	}
+
+	public function testSanitizeTextNeverLeaksASurrogateCodepoint(): void
+	{
+		// Category Cs (surrogate) has no valid UTF-8 encoding (RFC 3629
+		// excludes it) -- PCRE's /u modifier refuses to even run \p{C} over a
+		// subject containing raw surrogate-shaped bytes (probed: preg_replace()
+		// returns NULL, not a Cs match), so the \p{C} strip itself never sees
+		// one. The legacy-encoding recovery step upstream reinterprets the raw
+		// bytes \xED\xA0\x80 as ISO-8859-1 (-> U+00ED U+00A0 U+0080) first; the
+		// resulting U+0080 (a *different* char, category Cc) is then stripped
+		// by the same \p{C} pass -- so no Cs codepoint ever reaches the
+		// output, and the byte that came along with it does not survive
+		// either. Probed exact result (issue #1795), not predicted.
+		$this->assertSame("a\xC3\xAD\xC2\xA0b", pfb_sanitize_text("a\xED\xA0\x80b"));
 	}
 
 	public function testSanitizeTextConvertsInvalidUtf8FromIso88591(): void
@@ -89,10 +119,10 @@ final class PfbSanitizeTextTest extends TestCase
 		$this->assertSame('ab', pfb_sanitize_text("a\xC2\x85b"));
 	}
 
-	public function testSanitizeTextPreservesBidiMarks(): void
+	public function testSanitizeTextStripsBidiMarks(): void
 	{
-		// RLO (U+202E) is a Unicode format char, not \p{Cc} -- must survive.
-		$this->assertSame("a\xE2\x80\xAEb", pfb_sanitize_text("a\xE2\x80\xAEb"));
+		// issue #1795: RLO (U+202E) is Cf, now covered by the widened \p{C} strip.
+		$this->assertSame('ab', pfb_sanitize_text("a\xE2\x80\xAEb"));
 	}
 
 	public function testSanitizeTextTrimsUnicodeWhitespace(): void
@@ -148,6 +178,16 @@ final class PfbSanitizeTextTest extends TestCase
 	public function testSanitizeTextAreaRemovesBom(): void
 	{
 		$this->assertSame('hello', pfb_sanitize_text_area("\xEF\xBB\xBFhello"));
+	}
+
+	public function testSanitizeTextAreaStripsCfCoCnButPreservesNewlineAndTab(): void
+	{
+		// issue #1795: widened from \p{Cc}(-\n\t)+BOM to the full \p{C} set
+		// minus \n/\t. ZWJ (Cf, U+200D), private-use (Co, U+E000), and
+		// unassigned (Cn, U+0378) are now stripped on every line; \n and \t
+		// must still survive untouched.
+		$in = "a\xE2\x80\x8D\tb\ncd\xEE\x80\x80\ne\xCD\xB8f";
+		$this->assertSame("a\tb\ncd\nef", pfb_sanitize_text_area($in));
 	}
 
 	public function testSanitizeTextAreaPreservesUnicodeLineContent(): void
