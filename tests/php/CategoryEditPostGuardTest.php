@@ -165,6 +165,26 @@ final class CategoryEditPostGuardTest extends TestCase
 				. ' return $savemsg ?? null; }'
 			);
 		}
+
+		// Region 7: the persist rowhelper loop (issue #1737 persist-parity
+		// coverage). Anchored on text stable either side of the #1723 in-loop
+		// sanitize block this issue removes -- never on that block itself --
+		// so the same anchors match the region red (block present) and green
+		// (block removed).
+		if (!function_exists('pfb_category_oracle_persist_rowhelper_loop')) {
+			if (!preg_match(
+				'/(\t\t\$rowhelper_exist = array\(\);\n\t\tforeach \(\$_POST as \$key => \$value\) \{\n.*?\n\t\t\})\n\n\t\t\/\/ Remove all undefined rowhelpers/s',
+				$src,
+				$m
+			)) {
+				throw new RuntimeException('test bootstrap: persist rowhelper loop not found');
+			}
+			eval(
+				'function pfb_category_oracle_persist_rowhelper_loop(string $conf_type, $rowid): void {'
+				. $m[1]
+				. ' }'
+			);
+		}
 	}
 
 	protected function setUp(): void
@@ -584,25 +604,75 @@ final class CategoryEditPostGuardTest extends TestCase
 
 	// -- hostile-input rows -----------------------------------------------
 
-	public function testUrlSaveGuardRejectsEmbeddedControlCharacter(): void
+	// issue #1737 contract update: these two rows used to assert the
+	// state-loop's [\p{C}<>"] guard REJECTS an embedded Cc byte / tab. That
+	// shape is now stale -- pfb_sanitize_text() strips \p{Cc}+BOM at
+	// ingestion (before the state loop ever runs), the same #1723 standard
+	// already shipped for the Hooks tab (commit 66da925d) and for header-N/
+	// url-N whitespace elsewhere on this page. An embedded Cc byte is now
+	// silently cleaned, not rejected -- pinned below as sanitize-then-accept.
+	// The Cf/`<`/`"` rows further down prove the guard is still LIVE for
+	// what sanitize does NOT strip (\p{Cf}, `<`, `"`).
+
+	public function testUrlEmbeddedControlCharSanitizedAtIngestion(): void
+	{
+		$value = "US\x01CA";
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'geoip',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame('USCA', $_POST['url-0'], 'the embedded Cc byte must be stripped at ingestion, not merely tolerated');
+	}
+
+	public function testUrlEmbeddedTabCharacterMergedAtIngestion(): void
+	{
+		// The tab (Cc, 0x09) is stripped with no replacement, so 'US<TAB>CA'
+		// merges to 'USCA' -- a knowing consequence of the single-line Cc-strip
+		// contract, not a special case for tab. Crafted-POST territory only: a
+		// browser text input cannot submit a literal tab character.
+		$value = "US\tCA";
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'geoip',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame('USCA', $_POST['url-0'], 'the embedded tab must be stripped (merged, no replacement) at ingestion');
+	}
+
+	// issue #1737 vacuity guards: pfb_sanitize_text() strips only \p{Cc}+BOM
+	// -- never \p{Cf}, `<`, or `"` -- so the state-loop's [\p{C}<>"] character
+	// guard must still be provably live post-sanitize for those.
+
+	public function testUrlSaveGuardStillRejectsRawLessThanAfterSanitize(): void
 	{
 		$this->assertGuardRejects([
 			'aliasname' => 'validname',
 			'state-0'   => 'Enabled',
 			'header-0'  => 'validheader',
-			'url-0'     => "US\x01CA",
-			'format-0'  => 'geoip',
+			'url-0'     => 'http://192.0.2.1/x<y',
+			'format-0'  => 'auto',
 		]);
 	}
 
-	public function testUrlSaveGuardRejectsEmbeddedTabCharacter(): void
+	public function testUrlSaveGuardStillRejectsCfCharacterAfterSanitize(): void
 	{
+		// U+200D ZERO WIDTH JOINER is Cf (format), not Cc -- pfb_sanitize_text()
+		// leaves it intact (issue #1723's "Unicode format characters survive"
+		// contract). \p{C} = \p{Cc} + \p{Cf}, so the state-loop's guard must
+		// still catch it even though ingestion-sanitize does not strip it.
 		$this->assertGuardRejects([
 			'aliasname' => 'validname',
 			'state-0'   => 'Enabled',
 			'header-0'  => 'validheader',
-			'url-0'     => "US\tCA",
-			'format-0'  => 'geoip',
+			'url-0'     => "http://192.0.2.1/x\u{200D}y",
+			'format-0'  => 'auto',
 		]);
 	}
 
@@ -628,17 +698,25 @@ final class CategoryEditPostGuardTest extends TestCase
 		]);
 	}
 
-	public function testUrlSaveGuardRejectsInvalidUtf8FailClosed(): void
+	public function testUrlInvalidUtf8LegacyConvertedAtIngestion(): void
 	{
-		// preg_match() with /u returns FALSE (not 0) on invalid UTF-8; the
-		// guard's `!== 0` compare must treat FALSE as a reject (fail closed).
-		$this->assertGuardRejects([
+		// issue #1737 contract update: pfb_sanitize_text() legacy-encoding-
+		// converts invalid UTF-8 to valid UTF-8 at ingestion, before the state
+		// loop's /u guard ever runs -- the raw bytes never reach the guard as
+		// invalid UTF-8. Downstream format validators (PFB_FILTER_URL, here)
+		// still run on the converted bytes -- an unrelated "Invalid URL" error
+		// from that check is not this guard's concern (assertGuardAccepts
+		// filters for the character guard's own message only).
+		$value = "\xFF\xFE";
+		$post = [
 			'aliasname' => 'validname',
 			'state-0'   => 'Enabled',
 			'header-0'  => 'validheader',
-			'url-0'     => "\xFF\xFE",
+			'url-0'     => $value,
 			'format-0'  => 'auto',
-		]);
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame("\xC3\xBF\xC3\xBE", $_POST['url-0'], 'invalid UTF-8 must be legacy-converted (ISO-8859-1 -> UTF-8) at ingestion');
 	}
 
 	public function testUrlSaveGuardAcceptsSingleQuoteSubDelim(): void
@@ -757,5 +835,98 @@ final class CategoryEditPostGuardTest extends TestCase
 		$_REQUEST['savemsg'] = 'ok <b>';
 		$savemsg = pfb_category_oracle_savemsg();
 		$this->assertSame(htmlspecialchars('ok <b>'), $savemsg, 'a scalar savemsg is still HTML-escaped and rendered');
+	}
+
+	// --- issue #1737: rowhelper header-N/url-N sanitize at ingestion, not
+	// only at persist -- the validation loop must see the SAME bytes the
+	// persist loop later stores. -------------------------------------------
+
+	public function testIngestionSanitizesHeaderBomAndNbspBeforeValidation(): void
+	{
+		$_POST = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Disabled',	// issue #1270: header/url checks are non-empty-, not state-, gated
+			'header-0'  => "\u{00A0}hdr\u{FEFF}",
+			'url-0'     => '',
+			'format-0'  => 'auto',
+		];
+		pfb_category_oracle_aliasname_region('dnsbl');	// ingestion prologue
+		$errors = pfb_category_oracle_state_loop('DNSBL');
+		$this->assertEmpty(
+			array_filter($errors, static fn (string $e): bool => str_contains($e, 'Header field cannot contain spaces')),
+			'a header sanitized to plain word chars at ingestion must not trip the validation \W check'
+		);
+		$this->assertSame('hdr', $_POST['header-0'], 'the ingestion prologue must sanitize header-N (NBSP/BOM stripped)');
+	}
+
+	public function testIngestionSanitizesUrlControlCharAndWhitespaceBeforeValidation(): void
+	{
+		$_POST = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Disabled',	// issue #1270: the control-char guard is non-empty-, not state-, gated
+			'header-0'  => 'validheader',
+			'url-0'     => " https://example.com/x\x01 ",
+			'format-0'  => 'auto',
+		];
+		pfb_category_oracle_aliasname_region('dnsbl');
+		$errors = pfb_category_oracle_state_loop('DNSBL');
+		$this->assertEmpty(
+			array_filter($errors, static fn (string $e): bool => str_contains($e, 'disallowed character')),
+			'a url-N sanitized (Cc stripped, trimmed) at ingestion must not trip the control-char guard'
+		);
+		$this->assertSame(
+			'https://example.com/x',
+			$_POST['url-0'],
+			'the ingestion prologue must sanitize url-N (Cc stripped + leading/trailing whitespace trimmed)'
+		);
+	}
+
+	public function testIngestionPrologueLeavesStateAndFormatSelectValuesUntouched(): void
+	{
+		// Scope pin: the header/url prologue targets ONLY header-N/url-N keys --
+		// a select value under state-N/format-N must survive byte-identical.
+		$_POST = [
+			'aliasname' => 'validname',
+			'state-0'   => "  Enabled\u{00A0}",
+			'header-0'  => 'validheader',
+			'url-0'     => 'http://192.0.2.1/feed',
+			'format-0'  => " auto\u{00A0}",
+		];
+		pfb_category_oracle_aliasname_region('dnsbl');
+		$this->assertSame(
+			"  Enabled\u{00A0}",
+			$_POST['state-0'],
+			'state-N is a select value, not free text -- must not be sanitized by the header/url prologue'
+		);
+		$this->assertSame(
+			" auto\u{00A0}",
+			$_POST['format-0'],
+			'format-N is a select value, not free text -- must not be sanitized by the header/url prologue'
+		);
+	}
+
+	public function testPersistRowhelperLoopStoresIngestionSanitizedHeaderOnce(): void
+	{
+		// Regression pin (passes unchanged pre- and post-fix): the persist loop's
+		// stored value must equal the sanitized+PFB_FILTER_HTML'd form whether
+		// sanitize runs once (ingestion, post-fix) or twice idempotently
+		// (ingestion is a no-op pre-fix, so persist's own #1723 sanitize is the
+		// only pass) -- proves removing the persist-loop sanitize is safe.
+		$GLOBALS['config'] = [];
+		$_POST = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => "\u{00A0}hdr\u{FEFF}",
+			'url-0'     => 'http://192.0.2.1/feed',
+			'format-0'  => 'auto',
+		];
+		pfb_category_oracle_aliasname_region('dnsbl');	// ingestion prologue (no-op pre-fix)
+		pfb_category_oracle_persist_rowhelper_loop('pfblockerngdnsbl', 0);
+
+		$this->assertSame(
+			'hdr',
+			config_get_path('installedpackages/pfblockerngdnsbl/config/0/row/0/header'),
+			'the stored header must equal the sanitized+PFB_FILTER_HTML value regardless of which loop sanitized it'
+		);
 	}
 }

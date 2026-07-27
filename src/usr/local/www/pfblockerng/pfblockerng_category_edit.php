@@ -486,6 +486,16 @@ if ($_POST && isset($_POST['save'])) {
 	}
 	$_POST['custom'] = pfb_sanitize_text_area((string) ($_POST['custom'] ?? ''));
 
+	// issue #1737: rowhelper header-N/url-N single-line columns sanitize at
+	// ingestion too, so the validation loop below and the persist state-loop
+	// see the same bytes (previously sanitized only at persist, after
+	// validation already ran on the raw value).
+	foreach ($_POST as $pfb_post_key => $pfb_post_value) {
+		if (preg_match('/^(?:header|url)-/', (string) $pfb_post_key)) {
+			$_POST[$pfb_post_key] = pfb_sanitize_text((string) $pfb_post_value);
+		}
+	}
+
 	// Validate Select field options
 	$select_options = array(	'action'		=> 'Disabled',
 					'cron'			=> 'Never',
@@ -863,14 +873,9 @@ if ($_POST && isset($_POST['save'])) {
 				// Collect all rowhelper keys
 				$rowhelper_exist[$k_field[1]] = '';
 
-				// issue #1723: sanitize the header/url single-line text columns
-				// before their existing PFB_FILTER_HTML/htmlentities handling below
-				// (state-N/format-N stay untouched -- they are select values, not
-				// free text).
-				if (in_array($k_field[0], array('header', 'url'), TRUE)) {
-					$value = pfb_sanitize_text((string) $value);
-				}
-
+				// issue #1737: header/url already sanitized by the ingestion
+				// prologue above -- plain read here, same bytes the validation
+				// loop evaluated.
 				if (!empty($value) && $k_field[0] != 'url') {
 					$value = pfb_filter($value, PFB_FILTER_HTML, 'Category_edit save');
 				}

@@ -475,6 +475,54 @@ def test_category_edit_custom_list_accepts_wildcard_idn_row(
         tce._del_rowid(vm, tce.CFG_DNSBL, rowid)
 
 
+def test_category_edit_rowhelper_header_sanitized(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """DNSBL alias rowhelper ``header-0`` sanitizes BOM/NBSP at ingestion (#1737).
+
+    Companion to ``CategoryEditPostGuardTest`` (PHPUnit oracle, off-appliance):
+    ``pfblockerng_category_edit.php``'s rowhelper ``header-N``/``url-N`` fields
+    used to sanitize only in the PERSIST loop, after the validation loop had
+    already evaluated the raw (unsanitized) bytes. A new ingestion-prologue
+    loop now runs ``pfb_sanitize_text()`` on every ``header-N``/``url-N`` POST
+    key right before validation, so both loops see the same bytes. The row is
+    kept ``state-0='Disabled'`` -- the header check is non-empty-, not state-,
+    gated (issue #1270), and an empty ``url-0`` on a Disabled row skips every
+    url-N check, so the header sanitizer is the sole variable under test.
+
+    RED (before the fix): the NBSP/BOM survive into the validation loop's own
+    ``\\W`` header check unchanged -- a NBSP is ``\\W``, so the whole save is
+    REJECTED and the seeded (empty) header is left unchanged.
+    GREEN (after): the ingestion prologue strips the NBSP/BOM before the
+    validation loop ever runs, so the row validates and persists as ``'hdr'``.
+    """
+    vm = smoke_vm
+    rowid = tce._free_rowid(vm, tce.CFG_DNSBL)
+    base = f"{tce.CFG_DNSBL}/{rowid}"
+    aliasname = "smokehdrsan"
+    try:
+        assert helpers.config_get(vm, f"{base}/aliasname") == "", f"rowid {rowid} not free (aliasname already set)"
+        assert helpers.config_get(vm, f"{base}/row/0/header") == "", f"rowid {rowid} not free (header already set)"
+
+        raw = "\u00a0hdr\ufeff"
+        expected = "hdr"
+        tce._post_form(
+            webui,
+            tce._dnsbl_payload(rowid, aliasname, **{"header-0": raw}),
+        )
+
+        assert helpers.config_get(vm, f"{base}/aliasname") == aliasname, (
+            "the save aborted (aliasname did not persist) -- the header guard rejected the sanitized value"
+        )
+        assert helpers.config_get(vm, f"{base}/row/0/header") == expected, (
+            f"header not sanitized at ingestion: expected {expected!r}, got "
+            f"{helpers.config_get(vm, f'{base}/row/0/header')!r}"
+        )
+    finally:
+        tce._del_rowid(vm, tce.CFG_DNSBL, rowid)
+
+
 def test_dnsbl_suppression_accepts_single_dot_wildcard_row(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
