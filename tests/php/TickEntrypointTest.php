@@ -592,4 +592,144 @@ final class TickEntrypointTest extends TestCase
 			. "{$linesAfter} -- pfb_log_mgmt() must be skipped on a tick that just dispatched an "
 			. 'update pass (race against the backgrounded pass appending to the same log)');
 	}
+
+	// -----------------------------------------------------------------------
+	// issue #1769 — the pfb_update_pass_running() half of the log-maintenance
+	// gate (the OTHER half of Case D above, which covers $dispatched) was
+	// SILENT on skip: a stray process matching the ps-scan regex closed the
+	// gate with zero trace, which cost a live-tier diagnosis (the smoke suite's
+	// seeded log rode this same unsynchronized gate). This test drives a REAL
+	// background process through the REAL, uninjected pfb_update_pass_running()
+	// ps scan (PfbUpdatePassRunningTest covers the regex itself via an injected
+	// array; this pins the live gate) and asserts BOTH halves of the fix: the
+	// skip still holds (log untrimmed) AND it is no longer silent (a
+	// deferred-maintenance line lands in the log).
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Red->green: before this fix the tail gate's elseif branch did not exist --
+	 * the skip happened with no trace. Assertion (b) below is the one that fails
+	 * RED against the pre-fix worktree (no deferred-maintenance line ever
+	 * reaches the log); assertion (a) pins the pre-existing skip stays put.
+	 *
+	 * Scenario:
+	 *   Given a REAL background process whose /bin/ps -wax command line matches
+	 *   pfb_update_pass_running()'s regex (a tiny `/bin/sh <sandbox>/pfblockerng.php
+	 *   dcc` sleeper -- proven live via the ps scan itself, not an injected array).
+	 *   And   the same 5-line 'log' / log_max_log=3 seeding as Case A/D.
+	 *   And   cron/dcc/bl ledger entries all future-dated (no real dispatch of
+	 *         pfblockerng_tick()'s own jobs this tick -- isolates to the stray
+	 *         process's effect on the gate).
+	 *   When  pfblockerng_tick() is called.
+	 *   Then  (a) 'log' is NOT trimmed -- the ORIGINAL 5 lines are still present,
+	 *         untouched by pfb_log_mgmt().
+	 *   And   (b) a "log maintenance deferred" line IS appended -- the skip is
+	 *         no longer silent.
+	 */
+	public function testTickLogsDeferredMaintenanceWhenAPassIsRunning(): void
+	{
+		$this->seedTickPrereqs('24');
+		// Mirrors src/usr/local/www/pfblockerng/pfblockerng.php:63 -- see Case A.
+		pfb_global();
+		$this->ensureLogDir();
+
+		$now = time();
+		$this->seedFutureLedgerEntry('cron', $now);
+		$this->seedFutureLedgerEntry('dcc',  $now);
+		$this->seedFutureLedgerEntry('bl',   $now);
+
+		$logPath = $this->logPath('log');
+		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
+
+		[$proc, $pid] = $this->spawnStrayUpdatePassProcess();
+		try {
+			// Prove the fixture BEFORE trusting the tick's own scan of it: a real,
+			// uninjected pfb_update_pass_running() call must see this process.
+			$this->assertTrue(pfb_update_pass_running(),
+				'fixture process does not satisfy pfb_update_pass_running() -- ps line does not '
+				. 'match; see spawnStrayUpdatePassProcess()');
+
+			// Before.
+			$linesBefore = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+			$this->assertSame(5, $linesBefore, "Before: expected 'log' to have 5 lines, got {$linesBefore}");
+
+			// Act.
+			pfblockerng_tick();
+
+			// (a) 'log' was NOT trimmed -- the original 5 lines are all still present
+			// (pfb_log_mgmt()'s tail-to-3 trim never ran).
+			clearstatcache(TRUE, $logPath);
+			$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+			$this->assertSame(['l1', 'l2', 'l3', 'l4', 'l5'], array_slice($linesAfter, 0, 5),
+				"After tick with a running update pass: expected 'log' UNTRIMMED (original 5 lines "
+				. 'intact), got ' . var_export($linesAfter, TRUE)
+				. ' -- pfb_log_mgmt() must still be skipped while pfb_update_pass_running() is TRUE');
+
+			// (b) the skip is no longer silent -- a deferred-maintenance line was appended.
+			$deferredLines = array_values(array_filter(
+				$linesAfter,
+				static fn (string $l) => str_contains($l, 'log maintenance deferred')
+			));
+			$this->assertNotEmpty($deferredLines,
+				"After tick with a running update pass: expected a 'log maintenance deferred' line "
+				. 'in \'log\', got ' . var_export($linesAfter, TRUE)
+				. ' -- the skip must be observable, not silent (issue #1769)');
+		} finally {
+			$this->killStrayUpdatePassProcess($proc, $pid);
+		}
+	}
+
+	/**
+	 * Spawn a REAL background process whose /bin/ps -wax command line matches
+	 * pfb_update_pass_running()'s regex: a tiny sleeper script invoked as
+	 * "/bin/sh <sandbox>/pfblockerng.php dcc" -- the literal substring
+	 * "pfblockerng.php" followed by whitespace then "dcc" (not followed by a
+	 * word char) is exactly what the regex scans `ps -wax` for. Array-form
+	 * proc_open (no shell wrapper) so the tracked pid IS the /bin/sh process
+	 * `ps` actually reports, not an intermediary.
+	 *
+	 * @return array{0:resource,1:int} [$proc, $pid]
+	 */
+	private function spawnStrayUpdatePassProcess(): array
+	{
+		$script = "{$this->dbdir}/pfblockerng.php";
+		file_put_contents($script, "#!/bin/sh\nsleep 30\n");
+
+		$descriptors = [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
+		$proc = proc_open(['/bin/sh', $script, 'dcc'], $descriptors, $pipes);
+		$this->assertIsResource($proc, 'failed to spawn the stray update-pass fixture process');
+
+		$status = proc_get_status($proc);
+		$pid    = $status['pid'];
+
+		// Give the ps table a moment to pick the new process up before the caller
+		// trusts it.
+		for ($i = 0; $i < 50; $i++) {
+			if (pfb_update_pass_running()) {
+				break;
+			}
+			usleep(20000);
+		}
+
+		return [$proc, $pid];
+	}
+
+	/** @param resource $proc */
+	private function killStrayUpdatePassProcess($proc, int $pid): void
+	{
+		if (is_resource($proc)) {
+			proc_terminate($proc, 9);	// SIGKILL: no cleanup path runs in the child
+			proc_close($proc);
+		}
+		// Assert it is actually gone -- posix_kill(pid, 0) is the standard
+		// "is this pid alive" probe (no signal sent, just an existence check).
+		for ($i = 0; $i < 50; $i++) {
+			if (!@posix_kill($pid, 0)) {
+				break;
+			}
+			usleep(20000);
+		}
+		$this->assertFalse(@posix_kill($pid, 0),
+			"stray fixture process {$pid} is still alive after kill -- see spawnStrayUpdatePassProcess()");
+	}
 }

@@ -3206,6 +3206,11 @@ function pfblockerng_tick(): void
 	// against a live writer loses whatever it appends meanwhile.
 	if (!$dispatched && !pfb_update_pass_running()) {
 		pfb_log_mgmt();
+	} elseif (!$dispatched) {
+		// issue #1769: the skip above was previously silent -- a running update pass
+		// reads identically to "maintenance ran" from the log, which cost a live-tier
+		// diagnosis. Say so.
+		pfb_logger("\n" . localize_text('Tick: log maintenance deferred (an update pass is running).') . "\n", 1);
 	}
 }
 

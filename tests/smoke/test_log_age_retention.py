@@ -32,6 +32,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import subprocess
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -232,6 +233,57 @@ def _rm_log(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> None:
     vm.ssh("/bin/rm", "-f", path, timeout=timeout)
 
 
+_PASS_RUNNING_OPEN = "<<<PFBPASSRUNNING>>>"
+_PASS_RUNNING_CLOSE = "<<<PFBPASSRUNNINGEND>>>"
+
+
+def _update_pass_running(vm: SmokeVM, *, timeout: float = 30.0) -> bool:
+    """True iff the real, on-box ``pfb_update_pass_running()`` sees a live update pass.
+
+    Driven via ``pfSsh.php`` (h.php_eval — the established helper for running pkg PHP
+    on-box; CLAUDE.md forbids a bare ``php -r``), not an injected ``ps`` snapshot: this
+    probes the SAME live process table ``pfblockerng_tick()``'s log-maintenance gate
+    scans (issue #1769).
+    """
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        f"echo {h._php_str(_PASS_RUNNING_OPEN)} . (pfb_update_pass_running() ? '1' : '0') "
+        f". {h._php_str(_PASS_RUNNING_CLOSE)};"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    out = result.stdout
+    start, end = out.find(_PASS_RUNNING_OPEN), out.find(_PASS_RUNNING_CLOSE)
+    if result.returncode != 0 or start == -1 or end == -1:
+        raise RuntimeError(f"_update_pass_running probe failed: rc={result.returncode} {result.stderr!r} {out!r}")
+    return out[start + len(_PASS_RUNNING_OPEN) : end] == "1"
+
+
+def _wait_update_pass_idle(vm: SmokeVM, *, timeout: float = 60.0, poll_interval: float = 2.0) -> None:
+    """Poll until ``pfb_update_pass_running()`` reports FALSE on-box, or fail loudly.
+
+    issue #1769: ``pfblockerng_tick()``'s log-maintenance gate silently skips
+    ``pfb_log_mgmt()`` whenever ANY process matches ``pfb_update_pass_running()``'s
+    ps-scan (confirmed live: a stray matching process left a seeded log untrimmed with
+    zero trace). A maintenance-sensitive tick that races that gate unsynchronized reads
+    as a false trim failure. This cap is SALVAGE only (testing.md: a timeout never does
+    assertion work) — it bounds how long we wait for the real "idle" event and fails with
+    a distinguishable message when the box never reaches it; it never substitutes for
+    the event itself.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _update_pass_running(vm):
+            return
+        time.sleep(poll_interval)
+    if not _update_pass_running(vm):
+        return
+    raise RuntimeError(
+        f"stuck/environment: pfb_update_pass_running() never went idle within {timeout}s -- "
+        "an update pass (or a stray matching process) held the tick's log-maintenance gate "
+        "closed for the whole wait (issue #1769)"
+    )
+
+
 def _resolve_dnslog_path(vm: SmokeVM) -> str:
     """Return the effective dnslog path: chrooted if /var/unbound's log dir exists.
 
@@ -306,13 +358,31 @@ def test_age_cutoff_trims_expired_lines_host_path_ip_blocklog(deployed_vm: Smoke
         assert inode_before, "BEFORE: could not read ip_blocklog inode — file may not exist"
 
         # --- When ---
+        # issue #1769: synchronize on the real state before this maintenance-sensitive
+        # tick. pfblockerng_tick()'s log-maintenance gate silently skips pfb_log_mgmt()
+        # whenever ANY process matches pfb_update_pass_running()'s ps-scan (confirmed
+        # live: a stray matching process left a seeded log untrimmed with zero trace) --
+        # wait for idle first so this test's own trim assertion below isn't racing an
+        # unrelated process still in the table.
+        _wait_update_pass_idle(vm)
         h.reload(vm, "tick")
 
         # --- Then ---
         content_after = _read_file(vm, LOG_IP_BLOCKLOG)
+        if content_after != kept:
+            # issue #1769: self-diagnosing failure -- if the log-maintenance gate was
+            # closed by a running update pass, the product now says so; surface that
+            # (and the log tail) so a future starvation doesn't need a live-VM diagnosis.
+            pfb_log_tail = _read_file(vm, f"{PFB_LOGDIR}/pfblockerng.log")[-2000:]
+            deferred_seen = "log maintenance deferred" in pfb_log_tail
+        else:
+            pfb_log_tail, deferred_seen = "", False
         assert content_after == kept, (
             f"AFTER: ip_blocklog should hold exactly the 2 non-expired lines.\n"
-            f"  expected: {kept!r}\n  got: {content_after!r}"
+            f"  expected: {kept!r}\n  got: {content_after!r}\n"
+            f"  'log maintenance deferred' line present in pfblockerng.log tail: {deferred_seen} "
+            "(TRUE would mean an update pass held the gate closed despite the idle wait -- issue #1769)\n"
+            f"  pfblockerng.log tail: {pfb_log_tail!r}"
         )
         inode_after = _get_inode(vm, LOG_IP_BLOCKLOG)
         assert inode_after == inode_before, (
