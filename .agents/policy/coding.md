@@ -76,10 +76,13 @@ the field, before any evaluation of its contents (validation, comparison, persis
 never an ad-hoc `trim`/`str_replace` chain and never re-sanitized downstream:
 
 - **Single-line fields:** `pfb_sanitize_text()` — legacy-encoding→UTF-8 scrub, strips
-  control characters (Cc) + BOM, Unicode-aware trim. Unicode format characters
-  (ZWJ/ZWNJ, bidi marks) survive: fields accept Unicode text, especially comments.
+  every `\p{C}` character (Cc/Cf/Co/Cs/Cn, which subsumes the BOM) + BOM, Unicode-aware
+  trim. Unicode format characters (ZWJ/ZWNJ, bidi marks) do NOT survive as of issue
+  #1795: this package has no use for them, and letting them through was the seam that
+  let the same input be simultaneously "sanitized" here and "rejected" by a stricter
+  `\p{C}` validator downstream (issue #756/#1761).
 - **Multi-line textarea fields:** `pfb_sanitize_text_area()` at ingestion — CRLF/CR
-  normalized to LF, control characters stripped except `\n`/`\t`, each line
+  normalized to LF, every `\p{C}` character stripped except `\n`/`\t`, each line
   right-stripped (indentation survives) — then persisted with a plain `base64_encode()`.
   `pfb_text_area_encode()` (`base64_encode(pfb_sanitize_text_area(...))`) remains only
   for programmatic writers whose encode call itself IS the ingestion point (the
