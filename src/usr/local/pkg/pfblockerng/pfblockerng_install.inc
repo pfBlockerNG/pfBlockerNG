@@ -593,8 +593,8 @@ update_status(" Reverse DNS lookup default...");
 // marker so a marker-only section (General never saved -- genuine fresh install)
 // reads empty here too, same chokepoint as the #1770/#1771 grandfathers above.
 $pfb_rdns_seed = pfb_rdns_seed_value(
-	pfb_gconfig_operator_view(config_get_path('installedpackages/pfblockerng/config/0', [])),
-	config_get_path('installedpackages/pfblockerngipsettings/config/0', [])
+	pfb_gconfig_operator_view(PfbConfig::readSection('installedpackages/pfblockerng/config/0')),
+	PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0')
 );
 if ($pfb_rdns_seed !== null) {
 	config_set_path('installedpackages/pfblockerngipsettings/config/0/enable_rdns', $pfb_rdns_seed);
