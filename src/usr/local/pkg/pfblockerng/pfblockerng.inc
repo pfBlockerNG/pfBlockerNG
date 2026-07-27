@@ -7653,16 +7653,16 @@ function pfb_dnsbl_strip_bom(string $line): string {
 }
 
 
-// Per-line scrub for the DNSBL feed parse loop, extracted verbatim from the loop.
-// Contract pinned by DnsblScrubLineTest.
+// Per-line scrub for the DNSBL feed parse loop (issue #1797). CR is removed
+// EVERYWHERE (a lone CR embeds mid-row after fgets()); the trim charlist is
+// ASCII-only so a byte-wise trim can never slice a multi-byte character and
+// create invalid UTF-8. Unicode whitespace hygiene (trailing NBSP etc.) is
+// the whole-file normalize stage's job. Contract pinned by DnsblScrubLineTest.
 function pfb_dnsbl_scrub_line(string $line): string {
-	// Remove any '^M' characters
 	if (strpos($line, "\r") !== FALSE) {
-		$line = rtrim($line, "\x00..\x1F");
+		$line = str_replace("\r", '', $line);
 	}
-
-	// Remove invalid charaters
-	return trim($line, " \t\n\r\0\x0B\xC2\xA0");
+	return trim($line, " \t\n\0\x0B");
 }
 
 
