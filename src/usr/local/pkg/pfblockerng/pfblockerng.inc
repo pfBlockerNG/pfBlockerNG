@@ -17183,6 +17183,23 @@ function pfblockerng_sync_on_changes() {
 					$protocol	= $sh['varsyncprotocol'];
 					$username	= $sh['varsyncusername'] ?: 'admin';
 
+					// issue #1778: PFB_FILTER_HOSTNAME (pfblockerng_sync.php, #1731)
+					// accepts and persists a Unicode (IDN) sync target, but the gate
+					// below and the XMLRPC connection (pfblockerng_do_xmlrpc_sync())
+					// are ASCII-only -- punycode-convert at the point of use so both
+					// see a candidate they can validate/dial. Keep the original for
+					// the human-facing log lines -- the operator sees the target as
+					// configured, not its punycode form. A conversion failure leaves
+					// $sync_to_ip unchanged, so the existing gate rejects it exactly
+					// as before. An ASCII target (the common case) is untouched.
+					$sync_to_ip_display = $sync_to_ip;
+					if (preg_match('/[^\x00-\x7F]/', (string) $sync_to_ip)) {
+						$sync_to_ip_ascii = idn_to_ascii((string) $sync_to_ip);
+						if (!empty($sync_to_ip_ascii)) {
+							$sync_to_ip = $sync_to_ip_ascii;
+						}
+					}
+
 					$validate = TRUE;
 					$error = '| ';
 
@@ -17200,18 +17217,18 @@ function pfblockerng_sync_on_changes() {
 					}
 
 					if ($validate) {
-						pfb_logger("\n Sync with [ {$protocol}://{$sync_to_ip}:{$port} ] ...", 1);
+						pfb_logger("\n Sync with [ {$protocol}://{$sync_to_ip_display}:{$port} ] ...", 1);
 						$success = pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $password, $synctimeout);
 
 						if ($success) {
 							pfb_logger(" done.\n", 1);
-							logger(LOG_NOTICE, localize_text("XMLRPC sync to [ %s ] completed successfully.", "{$sync_to_ip}:{$port}"), LOG_PREFIX_PKG_PFBLOCKERNG);
+							logger(LOG_NOTICE, localize_text("XMLRPC sync to [ %s ] completed successfully.", "{$sync_to_ip_display}:{$port}"), LOG_PREFIX_PKG_PFBLOCKERNG);
 						} else {
 							pfb_logger(" Failed!\n", 1);
 						}
 					} else {
 						pfb_logger(" terminated due to the following error(s): {$error}", 1);
-						logger(LOG_ERR, localize_text("XMLRPC sync to [ %s:%s ] terminated due to the following error(s): %s", $sync_to_ip, $port, $error), LOG_PREFIX_PKG_PFBLOCKERNG);
+						logger(LOG_ERR, localize_text("XMLRPC sync to [ %s:%s ] terminated due to the following error(s): %s", $sync_to_ip_display, $port, $error), LOG_PREFIX_PKG_PFBLOCKERNG);
 					}
 				}
 			}
