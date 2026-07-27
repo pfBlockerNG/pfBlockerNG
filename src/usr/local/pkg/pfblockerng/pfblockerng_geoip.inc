@@ -286,8 +286,8 @@ foreach (array('Top Spammers', 'Africa', 'Antarctica', 'Asia', 'Europe', 'North 
 }
 
 $pconfig = array();
-$pconfig['countries4']		= explode(',', $pfb['geoipconfig']['countries4']);
-$pconfig['countries6']		= explode(',', $pfb['geoipconfig']['countries6']);
+$pconfig['countries4']		= explode(',', $pfb['geoipconfig']['countries4'] ?? '');
+$pconfig['countries6']		= explode(',', $pfb['geoipconfig']['countries6'] ?? '');
 $pconfig['action'] = pfb_group_action_valid($pfb['geoipconfig']['action'] ?? NULL, 'geoip') ? $pfb['geoipconfig']['action'] : 'Disabled';
 $pconfig['aliaslog']		= $pfb['geoipconfig']['aliaslog']			?: 'enabled';
 
@@ -846,10 +846,10 @@ $pconfig['enable_dedup']	= $pfb['repconfig']['enable_dedup'];
 $pconfig['p24_dmax_var']	= $pfb['repconfig']['p24_dmax_var'];
 $pconfig['ccwhite']		= $pfb['repconfig']['ccwhite'];
 $pconfig['ccblack']		= $pfb['repconfig']['ccblack'];
-$pconfig['ccexclude']		= explode(',', $pfb['repconfig']['ccexclude']);
+$pconfig['ccexclude']		= explode(',', $pfb['repconfig']['ccexclude'] ?? '');
 $pconfig['et_header']		= $pfb['repconfig']['et_header'];
-$pconfig['etblock']		= explode(',', $pfb['repconfig']['etblock']);
-$pconfig['etmatch']		= explode(',', $pfb['repconfig']['etmatch']);
+$pconfig['etblock']		= explode(',', $pfb['repconfig']['etblock'] ?? '');
+$pconfig['etmatch']		= explode(',', $pfb['repconfig']['etmatch'] ?? '');
 
 
 // Select field options

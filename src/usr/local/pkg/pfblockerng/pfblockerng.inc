@@ -1419,6 +1419,14 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		}
 	}
 
+	// issue #1768: ON_OFF/NUM skip the early return above (NULL==''/0 are legitimate
+	// stored values), but still flow into the scalar ops below (preg_match/htmlspecialchars).
+	// Coerce NULL -> '' here (not is_null-guard) so 'NULL==""' stays byte-identical while
+	// null-deprecations stop; caller-side Undefined-array-key warnings are untouched.
+	if (!is_array($input)) {
+		$input = (string) ($input ?? '');
+	}
+
 	// issue #1070: every non-FILE_MIME type runs scalar string ops below (htmlspecialchars/
 	// preg_match) that PHP 8 TypeErrors on an array -- reject an array up front, before any
 	// such op runs, for those types. issue #1139: must run before the control-char loop
@@ -2943,8 +2951,8 @@ function pfb_global() {
 		}
 	}
 
-	$pfb['supp']		= $pfb['ipconfig']['suppression'];			// Enable Suppression
-	$pfb['cc']		= $pfb['ipconfig']['database_cc'];			// Disable Country database CRON updates
+	$pfb['supp']		= $pfb['ipconfig']['suppression'] ?? '';		// Enable Suppression
+	$pfb['cc']		= $pfb['ipconfig']['database_cc'] ?? '';		// Disable Country database CRON updates
 	$pfb['maxmind_locale']	= $pfb['ipconfig']['maxmind_locale']	?: 'en';	// MaxMind Localized Language setting
 	$pfb['asn_reporting']	= $pfb['ipconfig']['asn_reporting']	?: 'disabled';	// ASN Reporting
 	$pfb['asn_token']	= $pfb['ipconfig']['asn_token']		?: '';		// ASN Token (IPinfo)
@@ -3013,16 +3021,16 @@ function pfb_global() {
 	$pfb['dnsbl_idn_block_malicious']	= PfbConfig::read('pfb_idn_block_malicious');		// Confusable: block malicious homoglyphs (default 'on')
 	$pfb['dnsbl_idn_escalate_suspicious']	= PfbConfig::read('pfb_idn_escalate_suspicious');	// Confusable: escalate suspicious mixed-script to block (opt-in)
 	$pfb['dnsbl_regex']	= $pfb['dnsblconfig']['pfb_regex'];			// DNSBL Resolver python regex
-	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'];		// DNSBL Resolver python regex list
+	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'] ?? '';	// DNSBL Resolver python regex list
 	$pfb['dnsbl_regex_cap']	= PfbConfig::read('pfb_regex_cap');			// DNSBL Resolver python opt-in "Limit long/complex regex" static cap
 	$pfb['dnsbl_cname']	= $pfb['dnsblconfig']['pfb_cname'];			// DNSBL Resolver python CNAME Validation
 	$pfb['dnsbl_tld_allow']	= $pfb['dnsblconfig']['pfb_pytld'];			// DNSBL Resolver TLD Allow option
 	$pfb['dnsbl_py_nolog']	= $pfb['dnsblconfig']['pfb_py_nolog'];			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
 	$pfb['dnsbl_noaaaa']	= $pfb['dnsblconfig']['pfb_noaaaa'];			// DNSBL Resolver python no AAAA
-	$pfb['dnsbl_noaaaa_list']=$pfb['dnsblconfig']['pfb_noaaaa_list'];		// DNSBL Resolver python no AAAA list
+	$pfb['dnsbl_noaaaa_list']=$pfb['dnsblconfig']['pfb_noaaaa_list'] ?? '';	// DNSBL Resolver python no AAAA list
 
 	$pfb['dnsbl_gp']		= $pfb['dnsblconfig']['pfb_gp'];		// DNSBL Resolver python - DNSBL Bypass
-	$pfb['dnsbl_gp_bypass_list']	= $pfb['dnsblconfig']['pfb_gp_bypass_list'];	// DNSBL Resolver python - List of Local IPs to bypass DNSBL
+	$pfb['dnsbl_gp_bypass_list']	= $pfb['dnsblconfig']['pfb_gp_bypass_list'] ?? '';	// DNSBL Resolver python - List of Local IPs to bypass DNSBL
 
 	// SafeSearch — read via gateway (ADR-29).
 	$pfb['safesearch_enable']	= PfbConfig::read('safesearch_enable');
@@ -3380,6 +3388,10 @@ function pfb_sanitize_text_area(string $text): string {
 // Function to decode alias custom entry box.
 // Default (False, True): Return as string with comments
 function pfb_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
+
+	// issue #1768: untyped $text feeds base64_decode() below; coerce NULL -> ''
+	// so an absent/unset caller stops emitting the null-deprecation.
+	$text = (string) ($text ?? '');
 
 	if ($mode) {
 		$custom = array();
@@ -15309,7 +15321,9 @@ function pfb_daemon_filterlog() {
 			if ($log_type == 'BSD' && empty($f[1])) {
 				array_splice($f, 1, 1);
 			}
-			$d = explode(',', $f[$f_pos]);
+			// issue #1768: a short/malformed filterlog line has no field at $f_pos --
+			// guard so explode() doesn't get NULL.
+			$d = explode(',', $f[$f_pos] ?? '');
 
 			// Resolve the Tracker ID: reparse at most once per unknown tracker; persistent
 			// negative cache prevents repeated reparses for anchor/trackerless rules.

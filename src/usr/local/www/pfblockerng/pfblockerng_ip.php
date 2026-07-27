@@ -61,15 +61,15 @@ $pconfig['maxmind_account']	= $pfb['iconfig']['maxmind_account']			?: '';
 // A GET renders blank; a validation-error redisplay preserves the just-typed $_POST value
 // (like every other field), never PfbConfig/iconfig.
 $pconfig['maxmind_key']		= $_POST['maxmind_key'] ?? '';
-$pconfig['inbound_interface']	= explode(',', $pfb['iconfig']['inbound_interface'])	?: array();
+$pconfig['inbound_interface']	= explode(',', $pfb['iconfig']['inbound_interface'] ?? '')	?: array();
 $pconfig['inbound_deny_action']	= $pfb['iconfig']['inbound_deny_action']		?: 'block';
-$pconfig['outbound_interface']	= explode(',', $pfb['iconfig']['outbound_interface'])	?: array();
+$pconfig['outbound_interface']	= explode(',', $pfb['iconfig']['outbound_interface'] ?? '')	?: array();
 $pconfig['outbound_deny_action']= $pfb['iconfig']['outbound_deny_action']		?: 'reject';
 $pconfig['enable_float']	= $pfb['iconfig']['enable_float']			?: '';
 $pconfig['pass_order']		= $pfb['iconfig']['pass_order']				?: 'order_0';
 $pconfig['autorule_suffix']	= $pfb['iconfig']['autorule_suffix']			?: 'autorule';
 $pconfig['killstates']		= $pfb['iconfig']['killstates']				?: '';
-$pconfig['v4suppression']	= base64_decode($pfb['iconfig']['v4suppression'])	?: '';
+$pconfig['v4suppression']	= base64_decode($pfb['iconfig']['v4suppression'] ?? '')	?: '';
 // ADR-53 review finding B: '?? ""' on the array read -- v6suppression (unlike
 // v4suppression) is NEVER install-migrated, so it is absent from config.xml
 // on every install until this page's first post-upgrade save.

@@ -849,7 +849,8 @@ if ($_POST && isset($_POST['save'])) {
 
 		// Set flag to update CustomList on next Cron|Force update|Force reload
 		// foreign key: installedpackages/{conf_type} list structure not in registry
-		if (base64_decode(config_get_path("installedpackages/{$conf_type}/config/{$rowid}/custom")) != $_POST['custom']) {
+		// issue #1768: no default -> config_get_path() returns NULL on a fresh row -> base64_decode(NULL) deprecation.
+		if (base64_decode(config_get_path("installedpackages/{$conf_type}/config/{$rowid}/custom", '')) != $_POST['custom']) {
 			$action = $_POST['action'];
 			$aname  = $_POST['aliasname'];
 
