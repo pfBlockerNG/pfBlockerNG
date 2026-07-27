@@ -1658,6 +1658,17 @@ function pfb_settings_family_record(string $family): bool
 	}
 }
 
+/**
+ * The operator's view of a config section: installer-seeded schema markers
+ * stripped, so "is this pre-existing operator configuration?" decisions
+ * (install-default grandfathers, migrations, seeds) never fire on the
+ * installer's own bookkeeping (issues #1770/#1771/#1775).
+ */
+function pfb_gconfig_operator_view(array $gconfig): array {
+	unset($gconfig['settings_family']);
+	return $gconfig;
+}
+
 function pfb_settings_downgrade_context_target(string $current_family): ?string
 {
 	if (!isset(PFB_SETTINGS_FAMILY_RANK[$current_family])) {

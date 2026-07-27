@@ -3396,6 +3396,19 @@
             }
         ]
     },
+    "pfb_gconfig_operator_view": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "gconfig",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_get_gateways": {
         "returnsRef": false,
         "returnType": null,

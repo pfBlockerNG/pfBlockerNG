@@ -654,7 +654,9 @@ $pfb_gcfg = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 // (pfb_settings_family_replace() seeds it before this read on every install),
 // not operator data -- computing "pre-existing config" over it turned the
 // fresh-install branch of both install-default grandfathers into dead code.
-unset($pfb_gcfg['settings_family']);
+// pfb_gconfig_operator_view() is the shared chokepoint for this decision
+// (also used by pfb_keep_migrate() and the rdns seed read below -- #1775).
+$pfb_gcfg = pfb_gconfig_operator_view($pfb_gcfg);
 $pfb_gcfg = empty($pfb_gcfg) ? NULL : $pfb_gcfg;
 $pfb_feed_default = pfb_feed_filter_install_default($pfb_gcfg);
 if ($pfb_feed_default !== null) {
