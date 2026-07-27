@@ -38,6 +38,11 @@ use PHPUnit\Framework\TestCase;
  *            (testDispatchingTickSkipsLogMaintenanceThisTick) must skip log
  *            maintenance THAT tick -- pfb_log_mgmt()'s tail-to-temp-then-cat-over
  *            trim would otherwise race the backgrounded pass it just exec()'d.
+ *   Case E — issue #1769: the pfb_update_pass_running() half of the gate's skip
+ *            must be observable, not silent (testTickLogsDeferredMaintenanceWhenAPassIsRunning).
+ *   Case F — issue #1769: the $dispatched half of the SAME gate (Case D's skip)
+ *            was ALSO silent -- now observable via logger()/syslog, NOT $pfb['log']
+ *            (Case D pins that file unchanged) -- (testDispatchingTickLogsSkippedMaintenanceMessage).
  *   Case G — issue #1769 root cause: a PENDING 'cron' entry (pfb_due_ledger_set_pending)
  *            bypasses $cron_disabled even with pfb_interval='Disabled', dispatches, and
  *            skips log maintenance via $dispatched, NOT pfb_update_pass_running() --
@@ -151,6 +156,10 @@ final class TickEntrypointTest extends TestCase
 		$GLOBALS['pfb']['php']       = $this->installPhpArgvRecorder();
 
 		$GLOBALS['config'] = [];
+
+		// issue #1769: pfsense_doubles.php's logger() double records every call here
+		// (real syslog() has no portable off-appliance read-back) -- fresh per test.
+		$GLOBALS['pfb_test_logger_calls'] = [];
 	}
 
 	protected function tearDown(): void
@@ -200,6 +209,7 @@ final class TickEntrypointTest extends TestCase
 		} else {
 			unset($GLOBALS['g']['unbound_chroot_path']);
 		}
+		unset($GLOBALS['pfb_test_logger_calls']);
 		$this->rrmdir($this->dbdir);
 	}
 
@@ -632,6 +642,15 @@ final class TickEntrypointTest extends TestCase
 	 *         untouched by pfb_log_mgmt().
 	 *   And   (b) a "log maintenance deferred" line IS appended -- the skip is
 	 *         no longer silent.
+	 *
+	 * issue #1769 review: this branch is deliberately KEPT on pfb_logger()/$pfb['log']
+	 * (unlike the NEW $dispatched-skip message added alongside it -- see
+	 * testDispatchingTickLogsSkippedMaintenanceMessage below, which uses logger()/syslog
+	 * because Case D pins 'log' unchanged for that path) -- this test and the ADR-60
+	 * smoke suite's self-diagnosing failure output both already assert on this exact
+	 * surface. Tradeoff stated explicitly, not silently kept: a long-lived stray/leaked
+	 * update pass would make this line accumulate in the very file it's deferring
+	 * maintenance on, bounded by how long that pass survives (transient in practice).
 	 */
 	public function testTickLogsDeferredMaintenanceWhenAPassIsRunning(): void
 	{
@@ -741,10 +760,75 @@ final class TickEntrypointTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// issue #1769 Case F — the $dispatched half of the log-maintenance gate
+	// (Case D's skip) was ALSO silent, same as Case E's pfb_update_pass_running()
+	// half. Sibling to testTickLogsDeferredMaintenanceWhenAPassIsRunning, reusing
+	// Case D's exact dispatch setup.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Red->green: before this fix, a dispatching tick fell through BOTH the
+	 * `if (!$dispatched && ...)` and the old `elseif (!$dispatched)` with no
+	 * logger() call at all -- $GLOBALS['pfb_test_logger_calls'] stayed empty.
+	 * The assertion below is the one that fails RED against the pre-fix worktree.
+	 *
+	 * Scenario:
+	 *   Given pfb_interval='24' and a 'cron' ledger entry 10 s past due
+	 *   (dispatches this tick, same as Case D); dcc/bl are NOT due.
+	 *   When  pfblockerng_tick() is called.
+	 *   Then  the feed cron IS dispatched (mark_ran_anchored advances 'cron',
+	 *         same tripwire as Case D).
+	 *   And   a logger() call with "log maintenance skipped" text was recorded --
+	 *         the $dispatched skip is no longer silent. Deliberately NOT asserted
+	 *         via 'log' content: Case D pins that file byte-unchanged for this
+	 *         exact scenario, so this message cannot land there (see the tail-gate
+	 *         comment in pfblockerng_extra.inc).
+	 */
+	public function testDispatchingTickLogsSkippedMaintenanceMessage(): void
+	{
+		$this->seedTickPrereqs('24');
+		// Mirrors src/usr/local/www/pfblockerng/pfblockerng.php:63 -- see Case A.
+		pfb_global();
+		$this->ensureLogDir();
+
+		$now      = time();
+		$interval = 86400;	// pfb_interval='24' hours
+
+		pfb_due_ledger_write_entry('cron', [
+			'last_run' => $now - $interval - 10,
+			'next_due' => $now - 10,	// 10 s past due -- dispatches this tick
+			'jitter'   => 0,
+		], $GLOBALS['pfb']['dbdir']);
+
+		// Prevent a real exec() dispatch for dcc/bl -- isolate to the cron dispatch.
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl',  $now);
+
+		// Act.
+		pfblockerng_tick();
+
+		// The feed cron WAS dispatched -- same tripwire as Case D.
+		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
+		$this->assertNotNull($cronEntry, 'cron ledger entry must exist after the tick');
+		$this->assertGreaterThan($now - 10, $cronEntry['next_due'],
+			'cron next_due must have advanced (dispatched this tick): expected > ' . ($now - 10)
+			. " got {$cronEntry['next_due']} -- test setup did not actually dispatch the cron");
+
+		$skipped = array_values(array_filter(
+			$GLOBALS['pfb_test_logger_calls'] ?? [],
+			static fn (array $c) => str_contains($c['message'], 'log maintenance skipped')
+		));
+		$this->assertNotEmpty($skipped,
+			'expected a "log maintenance skipped" logger() call after a dispatching tick, got '
+			. var_export($GLOBALS['pfb_test_logger_calls'] ?? [], TRUE)
+			. ' -- the $dispatched half of the log-maintenance gate must be observable, not silent (issue #1769)');
+	}
+
+	// -----------------------------------------------------------------------
 	// issue #1769 root cause (Cases G/H) -- the ADR-60 smoke suite's
 	// log-age-retention module starved pfb_log_mgmt() on its FIRST tick after a
 	// fresh deploy through the $dispatched half of this SAME gate, not the
-	// pfb_update_pass_running() half Cases A-D/above cover: h.deploy()'s package
+	// pfb_update_pass_running() half Cases A-F cover: h.deploy()'s package
 	// reinstall loses the pfb_feed_pass_begin() race, pfblockerng_cron.inc calls
 	// pfb_due_ledger_set_pending('cron'), and the smoke fixture (before this fix)
 	// never cleared it for 'cron' (only 'dcc'/'bl') -- so even with

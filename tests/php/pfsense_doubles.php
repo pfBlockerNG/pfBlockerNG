@@ -922,6 +922,26 @@ if (!function_exists('system_syslogd_start')) {
 	}
 }
 
+// --- issue #1769: logger() capture double ---
+//
+// pfSense core's logger() (Plus/master) and extra.inc's own function_exists()-guarded
+// CE-compat fallback (pfblockerng_extra.inc, for released CE <= 2.8.1) both ultimately
+// call the REAL syslog() -- genuinely uncapturable off-appliance (no portable syslog
+// read-back in CI/dev boxes). Record each call instead so tests can assert on it
+// directly. Defining logger() HERE means extra.inc's function_exists('logger') guard
+// sees it already defined and never defines its own fallback -- bootstrap.php's
+// "Coupling caveat" note flags exactly this: it drops `logger` from the package
+// function inventory golden snapshot (regenerated alongside this double, same commit).
+if (!function_exists('logger')) {
+	function logger(int $priority, mixed $message, ?string $prefix = null, ?int $facilities = null): void {
+		$GLOBALS['pfb_test_logger_calls'][] = [
+			'priority' => $priority,
+			'message'  => is_string($message) ? $message : var_export($message, true),
+			'prefix'   => $prefix,
+		];
+	}
+}
+
 // --- pfb_tracker() doubles (#482) ---
 //
 // pfb_tracker() calls four pfSense interface helpers that have no off-appliance
