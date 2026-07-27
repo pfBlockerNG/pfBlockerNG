@@ -2841,6 +2841,33 @@
         "returnType": null,
         "params": []
     },
+    "pfb_feed_convert_encoding": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "src",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "dst",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "interpreter",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_feed_filter_enabled": {
         "returnsRef": false,
         "returnType": null,
@@ -2937,6 +2964,53 @@
                 "variadic": false,
                 "type": "string",
                 "default": "'deny'"
+            }
+        ]
+    },
+    "pfb_feed_normalize": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "orig_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "interpreter",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_feed_normalize_generate": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "src",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "dst",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "interpreter",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
             }
         ]
     },
