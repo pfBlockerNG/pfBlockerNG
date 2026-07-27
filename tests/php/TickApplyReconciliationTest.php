@@ -48,7 +48,7 @@ final class TickApplyReconciliationTest extends TestCase
 		$this->dir = sys_get_temp_dir() . '/pfb_tick_apply_reconciliation_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir, 0755, TRUE);
 
-		foreach (['dbdir', 'aliasdir', 'dnsbldir', 'pfctl', 'log', 'errlog', 'runlog', 'extraslog',
+		foreach (['dbdir', 'aliasdir', 'dnsbldir', 'pfctl', 'php', 'log', 'errlog', 'runlog', 'extraslog',
 			  'dnsbl_file', 'dnsbl_python_unmount'] as $k) {
 			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
@@ -67,6 +67,20 @@ final class TickApplyReconciliationTest extends TestCase
 		$GLOBALS['config'] = [];
 
 		$this->seedTickPrereqs();
+
+		// issue #1666: pfb_interval='Disabled' (seeded above) only gates the tick's
+		// cron dispatch branch -- dcc/bl dispatch off the due-ledger regardless of
+		// pfb_interval, and an absent ledger entry reads as due NOW
+		// (pfb_due_ledger_is_due_from_entry()). Without seeding, every tick() call
+		// in this suite dispatched a REAL "pfblockerng.php dcc" background shell
+		// that a sibling suite's pfb_update_pass_running() `ps` scan could then see.
+		// Future-date every job so no dispatch branch fires here at all, and neuter
+		// $pfb['php'] as a backstop in case that ever regresses.
+		$this->installPhpArgvRecorder();
+		$now = time();
+		foreach (['cron', 'dcc', 'bl'] as $jobKey) {
+			$this->seedFutureLedgerEntry($jobKey, $now);
+		}
 	}
 
 	protected function tearDown(): void
@@ -97,9 +111,15 @@ final class TickApplyReconciliationTest extends TestCase
 	/**
 	 * Minimum config keys pfb_global() reads (avoids undefined-array-key warnings --
 	 * pfblockerng_ss_refresh() calls pfb_global() internally every tick), plus
-	 * pfb_interval='Disabled' so the tick's own cron/dcc/bl dispatch branches
-	 * never exec() anything real -- isolates every test here to the new
-	 * reconciliation step alone. Mirrors TickEntrypointTest::seedTickPrereqs().
+	 * pfb_interval='Disabled' so the tick's own cron dispatch branch never fires.
+	 *
+	 * NOTE (issue #1666): 'Disabled' alone does NOT gate the dcc/bl dispatch
+	 * branches -- those key off the due-ledger regardless of pfb_interval, and an
+	 * absent ledger entry reads as due now. setUp() additionally future-dates the
+	 * cron/dcc/bl ledger entries and neuters $pfb['php'] so a tick() call in this
+	 * class can never exec() a real "pfblockerng.php <verb>" background process --
+	 * that's what genuinely isolates every test here to the new reconciliation
+	 * step alone. Mirrors TickEntrypointTest::seedTickPrereqs().
 	 */
 	private function seedTickPrereqs(): void
 	{
@@ -144,6 +164,42 @@ final class TickApplyReconciliationTest extends TestCase
 		if (!isset($GLOBALS['g']['unbound_chroot_path'])) {
 			$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		}
+	}
+
+	/** Ledger dir path a php-argv recorder logs to; see installPhpArgvRecorder(). */
+	private function phpCallsLog(): string
+	{
+		return "{$this->dir}/pfb_php_calls.log";
+	}
+
+	/**
+	 * issue #1666: point $pfb['php'] at a harmless recording stub instead of the
+	 * real interpreter -- a backstop so that even if the due-ledger seeding below
+	 * ever regresses, a dispatch branch that fires anyway writes a line to
+	 * phpCallsLog() instead of forking a REAL "pfblockerng.php <verb>" background
+	 * shell that a sibling suite's pfb_update_pass_running() `ps` scan could see.
+	 * Saved via the generic $saved loop in setUp(); restored in tearDown().
+	 */
+	private function installPhpArgvRecorder(): void
+	{
+		$path = "{$this->dir}/pfb_php_recorder";
+		$log  = escapeshellarg($this->phpCallsLog());
+		file_put_contents($path, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> {$log}\n");
+		chmod($path, 0755);
+		$GLOBALS['pfb']['php'] = $path;
+	}
+
+	/**
+	 * Mirrors TickEntrypointTest::seedFutureLedgerEntry() -- keeps cron/dcc/bl
+	 * not-due so tick() calls in this suite dispatch nothing (issue #1666).
+	 */
+	private function seedFutureLedgerEntry(string $jobKey, int $now): void
+	{
+		pfb_due_ledger_write_entry($jobKey, [
+			'last_run' => $now - 3600,
+			'next_due' => $now + 3600,
+			'jitter'   => 0,
+		], $this->dir);
 	}
 
 	/** Write an executable POSIX-sh mock pfctl that exits $rc, emitting $stderr on fd 2,
@@ -461,5 +517,36 @@ final class TickApplyReconciliationTest extends TestCase
 		$this->assertSame(5, $sentinelAfter,
 			'Unbound is not running -- nothing can consume a re-flipped sentinel, so '
 			. "pfb_dnsbl_apply_retry() must not bump it (got {$sentinelAfter}, expected unchanged 5)");
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1666 -- hermeticity tripwire: this suite must never dispatch a
+	// real cron/dcc/bl background process (setUp() future-dates every
+	// due-ledger entry and neuters $pfb['php']); this pins that guarantee
+	// directly instead of relying on every other test here happening not to
+	// notice a leak.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Scenario:
+	 *   Given setUp()'s future-dated cron/dcc/bl ledger entries and the
+	 *   recording-stub $pfb['php'] (issue #1666).
+	 *   When  pfblockerng_tick() runs once.
+	 *   Then  the php-recorder's calls log stays absent -- no dispatch branch
+	 *         fired, so nothing could have exec()'d a real background process.
+	 *
+	 * Red->green (manual scratch probe, issue #1666): temporarily removing the
+	 * setUp() ledger seeding makes this FAIL -- the absent 'dcc' entry reads
+	 * as due (pfb_due_ledger_is_due_from_entry(): NULL -> due now) and the
+	 * tick dispatches it through the recorder, populating the calls log.
+	 */
+	public function testTickDispatchesNothingWhenNoJobIsDue(): void
+	{
+		$this->tick();
+
+		$this->assertFileDoesNotExist($this->phpCallsLog(),
+			'expected no cron/dcc/bl dispatch branch to fire on a tick with every '
+			. 'ledger entry future-dated -- a populated calls log means this suite '
+			. 'leaked a real pfblockerng.php dispatch (issue #1666)');
 	}
 }

@@ -55,6 +55,38 @@ final class TickEntrypointTest extends TestCase
 	private mixed $originalExtraslog = NULL;
 
 	/**
+	 * issue #1666: $GLOBALS['pfb']['log']/['logdir']/['errlog'] are set ONCE at
+	 * pfblockerng.inc include time (never recomputed by pfb_global()) -- so
+	 * without a per-test sandbox here, 'log' rode whatever value a PRIOR test
+	 * class last left it at, including a path a leaked-teardown suite had
+	 * already deleted. Same treatment as dbdir/runlog/extraslog above.
+	 */
+	private bool $hadLog = FALSE;
+	private mixed $originalLog = NULL;
+	private bool $hadLogdir = FALSE;
+	private mixed $originalLogdir = NULL;
+	private bool $hadErrlog = FALSE;
+	private mixed $originalErrlog = NULL;
+
+	/** issue #1666: neuter $pfb['php'] so Cases C/D's real dispatch branches exec()
+	 *  a harmless recording stub instead of a REAL "pfblockerng.php <verb>" shell
+	 *  a sibling suite's pfb_update_pass_running() `ps` scan could then see. */
+	private bool $hadPhp = FALSE;
+	private mixed $originalPhp = NULL;
+
+	/** issue #1666: $GLOBALS['config'] was overwritten unconditionally below with
+	 *  no restore; save/restore it like every other process-global this suite
+	 *  touches. */
+	private bool $hadConfig = FALSE;
+	private mixed $originalConfig = NULL;
+
+	/** issue #1666: seedTickPrereqs() sets this once, guarded by isset(), and it is
+	 *  never restored -- the first test to run in the whole suite leaves it set for
+	 *  every later test/class. Save/restore it explicitly instead. */
+	private bool $hadUnboundChroot = FALSE;
+	private mixed $originalUnboundChroot = NULL;
+
+	/**
 	 * Self-encapsulated (CLAUDE.md mandate): pfblockerng_tick() reads/writes the
 	 * due-ledger + log-rotate marker at $pfb['dbdir'] (not injectable), a path a
 	 * sibling suite (SoftwareUpdateCheckTest) also repoints at its own sandbox
@@ -83,11 +115,33 @@ final class TickEntrypointTest extends TestCase
 		$this->hadExtraslog      = array_key_exists('extraslog', $GLOBALS['pfb'] ?? []);
 		$this->originalExtraslog = $GLOBALS['pfb']['extraslog'] ?? NULL;
 
+		$this->hadLog      = array_key_exists('log', $GLOBALS['pfb'] ?? []);
+		$this->originalLog = $GLOBALS['pfb']['log'] ?? NULL;
+
+		$this->hadLogdir      = array_key_exists('logdir', $GLOBALS['pfb'] ?? []);
+		$this->originalLogdir = $GLOBALS['pfb']['logdir'] ?? NULL;
+
+		$this->hadErrlog      = array_key_exists('errlog', $GLOBALS['pfb'] ?? []);
+		$this->originalErrlog = $GLOBALS['pfb']['errlog'] ?? NULL;
+
+		$this->hadPhp      = array_key_exists('php', $GLOBALS['pfb'] ?? []);
+		$this->originalPhp = $GLOBALS['pfb']['php'] ?? NULL;
+
+		$this->hadConfig      = array_key_exists('config', $GLOBALS);
+		$this->originalConfig = $GLOBALS['config'] ?? NULL;
+
+		$this->hadUnboundChroot      = array_key_exists('unbound_chroot_path', $GLOBALS['g'] ?? []);
+		$this->originalUnboundChroot = $GLOBALS['g']['unbound_chroot_path'] ?? NULL;
+
 		$this->dbdir = sys_get_temp_dir() . '/pfb_tick_entrypoint_' . uniqid('', TRUE);
 		mkdir($this->dbdir, 0755, TRUE);
 		$GLOBALS['pfb']['dbdir']     = $this->dbdir;
 		$GLOBALS['pfb']['runlog']    = "{$this->dbdir}/pfblockerng_run.log";
 		$GLOBALS['pfb']['extraslog'] = "{$this->dbdir}/extras.log";
+		$GLOBALS['pfb']['logdir']    = $this->dbdir;
+		$GLOBALS['pfb']['log']       = "{$this->dbdir}/pfblockerng.log";
+		$GLOBALS['pfb']['errlog']    = "{$this->dbdir}/error.log";
+		$GLOBALS['pfb']['php']       = $this->installPhpArgvRecorder();
 
 		$GLOBALS['config'] = [];
 	}
@@ -109,7 +163,53 @@ final class TickEntrypointTest extends TestCase
 		} else {
 			unset($GLOBALS['pfb']['extraslog']);
 		}
+		if ($this->hadLog) {
+			$GLOBALS['pfb']['log'] = $this->originalLog;
+		} else {
+			unset($GLOBALS['pfb']['log']);
+		}
+		if ($this->hadLogdir) {
+			$GLOBALS['pfb']['logdir'] = $this->originalLogdir;
+		} else {
+			unset($GLOBALS['pfb']['logdir']);
+		}
+		if ($this->hadErrlog) {
+			$GLOBALS['pfb']['errlog'] = $this->originalErrlog;
+		} else {
+			unset($GLOBALS['pfb']['errlog']);
+		}
+		if ($this->hadPhp) {
+			$GLOBALS['pfb']['php'] = $this->originalPhp;
+		} else {
+			unset($GLOBALS['pfb']['php']);
+		}
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->originalConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
+		if ($this->hadUnboundChroot) {
+			$GLOBALS['g']['unbound_chroot_path'] = $this->originalUnboundChroot;
+		} else {
+			unset($GLOBALS['g']['unbound_chroot_path']);
+		}
 		$this->rrmdir($this->dbdir);
+	}
+
+	/**
+	 * issue #1666: point $pfb['php'] at a harmless recording stub instead of the
+	 * real interpreter -- Cases C/D genuinely dispatch (a due 'cron' job), so
+	 * this is the only lever available to keep that dispatch from forking a REAL
+	 * "pfblockerng.php cron" background process. Mirrors
+	 * TickFeedPassDeferralTest::installPhpArgvRecorder().
+	 */
+	private function installPhpArgvRecorder(): string
+	{
+		$path = "{$this->dbdir}/pfb_php_recorder";
+		$log  = escapeshellarg("{$this->dbdir}/pfb_php_calls.log");
+		file_put_contents($path, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> {$log}\n");
+		chmod($path, 0755);
+		return $path;
 	}
 
 	private function rrmdir(string $dir): void
@@ -308,6 +408,15 @@ final class TickEntrypointTest extends TestCase
 		$linesBefore = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
 		$this->assertSame(5, $linesBefore,
 			"Before: expected 'log' to have 5 lines, got {$linesBefore}");
+
+		// Ordering-regression tripwire (issue #1666): pfb_update_pass_running()
+		// scans the REAL `ps -wax` table for a "pfblockerng.php <verb>" line -- a
+		// process leaked from an earlier, un-neutered sibling test would make this
+		// test's own tick() wrongly skip pfb_log_mgmt() below, exactly reproducing
+		// the flake. Assert the process table is clean BEFORE the tick so a leak
+		// fails loudly here instead of silently failing the trim assertion after.
+		$this->assertFalse(pfb_update_pass_running(),
+			'a pfblockerng.php worker process leaked from an earlier test -- see issue #1666');
 
 		// Act.
 		pfblockerng_tick();

@@ -368,6 +368,12 @@ SH;
 		$this->seedFutureLedgerEntry('dcc', $now);
 		$this->seedFutureLedgerEntry('bl',  $now);
 
+		// issue #1666: this test genuinely dispatches (lock free, cron due) --
+		// neuter $pfb['php'] so that dispatch exec()s a harmless recording stub
+		// instead of a REAL "pfblockerng.php cron" background shell a sibling
+		// suite's pfb_update_pass_running() `ps` scan could then see.
+		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
+
 		// Act -- no lock held anywhere.
 		pfblockerng_tick();
 
@@ -416,6 +422,12 @@ SH;
 
 		$this->seedFutureLedgerEntry('dcc', $now);
 		$this->seedFutureLedgerEntry('bl',  $now);
+
+		// issue #1666: this test genuinely dispatches (lock free, cron still due) --
+		// neuter $pfb['php'] so that dispatch exec()s a harmless recording stub
+		// instead of a REAL "pfblockerng.php cron" background shell a sibling
+		// suite's pfb_update_pass_running() `ps` scan could then see.
+		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
 
 		// Act -- lock is free this time.
 		pfblockerng_tick();
