@@ -256,6 +256,21 @@ final class PfbFilterContractTest extends TestCase
 			// Unicode-whitespace/control: still caught by pfb_filter()'s universal
 			// \p{Cc}+BOM gate before the switch is even reached -- pin.
 			'embedded NUL'                => ["example\0host"],
+			// PR #1781 adversarial review: a delimiter character survives
+			// idn_to_ascii() -- it has no STD3-ASCII-rules check, so the
+			// punycode candidate can carry a literal ',', ' ' or '|' straight
+			// through (probed: idn_to_ascii("a,bä.example") ===
+			// "xn--a,b-sla.example", non-FALSE, non-empty). is_hostname() is
+			// the SOLE remaining guard that rejects it. These pin the
+			// delimiter class specifically -- not merely "invalid hostname"
+			// in general -- because these three characters are the ones a
+			// converted-but-accepted candidate would inject into the
+			// comma-joined $details line (pfblockerng.inc:~15389) and the
+			// ipcache SQLite table, shifting every downstream field. The
+			// inputs are non-admin: DHCP client-hostname / a PTR record.
+			'comma survives IDN conversion (log/DB delimiter safety)' => ['a,bä.example'],
+			'space survives IDN conversion (log/DB delimiter safety)' => ['a bä.example'],
+			'pipe survives IDN conversion (log/DB delimiter safety)'  => ['a|bä.example'],
 		];
 	}
 

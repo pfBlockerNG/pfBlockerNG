@@ -96,6 +96,42 @@ final class XmlrpcSyncIdnTargetTest extends TestCase
 		);
 	}
 
+	// PR #1781 adversarial review: $sync_to_ip_display was entirely unpinned --
+	// a mutant replacing all four `$sync_to_ip_display` occurrences with
+	// `$sync_to_ip` (the commit-4 assignment at ~17188 plus the three
+	// human-facing log lines at ~17213/17216/17224) survived the full suite,
+	// because every existing assertion here only inspects the XMLRPC
+	// connection argument (which correctly stays punycode either way). Pin the
+	// human-facing pfb_logger() line via the established sandbox
+	// ($GLOBALS['pfb']['log'], the LiveLogStdoutTest / AlertsLivePunchApplyTest
+	// idiom): it must show the ORIGINAL Unicode target, never the punycode
+	// form. logger()/syslog() (the other two mutated call sites, ~17218/
+	// ~17224) is not captured by any test double in this bootstrap (it falls
+	// through to a real syslog() call) -- the mutant touches all four
+	// occurrences at once, so killing it via the one capturable site is
+	// sufficient proof.
+	public function testIdnTargetLogLineKeepsOriginalUnicodeTarget(): void
+	{
+		global $pfb;
+		@mkdir($pfb['logdir'], 0777, TRUE);
+		@file_put_contents($pfb['log'], '');
+
+		$this->seedSyncConfig('bücher.example');
+		pfblockerng_sync_on_changes();
+
+		$log = (string) @file_get_contents($pfb['log']);
+		$this->assertStringContainsString(
+			'bücher.example',
+			$log,
+			"expected the human-facing sync log line to keep the original Unicode target, but log was:\n{$log}"
+		);
+		$this->assertStringNotContainsString(
+			'xn--bcher-kva.example',
+			$log,
+			"the human-facing sync log line must never show the punycode form, but log was:\n{$log}"
+		);
+	}
+
 	// --- before-state pins: green both sides of the fix ---------------------
 
 	public function testPlainAsciiHostnameTargetUnchanged(): void

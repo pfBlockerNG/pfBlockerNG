@@ -523,6 +523,66 @@ def test_category_edit_rowhelper_header_sanitized(
         tce._del_rowid(vm, tce.CFG_DNSBL, rowid)
 
 
+def test_category_edit_rowhelper_url_sanitized(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """DNSBL alias rowhelper ``url-0`` sanitizes BOM/NBSP at ingestion (#1737).
+
+    Companion to ``test_category_edit_rowhelper_header_sanitized`` above -- the
+    #1737 contract update sanitizes BOTH ``header-N`` and ``url-N`` at
+    ingestion, but that test keeps the row ``state-0='Disabled'`` so the
+    empty ``url-0`` skips every state-gated url check entirely -- it never
+    proves the ingestion sanitizer runs ahead of THOSE. This test keeps
+    ``state-0='Enabled'``/``format-0='geoip'`` instead (the deterministic,
+    no-network-fetch shape ``test_dnsbl_url_geoip_value_persists_byte_identical``
+    in ``test_category_edit.py`` already uses -- 'auto'/'regex'/'rsync' would
+    need a real resolvable feed host) so the row actually persists through
+    BOTH the non-empty-gated control-char guard AND the state-gated geoip
+    ``PFB_FILTER_ALNUM`` prefix check, not just the former.
+
+    RED (before the fix): the raw BOM (category Cf) is itself inside the
+    row's own ``\\p{C}`` url-N guard (issue #1104), run on the RAW value
+    before any sanitize -- the save is REJECTED outright and the seeded
+    (empty) url is left unchanged (mirrors
+    ``test_category_edit_rowhelper_header_sanitized``'s RED story).
+    GREEN (after): ``pfb_sanitize_text()`` strips the BOM + Unicode-trims the
+    leading NBSP BEFORE the validation loop runs, so the row validates
+    (geoip's prefix check sees a clean ``'US'``) and persists as ``'US CA'``.
+    """
+    vm = smoke_vm
+    rowid = tce._free_rowid(vm, tce.CFG_DNSBL)
+    base = f"{tce.CFG_DNSBL}/{rowid}"
+    aliasname = "smokeurlsan"
+    orig_key, orig_account = tce._capture_maxmind_creds(vm)
+    try:
+        tce._seed_maxmind_test_creds(vm)
+        assert helpers.config_get(vm, f"{base}/aliasname") == "", f"rowid {rowid} not free (aliasname already set)"
+        assert helpers.config_get(vm, f"{base}/row/0/url") == "", f"rowid {rowid} not free (url already set)"
+
+        raw = "\u00a0US CA\ufeff"
+        expected = "US CA"
+        tce._post_form(
+            webui,
+            tce._dnsbl_payload(
+                rowid,
+                aliasname,
+                **{"state-0": "Enabled", "header-0": "hdr", "format-0": "geoip", "url-0": raw},
+            ),
+        )
+
+        assert helpers.config_get(vm, f"{base}/aliasname") == aliasname, (
+            "the save aborted (aliasname did not persist) -- the url guard rejected the sanitized value"
+        )
+        assert helpers.config_get(vm, f"{base}/row/0/url") == expected, (
+            f"url not sanitized at ingestion: expected {expected!r}, got "
+            f"{helpers.config_get(vm, f'{base}/row/0/url')!r}"
+        )
+    finally:
+        tce._del_rowid(vm, tce.CFG_DNSBL, rowid)
+        tce._restore_maxmind_creds(vm, orig_key, orig_account)
+
+
 def test_dnsbl_suppression_accepts_single_dot_wildcard_row(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
