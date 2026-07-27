@@ -1690,6 +1690,7 @@ function sync_package_pfblockerng($cron='') {
 								pfb_logger("{$log}", 1);
 								$file_dwn = "{$pfborig}/{$header}";
 								$orig_content_stale = FALSE;
+								$downloaded_fresh = FALSE;
 
 								// issue #1278: Hold means "download once, never again" -- skip the network
 								// fallback entirely and retry next pass; staging stays untouched.
@@ -1750,6 +1751,7 @@ function sync_package_pfblockerng($cron='') {
 										else {
 											// Clear any previous download fail marker
 											unlink_if_exists("{$pfbfolder}/{$header}.fail");
+											$downloaded_fresh = TRUE;
 										}
 									}
 								}
@@ -1760,6 +1762,26 @@ function sync_package_pfblockerng($cron='') {
 									unset($custom_list);
 								}
 
+								// issue #1797: normalize once per file; the parse below reads .norm
+								// (raw .orig on normalize failure). A fresh download whose NORMALIZED
+								// content is byte-identical to the previous pass reuses the staged
+								// '.txt' the same way the verbatim-reuse branch does.
+								$pfb_norm = pfb_feed_normalize("{$file_dwn}.orig");
+								if (pfb_dnsbl_norm_reuse_skip($downloaded_fresh, (bool) $custom, $orig_content_stale,
+								    $pfb_norm['changed'], file_exists("{$pfbfolder}/{$header}.txt"), $staging_current_generation)) {
+									pfb_logger("\n[ {$header} ]{$logtab} unchanged after normalization.", 1);
+									$lists_dnsbl_all[]	= "{$row['header']}.txt";
+									// ADR-31: same manifest-row shape as the verbatim-reuse branch above.
+									$pfb_py_feeds[]		= pfb_feed_manifest_row(
+										$header, $alias, $logging_type,
+										$custom ? 'user' : 'feed',
+										$mode);
+									$list_cnt		= pfb_count_lines("{$pfbfolder}/{$header}.txt") ?? 0;
+									$alias_cnt		= $alias_cnt + $list_cnt;
+									unlink_if_exists("{$pfbfolder}/{$header}.update");
+									continue;
+								}
+
 								$run_once = $csv_parser = FALSE;
 								$csv_type = '';
 								$ipcount = $ip_cnt = $ip_cnt6 = 0;
@@ -1767,7 +1789,7 @@ function sync_package_pfblockerng($cron='') {
 								$dnsbl_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
 
 								// Parse downloaded file for Domain names
-								if (($fhandle = @fopen("{$file_dwn}.orig", 'r')) !== FALSE) {
+								if (($fhandle = @fopen($pfb_norm['path'], 'r')) !== FALSE) {
 									if (($dhandle = @fopen("{$pfbfolder}/{$header}.bk", 'w')) !== FALSE) {
 										while (($line = @fgets($fhandle)) !== FALSE) {
 
@@ -3132,6 +3154,7 @@ function sync_package_pfblockerng($cron='') {
 							pfb_logger("{$log}", 1);
 							$file_dwn = "{$pfborig}/{$header}";
 							$orig_content_stale = FALSE;
+							$downloaded_fresh = FALSE;
 
 							// Force 'Alias Native' setting to any Alias with 'Advanced Inbound/Outbound -Invert src/dst' settings.
 							// This will bypass Deduplication and Reputation features.
@@ -3235,6 +3258,7 @@ function sync_package_pfblockerng($cron='') {
 									else {
 										// Clear any previous download fail marker
 										unlink_if_exists("{$pfbfolder}/{$header}.fail");
+										$downloaded_fresh = TRUE;
 										pfb_logger('.', 1);
 									}
 								}
@@ -3290,15 +3314,32 @@ function sync_package_pfblockerng($cron='') {
 							}
 
 							// IPv4/6 Advanced Tunable - (Pre Script processing)
+							$pfb_user_script = FALSE;
 							if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {
 								pfb_logger("\nExecuting pre-script: {$list['script_pre']}\n", 1);
+								$pfb_user_script = TRUE;
 								$file_dwn_esc = escapeshellarg("{$file_dwn}.orig");
 								@copy("{$file_dwn}.orig", "{$file_dwn}.orig.pre"); // Save original file for restoration
 								$tmo = '/usr/bin/timeout -s TERM -k ' . PFB_HOOK_KILL_GRACE . ' ' . PFB_LIST_SCRIPT_TIMEOUT . ' ';
 								exec("{$tmo}" . escapeshellarg($pfb_script_pre) . " {$file_dwn_esc} {$list['vtype']} {$elog}");
 							}
+							if ($pfb_script_post && is_file("{$pfb_script_post}")) {
+								$pfb_user_script = TRUE;
+							}
 
-							if (($fhandle = @fopen("{$file_dwn}.orig", 'r')) !== FALSE) {
+							// issue #1797: normalize once per file (after the pre-script has had its
+							// raw look at .orig); the parse below reads .norm (raw .orig on normalize
+							// failure). A fresh download whose NORMALIZED content is byte-identical
+							// to the previous pass keeps the staged '.txt' untouched.
+							$pfb_norm = pfb_feed_normalize("{$file_dwn}.orig");
+							if (pfb_ip_norm_reuse_skip($downloaded_fresh, (bool) $custom, $orig_content_stale,
+							    $pfb_norm['changed'], file_exists("{$pfbfolder}/{$header}.txt"), $pfb_user_script)) {
+								pfb_logger("\n[ {$header} ]{$logtab} unchanged after normalization.\n", 1);
+								unlink_if_exists("{$pfbfolder}/{$header}.update");
+								continue;
+							}
+
+							if (($fhandle = @fopen($pfb_norm['path'], 'r')) !== FALSE) {
 								while (($line = @fgets($fhandle)) !== FALSE) {
 									// issue #1004: incremented every iteration, regardless of outcome
 									$ip_lineno++;

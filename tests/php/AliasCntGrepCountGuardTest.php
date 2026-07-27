@@ -44,19 +44,20 @@ final class AliasCntGrepCountGuardTest extends TestCase
 	private const ACCUMULATION_RE = '/\$alias_cnt\s*=\s*\$alias_cnt\s*\+\s*\$list_cnt\s*;/';
 	private const COUNT_ASSIGN_RE = '/\$list_cnt\s*=\s*pfb_count_lines\([^;]*\)\s*\?\?\s*0\s*;/';
 
-	public function testVacuityExactlyTwoAccumulationSitesExist(): void
+	public function testVacuityExactlyThreeAccumulationSitesExist(): void
 	{
 		$count = preg_match_all(self::ACCUMULATION_RE, self::$src);
-		$this->assertSame(2, $count,
-			'expected exactly 2 $alias_cnt = $alias_cnt + $list_cnt; accumulation sites '
-			. "(list-reuse branch and downloaded/rebuilt branch); found {$count}");
+		$this->assertSame(3, $count,
+			'expected exactly 3 $alias_cnt = $alias_cnt + $list_cnt; accumulation sites '
+			. '(list-reuse branch, the issue #1797 norm-unchanged skip branch, and the '
+			. "downloaded/rebuilt branch); found {$count}");
 	}
 
-	public function testBothSitesAssignListCntFromPfbCountLinesWithNullFallback(): void
+	public function testAllSitesAssignListCntFromPfbCountLinesWithNullFallback(): void
 	{
 		$count = preg_match_all(self::COUNT_ASSIGN_RE, self::$src);
-		$this->assertSame(2, $count,
-			'expected exactly 2 `$list_cnt = pfb_count_lines(...) ?? 0;` assignments feeding '
+		$this->assertSame(3, $count,
+			'expected exactly 3 `$list_cnt = pfb_count_lines(...) ?? 0;` assignments feeding '
 			. "the accumulation sites (issue #1261); found {$count}");
 	}
 

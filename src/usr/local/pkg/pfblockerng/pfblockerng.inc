@@ -2465,6 +2465,30 @@ function pfb_dnsbl_verbatim_reuse_active(bool $txt_exists, bool $update_exists, 
 	return $txt_exists && !$update_exists && !$fail_exists && $reuse_unset && $staging_current_generation;
 }
 
+// issue #1797: skip the DNSBL reparse when a FRESH download normalized to
+// byte-identical content -- upstream churn that normalizes away (CRLF flips,
+// trailing whitespace, a BOM) rebuilds nothing. Deliberately narrow: only a
+// completed non-custom download qualifies (a Reload/Force pass must keep its
+// reparse-everything semantics; a custom list re-synthesizes per pass; a
+// stale-.orig download-failure fallback stays fail-safe like #1022/#1031),
+// and only onto a current-generation staged '.txt' (#1083).
+function pfb_dnsbl_norm_reuse_skip(bool $downloaded_fresh, bool $custom, bool $orig_content_stale,
+	bool $norm_changed, bool $txt_exists, bool $staging_current_generation): bool
+{
+	return $downloaded_fresh && !$custom && !$orig_content_stale && !$norm_changed &&
+		$txt_exists && $staging_current_generation;
+}
+
+// issue #1797: the IP-loop counterpart of pfb_dnsbl_norm_reuse_skip(). Feeds
+// carrying a user pre/post script never skip -- the scripts' contract is a
+// full pass over the downloaded file every run.
+function pfb_ip_norm_reuse_skip(bool $downloaded_fresh, bool $custom, bool $orig_content_stale,
+	bool $norm_changed, bool $txt_exists, bool $has_user_script): bool
+{
+	return $downloaded_fresh && !$custom && !$orig_content_stale && !$norm_changed &&
+		$txt_exists && !$has_user_script;
+}
+
 // issue #1083: a stale-generation rebuild ($stale_generation_rebuild, above) that
 // reparses '.orig' and finds ZERO domains must converge staging to empty -- else the
 // pre-NDJSON '.txt' is never touched, its stale lines are silently double-counted, and
@@ -13136,6 +13160,13 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// the transcode-ordering comment above).
 			pfb_ensure_trailing_newline("{$orig_download}");
 
+			// issue #1797: eagerly normalize the finalized plain .orig so the parse
+			// pass finds a fresh .norm. Correctness never depends on this call --
+			// the consumer regenerates on demand keyed by the source digest -- and
+			// the geoip/asn/top1m/blacklist archive paths early-return above, so a
+			// compressed artifact can never reach the text pipeline.
+			pfb_feed_normalize("{$orig_download}");
+
 			// Process Emerging Threats IQRisk if required
 			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
 				exec("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}");
@@ -14806,6 +14837,16 @@ function pfb_force_clear_validators(array $dirs, bool $clear_hashes): int {
 	foreach ($dirs as $dir) {
 		foreach ($suffixes as $sfx) {
 			foreach (glob("{$dir}/*.orig.{$sfx}") ?: array() as $sidecar) {
+				if (unlink_if_exists($sidecar)) {
+					$removed++;
+				}
+			}
+		}
+		// issue #1797: also clear the normalize-stage source-digest baselines so
+		// pfb_feed_normalize() fail-safes to 'changed' and the downstream norm-skip
+		// gate cannot defeat a forced reprocess.
+		if ($clear_hashes) {
+			foreach (glob("{$dir}/*.norm.src.xxhash128") ?: array() as $sidecar) {
 				if (unlink_if_exists($sidecar)) {
 					$removed++;
 				}

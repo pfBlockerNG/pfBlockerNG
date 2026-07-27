@@ -562,6 +562,32 @@ final class ConditionalGetHelpersTest extends TestCase
 	}
 
 	/**
+	 * issue #1797: clear_hashes=TRUE also removes the normalize-stage source-digest
+	 * baseline (.norm.src.xxhash128) so a forced pass regenerates and fail-safes to
+	 * 'changed' (the downstream norm-skip gate must not survive a Force). The .norm
+	 * content file itself is kept, mirroring how .orig is kept.
+	 */
+	public function test_force_clear_validators_clears_norm_source_baseline_only_with_hashes(): void
+	{
+		$dir = $this->dir;
+		file_put_contents("{$dir}/feedA.orig",                'content');
+		file_put_contents("{$dir}/feedA.norm",                'content');
+		file_put_contents("{$dir}/feedA.norm.src.xxhash128",  'deadbeef');
+
+		$removed = pfb_force_clear_validators([$dir], FALSE);
+		$this->assertFileExists("{$dir}/feedA.norm.src.xxhash128",
+			'clear_hashes=FALSE must NOT remove the .norm.src baseline');
+		$this->assertSame(0, $removed);
+
+		$removed = pfb_force_clear_validators([$dir], TRUE);
+		$this->assertFileDoesNotExist("{$dir}/feedA.norm.src.xxhash128",
+			'clear_hashes=TRUE must remove the .norm.src baseline');
+		$this->assertFileExists("{$dir}/feedA.norm", 'the .norm content file itself must be kept');
+		$this->assertFileExists("{$dir}/feedA.orig", 'the .orig content file itself must be kept');
+		$this->assertSame(1, $removed);
+	}
+
+	/**
 	 * Two dirs each with one .orig.etag → returns 2.
 	 *
 	 *  GIVEN dirA with feedA.orig.etag and dirB with feedB.orig.etag;
