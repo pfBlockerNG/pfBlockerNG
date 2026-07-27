@@ -39,5 +39,4 @@
 /usr/local/www/pfblockerng/pfblockerng_ip.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
 /usr/local/www/pfblockerng/pfblockerng_reputation.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
 /usr/local/www/widgets/widgets/pfblockerng.widget.php|Deprecated|htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated
-/usr/local/www/widgets/widgets/pfblockerng.widget.php|Warning|Trying to access array offset on null
 /usr/local/www/widgets/widgets/pfblockerng.widget.php|Warning|Undefined variable $widgetname

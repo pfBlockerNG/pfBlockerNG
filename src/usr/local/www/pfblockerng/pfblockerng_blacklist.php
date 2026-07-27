@@ -482,7 +482,13 @@ foreach ($blacklist_types as $type => $setting) {
 	ksort($data, SORT_NATURAL);
 	foreach ($data as $category => $info) {
 
-		$category_lang = $info[$pconfig['blacklist_lang']][1] ?: $info['EN'][1];
+		// issue #1777: most providers document a DESC/NAME line for only a
+		// subset of languages per category -- $l/$e guard the missing-index
+		// read; the ?: EN fallback below is load-bearing (an empty translation
+		// must still fall back to EN) and must stay ?:, never ??.
+		$l = $info[$pconfig['blacklist_lang']] ?? array();
+		$e = $info['EN'] ?? array();
+		$category_lang = ($l[1] ?? '') ?: ($e[1] ?? '');
 
 		$selected = FALSE;
 		if (isset($_POST['enableall'][$type])) {
@@ -513,7 +519,7 @@ foreach ($blacklist_types as $type => $setting) {
 
 		$group->add(new Form_StaticText(
 			'',
-			$info[$pconfig['blacklist_lang']][0] ?: $info['EN'][0]
+			($l[0] ?? '') ?: ($e[0] ?? '')
 		))->setWidth(7);
 
 		$section->add($group);

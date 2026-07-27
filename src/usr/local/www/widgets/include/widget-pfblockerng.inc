@@ -23,6 +23,10 @@
 //set variables for custom title and link
 $pfblockerng_title = '<span title="Click to open Unified Log tab">pfBlockerNG</span>';
 $pfblockerng_title_link = 'pfblockerng/pfblockerng_alerts.php?view=unified';
+// issue #1777: pfSense dashboard widget-include convention (same family as
+// $widgetname/$pfblockerng_title above); the widget is a singleton (fixed POST
+// action URL, settings keyed off one installedpackages/pfblockerngglobal block).
+$pfblockerng_allow_multiple_widget_copies = FALSE;
 
 // issue #1050: the widget sets $nocsrf=TRUE (csrf-magic never runs here), so a
 // mutating POST handler gates on this instead. DEFAULT-DENY on an absent header
