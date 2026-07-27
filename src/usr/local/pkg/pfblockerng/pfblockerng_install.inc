@@ -563,7 +563,11 @@ update_status(" General Tab -> IP Tab settings...");
 
 $pfb_gen_section  = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 $pfb_ip_section   = PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0');
-if (!empty($pfb_gen_section) && empty($pfb_ip_section)) {
+// issue #1772: gate on the OPERATOR view -- a marker-only General section (only
+// the installer's own settings_family, seeded before this region on every
+// install) is a genuinely fresh install; migrating it seeded 14 phantom blank
+// keys into the IP section. Same chokepoint as the #1770/#1771/#1775 reads.
+if (!empty(pfb_gconfig_operator_view($pfb_gen_section)) && empty($pfb_ip_section)) {
 
 	$pfb['gconfig'] = $pfb_gen_section;
 	$pfb['iconfig'] = $pfb_ip_section;
@@ -573,7 +577,10 @@ if (!empty($pfb_gen_section) && empty($pfb_ip_section)) {
 				'enable_float', 'pass_order', 'autorule_suffix', 'killstates' );
 
 	foreach ($settings as $setting) {
-		$pfb['iconfig'][$setting] = $pfb['gconfig'][$setting] ?: '';
+		// issue #1772: ?? -- an absent key copies as '' with no
+		// Undefined-array-key warning, and a stored '0' migrates as '0'
+		// (the empty('0') falsiness class, issues #1787/#1792).
+		$pfb['iconfig'][$setting] = $pfb['gconfig'][$setting] ?? '';
 		if (isset($pfb['gconfig'][$setting])) {
 			unset($pfb['gconfig'][$setting]);
 		}
