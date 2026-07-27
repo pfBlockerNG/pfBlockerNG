@@ -114,7 +114,7 @@ $pfb['bconfig']	= PfbConfig::readSection('installedpackages/pfblockerngblacklist
 $pconfig = array();
 $pconfig['blacklist_enable']		= $pfb['bconfig']['blacklist_enable']				?: 'Disable';
 $pconfig['blacklist_lang']		= $pfb['bconfig']['blacklist_lang']				?: 'EN';
-$pconfig['blacklist_selected']		= explode(',', $pfb['bconfig']['blacklist_selected'])		?: array();
+$pconfig['blacklist_selected']		= explode(',', $pfb['bconfig']['blacklist_selected'] ?? '')		?: array();
 $pconfig['blacklist_freq']		= $pfb['bconfig']['blacklist_freq']				?: 'Never';
 $pconfig['blacklist_logging']		= $pfb['bconfig']['blacklist_logging']				?: 'enabled';
 

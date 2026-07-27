@@ -41,8 +41,8 @@ $pfb['aglobal'] = PfbConfig::readSection('installedpackages/pfblockerngglobal');
 $alertrefresh	= isset($pfb['aglobal']['alertrefresh'])	? $pfb['aglobal']['alertrefresh']	: 'on';
 $pfbpageload	= $pfb['aglobal']['pfbpageload']	!= ''	? $pfb['aglobal']['pfbpageload']	: 'unified';
 $pfbmaxtable	= $pfb['aglobal']['pfbmaxtable']	!= ''	? $pfb['aglobal']['pfbmaxtable']	: '1000';
-$pfbreplytypes	= explode(',', $pfb['aglobal']['pfbreplytypes'])?: array();
-$pfbreplyrec	= explode(',', $pfb['aglobal']['pfbreplyrec'])	?: array();
+$pfbreplytypes	= explode(',', $pfb['aglobal']['pfbreplytypes'] ?? '')?: array();
+$pfbreplyrec	= explode(',', $pfb['aglobal']['pfbreplyrec'] ?? '')	?: array();
 
 // Unified Log - Light/Dark Theme colour keys: one registry drives the read defaults, the
 // save loops, and the render loops below. 'upstream' reads with null-coalescing because it
@@ -73,11 +73,11 @@ $pfbchartcnt	= $pfb['aglobal']['pfbchartcnt']		?: '24';
 $pfbchartstyle	= $pfb['aglobal']['pfbchartstyle']		?: 'twotone';
 $pfbchart1	= $pfb['aglobal']['pfbchart1']			?: '#0C6197';
 $pfbchart2	= $pfb['aglobal']['pfbchart2']			?: '#7A7A7A';
-$pfbblockstat	= explode(',', $pfb['aglobal']['pfbblockstat']) ?: array();
-$pfbpermitstat	= explode(',', $pfb['aglobal']['pfbpermitstat'])?: array();
-$pfbmatchstat	= explode(',', $pfb['aglobal']['pfbmatchstat'])	?: array();
-$pfbdnsblstat	= explode(',', $pfb['aglobal']['pfbdnsblstat'])	?: array();
-$pfbdnsblreplystat = explode(',', $pfb['aglobal']['pfbdnsblreplystat']) ?: array();
+$pfbblockstat	= explode(',', $pfb['aglobal']['pfbblockstat'] ?? '') ?: array();
+$pfbpermitstat	= explode(',', $pfb['aglobal']['pfbpermitstat'] ?? '')?: array();
+$pfbmatchstat	= explode(',', $pfb['aglobal']['pfbmatchstat'] ?? '')	?: array();
+$pfbdnsblstat	= explode(',', $pfb['aglobal']['pfbdnsblstat'] ?? '')	?: array();
+$pfbdnsblreplystat = explode(',', $pfb['aglobal']['pfbdnsblreplystat'] ?? '') ?: array();
 
 // issue #1497: explicit assignments (was a ${"$type"} variable-variable loop
 // over $aglobal_array) -- PHPStan can't trace a variable-variable target, so

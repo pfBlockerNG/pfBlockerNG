@@ -480,6 +480,59 @@ final class PfbFilterContractTest extends TestCase
 		$this->assertSame('DEF', pfb_filter("\xC3\x28", PFB_FILTER_HTML, 'ref', 'DEF'));
 	}
 
+	// --- PFB_FILTER_ON_OFF / PFB_FILTER_NUM: NULL input (issue #1768) -------------
+	//
+	// Both constants are deliberately exempt from the early
+	// empty($input)||is_null($input) return (NULL=='' / a legitimate stored
+	// default must still validate), so a caller passing NULL (e.g. an absent
+	// POST/config field) previously flowed unguarded into preg_match()/
+	// htmlspecialchars() -- PHP 8.1+ deprecates passing NULL to a non-nullable
+	// string parameter. pfb_filter() now coerces a non-array $input to a
+	// string immediately after that early-return guard, preserving the
+	// NULL==''/NUM-no-match-default return shape byte-identically.
+
+	public function testOnOffFilterAcceptsNullWithNoDiagnostics(): void
+	{
+		$diagnostics = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
+			$diagnostics[] = $errstr;
+			return TRUE;
+		}, E_WARNING | E_DEPRECATED);
+		try {
+			$result = pfb_filter(NULL, PFB_FILTER_ON_OFF, 'PFBL-01 contract');
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame(
+			[],
+			$diagnostics,
+			"pfb_filter(NULL, PFB_FILTER_ON_OFF) must emit zero diagnostics, got:\n" . implode("\n", $diagnostics)
+		);
+		// NULL == '' -- same accepted-empty shape as an explicit '' input.
+		$this->assertSame('', $result);
+	}
+
+	public function testNumFilterAcceptsNullWithNoDiagnostics(): void
+	{
+		$diagnostics = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
+			$diagnostics[] = $errstr;
+			return TRUE;
+		}, E_WARNING | E_DEPRECATED);
+		try {
+			$result = pfb_filter(NULL, PFB_FILTER_NUM, 'PFBL-01 contract');
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame(
+			[],
+			$diagnostics,
+			"pfb_filter(NULL, PFB_FILTER_NUM) must emit zero diagnostics, got:\n" . implode("\n", $diagnostics)
+		);
+		// No digits matched -> caller-supplied default ('').
+		$this->assertSame('', $result);
+	}
+
 	// --- Array-input branch: the same gate, applied per element --------------------
 
 	/**

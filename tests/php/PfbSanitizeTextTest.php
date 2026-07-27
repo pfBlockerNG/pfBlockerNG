@@ -16,6 +16,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_sanitize_text')]
 #[CoversFunction('pfb_sanitize_text_area')]
 #[CoversFunction('pfb_text_area_encode')]
+#[CoversFunction('pfb_text_area_decode')]
 final class PfbSanitizeTextTest extends TestCase
 {
 	// --- pfb_sanitize_text() ---
@@ -279,5 +280,30 @@ final class PfbSanitizeTextTest extends TestCase
 		$raw = "A\r\nB\xC2\xA0 \n\x07C";
 		$encoded = pfb_text_area_encode($raw);
 		$this->assertSame(['a', 'b', 'c'], pfb_text_area_decode($encoded, TRUE, FALSE));
+	}
+
+	// --- pfb_text_area_decode() ---
+
+	public function testTextAreaDecodeAcceptsNullWithNoDiagnostics(): void
+	{
+		// issue #1768: untyped $text flows into base64_decode(); an absent
+		// caller-side value (NULL) previously deprecated (PHP 8.1+: passing
+		// NULL to a non-nullable string parameter). Coerced to '' at entry now.
+		$diagnostics = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
+			$diagnostics[] = $errstr;
+			return TRUE;
+		}, E_WARNING | E_DEPRECATED);
+		try {
+			$result = pfb_text_area_decode(NULL);
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame(
+			[],
+			$diagnostics,
+			"pfb_text_area_decode(NULL) must emit zero diagnostics, got:\n" . implode("\n", $diagnostics)
+		);
+		$this->assertSame('', $result);
 	}
 }
