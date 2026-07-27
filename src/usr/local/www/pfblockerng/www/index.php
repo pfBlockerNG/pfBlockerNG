@@ -34,7 +34,7 @@ if (strlen($_SERVER['REQUEST_TIME']) != 10 || !preg_match("/^[0-9]+$/", $_SERVER
 $ptype = array();
 $ptype['REQUEST_URI'] = htmlspecialchars(str_replace('|', '--', $_SERVER['REQUEST_URI']));
 foreach (array('HTTP_HOST', 'HTTP_REFERER', 'HTTP_USER_AGENT', 'REMOTE_ADDR') as $server_type) {
-	$ptype[$server_type] = htmlspecialchars($_SERVER[$server_type]) ?: 'Unknown';
+	$ptype[$server_type] = htmlspecialchars($_SERVER[$server_type] ?? '') ?: 'Unknown';
 }
 
 $ptype['type'] = $ptype['group'] = $ptype['evald'] = $ptype['feed'] = '-';
