@@ -13165,12 +13165,13 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// the transcode-ordering comment above).
 			pfb_ensure_trailing_newline("{$orig_download}");
 
-			// issue #1797: eagerly normalize the finalized plain .orig so the parse
-			// pass finds a fresh .norm. Correctness never depends on this call --
-			// the consumer regenerates on demand keyed by the source digest -- and
-			// the geoip/asn/top1m/blacklist archive paths early-return above, so a
-			// compressed artifact can never reach the text pipeline.
-			pfb_feed_normalize("{$orig_download}");
+			// issue #1797: normalization deliberately does NOT run here. Only the
+			// parse-loop consumers normalize: the helper's changed-verdict means
+			// "changed since the last CONSUMER normalize", so a download-time call
+			// would consume the change signal and make the loops' norm-skip gate
+			// wrongly reuse stale staging (caught live by
+			// test_cron_detects_changed_local_feed). The geoip/asn/top1m/blacklist
+			// archive paths early-return above and never reach the text pipeline.
 
 			// Process Emerging Threats IQRisk if required
 			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
