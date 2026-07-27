@@ -114,7 +114,7 @@ $pfb['bconfig']	= PfbConfig::readSection('installedpackages/pfblockerngblacklist
 $pconfig = array();
 $pconfig['blacklist_enable']		= $pfb['bconfig']['blacklist_enable']				?: 'Disable';
 $pconfig['blacklist_lang']		= $pfb['bconfig']['blacklist_lang']				?: 'EN';
-$pconfig['blacklist_selected']		= explode(',', $pfb['bconfig']['blacklist_selected'] ?? '')		?: array();
+$pconfig['blacklist_selected']		= pfb_csv_list($pfb['bconfig']['blacklist_selected'] ?? NULL);
 $pconfig['blacklist_freq']		= $pfb['bconfig']['blacklist_freq']				?: 'Never';
 $pconfig['blacklist_logging']		= $pfb['bconfig']['blacklist_logging']				?: 'enabled';
 
@@ -484,11 +484,12 @@ foreach ($blacklist_types as $type => $setting) {
 
 		// issue #1777: most providers document a DESC/NAME line for only a
 		// subset of languages per category -- $l/$e guard the missing-index
-		// read; the ?: EN fallback below is load-bearing (an empty translation
-		// must still fall back to EN) and must stay ?:, never ??.
+		// read; the EN fallback below is load-bearing (an empty translation
+		// must still fall back to EN -- pfb_is_empty, issue #1792, so a
+		// translation of literally '0' is kept, never treated as absent).
 		$l = $info[$pconfig['blacklist_lang']] ?? array();
 		$e = $info['EN'] ?? array();
-		$category_lang = ($l[1] ?? '') ?: ($e[1] ?? '');
+		$category_lang = pfb_is_empty($l[1] ?? NULL) ? ($e[1] ?? '') : $l[1];
 
 		$selected = FALSE;
 		if (isset($_POST['enableall'][$type])) {
@@ -519,7 +520,8 @@ foreach ($blacklist_types as $type => $setting) {
 
 		$group->add(new Form_StaticText(
 			'',
-			($l[0] ?? '') ?: ($e[0] ?? '')
+			// issue #1792: same honest fallback as $category_lang above.
+			pfb_is_empty($l[0] ?? NULL) ? ($e[0] ?? '') : $l[0]
 		))->setWidth(7);
 
 		$section->add($group);

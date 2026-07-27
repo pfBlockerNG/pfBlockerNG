@@ -41,8 +41,8 @@ $pfb['aglobal'] = PfbConfig::readSection('installedpackages/pfblockerngglobal');
 $alertrefresh	= isset($pfb['aglobal']['alertrefresh'])	? $pfb['aglobal']['alertrefresh']	: 'on';
 $pfbpageload	= $pfb['aglobal']['pfbpageload']	!= ''	? $pfb['aglobal']['pfbpageload']	: 'unified';
 $pfbmaxtable	= $pfb['aglobal']['pfbmaxtable']	!= ''	? $pfb['aglobal']['pfbmaxtable']	: '1000';
-$pfbreplytypes	= explode(',', $pfb['aglobal']['pfbreplytypes'] ?? '')?: array();
-$pfbreplyrec	= explode(',', $pfb['aglobal']['pfbreplyrec'] ?? '')	?: array();
+$pfbreplytypes	= pfb_csv_list($pfb['aglobal']['pfbreplytypes'] ?? NULL);
+$pfbreplyrec	= pfb_csv_list($pfb['aglobal']['pfbreplyrec'] ?? NULL);
 
 // Unified Log - Light/Dark Theme colour keys: one registry drives the read defaults, the
 // save loops, and the render loops below. 'upstream' reads with null-coalescing because it
@@ -61,8 +61,10 @@ foreach ($uni_defaults as $u_type => $u_cfg) {
 	$u_light = "uni{$u_type}";
 	$u_dark  = "uni{$u_type}2";
 	if ($u_cfg['safe_read']) {
-		$pfb[$u_light]	= ($pfb['aglobal'][$u_light] ?? '')	?: $u_cfg['light_default'];
-		$pfb[$u_dark]	= ($pfb['aglobal'][$u_dark] ?? '')	?: $u_cfg['dark_default'];
+		// issue #1792: pfb_is_empty, not ?: -- a stored colour of literally
+		// '0' is the user's (odd) value, not an absence.
+		$pfb[$u_light]	= pfb_is_empty($pfb['aglobal'][$u_light] ?? NULL) ? $u_cfg['light_default'] : $pfb['aglobal'][$u_light];
+		$pfb[$u_dark]	= pfb_is_empty($pfb['aglobal'][$u_dark] ?? NULL) ? $u_cfg['dark_default'] : $pfb['aglobal'][$u_dark];
 	} else {
 		$pfb[$u_light]	= $pfb['aglobal'][$u_light]		?: $u_cfg['light_default'];
 		$pfb[$u_dark]	= $pfb['aglobal'][$u_dark]		?: $u_cfg['dark_default'];
@@ -73,11 +75,11 @@ $pfbchartcnt	= $pfb['aglobal']['pfbchartcnt']		?: '24';
 $pfbchartstyle	= $pfb['aglobal']['pfbchartstyle']		?: 'twotone';
 $pfbchart1	= $pfb['aglobal']['pfbchart1']			?: '#0C6197';
 $pfbchart2	= $pfb['aglobal']['pfbchart2']			?: '#7A7A7A';
-$pfbblockstat	= explode(',', $pfb['aglobal']['pfbblockstat'] ?? '') ?: array();
-$pfbpermitstat	= explode(',', $pfb['aglobal']['pfbpermitstat'] ?? '')?: array();
-$pfbmatchstat	= explode(',', $pfb['aglobal']['pfbmatchstat'] ?? '')	?: array();
-$pfbdnsblstat	= explode(',', $pfb['aglobal']['pfbdnsblstat'] ?? '')	?: array();
-$pfbdnsblreplystat = explode(',', $pfb['aglobal']['pfbdnsblreplystat'] ?? '') ?: array();
+$pfbblockstat	= pfb_csv_list($pfb['aglobal']['pfbblockstat'] ?? NULL);
+$pfbpermitstat	= pfb_csv_list($pfb['aglobal']['pfbpermitstat'] ?? NULL);
+$pfbmatchstat	= pfb_csv_list($pfb['aglobal']['pfbmatchstat'] ?? NULL);
+$pfbdnsblstat	= pfb_csv_list($pfb['aglobal']['pfbdnsblstat'] ?? NULL);
+$pfbdnsblreplystat = pfb_csv_list($pfb['aglobal']['pfbdnsblreplystat'] ?? NULL);
 
 // issue #1497: explicit assignments (was a ${"$type"} variable-variable loop
 // over $aglobal_array) -- PHPStan can't trace a variable-variable target, so
@@ -1781,7 +1783,9 @@ if ($alert_summary) {
 					}
 
 					$data = array_map('trim', explode(' ', trim($line), 2));
-					$alert_stats[$alert_view][$stat_type][($data[1] ?? '') ?: $unknown_msg] = $data[0] ?: 0;
+					// issue #1792: a stat label of literally '0' is a real
+					// label -- only a MISSING/empty field reads "Unknown".
+					$alert_stats[$alert_view][$stat_type][pfb_is_empty($data[1] ?? NULL) ? $unknown_msg : $data[1]] = (int) $data[0];
 				}
 			}
 			else {

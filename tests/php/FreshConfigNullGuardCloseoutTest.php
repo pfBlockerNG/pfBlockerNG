@@ -43,7 +43,7 @@ final class FreshConfigNullGuardCloseoutTest extends TestCase
 				throw new RuntimeException('test bootstrap: failed to read www/index.php');
 			}
 			if (!preg_match(
-				'/\$ptype\[\$server_type\] = htmlspecialchars\(\$_SERVER\[\$server_type\][^\n]*\n/',
+				'/\$ptype\[\$server_type\] = \(\$server_value = htmlspecialchars\(\$_SERVER\[\$server_type\][^\n]*\n/',
 				$src,
 				$m
 			)) {

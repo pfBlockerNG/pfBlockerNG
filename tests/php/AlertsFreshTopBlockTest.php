@@ -48,7 +48,7 @@ final class AlertsFreshTopBlockTest extends TestCase
 
 		if (!function_exists('pfb_alerts_oracle_fresh_top')) {
 			if (!preg_match(
-				'/(\$aglobal_array\s*=\s*array\(.*?\n\$pfbdnsblreplystat\s*=\s*explode\([^\n]*\n)/s',
+				'/(\$aglobal_array\s*=\s*array\(.*?\n\$pfbdnsblreplystat\s*=\s*pfb_csv_list\([^\n]*\n)/s',
 				$src,
 				$m
 			)) {
@@ -125,9 +125,9 @@ final class AlertsFreshTopBlockTest extends TestCase
 			$nullDeprecations,
 			"fresh Alerts top-level block must emit zero 'Passing null' deprecations, got:\n" . implode("\n", $nullDeprecations)
 		);
-		// explode(',', '') yields a single empty-string element, not [] -- the
-		// caller-visible shape is unchanged by the guard (behaviour-preserving).
-		$this->assertSame([''], $vars['pfbreplytypes']);
+		// issue #1792: pfb_csv_list() answers an absent scalar with NO entries
+		// -- the phantom [''] the old explode(',', '') shape produced is gone.
+		$this->assertSame([], $vars['pfbreplytypes']);
 	}
 
 	public function testPopulatedAlertsTopBlockExplodeSitesPassThroughUnchanged(): void

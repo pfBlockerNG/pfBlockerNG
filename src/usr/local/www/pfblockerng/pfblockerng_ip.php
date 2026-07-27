@@ -61,19 +61,19 @@ $pconfig['maxmind_account']	= $pfb['iconfig']['maxmind_account']			?: '';
 // A GET renders blank; a validation-error redisplay preserves the just-typed $_POST value
 // (like every other field), never PfbConfig/iconfig.
 $pconfig['maxmind_key']		= $_POST['maxmind_key'] ?? '';
-$pconfig['inbound_interface']	= explode(',', $pfb['iconfig']['inbound_interface'] ?? '')	?: array();
+$pconfig['inbound_interface']	= pfb_csv_list($pfb['iconfig']['inbound_interface'] ?? NULL);
 $pconfig['inbound_deny_action']	= $pfb['iconfig']['inbound_deny_action']		?: 'block';
-$pconfig['outbound_interface']	= explode(',', $pfb['iconfig']['outbound_interface'] ?? '')	?: array();
+$pconfig['outbound_interface']	= pfb_csv_list($pfb['iconfig']['outbound_interface'] ?? NULL);
 $pconfig['outbound_deny_action']= $pfb['iconfig']['outbound_deny_action']		?: 'reject';
 $pconfig['enable_float']	= $pfb['iconfig']['enable_float']			?: '';
 $pconfig['pass_order']		= $pfb['iconfig']['pass_order']				?: 'order_0';
 $pconfig['autorule_suffix']	= $pfb['iconfig']['autorule_suffix']			?: 'autorule';
 $pconfig['killstates']		= $pfb['iconfig']['killstates']				?: '';
-$pconfig['v4suppression']	= base64_decode($pfb['iconfig']['v4suppression'] ?? '')	?: '';
+$pconfig['v4suppression']	= pfb_b64_text($pfb['iconfig']['v4suppression'] ?? NULL);
 // ADR-53 review finding B: '?? ""' on the array read -- v6suppression (unlike
 // v4suppression) is NEVER install-migrated, so it is absent from config.xml
 // on every install until this page's first post-upgrade save.
-$pconfig['v6suppression']	= base64_decode($pfb['iconfig']['v6suppression'] ?? '')	?: '';
+$pconfig['v6suppression']	= pfb_b64_text($pfb['iconfig']['v6suppression'] ?? NULL);
 
 // Select array options
 $options_asn_reporting 		= [	'disabled'	=> 'Disabled',
@@ -263,8 +263,8 @@ if ($_POST) {
 			$pfb['iconfig']['autorule_suffix']	= $_POST['autorule_suffix']					?: 'autorule';
 			$pfb['iconfig']['killstates']		= pfb_filter($_POST['killstates'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			// issue #1723: already sanitized by the ingestion prologue -- plain encode.
-			$pfb['iconfig']['v4suppression']	= base64_encode($_POST['v4suppression'] ?? '')			?: '';
-			$pfb['iconfig']['v6suppression']	= base64_encode($_POST['v6suppression'] ?? '')			?: '';
+			$pfb['iconfig']['v4suppression']	= base64_encode($_POST['v4suppression'] ?? '');
+			$pfb['iconfig']['v6suppression']	= base64_encode($_POST['v6suppression'] ?? '');
 
 			// ADR-11: per-type aggregate aliases multi-select -> CSV scalar (sanitised to the
 			// known option keys; default none). Gateway-registered in the general section, so
