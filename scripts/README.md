@@ -399,7 +399,8 @@ The scheduled version-tracking + release-automation design is its own ADR.
 
 `build-repo-portable.py --build-matrix` generates the self-hosted `pkg` repository tree
 (ADR-17). By default it keeps only the **latest** release of each channel per
-`(version, arch)` — identical to the pre-ADR-27 behaviour. Three flags control retention:
+`(version, arch)`, plus the newest package of each major/minor line (line pins, below) —
+the window itself is identical to the pre-ADR-27 behaviour. Three flags control retention:
 
 | Flag | Default | Purpose |
 | ---- | ------- | ------- |
@@ -432,7 +433,7 @@ retention depth, it prunes to the newest N/M before writing the catalog.
 
 `pkg install <name>` (no version) still resolves the **highest** listed version
 (newest-wins, `pkg` version ordering). Versions older than the N/M retention window are absent
-from the catalog.
+from the catalog unless retained as a line pin.
 
 > **Compatibility note:** retention is artifact availability, not supported downgrade. Older
 > packages may not understand current state; configuration or enforcement may fail. Restore a
