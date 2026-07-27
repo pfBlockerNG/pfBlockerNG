@@ -44,6 +44,12 @@ _GIT_ADD_RE = re.compile(r"\bgit add\b(?P<paths>[^\n#]*)")
 _GIT_COMMIT_RE = re.compile(r"\bgit commit\b")
 _COMPOSER_INSTALL_RE = re.compile(r"\bcomposer install\b")
 
+# The hook's php -l / PHPStan / PHPCS gates must run on a supported PHP, which
+# means setup-php fed from read-version-matrix rather than the runner default.
+_SETUP_PHP_RE = re.compile(r"uses:\s*shivammathur/setup-php@")
+_PHP_VERSION_RE = re.compile(r"php-version:\s*(?P<value>\S.*?)\s*$")
+_MATRIX_OUTPUT_RE = re.compile(r"outputs\.php_versions")
+
 # A job key: exactly two spaces of indent under the top-level `jobs:` mapping.
 _JOB_KEY_RE = re.compile(r"^ {2}(?P<name>[A-Za-z0-9_.-]+):\s*(#.*)?$")
 _JOBS_ROOT_RE = re.compile(r"^jobs:\s*(#.*)?$")
@@ -128,17 +134,19 @@ def _first_line_matching(lines: list[str], pattern: re.Pattern[str]) -> int | No
     return None
 
 
-def _offenders(name: str, text: str) -> tuple[list[str], list[str]]:
-    """(offending job descriptions, inspected job labels) for one workflow."""
+def _hook_php_jobs(text: str) -> list[tuple[str, int, list[str]]]:
+    """Every job in this workflow that stages PHP with .githooks active."""
     lines = _code_lines(text)
     if not _HOOKS_RE.search("\n".join(lines)):
-        return [], []
+        return []
+    return [job for job in _jobs(lines) if _stages_php(job[2])]
 
+
+def _offenders(name: str, text: str) -> tuple[list[str], list[str]]:
+    """(offending job descriptions, inspected job labels) for one workflow."""
     offenders: list[str] = []
     inspected: list[str] = []
-    for job, job_start, job_lines in _jobs(lines):
-        if not _stages_php(job_lines):
-            continue
+    for job, job_start, job_lines in _hook_php_jobs(text):
         inspected.append(f"{name}:{job}")
 
         install_offset = _first_line_matching(job_lines, _COMPOSER_INSTALL_RE)
@@ -176,6 +184,39 @@ def test_php_staging_jobs_install_composer_before_committing() -> None:
         "this guard rather than leaving it vacuous"
     )
     assert not offenders, "expected every PHP-staging job to install Composer before committing; got:\n" + "\n".join(
+        offenders
+    )
+
+
+def test_php_staging_jobs_pin_php_from_the_version_matrix() -> None:
+    """The hook's PHP gates run on a supported PHP, not on whatever the runner ships.
+
+    Scenario: .githooks/pre-commit runs php -l, PHPStan and PHPCS.
+    Given a job that puts those gates in front of its own commit,
+    when the runner image changes its default PHP,
+    then the gates must still run on a version supported-versions.json ships --
+    so the PHP version comes from read-version-matrix, never from the ambient
+    runner default and never from a literal restating the matrix.
+    """
+    offenders: list[str] = []
+    for path in _workflow_files():
+        for job, _, job_lines in _hook_php_jobs(path.read_text(encoding="utf-8")):
+            if _first_line_matching(job_lines, _SETUP_PHP_RE) is None:
+                offenders.append(f"{path.name}: job `{job}` runs the hook PHP gates on the runner's ambient PHP")
+                continue
+            pinned = [
+                match.group("value")
+                for line in job_lines
+                if (match := _PHP_VERSION_RE.search(line))
+                if not _MATRIX_OUTPUT_RE.search(match.group("value"))
+            ]
+            if pinned:
+                offenders.append(
+                    f"{path.name}: job `{job}` pins php-version to {', '.join(pinned)} "
+                    "instead of a read-version-matrix output"
+                )
+
+    assert not offenders, "expected every PHP-staging job to take its PHP version from the matrix; got:\n" + "\n".join(
         offenders
     )
 
