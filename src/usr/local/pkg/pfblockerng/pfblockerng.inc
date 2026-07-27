@@ -3136,21 +3136,21 @@ function pfb_is_blank(?string $value): bool {
 
 /**
  * Sanitize a single-line/scalar text field: converts legacy encodings to
- * UTF-8, strips every Unicode control character (Cc) -- including CR/LF/TAB,
- * since this contract is single-line -- and the BOM, then trims (Unicode
- * whitespace \p{Z}/tab, then the ASCII trim() backstop). Unicode format
- * characters (ZWJ/ZWNJ/bidi marks) are NOT Cc and survive. A pathological
- * preg_replace() failure degrades to the unstripped input, never to NULL.
- * Under a pathological (~1M-char) whitespace run the guarded preg pass
- * degrades fail-open the same way, so Unicode-whitespace stripping may not
- * apply for that call.
+ * UTF-8, strips every \p{C} character (Cc/Cf/Co/Cs/Cn -- includes CR/LF/TAB
+ * and the BOM, since this contract is single-line), then trims (Unicode
+ * whitespace \p{Z}/tab, then the ASCII trim() backstop). issue #1795: this
+ * package has no use for Unicode format characters (ZWJ/ZWNJ/bidi marks)
+ * either, so they no longer survive. A pathological preg_replace() failure
+ * degrades to the unstripped input, never to NULL. Under a pathological
+ * (~1M-char) whitespace run the guarded preg pass degrades fail-open the
+ * same way, so Unicode-whitespace stripping may not apply for that call.
  */
 function pfb_sanitize_text(string $text): string {
 	if (!mb_check_encoding($text, 'UTF-8')) {
 		$text = mb_convert_encoding($text, 'UTF-8',
 			mb_detect_encoding($text, 'UTF-8, ASCII, ISO-8859-1'));
 	}
-	$text = pfb_preg_replace_safe('/[\p{Cc}\x{FEFF}]+/u', '', $text);
+	$text = pfb_preg_replace_safe('/\p{C}+/u', '', $text);
 	$text = pfb_preg_replace_safe('/^[\p{Z}\t]+|[\p{Z}\t]+$/u', '', $text);
 	return trim($text);
 }
@@ -3158,10 +3158,11 @@ function pfb_sanitize_text(string $text): string {
 
 /**
  * Sanitize a multi-line textarea blob: converts legacy encodings to UTF-8,
- * normalizes CRLF/CR/LF line endings to LF, strips every Unicode control
- * character except \n/\t (plus the BOM) -- so VT/FF/NEL/etc. never become row
- * separators or survive as data -- then right-strips trailing whitespace per
- * line. The right-strip is Unicode-aware (\p{Z} + tab), so NBSP/ideographic
+ * normalizes CRLF/CR/LF line endings to LF, strips every \p{C} character
+ * (Cc/Cf/Co/Cs/Cn, plus the BOM) except \n/\t -- so VT/FF/NEL/ZWJ/etc. never
+ * become row separators or survive as data (issue #1795) -- then
+ * right-strips trailing whitespace per line. The right-strip is
+ * Unicode-aware (\p{Z} + tab), so NBSP/ideographic
  * space/line-separator runs are stripped like ASCII space/tab, and a row of
  * only Unicode whitespace right-strips to '' same as an ASCII-blank row. Does
  * NOT drop blank lines; that is the caller's job (issue #1707). A
@@ -3177,8 +3178,7 @@ function pfb_sanitize_text_area(string $text): string {
 			mb_detect_encoding($text, 'UTF-8, ASCII, ISO-8859-1'));
 	}
 	$text = str_replace(array("\r\n", "\r"), "\n", $text);
-	$text = pfb_preg_replace_safe(
-		'/[\x00-\x08\x0B-\x1F\x7F\x{80}-\x{9F}\x{FEFF}]+/u', '', $text);
+	$text = pfb_preg_replace_safe('/[^\P{C}\t\n]+/u', '', $text);
 
 	$lines = explode("\n", $text);
 	foreach ($lines as &$line) {
