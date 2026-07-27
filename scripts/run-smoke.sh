@@ -46,7 +46,12 @@
 #     error, never a silent pick); the splitter's own errors (e.g. an empty slice)
 #     propagate as-is under `set -eu`. When N>1, pytest exit 5 ("no tests ran") is
 #     mapped to 0 — a shard whose slice carries no test matching the marker is a
-#     partition artifact, not a failure; unsharded runs keep exit 5 fatal.
+#     partition artifact, not a failure; unsharded runs keep exit 5 fatal. Every
+#     sharded invocation also records its outcome ('empty' | 'selected') to
+#     $PFB_DIAG_DIR/shard-selection-status (issue #1767) — the per-shard tolerance
+#     above can't see a whole-LEG zero-selection (every shard's slice empty, a real
+#     collection bug), so smoke.yml's all-smoke-passed job sums this marker across
+#     a leg's shards and fails the leg unless at least one says 'selected'.
 #
 # Env passthrough: RUN_ID / PFB_DIAG_DIR / SMOKE_LANE reach pytest by inheritance (no
 #   explicit forwarding needed — subprocess env-inherit covers it).
@@ -279,14 +284,26 @@ fi
 # run), so an empty shard is a benign no-op. Only exit 5 is mapped; every other
 # non-zero rc stays fatal. Unsharded runs keep the exec (byte-identical path)
 # where exit 5 still fails loudly — there it means a genuinely wrong invocation.
+#
+# issue #1767: the per-shard tolerance above is invisible to whatever runs the
+# OTHER shards of this same leg — a marker typo or collection bug that empties
+# EVERY shard would report each one "empty, success" with nothing left to catch
+# the leg-wide zero-selection. Record this shard's outcome to a one-word file in
+# $PFB_DIAG_DIR so a LEG-LEVEL check (smoke.yml's all-smoke-passed, summing this
+# marker across a leg's shards) can still see it. A single-shard leg (below)
+# writes nothing — it needs none: its own exit 5 already propagates raw and
+# fails the leg directly.
 if [ "$_SHARD_TOTAL" -gt 1 ]; then
     _rc=0
     "$PYTHON" -m pytest "$@" || _rc=$?
+    mkdir -p "$PFB_DIAG_DIR"
     if [ "$_rc" -eq 5 ]; then
         printf 'run-smoke: shard %s/%s selected no tests for this marker — empty slice is a partition artifact, treating as pass\n' \
             "$_SHARD" "$_SHARD_TOTAL" >&2
+        printf 'empty\n' > "$PFB_DIAG_DIR/shard-selection-status"
         exit 0
     fi
+    printf 'selected\n' > "$PFB_DIAG_DIR/shard-selection-status"
     exit "$_rc"
 fi
 

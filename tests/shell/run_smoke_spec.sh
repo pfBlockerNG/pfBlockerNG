@@ -27,6 +27,10 @@ Describe 'run-smoke.sh'
     ARGV_FILE="${WORK}/argv"
     FAKE_BIN="${WORK}/bin"
     mkdir -p "$FAKE_BIN"
+    # Localize the diagnostics dir into the per-test tmpdir (issue #1767's
+    # shard-selection-status marker below lands here) -- never the real repo
+    # cwd, which the default "smoke-diag" would otherwise litter.
+    PFB_DIAG_DIR="${WORK}/smoke-diag"
 
     # Fake python: records its argv (one arg per line) to $ARGV_FILE.
     # run-smoke.sh calls: exec $PYTHON -m pytest <args>; the fake captures them.
@@ -45,7 +49,7 @@ PY3EOF
 
     # Prepend fake bin so run-smoke.sh's python3 fallback hits our stub.
     PATH="${FAKE_BIN}:${PATH}"
-    export PATH ARGV_FILE WORK FAKE_BIN
+    export PATH ARGV_FILE WORK FAKE_BIN PFB_DIAG_DIR
   }
 
   teardown() {
@@ -441,6 +445,14 @@ VENVEOF
   #
   # RED→GREEN: before run-smoke.sh mapped rc 5 under N>1, the first example
   # failed (run-smoke propagated 5); after the mapping it passes.
+  #
+  # issue #1767: every sharded invocation ALSO records its selection outcome
+  # ('empty' | 'selected') to $PFB_DIAG_DIR/shard-selection-status -- the
+  # per-shard signal a LEG-LEVEL check (smoke.yml's all-smoke-passed) sums
+  # across a leg's shards, so a whole-leg zero-selection (every shard empty)
+  # can no longer hide behind this per-shard tolerance. RED→GREEN: before the
+  # write existed, the file was never created; the content assertions below
+  # failed (file absent). After: the file exists with the right content.
   make_rc_fake() {
     # Fake python exiting with $1 after recording argv — drives the rc mapping.
     cat > "${FAKE_BIN}/python-rc" << RCEOF
@@ -463,6 +475,7 @@ RCEOF
       The status should be success
       The stderr should include 'partition artifact'
       The path "$ARGV_FILE" should be exist
+      The contents of file "${PFB_DIAG_DIR}/shard-selection-status" should equal 'empty'
     End
   End
 
@@ -476,6 +489,21 @@ RCEOF
     It 'stays fatal -- only exit 5 is mapped, never a genuine failure'
       When run run_sharded_pytest_exit1
       The status should equal 1
+      The contents of file "${PFB_DIAG_DIR}/shard-selection-status" should equal 'selected'
+    End
+  End
+
+  run_sharded_pytest_exit0() {
+    make_shard_fixture
+    make_rc_fake 0
+    PYTHON="${FAKE_BIN}/python-rc" sh "$SCRIPT" --paths "${WORK}/mods" --shard 0 --shard-total 2
+  }
+
+  Describe 'sharded run whose slice selects and passes tests (pytest exit 0)'
+    It 'records the shard as having selected tests'
+      When run run_sharded_pytest_exit0
+      The status should be success
+      The contents of file "${PFB_DIAG_DIR}/shard-selection-status" should equal 'selected'
     End
   End
 
@@ -489,6 +517,10 @@ RCEOF
     It 'keeps exit 5 fatal -- zero-selected without sharding means a wrong invocation'
       When run run_unsharded_pytest_exit5
       The status should equal 5
+      # issue #1767: a single-shard leg needs no shard-selection-status marker --
+      # its own exit 5 already propagates raw (asserted above) and fails the leg
+      # directly; only the sharded branch above writes the marker.
+      The path "${PFB_DIAG_DIR}/shard-selection-status" should not be exist
     End
   End
 
