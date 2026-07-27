@@ -3206,10 +3206,28 @@ function pfblockerng_tick(): void
 	// against a live writer loses whatever it appends meanwhile.
 	if (!$dispatched && !pfb_update_pass_running()) {
 		pfb_log_mgmt();
-	} elseif (!$dispatched) {
+	} elseif ($dispatched) {
+		// issue #1769: the OTHER half of this gate ($dispatched) was ALSO silent -- a
+		// tick that itself just dispatched an update pass read identically to
+		// "maintenance ran" from the log, with zero trace. Say so via logger() (like
+		// every other 'Tick: ...' message in this function) -> ADR-38's declarative
+		// syslog routing sends it to /var/log/pfblockerng_syslog.log, NOT $pfb['log']:
+		// TickEntrypointTest::testDispatchingTickSkipsLogMaintenanceThisTick (Case D)
+		// pins THIS tick's 'log' file byte-UNCHANGED, so pfb_logger()->$pfb['log']
+		// is not an option here regardless -- and syslog genuinely isn't a file
+		// pfb_log_mgmt() manages, so there is no feedback loop to accept.
+		logger(LOG_INFO, localize_text('Tick: log maintenance skipped (this tick dispatched an update pass).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+	} else {
 		// issue #1769: the skip above was previously silent -- a running update pass
 		// reads identically to "maintenance ran" from the log, which cost a live-tier
-		// diagnosis. Say so.
+		// diagnosis. Say so. Deliberately KEPT on pfb_logger()/$pfb['log'] (not
+		// logger()/syslog like the branch above): TickEntrypointTest::
+		// testTickLogsDeferredMaintenanceWhenAPassIsRunning and the ADR-60 smoke
+		// suite's self-diagnosing failure output both assert on this exact surface.
+		// Accepted tradeoff, stated explicitly: a long-lived stray/leaked update pass
+		// would make this line accumulate in the very file it's deferring maintenance
+		// on -- bounded by how long that pass survives (transient in practice), not
+		// unbounded growth.
 		pfb_logger("\n" . localize_text('Tick: log maintenance deferred (an update pass is running).') . "\n", 1);
 	}
 }

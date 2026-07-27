@@ -102,40 +102,6 @@
             }
         ]
     },
-    "logger": {
-        "returnsRef": false,
-        "returnType": "void",
-        "params": [
-            {
-                "name": "priority",
-                "byRef": false,
-                "variadic": false,
-                "type": "int",
-                "default": null
-            },
-            {
-                "name": "message",
-                "byRef": false,
-                "variadic": false,
-                "type": "mixed",
-                "default": null
-            },
-            {
-                "name": "prefix",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": "NULL"
-            },
-            {
-                "name": "facilities",
-                "byRef": false,
-                "variadic": false,
-                "type": "?int",
-                "default": "NULL"
-            }
-        ]
-    },
     "pfBlockerNG_clearip": {
         "returnsRef": false,
         "returnType": null,
