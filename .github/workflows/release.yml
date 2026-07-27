@@ -338,18 +338,24 @@ jobs:
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
 
   # ── 1b. UI suite (ADR-14, D1) ────────────────────────────────────────────
-  # Run the FULL tiered Web-UI suite on the live pfSense VM BEFORE publishing.
-  # `tier: all` expands the reusable workflow's matrix to one GH job per
-  # (tier × version) leg — render / functional / browser × each image — and
-  # `fail-fast: false` keeps every leg independent. Because each leg is its own
-  # job, GitHub's "Re-run failed jobs" re-runs ONLY a flaky leg; `release` and
-  # `sync-ports-fork` do NOT re-run until all legs are green again (they only run once
-  # their `needs:` are all `success`), so a not-our-fault browser flake costs a
-  # single-leg re-run, never a republish.
+  # Run the FULL tiered Web-UI suite on the live pfSense VM against the EXACT
+  # per-leg .pkg artifacts build-pkgs-portable just built (pkg_artifact_prefix:
+  # pfBlockerNG-relpkg, issue #1662) — not a fresh build of its own, so the
+  # release gates on the SAME bits that get published. `tier: all` expands the
+  # reusable workflow's matrix to one GH job per (tier × version) leg — render
+  # / functional / browser × each image — and `fail-fast: false` keeps every
+  # leg independent. Because each leg is its own job, GitHub's "Re-run failed
+  # jobs" re-runs ONLY a flaky leg; publish-release does NOT re-run until all
+  # legs are green again (it only runs once its `needs:` are all `success`),
+  # so a not-our-fault browser flake costs a single-leg re-run, never a
+  # republish.
   #
   # This is a SEPARATE gate ALONGSIDE the CI check asserted by prepare-release
   # (which still asserts the "All tests passed" branch-tip check, covering the
-  # Tier-A PR fold). It does not weaken that gate — the release `needs:` BOTH.
+  # Tier-A PR fold). It does not weaken that gate — publish-release `needs:`
+  # BOTH this AND smoke-suite (ADR-14 D1: the publish flip waits on every leg;
+  # a flaky leg re-runs in isolation without redoing the publish — gate
+  # publish-release, never `release`, so draft creation stays recoverable).
   #
   # §7 browser DEMOTE/DROP — one-line switch: the browser leg is included here as
   # a separate re-runnable leg (the cheap tiers gate firmly; browser adds the
@@ -359,14 +365,15 @@ jobs:
   # AND running this with `tier: functional` instead of `tier: all` here — the
   # render + functional legs keep gating the release, the browser leg goes
   # dispatch-only. Tier A + B-HTTP retain full standalone value.
-  # TEMPORARILY DISABLED (if: false) — the live-VM UI harness is still being
-  # stabilized (ADR-14 §7; login fixed in #81, page-serving 404 + php_error.log
-  # size read outstanding). While it cannot pass, it must not gate or burden a
-  # release. Re-enable by removing `if: false` here AND re-adding `ui-suite` to
-  # the `release` job's `needs:` below, once the harness runs green.
+  #
+  # Deliberately carries no reference to the dispatch's dry-run input (kept OUT
+  # of the mutation-jobs gate set): this runs in BOTH dry-run and real modes,
+  # same as build-pkgs-portable already builds in dry-run to validate the .pkg
+  # — dry-run parity for the live gates comes free.
   ui-suite:
     name: UI fan-out (all CI legs, live pfSense VM)
-    if: false
+    needs: [prepare-release, read-matrix, build-pkgs-portable]
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' }}
     uses: ./.github/workflows/ui-tests.yml
     with:
       tier: all
@@ -374,6 +381,24 @@ jobs:
       # so without this the scope ladder resolves `impacted` — min-CE leg only —
       # not the full pre-release fan-out this job exists for.
       scope: full
+      # Consume the EXACT per-leg artifacts build-pkgs-portable just built
+      # (issue #1662) instead of building its own.
+      pkg_artifact_prefix: pfBlockerNG-relpkg
+    secrets: inherit
+
+  # ── 1b2. Smoke suite (ADR-14 D1 sibling) ─────────────────────────────────
+  # Same live-gate contract as ui-suite, one leg per ci:true image, over the
+  # SAME per-leg .pkg artifacts (pkg_artifact_prefix: pfBlockerNG-relpkg, issue
+  # #1662). Carries no dry-run-input reference either — runs in both modes,
+  # same as ui-suite.
+  smoke-suite:
+    name: Smoke fan-out (all CI legs, live pfSense VM)
+    needs: [prepare-release, read-matrix, build-pkgs-portable]
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' }}
+    uses: ./.github/workflows/smoke.yml
+    with:
+      scope: full
+      pkg_artifact_prefix: pfBlockerNG-relpkg
     secrets: inherit
 
   # ── 1c. Read version matrix ──────────────────────────────────────────────
@@ -468,9 +493,9 @@ jobs:
     name: Create draft GitHub Release
     runs-on: ubuntu-latest
     # Gate on prepare-release (real: must succeed; dry-run: skipped is fine) AND
-    # the matrix read. The live-VM UI suite (ui-suite) is TEMPORARILY un-gated
-    # (see its `if: false` above) while the ADR-14 harness is stabilized;
-    # re-add `ui-suite` here once it is green.
+    # the matrix read. The live-VM ui-suite/smoke-suite gates do NOT block THIS
+    # job (draft creation) — per ADR-14 D1 they gate publish-release instead, so
+    # a flaky live leg re-runs in isolation without redoing the draft/changelog.
     needs: [prepare-release, read-matrix]
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' }}
     permissions:
@@ -794,27 +819,37 @@ jobs:
           files: ${{ env.ARCHIVE }}
 
   # ── 2b. Build .pkg artifacts (portable Linux builder) ────────────────────
-  # Builds one .pkg per distinct FreeBSD major from the deduped matrix.
-  # Runs the portable Linux builder steps inline (no FreeBSD VM, ~3 min/entry).
-  # This is the SOLE release .pkg builder: pfBlockerNG is a NO_BUILD port, so the
-  # portable builder reproduces `make package` byte-for-byte (validated against it
-  # over every smoke + Web-UI run on CE and Plus) and `pkg add` checks a dep is
-  # PRESENT, not its version — so the portable artifact installs identically.
+  # Builds one .pkg per build-matrix entry (every CE/Plus variant × FreeBSD
+  # major × arch). Runs the portable Linux builder steps inline (no FreeBSD
+  # VM, ~3 min/entry). This is the SOLE release .pkg builder: pfBlockerNG is a
+  # NO_BUILD port, so the portable builder reproduces `make package`
+  # byte-for-byte (validated against it over every smoke + Web-UI run on CE
+  # and Plus) and `pkg add` checks a dep is PRESENT, not its version — so the
+  # portable artifact installs identically.
   #
-  # GitHub Actions does not allow strategy.matrix on a job that uses a
-  # reusable workflow (uses:), so we run each entry sequentially in one job,
-  # uploading one artifact per entry with a unique name (pfBlockerNG-pkg-<major>).
+  # ONE JOB PER LEG (strategy.matrix over read-matrix's build_matrix,
+  # fail-fast: false): each leg uploads its OWN artifact, named exactly
+  # `pfBlockerNG-relpkg-<variant_lc>-<pfsense_version>-<arch>` (issue #1662) —
+  # the EXACT name ui-tests.yml's/smoke.yml's pkg_artifact_prefix consumer side
+  # downloads, so ui-suite/smoke-suite below gate on the SAME bits this job
+  # built, not a fresh rebuild of their own.
   #
-  # A build failure surfaces clearly (the job goes red) but MUST NOT break
-  # sync-ports-fork: it needs only `release`, never build-pkgs-*.
-  # attach-pkgs absorbs the failure with `if: always() && ...` (below).
+  # A leg's build failure surfaces as a red leg (fail-fast: false keeps the
+  # others going) but MUST NOT break sync-ports-fork: it needs only `release`,
+  # never build-pkgs-*. attach-pkgs absorbs the failure with `if: always() && ...`
+  # (below); a failed leg simply uploads nothing, so its .pkg is absent from
+  # the merged download and the publish-release healthcheck fails closed.
   build-pkgs-portable:
-    name: build .pkg artifacts (portable Linux)
+    name: "build .pkg — ${{ matrix.variant }}-${{ matrix.pfsense_version }} (FreeBSD ${{ matrix.freebsd_major }}/${{ matrix.arch }})"
     runs-on: ubuntu-latest
     needs: [prepare-release, read-matrix, resolve-stamp]
     # Same gate as release: run in both dry-run (skipped) and real (succeeded) modes.
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.resolve-stamp.result == 'success' }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.read-matrix.outputs.build_matrix) }}
 
     steps:
       - name: Checkout the tagged source
@@ -834,84 +869,95 @@ jobs:
       - name: Ensure zstd encoder is present
         run: command -v zstd >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y zstd; }
 
-      - name: Build one .pkg per matrix entry via build-leg.sh
+      - name: Compute this leg's VARSLUG/ABI (variant slug == pkg repo's catalog dir name)
+        id: leg
+        # Variant slug == the pkg repo's catalog dir name (build-repo-portable.py
+        # catalog_name_from_version): "<variant_lc>-<major.minor>", e.g. ce-2.8 /
+        # plus-26.03. The Release encodes it in the per-leg ARTIFACT NAME (issue
+        # #1662 exact-artifact contract) and the .pkg FILENAME; the pkg repo
+        # encodes the same identity as the FOLDER release/<varslug>/<arch>/.
+        env:
+          VARIANT: ${{ matrix.variant }}
+          CHANNEL_FALLBACK: ${{ matrix.channel }}
+          PFV: ${{ matrix.pfsense_version }}
+          MAJOR: ${{ matrix.freebsd_major }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -eu
+          V="${VARIANT:-${CHANNEL_FALLBACK:-CE}}"
+          MM=$(printf '%s' "$PFV" | cut -d. -f1-2)
+          VARSLUG="$(printf '%s' "$V" | tr '[:upper:]' '[:lower:]')-${MM}"
+          ABI="FreeBSD:${MAJOR}:${ARCH}"
+          # AMENDMENT 7: slug this leg from VARSLUG + major + arch so it lands in
+          # a distinct RUN_ID-keyed out dir. Colons in ABI are path-unsafe; the
+          # slug uses only safe chars.
+          LEG="${VARSLUG}-${MAJOR}-${ARCH}"
+          {
+            echo "varslug=${VARSLUG}"
+            echo "abi=${ABI}"
+            echo "leg=${LEG}"
+          } >> "$GITHUB_OUTPUT"
+          echo "leg ${LEG}: variant=${V} ABI=${ABI}"
+
+      - name: Build the .pkg via build-leg.sh
         # build-leg.sh is the shared build path (local/CI/release parity — ADR-47 P3).
         # portversion pinned from read-matrix (ref-independent, tag-string-derived).
         # created + commit from resolve-stamp (same checkout ref as this job's tree).
         env:
-          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
           PKG_CHANNEL:  ${{ needs.read-matrix.outputs.pkg_channel }}
           PORTVERSION:  ${{ needs.read-matrix.outputs.portversion }}
           CREATED:      ${{ needs.resolve-stamp.outputs.created }}
           COMMIT:       ${{ needs.resolve-stamp.outputs.commit }}
-          # Place run-keyed out dirs under $GITHUB_WORKSPACE/out so the upload
-          # glob out/**/*.pkg finds all artifacts without any path remapping.
+          ABI:          ${{ steps.leg.outputs.abi }}
+          VARSLUG:      ${{ steps.leg.outputs.varslug }}
+          LEG:          ${{ steps.leg.outputs.leg }}
+          PHP:          ${{ matrix.php_version }}
+          PY:           ${{ matrix.py_flavor }}
+          MAJOR:        ${{ matrix.freebsd_major }}
+          ARCH:         ${{ matrix.arch }}
+          # Place the run-keyed out dir under $GITHUB_WORKSPACE/out so the
+          # rename step below finds this leg's .pkg without any path remapping.
           PFB_RUN_ROOT: ${{ github.workspace }}/out
         run: |
           set -eu
-          echo "Pinning .pkg version to ${PORTVERSION}"
+          export LEG
+          RUN_ID="$(sh scripts/select-box.sh --print-id)"
+          export RUN_ID
 
-          printf '%s\n' "$BUILD_MATRIX" \
-            | jq -c '.[]' \
-            | while IFS= read -r ENTRY; do
-                MAJOR=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_major')
-                FREEBSD_VERSION=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_version')
-                PHP=$(printf '%s\n' "$ENTRY" | jq -r '.php_version')
-                PY=$(printf '%s\n' "$ENTRY" | jq -r '.py_flavor')
-                ARCH=$(printf '%s\n' "$ENTRY" | jq -r '.arch')
-                # Variant identity (CE/Plus + its pfSense version) disambiguates two
-                # entries that share a FreeBSD major × arch but differ in php/python deps.
-                VARIANT=$(printf '%s\n' "$ENTRY" | jq -r '.variant // .channel // "CE"')
-                PFV=$(printf '%s\n' "$ENTRY" | jq -r '.pfsense_version // empty')
-                ABI="FreeBSD:${MAJOR}:${ARCH}"
-                # Variant slug == the pkg repo's catalog dir name (build-repo-portable.py
-                # catalog_name_from_version): "<variant_lc>-<major.minor>", e.g. ce-2.8 /
-                # plus-26.03. The Release encodes it in the FILENAME; the pkg repo encodes
-                # the same identity as the FOLDER release/<varslug>/<arch>/ — one artifact,
-                # two presentations, the variant segment identical in both.
-                MM=$(printf '%s' "$PFV" | cut -d. -f1-2)
-                VARSLUG="$(printf '%s' "$VARIANT" | tr '[:upper:]' '[:lower:]')-${MM}"
+          echo "--- Building .pkg for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH}, PHP ${PHP}, ${PY} ---"
 
-                echo "--- Building .pkg for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH} (${FREEBSD_VERSION}), PHP ${PHP}, ${PY} ---"
+          PKG="$(sh scripts/build-leg.sh \
+            --channel    "$PKG_CHANNEL" \
+            --abi        "$ABI" \
+            --py-flavor  "$PY" \
+            --php        "$PHP" \
+            --pkgversion "$PORTVERSION" \
+            --annotate   "created=${CREATED}" \
+            --annotate   "commit=${COMMIT}")"
 
-                # AMENDMENT 7: slug a per-entry LEG from VARSLUG + major + arch so
-                # each matrix entry lands in a distinct RUN_ID-keyed out dir.
-                # Colons in ABI are path-unsafe; the slug uses only safe chars.
-                LEG="${VARSLUG}-${MAJOR}-${ARCH}"
-                export LEG
-                RUN_ID="$(sh scripts/select-box.sh --print-id)"
-                export RUN_ID
+          PKG_DIR="$(dirname "$PKG")"
+          echo "Built for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH}:"
+          ls -l "${PKG_DIR}"
 
-                PKG="$(sh scripts/build-leg.sh \
-                  --channel    "$PKG_CHANNEL" \
-                  --abi        "$ABI" \
-                  --py-flavor  "$PY" \
-                  --php        "$PHP" \
-                  --pkgversion "$PORTVERSION" \
-                  --annotate   "created=${CREATED}" \
-                  --annotate   "commit=${COMMIT}")"
+          # Rename to embed variant + pfSense version + FreeBSD major + arch, so
+          # this leg's .pkg filename stays unambiguous inside its own artifact.
+          BASE="$(basename "$PKG" .pkg)"
+          RENAMED="${PKG_DIR}/${BASE}-${VARSLUG}-FreeBSD-${MAJOR}-${ARCH}.pkg"
+          mv "$PKG" "$RENAMED"
+          echo "Renamed: ${BASE}.pkg -> $(basename "$RENAMED")"
+          echo "PKG_PATH=${RENAMED}" >> "$GITHUB_ENV"
 
-                PKG_DIR="$(dirname "$PKG")"
-                echo "Built for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH}:"
-                ls -l "${PKG_DIR}"
-
-                # Rename to embed variant + pfSense version + FreeBSD major + arch before
-                # upload, so every matrix entry yields a uniquely-named artifact (two
-                # variants on one major × arch, or two arches of one major, never collide).
-                BASE="$(basename "$PKG" .pkg)"
-                mv "$PKG" "${PKG_DIR}/${BASE}-${VARSLUG}-FreeBSD-${MAJOR}-${ARCH}.pkg"
-                echo "Renamed: ${BASE}.pkg -> ${BASE}-${VARSLUG}-FreeBSD-${MAJOR}-${ARCH}.pkg"
-              done
-
-          echo "All .pkg artifacts:"
-          find out -name "*.pkg" -exec ls -l {} \;
-
-      - name: Upload .pkg artifacts
-        if: always()
+      - name: Upload this leg's .pkg artifact (exact-name contract, issue #1662)
+        # Name MUST equal pfBlockerNG-relpkg-<variant_lc>-<pfsense_version>-<arch>
+        # -- the EXACT name ui-tests.yml's/smoke.yml's pkg_artifact_prefix download
+        # step composes when pkg_artifact_prefix: pfBlockerNG-relpkg is set (see
+        # ui-suite/smoke-suite below). Upload only on success: fail-fast: false
+        # already isolates a failed leg, so it simply uploads nothing and
+        # attach-pkgs/the publish healthcheck fail closed on the missing asset.
         uses: actions/upload-artifact@v7
         with:
-          name: pfBlockerNG-release-pkgs
-          path: out/**/*.pkg
+          name: pfBlockerNG-relpkg-${{ steps.leg.outputs.varslug }}-${{ matrix.arch }}
+          path: ${{ env.PKG_PATH }}
           if-no-files-found: error
           retention-days: 7
 
@@ -945,11 +991,14 @@ jobs:
           persist-credentials: false
 
       - name: Download .pkg artifacts from portable builder
-        # The portable builder uploads as "pfBlockerNG-release-pkgs"; each artifact
-        # already has -FreeBSD-<major> in the filename (renamed before upload).
+        # Each build-pkgs-portable leg uploads its OWN artifact, named
+        # pfBlockerNG-relpkg-<variant_lc>-<pfsense_version>-<arch> (issue #1662);
+        # merge every leg's artifact into pkgs/ (each holds exactly one .pkg,
+        # already carrying -FreeBSD-<major> in the filename).
         uses: actions/download-artifact@v4
         with:
-          name: pfBlockerNG-release-pkgs
+          pattern: pfBlockerNG-relpkg-*
+          merge-multiple: true
           path: pkgs/
         continue-on-error: true
 
@@ -994,8 +1043,11 @@ jobs:
   publish-release:
     name: Health-check + publish the draft Release
     runs-on: ubuntu-latest
-    needs: [prepare-release, release, attach-pkgs, read-matrix]
-    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.release.outputs.dry_run == 'false'
+    needs: [prepare-release, release, attach-pkgs, read-matrix, ui-suite, smoke-suite]
+    # ADR-14 D1 / issue #1662: the publish flip waits on EVERY live gate
+    # (ui-suite AND smoke-suite) — a flaky leg re-runs in isolation without
+    # redoing the publish (gate publish-release, never release/attach-pkgs).
+    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.ui-suite.result == 'success' && needs.smoke-suite.result == 'success' && needs.release.outputs.dry_run == 'false'
     permissions:
       contents: write
     steps:

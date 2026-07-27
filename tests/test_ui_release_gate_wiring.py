@@ -1,11 +1,15 @@
-"""Pin the reusable-workflow half of issue #1662: ui-tests.yml + smoke.yml must be able to
-consume prebuilt exact-release .pkg artifacts (via a `pkg_artifact_prefix` input) instead of
-always building their own, ui-tests.yml gets a fail-closed `all-ui-passed` AND gate (mirroring
-smoke.yml's `all-smoke-passed`), and the ui tier's pytest-exit-5 mapper stops silently passing
-a full, unfiltered run that selected zero tests.
+"""Pin issue #1662 end to end. Part 1 (reusable-workflow side): ui-tests.yml + smoke.yml
+must be able to consume prebuilt exact-release .pkg artifacts (via a `pkg_artifact_prefix`
+input) instead of always building their own, ui-tests.yml gets a fail-closed `all-ui-passed`
+AND gate (mirroring smoke.yml's `all-smoke-passed`) -- including the prepare-crash fail-closed
+fix -- and the ui tier's pytest-exit-5 mapper stops silently passing a full, unfiltered run
+that selected zero tests.
 
-release.yml itself (part 2 -- wiring the prefix in from a real release build) is a LATER
-change by someone else; this file only pins the reusable-workflow side.
+Part 2 (release.yml side): build-pkgs-portable matrix-ifies over the read-matrix build_matrix
+(one job per leg) and uploads one EXACT-named artifact per leg
+(`pfBlockerNG-relpkg-<variant_lc>-<pfsense_version>-<arch>`); attach-pkgs merges them by
+pattern; ui-suite/smoke-suite are re-enabled, consume those exact artifacts, and gate
+publish-release (never `release`/`attach-pkgs` -- ADR-14 D1).
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 UI_WORKFLOW = ROOT / ".github/workflows/ui-tests.yml"
 SMOKE_WORKFLOW = ROOT / ".github/workflows/smoke.yml"
+RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
 
 _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
 _STEP_HEADER_RE = re.compile(r"^      - ")
@@ -207,13 +212,18 @@ def _all_ui_passed_script() -> str:
     return _step_run_script(steps[0])
 
 
-def _run_all_ui_passed(run_gate: str, leg_count: str, ui_result: str) -> subprocess.CompletedProcess[str]:
+def _run_all_ui_passed(
+    run_gate: str, leg_count: str, ui_result: str, prepare_result: str = "success"
+) -> subprocess.CompletedProcess[str]:
     script = _all_ui_passed_script()
     env = {
         "PATH": os.environ.get("PATH", ""),
         "RUN_GATE": run_gate,
         "LEG_COUNT": leg_count,
         "UI_RESULT": ui_result,
+        # Existing rows below don't pass this explicitly -- they all mean a
+        # genuinely-succeeded prepare job, so the default carries that.
+        "PREPARE_RESULT": prepare_result,
     }
     return subprocess.run(  # noqa: S603
         ["sh", "-c", script],
@@ -240,6 +250,27 @@ def test_all_ui_passed_zero_legs_with_run_true_fails() -> None:
 def test_all_ui_passed_empty_leg_count_with_run_true_fails() -> None:
     completed = _run_all_ui_passed(run_gate="true", leg_count="", ui_result="success")
     assert completed.returncode != 0, completed.stdout + completed.stderr
+
+
+# --------------------------------------------------------------------------- #
+# prepare-crash fail-closed FINDING (issue #1662): a prepare job that did NOT
+# genuinely succeed must fail the gate even though a crash leaves RUN_GATE
+# empty -- the old RUN_GATE-first check read that as "scheduled idle, pass".
+# Checked BEFORE the RUN_GATE branch, so it wins regardless of RUN_GATE.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("prepare_result", ["failure", "cancelled", "skipped"])
+def test_all_ui_passed_prepare_not_success_fails_closed_even_with_empty_run_gate(prepare_result: str) -> None:
+    completed = _run_all_ui_passed(run_gate="", leg_count="", ui_result="skipped", prepare_result=prepare_result)
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+
+
+def test_all_ui_passed_prepare_success_with_run_gate_false_still_passes() -> None:
+    """A genuinely-succeeded prepare that legitimately declined the run (nightly
+    no-commit guard) stays a pass -- the fix must not touch this existing case."""
+    completed = _run_all_ui_passed(run_gate="false", leg_count="", ui_result="skipped", prepare_result="success")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 @pytest.mark.parametrize(
@@ -328,3 +359,155 @@ def test_non_five_failure_rc_stays_unmapped(tmp_path: Path) -> None:
 def test_success_rc_stays_zero(tmp_path: Path) -> None:
     completed = _run_exit5_mapper(tmp_path, run_smoke_rc=0, pytest_filter="", scope="full")
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+# =========================================================================== #
+# release.yml (part 2): per-leg artifacts, live-gate wiring, publish gating
+# =========================================================================== #
+
+
+# --------------------------------------------------------------------------- #
+# build-pkgs-portable: matrix-ified over read-matrix's build_matrix
+# --------------------------------------------------------------------------- #
+
+
+def test_build_pkgs_portable_matrixes_over_read_matrix_build_matrix() -> None:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    assert "build-pkgs-portable" in jobs
+    job_text = "\n".join(jobs["build-pkgs-portable"])
+    assert "strategy:" in job_text, "build-pkgs-portable must gain a strategy.matrix"
+    assert "fail-fast: false" in job_text
+    assert "fromJson(needs.read-matrix.outputs.build_matrix)" in job_text, (
+        f"build-pkgs-portable must matrix over read-matrix's build_matrix output, got:\n{job_text}"
+    )
+
+
+def test_build_pkgs_portable_per_leg_upload_name_is_the_exact_contract() -> None:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    steps = _split_into_steps(jobs["build-pkgs-portable"])
+    upload_steps = [s for s in steps if any("uses: actions/upload-artifact" in line for line in s)]
+    assert len(upload_steps) == 1, "expected exactly one upload-artifact step in build-pkgs-portable"
+    step_text = "\n".join(upload_steps[0])
+    name_line = next(line for line in upload_steps[0] if line.strip().startswith("name:"))
+    assert "pfBlockerNG-relpkg-" in name_line, f"per-leg upload name must start pfBlockerNG-relpkg-, got: {name_line}"
+    assert "varslug" in name_line and "matrix.arch" in name_line, (
+        f"per-leg upload name must be pfBlockerNG-relpkg-<varslug>-<matrix.arch>, got: {name_line}"
+    )
+    # varslug computation: lowercase(variant) + '-' + pfsense_version.
+    assert "tr '[:upper:]' '[:lower:]'" in step_text or "tr '[:upper:]' '[:lower:]'" in "\n".join(
+        jobs["build-pkgs-portable"]
+    ), "varslug must lowercase the variant"
+
+
+def test_build_pkgs_portable_varslug_derives_from_pfsense_version() -> None:
+    job_text = "\n".join(_jobs(RELEASE_WORKFLOW)["build-pkgs-portable"])
+    assert "matrix.pfsense_version" in job_text
+
+
+# --------------------------------------------------------------------------- #
+# attach-pkgs: merges every per-leg artifact by pattern
+# --------------------------------------------------------------------------- #
+
+
+def test_attach_pkgs_downloads_every_leg_by_pattern_with_merge() -> None:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    steps = _split_into_steps(jobs["attach-pkgs"])
+    target = [s for s in steps if any("Download .pkg artifacts" in line for line in s)]
+    assert len(target) == 1, "expected exactly one 'Download .pkg artifacts' step in attach-pkgs"
+    step_text = "\n".join(target[0])
+    assert "pattern: pfBlockerNG-relpkg-*" in step_text, step_text
+    assert "merge-multiple: true" in step_text, step_text
+
+
+# --------------------------------------------------------------------------- #
+# ui-suite / smoke-suite: re-enabled, gated on build-pkgs-portable, exact prefix
+# --------------------------------------------------------------------------- #
+
+
+def test_ui_suite_is_no_longer_hard_disabled() -> None:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    job_lines = jobs["ui-suite"]
+    if_line = next((line for line in job_lines if line.strip().startswith("if:")), None)
+    assert if_line is not None, "ui-suite must carry an if: condition gating it on the upstream jobs"
+    assert if_line.strip() != "if: false", f"ui-suite must no longer be hard-disabled, got: {if_line}"
+
+
+@pytest.mark.parametrize("job_name", ["ui-suite", "smoke-suite"])
+def test_suite_job_if_condition_shape(job_name: str) -> None:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    assert job_name in jobs, f"release.yml must have a {job_name} job"
+    job_lines = jobs[job_name]
+    if_line = next((line for line in job_lines if line.strip().startswith("if:")), None)
+    assert if_line is not None, f"{job_name} must carry an if: condition"
+    assert "!cancelled()" in if_line
+    assert "needs.build-pkgs-portable.result == 'success'" in if_line
+
+
+@pytest.mark.parametrize("job_name", ["ui-suite", "smoke-suite"])
+def test_suite_job_needs_build_pkgs_portable(job_name: str) -> None:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    needs_line = next(line for line in jobs[job_name] if line.strip().startswith("needs:"))
+    assert "build-pkgs-portable" in needs_line, f"{job_name} must need build-pkgs-portable, got: {needs_line}"
+
+
+@pytest.mark.parametrize("job_name", ["ui-suite", "smoke-suite"])
+def test_suite_job_carries_the_exact_pkg_artifact_prefix(job_name: str) -> None:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    job_text = "\n".join(jobs[job_name])
+    assert "pkg_artifact_prefix: pfBlockerNG-relpkg" in job_text, (
+        f"{job_name} must pass the literal pkg_artifact_prefix: pfBlockerNG-relpkg, got:\n{job_text}"
+    )
+    assert "secrets: inherit" in job_text
+
+
+@pytest.mark.parametrize("job_name", ["ui-suite", "smoke-suite"])
+def test_suite_jobs_carry_no_dry_run_reference(job_name: str) -> None:
+    """ADR-14 D1 / dry-run parity: these run in BOTH modes, so they must reference
+    dry_run nowhere in their job body (they are deliberately kept OUT of the
+    MUTATION_JOBS set in test_release_dry_run_gate.py)."""
+    jobs = _jobs(RELEASE_WORKFLOW)
+    job_text = "\n".join(jobs[job_name])
+    assert "dry_run" not in job_text, f"{job_name} must carry NO dry_run reference, got:\n{job_text}"
+
+
+# --------------------------------------------------------------------------- #
+# publish-release: gated on BOTH suites, dry_run == 'false' retained
+# --------------------------------------------------------------------------- #
+
+
+def test_publish_release_needs_both_suites() -> None:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    needs_line = next(line for line in jobs["publish-release"] if line.strip().startswith("needs:"))
+    assert "ui-suite" in needs_line and "smoke-suite" in needs_line, f"got: {needs_line}"
+
+
+def test_publish_release_if_gates_on_both_suite_results_and_retains_dry_run_false() -> None:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    if_line = next(line for line in jobs["publish-release"] if line.strip().startswith("if:"))
+    assert "needs.ui-suite.result == 'success'" in if_line, if_line
+    assert "needs.smoke-suite.result == 'success'" in if_line, if_line
+    assert "dry_run == 'false'" in if_line, if_line
+
+
+# --------------------------------------------------------------------------- #
+# Cross-contract consistency: release-side naming == part-1 consumer-side naming
+# --------------------------------------------------------------------------- #
+
+
+def test_release_side_naming_matches_consumer_side_for_ce_2_8_amd64() -> None:
+    """Simulate both sides' naming formulas for (variant=CE, pfsense_version=2.8,
+    arch=amd64) and assert they land on the identical exact-artifact name that both
+    build-pkgs-portable (release.yml) and the ui/smoke download steps (part 1) use."""
+    variant, pfsense_version, arch = "CE", "2.8", "amd64"
+    prefix = "pfBlockerNG-relpkg"
+
+    # release-side (build-pkgs-portable): VARSLUG = lower(variant)-pfsense_version;
+    # artifact name = <prefix>-<varslug>-<arch>.
+    varslug = f"{variant.lower()}-{pfsense_version}"
+    release_side_name = f"{prefix}-{varslug}-{arch}"
+
+    # consumer-side (part 1's contract -- ui-tests.yml download step / smoke.yml
+    # pkg_artifact expression): format('{0}-{1}-{2}-{3}', prefix, variant_lc, version, arch).
+    consumer_side_name = "{0}-{1}-{2}-{3}".format(prefix, variant.lower(), pfsense_version, arch)
+
+    assert release_side_name == consumer_side_name == "pfBlockerNG-relpkg-ce-2.8-amd64"
