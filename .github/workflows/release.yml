@@ -835,10 +835,16 @@ jobs:
   # built, not a fresh rebuild of their own.
   #
   # A leg's build failure surfaces as a red leg (fail-fast: false keeps the
-  # others going) but MUST NOT break sync-ports-fork: it needs only `release`,
-  # never build-pkgs-*. attach-pkgs absorbs the failure with `if: always() && ...`
-  # (below); a failed leg simply uploads nothing, so its .pkg is absent from
-  # the merged download and the publish-release healthcheck fails closed.
+  # others going). sync-ports-fork's own `needs:` list is [prepare-release,
+  # release, publish-release] -- it never lists build-pkgs-* directly -- but a
+  # leg failure now blocks it TRANSITIVELY: build-pkgs-portable fails (matrix
+  # job result is 'failure' if any leg fails) -> ui-suite/smoke-suite skip
+  # (their `if:` requires needs.build-pkgs-portable.result == 'success') ->
+  # publish-release skips (requires both suites == 'success') -> sync-ports-fork
+  # skips (requires needs.publish-release.result == 'success'). attach-pkgs
+  # absorbs the failure with `if: always() && ...` (below), unaffected by this
+  # chain; a failed leg simply uploads nothing, so its .pkg is absent from the
+  # merged download and the publish-release healthcheck fails closed.
   build-pkgs-portable:
     name: "build .pkg — ${{ matrix.variant }}-${{ matrix.pfsense_version }} (FreeBSD ${{ matrix.freebsd_major }}/${{ matrix.arch }})"
     runs-on: ubuntu-latest

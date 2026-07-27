@@ -461,6 +461,27 @@ def test_suite_job_carries_the_exact_pkg_artifact_prefix(job_name: str) -> None:
 
 
 @pytest.mark.parametrize("job_name", ["ui-suite", "smoke-suite"])
+def test_suite_job_pins_scope_full(job_name: str) -> None:
+    """A silent `scope: full` -> `scope: impacted` regression would quietly
+    narrow release qualification to a selective run -- where the ui job's
+    exit-5 mapper (see test_exit5_impacted_scope_is_benign above) treats a
+    zero-selected-tests run as a PASS instead of a failure. Pinning scope
+    here is what makes that exit-5 tolerance safe."""
+    jobs = _jobs(RELEASE_WORKFLOW)
+    job_text = "\n".join(jobs[job_name])
+    assert "scope: full" in job_text, f"{job_name} must pin scope: full, got:\n{job_text}"
+
+
+def test_ui_suite_pins_tier_all() -> None:
+    """A silently-dropped `tier: all` would narrow the release-gating UI
+    fan-out to a subset of CI legs -- same silent-scope-narrowing risk
+    scope: full guards against above."""
+    jobs = _jobs(RELEASE_WORKFLOW)
+    job_text = "\n".join(jobs["ui-suite"])
+    assert "tier: all" in job_text, f"ui-suite must pin tier: all, got:\n{job_text}"
+
+
+@pytest.mark.parametrize("job_name", ["ui-suite", "smoke-suite"])
 def test_suite_jobs_carry_no_dry_run_reference(job_name: str) -> None:
     """ADR-14 D1 / dry-run parity: these run in BOTH modes, so they must reference
     dry_run nowhere in their job body (they are deliberately kept OUT of the
