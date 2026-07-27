@@ -1138,6 +1138,19 @@
             }
         ]
     },
+    "pfb_csv_field": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_csv_list": {
         "returnsRef": false,
         "returnType": "array",
