@@ -108,6 +108,17 @@ if ($_POST) {
 
 		unset($savemsg);
 
+		// issue #1777: reject an array-valued field ('asn_token[]=x') before any
+		// string sink below Array-to-string-converts on it -- same guard as
+		// pfblockerng_category_edit.php (issue #1106); every field here is
+		// scalar in normal use, no field is exempt.
+		foreach ($_POST as $pfb_post_key => $pfb_post_value) {
+			if (!is_scalar($pfb_post_value)) {
+				$input_errors[] = gettext('Invalid value submitted for field:') . ' ' . htmlspecialchars((string) $pfb_post_key);
+				$_POST[$pfb_post_key] = '';
+			}
+		}
+
 		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
 		foreach (array('ip_placeholder', 'asn_token', 'autorule_suffix', 'maxmind_account', 'maxmind_key') as $pfb_text_field) {
 			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));

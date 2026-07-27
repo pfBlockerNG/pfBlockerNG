@@ -121,7 +121,7 @@ foreach (array(2,7,8,13,15,17,19,20,99) as $field_1) {
 
 $filterfieldsarray[2]	= array();
 foreach (array(81,82,83,84,85,86,87,88,89) as $field_2) {
-	$filterfieldsarray[1][$field_2] = '';
+	$filterfieldsarray[2][$field_2] = '';
 }
 
 // $alert_log is set by the view handler below but read in the stats section much later;
@@ -1781,7 +1781,7 @@ if ($alert_summary) {
 					}
 
 					$data = array_map('trim', explode(' ', trim($line), 2));
-					$alert_stats[$alert_view][$stat_type][$data[1] ?: $unknown_msg] = $data[0] ?: 0;
+					$alert_stats[$alert_view][$stat_type][($data[1] ?? '') ?: $unknown_msg] = $data[0] ?: 0;
 				}
 			}
 			else {
@@ -2495,7 +2495,13 @@ function convert_dns_reply_log($mode, $fields) {
 	// Determine Whitelist type
 	else {
 
-		$dns_fields = array ('2' => $fields[6], '6' => 'Unknown');
+		// issue #1777: dnsbl_whitelist_type() unconditionally reads keys 5/7/8 too
+		// (DNSBL Mode / Evaluated Domain / Feed Name) -- a DNS reply row has no
+		// Mode or Feed, so '' preserves the pre-fix implicit-NULL branch selection
+		// (still != 'DNSBL_TLD') and leaves the (never-reached, group=='Unknown')
+		// Feed-name usage inert; the replied domain doubles as the "evaluated"
+		// domain, matching key 2 and the $qdomain argument below.
+		$dns_fields = array ('2' => $fields[6], '5' => '', '6' => 'Unknown', '7' => $fields[6], '8' => '');
 		list($supp_dom, $ex_dom, $isWhitelist_found) = dnsbl_whitelist_type($dns_fields, $clists, $isExclusion, FALSE, $fields[6]);
 
 		// Threat Lookup Icon
@@ -4935,7 +4941,7 @@ var pieChart_<?=$stat_type?> = new d3pie("pieChart_<?=$stat_type?>", {
 	$k = array_keys($summary);
 	$numentries = 0;
 	for ($i = 0; $i < ($numsegments-1); $i++) {
-		if ($k[$i]) {
+		if ($k[$i] ?? NULL) {
 			$numentries++;
 			if ($i > 0) {
 				print(",\r\n");

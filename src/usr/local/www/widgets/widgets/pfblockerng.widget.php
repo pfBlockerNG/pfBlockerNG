@@ -751,6 +751,14 @@ function pfBlockerNG_get_header($mode='') {
 				}
 				pfb_close_sqlite($db_handle);
 
+				// issue #1777: a fresh box has no $db_handle (SQLite DB not yet
+				// created) -- $resolver stays empty and every $resolver[0][...]
+				// read below hits an undefined array key. Seed the same shape the
+				// SELECT above produces (row 0, both counters absent/zero).
+				if (!isset($resolver[0])) {
+					$resolver[0] = array('totalqueries' => 0, 'queries' => 0);
+				}
+
 				if (!is_numeric($resolver[0]['totalqueries'])) {
 					$resolver[0]['totalqueries'] = 0;
 				}
