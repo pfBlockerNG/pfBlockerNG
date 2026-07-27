@@ -24,8 +24,50 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_rstrip')]
 #[CoversFunction('pfb_lstrip')]
 #[CoversFunction('pfb_strip')]
+#[CoversFunction('pfb_csv_list')]
+#[CoversFunction('pfb_b64_text')]
 final class PfbStringHelpersTest extends TestCase
 {
+	// --- pfb_csv_list (issue #1792) ---------------------------------------
+
+	public function testCsvListSplitsEntriesAndKeepsZero(): void
+	{
+		$this->assertSame(['a', 'b'], pfb_csv_list('a,b'));
+		// "0" is one real entry, never the default (the empty('0') lie again).
+		$this->assertSame(['0'], pfb_csv_list('0'));
+	}
+
+	public function testCsvListAbsentOrEmptyYieldsDefault(): void
+	{
+		// The `explode(...) ?: $default` idiom this replaces NEVER produced
+		// the default -- explode() on a string is always truthy, so '' gave
+		// [''] and NULL gave [''] too. The default must now genuinely apply.
+		$this->assertSame([], pfb_csv_list(NULL));
+		$this->assertSame([], pfb_csv_list(''));
+		$this->assertSame(['x', 'y'], pfb_csv_list('', ['x', 'y']));
+		$this->assertSame(['x', 'y'], pfb_csv_list(NULL, ['x', 'y']));
+	}
+
+	// --- pfb_b64_text (issue #1792) ---------------------------------------
+
+	public function testB64TextDecodesAndKeepsZero(): void
+	{
+		$this->assertSame('abc', pfb_b64_text(base64_encode('abc')));
+		// 'MA==' decodes to '0' -- falsy, eaten by the `?: ''` idiom this
+		// replaces; a stored "0" must survive to the re-rendered form.
+		$this->assertSame('0', pfb_b64_text('MA=='));
+	}
+
+	public function testB64TextAbsentEmptyOrMalformedYieldsEmptyString(): void
+	{
+		$this->assertSame('', pfb_b64_text(NULL));
+		$this->assertSame('', pfb_b64_text(''));
+		// base64_decode() returns FALSE only in strict mode; the non-strict
+		// default never does -- pinned so the FALSE guard is provably the
+		// only degradation path and '' stays the worst case.
+		$this->assertSame('', pfb_b64_text(base64_encode('')));
+	}
+
 	// --- pfb_is_empty -----------------------------------------------------
 
 	public function testAbsentAndEmptyStringAreEmpty(): void

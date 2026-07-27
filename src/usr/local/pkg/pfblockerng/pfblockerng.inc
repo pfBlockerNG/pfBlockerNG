@@ -3379,6 +3379,32 @@ function pfb_strip(string $value): string {
 
 
 /**
+ * Split a comma-joined config scalar into its list, honestly (issue #1792).
+ * Replaces the `explode(',', $x ?? '') ?: $default` idiom, whose elvis arm is
+ * unreachable -- explode() on a string subject always returns a non-empty
+ * (truthy) array, so an absent/empty scalar yielded [''] and the intended
+ * $default NEVER applied. Absent/empty ('' exactly -- pfb_is_empty, so a
+ * stored "0" is one real entry) now genuinely yields $default.
+ */
+function pfb_csv_list(?string $value, array $default = array()): array {
+	return pfb_is_empty($value) ? $default : explode(',', $value);
+}
+
+
+/**
+ * Decode a base64 config scalar for display/re-edit, honestly (issue #1792).
+ * Replaces the `base64_decode($x ?? '') ?: ''` idiom, whose elvis arm ate a
+ * stored "0" (base64_decode('MA==') === '0', falsy) along with the FALSE it
+ * was guarding against. Only a FALSE decode (malformed input) degrades to '';
+ * every decoded string -- "0" included -- survives verbatim.
+ */
+function pfb_b64_text(?string $value): string {
+	$decoded = base64_decode((string) ($value ?? ''));
+	return $decoded === FALSE ? '' : $decoded;
+}
+
+
+/**
  * Sanitize a single-line/scalar text field: converts legacy encodings to
  * UTF-8, strips every \p{C} character (Cc/Cf/Co/Cs/Cn -- includes CR/LF/TAB
  * and the BOM, since this contract is single-line), then trims (Unicode
