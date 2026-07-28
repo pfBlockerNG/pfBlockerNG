@@ -216,6 +216,17 @@ if (!function_exists('write_rcfile')) {
 	}
 }
 
+if (!function_exists('is_platform_booting')) {
+	// pfSense pfsense-utils.inc: TRUE only while /var/run/booting exists (early boot).
+	// sync_package_pfblockerng() checks this (|| $g['pfblockerng_install']) right after
+	// its own syslog registration to bail out of a boot-time/install pass before doing
+	// any real work -- off-appliance there is no such marker, so FALSE (not booting) is
+	// the faithful answer and lets tests drive the real post-boot code paths.
+	function is_platform_booting() {
+		return false;
+	}
+}
+
 if (!function_exists('safe_mkdir')) {
 	// pfSense util.inc: recursive mkdir if absent. Faithful — pfb_unbound_python_sources
 	// uses it to (re)create the per-feed raw dir, which the manifest test relies on.
@@ -907,6 +918,15 @@ if (!function_exists('get_configured_interface_with_descr')) {
 	// Off-appliance, use pfb_test_interfaces if seeded; otherwise return an empty map.
 	function get_configured_interface_with_descr($all = FALSE, $filter = FALSE) {
 		return $GLOBALS['pfb_test_interfaces'] ?? [];
+	}
+}
+
+if (!function_exists('ipsec_enabled')) {
+	// pfSense ipsec.inc: TRUE iff an IPsec phase1 entry is configured. pfb_build_if_list()
+	// calls it to decide whether to add the synthetic 'enc0' interface; no IPsec config
+	// exists off-appliance, so FALSE is the faithful answer.
+	function ipsec_enabled() {
+		return false;
 	}
 }
 
