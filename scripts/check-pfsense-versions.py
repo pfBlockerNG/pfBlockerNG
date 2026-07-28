@@ -7,11 +7,17 @@ Usage:
   check-pfsense-versions.py [--html-file PATH] [--matrix-json JSON]
   printf '%s' "$BUILD_MATRIX" | check-pfsense-versions.py
 
-Output (stdout): {"supported_missing": [...], "future": [...]}
+Output (stdout): {"supported_missing": [...], "future": [...],
+                  "latest_releases": [...], "ga_flips": [...]}
 
   supported_missing — families that appear as still-supported on the Netgate page
                       but are absent from the BUILD matrix.
   future            — families whose only rows are TBD/unreleased.
+  latest_releases   — per matrix family (version+channel), the newest RELEASED
+                      build on the page (issue #1820: compared against the full
+                      version stamped on the published image to detect patch/GA).
+  ga_flips          — matrix entries still status=beta whose family the page
+                      shows as supported (signal to flip status via a matrix PR).
 
 Graceful: any fetch or parse failure → empty result + ::warning:: to stderr, exit 0.
 Pure detection — no gh calls, no matrix writes.
@@ -38,7 +44,12 @@ _FETCH_HEADERS: dict[str, str] = {
     "Accept-Language": "en-US,en;q=0.5",
 }
 
-_EMPTY: dict[str, list[dict[str, str]]] = {"supported_missing": [], "future": []}
+_EMPTY: dict[str, list[dict[str, str]]] = {
+    "supported_missing": [],
+    "future": [],
+    "latest_releases": [],
+    "ga_flips": [],
+}
 
 
 # ── Data types ─────────────────────────────────────────────────────────────────
@@ -61,6 +72,7 @@ class _Family(NamedTuple):
     freebsd_version: str
     freebsd_major: str
     released: str
+    latest_release: str  # newest non-future member version ("" if none released yet)
 
 
 # ── HTML parser ────────────────────────────────────────────────────────────────
@@ -151,6 +163,15 @@ def _channel_from_branch(branch: str) -> str | None:
     return None
 
 
+def _version_key(raw: str) -> tuple[int, ...]:
+    """Numeric sort key for a dotted version string ('26.03.1' → (26, 3, 1))."""
+    key: list[int] = []
+    for part in raw.strip().split("."):
+        m = re.match(r"(\d+)", part)
+        key.append(int(m.group(1)) if m else 0)
+    return tuple(key)
+
+
 def _normalize(raw: str) -> str:
     """Normalize a raw version string to its Major.Minor family key.
 
@@ -239,6 +260,7 @@ def group_families(rows: list[_Row]) -> list[_Family]:
     for (normalized, channel), members in groups.items():
         supported = [r for r in members if r.support == "supported"]
         future = [r for r in members if r.support == "future"]
+        released = [r for r in members if r.support != "future"]
 
         if supported:
             status, ref = "supported", supported[0]
@@ -255,6 +277,7 @@ def group_families(rows: list[_Row]) -> list[_Family]:
                 freebsd_version=ref.freebsd_version,
                 freebsd_major=ref.freebsd_major,
                 released=ref.released,
+                latest_release=max((r.version for r in released), key=_version_key, default=""),
             )
         )
     return result
@@ -269,9 +292,13 @@ def diff(
 ) -> dict[str, list[dict[str, str]]]:
     """Produce the output JSON dict from the families + matrix comparison."""
     in_matrix = {entry["pfsense_version"] for entry in build_matrix}
+    # (version, channel) → matrix entry, for the family-scoped detections below.
+    matrix_by_key = {(e.get("pfsense_version", ""), e.get("channel", "")): e for e in build_matrix}
 
     supported_missing: list[dict[str, str]] = []
     future_list: list[dict[str, str]] = []
+    latest_releases: list[dict[str, str]] = []
+    ga_flips: list[dict[str, str]] = []
 
     for fam in sorted(families, key=lambda f: (f.channel, f.version)):
         if fam.status == "supported" and fam.version not in in_matrix:
@@ -293,7 +320,26 @@ def diff(
                 }
             )
 
-    return {"supported_missing": supported_missing, "future": future_list}
+        entry = matrix_by_key.get((fam.version, fam.channel))
+        if entry is None:
+            continue
+        if fam.latest_release:
+            latest_releases.append(
+                {
+                    "version": fam.version,
+                    "channel": fam.channel,
+                    "latest_release": fam.latest_release,
+                }
+            )
+        if fam.status == "supported" and entry.get("status") == "beta":
+            ga_flips.append({"version": fam.version, "channel": fam.channel})
+
+    return {
+        "supported_missing": supported_missing,
+        "future": future_list,
+        "latest_releases": latest_releases,
+        "ga_flips": ga_flips,
+    }
 
 
 # ── I/O helpers ───────────────────────────────────────────────────────────────

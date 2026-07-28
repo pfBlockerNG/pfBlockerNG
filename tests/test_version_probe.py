@@ -376,18 +376,18 @@ class TestGracefulDegradation:
 
     def test_empty_html_yields_empty_result(self) -> None:
         result = self._run_capture("", None)
-        assert result == {"supported_missing": [], "future": []}
+        assert result == {"supported_missing": [], "future": [], "latest_releases": [], "ga_flips": []}
 
     def test_html_without_tables_yields_empty_result(self) -> None:
         html = "<html><body><p>no tables here</p></body></html>"
         result = self._run_capture(html, None)
-        assert result == {"supported_missing": [], "future": []}
+        assert result == {"supported_missing": [], "future": [], "latest_releases": [], "ga_flips": []}
 
     def test_garbage_html_yields_empty_result(self) -> None:
         # Even structurally broken HTML must not raise
         html = "<<<NOT HTML AT ALL>>>"
         result = self._run_capture(html, None)
-        assert result == {"supported_missing": [], "future": []}
+        assert result == {"supported_missing": [], "future": [], "latest_releases": [], "ga_flips": []}
 
     def test_fixture_with_empty_matrix_returns_valid_json(self) -> None:
         # Fixture with empty matrix: all supported families appear in supported_missing
@@ -398,6 +398,106 @@ class TestGracefulDegradation:
         missing = [e["version"] for e in result["supported_missing"]]
         assert "2.8" in missing
         assert "26.03" in missing
+
+
+# ── Diff: latest_releases (patch/GA detection, issue #1820) ──────────────────
+
+
+class TestDiffLatestReleases:
+    """Scenario: Matrix families report the newest RELEASED build on the page.
+
+    The workflow compares each family's `latest_release` against the full
+    version stamped on the published GHCR image to decide whether an image
+    self-refresh is needed (e.g. image built at 26.03.0, page shows 26.03.1).
+
+    Background:
+      Given the fixture lists CE 2.8 rows (2.8.0, 2.8.1 — both released)
+      And Plus 26.03 rows (26.03, 26.03.1 — both released)
+      And CE 2.9 / Plus 26.07 only as TBD rows
+    """
+
+    @pytest.fixture(autouse=True)
+    def _parse(self) -> None:
+        p = cvs._TableParser()
+        p.feed(_fixture())
+        rows = cvs.parse_tables(p.tables)
+        self.families = cvs.group_families(rows)
+
+    def test_ce_matrix_family_reports_newest_released_patch(self) -> None:
+        matrix = [{"pfsense_version": "2.8", "channel": "CE", "status": "active"}]
+        result = cvs.diff(self.families, matrix)
+        entry = next(e for e in result["latest_releases"] if e["version"] == "2.8")
+        assert entry["channel"] == "CE"
+        assert entry["latest_release"] == "2.8.1"
+
+    def test_plus_patch_row_wins_over_dot_zero(self) -> None:
+        matrix = [{"pfsense_version": "26.03", "channel": "Plus", "status": "active"}]
+        result = cvs.diff(self.families, matrix)
+        entry = next(e for e in result["latest_releases"] if e["version"] == "26.03")
+        assert entry["latest_release"] == "26.03.1"
+
+    def test_family_absent_from_matrix_not_reported(self) -> None:
+        # Detection is scoped to families we publish images for
+        result = cvs.diff(self.families, [])
+        assert result["latest_releases"] == []
+
+    def test_channel_mismatch_not_reported(self) -> None:
+        # Same version string on the wrong channel must not match
+        matrix = [{"pfsense_version": "26.03", "channel": "CE", "status": "active"}]
+        result = cvs.diff(self.families, matrix)
+        assert result["latest_releases"] == []
+
+    def test_tbd_only_family_emits_no_latest_release(self) -> None:
+        # A future-only family (beta already in the matrix) has no RELEASED
+        # build yet — nothing to compare an image against
+        matrix = [{"pfsense_version": "26.07", "channel": "Plus", "status": "beta"}]
+        result = cvs.diff(self.families, matrix)
+        versions = [e["version"] for e in result["latest_releases"]]
+        assert "26.07" not in versions
+
+    def test_tbd_row_never_wins_within_mixed_family(self) -> None:
+        # Given a family holding a released 26.03.1 AND a TBD 26.03.2 row
+        rows = [
+            cvs._Row("26.03.1", "supported", "2026-05-27", "16.0-CURRENT@abc", "16", "Plus", "26.03"),
+            cvs._Row("26.03.2", "future", "TBD", "16.0-CURRENT@abc", "16", "Plus", "26.03"),
+        ]
+        families = cvs.group_families(rows)
+        matrix = [{"pfsense_version": "26.03", "channel": "Plus", "status": "active"}]
+        result = cvs.diff(families, matrix)
+        entry = next(e for e in result["latest_releases"] if e["version"] == "26.03")
+        assert entry["latest_release"] == "26.03.1"
+
+
+# ── Diff: ga_flips (beta matrix entry went GA on the page) ───────────────────
+
+
+class TestDiffGaFlips:
+    """Scenario: A matrix entry still marked beta is reported once the page
+    shows its family as supported — the signal to flip status via a matrix PR.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _parse(self) -> None:
+        p = cvs._TableParser()
+        p.feed(_fixture())
+        rows = cvs.parse_tables(p.tables)
+        self.families = cvs.group_families(rows)
+
+    def test_beta_entry_supported_on_page_is_flagged(self) -> None:
+        matrix = [{"pfsense_version": "26.03", "channel": "Plus", "status": "beta"}]
+        result = cvs.diff(self.families, matrix)
+        assert {"version": "26.03", "channel": "Plus"} in result["ga_flips"]
+
+    def test_active_entry_not_flagged(self) -> None:
+        # Before-state guard: the same family with status active stays quiet
+        matrix = [{"pfsense_version": "26.03", "channel": "Plus", "status": "active"}]
+        result = cvs.diff(self.families, matrix)
+        assert result["ga_flips"] == []
+
+    def test_beta_entry_still_future_on_page_not_flagged(self) -> None:
+        matrix = [{"pfsense_version": "26.07", "channel": "Plus", "status": "beta"}]
+        result = cvs.diff(self.families, matrix)
+        assert result["ga_flips"] == []
 
 
 # ── Family status: mixed members ─────────────────────────────────────────────
