@@ -84,12 +84,12 @@ def test_human_ticket_procedures_make_labels_optional() -> None:
     qa = _read(".agents/skills/qa/SKILL.md")
     assert "`gh issue create --type Bug`" in qa
 
-    tracker = _read("plugins/mattpocock-skills/skills/setup-matt-pocock-skills/issue-tracker-github.md")
+    tracker = _read("plugins/mattpocock-skills/codex/skills/setup-matt-pocock-skills/issue-tracker-github.md")
     assert '--type "<type>"' in tracker
     assert "`--label` is optional" in tracker
     assert "gh issue create --label wayfinder:map --type Task" in tracker
 
-    wayfinder = _read("plugins/mattpocock-skills/skills/wayfinder/SKILL.md")
+    wayfinder = _read("plugins/mattpocock-skills/codex/skills/wayfinder/SKILL.md")
     assert "`wayfinder:<type>` label" in wayfinder
     assert "native issue type `Task`" in wayfinder
 
@@ -108,22 +108,23 @@ def test_human_ticket_procedures_make_labels_optional() -> None:
 def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
     plugin = ROOT / "plugins/mattpocock-skills"
     claude = json.loads((plugin / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
-    codex = json.loads((plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
+    codex = json.loads((plugin / "codex/.codex-plugin/plugin.json").read_text(encoding="utf-8"))
     marketplace = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
 
     claude_skills = {Path(skill).name for skill in claude["skills"]}
-    codex_skills = {path.name for path in (plugin / "skills").iterdir() if path.is_dir()}
+    codex_skills = {path.name for path in (plugin / "codex/skills").iterdir() if path.is_dir()}
 
     assert claude["name"] == codex["name"] == "mattpocock-skills"
     assert claude["version"] == codex["version"] == "1.2.0"
     assert claude_skills == codex_skills
     assert len(codex_skills) == 22
     assert codex["skills"] == "./skills/"
+    assert not (plugin / "skills").exists()
     assert all((plugin / "claude-skills" / name / "SKILL.md").is_file() for name in claude_skills)
     assert all(not (ROOT / ".agents/skills" / name).exists() for name in codex_skills)
 
     entry = next(item for item in marketplace["plugins"] if item["name"] == "mattpocock-skills")
-    assert entry["source"] == {"source": "local", "path": "./plugins/mattpocock-skills"}
+    assert entry["source"] == {"source": "local", "path": "./plugins/mattpocock-skills/codex"}
 
     explicit_only = {
         "ask-matt",
@@ -142,8 +143,8 @@ def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
     }
     for name in explicit_only:
         claude_skill = (plugin / "claude-skills" / name / "SKILL.md").read_text(encoding="utf-8")
-        codex_skill = (plugin / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
-        codex_metadata = (plugin / "skills" / name / "agents/openai.yaml").read_text(encoding="utf-8")
+        codex_skill = (plugin / "codex/skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        codex_metadata = (plugin / "codex/skills" / name / "agents/openai.yaml").read_text(encoding="utf-8")
         assert "disable-model-invocation: true" in claude_skill.partition("\n---\n")[0].splitlines()
         assert "disable-model-invocation: true" not in codex_skill.partition("\n---\n")[0].splitlines()
         assert "allow_implicit_invocation: false" in codex_metadata
