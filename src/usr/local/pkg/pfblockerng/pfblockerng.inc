@@ -1748,9 +1748,14 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			// PFB_FILTER_TLD -- a non-ASCII (IDN) hostname converts to its
 			// punycode candidate before is_hostname(); on success the ORIGINAL
 			// input is returned (the read path IDN-converts separately).
+			// issue #1807: run nontransitional UTS46 with CONTEXTJ checks so a
+			// joiner placement IDNA2008 forbids is rejected. IDNA_CHECK_CONTEXTJ
+			// alone is a no-op here: default (transitional) processing DELETES
+			// ZWJ/ZWNJ before the check runs, silently accepting the forbidden
+			// placement and returning the joiner-bearing original.
 			$candidate = $input;
 			if (preg_match('/[^\x00-\x7F]/', $input)) {
-				$candidate = idn_to_ascii($input);
+				$candidate = idn_to_ascii($input, IDNA_CHECK_CONTEXTJ | IDNA_NONTRANSITIONAL_TO_ASCII);
 				$candidate = empty($candidate) ? FALSE : $candidate;
 			}
 			if (($candidate !== FALSE) && is_hostname($candidate)) {

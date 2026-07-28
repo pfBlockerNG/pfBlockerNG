@@ -287,6 +287,59 @@ final class PfbFilterContractTest extends TestCase
 		$this->assertSame('', pfb_filter('', PFB_FILTER_HOSTNAME, 'PFBL-01 contract', ''));
 	}
 
+	// --- PFB_FILTER_HOSTNAME: IDNA2008 CONTEXTJ joiner placements (issue #1807) --
+	//
+	// The entry gate deliberately admits Cf format characters (issue #1723) on the
+	// premise that "domain-shaped fields still exclude them via their type-specific
+	// validation below". For the HOSTNAME branch that premise does not hold:
+	// idn_to_ascii() under default (transitional) UTS46 processing silently DELETES
+	// ZWJ/ZWNJ instead of checking them, so a CONTEXTJ-forbidden placement IDNA2008
+	// rejects is accepted and the joiner-bearing ORIGINAL input is returned and
+	// persisted. The filter must run nontransitional processing with CONTEXTJ
+	// checks (probed: IDNA_CHECK_CONTEXTJ alone is a no-op -- transitional mapping
+	// removes the joiners before the check ever sees them) and reject on failure.
+
+	/** @return array<string, array{0: string}> label => CONTEXTJ-forbidden joiner placement */
+	public static function hostnameContextjRejectedProvider(): array
+	{
+		return [
+			// A leading joiner has no preceding character to join -- forbidden in
+			// every IDNA2008 CONTEXTJ rule; no conformant resolver produces it.
+			'leading ZWJ'  => ["\u{200D}example.com"],
+			'leading ZWNJ' => ["\u{200C}example.com"],
+			// ZWNJ between two non-joining Latin letters: fails the CONTEXTJ
+			// regional rule (needs a virama before it, or joining-type context).
+			'ZWNJ between non-joining latin letters' => ["a\u{200C}b\u{00E4}.example"],
+		];
+	}
+
+	#[DataProvider('hostnameContextjRejectedProvider')]
+	public function testHostnameFilterRejectsContextjForbiddenJoiners(string $input): void
+	{
+		$this->assertSame('', pfb_filter($input, PFB_FILTER_HOSTNAME, 'PFBL-01 contract'));
+	}
+
+	/** @return array<string, array{0: string}> label => CONTEXTJ-valid or deviation input kept */
+	public static function hostnameContextjAcceptedProvider(): array
+	{
+		return [
+			// Persian "nameh-i": ZWNJ in a valid joining context (CONTEXTJ-valid) --
+			// rejecting joiners wholesale would break real IDN hostnames, so this
+			// pins that the CONTEXTJ check is placement-aware, not a blanket strip.
+			'CONTEXTJ-valid ZWNJ (Persian)' => ["\u{0646}\u{0627}\u{0645}\u{0647}\u{200C}\u{0627}\u{06CC}.example"],
+			// Eszett is a UTS46 deviation character: transitional maps it to 'ss',
+			// nontransitional keeps it. ACCEPTANCE must be stable across the flag
+			// change (the filter returns the ORIGINAL input either way).
+			'eszett deviation character' => ["stra\u{00DF}e.example"],
+		];
+	}
+
+	#[DataProvider('hostnameContextjAcceptedProvider')]
+	public function testHostnameFilterKeepsContextjValidJoiners(string $hostname): void
+	{
+		$this->assertSame($hostname, pfb_filter($hostname, PFB_FILTER_HOSTNAME, 'PFBL-01 contract'));
+	}
+
 	// --- PFB_FILTER_WORD (feed headers + friendly interface names) ---------------
 
 	/** @return array<string, array{0: string}> label => valid \w-only value returned unchanged */
