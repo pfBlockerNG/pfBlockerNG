@@ -74,7 +74,7 @@ Describe 'image-upgrade.sh upgrade-lock retry'
   # (issue #1844). The shipped call sites must
   # therefore never pipe the helper.
   run_call_site() {
-    _mode="$1" sh -c '
+    _func="${2:-pfb_call_site_check}" _seed="${3:-}" _mode="$1" sh -c '
       set -e
       log()  { printf "==> %s\n" "$*"; }
       warn() { printf "WARNING: %s\n" "$*" >&2; }
@@ -85,7 +85,9 @@ Describe 'image-upgrade.sh upgrade-lock retry'
       ssh_guest() { printf "Another instance is already running... Aborting!\n"; }
       # The shape the script actually uses, whatever it is today.
       eval "$(sed -n "/^# pfb_call_site BEGIN/,/^# pfb_call_site END/p" "$1")"
-      pfb_call_site_check "$2/check.log"
+      UPGRADE_CMD="yes | pfSense-upgrade -d"
+      [ -n "$_seed" ] && printf "%s\n" "$_seed" > "$2/check.log"
+      "$_func" "$2/check.log"
       printf "REACHED-AFTER-CHECK\n"
     ' _ "$SCRIPT" "$WORK"
   }
@@ -102,6 +104,23 @@ Describe 'image-upgrade.sh upgrade-lock retry'
     The status should be failure
     The stderr should include 'lock held'
     The contents of file "${WORK}/check.log" should include 'Another instance is already running'
+  End
+
+  It 'aborts the script at the UPGRADE call site too'
+    # The call site that actually triggers the reboot must fail the same way —
+    # it was the untested half of the pair.
+    When call run_call_site always-locked pfb_call_site_upgrade
+    The status should be failure
+    The stderr should include 'lock held'
+    The output should not include 'REACHED-AFTER-CHECK'
+    The contents of file "${WORK}/check.log" should include 'Another instance is already running'
+  End
+
+  It 'starts each run with a fresh log instead of appending to a stale one'
+    When call run_call_site always-locked pfb_call_site_check STALE-FROM-A-PREVIOUS-RUN
+    The status should be failure
+    The stderr should include 'lock held'
+    The contents of file "${WORK}/check.log" should not include 'STALE-FROM-A-PREVIOUS-RUN'
   End
 
   It 'never returns the refusal text as if it were a verdict'

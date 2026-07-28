@@ -280,7 +280,8 @@ ssh_guest() {
 }
 
 # pfb_upgrade_run BEGIN
-# pfb_upgrade_run CMD LABEL — run a pfSense-upgrade invocation on the guest,
+# pfb_upgrade_run CMD LABEL [LOG] — run a pfSense-upgrade invocation on the
+# guest, appending every attempt's output to LOG when given;
 # retrying while it answers "Another instance is already running... Aborting!".
 # pkg_switch_repo() (the --branch path) leaves that lock held for tens of
 # seconds, and the refusal is NOT a verdict: taking it at face value let a
