@@ -276,7 +276,9 @@ jobs:
         id: matrix
         run: |
           set -eu
-          ROUTE="$(sh scripts/read-version-matrix.sh --ref origin/ci-metadata --print-route)"
+          # The reader pretty-prints; compact it — a multi-line step output
+          # silently truncates at the first newline.
+          ROUTE="$(sh scripts/read-version-matrix.sh --ref origin/ci-metadata --print-route | jq -c '.')"
           printf 'route=%s\n' "$ROUTE" >> "$GITHUB_OUTPUT"
           printf '%s' "$ROUTE" | jq -r '.[] | "  \(.channel) \(.pfsense_version) (status \(.status // "active"))"'
 

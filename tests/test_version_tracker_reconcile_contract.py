@@ -503,3 +503,38 @@ class TestReconcileMatrixSource:
         reconcile = source.split("\n  reconcile:\n", 1)[1]
         assert "BUILD_MATRIX" not in reconcile
         assert reconcile.count("ROUTE_MATRIX:") >= 3
+
+    def test_resolve_step_emits_single_line_json(self, tmp_path: Path) -> None:
+        # CodeRabbit: the reader pretty-prints, so a bare `printf key=%s` would
+        # corrupt GITHUB_OUTPUT and hand the reconcile a truncated matrix.
+        matrix_file = tmp_path / "matrix.json"
+        matrix_file.write_text(json.dumps(self.SAME_MAJOR_MATRIX), encoding="utf-8")
+        fake_git = tmp_path / "git"
+        fake_git.write_text(
+            '#!/bin/sh\ncase "$1" in\n  fetch) exit 0 ;;\n  show) cat "$FAKE_MATRIX" ;;\nesac\n',
+            encoding="utf-8",
+        )
+        fake_git.chmod(0o755)
+        (tmp_path / "scripts").mkdir(exist_ok=True)
+        (tmp_path / "scripts" / "read-version-matrix.sh").write_text(
+            (ROOT / "scripts" / "read-version-matrix.sh").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        out = tmp_path / "gh-output"
+        out.write_text("", encoding="utf-8")
+        subprocess.run(
+            ["bash", "-c", _step_script("Resolve the route matrix (never deduped)")],
+            cwd=tmp_path,
+            env=os.environ
+            | {
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "FAKE_MATRIX": str(matrix_file),
+                "GITHUB_OUTPUT": str(out),
+            },
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        lines = [ln for ln in out.read_text(encoding="utf-8").splitlines() if ln.startswith("route=")]
+        assert len(lines) == 1, "the route output must be one line"
+        entries = json.loads(lines[0][len("route=") :])
+        assert sorted(e["pfsense_version"] for e in entries if e["channel"] == "Plus") == ["26.03", "26.07"]
