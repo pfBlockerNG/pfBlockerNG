@@ -1,23 +1,14 @@
 name: Upgrade pfSense smoke images
 
 # Upgrade published pfSense CE and Plus GHCR smoke base images to new releases and
-# publish the results as new tags. Runs as a matrix fan-out: one parallel leg per
-# amd64 entry in ci-metadata that has upgrade.available == true (CE and Plus alike,
-# REGARDLESS of the entry's ci flag — issue #1820). A dispatch with self_refresh=true
-# instead re-publishes the newest entry per channel under its own floating tag
-# (from == to, --force): the patch/GA path the version tracker fires on detection.
+# publish the results as new tags. The generation engine of the daily reconcile
+# loop (issue #1823): the version tracker plans actions from the booted boxes and
+# dispatches each one here as a fully-specified `direct_leg`. A dispatch with
+# self_refresh=true re-publishes the newest entry per channel under its own
+# floating tag (from == to, --force) — manual operator refresh. A bare dispatch
+# plans NOTHING (the old upgrade.available matrix mode is retired).
 # Fail-closed: a bad upgrade MUST NEVER be published and the old tag MUST be left
 # untouched.
-#
-# AVAILABILITY FLAG:
-#   Each supported-versions.json entry MAY carry an optional "upgrade" block:
-#     "upgrade": {
-#       "available": true,           # absent or false → skip this variant
-#       "branch":    "devel-x",      # optional: pfSense update branch (default: image's own)
-#       "target":    "2.8.1",        # informational: full version string being targeted
-#       "from":      "2.8"           # optional: GHCR floating tag to pull FROM (default: same as pfsense_version)
-#     }
-#   Today no entry has this block, so the workflow skips everything — correct default.
 #
 # PUBLISH GUARD (inside scripts/image-upgrade.sh):
 #   1. Prior GHCR tag pulled and booted writable under QEMU/KVM.
@@ -63,9 +54,14 @@ on:
         default: ""
         type: string
       self_refresh:
-        description: "If 'true', ignore upgrade.available and re-publish the newest entry per channel under its own tag (from == to, --force) — the patch/GA refresh the version tracker dispatches."
+        description: "If 'true', re-publish the newest entry per channel under its own tag (from == to, --force) — manual operator refresh."
         required: false
         default: "false"
+        type: string
+      direct_leg:
+        description: "One fully-specified leg as JSON ({variant,label,pfsense_version,freebsd_version,image_name,branch,target,from,force_flag}) — how the reconcile loop (issue #1823) dispatches its planned actions. Takes precedence over self_refresh."
+        required: false
+        default: ""
         type: string
       compression:
         description: "qcow2 compression for the published image (zstd|zlib|off)"
@@ -116,21 +112,31 @@ jobs:
         env:
           FILTER_VERSION: ${{ inputs.pfsense_version }}
           SELF_REFRESH: ${{ inputs.self_refresh }}
+          DIRECT_LEG: ${{ inputs.direct_leg }}
         run: |
           set -eu
           git fetch origin ci-metadata -q
           MATRIX_JSON="$(git show origin/ci-metadata:supported-versions.json)"
 
-          # Build the include array (issue #1820 gating; contract pinned by
+          # Build the include array (issue #1823 modes; contract pinned by
           # tests/test_image_refresh_plan_contract.py):
-          #  - default: one entry per amd64 version with upgrade.available==true,
-          #    REGARDLESS of ci (a beta entry starts ci:false — smoke-fan-out
-          #    eligibility is separate from refreshability);
+          #  - DIRECT_LEG: one fully-specified leg from the reconcile loop —
+          #    validated, passed through verbatim; wins over self_refresh.
           #  - SELF_REFRESH=true: the newest amd64 entry per channel gets a
-          #    from==to --force leg (patch/GA re-publish, same floating tag),
-          #    ignoring upgrade.available.
+          #    from==to --force leg (manual operator re-publish).
+          #  - bare dispatch: NOTHING (the upgrade.available matrix mode is
+          #    retired — the reconcile loop decides what runs).
           # aarch64 entries never boot: there is no ARM smoke image (scripts/README.md).
-          if [ "${SELF_REFRESH:-false}" = "true" ]; then
+          if [ -n "${DIRECT_LEG:-}" ]; then
+            INCLUDE="$(printf '%s' "$DIRECT_LEG" | jq -c '
+              if type == "object"
+                 and ([.variant, .label, .pfsense_version, .freebsd_version, .image_name,
+                       .branch, .target, .from, .force_flag] | all(type == "string"))
+              then [.] else [] end' 2>/dev/null || printf '[]')"
+            if [ "$(printf '%s' "$INCLUDE" | jq 'length')" -eq 0 ]; then
+              echo "::warning::direct_leg rejected (malformed or missing fields)"
+            fi
+          elif [ "${SELF_REFRESH:-false}" = "true" ]; then
             # The version filter applies BEFORE newest-per-channel selection —
             # deliberate: a manual dispatch naming an OLDER version re-publishes
             # that frozen tag (seed/repair override). Tracker dispatches always
@@ -157,27 +163,7 @@ jobs:
                 })
             ')"
           else
-            # from defaults to pfsense_version (self); force_flag is "--force" when from==pfsense_version.
-            INCLUDE="$(printf '%s' "$MATRIX_JSON" | jq -c --arg filter "$FILTER_VERSION" '
-              [
-                .versions[]
-                | select((.role // "build") != "route-only")
-                | select((.arch // "amd64") == "amd64")
-                | select((.upgrade.available // false) == true)
-                | select($filter == "" or .pfsense_version == $filter)
-                | {
-                    variant:          (.channel | ascii_downcase),
-                    label:            .channel,
-                    pfsense_version:  .pfsense_version,
-                    freebsd_version:  .freebsd_version,
-                    image_name:       (.image_name // ("pfsense-" + (.channel | ascii_downcase))),
-                    branch:           (.upgrade.branch // ""),
-                    target:           (.upgrade.target // .pfsense_version),
-                    from:             (.upgrade.from // .pfsense_version),
-                    force_flag:       (if ((.upgrade.from // .pfsense_version) == .pfsense_version) then "--force" else "" end)
-                  }
-              ]
-            ')"
+            INCLUDE='[]'
           fi
 
           printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
@@ -190,20 +176,10 @@ jobs:
             printf '%s' "$INCLUDE" | jq -r '
               .[] | "  \(.label) \(.pfsense_version): SELF-REFRESH (from==to, --force)"'
           else
-            printf '%s' "$MATRIX_JSON" | jq -r --arg filter "$FILTER_VERSION" '
-              .versions[] |
-              if ((.role // "build") == "route-only") then
-                "  \(.channel) \(.pfsense_version): skip (role == route-only)"
-              elif ((.arch // "amd64") != "amd64") then
-                "  \(.channel) \(.pfsense_version): skip (no \(.arch) smoke image)"
-              elif ((.upgrade.available // false) != true) then
-                "  \(.channel) \(.pfsense_version): skip (upgrade.available != true)"
-              elif ($filter != "" and .pfsense_version != $filter) then
-                "  \(.channel) \(.pfsense_version): skip (filtered out by pfsense_version input)"
-              else
-                "  \(.channel) \(.pfsense_version): WILL RUN (from=\(.upgrade.from // .pfsense_version) target=\(.upgrade.target // .pfsense_version) branch=\(.upgrade.branch // "(image default)"))"
-              end
-            '
+            printf '%s' "$INCLUDE" | jq -r '
+              if length == 0 then "  no legs (bare dispatch plans nothing — use direct_leg or self_refresh)"
+              else .[] | "  \(.label) \(.pfsense_version): DIRECT (from=\(.from) target=\(.target) branch=\(.branch // "(image default)"))"
+              end'
           fi
 
   # ── Upgrade in place → health gate → publish; then non-blocking smoke ──────
