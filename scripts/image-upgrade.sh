@@ -513,15 +513,21 @@ fi
 log "upgraded: ${OLD_VER} -> ${NEW_VER}"
 
 # --- post-upgrade dependency reconcile + shed (issue #1806 final step) -----
-# Repair pfBlockerNG's baked RUN_DEPENDS set for the box's NEW version before
-# the health gate/publish below: most notably a py_flavor flip (e.g. py311 ->
-# py312) strands every old-flavor package. Matrix-driven off the CI matrix's
-# per-pfsense_version rows (--print-ci; one row per version, unlike the
-# per-freebsd_major-deduped BUILD matrix); best-effort when the NEW version
-# has no matrix row yet (a version not yet added) — warn + skip the
+# Repair pfBlockerNG's baked CORE RUN_DEPENDS set for the box's NEW version
+# before the health gate/publish below: most notably a py_flavor flip (e.g.
+# py311 -> py312) strands every old-flavor package. Matrix-driven off the CI
+# matrix's per-pfsense_version rows (--print-ci; one row per version, unlike
+# the per-freebsd_major-deduped BUILD matrix); best-effort when the NEW
+# version has no matrix row yet (a version not yet added) — warn + skip the
 # install/shed plan, but still verify the OLD row's own deps so a genuinely
 # broken set (e.g. a flip that already happened) is still caught. Fail-closed
 # like the health gate below: a verify failure aborts BEFORE publish.
+# A matrix row's extra_pkgs (e.g. CE's textproc/py-charset-normalizer) NEVER
+# enter install/verify — that package is deliberately not baked into the
+# image (per-leg smoke harness installs it; a real install resolves it from
+# our self-hosted repo as an ordinary RUN_DEPENDS). extra_pkgs participate
+# ONLY in shed, and only once genuinely dropped by the NEW row — see
+# scripts/lib/dep-reconcile.sh's header for the full rationale.
 # scripts/lib/dep-reconcile.sh's pfb_dep_* functions are the tested, pure
 # needed-set/diff logic (tests/shell/dep_reconcile_spec.sh); everything below
 # is the live ssh/pkg(8) wiring around them (live-proof-only).
@@ -555,7 +561,6 @@ else
         # caught rather than silently waved through.
         warn "no matrix row for ${TYPE} ${_DEP_NEW_MATRIX_VER} yet — skipping install/shed plan; verifying ${FROM}'s own deps only"
         _DEP_VERIFY_FLAVOR="$_DEP_OLD_FLAVOR"
-        _DEP_VERIFY_EXTRA="$_DEP_OLD_EXTRA"
     else
         _DEP_NEW_FLAVOR="$(printf '%s' "$_DEP_NEW_ROW" | jq -r '.py_flavor')"
         _DEP_NEW_EXTRA="$(printf '%s' "$_DEP_NEW_ROW" | jq -r '.extra_pkgs[]? // empty')"
@@ -579,25 +584,27 @@ else
         fi
 
         _DEP_VERIFY_FLAVOR="$_DEP_NEW_FLAVOR"
-        _DEP_VERIFY_EXTRA="$_DEP_NEW_EXTRA"
     fi
 
-    # Verify (always, whether or not a plan ran above): every needed package
-    # resolves in the pkg db (pkg info -e — one round trip per package, as
-    # specified), and the python import probe succeeds for the python-module
-    # deps — fail-closed: a bad dependency set must never be published (same
-    # shape as the health gate below).
+    # Verify (always, whether or not a plan ran above): every CORE needed
+    # package resolves in the pkg db (pkg info -e — one round trip per
+    # package, as specified), and the core python import probe succeeds —
+    # fail-closed: a bad dependency set must never be published (same shape
+    # as the health gate below). extra_pkgs are DELIBERATELY excluded from
+    # verify (contract correction — see scripts/lib/dep-reconcile.sh's header
+    # and pfSense_versions.md's CE-only note): CE's charset-normalizer is not
+    # baked into the image, so demanding it here would fail-close every
+    # healthy CE image upgrade.
     _DEP_VERIFY_FAIL=0
-    for _dep_pkg in $(pfb_dep_needed_pkgs "$_DEP_VERIFY_FLAVOR" "$_DEP_VERIFY_EXTRA"); do
+    for _dep_pkg in $(pfb_dep_core_pkgs "$_DEP_VERIFY_FLAVOR"); do
         ssh_guest "pkg info -e '$_dep_pkg'" >/dev/null 2>&1 || {
             warn "dependency verify: ${_dep_pkg} not resolved on the guest"
             _DEP_VERIFY_FAIL=1
         }
     done
     _DEP_PY_DOTTED="$(pfb_dep_python_dotted "$_DEP_VERIFY_FLAVOR")"
-    _DEP_PY_MODULES="$(pfb_dep_python_modules "$_DEP_VERIFY_FLAVOR" "$_DEP_VERIFY_EXTRA" | tr '\n' ',' | sed 's/,$//;s/,/, /g')"
-    ssh_guest "/usr/local/bin/python${_DEP_PY_DOTTED} -c 'import ${_DEP_PY_MODULES}'" >/dev/null 2>&1 || {
-        warn "dependency verify: python${_DEP_PY_DOTTED} import probe failed (${_DEP_PY_MODULES})"
+    ssh_guest "/usr/local/bin/python${_DEP_PY_DOTTED} -c 'import maxminddb, sqlite3'" >/dev/null 2>&1 || {
+        warn "dependency verify: python${_DEP_PY_DOTTED} import probe failed (maxminddb, sqlite3)"
         _DEP_VERIFY_FAIL=1
     }
     [ "$_DEP_VERIFY_FAIL" -eq 0 ] || die "post-upgrade dependency verify failed — refusing to publish (see warnings above)"
