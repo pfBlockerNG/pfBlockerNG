@@ -136,6 +136,13 @@ EOF
       'FreeBSD:*:amd64'
       '*'
       'FreeBSD:15:*extra'
+      # gate-B finding (issue #1806 step C0): the wildcard branch's charset-only
+      # check on `rest` (everything but the trailing ':*') accepted these two
+      # malformed shapes — 'FreeBSD:*' has NO major segment (0 colons in rest)
+      # and 'FreeBSD:15:16:*' has an EXTRA segment (2 colons in rest); the tight
+      # wildcard shape is EXACTLY "OS:major:*" (one colon in rest).
+      'FreeBSD:*'
+      'FreeBSD:15:16:*'
     End
 
     It "rejects hostile ABI metadata: $1"
