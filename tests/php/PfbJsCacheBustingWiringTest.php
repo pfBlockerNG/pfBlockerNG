@@ -9,20 +9,14 @@ use PHPUnit\Framework\TestCase;
  * Every page that ships `pfBlockerNG.js` must reference it with an mtime cache-buster,
  * the same way the pfSense chrome and this package's CodeMirror assets already do.
  *
- * A bare `src="pfBlockerNG.js"` lets a browser keep its pre-upgrade copy of the script
- * for an unbounded time: the response carries no Expires/Cache-Control, so the browser
- * falls back to heuristic freshness. The stale copy then executes against post-upgrade
- * markup and throws on symbols the new pages no longer emit; because pfSense drains its
- * `events` queue with an unguarded loop, one such throw silently disables every page
- * callback queued behind it (issue #1845: the internal `XXXX` label sentinel stayed
- * visible on the Feeds edit page because `pfb_remove_label()` never ran).
+ * A bare `src="pfBlockerNG.js"` lets a browser keep its pre-upgrade copy of the script:
+ * the response carries no Expires/Cache-Control, so heuristic freshness applies. The
+ * stale copy then throws against post-upgrade markup, and pfSense's unguarded `events`
+ * drain skips every page callback queued behind it (issue #1845).
  *
- * These pages carry top-level render execution (`require_once('guiconfig.inc')` et al.)
- * and cannot be require()d off-appliance, so reading the shipped source IS reading the
- * render for this markup -- the same rationale recorded on DnsblRegexHighlightWiringTest.
- * The rendered form on a live appliance is pinned by
- * tests/smoke/ui/test_render_smoke.py::test_pfblockerng_js_include_carries_a_cache_buster,
- * which also proves the emitted token is non-zero.
+ * These pages carry top-level render execution and cannot be require()d off-appliance,
+ * so reading the shipped source IS reading the render for this markup. The rendered
+ * form is pinned on a live appliance by tests/smoke/ui/test_render_smoke.py.
  */
 final class PfbJsCacheBustingWiringTest extends TestCase
 {
