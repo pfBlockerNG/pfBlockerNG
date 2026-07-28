@@ -357,6 +357,14 @@ class TestDiffFuture:
         entry_29 = next(e for e in result["future"] if e["version"] == "2.9")
         assert entry_29["freebsd_major"] == "16"
 
+    def test_future_entry_includes_full_freebsd_version(self) -> None:
+        # issue #1820: the matrix auto-PR seeds the new beta entry's
+        # freebsd_version from the page (a beta often tracks a NEWER FreeBSD
+        # than the sibling entry it copies its other fields from)
+        result = cvs.diff(self.families, [])
+        entry_29 = next(e for e in result["future"] if e["version"] == "2.9")
+        assert entry_29["freebsd_version"] == "16.0-CURRENT@3f5f52216f7e"
+
 
 # ── run() integration: graceful degradation ───────────────────────────────────
 

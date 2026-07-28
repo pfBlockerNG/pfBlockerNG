@@ -317,6 +317,7 @@ def diff(
                     "channel": fam.channel,
                     "released": fam.released,
                     "freebsd_major": fam.freebsd_major,
+                    "freebsd_version": fam.freebsd_version,
                 }
             )
 

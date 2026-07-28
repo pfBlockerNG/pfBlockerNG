@@ -5,16 +5,22 @@ name: Version Tracker
 # triggering the release artifact build AND the CI image-refresh + smoke
 # fan-out (ADR-04 Accepted, so these are LIVE, not gated).
 #
-# DETECT = CURATED: a human edits supported-versions.json on ci-metadata when
-# a pfSense beta or GA drops.  An OPTIONAL best-effort probe (see `probe` job)
-# scrapes the Netgate docs versions page for CE + Plus versions absent from the
-# matrix and opens per-version nudge/tracking issues — it NEVER edits the matrix.
+# DETECT = AUTOMATED, APPLY = HUMAN-MERGED (issue #1820): the best-effort
+# `probe` job scrapes the Netgate docs versions page, boots the newest smoke
+# image per channel to ask `pfSense-repoc -p` whether a TBD family is already a
+# public beta, and compares the page's newest released build against the
+# pfsense-version annotation on the published GHCR images.  On detection it
+# updates the per-version tracking issues, opens a matrix PR against the
+# ci-metadata orphan ref (add-beta-entry / GA status flip — a human merges),
+# and dispatches image-refresh.yml (self_refresh) for patch/GA drift.  It
+# NEVER pushes to ci-metadata itself.
 #
 # ┌─────────────────────────────────────────────────────────────────────┐
 # │ INVARIANT: this workflow NEVER commits to or force-pushes           │
-# │ main, devel, or any channel branch.  The matrix is on ci-metadata   │
-# │ (an orphan ref), so all version tracking is off-branch.  The REACT  │
-# │ step triggers OTHER workflows — it does not write to the repo.      │
+# │ main, devel, or any channel branch.  The matrix lives on            │
+# │ ci-metadata (an orphan ref, branch-protected) and is changed ONLY   │
+# │ via tracker/* PRs a human merges.  The REACT step triggers OTHER    │
+# │ workflows — it does not write to the repo.                          │
 # └─────────────────────────────────────────────────────────────────────┘
 #
 # Phase 5 (image-refresh.yml) and Phase 6 (smoke.yml) are wired
@@ -256,26 +262,34 @@ jobs:
   # Scrapes docs.netgate.com for authoritative CE + Plus version coverage and
   # compares against the BUILD matrix.  Opens one nudge issue per still-supported
   # version absent from the matrix, and one tracking issue per upcoming/TBD version
-  # (updated in place as the stage advances).
+  # (updated in place as the stage advances).  Issue #1820 detection/generation
+  # split — DETECTION (cheap, daily): the VM repo probe for TBD families (~5 min,
+  # only on days the page lists one) and the annotation drift check (an oras
+  # manifest fetch, no VM).  GENERATION (expensive, on positive detection only):
+  # matrix auto-PRs a human merges, and image-refresh.yml dispatches.
   #
-  # NEVER edits the matrix.  NEVER commits to any branch.  NUDGES ONLY.
+  # NEVER pushes to ci-metadata (matrix changes are tracker/* PRs).  NEVER
+  # commits to any channel branch.
   # Best-effort: any fetch/parse failure → empty result, no issues, no job failure.
   #
   # DISABLING: set skip_probe='true' on workflow_dispatch, or add the label
   # 'tracker-probe-disabled' to this repo, or remove this job entirely.
   probe:
-    name: Best-effort version probe (nudge only)
+    name: Best-effort version probe (detect + propose)
     runs-on: ubuntu-latest
     needs: read-matrix
     # Probe runs in parallel with react; failures here NEVER block react.
     if: github.event.inputs.skip_probe != 'true'
     permissions:
-      issues: write
-      contents: read
+      issues: write          # nudge + tracking issues
+      contents: write        # push tracker/* matrix-PR branches (NEVER ci-metadata itself)
+      pull-requests: write   # open the matrix PRs
+      actions: write         # dispatch image-refresh.yml on drift detection
+      packages: read         # oras pull/manifest-fetch of the smoke images
     steps:
       - uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true   # push the tracker/* matrix-PR branches
           fetch-depth: 0
 
       - name: Check if probe is disabled via repo label
@@ -306,6 +320,350 @@ jobs:
             > probe_result.json
           echo "Probe result:"
           python3 -m json.tool probe_result.json || cat probe_result.json
+
+      - name: Install oras
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.detect.outcome == 'success'
+        continue-on-error: true
+        uses: oras-project/setup-oras@v2
+
+      # ── Beta detection (VM probe — issue #1820) ─────────────────────────────
+      # Only on days the page lists a TBD family: boot the newest published
+      # image for that family's channel as a throwaway overlay and ask
+      # `pfSense-repoc -p` whether the family is already a public repo branch.
+      # ~5 min per channel; most days the step exits at the count check.
+      - name: Public-beta VM probe (boot latest image per channel)
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.detect.outcome == 'success'
+        continue-on-error: true
+        env:
+          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+          SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
+          SMOKE_PLUS_SMBIOS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          COUNT=$(jq '.future | length' probe_result.json)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No TBD families on the page — no VM probe today."
+            exit 0
+          fi
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::warning::SMOKE_SSH_PRIV_KEY absent — beta probe skipped"
+            exit 0
+          fi
+
+          # VM probe dependencies, installed only on TBD days.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 qemu-utils openssh-client
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+
+          REPO_NS="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+          echo '{}' > beta_result.json
+          i=0
+          while [ "$i" -lt "$COUNT" ]; do
+            VERSION=$(jq -r ".future[$i].version" probe_result.json)
+            CHANNEL=$(jq -r ".future[$i].channel" probe_result.json)
+            i=$((i + 1))
+            VARIANT=$(printf '%s' "$CHANNEL" | tr '[:upper:]' '[:lower:]')
+
+            # The image to boot: the newest amd64 same-channel matrix entry.
+            SRC=$(printf '%s\n' "$BUILD_MATRIX" | jq -c --arg ch "$CHANNEL" '
+              [ .[] | select(.channel == $ch) | select((.arch // "amd64") == "amd64") ]
+              | max_by(.pfsense_version | split(".") | map(tonumber)) // empty')
+            if [ -z "$SRC" ]; then
+              echo "::warning::no ${CHANNEL} matrix entry to boot for ${VERSION} — verdict unknown"
+              jq --arg k "${CHANNEL}/${VERSION}" --arg var "$VARIANT" --arg exp "$VERSION" \
+                 '.[$k] = {variant: $var, expect: $exp, verdict: "unknown", branch: ""}' \
+                 beta_result.json > beta_result.json.tmp && mv beta_result.json.tmp beta_result.json
+              continue
+            fi
+            IMAGE_NAME=$(printf '%s\n' "$SRC" | jq -r '.image_name // ("pfsense-" + (.channel | ascii_downcase))')
+            TAG=$(printf '%s\n' "$SRC" | jq -r '.pfsense_version')
+
+            echo "==> probing ${CHANNEL} ${VERSION} on ${REPO_NS%/}/${IMAGE_NAME}:${TAG}"
+            if [ "$VARIANT" = "plus" ]; then
+              SMOKE_VM_MAC="${SMOKE_PLUS_MAC:-}" SMOKE_VM_SMBIOS_UUID="${SMOKE_PLUS_SMBIOS_UUID:-}" \
+                sh scripts/beta-repo-probe.sh \
+                  --variant "$VARIANT" --expect "$VERSION" \
+                  --image "${REPO_NS%/}/${IMAGE_NAME}" --tag "$TAG" \
+                  --ssh-key "$PWD/smoke_key" --out verdict.json
+            else
+              sh scripts/beta-repo-probe.sh \
+                --variant "$VARIANT" --expect "$VERSION" \
+                --image "${REPO_NS%/}/${IMAGE_NAME}" --tag "$TAG" \
+                --ssh-key "$PWD/smoke_key" --out verdict.json
+            fi
+            jq --arg k "${CHANNEL}/${VERSION}" --slurpfile v verdict.json '.[$k] = $v[0]' \
+              beta_result.json > beta_result.json.tmp && mv beta_result.json.tmp beta_result.json
+          done
+          echo "Beta probe results:"
+          jq . beta_result.json
+
+      # ── Patch/GA detection (no VM — issue #1820) ────────────────────────────
+      # Compare the page's newest RELEASED build per family with the
+      # io.github.pfblockerng.pfsense-version annotation on the published image
+      # (an `oras manifest fetch`, cheap).  Only the newest version per channel
+      # is checked — older floating tags are frozen.
+      - name: Patch/GA drift detection (page vs image annotation)
+        id: patchdetect
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.detect.outcome == 'success'
+        continue-on-error: true
+        env:
+          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo '[]' > patch_result.json
+          COUNT=$(jq '.latest_releases | length' probe_result.json)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No released matrix families reported by the page probe."
+            exit 0
+          fi
+          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+          REPO_NS="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+
+          CANDS=$(jq -c --argjson bm "$BUILD_MATRIX" '
+            [ .latest_releases[] as $lr
+              | ([ $bm[] | select(.channel == $lr.channel) | select((.arch // "amd64") == "amd64") ]
+                 | max_by(.pfsense_version | split(".") | map(tonumber))) as $newest
+              | select($newest != null and $newest.pfsense_version == $lr.version)
+              | { version: $lr.version, channel: $lr.channel, page: $lr.latest_release,
+                  image_name: ($newest.image_name // ("pfsense-" + ($newest.channel | ascii_downcase))) }
+            ]' probe_result.json)
+          N=$(printf '%s\n' "$CANDS" | jq 'length')
+          i=0
+          while [ "$i" -lt "$N" ]; do
+            C=$(printf '%s\n' "$CANDS" | jq -c ".[$i]")
+            i=$((i + 1))
+            VERSION=$(printf '%s\n' "$C" | jq -r '.version')
+            CHANNEL=$(printf '%s\n' "$C" | jq -r '.channel')
+            PAGE=$(printf '%s\n' "$C" | jq -r '.page')
+            IMAGE_NAME=$(printf '%s\n' "$C" | jq -r '.image_name')
+            IMG_REF="${REPO_NS%/}/${IMAGE_NAME}:${VERSION}"
+
+            ANN=$(oras manifest fetch "$IMG_REF" 2>/dev/null \
+              | jq -r '.annotations["io.github.pfblockerng.pfsense-version"] // empty' || true)
+            if [ -z "$ANN" ]; then
+              echo "::warning::${IMG_REF}: no pfsense-version annotation — seed it once by dispatching image-refresh.yml with self_refresh=true"
+              continue
+            fi
+            IMG_VER=${ANN%%-*}
+            if [ "$IMG_VER" != "$PAGE" ]; then REFRESH=true; else REFRESH=false; fi
+            jq --arg v "$VERSION" --arg c "$CHANNEL" --arg p "$PAGE" --arg img "$ANN" --argjson r "$REFRESH" \
+               '. += [{version: $v, channel: $c, page: $p, image: $img, refresh: $r}]' \
+               patch_result.json > patch_result.json.tmp && mv patch_result.json.tmp patch_result.json
+          done
+          echo "Patch/GA drift:"
+          jq . patch_result.json
+
+      # ── Auto-generation trigger: image self-refresh on drift ────────────────
+      - name: Dispatch image self-refresh for detected drift
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.patchdetect.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          [ -f patch_result.json ] || { echo "No drift results."; exit 0; }
+          PENDING=$(jq -c '[ .[] | select(.refresh == true) ]' patch_result.json)
+          N=$(printf '%s\n' "$PENDING" | jq 'length')
+          if [ "$N" -eq 0 ]; then
+            echo "All published images match the page — nothing to refresh."
+            exit 0
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "[DRY-RUN] WOULD dispatch image-refresh.yml (self_refresh=true) for:"
+            printf '%s\n' "$PENDING" | jq .
+            exit 0
+          fi
+          i=0
+          while [ "$i" -lt "$N" ]; do
+            VERSION=$(printf '%s\n' "$PENDING" | jq -r ".[$i].version")
+            i=$((i + 1))
+            echo "  [TRIGGER] image-refresh.yml self-refresh for ${VERSION}"
+            gh workflow run image-refresh.yml \
+              --repo "$REPO" \
+              --ref "$REF" \
+              -f "pfsense_version=${VERSION}" \
+              -f self_refresh=true \
+              || echo "  ::warning::Dispatch of image-refresh.yml (self_refresh ${VERSION}) failed"
+          done
+
+      # ── Matrix auto-PRs (a human merges; the probe NEVER pushes ci-metadata) ─
+      # Beta detected → PR adding the entry (status beta, ci false, upgrade
+      # block wiring the beta build).  Page went GA while the matrix still says
+      # beta → PR flipping the status.  Unknown fields carry over from the
+      # newest same-channel amd64 sibling, so matrix schema changes flow through
+      # untouched.  Contract pinned by tests/test_version_tracker_probe_contract.py.
+      - name: Open matrix PRs for detected betas and GA flips
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.detect.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          BETAS='[]'
+          if [ -f beta_result.json ]; then
+            BETAS=$(jq -c '[ to_entries[] | select(.value.verdict == "yes") ]' beta_result.json)
+          fi
+          GAFLIPS=$(jq -c '.ga_flips // []' probe_result.json)
+          BCOUNT=$(printf '%s\n' "$BETAS" | jq 'length')
+          GCOUNT=$(printf '%s\n' "$GAFLIPS" | jq 'length')
+          if [ "$BCOUNT" -eq 0 ] && [ "$GCOUNT" -eq 0 ]; then
+            echo "No matrix changes to propose."
+            exit 0
+          fi
+
+          git fetch origin ci-metadata -q || true
+          git show origin/ci-metadata:supported-versions.json > matrix_current.json
+          echo '{}' > matrix_prs.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # open_matrix_pr BRANCH TITLE BODY_FILE NEW_MATRIX_FILE PRS_KEY —
+          # (re)build the bot-owned tracker/* branch from ci-metadata + the new
+          # matrix file, force-push, and open (or reuse) the PR against
+          # ci-metadata.  Records the PR number under PRS_KEY in matrix_prs.json
+          # (the tracking-issue step links it).
+          open_matrix_pr() {
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[DRY-RUN] WOULD open PR '$2' from branch $1"
+              return 0
+            fi
+            git checkout -B "$1" origin/ci-metadata
+            cp "$4" supported-versions.json
+            git add supported-versions.json
+            git commit -m "$2"
+            git push --force origin "$1"
+            PR=$(gh pr list --repo "$REPO" --head "$1" --base ci-metadata --state open \
+              --json number --jq '.[0].number // empty' || true)
+            if [ -z "$PR" ]; then
+              gh pr create --repo "$REPO" --base ci-metadata --head "$1" \
+                --title "$2" --body-file "$3" \
+                || { echo "::warning::Could not open matrix PR from $1"; return 0; }
+              PR=$(gh pr list --repo "$REPO" --head "$1" --base ci-metadata --state open \
+                --json number --jq '.[0].number // empty' || true)
+            else
+              echo "  open PR #${PR} from $1 already exists — the force-push updated it"
+            fi
+            if [ -n "$PR" ]; then
+              jq --arg k "$5" --arg pr "$PR" '.[$k] = $pr' matrix_prs.json \
+                > matrix_prs.json.tmp && mv matrix_prs.json.tmp matrix_prs.json
+            fi
+          }
+
+          i=0
+          while [ "$i" -lt "$BCOUNT" ]; do
+            E=$(printf '%s\n' "$BETAS" | jq -c ".[$i]")
+            i=$((i + 1))
+            KEY=$(printf '%s\n' "$E" | jq -r '.key')
+            CHANNEL=${KEY%%/*}
+            VERSION=${KEY##*/}
+            REPO_BRANCH=$(printf '%s\n' "$E" | jq -r '.value.branch')
+            VARIANT=$(printf '%s' "$CHANNEL" | tr '[:upper:]' '[:lower:]')
+
+            if jq -e --arg v "$VERSION" --arg c "$CHANNEL" \
+                 '.versions[] | select(.pfsense_version == $v and .channel == $c)' \
+                 matrix_current.json >/dev/null; then
+              echo "  [skip] ${CHANNEL} ${VERSION} already in the matrix"
+              continue
+            fi
+            SIB=$(jq -c --arg c "$CHANNEL" '
+              [ .versions[] | select(.channel == $c) | select((.arch // "amd64") == "amd64") ]
+              | max_by(.pfsense_version | split(".") | map(tonumber)) // empty' matrix_current.json)
+            if [ -z "$SIB" ] || [ "$SIB" = "null" ]; then
+              echo "::warning::no ${CHANNEL} sibling entry to derive ${VERSION} from — skipping"
+              continue
+            fi
+            FUT=$(jq -c --arg v "$VERSION" --arg c "$CHANNEL" \
+              '.future[] | select(.version == $v and .channel == $c)' probe_result.json)
+
+            NEWM=$(mktemp)
+            jq --argjson sib "$SIB" --argjson fut "$FUT" --arg branch "$REPO_BRANCH" '
+              .versions += [
+                $sib + {
+                  pfsense_version: $fut.version,
+                  freebsd_version: ($fut.freebsd_version // $sib.freebsd_version),
+                  freebsd_major:   (if ($fut.freebsd_major // "") != "" then $fut.freebsd_major else $sib.freebsd_major end),
+                  status:  "beta",
+                  ci:      false,
+                  upgrade: { available: true, from: $sib.pfsense_version, branch: $branch, target: $fut.version }
+                }
+              ]' matrix_current.json > "$NEWM"
+
+            BODY_FILE=$(mktemp)
+            {
+              printf '## Add pfSense %s %s (public beta detected)\n\n' "$CHANNEL" "$VERSION"
+              printf 'The version-tracker probe booted the current %s smoke image and found\n' "$CHANNEL"
+              printf '`%s` served as repo branch `%s` (`pfSense-repoc -p`).\n\n' "$VERSION" "$REPO_BRANCH"
+              printf 'This PR adds the matrix entry with `status: beta`, `ci: false` (no image\n'
+              printf 'exists yet) and an `upgrade` block wiring the beta build. Merging it lets\n'
+              printf 'the next tracker run dispatch image-refresh.yml, which upgrades a copy of\n'
+              printf 'the current image to the beta and publishes the new floating tag. Flip\n'
+              printf '`ci` to `true` once that image exists.\n\n'
+              printf '_Opened automatically by the version-tracker probe (issue #1820). The\n'
+              printf 'probe never pushes to `ci-metadata` — merging is a human decision._\n'
+            } > "$BODY_FILE"
+
+            open_matrix_pr "tracker/matrix-${VARIANT}-${VERSION}" \
+              "ci-metadata: add ${CHANNEL} ${VERSION} (public beta detected)" \
+              "$BODY_FILE" "$NEWM" "$KEY"
+            rm -f "$BODY_FILE" "$NEWM"
+          done
+
+          i=0
+          while [ "$i" -lt "$GCOUNT" ]; do
+            G=$(printf '%s\n' "$GAFLIPS" | jq -c ".[$i]")
+            i=$((i + 1))
+            VERSION=$(printf '%s\n' "$G" | jq -r '.version')
+            CHANNEL=$(printf '%s\n' "$G" | jq -r '.channel')
+            VARIANT=$(printf '%s' "$CHANNEL" | tr '[:upper:]' '[:lower:]')
+
+            if ! jq -e --arg v "$VERSION" --arg c "$CHANNEL" \
+                 '.versions[] | select(.pfsense_version == $v and .channel == $c and .status == "beta")' \
+                 matrix_current.json >/dev/null; then
+              echo "  [skip] ${CHANNEL} ${VERSION} is not a beta entry (anymore)"
+              continue
+            fi
+            NEWM=$(mktemp)
+            jq --arg v "$VERSION" --arg c "$CHANNEL" '
+              (.versions[] | select(.pfsense_version == $v and .channel == $c) | .status) = "active"
+            ' matrix_current.json > "$NEWM"
+
+            BODY_FILE=$(mktemp)
+            {
+              printf '## Mark pfSense %s %s GA\n\n' "$CHANNEL" "$VERSION"
+              printf 'The Netgate versions page now lists the %s %s family as supported,\n' "$CHANNEL" "$VERSION"
+              printf 'but its matrix entry still says `status: beta`. This PR flips it to\n'
+              printf '`active`. The published image is refreshed to the GA build separately\n'
+              printf 'by the drift detection (image-refresh.yml, self_refresh).\n\n'
+              printf '_Opened automatically by the version-tracker probe (issue #1820)._\n'
+            } > "$BODY_FILE"
+
+            open_matrix_pr "tracker/matrix-${VARIANT}-${VERSION}-ga" \
+              "ci-metadata: mark ${CHANNEL} ${VERSION} GA" \
+              "$BODY_FILE" "$NEWM" "${CHANNEL}/${VERSION}-ga"
+            rm -f "$BODY_FILE" "$NEWM"
+          done
+
+          echo "Invariant confirmed: matrix changes proposed as PRs only — no ci-metadata push."
 
       - name: Ensure version-tracker labels exist
         if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.detect.outcome == 'success'
@@ -422,6 +780,25 @@ jobs:
 
             TITLE="[version-tracker] pfSense ${CHANNEL} ${VERSION} — upcoming version tracking"
 
+            # Public-beta probe outcome (issue #1820; beta_result.json is written
+            # by the VM probe step — absent means the probe did not run).
+            KEY="${CHANNEL}/${VERSION}"
+            BETA_VERDICT="unknown"
+            BETA_BRANCH=""
+            if [ -f beta_result.json ]; then
+              BETA_VERDICT=$(jq -r --arg k "$KEY" '.[$k].verdict // "unknown"' beta_result.json)
+              BETA_BRANCH=$(jq -r --arg k "$KEY" '.[$k].branch // ""' beta_result.json)
+            fi
+            MATRIX_PR=""
+            if [ -f matrix_prs.json ]; then
+              MATRIX_PR=$(jq -r --arg k "$KEY" '.[$k] // ""' matrix_prs.json)
+            fi
+            case "$BETA_VERDICT" in
+              yes) BETA_CELL="yes — public repo branch \`${BETA_BRANCH}\`" ;;
+              no)  BETA_CELL="not yet (repo probe found nothing)" ;;
+              *)   BETA_CELL="unknown (probe unavailable)" ;;
+            esac
+
             BODY_FILE=$(mktemp)
             {
               printf '## Upcoming pfSense %s %s\n\n' "$CHANNEL" "$VERSION"
@@ -431,13 +808,23 @@ jobs:
               printf '| Channel | %s |\n' "$CHANNEL"
               printf '| FreeBSD major | %s |\n' "$FREEBSD"
               printf '| Released | %s |\n' "$RELEASED"
+              printf '| Public beta | %s |\n' "$BETA_CELL"
               printf '\n'
               printf 'pfSense **%s %s** is listed as an upcoming/TBD version on the\n' "$CHANNEL" "$VERSION"
               printf '[Netgate versions page](https://docs.netgate.com/pfsense/en/latest/releases/versions.html).\n\n'
+              if [ "$BETA_VERDICT" = "yes" ]; then
+                printf 'A **public beta is available** on the pfSense update servers.\n'
+                if [ -n "$MATRIX_PR" ]; then
+                  printf 'Matrix auto-PR: #%s — merging it lets image-refresh.yml build and\n' "$MATRIX_PR"
+                  printf 'publish the beta smoke image.\n\n'
+                else
+                  printf '\n'
+                fi
+              fi
               printf 'Once it reaches GA, evaluate adding an entry to `supported-versions.json`\n'
               printf 'on the `ci-metadata` branch via a PR.\n\n'
               printf '_This issue is updated automatically by the version-tracker probe as_\n'
-              printf '_the page signal changes (TBD → released date → GA)._\n'
+              printf '_the page signal changes (TBD → beta → released date → GA)._\n'
             } > "$BODY_FILE"
 
             # Update an open tracking issue; create one if none exists. The
