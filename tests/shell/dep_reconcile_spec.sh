@@ -4,12 +4,28 @@
 #
 # Pins the pure needed-set derivation + install/shed diff that
 # scripts/image-upgrade.sh's post-upgrade phase drives: a py_flavor flip
-# (py311 -> py312) must install the new-flavor core pkgs and shed the
+# (py311 -> py312) must install the new-flavor CORE pkgs and shed the
 # old-flavor ones; a missing package surfaces in the install list; a healthy
 # (already-reconciled) set produces two empty lists; a same-row call (the
 # "no matrix row for the new version yet" shape) never sheds and only
-# reports genuinely missing packages; and a matrix row's extra_pkgs is
-# excluded from shed while still needed, included once dropped.
+# reports genuinely missing packages.
+#
+# CONTRACT (corrected — a matrix row's extra_pkgs, e.g. CE's
+# textproc/py-charset-normalizer, NEVER enter needed/install/verify: that
+# package is deliberately NOT baked into the image — the per-leg smoke
+# harness ships+installs it, and a real install resolves it from our
+# self-hosted repo as an ordinary RUN_DEPENDS. Baking/demanding it here would
+# (a) violate that dep-free-image decision and (b) fail-close every CE image
+# upgrade on a healthy, correctly dep-free image. extra_pkgs participate ONLY
+# in shed, and only for a basename NEW_EXTRA has genuinely dropped — never
+# merely because its flavor changed):
+#   (a) a CE-shaped row's extra_pkgs NEVER put that package in install (or, by
+#       construction, verify — verify walks the same core-only set as install).
+#   (b) an extra-derived stray already on the box gets shed once the NEW row's
+#       extra_pkgs drops its origin.
+#   (c) a Plus-shaped pair (extra_pkgs=[] on BOTH rows) never recognises its
+#       baked (Netgate-provided) charset-normalizer as extra-derived at all —
+#       neither installed nor shed; untouched end to end.
 #
 # RED->GREEN: before scripts/lib/dep-reconcile.sh exists, every `.` (source)
 # below fails (ENOENT) and every function call is "command not found" —
@@ -27,7 +43,8 @@ Describe 'dep-reconcile.sh'
   Describe 'pfb_dep_core_pkgs'
     It 'lists the 7 flavor-independent + 2 flavor-tracking RUN_DEPENDS packages for py311'
       # Scenario: docs/misc/pfSense_versions.md's 9-row table (minus the
-      # extra_pkgs-derived charset-normalizer, which is NOT core).
+      # extra_pkgs-derived charset-normalizer, which is NOT core). This IS the
+      # image's full needed/install/verify set — extra_pkgs never add to it.
       When call pfb_dep_core_pkgs py311
       The lines of output should equal 9
       The output should include 'libmaxminddb'
@@ -79,54 +96,30 @@ Describe 'dep-reconcile.sh'
     End
   End
 
-  Describe 'pfb_dep_extra_pkg_name'
-    It 'strips the py- PKGNAMEPREFIX and applies the target flavor'
+  Describe 'pfb_dep_extra_basename'
+    # SHED-recognition only (see file header) — never feeds needed/install/verify.
+    It 'strips the py- PKGNAMEPREFIX'
       # Scenario: the one currently-known extra_pkgs entry (CE's charset-normalizer).
-      When call pfb_dep_extra_pkg_name 'textproc/py-charset-normalizer' py311
-      The output should equal 'py311-charset-normalizer'
+      When call pfb_dep_extra_basename 'textproc/py-charset-normalizer'
+      The output should equal 'charset-normalizer'
     End
 
-    It 'applies a different flavor to the same origin'
-      When call pfb_dep_extra_pkg_name 'textproc/py-charset-normalizer' py312
-      The output should equal 'py312-charset-normalizer'
-    End
-  End
-
-  Describe 'pfb_dep_needed_pkgs'
-    It 'is exactly the core set when EXTRA_ORIGINS is empty'
-      When call pfb_dep_needed_pkgs py311 ''
-      The lines of output should equal 9
-      The output should not include 'charset-normalizer'
-    End
-
-    It 'appends the extra_pkgs-derived name when EXTRA_ORIGINS is non-empty'
-      When call pfb_dep_needed_pkgs py311 'textproc/py-charset-normalizer'
-      The lines of output should equal 10
-      The output should include 'py311-charset-normalizer'
-    End
-  End
-
-  Describe 'pfb_dep_python_modules'
-    It 'is maxminddb + sqlite3 with no extras'
-      When call pfb_dep_python_modules py311 ''
-      The lines of output should equal 2
-      The output should include 'maxminddb'
-      The output should include 'sqlite3'
-    End
-
-    It 'turns an extra package name dash into the python import underscore'
-      When call pfb_dep_python_modules py311 'textproc/py-charset-normalizer'
-      The lines of output should equal 3
-      The output should include 'charset_normalizer'
-      The output should not include 'charset-normalizer'
+    It 'passes a non-py- basename through unchanged (branch coverage)'
+      When call pfb_dep_extra_basename 'net/foo-bar'
+      The output should equal 'foo-bar'
     End
   End
 
   Describe 'pfb_dep_plan'
-    # installed_of <flavor> [extra] — the exact needed set for FLAVOR (+ optional
-    # extra origin), i.e. a box that is FULLY reconciled for that row already.
+    # installed_of FLAVOR [EXTRA_PKG_NAME] — FLAVOR's core needed set, an
+    # already-reconciled box, plus an optional literal extra-derived package
+    # name (simulating a stray/baked extra actually present on the box —
+    # never derived via the production needed-set logic, since extra_pkgs
+    # deliberately never feed that).
     installed_of() {
-      pfb_dep_needed_pkgs "$1" "${2:-}"
+      _flavor="$1"; _extra_pkg="${2:-}"
+      pfb_dep_core_pkgs "$_flavor"
+      [ -z "$_extra_pkg" ] || printf '%s\n' "$_extra_pkg"
     }
 
     It 'a py311->py312 flip: installs every py312-* core pkg, sheds every py311-* one'
@@ -191,12 +184,39 @@ Describe 'dep-reconcile.sh'
       The output should equal 'install jq'
     End
 
+    It 'CONTRACT (a): a CE-shaped extra_pkgs entry never enters install (only the per-leg harness installs it)'
+      # DISCRIMINATING RED: the pre-correction implementation put the
+      # extra_pkgs-derived name straight into the install list here (it folded
+      # extra_pkgs into the "needed" set). Given a healthy, correctly
+      # dep-free CE image (installed = core only) and a NEW row that carries
+      # extra_pkgs; Then the plan is EMPTY — nothing is installed and nothing
+      # verifies-missing for it (verify walks this same core-only set).
+      ce_extra_never_installed() {
+        core_only_installed="$(installed_of py311)"
+        pfb_dep_plan py311 '' py311 'textproc/py-charset-normalizer' "$core_only_installed"
+      }
+      When call ce_extra_never_installed
+      The output should equal ''
+    End
+
+    It 'CONTRACT (b): an extra-derived stray is shed once the NEW row drops its origin'
+      # Given the OLD row needed the extra pkg (and a stray is actually
+      # installed) but the NEW row's extra_pkgs dropped it (e.g. upstream now
+      # covers it); Then it moves to the shed list, and nothing else changes.
+      extra_dropped() {
+        old_installed="$(installed_of py311 'py311-charset-normalizer')"
+        pfb_dep_plan py311 'textproc/py-charset-normalizer' py311 '' "$old_installed"
+      }
+      When call extra_dropped
+      The output should equal 'shed py311-charset-normalizer'
+    End
+
     It 'excludes a still-needed extra_pkgs entry from shed (same flavor, unchanged extra)'
-      # Given the box has the extra pkg installed and BOTH rows still carry it;
-      # Then it is in neither list (still needed -> never shed; already
-      # installed -> never queued to install).
+      # Given a stray is installed and BOTH rows still carry its origin; Then
+      # it is in neither list (never installed — extra_pkgs never is; never
+      # shed — its basename was not dropped).
       extra_kept() {
-        old_installed="$(installed_of py311 'textproc/py-charset-normalizer')"
+        old_installed="$(installed_of py311 'py311-charset-normalizer')"
         pfb_dep_plan py311 'textproc/py-charset-normalizer' \
                      py311 'textproc/py-charset-normalizer' \
                      "$old_installed"
@@ -205,27 +225,30 @@ Describe 'dep-reconcile.sh'
       The output should equal ''
     End
 
-    It 'sheds an extra_pkgs entry the NEW row no longer carries'
-      # Given the OLD row needed the extra pkg (and it is installed) but the
-      # NEW row's extra_pkgs dropped it (e.g. upstream now covers it); Then it
-      # moves to the shed list, and nothing else changes.
-      extra_dropped() {
-        old_installed="$(installed_of py311 'textproc/py-charset-normalizer')"
-        pfb_dep_plan py311 'textproc/py-charset-normalizer' py311 '' "$old_installed"
+    It 'CONTRACT (c): a Plus-shaped pair (extra_pkgs=[] both sides) leaves its baked charset-normalizer untouched'
+      # Scenario: Plus's own pfSense repo already carries charset-normalizer
+      # (Netgate-provided, a real RUN_DEPENDS resolution) — the matrix's
+      # extra_pkgs is [] on BOTH rows (docs/misc/pfSense_versions.md). Given
+      # it is installed; Then it is recognised as neither core nor
+      # extra-derived (no basename in either row's extra_pkgs to match) —
+      # neither installed (redundant — already there) nor shed.
+      plus_baked_charset_untouched() {
+        installed="$(installed_of py311 'py311-charset-normalizer')"
+        pfb_dep_plan py311 '' py311 '' "$installed"
       }
-      When call extra_dropped
-      The output should equal 'shed py311-charset-normalizer'
+      When call plus_baked_charset_untouched
+      The output should equal ''
     End
 
-    It 'queues a NEWLY-added extra_pkgs entry for install, never shed'
+    It 'a newly-added extra_pkgs entry is untouched (never installed — the per-leg harness handles it)'
       # Given the OLD row carried no extra pkg (not installed) and the NEW row
-      # adds one; Then it is queued to install, and the shed list stays empty.
+      # adds one; Then the plan is EMPTY — extra_pkgs never enters install.
       extra_added() {
         old_installed="$(installed_of py311)"
         pfb_dep_plan py311 '' py311 'textproc/py-charset-normalizer' "$old_installed"
       }
       When call extra_added
-      The output should equal 'install py311-charset-normalizer'
+      The output should equal ''
     End
   End
 End
