@@ -18,6 +18,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -304,7 +305,7 @@ def test_fetch_verified_sdist_all_mirrors_failing_raises(tmp_path: Path, monkeyp
 
 
 def test_build_wheel_accepts_single_pure_wheel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bdp.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(bdp.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
     wheel_dir = tmp_path / "wheel"
     wheel_dir.mkdir()
     wheel = wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl"
@@ -314,13 +315,13 @@ def test_build_wheel_accepts_single_pure_wheel(tmp_path: Path, monkeypatch: pyte
 
 
 def test_build_wheel_refuses_zero_wheels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bdp.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(bdp.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
     with pytest.raises(bdp.DepPkgError, match="exactly one wheel"):
         bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
 
 
 def test_build_wheel_refuses_multiple_wheels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bdp.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(bdp.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
     wheel_dir = tmp_path / "wheel"
     wheel_dir.mkdir()
     (wheel_dir / "a-1.0-py3-none-any.whl").write_bytes(b"")
@@ -330,12 +331,59 @@ def test_build_wheel_refuses_multiple_wheels(tmp_path: Path, monkeypatch: pytest
 
 
 def test_build_wheel_refuses_platform_wheel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bdp.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(bdp.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
     wheel_dir = tmp_path / "wheel"
     wheel_dir.mkdir()
     (wheel_dir / "charset_normalizer-3.4.4-cp311-cp311-macosx_11_0_arm64.whl").write_bytes(b"")
     with pytest.raises(bdp.DepPkgError, match="not a pure-Python wheel"):
         bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
+
+
+# --------------------------------------------------------------------------- #
+# _pip_python — venv fallback when the interpreter has no pip module
+# (issue #1806: the PFB_BOXES minimal Debian pool ships python3-venv but not
+# pip on /usr/bin/python3; a venv's own bootstrapped pip is always present).
+# --------------------------------------------------------------------------- #
+
+
+def test_pip_python_falls_back_to_venv_when_direct_pip_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        calls.append(cmd)
+        if cmd[1:3] == ["-m", "pip"]:
+            return subprocess.CompletedProcess(cmd, 1)  # no pip module on sys.executable
+        if cmd[1:3] == ["-m", "venv"]:
+            return subprocess.CompletedProcess(cmd, 0)  # venv created fine
+        raise AssertionError(f"unexpected subprocess.run call: {cmd}")
+
+    monkeypatch.setattr(bdp.subprocess, "run", fake_run)
+    python = bdp._pip_python(tmp_path)
+
+    assert python == str(tmp_path / "pip-venv" / "bin" / "python")
+    assert python != sys.executable
+    assert any(c[1:3] == ["-m", "venv"] for c in calls), f"venv path was not exercised: {calls}"
+
+
+def test_pip_python_uses_sys_executable_when_pip_already_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fast path (CI runners): a direct pip probe success skips the venv entirely."""
+    monkeypatch.setattr(bdp.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
+    assert bdp._pip_python(tmp_path) == sys.executable
+
+
+def test_pip_python_raises_when_venv_creation_also_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        if cmd[1:3] == ["-m", "pip"]:
+            return subprocess.CompletedProcess(cmd, 1)
+        if cmd[1:3] == ["-m", "venv"]:
+            raise subprocess.CalledProcessError(1, cmd)
+        raise AssertionError(f"unexpected subprocess.run call: {cmd}")
+
+    monkeypatch.setattr(bdp.subprocess, "run", fake_run)
+    with pytest.raises(bdp.DepPkgError, match="no pip"):
+        bdp._pip_python(tmp_path)
 
 
 # --------------------------------------------------------------------------- #
