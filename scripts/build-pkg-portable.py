@@ -1173,8 +1173,9 @@ def make_manifest(b: Build, *, compact: bool) -> dict:
     return m
 
 
-# The ustar mtime field is 8 octal digits, unsigned — anything outside this range would
-# surface as tarfile's "overflow in number field" from inside the writer.
+# The ustar mtime field holds 11 octal digits plus a terminator, unsigned — anything
+# outside this range surfaces as tarfile's "overflow in number field" from inside the
+# writer, long after the manifest is built.
 _USTAR_MAX_MTIME = 0o77777777777
 
 
@@ -1191,10 +1192,15 @@ def _staged_mtime(f: StagedFile) -> int:
             epoch = int(raw)
         except ValueError:
             raise BuildError(f"SOURCE_DATE_EPOCH must be an integer of seconds, got {raw!r}") from None
-        if not 0 <= epoch <= _USTAR_MAX_MTIME:
-            raise BuildError(f"SOURCE_DATE_EPOCH must be between 0 and {_USTAR_MAX_MTIME}, got {epoch}")
-        return epoch
-    return int(f.src_in_stage.stat().st_mtime)
+        return _checked_mtime(epoch, "SOURCE_DATE_EPOCH")
+    return _checked_mtime(int(f.src_in_stage.stat().st_mtime), f"mtime of {f.install_path}")
+
+
+def _checked_mtime(value: int, what: str) -> int:
+    """Reject an mtime the archive format cannot carry, wherever it came from."""
+    if not 0 <= value <= _USTAR_MAX_MTIME:
+        raise BuildError(f"{what} must be between 0 and {_USTAR_MAX_MTIME}, got {value}")
+    return value
 
 
 def _sha256(path: Path) -> str:
