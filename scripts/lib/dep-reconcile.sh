@@ -141,6 +141,14 @@ pfb_dep_plan() {
 
     printf '%s\n' "$_planp_installed" | while IFS= read -r _planp_pkg; do
         [ -n "$_planp_pkg" ] || continue
+        # CR-3: never shed a package the NEW core needed set still requires --
+        # a dropped extra_pkgs basename can collide with a core package name
+        # (e.g. net/py-maxminddb's basename "maxminddb" collides with the
+        # CORE py<flavor>-maxminddb dependency); the core requirement always
+        # wins over an extra_pkgs-derived shed.
+        if printf '%s\n' "$_planp_new_needed" | grep -qxF "$_planp_pkg"; then
+            continue
+        fi
         printf '%s\n' "$_planp_dropped_basenames" | while IFS= read -r _planp_base; do
             [ -n "$_planp_base" ] || continue
             case "$_planp_pkg" in
