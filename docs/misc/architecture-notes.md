@@ -1045,11 +1045,16 @@ Full design: ADR-39.
   publishes within seconds; additive + isolated (`needs: [release]`), so its failure never breaks
   `release`/`sync-ports-fork`/`attach-pkgs`. The FreeBSD `pkg repo` fidelity path
   (`scripts/build-repo.sh`) is retained as a script only. **extra_pkgs dep .pkgs (issue #1806,
-  e.g. CE's `textproc/py-charset-normalizer`) are not yet part of this real publish flow** —
-  `release.yml`'s `build-pkgs-portable` job builds + uploads them and the release-verification
-  gate (smoke-suite/ui-suite) installs from them, proving the mechanism, but `attach-pkgs`
-  attaching the dep `.pkg` to the GitHub Release AND `pfBlockerNG/pkg`'s `publish.yml` folding
-  it into the live served catalog are a tracked follow-up, not yet wired.
+  e.g. CE's `textproc/py-charset-normalizer`) ARE deliberate release assets** —
+  `release.yml`'s `build-pkgs-portable` job builds + uploads each major's dep .pkg as its own
+  `pfBlockerNG-relpkg-deppkgs-fbsd<major>` artifact; `attach-pkgs`'s existing
+  `pfBlockerNG-relpkg-*` sweep picks it up and attaches it to the GitHub Release alongside the
+  branch `.pkg`s (frozen together — the EOL/route-only story wants this); `publish-release`'s
+  healthcheck counts them explicitly (`EXPECTED_PKGS` = distinct-major count + the total
+  extra_pkgs entries across the build matrix). The remaining follow-up is narrower: the
+  separate `pfBlockerNG/pkg` repo's `publish.yml` folding the attached dep `.pkg` into the live
+  served catalog (via `build-repo-portable.py --dep-pkgs`, already built for this) is not yet
+  wired there.
 - **Generators + bootstrap:** `scripts/build-repo-portable.py` (primary catalog gen),
   `scripts/build-repo.sh` (fallback + the single `--print-conf` conf template),
   `scripts/add-repo.sh` (client bootstrap — channel is a FLAG: no-arg = release repo, `--nightly`

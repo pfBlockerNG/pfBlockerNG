@@ -1025,7 +1025,12 @@ jobs:
         # Each build-pkgs-portable leg uploads its OWN artifact, named
         # pfBlockerNG-relpkg-fbsd<freebsd_major> (issue #1806); merge every
         # leg's artifact into pkgs/ (each holds exactly one .pkg, already
-        # carrying -FreeBSD-<major> in the filename).
+        # carrying -FreeBSD-<major> in the filename). The pattern also sweeps
+        # up each leg's pfBlockerNG-relpkg-deppkgs-fbsd<major> artifact
+        # (issue #1806 B1) -- INTENTIONAL: dep .pkgs (e.g. CE's
+        # py311-charset-normalizer) are deliberate release assets, frozen
+        # alongside the branch .pkgs for the pkg-repo publish + EOL/route-only
+        # story. publish-release's healthcheck counts them (EXPECTED_PKGS).
         uses: actions/download-artifact@v4
         with:
           pattern: pfBlockerNG-relpkg-*
@@ -1086,8 +1091,12 @@ jobs:
       - name: Health-check the draft release is complete
         # Verify completeness BEFORE the irreversible publish. Expected assets: the
         # source archive + exactly one .pkg per build-matrix entry (one per distinct
-        # FreeBSD major, issue #1806). Anything missing → fail, leaving the draft
-        # intact for a resume. Already-published (idempotent re-run) short-circuits OK.
+        # FreeBSD major, issue #1806) PLUS one dep .pkg per extra_pkgs entry across
+        # every (deduped) build-matrix row (issue #1806 B1: attach-pkgs's
+        # pfBlockerNG-relpkg-* sweep also picks up each major's
+        # pfBlockerNG-relpkg-deppkgs-fbsd<major> artifact -- a deliberate release
+        # asset, not a leak). Anything missing → fail, leaving the draft intact for
+        # a resume. Already-published (idempotent re-run) short-circuits OK.
         env:
           GH_TOKEN:     ${{ github.token }}
           TAG:          ${{ needs.release.outputs.tag }}
@@ -1103,7 +1112,10 @@ jobs:
             exit 0
           fi
 
-          EXPECTED_PKGS=$(printf '%s' "$BUILD_MATRIX" | jq 'length')
+          # issue #1806 B1: the distinct-major count PLUS the total number of
+          # extra_pkgs entries across the (deduped) build-matrix rows -- each
+          # dep .pkg is its own release asset (see attach-pkgs's comment).
+          EXPECTED_PKGS=$(printf '%s' "$BUILD_MATRIX" | jq '(length) + ([.[] | (.extra_pkgs // []) | length] | add // 0)')
           PKG_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".pkg"))] | length')
           SRC_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".tar.gz"))] | length')
 
