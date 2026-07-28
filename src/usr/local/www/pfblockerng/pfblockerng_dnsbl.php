@@ -3861,5 +3861,5 @@ events.push(function(){
 
 //]]>
 </script>
-<script src="pfBlockerNG.js" type="text/javascript"></script>
+<script src="pfBlockerNG.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/pfBlockerNG.js')?>" type="text/javascript"></script>
 <?php include('foot.inc');?>

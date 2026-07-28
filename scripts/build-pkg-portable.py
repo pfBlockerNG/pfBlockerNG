@@ -1139,9 +1139,12 @@ def make_manifest(b: Build, *, compact: bool) -> dict:
         m["annotations"] = b.annotations
     if compact:
         return m
-    # `fflags: 0` matches `pkg create` (no file flags set). mtime is the staged
-    # file's install time in real pkg — inherently per-build, so we record 0
-    # (deterministic; install-irrelevant).
+    # `fflags: 0` matches `pkg create` (no file flags set). mtime is the staged file's
+    # own mtime, as real pkg records it: it lands on the installed file, so a constant
+    # would freeze every asset at that instant. Epoch 0 in particular breaks HTTP cache
+    # invalidation for the shipped web assets — `Last-Modified: Thu, 01 Jan 1970` buys a
+    # multi-year heuristic freshness window, and `filemtime()` cache-busters render a
+    # constant `?v=0` for every release (issue #1845).
     m["files"] = {}
     for f in sorted(b.files, key=lambda x: x.install_path):
         digest = _sha256(f.src_in_stage)
@@ -1151,7 +1154,7 @@ def make_manifest(b: Build, *, compact: bool) -> dict:
             "gname": "wheel",
             "perm": f.perm,
             "fflags": 0,
-            "mtime": 0,
+            "mtime": _staged_mtime(f),
         }
     if b.directories:
         m["directories"] = {
@@ -1161,6 +1164,11 @@ def make_manifest(b: Build, *, compact: bool) -> dict:
     if b.scripts:
         m["scripts"] = b.scripts
     return m
+
+
+def _staged_mtime(f: StagedFile) -> int:
+    """The staged file's mtime, whole seconds — what pkg records and installs."""
+    return int(f.src_in_stage.stat().st_mtime)
 
 
 def _sha256(path: Path) -> str:
@@ -1191,7 +1199,7 @@ def write_pkg(b: Build, out_path: Path, compression: str) -> None:
             ti.mode = int(f.perm, 8)
             ti.uid = ti.gid = 0
             ti.uname, ti.gname = "root", "wheel"
-            ti.mtime = 0
+            ti.mtime = _staged_mtime(f)
             ti.type = tarfile.REGTYPE
             tf.addfile(ti, io.BytesIO(data))
     tar_bytes = raw.getvalue()
