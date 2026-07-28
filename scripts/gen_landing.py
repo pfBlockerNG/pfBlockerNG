@@ -42,9 +42,10 @@ SOURCE_REPO_URL = "https://github.com/pfBlockerNG/pfBlockerNG"
 CATALOG_META = ("packagesite.pkg", "data.pkg")
 
 # Placeholder catalog-path passed to add-repo.sh --print-conf for the manual-conf
-# snippet on the landing page.  The rc.d hook resolves the box's real varver/arch
-# at boot; a hand-written conf must substitute a concrete value (e.g. ce-2.8/amd64).
-_CONF_PLACEHOLDER_PATH = "<varver>/<arch>"
+# snippet on the landing page.  The rc.d hook resolves the box's real varver at
+# boot (arch-less; issue #1806 NO_ARCH); a hand-written conf must substitute a
+# concrete value (e.g. ce-2.8).
+_CONF_PLACEHOLDER_PATH = "<varver>"
 
 
 def channel_of(name: str) -> str:
@@ -313,10 +314,9 @@ def _manual_conf_details(conf_fn: Callable[[str], str], repo: str) -> str:
     """
     return (
         "<details><summary>Manual conf (advanced)</summary>"
-        '<p class="blurb">The bootstrap auto-detects these; in a hand-written conf, replace '
-        "<code>&lt;varver&gt;</code> (the edition-version: <code>ce-2.8</code>, <code>plus-26.03</code>, &hellip;) and "
-        "<code>&lt;arch&gt;</code> (the CPU architecture: <code>amd64</code> or <code>aarch64</code>) "
-        "with your box's values.</p>"
+        '<p class="blurb">The bootstrap auto-detects this; in a hand-written conf, replace '
+        "<code>&lt;varver&gt;</code> (the edition-version: <code>ce-2.8</code>, <code>plus-26.03</code>, &hellip;) "
+        "with your box's value.</p>"
         f"{_copyable(_esc(conf_fn(repo)))}</details>"
     )
 
@@ -365,6 +365,24 @@ def _nightly_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], st
     )
 
 
+def _is_wildcard_abi(abi: str) -> bool:
+    """True if ``abi`` is a NO_ARCH package's CPU-wildcarded ABI (e.g. "FreeBSD:16:*",
+    issue #1806) — probed live against a real Netgate noarch package."""
+    return isinstance(abi, str) and abi.endswith(":*")
+
+
+def _abi_matches(a: str, b: str) -> bool:
+    """True if two ABI strings denote the same catalog placement: exact string
+    equality, OR either side is a NO_ARCH package's wildcarded ABI sharing the
+    other's OS+major (the CPU/arch segment is never compared in that case;
+    issue #1806 — mirrors build-repo-portable.py's ``_pkg_matches_abi``)."""
+    if a == b:
+        return True
+    if not (_is_wildcard_abi(a) or _is_wildcard_abi(b)):
+        return False
+    return a.split(":")[:2] == b.split(":")[:2]
+
+
 def matrix_index(matrix: list[dict] | None) -> dict[str, list[dict]]:
     """Map each ABI to its matrix entries (edition / pfSense version / php / py).
 
@@ -397,11 +415,19 @@ def _join_matrix(rows: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     one row per match (the same .pkg installs on each); an ABI with no matrix entry
     yields a single ("Other") row with a blank pfSense version + manifest-derived
     php/py, so nothing published is ever hidden. Input order is preserved.
+
+    A NO_ARCH package's manifest ABI is CPU-wildcarded (issue #1806, e.g.
+    "FreeBSD:16:*") — the exact-string index never hits it (a matrix row's own
+    ABI is always concrete), so a wildcarded row falls back to an OS+major scan
+    across every matrix entry (``_abi_matches``), joining EVERY row of that
+    major instead of dropping to "Other".
     """
     idx = matrix_index(matrix)
     out: list[tuple[str, dict]] = []
     for r in rows:
         entries = idx.get(r["abi"], [])
+        if not entries and _is_wildcard_abi(r["abi"]):
+            entries = [e for e in (matrix or []) if _abi_matches(e.get("abi", ""), r["abi"])]
         if entries:
             for e in entries:
                 row = dict(r)
@@ -618,7 +644,9 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
             continue
         seen.add(dedup_key)
 
-        pool = [p for p in varver_pkgs.get(varver, []) if p["abi"] == abi]
+        # Matched via _abi_matches (OS+major, issue #1806): the served .pkg may be
+        # NO_ARCH/wildcarded even when the matrix still records a concrete ABI.
+        pool = [p for p in varver_pkgs.get(varver, []) if _abi_matches(p["abi"], abi)]
         if not pool:
             continue  # no .pkg served for this (varver, abi) — skip silently
 
@@ -845,7 +873,7 @@ def _conf_via_addrepo(addrepo: str, base: str, channel: str) -> str:
     # --nightly picks the nightly repo. Anything other than "nightly" => the release conf.
     # --catalog-path is required by --print-conf; we pass a literal placeholder here
     # because the landing page shows a generic snippet — the rc.d hook resolves the
-    # box's real varver/arch at boot (see _CONF_PLACEHOLDER_PATH).
+    # box's real varver at boot (see _CONF_PLACEHOLDER_PATH).
     extra = ["--nightly"] if channel == "nightly" else []
     out = subprocess.run(
         ["sh", addrepo, "--print-conf", "--base-url", base, "--catalog-path", _CONF_PLACEHOLDER_PATH, *extra],
