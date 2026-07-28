@@ -89,10 +89,10 @@ on:
         default: "192.0.2.99"
         type: string
 
+# Least-privilege default; the refresh job elevates for its publish + the
+# activation PR (review: CWE-276).
 permissions:
-  contents: write        # push tracker/* activation-PR branches (NEVER ci-metadata itself)
-  packages: write
-  pull-requests: write   # open the activation PR
+  contents: read
 
 jobs:
   # ── Resolve refresh matrix (CE + Plus) ─────────────────────────────────────
@@ -201,6 +201,10 @@ jobs:
     if: ${{ needs.plan.outputs.count != '0' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: write        # push tracker/* activation-PR branches (NEVER ci-metadata itself)
+      packages: write        # publish the upgraded image to GHCR
+      pull-requests: write   # open the activation PR
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
