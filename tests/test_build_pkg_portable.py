@@ -18,6 +18,7 @@ import json
 import lzma
 import sys
 import tarfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -1100,3 +1101,50 @@ def test_php_injects_variant_guard_via_cli(tmp_path: Path) -> None:
     assert deps.get("python311", {}).get("origin") == "lang/python311"  # Python guard, real origin
     assert "php85" not in deps  # the Plus discriminator stays absent
     assert "py311" not in deps  # the flavor token is NOT a dep name (would be unsatisfiable)
+
+
+def test_packaged_files_carry_the_build_mtime_not_epoch_zero(tmp_path: Path) -> None:
+    """Payload entries record the staged file's real mtime, in the manifest and the archive.
+
+    Scenario: an installed asset must be able to invalidate a browser cache
+      Given a package whose payload files are recorded with mtime 0
+      Then every installed file reports 1970 on the appliance
+      And `filemtime()`-based cache-busting renders a constant `?v=0` for every release,
+          while nginx answers with `Last-Modified: Thu, 01 Jan 1970` -- which browsers
+          turn into a multi-year heuristic freshness window
+      So a pre-upgrade copy of a shipped script survives the upgrade indefinitely and
+          runs against the new markup (issue #1845)
+
+    Recording the staged file's mtime is also what `pkg create` itself does, so this
+    closes the one payload field the portable builder deliberately diverged on.
+    """
+    ports, portdir = _make_classic_port(tmp_path)
+    out = tmp_path / "out"
+    # Floor for "the build clock": the staging copy happens after this point, so every
+    # recorded mtime must be at or after it. Pins a real clock read rather than any
+    # constant -- a hardcoded non-zero value would fail here too.
+    before_build = int(time.time())
+    rc = bpp.main(
+        [
+            "--ports", str(ports),
+            "--port-dir", str(portdir),
+            "--abi", "FreeBSD:15:amd64",
+            "--py-flavor", "py311",
+            "--compression", "xz",
+            "--out", str(out),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+
+    full, _compact, tf = _read_pkg(out / "testpkg-1.0_2.pkg")
+    payload = [m for m in tf.getmembers() if m.name.startswith("/")]
+    assert payload, "no payload members in the archive -- nothing to assert on"
+
+    stale = [(m.name, m.mtime) for m in payload if m.mtime < before_build]
+    assert not stale, f"archive entries carry an mtime older than the build (>= {before_build} expected): {stale}"
+
+    manifest_mtimes = {path: entry["mtime"] for path, entry in full["files"].items()}
+    mismatched = [
+        (m.name, m.mtime, manifest_mtimes.get(m.name)) for m in payload if manifest_mtimes.get(m.name) != m.mtime
+    ]
+    assert not mismatched, f"+MANIFEST mtime disagrees with the archive entry (name, archive, manifest): {mismatched}"
