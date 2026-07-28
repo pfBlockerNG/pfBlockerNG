@@ -107,7 +107,9 @@ Notes:
   (no FreeBSD host needed), and `build-repo-portable.py --dep-pkgs` folds the
   result into the release/nightly catalogs of every matching FreeBSD major. The
   release-verification CI gate (release.yml's smoke-suite/ui-suite) proves this
-  end to end against the built artifacts; wiring the REAL published catalog —
-  attaching the dep `.pkg` to the GitHub Release and having the separate
-  `pfBlockerNG/pkg` repo's `publish.yml` carry it into the live served tree — is
-  a tracked follow-up, not yet done.
+  end to end against the built artifacts, and the dep `.pkg` IS a deliberate
+  GitHub Release asset — `attach-pkgs`'s existing `pfBlockerNG-relpkg-*` sweep
+  attaches it alongside the branch `.pkg`s, and `publish-release`'s healthcheck
+  counts it explicitly. The remaining follow-up is narrower: the separate
+  `pfBlockerNG/pkg` repo's `publish.yml` folding the attached dep `.pkg` into
+  the live served catalog is not yet wired there.

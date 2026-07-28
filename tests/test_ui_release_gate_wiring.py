@@ -770,3 +770,32 @@ def test_healthcheck_nonempty_matrix_with_matching_pkgs_still_passes(tmp_path: P
         assets_json='[{"name":"pfBlockerNG-src.tar.gz"},{"name":"pfBlockerNG-relpkg-ce-2.8-amd64.pkg"}]',
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_healthcheck_counts_extra_pkgs_dep_assets_too(tmp_path: Path) -> None:
+    """issue #1806 B1 (delta review finding): attach-pkgs's pfBlockerNG-relpkg-*
+    sweep ALSO attaches each major's dep .pkg artifact
+    (pfBlockerNG-relpkg-deppkgs-fbsd<major>) -- a deliberate release asset, not
+    a leak. EXPECTED_PKGS must count those too, or a release with any major's
+    extra_pkgs non-empty (CE today) fails this healthcheck and gets stuck as a
+    draft even though every expected asset IS present (dry-run CI never
+    exercises attach/publish, so no workflow run catches this pre-merge).
+
+    Two build-matrix rows: major 15 with one extra_pkgs entry, major 16 with
+    none. Draft carries exactly 2 branch .pkgs + 1 dep .pkg (the CE dep) + the
+    source archive -- a fully complete, correct draft. Must pass.
+    """
+    completed = _run_healthcheck(
+        tmp_path,
+        build_matrix=(
+            '[{"freebsd_major":"15","extra_pkgs":["textproc/py-charset-normalizer"]},'
+            '{"freebsd_major":"16","extra_pkgs":[]}]'
+        ),
+        assets_json=(
+            '[{"name":"pfBlockerNG-src.tar.gz"},'
+            '{"name":"pfBlockerNG-relpkg-fbsd15.pkg"},'
+            '{"name":"pfBlockerNG-relpkg-fbsd16.pkg"},'
+            '{"name":"py311-charset-normalizer-3.4.4.pkg"}]'
+        ),
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
