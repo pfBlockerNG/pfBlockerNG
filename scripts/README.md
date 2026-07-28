@@ -48,10 +48,10 @@ for the ROUTE matrix (see below).
   "pfsense_version": "2.8",          # pfSense Major.Minor family (CE: Y.Z; Plus: YY.MM)
   "channel":         "CE",           # CE | Plus
   "freebsd_version": "15.0-RELEASE", # full FreeBSD version string (build env)
-  "freebsd_major":   "15",           # FreeBSD major (ABI dedup key; artifact suffix)
+  "freebsd_major":   "15",           # FreeBSD major (BUILD-matrix dedup key)
   "php_version":     "8.3",          # PHP version (pinned so USES=php dep names match)
   "py_flavor":       "py311",        # Python flavor for build-pkg-linux.yml
-  "arch":            "amd64",        # OPTIONAL; ABI arch (amd64 | aarch64). Omit => amd64. aarch64 = Netgate ARM appliances, Plus-only (issue #199)
+  "extra_pkgs":      [],             # OPTIONAL; port origins to build+fold in as deps (issue #1806, e.g. ["textproc/py-charset-normalizer"] for CE). Omit => []
   "status":          "active",       # beta | active (legacy alias: GA) — the reconcile flip PR writes "active"
   "ci":              true,           # include in the smoke CI fan-out (CE + Plus; Plus from a private licensed image, ADR-24)
   "role":            "build"         # OPTIONAL; "build" (default, absent => build) | "route-only"
@@ -61,30 +61,35 @@ for the ROUTE matrix (see below).
 The `role` field controls how the catalog generator treats an entry:
 
 - **Absent or `"build"`** (today's behaviour; back-compat): the entry is built, smoke-tested,
-  and its `release/<varver>/<arch>/` catalog is regenerated from the fresh build each run. An
+  and its `release/<varver>/` catalog is regenerated from the fresh build each run. An
   absent `role` is always treated as `"build"` — no existing entry needs to change.
 - **`"route-only"`**: the entry's release catalog is regenerated from its **last frozen `.pkg`**
-  (a GitHub Release asset) and served at `release/<varver>/<arch>/` — but it is **not** rebuilt,
+  (a GitHub Release asset) and served at `release/<varver>/` — but it is **not** rebuilt,
   not included in `--print-build` / `--print-ci` / `--print-test`, and not smoke-tested. This
   is the EOL state: a pfSense version that has left the build matrix still gets its route served
   so existing boxes can `pkg install`/`upgrade`. A truly dropped entry (no route at all) is
   simply absent from the JSON.
 
-`--print-route` emits the **ROUTE matrix** — the BUILD matrix UNION `role=route-only` entries.
-This is every entry with an actively served `release/<varver>/<arch>/` catalog. The publish
-pipeline uses `--print-route` minus `--print-build` to enumerate the `route-only` entries whose
-frozen `.pkg` it needs to feed to the catalog generator.
+`--print-route` emits the **ROUTE matrix** — build-role-eligible entries (one row per version,
+never deduped) UNION `role=route-only` entries. This is every entry with an actively served
+`release/<varver>/` catalog. The publish pipeline uses `--print-route` minus `--print-build`
+to enumerate the `route-only` entries whose frozen `.pkg` it needs to feed to the catalog
+generator.
 
 > **`ci-metadata` schema note:** the `role` field is applied by a PR against the `ci-metadata`
 > orphan branch (edit `supported-versions.json` there, same as adding/dropping a version). No
 > real version is currently `route-only` — the field is added to the schema so the machinery is
 > in place when the min supported pfSense first advances (ADR-27 Part 2).
 
-The reader resolves `arch` to `amd64` when omitted (or empty), so a pre-#199 matrix
-builds exactly as before. The build path keys on `(freebsd_major, arch)`, so an
-`aarch64` entry produces its own `FreeBSD:N:aarch64` `.pkg` alongside the amd64 one.
-ARM is **Plus-only** (pfSense CE is amd64-only). Live-VM smoke stays amd64 — no ARM
-image yet, so an `aarch64` entry should set `ci: false` (build + distribute only).
+**There is no `arch` field (issue #1806 — supersedes issue #199's ARM/aarch64 plan).** Every
+`pfSense-pkg-pfBlockerNG` port is `NO_ARCH`: one wildcard-ABI `.pkg` build serves every CPU
+arch of a FreeBSD major, so the catalog is arch-less and the BUILD matrix (`--print-build`)
+dedupes to **one row per distinct `freebsd_major`** — `php_version`/`py_flavor` must agree
+across every version sharing a major (a mismatch is a hard reader error), and `extra_pkgs`
+unions across the merged rows. The CI matrix (`--print-ci`) and ROUTE matrix (`--print-route`)
+stay **one row per version** (never deduped — a smoke/UI leg needs every version's own
+identity). A stray `arch` key on an old row is tolerated-ignored, never resurrected as a
+default.
 
 ### Lifecycle policy
 
@@ -123,10 +128,11 @@ pfBlockerNG is a `NO_BUILD` port (nothing compiles) and `pkg add` checks a depen
 
 ### Where `.pkg` artifacts land
 
-A tag push (`vX.Y.Z[-devel]`) triggers `release.yml`, which reads `build_matrix` and
-builds one `.pkg` per entry against its `(freebsd_version, php_version)` pair. Artifacts
-are attached to the **GitHub Release**, deduplicated by FreeBSD major × arch — one `.pkg`
-per distinct `(major, arch)` covers every pfSense version on that major. A build failure surfaces in CI
+A tag push (`vX.Y.Z[-devel]`) triggers `release.yml`, which reads `build_matrix` — already
+deduplicated by `read-version-matrix.sh` to one row per distinct FreeBSD major (issue #1806) —
+and builds one `.pkg` per row against its `(freebsd_version, php_version)` pair. Artifacts
+are attached to the **GitHub Release** named `pfBlockerNG-relpkg-fbsd<major>`; one `.pkg`
+per distinct major covers every pfSense edition/version on it. A build failure surfaces in CI
 but must **not** block the `ports-pr` step (the ports PR is the real distribution path).
 
 The `sync-ports-fork` job in `release.yml` also updates `PORTREVISION` on the ports fork using
@@ -376,20 +382,28 @@ For the smoke matrix, `install-from-repo.sh` is enough and faster. Build the rea
 
 ## ABI: what actually matters for the `.pkg`
 
-pfBlockerNG ships no compiled files, but the port (`net/pfSense-pkg-pfBlockerNG-devel`)
-**run-depends on `net/libmaxminddb`** (a compiled C lib, `mmdblookup`) and does **not**
-set `NO_ARCH`, so the package is ABI-tagged `FreeBSD:<major>:<arch>` (e.g.
-`FreeBSD:15:amd64`).
+pfBlockerNG ships no compiled files of its own — every `net/pfSense-pkg-pfBlockerNG*`
+port sets `NO_ARCH` (issue #1806). A `RUN_DEPENDS` on a compiled C lib (`net/libmaxminddb`,
+`mmdblookup`) doesn't change that: `NO_ARCH` describes THIS port's own payload
+(scripts/PHP/Python, no arch-specific files), and `pkg` resolves that dependency
+separately against the box's own arch. A real package's manifest ABI is therefore
+CPU-wildcarded — `FreeBSD:<major>:*` (e.g. `FreeBSD:15:*`) — never a concrete
+`FreeBSD:<major>:<arch>`.
 
-- `pkg` gates installs on the **OS major**. A `FreeBSD:15` package on a `FreeBSD:16`
-  system is **refused by default**; `pkg add -f` forces it — functionally safe here
-  (no binaries of ours; the smoke image bakes pfBlockerNG's run-deps incl.
-  `libmaxminddb`, so `pkg add` resolves them locally/offline).
-- So **build one `.pkg` per distinct FreeBSD major**, on a FreeBSD VM pinned to that
-  major. One build covers every pfSense version on that major. Rebuild only on a
+- `pkg` gates installs on the **OS major**; the wildcarded CPU segment matches every
+  arch of that major. A `FreeBSD:15` package on a `FreeBSD:16` system is **refused by
+  default**; `pkg add -f` forces it — functionally safe here (no binaries of ours; the
+  smoke image bakes pfBlockerNG's run-deps incl. `libmaxminddb`, so `pkg add` resolves
+  them locally/offline).
+- So **build one `.pkg` per distinct FreeBSD major** — `build-pkg-portable.py --abi
+  FreeBSD:<major>:<cpu>` on ANY host (no FreeBSD VM needed; the portable Linux builder
+  is the sole builder). The `<cpu>` segment is an INERT placeholder for a NO_ARCH port
+  (the builder wildcards the stamp regardless of what's given); one build covers every
+  arch AND every pfSense edition/version on that major. Rebuild only on a
   **FreeBSD-major jump** (rare; coincides with raising the minimum supported version).
-- `NO_ARCH` would wildcard the **arch**, not the OS major — it does not make the
-  package cross-major.
+- The self-hosted catalog (ADR-17) is **arch-less**: `release/<varver>/` holds the
+  catalog directly (no arch subdirectory) — one varver directory serves every arch of
+  its FreeBSD major.
 - pfSense **Plus** artifacts build fine without a Plus license (you only need the
   right FreeBSD-major build env); Plus is also **smoke-tested in CI** from a private,
   licensed GHCR image (ADR-24).
@@ -408,13 +422,14 @@ The scheduled version-tracking + release-automation design is its own ADR.
 ## Catalog generator — release retention
 
 `build-repo-portable.py --build-matrix` generates the self-hosted `pkg` repository tree
-(ADR-17). By default it keeps only the **latest** release of each channel per
-`(version, arch)`, plus the newest package of each major/minor line (line pins, below) —
-the window itself is identical to the pre-ADR-27 behaviour. Three flags control retention:
+(ADR-17; arch-less catalogs, issue #1806). By default it keeps only the **latest** release
+of each channel per varver, plus the newest package of each major/minor line (line pins,
+below) — the window itself is identical to the pre-ADR-27 behaviour. Three flags control
+retention:
 
 | Flag | Default | Purpose |
 | ---- | ------- | ------- |
-| `--release-keep-devel N` | `1` (latest-only) | Retain the N newest devel releases per `(version, arch)` in the `release/` catalog. |
+| `--release-keep-devel N` | `1` (latest-only) | Retain the N newest devel releases per varver in the `release/` catalog. |
 | `--release-keep-stable M` | `1` (latest-only) | Same for the stable channel. |
 | `--release-extra-pkgs PATH` | (none) | Pre-built older-release `.pkg` to fold into the release pool alongside the fresh build (repeatable — pass one per file). The generator prunes the merged pool to `N` / `M` after folding. |
 

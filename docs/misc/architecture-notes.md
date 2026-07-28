@@ -924,15 +924,30 @@ pfb_resolve_utf8_ctype() {
 **Load-bearing invariant. Do not "simplify" it away** (it keeps getting wrongly re-derived). The
 self-hosted catalog (ADR-17/20) is keyed by a **varver** — the pfSense edition+version slug
 `ce-2.8` / `plus-26.03` (`catalog_name_from_version()` in `scripts/build-repo-portable.py`) —
-**never** by the pkg `${ABI}` (`FreeBSD:<major>:<arch>`).
+**never** by the pkg `${ABI}`.
 
-**Why (the trap).** pkg's `${ABI}` carries only the FreeBSD major + arch. A pfSense `${ABI}` is
-**NOT in 1:1 correspondence** with a pfSense version or its package-build inputs (the `php<XY>` /
-`py3<XY>` flavors). Multiple pfSense versions/editions can share one FreeBSD major — hence one
-`${ABI}` — while shipping **different** PHP/Python. So `FreeBSD:16:amd64` does not tell you whether
-the box needs the php8.5 build or some later/other php build; an `${ABI}`-keyed conf would serve the
-wrong package. The varver encodes exactly the `(edition, version) → (php, py)` mapping that `${ABI}`
-cannot.
+**2026-07-28 update (issue #1806): `arch` is retired — the invariant gets STRONGER, not weaker.**
+Every `pfSense-pkg-pfBlockerNG` port is `NO_ARCH`, so a real package's manifest ABI is
+CPU-wildcarded (`FreeBSD:<major>:*`) and the catalog is arch-less (`release/<varver>/` directly,
+no arch subdirectory — one varver directory serves every arch of its FreeBSD major). This does
+**not** change the varver-keying conclusion below — a *box's own* concrete ABI (`pkg config abi`
+→ `FreeBSD:<major>:<arch>`) still carries only the FreeBSD major (the arch segment was never the
+load-bearing part of the trap; see "Why" next), so the same "multiple editions can share one major"
+collision still applies, one field narrower than before. The BUILD matrix
+(`scripts/read-version-matrix.sh --print-build`) now dedupes to **one row per freebsd_major**
+(hard-erroring if two versions sharing a major disagree on `php_version`/`py_flavor`) purely as a
+**build-efficiency** optimization (one wildcard-ABI `.pkg` build serves every edition/version on
+that major) — it changes nothing about how the catalog is *keyed* or *served*: the CI matrix and
+ROUTE matrix stay one row per version, and every served catalog path is still `release/<varver>/`,
+never `release/<freebsd_major>/`.
+
+**Why (the trap).** A box's own `${ABI}` (`pkg config abi`) carries only the FreeBSD major (+ its
+own concrete arch, irrelevant to our NO_ARCH package). It is **NOT in 1:1 correspondence** with a
+pfSense version or its package-build inputs (the `php<XY>` / `py3<XY>` flavors). Multiple pfSense
+versions/editions can share one FreeBSD major — hence one `${ABI}` major — while shipping
+**different** PHP/Python. So `FreeBSD:16` does not tell you whether the box needs the php8.5 build
+or some later/other php build; an `${ABI}`-keyed conf would serve the wrong package. The varver
+encodes exactly the `(edition, version) → (php, py)` mapping that `${ABI}` cannot.
 
 **Proof (live, 2026-06, Plus 26.03.1).** `pkg config abi` → `FreeBSD:16:amd64`, but **Netgate's own
 repo URL** is
@@ -943,9 +958,11 @@ version-pinned conf on each upgrade (server-side) instead.
 
 **Do NOT conclude "the current matrix is 1:1, so `${ABI}` suffices."** That 1:1 (CE→FreeBSD15,
 Plus→FreeBSD16) is **incidental and not guaranteed** — CE and Plus have shared FreeBSD bases before,
-and the supported window can hold two versions on one major with different deps at any time. A
-fail-closed CI guard may reject a matrix that introduces such a collision, but the design **stays
-varver-keyed regardless**.
+and the supported window can hold two versions on one major with different deps at any time. That
+fail-closed CI guard now EXISTS: `read-version-matrix.sh`'s BUILD-matrix dedup hard-errors when two
+entries share a `freebsd_major` with disagreeing `php_version`/`py_flavor` (issue #1806) — but the
+design **stays varver-keyed regardless**; the guard only rejects an *unresolvable* collision, it
+does not make `${ABI}` (or `freebsd_major`) a valid catalog key.
 
 **Upgrade consequence (verified — libpkg + `pfSense-upgrade`).** Because the conf is version-pinned it
 cannot auto-follow a version-crossing upgrade the way an `${ABI}` template would, and there is **no
@@ -959,8 +976,8 @@ one-pkg-run lag. The boot-time generator hook below closes that lag.
 
 **`rc.d` generator hook (`scripts/rc.d/pfblockerng_repo_generate.sh`).** Installed on-box by
 `add-repo.sh` into `/usr/local/etc/rc.d/`; runs at every boot. It is a pure conf **regenerator**:
-for each of our conf files that exists, it detects the box's `<varver>/<arch>` and
-**unconditionally overwrites** the conf with the canonical body (channel-correct URL + a marker
+for each of our conf files that exists, it detects the box's `<varver>` (arch-less, issue #1806)
+and **unconditionally overwrites** the conf with the canonical body (channel-correct URL + a marker
 comment). **No `pkg` call, no network, no snapshot, no reconcile, no parse-and-compare** —
 re-deriving the conf from scratch is strictly simpler than diffing and patching one in place, and
 never wrong. Key properties:
@@ -973,13 +990,15 @@ never wrong. Key properties:
   by the time the box first reaches for a catalog. Running this early is safe precisely because it
   is local-file-only (no network, no daemon).
 - **Folded detection (KISS):** edition = "`/etc/product_label` contains `Plus`" → `plus`, else
-  `ce`; version = major.minor of `/etc/version`; arch = the leaf of `pkg config abi`. This mirrors
-  `catalog_name_from_version()` in `scripts/build-repo-portable.py`; there is **no** separate
-  `/lib` detection helper (it is folded into the one self-contained hook file).
+  `ce`; version = major.minor of `/etc/version`. This mirrors `catalog_name_from_version()` in
+  `scripts/build-repo-portable.py`; there is **no** separate `/lib` detection helper (it is folded
+  into the one self-contained hook file). **issue #1806:** the catalog is arch-less, so the hook no
+  longer calls `pkg config abi` at all (it used to read the arch leaf; there is no arch leaf to
+  read any more) — one fewer moving part, and it no longer needs `pkg` on the PATH.
 - **Byte-identical output:** the conf body the hook writes is byte-for-byte identical to
   `add-repo.sh --print-conf`, `build-repo.sh --print-conf`, and `build-repo-portable.py
   --print-conf` (drift-pinned by `tests/test_add_repo_conf.py` across all four producers).
-- **Detection-failure safety:** if version or arch cannot be resolved the hook leaves the existing
+- **Detection-failure safety:** if the version cannot be resolved the hook leaves the existing
   conf **unchanged** (warns) rather than writing a malformed URL.
 - **Always `exit 0`:** every code path ends in `exit 0`. A non-zero exit would wedge the rc.d
   chain; this hook must never do that.
@@ -1015,8 +1034,8 @@ Full design: ADR-39.
   repo** (its `.github/workflows/publish.yml`), NOT this repo. Each run it builds the current
   **devel** `.pkg` by running this repo's own `scripts/build-pkg-portable.py` against a checkout
   of the source (a reusable workflow can't be reused cross-repo — it runs in the caller's context
-  — so it runs the *script*), folds in **every** Release `.pkg`, regenerates the per-ABI catalog
-  with `scripts/build-repo-portable.py`, and deploys to its **own** GitHub Pages via same-repo
+  — so it runs the *script*), folds in **every** Release `.pkg`, regenerates the arch-less
+  per-varver catalog (issue #1806) with `scripts/build-repo-portable.py`, and deploys to its **own** GitHub Pages via same-repo
   OIDC `actions/deploy-pages` → `pfblockerng.github.io/pkg`. **No deploy key, no cross-repo
   secret** — everything it reads from here is public. Triggers: daily `schedule` +
   `workflow_dispatch`. This repo's `release.yml` `repo-publish` job just fires `gh workflow run
@@ -1042,9 +1061,13 @@ Full design: ADR-39.
   hardcoded CE/Plus: `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
   reads `SMOKE_MATRIX_JSON` (smoke-single.yml injects `read-version-matrix.sh --print-build` at job start,
   egress open), falls back to running that script, and SKIPs the topology cases when neither is
-  available. Per-leg `SMOKE_ABI`/`SMOKE_PHP_VERSION`/`SMOKE_PY_FLAVOR` select within it; adding a
-  pfSense version needs no edit here. (`scripts/install-from-repo.sh` likewise derives its
-  `py3xx-*` deps from the matrix via the box's ABI.) Dispatch: `gh workflow run smoke-single.yml -f
+  available. Per-leg `SMOKE_ABI`/`SMOKE_PHP_VERSION`/`SMOKE_PY_FLAVOR` select within it (SMOKE_ABI
+  stays a CONCRETE guest ABI); when it matches more than one edition sharing a `freebsd_major`
+  (issue #1806 — no `arch` left to disambiguate by), `SMOKE_IMAGE_REF` (already exported by
+  smoke-single.yml) breaks the tie by image name, and `_own_entry()` refuses loudly rather than
+  silently picking one when it can't. Adding a pfSense version needs no edit here.
+  (`scripts/install-from-repo.sh` likewise derives its `py3xx-*` deps from the matrix, matching the
+  box's FreeBSD major.) Dispatch: `gh workflow run smoke-single.yml -f
   pytest_marker=repo` (or `repo-install.yml` once it lands on `devel`). The gated
   `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the real `pfblockerng.github.io`
   URL — post-merge (a new `workflow_dispatch` workflow is only dispatchable from the default
