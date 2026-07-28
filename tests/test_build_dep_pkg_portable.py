@@ -1,0 +1,583 @@
+"""Tests for scripts/build-dep-pkg-portable.py — the port-driven dependency
+package builder (issue #1806 step A).
+
+Brand-new code (no pre-existing behaviour to be wrong), so no red-vs-existing
+proof is required — but every assertion here is real (fails on a regression),
+per testing.md principle 3. The fixture Makefile/distinfo/pkg-descr mirror the
+REAL textproc/py-charset-normalizer port (captured 2026-07-28 from the
+pfBlockerNG/FreeBSD-ports fork, commit 3a57c58d82c8's parent). Network (sdist
+fetch, `pip wheel`) is mocked everywhere here — see the module docstring in
+build-dep-pkg-portable.py and the handoff for the one real, network-using,
+manually-executed end-to-end run against the actual ports checkout.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.util
+import io
+import json
+import sys
+import tarfile
+import zipfile
+from pathlib import Path
+from typing import Any
+
+import pfb_pkg
+import pytest
+
+# --------------------------------------------------------------------------- #
+# Load the hyphen-named tool as a module (same convention as
+# tests/test_build_repo_portable.py:49-54 — register in sys.modules BEFORE
+# exec_module, or the tool's own dataclass-based import of build-pkg-portable.py
+# breaks).
+# --------------------------------------------------------------------------- #
+
+_TOOL = Path(__file__).resolve().parent.parent / "scripts" / "build-dep-pkg-portable.py"
+_spec = importlib.util.spec_from_file_location("build_dep_pkg_portable", _TOOL)
+assert _spec is not None and _spec.loader is not None
+bdp = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = bdp
+_spec.loader.exec_module(bdp)
+
+
+# --------------------------------------------------------------------------- #
+# Fixture port dir — the REAL textproc/py-charset-normalizer Makefile/distinfo/
+# pkg-descr shape, with two knobs (`use_python`, `no_arch_line`) for the
+# refusal tests.
+# --------------------------------------------------------------------------- #
+
+
+def _port_makefile(*, use_python: str = "autoplist concurrent pep517", no_arch_line: str = "NO_ARCH=\tyes") -> str:
+    return (
+        "PORTNAME=\tcharset-normalizer\n"
+        "PORTVERSION=\t3.4.4\n"
+        "CATEGORIES=\ttextproc python\n"
+        "MASTER_SITES=\tPYPI \\\n"
+        "\t\thttps://github.com/jawah/charset_normalizer/releases/download/${PORTVERSION}/\n"
+        "PKGNAMEPREFIX=\t${PYTHON_PKGNAMEPREFIX}\n"
+        "DISTNAME=\tcharset_normalizer-${PORTVERSION}\n"
+        "\n"
+        "MAINTAINER=\tsunpoet@FreeBSD.org\n"
+        "COMMENT=\tReal First Universal Charset Detector\n"
+        "WWW=\t\thttps://charset-normalizer.readthedocs.io/en/latest/ \\\n"
+        "\t\thttps://github.com/Ousret/charset_normalizer\n"
+        "\n"
+        "LICENSE=\tMIT\n"
+        "LICENSE_FILE=\t${WRKSRC}/LICENSE\n"
+        "\n"
+        "BUILD_DEPENDS=\t${PYTHON_PKGNAMEPREFIX}setuptools>=61:devel/py-setuptools@${PY_FLAVOR} \\\n"
+        "\t\t${PYTHON_PKGNAMEPREFIX}wheel>=0:devel/py-wheel@${PY_FLAVOR}\n"
+        "\n"
+        "USES=\t\tpython\n"
+        f"USE_PYTHON=\t{use_python}\n"
+        "\n"
+        f"{no_arch_line}\n"
+        "\n"
+        ".include <bsd.port.mk>\n"
+    )
+
+
+_REAL_DISTINFO = (
+    "TIMESTAMP = 1759774719\n"
+    "SHA256 (charset_normalizer-3.4.4.tar.gz) = 94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a\n"
+    "SIZE (charset_normalizer-3.4.4.tar.gz) = 129418\n"
+)
+
+_REAL_PKG_DESCR = (
+    "A library that helps you read text from an unknown charset encoding. Motivated\n"
+    "by chardet, I'm trying to resolve the issue by taking a new approach. All IANA\n"
+    "character set names for which the Python core library provides codecs are\n"
+    "supported.\n"
+)
+
+
+def _write_port(
+    ports_root: Path,
+    *,
+    use_python: str = "autoplist concurrent pep517",
+    no_arch_line: str = "NO_ARCH=\tyes",
+    with_descr: bool = True,
+) -> Path:
+    port_dir = ports_root / "textproc" / "py-charset-normalizer"
+    port_dir.mkdir(parents=True)
+    (port_dir / "Makefile").write_text(_port_makefile(use_python=use_python, no_arch_line=no_arch_line))
+    (port_dir / "distinfo").write_text(_REAL_DISTINFO)
+    if with_descr:
+        (port_dir / "pkg-descr").write_text(_REAL_PKG_DESCR)
+    return port_dir
+
+
+def _write_wheel(path: Path, *, files: dict[str, bytes], entry_points: str | None) -> None:
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in files.items():
+            zf.writestr(name, data)
+        if entry_points is not None:
+            zf.writestr("mypkg-1.0.dist-info/entry_points.txt", entry_points)
+
+
+def _read_full_manifest(pkg_path: Path) -> dict:
+    """Read the +MANIFEST (file listing + perms) of a .pkg written by write_pkg."""
+    tar_bytes = pfb_pkg.zstd_decompress(pkg_path.read_bytes())
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
+        member = tf.extractfile("+MANIFEST")
+        assert member is not None
+        return json.loads(member.read())
+
+
+# --------------------------------------------------------------------------- #
+# Makefile parsing — every extracted field, and the two hard refusals.
+# --------------------------------------------------------------------------- #
+
+
+def test_read_port_extracts_facts(tmp_path: Path) -> None:
+    port_dir = _write_port(tmp_path)
+    facts = bdp.read_port(port_dir)
+    assert facts.portname == "charset-normalizer"
+    assert facts.portversion == "3.4.4"
+    assert facts.distname == "charset_normalizer-3.4.4"
+    assert facts.comment == "Real First Universal Charset Detector"
+    assert facts.maintainer == "sunpoet@FreeBSD.org"
+    # WWW carries the FIRST url only, even though the port lists two.
+    assert facts.www == "https://charset-normalizer.readthedocs.io/en/latest/"
+    assert facts.license == "MIT"
+    assert facts.categories == ["textproc", "python"]
+    assert facts.master_sites == [
+        "PYPI",
+        "https://github.com/jawah/charset_normalizer/releases/download/3.4.4/",
+    ]
+
+
+def test_read_port_refuses_missing_no_arch(tmp_path: Path) -> None:
+    port_dir = _write_port(tmp_path, no_arch_line="")
+    with pytest.raises(bdp.DepPkgError, match="NO_ARCH"):
+        bdp.read_port(port_dir)
+
+
+def test_read_port_refuses_no_arch_explicitly_no(tmp_path: Path) -> None:
+    port_dir = _write_port(tmp_path, no_arch_line="NO_ARCH=\tno")
+    with pytest.raises(bdp.DepPkgError, match="NO_ARCH"):
+        bdp.read_port(port_dir)
+
+
+def test_read_port_refuses_non_pep517(tmp_path: Path) -> None:
+    port_dir = _write_port(tmp_path, use_python="autoplist concurrent distutils")
+    with pytest.raises(bdp.DepPkgError, match="pep517"):
+        bdp.read_port(port_dir)
+
+
+def test_read_port_requires_makefile(tmp_path: Path) -> None:
+    missing = tmp_path / "textproc" / "does-not-exist"
+    with pytest.raises(bdp.DepPkgError, match="Makefile"):
+        bdp.read_port(missing)
+
+
+# --------------------------------------------------------------------------- #
+# distinfo parsing
+# --------------------------------------------------------------------------- #
+
+
+def test_read_distinfo_parses_sha256_and_size(tmp_path: Path) -> None:
+    port_dir = _write_port(tmp_path)
+    sha, size = bdp.read_distinfo(port_dir, "charset_normalizer-3.4.4.tar.gz")
+    assert sha == "94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a"
+    assert size == 129418
+
+
+def test_read_distinfo_missing_entry_raises(tmp_path: Path) -> None:
+    port_dir = _write_port(tmp_path)
+    with pytest.raises(bdp.DepPkgError, match="distinfo"):
+        bdp.read_distinfo(port_dir, "nonexistent-9.9.9.tar.gz")
+
+
+def test_read_descr_uses_pkg_descr_when_present(tmp_path: Path) -> None:
+    port_dir = _write_port(tmp_path)
+    assert bdp.read_descr(port_dir, "fallback").startswith("A library that helps you read text")
+
+
+def test_read_descr_falls_back_to_comment_when_missing(tmp_path: Path) -> None:
+    port_dir = _write_port(tmp_path, with_descr=False)
+    assert bdp.read_descr(port_dir, "fallback comment") == "fallback comment"
+
+
+# --------------------------------------------------------------------------- #
+# URL derivation (MASTER_SITES -> candidate download URLs)
+# --------------------------------------------------------------------------- #
+
+
+def _demo_port(**overrides: object) -> Any:
+    base: dict[str, Any] = dict(
+        portname="charset-normalizer",
+        portversion="3.4.4",
+        distname="charset_normalizer-3.4.4",
+        comment="x",
+        maintainer="",
+        www="",
+        license="MIT",
+        categories=["textproc", "python"],
+        master_sites=["PYPI", "https://github.com/jawah/charset_normalizer/releases/download/3.4.4/"],
+    )
+    base.update(overrides)
+    return bdp.PortFacts(**base)  # type: ignore[arg-type]
+
+
+def test_candidate_urls_pypi_redirector_then_literal_fallback() -> None:
+    port = _demo_port()
+    urls = bdp.candidate_urls(port, "charset_normalizer-3.4.4.tar.gz")
+    assert urls == [
+        "https://pypi.io/packages/source/c/charset_normalizer/charset_normalizer-3.4.4.tar.gz",
+        "https://github.com/jawah/charset_normalizer/releases/download/3.4.4/charset_normalizer-3.4.4.tar.gz",
+    ]
+
+
+def test_candidate_urls_literal_only_site_has_no_pypi_entry() -> None:
+    port = _demo_port(master_sites=["https://example.com/dist/"])
+    urls = bdp.candidate_urls(port, "charset_normalizer-3.4.4.tar.gz")
+    assert urls == ["https://example.com/dist/charset_normalizer-3.4.4.tar.gz"]
+
+
+# --------------------------------------------------------------------------- #
+# Source acquisition — verify-or-refuse, mismatch never retried, connection
+# failure DOES fall through to the next mirror.
+# --------------------------------------------------------------------------- #
+
+
+def test_fetch_verified_sdist_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"a fake sdist tarball payload"
+    sha = hashlib.sha256(data).hexdigest()
+    monkeypatch.setattr(bdp, "_urlopen", lambda url: io.BytesIO(data))
+    got = bdp.fetch_verified_sdist(_demo_port(), tmp_path, sha256=sha, size=len(data))
+    assert got.read_bytes() == data
+
+
+def test_fetch_verified_sdist_mismatch_refuses_without_trying_other_mirrors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checksum/size MISMATCH is a hard refusal — it must NOT silently fall
+    through to the next MASTER_SITES candidate (that would mask a poisoned or
+    wrong-version mirror). Only the connection-failure branch falls through."""
+    good = b"correct payload"
+    bad = b"WRONG payload!!"
+    calls: list[str] = []
+
+    def fake_urlopen(url: str) -> io.BytesIO:
+        calls.append(url)
+        return io.BytesIO(bad)
+
+    monkeypatch.setattr(bdp, "_urlopen", fake_urlopen)
+    port = _demo_port(master_sites=["PYPI", "https://example.com/fallback/"])
+    with pytest.raises(bdp.DepPkgError, match="does not match distinfo"):
+        bdp.fetch_verified_sdist(port, tmp_path, sha256=hashlib.sha256(good).hexdigest(), size=len(good))
+    assert len(calls) == 1, "a checksum mismatch must refuse immediately, never retry another mirror"
+
+
+def test_fetch_verified_sdist_connection_failure_falls_through_to_next_mirror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    good = b"correct payload"
+    calls: list[str] = []
+
+    def fake_urlopen(url: str) -> io.BytesIO:
+        calls.append(url)
+        if len(calls) == 1:
+            raise OSError("connection refused")
+        return io.BytesIO(good)
+
+    monkeypatch.setattr(bdp, "_urlopen", fake_urlopen)
+    port = _demo_port(master_sites=["PYPI", "https://example.com/fallback/"])
+    got = bdp.fetch_verified_sdist(port, tmp_path, sha256=hashlib.sha256(good).hexdigest(), size=len(good))
+    assert got.read_bytes() == good
+    assert len(calls) == 2
+
+
+def test_fetch_verified_sdist_all_mirrors_failing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bdp, "_urlopen", lambda url: (_ for _ in ()).throw(OSError("unreachable")))
+    port = _demo_port(master_sites=["PYPI"])
+    with pytest.raises(bdp.DepPkgError, match="failed to fetch"):
+        bdp.fetch_verified_sdist(port, tmp_path, sha256="0" * 64, size=1)
+
+
+# --------------------------------------------------------------------------- #
+# Wheel build — exactly one PURE wheel, or refuse.
+# --------------------------------------------------------------------------- #
+
+
+def test_build_wheel_accepts_single_pure_wheel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bdp.subprocess, "run", lambda *a, **k: None)
+    wheel_dir = tmp_path / "wheel"
+    wheel_dir.mkdir()
+    wheel = wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl"
+    wheel.write_bytes(b"")
+    got = bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
+    assert got == wheel
+
+
+def test_build_wheel_refuses_zero_wheels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bdp.subprocess, "run", lambda *a, **k: None)
+    with pytest.raises(bdp.DepPkgError, match="exactly one wheel"):
+        bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
+
+
+def test_build_wheel_refuses_multiple_wheels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bdp.subprocess, "run", lambda *a, **k: None)
+    wheel_dir = tmp_path / "wheel"
+    wheel_dir.mkdir()
+    (wheel_dir / "a-1.0-py3-none-any.whl").write_bytes(b"")
+    (wheel_dir / "b-1.0-py3-none-any.whl").write_bytes(b"")
+    with pytest.raises(bdp.DepPkgError, match="exactly one wheel"):
+        bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
+
+
+def test_build_wheel_refuses_platform_wheel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bdp.subprocess, "run", lambda *a, **k: None)
+    wheel_dir = tmp_path / "wheel"
+    wheel_dir.mkdir()
+    (wheel_dir / "charset_normalizer-3.4.4-cp311-cp311-macosx_11_0_arm64.whl").write_bytes(b"")
+    with pytest.raises(bdp.DepPkgError, match="not a pure-Python wheel"):
+        bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
+
+
+# --------------------------------------------------------------------------- #
+# [console_scripts] entry_points.txt parsing
+# --------------------------------------------------------------------------- #
+
+
+def test_parse_console_scripts_basic() -> None:
+    text = (
+        "[console_scripts]\n"
+        "normalizer = charset_normalizer.cli:cli_detect\n"
+        "\n"
+        "[some.other.group]\n"
+        "plugin = charset_normalizer.plugins:register\n"
+    )
+    assert bdp.parse_console_scripts(text) == {"normalizer": ("charset_normalizer.cli", "cli_detect")}
+
+
+def test_parse_console_scripts_ignores_comments_and_blank_lines() -> None:
+    text = "# a comment\n\n[console_scripts]\n; also a comment\nnormalizer = charset_normalizer.cli:cli_detect\n"
+    assert bdp.parse_console_scripts(text) == {"normalizer": ("charset_normalizer.cli", "cli_detect")}
+
+
+def test_parse_console_scripts_empty_when_no_section() -> None:
+    assert bdp.parse_console_scripts("[some.other.group]\nx = y:z\n") == {}
+
+
+def test_parse_console_scripts_unparseable_line_raises() -> None:
+    with pytest.raises(bdp.DepPkgError, match="unparseable"):
+        bdp.parse_console_scripts("[console_scripts]\nthis line has no colon target\n")
+
+
+# --------------------------------------------------------------------------- #
+# --py-flavor -> python3.NN dotted version
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("flavor", "dotted"),
+    [("py311", "3.11"), ("py310", "3.10"), ("py39", "3.9")],
+)
+def test_python_dotted_version_derives_from_flavor(flavor: str, dotted: str) -> None:
+    assert bdp.python_dotted_version(flavor) == dotted
+
+
+def test_python_dotted_version_refuses_unknown_flavor() -> None:
+    with pytest.raises(bdp.DepPkgError, match="py-flavor"):
+        bdp.python_dotted_version("cp311")
+
+
+# --------------------------------------------------------------------------- #
+# Staging: wheel -> site-packages files + console-script stub(s)
+# --------------------------------------------------------------------------- #
+
+
+def test_stage_wheel_lays_out_site_packages_and_console_script(tmp_path: Path) -> None:
+    wheel = tmp_path / "mypkg-1.0-py3-none-any.whl"
+    _write_wheel(
+        wheel,
+        files={"mypkg/__init__.py": b"X = 1\n", "mypkg-1.0.dist-info/METADATA": b"Metadata-Version: 2.1\n"},
+        entry_points="[console_scripts]\nmycli = mypkg.cli:main\n",
+    )
+    stage = tmp_path / "stage"
+    site_files, script_files = bdp.stage_wheel(wheel, stage, "3.11")
+
+    site_pkg_init = stage / "usr/local/lib/python3.11/site-packages/mypkg/__init__.py"
+    assert site_pkg_init in site_files
+    assert site_pkg_init.read_bytes() == b"X = 1\n"
+    dist_info_meta = stage / "usr/local/lib/python3.11/site-packages/mypkg-1.0.dist-info/METADATA"
+    assert dist_info_meta in site_files
+
+    script = stage / "usr/local/bin/mycli"
+    assert script_files == [script]
+    # Compare against the SAME stub template the production code fills in — a
+    # single source of truth, and it never re-embeds the appliance interpreter
+    # path as a literal in test code (scripts/check_appliance_python.py scans
+    # tests/ for exactly that; the production template lives in scripts/,
+    # which is intentionally out of its scope).
+    expected = bdp._SCRIPT_STUB.format(py_dotted="3.11", module="mypkg.cli", func="main")
+    assert script.read_text() == expected
+    assert expected.count("\n") == 8, "the console-script stub must be the standard 8-line launcher"
+    assert (script.stat().st_mode & 0o777) == 0o555
+
+
+def test_stage_wheel_without_entry_points_yields_no_scripts(tmp_path: Path) -> None:
+    wheel = tmp_path / "mypkg-1.0-py3-none-any.whl"
+    _write_wheel(wheel, files={"mypkg/__init__.py": b"X = 1\n"}, entry_points=None)
+    stage = tmp_path / "stage"
+    site_files, script_files = bdp.stage_wheel(wheel, stage, "3.11")
+    assert script_files == []
+    assert len(site_files) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Full orchestration: manifest correctness of the emitted .pkg, read back via
+# pfb_pkg.read_compact_manifest (the SAME contract tests/test_pfb_pkg.py pins).
+# Network (fetch + `pip wheel`) is mocked; the staging/manifest/write_pkg path
+# is REAL.
+# --------------------------------------------------------------------------- #
+
+
+def _mock_network(monkeypatch: pytest.MonkeyPatch, *, console_scripts: str | None) -> None:
+    def fake_fetch(port: Any, dest_dir: Path, *, sha256: str, size: int) -> Path:
+        dest = dest_dir / f"{port.distname}.tar.gz"
+        dest.write_bytes(b"mocked sdist bytes -- fetch is not exercised here")
+        return dest
+
+    def fake_build_wheel(sdist: Path, work_dir: Path) -> Path:
+        wheel_dir = work_dir / "wheel"
+        wheel_dir.mkdir(parents=True, exist_ok=True)
+        wheel = wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl"
+        _write_wheel(
+            wheel,
+            files={
+                "charset_normalizer/__init__.py": b"__version__ = '3.4.4'\n",
+                "charset_normalizer-3.4.4.dist-info/METADATA": b"Metadata-Version: 2.1\n",
+            },
+            entry_points=console_scripts,
+        )
+        return wheel
+
+    monkeypatch.setattr(bdp, "fetch_verified_sdist", fake_fetch)
+    monkeypatch.setattr(bdp, "build_wheel", fake_build_wheel)
+
+
+def _build_args(ports_root: Path, out_dir: Path) -> argparse.Namespace:
+    return argparse.Namespace(
+        ports=str(ports_root),
+        port="textproc/py-charset-normalizer",
+        py_flavor="py311",
+        freebsd_major="15",
+        python_dep_version="3.11.13",
+        out_dir=str(out_dir),
+        compression="zstd",
+    )
+
+
+def test_build_dep_pkg_emits_correct_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts="[console_scripts]\nnormalizer = charset_normalizer.cli:cli_detect\n")
+
+    out_dir = tmp_path / "out"
+    out_path = bdp.build_dep_pkg(_build_args(ports_root, out_dir))
+
+    # Canonical <name>-<version>.pkg output filename.
+    assert out_path == out_dir / "py311-charset-normalizer-3.4.4.pkg"
+    assert out_path.is_file()
+
+    manifest = pfb_pkg.read_compact_manifest(out_path)
+    assert manifest["name"] == "py311-charset-normalizer"
+    assert manifest["version"] == "3.4.4"
+    assert manifest["origin"] == "textproc/py-charset-normalizer"
+    assert manifest["abi"] == "FreeBSD:15:*"
+    assert manifest["arch"] == "freebsd:15:*"
+    assert manifest["categories"] == ["textproc", "python"]
+    assert manifest["licenses"] == ["MIT"]
+    assert manifest["deps"] == {"python311": {"origin": "lang/python311", "version": "3.11.13"}}
+
+    # File listing + perms live in the FULL +MANIFEST, not the compact one.
+    full = _read_full_manifest(out_path)
+    files = full["files"]
+    assert "/usr/local/lib/python3.11/site-packages/charset_normalizer/__init__.py" in files
+    assert "/usr/local/bin/normalizer" in files
+    assert files["/usr/local/bin/normalizer"]["perm"] == "0555"
+    assert files["/usr/local/lib/python3.11/site-packages/charset_normalizer/__init__.py"]["perm"] == "0644"
+
+
+def test_build_dep_pkg_no_console_scripts_still_emits_valid_pkg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pure-library dependency (no entry points) still produces a valid .pkg
+    with no /usr/local/bin files — the console-script stage is optional."""
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+
+    out_dir = tmp_path / "out"
+    out_path = bdp.build_dep_pkg(_build_args(ports_root, out_dir))
+
+    full = _read_full_manifest(out_path)
+    assert not any(p.startswith("/usr/local/bin/") for p in full["files"])
+
+
+def test_build_dep_pkg_derives_portname_from_flavor_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """portname = PKGNAMEPREFIX (from --py-flavor) + PORTNAME — never hardcoded."""
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+
+    out_dir = tmp_path / "out"
+    args = _build_args(ports_root, out_dir)
+    args.py_flavor = "py310"
+    args.python_dep_version = "3.10.9"
+    out_path = bdp.build_dep_pkg(args)
+
+    assert out_path.name == "py310-charset-normalizer-3.4.4.pkg"
+    manifest = pfb_pkg.read_compact_manifest(out_path)
+    assert manifest["name"] == "py310-charset-normalizer"
+    assert manifest["deps"] == {"python310": {"origin": "lang/python310", "version": "3.10.9"}}
+
+
+# --------------------------------------------------------------------------- #
+# CLI wiring
+# --------------------------------------------------------------------------- #
+
+
+def test_main_prints_out_path_as_last_stdout_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+
+    out_dir = tmp_path / "out"
+    rc = bdp.main(
+        [
+            "--ports", str(ports_root),
+            "--port", "textproc/py-charset-normalizer",
+            "--py-flavor", "py311",
+            "--freebsd-major", "15",
+            "--python-dep-version", "3.11.13",
+            "--out-dir", str(out_dir),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    last_line = capsys.readouterr().out.strip().splitlines()[-1]
+    assert last_line == str(out_dir / "py311-charset-normalizer-3.4.4.pkg")
+
+
+def test_main_returns_1_and_reports_refusal_on_stderr(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root, no_arch_line="")  # missing NO_ARCH -> refusal, no network involved
+    rc = bdp.main(
+        [
+            "--ports", str(ports_root),
+            "--port", "textproc/py-charset-normalizer",
+            "--py-flavor", "py311",
+            "--freebsd-major", "15",
+            "--python-dep-version", "3.11.13",
+            "--out-dir", str(tmp_path / "out"),
+        ]
+    )  # fmt: skip
+    assert rc == 1
+    assert "NO_ARCH" in capsys.readouterr().err
