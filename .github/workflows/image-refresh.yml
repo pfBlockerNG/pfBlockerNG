@@ -397,6 +397,9 @@ jobs:
           # would swap the JOB's tree to the ci-metadata ref and break the
           # non-blocking smoke step that runs after this one (review CR2).
           WT=$(mktemp -d)
+          # Reap the worktree even when a git op below fails (set -e would
+          # otherwise skip the cleanup line).
+          trap 'git worktree remove --force "$WT" >/dev/null 2>&1 || true' EXIT
           git worktree add --force -B "$BR" "$WT" origin/ci-metadata
           cp "$NEWM" "$WT/supported-versions.json"
           git -C "$WT" add supported-versions.json
