@@ -286,3 +286,31 @@ Evidence in `RESULTS/05_Results.txt` (and per-phase RESULTS):
 - The Plus leg cannot pass without per-test special-casing that diverges from CE
   semantics — that is a product finding, not a harness patch; stop and file issues.
 - Any §2.2 contract item fails after Phase 3 (pre-flip).
+
+## 8. Post-merge amendment (2026-07-28 — issue #1806)
+
+The `arch` field this ADR's matrix schema assumed (§2.2 "carrying its resolved `arch`") is
+**retired**. Every `pfSense-pkg-pfBlockerNG` port is `NO_ARCH` (issue #1806, superseding the
+issue #199 ARM/aarch64 plan this ADR's schema left room for): a real package's manifest ABI is
+CPU-wildcarded (`FreeBSD:<major>:*`), so `supported-versions.json` entries no longer carry an
+`arch` field at all — a stray one on an old row is tolerated-ignored, never resurrected as a
+default. This does not touch this ADR's CE+Plus fan-out decision, the CI matrix shape (still one
+row per version, `image_name`/`mac` resolution unchanged), or the Plus identity/redaction design
+(§2.7) — those are unaffected. What changed:
+
+1. **The BUILD matrix (`--print-build`) now dedupes to one row per distinct `freebsd_major`.**
+   One wildcard-ABI `.pkg` build serves every arch AND every edition/version sharing a major, so
+   the release-artifact fan-out (`release.yml`) collapses from one leg per (variant, version) to
+   one leg per major, named `pfBlockerNG-relpkg-fbsd<major>`. The CI matrix this ADR defines
+   stays **one row per version** (never deduped) — a smoke leg still boots one VM per pfSense
+   version, exactly as this ADR specifies.
+2. **A new `extra_pkgs` field** (array of port origins) lets an entry declare a RUN_DEPENDS its
+   own edition's upstream repo doesn't carry (e.g. CE's `textproc/py-charset-normalizer`, absent
+   from Netgate's CE mirror but present in Plus's). Orthogonal to this ADR's CE/Plus CI design.
+3. **`tests/smoke/_matrix.py`'s `_own_entry()` gained a `SMOKE_IMAGE_REF`-based disambiguator.**
+   With `arch` gone, two editions sharing a `freebsd_major` (a real shape now, not just this
+   ADR's §1 transition-window note) can both match a `SMOKE_ABI` lookup; the topology now breaks
+   the tie by image name and refuses loudly rather than silently picking one when it can't.
+
+See `docs/misc/architecture-notes.md` "Self-hosted pkg distribution — ABI is NOT 1:1..." for the
+full design and `scripts/README.md` "Supported-version matrix" for the current schema.

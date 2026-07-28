@@ -45,8 +45,12 @@ entry — no new shipped file, no extra deploy wiring.
    **`ci-metadata` orphan branch** via a PR against `ci-metadata`. Single source of truth for
    supported versions + their `(freebsd_version, php_version)` build pair; workflows read it at
    runtime via `scripts/read-version-matrix.sh` + `.github/actions/read-version-matrix/` (see
-   `scripts/README.md`). Build + CI: every `ci: true` entry — **CE and Plus** (ADR-24) — gets
-   `.pkg` builds **and** live-VM smoke. Plus runs from a **PRIVATE, licensed** GHCR image
+   `scripts/README.md`). **No `arch` field** (issue #1806 — every port is `NO_ARCH`); if the new
+   entry shares a `freebsd_major` with an existing one, its `php_version`/`py_flavor` MUST match
+   (the BUILD matrix dedupes by major and hard-errors on a mismatch) and add `extra_pkgs` only
+   for a dependency this edition's own upstream repo doesn't carry (e.g. CE's
+   `textproc/py-charset-normalizer`). Build + CI: every `ci: true` entry — **CE and Plus**
+   (ADR-24) — gets `.pkg` builds **and** live-VM smoke. Plus runs from a **PRIVATE, licensed** GHCR image
    (`pfsense-plus`); its VM identity (NIC MAC + SMBIOS uuid, keying the Netgate Device ID) comes
    from the `SMOKE_PLUS_MAC`/`SMOKE_PLUS_SMBIOS_UUID` (+ optional `SMOKE_PLUS_NDI`) secrets —
    **never** the matrix — and the harness redacts it from diagnostics. Adding the entry + letting

@@ -39,6 +39,14 @@ Observed on a CE **2.8.1** box; 2.8.0 shares the same base toolchain.
 > (`scripts/read-version-matrix.sh`). `scripts/check_version_literals.py`
 > (pre-commit + CI) enforces this; escape a genuine one-off with an inline
 > `# version-literal-ok: <reason>` comment.
+>
+> **`arch` is retired from the matrix (issue #1806).** Every
+> `pfSense-pkg-pfBlockerNG` port is `NO_ARCH`, so one wildcard-ABI `.pkg`
+> build serves every CPU arch of a FreeBSD major — `supported-versions.json`
+> entries no longer carry an `arch` field at all (a stray one on an old row
+> is tolerated-ignored, never resurrected as a default). The BUILD matrix
+> (`read-version-matrix.sh --print-build`) dedupes to one row per distinct
+> `freebsd_major` and gains `extra_pkgs` — see below.
 
 ### pfBlockerNG runtime dependencies (port `RUN_DEPENDS`)
 
@@ -47,12 +55,14 @@ smoke image **bakes** them so the harness `pkg add` of the branch `.pkg` resolve
 them from the local pkg db **offline** (see `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`
 §3). A missing dep → `pkg add` "Missing dependency" → bad image, re-bake.
 
-These are the port's explicit `RUN_DEPENDS` (9 packages), verified against
-`net/pfSense-pkg-pfBlockerNG-devel/Makefile`. To bake them onto an image, run
+These are the port's explicit `RUN_DEPENDS` (10 packages, issue #1806 — fixes a
+pre-existing drift against the port Makefile: this table had stopped at 9),
+verified against `net/pfSense-pkg-pfBlockerNG-devel/Makefile`. To bake them
+onto an image, run
 [`scripts/misc/install_deps_CE_2.8.sh`](../../scripts/misc/install_deps_CE_2.8.sh)
 on the box (as root):
 
-> **The built `.pkg` records 12 dependencies, not 9.** Besides these 9,
+> **The built `.pkg` records 13 dependencies, not 10.** Besides these 10,
 > `make package` records the three that `USES=php` (`USE_PHP=intl`) and
 > `USES=python` inject: `php83` (`lang/php83`), `php83-intl` (`devel/php83-intl`)
 > and `python311` (`lang/python311`) on 2.8.x. They are *not* literal
@@ -72,6 +82,7 @@ on the box (as root):
 | `net-mgmt/grepcidr` | `bin/grepcidr` | CIDR matching on the IP path |
 | `net-mgmt/iprange` | `bin/iprange` | IP-range aggregation on the IP path |
 | `textproc/gnugrep` | `bin/ggrep` | GNU grep (vs base BSD grep) for the list-processing pipeline |
+| `textproc/py-charset-normalizer` (`py311-charset-normalizer`) | — | Character-encoding detection (issue #1806) — see the CE-only note below |
 
 Notes:
 
@@ -85,3 +96,13 @@ Notes:
   but the built `.pkg` still depends on `php83` + `php83-intl` + `python311`
   because `USES=php`/`USES=python` inject them (see the note above). Unbound is a
   base component and is not a package dependency at all.
+- **`py311-charset-normalizer` is CE-only from OUR repo (issue #1806).** Netgate's
+  own pfSense CE package repo does not carry it (they build it for Plus only), so
+  `pkg install pfSense-pkg-pfBlockerNG` on a stock CE box cannot resolve that
+  RUN_DEPENDS from Netgate's mirror. Our self-hosted pkg repo (ADR-17) builds and
+  serves it itself: `supported-versions.json`'s CE entry carries
+  `extra_pkgs: ["textproc/py-charset-normalizer"]` (Plus's entry carries
+  `extra_pkgs: []` — Netgate already ships it there), `scripts/build-dep-pkg-portable.py`
+  builds a NO_ARCH `.pkg` for it straight from the FreeBSD-ports port definition
+  (no FreeBSD host needed), and `build-repo-portable.py --dep-pkgs` folds the
+  result into the release/nightly catalogs of every matching FreeBSD major.
