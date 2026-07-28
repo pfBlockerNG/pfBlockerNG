@@ -1640,6 +1640,14 @@ if ($alert_summary) {
 					'ipasn'		=> 20);
 	}
 
+	// issue #1814 follow-up: BSD cut/sort/uniq (the pfSense/FreeBSD guest's
+	// userland) ABORT with "Illegal byte sequence" on an invalid-UTF-8 byte
+	// when the process locale is UTF-8 (pfSense's default) -- silently losing
+	// EVERY row in the whole stat/chart panel, not just the one bad row.
+	// LC_ALL=C forces byte-safe processing; the `export` form (not a leading
+	// `VAR=x cmd`, which only binds the first pipeline member) is required so
+	// every stage of the exec() pipeline sees it.
+	$lc_bytes	= 'LC_ALL=C; export LC_ALL; ';
 	$su_cmd		= "sort | uniq -c";
 	$grep_cmd	= "{$pfb['grep']} -v";
 	$sss_cmd	= "sort | uniq -c | {$pfb['sed']} 's/^ *//' | sort -nr";
@@ -1709,59 +1717,59 @@ if ($alert_summary) {
 					// ISO date/time has 1 space token (not the old 3-token
 					// 'M j H:i:s'); the day bucket is the date field alone.
 					// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
-					exec("{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
 					$stats = array_reverse($stats);
 					break;
 				case 'dnsbldatehr':
 					// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
-					exec("{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1 | sort | uniq -c | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1 | sort | uniq -c | sort -nr 2>&1", $stats);
 					break;
 				case 'dnsbldatehrmin':
 					// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
-					exec("{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1,2 | sort | uniq -c | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1,2 | sort | uniq -c | sort -nr 2>&1", $stats);
 					break;
 				case 'dnsblchart':
 				case 'replychart':
 				case 'ipchart':
-					exec("echo 'edate,ecount' > /usr/local/www/pfblockerng/chart_stats.csv");
-					exec("{$cut_cmd} {$alert_log} | cut -d ':' -f1 | uniq -c | {$chart_cmd} 2>&1");
+					exec("{$lc_bytes}echo 'edate,ecount' > /usr/local/www/pfblockerng/chart_stats.csv");
+					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | cut -d ':' -f1 | uniq -c | {$chart_cmd} 2>&1");
 					break;
 				case 'ipsrcipin':
-					exec("{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
 					break;
 				case 'ipsrcipout':
-					exec("{$cut_cmd},13,14 {$alert_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd},13,14 {$alert_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
  					break;
 				case 'ipdstipin':
-					exec("{$cut_cmd},13,14 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd},13,14 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
 					break;
 				case 'ipdstipout':
-					exec("{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
 					break;
 				case 'dnsbltld':
 				case 'replytld':
-					exec("{$cut_cmd} {$alert_log} | awk -F. 'NF>1' | rev | cut -d '.' -f1 | rev | sort | uniq -c | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | awk -F. 'NF>1' | rev | cut -d '.' -f1 | rev | sort | uniq -c | sort -nr 2>&1", $stats);
 					break;
 				case 'replytld2':
-					exec("{$cut_cmd} {$alert_log} | rev | cut -d '.' -f1,2 | awk -F. 'NF>1' | rev | sort | uniq -c | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | rev | cut -d '.' -f1,2 | awk -F. 'NF>1' | rev | sort | uniq -c | sort -nr 2>&1", $stats);
 					break;
 				case 'replytld3':
-					exec("{$cut_cmd} {$alert_log} | rev | cut -d '.' -f1,2,3 | awk -F. 'NF>2' | rev | sort | uniq -c | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | rev | cut -d '.' -f1,2,3 | awk -F. 'NF>2' | rev | sort | uniq -c | sort -nr 2>&1", $stats);
 					break;
 				case 'ipsrcport':
-					exec("{$cut_cmd} {$alert_log} | {$su_cmd} | {$pfb['awk']} -F ' ' '\$2 <= 1024 || \$2 ~ /[a-zA-Z]/' | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$su_cmd} | {$pfb['awk']} -F ' ' '\$2 <= 1024 || \$2 ~ /[a-zA-Z]/' | sort -nr 2>&1", $stats);
 					break;
 				case 'replyttl':
-					exec("{$cut_cmd} {$alert_log} | {$pfb['grep']} -v ',cache,' | {$su_cmd} | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$pfb['grep']} -v ',cache,' | {$su_cmd} | sort -nr 2>&1", $stats);
 					break;
 				case 'dnsbldomain':
-					exec("{$cut_cmd},6 {$alert_log} | {$su_cmd} | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd},6 {$alert_log} | {$su_cmd} | sort -nr 2>&1", $stats);
 					break;
 				case 'dnsblevald':
-					exec("{$cut_cmd},6 {$alert_log} | {$pfb['grep']} 'TLD' | {$su_cmd} | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd},6 {$alert_log} | {$pfb['grep']} 'TLD' | {$su_cmd} | sort -nr 2>&1", $stats);
 					break;
 				case 'replysrcipd':
-					exec("{$cut_cmd},8 {$alert_log} | {$su_cmd} | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd},8 {$alert_log} | {$su_cmd} | sort -nr 2>&1", $stats);
 					break;
 				case 'ipasn':
 					// issue #1369 (ADR-38 Amendment 3): no back-compat for log entries --
@@ -1772,10 +1780,10 @@ if ($alert_summary) {
 					// gate on the exact new field count before extracting, so a legacy/
 					// malformed row is skipped silently instead of polluting the Top ASN
 					// count with blob noise.
-					exec("{$pfb['awk']} -F',' 'NF == 23' {$alert_log} | {$cut_cmd} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$pfb['awk']} -F',' 'NF == 23' {$alert_log} | {$cut_cmd} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
 					break;
 				default:
-					exec("{$cut_cmd} {$alert_log} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
+					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
 					break;
 			}
 
@@ -1815,7 +1823,7 @@ if ($alert_summary) {
 			}
 
 			if ($stat_type == 'dnsblchart' || $stat_type == 'replychart' || $stat_type == 'ipchart') {
-				exec("echo 'edate,ecount' > /usr/local/www/pfblockerng/chart_stats.csv");
+				exec("{$lc_bytes}echo 'edate,ecount' > /usr/local/www/pfblockerng/chart_stats.csv");
 			}
 		}
 	}
