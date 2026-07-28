@@ -619,8 +619,10 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     # Group pkgs by path prefix release/<varver>/, so each EOL varver's pool is isolated.
     varver_pkgs: dict[str, list[dict]] = {}
     for p in pkgs:
-        # rel format: release/<varver>/<arch>/name.pkg (always forward-slash, os.path.relpath
-        # normalises to the OS separator, so normalise here too).
+        # rel format: release/<varver>/name.pkg — arch-less (issue #1806: NO_ARCH
+        # packages, one varver directory serves every arch of its FreeBSD major).
+        # Always forward-slash; os.path.relpath normalises to the OS separator,
+        # so normalise here too.
         rel = p["rel"].replace(os.sep, "/")
         parts = rel.split("/")
         if len(parts) >= 2 and parts[0] == "release":

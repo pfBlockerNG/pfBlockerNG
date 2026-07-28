@@ -194,6 +194,28 @@ for f in "$@"; do
     fi
 done
 
+# True (status 0) iff $1 is EXACTLY the tight NO_ARCH wildcard shape
+# "OS:major:*" (issue #1806) — '*' as the WHOLE final segment, preceded by
+# EXACTLY one colon-separated, non-empty, safe-charset "OS:major" pair.
+# gate-B finding: a charset-only check on `rest` (everything but the trailing
+# ':*') wrongly accepted 'FreeBSD:*' (0 colons in rest — no major segment) and
+# 'FreeBSD:15:16:*' (2 colons in rest — an extra segment); counting colons via
+# LC_ALL=C tr -cd closes both. Shared by validate_abi() and require_noarch_abi()
+# so the tight shape is defined once (ladder rung 2: reuse, not two copies).
+_abi_is_tight_wildcard() {
+    case "$1" in
+        *:\*) : ;;
+        *) return 1 ;;
+    esac
+    rest="${1%:*}"
+    case "$rest" in
+        :*|*:) return 1 ;;
+    esac
+    ncolons="$(printf '%s' "$rest" | LC_ALL=C tr -cd ':')"
+    [ "${#ncolons}" -eq 1 ] || return 1
+    [ "$(printf '%s/' "$rest" | LC_ALL=C tr -d 'A-Za-z0-9:._+-')" = '/' ]
+}
+
 # Reject an ABI that is not a single safe path segment or, when it wildcards
 # the CPU segment (a NO_ARCH package; issue #1806), not in the TIGHT
 # "OS:major:*" shape. The ABI is never used as a directory name any more
@@ -210,14 +232,11 @@ validate_abi() {
     fi
     last="${1##*:}"
     if [ "$last" = "*" ]; then
-        # Tight wildcard: validate the OS:major prefix (everything but the
-        # trailing ':*') against the same safe charset — no '*' anywhere in it.
-        rest="${1%:*}"
-        if [ "$(printf '%s/' "$rest" | LC_ALL=C tr -d 'A-Za-z0-9:._+-')" != '/' ]; then
-            echo "build-repo: unsafe or invalid ABI in package metadata: '$1'" >&2
-            exit 1
+        if _abi_is_tight_wildcard "$1"; then
+            return 0
         fi
-        return 0
+        echo "build-repo: unsafe or invalid ABI in package metadata: '$1'" >&2
+        exit 1
     fi
     if [ "$(printf '%s/' "$1" | LC_ALL=C tr -d 'A-Za-z0-9:._+-')" != '/' ]; then
         echo "build-repo: unsafe or invalid ABI in package metadata: '$1'" >&2
@@ -231,9 +250,9 @@ validate_abi() {
 # silently install on only one arch — the tripwire that forces a conscious
 # layout decision if a compiled, per-arch dependency is ever added.
 require_noarch_abi() {
-    case "$1" in
-        *:\*) return 0 ;;
-    esac
+    if _abi_is_tight_wildcard "$1"; then
+        return 0
+    fi
     echo "build-repo: catalog requires a NO_ARCH (wildcard-ABI) package — got concrete ABI '$1'." >&2
     echo "  The catalog tree is arch-less (one directory serves every arch of a FreeBSD major);" >&2
     echo "  a concrete-ABI package would silently install on only one arch. Ship a wildcard-ABI" >&2
