@@ -59,6 +59,17 @@ CONF_PRIORITY = 100
 # allowed); `/`, `\`, whitespace, and traversal are not.
 _ABI_RE = re.compile(r"^[A-Za-z0-9:._+-]+$")
 
+# A NO_ARCH package's manifest ABI wildcards ONLY the final CPU segment — e.g.
+# "FreeBSD:15:*" (probed live against a real Netgate noarch package; issue
+# #1806). Tight: '*' is valid ONLY as the whole final segment, never elsewhere
+# and never partial — "FreeBSD:*:amd64" / "*" / "FreeBSD:15:*extra" are not ABIs.
+_ABI_WILDCARD_RE = re.compile(r"^[A-Za-z0-9._+-]+:[A-Za-z0-9._+-]+:\*$")
+
+
+def _is_wildcard_abi(abi: object) -> bool:
+    """True if ``abi`` is a NO_ARCH package's tight, CPU-wildcarded ABI string."""
+    return isinstance(abi, str) and bool(_ABI_WILDCARD_RE.fullmatch(abi))
+
 
 class BuildRepoError(Exception):
     """A fatal, user-facing error (bad input / collision / missing tool)."""
@@ -213,18 +224,21 @@ def _flavor_signature(manifest: dict) -> str:
     return ",".join(sorted(flavored))
 
 
-def _dep_pkg_matches_abi(dep_manifest: dict, catalog_abi: str) -> bool:
-    """True if a --dep-pkgs manifest is compatible with ``catalog_abi``.
+def _pkg_matches_abi(manifest: dict, row_abi: str) -> bool:
+    """True if a pre-supplied package's manifest ABI belongs to ``row_abi``'s
+    FreeBSD major (OS+major only — the CPU/arch segment is never compared).
 
-    A NO_ARCH dependency package (build-dep-pkg-portable.py) records a CPU-
-    WILDCARDED abi — e.g. ``"FreeBSD:15:*"`` — because it works on every arch
-    of that FreeBSD major. So it is matched by OS+major only, NOT by exact
-    string equality like the existing per-arch release_extra_pkgs/release_pkgs
-    candidates (:706/:725/:757) — an exact-string compare would never match a
-    wildcarded abi against a catalog's concrete ``"FreeBSD:15:amd64"``.
+    Every package the matrix-driven catalog handles is NO_ARCH (issue #1806):
+    its manifest abi is CPU-wildcarded (e.g. ``"FreeBSD:15:*"``, see
+    ``_is_wildcard_abi``), so an exact string compare against a matrix row's
+    concrete ``"FreeBSD:15:amd64"`` abi would never match. Matching by OS+major
+    is what decides which VARVER catalog(s) a pre-built/frozen/dep package
+    lands in (``route_only_pkgs``/``release_pkgs``/``release_extra_pkgs``/
+    ``dep_pkgs``) — the catalog tree is arch-less, so there is no arch bucket
+    to route into, only a varver.
     """
-    dep_abi = dep_manifest.get("abi", "")
-    return isinstance(dep_abi, str) and dep_abi.split(":")[:2] == catalog_abi.split(":")[:2]
+    abi = manifest.get("abi", "")
+    return isinstance(abi, str) and abi.split(":")[:2] == row_abi.split(":")[:2]
 
 
 def _check_collisions(entries: list[tuple[Path, dict]]) -> None:
@@ -379,10 +393,12 @@ def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict
 # --------------------------------------------------------------------------- #
 # ADR-20: the matrix-driven BRAIN. build_repo_matrix() drives the DUMB
 # build-pkg-portable.py builder per (ci-metadata entry x channel) and projects
-# the matrix 1:1 onto release/<variant>-<major.minor>/<arch>/... (stable+devel,
-# one catalog) and nightly/<variant>-<major.minor>/<arch>/... (retained to N).
-# The leaf is the bare ARCH, not the full ABI (the version segment already
-# implies the FreeBSD major; each .pkg's real ABI lives in its own manifest).
+# the matrix onto release/<variant>-<major.minor>/... (stable+devel, one
+# catalog) and nightly/<variant>-<major.minor>/... (retained to N). Arch-less
+# since issue #1806 (NO_ARCH): the leaf is the varver, not an ABI/arch — every
+# package here is CPU-wildcarded, so one directory serves every arch of that
+# FreeBSD major (each .pkg's real, wildcarded ABI still lives in its own
+# manifest; see _is_wildcard_abi / _emit_catalog_from_paths).
 # FULL MATRIX, NO DEDUP: every entry gets its own subtree.
 # --------------------------------------------------------------------------- #
 
@@ -414,9 +430,27 @@ def _pkg_version_key(version: str) -> tuple[list[int], int, int]:
 
 
 def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path]) -> int:
-    """Read each .pkg's manifest, dedup by (name, version), collision-check, emit at dest."""
+    """Read each .pkg's manifest, dedup by (name, version), collision-check, emit at dest.
+
+    Every package here MUST carry a NO_ARCH (wildcard) ABI (``_is_wildcard_abi``,
+    issue #1806) — the matrix-driven catalog tree is arch-less: one directory
+    (``release/<varver>/`` / ``nightly/<varver>/``) serves every arch of a
+    FreeBSD major, so a concrete-ABI package would silently install on only
+    one. A concrete ABI reaching catalog emission is a hard error — the
+    tripwire that forces a conscious layout decision if a compiled, per-arch
+    dependency is ever added.
+    """
     entries: list[tuple[Path, dict]] = [(p, read_compact_manifest(p)) for p in sorted(set(pkg_paths))]
     _check_collisions(entries)
+    for path, manifest in entries:
+        abi = manifest.get("abi")
+        if not _is_wildcard_abi(abi):
+            raise BuildRepoError(
+                f"{path.name}: catalog requires a NO_ARCH (wildcard-ABI) package — got "
+                f"concrete ABI {abi!r}. The catalog tree is arch-less (one directory serves "
+                f"every arch of a FreeBSD major); a concrete-ABI package would silently "
+                f"install on only one arch. Ship a wildcard-ABI (NO_ARCH) build instead."
+            )
     items: dict[tuple[str, str], tuple[Path, dict]] = {}
     for path, manifest in entries:
         nv = (manifest["name"], manifest["version"])
@@ -620,30 +654,43 @@ def build_repo_matrix(
     dep_pkgs: list[Path] | None = None,
     **builder_kwargs: object,
 ) -> dict:
-    """Build the full variant/arch repository tree from the version matrix.
+    """Build the full variant repository tree from the version matrix.
 
-    For each matrix entry (each carrying pfsense_version, variant, freebsd_major, arch,
-    php_version, py_flavor, and optionally role):
+    issue #1806: the catalog tree is ARCH-LESS — ``release/<varver>/`` and
+    ``nightly/<varver>/`` hold the catalog directly (meta.conf, packagesite.pkg,
+    data.pkg, the .pkg files), with NO per-arch subdirectory. All three
+    pfSense-pkg-pfBlockerNG ports are NO_ARCH: a real package's manifest abi is
+    CPU-wildcarded (``"FreeBSD:<major>:*"``, see ``_is_wildcard_abi``) — one
+    varver directory serves every arch of that FreeBSD major, so there is
+    nothing left to bucket by arch. ``_emit_catalog_from_paths`` hard-rejects a
+    concrete-ABI package at emission (never a silent single-arch install).
+    Each matrix row still carries ``arch`` (it drives CI legs and the
+    concrete ``--abi`` fed to the builder, per-row, so build-pkg-portable.py
+    can derive the FreeBSD major — it no longer selects a catalog bucket).
+
+    For each matrix entry (each carrying pfsense_version, variant, freebsd_major,
+    php_version, py_flavor, optionally arch, and optionally role):
 
     **build entries** (``role`` absent or ``"build"`` — the default, unchanged path):
 
-      * RELEASE subtree ``release/<varver>/<arch>/`` — the devel .pkg, plus the stable
+      * RELEASE subtree ``release/<varver>/`` — the devel .pkg, plus the stable
         .pkg built from ``stable_tag`` (skipped when no stable tag exists), optionally
         folded with pre-built older-release .pkg from ``release_extra_pkgs``, pruned to
         the ``release_keep_devel`` newest devel + ``release_keep_stable`` newest stable.
         Defaults (1/1) reproduce today's latest-only behaviour; setting higher values
         retains older artifacts in the catalog for diagnostics and reproducibility.
-      * NIGHTLY subtree ``nightly/<varver>/<arch>/`` — the freshly built nightly folded in
+      * NIGHTLY subtree ``nightly/<varver>/`` — the freshly built nightly folded in
         with any pre-existing nightlies in that subtree (cache-restored by the caller),
         pruned to the ``nightly_keep`` newest. Skipped when ``build_nightly`` is False.
     **route-only entries** (``role == "route-only"`` — EOL versions served from frozen .pkg):
 
       * NO builder call for a fresh devel-HEAD .pkg — the version is EOL, no new build.
       * NO nightly subtree — a route-only entry never gets a nightly build.
-      * RELEASE subtree ``release/<varver>/<arch>/`` — built EXCLUSIVELY from the frozen
-        .pkg supplied in ``route_only_pkgs[varver]`` (a list of pre-downloaded Release
-        assets, one per arch entry, provided by publish.yml). The existing
-        ``_emit_catalog_from_paths`` machinery handles the rest.
+      * RELEASE subtree ``release/<varver>/`` — built EXCLUSIVELY from the frozen
+        .pkg supplied in ``route_only_pkgs[varver]`` (pre-downloaded Release assets
+        provided by publish.yml — must be NO_ARCH/wildcard-ABI, same as every other
+        catalog input; a concrete-ABI frozen .pkg is rejected at emission). The
+        existing ``_emit_catalog_from_paths`` machinery handles the rest.
       * If ``route_only_pkgs`` has no entry for this ``varver`` (or is ``None``), the call
         raises ``BuildRepoError`` — a route-only entry with no frozen .pkg is a hard error.
 
@@ -651,21 +698,21 @@ def build_repo_matrix(
       Callers (e.g. publish.yml) supply a ``dict[varver, list[Path]]`` mapping the
       ``catalog_name_from_version()`` key (e.g. ``"ce-2.7"``) to the ordered list of
       pre-downloaded .pkg files for that version. publish.yml downloads these from the
-      corresponding GitHub Release tag and passes them here. Each path must be a valid
-      .pkg (readable by ``read_compact_manifest``). The mapping is keyed by ``varver``
-      so multiple arch entries for the same version can share the same frozen .pkg pool
-      (``_emit_catalog_from_paths`` deduplicates by (name, version), so arch-specific
-      or duplicate entries are handled safely).
+      corresponding GitHub Release tag and passes them here. Each path must be a valid,
+      NO_ARCH .pkg (readable by ``read_compact_manifest``). The mapping is keyed by
+      ``varver`` so multiple matrix rows of the same version share the same frozen .pkg
+      pool (``_emit_catalog_from_paths`` deduplicates by (name, version)).
 
     ``release_pkgs`` (optional) — consume pre-built Release .pkg files instead of
       rebuilding devel/stable from source for build-entry matrix rows:
       ``dict[varver, list[Path]]`` mapping ``catalog_name_from_version()`` keys to lists
       of pre-built Release .pkg paths (e.g. all assets downloaded from GitHub Releases
-      by publish.yml). When provided, the ``release/<varver>/<arch>/`` catalog is SERVED
-      from these (ABI-filtered, then pruned by ``retain_by_channel`` with
-      ``release_keep_devel`` / ``release_keep_stable``) instead of calling the builder
-      for devel/stable. ``release_extra_pkgs`` is still folded in after the pool.
-      An empty pool for a (varver, arch) pair skips that release catalog with a warning
+      by publish.yml). When provided, the ``release/<varver>/`` catalog is SERVED
+      from these (matched by OS+major via ``_pkg_matches_abi``, then pruned by
+      ``retain_by_channel`` with ``release_keep_devel`` / ``release_keep_stable``)
+      instead of calling the builder for devel/stable. ``release_extra_pkgs`` is
+      still folded in after the pool.
+      An empty pool for a varver skips that release catalog with a warning
       (no exception raised — a newly-added version with no Release asset yet simply has
       no release-channel package until the next release covers it; nightly still covers
       it from HEAD). Nightly is unaffected — the nightly subtree is always built from
@@ -675,12 +722,15 @@ def build_repo_matrix(
     ``dep_pkgs`` (optional, issue #1806) — pre-built dependency .pkg files (e.g.
       py311-charset-normalizer, built by build-dep-pkg-portable.py) folded into BOTH
       the release AND nightly catalogs of every build-role matrix entry whose ABI
-      matches (OS+major; see ``_dep_pkg_matches_abi`` — a NO_ARCH dep's abi is CPU-
+      matches (OS+major; see ``_pkg_matches_abi`` — a NO_ARCH dep's abi is CPU-
       wildcarded). Folded AFTER retention (``retain_by_channel`` / ``_retain_newest``)
       — NEVER before, or a dep would compete with real releases/nightlies for a
       retention slot. Route-only (frozen EOL) entries never receive a dep pkg. A
-      dep pkg whose ABI matches no emitted catalog is a hard ``BuildRepoError``
-      (fail loud, never a silent drop).
+      dep pkg whose ABI matches no catalog it actually landed in is a hard
+      ``BuildRepoError`` (fail loud, never a silent drop) — matched is tracked only
+      at the point a dep is folded into an EMITTED catalog, never merely because its
+      ABI matched a row (issue #1806 gate-A finding: a matched-but-unemitted dep must
+      still raise).
 
     ``builder`` is injectable (tests pass a stub); the default drives build-pkg-portable.py.
     Extra ``builder_kwargs`` pass through to every builder call. Returns a summary dict.
@@ -722,16 +772,16 @@ def build_repo_matrix(
                     f"A route-only entry without a frozen .pkg would produce an empty or stale "
                     f"catalog; refusing to proceed."
                 )
-            # A varver's frozen pool may carry multiple ABIs (e.g. a Plus amd64 + aarch64
-            # pair). Each (varver, arch) catalog must hold ONLY its own ABI — _emit_catalog
-            # dedups by (name, version), not ABI, so an unfiltered pool would cross-contaminate.
-            frozen = [p for p in frozen_pool if read_compact_manifest(p).get("abi") == abi]
+            # A varver's frozen pool may carry entries for other majors too (matched by
+            # OS+major, never exact-string — every catalog input is NO_ARCH/wildcard-ABI;
+            # _emit_catalog_from_paths hard-rejects a concrete one at emission).
+            frozen = [p for p in frozen_pool if _pkg_matches_abi(read_compact_manifest(p), abi)]
             if not frozen:
                 raise BuildRepoError(
                     f"route-only entry for {varver!r} (version {version}, variant {variant}) has "
                     f"frozen .pkg, but none match ABI {abi!r} — supply a frozen .pkg for this ABI."
                 )
-            release_dir = out_dir / "release" / varver / arch
+            release_dir = out_dir / "release" / varver
             n_release = _emit_catalog_from_paths(release_dir, frozen)
             built.append(str(release_dir))
             sys.stderr.write(f"==> route-only release catalog {release_dir} ({n_release} package(s), frozen)\n")
@@ -740,24 +790,24 @@ def build_repo_matrix(
         else:
             # --- build entry (role absent or "build") ---
 
-            release_dir = out_dir / "release" / varver / arch
+            release_dir = out_dir / "release" / varver
 
-            # --dep-pkgs (issue #1806) ABI-filtered for THIS entry's ABI train
-            # (OS+major; _dep_pkg_matches_abi tolerates a NO_ARCH dep's CPU
-            # wildcard). Folded into release/nightly AFTER retention below —
-            # never before, see build_repo_matrix's docstring.
-            dep_for_abi = [p for p, m in dep_entries if _dep_pkg_matches_abi(m, abi)]
-            dep_pkgs_matched.update(dep_for_abi)
+            # --dep-pkgs (issue #1806) ABI-filtered for THIS entry's ABI train (OS+major;
+            # _pkg_matches_abi tolerates a NO_ARCH dep's CPU wildcard). Folded into
+            # release/nightly AFTER retention below — never before, see build_repo_matrix's
+            # docstring. dep_pkgs_matched is updated ONLY where dep_for_abi actually lands
+            # in an emitted catalog (below), never merely because it matched this row —
+            # marking it matched here unconditionally would let a matched-but-never-emitted
+            # dep escape the end-of-run unmatched check (issue #1806 gate-A finding).
+            dep_for_abi = [p for p, m in dep_entries if _pkg_matches_abi(m, abi)]
 
             if release_pkgs is not None:
-                # --- consume mode: serve release/<varver>/<arch>/ from caller-supplied pre-built .pkg ---
-                # ABI-filtered exactly like the route-only branch; release_extra_pkgs still folded in.
+                # --- consume mode: serve release/<varver>/ from caller-supplied pre-built .pkg ---
+                # Matched exactly like the route-only branch; release_extra_pkgs still folded in.
                 # An empty pool is a warning + skip (not an error) — a newly-added version with no
                 # Release asset yet simply has no release-channel package until the next release.
-                pool = [p for p in (release_pkgs.get(varver) or []) if read_compact_manifest(p).get("abi") == abi]
-                # ABI-filter the extras too: _emit_catalog_from_paths dedups by (name, version),
-                # NOT by ABI, so a wrong-ABI extra would cross-contaminate this arch's catalog.
-                extras = [p for p in (release_extra_pkgs or []) if read_compact_manifest(p).get("abi") == abi]
+                pool = [p for p in (release_pkgs.get(varver) or []) if _pkg_matches_abi(read_compact_manifest(p), abi)]
+                extras = [p for p in (release_extra_pkgs or []) if _pkg_matches_abi(read_compact_manifest(p), abi)]
                 candidates = pool + extras
                 kept_release = retain_by_channel(
                     candidates,
@@ -769,6 +819,7 @@ def build_repo_matrix(
                     n_release = _emit_catalog_from_paths(release_dir, kept_release + dep_for_abi)
                     built.append(str(release_dir))
                     sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s), consumed)\n")
+                    dep_pkgs_matched.update(dep_for_abi)
                 else:
                     sys.stderr.write(f"==> WARNING: no Release .pkg for {varver} {abi} — release catalog skipped\n")
             else:
@@ -788,9 +839,8 @@ def build_repo_matrix(
                             builder("stable", out_dir=staging, ports=ports, local_src=stable_src or local_src, **common)
                         )
                     # Fold in pre-built older-release candidates (caller-provided, e.g. from GitHub
-                    # Releases), ABI-filtered to this arch — _emit_catalog_from_paths dedups by
-                    # (name, version), not ABI, so a wrong-ABI extra would cross-contaminate.
-                    extras = [p for p in (release_extra_pkgs or []) if read_compact_manifest(p).get("abi") == abi]
+                    # Releases), matched by OS+major (see _pkg_matches_abi).
+                    extras = [p for p in (release_extra_pkgs or []) if _pkg_matches_abi(read_compact_manifest(p), abi)]
                     all_release_pkgs = built_pkgs + extras
                     kept_release = retain_by_channel(
                         all_release_pkgs,
@@ -801,10 +851,11 @@ def build_repo_matrix(
                     n_release = _emit_catalog_from_paths(release_dir, kept_release + dep_for_abi)
                 built.append(str(release_dir))
                 sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s))\n")
+                dep_pkgs_matched.update(dep_for_abi)
 
             # --- nightly subtree: fold the new build in with retained prior nightlies ---
             if build_nightly:
-                nightly_dir = out_dir / "nightly" / varver / arch
+                nightly_dir = out_dir / "nightly" / varver
                 # Glob the retained package files, EXCLUDING the catalog files (which are also
                 # named *.pkg: packagesite.pkg / data.pkg) — they are not libpkg archives.
                 existing = (
@@ -824,6 +875,7 @@ def build_repo_matrix(
                     n = _emit_catalog_from_paths(nightly_dir, kept + dep_for_abi)
                 built.append(str(nightly_dir))
                 sys.stderr.write(f"==> nightly catalog {nightly_dir} ({n} package(s), kept ≤{nightly_keep})\n")
+                dep_pkgs_matched.update(dep_for_abi)
 
     # A --dep-pkgs entry whose ABI matched no build-role matrix entry is a hard
     # error — never a silent drop (it would otherwise mean a real user's
@@ -841,17 +893,18 @@ def build_repo_matrix(
 def print_conf(resolved_url: str) -> None:
     """Emit the release-channel repo-conf stanza.
 
-    ``resolved_url`` is the fully-resolved URL for the box's edition/version/arch
-    (ADR-39): ``<base>/release/<varver>/<arch>`` — no ``${ABI}`` token.
-    Supply ``--catalog-path <varver>/<arch>`` so tests can pin the exact bytes.
+    ``resolved_url`` is the fully-resolved URL for the box's edition/version
+    (ADR-39; arch-less since issue #1806 — the catalog is NO_ARCH):
+    ``<base>/release/<varver>`` — no ``${ABI}`` token.
+    Supply ``--catalog-path <varver>`` so tests can pin the exact bytes.
     """
     url = resolved_url.rstrip("/")
     sys.stdout.write(
         "# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.\n"
         "# pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).\n"
         "# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is\n"
-        "# fully resolved for this box's edition/version/arch (ADR-39); the boot\n"
-        "# rc.d hook updates it on a pfSense OS upgrade.\n"
+        "# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,\n"
+        "# issue #1806); the boot rc.d hook updates it on a pfSense OS upgrade.\n"
         f"# priority {CONF_PRIORITY} sits above the base Netgate `pfSense` repo so cross-repo\n"
         "# resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.\n"
         "pfblockerng: {\n"
@@ -877,7 +930,7 @@ def main(argv: list[str]) -> int:
             "  build-repo-portable.py --in ./pkgs --out ./site --catalog-name ce-2.8\n\n"
             "  # print the client repo-conf (add-repo.sh + README reuse it)\n"
             "  build-repo-portable.py --print-conf --base-url https://example.github.io/pkg\n\n"
-            "  # matrix-driven: build the full variant/arch tree (ADR-20)\n"
+            "  # matrix-driven: build the full variant tree, arch-less (ADR-20; issue #1806)\n"
             "  read-version-matrix.sh --print-build | build-repo-portable.py --build-matrix \\\n"
             "    --matrix-json - --out ./site --ports ./ports --local-src . \\\n"
             "    --nightly-pkgversion 3.2.16.20260615.1\n"
@@ -896,10 +949,10 @@ def main(argv: list[str]) -> int:
         default="",
         dest="catalog_path",
         help=(
-            "catalog subtree for --print-conf, in '<varver>/<arch>' form "
-            "(e.g. 'ce-2.8/amd64', 'plus-26.03/aarch64'). "
+            "catalog subtree for --print-conf, a bare '<varver>' (e.g. 'ce-2.8', "
+            "'plus-26.03') — the catalog is arch-less (NO_ARCH; issue #1806). "
             "When supplied, the emitted url is <base-url>/release/<catalog-path>. "
-            "Required for byte-identical output across all three generators."
+            "Required for byte-identical output across all four generators."
         ),
     )
     ap.add_argument(
@@ -917,9 +970,9 @@ def main(argv: list[str]) -> int:
         "--build-matrix",
         action="store_true",
         help=(
-            "drive build-pkg-portable.py per (matrix entry × channel), lay out the "
-            "release/<varver>/<arch>/ + nightly/<varver>/<arch>/ tree under --out. "
-            "Requires --matrix-json + --out."
+            "drive build-pkg-portable.py per (matrix entry x channel), lay out the "
+            "release/<varver>/ + nightly/<varver>/ tree under --out (arch-less; NO_ARCH, "
+            "issue #1806). Requires --matrix-json + --out."
         ),
     )
     g_matrix.add_argument(
@@ -939,9 +992,7 @@ def main(argv: list[str]) -> int:
     g_matrix.add_argument(
         "--stable-src", default=None, help="source tree checked out at --stable-tag (defaults to --local-src)"
     )
-    g_matrix.add_argument(
-        "--nightly-keep", type=int, default=14, help="nightlies retained per (version, arch) (default 14)"
-    )
+    g_matrix.add_argument("--nightly-keep", type=int, default=14, help="nightlies retained per varver (default 14)")
     g_matrix.add_argument(
         "--nightly-pkgversion",
         default=None,
@@ -954,7 +1005,7 @@ def main(argv: list[str]) -> int:
         default=1,
         dest="release_keep_devel",
         help=(
-            "devel releases retained per (version, arch) in the release catalog (default 1 = latest-only). "
+            "devel releases retained per varver in the release catalog (default 1 = latest-only). "
             "Set >1 to retain multiple devel artifacts for diagnostics and reproducibility. "
             "The publish job must supply the older .pkg via --release-extra-pkgs. "
             "The newest package of every major/minor line is pinned on top of this window, "
@@ -967,7 +1018,7 @@ def main(argv: list[str]) -> int:
         default=1,
         dest="release_keep_stable",
         help=(
-            "stable releases retained per (version, arch) in the release catalog (default 1 = latest-only). "
+            "stable releases retained per varver in the release catalog (default 1 = latest-only). "
             "Set >1 to retain multiple stable artifacts for diagnostics and reproducibility. "
             "The publish job must supply the older .pkg via --release-extra-pkgs. "
             "The newest package of every major/minor line is pinned on top of this window, "
@@ -1021,10 +1072,10 @@ def main(argv: list[str]) -> int:
         dest="release_pkgs",
         metavar="VARVER:PATH",
         help=(
-            "pre-built Release .pkg to SERVE the release/<varver>/<arch>/ catalog from, "
-            "in VARVER:PATH form (repeatable; arch derived from the .pkg manifest ABI). "
+            "pre-built Release .pkg to SERVE the release/<varver>/ catalog from, "
+            "in VARVER:PATH form (repeatable; matched by OS+major, arch-less; issue #1806). "
             "When supplied, devel+stable are consumed from these instead of rebuilt from source. "
-            "An empty pool for a (varver, arch) skips that release catalog (no error)."
+            "An empty pool for a varver skips that release catalog (no error)."
         ),
     )
     g_matrix.add_argument(
@@ -1038,7 +1089,7 @@ def main(argv: list[str]) -> int:
 
     if args.print_conf:
         if not args.catalog_path or not args.catalog_path.strip("/"):
-            ap.error("--print-conf requires --catalog-path <varver>/<arch>")
+            ap.error("--print-conf requires --catalog-path <varver>")
         _base = args.base_url.rstrip("/")
         _cat = args.catalog_path.strip("/")
         print_conf(f"{_base}/release/{_cat}")

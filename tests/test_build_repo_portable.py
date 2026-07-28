@@ -465,6 +465,39 @@ def test_unsafe_abi_is_rejected(tmp_path: Path) -> None:
             brp.build_repo(in_dir, out)
 
 
+@pytest.mark.parametrize(
+    ("abi", "expected"),
+    [
+        ("FreeBSD:15:*", True),
+        ("FreeBSD:16:*", True),
+        ("FreeBSD:15:amd64", False),  # concrete — not wildcarded at all
+        ("FreeBSD:*:amd64", False),  # '*' not in the final segment
+        ("*", False),  # bare '*' — not a 3-part ABI
+        ("FreeBSD:15:*extra", False),  # '*' not the WHOLE final segment
+        (None, False),  # non-string
+        (123, False),  # non-string
+    ],
+)
+def test_is_wildcard_abi_tight_shape(abi: object, expected: bool) -> None:
+    """``_is_wildcard_abi`` accepts '*' ONLY as the whole final (CPU) segment —
+    tight, per issue #1806 (a real Netgate NO_ARCH package's manifest ABI)."""
+    assert brp._is_wildcard_abi(abi) is expected
+
+
+def test_pkg_matches_abi_by_os_and_major_only() -> None:
+    """``_pkg_matches_abi`` compares OS+major ONLY — the CPU/arch segment (concrete
+    or wildcarded) never affects the match; a different major never matches."""
+    # A wildcarded manifest matches any row of the same major, any arch.
+    assert brp._pkg_matches_abi({"abi": "FreeBSD:15:*"}, "FreeBSD:15:amd64") is True
+    assert brp._pkg_matches_abi({"abi": "FreeBSD:15:*"}, "FreeBSD:15:aarch64") is True
+    # A concrete manifest also matches by major only (arch segment ignored).
+    assert brp._pkg_matches_abi({"abi": "FreeBSD:15:amd64"}, "FreeBSD:15:aarch64") is True
+    # A different major never matches, wildcard or not.
+    assert brp._pkg_matches_abi({"abi": "FreeBSD:16:*"}, "FreeBSD:15:amd64") is False
+    # A missing/non-string abi never matches.
+    assert brp._pkg_matches_abi({}, "FreeBSD:15:amd64") is False
+
+
 def test_flavor_signature_classifies_dep_names() -> None:
     """The flavor signature picks ONLY php*/python*/py*- dep names, sorted."""
     assert brp._flavor_signature({"deps": {}}) == ""
@@ -800,15 +833,19 @@ def test_nightly_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # ADR-20 routing rework: the matrix-driven brain (build_repo_matrix + helpers)
 #
-# These pin the LITERAL 1:1 projection of the version matrix onto the tree
-# (release/<varver>/<arch>/ + nightly/<varver>/<arch>/, arch leaf — NOT full ABI),
-# the release channel-group (devel + stable in one catalog), full-matrix/no-dedup
-# placement, and nightly retention. The DUMB pkg builder is stubbed so the tests
-# exercise the BRAIN (arrangement) without a ports tree — build-pkg-portable.py's
-# own behaviour is covered by its own suite.
+# These pin the LITERAL projection of the version matrix onto the tree
+# (release/<varver>/ + nightly/<varver>/ — arch-less since issue #1806: all
+# three pfSense-pkg-pfBlockerNG ports are NO_ARCH, so one varver directory
+# serves every arch of its FreeBSD major), the release channel-group (devel +
+# stable in one catalog), full-matrix/no-dedup placement, and nightly
+# retention. The DUMB pkg builder is stubbed so the tests exercise the BRAIN
+# (arrangement) without a ports tree — build-pkg-portable.py's own behaviour
+# (including the NO_ARCH wildcard stamp) is covered by its own suite.
 # --------------------------------------------------------------------------- #
 
-# The live matrix shape (subset of fields build_repo_matrix consumes).
+# The live matrix shape (subset of fields build_repo_matrix consumes). `arch`
+# still drives which concrete --abi the (stubbed) builder receives per row —
+# it no longer selects a catalog bucket (arch-less; issue #1806).
 _CE = {
     "pfsense_version": "2.8",
     "variant": "CE",
@@ -847,8 +884,11 @@ def _stub_builder(
     """Stand-in for build-pkg-portable.py: drop a libpkg-shaped .pkg, return its path.
 
     The package NAME encodes the channel (so a subtree's catalog reveals which channels
-    landed there); the manifest carries the requested ABI + a versioned php guard dep
-    (so a wrong-flavor mix would trip the collision guard, as in a real build).
+    landed there); the manifest carries a versioned php guard dep (so a wrong-flavor mix
+    would trip the collision guard, as in a real build). The manifest ABI is stamped
+    CPU-WILDCARDED (``FreeBSD:<major>:*``) regardless of the incoming concrete ``abi``'s
+    CPU segment — a real build-pkg-portable.py run does exactly this for a NO_ARCH port
+    (issue #1806 B1), and the catalog now hard-requires it (``_is_wildcard_abi``).
     """
     name = _CHANNEL_NAME[channel]
     version = pkgversion or "1.0_1"
@@ -857,10 +897,12 @@ def _stub_builder(
         php_dep: {"origin": f"lang/{php_dep}", "version": "0"},
         py_flavor: {"origin": f"lang/{py_flavor}", "version": "0"},
     }
+    major = abi.split(":")[1]
+    wildcard_abi = f"FreeBSD:{major}:*"
     # Distinct on-disk filename per (channel, varver, arch) so concurrent staging never clashes;
     # the catalog copies it CANONICALLY as <name>-<version>.pkg regardless.
     out = out_dir / f"{name}-{version}-{varver}-{arch}-{channel}.pkg"
-    make_pkg(out, name=name, version=version, abi=abi, deps=deps)
+    make_pkg(out, name=name, version=version, abi=wildcard_abi, deps=deps)
     return out
 
 
@@ -978,14 +1020,14 @@ def test_retain_by_channel_devel_retains_prerelease_stages_in_pkg_order(tmp_path
     assert "4.0.0.alpha.1" not in kept_versions
 
 
-def test_build_matrix_tree_layout_arch_leaf(tmp_path: Path) -> None:
-    """build_repo_matrix projects the matrix 1:1 with the bare ARCH as the leaf.
+def test_build_matrix_tree_layout_arch_less(tmp_path: Path) -> None:
+    """build_repo_matrix projects the matrix onto an ARCH-LESS tree (issue #1806).
 
     Scenario: a CE + a Plus entry
       Given an empty output root
       When build_repo_matrix runs over [CE, Plus]
-      Then release/ce-2.8/amd64/ and release/plus-26.03/amd64/ catalogs exist
-       And the leaf is the bare arch — NOT the full ABI (no FreeBSD:NN:amd64 dir)
+      Then release/ce-2.8/ and release/plus-26.03/ catalogs exist DIRECTLY
+       And there is NO arch subdirectory, and NO full-ABI subdirectory either
        And the matching nightly subtrees exist
     """
     out = tmp_path / "site"
@@ -994,13 +1036,15 @@ def test_build_matrix_tree_layout_arch_leaf(tmp_path: Path) -> None:
 
     brp.build_repo_matrix([_CE, _PLUS], out, builder=_stub_builder)
 
-    # Arch leaf, version segment implies the FreeBSD major.
-    assert (out / "release" / "ce-2.8" / "amd64" / "meta.conf").is_file()
-    assert (out / "release" / "plus-26.03" / "amd64" / "meta.conf").is_file()
-    assert (out / "nightly" / "ce-2.8" / "amd64" / "meta.conf").is_file()
-    assert (out / "nightly" / "plus-26.03" / "amd64" / "meta.conf").is_file()
-    # The full ABI must NOT appear as a path segment (this is the arch-leaf reconciliation).
+    # The catalog lives directly at release/<varver>/ — no arch leaf.
+    assert (out / "release" / "ce-2.8" / "meta.conf").is_file()
+    assert (out / "release" / "plus-26.03" / "meta.conf").is_file()
+    assert (out / "nightly" / "ce-2.8" / "meta.conf").is_file()
+    assert (out / "nightly" / "plus-26.03" / "meta.conf").is_file()
+    # Neither an arch leaf nor the full ABI ever appears as a path segment.
+    assert not (out / "release" / "ce-2.8" / "amd64").exists()
     assert not (out / "release" / "ce-2.8" / "FreeBSD:15:amd64").exists()
+    assert not (out / "release" / "plus-26.03" / "amd64").exists()
     assert not (out / "release" / "plus-26.03" / "FreeBSD:16:amd64").exists()
 
 
@@ -1009,7 +1053,7 @@ def test_build_matrix_release_holds_devel_and_stable(tmp_path: Path) -> None:
 
     Scenario: stable tag absent -> present (the branch + the before/after)
       Given build_repo_matrix([CE]) with NO stable_tag
-      Then release/ce-2.8/amd64 holds ONLY the devel package
+      Then release/ce-2.8 holds ONLY the devel package
       When re-run WITH stable_tag set
       Then the release catalog holds BOTH the devel and the stable package
     """
@@ -1017,7 +1061,7 @@ def test_build_matrix_release_holds_devel_and_stable(tmp_path: Path) -> None:
 
     # Off branch: no stable tag -> devel only.
     brp.build_repo_matrix([_CE], out, builder=_stub_builder)
-    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     assert _names_in(rel) == {"pfBlockerNG-devel"}
 
     # On branch: a stable tag -> devel + stable coexist in ONE catalog.
@@ -1032,23 +1076,37 @@ def test_build_matrix_full_matrix_no_dedup(tmp_path: Path) -> None:
     out = tmp_path / "site"
     brp.build_repo_matrix([ce_28, ce_29], out, builder=_stub_builder)
     # Distinct version segments, each populated independently.
-    assert (out / "release" / "ce-2.8" / "amd64" / "meta.conf").is_file()
-    assert (out / "release" / "ce-2.9" / "amd64" / "meta.conf").is_file()
+    assert (out / "release" / "ce-2.8" / "meta.conf").is_file()
+    assert (out / "release" / "ce-2.9" / "meta.conf").is_file()
 
 
-def test_build_matrix_aarch64_distinct_leaf(tmp_path: Path) -> None:
-    """An aarch64 Plus entry lands under its own arch leaf, separate from amd64."""
+def test_build_matrix_multi_arch_rows_share_one_varver_catalog(tmp_path: Path) -> None:
+    """Multiple arch rows of the SAME varver converge on ONE catalog (arch-less; issue #1806).
+
+    Before the redesign, an aarch64 Plus entry landed under its own arch leaf,
+    separate from amd64. Under the arch-less contract every arch row of a
+    varver targets the SAME ``release/<varver>/`` directory — there is no
+    per-arch leaf left to be distinct.
+
+    Scenario: a Plus amd64 row + a Plus aarch64 row, same varver
+      When build_repo_matrix runs over [Plus(amd64), Plus(aarch64)]
+      Then exactly ONE release/plus-26.03/ catalog exists (no amd64/aarch64 subdirs)
+       And it carries the (wildcard-ABI) devel package
+    """
     out = tmp_path / "site"
-    brp.build_repo_matrix([_PLUS, _PLUS_ARM], out, builder=_stub_builder)
-    assert (out / "release" / "plus-26.03" / "amd64" / "meta.conf").is_file()
-    assert (out / "release" / "plus-26.03" / "aarch64" / "meta.conf").is_file()
+    brp.build_repo_matrix([_PLUS, _PLUS_ARM], out, builder=_stub_builder, build_nightly=False)
+    rel = out / "release" / "plus-26.03"
+    assert (rel / "meta.conf").is_file()
+    assert not (rel / "amd64").exists()
+    assert not (rel / "aarch64").exists()
+    assert _names_in(rel / "packagesite.pkg") == {"pfBlockerNG-devel"}
 
 
 def test_build_matrix_no_nightly(tmp_path: Path) -> None:
     """build_nightly=False builds the release subtree but NO nightly/ tree."""
     out = tmp_path / "site"
     brp.build_repo_matrix([_CE], out, builder=_stub_builder, build_nightly=False)
-    assert (out / "release" / "ce-2.8" / "amd64" / "meta.conf").is_file()
+    assert (out / "release" / "ce-2.8" / "meta.conf").is_file()
     assert not (out / "nightly").exists()
 
 
@@ -1061,7 +1119,7 @@ def test_build_matrix_nightly_retention(tmp_path: Path) -> None:
        When build #3 (.3) lands -> it is pruned back to 2, keeping the 2 NEWEST (.2, .3)
     """
     out = tmp_path / "site"
-    nl = out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    nl = out / "nightly" / "ce-2.8" / "packagesite.pkg"
 
     def run(counter: int) -> None:
         brp.build_repo_matrix(
@@ -1181,9 +1239,15 @@ def _make_pkg_channel(
     name: str,
     version: str,
     *,
-    abi: str = "FreeBSD:15:amd64",
+    abi: str = "FreeBSD:15:*",
 ) -> Path:
-    """Write a minimal .pkg and return its path (name encodes the channel)."""
+    """Write a minimal .pkg and return its path (name encodes the channel).
+
+    Default ABI is wildcard (NO_ARCH; issue #1806) — most callers feed these
+    paths through build_repo_matrix, whose catalog now hard-requires it. The
+    pure retention-helper tests (_retain_newest/retain_by_channel/_line_pins)
+    never inspect the abi field, so the wildcard default is harmless there too.
+    """
     p = tmp_path / f"{name}-{version}.pkg"
     make_pkg(p, name=name, version=version, abi=abi)
     return p
@@ -1765,7 +1829,7 @@ def test_release_default_is_latest_only(tmp_path: Path) -> None:
 
     brp.build_repo_matrix([_CE], out, builder=_stub_builder, stable_tag="v3.2.15")
 
-    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     assert rel.is_file()
 
     objs = _catalog_objects(rel)
@@ -1793,7 +1857,7 @@ def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
     """
     extras = tmp_path / "extras"
     extras.mkdir()
-    abi = "FreeBSD:15:amd64"
+    abi = "FreeBSD:15:*"
 
     # 4 pre-built devel candidates (the fresh build will be version "1.0_1" from the
     # stub, so all 4 extras sit below "1.0_1" as older versions). Use 3.0.1..3.0.4 as
@@ -1815,7 +1879,7 @@ def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
         release_keep_devel=1,
         release_keep_stable=1,
     )
-    rel_before = out_before / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    rel_before = out_before / "release" / "ce-2.8" / "packagesite.pkg"
     objs_before = _catalog_objects(rel_before)
     # 1 window + 1 line pin per channel: the stub's fresh build is version "1.0_1",
     # a major/minor line ("1.0") distinct from the 3.0.x/2.0.x extras, so it survives
@@ -1833,7 +1897,7 @@ def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
         release_keep_devel=3,
         release_keep_stable=3,
     )
-    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     nv_set = _names_versions_in_release(rel)
 
     # Devel: 3.0.2, 3.0.3, 3.0.4 present; 3.0.1 dropped (4th/oldest).
@@ -1868,7 +1932,7 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
     """
     extras = tmp_path / "extras"
     extras.mkdir()
-    abi = "FreeBSD:15:amd64"
+    abi = "FreeBSD:15:*"
 
     # 3 extras each channel; with keep=2 only the newest 2 survive per channel.
     devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}", abi=abi) for i in range(1, 4)]
@@ -1885,7 +1949,7 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
         release_keep_stable=2,
     )
 
-    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     objs = _catalog_objects(rel)
 
     # 6 catalog entries: (2-window + 1 line-pin) devel + (2-window + 1 line-pin) stable.
@@ -1995,7 +2059,7 @@ def test_cli_release_extra_pkgs_default_keeps_latest_plus_line_pins(
     )
     assert rc == 0
 
-    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     assert rel.is_file()
     objs = _catalog_objects(rel)
 
@@ -2063,7 +2127,7 @@ def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pyte
         + extra_flags
     )
     assert rc_before == 0
-    before_objs = _catalog_objects(out_before / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    before_objs = _catalog_objects(out_before / "release" / "ce-2.8" / "packagesite.pkg")
     before_devel = [o for o in before_objs if o["name"] == "pfBlockerNG-devel"]
     before_stable = [o for o in before_objs if o["name"] == "pfBlockerNG"]
     # No --stable-tag on this CLI path, so only devel gets a fresh build: default
@@ -2090,7 +2154,7 @@ def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pyte
     )
     assert rc == 0
 
-    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     assert rel.is_file()
     objs = _catalog_objects(rel)
     nv = {(o["name"], o["version"]) for o in objs}
@@ -2160,7 +2224,7 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
     )
     assert rc == 0
 
-    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     objs = _catalog_objects(rel)
 
     devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
@@ -2234,7 +2298,7 @@ def test_route_only_release_catalog_contains_exactly_frozen_pkg(tmp_path: Path) 
     out = tmp_path / "site"
     frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
     frozen_pkg.parent.mkdir()
-    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
 
     # Before-state: no release subtree yet.
     assert not (out / "release" / "ce-2.7").exists()
@@ -2246,7 +2310,7 @@ def test_route_only_release_catalog_contains_exactly_frozen_pkg(tmp_path: Path) 
         route_only_pkgs={"ce-2.7": [frozen_pkg]},
     )
 
-    rel = out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg"
+    rel = out / "release" / "ce-2.7" / "packagesite.pkg"
     assert rel.is_file(), "release catalog must exist for a route-only entry"
     objs = _catalog_objects(rel)
 
@@ -2268,7 +2332,7 @@ def test_route_only_no_nightly_subtree(tmp_path: Path) -> None:
     out = tmp_path / "site"
     frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
     frozen_pkg.parent.mkdir()
-    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
 
     # Before-state: neither nightly subtree exists.
     assert not (out / "nightly" / "ce-2.7").exists()
@@ -2284,7 +2348,7 @@ def test_route_only_no_nightly_subtree(tmp_path: Path) -> None:
     # Route-only entry: NO nightly subtree.
     assert not (out / "nightly" / "ce-2.7").exists(), "route-only must never produce a nightly/"
     # Build entry: nightly subtree present as normal.
-    assert (out / "nightly" / "ce-2.8" / "amd64" / "meta.conf").is_file()
+    assert (out / "nightly" / "ce-2.8" / "meta.conf").is_file()
 
 
 def test_route_only_additive_parity_build_entry_unchanged(tmp_path: Path) -> None:
@@ -2300,12 +2364,12 @@ def test_route_only_additive_parity_build_entry_unchanged(tmp_path: Path) -> Non
     out = tmp_path / "site"
     frozen_ce = tmp_path / "frozen_ce" / "pfBlockerNG-devel-3.1.0_5.pkg"
     frozen_ce.parent.mkdir()
-    make_pkg(frozen_ce, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+    make_pkg(frozen_ce, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
 
     # BEFORE: build-only matrix (CE 2.8 only).
     brp.build_repo_matrix([_CE], out, builder=_stub_builder)
-    rel_before = (out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg").read_bytes()
-    nightly_before = (out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg").read_bytes()
+    rel_before = (out / "release" / "ce-2.8" / "packagesite.pkg").read_bytes()
+    nightly_before = (out / "nightly" / "ce-2.8" / "packagesite.pkg").read_bytes()
 
     # AFTER: same matrix + route-only CE 2.7 added.
     brp.build_repo_matrix(
@@ -2314,15 +2378,15 @@ def test_route_only_additive_parity_build_entry_unchanged(tmp_path: Path) -> Non
         builder=_stub_builder,
         route_only_pkgs={"ce-2.7": [frozen_ce]},
     )
-    rel_after = (out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg").read_bytes()
-    nightly_after = (out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg").read_bytes()
+    rel_after = (out / "release" / "ce-2.8" / "packagesite.pkg").read_bytes()
+    nightly_after = (out / "nightly" / "ce-2.8" / "packagesite.pkg").read_bytes()
 
     # Build-entry subtrees are byte-identical — route-only is additive, not a regression.
     assert rel_after == rel_before, "route-only must not alter the build entry's release catalog"
     assert nightly_after == nightly_before, "route-only must not alter the build entry's nightly catalog"
 
     # Route-only CE 2.7 release catalog now exists (the additive part).
-    assert (out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg").is_file()
+    assert (out / "release" / "ce-2.7" / "packagesite.pkg").is_file()
 
 
 def test_route_only_ce_and_plus_both_served(tmp_path: Path) -> None:
@@ -2338,11 +2402,11 @@ def test_route_only_ce_and_plus_both_served(tmp_path: Path) -> None:
     out = tmp_path / "site"
     frozen_ce = tmp_path / "frozen_ce" / "pfBlockerNG-devel-3.1.0_5.pkg"
     frozen_ce.parent.mkdir()
-    make_pkg(frozen_ce, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+    make_pkg(frozen_ce, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
 
     frozen_plus = tmp_path / "frozen_plus" / "pfBlockerNG-devel-3.0.9_1.pkg"
     frozen_plus.parent.mkdir()
-    make_pkg(frozen_plus, name="pfBlockerNG-devel", version="3.0.9_1", abi="FreeBSD:15:amd64")
+    make_pkg(frozen_plus, name="pfBlockerNG-devel", version="3.0.9_1", abi="FreeBSD:15:*")
 
     brp.build_repo_matrix(
         [_CE, _CE_EOL, _PLUS_EOL],
@@ -2355,12 +2419,12 @@ def test_route_only_ce_and_plus_both_served(tmp_path: Path) -> None:
     )
 
     # CE route-only: correct frozen version served.
-    ce_objs = _catalog_objects(out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg")
+    ce_objs = _catalog_objects(out / "release" / "ce-2.7" / "packagesite.pkg")
     assert len(ce_objs) == 1
     assert ce_objs[0]["version"] == "3.1.0_5"
 
     # Plus route-only: correct frozen version served.
-    plus_objs = _catalog_objects(out / "release" / "plus-25.03" / "amd64" / "packagesite.pkg")
+    plus_objs = _catalog_objects(out / "release" / "plus-25.03" / "packagesite.pkg")
     assert len(plus_objs) == 1
     assert plus_objs[0]["version"] == "3.0.9_1"
 
@@ -2417,8 +2481,8 @@ def test_route_only_multiple_frozen_pkgs_all_indexed(tmp_path: Path) -> None:
     frozen_dir.mkdir()
     frozen_a = frozen_dir / "pfBlockerNG-devel-3.1.0_4.pkg"
     frozen_b = frozen_dir / "pfBlockerNG-devel-3.1.0_5.pkg"
-    make_pkg(frozen_a, name="pfBlockerNG-devel", version="3.1.0_4", abi="FreeBSD:14:amd64")
-    make_pkg(frozen_b, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+    make_pkg(frozen_a, name="pfBlockerNG-devel", version="3.1.0_4", abi="FreeBSD:14:*")
+    make_pkg(frozen_b, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
 
     brp.build_repo_matrix(
         [_CE_EOL],
@@ -2427,7 +2491,7 @@ def test_route_only_multiple_frozen_pkgs_all_indexed(tmp_path: Path) -> None:
         route_only_pkgs={"ce-2.7": [frozen_a, frozen_b]},
     )
 
-    objs = _catalog_objects(out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg")
+    objs = _catalog_objects(out / "release" / "ce-2.7" / "packagesite.pkg")
     versions = {o["version"] for o in objs}
     assert versions == {"3.1.0_4", "3.1.0_5"}
 
@@ -2446,40 +2510,65 @@ def test_invalid_role_raises_build_repo_error(tmp_path: Path) -> None:
         brp.build_repo_matrix([typo_entry], out, builder=_stub_builder)
 
 
-def test_route_only_frozen_pkg_filtered_by_abi(tmp_path: Path) -> None:
-    """A varver's frozen pool spanning multiple ABIs is filtered per (varver, arch).
+def test_route_only_wildcard_frozen_pkg_serves_all_arch_rows_of_varver(tmp_path: Path) -> None:
+    """ONE wildcard-ABI frozen .pkg serves EVERY arch row of a route-only varver
+    (arch-less; issue #1806) — matched by OS+major, never exact-string.
 
-    Scenario: Plus 25.03 EOL on BOTH amd64 and aarch64 (one varver, two arch entries),
-      route_only_pkgs carrying one frozen .pkg per ABI.
-      Given the pool [plus amd64 .pkg, plus aarch64 .pkg] under "plus-25.03"
-       When build_repo_matrix runs for both arch entries
-      Then release/plus-25.03/amd64 holds ONLY the amd64 .pkg
-       And release/plus-25.03/aarch64 holds ONLY the aarch64 .pkg
-      (a pool dedups by (name, version), so without an ABI filter each arch catalog
-       would cross-contaminate with the other ABI's build).
+    Before the redesign, a per-arch frozen pool was filtered into SEPARATE
+    arch-specific catalogs. Under the arch-less contract there is only ONE
+    release catalog per varver: a single NO_ARCH frozen package serves both
+    the amd64 AND the aarch64 route-only matrix row.
+
+    Scenario: Plus 25.03 EOL on BOTH amd64 and aarch64 (one varver, two arch rows)
+      Given ONE wildcard-ABI (FreeBSD:15:*) frozen .pkg under "plus-25.03"
+       When build_repo_matrix runs for both arch rows
+      Then release/plus-25.03/ (no arch subdir) holds exactly that one package
     """
     out = tmp_path / "site"
     plus_amd64 = {**_PLUS_EOL, "freebsd_major": "15", "arch": "amd64"}
     plus_arm = {**_PLUS_EOL, "freebsd_major": "15", "arch": "aarch64"}
     frozen_dir = tmp_path / "frozen"
     frozen_dir.mkdir()
-    pkg_amd64 = frozen_dir / "plus-amd64.pkg"
-    pkg_arm = frozen_dir / "plus-aarch64.pkg"
-    make_pkg(pkg_amd64, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:15:amd64")
-    make_pkg(pkg_arm, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:15:aarch64")
+    frozen_pkg = frozen_dir / "plus-devel.pkg"
+    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:15:*")
 
     brp.build_repo_matrix(
         [plus_amd64, plus_arm],
         out,
         builder=_stub_builder,
         build_nightly=False,
-        route_only_pkgs={"plus-25.03": [pkg_amd64, pkg_arm]},
+        route_only_pkgs={"plus-25.03": [frozen_pkg]},
     )
 
-    amd64_objs = _catalog_objects(out / "release" / "plus-25.03" / "amd64" / "packagesite.pkg")
-    arm_objs = _catalog_objects(out / "release" / "plus-25.03" / "aarch64" / "packagesite.pkg")
-    assert [o["abi"] for o in amd64_objs] == ["FreeBSD:15:amd64"]
-    assert [o["abi"] for o in arm_objs] == ["FreeBSD:15:aarch64"]
+    rel = out / "release" / "plus-25.03"
+    assert not (rel / "amd64").exists()
+    assert not (rel / "aarch64").exists()
+    objs = _catalog_objects(rel / "packagesite.pkg")
+    assert [o["abi"] for o in objs] == ["FreeBSD:15:*"]
+    assert [o["version"] for o in objs] == ["3.1.0_5"]
+
+
+def test_route_only_concrete_abi_frozen_pkg_rejected_at_emission(tmp_path: Path) -> None:
+    """A concrete-ABI frozen .pkg is a hard error — the arch-less catalog HARD-REQUIRES
+    a NO_ARCH (wildcard-ABI) package (issue #1806), even for a route-only (frozen
+    EOL) entry: a concrete one would silently install on only one arch.
+
+    Scenario: a concrete FreeBSD:14:amd64 frozen .pkg served via route_only_pkgs
+      When build_repo_matrix runs
+      Then it raises BuildRepoError naming the concrete ABI
+    """
+    out = tmp_path / "site"
+    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_pkg.parent.mkdir()
+    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+
+    with pytest.raises(brp.BuildRepoError, match="NO_ARCH"):
+        brp.build_repo_matrix(
+            [_CE_EOL],
+            out,
+            builder=_stub_builder,
+            route_only_pkgs={"ce-2.7": [frozen_pkg]},
+        )
 
 
 def test_route_only_no_frozen_pkg_for_abi_raises(tmp_path: Path) -> None:
@@ -2524,7 +2613,7 @@ def test_cli_route_only_pkgs_flag_builds_frozen_catalog(tmp_path: Path) -> None:
     frozen_dir = tmp_path / "frozen"
     frozen_dir.mkdir()
     frozen_pkg = frozen_dir / "pfBlockerNG-devel-3.1.0_5.pkg"
-    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
 
     matrix_json = json.dumps([_CE_EOL])
     matrix_file = tmp_path / "matrix.json"
@@ -2548,7 +2637,7 @@ def test_cli_route_only_pkgs_flag_builds_frozen_catalog(tmp_path: Path) -> None:
 
     # THEN: CLI exits 0, catalog present, no nightly.
     assert rc == 0
-    catalog = out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg"
+    catalog = out / "release" / "ce-2.7" / "packagesite.pkg"
     assert catalog.is_file(), f"route-only release catalog not emitted: {catalog}"
     objs = _catalog_objects(catalog)
     assert len(objs) == 1
@@ -2570,8 +2659,8 @@ def test_cli_route_only_pkgs_flag_repeatable_for_multiple_frozen(tmp_path: Path)
     frozen_dir.mkdir()
     frozen_a = frozen_dir / "pfBlockerNG-devel-3.1.0_4.pkg"
     frozen_b = frozen_dir / "pfBlockerNG-devel-3.1.0_5.pkg"
-    make_pkg(frozen_a, name="pfBlockerNG-devel", version="3.1.0_4", abi="FreeBSD:14:amd64")
-    make_pkg(frozen_b, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+    make_pkg(frozen_a, name="pfBlockerNG-devel", version="3.1.0_4", abi="FreeBSD:14:*")
+    make_pkg(frozen_b, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
 
     matrix_file = tmp_path / "matrix.json"
     matrix_file.write_text(json.dumps([_CE_EOL]))
@@ -2592,7 +2681,7 @@ def test_cli_route_only_pkgs_flag_repeatable_for_multiple_frozen(tmp_path: Path)
     )
 
     assert rc == 0
-    objs = _catalog_objects(out / "release" / "ce-2.7" / "amd64" / "packagesite.pkg")
+    objs = _catalog_objects(out / "release" / "ce-2.7" / "packagesite.pkg")
     assert {o["version"] for o in objs} == {"3.1.0_4", "3.1.0_5"}
 
 
@@ -2658,7 +2747,7 @@ def test_consume_mode_release_catalog_contains_consumed_pkg(tmp_path: Path) -> N
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
     prebuilt = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
-    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:amd64")
+    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:*")
 
     # Before-state: no release subtree yet.
     assert not (out / "release" / "ce-2.8").exists()
@@ -2678,7 +2767,7 @@ def test_consume_mode_release_catalog_contains_consumed_pkg(tmp_path: Path) -> N
     )
 
     # Catalog must exist and list the consumed package.
-    catalog = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    catalog = out / "release" / "ce-2.8" / "packagesite.pkg"
     assert catalog.is_file(), "release catalog must exist in consume mode"
     objs = _catalog_objects(catalog)
     assert len(objs) == 1
@@ -2690,25 +2779,26 @@ def test_consume_mode_release_catalog_contains_consumed_pkg(tmp_path: Path) -> N
     assert "stable" not in builder_calls, "builder must not be called for stable in consume mode"
 
 
-def test_consume_mode_abi_filter_yields_arch_specific_catalogs(tmp_path: Path) -> None:
-    """A mixed-ABI pool filtered per (varver, arch) yields separate arch-specific catalogs.
+def test_consume_mode_wildcard_pkg_serves_all_arch_rows_of_varver(tmp_path: Path) -> None:
+    """ONE wildcard-ABI pool entry serves EVERY arch row of a varver (arch-less; issue #1806).
 
-    Scenario: Plus 26.03 on amd64 + aarch64 (two arch entries, one varver)
-      Given a pool with one amd64 .pkg and one aarch64 .pkg under "plus-26.03"
+    Before the redesign, a mixed-ABI pool was filtered per (varver, arch) into
+    SEPARATE arch-specific catalogs. Under the arch-less contract there is only
+    ONE catalog per varver — a single NO_ARCH package (matched by OS+major)
+    serves both the amd64 AND the aarch64 matrix row.
+
+    Scenario: Plus 26.03 on amd64 + aarch64 (two arch rows, one varver)
+      Given a pool with ONE wildcard-ABI (FreeBSD:16:*) devel .pkg under "plus-26.03"
        When build_repo_matrix runs for both _PLUS (amd64) + _PLUS_ARM (aarch64)
-      Then release/plus-26.03/amd64/ holds ONLY the amd64 .pkg
-       And release/plus-26.03/aarch64/ holds ONLY the aarch64 .pkg
-      (without ABI filter each catalog would cross-contaminate with the other ABI's build)
+      Then release/plus-26.03/ (no arch subdir) holds exactly that one package
     """
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
-    pkg_amd64 = pkg_dir / "pfBlockerNG-devel-4.0.0_1-amd64.pkg"
-    pkg_aarch64 = pkg_dir / "pfBlockerNG-devel-4.0.0_1-aarch64.pkg"
-    make_pkg(pkg_amd64, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:16:amd64")
-    make_pkg(pkg_aarch64, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:16:aarch64")
+    pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
+    make_pkg(pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:16:*")
 
-    # Before-state: no catalogs exist.
+    # Before-state: no catalog exists.
     assert not (out / "release" / "plus-26.03").exists()
 
     brp.build_repo_matrix(
@@ -2716,15 +2806,40 @@ def test_consume_mode_abi_filter_yields_arch_specific_catalogs(tmp_path: Path) -
         out,
         builder=_stub_builder,
         build_nightly=False,
-        release_pkgs={"plus-26.03": [pkg_amd64, pkg_aarch64]},
+        release_pkgs={"plus-26.03": [pkg]},
     )
 
-    amd64_objs = _catalog_objects(out / "release" / "plus-26.03" / "amd64" / "packagesite.pkg")
-    arm_objs = _catalog_objects(out / "release" / "plus-26.03" / "aarch64" / "packagesite.pkg")
+    rel = out / "release" / "plus-26.03"
+    assert not (rel / "amd64").exists()
+    assert not (rel / "aarch64").exists()
+    objs = _catalog_objects(rel / "packagesite.pkg")
+    assert [o["abi"] for o in objs] == ["FreeBSD:16:*"]
+    assert [o["version"] for o in objs] == ["4.0.0_1"]
 
-    # Each arch catalog contains ONLY its own ABI's package.
-    assert [o["abi"] for o in amd64_objs] == ["FreeBSD:16:amd64"]
-    assert [o["abi"] for o in arm_objs] == ["FreeBSD:16:aarch64"]
+
+def test_consume_mode_concrete_abi_pkg_rejected_at_emission(tmp_path: Path) -> None:
+    """A concrete-ABI pool entry is a hard error — the arch-less catalog HARD-REQUIRES
+    a NO_ARCH (wildcard-ABI) package (issue #1806): a concrete one would silently
+    install on only one arch.
+
+    Scenario: a concrete FreeBSD:16:amd64 devel .pkg served via release_pkgs
+      When build_repo_matrix runs
+      Then it raises BuildRepoError naming the concrete ABI
+    """
+    out = tmp_path / "site"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
+    make_pkg(pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:16:amd64")
+
+    with pytest.raises(brp.BuildRepoError, match="NO_ARCH"):
+        brp.build_repo_matrix(
+            [_PLUS],
+            out,
+            builder=_stub_builder,
+            build_nightly=False,
+            release_pkgs={"plus-26.03": [pkg]},
+        )
 
 
 def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
@@ -2741,9 +2856,9 @@ def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
     devel_pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
     stable_pkg = pkg_dir / "pfBlockerNG-4.0.0.pkg"
     # devel channel: name ends in "-devel" (retain_by_channel uses the name to classify)
-    make_pkg(devel_pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:amd64")
+    make_pkg(devel_pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:*")
     # stable channel: base name without "-devel" suffix
-    make_pkg(stable_pkg, name="pfBlockerNG", version="4.0.0", abi="FreeBSD:15:amd64")
+    make_pkg(stable_pkg, name="pfBlockerNG", version="4.0.0", abi="FreeBSD:15:*")
 
     # Before-state: no release catalog.
     assert not (out / "release" / "ce-2.8").exists()
@@ -2756,7 +2871,7 @@ def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
         release_pkgs={"ce-2.8": [devel_pkg, stable_pkg]},
     )
 
-    catalog = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    catalog = out / "release" / "ce-2.8" / "packagesite.pkg"
     assert catalog.is_file()
     objs = _catalog_objects(catalog)
     names = {o["name"] for o in objs}
@@ -2770,14 +2885,14 @@ def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
 def test_consume_mode_release_extra_pkgs_abi_filtered(tmp_path: Path) -> None:
     """release_extra_pkgs is ABI-filtered before channel retention in consume mode.
 
-    Scenario: a wrong-ABI extra with a HIGHER version must not contaminate this arch's catalog
-      Given a ce-2.8 amd64 entry, a correct-ABI devel pkg in the pool, and release_extra_pkgs
-            carrying a correct-ABI stable pkg PLUS a wrong-ABI (FreeBSD:16) devel pkg whose
-            version (9.9.9) is higher than the pool's devel (4.0.0_1)
+    Scenario: a wrong-major extra with a HIGHER version must not contaminate this catalog
+      Given a ce-2.8 (FreeBSD major 15) entry, a correct-major devel pkg in the pool, and
+            release_extra_pkgs carrying a correct-major stable pkg PLUS a wrong-major
+            (FreeBSD:16) devel pkg whose version (9.9.9) is higher than the pool's devel (4.0.0_1)
        When build_repo_matrix runs in consume mode (keep_devel=1, keep_stable=1)
-      Then the release catalog holds ONLY the FreeBSD:15:amd64 packages — the higher-version
-           wrong-ABI devel is excluded by the ABI filter, not retained over the right-ABI devel
-           (without the filter, retain_by_channel would pick the 9.9.9 wrong-ABI devel).
+      Then the release catalog holds ONLY the FreeBSD:15:* packages — the higher-version
+           wrong-major devel is excluded by the ABI filter, not retained over the right-major devel
+           (without the filter, retain_by_channel would pick the 9.9.9 wrong-major devel).
     """
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
@@ -2785,9 +2900,9 @@ def test_consume_mode_release_extra_pkgs_abi_filtered(tmp_path: Path) -> None:
     devel_pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
     stable_extra = pkg_dir / "pfBlockerNG-4.0.0.pkg"
     wrong_abi_devel = pkg_dir / "pfBlockerNG-devel-9.9.9.pkg"
-    make_pkg(devel_pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:amd64")
-    make_pkg(stable_extra, name="pfBlockerNG", version="4.0.0", abi="FreeBSD:15:amd64")
-    make_pkg(wrong_abi_devel, name="pfBlockerNG-devel", version="9.9.9", abi="FreeBSD:16:amd64")
+    make_pkg(devel_pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:*")
+    make_pkg(stable_extra, name="pfBlockerNG", version="4.0.0", abi="FreeBSD:15:*")
+    make_pkg(wrong_abi_devel, name="pfBlockerNG-devel", version="9.9.9", abi="FreeBSD:16:*")
 
     assert not (out / "release" / "ce-2.8").exists()
 
@@ -2800,10 +2915,10 @@ def test_consume_mode_release_extra_pkgs_abi_filtered(tmp_path: Path) -> None:
         release_extra_pkgs=[stable_extra, wrong_abi_devel],
     )
 
-    objs = _catalog_objects(out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    objs = _catalog_objects(out / "release" / "ce-2.8" / "packagesite.pkg")
     abis = {o["abi"] for o in objs}
     versions = {(o["name"], o["version"]) for o in objs}
-    assert abis == {"FreeBSD:15:amd64"}, "only this arch's ABI may appear in the catalog"
+    assert abis == {"FreeBSD:15:*"}, "only this major's ABI may appear in the catalog"
     assert ("pfBlockerNG-devel", "4.0.0_1") in versions, "right-ABI devel must be kept"
     assert ("pfBlockerNG", "4.0.0") in versions, "right-ABI stable extra must be kept"
     assert ("pfBlockerNG-devel", "9.9.9") not in versions, "wrong-ABI extra must be filtered out"
@@ -2836,11 +2951,11 @@ def test_consume_mode_empty_pool_skips_release_catalog_no_exception(tmp_path: Pa
     )
 
     # Release catalog must NOT be emitted for an empty pool.
-    release_catalog = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    release_catalog = out / "release" / "ce-2.8" / "packagesite.pkg"
     assert not release_catalog.exists(), "release catalog must not be emitted for empty pool"
 
     # Nightly must still be built.
-    nightly_catalog = out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    nightly_catalog = out / "nightly" / "ce-2.8" / "packagesite.pkg"
     assert nightly_catalog.is_file(), "nightly catalog must still be built in consume mode"
 
 
@@ -2858,7 +2973,7 @@ def test_consume_mode_nightly_still_built_from_source(tmp_path: Path) -> None:
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
     prebuilt = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
-    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:amd64")
+    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:*")
 
     builder_channels: list[str] = []
 
@@ -2879,10 +2994,10 @@ def test_consume_mode_nightly_still_built_from_source(tmp_path: Path) -> None:
     assert "devel" not in builder_channels, "builder must NOT be called for devel in consume mode"
 
     # Nightly catalog exists.
-    assert (out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg").is_file()
+    assert (out / "nightly" / "ce-2.8" / "packagesite.pkg").is_file()
 
     # Release catalog exists and lists the consumed pkg (not the nightly build).
-    rel_objs = _catalog_objects(out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    rel_objs = _catalog_objects(out / "release" / "ce-2.8" / "packagesite.pkg")
     assert len(rel_objs) == 1
     assert rel_objs[0]["name"] == "pfBlockerNG-devel"
     assert rel_objs[0]["version"] == "4.0.0_1"
@@ -2909,11 +3024,11 @@ def test_consume_mode_none_reproduces_source_build_path(tmp_path: Path) -> None:
     brp.build_repo_matrix([_CE], out, builder=_stub_builder)
 
     # Both subtrees present, built from source via stub.
-    assert (out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg").is_file()
-    assert (out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg").is_file()
+    assert (out / "release" / "ce-2.8" / "packagesite.pkg").is_file()
+    assert (out / "nightly" / "ce-2.8" / "packagesite.pkg").is_file()
 
     # Verify the catalog lists the stub-built devel package (confirms source-build path ran).
-    rel_objs = _catalog_objects(out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    rel_objs = _catalog_objects(out / "release" / "ce-2.8" / "packagesite.pkg")
     assert any(o["name"] == "pfBlockerNG-devel" for o in rel_objs), (
         "devel package from stub builder must appear in release catalog on source-build path"
     )
@@ -2933,7 +3048,7 @@ def test_cli_release_pkgs_flag_serves_consumed_catalog(tmp_path: Path) -> None:
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
     prebuilt = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
-    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:amd64")
+    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:*")
 
     matrix_file = tmp_path / "matrix.json"
     matrix_file.write_text(json.dumps([_CE]))
@@ -2955,7 +3070,7 @@ def test_cli_release_pkgs_flag_serves_consumed_catalog(tmp_path: Path) -> None:
     )
 
     assert rc == 0
-    catalog = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    catalog = out / "release" / "ce-2.8" / "packagesite.pkg"
     assert catalog.is_file(), f"consumed release catalog not emitted: {catalog}"
     objs = _catalog_objects(catalog)
     assert len(objs) == 1
@@ -3053,10 +3168,10 @@ def test_cli_dep_pkgs_lands_in_release_and_nightly_same_abi_train(
     )
     assert rc == 0
 
-    ce_release = _names_in(out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
-    ce_nightly = _names_in(out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg")
-    plus_release = _names_in(out / "release" / "plus-26.03" / "amd64" / "packagesite.pkg")
-    plus_nightly = _names_in(out / "nightly" / "plus-26.03" / "amd64" / "packagesite.pkg")
+    ce_release = _names_in(out / "release" / "ce-2.8" / "packagesite.pkg")
+    ce_nightly = _names_in(out / "nightly" / "ce-2.8" / "packagesite.pkg")
+    plus_release = _names_in(out / "release" / "plus-26.03" / "packagesite.pkg")
+    plus_nightly = _names_in(out / "nightly" / "plus-26.03" / "packagesite.pkg")
 
     assert "py311-charset-normalizer" in ce_release, "dep must land in the release catalog of its own ABI train"
     assert "py311-charset-normalizer" in ce_nightly, "dep must ALSO land in the nightly catalog of its own ABI train"
@@ -3095,7 +3210,7 @@ def test_cli_dep_pkgs_flag_is_repeatable(tmp_path: Path, monkeypatch: pytest.Mon
         ]
     )
     assert rc == 0
-    names = _names_in(out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    names = _names_in(out / "release" / "ce-2.8" / "packagesite.pkg")
     assert {"py311-charset-normalizer", "py311-idna"} <= names
 
 
@@ -3103,15 +3218,23 @@ def test_dep_pkgs_fold_after_retention_stable_pin_survives(tmp_path: Path) -> No
     """--dep-pkgs folds AFTER retain_by_channel — it never competes for a
     --release-keep-stable slot (consume mode's fold point).
 
-    If the dep pkg were folded BEFORE retention, its version (3.4.4 —
-    numerically higher than the real stable's 3.0.1) would win the keep=1
-    window and EVICT the real pfBlockerNG stable release. It must not.
+    issue #1806 gate-A finding: the ORIGINAL version of this test used a dep
+    version (3.4.4) on a DIFFERENT major/minor line ("3.4") than the real
+    stable's (3.0.1, line "3.0") — vacuous, because ``_line_pins`` pins the
+    newest package of EVERY line on top of the retention window regardless of
+    fold order, so the stable pin would survive even under a (buggy)
+    pre-retention fold. This version uses a dep version on the SAME line
+    ("3.0") as the real stable, which DOES discriminate: proven below by
+    directly simulating a pre-retention fold via ``retain_by_channel`` and
+    showing it evicts the real stable pin (a real production bug would look
+    like this) — then showing ``build_repo_matrix``'s actual AFTER-retention
+    fold point does not.
 
-    Scenario: keep_stable=1, one real stable release, one higher-version dep pkg
+    Scenario: keep_stable=1, one real stable release, one same-line dep pkg
       Given a pfBlockerNG stable .pkg at version 3.0.1 (consume-mode pool)
-        And a py311-charset-normalizer dep .pkg at version 3.4.4 (same ABI train)
+        And a py311-charset-normalizer dep .pkg at version 3.0.5 (SAME line "3.0")
        When build_repo_matrix runs with release_keep_stable=1 (default)
-      Then release/ce-2.8/amd64 lists BOTH the stable pin (3.0.1, intact) AND
+      Then release/ce-2.8 lists BOTH the stable pin (3.0.1, intact) AND
            the dep pkg — the stable pin was never evicted by the dep's higher
            version number
     """
@@ -3119,14 +3242,29 @@ def test_dep_pkgs_fold_after_retention_stable_pin_survives(tmp_path: Path) -> No
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
     stable_pkg = pkg_dir / "pfBlockerNG-3.0.1.pkg"
-    make_pkg(stable_pkg, name="pfBlockerNG", version="3.0.1", abi="FreeBSD:15:amd64")
-    dep_pkg = pkg_dir / "py311-charset-normalizer-3.4.4.pkg"
-    make_pkg(dep_pkg, name="py311-charset-normalizer", version="3.4.4", abi="FreeBSD:15:*")
+    make_pkg(stable_pkg, name="pfBlockerNG", version="3.0.1", abi="FreeBSD:15:*")
+    dep_pkg = pkg_dir / "py311-charset-normalizer-3.0.5.pkg"
+    make_pkg(dep_pkg, name="py311-charset-normalizer", version="3.0.5", abi="FreeBSD:15:*")
 
-    # Before-state: confirm the dep's version really is higher (the scenario's
-    # premise) — a pre-retention fold would let this version win the window.
-    assert brp._pkg_version_key("3.4.4") > brp._pkg_version_key("3.0.1")
+    # Before-state: confirm the dep's version really is higher AND on the SAME
+    # major/minor line as the stable's — the scenario's discriminating premise.
+    assert brp._pkg_version_key("3.0.5") > brp._pkg_version_key("3.0.1")
+    assert brp._line_key("3.0.5", "dep") == brp._line_key("3.0.1", "stable") == "3.0"
 
+    # Simulated pre-retention fold (the bug this design deliberately avoids):
+    # folding the dep into the candidate pool BEFORE retain_by_channel runs lets
+    # its higher version win the keep=1 window; the line-pin logic then finds
+    # NOTHING left outside the window for line "3.0" (the dep IS that line's
+    # newest) — so the real stable pin is evicted. This proves the scenario
+    # actually discriminates between fold-before and fold-after.
+    pre_retention_result = brp.retain_by_channel([stable_pkg, dep_pkg], keep_devel=1, keep_stable=1)
+    pre_retention_versions = {brp.read_compact_manifest(p)["version"] for p in pre_retention_result}
+    assert "3.0.1" not in pre_retention_versions, (
+        "simulated pre-retention fold must evict the stable pin (proves the scenario discriminates)"
+    )
+
+    # The ACTUAL production fold point: dep_pkgs never enters retain_by_channel's
+    # candidate pool — it folds in strictly AFTER, so the stable pin is untouched.
     brp.build_repo_matrix(
         [_CE],
         out,
@@ -3136,10 +3274,10 @@ def test_dep_pkgs_fold_after_retention_stable_pin_survives(tmp_path: Path) -> No
         dep_pkgs=[dep_pkg],
     )
 
-    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     names_versions = _names_versions_in_release(rel)
     assert ("pfBlockerNG", "3.0.1") in names_versions, "the real stable pin must survive intact"
-    assert ("py311-charset-normalizer", "3.4.4") in names_versions, "the dep pkg must still be present"
+    assert ("py311-charset-normalizer", "3.0.5") in names_versions, "the dep pkg must still be present"
     assert len(names_versions) == 2, "no other package should have appeared or been evicted"
 
 
@@ -3156,3 +3294,92 @@ def test_dep_pkgs_mismatched_abi_raises_hard_error(tmp_path: Path) -> None:
 
     with pytest.raises(brp.BuildRepoError, match="dep"):
         brp.build_repo_matrix([_CE], out, builder=_stub_builder, dep_pkgs=[dep_pkg])
+
+
+def test_dep_pkgs_matched_but_never_emitted_still_raises(tmp_path: Path) -> None:
+    """issue #1806 gate-A finding: a dep whose ABI MATCHES a row must still raise
+    if it never actually lands in an EMITTED catalog for that row — a matched-but-
+    unemitted dep is exactly as silent a drop as an unmatched one.
+
+    The gap: ``dep_pkgs_matched`` was updated unconditionally the moment a dep's
+    ABI matched a row's major, even on the consume-mode branch that can skip
+    emitting the release catalog entirely (an empty pool -> ``if kept_release:``
+    warns and skips). Combined with ``build_nightly=False`` on that SAME entry,
+    the dep landed in NEITHER catalog, yet was marked "matched" — so the
+    end-of-run unmatched check never fired. The fix tracks ``dep_pkgs_matched``
+    only at each site that actually folds the dep into an emitted catalog.
+
+    Scenario: consume mode, EMPTY pool (release skipped), nightly off
+      Given the CE 2.8 entry, release_pkgs={"ce-2.8": []} (nothing serves this
+            major, so kept_release is empty and the release catalog is skipped)
+        And build_nightly=False (no nightly catalog either)
+        And a dep pkg whose ABI matches CE 2.8's major (FreeBSD:15)
+       When build_repo_matrix runs
+      Then it raises BuildRepoError — the dep never landed in ANY catalog, even
+           though its ABI matched this entry
+    """
+    out = tmp_path / "site"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    dep_pkg = pkg_dir / "py311-charset-normalizer-3.4.4.pkg"
+    make_pkg(dep_pkg, name="py311-charset-normalizer", version="3.4.4", abi="FreeBSD:15:*")
+
+    with pytest.raises(brp.BuildRepoError, match="dep"):
+        brp.build_repo_matrix(
+            [_CE],
+            out,
+            builder=_stub_builder,
+            build_nightly=False,
+            release_pkgs={"ce-2.8": []},  # empty pool -> kept_release empty -> release skipped
+            dep_pkgs=[dep_pkg],
+        )
+
+
+def test_dep_pkgs_route_only_entry_never_folds_dep_shared_major_build_entry_does(
+    tmp_path: Path,
+) -> None:
+    """A route-only (frozen EOL) entry NEVER receives a dep pkg, even when it shares
+    its FreeBSD major with a build entry that DOES (issue #1806 coverage gap: B0.3).
+
+    Scenario: a route-only CE 2.7 entry (FreeBSD major 15) + a build Plus entry
+              ALSO on FreeBSD major 15, one dep pkg wildcarded to FreeBSD:15:*
+      Given a frozen CE 2.7 .pkg served via route_only_pkgs
+        And a py311-charset-normalizer dep pkg matching major 15 by OS+major
+       When build_repo_matrix runs over [route-only CE 2.7, build Plus-on-15]
+      Then the dep lands in the BUILD entry's release catalog (release/plus-15/)
+       And the route-only entry's release catalog (release/ce-2.7/) holds ONLY
+           the frozen .pkg — never the dep
+       And no error is raised (the dep WAS emitted somewhere)
+    """
+    out = tmp_path / "site"
+    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_pkg.parent.mkdir()
+    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:15:*")
+
+    dep_pkg = tmp_path / "py311-charset-normalizer-3.4.4.pkg"
+    make_pkg(dep_pkg, name="py311-charset-normalizer", version="3.4.4", abi="FreeBSD:15:*")
+
+    # A route-only entry pinned to major 15 (CE 2.7 is major 14 by default; override
+    # so it shares its major with the build entry below) + a build entry that shares
+    # that SAME major (hypothetical: a Plus edition also targeting major 15).
+    ce_eol_on_15 = {**_CE_EOL, "freebsd_major": "15"}
+    plus_on_15 = {**_PLUS, "pfsense_version": "15.0", "freebsd_major": "15"}
+
+    brp.build_repo_matrix(
+        [ce_eol_on_15, plus_on_15],
+        out,
+        builder=_stub_builder,
+        build_nightly=False,
+        route_only_pkgs={"ce-2.7": [frozen_pkg]},
+        dep_pkgs=[dep_pkg],
+    )
+
+    # Build entry: dep folded in alongside the fresh devel build.
+    build_names = _names_in(out / "release" / "plus-15.0" / "packagesite.pkg")
+    assert "py311-charset-normalizer" in build_names, "dep must land in the build entry's release catalog"
+
+    # Route-only entry: frozen .pkg ONLY — the dep must never be folded in.
+    route_only_objs = _catalog_objects(out / "release" / "ce-2.7" / "packagesite.pkg")
+    assert {o["name"] for o in route_only_objs} == {"pfBlockerNG-devel"}, (
+        "a route-only entry must never receive a dep pkg, even sharing a major with a build entry"
+    )
