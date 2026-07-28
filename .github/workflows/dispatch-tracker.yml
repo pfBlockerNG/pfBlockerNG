@@ -1,0 +1,35 @@
+name: Dispatch tracker on matrix change
+
+# Lives ON the ci-metadata orphan branch (issue #1823): a push-triggered
+# workflow only fires from the pushed ref, and devel's workflows can never see
+# pushes here. When a tracker/* matrix PR (or any hand edit) merges into
+# ci-metadata, kick the daily reconcile immediately instead of waiting for the
+# 06:00 UTC cron — the reconcile then builds/publishes whatever the new matrix
+# state demands.
+#
+# The dispatch targets devel, where version-tracker.yml lives. github.token
+# with actions:write is the same mechanism version-tracker.yml itself uses to
+# dispatch image-refresh.yml.
+
+on:
+  push:
+    branches:
+      - ci-metadata
+
+permissions:
+  actions: write
+
+jobs:
+  dispatch:
+    name: Kick version-tracker on devel
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch version-tracker.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          echo "Matrix changed on ci-metadata — dispatching version-tracker.yml on devel"
+          gh workflow run version-tracker.yml --repo "$REPO" --ref devel
