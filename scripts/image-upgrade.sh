@@ -24,7 +24,10 @@
 # [optional: pkg update -f + pkg upgrade, reboot, wait SSH back] ->
 # check for an available OS upgrade (pfSense-upgrade -c); if the box is already
 # current, exit 0 WITHOUT publishing -> else run pfSense-upgrade over an SSH jump
-# -> wait for /etc/version to change + reboot -> health-gate (webConfigurator HTTP
+# -> wait for /etc/version to change + reboot -> reconcile pfBlockerNG's baked
+# RUN_DEPENDS against the NEW version's matrix row (install what's missing, e.g.
+# after a py_flavor flip; shed stale old-flavor/extra packages; verify pkg info -e
+# + a python import probe, fail-closed) -> health-gate (webConfigurator HTTP
 # or pfctl live ruleset; confirms it boots and works on the NEW version) ->
 # power off cleanly -> compress on Proxmox -> stream back ->
 # push the new tag (local). The source tag is left untouched, so the old image
@@ -119,6 +122,10 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 [ -f "$SCRIPT_DIR/image-lib.sh" ] || die "image-lib.sh not found next to this script: $SCRIPT_DIR/image-lib.sh"
 # shellcheck source=scripts/image-lib.sh
 . "$SCRIPT_DIR/image-lib.sh"
+# Post-upgrade dependency reconcile+shed decision logic (issue #1806 final
+# step) — pure functions, tested by tests/shell/dep_reconcile_spec.sh.
+# shellcheck source=scripts/lib/dep-reconcile.sh
+. "$SCRIPT_DIR/lib/dep-reconcile.sh"
 
 FROM=""
 TO=""
@@ -504,6 +511,98 @@ if [ -z "$NEW_VER" ]; then
     die "version did not change within ${UPGRADE_TIMEOUT}s (still '${OLD_VER}'; see $LOCAL_DIR/upgrade.log)"
 fi
 log "upgraded: ${OLD_VER} -> ${NEW_VER}"
+
+# --- post-upgrade dependency reconcile + shed (issue #1806 final step) -----
+# Repair pfBlockerNG's baked RUN_DEPENDS set for the box's NEW version before
+# the health gate/publish below: most notably a py_flavor flip (e.g. py311 ->
+# py312) strands every old-flavor package. Matrix-driven off the CI matrix's
+# per-pfsense_version rows (--print-ci; one row per version, unlike the
+# per-freebsd_major-deduped BUILD matrix); best-effort when the NEW version
+# has no matrix row yet (a version not yet added) — warn + skip the
+# install/shed plan, but still verify the OLD row's own deps so a genuinely
+# broken set (e.g. a flip that already happened) is still caught. Fail-closed
+# like the health gate below: a verify failure aborts BEFORE publish.
+# scripts/lib/dep-reconcile.sh's pfb_dep_* functions are the tested, pure
+# needed-set/diff logic (tests/shell/dep_reconcile_spec.sh); everything below
+# is the live ssh/pkg(8) wiring around them (live-proof-only).
+_DEP_MATRIX="$(sh "$SCRIPT_DIR/read-version-matrix.sh" --print-ci 2>/dev/null)" \
+    || { warn "could not read the version matrix — skipping dependency reconcile"; _DEP_MATRIX="[]"; }
+
+# _dep_row VERSION — echo the CI-matrix row (compact JSON) whose pfsense_version
+# equals VERSION and whose channel matches this run's --type (case-insensitive
+# — the matrix spells it "CE"/"Plus"), or empty when none matches.
+_dep_row() {
+    printf '%s' "$_DEP_MATRIX" | jq -c --arg v "$1" --arg t "$TYPE" \
+        '[.[] | select(.pfsense_version == $v and ((.channel // "") | ascii_downcase) == $t)][0] // empty'
+}
+
+_DEP_OLD_ROW="$(_dep_row "$FROM")"
+_DEP_NEW_MATRIX_VER="$(image_version_tag "$NEW_VER")"
+_DEP_NEW_ROW="$(_dep_row "$_DEP_NEW_MATRIX_VER")"
+
+if [ -z "$_DEP_OLD_ROW" ]; then
+    warn "no matrix row for ${TYPE} ${FROM} — skipping dependency reconcile (no known baseline to diff against)"
+else
+    _DEP_OLD_FLAVOR="$(printf '%s' "$_DEP_OLD_ROW" | jq -r '.py_flavor')"
+    _DEP_OLD_EXTRA="$(printf '%s' "$_DEP_OLD_ROW" | jq -r '.extra_pkgs[]? // empty')"
+    _DEP_INSTALLED="$(ssh_guest "pkg query '%n'" 2>/dev/null || true)"
+
+    if [ -z "$_DEP_NEW_ROW" ]; then
+        # Best-effort: a version not yet added to the matrix. NEVER attempt an
+        # install/shed plan against an unknown target (nothing to diff against) —
+        # only verify the OLD row's own expectations are still met, so a genuine
+        # break (e.g. a py_flavor flip the box already went through) is still
+        # caught rather than silently waved through.
+        warn "no matrix row for ${TYPE} ${_DEP_NEW_MATRIX_VER} yet — skipping install/shed plan; verifying ${FROM}'s own deps only"
+        _DEP_VERIFY_FLAVOR="$_DEP_OLD_FLAVOR"
+        _DEP_VERIFY_EXTRA="$_DEP_OLD_EXTRA"
+    else
+        _DEP_NEW_FLAVOR="$(printf '%s' "$_DEP_NEW_ROW" | jq -r '.py_flavor')"
+        _DEP_NEW_EXTRA="$(printf '%s' "$_DEP_NEW_ROW" | jq -r '.extra_pkgs[]? // empty')"
+
+        log "reconciling pfBlockerNG dependencies (${_DEP_OLD_FLAVOR} -> ${_DEP_NEW_FLAVOR})"
+        _DEP_PLAN="$(pfb_dep_plan "$_DEP_OLD_FLAVOR" "$_DEP_OLD_EXTRA" "$_DEP_NEW_FLAVOR" "$_DEP_NEW_EXTRA" "$_DEP_INSTALLED")"
+        _DEP_INSTALL_LIST="$(printf '%s\n' "$_DEP_PLAN" | sed -n 's/^install //p')"
+        _DEP_SHED_LIST="$(printf '%s\n' "$_DEP_PLAN" | sed -n 's/^shed //p')"
+
+        if [ -n "$_DEP_INSTALL_LIST" ]; then
+            log "installing missing dependencies: $(printf '%s' "$_DEP_INSTALL_LIST" | tr '\n' ' ')"
+            ssh_guest "env ASSUME_ALWAYS_YES=yes pkg install -y $(printf '%s' "$_DEP_INSTALL_LIST" | tr '\n' ' ')" \
+                2>&1 | tee "$LOCAL_DIR/dep-install.log" || true
+        fi
+
+        if [ -n "$_DEP_SHED_LIST" ]; then
+            log "shedding stale dependencies: $(printf '%s' "$_DEP_SHED_LIST" | tr '\n' ' ')"
+            ssh_guest "pkg delete -y $(printf '%s' "$_DEP_SHED_LIST" | tr '\n' ' ')" \
+                2>&1 | tee "$LOCAL_DIR/dep-shed.log" \
+                || warn "pkg delete of stale deps reported a non-zero exit (see $LOCAL_DIR/dep-shed.log)"
+        fi
+
+        _DEP_VERIFY_FLAVOR="$_DEP_NEW_FLAVOR"
+        _DEP_VERIFY_EXTRA="$_DEP_NEW_EXTRA"
+    fi
+
+    # Verify (always, whether or not a plan ran above): every needed package
+    # resolves in the pkg db (pkg info -e — one round trip per package, as
+    # specified), and the python import probe succeeds for the python-module
+    # deps — fail-closed: a bad dependency set must never be published (same
+    # shape as the health gate below).
+    _DEP_VERIFY_FAIL=0
+    for _dep_pkg in $(pfb_dep_needed_pkgs "$_DEP_VERIFY_FLAVOR" "$_DEP_VERIFY_EXTRA"); do
+        ssh_guest "pkg info -e '$_dep_pkg'" >/dev/null 2>&1 || {
+            warn "dependency verify: ${_dep_pkg} not resolved on the guest"
+            _DEP_VERIFY_FAIL=1
+        }
+    done
+    _DEP_PY_DOTTED="$(pfb_dep_python_dotted "$_DEP_VERIFY_FLAVOR")"
+    _DEP_PY_MODULES="$(pfb_dep_python_modules "$_DEP_VERIFY_FLAVOR" "$_DEP_VERIFY_EXTRA" | tr '\n' ',' | sed 's/,$//;s/,/, /g')"
+    ssh_guest "/usr/local/bin/python${_DEP_PY_DOTTED} -c 'import ${_DEP_PY_MODULES}'" >/dev/null 2>&1 || {
+        warn "dependency verify: python${_DEP_PY_DOTTED} import probe failed (${_DEP_PY_MODULES})"
+        _DEP_VERIFY_FAIL=1
+    }
+    [ "$_DEP_VERIFY_FAIL" -eq 0 ] || die "post-upgrade dependency verify failed — refusing to publish (see warnings above)"
+    log "dependency verify OK"
+fi
 
 # --- health gate: wait until box is "working fine" -------------------------
 # Poll up to HEALTH_TIMEOUT seconds. The box is considered healthy when EITHER:
