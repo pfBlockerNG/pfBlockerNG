@@ -88,9 +88,12 @@ image yet, so an `aarch64` entry should set `ci: false` (build + distribute only
 
 ### Lifecycle policy
 
-- **Add** when a beta/GA lands (curated — a human edits the JSON via a PR against
-  `ci-metadata`). Add immediately on a beta so the build + CI validation starts early;
-  the status field distinguishes beta from GA.
+- **Add** when a beta/GA lands via a PR against `ci-metadata` — hand-written, or the
+  tracker's auto-PR (issue #1820: when the daily probe detects a public beta via
+  `pfSense-repoc -p` on the booted current image, it opens a PR adding the entry with
+  `status: beta`, `ci: false` and the wired `upgrade` block; a human merges). Add
+  immediately on a beta so the build + CI validation starts early; the status field
+  distinguishes beta from GA (the probe also PRs the beta→GA status flip).
 - **Drop** an entry when it should be fully removed (no catalog served). For an EOL version
   that still has users, set `role: "route-only"` instead of dropping it — the last `.pkg` keeps
   being served. Drop only when you want a clean 404 (no route).
@@ -144,13 +147,20 @@ After `supported-versions.json` is updated on `ci-metadata`, the next
 1. **`build-pkg-linux.yml`** — validates the new entry's `(freebsd_version, php_version)`
    pair by building an installable `.pkg`. One dispatch per BUILD entry.
 2. **`image-refresh.yml`** (`Upgrade pfSense smoke images`) — a **CE + Plus matrix
-   fan-out**. A `plan` job reads `ci-metadata` and refreshes each `ci: true` variant
-   **only when its `upgrade.available` flag is set** (a curated signal that a public
-   pre-release / GA / patch exists); absent/`false` → that variant is skipped, so most
-   days the run is a clean no-op. Each leg runs `scripts/image-upgrade.sh --type ce|plus`
+   fan-out**. A `plan` job reads `ci-metadata` and refreshes each amd64 variant
+   **only when its `upgrade.available` flag is set** (a signal that a public
+   pre-release / GA / patch exists — set by a human or by the tracker's beta auto-PR;
+   the entry's `ci` flag is NOT consulted, issue #1820); absent/`false` → that variant
+   is skipped, so most days the run is a clean no-op. A dispatch with
+   `self_refresh=true` instead re-publishes the newest entry per channel under its own
+   floating tag (`from == to`, `--force`) — the patch/GA path the tracker fires on
+   annotation drift. Each leg runs `scripts/image-upgrade.sh --type ce|plus`
    (plus `--branch <id>` when `upgrade.branch` is set, to reach a pre-release/development
    build), applies the health gate, and publishes the new tag to GHCR **only on gate pass**
-   (fail-closed). GA/patches self-replace the floating tag; a new Major.Minor gets a new tag.
+   (fail-closed). GA/patches self-replace the floating tag; a new Major.Minor gets a new
+   tag. Published images carry the full `/etc/version` as the
+   `io.github.pfblockerng.pfsense-version` OCI annotation, which the tracker's drift
+   detection compares against the Netgate page.
 3. **`smoke.yml`** — runs the ADR-04 live-VM smoke suite across **all** `ci: true`
    entries — **CE and Plus** (ADR-24) — in parallel (`fail-fast: false`). The
    **`all-smoke-passed` AND-gate** fails if any single leg fails — one failed leg makes the
