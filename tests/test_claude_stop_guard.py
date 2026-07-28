@@ -6,7 +6,7 @@ the last edit. Not wired into any settings file yet -- script + tests only.
 
 The checker is a hyphen-named script under scripts/, loaded via importlib by
 path (the house pattern for dash-named tools -- see
-tests/test_version_probe.py loading scripts/check-pfsense-versions.py).
+tests/test_reconcile_plan.py loading scripts/reconcile-plan.py).
 
 Fixture-builder helpers construct transcript-entry dicts matching the shape
 probed live (top-level ``type`` in user/assistant; assistant ``message.content``

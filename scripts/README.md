@@ -88,12 +88,13 @@ image yet, so an `aarch64` entry should set `ci: false` (build + distribute only
 
 ### Lifecycle policy
 
-- **Add** when a beta/GA lands via a PR against `ci-metadata` — hand-written, or the
-  tracker's auto-PR (issue #1820: when the daily probe detects a public beta via
-  `pfSense-repoc -p` on the booted current image, it opens a PR adding the entry with
-  `status: beta`, `ci: false` and the wired `upgrade` block; a human merges). Add
-  immediately on a beta so the build + CI validation starts early; the status field
-  distinguishes beta from GA (the probe also PRs the beta→GA status flip).
+- **Add** via a PR against `ci-metadata` — hand-written, or the daily reconcile's
+  auto-PR (issue #1823: when the booted image's `pfSense-repoc -p` lists a branch whose
+  family the matrix lacks, the reconcile opens a PR adding the entry with the observed
+  status and `ci: false`; verify the seeded FreeBSD fields, then merge — the next
+  reconcile run builds and publishes the image; the reconcile also PRs the beta→GA
+  status flip when it sees a final build). The matrix is the desired state; the box is
+  the source of truth.
 - **Drop** an entry when it should be fully removed (no catalog served). For an EOL version
   that still has users, set `role: "route-only"` instead of dropping it — the last `.pkg` keeps
   being served. Drop only when you want a clean 404 (no route).
@@ -146,21 +147,18 @@ After `supported-versions.json` is updated on `ci-metadata`, the next
 
 1. **`build-pkg-linux.yml`** — validates the new entry's `(freebsd_version, php_version)`
    pair by building an installable `.pkg`. One dispatch per BUILD entry.
-2. **`image-refresh.yml`** (`Upgrade pfSense smoke images`) — a **CE + Plus matrix
-   fan-out**. A `plan` job reads `ci-metadata` and refreshes each amd64 variant
-   **only when its `upgrade.available` flag is set** (a signal that a public
-   pre-release / GA / patch exists — set by a human or by the tracker's beta auto-PR;
-   the entry's `ci` flag is NOT consulted, issue #1820); absent/`false` → that variant
-   is skipped, so most days the run is a clean no-op. A dispatch with
-   `self_refresh=true` instead re-publishes the newest entry per channel under its own
-   floating tag (`from == to`, `--force`) — the patch/GA path the tracker fires on
-   annotation drift. Each leg runs `scripts/image-upgrade.sh --type ce|plus`
-   (plus `--branch <id>` when `upgrade.branch` is set, to reach a pre-release/development
-   build), applies the health gate, and publishes the new tag to GHCR **only on gate pass**
-   (fail-closed). GA/patches self-replace the floating tag; a new Major.Minor gets a new
-   tag. Published images carry the full `/etc/version` as the
-   `io.github.pfblockerng.pfsense-version` OCI annotation, which the tracker's drift
-   detection compares against the Netgate page.
+2. **`image-refresh.yml`** (`Upgrade pfSense smoke images`) — the generation engine of
+   the daily reconcile loop (issue #1823). The reconcile job in `version-tracker.yml`
+   boots the newest published image(s) per channel, reads the truth from the box
+   (`/etc/version`, `pfSense-repoc -p`, `pfSense-upgrade -c` as the second source), and
+   dispatches each planned move as a fully-specified `direct_leg` (patch republish under
+   the same floating tag, first build of a merged beta entry, GA-final refresh). Each
+   leg runs `scripts/image-upgrade.sh --type ce|plus` (with `--branch <name>` for branch
+   switches — every pfSense version move is one), applies the health gate, and publishes
+   to GHCR **only on gate pass** (fail-closed). A `self_refresh=true` dispatch is the
+   manual operator re-publish; a bare dispatch plans nothing. Published images carry the
+   full `/etc/version` as the `io.github.pfblockerng.pfsense-version` OCI annotation
+   (provenance).
 3. **`smoke.yml`** — runs the ADR-04 live-VM smoke suite across **all** `ci: true`
    entries — **CE and Plus** (ADR-24) — in parallel (`fail-fast: false`). The
    **`all-smoke-passed` AND-gate** fails if any single leg fails — one failed leg makes the
@@ -275,7 +273,8 @@ boots a real pfSense CE VM. **No Packer**: pfBlockerNG compiles nothing.
 | [`image-publish.sh`](image-publish.sh) | Export a powered-off VM's ZFS zvol → compressed (zstd) qcow2 → `oras push` to GHCR. `--type ce\|plus\|civm` derives the image ref, qcow2 filename, description + artifact-type from the type + version. Old tags kept. |
 | [`publish-smoke-image.sh`](publish-smoke-image.sh) | Interactive front-end for `image-publish.sh` — asks only type, version, VM id and Proxmox host/port; derives everything else. |
 | [`image-upgrade.sh`](image-upgrade.sh) | Pull a tag → boot a **copy** → `pfSense-upgrade` → power off → publish a new version tag. Source image untouched. |
-| [`beta-repo-probe.sh`](beta-repo-probe.sh) | Version-tracker beta detection (issue #1820): boot the current smoke image as a throwaway overlay, `pfSense-repoc -p`, report whether an expected upcoming version is a public repo branch (JSON verdict yes/no/unknown + branch name). |
+| [`box-facts.sh`](box-facts.sh) | Daily reconcile fact gatherer (issue #1823): boot a published smoke image as a throwaway overlay and record `/etc/version`, `pfSense-repoc -p`, and `pfSense-upgrade -c` verbatim. |
+| [`reconcile-plan.py`](reconcile-plan.py) | Daily reconcile planner (issue #1823): pure box-facts + matrix → action list (republish / publish_new / matrix PRs). |
 
 ### Driving from your machine
 
