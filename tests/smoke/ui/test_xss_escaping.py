@@ -171,6 +171,16 @@ def test_alerts_dnsbl_stat_escapes_hostile_domain(smoke_vm: SmokeVM, webui: WebU
 # 2-byte sequence b"\xc3\xbf", defeating the fixture's whole point.
 INVALID_UTF8_DOMAIN_MARKER = ".invalidutf8.example"
 _INVALID_UTF8_DOMAIN_BYTES = b"badutf8\xffdomain" + INVALID_UTF8_DOMAIN_MARKER.encode("ascii")
+# The domain as it must render in the STATS TABLE <td> cell post-fix: the raw
+# 0xFF byte substituted with U+FFFD (pfb_hsc()'s ENT_SUBSTITUTE), everything
+# else intact. Deliberately cell-specific and discriminating: the SAME stat key
+# also leaks into the pie chart's inline <script> JSON via pfb_js_string(),
+# which ALREADY substitutes the byte pre-fix (JSON_INVALID_UTF8_SUBSTITUTE
+# predates this issue) -- but backslash-escaped as the literal 6-character
+# text "backslash u f f f d", never as this composed string. A bare
+# marker/U+FFFD presence check would therefore pass vacuously pre-fix off the
+# pie chart alone; this exact substring is unique to the FIXED HTML table cell.
+INVALID_UTF8_DOMAIN_SUBSTITUTED = "badutf8\N{REPLACEMENT CHARACTER}domain" + INVALID_UTF8_DOMAIN_MARKER
 _INVALID_UTF8_LOG_LINE = (
     b"DNSBL-python,2030-02-21 10:00:00," + _INVALID_UTF8_DOMAIN_BYTES + b",203.0.113.51,Python,DNSBL,"
     b"InvalidUtf8Group,Match,InvalidUtf8Feed,+,A\n"
@@ -226,12 +236,18 @@ def test_alerts_dnsbl_stat_substitutes_invalid_utf8_byte(
             0xFF byte (never valid in any UTF-8 sequence), seeded to outrank
             noise into the Top Blocked Domain table.
       When  GET the DNSBL Block Stats view.
-      Then  the Tier-A render oracle passes AND the seeded marker
-            (``.invalidutf8.example``) is present -- proving the row rendered
-            non-empty with the invalid byte substituted (U+FFFD), rather than
-            the whole cell going blank (issue #1814 -- pre-fix, ENT_QUOTES
-            alone made htmlspecialchars() return '' on the invalid byte,
-            silently blanking the cell).
+      Then  the Tier-A render oracle passes AND the stats table <td> cell
+            contains the domain with the byte substituted
+            (``badutf8<REPLACEMENT CHARACTER>domain.invalidutf8.example``) --
+            proving the row rendered non-empty with U+FFFD substituted, rather
+            than the whole cell going blank (issue #1814 -- pre-fix,
+            ENT_QUOTES alone made htmlspecialchars() return '' on the invalid
+            byte, silently blanking the cell). This exact composed form is
+            cell-specific: the same stat key also reaches the pie chart's
+            inline <script> JSON via pfb_js_string(), which already
+            substitutes the byte pre-fix too, but backslash-escaped -- a bare
+            marker/U+FFFD presence check would pass vacuously off that
+            unrelated sink even before this fix.
     """
     guard = PhpErrorLogGuard(smoke_vm)
     guard.snapshot()
@@ -241,14 +257,16 @@ def test_alerts_dnsbl_stat_substitutes_invalid_utf8_byte(
     assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
 
     body = resp.text
-    # Non-vacuity: the unique marker proves THE SEEDED domain rendered at all --
-    # pre-fix, the whole cell (including this marker) would be blank.
-    assert INVALID_UTF8_DOMAIN_MARKER in body, (
-        f"the seeded invalid-UTF-8 domain never rendered ({INVALID_UTF8_DOMAIN_MARKER!r} absent) -- "
-        "the cell was blanked instead of substituted (issue #1814)"
+    # Discriminating, cell-specific: this exact composed substitution appears ONLY
+    # in the fixed HTML <td> cell. The pie chart's inline <script> JSON
+    # (pfb_js_string(), a pre-existing/unrelated substitution) renders the same
+    # byte backslash-escaped, never as this literal string -- so this check is
+    # genuinely red pre-fix, not vacuously green off the unrelated JSON sink.
+    assert INVALID_UTF8_DOMAIN_SUBSTITUTED in body, (
+        f"the stats table <td> cell did not render the invalid-UTF-8 domain substituted "
+        f"({INVALID_UTF8_DOMAIN_SUBSTITUTED!r} absent) -- the cell was blanked instead of "
+        "substituted (issue #1814)"
     )
-    # The invalid byte must be substituted with U+FFFD, never silently dropped.
-    assert "�" in body, "the invalid UTF-8 byte must render substituted (U+FFFD), not dropped"
 
     guard.assert_no_growth()
 
