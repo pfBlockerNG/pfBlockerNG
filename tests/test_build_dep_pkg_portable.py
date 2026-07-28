@@ -566,6 +566,34 @@ def test_main_prints_out_path_as_last_stdout_line(
     assert last_line == str(out_dir / "py311-charset-normalizer-3.4.4.pkg")
 
 
+def test_main_defaults_python_dep_version_to_0_when_omitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--python-dep-version is optional (issue #1806 D-fix): pkg(8) resolves a
+    dependency by NAME, never by the version recorded in another package's
+    manifest, so this field is never enforced at install. lang/python<NNN>'s
+    real PORTVERSION also isn't a literal in its Makefile (it's
+    ${PYTHON_DISTVERSION}, indirect via Mk/Uses/python.mk) -- deriving it
+    honestly needs the ports framework this tool deliberately avoids.
+    Omitting the flag must not error, and must record version "0"
+    (unknown-at-build), not silently invent a plausible-looking value."""
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+
+    out_dir = tmp_path / "out"
+    rc = bdp.main(
+        [
+            "--ports", str(ports_root),
+            "--port", "textproc/py-charset-normalizer",
+            "--py-flavor", "py311",
+            "--freebsd-major", "15",
+            "--out-dir", str(out_dir),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    manifest = pfb_pkg.read_compact_manifest(out_dir / "py311-charset-normalizer-3.4.4.pkg")
+    assert manifest["deps"] == {"python311": {"origin": "lang/python311", "version": "0"}}
+
+
 def test_main_returns_1_and_reports_refusal_on_stderr(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     ports_root = tmp_path / "ports"
     _write_port(ports_root, no_arch_line="")  # missing NO_ARCH -> refusal, no network involved

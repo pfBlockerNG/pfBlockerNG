@@ -249,26 +249,20 @@ SMOKE_DEP_PKGS=""
 if [ "$_EXTRA_PKGS_COUNT" -gt 0 ]; then
     _DEP_PKG_DIR="${REPO_ROOT}/out/deppkgs"
     mkdir -p "$_DEP_PKG_DIR"
-    # The target's own lang/python<NNN> PORTVERSION, from the SAME ports tree —
-    # the honest source for the python<NNN> RUN_DEPENDS version
-    # build-dep-pkg-portable.py records (never a fixed/guessed literal).
-    _PYNNN="$(printf '%s' "$_py_flavor" | sed 's/^py//')"
-    _PYTHON_DEP_VERSION="$(sed -n 's/^PORTVERSION=[[:space:]]*//p' "${PORTS_DIR}/lang/python${_PYNNN}/Makefile" | head -1)"
-    if [ -z "$_PYTHON_DEP_VERSION" ]; then
-        printf 'smoke-on-box: cannot derive PORTVERSION from %s/lang/python%s/Makefile\n' \
-            "$PORTS_DIR" "$_PYNNN" >&2
-        exit 1
-    fi
     _i=0
     while [ "$_i" -lt "$_EXTRA_PKGS_COUNT" ]; do
         _origin="$(printf '%s' "$_EXTRA_PKGS_JSON" | jq -r ".[$_i]")"
+        # sparse-clone-ports.sh's checkout only includes the pfBlockerNG port's
+        # OWN RUN_DEPENDS -- extra_pkgs is a matrix-level concept it doesn't
+        # know about, so this origin's dir was never materialized. Add it
+        # explicitly (idempotent; cone mode already set by sparse-clone-ports.sh).
+        git -C "$PORTS_DIR" sparse-checkout add "$_origin"
         printf 'smoke-on-box: building dep pkg %s...\n' "$_origin" >&2
         _dep_pkg="$(python3 scripts/build-dep-pkg-portable.py \
             --ports "$PORTS_DIR" \
             --port "$_origin" \
             --py-flavor "$_py_flavor" \
             --freebsd-major "$_freebsd_major" \
-            --python-dep-version "$_PYTHON_DEP_VERSION" \
             --out-dir "$_DEP_PKG_DIR")"
         SMOKE_DEP_PKGS="${SMOKE_DEP_PKGS:+$SMOKE_DEP_PKGS }${_dep_pkg}"
         _i=$((_i + 1))
