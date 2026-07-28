@@ -2986,3 +2986,173 @@ def test_cli_release_pkgs_bad_format_errors(tmp_path: Path) -> None:
                 "ce-2.8-no-colon",  # missing ':' separator
             ]
         )
+
+
+# --------------------------------------------------------------------------- #
+# issue #1806 step A2: --dep-pkgs — fold a pre-built dependency .pkg (e.g.
+# py311-charset-normalizer, built by build-dep-pkg-portable.py) into BOTH the
+# release AND nightly catalogs of its matching ABI train, AFTER retention.
+#
+# A NO_ARCH dependency package records a CPU-wildcarded ABI (e.g.
+# "FreeBSD:15:*") — it works on every arch of that FreeBSD major — so the fold
+# matches by OS+major, not exact ABI string equality like the existing
+# per-arch release_extra_pkgs/release_pkgs candidates.
+#
+# These tests pin:
+#   * the dep lands in BOTH release/<varver>/<arch>/ and nightly/<varver>/<arch>/
+#     of its OWN ABI train (source-build mode + the nightly fold)
+#   * it is ABSENT from a different variant's catalogs (different FreeBSD major)
+#   * it does NOT consume a --release-keep-stable retention slot (folded AFTER
+#     retain_by_channel, not before — the bug this design deliberately avoids:
+#     folding pre-retention would let the dep's version compete for the window
+#     and evict a real release) — covers consume mode's fold point
+#   * --dep-pkgs is repeatable (mirrors --release-extra-pkgs's arg style)
+#   * a dep pkg whose ABI matches no emitted catalog is a hard error
+# --------------------------------------------------------------------------- #
+
+
+def test_cli_dep_pkgs_lands_in_release_and_nightly_same_abi_train(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--dep-pkgs folds a NO_ARCH dependency .pkg into BOTH the release and
+    nightly catalogs of its OWN ABI train (CE, FreeBSD 15) and NEITHER of a
+    different variant's catalogs (Plus, FreeBSD 16).
+
+    Scenario: CE + Plus entries, one CE-major dep pkg (source-build mode, the
+              default path with no --release-pkgs/--release-extra-pkgs)
+      Given a py311-charset-normalizer dep .pkg with a NO_ARCH-wildcarded ABI
+            "FreeBSD:15:*" (matches CE's FreeBSD major, not Plus's 16)
+       When brp.main([--build-matrix, --dep-pkgs <path>, ...]) runs for [CE, Plus]
+      Then release/ce-2.8/amd64 AND nightly/ce-2.8/amd64 both list the dep pkg
+       And release/plus-26.03/amd64 and nightly/plus-26.03/amd64 do NOT
+    """
+    _with_stub_builder(monkeypatch)
+
+    dep_dir = tmp_path / "deps"
+    dep_dir.mkdir()
+    dep_pkg = dep_dir / "py311-charset-normalizer-3.4.4.pkg"
+    make_pkg(dep_pkg, name="py311-charset-normalizer", version="3.4.4", abi="FreeBSD:15:*")
+
+    out = tmp_path / "site"
+    mfile = tmp_path / "matrix.json"
+    mfile.write_text(json.dumps({"versions": [_CE, _PLUS]}))
+
+    # Before-state: nothing built yet.
+    assert not out.exists()
+
+    rc = brp.main(
+        [
+            "--build-matrix",
+            "--matrix-json",
+            str(mfile),
+            "--out",
+            str(out),
+            "--dep-pkgs",
+            str(dep_pkg),
+        ]
+    )
+    assert rc == 0
+
+    ce_release = _names_in(out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    ce_nightly = _names_in(out / "nightly" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    plus_release = _names_in(out / "release" / "plus-26.03" / "amd64" / "packagesite.pkg")
+    plus_nightly = _names_in(out / "nightly" / "plus-26.03" / "amd64" / "packagesite.pkg")
+
+    assert "py311-charset-normalizer" in ce_release, "dep must land in the release catalog of its own ABI train"
+    assert "py311-charset-normalizer" in ce_nightly, "dep must ALSO land in the nightly catalog of its own ABI train"
+    assert "py311-charset-normalizer" not in plus_release, "dep must be absent from a different FreeBSD major"
+    assert "py311-charset-normalizer" not in plus_nightly, "dep must be absent from a different FreeBSD major"
+
+
+def test_cli_dep_pkgs_flag_is_repeatable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--dep-pkgs is repeatable (mirrors --release-extra-pkgs's arg style):
+    multiple dependency packages all fold into the matching catalog."""
+    _with_stub_builder(monkeypatch)
+
+    dep_dir = tmp_path / "deps"
+    dep_dir.mkdir()
+    dep_a = dep_dir / "py311-charset-normalizer-3.4.4.pkg"
+    make_pkg(dep_a, name="py311-charset-normalizer", version="3.4.4", abi="FreeBSD:15:*")
+    dep_b = dep_dir / "py311-idna-3.7.pkg"
+    make_pkg(dep_b, name="py311-idna", version="3.7", abi="FreeBSD:15:*")
+
+    out = tmp_path / "site"
+    mfile = tmp_path / "matrix.json"
+    mfile.write_text(json.dumps({"versions": [_CE]}))
+
+    rc = brp.main(
+        [
+            "--build-matrix",
+            "--matrix-json",
+            str(mfile),
+            "--out",
+            str(out),
+            "--no-nightly",
+            "--dep-pkgs",
+            str(dep_a),
+            "--dep-pkgs",
+            str(dep_b),
+        ]
+    )
+    assert rc == 0
+    names = _names_in(out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg")
+    assert {"py311-charset-normalizer", "py311-idna"} <= names
+
+
+def test_dep_pkgs_fold_after_retention_stable_pin_survives(tmp_path: Path) -> None:
+    """--dep-pkgs folds AFTER retain_by_channel — it never competes for a
+    --release-keep-stable slot (consume mode's fold point).
+
+    If the dep pkg were folded BEFORE retention, its version (3.4.4 —
+    numerically higher than the real stable's 3.0.1) would win the keep=1
+    window and EVICT the real pfBlockerNG stable release. It must not.
+
+    Scenario: keep_stable=1, one real stable release, one higher-version dep pkg
+      Given a pfBlockerNG stable .pkg at version 3.0.1 (consume-mode pool)
+        And a py311-charset-normalizer dep .pkg at version 3.4.4 (same ABI train)
+       When build_repo_matrix runs with release_keep_stable=1 (default)
+      Then release/ce-2.8/amd64 lists BOTH the stable pin (3.0.1, intact) AND
+           the dep pkg — the stable pin was never evicted by the dep's higher
+           version number
+    """
+    out = tmp_path / "site"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    stable_pkg = pkg_dir / "pfBlockerNG-3.0.1.pkg"
+    make_pkg(stable_pkg, name="pfBlockerNG", version="3.0.1", abi="FreeBSD:15:amd64")
+    dep_pkg = pkg_dir / "py311-charset-normalizer-3.4.4.pkg"
+    make_pkg(dep_pkg, name="py311-charset-normalizer", version="3.4.4", abi="FreeBSD:15:*")
+
+    # Before-state: confirm the dep's version really is higher (the scenario's
+    # premise) — a pre-retention fold would let this version win the window.
+    assert brp._pkg_version_key("3.4.4") > brp._pkg_version_key("3.0.1")
+
+    brp.build_repo_matrix(
+        [_CE],
+        out,
+        builder=_stub_builder,
+        build_nightly=False,
+        release_pkgs={"ce-2.8": [stable_pkg]},
+        dep_pkgs=[dep_pkg],
+    )
+
+    rel = out / "release" / "ce-2.8" / "amd64" / "packagesite.pkg"
+    names_versions = _names_versions_in_release(rel)
+    assert ("pfBlockerNG", "3.0.1") in names_versions, "the real stable pin must survive intact"
+    assert ("py311-charset-normalizer", "3.4.4") in names_versions, "the dep pkg must still be present"
+    assert len(names_versions) == 2, "no other package should have appeared or been evicted"
+
+
+def test_dep_pkgs_mismatched_abi_raises_hard_error(tmp_path: Path) -> None:
+    """A --dep-pkgs entry whose ABI matches NO emitted catalog is a hard error
+    (never a silent drop) — e.g. built for a FreeBSD major nothing in the
+    matrix targets."""
+    out = tmp_path / "site"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    # FreeBSD major 99 never appears in [_CE] (major 15) — matches no catalog.
+    dep_pkg = pkg_dir / "py311-charset-normalizer-3.4.4.pkg"
+    make_pkg(dep_pkg, name="py311-charset-normalizer", version="3.4.4", abi="FreeBSD:99:*")
+
+    with pytest.raises(brp.BuildRepoError, match="dep"):
+        brp.build_repo_matrix([_CE], out, builder=_stub_builder, dep_pkgs=[dep_pkg])
