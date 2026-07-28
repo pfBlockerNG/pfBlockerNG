@@ -199,6 +199,11 @@ jobs:
       # normal run is byte-identical.
       ports_repo: ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
       ports_ref: ${{ inputs.ports_ref || 'pfblockerng/use-github' }}
+      # issue #1806 D1/D2: this leg's dep .pkgs — uploaded separately as
+      # pfBlockerNG-deppkgs-fbsd<freebsd_major>; the ui job below downloads it
+      # when non-empty (this job only runs when pkg_artifact_prefix is empty,
+      # so no ternary needed here).
+      extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
 
   # Compute the (tier × version) matrix and the nightly no-commit guard. Emits a
   # JSON `include` list so each leg is a distinct, independently-re-runnable job.
@@ -283,7 +288,7 @@ jobs:
           # Build matrix: ONE .pkg per distinct leg (version/ABI), independent of
           # the tier axis — the tiers for a version all install the SAME package.
           BUILD_INCLUDE="$(printf '%s\n' "$LEGS" | jq -c \
-            '[ .[] | {version: .pfsense_version, image_name, freebsd_major, php_version, py_flavor} ]')"
+            '[ .[] | {version: .pfsense_version, image_name, freebsd_major, php_version, py_flavor, extra_pkgs: (.extra_pkgs // [])} ]')"
           printf 'build_matrix={"include":%s}\n' "$BUILD_INCLUDE" >> "$GITHUB_OUTPUT"
 
           # Cross the tier set with the legs: one matrix item per (tier × leg),
@@ -297,7 +302,8 @@ jobs:
             '($tiers | split(" ")) as $ts
              | [ $ts[] as $t | .[]
                  | {tier: $t, version: .pfsense_version, variant: (.image_name | ltrimstr("pfsense-")),
-                    image_name: .image_name, channel: .channel, freebsd_major: .freebsd_major} ]')"
+                    image_name: .image_name, channel: .channel, freebsd_major: .freebsd_major,
+                    extra_pkgs: (.extra_pkgs // [])} ]')"
           printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
           # leg_count = the (tier x leg) matrix size, for the all-ui-passed AND
           # gate's zero-leg guard (distinct from $LEGS' own leg count -- one
@@ -476,6 +482,45 @@ jobs:
           name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major) || format('pfBlockerNG-pkg-{0}', matrix.version) }}
           path: pkg
 
+      # issue #1806 D1/D2: this leg's extra_pkgs (e.g. py311-charset-normalizer
+      # for CE) — a SEPARATE artifact from the branch .pkg above (never folded
+      # into `pkg/`, so the N_PKG -eq 1 guard below stays exactly one .pkg).
+      # Skipped when pkg_artifact_prefix is set: that path (e.g. release.yml)
+      # never built a matching deppkgs-fbsd<major> artifact (step E's concern).
+      - name: Resolve dep-pkg artifact need
+        id: depmajor
+        env:
+          EXTRA_PKGS: ${{ toJson(matrix.extra_pkgs) }}
+          PKG_ARTIFACT_PREFIX: ${{ inputs.pkg_artifact_prefix }}
+        run: |
+          set -eu
+          N="$(printf '%s' "$EXTRA_PKGS" | jq 'length')"
+          if [ "$N" -gt 0 ] && [ -z "${PKG_ARTIFACT_PREFIX}" ]; then
+            echo "needed=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download dep packages
+        if: steps.depmajor.outputs.needed == '1'
+        uses: actions/download-artifact@v8
+        with:
+          name: pfBlockerNG-deppkgs-fbsd${{ matrix.freebsd_major }}
+          path: deppkgs
+
+      - name: Export SMOKE_DEP_PKGS
+        if: steps.depmajor.outputs.needed == '1'
+        run: |
+          set -eu
+          N_DEP="$(find deppkgs -type f -name '*.pkg' | wc -l | tr -d ' ')"
+          [ "$N_DEP" -ge 1 ] || { echo "::error::extra_pkgs was non-empty but the deppkgs artifact carried no .pkg"; ls -lR deppkgs || true; exit 1; }
+          DEP_PATHS=""
+          for f in $(find deppkgs -type f -name '*.pkg' | sort); do
+            DEP_PATHS="${DEP_PATHS}$(cd "$(dirname "$f")" && pwd)/$(basename "$f") "
+          done
+          echo "SMOKE_DEP_PKGS=${DEP_PATHS% }" >> "$GITHUB_ENV"
+          echo "resolved SMOKE_DEP_PKGS=${DEP_PATHS% }"
+
       - name: Locate the .pkg + the pulled .qcow2
         id: paths
         run: |
@@ -518,6 +563,10 @@ jobs:
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
+          # issue #1806 D2: this leg's dep .pkgs (space-separated absolute paths),
+          # set by "Export SMOKE_DEP_PKGS" above when non-empty; stays unset
+          # (empty) otherwise — install-pkg.sh skips deps entirely then.
+          SMOKE_DEP_PKGS: ${{ env.SMOKE_DEP_PKGS }}
           # QEMU NIC MAC + SMBIOS uuid for the VM boot (ADR-24): conftest passes
           # these through to boot_vm.sh. RESOLVED_* come from the "Resolve VM
           # identity" step — the CE pin for a CE image (byte-identical to today),

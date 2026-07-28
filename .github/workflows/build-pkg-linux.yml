@@ -60,6 +60,10 @@ on:
         description: "Name of the uploaded .pkg artifact. Override to keep per-leg builds distinct in one run (the smoke fan-out builds a CE + a Plus .pkg in the same workflow run)."
         required: false
         default: "pfBlockerNG-pkg"
+      extra_pkgs:
+        description: "JSON array of FreeBSD port origins (the matrix row's extra_pkgs) pfSense's own repo doesn't carry, e.g. [\"textproc/py-charset-normalizer\"]. Each is built as a dep .pkg from the SAME ports checkout and uploaded as pfBlockerNG-deppkgs-fbsd<freebsd_major> (skipped when empty)."
+        required: false
+        default: "[]"
   workflow_call:
     inputs:
       channel:
@@ -90,6 +94,11 @@ on:
         required: false
         type: string
         default: "pfBlockerNG-pkg"
+      extra_pkgs:
+        description: "JSON array of FreeBSD port origins (the matrix row's extra_pkgs) pfSense's own repo doesn't carry, e.g. [\"textproc/py-charset-normalizer\"]. Each is built as a dep .pkg from the SAME ports checkout and uploaded as pfBlockerNG-deppkgs-fbsd<freebsd_major> (skipped when empty)."
+        required: false
+        type: string
+        default: "[]"
     outputs:
       artifact:
         description: "Name of the uploaded package artifact"
@@ -134,6 +143,7 @@ jobs:
           ABI:          ${{ inputs.abi }}
           PY_FLAVOR:    ${{ inputs.py_flavor }}
           PHP_VERSION:  ${{ inputs.php_version }}
+          EXTRA_PKGS:   ${{ inputs.extra_pkgs }}
           PFB_RUN_ROOT: ${{ github.workspace }}/out
         run: |
           set -eu
@@ -158,11 +168,67 @@ jobs:
           echo "pkg_dir=$(dirname "$PKG")" >> "$GITHUB_OUTPUT"
           ls -l "$(dirname "$PKG")"
 
+          FREEBSD_MAJOR="$(printf '%s' "$ABI" | cut -d: -f2)"
+          echo "freebsd_major=${FREEBSD_MAJOR}" >> "$GITHUB_OUTPUT"
+
+          # issue #1806 D1: build the row's extra_pkgs (RUN_DEPENDS ports pfSense's
+          # own repo doesn't carry, e.g. textproc/py-charset-normalizer) from the
+          # SAME ports checkout build-leg.sh just prepared above — never a second
+          # clone. build-leg.sh's own DEST formula (no --ports-dir/PFB_PORTS_DIR/
+          # PFB_RUN_DIR override in scope here) is
+          # ${PFB_RUN_ROOT:-/var/tmp/pfb-runs}/${RUN_ID}/ports; PFB_RUN_ROOT is set
+          # above, so it resolves the same way here.
+          DEP_PKG_DIR="${PFB_RUN_ROOT}/${RUN_ID}/deppkgs"
+          HAS_DEP_PKGS=0
+          ORIGIN_COUNT="$(printf '%s' "$EXTRA_PKGS" | jq 'length')"
+          if [ "$ORIGIN_COUNT" -gt 0 ]; then
+            PORTS_DIR="${PFB_RUN_ROOT}/${RUN_ID}/ports"
+            mkdir -p "$DEP_PKG_DIR"
+            # The target's own lang/python<NNN> PORTVERSION, from the SAME ports
+            # tree — the honest source for the python<NNN> RUN_DEPENDS version
+            # build-dep-pkg-portable.py records (never a fixed/guessed literal).
+            PYNNN="$(printf '%s' "$PY_FLAVOR" | sed 's/^py//')"
+            PYTHON_DEP_VERSION="$(sed -n 's/^PORTVERSION=[[:space:]]*//p' "${PORTS_DIR}/lang/python${PYNNN}/Makefile" | head -1)"
+            if [ -z "$PYTHON_DEP_VERSION" ]; then
+              echo "::error::cannot derive PORTVERSION from ${PORTS_DIR}/lang/python${PYNNN}/Makefile"
+              exit 1
+            fi
+            I=0
+            while [ "$I" -lt "$ORIGIN_COUNT" ]; do
+              ORIGIN="$(printf '%s' "$EXTRA_PKGS" | jq -r ".[$I]")"
+              python3 scripts/build-dep-pkg-portable.py \
+                --ports "$PORTS_DIR" \
+                --port "$ORIGIN" \
+                --py-flavor "$PY_FLAVOR" \
+                --freebsd-major "$FREEBSD_MAJOR" \
+                --python-dep-version "$PYTHON_DEP_VERSION" \
+                --out-dir "$DEP_PKG_DIR"
+              I=$((I + 1))
+            done
+            HAS_DEP_PKGS=1
+          fi
+          echo "dep_pkg_dir=${DEP_PKG_DIR}" >> "$GITHUB_OUTPUT"
+          echo "has_dep_pkgs=${HAS_DEP_PKGS}" >> "$GITHUB_OUTPUT"
+
       - name: Upload package
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact_name }}
           path: ${{ steps.build.outputs.pkg_dir }}/*.pkg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload dep packages
+        # Never uploaded when extra_pkgs is empty (no empty artifacts) — a SEPARATE
+        # artifact from the branch .pkg above, keyed by freebsd_major only (dep
+        # .pkgs are wildcard-ABI, shared across every edition/version on this
+        # major): smoke-single.yml/ui-tests.yml/repo-install.yml download it as
+        # pfBlockerNG-deppkgs-fbsd<freebsd_major>.
+        if: steps.build.outputs.has_dep_pkgs == '1'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pfBlockerNG-deppkgs-fbsd${{ steps.build.outputs.freebsd_major }}
+          path: ${{ steps.build.outputs.dep_pkg_dir }}/*.pkg
           if-no-files-found: error
           retention-days: 7
