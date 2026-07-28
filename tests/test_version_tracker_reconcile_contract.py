@@ -538,3 +538,14 @@ class TestReconcileMatrixSource:
         assert len(lines) == 1, "the route output must be one line"
         entries = json.loads(lines[0][len("route=") :])
         assert sorted(e["pfsense_version"] for e in entries if e["channel"] == "Plus") == ["26.03", "26.07"]
+
+    def test_reconcile_job_is_independent_and_best_effort(self) -> None:
+        # Review follow-ups: the reconcile resolves its own matrix, so the
+        # read-matrix dependency is dead coupling (an unrelated failure there
+        # would skip this job); and the resolve step must degrade like every
+        # other data step in this best-effort job.
+        source = WORKFLOW.read_text(encoding="utf-8")
+        reconcile = source.split("\n  reconcile:\n", 1)[1].split("\n  probe:", 1)[0]
+        assert "needs: read-matrix" not in reconcile
+        resolve = reconcile.split("- name: Resolve the route matrix", 1)[1].split("\n      - name:", 1)[0]
+        assert "continue-on-error: true" in resolve
