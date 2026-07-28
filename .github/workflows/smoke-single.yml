@@ -100,6 +100,10 @@ on:
         description: "Name of a pre-built .pkg artifact to download instead of building one here. The smoke.yml fan-out builds one .pkg per version leg and passes its artifact name in; blank = build the .pkg in this workflow (bare dispatch + repo-install path)."
         required: false
         default: ""
+      extra_pkgs:
+        description: "JSON array of FreeBSD port origins for this leg (the matrix row's extra_pkgs, e.g. [\"textproc/py-charset-normalizer\"]). Non-empty -> download pfBlockerNG-deppkgs-fbsd<freebsd_major> and export SMOKE_DEP_PKGS (space-separated absolute .pkg paths) for install-pkg.sh. Empty/blank -> SMOKE_DEP_PKGS stays unset."
+        required: false
+        default: "[]"
   workflow_call:
     inputs:
       image_ref:
@@ -177,6 +181,11 @@ on:
         required: false
         type: string
         default: ""
+      extra_pkgs:
+        description: "JSON array of FreeBSD port origins for this leg (the matrix row's extra_pkgs, e.g. [\"textproc/py-charset-normalizer\"]). Non-empty -> download pfBlockerNG-deppkgs-fbsd<freebsd_major> and export SMOKE_DEP_PKGS (space-separated absolute .pkg paths) for install-pkg.sh. Empty/blank -> SMOKE_DEP_PKGS stays unset."
+        required: false
+        type: string
+        default: "[]"
   # Nightly gated run — enable once the wall-time is confirmed within budget.
   # schedule:
   #   - cron: "0 5 * * *"
@@ -230,6 +239,12 @@ jobs:
       # (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github), so a normal run is unchanged.
       ports_repo: ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
       ports_ref: ${{ inputs.ports_ref || 'pfblockerng/use-github' }}
+      # issue #1806 D1/D2: this leg's extra_pkgs, straight through — this build-pkg
+      # job only runs on the build-if-absent path (bare dispatch / repo-install.yml),
+      # so it is the SOLE builder for this leg; if extra_pkgs is non-empty it also
+      # uploads pfBlockerNG-deppkgs-fbsd<freebsd_major>, which the "Download dep
+      # packages" step below (same workflow, same run) then downloads.
+      extra_pkgs: ${{ inputs.extra_pkgs }}
 
   smoke:
     name: pytest -m smoke (live pfSense VM)
@@ -430,6 +445,41 @@ jobs:
           name: ${{ inputs.pkg_artifact != '' && inputs.pkg_artifact || needs.build-pkg.outputs.artifact }}
           path: pkg
 
+      # issue #1806 D2: this leg's extra_pkgs (e.g. py311-charset-normalizer for
+      # CE) — a SEPARATE artifact from the branch .pkg above (never folded into
+      # `pkg/`, so the N_PKG -eq 1 guard below stays exactly one .pkg). Named by
+      # freebsd_major only (dep .pkgs are wildcard-ABI, shared by every
+      # edition/version on this major) — parsed from the SAME `abi` input the
+      # build-pkg job above was called with.
+      - name: Resolve dep-pkg artifact name
+        id: depmajor
+        if: ${{ inputs.extra_pkgs != '' && inputs.extra_pkgs != '[]' }}
+        env:
+          ABI: ${{ inputs.abi }}
+        run: |
+          set -eu
+          echo "freebsd_major=$(printf '%s' "$ABI" | cut -d: -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Download dep packages
+        if: ${{ inputs.extra_pkgs != '' && inputs.extra_pkgs != '[]' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: pfBlockerNG-deppkgs-fbsd${{ steps.depmajor.outputs.freebsd_major }}
+          path: deppkgs
+
+      - name: Export SMOKE_DEP_PKGS
+        if: ${{ inputs.extra_pkgs != '' && inputs.extra_pkgs != '[]' }}
+        run: |
+          set -eu
+          N_DEP="$(find deppkgs -type f -name '*.pkg' | wc -l | tr -d ' ')"
+          [ "$N_DEP" -ge 1 ] || { echo "::error::extra_pkgs was non-empty but the deppkgs artifact carried no .pkg"; ls -lR deppkgs || true; exit 1; }
+          DEP_PATHS=""
+          for f in $(find deppkgs -type f -name '*.pkg' | sort); do
+            DEP_PATHS="${DEP_PATHS}$(cd "$(dirname "$f")" && pwd)/$(basename "$f") "
+          done
+          echo "SMOKE_DEP_PKGS=${DEP_PATHS% }" >> "$GITHUB_ENV"
+          echo "resolved SMOKE_DEP_PKGS=${DEP_PATHS% }"
+
       - name: Locate the .pkg + the pulled .qcow2
         id: paths
         run: |
@@ -554,6 +604,10 @@ jobs:
           SMOKE_CLIENT_MAC_ADDRESS: ${{ secrets.SMOKE_CLIENT_MAC_ADDRESS }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
+          # issue #1806 D2: this leg's dep .pkgs (space-separated absolute paths),
+          # set by "Export SMOKE_DEP_PKGS" above when extra_pkgs is non-empty;
+          # stays unset (empty) otherwise — install-pkg.sh skips deps entirely then.
+          SMOKE_DEP_PKGS: ${{ env.SMOKE_DEP_PKGS }}
           # Matrix-derived build target (ADR-24): the per-leg ABI / PHP / Python flavor
           # the .pkg was built for, straight from the ci-metadata matrix (the fan-out
           # passes them as inputs; a bare dispatch defaults to the CE values). The ADR-20

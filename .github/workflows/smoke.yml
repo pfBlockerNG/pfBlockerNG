@@ -260,6 +260,10 @@ jobs:
       artifact_name: pfBlockerNG-pkg-fbsd${{ matrix.freebsd_major }}-${{ matrix.image_name }}
       ports_repo: pfBlockerNG/FreeBSD-ports
       ports_ref: pfblockerng/use-github
+      # issue #1806 D1: this leg's dep .pkgs (e.g. textproc/py-charset-normalizer
+      # for CE), uploaded separately as pfBlockerNG-deppkgs-fbsd<freebsd_major>
+      # when non-empty — smoke-single.yml downloads + installs them (D2/D3).
+      extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
 
   # ── 3. Per-leg smoke run (parallel, fail-fast: false) ────────────────────────
   #
@@ -315,6 +319,14 @@ jobs:
       abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
       php_version: ${{ matrix.php_version }}
       py_flavor: ${{ matrix.py_flavor }}
+      # issue #1806 D1/D2: this leg's dep .pkgs — smoke-single.yml downloads
+      # pfBlockerNG-deppkgs-fbsd<freebsd_major> (the build-pkg job above
+      # uploaded it) and exports SMOKE_DEP_PKGS when non-empty. Gated the SAME
+      # way as build-pkg's own `if:` above: pkg_artifact_prefix set means THIS
+      # job never ran (a release.yml-style caller supplies its own prebuilt
+      # per-major artifact and, for now, no matching deppkgs artifact — that's
+      # step E) — so there is no deppkgs artifact to download in that case.
+      extra_pkgs: ${{ inputs.pkg_artifact_prefix == '' && toJson(matrix.extra_pkgs) || '[]' }}
       # pkg_artifact_prefix set: the prebuilt artifact a caller (e.g. release.yml)
       # already published, named '<prefix>-fbsd<freebsd_major>' (issue #1806 --
       # release.yml builds ONE .pkg per major, shared by every variant/version on

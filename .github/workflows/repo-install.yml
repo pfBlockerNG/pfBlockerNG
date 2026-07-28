@@ -169,6 +169,13 @@ jobs:
       py_flavor: ${{ matrix.py_flavor }}
       # The distribution flow — not the runtime smoke matrix.
       pytest_marker: repo
+      # issue #1806 D1/D3: this leg's dep .pkgs — smoke-single.yml's own
+      # build-if-absent build-pkg job (pkg_artifact is blank here) builds +
+      # uploads them, then exports SMOKE_DEP_PKGS; test_repo_install.py folds
+      # them into the staged guest catalog so `pkg install` resolves
+      # RUN_DEPENDS pfSense's own repo doesn't carry (e.g. CE's
+      # textproc/py-charset-normalizer) from OUR catalog.
+      extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
     secrets: inherit
 
   # AND-gate: green only if ALL legs passed. Runs regardless of the matrix outcome
