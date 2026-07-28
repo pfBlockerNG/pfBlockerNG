@@ -20,7 +20,7 @@
       "name": "mattpocock-skills",
       "source": {
         "source": "local",
-        "path": "./plugins/mattpocock-skills"
+        "path": "./plugins/mattpocock-skills/codex"
       },
       "policy": {
         "installation": "AVAILABLE",
