@@ -35,15 +35,15 @@
           },
           "freebsd_major": {
             "type": "string",
-            "description": "FreeBSD major version digit only, e.g. '15'. Used to construct the ABI tag FreeBSD:<major>:<arch> for build-pkg-linux.yml and for artifact dedup (one .pkg per distinct (major, arch) pair)."
+            "description": "FreeBSD major version digit only, e.g. '15'. Every pfSense-pkg-pfBlockerNG port is NO_ARCH (issue #1806): one wildcard-ABI .pkg build (FreeBSD:<major>:*) serves every CPU arch AND every edition/version sharing this major, so the BUILD matrix (read-version-matrix.sh --print-build) dedupes to one row per distinct freebsd_major."
           },
           "php_version": {
             "type": "string",
-            "description": "PHP version string, e.g. '8.3'. Passed to both builders to pin USES=php so dep names match the target pfSense."
+            "description": "PHP version string, e.g. '8.3'. Passed to both builders to pin USES=php so dep names match the target pfSense. Entries sharing a freebsd_major MUST agree on php_version (the BUILD-matrix dedup hard-errors otherwise)."
           },
           "py_flavor": {
             "type": "string",
-            "description": "Python flavor string, e.g. 'py311'. Passed to build-pkg-linux.yml (portable builder). build-pkg.yml derives it from the VM's installed Python."
+            "description": "Python flavor string, e.g. 'py311'. Passed to build-pkg-linux.yml (portable builder). build-pkg.yml derives it from the VM's installed Python. Entries sharing a freebsd_major MUST agree on py_flavor (the BUILD-matrix dedup hard-errors otherwise)."
           },
           "status": {
             "type": "string",
@@ -57,17 +57,17 @@
           },
           "ci": {
             "type": "boolean",
-            "description": "true = include in the CI smoke matrix (CE, or Plus from its private licensed image). false = build-only (use for a beta, or an arch/platform with no CI image yet, e.g. aarch64)."
+            "description": "true = include in the CI smoke matrix (CE, or Plus from its private licensed image). false = build-only (e.g. a beta with no smoke image yet)."
           },
           "image_name": {
             "type": "string",
             "description": "GHCR image name for the smoke leg, e.g. 'pfsense-ce' (default if omitted) or 'pfsense-plus'. For a Plus leg the VM identity (MAC + SMBIOS uuid) is NOT carried here — it comes from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID repo secrets (ADR-24)."
           },
-          "arch": {
-            "type": "string",
-            "enum": ["amd64", "aarch64"],
-            "default": "amd64",
-            "description": "Target ABI architecture. Omit (or 'amd64') for the standard amd64 build; the reader resolves missing/empty to 'amd64'. 'aarch64' = Netgate ARM appliances (Plus-only); the build keys on (freebsd_major, arch) so an aarch64 entry yields a FreeBSD:<major>:aarch64 .pkg. No ARM CI image exists yet, so an aarch64 entry must be build-only (ci=false)."
+          "extra_pkgs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "Port origins (e.g. 'textproc/py-charset-normalizer') this entry's edition needs that its OWN upstream pkg repo does not carry (issue #1806 — e.g. Netgate builds some py3xx-* ports for Plus only). scripts/build-dep-pkg-portable.py builds each as a NO_ARCH .pkg straight from the FreeBSD-ports port definition; build-repo-portable.py --dep-pkgs folds the result into the release/nightly catalogs of every entry sharing this freebsd_major. Omit or [] when the edition's own repo already carries everything; entries sharing a freebsd_major union their extra_pkgs in the BUILD matrix."
           },
           "role": {
             "type": "string",
