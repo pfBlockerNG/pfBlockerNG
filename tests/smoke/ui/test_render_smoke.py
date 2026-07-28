@@ -422,6 +422,42 @@ def test_pfblockerng_new_tab_link_renders_with_noopener_rel(path: str, url: str,
     )
 
 
+# issue #1845: every page that ships pfBlockerNG.js must render the include with an
+# mtime cache-buster, and that token must be non-zero. Without the token a browser keeps
+# its pre-upgrade copy of the script (the response carries no Expires/Cache-Control, so
+# heuristic freshness applies) and the stale copy then throws against the new markup,
+# which silently disables every page callback queued behind it in pfSense's unguarded
+# `events` drain. A rendered `?v=0` is the same failure wearing a token: it means the
+# package installed its files with mtime 0, so the URL never changes between releases.
+_PFB_JS_PAGES: tuple[str, ...] = (
+    "/pfblockerng/pfblockerng_category_edit.php?type=ipv4",
+    "/pfblockerng/pfblockerng_category.php?type=ipv4",
+    "/pfblockerng/pfblockerng_ip.php",
+    "/pfblockerng/pfblockerng_dnsbl.php",
+)
+
+
+@pytest.mark.parametrize("path", _PFB_JS_PAGES, ids=lambda v: v)
+def test_pfblockerng_js_include_carries_a_nonzero_cache_buster(path: str, webui: WebUI) -> None:
+    """The shipped pfBlockerNG.js include renders with a non-zero mtime cache-buster (#1845).
+
+    Tier-A render-layer proof covering BOTH halves of the stale-script defect: the page
+    emits the token at all, and the installed package gives it a real value.
+    """
+    body = webui.get(path).text
+    assert 'src="pfBlockerNG.js' in body, f"pfBlockerNG.js is not included on {path} at all"
+
+    match = re.search(r'src="pfBlockerNG\.js\?v=(\d+)"', body)
+    assert match is not None, (
+        f"{path} renders the pfBlockerNG.js include without a ?v=<mtime> cache-buster; "
+        "a browser may keep serving the pre-upgrade script"
+    )
+    assert int(match.group(1)) > 0, (
+        f"{path} renders pfBlockerNG.js?v={match.group(1)}: the installed file's mtime is the "
+        "epoch, so the URL is identical for every release and the cache is never invalidated"
+    )
+
+
 # issue #1734: the hook editor's help text is the admin's only signal that the save
 # rewrites their script, so it must name every transformation the shared sanitizer
 # applies -- not just the line-ending fold it described while the save still used the
