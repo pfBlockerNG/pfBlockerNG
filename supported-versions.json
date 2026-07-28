@@ -23,8 +23,12 @@
       "variant": "CE",
       "status": "active",
       "ci": true,
-      "extra_pkgs": ["textproc/py-charset-normalizer"],
-      "upgrade": { "available": false }
+      "extra_pkgs": [
+        "textproc/py-charset-normalizer"
+      ],
+      "upgrade": {
+        "available": false
+      }
     },
     {
       "pfsense_version": "26.03",
@@ -38,7 +42,9 @@
       "ci": true,
       "image_name": "pfsense-plus",
       "extra_pkgs": [],
-      "upgrade": { "available": false }
+      "upgrade": {
+        "available": false
+      }
     }
   ]
 }
