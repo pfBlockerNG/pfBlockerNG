@@ -213,6 +213,20 @@ def _flavor_signature(manifest: dict) -> str:
     return ",".join(sorted(flavored))
 
 
+def _dep_pkg_matches_abi(dep_manifest: dict, catalog_abi: str) -> bool:
+    """True if a --dep-pkgs manifest is compatible with ``catalog_abi``.
+
+    A NO_ARCH dependency package (build-dep-pkg-portable.py) records a CPU-
+    WILDCARDED abi — e.g. ``"FreeBSD:15:*"`` — because it works on every arch
+    of that FreeBSD major. So it is matched by OS+major only, NOT by exact
+    string equality like the existing per-arch release_extra_pkgs/release_pkgs
+    candidates (:706/:725/:757) — an exact-string compare would never match a
+    wildcarded abi against a catalog's concrete ``"FreeBSD:15:amd64"``.
+    """
+    dep_abi = dep_manifest.get("abi", "")
+    return isinstance(dep_abi, str) and dep_abi.split(":")[:2] == catalog_abi.split(":")[:2]
+
+
 def _check_collisions(entries: list[tuple[Path, dict]]) -> None:
     """Fail loud if two .pkg share name+version+ABI but differ in php/py flavor."""
     seen: dict[str, str] = {}  # "name|version|ABI" -> flavor signature
@@ -603,6 +617,7 @@ def build_repo_matrix(
     release_extra_pkgs: list[Path] | None = None,
     route_only_pkgs: dict[str, list[Path]] | None = None,
     release_pkgs: dict[str, list[Path]] | None = None,
+    dep_pkgs: list[Path] | None = None,
     **builder_kwargs: object,
 ) -> dict:
     """Build the full variant/arch repository tree from the version matrix.
@@ -657,12 +672,25 @@ def build_repo_matrix(
       source when ``build_nightly`` is True, regardless of ``release_pkgs``.
       When ``None`` (the default), the existing build-from-source path is used unchanged.
 
+    ``dep_pkgs`` (optional, issue #1806) — pre-built dependency .pkg files (e.g.
+      py311-charset-normalizer, built by build-dep-pkg-portable.py) folded into BOTH
+      the release AND nightly catalogs of every build-role matrix entry whose ABI
+      matches (OS+major; see ``_dep_pkg_matches_abi`` — a NO_ARCH dep's abi is CPU-
+      wildcarded). Folded AFTER retention (``retain_by_channel`` / ``_retain_newest``)
+      — NEVER before, or a dep would compete with real releases/nightlies for a
+      retention slot. Route-only (frozen EOL) entries never receive a dep pkg. A
+      dep pkg whose ABI matches no emitted catalog is a hard ``BuildRepoError``
+      (fail loud, never a silent drop).
+
     ``builder`` is injectable (tests pass a stub); the default drives build-pkg-portable.py.
     Extra ``builder_kwargs`` pass through to every builder call. Returns a summary dict.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     built: list[str] = []
+
+    dep_entries: list[tuple[Path, dict]] = [(p, read_compact_manifest(p)) for p in (dep_pkgs or [])]
+    dep_pkgs_matched: set[Path] = set()
 
     for entry in matrix:
         version = entry["pfsense_version"]
@@ -714,6 +742,13 @@ def build_repo_matrix(
 
             release_dir = out_dir / "release" / varver / arch
 
+            # --dep-pkgs (issue #1806) ABI-filtered for THIS entry's ABI train
+            # (OS+major; _dep_pkg_matches_abi tolerates a NO_ARCH dep's CPU
+            # wildcard). Folded into release/nightly AFTER retention below —
+            # never before, see build_repo_matrix's docstring.
+            dep_for_abi = [p for p, m in dep_entries if _dep_pkg_matches_abi(m, abi)]
+            dep_pkgs_matched.update(dep_for_abi)
+
             if release_pkgs is not None:
                 # --- consume mode: serve release/<varver>/<arch>/ from caller-supplied pre-built .pkg ---
                 # ABI-filtered exactly like the route-only branch; release_extra_pkgs still folded in.
@@ -730,7 +765,8 @@ def build_repo_matrix(
                     keep_stable=release_keep_stable,
                 )
                 if kept_release:
-                    n_release = _emit_catalog_from_paths(release_dir, kept_release)
+                    # dep_for_abi folds in AFTER retention (never competes for a slot).
+                    n_release = _emit_catalog_from_paths(release_dir, kept_release + dep_for_abi)
                     built.append(str(release_dir))
                     sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s), consumed)\n")
                 else:
@@ -761,7 +797,8 @@ def build_repo_matrix(
                         keep_devel=release_keep_devel,
                         keep_stable=release_keep_stable,
                     )
-                    n_release = _emit_catalog_from_paths(release_dir, kept_release)
+                    # dep_for_abi folds in AFTER retention (never competes for a slot).
+                    n_release = _emit_catalog_from_paths(release_dir, kept_release + dep_for_abi)
                 built.append(str(release_dir))
                 sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s))\n")
 
@@ -782,9 +819,21 @@ def build_repo_matrix(
                         "nightly", out_dir=staging, ports=ports, local_src=local_src, pkgversion=pkgver, **common
                     )
                     kept = _retain_newest([*existing, new_nightly], nightly_keep)
-                    n = _emit_catalog_from_paths(nightly_dir, kept)
+                    # dep_for_abi folds in AFTER retention here too — the SAME dep pkg
+                    # belongs in both the release and nightly catalogs of this ABI train.
+                    n = _emit_catalog_from_paths(nightly_dir, kept + dep_for_abi)
                 built.append(str(nightly_dir))
                 sys.stderr.write(f"==> nightly catalog {nightly_dir} ({n} package(s), kept ≤{nightly_keep})\n")
+
+    # A --dep-pkgs entry whose ABI matched no build-role matrix entry is a hard
+    # error — never a silent drop (it would otherwise mean a real user's
+    # `pkg install` never sees the dependency it was built for).
+    unmatched = [p for p, _m in dep_entries if p not in dep_pkgs_matched]
+    if unmatched:
+        raise BuildRepoError(
+            "--dep-pkgs ABI matches no emitted catalog (checked every build-role matrix "
+            "entry's ABI; route-only entries never receive a dep pkg): " + ", ".join(str(p) for p in unmatched)
+        )
 
     return {"built": built}
 
@@ -938,6 +987,21 @@ def main(argv: list[str]) -> int:
         ),
     )
     g_matrix.add_argument(
+        "--dep-pkgs",
+        action="append",
+        default=[],
+        dest="dep_pkgs",
+        metavar="PATH",
+        help=(
+            "pre-built dependency .pkg (e.g. py311-charset-normalizer, built by "
+            "build-dep-pkg-portable.py) to fold into BOTH the release AND nightly catalogs "
+            "of every matrix entry whose ABI matches (repeatable). Folded in AFTER "
+            "--release-keep-*/--nightly-keep retention runs — NEVER before, or the dep would "
+            "compete with real releases/nightlies for a retention slot. A dep whose ABI "
+            "matches no emitted catalog is a hard error."
+        ),
+    )
+    g_matrix.add_argument(
         "--route-only-pkgs",
         action="append",
         default=[],
@@ -1001,6 +1065,7 @@ def main(argv: list[str]) -> int:
             k, v = item.split("=", 1)
             annotate[k] = v
         extra_pkgs = [Path(p) for p in args.release_extra_pkgs] if args.release_extra_pkgs else None
+        dep_pkgs_arg = [Path(p) for p in args.dep_pkgs] if args.dep_pkgs else None
         route_only: dict[str, list[Path]] | None = None
         if args.route_only_pkgs:
             route_only = {}
@@ -1031,6 +1096,7 @@ def main(argv: list[str]) -> int:
                 release_keep_devel=args.release_keep_devel,
                 release_keep_stable=args.release_keep_stable,
                 release_extra_pkgs=extra_pkgs,
+                dep_pkgs=dep_pkgs_arg,
                 route_only_pkgs=route_only,
                 release_pkgs=release_pkgs_arg,
                 annotate=annotate or None,
