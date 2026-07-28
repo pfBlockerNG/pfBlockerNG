@@ -240,6 +240,27 @@ Describe 'dep-reconcile.sh'
       The output should equal ''
     End
 
+    It 'CR-3: a dropped extra_pkgs basename never sheds a same-named CORE package (net/py-maxminddb collision)'
+      # DISCRIMINATING RED: the extra-derived shed loop matched by BASENAME
+      # alone (py[0-9][0-9]*-<basename> against $_planp_installed), with no
+      # check against the NEW core needed set -- a dropped extra_pkgs origin
+      # whose basename collides with a CORE package (net/py-maxminddb's
+      # basename "maxminddb" collides with the CORE py<flavor>-maxminddb
+      # dependency every row needs) would shed the STILL-NEEDED core pkg.
+      # Given the OLD row carried net/py-maxminddb as an extra_pkgs entry and
+      # the box has the full core set installed (incl. py311-maxminddb, which
+      # is core-needed regardless), but the NEW row (same flavor) dropped that
+      # extra origin; Then py311-maxminddb must NOT be shed -- the plan is
+      # empty (nothing to install, already-core-satisfied; nothing genuinely
+      # stale to shed).
+      core_collision() {
+          old_installed="$(installed_of py311)"
+          pfb_dep_plan py311 'net/py-maxminddb' py311 '' "$old_installed"
+      }
+      When call core_collision
+      The output should equal ''
+    End
+
     It 'a newly-added extra_pkgs entry is untouched (never installed — the per-leg harness handles it)'
       # Given the OLD row carried no extra pkg (not installed) and the NEW row
       # adds one; Then the plan is EMPTY — extra_pkgs never enters install.
