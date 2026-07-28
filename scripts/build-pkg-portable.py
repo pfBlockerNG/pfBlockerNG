@@ -458,7 +458,9 @@ class Recipe:
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
                 target.unlink()
-            shutil.copyfile(sp, target)
+            # copy2, not copyfile: the source mtime rides into the stage, and from there
+            # into the package (see _staged_mtime). The mode is set explicitly below.
+            shutil.copy2(sp, target)
             os.chmod(target, int(perm, 8))
             self.modes[self._install_path(target)] = perm
 
@@ -486,7 +488,7 @@ class Recipe:
                 os.chmod(target, 0o755)
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(item, target)
+            shutil.copy2(item, target)  # keep the source mtime; mode is set explicitly
             os.chmod(target, 0o644)
             self.modes[self._install_path(target)] = "0644"
 
@@ -553,7 +555,12 @@ class Recipe:
         text = path.read_text()
         for expr in exprs:
             text = self._sed_s(text, expr)
+        # Restore the mtime the staged copy inherited from the source tree: the rewrite
+        # is a deterministic function of that source plus the port variables, so letting
+        # it stamp the build clock would make otherwise identical builds differ.
+        stat = path.stat()
         path.write_text(text)
+        os.utime(path, (stat.st_atime, stat.st_mtime))
 
     def _sed_s(self, text: str, expr: str) -> str:
         m = self.SED_S.match(expr)
@@ -1166,18 +1173,27 @@ def make_manifest(b: Build, *, compact: bool) -> dict:
     return m
 
 
+# The ustar mtime field is 8 octal digits, unsigned — anything outside this range would
+# surface as tarfile's "overflow in number field" from inside the writer.
+_USTAR_MAX_MTIME = 0o77777777777
+
+
 def _staged_mtime(f: StagedFile) -> int:
     """The mtime pkg records and installs: the staged file's own, whole seconds.
 
-    `SOURCE_DATE_EPOCH` overrides it with a fixed value for callers that need
-    byte-identical rebuilds of the same inputs.
+    Staging preserves the source file's mtime, so the value travels from the source tree
+    rather than the build clock and identical inputs still build to identical bytes.
+    `SOURCE_DATE_EPOCH` overrides it outright for callers that want one fixed stamp.
     """
     raw = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
     if raw:
         try:
-            return int(raw)
+            epoch = int(raw)
         except ValueError:
             raise BuildError(f"SOURCE_DATE_EPOCH must be an integer of seconds, got {raw!r}") from None
+        if not 0 <= epoch <= _USTAR_MAX_MTIME:
+            raise BuildError(f"SOURCE_DATE_EPOCH must be between 0 and {_USTAR_MAX_MTIME}, got {epoch}")
+        return epoch
     return int(f.src_in_stage.stat().st_mtime)
 
 

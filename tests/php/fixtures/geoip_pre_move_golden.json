@@ -29,16 +29,17 @@
     "ZZ_v4.txt": "454debca5afcd37addd0dcca05094625dcde6402510f8fc664cd567893ec7096"
   },
   "continent_pages": {
-    "pfblockerng_Africa.php": "b4f26d783f460b37892d610761ce8693767a848d3be1ec679274e18f9be65f7a",
-    "pfblockerng_Antarctica.php": "16e2625fbe93cf2e7973c728c5b24281cc9cbca4c2b2c45dab41597366b216b9",
-    "pfblockerng_Asia.php": "b5e5de0487906eb6f17368e8647602e7f509467cbbeb629d8ab9c7ddd534b00c",
-    "pfblockerng_Europe.php": "790876fd8208cf8a90e4aab5fe6379375c43be9c927f8f5a7c08a437122eec25",
-    "pfblockerng_North_America.php": "fc0656d9437b8387d267fce68bd9bfc2e49063afdbcc8f7c4f0e9e3d20961dbb",
-    "pfblockerng_Oceania.php": "7abf871d9c53c2f1978ce8694ec34baa277ac29656eda3d3eaa885e306045d02",
-    "pfblockerng_South_America.php": "03914349dacb312772f60a7adc12fa712a2d6fc32400ef3f518ce64bffe7683b",
-    "pfblockerng_Proxy_and_Satellite.php": "99866f1ba3c274ff81708dc2b39fef714823af20dbd34e3bdb1d047d8a14c74c",
-    "pfblockerng_Top_Spammers.php": "e94e2be0d6579d53f806e9b62c4288424fea7c33c0a10ed068344c6888cb1aa2"
+    "pfblockerng_Africa.php": "189649e5d06a15aa844599018cfe1f4646b7a783477f5a014aa0b63d34a360d6",
+    "pfblockerng_Antarctica.php": "4e518efaa8fc5c74499d3ac7cfb55a9e84f7401e1bf171fd870b57d96f164166",
+    "pfblockerng_Asia.php": "9662c321eafaf641e836f2b377f6e18af6a7a1f02dbdd34ee1d02b644a136328",
+    "pfblockerng_Europe.php": "376f832ecf412a1a383e647536d7273812dfdd43fd6f779049f5b14c66380ac8",
+    "pfblockerng_North_America.php": "f4bd735c4536e5f5ac767bf3d576f649bfd24d553886a6eaee3d14018c5343f5",
+    "pfblockerng_Oceania.php": "d42eff86ccfa0e73ea39d0e8eb59e61b7150cb8423ac8c91945e8ec630794b66",
+    "pfblockerng_South_America.php": "4b4ff3e724f094994e31f9bfac8ef206b071299f60c488693ffdb4bf00bbb12e",
+    "pfblockerng_Proxy_and_Satellite.php": "d7469e2355203eaa46c090127551b36883735800328f19cc6a617eeb568d52b1",
+    "pfblockerng_Top_Spammers.php": "9802ff70600cfbf74f8f38d3dc2f2fccc1d60b7c62cb9aa6371b7d3c97fd7a5d"
   },
   "reputation_empty": "5a61a598cb8d1ac66db93a27e88338f7c28e627df9d3b606a8df7348a30c5984",
-  "reputation_populated": "7dced7a138426dc8dbef7fa5c8f1b740e1459d4ba79e4340b7b3683ed79a0266"
+  "reputation_populated": "7dced7a138426dc8dbef7fa5c8f1b740e1459d4ba79e4340b7b3683ed79a0266",
+  "continent_pages_amended": "issue #1845: the generated pages now carry the pfBlockerNG.js cache-buster; the pre-move template is otherwise unchanged"
 }
