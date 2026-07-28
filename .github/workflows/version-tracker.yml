@@ -246,6 +246,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: read-matrix
     if: github.event.inputs.skip_probe != 'true'
+    # A wedged guest must not hold a runner for the 360-minute default (review F2);
+    # the whole loop (2-3 boots + facts + PRs) fits comfortably in 90.
+    timeout-minutes: 90
     permissions:
       contents: write        # push tracker/* matrix-PR branches (NEVER ci-metadata itself)
       pull-requests: write   # open the matrix PRs
@@ -343,9 +346,12 @@ jobs:
                 && mv "facts/${CHANNEL}-published.json.tmp" "facts/${CHANNEL}-published.json"
             done
 
-            # Boot set: newest non-beta + published beta entries.
+            # Boot set: newest PUBLISHED non-beta + published beta entries.
+            # (Review F1: a freshly-merged newer stable entry has no image yet —
+            # booting only its nonexistent tag would blind the whole channel.)
             BOOTS=$(printf '%s\n' "$ENTRIES" | jq -c --slurpfile pub "facts/${CHANNEL}-published.json" '
-              ([ .[] | select((.status // "active") != "beta") ]
+              ([ .[] | select((.status // "active") != "beta")
+                     | select($pub[0][.pfsense_version] == true) ]
                | max_by(.pfsense_version | split(".") | map(tonumber))) as $stable
               | ([ $stable // empty ]
                  + [ .[] | select((.status // "active") == "beta")
@@ -461,7 +467,7 @@ jobs:
       # sibling (schema changes flow through). FreeBSD fields are flagged in the
       # PR body — a new family often tracks a NEWER FreeBSD than its sibling.
       # matrix_pr_ga_flip: beta entry whose final build was seen → status flip.
-      # Contract pinned by tests/test_version_tracker_probe_contract.py.
+      # Contract pinned by tests/test_version_tracker_reconcile_contract.py.
       - name: Open matrix PRs for planned actions
         if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.plan.outcome == 'success'
         continue-on-error: true

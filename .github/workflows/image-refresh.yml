@@ -49,7 +49,7 @@ on:
   workflow_dispatch:
     inputs:
       pfsense_version:
-        description: "Optional filter: only the entry whose pfsense_version matches. Leave blank to run all entries with upgrade.available == true."
+        description: "Optional filter for self_refresh mode: only the entry whose pfsense_version matches."
         required: false
         default: ""
         type: string
@@ -90,10 +90,9 @@ permissions:
 
 jobs:
   # ── Resolve refresh matrix (CE + Plus) ─────────────────────────────────────
-  # Read ci-metadata, filter entries with upgrade.available == true (and optionally
-  # by pfsense_version input), and emit the matrix include array for the refresh job.
-  # If no entry qualifies (the common case today) the include array is empty and the
-  # refresh job runs zero legs — a clean no-op.
+  # Validate the direct_leg input (the reconcile loop's dispatch), or derive the
+  # newest-per-channel self_refresh legs from ci-metadata. A bare dispatch emits
+  # an empty include array — the refresh job runs zero legs, a clean no-op.
   plan:
     name: Resolve refresh matrix (CE + Plus)
     runs-on: ubuntu-latest
@@ -128,10 +127,17 @@ jobs:
           #    retired — the reconcile loop decides what runs).
           # aarch64 entries never boot: there is no ARM smoke image (scripts/README.md).
           if [ -n "${DIRECT_LEG:-}" ]; then
+            # Validation is load-bearing: leg fields reach ${{ matrix.* }}
+            # interpolation in the refresh job's run bodies, so every value is
+            # charset-constrained and force_flag is an enum (review F4).
             INCLUDE="$(printf '%s' "$DIRECT_LEG" | jq -c '
               if type == "object"
                  and ([.variant, .label, .pfsense_version, .freebsd_version, .image_name,
                        .branch, .target, .from, .force_flag] | all(type == "string"))
+                 and ([.variant, .label, .pfsense_version, .freebsd_version, .image_name,
+                       .branch, .target, .from]
+                      | all(test("[^0-9A-Za-z._@:-]") | not))
+                 and (.force_flag == "" or .force_flag == "--force")
               then [.] else [] end' 2>/dev/null || printf '[]')"
             if [ "$(printf '%s' "$INCLUDE" | jq 'length')" -eq 0 ]; then
               echo "::warning::direct_leg rejected (malformed or missing fields)"

@@ -175,8 +175,11 @@ def plan(
             )
         elif br["family"] in beta_families and br["kind"] == "stable":
             # GA final published as a stable branch while the matrix still says
-            # beta: refresh that image and flip the status.
-            add({"type": "republish", "family": br["family"], "branch": br["name"], "reason": "ga-final"})
+            # beta: flip the status, and refresh the beta image ONLY when its
+            # tag exists (an unpublished entry is publish_new's job — a
+            # republish leg against a nonexistent tag is a dead dispatch).
+            if published.get(br["family"], False):
+                add({"type": "republish", "family": br["family"], "branch": br["name"], "reason": "ga-final"})
             add({"type": "matrix_pr_ga_flip", "family": br["family"]})
 
     # Rule: merged matrix entry with no published tag → first build.
@@ -190,7 +193,11 @@ def plan(
         fam = entry["pfsense_version"]
         if published.get(fam, False):
             continue
-        branch = next((b["name"] for b in all_branches if b["family"] == fam), "")
+        # Prefer the STABLE branch for the first build — after GA a leftover
+        # beta branch may still be listed first (live repoc orders betas first).
+        branch = next((b["name"] for b in all_branches if b["family"] == fam and b["kind"] == "stable"), "") or next(
+            (b["name"] for b in all_branches if b["family"] == fam), ""
+        )
         if not branch:
             add({"type": "warn", "family": fam, "message": "no repo branch found for unpublished matrix entry"})
             continue

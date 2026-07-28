@@ -16,6 +16,7 @@ Describe 'box-facts.sh'
     BOOT_ARGV="${WORK}/boot-argv"
     OUT="${WORK}/facts"
     KEY="${WORK}/key"; : > "$KEY"
+    SSH_CMDS_LOG="${WORK}/ssh-cmds"
 
     # Stub oras: succeed and drop a qcow2 into the --output dir (unless ORAS_FAIL=1).
     cat > "${BIN}/oras" << 'OEOF'
@@ -44,6 +45,7 @@ while [ "$#" -gt 0 ]; do
     *) _cmd="$_cmd $1"; shift ;;
   esac
 done
+printf '%s\n' "$_cmd" >> "$SSH_CMDS_LOG"
 case "$_cmd" in
   *pfSense-repoc*)
     [ "${FAIL_REPOC:-0}" = "1" ] && exit 1
@@ -66,7 +68,7 @@ exec sleep 60 < /dev/null > /dev/null 2>&1
 BEOF
     chmod +x "${WORK}/boot_vm"
 
-    export WORK BIN BOOT_ARGV OUT KEY
+    export WORK BIN BOOT_ARGV OUT KEY SSH_CMDS_LOG
     export PFB_BOOT_VM="${WORK}/boot_vm" PFB_POLL_INTERVAL=1 PFB_SHUTDOWN_WAIT=1
   }
   teardown() { rm -rf "$WORK"; }
@@ -88,6 +90,9 @@ BEOF
     The contents of file "${OUT}/etc-version" should equal '26.03.1-RELEASE'
     The contents of file "${OUT}/repoc.txt" should include 'Beta Version (26.07)'
     The contents of file "${OUT}/upgrade-check.txt" should include 'up to date'
+    # Review F2: both network-fetching guest commands run under a hard cap
+    The contents of file "$SSH_CMDS_LOG" should include 'timeout 120 /usr/local/sbin/pfSense-repoc'
+    The contents of file "$SSH_CMDS_LOG" should include 'timeout 240 /usr/local/sbin/pfSense-upgrade'
   End
 
   It 'reports unavailable without booting when Plus identity is absent'
