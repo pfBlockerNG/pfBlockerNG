@@ -894,6 +894,7 @@ jobs:
           PHP:          ${{ matrix.php_version }}
           PY:           ${{ matrix.py_flavor }}
           MAJOR:        ${{ matrix.freebsd_major }}
+          EXTRA_PKGS:   ${{ toJson(matrix.extra_pkgs) }}
           # Place the run-keyed out dir under $GITHUB_WORKSPACE/out so the
           # rename step below finds this leg's .pkg without any path remapping.
           PFB_RUN_ROOT: ${{ github.workspace }}/out
@@ -926,6 +927,40 @@ jobs:
           echo "Renamed: ${BASE}.pkg -> $(basename "$RENAMED")"
           echo "PKG_PATH=${RENAMED}" >> "$GITHUB_ENV"
 
+          # issue #1806 B1: this row's extra_pkgs (RUN_DEPENDS ports pfSense's
+          # own repo doesn't carry, e.g. textproc/py-charset-normalizer) --
+          # SAME loop as build-pkg-linux.yml, from the SAME ports checkout
+          # build-leg.sh just prepared above (never a second clone).
+          # read-matrix's build_matrix is already deduped one row per major, so
+          # this leg is the only one ever building this major's dep .pkgs.
+          DEP_PKG_DIR="${PFB_RUN_ROOT}/${RUN_ID}/deppkgs"
+          HAS_DEP_PKGS=0
+          ORIGIN_COUNT="$(printf '%s' "${EXTRA_PKGS:-[]}" | jq 'length // 0')"
+          if [ "$ORIGIN_COUNT" -gt 0 ]; then
+            PORTS_DIR="${PFB_RUN_ROOT}/${RUN_ID}/ports"
+            mkdir -p "$DEP_PKG_DIR"
+            I=0
+            while [ "$I" -lt "$ORIGIN_COUNT" ]; do
+              ORIGIN="$(printf '%s' "$EXTRA_PKGS" | jq -r ".[$I]")"
+              # sparse-clone-ports.sh's checkout only includes the pfBlockerNG
+              # port's OWN RUN_DEPENDS -- extra_pkgs is a matrix-level concept
+              # it doesn't know about, so this origin's dir was never
+              # materialized. Add it explicitly (idempotent; cone mode already
+              # set by sparse-clone-ports.sh).
+              git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
+              python3 scripts/build-dep-pkg-portable.py \
+                --ports "$PORTS_DIR" \
+                --port "$ORIGIN" \
+                --py-flavor "$PY" \
+                --freebsd-major "$MAJOR" \
+                --out-dir "$DEP_PKG_DIR"
+              I=$((I + 1))
+            done
+            HAS_DEP_PKGS=1
+          fi
+          echo "DEP_PKG_DIR=${DEP_PKG_DIR}" >> "$GITHUB_ENV"
+          echo "HAS_DEP_PKGS=${HAS_DEP_PKGS}" >> "$GITHUB_ENV"
+
       - name: Upload this leg's .pkg artifact (exact-name contract, issue #1806)
         # Name MUST equal pfBlockerNG-relpkg-fbsd<freebsd_major> -- the EXACT
         # name ui-tests.yml's/smoke.yml's pkg_artifact_prefix download step
@@ -938,6 +973,21 @@ jobs:
         with:
           name: pfBlockerNG-relpkg-fbsd${{ matrix.freebsd_major }}
           path: ${{ env.PKG_PATH }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload this leg's dep .pkg artifact (issue #1806 B1)
+        # Name MUST equal pfBlockerNG-relpkg-deppkgs-fbsd<freebsd_major> -- the
+        # EXACT name smoke.yml's/ui-tests.yml's pkg_artifact_prefix ==
+        # 'pfBlockerNG-relpkg' download steps compose (dep_pkg_artifact /
+        # the "Download dep packages" ternary). Never uploaded when
+        # extra_pkgs is empty (no empty artifacts) -- a SEPARATE artifact
+        # from the branch .pkg above, never folded into it.
+        if: env.HAS_DEP_PKGS == '1'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pfBlockerNG-relpkg-deppkgs-fbsd${{ matrix.freebsd_major }}
+          path: ${{ env.DEP_PKG_DIR }}/*.pkg
           if-no-files-found: error
           retention-days: 7
 

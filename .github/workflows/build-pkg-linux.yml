@@ -64,6 +64,10 @@ on:
         description: "JSON array of FreeBSD port origins (the matrix row's extra_pkgs) pfSense's own repo doesn't carry, e.g. [\"textproc/py-charset-normalizer\"]. Each is built as a dep .pkg from the SAME ports checkout and uploaded as pfBlockerNG-deppkgs-fbsd<freebsd_major> (skipped when empty)."
         required: false
         default: "[]"
+      dep_artifact_name:
+        description: "Name for the uploaded dep-pkgs artifact (ignored when extra_pkgs is empty). Blank (default) -> pfBlockerNG-deppkgs-fbsd<freebsd_major>, the self-build convention (one per major, safe when the caller's fan-out never builds two same-major rows in one run). A caller whose fan-out IS per-version (e.g. smoke.yml/ui-tests.yml matrixing over leg rows) must override this with a per-row-unique name (e.g. append -<image_name>) or two same-major rows collide on upload."
+        required: false
+        default: ""
   workflow_call:
     inputs:
       channel:
@@ -99,6 +103,11 @@ on:
         required: false
         type: string
         default: "[]"
+      dep_artifact_name:
+        description: "Name for the uploaded dep-pkgs artifact (ignored when extra_pkgs is empty). Blank (default) -> pfBlockerNG-deppkgs-fbsd<freebsd_major>, the self-build convention (one per major, safe when the caller's fan-out never builds two same-major rows in one run). A caller whose fan-out IS per-version (e.g. smoke.yml/ui-tests.yml matrixing over leg rows) must override this with a per-row-unique name (e.g. append -<image_name>) or two same-major rows collide on upload."
+        required: false
+        type: string
+        default: ""
     outputs:
       artifact:
         description: "Name of the uploaded package artifact"
@@ -144,6 +153,7 @@ jobs:
           PY_FLAVOR:    ${{ inputs.py_flavor }}
           PHP_VERSION:  ${{ inputs.php_version }}
           EXTRA_PKGS:   ${{ inputs.extra_pkgs }}
+          DEP_ARTIFACT_NAME: ${{ inputs.dep_artifact_name }}
           PFB_RUN_ROOT: ${{ github.workspace }}/out
         run: |
           set -eu
@@ -180,7 +190,9 @@ jobs:
           # above, so it resolves the same way here.
           DEP_PKG_DIR="${PFB_RUN_ROOT}/${RUN_ID}/deppkgs"
           HAS_DEP_PKGS=0
-          ORIGIN_COUNT="$(printf '%s' "$EXTRA_PKGS" | jq 'length')"
+          # CodeRabbit: guard an empty/unset EXTRA_PKGS env (jq errors parsing "" as
+          # JSON) rather than trusting the caller always supplies "[]".
+          ORIGIN_COUNT="$(printf '%s' "${EXTRA_PKGS:-[]}" | jq 'length // 0')"
           if [ "$ORIGIN_COUNT" -gt 0 ]; then
             PORTS_DIR="${PFB_RUN_ROOT}/${RUN_ID}/ports"
             mkdir -p "$DEP_PKG_DIR"
@@ -205,6 +217,12 @@ jobs:
           fi
           echo "dep_pkg_dir=${DEP_PKG_DIR}" >> "$GITHUB_OUTPUT"
           echo "has_dep_pkgs=${HAS_DEP_PKGS}" >> "$GITHUB_OUTPUT"
+          # W1: a caller whose fan-out is per-version (smoke.yml/ui-tests.yml) must
+          # override --dep-artifact-name so two same-major rows don't collide on
+          # upload; blank (the default, safe for a per-major-deduped caller like
+          # release.yml or a single-invocation caller) falls back to the plain
+          # per-major name.
+          echo "dep_artifact_name=${DEP_ARTIFACT_NAME:-pfBlockerNG-deppkgs-fbsd${FREEBSD_MAJOR}}" >> "$GITHUB_OUTPUT"
 
       - name: Upload package
         if: always()
@@ -217,14 +235,14 @@ jobs:
 
       - name: Upload dep packages
         # Never uploaded when extra_pkgs is empty (no empty artifacts) — a SEPARATE
-        # artifact from the branch .pkg above, keyed by freebsd_major only (dep
-        # .pkgs are wildcard-ABI, shared across every edition/version on this
-        # major): smoke-single.yml/ui-tests.yml/repo-install.yml download it as
-        # pfBlockerNG-deppkgs-fbsd<freebsd_major>.
+        # artifact from the branch .pkg above, keyed by freebsd_major by default
+        # (dep .pkgs are wildcard-ABI, shared across every edition/version on this
+        # major) — or by the caller-supplied dep_artifact_name (W1) when the
+        # caller's own fan-out is per-version and needs a per-row-unique name.
         if: steps.build.outputs.has_dep_pkgs == '1'
         uses: actions/upload-artifact@v7
         with:
-          name: pfBlockerNG-deppkgs-fbsd${{ steps.build.outputs.freebsd_major }}
+          name: ${{ steps.build.outputs.dep_artifact_name }}
           path: ${{ steps.build.outputs.dep_pkg_dir }}/*.pkg
           if-no-files-found: error
           retention-days: 7

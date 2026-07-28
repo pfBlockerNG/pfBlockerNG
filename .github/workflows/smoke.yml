@@ -261,9 +261,14 @@ jobs:
       ports_repo: pfBlockerNG/FreeBSD-ports
       ports_ref: pfblockerng/use-github
       # issue #1806 D1: this leg's dep .pkgs (e.g. textproc/py-charset-normalizer
-      # for CE), uploaded separately as pfBlockerNG-deppkgs-fbsd<freebsd_major>
-      # when non-empty — smoke-single.yml downloads + installs them (D2/D3).
+      # for CE), uploaded separately when non-empty — smoke-single.yml downloads
+      # + installs them (D2/D3).
       extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
+      # W1: this job matrixes over leg_matrix (one row PER VERSION, never
+      # deduped by major) -- the plain per-major default name would collide if
+      # two same-major rows both carry extra_pkgs. Discriminate by image_name,
+      # matching the branch artifact's own discriminator (artifact_name above).
+      dep_artifact_name: pfBlockerNG-deppkgs-fbsd${{ matrix.freebsd_major }}-${{ matrix.image_name }}
 
   # ── 3. Per-leg smoke run (parallel, fail-fast: false) ────────────────────────
   #
@@ -319,14 +324,16 @@ jobs:
       abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
       php_version: ${{ matrix.php_version }}
       py_flavor: ${{ matrix.py_flavor }}
-      # issue #1806 D1/D2: this leg's dep .pkgs — smoke-single.yml downloads
-      # pfBlockerNG-deppkgs-fbsd<freebsd_major> (the build-pkg job above
-      # uploaded it) and exports SMOKE_DEP_PKGS when non-empty. Gated the SAME
-      # way as build-pkg's own `if:` above: pkg_artifact_prefix set means THIS
-      # job never ran (a release.yml-style caller supplies its own prebuilt
-      # per-major artifact and, for now, no matching deppkgs artifact — that's
-      # step E) — so there is no deppkgs artifact to download in that case.
-      extra_pkgs: ${{ inputs.pkg_artifact_prefix == '' && toJson(matrix.extra_pkgs) || '[]' }}
+      # issue #1806 D1/D2/B1: this leg's dep .pkgs. extra_pkgs flows regardless
+      # of pkg_artifact_prefix (B1 fix): release.yml's build-pkgs-portable job
+      # now builds + uploads them too, so the release-verification path has a
+      # real deppkgs artifact to download -- it no longer needs forcing to '[]'.
+      extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
+      # dep_artifact composes the SAME way pkg_artifact does just below:
+      # pkg_artifact_prefix set -> '<prefix>-deppkgs-fbsd<major>' (release.yml's
+      # build-pkgs-portable is per-major-deduped, no image_name discriminator
+      # needed there); blank -> this job's own per-row dep_artifact_name above.
+      dep_artifact: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-deppkgs-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major) || format('pfBlockerNG-deppkgs-fbsd{0}-{1}', matrix.freebsd_major, matrix.image_name) }}
       # pkg_artifact_prefix set: the prebuilt artifact a caller (e.g. release.yml)
       # already published, named '<prefix>-fbsd<freebsd_major>' (issue #1806 --
       # release.yml builds ONE .pkg per major, shared by every variant/version on

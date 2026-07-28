@@ -1044,7 +1044,12 @@ Full design: ADR-39.
   **`PKG_GITHUB_APP_PRIVATE_KEY`** — `Actions:write` on `pfBlockerNG/pkg` only) so a release
   publishes within seconds; additive + isolated (`needs: [release]`), so its failure never breaks
   `release`/`sync-ports-fork`/`attach-pkgs`. The FreeBSD `pkg repo` fidelity path
-  (`scripts/build-repo.sh`) is retained as a script only.
+  (`scripts/build-repo.sh`) is retained as a script only. **extra_pkgs dep .pkgs (issue #1806,
+  e.g. CE's `textproc/py-charset-normalizer`) are not yet part of this real publish flow** —
+  `release.yml`'s `build-pkgs-portable` job builds + uploads them and the release-verification
+  gate (smoke-suite/ui-suite) installs from them, proving the mechanism, but `attach-pkgs`
+  attaching the dep `.pkg` to the GitHub Release AND `pfBlockerNG/pkg`'s `publish.yml` folding
+  it into the live served catalog are a tracked follow-up, not yet wired.
 - **Generators + bootstrap:** `scripts/build-repo-portable.py` (primary catalog gen),
   `scripts/build-repo.sh` (fallback + the single `--print-conf` conf template),
   `scripts/add-repo.sh` (client bootstrap — channel is a FLAG: no-arg = release repo, `--nightly`
@@ -1059,8 +1064,10 @@ Full design: ADR-39.
   accepted from both generators. The ADR-20 **variant topology** (each leg's ABI / PHP / Python /
   catalog, and the opposite-edition guard) is **derived entirely from the version matrix** — never
   hardcoded CE/Plus: `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
-  reads `SMOKE_MATRIX_JSON` (smoke-single.yml injects `read-version-matrix.sh --print-build` at job start,
-  egress open), falls back to running that script, and SKIPs the topology cases when neither is
+  reads `SMOKE_MATRIX_JSON` (smoke-single.yml injects `read-version-matrix.sh --print-ci` at job start —
+  issue #1806 W3: never `--print-build`, which dedupes by `freebsd_major` and would hide a same-major
+  second edition from this topology entirely — egress open), falls back to running that script, and
+  SKIPs the topology cases when neither is
   available. Per-leg `SMOKE_ABI`/`SMOKE_PHP_VERSION`/`SMOKE_PY_FLAVOR` select within it (SMOKE_ABI
   stays a CONCRETE guest ABI); when it matches more than one edition sharing a `freebsd_major`
   (issue #1806 — no `arch` left to disambiguate by), `SMOKE_IMAGE_REF` (already exported by

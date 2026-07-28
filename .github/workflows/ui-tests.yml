@@ -199,11 +199,14 @@ jobs:
       # normal run is byte-identical.
       ports_repo: ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
       ports_ref: ${{ inputs.ports_ref || 'pfblockerng/use-github' }}
-      # issue #1806 D1/D2: this leg's dep .pkgs — uploaded separately as
-      # pfBlockerNG-deppkgs-fbsd<freebsd_major>; the ui job below downloads it
-      # when non-empty (this job only runs when pkg_artifact_prefix is empty,
-      # so no ternary needed here).
+      # issue #1806 D1/D2: this leg's dep .pkgs — uploaded separately; the ui
+      # job below downloads it when non-empty (this job only runs when
+      # pkg_artifact_prefix is empty, so no ternary needed here).
       extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
+      # W1: this job matrixes over build_matrix (one row PER VERSION, never
+      # deduped by major) -- the plain per-major default name would collide if
+      # two same-major rows both carry extra_pkgs. Discriminate by image_name.
+      dep_artifact_name: pfBlockerNG-deppkgs-fbsd${{ matrix.freebsd_major }}-${{ matrix.image_name }}
 
   # Compute the (tier × version) matrix and the nightly no-commit guard. Emits a
   # JSON `include` list so each leg is a distinct, independently-re-runnable job.
@@ -482,30 +485,35 @@ jobs:
           name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major) || format('pfBlockerNG-pkg-{0}', matrix.version) }}
           path: pkg
 
-      # issue #1806 D1/D2: this leg's extra_pkgs (e.g. py311-charset-normalizer
+      # issue #1806 D1/D2/B1: this leg's extra_pkgs (e.g. py311-charset-normalizer
       # for CE) — a SEPARATE artifact from the branch .pkg above (never folded
       # into `pkg/`, so the N_PKG -eq 1 guard below stays exactly one .pkg).
-      # Skipped when pkg_artifact_prefix is set: that path (e.g. release.yml)
-      # never built a matching deppkgs-fbsd<major> artifact (step E's concern).
+      # No longer gated on pkg_artifact_prefix being blank (B1 fix): release.yml's
+      # build-pkgs-portable job now builds + uploads the matching dep artifact
+      # too, so the release-verification path (prefix set) has one to download.
       - name: Resolve dep-pkg artifact need
         id: depmajor
         env:
           EXTRA_PKGS: ${{ toJson(matrix.extra_pkgs) }}
-          PKG_ARTIFACT_PREFIX: ${{ inputs.pkg_artifact_prefix }}
         run: |
           set -eu
           N="$(printf '%s' "$EXTRA_PKGS" | jq 'length')"
-          if [ "$N" -gt 0 ] && [ -z "${PKG_ARTIFACT_PREFIX}" ]; then
+          if [ "$N" -gt 0 ]; then
             echo "needed=1" >> "$GITHUB_OUTPUT"
           else
             echo "needed=0" >> "$GITHUB_OUTPUT"
           fi
 
+      # dep-pkg artifact name mirrors the branch pkg's OWN pkg_artifact_prefix
+      # ternary just above: prefix set -> '<prefix>-deppkgs-fbsd<major>'
+      # (release.yml's build-pkgs-portable is per-major-deduped, no image_name
+      # discriminator needed there); blank -> this run's own build-pkg job's
+      # dep_artifact_name (W1, discriminated by image_name).
       - name: Download dep packages
         if: steps.depmajor.outputs.needed == '1'
         uses: actions/download-artifact@v8
         with:
-          name: pfBlockerNG-deppkgs-fbsd${{ matrix.freebsd_major }}
+          name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-deppkgs-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major) || format('pfBlockerNG-deppkgs-fbsd{0}-{1}', matrix.freebsd_major, matrix.image_name) }}
           path: deppkgs
 
       - name: Export SMOKE_DEP_PKGS
