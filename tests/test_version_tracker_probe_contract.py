@@ -27,6 +27,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "version-tracker.yml"
 TRACKING_STEP = "Open or update tracking issues for upcoming/TBD versions"
 PATCH_STEP = "Patch/GA drift detection (page vs image annotation)"
 MATRIX_PR_STEP = "Open matrix PRs for detected betas and GA flips"
+BETA_PROBE_STEP = "Public-beta VM probe (boot latest image per channel)"
 
 FUTURE_2607 = {
     "version": "26.07",
@@ -276,16 +277,91 @@ class TestPatchDetect:
         )
         assert result == []
         assert "no pfsense-version annotation" in output
+        # Review F1: image-refresh cannot seed a CURRENT image (image-upgrade
+        # no-op-exits before publishing), so the prescribed remediation must be
+        # the manual publish path, which stamps the annotation unconditionally
+        assert "image-publish.sh" in output
 
     def test_only_newest_version_per_channel_is_checked(self, tmp_path: Path) -> None:
         # 2.7 is in latest_releases (matrix family) but 2.8 is the channel's
-        # newest — the frozen 2.7 floating tag must not be probed
+        # newest — the frozen 2.7 floating tag must not be probed. Review F2:
+        # the fixture carries a DRIFTED manifest for 2.7, so if the
+        # newest-per-channel guard is removed the candidate gets probed,
+        # flagged, and this assertion fails (not vacuous).
         result, _ = self._run(
             tmp_path,
             [{"version": "2.7", "channel": "CE", "latest_release": "2.7.2"}],
-            {},
+            {
+                "ghcr.io/pfblockerng/pfsense-ce:2.7": {
+                    "annotations": {"io.github.pfblockerng.pfsense-version": "2.7.0-RELEASE"}
+                }
+            },
         )
         assert result == []
+
+    def test_nonfinal_annotation_flags_refresh_even_when_versions_match(self, tmp_path: Path) -> None:
+        # A beta image reports /etc/version like "26.07-BETA" (live-probed on
+        # the owner's Plus VM). On GA day the page's newest released build is
+        # "26.07" — equal after suffix strip — yet the image still holds the
+        # BETA build and MUST be refreshed to the GA final.
+        result, _ = self._run(
+            tmp_path,
+            [{"version": "26.03", "channel": "Plus", "latest_release": "26.03"}],
+            {
+                "ghcr.io/pfblockerng/pfsense-plus:26.03": {
+                    "annotations": {"io.github.pfblockerng.pfsense-version": "26.03-BETA"}
+                }
+            },
+        )
+        assert result == [
+            {"version": "26.03", "channel": "Plus", "page": "26.03", "image": "26.03-BETA", "refresh": True}
+        ]
+
+
+class TestBetaProbeBootSource:
+    """Scenario: the VM probe boots the newest PUBLISHED image — a merged beta
+    matrix entry (ci:false, image not yet built) must not become the boot source
+    (review F5: booting the nonexistent beta tag would flip the verdict to
+    unknown daily until image-refresh publishes it)."""
+
+    def test_merged_beta_entry_is_not_the_boot_source(self, tmp_path: Path) -> None:
+        (tmp_path / "probe_result.json").write_text(json.dumps({"future": [FUTURE_2607]}), encoding="utf-8")
+        env = _write_fakes(tmp_path)
+        # sudo stub swallows the dep-install plumbing (udev, apt, tee).
+        sudo = tmp_path / "sudo"
+        sudo.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        sudo.chmod(0o755)
+        # The step invokes the real probe script relative to the workspace.
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        probe = ROOT / "scripts" / "beta-repo-probe.sh"
+        (scripts_dir / "beta-repo-probe.sh").write_text(probe.read_text(encoding="utf-8"), encoding="utf-8")
+        # Matrix already carries the merged (unbuilt) 26.07 beta entry.
+        build_matrix = MATRIX_VERSIONS + [dict(MATRIX_VERSIONS[1], pfsense_version="26.07", status="beta", ci=False)]
+        proc = subprocess.run(
+            ["bash", "-c", _step_script(BETA_PROBE_STEP)],
+            cwd=tmp_path,
+            env=os.environ
+            | env
+            | {
+                "BUILD_MATRIX": json.dumps(build_matrix),
+                "SMOKE_SSH_PRIV_KEY": "dummy-key",
+                "SMOKE_GHCR_USER": "u",
+                "SMOKE_GHCR_TOKEN": "t",
+                "SMOKE_IMAGE_REPO": "ghcr.io/pfblockerng",
+                "GITHUB_REPOSITORY_OWNER": "pfBlockerNG",
+            },
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        out = proc.stdout + proc.stderr
+        # Boot source = newest NON-beta entry (26.03), never the beta tag.
+        assert "on ghcr.io/pfblockerng/pfsense-plus:26.03" in out
+        assert "on ghcr.io/pfblockerng/pfsense-plus:26.07" not in out
+        # The probe itself degrades to unknown here (no Plus identity in env).
+        beta = json.loads((tmp_path / "beta_result.json").read_text(encoding="utf-8"))
+        assert beta["Plus/26.07"]["verdict"] == "unknown"
 
 
 class TestMatrixAutoPr:

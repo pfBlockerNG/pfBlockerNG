@@ -131,6 +131,10 @@ jobs:
           #    ignoring upgrade.available.
           # aarch64 entries never boot: there is no ARM smoke image (scripts/README.md).
           if [ "${SELF_REFRESH:-false}" = "true" ]; then
+            # The version filter applies BEFORE newest-per-channel selection —
+            # deliberate: a manual dispatch naming an OLDER version re-publishes
+            # that frozen tag (seed/repair override). Tracker dispatches always
+            # name the channel's newest, so the automated path stays newest-only.
             INCLUDE="$(printf '%s' "$MATRIX_JSON" | jq -c --arg filter "$FILTER_VERSION" '
               [
                 .versions[]

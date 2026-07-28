@@ -375,9 +375,12 @@ jobs:
             i=$((i + 1))
             VARIANT=$(printf '%s' "$CHANNEL" | tr '[:upper:]' '[:lower:]')
 
-            # The image to boot: the newest amd64 same-channel matrix entry.
+            # The image to boot: the newest amd64 same-channel matrix entry
+            # whose image actually EXISTS — a merged beta entry (ci:false, tag
+            # not yet published) must not become the boot source (review F5).
             SRC=$(printf '%s\n' "$BUILD_MATRIX" | jq -c --arg ch "$CHANNEL" '
-              [ .[] | select(.channel == $ch) | select((.arch // "amd64") == "amd64") ]
+              [ .[] | select(.channel == $ch) | select((.arch // "amd64") == "amd64")
+                    | select((.status // "active") != "beta") ]
               | max_by(.pfsense_version | split(".") | map(tonumber)) // empty')
             if [ -z "$SRC" ]; then
               echo "::warning::no ${CHANNEL} matrix entry to boot for ${VERSION} — verdict unknown"
@@ -456,11 +459,20 @@ jobs:
             ANN=$(oras manifest fetch "$IMG_REF" 2>/dev/null \
               | jq -r '.annotations["io.github.pfblockerng.pfsense-version"] // empty' || true)
             if [ -z "$ANN" ]; then
-              echo "::warning::${IMG_REF}: no pfsense-version annotation — seed it once by dispatching image-refresh.yml with self_refresh=true"
+              # Review F1: image-refresh CANNOT seed an already-current image
+              # (image-upgrade.sh no-op-exits before publishing) — the manual
+              # publish path stamps the annotation unconditionally.
+              echo "::warning::${IMG_REF}: no pfsense-version annotation — seed it once with scripts/image-publish.sh --os-version \$(ssh <box> cat /etc/version)"
               continue
             fi
             IMG_VER=${ANN%%-*}
-            if [ "$IMG_VER" != "$PAGE" ]; then REFRESH=true; else REFRESH=false; fi
+            # A non-final build marker (26.07-BETA etc.) strips to the same
+            # family as the page's GA row — still a drift (beta -> GA final).
+            case "$ANN" in
+              *BETA*|*ALPHA*|*RC*|*DEVEL*) NONFINAL=1 ;;
+              *) NONFINAL=0 ;;
+            esac
+            if [ "$IMG_VER" != "$PAGE" ] || [ "$NONFINAL" -eq 1 ]; then REFRESH=true; else REFRESH=false; fi
             jq --arg v "$VERSION" --arg c "$CHANNEL" --arg p "$PAGE" --arg img "$ANN" --argjson r "$REFRESH" \
                '. += [{version: $v, channel: $c, page: $p, image: $img, refresh: $r}]' \
                patch_result.json > patch_result.json.tmp && mv patch_result.json.tmp patch_result.json
