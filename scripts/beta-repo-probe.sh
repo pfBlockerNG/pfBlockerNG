@@ -76,7 +76,9 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-[ -n "$VARIANT" ] && [ -n "$EXPECT" ] && [ -n "$IMAGE" ] && [ -n "$TAG" ] && [ -n "$SSH_KEY" ] || usage
+if [ -z "$VARIANT" ] || [ -z "$EXPECT" ] || [ -z "$IMAGE" ] || [ -z "$TAG" ] || [ -z "$SSH_KEY" ]; then
+    usage
+fi
 case "$VARIANT" in ce|plus) ;; *) usage ;; esac
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -85,7 +87,7 @@ BOOT_VM="${PFB_BOOT_VM:-$SCRIPT_DIR/../tests/smoke/boot_vm.sh}"
 WORK=$(mktemp -d)
 BOOT_PID=""
 
-# shellcheck disable=SC2329  # invoked via the EXIT/INT/TERM trap
+# shellcheck disable=SC2329,SC2317  # invoked via the EXIT/INT/TERM trap
 cleanup() {
     _rc=$?
     if [ -n "$BOOT_PID" ] && kill -0 "$BOOT_PID" 2>/dev/null; then
