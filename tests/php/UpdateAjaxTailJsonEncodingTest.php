@@ -22,14 +22,11 @@ use PHPUnit\Framework\TestCase;
  * and for pfblockerng_dnsbl.php/pfblockerng_edit_hooks.php's page renders. This
  * class follows that established convention:
  *   - testJsonEncodeCallSiteCarriesInvalidUtf8SubstituteFlag pins the exact
- *     call-site source text -- a REAL red-before/green-after proof (fails until
- *     the production line carries the flag, unlike an equivalence check).
- *   - testInvalidUtf8SubstituteFlagFixesEncodingOfTailedInvalidByte is an
- *     equivalence/documentation test against the real pfb_log_tail_payload()
- *     output shape: it demonstrates the defect + fix mechanics on an actual
- *     hostile payload, but -- since it does not read the production file -- it
- *     cannot itself flip red/green off the production edit (see this change's
- *     handoff for the recorded deviation).
+ *     call-site source text (fails whenever the production line drops the flag).
+ *   - testInvalidUtf8SubstituteFlagFixesEncodingOfTailedInvalidByte pins the
+ *     flag's behavior against the real pfb_log_tail_payload() output shape on
+ *     an actual hostile payload; it does not read the production file, so the
+ *     call-site pin above is what ties it to the endpoint.
  */
 #[CoversFunction('pfb_log_tail_payload')]
 final class UpdateAjaxTailJsonEncodingTest extends TestCase
