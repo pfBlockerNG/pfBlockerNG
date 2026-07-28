@@ -114,6 +114,7 @@ def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
     locked = set(json.loads((ROOT / "skills-lock.json").read_text(encoding="utf-8"))["skills"])
 
     claude_skills = {Path(skill).name for skill in claude["skills"]}
+    claude_dirs = {path.name for path in (plugin / "claude-skills").iterdir() if path.is_dir()}
     codex_skills = {path.name for path in (plugin / "codex/skills").iterdir() if path.is_dir()}
     promoted = {
         "ask-matt",
@@ -172,7 +173,8 @@ def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
 
     assert claude["name"] == codex["name"] == "mattpocock-skills"
     assert claude["version"] == codex["version"] == "1.2.0"
-    assert claude_skills == codex_skills == promoted
+    assert claude_skills == claude_dirs == codex_skills == promoted
+    assert len(claude["skills"]) == len(promoted)
     assert codex["skills"] == "./skills/"
     assert not (plugin / "skills").exists()
     assert locked == retained | local_vendored
@@ -180,9 +182,13 @@ def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
     assert all(not (ROOT / ".agents/skills" / name).exists() for name in promoted)
     assert all(not (ROOT / ".claude/skills" / name).exists() for name in promoted)
 
-    entry = next(item for item in marketplace["plugins"] if item["name"] == "mattpocock-skills")
+    entries = [item for item in marketplace["plugins"] if item["name"] == "mattpocock-skills"]
+    assert len(entries) == 1
+    entry = entries[0]
     assert entry["source"] == {"source": "local", "path": "./plugins/mattpocock-skills/codex"}
-    claude_entry = next(item for item in claude_marketplace["plugins"] if item["name"] == "mattpocock-skills")
+    claude_entries = [item for item in claude_marketplace["plugins"] if item["name"] == "mattpocock-skills"]
+    assert len(claude_entries) == 1
+    claude_entry = claude_entries[0]
     assert claude_entry["source"] == "./"
 
     explicit_only = {
