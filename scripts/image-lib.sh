@@ -141,3 +141,30 @@ image_oci_push() {
             "${_pushname}:application/vnd.qemu.qcow2"
     )
 }
+
+# image_gather_facts OUTFILE RUNNER — read the LIVE box's version facts through
+# RUNNER (a function/command executing its single string argument on the guest,
+# e.g. image-upgrade.sh's ssh_guest) and write key=value lines to OUTFILE:
+# etc_version, php_version (major.minor), py_flavor (pyXY), freebsd_version,
+# freebsd_major. The activation PR after a publish consumes them (issue #1837).
+# Guest commands run under /bin/sh -c (stock pfSense root shells are tcsh).
+# Best-effort: an absent tool leaves its keys out; returns 1 only when nothing
+# at all was gathered.
+image_gather_facts() {
+    _fo=$1; _run=$2
+    : > "$_fo" || return 1
+    _v=$($_run "/bin/sh -c 'cat /etc/version'" 2>/dev/null | tr -d '\r')
+    [ -n "$_v" ] && printf 'etc_version=%s\n' "$_v" >> "$_fo"
+    _php=$($_run "/bin/sh -c '/usr/local/bin/php -v'" 2>/dev/null \
+        | sed -n '1s/^PHP \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
+    [ -n "$_php" ] && printf 'php_version=%s\n' "$_php" >> "$_fo"
+    _py=$($_run "/bin/sh -c 'ls /usr/local/bin'" 2>/dev/null \
+        | sed -n 's/^python3\.\([0-9][0-9]*\)$/py3\1/p' | head -1)
+    [ -n "$_py" ] && printf 'py_flavor=%s\n' "$_py" >> "$_fo"
+    _fb=$($_run "/bin/sh -c '/bin/freebsd-version'" 2>/dev/null | tr -d '\r')
+    if [ -n "$_fb" ]; then
+        printf 'freebsd_version=%s\n' "$_fb" >> "$_fo"
+        printf 'freebsd_major=%s\n' "${_fb%%.*}" >> "$_fo"
+    fi
+    [ -s "$_fo" ]
+}

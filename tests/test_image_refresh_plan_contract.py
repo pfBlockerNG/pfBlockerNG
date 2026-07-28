@@ -244,3 +244,153 @@ class TestSelfRefreshLegs:
         matrix = _run_plan(tmp_path, versions, self_refresh="true")
         assert len(matrix["include"]) == 1
         assert matrix["include"][0]["pfsense_version"] == "26.03"
+
+
+ACTIVATION_STEP = "Open activation PR (box-verified matrix update)"
+
+FAKE_GIT_ACT = """#!/bin/sh
+printf 'git %s\\n' "$*" >> "$GIT_LOG"
+case "$1" in
+  show) cat "$FAKE_MATRIX" ;;
+esac
+exit 0
+"""
+
+FAKE_GH_ACT = """#!/bin/sh
+case "$*" in
+  "pr list "*) printf '%s\\n' "${GH_PR_OPEN:-}" ;;
+  "pr create "*) printf 'pr create %s\\n' "$*" >> "$GH_LOG" ;;
+esac
+exit 0
+"""
+
+PLUS_2607_MATRIX = {
+    "versions": [
+        {
+            "pfsense_version": "26.03",
+            "channel": "Plus",
+            "freebsd_version": "16.0-RELEASE",
+            "freebsd_major": "16",
+            "php_version": "8.5",
+            "py_flavor": "py311",
+            "variant": "Plus",
+            "status": "active",
+            "ci": True,
+            "image_name": "pfsense-plus",
+        },
+        {
+            "pfsense_version": "26.07",
+            "channel": "Plus",
+            "freebsd_version": "16.0-RELEASE",
+            "freebsd_major": "16",
+            "php_version": "8.5",
+            "py_flavor": "py311",
+            "variant": "Plus",
+            "status": "beta",
+            "ci": False,
+            "image_name": "pfsense-plus",
+        },
+    ]
+}
+
+FACTS_857 = "etc_version=26.07-BETA\nphp_version=8.6\npy_flavor=py312\nfreebsd_version=16.0-CURRENT\nfreebsd_major=16\n"
+
+
+class TestActivationPr:
+    """Scenario (issue #1837): after a publish, the leg's matrix entry is
+    activated (ci: true) with the box-verified versions, via ONE tracker/* PR;
+    freebsd_version only follows the box when the MAJOR changed."""
+
+    def _run(
+        self,
+        tmp_path: Path,
+        *,
+        facts: str | None,
+        matrix: dict[str, Any] | None = None,
+        family: str = "26.07",
+        pr_open: str = "",
+    ) -> tuple[str, str, Path]:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        step = source.split(f"      - name: {ACTIVATION_STEP}\n", 1)[1].split("\n      - name:", 1)[0]
+        body: list[str] = []
+        for line in step.split("        run: |\n", 1)[1].splitlines():
+            if not line.strip():
+                body.append("")
+            elif line.startswith("          "):
+                body.append(line[10:])
+            else:
+                break
+        script = "\n".join(body)
+
+        for name, content in (("git", FAKE_GIT_ACT), ("gh", FAKE_GH_ACT)):
+            fake = tmp_path / name
+            fake.write_text(content, encoding="utf-8")
+            fake.chmod(0o755)
+        matrix_file = tmp_path / "fake-matrix.json"
+        matrix_file.write_text(json.dumps(matrix or PLUS_2607_MATRIX), encoding="utf-8")
+        if facts is not None:
+            (tmp_path / "box-facts.env").write_text(facts, encoding="utf-8")
+
+        env = os.environ | {
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "GIT_LOG": str(tmp_path / "git.log"),
+            "GH_LOG": str(tmp_path / "gh.log"),
+            "GH_PR_OPEN": pr_open,
+            "FAKE_MATRIX": str(matrix_file),
+            "REPO": "owner/repo",
+            "CHANNEL": "Plus",
+            "FAMILY": family,
+            "VARIANT": "plus",
+        }
+        subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, check=True, capture_output=True, text=True)
+
+        def log(name: str) -> str:
+            f = tmp_path / name
+            return f.read_text(encoding="utf-8") if f.exists() else ""
+
+        return log("git.log"), log("gh.log"), tmp_path
+
+    def test_publish_activates_entry_with_box_facts(self, tmp_path: Path) -> None:
+        git_log, gh_log, cwd = self._run(tmp_path, facts=FACTS_857)
+        assert "git push " + "--force origin tracker/matrix-activate-plus-26.07" in git_log
+        assert "pr create" in gh_log
+        entry = next(
+            e
+            for e in json.loads((cwd / "supported-versions.json").read_text(encoding="utf-8"))["versions"]
+            if e["pfsense_version"] == "26.07"
+        )
+        assert entry["ci"] is True
+        assert entry["php_version"] == "8.6"
+        assert entry["py_flavor"] == "py312"
+        # major unchanged (16) -> the human freebsd_version convention survives
+        assert entry["freebsd_version"] == "16.0-RELEASE"
+
+    def test_major_change_rewrites_full_freebsd_version(self, tmp_path: Path) -> None:
+        facts = FACTS_857.replace("16.0-CURRENT", "17.0-CURRENT").replace("freebsd_major=16", "freebsd_major=17")
+        _, _, cwd = self._run(tmp_path, facts=facts)
+        entry = next(
+            e
+            for e in json.loads((cwd / "supported-versions.json").read_text(encoding="utf-8"))["versions"]
+            if e["pfsense_version"] == "26.07"
+        )
+        assert entry["freebsd_major"] == "17"
+        assert entry["freebsd_version"] == "17.0-CURRENT"
+
+    def test_active_and_accurate_entry_does_nothing(self, tmp_path: Path) -> None:
+        facts = (
+            "etc_version=26.03.1-RELEASE\nphp_version=8.5\npy_flavor=py311\n"
+            "freebsd_version=16.0-CURRENT\nfreebsd_major=16\n"
+        )
+        git_log, gh_log, _ = self._run(tmp_path, facts=facts, family="26.03")
+        assert "push" not in git_log
+        assert "pr create" not in gh_log
+
+    def test_missing_facts_skip_everything(self, tmp_path: Path) -> None:
+        git_log, gh_log, _ = self._run(tmp_path, facts=None)
+        assert git_log == ""
+        assert gh_log == ""
+
+    def test_existing_open_pr_updates_without_recreating(self, tmp_path: Path) -> None:
+        git_log, gh_log, _ = self._run(tmp_path, facts=FACTS_857, pr_open="88")
+        assert "git push " + "--force origin tracker/matrix-activate-plus-26.07" in git_log
+        assert "pr create" not in gh_log
