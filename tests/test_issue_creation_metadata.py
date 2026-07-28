@@ -110,21 +110,80 @@ def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
     claude = json.loads((plugin / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
     codex = json.loads((plugin / "codex/.codex-plugin/plugin.json").read_text(encoding="utf-8"))
     marketplace = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
+    claude_marketplace = json.loads((plugin / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
+    locked = set(json.loads((ROOT / "skills-lock.json").read_text(encoding="utf-8"))["skills"])
 
     claude_skills = {Path(skill).name for skill in claude["skills"]}
     codex_skills = {path.name for path in (plugin / "codex/skills").iterdir() if path.is_dir()}
+    promoted = {
+        "ask-matt",
+        "code-review",
+        "codebase-design",
+        "diagnosing-bugs",
+        "domain-modeling",
+        "grill-me",
+        "grill-with-docs",
+        "grilling",
+        "handoff",
+        "implement",
+        "improve-codebase-architecture",
+        "prototype",
+        "research",
+        "resolving-merge-conflicts",
+        "setup-matt-pocock-skills",
+        "tdd",
+        "teach",
+        "to-spec",
+        "to-tickets",
+        "triage",
+        "wayfinder",
+        "writing-great-skills",
+    }
+    retained = {
+        "batch-grill-me",
+        "claude-handoff",
+        "design-an-interface",
+        "edit-article",
+        "git-guardrails-claude-code",
+        "loop-me",
+        "migrate-to-shoehorn",
+        "obsidian-vault",
+        "qa",
+        "request-refactor-plan",
+        "scaffold-exercises",
+        "setup-pre-commit",
+        "setup-ts-deep-modules",
+        "to-questionnaire",
+        "ubiquitous-language",
+        "wizard",
+        "writing-beats",
+        "writing-fragments",
+        "writing-shape",
+    }
+    local_vendored = {
+        "cavecrew",
+        "caveman",
+        "caveman-commit",
+        "caveman-compress",
+        "caveman-help",
+        "caveman-review",
+        "caveman-stats",
+    }
 
     assert claude["name"] == codex["name"] == "mattpocock-skills"
     assert claude["version"] == codex["version"] == "1.2.0"
-    assert claude_skills == codex_skills
-    assert len(codex_skills) == 22
+    assert claude_skills == codex_skills == promoted
     assert codex["skills"] == "./skills/"
     assert not (plugin / "skills").exists()
-    assert all((plugin / "claude-skills" / name / "SKILL.md").is_file() for name in claude_skills)
-    assert all(not (ROOT / ".agents/skills" / name).exists() for name in codex_skills)
+    assert locked == retained | local_vendored
+    assert all((ROOT / ".agents/skills" / name).exists() for name in retained)
+    assert all(not (ROOT / ".agents/skills" / name).exists() for name in promoted)
+    assert all(not (ROOT / ".claude/skills" / name).exists() for name in promoted)
 
     entry = next(item for item in marketplace["plugins"] if item["name"] == "mattpocock-skills")
     assert entry["source"] == {"source": "local", "path": "./plugins/mattpocock-skills/codex"}
+    claude_entry = next(item for item in claude_marketplace["plugins"] if item["name"] == "mattpocock-skills")
+    assert claude_entry["source"] == "./"
 
     explicit_only = {
         "ask-matt",
@@ -141,10 +200,23 @@ def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
         "wayfinder",
         "writing-great-skills",
     }
-    for name in explicit_only:
-        claude_skill = (plugin / "claude-skills" / name / "SKILL.md").read_text(encoding="utf-8")
-        codex_skill = (plugin / "codex/skills" / name / "SKILL.md").read_text(encoding="utf-8")
-        codex_metadata = (plugin / "codex/skills" / name / "agents/openai.yaml").read_text(encoding="utf-8")
-        assert "disable-model-invocation: true" in claude_skill.partition("\n---\n")[0].splitlines()
-        assert "disable-model-invocation: true" not in codex_skill.partition("\n---\n")[0].splitlines()
-        assert "allow_implicit_invocation: false" in codex_metadata
+    for name in promoted:
+        claude_root = plugin / "claude-skills" / name
+        codex_root = plugin / "codex/skills" / name
+        claude_files = {path.relative_to(claude_root) for path in claude_root.rglob("*") if path.is_file()}
+        codex_files = {path.relative_to(codex_root) for path in codex_root.rglob("*") if path.is_file()}
+        assert claude_files == codex_files
+
+        for relative in claude_files:
+            claude_bytes = (claude_root / relative).read_bytes()
+            codex_bytes = (codex_root / relative).read_bytes()
+            if relative == Path("SKILL.md") and name in explicit_only:
+                claude_bytes = claude_bytes.replace(b"disable-model-invocation: true\n", b"", 1)
+            assert claude_bytes == codex_bytes
+
+        claude_skill = (claude_root / "SKILL.md").read_text(encoding="utf-8")
+        has_explicit_flag = "disable-model-invocation: true" in claude_skill.partition("\n---\n")[0].splitlines()
+        assert has_explicit_flag == (name in explicit_only)
+        if name in explicit_only:
+            codex_metadata = (codex_root / "agents/openai.yaml").read_text(encoding="utf-8")
+            assert "allow_implicit_invocation: false" in codex_metadata
