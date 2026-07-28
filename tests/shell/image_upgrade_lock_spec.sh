@@ -68,6 +68,42 @@ Describe 'image-upgrade.sh upgrade-lock retry'
     The stderr should include 'lock'
   End
 
+  # run_call_site MODE — drive the helper through the REAL call-site shape.
+  # A shell function on the left of a pipe runs in a subshell, so its `die`
+  # cannot abort the script and `set -e` only sees the pipeline's last command
+  # (issue #1844). The shipped call sites must
+  # therefore never pipe the helper.
+  run_call_site() {
+    _mode="$1" sh -c '
+      set -e
+      log()  { printf "==> %s\n" "$*"; }
+      warn() { printf "WARNING: %s\n" "$*" >&2; }
+      die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      eval "$(sed -n "/^# pfb_upgrade_run BEGIN/,/^# pfb_upgrade_run END/p" "$1")"
+      LOCK_RETRIES=2
+      LOCK_INTERVAL=0
+      ssh_guest() { printf "Another instance is already running... Aborting!\n"; }
+      # The shape the script actually uses, whatever it is today.
+      eval "$(sed -n "/^# pfb_call_site BEGIN/,/^# pfb_call_site END/p" "$1")"
+      pfb_call_site_check "$2/check.log"
+      printf "REACHED-AFTER-CHECK\n"
+    ' _ "$SCRIPT" "$WORK"
+  }
+
+  It 'aborts the script when the lock never clears at the real call site'
+    When call run_call_site always-locked
+    The status should be failure
+    The stderr should include 'lock'
+    The output should not include 'REACHED-AFTER-CHECK'
+  End
+
+  It 'persists the refusal diagnostics in the log file'
+    When call run_call_site always-locked
+    The status should be failure
+    The stderr should include 'lock held'
+    The contents of file "${WORK}/check.log" should include 'Another instance is already running'
+  End
+
   It 'never returns the refusal text as if it were a verdict'
     When call run_helper always-locked
     The status should be failure

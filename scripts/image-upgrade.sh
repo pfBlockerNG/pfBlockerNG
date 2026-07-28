@@ -289,10 +289,14 @@ ssh_guest() {
 # before any downstream step can misread it. Echoes the successful output.
 # LOCK_RETRIES / LOCK_INTERVAL are overridable for the spec.
 pfb_upgrade_run() {
-    _pur_cmd="$1"; _pur_label="$2"
+    _pur_cmd="$1"; _pur_label="$2"; _pur_log="${3:-}"
     _pur_i=0
     while [ "$_pur_i" -lt "${LOCK_RETRIES:-20}" ]; do
         _pur_out=$(ssh_guest "$_pur_cmd" 2>&1 || true)
+        # Persist EVERY attempt (append) so an unclearable lock still leaves the
+        # refusal text in the log — the old `| tee` path recorded it, and the
+        # operator needs it to tell a lock apart from a failed upgrade.
+        [ -n "$_pur_log" ] && printf '%s\n' "$_pur_out" >> "$_pur_log"
         case "$_pur_out" in
             *"Another instance is already running"*)
                 _pur_i=$((_pur_i + 1))
@@ -308,6 +312,24 @@ pfb_upgrade_run() {
     die "${_pur_label}: pfSense-upgrade lock never cleared after ${LOCK_RETRIES:-20} attempts — refusing to continue"
 }
 # pfb_upgrade_run END
+
+# pfb_call_site BEGIN
+# The two call sites, as functions so the spec drives the SHIPPED shape. They
+# take the log path and redirect — NEVER a pipe: a function on the left of a
+# pipe runs in a subshell, so its die() cannot abort the script and `set -e`
+# only sees the pipeline's last command (issue #1844).
+pfb_call_site_check() {
+    _pcs_log="$1"
+    true > "$_pcs_log"
+    pfb_upgrade_run 'pfSense-upgrade -c' 'upgrade check' "$_pcs_log"
+}
+
+pfb_call_site_upgrade() {
+    _pcs_log="$1"
+    true > "$_pcs_log"
+    pfb_upgrade_run "$UPGRADE_CMD" 'upgrade' "$_pcs_log" > /dev/null
+}
+# pfb_call_site END
 
 # wait_guest_ssh TIMEOUT — poll until root SSH answers or TIMEOUT seconds elapse.
 wait_guest_ssh() {
@@ -510,7 +532,7 @@ fi
 # the /etc/version change after the upgrade run below. If the check clearly says
 # the box is already current there is nothing to publish -> graceful no-op exit.
 log "checking for an available OS upgrade (pfSense-upgrade -c)"
-UPGRADE_CHECK=$(pfb_upgrade_run 'pfSense-upgrade -c' 'upgrade check' | tee "$LOCAL_DIR/upgrade-check.log")
+UPGRADE_CHECK=$(pfb_call_site_check "$LOCAL_DIR/upgrade-check.log")
 printf '%s\n' "$UPGRADE_CHECK" | sed 's/^/    /'
 if printf '%s' "$UPGRADE_CHECK" | grep -qiE 'up.to.date|already.*(latest|current)|no [a-z ]*update'; then
     log "no OS upgrade available — box is current at '${OLD_VER}'; nothing to publish."
@@ -522,7 +544,7 @@ log "running pfSense upgrade (this reboots the box; up to ${UPGRADE_TIMEOUT}s)"
 # Connection will drop when the box reboots — that is expected, so ignore it.
 # The lock retry still applies: a refused upgrade must never be mistaken for a
 # started one (issue #1844).
-pfb_upgrade_run "$UPGRADE_CMD" 'upgrade' | tee "$LOCAL_DIR/upgrade.log"
+pfb_call_site_upgrade "$LOCAL_DIR/upgrade.log"
 
 # --- wait for the new version to come up -----------------------------------
 log "waiting for the upgraded box to come back..."
