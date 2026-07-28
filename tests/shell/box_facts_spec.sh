@@ -101,9 +101,12 @@ BEOF
     The contents of file "${OUT}/etc-version" should equal '26.03.1-RELEASE'
     The contents of file "${OUT}/repoc.txt" should include 'Beta Version (26.07)'
     The contents of file "${OUT}/upgrade-check.txt" should include 'up to date'
-    # Review F2: both network-fetching guest commands run under a hard cap
-    The contents of file "$SSH_CMDS_LOG" should include 'timeout 120 /usr/local/sbin/pfSense-repoc'
-    The contents of file "$SSH_CMDS_LOG" should include 'timeout 240 /usr/local/sbin/pfSense-upgrade'
+    # Review F2: both network-fetching guest commands run under a hard cap;
+    # delta-review: every fact command is wrapped in /bin/sh -c so a stock
+    # tcsh root shell can never misparse 2>&1 (docs/misc/local-smoke-debian.md)
+    The contents of file "$SSH_CMDS_LOG" should include "/bin/sh -c 'timeout 120 /usr/local/sbin/pfSense-repoc -p'"
+    The contents of file "$SSH_CMDS_LOG" should include "/bin/sh -c 'timeout 240 /usr/local/sbin/pfSense-upgrade"
+    The contents of file "$SSH_CMDS_LOG" should include "/bin/sh -c 'cat /etc/version'"
   End
 
   It 'reports unavailable without booting when Plus identity is absent'

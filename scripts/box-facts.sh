@@ -131,6 +131,14 @@ guest_ssh() {
         root@127.0.0.1 "$@"
 }
 
+# guest_sh CMD — run CMD under /bin/sh on the guest regardless of the login
+# shell: stock pfSense root uses tcsh, which misparses 2>&1 inside a remote
+# command string (docs/misc/local-smoke-debian.md); our images use sh, but the
+# wrap costs nothing. CMD must not contain single quotes.
+guest_sh() {
+    guest_ssh "/bin/sh -c '$1'"
+}
+
 # Wait for guest SSH — hard-capped; a dead qemu ends the wait early.
 _elapsed=0
 _ssh_up=0
@@ -153,16 +161,16 @@ fi
 # network — each runs under its own guest-side hard cap (a wedged pkg/fetch
 # must not hang the run; review F2).
 _ok=1
-guest_ssh 'cat /etc/version' > "$OUT_DIR/etc-version" 2>/dev/null || _ok=0
-guest_ssh 'timeout 120 /usr/local/sbin/pfSense-repoc -p' > "$OUT_DIR/repoc.txt" 2>/dev/null || _ok=0
+guest_sh 'cat /etc/version' > "$OUT_DIR/etc-version" 2>/dev/null || _ok=0
+guest_sh 'timeout 120 /usr/local/sbin/pfSense-repoc -p' > "$OUT_DIR/repoc.txt" 2>/dev/null || _ok=0
 # rc 0 (current) and rc 2 (update available) are both healthy outcomes of -c;
 # anything else — including timeout(1)'s 124 — is a failed fact (an empty
 # second source must never read as "up to date"; review CR2).
-guest_ssh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1; [ "$?" -le 2 ]' \
+guest_sh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1; [ "$?" -le 2 ]' \
     > "$OUT_DIR/upgrade-check.txt" 2>/dev/null || _ok=0
 
 # Best-effort clean shutdown; the trap reaps whatever is left (capped).
-guest_ssh '/sbin/shutdown -p now' 2>/dev/null || true
+guest_sh '/sbin/shutdown -p now' 2>/dev/null || true
 _elapsed=0
 while kill -0 "$BOOT_PID" 2>/dev/null && [ "$_elapsed" -lt "$SHUTDOWN_WAIT" ]; do
     sleep "$POLL"; _elapsed=$((_elapsed + POLL))
