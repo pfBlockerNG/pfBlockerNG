@@ -152,7 +152,9 @@ image_oci_push() {
 # at all was gathered.
 image_gather_facts() {
     _fo=$1; _run=$2
-    : > "$_fo" || return 1
+    # true (regular builtin), never `:` — a redirection error on a special
+    # builtin exits ash/dash entirely (issue #1172; guard-enforced).
+    true > "$_fo" || return 1
     _v=$($_run "/bin/sh -c 'cat /etc/version'" 2>/dev/null | tr -d '\r')
     [ -n "$_v" ] && printf 'etc_version=%s\n' "$_v" >> "$_fo"
     _php=$($_run "/bin/sh -c '/usr/local/bin/php -v'" 2>/dev/null \
