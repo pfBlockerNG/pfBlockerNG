@@ -1148,3 +1148,39 @@ def test_packaged_files_carry_the_build_mtime_not_epoch_zero(tmp_path: Path) -> 
         (m.name, m.mtime, manifest_mtimes.get(m.name)) for m in payload if manifest_mtimes.get(m.name) != m.mtime
     ]
     assert not mismatched, f"+MANIFEST mtime disagrees with the archive entry (name, archive, manifest): {mismatched}"
+
+
+def test_source_date_epoch_pins_every_packaged_mtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SOURCE_DATE_EPOCH pins the recorded mtimes, so a build can still be reproducible.
+
+    The default (the staged file's own mtime) moves with the build clock, which is what
+    makes an upgraded asset look new to a browser. A caller that needs byte-identical
+    rebuilds sets the standard reproducible-builds variable and gets a fixed value in
+    both +MANIFEST and the archive.
+    """
+    pinned = 1700000000  # 2023-11-14, safely in the past
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", str(pinned))
+    ports, portdir = _make_classic_port(tmp_path)
+    out = tmp_path / "out"
+    rc = bpp.main(
+        [
+            "--ports", str(ports),
+            "--port-dir", str(portdir),
+            "--abi", "FreeBSD:15:amd64",
+            "--py-flavor", "py311",
+            "--compression", "xz",
+            "--out", str(out),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+
+    full, _compact, tf = _read_pkg(out / "testpkg-1.0_2.pkg")
+    payload = [m for m in tf.getmembers() if m.name.startswith("/")]
+    assert payload, "no payload members in the archive -- nothing to assert on"
+
+    assert [m.mtime for m in payload] == [pinned] * len(payload), (
+        f"archive entries ignore SOURCE_DATE_EPOCH={pinned}: {[(m.name, m.mtime) for m in payload]}"
+    )
+    assert [entry["mtime"] for entry in full["files"].values()] == [pinned] * len(payload), (
+        f"+MANIFEST entries ignore SOURCE_DATE_EPOCH={pinned}: {full['files']}"
+    )

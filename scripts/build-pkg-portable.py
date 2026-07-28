@@ -1167,7 +1167,17 @@ def make_manifest(b: Build, *, compact: bool) -> dict:
 
 
 def _staged_mtime(f: StagedFile) -> int:
-    """The staged file's mtime, whole seconds — what pkg records and installs."""
+    """The mtime pkg records and installs: the staged file's own, whole seconds.
+
+    `SOURCE_DATE_EPOCH` overrides it with a fixed value for callers that need
+    byte-identical rebuilds of the same inputs.
+    """
+    raw = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            raise BuildError(f"SOURCE_DATE_EPOCH must be an integer of seconds, got {raw!r}") from None
     return int(f.src_in_stage.stat().st_mtime)
 
 
