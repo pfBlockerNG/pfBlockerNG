@@ -17,9 +17,11 @@
 #   detection   — edition = "/etc/product_label contains 'Plus'": Plus vs CE; the
 #                 varver prefix and the catalog path follow. Version-only —
 #                 arch-less (issue #1806): the hook never calls `pkg` at all.
-#   no-pkg      — the hook NEVER invokes `pkg`, under any invocation mechanism
-#                 (bare PATH lookup or PFB_PKG_BIN) — no arch detection to read,
-#                 no reconcile, no fetch.
+#   no-pkg      — the hook NEVER invokes `pkg` at all (it has no configurable
+#                 pkg-binary override, unlike e.g. build-repo.sh's PKG_BIN) —
+#                 no arch detection to read, no reconcile, no fetch. The stub
+#                 below only intercepts a BARE PATH `pkg` lookup, which is the
+#                 only mechanism there is to catch.
 #   fail-proof  — detection failure (empty version) leaves the conf UNCHANGED,
 #                 warns on stderr, and still exits 0 (never wedge boot).
 #
@@ -55,10 +57,10 @@ EOF
 
 # Stand up a stubbed box in dir $1: product_label=$2, version=$3.
 # Exports every PFB_* override the hook reads. A logging `pkg` stub is placed
-# BOTH on PATH and it would be picked up if anything ever read PFB_PKG_BIN
-# again — pure regression guard, the hook calls neither (issue #1806). Conf
-# files are NOT created here — each example stages the conf(s) it wants the
-# hook to (not) regenerate.
+# on PATH so a BARE `pkg` invocation is caught — the hook has no PFB_PKG_BIN-
+# style override to intercept separately, and calls it under no mechanism at
+# all (issue #1806) — pure regression guard. Conf files are NOT created here —
+# each example stages the conf(s) it wants the hook to (not) regenerate.
 _make_box() {
     _mb_dir="$1"
     mkdir -p "${_mb_dir}/repos" "${_mb_dir}/bin"
