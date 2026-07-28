@@ -91,7 +91,7 @@ on:
         required: false
         default: "3"
       pkg_artifact_prefix:
-        description: "Name prefix of prebuilt per-leg package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<variant>-<version>-<arch>'. Empty = build internally (the build-pkg job runs as before)."
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally (the build-pkg job runs as before)."
         required: false
         default: ""
   # Called by other workflows. A callee sees the CALLER's event_name, so scope
@@ -125,7 +125,7 @@ on:
         type: string
         default: "3"
       pkg_artifact_prefix:
-        description: "Name prefix of prebuilt per-leg package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<variant>-<version>-<arch>'. Empty = build internally."
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally."
         required: false
         type: string
         default: ""
@@ -251,10 +251,13 @@ jobs:
       abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
       php_version: ${{ matrix.php_version }}
       py_flavor: ${{ matrix.py_flavor }}
-      # Keyed on image_name + pfsense_version (unique per version leg, stable
-      # across its shards) — the smoke job below passes the SAME name as
-      # pkg_artifact so every shard of this leg downloads this one build.
-      artifact_name: pfBlockerNG-pkg-${{ matrix.image_name }}-${{ matrix.pfsense_version }}
+      # fbsd<major>-<image_name> (issue #1806 naming convention; image_name keeps
+      # this leg's artifact distinct from a same-major sibling leg in the SAME
+      # run — this job matrixes over leg_matrix, one row per VERSION, never
+      # deduped by major) — unique per version leg, stable across its shards,
+      # so the smoke job below passes the SAME name as pkg_artifact and every
+      # shard of this leg downloads this one build.
+      artifact_name: pfBlockerNG-pkg-fbsd${{ matrix.freebsd_major }}-${{ matrix.image_name }}
       ports_repo: pfBlockerNG/FreeBSD-ports
       ports_ref: pfblockerng/use-github
 
@@ -312,16 +315,15 @@ jobs:
       abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
       php_version: ${{ matrix.php_version }}
       py_flavor: ${{ matrix.py_flavor }}
-      # pkg_artifact_prefix set: the prebuilt per-leg artifact a caller (e.g.
-      # release.yml) already published, named '<prefix>-<variant>-<version>-<arch>'
-      # -- the SAME template ui-tests.yml's ui job downloads (both fan-outs
-      # consume one shared release build). image_name is only ever
-      # pfsense-ce/pfsense-plus today (ponytail: hardcoded 2-way ternary, not a
-      # generic prefix strip -- widen if a 3rd variant ships).
+      # pkg_artifact_prefix set: the prebuilt artifact a caller (e.g. release.yml)
+      # already published, named '<prefix>-fbsd<freebsd_major>' (issue #1806 --
+      # release.yml builds ONE .pkg per major, shared by every variant/version on
+      # it) -- the SAME template ui-tests.yml's ui job downloads (both fan-outs
+      # consume one shared release build).
       # Blank: the .pkg build-pkg already produced for this version leg (issue
       # #857) -- identical to that job's artifact_name, so every shard of this
       # leg finds the SAME shared artifact and downloads it instead of rebuilding.
-      pkg_artifact: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-{1}-{2}-{3}', inputs.pkg_artifact_prefix, (matrix.image_name == 'pfsense-plus' && 'plus' || 'ce'), matrix.pfsense_version, matrix.arch) || format('pfBlockerNG-pkg-{0}-{1}', matrix.image_name, matrix.pfsense_version) }}
+      pkg_artifact: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major) || format('pfBlockerNG-pkg-fbsd{0}-{1}', matrix.freebsd_major, matrix.image_name) }}
       # Resolved by the prepare step: the marker, and the effective -k (an explicit
       # input, else the impacted auto-derivation, else blank = whole marker).
       pytest_marker: ${{ needs.prepare.outputs.pytest_marker || 'smoke' }}
