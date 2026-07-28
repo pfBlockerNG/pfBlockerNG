@@ -1,26 +1,30 @@
 #!/bin/sh
 # build-repo.sh — turn a directory of ONE variant/version's pfBlockerNG .pkg
 # files into a FreeBSD `pkg` repository tree (ADR-17): reads each .pkg's ABI
-# FROM THE PACKAGE (never the filename), lays the catalog out under
-# <out>/release/<varver>/<arch>/ (the ADR-20 varver keying — an ABI is NOT
+# FROM THE PACKAGE (never the filename), lays the catalog out DIRECTLY under
+# <out>/release/<varver>/ — arch-less (issue #1806: all three
+# pfSense-pkg-pfBlockerNG ports are NO_ARCH, so one varver directory serves
+# every arch of its FreeBSD major; the ADR-20 varver keying — an ABI is NOT
 # 1:1 with an edition/version, so the varver cannot be derived from the
-# package and is supplied by the caller), and runs unsigned `pkg repo` on the
-# bucket (NONE-signed trust model, ADR §2). Deterministic + re-runnable + no
-# network: the bucket is wiped and rebuilt every run. A flavor collision
-# (same name+version+ABI, different php/py flavor) or a mixed-ABI input
-# fails loud — see the guards below. `pkg` must be a real libpkg build on
-# PATH (override PKG_BIN).
+# package and is supplied by the caller) — and runs unsigned `pkg repo` on
+# the bucket (NONE-signed trust model, ADR §2). Deterministic + re-runnable +
+# no network: the bucket is wiped and rebuilt every run. A flavor collision
+# (same name+version+ABI, different php/py flavor), a mixed-ABI input, or a
+# CONCRETE (non-NO_ARCH) package ABI all fail loud — see the guards below
+# (arch-less catalogs serve every arch, so a concrete package would silently
+# install on only one). `pkg` must be a real libpkg build on PATH (override
+# PKG_BIN).
 #
 # Usage:
 #   build-repo.sh --in <dir-of-.pkg> --out <dir> --varver <varver>
-#   build-repo.sh --print-conf --catalog-path <varver>/<arch> [--base-url <url>]
+#   build-repo.sh --print-conf --catalog-path <varver> [--base-url <url>]
 #
 # Options:
 #   --in DIR          directory holding the input .pkg files (searched, non-recursive)
-#   --out DIR         output root; the catalog is created at release/<varver>/<arch>/
+#   --out DIR         output root; the catalog is created at release/<varver>/
 #   --varver NAME     catalog key, e.g. ce-2.8 / plus-26.03 (ADR-20; required with --in)
 #   --print-conf      print the client repo-conf template to stdout and exit
-#   --catalog-path P  <varver>/<arch> path the printed conf's url resolves to
+#   --catalog-path P  <varver> path the printed conf's url resolves to
 #   --base-url URL    base URL for --print-conf (default: the ADR Pages base)
 #
 # Env:
@@ -43,16 +47,16 @@ CONF_PRIORITY=100
 
 print_conf() {
     # $1 = fully-resolved URL (no trailing slash). The URL is a STATIC, directly-resolved
-    # string for the box's edition/version/arch — no ${ABI} token (ADR-39).
-    # Supply --catalog-path <varver>/<arch> (e.g. "ce-2.8/amd64") so the test can
-    # pin the exact resolved conf; the url is then base/release/<varver>/<arch>.
+    # string for the box's edition/version — no ${ABI} token (ADR-39), arch-less
+    # since issue #1806 (NO_ARCH). Supply --catalog-path <varver> (e.g. "ce-2.8")
+    # so the test can pin the exact resolved conf; the url is then base/release/<varver>.
     base="$1"
     cat <<EOF
 # Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.
 # pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
-# fully resolved for this box's edition/version/arch (ADR-39); the boot
-# rc.d hook updates it on a pfSense OS upgrade.
+# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
+# issue #1806); the boot rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.
 pfblockerng: {
@@ -84,7 +88,7 @@ while [ $# -gt 0 ]; do
         --base-url)      BASE_URL="$2"; shift 2 ;;
         --catalog-path)  CATALOG_PATH="$2"; shift 2 ;;
         -h|--help)
-            sed -n '14,29p' "$0"   # the Usage/Options/Env block from the header
+            sed -n '18,31p' "$0"   # the Usage/Options/Env block from the header
             exit 0 ;;
         *) echo "build-repo: unknown arg: $1" >&2; exit 2 ;;
     esac
@@ -92,7 +96,7 @@ done
 
 if [ "$PRINT_CONF" -eq 1 ]; then
     [ -n "${CATALOG_PATH}" ] || {
-        echo "build-repo: --catalog-path <varver>/<arch> is required with --print-conf" >&2
+        echo "build-repo: --catalog-path <varver> is required with --print-conf" >&2
         exit 2
     }
     _full_url="${BASE_URL%/}/release/${CATALOG_PATH}"
@@ -104,7 +108,7 @@ fi
 # the && chain is side-effect-free, so SC2015's caveat does not apply.
 # shellcheck disable=SC2015
 [ -n "$IN" ] && [ -n "$OUT" ] && [ -n "$VARVER" ] || {
-    echo "Usage: $0 --in <dir-of-.pkg> --out <dir> --varver <varver>   |   $0 --print-conf --catalog-path <varver>/<arch> [--base-url <url>]" >&2
+    echo "Usage: $0 --in <dir-of-.pkg> --out <dir> --varver <varver>   |   $0 --print-conf --catalog-path <varver> [--base-url <url>]" >&2
     exit 2
 }
 [ -d "$IN" ] || { echo "build-repo: --in is not a directory: $IN" >&2; exit 1; }
@@ -190,36 +194,71 @@ for f in "$@"; do
     fi
 done
 
-# Reject an ABI that is not a single safe path segment — it becomes a directory
-# name (${OUT}/${abi}) that is `rm -rf`'d + rebuilt, so `..` / `/` / odd chars could
-# escape $OUT. FreeBSD ABIs look like `FreeBSD:15:amd64` (the `:` is allowed).
+# Reject an ABI that is not a single safe path segment or, when it wildcards
+# the CPU segment (a NO_ARCH package; issue #1806), not in the TIGHT
+# "OS:major:*" shape. The ABI is never used as a directory name any more
+# (arch-less catalog), but package metadata still lands verbatim in error
+# messages, so it stays validated before any of it is trusted.
+# FreeBSD ABIs look like `FreeBSD:15:amd64` (the `:` is allowed); a NO_ARCH
+# package's is `FreeBSD:15:*` — '*' is valid ONLY as the WHOLE final segment.
 validate_abi() {
     # issue #1148: LC_ALL=C tr + '/' sentinel, not a `case` range — see the
     # --varver guard for both traps (locale collation; trailing-newline strip).
-    if [ -z "$1" ] || [ "${1#*..}" != "$1" ] || \
-       [ "$(printf '%s/' "$1" | LC_ALL=C tr -d 'A-Za-z0-9:._+-')" != '/' ]; then
+    if [ -z "$1" ] || [ "${1#*..}" != "$1" ]; then
+        echo "build-repo: unsafe or invalid ABI in package metadata: '$1'" >&2
+        exit 1
+    fi
+    last="${1##*:}"
+    if [ "$last" = "*" ]; then
+        # Tight wildcard: validate the OS:major prefix (everything but the
+        # trailing ':*') against the same safe charset — no '*' anywhere in it.
+        rest="${1%:*}"
+        if [ "$(printf '%s/' "$rest" | LC_ALL=C tr -d 'A-Za-z0-9:._+-')" != '/' ]; then
+            echo "build-repo: unsafe or invalid ABI in package metadata: '$1'" >&2
+            exit 1
+        fi
+        return 0
+    fi
+    if [ "$(printf '%s/' "$1" | LC_ALL=C tr -d 'A-Za-z0-9:._+-')" != '/' ]; then
         echo "build-repo: unsafe or invalid ABI in package metadata: '$1'" >&2
         exit 1
     fi
 }
 
+# Hard-require a NO_ARCH (CPU-wildcarded) ABI at catalog-emission time
+# (issue #1806): the catalog is arch-less (release/<varver>/ serves every arch
+# of a FreeBSD major from ONE directory), so a concrete-ABI package would
+# silently install on only one arch — the tripwire that forces a conscious
+# layout decision if a compiled, per-arch dependency is ever added.
+require_noarch_abi() {
+    case "$1" in
+        *:\*) return 0 ;;
+    esac
+    echo "build-repo: catalog requires a NO_ARCH (wildcard-ABI) package — got concrete ABI '$1'." >&2
+    echo "  The catalog tree is arch-less (one directory serves every arch of a FreeBSD major);" >&2
+    echo "  a concrete-ABI package would silently install on only one arch. Ship a wildcard-ABI" >&2
+    echo "  (NO_ARCH) build instead." >&2
+    exit 1
+}
+
 # ── Lay out the varver bucket + run `pkg repo` ─────────────────────────────────
-# issue #1081: the catalog lives at <out>/release/<varver>/<arch>/ (ADR-20 varver
-# keying, matching build-repo-portable.py and this script's own --print-conf
-# url); one ABI per invocation — a mixed input would silently mix editions.
+# issue #1081/#1806: the catalog lives DIRECTLY at <out>/release/<varver>/ —
+# arch-less (ADR-20 varver keying, matching build-repo-portable.py and this
+# script's own --print-conf url); one (wildcarded) ABI per invocation — a
+# mixed input would silently mix editions.
 bucket_abi=""
 for f in "$@"; do
     abi="$(pkg_abi "$f")"
     validate_abi "$abi"
+    require_noarch_abi "$abi"
     if [ -z "$bucket_abi" ]; then
         bucket_abi="$abi"
     elif [ "$abi" != "$bucket_abi" ]; then
-        echo "build-repo: mixed ABIs in one run ('$bucket_abi' vs '$abi') — filter --in to one ABI and invoke once per ABI/arch (keep the same --varver for one edition)" >&2
+        echo "build-repo: mixed ABIs in one run ('$bucket_abi' vs '$abi') — filter --in to one ABI and invoke once per major (keep the same --varver for one edition)" >&2
         exit 1
     fi
 done
-arch="${bucket_abi##*:}"
-dir="${OUT}/release/${VARVER}/${arch}"
+dir="${OUT}/release/${VARVER}"
 rm -rf "$dir"
 mkdir -p "$dir"
 for f in "$@"; do
@@ -236,4 +275,4 @@ echo "==> pkg repo ${dir}" >&2
 # pkg never prompts in CI.
 env ASSUME_ALWAYS_YES=yes "$PKG_BIN" repo "$dir"
 
-echo "==> built catalog (release channel) at release/${VARVER}/${arch}" >&2
+echo "==> built catalog (release channel) at release/${VARVER}" >&2

@@ -3,16 +3,16 @@
 # regenerator (ADR-39). Installed by add-repo.sh.
 #
 # WHAT IT DOES (and nothing more): for each pfBlockerNG pkg-repo conf file that
-# EXISTS, it detects this box's pfSense edition/version/arch and UNCONDITIONALLY
+# EXISTS, it detects this box's pfSense edition/version and UNCONDITIONALLY
 # overwrites the conf with the canonical body — a fully-resolved GitHub Pages
 # catalog URL for the box's variant (ADR-17 / ADR-20) plus a marker comment.
 # No pkg call, no network fetch, no snapshot, no parse-and-compare, no
 # reconcile. It is a pure conf REGENERATOR: re-deriving the conf from scratch is
 # strictly simpler — and never wrong — than diffing and patching one in place.
 #
-# WHY AT BOOT: a pfSense OS upgrade can change the box's edition/version/arch
-# (all of which require a reboot), which moves the catalog subtree. Regenerating
-# every boot keeps the conf aligned with no upgrade hook to register.
+# WHY AT BOOT: a pfSense OS upgrade can change the box's edition/version (which
+# requires a reboot), which moves the catalog subtree. Regenerating every boot
+# keeps the conf aligned with no upgrade hook to register.
 #
 # rc.d ordering: REQUIRE FILESYSTEMS (so /usr/local is mounted) and
 # BEFORE NETWORKING (so the conf is correct before anything that could invoke
@@ -22,8 +22,11 @@
 # HARD RULE: every path ends in `exit 0`. This hook MUST NEVER wedge boot.
 #
 # Detection (KISS): edition = "/etc/product_label contains 'Plus'" -> plus, else
-# ce; version = major.minor of /etc/version; arch = the leaf of `pkg config abi`.
-# This mirrors catalog_name_from_version() in scripts/build-repo-portable.py.
+# ce; version = major.minor of /etc/version. This mirrors
+# catalog_name_from_version() in scripts/build-repo-portable.py. Arch-less
+# since issue #1806 (NO_ARCH) — the catalog no longer has a per-arch leaf, so
+# this hook no longer calls `pkg` at all (it used to read `pkg config abi`
+# only to derive that leaf).
 #
 # The emitted conf body is BYTE-IDENTICAL to `add-repo.sh --print-conf`,
 # `build-repo.sh --print-conf`, and `build-repo-portable.py --print-conf`
@@ -50,14 +53,14 @@ name="pfblockerng_repo_generate"
 : "${PFB_NIGHTLY_CONF:=/usr/local/etc/pkg/repos/pfblockerng-nightly.conf}"
 : "${PFB_PRODUCT_LABEL:=/etc/product_label}"
 : "${PFB_VERSION_FILE:=/etc/version}"
-: "${PFB_PKG_BIN:=/usr/local/sbin/pkg}"
 : "${PFB_BASE_URL:=https://pfblockerng.github.io/pkg}"
 
 CONF_PRIORITY=100
 
-# Detect this box's catalog subtree "<varver>/<arch>" (e.g. "ce-2.8/amd64").
-# Returns 1 (no output) if version or arch can't be resolved — the caller then
-# leaves the existing conf untouched rather than writing a malformed URL.
+# Detect this box's catalog subtree "<varver>" (e.g. "ce-2.8") — arch-less
+# since issue #1806 (NO_ARCH). Returns 1 (no output) if the version can't be
+# resolved — the caller then leaves the existing conf untouched rather than
+# writing a malformed URL.
 _detect_catalog() {
     # Edition: lowercase prefix matching build-repo-portable.py (ce | plus).
     if grep -q 'Plus' "${PFB_PRODUCT_LABEL}" 2>/dev/null; then
@@ -69,11 +72,8 @@ _detect_catalog() {
     _dc_ver=''
     [ -r "${PFB_VERSION_FILE}" ] && IFS= read -r _dc_ver < "${PFB_VERSION_FILE}"
     _dc_mm="$(printf '%s' "${_dc_ver}" | cut -d. -f1,2)"
-    # Arch: leaf of `pkg config abi` ("FreeBSD:15:amd64" -> "amd64").
-    _dc_abi="$("${PFB_PKG_BIN}" config abi 2>/dev/null)"
-    _dc_arch="${_dc_abi##*:}"
-    [ -n "${_dc_mm}" ] && [ -n "${_dc_arch}" ] || return 1
-    printf '%s-%s/%s' "${_dc_edition}" "${_dc_mm}" "${_dc_arch}"
+    [ -n "${_dc_mm}" ] || return 1
+    printf '%s-%s' "${_dc_edition}" "${_dc_mm}"
 }
 
 # Emit the canonical conf body. $1 = channel word, $2 = repo name, $3 = url.
@@ -86,8 +86,8 @@ _emit_conf() {
 # Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.
 # pfBlockerNG (${_ec_channel} channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
-# fully resolved for this box's edition/version/arch (ADR-39); the boot
-# rc.d hook updates it on a pfSense OS upgrade.
+# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
+# issue #1806); the boot rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.
 ${_ec_repo}: {

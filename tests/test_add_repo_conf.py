@@ -6,22 +6,24 @@ ALL emit the pkg(8) repo-conf the user ends up with.  They MUST never disagree
 on ANY load-bearing field.
 
 ADR-39 rework: the conf URL is now a DIRECT, fully-resolved GitHub Pages URL
-(no Cloudflare Worker, no ``${ABI}`` token):
+(no Cloudflare Worker, no ``${ABI}`` token). Arch-less since issue #1806
+(NO_ARCH — all three pfSense-pkg-pfBlockerNG ports are NO_ARCH, so one varver
+serves every arch of its FreeBSD major):
 
-    https://pfblockerng.github.io/pkg/<channel>/<varver>/<arch>
+    https://pfblockerng.github.io/pkg/<channel>/<varver>
 
-The ``<varver>/<arch>`` segment is resolved by the boot-time ``rc.d`` generator hook
+The ``<varver>`` segment is resolved by the boot-time ``rc.d`` generator hook
 (``pfblockerng_repo_generate.sh``), whose detection is folded in (ADR-39): edition =
-"/etc/product_label contains 'Plus'", version = major.minor of /etc/version, arch =
-the leaf of ``pkg config abi``.  The hook regenerates the whole conf each boot, so the
-URL self-corrects after a pfSense OS upgrade.
+"/etc/product_label contains 'Plus'", version = major.minor of /etc/version.  The
+hook regenerates the whole conf each boot, so the URL self-corrects after a pfSense
+OS upgrade.
 
 Tests below pin:
 
 * **byte-identity** across all FOUR producers — the three ``--print-conf`` generators
-  AND the hook (release conf, ``--catalog-path ce-2.8/amd64`` so the URL is
+  AND the hook (release conf, ``--catalog-path ce-2.8`` so the URL is
   deterministic);
-* **resolved URL shape** for representative ``<varver>/<arch>`` values;
+* **resolved URL shape** for representative ``<varver>`` values;
 * **no ``${ABI}``** in any generated conf;
 * **idempotence** (re-running add-repo.sh produces an identical conf file);
 * **release / nightly non-clobber** (the two channels write distinct files that
@@ -50,8 +52,8 @@ _PAGES_BASE = "https://pfblockerng.github.io/pkg"
 _OLD_WORKER_URL = "https://pkg.pfblockerng.workers.dev"
 
 # Representative catalog paths for byte-identity and URL-shape tests.
-_CE_28_AMD64 = "ce-2.8/amd64"
-_PLUS_2603_AMD64 = "plus-26.03/amd64"
+_CE_28 = "ce-2.8"
+_PLUS_2603 = "plus-26.03"
 
 
 # --------------------------------------------------------------------------- #
@@ -59,7 +61,7 @@ _PLUS_2603_AMD64 = "plus-26.03/amd64"
 # --------------------------------------------------------------------------- #
 
 
-def _print_conf_portable(catalog_path: str = _CE_28_AMD64, base_url: str = _PAGES_BASE) -> str:
+def _print_conf_portable(catalog_path: str = _CE_28, base_url: str = _PAGES_BASE) -> str:
     """Run ``build-repo-portable.py --print-conf`` and return stdout."""
     proc = subprocess.run(
         [
@@ -78,7 +80,7 @@ def _print_conf_portable(catalog_path: str = _CE_28_AMD64, base_url: str = _PAGE
     return proc.stdout
 
 
-def _print_conf_sh(script: Path, catalog_path: str = _CE_28_AMD64, base_url: str = _PAGES_BASE, *extra: str) -> str:
+def _print_conf_sh(script: Path, catalog_path: str = _CE_28, base_url: str = _PAGES_BASE, *extra: str) -> str:
     """Run ``<script> --print-conf --catalog-path <path>`` and return stdout."""
     proc = subprocess.run(
         [
@@ -101,27 +103,23 @@ def _print_conf_sh(script: Path, catalog_path: str = _CE_28_AMD64, base_url: str
 def _run_add_repo(root: str, *, nightly: bool = False) -> None:
     """Run add-repo.sh with PFBLOCKERNG_ROOT=root.
 
-    PKG_BIN is overridden to a stub that exits 0 for every subcommand; for
-    ``pkg config abi`` it prints a real ABI (``FreeBSD:15:amd64``). add-repo.sh
-    installs the generator hook into ``root`` and runs it; the hook resolves the
-    conf from ``root/etc/product_label`` (CE here — no "Plus") and
-    ``root/etc/version`` (2.8.1). We assert only that the conf file was written;
-    exit code is irrelevant (the rquery verify fails because the stub is empty).
+    PKG_BIN is overridden to a stub that exits 0 (no output) for every
+    subcommand — add-repo.sh's own live-bootstrap steps (`pkg update`, `pkg
+    rquery`) tolerate that; the generator hook no longer calls `pkg` at all
+    (arch-less catalog; issue #1806 — it used to read `pkg config abi` only to
+    derive the now-retired per-arch leaf). add-repo.sh installs the generator
+    hook into ``root`` and runs it; the hook resolves the conf from
+    ``root/etc/product_label`` (CE here — no "Plus") and ``root/etc/version``
+    (2.8.1). We assert only that the conf file was written; exit code is
+    irrelevant (the rquery verify fails because the stub is empty).
     """
     bin_dir = os.path.join(root, "bin")
     os.makedirs(bin_dir, exist_ok=True)
 
-    # pkg stub: exits 0 for everything; for `pkg config abi` prints a real ABI.
+    # pkg stub: exits 0 (no output) for every subcommand.
     fake_pkg = os.path.join(bin_dir, "pkg")
     with open(fake_pkg, "w") as fh:
-        fh.write(
-            "#!/bin/sh\n"
-            "# fake pkg stub for tests\n"
-            'case "$*" in\n'
-            "  'config abi') printf 'FreeBSD:15:amd64' ;;\n"
-            "esac\n"
-            "exit 0\n"
-        )
+        fh.write("#!/bin/sh\n# fake pkg stub for tests\nexit 0\n")
     os.chmod(fake_pkg, 0o755)
 
     # CE 2.8.1 box fixture: /etc/version + /etc/product_label (no "Plus" → CE).
@@ -175,33 +173,27 @@ def test_release_conf_byte_identical_across_all_three_generators() -> None:
     assert add == portable, f"add-repo.sh and build-repo-portable.py drifted:\nadd:\n{add}\nportable:\n{portable}"
 
 
-def test_release_conf_byte_identical_plus_26_03_amd64() -> None:
-    """Byte-identity holds for a Plus 26.03/amd64 box (second representative case)."""
-    cat = _PLUS_2603_AMD64
+def test_release_conf_byte_identical_plus_26_03() -> None:
+    """Byte-identity holds for a Plus 26.03 box (second representative case)."""
+    cat = _PLUS_2603
     add = _print_conf_sh(_ADD_REPO, cat)
     build = _print_conf_sh(_BUILD_REPO, cat)
     portable = _print_conf_portable(cat)
 
-    assert add == build, f"add-repo.sh vs build-repo.sh mismatch (plus-26.03/amd64):\nadd:\n{add}\nbuild:\n{build}"
-    assert add == portable, f"add-repo.sh vs portable mismatch (plus-26.03/amd64):\nadd:\n{add}\nportable:\n{portable}"
+    assert add == build, f"add-repo.sh vs build-repo.sh mismatch (plus-26.03):\nadd:\n{add}\nbuild:\n{build}"
+    assert add == portable, f"add-repo.sh vs portable mismatch (plus-26.03):\nadd:\n{add}\nportable:\n{portable}"
 
 
-def _run_hook(root: str, *, edition_label: str, version: str, abi: str, channel: str) -> str:
+def _run_hook(root: str, *, edition_label: str, version: str, channel: str) -> str:
     """Run the generator hook off-box against a stubbed box; return the conf it wrote.
 
     ``channel`` selects which conf the hook regenerates (release|nightly): we stage
     only that one so the orphan guard leaves the other absent. The hook runs the
-    *_start path directly off-box (no /etc/rc.subr present).
+    *_start path directly off-box (no /etc/rc.subr present). No `pkg` stub needed —
+    the hook is arch-less (issue #1806) and no longer calls `pkg` at all.
     """
-    bin_dir = os.path.join(root, "bin")
     repos = os.path.join(root, "repos")
-    os.makedirs(bin_dir, exist_ok=True)
     os.makedirs(repos, exist_ok=True)
-
-    fake_pkg = os.path.join(bin_dir, "pkg")
-    with open(fake_pkg, "w") as fh:
-        fh.write(f"#!/bin/sh\ncase \"$*\" in 'config abi') printf '{abi}' ;; esac\nexit 0\n")
-    os.chmod(fake_pkg, 0o755)
 
     label = os.path.join(root, "product_label")
     ver = os.path.join(root, "version")
@@ -221,7 +213,6 @@ def _run_hook(root: str, *, edition_label: str, version: str, abi: str, channel:
         "PFB_NIGHTLY_CONF": os.path.join(repos, "pfblockerng-nightly.conf"),
         "PFB_PRODUCT_LABEL": label,
         "PFB_VERSION_FILE": ver,
-        "PFB_PKG_BIN": fake_pkg,
     }
     subprocess.run(["sh", str(_HOOK), "onestart"], env=env, capture_output=True, text=True, check=False)
     return Path(conf_path).read_text()
@@ -231,21 +222,19 @@ def test_hook_output_byte_identical_to_print_conf_release() -> None:
     """The rc.d hook writes the SAME bytes as ``add-repo.sh --print-conf`` (release).
 
     This is the 4th producer of the conf — the boot-time generator. It MUST match
-    the three ``--print-conf`` generators byte-for-byte for a CE 2.8.1/amd64 box.
+    the three ``--print-conf`` generators byte-for-byte for a CE 2.8.1 box.
     """
     with tempfile.TemporaryDirectory() as root:
-        hook_conf = _run_hook(root, edition_label="pfSense", version="2.8.1", abi="FreeBSD:15:amd64", channel="release")
-    print_conf = _print_conf_sh(_ADD_REPO, _CE_28_AMD64)
+        hook_conf = _run_hook(root, edition_label="pfSense", version="2.8.1", channel="release")
+    print_conf = _print_conf_sh(_ADD_REPO, _CE_28)
     assert hook_conf == print_conf, f"hook vs --print-conf drift:\nhook:\n{hook_conf}\nprint-conf:\n{print_conf}"
 
 
 def test_hook_output_byte_identical_to_print_conf_nightly_plus() -> None:
-    """The hook's nightly conf for a Plus 26.03/amd64 box matches --print-conf --nightly."""
+    """The hook's nightly conf for a Plus 26.03 box matches --print-conf --nightly."""
     with tempfile.TemporaryDirectory() as root:
-        hook_conf = _run_hook(
-            root, edition_label="pfSense Plus", version="26.03.1", abi="FreeBSD:15:amd64", channel="nightly"
-        )
-    print_conf = _print_conf_sh(_ADD_REPO, _PLUS_2603_AMD64, _PAGES_BASE, "--nightly")
+        hook_conf = _run_hook(root, edition_label="pfSense Plus", version="26.03.1", channel="nightly")
+    print_conf = _print_conf_sh(_ADD_REPO, _PLUS_2603, _PAGES_BASE, "--nightly")
     assert hook_conf == print_conf, (
         f"hook nightly vs --print-conf drift:\nhook:\n{hook_conf}\nprint-conf:\n{print_conf}"
     )
@@ -259,33 +248,33 @@ def test_hook_output_byte_identical_to_print_conf_nightly_plus() -> None:
 @pytest.mark.parametrize(
     ("catalog_path", "channel_args", "repo_name", "expected_url"),
     [
-        # CE 2.8 / amd64 — release channel
+        # CE 2.8 — release channel
         (
-            _CE_28_AMD64,
+            _CE_28,
             (),
             "pfblockerng",
-            f"{_PAGES_BASE}/release/{_CE_28_AMD64}",
+            f"{_PAGES_BASE}/release/{_CE_28}",
         ),
-        # CE 2.8 / amd64 — nightly channel
+        # CE 2.8 — nightly channel
         (
-            _CE_28_AMD64,
+            _CE_28,
             ("--nightly",),
             "pfblockerng-nightly",
-            f"{_PAGES_BASE}/nightly/{_CE_28_AMD64}",
+            f"{_PAGES_BASE}/nightly/{_CE_28}",
         ),
-        # Plus 26.03 / amd64 — release channel
+        # Plus 26.03 — release channel
         (
-            _PLUS_2603_AMD64,
+            _PLUS_2603,
             (),
             "pfblockerng",
-            f"{_PAGES_BASE}/release/{_PLUS_2603_AMD64}",
+            f"{_PAGES_BASE}/release/{_PLUS_2603}",
         ),
-        # Plus 26.03 / amd64 — nightly channel
+        # Plus 26.03 — nightly channel
         (
-            _PLUS_2603_AMD64,
+            _PLUS_2603,
             ("--nightly",),
             "pfblockerng-nightly",
-            f"{_PAGES_BASE}/nightly/{_PLUS_2603_AMD64}",
+            f"{_PAGES_BASE}/nightly/{_PLUS_2603}",
         ),
     ],
 )
@@ -295,7 +284,7 @@ def test_add_repo_conf_resolved_url_shape(
     repo_name: str,
     expected_url: str,
 ) -> None:
-    """The resolved url: is base/channel/varver/arch — no ${ABI}, no Worker URL.
+    """The resolved url: is base/channel/varver — no ${ABI}, no Worker URL.
 
     Scenario: given the specified catalog_path and channel,
     When  add-repo.sh --print-conf is run,
@@ -333,7 +322,7 @@ def test_no_abi_placeholder_in_any_generator_output(generator: str, channel_args
     trick from ADR-17/20 is retired because one ABI can map to multiple pfSense
     versions (varver keying is mandatory).
     """
-    cat = _CE_28_AMD64
+    cat = _CE_28
     if generator == "add-repo.sh":
         conf = _print_conf_sh(_ADD_REPO, cat, _PAGES_BASE, *channel_args)
     elif generator == "build-repo.sh":
@@ -371,7 +360,7 @@ def test_add_repo_conf_fields_per_channel(
     Default (no arg) -> ``pfblockerng`` (stable + devel); --nightly ->
     ``pfblockerng-nightly``.  The OTHER repo name must not appear as a stanza key.
     """
-    conf = _print_conf_sh(_ADD_REPO, _CE_28_AMD64, _PAGES_BASE, *channel_args)
+    conf = _print_conf_sh(_ADD_REPO, _CE_28, _PAGES_BASE, *channel_args)
 
     # The stanza is keyed by the expected repo name.
     assert re.search(rf"^{re.escape(repo_name)}:\s*\{{", conf, re.MULTILINE), conf
@@ -544,7 +533,7 @@ def test_print_conf_requires_catalog_path(argv: list[str], needle: str) -> None:
     """All three generators FAIL `--print-conf` without `--catalog-path` (no unresolved URL).
 
     A bare `--print-conf` would otherwise emit a URL ending at the channel (no
-    `<varver>/<arch>`), violating the ADR-39 resolved-URL contract. Each generator must
+    `<varver>`), violating the ADR-39 resolved-URL contract. Each generator must
     error loud instead of emitting an unusable conf.
     """
     proc = subprocess.run(argv, capture_output=True, text=True, check=False)
