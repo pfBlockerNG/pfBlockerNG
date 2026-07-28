@@ -85,8 +85,9 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write        # push tracker/* activation-PR branches (NEVER ci-metadata itself)
   packages: write
+  pull-requests: write   # open the activation PR
 
 jobs:
   # ── Resolve refresh matrix (CE + Plus) ─────────────────────────────────────
@@ -202,7 +203,8 @@ jobs:
       - name: Checkout (for scripts/ + tests/smoke/)
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true   # the activation step pushes tracker/* branches (issue #1837)
+          fetch-depth: 0              # reach the ci-metadata orphan ref
 
       - name: Enable KVM access for the runner user
         # GH-hosted ubuntu-latest ships /dev/kvm; the `runner` user is not in
@@ -301,7 +303,108 @@ jobs:
             --ssh-key "$PWD/smoke_key" \
             --compression "${{ inputs.compression }}" \
             --upgrade-timeout "${{ inputs.upgrade_timeout }}" \
+            --facts-out "$PWD/box-facts.env" \
             --upgrade-pkgs
+
+      # ── Activation PR: box-verified matrix update (issue #1837) ────────────
+      # The upgrade leg is the only moment automation has SSH into a live box
+      # running the NEW version. image-upgrade.sh gathered its facts
+      # (box-facts.env); if the leg family's matrix entry is not yet
+      # active-and-accurate, open ONE tracker/* PR setting ci: true and the
+      # box-verified php_version / py_flavor / freebsd_major. The full
+      # freebsd_version string only changes when the MAJOR moved (the matrix
+      # keeps its human convention, e.g. 16.0-RELEASE vs the box's
+      # 16.0-CURRENT); the raw box value is quoted in the PR body.
+      # Matrix writes remain auto-PR ONLY — never a ci-metadata push.
+      # Contract pinned by tests/test_image_refresh_plan_contract.py.
+      - name: Open activation PR (box-verified matrix update)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CHANNEL: ${{ matrix.label }}
+          FAMILY: ${{ matrix.pfsense_version }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          if [ ! -s box-facts.env ]; then
+            echo "No box facts gathered — skipping the activation PR."
+            exit 0
+          fi
+          # shellcheck disable=SC1091
+          . ./box-facts.env
+          echo "Box facts: etc=${etc_version:-} php=${php_version:-} py=${py_flavor:-} fbsd=${freebsd_version:-}/${freebsd_major:-}"
+
+          git fetch origin ci-metadata -q
+          git show origin/ci-metadata:supported-versions.json > matrix_current.json
+          ENTRY=$(jq -c --arg v "$FAMILY" --arg c "$CHANNEL" '
+            first(.versions[] | select(.pfsense_version == $v and .channel == $c
+                                        and ((.arch // "amd64") == "amd64"))) // empty' matrix_current.json)
+          if [ -z "$ENTRY" ]; then
+            echo "::warning::no ${CHANNEL} ${FAMILY} matrix entry — nothing to activate"
+            exit 0
+          fi
+
+          NEWM=$(mktemp)
+          jq --arg v "$FAMILY" --arg c "$CHANNEL" \
+             --arg php "${php_version:-}" --arg py "${py_flavor:-}" \
+             --arg fbmaj "${freebsd_major:-}" --arg fb "${freebsd_version:-}" '
+            (.versions[] | select(.pfsense_version == $v and .channel == $c
+                                   and ((.arch // "amd64") == "amd64"))) |= (
+              .ci = true
+              | (if $php != "" then .php_version = $php else . end)
+              | (if $py != "" then .py_flavor = $py else . end)
+              | (if $fbmaj != "" and .freebsd_major != $fbmaj
+                 then .freebsd_major = $fbmaj | .freebsd_version = $fb
+                 else . end)
+            )' matrix_current.json > "$NEWM"
+
+          # Semantic compare — immune to on-disk formatting drift.
+          if [ "$(jq -S . matrix_current.json)" = "$(jq -S . "$NEWM")" ]; then
+            echo "Matrix entry already active and accurate — nothing to do."
+            rm -f "$NEWM"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BR="tracker/matrix-activate-${VARIANT}-${FAMILY}"
+          git checkout -B "$BR" origin/ci-metadata
+          cp "$NEWM" supported-versions.json
+          git add supported-versions.json
+          git commit -m "ci-metadata: activate ${CHANNEL} ${FAMILY} (box-verified)"
+          git push --force origin "$BR"
+
+          BODY_FILE=$(mktemp)
+          {
+            printf '## Activate pfSense %s %s (box-verified)\n\n' "$CHANNEL" "$FAMILY"
+            printf 'The %s image for `%s` was just published; these values were read from\n' "$CHANNEL" "$FAMILY"
+            printf 'the upgraded box itself right before poweroff:\n\n'
+            printf '| Fact | Box value |\n| --- | --- |\n'
+            printf '| /etc/version | `%s` |\n' "${etc_version:-?}"
+            printf '| PHP | `%s` |\n' "${php_version:-?}"
+            printf '| Python flavor | `%s` |\n' "${py_flavor:-?}"
+            printf '| FreeBSD | `%s` (major %s) |\n\n' "${freebsd_version:-?}" "${freebsd_major:-?}"
+            printf 'This PR sets `ci: true` (the image now exists for the smoke fan-out) and\n'
+            printf 'corrects any drifted version fields. The full `freebsd_version` string is\n'
+            printf 'only rewritten when the MAJOR changed — the matrix keeps its human\n'
+            printf 'convention otherwise.\n\n'
+            printf '_Opened automatically by image-refresh (issue #1837). Matrix changes are\n'
+            printf 'PRs only — merging is a human decision and re-fires the reconcile._\n'
+          } > "$BODY_FILE"
+
+          PR=$(gh pr list --repo "$REPO" --head "$BR" --base ci-metadata --state open \
+            --json number --jq '.[0].number // empty' || true)
+          if [ -z "$PR" ]; then
+            gh pr create --repo "$REPO" --base ci-metadata --head "$BR" \
+              --title "ci-metadata: activate ${CHANNEL} ${FAMILY} (box-verified)" \
+              --body-file "$BODY_FILE" \
+              || echo "::warning::Could not open the activation PR from $BR"
+          else
+            echo "  open PR #${PR} from $BR already exists — the force-push updated it"
+          fi
+          rm -f "$BODY_FILE" "$NEWM"
+          echo "Invariant confirmed: matrix changes proposed as PRs only — no ci-metadata push."
 
       # ── pfBlockerNG smoke (non-blocking, post-publish) ──────────────────────
       # Boots a THROWAWAY copy-on-write overlay of the JUST-PUBLISHED image

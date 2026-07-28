@@ -105,6 +105,10 @@
 #                    fails if it is not found. Default empty = leave the image's
 #                    configured branch unchanged. Example (Plus pre-release):
 #                    --branch pfSense-plus-v26.07-DEVTEST
+#   --facts-out FILE gather the upgraded box's version facts (etc_version,
+#                    php_version, py_flavor, freebsd_version/major) into FILE
+#                    after the health gate — the activation-PR step consumes
+#                    them (issue #1837). Best-effort; default off.
 #   --keep           keep the work dirs (image copies, console log) afterwards
 #   --force          overwrite the target tag if it already exists
 #
@@ -162,6 +166,7 @@ COMPRESSION=zstd
 UPGRADE_TIMEOUT=1200
 UPGRADE_PKGS=0
 BRANCH=""
+FACTS_OUT=""
 KEEP=0
 FORCE=0
 
@@ -200,9 +205,10 @@ while [ $# -gt 0 ]; do
         --upgrade-timeout) UPGRADE_TIMEOUT="$2"; shift 2 ;;
         --upgrade-pkgs)    UPGRADE_PKGS=1; shift ;;
         --branch)          BRANCH="$2"; shift 2 ;;
+        --facts-out)       FACTS_OUT="$2"; shift 2 ;;
         --keep)            KEEP=1; shift ;;
         --force)           FORCE=1; shift ;;
-        -h|--help)         sed -n '2,108p' "$0"; exit 0 ;;
+        -h|--help)         sed -n '2,115p' "$0"; exit 0 ;;
         *)                 die "unknown option: $1" ;;
     esac
 done
@@ -637,6 +643,14 @@ while [ "$_hg_elapsed" -lt "$HEALTH_TIMEOUT" ]; do
     sleep 10; _hg_elapsed=$((_hg_elapsed + 10))
 done
 [ "$_hg_healthy" -eq 1 ] || die "upgraded box did not become healthy within ${HEALTH_TIMEOUT}s (webConfigurator and pfctl both failed; see $LOCAL_DIR/upgrade.log)"
+
+# --- optional: gather box facts for the activation PR (issue #1837) --------
+# Best-effort: the publish must not depend on it.
+if [ -n "$FACTS_OUT" ]; then
+    log "gathering box facts -> $FACTS_OUT (best-effort)"
+    image_gather_facts "$FACTS_OUT" ssh_guest \
+        || warn "box-facts gathering failed; the activation PR will be skipped"
+fi
 
 # --- power off cleanly -----------------------------------------------------
 log "shutting the box down"
