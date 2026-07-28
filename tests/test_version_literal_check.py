@@ -229,7 +229,7 @@ def test_comment_prefixed_quoted_example_not_flagged(tmp_path: Path) -> None:
 def test_inline_trailing_comment_example_not_flagged(tmp_path: Path) -> None:
     # A trailing `# e.g. "ce-2.8"` on an otherwise-real code line is a comment
     # illustrating the value, not the value itself (real case from
-    # build-repo-portable.py / check-pfsense-versions.py).
+    # build-repo-portable.py).
     line = f'varver = catalog_name_from_version(version, variant)  # e.g. "{_CE_VARVER}"\n'
     assert _find(tmp_path, line) == [], "a trailing inline comment example must stay clean"
 

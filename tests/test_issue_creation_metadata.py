@@ -27,10 +27,8 @@ def test_automated_issue_creators_set_type_and_only_additive_labels() -> None:
     expected = {
         "nightly-failure-alert.yml": [("nightly-red", "Bug")],
         "top1m-healthcheck.yml": [("top1m-provider", "Bug")],
-        "version-tracker.yml": [
-            ("version-tracker", "Task"),
-            ("version-tracker", "Task"),
-        ],
+        # version-tracker.yml creates NO issues anymore — the matrix auto-PR is
+        # the sole notification surface (issue #1823)
     }
     commands: dict[str, list[str]] = {}
     workflows = ROOT / ".github/workflows"
