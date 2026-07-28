@@ -225,6 +225,22 @@ class TestGaFlip:
         )
         assert all(a["type"] != "matrix_pr_ga_flip" for a in actions)
 
+    def test_unpublished_beta_family_gone_ga_builds_from_stable_branch(self) -> None:
+        # Review F3: GA lands BEFORE the merged beta entry's first build. The
+        # family must be built once via publish_new from the STABLE branch (not
+        # the leftover beta branch), and no dead republish leg may target the
+        # nonexistent tag.
+        repoc = REPOC_PLUS + "26_07 (release)\t\tCurrent Stable Version (26.07)\n"
+        actions = _plan(
+            [PLUS_2603, PLUS_2607_BETA],
+            {"26.03": True, "26.07": False},
+            [_boot("26.03", "26.03.1-RELEASE", repoc)],
+        )
+        assert {"type": "publish_new", "family": "26.07", "branch": "26_07", "from": "26.03"} in actions
+        assert all(not (a["type"] == "republish" and a["family"] == "26.07") for a in actions)
+        # the status flip is still proposed — the built image IS the GA build
+        assert {"type": "matrix_pr_ga_flip", "family": "26.07"} in actions
+
     def test_stable_branch_for_beta_family_republishes_and_flips(self) -> None:
         # GA lands as a NEW stable pinned branch while the matrix still says
         # beta: refresh the beta image from it AND flip the status

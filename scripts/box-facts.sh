@@ -149,11 +149,12 @@ if [ "$_ssh_up" -ne 1 ]; then
     done_with unavailable
 fi
 
-# The three facts. The -c check refreshes pkg metadata over the network — give
-# it a bounded window of its own (a wedged pkg must not hang the run).
+# The three facts. repoc and the -c check both refresh metadata over the
+# network — each runs under its own guest-side hard cap (a wedged pkg/fetch
+# must not hang the run; review F2).
 _ok=1
 guest_ssh 'cat /etc/version' > "$OUT_DIR/etc-version" 2>/dev/null || _ok=0
-guest_ssh '/usr/local/sbin/pfSense-repoc -p' > "$OUT_DIR/repoc.txt" 2>/dev/null || _ok=0
+guest_ssh 'timeout 120 /usr/local/sbin/pfSense-repoc -p' > "$OUT_DIR/repoc.txt" 2>/dev/null || _ok=0
 guest_ssh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1 || true' \
     > "$OUT_DIR/upgrade-check.txt" 2>/dev/null || _ok=0
 

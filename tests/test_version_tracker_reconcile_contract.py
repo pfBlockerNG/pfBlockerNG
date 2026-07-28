@@ -245,6 +245,26 @@ exit 0
         assert "--tag 26.03" in facts_log
         assert "--tag 26.07" in facts_log
 
+    def test_unpublished_newest_stable_does_not_shadow_the_published_one(self, tmp_path: Path) -> None:
+        # Review F1: a freshly-merged NEWER stable entry with no image yet must
+        # not become the boot source — booting only the nonexistent tag would
+        # blind the whole channel (no facts → no publish_new branch → deadlock)
+        newer_stable = dict(BUILD_MATRIX[1], pfsense_version="26.05")
+        facts_log, _ = self._run(
+            tmp_path,
+            BUILD_MATRIX + [newer_stable],
+            "ghcr.io/pfblockerng/pfsense-ce:2.8 ghcr.io/pfblockerng/pfsense-plus:26.03",
+        )
+        assert "--tag 26.03" in facts_log
+        assert "--tag 26.05" not in facts_log
+
+    def test_reconcile_job_has_a_hard_timeout(self) -> None:
+        # Review F2: a wedged guest command must not hold a runner for the
+        # 360-minute default
+        source = WORKFLOW.read_text(encoding="utf-8")
+        job = source.split("\n  reconcile:\n", 1)[1].split("\n    steps:", 1)[0]
+        assert "timeout-minutes:" in job
+
 
 class TestPlanStep:
     """Scenario: the REAL planner runs over gathered facts, ok-status only."""
