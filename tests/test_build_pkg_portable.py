@@ -1250,3 +1250,28 @@ def test_source_date_epoch_pins_every_packaged_mtime(tmp_path: Path, monkeypatch
     assert [entry["mtime"] for entry in full["files"].values()] == [pinned] * len(payload), (
         f"+MANIFEST entries ignore SOURCE_DATE_EPOCH={pinned}: {full['files']}"
     )
+
+
+def test_source_file_mtime_the_archive_cannot_carry_fails_cleanly(tmp_path: Path) -> None:
+    """An out-of-range mtime on a SOURCE file is rejected the same way the env var is.
+
+    The archive format bounds the value whatever its origin, so the default path needs
+    the same guard as SOURCE_DATE_EPOCH -- otherwise it surfaces as tarfile's "overflow
+    in number field" from inside the writer, after the manifest is already built.
+    """
+    ports, portdir = _make_classic_port(tmp_path)
+    victim = portdir / "files/usr/local/etc/testpkg.conf"
+    beyond = 0o77777777777 + 1
+    os.utime(victim, (beyond, beyond))
+    out = tmp_path / "out"
+    with pytest.raises(bpp.BuildError, match="mtime"):
+        bpp.main(
+            [
+                "--ports", str(ports),
+                "--port-dir", str(portdir),
+                "--abi", "FreeBSD:15:amd64",
+                "--py-flavor", "py311",
+                "--compression", "xz",
+                "--out", str(out),
+            ]
+        )  # fmt: skip
