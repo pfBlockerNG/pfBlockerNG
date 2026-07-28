@@ -17,6 +17,10 @@ The single source of truth for which pfSense versions pfBlockerNG supports lives
 the **`ci-metadata` orphan branch** (its own history, off `main`/`devel`) as
 `supported-versions.json`. All CI/build workflows read it at runtime.
 
+The file's canonical on-disk format is `jq .` output (normalized in PR #1835): the
+reconcile's matrix auto-PRs rewrite it through `jq`, so hand edits should be piped
+through `jq .` before committing or the next auto-PR carries formatting churn.
+
 | Script | Use |
 | --- | --- |
 | [`read-version-matrix.sh`](read-version-matrix.sh) | Read the matrix from `ci-metadata` and print/emit the BUILD, CI, and ROUTE matrices. |
