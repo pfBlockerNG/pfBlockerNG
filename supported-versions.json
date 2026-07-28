@@ -45,6 +45,22 @@
       "upgrade": {
         "available": false
       }
+    },
+    {
+      "pfsense_version": "26.07",
+      "channel": "Plus",
+      "freebsd_version": "16.0-RELEASE",
+      "freebsd_major": "16",
+      "php_version": "8.5",
+      "py_flavor": "py311",
+      "variant": "Plus",
+      "status": "beta",
+      "ci": false,
+      "image_name": "pfsense-plus",
+      "extra_pkgs": [],
+      "upgrade": {
+        "available": false
+      }
     }
   ]
 }
