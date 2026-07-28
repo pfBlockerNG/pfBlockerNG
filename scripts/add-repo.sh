@@ -2,7 +2,7 @@
 # add-repo.sh — bootstrap pfBlockerNG's self-hosted pkg repository on a pfSense
 # box (ADR-17, the client side). Run it ON the pfSense box. It installs the
 # boot-time repo-conf generator rc.d hook (ADR-39), stubs the repo conf so the
-# hook regenerates it for THIS box's edition/version/arch, runs the hook once
+# hook regenerates it for THIS box's edition/version, runs the hook once
 # to resolve the conf now, then runs `pkg update` and VERIFIES the package is
 # visible from the pfBlockerNG repo — after which
 #   pkg install pfSense-pkg-pfBlockerNG-devel   (or -y, no -f, no -r)
@@ -11,7 +11,7 @@
 # install is not repo-locked). Invocation forms: see --help.
 #
 # WHY A HOOK DOES THE DETECTION: a pfSense OS upgrade can change the box's
-# edition/version/arch (which moves the catalog subtree). The rc.d hook
+# edition/version (which moves the catalog subtree). The rc.d hook
 # regenerates the conf every boot, so the URL self-corrects after an upgrade
 # with no work here. add-repo.sh therefore does NO detection itself — it installs
 # the hook and runs it; the hook is the single source of the resolved conf.
@@ -32,8 +32,9 @@
 #
 # THE CONF (single source of truth — byte-identical to `build-repo.sh --print-conf`,
 # `build-repo-portable.py --print-conf`, and what the rc.d hook writes):
-#   url:            Direct GitHub Pages URL, fully resolved by the hook for this box:
-#                   https://pfblockerng.github.io/pkg/<channel>/<varver>/<arch>
+#   url:            Direct GitHub Pages URL, fully resolved by the hook for this box
+#                   (arch-less; NO_ARCH, issue #1806):
+#                   https://pfblockerng.github.io/pkg/<channel>/<varver>
 #   mirror_type:    none.
 #   signature_type: none — NONE-signed; trust anchor is HTTPS to the host (no CI
 #                   signing key). pfSense honors per-repo `none` (ADR §1 Context 4).
@@ -105,7 +106,7 @@ add-repo.sh — bootstrap pfBlockerNG's self-hosted pkg repository (run ON the p
 Usage:
   add-repo.sh                                set up the release repo (stable + devel), pkg update, verify
   add-repo.sh --nightly                      set up the nightly repo instead (bleeding edge; not for daily use)
-  add-repo.sh --print-conf [--nightly] [--catalog-path <varver>/<arch>]
+  add-repo.sh --print-conf [--nightly] [--catalog-path <varver>]
                                              print the repo conf to stdout and exit (no writes)
   add-repo.sh --base-url <url> [--nightly]   override the catalog base (forks/staging)
 
@@ -166,8 +167,8 @@ print_conf() {
 # ${CONF_MARKER} (ADR-39) — do not edit; re-run add-repo.sh to change.
 # pfBlockerNG (${CHANNEL} channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
-# fully resolved for this box's edition/version/arch (ADR-39); the boot
-# rc.d hook updates it on a pfSense OS upgrade.
+# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
+# issue #1806); the boot rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.
 ${REPO_NAME}: {
@@ -181,11 +182,11 @@ EOF
 }
 
 # ── --print-conf: emit and exit, no side effects (the test + a dry-run use this) ─
-# A resolved URL needs --catalog-path <varver>/<arch> (the live bootstrap leaves
+# A resolved URL needs --catalog-path <varver> (the live bootstrap leaves
 # detection to the hook; --print-conf is a documentation/dry-run aid).
 if [ "$PRINT_CONF" -eq 1 ]; then
     [ -n "${CATALOG_PATH}" ] || {
-        printf 'add-repo: --catalog-path <varver>/<arch> is required with --print-conf\n' >&2
+        printf 'add-repo: --catalog-path <varver> is required with --print-conf\n' >&2
         exit 2
     }
     _url="${BASE_URL%/}/${CHANNEL}/${CATALOG_PATH}"
@@ -226,7 +227,6 @@ printf '==> Running the generator hook to resolve the conf now\n'
 PFB_RELEASE_CONF="${REPOS_DIR}/pfblockerng.conf" \
 PFB_NIGHTLY_CONF="${REPOS_DIR}/pfblockerng-nightly.conf" \
 PFB_BASE_URL="${BASE_URL}" \
-PFB_PKG_BIN="${PKG_BIN}" \
 PFB_PRODUCT_LABEL="${ROOT}/etc/product_label" \
 PFB_VERSION_FILE="${ROOT}/etc/version" \
     sh "${ON_BOX_HOOK}" onestart || true
