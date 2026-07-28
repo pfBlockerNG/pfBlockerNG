@@ -549,6 +549,16 @@ function sync_package_pfblockerng($cron='') {
 
 	// Starting variable to skip Reputation functions, if no changes are required
 	$pfb['repcheck'] = FALSE;
+	// issue #1840: unconditional, like $pfb['repcheck'] just above -- the alias-configure
+	// loop's suppression-body calls (pfb_ip_suppress_body_active(), v4 site further down,
+	// v6 sibling right after it) read this on EVERY pass reachable via
+	// `if (!empty($lists) && $pfb['enable'] == 'on')`, which has no '!save' guard. A
+	// POST-INSTALL/GUI resync (custom_php_resync_config_command sets $pfb['save'] = TRUE
+	// before calling this function) still reaches that loop, so this must be seeded here
+	// -- not only inside the `!$pfb['save']` download block below, which a save=TRUE pass
+	// never enters -- or the key stays undefined (NULL) and TypeErrors the strictly-typed
+	// bool parameter.
+	$pfb['supp_update'] = FALSE;
 	// $pfb['save'] is used to determine if user pressed "save" button to avoid collision with CRON.
 
 	// For 'script' calls using exec() (used to shorten length of line)
@@ -2949,7 +2959,8 @@ function sync_package_pfblockerng($cron='') {
 
 	if ($pfb['enable'] == 'on' && !$pfb['save']) {
 
-		$pfb['supp_update'] = FALSE;
+		// issue #1840: init moved to the function's unconditional seeds (near
+		// $pfb['repcheck']) -- this loop's TRUE flip below is unaffected.
 		$runonce_v4 = $runonce_v6 = TRUE;
 		$lists = array();
 
