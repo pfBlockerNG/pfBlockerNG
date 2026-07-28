@@ -99,10 +99,15 @@ Notes:
 - **`py311-charset-normalizer` is CE-only from OUR repo (issue #1806).** Netgate's
   own pfSense CE package repo does not carry it (they build it for Plus only), so
   `pkg install pfSense-pkg-pfBlockerNG` on a stock CE box cannot resolve that
-  RUN_DEPENDS from Netgate's mirror. Our self-hosted pkg repo (ADR-17) builds and
-  serves it itself: `supported-versions.json`'s CE entry carries
+  RUN_DEPENDS from Netgate's mirror. Our self-hosted pkg repo (ADR-17) builds it
+  and is designed to serve it itself: `supported-versions.json`'s CE entry carries
   `extra_pkgs: ["textproc/py-charset-normalizer"]` (Plus's entry carries
   `extra_pkgs: []` — Netgate already ships it there), `scripts/build-dep-pkg-portable.py`
   builds a NO_ARCH `.pkg` for it straight from the FreeBSD-ports port definition
   (no FreeBSD host needed), and `build-repo-portable.py --dep-pkgs` folds the
-  result into the release/nightly catalogs of every matching FreeBSD major.
+  result into the release/nightly catalogs of every matching FreeBSD major. The
+  release-verification CI gate (release.yml's smoke-suite/ui-suite) proves this
+  end to end against the built artifacts; wiring the REAL published catalog —
+  attaching the dep `.pkg` to the GitHub Release and having the separate
+  `pfBlockerNG/pkg` repo's `publish.yml` carry it into the live served tree — is
+  a tracked follow-up, not yet done.
