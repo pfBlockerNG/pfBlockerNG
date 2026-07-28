@@ -2,8 +2,12 @@ name: Upgrade pfSense smoke images
 
 # Upgrade published pfSense CE and Plus GHCR smoke base images to new releases and
 # publish the results as new tags. Runs as a matrix fan-out: one parallel leg per
-# entry in ci-metadata that has upgrade.available == true (CE and Plus alike). Fail-
-# closed: a bad upgrade MUST NEVER be published and the old tag MUST be left untouched.
+# amd64 entry in ci-metadata that has upgrade.available == true (CE and Plus alike,
+# REGARDLESS of the entry's ci flag — issue #1820). A dispatch with self_refresh=true
+# instead re-publishes the newest entry per channel under its own floating tag
+# (from == to, --force): the patch/GA path the version tracker fires on detection.
+# Fail-closed: a bad upgrade MUST NEVER be published and the old tag MUST be left
+# untouched.
 #
 # AVAILABILITY FLAG:
 #   Each supported-versions.json entry MAY carry an optional "upgrade" block:
@@ -58,6 +62,11 @@ on:
         required: false
         default: ""
         type: string
+      self_refresh:
+        description: "If 'true', ignore upgrade.available and re-publish the newest entry per channel under its own tag (from == to, --force) — the patch/GA refresh the version tracker dispatches."
+        required: false
+        default: "false"
+        type: string
       compression:
         description: "qcow2 compression for the published image (zstd|zlib|off)"
         required: false
@@ -106,33 +115,66 @@ jobs:
         id: plan
         env:
           FILTER_VERSION: ${{ inputs.pfsense_version }}
+          SELF_REFRESH: ${{ inputs.self_refresh }}
         run: |
           set -eu
           git fetch origin ci-metadata -q
           MATRIX_JSON="$(git show origin/ci-metadata:supported-versions.json)"
 
-          # Build the include array: one entry per ci==true version with upgrade.available==true.
-          # from defaults to pfsense_version (self); force_flag is "--force" when from==pfsense_version.
-          INCLUDE="$(printf '%s' "$MATRIX_JSON" | jq -c --arg filter "$FILTER_VERSION" '
-            [
-              .versions[]
-              | select((.role // "build") != "route-only")
-              | select(.ci == true)
-              | select((.upgrade.available // false) == true)
-              | select($filter == "" or .pfsense_version == $filter)
-              | {
+          # Build the include array (issue #1820 gating; contract pinned by
+          # tests/test_image_refresh_plan_contract.py):
+          #  - default: one entry per amd64 version with upgrade.available==true,
+          #    REGARDLESS of ci (a beta entry starts ci:false — smoke-fan-out
+          #    eligibility is separate from refreshability);
+          #  - SELF_REFRESH=true: the newest amd64 entry per channel gets a
+          #    from==to --force leg (patch/GA re-publish, same floating tag),
+          #    ignoring upgrade.available.
+          # aarch64 entries never boot: there is no ARM smoke image (scripts/README.md).
+          if [ "${SELF_REFRESH:-false}" = "true" ]; then
+            INCLUDE="$(printf '%s' "$MATRIX_JSON" | jq -c --arg filter "$FILTER_VERSION" '
+              [
+                .versions[]
+                | select((.role // "build") != "route-only")
+                | select((.arch // "amd64") == "amd64")
+                | select($filter == "" or .pfsense_version == $filter)
+              ]
+              | group_by(.channel)
+              | map(max_by(.pfsense_version | split(".") | map(tonumber)))
+              | map({
                   variant:          (.channel | ascii_downcase),
                   label:            .channel,
                   pfsense_version:  .pfsense_version,
                   freebsd_version:  .freebsd_version,
                   image_name:       (.image_name // ("pfsense-" + (.channel | ascii_downcase))),
-                  branch:           (.upgrade.branch // ""),
-                  target:           (.upgrade.target // .pfsense_version),
-                  from:             (.upgrade.from // .pfsense_version),
-                  force_flag:       (if ((.upgrade.from // .pfsense_version) == .pfsense_version) then "--force" else "" end)
-                }
-            ]
-          ')"
+                  branch:           "",
+                  target:           .pfsense_version,
+                  from:             .pfsense_version,
+                  force_flag:       "--force"
+                })
+            ')"
+          else
+            # from defaults to pfsense_version (self); force_flag is "--force" when from==pfsense_version.
+            INCLUDE="$(printf '%s' "$MATRIX_JSON" | jq -c --arg filter "$FILTER_VERSION" '
+              [
+                .versions[]
+                | select((.role // "build") != "route-only")
+                | select((.arch // "amd64") == "amd64")
+                | select((.upgrade.available // false) == true)
+                | select($filter == "" or .pfsense_version == $filter)
+                | {
+                    variant:          (.channel | ascii_downcase),
+                    label:            .channel,
+                    pfsense_version:  .pfsense_version,
+                    freebsd_version:  .freebsd_version,
+                    image_name:       (.image_name // ("pfsense-" + (.channel | ascii_downcase))),
+                    branch:           (.upgrade.branch // ""),
+                    target:           (.upgrade.target // .pfsense_version),
+                    from:             (.upgrade.from // .pfsense_version),
+                    force_flag:       (if ((.upgrade.from // .pfsense_version) == .pfsense_version) then "--force" else "" end)
+                  }
+              ]
+            ')"
+          fi
 
           printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
           # Count of eligible legs — the refresh job is gated on this so an empty
@@ -140,20 +182,25 @@ jobs:
           printf 'count=%s\n' "$(printf '%s' "$INCLUDE" | jq 'length')" >> "$GITHUB_OUTPUT"
 
           # Human-readable summary for the run log.
-          printf '%s' "$MATRIX_JSON" | jq -r --arg filter "$FILTER_VERSION" '
-            .versions[] |
-            if ((.role // "build") == "route-only") then
-              "  \(.channel) \(.pfsense_version): skip (role == route-only)"
-            elif .ci != true then
-              "  \(.channel) \(.pfsense_version): skip (ci != true)"
-            elif ((.upgrade.available // false) != true) then
-              "  \(.channel) \(.pfsense_version): skip (upgrade.available != true)"
-            elif ($filter != "" and .pfsense_version != $filter) then
-              "  \(.channel) \(.pfsense_version): skip (filtered out by pfsense_version input)"
-            else
-              "  \(.channel) \(.pfsense_version): WILL RUN (from=\(.upgrade.from // .pfsense_version) target=\(.upgrade.target // .pfsense_version) branch=\(.upgrade.branch // "(image default)"))"
-            end
-          '
+          if [ "${SELF_REFRESH:-false}" = "true" ]; then
+            printf '%s' "$INCLUDE" | jq -r '
+              .[] | "  \(.label) \(.pfsense_version): SELF-REFRESH (from==to, --force)"'
+          else
+            printf '%s' "$MATRIX_JSON" | jq -r --arg filter "$FILTER_VERSION" '
+              .versions[] |
+              if ((.role // "build") == "route-only") then
+                "  \(.channel) \(.pfsense_version): skip (role == route-only)"
+              elif ((.arch // "amd64") != "amd64") then
+                "  \(.channel) \(.pfsense_version): skip (no \(.arch) smoke image)"
+              elif ((.upgrade.available // false) != true) then
+                "  \(.channel) \(.pfsense_version): skip (upgrade.available != true)"
+              elif ($filter != "" and .pfsense_version != $filter) then
+                "  \(.channel) \(.pfsense_version): skip (filtered out by pfsense_version input)"
+              else
+                "  \(.channel) \(.pfsense_version): WILL RUN (from=\(.upgrade.from // .pfsense_version) target=\(.upgrade.target // .pfsense_version) branch=\(.upgrade.branch // "(image default)"))"
+              end
+            '
+          fi
 
   # ── Upgrade in place → health gate → publish; then non-blocking smoke ──────
   refresh:
