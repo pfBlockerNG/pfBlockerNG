@@ -20,30 +20,25 @@ bump on our **`pfBlockerNG/FreeBSD-ports` fork** (self-hosted distribution, no u
 
 ## Release notes pipeline
 
-Body precedence: a **committed `docs/release-notes/TAG.md` wins** (curated, or persisted from
-a prior run) — when present the Models step is skipped; else **GitHub Models**
-(`actions/ai-inference`, model `openai/gpt-4.1` — no secret, the built-in token +
-`permissions: models:read`, free tier) drafts it; else a placeholder (the release never blocks
-on the generator). When Models runs, a shell step gathers the commits since the previous
-same-channel release (`prev_tag` classifies each tag's channel via `release-version.sh`) and
-feeds them with the static system prompt in `scripts/release-notes-prompt.txt`; the model
-returns a `SUMMARY:` line (→ the Release title suffix; the title is
-`YYYY-MM-DD - VER — 3-word summary`, ISO date prefixed so GitHub's alphabetical release sort
-stays chronological) plus a Markdown block grouping user-facing changes under
-**Features / Improvements / Bug Fixes** with PR/issue links (CI/test/tooling/ADR noise
-filtered), ending with the compare link. A committed file carries the same notes; its title
-summary rides in an optional first-line `<!-- SUMMARY: … -->` marker (stripped from the
-rendered body). Generated notes are **persisted** to `docs/release-notes/TAG.md` by the
-`persist-notes` job (committed to the channel branch; docs-only ⇒ CI-skipped); a pre-committed
-file is left untouched. To author notes by hand, commit `docs/release-notes/TAG.md` — same
-format. To swap models, change the `model:` input; to use Claude Haiku on a Max plan, flip the
-step to the Claude CLI with `CLAUDE_CODE_OAUTH_TOKEN` (prompt file + parser reused).
+Body precedence: a **committed `docs/release-notes/TAG.md` wins** (curated, or committed by
+`prepare-release`'s own placeholder writer) — otherwise the workflow writes a **deterministic
+placeholder** ending in the compare link (`prev_tag` classifies each tag's channel via
+`release-version.sh` to find the previous same-channel release for that link). GitHub Models
+drafting was removed (`ci: remove the GitHub Models changelog/notes drafts from the release
+flow`, release run 30379645002) — it never produced a working result. A committed file's
+title summary rides in an optional first-line `<!-- SUMMARY: … -->` marker (stripped from the
+rendered body; the title is `YYYY-MM-DD - VER — summary`, ISO date prefixed so GitHub's
+alphabetical release sort stays chronological). To author real notes, commit
+`docs/release-notes/TAG.md` before dispatching — the **`/release-with-changelog`** skill does
+this for you, applying the same prompt template `scripts/release-notes-prompt.txt` used to
+describe the desired shape (group user-facing changes under **Features / Improvements /
+Bug Fixes** with PR/issue links, CI/test/tooling/ADR noise filtered).
 **Nightly builds get no GitHub Release.**
 
 **Dry-run.** `release.yml`'s `workflow_dispatch` is a no-publish harness: pass the `tag` to
 simulate with `dry_run=true` (default) to validate the scheme, build the `.pkg` artifacts, and
-render the body (the Models draft runs; the real body shows in the run summary) — publishing
-nothing. Dispatchable only from the default branch once merged.
+render the body (the real body shows in the run summary) — publishing nothing. Dispatchable
+only from the default branch once merged.
 
 ## Self-hosted pkg repository (ADR-17)
 
