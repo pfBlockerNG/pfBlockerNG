@@ -299,6 +299,75 @@ class TestPatchDetect:
         )
         assert result == []
 
+    def test_beta_entry_does_not_hide_ga_family_drift(self, tmp_path: Path) -> None:
+        # Final-pass F1: with a merged (unbuilt) beta entry in the matrix, the
+        # channel's newest STABLE family must still be drift-checked — during
+        # the whole beta window it is the image CI actually smokes.
+        (tmp_path / "probe_result.json").write_text(
+            json.dumps({"latest_releases": [{"version": "26.03", "channel": "Plus", "latest_release": "26.03.1"}]}),
+            encoding="utf-8",
+        )
+        env = _write_fakes(tmp_path)
+        (Path(env["ORAS_DIR"]) / "ghcr.io_pfblockerng_pfsense-plus_26.03").write_text(
+            json.dumps({"annotations": {"io.github.pfblockerng.pfsense-version": "26.03.0-RELEASE"}}),
+            encoding="utf-8",
+        )
+        build_matrix = MATRIX_VERSIONS + [dict(MATRIX_VERSIONS[1], pfsense_version="26.07", status="beta", ci=False)]
+        subprocess.run(
+            ["bash", "-c", _step_script(PATCH_STEP)],
+            cwd=tmp_path,
+            env=os.environ
+            | env
+            | {
+                "BUILD_MATRIX": json.dumps(build_matrix),
+                "SMOKE_GHCR_USER": "u",
+                "SMOKE_GHCR_TOKEN": "t",
+                "SMOKE_IMAGE_REPO": "ghcr.io/pfblockerng",
+                "GITHUB_REPOSITORY_OWNER": "pfBlockerNG",
+            },
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        result = json.loads((tmp_path / "patch_result.json").read_text(encoding="utf-8"))
+        assert result == [
+            {"version": "26.03", "channel": "Plus", "page": "26.03.1", "image": "26.03.0-RELEASE", "refresh": True}
+        ]
+
+    def test_beta_entry_itself_is_checked_on_ga_day(self, tmp_path: Path) -> None:
+        # GA day: the page lists the (still status:beta) family as released —
+        # its own entry is a candidate even though it is not the newest stable
+        (tmp_path / "probe_result.json").write_text(
+            json.dumps({"latest_releases": [{"version": "26.07", "channel": "Plus", "latest_release": "26.07"}]}),
+            encoding="utf-8",
+        )
+        env = _write_fakes(tmp_path)
+        (Path(env["ORAS_DIR"]) / "ghcr.io_pfblockerng_pfsense-plus_26.07").write_text(
+            json.dumps({"annotations": {"io.github.pfblockerng.pfsense-version": "26.07-BETA"}}),
+            encoding="utf-8",
+        )
+        build_matrix = MATRIX_VERSIONS + [dict(MATRIX_VERSIONS[1], pfsense_version="26.07", status="beta", ci=False)]
+        subprocess.run(
+            ["bash", "-c", _step_script(PATCH_STEP)],
+            cwd=tmp_path,
+            env=os.environ
+            | env
+            | {
+                "BUILD_MATRIX": json.dumps(build_matrix),
+                "SMOKE_GHCR_USER": "u",
+                "SMOKE_GHCR_TOKEN": "t",
+                "SMOKE_IMAGE_REPO": "ghcr.io/pfblockerng",
+                "GITHUB_REPOSITORY_OWNER": "pfBlockerNG",
+            },
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        result = json.loads((tmp_path / "patch_result.json").read_text(encoding="utf-8"))
+        assert result == [
+            {"version": "26.07", "channel": "Plus", "page": "26.07", "image": "26.07-BETA", "refresh": True}
+        ]
+
     def test_nonfinal_annotation_flags_refresh_even_when_versions_match(self, tmp_path: Path) -> None:
         # A beta image reports /etc/version like "26.07-BETA" (live-probed on
         # the owner's Plus VM). On GA day the page's newest released build is
@@ -374,10 +443,11 @@ class TestMatrixAutoPr:
         beta: dict[str, Any] | None = None,
         ga_flips: list[dict[str, str]] | None = None,
         matrix_versions: list[dict[str, Any]] | None = None,
+        future: dict[str, Any] | None = None,
         dry_run: str = "false",
     ) -> tuple[str, str, Path]:
         (tmp_path / "probe_result.json").write_text(
-            json.dumps({"future": [FUTURE_2607], "ga_flips": ga_flips or []}), encoding="utf-8"
+            json.dumps({"future": [future or FUTURE_2607], "ga_flips": ga_flips or []}), encoding="utf-8"
         )
         if beta is not None:
             (tmp_path / "beta_result.json").write_text(json.dumps(beta), encoding="utf-8")
@@ -416,6 +486,19 @@ class TestMatrixAutoPr:
         assert entry["upgrade"] == {"available": True, "from": "26.03", "branch": "26.07", "target": "26.07"}
         prs = json.loads((cwd / "matrix_prs.json").read_text(encoding="utf-8"))
         assert prs["Plus/26.07"] == "77"
+
+    def test_empty_page_freebsd_cells_fall_back_to_sibling(self, tmp_path: Path) -> None:
+        # Final-pass F2: jq // treats "" as truthy — an empty/TBD FreeBSD cell
+        # on the page must not overwrite the sibling's value in the proposed entry
+        _, _, cwd = self._run(
+            tmp_path,
+            beta=self.BETA_YES,
+            future=dict(FUTURE_2607, freebsd_version="", freebsd_major=""),
+        )
+        new_matrix = json.loads((cwd / "supported-versions.json").read_text(encoding="utf-8"))
+        entry = next(e for e in new_matrix["versions"] if e["pfsense_version"] == "26.07")
+        assert entry["freebsd_version"] == "16.0-RELEASE"
+        assert entry["freebsd_major"] == "16"
 
     def test_existing_matrix_entry_skips_pr(self, tmp_path: Path) -> None:
         versions = MATRIX_VERSIONS + [dict(MATRIX_VERSIONS[1], pfsense_version="26.07", status="beta", ci=False)]
