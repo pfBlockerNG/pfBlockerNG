@@ -25,9 +25,11 @@ use PHPUnit\Framework\TestCase;
  *   - testDefaultStatPipelineSurvivesAnInvalidUtf8ByteUnderAUtf8Locale drives
  *     the REAL exec() line (the `default:` case) against a real temp log
  *     file, with the process locale forced to a UTF-8 locale via putenv()
- *     (restored in tearDown) -- genuinely red pre-fix and green post-fix
- *     regardless of the host's own default locale, because the extraction
- *     re-reads the current production source every run.
+ *     (restored in tearDown). Red pre-fix only on BSD userland (macOS dev
+ *     boxes, the FreeBSD appliance -- BSD cut aborts on an invalid byte
+ *     under a UTF-8 locale); GNU cut tolerates invalid bytes, so on glibc
+ *     hosts (GitHub CI) this test is green either way and the source-text
+ *     pin below carries the regression coverage there.
  *   - testEveryStatChartExecCarriesTheByteSafeLocalePrefix is a source-text
  *     pin (same convention as UpdateAjaxTailJsonEncodingTest's call-site flag
  *     pin) covering EVERY exec( in the block -- the coverage axis the brief
