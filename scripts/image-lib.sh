@@ -156,17 +156,35 @@ image_gather_facts() {
     # builtin exits ash/dash entirely (issue #1172; guard-enforced).
     true > "$_fo" || return 1
     _v=$($_run "/bin/sh -c 'cat /etc/version'" 2>/dev/null | tr -d '\r')
-    [ -n "$_v" ] && printf 'etc_version=%s\n' "$_v" >> "$_fo"
+    # Chokepoint: box values are consumed by CI. Only a single charset-safe
+    # token may be written — anything multi-line or metacharacter-bearing is
+    # dropped (same discipline as reconcile-plan.py's branch-name gate).
+    image_facts_put "$_fo" etc_version "$_v"
     _php=$($_run "/bin/sh -c '/usr/local/bin/php -v'" 2>/dev/null \
         | sed -n '1s/^PHP \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
-    [ -n "$_php" ] && printf 'php_version=%s\n' "$_php" >> "$_fo"
+    image_facts_put "$_fo" php_version "$_php"
+    # Highest minor wins — a mid-upgrade box can carry two interpreters and
+    # `ls` order is lexical (python3.11 sorts before python3.9).
     _py=$($_run "/bin/sh -c 'ls /usr/local/bin'" 2>/dev/null \
-        | sed -n 's/^python3\.\([0-9][0-9]*\)$/py3\1/p' | head -1)
-    [ -n "$_py" ] && printf 'py_flavor=%s\n' "$_py" >> "$_fo"
+        | sed -n 's/^python3\.\([0-9][0-9]*\)$/\1/p' | sort -n | tail -1)
+    [ -n "$_py" ] && _py="py3${_py}"
+    image_facts_put "$_fo" py_flavor "$_py"
     _fb=$($_run "/bin/sh -c '/bin/freebsd-version'" 2>/dev/null | tr -d '\r')
-    if [ -n "$_fb" ]; then
-        printf 'freebsd_version=%s\n' "$_fb" >> "$_fo"
-        printf 'freebsd_major=%s\n' "${_fb%%.*}" >> "$_fo"
+    if image_facts_put "$_fo" freebsd_version "$_fb"; then
+        image_facts_put "$_fo" freebsd_major "${_fb%%.*}"
     fi
     [ -s "$_fo" ]
+}
+
+# image_facts_put FILE KEY VALUE — append KEY=VALUE iff VALUE is a single
+# charset-safe token ([0-9A-Za-z._:@-]); returns non-zero (writing nothing)
+# for an empty, multi-line, or metacharacter-bearing value. Guest output is
+# untrusted input: consumers parse this file, and a stray line or an embedded
+# $(...) must never reach them.
+image_facts_put() {
+    [ -n "$3" ] || return 1
+    case "$3" in
+        *[!0-9A-Za-z._:@-]*) return 1 ;;
+    esac
+    printf '%s=%s\n' "$2" "$3" >> "$1"
 }
