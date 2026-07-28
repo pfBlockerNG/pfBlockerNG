@@ -2,7 +2,7 @@
 # mcp-token-savior.sh — shared Claude/Codex stdio launcher for the token-savior MCP
 # server (wired via .mcp.json and .codex/config.toml).
 # Installs TS_SOURCE into a per-user cached venv, then execs it. The default TS_SOURCE pins
-# upstream token-savior-recall 4.20.0 with the MCP and vector-memory extras. A TS_SOURCE change
+# upstream token-savior-recall 4.21.0 with the MCP and vector-memory extras. A TS_SOURCE change
 # is detected via the .pfb-ts-source stamp and triggers a clean venv rebuild;
 # a mkdir lock serializes concurrent sessions racing that rebuild (the venv is one shared
 # per-user cache). Requires python3 >= 3.11.
@@ -15,7 +15,7 @@
 #                          passes codex explicitly)
 #   TOKEN_SAVIOR_PROFILE   server tool profile (default: optimized)
 #   TS_VENV                venv location (default: ${XDG_CACHE_HOME:-$HOME/.cache}/token-savior/venv)
-#   TS_SOURCE              pip requirement to install (default: upstream 4.20.0)
+#   TS_SOURCE              pip requirement to install (default: upstream 4.21.0)
 #   TS_LOCK_WAIT           max seconds to wait on another session's rebuild (default 300)
 #   INCLUDE_PATTERNS       colon-separated index globs; the default below REPLACES the
 #                          server's built-in list, which lacks .php/.inc/.sh — this repo's
@@ -43,7 +43,7 @@ if [ "$venv_bad" = 1 ]; then
 fi
 bin="$venv/bin/token-savior"
 stamp="$venv/.pfb-ts-source"
-TS_SOURCE="${TS_SOURCE:-token-savior-recall[mcp,memory-vector]==4.20.0}"
+TS_SOURCE="${TS_SOURCE:-token-savior-recall[mcp,memory-vector]==4.21.0}"
 
 # stdout is the MCP stdio channel — install chatter must stay on stderr
 if [ ! -x "$bin" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$TS_SOURCE" ]; then
