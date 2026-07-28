@@ -34,7 +34,10 @@
 #   3. Refresh /root/images/{pfsense,civm} via oras (digest-compare; pull when absent).
 #   4. Host prep: ip_unprivileged_port_start sysctl + pkill stale qemu.
 #   5. Build .pkg via build-leg.sh → SMOKE_PKG.
-#   6. Run: run-smoke.sh with the configured lane/marker/-k.
+#   6. Build this leg's extra_pkgs (per the CURRENT ref's version matrix) via
+#      build-dep-pkg-portable.py → SMOKE_DEP_PKGS (issue #1806 D2; empty when
+#      the leg's extra_pkgs is empty).
+#   7. Run: run-smoke.sh with the configured lane/marker/-k.
 #
 # POSIX sh; shellcheck clean; all expansions quoted.
 
@@ -231,6 +234,49 @@ SMOKE_PKG="$(sh scripts/build-leg.sh \
 export SMOKE_PKG
 printf 'smoke-on-box: pkg built: %s\n' "$SMOKE_PKG" >&2
 
+# ── Step 5b: this leg's dep pkgs (issue #1806 D2) ──────────────────────────── #
+# Look up this leg's freebsd_major row in the CURRENT ref's BUILD matrix
+# (read-version-matrix.sh --print-build is deduped one row per major) for its
+# extra_pkgs (port origins pfSense's own repo doesn't carry, e.g.
+# textproc/py-charset-normalizer for CE) and build each as a dep .pkg, from the
+# SAME ports tree build-leg.sh above just prepared/reused (no second clone).
+_BUILD_ROW="$(sh scripts/read-version-matrix.sh --print-build)" \
+    || { printf 'smoke-on-box: could not read the version matrix for extra_pkgs\n' >&2; exit 1; }
+_EXTRA_PKGS_JSON="$(printf '%s' "$_BUILD_ROW" | jq -c --arg maj "$_freebsd_major" \
+    '([.[] | select(.freebsd_major == $maj)][0].extra_pkgs) // []')"
+_EXTRA_PKGS_COUNT="$(printf '%s' "$_EXTRA_PKGS_JSON" | jq 'length')"
+SMOKE_DEP_PKGS=""
+if [ "$_EXTRA_PKGS_COUNT" -gt 0 ]; then
+    _DEP_PKG_DIR="${REPO_ROOT}/out/deppkgs"
+    mkdir -p "$_DEP_PKG_DIR"
+    # The target's own lang/python<NNN> PORTVERSION, from the SAME ports tree —
+    # the honest source for the python<NNN> RUN_DEPENDS version
+    # build-dep-pkg-portable.py records (never a fixed/guessed literal).
+    _PYNNN="$(printf '%s' "$_py_flavor" | sed 's/^py//')"
+    _PYTHON_DEP_VERSION="$(sed -n 's/^PORTVERSION=[[:space:]]*//p' "${PORTS_DIR}/lang/python${_PYNNN}/Makefile" | head -1)"
+    if [ -z "$_PYTHON_DEP_VERSION" ]; then
+        printf 'smoke-on-box: cannot derive PORTVERSION from %s/lang/python%s/Makefile\n' \
+            "$PORTS_DIR" "$_PYNNN" >&2
+        exit 1
+    fi
+    _i=0
+    while [ "$_i" -lt "$_EXTRA_PKGS_COUNT" ]; do
+        _origin="$(printf '%s' "$_EXTRA_PKGS_JSON" | jq -r ".[$_i]")"
+        printf 'smoke-on-box: building dep pkg %s...\n' "$_origin" >&2
+        _dep_pkg="$(python3 scripts/build-dep-pkg-portable.py \
+            --ports "$PORTS_DIR" \
+            --port "$_origin" \
+            --py-flavor "$_py_flavor" \
+            --freebsd-major "$_freebsd_major" \
+            --python-dep-version "$_PYTHON_DEP_VERSION" \
+            --out-dir "$_DEP_PKG_DIR")"
+        SMOKE_DEP_PKGS="${SMOKE_DEP_PKGS:+$SMOKE_DEP_PKGS }${_dep_pkg}"
+        _i=$((_i + 1))
+    done
+    printf 'smoke-on-box: dep pkgs built: %s\n' "$SMOKE_DEP_PKGS" >&2
+fi
+export SMOKE_DEP_PKGS
+
 # SSH key for the pfSense guest (baked into the image).
 export SMOKE_SSH_KEY="${SMOKE_SSH_KEY:-/root/smoke-ssh-key}"
 if [ ! -f "$SMOKE_SSH_KEY" ]; then
@@ -239,7 +285,7 @@ if [ ! -f "$SMOKE_SSH_KEY" ]; then
     exit 2
 fi
 
-# ── Step 5b: provision the Python test deps into a repo-root venv ──────────── #
+# ── Step 5c: provision the Python test deps into a repo-root venv ──────────── #
 # The box ships python3 but not pytest; install the harness deps (version-pinned
 # by the checked-out ref's tests/smoke/requirements.txt, + pytest explicitly, the
 # same set CI installs) into ${REPO_ROOT}/.venv so run-smoke.sh's non-CI .venv
@@ -258,7 +304,7 @@ if pfb_smoke_tier_needs_browser "$_MARKER"; then
     pfb_chromium_provision "$(pfb_playwright_cache_root)" "${REPO_ROOT}/.venv/bin/python" -m playwright
 fi
 
-# ── Step 6: run smoke ─────────────────────────────────────────────────────── #
+# ── Step 7: run smoke ─────────────────────────────────────────────────────── #
 # Paths + per-test timeout follow the marker: a UI tier scopes to tests/smoke/ui
 # with the 300s ceiling (matching ui-tests.yml); everything else keeps the
 # whole-suite tests/smoke + 30s default.

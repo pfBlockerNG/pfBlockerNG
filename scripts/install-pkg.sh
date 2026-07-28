@@ -5,15 +5,24 @@
 # The .pkg is produced by the portable Linux builder (scripts/build-pkg-portable.py,
 # driven by build-pkg-linux.yml) for the exact branch commit.
 #
-# RUN_DEPENDS: NOT fetched here. By convention the pre-baked smoke image ships
-# pfBlockerNG's runtime dependencies, so `pkg add` of the local .pkg resolves
-# them from the local pkg db and runs fully OFFLINE (no egress, no repo-catalogue
-# round-trip — a more stable deploy). If a dependency is missing, `pkg add` fails
-# loudly with "Missing dependency": that means the image is bad — fix the image
-# (re-bake with the deps), don't paper over it with a repo install here.
+# RUN_DEPENDS: resolved from the LOCAL pkg db, either because the pre-baked smoke
+# image ships them (convention), OR because SMOKE_DEP_PKGS names extra dep .pkgs
+# this script installs FIRST (issue #1806: pfSense CE's own repo does not carry
+# every RUN_DEPENDS a port needs, e.g. textproc/py-charset-normalizer, so its dep
+# .pkg ships alongside the branch build instead of being baked into the image).
+# Either way, `pkg add` of the local .pkg then resolves fully OFFLINE (no egress,
+# no repo-catalogue round-trip — a more stable deploy). If a dependency is still
+# missing, `pkg add` fails loudly with "Missing dependency": that means it is
+# missing from BOTH the image AND SMOKE_DEP_PKGS — fix one of those, don't paper
+# over it with a repo install here.
 #
 # Usage:
 #   install-pkg.sh <ssh-target> --pkg <local .pkg> [--port N] [--ssh-key PATH]
+#
+# Env:
+#   SMOKE_DEP_PKGS   space-separated absolute paths of extra dep .pkg files,
+#                    scp'd + `pkg add`ed BEFORE the branch .pkg, in the given
+#                    order. Unset/empty (the default) -> skipped entirely.
 #
 # POSIX sh; quoted expansions; absolute binary paths where it matters.
 
@@ -74,6 +83,20 @@ ssh_t() {
 }
 
 REMOTE="/tmp/$(basename "$PKGFILE")"
+
+# issue #1806 D2: install any SMOKE_DEP_PKGS FIRST, in the given order. `set -eu`
+# already makes a dep `pkg add` failure abort the whole script right here — the
+# SAME loud error contract as the branch .pkg add below, and the branch .pkg is
+# never reached (not even copied).
+for _dep in ${SMOKE_DEP_PKGS:-}; do
+    [ -f "$_dep" ] || { echo "install-pkg: SMOKE_DEP_PKGS file not found: ${_dep}" >&2; exit 1; }
+    _dep_remote="/tmp/$(basename "$_dep")"
+    echo "==> Copying dep $(basename "$_dep") to ${SSH_TARGET}:${_dep_remote}"
+    # shellcheck disable=SC2086
+    scp ${SCP_OPTS} "$_dep" "${SSH_TARGET}:${_dep_remote}"
+    echo "==> pkg add ${_dep_remote} (dep, from SMOKE_DEP_PKGS)"
+    ssh_t "env ASSUME_ALWAYS_YES=yes pkg add '${_dep_remote}'"
+done
 
 echo "==> Copying $(basename "$PKGFILE") to ${SSH_TARGET}:${REMOTE}"
 # shellcheck disable=SC2086
