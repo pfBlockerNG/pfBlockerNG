@@ -394,8 +394,16 @@ def test_build_pkgs_portable_per_leg_upload_name_is_the_exact_contract() -> None
     jobs = _jobs(RELEASE_WORKFLOW)
     steps = _split_into_steps(jobs["build-pkgs-portable"])
     upload_steps = [s for s in steps if any("uses: actions/upload-artifact" in line for line in s)]
-    assert len(upload_steps) == 1, "expected exactly one upload-artifact step in build-pkgs-portable"
-    name_line = next(line for line in upload_steps[0] if line.strip().startswith("name:"))
+    # issue #1806 B1: TWO upload steps now -- the branch .pkg (this test) and,
+    # gated on this major's extra_pkgs being non-empty, its dep .pkg as a
+    # SEPARATE artifact (see test_build_pkgs_portable_dep_pkg_upload_name_is_the_exact_contract).
+    assert len(upload_steps) == 2, (
+        f"expected exactly two upload-artifact steps in build-pkgs-portable, got {len(upload_steps)}"
+    )
+    pkg_step = next(
+        s for s in upload_steps if any("pfBlockerNG-relpkg-fbsd" in line and "deppkgs" not in line for line in s)
+    )
+    name_line = next(line for line in pkg_step if line.strip().startswith("name:"))
     assert "pfBlockerNG-relpkg-fbsd" in name_line, (
         f"per-leg upload name must start pfBlockerNG-relpkg-fbsd, got: {name_line}"
     )
@@ -406,6 +414,27 @@ def test_build_pkgs_portable_per_leg_upload_name_is_the_exact_contract() -> None
     assert not any(tok in name_line for tok in stale_tokens), (
         f"the deduped-by-major upload name must reference no variant/version/arch, got: {name_line}"
     )
+
+
+def test_build_pkgs_portable_dep_pkg_upload_name_is_the_exact_contract() -> None:
+    """issue #1806 B1: the dep-pkg artifact name mirrors the branch pkg's own
+    per-major contract, with a 'deppkgs' segment inserted -- smoke.yml's/
+    ui-tests.yml's pkg_artifact_prefix == 'pfBlockerNG-relpkg' download steps
+    compose this exact literal. Gated (never an empty artifact when a major's
+    extra_pkgs is empty)."""
+    jobs = _jobs(RELEASE_WORKFLOW)
+    steps = _split_into_steps(jobs["build-pkgs-portable"])
+    upload_steps = [s for s in steps if any("uses: actions/upload-artifact" in line for line in s)]
+    dep_step = next(s for s in upload_steps if any("deppkgs" in line for line in s))
+    name_line = next(line for line in dep_step if line.strip().startswith("name:"))
+    assert "pfBlockerNG-relpkg-deppkgs-fbsd" in name_line, (
+        f"dep-pkg upload name must be pfBlockerNG-relpkg-deppkgs-fbsd<major>, got: {name_line}"
+    )
+    assert "matrix.freebsd_major" in name_line, (
+        f"dep-pkg upload name must key on matrix.freebsd_major, got: {name_line}"
+    )
+    if_line = next((line for line in dep_step if line.strip().startswith("if:")), "")
+    assert "HAS_DEP_PKGS" in if_line, f"dep-pkg upload must be gated (never an empty artifact), got: {if_line!r}"
 
 
 def test_build_pkgs_portable_leg_step_needs_no_variant_version_or_arch() -> None:

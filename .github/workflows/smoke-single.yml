@@ -101,9 +101,13 @@ on:
         required: false
         default: ""
       extra_pkgs:
-        description: "JSON array of FreeBSD port origins for this leg (the matrix row's extra_pkgs, e.g. [\"textproc/py-charset-normalizer\"]). Non-empty -> download pfBlockerNG-deppkgs-fbsd<freebsd_major> and export SMOKE_DEP_PKGS (space-separated absolute .pkg paths) for install-pkg.sh. Empty/blank -> SMOKE_DEP_PKGS stays unset."
+        description: "JSON array of FreeBSD port origins for this leg (the matrix row's extra_pkgs, e.g. [\"textproc/py-charset-normalizer\"]). Non-empty -> download the dep-pkgs artifact (dep_artifact, or this workflow's own self-built default) and export SMOKE_DEP_PKGS (space-separated absolute .pkg paths) for install-pkg.sh. Empty/blank -> SMOKE_DEP_PKGS stays unset."
         required: false
         default: "[]"
+      dep_artifact:
+        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-s<shard>."
+        required: false
+        default: ""
   workflow_call:
     inputs:
       image_ref:
@@ -182,10 +186,15 @@ on:
         type: string
         default: ""
       extra_pkgs:
-        description: "JSON array of FreeBSD port origins for this leg (the matrix row's extra_pkgs, e.g. [\"textproc/py-charset-normalizer\"]). Non-empty -> download pfBlockerNG-deppkgs-fbsd<freebsd_major> and export SMOKE_DEP_PKGS (space-separated absolute .pkg paths) for install-pkg.sh. Empty/blank -> SMOKE_DEP_PKGS stays unset."
+        description: "JSON array of FreeBSD port origins for this leg (the matrix row's extra_pkgs, e.g. [\"textproc/py-charset-normalizer\"]). Non-empty -> download the dep-pkgs artifact (dep_artifact, or this workflow's own self-built default) and export SMOKE_DEP_PKGS (space-separated absolute .pkg paths) for install-pkg.sh. Empty/blank -> SMOKE_DEP_PKGS stays unset."
         required: false
         type: string
         default: "[]"
+      dep_artifact:
+        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-s<shard>."
+        required: false
+        type: string
+        default: ""
   # Nightly gated run — enable once the wall-time is confirmed within budget.
   # schedule:
   #   - cron: "0 5 * * *"
@@ -242,9 +251,14 @@ jobs:
       # issue #1806 D1/D2: this leg's extra_pkgs, straight through — this build-pkg
       # job only runs on the build-if-absent path (bare dispatch / repo-install.yml),
       # so it is the SOLE builder for this leg; if extra_pkgs is non-empty it also
-      # uploads pfBlockerNG-deppkgs-fbsd<freebsd_major>, which the "Download dep
-      # packages" step below (same workflow, same run) then downloads.
+      # uploads its dep artifact, which the "Download dep packages" step below
+      # (same workflow, same run) then downloads.
       extra_pkgs: ${{ inputs.extra_pkgs }}
+      # W1: mirror artifact_name's OWN discriminator (image_name + shard) — this
+      # build-pkg job's matrix (indirectly, one invocation per caller-side leg)
+      # can share a run with sibling invocations of THIS reusable workflow (e.g.
+      # repo-install.yml's fan-out); the plain per-major default would collide.
+      dep_artifact_name: pfBlockerNG-deppkgs-${{ inputs.image_name }}-s${{ inputs.shard }}
 
   smoke:
     name: pytest -m smoke (live pfSense VM)
@@ -292,14 +306,22 @@ jobs:
         # the test falls back to running this script itself, which needs network the pytest
         # phase may not have. Best-effort: on failure the topology cases SKIP, never fail the
         # whole smoke job. (read-version-matrix.sh self-fetches the ci-metadata orphan ref.)
+        # W3: --print-ci (ONE ROW PER VERSION, never deduped by major), not --print-build
+        # (issue #1806 dedupes BUILD to one row per freebsd_major) -- a deduped feed means
+        # _matrix.py's matrix_variants() can never see two editions sharing a major at once,
+        # so its SMOKE_IMAGE_REF disambiguator (own_entry()) can never actually fire, and a
+        # merged row's last-wins fields could misreport which edition is booted. --print-ci
+        # is also the honest source here: every leg this topology ever runs against IS a
+        # ci:true leg (a live VM only ever boots for one), so nothing --print-ci excludes was
+        # ever reachable by this topology anyway.
         run: |
           set -u
-          if matrix="$(sh scripts/read-version-matrix.sh --print-build 2>/dev/null)" && [ -n "$matrix" ]; then
-            # --print-build emits pretty (multi-line) JSON, so write it via the heredoc
+          if matrix="$(sh scripts/read-version-matrix.sh --print-ci 2>/dev/null)" && [ -n "$matrix" ]; then
+            # --print-ci emits pretty (multi-line) JSON, so write it via the heredoc
             # delimiter form (as RESOLVED_REDACT below does): a single-line KEY=value write
             # of a multi-line value errors the step ("Invalid format") and drops the matrix.
             { printf 'SMOKE_MATRIX_JSON<<__EOF__\n%s\n__EOF__\n' "$matrix"; } >> "$GITHUB_ENV"
-            echo "Resolved $(printf '%s' "$matrix" | jq 'length') build-matrix entries for the smoke topology."
+            echo "Resolved $(printf '%s' "$matrix" | jq 'length') CI-matrix entries for the smoke topology."
           else
             echo "::warning::could not resolve the version matrix — ADR-20 variant-topology cases will SKIP"
           fi
@@ -445,26 +467,17 @@ jobs:
           name: ${{ inputs.pkg_artifact != '' && inputs.pkg_artifact || needs.build-pkg.outputs.artifact }}
           path: pkg
 
-      # issue #1806 D2: this leg's extra_pkgs (e.g. py311-charset-normalizer for
+      # issue #1806 D2/B1: this leg's extra_pkgs (e.g. py311-charset-normalizer for
       # CE) — a SEPARATE artifact from the branch .pkg above (never folded into
-      # `pkg/`, so the N_PKG -eq 1 guard below stays exactly one .pkg). Named by
-      # freebsd_major only (dep .pkgs are wildcard-ABI, shared by every
-      # edition/version on this major) — parsed from the SAME `abi` input the
-      # build-pkg job above was called with.
-      - name: Resolve dep-pkg artifact name
-        id: depmajor
-        if: ${{ inputs.extra_pkgs != '' && inputs.extra_pkgs != '[]' }}
-        env:
-          ABI: ${{ inputs.abi }}
-        run: |
-          set -eu
-          echo "freebsd_major=$(printf '%s' "$ABI" | cut -d: -f2)" >> "$GITHUB_OUTPUT"
-
+      # `pkg/`, so the N_PKG -eq 1 guard below stays exactly one .pkg). dep_artifact
+      # set (smoke.yml's fan-out, either self-build or release-prefix path):
+      # download that exact name. Blank: fall back to THIS workflow's own
+      # build-pkg job's dep_artifact_name above (bare dispatch / repo-install.yml).
       - name: Download dep packages
         if: ${{ inputs.extra_pkgs != '' && inputs.extra_pkgs != '[]' }}
         uses: actions/download-artifact@v8
         with:
-          name: pfBlockerNG-deppkgs-fbsd${{ steps.depmajor.outputs.freebsd_major }}
+          name: ${{ inputs.dep_artifact != '' && inputs.dep_artifact || format('pfBlockerNG-deppkgs-{0}-s{1}', inputs.image_name, inputs.shard) }}
           path: deppkgs
 
       - name: Export SMOKE_DEP_PKGS

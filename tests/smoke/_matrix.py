@@ -1,14 +1,16 @@
 """Per-leg variant topology for the ADR-20 repo smoke — DERIVED FROM THE VERSION MATRIX.
 
 Every ABI / PHP / Python / catalog fact comes from the ci-metadata version matrix, never a
-literal. The whole BUILD matrix is read from ``SMOKE_MATRIX_JSON`` (injected by smoke-single.yml from
-``read-version-matrix.sh --print-build``); a local run falls back to running that script itself;
-when neither is available the variant-topology cases SKIP. Per-leg selection still honours
-``SMOKE_ABI`` / ``SMOKE_PHP_VERSION`` / ``SMOKE_PY_FLAVOR`` (the fan-out exports them per matrix
-entry) plus ``SMOKE_IMAGE_REF`` (issue #1806: disambiguates two editions sharing a freebsd_major,
-now that the matrix carries no ``arch`` column) — SMOKE_ABI itself stays a CONCRETE guest ABI env
-var; a bare dispatch defaults to the matrix's CE entry. So adding a pfSense version to the matrix
-needs no edit here.
+literal. The whole CI matrix (ONE ROW PER VERSION, never deduped by freebsd_major) is read from
+``SMOKE_MATRIX_JSON`` (injected by smoke-single.yml from ``read-version-matrix.sh --print-ci`` —
+issue #1806 W3: --print-build dedupes to one row per major, which would hide a second edition
+sharing a major from matrix_variants() entirely and make the SMOKE_IMAGE_REF disambiguation below
+unreachable); a local run falls back to running that script itself; when neither is available the
+variant-topology cases SKIP. Per-leg selection still honours ``SMOKE_ABI`` / ``SMOKE_PHP_VERSION``
+/ ``SMOKE_PY_FLAVOR`` (the fan-out exports them per matrix entry) plus ``SMOKE_IMAGE_REF``
+(issue #1806: disambiguates two editions sharing a freebsd_major, now that the matrix carries no
+``arch`` column) — SMOKE_ABI itself stays a CONCRETE guest ABI env var; a bare dispatch defaults to
+the matrix's CE entry. So adding a pfSense version to the matrix needs no edit here.
 
 Kept in its own stdlib-only module (no intra-package smoke imports) so the derivation is
 unit-testable off-box — see ``tests/test_smoke_matrix.py``.
@@ -52,18 +54,21 @@ def catalog_name(pfsense_version: str, variant: str) -> str:
 
 @functools.lru_cache(maxsize=1)
 def build_matrix() -> tuple[dict, ...] | None:
-    """The whole BUILD matrix (every CE+Plus entry), or None when unavailable.
+    """The whole CI matrix (every CE+Plus ci:true entry, one row per version), or None when
+    unavailable.
 
-    Prefers ``SMOKE_MATRIX_JSON`` (smoke-single.yml injects ``read-version-matrix.sh --print-build``);
-    falls back to running that script on the runner; None when neither yields a non-empty JSON
-    array (the caller then SKIPs the topology cases)."""
+    Prefers ``SMOKE_MATRIX_JSON`` (smoke-single.yml injects ``read-version-matrix.sh --print-ci``
+    — issue #1806 W3, never ``--print-build``: that dedupes by freebsd_major, which would hide a
+    same-major second edition from this topology entirely); falls back to running that script on
+    the runner; None when neither yields a non-empty JSON array (the caller then SKIPs the
+    topology cases)."""
     raw = os.environ.get("SMOKE_MATRIX_JSON", "").strip()
     if not raw:
         script = _REPO_ROOT / "scripts" / "read-version-matrix.sh"
         if script.is_file():
             try:
                 proc = subprocess.run(
-                    ["sh", str(script), "--print-build"],
+                    ["sh", str(script), "--print-ci"],
                     capture_output=True,
                     text=True,
                     timeout=30.0,
