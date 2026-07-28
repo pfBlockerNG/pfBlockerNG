@@ -578,7 +578,8 @@ px "cat '$REMOTE_DIR/out.qcow2'" > "$OUT"
 
 log "pushing ${IMAGE}:${TAG} (local oras)"
 # Shared push — identical to image-publish.sh --type ${TYPE} ${TAG} (same image
-# ref, qcow2 title, description and artifact-type).
-image_oci_push "$OUT" "$IMAGE" "$TAG" "$ARTIFACT_TYPE" "$DESCRIPTION" "$QCOW_NAME"
+# ref, qcow2 title, description and artifact-type). NEW_VER stamps the full
+# pfSense version annotation the tracker's patch/GA detection compares against.
+image_oci_push "$OUT" "$IMAGE" "$TAG" "$ARTIFACT_TYPE" "$DESCRIPTION" "$QCOW_NAME" "$NEW_VER"
 
 log "done. ${IMAGE}:${TAG} published; ${IMAGE}:${FROM} kept."

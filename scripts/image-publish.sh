@@ -79,6 +79,11 @@
 #                      derives it; overrides the derived value when present.
 #   --description D    OCI image-description annotation. Required unless --type is
 #                      given; overrides the derived value when present.
+#   --os-version V     full pfSense version inside the image (e.g. 2.8.1-RELEASE,
+#                      the VM's /etc/version). Stamped as the
+#                      io.github.pfblockerng.pfsense-version annotation the
+#                      version-tracker's patch/GA detection reads; omitted when
+#                      not given (image-upgrade.sh always stamps it).
 #   --print-identity   print every NIC's MAC + the SMBIOS UUID from the VM config,
 #                      then exit (no export/push). <version> is not required.
 #
@@ -113,6 +118,7 @@ OUT=""
 KEEP=0
 FORCE=0
 VERSION=""
+OS_VERSION=""
 PRINT_IDENTITY=0
 # NO image-shaped defaults: these are derived from --type, or required explicitly.
 ARTIFACT_TYPE=""
@@ -141,6 +147,7 @@ while [ $# -gt 0 ]; do
         --force)           FORCE=1; shift ;;
         --artifact-type)   ARTIFACT_TYPE="$2"; shift 2 ;;
         --description)     DESCRIPTION="$2"; shift 2 ;;
+        --os-version)      OS_VERSION="$2"; shift 2 ;;
         --print-identity)  PRINT_IDENTITY=1; shift ;;
         -h|--help)         sed -n '2,87p' "$0"; exit 0 ;;
         -*)                die "unknown option: $1" ;;
@@ -311,7 +318,7 @@ log "local image: $(qemu-img info --output=human "$OUT" 2>/dev/null | sed -n 's/
 
 log "pushing ${IMAGE}:${VERSION}"
 # Shared push — the layer title is the resolved qcow2 basename (predictable on pull).
-image_oci_push "$OUT" "$IMAGE" "$VERSION" "$ARTIFACT_TYPE" "$DESCRIPTION" "$(basename "$OUT")"
+image_oci_push "$OUT" "$IMAGE" "$VERSION" "$ARTIFACT_TYPE" "$DESCRIPTION" "$(basename "$OUT")" "$OS_VERSION"
 
 if [ "$KEEP" -eq 1 ] || [ "$CREATED_OUT" -eq 0 ]; then
     log "local image kept at: $OUT"
