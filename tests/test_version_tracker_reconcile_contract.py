@@ -204,7 +204,7 @@ exit 0
             tmp_path,
             GATHER_STEP,
             {
-                "BUILD_MATRIX": json.dumps(matrix),
+                "ROUTE_MATRIX": json.dumps(matrix),
                 "SMOKE_SSH_PRIV_KEY": "dummy-key",
                 "SMOKE_GHCR_USER": "u",
                 "SMOKE_GHCR_TOKEN": "t",
@@ -294,7 +294,7 @@ class TestPlanStep:
         )
         # An unavailable boot must be EXCLUDED from the planner's input
         self._facts(tmp_path, "Plus", "26.09", "unavailable", "junk\t\tJunk (26.99)\n", "26.09-BETA")
-        _run_step(tmp_path, PLAN_STEP, {"BUILD_MATRIX": json.dumps(BUILD_MATRIX)})
+        _run_step(tmp_path, PLAN_STEP, {"ROUTE_MATRIX": json.dumps(BUILD_MATRIX)})
         plan = json.loads((tmp_path / "facts" / "plan-Plus.json").read_text(encoding="utf-8"))
         assert {"type": "matrix_pr_add", "family": "26.07", "branch": "26.07", "status": "beta"} in plan["actions"]
         assert all(a.get("family") != "26.99" for a in plan["actions"])
@@ -309,7 +309,7 @@ class TestDispatchStep:
         _run_step(
             tmp_path,
             DISPATCH_STEP,
-            {"BUILD_MATRIX": json.dumps(BUILD_MATRIX + [BETA_2607]), "DRY_RUN": dry_run},
+            {"ROUTE_MATRIX": json.dumps(BUILD_MATRIX + [BETA_2607]), "DRY_RUN": dry_run},
         )
         return _log(tmp_path, "gh.log"), _log(tmp_path, "gh-fields.log")
 
@@ -418,3 +418,88 @@ class TestMatrixPrStep:
         git_log, gh_log, _ = self._run(tmp_path, self.ADD_2607, dry_run="true")
         assert "push" not in git_log
         assert "pr create" not in gh_log
+
+
+class TestReconcileMatrixSource:
+    """Scenario (issue #1839): the reconcile must see EVERY version, one row per
+    family. `build_matrix` is deduped to one row per freebsd_major (issue #1806),
+    which hid Plus 26.03 the moment 26.07 (same major 16) joined the matrix —
+    the boot source vanished and the planner could not resolve the new family's
+    branch. The route matrix is the never-deduped view."""
+
+    SAME_MAJOR_MATRIX = {
+        "versions": [
+            {
+                "pfsense_version": "2.8",
+                "channel": "CE",
+                "freebsd_version": "15.0-RELEASE",
+                "freebsd_major": "15",
+                "php_version": "8.3",
+                "py_flavor": "py311",
+                "variant": "CE",
+                "status": "active",
+                "ci": True,
+            },
+            {
+                "pfsense_version": "26.03",
+                "channel": "Plus",
+                "freebsd_version": "16.0-RELEASE",
+                "freebsd_major": "16",
+                "php_version": "8.5",
+                "py_flavor": "py311",
+                "variant": "Plus",
+                "status": "active",
+                "ci": True,
+                "image_name": "pfsense-plus",
+            },
+            {
+                "pfsense_version": "26.07",
+                "channel": "Plus",
+                "freebsd_version": "16.0-RELEASE",
+                "freebsd_major": "16",
+                "php_version": "8.5",
+                "py_flavor": "py311",
+                "variant": "Plus",
+                "status": "beta",
+                "ci": False,
+                "image_name": "pfsense-plus",
+            },
+        ]
+    }
+
+    def _reader(self, tmp_path: Path, mode: str) -> list[dict[str, Any]]:
+        """Run the REAL reader against the fixture matrix."""
+        matrix_file = tmp_path / "matrix.json"
+        matrix_file.write_text(json.dumps(self.SAME_MAJOR_MATRIX), encoding="utf-8")
+        fake_git = tmp_path / "git"
+        fake_git.write_text(
+            '#!/bin/sh\ncase "$1" in\n  fetch) exit 0 ;;\n  show) cat "$FAKE_MATRIX" ;;\nesac\n',
+            encoding="utf-8",
+        )
+        fake_git.chmod(0o755)
+        proc = subprocess.run(
+            ["sh", str(ROOT / "scripts" / "read-version-matrix.sh"), "--ref", "origin/ci-metadata", mode],
+            cwd=tmp_path,
+            env=os.environ | {"PATH": f"{tmp_path}:{os.environ['PATH']}", "FAKE_MATRIX": str(matrix_file)},
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(proc.stdout)
+
+    def test_build_matrix_hides_a_same_major_family(self, tmp_path: Path) -> None:
+        # The documented ABI dedup — correct for .pkg builds, wrong for the
+        # reconcile. Pins WHY the source had to change.
+        plus = [e for e in self._reader(tmp_path, "--print-build") if e["channel"] == "Plus"]
+        assert len(plus) == 1
+
+    def test_route_matrix_keeps_every_family(self, tmp_path: Path) -> None:
+        plus = sorted(e["pfsense_version"] for e in self._reader(tmp_path, "--print-route") if e["channel"] == "Plus")
+        assert plus == ["26.03", "26.07"]
+
+    def test_reconcile_steps_consume_the_route_matrix(self) -> None:
+        # Wiring pin: every reconcile step reads the never-deduped view.
+        source = WORKFLOW.read_text(encoding="utf-8")
+        reconcile = source.split("\n  reconcile:\n", 1)[1]
+        assert "BUILD_MATRIX" not in reconcile
+        assert reconcile.count("ROUTE_MATRIX:") >= 3

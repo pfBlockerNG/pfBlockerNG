@@ -129,6 +129,8 @@ jobs:
       - name: Plan reactions (dry-run log or live dispatch)
         env:
           GH_TOKEN: ${{ github.token }}
+          # react builds one .pkg per ABI — the freebsd_major-deduped view is
+          # the correct source here (unlike the reconcile job, issue #1839).
           BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
           CI_MATRIX: ${{ needs.read-matrix.outputs.ci_matrix }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
@@ -266,6 +268,18 @@ jobs:
           persist-credentials: true   # push the tracker/* matrix-PR branches
           fetch-depth: 0
 
+      # The reconcile needs EVERY family, one row per version: build_matrix is
+      # deduped to one row per freebsd_major (issue #1806), which hides a
+      # same-major family (26.03 vs 26.07) and blinds the boot source + the
+      # branch lookup (issue #1839). The route matrix is the never-deduped view.
+      - name: Resolve the route matrix (never deduped)
+        id: matrix
+        run: |
+          set -eu
+          ROUTE="$(sh scripts/read-version-matrix.sh --ref origin/ci-metadata --print-route)"
+          printf 'route=%s\n' "$ROUTE" >> "$GITHUB_OUTPUT"
+          printf '%s' "$ROUTE" | jq -r '.[] | "  \(.channel) \(.pfsense_version) (status \(.status // "active"))"'
+
       - name: Check if the reconcile is disabled via repo label
         id: probe_gate
         env:
@@ -295,7 +309,7 @@ jobs:
         if: steps.probe_gate.outputs.probe_disabled != 'true'
         continue-on-error: true
         env:
-          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+          ROUTE_MATRIX: ${{ steps.matrix.outputs.route }}
           SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
           SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
           SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
@@ -324,14 +338,14 @@ jobs:
           REPO_NS="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
           mkdir -p facts
 
-          CHANNELS=$(printf '%s\n' "$BUILD_MATRIX" | jq -r '[.[].channel] | unique[]')
+          CHANNELS=$(printf '%s\n' "$ROUTE_MATRIX" | jq -r '[.[].channel] | unique[]')
           for CHANNEL in $CHANNELS; do
             VARIANT=$(printf '%s' "$CHANNEL" | tr '[:upper:]' '[:lower:]')
             mkdir -p "facts/${CHANNEL}"
 
             # Published map: does the family's floating tag exist on GHCR?
             printf '{}' > "facts/${CHANNEL}-published.json"
-            ENTRIES=$(printf '%s\n' "$BUILD_MATRIX" | jq -c --arg ch "$CHANNEL" '
+            ENTRIES=$(printf '%s\n' "$ROUTE_MATRIX" | jq -c --arg ch "$CHANNEL" '
               [ .[] | select(.channel == $ch)
                     | select((.role // "build") != "route-only")
                     | select((.arch // "amd64") == "amd64") ]')
@@ -392,15 +406,15 @@ jobs:
         if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.facts.outcome == 'success'
         continue-on-error: true
         env:
-          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+          ROUTE_MATRIX: ${{ steps.matrix.outputs.route }}
         run: |
           set -euo pipefail
           [ -d facts ] || { echo "No facts gathered — nothing to plan."; exit 0; }
-          CHANNELS=$(printf '%s\n' "$BUILD_MATRIX" | jq -r '[.[].channel] | unique[]')
+          CHANNELS=$(printf '%s\n' "$ROUTE_MATRIX" | jq -r '[.[].channel] | unique[]')
           for CHANNEL in $CHANNELS; do
             [ -f "facts/${CHANNEL}-published.json" ] || continue
             set -- --channel "$CHANNEL" \
-              --matrix-json "$BUILD_MATRIX" \
+              --matrix-json "$ROUTE_MATRIX" \
               --published-json "$(cat "facts/${CHANNEL}-published.json")"
             for D in "facts/${CHANNEL}"/*/; do
               [ -f "${D}status" ] || continue
@@ -422,14 +436,14 @@ jobs:
           REPO: ${{ github.repository }}
           REF: ${{ github.ref_name }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
-          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+          ROUTE_MATRIX: ${{ steps.matrix.outputs.route }}
         run: |
           set -euo pipefail
           for PLAN in facts/plan-*.json; do
             [ -f "$PLAN" ] || continue
             CHANNEL=$(basename "$PLAN" .json)
             CHANNEL=${CHANNEL#plan-}
-            LEGS=$(jq -c --argjson bm "$BUILD_MATRIX" --arg ch "$CHANNEL" '
+            LEGS=$(jq -c --argjson bm "$ROUTE_MATRIX" --arg ch "$CHANNEL" '
               [ .actions[]
                 | select(.type == "republish" or .type == "publish_new") as $a
                 | (first($bm[] | select(.channel == $ch)
