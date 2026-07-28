@@ -5,8 +5,10 @@ literal. The whole BUILD matrix is read from ``SMOKE_MATRIX_JSON`` (injected by 
 ``read-version-matrix.sh --print-build``); a local run falls back to running that script itself;
 when neither is available the variant-topology cases SKIP. Per-leg selection still honours
 ``SMOKE_ABI`` / ``SMOKE_PHP_VERSION`` / ``SMOKE_PY_FLAVOR`` (the fan-out exports them per matrix
-entry); a bare dispatch defaults to the matrix's CE entry. So adding a pfSense version to the
-matrix needs no edit here.
+entry) plus ``SMOKE_IMAGE_REF`` (issue #1806: disambiguates two editions sharing a freebsd_major,
+now that the matrix carries no ``arch`` column) — SMOKE_ABI itself stays a CONCRETE guest ABI env
+var; a bare dispatch defaults to the matrix's CE entry. So adding a pfSense version to the matrix
+needs no edit here.
 
 Kept in its own stdlib-only module (no intra-package smoke imports) so the derivation is
 unit-testable off-box — see ``tests/test_smoke_matrix.py``.
@@ -93,8 +95,10 @@ def matrix_variants() -> list[Variant]:
     out: dict[tuple[str, str], Variant] = {}
     for e in entries:
         major = str(e.get("freebsd_major", "")).strip()
-        arch = str(e.get("arch", "")).strip() or "amd64"
-        abi = f"FreeBSD:{major}:{arch}"
+        # issue #1806: the matrix carries no `arch` field at all any more (every
+        # pfSense-pkg-pfBlockerNG port is NO_ARCH, the catalog is arch-less) —
+        # "amd64" here is an inert CPU placeholder, never read from the entry.
+        abi = f"FreeBSD:{major}:amd64"
         variant = str(e.get("variant", "")).strip()
         out.setdefault(
             (abi, variant),
@@ -110,7 +114,16 @@ def matrix_variants() -> list[Variant]:
 
 
 def _own_entry() -> Variant:
-    """This leg's variant: matched by SMOKE_ABI, else the matrix CE entry (bare dispatch)."""
+    """This leg's variant: matched by SMOKE_ABI, else the matrix CE entry (bare dispatch).
+
+    issue #1806: with `arch` retired, two editions CAN share a freebsd_major (not just an
+    ADR-24 transition-window hypothetical) — SMOKE_ABI alone (a CONCRETE guest ABI env var;
+    that contract is unchanged) then matches more than one Variant. Disambiguate via
+    SMOKE_IMAGE_REF (already exported by smoke-single.yml as the resolved GHCR ref, e.g.
+    ".../pfsense-plus:15.1.0") by checking which candidate's "pfsense-<variant>" image name
+    it names; refuse (loudly) rather than silently pick matches[0] when it doesn't resolve to
+    exactly one — a gate-A-era hazard this closes.
+    """
     variants = matrix_variants()
     abi = os.environ.get("SMOKE_ABI")
     if not abi:
@@ -119,7 +132,17 @@ def _own_entry() -> Variant:
     matches = [v for v in variants if v.abi == abi]
     if not matches:
         raise RuntimeError(f"no matrix variant for ABI {abi!r} (known: {sorted(v.abi for v in variants)})")
-    return matches[0]
+    if len(matches) == 1:
+        return matches[0]
+    image_ref = os.environ.get("SMOKE_IMAGE_REF", "")
+    disambiguated = [v for v in matches if f"pfsense-{v.variant.lower()}" in image_ref]
+    if len(disambiguated) == 1:
+        return disambiguated[0]
+    raise RuntimeError(
+        f"ABI {abi!r} matches {len(matches)} variants ({[v.variant for v in matches]!r}) and "
+        f"SMOKE_IMAGE_REF={image_ref!r} does not disambiguate to exactly one — refusing to "
+        f"silently pick one (set SMOKE_IMAGE_REF to the resolved image ref)"
+    )
 
 
 def matrix_php_dep() -> str:

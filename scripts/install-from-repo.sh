@@ -79,15 +79,20 @@ if ! ssh_t 'command -v rsync >/dev/null 2>&1'; then
 fi
 
 # The Python flavor for the py3xx-* RUN_DEPENDS is DERIVED FROM THE VERSION MATRIX (no
-# hardcoded py311): match the box's ABI (FreeBSD:major:arch) to its matrix entry's py_flavor.
-# Fallbacks keep the installer working when the matrix/jq is unavailable: the box's OWN
-# installed py3xx flavor, then py311. (read-version-matrix.sh self-fetches the ci-metadata ref.)
+# hardcoded py311): match the box's FreeBSD major (parsed from its concrete ABI, e.g.
+# FreeBSD:15:amd64) to its matrix entry's py_flavor. issue #1806: the matrix is arch-less
+# (no `arch` field) and the BUILD matrix dedupes to one row per freebsd_major with
+# php_version/py_flavor asserted identical across any merged versions, so matching by major
+# alone is exact — not just a fallback. Fallbacks keep the installer working when the
+# matrix/jq is unavailable: the box's OWN installed py3xx flavor, then py311.
+# (read-version-matrix.sh self-fetches the ci-metadata ref.)
 PY_FLAVOR=""
 BOX_ABI="$(ssh_t 'pkg config ABI 2>/dev/null' | tr -d '\r')"
-if [ -n "$BOX_ABI" ] && command -v jq >/dev/null 2>&1; then
+BOX_MAJOR="$(printf '%s' "$BOX_ABI" | cut -d: -f2)"
+if [ -n "$BOX_MAJOR" ] && command -v jq >/dev/null 2>&1; then
     PY_FLAVOR="$(sh "${REPO_ROOT}/scripts/read-version-matrix.sh" --print-build 2>/dev/null \
-        | jq -r --arg abi "$BOX_ABI" \
-            '[ .[] | select("FreeBSD:\(.freebsd_major):\(.arch // "amd64")" == $abi) ][0].py_flavor // empty' \
+        | jq -r --arg major "$BOX_MAJOR" \
+            '[ .[] | select(.freebsd_major == $major) ][0].py_flavor // empty' \
         2>/dev/null || true)"
 fi
 if [ -z "$PY_FLAVOR" ]; then

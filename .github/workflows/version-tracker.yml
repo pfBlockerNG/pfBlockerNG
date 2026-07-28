@@ -153,18 +153,24 @@ jobs:
             MAJOR=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_major')
             PHP=$(printf '%s\n' "$ENTRY" | jq -r '.php_version')
             PY=$(printf '%s\n' "$ENTRY" | jq -r '.py_flavor')
-            ARCH=$(printf '%s\n' "$ENTRY" | jq -r '.arch')
 
-            # Filter to target version if specified
+            # Filter to target version if specified. issue #1806: BUILD_MATRIX is
+            # now deduped to one row per freebsd_major, so PFSENSE/CHANNEL are
+            # whichever merged version last wrote that major's row — a
+            # target_version naming the OTHER version sharing that major won't
+            # match (no live collision today; both would build byte-identically
+            # anyway, since the reader hard-errors on a php/py mismatch).
             if [ -n "$TARGET_VERSION" ] && [ "$PFSENSE" != "$TARGET_VERSION" ]; then
               echo "  [skip] ${PFSENSE} (${CHANNEL}) — does not match target '${TARGET_VERSION}'"
               continue
             fi
 
-            # The reader resolves arch (default amd64) on every build entry, so an
-            # aarch64 entry (Plus-only, issue #199) dispatches a FreeBSD:N:aarch64
-            # build; every existing amd64 entry is unchanged.
-            ABI="FreeBSD:${MAJOR}:${ARCH}"
+            # issue #1806: NO_ARCH packages are arch-less; the matrix no longer
+            # carries `arch` at all. "amd64" here is an INERT cpu placeholder —
+            # build-pkg-portable.py wildcards the stamp for any NO_ARCH port
+            # regardless of what's given, so every arch of this FreeBSD major
+            # is served by the one build this triggers.
+            ABI="FreeBSD:${MAJOR}:amd64"
             # Channel maps to pkg channel: CE on devel branch -> devel, main -> stable
             # For standalone tracker runs we use 'devel' as the pkg channel by default.
             # A real release tag push always uses release.yml; this is a build smoke-check.
@@ -172,10 +178,10 @@ jobs:
 
             if [ "$DRY_RUN" = "true" ]; then
               echo "  [DRY-RUN] WOULD dispatch build-pkg-linux.yml:"
-              echo "    pfsense_version=${PFSENSE} (${CHANNEL})  freebsd_major=${MAJOR}  arch=${ARCH}"
+              echo "    pfsense_version=${PFSENSE} (${CHANNEL})  freebsd_major=${MAJOR}"
               echo "    abi=${ABI}  php=${PHP}  py_flavor=${PY}  pkg_channel=${PKG_CHANNEL}"
             else
-              echo "  [TRIGGER] build-pkg-linux.yml for ${PFSENSE} (${CHANNEL}) FreeBSD ${MAJOR}/${ARCH}"
+              echo "  [TRIGGER] build-pkg-linux.yml for ${PFSENSE} (${CHANNEL}) FreeBSD ${MAJOR}"
               # Dispatch the portable Linux builder for this matrix entry.
               # build-pkg-linux.yml expects: channel, abi, php_version, py_flavor.
               # INVARIANT: we dispatch a build-only workflow — no commits, no pushes.
