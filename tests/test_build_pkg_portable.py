@@ -701,6 +701,79 @@ def test_end_to_end_classic_build(tmp_path: Path) -> None:
     assert info == "<version>1.0_2</version>\n"
 
 
+def _make_no_arch_port(tmp_path: Path) -> tuple[Path, Path]:
+    """The same minimal classic port as _make_classic_port, with NO_ARCH=yes set —
+    simulates the FreeBSD-ports fork's staged NO_ARCH Makefile change (issue #1806;
+    not visible to this repo — this fixture simulates it)."""
+    ports, portdir = _make_classic_port(tmp_path)
+    makefile = portdir / "Makefile"
+    makefile.write_text(makefile.read_text().replace("NO_BUILD=\tyes\n", "NO_BUILD=\tyes\nNO_ARCH=\tyes\n"))
+    return ports, portdir
+
+
+def test_end_to_end_no_arch_port_stamps_wildcard_abi_and_arch(tmp_path: Path) -> None:
+    """A NO_ARCH port's manifest stamps a CPU-wildcarded abi/arch (issue #1806 B1).
+
+    Scenario: NO_ARCH port, concrete --abi input, no --arch override
+      Given a port Makefile with NO_ARCH=yes
+       When build-pkg-portable.py runs with --abi FreeBSD:15:amd64 (no --arch)
+      Then the manifest abi is "FreeBSD:15:*" (major derived from --abi, CPU wildcarded)
+       And the manifest arch is "freebsd:15:*" (same wildcard, lowercase per the
+           existing arch triplet convention)
+    """
+    ports, portdir = _make_no_arch_port(tmp_path)
+    out = tmp_path / "out"
+    rc = bpp.main(
+        [
+            "--ports", str(ports),
+            "--port-dir", str(portdir),
+            "--abi", "FreeBSD:15:amd64",
+            "--py-flavor", "py311",
+            "--compression", "xz",
+            "--freebsd-version", "1500068",
+            "--out", str(out),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    full, _, _ = _read_pkg(out / "testpkg-1.0_2.pkg")
+    assert full["abi"] == "FreeBSD:15:*"
+    assert full["arch"] == "freebsd:15:*"
+
+
+def test_end_to_end_no_arch_port_explicit_arch_override_wins(tmp_path: Path) -> None:
+    """An explicit --arch still wins over the NO_ARCH wildcard default (issue #1806 B1).
+
+    The manifest ABI is ALWAYS wildcarded for a NO_ARCH port (it is a fact about the
+    package, probed live against a real Netgate build) — but --arch's existing
+    override precedence (``args.arch or abi_to_arch(abi)``) is preserved: when the
+    caller passes --arch explicitly, that concrete value is used verbatim, never
+    wildcarded.
+
+    Scenario: NO_ARCH port, explicit --arch override
+      When build-pkg-portable.py runs with --abi FreeBSD:15:amd64 --arch freebsd:99:custom
+      Then the manifest abi is STILL "FreeBSD:15:*" (unconditional NO_ARCH fact)
+       And the manifest arch is the EXPLICIT "freebsd:99:custom" (not wildcarded)
+    """
+    ports, portdir = _make_no_arch_port(tmp_path)
+    out = tmp_path / "out"
+    rc = bpp.main(
+        [
+            "--ports", str(ports),
+            "--port-dir", str(portdir),
+            "--abi", "FreeBSD:15:amd64",
+            "--arch", "freebsd:99:custom",
+            "--py-flavor", "py311",
+            "--compression", "xz",
+            "--freebsd-version", "1500068",
+            "--out", str(out),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    full, _, _ = _read_pkg(out / "testpkg-1.0_2.pkg")
+    assert full["abi"] == "FreeBSD:15:*"
+    assert full["arch"] == "freebsd:99:custom"
+
+
 def test_end_to_end_dynamic_plist_uses_the_staged_payload(tmp_path: Path) -> None:
     ports, portdir = _make_classic_port(tmp_path)
     portdir.joinpath("pkg-plist").unlink()

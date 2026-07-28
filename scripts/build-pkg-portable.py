@@ -1457,6 +1457,21 @@ def run_build(args: argparse.Namespace) -> Build:
     seed = seed_vars(portdir, workdir, py_flavor)
     mk = Makefile(makefile, seed)
 
+    # NO_ARCH (issue #1806): a real Netgate noarch package's manifest stamps a
+    # CPU-wildcarded abi/arch (e.g. "FreeBSD:15:*" / "freebsd:15:*") — probed
+    # live — because the package works on every arch of that FreeBSD major.
+    # `abi`/`arch` above stay CONCRETE (still needed verbatim for
+    # --repo-catalogue's pkg.freebsd.org lookup below); only the MANIFEST
+    # fields are wildcarded here. --arch's existing override precedence is
+    # preserved: an explicit --arch is never wildcarded, only the derived
+    # default is.
+    manifest_abi, manifest_arch = abi, arch
+    if _truthy(mk.get("NO_ARCH")):
+        major = abi.split(":")[1]
+        manifest_abi = f"FreeBSD:{major}:*"
+        if not args.arch:
+            manifest_arch = f"freebsd:{major}:*"
+
     prefix = mk.get("PREFIX")
     portname = mk.get("PORTNAME")
     # The version is computed from the Makefile by default; a nightly build overrides
@@ -1504,8 +1519,8 @@ def run_build(args: argparse.Namespace) -> Build:
         www=www,
         desc=desc,
         prefix=prefix,
-        abi=abi,
-        arch=arch,
+        abi=manifest_abi,
+        arch=manifest_arch,
     )
 
     # --- source + recipe -------------------------------------------------- #
