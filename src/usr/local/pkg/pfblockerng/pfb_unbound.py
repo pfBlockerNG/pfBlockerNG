@@ -333,7 +333,7 @@ def _reload_read_generation(sentinel_path: str) -> int | None:
     try:
         with open(sentinel_path, encoding="utf-8") as fh:
             line = fh.readline().strip()
-    except OSError:
+    except (OSError, ValueError):
         return None
     if not line:
         return None
@@ -502,7 +502,7 @@ def _build_swap_snapshot() -> Snapshot | None:
     if os.path.isfile(pfb["pfb_unbound.ini"]):
         config = ConfigParser()
         try:
-            config.read(pfb["pfb_unbound.ini"])
+            config.read(pfb["pfb_unbound.ini"], encoding="utf-8")
             r_count = 1
             for name, pattern in _load_user_regex_entries(config):
                 if _regex_is_catastrophic_shape(pattern):
@@ -539,7 +539,7 @@ def _build_swap_snapshot() -> Snapshot | None:
     hsts_db: dict[str, Any] = {}
     if pfb["python_hsts"] and os.path.isfile(pfb["pfb_py_hsts"]):
         try:
-            with open(pfb["pfb_py_hsts"]) as hsts:
+            with open(pfb["pfb_py_hsts"], encoding="utf-8", errors="replace") as hsts:
                 for line in hsts:
                     # match _dnsbl_load_tld_wildcard_master(): skip comment/whitespace-only lines; '0' stays a valid key
                     key = line.strip()
@@ -737,7 +737,7 @@ def _control_read_record(path: str) -> dict[str, Any] | None:
     try:
         with open(path, encoding="utf-8") as fh:
             raw = fh.read()
-    except OSError:
+    except (OSError, ValueError):
         return None
     if not raw.strip():
         return None
@@ -1044,7 +1044,7 @@ def _load_hsts_db() -> None:
         pfb_py_status_close("dnsbl", pfb["pfb_py_hsts"], "parse")
         return
     try:
-        with open(pfb["pfb_py_hsts"]) as hsts:
+        with open(pfb["pfb_py_hsts"], encoding="utf-8", errors="replace") as hsts:
             for line in hsts:
                 # match _dnsbl_load_tld_wildcard_master(): skip comment/whitespace-only lines; '0' stays a valid key
                 key = line.strip()
@@ -1102,7 +1102,7 @@ def _load_ini_config() -> ConfigParser | None:
         return None
     config = ConfigParser()
     try:
-        config.read(pfb["pfb_unbound.ini"])
+        config.read(pfb["pfb_unbound.ini"], encoding="utf-8")
         pfb_py_status_close("dnsbl", pfb["pfb_unbound.ini"], "parse")
     except Exception as e:
         sys.stderr.write("[pfBlockerNG]: Failed to load ini configuration: {}".format(e))
@@ -6593,7 +6593,7 @@ def _load_safesearch_db() -> None:
     """
     if os.path.isfile(pfb["pfb_py_ss"]):
         try:
-            with open(pfb["pfb_py_ss"]) as csv_file:
+            with open(pfb["pfb_py_ss"], encoding="utf-8", errors="replace") as csv_file:
                 csv_reader = csv.reader(csv_file, delimiter=",")
                 for row in csv_reader:
                     # 3 cols: domain,A,AAAA (A/AAAA rewrite or nxdomain).
