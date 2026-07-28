@@ -82,6 +82,12 @@ EOF
     The path "${work}/out/release/ce-2.8/packagesite.pkg" should be exist
     The path "${work}/out/release/FreeBSD:15:amd64" should not be exist
     The path "${work}/out/release/ce-2.8/amd64" should not be exist
+    # CR-4 (strengthen): the ABI is never used as a directory name any more
+    # (arch-less catalog) -- assert the ACTUAL wildcard-ABI value the fake
+    # packages carry (FreeBSD:15:*), not just a made-up "amd64" placeholder,
+    # never becomes a path segment either.
+    The path "${work}/out/release/FreeBSD:15:*" should not be exist
+    The path "${work}/out/release/ce-2.8/FreeBSD:15:*" should not be exist
   End
 
   It 'requires --varver in build mode (the key cannot be derived from the package)'
