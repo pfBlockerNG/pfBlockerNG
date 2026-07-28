@@ -28,6 +28,8 @@
 #   PFB_BOOT_VM        boot helper (default tests/smoke/boot_vm.sh) — spec override
 #   PFB_POLL_INTERVAL  SSH poll interval seconds (default 5; floored to 1) — spec override
 #   PFB_SHUTDOWN_WAIT  max seconds to wait for a clean poweroff (default 60)
+#   PFB_LOCK_RETRIES   upgrade-check attempts while pfSense holds the upgrade
+#                      lock (default 8; issue #1844)
 #
 # status file: "ok" = all three facts gathered; "unavailable" = any
 # infrastructure failure (pull, boot, ssh, Plus identity) — partial fact files
