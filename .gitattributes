@@ -1,8 +1,7 @@
-# Vendored third-party plugin trees (byte-identical upstream copies; see each
-# dir's UPSTREAM provenance file). linguist-vendored keeps them out of language
-# stats and collapses their diffs in GitHub review views.
-.claude/skills/ponytail/** linguist-vendored
-.claude/skills/caveman/** linguist-vendored
+# Vendored third-party skills and plugin trees. linguist-vendored keeps them
+# out of language stats and collapses their diffs in GitHub review views.
+.agents/skills/cave*/** linguist-vendored
+plugins/** linguist-vendored
 
 # ADR text and dev-only docs dominate many commits (95%+ of the changed
 # lines). linguist-documentation keeps them out of the language stats while
