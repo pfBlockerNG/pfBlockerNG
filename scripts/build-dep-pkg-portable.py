@@ -236,10 +236,33 @@ def fetch_verified_sdist(port: PortFacts, dest_dir: Path, *, sha256: str, size: 
 # --------------------------------------------------------------------------- #
 
 
+def _pip_python(work_dir: Path) -> str:
+    """A python executable with a working ``pip`` module.
+
+    ``sys.executable`` (the fast path — true on every CI runner) when it
+    already has one. Some build hosts (the PFB_BOXES minimal Debian pool) ship
+    ``python3-venv`` but not ``pip`` on the system interpreter; there, bootstrap
+    a throwaway venv under ``work_dir`` (a venv's own pip is always present)
+    and return ITS python instead. A venv-creation failure too is a loud
+    refusal, never a silent fall-through.
+    """
+    probe = subprocess.run([sys.executable, "-m", "pip", "--version"], capture_output=True)
+    if probe.returncode == 0:
+        return sys.executable
+    venv_dir = work_dir / "pip-venv"
+    sys.stderr.write(f"==> {sys.executable} has no pip module; bootstrapping a venv at {venv_dir}\n")
+    try:
+        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+    except subprocess.CalledProcessError as e:
+        raise DepPkgError(f"{sys.executable} has no pip and venv creation failed: {e}") from e
+    return str(venv_dir / "bin" / "python")
+
+
 def build_wheel(sdist: Path, work_dir: Path) -> Path:
     wheel_dir = work_dir / "wheel"
     wheel_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, "-m", "pip", "wheel", "--no-deps", str(sdist), "-w", str(wheel_dir)]
+    python = _pip_python(work_dir)
+    cmd = [python, "-m", "pip", "wheel", "--no-deps", str(sdist), "-w", str(wheel_dir)]
     sys.stderr.write(f"==> building wheel: {' '.join(cmd)}\n")
     subprocess.run(cmd, check=True)
     wheels = sorted(wheel_dir.glob("*.whl"))
