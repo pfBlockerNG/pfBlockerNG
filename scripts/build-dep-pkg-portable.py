@@ -236,6 +236,27 @@ def fetch_verified_sdist(port: PortFacts, dest_dir: Path, *, sha256: str, size: 
 # --------------------------------------------------------------------------- #
 
 
+def _run_relayed(cmd: list[str]) -> None:
+    """Run ``cmd`` with its stdout+stderr CAPTURED (never inherited) and relayed
+    to OUR stderr, then raise ``CalledProcessError`` on a nonzero exit — same
+    contract as ``subprocess.run(cmd, check=True)`` for the caller.
+
+    A tool this script shells out to (pip, venv) is chatty on stdout
+    ("Processing ...", "Created wheel ..."). ``main()``'s stdout contract is
+    exactly one line — the emitted .pkg path — because an on-box caller
+    captures this whole process's stdout as that path (``PKG="$(python3
+    build-dep-pkg-portable.py ...)"``); an inherited child stdout leaks that
+    chatter into the captured value and word-splits it into garbage.
+    """
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.stdout:
+        sys.stderr.write(result.stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=result.stderr)
+
+
 def _pip_python(work_dir: Path) -> str:
     """A python executable with a working ``pip`` module.
 
@@ -252,7 +273,7 @@ def _pip_python(work_dir: Path) -> str:
     venv_dir = work_dir / "pip-venv"
     sys.stderr.write(f"==> {sys.executable} has no pip module; bootstrapping a venv at {venv_dir}\n")
     try:
-        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+        _run_relayed([sys.executable, "-m", "venv", str(venv_dir)])
     except subprocess.CalledProcessError as e:
         raise DepPkgError(f"{sys.executable} has no pip and venv creation failed: {e}") from e
     return str(venv_dir / "bin" / "python")
@@ -264,7 +285,7 @@ def build_wheel(sdist: Path, work_dir: Path) -> Path:
     python = _pip_python(work_dir)
     cmd = [python, "-m", "pip", "wheel", "--no-deps", str(sdist), "-w", str(wheel_dir)]
     sys.stderr.write(f"==> building wheel: {' '.join(cmd)}\n")
-    subprocess.run(cmd, check=True)
+    _run_relayed(cmd)
     wheels = sorted(wheel_dir.glob("*.whl"))
     if len(wheels) != 1:
         raise DepPkgError(f"expected exactly one wheel from `pip wheel`, got {[w.name for w in wheels]}")

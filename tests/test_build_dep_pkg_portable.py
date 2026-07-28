@@ -614,6 +614,80 @@ def test_main_prints_out_path_as_last_stdout_line(
     assert last_line == str(out_dir / "py311-charset-normalizer-3.4.4.pkg")
 
 
+def test_main_stdout_is_only_the_pkg_path_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """main()'s ENTIRE stdout is the emitted .pkg path + newline -- NOTHING else,
+    even when a shelled-out tool (pip) is chatty on ITS OWN stdout. An on-box
+    caller captures this whole process's stdout as the path (``PKG="$(python3
+    build-dep-pkg-portable.py ...)"``); pip's "Processing ...", "Created wheel
+    ..." lines leaking onto an inherited stdout got word-split into that
+    captured value as garbage (issue #1806 live-leg RED #4). The real
+    build_wheel()/_pip_python() run here (not mocked out) so the actual
+    subprocess-output-relay path is exercised; ``--compression xz`` sidesteps
+    the ALSO-real zstd_compress() subprocess call (stdlib lzma, no subprocess)
+    so only the two calls under test need a fake.
+    """
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+
+    def fake_fetch(port: Any, dest_dir: Path, *, sha256: str, size: int) -> Path:
+        dest = dest_dir / f"{port.distname}.tar.gz"
+        dest.write_bytes(b"mocked sdist bytes")
+        return dest
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Simulates a REAL child's fd-inheritance semantics (not just a canned
+        return value): with ``capture_output=True`` its chatter comes back on
+        ``.stdout``/``.stderr`` (what a fixed caller relays itself); WITHOUT it,
+        a real child would write straight through the inherited fd -- so this
+        writes directly to ``sys.stdout``, reproducing the pre-fix leak if the
+        caller ever regresses to an uncaptured ``subprocess.run(cmd, check=True)``.
+        """
+        if cmd[1:3] == ["-m", "pip"] and cmd[3:] == ["--version"]:
+            chatter = "pip 24.0\n"
+        elif cmd[1:3] == ["-m", "pip"] and "wheel" in cmd:
+            wheel_dir = Path(cmd[cmd.index("-w") + 1])
+            wheel_dir.mkdir(parents=True, exist_ok=True)
+            _write_wheel(
+                wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl",
+                files={"charset_normalizer/__init__.py": b"__version__ = '3.4.4'\n"},
+                entry_points=None,
+            )
+            chatter = "Processing /tmp/x.tar.gz\nCreated wheel for charset-normalizer\n"
+        else:
+            raise AssertionError(f"unexpected subprocess.run call: {cmd}")
+
+        if kwargs.get("capture_output"):
+            return subprocess.CompletedProcess(cmd, 0, stdout=chatter, stderr="")
+        sys.stdout.write(chatter)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(bdp, "fetch_verified_sdist", fake_fetch)
+    monkeypatch.setattr(bdp.subprocess, "run", fake_run)
+
+    out_dir = tmp_path / "out"
+    rc = bdp.main(
+        [
+            "--ports", str(ports_root),
+            "--port", "textproc/py-charset-normalizer",
+            "--py-flavor", "py311",
+            "--freebsd-major", "15",
+            "--compression", "xz",
+            "--out-dir", str(out_dir),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == f"{out_dir / 'py311-charset-normalizer-3.4.4.pkg'}\n", (
+        f"stdout must be ONLY the .pkg path line; got {captured.out!r}"
+    )
+    # The pip chatter must still be VISIBLE -- relayed to stderr, never dropped.
+    assert "Processing /tmp/x.tar.gz" in captured.err
+    assert "Created wheel for charset-normalizer" in captured.err
+
+
 def test_main_defaults_python_dep_version_to_0_when_omitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--python-dep-version is optional (issue #1806 D-fix): pkg(8) resolves a
     dependency by NAME, never by the version recorded in another package's
