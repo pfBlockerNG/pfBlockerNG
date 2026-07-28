@@ -193,6 +193,39 @@ def _ensure_egress_open() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# issue #1806 D3 — SMOKE_DEP_PKGS (extra dep .pkgs shipped alongside the branch
+# build; folded into the catalog(s) below so `pkg install` resolves RUN_DEPENDS
+# pfSense's own repo doesn't carry, e.g. textproc/py-charset-normalizer for CE)
+# --------------------------------------------------------------------------- #
+
+
+def _smoke_dep_pkg_paths() -> list[Path]:
+    """Extra dep ``.pkg`` paths for THIS leg (``SMOKE_DEP_PKGS`` — space-separated
+    absolute paths, set by smoke-single.yml/smoke-on-box.sh when the leg's
+    ``extra_pkgs`` is non-empty). Folded into the catalog(s) built from the REAL
+    branch ``.pkg`` so `pkg install` resolves RUN_DEPENDS pfSense's own repo
+    doesn't carry FROM OUR CATALOG — the true user-facing install path. Unset or
+    empty -> ``[]`` (deps assumed baked into the image, or this leg carries none;
+    never a hard requirement)."""
+    return [Path(p) for p in os.environ.get("SMOKE_DEP_PKGS", "").split() if p]
+
+
+def test_smoke_dep_pkg_paths_parses_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hermetic (no VM): ``_smoke_dep_pkg_paths()`` parses ``SMOKE_DEP_PKGS``.
+
+    Unset/empty -> []. A space-separated list -> one ``Path`` per entry, in order.
+    """
+    monkeypatch.delenv("SMOKE_DEP_PKGS", raising=False)
+    assert _smoke_dep_pkg_paths() == []
+
+    monkeypatch.setenv("SMOKE_DEP_PKGS", "")
+    assert _smoke_dep_pkg_paths() == []
+
+    monkeypatch.setenv("SMOKE_DEP_PKGS", "/tmp/a.pkg /tmp/b.pkg")
+    assert _smoke_dep_pkg_paths() == [Path("/tmp/a.pkg"), Path("/tmp/b.pkg")]
+
+
+# --------------------------------------------------------------------------- #
 # On-guest catalog build + repo conf + pkg ops (over SSH)
 # --------------------------------------------------------------------------- #
 
@@ -738,8 +771,9 @@ def repo_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     # Build BOTH catalogs from the same branch .pkg: ours and a controlled decoy that
     # serves the identical package, so the precedence cases compare two genuine
     # providers and the winner is decided purely by `priority:`.
-    build_guest_repo(smoke_vm, OURS_REPO_DIR, [src])
-    build_guest_repo(smoke_vm, DECOY_REPO_DIR, [src])
+    dep_pkgs = _smoke_dep_pkg_paths()
+    build_guest_repo(smoke_vm, OURS_REPO_DIR, [src, *dep_pkgs])
+    build_guest_repo(smoke_vm, DECOY_REPO_DIR, [src, *dep_pkgs])
     try:
         yield smoke_vm
     finally:
@@ -831,8 +865,9 @@ def test_pkg_upgrade_moves_to_our_newer_build(repo_vm: SmokeVM, tmp_path: Path) 
     try:
         # GIVEN: a clean before-state — package absent; our repo carries ONLY the
         # LOWER build, enabled ABOVE the Netgate `pfSense` repo.
+        dep_pkgs = _smoke_dep_pkg_paths()
         pkg_delete(repo_vm)
-        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [low_pkg])
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [low_pkg, *dep_pkgs])
         write_repo_conf(repo_vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
         pkg_update(repo_vm)
         assert pkg_installed_version(repo_vm) is None, f"{PKG_NAME} unexpectedly present before the upgrade test"
@@ -849,7 +884,7 @@ def test_pkg_upgrade_moves_to_our_newer_build(repo_vm: SmokeVM, tmp_path: Path) 
         )
 
         # WHEN (2): publish the HIGHER build into the SAME repo dir, re-read it, upgrade.
-        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [high_pkg])
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [high_pkg, *dep_pkgs])
         pkg_update(repo_vm)
         proc = pkg_upgrade(repo_vm)
 
@@ -968,7 +1003,7 @@ def test_build_repo_script_catalog_is_accepted(repo_vm: SmokeVM) -> None:
 
     # GIVEN: build the catalog with the Phase-2 SCRIPT (not the inline pkg repo), then
     # point a NONE-signed file:// repo at the produced <ABI>/ dir, above pfSense.
-    abi_dir = build_repo_via_script(repo_vm, [Path(pkg)])
+    abi_dir = build_repo_via_script(repo_vm, [Path(pkg), *_smoke_dep_pkg_paths()])
     pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
     pkg_delete(repo_vm)
     write_repo_conf(repo_vm, abi_dir, ours_priority=pfsense_prio + 100)
@@ -1018,7 +1053,7 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM, tmp_path: Path
     real_varver, real_arch = _box_real_catalog(repo_vm).rsplit("/", 1)
     abi_dir = build_repo_via_portable_named(
         repo_vm,
-        [Path(pkg)],
+        [Path(pkg), *_smoke_dep_pkg_paths()],
         tmp_path,
         catalog_name=f"release/{real_varver}",
         guest_root=SCRIPT_REPO_ROOT,
@@ -1074,7 +1109,7 @@ def test_portable_catalog_is_accepted(repo_vm: SmokeVM, tmp_path: Path) -> None:
 
     # GIVEN: build the catalog with the PURE-PYTHON generator on the runner (no libpkg),
     # ship its <ABI>/ tree to the guest, point a NONE-signed file:// repo above pfSense.
-    abi_dir = build_repo_via_portable(repo_vm, [Path(pkg)], tmp_path)
+    abi_dir = build_repo_via_portable(repo_vm, [Path(pkg), *_smoke_dep_pkg_paths()], tmp_path)
     pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
     pkg_delete(repo_vm)
     write_repo_conf(repo_vm, abi_dir, ours_priority=pfsense_prio + 100)
@@ -1123,6 +1158,10 @@ def test_portable_catalog_dedups_duplicate_sources(repo_vm: SmokeVM, tmp_path: P
     b = tmp_path / "built-incoming_release-freebsd-pfb.pkg"
     a.write_bytes(src.read_bytes())
     b.write_bytes(src.read_bytes())
+    # NOTE: deliberately NOT folding _smoke_dep_pkg_paths() here — this test's own
+    # assertion below counts EXACTLY one package .pkg in the bucket (the dedup
+    # proof); a dep .pkg would be a second, distinct-named entry and break that
+    # count. It has no "Missing dependency" assertion (not this test's concern).
     abi_dir = build_repo_via_portable(repo_vm, [a, b], tmp_path)
 
     # THEN (catalog shape): exactly ONE package .pkg, canonically named (no prefix) — the
@@ -1534,7 +1573,7 @@ def test_install_from_variant_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
     # ship to guest, write a NONE-signed file:// repo conf above pfSense.
     abi_dir = build_repo_via_portable_named(
         repo_vm,
-        [Path(pkg)],
+        [Path(pkg), *_smoke_dep_pkg_paths()],
         tmp_path,
         catalog_name=own.catalog,
         guest_root=VARIANT_REPO_ROOT,
@@ -1615,7 +1654,7 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
     # ---- Before-state: prove the box's OWN path works (the guard control) ----
     own_abi_dir = build_repo_via_portable_named(
         repo_vm,
-        [src],
+        [src, *_smoke_dep_pkg_paths()],
         tmp_path,
         catalog_name=own.catalog,
         guest_root=VARIANT_REPO_ROOT,
@@ -1641,6 +1680,11 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
     opp_pkg = forge_variant_pkg(src, tmp_path / "opp_forge", target_php=opp.php, target_abi=opp.abi)
 
     # ---- Build the opposite-variant catalog in <opp.catalog>/<opp.abi>/ ----
+    # Deliberately NOT folding _smoke_dep_pkg_paths() here: this leg's dep .pkgs
+    # are built for the box's OWN freebsd_major, which by definition mismatches
+    # opp.abi — adding them would open a SECOND ABI bucket and break the
+    # generator's own `len(abi_buckets) == 1` invariant. This catalog exists to
+    # be REJECTED (wrong variant), not to prove dep resolution.
     opp_abi_dir = build_repo_via_portable_named(
         repo_vm,
         [opp_pkg],
@@ -1727,7 +1771,8 @@ def test_legacy_abi_path_still_upgrades(repo_vm: SmokeVM, tmp_path: Path) -> Non
     try:
         # ---- GIVEN: legacy catalog (no variant prefix) with the LOWER build ----
         # build_repo_via_portable produces <out>/<ABI>/ (no catalog-name prefix).
-        legacy_abi_dir = build_repo_via_portable(repo_vm, [low_pkg], tmp_path)
+        dep_pkgs = _smoke_dep_pkg_paths()
+        legacy_abi_dir = build_repo_via_portable(repo_vm, [low_pkg, *dep_pkgs], tmp_path)
         pkg_delete(repo_vm)
         write_repo_conf(repo_vm, legacy_abi_dir, ours_priority=pfsense_prio + 100)
         pkg_update(repo_vm)
@@ -1752,6 +1797,8 @@ def test_legacy_abi_path_still_upgrades(repo_vm: SmokeVM, tmp_path: Path) -> Non
         out_high = tmp_path / "legacy_high_out"
         in_high.mkdir(parents=True, exist_ok=True)
         (in_high / high_pkg.name).write_bytes(high_pkg.read_bytes())
+        for _dep in dep_pkgs:
+            (in_high / _dep.name).write_bytes(_dep.read_bytes())
         proc_high = subprocess.run(
             [sys.executable, str(BUILD_REPO_PORTABLE), "--in", str(in_high), "--out", str(out_high)],
             capture_output=True,
@@ -1930,6 +1977,13 @@ def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: 
 
     # ---- Build the route-only (EOL) catalog ON THE RUNNER (no guest involved). ----
     # Uses --build-matrix + --route-only-pkgs — the exact CLI shape publish.yml will use.
+    # issue #1806 D3 KNOWN GAP (deliberately not addressed here): --dep-pkgs never
+    # folds into a route-only entry (test_dep_pkgs_route_only_entry_never_folds_
+    # dep_shared_major_build_entry_does pins that exclusion), so this frozen
+    # catalog cannot carry SMOKE_DEP_PKGS even though the frozen .pkg's payload
+    # (a reversion_pkg of the branch build) declares the SAME RUN_DEPENDS. If the
+    # branch's RUN_DEPENDS set ever needs a repo-supplied dep, an EOL/route-only
+    # install of it stays unresolved by design — a product question beyond D3.
     eol_out_dir = tmp_path / "eol_catalog_out"
     local_release_dir = _build_eol_catalog_on_runner(
         frozen_pkg,
@@ -2189,7 +2243,7 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
         #    dir so the file:// URL the hook writes actually finds the catalog.
         shipped_dir = build_repo_via_portable_named(
             repo_vm,
-            [Path(pkg)],
+            [Path(pkg), *_smoke_dep_pkg_paths()],
             tmp_path,
             catalog_name=f"release/{real_varver}",
             guest_root=catalog_base,
