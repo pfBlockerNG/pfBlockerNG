@@ -115,6 +115,10 @@ if [ -z "${RUN_ID:-}" ]; then
     if [ -n "${GITHUB_RUN_ID:-}" ]; then
         # CI: slug the ABI into a path-safe LEG token if not externally set.
         # FreeBSD:15:amd64 → freebsd-15-amd64 (colons → dashes; no path separators).
+        # issue #1806: --abi stays a CONCRETE guest/builder ABI here regardless of
+        # the arch-less matrix -- this fallback slug is unaffected by the
+        # major-collapse (callers that want the fbsd<major>-only naming set LEG
+        # explicitly before calling, e.g. release.yml/smoke.yml).
         if [ -z "${LEG:-}" ]; then
             LEG="$(printf '%s' "$ABI" | tr '[:upper:]' '[:lower:]' | tr ':' '-')"
             export LEG

@@ -219,6 +219,11 @@ jobs:
       # The `-s<shard>` suffix (issue #797) keys it further: two shards of the SAME
       # leg each build their own .pkg on THIS path — only reached when pkg_artifact
       # is blank, so it never collides with the shared per-leg artifact smoke.yml builds.
+      # issue #1806: deliberately NOT the fbsd<major> convention — this artifact is
+      # produced and consumed entirely within THIS run (via build-pkg.outputs.artifact,
+      # the dynamic name GH assigned, never matched by this literal elsewhere), so the
+      # major-collapse naming that matters for cross-workflow/cross-run consumers
+      # (release.yml/smoke.yml) buys nothing here.
       artifact_name: pfBlockerNG-pkg-${{ inputs.image_name }}-s${{ inputs.shard }}
       # Optional Option-A validation: point the .pkg build at a FreeBSD-ports branch
       # carrying a new plist entry. Blank -> build-pkg-linux's own defaults
