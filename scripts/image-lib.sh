@@ -109,12 +109,16 @@ image_version_tag() {
     esac
 }
 
-# image_oci_push FILE IMAGE TAG ATYPE DESCRIPTION TITLE — push the local qcow2
-# FILE to IMAGE:TAG as a qcow2 OCI artifact with the standard annotations, stored
-# under the layer title TITLE so a pull always sees a predictable *.qcow2 name.
+# image_oci_push FILE IMAGE TAG ATYPE DESCRIPTION TITLE [FULL_VERSION] — push the
+# local qcow2 FILE to IMAGE:TAG as a qcow2 OCI artifact with the standard
+# annotations, stored under the layer title TITLE so a pull always sees a
+# predictable *.qcow2 name. A non-empty FULL_VERSION (the image's full pfSense
+# /etc/version, e.g. 2.8.1-RELEASE, vs the floating major.minor TAG) is stamped
+# as io.github.pfblockerng.pfsense-version — the version-tracker's patch/GA
+# detection reads it via `oras manifest fetch` (issue #1820).
 # Identical call shape in both scripts => identical artifacts. `oras` runs locally.
 image_oci_push() {
-    _f=$1; _image=$2; _tag=$3; _atype=$4; _desc=$5; _title=$6
+    _f=$1; _image=$2; _tag=$3; _atype=$4; _desc=$5; _title=$6; _full=${7:-}
     _dir=$(dirname "$_f")
     _pushname=$_title
     # Ensure an on-disk file whose basename equals TITLE (the stored layer title
@@ -124,11 +128,15 @@ image_oci_push() {
     fi
     (
         cd "$_dir" || exit 1
-        oras push \
+        set -- \
             --artifact-type "$_atype" \
             --annotation "org.opencontainers.image.title=$_pushname" \
             --annotation "org.opencontainers.image.version=$_tag" \
-            --annotation "org.opencontainers.image.description=$_desc" \
+            --annotation "org.opencontainers.image.description=$_desc"
+        if [ -n "$_full" ]; then
+            set -- "$@" --annotation "io.github.pfblockerng.pfsense-version=$_full"
+        fi
+        oras push "$@" \
             "${_image}:${_tag}" \
             "${_pushname}:application/vnd.qemu.qcow2"
     )
