@@ -25,7 +25,8 @@
 #   --print-all          Print both BUILD and CI matrices to stdout (labelled).
 #   --print-route        Print ROUTE matrix JSON to stdout — every entry with a live
 #                        catalog: role=build (or absent) UNION role=route-only. This
-#                        is the set whose release/<varver>/<arch>/ catalog is served.
+#                        is the set whose release/<varver>/ catalog is served (one row
+#                        per pfSense version — never deduped, unlike --print-build).
 #                        Excludes truly-dropped entries (those are simply absent from
 #                        supported-versions.json).
 #   --variant CE|Plus    Filter both matrices to entries whose `variant` field
@@ -35,29 +36,42 @@
 #                        this flag all entries are returned (backward-compatible).
 #
 # Outputs:
-#   BUILD matrix     — role=build entries (absent role treated as build; back-compat).
-#     Each entry carries: pfsense_version, channel, freebsd_version, freebsd_major,
-#     php_version, py_flavor, variant, status, ci, arch. `arch` is resolved
-#     (default "amd64"), so the build fans out version × arch — an entry that
-#     omits arch (every entry today) stays amd64, while an aarch64 entry
-#     (Plus-only, Netgate ARM appliances) builds a FreeBSD:N:aarch64 .pkg
-#     (issue #199). role=route-only entries are EXCLUDED: they are served from a
-#     frozen .pkg but never built or smoked.
-#   CI matrix        — the ci:true entries (ANY channel), subset of BUILD matrix.
-#     Inherits the resolved `arch` from the BUILD matrix, and additionally carries
-#     a resolved image_name (default "pfsense-ce") and mac (default the CE pin
-#     "BC:24:11:37:9C:AC"), so an entry that omits them — every CE entry today —
-#     keeps the CE image + MAC, while a ci:true Plus entry can carry its own
-#     image_name/mac (ADR-24). role=route-only entries are EXCLUDED (same as BUILD).
-#   ROUTE matrix     — BUILD matrix UNION role=route-only entries. Every entry whose
-#     release/<varver>/<arch>/ catalog is actively served. The generator uses this
-#     to determine which varver paths to build (route-only from frozen .pkg, build
-#     entries from the fresh build). Absent role == build (fully back-compat).
-#   python_versions  — DISTINCT python versions derived from each BUILD-matrix
+#   BUILD matrix     — role=build entries (absent role treated as build; back-compat),
+#     DEDUPED to one row per distinct freebsd_major (issue #1806): every
+#     pfSense-pkg-pfBlockerNG port is NO_ARCH, so one wildcard-ABI .pkg build
+#     serves every arch AND every edition/version sharing a FreeBSD major — the
+#     BUILD matrix is the CI fan-out that actually BUILDS a .pkg, so it collapses
+#     to that one-build-per-major granularity. Each row carries: freebsd_major,
+#     php_version, py_flavor, extra_pkgs (deduped union across merged rows;
+#     default [] when every merged row omits it), plus pfsense_version/channel/
+#     freebsd_version/variant/status/ci/image_name/mac/... inherited from
+#     whichever merged row is LAST in matrix order (fine for a build TARGET; a
+#     consumer needing every distinct version sharing a major reads --print-ci
+#     or --print-route instead, both one row per version, never deduped).
+#     php_version/py_flavor drive the real build and MUST agree across every row
+#     sharing a major — disagreement is a hard error (an unresolvable ambiguity,
+#     never silently picking one side). There is no `arch` field anywhere: the
+#     catalog is arch-less (a stray `arch` key on an input row is tolerated and
+#     ignored, never resurrected as a default). role=route-only entries are
+#     EXCLUDED: they are served from a frozen .pkg but never built or smoked.
+#   CI matrix        — the ci:true entries (ANY channel), ONE ROW PER VERSION
+#     (never deduped by freebsd_major — a smoke/UI leg boots one VM per pfSense
+#     version, so it needs every version's own identity). Carries extra_pkgs
+#     (default [] when absent) and a resolved image_name (default "pfsense-ce")
+#     + mac (default the CE pin "BC:24:11:37:9C:AC"), so an entry that omits them
+#     — every CE entry today — keeps the CE image + MAC, while a ci:true Plus
+#     entry can carry its own image_name/mac (ADR-24). role=route-only entries
+#     are EXCLUDED (same as BUILD).
+#   ROUTE matrix     — BUILD-role-eligible entries (one row per version, never
+#     deduped) UNION role=route-only entries. Every entry whose release/<varver>/
+#     catalog is actively served. The generator uses this to determine which
+#     varver paths to build (route-only from frozen .pkg, build entries from the
+#     fresh build). Absent role == build (fully back-compat).
+#   python_versions  — DISTINCT python versions derived from every build-role
 #     entry's py_flavor (`pyN` + `MM` => `N.MM`, e.g. py311 => 3.11; py39 => 3.9),
 #     sorted + deduped. test.yml's pytest matrix (supported-only — only the
 #     pythons the matrix actually ships). Excludes route-only (no build, no test leg).
-#   php_versions     — DISTINCT php_version across the BUILD-matrix entries,
+#   php_versions     — DISTINCT php_version across every build-role entry,
 #     sorted + deduped. test.yml's PHP-jobs matrix (supported-only).
 #     Excludes route-only (no build, no test leg).
 #
@@ -137,6 +151,9 @@ fi
 # ── Route matrix: ALL entries with a live catalog (build ∪ route-only) ───────
 # role absent/build/route-only all have a served catalog. A truly dropped version
 # is simply absent from the JSON. Absent role defaults to "build" (back-compat).
+# issue #1806: no `arch` normalization here (or anywhere in this script) — the
+# catalog is arch-less. A stray `arch` key on an input row rides through
+# untouched (tolerated, never inspected); this script never adds one.
 if [ -n "$VARIANT_FILTER" ]; then
   # Case-insensitive match: compare lowercase of both sides.
   _VF_LOWER="$(printf '%s' "$VARIANT_FILTER" | tr '[:upper:]' '[:lower:]')"
@@ -147,10 +164,6 @@ else
   ROUTE_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c '.versions')"
 fi
 
-# Normalise arch in the ROUTE matrix (same rule as BUILD: absent/empty => amd64).
-ROUTE_MATRIX="$(printf '%s' "$ROUTE_MATRIX" | jq -c '
-  [ .[] | . + { arch: (if ((.arch // "") == "") then "amd64" else .arch end) } ]')"
-
 # Fail closed on an unknown role (allowed: absent, "build", "route-only") so a typo
 # like "route_only" cannot silently re-enable build/CI/smoke for an EOL version.
 if [ "$(printf '%s' "$ROUTE_MATRIX" | jq '[.[] | select(has("role") and (.role != "build" and .role != "route-only"))] | length')" -gt 0 ]; then
@@ -158,27 +171,78 @@ if [ "$(printf '%s' "$ROUTE_MATRIX" | jq '[.[] | select(has("role") and (.role !
   exit 1
 fi
 
-# ── Build matrix: role=build entries only (excludes role=route-only) ──────────
-# An absent role is treated as "build" ((.role // "build") == "build") so with
-# today's matrices — no route-only entries — the BUILD matrix is byte-identical to
-# the old full .versions[] output (fully back-compat).
-BUILD_MATRIX="$(printf '%s' "$ROUTE_MATRIX" | jq -c \
+# ── Build-role entries: role=build (or absent), ONE ROW PER VERSION ──────────
+# An absent role is treated as "build" ((.role // "build") == "build"). This is
+# the per-version pool the CI matrix (below) and VARIANT_ARRAY read — never
+# deduped, so every distinct version/variant stays visible.
+_BUILD_ROLE_ENTRIES="$(printf '%s' "$ROUTE_MATRIX" | jq -c \
   '[.[] | select((.role // "build") != "route-only")]')"
 
-# BUILD_MATRIX inherits already-normalised arch from ROUTE_MATRIX (absent/empty =>
-# amd64, done above). The CI matrix inherits this resolved arch verbatim.
+# ── Build matrix: _BUILD_ROLE_ENTRIES DEDUPED to one row per freebsd_major ────
+# issue #1806: every pfSense-pkg-pfBlockerNG port is NO_ARCH, so one wildcard-ABI
+# .pkg build serves every arch AND every edition/version sharing a FreeBSD
+# major — the BUILD matrix (what actually drives a .pkg build) collapses to
+# that granularity. php_version/py_flavor drive the real build and MUST agree
+# across every row sharing a major; a disagreement is a hard error (never
+# silently picking one side) rather than a silently wrong dep set. Grouping
+# key is `.freebsd_major // ""` but the EMPTY-major group is deliberately never
+# merged/asserted (`.[0].freebsd_major // "" == ""` guards both jq calls below):
+# every REAL matrix entry always carries freebsd_major, so an empty-major row
+# only ever shows up in a synthetic fixture exercising unrelated derivations
+# (e.g. python_versions/php_versions) that never intended those rows to
+# represent the same build target.
+_BUILD_MAJOR_MISMATCH="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
+  group_by(.freebsd_major // "")
+  | map(select(
+      (.[0].freebsd_major // "") != ""
+      and ((map(.php_version) | unique | length) > 1 or (map(.py_flavor) | unique | length) > 1)
+    ))
+  | map({freebsd_major: .[0].freebsd_major,
+         php_version: (map(.php_version) | unique),
+         py_flavor: (map(.py_flavor) | unique)})')"
+if [ "$(printf '%s' "$_BUILD_MAJOR_MISMATCH" | jq 'length')" -gt 0 ]; then
+  printf '::error::BUILD matrix: freebsd_major with disagreeing php_version/py_flavor across merged rows in %s: %s\n' \
+    "$MATRIX_FILE" "$(printf '%s' "$_BUILD_MAJOR_MISMATCH" | jq -c '.')" >&2
+  exit 1
+fi
 
-# ── CI matrix: the ci:true entries (ANY channel) within the variant-filtered set ──
-# The channel no longer filters (ADR-24): a ci:true Plus entry is a first-class CI
-# leg. Each entry gains a resolved image_name (default "pfsense-ce") and mac (default
-# the CE pin) — an entry that omits them keeps the CE image + MAC, while a Plus entry
-# carries its own. The MAC is load-bearing for a Plus image (license/NDI keyed to it).
-CI_MATRIX="$(printf '%s' "$BUILD_MATRIX" | jq -c '
+# Merge each REAL freebsd_major group into ONE row: identity fields
+# (pfsense_version, channel, variant, status, image_name, mac, ci, ...) come
+# from whichever row is LAST in matrix order (jq's `+` — later keys win) —
+# fine for a build TARGET; a consumer needing every distinct version reads
+# --print-ci/--print-route instead. extra_pkgs unions + dedupes + sorts across
+# every merged row (default [] when every one omits it), so e.g. CE's
+# textproc/py-charset-normalizer survives the merge even if a same-major
+# sibling entry carries none. An empty-major row (see above) passes through
+# UNMERGED, one row per input entry — never grouped with its empty-major peers.
+BUILD_MATRIX="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
+  group_by(.freebsd_major // "")
+  | map(
+      if (.[0].freebsd_major // "") == "" then
+        .[]
+      else
+        (reduce .[] as $row ({}; . + $row)) as $merged
+        | $merged + {extra_pkgs: ([.[] | (.extra_pkgs // [])] | add | unique | sort)}
+      end
+    )
+  | sort_by(.freebsd_major // "")')"
+
+# ── CI matrix: the ci:true entries (ANY channel), ONE ROW PER VERSION ─────────
+# Derived from _BUILD_ROLE_ENTRIES (never the deduped BUILD_MATRIX): a smoke/UI
+# leg boots one VM per pfSense version, so it needs every version's own
+# identity, never collapsed by freebsd_major. The channel no longer filters
+# (ADR-24): a ci:true Plus entry is a first-class CI leg. Each entry gains a
+# resolved image_name (default "pfsense-ce"), mac (default the CE pin), and
+# extra_pkgs (default []) — an entry that omits them keeps the CE image + MAC
+# and an empty dep list, while a Plus entry can carry its own. The MAC is
+# load-bearing for a Plus image (license/NDI keyed to it).
+CI_MATRIX="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
   [ .[]
     | select(.ci == true)
     | . + {
         image_name: (if ((.image_name // "") == "") then "pfsense-ce" else .image_name end),
-        mac: (if ((.mac // "") == "") then "BC:24:11:37:9C:AC" else .mac end)
+        mac: (if ((.mac // "") == "") then "BC:24:11:37:9C:AC" else .mac end),
+        extra_pkgs: (.extra_pkgs // [])
       }
   ]')"
 
@@ -194,34 +258,38 @@ if [ "${_VF_LOWER:-}" != "plus" ]; then
 fi
 
 # ── Emit ──────────────────────────────────────────────────────────────────────
-# Variant JSON array: distinct variant values present in the BUILD matrix.
-VARIANT_ARRAY="$(printf '%s' "$BUILD_MATRIX" | jq -c '[.[].variant // empty] | unique')"
+# Variant JSON array: distinct variant values present among build-role entries
+# (_BUILD_ROLE_ENTRIES, never the deduped BUILD_MATRIX — a variant sharing a
+# freebsd_major with another must still be visible here).
+VARIANT_ARRAY="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '[.[].variant // empty] | unique')"
 
 # ── Derived test matrices (test.yml — supported-only) ─────────────────────────
 # python_versions: map each entry's py_flavor ("pyN" + "MM") to "N.MM"
 #   (py311 => 3.11, py39 => 3.9), then dedup + sort. The regex captures the
 #   single major digit and the remaining minor digits, joined with a dot.
 # php_versions: distinct php_version values, deduped + sorted.
-# Both feed test.yml's strategy.matrix unfiltered (CE + Plus) so the pytest /
-# PHP gates only ever run a version the matrix actually ships.
-PYTHON_VERSIONS="$(printf '%s' "$BUILD_MATRIX" | jq -c '
+# Both derive from _BUILD_ROLE_ENTRIES (equivalent distinct-value set to the
+# deduped BUILD_MATRIX, computed pre-dedup for directness) and feed test.yml's
+# strategy.matrix unfiltered (CE + Plus) so the pytest / PHP gates only ever
+# run a version the matrix actually ships.
+PYTHON_VERSIONS="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
   [ .[].py_flavor
     | capture("^py(?<maj>[0-9])(?<min>[0-9]+)$")
     | "\(.maj).\(.min)"
   ] | unique')"
-PHP_VERSIONS="$(printf '%s' "$BUILD_MATRIX" | jq -c '[.[].php_version] | unique')"
+PHP_VERSIONS="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '[.[].php_version] | unique')"
 
-# Fail-closed: every entry in a non-empty BUILD matrix must yield a python AND a php
+# Fail-closed: every entry in a non-empty build-role set must yield a python AND a php
 # version. The py_flavor map above already aborts on a malformed flavor (jq capture()
 # errors under set -e); guard the php side SYMMETRICALLY — a null/empty php_version on
 # any entry must fail HERE, not slip through as a [null] matrix leg (a bare length check
 # would pass [null], whose length is 1, straight into test.yml's strategy.matrix).
-if [ "$(printf '%s' "$BUILD_MATRIX" | jq 'length')" -gt 0 ]; then
+if [ "$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq 'length')" -gt 0 ]; then
   if [ "$(printf '%s' "$PYTHON_VERSIONS" | jq 'length')" -eq 0 ]; then
     printf '::error::no python versions derived from py_flavor in %s (malformed py_flavor?)\n' "$MATRIX_FILE" >&2
     exit 1
   fi
-  if [ "$(printf '%s' "$BUILD_MATRIX" | jq '[.[].php_version | select(. == null or . == "")] | length')" -gt 0 ]; then
+  if [ "$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq '[.[].php_version | select(. == null or . == "")] | length')" -gt 0 ]; then
     printf '::error::an entry has a missing/empty php_version in %s\n' "$MATRIX_FILE" >&2
     exit 1
   fi

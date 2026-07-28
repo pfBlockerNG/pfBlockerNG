@@ -293,55 +293,148 @@ def test_build_and_test_matrices_unchanged_by_new_fields(tmp_path: Path) -> None
 
 
 # --------------------------------------------------------------------------- #
-# Scenario f — arch defaults to amd64 when omitted (issue #199).
-# A pre-#199 matrix has no `arch` field; every entry must resolve to amd64 so the
-# build path emits the unchanged FreeBSD:N:amd64 ABI. RED before the reader injects
-# arch (the field would simply be absent).
+# Scenario f — arch is NEVER emitted/resurrected (issue #1806 supersedes #199).
+# The catalog is arch-less: every pfSense-pkg-pfBlockerNG port is NO_ARCH, so
+# ARM support is dropped and the reader must not inject a synthetic "arch"
+# default anywhere. RED before the change (the old reader injected arch:
+# "amd64" into every BUILD/CI/ROUTE row).
 # --------------------------------------------------------------------------- #
-def test_build_matrix_defaults_arch_to_amd64_when_omitted(tmp_path: Path) -> None:
-    """An entry without an `arch` field resolves to amd64 in the BUILD matrix (and CI inherits it)."""
+def test_build_and_ci_matrices_never_carry_an_arch_key_when_omitted(tmp_path: Path) -> None:
+    """An entry without `arch` yields NO `arch` key in BUILD or CI output (never resurrected)."""
     repo = _make_matrix_ref(tmp_path, [_ce_entry()])  # omits arch
     build = _build_matrix(repo)
     assert len(build) == 1
-    assert build[0]["arch"] == "amd64", f"omitted arch must default to amd64; got {build[0].get('arch')!r}"
-    # CI matrix inherits the resolved arch (no separate injection).
+    assert "arch" not in build[0], f"BUILD matrix must never carry a synthetic arch key; got {build[0]!r}"
     ci = _ci_matrix(repo)
-    assert len(ci) == 1 and ci[0]["arch"] == "amd64"
+    assert len(ci) == 1
+    assert "arch" not in ci[0], f"CI matrix must never carry a synthetic arch key; got {ci[0]!r}"
+    route = _route_matrix(repo)
+    assert len(route) == 1
+    assert "arch" not in route[0], f"ROUTE matrix must never carry a synthetic arch key; got {route[0]!r}"
 
 
 # --------------------------------------------------------------------------- #
-# Scenario g — explicit aarch64 passes through verbatim (issue #199 — the point).
-# An aarch64 Plus entry (Netgate ARM appliances) must carry arch=aarch64 into both
-# the BUILD and CI matrices so release.yml/version-tracker build a FreeBSD:N:aarch64
-# .pkg. RED before #199 (no arch field is propagated at all).
+# Scenario g — a stray `arch` key on an input row is TOLERATED-IGNORED, not an
+# error and not amplified into anything: it rides through verbatim on the row
+# it came from, but the reader never reads or branches on it. This lets a
+# stale ci-metadata push (still carrying the retired column) coexist with this
+# reader without racing the data-flip landing.
 # --------------------------------------------------------------------------- #
-def test_build_matrix_passes_through_explicit_aarch64(tmp_path: Path) -> None:
-    """An explicit arch=aarch64 is emitted verbatim in the BUILD matrix and inherited by CI."""
-    repo = _make_matrix_ref(
-        tmp_path,
-        [_ce_entry(), _plus_entry(ci=True, arch="aarch64", image_name="pfsense-plus", mac=FAKE_DOC_MAC)],
-    )
-    build = _build_matrix(repo)
-    arches = {e["pfsense_version"]: e["arch"] for e in build}
-    assert arches == {"2.8": "amd64", "26.03": "aarch64"}, f"explicit aarch64 must pass through; got {arches!r}"
-    # The ci:true aarch64 Plus entry carries aarch64 into the CI matrix too.
-    ci = _ci_matrix(repo)
-    plus = [e for e in ci if e["channel"] == "Plus"]
-    assert len(plus) == 1 and plus[0]["arch"] == "aarch64"
-
-
-# --------------------------------------------------------------------------- #
-# Scenario h — empty-string arch normalizes to amd64 (the other invalid input).
-# `//` alone treats only null/missing as absent, so a literal "" would otherwise
-# flow through and a downstream ABI build would emit `FreeBSD:N:` (no arch) — the
-# same trap guarded for image_name/mac. The reader must coerce "" to amd64.
-# --------------------------------------------------------------------------- #
-def test_build_matrix_empty_string_arch_normalizes_to_amd64(tmp_path: Path) -> None:
-    """An empty-string arch is treated as absent → amd64 (never a bare `FreeBSD:N:` ABI)."""
-    repo = _make_matrix_ref(tmp_path, [_ce_entry(arch="")])
+def test_stray_arch_key_on_input_row_is_tolerated_and_passed_through_verbatim(tmp_path: Path) -> None:
+    """A leftover `arch` field on an input row does not error and rides through as-is."""
+    repo = _make_matrix_ref(tmp_path, [_ce_entry(arch="aarch64")])
     build = _build_matrix(repo)
     assert len(build) == 1
-    assert build[0]["arch"] == "amd64", f"empty arch must default to amd64; got {build[0]['arch']!r}"
+    assert build[0]["arch"] == "aarch64", f"a stray arch key must pass through verbatim; got {build[0]!r}"
+    ci = _ci_matrix(repo)
+    assert len(ci) == 1 and ci[0]["arch"] == "aarch64"
+
+
+# --------------------------------------------------------------------------- #
+# extra_pkgs (issue #1806): defaults to [] when absent, passes through
+# verbatim when present, on both BUILD and CI matrices.
+# --------------------------------------------------------------------------- #
+def test_extra_pkgs_defaults_to_empty_list_when_absent(tmp_path: Path) -> None:
+    """An entry with no extra_pkgs field yields extra_pkgs: [] in BUILD and CI."""
+    repo = _make_matrix_ref(tmp_path, [_ce_entry()])
+    build = _build_matrix(repo)
+    assert len(build) == 1 and build[0]["extra_pkgs"] == []
+    ci = _ci_matrix(repo)
+    assert len(ci) == 1 and ci[0]["extra_pkgs"] == []
+
+
+def test_extra_pkgs_passes_through_verbatim_on_a_single_entry_major(tmp_path: Path) -> None:
+    """An explicit extra_pkgs list survives into BUILD and CI when its major has no sibling."""
+    repo = _make_matrix_ref(tmp_path, [_ce_entry(extra_pkgs=["textproc/py-charset-normalizer"]), _plus_entry(ci=True)])
+    build = _build_matrix(repo)
+    by_major = {e["freebsd_major"]: e["extra_pkgs"] for e in build}
+    assert by_major == {"15": ["textproc/py-charset-normalizer"], "16": []}
+    ci = _ci_matrix(repo)
+    ce = next(e for e in ci if e["channel"] == "CE")
+    assert ce["extra_pkgs"] == ["textproc/py-charset-normalizer"]
+
+
+# --------------------------------------------------------------------------- #
+# BUILD-matrix dedup by freebsd_major (issue #1806): two build-role entries
+# sharing a freebsd_major collapse to ONE BUILD-matrix row (CI matrix stays
+# one row per version — no arch, never deduped).
+# --------------------------------------------------------------------------- #
+def test_build_matrix_dedupes_two_versions_sharing_a_freebsd_major(tmp_path: Path) -> None:
+    """Two CE entries on the same freebsd_major collapse to one BUILD row; CI keeps both."""
+    repo = _make_matrix_ref(
+        tmp_path,
+        [
+            _ce_entry(pfsense_version="2.8"),
+            _ce_entry(pfsense_version="2.9", ci=False),
+        ],
+    )
+    build = _build_matrix(repo)
+    assert len(build) == 1, f"same-major entries must collapse to one BUILD row; got {build!r}"
+    assert build[0]["freebsd_major"] == "15"
+    # CI matrix is never deduped — the ci:true entry still appears on its own.
+    ci = _ci_matrix(repo)
+    assert [e["pfsense_version"] for e in ci] == ["2.8"]
+
+
+def test_build_matrix_dedup_unions_and_dedupes_extra_pkgs_across_merged_rows(tmp_path: Path) -> None:
+    """extra_pkgs from every same-major row unions (deduped + sorted) onto the merged BUILD row."""
+    repo = _make_matrix_ref(
+        tmp_path,
+        [
+            _ce_entry(pfsense_version="2.8", extra_pkgs=["textproc/py-charset-normalizer"]),
+            _ce_entry(pfsense_version="2.9", ci=False, extra_pkgs=["textproc/py-charset-normalizer", "net/py-foo"]),
+        ],
+    )
+    build = _build_matrix(repo)
+    assert len(build) == 1
+    assert build[0]["extra_pkgs"] == ["net/py-foo", "textproc/py-charset-normalizer"]
+
+
+def test_build_matrix_dedup_hard_errors_on_php_version_mismatch(tmp_path: Path) -> None:
+    """Two same-major entries with DIFFERENT php_version abort the reader (never silently pick one)."""
+    repo = _make_matrix_ref(
+        tmp_path,
+        [
+            _ce_entry(pfsense_version="2.8", php_version="8.3"),
+            _ce_entry(pfsense_version="2.9", ci=False, php_version="8.4"),
+        ],
+    )
+    proc = subprocess.run(
+        ["sh", str(_SCRIPT), "--ref", "ci-metadata", "--file", "supported-versions.json", "--print-build"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=_clean_git_env(),
+    )
+    assert proc.returncode != 0, f"a php_version mismatch across merged rows must abort; stdout:\n{proc.stdout}"
+    assert "disagreeing php_version" in proc.stderr, proc.stderr
+
+
+def test_build_matrix_dedup_hard_errors_on_py_flavor_mismatch(tmp_path: Path) -> None:
+    """Two same-major entries with DIFFERENT py_flavor abort the reader too."""
+    repo = _make_matrix_ref(
+        tmp_path,
+        [
+            _ce_entry(pfsense_version="2.8", py_flavor="py311"),
+            _ce_entry(pfsense_version="2.9", ci=False, py_flavor="py312"),
+        ],
+    )
+    proc = subprocess.run(
+        ["sh", str(_SCRIPT), "--ref", "ci-metadata", "--file", "supported-versions.json", "--print-build"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=_clean_git_env(),
+    )
+    assert proc.returncode != 0, f"a py_flavor mismatch across merged rows must abort; stdout:\n{proc.stdout}"
+    assert "disagreeing php_version" in proc.stderr, proc.stderr
+
+
+def test_build_matrix_no_dedup_when_majors_differ(tmp_path: Path) -> None:
+    """Distinct majors (today's real CE/Plus split) never merge — one BUILD row each."""
+    repo = _make_matrix_ref(tmp_path, [_ce_entry(), _plus_entry(ci=True)])
+    build = _build_matrix(repo)
+    assert sorted(e["freebsd_major"] for e in build) == ["15", "16"]
 
 
 # --------------------------------------------------------------------------- #

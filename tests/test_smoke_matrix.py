@@ -24,11 +24,19 @@ sys.modules[_SPEC.name] = mx
 _SPEC.loader.exec_module(mx)
 
 
-# A representative multi-edition, multi-arch matrix (CE amd64 + Plus amd64 + Plus aarch64).
+# A representative multi-edition matrix (CE + Plus, distinct FreeBSD majors — no
+# `arch` field: issue #1806 retires it, the catalog is arch-less).
 _MATRIX = (
-    '[{"pfsense_version":"2.8.0","freebsd_major":"15","arch":"amd64","php_version":"8.3","py_flavor":"py311","variant":"CE"},'
-    '{"pfsense_version":"26.03.1","freebsd_major":"16","arch":"amd64","php_version":"8.5","py_flavor":"py311","variant":"Plus"},'
-    '{"pfsense_version":"26.03.1","freebsd_major":"16","arch":"aarch64","php_version":"8.5","py_flavor":"py311","variant":"Plus"}]'
+    '[{"pfsense_version":"2.8.0","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","variant":"CE"},'
+    '{"pfsense_version":"26.03.1","freebsd_major":"16","php_version":"8.5","py_flavor":"py311","variant":"Plus"}]'
+)
+
+# Two editions sharing the SAME freebsd_major (issue #1806: with `arch` retired,
+# this is a real possible shape now, not just an ADR-24 transition-window
+# hypothetical) — exercises the SMOKE_IMAGE_REF disambiguation in _own_entry().
+_COLLIDING_MATRIX = (
+    '[{"pfsense_version":"2.8.0","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","variant":"CE"},'
+    '{"pfsense_version":"15.1.0","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","variant":"Plus"}]'
 )
 
 
@@ -41,7 +49,7 @@ def _clear_matrix_cache() -> Any:
 
 
 def _set_env(monkeypatch: pytest.MonkeyPatch, **kv: str | None) -> None:
-    for k in ("SMOKE_MATRIX_JSON", "SMOKE_ABI", "SMOKE_PHP_VERSION", "SMOKE_PY_FLAVOR"):
+    for k in ("SMOKE_MATRIX_JSON", "SMOKE_ABI", "SMOKE_PHP_VERSION", "SMOKE_PY_FLAVOR", "SMOKE_IMAGE_REF"):
         monkeypatch.delenv(k, raising=False)
     for k, v in kv.items():
         if v is not None:
@@ -59,7 +67,7 @@ def test_build_matrix_parses_env_json(monkeypatch: pytest.MonkeyPatch) -> None:
     """A well-formed SMOKE_MATRIX_JSON array is returned as a tuple of entries."""
     _set_env(monkeypatch, SMOKE_MATRIX_JSON=_MATRIX)
     m = mx.build_matrix()
-    assert m is not None and len(m) == 3 and m[0]["variant"] == "CE"
+    assert m is not None and len(m) == 2 and m[0]["variant"] == "CE"
 
 
 def test_build_matrix_none_on_malformed_or_empty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,9 +82,9 @@ def test_variants_derived_per_abi_edition(monkeypatch: pytest.MonkeyPatch) -> No
     """One Variant per (ABI, edition), php/catalog/py derived from the matrix entry."""
     _set_env(monkeypatch, SMOKE_MATRIX_JSON=_MATRIX)
     by_abi = {v.abi: v for v in mx.matrix_variants()}
-    assert set(by_abi) == {"FreeBSD:15:amd64", "FreeBSD:16:amd64", "FreeBSD:16:aarch64"}
+    assert set(by_abi) == {"FreeBSD:15:amd64", "FreeBSD:16:amd64"}
     assert by_abi["FreeBSD:15:amd64"] == mx.Variant("php83", "FreeBSD:15:amd64", "ce-2.8", "py311", "CE")
-    assert by_abi["FreeBSD:16:aarch64"].php == "php85" and by_abi["FreeBSD:16:aarch64"].catalog == "plus-26.03"
+    assert by_abi["FreeBSD:16:amd64"].php == "php85" and by_abi["FreeBSD:16:amd64"].catalog == "plus-26.03"
 
 
 def test_own_and_opposite_follow_smoke_abi(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,8 +111,8 @@ def test_bare_dispatch_defaults_to_ce_entry(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_env_overrides_win_over_matrix(monkeypatch: pytest.MonkeyPatch) -> None:
     """SMOKE_* env values override the derived matrix defaults (the per-leg injection)."""
-    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_MATRIX, SMOKE_ABI="FreeBSD:16:aarch64", SMOKE_PY_FLAVOR="py312")
-    assert mx.matrix_abi() == "FreeBSD:16:aarch64"
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_MATRIX, SMOKE_ABI="FreeBSD:16:amd64", SMOKE_PY_FLAVOR="py312")
+    assert mx.matrix_abi() == "FreeBSD:16:amd64"
     assert mx.matrix_py_flavor() == "py312"  # env wins
     assert mx.matrix_php_dep() == "php85"  # derived from the matched entry (no SMOKE_PHP_VERSION)
 
@@ -114,6 +122,37 @@ def test_php_version_mismatch_is_a_wiring_error(monkeypatch: pytest.MonkeyPatch)
     (a CI-wiring bug), never silently passes."""
     _set_env(monkeypatch, SMOKE_MATRIX_JSON=_MATRIX, SMOKE_ABI="FreeBSD:15:amd64", SMOKE_PHP_VERSION="8.5")
     with pytest.raises(AssertionError, match="matrix inconsistency"):
+        mx.own_variant()
+
+
+# --------------------------------------------------------------------------- #
+# gate-A-era hazard (issue #1806): with `arch` retired, two editions CAN share
+# a freebsd_major (not just an ADR-24 transition-window hypothetical), so
+# SMOKE_ABI alone no longer uniquely selects a variant. SMOKE_IMAGE_REF (already
+# exported by smoke-single.yml as the resolved GHCR ref, e.g.
+# .../pfsense-plus:15.1.0) disambiguates by image name; when it can't, own_entry
+# must refuse to silently pick one rather than guess.
+# --------------------------------------------------------------------------- #
+def test_own_entry_disambiguates_same_major_variants_via_smoke_image_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SMOKE_ABI matches both CE and Plus on freebsd_major=15; SMOKE_IMAGE_REF picks the right one."""
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_COLLIDING_MATRIX, SMOKE_ABI="FreeBSD:15:amd64")
+    monkeypatch.setenv("SMOKE_IMAGE_REF", "ghcr.io/pfblockerng/pfsense-plus:15.1.0")
+    assert mx.own_variant().variant == "Plus"
+
+    monkeypatch.setenv("SMOKE_IMAGE_REF", "ghcr.io/pfblockerng/pfsense-ce:2.8.0")
+    assert mx.own_variant().variant == "CE"
+
+
+def test_own_entry_refuses_to_silently_pick_when_image_ref_cannot_disambiguate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No SMOKE_IMAGE_REF (or one naming neither edition) -> a loud RuntimeError, never a guess."""
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_COLLIDING_MATRIX, SMOKE_ABI="FreeBSD:15:amd64")
+    with pytest.raises(RuntimeError, match="does not disambiguate"):
+        mx.own_variant()
+
+    monkeypatch.setenv("SMOKE_IMAGE_REF", "ghcr.io/pfblockerng/pfsense-somethingelse:1.0")
+    with pytest.raises(RuntimeError, match="does not disambiguate"):
         mx.own_variant()
 
 
@@ -136,8 +175,7 @@ def test_topology_skips_when_matrix_absent(monkeypatch: pytest.MonkeyPatch) -> N
 # The _matrix.py:build_matrix() function trusts the injected JSON, so CI-injected
 # SMOKE_MATRIX_JSON (from --print-build) is always free of route-only entries.
 _BUILD_ONLY_MATRIX = (
-    '[{"pfsense_version":"2.8.0","freebsd_major":"15","arch":"amd64",'
-    '"php_version":"8.3","py_flavor":"py311","variant":"CE"}]'
+    '[{"pfsense_version":"2.8.0","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","variant":"CE"}]'
 )
 
 
@@ -167,8 +205,8 @@ def test_smoke_topology_excludes_route_only_via_build_matrix_injection(monkeypat
 
     # AFTER: add a second build CE entry → two variants; the topology mirrors its input.
     two_ce = (
-        '[{"pfsense_version":"2.8.0","freebsd_major":"15","arch":"amd64","php_version":"8.3","py_flavor":"py311","variant":"CE"},'
-        '{"pfsense_version":"2.9.0","freebsd_major":"16","arch":"amd64","php_version":"8.5","py_flavor":"py311","variant":"CE"}]'
+        '[{"pfsense_version":"2.8.0","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","variant":"CE"},'
+        '{"pfsense_version":"2.9.0","freebsd_major":"16","php_version":"8.5","py_flavor":"py311","variant":"CE"}]'
     )
     _set_env(monkeypatch, SMOKE_MATRIX_JSON=two_ce)
     mx.build_matrix.cache_clear()
