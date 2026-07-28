@@ -32,6 +32,8 @@ _spec.loader.exec_module(cvl)
 _FREEBSD15 = "FreeBSD" + ":15:amd64"
 _FREEBSD14 = "FreeBSD" + ":14"
 _FREEBSD17 = "FreeBSD" + ":17"
+# NO_ARCH wildcard ABI (issue #1806) — a real Netgate noarch package's manifest.
+_FREEBSD15_WILDCARD = "FreeBSD" + ":15:*"
 _PY311 = "py3" + "11"
 _PY311_PKG = _PY311 + "-sqlite3"
 _PY3110_LOOKALIKE = _PY311 + "0"
@@ -54,6 +56,16 @@ def test_flags_freebsd_abi_exact_quoted_value(tmp_path: Path) -> None:
     line = f'_ABI="{_FREEBSD15}"\n'
     violations = _find(tmp_path, line)
     assert len(violations) == 1, f"exact quoted FreeBSD ABI must be flagged; got {violations}"
+    assert violations[0][1] == 1
+
+
+def test_flags_wildcard_freebsd_abi_exact_quoted_value(tmp_path: Path) -> None:
+    """A NO_ARCH package's wildcard ABI (issue #1806, e.g. "FreeBSD:15:*") gets the
+    SAME allow-list treatment as a concrete one — restating it as a literal is the
+    same drift hazard, so it must be flagged too."""
+    line = f'_ABI="{_FREEBSD15_WILDCARD}"\n'
+    violations = _find(tmp_path, line)
+    assert len(violations) == 1, f"exact quoted wildcard FreeBSD ABI must be flagged; got {violations}"
     assert violations[0][1] == 1
 
 
@@ -488,6 +500,19 @@ def _current_shape_matrix() -> dict[str, Any]:
 def test_matrix_tokens_current_shape_covered() -> None:
     uncovered = cvl.uncovered_matrix_tokens(_current_shape_matrix())
     assert uncovered == [], f"the live-shape matrix must be fully covered; got {uncovered}"
+
+
+def test_matrix_tokens_emit_and_cover_wildcard_abi() -> None:
+    """_matrix_tokens ALSO emits the wildcard-ABI form (FreeBSD:<major>:*) for every
+    active entry (issue #1806: all pfSense-pkg-pfBlockerNG ports are NO_ARCH), and
+    the detection regex covers it — so a new wildcard literal in source/docs gets
+    the same allow-list treatment as a concrete one, exercised by the tripwire."""
+    m = _current_shape_matrix()
+    tokens = cvl._matrix_tokens(m)
+    assert _FREEBSD15_WILDCARD in tokens
+    assert "FreeBSD" + ":16:*" in tokens
+    uncovered = cvl.uncovered_matrix_tokens(m)
+    assert uncovered == [], f"wildcard-ABI matrix tokens must be covered; got {uncovered}"
 
 
 def test_matrix_tokens_dot_x_suffix_stripped() -> None:
