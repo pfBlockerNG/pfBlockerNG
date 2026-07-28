@@ -10,11 +10,17 @@ name: Dispatch tracker on matrix change
 # The dispatch targets devel, where version-tracker.yml lives. github.token
 # with actions:write is the same mechanism version-tracker.yml itself uses to
 # dispatch image-refresh.yml.
+#
+# CAVEAT: pushes made BY the built-in GITHUB_TOKEN fire no workflows (GitHub's
+# anti-recursion rule). Matrix PRs are human-merged today; if automerge under
+# GITHUB_TOKEN ever appears, this silently falls back to the daily cron.
 
 on:
   push:
     branches:
       - ci-metadata
+    paths:
+      - supported-versions.json
 
 permissions:
   actions: write
