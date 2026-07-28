@@ -176,4 +176,73 @@ final class AlertsRowOutputEncodingTest extends TestCase
         $this->assertStringNotContainsString('&lt;', $html, 'benign input must not produce stray entities');
         $this->assertStringNotContainsString('&amp;', $html, 'benign input has no & to encode');
     }
+
+    public function test_invalid_utf8_byte_in_domain_renders_substituted_not_blanked(): void
+    {
+        // issue #1814: a single invalid-UTF-8 byte (0xFF is never valid in any UTF-8
+        // sequence) embedded in an otherwise benign domain, well under the truncation
+        // threshold (60 chars, see the truncation test below) -- exercises the direct
+        // pfb_hsc($f2) branch. htmlspecialchars(ENT_QUOTES) alone returns '' on ANY
+        // invalid byte (wiping the WHOLE string, not just the offending byte); ENT_SUBSTITUTE
+        // keeps the valid surrounding text and substitutes only the bad byte with U+FFFD.
+        $domain = "evil\xFFdomain.example";
+        $fields = $this->dnsblFields($domain, '10.0.0.11', 'InvalidUtf8Group', 'InvalidUtf8Feed');
+
+        $html = $this->renderDnsblRow($fields);
+
+        $this->assertStringContainsString('evil', $html, 'the domain text before the invalid byte must survive, not blank the whole cell');
+        $this->assertStringContainsString('domain.example', $html, 'the domain text after the invalid byte must survive, not blank the whole cell');
+        $this->assertStringContainsString("\u{FFFD}", $html, 'the invalid byte must render substituted (U+FFFD), never silently dropped');
+        $this->assertTrue(mb_check_encoding($html, 'UTF-8'), 'the rendered row must be valid UTF-8');
+    }
+
+    public function test_truncated_multibyte_lead_byte_in_domain_renders_substituted_not_blanked(): void
+    {
+        // A >=60-char domain whose 59th raw BYTE is the lead byte of a 2-byte UTF-8
+        // sequence ("\xC3\xA9" = e-acute), straddling convert_dnsbl_log's
+        // substr($f2, 0, 59) truncation boundary (pfblockerng_alerts.php ~line 2231).
+        // That byte-substr call site is explicitly OUT OF SCOPE for conversion to
+        // mb_substr (issue #1814 follow-up) -- pfb_hsc()'s ENT_SUBSTITUTE is what makes
+        // the resulting dangling lead byte render safely instead of blanking the cell.
+        $domain = str_repeat('a', 58) . "\xC3\xA9" . 'trailing-domain-suffix.example';
+        $this->assertGreaterThanOrEqual(60, strlen($domain));
+
+        $fields = $this->dnsblFields($domain, '10.0.0.12', 'TruncGroup', 'TruncFeed');
+
+        $html = $this->renderDnsblRow($fields);
+
+        $this->assertStringContainsString(str_repeat('a', 58), $html, 'the domain text before the truncation point must survive');
+        $this->assertStringContainsString("\u{FFFD}", $html, 'the dangling lead byte left by the truncation must render substituted (U+FFFD)');
+        $this->assertStringContainsString('<small>...</small>', $html, 'the truncation ellipsis must still render');
+        $this->assertTrue(mb_check_encoding($html, 'UTF-8'), 'the rendered row must be valid UTF-8');
+    }
+
+    public function test_single_quote_in_domain_is_entity_encoded(): void
+    {
+        // The remaining ENT_QUOTES metacharacter not yet directly pinned by a test in
+        // this file (< / > / " / & are covered above): a single quote must still encode
+        // to &#039; -- unchanged by the ENT_SUBSTITUTE addition.
+        $domain = "o'brien.evil.example";
+        $fields = $this->dnsblFields($domain, '10.0.0.13', 'QuoteGroup', 'QuoteFeed');
+
+        $html = $this->renderDnsblRow($fields);
+
+        $this->assertStringContainsString('&#039;', $html, "a data-token single-quote must be encoded to &#039;");
+        $this->assertStringNotContainsString("o'brien", $html, 'no raw single-quote from a domain may reach the output unescaped');
+    }
+
+    public function test_valid_multibyte_domain_renders_unchanged_apart_from_escaping(): void
+    {
+        // Valid multibyte characters (a German umlaut, then CJK) must render unchanged
+        // apart from HTML-escaping -- ENT_SUBSTITUTE only substitutes INVALID byte
+        // sequences; it must never touch well-formed multibyte characters.
+        $domain = 'b' . "\u{00FC}" . 'cher.' . "\u{4E2D}\u{6587}" . '.example'; // "bücher.中文.example"
+        $fields = $this->dnsblFields($domain, '10.0.0.14', 'MultibyteGroup', 'MultibyteFeed');
+
+        $html = $this->renderDnsblRow($fields);
+
+        $this->assertStringContainsString($domain, $html, 'a valid multibyte domain must render verbatim (no HTML metachars to escape)');
+        $this->assertStringNotContainsString("\u{FFFD}", $html, 'valid multibyte characters must never be substituted');
+        $this->assertTrue(mb_check_encoding($html, 'UTF-8'), 'the rendered row must be valid UTF-8');
+    }
 }

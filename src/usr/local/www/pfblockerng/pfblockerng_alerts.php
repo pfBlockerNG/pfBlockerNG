@@ -1861,7 +1861,11 @@ if ($alert_summary) {
 // at the point it enters cell markup, so HTML metacharacters render as text
 // (the intentional static markup around it stays unencoded).
 function pfb_hsc($value) {
-	return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+	// ENT_SUBSTITUTE: without it, ANY invalid-UTF-8 byte anywhere in $value makes
+	// htmlspecialchars() return '' -- blanking the WHOLE string, not just the offending
+	// byte (issue #1814). With it, the invalid byte alone is replaced with U+FFFD and the
+	// rest of the value still renders.
+	return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
 // Compose the resolved-hostname stats cell for the IP src/dst-in stats. The raw
