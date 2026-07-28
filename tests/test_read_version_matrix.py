@@ -321,11 +321,13 @@ def test_build_and_ci_matrices_never_carry_an_arch_key_when_omitted(tmp_path: Pa
 # reader without racing the data-flip landing.
 # --------------------------------------------------------------------------- #
 def test_stray_arch_key_on_input_row_is_tolerated_and_passed_through_verbatim(tmp_path: Path) -> None:
-    """A leftover `arch` field on an input row does not error and rides through as-is."""
+    """A leftover `arch` field on an input row does not error. CI/ROUTE ride through it
+    verbatim; BUILD drops it (issue #1806 D0 — arch is never a BUILD-matrix key, merged
+    or not — CI matrix is the leg source for anything arch/ci-shaped)."""
     repo = _make_matrix_ref(tmp_path, [_ce_entry(arch="aarch64")])
     build = _build_matrix(repo)
     assert len(build) == 1
-    assert build[0]["arch"] == "aarch64", f"a stray arch key must pass through verbatim; got {build[0]!r}"
+    assert "arch" not in build[0], f"BUILD must never carry arch, even a passthrough stray; got {build[0]!r}"
     ci = _ci_matrix(repo)
     assert len(ci) == 1 and ci[0]["arch"] == "aarch64"
 
@@ -435,6 +437,33 @@ def test_build_matrix_no_dedup_when_majors_differ(tmp_path: Path) -> None:
     repo = _make_matrix_ref(tmp_path, [_ce_entry(), _plus_entry(ci=True)])
     build = _build_matrix(repo)
     assert sorted(e["freebsd_major"] for e in build) == ["15", "16"]
+
+
+# --------------------------------------------------------------------------- #
+# issue #1806 D0 — a stray arch/ci on a NON-representative (non-last) same-major
+# row must not leak into the merged BUILD row via the last-wins `reduce` merge.
+# Live-reproduced on origin/ci-metadata: the freebsd_major=16 group holds a
+# `ci:true, image_name:pfsense-plus` row followed by a `ci:false, arch:aarch64`
+# row; `--print-build` emits `"ci":false,"image_name":"pfsense-plus",...,
+# "arch":"aarch64"` on the merged row — the representative (last) row IS
+# ci:true, yet the merged BUILD row says ci:false and carries an arch key that
+# contradicts the script's own "the catalog is arch-less" header. BUILD
+# consumers never read arch or ci (CI matrix is the leg source) — the merged
+# row must carry neither key, from any contributing row.
+# --------------------------------------------------------------------------- #
+def test_build_matrix_dedup_drops_arch_and_ci_keys_from_non_representative_row(tmp_path: Path) -> None:
+    """A stray arch/ci key on a same-major row must never leak into the merged BUILD row."""
+    repo = _make_matrix_ref(
+        tmp_path,
+        [
+            _plus_entry(pfsense_version="26.03", ci=True, image_name="pfsense-plus"),
+            _plus_entry(pfsense_version="26.03", ci=False, arch="aarch64"),
+        ],
+    )
+    build = _build_matrix(repo)
+    assert len(build) == 1, f"same-major rows must still collapse to one BUILD row; got {build!r}"
+    assert "arch" not in build[0], f"BUILD row must never carry a leaked arch key; got {build[0]!r}"
+    assert "ci" not in build[0], f"BUILD row must never carry a leaked/stale ci key; got {build[0]!r}"
 
 
 # --------------------------------------------------------------------------- #
