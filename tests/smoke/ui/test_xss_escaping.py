@@ -156,6 +156,104 @@ def test_alerts_dnsbl_stat_escapes_hostile_domain(smoke_vm: SmokeVM, webui: WebU
 
 
 # --------------------------------------------------------------------------- #
+# DNSBL Block Stats: an invalid-UTF-8 byte in a log-derived domain must render
+# substituted (U+FFFD), never blank the whole stats cell (issue #1814 --
+# htmlspecialchars(ENT_QUOTES) alone returns '' on ANY invalid byte, wiping the
+# WHOLE cell; ENT_SUBSTITUTE substitutes only the bad byte).
+# --------------------------------------------------------------------------- #
+
+# Hostile-input fixture: a raw 0xFF byte (never valid in any UTF-8 sequence)
+# embedded in an otherwise benign domain. No comma (the dnsbl.log stat pipeline
+# is comma-delimited via `cut -d ','`) and no space (the count/value split is
+# `explode(' ', trim($line), 2)`, which assumes no space before the first
+# token). Written in BINARY (not text) over ssh -- encoding a Python str
+# through the normal UTF-8 pipeline would turn chr(0xFF) into the *valid*
+# 2-byte sequence b"\xc3\xbf", defeating the fixture's whole point.
+INVALID_UTF8_DOMAIN_MARKER = ".invalidutf8.example"
+_INVALID_UTF8_DOMAIN_BYTES = b"badutf8\xffdomain" + INVALID_UTF8_DOMAIN_MARKER.encode("ascii")
+_INVALID_UTF8_LOG_LINE = (
+    b"DNSBL-python,2030-02-21 10:00:00," + _INVALID_UTF8_DOMAIN_BYTES + b",203.0.113.51,Python,DNSBL,"
+    b"InvalidUtf8Group,Match,InvalidUtf8Feed,+,A\n"
+)
+_INVALID_UTF8_LOG_LINES = _INVALID_UTF8_LOG_LINE * _XSS_LOG_ROW_COUNT
+
+
+@pytest.fixture
+def _seeded_invalid_utf8_dnsbl_log(smoke_vm: SmokeVM) -> Iterator[None]:
+    """Append many identical invalid-UTF-8-byte dnsbl.log rows; restore the pre-test size after.
+
+    Same self-encapsulated teardown as ``_seeded_xss_dnsbl_log``, except the
+    append runs in binary mode (see the fixture's module-level comment for why).
+    """
+    vm = smoke_vm
+    log_dir = DNSBL_LOG.rsplit("/", 1)[0]
+    ensure = vm.ssh(f"mkdir -p {log_dir} && touch {DNSBL_LOG}", timeout=15)
+    assert ensure.returncode == 0, f"failed to ensure {DNSBL_LOG} exists: {ensure.stderr!r}"
+
+    size_before = vm.ssh("stat", "-f", "%z", DNSBL_LOG, timeout=15)
+    assert size_before.returncode == 0, f"failed to stat {DNSBL_LOG}: stderr={size_before.stderr!r}"
+    original_size = size_before.stdout.strip()
+
+    append = subprocess.run(
+        vm.ssh_argv("tee", "-a", DNSBL_LOG),
+        input=_INVALID_UTF8_LOG_LINES,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert append.returncode == 0, (
+        f"failed to append the invalid-UTF-8 fixture rows to {DNSBL_LOG}: stderr={append.stderr!r}"
+    )
+
+    yield
+
+    restore = vm.ssh(f"truncate -s {original_size} {DNSBL_LOG}", timeout=15)
+    assert restore.returncode == 0, f"failed to restore {DNSBL_LOG} size: stderr={restore.stderr!r}"
+    size_after = vm.ssh("stat", "-f", "%z", DNSBL_LOG, timeout=15)
+    assert size_after.returncode == 0 and size_after.stdout.strip() == original_size, (
+        f"{DNSBL_LOG} restore did not take (before={original_size!r}, after={size_after.stdout.strip()!r}) "
+        "-- the invalid-UTF-8 fixture row leaked to sibling tests"
+    )
+
+
+def test_alerts_dnsbl_stat_substitutes_invalid_utf8_byte(
+    smoke_vm: SmokeVM, webui: WebUI, _seeded_invalid_utf8_dnsbl_log: None
+) -> None:
+    """An invalid-UTF-8 byte in a blocked domain renders substituted, never blanks the cell.
+
+    Scenario:
+      Given many identical dnsbl.log rows whose blocked domain carries a raw
+            0xFF byte (never valid in any UTF-8 sequence), seeded to outrank
+            noise into the Top Blocked Domain table.
+      When  GET the DNSBL Block Stats view.
+      Then  the Tier-A render oracle passes AND the seeded marker
+            (``.invalidutf8.example``) is present -- proving the row rendered
+            non-empty with the invalid byte substituted (U+FFFD), rather than
+            the whole cell going blank (issue #1814 -- pre-fix, ENT_QUOTES
+            alone made htmlspecialchars() return '' on the invalid byte,
+            silently blanking the cell).
+    """
+    guard = PhpErrorLogGuard(smoke_vm)
+    guard.snapshot()
+
+    resp = webui.get(ALERTS_DNSBL_STAT_PAGE)
+    result = evaluate_render(ALERTS_DNSBL_STAT_PAGE, resp.status_code, resp.text, ("DNSBL Block Stats",))
+    assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
+
+    body = resp.text
+    # Non-vacuity: the unique marker proves THE SEEDED domain rendered at all --
+    # pre-fix, the whole cell (including this marker) would be blank.
+    assert INVALID_UTF8_DOMAIN_MARKER in body, (
+        f"the seeded invalid-UTF-8 domain never rendered ({INVALID_UTF8_DOMAIN_MARKER!r} absent) -- "
+        "the cell was blanked instead of substituted (issue #1814)"
+    )
+    # The invalid byte must be substituted with U+FFFD, never silently dropped.
+    assert "�" in body, "the invalid UTF-8 byte must render substituted (U+FFFD), not dropped"
+
+    guard.assert_no_growth()
+
+
+# --------------------------------------------------------------------------- #
 # Feeds page: the Custom Feeds table URL column echoes the raw feed URL
 # (issue #1069 defect #4). Seeded directly via the config API -- a row need
 # not match a real predefined feed URL to appear in the Custom Feeds table
