@@ -245,6 +245,14 @@ _BUILD_ROW="$(sh scripts/read-version-matrix.sh --print-build)" \
 _EXTRA_PKGS_JSON="$(printf '%s' "$_BUILD_ROW" | jq -c --arg maj "$_freebsd_major" \
     '([.[] | select(.freebsd_major == $maj)][0].extra_pkgs) // []')"
 _EXTRA_PKGS_COUNT="$(printf '%s' "$_EXTRA_PKGS_JSON" | jq 'length')"
+# This leg's OWN py_flavor from the SAME matrix row (already read above for
+# extra_pkgs) -- never the top-level hardcoded default: a dep .pkg's
+# python<NNN> RUN_DEPENDS must match the box's REAL flavor, which the matrix
+# already knows precisely, even while the branch-.pkg build above still uses
+# the hardcoded ceiling (see its own comment).
+_dep_py_flavor="$(printf '%s' "$_BUILD_ROW" | jq -r --arg maj "$_freebsd_major" \
+    '([.[] | select(.freebsd_major == $maj)][0].py_flavor) // ""')"
+[ -n "$_dep_py_flavor" ] || _dep_py_flavor="$_py_flavor"
 SMOKE_DEP_PKGS=""
 if [ "$_EXTRA_PKGS_COUNT" -gt 0 ]; then
     _DEP_PKG_DIR="${REPO_ROOT}/out/deppkgs"
@@ -266,7 +274,7 @@ if [ "$_EXTRA_PKGS_COUNT" -gt 0 ]; then
         _dep_pkg_out="$(python3 scripts/build-dep-pkg-portable.py \
             --ports "$PORTS_DIR" \
             --port "$_origin" \
-            --py-flavor "$_py_flavor" \
+            --py-flavor "$_dep_py_flavor" \
             --freebsd-major "$_freebsd_major" \
             --out-dir "$_DEP_PKG_DIR")"
         _dep_pkg="$(printf '%s\n' "$_dep_pkg_out" | tail -n 1)"
