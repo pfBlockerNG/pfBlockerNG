@@ -65,7 +65,6 @@ jobs:
     if: ${{ github.event.inputs.dry_run == 'false' }}
     permissions:
       contents: write
-      models: read    # actions/ai-inference for the changelog draft
       checks: read    # gh api /commits/<sha>/check-runs to assert CI green
 
     outputs:
@@ -167,10 +166,11 @@ jobs:
       - name: Detect committed changelog
         id: detect
         # A committed docs/release-notes/<tag>.md is the curated/authoritative notes;
-        # when it exists the Models draft is skipped and the commit step is a no-op.
-        # When absent, also prepare the prompt inputs (prev-tag range + user prompt file)
-        # so the Models step can draft the notes inline here — mirroring the same logic
-        # as the release job's prev_tag + notes_prep steps.
+        # when it exists the write step below is a no-op. When absent, the write step's
+        # deterministic placeholder is the ONLY notes path — GitHub Models drafting was
+        # removed (it never produced a working result; release run 30379645002); use
+        # /release-with-changelog to author real notes before dispatching. Compute the
+        # compare-link inputs the placeholder needs either way.
         env:
           TAG:     ${{ steps.resolve.outputs.tag }}
           CHANNEL: ${{ steps.resolve.outputs.channel }}
@@ -206,93 +206,38 @@ jobs:
               | awk -v cur="$TAG" 'found{print; exit} $0==cur{found=1}' ) || true
           fi
 
-          # Commit range + compare link.
+          # Compare link the placeholder body ends with.
           if [ -n "$PREV" ]; then
-            RANGE="${PREV}..HEAD"
             CMP_URL="https://github.com/${REPO}/compare/${PREV}...${TAG}"
             FULL_LINK="**Full changelog:** [\`${PREV}\` → \`${TAG}\`](${CMP_URL})"
           else
-            RANGE="HEAD"
             CMP_URL="https://github.com/${REPO}/commits/${TAG}"
             FULL_LINK="**Full changelog:** [commits in \`${TAG}\`](${CMP_URL})"
           fi
 
-          COMMITS=$(git log "$RANGE" --no-merges --pretty=format:'%h %s' -- src/ scripts/)
-          [ -n "$COMMITS" ] || COMMITS="(no src/ or scripts/ changes in range)"
-
-          PROMPT_FILE="${RUNNER_TEMP}/notes_user_prompt.txt"
-          {
-            printf 'Context:\n'
-            printf -- '- Repository (OWNER/REPO): %s\n' "$REPO"
-            printf -- '- Release tag: %s\n' "$TAG"
-            printf -- '- Previous %s release: %s\n' "$CHANNEL" "${PREV:-<none>}"
-            printf -- '- Final line (use verbatim): %s\n\n' "$FULL_LINK"
-            printf 'Commits:\n%s\n' "$COMMITS"
-          } > "$PROMPT_FILE"
-
-          echo "cmp_url=${CMP_URL}" >> "$GITHUB_OUTPUT"
           {
             echo "full_link<<__FL__"
             printf '%s\n' "$FULL_LINK"
             echo "__FL__"
           } >> "$GITHUB_OUTPUT"
-          echo "prompt_file=${PROMPT_FILE}" >> "$GITHUB_OUTPUT"
-
-      - name: Draft changelog (GitHub Models)
-        id: ai
-        # Single-shot inference; skipped when a committed notes file already exists.
-        # continue-on-error so a Models hiccup falls through to the write step which
-        # will emit a minimal placeholder instead.
-        if: ${{ steps.detect.outputs.has_file != 'true' }}
-        continue-on-error: true
-        uses: actions/ai-inference@v1
-        with:
-          model: openai/gpt-4.1
-          max-tokens: 2000
-          system-prompt-file: scripts/release-notes-prompt.txt
-          prompt-file: ${{ steps.detect.outputs.prompt_file }}
 
       - name: Write + commit the changelog
         id: write-changelog
-        # Parse the model response (SUMMARY line + first ```-fenced block) and write
-        # docs/release-notes/<tag>.md, then commit it.  If the model produced nothing,
-        # write a minimal placeholder (so the tag always carries a notes file).
-        # Skipped when a committed file already exists (has_file=true).
+        # No committed notes file (has_file=false): write the deterministic placeholder
+        # — the ONLY path here now that GitHub Models drafting is gone (it never produced
+        # a working result; release run 30379645002). Use /release-with-changelog to
+        # author real notes before dispatching. Skipped when a committed file already
+        # exists (has_file=true).
         if: ${{ steps.detect.outputs.has_file != 'true' }}
         env:
           TAG:       ${{ steps.resolve.outputs.tag }}
           FULL_LINK: ${{ steps.detect.outputs.full_link }}
-          CMP_URL:   ${{ steps.detect.outputs.cmp_url }}
-          RESP_FILE: ${{ steps.ai.outputs['response-file'] }}
         run: |
           set -u
           NOTES_FILE="docs/release-notes/${TAG}.md"
           mkdir -p docs/release-notes
-          SUMMARY=""
-          BODY=""
-
-          if [ -n "${RESP_FILE:-}" ] && [ -s "${RESP_FILE}" ]; then
-            SUMMARY=$(grep -m1 '^SUMMARY:' "$RESP_FILE" | sed 's/^SUMMARY:[[:space:]]*//' | tr -d '\r') || true
-            BODY=$(awk '/^```/{fence++; next} fence==1{print}' "$RESP_FILE")
-          fi
-
-          if [ -z "$BODY" ]; then
-            echo "No model response — writing a placeholder notes file."
-            BODY=$(printf '_Release notes unavailable; see the full changelog below._\n\n%s' "$FULL_LINK")
-          fi
-
-          # Guarantee the compare link is present (append if the source omitted it).
-          case "$BODY" in
-            *"${CMP_URL}"*) ;;
-            *) BODY=$(printf '%s\n\n%s' "$BODY" "$FULL_LINK") ;;
-          esac
-
-          # Write the file: optional SUMMARY marker as first line, then the body.
-          if [ -n "$SUMMARY" ]; then
-            printf '<!-- SUMMARY: %s -->\n%s\n' "$SUMMARY" "$BODY" > "$NOTES_FILE"
-          else
-            printf '%s\n' "$BODY" > "$NOTES_FILE"
-          fi
+          echo "No committed release notes — writing a placeholder notes file."
+          printf '_Release notes unavailable; see the full changelog below._\n\n%s\n' "$FULL_LINK" > "$NOTES_FILE"
 
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -483,7 +428,6 @@ jobs:
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' }}
     permissions:
       contents: write
-      models: read   # actions/ai-inference (GitHub Models) for the release-notes draft
 
     outputs:
       tag:         ${{ steps.meta.outputs.tag }}
@@ -601,47 +545,25 @@ jobs:
 
       - name: Prepare release-notes inputs
         id: notes_prep
-        # Gather the commit range + the user prompt for the model. GitHub Models does a
-        # single prompt→completion (it cannot run git itself), so we collect the commits
-        # here and feed them in. Emits the compare link + the assembled prompt-file path.
+        # Compute the compare-link inputs the placeholder/committed-notes body needs.
+        # GitHub Models drafting was removed (it never produced a working result;
+        # release run 30379645002) — a committed docs/release-notes/<tag>.md is now the
+        # only real notes source; the assemble-body step below falls back to a
+        # deterministic placeholder ending in this compare link. Use
+        # /release-with-changelog to author real notes before dispatching.
         env:
-          REPO:    ${{ github.repository }}
-          TAG:     ${{ steps.meta.outputs.tag }}
-          PREV:    ${{ steps.prev_tag.outputs.tag }}
-          CHANNEL: ${{ steps.meta.outputs.channel }}
-          DRY_RUN: ${{ steps.meta.outputs.dry_run }}
+          REPO: ${{ github.repository }}
+          TAG:  ${{ steps.meta.outputs.tag }}
+          PREV: ${{ steps.prev_tag.outputs.tag }}
         run: |
           set -u
-          # dry_run=true: operate off HEAD (tag does not exist yet).
-          # dry_run=false: operate off the tag (the just-created tag, already checked out).
-          if [ "$DRY_RUN" = "true" ]; then HEAD_REF="HEAD"; else HEAD_REF="$TAG"; fi
-
-          # Commit range + the compare/changelog link the notes end with.
           if [ -n "$PREV" ]; then
-            RANGE="${PREV}..${HEAD_REF}"
             CMP_URL="https://github.com/${REPO}/compare/${PREV}...${TAG}"
             FULL_LINK="**Full changelog:** [\`${PREV}\` → \`${TAG}\`](${CMP_URL})"
           else
-            RANGE="$HEAD_REF"
             CMP_URL="https://github.com/${REPO}/commits/${TAG}"
             FULL_LINK="**Full changelog:** [commits in \`${TAG}\`](${CMP_URL})"
           fi
-
-          COMMITS=$(git log "$RANGE" --no-merges --pretty=format:'%h %s' -- src/ scripts/)
-          [ -n "$COMMITS" ] || COMMITS="(no src/ or scripts/ changes in range)"
-
-          # Assemble the user prompt (Context + commit list); the static instructions are
-          # the system prompt (scripts/release-notes-prompt.txt). Written to a file so the
-          # model-generated content is never interpolated through the shell.
-          PROMPT_FILE="${RUNNER_TEMP}/notes_user_prompt.txt"
-          {
-            printf 'Context:\n'
-            printf -- '- Repository (OWNER/REPO): %s\n' "$REPO"
-            printf -- '- Release tag: %s\n' "$TAG"
-            printf -- '- Previous %s release: %s\n' "$CHANNEL" "${PREV:-<none>}"
-            printf -- '- Final line (use verbatim): %s\n\n' "$FULL_LINK"
-            printf 'Commits:\n%s\n' "$COMMITS"
-          } > "$PROMPT_FILE"
 
           echo "cmp_url=${CMP_URL}" >> "$GITHUB_OUTPUT"
           {
@@ -649,68 +571,36 @@ jobs:
             printf '%s\n' "$FULL_LINK"
             echo "__FL__"
           } >> "$GITHUB_OUTPUT"
-          echo "prompt_file=${PROMPT_FILE}" >> "$GITHUB_OUTPUT"
-          # A committed docs/release-notes/<tag>.md is the curated/authoritative notes for
-          # this release; when present it WINS and the Models step is skipped (below).
-          # On dry_run=false the checkout is the tag, which now contains the file committed
-          # by prepare-release — so this is the normal real-publish path.
-          if [ -f "docs/release-notes/${TAG}.md" ]; then HAS_FILE=true; else HAS_FILE=false; fi
-          echo "has_file=${HAS_FILE}" >> "$GITHUB_OUTPUT"
-          echo "Range: ${RANGE}  (committed notes file: ${HAS_FILE})"
-
-      - name: Draft release notes (GitHub Models)
-        id: ai
-        # Single-shot inference on GitHub Models with the built-in token (no secret, free
-        # tier; needs permissions: models:read on this job). The system prompt is the
-        # static instruction file; the user prompt is the Context + commit list above.
-        # SKIPPED when a committed docs/release-notes/<tag>.md already exists — a curated
-        # (or prepare-release-committed) file is authoritative. continue-on-error so a
-        # Models hiccup/rate-limit falls through to the fallback when it does run.
-        if: ${{ steps.notes_prep.outputs.has_file != 'true' }}
-        continue-on-error: true
-        uses: actions/ai-inference@v1
-        with:
-          model: openai/gpt-4.1
-          max-tokens: 2000
-          system-prompt-file: scripts/release-notes-prompt.txt
-          prompt-file: ${{ steps.notes_prep.outputs.prompt_file }}
 
       - name: Assemble release body
         id: changelog
-        # Parse the model output (SUMMARY line + the first ```-fenced block) into the
-        # release title + body. Resilient: if inference was skipped/failed/empty, fall
-        # back to a committed docs/release-notes/<tag>.md, else a placeholder. Always
-        # guarantees the compare link is present. Runs on every event, so a dry-run
-        # shows the real body that would be published.
+        # Precedence: a committed docs/release-notes/<tag>.md (curated, or committed by
+        # prepare-release's placeholder writer) wins; otherwise a deterministic
+        # placeholder — GitHub Models drafting was removed (it never produced a working
+        # result; release run 30379645002); use /release-with-changelog to author real
+        # notes before dispatching. Always guarantees the compare link is present. Runs
+        # on every event, so a dry-run shows the real body that would be published.
         env:
           TAG:       ${{ steps.meta.outputs.tag }}
           VERSION:   ${{ steps.meta.outputs.version }}
           CMP_URL:   ${{ steps.notes_prep.outputs.cmp_url }}
           FULL_LINK: ${{ steps.notes_prep.outputs.full_link }}
-          RESP_FILE: ${{ steps.ai.outputs['response-file'] }}
         run: |
           set -u
           SUMMARY=""
           BODY=""
           NOTES_FILE="docs/release-notes/${TAG}.md"
 
-          # Precedence: a committed notes file wins (curated, or committed by prepare-release);
-          # else the GitHub Models response; else a placeholder.
           if [ -f "$NOTES_FILE" ]; then
             echo "Using committed ${NOTES_FILE}"
             # Optional first-line marker '<!-- SUMMARY: ... -->' becomes the title suffix
             # and is stripped from the rendered body.
             SUMMARY=$(sed -n 's/^<!-- SUMMARY:[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*-->[[:space:]]*$/\1/p' "$NOTES_FILE" | head -1 | tr -d '\r') || true
             BODY=$(sed '/^<!-- SUMMARY:.*-->[[:space:]]*$/d' "$NOTES_FILE")
-          elif [ -n "${RESP_FILE:-}" ] && [ -s "${RESP_FILE}" ]; then
-            echo "Using the GitHub Models draft."
-            SUMMARY=$(grep -m1 '^SUMMARY:' "$RESP_FILE" | sed 's/^SUMMARY:[[:space:]]*//' | tr -d '\r') || true
-            # Extract the content of the FIRST ```-fenced block (the description).
-            BODY=$(awk '/^```/{fence++; next} fence==1{print}' "$RESP_FILE")
           fi
 
           if [ -z "$BODY" ]; then
-            echo "No committed notes and no model response — using a placeholder."
+            echo "No committed notes — using a placeholder."
             BODY=$(printf '_Release notes unavailable; see the full changelog below._\n\n%s' "$FULL_LINK")
           fi
 

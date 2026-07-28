@@ -1,27 +1,29 @@
 ---
 name: release-with-changelog
 description: >
-  Cut a pfBlockerNG release WITH hand-authored release notes: play the role of the
-  GitHub Models step — write docs/release-notes/<tag>.md from the commit range using the
-  same prompt the workflow feeds the model — commit it on the channel branch, then hand
-  off to the /release skill to validate the scheme + dispatch the release workflow (which
-  creates+pushes the tag and publishes; no tag is pushed by hand). Because the file is committed, the
-  workflow's GitHub Models step is skipped and the release body comes from your file. Use
-  this when Models is unavailable (e.g. the org hasn't enabled it), when you want curated
-  notes, or when the user says "write the changelog and release", "release with notes",
-  "play the model and cut the release", or invokes /release-with-changelog.
+  Cut a pfBlockerNG release WITH hand-authored release notes: write
+  docs/release-notes/<tag>.md from the commit range following the same prompt template the
+  workflow used to feed a model — commit it on the channel branch, then hand off to the
+  /release skill to validate the scheme + dispatch the release workflow (which
+  creates+pushes the tag and publishes; no tag is pushed by hand). Because the file is
+  committed, the release body comes from your file instead of the deterministic
+  placeholder. This is the recommended way to produce real release notes (the workflow no
+  longer drafts them — GitHub Models never produced a working result), or when the user
+  says "write the changelog and release", "release with notes", or invokes
+  /release-with-changelog.
   Args: <tag> (e.g. v4.0.0.alpha.1).
 ---
 
 You author the release notes yourself, commit them, then cut the release. The release
-workflow uses a committed `docs/release-notes/<tag>.md` **in preference to** GitHub Models
-(it skips the Models step when the file exists), so providing the file IS "playing the
-model". The actual scheme validation + workflow dispatch (the workflow creates+pushes the
-tag and publishes — you never push a tag by hand) is delegated to **`/release`** — do not
-re-implement it.
+workflow uses a committed `docs/release-notes/<tag>.md` **in preference to** its
+deterministic placeholder, so providing the file is how real release notes happen — the
+workflow itself no longer drafts anything (GitHub Models drafting was removed; it never
+produced a working result). The actual scheme validation + workflow dispatch (the workflow
+creates+pushes the tag and publishes — you never push a tag by hand) is delegated to
+**`/release`** — do not re-implement it.
 
-`scripts/release-notes-prompt.txt` is the **same system prompt** the workflow feeds the
-model; you apply it by hand here. `scripts/release-version.sh` classifies the tag/channel.
+`scripts/release-notes-prompt.txt` is the prompt template the workflow used to feed a
+model; apply it by hand here. `scripts/release-version.sh` classifies the tag/channel.
 
 ## Arguments
 
@@ -41,14 +43,14 @@ model; you apply it by hand here. `scripts/release-version.sh` classifies the ta
    `https://github.com/<owner>/<repo>/compare/<PREV>...<tag>` (or `…/commits/<tag>` when there
    is no `PREV`).
 
-3. **Gather the commits the "model" sees.**
+3. **Gather the commits the notes cover.**
    `git log <PREV>..origin/<branch> --no-merges --pretty='%h %s' -- src/ scripts/`.
    For a **genesis release of a new series** (the first `X.0.0.alpha.1`, whose `PREV` is an
    old-scheme tag), also describe the headline features of the whole series — the narrow
    `PREV..HEAD` range alone undersells it; read prior notes / ADR titles for the arc.
 
-4. **Author the notes by applying `scripts/release-notes-prompt.txt`.** Produce exactly what
-   the model would: keep only user-relevant changes (drop CI / tests / tooling / lint /
+4. **Author the notes by applying `scripts/release-notes-prompt.txt`.** Follow its shape:
+   keep only user-relevant changes (drop CI / tests / tooling / lint /
    internal refactors / dev-docs); group under `## Features`, `## Improvements`, `## Bug Fixes`
    (omit an empty group); link each item's PR/issue as `([#N](…/issues/N))` when the subject
    references `#N` (the `/issues/` path resolves for PRs too); **never name internal ADRs** —
@@ -73,14 +75,14 @@ model; you apply it by hand here. `scripts/release-version.sh` classifies the ta
    the channel↔branch scheme, checks CI is green on the release commit (now including the notes
    commit), and **dispatches `release.yml` with `dry_run=false`** — the workflow then creates and
    pushes the tag on the channel-branch tip itself (no hand-pushed tag), sees the committed notes
-   file, **skips the Models step**, and publishes the Release with your notes as the body and the
-   `SUMMARY` as the title suffix.
+   file, and publishes the Release with your notes as the body and the `SUMMARY` as the title
+   suffix.
 
 ## Guardrails
 
 - **The notes file must land on the channel branch before the tag** — a tag whose commit
-  predates the file means the workflow won't see it (it would fall through to Models, or a
-  placeholder). Order matters: notes commit first, tag second.
+  predates the file means the workflow won't see it (it would fall through to the
+  deterministic placeholder). Order matters: notes commit first, tag second.
 - **Inherit every `/release` guardrail** — channel↔branch enforcement, immutable tags (cut the
   next `.N` instead of moving one), tag-only pushes (never a direct `main`/`devel` push). This
   skill only adds the notes-authoring + commit in front.
