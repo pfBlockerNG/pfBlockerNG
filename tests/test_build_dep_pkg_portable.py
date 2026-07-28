@@ -1,14 +1,13 @@
 """Tests for scripts/build-dep-pkg-portable.py — the port-driven dependency
 package builder (issue #1806 step A).
 
-Brand-new code (no pre-existing behaviour to be wrong), so no red-vs-existing
-proof is required — but every assertion here is real (fails on a regression),
-per testing.md principle 3. The fixture Makefile/distinfo/pkg-descr mirror the
-REAL textproc/py-charset-normalizer port (captured 2026-07-28 from the
+The fixture Makefile/distinfo/pkg-descr mirror the REAL
+textproc/py-charset-normalizer port (captured 2026-07-28 from the
 pfBlockerNG/FreeBSD-ports fork, commit 3a57c58d82c8's parent). Network (sdist
 fetch, `pip wheel`) is mocked everywhere here — see the module docstring in
-build-dep-pkg-portable.py and the handoff for the one real, network-using,
-manually-executed end-to-end run against the actual ports checkout.
+build-dep-pkg-portable.py for the tool's real network behavior; a real build
+against an actual ports checkout (genuine sdist fetch + pip wheel) is
+validated separately, outside this hermetic suite.
 """
 
 from __future__ import annotations
@@ -337,6 +336,38 @@ def test_build_wheel_refuses_platform_wheel(tmp_path: Path, monkeypatch: pytest.
     (wheel_dir / "charset_normalizer-3.4.4-cp311-cp311-macosx_11_0_arm64.whl").write_bytes(b"")
     with pytest.raises(bdp.DepPkgError, match="not a pure-Python wheel"):
         bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
+
+
+def test_build_wheel_sets_pip_constraint_pinning_setuptools_and_wheel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """W4 (supply chain, honest middle ground): `pip wheel`'s pep517 isolated
+    build env otherwise fetches whatever's newest on PyPI for the build backend
+    itself (setuptools/wheel) -- PIP_CONSTRAINT pins it to exact versions.
+    Assert the env var is actually passed on the pip call, pointing at a real
+    constraints file naming both packages."""
+    captured_envs: list[dict[str, str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        captured_envs.append(kwargs.get("env") or {})
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(bdp.subprocess, "run", fake_run)
+    wheel_dir = tmp_path / "wheel"
+    wheel_dir.mkdir()
+    (wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl").write_bytes(b"")
+
+    bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
+
+    # The pip-wheel call (the last of the two subprocess.run calls: the pip
+    # probe in _pip_python, then the actual build) carries PIP_CONSTRAINT.
+    pip_wheel_env = captured_envs[-1]
+    assert "PIP_CONSTRAINT" in pip_wheel_env, "pip wheel call was not given PIP_CONSTRAINT"
+    constraints_path = Path(pip_wheel_env["PIP_CONSTRAINT"])
+    assert constraints_path.is_file(), f"PIP_CONSTRAINT points at a nonexistent file: {constraints_path}"
+    text = constraints_path.read_text()
+    assert "setuptools==" in text
+    assert "wheel==" in text
 
 
 # --------------------------------------------------------------------------- #

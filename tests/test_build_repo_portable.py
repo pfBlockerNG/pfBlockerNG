@@ -3114,8 +3114,9 @@ def test_cli_release_pkgs_bad_format_errors(tmp_path: Path) -> None:
 # per-arch release_extra_pkgs/release_pkgs candidates.
 #
 # These tests pin:
-#   * the dep lands in BOTH release/<varver>/<arch>/ and nightly/<varver>/<arch>/
-#     of its OWN ABI train (source-build mode + the nightly fold)
+#   * the dep lands in BOTH release/<varver>/ and nightly/<varver>/ (arch-less;
+#     issue #1806 — no <arch> leaf) of its OWN ABI train (source-build mode +
+#     the nightly fold)
 #   * it is ABSENT from a different variant's catalogs (different FreeBSD major)
 #   * it does NOT consume a --release-keep-stable retention slot (folded AFTER
 #     retain_by_channel, not before — the bug this design deliberately avoids:

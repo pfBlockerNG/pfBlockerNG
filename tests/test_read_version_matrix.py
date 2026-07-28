@@ -429,7 +429,11 @@ def test_build_matrix_dedup_hard_errors_on_py_flavor_mismatch(tmp_path: Path) ->
         env=_clean_git_env(),
     )
     assert proc.returncode != 0, f"a py_flavor mismatch across merged rows must abort; stdout:\n{proc.stdout}"
-    assert "disagreeing php_version" in proc.stderr, proc.stderr
+    # CR-8: this test is about py_flavor, not php_version — assert ITS OWN field
+    # token (production emits one combined "disagreeing php_version/py_flavor"
+    # message for either mismatch; the sibling php_version test above asserts
+    # "disagreeing php_version" for the same reason, on its own field).
+    assert "disagreeing" in proc.stderr and "py_flavor" in proc.stderr, proc.stderr
 
 
 def test_build_matrix_no_dedup_when_majors_differ(tmp_path: Path) -> None:
