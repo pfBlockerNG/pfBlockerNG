@@ -49,6 +49,7 @@ def _run_plan(
     *,
     filter_version: str = "",
     self_refresh: str = "",
+    direct_leg: str = "",
 ) -> dict[str, Any]:
     """Extract the plan step's run script and execute it against a fixture."""
     source = WORKFLOW.read_text(encoding="utf-8")
@@ -87,6 +88,7 @@ esac
         "FAKE_MATRIX": str(matrix_file),
         "FILTER_VERSION": filter_version,
         "SELF_REFRESH": self_refresh,
+        "DIRECT_LEG": direct_leg,
         "GITHUB_OUTPUT": str(out_file),
     }
     subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, check=True, capture_output=True, text=True)
@@ -100,13 +102,14 @@ esac
     return matrix
 
 
-class TestAvailabilityLegs:
-    """Scenario: upgrade.available drives the leg — ci does not."""
+class TestBareDispatch:
+    """Scenario (issue #1823): the retired upgrade.available matrix mode plans
+    NOTHING — legs come only from a direct_leg dispatch (the reconcile loop) or
+    an explicit self_refresh run."""
 
-    def test_available_entry_with_ci_false_gets_leg(self, tmp_path: Path) -> None:
-        # issue #1820: a beta entry enters the matrix with ci:false (no image to
-        # smoke yet) and MUST still be refreshable
+    def test_bare_dispatch_plans_no_legs_even_with_available_flags(self, tmp_path: Path) -> None:
         versions = [
+            _entry(upgrade={"available": True}),
             _entry(
                 pfsense_version="26.07",
                 channel="Plus",
@@ -115,54 +118,47 @@ class TestAvailabilityLegs:
                 ci=False,
                 image_name="pfsense-plus",
                 upgrade={"available": True, "from": "26.03", "branch": "26.07"},
-            )
-        ]
-        matrix = _run_plan(tmp_path, versions)
-        assert len(matrix["include"]) == 1
-        leg = matrix["include"][0]
-        assert leg["pfsense_version"] == "26.07"
-        assert leg["from"] == "26.03"
-        assert leg["branch"] == "26.07"
-        assert leg["force_flag"] == ""
-
-    def test_available_false_entry_skipped(self, tmp_path: Path) -> None:
-        matrix = _run_plan(tmp_path, [_entry(ci=True, upgrade={"available": False})])
-        assert matrix["include"] == []
-
-    def test_route_only_entry_skipped(self, tmp_path: Path) -> None:
-        versions = [_entry(role="route-only", upgrade={"available": True})]
-        matrix = _run_plan(tmp_path, versions)
-        assert matrix["include"] == []
-
-    def test_aarch64_entry_never_gets_leg(self, tmp_path: Path) -> None:
-        # No ARM smoke image exists; only amd64 entries may boot (scripts/README.md)
-        versions = [
-            _entry(
-                pfsense_version="26.03",
-                channel="Plus",
-                variant="Plus",
-                ci=False,
-                arch="aarch64",
-                image_name="pfsense-plus",
-                upgrade={"available": True},
-            )
-        ]
-        matrix = _run_plan(tmp_path, versions)
-        assert matrix["include"] == []
-
-    def test_version_filter_restricts_legs(self, tmp_path: Path) -> None:
-        versions = [
-            _entry(upgrade={"available": True}),
-            _entry(
-                pfsense_version="26.03",
-                channel="Plus",
-                variant="Plus",
-                image_name="pfsense-plus",
-                upgrade={"available": True},
             ),
         ]
-        matrix = _run_plan(tmp_path, versions, filter_version="26.03")
-        assert [leg["pfsense_version"] for leg in matrix["include"]] == ["26.03"]
+        matrix = _run_plan(tmp_path, versions)
+        assert matrix["include"] == []
+
+
+class TestDirectLeg:
+    """Scenario (issue #1823): the reconcile loop dispatches one fully-specified
+    leg as JSON; the plan validates and passes it through verbatim."""
+
+    LEG = {
+        "variant": "plus",
+        "label": "Plus",
+        "pfsense_version": "26.07",
+        "freebsd_version": "16.0-RELEASE",
+        "image_name": "pfsense-plus",
+        "branch": "26.07",
+        "target": "26.07",
+        "from": "26.03",
+        "force_flag": "",
+    }
+
+    def test_valid_direct_leg_passes_through(self, tmp_path: Path) -> None:
+        matrix = _run_plan(tmp_path, [_entry()], direct_leg=json.dumps(self.LEG))
+        assert matrix["include"] == [self.LEG]
+
+    def test_direct_leg_overrides_self_refresh(self, tmp_path: Path) -> None:
+        # A dispatch carrying both inputs is a caller bug; direct wins (explicit
+        # beats derived) and exactly one leg runs
+        matrix = _run_plan(tmp_path, [_entry()], direct_leg=json.dumps(self.LEG), self_refresh="true")
+        assert matrix["include"] == [self.LEG]
+
+    def test_garbage_direct_leg_plans_nothing(self, tmp_path: Path) -> None:
+        matrix = _run_plan(tmp_path, [_entry()], direct_leg="not json {")
+        assert matrix["include"] == []
+
+    def test_incomplete_direct_leg_plans_nothing(self, tmp_path: Path) -> None:
+        # Missing required fields (e.g. image_name) must not produce a leg
+        leg = {k: v for k, v in self.LEG.items() if k != "image_name"}
+        matrix = _run_plan(tmp_path, [_entry()], direct_leg=json.dumps(leg))
+        assert matrix["include"] == []
 
 
 class TestSelfRefreshLegs:
