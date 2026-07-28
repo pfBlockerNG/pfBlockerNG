@@ -258,12 +258,18 @@ if [ "$_EXTRA_PKGS_COUNT" -gt 0 ]; then
         # explicitly (idempotent; cone mode already set by sparse-clone-ports.sh).
         git -C "$PORTS_DIR" sparse-checkout add "$_origin"
         printf 'smoke-on-box: building dep pkg %s...\n' "$_origin" >&2
-        _dep_pkg="$(python3 scripts/build-dep-pkg-portable.py \
+        # Capture WITHOUT a pipe first -- a pipe inside `$(...)` would take the
+        # PIPELINE's exit status (tail's, always 0) instead of the builder's,
+        # masking a real build failure under `set -e`. Then tail -n 1 as
+        # belt-and-braces on top of the script's own stdout=path-only contract
+        # (take only the LAST line no matter what).
+        _dep_pkg_out="$(python3 scripts/build-dep-pkg-portable.py \
             --ports "$PORTS_DIR" \
             --port "$_origin" \
             --py-flavor "$_py_flavor" \
             --freebsd-major "$_freebsd_major" \
             --out-dir "$_DEP_PKG_DIR")"
+        _dep_pkg="$(printf '%s\n' "$_dep_pkg_out" | tail -n 1)"
         SMOKE_DEP_PKGS="${SMOKE_DEP_PKGS:+$SMOKE_DEP_PKGS }${_dep_pkg}"
         _i=$((_i + 1))
     done
