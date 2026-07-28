@@ -137,6 +137,11 @@ jobs:
           PFB_RUN_ROOT: ${{ github.workspace }}/out
         run: |
           set -eu
+          # issue #1806: the ABI's cpu segment (e.g. "amd64") is INERT for a
+          # NO_ARCH port — build-pkg-portable.py wildcards the stamp regardless
+          # of what's given, so callers that only care about the FreeBSD major
+          # (e.g. release.yml's deduped-by-major fan-out) can pass any concrete
+          # placeholder here; it never affects the produced .pkg's real ABI.
           # AMENDMENT 7: slug ABI into a path-safe LEG token (FreeBSD:15:amd64 →
           # freebsd-15-amd64) so the RUN_ID never carries raw colon path components.
           LEG="$(printf '%s' "$ABI" | tr '[:upper:]' '[:lower:]' | tr ':' '-')"
