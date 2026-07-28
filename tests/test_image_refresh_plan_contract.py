@@ -252,6 +252,31 @@ FAKE_GIT_ACT = """#!/bin/sh
 printf 'git %s\\n' "$*" >> "$GIT_LOG"
 case "$1" in
   show) cat "$FAKE_MATRIX" ;;
+  checkout)
+    # Emulate the real effect: switching the JOB's tree to the ci-metadata
+    # orphan ref leaves only the matrix file behind (CodeRabbit CR2).
+    rm -rf scripts
+    ;;
+  worktree)
+    # `worktree add [--force] [-B BR] DIR REF` materialises the ref in DIR and
+    # leaves the JOB's tree untouched. Mirror it into a predictable wt-* dir so
+    # the assertions can read what the step staged.
+    shift
+    [ "$1" = "add" ] && shift
+    _dir=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --force) shift ;;
+        -B) shift 2 ;;
+        *) [ -z "$_dir" ] && _dir=$1; shift ;;
+      esac
+    done
+    if [ -n "$_dir" ] && [ "$_dir" != "remove" ]; then
+      mkdir -p "$_dir"
+      printf 'WT %s\\n' "$_dir" >> "$GIT_LOG"
+      ln -s "$_dir" "wt-$$" 2>/dev/null || true
+    fi
+    ;;
 esac
 exit 0
 """
@@ -296,6 +321,13 @@ PLUS_2607_MATRIX = {
 FACTS_857 = "etc_version=26.07-BETA\nphp_version=8.6\npy_flavor=py312\nfreebsd_version=16.0-CURRENT\nfreebsd_major=16\n"
 
 
+def _pushed_matrix(tmp_path: Path) -> dict[str, Any]:
+    """The matrix the step staged for the PR branch (written in its worktree)."""
+    staged = sorted(tmp_path.glob("wt-*/supported-versions.json"))
+    assert staged, "the activation step staged no matrix file"
+    return json.loads(staged[0].read_text(encoding="utf-8"))
+
+
 class TestActivationPr:
     """Scenario (issue #1837): after a publish, the leg's matrix entry is
     activated (ci: true) with the box-verified versions, via ONE tracker/* PR;
@@ -309,6 +341,7 @@ class TestActivationPr:
         matrix: dict[str, Any] | None = None,
         family: str = "26.07",
         pr_open: str = "",
+        dry_run: str = "false",
     ) -> tuple[str, str, Path]:
         source = WORKFLOW.read_text(encoding="utf-8")
         step = source.split(f"      - name: {ACTIVATION_STEP}\n", 1)[1].split("\n      - name:", 1)[0]
@@ -341,6 +374,7 @@ class TestActivationPr:
             "CHANNEL": "Plus",
             "FAMILY": family,
             "VARIANT": "plus",
+            "DRY_RUN": dry_run,
         }
         subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, check=True, capture_output=True, text=True)
 
@@ -352,13 +386,9 @@ class TestActivationPr:
 
     def test_publish_activates_entry_with_box_facts(self, tmp_path: Path) -> None:
         git_log, gh_log, cwd = self._run(tmp_path, facts=FACTS_857)
-        assert "git push " + "--force origin tracker/matrix-activate-plus-26.07" in git_log
+        assert "--force origin tracker/matrix-activate-plus-26.07" in git_log
         assert "pr create" in gh_log
-        entry = next(
-            e
-            for e in json.loads((cwd / "supported-versions.json").read_text(encoding="utf-8"))["versions"]
-            if e["pfsense_version"] == "26.07"
-        )
+        entry = next(e for e in _pushed_matrix(cwd)["versions"] if e["pfsense_version"] == "26.07")
         assert entry["ci"] is True
         assert entry["php_version"] == "8.6"
         assert entry["py_flavor"] == "py312"
@@ -368,11 +398,7 @@ class TestActivationPr:
     def test_major_change_rewrites_full_freebsd_version(self, tmp_path: Path) -> None:
         facts = FACTS_857.replace("16.0-CURRENT", "17.0-CURRENT").replace("freebsd_major=16", "freebsd_major=17")
         _, _, cwd = self._run(tmp_path, facts=facts)
-        entry = next(
-            e
-            for e in json.loads((cwd / "supported-versions.json").read_text(encoding="utf-8"))["versions"]
-            if e["pfsense_version"] == "26.07"
-        )
+        entry = next(e for e in _pushed_matrix(cwd)["versions"] if e["pfsense_version"] == "26.07")
         assert entry["freebsd_major"] == "17"
         assert entry["freebsd_version"] == "17.0-CURRENT"
 
@@ -392,5 +418,42 @@ class TestActivationPr:
 
     def test_existing_open_pr_updates_without_recreating(self, tmp_path: Path) -> None:
         git_log, gh_log, _ = self._run(tmp_path, facts=FACTS_857, pr_open="88")
-        assert "git push " + "--force origin tracker/matrix-activate-plus-26.07" in git_log
+        assert "--force origin tracker/matrix-activate-plus-26.07" in git_log
         assert "pr create" not in gh_log
+
+    def test_dry_run_proposes_nothing(self, tmp_path: Path) -> None:
+        # Review B2: issue #1837 requires DRY_RUN honored, like the reconcile's
+        # own open_matrix_pr
+        git_log, gh_log, _ = self._run(tmp_path, facts=FACTS_857, dry_run="true")
+        assert "push" not in git_log
+        assert "pr create" not in gh_log
+
+    def test_hostile_facts_file_is_not_executed(self, tmp_path: Path) -> None:
+        # Review B1: the step must not source the facts file — a stray line
+        # (anomalous /etc/version, or an injected one) must never run
+        facts = FACTS_857 + f"touch {tmp_path}/PWNED\n"
+        self._run(tmp_path, facts=facts)
+        assert not (tmp_path / "PWNED").exists()
+
+    def test_aarch64_twin_entry_is_left_untouched(self, tmp_path: Path) -> None:
+        matrix = json.loads(json.dumps(PLUS_2607_MATRIX))
+        twin = dict(matrix["versions"][1], arch="aarch64", ci=False)
+        matrix["versions"].append(twin)
+        _, _, cwd = self._run(tmp_path, facts=FACTS_857, matrix=matrix)
+        versions = _pushed_matrix(cwd)["versions"]
+        amd = next(e for e in versions if e["pfsense_version"] == "26.07" and e.get("arch", "amd64") == "amd64")
+        arm = next(e for e in versions if e.get("arch") == "aarch64")
+        assert amd["ci"] is True
+        assert amd["php_version"] == "8.6"
+        # the ARM twin has no smoke image — it must keep ci:false and its values
+        assert arm["ci"] is False
+        assert arm["php_version"] == "8.5"
+
+    def test_working_tree_survives_the_activation_step(self, tmp_path: Path) -> None:
+        # CodeRabbit CR2 (critical): the non-blocking smoke step runs AFTER this
+        # one and needs scripts/ — the PR branch work must not swap the job's
+        # working tree to the ci-metadata ref.
+        (tmp_path / "scripts").mkdir()
+        (tmp_path / "scripts" / "install-from-repo.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        self._run(tmp_path, facts=FACTS_857)
+        assert (tmp_path / "scripts" / "install-from-repo.sh").exists()

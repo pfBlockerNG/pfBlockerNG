@@ -58,6 +58,11 @@ on:
         required: false
         default: "false"
         type: string
+      dry_run:
+        description: "If 'true', log the activation PR that WOULD be proposed but do not push or open it."
+        required: false
+        default: "false"
+        type: string
       direct_leg:
         description: "One fully-specified leg as JSON ({variant,label,pfsense_version,freebsd_version,image_name,branch,target,from,force_flag}) — how the reconcile loop (issue #1823) dispatches its planned actions. Takes precedence over self_refresh."
         required: false
@@ -325,14 +330,22 @@ jobs:
           CHANNEL: ${{ matrix.label }}
           FAMILY: ${{ matrix.pfsense_version }}
           VARIANT: ${{ matrix.variant }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           if [ ! -s box-facts.env ]; then
             echo "No box facts gathered — skipping the activation PR."
             exit 0
           fi
-          # shellcheck disable=SC1091
-          . ./box-facts.env
+          # NEVER source this file: its values come from the guest. Read the
+          # keys instead (image_facts_put already charset-gates them; parsing
+          # keeps a hostile or anomalous line inert either way — review B1).
+          fact() { sed -n "s/^$1=\\(.*\\)$/\\1/p" box-facts.env | head -1; }
+          etc_version=$(fact etc_version)
+          php_version=$(fact php_version)
+          py_flavor=$(fact py_flavor)
+          freebsd_version=$(fact freebsd_version)
+          freebsd_major=$(fact freebsd_major)
           echo "Box facts: etc=${etc_version:-} php=${php_version:-} py=${py_flavor:-} fbsd=${freebsd_version:-}/${freebsd_major:-}"
 
           git fetch origin ci-metadata -q
@@ -366,14 +379,26 @@ jobs:
             exit 0
           fi
 
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "[DRY-RUN] WOULD open the activation PR for ${CHANNEL} ${FAMILY}:"
+            diff -u matrix_current.json "$NEWM" || true
+            rm -f "$NEWM"
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BR="tracker/matrix-activate-${VARIANT}-${FAMILY}"
-          git checkout -B "$BR" origin/ci-metadata
-          cp "$NEWM" supported-versions.json
-          git add supported-versions.json
-          git commit -m "ci-metadata: activate ${CHANNEL} ${FAMILY} (box-verified)"
-          git push --force origin "$BR"
+          # Build the PR branch in a SEPARATE worktree: `git checkout -B` here
+          # would swap the JOB's tree to the ci-metadata ref and break the
+          # non-blocking smoke step that runs after this one (review CR2).
+          WT=$(mktemp -d)
+          git worktree add --force -B "$BR" "$WT" origin/ci-metadata
+          cp "$NEWM" "$WT/supported-versions.json"
+          git -C "$WT" add supported-versions.json
+          git -C "$WT" commit -m "ci-metadata: activate ${CHANNEL} ${FAMILY} (box-verified)"
+          git -C "$WT" push --force origin "$BR"
+          git worktree remove --force "$WT" || true
 
           BODY_FILE=$(mktemp)
           {
