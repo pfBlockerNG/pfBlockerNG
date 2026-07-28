@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import os
 import re
 import shutil
 import subprocess
@@ -236,10 +237,11 @@ def fetch_verified_sdist(port: PortFacts, dest_dir: Path, *, sha256: str, size: 
 # --------------------------------------------------------------------------- #
 
 
-def _run_relayed(cmd: list[str]) -> None:
+def _run_relayed(cmd: list[str], **kwargs: Any) -> None:
     """Run ``cmd`` with its stdout+stderr CAPTURED (never inherited) and relayed
     to OUR stderr, then raise ``CalledProcessError`` on a nonzero exit — same
-    contract as ``subprocess.run(cmd, check=True)`` for the caller.
+    contract as ``subprocess.run(cmd, check=True)`` for the caller. Extra
+    ``kwargs`` (e.g. ``env=``) pass through to ``subprocess.run`` verbatim.
 
     A tool this script shells out to (pip, venv) is chatty on stdout
     ("Processing ...", "Created wheel ..."). ``main()``'s stdout contract is
@@ -248,13 +250,24 @@ def _run_relayed(cmd: list[str]) -> None:
     build-dep-pkg-portable.py ...)"``); an inherited child stdout leaks that
     chatter into the captured value and word-splits it into garbage.
     """
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
     if result.stdout:
         sys.stderr.write(result.stdout)
     if result.stderr:
         sys.stderr.write(result.stderr)
     if result.returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=result.stderr)
+
+
+# W4 (supply chain, honest middle ground): `pip wheel` builds the sdist's
+# pep517 backend in an ISOLATED build env by default — with no pin, that env
+# fetches whatever is newest on PyPI for the backend itself (setuptools/wheel),
+# a version-drift supply-chain gap this narrows. PIP_CONSTRAINT (below) makes
+# pip apply this EXACT-version pin to the isolated build env too, not just the
+# top-level install. This does NOT close the gap: PyPI is still trusted to
+# serve these exact, named versions honestly (no hash pin) — a deliberate
+# middle ground, not a hermetic build. Bump these periodically.
+_BUILD_BACKEND_CONSTRAINTS = "setuptools==75.6.0\nwheel==0.45.1\n"
 
 
 def _pip_python(work_dir: Path) -> str:
@@ -283,9 +296,15 @@ def build_wheel(sdist: Path, work_dir: Path) -> Path:
     wheel_dir = work_dir / "wheel"
     wheel_dir.mkdir(parents=True, exist_ok=True)
     python = _pip_python(work_dir)
+    # W4: PIP_CONSTRAINT applies to pip's OWN isolated pep517 build env too (not
+    # just this top-level install), pinning the sdist's build backend
+    # (setuptools/wheel) to the exact versions above.
+    constraints_file = work_dir / "build-constraints.txt"
+    constraints_file.write_text(_BUILD_BACKEND_CONSTRAINTS)
+    env = dict(os.environ, PIP_CONSTRAINT=str(constraints_file))
     cmd = [python, "-m", "pip", "wheel", "--no-deps", str(sdist), "-w", str(wheel_dir)]
     sys.stderr.write(f"==> building wheel: {' '.join(cmd)}\n")
-    _run_relayed(cmd)
+    _run_relayed(cmd, env=env)
     wheels = sorted(wheel_dir.glob("*.whl"))
     if len(wheels) != 1:
         raise DepPkgError(f"expected exactly one wheel from `pip wheel`, got {[w.name for w in wheels]}")
