@@ -437,13 +437,22 @@ jobs:
             --username "$SMOKE_GHCR_USER" --password-stdin
           REPO_NS="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
 
+          # A family is a candidate when it is the channel's newest STABLE entry
+          # (beta entries must not hide the GA family the CI images actually
+          # track) OR its own entry is beta (GA day: the beta image needs its
+          # final refresh even though a newer stable does not exist yet).
           CANDS=$(jq -c --argjson bm "$BUILD_MATRIX" '
             [ .latest_releases[] as $lr
-              | ([ $bm[] | select(.channel == $lr.channel) | select((.arch // "amd64") == "amd64") ]
-                 | max_by(.pfsense_version | split(".") | map(tonumber))) as $newest
-              | select($newest != null and $newest.pfsense_version == $lr.version)
+              | ([ $bm[] | select(.channel == $lr.channel) | select((.arch // "amd64") == "amd64")
+                         | select((.status // "active") != "beta") ]
+                 | max_by(.pfsense_version | split(".") | map(tonumber))) as $stable
+              | ((first($bm[] | select(.channel == $lr.channel) | select((.arch // "amd64") == "amd64")
+                         | select(.pfsense_version == $lr.version))) // null) as $own
+              | select($own != null)
+              | select(($stable != null and $stable.pfsense_version == $lr.version)
+                       or (($own.status // "active") == "beta"))
               | { version: $lr.version, channel: $lr.channel, page: $lr.latest_release,
-                  image_name: ($newest.image_name // ("pfsense-" + ($newest.channel | ascii_downcase))) }
+                  image_name: ($own.image_name // ("pfsense-" + ($own.channel | ascii_downcase))) }
             ]' probe_result.json)
           N=$(printf '%s\n' "$CANDS" | jq 'length')
           i=0
@@ -612,7 +621,7 @@ jobs:
               .versions += [
                 $sib + {
                   pfsense_version: $fut.version,
-                  freebsd_version: ($fut.freebsd_version // $sib.freebsd_version),
+                  freebsd_version: (if ($fut.freebsd_version // "") != "" then $fut.freebsd_version else $sib.freebsd_version end),
                   freebsd_major:   (if ($fut.freebsd_major // "") != "" then $fut.freebsd_major else $sib.freebsd_major end),
                   status:  "beta",
                   ci:      false,
