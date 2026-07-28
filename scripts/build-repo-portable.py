@@ -664,9 +664,12 @@ def build_repo_matrix(
     varver directory serves every arch of that FreeBSD major, so there is
     nothing left to bucket by arch. ``_emit_catalog_from_paths`` hard-rejects a
     concrete-ABI package at emission (never a silent single-arch install).
-    Each matrix row still carries ``arch`` (it drives CI legs and the
-    concrete ``--abi`` fed to the builder, per-row, so build-pkg-portable.py
-    can derive the FreeBSD major — it no longer selects a catalog bucket).
+    ``arch`` is retired from the matrix (issue #1806) — a row no longer carries
+    it. This function still needs a literal CPU segment for the concrete
+    ``--abi`` fed to the builder, per-row, so build-pkg-portable.py can derive
+    the FreeBSD major: it defaults to ``"amd64"`` (a stray legacy ``arch`` key,
+    if a row still carries one, is honored instead) — either way it no longer
+    selects a catalog bucket.
 
     For each matrix entry (each carrying pfsense_version, variant, freebsd_major,
     php_version, py_flavor, optionally arch, and optionally role):

@@ -44,15 +44,19 @@
 #     to that one-build-per-major granularity. Each row carries: freebsd_major,
 #     php_version, py_flavor, extra_pkgs (deduped union across merged rows;
 #     default [] when every merged row omits it), plus pfsense_version/channel/
-#     freebsd_version/variant/status/ci/image_name/mac/... inherited from
-#     whichever merged row is LAST in matrix order (fine for a build TARGET; a
-#     consumer needing every distinct version sharing a major reads --print-ci
-#     or --print-route instead, both one row per version, never deduped).
+#     freebsd_version/variant/status/image_name/mac/... inherited from whichever
+#     merged row is LAST in matrix order (fine for a build TARGET; a consumer
+#     needing every distinct version sharing a major reads --print-ci or
+#     --print-route instead, both one row per version, never deduped).
 #     php_version/py_flavor drive the real build and MUST agree across every row
 #     sharing a major — disagreement is a hard error (an unresolvable ambiguity,
-#     never silently picking one side). There is no `arch` field anywhere: the
-#     catalog is arch-less (a stray `arch` key on an input row is tolerated and
-#     ignored, never resurrected as a default). role=route-only entries are
+#     never silently picking one side). There is no `arch` OR `ci` field on a
+#     merged BUILD row, ever: both are explicitly deleted post-merge (a stray
+#     `arch`/`ci` key on any contributing row — even a non-representative one —
+#     would otherwise ride through via the last-wins `reduce`, e.g. a
+#     non-last row's `arch` never gets overwritten by a last row that lacks
+#     it). BUILD consumers never read either key; --print-ci is the leg/arch
+#     source. role=route-only entries are
 #     EXCLUDED: they are served from a frozen .pkg but never built or smoked.
 #   CI matrix        — the ci:true entries (ANY channel), ONE ROW PER VERSION
 #     (never deduped by freebsd_major — a smoke/UI leg boots one VM per pfSense
@@ -223,6 +227,7 @@ BUILD_MATRIX="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
       else
         (reduce .[] as $row ({}; . + $row)) as $merged
         | $merged + {extra_pkgs: ([.[] | (.extra_pkgs // [])] | add | unique | sort)}
+        | del(.arch, .ci)
       end
     )
   | sort_by(.freebsd_major // "")')"
