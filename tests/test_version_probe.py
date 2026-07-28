@@ -408,6 +408,36 @@ class TestGracefulDegradation:
         assert "26.03" in missing
 
 
+# ── Hostile version cells (review F3) ────────────────────────────────────────
+
+
+class TestHostileVersionCells:
+    """Scenario: a version cell that is not a plausible version string is
+    dropped at the parser chokepoint — downstream consumers printf these values
+    into JSON, git branch names, and PR titles, so shell/JSON metacharacters
+    must never leave this script."""
+
+    def _rows_for(self, version: str) -> list[Any]:
+        html = _make_table([_make_row(version, "fa-clock", "TBD", "16.0-CURRENT@abc", "plus-RELENG_26_07")])
+        p = cvs._TableParser()
+        p.feed(html)
+        return cvs.parse_tables(p.tables)
+
+    def test_metacharacter_version_cell_is_dropped(self) -> None:
+        rows = self._rows_for('26.07"x};$(touch pwn)')
+        assert rows == []
+
+    def test_plain_version_cell_is_kept(self) -> None:
+        # Before-state guard for the same fixture shape: a normal cell parses
+        rows = self._rows_for("26.07")
+        assert [r.version for r in rows] == ["26.07"]
+
+    def test_patchlevel_suffix_version_is_kept(self) -> None:
+        # 2.4.4-p3-style page rows are legitimate history on the Netgate page
+        rows = self._rows_for("2.4.4-p3")
+        assert [r.version for r in rows] == ["2.4.4-p3"]
+
+
 # ── Diff: latest_releases (patch/GA detection, issue #1820) ──────────────────
 
 

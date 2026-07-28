@@ -36,6 +36,10 @@ from typing import NamedTuple
 
 VERSIONS_URL = "https://docs.netgate.com/pfsense/en/latest/releases/versions.html"
 
+# A plausible page version cell: leading digit, then digits/dots/alnum/hyphen
+# (covers 2.8.1, 26.03, and historical 2.4.4-p3 patchlevels).
+_VERSION_CELL_RE = re.compile(r"[0-9][0-9A-Za-z.-]*")
+
 _FETCH_HEADERS: dict[str, str] = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -224,6 +228,11 @@ def parse_tables(tables: list[list[list[str]]]) -> list[_Row]:
             ver_raw = row[col["version"]].strip()
             branch_raw = row[col["branch"]].strip()
             if not ver_raw or not branch_raw:
+                continue
+            # Chokepoint (issue #1820 review): version cells feed printf'd JSON,
+            # git branch names, and PR titles downstream — drop anything that is
+            # not a plausible version string (digits/dots/alnum/hyphen only).
+            if not _VERSION_CELL_RE.fullmatch(ver_raw):
                 continue
 
             channel = _channel_from_branch(branch_raw)

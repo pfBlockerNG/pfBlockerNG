@@ -275,6 +275,7 @@ boots a real pfSense CE VM. **No Packer**: pfBlockerNG compiles nothing.
 | [`image-publish.sh`](image-publish.sh) | Export a powered-off VM's ZFS zvol → compressed (zstd) qcow2 → `oras push` to GHCR. `--type ce\|plus\|civm` derives the image ref, qcow2 filename, description + artifact-type from the type + version. Old tags kept. |
 | [`publish-smoke-image.sh`](publish-smoke-image.sh) | Interactive front-end for `image-publish.sh` — asks only type, version, VM id and Proxmox host/port; derives everything else. |
 | [`image-upgrade.sh`](image-upgrade.sh) | Pull a tag → boot a **copy** → `pfSense-upgrade` → power off → publish a new version tag. Source image untouched. |
+| [`beta-repo-probe.sh`](beta-repo-probe.sh) | Version-tracker beta detection (issue #1820): boot the current smoke image as a throwaway overlay, `pfSense-repoc -p`, report whether an expected upcoming version is a public repo branch (JSON verdict yes/no/unknown + branch name). |
 
 ### Driving from your machine
 
