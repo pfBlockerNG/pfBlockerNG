@@ -25,26 +25,31 @@ final class PfbJsCacheBustingWiringTest extends TestCase
 	private const SCRIPT_PATH = '/usr/local/www/pfblockerng/pfBlockerNG.js';
 
 	/**
+	 * Sources that ship the include: the four static pages, plus the nowdoc template
+	 * pfblockerng_get_countries() writes out as the nine GeoIP continent pages -- those
+	 * are navigable tabs and carry the same exposure.
+	 *
 	 * @return array<string, array{string}>
 	 */
 	public static function pageProvider(): array
 	{
-		$pages = array(
-			'pfblockerng_category_edit.php',
-			'pfblockerng_category.php',
-			'pfblockerng_ip.php',
-			'pfblockerng_dnsbl.php',
+		$sources = array(
+			'usr/local/www/pfblockerng/pfblockerng_category_edit.php',
+			'usr/local/www/pfblockerng/pfblockerng_category.php',
+			'usr/local/www/pfblockerng/pfblockerng_ip.php',
+			'usr/local/www/pfblockerng/pfblockerng_dnsbl.php',
+			'usr/local/pkg/pfblockerng/pfblockerng_geoip.inc',
 		);
 		$cases = array();
-		foreach ($pages as $page) {
-			$cases[$page] = array($page);
+		foreach ($sources as $source) {
+			$cases[basename($source)] = array($source);
 		}
 		return $cases;
 	}
 
 	private static function read(string $page): string
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/' . $page;
+		$path = dirname(__DIR__, 2) . '/src/' . $page;
 		$src  = file_get_contents($path);
 		if ($src === false) {
 			throw new RuntimeException("failed to read {$page}");

@@ -16,6 +16,7 @@ import importlib.util
 import io
 import json
 import lzma
+import os
 import sys
 import tarfile
 import time
@@ -1103,8 +1104,8 @@ def test_php_injects_variant_guard_via_cli(tmp_path: Path) -> None:
     assert "py311" not in deps  # the flavor token is NOT a dep name (would be unsatisfiable)
 
 
-def test_packaged_files_carry_the_build_mtime_not_epoch_zero(tmp_path: Path) -> None:
-    """Payload entries record the staged file's real mtime, in the manifest and the archive.
+def test_packaged_files_carry_the_source_mtime_not_epoch_zero(tmp_path: Path) -> None:
+    """Payload entries carry the SOURCE file's mtime, in the manifest and the archive.
 
     Scenario: an installed asset must be able to invalidate a browser cache
       Given a package whose payload files are recorded with mtime 0
@@ -1115,15 +1116,21 @@ def test_packaged_files_carry_the_build_mtime_not_epoch_zero(tmp_path: Path) -> 
       So a pre-upgrade copy of a shipped script survives the upgrade indefinitely and
           runs against the new markup (issue #1845)
 
-    Recording the staged file's mtime is also what `pkg create` itself does, so this
-    closes the one payload field the portable builder deliberately diverged on.
+    The mtime travels from the source tree rather than the build clock, so the same
+    inputs still produce a byte-identical archive.
     """
     ports, portdir = _make_classic_port(tmp_path)
+    # Distinct, in-the-past mtimes: a build-clock read (or any single constant) would
+    # collapse them to one value, so this also pins that each file keeps its OWN mtime.
+    sources = sorted((portdir / "files").rglob("*"))
+    source_mtimes = {}
+    for offset, src in enumerate(f for f in sources if f.is_file()):
+        stamp = 1700000000 + offset
+        os.utime(src, (stamp, stamp))
+        source_mtimes[src.name] = stamp
+    assert source_mtimes, "no source files staged -- nothing to assert on"
+
     out = tmp_path / "out"
-    # Floor for "the build clock": the staging copy happens after this point, so every
-    # recorded mtime must be at or after it. Pins a real clock read rather than any
-    # constant -- a hardcoded non-zero value would fail here too.
-    before_build = int(time.time())
     rc = bpp.main(
         [
             "--ports", str(ports),
@@ -1140,14 +1147,73 @@ def test_packaged_files_carry_the_build_mtime_not_epoch_zero(tmp_path: Path) -> 
     payload = [m for m in tf.getmembers() if m.name.startswith("/")]
     assert payload, "no payload members in the archive -- nothing to assert on"
 
-    stale = [(m.name, m.mtime) for m in payload if m.mtime < before_build]
-    assert not stale, f"archive entries carry an mtime older than the build (>= {before_build} expected): {stale}"
+    wrong = [
+        (m.name, m.mtime, source_mtimes[m.name.rsplit("/", 1)[-1]])
+        for m in payload
+        if m.name.rsplit("/", 1)[-1] in source_mtimes and m.mtime != source_mtimes[m.name.rsplit("/", 1)[-1]]
+    ]
+    assert not wrong, f"archive entries lost the source mtime (name, archive, source): {wrong}"
 
     manifest_mtimes = {path: entry["mtime"] for path, entry in full["files"].items()}
     mismatched = [
         (m.name, m.mtime, manifest_mtimes.get(m.name)) for m in payload if manifest_mtimes.get(m.name) != m.mtime
     ]
     assert not mismatched, f"+MANIFEST mtime disagrees with the archive entry (name, archive, manifest): {mismatched}"
+
+
+def test_two_builds_of_the_same_inputs_are_byte_identical(tmp_path: Path) -> None:
+    """The same source tree builds to the same bytes, whatever the clock says.
+
+    The mtime fix must not reintroduce a per-build value: a build-clock read would make
+    two runs over identical inputs differ, which the sparse-checkout equivalence check
+    (tests/test_build_pkg_origins.py) relies on being false.
+    """
+    ports, portdir = _make_classic_port(tmp_path)
+    built = []
+    for run in ("one", "two"):
+        out = tmp_path / f"out-{run}"
+        rc = bpp.main(
+            [
+                "--ports", str(ports),
+                "--port-dir", str(portdir),
+                "--abi", "FreeBSD:15:amd64",
+                "--py-flavor", "py311",
+                "--compression", "xz",
+                "--out", str(out),
+            ]
+        )  # fmt: skip
+        assert rc == 0
+        built.append((out / "testpkg-1.0_2.pkg").read_bytes())
+        # A build-clock mtime differs between runs only if the clock moved; force it.
+        time.sleep(1.1)
+
+    assert built[0] == built[1], "two builds of identical inputs produced different .pkg bytes"
+
+
+@pytest.mark.parametrize("bad", ["-1", "99999999999999", "not-a-number"])
+def test_unusable_source_date_epoch_fails_the_build_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    """A SOURCE_DATE_EPOCH the archive format cannot carry is rejected, not half-written.
+
+    The ustar mtime field holds 8 octal digits and no sign, so a negative or oversized
+    value would otherwise surface as tarfile's "overflow in number field" from deep
+    inside the writer, after the manifest was already built.
+    """
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", bad)
+    ports, portdir = _make_classic_port(tmp_path)
+    out = tmp_path / "out"
+    with pytest.raises(bpp.BuildError, match="SOURCE_DATE_EPOCH"):
+        bpp.main(
+            [
+                "--ports", str(ports),
+                "--port-dir", str(portdir),
+                "--abi", "FreeBSD:15:amd64",
+                "--py-flavor", "py311",
+                "--compression", "xz",
+                "--out", str(out),
+            ]
+        )  # fmt: skip
 
 
 def test_source_date_epoch_pins_every_packaged_mtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -434,6 +434,9 @@ _PFB_JS_PAGES: tuple[str, ...] = (
     "/pfblockerng/pfblockerng_category.php?type=ipv4",
     "/pfblockerng/pfblockerng_ip.php",
     "/pfblockerng/pfblockerng_dnsbl.php",
+    # A generated GeoIP continent page: same include, written out from the nowdoc
+    # template in pfblockerng_geoip.inc rather than shipped as a page of its own.
+    "/pfblockerng/pfblockerng_Europe.php",
 )
 
 
