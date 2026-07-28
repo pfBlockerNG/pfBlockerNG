@@ -423,7 +423,7 @@ def main(argv: list[str]) -> int:
             "example:\n"
             "  build-dep-pkg-portable.py --ports ../FreeBSD-ports \\\n"
             "      --port textproc/py-charset-normalizer --py-flavor py311 \\\n"
-            "      --freebsd-major 15 --python-dep-version 3.11.13 --out-dir /tmp\n"
+            "      --freebsd-major 15 --out-dir /tmp\n"
         ),
     )
     ap.add_argument("--ports", required=True, help="FreeBSD-ports checkout root")
@@ -434,9 +434,17 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument(
         "--python-dep-version",
-        required=True,
+        default="0",
         dest="python_dep_version",
-        help="version recorded for the python<NNN> RUN_DEPENDS (the target's installed lang/python<NNN> version)",
+        help=(
+            "version recorded for the python<NNN> RUN_DEPENDS. Informational only -- "
+            "pkg(8) resolves a dependency by NAME, never by the version recorded in "
+            "another package's manifest, so this is never enforced at install. Default "
+            "'0' (unknown at build time): lang/python<NNN>'s real PORTVERSION is not a "
+            "literal in its Makefile (it's ${PYTHON_DISTVERSION}, indirect via Mk/Uses/"
+            "python.mk) and deriving it honestly needs the ports framework this tool "
+            "deliberately avoids. Pass an explicit version only if a caller has one."
+        ),
     )
     ap.add_argument("--out-dir", required=True, dest="out_dir", help="output directory for the .pkg")
     ap.add_argument("--compression", choices=("zstd", "xz"), default="zstd", help="output compression (default: zstd)")
