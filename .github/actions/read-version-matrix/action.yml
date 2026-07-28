@@ -1,11 +1,11 @@
 name: Read version matrix
 description: >
   Read supported-versions.json from the ci-metadata orphan ref and emit
-  the workflow output matrices: the BUILD matrix (all entries with their
-  (freebsd_version, php_version) pair), the CI matrix (ci:true CE entries
-  only), and the derived test matrices python_versions / php_versions
-  (the distinct, supported-only python + php versions test.yml fans out
-  over). Pure read — no writes anywhere.
+  the workflow output matrices: the BUILD matrix (deduped to one row per
+  freebsd_major, issue #1806), the CI matrix (ci:true entries of any
+  channel, one row per version), and the derived test matrices
+  python_versions / php_versions (the distinct, supported-only python +
+  php versions test.yml fans out over). Pure read — no writes anywhere.
 
 inputs:
   ref:
@@ -31,17 +31,22 @@ inputs:
 outputs:
   build_matrix:
     description: >
-      JSON array of all supported entries (optionally filtered by variant),
-      each carrying its full (freebsd_version, php_version) pair plus
-      pfsense_version, channel, freebsd_major, py_flavor, variant, status,
-      and ci. Artifacts dedup by distinct freebsd_major (one .pkg per ABI)
-      — that dedup is the caller's job.
+      JSON array of build-role entries, ALREADY DEDUPED to one row per
+      distinct freebsd_major (issue #1806: every pfSense-pkg-pfBlockerNG port
+      is NO_ARCH, so one wildcard-ABI .pkg build serves every arch and every
+      edition/version sharing a major — no separate per-caller dedup needed).
+      Each row carries freebsd_major, php_version, py_flavor, extra_pkgs
+      (deduped union across merged rows), plus pfsense_version/channel/
+      freebsd_version/variant/status/ci/... inherited from whichever merged
+      row is last in matrix order. There is no `arch` field. A consumer
+      needing every distinct version (never deduped) reads ci_matrix instead.
     value: ${{ steps.read.outputs.build_matrix }}
   ci_matrix:
     description: >
-      JSON array of the ci:true CE entries only. Feed this into a
-      strategy.matrix job to fan out the smoke suite across all supported
-      CE versions.
+      JSON array of the ci:true entries (any channel), ONE ROW PER VERSION
+      (never deduped by freebsd_major — a smoke/UI leg boots one VM per
+      pfSense version). Feed this into a strategy.matrix job to fan out the
+      smoke suite across all supported versions.
     value: ${{ steps.read.outputs.ci_matrix }}
   variant:
     description: >

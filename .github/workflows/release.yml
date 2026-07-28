@@ -402,10 +402,13 @@ jobs:
     secrets: inherit
 
   # ── 1c. Read version matrix ──────────────────────────────────────────────
-  # Read the supported-versions matrix from ci-metadata and compute a
-  # deduped build matrix (one entry per distinct FreeBSD major — one .pkg
-  # per ABI). Runs after prepare-release (or in parallel with its skip on dry-run);
-  # build-pkgs-portable needs both.
+  # Read the supported-versions matrix from ci-metadata. read-version-matrix.sh
+  # (issue #1806) already dedupes the BUILD matrix to one row per distinct
+  # freebsd_major — every pfSense-pkg-pfBlockerNG port is NO_ARCH, so one
+  # wildcard-ABI .pkg build serves every edition/version sharing a major — so
+  # this job passes the reader's build_matrix output straight through; no
+  # override step needed. Runs after prepare-release (or in parallel with its
+  # skip on dry-run); build-pkgs-portable needs both.
   read-matrix:
     name: Read version matrix
     runs-on: ubuntu-latest
@@ -414,7 +417,7 @@ jobs:
     # If prepare-release failed for any reason, do NOT build or publish.
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     outputs:
-      build_matrix: ${{ steps.matrix.outputs.build_matrix }}
+      build_matrix: ${{ steps.matrices.outputs.build_matrix }}
       pkg_channel:  ${{ steps.channel.outputs.pkg_channel }}
       portversion:  ${{ steps.channel.outputs.portversion }}
     steps:
@@ -440,27 +443,6 @@ jobs:
       - name: Read matrix from ci-metadata
         id: matrices
         uses: ./.github/actions/read-version-matrix
-
-      - name: Use the full build matrix (every variant)
-        id: matrix
-        # The Release must carry the FULL version matrix — one .pkg per build entry
-        # (every CE/Plus variant × FreeBSD major × arch), NOT a per-ABI dedup. So pass
-        # the build matrix through verbatim; build-pkgs-portable names each artifact by
-        # variant + pfSense version + ABI, so two variants sharing a FreeBSD major × arch
-        # (e.g. CE and Plus on the same major with different php/python deps) each produce
-        # their own, distinctly-named .pkg instead of one shadowing the other. The reader
-        # already excludes role=route-only entries (served from a frozen catalog).
-        # The matrix rides in via env (never inlined into the script) and is written with a
-        # heredoc block, so its content can't template-inject into the shell.
-        env:
-          FULL_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
-        run: |
-          {
-            echo "build_matrix<<__MATRIX__"
-            printf '%s\n' "$FULL_MATRIX"
-            echo "__MATRIX__"
-          } >> "$GITHUB_OUTPUT"
-          echo "Full build matrix: $FULL_MATRIX"
 
   # ── 1d. Resolve build stamp ──────────────────────────────────────────────
   # Checks out the SAME ref as build-pkgs-portable so that `created` (epoch of the
@@ -820,20 +802,22 @@ jobs:
           files: ${{ env.ARCHIVE }}
 
   # ── 2b. Build .pkg artifacts (portable Linux builder) ────────────────────
-  # Builds one .pkg per build-matrix entry (every CE/Plus variant × FreeBSD
-  # major × arch). Runs the portable Linux builder steps inline (no FreeBSD
-  # VM, ~3 min/entry). This is the SOLE release .pkg builder: pfBlockerNG is a
-  # NO_BUILD port, so the portable builder reproduces `make package`
-  # byte-for-byte (validated against it over every smoke + Web-UI run on CE
-  # and Plus) and `pkg add` checks a dep is PRESENT, not its version — so the
-  # portable artifact installs identically.
+  # Builds ONE .pkg per DISTINCT FreeBSD major (issue #1806): read-matrix's
+  # build_matrix is already deduped by read-version-matrix.sh -- every
+  # pfSense-pkg-pfBlockerNG port is NO_ARCH, so one wildcard-ABI build serves
+  # every arch AND every edition/version sharing a major. Runs the portable
+  # Linux builder steps inline (no FreeBSD VM, ~3 min/leg). This is the SOLE
+  # release .pkg builder: pfBlockerNG is a NO_BUILD port, so the portable
+  # builder reproduces `make package` byte-for-byte (validated against it over
+  # every smoke + Web-UI run on CE and Plus) and `pkg add` checks a dep is
+  # PRESENT, not its version — so the portable artifact installs identically.
   #
-  # ONE JOB PER LEG (strategy.matrix over read-matrix's build_matrix,
+  # ONE JOB PER MAJOR (strategy.matrix over read-matrix's build_matrix,
   # fail-fast: false): each leg uploads its OWN artifact, named exactly
-  # `pfBlockerNG-relpkg-<variant_lc>-<pfsense_version>-<arch>` (issue #1662) —
-  # the EXACT name ui-tests.yml's/smoke.yml's pkg_artifact_prefix consumer side
-  # downloads, so ui-suite/smoke-suite below gate on the SAME bits this job
-  # built, not a fresh rebuild of their own.
+  # `pfBlockerNG-relpkg-fbsd<freebsd_major>` — the EXACT name ui-tests.yml's/
+  # smoke.yml's pkg_artifact_prefix consumer side downloads, so ui-suite/
+  # smoke-suite below gate on the SAME bits this job built, not a fresh
+  # rebuild of their own.
   #
   # A leg's build failure surfaces as a red leg (fail-fast: false keeps the
   # others going). sync-ports-fork's own `needs:` list is [prepare-release,
@@ -847,7 +831,7 @@ jobs:
   # chain; a failed leg simply uploads nothing, so its .pkg is absent from the
   # merged download and the publish-release healthcheck fails closed.
   build-pkgs-portable:
-    name: "build .pkg — ${{ matrix.variant }}-${{ matrix.pfsense_version }} (FreeBSD ${{ matrix.freebsd_major }}/${{ matrix.arch }})"
+    name: "build .pkg — FreeBSD ${{ matrix.freebsd_major }}"
     runs-on: ubuntu-latest
     needs: [prepare-release, read-matrix, resolve-stamp]
     # Same gate as release: run in both dry-run (skipped) and real (succeeded) modes.
@@ -876,42 +860,25 @@ jobs:
       - name: Ensure zstd encoder is present
         run: command -v zstd >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y zstd; }
 
-      - name: Compute this leg's VARSLUG/ABI (variant slug == pkg repo's catalog dir name)
+      - name: Compute this leg's LEG/ABI (one .pkg per FreeBSD major)
         id: leg
-        # Variant slug == the pkg repo's catalog dir name (build-repo-portable.py
-        # catalog_name_from_version): "<variant_lc>-<major.minor>", e.g. ce-2.8 /
-        # plus-26.03. VARSLUG (major.minor-truncated) drives the .pkg FILENAME and
-        # the catalog path; it stays untouched. ARTSLUG (issue #1662 M1) is the
-        # SAME lower(variant) but keyed on the FULL pfsense_version (no cut) and
-        # is used ONLY for the per-leg ARTIFACT NAME below -- both consumer sides
-        # (ui-tests.yml/smoke.yml) format their download name from the full
-        # matrix.pfsense_version, so a future 3-component version (e.g. 2.8.1)
-        # would otherwise truncate on the producer side only and 404 the download.
+        # issue #1806: the leg key is freebsd_major ALONE -- read-matrix's
+        # build_matrix is already deduped to one row per major, so there is no
+        # variant/version/arch left to slug. ABI's cpu segment ("amd64") is an
+        # INERT placeholder: build-pkg-portable.py wildcards the stamp for any
+        # NO_ARCH port regardless of what's given, so the one .pkg this leg
+        # builds serves every arch of this FreeBSD major.
         env:
-          VARIANT: ${{ matrix.variant }}
-          CHANNEL_FALLBACK: ${{ matrix.channel }}
-          PFV: ${{ matrix.pfsense_version }}
           MAJOR: ${{ matrix.freebsd_major }}
-          ARCH: ${{ matrix.arch }}
         run: |
           set -eu
-          V="${VARIANT:-${CHANNEL_FALLBACK:-CE}}"
-          MM=$(printf '%s' "$PFV" | cut -d. -f1-2)
-          V_LC="$(printf '%s' "$V" | tr '[:upper:]' '[:lower:]')"
-          VARSLUG="${V_LC}-${MM}"
-          ARTSLUG="${V_LC}-${PFV}"
-          ABI="FreeBSD:${MAJOR}:${ARCH}"
-          # AMENDMENT 7: slug this leg from VARSLUG + major + arch so it lands in
-          # a distinct RUN_ID-keyed out dir. Colons in ABI are path-unsafe; the
-          # slug uses only safe chars.
-          LEG="${VARSLUG}-${MAJOR}-${ARCH}"
+          ABI="FreeBSD:${MAJOR}:amd64"
+          LEG="fbsd${MAJOR}"
           {
-            echo "varslug=${VARSLUG}"
-            echo "artslug=${ARTSLUG}"
             echo "abi=${ABI}"
             echo "leg=${LEG}"
           } >> "$GITHUB_OUTPUT"
-          echo "leg ${LEG}: variant=${V} ABI=${ABI}"
+          echo "leg ${LEG}: ABI=${ABI}"
 
       - name: Build the .pkg via build-leg.sh
         # build-leg.sh is the shared build path (local/CI/release parity — ADR-47 P3).
@@ -923,12 +890,10 @@ jobs:
           CREATED:      ${{ needs.resolve-stamp.outputs.created }}
           COMMIT:       ${{ needs.resolve-stamp.outputs.commit }}
           ABI:          ${{ steps.leg.outputs.abi }}
-          VARSLUG:      ${{ steps.leg.outputs.varslug }}
           LEG:          ${{ steps.leg.outputs.leg }}
           PHP:          ${{ matrix.php_version }}
           PY:           ${{ matrix.py_flavor }}
           MAJOR:        ${{ matrix.freebsd_major }}
-          ARCH:         ${{ matrix.arch }}
           # Place the run-keyed out dir under $GITHUB_WORKSPACE/out so the
           # rename step below finds this leg's .pkg without any path remapping.
           PFB_RUN_ROOT: ${{ github.workspace }}/out
@@ -938,7 +903,7 @@ jobs:
           RUN_ID="$(sh scripts/select-box.sh --print-id)"
           export RUN_ID
 
-          echo "--- Building .pkg for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH}, PHP ${PHP}, ${PY} ---"
+          echo "--- Building .pkg for FreeBSD ${MAJOR}, PHP ${PHP}, ${PY} ---"
 
           PKG="$(sh scripts/build-leg.sh \
             --channel    "$PKG_CHANNEL" \
@@ -950,31 +915,28 @@ jobs:
             --annotate   "commit=${COMMIT}")"
 
           PKG_DIR="$(dirname "$PKG")"
-          echo "Built for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH}:"
+          echo "Built for FreeBSD ${MAJOR}:"
           ls -l "${PKG_DIR}"
 
-          # Rename to embed variant + pfSense version + FreeBSD major + arch, so
-          # this leg's .pkg filename stays unambiguous inside its own artifact.
+          # Rename to embed the FreeBSD major, so this leg's .pkg filename
+          # stays unambiguous inside its own artifact.
           BASE="$(basename "$PKG" .pkg)"
-          RENAMED="${PKG_DIR}/${BASE}-${VARSLUG}-FreeBSD-${MAJOR}-${ARCH}.pkg"
+          RENAMED="${PKG_DIR}/${BASE}-FreeBSD-${MAJOR}.pkg"
           mv "$PKG" "$RENAMED"
           echo "Renamed: ${BASE}.pkg -> $(basename "$RENAMED")"
           echo "PKG_PATH=${RENAMED}" >> "$GITHUB_ENV"
 
-      - name: Upload this leg's .pkg artifact (exact-name contract, issue #1662)
-        # Name MUST equal pfBlockerNG-relpkg-<variant_lc>-<pfsense_version>-<arch>
-        # -- the EXACT name ui-tests.yml's/smoke.yml's pkg_artifact_prefix download
-        # step composes when pkg_artifact_prefix: pfBlockerNG-relpkg is set (see
-        # ui-suite/smoke-suite below). Uses ARTSLUG (full pfsense_version, issue
-        # #1662 M1), NOT VARSLUG (major.minor-truncated) -- the consumer sides
-        # format the full matrix.pfsense_version into the name, so this must match
-        # byte-for-byte even once a 3-component version ships. Upload only on
-        # success: fail-fast: false already isolates a failed leg, so it simply
-        # uploads nothing and attach-pkgs/the publish healthcheck fail closed on
-        # the missing asset.
+      - name: Upload this leg's .pkg artifact (exact-name contract, issue #1806)
+        # Name MUST equal pfBlockerNG-relpkg-fbsd<freebsd_major> -- the EXACT
+        # name ui-tests.yml's/smoke.yml's pkg_artifact_prefix download step
+        # composes when pkg_artifact_prefix: pfBlockerNG-relpkg is set (see
+        # ui-suite/smoke-suite below). Upload only on success: fail-fast:
+        # false already isolates a failed leg, so it simply uploads nothing
+        # and attach-pkgs/the publish healthcheck fail closed on the missing
+        # asset.
         uses: actions/upload-artifact@v7
         with:
-          name: pfBlockerNG-relpkg-${{ steps.leg.outputs.artslug }}-${{ matrix.arch }}
+          name: pfBlockerNG-relpkg-fbsd${{ matrix.freebsd_major }}
           path: ${{ env.PKG_PATH }}
           if-no-files-found: error
           retention-days: 7
@@ -1011,9 +973,9 @@ jobs:
 
       - name: Download .pkg artifacts from portable builder
         # Each build-pkgs-portable leg uploads its OWN artifact, named
-        # pfBlockerNG-relpkg-<variant_lc>-<pfsense_version>-<arch> (issue #1662);
-        # merge every leg's artifact into pkgs/ (each holds exactly one .pkg,
-        # already carrying -FreeBSD-<major> in the filename).
+        # pfBlockerNG-relpkg-fbsd<freebsd_major> (issue #1806); merge every
+        # leg's artifact into pkgs/ (each holds exactly one .pkg, already
+        # carrying -FreeBSD-<major> in the filename).
         uses: actions/download-artifact@v4
         with:
           pattern: pfBlockerNG-relpkg-*
@@ -1073,8 +1035,8 @@ jobs:
     steps:
       - name: Health-check the draft release is complete
         # Verify completeness BEFORE the irreversible publish. Expected assets: the
-        # source archive + exactly one .pkg per build-matrix entry (every CE/Plus
-        # variant × FreeBSD major × arch). Anything missing → fail, leaving the draft
+        # source archive + exactly one .pkg per build-matrix entry (one per distinct
+        # FreeBSD major, issue #1806). Anything missing → fail, leaving the draft
         # intact for a resume. Already-published (idempotent re-run) short-circuits OK.
         env:
           GH_TOKEN:     ${{ github.token }}
@@ -1140,8 +1102,9 @@ jobs:
   # ── 2d. Poke the self-hosted pkg repository to republish (ADR-17) ──────────
   # The pkg catalog is hosted + deployed by the SEPARATE pfBlockerNG/pkg repo:
   # its own publish.yml enumerates this repo's Releases (the durable store),
-  # CONSUMES the Release .pkg assets for the release/<varver>/<arch>/ subtree (devel
-  # = latest prerelease, stable = latest stable; nightly still built from devel HEAD),
+  # CONSUMES the Release .pkg assets for the release/<varver>/ subtree (arch-less;
+  # issue #1806 — devel = latest prerelease, stable = latest stable; nightly still
+  # built from devel HEAD),
   # and deploys to its OWN GitHub Pages via same-repo OIDC — no cross-repo deploy key.
   # On a release we just trigger it so the new Release appears at
   # pfblockerng.github.io/pkg within seconds (its daily schedule is the backstop).

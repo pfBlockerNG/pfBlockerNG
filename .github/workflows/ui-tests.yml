@@ -102,7 +102,7 @@ on:
         type: string
         default: ""
       pkg_artifact_prefix:
-        description: "Name prefix of prebuilt per-leg package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<variant>-<version>-<arch>'. Empty = build internally (the build-pkg job runs as before)."
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally (the build-pkg job runs as before)."
         required: false
         type: string
         default: ""
@@ -147,7 +147,7 @@ on:
         required: false
         default: ""
       pkg_artifact_prefix:
-        description: "Name prefix of prebuilt per-leg package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<variant>-<version>-<arch>'. Empty = build internally."
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally."
         required: false
         default: ""
   # Daily run: Tier A render + Tier B (functional + browser). Non-PR-blocking
@@ -288,13 +288,16 @@ jobs:
 
           # Cross the tier set with the legs: one matrix item per (tier × leg),
           # each carrying tier + version (= pfsense_version) + a lowercased `variant`
-          # (ce / plus, from image_name) for a variant-qualified artifact name + image_name + channel.
+          # (ce / plus, from image_name) for a variant-qualified artifact name +
+          # image_name + channel + freebsd_major (issue #1806: the download-name
+          # discriminator when pkg_artifact_prefix is set -- release.yml builds one
+          # .pkg per freebsd_major, no `arch` field exists anywhere any more).
           INCLUDE="$(printf '%s\n' "$LEGS" | jq -c \
             --arg tiers "${TIERS}" \
             '($tiers | split(" ")) as $ts
              | [ $ts[] as $t | .[]
                  | {tier: $t, version: .pfsense_version, variant: (.image_name | ltrimstr("pfsense-")),
-                    image_name: .image_name, channel: .channel, arch: .arch} ]')"
+                    image_name: .image_name, channel: .channel, freebsd_major: .freebsd_major} ]')"
           printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
           # leg_count = the (tier x leg) matrix size, for the all-ui-passed AND
           # gate's zero-leg guard (distinct from $LEGS' own leg count -- one
@@ -462,13 +465,15 @@ jobs:
       - name: Download the built pfBlockerNG package
         uses: actions/download-artifact@v8
         with:
-          # pkg_artifact_prefix set: download the prebuilt per-leg artifact a
-          # caller (e.g. release.yml) already published, named
-          # '<prefix>-<variant>-<version>-<arch>' (e.g. myprefix-ce-2.8-amd64).
-          # Blank: the per-version artifact THIS run's build-pkg job just built
-          # (matrix is by version; this leg installs the package matching its
-          # own pfSense base).
-          name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-{1}-{2}-{3}', inputs.pkg_artifact_prefix, matrix.variant, matrix.version, matrix.arch) || format('pfBlockerNG-pkg-{0}', matrix.version) }}
+          # pkg_artifact_prefix set: download the prebuilt artifact a caller
+          # (e.g. release.yml) already published, named
+          # '<prefix>-fbsd<freebsd_major>' (e.g. myprefix-fbsd15) -- issue #1806:
+          # release.yml builds ONE .pkg per FreeBSD major, shared by every
+          # edition/version on it, so no variant/version/arch discriminator is
+          # needed here. Blank: the per-version artifact THIS run's build-pkg
+          # job just built (matrix is by version; this leg installs the
+          # package matching its own pfSense base).
+          name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major) || format('pfBlockerNG-pkg-{0}', matrix.version) }}
           path: pkg
 
       - name: Locate the .pkg + the pulled .qcow2
