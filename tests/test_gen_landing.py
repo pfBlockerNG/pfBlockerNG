@@ -323,6 +323,35 @@ def test_build_edition_sections_splits_and_shares_abi_across_versions() -> None:
     assert (ce_29["pfsense_version"], ce_29["php"], ce_29["py"]) == ("2.9", "8.4", "3.11")
 
 
+def test_build_edition_sections_wildcard_abi_joins_every_row_of_its_major() -> None:
+    """A NO_ARCH package's manifest ABI is CPU-wildcarded (issue #1806, e.g.
+    "FreeBSD:16:*") — it must join the matrix by OS+major, landing under EVERY
+    edition/arch row of that major, never dropping to the unmatched "Other"
+    section (the bug: an exact-string join misses it entirely).
+
+    Scenario: one wildcard-ABI devel build, matrix has CE 2.9 (FreeBSD 16 amd64)
+              AND Plus 26.03 (FreeBSD 16 amd64) — both major 16
+      Given a devel .pkg whose manifest abi is "FreeBSD:16:*"
+       When the edition sections are built
+      Then it appears under BOTH CE and Plus (not "Other"), each carrying that
+           edition's own matrix-joined pfSense version/php/py
+    """
+    p_wild = _pkg("devel", "d", "3.2.16", "FreeBSD:16:*", "w.pkg")
+    matrix = [
+        _mx("FreeBSD:16:amd64", "2.9", "CE", "8.4", "py311"),
+        _mx("FreeBSD:16:amd64", "26.03", "Plus", "8.5", "py312"),
+    ]
+
+    sections = dict(gl.build_edition_sections([p_wild], matrix))
+
+    assert "Other" not in sections, "a wildcard-ABI build must join the matrix, never fall to Other"
+    assert set(sections) == {"CE", "Plus"}
+    ce = sections["CE"][0]
+    assert (ce["pfsense_version"], ce["php"], ce["py"]) == ("2.9", "8.4", "3.11")
+    plus = sections["Plus"][0]
+    assert (plus["pfsense_version"], plus["php"], plus["py"]) == ("26.03", "8.5", "3.12")
+
+
 def test_older_nightlies_lists_retained_excludes_latest() -> None:
     """Scenario: surface the retained older nightlies, never the current one.
 
@@ -771,15 +800,15 @@ def _mx_eol(abi: str, ver: str, variant: str, php: str, py: str) -> dict[str, st
 def _eol_pkg(version: str, abi: str, varver: str) -> dict[str, Any]:
     """A package row as collect_packages would produce for a route-only (EOL) catalog entry.
 
-    rel is under release/<varver>/<arch>/ — exactly where build-repo-portable.py places them.
+    rel is DIRECTLY under release/<varver>/ — arch-less (issue #1806 NO_ARCH), exactly
+    where build-repo-portable.py places them.
     """
-    arch = abi.split(":")[-1]
     return {
         "channel": "stable",
         "name": "pfSense-pkg-pfBlockerNG",
         "version": version,
         "abi": abi,
-        "rel": f"release/{varver}/{arch}/pfSense-pkg-pfBlockerNG-{version}.pkg",
+        "rel": f"release/{varver}/pfSense-pkg-pfBlockerNG-{version}.pkg",
         "size": 42,
         "published": "2026-01-10 08:00 UTC",
         "commit": "aabbcc1122334455667788990011223344556677",
@@ -844,6 +873,28 @@ def test_eol_versions_lists_newest_served_pkg_per_eol_version() -> None:
     # Live build version never appears in the EOL result.
     all_versions = {r["version"] for _, _, r in result}
     assert "3.2.16" not in all_versions
+
+
+def test_eol_versions_wildcard_served_pkg_matches_concrete_matrix_entry() -> None:
+    """A served EOL .pkg with a NO_ARCH (wildcard) manifest ABI still joins a
+    route-only matrix entry recorded with a CONCRETE ABI (issue #1806) — matched
+    by OS+major, never exact-string equality.
+
+    Scenario: route-only CE 2.7 (matrix records concrete FreeBSD:14:amd64), but
+              the actually-served .pkg is wildcard-ABI'd (FreeBSD:14:*)
+      When eol_versions is called
+      Then CE 2.7 still appears, carrying the served (wildcard-ABI) package
+    """
+    eol_pkg = _eol_pkg("3.1.0_5", "FreeBSD:14:*", "ce-2.7")
+    matrix = [_mx_eol("FreeBSD:14:amd64", "2.7", "CE", "8.2", "py311")]
+
+    result = gl.eol_versions([eol_pkg], matrix)
+
+    assert len(result) == 1
+    ekey, ver, row = result[0]
+    assert ekey == "CE"
+    assert ver == "2.7"
+    assert row["version"] == "3.1.0_5"
 
 
 def test_eol_versions_ce_and_plus_split_into_separate_tables() -> None:
@@ -977,17 +1028,18 @@ def test_conf_via_addrepo_matches_real_add_repo_contract() -> None:
     addrepo: str = str(Path(__file__).resolve().parent.parent / "scripts" / "add-repo.sh")
     base: str = "https://pfblockerng.github.io/pkg"
 
-    # release channel: repo name `pfblockerng` and URL contains /release/<varver>/<arch>
+    # release channel: repo name `pfblockerng` and URL contains /release/<varver>
+    # (arch-less; issue #1806 NO_ARCH)
     release_conf: str = gl._conf_via_addrepo(addrepo, base, "release")
     assert release_conf, "release conf must be non-empty"
     assert "pfblockerng: {" in release_conf
-    assert f"{base}/release/<varver>/<arch>" in release_conf
+    assert f"{base}/release/<varver>" in release_conf
 
-    # nightly channel: repo name `pfblockerng-nightly` and URL contains /nightly/<varver>/<arch>
+    # nightly channel: repo name `pfblockerng-nightly` and URL contains /nightly/<varver>
     nightly_conf: str = gl._conf_via_addrepo(addrepo, base, "nightly")
     assert nightly_conf, "nightly conf must be non-empty"
     assert "pfblockerng-nightly: {" in nightly_conf
-    assert f"{base}/nightly/<varver>/<arch>" in nightly_conf
+    assert f"{base}/nightly/<varver>" in nightly_conf
 
 
 # ── Piped-invocation: published add-repo.sh embeds hook + installs correctly ─
