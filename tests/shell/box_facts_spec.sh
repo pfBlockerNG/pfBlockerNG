@@ -54,6 +54,16 @@ case "$_cmd" in
     ;;
   */etc/version*) printf '26.03.1-RELEASE\n' ;;
   *pfSense-upgrade*)
+    # LOCKED_UNTIL=N: the first N attempts hit pfSense's lock refusal (issue
+    # #1844) — the gatherer must retry, not record the refusal.
+    if [ "${LOCKED_UNTIL:-0}" -gt 0 ]; then
+      _n=$(cat "$WORK/upg-count" 2>/dev/null || printf '0')
+      _n=$((_n + 1)); printf '%s\n' "$_n" > "$WORK/upg-count"
+      if [ "$_n" -le "$LOCKED_UNTIL" ]; then
+        printf 'Another instance is already running... Aborting!\n'
+        exit 75
+      fi
+    fi
     # TIMEOUT_UPGRADE=1 emulates the guest-side `timeout` expiring: the remote
     # shell yields exit 124 — unless the command string swallows it with a bare
     # `|| true`, which is exactly the defect this pin exists for (CR2)
@@ -152,6 +162,16 @@ BEOF
     The status should be success
     The stderr should include 'guest commands failed'
     The contents of file "${OUT}/status" should equal 'unavailable'
+  End
+
+  It 'retries a locked upgrade check instead of recording the refusal'
+    export LOCKED_UNTIL=2
+    When call facts ce
+    The status should be success
+    The stderr should include 'upgrade check locked'
+    The contents of file "${OUT}/status" should equal 'ok'
+    The contents of file "${OUT}/upgrade-check.txt" should include 'up to date'
+    The contents of file "${OUT}/upgrade-check.txt" should not include 'Another instance'
   End
 
   It 'reports unavailable when the upgrade check times out on the guest'

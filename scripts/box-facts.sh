@@ -166,8 +166,27 @@ guest_sh 'timeout 120 /usr/local/sbin/pfSense-repoc -p' > "$OUT_DIR/repoc.txt" 2
 # rc 0 (current) and rc 2 (update available) are both healthy outcomes of -c;
 # anything else — including timeout(1)'s 124 — is a failed fact (an empty
 # second source must never read as "up to date"; review CR2).
-guest_sh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1; [ "$?" -le 2 ]' \
-    > "$OUT_DIR/upgrade-check.txt" 2>/dev/null || _ok=0
+# pfSense refuses a check while another upgrade instance holds the lock
+# (issue #1844) — retry rather than record the refusal as the second source.
+_uc_i=0
+while [ "$_uc_i" -lt "${PFB_LOCK_RETRIES:-8}" ]; do
+    _uc_rc=0   # per attempt — a locked attempt must not condemn the retry
+    guest_sh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1; [ "$?" -le 2 ]' \
+        > "$OUT_DIR/upgrade-check.txt" 2>/dev/null || _uc_rc=1
+    if grep -q 'Another instance is already running' "$OUT_DIR/upgrade-check.txt" 2>/dev/null; then
+        _uc_i=$((_uc_i + 1))
+        echo "box-facts: upgrade check locked (attempt ${_uc_i}); retrying" >&2
+        sleep "$POLL"
+        continue
+    fi
+    break
+done
+if grep -q 'Another instance is already running' "$OUT_DIR/upgrade-check.txt" 2>/dev/null; then
+    true > "$OUT_DIR/upgrade-check.txt"
+    _ok=0
+elif [ "${_uc_rc:-0}" -ne 0 ]; then
+    _ok=0
+fi
 
 # Best-effort clean shutdown; the trap reaps whatever is left (capped).
 guest_sh '/sbin/shutdown -p now' 2>/dev/null || true
