@@ -155,7 +155,10 @@ fi
 _ok=1
 guest_ssh 'cat /etc/version' > "$OUT_DIR/etc-version" 2>/dev/null || _ok=0
 guest_ssh 'timeout 120 /usr/local/sbin/pfSense-repoc -p' > "$OUT_DIR/repoc.txt" 2>/dev/null || _ok=0
-guest_ssh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1 || true' \
+# rc 0 (current) and rc 2 (update available) are both healthy outcomes of -c;
+# anything else — including timeout(1)'s 124 — is a failed fact (an empty
+# second source must never read as "up to date"; review CR2).
+guest_ssh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1; [ "$?" -le 2 ]' \
     > "$OUT_DIR/upgrade-check.txt" 2>/dev/null || _ok=0
 
 # Best-effort clean shutdown; the trap reaps whatever is left (capped).

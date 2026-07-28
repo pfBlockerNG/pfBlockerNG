@@ -128,6 +128,21 @@ class TestMatrixPrAdd:
         assert {"type": "matrix_pr_add", "family": "26.07", "branch": "26.07", "status": "beta"} in actions
 
     def test_untracked_stable_branch_proposes_active_entry(self) -> None:
+        # CR7: no beta row in the fixture — the stable row alone must yield
+        # an ACTIVE proposal
+        repoc = "26_07\t\tCurrent Stable Version (26.07)\n"
+        actions = _plan(
+            [PLUS_2603],
+            {"26.03": True},
+            [
+                _boot(
+                    "26.03", "26.03.1-RELEASE", REPOC_CE.replace("2.8.1", "26.03.1").replace("2_8_1", "26_03_1") + repoc
+                )
+            ],
+        )
+        assert {"type": "matrix_pr_add", "family": "26.07", "branch": "26_07", "status": "active"} in actions
+
+    def test_same_family_beta_and_stable_rows_dedup_to_one_proposal(self) -> None:
         repoc = REPOC_PLUS + "26_07\t\tCurrent Stable Version (26.07)\n"
         actions = _plan([PLUS_2603], {"26.03": True}, [_boot("26.03", "26.03.1-RELEASE", repoc)])
         adds = [a for a in actions if a["type"] == "matrix_pr_add" and a["family"] == "26.07"]
@@ -190,6 +205,12 @@ class TestRepublishNewerBranch:
             [_boot("26.03", "26.03-RELEASE", REPOC_PLUS)],
         )
         assert {"type": "republish", "family": "26.03", "branch": "26_03_1", "reason": "newer-branch"} in actions
+
+    def test_empty_etc_version_never_fires_republish(self) -> None:
+        # CodeRabbit CR5: version_key("") == (0,) would make EVERY stable
+        # branch look newer — an unestablished box version must fire nothing
+        actions = _plan([PLUS_2603], {"26.03": True}, [_boot("26.03", "", REPOC_PLUS)])
+        assert all(a["type"] != "republish" for a in actions)
 
     def test_current_patch_level_fires_nothing(self) -> None:
         actions = _plan([PLUS_2603], {"26.03": True}, [_boot("26.03", "26.03.1-RELEASE", REPOC_PLUS)])

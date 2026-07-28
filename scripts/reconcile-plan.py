@@ -149,7 +149,8 @@ def plan(
 
         for br in branches:
             if (
-                br["family"] == family
+                booted_version  # CR5: an unestablished box version compares as (0,) — never act on it
+                and br["family"] == family
                 and br["kind"] == "stable"
                 and version_key(br["version"]) > version_key(booted_version)
             ):

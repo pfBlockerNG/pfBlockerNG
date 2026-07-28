@@ -52,7 +52,7 @@ for the ROUTE matrix (see below).
   "php_version":     "8.3",          # PHP version (pinned so USES=php dep names match)
   "py_flavor":       "py311",        # Python flavor for build-pkg-linux.yml
   "arch":            "amd64",        # OPTIONAL; ABI arch (amd64 | aarch64). Omit => amd64. aarch64 = Netgate ARM appliances, Plus-only (issue #199)
-  "status":          "GA",           # beta | GA
+  "status":          "active",       # beta | active (legacy alias: GA) — the reconcile flip PR writes "active"
   "ci":              true,           # include in the smoke CI fan-out (CE + Plus; Plus from a private licensed image, ADR-24)
   "role":            "build"         # OPTIONAL; "build" (default, absent => build) | "route-only"
 }
@@ -164,11 +164,11 @@ After `supported-versions.json` is updated on `ci-metadata`, the next
    **`all-smoke-passed` AND-gate** fails if any single leg fails — one failed leg makes the
    whole gate red, no partial pass.
 
-The tracker dispatches step 1 (build), step 2 (image refresh), and step 3 (smoke). Step 2
-now covers **CE and Plus** in one run (gated per variant on `upgrade.available`); the Plus
-leg takes its license/NDI identity from the `SMOKE_PLUS_MAC`/`SMOKE_PLUS_SMBIOS_UUID`
-secrets. `scripts/image-publish.sh` remains the manual fallback (gate failure, or the
-initial Plus image seed).
+The tracker's react job dispatches step 1 (build) and step 3 (smoke); step 2 legs are
+dispatched per-action by the reconcile job (`direct_leg`). The Plus leg takes its
+license/NDI identity from the `SMOKE_PLUS_MAC`/`SMOKE_PLUS_SMBIOS_UUID` secrets.
+`scripts/image-publish.sh` remains the manual fallback (gate failure, or the initial
+Plus image seed).
 
 ### ADR-04 §2 reconciliation (flagged — not edited here)
 

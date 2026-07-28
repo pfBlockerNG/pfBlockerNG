@@ -53,7 +53,18 @@ case "$_cmd" in
     printf '26_03_1 (release) (default)\t\tCurrent Stable Version (26.03.1)\n'
     ;;
   */etc/version*) printf '26.03.1-RELEASE\n' ;;
-  *pfSense-upgrade*) printf 'Your system is up to date\n' ;;
+  *pfSense-upgrade*)
+    # TIMEOUT_UPGRADE=1 emulates the guest-side `timeout` expiring: the remote
+    # shell yields exit 124 — unless the command string swallows it with a bare
+    # `|| true`, which is exactly the defect this pin exists for (CR2)
+    if [ "${TIMEOUT_UPGRADE:-0}" = "1" ]; then
+      case "$_cmd" in
+        *"|| true"*) exit 0 ;;
+        *) exit 124 ;;
+      esac
+    fi
+    printf 'Your system is up to date\n'
+    ;;
 esac
 exit 0
 SEOF
@@ -134,6 +145,16 @@ BEOF
 
   It 'reports unavailable when a guest fact command fails'
     export FAIL_REPOC=1
+    When call facts ce
+    The status should be success
+    The stderr should include 'guest commands failed'
+    The contents of file "${OUT}/status" should equal 'unavailable'
+  End
+
+  It 'reports unavailable when the upgrade check times out on the guest'
+    # CodeRabbit CR2: `|| true` must not swallow timeout(1)'s exit 124 — an
+    # empty second-source fact must never count as a clean "up to date"
+    export TIMEOUT_UPGRADE=1
     When call facts ce
     The status should be success
     The stderr should include 'guest commands failed'
