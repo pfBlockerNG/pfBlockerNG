@@ -52,7 +52,10 @@ if (($_GET['ajax'] ?? '') === 'tail') {
 	header('Content-Type: application/json');
 	header('Cache-Control: no-cache, no-store, must-revalidate');
 	$pfb_has_off = isset($_GET['offset']) && ctype_digit((string) $_GET['offset']);
-	print(json_encode(pfb_log_tail_payload('update', $pfb_has_off ? (int) $_GET['offset'] : -1, $pfb_has_off)));
+	// JSON_INVALID_UTF8_SUBSTITUTE: without it, an invalid-UTF-8 byte in the tailed log
+	// line makes json_encode() return FALSE -- print(FALSE) is an empty response body,
+	// which fails the client's JSON.parse() and stalls the live tail (issue #1814).
+	print(json_encode(pfb_log_tail_payload('update', $pfb_has_off ? (int) $_GET['offset'] : -1, $pfb_has_off), JSON_INVALID_UTF8_SUBSTITUTE));
 	exit;
 }
 
