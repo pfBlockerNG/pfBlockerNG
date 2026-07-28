@@ -87,7 +87,7 @@ from pathlib import Path
 _TOKEN_ALTERNATIVES = (
     r"2\.[89]",  # CE version window: 2.8 / 2.9 (tripwired)
     r"2[56]\.[0-9]{2}",  # Plus version window: 25.NN / 26.NN (tripwired)
-    r"FreeBSD:[0-9]+(?::[a-z0-9_]+)?",  # FreeBSD ABI, any major, optional :arch
+    r"FreeBSD:[0-9]+(?::(?:[a-z0-9_]+|\*))?",  # FreeBSD ABI, any major, optional :arch or NO_ARCH :* (#1806)
     r"php[0-9]{2}",  # php flavor: php74..php99
     r"py3[0-9]{2}",  # py flavor: py310..py399
     r"ce-[0-9]+\.[0-9]+",  # varver: ce-X.Y
@@ -593,8 +593,11 @@ def _matrix_tokens(matrix: dict) -> list[str]:
     """Derive every version-shaped token a ``supported-versions.json`` entry implies.
 
     Per entry: the bare pfSense version (a trailing ``.x`` stripped), its
-    ``ce-``/``plus-`` varver, the ``FreeBSD:<major>`` ABI prefix, the php
-    flavor (``php_version`` with the dot dropped), and the py flavor verbatim.
+    ``ce-``/``plus-`` varver, the ``FreeBSD:<major>`` ABI prefix AND its
+    NO_ARCH wildcard form ``FreeBSD:<major>:*`` (issue #1806: every active
+    pfSense-pkg-pfBlockerNG port is NO_ARCH, so a real package's manifest ABI
+    is CPU-wildcarded), the php flavor (``php_version`` with the dot dropped),
+    and the py flavor verbatim.
 
     ``role=route-only`` entries (ADR-27: EOL'd but still served, frozen
     catalog, no longer built/tested) are excluded, mirroring
@@ -616,6 +619,7 @@ def _matrix_tokens(matrix: dict) -> list[str]:
             tokens.append(("ce-" if channel == "ce" else "plus-") + version)
         if major:
             tokens.append(f"FreeBSD:{major}")
+            tokens.append(f"FreeBSD:{major}:*")
         if php:
             tokens.append("php" + php.replace(".", ""))
         if py:
