@@ -45,6 +45,8 @@ model; apply it by hand here. `scripts/release-version.sh` classifies the tag/ch
 
 3. **Gather the commits the notes cover.**
    `git log <PREV>..origin/<branch> --no-merges --pretty='%h %s' -- src/ scripts/`.
+   When **no prior tag exists** (`PREV` empty — the very first release), drop the range:
+   `git log origin/<branch> --no-merges --pretty='%h %s' -- src/ scripts/`.
    For a **genesis release of a new series** (the first `X.0.0.alpha.1`, whose `PREV` is an
    old-scheme tag), also describe the headline features of the whole series — the narrow
    `PREV..HEAD` range alone undersells it; read prior notes / ADR titles for the arc.
