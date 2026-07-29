@@ -34,6 +34,19 @@ EOF
     env PATH="${shim}:${PATH}" RTK_LOG="${log}" CLAUDE_PROJECT_DIR="${project}" sh "${hook}"
   }
 
+  # Premise gate for the clean-filter example (#1883): the example only tests
+  # the hook when HEAD holds the CLEANED bytes. If `git add` skipped the clean
+  # filter, HEAD equals the worktree bytes and the hook would trust them
+  # legitimately — fail the premise loudly instead of flaking on the log check.
+  run_hook_with_cleaned_head() {
+    head_blob=$(git -C "${project}" cat-file -p HEAD:.rtk/filters.toml) || return 9
+    if [ "${head_blob}" != '[FILTERS]' ]; then
+      echo "premise failed: HEAD:.rtk/filters.toml is '${head_blob}', expected cleaned '[FILTERS]'" >&2
+      return 9
+    fi
+    run_hook
+  }
+
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -94,12 +107,19 @@ EOF
   End
 
   It 'does not trust changed bytes normalized by a Git clean filter'
+    # Pin the stat-cache skip deterministically (#1883): a backdated, re-added
+    # entry is definitively clean (entry mtime < index mtime), so a plain
+    # `git add` would trust the stat cache and never re-run the clean filter —
+    # the intermittent CI path. --renormalize forces the re-clean regardless.
+    touch -t 202001010000 "${project}/.rtk/filters.toml"
+    git -C "${project}" add .rtk/filters.toml
     git -C "${project}" config filter.upper.clean "tr '[:lower:]' '[:upper:]'"
     git -C "${project}" config filter.upper.smudge cat
     printf '*.toml filter=upper\n' > "${project}/.gitattributes"
-    git -C "${project}" add .gitattributes .rtk/filters.toml
+    git -C "${project}" add .gitattributes
+    git -C "${project}" add --renormalize .rtk/filters.toml
     git -C "${project}" commit -q -m clean-filter
-    When run run_hook
+    When run run_hook_with_cleaned_head
     The status should be success
     The file "${log}" should not be exist
   End
