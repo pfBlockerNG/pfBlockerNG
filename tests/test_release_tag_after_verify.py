@@ -11,9 +11,16 @@ Publishing is a separate, human/Claude step: the notes and the title are authore
 onto the draft and the draft is published by hand. Release notes are therefore not
 files in this repository at all -- nothing here reads, writes or commits a
 `docs/release-notes/<tag>.md`, and the pipeline pushes NOTHING to the channel
-branch. The downstream effects that used to run after the in-pipeline publish flip
-(pkg-repo republish, ports-fork bump) now fire from `release-published.yml` on the
-real `release: published` event.
+branch.
+
+Of the two effects that used to hang off the in-pipeline publish flip, only ONE
+moved to `release-published.yml`'s `release: published` event: the pkg-repo
+republish, which enumerates PUBLISHED Releases and downloads their assets, so it
+genuinely cannot run any earlier. The FreeBSD-ports PORTVERSION bump did not --
+it is the TERMINAL job of the release run itself, so when a run finishes the only
+things left to do are "write the changelog" and "publish"
+(`test_the_ports_bump_is_the_last_thing_the_run_does` and the two
+`test_the_published_workflow_*` tests below pin both halves).
 
 Two other parts ride along:
 
