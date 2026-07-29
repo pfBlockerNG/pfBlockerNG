@@ -44,6 +44,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          # SECURITY: release-version.sh below is EXECUTED AS SHELL, and a `release`
+          # event would otherwise default this checkout to the RELEASED tag's tree — a
+          # tree this workflow does not control. Pin the revision the workflow itself
+          # came from instead. The blast radius is small today (no App token, a
+          # read-scoped GITHUB_TOKEN, nothing pushed), but that is a property of this
+          # job's current body, not of the design: the next credential added here would
+          # silently inherit the hole. Same rule as release.yml's ports helper. Do not
+          # "simplify" this to the event ref or the release tag.
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
       - name: Classify the tag
