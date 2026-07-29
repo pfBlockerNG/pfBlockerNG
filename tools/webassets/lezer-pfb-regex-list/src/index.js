@@ -41,3 +41,11 @@ export const pfbRegexListLanguage = LRLanguage.define({ parser: mixedParser });
 export function pfbRegexList() {
   return new LanguageSupport(pfbRegexListLanguage);
 }
+
+// issue #1875 -- plain "one entry per line, optional # comment" lists (domains/TLDs/IPs)
+// reuse the outer grammar WITHOUT the parseMixed regex overlay.
+export const pfbPlainListLanguage = LRLanguage.define({ parser });
+
+export function pfbPlainList() {
+  return new LanguageSupport(pfbPlainListLanguage);
+}
