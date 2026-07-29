@@ -259,8 +259,12 @@ jobs:
           esac
 
           # Fail SAFE on anything that is not exactly 'false': a dry run deletes nothing.
-          # Unreachable today (this job is real-publish only) — defence in depth if that
-          # job-level gate is ever relaxed.
+          # UNREACHABLE today, and deliberately: the whole job is real-publish only
+          # (`if: dry_run == 'false'`), so a dry run is skipped wholesale and never
+          # reports what it "would delete" — nothing here executes at all. Kept purely as
+          # defence in depth for the day that job-level gate is relaxed; anything that is
+          # not exactly 'false' takes the no-delete path, so the worst failure mode is
+          # "refuses to delete", never "deletes anyway".
           if [ "$DRY_RUN" != "false" ]; then
             echo "retag (dry run): would delete tag ${TAG} (release state: ${STATE}) — deleting nothing."
             exit 0
