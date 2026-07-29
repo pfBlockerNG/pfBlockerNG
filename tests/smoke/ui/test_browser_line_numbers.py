@@ -147,12 +147,18 @@ def test_line_numbers_do_not_displace_the_lint_gutter(
     browser_page: Page,
     webui: WebUI,
 ) -> None:
-    """Both gutters coexist: numbers on the left, lint markers still rendering.
+    """Both gutters coexist, with the numbers LEFT of the lint markers.
 
     The lint gutter is the one that was already there; adding a second gutter
     to the same editor must not cost the diagnostic its home (issue #1732's
-    marker path). Asserted structurally -- the lint gutter's own marker
-    behaviour stays pinned by ``test_browser_lint.py``.
+    marker path). The lint gutter's own marker behaviour stays pinned by
+    ``test_browser_lint.py``.
+
+    The left-right order is asserted on rendered geometry rather than left to
+    the extension-order argument in the source comments: "numbers sit leftmost"
+    is a claim about what the admin sees, and CodeMirror decides gutter order
+    from facet precedence, which a future extension could reorder without
+    touching either bundle entry point.
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
@@ -160,5 +166,17 @@ def test_line_numbers_do_not_displace_the_lint_gutter(
     _clear_and_type(content, THREE_LINES)
 
     editor = _editor_root(content)
-    expect(editor.locator(".cm-lineNumbers")).to_be_attached(timeout=JS_TIMEOUT_MS)
-    expect(editor.locator(".cm-gutter-lint")).to_be_attached(timeout=JS_TIMEOUT_MS)
+    numbers_gutter = editor.locator(".cm-lineNumbers")
+    lint_gutter = editor.locator(".cm-gutter-lint")
+    expect(numbers_gutter).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(lint_gutter).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    numbers_box = numbers_gutter.bounding_box()
+    lint_box = lint_gutter.bounding_box()
+    assert numbers_box is not None and lint_box is not None, (
+        f"both gutters must have a rendered box; got numbers={numbers_box!r} lint={lint_box!r}"
+    )
+    assert numbers_box["x"] < lint_box["x"], (
+        f"the line-number gutter must render LEFT of the lint gutter; "
+        f"numbers at x={numbers_box['x']}, lint at x={lint_box['x']}"
+    )
