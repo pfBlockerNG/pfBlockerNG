@@ -23,6 +23,7 @@ the test exactly as it started. It never touches a script it did not create.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
@@ -189,7 +190,13 @@ def test_saving_a_script_still_works_alongside_the_delete_field(
     # instead have produced an input-error box and an emptied editor.
     expect(page.locator(".alert-success")).to_contain_text("saved", timeout=JS_TIMEOUT_MS)
     expect(page.locator(".input-errors")).to_have_count(0)
-    expect(page.locator("#pfb_eh_content")).to_contain_text(marker, timeout=JS_TIMEOUT_MS)
+
+    # The content itself round-tripped. The field's id is pfb_hook_editor_content
+    # ('pfb_eh_content' is its NAME, the POST key); it is the hidden mirror textarea
+    # behind the CodeMirror view, so its VALUE is what the page re-rendered from
+    # disk -- proving the bytes reached the file rather than only that the page
+    # reported success.
+    expect(page.locator("#pfb_hook_editor_content")).to_have_value(re.compile(re.escape(marker)), timeout=JS_TIMEOUT_MS)
 
 
 def test_dismissing_the_delete_confirmation_keeps_the_script(
