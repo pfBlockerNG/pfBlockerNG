@@ -21,15 +21,20 @@
 # retirement). Scoped to the whole of src/ (not just pfblockerng/) so the guard also
 # covers any future shell source elsewhere under src/.
 _trunc_legacy_hits() {
-	git -C "${PFB_ROOT}" grep -nE '(^|[;&|({[:space:]]):[[:space:]]*>' -- \
+	git -C "${1:-${PFB_ROOT}}" grep -nE '(^|[;&|({[:space:]]):[[:space:]]*>' -- \
 		src scripts tests
 }
 
-# _colon_loop_hits — `while true` / `until true` spell an infinite loop with the
-# special builtin where the plain `true` word reads better and carries none of
-# `:`'s ash/dash baggage (owner rule, issue #1850).
+# _colon_loop_hits — a `while`/`until` whose condition is the `:` special builtin
+# spells an infinite loop where the plain `true` word reads better and carries
+# none of `:`'s ash/dash baggage (owner rule, issue #1850). Written that way
+# round because the literal idiom here would make this file its own hit.
+#
+# Both helpers take an optional repo root so the guards can be pointed at a
+# planted-violation fixture: a clean-tree assertion alone passes just as well
+# with a broken pattern as with a working one.
 _colon_loop_hits() {
-	git -C "${PFB_ROOT}" grep -nE '(while|until)[[:space:]]+:' -- \
+	git -C "${1:-${PFB_ROOT}}" grep -nE '(while|until)[[:space:]]+:' -- \
 		src scripts tests
 }
 
@@ -383,5 +388,37 @@ Describe 'structural retirement guard: no ":" special-builtin idioms remain (iss
     When call _colon_loop_hits
     The status should be failure
     The output should equal ""
+  End
+
+  # Positive path: a guard that only ever sees a clean tree cannot tell a working
+  # pattern from a broken one. Plant both violations in a throwaway repo of the
+  # same shape and demand the guards report them.
+  plant_violations() {
+    fixture="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/colonfix.XXXXXX")"
+    mkdir -p "${fixture}/src" "${fixture}/scripts" "${fixture}/tests"
+    # The retired idioms are assembled from a %s so this spec file does not
+    # itself become a hit for the guards it exercises.
+    printf '#!/bin/sh\n%s > "$1"\n' ':' > "${fixture}/src/truncate.sh"
+    printf '#!/bin/sh\nwhile %s; do sleep 1; done\n' ':' > "${fixture}/scripts/loop.sh"
+    git -C "${fixture}" init -q
+    git -C "${fixture}" add -A
+  }
+  drop_violations() { rm -rf "$fixture"; }
+
+  Context 'against a repo that does contain the retired idioms'
+    Before 'plant_violations'
+    After 'drop_violations'
+
+    It 'reports the legacy truncate site'
+      When call _trunc_legacy_hits "$fixture"
+      The status should be success
+      The output should include 'src/truncate.sh'
+    End
+
+    It 'reports the ":" loop condition'
+      When call _colon_loop_hits "$fixture"
+      The status should be success
+      The output should include 'scripts/loop.sh'
+    End
   End
 End
