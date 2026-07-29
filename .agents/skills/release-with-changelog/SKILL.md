@@ -6,7 +6,7 @@ description: >
   release notes and title from the commit range using scripts/release-notes-prompt.txt,
   write them onto the DRAFT Release, and publish it. Release notes are never files in
   the repository — they are authored onto the Release itself, and publishing is what
-  fires the pkg-repo republish and the FreeBSD-ports bump. This is the full path when
+  fires the pkg-repo republish. This is the full path when
   Claude is driving, and the one to use when the user says "write the changelog and
   release", "release with notes", "cut and publish vX.Y.Z", or invokes
   /release-with-changelog.
@@ -21,7 +21,8 @@ The split is deliberate. `release.yml` deliberately stops at a draft — release
 forces a push to the channel branch and a re-generation whenever `devel` moves), and
 in-pipeline LLM drafting has no working free option, so a human or Claude writes them.
 Publishing the draft is what emits `release: published`, which fires
-`release-published.yml` (pkg-repo republish + FreeBSD-ports `PORTVERSION` bump).
+`release-published.yml` (the pkg-repo republish; the FreeBSD-ports `PORTVERSION` bump is
+already done — it is the release run's terminal job).
 
 `scripts/release-notes-prompt.txt` is the authoring template — apply it by hand here.
 `scripts/release-version.sh` classifies the tag/channel. **Never re-implement `/release`'s
@@ -89,10 +90,10 @@ dispatch mechanics**; delegate them.
    gh release edit <tag> --draft=false --prerelease   # stable: --latest instead
    ```
 
-   Publishing fires `release-published.yml`: the FreeBSD-ports `PORTVERSION` bump on
-   `pfBlockerNG/FreeBSD-ports@pfblockerng/use-github`, then the `pfBlockerNG/pkg` republish so
-   the build appears at `pfblockerng.github.io/pkg`. Point at that run and report the
-   published Release URL.
+   Publishing fires `release-published.yml`, which dispatches the `pfBlockerNG/pkg`
+   republish so the build appears at `pfblockerng.github.io/pkg`. (The FreeBSD-ports
+   `PORTVERSION` bump already happened, as the terminal job of the release run.) Point at
+   that run and report the published Release URL.
 
 ## Guardrails
 
@@ -100,7 +101,9 @@ dispatch mechanics**; delegate them.
   immutability the moment you publish.
 - **Never leave a release drafted silently.** If you stop before step 8 (the user asked to
   review, something failed), say so explicitly and name the draft URL — a drafted release
-  ships nothing: no pkg-repo refresh, no port bump.
+  ships nothing to users: no pkg-repo refresh. (The ports fork is already bumped to that
+  version, so an abandoned draft leaves the fork ahead of what actually shipped until the
+  next cut overwrites it.)
 - **Prerelease flag matches the channel** — `--prerelease` for `alpha`/`beta`/`rc`,
   `--latest` for a stable `vX.Y.Z`. `release-version.sh` classifies it; the draft was already
   created with the right flag, so only re-assert it, never flip it.

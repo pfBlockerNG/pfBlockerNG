@@ -45,14 +45,16 @@ _JOB_KEY_RE = re.compile(r"^    [A-Za-z_-]+:")
 _STEP_HEADER_RE = re.compile(r"^      - ")
 
 # Every job in release.yml that changes something outside this workflow run: the
-# tag, the Release, its assets. Each MUST be downstream of the build and (when they
-# run) of both live suites. The pkg-repo republish and the ports-fork bump are no
-# longer here at all -- they hang off the real `release: published` event.
+# tag, the Release, its assets, the port on our FreeBSD-ports fork. Each MUST be
+# downstream of the build and (when they run) of both live suites. Only the pkg-repo
+# republish is not here -- it consumes the PUBLISHED Release's assets, so it hangs off
+# the real `release: published` event instead.
 IRREVERSIBLE_JOBS = (
     "tag-release",
     "release",
     "attach-pkgs",
     "draft-healthcheck",
+    "sync-ports-fork",
 )
 
 
@@ -290,13 +292,17 @@ def test_nothing_in_the_release_run_un_drafts_the_release() -> None:
     assert "publish-release" not in _jobs(), "the in-pipeline publish job is gone; the draft is the end state"
 
 
-def test_the_draft_healthcheck_is_the_terminal_job() -> None:
-    """Completeness is still asserted -- a human must never be handed a draft that is
-    missing the source archive or a .pkg -- it just no longer publishes anything."""
+def test_the_ports_bump_is_the_last_thing_the_run_does() -> None:
+    """When the run finishes, the only things left are "write the changelog" and
+    "publish". Completeness is still asserted first -- a human must never be handed a
+    draft that is missing the source archive or a .pkg -- and the port bump rides on
+    that, so the fork only advances for a draft that is actually complete."""
     jobs = _jobs()
     assert "draft-healthcheck" in jobs, "release.yml must health-check the finished draft"
-    downstream = [name for name, lines in jobs.items() if "draft-healthcheck" in _needs(lines)]
-    assert not downstream, f"nothing may run after the draft healthcheck, got: {downstream}"
+    graph = _graph()
+    assert "draft-healthcheck" in _upstream("sync-ports-fork", graph), sorted(graph["sync-ports-fork"])
+    downstream = [name for name, lines in jobs.items() if "sync-ports-fork" in _needs(lines)]
+    assert not downstream, f"the ports bump must be terminal, got: {downstream}"
 
 
 @pytest.mark.parametrize("job", IRREVERSIBLE_JOBS)
@@ -323,10 +329,13 @@ def test_the_draft_job_never_runs_without_the_tag() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_downstream_jobs_left_the_release_workflow() -> None:
+def test_only_the_pkg_repo_dispatch_waits_for_the_published_release() -> None:
+    """The pkg repo enumerates PUBLISHED Releases and downloads their assets, so it
+    genuinely cannot run before the publish. The ports bump has no such dependency --
+    it needs the tag and the version, both of which exist by the end of the run."""
     jobs = _jobs()
     assert "repo-publish" not in jobs, "the pkg-repo dispatch must not run before the release is published"
-    assert "sync-ports-fork" not in jobs, "the ports bump must not run before the release is published"
+    assert "sync-ports-fork" in jobs, "the ports bump belongs at the end of the release run"
 
 
 def test_the_published_workflow_triggers_on_a_published_release() -> None:
@@ -336,19 +345,101 @@ def test_the_published_workflow_triggers_on_a_published_release() -> None:
     assert "types: [published]" in on_block, on_block
 
 
-def test_the_published_workflow_carries_both_downstream_effects() -> None:
-    """Publishing a release must still refresh the pkg repo and bump the ports fork."""
+def test_the_published_workflow_carries_only_the_pkg_repo_dispatch() -> None:
+    """Publishing a release must still refresh the pkg repo -- and nothing else: the
+    ports bump already happened at the end of the release run."""
     jobs = _jobs(PUBLISHED_WORKFLOW)
-    assert "sync-ports-fork" in jobs, sorted(jobs)
     assert "repo-publish" in jobs, sorted(jobs)
+    assert "sync-ports-fork" not in jobs, sorted(jobs)
 
 
-def test_the_pkg_repo_dispatch_still_waits_for_the_ports_bump() -> None:
+def test_the_bump_before_publish_ordering_is_recorded_where_it_used_to_be_enforced() -> None:
     """pfBlockerNG/pkg derives the NIGHTLY version from the -nightly port's PORTVERSION,
     so racing the bump ships a stale-versioned nightly (e.g. 4.0.0.alpha.3.* on the
-    alpha.4 commit)."""
+    alpha.4 commit). That used to be a `needs:` edge; it is now structural -- the bump
+    is inside the release run, strictly before any publish can happen. Keep the reason
+    written down so nobody re-adds a dependency that no longer exists."""
+    text = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
+    assert "nightly" in text.lower(), text
     graph = {name: _needs(lines) for name, lines in _jobs(PUBLISHED_WORKFLOW).items()}
-    assert "sync-ports-fork" in _upstream("repo-publish", graph), graph
+    assert "sync-ports-fork" not in graph.get("repo-publish", set()), graph
+
+
+def test_the_ports_bump_runs_its_helper_from_a_trusted_ref() -> None:
+    """Workflow-text assertion (the step cannot be lifted: it needs a ports checkout).
+
+    `portrevision-rebuild.sh` is executed as shell while an App token that can push to
+    the FreeBSD-ports fork is live in the job. It must therefore come from the revision
+    this workflow itself was dispatched from -- never from the tree the run is merely
+    releasing, whose contents are what the release is verifying rather than something
+    already trusted.
+    """
+    job = _jobs()["sync-ports-fork"]
+    checkout = _step(job, "path: pfblockerng-src")
+    ref_line = next(line for line in checkout if line.strip().startswith("ref:"))
+    assert "github.workflow_sha" in ref_line, f"the helper checkout must pin the trusted ref, got: {ref_line}"
+    for untrusted in ("needs.release.outputs.tag", "needs.prepare-release.outputs.sha", "github.event"):
+        assert untrusted not in ref_line, f"the helper must not come from the released tree, got: {ref_line}"
+
+
+def test_the_helper_checkout_never_persists_credentials() -> None:
+    """The ports-fork checkout deliberately persists its App token (it has to push), and
+    it targets the workspace ROOT. The helper's own checkout must not add a second set
+    of credentials next to the script that gets executed."""
+    checkout = _step(_jobs()["sync-ports-fork"], "path: pfblockerng-src")
+    assert any("persist-credentials: false" in line for line in checkout), "\n".join(checkout)
+
+
+# --------------------------------------------------------------------------- #
+# release-published.yml: an off-scheme tag must say WHY
+# --------------------------------------------------------------------------- #
+
+
+def _run_classify_step(tmp_path: Path, tag: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+    """Execute the REAL tag-classification step body under sh."""
+    script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["resolve"], "Classify the tag"))
+    output_file = tmp_path / "gh_output"
+    output_file.write_text("")
+    completed = subprocess.run(  # noqa: S603
+        ["sh", "-c", script],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "TAG": tag,
+            "GITHUB_OUTPUT": str(output_file),
+        },
+        capture_output=True,
+        text=True,
+    )
+    outputs: dict[str, str] = {}
+    for line in output_file.read_text().splitlines():
+        key, _, value = line.partition("=")
+        outputs[key] = value
+    return completed, outputs
+
+
+def test_an_off_scheme_published_tag_reports_the_real_reason(tmp_path: Path) -> None:
+    """release-version.sh writes its diagnostics to stderr, so capturing only stdout
+    annotated an empty line and buried the reason in the raw log.
+
+    Asserted on the ANNOTATION LINE alone: the workflow's own wording deliberately does
+    not restate the reason, so "is not a valid release tag" can only have come from the
+    captured stderr. Drop the capture and this test goes red.
+    """
+    completed, _outputs = _run_classify_step(tmp_path, "v4.0.0.gamma.1")
+    combined = completed.stdout + completed.stderr
+    assert completed.returncode != 0, combined
+    annotations = [ln for ln in combined.splitlines() if ln.startswith("::error::")]
+    assert len(annotations) == 1, combined
+    assert "v4.0.0.gamma.1" in annotations[0], annotations[0]
+    assert "is not a valid release tag" in annotations[0], annotations[0]
+
+
+def test_a_scheme_tag_classifies_cleanly(tmp_path: Path) -> None:
+    completed, outputs = _run_classify_step(tmp_path, "v4.0.0.alpha.7")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert outputs["branch"] == "devel", outputs
+    assert outputs["portversion"] == "4.0.0.alpha.7", outputs
 
 
 def test_the_published_workflow_reads_the_tag_from_the_release_payload() -> None:
