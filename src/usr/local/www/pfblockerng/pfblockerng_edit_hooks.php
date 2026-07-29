@@ -46,6 +46,11 @@
 require_once('guiconfig.inc');
 require_once('globals.inc');
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
+// Destructive hook-script operations, deliberately NOT in the package-wide includes:
+// this file is included by THIS PAGE ONLY, so a root-privileged unlink() is never in
+// scope on a page that has no business holding one. Containment is pinned by
+// tests/php/HookEditFileContainmentTest.php.
+require_once('/usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc');
 
 global $pfb;
 pfb_global();

@@ -5007,40 +5007,6 @@ function pfb_hook_editor_path(string $basename, ?string $dir = null): ?string {
 }
 
 /*
- * issue #1871: remove a hook script on behalf of the Edit Hooks page.
- *
- * The Web UI could create and save hook scripts but never delete one, so a typo in
- * the Name field at creation time was unrecoverable without shell access. This is a
- * root-privileged file removal driven by a GUI request, so it deletes NOTHING it has
- * not first cleared through pfb_hook_script_valid() -- the same allow-list the picker
- * offers from, the save handler accepts, and the runner executes. That single gate
- * covers every hostile shape at once: a traversal or absolute path fails its bare-
- * basename check, and a non-hook file, a wrong Pre/Post, or a symlink whose real path
- * leaves the hook directory all fail pfb_hook_scripts()' membership test.
- *
- * Returns TRUE only when a file was actually removed, so a double submit reports
- * failure on the second pass rather than a phantom success.
- */
-function pfb_hook_editor_delete(string $script, string $when, ?string $dir = null): bool
-{
-	if (!pfb_hook_script_valid($script, $when, $dir)) {
-		return FALSE;
-	}
-	$path = pfb_hook_editor_path($script, $dir);
-	if ($path === NULL || !is_file($path)) {
-		return FALSE;
-	}
-	// Remove the DIRECTORY ENTRY the admin named, not what it resolves to.
-	// pfb_hook_editor_path() returns a realpath(), so for a symlink sitting in the
-	// hook directory that is the link's TARGET -- unlinking it would delete a
-	// different hook than the row that was clicked (a post hook's row removing a
-	// pre hook's file) while the UI reported success. Both halves of this path are
-	// already validated: dirname($path) is the resolved hook directory, and $script
-	// passed the bare-basename check inside pfb_hook_script_valid().
-	return @unlink(dirname($path) . '/' . $script);
-}
-
-/*
  * The PFB_* env-var names pfb_run_hooks() exports, as pinned by the runner source
  * (pfblockerng.inc pfb_run_hooks() + pfb_hook_lifecycle_ctx() + the pre/post call
  * sites in pfblockerng_apply.inc) and documented verbatim on the Hooks tab
