@@ -14,7 +14,7 @@
 // as the $lang argument to fromTextarea() -- 'py' selects Python, anything else
 // (including 'sh') falls back to the shell StreamLanguage.
 import { EditorState } from "@codemirror/state";
-import { EditorView, keymap, drawSelection } from "@codemirror/view";
+import { EditorView, keymap, drawSelection, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { StreamLanguage, syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { pythonLanguage } from "@codemirror/lang-python";
@@ -58,6 +58,11 @@ export function fromTextarea(textarea, lang, opts) {
   const extensions = [
     history(),
     drawSelection(),
+    // issue #1869: the lint gutter alone rendered an empty strip down the left edge, so
+    // a "line N" diagnostic (from /bin/sh -n or python -m py_compile) left the admin
+    // counting rows by hand. Listed BEFORE the lint extensions so the numbers sit
+    // leftmost and the lint marker keeps its own column beside them.
+    lineNumbers(),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     syntaxHighlighting(defaultHighlightStyle),
     syntaxHighlighting(pfbHighlightStyle),

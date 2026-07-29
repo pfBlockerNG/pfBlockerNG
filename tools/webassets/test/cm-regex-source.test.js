@@ -135,3 +135,12 @@ test("cm-lint.js uses a plain XMLHttpRequest, never fetch() or FormData (csrf-ma
   assert.ok(!/\bfetch\(/.test(codeLines), "expected no fetch( call in cm-lint.js code");
   assert.ok(!/\bFormData\b/.test(codeLines), "expected no FormData usage in cm-lint.js code");
 });
+
+// issue #1869: cheap regression guard for the line-number gutter. The rendering
+// itself is proven in the browser tier (tests/smoke/ui/test_browser_line_numbers.py)
+// -- this only catches the extension being dropped from the list, which no grammar
+// or wiring test would notice.
+test("lineNumbers() is imported and installed in the extension list", () => {
+  assert.match(src, /import \{[^}]*\blineNumbers\b[^}]*\} from "@codemirror\/view"/);
+  assert.match(src, /^\s*lineNumbers\(\),$/m);
+});
