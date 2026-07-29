@@ -97,6 +97,10 @@ $pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('pfb_log_trim_margin_pct')
 // for pfb_cfg_lenient_read() at render.
 $pconfig['pfb_syntax_highlight']	= PfbConfig::read('pfb_syntax_highlight')->value;
 
+// issue #1875 step 2b: gate the CM6 live-highlight overlay for pfb_feed_internal_allowlist,
+// same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.
+$pfb_syntaxhl_on = (PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On);
+
 // Select field options
 $options_pfb_interval	= [	'1' => 'Every hour',
 				'2' => 'Every 2 hours',
@@ -588,6 +592,10 @@ $form->add($section);
 print($form);
 print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
 ?>
+<?php if ($pfb_syntaxhl_on): ?>
+<!-- issue #1875 step 2b: live syntax highlighting for the internal-feed-host allowlist field -->
+<script src="vendor/codemirror/cm-regex.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-regex.min.js')?>"></script>
+<?php endif; ?>
 
 <script type="text/javascript">
 //<![CDATA[
@@ -602,6 +610,13 @@ events.push(function() {
 
 	$('#pfb_feed_internal_filter').click(pfb_sync_internal_filter);
 	pfb_sync_internal_filter();
+
+<?php if ($pfb_syntaxhl_on): ?>
+	// issue #1875 step 2b: plain-list field shares the regex page's CM6 bundle; mountLists skips absent ids
+	if (window.pfbCM) {
+		window.pfbCM.mountLists(['pfb_feed_internal_allowlist']);
+	}
+<?php endif; ?>
 
 });
 //]]>

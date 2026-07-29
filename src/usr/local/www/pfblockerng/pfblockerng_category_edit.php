@@ -73,6 +73,10 @@ phpsession_end(TRUE);
 global $group, $pfb;
 pfb_global();
 
+// issue #1875 step 2b: gate the CM6 live-highlight overlay for the custom-list field,
+// same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.
+$pfb_syntaxhl_on = (PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On);
+
 $rowdata	= array();
 $rowid		= 0;
 $id		= 0;
@@ -1765,6 +1769,10 @@ else {
 }
 
 ?>
+<?php if ($pfb_syntaxhl_on): ?>
+<!-- issue #1875 step 2b: live syntax highlighting for the custom-list field -->
+<script src="vendor/codemirror/cm-regex.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-regex.min.js')?>"></script>
+<?php endif; ?>
 <script type="text/javascript">
 //<![CDATA[
 
@@ -1824,6 +1832,13 @@ events.push(function() {
 		pfb_gutter_bind_delete();
 	});
 	pfb_gutter_bind_delete();
+
+<?php if ($pfb_syntaxhl_on): ?>
+	// issue #1875 step 2b: plain-list field shares the regex page's CM6 bundle; mountLists skips absent ids
+	if (window.pfbCM) {
+		window.pfbCM.mountLists(['custom']);
+	}
+<?php endif; ?>
 });
 <?php } ?>
 

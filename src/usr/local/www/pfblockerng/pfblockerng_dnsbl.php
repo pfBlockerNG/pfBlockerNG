@@ -3804,6 +3804,11 @@ events.push(function(){
 			}
 		});
 	}
+
+	// issue #1875 step 2b: plain-list fields share this page's CM6 bundle; mountLists skips absent ids
+	if (window.pfbCM) {
+		window.pfbCM.mountLists(['pfb_gp_bypass_list', 'pfb_noaaaa_list', 'suppression', 'tldexclusion', 'tldblacklist']);
+	}
 <?php endif; ?>
 
 	$('#pfb_tld').click(function() {
