@@ -120,6 +120,9 @@ Describe 'image-upgrade.sh boot-environment promotion'
         case "$*" in
           *"bectl activate"*) printf "activated\n" >> "$WORK/activated" ;;
           *"bectl list"*)
+            # garbled — the list never parses (ssh flake, unexpected output):
+            # there is nothing trustworthy to promote or verify against
+            [ "$_mode" = garbled ] && return 0
             _n=$(( $(cat "$POLLS" 2>/dev/null || echo 0) + 1 ))
             printf "%s" "$_n" > "$POLLS"
             _promoted=0
@@ -166,5 +169,82 @@ Describe 'image-upgrade.sh boot-environment promotion'
     The status should be failure
     The stderr should include 'boot environment'
     The output should not include 'REACHED-AFTER-PROMOTE'
+  End
+
+  It 'refuses to guess when the running BE cannot be identified'
+    # an empty/garbled `bectl list` must not degrade into activating a guessed
+    # name: on a lineage whose permanent BE happens to carry that name, the
+    # guess passes the permanence check and publishes a disk nobody verified
+    When call run_promote garbled
+    The status should be failure
+    The stderr should include 'could not identify the running boot environment'
+    The output should not include 'REACHED-AFTER-PROMOTE'
+    The contents of file "$CMDS" should not include 'bectl activate'
+  End
+End
+
+Describe 'image-upgrade.sh verification boot command'
+  SCRIPT="${PFB_ROOT}/scripts/image-upgrade.sh"
+
+  setup() {
+    WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/upgcmd.XXXXXX")"
+    PXCMDS="${WORK}/px-cmds"
+    export WORK PXCMDS
+  }
+  teardown() { rm -rf "$WORK"; }
+  BeforeEach 'setup'
+  AfterEach 'teardown'
+
+  # run_bootcmd DRIVE — drive the shipped pfb_boot_artifact_version with a stub
+  # KVM host (px) and guest. DRIVE is the `-drive file=` the upgrade's QEMU_CMD
+  # carries: the real work.qcow2 in the good case, something else to model the
+  # command's shape having drifted from what the sed seams expect.
+  run_bootcmd() {
+    _drive="$1" sh -c '
+      set -e
+      log()  { printf "==> %s\n" "$*"; }
+      warn() { printf "WARNING: %s\n" "$*" >&2; }
+      die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      sleep() { true; }
+      REMOTE_DIR=/r
+      QEMU_CMD="qemu-kvm -drive file=${_drive},if=none,id=drive-scsi0 -display none -serial file:/r/console.log -pidfile /r/qemu.pid -daemonize"
+      eval "$(sed -n "/^pfb_boot_artifact_version()/,/^}/p" "$1")"
+      px() {
+        printf "%s\n" "$1" >> "$PXCMDS"
+        case "$1" in
+          "cat "*) printf "4242\n" ;;
+          "kill -0 "*) return 1 ;;   # the verify VM is already gone
+        esac
+      }
+      wait_guest_ssh() { true; }
+      ssh_guest() {
+        case "$*" in
+          *"/etc/version"*) printf "26.07-BETA\n" ;;
+        esac
+      }
+      pfb_boot_artifact_version /r/out.qcow2
+    ' _ "$SCRIPT"
+  }
+
+  It 'boots the exported artifact on the upgrade topology, swapping only the seams'
+    When call run_bootcmd /r/work.qcow2
+    The status should be success
+    The stderr should include 'booting the exported artifact'
+    The output should include '26.07-BETA'
+    The contents of file "$PXCMDS" should include '/r/out.qcow2'
+    The contents of file "$PXCMDS" should include '/r/verify.pid'
+    The contents of file "$PXCMDS" should include '/r/verify-console.log'
+    The contents of file "$PXCMDS" should not include 'work.qcow2'
+    The contents of file "$PXCMDS" should not include '/r/qemu.pid'
+    The contents of file "$PXCMDS" should not include '/r/console.log'
+  End
+
+  It 'refuses to boot when the substitutions do not take'
+    # QEMU_CMD drifted (no work.qcow2 seam): the old sed silently no-opped and
+    # re-booted the disk we already observed — the exact fail-open of #1858
+    When call run_bootcmd /r/box.qcow2
+    The status should be failure
+    The stderr should include 'refusing to boot'
+    The path "$PXCMDS" should not be exist
   End
 End
