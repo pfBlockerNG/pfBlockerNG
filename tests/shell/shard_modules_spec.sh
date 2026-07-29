@@ -43,14 +43,14 @@ Describe 'shard-modules.sh'
   #   - a non-matching file (conftest.py)
   setup() {
     fixture_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/shard-modules-fixture.XXXXXX")"
-    : > "${fixture_dir}/test_a.py"
-    : > "${fixture_dir}/test_b.py"
-    : > "${fixture_dir}/test_c.py"
-    : > "${fixture_dir}/test_d.py"
-    : > "${fixture_dir}/test_e.py"
-    : > "${fixture_dir}/conftest.py"
+    true > "${fixture_dir}/test_a.py"
+    true > "${fixture_dir}/test_b.py"
+    true > "${fixture_dir}/test_c.py"
+    true > "${fixture_dir}/test_d.py"
+    true > "${fixture_dir}/test_e.py"
+    true > "${fixture_dir}/conftest.py"
     mkdir -p "${fixture_dir}/ui"
-    : > "${fixture_dir}/ui/test_zz.py"
+    true > "${fixture_dir}/ui/test_zz.py"
   }
   cleanup() { rm -rf "${fixture_dir}"; }
   BeforeEach 'setup'
@@ -180,7 +180,7 @@ ${fixture_dir}/test_e.py"
     # depends on another's table content (self-encapsulated per the
     # test-coverage mandate).
     write_table() {
-      : > "${fixture_dir}/module-durations.txt"
+      true > "${fixture_dir}/module-durations.txt"
       for line in "$@"; do
         printf '%s\n' "$line" >> "${fixture_dir}/module-durations.txt"
       done
@@ -354,9 +354,9 @@ ${fixture_dir}/test_e.py"
       space_setup() {
         space_dir="${fixture_dir}/sub dir"
         mkdir -p "$space_dir"
-        : > "${space_dir}/test_a.py"
-        : > "${space_dir}/test_b.py"
-        : > "${space_dir}/test_c.py"
+        true > "${space_dir}/test_a.py"
+        true > "${space_dir}/test_b.py"
+        true > "${space_dir}/test_c.py"
         printf '%s\n' 'test_a.py 100.00' 'test_b.py 10.00' 'test_c.py 10.00' \
           > "${space_dir}/module-durations.txt"
       }
@@ -388,7 +388,7 @@ ${space_dir}/test_c.py"
     # in the fixture dir; every It calls it itself right before shard(), so
     # no example depends on another's table content.
     write_table() {
-      : > "${fixture_dir}/module-durations.txt"
+      true > "${fixture_dir}/module-durations.txt"
       for line in "$@"; do
         printf '%s\n' "$line" >> "${fixture_dir}/module-durations.txt"
       done
@@ -606,7 +606,7 @@ ${r}/test_a.py::test_1"
     # OUTER shard() (plain "sh $SCRIPT $fixture_dir ...") is what we want
     # here -- no override needed in this Describe.
     write_oversized_table() {
-      : > "${fixture_dir}/module-durations.txt"
+      true > "${fixture_dir}/module-durations.txt"
       printf '%s\n' 'test_a.py 100.00' 'test_a.py::test_1 40.00' \
         'test_a.py::test_2 30.00' 'test_a.py::test_3 30.00' \
         'test_b.py 5.00' 'test_c.py 5.00' 'test_d.py 5.00' 'test_e.py 5.00' \
@@ -636,7 +636,7 @@ ${fixture_dir}/test_e.py"
     # weights/tie-breaks unless every awk stage pins LC_ALL=C itself -- skip
     # (never fail) if this libc has none installed.
     write_table() {
-      : > "${fixture_dir}/module-durations.txt"
+      true > "${fixture_dir}/module-durations.txt"
       for line in "$@"; do
         printf '%s\n' "$line" >> "${fixture_dir}/module-durations.txt"
       done
@@ -694,7 +694,7 @@ ${fixture_dir}/test_e.py"
     # throughout (single-space nodeids were never broken), proving the
     # guard doesn't regress the legitimate #861 case.
     write_table() {
-      : > "${fixture_dir}/module-durations.txt"
+      true > "${fixture_dir}/module-durations.txt"
       for line in "$@"; do
         printf '%s\n' "$line" >> "${fixture_dir}/module-durations.txt"
       done

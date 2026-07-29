@@ -24,15 +24,15 @@ Describe 'install-pkg.sh'
     mkdir -p "$FAKE_BIN"
     SSH_LOG="${WORK}/ssh.log"
     SCP_LOG="${WORK}/scp.log"
-    : > "$SSH_LOG"
-    : > "$SCP_LOG"
+    true > "$SSH_LOG"
+    true > "$SCP_LOG"
 
     PKGFILE="${WORK}/pfBlockerNG-devel.pkg"
     DEP1="${WORK}/py311-charset-normalizer-1.pkg"
     DEP2="${WORK}/py311-idna-2.pkg"
-    : > "$PKGFILE"
-    : > "$DEP1"
-    : > "$DEP2"
+    true > "$PKGFILE"
+    true > "$DEP1"
+    true > "$DEP2"
 
     # Fake ssh: records the LAST arg (the wrapped `/bin/sh -c '<remote cmd>'`
     # string install-pkg.sh's ssh_t() builds) to $SSH_LOG, one per line.

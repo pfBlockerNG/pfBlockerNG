@@ -180,7 +180,7 @@ done
 "${realawk}" "\$@"
 rc=\$?
 if [ "\${window}" -eq 1 ]; then
-	: > "$1/window-hit"
+	true > "$1/window-hit"
 	[ "\${rc}" -eq 0 ] && exit 74
 fi
 exit "\${rc}"
@@ -275,7 +275,7 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 	It 'gives an IP back to the next-priority owner once the higher-priority feed is removed from the memberlist'
 		# Pre-existing state as the prior pass (High_v4 owning the IP) left it.
 		printf 'High_v4 192.0.2.77\n' > "$masterfile"
-		: > "${pfbdeny}Low_v4.txt"
+		true > "${pfbdeny}Low_v4.txt"
 		printf '192.0.2.77\n' > "${snap}/Low_v4.orig"
 		# High_v4 removed from the memberlist entirely (a genuine feed removal).
 		printf '%s\n' "${snap}/Low_v4.orig" > "$memberlist"
@@ -312,7 +312,7 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 	End
 
 	It 'a single-feed class is a plain copy (no grepcidr call needed), dedups an internal repeat, and still gets counted'
-		: > "${work}/grepcidr.never-called"
+		true > "${work}/grepcidr.never-called"
 		printf '#!/bin/sh\nrm -f "%s/grepcidr.never-called"\n' "$work" > "$pathgrepcidr"
 		chmod +x "$pathgrepcidr"
 		# issue #1084 review: an internal repeat (203.0.113.30 twice) discriminates the
@@ -329,7 +329,7 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 	End
 
 	It 'an alias whose snapshot is empty ends up with an empty (present, not missing) deny file'
-		: > "${snap}/Empty_v4.orig"
+		true > "${snap}/Empty_v4.orig"
 		printf '%s\n' "${snap}/Empty_v4.orig" > "$memberlist"
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
 		The status should be success
@@ -940,7 +940,7 @@ Describe 'pfb_recompute() hostile inputs'
 		# TRUNCATES an existing file (no directory-write needed), so emit
 		# succeeds while the later mv (a rename -- directory write required)
 		# still fails once pfbdeny itself goes read-only.
-		: > "${pfbdeny}Alpha_v4.txt.new"
+		true > "${pfbdeny}Alpha_v4.txt.new"
 		chmod 555 "$pfbdeny"
 
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
@@ -988,7 +988,7 @@ Describe 'pfb_recompute() mastercat consistency + empty-pass edges'
 	It 'swaps a consistent empty mastercat when a dedup=on pass emits zero rows'
 		printf 'Stale_v4 198.51.100.9\n' > "$masterfile"
 		printf '198.51.100.9\n' > "$mastercat"
-		: > "${snap}/Empty_v4.orig"
+		true > "${snap}/Empty_v4.orig"
 		printf '%s\n' "${snap}/Empty_v4.orig" > "$memberlist"
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
 		The status should be success
@@ -997,7 +997,7 @@ Describe 'pfb_recompute() mastercat consistency + empty-pass edges'
 	End
 
 	It 'completes an all-empty memberlist under repmode=dmax exactly like repmode=off'
-		: > "${snap}/Empty_v4.orig"
+		true > "${snap}/Empty_v4.orig"
 		printf '%s\n' "${snap}/Empty_v4.orig" > "$memberlist"
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 2 US off block
 		The status should be success
@@ -1271,7 +1271,7 @@ Describe 'pfb_recompute() renders a per-feed Original/Final stats table on stdou
 	End
 
 	It 'a zero-final-count feed still renders its row with Final 0 (Original also 0, from its .aggcount)'
-		: > "${snap}/ZeroFeed_v4.orig"
+		true > "${snap}/ZeroFeed_v4.orig"
 		printf '0\n' > "${pfborig}ZeroFeed_v4.aggcount"
 		printf '%s\n' "${snap}/ZeroFeed_v4.orig" > "$memberlist"
 		row="$(printf '%-36s %-10s %-10s' '  ZeroFeed_v4' '0' '0')"

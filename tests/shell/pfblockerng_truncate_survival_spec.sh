@@ -22,7 +22,15 @@
 # covers any future shell source elsewhere under src/.
 _trunc_legacy_hits() {
 	git -C "${PFB_ROOT}" grep -nE '(^|[;&|({[:space:]]):[[:space:]]*>' -- \
-		src scripts
+		src scripts tests
+}
+
+# _colon_loop_hits — `while true` / `until true` spell an infinite loop with the
+# special builtin where the plain `true` word reads better and carries none of
+# `:`'s ash/dash baggage (owner rule, issue #1850).
+_colon_loop_hits() {
+	git -C "${PFB_ROOT}" grep -nE '(while|until)[[:space:]]+:' -- \
+		src scripts tests
 }
 
 # process255(): truncate the dedupfile, then signal survival. `silently` swallows
@@ -80,7 +88,7 @@ Describe 'legacy special-builtin truncate sites survive redirection failure (iss
       tempfile="${work}/t1"
       # Empty deny file -> data255 stays empty -> process255 never runs past the
       # truncate site under test into the octet-collapse body.
-      : > "${pfbdeny}${alias}.txt"
+      true > "${pfbdeny}${alias}.txt"
       # Crash-leftover DIRECTORY at the dedupfile truncate target.
       mkdir "${dedupfile}"
     }
@@ -106,7 +114,7 @@ Describe 'legacy special-builtin truncate sites survive redirection failure (iss
       consumer="${work}/agg.lst"
       # No members -> the empty-union branch fires, which is the one guarded by
       # the agg_tmp truncate site under test.
-      : > "${memberlist}"
+      true > "${memberlist}"
       printf 'stale\n' > "${aggout}"
       # Crash-leftover DIRECTORY at agg_tmp ("${aggout}.tmp").
       mkdir "${aggout}.tmp"
@@ -295,7 +303,7 @@ STUB
       mastercat="${work}/mastercat"
       tempfile="${work}/t1"; tempfile2="${work}/t2"
       dedupfile="${work}/dedup"; addfile="${work}/add"
-      : > "${dedupfile}"; : > "${addfile}"
+      true > "${dedupfile}"; true > "${addfile}"
       errorlog="${work}/err.log"
       i=1
       while [ "$i" -le 254 ]; do
@@ -357,14 +365,22 @@ STUB
   End
 End
 
-Describe 'structural retirement guard: no legacy ": >" truncate sites remain in shipped shell sources (issue #1172)'
+Describe 'structural retirement guard: no ":" special-builtin idioms remain (issues #1172, #1850)'
   # ADR-47 P5: scrub inherited GIT_* before the real `git grep` below -- an
   # inherited GIT_DIR (e.g. from the pre-commit hook) can override `-C` and
   # silently target the wrong repo.
   BeforeAll 'scrub_git_env'
 
+  # Both guards scan src + scripts + tests. Replacement in every case is the
+  # regular builtin `true` (`true > file`, `while true`).
   It 'has zero hits for the legacy special-builtin truncate pattern'
     When call _trunc_legacy_hits
+    The status should be failure
+    The output should equal ""
+  End
+
+  It 'has zero hits for a ":" infinite-loop condition'
+    When call _colon_loop_hits
     The status should be failure
     The output should equal ""
   End

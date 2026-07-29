@@ -56,8 +56,8 @@ Describe 'processet() etblock/etmatch tempfile accumulation: multi-category conc
     etdir="${work}/ET"; mkdir -p "$etdir"
     tempfile="${work}/t1"
     tempfile2="${work}/t2"
-    : > "$tempfile"
-    : > "$tempfile2"
+    true > "$tempfile"
+    true > "$tempfile2"
     # Two selected categories, the first unterminated -- deterministic single-line
     # weld pre-fix regardless of iteration order (both accumulators are seeded
     # identically so the same fixture drives both the block and match statements).

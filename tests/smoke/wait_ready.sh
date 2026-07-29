@@ -93,7 +93,7 @@ ATTEMPT=0
 # SSH liveness floor observed (web/pfSense role only); logged once.
 WEB_SSH_SEEN=""
 
-while :; do
+while true; do
     NOW="$(date +%s)"
     ELAPSED=$((NOW - START))
 

@@ -22,7 +22,7 @@ Describe 'reputation_pmax() masterfile block removal (#730)'
     mkdir -p "$pfbdeny"
     tmpdir="${work}"
     tempfile="${work}/t1"; tempfile2="${work}/t2"
-    dedupfile="${work}/d4"; addfile="${work}/d5"; : > "$dedupfile"; : > "$addfile"
+    dedupfile="${work}/d4"; addfile="${work}/d5"; true > "$dedupfile"; true > "$addfile"
     masterfile="${work}/master"; mastercat="${work}/mastercat"
     ip_placeholder='240.0.0.0'
     ip_placeholder3="$(echo "${ip_placeholder}" | cut -d '.' -f 1-3)"

@@ -27,12 +27,12 @@ Describe 'pfblockerng.sh remove() entry guard'
     mastercat="${sandbox}/mastercat"
     tempfile="${sandbox}/t1"
     tempfile2="${sandbox}/t2"
-    : > "${masterfile}"
+    true > "${masterfile}"
     # A sentinel INSIDE the sandbox, one level above every ${pfb*} prefix dir
     # (they all live at "${sandbox}/<name>/") -- exactly where a single "../"
     # traversal in a header/alias lands, so an unguarded glob can delete it.
     sentinel="${sandbox}/SENTINEL"
-    : > "${sentinel}"
+    true > "${sentinel}"
   }
 
   cleanup_sandbox() {
@@ -106,7 +106,7 @@ Describe 'pfblockerng.sh remove() entry guard'
     alias='GoodList_v4'
     # shellcheck disable=SC2034
     cc='GoodList_v4,'
-    : > "${pfborig}GoodList_v4.txt"
+    true > "${pfborig}GoodList_v4.txt"
     When call remove_valid_and_report
     # Before-state: the file existed; After: it is gone (the valid path proceeds).
     The output should include 'PRE:exists'

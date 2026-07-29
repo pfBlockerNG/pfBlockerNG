@@ -198,7 +198,7 @@ final class TickFeedPassDeferralTest extends TestCase
 active="${0}.active.$$"
 done="${0}.done.$$"
 tmp="${done}.tmp"
-: > "$active"
+true > "$active"
 trap 'rm -f "$active" "$tmp"' EXIT HUP INT TERM
 printf '%s\0' "$@" > "$tmp"
 mv "$tmp" "$done"

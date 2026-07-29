@@ -43,7 +43,7 @@ ask() {
 
 # 1. Image type (drives all the derived fields downstream).
 TYPE=""
-while :; do
+while true; do
     ask TYPE "Image type (ce | plus | civm)"
     case "$TYPE" in
         ce|plus|civm) break ;;

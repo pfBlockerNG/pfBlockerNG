@@ -30,8 +30,8 @@ Describe "remove() masterfile row removal (suffix-sibling intact) + file cleanup
 		alias='Ads_v4'
 		cc='Ads_v4,'
 		printf 'Ads_v4 10.0.0.0/24\nBadAds_v4 20.0.0.0/24\n' > "$masterfile"
-		: > "${pfborig}Ads_v4.orig"; : > "${pfbdeny}Ads_v4.txt"; : > "${pfbmatch}Ads_v4.txt"
-		: > "${pfbdeny}BadAds_v4.txt"
+		true > "${pfborig}Ads_v4.orig"; true > "${pfbdeny}Ads_v4.txt"; true > "${pfbmatch}Ads_v4.txt"
+		true > "${pfbdeny}BadAds_v4.txt"
 
 		When call remove
 		The status should be success
@@ -49,7 +49,7 @@ Describe "remove() masterfile row removal (suffix-sibling intact) + file cleanup
 		alias='Solo_v4'
 		cc='Solo_v4,'
 		printf 'Solo_v4 30.0.0.0/24\n' > "$masterfile"
-		: > "${pfbdeny}Solo_v4.txt"
+		true > "${pfbdeny}Solo_v4.txt"
 
 		When call remove
 		The status should be success
@@ -67,7 +67,7 @@ Describe 'reputation_pmax() collapse (no GeoIP, block-only)'
 		mkdir -p "$pfbdeny"
 		tmpdir="${work}"
 		tempfile="${work}/t1"; tempfile2="${work}/t2"
-		dedupfile="${work}/d4"; addfile="${work}/d5"; : > "$dedupfile"; : > "$addfile"
+		dedupfile="${work}/d4"; addfile="${work}/d5"; true > "$dedupfile"; true > "$addfile"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		ip_placeholder='240.0.0.0'
 		ip_placeholder3="$(echo "${ip_placeholder}" | cut -d '.' -f 1-3)"

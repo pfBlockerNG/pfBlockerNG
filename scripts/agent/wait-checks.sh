@@ -133,7 +133,7 @@ main() {
 		# least settled -- must not kill the whole wait. Still capped by the
 		# wall-clock deadline via gh_bounded; a wait that still cannot pin a SHA
 		# after that tolerance is exhausted must fail loudly, never poll blind.
-		while :; do
+		while true; do
 			if sha=$(gh_bounded pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) && [ -n "$sha" ]; then
 				break
 			fi
@@ -183,7 +183,7 @@ main() {
 				# an otherwise-completed wait. An empty read is a hard failure, same
 				# as arm-time -- it is never proof the head moved, only that this
 				# read didn't land, so it is GH-ERROR, not STALE.
-				while :; do
+				while true; do
 					if live=$(gh_bounded pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) && [ -n "$live" ]; then
 						break
 					fi
