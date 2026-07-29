@@ -187,6 +187,18 @@ BEOF
     The contents of file "${OUT}/status" should equal 'unavailable'
   End
 
+  It 'gives up on a lock that never clears instead of retrying forever'
+    # Review: removing the PFB_LOCK_RETRIES bound killed no test — the only
+    # locked case released well inside the default cap.
+    export LOCKED_UNTIL=99 PFB_LOCK_RETRIES=3
+    When call facts ce
+    The status should be success
+    The stderr should include 'attempt 2'
+    The stderr should not include 'attempt 3'
+    The contents of file "${OUT}/status" should equal 'ok'
+    The contents of file "${OUT}/upgrade-check.txt" should equal ''
+  End
+
   It 'still fails the boot when the version fact is lost'
     export FAIL_VERSION=1
     When call facts ce
