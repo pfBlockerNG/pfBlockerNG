@@ -29,9 +29,12 @@
 # after a py_flavor flip; shed stale old-flavor/extra packages; verify pkg info -e
 # + a python import probe, fail-closed) -> health-gate (webConfigurator HTTP
 # or pfctl live ruleset; confirms it boots and works on the NEW version) ->
-# power off cleanly -> compress on Proxmox -> stream back ->
-# push the new tag (local). The source tag is left untouched, so the old image
-# is always kept.
+# wait for pfSense's boot verification to make the new boot environment
+# permanent on disk (fall back to an explicit bectl activate; fail closed —
+# issue #1858) -> power off cleanly -> compress on Proxmox -> stream back ->
+# boot the exported artifact once and refuse to publish it under a tag whose
+# family it does not come up with (issue #1858) -> push the new tag (local).
+# The source tag is left untouched, so the old image is always kept.
 #
 # Usage:
 #   ./scripts/image-upgrade.sh --from <current-version> [--type ce|plus] [options]
@@ -55,7 +58,9 @@
 #
 # Options:
 #   --from VERSION   current published tag to upgrade (required)
-#   --to VERSION     tag to publish as (default: major.minor of the upgraded box)
+#   --to VERSION     tag to publish as, in major.minor form — the pre-push
+#                    artifact verification compares it against the booted
+#                    version's FAMILY (default: major.minor of the upgraded box)
 #   --type T         ce (default) | plus — derives the image name, description and
 #                    artifact-type (image-publish.sh's scheme)
 #   --registry REF   GHCR namespace for the derived --type ref (default:
@@ -86,6 +91,10 @@
 #                    (default: 1200). The poll exits the instant /etc/version
 #                    changes, so this only bounds how long a STUCK upgrade waits
 #                    before the run fails — it is not added to a successful run.
+#   Env knobs (mainly for the spec): VERIFY_BOOT_TIMEOUT — seconds to wait for
+#   the artifact-verification boot's SSH (default: 600); PROMOTE_TIMEOUT /
+#   PROMOTE_INTERVAL — seconds to wait / poll step for pfSense's own boot
+#   verification to promote the new BE (defaults: 300 / 10).
 #   --upgrade-pkgs   before pfSense-upgrade, run `pkg update -f` + `pkg upgrade -y`
 #                    to upgrade baked deps (qemu-guest-agent, etc.) to their latest
 #                    versions; reboots the guest and waits for SSH before proceeding.
@@ -344,7 +353,11 @@ pfb_call_site_upgrade() {
 pfb_verify_artifact() {
     _pva_file=$1; _pva_tag=$2
     log "verifying the exported artifact boots ${_pva_tag} before publishing"
-    _pva_ver=$(pfb_boot_artifact_version "$_pva_file" | tr -d '\r')
+    # Run the boot in THIS shell — never $() or a pipe: die() must abort the
+    # script (the #1844 rule above), and QPID must land in the top-level shell
+    # so cleanup() can reap a wedged verification QEMU.
+    pfb_boot_artifact_version "$_pva_file" > "${LOCAL_DIR}/verify-version"
+    _pva_ver=$(tr -d '\r' < "${LOCAL_DIR}/verify-version")
     [ -n "$_pva_ver" ] \
         || die "could not read a version from the exported artifact — refusing to publish"
     _pva_fam=$(image_version_tag "$_pva_ver")
@@ -382,7 +395,7 @@ pfb_boot_artifact_version() {
     px "$_pbav_cmd" >&2
     QPID=$(px "cat '${REMOTE_DIR}/verify.pid'" | tr -d '\r')
     [ -n "$QPID" ] || die "verification boot did not write a pidfile (see ${REMOTE_DIR}/verify-console.log on the KVM host)"
-    wait_guest_ssh "${VERIFY_BOOT_TIMEOUT:-600}" >&2
+    wait_guest_ssh "${VERIFY_BOOT_TIMEOUT:-600}" verify-console.log >&2
     _pbav_ver=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r')
     ssh_guest '/sbin/shutdown -p now' >/dev/null 2>&1 || true
     _pbav_elapsed=0
@@ -441,13 +454,16 @@ pfb_be_is_permanent() {
 }
 # pfb_promote_be END
 
-# wait_guest_ssh TIMEOUT — poll until root SSH answers or TIMEOUT seconds elapse.
+# wait_guest_ssh TIMEOUT [CONSOLE] — poll until root SSH answers or TIMEOUT
+# seconds elapse; CONSOLE names the boot's console log for the failure message
+# (the verification boot writes verify-console.log, not console.log).
 wait_guest_ssh() {
     _wgs_timeout="$1"
+    _wgs_console="${2:-console.log}"
     _wgs_elapsed=0
     while ! ssh_guest true 2>/dev/null; do
         [ "$_wgs_elapsed" -ge "$_wgs_timeout" ] && \
-            die "VM did not answer SSH within ${_wgs_timeout}s (see $REMOTE_DIR/console.log on the KVM host)"
+            die "VM did not answer SSH within ${_wgs_timeout}s (see $REMOTE_DIR/${_wgs_console} on the KVM host)"
         sleep 5; _wgs_elapsed=$((_wgs_elapsed + 5))
     done
 }
