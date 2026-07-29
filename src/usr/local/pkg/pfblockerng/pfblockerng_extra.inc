@@ -5030,7 +5030,14 @@ function pfb_hook_editor_delete(string $script, string $when, ?string $dir = nul
 	if ($path === NULL || !is_file($path)) {
 		return FALSE;
 	}
-	return @unlink($path);
+	// Remove the DIRECTORY ENTRY the admin named, not what it resolves to.
+	// pfb_hook_editor_path() returns a realpath(), so for a symlink sitting in the
+	// hook directory that is the link's TARGET -- unlinking it would delete a
+	// different hook than the row that was clicked (a post hook's row removing a
+	// pre hook's file) while the UI reported success. Both halves of this path are
+	// already validated: dirname($path) is the resolved hook directory, and $script
+	// passed the bare-basename check inside pfb_hook_script_valid().
+	return @unlink(dirname($path) . '/' . $script);
 }
 
 /*

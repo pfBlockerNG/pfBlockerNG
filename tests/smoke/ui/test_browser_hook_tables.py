@@ -152,6 +152,46 @@ def test_a_hook_script_can_be_deleted_from_the_web_ui(
     expect(page.locator(f"tr[data-pfb-hook='{probe_hook}']")).to_have_count(0, timeout=JS_TIMEOUT_MS)
 
 
+def test_saving_a_script_still_works_alongside_the_delete_field(
+    browser_page: Page,
+    webui: WebUI,
+    probe_hook: str,
+) -> None:
+    """Save still saves once the delete flow's hidden fields exist on the form.
+
+    The delete action posts through hidden inputs on the page's single form, and
+    a browser submits hidden inputs on EVERY submit -- including a Save. A
+    delete branch guarded on presence alone therefore swallows Save, fails, and
+    discards whatever the admin had typed. This pins the dispatch: Save reaches
+    the save handler, the content is written, and it survives a reload.
+    """
+    page = browser_page
+    _open(page, webui, HOOKS_PAGE)
+
+    row = page.locator(f"tr[data-pfb-hook='{probe_hook}']")
+    expect(row).to_be_visible(timeout=JS_TIMEOUT_MS)
+    row.locator("a .fa-pencil").click()
+    page.wait_for_load_state("networkidle", timeout=JS_TIMEOUT_MS * 3)
+    assert page.locator("#pfb_eh_cur_script").input_value() == probe_hook, "precondition: the script is loaded"
+
+    marker = "# pfb-uitest-save-marker"
+    content = page.locator(".cm-content")
+    expect(content).to_be_visible(timeout=JS_TIMEOUT_MS)
+    content.click()
+    page.keyboard.press("ControlOrMeta+a")
+    page.keyboard.press("Delete")
+    content.press_sequentially(f"#!/bin/sh\n{marker}\nexit 0", delay=20)
+
+    page.click("[name='pfb_eh_save']")
+    page.wait_for_load_state("networkidle", timeout=JS_TIMEOUT_MS * 3)
+
+    # The save handler's own PRG lands on ?saved=1; the delete branch would
+    # instead have produced an input-error box and an emptied editor.
+    expect(page.locator(".alert-success")).to_contain_text("saved", timeout=JS_TIMEOUT_MS)
+    expect(page.locator(".input-errors")).to_have_count(0)
+    expect(page.locator("#pfb_eh_content")).to_contain_text(marker, timeout=JS_TIMEOUT_MS)
+
+
 def test_dismissing_the_delete_confirmation_keeps_the_script(
     browser_page: Page,
     webui: WebUI,

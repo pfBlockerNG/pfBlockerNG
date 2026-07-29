@@ -149,12 +149,19 @@ if ($_POST) {
 		$pfb_eh_content      = '';
 		$pfb_eh_new_core_val = $post_core;
 		$pfb_eh_new_lang_val = ($post_lang === 'py') ? 'py' : 'sh';
-	} elseif (isset($_POST['pfb_eh_delete'])) {
-		// issue #1871: delete flow. Every decision is delegated to
-		// pfb_hook_editor_delete(), which refuses anything the shared allow-list
-		// (pfb_hook_script_valid()) does not already vouch for -- this handler
-		// therefore never inlines a path or naming rule of its own, exactly like the
-		// create and save handlers above and below it.
+	} elseif (isset($_POST['pfb_eh_delete']) && $_POST['pfb_eh_delete'] !== '') {
+		// The emptiness check is load-bearing, not defensive: pfb_eh_delete is a
+		// hidden field rendered on EVERY request, and a browser submits hidden inputs
+		// whether or not the delete button was the thing clicked. isset() alone is
+		// therefore true on a Save too, which would route Save into this branch,
+		// fail, and discard the admin's unsaved editor content. Only the click
+		// handler ever gives the field a value. Same idiom as
+		// pfblockerng_alerts.php's entry_delete guard.
+		//
+		// issue #1871: every decision is delegated to pfb_hook_editor_delete(), which
+		// refuses anything the shared allow-list (pfb_hook_script_valid()) does not
+		// already vouch for -- this handler never inlines a path or naming rule of
+		// its own, exactly like the create and save handlers above and below it.
 		$post_when   = (string) ($_POST['pfb_eh_del_when'] ?? '');
 		$post_script = (string) ($_POST['pfb_eh_del_script'] ?? '');
 
@@ -277,6 +284,19 @@ if ($input_errors) {
 }
 if (!$_POST && isset($_GET['saved'])) {
 	print_info_box(gettext('Hook script saved.'), 'success');
+}
+// issue #1871: a delete removes the row it acted on, so without this the page comes
+// back with the script simply absent and no statement that anything happened -- the
+// same silent-success problem the save flow already avoids. The name is echoed
+// through htmlspecialchars() because it reaches this point from a query string.
+if (!$_POST && isset($_GET['deleted']) && $_GET['deleted'] !== '') {
+	print_info_box(
+		sprintf(
+			gettext('Hook script %s deleted.'),
+			'<strong>' . htmlspecialchars((string) $_GET['deleted'], ENT_QUOTES) . '</strong>'
+		),
+		'success'
+	);
 }
 
 // Define default Alerts Tab href link (Top row)
