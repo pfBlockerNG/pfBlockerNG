@@ -94,6 +94,42 @@ final class LiveTableSnapshotTest extends TestCase
 	}
 
 	/**
+	 * Issue #1852: a table absent from the loaded ruleset (a fresh alias not
+	 * yet referenced by any rule/reload -- exactly the state a user hits
+	 * clicking Alerts "+" right after creating a Suppression/DNSBL alias)
+	 * must NOT throw -- it is "no live members", not a capture failure.
+	 * Stderr text probed for real on a leased pfSense CE 2.8 pool box (PHP
+	 * 8.3.19): `pfctl -t <absent> -T show` exits rc=255 with stderr
+	 * "pfctl: Table does not exist.". This shim reproduces that exact rc +
+	 * stderr pairing.
+	 */
+	public function testAbsentTableYieldsEmptyInsteadOfThrowing(): void
+	{
+		$shim = $this->writeShim("printf 'pfctl: Table does not exist.\\n' 1>&2\nexit 255");
+
+		$entries = self::collect(pfb_live_table_snapshot($shim, $this->aliasdir, $this->dbdir, 'pfB_Absent_v4'));
+
+		$this->assertSame([], $entries, 'an absent table must yield an empty membership set, not throw');
+	}
+
+	/**
+	 * Issue #1852: the absent-table carve-out is narrow -- ANY other
+	 * non-zero exit (a genuine pfctl failure, distinguished by stderr NOT
+	 * matching "Table does not exist") still throws loudly, same as before.
+	 */
+	public function testGenuinePfctlFailureStillThrows(): void
+	{
+		$this->expectException(\RuntimeException::class);
+		$this->expectExceptionMessageMatches('/pfctl -T show exited rc=1/');
+
+		$shim = $this->writeShim("printf 'pfctl: some other genuine failure\\n' 1>&2\nexit 1");
+
+		foreach (pfb_live_table_snapshot($shim, $this->aliasdir, $this->dbdir, 'pfB_GenuineFail_v4') as $entry) {
+			// the throw fires lazily -- iterating is what triggers the generator body
+		}
+	}
+
+	/**
 	 * Issue #1467: a mirror file present does NOT win -- it is never read at
 	 * all. The mirror holds a stale set A; live pfctl reports a different
 	 * set B, exactly as it would after a first live punch that never
