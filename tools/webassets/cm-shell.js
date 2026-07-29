@@ -2,7 +2,7 @@
 // layer supplied per entry. Extracted out of cm-regex.js/cm-hooks.js, which used to
 // duplicate this whole scaffold (owner decision to keep the BUNDLES separate still holds --
 // only the SOURCE dedups, so a fix like #1869's lineNumbers gutter lives once).
-import { EditorState } from "@codemirror/state";
+import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView, keymap, drawSelection, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
@@ -28,6 +28,12 @@ export function mountTextarea(textarea, language, extraExtensions = []) {
   const height = Number.isFinite(rows) && rows > 0 ? `${rows * 1.4}em` : "20em";
   const ariaLabel = accessibleNameFor(textarea);
 
+  // issue #1875: pfSense's disableInput() greys a field and keeps it out of the POST (the
+  // General page's internal-feed allowlist). The textarea is hidden below, so the editor
+  // must mirror its disabled state -- at mount AND on live flips -- or a disabled field
+  // stays typable and silently eats edits the save then ignores.
+  const editable = new Compartment();
+
   const extensions = [
     history(),
     drawSelection(),
@@ -40,11 +46,14 @@ export function mountTextarea(textarea, language, extraExtensions = []) {
     syntaxHighlighting(defaultHighlightStyle),
     syntaxHighlighting(pfbHighlightStyle),
     language,
+    editable.of(EditorView.editable.of(!textarea.disabled)),
     EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
     EditorView.theme({
       "&": { border: "1px solid #b7b7b7", backgroundColor: "#fff" },
       ".cm-scroller": { fontFamily: "monospace", overflow: "auto" },
       ".cm-content": { whiteSpace: "pre" },
+      // Non-editable (disabled-field) parity: grey like a disabled pfSense input.
+      ".cm-content[contenteditable=false]": { backgroundColor: "#eee" },
     }),
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
@@ -74,6 +83,11 @@ export function mountTextarea(textarea, language, extraExtensions = []) {
   if (label) {
     label.addEventListener("click", () => view.focus());
   }
+
+  // disableInput() flips the attribute at runtime (checkbox handlers) -- follow it live.
+  new MutationObserver(() => {
+    view.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!textarea.disabled)) });
+  }).observe(textarea, { attributes: true, attributeFilter: ["disabled"] });
 
   return view;
 }

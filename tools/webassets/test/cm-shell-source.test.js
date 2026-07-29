@@ -81,3 +81,37 @@ test("lineNumbers() is imported and installed in the extension list", () => {
   assert.match(src, /import \{[^}]*\blineNumbers\b[^}]*\} from "@codemirror\/view"/);
   assert.match(src, /^\s*lineNumbers\(\),$/m);
 });
+
+// issue #1875: pfSense's disableInput() greys a field and keeps it out of the POST (the
+// General page's internal-feed allowlist does this when the master filter is off). The
+// mounted editor hides that textarea, so without tracking the attribute the editor stays
+// editable over a disabled field and silently eats edits the save then ignores. The
+// behaviour itself is proven in the browser tier; these pins only catch the mechanism
+// being dropped from the shared shell.
+test("the editor's editable state follows the textarea's disabled attribute (mount time)", () => {
+  assert.match(src, /import \{[^}]*\bCompartment\b[^}]*\} from "@codemirror\/state"/);
+  assert.ok(
+    src.includes("EditorView.editable.of(!textarea.disabled)"),
+    "expected the editable facet to be derived from !textarea.disabled at mount time",
+  );
+});
+
+test("a MutationObserver tracks live disabled-attribute flips (disableInput toggles at runtime)", () => {
+  assert.match(src, /new MutationObserver\(/);
+  assert.ok(
+    src.includes('attributeFilter: ["disabled"]'),
+    "expected the observer to watch exactly the disabled attribute",
+  );
+  assert.match(
+    src,
+    /reconfigure\(EditorView\.editable\.of\(!textarea\.disabled\)\)/,
+    "expected the observer to reconfigure the editable compartment from the textarea's live disabled state",
+  );
+});
+
+test("a non-editable editor is greyed like a disabled pfSense input", () => {
+  assert.ok(
+    src.includes('".cm-content[contenteditable=false]"'),
+    "expected a theme rule greying the content pane when the editable facet turns it off",
+  );
+});
