@@ -485,6 +485,18 @@ jobs:
             jq -r '.actions[] | select(.type == "warn") | "::warning::\(.family): \(.message)"' "$PLAN"
           done
 
+      # Facts outlive the runner: an intermittent boot failure is otherwise
+      # undiagnosable from the log alone (issue #1848).
+      - name: Upload the gathered facts
+        if: always() && steps.probe_gate.outputs.probe_disabled != 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: reconcile-facts
+          path: facts/
+          if-no-files-found: ignore
+          retention-days: 14
+
       # ── Act 2: matrix auto-PRs (a human merges; NEVER a ci-metadata push) ───
       # matrix_pr_add: new family seen on the box → entry with the action's
       # status, ci: false, fields jq-carried from the newest same-channel amd64

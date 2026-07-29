@@ -31,9 +31,11 @@
 #   PFB_LOCK_RETRIES   upgrade-check attempts while pfSense holds the upgrade
 #                      lock (default 8; issue #1844)
 #
-# status file: "ok" = all three facts gathered; "unavailable" = any
-# infrastructure failure (pull, boot, ssh, Plus identity) — partial fact files
-# may exist but the planner must treat the boot as absent.
+# status file: "ok" = the REQUIRED facts (etc-version, repoc) were gathered;
+# the upgrade-check fact is optional (the planner's second source) and its
+# absence leaves an empty file without failing the boot. "unavailable" = a
+# required fact or an infrastructure failure (pull, boot, ssh, Plus identity) —
+# the planner must then treat the boot as absent.
 # Exit status: always 0 — best-effort; callers gate on the status file.
 #
 # POSIX sh (strict ash/dash semantics); base utilities bare, guest binaries absolute.
@@ -161,33 +163,57 @@ fi
 
 # The three facts. repoc and the -c check both refresh metadata over the
 # network — each runs under its own guest-side hard cap (a wedged pkg/fetch
-# must not hang the run; review F2).
+# must not hang the run). Each failure is named in the log; only the REQUIRED
+# facts (etc-version, repoc) decide the boot's status, because the planner
+# treats the -c check as an optional second source (issue #1848).
 _ok=1
-guest_sh 'cat /etc/version' > "$OUT_DIR/etc-version" 2>/dev/null || _ok=0
-guest_sh 'timeout 120 /usr/local/sbin/pfSense-repoc -p' > "$OUT_DIR/repoc.txt" 2>/dev/null || _ok=0
-# rc 0 (current) and rc 2 (update available) are both healthy outcomes of -c;
-# anything else — including timeout(1)'s 124 — is a failed fact (an empty
-# second source must never read as "up to date"; review CR2).
-# pfSense refuses a check while another upgrade instance holds the lock
-# (issue #1844) — retry rather than record the refusal as the second source.
-_uc_i=0
-while [ "$_uc_i" -lt "${PFB_LOCK_RETRIES:-8}" ]; do
-    _uc_rc=0   # per attempt — a locked attempt must not condemn the retry
-    guest_sh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1; [ "$?" -le 2 ]' \
-        > "$OUT_DIR/upgrade-check.txt" 2>/dev/null || _uc_rc=1
-    if grep -q 'Another instance is already running' "$OUT_DIR/upgrade-check.txt" 2>/dev/null; then
-        _uc_i=$((_uc_i + 1))
-        echo "box-facts: upgrade check locked (attempt ${_uc_i}); retrying" >&2
-        sleep "$POLL"
-        continue
+
+# fact_get LABEL FILE CMD [optional] — run CMD on the guest, write FILE, and
+# name the fact in the log when it fails. Anything but a trailing "optional"
+# marks the boot unavailable on failure.
+fact_get() {
+    _fg_label=$1; _fg_file=$2; _fg_cmd=$3; _fg_opt=${4:-}
+    if guest_sh "$_fg_cmd" > "$_fg_file" 2>/dev/null; then
+        return 0
     fi
-    break
+    if [ "$_fg_opt" = "optional" ]; then
+        echo "box-facts: ${_fg_label} fact failed (optional — boot still usable)" >&2
+        true > "$_fg_file"
+        return 1
+    fi
+    echo "box-facts: ${_fg_label} fact failed — status unavailable" >&2
+    _ok=0
+    return 1
+}
+
+fact_get etc-version "$OUT_DIR/etc-version" 'cat /etc/version' || true
+fact_get repoc "$OUT_DIR/repoc.txt" 'timeout 120 /usr/local/sbin/pfSense-repoc -p' || true
+
+# The upgrade check is the planner's OPTIONAL second source: rc 0 (current) and
+# rc 2 (update available) are healthy; anything else — timeout(1)'s 124, or the
+# refusal pfSense returns while another upgrade instance holds the lock — is
+# retried, then recorded as absent (an empty file never reads as "up to date").
+# Its loss never voids the boot: the branch list is what the reconcile turns on.
+_uc_raw="$WORK/upgrade-check.raw"
+_uc_i=0
+_uc_ok=0
+while :; do
+    if guest_sh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1; [ "$?" -le 2 ]' \
+        > "$_uc_raw" 2>/dev/null; then
+        _uc_ok=1
+        break
+    fi
+    grep -q 'Another instance is already running' "$_uc_raw" 2>/dev/null || break
+    _uc_i=$((_uc_i + 1))
+    [ "$_uc_i" -lt "${PFB_LOCK_RETRIES:-8}" ] || break
+    echo "box-facts: upgrade check locked (attempt ${_uc_i}); retrying" >&2
+    sleep "$POLL"
 done
-if grep -q 'Another instance is already running' "$OUT_DIR/upgrade-check.txt" 2>/dev/null; then
+if [ "$_uc_ok" -eq 1 ]; then
+    cat "$_uc_raw" > "$OUT_DIR/upgrade-check.txt"
+else
+    echo "box-facts: upgrade-check fact failed (optional — boot still usable)" >&2
     true > "$OUT_DIR/upgrade-check.txt"
-    _ok=0
-elif [ "${_uc_rc:-0}" -ne 0 ]; then
-    _ok=0
 fi
 
 # Best-effort clean shutdown; the trap reaps whatever is left (capped).
@@ -200,5 +226,5 @@ done
 if [ "$_ok" -eq 1 ]; then
     done_with ok
 fi
-echo "box-facts: one or more guest commands failed — status unavailable" >&2
+echo "box-facts: required facts incomplete — status unavailable" >&2
 done_with unavailable
