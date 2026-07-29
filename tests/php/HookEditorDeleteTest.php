@@ -128,7 +128,44 @@ final class HookEditorDeleteTest extends TestCase
 
 	public function testRefusesAnEmptyScriptName(): void
 	{
+		$keep = $this->makeHook('hook_post_keep.sh');
 		$this->assertFalse(pfb_hook_editor_delete('', 'post', $this->dir));
+		$this->assertFileExists($keep, 'an empty name must not remove anything');
+	}
+
+	public function testDeletingASymlinkInTheDirectoryRemovesTheLinkNotItsTarget(): void
+	{
+		// pfb_hook_editor_path() resolves through symlinks, so unlinking its return
+		// value would delete the link's TARGET. A link named as a POST hook pointing
+		// at a PRE hook would then make the post row's trash can silently remove a
+		// different hook -- and the UI would report success, because the dangling
+		// link stops being listed either way.
+		$target = $this->makeHook('hook_pre_target.sh');
+		$link = "{$this->dir}/hook_post_alias.sh";
+		if (!@symlink($target, $link)) {
+			$this->markTestSkipped('symlink() unavailable on this filesystem');
+		}
+
+		$this->assertTrue(pfb_hook_editor_delete('hook_post_alias.sh', 'post', $this->dir));
+		$this->assertFileExists($target, 'the symlink target is a different hook and must survive');
+		$this->assertFalse(is_link($link), 'the named entry itself must be gone');
+	}
+
+	public function testDeletingAHardLinkLeavesTheOutsideFileIntact(): void
+	{
+		// A hard link shares an inode with a file outside the directory. Removing the
+		// in-directory name must not destroy the outside file's content -- unlink()
+		// drops one directory entry, never the inode while another name holds it.
+		$outside = "{$this->outside}/victim.sh";
+		file_put_contents($outside, "#!/bin/sh\nVICTIM\n");
+		$link = "{$this->dir}/hook_post_hard.sh";
+		if (!@link($outside, $link)) {
+			$this->markTestSkipped('link() unavailable on this filesystem');
+		}
+
+		$this->assertTrue(pfb_hook_editor_delete('hook_post_hard.sh', 'post', $this->dir));
+		$this->assertFileExists($outside, 'the outside name must still exist');
+		$this->assertStringContainsString('VICTIM', (string) file_get_contents($outside));
 	}
 
 	public function testRefusesANameCarryingANulByte(): void
