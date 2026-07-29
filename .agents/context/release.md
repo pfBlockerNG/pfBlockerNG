@@ -85,10 +85,12 @@ This is the only place the pipeline removes anything from GitHub; it lives in
 `prepare-release` (the sole reason that job holds `contents: write`), runs before the pin,
 and never fires in a dry run.
 
-**One trust rule inside `sync-ports-fork`:** `scripts/portrevision-rebuild.sh` is executed as
-shell while an App token that can push to the ports fork is live, so it is checked out from
-`github.workflow_sha` — the revision the workflow itself was dispatched from — never from the
-tree the run is releasing.
+**One trust rule, wherever a release workflow executes a script:** anything run as shell —
+`scripts/portrevision-rebuild.sh` in `sync-ports-fork`, `scripts/release-version.sh` in
+`release-published.yml`'s `resolve` — is checked out from `github.workflow_sha`, the revision
+the workflow itself came from, never from the tree being released. It holds even where the
+job currently carries no credential worth stealing: the blast radius is a property of a job's
+present body, not of the design.
 
 ## Release notes — authored onto the Release, never committed
 

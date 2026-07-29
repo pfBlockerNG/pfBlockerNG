@@ -391,8 +391,26 @@ def test_the_helper_checkout_never_persists_credentials() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# release-published.yml: an off-scheme tag must say WHY
+# release-published.yml: trusted execution, and an off-scheme tag must say WHY
 # --------------------------------------------------------------------------- #
+
+
+def test_the_tag_classifier_runs_from_a_trusted_ref() -> None:
+    """Workflow-text assertion (a checkout's `ref:` cannot be executed): the last
+    untrusted-execution site in the pipeline.
+
+    `release-version.sh` is executed as shell in this job, and a `release` event
+    defaults the checkout to the RELEASED tag's tree — a tree the workflow does not
+    control. The blast radius is small *today* (no App token, read-scoped
+    GITHUB_TOKEN, pushes nowhere), but that is a property of the current job body, not
+    of the design: the next credential this job grows would silently inherit the hole.
+    Pin the trusted ref instead, so nobody has to re-derive "is this one safe?".
+    """
+    checkout = _step(_jobs(PUBLISHED_WORKFLOW)["resolve"], "uses: actions/checkout")
+    ref_line = next(line for line in checkout if line.strip().startswith("ref:"))
+    assert "github.workflow_sha" in ref_line, f"the classifier checkout must pin the trusted ref, got: {ref_line}"
+    for untrusted in ("github.event.release", "github.ref", "tag_name"):
+        assert untrusted not in ref_line, f"the classifier must not run from the released tree, got: {ref_line}"
 
 
 def _run_classify_step(tmp_path: Path, tag: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
