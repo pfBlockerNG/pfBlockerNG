@@ -3275,11 +3275,10 @@ $section->addInput(new Form_Input(
 	. 'Roughly under 1 KB of RAM per entry. Set to <strong>0</strong> for unlimited (no eviction). '
 	. 'Takes effect on the next DNSBL Reload.');
 
-// Create page anchor for DNSBL Whitelist
-$section->addInput(new Form_StaticText(
-	NULL,
-	'<div id="Whitelist"></div>'));
-
+// issue #1881: the "#Whitelist" page anchor that used to live here was its own empty
+// Form_StaticText row -- every .form-group carries a theme border-bottom, so it drew a
+// separator with nothing above it. Its only consumer, the dashboard widget, now links
+// the DNSBL Whitelist section's own id (#DNSBL_Whitelist_customlist) instead.
 $form->add($section);
 
 $suppression_text = 'No Regex Entries Allowed!&emsp;

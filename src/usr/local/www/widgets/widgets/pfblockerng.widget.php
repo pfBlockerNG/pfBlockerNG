@@ -935,8 +935,12 @@ function pfBlockerNG_get_header($mode='') {
 
 				if ($data == 'Suppression' || $data == 'Whitelist') {
 					$d_type = ($data == 'Suppression') ? 'ip' : 'dnsbl';
+					// issue #1881: link the target section's own id -- the dedicated
+					// "#Suppression"/"#Whitelist" anchor rows were empty form rows
+					// drawing stray separators and are gone.
+					$d_anchor = ($data == 'Suppression') ? 'IPv4_Suppression_customlist' : 'DNSBL_Whitelist_customlist';
 					print("{$tab5}<td {$tdl} title=\"{$titles[$key][$data]}\"><i class=\"{$faicon[$key][$col]}\"></i>&nbsp;&nbsp;"
-						. "<a target=\"_blank\" href=\"/pfblockerng/pfblockerng_{$d_type}.php#{$data}\" title=\"Link to {$data}\">"
+						. "<a target=\"_blank\" href=\"/pfblockerng/pfblockerng_{$d_type}.php#{$d_anchor}\" title=\"Link to {$data}\">"
 						. "<small><span class=\"pfb_{$data}\">{$value}</span></small></a></td>\n");
 				}
 				else {

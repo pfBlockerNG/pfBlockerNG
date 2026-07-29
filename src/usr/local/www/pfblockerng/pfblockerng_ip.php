@@ -541,11 +541,9 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('This will disable the MaxMind monthly CSV GeoIP database cron update. This does not affect the MaxMind binary cron update that is used for other GeoIP funcionality in the package.');
 
-// Create page anchor for IP Suppression List
-$section->addInput(new Form_StaticText(
-	NULL,
-	'<div id="Suppression"></div>'));
-
+// issue #1881: the "#Suppression" page anchor that used to live here was its own empty
+// Form_StaticText row drawing a stray separator. Its only consumer, the dashboard
+// widget, now links the IPv4 Suppression section's own id (#IPv4_Suppression_customlist).
 $form->add($section);
 
 // Print Custom List TextArea section
