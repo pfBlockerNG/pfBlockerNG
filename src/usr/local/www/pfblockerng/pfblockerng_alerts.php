@@ -863,7 +863,10 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 			$clists['dnsblwhitelist']['base64'] = pfb_text_area_encode($data);
 			PfbConfig::write('suppression', $clists['dnsblwhitelist']['base64']);
-			write_config("pfBlockerNG: Removed [ {$wl_base} ] from DNSBL Whitelist (added to Custom_List)", FALSE);
+			// issue #1872: this description is user-facing (Diagnostics > Config History),
+			// so it spells the field the way the UI does -- "Custom List", not the
+			// code-level "Custom_List".
+			write_config("pfBlockerNG: Removed [ {$wl_base} ] from DNSBL Whitelist (added to Custom List)", FALSE);
 
 			// Refresh the query-time whiteDB so the domain is no longer allowed.
 			pfb_unbound_python_whitelist('alerts');

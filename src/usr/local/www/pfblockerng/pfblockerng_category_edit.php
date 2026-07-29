@@ -1706,7 +1706,11 @@ else {
 $custom_txt = '<div id="Customlist"></div>' . $custom_txt;
 
 // Print Custom List TextArea section
-$section = new Form_Section("{$type} Custom_List", str_replace(' ', '', $type) . 'customlist', COLLAPSIBLE|SEC_CLOSED);
+// issue #1872: the heading is user-facing text, so it reads "Custom List" -- "Custom_List"
+// is the code-level spelling. The section ID is derived from $type, not from this title,
+// so the #Customlist anchor that pfblockerng_category.php and pfblockerng_alerts.php link
+// to is unaffected.
+$section = new Form_Section("{$type} Custom List", str_replace(' ', '', $type) . 'customlist', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	NULL,
 	$custom_txt));
@@ -1727,11 +1731,17 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 	}
 }
 
-// Create page anchor for IP Suppression List
-$section->addInput(new Form_StaticText(
-	NULL,
-	'<div id="Custom"></div>'));
-
+// issue #1873: the "#Custom" anchor that used to live here was its own Form_StaticText,
+// so it rendered as an empty .form-group -- invisible except for the bottom border the
+// theme puts on every row, which drew a separator with nothing above it. Nothing in the
+// package ever linked to "#Custom" (the Alerts and Category pages both target
+// "#Customlist", added to $custom_txt above), so the row is gone rather than relocated.
+//
+// The explicit width is load-bearing: col-sm-12 on the control itself contributes 15px of
+// horizontal padding at desktop widths, and BELOW Bootstrap's sm breakpoint the class
+// stops applying at all, leaving the textarea at its default ~20-column size -- 192px
+// inside a 378px column on a phone. This matches the DNSBL Regex List field, which
+// already carried width: 100% and never showed the defect.
 $section->addInput(new Form_Textarea(
 	'custom',
 	'',
@@ -1740,7 +1750,7 @@ $section->addInput(new Form_Textarea(
   ->addClass('row-fluid col-sm-12')
   ->setAttribute('rows', '30')
   ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa;');
+  ->setAttribute('style', 'background:#fafafa; width: 100%');
 
 $form->add($section);
 print ($form);
