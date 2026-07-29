@@ -129,6 +129,14 @@ def _needs(job_lines: list[str]) -> set[str]:
     return {token.strip().strip("\"'") for token in value.split(",") if token.strip()}
 
 
+def _job_contents_scope(job_lines: list[str]) -> str:
+    """The job's own `contents:` permission scope ('' when it declares none)."""
+    line = next((ln for ln in job_lines if ln.strip().split("#", 1)[0].strip().startswith("contents:")), None)
+    if line is None:
+        return ""
+    return line.split("contents:", 1)[1].split("#", 1)[0].strip()
+
+
 def _graph() -> dict[str, set[str]]:
     return {name: _needs(lines) for name, lines in _jobs().items()}
 
@@ -290,6 +298,29 @@ def test_nothing_in_the_release_run_un_drafts_the_release() -> None:
     assert "--draft=false" not in text, "release.yml must not flip the draft to published"
     assert "draft: false" not in text, "release.yml must not flip the draft to published"
     assert "publish-release" not in _jobs(), "the in-pipeline publish job is gone; the draft is the end state"
+
+
+def test_every_job_that_touches_a_release_can_actually_see_a_draft() -> None:
+    """A DRAFT Release is invisible to a `contents: read` GITHUB_TOKEN, so a job that
+    reads one must hold `contents: write` or it 404s on every real cut.
+
+    PROBED in-session (2026-07-29, run 30442759084, two jobs differing only in scope):
+    `GET /releases/tags/<tag>` returns 404 for a draft under BOTH scopes, so `gh release
+    view` falls back to LISTING releases -- and that listing only returns drafts to a
+    token with push access. Under `contents: read` the call printed "release not found"
+    and exited 1 and the list showed 0 drafts; under `contents: write` it returned
+    `{"assets":[],"isDraft":true,...}` and the list showed 1. This run never publishes,
+    so every draft-reading job is write-scoped for VISIBILITY, not to mutate.
+    """
+    offenders = {}
+    for name, lines in _jobs().items():
+        body = "\n".join(lines)
+        if "gh release " not in body and "action-gh-release" not in body:
+            continue
+        scope = _job_contents_scope(lines)
+        if scope != "write":
+            offenders[name] = scope or "<none: inherits the read-only workflow default>"
+    assert not offenders, f"job(s) that read or write a Release without the scope a DRAFT read needs: {offenders}"
 
 
 def test_the_ports_bump_is_the_last_thing_the_run_does() -> None:
