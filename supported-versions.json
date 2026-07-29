@@ -54,7 +54,7 @@
       "php_version": "8.5",
       "py_flavor": "py311",
       "variant": "Plus",
-      "status": "beta",
+      "status": "active",
       "ci": true,
       "image_name": "pfsense-plus",
       "extra_pkgs": [],
