@@ -593,4 +593,48 @@ Describe 'resolve-legs.sh legs — release-gate status demotion (issue #1855)'
         The output should include '2.8=true'
         The output should include '26.03=true'
     End
+
+    # AGGREGATE guard. Demoting rows one at a time is safe; demoting ALL of them
+    # is not. With legs to run but NOT ONE of them able to veto, every leg runs,
+    # every failure is ignored, both suite AND-gates go green and the tag ships —
+    # the whole live-verification phase silently became advisory, announced only
+    # by ::warning:: lines inside a green run. Plausible mid-transition: reconcile
+    # demotes 2.8 and 26.03 while 26.07 is still beta. Distinct exit 3 so the
+    # cause is not confused with a scope/filter error (exit 1).
+    NO_BLOCKING_MATRIX='[{"pfsense_version":"26.07","channel":"Plus","ci":true,"status":"beta","image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"},{"pfsense_version":"27.01","channel":"Plus","ci":true,"image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"}]'
+
+    no_blocking_legs() {
+        env CI_MATRIX="$NO_BLOCKING_MATRIX" EVENT_NAME="workflow_call" SCOPE_INPUT="full" \
+            RELEASE_GATE_INPUT="$1" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+    }
+
+    It 'a release gate with legs but NO blocking row fails loudly'
+        # Given: two ci:true rows, neither of them a released pfSense version.
+        # When: an rc/stable release resolves its legs with the gate on.
+        # Then: it stops with a distinct exit and names what happened, instead of
+        #       running an entire fan-out whose verdict nothing could act on.
+        When run no_blocking_legs true
+        The status should equal 3
+        The error should include '::error::release gate:'
+        The error should include 'no leg can veto'
+        The stdout should be defined
+    End
+
+    It 'the same all-demoted matrix is fine when the gate is off'
+        # PR CI and the nightly fan-out never resolve a blocking set, so the guard
+        # must be release-scoped exactly like the demotion it protects.
+        When run no_blocking_legs ''
+        The status should be success
+        The output should include '"pfsense_version":"26.07"'
+        The error should be defined
+    End
+
+    It 'one blocking row is enough to satisfy the guard'
+        # Boundary: the guard fires on ZERO blocking legs, never on "fewer than
+        # before" — a single active/GA row still carries a real veto.
+        When call gate_pairs true
+        The status should be success
+        The output should include '2.8=true'
+    End
 End

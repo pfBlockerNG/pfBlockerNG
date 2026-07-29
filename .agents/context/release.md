@@ -61,7 +61,10 @@ released pfSense version** (`active`, or its legacy alias `GA`). Every other val
 anything added later, absent/unrecognized — is non-blocking: the leg still runs and still
 reports, emits a loud demotion warning naming the row and its status, and cannot fail the
 release. Predicate + warning live in `scripts/resolve-legs.sh`, switched on by the suites'
-`release_gate` input (release-only; PR/nightly gating is unchanged).
+`release_gate` input (release-only; PR/nightly gating is unchanged). Demoting rows one at a
+time is safe; demoting **all** of them is not — legs to run but not one able to veto makes
+the whole live phase advisory inside a green run, so that case is a hard `::error::` and a
+distinct **exit 3**, not a warning.
 
 **Dry-run** (`dry_run=true`, the default) does steps 1–2 only, off the dispatch ref: pin,
 build, verify — then stop. No tag, no Release, no push. A malformed tag still fails it, at
