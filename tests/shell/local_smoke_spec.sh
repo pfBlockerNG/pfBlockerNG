@@ -130,7 +130,7 @@ FAKEEOF
   # proves exit=0 when nothing fails, so THIS example genuinely proves the
   # failure path flips the aggregate result rather than always reporting 0.
   run_shards2_one_fails() {
-    : > "${WORK}/fail-1"   # shard index 1 fails; shard 0 must still run
+    true > "${WORK}/fail-1"   # shard index 1 fails; shard 0 must still run
     run_and_diag --ref dummy --shards 2
   }
 

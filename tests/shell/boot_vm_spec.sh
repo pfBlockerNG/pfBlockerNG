@@ -16,7 +16,7 @@ Describe 'boot_vm.sh slirp netdev argv'
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/bootvmspec.XXXXXX")"
     ARGV_FILE="${WORK}/argv"
     IMG_ARGV_FILE="${WORK}/img-argv"
-    BASE="${WORK}/base.qcow2"; : > "$BASE"
+    BASE="${WORK}/base.qcow2"; true > "$BASE"
     OVERLAY="${WORK}/ovl.qcow2"
     BIN="${WORK}/bin"; mkdir -p "$BIN"
 
@@ -31,7 +31,7 @@ QEOF
 #!/bin/sh
 printf '%s\n' "$@" > "$IMG_ARGV_FILE"
 while [ "$#" -gt 1 ]; do shift; done
-: > "$1"
+true > "$1"
 QIEOF
     chmod +x "${BIN}/qemu-img"
 
@@ -48,8 +48,8 @@ QIEOF
   Describe 'role pfsense'
     It 'resolves absolute, basename, and nested-relative base images independently of CDPATH'
       mkdir -p "${WORK}/base-dir/nested" "${WORK}/decoy/nested"
-      : > "${WORK}/base-dir/base.qcow2"
-      : > "${WORK}/base-dir/nested/base.qcow2"
+      true > "${WORK}/base-dir/base.qcow2"
+      true > "${WORK}/base-dir/nested/base.qcow2"
       When run sh -c '
         unset CDPATH
         IMG_ARGV_FILE="$5/absolute" sh "$1" "$2" "$5/absolute-overlay"

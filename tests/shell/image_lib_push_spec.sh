@@ -20,7 +20,7 @@ Describe 'image-lib.sh image_oci_push'
 printf '%s\n' "$@" > "$ARGV_FILE"
 OEOF
     chmod +x "${BIN}/oras"
-    : > "${WORK}/img.qcow2"
+    true > "${WORK}/img.qcow2"
     export WORK ARGV_FILE BIN
   }
   teardown() { rm -rf "$WORK"; }

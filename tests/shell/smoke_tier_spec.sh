@@ -156,7 +156,7 @@ Describe 'smoke-tier.sh'
     prov_setup() {
       CACHE="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pwprov.XXXXXX")"
       LOG="${CACHE}/calls"
-      : > "$LOG"
+      true > "$LOG"
       unset _pfb_cp_cache   # the leak probe below must measure THIS call, not a sibling's
     }
     prov_cleanup() { rm -rf "$CACHE"; }

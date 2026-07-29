@@ -28,7 +28,7 @@ venv="${TS_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/token-savior/venv}"
 # Trim trailing slashes so the lock and dirname derivations below treat $venv
 # as the final path component (a trailing slash once nested the lock inside
 # the not-yet-created venv and broke every fresh install).
-while :; do case "$venv" in */) venv="${venv%/}" ;; *) break ;; esac; done
+while true; do case "$venv" in */) venv="${venv%/}" ;; *) break ;; esac; done
 # The rebuild path below rm -rf's $venv — string checks never resolve '..'
 # (only the kernel does, at rm time), so refuse '..' segments and '//' along
 # with anything non-absolute ('.', '', '/', relative paths).

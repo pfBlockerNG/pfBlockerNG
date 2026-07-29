@@ -97,9 +97,9 @@ SHIM
       tmpdir="${work}"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="${work}/iprange"
       write_pathaggregate_shim "${pathaggregate}"
       livelist="${work}/${alias}.txt"
@@ -139,7 +139,7 @@ SHIM
       masterfile="${work}/master"; mastercat="${work}/mastercat"
       printf 'DedupList_v4 PRIOR-1\nDedupList_v4 PRIOR-2\nOtherList_v4 203.0.113.5\n' > "${masterfile}"
       dedup='on'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="${work}/iprange"
       write_pathaggregate_shim "${pathaggregate}"
       livelist="${work}/${alias}.txt"
@@ -190,7 +190,7 @@ SHIM
       awkshim="${work}/bin"
       setup_awk_shim "${awkshim}"
       printf 'RmList_v4 192.0.2.20\nOtherList_v4 203.0.113.9\n' > "${masterfile}"
-      : > "${pfborig}RmList_v4.txt"
+      true > "${pfborig}RmList_v4.txt"
     }
     cleanup() { rm -rf "${work}"; }
     Before 'setup'
@@ -257,11 +257,11 @@ SHIM
       pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; mkdir -p "${pfbdeny}" "${pfbmatch}"
       tempfile="${work}/r1"; tempfile2="${work}/r2"; dupfile="${work}/r3"
       matchfile="${work}/r4"; tempmatchfile="${work}/r5"
-      : > "${dupfile}"; : > "${matchfile}"; : > "${tempmatchfile}"
+      true > "${dupfile}"; true > "${matchfile}"; true > "${tempmatchfile}"
       max=253; cc='ZZ,'; ccwhite='block'; ccblack='block'; dedup='off'; count=0; countr=0
       # An empty GeoIP answer routes every repeat offender down the block/dupfile
       # path (the unknown-country branch), reaching the ccblack='block' dedup awk.
-      pathgeoip="${work}/mmdblookup"; pathgeoipdat="${work}/geo.mmdb"; : > "${pathgeoipdat}"
+      pathgeoip="${work}/mmdblookup"; pathgeoipdat="${work}/geo.mmdb"; true > "${pathgeoipdat}"
       make_geoip_stub "${pathgeoip}" ''
       { i=1; while [ "${i}" -le 254 ]; do echo "10.0.0.${i}"; i=$((i + 1)); done; echo 'PRIOR-MARKER'; } > "${pfbdeny}${alias}.txt"
       awkshim="${work}/bin"

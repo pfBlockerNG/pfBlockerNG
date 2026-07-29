@@ -143,7 +143,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     echo 'rawdata' > "${pfbchroot}/${generation}/feed.raw"
     echo 'partial' > "${pfbchroot}/${stage}/feed.raw"
     echo "{\"feeds\":[{\"raw\":\"${generation}/feed.raw\"}]}" > "${pfbchroot}/pfb_py_sources.json"
-    : > "${pfbchroot}/pfb_py_sources.lock"
+    true > "${pfbchroot}/pfb_py_sources.lock"
     echo 'ini' > "${pfbchroot}/pfb_unbound.ini"
     When call dc save
     # An archive was written (codec-agnostic).

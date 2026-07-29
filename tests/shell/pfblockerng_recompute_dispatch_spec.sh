@@ -10,8 +10,8 @@
 Describe 'pfblockerng.sh recompute dispatch (issue #1084 review: rc propagation)'
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recdispatch.XXXXXX")"
-		: > "${work}/memberlist"
-		: > "${work}/countsfile"
+		true > "${work}/memberlist"
+		true > "${work}/countsfile"
 	}
 	cleanup() { rm -rf "$work"; }
 	Before 'setup'

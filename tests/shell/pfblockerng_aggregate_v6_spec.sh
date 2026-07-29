@@ -103,7 +103,7 @@ STUB
     # never invoked. Pre-seed stale content to prove the rebuild actually clears it.
     printf 'stale\n' > "${aggout}"
     printf 'stale\n' > "${consumer}"
-    : > "${memberlist}"
+    true > "${memberlist}"
 
     When call pfb_aggregate agg v6 "${memberlist}" "${aggout}" "${consumer}"
 

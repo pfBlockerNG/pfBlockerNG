@@ -139,9 +139,9 @@ SHIM
       pfbsuppression="${work}/suppression.txt"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="${work}/iprange"
       write_pathaggregate_shim "${pathaggregate}"
       member="${work}/${alias}.txt"
@@ -160,7 +160,7 @@ SHIM
 
     It 'leaves the member file byte-identical when the suppression file exists but is empty'
       # Given: the file exists but is zero-length (the "-s" leg of the gate).
-      : > "${pfbsuppression}"
+      true > "${pfbsuppression}"
       When call silently suppress
       The status should be success
       The contents of file "${member}" should equal '203.0.113.5'
@@ -176,9 +176,9 @@ SHIM
       printf '203.0.113.7/32\n' > "${pfbsuppression}"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="${work}/iprange"
       write_pathaggregate_shim "${pathaggregate}"
       member="${work}/${alias}.txt"
@@ -203,9 +203,9 @@ SHIM
       pfbsuppression="${work}/suppression.txt"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="$(pfb_real_iprange)"
       member="${work}/${alias}.txt"
       printf '10.9.8.0/24\n' > "${member}"
@@ -270,9 +270,9 @@ SHIM
       printf '10.0.3.4/32\n' > "${pfbsuppression}"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="$(pfb_real_iprange)"
       member="${work}/${alias}.txt"
       # A /16 member entry containing the suppressed /32 host -- the OLD
@@ -319,7 +319,7 @@ SHIM
       # that must survive the resync untouched.
       printf 'DedupList_v4 PRIOR-1\nDedupList_v4 PRIOR-2\nOtherList_v4 198.51.100.5\n' > "${masterfile}"
       dedup='on'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="${work}/iprange"
       write_pathaggregate_shim "${pathaggregate}"
       member="${work}/${alias}.txt"
@@ -349,9 +349,9 @@ SHIM
       printf '203.0.113.7/32\n' > "${pfbsuppression}"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="${work}/iprange"
       write_pathaggregate_shim "${pathaggregate}"
       alias='StatsList_v4'
@@ -390,9 +390,9 @@ SHIM
       pfbsuppression="${work}/suppression.txt"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="${work}/iprange"
       write_pathaggregate_identity_shim "${pathaggregate}"
       member="${work}/${alias}.txt"
@@ -429,9 +429,9 @@ SHIM
       printf '203.0.113.7/32\n' > "${pfbsuppression}"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="${work}/iprange"
       write_pathaggregate_fail_shim "${pathaggregate}"
       member="${work}/${alias}.txt"
@@ -458,9 +458,9 @@ SHIM
       printf '203.0.113.7/32\n' > "${pfbsuppression}"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="$(pfb_real_iprange)"
       member="${work}/${alias}.txt"
       printf '203.0.113.7\n' > "${member}"
@@ -487,9 +487,9 @@ SHIM
       printf '203.0.113.99/32\n' > "${pfbsuppression}"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       pathaggregate="${work}/iprange"
       # Identity shim (echoes the haystack -- here the pre-filtered member
       # file -- back unchanged): isolates the member-file grep pre-filter
@@ -529,9 +529,9 @@ SHIM
       printf '203.0.113.7/32\n' > "${pfbsuppression}"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
       masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
+      true > "${masterfile}"
       dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
+      errorlog="${work}/error.log"; true > "${errorlog}"
       # A path that does not exist at all -- `[ ! -x "${pathaggregate}" ]`
       # (pfblockerng.sh's suppress()) must fire before ANY of the pre-filter
       # or iprange machinery runs. No coverage existed for this guard before

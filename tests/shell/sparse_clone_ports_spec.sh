@@ -106,7 +106,7 @@ PYEOF
   End
 
   refuse_result() {
-    mkdir -p "$DEST" && : > "${DEST}/not-a-clone"
+    mkdir -p "$DEST" && true > "${DEST}/not-a-clone"
     run_clone 2>&1  # merge the refusal (stderr) into output for a single clean assertion
   }
   It 'refuse-foreign: a non-git DEST is refused, not overwritten'

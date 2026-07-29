@@ -336,7 +336,7 @@ VENVEOF
   make_shard_fixture() {
     mkdir -p "${WORK}/mods"
     for m in a b c d e; do
-      : > "${WORK}/mods/test_${m}.py"
+      true > "${WORK}/mods/test_${m}.py"
     done
   }
 

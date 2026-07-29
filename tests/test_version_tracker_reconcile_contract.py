@@ -103,7 +103,7 @@ case "$*" in
   "pr list "*)
     if [ -f "$GH_STATE_DIR/pr-created" ]; then printf '77\\n'; fi
     ;;
-  "pr create "*) printf 'pr create %s\\n' "$*" >> "$GH_LOG"; : > "$GH_STATE_DIR/pr-created" ;;
+  "pr create "*) printf 'pr create %s\\n' "$*" >> "$GH_LOG"; true > "$GH_STATE_DIR/pr-created" ;;
   "workflow run "*)
     printf 'workflow run %s\\n' "$*" >> "$GH_LOG"
     _prev=""
@@ -194,8 +194,8 @@ while [ "$#" -gt 0 ]; do [ "$1" = "--out-dir" ] && OUT="$2"; shift; done
 mkdir -p "$OUT"
 printf 'ok\\n' > "$OUT/status"
 printf '26.03.1-RELEASE\\n' > "$OUT/etc-version"
-: > "$OUT/repoc.txt"
-: > "$OUT/upgrade-check.txt"
+true > "$OUT/repoc.txt"
+true > "$OUT/upgrade-check.txt"
 exit 0
 """,
             encoding="utf-8",
