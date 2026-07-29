@@ -22,6 +22,8 @@
 #                 ci-metadata `status` is a RELEASED pfSense version (active, or
 #                 its legacy alias GA) may veto a release; every other/absent
 #                 status is demoted with a loud ::warning:: naming the row.
+#                 Legs but NO blocking leg left is a hard ::error:: + exit 3 —
+#                 a fan-out nothing can act on is not verification.
 #                 Without RELEASE_GATE_INPUT every row stays blocking.
 #                 Prints the filtered legs JSON to stdout.
 #                 Writes scope= / ci_matrix= / leg_matrix= / pytest_filter= to
@@ -140,6 +142,21 @@ _rl_legs() {
     if [ "${RELEASE_GATE_INPUT:-}" = "true" ]; then
         printf '%s\n' "$FILTERED" | jq -r '.[] | select(.release_blocking == "false")
             | "::warning::release gate: \(.channel // "?") \(.pfsense_version) (status \(.status // "<absent>")) is not a released pfSense version — this leg still runs and still reports, but it cannot veto the release"' >&2
+
+        # AGGREGATE guard: demoting rows one at a time is safe, demoting ALL of
+        # them is not. With legs to run but NOT ONE able to veto, every leg runs,
+        # every failure is ignored, both suite AND-gates go green and the tag ships
+        # — the whole live-verification phase has silently become advisory, and the
+        # only trace is ::warning:: lines inside a green run. Plausible mid-
+        # transition: reconcile demotes 2.8 and 26.03 while 26.07 is still beta.
+        # Distinct exit 3 so the cause is never confused with a scope/filter error.
+        _l_legs="$(printf '%s\n' "$FILTERED" | jq 'length')"
+        _l_blocking="$(printf '%s\n' "$FILTERED" | jq '[ .[] | select(.release_blocking == "true") ] | length')"
+        if [ "$_l_legs" -ge 1 ] && [ "$_l_blocking" -eq 0 ]; then
+            printf '::error::release gate: all %s resolved leg(s) are non-blocking — no leg can veto this release, so verification would be advisory only. Give the matrix a row whose ci-metadata status is a released pfSense version (active/GA), or cut without the release gate deliberately.\n' \
+                "$_l_legs" >&2
+            exit 3
+        fi
     fi
 
     # ── -k derivation ─────────────────────────────────────────────────────── #
