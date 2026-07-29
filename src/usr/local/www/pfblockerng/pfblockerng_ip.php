@@ -29,6 +29,10 @@ pfb_global();
 
 $pfb['iconfig'] = PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0');
 
+// issue #1875 step 2b: gate the CM6 live-highlight overlay for v4suppression/v6suppression,
+// same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.
+$pfb_syntaxhl_on = (PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On);
+
 $pconfig = array();
 $pconfig['enable_dup']		= $pfb['iconfig']['enable_dup']				?: '';
 $pconfig['enable_agg']		= $pfb['iconfig']['enable_agg']				?: '';
@@ -693,10 +697,23 @@ print ($form);
 print_callout('<strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong>');
 
 ?>
+<?php if ($pfb_syntaxhl_on): ?>
+<!-- issue #1875 step 2b: live syntax highlighting for the suppression list fields -->
+<script src="vendor/codemirror/cm-regex.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-regex.min.js')?>"></script>
+<?php endif; ?>
 <script type="text/javascript">
 //<![CDATA[
 
 var pagetype = null;
+
+events.push(function(){
+<?php if ($pfb_syntaxhl_on): ?>
+	// issue #1875 step 2b: plain-list fields share the regex page's CM6 bundle; mountLists skips absent ids
+	if (window.pfbCM) {
+		window.pfbCM.mountLists(['v4suppression', 'v6suppression']);
+	}
+<?php endif; ?>
+});
 
 //]]>
 </script>
