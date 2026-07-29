@@ -445,6 +445,25 @@ def test_build_edition_sections_one_row_per_pfsense_minor_whatever_the_flavor_se
     assert [r["pfsense_version"] for r in sections["CE"]] == ["2.8"]
 
 
+def test_sort_table_rows_breaks_a_version_tie_by_channel() -> None:
+    """Rows tying on both versions still land in a fixed order — stable, devel, nightly.
+
+    Without the tie-break the order would depend on collection order, so the same catalog
+    could render two different pages.
+    """
+    rows = [
+        _pkg("nightly", "n", "3.2.16", "FreeBSD:15:*", "nightly/ce-2.8/n.pkg"),
+        _pkg("stable", "s", "3.2.16", "FreeBSD:15:*", "release/ce-2.8/s.pkg"),
+        _pkg("devel", "d", "3.2.16", "FreeBSD:15:*", "release/ce-2.8/d.pkg"),
+    ]
+    for r in rows:
+        r["pfsense_version"] = "2.8"
+
+    gl.sort_table_rows(rows)
+
+    assert [r["channel"] for r in rows] == ["stable", "devel", "nightly"]
+
+
 def test_build_edition_sections_keeps_distinct_files_a_legacy_layout_cannot_pin() -> None:
     """The one-row-per-minor rule collapses matrix flavors, never distinct published files.
 
@@ -906,6 +925,39 @@ def test_render_autoindex_root_has_no_parent_and_is_colon_safe() -> None:
     assert 'href="./FreeBSD:16:aarch64/"' in deep
 
 
+def test_write_site_keeps_dependency_packages_browsable(tmp_path: Path, monkeypatch: Any) -> None:
+    """A dependency package stays in the directory listing while leaving the page alone.
+
+    Filtering it out of the channel tables (issue #1863) must not make it unreachable: the
+    autoindex is how a user gets at everything we publish, including the CE-only
+    `py311-charset-normalizer` (issue #1806). The returned count is OUR packages.
+    """
+    site = tmp_path / "site"
+    _touch(site / "release" / "ce-2.8" / "pfSense-pkg-pfBlockerNG-devel-4.0.0.alpha.22.pkg")
+    _touch(site / "release" / "ce-2.8" / "py311-charset-normalizer-3.4.4.pkg")
+    manifests = {
+        "pfSense-pkg-pfBlockerNG-devel-4.0.0.alpha.22.pkg": {
+            "name": "pfSense-pkg-pfBlockerNG-devel",
+            "version": "4.0.0.alpha.22",
+            "abi": "FreeBSD:15:*",
+        },
+        "py311-charset-normalizer-3.4.4.pkg": {
+            "name": "py311-charset-normalizer",
+            "version": "3.4.4",
+            "abi": "FreeBSD:15:*",
+        },
+    }
+    monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifests[os.path.basename(p)])
+    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
+
+    assert n == 1  # the count is pfBlockerNG packages, not everything published
+    listing = (site / "release" / "ce-2.8" / "index.html").read_text()
+    assert "py311-charset-normalizer-3.4.4.pkg" in listing  # still reachable by browsing
+    assert "3.4.4" not in (site / "index.html").read_text()  # but never on the landing page
+
+
 def test_write_site_emits_browse_and_autoindex_at_every_level(tmp_path: Path, monkeypatch: Any) -> None:
     """write_site emits the landing page, browse.html, and an autoindex index.html at EVERY
     directory level (intermediate dirs too) so the whole tree is folder-navigable."""
@@ -1109,6 +1161,55 @@ def test_eol_versions_wildcard_served_pkg_matches_concrete_matrix_entry() -> Non
     assert ekey == "CE"
     assert ver == "2.7"
     assert row["version"] == "3.1.0_5"
+
+
+def test_eol_versions_newest_is_taken_across_every_entry_of_the_varver() -> None:
+    """The last-served version is the newest in the varver's WHOLE pool (issue #1863).
+
+    One row per EOL pfSense minor means its several matrix entries (arch/FreeBSD/PHP/Python
+    flavors) share one pool: taking the newest from only the first matching entry's slice
+    reports a stale "last served" version and hides the file that really is the last one.
+
+    Given route-only CE 2.7 recorded per arch, and a frozen catalog whose amd64 file is
+      3.1.9 while its aarch64 file is the newer 3.2.0,
+    When eol_versions is called,
+    Then the single CE 2.7 row reports 3.2.0.
+    """
+    served_amd64 = _eol_pkg("3.1.9", "FreeBSD:14:amd64", "ce-2.7")
+    served_arm64 = _eol_pkg("3.2.0", "FreeBSD:14:aarch64", "ce-2.7")
+    matrix = [
+        _mx_eol("FreeBSD:14:amd64", "2.7", "CE", "8.2", "py311"),
+        _mx_eol("FreeBSD:14:aarch64", "2.7", "CE", "8.2", "py311"),
+    ]
+
+    result = gl.eol_versions([served_amd64, served_arm64], matrix)
+
+    assert [(ver, row["version"]) for _, ver, row in result] == [("2.7", "3.2.0")]
+
+
+def test_eol_versions_flavor_entry_without_a_served_pkg_does_not_claim_the_varver() -> None:
+    """A matrix entry whose ABI nothing serves must not consume its varver's single row.
+
+    The varver is emitted once, so the entry that supplies the displayed flavors has to be
+    one that actually matches a served file — otherwise an unserved flavor row silently
+    swallows the minor and the frozen package disappears from the EOL table (issue #1863).
+
+    Given route-only CE 2.7 recorded for two FreeBSD majors, only the second of which has
+      a served file,
+    When eol_versions is called,
+    Then CE 2.7 is still listed, carrying the served file and that entry's PHP/Python.
+    """
+    served = _eol_pkg("3.1.9", "FreeBSD:14:amd64", "ce-2.7")
+    matrix = [
+        _mx_eol("FreeBSD:13:amd64", "2.7", "CE", "8.1", "py310"),
+        _mx_eol("FreeBSD:14:amd64", "2.7", "CE", "8.2", "py311"),
+    ]
+
+    result = gl.eol_versions([served], matrix)
+
+    assert len(result) == 1
+    _, ver, row = result[0]
+    assert (ver, row["version"], row["php"], row["py"]) == ("2.7", "3.1.9", "8.2", "3.11")
 
 
 def test_eol_versions_sorted_by_pkg_version_then_pfsense_version_desc() -> None:

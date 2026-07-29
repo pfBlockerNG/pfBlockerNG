@@ -703,38 +703,35 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
             vv = parts[1]
             varver_pkgs.setdefault(vv, []).append(p)
 
-    # For each EOL matrix entry, find the newest pkg in its varver pool. A varver is
-    # emitted at most ONCE (issue #1863): its several matrix entries enumerate build
-    # flavors (arch, FreeBSD, PHP, Python), but the frozen catalog serves one file. The
-    # first entry that has a served .pkg supplies the displayed flavors — an entry whose
-    # ABI nothing matches never claims the varver.
-    out: list[tuple[str, str, dict]] = []
-    seen: set[str] = set()
+    # Group the entries by varver: a varver is emitted at most ONCE (issue #1863), since its
+    # several matrix entries enumerate build flavors (arch, FreeBSD, PHP, Python) of ONE
+    # frozen catalog. They therefore share one pool — taking the newest from a single
+    # entry's slice would report a stale last-served version.
+    by_varver: dict[str, list[dict]] = {}
     for e in eol_entries:
-        version = e.get("pfsense_version", "")
-        variant = e.get("variant", "")
-        abi = e.get("abi", "")
-        php = e.get("php_version") or e.get("php", "")
-        py = _dotted_ver(e.get("py_flavor", "")) or e.get("py", "")
-        ekey = _edition_key(variant)
-        varver = _matrix_varver(version, variant)
-        if varver in seen:
-            continue
+        by_varver.setdefault(_matrix_varver(e.get("pfsense_version", ""), e.get("variant", "")), []).append(e)
 
+    out: list[tuple[str, str, dict]] = []
+    for varver, entries in by_varver.items():
         # Matched via _abi_matches (OS+major, issue #1806): the served .pkg may be
         # NO_ARCH/wildcarded even when the matrix still records a concrete ABI.
-        pool = [p for p in varver_pkgs.get(varver, []) if _abi_matches(p["abi"], abi)]
+        served = varver_pkgs.get(varver, [])
+        pool = [p for p in served if any(_abi_matches(p["abi"], e.get("abi", "")) for e in entries)]
         if not pool:
-            continue  # no .pkg served for this (varver, abi) — skip silently
-        seen.add(varver)
+            continue  # nothing served for this varver — skip silently
+
+        # The displayed flavors come from an entry that actually matches a served file, so
+        # an unserved flavor never speaks for the varver.
+        entry = next(e for e in entries if any(_abi_matches(p["abi"], e.get("abi", "")) for p in pool))
+        version = entry.get("pfsense_version", "")
 
         # Newest served version = highest ver_key.
         best = max(pool, key=lambda p: ver_key(p["version"]))
         row = dict(best)
         row["pfsense_version"] = version
-        row["php"] = php
-        row["py"] = py
-        out.append((ekey, version, row))
+        row["php"] = entry.get("php_version") or entry.get("php", "")
+        row["py"] = _dotted_ver(entry.get("py_flavor", "")) or entry.get("py", "")
+        out.append((_edition_key(entry.get("variant", "")), version, row))
 
     # Sort: edition order (CE < Plus < Other) — each edition is its own table — then the
     # shared table order within it: pfBlockerNG version desc, then pfSense version desc
@@ -965,7 +962,8 @@ def write_site(site: str, base: str, addrepo: str, matrix: list[dict] | None = N
     """Generate the human landing page (root index.html), a browsable autoindex at EVERY
     directory level (so the whole tree is folder-navigable on GitHub Pages, which has no
     autoindex), and a root ``browse.html`` entry point the landing page links to. Returns the
-    package count."""
+    count of pfBlockerNG packages indexed — published dependencies are browsable but not
+    ours to count (issue #1863)."""
     base = base.rstrip("/")
     pkgs = collect_packages(site)
 
@@ -1005,7 +1003,10 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.matrix) as fh:
             matrix = json.load(fh)
     n = write_site(args.site, args.base_url, args.add_repo, matrix)
-    print(f"landing page + browse.html + {len(all_dirs(args.site))} dir index(es) written; {n} package(s) indexed")
+    print(
+        f"landing page + browse.html + {len(all_dirs(args.site))} dir index(es) written; "
+        f"{n} pfBlockerNG package(s) indexed"
+    )
     return 0
 
 
