@@ -93,4 +93,47 @@ final class GeneralSyntaxHighlightToggleWiringTest extends TestCase
 			'expected the checkbox help text to document that disabling it skips loading the editor assets'
 		);
 	}
+
+	/**
+	 * issue #1888: the toggle gates the whole CM6 editor -- highlighting (#1669), the
+	 * lineNumbers gutter (#1869), the server + Lezer bracket lint (#1732) and undo/redo
+	 * history -- so its label is the editor, not one of its features.
+	 */
+	public function testCheckboxIsLabelledForTheWholeEditor(): void
+	{
+		$this->assertMatchesRegularExpression(
+			"#new Form_Checkbox\\(\\s*'pfb_syntax_highlight',\\s*'Advanced Text Editor',#",
+			self::$src,
+			'expected the pfb_syntax_highlight checkbox to be labelled \'Advanced Text Editor\''
+		);
+		$this->assertStringNotContainsString(
+			"'Syntax Highlighting',",
+			self::$src,
+			'expected no leftover \'Syntax Highlighting\' field label'
+		);
+	}
+
+	/**
+	 * issue #1888: the help text must name what the editor actually provides, not
+	 * highlighting alone -- each feature is wired in tools/webassets/cm-shell.js
+	 * (lineNumbers, history) and cm-lint.js (lintGutter + linter). Asserted against the
+	 * field's OWN setHelp() argument, never the whole page: the page's comments talk
+	 * about syntax highlighting too, so a whole-source assertion would pass vacuously.
+	 */
+	public function testHelpTextDocumentsTheEditorFeatures(): void
+	{
+		$matched = preg_match(
+			"#new Form_Checkbox\\(\\s*'pfb_syntax_highlight',.*?\\)\\)->setHelp\\((.*?)\\);#s",
+			self::$src,
+			$m
+		);
+		$this->assertSame(1, $matched, 'expected a setHelp() call on the pfb_syntax_highlight checkbox');
+		foreach (['syntax highlighting', 'line numbers', 'linting', 'undo/redo'] as $feature) {
+			$this->assertStringContainsString(
+				$feature,
+				$m[1],
+				"expected the checkbox help text to document the editor's {$feature}"
+			);
+		}
+	}
 }

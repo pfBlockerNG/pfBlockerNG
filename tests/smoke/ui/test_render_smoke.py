@@ -76,7 +76,14 @@ class Page:
 # coverage): pfblockerng_category.php and _category_edit.php render an IP view by
 # default and a DNSBL view under ?type=dnsbl; both are listed.
 PAGE_TABLE: tuple[Page, ...] = (
-    Page("general", "/pfblockerng/pfblockerng_general.php", ("pfBlockerNG", "General Settings")),
+    # "Advanced Text Editor" is the issue #1888 label of the pfb_syntax_highlight checkbox
+    # (renamed from "Syntax Highlighting") — a third marker so the gate proves the renamed
+    # field label actually reaches the shipped page.
+    Page(
+        "general",
+        "/pfblockerng/pfblockerng_general.php",
+        ("pfBlockerNG", "General Settings", "Advanced Text Editor"),
+    ),
     # "Aggregated Aliases" is the ADR-11 pfb_agg_types multi-select label (rendered
     # verbatim) — a third marker so the gate also proves that field renders on the IP page.
     # "IPv6 Suppression" is the ADR-53 Phase 6 section title (the v6 sibling of the
