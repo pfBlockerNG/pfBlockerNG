@@ -228,6 +228,44 @@ def test_collect_packages_walks_and_excludes_metadata(tmp_path: Path) -> None:
     assert {p["py"] for p in pkgs} == {"3.11"}
 
 
+def test_collect_packages_excludes_dependency_packages(tmp_path: Path) -> None:
+    """A dependency package we publish is never treated as a pfBlockerNG build (issue #1863).
+
+    The CE-only `py311-charset-normalizer` (issue #1806) ships in the same catalog dirs as
+    our own packages. Its name carries neither the `-devel` nor the `-nightly` suffix, so a
+    name-suffix channel classifier drops it into `stable` — which made the live landing page
+    advertise `Latest 3.4.4` (charset-normalizer's own version) as the stable pfBlockerNG
+    release, and list a package living under `nightly/` as a stable row.
+
+    Given a catalog tree holding a devel pfBlockerNG build plus the dependency package under
+      BOTH the release and the nightly varver dirs,
+    When the packages are collected,
+    Then only the pfBlockerNG build is returned and no channel claims the dependency version.
+    """
+    site = tmp_path / "site"
+    layout = {
+        "release/ce-2.8/pfSense-pkg-pfBlockerNG-devel-4.0.0.alpha.22.pkg": (
+            "pfSense-pkg-pfBlockerNG-devel",
+            "4.0.0.alpha.22",
+        ),
+        "release/ce-2.8/py311-charset-normalizer-3.4.4.pkg": ("py311-charset-normalizer", "3.4.4"),
+        "nightly/ce-2.8/py311-charset-normalizer-3.4.4.pkg": ("py311-charset-normalizer", "3.4.4"),
+    }
+    for rel in layout:
+        _touch(site / rel)
+
+    def fake_read(path: str) -> dict[str, Any]:
+        name, ver = layout[os.path.relpath(path, site)]
+        return {"name": name, "version": ver, "abi": "FreeBSD:15:*", "annotations": {}, "deps": {}}
+
+    pkgs = gl.collect_packages(str(site), read_manifest=fake_read)
+
+    assert {p["name"] for p in pkgs} == {"pfSense-pkg-pfBlockerNG-devel"}
+    assert not any(p["version"] == "3.4.4" for p in pkgs)
+    # The card-driving consequence: stable stays unpublished instead of borrowing 3.4.4.
+    assert gl.latest_versions(pkgs) == {"devel": "4.0.0.alpha.22"}
+
+
 # ── build_table: newest version per (channel, ABI) ────────────────────────────
 
 
@@ -350,6 +388,61 @@ def test_build_edition_sections_wildcard_abi_joins_every_row_of_its_major() -> N
     assert (ce["pfsense_version"], ce["php"], ce["py"]) == ("2.9", "8.4", "3.11")
     plus = sections["Plus"][0]
     assert (plus["pfsense_version"], plus["php"], plus["py"]) == ("26.03", "8.5", "3.12")
+
+
+def test_build_edition_sections_pins_a_published_row_to_its_own_varver_dir() -> None:
+    """A published file is listed under the pfSense version of the dir it was published to.
+
+    Two pfSense Plus varvers share one FreeBSD major, so a NO_ARCH package's wildcarded ABI
+    (issue #1806) matches BOTH matrix rows. The catalog is published per varver, so each
+    varver dir holds its own copy — broadcasting every copy to every matching matrix row
+    cross-products them (issue #1863: a 26.03 row linking the plus-26.07 file and vice
+    versa). The varver dir in the row's own path decides which pfSense version it belongs to.
+
+    Given one wildcard-ABI devel build published under BOTH plus-26.03/ and plus-26.07/,
+      and a matrix whose 26.03 and 26.07 Plus rows share FreeBSD major 16,
+    When the edition sections are built,
+    Then each file appears exactly once, under the pfSense version of its own varver dir.
+    """
+    p_2603 = _pkg("devel", "d", "4.0.0.alpha.22", "FreeBSD:16:*", "release/plus-26.03/d.pkg")
+    p_2607 = _pkg("devel", "d", "4.0.0.alpha.22", "FreeBSD:16:*", "release/plus-26.07/d.pkg")
+    matrix = [
+        _mx("FreeBSD:16:amd64", "26.03", "Plus", "8.5", "py311"),
+        _mx("FreeBSD:16:amd64", "26.07", "Plus", "8.5", "py311"),
+    ]
+
+    sections = dict(gl.build_edition_sections([p_2603, p_2607], matrix))
+
+    assert set(sections) == {"Plus"}
+    assert {(r["pfsense_version"], r["rel"]) for r in sections["Plus"]} == {
+        ("26.03", "release/plus-26.03/d.pkg"),
+        ("26.07", "release/plus-26.07/d.pkg"),
+    }
+
+
+def test_build_edition_sections_one_row_per_pfsense_minor_whatever_the_flavor_set() -> None:
+    """One row per pfSense minor release per table, each linking a single .pkg (issue #1863).
+
+    A pfSense minor can appear in the matrix several times — one entry per arch, and in
+    general per FreeBSD/PHP/Python combination. Those are build-matrix facts, not separate
+    downloads: since issue #1806 the catalog is arch-less, so a minor serves exactly ONE
+    file per channel. Joining a published file to every matching entry would list that same
+    minor once per flavor combination.
+
+    Given a devel build published under release/ce-2.8/,
+      and a matrix carrying CE 2.8 twice (amd64 and aarch64),
+    When the edition sections are built,
+    Then CE 2.8 is listed exactly once.
+    """
+    p = _pkg("devel", "d", "4.0.0.alpha.22", "FreeBSD:15:*", "release/ce-2.8/d.pkg")
+    matrix = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx("FreeBSD:15:aarch64", "2.8", "CE", "8.3", "py311"),
+    ]
+
+    sections = dict(gl.build_edition_sections([p], matrix))
+
+    assert [r["pfsense_version"] for r in sections["CE"]] == ["2.8"]
 
 
 def test_older_nightlies_lists_retained_excludes_latest() -> None:
@@ -895,6 +988,28 @@ def test_eol_versions_wildcard_served_pkg_matches_concrete_matrix_entry() -> Non
     assert ekey == "CE"
     assert ver == "2.7"
     assert row["version"] == "3.1.0_5"
+
+
+def test_eol_versions_one_row_per_pfsense_minor_whatever_the_flavor_set() -> None:
+    """The EOL table obeys the same one-row-per-minor rule as the live tables (issue #1863).
+
+    A route-only pfSense minor can hold several matrix entries (one per arch, and in general
+    per FreeBSD/PHP/Python combination), but its frozen catalog serves a single .pkg.
+
+    Given a route-only CE 2.7 recorded twice in the matrix (amd64 and aarch64),
+      and one .pkg served under release/ce-2.7/,
+    When eol_versions is called,
+    Then CE 2.7 is listed exactly once.
+    """
+    served = _eol_pkg("3.1.0_5", "FreeBSD:14:*", "ce-2.7")
+    matrix = [
+        _mx_eol("FreeBSD:14:amd64", "2.7", "CE", "8.2", "py311"),
+        _mx_eol("FreeBSD:14:aarch64", "2.7", "CE", "8.2", "py311"),
+    ]
+
+    result = gl.eol_versions([served], matrix)
+
+    assert [(ekey, ver) for ekey, ver, _ in result] == [("CE", "2.7")]
 
 
 def test_eol_versions_ce_and_plus_split_into_separate_tables() -> None:
