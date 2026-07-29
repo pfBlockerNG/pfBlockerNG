@@ -332,6 +332,101 @@ pfb_call_site_upgrade() {
 }
 # pfb_call_site END
 
+# pfb_verify_artifact BEGIN
+# pfb_verify_artifact FILE TAG — boot the EXPORTED qcow2 once and refuse to
+# publish it unless the version it actually comes up with belongs to TAG's
+# family. The running box is not proof: a box captured before its boot finished
+# made a 26.03.1 disk pass every in-run check and ship as :26.07 (issue #1858).
+# The artifact is the last word before a push.
+# FILE is the KVM host's out.qcow2 — the exact bytes the pushed local copy was
+# streamed from, so booting it there costs no second transfer. The boot writes
+# to that copy; the local one is already on disk and is what gets pushed.
+pfb_verify_artifact() {
+    _pva_file=$1; _pva_tag=$2
+    log "verifying the exported artifact boots ${_pva_tag} before publishing"
+    _pva_ver=$(pfb_boot_artifact_version "$_pva_file" | tr -d '\r')
+    [ -n "$_pva_ver" ] \
+        || die "could not read a version from the exported artifact — refusing to publish"
+    _pva_fam=$(image_version_tag "$_pva_ver")
+    if [ "$_pva_fam" != "$_pva_tag" ]; then
+        die "exported artifact boots ${_pva_ver} (family ${_pva_fam}), not ${_pva_tag} — refusing to publish a mislabelled image"
+    fi
+    log "artifact verified: boots ${_pva_ver}"
+}
+# pfb_verify_artifact END
+
+# pfb_boot_artifact_version DISK — boot DISK once with the SAME topology the
+# upgrade ran under (same MACs, same SMBIOS uuid, same mgmt hostfwd; the upgrade
+# VM is already gone, so GUEST_PORT is free) and echo the guest's /etc/version.
+# Everything but that version goes to stderr — the caller reads stdout.
+pfb_boot_artifact_version() {
+    _pbav_disk=$1
+    log "booting the exported artifact to read the version it really comes up with" >&2
+    _pbav_cmd=$(printf '%s' "$QEMU_CMD" | sed \
+        -e "s#${REMOTE_DIR}/work.qcow2#${_pbav_disk}#" \
+        -e "s#${REMOTE_DIR}/qemu.pid#${REMOTE_DIR}/verify.pid#" \
+        -e "s#${REMOTE_DIR}/console.log#${REMOTE_DIR}/verify-console.log#")
+    px "$_pbav_cmd" >&2
+    QPID=$(px "cat '${REMOTE_DIR}/verify.pid'" | tr -d '\r')
+    [ -n "$QPID" ] || die "verification boot did not write a pidfile (see ${REMOTE_DIR}/verify-console.log on the KVM host)"
+    wait_guest_ssh "${VERIFY_BOOT_TIMEOUT:-600}" >&2
+    _pbav_ver=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r')
+    ssh_guest '/sbin/shutdown -p now' >/dev/null 2>&1 || true
+    _pbav_elapsed=0
+    while px "kill -0 $QPID 2>/dev/null"; do
+        if [ "$_pbav_elapsed" -ge 120 ]; then
+            px "kill $QPID 2>/dev/null" || true
+            break
+        fi
+        sleep 3; _pbav_elapsed=$((_pbav_elapsed + 3))
+    done
+    QPID=""
+    printf '%s\n' "$_pbav_ver"
+}
+
+# pfb_promote_be BEGIN
+# pfb_promote_be — make the upgrade permanent on DISK before the box is captured.
+# pfSense-upgrade renames the running BE to <be>_<ts>, installs the new release
+# as <be>, activates it FOR THE NEXT BOOT ONLY and reboots; the permanent
+# activation happens at the END of that boot, in pfSense-rc's automatic boot
+# verification. The image job used to shut the box down seconds after its first
+# SSH answer — long before pfSense-rc got there — so the exported disk still
+# booted the archived pre-upgrade BE (issue #1858: :26.07 shipped a 26.03.1
+# disk). Wait for that promotion, fall back to doing it ourselves if the box
+# never gets there, and fail closed if the disk would still boot the old system.
+# PROMOTE_TIMEOUT / PROMOTE_INTERVAL are overridable for the spec.
+pfb_promote_be() {
+    # Parse locally: the guest side stays a plain `bectl list`, so this works
+    # the same on any pfSense and is drivable in the spec.
+    _pbe_running=$(ssh_guest 'bectl list' 2>/dev/null | tr -d '\r' \
+        | awk '$2 ~ /N/ { print $1; exit }')
+    [ -n "$_pbe_running" ] || _pbe_running=default
+    log "waiting for pfSense to make boot environment '${_pbe_running}' permanent"
+    _pbe_elapsed=0
+    while [ "$_pbe_elapsed" -lt "${PROMOTE_TIMEOUT:-300}" ]; do
+        pfb_be_is_permanent "$_pbe_running" && {
+            log "boot environment '${_pbe_running}' is active on reboot"
+            return 0
+        }
+        sleep "${PROMOTE_INTERVAL:-10}"
+        _pbe_elapsed=$((_pbe_elapsed + ${PROMOTE_INTERVAL:-10}))
+    done
+    # No automatic promotion (manual verification configured, or a boot that
+    # never finished): do what pfSense-rc would have done, then re-check.
+    warn "no automatic boot verification after ${PROMOTE_TIMEOUT:-300}s — activating '${_pbe_running}' explicitly"
+    ssh_guest "bectl activate '${_pbe_running}'" >/dev/null 2>&1 || true
+    pfb_be_is_permanent "$_pbe_running" \
+        || die "boot environment '${_pbe_running}' is not active on reboot — refusing to publish a disk that boots the pre-upgrade system"
+    log "boot environment '${_pbe_running}' is active on reboot"
+}
+
+# pfb_be_is_permanent BE — true when `bectl list` marks BE active on reboot (R).
+pfb_be_is_permanent() {
+    ssh_guest 'bectl list' 2>/dev/null | tr -d '\r' \
+        | awk -v be="$1" '$1 == be && $2 ~ /R/ { found = 1 } END { exit !found }'
+}
+# pfb_promote_be END
+
 # wait_guest_ssh TIMEOUT — poll until root SSH answers or TIMEOUT seconds elapse.
 wait_guest_ssh() {
     _wgs_timeout="$1"
@@ -699,6 +794,9 @@ while [ "$_hg_elapsed" -lt "$HEALTH_TIMEOUT" ]; do
 done
 [ "$_hg_healthy" -eq 1 ] || die "upgraded box did not become healthy within ${HEALTH_TIMEOUT}s (webConfigurator and pfctl both failed; see $LOCAL_DIR/upgrade.log)"
 
+# --- wait until the upgrade is permanent on disk (issue #1858) -------------
+pfb_promote_be
+
 # --- optional: gather box facts for the activation PR (issue #1837) --------
 # Best-effort: the publish must not depend on it.
 if [ -n "$FACTS_OUT" ]; then
@@ -750,6 +848,8 @@ OUT="$LOCAL_DIR/${QCOW_NAME}"
 log "streaming upgraded image back -> $(basename "$OUT")"
 px "cat '$REMOTE_DIR/out.qcow2'" > "$OUT"
 [ -s "$OUT" ] || die "streamed upgraded image is empty: $OUT"
+
+pfb_verify_artifact "$REMOTE_DIR/out.qcow2" "$TAG"
 
 log "pushing ${IMAGE}:${TAG} (local oras)"
 # Shared push — identical to image-publish.sh --type ${TYPE} ${TAG} (same image
