@@ -337,6 +337,24 @@ def test_the_ports_bump_is_the_last_thing_the_run_does() -> None:
 
 
 @pytest.mark.parametrize("job", IRREVERSIBLE_JOBS)
+def test_a_cancelled_run_never_tags_drafts_or_bumps(job: str) -> None:
+    """Cancel must abort the run, not merely stop scheduling more of it.
+
+    GitHub still STARTS a queued job whose `if:` contains `always()` on a CANCELLED run.
+    Scenario: an operator dispatches the wrong tag and hits Cancel once
+    `build-pkgs-portable` is through -- for an alpha/beta there are no live suites left
+    to absorb the cancel -- and the tag is pushed, the draft created and the ports fork
+    bumped on an explicitly aborted run, which is the exact invariant issue #1855
+    exists to establish. `!cancelled()` carries identical skip tolerance (ANY status
+    function suppresses the implicit `success()`) and honours the cancel; the live
+    suites at `ui-suite`/`smoke-suite` already use it.
+    """
+    if_block = _job_if_block(_jobs()[job])
+    assert "always()" not in if_block, f"{job} would still start on a CANCELLED run -- use !cancelled(): {if_block}"
+    assert "!cancelled()" in if_block, f"{job} lost its skip tolerance: {if_block}"
+
+
+@pytest.mark.parametrize("job", IRREVERSIBLE_JOBS)
 def test_a_dry_run_stops_after_the_suites(job: str) -> None:
     """dry_run=true does steps 1-4 only: pin, build, verify -- then stop. Nothing that
     touches GitHub may be reachable without an explicit `dry_run == 'false'`."""
