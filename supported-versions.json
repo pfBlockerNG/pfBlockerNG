@@ -55,7 +55,7 @@
       "py_flavor": "py311",
       "variant": "Plus",
       "status": "beta",
-      "ci": false,
+      "ci": true,
       "image_name": "pfsense-plus",
       "extra_pkgs": [],
       "upgrade": {
