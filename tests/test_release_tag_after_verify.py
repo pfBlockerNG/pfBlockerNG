@@ -426,20 +426,48 @@ def test_the_published_workflow_carries_only_the_pkg_repo_dispatch() -> None:
     assert "sync-ports-fork" not in jobs, sorted(jobs)
 
 
-def test_the_published_workflow_declares_no_output_nobody_reads() -> None:
-    """`resolve` published `tag`/`branch`/`portversion` for the ports bump. The bump moved
-    into the release run and took every consumer with it, leaving three outputs that read
-    as a live contract while nothing reads them -- the next person to touch this file has
-    to prove them dead all over again. The job stays exactly what it is now: the
-    off-scheme hard-error gate that `repo-publish` hangs off via `needs:`."""
-    text = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
+@pytest.mark.parametrize("workflow", [RELEASE_WORKFLOW, PUBLISHED_WORKFLOW], ids=lambda p: p.name)
+def test_no_job_declares_an_output_nobody_reads(workflow: Path) -> None:
+    """A job output nobody reads states a contract that no longer exists.
+
+    Both files accumulated them as the pipeline was rearranged: `release-published.yml`'s
+    `resolve` kept publishing `tag`/`branch`/`portversion` after the ports bump moved into
+    the release run and took every consumer with it, and `release.yml` kept
+    `prepare-release`'s branch/channel/portversion, the `release` job's version/prerelease
+    and `tag-release`'s sha for the same reason. Whoever reads the file next then has to
+    prove each one dead all over again. Covering BOTH workflows is the point: pinning one
+    and not its sibling is the asymmetry that let these survive.
+
+    Detection is a substring scan of the WHOLE file, which is deliberately biased safe: a
+    mention in a comment counts as a reader, so the failure mode is "keeps a dead output",
+    never "deletes a live one". Both accepted prefixes are covered -- `needs.` (a
+    downstream job) and `jobs.` (the shape a `workflow_call` callee uses to re-export an
+    output). The guard below pins the one assumption the scan makes.
+    """
+    text = workflow.read_text(encoding="utf-8")
     unconsumed = sorted(
         f"{job}.{out}"
-        for job, lines in _jobs(PUBLISHED_WORKFLOW).items()
+        for job, lines in _jobs(workflow).items()
         for out in _job_outputs(lines)
-        if f"needs.{job}.outputs.{out}" not in text
+        if f"needs.{job}.outputs.{out}" not in text and f"jobs.{job}.outputs.{out}" not in text
     )
-    assert not unconsumed, f"job output(s) nobody consumes: {unconsumed}"
+    assert not unconsumed, f"{workflow.name}: job output(s) nobody consumes: {unconsumed}"
+
+
+@pytest.mark.parametrize("workflow", [RELEASE_WORKFLOW, PUBLISHED_WORKFLOW], ids=lambda p: p.name)
+def test_no_job_output_is_read_through_index_syntax(workflow: Path) -> None:
+    """Guards the one assumption the dead-output scan above makes.
+
+    `needs['prepare-release'].outputs.branch` is legal GitHub and spells the same
+    reference without the dotted form the scan looks for, so it would read as unconsumed
+    and the output would be deleted out from under a live consumer -- breaking a real cut.
+    No such reference exists today; if one is ever added, this fails and the scan has to
+    learn the shape before it can be trusted again. Scoped to `${{ … }}` bodies, because
+    prose like "attach-pkgs needs [prepare-release, release, …]" is not a reference.
+    """
+    expressions = re.findall(r"\$\{\{(.*?)\}\}", workflow.read_text(encoding="utf-8"), re.DOTALL)
+    indexed = [expr.strip() for expr in expressions if re.search(r"\b(?:needs|jobs)\s*\[", expr)]
+    assert not indexed, f"{workflow.name}: index-syntax job reference(s) the dead-output scan cannot see: {indexed}"
 
 
 def test_the_bump_before_publish_ordering_is_recorded_where_it_used_to_be_enforced() -> None:
