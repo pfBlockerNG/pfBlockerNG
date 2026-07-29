@@ -14,9 +14,11 @@ release or touching `release.yml`, ports plumbing, or the pkg-repo publish path.
 pkg orders the stage keywords natively below the bare release; the tag maps to `PORTVERSION`
 verbatim); stable `vX.Y.Z` from **`main` only** (typically the final rc's commit; `devel`
 then opens `X.(Y+1).0.alpha.1`). `release.yml` and `.githooks/pre-push` both consume the
-script, so the rule never drifts. A versioned tag triggers: tests → GitHub Release → port
-bump on our **`pfBlockerNG/FreeBSD-ports` fork** (self-hosted distribution, no upstream PR).
-**Nightly builds get no GitHub Release.**
+script, so the rule never drifts — `pre-push` only ever sees a tag pushed by hand, since the
+runner's checkout sets no `core.hooksPath`. A release is a **dispatch**, never a
+hand-pushed tag: one `release.yml` run builds, verifies, tags, drafts and finally bumps the
+port on our **`pfBlockerNG/FreeBSD-ports` fork** (self-hosted distribution, no upstream PR).
+See *Pipeline order* below. **Nightly builds get no GitHub Release.**
 
 ## Pipeline order — build, verify, tag, DRAFT — then stop (issue #1855)
 
