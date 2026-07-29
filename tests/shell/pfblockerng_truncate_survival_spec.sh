@@ -378,13 +378,13 @@ Describe 'structural retirement guard: no ":" special-builtin idioms remain (iss
 
   # Both guards scan src + scripts + tests. Replacement in every case is the
   # regular builtin `true` (`true > file`, `while true`).
-  It 'has zero hits for the legacy special-builtin truncate pattern'
+  It 'has zero hits for the legacy special-builtin truncate pattern (replace ": >" with "true >")'
     When call _trunc_legacy_hits
     The status should be failure
     The output should equal ""
   End
 
-  It 'has zero hits for a ":" infinite-loop condition'
+  It 'has zero hits for a ":" infinite-loop condition (replace with "while true" / "until true")'
     When call _colon_loop_hits
     The status should be failure
     The output should equal ""
