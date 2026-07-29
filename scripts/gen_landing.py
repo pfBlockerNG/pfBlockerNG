@@ -468,11 +468,13 @@ def _join_matrix(rows: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     A pfSense minor is then listed ONCE per channel and package version, however many
     matrix entries it has: those entries enumerate build flavors (arch, FreeBSD, PHP,
     Python), while the arch-less catalog (issue #1806) serves one file per minor. The
-    first entry of a minor supplies the displayed flavors.
+    first entry of a minor supplies the displayed flavors. The dedup is per published
+    FILE, so a legacy per-ABI layout — which publishes one file per arch and pins to no
+    varver — still lists each of them; only flavor duplicates of one file collapse.
     """
     idx = matrix_index(matrix)
     out: list[tuple[str, dict]] = []
-    seen: set[tuple[str, str, str, str]] = set()  # (edition, pfSense minor, channel, version)
+    seen: set[tuple[str, str, str, str, str]] = set()  # (edition, minor, channel, version, file)
     for r in rows:
         entries = idx.get(r["abi"], [])
         if not entries and _is_wildcard_abi(r["abi"]):
@@ -483,7 +485,7 @@ def _join_matrix(rows: list[dict], matrix: list[dict] | None) -> list[tuple[str,
         if entries:
             for e in entries:
                 ekey = _edition_key(e.get("variant", ""))
-                key = (ekey, e.get("pfsense_version", ""), r["channel"], r["version"])
+                key = (ekey, e.get("pfsense_version", ""), r["channel"], r["version"], r["rel"])
                 if key in seen:
                     continue
                 seen.add(key)

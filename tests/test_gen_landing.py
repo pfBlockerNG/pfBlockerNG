@@ -445,6 +445,34 @@ def test_build_edition_sections_one_row_per_pfsense_minor_whatever_the_flavor_se
     assert [r["pfsense_version"] for r in sections["CE"]] == ["2.8"]
 
 
+def test_build_edition_sections_keeps_distinct_files_a_legacy_layout_cannot_pin() -> None:
+    """The one-row-per-minor rule collapses matrix flavors, never distinct published files.
+
+    One pfSense minor serves one file only because the catalog is arch-less (issue #1806).
+    A legacy per-ABI layout publishes a separate file per arch, and no such path names a
+    varver, so those rows keep the matrix broadcast — they must also keep their own rows,
+    or a published package silently disappears from the page (issue #1863).
+
+    Given two per-arch files published for one pfSense minor under legacy per-ABI dirs,
+      and a matrix entry per arch for that minor,
+    When the edition sections are built,
+    Then both files are listed.
+    """
+    p_amd64 = _pkg("devel", "d", "4.0.0.alpha.22", "FreeBSD:16:amd64", "release/FreeBSD:16:amd64/d.pkg")
+    p_arm64 = _pkg("devel", "d", "4.0.0.alpha.22", "FreeBSD:16:aarch64", "release/FreeBSD:16:aarch64/d.pkg")
+    matrix = [
+        _mx("FreeBSD:16:amd64", "26.03", "Plus", "8.5", "py311"),
+        _mx("FreeBSD:16:aarch64", "26.03", "Plus", "8.5", "py311"),
+    ]
+
+    sections = dict(gl.build_edition_sections([p_amd64, p_arm64], matrix))
+
+    assert {r["rel"] for r in sections["Plus"]} == {
+        "release/FreeBSD:16:amd64/d.pkg",
+        "release/FreeBSD:16:aarch64/d.pkg",
+    }
+
+
 def test_build_edition_sections_sorted_by_pkg_version_then_pfsense_version_desc() -> None:
     """Table order: pfBlockerNG version desc, then pfSense version desc (issue #1863).
 
