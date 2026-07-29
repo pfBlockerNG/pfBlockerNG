@@ -366,6 +366,19 @@ pfb_boot_artifact_version() {
         -e "s#${REMOTE_DIR}/work.qcow2#${_pbav_disk}#" \
         -e "s#${REMOTE_DIR}/qemu.pid#${REMOTE_DIR}/verify.pid#" \
         -e "s#${REMOTE_DIR}/console.log#${REMOTE_DIR}/verify-console.log#")
+    # The upgrade's command line is data, not a contract: if its shape drifts,
+    # the substitutions above silently no-op and this would re-boot the disk we
+    # already observed instead of the exported artifact. Every seam must take.
+    for _pbav_want in "$_pbav_disk" "${REMOTE_DIR}/verify.pid" "${REMOTE_DIR}/verify-console.log"; do
+        case $_pbav_cmd in
+            *"$_pbav_want"*) ;;
+            *) die "verification boot command does not carry '${_pbav_want}' — QEMU_CMD drifted from the shape the substitutions expect; refusing to boot the wrong disk" ;;
+        esac
+    done
+    case $_pbav_cmd in
+        *"${REMOTE_DIR}/work.qcow2"*|*"${REMOTE_DIR}/qemu.pid"*|*"${REMOTE_DIR}/console.log"*)
+            die "verification boot command still references the upgrade VM's files — refusing to boot the wrong disk" ;;
+    esac
     px "$_pbav_cmd" >&2
     QPID=$(px "cat '${REMOTE_DIR}/verify.pid'" | tr -d '\r')
     [ -n "$QPID" ] || die "verification boot did not write a pidfile (see ${REMOTE_DIR}/verify-console.log on the KVM host)"
@@ -396,11 +409,12 @@ pfb_boot_artifact_version() {
 # never gets there, and fail closed if the disk would still boot the old system.
 # PROMOTE_TIMEOUT / PROMOTE_INTERVAL are overridable for the spec.
 pfb_promote_be() {
-    # Parse locally: the guest side stays a plain `bectl list`, so this works
-    # the same on any pfSense and is drivable in the spec.
-    _pbe_running=$(ssh_guest 'bectl list' 2>/dev/null | tr -d '\r' \
+    # Parse locally (-H: headerless, script-stable fields), so this works the
+    # same on any pfSense and is drivable in the spec.
+    _pbe_running=$(ssh_guest 'bectl list -H' 2>/dev/null | tr -d '\r' \
         | awk '$2 ~ /N/ { print $1; exit }')
-    [ -n "$_pbe_running" ] || _pbe_running=default
+    [ -n "$_pbe_running" ] \
+        || die "could not identify the running boot environment from 'bectl list' — refusing to promote a guess"
     log "waiting for pfSense to make boot environment '${_pbe_running}' permanent"
     _pbe_elapsed=0
     while [ "$_pbe_elapsed" -lt "${PROMOTE_TIMEOUT:-300}" ]; do
@@ -422,7 +436,7 @@ pfb_promote_be() {
 
 # pfb_be_is_permanent BE — true when `bectl list` marks BE active on reboot (R).
 pfb_be_is_permanent() {
-    ssh_guest 'bectl list' 2>/dev/null | tr -d '\r' \
+    ssh_guest 'bectl list -H' 2>/dev/null | tr -d '\r' \
         | awk -v be="$1" '$1 == be && $2 ~ /R/ { found = 1 } END { exit !found }'
 }
 # pfb_promote_be END
