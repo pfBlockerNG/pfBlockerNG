@@ -62,6 +62,34 @@ test("dedicated: a whitespace-only line with no '#' is a Pattern, not a Comment"
   assert.deepEqual(names(parser.parse("   ")), ["RegexList", "Pattern"]);
 });
 
+// issue #1867: WHERE the split lands, not just that one happened. cases.txt compares
+// tree TOPOLOGY only, so "a\#b#desc" reads as Pattern,Comment under both the old
+// first-hash-wins rule and the new unescaped-hash rule -- the topology is identical and
+// only the boundary moves. Without a positional assertion nothing in the suite would
+// notice the split regressing to the first hash on a line that has a later real one.
+test("dedicated: the split lands at the first UNESCAPED '#', not the first '#'", () => {
+  const input = "a\\#b#desc";
+  const tree = parser.parse(input);
+  let commentFrom = null;
+  tree.iterate({
+    enter(node) {
+      if (node.name === "Comment") commentFrom = node.from;
+    },
+  });
+  // "a\#b" is the pattern (4 chars), so the Comment starts at index 4 -- the SECOND
+  // hash. Under the old rule it would start at index 1.
+  assert.equal(commentFrom, 4, `expected the Comment to start at the unescaped '#' in ${JSON.stringify(input)}`);
+  assert.equal(input.slice(commentFrom), "#desc");
+});
+
+test("dedicated: an escaped hash with no later marker yields no Comment at all", () => {
+  // The other direction: nothing after the escape means the whole line is Pattern.
+  // Pairs with the case above so neither "always split early" nor "never split"
+  // could satisfy both.
+  const names_ = names(parser.parse("a\\#b"));
+  assert.deepEqual(names_, ["RegexList", "Pattern"]);
+});
+
 // parseMixed nesting: the wrapped parser re-parses a Pattern node's contents with
 // @pfblockerng/lezer-regexp's Python-re grammar (slice A), mounted as an OVERLAY (see
 // index.js's comment on `overlay: [{from, to}]` -- required, and NOT the brief's literal
