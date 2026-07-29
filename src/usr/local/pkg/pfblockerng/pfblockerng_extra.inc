@@ -4139,6 +4139,16 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
  * capture failure as "not currently blocked". The throw fires lazily, on the
  * generator's first iteration.
  *
+ * Issue #1852 -- ONE exception to the above: a table absent from the loaded
+ * ruleset (a fresh alias not yet referenced by any rule/reload -- verified
+ * on pfSense CE 2.8 / PHP 8.3: `pfctl -t <absent> -T show` exits rc=255,
+ * stderr "pfctl: Table does not exist.") yields EMPTY rather than throwing --
+ * that condition genuinely means "no live members", not a capture failure,
+ * and a user clicking Alerts "+" on such a host must not fatal. Distinguished
+ * by classifying `pfctl`'s own stderr (captured to a SEPARATE temp file, per
+ * ADR-53 below, never merged into the stdout membership parse); any other
+ * non-zero exit still throws.
+ *
  * NOT pure -- execs pfctl.
  *
  * @param  string $pfctl    Absolute path to the pfctl binary ($pfb['pfctl']).
@@ -4156,18 +4166,41 @@ function pfb_live_table_snapshot(string $pfctl, string $aliasdir, string $dbdir,
 	if ($scan_tmp === FALSE) {
 		throw new \RuntimeException("table={$table}: tempnam() failed in dbdir={$dbdir}");
 	}
+	$err_tmp = tempnam($dbdir, 'pfb_punch_err_');
+	if ($err_tmp === FALSE) {
+		@unlink($scan_tmp);
+		throw new \RuntimeException("table={$table}: tempnam() failed in dbdir={$dbdir}");
+	}
 
-	// ADR-53: stderr -> /dev/null, NOT 2>&1 -- the
-	// capture file is parsed line-by-line as membership entries below;
-	// merging stderr into it would feed any pfctl diagnostic line into
-	// that parse as if it were a table member.
+	// ADR-53/#1852: stdout and stderr capture to SEPARATE temp files -- NOT
+	// 2>&1 -- the stdout file is parsed line-by-line as membership entries
+	// below; merging stderr into it would feed any pfctl diagnostic line
+	// into that parse as if it were a table member. stderr is classified
+	// below on a non-zero exit, to tell an absent table (benign) from a
+	// genuine pfctl failure (loud).
 	$exec_out = [];
 	$rc       = 0;
-	exec("{$pfctl} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>/dev/null', $exec_out, $rc);
+	exec(
+		"{$pfctl} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>' . escapeshellarg($err_tmp),
+		$exec_out,
+		$rc
+	);
 	if ($rc !== 0) {
+		$stderr_text = (string) @file_get_contents($err_tmp);
 		@unlink($scan_tmp);
-		throw new \RuntimeException("table={$table}: pfctl -T show exited rc={$rc}");
+		@unlink($err_tmp);
+		// pfctl's own wording for a table absent from the loaded ruleset
+		// (probed on pfSense CE 2.8 / PHP 8.3.19: rc=255, stderr
+		// "pfctl: Table does not exist."). A fresh alias not yet referenced
+		// by any rule/reload is "no live members", not a capture failure --
+		// yield nothing rather than throw. Any other non-zero exit (a
+		// genuine pfctl failure) still throws loudly.
+		if (str_contains($stderr_text, 'Table does not exist')) {
+			return;
+		}
+		throw new \RuntimeException("table={$table}: pfctl -T show exited rc={$rc}: " . trim($stderr_text));
 	}
+	@unlink($err_tmp);
 
 	$handle = @fopen($scan_tmp, 'r');
 	if ($handle === FALSE) {
@@ -4179,7 +4212,14 @@ function pfb_live_table_snapshot(string $pfctl, string $aliasdir, string $dbdir,
 			yield trim($line);
 		}
 	} finally {
-		fclose($handle);
+		// Issue #1852: an abandoned (never-fully-drained) generator's finally
+		// only runs at the tail of request shutdown (bugs.php.net #76006), by
+		// which point $handle can already be an invalid resource -- guard
+		// instead of a bare fclose(). @unlink() still runs unconditionally so
+		// the scratch file is never leaked either way.
+		if (is_resource($handle)) {
+			fclose($handle);
+		}
 		@unlink($scan_tmp);
 	}
 }
