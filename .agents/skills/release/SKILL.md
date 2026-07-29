@@ -3,9 +3,11 @@ name: release
 description: >
   Cut a pfBlockerNG release by validating the tag scheme, then DISPATCHING
   .github/workflows/release.yml — the workflow builds and VERIFIES first, then
-  creates+pushes the tag and publishes (GitHub Release + .pkg artifacts +
-  self-hosted pkg-repo publish + FreeBSD-ports bump); a failed run leaves no tag
-  and no draft behind. You do NOT push a tag by hand. Enforces the scheme before
+  pushes the tag and leaves a complete DRAFT Release (source archive + .pkg
+  assets, placeholder body). It stops there: this skill never writes notes and
+  never publishes. Report the draft URL; /release-with-changelog is the path that
+  writes the notes onto that draft and publishes it. You do NOT push a tag by
+  hand. Enforces the scheme before
   dispatch: prereleases (vX.Y.Z.alpha.N | .beta.N | .rc.N) cut from `devel` only,
   stable (vX.Y.Z) from `main` only — the same rule release-version.sh, the
   workflow's prepare-release job, and the pre-push hook enforce, so a bad tag is
@@ -14,18 +16,24 @@ description: >
   release", "publish the alpha", or invokes /release.
 ---
 
-You cut a pfBlockerNG release. **`release.yml` is `workflow_dispatch`-only and does it
-all** — its `prepare-release` job resolves the channel-branch tip, commits the changelog
-when absent and **pins the release SHA**; the workflow then builds every `.pkg` from that
-pinned SHA, runs the verification suites against those exact artifacts, and only **when
-green** creates + pushes the tag (on the pinned SHA) and publishes. So you do **not**
-`git tag`/`git push` a tag by hand; you **dispatch the workflow** with `dry_run=false`.
-Everything below is the friendly pre-check that the tag + commit are correct **before**
-that dispatch.
+You cut a pfBlockerNG release **up to the draft**. **`release.yml` is
+`workflow_dispatch`-only and does everything up to that point** — its `prepare-release`
+job validates the scheme, asserts CI is green, **pins the channel-branch tip** and mints
+the tag locally; the workflow then builds every `.pkg` from that pinned SHA, runs the
+verification suites against those exact artifacts and that exact source, and only **when
+green** pushes the tag (on the pinned SHA), creates the Release **as a DRAFT**, attaches
+the assets and health-checks it. So you do **not** `git tag`/`git push` a tag by hand; you
+**dispatch the workflow** with `dry_run=false`. Everything below is the friendly pre-check
+that the tag + commit are correct **before** that dispatch.
 
-**A failed run leaves nothing on GitHub** (issue #1855): no tag, no draft — only the
-docs-only notes commit, which the retry reuses. The version number is not burned, so
-re-dispatching the SAME tag after fixing the cause is the normal recovery.
+**The workflow never publishes.** It hands you a complete draft with a placeholder body.
+Writing the real notes + title onto that draft and publishing it is a separate, explicit
+step — **`/release-with-changelog`** does exactly that (it invokes this skill first). If
+the user asked for `/release`, stop at the draft and say so; do not publish.
+
+**A failed run leaves nothing behind** — no tag, no draft, nothing pushed to any branch.
+The version number is not burned, so re-dispatching the SAME tag after fixing the cause is
+the normal recovery.
 
 **Which channels verify live.** `alpha` and `beta` tags **skip** the live smoke/UI suites —
 their mandatory gate is CI green on the release commit. `rc` and stable run the suites in
@@ -93,25 +101,23 @@ devel" guard, applied before the tag exists.
      commit would be missed).
    - **CI is green on the release commit** — the `All tests passed` check-run on the
      channel-branch tip must be `success`. NOTE: the workflow's `verify-checks` walks back
-     first-parent ancestors past docs-only commits (a `docs/release-notes/<tag>.md` commit
-     skips CI via `paths-ignore` and carries no check-run), so check the nearest ancestor
+     first-parent ancestors past docs-only commits (a docs-only tip skips CI via
+     `paths-ignore` and carries no check-run), so check the nearest ancestor
      **with** a check-run. Read via `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`.
      If pending, wait; if failed, stop.
    - Git hooks are active (`git config core.hooksPath` = `.githooks`); if not, run
      `sh scripts/setup-hooks.sh` so the pre-push backstop (on the tag the workflow pushes)
      is armed.
 
-5. **Notes source.** The release body comes from `docs/release-notes/<tag>.md` when that file
-   is committed on the channel branch — it is **authoritative** (an optional first-line
-   `<!-- SUMMARY: … -->` marker becomes the title suffix, stripped from the body). When no file
-   exists, the workflow writes a deterministic placeholder body instead (GitHub Models drafting
-   was removed — it never produced a working result; release run 30379645002). To author the
-   real notes, use **`/release-with-changelog`** — it writes the file, commits it, then calls
-   this skill. Don't author notes here unless asked.
+5. **Notes.** Nothing to prepare: release notes are **not files in this repository**. The
+   workflow gives the draft a deterministic placeholder body ending in the compare link, and
+   the title `YYYY-MM-DD - VERSION`. The real notes and the final title are written onto the
+   draft afterwards by **`/release-with-changelog`** (or by a human), which then publishes
+   it. Don't author notes here.
 
-6. **Confirm, then dispatch.** Dispatching with `dry_run=false` **becomes** irreversible and
-   public once verification is green (tag, GitHub Release, `.pkg` assets, pkg-repo
-   republish, ports-fork bump) — a run that fails before that point publishes nothing.
+6. **Confirm, then dispatch.** Dispatching with `dry_run=false` **becomes** irreversible
+   once verification is green — it pushes the tag and drafts the Release. It still publishes
+   nothing, and a run that fails before the tag leaves no trace at all.
    Confirm the tag + channel-branch tip with the user, then dispatch — **do not push a tag
    by hand**:
 
@@ -129,19 +135,19 @@ devel" guard, applied before the tag exists.
    resolved channel branch regardless. After dispatching, find the run
    (`gh run list --workflow=release.yml`) to report/watch it.
 
-7. **Report.** After dispatch, point at the running `Release` workflow (Actions tab),
-   and state what it will produce:
-   - a GitHub **Release** (`pre-release` for alpha/beta/rc), title
-     `pfBlockerNG <version> — <3-word summary>`, body grouped Features / Improvements /
-     Bug Fixes ending in the compare link;
-   - one **`.pkg` per variant × FreeBSD major × arch**, named
-     `pfSense-pkg-pfBlockerNG[-devel]-<portversion>-<varslug>-FreeBSD-<major>-<arch>.pkg`
-     (e.g. `…-4.0.0.alpha.1-ce-2.8-FreeBSD-15-amd64.pkg`), attached to the Release;
-   - the **self-hosted pkg repo** republish (`pfBlockerNG/pkg`) so the build appears at
-     `pfblockerng.github.io/pkg` within minutes;
-   - the **port bump** on `pfBlockerNG/FreeBSD-ports@pfblockerng/use-github`.
+7. **Report the DRAFT.** After dispatch, point at the running `Release` workflow (Actions
+   tab) and state what it will produce:
+   - a **DRAFT** GitHub Release (`pre-release` for alpha/beta/rc), title
+     `YYYY-MM-DD - <version>`, body a placeholder ending in the compare link;
+   - one **`.pkg` per FreeBSD major** (plus each major's `extra_pkgs` dependency packages)
+     attached to that draft, alongside the `src/` source archive;
+   - **nothing published**: no pkg-repo republish, no ports bump — those fire when the
+     release is published, from `release-published.yml`.
 
-   Offer to watch the workflow and report its result.
+   Offer to watch the run. When it finishes, report the **draft Release URL** (the
+   `draft-healthcheck` job prints it in the run summary; `gh release view <tag> --json url`
+   also works) and say plainly that the release is **drafted pending notes** — someone must
+   write the notes + title onto it and publish it, which `/release-with-changelog` does.
 
 ## Guardrails
 
@@ -152,7 +158,9 @@ devel" guard, applied before the tag exists.
 - **Don't push a tag by hand** — dispatching the workflow is the whole job; it creates and
   pushes the tag, and only after the build and the verification suites are green. A
   hand-pushed tag now *blocks* the run unless it happens to point at the exact commit the
-  run verified.
+  run pinned (the check fires in `prepare-release`, before the build).
+- **Never publish from this skill.** It stops at the draft. Publishing is
+  `/release-with-changelog`'s last step, after the notes are written.
 - **Never** re-release a tag with a **published** Release — cut the next `.N`
   (e.g. `.alpha.2`) instead. A tag with no/draft release is resumable, not a re-release.
 - **A run that failed verification burned nothing** — no tag, no draft, the version number

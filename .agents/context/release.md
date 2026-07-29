@@ -18,36 +18,40 @@ script, so the rule never drifts. A versioned tag triggers: tests → GitHub Rel
 bump on our **`pfBlockerNG/FreeBSD-ports` fork** (self-hosted distribution, no upstream PR).
 **Nightly builds get no GitHub Release.**
 
-## Pipeline order — build + verify BEFORE anything is tagged (issue #1855)
+## Pipeline order — build, verify, tag, DRAFT — then stop (issue #1855)
 
-`release.yml` is one dispatch, one run, in this order:
+`release.yml` is one dispatch, one run, and it never publishes:
 
 1. **`prepare-release`** (real only) — validate the tag↔channel scheme, refuse an already
    **published** release, assert **CI green on the release commit** (`release-ci-gate.sh`,
-   walking past docs-only commits), commit the deterministic notes placeholder when no
-   curated `docs/release-notes/TAG.md` exists (docs-only, on the channel branch), then **pin
-   the release SHA**. *Nothing is tagged here.*
+   walking past docs-only commits), **pin** the channel-branch tip as the release commit and
+   **mint the annotated tag on it locally**. *Nothing is pushed* — not the tag, not the
+   branch. Minting early is what turns a conflicting tag into a five-second failure instead
+   of an hour-long one.
 2. **Build + verify** — `resolve-stamp` / `build-pkgs-portable` (per-major `.pkg`s +
    `extra_pkgs` dep packages) build **from the pinned SHA** as *workflow* artifacts, then
    `ui-suite` / `smoke-suite` verify **those exact artifacts** (`pkg_artifact_prefix:
-   pfBlockerNG-relpkg`) — never Release assets, so they need no tag and no Release.
-3. **`tag-release`** — the FIRST irreversible step: creates + pushes the tag **on the pinned
-   SHA** (not on "the branch tip now"), gated on the build and, when they ran, on **both**
-   suite AND-gates.
-4. **`release` → `attach-pkgs` → `publish-release` → `sync-ports-fork` → `repo-publish`** —
-   draft Release, assets, healthcheck, publish flip, ports bump, pkg-repo dispatch.
+   pfBlockerNG-relpkg`) **from that same source tree** (`checkout_ref`, issue #1859) — never
+   Release assets, so they need no tag and no Release.
+3. **`tag-release`** — the FIRST irreversible step: pushes the tag **on the pinned SHA** (not
+   on "the branch tip now"), gated on the build and, when they ran, on **both** suite
+   AND-gates.
+4. **`release` → `attach-pkgs` → `draft-healthcheck`** — create the Release as a **DRAFT**
+   with a deterministic placeholder body, attach the assets, assert the draft is complete.
+   **The draft is the end state.**
 
-So a failed run leaves **nothing** on GitHub — no tag, no draft (only the docs-only notes
-commit, which the retry reuses). `tag-release` is the single seam for the suite gate;
-publish-release inherits it transitively. Its resume path is narrowed to the
-**crash-after-tag** window: a pre-existing tag on the pinned SHA is reused, a tag on any
-other commit is refused loudly and never moved. `tests/test_release_tag_after_verify.py`
-walks the whole `needs:` graph, so the pre-#1855 order cannot come back silently.
+A failed run leaves **nothing** behind: no tag, no draft, nothing pushed to any branch —
+re-dispatch the same tag once the cause is fixed. `tag-release` is the single seam for the
+suite gate; everything after it inherits that transitively. The resume path is narrowed to
+the **crash-after-tag** window: a pre-existing tag on the pinned SHA is reused, a tag on any
+other commit is refused loudly and never moved.
+`tests/test_release_tag_after_verify.py` walks the whole `needs:` graph, so neither the
+pre-#1855 order nor an in-pipeline publish can come back silently.
 
 **Which channels verify live.** `prekind` (from `release-version.sh`) decides:
-`alpha`/`beta` **skip** the live smoke/UI suites — the mandatory gate is the `verify-checks`
-CI-green assertion above; `rc` and stable run them in full. One code path: for an alpha/beta
-the verification phase is simply empty, not a parallel pipeline. The `force_suites` dispatch
+`alpha`/`beta` **skip** the live smoke/UI suites — the mandatory gate is the CI-green
+assertion above; `rc` and stable run them in full. One code path: for an alpha/beta the
+verification phase is simply empty, not a parallel pipeline. The `force_suites` dispatch
 input (default `false`) forces them on for an alpha/beta; it can only ever *add* verification.
 
 **Which rows may veto.** A matrix row gates a release **iff its ci-metadata `status` is a
@@ -57,27 +61,47 @@ reports, emits a loud demotion warning naming the row and its status, and cannot
 release. Predicate + warning live in `scripts/resolve-legs.sh`, switched on by the suites'
 `release_gate` input (release-only; PR/nightly gating is unchanged).
 
-## Release notes pipeline
+**Dry-run** (`dry_run=true`, the default) does steps 1–2 only, off the dispatch ref: pin,
+build, verify — then stop. No tag, no Release, no push. A malformed tag still fails it, at
+`read-matrix`'s `release-version.sh` classification.
 
-Body precedence: a **committed `docs/release-notes/TAG.md` wins** (curated, or committed by
-`prepare-release`'s own placeholder writer) — otherwise the workflow writes a **deterministic
-placeholder** ending in the compare link (`prev_tag` classifies each tag's channel via
-`release-version.sh` to find the previous same-channel release for that link). GitHub Models
-drafting was removed (`ci: remove the GitHub Models changelog/notes drafts from the release
-flow`, release run 30379645002) — it never produced a working result. A committed file's
-title summary rides in an optional first-line `<!-- SUMMARY: … -->` marker (stripped from the
-rendered body; the title is `YYYY-MM-DD - VER — summary`, ISO date prefixed so GitHub's
-alphabetical release sort stays chronological). To author real notes, commit
-`docs/release-notes/TAG.md` before dispatching — the **`/release-with-changelog`** skill does
-this for you, applying the same prompt template `scripts/release-notes-prompt.txt` used to
-describe the desired shape (group user-facing changes under **Features / Improvements /
-Bug Fixes** with PR/issue links, CI/test/tooling/ADR noise filtered).
+## Release notes — authored onto the Release, never committed
+
+**There are no release-notes files in this repository.** A committed changelog forces a
+changelog commit, which forces a push to the channel branch and a re-generation whenever
+`devel` moves — and the released source tree should not carry its own changelog. Past
+releases' bodies live on their GitHub Release pages; that is the record.
+
+`release.yml` gives the draft a **deterministic placeholder body** ending in the compare link
+(`prev_tag` classifies each tag's channel via `release-version.sh` to find the previous
+same-channel release for that link) and the title `YYYY-MM-DD - VERSION` (ISO date prefixed
+so GitHub's alphabetical release sort stays chronological). In-pipeline LLM drafting is
+wanted but no free option has worked — GitHub Models was removed after never producing a
+working result (release run 30379645002); **do not add one**.
+
+The real notes and the final title are authored **onto the draft**, from the commit range,
+using the template in `scripts/release-notes-prompt.txt` (group user-facing changes under
+**Features / Improvements / Bug Fixes** with PR/issue links, CI/test/tooling/ADR noise
+filtered) — by a human, or by Claude via **`/release-with-changelog`**. Publishing the draft
+is that same step's last action.
 **Nightly builds get no GitHub Release.**
 
-**Dry-run.** `release.yml`'s `workflow_dispatch` is a no-publish harness: pass the `tag` to
-simulate with `dry_run=true` (default) to validate the scheme, build the `.pkg` artifacts, and
-render the body (the real body shows in the run summary) — publishing nothing. Dispatchable
-only from the default branch once merged.
+## Publishing, and what it triggers
+
+Publishing is deliberately **outside** `release.yml`. The two downstream effects that used to
+run after its own publish flip now hang off the real `release: published` event, in
+**`.github/workflows/release-published.yml`**:
+
+1. **`sync-ports-fork`** — bump the port's `PORTVERSION` on our
+   `pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github` fork (a devel release bumps `-devel`
+   and `-nightly` in one commit). `GH_TAGNAME` is `v${PORTVERSION}` in the Makefile, so it
+   self-resolves to the matching tag.
+2. **`repo-publish`** — dispatch `pfBlockerNG/pkg`'s `publish.yml` so the new Release appears
+   at `pfblockerng.github.io/pkg` within seconds (its daily schedule is the backstop).
+
+Order matters and is enforced by `needs:`: `pfBlockerNG/pkg` derives the **nightly** version
+from the `-nightly` port's `PORTVERSION`, so racing the bump ships a stale-versioned nightly.
+Everything either job needs is derived from `github.event.release.tag_name` alone.
 
 ## Self-hosted pkg repository (ADR-17)
 
