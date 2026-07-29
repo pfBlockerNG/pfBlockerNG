@@ -3,11 +3,6 @@
 Scope: PR landing — review sources, adversarial reviewer contract, finding intake,
 merge gate, CI waits, post-merge. Load when: landing a PR or applying review findings.
 
-- **Scope:** vendor-neutral mechanics for landing a pull request — review feedback
-  first, then rebase-merge — extracted from the `pr-merge`, `pr-merge-flow`, and
-  `pr-comments` skills and the `review-single` reviewer contract (all since retired,
-  #1431; ticket #1428, map #1383).
-- **Load-when:** reviewing, resolving review feedback on, or merging a pull request.
 - **Owner:** repo owner. **Last-verified:** 2026-07-17.
 
 Composes with [`workflow.md`](workflow.md) — its "Review" section defines the
@@ -30,7 +25,8 @@ follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
 - **Review effort floors:** `xhigh` for the `full` profile, `high` for the `verify`
   profile — never below the profile's floor, never `max`.
 - **Delta-scoped re-reviews.** A feedback-fix re-review covers exactly the fix commits
-  (base = the pre-fix head SHA), never the whole PR again, and runs on the small tier.
+  (base = the pre-fix head SHA), never the whole PR again, and runs on the small tier;
+  a bare SHA base means delta scope, a branch name the remote base ref.
 - **Convergence rule.** The fix→re-review loop continues only while the latest round
   returned a `blocking` finding; an all-nitpick or clean round closes it (hard cap and
   CI-retry limits per workflow.md "Retry and fix-loop limits").
@@ -140,9 +136,6 @@ Mechanics that hold for every pass:
   triage). Never the mid tier as a sole reviewer; never a multi-agent fan-out except
   on explicit user request; never a dated model ID.
 - **No build-mode styling propagates to a reviewer** — reviewers build nothing.
-- **Delta scoping:** a re-review after fix commits sets its base to the pre-fix head
-  SHA so the diff is exactly the fix commits (a bare SHA base means delta scope; a
-  branch name means the remote base ref).
 
 ### CodeRabbit availability (bounded, never blocking)
 
@@ -284,6 +277,12 @@ still gets its reply, pointing at the shared resolution. Then per finding:
   through them): any non-trivial APPLY gets a delta-scoped re-review (base = the
   pre-fix head SHA, small tier) before the merge gate, looping under the convergence
   rule; the closing round's nits are triaged inline with no further round.
+  **Exempt:** a round whose every APPLY implements its reviewer's own concrete
+  suggestion, tests adjusted, differing only in formatting or in what CI catches
+  (SKIPs/DEFERs do not block it) — a reviewer cannot answer its own instruction
+  differently. Anything else — a different fix, a finding with no concrete suggestion
+  to match, extra edits riding along — takes the re-review and the reviewer's own
+  approval.
 
 ### Replies and the audit trail
 
