@@ -291,3 +291,16 @@ class TestSteadyState:
         ce = {"pfsense_version": "2.8", "channel": "CE", "status": "active", "ci": True}
         actions = _plan([ce], {"2.8": True}, [_boot("2.8", "2.8.1-RELEASE", REPOC_CE)], channel="CE")
         assert actions == []
+
+
+class TestMissingSecondSource:
+    """Scenario (issue #1848): the -c fact is optional. A boot that gathered its
+    branch list but lost the upgrade check must still drive branch-based rules."""
+
+    def test_branches_still_drive_rules_without_upgrade_check(self) -> None:
+        actions = _plan(
+            [PLUS_2603, PLUS_2607_BETA],
+            {"26.03": True, "26.07": False},
+            [_boot("26.03", "26.03.1-RELEASE", REPOC_PLUS, check="")],
+        )
+        assert {"type": "publish_new", "family": "26.07", "branch": "26.07", "from": "26.03"} in actions

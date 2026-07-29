@@ -549,3 +549,11 @@ class TestReconcileMatrixSource:
         assert "needs: read-matrix" not in reconcile
         resolve = reconcile.split("- name: Resolve the route matrix", 1)[1].split("\n      - name:", 1)[0]
         assert "continue-on-error: true" in resolve
+
+    def test_reconcile_uploads_the_facts_tree(self) -> None:
+        # issue #1848: an intermittent boot failure is undiagnosable once the
+        # runner is gone — the facts must outlive it.
+        source = WORKFLOW.read_text(encoding="utf-8")
+        reconcile = source.split("\n  reconcile:\n", 1)[1]
+        assert "actions/upload-artifact" in reconcile
+        assert "facts" in reconcile.split("actions/upload-artifact", 1)[1][:400]

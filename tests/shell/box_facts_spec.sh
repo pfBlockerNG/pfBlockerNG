@@ -52,7 +52,10 @@ case "$_cmd" in
     printf '26.07\t\tBeta Version (26.07)\n'
     printf '26_03_1 (release) (default)\t\tCurrent Stable Version (26.03.1)\n'
     ;;
-  */etc/version*) printf '26.03.1-RELEASE\n' ;;
+  */etc/version*)
+    [ "${FAIL_VERSION:-0}" = "1" ] && exit 1
+    printf '26.03.1-RELEASE\n'
+    ;;
   *pfSense-upgrade*)
     # LOCKED_UNTIL=N: the first N attempts hit pfSense's lock refusal (issue
     # #1844) — the gatherer must retry, not record the refusal.
@@ -73,6 +76,7 @@ case "$_cmd" in
         *) exit 124 ;;
       esac
     fi
+    [ "${FAIL_UPGRADE:-0}" = "1" ] && exit 1
     printf 'Your system is up to date\n'
     ;;
 esac
@@ -156,11 +160,38 @@ BEOF
     The contents of file "${OUT}/status" should equal 'unavailable'
   End
 
-  It 'reports unavailable when a guest fact command fails'
+  # issue #1848: the -c check is the planner's OPTIONAL second source. Losing
+  # it must not discard the branch list — the fact the whole reconcile turns on.
+  It 'keeps the boot usable when only the optional upgrade check fails'
+    export FAIL_UPGRADE=1
+    When call facts ce
+    The status should be success
+    The stderr should include 'upgrade-check'
+    The contents of file "${OUT}/status" should equal 'ok'
+    The contents of file "${OUT}/repoc.txt" should include 'Beta Version (26.07)'
+  End
+
+  It 'names the failing fact in the log'
     export FAIL_REPOC=1
     When call facts ce
     The status should be success
-    The stderr should include 'guest commands failed'
+    The stderr should include 'repoc'
+    The contents of file "${OUT}/status" should equal 'unavailable'
+  End
+
+  It 'still fails the boot when the version fact is lost'
+    export FAIL_VERSION=1
+    When call facts ce
+    The status should be success
+    The stderr should include 'etc-version'
+    The contents of file "${OUT}/status" should equal 'unavailable'
+  End
+
+  It 'reports unavailable when a REQUIRED guest fact command fails'
+    export FAIL_REPOC=1
+    When call facts ce
+    The status should be success
+    The stderr should include 'required facts incomplete'
     The contents of file "${OUT}/status" should equal 'unavailable'
   End
 
@@ -174,13 +205,15 @@ BEOF
     The contents of file "${OUT}/upgrade-check.txt" should not include 'Another instance'
   End
 
-  It 'reports unavailable when the upgrade check times out on the guest'
-    # CodeRabbit CR2: `|| true` must not swallow timeout(1)'s exit 124 — an
-    # empty second-source fact must never count as a clean "up to date"
+  It 'records a timed-out upgrade check as absent, never as up to date'
+    # CR2: timeout(1)'s 124 must never be swallowed into a clean-looking fact.
+    # issue #1848: it is the OPTIONAL source, so the boot stays usable — the
+    # file is left EMPTY, which the planner reads as "no signal".
     export TIMEOUT_UPGRADE=1
     When call facts ce
     The status should be success
-    The stderr should include 'guest commands failed'
-    The contents of file "${OUT}/status" should equal 'unavailable'
+    The stderr should include 'optional'
+    The contents of file "${OUT}/status" should equal 'ok'
+    The contents of file "${OUT}/upgrade-check.txt" should equal ''
   End
 End
