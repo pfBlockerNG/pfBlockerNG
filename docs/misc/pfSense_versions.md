@@ -47,6 +47,20 @@ Observed on a CE **2.8.1** box; 2.8.0 shares the same base toolchain.
 > is tolerated-ignored, never resurrected as a default). The BUILD matrix
 > (`read-version-matrix.sh --print-build`) dedupes to one row per distinct
 > `freebsd_major` and gains `extra_pkgs` — see below.
+>
+> **`status` decides whether a row may VETO A RELEASE (issue #1855).** The enum is
+> `beta | active | GA` (`GA` = legacy alias for `active`). A row gates a release
+> **iff its status is a released pfSense version** — `active` or `GA`. Every other
+> value is non-blocking: `beta` today, anything added later (rc, dev, eol, …), and
+> an absent or unrecognized status alike. A non-blocking leg **still runs and still
+> reports** in the release run; it simply cannot fail it, and each demotion emits a
+> loud `::warning::` naming the row and its status so coverage cannot erode
+> silently. The predicate lives in exactly one place —
+> `scripts/resolve-legs.sh` (`RELEASE_GATE_INPUT=true`, set only by `release.yml`
+> via the suites' `release_gate` input) — so PR-gate and nightly runs are
+> unaffected: there, every `ci:true` row still vetoes. Prompted by v4.0.0.alpha.24,
+> which Plus 26.07 (`status: beta`, auto-activated to `ci: true` by the reconcile
+> automation) vetoed over a real 26.07-only defect (#1856).
 
 ### pfBlockerNG runtime dependencies (port `RUN_DEPENDS`)
 
