@@ -3,89 +3,38 @@
 // src/usr/local/www/pfblockerng/vendor/codemirror/cm-regex.min.js. Keep this file tiny --
 // test/cm-regex-source.test.js and tests/php/DnsblRegexHighlightWiringTest.php pin the
 // real call sites (textarea sync, DOM wiring, aria-label) this file exercises.
-import { EditorState } from "@codemirror/state";
-import { EditorView, keymap, drawSelection, lineNumbers } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
-import { pfbRegexList } from "./lezer-pfb-regex-list/src/index.js";
-import { pfbHighlightStyle } from "./pfb-highlight-style.js";
+import { pfbRegexList, pfbPlainList } from "./lezer-pfb-regex-list/src/index.js";
 import { serverLint, lezerErrorLint } from "./cm-lint.js";
+import { mountTextarea } from "./cm-shell.js";
 
 // Server-side validation (pfb_text_area_decode(), preg_match/re.compile) stays
 // authoritative -- this is a highlighter, not a validator.
 
-// Derives an accessible name for the replacement editor from the textarea it's replacing --
-// its own aria-label, else the text of a <label> associated via `for`/wrapping (the DOM
-// gives us that for free through HTMLInputElement-alike `.labels`), else a generic fallback.
-// The textarea itself is display:none below, which drops it (and any aria-label it carried)
-// from the accessibility tree entirely, so the replacement view needs its own name.
-function accessibleNameFor(textarea) {
-  const own = textarea.getAttribute("aria-label");
-  if (own && own.trim()) return own.trim();
-  const label = textarea.labels && textarea.labels[0];
-  if (label && label.textContent && label.textContent.trim()) return label.textContent.trim();
-  return "Code editor";
-}
-
 export function fromTextarea(textarea, opts) {
-  const rows = parseInt(textarea.getAttribute("rows"), 10);
-  const height = Number.isFinite(rows) && rows > 0 ? `${rows * 1.4}em` : "20em";
-  const ariaLabel = accessibleNameFor(textarea);
-
-  const extensions = [
-    history(),
-    drawSelection(),
-    // issue #1869: the lint gutter alone rendered an empty strip down the left edge, so
-    // the save-time validator's "line N: ..." diagnostics and the gutter markers had no
-    // number to point at and the admin counted rows by hand. Listed BEFORE the lint
-    // extensions so the numbers sit leftmost and the lint marker keeps its own column
-    // beside them.
-    lineNumbers(),
-    keymap.of([...defaultKeymap, ...historyKeymap]),
-    syntaxHighlighting(defaultHighlightStyle),
-    syntaxHighlighting(pfbHighlightStyle),
-    pfbRegexList(),
-    EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
-    EditorView.theme({
-      "&": { border: "1px solid #b7b7b7", backgroundColor: "#fff" },
-      ".cm-scroller": { fontFamily: "monospace", overflow: "auto" },
-      ".cm-content": { whiteSpace: "pre" },
-    }),
-    EditorView.updateListener.of((update) => {
-      if (update.docChanged) {
-        textarea.value = update.state.doc.toString();
-      }
-    }),
-  ];
-
+  const extraExtensions = [];
   // issue #1732 step 2: advisory server lint (POST pfblockerng_lint.php) + the offline
   // Lezer bracket lint, both opt-in via opts.lintUrl -- no opts means no lintUrl means
   // byte-identical behaviour to before this slice.
   if (opts && opts.lintUrl) {
-    extensions.push(...serverLint(opts.lintUrl, "regex", opts.lintExtraParams), lezerErrorLint());
+    extraExtensions.push(...serverLint(opts.lintUrl, "regex", opts.lintExtraParams), lezerErrorLint());
   }
+  return mountTextarea(textarea, pfbRegexList(), extraExtensions);
+}
 
-  const view = new EditorView({
-    state: EditorState.create({
-      doc: textarea.value,
-      extensions,
-    }),
-  });
+// issue #1875 -- plain "one entry per line, optional # comment" list fields (no regex
+// overlay, no lint wiring).
+export function fromTextareaList(textarea) {
+  return mountTextarea(textarea, pfbPlainList(), []);
+}
 
-  view.dom.style.height = height;
-  textarea.insertAdjacentElement("beforebegin", view.dom);
-  // The textarea stays in the form (its name/value are the POST source) but is hidden --
-  // updateListener above keeps its value synced on every doc change, so any submit path
-  // (including a plain HTML form submit with JS otherwise disabled) still sees the
-  // CURRENT editor content, not just the value as of page load.
-  textarea.style.display = "none";
-
-  // Clicking the <label> that used to focus the (now-hidden) textarea should focus the
-  // replacement view instead, same as a native label->control association would.
-  const label = textarea.labels && textarea.labels[0];
-  if (label) {
-    label.addEventListener("click", () => view.focus());
+// issue #1875 -- one call per page mounts every plain-list field; missing ids skipped so
+// pages share one helper.
+export function mountLists(ids) {
+  const views = [];
+  for (const id of ids) {
+    const textarea = document.getElementById(id);
+    if (!textarea) continue;
+    views.push(fromTextareaList(textarea));
   }
-
-  return view;
+  return views;
 }

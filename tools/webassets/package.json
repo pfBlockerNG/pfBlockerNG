@@ -6,7 +6,7 @@
     "build": "sh ../../scripts/build-webassets.sh",
     "test:grammar": "npm --prefix lezer-regexp test",
     "test:listgrammar": "npm --prefix lezer-pfb-regex-list test",
-    "test:bundle": "node --test test/cm-lint.test.js test/cm-regex-source.test.js test/cm-hooks-source.test.js"
+    "test:bundle": "node --test test/cm-lint.test.js test/cm-regex-source.test.js test/cm-hooks-source.test.js test/cm-shell-source.test.js test/plain-list-language.test.js"
   },
   "devDependencies": {
     "@codemirror/commands": "6.10.4",
