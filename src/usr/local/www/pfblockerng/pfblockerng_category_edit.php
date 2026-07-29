@@ -1800,6 +1800,17 @@ else if (gtype == 'dnsbl') {
 	var pagetype = 'dnsbl';
 }
 
+// issue #1875 step 2b: plain-list field shares the regex page's CM6 bundle; mountLists
+// skips absent ids. Own events.push, OUTSIDE the no-sort conditional below -- the
+// 'custom' textarea renders in every sort mode and for new groups (no rowid).
+events.push(function() {
+<?php if ($pfb_syntaxhl_on): ?>
+	if (window.pfbCM) {
+		window.pfbCM.mountLists(['custom']);
+	}
+<?php endif; ?>
+});
+
 <?php if (($rowdata[$rowid]['sort'] ?? '') == 'no-sort') { ?>
 // ADR-63: staged reorder via shared component; renumber() keeps field names positional
 var pfb_drag_enabled = <?=config_path_enabled('system/webgui', 'roworderdragging') ? 'false' : 'true';?>;
@@ -1832,13 +1843,6 @@ events.push(function() {
 		pfb_gutter_bind_delete();
 	});
 	pfb_gutter_bind_delete();
-
-<?php if ($pfb_syntaxhl_on): ?>
-	// issue #1875 step 2b: plain-list field shares the regex page's CM6 bundle; mountLists skips absent ids
-	if (window.pfbCM) {
-		window.pfbCM.mountLists(['custom']);
-	}
-<?php endif; ?>
 });
 <?php } ?>
 
