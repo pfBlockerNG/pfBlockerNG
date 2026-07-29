@@ -209,8 +209,14 @@ jobs:
         #
         #   published Release        -> REFUSE. Immutable; retagging cannot rescue it.
         #                               Cut the next .N.
-        #   draft WITH assets        -> REFUSE. That is a finished cut waiting for its
-        #                               notes; publish it instead of throwing it away.
+        #   draft WITH assets        -> REFUSE. `release` attaches the source archive
+        #                               BEFORE attach-pkgs adds the .pkgs, so assets do
+        #                               NOT prove a finished cut — a crash in between
+        #                               leaves a draft with an archive and no .pkg at
+        #                               all. Since retag cannot tell those apart it
+        #                               never deletes them, and the refusal offers both
+        #                               routes: re-dispatch with retag=false to finish
+        #                               that draft, or delete it by hand to start over.
         #   draft WITHOUT assets     -> delete the draft AND the tag. Deleting only the
         #                               tag would orphan the draft and this run would
         #                               then create a SECOND draft for the same tag.
@@ -248,7 +254,7 @@ jobs:
               echo "::error::retag refused: ${TAG} already has a PUBLISHED Release. A published release is immutable, so retagging cannot rescue it — cut the next .N instead."
               exit 1 ;;
             draft-with-assets)
-              echo "::error::retag refused: ${TAG} has a DRAFT Release with assets already attached. That draft is a finished cut waiting for its notes — author them and publish it rather than retagging. To start over anyway, delete that draft by hand first."
+              echo "::error::retag refused: ${TAG} has a DRAFT Release with assets already attached, and retag cannot tell a finished cut from the debris of a run that died mid-attach — so it never deletes them. To FINISH that draft, re-dispatch the same tag with retag=false (this run reuses the tag and updates the draft in place; it needs the channel branch to still be at the tagged commit). To START OVER on the current tip, delete that draft by hand first, then re-dispatch with retag=true."
               exit 1 ;;
           esac
 

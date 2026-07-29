@@ -133,8 +133,10 @@ devel" guard, applied before the tag exists.
    want a clean cut on the current tip. It deletes the existing tag (and an **assetless**
    draft Release for it) before pinning. It **refuses** when the tag has a **published**
    Release — that is immutable, and the only way forward is the next `.N` — and when its
-   draft **already has assets**, where the right move is to finish that draft (write the
-   notes, publish) rather than throw it away. Leave it `false` for a normal cut.
+   draft **already has assets**: assets do not prove a finished cut (the source archive is
+   attached before the `.pkg`s), so it never deletes them. Finish that draft by
+   re-dispatching the same tag with `retag=false`, or delete it by hand to start over.
+   Leave it `false` for a normal cut.
 
    The workflow pins the channel-branch tip, tags **that** commit after verification, and
    the `pre-push` hook re-validates the tag as it pushes. On `--dry-run`, the
