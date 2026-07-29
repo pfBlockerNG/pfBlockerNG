@@ -871,6 +871,10 @@ def test_release_side_artifact_name_matches_both_consumer_sides(tmp_path: Path) 
     rows = _cross_contract_rows()
     if rows is None:
         pytest.skip("ci-metadata matrix not available in this environment -- skipping real-matrix rows")
+        # Editors that know pytest.skip() is NoReturn flag this `return` as unreachable.
+        # It is not removable: mypy does NOT narrow through the skip, so without it `rows`
+        # stays `list[...] | None` at the loop below and `mypy tests/` fails with
+        # union-attr. Keep it until the gate's analyser learns the NoReturn.
         return
 
     failures: list[str] = []
