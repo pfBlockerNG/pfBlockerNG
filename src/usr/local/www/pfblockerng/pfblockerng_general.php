@@ -349,17 +349,19 @@ $section->addInput(new Form_Textarea(
 		. 'Leave empty to block all feeds that resolve to an internal/private address.'
 );
 
-// issue #1669 slice C: client-side syntax highlighting for regex list fields.
+// issue #1669 slice C: the client-side editor for the list and script fields. Label and
+// help cover the whole editor (issue #1888) -- the config key stays pfb_syntax_highlight.
 $section->addInput(new Form_Checkbox(
 	'pfb_syntax_highlight',
-	'Syntax Highlighting',
+	'Advanced Text Editor',
 	gettext('Enable'),
 	pfb_cfg_lenient_read($pconfig['pfb_syntax_highlight']) === PfbLenient::On,
 	'on'
-))->setHelp('Client-side syntax highlighting for regex list fields (e.g. the DNSBL '
-		. 'Regex List). Unchecking this disables it and skips loading the editor assets '
-		. '&mdash; useful for low-end client machines. Validation always stays '
-		. 'server-side either way.'
+))->setHelp('Client-side editor for the list and script fields (e.g. the DNSBL Regex '
+		. 'List, custom lists, IP suppression lists, hook scripts): syntax highlighting, '
+		. 'line numbers, inline linting and undo/redo. Unchecking this leaves those '
+		. 'fields as plain text boxes and skips loading the editor assets &mdash; useful '
+		. 'for low-end client machines. Validation always stays server-side either way.'
 );
 
 $group = new Form_Group('CRON Settings');
