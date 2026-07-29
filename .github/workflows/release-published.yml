@@ -37,10 +37,10 @@ jobs:
   resolve:
     name: Resolve the published tag
     runs-on: ubuntu-latest
-    outputs:
-      tag:         ${{ steps.classify.outputs.tag }}
-      branch:      ${{ steps.classify.outputs.branch }}
-      portversion: ${{ steps.classify.outputs.portversion }}
+    # No job-level `outputs:`. This job published tag/branch/portversion for the ports
+    # bump; that bump moved into the release run and took every consumer with it, and an
+    # output nobody reads reads as a live contract. What survives is the GATE: an
+    # off-scheme published tag fails here, and `repo-publish` hangs off it via `needs:`.
     steps:
       - uses: actions/checkout@v6
         with:

@@ -129,6 +129,23 @@ def _needs(job_lines: list[str]) -> set[str]:
     return {token.strip().strip("\"'") for token in value.split(",") if token.strip()}
 
 
+def _job_outputs(job_lines: list[str]) -> list[str]:
+    """The job's declared `outputs:` keys."""
+    names: list[str] = []
+    inside = False
+    for line in job_lines:
+        if line.startswith("    outputs:"):
+            inside = True
+            continue
+        if inside:
+            if _JOB_KEY_RE.match(line):
+                break
+            match = re.match(r"^      ([A-Za-z_][A-Za-z0-9_-]*):", line)
+            if match is not None:
+                names.append(match.group(1))
+    return names
+
+
 def _job_contents_scope(job_lines: list[str]) -> str:
     """The job's own `contents:` permission scope ('' when it declares none)."""
     line = next((ln for ln in job_lines if ln.strip().split("#", 1)[0].strip().startswith("contents:")), None)
@@ -400,6 +417,22 @@ def test_the_published_workflow_carries_only_the_pkg_repo_dispatch() -> None:
     jobs = _jobs(PUBLISHED_WORKFLOW)
     assert "repo-publish" in jobs, sorted(jobs)
     assert "sync-ports-fork" not in jobs, sorted(jobs)
+
+
+def test_the_published_workflow_declares_no_output_nobody_reads() -> None:
+    """`resolve` published `tag`/`branch`/`portversion` for the ports bump. The bump moved
+    into the release run and took every consumer with it, leaving three outputs that read
+    as a live contract while nothing reads them -- the next person to touch this file has
+    to prove them dead all over again. The job stays exactly what it is now: the
+    off-scheme hard-error gate that `repo-publish` hangs off via `needs:`."""
+    text = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
+    unconsumed = sorted(
+        f"{job}.{out}"
+        for job, lines in _jobs(PUBLISHED_WORKFLOW).items()
+        for out in _job_outputs(lines)
+        if f"needs.{job}.outputs.{out}" not in text
+    )
+    assert not unconsumed, f"job output(s) nobody consumes: {unconsumed}"
 
 
 def test_the_bump_before_publish_ordering_is_recorded_where_it_used_to_be_enforced() -> None:
