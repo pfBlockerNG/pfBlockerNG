@@ -1047,7 +1047,15 @@ jobs:
     needs: [prepare-release, release, attach-pkgs, read-matrix]
     if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.release.outputs.dry_run == 'false'
     permissions:
-      contents: read
+      # write for VISIBILITY, not to mutate: this job only READS the draft, but a DRAFT
+      # Release is invisible to a `contents: read` GITHUB_TOKEN. PROBED 2026-07-29 (run
+      # 30442759084, two jobs differing only in this scope): `GET /releases/tags/<tag>`
+      # 404s on a draft under BOTH scopes, so `gh release view` falls back to LISTING
+      # releases -- and that listing returns drafts only to a token with push access.
+      # Under `contents: read` the call printed "release not found" and exited 1 (0
+      # drafts listed); under `contents: write` it returned `{"isDraft":true,...}`.
+      # Read-scoped, this job would fail EVERY real cut and skip the ports bump.
+      contents: write
     steps:
       - name: Health-check the draft release is complete
         # Expected assets: the source archive + exactly one .pkg per build-matrix entry
