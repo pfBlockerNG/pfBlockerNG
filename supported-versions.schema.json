@@ -3,7 +3,9 @@
   "title": "pfBlockerNG supported-versions matrix",
   "description": "Each entry describes one supported pfSense version and its build environment (FreeBSD ABI + PHP runtime). Workflows read this at runtime to drive .pkg builds and CI.",
   "type": "object",
-  "required": ["versions"],
+  "required": [
+    "versions"
+  ],
   "properties": {
     "versions": {
       "type": "array",
@@ -26,7 +28,10 @@
           },
           "channel": {
             "type": "string",
-            "enum": ["CE", "Plus"],
+            "enum": [
+              "CE",
+              "Plus"
+            ],
             "description": "CE = Community Edition; Plus = pfSense Plus (runs in CI from a private licensed image when ci=true + image_name=pfsense-plus)."
           },
           "freebsd_version": {
@@ -47,12 +52,19 @@
           },
           "status": {
             "type": "string",
-            "enum": ["beta", "active", "GA"],
-            "description": "beta = pre-release; active = GA and currently supported; GA = generally available (legacy alias for active). Set to beta when first added; update to active on GA release."
+            "enum": [
+              "beta",
+              "active",
+              "GA"
+            ],
+            "description": "Release state of this pfSense version, and the RELEASE-VETO key (pfBlockerNG issue #1855). beta = pre-release; active = GA and currently supported; GA = generally available (legacy alias for active). Set to beta when first added; update to active on GA release. A matrix row may VETO a pfBlockerNG release ONLY when this is a released pfSense version -- 'active', or its legacy alias 'GA'. Every other value (beta today; anything added later such as rc/dev/eol) and an absent or unrecognized status is NON-BLOCKING: the leg still runs and still reports in the release run, and emits a loud demotion warning naming the row and its status, but it cannot fail the release. The predicate lives in scripts/resolve-legs.sh and is switched on only by release.yml (the suites' release_gate input) -- PR-gate and nightly runs are unaffected: there every ci:true row still vetoes."
           },
           "variant": {
             "type": "string",
-            "enum": ["CE", "Plus"],
+            "enum": [
+              "CE",
+              "Plus"
+            ],
             "description": "Variant alias for channel. CE = Community Edition; Plus = pfSense Plus. Must match the channel field."
           },
           "ci": {
@@ -65,13 +77,18 @@
           },
           "extra_pkgs": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "default": [],
             "description": "Port origins (e.g. 'textproc/py-charset-normalizer') this entry's edition needs that its OWN upstream pkg repo does not carry (issue #1806 — e.g. Netgate builds some py3xx-* ports for Plus only). scripts/build-dep-pkg-portable.py builds each as a NO_ARCH .pkg straight from the FreeBSD-ports port definition; build-repo-portable.py --dep-pkgs folds the result into the release/nightly catalogs of every entry sharing this freebsd_major. Omit or [] when the edition's own repo already carries everything; entries sharing a freebsd_major union their extra_pkgs in the BUILD matrix."
           },
           "role": {
             "type": "string",
-            "enum": ["build", "route-only"],
+            "enum": [
+              "build",
+              "route-only"
+            ],
             "default": "build",
             "description": "Distribution role (ADR-27 Part 2). 'build' (default; omit for today's behaviour) = built + smoked + served. 'route-only' = an EOL pfSense version that is NO LONGER built or smoked, but whose last .pkg is still served from a frozen catalog so installs in the field keep updating. A route-only entry MUST set ci=false and provide last_tag; the reader excludes it from --print-build/--print-ci/--print-test and includes it only in --print-route. An unknown role fails the reader closed."
           },
@@ -82,7 +99,9 @@
           "upgrade": {
             "type": "object",
             "description": "Image-refresh control for image-refresh.yml (Upgrade pfSense smoke images). Absent or available=false => this variant's published GHCR image is left untouched (the common case). 'available' is a transient 'a newer public build exists than what we publish' signal — NOT 'this version is released'.",
-            "required": ["available"],
+            "required": [
+              "available"
+            ],
             "additionalProperties": false,
             "properties": {
               "available": {
