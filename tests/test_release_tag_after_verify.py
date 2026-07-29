@@ -529,3 +529,176 @@ def test_tag_step_refuses_a_stale_tag_pointing_at_other_code(tmp_path: Path) -> 
     assert result.returncode != 0, result.stdout + result.stderr
     assert "::error::" in (result.stdout + result.stderr)
     assert _git(repo, "rev-list", "-n", "1", "refs/tags/v9.9.9.rc.1") == older, "the stale tag must not be moved"
+
+
+# --------------------------------------------------------------------------- #
+# `retag`: the operator states the intent, the workflow never guesses it
+#
+# The pin is the channel-branch tip. If the branch moved after a run pushed its
+# tag, re-dispatching the same tag pins a NEW commit and then rejects its own
+# already-pushed tag as stale -- unrecoverable without deleting the tag by hand.
+# `retag=true` says "start clean on the current tip", and the workflow only obeys
+# when that is provably safe.
+# --------------------------------------------------------------------------- #
+
+
+def test_retag_input_is_declared_boolean_and_defaults_off() -> None:
+    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    dispatch = text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    assert "retag:" in dispatch, "release.yml must offer a retag dispatch input"
+    block = dispatch.split("      retag:\n", 1)[1].split("\n\n", 1)[0]
+    assert re.search(r"^\s+type:\s*boolean\s*$", block, re.MULTILINE), block
+    assert re.search(r"^\s+default:\s*false\s*$", block, re.MULTILINE), block
+
+
+def test_the_retag_step_is_opt_in_and_runs_before_the_pin() -> None:
+    """Workflow-text assertion (a step's own `if:` cannot be executed): the deletion
+    is reachable ONLY with retag=true, and it happens before the SHA is pinned so the
+    re-cut lands on the freshly pinned commit."""
+    steps = _steps(_jobs()["prepare-release"])
+    names = ["\n".join(s) for s in steps]
+    retag_idx = next(i for i, s in enumerate(names) if "Delete the existing tag" in s)
+    pin_idx = next(i for i, s in enumerate(names) if "id: pin" in s)
+    assert retag_idx < pin_idx, "the retag deletion must run BEFORE the SHA is pinned"
+    if_line = next(line for line in steps[retag_idx] if line.strip().startswith("if:"))
+    assert "github.event.inputs.retag == 'true'" in if_line, if_line
+
+
+def test_only_the_pin_job_may_delete_and_it_says_why() -> None:
+    """Workflow-text assertion: this is the one place the pipeline REMOVES something
+    from GitHub. GitHub scopes permissions per job, not per step, so the write scope
+    must be justified in place rather than silently widened."""
+    body = "\n".join(_jobs()["prepare-release"])
+    assert "contents: write" in body, body
+    assert "retag" in body.split("contents: write", 1)[1][:300], (
+        "the write scope must name the retag deletion as its reason"
+    )
+    deleting_jobs = {name for name, lines in _jobs().items() if "gh release delete" in "\n".join(lines)}
+    assert deleting_jobs == {"prepare-release"}, f"only prepare-release may delete: {deleting_jobs}"
+
+
+def _run_retag_step(
+    tmp_path: Path,
+    tag: str,
+    release_json: str | None,
+    dry_run: str = "false",
+    make_tag: bool = True,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Execute the REAL retag step body against a throwaway repo and a `gh` stub.
+
+    `release_json` is what `gh release view` returns (None = no release at all, i.e.
+    gh exits non-zero). Returns the completed process plus every gh invocation.
+    """
+    repo = tmp_path / "work"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "devel")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    (repo / "a.txt").write_text("one\n")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "-qm", "one")
+    if make_tag:
+        _git(repo, "tag", "-a", tag, "-m", tag)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh_log = tmp_path / "gh.log"
+    meta = tmp_path / "meta.json"
+    meta.write_text(release_json or "")
+    (bin_dir / "gh").write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{gh_log}"\n'
+        'if [ "$1 $2" = "release view" ]; then\n'
+        f'  [ -s "{meta}" ] || exit 1\n'
+        f'  cat "{meta}"\n'
+        "fi\n"
+        "exit 0\n"
+    )
+    (bin_dir / "gh").chmod(0o755)
+
+    script = _step_run_script(_step(_jobs()["prepare-release"], "Delete the existing tag"))
+    completed = subprocess.run(  # noqa: S603
+        ["sh", "-c", script],
+        cwd=repo,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "HOME": str(repo),
+            "TAG": tag,
+            "REPO": "owner/repo",
+            "DRY_RUN": dry_run,
+            "GH_TOKEN": "stub",
+        },
+        capture_output=True,
+        text=True,
+    )
+    calls = gh_log.read_text().splitlines() if gh_log.exists() else []
+    return completed, calls
+
+
+def _tag_still_there(tmp_path: Path, tag: str) -> bool:
+    return (
+        subprocess.run(  # noqa: S603
+            ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
+            cwd=tmp_path / "work",
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+
+def test_retag_refuses_a_published_release(tmp_path: Path) -> None:
+    """Given the tag already carries a PUBLISHED Release, when retag runs, then it
+    refuses: a published release is immutable, so retagging cannot rescue it and the
+    only way forward is the next .N."""
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", '{"isDraft":false,"assets":[]}')
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+    assert "::error::" in completed.stdout + completed.stderr
+    assert "PUBLISHED" in completed.stdout + completed.stderr
+    assert not [c for c in calls if "delete" in c or "DELETE" in c], calls
+    assert _tag_still_there(tmp_path, "v9.9.9.rc.1")
+
+
+def test_retag_refuses_a_draft_that_already_has_assets(tmp_path: Path) -> None:
+    """Given a DRAFT with assets attached, when retag runs, then it refuses: that draft
+    is a finished cut waiting for its notes, so the right move is to publish it."""
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", '{"isDraft":true,"assets":[{"name":"x.pkg"}]}')
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+    assert "::error::" in completed.stdout + completed.stderr
+    assert not [c for c in calls if "delete" in c or "DELETE" in c], calls
+    assert _tag_still_there(tmp_path, "v9.9.9.rc.1")
+
+
+def test_retag_deletes_an_assetless_draft_together_with_the_tag(tmp_path: Path) -> None:
+    """An assetless draft is the debris of a crashed run. Leaving it while deleting its
+    tag would orphan it and produce two drafts for the same tag, so both go."""
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", '{"isDraft":true,"assets":[]}')
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert any(c.startswith("release delete v9.9.9.rc.1") for c in calls), calls
+    assert any("git/refs/tags/v9.9.9.rc.1" in c for c in calls), calls
+    assert not _tag_still_there(tmp_path, "v9.9.9.rc.1"), "the local ref must go too, or the pin re-finds it"
+
+
+def test_retag_with_no_release_deletes_only_the_tag(tmp_path: Path) -> None:
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", None)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not [c for c in calls if c.startswith("release delete")], calls
+    assert any("git/refs/tags/v9.9.9.rc.1" in c for c in calls), calls
+    assert not _tag_still_there(tmp_path, "v9.9.9.rc.1")
+
+
+def test_retag_is_a_silent_no_op_when_no_tag_exists(tmp_path: Path) -> None:
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", None, make_tag=False)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not [c for c in calls if "delete" in c or "DELETE" in c], calls
+
+
+@pytest.mark.parametrize("release_json", [None, '{"isDraft":true,"assets":[]}'])
+def test_a_dry_run_never_deletes_anything(tmp_path: Path, release_json: str | None) -> None:
+    """Defence in depth: the job is real-publish only, so this step cannot run in a dry
+    run at all -- but if that gate is ever relaxed, the step still refuses to delete and
+    only reports what it would have removed."""
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", release_json, dry_run="true")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not [c for c in calls if "delete" in c or "DELETE" in c], calls
+    assert _tag_still_there(tmp_path, "v9.9.9.rc.1")
+    assert "would delete" in completed.stdout.lower(), completed.stdout

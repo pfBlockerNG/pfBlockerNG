@@ -128,6 +128,14 @@ devel" guard, applied before the tag exists.
    Add `-f force_suites=true` to run the live smoke/UI suites for an `alpha`/`beta` tag
    (they always run for `rc`/stable).
 
+   Add `-f retag=true` to **re-cut a tag that is already pushed** — the recovery for a run
+   that crashed after pushing its tag while the channel branch moved on, or simply when you
+   want a clean cut on the current tip. It deletes the existing tag (and an **assetless**
+   draft Release for it) before pinning. It **refuses** when the tag has a **published**
+   Release — that is immutable, and the only way forward is the next `.N` — and when its
+   draft **already has assets**, where the right move is to finish that draft (write the
+   notes, publish) rather than throw it away. Leave it `false` for a normal cut.
+
    The workflow pins the channel-branch tip, tags **that** commit after verification, and
    the `pre-push` hook re-validates the tag as it pushes. On `--dry-run`, the
    same dispatch with `dry_run=false` → `dry_run=true` (publishes nothing). Dispatch is
