@@ -1110,6 +1110,34 @@ def _load_ini_config() -> ConfigParser | None:
     return config
 
 
+def pfb_split_regex_line(line: str) -> tuple[str, str | None]:
+    """Split a regex-list line into (pattern, description) at the first UNESCAPED '#'.
+
+    issue #1867: a '#' preceded by an ODD number of backslashes is escaped and
+    belongs to the pattern; an EVEN run (including none) leaves it as the
+    description marker. The escaped form is returned verbatim -- Python's ``re``
+    already reads "\\#" as a literal '#', so no unescaping step is needed and the
+    pattern half reaches ``re.compile`` unchanged.
+
+    Returns ``(line, None)`` when the line carries no description marker at all;
+    the caller distinguishes that from an empty description ("pattern#").
+
+    The PHP twin is ``pfb_split_regex_line()`` in pfblockerng_extra.inc and the
+    editor twin is the ``Pattern``/``Comment`` token pair in
+    tools/webassets/lezer-pfb-regex-list/src/pfb-regex-list.grammar -- all three
+    implement this one rule and their tests reference each other.
+    """
+    backslashes = 0
+    for index, character in enumerate(line):
+        if character == "\\":
+            backslashes += 1
+            continue
+        if character == "#" and backslashes % 2 == 0:
+            return line[:index], line[index + 1 :]
+        backslashes = 0
+    return line, None
+
+
 def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
     """Load normalized user regex rows from MAIN.regex_list."""
     if config.has_option("MAIN", "regex_list"):
@@ -1128,12 +1156,12 @@ def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
             if not line or line.startswith("#"):
                 continue
             row_number += 1
-            pattern, separator, description = line.partition("#")
+            pattern, description = pfb_split_regex_line(line)
             pattern = pattern.rstrip().encode("utf-8").lower().decode("utf-8")
             if not pattern:
                 continue
-            if separator:
-                description = description.partition("#")[0]
+            if description is not None:
+                description = pfb_split_regex_line(description)[0]
                 name = re.sub(r"\W", "", description.strip().replace(" ", "_"), flags=re.ASCII)
             else:
                 name = "Regex_{}".format(row_number)

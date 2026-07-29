@@ -80,10 +80,42 @@ RegexList
 
 RegexList(Pattern)
 
-# escaped-hash-still-splits-mid-pattern
+# escaped-hash-stays-in-the-pattern
 
 a\#b
 
 ==>
 
+RegexList(Pattern)
+
+# escaped-hash-then-a-real-marker-later-on-the-line
+
+a\#b#desc
+
+==>
+
 RegexList(Pattern,Comment)
+
+# escaped-backslash-does-not-protect-the-hash-after-it
+
+a\\#desc
+
+==>
+
+RegexList(Pattern,Comment)
+
+# leading-escaped-hash-is-a-pattern-not-a-whole-line-comment
+
+\#foo
+
+==>
+
+RegexList(Pattern)
+
+# a-trailing-backslash-at-end-of-line-is-still-a-pattern
+
+a\
+
+==>
+
+RegexList(Pattern)

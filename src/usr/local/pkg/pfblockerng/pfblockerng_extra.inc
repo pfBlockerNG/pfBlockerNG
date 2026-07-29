@@ -2024,6 +2024,96 @@ function pfb_adv_alias_field_errors(array $post): array
 }
 
 /**
+ * The regex-description length the Regex List help text documents, and the
+ * width the Alerts tab column is sized for (issue #1868). Advisory: exceeded
+ * descriptions are flagged in the editor, never rejected at save.
+ */
+const PFB_REGEX_DESCRIPTION_MAX = 15;
+
+/**
+ * pfb_split_regex_line — split a regex-list line at the first UNESCAPED '#'.
+ *
+ * issue #1867: a '#' preceded by an ODD number of backslashes is escaped and
+ * belongs to the pattern; an EVEN run (none included) leaves it as the
+ * description marker. The escaped form needs no unescaping — Python's re reads
+ * "\#" as a literal '#' already — so the pattern half travels verbatim all the
+ * way to re.compile().
+ *
+ * Twins that must agree, each with its own tests: pfb_split_regex_line() in
+ * pfb_unbound.py (the resolver's load path), the split_line() helper inside this
+ * file's validator probe, and the Pattern/Comment token pair in
+ * tools/webassets/lezer-pfb-regex-list/src/pfb-regex-list.grammar (the editor).
+ *
+ * @return array{0: string, 1: ?string} [pattern, description]; description NULL
+ *     when the line carries no marker at all (distinct from an empty one).
+ */
+function pfb_split_regex_line(string $line): array
+{
+	$backslashes = 0;
+	$length = strlen($line);
+	for ($index = 0; $index < $length; $index++) {
+		$character = $line[$index];
+		if ($character === '\\') {
+			$backslashes++;
+			continue;
+		}
+		if ($character === '#' && $backslashes % 2 === 0) {
+			return [substr($line, 0, $index), substr($line, $index + 1)];
+		}
+		$backslashes = 0;
+	}
+	return [$line, NULL];
+}
+
+/**
+ * pfb_dnsbl_regex_description_warnings — advisory notes about over-long regex
+ * descriptions (issue #1868).
+ *
+ * The Regex List help text caps a description at 15 characters because the
+ * Alerts tab shows it, but the cap was never checked anywhere the admin could
+ * see it. This is deliberately NOT wired into
+ * pfb_dnsbl_regex_validation_errors(): a config that already carries a longer
+ * description must keep saving, so the note reaches the admin through the lint
+ * gutter instead and never blocks a save.
+ *
+ * @return array<int, array{line: int, message: string, severity: string}>
+ */
+function pfb_dnsbl_regex_description_warnings(string $contents): array
+{
+	$warnings = [];
+	$lines = preg_split('/\R/', $contents);
+	if ($lines === FALSE) {
+		return [];
+	}
+	foreach ($lines as $offset => $line) {
+		$trimmed = trim($line);
+		if ($trimmed === '' || str_starts_with($trimmed, '#')) {
+			continue;
+		}
+		[$pattern, $description] = pfb_split_regex_line($line);
+		if ($description === NULL || trim($pattern) === '') {
+			continue;
+		}
+		// A second '#' ends the description, matching what the resolver keeps
+		// as the Alerts name.
+		$description = trim(pfb_split_regex_line($description)[0]);
+		if ($description === '' || strlen($description) <= PFB_REGEX_DESCRIPTION_MAX) {
+			continue;
+		}
+		$warnings[] = [
+			'line' => $offset + 1,
+			'message' => sprintf(
+				'description is %d characters; keep it to %d or fewer — the Alerts tab shows it',
+				strlen($description),
+				PFB_REGEX_DESCRIPTION_MAX
+			),
+			'severity' => 'warning',
+		];
+	}
+	return $warnings;
+}
+
+/**
  * pfb_dnsbl_regex_validation_errors — validate the DNSBL regex form in one
  * bounded Python pass, preserving source line numbers and resolver semantics.
  *
@@ -2065,11 +2155,27 @@ def report(line_number, pattern, message):
 
 regex_cap = len(sys.argv) > 1 and sys.argv[1] == "1"
 
+
+def split_line(line):
+    # issue #1867 mirror of pfb_split_regex_line() (PHP) and pfb_unbound.py's
+    # twin: the description starts at the first '#' preceded by an EVEN number
+    # of backslashes, so an escaped "\#" stays in the pattern.
+    backslashes = 0
+    for index, character in enumerate(line):
+        if character == "\\":
+            backslashes += 1
+            continue
+        if character == "#" and backslashes % 2 == 0:
+            return line[:index]
+        backslashes = 0
+    return line
+
+
 for line_number, line in enumerate(sys.stdin, start=1):
     line = line.rstrip("\r\n")
     if not line.strip() or line.lstrip().startswith("#"):
         continue
-    pattern = line.split("#", 1)[0].strip().lower()
+    pattern = split_line(line).strip().lower()
     if not pattern:
         continue
     if any(ord(character) < 0x20 or ord(character) == 0x7f for character in pattern):
@@ -5202,8 +5308,14 @@ function pfb_lint_diagnostics(
 	$content = pfb_sanitize_text_area($content);
 	$timeout_bin ??= '/usr/bin/timeout';
 	return match ($lang) {
-		'regex' => pfb_lint_parse_regex_errors(
-			pfb_dnsbl_regex_validation_errors($content, $python ?? pfb_python_interpreter(), $cap, $timeout_bin)
+		// issue #1868: the advisory description-length notes ride the lint path
+		// only — pfb_dnsbl_regex_validation_errors() (what save consults) never
+		// sees them, so a long description warns without blocking a save.
+		'regex' => array_merge(
+			pfb_lint_parse_regex_errors(
+				pfb_dnsbl_regex_validation_errors($content, $python ?? pfb_python_interpreter(), $cap, $timeout_bin)
+			),
+			pfb_dnsbl_regex_description_warnings($content)
 		),
 		'sh' => pfb_lint_sh_diagnostics($content, $sh ?? '/bin/sh', $timeout_bin),
 		'py' => pfb_lint_py_diagnostics($content, $python ?? pfb_python_interpreter(), $timeout_bin),
