@@ -17,6 +17,12 @@
 #                 label = shard+1 for display). One S drives every channel —
 #                 Plus shards exactly like CE (issue #856 validated
 #                 same-identity parallel Plus boots).
+#                 Every entry is also stamped `release_blocking` ("true"/"false",
+#                 issue #1855): with RELEASE_GATE_INPUT=true only a row whose
+#                 ci-metadata `status` is a RELEASED pfSense version (active, or
+#                 its legacy alias GA) may veto a release; every other/absent
+#                 status is demoted with a loud ::warning:: naming the row.
+#                 Without RELEASE_GATE_INPUT every row stays blocking.
 #                 Prints the filtered legs JSON to stdout.
 #                 Writes scope= / ci_matrix= / leg_matrix= / pytest_filter= to
 #                 $GITHUB_OUTPUT. leg_matrix is the UNSHARDED per-leg set (one
@@ -109,6 +115,31 @@ _rl_legs() {
             '[ .[] | select(.channel == "CE") ] | sort_by(.pfsense_version | split(".") | map(tonumber)) | .[0:1]')"
         [ "$(printf '%s' "$FILTERED" | jq 'length')" -ne 0 ] \
             || { printf '::error::impacted scope found no CE leg in the CI matrix\n' >&2; exit 1; }
+    fi
+
+    # ── RELEASE-GATE status demotion (issue #1855) ────────────────────────── #
+    # A matrix row may VETO A RELEASE only when its ci-metadata `status` is a
+    # RELEASED pfSense version: "active", or its legacy alias "GA". Every other
+    # value is non-blocking — "beta" today, plus anything added later (rc, dev,
+    # eol, …) — as is an absent or unrecognized status. A demoted leg still runs
+    # and still reports; it simply cannot fail the release. Each demotion is
+    # announced loudly, naming the row and its status, so coverage cannot erode
+    # silently.
+    #
+    # This is the ONE place the predicate lives; the workflows only read the
+    # stamped `release_blocking` field. It is release-scoped: without
+    # RELEASE_GATE_INPUT=true every row stays blocking, so PR-gate and nightly
+    # runs veto exactly as before.
+    #
+    # Stamped BEFORE the shard expansion below, so every shard of a leg inherits
+    # its leg's verdict (and `leg_matrix` carries it too).
+    FILTERED="$(printf '%s\n' "$FILTERED" | jq -c --arg gate "${RELEASE_GATE_INPUT:-}" \
+        '[ .[] | . + {release_blocking:
+             (if $gate != "true" or .status == "active" or .status == "GA"
+              then "true" else "false" end)} ]')"
+    if [ "${RELEASE_GATE_INPUT:-}" = "true" ]; then
+        printf '%s\n' "$FILTERED" | jq -r '.[] | select(.release_blocking == "false")
+            | "::warning::release gate: \(.channel // "?") \(.pfsense_version) (status \(.status // "<absent>")) is not a released pfSense version — this leg still runs and still reports, but it cannot veto the release"' >&2
     fi
 
     # ── -k derivation ─────────────────────────────────────────────────────── #
