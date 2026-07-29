@@ -1,5 +1,6 @@
 """Tier-B browser tests (issue #1875 step 3): the CM6 plain-list editor shell actually
-MOUNTS on the 9 fields wired in commits 110104dd/57290491, and follows the textarea's
+MOUNTS on the 9 fields the #1875 rollout wired ("pfblockerng: mount the shared list
+editor on every plaintext list field"), and follows the textarea's
 disabled state. This is client-side-only progressive enhancement (``pfbCM.mountLists``
 replacing a ``Form_Textarea`` with a CodeMirror 6 view) -- a source-level grep can pin the
 ``mountLists([...])`` call sites, but only a real browser proves the JS actually ran: the
@@ -23,8 +24,8 @@ top of the ``COLLAPSIBLE|SEC_CLOSED`` panel-body collapse every field's section 
 carries; ``_gate`` and ``_expand`` drive those two independent layers.
 
 The category_edit "custom" field row deliberately uses ``ADVANCED_IP_EDITOR`` (no
-``rowid`` -- a brand-new, unsaved group): this is also the live proof for commit
-57290491's sort-mode-placement fix (the mount init used to sit inside the ADR-63 no-sort
+``rowid`` -- a brand-new, unsaved group): this is also the live proof for the #1875
+sort-mode-placement fix (the mount init used to sit inside the ADR-63 no-sort
 conditional, so a new group with no rows rendered no editor at all). A separate test
 reopening the identical URL to reassert the identical DOM would add nothing, so that one
 parametrized row IS the "new-group" coverage row the brief calls out -- no duplicate test.
