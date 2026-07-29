@@ -35,6 +35,12 @@ run-name: "Smoke fan-out (all CI legs, live pfSense VM)${{ inputs.pytest_filter 
 # needs.smoke.result already aggregates the WHOLE expanded matrix, shard
 # entries included.
 #
+# NOTE (issue #1855): `prepare` runs resolve-legs.sh from the CALLER's tree, so the
+# shard clamp counts tests/smoke/test_*.py there, while the legs execute the tests
+# from `checkout_ref` (the pinned release SHA). Inert in practice — the clamp only
+# bites below the shard count, and 51 modules sit far above the default 3 — but the
+# two counts are not by construction the same tree.
+#
 # ONE .pkg BUILD PER VERSION LEG, NOT PER SHARD (issue #857): resolve-legs.sh
 # also emits `leg_matrix` — the UNSHARDED per-leg set (one entry per version
 # leg). The `build-pkg` job below matrixes over THAT, so a leg sharded N ways
