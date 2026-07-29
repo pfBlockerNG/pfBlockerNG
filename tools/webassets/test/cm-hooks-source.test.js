@@ -125,3 +125,10 @@ test("serverLint is wired with the py/sh ternary behind an opts.lintUrl guard", 
 test("no bracket/lezer-error lint is referenced (regex editor only)", () => {
   assert.ok(!/lezerErrorLint/.test(src), "expected cm-hooks.js to never reference lezerErrorLint");
 });
+
+// issue #1869: same guard as cm-regex-source.test.js. Both bundles are built from
+// separate entry points, so wiring one and not the other is a real failure mode.
+test("lineNumbers() is imported and installed in the extension list", () => {
+  assert.match(src, /import \{[^}]*\blineNumbers\b[^}]*\} from "@codemirror\/view"/);
+  assert.match(src, /^\s*lineNumbers\(\),$/m);
+});

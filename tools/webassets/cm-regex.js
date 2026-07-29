@@ -4,7 +4,7 @@
 // test/cm-regex-source.test.js and tests/php/DnsblRegexHighlightWiringTest.php pin the
 // real call sites (textarea sync, DOM wiring, aria-label) this file exercises.
 import { EditorState } from "@codemirror/state";
-import { EditorView, keymap, drawSelection } from "@codemirror/view";
+import { EditorView, keymap, drawSelection, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { pfbRegexList } from "./lezer-pfb-regex-list/src/index.js";
@@ -35,6 +35,12 @@ export function fromTextarea(textarea, opts) {
   const extensions = [
     history(),
     drawSelection(),
+    // issue #1869: the lint gutter alone rendered an empty strip down the left edge, so
+    // the save-time validator's "line N: ..." diagnostics and the gutter markers had no
+    // number to point at and the admin counted rows by hand. Listed BEFORE the lint
+    // extensions so the numbers sit leftmost and the lint marker keeps its own column
+    // beside them.
+    lineNumbers(),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     syntaxHighlighting(defaultHighlightStyle),
     syntaxHighlighting(pfbHighlightStyle),
