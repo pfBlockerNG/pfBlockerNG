@@ -112,11 +112,12 @@ jobs:
       contents: write  # ONLY for the retag deletion below
       checks: read     # gh api /commits/<sha>/check-runs to assert CI green
 
+    # Only what a downstream job actually reads. branch/channel/portversion are resolved
+    # in the `resolve` step and used inside this job; they are NOT re-exported, because
+    # nothing consumes them — read-matrix classifies the tag itself, and the `release` job
+    # re-derives its own. An output nobody reads states a contract that does not exist.
     outputs:
       tag:         ${{ steps.resolve.outputs.tag }}
-      branch:      ${{ steps.resolve.outputs.branch }}
-      channel:     ${{ steps.resolve.outputs.channel }}
-      portversion: ${{ steps.resolve.outputs.portversion }}
       # The PINNED release commit: the channel-branch tip at dispatch. Every downstream
       # build/verify job checks THIS out, and tag-release pushes the tag on it.
       sha:         ${{ steps.pin.outputs.sha }}
@@ -569,9 +570,6 @@ jobs:
     permissions:
       contents: write
 
-    outputs:
-      sha: ${{ steps.tag.outputs.sha }}
-
     steps:
       - uses: actions/checkout@v6
         with:
@@ -626,10 +624,11 @@ jobs:
     permissions:
       contents: write
 
+    # Only what a downstream job reads. version/prerelease stay STEP outputs
+    # (steps.meta.*), consumed inside this job by the body/title and softprops steps —
+    # re-exporting them claimed a contract nothing downstream ever used.
     outputs:
       tag:         ${{ steps.meta.outputs.tag }}
-      version:     ${{ steps.meta.outputs.version }}
-      prerelease:  ${{ steps.meta.outputs.prerelease }}
       branch:      ${{ steps.meta.outputs.branch }}
       portversion: ${{ steps.meta.outputs.portversion }}
       dry_run:     ${{ steps.meta.outputs.dry_run }}
