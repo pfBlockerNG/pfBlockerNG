@@ -62,6 +62,18 @@ def is_package_file(fname: str) -> bool:
     return fname.endswith(".pkg") and fname not in CATALOG_META
 
 
+def is_pfblockerng_package(name: str) -> bool:
+    """True for one of OUR three channel packages, False for anything else.
+
+    Dependency packages we publish alongside them (the CE-only
+    ``py311-charset-normalizer``, issue #1806) share the catalog dirs but are not
+    pfBlockerNG builds. They carry neither channel suffix, so ``channel_of`` would call
+    them stable and the page would advertise the dependency's own version as the stable
+    pfBlockerNG release (issue #1863). They stay browsable; they are never a channel row.
+    """
+    return name in (_PKG_STABLE, _PKG_DEVEL, _PKG_NIGHTLY)
+
+
 def human_size(n: int) -> str:
     f = float(n)
     for unit in ("B", "KiB", "MiB", "GiB"):
@@ -166,6 +178,8 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
             path = os.path.join(dirpath, fname)
             man = read_manifest(path)
             name, ver, abi = man.get("name", ""), man.get("version", ""), man.get("abi", "")
+            if not is_pfblockerng_package(name):
+                continue  # a published dependency (issue #1806) — browsable, never a channel row
             deps = man.get("deps") or {}
             pkgs.append(
                 {
@@ -408,6 +422,28 @@ def _edition_key(variant: str) -> str:
     return variant.strip() or "Other"
 
 
+def _matrix_varver(pfsense_version: str, variant: str) -> str:
+    """The catalog dir name (varver) a matrix entry's packages are published under.
+
+    Mirrors build-repo-portable.py's catalog_name_from_version (major.minor only):
+      "2.7" + "CE"   -> "ce-2.7"
+      "25.03"+ "Plus" -> "plus-25.03"
+    """
+    major_minor = ".".join(pfsense_version.split(".")[:2])
+    return f"{variant.lower()}-{major_minor}"
+
+
+def _row_varver(rel: str) -> str:
+    """The varver dir a published package sits in, read from its site-relative path.
+
+    ``release/plus-26.03/x.pkg`` -> ``plus-26.03`` (arch-less since issue #1806: one varver
+    dir per FreeBSD major). A legacy per-ABI path yields that dir name instead, which
+    matches no matrix varver — callers treat that as "no varver pin".
+    """
+    parts = rel.replace(os.sep, "/").split("/")
+    return parts[-2] if len(parts) >= 2 else ""
+
+
 def _join_matrix(rows: list[dict], matrix: list[dict] | None) -> list[tuple[str, dict]]:
     """Enrich each row with the pfSense version + PHP/Python from the matrix join.
 
@@ -421,20 +457,41 @@ def _join_matrix(rows: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     ABI is always concrete), so a wildcarded row falls back to an OS+major scan
     across every matrix entry (``_abi_matches``), joining EVERY row of that
     major instead of dropping to "Other".
+
+    An ABI match alone over-joins when two pfSense versions share it: the catalog is
+    published per varver, so each varver dir holds its OWN copy of the .pkg, and
+    broadcasting every copy to every matching entry cross-products them (issue #1863 —
+    a 26.03 row linking the plus-26.07 file and vice versa). When the row's path names a
+    varver that some matched entry is published under, that entry wins; a path naming no
+    known varver (a legacy per-ABI dir) keeps the broadcast, so nothing is ever hidden.
+
+    A pfSense minor is then listed ONCE per channel and package version, however many
+    matrix entries it has: those entries enumerate build flavors (arch, FreeBSD, PHP,
+    Python), while the arch-less catalog (issue #1806) serves one file per minor. The
+    first entry of a minor supplies the displayed flavors.
     """
     idx = matrix_index(matrix)
     out: list[tuple[str, dict]] = []
+    seen: set[tuple[str, str, str, str]] = set()  # (edition, pfSense minor, channel, version)
     for r in rows:
         entries = idx.get(r["abi"], [])
         if not entries and _is_wildcard_abi(r["abi"]):
             entries = [e for e in (matrix or []) if _abi_matches(e.get("abi", ""), r["abi"])]
+        vv = _row_varver(r["rel"])
+        pinned = [e for e in entries if _matrix_varver(e.get("pfsense_version", ""), e.get("variant", "")) == vv]
+        entries = pinned or entries
         if entries:
             for e in entries:
+                ekey = _edition_key(e.get("variant", ""))
+                key = (ekey, e.get("pfsense_version", ""), r["channel"], r["version"])
+                if key in seen:
+                    continue
+                seen.add(key)
                 row = dict(r)
                 row["pfsense_version"] = e.get("pfsense_version", "")
                 row["php"] = e.get("php_version") or e.get("php") or r.get("php", "")
                 row["py"] = _dotted_ver(e.get("py_flavor", "")) or r.get("py", "")
-                out.append((_edition_key(e.get("variant", "")), row))
+                out.append((ekey, row))
         else:
             row = dict(r)
             row["pfsense_version"] = ""
@@ -590,17 +647,6 @@ def _older_releases_details(rows: list[dict]) -> str:
     )
 
 
-def _eol_varver(pfsense_version: str, variant: str) -> str:
-    """The catalog dir name (varver) for a route-only matrix entry.
-
-    Mirrors build-repo-portable.py's catalog_name_from_version (major.minor only):
-      "2.7" + "CE"   -> "ce-2.7"
-      "25.03"+ "Plus" -> "plus-25.03"
-    """
-    major_minor = ".".join(pfsense_version.split(".")[:2])
-    return f"{variant.lower()}-{major_minor}"
-
-
 def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str, str, dict]]:
     """The last-served .pkg for each EOL (route-only) pfSense version.
 
@@ -629,10 +675,13 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
             vv = parts[1]
             varver_pkgs.setdefault(vv, []).append(p)
 
-    # For each EOL matrix entry, find the newest pkg per ABI in its varver pool.
-    # One matrix entry = one (pfsense_version, variant, abi) combination.
+    # For each EOL matrix entry, find the newest pkg in its varver pool. A varver is
+    # emitted at most ONCE (issue #1863): its several matrix entries enumerate build
+    # flavors (arch, FreeBSD, PHP, Python), but the frozen catalog serves one file. The
+    # first entry that has a served .pkg supplies the displayed flavors — an entry whose
+    # ABI nothing matches never claims the varver.
     out: list[tuple[str, str, dict]] = []
-    seen: set[tuple[str, str]] = set()  # (varver, abi) already emitted — dedup multi-arch entries
+    seen: set[str] = set()
     for e in eol_entries:
         version = e.get("pfsense_version", "")
         variant = e.get("variant", "")
@@ -640,17 +689,16 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
         php = e.get("php_version") or e.get("php", "")
         py = _dotted_ver(e.get("py_flavor", "")) or e.get("py", "")
         ekey = _edition_key(variant)
-        varver = _eol_varver(version, variant)
-        dedup_key = (varver, abi)
-        if dedup_key in seen:
+        varver = _matrix_varver(version, variant)
+        if varver in seen:
             continue
-        seen.add(dedup_key)
 
         # Matched via _abi_matches (OS+major, issue #1806): the served .pkg may be
         # NO_ARCH/wildcarded even when the matrix still records a concrete ABI.
         pool = [p for p in varver_pkgs.get(varver, []) if _abi_matches(p["abi"], abi)]
         if not pool:
             continue  # no .pkg served for this (varver, abi) — skip silently
+        seen.add(varver)
 
         # Newest served version = highest ver_key.
         best = max(pool, key=lambda p: ver_key(p["version"]))
