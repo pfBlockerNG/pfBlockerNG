@@ -13,15 +13,16 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
 
-# Current jobs that create or publish release artifacts.
+# Current jobs that create or publish release artifacts. repo-publish and
+# sync-ports-fork left this workflow entirely (issue #1855 rework): the release is
+# no longer published by the pipeline, so they fire from release-published.yml on
+# the real `release: published` event instead.
 MUTATION_JOBS = {
     "prepare-release",
     "tag-release",
     "release",
     "attach-pkgs",
-    "publish-release",
-    "repo-publish",
-    "sync-ports-fork",
+    "draft-healthcheck",
 }
 
 _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")

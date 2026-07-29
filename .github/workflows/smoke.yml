@@ -94,6 +94,11 @@ on:
         description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally (the build-pkg job runs as before)."
         required: false
         default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
+        required: false
+        default: ""
+        type: string
       release_gate:
         description: "true = this run gates a RELEASE (issue #1855): only rows whose ci-metadata status is a released pfSense version (active | GA) may veto. Every other/absent status still runs and reports, loudly demoted, but cannot fail the run. false (default) = every row vetoes, as on PR/nightly runs."
         required: false
@@ -131,6 +136,11 @@ on:
         default: "3"
       pkg_artifact_prefix:
         description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally."
+        required: false
+        type: string
+        default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
         required: false
         type: string
         default: ""
@@ -372,6 +382,9 @@ jobs:
       # the demotion rides in as an input and smoke-single.yml applies it to ITS own
       # job -- a demoted leg runs, reports red, and does not fail this call.
       nonblocking: ${{ matrix.release_blocking == 'false' }}
+      # issue #1859: smoke.yml runs no tests itself — the leg does, so the pinned
+      # source ref rides down to smoke-single.yml.
+      checkout_ref: ${{ inputs.checkout_ref }}
     secrets: inherit
 
   # ── 4. AND-gate: green only if ALL legs passed ───────────────────────────────

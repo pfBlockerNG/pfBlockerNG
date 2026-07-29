@@ -106,6 +106,11 @@ on:
         required: false
         type: string
         default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
+        required: false
+        type: string
+        default: ""
       release_gate:
         description: "true = this run gates a RELEASE (issue #1855): only rows whose ci-metadata status is a released pfSense version (active | GA) may veto. Every other/absent status still runs and reports, loudly demoted, but cannot fail the run. false (default) = every row vetoes, as on PR/nightly runs."
         required: false
@@ -154,6 +159,11 @@ on:
       pkg_artifact_prefix:
         description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally."
         required: false
+        default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
+        required: false
+        type: string
         default: ""
       release_gate:
         description: "true = this run gates a RELEASE (issue #1855): only rows whose ci-metadata status is a released pfSense version (active | GA) may veto. false (default) = every row vetoes, as on PR/nightly runs."
@@ -361,6 +371,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          # issue #1859: the test code comes from the ref the caller names — for a
+          # release that is the pinned release SHA, so the suite verifies the source
+          # it ships rather than whatever landed on the branch mid-run. Blank =
+          # actions/checkout's default (the caller's own ref), as before.
+          ref: ${{ inputs.checkout_ref }}
           persist-credentials: false
 
       - name: Map the tier to its pytest marker

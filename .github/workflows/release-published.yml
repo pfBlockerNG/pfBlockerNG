@@ -1,0 +1,256 @@
+name: Release published (downstream)
+
+# Everything that must happen AFTER a GitHub Release is actually published.
+#
+# release.yml deliberately stops at a complete DRAFT (issue #1855): the release notes
+# and the final title are authored onto that draft by a human or by Claude, who then
+# publishes it. Publishing is therefore not an event this repository's pipeline emits
+# — so the two downstream effects that used to run inside release.yml after its own
+# publish flip live here instead, hanging off the real `release: published` event.
+# Nothing else can reach them: if this workflow did not exist, publishing a release
+# would silently stop refreshing the pkg repo and the ports fork.
+#
+# ORDER: sync-ports-fork FIRST, then repo-publish. pfBlockerNG/pkg's publish.yml
+# derives the NIGHTLY version from the `-nightly` port's PORTVERSION in the
+# FreeBSD-ports fork, which sync-ports-fork bumps; racing it shipped a stale-versioned
+# nightly (e.g. 4.0.0.alpha.3.* on the alpha.4 commit).
+#
+# Fires for prereleases too (`published` covers a pre-release being published): an
+# alpha/beta bumps the -devel + -nightly ports exactly as before.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── 0. Classify the published tag ────────────────────────────────────────
+  # Everything downstream needs is derived from the tag alone, via the single source
+  # of truth (scripts/release-version.sh). A published release whose tag is not in the
+  # scheme is a hard error, not a silent skip — the ports bump would be meaningless.
+  resolve:
+    name: Resolve the published tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag:         ${{ steps.classify.outputs.tag }}
+      branch:      ${{ steps.classify.outputs.branch }}
+      portversion: ${{ steps.classify.outputs.portversion }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Classify the tag
+        id: classify
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -eu
+          [ -n "$TAG" ] || { echo "::error::the published release carries no tag"; exit 1; }
+          OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
+          eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
+          if [ "$channel" = "devel" ]; then BRANCH="devel"; else BRANCH="main"; fi
+          {
+            echo "tag=${TAG}"
+            echo "branch=${BRANCH}"
+            echo "portversion=${portversion}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Published ${TAG}: channel=${channel} branch=${BRANCH} portversion=${portversion}"
+
+  # ── 1. Sync the port on our FreeBSD-ports fork (pfblockerng/use-github) ────
+  # Self-hosted distribution (ADR-17): we do NOT PR the upstream pfsense ports
+  # tree. Bump the matching port's PORTVERSION directly on our own fork's build-input
+  # branch (pfblockerng/use-github) — the SAME branch every build reads (release.yml
+  # build-pkgs-portable, pfBlockerNG/pkg publish.yml) — so the fork's port stays in
+  # lockstep with each release. Direct push: it's our branch, no PR. A no-op bump
+  # (version unchanged) just exits. The public port only advances once the release is
+  # definitively published — which is now literally this workflow's trigger.
+  sync-ports-fork:
+    name: Sync port on FreeBSD-ports fork
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    permissions:
+      contents: read
+
+    steps:
+      - name: Generate GitHub App token (FreeBSD-ports)
+        id: ports-token
+        # Mint a short-lived installation token from the PKG GitHub App, scoped to
+        # pfBlockerNG/FreeBSD-ports with Contents:write — the same App used by
+        # repo-publish, no standalone PAT to rotate. REQUIRES the App to be installed
+        # on FreeBSD-ports with Contents:write; if it is not, this step fails loudly
+        # ('not installed on ... repositories' / permission error) — the clear signal
+        # to grant it, rather than a confusing empty-token checkout failure.
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: FreeBSD-ports
+          permission-contents: write
+
+      - name: Checkout the FreeBSD-ports fork (use-github branch)
+        uses: actions/checkout@v6
+        with:
+          repository: pfBlockerNG/FreeBSD-ports
+          ref: pfblockerng/use-github
+          token: ${{ steps.ports-token.outputs.token }}
+          persist-credentials: true   # need to push the PORTVERSION bump via the App token
+          # Minimal clone: the bump only edits the port Makefile(s), then commits + pushes.
+          # Shallow (depth-1) + blobless + sparse to the bumped port dirs avoids cloning the
+          # full ~1.3 GB ports tree. The commit is a fast-forward the remote accepts; the
+          # push-reject rebase retry below reaches the racing tip via an on-demand fetch.
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            net/pfSense-pkg-pfBlockerNG
+            net/pfSense-pkg-pfBlockerNG-devel
+            net/pfSense-pkg-pfBlockerNG-nightly
+          sparse-checkout-cone-mode: true
+
+      - name: Checkout pfBlockerNG (scripts only — sparse)
+        uses: actions/checkout@v6
+        with:
+          repository: pfBlockerNG/pfBlockerNG
+          ref: ${{ needs.resolve.outputs.tag }}
+          sparse-checkout: scripts/
+          sparse-checkout-cone-mode: false
+          path: pfblockerng-src
+          persist-credentials: false
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump PORTVERSION and push to use-github
+        # branch/version ride in via env (NOT inline ${{ }}) so a crafted tag can't
+        # template-inject into this shell.
+        env:
+          BRANCH:      ${{ needs.resolve.outputs.branch }}
+          TAG:         ${{ needs.resolve.outputs.tag }}              # e.g. v4.0.0.alpha.1 | v4.0.0
+          PORTVERSION: ${{ needs.resolve.outputs.portversion }}  # e.g. 4.0.0.alpha.1 | 4.0.0 (pkg-safe)
+        run: |
+          set -eu
+          # PORTVERSION is already classified + pkg-safe (no '-') by release-version.sh
+          # in the `resolve` job; re-assert the shape here as belt-and-braces so a
+          # malformed value can never reach the Makefile.
+          if [ "$BRANCH" = "devel" ]; then
+            printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(alpha|beta|rc)\.[1-9][0-9]*$' || {
+              echo "::error::invalid devel PORTVERSION/tag: ${TAG}"; exit 1; }
+          else
+            printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+              echo "::error::invalid stable PORTVERSION/tag: ${TAG}"; exit 1; }
+          fi
+
+          # A devel release bumps TWO ports in lockstep: the -devel port (the Netgate
+          # devel package) AND the -nightly port. publish.yml (pfBlockerNG/pkg) derives
+          # the nightly base version from the -nightly port's PORTVERSION, so unless it
+          # advances together with -devel the nightlies stay pinned to a stale version
+          # and sort BELOW the current prerelease (e.g. 3.2.16.* < 4.0.0.alpha.2). They
+          # share an identical pkg-plist, differing only in PORTNAME/CONFLICTS/GH_ACCOUNT,
+          # so the version edit is the only thing to keep in sync. Both are committed in
+          # ONE commit so the two ports can never diverge. Stable touches only its port.
+          if [ "$BRANCH" = "devel" ]; then
+            PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel net/pfSense-pkg-pfBlockerNG-nightly"
+            PORTS_LABEL="net/pfSense-pkg-pfBlockerNG-{devel,nightly}"
+          else
+            PORT_PATHS="net/pfSense-pkg-pfBlockerNG"
+            PORTS_LABEL="net/pfSense-pkg-pfBlockerNG"
+          fi
+
+          for PORT_PATH in $PORT_PATHS; do
+            MAKEFILE="${PORT_PATH}/Makefile"
+
+            # Read the current PORTVERSION and PORTREVISION from the Makefile before
+            # editing, so the compare-and-bump helper can decide whether to increment
+            # or reset.  Absent PORTREVISION is treated as 0 by the helper.
+            OLD_PORTVERSION="$(grep -m1 '^PORTVERSION=' "$MAKEFILE" | sed 's/^PORTVERSION=[[:space:]]*//')"
+            if [ -z "${OLD_PORTVERSION}" ]; then
+              echo "::error::PORTVERSION not found in ${MAKEFILE}"
+              exit 1
+            fi
+            OLD_PORTREVISION="$(grep -m1 '^PORTREVISION=' "$MAKEFILE" | sed 's/^PORTREVISION=[[:space:]]*//')" || true
+
+            # Auto-detect rebuild: same PORTVERSION → bump PORTREVISION; different → 0.
+            # Logic is extracted into scripts/portrevision-rebuild.sh for testability.
+            NEW_PORTREVISION="$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/portrevision-rebuild.sh" \
+              "${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}")"
+
+            # Update PORTVERSION only. GH_TAGNAME is `v${PORTVERSION}` in the Makefile,
+            # so it self-resolves to the matching tag — the workflow never sets it.
+            sed -i \
+              -e "s/^PORTVERSION=.*/PORTVERSION=\t${PORTVERSION}/" \
+              "$MAKEFILE"
+
+            # Apply PORTREVISION per ports convention: remove when 0; set/insert after
+            # PORTVERSION when > 0.  The sed removes any existing line first, then the
+            # PORTVERSION line is used as an anchor to insert the new one.
+            sed -i -e "/^PORTREVISION=/d" "$MAKEFILE"
+            if [ "${NEW_PORTREVISION}" -gt 0 ]; then
+              sed -i -e "s/^PORTVERSION=.*/&\nPORTREVISION=\t${NEW_PORTREVISION}/" "$MAKEFILE"
+            fi
+
+            git add "$MAKEFILE"
+          done
+
+          # ONE atomic commit for every bumped port — devel + nightly move together.
+          if git diff --cached --quiet; then
+            echo "${PORTS_LABEL} already at ${PORTVERSION} (${TAG}) — nothing to push."
+            exit 0
+          fi
+          git commit -m "$(printf '%s: update to %s\n\npfBlockerNG/pfBlockerNG release %s.' \
+            "$PORTS_LABEL" "$PORTVERSION" "$TAG")"
+
+          # use-github only advances via releases; push directly, rebasing once on a
+          # racing update.
+          n=0
+          until git push origin HEAD:pfblockerng/use-github; do
+            n=$((n + 1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::could not push the port bump to use-github after ${n} attempts"
+              exit 1
+            fi
+            echo "push rejected — rebasing on the latest use-github (attempt ${n})"
+            git pull --rebase origin pfblockerng/use-github
+          done
+          echo "Pushed ${PORTS_LABEL} ${PORTVERSION} (${TAG}) to pfblockerng/use-github"
+
+  # ── 2. Poke the self-hosted pkg repository to republish (ADR-17) ──────────
+  # The pkg catalog is hosted + deployed by the SEPARATE pfBlockerNG/pkg repo: its own
+  # publish.yml enumerates this repo's PUBLISHED Releases (the durable store), consumes
+  # their .pkg assets for the release/<varver>/ subtree (arch-less; issue #1806 — devel
+  # = latest prerelease, stable = latest stable; nightly still built from devel HEAD),
+  # and deploys to its OWN GitHub Pages via same-repo OIDC — no cross-repo deploy key.
+  # We just trigger it so the new Release appears at pfblockerng.github.io/pkg within
+  # seconds (its daily schedule is the backstop).
+  #
+  # ORDERED AFTER sync-ports-fork (see the header) but never GATED on it: `always()`
+  # keeps the catalog refresh happening even if the ports bump failed — the published
+  # Release and its assets exist either way.
+  repo-publish:
+    name: Trigger pkg repository publish
+    runs-on: ubuntu-latest
+    needs: [resolve, sync-ports-fork]
+    if: always() && needs.resolve.result == 'success'
+    permissions:
+      contents: read
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: pkg
+          permission-actions: write
+
+      - name: Dispatch pfBlockerNG/pkg publish.yml
+        # GitHub App scoped to pfBlockerNG/pkg with Actions:write — only enough to
+        # start a workflow there (cannot push code).
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh workflow run publish.yml -R pfBlockerNG/pkg

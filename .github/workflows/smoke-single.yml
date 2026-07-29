@@ -108,6 +108,11 @@ on:
         description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-s<shard>."
         required: false
         default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
+        required: false
+        type: string
+        default: ""
       nonblocking:
         description: "true = this leg cannot veto the caller (issue #1855): it runs and reports as usual, but its failure does not fail the run. Set by smoke.yml for a leg whose ci-metadata status is not a released pfSense version, and only when the caller asked for the release gate."
         required: false
@@ -197,6 +202,11 @@ on:
         default: "[]"
       dep_artifact:
         description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-s<shard>."
+        required: false
+        type: string
+        default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
         required: false
         type: string
         default: ""
@@ -291,6 +301,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          # issue #1859: the test code comes from the ref the caller names — for a
+          # release that is the pinned release SHA, so the suite verifies the source
+          # it ships rather than whatever landed on the branch mid-run. Blank =
+          # actions/checkout's default (the caller's own ref), as before.
+          ref: ${{ inputs.checkout_ref }}
           persist-credentials: false
 
       - name: Enable KVM access for the runner user

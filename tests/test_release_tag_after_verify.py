@@ -1,15 +1,22 @@
-"""Pin issue #1855: the release pipeline builds and VERIFIES before it tags.
+"""Pin issue #1855: the release pipeline builds and VERIFIES before it tags, and
+stops at a DRAFT.
 
-Three parts compose into one code path in `.github/workflows/release.yml`:
+`.github/workflows/release.yml` runs, in order: pin the channel-branch tip; mint
+the tag locally on it (nothing pushed); build every `.pkg` from that SHA; run the
+verification suites against those artifacts AND that same source tree; push the
+tag; create the Release as a DRAFT with the deterministic placeholder body,
+attach the packages, health-check the draft -- and STOP.
 
-* Part 1 -- ordering. Nothing irreversible reaches GitHub until the artifacts are
-  built and the verification phase is green: the release SHA is pinned on the
-  channel-branch tip (after the docs-only notes commit), every `.pkg` is built from
-  that pinned SHA, the suites run, and only then does `tag-release` create+push the
-  tag on the SAME pinned SHA -- followed by the draft Release, the assets, the
-  healthcheck, the publish flip, the pkg-repo dispatch and the ports-fork sync.
-  Two stranded tag+draft pairs in one day (runs 30419586338 / 30424647767) came
-  from the old order; this file is the graph proof that it cannot come back.
+Publishing is a separate, human/Claude step: the notes and the title are authored
+onto the draft and the draft is published by hand. Release notes are therefore not
+files in this repository at all -- nothing here reads, writes or commits a
+`docs/release-notes/<tag>.md`, and the pipeline pushes NOTHING to the channel
+branch. The downstream effects that used to run after the in-pipeline publish flip
+(pkg-repo republish, ports-fork bump) now fire from `release-published.yml` on the
+real `release: published` event.
+
+Two other parts ride along:
+
 * Part 2 -- only a RELEASED pfSense version may veto (see
   `tests/shell/resolve_legs_spec.sh` for the status predicate itself).
 * Part 3 -- our own alpha/beta tags skip the live suites (`run_suites`), with a
@@ -31,21 +38,21 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
+PUBLISHED_WORKFLOW = ROOT / ".github/workflows/release-published.yml"
 
 _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
 _JOB_KEY_RE = re.compile(r"^    [A-Za-z_-]+:")
 _STEP_HEADER_RE = re.compile(r"^      - ")
 
-# Every job that changes something outside this workflow run: the tag, the Release,
-# its assets, the published flip, the pkg repo, the ports fork. Each MUST be
-# downstream of the build and (when they run) of both live suites.
+# Every job in release.yml that changes something outside this workflow run: the
+# tag, the Release, its assets. Each MUST be downstream of the build and (when they
+# run) of both live suites. The pkg-repo republish and the ports-fork bump are no
+# longer here at all -- they hang off the real `release: published` event.
 IRREVERSIBLE_JOBS = (
     "tag-release",
     "release",
     "attach-pkgs",
-    "publish-release",
-    "repo-publish",
-    "sync-ports-fork",
+    "draft-healthcheck",
 )
 
 
@@ -209,15 +216,28 @@ def test_the_draft_release_is_downstream_of_the_tag() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_prepare_release_no_longer_creates_the_tag() -> None:
-    """prepare-release only pins the release SHA (and pushes the docs-only notes
-    commit). Creating or pushing the tag there is the pre-#1855 order that stranded
-    two tag+draft pairs. (Reading tags -- `git tag --sort=...` for the compare base --
-    is fine; only creation and push are forbidden.)"""
+def test_prepare_release_mints_the_tag_locally_and_pushes_nothing() -> None:
+    """Scenario: the tag is minted before the build so a conflicting tag is caught in
+    seconds instead of after an hour of live suites -- but it stays LOCAL. Given a
+    dispatch, when prepare-release runs, then it creates the annotated tag on the
+    pinned SHA and pushes nothing at all: not the tag, and (notes are no longer files)
+    not the channel branch either."""
     body = "\n".join(_jobs()["prepare-release"])
-    assert "git tag -a" not in body, body
-    assert "refs/tags/" not in body, body
-    assert "git push origin" in body, "prepare-release still pushes the notes commit to the channel branch"
+    assert 'git tag -a "$TAG" -m "$TAG" "$SHA"' in body, body
+    assert "git push" not in body, f"prepare-release must push NOTHING; got:\n{body}"
+
+
+def test_no_release_job_touches_a_notes_file() -> None:
+    """Release notes are authored onto the GitHub Release, never committed to the repo.
+
+    A committed changelog forces a changelog commit, which forces a push to the channel
+    branch and a re-generation whenever devel moves; the released source tree should not
+    carry its own changelog.
+    """
+    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "release-notes/" not in text, "release.yml must not read, write or commit a notes file"
+    assert "NOTES_FILE" not in text, "release.yml must not read, write or commit a notes file"
+    assert "<!-- SUMMARY:" not in text, "there is no notes file, so no `<!-- SUMMARY: … -->` title marker to parse"
 
 
 def test_prepare_release_pins_a_sha_output() -> None:
@@ -249,6 +269,91 @@ def test_artifact_jobs_check_out_the_pinned_sha_not_the_tag(job: str) -> None:
         f"{job} must not check out the tag -- it does not exist until tag-release runs, got: {ref_line}"
     )
     assert body  # the job body is non-empty (parser sanity)
+
+
+# --------------------------------------------------------------------------- #
+# The run STOPS at a complete draft; publishing is a separate human/Claude step
+# --------------------------------------------------------------------------- #
+
+
+def test_the_release_is_created_as_a_draft() -> None:
+    draft_step = _step(_jobs()["release"], "softprops/action-gh-release")
+    assert "draft: true" in "\n".join(draft_step), "\n".join(draft_step)
+
+
+def test_nothing_in_the_release_run_un_drafts_the_release() -> None:
+    """The pipeline must never publish: the notes are authored onto the draft first,
+    and only then does a human (or Claude) publish it."""
+    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "--draft=false" not in text, "release.yml must not flip the draft to published"
+    assert "draft: false" not in text, "release.yml must not flip the draft to published"
+    assert "publish-release" not in _jobs(), "the in-pipeline publish job is gone; the draft is the end state"
+
+
+def test_the_draft_healthcheck_is_the_terminal_job() -> None:
+    """Completeness is still asserted -- a human must never be handed a draft that is
+    missing the source archive or a .pkg -- it just no longer publishes anything."""
+    jobs = _jobs()
+    assert "draft-healthcheck" in jobs, "release.yml must health-check the finished draft"
+    downstream = [name for name, lines in jobs.items() if "draft-healthcheck" in _needs(lines)]
+    assert not downstream, f"nothing may run after the draft healthcheck, got: {downstream}"
+
+
+@pytest.mark.parametrize("job", IRREVERSIBLE_JOBS)
+def test_a_dry_run_stops_after_the_suites(job: str) -> None:
+    """dry_run=true does steps 1-4 only: pin, build, verify -- then stop. Nothing that
+    touches GitHub may be reachable without an explicit `dry_run == 'false'`."""
+    if_block = _job_if_block(_jobs()[job])
+    assert "dry_run == 'false'" in if_block, f"{job} is reachable in a dry run: {if_block}"
+
+
+def test_the_draft_job_never_runs_without_the_tag() -> None:
+    """Pre-rework the draft job tolerated a SKIPPED tag-release so a dry run could still
+    render the body. That tolerance is gone: a real run whose tag-release was skipped
+    must not reach softprops (which would create the missing tag itself)."""
+    if_block = _job_if_block(_jobs()["release"])
+    assert "needs.tag-release.result == 'success'" in if_block, if_block
+    assert "needs.prepare-release.result == 'skipped'" not in if_block, (
+        f"the draft job must not run when prepare-release was skipped: {if_block}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Downstream effects fire on the REAL published event, not inside the release run
+# --------------------------------------------------------------------------- #
+
+
+def test_downstream_jobs_left_the_release_workflow() -> None:
+    jobs = _jobs()
+    assert "repo-publish" not in jobs, "the pkg-repo dispatch must not run before the release is published"
+    assert "sync-ports-fork" not in jobs, "the ports bump must not run before the release is published"
+
+
+def test_the_published_workflow_triggers_on_a_published_release() -> None:
+    text = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
+    on_block = text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    assert "release:" in on_block, on_block
+    assert "types: [published]" in on_block, on_block
+
+
+def test_the_published_workflow_carries_both_downstream_effects() -> None:
+    """Publishing a release must still refresh the pkg repo and bump the ports fork."""
+    jobs = _jobs(PUBLISHED_WORKFLOW)
+    assert "sync-ports-fork" in jobs, sorted(jobs)
+    assert "repo-publish" in jobs, sorted(jobs)
+
+
+def test_the_pkg_repo_dispatch_still_waits_for_the_ports_bump() -> None:
+    """pfBlockerNG/pkg derives the NIGHTLY version from the -nightly port's PORTVERSION,
+    so racing the bump ships a stale-versioned nightly (e.g. 4.0.0.alpha.3.* on the
+    alpha.4 commit)."""
+    graph = {name: _needs(lines) for name, lines in _jobs(PUBLISHED_WORKFLOW).items()}
+    assert "sync-ports-fork" in _upstream("repo-publish", graph), graph
+
+
+def test_the_published_workflow_reads_the_tag_from_the_release_payload() -> None:
+    text = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
+    assert "github.event.release.tag_name" in text, "the tag must come from the release that was published"
 
 
 # --------------------------------------------------------------------------- #
