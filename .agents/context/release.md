@@ -85,12 +85,19 @@ This is the only place the pipeline removes anything from GitHub; it lives in
 `prepare-release` (the sole reason that job holds `contents: write`), runs before the pin,
 and never fires in a dry run.
 
-**One trust rule, wherever a release workflow executes a script:** anything run as shell —
-`scripts/portrevision-rebuild.sh` in `sync-ports-fork`, `scripts/release-version.sh` in
-`release-published.yml`'s `resolve` — is checked out from `github.workflow_sha`, the revision
-the workflow itself came from, never from the tree being released. It holds even where the
-job currently carries no credential worth stealing: the blast radius is a property of a job's
-present body, not of the design.
+**One trust rule, wherever a release workflow executes a script:** anything run as shell
+comes from a second, sparse checkout pinned to `github.workflow_sha` (`pfblockerng-src/`) —
+the revision the workflow itself came from — never from the tree being released. That covers
+`release-version.sh` + `release-ci-gate.sh` in `prepare-release`, `release-version.sh` in the
+`release` job, `portrevision-rebuild.sh` in `sync-ports-fork`, and `release-version.sh` in
+`release-published.yml`'s `resolve`. It holds even where the job currently carries no
+credential worth stealing: the blast radius is a property of a job's present body, not of the
+design. The rule is mechanical rather than per-call — "this one runs before the branch reset,
+so it is fine" is what let two `contents: write` jobs execute the released tree's scripts.
+*Exempt by nature:* `build-pkgs-portable` and the live suites do run scripts out of the
+released tree, because building and testing that tree is the whole point; they hold no write
+credential and persist no checkout credentials. `read-matrix` classifies the tag from the
+dispatch ref's own tree, which is the trusted revision already.
 
 ## Release notes — authored onto the Release, never committed
 

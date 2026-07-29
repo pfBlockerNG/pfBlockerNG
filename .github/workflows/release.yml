@@ -139,6 +139,31 @@ jobs:
           fetch-depth: 0          # full history: tag ancestry + log range
           persist-credentials: false
 
+      - name: Check out the release helpers (TRUSTED ref, sparse)
+        uses: actions/checkout@v6
+        with:
+          # SECURITY: this job holds contents:write AND a GH_TOKEN, and it executes
+          # release-version.sh + release-ci-gate.sh AS SHELL. The next step resets the
+          # root checkout to the channel-branch tip, so from there on the root tree is
+          # the tree this run is merely RELEASING — for a stable cut dispatched from
+          # devel, that is main's tree — i.e. what the run is verifying, not something
+          # already trusted. github.workflow_sha is the trusted handle (a release
+          # dispatch is only allowed from the default branch). Do not "simplify" this to
+          # the channel branch, the release tag or the pinned SHA.
+          #
+          # The rule is mechanical, not per-call: "this one runs before the reset, so it
+          # is fine" is exactly the reasoning that rotted here.
+          #
+          # ORDER: this MUST stay after the root checkout above. That one targets the
+          # workspace ROOT, and actions/checkout deletes the contents of its destination
+          # — checking this out first would wipe it again.
+          ref: ${{ github.workflow_sha }}
+          repository: pfBlockerNG/pfBlockerNG
+          sparse-checkout: scripts/
+          sparse-checkout-cone-mode: false
+          path: pfblockerng-src
+          persist-credentials: false
+
       - name: Resolve tag + channel branch
         id: resolve
         # Classify the tag via the single source of truth (scripts/release-version.sh)
@@ -148,11 +173,11 @@ jobs:
           TAG: ${{ github.event.inputs.tag }}
         run: |
           [ -n "$TAG" ] || { echo "::error::tag input is required"; exit 1; }
-          OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
+          OUT=$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG") || { echo "$OUT"; exit 1; }
           eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
           if [ "$channel" = "devel" ]; then BRANCH="devel"; else BRANCH="main"; fi
           # Re-assert branch<->channel pairing
-          sh scripts/release-version.sh "$TAG" "$BRANCH" > /dev/null || {
+          sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG" "$BRANCH" > /dev/null || {
             echo "::error::tag ${TAG} is not valid for branch ${BRANCH} (channel ${channel})"
             exit 1
           }
@@ -274,7 +299,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO:     ${{ github.repository }}
-        run: sh scripts/release-ci-gate.sh
+        run: sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-ci-gate.sh"
 
       - name: Pin the release SHA + mint the tag locally
         id: pin
@@ -608,6 +633,24 @@ jobs:
           fetch-depth: 0   # need full history to find the previous release tag
           persist-credentials: false
 
+      - name: Check out the release helpers (TRUSTED ref, sparse)
+        uses: actions/checkout@v6
+        with:
+          # SECURITY: same rule as prepare-release and sync-ports-fork. This job holds
+          # contents:write and executes release-version.sh AS SHELL (the metadata step
+          # and the prev_tag classification loop), while the checkout above is the tree
+          # being RELEASED. Anything executed as shell comes from the revision this
+          # workflow itself was dispatched from. Do not "simplify" this to the pinned
+          # SHA — that is precisely the untrusted side.
+          #
+          # ORDER: after the root checkout, which would otherwise wipe this path.
+          ref: ${{ github.workflow_sha }}
+          repository: pfBlockerNG/pfBlockerNG
+          sparse-checkout: scripts/
+          sparse-checkout-cone-mode: false
+          path: pfblockerng-src
+          persist-credentials: false
+
       - name: Gather release metadata
         id: meta
         # Validate + classify the tag via the single source of truth
@@ -630,11 +673,11 @@ jobs:
           TAG="$INPUT_TAG"
           [ -n "$TAG" ] || { echo "::error::tag input is required"; exit 1; }
 
-          OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
+          OUT=$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG") || { echo "$OUT"; exit 1; }
           eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
           if [ "$channel" = "devel" ]; then BRANCH="devel"; else BRANCH="main"; fi
           # Re-assert branch<->channel pairing (belt-and-braces; prepare-release already did this)
-          sh scripts/release-version.sh "$TAG" "$BRANCH" > /dev/null || {
+          sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG" "$BRANCH" > /dev/null || {
             echo "::error::tag ${TAG} is not valid for branch ${BRANCH} (channel ${channel})"
             exit 1
           }
@@ -670,7 +713,7 @@ jobs:
             | { grep -v "^${TAG}$" || true; } \
             | while read -r t; do
                 git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null || continue
-                tch=$(sh scripts/release-version.sh "$t" 2>/dev/null | sed -n 's/^channel=//p') || true
+                tch=$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$t" 2>/dev/null | sed -n 's/^channel=//p') || true
                 [ "$tch" = "$CHANNEL" ] && { echo "$t"; break; }
               done) || true
           # 2) Fallback: highest-version ANCESTOR tag of ANY channel.
