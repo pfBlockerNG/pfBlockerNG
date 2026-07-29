@@ -1,19 +1,40 @@
 name: Release
 
 # Dispatch-only release pipeline.  The workflow is triggered via workflow_dispatch
-# with a `tag` input; it handles the full lifecycle in a single run:
+# with a `tag` input; it handles the full lifecycle in a single run.
 #
-#   1. prepare-release (real only): validates the tag + channel, asserts CI is green
-#      on the branch tip, drafts + commits the changelog if absent, then creates +
-#      pushes the release tag on the changelog commit — so the tagged tree always
-#      contains docs/release-notes/<tag>.md.  (A tag pushed via GITHUB_TOKEN does
-#      NOT re-trigger another workflow run, so this run continues to build + publish.)
+# BUILD + VERIFY BEFORE ANYTHING IS TAGGED (issue #1855).  Runs 30419586338
+# (v4.0.0.alpha.23) and 30424647767 (v4.0.0.alpha.24) each pushed the tag, created
+# the draft Release and attached the .pkg assets BEFORE the verification suites ran
+# — both then failed verification and left a tag pointing at unverified code plus a
+# draft that had to be deleted unpublished.  The order is now:
 #
-#   2. read-matrix / build-pkgs-portable / release: run in both dry-run and real
-#      modes, gated on prepare-release succeeding (or being skipped in dry-run).
+#   1. prepare-release (real only): validate the tag + channel, refuse a PUBLISHED
+#      release, assert CI is green on the branch tip, commit the deterministic
+#      changelog placeholder when no curated notes file exists (docs-only, on the
+#      channel branch), then PIN the release SHA.  Nothing is tagged here.
 #
-#   3. attach-pkgs / repo-publish / sync-ports-fork: real-publish only
-#      (dry_run == 'false'), same ordering as before.
+#   2. read-matrix / resolve-stamp / build-pkgs-portable / ui-suite / smoke-suite:
+#      build every artifact FROM THE PINNED SHA as workflow artifacts, then verify
+#      them.  Whether the live suites run at all is Part 3's `run_suites` decision
+#      (alpha/beta skip them; rc + stable always run them; `force_suites` forces
+#      them on) — one code path, the verification phase is simply empty for an
+#      alpha/beta.  Which matrix rows may VETO is Part 2's released-status
+#      predicate (scripts/resolve-legs.sh, via `release_gate: true`).
+#
+#   3. tag-release (real only): the FIRST irreversible step.  Creates + pushes the
+#      tag on the PINNED SHA — even if the channel branch moved during verification,
+#      the tag lands on exactly the commit the artifacts were built from.  (A tag
+#      pushed via GITHUB_TOKEN does NOT re-trigger another workflow run, so this run
+#      continues to publish.)  Gated on the build AND, when they ran, both suites.
+#
+#   4. release / attach-pkgs / publish-release / repo-publish / sync-ports-fork:
+#      draft Release, assets, healthcheck, publish flip, pkg-repo dispatch, ports
+#      sync — real-publish only (dry_run == 'false'), each downstream of the tag.
+#
+# A failed run therefore leaves NOTHING on GitHub: no tag, no draft.  (The docs-only
+# notes commit does land on the channel branch first — it has to be inside the tagged
+# tree — and is simply reused by the retry.)
 #
 # dry_run=true (default): validate + build off HEAD; publish NOTHING (no commit, no
 # tag, no Release, no port bump, no pkg-repo poke).
@@ -40,6 +61,12 @@ on:
         default: true
         type: boolean
 
+      force_suites:
+        description: "Run the live smoke/UI suites even for an alpha/beta tag (issue #1855). rc + stable always run them; alpha/beta default to CI-green-on-the-release-commit as the mandatory gate."
+        required: false
+        default: false
+        type: boolean
+
 # Least-privilege default; jobs that need more elevate explicitly below
 # (release: contents:write to publish; prepare-release: contents:write to commit +
 # push the tag; ui-suite: packages:read to pull the pfSense image from private GHCR).
@@ -50,14 +77,12 @@ permissions:
 
 jobs:
   # ── 0. Prepare release (real publish only) ───────────────────────────────
-  # Commits the changelog (when absent) and creates + pushes the release tag on
-  # the resulting commit.  Skipped entirely on dry_run=true — in that mode every
-  # downstream job operates on the dispatch ref HEAD instead.
-  #
-  # Tag pushed via GITHUB_TOKEN does NOT re-trigger this workflow (GitHub's rule),
-  # so this same run continues to build + publish — no recursion.
+  # Commits the changelog (when absent) and PINS the release SHA — it does NOT
+  # tag (issue #1855: tagging moved to `tag-release`, after build + verify).
+  # Skipped entirely on dry_run=true — in that mode every downstream job falls
+  # back to the dispatch ref HEAD instead of the pinned SHA.
   prepare-release:
-    name: Commit changelog + create the release tag
+    name: Commit changelog + pin the release commit
     runs-on: ubuntu-latest
     # Only 'false' takes the real-publish path. NOT the whole guard: GitHub compares
     # strings case-insensitively, so 'FALSE' satisfies this too and the first step below
@@ -72,7 +97,9 @@ jobs:
       branch:      ${{ steps.resolve.outputs.branch }}
       channel:     ${{ steps.resolve.outputs.channel }}
       portversion: ${{ steps.resolve.outputs.portversion }}
-      sha:         ${{ steps.push-tag.outputs.sha }}
+      # The PINNED release commit: the channel-branch tip after the notes commit.
+      # Every downstream build/verify job checks THIS out, and tag-release tags it.
+      sha:         ${{ steps.pin.outputs.sha }}
 
     steps:
       # The job-level `if:` admits any case-variant of 'false'; re-check case-sensitively
@@ -127,13 +154,16 @@ jobs:
           git checkout "$BRANCH"
           git reset --hard "origin/$BRANCH"
 
-      - name: Refuse a published release; resume a draft (idempotent)
+      - name: Refuse a published release (early, before anything is built)
         id: tag_state
-        # Idempotency: this whole flow only becomes irreversible at the final publish
-        # step. A PUBLISHED release is immutable+final → refuse (bump the version). A tag
-        # that exists with only a DRAFT release (or no release yet) is a half-finished
-        # prior run → RESUME it: reuse the existing tag and let the draft be updated
-        # in place. Records tag_exists so the tag step reuses rather than recreates.
+        # A PUBLISHED release is immutable + final → refuse here, before the build
+        # burns runner time (bump the version instead). A DRAFT, or no release at
+        # all, is resumable: `release` updates the draft in place.
+        #
+        # issue #1855 narrowed this step: it no longer probes whether the TAG exists.
+        # With verification ahead of tagging, a pre-existing tag can only come from a
+        # prior run that crashed AFTER tag-release — a window tag-release itself now
+        # owns (it re-checks at tag time, against the SHA this run actually verified).
         env:
           TAG:      ${{ steps.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
@@ -145,13 +175,7 @@ jobs:
             echo "::error::a PUBLISHED release for ${TAG} already exists — it is immutable; bump the version"
             exit 1
           fi
-          if git ls-remote --exit-code --tags origin "$TAG" > /dev/null 2>&1; then
-            TAG_EXISTS=true
-          else
-            TAG_EXISTS=false
-          fi
-          echo "tag_exists=${TAG_EXISTS}" >> "$GITHUB_OUTPUT"
-          echo "Release state for ${TAG}: ${STATE}; tag exists on remote: ${TAG_EXISTS} — proceeding (resume-safe)."
+          echo "Release state for ${TAG}: ${STATE} — proceeding (resume-safe)."
 
       - name: Require CI green on the branch tip
         # The tag will point at the current HEAD of the channel branch; assert that
@@ -246,22 +270,18 @@ jobs:
           echo "committed=true" >> "$GITHUB_OUTPUT"
           echo "Committed docs/release-notes/${TAG}.md"
 
-      - name: Create + push the tag (and changelog commit)
-        id: push-tag
-        # Push the branch first if a changelog commit was made (so the tag lands on
-        # the post-changelog tip), then create and push the annotated tag.
+      - name: Push the changelog commit + pin the release SHA
+        id: pin
+        # Push the branch if a changelog commit was made (the notes file has to be
+        # inside the tagged tree), then PIN the resulting tip as THE release commit.
         #
-        # GITHUB_TOKEN push of a tag does NOT trigger another workflow_dispatch run
-        # (GitHub's re-trigger rule for GITHUB_TOKEN): this run continues to build +
-        # publish without recursion.
+        # Everything downstream — the stamp, every .pkg, both live suites, and finally
+        # the tag itself — is keyed to this SHA, so a commit landing on the channel
+        # branch mid-verification can never end up inside the release. No tag is
+        # created here (issue #1855): that is tag-release's job, after verification.
         env:
-          TAG:        ${{ steps.resolve.outputs.tag }}
-          BRANCH:     ${{ steps.resolve.outputs.branch }}
-          TAG_EXISTS: ${{ steps.tag_state.outputs.tag_exists }}
+          BRANCH: ${{ steps.resolve.outputs.branch }}
         run: |
-          # Annotated tags need a committer identity. The changelog step also sets
-          # this, but it is skipped when a committed notes file already exists, so set
-          # it here unconditionally (idempotent if already set).
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # Push the branch only if we have new commits ahead of the remote.
@@ -269,18 +289,9 @@ jobs:
             git push origin "HEAD:${BRANCH}"
             echo "Pushed changelog commit to ${BRANCH}."
           fi
-          if [ "$TAG_EXISTS" = "true" ]; then
-            # Resume of a prior draft run: the tag already exists (never published →
-            # not burned). Reuse it as-is rather than moving it; SHA = the tagged commit.
-            SHA=$(git rev-list -n 1 "refs/tags/${TAG}" 2>/dev/null || git rev-parse HEAD)
-            echo "Tag ${TAG} already exists — reusing it (resuming a prior draft run)."
-          else
-            SHA=$(git rev-parse HEAD)
-            git tag -a "$TAG" -m "$TAG"
-            git push origin "$TAG"
-            echo "Created and pushed tag ${TAG} at ${SHA}"
-          fi
+          SHA=$(git rev-parse HEAD)
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "Pinned release commit: ${SHA} (branch ${BRANCH}) — nothing tagged yet."
 
   # ── 1b. UI suite (ADR-14, D1) ────────────────────────────────────────────
   # Run the FULL tiered Web-UI suite on the live pfSense VM against the EXACT
@@ -290,17 +301,19 @@ jobs:
   # reusable workflow's matrix to one GH job per (tier × version) leg — render
   # / functional / browser × each image — and `fail-fast: false` keeps every
   # leg independent. Because each leg is its own job, GitHub's "Re-run failed
-  # jobs" re-runs ONLY a flaky leg; publish-release does NOT re-run until all
-  # legs are green again (it only runs once its `needs:` are all `success`),
-  # so a not-our-fault browser flake costs a single-leg re-run, never a
-  # republish.
+  # jobs" re-runs ONLY a flaky leg; nothing downstream advances until all legs
+  # are green again, so a not-our-fault browser flake costs a single-leg
+  # re-run — and since issue #1855 it costs it BEFORE anything is tagged.
   #
   # This is a SEPARATE gate ALONGSIDE the CI check asserted by prepare-release
   # (which still asserts the "All tests passed" branch-tip check, covering the
-  # Tier-A PR fold). It does not weaken that gate — publish-release `needs:`
-  # BOTH this AND smoke-suite (ADR-14 D1: the publish flip waits on every leg;
-  # a flaky leg re-runs in isolation without redoing the publish — gate
-  # publish-release, never `release`, so draft creation stays recoverable).
+  # Tier-A PR fold). It does not weaken that gate — tag-release `needs:` BOTH
+  # this AND smoke-suite (issue #1855: the tag itself, and therefore the draft,
+  # the assets and the publish flip, wait on every leg).
+  #
+  # Whether this job runs at all is read-matrix's `run_suites` decision: an
+  # alpha/beta release skips the live suites (Part 3), so this leg is simply
+  # absent rather than replaced by a parallel pipeline.
   #
   # §7 browser DEMOTE/DROP — one-line switch: the browser leg is included here as
   # a separate re-runnable leg (the cheap tiers gate firmly; browser adds the
@@ -318,7 +331,7 @@ jobs:
   ui-suite:
     name: UI fan-out (all CI legs, live pfSense VM)
     needs: [prepare-release, read-matrix, build-pkgs-portable]
-    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' }}
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && needs.read-matrix.outputs.run_suites == 'true' }}
     uses: ./.github/workflows/ui-tests.yml
     with:
       tier: all
@@ -329,6 +342,12 @@ jobs:
       # Consume the EXACT per-leg artifacts build-pkgs-portable just built
       # (issue #1662) instead of building its own.
       pkg_artifact_prefix: pfBlockerNG-relpkg
+      # issue #1855 Part 2: only a row whose ci-metadata `status` is a RELEASED
+      # pfSense version (active, or its legacy alias GA) may veto a release. Every
+      # other value — beta today, anything added later, an absent/unrecognized one —
+      # still runs and still reports, but cannot fail this call. Each demotion is
+      # announced loudly by scripts/resolve-legs.sh, naming the row and its status.
+      release_gate: true
     secrets: inherit
 
   # ── 1b2. Smoke suite (ADR-14 D1 sibling) ─────────────────────────────────
@@ -339,11 +358,13 @@ jobs:
   smoke-suite:
     name: Smoke fan-out (all CI legs, live pfSense VM)
     needs: [prepare-release, read-matrix, build-pkgs-portable]
-    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' }}
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && needs.read-matrix.outputs.run_suites == 'true' }}
     uses: ./.github/workflows/smoke.yml
     with:
       scope: full
       pkg_artifact_prefix: pfBlockerNG-relpkg
+      # Same released-status veto rule as ui-suite above (issue #1855 Part 2).
+      release_gate: true
     secrets: inherit
 
   # ── 1c. Read version matrix ──────────────────────────────────────────────
@@ -365,6 +386,10 @@ jobs:
       build_matrix: ${{ steps.matrices.outputs.build_matrix }}
       pkg_channel:  ${{ steps.channel.outputs.pkg_channel }}
       portversion:  ${{ steps.channel.outputs.portversion }}
+      # issue #1855 Part 3: 'true' | 'false' — whether the live smoke/UI suites run
+      # (and therefore gate) for THIS tag. Consumed by ui-suite/smoke-suite's `if:`
+      # and by tag-release's gate.
+      run_suites:   ${{ steps.channel.outputs.run_suites }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -375,15 +400,40 @@ jobs:
         id: channel
         # The channel drives which port we build (devel vs stable). Classified by
         # scripts/release-version.sh: vX.Y.Z.alpha.N|.beta.N|.rc.N -> devel, vX.Y.Z -> stable.
+        #
+        # It also decides, from the SAME classification, whether the live smoke/UI
+        # suites run for this release (issue #1855 Part 3):
+        #   prekind alpha|beta -> NO. The mandatory gate is prepare-release's
+        #     verify-checks (CI green on the release commit, walking past docs-only
+        #     commits). The verification phase is simply EMPTY — not a parallel
+        #     pipeline — so the ordering below is unchanged.
+        #   prekind rc, or stable -> YES, in full, gated per the released-status
+        #     predicate, and the tag/publish happen only on green.
+        # `force_suites` is the manual escape hatch: it can only ever ADD
+        # verification (rc/stable already run the suites unconditionally).
         env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_TAG:    ${{ github.event.inputs.tag }}
+          FORCE_SUITES: ${{ github.event.inputs.force_suites }}
         run: |
           TAG="$INPUT_TAG"
           OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
           eval "$OUT"
-          echo "pkg_channel=${channel}" >> "$GITHUB_OUTPUT"
-          echo "portversion=${portversion}" >> "$GITHUB_OUTPUT"
+          case "$prekind" in
+            alpha|beta) RUN_SUITES="false" ;;
+            *)          RUN_SUITES="true"  ;;
+          esac
+          # An API dispatch can send any casing for a boolean input; accept them all
+          # here because forcing the suites ON is always the safe direction.
+          case "${FORCE_SUITES:-}" in
+            [Tt][Rr][Uu][Ee]) RUN_SUITES="true" ;;
+          esac
+          {
+            echo "pkg_channel=${channel}"
+            echo "portversion=${portversion}"
+            echo "run_suites=${RUN_SUITES}"
+          } >> "$GITHUB_OUTPUT"
           echo "Tag: ${TAG}  →  pkg channel: ${channel}  portversion: ${portversion}"
+          echo "Live smoke/UI suites for this release: ${RUN_SUITES} (prekind='${prekind:-stable}', force_suites='${FORCE_SUITES:-false}')"
 
       - name: Read matrix from ci-metadata
         id: matrices
@@ -407,7 +457,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
+          # issue #1855: the PINNED release commit (prepare-release), not the tag —
+          # nothing is tagged yet at this point. Empty on dry-run (prepare-release is
+          # skipped) → the dispatch ref, exactly as before.
+          ref: ${{ needs.prepare-release.outputs.sha || github.ref }}
           fetch-depth: 0
           persist-credentials: false
       - name: Resolve stamp
@@ -416,16 +469,86 @@ jobs:
           echo "created=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+  # ── 1e. Tag the verified commit (real publish only) ──────────────────────
+  # THE FIRST IRREVERSIBLE STEP (issue #1855). Everything before this job is
+  # local to the run: artifacts in the run's own storage, suites against those
+  # artifacts. Nothing is on GitHub yet except the docs-only notes commit.
+  #
+  # Creates + pushes the annotated tag on prepare-release's PINNED SHA — never on
+  # "whatever the branch tip is now" — so the tag names exactly the tree the .pkgs
+  # were built from and the suites verified, even if the channel branch moved
+  # during a 40-minute live fan-out.
+  #
+  # GATE: the build must have succeeded AND, when the live suites ran for this
+  # channel, both AND-gates must be green. For an alpha/beta (run_suites=false)
+  # the verification phase is empty and the mandatory gate is prepare-release's
+  # CI-green-on-the-release-commit check — the tolerance is a POSITIVE
+  # `run_suites == 'false'` comparison, and read-matrix must itself have
+  # succeeded, so a crashed matrix read can never read as "no suites required".
+  #
+  # A tag pushed via GITHUB_TOKEN does NOT re-trigger this workflow (GitHub's
+  # re-trigger rule), so this same run continues into publish — no recursion.
+  tag-release:
+    name: Create + push the release tag (verified build only)
+    runs-on: ubuntu-latest
+    needs: [prepare-release, read-matrix, build-pkgs-portable, ui-suite, smoke-suite]
+    if: ${{ always() && github.event.inputs.dry_run == 'false' && needs.prepare-release.result == 'success' && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && (needs.read-matrix.outputs.run_suites == 'false' || (needs.ui-suite.result == 'success' && needs.smoke-suite.result == 'success')) }}
+    permissions:
+      contents: write
+
+    outputs:
+      sha: ${{ steps.tag.outputs.sha }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare-release.outputs.sha }}
+          fetch-depth: 0             # full history + tags: the resume check below
+          persist-credentials: true  # need to push the tag via GITHUB_TOKEN
+
+      - name: Create + push the tag on the verified commit
+        id: tag
+        # RESUME semantics, narrowed to the crash-after-tag window: the only
+        # legitimate reason for the tag to already exist is a prior run of THIS tag
+        # that died after tagging. Then it points at the same pinned SHA and is
+        # reused as-is. A tag on any OTHER commit means the artifacts this run
+        # verified do not match it — refuse loudly and leave it untouched rather
+        # than move a tag or publish mismatched assets.
+        env:
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          SHA: ${{ needs.prepare-release.outputs.sha }}
+        run: |
+          set -eu
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch --tags --force origin
+          if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null 2>&1; then
+            EXISTING=$(git rev-list -n 1 "refs/tags/${TAG}")
+            if [ "$EXISTING" != "$SHA" ]; then
+              echo "::error::tag ${TAG} already exists at ${EXISTING}, but this run built and verified ${SHA} — delete the stale (unpublished) tag or bump the version"
+              exit 1
+            fi
+            echo "Tag ${TAG} already at ${SHA} — reusing it (resuming a run that crashed after tagging)."
+          else
+            git tag -a "$TAG" -m "$TAG" "$SHA"
+            git push origin "refs/tags/${TAG}"
+            echo "Created and pushed tag ${TAG} at ${SHA}"
+          fi
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
   # ── 2. Release ───────────────────────────────────────────────────────────
   release:
     name: Create draft GitHub Release
     runs-on: ubuntu-latest
-    # Gate on prepare-release (real: must succeed; dry-run: skipped is fine) AND
-    # the matrix read. The live-VM ui-suite/smoke-suite gates do NOT block THIS
-    # job (draft creation) — per ADR-14 D1 they gate publish-release instead, so
-    # a flaky live leg re-runs in isolation without redoing the draft/changelog.
-    needs: [prepare-release, read-matrix]
-    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' }}
+    # issue #1855: the draft is created only AFTER the tag exists on the verified
+    # commit — softprops/action-gh-release CREATES a missing tag itself, which is
+    # exactly how a failed run used to strand one. In dry-run prepare-release (and
+    # therefore tag-release) is skipped and this job still runs, publishing nothing:
+    # it renders the body into the run summary. The live suites gate tag-release,
+    # so this job inherits them transitively — a flaky live leg still re-runs in
+    # isolation (ADR-14 D1) without redoing the draft/changelog.
+    needs: [prepare-release, read-matrix, build-pkgs-portable, tag-release]
+    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && (needs.tag-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     permissions:
       contents: write
 
@@ -440,9 +563,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # dry_run=true: validate off the dispatch ref (HEAD); no tag exists yet.
-          # dry_run=false: check out the just-created tag (contains the changelog).
-          ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
+          # issue #1855: the PINNED release commit — identical content to the tag
+          # tag-release just created on it, without depending on the tag having
+          # propagated. Empty on dry-run → the dispatch ref, exactly as before.
+          ref: ${{ needs.prepare-release.outputs.sha || github.ref }}
           fetch-depth: 0   # need full history for changelog
           persist-credentials: false
 
@@ -712,14 +836,12 @@ jobs:
   # A leg's build failure surfaces as a red leg (fail-fast: false keeps the
   # others going). sync-ports-fork's own `needs:` list is [prepare-release,
   # release, publish-release] -- it never lists build-pkgs-* directly -- but a
-  # leg failure now blocks it TRANSITIVELY: build-pkgs-portable fails (matrix
-  # job result is 'failure' if any leg fails) -> ui-suite/smoke-suite skip
-  # (their `if:` requires needs.build-pkgs-portable.result == 'success') ->
-  # publish-release skips (requires both suites == 'success') -> sync-ports-fork
-  # skips (requires needs.publish-release.result == 'success'). attach-pkgs
-  # absorbs the failure with `if: always() && ...` (below), unaffected by this
-  # chain; a failed leg simply uploads nothing, so its .pkg is absent from the
-  # merged download and the publish-release healthcheck fails closed.
+  # leg failure blocks it TRANSITIVELY: build-pkgs-portable fails (matrix job
+  # result is 'failure' if any leg fails) -> tag-release skips (its `if:`
+  # requires needs.build-pkgs-portable.result == 'success') -> release skips
+  # -> attach-pkgs, publish-release and sync-ports-fork all skip. Since issue
+  # #1855 that chain starts BEFORE the tag exists, so a failed build leaves no
+  # tag and no draft behind at all.
   build-pkgs-portable:
     name: "build .pkg — FreeBSD ${{ matrix.freebsd_major }}"
     runs-on: ubuntu-latest
@@ -733,13 +855,15 @@ jobs:
         include: ${{ fromJson(needs.read-matrix.outputs.build_matrix) }}
 
     steps:
-      - name: Checkout the tagged source
+      - name: Checkout the pinned release source
         uses: actions/checkout@v6
         with:
-          # dry_run=true: build off the dispatch ref (HEAD); no tag exists yet.
-          # dry_run=false: check out the just-created tag so .pkg is stamped from the
-          #   tagged tree (which includes the committed changelog).
-          ref: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.tag || github.ref }}
+          # issue #1855: build from prepare-release's PINNED SHA — the channel-branch
+          # tip including the committed changelog. The tag is created LATER, on this
+          # very SHA, so the published .pkg and the tag can never disagree even if
+          # the branch moves during verification. Empty on dry-run (prepare-release
+          # skipped) → the dispatch ref, exactly as before.
+          ref: ${{ needs.prepare-release.outputs.sha || github.ref }}
           persist-credentials: false
 
       - name: Set up Python 3.11
@@ -970,11 +1094,16 @@ jobs:
   publish-release:
     name: Health-check + publish the draft Release
     runs-on: ubuntu-latest
-    needs: [prepare-release, release, attach-pkgs, read-matrix, ui-suite, smoke-suite]
-    # ADR-14 D1 / issue #1662: the publish flip waits on EVERY live gate
-    # (ui-suite AND smoke-suite) — a flaky leg re-runs in isolation without
-    # redoing the publish (gate publish-release, never release/attach-pkgs).
-    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.ui-suite.result == 'success' && needs.smoke-suite.result == 'success' && needs.release.outputs.dry_run == 'false'
+    needs: [prepare-release, release, attach-pkgs, read-matrix]
+    # ADR-14 D1 / issue #1662: the publish flip waits on EVERY live gate — since
+    # issue #1855 it does so TRANSITIVELY and there is exactly ONE seam for that
+    # rule: tag-release. release needs tag-release, attach-pkgs needs release, and
+    # this job needs attach-pkgs, so nothing here can run unless both suite
+    # AND-gates were green (or, for an alpha/beta, were legitimately not required).
+    # Duplicating the suite conditions here would be a second copy of the Part 3
+    # predicate to drift; tests/test_release_tag_after_verify.py walks the graph
+    # instead. A flaky leg still re-runs in isolation without redoing the publish.
+    if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.release.outputs.dry_run == 'false'
     permissions:
       contents: write
     steps:

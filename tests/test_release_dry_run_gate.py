@@ -16,6 +16,7 @@ WORKFLOW = ROOT / ".github/workflows/release.yml"
 # Current jobs that create or publish release artifacts.
 MUTATION_JOBS = {
     "prepare-release",
+    "tag-release",
     "release",
     "attach-pkgs",
     "publish-release",
@@ -102,8 +103,11 @@ def test_mutation_jobs_exist_in_the_workflow() -> None:
 DRY_RUN_SAFE_JOBS = frozenset(
     {
         "read-matrix",  # reads the build matrix from repo state; no external effect
-        "resolve-stamp",  # dry-run-AWARE checkout-ref pick (tag vs dispatch ref); unconditional
-        "build-pkgs-portable",  # same dry-run-aware checkout-ref pick; builds only, unconditional
+        # issue #1855: both of these now check out prepare-release's PINNED SHA (the tag
+        # does not exist yet at build time), falling back to the dispatch ref in dry-run --
+        # a needs-output value pick, no dry_run reference at all, still unconditional.
+        "resolve-stamp",
+        "build-pkgs-portable",
         "ui-suite",  # runs the browser UI test suite against a built artifact
         "smoke-suite",  # runs the live-VM smoke suite against a built artifact
     }
