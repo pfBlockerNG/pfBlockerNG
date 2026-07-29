@@ -43,9 +43,10 @@ Independently, only a matrix row whose ci-metadata `status` is a released pfSens
 reports, loudly demoted, but cannot fail the release.
 
 `scripts/release-version.sh` is the single source of truth for the scheme; **call it,
-never re-implement the regex.** The workflow's `prepare-release` job re-validates the
-scheme, and `.githooks/pre-push` re-validates the tag the workflow pushes — so this skill
-is the pre-check, those are the backstops.
+never re-implement the regex.** This skill is the pre-check and the workflow's
+`prepare-release` job is the backstop that covers the workflow's own push.
+`.githooks/pre-push` does **not** see that push: the runner's checkout never sets
+`core.hooksPath`, so the hook only backstops tags pushed by hand from a dev machine.
 
 ## Arguments
 
@@ -106,8 +107,9 @@ devel" guard, applied before the tag exists.
      **with** a check-run. Read via `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`.
      If pending, wait; if failed, stop.
    - Git hooks are active (`git config core.hooksPath` = `.githooks`); if not, run
-     `sh scripts/setup-hooks.sh` so the pre-push backstop (on the tag the workflow pushes)
-     is armed.
+     `sh scripts/setup-hooks.sh`. This arms the pre-push backstop for tags pushed **by
+     hand from this machine** — it never covers the tag the workflow pushes, which runs
+     on a runner checkout with no `core.hooksPath`.
 
 5. **Notes.** Nothing to prepare: release notes are **not files in this repository**. The
    workflow gives the draft a deterministic placeholder body ending in the compare link, and
@@ -138,8 +140,9 @@ devel" guard, applied before the tag exists.
    re-dispatching the same tag with `retag=false`, or delete it by hand to start over.
    Leave it `false` for a normal cut.
 
-   The workflow pins the channel-branch tip, tags **that** commit after verification, and
-   the `pre-push` hook re-validates the tag as it pushes. On `--dry-run`, the
+   The workflow pins the channel-branch tip and tags **that** commit after verification;
+   `prepare-release` is what re-validates the scheme for that push (the runner installs no
+   git hooks, so `pre-push` never sees it). On `--dry-run`, the
    same dispatch with `dry_run=false` → `dry_run=true` (publishes nothing). Dispatch is
    only allowed from the default branch (`devel`), but the workflow operates on the
    resolved channel branch regardless. After dispatching, find the run
@@ -166,8 +169,8 @@ devel" guard, applied before the tag exists.
 
 - **Never** dispatch a release whose channel/branch pairing
   `release-version.sh <tag> <branch>` rejects. The scheme is non-negotiable; the
-  workflow's `prepare-release` (and the pre-push hook on the tag it pushes) will reject it
-  anyway, so catch it here.
+  workflow's `prepare-release` will reject it anyway — after a runner has spun up — so
+  catch it here.
 - **Don't push a tag by hand** — dispatching the workflow is the whole job; it creates and
   pushes the tag, and only after the build and the verification suites are green. A
   hand-pushed tag now *blocks* the run unless it happens to point at the exact commit the
