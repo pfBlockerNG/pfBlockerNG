@@ -73,6 +73,12 @@ on:
         default: false
         type: boolean
 
+      retag:
+        description: "Re-cut an already-pushed tag on the CURRENT channel-branch tip: delete the existing tag (and an assetless draft Release for it) before pinning. For a run that crashed after pushing its tag while the branch moved on. REFUSED for a published Release (cut the next .N) and for a draft that already has assets (finish that draft instead)."
+        required: false
+        default: false
+        type: boolean
+
 # Least-privilege default; jobs that need more elevate explicitly below
 # (release: contents:write to create the draft; tag-release: contents:write to push
 # the tag; ui-suite: packages:read to pull the pfSense image from private GHCR).
@@ -97,8 +103,14 @@ jobs:
     # re-checks case-sensitively before anything is pushed.
     if: ${{ github.event.inputs.dry_run == 'false' }}
     permissions:
-      contents: read  # pushes NOTHING: the tag is minted locally and pushed by tag-release
-      checks: read    # gh api /commits/<sha>/check-runs to assert CI green
+      # write ONLY for the opt-in `retag` deletion below — the single place this whole
+      # pipeline removes anything from GitHub. GitHub scopes permissions per JOB, not
+      # per step, so this cannot be narrowed further without splitting the job; the
+      # deletion goes through `gh` (GITHUB_TOKEN), never through the checkout's
+      # credentials, which stay unpersisted. Nothing else here writes: the tag is
+      # minted locally and pushed by tag-release.
+      contents: write  # ONLY for the retag deletion below
+      checks: read     # gh api /commits/<sha>/check-runs to assert CI green
 
     outputs:
       tag:         ${{ steps.resolve.outputs.tag }}
@@ -161,6 +173,75 @@ jobs:
           git fetch origin "$BRANCH" --tags
           git checkout "$BRANCH"
           git reset --hard "origin/$BRANCH"
+
+      - name: Delete the existing tag before pinning (retag, opt-in)
+        # THE ONE PLACE THIS PIPELINE DELETES ANYTHING FROM GITHUB. Opt-in per dispatch,
+        # because the alternative is guessing intent from state: the pin is the
+        # channel-branch tip, so if the branch moved after a run pushed its tag,
+        # re-dispatching the same tag pins a NEW commit and then rejects its own
+        # already-pushed tag as stale. `retag: true` says "start clean on the current
+        # tip" — and is obeyed only when that is provably safe:
+        #
+        #   published Release        -> REFUSE. Immutable; retagging cannot rescue it.
+        #                               Cut the next .N.
+        #   draft WITH assets        -> REFUSE. That is a finished cut waiting for its
+        #                               notes; publish it instead of throwing it away.
+        #   draft WITHOUT assets     -> delete the draft AND the tag. Deleting only the
+        #                               tag would orphan the draft and this run would
+        #                               then create a SECOND draft for the same tag.
+        #   no Release at all        -> delete the tag.
+        #   no tag at all            -> nothing to do.
+        #
+        # The local ref goes too: the pin step below reads refs/tags/<tag> from this
+        # same checkout, so a surviving local ref would resurrect the stale-tag refusal.
+        if: ${{ github.event.inputs.retag == 'true' }}
+        env:
+          TAG:      ${{ steps.resolve.outputs.tag }}
+          REPO:     ${{ github.repository }}
+          DRY_RUN:  ${{ github.event.inputs.dry_run }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null 2>&1; then
+            echo "retag: no ${TAG} tag exists — nothing to delete."
+            exit 0
+          fi
+
+          META=$(gh release view "$TAG" --repo "$REPO" --json isDraft,assets 2>/dev/null || echo '')
+          if [ -z "$META" ]; then
+            STATE="none"
+          elif [ "$(printf '%s' "$META" | jq -r '.isDraft')" != "true" ]; then
+            STATE="published"
+          elif [ "$(printf '%s' "$META" | jq '.assets | length')" -gt 0 ]; then
+            STATE="draft-with-assets"
+          else
+            STATE="draft-empty"
+          fi
+
+          case "$STATE" in
+            published)
+              echo "::error::retag refused: ${TAG} already has a PUBLISHED Release. A published release is immutable, so retagging cannot rescue it — cut the next .N instead."
+              exit 1 ;;
+            draft-with-assets)
+              echo "::error::retag refused: ${TAG} has a DRAFT Release with assets already attached. That draft is a finished cut waiting for its notes — author them and publish it rather than retagging. To start over anyway, delete that draft by hand first."
+              exit 1 ;;
+          esac
+
+          # Fail SAFE on anything that is not exactly 'false': a dry run deletes nothing.
+          # Unreachable today (this job is real-publish only) — defence in depth if that
+          # job-level gate is ever relaxed.
+          if [ "$DRY_RUN" != "false" ]; then
+            echo "retag (dry run): would delete tag ${TAG} (release state: ${STATE}) — deleting nothing."
+            exit 0
+          fi
+
+          if [ "$STATE" = "draft-empty" ]; then
+            gh release delete "$TAG" --repo "$REPO" --yes
+            echo "Deleted the assetless draft Release for ${TAG}."
+          fi
+          gh api -X DELETE "repos/${REPO}/git/refs/tags/${TAG}" > /dev/null
+          git tag -d "$TAG" > /dev/null
+          echo "Deleted tag ${TAG} — this run re-cuts it on the freshly pinned commit."
 
       - name: Refuse a published release (early, before anything is built)
         id: tag_state

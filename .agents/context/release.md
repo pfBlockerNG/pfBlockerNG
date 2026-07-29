@@ -65,6 +65,24 @@ release. Predicate + warning live in `scripts/resolve-legs.sh`, switched on by t
 build, verify — then stop. No tag, no Release, no push. A malformed tag still fails it, at
 `read-matrix`'s `release-version.sh` classification.
 
+**Re-cutting a tag that is already pushed** — `retag=true` (dispatch input, default
+`false`). The pin is the channel-branch tip, so a run that crashed *after* pushing its tag,
+on a branch that has since moved, would otherwise pin a new commit and reject its own tag as
+stale. `retag=true` deletes the existing tag first and re-cuts it on the freshly pinned tip.
+It is obeyed only when that is provably safe, and refuses loudly otherwise:
+
+| State of the tag's Release | `retag=true` does |
+| --- | --- |
+| **published** | **refuses** — a published Release is immutable; retagging cannot rescue it, cut the next `.N` |
+| **draft with assets** | **refuses** — that draft is a finished cut waiting for its notes; publish it instead |
+| draft with no assets | deletes the draft **and** the tag (an orphaned draft would collide with this run's own) |
+| no Release | deletes the tag |
+| no tag at all | no-op |
+
+This is the only place the pipeline removes anything from GitHub; it lives in
+`prepare-release` (the sole reason that job holds `contents: write`), runs before the pin,
+and never fires in a dry run.
+
 ## Release notes — authored onto the Release, never committed
 
 **There are no release-notes files in this repository.** A committed changelog forces a
