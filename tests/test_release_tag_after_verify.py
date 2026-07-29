@@ -843,13 +843,25 @@ def test_retag_refuses_a_published_release(tmp_path: Path) -> None:
 
 
 def test_retag_refuses_a_draft_that_already_has_assets(tmp_path: Path) -> None:
-    """Given a DRAFT with assets attached, when retag runs, then it refuses: that draft
-    is a finished cut waiting for its notes, so the right move is to publish it."""
+    """Given a DRAFT with assets attached, when retag runs, then it refuses and names
+    BOTH ways forward.
+
+    The state machine is right, but "that draft is a finished cut waiting for its notes,
+    author them and publish it" is not: the `release` job attaches the source archive
+    before `attach-pkgs` runs, so a crash in between leaves a draft WITH an asset and
+    NOT ONE `.pkg`. Publishing that ships an empty release. The refusal cannot tell the
+    two apart -- which is exactly why it refuses instead of deleting -- so it must offer
+    the operator both routes rather than pick one for them: re-dispatch the same tag
+    with `retag=false` to finish the draft, or delete it by hand to start over.
+    """
     completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", '{"isDraft":true,"assets":[{"name":"x.pkg"}]}')
-    assert completed.returncode != 0, completed.stdout + completed.stderr
-    assert "::error::" in completed.stdout + completed.stderr
+    message = completed.stdout + completed.stderr
+    assert completed.returncode != 0, message
+    assert "::error::" in message
     assert not [c for c in calls if "delete" in c or "DELETE" in c], calls
     assert _tag_still_there(tmp_path, "v9.9.9.rc.1")
+    assert "retag=false" in message, f"the refusal must name the way to FINISH that draft: {message}"
+    assert "by hand" in message, f"the refusal must name the way to START OVER: {message}"
 
 
 def test_retag_deletes_an_assetless_draft_together_with_the_tag(tmp_path: Path) -> None:

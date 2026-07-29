@@ -79,7 +79,7 @@ It is obeyed only when that is provably safe, and refuses loudly otherwise:
 | State of the tag's Release | `retag=true` does |
 | --- | --- |
 | **published** | **refuses** — a published Release is immutable; retagging cannot rescue it, cut the next `.N` |
-| **draft with assets** | **refuses** — that draft is a finished cut waiting for its notes; publish it instead |
+| **draft with assets** | **refuses** — assets do not prove a finished cut (`release` attaches the source archive before `attach-pkgs` adds the `.pkg`s), so it never deletes them: re-dispatch with `retag=false` to finish that draft, or delete it by hand to start over |
 | draft with no assets | deletes the draft **and** the tag (an orphaned draft would collide with this run's own) |
 | no Release | deletes the tag |
 | no tag at all | no-op |
