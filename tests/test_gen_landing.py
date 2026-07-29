@@ -445,6 +445,99 @@ def test_build_edition_sections_one_row_per_pfsense_minor_whatever_the_flavor_se
     assert [r["pfsense_version"] for r in sections["CE"]] == ["2.8"]
 
 
+def test_build_edition_sections_sorted_by_pkg_version_then_pfsense_version_desc() -> None:
+    """Table order: pfBlockerNG version desc, then pfSense version desc (issue #1863).
+
+    Editions are already separate tables (CE before Plus), so within one table the
+    pfBlockerNG version leads and the pfSense version breaks its ties — both newest-first.
+    A pfSense-version-first order interleaves channels instead, burying the newest build.
+
+    Given a devel and a nightly build, each published for CE 2.8 and CE 2.9,
+    When the edition sections are built,
+    Then the nightly rows come first (higher pfBlockerNG version), 2.9 before 2.8 in each.
+    """
+    pkgs = [
+        _pkg("devel", "d", "4.0.0.alpha.22", "FreeBSD:15:*", "release/ce-2.8/d.pkg"),
+        _pkg("devel", "d", "4.0.0.alpha.22", "FreeBSD:15:*", "release/ce-2.9/d.pkg"),
+        _pkg("nightly", "n", "4.0.0.alpha.22.20260729.1", "FreeBSD:15:*", "nightly/ce-2.8/n.pkg"),
+        _pkg("nightly", "n", "4.0.0.alpha.22.20260729.1", "FreeBSD:15:*", "nightly/ce-2.9/n.pkg"),
+    ]
+    matrix = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx("FreeBSD:15:amd64", "2.9", "CE", "8.4", "py311"),
+    ]
+
+    sections = dict(gl.build_edition_sections(pkgs, matrix))
+
+    assert [(r["version"], r["pfsense_version"]) for r in sections["CE"]] == [
+        ("4.0.0.alpha.22.20260729.1", "2.9"),
+        ("4.0.0.alpha.22.20260729.1", "2.8"),
+        ("4.0.0.alpha.22", "2.9"),
+        ("4.0.0.alpha.22", "2.8"),
+    ]
+
+
+def test_older_nightlies_one_row_per_nightly_version_per_pfsense_version() -> None:
+    """Retention keeps several nightlies, so the disclosure lists one row per retained
+    nightly version per pfSense version it was built for — same order rule as the main
+    table: pfBlockerNG version desc, then pfSense version desc (issue #1863).
+
+    Given two retained nightly versions, each published for CE 2.8 and CE 2.9,
+    When the older-nightlies rows are grouped per edition,
+    Then there are four rows, the newer nightly's pair first, 2.9 before 2.8 within each.
+    """
+    latest = _pkg("nightly", "n", "4.0.0.alpha.22.20260729.1", "FreeBSD:15:*", "nightly/ce-2.8/n3.pkg")
+    pkgs = [
+        latest,
+        _pkg("nightly", "n", "4.0.0.alpha.22.20260728.1", "FreeBSD:15:*", "nightly/ce-2.8/n2.pkg"),
+        _pkg("nightly", "n", "4.0.0.alpha.22.20260728.1", "FreeBSD:15:*", "nightly/ce-2.9/n2.pkg"),
+        _pkg("nightly", "n", "4.0.0.alpha.22.20260727.1", "FreeBSD:15:*", "nightly/ce-2.8/n1.pkg"),
+        _pkg("nightly", "n", "4.0.0.alpha.22.20260727.1", "FreeBSD:15:*", "nightly/ce-2.9/n1.pkg"),
+    ]
+    matrix = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx("FreeBSD:15:amd64", "2.9", "CE", "8.4", "py311"),
+    ]
+
+    rows = gl._older_nightlies_by_edition(pkgs, matrix)["CE"]
+
+    assert [(r["version"], r["pfsense_version"]) for r in rows] == [
+        ("4.0.0.alpha.22.20260728.1", "2.9"),
+        ("4.0.0.alpha.22.20260728.1", "2.8"),
+        ("4.0.0.alpha.22.20260727.1", "2.9"),
+        ("4.0.0.alpha.22.20260727.1", "2.8"),
+    ]
+
+
+def test_older_releases_sorted_by_pkg_version_then_pfsense_version_desc() -> None:
+    """The retained older releases obey the same order rule (issue #1863).
+
+    Given two retained devel versions, each published for CE 2.8 and CE 2.9,
+    When the older-releases rows are grouped per edition,
+    Then the newer version's pair leads, 2.9 before 2.8 within each.
+    """
+    pkgs = [
+        _pkg("devel", "d", "4.0.0.alpha.22", "FreeBSD:15:*", "release/ce-2.8/d3.pkg"),
+        _pkg("devel", "d", "4.0.0.alpha.21", "FreeBSD:15:*", "release/ce-2.8/d2.pkg"),
+        _pkg("devel", "d", "4.0.0.alpha.21", "FreeBSD:15:*", "release/ce-2.9/d2.pkg"),
+        _pkg("devel", "d", "4.0.0.alpha.20", "FreeBSD:15:*", "release/ce-2.8/d1.pkg"),
+        _pkg("devel", "d", "4.0.0.alpha.20", "FreeBSD:15:*", "release/ce-2.9/d1.pkg"),
+    ]
+    matrix = [
+        _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
+        _mx("FreeBSD:15:amd64", "2.9", "CE", "8.4", "py311"),
+    ]
+
+    rows = gl._older_releases_by_edition(pkgs, matrix)["CE"]
+
+    assert [(r["version"], r["pfsense_version"]) for r in rows] == [
+        ("4.0.0.alpha.21", "2.9"),
+        ("4.0.0.alpha.21", "2.8"),
+        ("4.0.0.alpha.20", "2.9"),
+        ("4.0.0.alpha.20", "2.8"),
+    ]
+
+
 def test_older_nightlies_lists_retained_excludes_latest() -> None:
     """Scenario: surface the retained older nightlies, never the current one.
 
@@ -988,6 +1081,27 @@ def test_eol_versions_wildcard_served_pkg_matches_concrete_matrix_entry() -> Non
     assert ekey == "CE"
     assert ver == "2.7"
     assert row["version"] == "3.1.0_5"
+
+
+def test_eol_versions_sorted_by_pkg_version_then_pfsense_version_desc() -> None:
+    """The EOL table obeys the same order rule as the live tables (issue #1863):
+    pfBlockerNG version desc, then pfSense version desc — within each edition's table.
+
+    Given route-only CE 2.6 and CE 2.7, where 2.7 was frozen at the HIGHER pfBlockerNG
+      version (so pfSense-version order and package-version order disagree),
+    When eol_versions is called,
+    Then the higher pfBlockerNG version leads.
+    """
+    served_27 = _eol_pkg("3.1.9", "FreeBSD:14:*", "ce-2.7")
+    served_26 = _eol_pkg("3.1.0_5", "FreeBSD:13:*", "ce-2.6")
+    matrix = [
+        _mx_eol("FreeBSD:13:amd64", "2.6", "CE", "8.1", "py311"),
+        _mx_eol("FreeBSD:14:amd64", "2.7", "CE", "8.2", "py311"),
+    ]
+
+    result = gl.eol_versions([served_26, served_27], matrix)
+
+    assert [(ver, row["version"]) for _, ver, row in result] == [("2.7", "3.1.9"), ("2.6", "3.1.0_5")]
 
 
 def test_eol_versions_one_row_per_pfsense_minor_whatever_the_flavor_set() -> None:

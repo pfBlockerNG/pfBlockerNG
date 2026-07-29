@@ -499,6 +499,19 @@ def _join_matrix(rows: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     return out
 
 
+def sort_table_rows(rows: list[dict]) -> None:
+    """Order one table's rows in place: the display rule every packages table follows.
+
+    pfBlockerNG version desc, then pfSense version desc, then channel (issue #1863). Both
+    versions compare number-aware (``ver_key``), never as strings. Editions are already
+    separate tables ordered CE before Plus (``_order_edition_keys``), which is where the
+    edition rank of the rule lives. Written as stable passes, least significant first.
+    """
+    rows.sort(key=lambda p: CH_ORDER.index(p["channel"]))
+    rows.sort(key=lambda p: ver_key(p.get("pfsense_version", "")), reverse=True)
+    rows.sort(key=lambda p: ver_key(p["version"]), reverse=True)
+
+
 def _order_edition_keys(sections: dict[str, list[dict]]) -> list[str]:
     """Edition display order: CE, then Plus, then any other variant alphabetically,
     with "Other" (unmatched ABIs) always last."""
@@ -515,7 +528,8 @@ def build_edition_sections(pkgs: list[dict], matrix: list[dict] | None) -> list[
     Each row is the newest version per (channel, ABI) (build_table), enriched with the
     pfSense version + PHP/Python from the matrix join. A build whose ABI has no matrix
     entry falls into a trailing "Other" section using its manifest-derived php/py, so
-    nothing published is ever hidden. Editions sort CE, then Plus, then the rest.
+    nothing published is ever hidden. Editions sort CE, then Plus, then the rest; rows
+    within each follow the shared table order (``sort_table_rows``).
     """
     sections: dict[str, list[dict]] = {}
     for ekey, row in _join_matrix(build_table(pkgs), matrix):
@@ -523,7 +537,7 @@ def build_edition_sections(pkgs: list[dict], matrix: list[dict] | None) -> list[
     out: list[tuple[str, list[dict]]] = []
     for k in _order_edition_keys(sections):
         rows = sections[k]
-        rows.sort(key=lambda p: (ver_key(p.get("pfsense_version", "")), CH_ORDER.index(p["channel"]), p["abi"]))
+        sort_table_rows(rows)
         out.append((k, rows))
     return out
 
@@ -594,10 +608,16 @@ def older_nightlies(pkgs: list[dict]) -> list[dict]:
 
 def _older_nightlies_by_edition(pkgs: list[dict], matrix: list[dict] | None) -> dict[str, list[dict]]:
     """The retained older nightlies grouped by edition key (matrix-joined by ABI), so each
-    edition's disclosure folds in directly under that edition's table. Empty when none."""
+    edition's disclosure folds in directly under that edition's table. Empty when none.
+
+    Retention keeps several nightly versions, so an edition lists one row per retained
+    version per pfSense version it was built for, in the shared table order (issue #1863).
+    """
     by_edition: dict[str, list[dict]] = {}
     for ekey, row in _join_matrix(older_nightlies(pkgs), matrix):
         by_edition.setdefault(ekey, []).append(row)
+    for rows in by_edition.values():
+        sort_table_rows(rows)
     return by_edition
 
 
@@ -629,10 +649,16 @@ def older_releases(pkgs: list[dict]) -> list[dict]:
 
 def _older_releases_by_edition(pkgs: list[dict], matrix: list[dict] | None) -> dict[str, list[dict]]:
     """The retained older releases grouped by edition key (matrix-joined by ABI), so each
-    edition's disclosure folds in directly under that edition's table. Empty when none."""
+    edition's disclosure folds in directly under that edition's table. Empty when none.
+
+    Rows follow the shared table order (issue #1863): pfBlockerNG version desc, then
+    pfSense version desc, then channel.
+    """
     by_edition: dict[str, list[dict]] = {}
     for ekey, row in _join_matrix(older_releases(pkgs), matrix):
         by_edition.setdefault(ekey, []).append(row)
+    for rows in by_edition.values():
+        sort_table_rows(rows)
     return by_edition
 
 
@@ -708,14 +734,13 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
         row["py"] = py
         out.append((ekey, version, row))
 
-    # Sort: edition order (CE < Plus < Other), then pfSense version newest-first, then ABI.
+    # Sort: edition order (CE < Plus < Other) — each edition is its own table — then the
+    # shared table order within it: pfBlockerNG version desc, then pfSense version desc
+    # (issue #1863). Stable passes, least significant first.
     edition_rank = {k: i for i, k in enumerate(EDITION_ORDER)}
-
-    def _sort_key(t: tuple[str, str, dict]) -> tuple[int, tuple[list[int], int, int], str]:
-        ekey, ver, row = t
-        return (edition_rank.get(ekey, len(EDITION_ORDER)), ver_key(ver), row["abi"])
-
-    out.sort(key=_sort_key)
+    out.sort(key=lambda t: ver_key(t[1]), reverse=True)
+    out.sort(key=lambda t: ver_key(t[2]["version"]), reverse=True)
+    out.sort(key=lambda t: edition_rank.get(t[0], len(EDITION_ORDER)))
     return out
 
 
