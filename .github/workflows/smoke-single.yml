@@ -108,6 +108,11 @@ on:
         description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-s<shard>."
         required: false
         default: ""
+      nonblocking:
+        description: "true = this leg cannot veto the caller (issue #1855): it runs and reports as usual, but its failure does not fail the run. Set by smoke.yml for a leg whose ci-metadata status is not a released pfSense version, and only when the caller asked for the release gate."
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       image_ref:
@@ -195,6 +200,11 @@ on:
         required: false
         type: string
         default: ""
+      nonblocking:
+        description: "true = this leg cannot veto the caller (issue #1855): it runs and reports as usual, but its failure does not fail the run. Set by smoke.yml for a leg whose ci-metadata status is not a released pfSense version, and only when the caller asked for the release gate."
+        required: false
+        type: boolean
+        default: false
   # Nightly gated run — enable once the wall-time is confirmed within budget.
   # schedule:
   #   - cron: "0 5 * * *"
@@ -267,6 +277,13 @@ jobs:
     # (pkg_artifact set — build-pkg's `if` above never even started it); skip
     # only if build-pkg actually ran and failed/was cancelled.
     if: ${{ always() && (needs.build-pkg.result == 'success' || needs.build-pkg.result == 'skipped') }}
+    # issue #1855: a leg the caller demoted to non-blocking still runs every step
+    # and still reports its failure -- it just does not fail the run, so the
+    # caller's fan-out (and the release it gates) is not vetoed by a pfSense
+    # version that is not a released one. Applied HERE because GitHub forbids
+    # continue-on-error on smoke.yml's `uses:` fan-out job. Default false: every
+    # other caller (PR gate, nightly, bare dispatch) keeps the hard veto.
+    continue-on-error: ${{ inputs.nonblocking }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 

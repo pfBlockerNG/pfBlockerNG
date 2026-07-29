@@ -517,3 +517,80 @@ Describe 'resolve-legs.sh exact-image-name'
     End
 
 End
+
+Describe 'resolve-legs.sh legs — release-gate status demotion (issue #1855)'
+
+    # A matrix row may veto a RELEASE only when its ci-metadata `status` is a
+    # RELEASED pfSense version: `active`, or its legacy alias `GA`. Every other
+    # value — `beta` today, anything added later (rc/dev/eol/…), and an absent or
+    # unrecognized one — is NON-BLOCKING. Non-blocking legs still run and still
+    # report; they simply cannot veto, and each demotion is announced loudly so
+    # coverage cannot erode silently. Off by default: without RELEASE_GATE_INPUT
+    # every row stays blocking, so PR/nightly gating is untouched.
+    #
+    # Prompted by v4.0.0.alpha.24 (run 30424647767): Plus 26.07 (status=beta,
+    # auto-activated to ci=true by the reconcile automation) vetoed a release over
+    # a real 26.07-only defect (#1856) after the tag and draft already existed.
+
+    GATE_MATRIX='[{"pfsense_version":"2.8","channel":"CE","ci":true,"status":"active","image_name":"pfsense-ce","mac":"","freebsd_major":"15","php_version":"8.3","py_flavor":"py311"},{"pfsense_version":"26.03","channel":"Plus","ci":true,"status":"GA","image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"},{"pfsense_version":"26.07","channel":"Plus","ci":true,"status":"beta","image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"},{"pfsense_version":"27.01","channel":"Plus","ci":true,"image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"},{"pfsense_version":"27.02","channel":"Plus","ci":true,"status":"eol","image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"}]'
+
+    setup() {
+        scrub_git_env
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+        unset SHARDS_INPUT MARKER_INPUT RELEASE_GATE_INPUT
+    }
+    BeforeEach 'setup'
+
+    # version=release_blocking pairs, matrix order preserved.
+    gate_pairs() {
+        env CI_MATRIX="$GATE_MATRIX" EVENT_NAME="workflow_call" SCOPE_INPUT="full" \
+            RELEASE_GATE_INPUT="$1" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker 2>/dev/null \
+            | jq -r 'map("\(.pfsense_version)=\(.release_blocking)") | join(" ")'
+    }
+
+    It 'RELEASE_GATE_INPUT=true → only active/GA rows keep their veto'
+        # Given: five ci:true rows — active, GA, beta, status-absent, unknown ("eol").
+        # When: the legs run with the release gate on.
+        # Then: active + GA stay blocking; beta, absent and unknown are demoted.
+        When call gate_pairs true
+        The status should be success
+        The output should equal '2.8=true 26.03=true 26.07=false 27.01=false 27.02=false'
+    End
+
+    It 'RELEASE_GATE_INPUT unset → every row stays blocking (PR/nightly unchanged)'
+        # The demotion is release-scoped: a pfSense beta still gates PR CI and the
+        # nightly fan-out exactly as before.
+        When call gate_pairs ''
+        The status should be success
+        The output should equal '2.8=true 26.03=true 26.07=true 27.01=true 27.02=true'
+    End
+
+    It 'each demoted row is announced loudly, naming the row and its status'
+        When run env \
+            CI_MATRIX="$GATE_MATRIX" \
+            EVENT_NAME="workflow_call" \
+            SCOPE_INPUT="full" \
+            RELEASE_GATE_INPUT="true" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        # The demoted legs are still IN the fan-out — they run and report, they
+        # just cannot veto.
+        The output should include '"pfsense_version":"26.07"'
+        The output should include '"release_blocking":"false"'
+        The error should include '::warning::release gate: Plus 26.07 (status beta)'
+        The error should include '::warning::release gate: Plus 27.01 (status <absent>)'
+        The error should include '::warning::release gate: Plus 27.02 (status eol)'
+        The error should not include '::warning::release gate: CE 2.8'
+        The error should not include '::warning::release gate: Plus 26.03'
+    End
+
+    It 'the release gate never silences a row it kept blocking'
+        # Coverage-erosion guard: an active/GA row must never be demoted, so a
+        # warning naming one is itself the bug.
+        When call gate_pairs true
+        The status should be success
+        The output should include '2.8=true'
+        The output should include '26.03=true'
+    End
+End

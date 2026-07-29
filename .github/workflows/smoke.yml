@@ -94,6 +94,11 @@ on:
         description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally (the build-pkg job runs as before)."
         required: false
         default: ""
+      release_gate:
+        description: "true = this run gates a RELEASE (issue #1855): only rows whose ci-metadata status is a released pfSense version (active | GA) may veto. Every other/absent status still runs and reports, loudly demoted, but cannot fail the run. false (default) = every row vetoes, as on PR/nightly runs."
+        required: false
+        default: false
+        type: boolean
   # Called by other workflows. A callee sees the CALLER's event_name, so scope
   # never auto-resolves to full here (issue #906): blank = impacted; a caller
   # that wants the full suite passes scope=full explicitly.
@@ -129,6 +134,11 @@ on:
         required: false
         type: string
         default: ""
+      release_gate:
+        description: "true = this run gates a RELEASE (issue #1855): only rows whose ci-metadata status is a released pfSense version (active | GA) may veto. false (default) = every row vetoes, as on PR/nightly runs."
+        required: false
+        type: boolean
+        default: false
   # Daily nightly run — scope=full: the whole marker on every ci:true leg (CE + Plus).
   schedule:
     - cron: "0 7 * * *"
@@ -184,6 +194,10 @@ jobs:
           # so a third CE shard now buys real wall-clock (~11 min legs).
           SHARDS_INPUT: ${{ inputs.shards || '3' }}
           EVENT_NAME: ${{ github.event_name }}
+          # issue #1855: release-scoped veto rule. resolve-legs.sh stamps every leg
+          # with release_blocking and warns loudly for each demoted row; blank/false
+          # (every non-release caller) keeps every row blocking.
+          RELEASE_GATE_INPUT: ${{ inputs.release_gate }}
         run: |
           set -eu
           # ADR-47 P5: scope + legs + -k resolved by the shared script.
@@ -352,6 +366,12 @@ jobs:
       # alike — issue #856). N=1 is a byte-identical no-op in run-smoke.sh.
       shard: ${{ matrix.shard }}
       shard_total: ${{ matrix.shard_total }}
+      # issue #1855: this leg's release verdict, stamped by resolve-legs.sh. GitHub
+      # forbids `continue-on-error` on a job that calls a reusable workflow (only
+      # name/uses/with/secrets/needs/if/permissions/strategy are allowed there), so
+      # the demotion rides in as an input and smoke-single.yml applies it to ITS own
+      # job -- a demoted leg runs, reports red, and does not fail this call.
+      nonblocking: ${{ matrix.release_blocking == 'false' }}
     secrets: inherit
 
   # ── 4. AND-gate: green only if ALL legs passed ───────────────────────────────
@@ -430,8 +450,13 @@ jobs:
               # PR #1766 selective exemption) — a selective run that legitimately
               # selects nothing anywhere stays tolerated.
               if [ -z "${PYTEST_FILTER:-}" ] && [ -n "${CI_MATRIX:-}" ]; then
+                # issue #1855: a leg demoted to non-blocking (its ci-metadata status
+                # is not a released pfSense version) must not veto here either -- it
+                # can fail before ever uploading a marker, which would otherwise read
+                # as a whole-leg zero-selection and re-introduce the veto by the back
+                # door. Absent field (every non-release run) = blocking, as before.
                 MULTI_SHARD_LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c '
-                    [.[] | select(.shard_total != "1")]
+                    [.[] | select(.shard_total != "1" and (.release_blocking != "false"))]
                     | group_by(.image_name + "|" + .pfsense_version)
                     | map({
                         image_name: .[0].image_name,
