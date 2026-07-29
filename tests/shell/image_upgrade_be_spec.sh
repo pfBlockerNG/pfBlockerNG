@@ -47,6 +47,7 @@ Describe 'image-upgrade.sh pre-push artifact verification'
       log()  { printf "==> %s\n" "$*"; }
       warn() { printf "WARNING: %s\n" "$*" >&2; }
       die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      LOCAL_DIR="$2"
       # the real tag rule, not a stub — the family comparison IS the guard
       . "$(dirname "$1")/image-lib.sh"
       eval "$(sed -n "/^# pfb_verify_artifact BEGIN/,/^# pfb_verify_artifact END/p" "$1")"
@@ -56,6 +57,54 @@ Describe 'image-upgrade.sh pre-push artifact verification'
       printf "REACHED-AFTER-VERIFY\n"
     ' _ "$SCRIPT" "$WORK"
   }
+
+  # run_verify_reap — drive the REAL boot helper (not the stub) into a wedged
+  # boot and show where the verify VM pid ends up. cleanup() reaps $QPID from
+  # the top-level shell: if the boot runs in a subshell/pipeline, the pid never
+  # reaches it and a wedged verification QEMU is unreapable (and die() cannot
+  # abort from the left side of a pipe — the #1844 rule in the script header).
+  run_verify_reap() {
+    sh -c '
+      set -e
+      log()  { printf "==> %s\n" "$*"; }
+      warn() { printf "WARNING: %s\n" "$*" >&2; }
+      die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      sleep() { true; }
+      REMOTE_DIR=/r
+      LOCAL_DIR="$2"
+      QPID=""
+      at_exit() { printf "QPID-AT-EXIT=%s\n" "$QPID" >&2; }
+      trap at_exit EXIT
+      QEMU_CMD="qemu-kvm -drive file=/r/work.qcow2,if=none -display none -serial file:/r/console.log -pidfile /r/qemu.pid -daemonize"
+      . "$(dirname "$1")/image-lib.sh"
+      eval "$(sed -n "/^# pfb_verify_artifact BEGIN/,/^# pfb_verify_artifact END/p" "$1")"
+      eval "$(sed -n "/^pfb_boot_artifact_version()/,/^}/p" "$1")"
+      px() {
+        case "$1" in
+          "cat "*) printf "4242\n" ;;
+        esac
+      }
+      wait_guest_ssh() { die "SSH never answered"; }
+      ssh_guest() { true; }
+      pfb_verify_artifact "$2/out.qcow2" 26.07
+      printf "REACHED-AFTER-VERIFY\n"
+    ' _ "$SCRIPT" "$WORK"
+  }
+
+  It 'keeps the verify VM pid where cleanup can reap it when the boot wedges'
+    When call run_verify_reap
+    The status should be failure
+    The stderr should include 'SSH never answered'
+    The stderr should include 'QPID-AT-EXIT=4242'
+    The output should not include 'REACHED-AFTER-VERIFY'
+  End
+
+  It 'keeps both #1858 guards wired into the main flow'
+    # a guard nobody calls is not a guard: the bare call lines must exist —
+    # deleting either wiring line must turn a test red, not silently drop a layer
+    When call sh -c 'grep -cE "^pfb_promote_be$|^pfb_verify_artifact " "$1"' _ "$SCRIPT"
+    The output should equal 2
+  End
 
   It 'passes when the exported disk boots the family being published'
     When call run_verify 26.07-BETA 26.07
@@ -123,6 +172,19 @@ Describe 'image-upgrade.sh boot-environment promotion'
             # garbled — the list never parses (ssh flake, unexpected output):
             # there is nothing trustworthy to promote or verify against
             [ "$_mode" = garbled ] && return 0
+            if [ "$_mode" = named ]; then
+              if [ -f "$WORK/activated" ]; then
+                printf "pfSense_2603           NR     /          1.76G 2026-07-29 03:30\n"
+                printf "default                -      -          826M  2026-06-12 22:03\n"
+              else
+                # hostile shape: an old BE literally named `default` still owns
+                # the permanent bootfs while the running BE carries another
+                # name — promoting a guessed `default` would pass here
+                printf "pfSense_2603           N      /          1.76G 2026-07-29 03:30\n"
+                printf "default                R      -          826M  2026-06-12 22:03\n"
+              fi
+              return 0
+            fi
             _n=$(( $(cat "$POLLS" 2>/dev/null || echo 0) + 1 ))
             printf "%s" "$_n" > "$POLLS"
             _promoted=0
@@ -169,6 +231,15 @@ Describe 'image-upgrade.sh boot-environment promotion'
     The status should be failure
     The stderr should include 'boot environment'
     The output should not include 'REACHED-AFTER-PROMOTE'
+  End
+
+  It 'promotes the BE it detected, not a well-known name'
+    When call run_promote named
+    The status should be success
+    The stderr should include 'no automatic boot verification'
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The contents of file "$CMDS" should include "bectl activate 'pfSense_2603'"
+    The contents of file "$CMDS" should not include "bectl activate 'default'"
   End
 
   It 'refuses to guess when the running BE cannot be identified'

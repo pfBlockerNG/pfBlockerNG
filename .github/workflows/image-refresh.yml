@@ -20,7 +20,13 @@ name: Upgrade pfSense smoke images
 #   5. Health gate: poll up to 300 s for EITHER the webConfigurator to answer
 #      HTTP on-box (fetch https://127.0.0.1/) OR pfctl -sr to show a live ruleset.
 #      If NEITHER within 300 s → die, fail-closed, nothing is published.
-#   6. Clean shutdown → compress to qcow2 (zstd) → oras push new tag.
+#   6. Boot-environment promotion: wait for pfSense's own boot verification to
+#      make the new BE permanent on disk (fallback: explicit bectl activate);
+#      die if the disk would still boot the pre-upgrade system (issue #1858).
+#   7. Clean shutdown → compress to qcow2 (zstd) → stream back.
+#   8. Artifact verification: boot the exported qcow2 once and refuse to push
+#      it under a tag whose family it does not come up with (issue #1858).
+#   9. oras push new tag.
 #
 # pfBlockerNG SMOKE (non-blocking, after publish):
 #   A separate step with continue-on-error: true boots a throwaway copy-on-write
