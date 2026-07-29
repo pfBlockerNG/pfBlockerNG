@@ -582,12 +582,28 @@ def test_tag_release_needs_both_suites() -> None:
     assert "ui-suite" in needs_line and "smoke-suite" in needs_line, f"got: {needs_line}"
 
 
-def test_tag_release_if_gates_on_both_suite_results_and_retains_dry_run_false() -> None:
+def test_tag_release_if_gates_on_every_upstream_result_and_retains_dry_run_false() -> None:
+    """The `if:` string is the WHOLE gate — `needs:` edges gate nothing here.
+
+    Because `tag-release` opens with a status function, GitHub drops the implicit
+    `success()` and runs the job whatever its `needs:` produced; every term that
+    actually holds the tag back lives in this one string. Dropping the build term is the
+    incident class this work exists to close: for an alpha/beta there is no suite gate
+    to fall back on, so a failed build would push the tag anyway. The prepare and
+    read-matrix terms carry the same weight — the pinned SHA and the `run_suites`
+    decision are only trustworthy if the jobs that produced them succeeded.
+    """
     jobs = _jobs(RELEASE_WORKFLOW)
     if_block = _job_if_block(jobs["tag-release"])
-    assert "needs.ui-suite.result == 'success'" in if_block, if_block
-    assert "needs.smoke-suite.result == 'success'" in if_block, if_block
-    assert "dry_run == 'false'" in if_block, if_block
+    for term in (
+        "needs.prepare-release.result == 'success'",
+        "needs.read-matrix.result == 'success'",
+        "needs.build-pkgs-portable.result == 'success'",
+        "needs.ui-suite.result == 'success'",
+        "needs.smoke-suite.result == 'success'",
+        "dry_run == 'false'",
+    ):
+        assert term in if_block, f"tag-release's gate lost `{term}`: {if_block}"
 
 
 def test_draft_healthcheck_retains_the_dry_run_false_gate() -> None:
