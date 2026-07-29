@@ -15,7 +15,7 @@ Describe 'box-facts.sh'
     BIN="${WORK}/bin"; mkdir -p "$BIN"
     BOOT_ARGV="${WORK}/boot-argv"
     OUT="${WORK}/facts"
-    KEY="${WORK}/key"; : > "$KEY"
+    KEY="${WORK}/key"; true > "$KEY"
     SSH_CMDS_LOG="${WORK}/ssh-cmds"
 
     # Stub oras: succeed and drop a qcow2 into the --output dir (unless ORAS_FAIL=1).
@@ -27,7 +27,7 @@ while [ "$#" -gt 0 ]; do
   [ "$1" = "--output" ] && _out="$2"
   shift
 done
-[ -n "$_out" ] && : > "${_out}/pfSense-Plus_26.03.qcow2"
+[ -n "$_out" ] && true > "${_out}/pfSense-Plus_26.03.qcow2"
 exit 0
 OEOF
     chmod +x "${BIN}/oras"
@@ -77,7 +77,13 @@ case "$_cmd" in
       esac
     fi
     [ "${FAIL_UPGRADE:-0}" = "1" ] && exit 1
-    printf 'Your system is up to date\n'
+    # UPGRADE_RC models what pfSense-upgrade -c itself returns: 0 current,
+    # 2 update available, 1 a real check error. ssh propagates it.
+    case "${UPGRADE_RC:-0}" in
+      2) printf '26.07.b.20260727.1443 version of pfSense is available\n'; exit 2 ;;
+      1) printf 'Unable to check for updates.\n'; exit 1 ;;
+      *) printf 'Your system is up to date\n' ;;
+    esac
     ;;
 esac
 exit 0
@@ -171,11 +177,13 @@ BEOF
     The contents of file "${OUT}/repoc.txt" should include 'Beta Version (26.07)'
   End
 
-  It 'names the failing fact in the log'
+  It 'names the failing fact, its command and its status in the log'
     export FAIL_REPOC=1
     When call facts ce
     The status should be success
     The stderr should include 'repoc'
+    The stderr should include 'pfSense-repoc -p'
+    The stderr should include 'status 1'
     The contents of file "${OUT}/status" should equal 'unavailable'
   End
 
@@ -203,6 +211,26 @@ BEOF
     The contents of file "${OUT}/status" should equal 'ok'
     The contents of file "${OUT}/upgrade-check.txt" should include 'up to date'
     The contents of file "${OUT}/upgrade-check.txt" should not include 'Another instance'
+  End
+
+  It 'treats a failing upgrade check (rc 1) as an absent optional fact'
+    # CodeRabbit: `-le 2` accepted rc 1, so a real check ERROR would have been
+    # recorded as the planner's second source.
+    export UPGRADE_RC=1
+    When call facts ce
+    The status should be success
+    The stderr should include 'optional'
+    The contents of file "${OUT}/status" should equal 'ok'
+    The contents of file "${OUT}/upgrade-check.txt" should equal ''
+  End
+
+  It 'keeps a real available-update answer (rc 2)'
+    export UPGRADE_RC=2
+    When call facts ce
+    The status should be success
+    The stderr should include 'booting'
+    The contents of file "${OUT}/status" should equal 'ok'
+    The contents of file "${OUT}/upgrade-check.txt" should include 'version of pfSense is available'
   End
 
   It 'records a timed-out upgrade check as absent, never as up to date'

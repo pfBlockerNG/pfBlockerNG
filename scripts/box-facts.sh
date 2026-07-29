@@ -173,15 +173,15 @@ _ok=1
 # marks the boot unavailable on failure.
 fact_get() {
     _fg_label=$1; _fg_file=$2; _fg_cmd=$3; _fg_opt=${4:-}
-    if guest_sh "$_fg_cmd" > "$_fg_file" 2>/dev/null; then
-        return 0
-    fi
+    guest_sh "$_fg_cmd" > "$_fg_file" 2>/dev/null
+    _fg_rc=$?
+    [ "$_fg_rc" -eq 0 ] && return 0
     if [ "$_fg_opt" = "optional" ]; then
-        echo "box-facts: ${_fg_label} fact failed (optional — boot still usable)" >&2
+        echo "box-facts: ${_fg_label} fact failed (optional — boot still usable): ${_fg_cmd} [status ${_fg_rc}]" >&2
         true > "$_fg_file"
         return 1
     fi
-    echo "box-facts: ${_fg_label} fact failed — status unavailable" >&2
+    echo "box-facts: ${_fg_label} fact failed — status unavailable: ${_fg_cmd} [status ${_fg_rc}]" >&2
     _ok=0
     return 1
 }
@@ -195,14 +195,19 @@ fact_get repoc "$OUT_DIR/repoc.txt" 'timeout 120 /usr/local/sbin/pfSense-repoc -
 # retried, then recorded as absent (an empty file never reads as "up to date").
 # Its loss never voids the boot: the branch list is what the reconcile turns on.
 _uc_raw="$WORK/upgrade-check.raw"
+# Guest-side predicate: pfSense-upgrade -c returns 0 (current) or 2 (update
+# available); anything else — including a real check error (1) and timeout's
+# 124 — must not become the planner's second source.
 _uc_i=0
 _uc_ok=0
-while :; do
-    if guest_sh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1; [ "$?" -le 2 ]' \
-        > "$_uc_raw" 2>/dev/null; then
-        _uc_ok=1
-        break
-    fi
+while true; do
+    guest_sh 'timeout 240 /usr/local/sbin/pfSense-upgrade -c 2>&1' > "$_uc_raw" 2>/dev/null
+    _uc_rc=$?
+    # 0 = current, 2 = update available; anything else (a real check error, or
+    # timeout(1)'s 124) must never become the planner's second source.
+    case "$_uc_rc" in
+        0|2) _uc_ok=1; break ;;
+    esac
     grep -q 'Another instance is already running' "$_uc_raw" 2>/dev/null || break
     _uc_i=$((_uc_i + 1))
     [ "$_uc_i" -lt "${PFB_LOCK_RETRIES:-8}" ] || break
@@ -212,7 +217,7 @@ done
 if [ "$_uc_ok" -eq 1 ]; then
     cat "$_uc_raw" > "$OUT_DIR/upgrade-check.txt"
 else
-    echo "box-facts: upgrade-check fact failed (optional — boot still usable)" >&2
+    echo "box-facts: upgrade-check fact failed (optional — boot still usable): pfSense-upgrade -c [status ${_uc_rc:-?}]" >&2
     true > "$OUT_DIR/upgrade-check.txt"
 fi
 

@@ -556,4 +556,7 @@ class TestReconcileMatrixSource:
         source = WORKFLOW.read_text(encoding="utf-8")
         reconcile = source.split("\n  reconcile:\n", 1)[1]
         assert "actions/upload-artifact" in reconcile
-        assert "facts" in reconcile.split("actions/upload-artifact", 1)[1][:400]
+        upload = reconcile.split("actions/upload-artifact", 1)[1][:400]
+        assert "facts" in upload
+        # the window an intermittent failure gets investigated in
+        assert "retention-days: 14" in upload
