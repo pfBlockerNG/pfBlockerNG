@@ -1,30 +1,31 @@
 ---
 name: release-with-changelog
 description: >
-  Cut a pfBlockerNG release WITH hand-authored release notes: write
-  docs/release-notes/<tag>.md from the commit range following the same prompt template the
-  workflow used to feed a model — commit it on the channel branch, then hand off to the
-  /release skill to validate the scheme + dispatch the release workflow (which builds and
-  verifies first, then creates+pushes the tag and publishes; no tag is pushed by hand).
-  Because the file is
-  committed, the release body comes from your file instead of the deterministic
-  placeholder. This is the recommended way to produce real release notes (the workflow no
-  longer drafts them — GitHub Models never produced a working result), or when the user
-  says "write the changelog and release", "release with notes", or invokes
+  Cut a pfBlockerNG release END TO END: invoke /release <tag> (scheme validation +
+  workflow dispatch + wait for the run to reach the drafted state), then author the
+  release notes and title from the commit range using scripts/release-notes-prompt.txt,
+  write them onto the DRAFT Release, and publish it. Release notes are never files in
+  the repository — they are authored onto the Release itself, and publishing is what
+  fires the pkg-repo republish and the FreeBSD-ports bump. This is the full path when
+  Claude is driving, and the one to use when the user says "write the changelog and
+  release", "release with notes", "cut and publish vX.Y.Z", or invokes
   /release-with-changelog.
   Args: <tag> (e.g. v4.0.0.alpha.1).
 ---
 
-You author the release notes yourself, commit them, then cut the release. The release
-workflow uses a committed `docs/release-notes/<tag>.md` **in preference to** its
-deterministic placeholder, so providing the file is how real release notes happen — the
-workflow itself no longer drafts anything (GitHub Models drafting was removed; it never
-produced a working result). The actual scheme validation + workflow dispatch (the workflow
-creates+pushes the tag and publishes — you never push a tag by hand) is delegated to
-**`/release`** — do not re-implement it.
+You cut the release **and finish it**. `/release` gets you a complete DRAFT; this skill is
+that plus the finish step: author the notes + title, put them on the draft, publish.
 
-`scripts/release-notes-prompt.txt` is the prompt template the workflow used to feed a
-model; apply it by hand here. `scripts/release-version.sh` classifies the tag/channel.
+The split is deliberate. `release.yml` deliberately stops at a draft — release notes are
+**not files in this repository** (a committed changelog forces a changelog commit, which
+forces a push to the channel branch and a re-generation whenever `devel` moves), and
+in-pipeline LLM drafting has no working free option, so a human or Claude writes them.
+Publishing the draft is what emits `release: published`, which fires
+`release-published.yml` (pkg-repo republish + FreeBSD-ports `PORTVERSION` bump).
+
+`scripts/release-notes-prompt.txt` is the authoring template — apply it by hand here.
+`scripts/release-version.sh` classifies the tag/channel. **Never re-implement `/release`'s
+dispatch mechanics**; delegate them.
 
 ## Arguments
 
@@ -32,25 +33,29 @@ model; apply it by hand here. `scripts/release-version.sh` classifies the tag/ch
 
 ## Steps
 
-1. **Classify the tag + pick the channel branch.** `sh scripts/release-version.sh <tag>` →
-   `channel`/`prerelease`. `devel` for a prerelease, `main` for stable. A malformed tag stops
-   here (show its error). Don't push anything yet.
+1. **Cut the release — delegate to `/release`.** Invoke **`/release <tag>`**. It validates
+   the channel↔branch scheme, checks CI is green on the release commit, and **dispatches
+   `release.yml` with `dry_run=false`** — the workflow pins the channel-branch tip, builds
+   every `.pkg` from it, verifies them, pushes the tag on that pinned SHA, and leaves a
+   complete **DRAFT** Release. Wait for the run to reach that state and capture the draft
+   URL. If the run fails, stop: nothing was tagged or drafted, and the same tag can be
+   re-dispatched once the fix lands.
 
 2. **Resolve the compare base (previous same-channel release).** Mirror `release.yml`'s
    `prev_tag`: `git fetch origin --tags`; the highest-version tag of the **same channel** that
-   is an ancestor of the channel-branch tip (classify each candidate with
-   `release-version.sh`), falling back to the highest ancestor tag of any channel, then the
-   next-lower version tag. Call it `PREV`. The compare link is
+   is an ancestor of the release commit (classify each candidate with `release-version.sh`),
+   falling back to the highest ancestor tag of any channel, then the next-lower version tag.
+   Call it `PREV`. The compare link is
    `https://github.com/<owner>/<repo>/compare/<PREV>...<tag>` (or `…/commits/<tag>` when there
-   is no `PREV`).
+   is no `PREV`) — the same link already sitting in the draft's placeholder body.
 
 3. **Gather the commits the notes cover.**
-   `git log <PREV>..origin/<branch> --no-merges --pretty='%h %s' -- src/ scripts/`.
+   `git log <PREV>..<tag> --no-merges --pretty='%h %s' -- src/ scripts/`.
    When **no prior tag exists** (`PREV` empty — the very first release), drop the range:
-   `git log origin/<branch> --no-merges --pretty='%h %s' -- src/ scripts/`.
+   `git log <tag> --no-merges --pretty='%h %s' -- src/ scripts/`.
    For a **genesis release of a new series** (the first `X.0.0.alpha.1`, whose `PREV` is an
    old-scheme tag), also describe the headline features of the whole series — the narrow
-   `PREV..HEAD` range alone undersells it; read prior notes / ADR titles for the arc.
+   `PREV..<tag>` range alone undersells it; read prior Releases / ADR titles for the arc.
 
 4. **Author the notes by applying `scripts/release-notes-prompt.txt`.** Follow its shape:
    keep only user-relevant changes (drop CI / tests / tooling / lint /
@@ -60,37 +65,49 @@ model; apply it by hand here. `scripts/release-version.sh` classifies the tag/ch
    describe the user-facing change. Professional, engineer-like tone; precision over flash.
    End the body with the exact compare link from step 2.
 
-5. **Write `docs/release-notes/<tag>.md`.** First line is the title marker
-   `<!-- SUMMARY: <three-word summary> -->` (the workflow turns it into the Release title
-   `<YYYY-MM-DD publish date> - <version> — <summary>` and strips it from the rendered body); then the
-   grouped body. Lint it: `npx markdownlint-cli2 docs/release-notes/<tag>.md` → 0 errors.
+5. **Compose the title.** `<YYYY-MM-DD> - <version> — <three-word summary>`, keeping the ISO
+   date the draft already carries (it keeps GitHub's alphabetical release sort chronological)
+   and appending the summary. There is no `SUMMARY` marker anywhere any more: the workflow
+   derives no title suffix, so this step owns the final title.
 
 6. **Confirm the rendered notes with the user.** Show the title + body. This is the public
-   release body — get a nod before committing (cheap to revise now, immutable after release).
+   release body — get a nod before writing it (cheap to revise now; the Release is immutable
+   once published).
 
-7. **Commit the notes file on the channel branch.** It must be on the channel branch **before**
-   the tag, so the tagged checkout contains it. Commit `docs: add release notes for <tag>`
-   (docs-only ⇒ CI-skipped) and land it on the channel branch via the repo's normal flow
-   (managed-remote: a docs PR to `devel`/`main`; off-appliance: the worktree flow). Wait until
-   it is merged so the channel-branch tip carries the file.
+7. **Write them onto the draft.** It stays a draft while you do:
 
-8. **Cut the release — delegate to `/release`.** Invoke **`/release <tag>`**. It re-validates
-   the channel↔branch scheme, checks CI is green on the release commit (now including the notes
-   commit), and **dispatches `release.yml` with `dry_run=false`** — the workflow pins that
-   channel-branch tip, builds and verifies from it, and only then creates and pushes the tag on
-   it (no hand-pushed tag). It sees the committed notes file and publishes the Release with your
-   notes as the body and the `SUMMARY` as the title suffix. If verification fails, nothing is
-   tagged or drafted and the same tag can be re-dispatched after the fix lands.
+   ```sh
+   gh release edit <tag> --title "<title>" --notes-file <path-to-body>
+   ```
+
+   Re-read it (`gh release view <tag>`) and confirm the body rendered as intended and every
+   asset is still attached.
+
+8. **Publish.** This is the irreversible, public step, and it locks the Release immutable:
+
+   ```sh
+   gh release edit <tag> --draft=false --prerelease   # stable: --latest instead
+   ```
+
+   Publishing fires `release-published.yml`: the FreeBSD-ports `PORTVERSION` bump on
+   `pfBlockerNG/FreeBSD-ports@pfblockerng/use-github`, then the `pfBlockerNG/pkg` republish so
+   the build appears at `pfblockerng.github.io/pkg`. Point at that run and report the
+   published Release URL.
 
 ## Guardrails
 
-- **The notes file must land on the channel branch before the release SHA is pinned** — the
-  workflow pins the branch tip, builds and verifies from it, and tags THAT commit. A notes
-  file that lands afterwards is not in the release (the body falls through to the
-  deterministic placeholder). Order matters: notes commit first, dispatch second.
-- **Inherit every `/release` guardrail** — channel↔branch enforcement, immutable tags (cut the
-  next `.N` instead of moving one), tag-only pushes (never a direct `main`/`devel` push). This
-  skill only adds the notes-authoring + commit in front.
+- **Never publish a draft you have not read.** The body and the asset list are frozen by
+  immutability the moment you publish.
+- **Never leave a release drafted silently.** If you stop before step 8 (the user asked to
+  review, something failed), say so explicitly and name the draft URL — a drafted release
+  ships nothing: no pkg-repo refresh, no port bump.
+- **Prerelease flag matches the channel** — `--prerelease` for `alpha`/`beta`/`rc`,
+  `--latest` for a stable `vX.Y.Z`. `release-version.sh` classifies it; the draft was already
+  created with the right flag, so only re-assert it, never flip it.
+- **Inherit every `/release` guardrail** — channel↔branch enforcement, immutable published
+  releases (cut the next `.N` instead of re-releasing), never a direct `main`/`devel` push.
+  This skill only adds the notes-authoring + publish behind it.
 - **Don't fabricate PR/issue numbers.** Link a `#N` only when a commit subject references it;
   otherwise describe the change without a link.
 - **Keep ADRs out of the public notes** — neutral, user-facing wording only.
+- **Never commit release notes to the repository.** They live on the Release.
