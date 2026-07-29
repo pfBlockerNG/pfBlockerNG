@@ -33,10 +33,23 @@ line { (Pattern Comment? | Comment)? }
   // ever fires at line-start, exactly the "trim($line) starts with '#'" case.
   Comment { $[ \t]* "#" ![\n]* }
 
-  // Everything up to the first "#" or newline. Whitespace is significant here (it's part
-  // of the regex pattern the outer grammar mounts inside via parseMixed).
-  Pattern { patternChar+ }
-  patternChar { ![#\n] }
+  // Everything up to the first UNESCAPED "#", or the newline. Whitespace is significant
+  // here (it's part of the regex pattern the outer grammar mounts inside via parseMixed).
+  //
+  // issue #1867: a backslash consumes the character after it, so "\#" is one pattern
+  // char and the "#" never reaches Comment -- while "\\#" (an escaped BACKSLASH) leaves
+  // the following "#" free to start the Comment, because the first alternative already
+  // ate both backslashes as a pair. That parity is the whole rule, and it matches
+  // pfb_split_regex_line() in PHP and pfb_unbound.py byte for byte.
+  //
+  // The dangling-backslash case (a line ENDING in "\\") is a trailing OPTION on Pattern,
+  // never a patternChar alternative: as an alternative it would let the tokenizer take a
+  // lone backslash mid-line and re-pair the rest, and since Lezer resolves a token by
+  // LONGEST match it would then read "a\\#desc" as one whole-line Pattern -- the escaped
+  // BACKSLASH would wrongly protect the "#". After the repetition it can only ever apply
+  // at end of input, where no re-pairing is possible.
+  Pattern { patternChar+ "\\"? }
+  patternChar { "\\" ![\n] | ![#\n\\] }
 
   @precedence { Comment, Pattern }
 }

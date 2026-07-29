@@ -1897,6 +1897,19 @@
             }
         ]
     },
+    "pfb_dnsbl_regex_description_warnings": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "contents",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_regex_validation_errors": {
         "returnsRef": false,
         "returnType": "array",
@@ -7233,6 +7246,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfb_split_regex_line": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "line",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
                 "default": null
             }
         ]

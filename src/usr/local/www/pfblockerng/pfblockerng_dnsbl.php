@@ -3046,11 +3046,11 @@ $section->addInput(new Form_Select(
 
 $form->add($section);
 
-$regex_text = 'List of Regex\'s to block via DNSBL<br /><br />
+$regex_text = 'List of Regex\'s to block via DNSBL:<br /><br />
 		Enter a single regex per line.<br /><br />
-		You may use "<strong>#</strong>" after each line for a Regex Description. IE:&emsp;regex (Regular Expression) # Regex Description<br /><br />
-		Ensure a space is entered before the # character. Keep the Regex description less than 15 characters as it will be used in<br />
-		the Alerts Tab. If no Description is entered a default Regex line number will be utilized.<br />
+		End a line with "<strong>#</strong>" to give it a Description, as in&emsp;"regex (Regular Expression) # Regex Description".<br /><br />
+		The first <strong>unescaped</strong> "#" on the line starts the Description, whether or not a space precedes it. To match a literal "#" inside a pattern, escape it as "<strong>\#</strong>".<br /><br />
+		Keep the Description to 15 characters or fewer — it is shown on the Alerts Tab, and a longer one is flagged in this editor. If no Description is entered a default Regex line number will be utilized.<br /><br />
 		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
 		Changes to this option will require a Force Update to take effect.';
 
