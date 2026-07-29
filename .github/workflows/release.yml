@@ -74,8 +74,8 @@ on:
         type: boolean
 
 # Least-privilege default; jobs that need more elevate explicitly below
-# (release: contents:write to publish; prepare-release: contents:write to commit +
-# push the tag; ui-suite: packages:read to pull the pfSense image from private GHCR).
+# (release: contents:write to create the draft; tag-release: contents:write to push
+# the tag; ui-suite: packages:read to pull the pfSense image from private GHCR).
 # The pkg-repo republish and the FreeBSD-ports bump are not here at all — they hang
 # off the real `release: published` event in release-published.yml.
 permissions:
@@ -84,12 +84,13 @@ permissions:
 
 jobs:
   # ── 0. Prepare release (real publish only) ───────────────────────────────
-  # Commits the changelog (when absent) and PINS the release SHA — it does NOT
-  # tag (issue #1855: tagging moved to `tag-release`, after build + verify).
+  # PINS the release SHA and mints the annotated tag LOCALLY — it commits nothing,
+  # pushes nothing (issue #1855: the tag reaches GitHub in `tag-release`, after
+  # build + verify; release notes are authored onto the Release, never committed).
   # Skipped entirely on dry_run=true — in that mode every downstream job falls
   # back to the dispatch ref HEAD instead of the pinned SHA.
   prepare-release:
-    name: Commit changelog + pin the release commit
+    name: Pin the release commit
     runs-on: ubuntu-latest
     # Only 'false' takes the real-publish path. NOT the whole guard: GitHub compares
     # strings case-insensitively, so 'FALSE' satisfies this too and the first step below
@@ -418,7 +419,7 @@ jobs:
   # ── 1e. Tag the verified commit (real publish only) ──────────────────────
   # THE FIRST IRREVERSIBLE STEP (issue #1855). Everything before this job is
   # local to the run: artifacts in the run's own storage, suites against those
-  # artifacts. Nothing is on GitHub yet except the docs-only notes commit.
+  # artifacts. Nothing has reached GitHub yet — no commit, no tag, no Release.
   #
   # Creates + pushes the annotated tag on prepare-release's PINNED SHA — never on
   # "whatever the branch tip is now" — so the tag names exactly the tree the .pkgs
