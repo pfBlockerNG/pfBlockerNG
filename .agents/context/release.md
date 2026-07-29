@@ -36,9 +36,11 @@ bump on our **`pfBlockerNG/FreeBSD-ports` fork** (self-hosted distribution, no u
 3. **`tag-release`** — the FIRST irreversible step: pushes the tag **on the pinned SHA** (not
    on "the branch tip now"), gated on the build and, when they ran, on **both** suite
    AND-gates.
-4. **`release` → `attach-pkgs` → `draft-healthcheck`** — create the Release as a **DRAFT**
-   with a deterministic placeholder body, attach the assets, assert the draft is complete.
-   **The draft is the end state.**
+4. **`release` → `attach-pkgs` → `draft-healthcheck` → `sync-ports-fork`** — create the
+   Release as a **DRAFT** with a deterministic placeholder body, attach the assets, assert
+   the draft is complete, then bump the port's `PORTVERSION` on our FreeBSD-ports fork.
+   **The draft is the end state**: when the run finishes, the only things left are *write
+   the changelog* and *publish*.
 
 A failed run leaves **nothing** behind: no tag, no draft, nothing pushed to any branch —
 re-dispatch the same tag once the cause is fixed. `tag-release` is the single seam for the
@@ -83,6 +85,11 @@ This is the only place the pipeline removes anything from GitHub; it lives in
 `prepare-release` (the sole reason that job holds `contents: write`), runs before the pin,
 and never fires in a dry run.
 
+**One trust rule inside `sync-ports-fork`:** `scripts/portrevision-rebuild.sh` is executed as
+shell while an App token that can push to the ports fork is live, so it is checked out from
+`github.workflow_sha` — the revision the workflow itself was dispatched from — never from the
+tree the run is releasing.
+
 ## Release notes — authored onto the Release, never committed
 
 **There are no release-notes files in this repository.** A committed changelog forces a
@@ -106,20 +113,28 @@ is that same step's last action.
 
 ## Publishing, and what it triggers
 
-Publishing is deliberately **outside** `release.yml`. The two downstream effects that used to
-run after its own publish flip now hang off the real `release: published` event, in
-**`.github/workflows/release-published.yml`**:
+Publishing is deliberately **outside** `release.yml` — but so is almost nothing else. The
+FreeBSD-ports `PORTVERSION` bump is the **terminal job of the release run**
+(`sync-ports-fork`, gated on `draft-healthcheck` and on `dry_run == 'false'`): a devel
+release bumps `-devel` and `-nightly` in one commit, and `GH_TAGNAME` is `v${PORTVERSION}`
+in the Makefile, so it self-resolves to the matching tag.
 
-1. **`sync-ports-fork`** — bump the port's `PORTVERSION` on our
-   `pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github` fork (a devel release bumps `-devel`
-   and `-nightly` in one commit). `GH_TAGNAME` is `v${PORTVERSION}` in the Makefile, so it
-   self-resolves to the matching tag.
-2. **`repo-publish`** — dispatch `pfBlockerNG/pkg`'s `publish.yml` so the new Release appears
-   at `pfblockerng.github.io/pkg` within seconds (its daily schedule is the backstop).
+The only thing that genuinely has to wait for the publish is **`repo-publish`** in
+**`.github/workflows/release-published.yml`** (`on: release: types: [published]`): it
+dispatches `pfBlockerNG/pkg`'s `publish.yml`, which enumerates this repo's **published**
+Releases and downloads their assets, so the new build appears at `pfblockerng.github.io/pkg`
+within seconds (its daily schedule is the backstop). Its `resolve` job still classifies the
+published tag and fails loudly, with the reason, on an off-scheme one.
 
-Order matters and is enforced by `needs:`: `pfBlockerNG/pkg` derives the **nightly** version
-from the `-nightly` port's `PORTVERSION`, so racing the bump ships a stale-versioned nightly.
-Everything either job needs is derived from `github.event.release.tag_name` alone.
+`pfBlockerNG/pkg` derives the **nightly** version from the `-nightly` port's `PORTVERSION`,
+so it must never read the fork before the bump lands. That used to be a `needs:` edge; it is
+now **structural** — the bump happens inside the release run, strictly before any publish can
+occur — and the reason is recorded in `release-published.yml` so nobody re-adds a dependency
+on a job that is no longer there.
+
+**Accepted cost:** a draft that is never published leaves the fork bumped to a version that
+never shipped. The bump *sets* the version rather than incrementing it, so the next release's
+bump overwrites it.
 
 ## Self-hosted pkg repository (ADR-17)
 

@@ -149,8 +149,11 @@ devel" guard, applied before the tag exists.
      `YYYY-MM-DD - <version>`, body a placeholder ending in the compare link;
    - one **`.pkg` per FreeBSD major** (plus each major's `extra_pkgs` dependency packages)
      attached to that draft, alongside the `src/` source archive;
-   - **nothing published**: no pkg-repo republish, no ports bump — those fire when the
-     release is published, from `release-published.yml`.
+   - the **port bump** on `pfBlockerNG/FreeBSD-ports@pfblockerng/use-github`, as the run's
+     terminal job — so when the run ends the only things left are the changelog and the
+     publish;
+   - **nothing published**: the pkg-repo republish fires when the release is actually
+     published, from `release-published.yml`.
 
    Offer to watch the run. When it finishes, report the **draft Release URL** (the
    `draft-healthcheck` job prints it in the run summary; `gh release view <tag> --json url`

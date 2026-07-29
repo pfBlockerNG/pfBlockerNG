@@ -1103,3 +1103,182 @@ jobs:
             # `:-/dev/null` so the whole step body stays runnable outside Actions --
             # tests/test_ui_release_gate_wiring.py lifts it verbatim and executes it.
           } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+  # ── 3. Sync the port on our FreeBSD-ports fork (pfblockerng/use-github) ────
+  # THE LAST THING THIS RUN DOES. Self-hosted distribution (ADR-17): we do NOT PR the
+  # upstream pfsense ports tree. Bump the matching port's PORTVERSION directly on our
+  # own fork's build-input branch (pfblockerng/use-github) — the SAME branch every
+  # build reads (build-pkgs-portable above, pfBlockerNG/pkg's publish.yml) — so the
+  # fork's port stays in lockstep with each release. Direct push: it's our branch, no
+  # PR. A no-op bump (version unchanged) just exits.
+  #
+  # It rides on draft-healthcheck, so the fork only advances for a draft that is
+  # actually complete. When this job finishes, the only things left for a human are
+  # "write the changelog" and "publish" — that is the whole point of it being here
+  # rather than on the `release: published` event.
+  #
+  # ACCEPTED COST: a draft that is never published leaves the fork bumped to a version
+  # that never shipped. The next release's bump overwrites it (the version is set, not
+  # incremented), so the fork self-corrects on the following cut.
+  sync-ports-fork:
+    name: Sync port on FreeBSD-ports fork
+    runs-on: ubuntu-latest
+    needs: [prepare-release, release, attach-pkgs, draft-healthcheck]
+    if: always() && needs.draft-healthcheck.result == 'success' && needs.release.outputs.dry_run == 'false'
+    permissions:
+      contents: read
+
+    steps:
+      - name: Generate GitHub App token (FreeBSD-ports)
+        id: ports-token
+        # Mint a short-lived installation token from the PKG GitHub App, scoped to
+        # pfBlockerNG/FreeBSD-ports with Contents:write — the same App used by
+        # repo-publish, no standalone PAT to rotate. REQUIRES the App to be installed
+        # on FreeBSD-ports with Contents:write; if it is not, this step fails loudly
+        # ('not installed on ... repositories' / permission error) — the clear signal
+        # to grant it, rather than a confusing empty-token checkout failure.
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: FreeBSD-ports
+          permission-contents: write
+
+      - name: Checkout the FreeBSD-ports fork (use-github branch)
+        uses: actions/checkout@v6
+        with:
+          repository: pfBlockerNG/FreeBSD-ports
+          ref: pfblockerng/use-github
+          token: ${{ steps.ports-token.outputs.token }}
+          persist-credentials: true   # need to push the PORTVERSION bump via the App token
+          # Minimal clone: the bump only edits the port Makefile(s), then commits + pushes.
+          # Shallow (depth-1) + blobless + sparse to the bumped port dirs avoids cloning the
+          # full ~1.3 GB ports tree. The commit is a fast-forward the remote accepts; the
+          # push-reject rebase retry below reaches the racing tip via an on-demand fetch.
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            net/pfSense-pkg-pfBlockerNG
+            net/pfSense-pkg-pfBlockerNG-devel
+            net/pfSense-pkg-pfBlockerNG-nightly
+          sparse-checkout-cone-mode: true
+
+      - name: Checkout pfBlockerNG (the release helper — TRUSTED ref, sparse)
+        uses: actions/checkout@v6
+        with:
+          # SECURITY: portrevision-rebuild.sh below is EXECUTED AS SHELL in a job that
+          # holds an App token able to push to pfblockerng/use-github. It must therefore
+          # come from the revision this workflow itself was dispatched from — never from
+          # the tree this run is merely releasing, whose contents are what the run is
+          # verifying rather than something already trusted. github.workflow_sha is that
+          # handle (a release dispatch is only allowed from the default branch). Do not
+          # "simplify" this to the release tag or the pinned SHA.
+          #
+          # ORDER: this MUST stay after the ports-fork checkout above. That one targets
+          # the workspace ROOT, and actions/checkout deletes the contents of its
+          # destination — checking this out first would wipe it again.
+          ref: ${{ github.workflow_sha }}
+          repository: pfBlockerNG/pfBlockerNG
+          sparse-checkout: scripts/
+          sparse-checkout-cone-mode: false
+          path: pfblockerng-src
+          persist-credentials: false
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump PORTVERSION and push to use-github
+        # branch/version ride in via env (NOT inline ${{ }}) so a crafted tag can't
+        # template-inject into this shell.
+        env:
+          BRANCH:      ${{ needs.release.outputs.branch }}
+          TAG:         ${{ needs.release.outputs.tag }}              # e.g. v4.0.0.alpha.1 | v4.0.0
+          PORTVERSION: ${{ needs.release.outputs.portversion }}  # e.g. 4.0.0.alpha.1 | 4.0.0 (pkg-safe)
+        run: |
+          set -eu
+          # PORTVERSION is already classified + pkg-safe (no '-') by release-version.sh
+          # in the `release` job; re-assert the shape here as belt-and-braces so a
+          # malformed value can never reach the Makefile.
+          if [ "$BRANCH" = "devel" ]; then
+            printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(alpha|beta|rc)\.[1-9][0-9]*$' || {
+              echo "::error::invalid devel PORTVERSION/tag: ${TAG}"; exit 1; }
+          else
+            printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+              echo "::error::invalid stable PORTVERSION/tag: ${TAG}"; exit 1; }
+          fi
+
+          # A devel release bumps TWO ports in lockstep: the -devel port (the Netgate
+          # devel package) AND the -nightly port. publish.yml (pfBlockerNG/pkg) derives
+          # the nightly base version from the -nightly port's PORTVERSION, so unless it
+          # advances together with -devel the nightlies stay pinned to a stale version
+          # and sort BELOW the current prerelease (e.g. 3.2.16.* < 4.0.0.alpha.2). They
+          # share an identical pkg-plist, differing only in PORTNAME/CONFLICTS/GH_ACCOUNT,
+          # so the version edit is the only thing to keep in sync. Both are committed in
+          # ONE commit so the two ports can never diverge. Stable touches only its port.
+          if [ "$BRANCH" = "devel" ]; then
+            PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel net/pfSense-pkg-pfBlockerNG-nightly"
+            PORTS_LABEL="net/pfSense-pkg-pfBlockerNG-{devel,nightly}"
+          else
+            PORT_PATHS="net/pfSense-pkg-pfBlockerNG"
+            PORTS_LABEL="net/pfSense-pkg-pfBlockerNG"
+          fi
+
+          for PORT_PATH in $PORT_PATHS; do
+            MAKEFILE="${PORT_PATH}/Makefile"
+
+            # Read the current PORTVERSION and PORTREVISION from the Makefile before
+            # editing, so the compare-and-bump helper can decide whether to increment
+            # or reset.  Absent PORTREVISION is treated as 0 by the helper.
+            OLD_PORTVERSION="$(grep -m1 '^PORTVERSION=' "$MAKEFILE" | sed 's/^PORTVERSION=[[:space:]]*//')"
+            if [ -z "${OLD_PORTVERSION}" ]; then
+              echo "::error::PORTVERSION not found in ${MAKEFILE}"
+              exit 1
+            fi
+            OLD_PORTREVISION="$(grep -m1 '^PORTREVISION=' "$MAKEFILE" | sed 's/^PORTREVISION=[[:space:]]*//')" || true
+
+            # Auto-detect rebuild: same PORTVERSION → bump PORTREVISION; different → 0.
+            # Logic is extracted into scripts/portrevision-rebuild.sh for testability.
+            NEW_PORTREVISION="$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/portrevision-rebuild.sh" \
+              "${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}")"
+
+            # Update PORTVERSION only. GH_TAGNAME is `v${PORTVERSION}` in the Makefile,
+            # so it self-resolves to the matching tag — the workflow never sets it.
+            sed -i \
+              -e "s/^PORTVERSION=.*/PORTVERSION=\t${PORTVERSION}/" \
+              "$MAKEFILE"
+
+            # Apply PORTREVISION per ports convention: remove when 0; set/insert after
+            # PORTVERSION when > 0.  The sed removes any existing line first, then the
+            # PORTVERSION line is used as an anchor to insert the new one.
+            sed -i -e "/^PORTREVISION=/d" "$MAKEFILE"
+            if [ "${NEW_PORTREVISION}" -gt 0 ]; then
+              sed -i -e "s/^PORTVERSION=.*/&\nPORTREVISION=\t${NEW_PORTREVISION}/" "$MAKEFILE"
+            fi
+
+            git add "$MAKEFILE"
+          done
+
+          # ONE atomic commit for every bumped port — devel + nightly move together.
+          if git diff --cached --quiet; then
+            echo "${PORTS_LABEL} already at ${PORTVERSION} (${TAG}) — nothing to push."
+            exit 0
+          fi
+          git commit -m "$(printf '%s: update to %s\n\npfBlockerNG/pfBlockerNG release %s.' \
+            "$PORTS_LABEL" "$PORTVERSION" "$TAG")"
+
+          # use-github only advances via releases; push directly, rebasing once on a
+          # racing update.
+          n=0
+          until git push origin HEAD:pfblockerng/use-github; do
+            n=$((n + 1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::could not push the port bump to use-github after ${n} attempts"
+              exit 1
+            fi
+            echo "push rejected — rebasing on the latest use-github (attempt ${n})"
+            git pull --rebase origin pfblockerng/use-github
+          done
+          echo "Pushed ${PORTS_LABEL} ${PORTVERSION} (${TAG}) to pfblockerng/use-github"

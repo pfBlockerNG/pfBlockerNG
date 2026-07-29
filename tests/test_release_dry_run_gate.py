@@ -13,16 +13,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
 
-# Current jobs that create or publish release artifacts. repo-publish and
-# sync-ports-fork left this workflow entirely (issue #1855 rework): the release is
-# no longer published by the pipeline, so they fire from release-published.yml on
-# the real `release: published` event instead.
+# Current jobs that create or publish release artifacts. repo-publish left this
+# workflow (issue #1855 rework): it consumes the PUBLISHED Release's assets, so it
+# fires from release-published.yml on the real `release: published` event. The ports
+# bump stayed -- when a release run finishes, the only things left are "write the
+# changelog" and "publish".
 MUTATION_JOBS = {
     "prepare-release",
     "tag-release",
     "release",
     "attach-pkgs",
     "draft-healthcheck",
+    "sync-ports-fork",
 }
 
 _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
