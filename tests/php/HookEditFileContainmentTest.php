@@ -26,6 +26,14 @@ use PHPUnit\Framework\TestCase;
  * Convention alone does not hold that line — a future contributor adding one
  * require_once would silently undo it, and no other test in the suite would
  * notice. So the containment is asserted here, over the real shipping tree.
+ *
+ * KNOWN CEILING: these are text scans, so they catch a LITERAL reference to the
+ * filename. A path assembled at runtime ('..._hook_' . 'edit.inc') is out of
+ * reach and always will be — mutation-tested, it passes. That is an accepted
+ * limit, not an oversight: the realistic regression is somebody adding a plain
+ * require_once, which is caught. The scans deliberately cover .xml too, because
+ * pfblockerng.xml uses <include_file> as a real load mechanism for this package
+ * and an entry there would otherwise evade every assertion below.
  */
 final class HookEditFileContainmentTest extends TestCase
 {
@@ -53,7 +61,7 @@ final class HookEditFileContainmentTest extends TestCase
 				continue;
 			}
 			$path = $file->getPathname();
-			if (!preg_match('/\.(php|inc)$/', $path)) {
+			if (!preg_match('/\.(php|inc|xml)$/', $path)) {
 				continue;
 			}
 			$contents = (string) file_get_contents($path);
@@ -99,9 +107,11 @@ final class HookEditFileContainmentTest extends TestCase
 		// while the test above would still pass if the reference were indirect.
 		foreach (['pfblockerng.inc', 'pfblockerng_extra.inc'] as $wide) {
 			$contents = (string) file_get_contents(self::$root . '/src/usr/local/pkg/pfblockerng/' . $wide);
-			$this->assertStringNotContainsString(
-				self::INC,
-				$contents,
+			// str_contains() rather than assertStringNotContainsString(): the latter
+			// prints the whole ~700 KB file into the failure output and buries the
+			// one line that matters.
+			$this->assertFalse(
+				str_contains($contents, self::INC),
 				"{$wide} is included by nearly every page; it must not pull in the destructive hook-edit file"
 			);
 		}
@@ -115,11 +125,14 @@ final class HookEditFileContainmentTest extends TestCase
 		$directory = new RecursiveDirectoryIterator(self::$root . '/src', FilesystemIterator::SKIP_DOTS);
 		foreach (new RecursiveIteratorIterator($directory) as $file) {
 			/** @var SplFileInfo $file */
-			if (!$file->isFile() || !preg_match('/\.(php|inc)$/', $file->getPathname())) {
+			if (!$file->isFile() || !preg_match('/\.(php|inc|xml)$/', $file->getPathname())) {
 				continue;
 			}
 			$contents = (string) file_get_contents($file->getPathname());
-			if (preg_match('/^function\s+pfb_hook_editor_delete\s*\(/m', $contents)) {
+			// Unanchored on purpose: a duplicate planted INDENTED inside an
+			// if (!function_exists(...)) { ... } block is exactly the shape that would
+			// restore the blast radius, and a ^-anchored scan misses it.
+			if (preg_match('/(?<![\w$>])function\s+pfb_hook_editor_delete\s*\(/', $contents)) {
 				$definitions[] = basename($file->getPathname());
 			}
 		}

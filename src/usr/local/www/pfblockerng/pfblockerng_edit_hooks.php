@@ -179,6 +179,17 @@ if ($_POST) {
 		}
 		$input_errors[] = gettext('That hook script could not be deleted -- reload the page and try again ' .
 			'(it may already be gone, or the hook-script directory may not be writable).');
+
+		// A FAILED delete must not cost the admin their unsaved edits. Falling through
+		// with these empty re-renders the page as "Load an existing script above..."
+		// and silently discards whatever was in the editor -- the same data-loss shape
+		// as the presence-only guard this branch already had to fix, just behind a
+		// narrower trigger (a double submit, or a hook removed from another tab). The
+		// loaded script is re-derived from the SAME cur_* fields the save branch
+		// trusts, and both are re-validated there before anything is written.
+		$pfb_eh_sel_when   = (string) ($_POST['pfb_eh_cur_when'] ?? '');
+		$pfb_eh_sel_script = (string) ($_POST['pfb_eh_cur_script'] ?? '');
+		$pfb_eh_content    = pfb_sanitize_text_area((string) ($_POST['pfb_eh_content'] ?? ''));
 	} elseif (isset($_POST['pfb_eh_save'])) {
 		// Save flow: edit the CONTENT of an EXISTING, already-vetted script only --
 		// this never creates a new file. pfb_hook_script_valid() is the same allow-list
@@ -294,14 +305,16 @@ if (!$_POST && isset($_GET['saved'])) {
 // back with the script simply absent and no statement that anything happened -- the
 // same silent-success problem the save flow already avoids. The name is echoed
 // through htmlspecialchars() because it reaches this point from a query string.
+// Deliberately does NOT echo the name back. The value is HTML-escaped either way, so
+// this is not about injection -- it is that a crafted link would otherwise render an
+// arbitrary attacker-chosen sentence inside a success box on an admin's screen, which
+// is a credible way to talk somebody into believing something happened that did not.
+// Validating the name here instead would mean inlining the hook naming rule on the
+// page, which belongs to pfb_hook_editor_compose_filename() alone (pinned by
+// EditHooksPageWiringTest). The row is already gone from the table above, so a fixed
+// message carries the confirmation without carrying attacker-controlled text.
 if (!$_POST && isset($_GET['deleted']) && $_GET['deleted'] !== '') {
-	print_info_box(
-		sprintf(
-			gettext('Hook script %s deleted.'),
-			'<strong>' . htmlspecialchars((string) $_GET['deleted'], ENT_QUOTES) . '</strong>'
-		),
-		'success'
-	);
+	print_info_box(gettext('Hook script deleted.'), 'success');
 }
 
 // Define default Alerts Tab href link (Top row)

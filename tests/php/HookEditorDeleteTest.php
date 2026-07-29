@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -20,6 +21,7 @@ use PHPUnit\Framework\TestCase;
  * FALSE: a guard that returned FALSE after unlinking would pass a return-value-only
  * test while still destroying the file.
  */
+#[CoversFunction('pfb_hook_editor_delete')]
 final class HookEditorDeleteTest extends TestCase
 {
 	private string $dir = '';

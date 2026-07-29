@@ -36,8 +36,19 @@
 // tests/php/HookEditFileContainmentTest.php fails if any file other than
 // pfblockerng_edit_hooks.php includes this one.
 //
-// The gates inside the function are NOT made redundant by that placement -- they are
-// defence in depth behind it, and each is load-bearing on its own.
+// The gates inside the function are defence in depth BEHIND that placement, and the
+// honest description of them is that GATE 1 (privilege) and the unlink-the-named-entry
+// rule are the two that individually change behaviour today: delete either and a test
+// fails. GATE 2 (the shared allow-list) establishes most of what GATES 3-7 then
+// re-derive, so each of those can be removed in isolation with the suite still green,
+// and GATE 7 (writability) rarely fires on-box at all because the caller is root, for
+// whom is_writable() on a read-only directory is still TRUE.
+//
+// They stay regardless. Each one re-derives from a canonical root a fact some OTHER
+// helper currently guarantees, so a future change to pfb_hook_scripts() or
+// pfb_hook_editor_path() cannot silently widen what this function will delete. That is
+// a real property, and it is a different claim from "every gate is individually
+// load-bearing" -- which mutation testing disproves.
 
 /*
  * issue #1871: remove a hook script on behalf of the Edit Hooks page.
@@ -132,10 +143,16 @@ function pfb_hook_editor_delete(string $script, string $when, ?string $dir = nul
 	// destructive root-privileged removal deserves at least the same, and a silent
 	// FALSE gives an operator investigating a vanished hook nothing to go on. Level
 	// 2 (error) for a refusal, level 1 for the removal itself.
+	// Line breaks are folded out of the name before it reaches the log: a filename
+	// carrying one would otherwise let a forged line be written into the package log,
+	// which is read by operators investigating exactly this kind of event. Creating
+	// such a name needs root shell access (the GUI create flow composes [A-Za-z0-9_]
+	// only), so this is cheap insurance rather than a reachable hole.
+	$logged = str_replace(["\r", "\n"], ' ', $script);
 	pfb_logger(
 		$removed
-			? "[ pfB Hook ] deleted {$when} hook script '{$script}' from {$real_dir}\n"
-			: "[ pfB Hook ] failed to delete {$when} hook script '{$script}' from {$real_dir}\n",
+			? "[ pfB Hook ] deleted {$when} hook script '{$logged}' from {$real_dir}\n"
+			: "[ pfB Hook ] failed to delete {$when} hook script '{$logged}' from {$real_dir}\n",
 		$removed ? 1 : 2
 	);
 	return $removed;
