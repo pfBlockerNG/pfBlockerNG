@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -21,11 +20,26 @@ use PHPUnit\Framework\TestCase;
  * FALSE: a guard that returned FALSE after unlinking would pass a return-value-only
  * test while still destroying the file.
  */
-#[CoversFunction('pfb_hook_editor_delete')]
 final class HookEditorDeleteTest extends TestCase
 {
 	private string $dir = '';
 	private string $outside = '';
+
+	/**
+	 * Load the one file that defines the deletion, directly.
+	 *
+	 * pfblockerng_hook_edit.inc is included by pfblockerng_edit_hooks.php and by
+	 * nothing else in the shipping tree (pinned by HookEditFileContainmentTest), so
+	 * it is not in scope after the normal bootstrap and has to be required here.
+	 * That is the point of the split rather than an inconvenience: a destructive
+	 * root-privileged unlink() should not be reachable from every page that happens
+	 * to include the package-wide helpers.
+	 */
+	public static function setUpBeforeClass(): void
+	{
+		parent::setUpBeforeClass();
+		require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc';
+	}
 
 	protected function setUp(): void
 	{
@@ -51,6 +65,58 @@ final class HookEditorDeleteTest extends TestCase
 		file_put_contents($path, $body);
 		chmod($path, 0700);
 		return $path;
+	}
+
+	public function testRefusesWhenTheCallerLacksTheHookEditorPrivilege(): void
+	{
+		// The privilege belongs to the OPERATION, not merely to the page that hosts
+		// it. Containment (this file being included by one gated page and no other)
+		// is the first line and is pinned by HookEditFileContainmentTest; this is the
+		// second. A caller that reached the function without passing the page's own
+		// isAllowedPage() gate still must not be able to remove a hook. Same
+		// privilege the hook editor demands: diag_command.php, the shell-equivalent
+		// trust class (ADR-12).
+		$keep = $this->makeHook('hook_post_probe.sh');
+		$GLOBALS['pfb_test_allowed_pages'] = ['diag_command.php' => false];
+		try {
+			$this->assertFalse(pfb_hook_editor_delete('hook_post_probe.sh', 'post', $this->dir));
+			$this->assertFileExists($keep, 'an unprivileged caller must not remove anything');
+		} finally {
+			unset($GLOBALS['pfb_test_allowed_pages']);
+		}
+	}
+
+	public function testDeletesOnceThePrivilegeIsGranted(): void
+	{
+		// The other side of the gate: with the privilege explicitly present the same
+		// call succeeds, so the refusal above is the privilege doing the work rather
+		// than some unrelated guard.
+		$path = $this->makeHook('hook_post_probe.sh');
+		$GLOBALS['pfb_test_allowed_pages'] = ['diag_command.php' => true];
+		try {
+			$this->assertTrue(pfb_hook_editor_delete('hook_post_probe.sh', 'post', $this->dir));
+			$this->assertFileDoesNotExist($path);
+		} finally {
+			unset($GLOBALS['pfb_test_allowed_pages']);
+		}
+	}
+
+	public function testRefusesWhenTheHookDirectoryIsNotWritable(): void
+	{
+		// unlink() needs write+execute on the DIRECTORY, not on the file. Root
+		// bypasses file permissions entirely, so this cannot be simulated as root --
+		// the same guard the repo's other permission-denial tests use.
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('root bypasses directory permissions; the denial cannot be simulated');
+		}
+		$path = $this->makeHook('hook_post_probe.sh');
+		chmod($this->dir, 0555);
+		try {
+			$this->assertFalse(pfb_hook_editor_delete('hook_post_probe.sh', 'post', $this->dir));
+			$this->assertFileExists($path, 'a read-only hook directory must leave the hook in place');
+		} finally {
+			chmod($this->dir, 0755);
+		}
 	}
 
 	public function testDeletesAnAllowListedHookAndReportsSuccess(): void
