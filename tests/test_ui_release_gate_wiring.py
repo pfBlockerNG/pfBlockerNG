@@ -28,6 +28,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 UI_WORKFLOW = ROOT / ".github/workflows/ui-tests.yml"
 SMOKE_WORKFLOW = ROOT / ".github/workflows/smoke.yml"
+SMOKE_SINGLE_WORKFLOW = ROOT / ".github/workflows/smoke-single.yml"
 RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
 
 _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
@@ -88,6 +89,27 @@ def _trigger_blocks(workflow: Path) -> tuple[str, str]:
         return after[: m.start()] if m else after
 
     return _block("workflow_call"), _block("workflow_dispatch")
+
+
+_JOB_KEY_RE = re.compile(r"^    [A-Za-z_-]+:")
+
+
+def _job_if_block(job_lines: list[str]) -> str:
+    """The whole job-level `if:` value, including a folded multi-line (`if: >-`) form.
+
+    A single-line `next(... startswith("if:"))` silently reads only the first line of a
+    folded condition, so a gate spread over several lines would look absent.
+    """
+    collected: list[str] = []
+    for line in job_lines:
+        if collected:
+            if _JOB_KEY_RE.match(line):
+                break
+            collected.append(line)
+        elif line.startswith("    if:"):
+            collected.append(line)
+    assert collected, f"job carries no job-level if:\n{chr(10).join(job_lines)}"
+    return "\n".join(collected)
 
 
 def _step_run_script(step_lines: list[str]) -> str:
@@ -536,22 +558,110 @@ def test_suite_jobs_carry_no_dry_run_reference(job_name: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# publish-release: gated on BOTH suites, dry_run == 'false' retained
+# tag-release: the single suite AND-gate seam; publish-release inherits it
+#
+# issue #1855 moved verification BEFORE tagging, so the live-suite AND-gate now
+# hangs off `tag-release` -- the first irreversible-on-GitHub job -- instead of
+# `publish-release`. publish-release stays gated transitively (release needs
+# tag-release, attach-pkgs needs release, publish-release needs attach-pkgs);
+# tests/test_release_tag_after_verify.py walks that whole graph.
 # --------------------------------------------------------------------------- #
 
 
-def test_publish_release_needs_both_suites() -> None:
+def test_tag_release_needs_both_suites() -> None:
     jobs = _jobs(RELEASE_WORKFLOW)
-    needs_line = next(line for line in jobs["publish-release"] if line.strip().startswith("needs:"))
+    assert "tag-release" in jobs, "release.yml must have a tag-release job"
+    needs_line = next(line for line in jobs["tag-release"] if line.strip().startswith("needs:"))
     assert "ui-suite" in needs_line and "smoke-suite" in needs_line, f"got: {needs_line}"
 
 
-def test_publish_release_if_gates_on_both_suite_results_and_retains_dry_run_false() -> None:
+def test_tag_release_if_gates_on_both_suite_results_and_retains_dry_run_false() -> None:
+    jobs = _jobs(RELEASE_WORKFLOW)
+    if_block = _job_if_block(jobs["tag-release"])
+    assert "needs.ui-suite.result == 'success'" in if_block, if_block
+    assert "needs.smoke-suite.result == 'success'" in if_block, if_block
+    assert "dry_run == 'false'" in if_block, if_block
+
+
+def test_publish_release_retains_the_dry_run_false_gate() -> None:
     jobs = _jobs(RELEASE_WORKFLOW)
     if_line = next(line for line in jobs["publish-release"] if line.strip().startswith("if:"))
-    assert "needs.ui-suite.result == 'success'" in if_line, if_line
-    assert "needs.smoke-suite.result == 'success'" in if_line, if_line
     assert "dry_run == 'false'" in if_line, if_line
+
+
+# --------------------------------------------------------------------------- #
+# issue #1855 Part 2: only a RELEASED-status row may veto a release
+#
+# `release_gate: true` (release.yml only) makes resolve-legs.sh stamp every leg
+# with release_blocking; a demoted leg still RUNS and still REPORTS, it just
+# cannot fail the suite call. The predicate itself lives in ONE place --
+# scripts/resolve-legs.sh, pinned by tests/shell/resolve_legs_spec.sh.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("workflow", [UI_WORKFLOW, SMOKE_WORKFLOW])
+def test_release_gate_input_declared_in_both_trigger_blocks(workflow: Path) -> None:
+    call_block, dispatch_block = _trigger_blocks(workflow)
+    for name, block in (("workflow_call", call_block), ("workflow_dispatch", dispatch_block)):
+        assert "release_gate:" in block, f"{workflow.name}: {name} is missing release_gate"
+        sub = block.split("release_gate:\n", 1)[1][:400]
+        assert re.search(r"^\s*default:\s*false\s*$", sub, re.MULTILINE), (
+            f"{workflow.name}: {name}'s release_gate must default to false -- block was:\n{sub}"
+        )
+
+
+@pytest.mark.parametrize("workflow", [UI_WORKFLOW, SMOKE_WORKFLOW])
+def test_prepare_threads_release_gate_into_resolve_legs(workflow: Path) -> None:
+    job_text = "\n".join(_jobs(workflow)["prepare"])
+    assert "RELEASE_GATE_INPUT: ${{ inputs.release_gate }}" in job_text, (
+        f"{workflow.name}: prepare must thread release_gate into resolve-legs.sh, got:\n{job_text}"
+    )
+
+
+def test_ui_prepare_projects_release_blocking_onto_every_matrix_entry() -> None:
+    job_text = "\n".join(_jobs(UI_WORKFLOW)["prepare"])
+    assert "release_blocking" in job_text, (
+        "ui-tests.yml's (tier x leg) matrix projection must carry release_blocking through"
+    )
+
+
+def test_ui_leg_is_non_blocking_when_its_row_is_demoted() -> None:
+    """A demoted UI leg runs, reports red, and does NOT fail the suite call."""
+    job_lines = _jobs(UI_WORKFLOW)["ui"]
+    coe = next((line for line in job_lines if line.strip().startswith("continue-on-error:")), None)
+    assert coe is not None, "the ui job must carry a continue-on-error demotion switch"
+    assert "matrix.release_blocking == 'false'" in coe, coe
+
+
+def test_smoke_leg_threads_nonblocking_into_smoke_single() -> None:
+    """smoke.yml's fan-out is a reusable-workflow CALL, and GitHub forbids
+    continue-on-error on a `uses:` job -- so the demotion rides into smoke-single.yml
+    as an input and is applied on ITS job instead."""
+    job_text = "\n".join(_jobs(SMOKE_WORKFLOW)["smoke"])
+    assert "nonblocking: ${{ matrix.release_blocking == 'false' }}" in job_text, job_text
+
+
+def test_smoke_single_demotes_a_nonblocking_leg() -> None:
+    jobs = _jobs(SMOKE_SINGLE_WORKFLOW)
+    job_lines = jobs["smoke"]
+    coe = next((line for line in job_lines if line.strip().startswith("continue-on-error:")), None)
+    assert coe is not None, "smoke-single.yml's smoke job must carry the demotion switch"
+    assert "inputs.nonblocking" in coe, coe
+    call_block, _dispatch = _trigger_blocks(SMOKE_SINGLE_WORKFLOW)
+    assert "nonblocking:" in call_block, "smoke-single.yml must declare the nonblocking input"
+
+
+def test_all_smoke_passed_zero_selection_check_skips_demoted_legs() -> None:
+    """The #1767 whole-leg zero-selection assert must not resurrect the veto: a demoted
+    leg that died before uploading its marker would otherwise fail the AND gate."""
+    job_text = "\n".join(_jobs(SMOKE_WORKFLOW)["all-smoke-passed"])
+    assert 'release_blocking != "false"' in job_text, job_text
+
+
+@pytest.mark.parametrize("job_name", ["ui-suite", "smoke-suite"])
+def test_release_suites_turn_the_released_status_gate_on(job_name: str) -> None:
+    job_text = "\n".join(_jobs(RELEASE_WORKFLOW)[job_name])
+    assert "release_gate: true" in job_text, f"{job_name} must ask for the released-status gate, got:\n{job_text}"
 
 
 # --------------------------------------------------------------------------- #
