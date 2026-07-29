@@ -414,28 +414,54 @@ def test_the_bump_before_publish_ordering_is_recorded_where_it_used_to_be_enforc
     assert "sync-ports-fork" not in graph.get("repo-publish", set()), graph
 
 
-def test_the_ports_bump_runs_its_helper_from_a_trusted_ref() -> None:
-    """Workflow-text assertion (the step cannot be lifted: it needs a ports checkout).
+# Jobs that hold a credential worth stealing AND execute a repository script as shell:
+# prepare-release (contents: write + GH_TOKEN), release (contents: write + GH_TOKEN),
+# sync-ports-fork (an App token that can push to the FreeBSD-ports fork). The build and
+# suite jobs also run scripts out of the released tree -- that is inherent to building
+# it -- but they carry no write credential, so they are not on this list.
+CREDENTIALLED_JOBS = ("prepare-release", "release", "sync-ports-fork")
 
-    `portrevision-rebuild.sh` is executed as shell while an App token that can push to
-    the FreeBSD-ports fork is live in the job. It must therefore come from the revision
-    this workflow itself was dispatched from -- never from the tree the run is merely
-    releasing, whose contents are what the release is verifying rather than something
-    already trusted.
+_HELPER_CALL_RE = re.compile(r"\bsh\s+(\S*scripts/[A-Za-z0-9._-]+)")
+_TRUSTED_HELPER_ROOT = "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/"
+
+
+@pytest.mark.parametrize("job", CREDENTIALLED_JOBS)
+def test_a_credentialled_job_runs_every_helper_from_a_trusted_checkout(job: str) -> None:
+    """Workflow-text assertion (these steps cannot be lifted: they need real checkouts).
+
+    A script executed AS SHELL while a push-capable credential is live in the job must
+    come from the revision this workflow itself was dispatched from -- never from the
+    tree the run is merely releasing, whose contents are what the release is verifying
+    rather than something already trusted. For a stable cut dispatched from `devel`,
+    that tree is `main`'s.
+
+    `github.workflow_sha` is the trusted handle. The rule is mechanical rather than
+    per-call ("this one runs before the branch reset, so it is fine") precisely because
+    that reasoning is what rotted: `release-ci-gate.sh` and `release-version.sh` were
+    being run out of the released checkout in two write-scoped jobs.
     """
-    job = _jobs()["sync-ports-fork"]
-    checkout = _step(job, "path: pfblockerng-src")
+    lines = _jobs()[job]
+    checkout = _step(lines, "path: pfblockerng-src")
     ref_line = next(line for line in checkout if line.strip().startswith("ref:"))
-    assert "github.workflow_sha" in ref_line, f"the helper checkout must pin the trusted ref, got: {ref_line}"
+    assert "github.workflow_sha" in ref_line, f"{job}: the helper checkout must pin the trusted ref, got: {ref_line}"
     for untrusted in ("needs.release.outputs.tag", "needs.prepare-release.outputs.sha", "github.event"):
-        assert untrusted not in ref_line, f"the helper must not come from the released tree, got: {ref_line}"
+        assert untrusted not in ref_line, f"{job}: the helper must not come from the released tree, got: {ref_line}"
+
+    calls = _HELPER_CALL_RE.findall("\n".join(lines))
+    assert calls, f"{job} executes no repository helper at all -- has the job shape changed?"
+    untrusted_calls = [c for c in calls if not c.lstrip('"').startswith(_TRUSTED_HELPER_ROOT)]
+    assert not untrusted_calls, (
+        f"{job} executes {untrusted_calls} out of the tree it is releasing, "
+        f"not out of the {_TRUSTED_HELPER_ROOT} checkout pinned to github.workflow_sha"
+    )
 
 
-def test_the_helper_checkout_never_persists_credentials() -> None:
+@pytest.mark.parametrize("job", CREDENTIALLED_JOBS)
+def test_the_helper_checkout_never_persists_credentials(job: str) -> None:
     """The ports-fork checkout deliberately persists its App token (it has to push), and
     it targets the workspace ROOT. The helper's own checkout must not add a second set
     of credentials next to the script that gets executed."""
-    checkout = _step(_jobs()["sync-ports-fork"], "path: pfblockerng-src")
+    checkout = _step(_jobs()[job], "path: pfblockerng-src")
     assert any("persist-credentials: false" in line for line in checkout), "\n".join(checkout)
 
 
