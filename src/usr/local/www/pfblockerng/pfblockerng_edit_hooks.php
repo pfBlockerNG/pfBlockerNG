@@ -149,6 +149,24 @@ if ($_POST) {
 		$pfb_eh_content      = '';
 		$pfb_eh_new_core_val = $post_core;
 		$pfb_eh_new_lang_val = ($post_lang === 'py') ? 'py' : 'sh';
+	} elseif (isset($_POST['pfb_eh_delete'])) {
+		// issue #1871: delete flow. Every decision is delegated to
+		// pfb_hook_editor_delete(), which refuses anything the shared allow-list
+		// (pfb_hook_script_valid()) does not already vouch for -- this handler
+		// therefore never inlines a path or naming rule of its own, exactly like the
+		// create and save handlers above and below it.
+		$post_when   = (string) ($_POST['pfb_eh_del_when'] ?? '');
+		$post_script = (string) ($_POST['pfb_eh_del_script'] ?? '');
+
+		if (pfb_hook_editor_delete($post_script, $post_when)) {
+			// PRG, and deliberately WITHOUT when/script: the editor must not come
+			// back pointing at a file that no longer exists.
+			header('Location: /pfblockerng/pfblockerng_edit_hooks.php?' .
+				http_build_query(array('deleted' => $post_script)));
+			exit;
+		}
+		$input_errors[] = gettext('That hook script could not be deleted -- reload the page and try again ' .
+			'(it may already be gone, or the hook-script directory may not be writable).');
 	} elseif (isset($_POST['pfb_eh_save'])) {
 		// Save flow: edit the CONTENT of an EXISTING, already-vetted script only --
 		// this never creates a new file. pfb_hook_script_valid() is the same allow-list
@@ -309,31 +327,71 @@ $form = new Form(FALSE);
 $section = new Form_Section('Load an Existing Hook Script');
 $section->addInput(new Form_StaticText(
 	'About',
-	'<small>' . gettext('Click a script below to load it into the editor. Only files already present ' .
-		'in the hook-script folder are listed here -- the same picker model as the Hooks tab.') . '</small>'
+	'<small>' . gettext('Use the pencil to load a script into the editor, or the trash can to delete it. ' .
+		'Only files already present in the hook-script folder are listed here -- the same picker model ' .
+		'as the Hooks tab.') . '</small>'
 ));
 
+// issue #1871: one table per Pre/Post instead of a run of inline links, matching the
+// row-with-actions pattern the IP/DNSBL group lists already use (pfblockerng_category.php).
+// The name is a plain cell and the actions are explicit buttons, so "load" is no longer
+// hidden behind clicking the name -- and there is somewhere for delete to live, which the
+// page previously had no way to offer at all.
 foreach (array('pre' => gettext('Pre'), 'post' => gettext('Post')) as $pfb_eh_when_key => $pfb_eh_when_label) {
-	// pfb_hook_scripts() is the SAME allow-list function the Hooks tab picker and the
-	// runner use -- basenames only, never a path.
+	// pfb_hook_scripts() is the SAME allow-list function the Hooks tab picker, the
+	// delete handler and the runner use -- basenames only, never a path.
 	$pfb_eh_scripts = pfb_hook_scripts($pfb_eh_when_key);
-	if (empty($pfb_eh_scripts)) {
-		$pfb_eh_list_html = '<em>' . gettext('(none yet)') . '</em>';
-	} else {
-		$pfb_eh_links = array();
-		foreach ($pfb_eh_scripts as $pfb_eh_script_name) {
-			$pfb_eh_href = '/pfblockerng/pfblockerng_edit_hooks.php?' .
-				http_build_query(array('when' => $pfb_eh_when_key, 'script' => $pfb_eh_script_name));
-			$pfb_eh_is_active = ($pfb_eh_sel_when === $pfb_eh_when_key && $pfb_eh_sel_script === $pfb_eh_script_name);
-			$pfb_eh_links[] = '<a href="' . htmlspecialchars($pfb_eh_href) . '"' .
-				($pfb_eh_is_active ? ' class="text-bold"' : '') . '>' .
-				htmlspecialchars($pfb_eh_script_name) . '</a>';
-		}
-		$pfb_eh_list_html = implode('&emsp;', $pfb_eh_links);
+
+	$pfb_eh_rows = '';
+	foreach ($pfb_eh_scripts as $pfb_eh_script_name) {
+		$pfb_eh_href = '/pfblockerng/pfblockerng_edit_hooks.php?' .
+			http_build_query(array('when' => $pfb_eh_when_key, 'script' => $pfb_eh_script_name));
+		$pfb_eh_is_active = ($pfb_eh_sel_when === $pfb_eh_when_key && $pfb_eh_sel_script === $pfb_eh_script_name);
+		$pfb_eh_lang_label = str_ends_with($pfb_eh_script_name, '.py') ? gettext('Python') : gettext('Shell');
+
+		// filemtime() is read through the allow-list-resolved path, never a composed
+		// one; an unresolvable entry simply reports no timestamp.
+		$pfb_eh_path = pfb_hook_editor_path($pfb_eh_script_name);
+		$pfb_eh_mtime = ($pfb_eh_path !== NULL) ? @filemtime($pfb_eh_path) : FALSE;
+		$pfb_eh_mtime_label = ($pfb_eh_mtime !== FALSE) ? date('Y-m-d H:i', $pfb_eh_mtime) : '';
+
+		$pfb_eh_safe_name = htmlspecialchars($pfb_eh_script_name, ENT_QUOTES);
+		$pfb_eh_rows .= '<tr data-pfb-hook="' . $pfb_eh_safe_name . '">'
+			. '<td' . ($pfb_eh_is_active ? ' class="text-bold"' : '') . '>' . htmlspecialchars($pfb_eh_script_name) . '</td>'
+			. '<td>' . htmlspecialchars($pfb_eh_lang_label) . '</td>'
+			. '<td>' . htmlspecialchars($pfb_eh_mtime_label) . '</td>'
+			. '<td>'
+			. '<a href="' . htmlspecialchars($pfb_eh_href) . '" title="' . gettext('Load this script into the editor') . '">'
+			. '<i class="fa-solid fa-pencil" alt="edit"></i></a>'
+			. '&emsp;'
+			. '<i class="fa-solid fa-trash-can icon-pointer no-confirm"'
+			. ' title="' . gettext('Delete this hook script') . '"'
+			. ' onclick="pfb_eh_delete_hook(\'' . htmlspecialchars($pfb_eh_when_key, ENT_QUOTES) . '\', \''
+			. htmlspecialchars(addslashes($pfb_eh_script_name), ENT_QUOTES) . '\');"></i>'
+			. '</td></tr>';
 	}
-	$section->addInput(new Form_StaticText($pfb_eh_when_label, $pfb_eh_list_html));
+	if ($pfb_eh_rows === '') {
+		$pfb_eh_rows = '<tr><td colspan="4"><em>' . gettext('(none yet)') . '</em></td></tr>';
+	}
+
+	$pfb_eh_table = '<table class="table table-striped table-hover table-condensed"'
+		. ' data-pfb-hook-table="' . htmlspecialchars($pfb_eh_when_key, ENT_QUOTES) . '">'
+		. '<thead><tr>'
+		. '<th>' . gettext('Script') . '</th>'
+		. '<th>' . gettext('Language') . '</th>'
+		. '<th>' . gettext('Modified') . '</th>'
+		. '<th>' . gettext('Actions') . '</th>'
+		. '</tr></thead><tbody>' . $pfb_eh_rows . '</tbody></table>';
+
+	$section->addInput(new Form_StaticText($pfb_eh_when_label, $pfb_eh_table));
 }
 $form->add($section);
+
+// issue #1871: the delete flow's POST fields. Populated by pfb_eh_delete_hook() below
+// and re-validated server-side against the allow-list regardless of what they claim.
+$form->addGlobal(new Form_Input('pfb_eh_del_when', 'pfb_eh_del_when', 'hidden', ''));
+$form->addGlobal(new Form_Input('pfb_eh_del_script', 'pfb_eh_del_script', 'hidden', ''));
+$form->addGlobal(new Form_Input('pfb_eh_delete', 'pfb_eh_delete', 'hidden', ''));
 
 // --- Create a new hook script ----------------------------------------------------
 $section = new Form_Section('Create a New Hook Script');
@@ -452,6 +510,21 @@ print($form);
 <?php endif; ?>
 <script type="text/javascript">
 //<![CDATA[
+// issue #1871: deleting a hook script is irreversible from the UI (the file is
+// unlinked, not moved aside), so it goes behind a confirmation naming the script.
+// Dismissing the dialog leaves everything untouched -- nothing is written until the
+// submit below, and the server re-validates the name against the shared allow-list
+// regardless of what these fields carry.
+function pfb_eh_delete_hook(when, script) {
+	if (!confirm('Delete hook script "' + script + '"? This cannot be undone.')) {
+		return;
+	}
+	$('#pfb_eh_del_when').val(when);
+	$('#pfb_eh_del_script').val(script);
+	$('#pfb_eh_delete').val('1');
+	$('#pfb_eh_del_when').closest('form').submit();
+}
+
 events.push(function() {
 <?php if ($pfb_syntaxhl_on): ?>
 	// issue #1669 / #1732 step 2: progressively enhance pfb_eh_content into a
