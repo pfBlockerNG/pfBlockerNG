@@ -3717,6 +3717,33 @@
             }
         ]
     },
+    "pfb_hook_editor_delete": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "script",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "when",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_hook_editor_lang_for": {
         "returnsRef": false,
         "returnType": "string",

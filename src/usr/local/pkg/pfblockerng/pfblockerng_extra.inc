@@ -5007,6 +5007,33 @@ function pfb_hook_editor_path(string $basename, ?string $dir = null): ?string {
 }
 
 /*
+ * issue #1871: remove a hook script on behalf of the Edit Hooks page.
+ *
+ * The Web UI could create and save hook scripts but never delete one, so a typo in
+ * the Name field at creation time was unrecoverable without shell access. This is a
+ * root-privileged file removal driven by a GUI request, so it deletes NOTHING it has
+ * not first cleared through pfb_hook_script_valid() -- the same allow-list the picker
+ * offers from, the save handler accepts, and the runner executes. That single gate
+ * covers every hostile shape at once: a traversal or absolute path fails its bare-
+ * basename check, and a non-hook file, a wrong Pre/Post, or a symlink whose real path
+ * leaves the hook directory all fail pfb_hook_scripts()' membership test.
+ *
+ * Returns TRUE only when a file was actually removed, so a double submit reports
+ * failure on the second pass rather than a phantom success.
+ */
+function pfb_hook_editor_delete(string $script, string $when, ?string $dir = null): bool
+{
+	if (!pfb_hook_script_valid($script, $when, $dir)) {
+		return FALSE;
+	}
+	$path = pfb_hook_editor_path($script, $dir);
+	if ($path === NULL || !is_file($path)) {
+		return FALSE;
+	}
+	return @unlink($path);
+}
+
+/*
  * The PFB_* env-var names pfb_run_hooks() exports, as pinned by the runner source
  * (pfblockerng.inc pfb_run_hooks() + pfb_hook_lifecycle_ctx() + the pre/post call
  * sites in pfblockerng_apply.inc) and documented verbatim on the Hooks tab
