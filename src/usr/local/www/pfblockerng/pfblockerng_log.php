@@ -500,11 +500,6 @@ $section->addInput(new Form_Textarea(
 ))->removeClass('form-control')->addClass('row-fluid col-sm-12')->setAttribute('rows', '30')->setAttribute('wrap', 'off')
   ->setAttribute('readonly', 'readonly')->setAttribute('style', 'background:#fafafa; width: 100%');
 
-// Scroll to end of page when loading logs
-$section->addInput(new Form_StaticText(
-	NULL,
-	'<div id="endofpage"></div>'));
-
 $form->add($section);
 
 $form->addGlobal(new Form_Input('download', 'download', 'hidden', ''));
@@ -516,6 +511,9 @@ $form->addGlobal(new Form_Input('file', 'file', 'hidden', ''));
 
 print($form);
 ?>
+<!-- issue #1881: the auto-scroll target lives OUTSIDE the form -- as a Form_StaticText
+     row it was an empty .form-group whose theme border drew a stray separator. -->
+<div id="endofpage"></div>
 
 <script type="text/javascript">	
 //<![CDATA[
