@@ -2,7 +2,7 @@
 # release-ci-gate.sh — assert CI is green for the commit a release will tag.
 #
 # The release tags the current HEAD of the channel branch. A docs-only tip
-# (e.g. a committed release-notes commit) skips CI via test.yml's paths-ignore
+# (a runbook edit, an ADR amendment) skips CI via test.yml's paths-ignore
 # and carries NO 'All tests passed' check-run, so walk back first-parent
 # ancestors to the most recent commit that actually ran it and assert THAT is
 # success — the docs-only commits in between change no code, so the nearest

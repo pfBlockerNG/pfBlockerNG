@@ -11,7 +11,8 @@ pfSense-pkg-pfBlockerNG port is NO_ARCH, so one wildcard-ABI .pkg build serves e
 arch and edition/version sharing a major) -- and uploads one EXACT-named artifact per
 major (`pfBlockerNG-relpkg-fbsd<freebsd_major>`); attach-pkgs merges them by pattern;
 ui-suite/smoke-suite are re-enabled, consume those exact artifacts, and gate
-publish-release (never `release`/`attach-pkgs` -- ADR-14 D1).
+tag-release (issue #1855: the tag, and therefore everything after it, waits on
+every live leg).
 """
 
 from __future__ import annotations
@@ -72,6 +73,12 @@ def _split_into_steps(job_lines: list[str]) -> list[list[str]]:
 
 def _jobs(workflow: Path) -> dict[str, list[str]]:
     return _split_into_jobs(_jobs_section_lines(workflow.read_text(encoding="utf-8")))
+
+
+def _step(job_lines: list[str], needle: str) -> list[str]:
+    matches = [s for s in _split_into_steps(job_lines) if any(needle in line for line in s)]
+    assert len(matches) == 1, f"expected exactly one step containing {needle!r}, got {len(matches)}"
+    return matches[0]
 
 
 def _trigger_blocks(workflow: Path) -> tuple[str, str]:
@@ -558,12 +565,12 @@ def test_suite_jobs_carry_no_dry_run_reference(job_name: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# tag-release: the single suite AND-gate seam; publish-release inherits it
+# tag-release: the single suite AND-gate seam; everything after inherits it
 #
 # issue #1855 moved verification BEFORE tagging, so the live-suite AND-gate now
-# hangs off `tag-release` -- the first irreversible-on-GitHub job -- instead of
-# `publish-release`. publish-release stays gated transitively (release needs
-# tag-release, attach-pkgs needs release, publish-release needs attach-pkgs);
+# hangs off `tag-release` -- the first irreversible-on-GitHub job. The draft, its
+# assets and the draft healthcheck stay gated transitively (release needs
+# tag-release, attach-pkgs needs release, draft-healthcheck needs attach-pkgs);
 # tests/test_release_tag_after_verify.py walks that whole graph.
 # --------------------------------------------------------------------------- #
 
@@ -583,10 +590,56 @@ def test_tag_release_if_gates_on_both_suite_results_and_retains_dry_run_false() 
     assert "dry_run == 'false'" in if_block, if_block
 
 
-def test_publish_release_retains_the_dry_run_false_gate() -> None:
+def test_draft_healthcheck_retains_the_dry_run_false_gate() -> None:
     jobs = _jobs(RELEASE_WORKFLOW)
-    if_line = next(line for line in jobs["publish-release"] if line.strip().startswith("if:"))
+    if_line = next(line for line in jobs["draft-healthcheck"] if line.strip().startswith("if:"))
     assert "dry_run == 'false'" in if_line, if_line
+
+
+# --------------------------------------------------------------------------- #
+# issue #1859: the suites test the code they ship
+#
+# The package under test comes from the pinned release SHA; without an explicit
+# ref the suites checked out the CALLER's dispatch ref, so a commit landing
+# during a ~hour-long live fan-out meant the release was verified by test code
+# that is not in the release. A blank checkout_ref keeps every non-release
+# caller inheriting its own ref, exactly as before.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("workflow", [UI_WORKFLOW, SMOKE_WORKFLOW, SMOKE_SINGLE_WORKFLOW])
+def test_checkout_ref_input_declared_in_both_trigger_blocks(workflow: Path) -> None:
+    call_block, dispatch_block = _trigger_blocks(workflow)
+    for name, block in (("workflow_call", call_block), ("workflow_dispatch", dispatch_block)):
+        assert "checkout_ref:" in block, f"{workflow.name}: {name} is missing checkout_ref"
+        sub = block.split("checkout_ref:\n", 1)[1][:400]
+        assert re.search(r"^\s*default:\s*\"\"\s*$", sub, re.MULTILINE), (
+            f"{workflow.name}: {name}'s checkout_ref must default to '' -- block was:\n{sub}"
+        )
+
+
+def test_smoke_threads_the_checkout_ref_down_to_the_leg() -> None:
+    """smoke.yml runs no tests itself; the leg that does is smoke-single.yml."""
+    job_text = "\n".join(_jobs(SMOKE_WORKFLOW)["smoke"])
+    assert "checkout_ref: ${{ inputs.checkout_ref }}" in job_text, job_text
+
+
+@pytest.mark.parametrize(
+    ("workflow", "job"),
+    [(UI_WORKFLOW, "ui"), (SMOKE_SINGLE_WORKFLOW, "smoke")],
+)
+def test_the_test_running_job_checks_out_the_requested_ref(workflow: Path, job: str) -> None:
+    checkout = _step(_jobs(workflow)[job], "uses: actions/checkout")
+    step_text = "\n".join(checkout)
+    assert "ref: ${{ inputs.checkout_ref }}" in step_text, (
+        f"{workflow.name}:{job} must honour checkout_ref, got:\n{step_text}"
+    )
+
+
+@pytest.mark.parametrize("job_name", ["ui-suite", "smoke-suite"])
+def test_release_suites_verify_the_pinned_commit(job_name: str) -> None:
+    job_text = "\n".join(_jobs(RELEASE_WORKFLOW)[job_name])
+    assert "checkout_ref: ${{ needs.prepare-release.outputs.sha }}" in job_text, job_text
 
 
 # --------------------------------------------------------------------------- #
@@ -818,13 +871,13 @@ def test_release_side_artifact_name_matches_both_consumer_sides(tmp_path: Path) 
 
 
 # --------------------------------------------------------------------------- #
-# publish-release healthcheck: EXPECTED_PKGS floor (issue #1662 I1)
+# draft-healthcheck: EXPECTED_PKGS floor (issue #1662 I1)
 # --------------------------------------------------------------------------- #
 
 
 def _healthcheck_script() -> str:
     jobs = _jobs(RELEASE_WORKFLOW)
-    steps = _split_into_steps(jobs["publish-release"])
+    steps = _split_into_steps(jobs["draft-healthcheck"])
     target = [s for s in steps if any("Health-check the draft release is complete" in line for line in s)]
     assert len(target) == 1, "expected exactly one 'Health-check the draft release is complete' step"
     script = _step_run_script(target[0])
