@@ -68,9 +68,13 @@ time is safe; demoting **all** of them is not — legs to run but not one able t
 the whole live phase advisory inside a green run, so that case is a hard `::error::` and a
 distinct **exit 3**, not a warning.
 
-**Dry-run** (`dry_run=true`, the default) does steps 1–2 only, off the dispatch ref: pin,
-build, verify — then stop. No tag, no Release, no push. A malformed tag still fails it, at
-`read-matrix`'s `release-version.sh` classification.
+**Dry-run** (`dry_run=true`, the default) builds and verifies off the **dispatch ref**, then
+stops: no tag, no Release, no push. `prepare-release` is skipped **wholesale**, so a dry run
+pins nothing (every downstream job falls back to the dispatch ref's HEAD) and gets none of
+that job's gates either: no CI-green assertion, no published-release refusal, no tag-state
+report, no early stale-tag conflict check, and `retag` does nothing at all — its only
+implementation lives inside the skipped job. What survives is the scheme check, at
+`read-matrix`'s `release-version.sh` classification, so a malformed tag still fails it.
 
 **Re-cutting a tag that is already pushed** — `retag=true` (dispatch input, default
 `false`). The pin is the channel-branch tip, so a run that crashed *after* pushing its tag,
