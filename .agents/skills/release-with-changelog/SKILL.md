@@ -4,8 +4,9 @@ description: >
   Cut a pfBlockerNG release WITH hand-authored release notes: write
   docs/release-notes/<tag>.md from the commit range following the same prompt template the
   workflow used to feed a model — commit it on the channel branch, then hand off to the
-  /release skill to validate the scheme + dispatch the release workflow (which
-  creates+pushes the tag and publishes; no tag is pushed by hand). Because the file is
+  /release skill to validate the scheme + dispatch the release workflow (which builds and
+  verifies first, then creates+pushes the tag and publishes; no tag is pushed by hand).
+  Because the file is
   committed, the release body comes from your file instead of the deterministic
   placeholder. This is the recommended way to produce real release notes (the workflow no
   longer drafts them — GitHub Models never produced a working result), or when the user
@@ -75,16 +76,18 @@ model; apply it by hand here. `scripts/release-version.sh` classifies the tag/ch
 
 8. **Cut the release — delegate to `/release`.** Invoke **`/release <tag>`**. It re-validates
    the channel↔branch scheme, checks CI is green on the release commit (now including the notes
-   commit), and **dispatches `release.yml` with `dry_run=false`** — the workflow then creates and
-   pushes the tag on the channel-branch tip itself (no hand-pushed tag), sees the committed notes
-   file, and publishes the Release with your notes as the body and the `SUMMARY` as the title
-   suffix.
+   commit), and **dispatches `release.yml` with `dry_run=false`** — the workflow pins that
+   channel-branch tip, builds and verifies from it, and only then creates and pushes the tag on
+   it (no hand-pushed tag). It sees the committed notes file and publishes the Release with your
+   notes as the body and the `SUMMARY` as the title suffix. If verification fails, nothing is
+   tagged or drafted and the same tag can be re-dispatched after the fix lands.
 
 ## Guardrails
 
-- **The notes file must land on the channel branch before the tag** — a tag whose commit
-  predates the file means the workflow won't see it (it would fall through to the
-  deterministic placeholder). Order matters: notes commit first, tag second.
+- **The notes file must land on the channel branch before the release SHA is pinned** — the
+  workflow pins the branch tip, builds and verifies from it, and tags THAT commit. A notes
+  file that lands afterwards is not in the release (the body falls through to the
+  deterministic placeholder). Order matters: notes commit first, dispatch second.
 - **Inherit every `/release` guardrail** — channel↔branch enforcement, immutable tags (cut the
   next `.N` instead of moving one), tag-only pushes (never a direct `main`/`devel` push). This
   skill only adds the notes-authoring + commit in front.
