@@ -470,6 +470,42 @@ final class LegacyKeyRenameMigrationTest extends TestCase
 		$this->assertArrayNotHasKey('settings_family', $changed[self::GEN_SECTION] ?? []);
 	}
 
+	/**
+	 * A fail-closed conflict must stay RECOVERABLE, so the seed must not materialise a
+	 * current name's default while its retired name is still stored.
+	 *
+	 * The rename is all-or-nothing: one conflicting pair leaves every OTHER retired key
+	 * present-and-unmigrated. Seeding those current names would give each of them a
+	 * both-present-and-different pair of its own on the next install, turning a
+	 * single-key recovery into an N-key one and destroying the old-present/new-absent
+	 * path that migrates them cleanly the moment the operator resolves the one real
+	 * conflict.
+	 */
+	public function testSeedDoesNotManufactureConflictsOutOfAnUnmigratedSection(): void
+	{
+		$legacy = $this->legacyDnsblSection();
+		$legacy['tld_wildcard'] = 'off';        // the single real conflict (legacy pfb_tld = 'on')
+		$this->seed(self::DNSBL_SECTION, $legacy);
+
+		pfb_run_migrations();
+		// Before: the migration failed closed, so every retired name is still stored.
+		$this->assertArrayHasKey('alexa_type', $this->get(self::DNSBL_SECTION));
+
+		$changed = pfb_registered_scalars_seed([self::DNSBL_SECTION => $this->get(self::DNSBL_SECTION)]);
+
+		foreach (['top1m_enable', 'top1m_source', 'top1m_count', 'top1m_inclusion',
+			'tld_allow', 'tld_wildcard_blacklist', 'tld_wildcard_exclusion'] as $new_key) {
+			$this->assertArrayNotHasKey(
+				$new_key,
+				$changed[self::DNSBL_SECTION] ?? [],
+				"seeding '{$new_key}' while its retired name is still stored manufactures a second conflict"
+			);
+		}
+		// ...while a registered key with no retired predecessor still seeds normally, so
+		// the guard is scoped to the rename map rather than disabling the whole section.
+		$this->assertSame('reject', $changed[self::DNSBL_SECTION]['dnsbl_dot_block_action'] ?? NULL);
+	}
+
 	/** A second pass over the seeded result changes nothing. */
 	public function testSeedIsIdempotent(): void
 	{

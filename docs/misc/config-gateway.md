@@ -146,7 +146,7 @@ Authorization is a property of the **write**, not the call site (the
     The stored key was `alexa_type` until issue #1898 renamed it (see "Stored-key
     vocabulary" below); the legacy *tokens* are unaffected by that rename.
   - **`top1m_token`** (ADR-59 P5, plain string — `NULL`/`NULL` adapters): a masked,
-    write-only credential (currently consumed only by the `cloudflare` `alexa_type`,
+    write-only credential (currently consumed only by the `cloudflare` `top1m_source`,
     ignored by every other provider), fed to `pfb_download()` via `pfb_top1m_auth_headers()`
     and the ADR-59 P3 header-auth plumbing (`Authorization: Bearer <token>`). Default `''`.
     Never echoed back on GET (`pfblockerng_dnsbl.php`); a blank POST preserves the
@@ -269,16 +269,42 @@ called from `pfblockerng_install.inc` **after** the migration driver *and* after
 end of that file, so a seed inside the migration registry would materialise the registry default
 first and permanently disarm both. It rides the installer's trailing `write_config()`.
 
-`settings_family` is the one exclusion: it is the installer's own schema marker, not operator
-configuration (the same reason `pfb_gconfig_operator_view()` strips it, #1770/#1771/#1775).
+`PFB_SCALAR_SEED_EXCLUDED` holds the five keys whose **literal absence** some consumer still
+reads as a distinct state, so materialising them would change behaviour on the way to making
+storage explicit:
+
+| Key | Why absence is load-bearing |
+| --- | --- |
+| `settings_family` | The installer's own schema marker, not operator configuration — the same reason `pfb_gconfig_operator_view()` strips it (#1770/#1771/#1775). |
+| `v4suppression` | `pfblockerng_install.inc`'s ADR-53 `pfBlockerNGSuppress` alias conversion is gated on "never migrated" (absent) versus "present but empty". |
+| `pfb_cache`, `pfb_py_reply`, `pfb_hsts` | `pfblockerng_dnsbl.php` renders these CHECKED while the key is absent (`isset(…) ? … : 'on'`) although the registered default is `''`. Seeding `''` would flip the first-open rendering, and so what a first save stores. That page/registry divergence is **issue #1907**; these three join the pass when it is resolved. |
+
 Nothing else needs excluding — under the issue #1887 `''` ≡ absent identity, seeding a
 `''`-default field (a credential, a base64 blob, an interface multi-select) stores exactly the
 value it already had, and every genuinely user-owned structure (feed rows, group policies,
 MaxMind credentials) is unregistered and therefore never reached.
 
+The pass also skips any key whose **retired name is still stored**. The rename is
+all-or-nothing, so a fail-closed conflict leaves every other retired key unmigrated; seeding
+their current names would give each one a conflicting pair of its own on the next install,
+escalating a single-key recovery into an N-key one and destroying the old-present/new-absent
+path that migrates them cleanly once the operator resolves the one real conflict.
+
 **Consequence for future fields:** after this pass a bare `!isset($cfg[$key])` no longer means
 "an existing install that predates this setting". A new grandfather decides from the *value*, or
 from a dedicated one-shot marker (`pfb_control_legacy_seeded`'s shape), never from key absence.
+The same applies to whole-section emptiness: `pfb_dnsbl_python_migrate()` and
+`pfb_control_legacy_seed()` use `empty($dconfig)` as their fresh-install discriminator, so on the
+install *after* a fresh one they now fire against a seeded section and write their (vestigial)
+`dnsbl_mode` / `pfb_py_block` / `pfb_control_legacy_seeded` keys. Behaviour is unchanged —
+`pfb_control_legacy` is still only set when `pfb_control` is `'on'`, which a seeded section is
+not — but the write is spurious. New run-once logic uses a marker, not emptiness.
+
+**Conflict comparison is strict on the raw stored value.** The `both present and semantically
+equal` row converges only on a byte-identical pair: `top1m_source` holding `'tranco'` beside a
+retired `alexa_type` holding the adapter-equivalent `'alexa'` is reported as a conflict, not
+coalesced. This is a deliberate narrowing — inferring which side an operator meant is the guess
+the ticket forbids, and failing closed leaves the configuration intact with an actionable notice.
 
 Coverage: `tests/php/LegacyKeyRenameMigrationTest.php`.
 

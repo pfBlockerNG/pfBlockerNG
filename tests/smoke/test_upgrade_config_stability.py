@@ -616,3 +616,143 @@ def test_pkg_install_applies_config_migrations(repo_vm: SmokeVM) -> None:
             _cleanup_migration_config(repo_vm)
         except Exception as exc:  # noqa: BLE001 -- cleanup must not mask the real test outcome
             print(f"[smoke] _cleanup_migration_config failed (non-fatal): {exc}")
+
+
+# --------------------------------------------------------------------------- #
+# issue #1898 — the legacy config-key rename applies during a real pkg install #
+# --------------------------------------------------------------------------- #
+
+# One representative row per retired cluster, covering the stored value shapes the
+# migration must carry: an on/off token, an adapter-bearing selector, a numeric string,
+# a CSV multi-select, an unregistered bucket field, and a base64 textarea blob.
+_RENAME_ROWS: tuple[tuple[str, str, str], ...] = (
+    ("alexa_enable", "top1m_enable", "on"),
+    ("alexa_type", "top1m_source", "cisco"),
+    ("alexa_count", "top1m_count", "5000"),
+    ("alexa_inclusion", "top1m_inclusion", "com,net,org"),
+    ("pfb_pytld", "tld_allow", "on"),
+    ("pfb_pytlds_gtld", "tld_allow_gtld", "arpa,com,net"),
+    ("pfb_tld", "tld_wildcard", "on"),
+    ("tldblacklist", "tld_wildcard_blacklist", "emlwCm1vdgo="),  # base64 "zip\nmov\n"
+)
+
+
+def _seed_retired_key_config(vm: SmokeVM) -> None:
+    """Write the retired pre-#1898 key names straight into config.xml.
+
+    Deliberately raw ``config_set_path``: the point is to reproduce what a genuine
+    pre-rename installation holds, which no current code path can produce any more.
+    """
+    assignments = "".join(f"$d[{h._php_str(old)}] = {h._php_str(value)};\n" for old, _new, value in _RENAME_ROWS)
+    removals = ", ".join(f"$d[{h._php_str(new)}]" for _old, new, _value in _RENAME_ROWS)
+    snippet = (
+        f"$d = config_get_path({h._php_str(_CFG_DNSBL)}, array());\n"
+        f"{assignments}"
+        f"unset({removals});\n"
+        f"config_set_path({h._php_str(_CFG_DNSBL)}, $d);\n"
+        "write_config('pfBlockerNG issue-1898 smoke: seed retired config keys');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=60.0)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_seed_retired_key_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def _cleanup_retired_key_config(vm: SmokeVM) -> None:
+    """Strip both spellings so a sibling test never inherits this test's state."""
+    keys = ", ".join(f"$d[{h._php_str(old)}], $d[{h._php_str(new)}]" for old, new, _value in _RENAME_ROWS)
+    snippet = (
+        f"$d = config_get_path({h._php_str(_CFG_DNSBL)}, array());\n"
+        f"unset({keys});\n"
+        f"config_set_path({h._php_str(_CFG_DNSBL)}, $d);\n"
+        "write_config('pfBlockerNG issue-1898 smoke: cleanup retired config keys');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=60.0)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_cleanup_retired_key_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+@pytest.mark.timeout(600)  # one pkg install cycle > the 30s default cap.
+def test_pkg_install_retires_legacy_config_key_names(repo_vm: SmokeVM) -> None:
+    """POST-INSTALL RENAME CONTRACT (issue #1898): the legacy config-key rename runs
+    PROCEDURALLY during a real ``pkg install``, not just at the pure-function level.
+
+    ``LegacyKeyRenameMigrationTest`` (PHPUnit) pins the mapping, the preflight rows and
+    the fail-closed conflict in isolation; this proves the whole chain actually executes
+    on a live box — ``pfblockerng_install.inc`` -> ``pfb_run_migrations()`` -> the
+    multi-section ``issue1898-legacy-key-rename`` entry -> ``writeSectionSystem()`` ->
+    ``write_config()`` -> the settings-family marker — after the settings-family source
+    snapshot and target restore have already run ahead of it.
+
+    Scenario: issue #1898 — an existing installation upgrades across the key rename.
+      Background: our NONE-signed file:// repo above the Netgate ``pfSense`` repo.
+
+    Given the package ABSENT and a DNSBL settings section holding every retired key
+      name (seeded raw, since current code can no longer produce them),
+
+    When the UNMODIFIED branch ``.pkg`` is installed (a plain ``pkg install`` runs
+      ``rc.packages`` POST-INSTALL -> ``custom_php_install_command`` ->
+      ``pfblockerng_install.inc`` top to bottom),
+
+    Then every value has moved to its current key name byte-identically, and no retired
+      key name survives in config.xml.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file — repo_vm already gated this"
+
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+
+    try:
+        pkg_delete(repo_vm)
+        assert pkg_installed_version(repo_vm) is None, (
+            "package unexpectedly present before the issue-1898 rename-contract install"
+        )
+
+        _seed_retired_key_config(repo_vm)
+
+        # BEFORE: the retired spelling is what is stored, and the current one is absent.
+        for old, new, value in _RENAME_ROWS:
+            before_old = h.config_get(repo_vm, f"{_CFG_DNSBL}/{old}")
+            assert before_old == value, f"BEFORE: {old} = {before_old!r}, expected {value!r} (seed did not take)"
+            before_new = h.config_get(repo_vm, f"{_CFG_DNSBL}/{new}")
+            assert before_new == "", (
+                f"BEFORE: {new} = {before_new!r}, expected '' (absent) — the migration's "
+                "old-present/new-absent row requires the current key to be unset"
+            )
+
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [Path(pkg)])
+        write_repo_conf(repo_vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
+        pkg_update(repo_vm)
+        pkg_install_from_repo(repo_vm)
+
+        installed = pkg_installed_version(repo_vm)
+        expected_version = read_compact_version(Path(pkg))
+        assert installed == expected_version, (
+            f"expected the branch build {expected_version!r} installed, got {installed!r}"
+        )
+
+        # AFTER: every value moved to the current name, and no retired name survives.
+        for old, new, value in _RENAME_ROWS:
+            after_new = h.config_get(repo_vm, f"{_CFG_DNSBL}/{new}")
+            assert after_new == value, (
+                f"AFTER: {new} = {after_new!r}, expected {value!r} carried from {old} — "
+                "the post-install rename migration did not move the value"
+            )
+            after_old = h.config_get(repo_vm, f"{_CFG_DNSBL}/{old}")
+            assert after_old == "", (
+                f"AFTER: {old} = {after_old!r}, expected '' (removed) — the rename migration "
+                "left the retired key behind, so a later run would see a duplicate pair"
+            )
+
+    finally:
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
+        try:
+            _cleanup_retired_key_config(repo_vm)
+        except Exception as exc:  # noqa: BLE001 -- cleanup must not mask the real test outcome
+            print(f"[smoke] _cleanup_retired_key_config failed (non-fatal): {exc}")

@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * Issue #920 -- pfblockerng_top1m()'s TLD inclusion match is case-sensitive
  * while the include keys are always lowercase (the GUI's fixed
- * $options_alexa_inclusion list, pfblockerng_dnsbl.php, keys like 'ae'/'com').
+ * $options_top1m_inclusion list, pfblockerng_dnsbl.php, keys like 'ae'/'com').
  * A feed row with an uppercase/mixed-case domain (EXAMPLE.COM,
  * example.XN--P1AI) passed every guard, counted toward $linecnt, but silently
  * failed isset($pfb_include[$tld]) -- never whitelisted, no warning, no log.
