@@ -5050,7 +5050,9 @@ def build(
     ``config`` carries the classification + whitelist inputs (``tld_wildcard_master``
     suffix lines, ``tld_wildcard_blacklist``, ``tld_wildcard_exclusion``,
     ``user_whitelist``, ``user_unlock``). TOP1M is streamed from the fixed
-    ``pfb_py_top1m.txt`` sidecar by ``dnsbl_build_from_manifest``.
+    ``pfb_py_top1m.txt`` sidecar by ``dnsbl_build_from_manifest``, except for a
+    pre-#1542 manifest that predates that sidecar and still carries the retired
+    ``config.top1m_list`` -- issue #1841 reads TOP1M from that inline list instead.
     ``line_reader`` yields the raw lines for a feed's ``raw`` reference -- injected so
     this stays pure and side-effect-free (no filesystem coupling, unit-testable; the
     init wiring supplies a file-backed reader).
