@@ -73,10 +73,11 @@ exclusions.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, the Reputation
     "Max"/"pMax"/"dMax" toggles): default Off. The section
     (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,
-    `ccwhite`/`ccblack`/`ccexclude`, `et_header`/`etblock`/`etmatch`) — only these three
-    toggles are registered; the whole-section read/write routes through
-    `PfbConfig::readSection()`/`writeSection()` so the three normalise while the rest pass
-    through byte-identical.
+    `ccwhite`/`ccblack`/`ccexclude`, `et_update`, `et_header`/`etblock`/`etmatch`) — only
+    these three toggles are registered; the Reputation settings page's read/write routes
+    through `PfbConfig::readSection()`/`writeSection()` so the three normalise while the
+    rest pass through byte-identical (direct section-level reads elsewhere stay legal —
+    the sniff gates exact key paths only).
   - **`pfb_alias_delta_mode` → `PfbAliasDeltaMode`** (ADR-40, registry adapters
     `pfb_cfg_alias_delta_mode_read/write`): tokens `'auto'` (new-install default) / `'delta'` /
     `'replace'`. Unknown or absent token reads as `Auto`. **Grandfather seed:** an already-configured
