@@ -2103,7 +2103,11 @@ function pfb_settings_family_pre_uninstall(): void
  * Returns an array of migration descriptor maps, in the order they must run.
  * Each entry's 'apply' callable wraps an existing *_migrate / *_seed helper.
  *
- * @return list<array{id:string,section:string,apply:callable,message:string,since:string}>
+ * An entry declares EITHER a single 'section' (apply() takes and returns that
+ * section's blob) OR a 'sections' list (issue #1898 — apply() takes and returns a
+ * section => blob map, persisted under one write_config()).
+ *
+ * @return list<array{id:string,section?:string,sections?:list<string>,apply:callable,message:string,since:string}>
  */
 function pfb_migration_registry(): array
 {
@@ -2130,7 +2134,19 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: preserve legacy unchecked IDN malicious-block as explicit off (issue #1887)',
 			'since'   => '4.0.0',
 		],
-		// 1. ADR-02: force DNSBL to python-only mode.
+		// 1. issue #1898: retire the compatibility-only stored key names. Runs AFTER the
+		// '' preservations above -- they read operator intent out of a legacy stored '',
+		// which this entry's adapter-riding write-back would already have canonicalised
+		// away -- and before the rest. Multi-section ('sections', not 'section'): the
+		// DNSBL settings scalars plus the dynamic per-feed row key.
+		[
+			'id'       => 'issue1898-legacy-key-rename',
+			'sections' => [$dnsbl, 'installedpackages/pfblockerngdnsbl/config'],
+			'apply'    => 'pfb_legacy_key_rename_migrate',
+			'message'  => 'pfBlockerNG: retire legacy configuration key names (issue #1898)',
+			'since'    => '3.2.0',
+		],
+		// 2. ADR-02: force DNSBL to python-only mode.
 		[
 			'id'      => 'adr02-dnsbl-python-mode',
 			'section' => $dnsbl,
@@ -2138,7 +2154,7 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: migrated DNSBL to Python-only mode',
 			'since'   => '2.0.0',
 		],
-		// 2. PFBL-03: one-time seed of the deprecated legacy DNS-TXT control toggle.
+		// 3. PFBL-03: one-time seed of the deprecated legacy DNS-TXT control toggle.
 		[
 			'id'      => 'pfbl03-control-legacy-seed',
 			'section' => $dnsbl,
@@ -2146,7 +2162,7 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)',
 			'since'   => '3.2.0',
 		],
-		// 3. ADR-22: preserve permissive DNSBL scheme parsing for existing installs.
+		// 4. ADR-22: preserve permissive DNSBL scheme parsing for existing installs.
 		[
 			'id'      => 'adr22-dnsbl-lenient',
 			'section' => $dnsbl,
@@ -2154,7 +2170,7 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: preserve permissive DNSBL parsing for existing install (ADR-22 migration)',
 			'since'   => '3.2.0',
 		],
-		// 4. Issue #281: seed pfb_keep to preserve settings across pkg upgrade.
+		// 5. Issue #281: seed pfb_keep to preserve settings across pkg upgrade.
 		[
 			'id'      => 'issue281-pfb-keep-seed',
 			'section' => $gen,
@@ -2176,6 +2192,25 @@ function pfb_migration_registry(): array
 function pfb_run_migrations(): void
 {
 	foreach (pfb_migration_registry() as $migration) {
+		// issue #1898: an entry may declare a LIST of sections instead of one. Its apply()
+		// then receives, and returns, a section => blob map, and the whole set is persisted
+		// under a SINGLE write_config() -- so a migration spanning several sections is
+		// all-or-nothing rather than one flush per section.
+		if (isset($migration['sections'])) {
+			$blobs = [];
+			foreach ($migration['sections'] as $section) {
+				$blobs[$section] = PfbConfig::readSection($section);
+			}
+			$result = ($migration['apply'])($blobs);
+			if ($result !== NULL) {
+				foreach ($result as $section => $data) {
+					// issue #1895: upgrade migrations run with no web session in scope.
+					PfbConfig::writeSectionSystem($section, $data);
+				}
+				write_config($migration['message']);
+			}
+			continue;
+		}
 		$cfg    = PfbConfig::readSection($migration['section']);
 		$result = ($migration['apply'])($cfg);
 		if ($result !== NULL) {

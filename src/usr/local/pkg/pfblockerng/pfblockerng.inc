@@ -11836,6 +11836,179 @@ function pfb_toggle_empty_preserve_dnsbl($dconfig) {
 }
 
 
+// Issue #1898: the compatibility-only stored-key renames, one entry per affected section.
+// ADR-29 froze registry keys at their exact historical config.xml spelling so 4.x could
+// share a config.xml with the 3.2.x family; the settings-family snapshots now own downgrade
+// safety, so stored keys carry the current domain vocabulary instead. 'rows' distinguishes a
+// scalar section (a flat key => value node) from the dynamic per-feed list section, whose
+// renames apply inside every row.
+const PFB_LEGACY_KEY_RENAMES = array(
+	array(
+		'section' => 'installedpackages/pfblockerngdnsblsettings/config/0',
+		'rows'    => FALSE,
+		'keys'    => array(
+			// TOP1M: the Alexa list died in 2022 (#872). The runtime mirrors, the
+			// PfbTop1mSource enum and the sibling top1m_token key already say TOP1M.
+			'alexa_enable'     => 'top1m_enable',
+			'alexa_type'       => 'top1m_source',
+			'alexa_count'      => 'top1m_count',
+			'alexa_inclusion'  => 'top1m_inclusion',
+			// TLD Allow: ADR-66 §2.1's stem, already the ini/runtime vocabulary.
+			'pfb_pytld'        => 'tld_allow',
+			'pfb_pytld_sort'   => 'tld_allow_sort',
+			'pfb_pytlds_gtld'  => 'tld_allow_gtld',
+			'pfb_pytlds_cctld' => 'tld_allow_cctld',
+			'pfb_pytlds_itld'  => 'tld_allow_itld',
+			'pfb_pytlds_bgtld' => 'tld_allow_bgtld',
+			// Wildcard Blocking (TLD): ADR-66 §2.2's stem, already the manifest vocabulary.
+			'pfb_tld'          => 'tld_wildcard',
+			'tldblacklist'     => 'tld_wildcard_blacklist',
+			'tldexclusion'     => 'tld_wildcard_exclusion',
+		),
+	),
+	array(
+		'section' => 'installedpackages/pfblockerngdnsbl/config',
+		'rows'    => TRUE,
+		'keys'    => array('filter_alexa' => 'filter_top1m'),
+	),
+);
+
+
+// Rename the retired keys inside ONE flat key => value node (a scalar section, or one feed
+// row). Preflight per key: old absent -> nothing to do (covers both "never had it" and
+// "already migrated"); old present, new absent -> move; both present and identical -> keep
+// the new key and drop the old; both present and different -> a conflict this function
+// refuses to resolve. The comparison is strict on the RAW stored value, because picking a
+// winner is exactly the guess issue #1898 forbids. $changed / $conflicts accumulate across
+// every node so the caller's decision stays all-or-nothing.
+function pfb_legacy_key_rename_node(array $node, array $keys, $where, &$changed, array &$conflicts) {
+
+	foreach ($keys as $old => $new) {
+		if (!array_key_exists($old, $node)) {
+			continue;
+		}
+		if (array_key_exists($new, $node) && $node[$old] !== $node[$new]) {
+			$conflicts[] = "{$where}: [{$old}] and [{$new}] are both present with different values";
+			continue;
+		}
+		if (!array_key_exists($new, $node)) {
+			$node[$new] = $node[$old];
+		}
+		unset($node[$old]);
+		$changed = TRUE;
+	}
+
+	return $node;
+}
+
+
+// Issue #1898: the one-time forward migration off the retired key names. Pure -- it takes the
+// section blobs the driver read and returns the blobs to persist, or NULL for a no-op (fresh
+// install, already migrated, or a conflict). Atomic across every section: one unresolvable
+// pair abandons the entire migration rather than leaving config.xml half-renamed, and the
+// notice names the two keys but never their values (these fields hold base64 list blobs and
+// multi-selects). Values move byte-identically; the only transformation is the one the renamed
+// key's own registered adapter applies on write-back (top1m_source's 'alexa'/'domcop'
+// coalesce), which is the documented behaviour-equivalent move.
+function pfb_legacy_key_rename_migrate($sections) {
+
+	if (!is_array($sections)) {
+		return NULL;
+	}
+
+	$updated   = array();
+	$changed   = FALSE;
+	$conflicts = array();
+
+	foreach (PFB_LEGACY_KEY_RENAMES as $spec) {
+		$blob = $sections[$spec['section']] ?? array();
+		if (!is_array($blob)) {
+			continue;
+		}
+		if ($spec['rows']) {
+			foreach ($blob as $index => $row) {
+				if (is_array($row)) {
+					$blob[$index] = pfb_legacy_key_rename_node($row, $spec['keys'],
+						"{$spec['section']}/{$index}", $changed, $conflicts);
+				}
+			}
+		} else {
+			$blob = pfb_legacy_key_rename_node($blob, $spec['keys'], $spec['section'], $changed, $conflicts);
+		}
+		$updated[$spec['section']] = $blob;
+	}
+
+	if (!empty($conflicts)) {
+		file_notice('pfBlockerNG',
+			gettext('pfBlockerNG left the legacy configuration key names in place: ')
+			. implode('; ', $conflicts)
+			. gettext('. Remove the stale duplicate, or set both keys to the same value, then reinstall the package.'),
+			'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
+		return NULL;
+	}
+
+	return $changed ? $updated : NULL;
+}
+
+
+// Registered scalars the seeding pass never materialises, because some consumer still reads
+// their LITERAL ABSENCE as a distinct state -- seeding them would change behaviour on the way
+// to making storage explicit:
+//   settings_family  the installer's own schema marker, not operator configuration; seeding
+//                    the legacy '3.2' default would fight pfb_settings_family_record()
+//                    (same reason pfb_gconfig_operator_view() strips it, #1770/#1771/#1775).
+//   v4suppression    pfblockerng_install.inc's ADR-53 pfBlockerNGSuppress alias conversion is
+//                    gated on "never migrated" (absent) vs "present but empty".
+//   pfb_cache,       pfblockerng_dnsbl.php renders these CHECKED while the key is absent
+//   pfb_py_reply,    (isset(...) ? ... : 'on') though the registry default is '', so seeding
+//   pfb_hsts         would flip the first-open rendering and what a first save stores. That
+//                    page/registry divergence is issue #1907; these join the pass when it is
+//                    resolved.
+const PFB_SCALAR_SEED_EXCLUDED = array(
+	'settings_family', 'v4suppression', 'pfb_cache', 'pfb_py_reply', 'pfb_hsts',
+);
+
+
+// Issue #1898: materialise every registered scalar still absent from its section at its
+// registered default, so config.xml explicitly carries every scalar setting and an absent key
+// only ever means "this install has not run the seed yet". Pure -- takes the section blobs,
+// returns only the sections that gained a key.
+//
+// An existing value is NEVER overwritten, including an explicit 'off' whose registered default
+// is 'on'. Ordering, not special-casing, is what protects the grandfather decisions:
+// pfblockerng_install.inc calls this AFTER pfb_run_migrations() and after both install-default
+// grandfathers, by which point every seeded-by-decision key is present and simply skipped here.
+//
+// Beyond the exclusions above, no user-content carve-out is needed. Under the issue #1887
+// '' == absent identity, seeding a ''-default field (a credential, a base64 list blob, an
+// interface multi-select) stores exactly the value it already had, and the genuinely
+// user-owned structures -- feed rows, group policies, per-continent nodes, MaxMind
+// credentials -- are unregistered, so this pass never reaches them.
+function pfb_registered_scalars_seed($sections) {
+
+	if (!is_array($sections)) {
+		$sections = array();
+	}
+
+	$seeded = array();
+
+	foreach (pfb_cfg_registry() as $key => $entry) {
+		if (in_array($key, PFB_SCALAR_SEED_EXCLUDED, TRUE)) {
+			continue;
+		}
+		$section = $entry['section'];
+		$blob    = $seeded[$section] ?? ($sections[$section] ?? array());
+		if (!is_array($blob) || array_key_exists($key, $blob)) {
+			continue;
+		}
+		$blob[$key]       = $entry['default'];
+		$seeded[$section] = $blob;
+	}
+
+	return $seeded;
+}
+
+
 // Whether the feed-host internal-address filter is enabled. Reads the General-settings
 // 'pfb_feed_internal_filter' on/off flag, defaulting to ON when the key is absent (a
 // fresh install ships the filter active; the install-time migration pins it OFF on an
