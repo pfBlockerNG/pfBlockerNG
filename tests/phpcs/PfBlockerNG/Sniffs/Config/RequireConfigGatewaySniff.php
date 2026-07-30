@@ -1,8 +1,11 @@
 <?php
 
 /*
- * ADR-29 item — enforce the config-gateway access rule mechanically.
+ * ADR-29 / issue #1895 — enforce the config-gateway access rules mechanically.
  *
+ * Carries two independent checks (two error codes, one sniff class):
+ *
+ * CHECK 1 — RawRegisteredKeyAccess (ADR-29).
  * Flags any config_get_path / config_set_path / config_del_path call whose
  * first argument is a static string literal that resolves to a REGISTERED
  * installedpackages/pfblockerng* key (i.e. a key present in
@@ -26,6 +29,33 @@
  * paths derived from pfb_cfg_registry()) embedded as a sniff property.  The
  * list must be kept in sync with pfb_cfg_registry() in pfblockerng_extra.inc.
  *
+ * CHECK 2 — SystemWriteInWww (issue #1895).
+ * PfbConfig::writeSystem() / PfbConfig::writeSectionSystem() write with NO
+ * per-field write_priv authorization check (see the docblocks on those two
+ * methods in pfblockerng_extra.inc) — they exist only for no-session system
+ * callers (cron/install/migrations/CLI/core hooks). Any file whose path
+ * (normalised to forward slashes) contains "/usr/local/www/" — the pfSense
+ * web UI, which always runs inside an authenticated session — MUST NOT call
+ * either variant; it flags a static PfbConfig::writeSystem(...) /
+ * PfbConfig::writeSectionSystem(...) call (case-insensitive method AND class
+ * name, matching PHP's own case-insensitivity) wherever it appears under
+ * www/.
+ *
+ * PRECISE by design, same T_STRING-token mechanism as check 1 — does NOT
+ * flag:
+ *   a) The same call outside www/ (e.g. pfblockerng_extra.inc itself, cron/
+ *      install/migration code under pkg/pfblockerng/) — the legitimate
+ *      system-caller use case.
+ *   b) PfbConfig::write() / PfbConfig::writeSection() (authorization-checked
+ *      variants) — different method name.
+ *   c) The same method name on any class other than PfbConfig.
+ *   d) A comment or string literal that merely mentions
+ *      "PfbConfig::writeSystem" — T_STRING only matches real code tokens.
+ *
+ * OUT OF SCOPE by design (static greppability, not full data-flow analysis):
+ * a call reached through an alias/variable (`$c::writeSystem()`) or through
+ * reflection/`call_user_func()` will NOT be flagged.
+ *
  * Wired from phpcs.xml.dist as PfBlockerNG.Config.RequireConfigGateway.
  */
 
@@ -46,6 +76,25 @@ class RequireConfigGatewaySniff implements Sniff
 		'config_set_path',
 		'config_del_path',
 	];
+
+	/**
+	 * PfbConfig methods that bypass per-field write_priv authorization (#1895) —
+	 * confined to no-session system callers (cron/install/migrations/CLI/core
+	 * hooks). Lower-case; compared case-insensitively (PHP method names are
+	 * case-insensitive).
+	 *
+	 * @var string[]
+	 */
+	private const SYSTEM_WRITE_METHODS = [
+		'writesystem',
+		'writesectionsystem',
+	];
+
+	/**
+	 * Substring a normalised (forward-slash) file path must contain for the
+	 * SystemWriteInWww check to apply — the pfSense web UI tree.
+	 */
+	private const WWW_PATH_MARKER = '/usr/local/www/';
 
 	/**
 	 * The complete set of registered installedpackages/pfblockerng* key paths.
@@ -187,9 +236,24 @@ class RequireConfigGatewaySniff implements Sniff
 	}
 
 	/**
+	 * Dispatch to both independent checks. Neither may short-circuit the
+	 * other — a T_STRING token can only match one of the two gated-name sets,
+	 * but each check performs its own early return, so both always run.
+	 *
 	 * @param int $stackPtr
 	 */
 	public function process(File $phpcsFile, $stackPtr)
+	{
+		$this->processRawConfigPathCall($phpcsFile, (int) $stackPtr);
+		$this->processSystemWriteInWww($phpcsFile, (int) $stackPtr);
+	}
+
+	/**
+	 * CHECK 1 — ADR-29 RawRegisteredKeyAccess.
+	 *
+	 * @param int $stackPtr
+	 */
+	private function processRawConfigPathCall(File $phpcsFile, int $stackPtr): void
 	{
 		$tokens = $phpcsFile->getTokens();
 
@@ -273,6 +337,69 @@ class RequireConfigGatewaySniff implements Sniff
 			),
 			$stackPtr,
 			'RawRegisteredKeyAccess'
+		);
+	}
+
+	/**
+	 * CHECK 2 — issue #1895 SystemWriteInWww.
+	 *
+	 * Flags a static PfbConfig::writeSystem(...) / PfbConfig::writeSectionSystem(...)
+	 * call found anywhere under a /usr/local/www/ path. Requires the T_DOUBLE_COLON
+	 * call form on the exact class name PfbConfig (case-insensitive) — the opposite
+	 * shape from check 1's isFunctionCall(), which disqualifies T_DOUBLE_COLON.
+	 *
+	 * @param int $stackPtr
+	 */
+	private function processSystemWriteInWww(File $phpcsFile, int $stackPtr): void
+	{
+		$tokens = $phpcsFile->getTokens();
+
+		// Must be one of the gated system-write method names.
+		$name = strtolower((string) $tokens[$stackPtr]['content']);
+		if (!in_array($name, self::SYSTEM_WRITE_METHODS, TRUE)) {
+			return;
+		}
+
+		// Must be a call (next non-whitespace token is '(').
+		$next = $phpcsFile->findNext(T_WHITESPACE, $stackPtr + 1, NULL, TRUE);
+		if ($next === FALSE || $tokens[$next]['code'] !== T_OPEN_PARENTHESIS) {
+			return;
+		}
+
+		// Must be a static call: previous non-whitespace token is T_DOUBLE_COLON.
+		$doubleColon = $phpcsFile->findPrevious(T_WHITESPACE, $stackPtr - 1, NULL, TRUE);
+		if ($doubleColon === FALSE || $tokens[$doubleColon]['code'] !== T_DOUBLE_COLON) {
+			return;
+		}
+
+		// The class name immediately before '::' must be PfbConfig (case-insensitive).
+		// A leading namespace separator further back (e.g. \PfbConfig::) is not
+		// examined and does not disqualify the match.
+		$classToken = $phpcsFile->findPrevious(T_WHITESPACE, $doubleColon - 1, NULL, TRUE);
+		if ($classToken === FALSE || $tokens[$classToken]['code'] !== T_STRING) {
+			return;
+		}
+		if (strtolower((string) $tokens[$classToken]['content']) !== 'pfbconfig') {
+			return;
+		}
+
+		// Only enforce under the pfSense web UI tree — the authenticated-session
+		// surface these two methods are not authorized for (issue #1895).
+		$filename = str_replace('\\', '/', $phpcsFile->getFilename());
+		if (strpos($filename, self::WWW_PATH_MARKER) === FALSE) {
+			return;
+		}
+
+		$phpcsFile->addError(
+			sprintf(
+				'issue #1895: PfbConfig::%s() bypasses per-field write_priv authorization '
+				. 'and is reserved for no-session system contexts (cron/install/migrations/'
+				. 'CLI/core hooks) — www/ code must use PfbConfig::write()/writeSection() '
+				. 'instead, so isAllowedPage() authorization applies.',
+				$tokens[$stackPtr]['content']
+			),
+			$stackPtr,
+			'SystemWriteInWww'
 		);
 	}
 
