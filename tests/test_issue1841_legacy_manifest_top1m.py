@@ -50,8 +50,11 @@ def _manifest(
     return str(path)
 
 
-def test_legacy_manifest_with_top1m_disabled_still_builds_its_feeds(tmp_path: Path) -> None:
-    """The retired key alone no longer costs the box its feed data."""
+def test_legacy_manifest_with_top1m_disabled_still_builds_its_feeds(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The retired key alone no longer costs the box its feed data, and the warning
+    says the list was ignored rather than claiming a TOP1M load that never happened."""
     manifest = _manifest(tmp_path, top1m_enabled=False, top1m_list=["popularcdn.com"])
 
     result = P.dnsbl_build_from_manifest(manifest)
@@ -59,6 +62,9 @@ def test_legacy_manifest_with_top1m_disabled_still_builds_its_feeds(tmp_path: Pa
     assert result is not None, "retired config.top1m_list still fails the whole generation"
     assert "blocked.example" in result.data_db
     assert result.white_db == {}, "TOP1M is off -- the retired list must not whitelist anything"
+    warning = capsys.readouterr().err
+    assert RETIRED_KEY_WARNING in warning
+    assert "ignoring it (TOP1M is disabled)" in warning
 
 
 def test_legacy_manifest_with_top1m_enabled_keeps_its_top1m_whitelist(tmp_path: Path) -> None:
@@ -81,7 +87,9 @@ def test_legacy_manifest_warns_once_about_the_retired_key(tmp_path: Path, capsys
 
     assert P.dnsbl_build_from_manifest(manifest) is not None
 
-    assert capsys.readouterr().err.count(RETIRED_KEY_WARNING) == 1
+    warning = capsys.readouterr().err
+    assert warning.count(RETIRED_KEY_WARNING) == 1
+    assert "reading TOP1M from it" in warning
 
 
 def test_current_manifest_reads_the_sidecar_and_warns_about_nothing(
