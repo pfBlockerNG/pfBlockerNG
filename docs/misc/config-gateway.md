@@ -22,6 +22,34 @@ exclusions.
 - **No `write_config()` inside the gateway** — the caller decides when to flush. The registry
   (`pfb_cfg_registry()`) is read-only after boot.
 
+## Write authorization (issue #1895)
+
+Authorization is a property of the **write**, not the call site (the
+`pfblockerng_hook_edit.inc` GATE 1 precedent generalised):
+
+- Every registry entry may carry an optional `write_priv` — the page whose privilege the
+  write re-asserts via `isAllowedPage()`. Absent means `PfbConfig::WRITE_PRIV_DEFAULT`
+  (`pfblockerng/pfblockerng_general.php`, the package page — pfSense grants all
+  pfBlockerNG pages through one privilege entry, so finer per-page defaults would be
+  meaningless). The only explicit override: `pfb_software_check` →
+  `pkg_mgr_installed.php` (the #485 Software-page secondary gate).
+- `PfbConfig::write()` / `writeSection()` enforce it **fail-closed**: an undefined
+  `isAllowedPage()` (no web session — `priv.inc` is only in the web auth include chain)
+  or a FALSE return throws `RuntimeException`. `writeSection()` checks every registered
+  field of the section present in `$data` before any mutation. The loud throw is
+  deliberate: the silent-FALSE alternative is exactly the CLI trap #1895 documents.
+- `PfbConfig::writeSystem()` / `writeSectionSystem()` skip the check — the sanctioned
+  path for cron, the install/deinstall hooks, migrations, CLI, and pfSense-core hooks
+  (`pfb_alias_rename_followup()` runs from the `firewall_aliases_edit` pre-write hook
+  under a firewall-alias-only privilege, so enforcement there would break a supported
+  path). The bypass is visible at the call site and mechanically confined:
+  `RequireConfigGatewaySniff` (`SystemWriteInWww`) refuses the `*System()` variants in
+  any file under `src/usr/local/www/`.
+- `delete()` / `deleteSection()` carry no privilege check (out of #1895's scope).
+- Coverage: `tests/php/CfgWriteAuthorizationTest.php` (deny/allow per entry point, the
+  per-field override, the priv.inc-loaded CLI-trap regression, write/writeSystem
+  parity) + the sniff fixtures in `tests/php/RequireConfigGatewaySniffTest.php`.
+
 ## Storage adapter rule (ADR-28 §2.2)
 
 - **Storage is NOT frozen — forward-upgrade compatible where practical, not byte-for-byte.**
@@ -128,6 +156,8 @@ exclusions.
    string), so every consumer of that field moves in the same commit — a stale string
    comparison against the enum fails silently in the always-false direction (issue #1887).
 2. Verify round-trip: `write(read(v)) == v` for every canonical stored vocabulary value.
+   When the field's owning page carries a secondary privilege gate (like the Software
+   page), set `write_priv` on the entry (see "Write authorization" above).
 3. Add a test in `tests/php/CfgGatewayTest.php` (round-trip + default-absent cases).
 4. Update the `$inventory` in `testInventoryCompletenessAllKnownKeysAccountedFor()`.
 
