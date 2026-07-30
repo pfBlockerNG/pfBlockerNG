@@ -110,6 +110,8 @@ class RequireConfigGatewaySniff implements Sniff
 	 */
 	public $registeredPaths = [
 		// installedpackages/pfblockerng/config/0 (general settings)
+		// Settings snapshot schema marker (drift caught by issue #1902 parity test).
+		'installedpackages/pfblockerng/config/0/settings_family',
 		'installedpackages/pfblockerng/config/0/enable_cb',
 		'installedpackages/pfblockerng/config/0/pfb_keep',
 		'installedpackages/pfblockerng/config/0/pfb_interval',
