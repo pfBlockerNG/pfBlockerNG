@@ -12,7 +12,7 @@ use PHPUnit\Framework\TestCase;
  * half-renamed bridge fails loudly in Phases 2/3).
  *
  * C1 -- ini bridge writer: pfb_unbound_python() derives tld_allow/
- * tld_allow_list from $pfb['dnsbl_tld_allow'] + the four pfb_pytlds_{gtld,cctld,
+ * tld_allow_list from $pfb['dnsbl_tld_allow'] + the four tld_allow_{gtld,cctld,
  * itld,bgtld} config fields and emits them into the MAIN-ini heredoc
  * (mirrors PythonTldWildcardIniEmitTest.php's structural pin -- no lighter
  * harness exists for pfb_unbound_python(), a live pfSense/VIP/DNS
@@ -55,9 +55,9 @@ final class TldBridgeEmitTest extends TestCase
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsbl_tld_wildcard' => '',
 			'dnsblconfig'        => [
-				'tldblacklist' => '',
-				'tldexclusion' => '',
-				'suppression'  => '',
+				'tld_wildcard_blacklist' => '',
+				'tld_wildcard_exclusion' => '',
+				'suppression'            => '',
 			],
 		]);
 	}
@@ -122,7 +122,7 @@ final class TldBridgeEmitTest extends TestCase
 	public function testIniWriterReadsAllFourPytldsConfigFields(): void
 	{
 		$body = $this->functionBody('pfb_unbound_python');
-		foreach (['pfb_pytlds_gtld', 'pfb_pytlds_cctld', 'pfb_pytlds_itld', 'pfb_pytlds_bgtld'] as $field) {
+		foreach (['tld_allow_gtld', 'tld_allow_cctld', 'tld_allow_itld', 'tld_allow_bgtld'] as $field) {
 			$this->assertStringContainsString(
 				"dnsblconfig']['{$field}']",
 				$body,
@@ -152,8 +152,8 @@ final class TldBridgeEmitTest extends TestCase
 	public function testManifestTldKeysEmptyWhenDnsblTldOff(): void
 	{
 		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';
-		$GLOBALS['pfb']['dnsblconfig']['tldblacklist'] = base64_encode('evil-tld');
-		$GLOBALS['pfb']['dnsblconfig']['tldexclusion'] = base64_encode('good.example');
+		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_blacklist'] = base64_encode('evil-tld');
+		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_exclusion'] = base64_encode('good.example');
 
 		$m = pfb_unbound_python_sources([]);
 
@@ -167,8 +167,8 @@ final class TldBridgeEmitTest extends TestCase
 	public function testManifestTldKeysPopulatedWhenDnsblTldOn(): void
 	{
 		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = 'on';
-		$GLOBALS['pfb']['dnsblconfig']['tldblacklist'] = base64_encode('evil-tld');
-		$GLOBALS['pfb']['dnsblconfig']['tldexclusion'] = base64_encode('good.example');
+		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_blacklist'] = base64_encode('evil-tld');
+		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_exclusion'] = base64_encode('good.example');
 
 		$m = pfb_unbound_python_sources([]);
 

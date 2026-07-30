@@ -19,7 +19,7 @@ asserted per field, never one alone (a half-mounted editor sitting next to a sti
 textarea is exactly the kind of defect a source-only pin would miss).
 
 Three of the fields are gated behind a checkbox that ``.hide()``/``.show()``s their whole
-section (``pfb_gp`` / ``pfb_noaaaa`` / ``pfb_tld`` -- all default OFF on a fresh box), on
+section (``pfb_gp`` / ``pfb_noaaaa`` / ``tld_wildcard`` -- all default OFF on a fresh box), on
 top of the ``COLLAPSIBLE|SEC_CLOSED`` panel-body collapse every field's section also
 carries; ``_gate`` and ``_expand`` drive those two independent layers.
 
@@ -126,12 +126,12 @@ def _prep_whitelist(page: Page) -> None:
 
 
 def _prep_tld_exclusion(page: Page) -> None:
-    _gate(page, "pfb_tld")
+    _gate(page, "tld_wildcard")
     _expand(page, "TLD_Exclusion")
 
 
 def _prep_tld_blacklist(page: Page) -> None:
-    _gate(page, "pfb_tld")
+    _gate(page, "tld_wildcard")
     _expand(page, "TLD_BW_list")
 
 
@@ -152,8 +152,8 @@ FIELDS: list[tuple[str, str, str, "Callable[[Page], None]"]] = [
     ("dnsbl", DNSBL_PAGE, "pfb_gp_bypass_list", _prep_gp),
     ("dnsbl", DNSBL_PAGE, "pfb_noaaaa_list", _prep_noaaaa),
     ("dnsbl", DNSBL_PAGE, "suppression", _prep_whitelist),
-    ("dnsbl", DNSBL_PAGE, "tldexclusion", _prep_tld_exclusion),
-    ("dnsbl", DNSBL_PAGE, "tldblacklist", _prep_tld_blacklist),
+    ("dnsbl", DNSBL_PAGE, "tld_wildcard_exclusion", _prep_tld_exclusion),
+    ("dnsbl", DNSBL_PAGE, "tld_wildcard_blacklist", _prep_tld_blacklist),
     ("ip", IP_PAGE, "v4suppression", _prep_v4_suppression),
     ("ip", IP_PAGE, "v6suppression", _prep_v6_suppression),
     ("general", GENERAL_PAGE, "pfb_feed_internal_allowlist", _prep_noop),

@@ -22,14 +22,14 @@ so the references cannot rot as pfblockerng_dnsbl.php grows (issue #788):
 * ``enable_python_noaaaa()``: ``#pfb_noaaaa`` gates the ``Python_noaaaa_list``
   section.
 * ``enable_python_gp()``: ``#pfb_gp`` gates the ``Python_Group_Policy`` section.
-* ``enable_tld()``: ``#pfb_tld`` gates BOTH the ``TLD_Exclusion`` and
+* ``enable_tld()``: ``#tld_wildcard`` gates BOTH the ``TLD_Exclusion`` and
   ``TLD_BW_list`` sections at once.
 * ``enable_dnsblip()`` (bound to ``#action`` click): the ``#action`` List-Action
   select being non-``Disabled`` ``.show()``s BOTH the ``advinboundsettings`` and
   ``advoutboundsettings`` sections; ``Disabled`` ``.hide()``s them.
 
 All five gating controls default OFF on a fresh box (``pfb_regex``/``pfb_noaaaa``/
-``pfb_gp``/``pfb_tld`` default ``''`` -> unchecked; ``action`` defaults
+``pfb_gp``/``tld_wildcard`` default ``''`` -> unchecked; ``action`` defaults
 ``Disabled``), so the on-load handler pass leaves every dependent section HIDDEN
 -- the BEFORE state each test asserts before flipping the control, then asserts
 the AFTER (shown), then flips back to re-hide (both branches, per CLAUDE.md
@@ -42,7 +42,7 @@ NO fixed sleeps: every assertion uses Playwright's auto-waiting
 Per-state full-page screenshots are written to ``screenshot_dir`` for human
 review (ADR §2 "Screenshots (A1)" -- artifacts, NOT asserted pixel baselines).
 
-DEFERRED (noted in the report): ``enable_python_pytld`` (multi-target
+DEFERRED (noted in the report): ``enable_tld_allow`` (multi-target
 ``hideMultiClass``/``hideCheckbox``), ``enable_ports`` (gated by the
 ``#dnsbl_interface`` select, whose non-``lo0`` options depend on the VM's live
 interfaces), and the auto-VIP OPTION-INJECTION half of ``enable_dnsvip_auto``.
@@ -201,7 +201,7 @@ def test_tld_checkbox_toggles_both_tld_sections(
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
-    """`#pfb_tld` gates BOTH the `TLD_Exclusion` and `TLD_BW_list` sections.
+    """`#tld_wildcard` gates BOTH the `TLD_Exclusion` and `TLD_BW_list` sections.
 
     ``enable_tld()`` (pfblockerng_dnsbl.php:3067-3075) ``.show()``/``.hide()``s
     the two collapsible TLD sections together off the one checkbox. Branch
@@ -211,7 +211,7 @@ def test_tld_checkbox_toggles_both_tld_sections(
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
 
-    box = page.locator("#pfb_tld")
+    box = page.locator("#tld_wildcard")
     excl = page.locator("#TLD_Exclusion")
     bwl = page.locator("#TLD_BW_list")
     expect(box).to_be_attached(timeout=JS_TIMEOUT_MS)

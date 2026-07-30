@@ -320,7 +320,7 @@ class DnsblCase:
     # python_control_legacy, emitted `on` only when BOTH pfb_control and pfb_control_legacy
     # are on, inc:4744). None (default) emits nothing.
     control_legacy: bool | None = None
-    # tld_enabled -> the "TLD Function" toggle (CFG_DNSBL_SETTINGS/pfb_tld -> $pfb['dnsbl_tld_wildcard']).
+    # tld_enabled -> the "TLD Function" toggle (CFG_DNSBL_SETTINGS/tld_wildcard -> $pfb['dnsbl_tld_wildcard']).
     # On: the manifest-build TLD-Wildcard classifier runs with no blacklist/exclusion
     # configured -- a coarse regression guard (ADR-62 issue #1060) that TLD mode
     # coexisting with a plain feed does not disturb ordinary DNSBL blocking. False
@@ -1879,9 +1879,9 @@ def set_dnsbl_lenient(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
 
 
 def set_dnsbl_tld_wildcard(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
-    """Toggle DNSBL Wildcard Blocking (TLD) (``pfb_tld`` -> ini ``python_tld_wildcard``).
+    """Toggle DNSBL Wildcard Blocking (TLD) (``tld_wildcard`` -> ini ``python_tld_wildcard``).
 
-    issue #1255: ``pfb_tld`` is read as a bare truthy check
+    issue #1255: ``tld_wildcard`` is read as a bare truthy check
     (``$pfb['dnsbl_tld_wildcard']``), so off is the empty string, matching
     :func:`set_dnsbl_control`. On: the next reload's ini carries
     ``python_tld_wildcard = on`` and the shipped public-suffix oracle
@@ -1892,9 +1892,9 @@ def set_dnsbl_tld_wildcard(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> N
     val = "on" if on else ""
     snippet = (
         f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
-        f"$d['pfb_tld'] = {_php_str(val)};\n"
+        f"$d['tld_wildcard'] = {_php_str(val)};\n"
         f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: toggle pfb_tld');\n"
+        "write_config('pfBlockerNG smoke: toggle tld_wildcard');\n"
         "echo 'OK';"
     )
     result = php_eval(vm, snippet, timeout=timeout)
@@ -2618,7 +2618,7 @@ def clear_dnsbl_settings(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     ``inject()`` MERGES into ``installedpackages/pfblockerngdnsblsettings/config/0``
     (``array_merge``, inc-side ``config_set_path``), so a setting one case turns on —
     ``pfb_regex`` + ``pfb_regex_list`` (user-regex), ``pfb_regex_cap``, ``pfb_cname``,
-    and any IDN/pytld toggles — STAYS on for every later case/module, because a plain
+    and any IDN/TLD Allow toggles — STAYS on for every later case/module, because a plain
     (non-regex) ``DnsblCase`` never sets those keys to clear them. ``reset()`` only does
     ``clearip``/``cleardnsbl`` + a forced update (it drops tables/sqlite, NOT config
     settings), so the toggle bleeds across modules: e.g. a leftover ``pfb_regex=on``
@@ -3054,8 +3054,8 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # The deprecated DNS-TXT sub-path (pfb_control_legacy -> ini python_control_legacy).
         settings["pfb_control_legacy"] = "on" if spec.control_legacy else ""
     if spec.tld_enabled:
-        # "TLD Function" (CFG_DNSBL_SETTINGS/pfb_tld -> $pfb['dnsbl_tld_wildcard'], inc:15156).
-        settings["pfb_tld"] = "on"
+        # "TLD Function" (CFG_DNSBL_SETTINGS/tld_wildcard -> $pfb['dnsbl_tld_wildcard'], inc:15156).
+        settings["tld_wildcard"] = "on"
     # The primary feed row + any ABP extra rows, all in ONE DNSBL list group. Each
     # row is downloaded and its lines captured per-line independently, so an ABP
     # body per row yields one ABP feed per row whose rules the Python build merges.

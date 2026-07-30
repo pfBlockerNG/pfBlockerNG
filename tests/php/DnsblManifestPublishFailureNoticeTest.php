@@ -48,8 +48,8 @@ final class DnsblManifestPublishFailureNoticeTest extends TestCase
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsbl_tld_wildcard' => '',
 			'dnsblconfig'        => [
-				'tldblacklist' => '',
-				'tldexclusion' => '',
+				'tld_wildcard_blacklist' => '',
+				'tld_wildcard_exclusion' => '',
 				'suppression'  => '',
 			],
 		]);

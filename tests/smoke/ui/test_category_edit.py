@@ -11,7 +11,7 @@ that is the CRUD heart of pfBlockerNG. Its save handler (gated on
 / ``dnsbl`` -> ``$conf_type`` ``pfblockernglistsv4`` / ``pfblockernglistsv6`` /
 ``pfblockerngdnsbl``) and ``$_POST['rowid']``, and writes the alias under
 ``installedpackages/{conf_type}/config/{rowid}/...`` (aliasname, action, the
-source ``row/<n>`` table, plus the DNSBL scalars logging/order/filter_alexa).
+source ``row/<n>`` table, plus the DNSBL scalars logging/order/filter_top1m).
 
 As in ``test_functional.py`` the oracle is ALWAYS the box's EFFECTIVE state --
 ``config.xml`` read via :func:`tests.smoke.helpers.config_get` -- never the HTTP
@@ -133,7 +133,7 @@ def _dnsbl_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, st
         "sort": "sort",
         "order": "default",
         "logging": "enabled",
-        "filter_alexa": "",
+        "filter_top1m": "",
         "srcint": "",
         "script_pre": "",
         "script_post": "",
@@ -427,7 +427,7 @@ def test_dnsbl_url_geoip_value_persists_byte_identical(
 
 
 # --------------------------------------------------------------------------- #
-# DNSBL scalar selects/toggle: logging (valid + bogus-coerce), order, filter_alexa.
+# DNSBL scalar selects/toggle: logging (valid + bogus-coerce), order, filter_top1m.
 # --------------------------------------------------------------------------- #
 
 
@@ -490,13 +490,13 @@ def test_dnsbl_order_select_transition(
         _del_rowid(vm, CFG_DNSBL, rowid)
 
 
-def test_dnsbl_filter_alexa_checkbox_both_ways(
+def test_dnsbl_filter_top1m_checkbox_both_ways(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """``filter_alexa`` (TOP1M Whitelist checkbox) stores 'on' when set, '' when clear.
+    """``filter_top1m`` (TOP1M Whitelist checkbox) stores 'on' when set, '' when clear.
 
-    Written via ``pfb_filter($_POST['filter_alexa'], PFB_FILTER_ON_OFF, ...)`` ->
+    Written via ``pfb_filter($_POST['filter_top1m'], PFB_FILTER_ON_OFF, ...)`` ->
     'on' iff the POST value is 'on', else ''. Branch coverage: create with it ON
     (assert 'on'), then save with it cleared (assert ''), then ON again. A browser
     omits an unchecked box; the cleared POST sends the empty value, which the
@@ -504,14 +504,14 @@ def test_dnsbl_filter_alexa_checkbox_both_ways(
     """
     vm = smoke_vm
     rowid = _free_rowid(vm, CFG_DNSBL)
-    cfg = f"{CFG_DNSBL}/{rowid}/filter_alexa"
+    cfg = f"{CFG_DNSBL}/{rowid}/filter_top1m"
     try:
-        _post_form(webui, _dnsbl_payload(rowid, "smokealexa", filter_alexa="on"))
-        assert helpers.config_get(vm, cfg) == "on", "filter_alexa not stored 'on'"
-        _post_form(webui, _dnsbl_payload(rowid, "smokealexa", filter_alexa=""))
-        assert helpers.config_get(vm, cfg) == "", "filter_alexa not cleared to ''"
-        _post_form(webui, _dnsbl_payload(rowid, "smokealexa", filter_alexa="on"))
-        assert helpers.config_get(vm, cfg) == "on", "filter_alexa not re-set 'on'"
+        _post_form(webui, _dnsbl_payload(rowid, "smokealexa", filter_top1m="on"))
+        assert helpers.config_get(vm, cfg) == "on", "filter_top1m not stored 'on'"
+        _post_form(webui, _dnsbl_payload(rowid, "smokealexa", filter_top1m=""))
+        assert helpers.config_get(vm, cfg) == "", "filter_top1m not cleared to ''"
+        _post_form(webui, _dnsbl_payload(rowid, "smokealexa", filter_top1m="on"))
+        assert helpers.config_get(vm, cfg) == "on", "filter_top1m not re-set 'on'"
     finally:
         _del_rowid(vm, CFG_DNSBL, rowid)
 

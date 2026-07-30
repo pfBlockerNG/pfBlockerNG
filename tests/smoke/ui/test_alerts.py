@@ -50,7 +50,7 @@ ALERTS_PAGE = "/pfblockerng/pfblockerng_alerts.php"
 
 # config.xml nodes the alerts handlers write (all base64 textarea fields).
 CFG_SUPPRESSION = "installedpackages/pfblockerngdnsblsettings/config/0/suppression"
-CFG_TLDEXCLUSION = "installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion"
+CFG_TLD_WILDCARD_EXCLUSION = "installedpackages/pfblockerngdnsblsettings/config/0/tld_wildcard_exclusion"
 CFG_V4SUPPRESSION = "installedpackages/pfblockerngipsettings/config/0/v4suppression"
 CFG_V6SUPPRESSION = "installedpackages/pfblockerngipsettings/config/0/v6suppression"
 
@@ -302,10 +302,10 @@ def test_dnsbl_remove_rejects_missing_type(
 # --------------------------------------------------------------------------- #
 # addwhitelistdom (alerts.php:947): adds a domain to the DNSBL Whitelist
 # (``suppression`` node) when ``dnsbl_exclude != 'true'``, OR to the TLD Exclusion
-# list (``tldexclusion`` node) when ``dnsbl_exclude == 'true'`` -- two distinct
+# list (``tld_wildcard_exclusion`` node) when ``dnsbl_exclude == 'true'`` -- two distinct
 # config branches off the SAME action. The reverse is the ``entry_delete`` handler
 # (alerts.php:1178): ``delete_domain`` removes from ``suppression``,
-# ``delete_exclusion`` removes from ``tldexclusion`` -- so the restore exercises
+# ``delete_exclusion`` removes from ``tld_wildcard_exclusion`` -- so the restore exercises
 # that handler too. Oracle = the base64-decoded config node membership.
 # --------------------------------------------------------------------------- #
 
@@ -400,16 +400,16 @@ def test_addwhitelistdom_exclude_writes_tld_exclusion_and_entry_delete_removes_i
 
     The OTHER branch of the same action (CLAUDE.md branch coverage: the exclude flag
     OFF case is the whitelist test above; this is the ON case). True transition with
-    the ``tldexclusion`` config node as oracle: absent before, present after the add,
+    the ``tld_wildcard_exclusion`` config node as oracle: absent before, present after the add,
     absent again after ``entry_delete=delete_exclusion`` (the reverse + that delete
     branch). Config reset in ``finally``.
     """
     vm = smoke_vm
     domain = helpers.unique_domain("uitld")
-    original = helpers.config_get(vm, CFG_TLDEXCLUSION)
+    original = helpers.config_get(vm, CFG_TLD_WILDCARD_EXCLUSION)
     try:
         # BEFORE: not in the TLD Exclusion list.
-        assert domain not in _suppression_entries(vm, CFG_TLDEXCLUSION), (
+        assert domain not in _suppression_entries(vm, CFG_TLD_WILDCARD_EXCLUSION), (
             f"{domain} already in the TLD Exclusion list before the add"
         )
 
@@ -425,21 +425,21 @@ def test_addwhitelistdom_exclude_writes_tld_exclusion_and_entry_delete_removes_i
             },
         )
         assert not looks_like_login_page(resp.text), "addwhitelistdom (exclude) POST returned the login form"
-        assert domain in _suppression_entries(vm, CFG_TLDEXCLUSION), (
+        assert domain in _suppression_entries(vm, CFG_TLD_WILDCARD_EXCLUSION), (
             f"{domain} not written to the TLD Exclusion config node after addwhitelistdom exclude=true"
         )
 
         # RESTORE via entry_delete=delete_exclusion (reverse + delete_exclusion coverage).
         resp = _post_action(webui, {"entry_delete": "delete_exclusion", "domain": domain, "table": "DNSBL"})
         assert not looks_like_login_page(resp.text), "entry_delete (exclusion) POST returned the login form"
-        assert domain not in _suppression_entries(vm, CFG_TLDEXCLUSION), (
+        assert domain not in _suppression_entries(vm, CFG_TLD_WILDCARD_EXCLUSION), (
             f"{domain} still in the TLD Exclusion list after entry_delete=delete_exclusion"
         )
     finally:
         helpers.php_eval(
             vm,
-            f"config_set_path('{CFG_TLDEXCLUSION}', '{original}');\n"
-            "write_config('pfBlockerNG smoke: restore tldexclusion');\n"
+            f"config_set_path('{CFG_TLD_WILDCARD_EXCLUSION}', '{original}');\n"
+            "write_config('pfBlockerNG smoke: restore tld_wildcard_exclusion');\n"
             "echo 'OK';",
         )
 

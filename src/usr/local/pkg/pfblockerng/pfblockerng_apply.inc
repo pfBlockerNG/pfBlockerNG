@@ -506,14 +506,14 @@ function sync_package_pfblockerng($cron='') {
 	// DNSBL settings
 	$pfb['dnsbl_ip']	= pfb_dnsblip_action_value($pfb['dnsblconfig']['action'] ?? NULL);	// Enable/Disable IP blocking from DNSBL lists
 	$pfb['dnsbl_rule']	= $pfb['dnsblconfig']['pfb_dnsbl_rule'] ?: 'Disabled';		// Auto create a Floating Pass Rule for other Lan subnets
-	$pfb['dnsbl_top1m_cnt']	= $pfb['dnsblconfig']['alexa_count']	?: '1000';		// TOP1M whitelist domain setting
+	$pfb['dnsbl_top1m_cnt']	= $pfb['dnsblconfig']['top1m_count']	?: '1000';		// TOP1M whitelist domain setting
 	// DNSBL Python decision-cache cap (LRU); 0 = unlimited. 0 is meaningful so avoid the
 	// ?: idiom (0 is falsy), and reject non-numeric input -- else the intval() at the ini
 	// emit would coerce a malformed value to 0 = silently unlimited. Clamp to the WebUI range.
 	$pfb_dcm_raw = (string) ($pfb['dnsblconfig']['pfb_py_cache_max'] ?? '');
 	$pfb['dnsbl_decisiondb_max'] = ctype_digit($pfb_dcm_raw) ? (string) min(5000000, (int) $pfb_dcm_raw) : '10000';
-	$pfb['dnsbl_top1m_inc']	= $pfb['dnsblconfig']['alexa_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
-	$pfb['dnsbl_tld_wildcard']	= $pfb['dnsblconfig']['pfb_tld'];				// Enable TLD Function
+	$pfb['dnsbl_top1m_inc']	= $pfb['dnsblconfig']['top1m_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
+	$pfb['dnsbl_tld_wildcard']	= $pfb['dnsblconfig']['tld_wildcard'];				// Enable TLD Function
 	$pfb['dnsbl_control']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control']	?: '');			// Python Control integration
 	$pfb['dnsbl_control_legacy']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control_legacy']	?? '');	// PFBL-03: deprecated legacy DNS-TXT control transport
 
@@ -882,7 +882,7 @@ function sync_package_pfblockerng($cron='') {
 
 		// If 'TLD' enabled and TLD Blacklists are defined, add to enabled DNSBL lists
 		if ($pfb['dnsbl_tld_wildcard']) {
-			$tld_wildcard_blacklist = pfb_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE);
+			$tld_wildcard_blacklist = pfb_text_area_decode($pfb['dnsblconfig']['tld_wildcard_blacklist'], TRUE, FALSE, TRUE);
 			if (!empty($tld_wildcard_blacklist)) {
 				$pfb['existing']['dnsbl'][] = 'DNSBL_TLD';
 			}
@@ -1433,7 +1433,7 @@ function sync_package_pfblockerng($cron='') {
 						$list['aliasname']	= "{$item['title']}";
 						$list['action']		= 'unbound';
 						$list['logging']	= $pfb['blconfig']['blacklist_logging'] ?: 'enabled';
-						$list['filter_alexa']	= '';
+						$list['filter_top1m']	= '';
 
 						$feedname	= strtolower($item['title']);
 						$update_flag	= "{$pfb['dbdir']}/{$feedname}/{$feedname}.update";
@@ -2212,8 +2212,8 @@ function sync_package_pfblockerng($cron='') {
 		if ($pfb['dnsbl_tld_allow'] === PfbToggle::On) {
 			$tld_allow_cnt = 0;
 			foreach (array('gtld', 'cctld', 'itld', 'bgtld') as $tld_allow_bucket) {
-				if (isset($pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow_bucket]) && !empty($pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow_bucket])) {
-					$p_cnt = count(explode(',', $pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow_bucket]));
+				if (isset($pfb['dnsblconfig']['tld_allow_' . $tld_allow_bucket]) && !empty($pfb['dnsblconfig']['tld_allow_' . $tld_allow_bucket])) {
+					$p_cnt = count(explode(',', $pfb['dnsblconfig']['tld_allow_' . $tld_allow_bucket]));
 					if (is_numeric($p_cnt) && $p_cnt > 0) {
 						$tld_allow_cnt += $p_cnt;
 					}

@@ -39,13 +39,13 @@ final class ToggleSectionMirrorTypeTest extends TestCase
 	 * settings key each one reads.
 	 */
 	private const SECTION_MIRRORS = [
-		'dnsbl_top1m'     => 'alexa_enable',
+		'dnsbl_top1m'     => 'top1m_enable',
 		'dnsbl_res_cache' => 'pfb_cache',
 		'dnsbl_py_reply'  => 'pfb_py_reply',
 		'dnsbl_regex'     => 'pfb_regex',
 		'dnsbl_regex_cap' => 'pfb_regex_cap',
 		'dnsbl_cname'     => 'pfb_cname',
-		'dnsbl_tld_allow' => 'pfb_pytld',
+		'dnsbl_tld_allow' => 'tld_allow',
 		'dnsbl_py_nolog'  => 'pfb_py_nolog',
 		'dnsbl_noaaaa'    => 'pfb_noaaaa',
 		'dnsbl_gp'        => 'pfb_gp',

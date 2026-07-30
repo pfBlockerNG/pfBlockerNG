@@ -176,7 +176,7 @@ final class DnsblTldStatsFinalizeTest extends TestCase
 			'alias_dnsbl_all' => $existing === null ? [] : [$existing['groupname']],
 			'dnsbl_info_stats' => $existing === null ? [] : [$existing],
 			'domain_update' => $domainUpdate,
-			'dnsblconfig' => ['tldblacklist' => base64_encode($blacklist)],
+			'dnsblconfig' => ['tld_wildcard_blacklist' => base64_encode($blacklist)],
 		]);
 	}
 

@@ -172,8 +172,8 @@ enum PfbAliasDeltaMode: string implements PfbStoredEnum
 	}
 }
 
-// PfbTop1mSource — TOP1M source selector (alexa_type, issue #877).
-// Used by alexa_type (config key) / $pfb['dnsbl_top1m_type'] (runtime). Canonical tokens:
+// PfbTop1mSource — TOP1M source selector (top1m_source, issue #877).
+// Used by top1m_source (config key) / $pfb['dnsbl_top1m_type'] (runtime). Canonical tokens:
 // 'tranco' (default), 'cisco', 'openpagerank' (#928, replacing ADR-59's 'domcop'),
 // 'majestic' (ADR-59), 'cloudflare' (ADR-59, token-authenticated). 'alexa' (#872) and
 // 'domcop' (#928) are READ-ONLY legacy tokens, coalesced to their replacement on read — the
@@ -411,9 +411,10 @@ function pfb_cfg_top1m_source_write(PfbTop1mSource|string $source): string
 // ADR-29 — PfbConfig gateway: the single sanctioned gateway for config.xml reads/writes of
 // registered installedpackages/pfblockerng* keys, wrapping config_get/set/del_path with the
 // registered default + field adapter (ADR-28) at the boundary.
-// CONSTRAINTS (ADR-29 §5, ADR-28 §2.2 + 2026-07-20 amendments): registry keys are the EXACT
-// existing config.xml keys (no renames); adapters accept supported forward-upgrade legacy
-// tokens and write the current canonical string; write(read(v)) == v for every canonical value.
+// CONSTRAINTS (ADR-29 §5, ADR-28 §2.2 + 2026-07-20 amendments): registry keys carry the
+// current domain vocabulary; a key rename ships with a one-time post-install migration
+// (issue #1898). Adapters accept supported forward-upgrade legacy tokens and write the
+// current canonical string; write(read(v)) == v for every canonical value.
 // Tests: tests/php/CfgGatewayTest.php (round-trip, default, inventory).
 // ---------------------------------------------------------------------------
 
@@ -826,7 +827,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// TOP1M whitelist enable. Default ''.
-		'alexa_enable' => [
+		'top1m_enable' => [
 			'section'       => $dnsbl,
 			'default'       => '',
 			'read_adapter'  => NULL,
@@ -837,7 +838,7 @@ function pfb_cfg_registry(): array
 		// Legacy 'alexa' (dead service, #872) coalesces to 'tranco', and legacy 'domcop'
 		// (list moved hosting, #928) coalesces to 'openpagerank', at the read boundary
 		// via pfb_cfg_top1m_source_read(). Default 'tranco'.
-		'alexa_type' => [
+		'top1m_source' => [
 			'section'       => $dnsbl,
 			'default'       => 'tranco',
 			'read_adapter'  => 'pfb_cfg_top1m_source_read',
@@ -845,7 +846,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// TOP1M domain count (numeric string). Default '1000'.
-		'alexa_count' => [
+		'top1m_count' => [
 			'section'       => $dnsbl,
 			'default'       => '1000',
 			'read_adapter'  => NULL,
@@ -853,7 +854,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// TOP1M TLD inclusions for whitelisting. Default ''.
-		'alexa_inclusion' => [
+		'top1m_inclusion' => [
 			'section'       => $dnsbl,
 			'default'       => '',
 			'read_adapter'  => NULL,
@@ -861,7 +862,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// ADR-59: masked, write-only Cloudflare Radar Bearer token -- consumed only
-		// when alexa_type == 'cloudflare' (every other provider ignores it), fed to
+		// when top1m_source == 'cloudflare' (every other provider ignores it), fed to
 		// pfb_download() via pfb_top1m_auth_headers() + the header-auth plumbing.
 		// Plain string (no adapter): the DNSBL page never echoes the stored value back
 		// on GET, and a blank POST preserves the existing value rather than clearing it
@@ -988,7 +989,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// TLD Allow option. Default ''.
-		'pfb_pytld' => [
+		'tld_allow' => [
 			'section'       => $dnsbl,
 			'default'       => '',
 			'read_adapter'  => NULL,
@@ -1036,7 +1037,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// TLD blacklist (textarea). Default ''.
-		'tldblacklist' => [
+		'tld_wildcard_blacklist' => [
 			'section'       => $dnsbl,
 			'default'       => '',
 			'read_adapter'  => NULL,
@@ -1044,7 +1045,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// TLD exclusion (textarea). Default ''.
-		'tldexclusion' => [
+		'tld_wildcard_exclusion' => [
 			'section'       => $dnsbl,
 			'default'       => '',
 			'read_adapter'  => NULL,
@@ -1108,7 +1109,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// TLD blocking enable. Default ''.
-		'pfb_tld' => [
+		'tld_wildcard' => [
 			'section'       => $dnsbl,
 			'default'       => '',
 			'read_adapter'  => NULL,
@@ -1471,7 +1472,7 @@ final class PfbConfig
 	 * registered key name living under a DIFFERENT section path is foreign
 	 * data and is left untouched) and carries BOTH a read and a write
 	 * adapter, the value is round-tripped read_adapter() then
-	 * write_adapter() — coalescing a legacy/read-only token (e.g. alexa_type
+	 * write_adapter() — coalescing a legacy/read-only token (e.g. top1m_source
 	 * 'domcop'/'alexa', pfb_idn 'all'), a NULL, a non-scalar (a crafted POST
 	 * array), or junk input to the field's canonical stored form, exactly as
 	 * a single-key PfbConfig::write() would. Unregistered keys and

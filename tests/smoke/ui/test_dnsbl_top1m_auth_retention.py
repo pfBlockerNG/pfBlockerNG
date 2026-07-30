@@ -39,7 +39,7 @@ def test_dnsbl_top1m_token_save_retains_active_files_and_invalidates_baseline(
     try:
         response = webui.post(
             DNSBL_PAGE,
-            {"alexa_type": "cloudflare", "top1m_token": old_token},
+            {"top1m_source": "cloudflare", "top1m_token": old_token},
             timeout=300.0,
         )
         assert not looks_like_login_page(response.text), "TOP1M auth setup POST returned the login form"

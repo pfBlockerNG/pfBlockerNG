@@ -1381,9 +1381,9 @@ def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_gu
         "OpenPageRank TOP1M",
         "Majestic Million TOP1M",
         "Cloudflare Radar",
-        'name="alexa_enable"',
-        'name="alexa_count"',
-        'name="alexa_inclusion[]"',
+        'name="top1m_enable"',
+        'name="top1m_count"',
+        'name="top1m_inclusion[]"',
     ):
         assert needle in body, f"DNSBL page is missing the TOP1M settings marker {needle!r}"
     # Self-coupled to Majestic specifically (#892 review) -- the bare substrings "CC BY"
@@ -1589,10 +1589,10 @@ def test_dnsbl_group_policy_section_renders_above_dns_redirect(
 # release to release, so "was just added" is not a safe assertion target, but these have
 # existed for years and are extremely unlikely to be retired.
 _TLD_STABLE_OPTIONS = {
-    "pfb_pytlds_gtld": "com",
-    "pfb_pytlds_cctld": "de",
-    "pfb_pytlds_itld": "xn--p1ai",  # a punycode (IDN) TLD -- Russia's .рф
-    "pfb_pytlds_bgtld": "ovh",
+    "tld_allow_gtld": "com",
+    "tld_allow_cctld": "de",
+    "tld_allow_itld": "xn--p1ai",  # a punycode (IDN) TLD -- Russia's .рф
+    "tld_allow_bgtld": "ovh",
 }
 
 

@@ -81,7 +81,7 @@ final class AlertsDnsReplyWhitelistTypeTest extends TestCase
 		$GLOBALS['clists'] = [
 			'dnsbl'          => ['options' => []],
 			'dnsblwhitelist' => ['data' => []],
-			'tldexclusion'   => ['data' => []],
+			'tld_wildcard_exclusion' => ['data' => []],
 		];
 		$GLOBALS['counter'] = ['DNS' => 0, 'Unified' => 0];
 		$GLOBALS['pfbentries'] = 1000;

@@ -1,6 +1,6 @@
 """Live-VM smoke for issue #1255 -- DNSBL Wildcard Blocking (TLD) toggle.
 
-``pfb_tld`` (ini ``python_tld_wildcard``) gates whether ``pfb_unbound.py``'s
+``tld_wildcard`` (ini ``python_tld_wildcard``) gates whether ``pfb_unbound.py``'s
 ``tld_wildcard_classify()`` opens the shipped public-suffix oracle (``pfb_py_tld.txt``,
 staged from ``dnsbl_tld`` by ``dnsbl_cache_stage()``, mirroring HSTS). ON: a listed
 2-label registrable domain (e.g. ``label-<uuid>.com``) classifies into a wildcard ZONE,
@@ -39,7 +39,7 @@ def tld_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> I
     """Deploy once with DNSBL Wildcard Blocking (TLD) ON and one 2-label domain listed.
 
     A single local feed pins a unique registrable domain (``label-<uuid>.com``) to a
-    VIP block; ``tld_enabled=True`` on the case writes ``pfb_tld = on`` at inject time
+    VIP block; ``tld_enabled=True`` on the case writes ``tld_wildcard = on`` at inject time
     (``inject()``'s DNSBL-settings replace, same as ``control``/``hsts`` -- #588).
     System DNS is pointed at the controlled stub so a not-blocked probe has a known
     answer. Yields ``(vm, domain)``.

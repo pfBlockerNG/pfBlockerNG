@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ui_e2e
 
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
-TOP1M_PROVIDER_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/alexa_type"
+TOP1M_PROVIDER_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/top1m_source"
 TOP1M_BASE = f"{helpers.PFB_DBDIR}/top-1m.csv.zip"
 TOP1M_FILES = (
     f"{helpers.PFB_DBDIR}/top-1m.csv",
@@ -56,7 +56,7 @@ def test_dnsbl_top1m_provider_save_retains_active_files_and_invalidates_baseline
     vm = smoke_vm
     original = _snapshot_guest_files(vm)
     if helpers.config_get(vm, TOP1M_PROVIDER_CFG) != "tranco":
-        response = webui.post(DNSBL_PAGE, {"alexa_type": "tranco"}, timeout=300.0)
+        response = webui.post(DNSBL_PAGE, {"top1m_source": "tranco"}, timeout=300.0)
         assert not looks_like_login_page(response.text), "TOP1M provider reset POST returned the login form"
     assert helpers.config_get(vm, TOP1M_PROVIDER_CFG) == "tranco", (
         "TOP1M provider must start at Tranco so the POST proves a provider transition"
@@ -81,7 +81,7 @@ def test_dnsbl_top1m_provider_save_retains_active_files_and_invalidates_baseline
 
         # WebUI.post re-scrapes and submits the complete current form; only the
         # provider changes, with no token-authenticated fields involved.
-        response = webui.post(DNSBL_PAGE, {"alexa_type": "cisco"}, timeout=300.0)
+        response = webui.post(DNSBL_PAGE, {"top1m_source": "cisco"}, timeout=300.0)
         assert not looks_like_login_page(response.text), "DNSBL provider POST returned the login form"
         assert helpers.config_get(vm, TOP1M_PROVIDER_CFG) == "cisco", "TOP1M provider was not persisted"
 

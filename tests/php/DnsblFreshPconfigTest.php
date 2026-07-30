@@ -29,7 +29,7 @@ use PHPUnit\Framework\TestCase;
  * off-appliance, so the $pconfig block is eval-extracted verbatim from the
  * REAL source (CategoryEditFreshRowPconfigTest's pattern, issue #1211),
  * anchored on the unique `$pconfig = array();` line through the trailing
- * `tldblacklist` assignment -- non-greedy, so the regex matches whatever the
+ * `tld_wildcard_blacklist` assignment -- non-greedy, so the regex matches whatever the
  * RHS guard state is (pre-fix bare read or post-fix `?? ''`-guarded) and
  * survives the fix -- and run as a pure function of ($dconfig, $default_tlds).
  */
@@ -47,7 +47,7 @@ final class DnsblFreshPconfigTest extends TestCase
 		if (!function_exists('pfb_dnsbl_oracle_fresh_pconfig')) {
 			if (!preg_match(
 				'/\$pconfig\s*= array\(\);\n'
-				. '(.*?\n\s*\$pconfig\[\'tldblacklist\'\][^\n]*\n)/s',
+				. '(.*?\n\s*\$pconfig\[\'tld_wildcard_blacklist\'\][^\n]*\n)/s',
 				$src,
 				$m
 			)) {
@@ -109,18 +109,18 @@ final class DnsblFreshPconfigTest extends TestCase
 		// Axis 2 (populated key): the guard must be a no-op when the field IS
 		// present -- proves the fix didn't clobber real decode/explode output.
 		$dconfig = [
-			'dnsbl_allow_int'    => 'wan,lan',
-			'pfb_pytlds_gtld'    => 'com,net',
-			'pfb_pytlds_cctld'   => 'uk,de',
-			'pfb_pytlds_itld'    => 'xn--p1ai',
-			'pfb_pytlds_bgtld'   => 'app,dev',
-			'pfb_regex_list'     => base64_encode("foo\nbar"),
-			'pfb_noaaaa_list'    => base64_encode('example.com'),
-			'pfb_gp_bypass_list' => base64_encode('192.0.2.1'),
-			'suppression'        => base64_encode('192.0.2.0/24'),
-			'alexa_inclusion'    => 'com,net,org',
-			'tldexclusion'       => base64_encode('example.test'),
-			'tldblacklist'       => base64_encode('bad.example'),
+			'dnsbl_allow_int'        => 'wan,lan',
+			'tld_allow_gtld'         => 'com,net',
+			'tld_allow_cctld'        => 'uk,de',
+			'tld_allow_itld'         => 'xn--p1ai',
+			'tld_allow_bgtld'        => 'app,dev',
+			'pfb_regex_list'         => base64_encode("foo\nbar"),
+			'pfb_noaaaa_list'        => base64_encode('example.com'),
+			'pfb_gp_bypass_list'     => base64_encode('192.0.2.1'),
+			'suppression'            => base64_encode('192.0.2.0/24'),
+			'top1m_inclusion'        => 'com,net,org',
+			'tld_wildcard_exclusion' => base64_encode('example.test'),
+			'tld_wildcard_blacklist' => base64_encode('bad.example'),
 		];
 
 		[$pconfig, $diagnostics] = $this->runCapturingDiagnostics(
@@ -130,16 +130,16 @@ final class DnsblFreshPconfigTest extends TestCase
 
 		$this->assertSame([], self::nullDeprecationsOnly($diagnostics));
 		$this->assertSame(['wan', 'lan'], $pconfig['dnsbl_allow_int']);
-		$this->assertSame(['com', 'net'], $pconfig['pfb_pytlds_gtld']);
-		$this->assertSame(['uk', 'de'], $pconfig['pfb_pytlds_cctld']);
-		$this->assertSame(['xn--p1ai'], $pconfig['pfb_pytlds_itld']);
-		$this->assertSame(['app', 'dev'], $pconfig['pfb_pytlds_bgtld']);
+		$this->assertSame(['com', 'net'], $pconfig['tld_allow_gtld']);
+		$this->assertSame(['uk', 'de'], $pconfig['tld_allow_cctld']);
+		$this->assertSame(['xn--p1ai'], $pconfig['tld_allow_itld']);
+		$this->assertSame(['app', 'dev'], $pconfig['tld_allow_bgtld']);
 		$this->assertSame("foo\nbar", $pconfig['pfb_regex_list']);
 		$this->assertSame('example.com', $pconfig['pfb_noaaaa_list']);
 		$this->assertSame('192.0.2.1', $pconfig['pfb_gp_bypass_list']);
 		$this->assertSame('192.0.2.0/24', $pconfig['suppression']);
-		$this->assertSame(['com', 'net', 'org'], $pconfig['alexa_inclusion']);
-		$this->assertSame('example.test', $pconfig['tldexclusion']);
-		$this->assertSame('bad.example', $pconfig['tldblacklist']);
+		$this->assertSame(['com', 'net', 'org'], $pconfig['top1m_inclusion']);
+		$this->assertSame('example.test', $pconfig['tld_wildcard_exclusion']);
+		$this->assertSame('bad.example', $pconfig['tld_wildcard_blacklist']);
 	}
 }

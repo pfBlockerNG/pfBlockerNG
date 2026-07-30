@@ -1,7 +1,7 @@
 """Tier-A ``ui_render`` coverage for issue #1782: an IDN TLD-exclusion row is
 RECOGNISED by the Alerts page for the punycode domain the dnsbl.log carries.
 
-``pfblockerng_alerts.php`` decodes its ``tldexclusion`` customlist at render
+``pfblockerng_alerts.php`` decodes its ``tld_wildcard_exclusion`` customlist at render
 time to key the "already excluded" lookup map. Before the #1782 fix that
 decode ran WITHOUT ``$idn=TRUE``, so a Unicode row (stored raw-Unicode by the
 DNSBL page since PR #1781/#1731) keyed the map by its Unicode label -- while
@@ -11,7 +11,7 @@ the punycode wire form. The row never matched: instead of the
 the page offered the duplicate-creating ``add`` control.
 
 Scenario (self-encapsulated: config node + log both restored in teardown):
-  Given a Unicode domain seeded raw in the ``tldexclusion`` config node
+  Given a Unicode domain seeded raw in the ``tld_wildcard_exclusion`` config node
   And   a dnsbl.log row TLD-blocking its punycode form (``DNSBL_TLD`` mode)
   When  GET the Alerts page
   Then  the Tier-A render oracle passes
@@ -44,7 +44,7 @@ pytestmark = pytest.mark.ui_render
 
 DNSBL_LOG = "/var/log/pfblockerng/dnsbl.log"
 ALERTS_PAGE = "/pfblockerng/pfblockerng_alerts.php"
-CFG_TLDEXCLUSION = "installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion"
+CFG_TLD_WILDCARD_EXCLUSION = "installedpackages/pfblockerngdnsblsettings/config/0/tld_wildcard_exclusion"
 CFG_DNSBL_ENABLE = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl"
 
 # Fixed synthetic IDN pair -- clearly inert, never resolved. The punycode form
@@ -60,7 +60,7 @@ _LOG_LINE = f"DNSBL-python,{FIXED_TS},sub.{PUNY_DOM},127.0.0.1,Python,DNSBL_TLD,
 
 @pytest.fixture
 def _seeded_idn_exclusion(smoke_vm: SmokeVM) -> Iterator[None]:
-    """Seed the Unicode tldexclusion row + the punycode dnsbl.log line; restore both.
+    """Seed the Unicode tld_wildcard_exclusion row + the punycode dnsbl.log line; restore both.
 
     Self-encapsulated (this module is ``ui_render``-only, so the shared
     ``_ui_pfb_isolation`` restore fixture does not run for it): the config node
@@ -77,16 +77,16 @@ def _seeded_idn_exclusion(smoke_vm: SmokeVM) -> Iterator[None]:
     helpers.ensure_dnsbl_vip(vm)
     helpers.set_dnsbl_enabled(vm, True)
 
-    prior_b64 = helpers.config_get(vm, CFG_TLDEXCLUSION)
+    prior_b64 = helpers.config_get(vm, CFG_TLD_WILDCARD_EXCLUSION)
     seeded_b64 = base64.b64encode(UNICODE_DOM.encode("utf-8")).decode("ascii")
     write = helpers.php_eval(
         vm,
-        f"config_set_path('{CFG_TLDEXCLUSION}', '{seeded_b64}');\n"
-        "write_config('pfBlockerNG smoke #1782: seed IDN tldexclusion');\n"
+        f"config_set_path('{CFG_TLD_WILDCARD_EXCLUSION}', '{seeded_b64}');\n"
+        "write_config('pfBlockerNG smoke #1782: seed IDN tld_wildcard_exclusion');\n"
         "echo 'SEED-OK';\n",
     )
     assert write.returncode == 0 and "SEED-OK" in write.stdout, (
-        f"failed to seed the tldexclusion config node: stdout={write.stdout!r} stderr={write.stderr!r}"
+        f"failed to seed the tld_wildcard_exclusion config node: stdout={write.stdout!r} stderr={write.stderr!r}"
     )
 
     log_dir = DNSBL_LOG.rsplit("/", 1)[0]
@@ -117,15 +117,16 @@ def _seeded_idn_exclusion(smoke_vm: SmokeVM) -> Iterator[None]:
 
     restore_cfg = helpers.php_eval(
         vm,
-        f"config_set_path('{CFG_TLDEXCLUSION}', '{prior_b64}');\n"
-        "write_config('pfBlockerNG smoke #1782: restore tldexclusion');\n"
+        f"config_set_path('{CFG_TLD_WILDCARD_EXCLUSION}', '{prior_b64}');\n"
+        "write_config('pfBlockerNG smoke #1782: restore tld_wildcard_exclusion');\n"
         "echo 'RESTORE-OK';\n",
     )
     assert restore_cfg.returncode == 0 and "RESTORE-OK" in restore_cfg.stdout, (
-        f"failed to restore the tldexclusion config node: stdout={restore_cfg.stdout!r} stderr={restore_cfg.stderr!r}"
+        f"failed to restore the tld_wildcard_exclusion config node: "
+        f"stdout={restore_cfg.stdout!r} stderr={restore_cfg.stderr!r}"
     )
-    assert helpers.config_get(vm, CFG_TLDEXCLUSION) == prior_b64, (
-        "tldexclusion config restore did not take -- the seeded IDN row leaked to sibling tests"
+    assert helpers.config_get(vm, CFG_TLD_WILDCARD_EXCLUSION) == prior_b64, (
+        "tld_wildcard_exclusion config restore did not take -- the seeded IDN row leaked to sibling tests"
     )
 
     helpers.set_dnsbl_enabled(vm, prior_dnsbl == "on")

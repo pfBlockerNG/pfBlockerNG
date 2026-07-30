@@ -347,10 +347,10 @@ def _configure_top1m(vm: SmokeVM) -> None:
     result = h.php_eval(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        "PfbConfig::write('alexa_enable', 'on');\n"
-        "PfbConfig::write('alexa_type', PfbTop1mSource::Tranco);\n"
-        "PfbConfig::write('alexa_count', '1');\n"
-        "PfbConfig::write('alexa_inclusion', 'com');\n"
+        "PfbConfig::write('top1m_enable', 'on');\n"
+        "PfbConfig::write('top1m_source', PfbTop1mSource::Tranco);\n"
+        "PfbConfig::write('top1m_count', '1');\n"
+        "PfbConfig::write('top1m_inclusion', 'com');\n"
         "write_config('pfBlockerNG #1542 smoke: enable deterministic TOP1M fixture');\n"
         "echo 'OK';",
     )

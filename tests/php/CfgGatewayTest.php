@@ -420,86 +420,86 @@ final class CfgGatewayTest extends TestCase
 
 	public function testReadReturnsRegisteredDefaultForAlexaTypeAbsentKey(): void
 	{
-		// alexa_type default is 'tranco' -> PfbTop1mSource::Tranco.
+		// top1m_source default is 'tranco' -> PfbTop1mSource::Tranco.
 		$this->assertNull(
-			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/alexa_type')
+			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/top1m_source')
 		);
 
-		$result = PfbConfig::read('alexa_type');
-		$this->assertInstanceOf(PfbTop1mSource::class, $result, 'alexa_type must return a PfbTop1mSource enum');
+		$result = PfbConfig::read('top1m_source');
+		$this->assertInstanceOf(PfbTop1mSource::class, $result, 'top1m_source must return a PfbTop1mSource enum');
 		$this->assertSame(PfbTop1mSource::Tranco, $result);
 	}
 
 	/**
-	 * alexa_type (issue #877): a stored legacy 'alexa' (dead TOP1M source, #872)
+	 * top1m_source (issue #877): a stored legacy 'alexa' (dead TOP1M source, #872)
 	 * coalesces to PfbTop1mSource::Tranco through the gateway's read adapter.
 	 *
 	 * Scenario: the dropped Alexa TOP1M option still reads safely on an existing
 	 * install that had it selected.
-	 *   Given alexa_type stored as the legacy 'alexa' token.
-	 *   When PfbConfig::read('alexa_type').
+	 *   Given top1m_source stored as the legacy 'alexa' token.
+	 *   When PfbConfig::read('top1m_source').
 	 *   Then the result is PfbTop1mSource::Tranco, not the dead 'alexa' token.
 	 */
 	public function testReadCoalescesLegacyAlexaTypeToTranco(): void
 	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type';
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/top1m_source';
 
 		// Given: legacy 'alexa' stored.
 		$this->seedConfig($path, 'alexa');
-		$this->assertSame('alexa', config_get_path($path), 'before: alexa_type seed is legacy alexa');
+		$this->assertSame('alexa', config_get_path($path), 'before: top1m_source seed is legacy alexa');
 
 		// When/Then: coalesced to PfbTop1mSource::Tranco.
-		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('alexa_type'), "legacy 'alexa' coalesces to Tranco");
+		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('top1m_source'), "legacy 'alexa' coalesces to Tranco");
 	}
 
 	/**
-	 * alexa_type (issue #928): a stored legacy 'domcop' token (the DomCop TOP1M list's
+	 * top1m_source (issue #928): a stored legacy 'domcop' token (the DomCop TOP1M list's
 	 * hosting moved to OpenPageRank) coalesces to PfbTop1mSource::OpenPageRank through
 	 * the gateway's read adapter -- same shape as the 'alexa' legacy coalesce above.
 	 *
 	 * Scenario: an existing install with DomCop selected still reads safely.
-	 *   Given alexa_type stored as the legacy 'domcop' token.
-	 *   When PfbConfig::read('alexa_type').
+	 *   Given top1m_source stored as the legacy 'domcop' token.
+	 *   When PfbConfig::read('top1m_source').
 	 *   Then the result is PfbTop1mSource::OpenPageRank, not the dead 'domcop' token.
 	 */
 	public function testReadCoalescesLegacyDomCopTypeToOpenPageRank(): void
 	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type';
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/top1m_source';
 
 		// Given: legacy 'domcop' stored.
 		$this->seedConfig($path, 'domcop');
-		$this->assertSame('domcop', config_get_path($path), 'before: alexa_type seed is legacy domcop');
+		$this->assertSame('domcop', config_get_path($path), 'before: top1m_source seed is legacy domcop');
 
 		// When/Then: coalesced to PfbTop1mSource::OpenPageRank.
 		$this->assertSame(
 			PfbTop1mSource::OpenPageRank,
-			PfbConfig::read('alexa_type'),
+			PfbConfig::read('top1m_source'),
 			"legacy 'domcop' coalesces to OpenPageRank"
 		);
 	}
 
 	/**
-	 * alexa_type: all five live tokens pass through as their enum cases (openpagerank/majestic
+	 * top1m_source: all five live tokens pass through as their enum cases (openpagerank/majestic
 	 * added ADR-59 P4, cloudflare added ADR-59 P5).
 	 */
 	public function testReadPassesThroughLivePfbTop1mSourceTokens(): void
 	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type';
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/top1m_source';
 
 		$this->seedConfig($path, 'cisco');
-		$this->assertSame(PfbTop1mSource::Cisco, PfbConfig::read('alexa_type'), "'cisco' passes through as Cisco");
+		$this->assertSame(PfbTop1mSource::Cisco, PfbConfig::read('top1m_source'), "'cisco' passes through as Cisco");
 
 		$this->seedConfig($path, 'tranco');
-		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('alexa_type'), "'tranco' passes through as Tranco");
+		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('top1m_source'), "'tranco' passes through as Tranco");
 
 		$this->seedConfig($path, 'openpagerank');
-		$this->assertSame(PfbTop1mSource::OpenPageRank, PfbConfig::read('alexa_type'), "'openpagerank' passes through as OpenPageRank");
+		$this->assertSame(PfbTop1mSource::OpenPageRank, PfbConfig::read('top1m_source'), "'openpagerank' passes through as OpenPageRank");
 
 		$this->seedConfig($path, 'majestic');
-		$this->assertSame(PfbTop1mSource::Majestic, PfbConfig::read('alexa_type'), "'majestic' passes through as Majestic");
+		$this->assertSame(PfbTop1mSource::Majestic, PfbConfig::read('top1m_source'), "'majestic' passes through as Majestic");
 
 		$this->seedConfig($path, 'cloudflare');
-		$this->assertSame(PfbTop1mSource::Cloudflare, PfbConfig::read('alexa_type'), "'cloudflare' passes through as Cloudflare");
+		$this->assertSame(PfbTop1mSource::Cloudflare, PfbConfig::read('top1m_source'), "'cloudflare' passes through as Cloudflare");
 	}
 
 	/**
@@ -1148,10 +1148,10 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dnsvip6',
 			'pfb_dnsport',
 			'pfb_dnsport_ssl',
-			'alexa_enable',
-			'alexa_type',
-			'alexa_count',
-			'alexa_inclusion',
+			'top1m_enable',
+			'top1m_source',
+			'top1m_count',
+			'top1m_inclusion',
 			'top1m_token', // ADR-59 P5
 			'pfb_cache',
 			'pfb_cache_flush',
@@ -1166,14 +1166,14 @@ final class CfgGatewayTest extends TestCase
 			'pfb_regex_list',
 			'pfb_regex_cap',
 			'pfb_cname',
-			'pfb_pytld',
+			'tld_allow',
 			'pfb_py_nolog',
 			'pfb_noaaaa',
 			'pfb_noaaaa_list',
 			'pfb_gp',
 			'pfb_gp_bypass_list',
-			'tldblacklist',
-			'tldexclusion',
+			'tld_wildcard_blacklist',
+			'tld_wildcard_exclusion',
 			'suppression',
 			'action',
 			'pfb_dnsbl_rule',
@@ -1181,7 +1181,7 @@ final class CfgGatewayTest extends TestCase
 			'pfb_control',
 			'pfb_control_legacy',
 			'pfb_py_cache_max',
-			'pfb_tld',
+			'tld_wildcard',
 			'aliaslog',
 			// ADR-36: NAT DNS-redirect fields
 			'dnsbl_redir',
@@ -2311,21 +2311,21 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * THE pinning red test (mirrors the issue #930 repro): a legacy 'domcop'
-	 * alexa_type token riding a section blob write is no longer re-emitted raw --
+	 * top1m_source token riding a section blob write is no longer re-emitted raw --
 	 * it is coalesced to the canonical 'openpagerank' token, same as a single-key
-	 * PfbConfig::write('alexa_type', 'domcop') would.
+	 * PfbConfig::write('top1m_source', 'domcop') would.
 	 *
 	 * Scenario:
-	 *   Given a DNSBL settings blob with the legacy 'domcop' alexa_type token.
+	 *   Given a DNSBL settings blob with the legacy 'domcop' top1m_source token.
 	 *   When PfbConfig::writeSection() persists it.
-	 *   Then the stored alexa_type is 'openpagerank', never the dead 'domcop' token.
+	 *   Then the stored top1m_source is 'openpagerank', never the dead 'domcop' token.
 	 */
 	public function testWriteSectionAlexaTypeLegacyDomcopNormalisesToOpenPageRank(): void
 	{
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		$path    = $section . '/alexa_type';
+		$path    = $section . '/top1m_source';
 
-		PfbConfig::writeSection($section, ['alexa_type' => 'domcop']);
+		PfbConfig::writeSection($section, ['top1m_source' => 'domcop']);
 
 		$this->assertSame('openpagerank', config_get_path($path),
 			"legacy 'domcop' riding a section write coalesces to 'openpagerank'"
@@ -2337,16 +2337,16 @@ final class CfgGatewayTest extends TestCase
 	 * coalesces to the canonical 'tranco' token.
 	 *
 	 * Scenario:
-	 *   Given a DNSBL settings blob with the legacy 'alexa' alexa_type token.
+	 *   Given a DNSBL settings blob with the legacy 'alexa' top1m_source token.
 	 *   When PfbConfig::writeSection() persists it.
-	 *   Then the stored alexa_type is 'tranco', never the dead 'alexa' token.
+	 *   Then the stored top1m_source is 'tranco', never the dead 'alexa' token.
 	 */
 	public function testWriteSectionAlexaTypeLegacyAlexaNormalisesToTranco(): void
 	{
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		$path    = $section . '/alexa_type';
+		$path    = $section . '/top1m_source';
 
-		PfbConfig::writeSection($section, ['alexa_type' => 'alexa']);
+		PfbConfig::writeSection($section, ['top1m_source' => 'alexa']);
 
 		$this->assertSame('tranco', config_get_path($path),
 			"legacy 'alexa' riding a section write coalesces to 'tranco'"
@@ -2354,20 +2354,20 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * A live canonical alexa_type token ('cisco') riding a section blob write
+	 * A live canonical top1m_source token ('cisco') riding a section blob write
 	 * passes through byte-identical -- normalisation never mangles a live token.
 	 *
 	 * Scenario:
-	 *   Given a DNSBL settings blob with the canonical 'cisco' alexa_type token.
+	 *   Given a DNSBL settings blob with the canonical 'cisco' top1m_source token.
 	 *   When PfbConfig::writeSection() persists it.
-	 *   Then the stored alexa_type is still 'cisco'.
+	 *   Then the stored top1m_source is still 'cisco'.
 	 */
 	public function testWriteSectionAlexaTypeCanonicalCiscoPassesThroughUnchanged(): void
 	{
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		$path    = $section . '/alexa_type';
+		$path    = $section . '/top1m_source';
 
-		PfbConfig::writeSection($section, ['alexa_type' => 'cisco']);
+		PfbConfig::writeSection($section, ['top1m_source' => 'cisco']);
 
 		$this->assertSame('cisco', config_get_path($path),
 			"canonical 'cisco' riding a section write is byte-identical"
@@ -2449,24 +2449,24 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * Hostile input: a crafted array value (e.g. a POST array
-	 * alexa_type[]=x) riding a section blob write hits the adapter's
+	 * top1m_source[]=x) riding a section blob write hits the adapter's
 	 * non-scalar guard and normalises to the parse-fallback default, never
 	 * crashes and never persists the raw array.
 	 *
 	 * Scenario:
-	 *   Given a DNSBL settings blob with alexa_type = ['x'] (non-scalar).
+	 *   Given a DNSBL settings blob with top1m_source = ['x'] (non-scalar).
 	 *   When PfbConfig::writeSection() persists it.
-	 *   Then the stored alexa_type is 'tranco' (the non-scalar-guard default).
+	 *   Then the stored top1m_source is 'tranco' (the non-scalar-guard default).
 	 */
 	public function testWriteSectionAlexaTypeArrayValueNormalisesToDefaultTranco(): void
 	{
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		$path    = $section . '/alexa_type';
+		$path    = $section . '/top1m_source';
 
-		PfbConfig::writeSection($section, ['alexa_type' => ['x']]);
+		PfbConfig::writeSection($section, ['top1m_source' => ['x']]);
 
 		$this->assertSame('tranco', config_get_path($path),
-			'array-valued alexa_type riding a section write hits the non-scalar guard -> tranco'
+			'array-valued top1m_source riding a section write hits the non-scalar guard -> tranco'
 		);
 	}
 
@@ -2499,17 +2499,17 @@ final class CfgGatewayTest extends TestCase
 	 * returns it as-is, and the write adapter emits its canonical token.
 	 *
 	 * Scenario:
-	 *   Given a DNSBL settings blob with alexa_type = PfbTop1mSource::Cisco (an
+	 *   Given a DNSBL settings blob with top1m_source = PfbTop1mSource::Cisco (an
 	 *     enum instance, not a raw string).
 	 *   When PfbConfig::writeSection() persists it.
-	 *   Then the stored alexa_type is 'cisco', not mangled by a double-apply.
+	 *   Then the stored top1m_source is 'cisco', not mangled by a double-apply.
 	 */
 	public function testWriteSectionAlexaTypeEnumInstanceIsIdempotent(): void
 	{
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		$path    = $section . '/alexa_type';
+		$path    = $section . '/top1m_source';
 
-		PfbConfig::writeSection($section, ['alexa_type' => PfbTop1mSource::Cisco]);
+		PfbConfig::writeSection($section, ['top1m_source' => PfbTop1mSource::Cisco]);
 
 		$this->assertSame('cisco', config_get_path($path),
 			'an already-adapted PfbTop1mSource enum instance riding a section write is idempotent'
@@ -2522,19 +2522,19 @@ final class CfgGatewayTest extends TestCase
 	 * normalises to the field's parse-fallback default.
 	 *
 	 * Scenario:
-	 *   Given a DNSBL settings blob with alexa_type = 1 (int, not a string token).
+	 *   Given a DNSBL settings blob with top1m_source = 1 (int, not a string token).
 	 *   When PfbConfig::writeSection() persists it.
-	 *   Then the stored alexa_type is 'tranco' (the parse-fallback default).
+	 *   Then the stored top1m_source is 'tranco' (the parse-fallback default).
 	 */
 	public function testWriteSectionAlexaTypeIntValueNormalisesToDefaultTranco(): void
 	{
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		$path    = $section . '/alexa_type';
+		$path    = $section . '/top1m_source';
 
-		PfbConfig::writeSection($section, ['alexa_type' => 1]);
+		PfbConfig::writeSection($section, ['top1m_source' => 1]);
 
 		$this->assertSame('tranco', config_get_path($path),
-			'int-valued alexa_type riding a section write normalises to the parse-fallback tranco'
+			'int-valued top1m_source riding a section write normalises to the parse-fallback tranco'
 		);
 	}
 
@@ -2573,7 +2573,7 @@ final class CfgGatewayTest extends TestCase
 	 *
 	 * Scenario:
 	 *   Given a pfblockerngsync section blob that happens to reuse the key name
-	 *     'alexa_type' (foreign to this section -- the registry maps alexa_type
+	 *     'top1m_source' (foreign to this section -- the registry maps top1m_source
 	 *     to the DNSBL section only) with the legacy 'domcop' value.
 	 *   When PfbConfig::writeSection() persists it against the SYNC section.
 	 *   Then the stored value is the raw 'domcop' -- no normalisation applied,
@@ -2583,9 +2583,9 @@ final class CfgGatewayTest extends TestCase
 	public function testWriteSectionAdaptedKeyNameInForeignSectionStaysRaw(): void
 	{
 		$section = 'installedpackages/pfblockerngsync/config/0';
-		$path    = $section . '/alexa_type';
+		$path    = $section . '/top1m_source';
 
-		PfbConfig::writeSection($section, ['alexa_type' => 'domcop']);
+		PfbConfig::writeSection($section, ['top1m_source' => 'domcop']);
 
 		$this->assertSame('domcop', config_get_path($path),
 			"a same-named key in a foreign (non-registered-for-it) section stays raw"
@@ -2599,7 +2599,7 @@ final class CfgGatewayTest extends TestCase
 	 * byte-identical.
 	 *
 	 * Scenario:
-	 *   Given a DNSBL settings blob mixing legacy alexa_type/pfb_idn tokens with
+	 *   Given a DNSBL settings blob mixing legacy top1m_source/pfb_idn tokens with
 	 *     unadapted plain fields (dnsbl_interface, pfb_dnsvip4, top1m_token).
 	 *   When PfbConfig::writeSection() persists it.
 	 *   Then the adapted fields are stored at their canonical tokens and every
@@ -2611,7 +2611,7 @@ final class CfgGatewayTest extends TestCase
 
 		$data = [
 			'pfb_dnsbl'       => 'on',           // adapted (toggle), canonical.
-			'alexa_type'      => 'domcop',        // adapted (top1m_source), LEGACY -> normalises.
+			'top1m_source'      => 'domcop',        // adapted (top1m_source), LEGACY -> normalises.
 			'pfb_idn'         => 'all',           // adapted (idn_mode), ALPHA-ONLY -> normalises.
 			'pfb_hsts'        => 'on',            // adapted (toggle), canonical.
 			'dnsbl_interface' => 'lo0',           // unadapted, plain.
@@ -2624,7 +2624,7 @@ final class CfgGatewayTest extends TestCase
 		$result = PfbConfig::readSection($section);
 
 		$this->assertSame('on', $result['pfb_dnsbl'], 'pfb_dnsbl canonical stays on');
-		$this->assertSame('openpagerank', $result['alexa_type'], "legacy 'domcop' normalises to 'openpagerank'");
+		$this->assertSame('openpagerank', $result['top1m_source'], "legacy 'domcop' normalises to 'openpagerank'");
 		$this->assertSame('off', $result['pfb_idn'], "alpha-only 'all' normalises to 'off'");
 		$this->assertSame('on', $result['pfb_hsts'], 'pfb_hsts canonical stays on');
 		$this->assertSame('lo0', $result['dnsbl_interface'], 'unadapted dnsbl_interface is byte-identical');

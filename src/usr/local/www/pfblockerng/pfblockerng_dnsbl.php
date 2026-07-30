@@ -48,7 +48,7 @@ $default_tlds = array('arpa',$local_tld,'com','net','org','edu','ca','co','io');
 
 $pconfig = array();
 $pconfig['pfb_dnsbl']		= $pfb['dconfig']['pfb_dnsbl']				?: '';
-$pconfig['pfb_tld']		= $pfb['dconfig']['pfb_tld']				?: '';
+$pconfig['tld_wildcard']		= $pfb['dconfig']['tld_wildcard']				?: '';
 $pconfig['pfb_control']		= $pfb['dconfig']['pfb_control']			?: '';
 $pconfig['pfb_control_legacy']	= $pfb['dconfig']['pfb_control_legacy']			?: '';
 $pconfig['pfb_dnsvip4'] = $pfb['dconfig']['pfb_dnsvip4'] ?: 'none';
@@ -84,12 +84,12 @@ $pconfig['pfb_cname']		= $pfb['dconfig']['pfb_cname']				?: '';
 $pconfig['pfb_dnsbl_lenient']	= $pfb['dconfig']['pfb_dnsbl_lenient']			?: '';
 $pconfig['pfb_noaaaa']		= $pfb['dconfig']['pfb_noaaaa']				?: '';
 $pconfig['pfb_gp']		= $pfb['dconfig']['pfb_gp']				?: '';
-$pconfig['pfb_pytld']		= $pfb['dconfig']['pfb_pytld']				?: '';
-$pconfig['pfb_pytld_sort']	= $pfb['dconfig']['pfb_pytld_sort']			?: '';
-$pconfig['pfb_pytlds_gtld']	= pfb_csv_list($pfb['dconfig']['pfb_pytlds_gtld'] ?? NULL, $default_tlds);
-$pconfig['pfb_pytlds_cctld']	= pfb_csv_list($pfb['dconfig']['pfb_pytlds_cctld'] ?? NULL);
-$pconfig['pfb_pytlds_itld']	= pfb_csv_list($pfb['dconfig']['pfb_pytlds_itld'] ?? NULL);
-$pconfig['pfb_pytlds_bgtld']	= pfb_csv_list($pfb['dconfig']['pfb_pytlds_bgtld'] ?? NULL);
+$pconfig['tld_allow']		= $pfb['dconfig']['tld_allow']				?: '';
+$pconfig['tld_allow_sort']	= $pfb['dconfig']['tld_allow_sort']			?: '';
+$pconfig['tld_allow_gtld']	= pfb_csv_list($pfb['dconfig']['tld_allow_gtld'] ?? NULL, $default_tlds);
+$pconfig['tld_allow_cctld']	= pfb_csv_list($pfb['dconfig']['tld_allow_cctld'] ?? NULL);
+$pconfig['tld_allow_itld']	= pfb_csv_list($pfb['dconfig']['tld_allow_itld'] ?? NULL);
+$pconfig['tld_allow_bgtld']	= pfb_csv_list($pfb['dconfig']['tld_allow_bgtld'] ?? NULL);
 $pconfig['pfb_py_nolog']	= $pfb['dconfig']['pfb_py_nolog']			?: '';
 $pconfig['pfb_regex_list']	= pfb_b64_text($pfb['dconfig']['pfb_regex_list'] ?? NULL);
 $pconfig['pfb_noaaaa_list']	= pfb_b64_text($pfb['dconfig']['pfb_noaaaa_list'] ?? NULL);
@@ -117,19 +117,19 @@ $pconfig['agateway_out']	= $pfb['dconfig']['agateway_out']			?: 'default';
 
 $pconfig['suppression']		= pfb_b64_text($pfb['dconfig']['suppression'] ?? NULL);
 
-$pconfig['alexa_enable']	= $pfb['dconfig']['alexa_enable']			?: '';
+$pconfig['top1m_enable']	= $pfb['dconfig']['top1m_enable']			?: '';
 // Routed via the gateway (not the section array) so a stored legacy 'alexa'
 // (dead TOP1M source, #872/#877) coalesces to 'tranco' for the form select.
 // ->toStored() unwraps the PfbTop1mSource enum to its scalar option key (a
 // Form_Select selected-value must be the scalar, not the enum instance).
-$pconfig['alexa_type']		= PfbConfig::read('alexa_type')->toStored();
-$pconfig['alexa_count']		= $pfb['dconfig']['alexa_count']			?: '1000';
+$pconfig['top1m_source']		= PfbConfig::read('top1m_source')->toStored();
+$pconfig['top1m_count']		= $pfb['dconfig']['top1m_count']			?: '1000';
 // 0 (unlimited) is meaningful, so don't use the ?: idiom (0 is falsy -> would reset to default).
 $pconfig['pfb_py_cache_max']	= (isset($pfb['dconfig']['pfb_py_cache_max']) && $pfb['dconfig']['pfb_py_cache_max'] !== '') ? $pfb['dconfig']['pfb_py_cache_max'] : '10000';
-$pconfig['alexa_inclusion']	= pfb_csv_list($pfb['dconfig']['alexa_inclusion'] ?? NULL, array('com','net','org','ca','co','io'));
+$pconfig['top1m_inclusion']	= pfb_csv_list($pfb['dconfig']['top1m_inclusion'] ?? NULL, array('com','net','org','ca','co','io'));
 
-$pconfig['tldexclusion']	= pfb_b64_text($pfb['dconfig']['tldexclusion'] ?? NULL);
-$pconfig['tldblacklist']	= pfb_b64_text($pfb['dconfig']['tldblacklist'] ?? NULL);
+$pconfig['tld_wildcard_exclusion']	= pfb_b64_text($pfb['dconfig']['tld_wildcard_exclusion'] ?? NULL);
+$pconfig['tld_wildcard_blacklist']	= pfb_b64_text($pfb['dconfig']['tld_wildcard_blacklist'] ?? NULL);
 
 // DoH/DoT/DoQ blocking — stored in pfblockerngsafesearch; read via gateway (registered keys)
 $pconfig['safesearch_doh']		= PfbConfig::read('safesearch_doh');
@@ -202,7 +202,7 @@ if (is_dir("{$indexdir}")) {
 }
 $options_dnsbl_webpage_cnt = count($options_dnsbl_webpage) ?: '1';
 
-$options_alexa_type		= [ 'tranco' => 'Tranco TOP1M', 'cisco' => 'Cisco Umbrella TOP1M',
+$options_top1m_source		= [ 'tranco' => 'Tranco TOP1M', 'cisco' => 'Cisco Umbrella TOP1M',
 					    'openpagerank' => 'OpenPageRank TOP1M', 'majestic' => 'Majestic Million TOP1M',
 					    'cloudflare' => 'Cloudflare Radar' ];
 
@@ -217,11 +217,11 @@ foreach (pfb_top1m_providers() as $pfb_top1m_id => $pfb_top1m_provider_row) {
 }
 $pfb_top1m_token_providers_json = json_encode($pfb_top1m_token_providers);
 
-$options_alexa_count		= [	'500' => 'Top 500', '1000' => 'Top 1k', '2000' => 'Top 2k', '5000' => 'Top 5k', '10000' => 'Top 10k',
+$options_top1m_count		= [	'500' => 'Top 500', '1000' => 'Top 1k', '2000' => 'Top 2k', '5000' => 'Top 5k', '10000' => 'Top 10k',
 					'25000' => 'Top 25k', '50000' => 'Top 50k', '75000' => 'Top 75k', '100000' => 'Top 100k', '250000' => 'Top 250k',
 					'500000' => 'Top 500k', '750000' => 'Top 750k', '1000000' => 'Top 1M' ];
 
-$options_alexa_inclusion	= [	'ae' => 'AE',
+$options_top1m_inclusion	= [	'ae' => 'AE',
 					'aero' => 'AERO',
 					'ag' => 'AG',
 					'al' => 'AL',
@@ -547,7 +547,7 @@ if ($_POST) {
 				'top1m_token', 'aliasaddr_in', 'aliasaddr_out', 'aliasports_in', 'aliasports_out') as $pfb_text_field) {
 			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
 		}
-		foreach (array('pfb_regex_list', 'pfb_noaaaa_list', 'pfb_gp_bypass_list', 'suppression', 'tldexclusion', 'tldblacklist') as $pfb_text_area_field) {
+		foreach (array('pfb_regex_list', 'pfb_noaaaa_list', 'pfb_gp_bypass_list', 'suppression', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist') as $pfb_text_area_field) {
 			$_POST[$pfb_text_area_field] = pfb_sanitize_text_area((string) ($_POST[$pfb_text_area_field] ?? ''));
 		}
 
@@ -555,8 +555,8 @@ if ($_POST) {
 		$select_options = array(						'dnsbl_interface'	=> 'lo0',
 						'global_log'		=> '',
 						'dnsbl_webpage'		=> 'dnsbl_default.php',
-						'alexa_type'		=> 'tranco',
-						'alexa_count'		=> '1000',
+						'top1m_source'		=> 'tranco',
+						'top1m_count'		=> '1000',
 						'action'		=> 'Disabled',
 						'aliaslog'		=> 'enabled',
 						'aliasports_in'		=> '',
@@ -581,7 +581,7 @@ if ($_POST) {
 
 		// Validate Select field (array) options
 		$select_options = array(	'dnsbl_allow_int'	=> '',
-						'alexa_inclusion'	=> $default_tlds
+						'top1m_inclusion'	=> $default_tlds
 						);
 
 		foreach ($select_options as $s_option => $s_default) {
@@ -665,8 +665,8 @@ if ($_POST) {
 				'pfb_noaaaa_list'	=> 'domain',
 				'pfb_gp_bypass_list'	=> 'ip',
 				'suppression'		=> 'domain',
-				'tldexclusion'		=> 'hostname',
-				'tldblacklist'		=> 'tld' ) as $custom_type => $custom_format) {
+				'tld_wildcard_exclusion'		=> 'hostname',
+				'tld_wildcard_blacklist'		=> 'tld' ) as $custom_type => $custom_format) {
 
 				if (!empty($_POST[$custom_type])) {
 					// issue #1723: the ingestion prologue already normalized CRLF/CR to LF,
@@ -810,14 +810,14 @@ if ($_POST) {
 
 		if (!$input_errors) {
 			$pfb_top1m_settings_before = array(
-				'enable'   => $pfb['dconfig']['alexa_enable'] ?? '',
-				'count'    => $pfb['dconfig']['alexa_count'] ?? '',
-				'tld'      => $pfb['dconfig']['alexa_inclusion'] ?? '',
-				'provider' => $pfb['dconfig']['alexa_type'] ?? '',
+				'enable'   => $pfb['dconfig']['top1m_enable'] ?? '',
+				'count'    => $pfb['dconfig']['top1m_count'] ?? '',
+				'tld'      => $pfb['dconfig']['top1m_inclusion'] ?? '',
+				'provider' => $pfb['dconfig']['top1m_source'] ?? '',
 			);
 
 			$pfb['dconfig']['pfb_dnsbl']		= pfb_filter($_POST['pfb_dnsbl'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['pfb_tld']		= pfb_filter($_POST['pfb_tld'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig']['tld_wildcard']		= pfb_filter($_POST['tld_wildcard'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_control']		= pfb_filter($_POST['pfb_control'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_control_legacy']	= pfb_filter($_POST['pfb_control_legacy'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_dnsbl_nonat']	= pfb_filter($_POST['pfb_dnsbl_nonat'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
@@ -857,21 +857,21 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_noaaaa']		= pfb_filter($_POST['pfb_noaaaa'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_gp']		= pfb_filter($_POST['pfb_gp'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 
-			$pfb['dconfig']['pfb_pytld']		= pfb_filter($_POST['pfb_pytld'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['pfb_pytld_sort']	= pfb_filter($_POST['pfb_pytld_sort'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['tld_allow']		= pfb_filter($_POST['tld_allow'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig']['tld_allow_sort']	= pfb_filter($_POST['tld_allow_sort'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_py_nolog']		= pfb_filter($_POST['pfb_py_nolog'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// Python TLD Allow (Add default TLD Allows + ARPA + pfSense TLD
-			if (!empty($_POST['pfb_pytlds_gtld'])) {
-				$pfb['dconfig']['pfb_pytlds_gtld']	= "arpa,{$local_tld}," . implode(',', (array)$_POST['pfb_pytlds_gtld']); 
+			if (!empty($_POST['tld_allow_gtld'])) {
+				$pfb['dconfig']['tld_allow_gtld']	= "arpa,{$local_tld}," . implode(',', (array)$_POST['tld_allow_gtld']); 
 			} else {
-				$pfb['dconfig']['pfb_pytlds_gtld']	= implode(',', $default_tlds);
+				$pfb['dconfig']['tld_allow_gtld']	= implode(',', $default_tlds);
 			}
 
 			// Python TLD Allow
-			$pfb['dconfig']['pfb_pytlds_cctld']	= implode(',', (array)$_POST['pfb_pytlds_cctld']);
-			$pfb['dconfig']['pfb_pytlds_itld']	= implode(',', (array)$_POST['pfb_pytlds_itld']);
-			$pfb['dconfig']['pfb_pytlds_bgtld']	= implode(',', (array)$_POST['pfb_pytlds_bgtld']);
+			$pfb['dconfig']['tld_allow_cctld']	= implode(',', (array)$_POST['tld_allow_cctld']);
+			$pfb['dconfig']['tld_allow_itld']	= implode(',', (array)$_POST['tld_allow_itld']);
+			$pfb['dconfig']['tld_allow_bgtld']	= implode(',', (array)$_POST['tld_allow_bgtld']);
 
 			$pfb['dconfig']['action']		= $_POST['action']							?: 'Disabled';
 			$pfb['dconfig']['aliaslog']		= $_POST['aliaslog']							?: 'enabled';
@@ -896,25 +896,25 @@ if ($_POST) {
 			$pfb['dconfig']['autoproto_out']	= $_POST['autoproto_out']						?: 'any';
 			$pfb['dconfig']['agateway_out']		= $_POST['agateway_out']						?: 'default';
 
-			$pfb['dconfig']['alexa_enable']		= pfb_filter($_POST['alexa_enable'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['top1m_enable']		= pfb_filter($_POST['top1m_enable'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// issue #1723: already sanitized by the ingestion prologue above -- plain encode.
 			$pfb['dconfig']['pfb_regex_list']	= base64_encode($_POST['pfb_regex_list'] ?? '');
 			$pfb['dconfig']['pfb_noaaaa_list']	= base64_encode($_POST['pfb_noaaaa_list'] ?? '');
 			$pfb['dconfig']['pfb_gp_bypass_list']	= base64_encode($_POST['pfb_gp_bypass_list'] ?? '');
 			$pfb['dconfig']['suppression']		= base64_encode($_POST['suppression'] ?? '');
-			$pfb['dconfig']['tldexclusion']		= base64_encode($_POST['tldexclusion'] ?? '');
-			$pfb['dconfig']['tldblacklist']		= base64_encode($_POST['tldblacklist'] ?? '');
+			$pfb['dconfig']['tld_wildcard_exclusion']		= base64_encode($_POST['tld_wildcard_exclusion'] ?? '');
+			$pfb['dconfig']['tld_wildcard_blacklist']		= base64_encode($_POST['tld_wildcard_blacklist'] ?? '');
 
 			// A provider/auth identity change invalidates only the download detector
 			// baseline. Keep the active source and derived whitelist available until
 			// the replacement download has been validated and published.
-			$pfb_top1m_provider = $_POST['alexa_type'] ?: 'tranco';
+			$pfb_top1m_provider = $_POST['top1m_source'] ?: 'tranco';
 			$pfb_top1m_identity_changed =
-				(($pfb['dconfig']['alexa_type'] ?? '') !== $pfb_top1m_provider) ||
+				(($pfb['dconfig']['top1m_source'] ?? '') !== $pfb_top1m_provider) ||
 				($pfb_top1m_token_post !== '' &&
 					($pfb['dconfig']['top1m_token'] ?? '') !== $pfb_top1m_token_post);
-			$pfb['dconfig']['alexa_type'] = $pfb_top1m_provider;
+			$pfb['dconfig']['top1m_source'] = $pfb_top1m_provider;
 
 			// top1m_token: masked/write-only -- blank means "keep the existing stored
 			// token" (never clear it via a blank submit, e.g. an unrelated settings
@@ -929,13 +929,13 @@ if ($_POST) {
 				pfb_top1m_invalidate_baseline("{$pfb['dbdir']}/top-1m.csv.zip");
 			}
 
-			$pfb['dconfig']['alexa_count']		= $_POST['alexa_count']							?: '1000';
-			$pfb['dconfig']['alexa_inclusion']	= implode(',', (array) $_POST['alexa_inclusion']);
+			$pfb['dconfig']['top1m_count']		= $_POST['top1m_count']							?: '1000';
+			$pfb['dconfig']['top1m_inclusion']	= implode(',', (array) $_POST['top1m_inclusion']);
 			$pfb_top1m_settings_after = array(
-				'enable'   => $pfb['dconfig']['alexa_enable'],
-				'count'    => $pfb['dconfig']['alexa_count'],
-				'tld'      => $pfb['dconfig']['alexa_inclusion'],
-				'provider' => $pfb['dconfig']['alexa_type'],
+				'enable'   => $pfb['dconfig']['top1m_enable'],
+				'count'    => $pfb['dconfig']['top1m_count'],
+				'tld'      => $pfb['dconfig']['top1m_inclusion'],
+				'provider' => $pfb['dconfig']['top1m_source'],
 			);
 			if (pfb_top1m_settings_reprocess($pfb_top1m_settings_before, $pfb_top1m_settings_after)) {
 				touch("{$pfb['dbdir']}/top-1m.update");
@@ -1099,10 +1099,10 @@ $dnsbl_text = 'This is an <strong>Advanced process</strong> to determine if all 
 	</div>';
 
 $section->addInput(new Form_Checkbox(
-	'pfb_tld',
+	'tld_wildcard',
 	gettext('Wildcard Blocking (TLD)'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_tld']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['tld_wildcard']) === PfbToggle::On,
 	'on'
 ))->setHelp($dnsbl_text);
 
@@ -2725,10 +2725,10 @@ $tld_info['bgTLD']	= 'List of Branded Generic Top-Level-Domains (bgTLD)';
 $tld_total = array_sum(array_map('count', $tld_list));
 
 $section->addInput(new Form_Checkbox(
-	'pfb_pytld',
+	'tld_allow',
 	gettext('TLD Allow'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_pytld']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['tld_allow']) === PfbToggle::On,
 	'on'
 ))->setHelp('Enable the TLD Allow feature (' . number_format($tld_total) . ' TLDs available). This will block all TLDs that are not specifically selected.'
 		. '<div id="dnsbl_python_tld_allow_text">'
@@ -2742,10 +2742,10 @@ $section->addInput(new Form_Checkbox(
 		);
 
 $section->addInput(new Form_Checkbox(
-	'pfb_pytld_sort',
+	'tld_allow_sort',
 	'',
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_pytld_sort']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['tld_allow_sort']) === PfbToggle::On,
 	'on'
 ))->setHelp('Enable to sort TLDs alphabetically');
 
@@ -2756,14 +2756,14 @@ foreach (array('gTLD', 'ccTLD', 'iTLD', 'bgTLD') as $key => $tld_type) {
 	}
 	$count = count($tld_list[$tld_type]);
 
-	if (pfb_cfg_toggle_read($pconfig['pfb_pytld_sort']) === PfbToggle::On) {
+	if (pfb_cfg_toggle_read($pconfig['tld_allow_sort']) === PfbToggle::On) {
 		ksort($tld_list[$tld_type]);
 	}
 
 	$group->add(new Form_Select(
-		'pfb_pytlds_' . strtolower($tld_type),
+		'tld_allow_' . strtolower($tld_type),
 		'',
-		$pconfig['pfb_pytlds_' . strtolower($tld_type)],
+		$pconfig['tld_allow_' . strtolower($tld_type)],
 		$tld_list[$tld_type],
 		TRUE
 	))->setHelp("{$tld_info[$tld_type]}<br />Total TLD Count: [{$count}]")
@@ -3344,18 +3344,18 @@ $top1m_text = 'The TOP1M feed can be used to whitelist the most popular Domain n
 		</div>';
 
 $section->addInput(new Form_Checkbox(
-	'alexa_enable',
+	'top1m_enable',
 	gettext('TOP1M'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['alexa_enable']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['top1m_enable']) === PfbToggle::On,
 	'on'
 ))->setHelp($top1m_text);
 
 $section->addInput(new Form_Select(
-	'alexa_type',
+	'top1m_source',
 	gettext('Type'),
-	$pconfig['alexa_type'],
-	$options_alexa_type
+	$pconfig['top1m_source'],
+	$options_top1m_source
 ))->setHelp('Default: Tranco TOP1M. To change the TOP1M type, select the type and Save, then run an Update -- this marks the source for reprocessing.');
 
 // ADR-59: masked, write-only token for a token-authenticated provider (currently only
@@ -3374,17 +3374,17 @@ $section->addInput(new Form_Input(
   ->setAttribute('autocomplete', 'off');
 
 $section->addInput(new Form_Select(
-	'alexa_count',
+	'top1m_count',
 	gettext('Domain count'),
-	$pconfig['alexa_count'],
-	$options_alexa_count
+	$pconfig['top1m_count'],
+	$options_top1m_count
 ))->sethelp('<strong>Default: Top 1k</strong><br />Select the <strong>number</strong> of TOP1M \'Top Domain global ranking\' to whitelist.');
 
 $section->addInput(new Form_Select(
-	'alexa_inclusion',
+	'top1m_inclusion',
 	gettext('TLD Inclusion'),
-	$pconfig['alexa_inclusion'],
-	$options_alexa_inclusion,
+	$pconfig['top1m_inclusion'],
+	$options_top1m_inclusion,
 	TRUE
 ))->setHelp('Select the TLDs for Whitelist. (Only showing the Top 150 TLDs)<br />'
 		. '<strong>Default: COM, NET, ORG, CA, CO, IO</strong><br /><br />'
@@ -3406,9 +3406,9 @@ $tld_exclusion_text = 'Enter TLD(s) and/or Domain(s) to be excluded from the TLD
 			</div>';
 
 $section->addInput(new Form_Textarea(
-	'tldexclusion',
+	'tld_wildcard_exclusion',
 	'TLD Exclusion List',
-	$pconfig['tldexclusion']
+	$pconfig['tld_wildcard_exclusion']
 ))->removeClass('form-control')
   ->addClass('row-fluid col-sm-12')
   ->setAttribute('columns', '90')
@@ -3437,9 +3437,9 @@ $tld_blacklist_text = 'Enter TLD(s) to be blacklisted.&emsp;
 			</div>';
 
 $section->addInput(new Form_Textarea(
-	'tldblacklist',
+	'tld_wildcard_blacklist',
 	'TLD Blacklist',
-	$pconfig['tldblacklist']
+	$pconfig['tld_wildcard_blacklist']
 ))->removeClass('form-control')
   ->addClass('row-fluid col-sm-12')
   ->setAttribute('columns', '90')
@@ -3699,7 +3699,7 @@ function enable_dnsvip_auto() {
 }
 
 function enable_tld() {
-	if ($('#pfb_tld').prop('checked')) {
+	if ($('#tld_wildcard').prop('checked')) {
 		$('#TLD_Exclusion').show();
 		$('#TLD_BW_list').show();
 	} else {
@@ -3718,13 +3718,13 @@ function enable_ports() {
 	}
 }
 
-function enable_python_pytld() {
-	if ($('#pfb_pytld').prop('checked')) {
-		hideCheckbox('pfb_pytld_sort', false);
+function enable_tld_allow() {
+	if ($('#tld_allow').prop('checked')) {
+		hideCheckbox('tld_allow_sort', false);
 		hideMultiClass('pfb_python', false);
 		$('#dnsbl_python_tld_allow_text').show();
 	} else {
-		hideCheckbox('pfb_pytld_sort', true);
+		hideCheckbox('tld_allow_sort', true);
 		hideMultiClass('pfb_python', true);
 		$('#dnsbl_python_tld_allow_text').hide();
 	}
@@ -3746,7 +3746,7 @@ function enable_idn_mode() {
 var pfb_top1m_token_providers = <?=$pfb_top1m_token_providers_json?>;
 
 function enable_top1m_token() {
-	hideInput('top1m_token', pfb_top1m_token_providers.indexOf($('#alexa_type').val()) === -1);
+	hideInput('top1m_token', pfb_top1m_token_providers.indexOf($('#top1m_source').val()) === -1);
 }
 
 function enable_python_regex() {
@@ -3808,11 +3808,11 @@ events.push(function(){
 
 	// issue #1875 step 2b: plain-list fields share this page's CM6 bundle; mountLists skips absent ids
 	if (window.pfbCM) {
-		window.pfbCM.mountLists(['pfb_gp_bypass_list', 'pfb_noaaaa_list', 'suppression', 'tldexclusion', 'tldblacklist']);
+		window.pfbCM.mountLists(['pfb_gp_bypass_list', 'pfb_noaaaa_list', 'suppression', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist']);
 	}
 <?php endif; ?>
 
-	$('#pfb_tld').click(function() {
+	$('#tld_wildcard').click(function() {
 		enable_tld();
 	});
 	enable_tld();
@@ -3822,17 +3822,17 @@ events.push(function(){
 	});
 	enable_ports();
 
-	$('#pfb_pytld').click(function() {
-		enable_python_pytld();
+	$('#tld_allow').click(function() {
+		enable_tld_allow();
 	});
-	enable_python_pytld();
+	enable_tld_allow();
 
 	$('#pfb_idn').change(function() {
 		enable_idn_mode();
 	});
 	enable_idn_mode();
 
-	$('#alexa_type').change(function() {
+	$('#top1m_source').change(function() {
 		enable_top1m_token();
 	});
 	enable_top1m_token();

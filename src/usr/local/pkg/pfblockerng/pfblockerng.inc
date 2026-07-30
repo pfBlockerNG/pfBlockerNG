@@ -3006,8 +3006,8 @@ function pfb_global() {
 
 	$pfb['dnsbl_port']	= $pfb['dnsblconfig']['pfb_dnsport'];									// Lighttpd web server http port setting
 	$pfb['dnsbl_port_ssl']	= $pfb['dnsblconfig']['pfb_dnsport_ssl'];								// Lighttpd web server https port setting
-	$pfb['dnsbl_top1m']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['alexa_enable'] ?? '');							// TOP1M whitelist
-	$pfb['dnsbl_top1m_type']	= PfbConfig::read('alexa_type');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
+	$pfb['dnsbl_top1m']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['top1m_enable'] ?? '');							// TOP1M whitelist
+	$pfb['dnsbl_top1m_type']	= PfbConfig::read('top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_res_cache']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cache'] ?? '');							// DNSBL Option to backup/restore Resolver cache
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
 	$pfb['dnsbl_global_log']= PfbConfig::read('global_log');							// Global Logging/Blocking mode (default '')
@@ -3029,7 +3029,7 @@ function pfb_global() {
 	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'] ?? '';	// DNSBL Resolver python regex list
 	$pfb['dnsbl_regex_cap']	= PfbConfig::read('pfb_regex_cap');			// DNSBL Resolver python opt-in "Limit long/complex regex" static cap
 	$pfb['dnsbl_cname']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cname'] ?? '');			// DNSBL Resolver python CNAME Validation
-	$pfb['dnsbl_tld_allow']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_pytld'] ?? '');			// DNSBL Resolver TLD Allow option
+	$pfb['dnsbl_tld_allow']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['tld_allow'] ?? '');			// DNSBL Resolver TLD Allow option
 	$pfb['dnsbl_py_nolog']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_nolog'] ?? '');			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
 	$pfb['dnsbl_noaaaa']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_noaaaa'] ?? '');			// DNSBL Resolver python no AAAA
 	$pfb['dnsbl_noaaaa_list']=$pfb['dnsblconfig']['pfb_noaaaa_list'] ?? '';	// DNSBL Resolver python no AAAA list
@@ -9279,8 +9279,8 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	$tld_wildcard_blacklist = array();
 	$tld_wildcard_exclusion = array();
 	if (!empty($pfb['dnsbl_tld_wildcard'])) {
-		$tld_wildcard_blacklist = pfb_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE) ?: array();
-		$tld_wildcard_exclusion = pfb_text_area_decode($pfb['dnsblconfig']['tldexclusion'], TRUE, FALSE, TRUE) ?: array();
+		$tld_wildcard_blacklist = pfb_text_area_decode($pfb['dnsblconfig']['tld_wildcard_blacklist'], TRUE, FALSE, TRUE) ?: array();
+		$tld_wildcard_exclusion = pfb_text_area_decode($pfb['dnsblconfig']['tld_wildcard_exclusion'], TRUE, FALSE, TRUE) ?: array();
 	}
 
 	$manifest = array(
@@ -9543,21 +9543,21 @@ function pfb_unbound_python($mode) {
 		$tld_allow = 'off';
 		$tld_allow_list = '';
 		if ($pfb['dnsbl_tld_allow'] === PfbToggle::On) {
-			if (!empty($pfb['dnsblconfig']['pfb_pytlds_gtld'])) {
+			if (!empty($pfb['dnsblconfig']['tld_allow_gtld'])) {
 				$tld_allow = 'on';
-				$tld_allow_list = $pfb['dnsblconfig']['pfb_pytlds_gtld'];
+				$tld_allow_list = $pfb['dnsblconfig']['tld_allow_gtld'];
 			}
-			if (!empty($pfb['dnsblconfig']['pfb_pytlds_cctld'])) {
+			if (!empty($pfb['dnsblconfig']['tld_allow_cctld'])) {
 				$tld_allow = 'on';
-				$tld_allow_list .= ',' . $pfb['dnsblconfig']['pfb_pytlds_cctld'];
+				$tld_allow_list .= ',' . $pfb['dnsblconfig']['tld_allow_cctld'];
 			}
-			if (!empty($pfb['dnsblconfig']['pfb_pytlds_itld'])) {
+			if (!empty($pfb['dnsblconfig']['tld_allow_itld'])) {
 				$tld_allow = 'on';
-				$tld_allow_list .= ',' . $pfb['dnsblconfig']['pfb_pytlds_itld'];
+				$tld_allow_list .= ',' . $pfb['dnsblconfig']['tld_allow_itld'];
 			}
-			if (!empty($pfb['dnsblconfig']['pfb_pytlds_bgtld'])) {
+			if (!empty($pfb['dnsblconfig']['tld_allow_bgtld'])) {
 				$tld_allow = 'on';
-				$tld_allow_list .= ',' . $pfb['dnsblconfig']['pfb_pytlds_bgtld'];
+				$tld_allow_list .= ',' . $pfb['dnsblconfig']['tld_allow_bgtld'];
 			}
 			$tld_allow_list = ltrim($tld_allow_list, ',');
 		}
@@ -9763,7 +9763,7 @@ function pfb_dnsbl_tld_stats_finalize(array $group_counts): void {
 	}
 
 	// Collect TLD Blacklist(s). If configured the whole TLD will be blocked
-	$tld_blacklist = pfb_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE);
+	$tld_blacklist = pfb_text_area_decode($pfb['dnsblconfig']['tld_wildcard_blacklist'], TRUE, FALSE, TRUE);
 	if (!empty($tld_blacklist)) {
 		$tld_blacklist = array_flip($tld_blacklist);
 	}
@@ -10432,7 +10432,7 @@ function pfblockerng_top1m(?array $provider_override = NULL, array $stream_ops=a
 
 	// ADR-59: the active provider descriptor drives the parse knobs below.
 	// $pfb['dnsbl_top1m_type'] may be unset in an isolated unit-test context
-	// (it is normally set by pfb_global() -- PfbConfig::read('alexa_type') --
+	// (it is normally set by pfb_global() -- PfbConfig::read('top1m_source') --
 	// which some tests never call); default to Tranco, the same absent-default
 	// the registry itself uses, so the resolved shape stays rank_domain/zip.
 	$top1m_type	= $pfb['dnsbl_top1m_type'] ?? PfbTop1mSource::Tranco;
