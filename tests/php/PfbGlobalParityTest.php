@@ -66,7 +66,7 @@ final class PfbGlobalParityTest extends TestCase
 	 * The issue #281 migration (pfb_keep_migrate) seeds this into config.xml for
 	 * EXISTING installs; new installs and the runtime both default to 'on'.
 	 *
-	 * #484 FIX: pfb_keep now uses the lenient adapter (PfbLenient) so the GUI stores
+	 * #484 FIX (merged into PfbToggle by #1887): the GUI stores
 	 * 'off' for unchecked-save — distinguishable from absent (default 'on').
 	 */
 	public function testParityPfbKeepAbsentYieldsOn(): void
@@ -78,7 +78,7 @@ final class PfbGlobalParityTest extends TestCase
 		$result = PfbConfig::read('pfb_keep');
 
 		// Then: 'on' — matches OLD ?? 'on' AND the repaired registry default.
-		// Adapter is now PfbLenient (not PfbToggle), but the value is unchanged.
+		// The merged PfbToggle adapter (issue #1887); the value is unchanged.
 		$this->assertSame(PfbToggle::On, $result);
 		$this->assertSame('on', $result->value, 'pfb_keep absent -> "on" (#281: default repaired via registry)');
 	}
@@ -317,7 +317,7 @@ final class PfbGlobalParityTest extends TestCase
 		$result = PfbConfig::read('pfb_hsts');
 
 		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('off', $result->value, 'pfb_hsts absent -> "" (off)');
+		$this->assertSame('off', $result->value, 'pfb_hsts absent -> off token');
 	}
 
 	/**
@@ -374,7 +374,7 @@ final class PfbGlobalParityTest extends TestCase
 	 * Via gateway: PfbConfig::read('pfb_idn_escalate_suspicious') = '' (registered default).
 	 * PARITY: identical.
 	 */
-	public function testParityPfbIdnEscalateSuspiciousAbsentYieldsEmpty(): void
+	public function testParityPfbIdnEscalateSuspiciousAbsentYieldsOff(): void
 	{
 		$this->assertNull(
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious')
@@ -490,7 +490,7 @@ final class PfbGlobalParityTest extends TestCase
 	 * a scattered per-site ?? fallback. The pfb_keep_migrate() migration seeds
 	 * this into config.xml for existing installs; the runtime default is identical.
 	 *
-	 * #484 FIX: pfb_keep now uses the lenient adapter (PfbLenient) so the GUI stores
+	 * #484 FIX (merged into PfbToggle by #1887): the GUI stores
 	 * 'off' for unchecked-save — distinguishable from absent (default 'on'). Current code
 	 * reads the legacy '' token (written by the old GUI) as PfbToggle::Off.
 	 */
