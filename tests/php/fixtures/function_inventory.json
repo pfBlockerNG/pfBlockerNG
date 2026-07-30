@@ -4752,6 +4752,60 @@
             }
         ]
     },
+    "pfb_legacy_key_rename_migrate": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfb_legacy_key_rename_node": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "node",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "keys",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "where",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "changed",
+                "byRef": true,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "conflicts",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_lint_diagnostics": {
         "returnsRef": false,
         "returnType": "array",
@@ -6519,6 +6573,19 @@
                 "variadic": false,
                 "type": "string",
                 "default": "''"
+            }
+        ]
+    },
+    "pfb_registered_scalars_seed": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
             }
         ]
     },

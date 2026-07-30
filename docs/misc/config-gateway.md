@@ -104,7 +104,7 @@ Authorization is a property of the **write**, not the call site (the
     writes always emit canonical lowercase. The runtime `$pfb[]` toggle mirrors carry
     the enum itself (never `->value`), so consumers compare `=== PfbToggle::On`.
     Registered checkbox fields still on `NULL`/`NULL` adapters (e.g. `pfb_regex`,
-    `pfb_noaaaa`, `pfb_gp`, `pfb_cache`, `pfb_py_nolog`, `pfb_tld`, `alexa_enable`)
+    `pfb_noaaaa`, `pfb_gp`, `pfb_cache`, `pfb_py_nolog`, `tld_wildcard`, `top1m_enable`)
     keep the raw `{'on', ''}` storage until they adopt the pair — a field joining the
     adapter set moves all its consumers in the same commit (see below).
   - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables the post-handshake full Unbound
@@ -135,7 +135,7 @@ Authorization is a property of the **write**, not the call site (the
     `=== PfbIdnMode::All` / `::Confusable`. The 4.0.0-alpha-only `'all'` token is **not** carried
     (alpha compatibility is intentionally not maintained) — it reads as Off. One canonical
     vocabulary spans `config.xml`, the ini, and the Python `IdnMode` enum.
-  - **`alexa_type` → `PfbTop1mSource`** (issue #877 review, registry adapters
+  - **`top1m_source` → `PfbTop1mSource`** (issue #877 review, registry adapters
     `pfb_cfg_top1m_source_read/write`): tokens `'tranco'` (default) / `'cisco'` /
     `'openpagerank'` (#928, replacing ADR-59 P4's `'domcop'`) /
     `'majestic'` (added ADR-59 P4) / `'cloudflare'` (added ADR-59 P5, the first
@@ -143,7 +143,8 @@ Authorization is a property of the **write**, not the call site (the
     `'alexa'` (the dead Alexa TOP1M service, #872) coalesces to `Tranco`, and `'domcop'`
     (the DomCop TOP1M list's hosting moved to OpenPageRank, #928) coalesces to
     `OpenPageRank`; `fromLegacy()` coalesces any other unknown/absent token to `Tranco`.
-    The stored config key stays `alexa_type` — no rename.
+    The stored key was `alexa_type` until issue #1898 renamed it (see "Stored-key
+    vocabulary" below); the legacy *tokens* are unaffected by that rename.
   - **`top1m_token`** (ADR-59 P5, plain string — `NULL`/`NULL` adapters): a masked,
     write-only credential (currently consumed only by the `cloudflare` `alexa_type`,
     ignored by every other provider), fed to `pfb_download()` via `pfb_top1m_auth_headers()`
@@ -188,6 +189,10 @@ The gateway preserves existing behaviour while configurations move forward:
 - **Grandfather invariant**: when an absent current default would change established behaviour,
   the install/upgrade path writes a one-time seed for existing installations.
 - **Canonical-write invariant**: current code writes the current canonical representation.
+- **Canonical-name invariant** (issue #1898): a registered key's *name* is the current domain
+  vocabulary too, not a frozen historical spelling. Renaming one ships a one-time post-install
+  migration in `pfb_migration_registry()`; after it runs, current code reads and writes only the
+  new name — no dual-read, no fallback, no shadow copy (see "Stored-key vocabulary" below).
 
 Package downgrade is unsupported. Current normalized state is not rewritten for an older
 package, and adapters need not emit old-package-compatible tokens. Before upgrading, keep a
@@ -205,7 +210,7 @@ pair (plain string) or not present in `$data` passes through byte-identical; `wr
 never calls `write_config()`.
 
 Before this fix, `writeSection()` called `config_set_path($section, $data)` directly, bypassing
-every adapter — a legacy read-only token (`alexa_type` `'domcop'`/`'alexa'`, `pfb_idn` alpha-only
+every adapter — a legacy read-only token (`top1m_source` `'domcop'`/`'alexa'`, `pfb_idn` alpha-only
 `'all'`) or a hostile/junk value riding **any** section-blob write (a `www/` save handler, an
 install seed, a migration) persisted raw into `config.xml` instead of being coalesced to its
 canonical form. Consequently, a legacy token riding a `readSection()` → `writeSection()`
@@ -215,9 +220,67 @@ section-level helper instead of the per-key one.
 
 Coverage: `tests/php/CfgGatewayTest.php` — a property test iterating `pfb_cfg_registry()` itself
 (every adapter-bearing field × a canonical/legacy/junk sample set, compared against the
-`PfbConfig::write()` oracle) plus targeted scenario and hostile-input tests (legacy `alexa_type`
+`PfbConfig::write()` oracle) plus targeted scenario and hostile-input tests (legacy `top1m_source`
 tokens, alpha-only `pfb_idn`, a non-scalar/`NULL`/enum-instance/int value, an unadapted key,
 a same-named key in a foreign section, a mixed realistic section blob).
+
+## Stored-key vocabulary (issue #1898)
+
+ADR-29 §5 originally froze registry keys at "the EXACT existing `config.xml` keys (no renames)"
+so 4.x code could share a `config.xml` with the 3.2.x package family. The owner retired that goal
+on 2026-07-30 — downgrade safety now comes from the settings-family snapshots
+(`pfb_settings_family_save()` / `_replace()`), not from perpetuating an obsolete spelling. Stored
+keys therefore carry the **current** domain vocabulary, and an existing installation is carried
+forward by one migration.
+
+**The 14 retired names.** Three landed decisions had frozen a stored key while the runtime/UI
+vocabulary moved on: the dead-Alexa TOP1M cluster (#872/#877) and ADR-66 §2.1/§2.2's TLD Allow
+and TLD Wildcard families.
+
+| Old stored key | Current stored key |
+| --- | --- |
+| `alexa_enable` · `alexa_type` · `alexa_count` · `alexa_inclusion` | `top1m_enable` · `top1m_source` · `top1m_count` · `top1m_inclusion` |
+| `filter_alexa` (dynamic `pfblockerngdnsbl/config/{row}`) | `filter_top1m` |
+| `pfb_pytld` · `pfb_pytld_sort` · `pfb_pytlds_{gtld,cctld,itld,bgtld}` | `tld_allow` · `tld_allow_sort` · `tld_allow_{gtld,cctld,itld,bgtld}` |
+| `pfb_tld` · `tldblacklist` · `tldexclusion` | `tld_wildcard` · `tld_wildcard_blacklist` · `tld_wildcard_exclusion` |
+
+**The migration.** `PFB_LEGACY_KEY_RENAMES` + `pfb_legacy_key_rename_migrate()`
+(`pfblockerng.inc`), wired as the `issue1898-legacy-key-rename` entry in
+`pfb_migration_registry()`. It runs **after** the two `issue1887-toggle-empty-preserve-*`
+conversions — those read operator intent out of a legacy stored `''`, which any adapter-riding
+write-back would have already canonicalised away — and before the remaining entries. Because it
+spans two sections, registry entries may carry a `sections` list instead of a single `section`;
+`pfb_run_migrations()` then hands the `apply` callable a `section => blob` map, persists every
+returned section, and calls `write_config()` **once**.
+
+Per-key preflight, all-or-nothing across every section: old absent → no-op; old present and new
+absent → move; old absent and new present → already migrated; both present and equal → keep the
+new key, drop the old; **both present and different → fail closed**, leave the entire config
+untouched and raise a `file_notice()` naming the two keys and never their values. Values move
+byte-identically, except where the renamed key's own registered adapter canonicalises a legacy
+token (`top1m_source`'s `'alexa'`/`'domcop'` coalesce) — the documented behaviour-equivalent
+move, not a value change.
+
+**The seeding pass.** `pfb_registered_scalars_seed()` (`pfblockerng.inc`) materialises every
+registered scalar that is still absent from its section at its registered default, so `config.xml`
+explicitly carries every scalar setting and "absent" stops being a third semantic state. It is
+called from `pfblockerng_install.inc` **after** the migration driver *and* after the
+`pfb_feed_internal_filter` / `pfb_alias_delta_mode` install-default grandfathers — they run at the
+end of that file, so a seed inside the migration registry would materialise the registry default
+first and permanently disarm both. It rides the installer's trailing `write_config()`.
+
+`settings_family` is the one exclusion: it is the installer's own schema marker, not operator
+configuration (the same reason `pfb_gconfig_operator_view()` strips it, #1770/#1771/#1775).
+Nothing else needs excluding — under the issue #1887 `''` ≡ absent identity, seeding a
+`''`-default field (a credential, a base64 blob, an interface multi-select) stores exactly the
+value it already had, and every genuinely user-owned structure (feed rows, group policies,
+MaxMind credentials) is unregistered and therefore never reached.
+
+**Consequence for future fields:** after this pass a bare `!isset($cfg[$key])` no longer means
+"an existing install that predates this setting". A new grandfather decides from the *value*, or
+from a dedicated one-shot marker (`pfb_control_legacy_seeded`'s shape), never from key absence.
+
+Coverage: `tests/php/LegacyKeyRenameMigrationTest.php`.
 
 ## Field vocabularies
 
@@ -231,7 +294,7 @@ a same-named key in a foreign section, a mixed realistic section blob).
 
 **Excluded fields** — none. `pfb_idn` was previously excluded (`NULL`/`NULL` identity adapters);
 it is now adopted as `PfbIdnMode` (see ADR-28 §2.2). `All` reuses the legacy `'on'` token, so the
-adoption is migration-free for supported upgrades. `alexa_type` similarly moved off a plain-string
+adoption is migration-free for supported upgrades. `top1m_source` similarly moved off a plain-string
 read-boundary coalesce onto the `PfbTop1mSource` enum (issue #877 review) — same shape, no migration.
 
 ## Foreign-key exclusion list (use `config_*_path` directly — NOT via `PfbConfig`)
@@ -244,6 +307,7 @@ registered path set). Each annotation is committed in the relevant source file.
 | --- | --- |
 | `pfblockerngdnsbl/config/{row}/custom` | Dynamic per-row key, not in registry |
 | `pfblockerngdnsbl/config/{row}/logging` | Dynamic per-row key, not in registry |
+| `pfblockerngdnsbl/config/{row}/filter_top1m` | Dynamic per-row key, not in registry (renamed from `filter_alexa`, issue #1898) |
 | `pfblockernglistsv4/config/{row}/custom` | Dynamic per-row key, not in registry |
 | `pfblockernglistsv6/config/{row}/custom` | Dynamic per-row key, not in registry |
 | `pfblockerngdnsbl` (section-level) | Dynamic per-feed list section |
@@ -257,6 +321,7 @@ registered path set). Each annotation is committed in the relevant source file.
 | `installedpackages` (bulk blob) | Bulk wizard init write, foreign structure |
 | `pfblockerng{continent}/config/0` | Dynamic per-continent structure |
 | `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope foreign key (ADR-29 §2.5); written directly by `pfblockerng_dnsbl.php`, read via `pfb_dnsbl_webpage()` (issue #713 removed the never-written `dnsblwebpage` registry mis-spelling) |
+| `pfblockerngdnsblsettings/config/0/tld_allow_sort` + `tld_allow_{gtld,cctld,itld,bgtld}` | Unregistered TLD-Allow scalars reached only through the section blob (`$pfb['dconfig']`/`$pfb['dnsblconfig']`), never a per-key `config_*_path`; the bucket keys are built dynamically (`'tld_allow_' . $bucket`). Renamed from the `pfb_pytld*` family by issue #1898 |
 | `pfblockerngdnsbl` / `pfblockernglistsv4/v6` (section-level reads) | Dynamic list sections |
 | `aliases/alias`, `filter/rule`, `system/*`, `interfaces`, `unbound/*` | pfSense core sections |
 

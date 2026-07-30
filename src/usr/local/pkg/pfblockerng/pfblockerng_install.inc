@@ -923,6 +923,23 @@ if ($ufound) {
 	update_status(" no changes required ... done.\n");
 }
 
+// issue #1898: with the retired key names migrated away and every grandfather decision above
+// already applied, materialise the still-absent registered scalars at their registered
+// defaults, so config.xml explicitly carries every scalar setting. This MUST stay after
+// pfb_run_migrations() AND after both install-default grandfathers -- seeding a registry
+// default ahead of them would make their !isset() run-once guards permanently false. Rides the
+// trailing write_config() below rather than adding a flush of its own.
+update_status("Recording default settings...");
+$pfb_seed_sections = array();
+foreach (pfb_cfg_registry() as $pfb_seed_entry) {
+	$pfb_seed_sections[$pfb_seed_entry['section']] ??= PfbConfig::readSection($pfb_seed_entry['section']);
+}
+foreach (pfb_registered_scalars_seed($pfb_seed_sections) as $pfb_seed_path => $pfb_seed_blob) {
+	PfbConfig::writeSectionSystem($pfb_seed_path, $pfb_seed_blob);
+}
+unset($pfb_seed_sections, $pfb_seed_entry, $pfb_seed_path, $pfb_seed_blob);
+update_status(" done.\n");
+
 unset($g['pfblockerng_install']);	// Remove 'Install flag'
 update_status("Upgrading... done\n\nCustom commands completed ... ");
 

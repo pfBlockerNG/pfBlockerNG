@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * ADR-29 Phase 2 — Migration registry + driver.
  *
- * Scenario: pfb_run_migrations() consolidates four independent upgrade migrations
+ * Scenario: pfb_run_migrations() consolidates the independent upgrade migrations
  * (ADR-02 python-mode, PFBL-03 control-legacy seed, ADR-22 lenient, issue #281 pfb_keep)
  * into one ordered, idempotent, registry-driven driver.
  *
@@ -20,7 +20,8 @@ use PHPUnit\Framework\TestCase;
  *   - BEHAVIOUR-PRESERVATION: the driver reproduces the same keys + values that the four
  *     hand-wired install.inc blocks produced on every install state (fresh, legacy-missing-key,
  *     already-migrated).
- *   - pfb_migration_registry() returns exactly four entries in the correct order.
+ *   - pfb_migration_registry() returns exactly the declared entries in the correct order,
+ *     each declaring exactly one of the single-'section' / multi-'sections' target forms.
  */
 #[CoversFunction('pfb_run_migrations')]
 #[CoversFunction('pfb_migration_registry')]
@@ -74,53 +75,73 @@ final class MigrationRegistryTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Registry returns exactly four entries in the correct declared order.
+	 * Registry returns exactly seven entries in the correct declared order.
 	 */
-	public function testRegistryHasSixEntriesInOrder(): void
+	public function testRegistryHasSevenEntriesInOrder(): void
 	{
 		$registry = pfb_migration_registry();
 
-		$this->assertCount(6, $registry);
+		$this->assertCount(7, $registry);
 
 		// The issue #1887 '' preservation pair MUST run first: every later migration's
 		// writeSection() write-back rides the adapters, which would canonicalise a
 		// still-present '' to the registered default before it could be preserved.
 		$this->assertSame('issue1887-toggle-empty-preserve-gen',   $registry[0]['id']);
 		$this->assertSame('issue1887-toggle-empty-preserve-dnsbl', $registry[1]['id']);
+		// issue #1898's key rename inherits that constraint (its write-back rides the
+		// same adapters) so it follows the pair and precedes everything else.
+		$this->assertSame('issue1898-legacy-key-rename',   $registry[2]['id']);
 		// Then the original install.inc sequence, order unchanged.
-		$this->assertSame('adr02-dnsbl-python-mode',    $registry[2]['id']);
-		$this->assertSame('pfbl03-control-legacy-seed', $registry[3]['id']);
-		$this->assertSame('adr22-dnsbl-lenient',        $registry[4]['id']);
-		$this->assertSame('issue281-pfb-keep-seed',     $registry[5]['id']);
+		$this->assertSame('adr02-dnsbl-python-mode',    $registry[3]['id']);
+		$this->assertSame('pfbl03-control-legacy-seed', $registry[4]['id']);
+		$this->assertSame('adr22-dnsbl-lenient',        $registry[5]['id']);
+		$this->assertSame('issue281-pfb-keep-seed',     $registry[6]['id']);
 	}
 
 	/**
-	 * Every entry carries the required fields.
+	 * Every entry carries the required fields, and declares EXACTLY ONE of the two
+	 * target forms — a single 'section', or issue #1898's 'sections' list. Carrying
+	 * both, or neither, would leave pfb_run_migrations() guessing which branch owns
+	 * the entry.
 	 */
 	public function testRegistryEntriesHaveRequiredFields(): void
 	{
 		foreach (pfb_migration_registry() as $entry) {
 			$this->assertArrayHasKey('id',      $entry);
-			$this->assertArrayHasKey('section', $entry);
 			$this->assertArrayHasKey('apply',   $entry);
 			$this->assertArrayHasKey('message', $entry);
 			$this->assertArrayHasKey('since',   $entry);
 			$this->assertIsCallable($entry['apply'], "apply for {$entry['id']} must be callable");
+
+			$this->assertSame(
+				1,
+				(int) isset($entry['section']) + (int) isset($entry['sections']),
+				"{$entry['id']} must declare exactly one of 'section' / 'sections'"
+			);
+			if (isset($entry['sections'])) {
+				$this->assertNotEmpty($entry['sections'], "{$entry['id']}: 'sections' must not be empty");
+			}
 		}
 	}
 
 	/**
-	 * DNSBL migrations target the DNSBL section; pfb_keep targets the general section.
+	 * DNSBL migrations target the DNSBL section; pfb_keep targets the general section;
+	 * the issue #1898 rename spans the DNSBL settings section plus the dynamic per-feed
+	 * row section.
 	 */
 	public function testRegistryEntriesSectionsAreCorrect(): void
 	{
 		$registry = pfb_migration_registry();
 		$this->assertSame(self::GEN_SECTION,   $registry[0]['section']);
 		$this->assertSame(self::DNSBL_SECTION, $registry[1]['section']);
-		$this->assertSame(self::DNSBL_SECTION, $registry[2]['section']);
+		$this->assertSame(
+			[self::DNSBL_SECTION, 'installedpackages/pfblockerngdnsbl/config'],
+			$registry[2]['sections']
+		);
 		$this->assertSame(self::DNSBL_SECTION, $registry[3]['section']);
 		$this->assertSame(self::DNSBL_SECTION, $registry[4]['section']);
-		$this->assertSame(self::GEN_SECTION,   $registry[5]['section']);
+		$this->assertSame(self::DNSBL_SECTION, $registry[5]['section']);
+		$this->assertSame(self::GEN_SECTION,   $registry[6]['section']);
 	}
 
 	// -----------------------------------------------------------------------
