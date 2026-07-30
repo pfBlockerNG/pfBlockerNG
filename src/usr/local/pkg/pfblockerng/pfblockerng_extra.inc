@@ -457,6 +457,11 @@ function pfb_cfg_registry(): array
 	// -----------------------------------------------------------------------
 	$ip = 'installedpackages/pfblockerngipsettings/config/0';
 
+	// -----------------------------------------------------------------------
+	// Section: installedpackages/pfblockerngreputation/config/0
+	// -----------------------------------------------------------------------
+	$rep = 'installedpackages/pfblockerngreputation/config/0';
+
 	$registry = [
 
 		// -------------------------------------------------------------------
@@ -1257,6 +1262,36 @@ function pfb_cfg_registry(): array
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
+		],
+
+		// -------------------------------------------------------------------
+		// Reputation section (pfblockerngreputation/config/0)
+		// -------------------------------------------------------------------
+
+		// issue #1896: 'Max' per-list Reputation toggle: 'on' | 'off' | ''. Default '' (off).
+		'enable_rep' => [
+			'section'       => $rep,
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+		],
+
+		// issue #1896: 'pMax' collective Reputation toggle (no Country Exclusion):
+		// 'on' | 'off' | ''. Default '' (off).
+		'enable_pdup' => [
+			'section'       => $rep,
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+		],
+
+		// issue #1896: 'dMax' collective Reputation toggle (Country Exclusion applied):
+		// 'on' | 'off' | ''. Default '' (off).
+		'enable_dedup' => [
+			'section'       => $rep,
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 	];
 

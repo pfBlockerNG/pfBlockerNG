@@ -172,6 +172,10 @@ class RequireConfigGatewaySniff implements Sniff
 		// ADR-53: installedpackages/pfblockerngipsettings/config/0 (IPv4/IPv6 suppression)
 		'installedpackages/pfblockerngipsettings/config/0/v4suppression',
 		'installedpackages/pfblockerngipsettings/config/0/v6suppression',
+		// issue #1896: installedpackages/pfblockerngreputation/config/0 (Reputation toggles)
+		'installedpackages/pfblockerngreputation/config/0/enable_rep',
+		'installedpackages/pfblockerngreputation/config/0/enable_pdup',
+		'installedpackages/pfblockerngreputation/config/0/enable_dedup',
 	];
 
 	/**

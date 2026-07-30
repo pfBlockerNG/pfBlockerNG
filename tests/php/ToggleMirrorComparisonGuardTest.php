@@ -35,6 +35,7 @@ final class ToggleMirrorComparisonGuardTest extends TestCase
 		'dnsbl_cname', 'dnsbl_tld_allow', 'dnsbl_py_nolog', 'dnsbl_noaaaa', 'dnsbl_gp',
 		'float', 'dup', 'agg', 'global_log', 'dnsbl_control', 'dnsbl_control_legacy',
 		'dnsbl_idn_block_malicious', 'dnsbl_idn_escalate_suspicious',
+		'rep', 'prep', 'drep',
 	];
 
 	public function testNoTypedMirrorIsComparedAgainstAStringToken(): void
@@ -45,9 +46,7 @@ final class ToggleMirrorComparisonGuardTest extends TestCase
 		// missed. Comparisons against PfbToggle::* do not match: the token there is
 		// not quoted.
 		// Interstitial tolerance is deliberately narrow: an optional `?? <fallback>`
-		// plus closing parens — the shapes the fixed regexes actually missed. A wider
-		// [^;]*? scan bled across to the SAME LINE's untyped rep/drep/prep compares
-		// (#1896), which are legitimate string comparisons.
+		// plus closing parens — the shapes the fixed regexes actually missed.
 		$coalesce = '(?:\s*\?\?\s*(?:\'[a-z]*\'|PfbToggle::\w+))?';
 		$pattern = '/' . $mirror . $coalesce . '\s*\)*\s*(?:===|!==|==|!=)\s*\'(?:on|off|)\'/';
 		// The reverse orientation ('on' == $pfb[...]) has no in-tree precedent but

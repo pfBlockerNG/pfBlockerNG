@@ -6023,8 +6023,8 @@ function pfb_ip_preprocess_args(bool $dup_on, bool $agg_on, bool $rep_on): strin
  *                          placeholder refill from the closing pass is never truncated away.
  * @param bool $rep_trigger dRep/pRep's shared "changes found" gate: $pfb['repcheck'] &&
  *                          !$pfb['save'] && $pfb['enable'] === PfbToggle::On.
- * @param bool $drep_on     $pfb['drep'] == 'on'.
- * @param bool $prep_on     $pfb['prep'] == 'on'.
+ * @param bool $drep_on     $pfb['drep'] === PfbToggle::On.
+ * @param bool $prep_on     $pfb['prep'] === PfbToggle::On.
  * @return array{invoke_v4:bool,invoke_v6:bool,dedup:string,repmode:string,legacy_pmax_followup:bool}
  */
 function pfb_ip_recompute_matrix(bool $dedup_on, bool $rep_trigger, bool $drep_on, bool $prep_on): array {

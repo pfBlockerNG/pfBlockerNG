@@ -525,9 +525,6 @@ function sync_package_pfblockerng($cron='') {
 
 	// Validate pfB Script variables
 	foreach (array(
-			'enable_rep'		=> 'rep',					// Enable/Disable 'Max' Reputation
-			'enable_pdup'		=> 'prep',					// Enable/Disable 'pRep' Reputation
-			'enable_dedup'		=> 'drep',					// Enable/Disable 'dRep' Reputation
 			'et_update'		=> 'etupdate',					// Perform a Force Update on ET categories
 			'ccwhite'		=> 'ccwhite',					// Action for whitelist Country category
 			'ccblack'		=> 'ccblack',					// Action for blacklist Country category
@@ -546,6 +543,14 @@ function sync_package_pfblockerng($cron='') {
 			$pfb[$pfb_value] = $pfb_variable;
 		}
 	}
+
+	// issue #1896: registered toggle mirrors -- typed PfbToggle via the gateway, not the
+	// loop's raw-string-or-'x' shape above (that placeholder exists for the numeric/CSV
+	// fields' shell-arg positional integrity; a toggle already has a well-formed enum for
+	// every input, so it never needs it).
+	$pfb['rep']	= PfbConfig::read('enable_rep');	// Enable/Disable 'Max' Reputation
+	$pfb['prep']	= PfbConfig::read('enable_pdup');	// Enable/Disable 'pRep' Reputation
+	$pfb['drep']	= PfbConfig::read('enable_dedup');	// Enable/Disable 'dRep' Reputation
 
 	// Starting variable to skip Reputation functions, if no changes are required
 	$pfb['repcheck'] = FALSE;
@@ -3441,9 +3446,12 @@ function sync_package_pfblockerng($cron='') {
 
 								// Call 'shell script' functions (Deny Actions only)
 								if ($pfbadv && $list['vtype'] == '_v4') {
-									$args = pfb_ip_preprocess_args($pfb['dup'] === PfbToggle::On, $pfb['agg'] === PfbToggle::On, $pfb['rep'] == 'on');
+									$args = pfb_ip_preprocess_args($pfb['dup'] === PfbToggle::On, $pfb['agg'] === PfbToggle::On, $pfb['rep'] === PfbToggle::On);
 									if (!empty($args)) {
-										exec("{$pfb['script']} {$args} {$header_esc} {$pfb['max']} {$pfb['drep']} {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
+										// issue #1896: boundary conversion -- the shell script reads this
+										// positional token raw ('on'/'off'), never the enum itself.
+										$pfb_drep_token = $pfb['drep']->toStored();
+										exec("{$pfb['script']} {$args} {$header_esc} {$pfb['max']} {$pfb_drep_token} {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
 									}
 
 									// issue #1084: snapshot the pristine post-preprocessing feed for the
@@ -3533,7 +3541,7 @@ function sync_package_pfblockerng($cron='') {
 	// follows memberlist order, so compare against the last recompute's memberlist and
 	// recompute on mismatch.
 	if (!$pfb['save'] && $pfb['enable'] === PfbToggle::On &&
-	    pfb_cross_list_scope($pfb['dup'] === PfbToggle::On, $pfb['drep'] == 'on' || $pfb['prep'] == 'on')) {
+	    pfb_cross_list_scope($pfb['dup'] === PfbToggle::On, $pfb['drep'] === PfbToggle::On || $pfb['prep'] === PfbToggle::On)) {
 		foreach (array('v4', 'v6') as $pfb_rec_family) {
 			if ($pfb_rec_family === 'v6' && $pfb['dup'] !== PfbToggle::On) {
 				continue;
@@ -3557,8 +3565,8 @@ function sync_package_pfblockerng($cron='') {
 	$pfb_rec_matrix  = pfb_ip_recompute_matrix(
 		$pfb['dup'] === PfbToggle::On && $pfb_rec_trigger,
 		$pfb_rec_trigger,
-		$pfb['drep'] == 'on',
-		$pfb['prep'] == 'on'
+		$pfb['drep'] === PfbToggle::On,
+		$pfb['prep'] === PfbToggle::On
 	);
 
 	// issue #1084 review: whether the recompute exec actually ran THIS pass, per family --
@@ -3627,7 +3635,7 @@ function sync_package_pfblockerng($cron='') {
 	// Avoids redundant recomputation on every list iteration.
 	$pfb_cross_list  = pfb_cross_list_scope(
 		$pfb['dup'] === PfbToggle::On,
-		$pfb['drep'] == 'on' || $pfb['prep'] == 'on'
+		$pfb['drep'] === PfbToggle::On || $pfb['prep'] === PfbToggle::On
 	);
 	// $final_alias_old: feed-changed aliases only (for suppression gate).
 	// Uses $pfb_feed_changed (the pre-write-loop snapshot) — not $pfb_alias_lists

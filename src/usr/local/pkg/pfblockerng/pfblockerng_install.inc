@@ -293,7 +293,7 @@ if (is_dir($pfb['matchdir'])) {
 	$pfb_deny_headers  = $pfb_headers['deny'];
 	$pfb_match_headers = $pfb_headers['match'];
 	$pfb_list_rows     = $pfb_headers['rows'];
-	$pfb_rep_config = config_get_path('installedpackages/pfblockerngreputation/config/0', []); // foreign key — out of ADR-29 gateway scope, static display section (no registered keys)
+	$pfb_rep_config = config_get_path('installedpackages/pfblockerngreputation/config/0', []); // section-level read (ccwhite is unregistered); issue #1896 registered the section's three Reputation toggles per-key, this whole-section read stays direct
 
 	$pfb_matchdir_listing = array();
 	foreach (glob("{$pfb['matchdir']}/*.txt") ?: [] as $pfb_f) {

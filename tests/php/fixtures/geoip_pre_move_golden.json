@@ -39,7 +39,8 @@
     "pfblockerng_Proxy_and_Satellite.php": "d7469e2355203eaa46c090127551b36883735800328f19cc6a617eeb568d52b1",
     "pfblockerng_Top_Spammers.php": "9802ff70600cfbf74f8f38d3dc2f2fccc1d60b7c62cb9aa6371b7d3c97fd7a5d"
   },
-  "reputation_empty": "5a61a598cb8d1ac66db93a27e88338f7c28e627df9d3b606a8df7348a30c5984",
-  "reputation_populated": "7dced7a138426dc8dbef7fa5c8f1b740e1459d4ba79e4340b7b3683ed79a0266",
-  "continent_pages_amended": "issue #1845: the generated pages now carry the pfBlockerNG.js cache-buster; the pre-move template is otherwise unchanged"
+  "reputation_empty": "59a4fa81040c5691ddb1b13574dfe3669052530c0947535a74b30bb3af459b4e",
+  "reputation_populated": "dcfe541ef16a5c9c74e8692354351bd9a78b52a17f3f50ea9b1efde42b240568",
+  "continent_pages_amended": "issue #1845: the generated pages now carry the pfBlockerNG.js cache-buster; the pre-move template is otherwise unchanged",
+  "reputation_hashes_amended": "issue #1896: the Reputation section's config_get_path/config_set_path calls now route through PfbConfig::readSection()/writeSection(); the pre-move template is otherwise unchanged"
 }
