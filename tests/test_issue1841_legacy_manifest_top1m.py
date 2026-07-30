@@ -29,7 +29,7 @@ def _manifest(
     tmp_path: Path,
     *,
     top1m_enabled: bool,
-    top1m_list: list[str] | None,
+    top1m_list: object | None,
 ) -> str:
     """A manifest/v1 with one raw feed; ``top1m_list`` present == pre-#1542 vintage."""
     (tmp_path / "feed.raw").write_text("blocked.example\npopularcdn.com\n", encoding="utf-8")
@@ -104,6 +104,20 @@ def test_current_manifest_reads_the_sidecar_and_warns_about_nothing(
     assert result is not None
     assert set(result.white_db) == {"sidecar.example"}
     assert RETIRED_KEY_WARNING not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [["popularcdn.com", 42], "popularcdn.com", {"popularcdn.com": True}],
+    ids=["non-string-entry", "bare-string", "object"],
+)
+def test_malformed_legacy_top1m_list_still_fails_the_generation(tmp_path: Path, malformed: object) -> None:
+    """Tolerating the retired key does not tolerate a corrupt one: the ``list[str]``
+    shape contract of the sibling config lists still governs it, and a violation is a
+    generation failure, not a silently ignored field."""
+    manifest = _manifest(tmp_path, top1m_enabled=True, top1m_list=malformed)
+
+    assert P.dnsbl_build_from_manifest(manifest) is None
 
 
 def test_legacy_manifest_prefers_its_own_inline_list_over_a_stray_sidecar(tmp_path: Path) -> None:
