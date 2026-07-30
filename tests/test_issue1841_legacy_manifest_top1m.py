@@ -81,6 +81,30 @@ def test_legacy_manifest_with_top1m_enabled_keeps_its_top1m_whitelist(tmp_path: 
     assert result.white_db["popularcdn.com"]["important"] is True
 
 
+@pytest.mark.parametrize(
+    "comma_framed",
+    [".legacy.example,,", ",legacy.example,,", ",www.legacy.example,,"],
+    ids=["wildcard-record", "exact-record", "www-record"],
+)
+def test_real_legacy_vintage_records_build_and_whitelist_nothing(
+    tmp_path: Path, comma_framed: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The producer vintage that emitted ``top1m_list`` wrote comma-framed records, and
+    the consumer of that vintage stored them as exact keys no query could ever match.
+    Reading the inline list reproduces that inert whitelist rather than inventing
+    coverage: the generation builds, the retirement is announced, nothing is allowed --
+    the same outcome the sidecar path pins for these records
+    (test_issue1542_top1m_fixed_file.py::test_enabled_rejects_retired_comma_framed_top1m_lines)."""
+    manifest = _manifest(tmp_path, top1m_enabled=True, top1m_list=[comma_framed])
+
+    result = P.dnsbl_build_from_manifest(manifest)
+
+    assert result is not None, "a real legacy manifest must still load its feeds"
+    assert "blocked.example" in result.data_db
+    assert result.white_db == {}, f"retired TOP1M record became a whitelist key: {result.white_db!r}"
+    assert RETIRED_KEY_WARNING in capsys.readouterr().err
+
+
 def test_legacy_manifest_warns_once_about_the_retired_key(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The tolerated retirement is operator-visible -- one warning, not silence."""
     manifest = _manifest(tmp_path, top1m_enabled=True, top1m_list=["popularcdn.com"])
