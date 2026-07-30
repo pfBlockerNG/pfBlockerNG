@@ -4255,7 +4255,9 @@ function sync_package_pfblockerng($cron='') {
 		// discarded by it; a single registered-key write needs no whole-config
 		// array_replace_recursive() merge. ADR-29: registered key -> PfbConfig.
 		config_read_file(FALSE, TRUE);
-		PfbConfig::write('pfb_reuse', PfbToggle::Off);
+		// issue #1895: this update-apply pass runs with no web session in scope, so the
+		// registered-field write asserts as a system caller, not a page privilege.
+		PfbConfig::writeSystem('pfb_reuse', PfbToggle::Off);
 		write_config('pfBlockerNG: save settings');
 
 		pfb_logger("... completed", 1);

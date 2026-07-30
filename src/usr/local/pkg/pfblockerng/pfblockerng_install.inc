@@ -122,7 +122,7 @@ if (
 	// Reset saved wizard configuration.
 	config_del_path('pfblockerng_wizard'); // foreign key — out of ADR-29 gateway scope (root-level, not installedpackages/pfblockerng*)
 
-	PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb_dnsbl_config);
+	PfbConfig::writeSectionSystem('installedpackages/pfblockerngdnsblsettings/config/0', $pfb_dnsbl_config);
 	write_config('Migrated old pfBlockerNG VIP configuraiton');
 	pfb_global();
 }
@@ -416,7 +416,7 @@ foreach ($upgrade_type as $type) {
 		}
 	}
 	if ($type_ufound) {
-		PfbConfig::writeSection("installedpackages/{$type}/config", $pfb_type_items);
+		PfbConfig::writeSectionSystem("installedpackages/{$type}/config", $pfb_type_items);
 		$ufound = TRUE;
 	}
 }
@@ -500,7 +500,7 @@ if (!empty($pfb_interfaces)) {
 		if (isset($pfb_interfaces['ipsec_action'])) {
 			unset($pfb_interfaces['ipsec_action']);
 		}
-		PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb_interfaces);
+		PfbConfig::writeSectionSystem('installedpackages/pfblockerng/config/0', $pfb_interfaces);
 	}
 }
 
@@ -553,7 +553,7 @@ if ($ufound) {
 	foreach ($et_type as $type => $cats) {
 		$pfb_iqrisk[$type] = implode(',', $cats);
 	}
-	PfbConfig::writeSection('installedpackages/pfblockerngreputation/config/0', $pfb_iqrisk);
+	PfbConfig::writeSectionSystem('installedpackages/pfblockerngreputation/config/0', $pfb_iqrisk);
 } else {
 	update_status(" no changes required ... done.\n");
 }
@@ -585,8 +585,8 @@ if (!empty(pfb_gconfig_operator_view($pfb_gen_section)) && empty($pfb_ip_section
 			unset($pfb['gconfig'][$setting]);
 		}
 	}
-	PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
-	PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
+	PfbConfig::writeSectionSystem('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
+	PfbConfig::writeSectionSystem('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 	update_status(" saving new changes ... done.\n");
 }
 else {
@@ -641,7 +641,7 @@ if (!isset($pfb_ip_cfg['v4suppression'])) {
 			// ADR-53: write via the same section array read above (a bulk migration
 			// write alongside the rest of $pfb_ip_cfg, not a lone per-field save).
 			$pfb_ip_cfg['v4suppression'] = pfb_text_area_encode($customlist) ?: '';
-			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb_ip_cfg);
+			PfbConfig::writeSectionSystem('installedpackages/pfblockerngipsettings/config/0', $pfb_ip_cfg);
 			// unset($config['aliases']['alias'][$key]);
 			$ufound = TRUE;
 			break;
@@ -670,7 +670,7 @@ $pfb_gcfg = pfb_gconfig_operator_view($pfb_gcfg);
 $pfb_gcfg = empty($pfb_gcfg) ? NULL : $pfb_gcfg;
 $pfb_feed_default = pfb_feed_filter_install_default($pfb_gcfg);
 if ($pfb_feed_default !== null) {
-	PfbConfig::write('pfb_feed_internal_filter', $pfb_feed_default);
+	PfbConfig::writeSystem('pfb_feed_internal_filter', $pfb_feed_default);
 }
 
 // ADR-40: grandfather an already-configured install to 'replace' (pre-ADR-40 full -T replace) so
@@ -678,7 +678,7 @@ if ($pfb_feed_default !== null) {
 // default. Run-once via the !isset guard in pfb_alias_delta_mode_install_default().
 $pfb_delta_default = pfb_alias_delta_mode_install_default($pfb_gcfg);
 if ($pfb_delta_default !== null) {
-	PfbConfig::write('pfb_alias_delta_mode', $pfb_delta_default);
+	PfbConfig::writeSystem('pfb_alias_delta_mode', $pfb_delta_default);
 }
 
 // Convert dnsbl_info CSV file to SQLite3 database format
@@ -797,7 +797,7 @@ if (!empty(PfbConfig::readSection('installedpackages/pfblockerngdnsbleasylist'))
 
 		$dnsblcfg   = PfbConfig::readSection('installedpackages/pfblockerngdnsbl/config');
 		$dnsblcfg[] = $add;
-		PfbConfig::writeSection('installedpackages/pfblockerngdnsbl/config', $dnsblcfg);
+		PfbConfig::writeSectionSystem('installedpackages/pfblockerngdnsbl/config', $dnsblcfg);
 	}
 
 	// Remove Previous EasyList configuration
@@ -824,7 +824,7 @@ if (!empty($doh_config)) {
 			$doh_config['safesearch_doh_list'] = 'use-application-dns.net';
 		}
 		unset($doh_config['safesearch_firefoxdoh']);
-		PfbConfig::writeSection('installedpackages/pfblockerngsafesearch', $doh_config);
+		PfbConfig::writeSectionSystem('installedpackages/pfblockerngsafesearch', $doh_config);
 	}
 }
 
@@ -842,7 +842,7 @@ $ufound = FALSE;
 $doh_list_migrated = pfb_ss_doh_list_yandex_migrate(PfbConfig::read('safesearch_doh_list'));
 if ($doh_list_migrated !== NULL) {
 	$ufound = TRUE;
-	PfbConfig::write('safesearch_doh_list', $doh_list_migrated);
+	PfbConfig::writeSystem('safesearch_doh_list', $doh_list_migrated);
 }
 
 if ($ufound) {
@@ -868,8 +868,8 @@ if (!empty($pfb_maxmind_gen) && !isset($pfb_maxmind_ip['maxmind_key'])) {
 		}
 	}
 	if ($ufound) {
-		PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb_maxmind_ip);
-		PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $maxmind_config);
+		PfbConfig::writeSectionSystem('installedpackages/pfblockerngipsettings/config/0', $pfb_maxmind_ip);
+		PfbConfig::writeSectionSystem('installedpackages/pfblockerng/config/0', $maxmind_config);
 	}
 }
 

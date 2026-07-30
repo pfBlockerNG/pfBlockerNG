@@ -49,7 +49,9 @@ final class InstallGrandfatherChokepointTest extends TestCase
 			if (!preg_match(
 				'/(\$pfb_gcfg = PfbConfig::readSection\(\'installedpackages\/pfblockerng\/config\/0\'\);\n'
 				. '.*?'
-				. 'PfbConfig::write\(\'pfb_alias_delta_mode\', \$pfb_delta_default\);\n\}\n)/s',
+				// issue #1895: install.inc's writes are system-context (no web session),
+				// converted to the writeSystem() escape hatch.
+				. 'PfbConfig::writeSystem\(\'pfb_alias_delta_mode\', \$pfb_delta_default\);\n\}\n)/s',
 				$src,
 				$m
 			)) {

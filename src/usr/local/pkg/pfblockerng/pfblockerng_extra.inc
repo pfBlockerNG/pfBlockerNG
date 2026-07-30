@@ -428,7 +428,11 @@ function pfb_cfg_top1m_source_write(PfbTop1mSource|string $source): string
  * Write adapter: callable(<enum|string> $value): string — runtime value -> stored string.
  * null adapter = plain string (identity; no conversion).
  *
- * @return array<string,array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null}>
+ * Optional 'write_priv': overrides PfbConfig::WRITE_PRIV_DEFAULT for this field's
+ * write-authorization check (issue #1895). Absent for every entry except
+ * 'pfb_software_check' (the #485 Software-page secondary gate).
+ *
+ * @return array<string,array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null,write_priv?:string}>
  */
 function pfb_cfg_registry(): array
 {
@@ -651,6 +655,9 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
+			// issue #1895: the #485 Software-page secondary gate -- this field's write
+			// authorization is 'pkg_mgr_installed.php', not the package's own general page.
+			'write_priv'    => 'pkg_mgr_installed.php',
 		],
 
 		// Internal-address feed-host filter toggle: 'on'|'off'. Default 'on' (new install).
@@ -1319,18 +1326,35 @@ function pfb_dnsbl_webpage(): string
  *
  * API:
  *   PfbConfig::read($key)                          — read one field
- *   PfbConfig::write($key, $value)                 — write one field
+ *   PfbConfig::write($key, $value)                 — write one field, gated by the
+ *                                                     field's write_priv (issue #1895)
  *   PfbConfig::delete($key)                        — delete one field
  *   PfbConfig::readSection($section)               — read a whole section array
  *   PfbConfig::writeSection($section, $data)       — write a section array, normalising
  *                                                     its registered fields through their
- *                                                     adapters (issue #930)
+ *                                                     adapters (issue #930), gated the same
+ *                                                     as write() per registered field
  *   PfbConfig::deleteSection($section)             — delete a whole section
+ *   PfbConfig::writeSystem($key, $value)           — write one field with NO privilege
+ *                                                     check, for no-session system callers
+ *                                                     (cron/install/migrations/CLI/core
+ *                                                     hooks; issue #1895)
+ *   PfbConfig::writeSectionSystem($section, $data) — writeSection() with NO privilege check,
+ *                                                     same system-caller contract
+ *
+ * Authorization model (issue #1895): write()/writeSection() enforce a per-field page
+ * privilege via isAllowedPage(), fail-closed when that check is undefined or false --
+ * a system-context caller with no web session must say so explicitly via the
+ * writeSystem()/writeSectionSystem() escape hatch, never rely on a silent pass.
  *
  * @see pfb_cfg_registry()
  */
 final class PfbConfig
 {
+	// issue #1895: the package's own general-settings page -- the default write-authorization
+	// page privilege for every registered field that does not declare its own 'write_priv'.
+	private const WRITE_PRIV_DEFAULT = 'pfblockerng/pfblockerng_general.php';
+
 	/**
 	 * Read a single registered field.
 	 *
@@ -1358,18 +1382,37 @@ final class PfbConfig
 	 * stored string) before calling config_set_path. Does NOT call
 	 * write_config() — callers must persist when appropriate.
 	 *
+	 * Enforces the field's write_priv page privilege (issue #1895) — a no-session
+	 * system caller (cron/install/migrations/CLI/core hooks) must use writeSystem().
+	 *
+	 * @param  string $key   The exact config.xml field key.
+	 * @param  mixed  $value Runtime value (enum or string).
+	 * @throws InvalidArgumentException When $key is not in the registry.
+	 * @throws RuntimeException         When the caller lacks the field's write_priv.
+	 */
+	public static function write(string $key, mixed $value): void
+	{
+		$entry = self::entry($key);
+		self::assertWriteAllowed($key, $entry);
+		self::writeRaw($key, $value);
+	}
+
+	/**
+	 * Write a single registered field with NO privilege check.
+	 *
+	 * For system-context callers with no web session -- cron, the installer,
+	 * migrations, CLI tooling, pfSense-core hooks (issue #1895). isAllowedPage()
+	 * is unreachable/meaningless in those contexts, so write() would fail-closed
+	 * on them; this is the explicit escape hatch for that legitimate case. Never
+	 * callable from src/usr/local/www/ (enforced by RequireConfigGatewaySniff).
+	 *
 	 * @param  string $key   The exact config.xml field key.
 	 * @param  mixed  $value Runtime value (enum or string).
 	 * @throws InvalidArgumentException When $key is not in the registry.
 	 */
-	public static function write(string $key, mixed $value): void
+	public static function writeSystem(string $key, mixed $value): void
 	{
-		$entry   = self::entry($key);
-		$path    = $entry['section'] . '/' . $key;
-		$adapter = $entry['write_adapter'];
-		$value   = self::notConfigured($entry, $value);
-		$stored  = ($adapter !== NULL) ? $adapter($value) : (string) $value;
-		config_set_path($path, $stored);
+		self::writeRaw($key, $value);
 	}
 
 	/**
@@ -1432,6 +1475,74 @@ final class PfbConfig
 	 */
 	public static function writeSection(string $section, array $data): void
 	{
+		// ALL privilege checks run BEFORE any mutation (issue #1895): a section blob can
+		// carry several registered fields with different write_priv values, and a later
+		// field failing its check must never leave an earlier field's config_set_path
+		// already applied. Registered fields only -- a key registered to a DIFFERENT
+		// section, or not registered at all, is foreign data and carries no gate here.
+		foreach (pfb_cfg_registry() as $key => $entry) {
+			if ($entry['section'] !== $section || !array_key_exists($key, $data)) {
+				continue;
+			}
+			self::assertWriteAllowed($key, $entry);
+		}
+		self::writeSectionRaw($section, $data);
+	}
+
+	/**
+	 * writeSection() with NO privilege check — see writeSystem() for the contract.
+	 *
+	 * @param string $section  The full config.xml section path.
+	 * @param array  $data     Section data to persist.
+	 */
+	public static function writeSectionSystem(string $section, array $data): void
+	{
+		self::writeSectionRaw($section, $data);
+	}
+
+	/**
+	 * Delete a whole section (e.g. during package removal / wipe).
+	 *
+	 * Equivalent to config_del_path($section).
+	 *
+	 * @param string $section  The full config.xml section path.
+	 */
+	public static function deleteSection(string $section): void
+	{
+		config_del_path($section);
+	}
+
+	// -----------------------------------------------------------------------
+	// Private helpers
+	// -----------------------------------------------------------------------
+
+	/**
+	 * write() body proper, with NO privilege check — shared by write() and
+	 * writeSystem() (issue #1895).
+	 *
+	 * @param  string $key   The exact config.xml field key.
+	 * @param  mixed  $value Runtime value (enum or string).
+	 * @throws InvalidArgumentException When $key is not in the registry.
+	 */
+	private static function writeRaw(string $key, mixed $value): void
+	{
+		$entry   = self::entry($key);
+		$path    = $entry['section'] . '/' . $key;
+		$adapter = $entry['write_adapter'];
+		$value   = self::notConfigured($entry, $value);
+		$stored  = ($adapter !== NULL) ? $adapter($value) : (string) $value;
+		config_set_path($path, $stored);
+	}
+
+	/**
+	 * writeSection() body proper, with NO privilege check — shared by writeSection()
+	 * and writeSectionSystem() (issue #1895).
+	 *
+	 * @param string $section  The full config.xml section path.
+	 * @param array  $data     Section data to persist.
+	 */
+	private static function writeSectionRaw(string $section, array $data): void
+	{
 		foreach (pfb_cfg_registry() as $key => $entry) {
 			if ($entry['section'] !== $section) {
 				continue;
@@ -1450,20 +1561,40 @@ final class PfbConfig
 	}
 
 	/**
-	 * Delete a whole section (e.g. during package removal / wipe).
+	 * Enforce the field's write_priv page privilege (issue #1895).
 	 *
-	 * Equivalent to config_del_path($section).
+	 * Authorization is a property of the WRITE, not the call site: this class is
+	 * pulled into essentially every page of the package (and several core hooks)
+	 * through pfblockerng_extra.inc, so any code with the include in scope can reach
+	 * a registered-field write. A page's own isAllowedPage() gate protects only that
+	 * page's request path -- nothing stops a future caller elsewhere from invoking
+	 * the writer with no gate at all. Re-asserting the privilege here makes it a
+	 * property of the write itself.
 	 *
-	 * @param string $section  The full config.xml section path.
+	 * Fails CLOSED when isAllowedPage() is undefined or returns FALSE. priv.inc (the
+	 * function's home) is only ever loaded on the web auth include chain, so in a
+	 * no-session context (cron, install, migrations, CLI, a pfSense-core hook) the
+	 * function is simply absent; treating an undefined check the same as an explicit
+	 * refusal is deliberate -- a silent pass (or a silent no-op write) is exactly the
+	 * trap issue #1895 documents. A legitimate system-context caller must say so
+	 * explicitly, via PfbConfig::writeSystem()/writeSectionSystem().
+	 *
+	 * @param  string $key    The exact config.xml field key (named in the exception).
+	 * @param  array  $entry  The registry entry (consulted for its optional 'write_priv').
+	 * @throws RuntimeException When the caller lacks the field's required page privilege.
 	 */
-	public static function deleteSection(string $section): void
+	private static function assertWriteAllowed(string $key, array $entry): void
 	{
-		config_del_path($section);
+		$priv = $entry['write_priv'] ?? self::WRITE_PRIV_DEFAULT;
+		if (!function_exists('isAllowedPage') || !isAllowedPage($priv)) {
+			throw new RuntimeException(
+				"PfbConfig: write of key '{$key}' requires page privilege '{$priv}' "
+				. '(isAllowedPage() denied or undefined). System-context callers with no '
+				. 'web session (cron/install/migrations/CLI/core hooks) must use '
+				. 'PfbConfig::writeSystem()/writeSectionSystem() instead.'
+			);
+		}
 	}
-
-	// -----------------------------------------------------------------------
-	// Private helpers
-	// -----------------------------------------------------------------------
 
 	/**
 	 * Substitute the registered default for a "not configured" value (issue #1887).
@@ -1501,7 +1632,7 @@ final class PfbConfig
 	 * Look up a registry entry, throwing on an unregistered key.
 	 *
 	 * @param  string $key
-	 * @return array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null}
+	 * @return array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null,write_priv?:string}
 	 * @throws InvalidArgumentException
 	 */
 	private static function entry(string $key): array
@@ -1739,7 +1870,9 @@ function pfb_settings_family_record(string $family): bool
 		return FALSE;
 	}
 	try {
-		PfbConfig::write('settings_family', $family);
+		// issue #1895: called from install/migration/upgrade paths with no web session --
+		// a plain write() would silently fail-closed here and this catch would swallow it.
+		PfbConfig::writeSystem('settings_family', $family);
 		write_config('pfBlockerNG: record settings family');
 		return TRUE;
 	} catch (Throwable) {
@@ -1935,7 +2068,8 @@ function pfb_run_migrations(): void
 		$cfg    = PfbConfig::readSection($migration['section']);
 		$result = ($migration['apply'])($cfg);
 		if ($result !== NULL) {
-			PfbConfig::writeSection($migration['section'], $result);
+			// issue #1895: upgrade migrations run with no web session in scope.
+			PfbConfig::writeSectionSystem($migration['section'], $result);
 			write_config($migration['message']);
 		}
 	}
@@ -1995,7 +2129,11 @@ function pfb_alias_rename_followup(string $old_name, string $new_name): bool
 		}
 
 		if ($section_dirty) {
-			PfbConfig::writeSection($path, $rows);
+			// issue #1895: this function runs from pfSense's firewall_aliases_edit
+			// pre_write_config hook, gated only by the core firewall-alias privilege --
+			// never a pfBlockerNG page privilege -- so a plain writeSection() here would
+			// break that supported path. System-context write is correct, not a workaround.
+			PfbConfig::writeSectionSystem($path, $rows);
 		}
 	}
 
@@ -2036,7 +2174,7 @@ function pfb_alias_rename_followup(string $old_name, string $new_name): bool
 		}
 
 		if ($section_dirty) {
-			PfbConfig::writeSection($path, $cfg);
+			PfbConfig::writeSectionSystem($path, $cfg);
 		}
 	}
 
