@@ -10,16 +10,30 @@ use PHPUnit\Framework\TestCase;
  * escape hatch for legitimate no-session system callers (cron/install/migrations/
  * CLI/core hooks), where isAllowedPage() is undefined or meaningless.
  *
- * Coverage matrix rows A-I (see the issue #1895 step-1 brief):
+ * Coverage matrix rows A-L (see the issue #1895 step-1 brief, and the delta-aware
+ * addendum found reviewing #1895 against pfblockerng_general.php's read-modify-write
+ * composition -- rows J-L):
  *   A - write() blocked by the default privilege: exception + stored value unchanged.
  *   B - write() allowed by the default privilege: succeeds, canonical token stored.
  *   C - write() consults the per-field write_priv override, not the default.
  *   D - write() succeeds once the per-field override is allowed.
- *   E - writeSection() blocked: exception, and the WHOLE section is unmodified.
+ *   E - writeSection() blocked: exception, and the WHOLE section is unmodified
+ *       (fixture is a REAL value change, not merely a present field, so the
+ *       delta-aware gate below still enforces refusal).
  *   F - writeSection() allowed: same normalisation/pass-through as before the change.
  *   G - writeSystem() bypasses the check even with every page disallowed.
  *   H - writeSectionSystem() bypasses the check even with every page disallowed.
  *   I - parity: writeSystem() stores byte-identical value to an allowed write().
+ *   J - writeSection() delta-aware pass-through: an unrelated field changes, a
+ *       privilege-gated field rides along UNCHANGED -- must succeed (the composition
+ *       bug this addendum fixes: a General-page save must not trip on
+ *       pfb_software_check's pass-through value).
+ *   K - same seeding as J, but the privilege-gated field's value actually CHANGES --
+ *       enforcement is retained: exception, section unmodified.
+ *   L - equivalence subtlety: the privilege-gated field is ABSENT from stored config
+ *       entirely; the incoming blob carries the registered default -- canonicalises
+ *       identical to "unchanged", so it is a pass-through too (notConfigured()'s
+ *       identity riding the delta comparison).
  */
 final class CfgWriteAuthorizationTest extends TestCase
 {
@@ -150,6 +164,15 @@ final class CfgWriteAuthorizationTest extends TestCase
 		// General page allowed (pfb_keep/enable_cb would pass), but the
 		// pfb_software_check override is blocked -- the whole section write must
 		// still be refused, and none of it -- not even pfb_keep -- may land.
+		//
+		// NOTE (delta-aware addendum): pfb_software_check's incoming value below
+		// ('off') is a REAL change from its stored baseline ('on') -- this is
+		// deliberate. The delta-aware gate (assertWriteAllowedOnChange()) only
+		// skips the privilege assertion for an UNCHANGED pass-through value; a
+		// fixture where the denied field's incoming value equalled its stored
+		// value would now (correctly) succeed instead of pinning refusal, which
+		// would silently defeat this test. See rows J/K/L below for the
+		// pass-through/real-change split this addendum adds.
 		$GLOBALS['pfb_test_allowed_pages'] = [
 			'pfblockerng/pfblockerng_general.php' => true,
 			'pkg_mgr_installed.php'               => false,
@@ -287,6 +310,109 @@ final class CfgWriteAuthorizationTest extends TestCase
 
 		$this->assertSame($expected, $actual,
 			'writeSystem() must store the same value an allowed write() would, byte-identical'
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// J - writeSection() delta-aware pass-through: THE composition-bug regression.
+	// -----------------------------------------------------------------------
+
+	public function testWriteSectionUnchangedPrivilegedFieldPassesThroughOnUnrelatedEdit(): void
+	{
+		$baseline = [
+			'pfb_keep'           => 'on',
+			'pfb_software_check' => 'on',
+		];
+		config_set_path(self::GEN, $baseline);
+
+		// A scoped operator: allowed on the General page, denied on the Software page.
+		// pfb_software_check's write_priv override ('pkg_mgr_installed.php') is denied.
+		$GLOBALS['pfb_test_allowed_pages'] = [
+			'pfblockerng/pfblockerng_general.php' => true,
+			'pkg_mgr_installed.php'                => false,
+		];
+
+		// The real General-page shape: whole-section readSection() -> modify ONE
+		// unrelated field -> writeSection(). pfb_software_check rides along unchanged.
+		$data              = PfbConfig::readSection(self::GEN);
+		$data['pfb_keep']  = 'off';
+
+		PfbConfig::writeSection(self::GEN, $data);
+
+		$this->assertSame('off', config_get_path(self::GEN . '/pfb_keep'),
+			'the unrelated, actually-changed field must persist canonically'
+		);
+		$this->assertSame('on', config_get_path(self::GEN . '/pfb_software_check'),
+			'an UNCHANGED pass-through of a privilege-gated field must not trip its '
+			. 'write_priv gate -- the #1895 composition bug this addendum fixes'
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// K - same seeding as J, but the privilege-gated field's value actually changes.
+	// -----------------------------------------------------------------------
+
+	public function testWriteSectionRealChangeOfPrivilegedFieldStillEnforcesGate(): void
+	{
+		$baseline = [
+			'pfb_keep'           => 'on',
+			'pfb_software_check' => 'on',
+		];
+		config_set_path(self::GEN, $baseline);
+
+		$GLOBALS['pfb_test_allowed_pages'] = [
+			'pfblockerng/pfblockerng_general.php' => true,
+			'pkg_mgr_installed.php'                => false,
+		];
+
+		// This time the operator (or a crafted POST) actually flips pfb_software_check.
+		$data                       = PfbConfig::readSection(self::GEN);
+		$data['pfb_software_check'] = 'off';
+
+		try {
+			PfbConfig::writeSection(self::GEN, $data);
+			$this->fail('expected RuntimeException, none thrown');
+		} catch (RuntimeException $e) {
+			$this->assertStringContainsString('pfb_software_check', $e->getMessage(),
+				'exception message must name the key'
+			);
+		}
+
+		$this->assertSame($baseline, config_get_path(self::GEN),
+			'a REAL change to a privilege-gated field must still refuse the whole section '
+			. 'write -- enforcement is retained, the delta-aware gate only skips unchanged values'
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// L - equivalence subtlety: stored ABSENT canonicalises identical to the incoming
+	//     registered default.
+	// -----------------------------------------------------------------------
+
+	public function testWriteSectionAbsentStoredFieldEqualsIncomingDefaultIsPassThrough(): void
+	{
+		// pfb_software_check is entirely ABSENT from the stored section -- never saved
+		// on this box before. notConfigured() must resolve the missing key to the
+		// registered default ('on'), the same as it would for an explicit 'on'.
+		config_set_path(self::GEN, ['pfb_keep' => 'on']);
+
+		$GLOBALS['pfb_test_allowed_pages'] = [
+			'pfblockerng/pfblockerng_general.php' => true,
+			'pkg_mgr_installed.php'                => false,
+		];
+
+		PfbConfig::writeSection(self::GEN, [
+			'pfb_keep'           => 'off',
+			// The registered default -- canonically identical to "absent".
+			'pfb_software_check' => 'on',
+		]);
+
+		$this->assertSame('off', config_get_path(self::GEN . '/pfb_keep'),
+			'the unrelated, actually-changed field must persist canonically'
+		);
+		$this->assertSame('on', config_get_path(self::GEN . '/pfb_software_check'),
+			'absent-stored must canonicalise identically to the registered default and be '
+			. 'treated as an unchanged pass-through, not an authorization event'
 		);
 	}
 }
