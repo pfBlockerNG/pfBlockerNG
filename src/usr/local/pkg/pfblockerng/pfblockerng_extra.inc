@@ -1332,8 +1332,12 @@ function pfb_dnsbl_webpage(): string
  *   PfbConfig::readSection($section)               — read a whole section array
  *   PfbConfig::writeSection($section, $data)       — write a section array, normalising
  *                                                     its registered fields through their
- *                                                     adapters (issue #930), gated the same
- *                                                     as write() per registered field
+ *                                                     adapters (issue #930), gated per
+ *                                                     registered field like write() --
+ *                                                     but DELTA-AWARE (issue #1895
+ *                                                     addendum): a present field only
+ *                                                     asserts its write_priv when its
+ *                                                     canonical value actually changes
  *   PfbConfig::deleteSection($section)             — delete a whole section
  *   PfbConfig::writeSystem($key, $value)           — write one field with NO privilege
  *                                                     check, for no-session system callers
@@ -1346,6 +1350,12 @@ function pfb_dnsbl_webpage(): string
  * privilege via isAllowedPage(), fail-closed when that check is undefined or false --
  * a system-context caller with no web session must say so explicitly via the
  * writeSystem()/writeSectionSystem() escape hatch, never rely on a silent pass.
+ * writeSection() adds a delta-aware carve-out on top (issue #1895 addendum): a
+ * registered field present in the section blob is an authorization event only when
+ * its canonical incoming value differs from its canonical currently-stored value --
+ * an unchanged read-modify-write pass-through (e.g. the General settings page saving
+ * an unrelated field) is not a write of that field. write() has no such carve-out and
+ * stays strict -- see assertWriteAllowedOnChange().
  *
  * @see pfb_cfg_registry()
  */
@@ -1384,6 +1394,14 @@ final class PfbConfig
 	 *
 	 * Enforces the field's write_priv page privilege (issue #1895) — a no-session
 	 * system caller (cron/install/migrations/CLI/core hooks) must use writeSystem().
+	 *
+	 * Unlike writeSection() (see its docblock), this check is STRICT, not delta-aware:
+	 * an explicit single-key write() call is always an authorization event, whether or
+	 * not the value actually changes, because there is no read-modify-write section
+	 * saver behind it that could be carrying an unrelated field's unchanged value along
+	 * for the ride. writeSection()'s pass-through carve-out exists specifically for that
+	 * read-modify-write case (e.g. the General settings page); write() has no such case
+	 * to carve out.
 	 *
 	 * @param  string $key   The exact config.xml field key.
 	 * @param  mixed  $value Runtime value (enum or string).
@@ -1470,6 +1488,14 @@ final class PfbConfig
 	 * string) — calling the write adapter directly on a raw array or NULL
 	 * would TypeError (write adapters are typed EnumClass|string).
 	 *
+	 * Privilege gate is DELTA-AWARE (issue #1895 addendum): a registered field
+	 * present in $data is only an authorization event when its canonical
+	 * incoming value differs from the canonical currently-stored value --
+	 * see assertWriteAllowedOnChange(). This is what write() does NOT do: a
+	 * single-key write() call is always an explicit authorization event, delta
+	 * or not, because there is no read-modify-write section saver behind it to
+	 * carry an unrelated field's unchanged value along for the ride.
+	 *
 	 * @param string $section  The full config.xml section path.
 	 * @param array  $data     Section data to persist.
 	 */
@@ -1484,7 +1510,7 @@ final class PfbConfig
 			if ($entry['section'] !== $section || !array_key_exists($key, $data)) {
 				continue;
 			}
-			self::assertWriteAllowed($key, $entry);
+			self::assertWriteAllowedOnChange($key, $entry, $section, $data[$key]);
 		}
 		self::writeSectionRaw($section, $data);
 	}
@@ -1594,6 +1620,82 @@ final class PfbConfig
 				. 'PfbConfig::writeSystem()/writeSectionSystem() instead.'
 			);
 		}
+	}
+
+	/**
+	 * writeSection()'s delta-aware privilege gate for one registered field (issue #1895
+	 * addendum, composition bug found reviewing #1895 against pfblockerng_general.php).
+	 *
+	 * The General settings page does a whole-section readSection() -> modify one field
+	 * -> writeSection() round trip. That carries every OTHER registered field's value
+	 * along unchanged. Once assertWriteAllowed() ran unconditionally for every present
+	 * field, a field with a write_priv override the current page doesn't hold (e.g.
+	 * pfb_software_check, gated to 'pkg_mgr_installed.php') would trip on its own
+	 * pass-through value even though nothing about it changed -- a supported save flow
+	 * throwing on an unrelated edit. Fix: a present field is an authorization event ONLY
+	 * when its canonical incoming value differs from the canonical currently-stored
+	 * value. An unchanged pass-through is not a write of that field in any sense an
+	 * operator would recognise; a real change still asserts the privilege, still BEFORE
+	 * any mutation (self::writeSectionRaw() runs only after every field in the loop has
+	 * cleared this gate).
+	 *
+	 * Both sides are canonicalised through the exact same pipeline write() and
+	 * writeSectionRaw() already use, so this can never disagree with what actually gets
+	 * stored: notConfigured() resolves NULL/'' to the registered default first; an
+	 * adapter-bearing field then round-trips write_adapter(read_adapter($value)) (the
+	 * same normalisation writeSectionRaw()'s loop applies to the incoming side); a plain
+	 * field is cast (string) (matching writeRaw()'s cast). The stored side reads via
+	 * config_get_path() directly (bypassing the registry default, then applying it here)
+	 * -- an absent key canonicalises identically to an explicit registered-default value,
+	 * so a field that has never been saved and a field just re-saved at its default both
+	 * correctly read as "unchanged" against an incoming default.
+	 *
+	 * write() has no equivalent carve-out -- an explicit single-key write() call is
+	 * always an authorization event, changed or not, because there is no read-modify-
+	 * write section saver behind it carrying an unrelated field's value along.
+	 *
+	 * @param  string $key     The exact config.xml field key (named in the exception).
+	 * @param  array  $entry   The registry entry (consulted for its optional 'write_priv').
+	 * @param  string $section The full config.xml section path $key lives under.
+	 * @param  mixed  $incoming The incoming (pre-normalisation) value for $key in the section blob.
+	 * @throws RuntimeException When the field's canonical value actually changes and the
+	 *                          caller lacks its required page privilege.
+	 */
+	private static function assertWriteAllowedOnChange(string $key, array $entry, string $section, mixed $incoming): void
+	{
+		$stored_raw = config_get_path($section . '/' . $key, NULL);
+		if (self::canonicalize($entry, $stored_raw) === self::canonicalize($entry, $incoming)) {
+			return;
+		}
+		self::assertWriteAllowed($key, $entry);
+	}
+
+	/**
+	 * Canonicalise a raw or runtime value for one registered field to the exact stored
+	 * string it would persist as, for the delta comparison in
+	 * assertWriteAllowedOnChange() (issue #1895 addendum).
+	 *
+	 * Mirrors the two normalisation pipelines already in this class byte-for-byte so the
+	 * comparison can never diverge from what an actual write would store:
+	 *   - adapter-bearing field (both read_adapter and write_adapter set, always paired
+	 *     -- see pfb_cfg_registry()): write_adapter(read_adapter(notConfigured($value))),
+	 *     the same round trip writeSectionRaw()'s normalisation loop applies.
+	 *   - plain field: (string) notConfigured($value), matching writeRaw()'s cast.
+	 *
+	 * @param  array $entry  The registry entry.
+	 * @param  mixed $value  Raw stored value (from config_get_path()) or the incoming
+	 *                       section-blob value for this key.
+	 * @return string        The canonical stored form $value would persist as.
+	 */
+	private static function canonicalize(array $entry, mixed $value): string
+	{
+		$value         = self::notConfigured($entry, $value);
+		$read_adapter  = $entry['read_adapter'];
+		$write_adapter = $entry['write_adapter'];
+		if ($read_adapter !== NULL && $write_adapter !== NULL) {
+			return $write_adapter($read_adapter($value));
+		}
+		return (string) $value;
 	}
 
 	/**

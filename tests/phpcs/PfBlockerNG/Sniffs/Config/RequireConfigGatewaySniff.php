@@ -63,6 +63,7 @@ namespace PfBlockerNG\Sniffs\Config;
 
 use PHP_CodeSniffer\Files\File;
 use PHP_CodeSniffer\Sniffs\Sniff;
+use PHP_CodeSniffer\Util\Tokens;
 
 class RequireConfigGatewaySniff implements Sniff
 {
@@ -360,14 +361,17 @@ class RequireConfigGatewaySniff implements Sniff
 			return;
 		}
 
-		// Must be a call (next non-whitespace token is '(').
-		$next = $phpcsFile->findNext(T_WHITESPACE, $stackPtr + 1, NULL, TRUE);
+		// Must be a call (next non-whitespace-or-comment token is '(') -- walking past
+		// Tokens::$emptyTokens (whitespace AND every comment/doc-comment type), not just
+		// T_WHITESPACE, so a comment wedged between the tokens (e.g.
+		// PfbConfig::/*x*/writeSystem(...)) cannot evade the sniff.
+		$next = $phpcsFile->findNext(Tokens::$emptyTokens, $stackPtr + 1, NULL, TRUE);
 		if ($next === FALSE || $tokens[$next]['code'] !== T_OPEN_PARENTHESIS) {
 			return;
 		}
 
-		// Must be a static call: previous non-whitespace token is T_DOUBLE_COLON.
-		$doubleColon = $phpcsFile->findPrevious(T_WHITESPACE, $stackPtr - 1, NULL, TRUE);
+		// Must be a static call: previous non-whitespace-or-comment token is T_DOUBLE_COLON.
+		$doubleColon = $phpcsFile->findPrevious(Tokens::$emptyTokens, $stackPtr - 1, NULL, TRUE);
 		if ($doubleColon === FALSE || $tokens[$doubleColon]['code'] !== T_DOUBLE_COLON) {
 			return;
 		}
@@ -375,7 +379,7 @@ class RequireConfigGatewaySniff implements Sniff
 		// The class name immediately before '::' must be PfbConfig (case-insensitive).
 		// A leading namespace separator further back (e.g. \PfbConfig::) is not
 		// examined and does not disqualify the match.
-		$classToken = $phpcsFile->findPrevious(T_WHITESPACE, $doubleColon - 1, NULL, TRUE);
+		$classToken = $phpcsFile->findPrevious(Tokens::$emptyTokens, $doubleColon - 1, NULL, TRUE);
 		if ($classToken === FALSE || $tokens[$classToken]['code'] !== T_STRING) {
 			return;
 		}

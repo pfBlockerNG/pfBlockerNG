@@ -32,3 +32,17 @@ function pfb_www_writesystem_case_variance()
 	// case-insensitive) — must still be flagged.
 	pfbconfig::WRITESYSTEM('pfb_keep', '30');
 }
+
+function pfb_www_writesystem_comment_before_double_colon()
+{
+	// A comment wedged between the class name and '::' must not evade the
+	// sniff -- it must walk past comment tokens, not just whitespace.
+	PfbConfig/*x*/::writeSystem('pfb_keep', '30');
+}
+
+function pfb_www_writesystem_comment_after_double_colon()
+{
+	// A comment wedged between '::' and the method name must not evade
+	// the sniff either.
+	PfbConfig::/*x*/writeSystem('pfb_keep', '30');
+}

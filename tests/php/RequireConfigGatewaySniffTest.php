@@ -46,8 +46,10 @@ use PHPUnit\Framework\TestCase;
  * against, mirroring the real src/usr/local/www/ tree layout:
  *
  *   tests/phpcs/fixtures/usr/local/www/system_write_violation.php — a www/
- *   path calling PfbConfig::writeSystem() / writeSectionSystem(), plus a
- *   case-varied (pfbconfig::WRITESYSTEM()) call — all three MUST be flagged.
+ *   path calling PfbConfig::writeSystem() / writeSectionSystem(), a
+ *   case-varied (pfbconfig::WRITESYSTEM()) call, and two comment-interleaved
+ *   shapes (a comment between the class name and '::', and one between '::'
+ *   and the method name) — all five MUST be flagged.
  *
  *   tests/phpcs/fixtures/usr/local/www/system_write_compliant.php — the same
  *   www/ path, but PfbConfig::write()/writeSection() (different method),
@@ -105,13 +107,15 @@ final class RequireConfigGatewaySniffTest extends TestCase
 
 	/**
 	 * Run the custom PfBlockerNG standard over an arbitrary file or directory
-	 * (absolute path) and return only the findings matching $source, across
-	 * every file phpcs reports on. Used for CHECK 2's real-tree assertion,
-	 * where the fixture-path convention of findingsFor() does not apply.
+	 * (absolute path) and return the decoded phpcs JSON report, unfiltered.
 	 *
-	 * @return list<array<string, mixed>>
+	 * Split out of findingsForPath() so the real-tree assertion (below) can
+	 * additionally check how many files phpcs actually processed -- a
+	 * zero-file report would make a zero-findings assertion vacuously true.
+	 *
+	 * @return array<string, mixed>
 	 */
-	private function findingsForPath(string $path, string $source): array
+	private function runPhpcsJson(string $path): array
 	{
 		$root = self::repoRoot();
 		$this->assertFileExists($path, "{$path} must exist");
@@ -129,6 +133,18 @@ final class RequireConfigGatewaySniffTest extends TestCase
 		$report = json_decode((string) $json, TRUE);
 		$this->assertIsArray($report, 'phpcs JSON report must decode');
 
+		return $report;
+	}
+
+	/**
+	 * Filter a decoded phpcs JSON report (see runPhpcsJson()) down to the
+	 * findings matching $source, across every file phpcs reports on.
+	 *
+	 * @param  array<string, mixed> $report
+	 * @return list<array<string, mixed>>
+	 */
+	private function extractFindings(array $report, string $source): array
+	{
 		$findings = [];
 		foreach (($report['files'] ?? []) as $file => $data) {
 			$messages = $data['messages'] ?? [];
@@ -140,6 +156,19 @@ final class RequireConfigGatewaySniffTest extends TestCase
 		}
 
 		return $findings;
+	}
+
+	/**
+	 * Run the custom PfBlockerNG standard over an arbitrary file or directory
+	 * (absolute path) and return only the findings matching $source, across
+	 * every file phpcs reports on. Used for CHECK 2's real-tree assertion,
+	 * where the fixture-path convention of findingsFor() does not apply.
+	 *
+	 * @return list<array<string, mixed>>
+	 */
+	private function findingsForPath(string $path, string $source): array
+	{
+		return $this->extractFindings($this->runPhpcsJson($path), $source);
 	}
 
 	/**
@@ -245,9 +274,10 @@ final class RequireConfigGatewaySniffTest extends TestCase
 		);
 
 		$this->assertCount(
-			3,
+			5,
 			$findings,
-			'writeSystem(), writeSectionSystem(), and the case-varied call must all be flagged'
+			'writeSystem(), writeSectionSystem(), the case-varied call, and both '
+			. 'comment-interleaved shapes must all be flagged'
 		);
 
 		$lines = array_column($findings, 'line');
@@ -256,10 +286,12 @@ final class RequireConfigGatewaySniffTest extends TestCase
 		// Line 20: PfbConfig::writeSystem(...)
 		// Line 26: PfbConfig::writeSectionSystem(...)
 		// Line 33: pfbconfig::WRITESYSTEM(...) (case variance)
+		// Line 40: PfbConfig/*x*/::writeSystem(...) (comment before '::')
+		// Line 47: PfbConfig::/*x*/writeSystem(...) (comment after '::')
 		$this->assertSame(
-			[20, 26, 33],
+			[20, 26, 33, 40, 47],
 			$lines,
-			'findings must land on the three static system-write call lines'
+			'findings must land on all five static system-write call lines'
 		);
 
 		foreach ($findings as $finding) {
@@ -329,10 +361,19 @@ final class RequireConfigGatewaySniffTest extends TestCase
 	 */
 	public function testRealWwwTreeHasNoSystemWriteCalls(): void
 	{
-		$findings = $this->findingsForPath(
-			self::repoRoot() . '/src/usr/local/www',
-			self::SOURCE_SYSTEM_WRITE
+		$report = $this->runPhpcsJson(self::repoRoot() . '/src/usr/local/www');
+
+		// Processed-file floor: guards against a vacuous pass (e.g. a wrong path, a
+		// misconfigured --extensions, or phpcs silently skipping everything) where
+		// zero files scanned would trivially satisfy the zero-findings assertion below.
+		$this->assertGreaterThan(
+			0,
+			count($report['files'] ?? []),
+			'phpcs must actually have processed files under src/usr/local/www/ -- a '
+			. 'zero-file report would make the zero-findings assertion below vacuous'
 		);
+
+		$findings = $this->extractFindings($report, self::SOURCE_SYSTEM_WRITE);
 
 		$this->assertSame(
 			[],

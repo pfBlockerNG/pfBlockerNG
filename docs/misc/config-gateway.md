@@ -46,9 +46,20 @@ Authorization is a property of the **write**, not the call site (the
   `RequireConfigGatewaySniff` (`SystemWriteInWww`) refuses the `*System()` variants in
   any file under `src/usr/local/www/`.
 - `delete()` / `deleteSection()` carry no privilege check (out of #1895's scope).
+- **`writeSection()`'s gate is delta-aware** (issue #1895 addendum, found reviewing the
+  composition against `pfblockerng_general.php`'s whole-section readSection → modify one
+  field → writeSection() save): a registered field present in `$data` only asserts its
+  `write_priv` when its canonical incoming value differs from its canonical
+  currently-stored value (both sides run through the same read/write-adapter
+  round-trip); an unchanged read-modify-write pass-through (e.g. `pfb_software_check`
+  riding along untouched while the General page saves an unrelated field) is not an
+  authorization event and is silently skipped. `PfbConfig::write()` stays **strict** — an
+  explicit single-key write is always an authorization event, changed or not, since there
+  is no read-modify-write section saver behind it.
 - Coverage: `tests/php/CfgWriteAuthorizationTest.php` (deny/allow per entry point, the
   per-field override, the priv.inc-loaded CLI-trap regression, write/writeSystem
-  parity) + the sniff fixtures in `tests/php/RequireConfigGatewaySniffTest.php`.
+  parity, the delta-aware pass-through/real-change/absent-vs-default rows) + the sniff
+  fixtures in `tests/php/RequireConfigGatewaySniffTest.php`.
 
 ## Storage adapter rule (ADR-28 §2.2)
 
