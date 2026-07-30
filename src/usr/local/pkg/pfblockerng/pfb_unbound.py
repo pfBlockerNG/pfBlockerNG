@@ -5617,8 +5617,10 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
         if legacy_top1m is not None:
             sys.stderr.write(
                 "[pfBlockerNG]: DNSBL manifest '{}' still carries the retired "
-                "config.top1m_list -- reading TOP1M from it until the next full update "
-                "rewrites the manifest".format(manifest_path)
+                "config.top1m_list -- {} until the next full update rewrites the manifest".format(
+                    manifest_path,
+                    "reading TOP1M from it" if top1m_enabled else "ignoring it (TOP1M is disabled)",
+                )
             )
         if not top1m_enabled:
             top1m_lines: Iterable[str] = ()
