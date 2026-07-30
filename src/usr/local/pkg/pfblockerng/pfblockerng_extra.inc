@@ -709,7 +709,8 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 		],
 
-		// issue #1669 slice C: client-side syntax highlighting for regex list fields
+		// issue #1669 slice C / #1888: client-side editor (syntax highlighting, line numbers,
+		// linting, undo/redo) for list/script fields
 		// (CodeMirror 6), gating asset emission on pfblockerng_dnsbl.php. NEW feature --
 		// no prior behaviour to preserve, so both fresh installs and upgraders take the
 		// same 'on' absent-default; no grandfather seed is needed (config-gateway.md's

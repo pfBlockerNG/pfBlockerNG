@@ -91,7 +91,7 @@ $pconfig['log_syslog']			= PfbConfig::read('log_syslog')->value;
 // the registered default ('0') applies when the key is absent (new install / upgrade).
 $pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('pfb_log_trim_margin_pct');
 
-// issue #1669 slice C: client-side syntax highlighting toggle (default on). Read via
+// issue #1669 slice C / #1888: client-side editor toggle (default on). Read via
 // PfbConfig::read so the registered default applies; pfb_syntax_highlight uses the
 // LENIENT adapter (default-on checkbox, mirrors pfb_keep) -- extract the scalar .value
 // for pfb_cfg_lenient_read() at render.
@@ -359,9 +359,10 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('Client-side editor for the list and script fields (e.g. the DNSBL Regex '
 		. 'List, custom lists, IP suppression lists, hook scripts): syntax highlighting, '
-		. 'line numbers, inline linting and undo/redo. Unchecking this leaves those '
-		. 'fields as plain text boxes and skips loading the editor assets &mdash; useful '
-		. 'for low-end client machines. Validation always stays server-side either way.'
+		. 'line numbers and undo/redo everywhere, plus inline linting on the DNSBL Regex '
+		. 'List and hook scripts. Unchecking this leaves those fields as plain text boxes '
+		. 'and skips loading the editor assets &mdash; useful for low-end client machines. '
+		. 'Validation always stays server-side either way.'
 );
 
 $group = new Form_Group('CRON Settings');

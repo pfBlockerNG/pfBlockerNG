@@ -77,8 +77,7 @@ class Page:
 # default and a DNSBL view under ?type=dnsbl; both are listed.
 PAGE_TABLE: tuple[Page, ...] = (
     # "Advanced Text Editor" is the issue #1888 label of the pfb_syntax_highlight checkbox
-    # (renamed from "Syntax Highlighting") — a third marker so the gate proves the renamed
-    # field label actually reaches the shipped page.
+    # (renamed from "Syntax Highlighting") — a third marker for the rendered field label.
     Page(
         "general",
         "/pfblockerng/pfblockerng_general.php",

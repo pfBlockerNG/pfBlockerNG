@@ -128,7 +128,15 @@ final class GeneralSyntaxHighlightToggleWiringTest extends TestCase
 			$m
 		);
 		$this->assertSame(1, $matched, 'expected a setHelp() call on the pfb_syntax_highlight checkbox');
-		foreach (['syntax highlighting', 'line numbers', 'linting', 'undo/redo'] as $feature) {
+		foreach ([
+			'syntax highlighting',
+			'line numbers',
+			'linting',
+			'undo/redo',
+			'list and script fields',
+			'plain text boxes',
+			'server-side',
+		] as $feature) {
 			$this->assertStringContainsString(
 				$feature,
 				$m[1],
