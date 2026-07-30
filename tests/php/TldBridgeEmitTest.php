@@ -109,7 +109,7 @@ final class TldBridgeEmitTest extends TestCase
 	// ------------------------------------------------------------------ //
 	// C1 -- ini bridge writer (structural).
 	// ------------------------------------------------------------------ //
-	public function testIniWriterDerivesTldAllowFromDnsblPytld(): void
+	public function testIniWriterDerivesTldAllowFromDnsblTldAllowToggle(): void
 	{
 		$body = $this->functionBody('pfb_unbound_python');
 		$this->assertMatchesRegularExpression(
@@ -119,7 +119,7 @@ final class TldBridgeEmitTest extends TestCase
 		);
 	}
 
-	public function testIniWriterReadsAllFourPytldsConfigFields(): void
+	public function testIniWriterReadsAllFourTldAllowConfigFields(): void
 	{
 		$body = $this->functionBody('pfb_unbound_python');
 		foreach (['tld_allow_gtld', 'tld_allow_cctld', 'tld_allow_itld', 'tld_allow_bgtld'] as $field) {

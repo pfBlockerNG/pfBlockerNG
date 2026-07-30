@@ -11990,6 +11990,18 @@ function pfb_registered_scalars_seed($sections) {
 		$sections = array();
 	}
 
+	// Current name => the retired name it replaced, per section. Row-section renames are
+	// per-feed keys and never registered scalars, so they cannot reach this pass.
+	$retired = array();
+	foreach (PFB_LEGACY_KEY_RENAMES as $spec) {
+		if ($spec['rows']) {
+			continue;
+		}
+		foreach ($spec['keys'] as $old => $new) {
+			$retired[$spec['section']][$new] = $old;
+		}
+	}
+
 	$seeded = array();
 
 	foreach (pfb_cfg_registry() as $key => $entry) {
@@ -11999,6 +12011,16 @@ function pfb_registered_scalars_seed($sections) {
 		$section = $entry['section'];
 		$blob    = $seeded[$section] ?? ($sections[$section] ?? array());
 		if (!is_array($blob) || array_key_exists($key, $blob)) {
+			continue;
+		}
+		// A retired name still sitting in the section means the rename did NOT complete
+		// for this key -- it failed closed on a conflicting pair elsewhere in the map, or
+		// has not run yet. Seeding the current name's default on top would hand that key
+		// a both-present-and-different pair of its own next time, escalating a one-key
+		// recovery into an N-key one and destroying the old-present/new-absent path that
+		// migrates it cleanly once the operator resolves the single real conflict.
+		$old_key = $retired[$section][$key] ?? NULL;
+		if ($old_key !== NULL && array_key_exists($old_key, $blob)) {
 			continue;
 		}
 		$blob[$key]       = $entry['default'];

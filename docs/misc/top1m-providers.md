@@ -80,7 +80,7 @@ under that derived name, then add one `NAME: ${{ secrets.NAME }}` line to the `c
 ## Adding a provider
 
 1. Add a row to `pfb_top1m_providers()` (url/container/parse/header/domain_col/auth/label/licence).
-2. Add its option to `$options_alexa_type` in `pfblockerng_dnsbl.php`; extend `$top1m_text` with
+2. Add its option to `$options_top1m_source` in `pfblockerng_dnsbl.php`; extend `$top1m_text` with
    its licence note if it carries one.
 3. If it needs a token, no code changes are required beyond the descriptor's `auth` field — the
    masked field, its JS toggle, and the CI health-check's classification are all derived from it.
