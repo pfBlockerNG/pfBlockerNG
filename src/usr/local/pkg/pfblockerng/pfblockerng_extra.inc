@@ -1680,7 +1680,12 @@ final class PfbConfig
 	 *   - adapter-bearing field (both read_adapter and write_adapter set, always paired
 	 *     -- see pfb_cfg_registry()): write_adapter(read_adapter(notConfigured($value))),
 	 *     the same round trip writeSectionRaw()'s normalisation loop applies.
-	 *   - plain field: (string) notConfigured($value), matching writeRaw()'s cast.
+	 *   - plain scalar field: (string) notConfigured($value), matching writeRaw()'s cast.
+	 *   - plain NON-scalar (a crafted-POST array riding the section blob):
+	 *     writeSectionRaw() persists it verbatim, so it must compare by SHAPE -- a
+	 *     (string) cast would collapse every array to 'Array', making two different
+	 *     arrays read "unchanged" (skipping the privilege assert for a value that
+	 *     genuinely changes on disk) and emitting an Array-to-string warning.
 	 *
 	 * @param  array $entry  The registry entry.
 	 * @param  mixed $value  Raw stored value (from config_get_path()) or the incoming
@@ -1694,6 +1699,9 @@ final class PfbConfig
 		$write_adapter = $entry['write_adapter'];
 		if ($read_adapter !== NULL && $write_adapter !== NULL) {
 			return $write_adapter($read_adapter($value));
+		}
+		if (!is_scalar($value)) {
+			return 'nonscalar:' . md5(serialize($value));
 		}
 		return (string) $value;
 	}

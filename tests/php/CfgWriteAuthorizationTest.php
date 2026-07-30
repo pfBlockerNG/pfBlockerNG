@@ -415,4 +415,68 @@ final class CfgWriteAuthorizationTest extends TestCase
 			. 'treated as an unchanged pass-through, not an authorization event'
 		);
 	}
+
+	// -----------------------------------------------------------------------
+	// M - non-scalar values under a plain (adapter-less) registered key must
+	//     compare by SHAPE in the delta gate, not by PHP's string cast: a
+	//     (string) cast collapses every array to 'Array' (warning + two
+	//     different arrays comparing "unchanged" while writeSectionRaw()
+	//     persists them verbatim) -- CodeRabbit finding on PR #1903.
+	// -----------------------------------------------------------------------
+
+	public function testWriteSectionNonScalarChangeUnderPlainKeyIsAnAuthorizationEvent(): void
+	{
+		// A crafted-POST array riding a plain registered key (pfb_interval has
+		// NULL/NULL adapters). Stored and incoming arrays DIFFER, so this is a
+		// real change: the delta gate must consult the privilege and refuse.
+		config_set_path(self::GEN, ['pfb_interval' => ['a']]);
+
+		$GLOBALS['pfb_test_allowed_pages'] = [
+			'pfblockerng/pfblockerng_general.php' => false,
+		];
+
+		try {
+			PfbConfig::writeSection(self::GEN, ['pfb_interval' => ['b']]);
+			$this->fail('expected RuntimeException, none thrown');
+		} catch (RuntimeException $e) {
+			$this->assertStringContainsString('pfb_interval', $e->getMessage(),
+				'exception message must name the key'
+			);
+		}
+
+		$this->assertSame(['a'], config_get_path(self::GEN . '/pfb_interval'),
+			'refused non-scalar change must leave the stored value unchanged'
+		);
+	}
+
+	public function testWriteSectionIdenticalNonScalarPassThroughEmitsNoWarning(): void
+	{
+		// Identical arrays are a pass-through; the comparison must not raise
+		// "Array to string conversion" (the cast would, on BOTH tests here --
+		// PHPUnit converts warnings to errors under failOnWarning, and this
+		// closure-based handler catches it regardless of that setting).
+		config_set_path(self::GEN, ['pfb_interval' => ['a']]);
+
+		$GLOBALS['pfb_test_allowed_pages'] = [
+			'pfblockerng/pfblockerng_general.php' => false,
+		];
+
+		$warnings = [];
+		set_error_handler(static function (int $no, string $msg) use (&$warnings): bool {
+			$warnings[] = $msg;
+			return true;
+		}, E_WARNING | E_NOTICE);
+		try {
+			PfbConfig::writeSection(self::GEN, ['pfb_interval' => ['a']]);
+		} finally {
+			restore_error_handler();
+		}
+
+		$this->assertSame([], $warnings,
+			'the delta comparison must not string-cast non-scalars'
+		);
+		$this->assertSame(['a'], config_get_path(self::GEN . '/pfb_interval'),
+			'identical non-scalar pass-through must persist verbatim'
+		);
+	}
 }
