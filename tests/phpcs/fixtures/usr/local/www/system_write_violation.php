@@ -46,3 +46,10 @@ function pfb_www_writesystem_comment_after_double_colon()
 	// the sniff either.
 	PfbConfig::/*x*/writeSystem('pfb_keep', '30');
 }
+
+function pfb_www_writesystem_comment_before_paren()
+{
+	// The third comment gap: between the method name and '(' — the sniff's
+	// forward walk to the opening parenthesis must skip comments too.
+	PfbConfig::writeSystem/*x*/('pfb_keep', '30');
+}

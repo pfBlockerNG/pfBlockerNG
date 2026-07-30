@@ -274,10 +274,10 @@ final class RequireConfigGatewaySniffTest extends TestCase
 		);
 
 		$this->assertCount(
-			5,
+			6,
 			$findings,
-			'writeSystem(), writeSectionSystem(), the case-varied call, and both '
-			. 'comment-interleaved shapes must all be flagged'
+			'writeSystem(), writeSectionSystem(), the case-varied call, and all '
+			. 'three comment-interleaved shapes must all be flagged'
 		);
 
 		$lines = array_column($findings, 'line');
@@ -288,10 +288,11 @@ final class RequireConfigGatewaySniffTest extends TestCase
 		// Line 33: pfbconfig::WRITESYSTEM(...) (case variance)
 		// Line 40: PfbConfig/*x*/::writeSystem(...) (comment before '::')
 		// Line 47: PfbConfig::/*x*/writeSystem(...) (comment after '::')
+		// Line 54: PfbConfig::writeSystem/*x*/(...) (comment before '(')
 		$this->assertSame(
-			[20, 26, 33, 40, 47],
+			[20, 26, 33, 40, 47, 54],
 			$lines,
-			'findings must land on all five static system-write call lines'
+			'findings must land on all six static system-write call lines'
 		);
 
 		foreach ($findings as $finding) {
