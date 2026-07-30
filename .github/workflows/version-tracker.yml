@@ -464,6 +464,11 @@ jobs:
                     from: (if ($a.from // "") != "" then $a.from else $a.family end),
                     force_flag: (if (if ($a.from // "") != "" then $a.from else $a.family end) == $a.family then "--force" else "" end) }
               ]' "$PLAN")
+            # Annotations first — the zero-legs continue below must not swallow
+            # them. error = mislabeled image (issue #1857): loud, and the planner
+            # already quarantined that boot's facts.
+            jq -r '.actions[] | select(.type == "warn") | "::warning::\(.family): \(.message)"' "$PLAN"
+            jq -r '.actions[] | select(.type == "error") | "::error::\(.family): \(.message)"' "$PLAN"
             N=$(printf '%s\n' "$LEGS" | jq 'length')
             [ "$N" -eq 0 ] && { echo "  ${CHANNEL}: no image legs planned."; continue; }
             i=0
@@ -482,7 +487,6 @@ jobs:
                 -f "direct_leg=${LEG}" \
                 || echo "  ::warning::Dispatch of image-refresh.yml direct leg failed"
             done
-            jq -r '.actions[] | select(.type == "warn") | "::warning::\(.family): \(.message)"' "$PLAN"
           done
 
       # Facts outlive the runner: an intermittent boot failure is otherwise
