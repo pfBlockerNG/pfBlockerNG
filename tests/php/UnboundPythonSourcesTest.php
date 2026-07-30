@@ -400,22 +400,22 @@ final class UnboundPythonSourcesTest extends TestCase
 	public static function validFullManifestValues(): array
 	{
 		return [
-			'ASCII' => ['on', "ascii.example\n"],
-			'Unicode remains escaped' => ['on', "b\u{00FC}cher.example\n"],
-			'quote and slash keep legacy escaping' => ['on', "quo\"te/path.example\n"],
-			'empty list keeps legacy shape' => ['off', ''],
+			'ASCII' => [PfbToggle::On, "ascii.example\n"],
+			'Unicode remains escaped' => [PfbToggle::On, "b\u{00FC}cher.example\n"],
+			'quote and slash keep legacy escaping' => [PfbToggle::On, "quo\"te/path.example\n"],
+			'empty list keeps legacy shape' => [PfbToggle::Off, ''],
 		];
 	}
 
 	#[DataProvider('validFullManifestValues')]
-	public function testFullManifestValidInputsKeepLegacyJsonBytes(string $enabled, string $top1m): void
+	public function testFullManifestValidInputsKeepLegacyJsonBytes(PfbToggle $enabled, string $top1m): void
 	{
 		$GLOBALS['pfb']['dnsbl_top1m'] = $enabled;
-		if ($enabled === 'on') {
+		if ($enabled === PfbToggle::On) {
 			file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", $top1m);
 		}
 
-		$manifest = pfb_unbound_python_sources([], $enabled === 'on' ? $this->top1mPublicationOps() : []);
+		$manifest = pfb_unbound_python_sources([], $enabled === PfbToggle::On ? $this->top1mPublicationOps() : []);
 		$published = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
 		$legacy = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 

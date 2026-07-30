@@ -66,7 +66,7 @@ class ToggleFlow:
     config_path: str
     on: str = "on"
     off: str = ""
-    # What an unchecked box SENDS (CR #1899 review): a browser submits ''/nothing for a
+    # What an unchecked box SENDS over the wire: a browser submits ''/nothing for a
     # cleared checkbox, and every save handler is designed around 'on'/empty input —
     # PFB_FILTER_ON_OFF rejects a literal 'off' (logs "Invalid on/off" and only lands the
     # right value via its fallback), and the #1887 ternaries treat any non-'on' as Off.
@@ -372,7 +372,7 @@ def test_toggle_flow_changes_effective_config(
         # box back to its original value so a failure here can't poison Tier A or
         # the next flow on the session-scoped VM.
         if helpers.config_get(smoke_vm, flow.config_path) != original:
-            overrides = {flow.field: flow.on} if original == flow.on else {flow.field: flow.off}
+            overrides = {flow.field: flow.on} if original == flow.on else {flow.field: flow.post_off}
             webui.post(flow.page, overrides, timeout=flow.post_timeout)
 
 
