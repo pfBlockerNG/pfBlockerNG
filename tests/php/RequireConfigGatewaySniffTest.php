@@ -47,9 +47,10 @@ use PHPUnit\Framework\TestCase;
  *
  *   tests/phpcs/fixtures/usr/local/www/system_write_violation.php — a www/
  *   path calling PfbConfig::writeSystem() / writeSectionSystem(), a
- *   case-varied (pfbconfig::WRITESYSTEM()) call, and two comment-interleaved
- *   shapes (a comment between the class name and '::', and one between '::'
- *   and the method name) — all five MUST be flagged.
+ *   case-varied (pfbconfig::WRITESYSTEM()) call, and three comment-interleaved
+ *   shapes (a comment between the class name and '::', one between '::' and
+ *   the method name, and one between the method name and '(') — all six MUST
+ *   be flagged.
  *
  *   tests/phpcs/fixtures/usr/local/www/system_write_compliant.php — the same
  *   www/ path, but PfbConfig::write()/writeSection() (different method),
