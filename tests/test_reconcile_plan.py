@@ -294,10 +294,9 @@ class TestSteadyState:
 
 
 class TestBootedFamilyMismatch:
-    """Scenario (issue #1857): the 26.07-tagged image booted 26.03.1-RELEASE —
-    the run's own uploaded facts (run 30420249611). A mislabeled image must
-    surface an error and drive NO rule, instead of flipping the beta entry to
-    GA and republishing off the wrong box."""
+    """Scenario (issue #1857): the 26.07-tagged image booted 26.03.1-RELEASE.
+    A mislabeled image must surface an error and drive NO rule, instead of
+    flipping the beta entry to GA and republishing off the wrong box."""
 
     MISLABELED = _boot("26.07", "26.03.1-RELEASE", REPOC_PLUS, UPGRADE_AVAILABLE)
 
