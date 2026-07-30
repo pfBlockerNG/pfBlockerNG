@@ -5348,13 +5348,17 @@ def _dnsbl_validate_manifest_raws(manifest: dict[str, Any], base_dir: str) -> No
         "tld_wildcard_exclusion",
         "user_whitelist",
         "user_unlock",
+        # issue #1841: ``top1m_list`` is RETIRED (#1542 moved TOP1M to the sidecar) but a
+        # box upgraded across that retirement still has a manifest carrying it until the
+        # next full update rewrites one. Rejecting the generation on the retired key left
+        # the resolver with NO DNSBL meanwhile, so it is tolerated and read as the TOP1M
+        # source of its own vintage (dnsbl_build_from_manifest) -- shape still checked.
+        "top1m_list",
     )
     for config_field in list_fields:
         value = config.get(config_field)
         if config_field in config and (not isinstance(value, list) or any(not isinstance(item, str) for item in value)):
             raise _DnsblGenerationError("DNSBL manifest/v1 config.{} must be list[str]".format(config_field))
-    if "top1m_list" in config:
-        raise _DnsblGenerationError("DNSBL manifest/v1 config.top1m_list is retired")
     for flag_field in ("top1m_enabled", "regex_cap"):
         if flag_field in config and not isinstance(config[flag_field], bool):
             raise _DnsblGenerationError("DNSBL manifest/v1 config.{} must be bool".format(flag_field))
@@ -5605,7 +5609,23 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
         manifest_config = manifest["config"]
         config = _dnsbl_config_from_manifest(manifest, base_dir)
         top1m_enabled = bool(manifest_config.get("top1m_enabled", False))
-        top1m_lines = _dnsbl_fixed_top1m_lines(base_dir) if top1m_enabled else ()
+        # issue #1841: a manifest still carrying the retired inline TOP1M list predates
+        # the sidecar (#1542), which therefore does not exist on that box yet -- read the
+        # list the manifest itself ships so an upgrade keeps the DNSBL it had, and warn
+        # so the retirement stays visible until the next full update rewrites the manifest.
+        legacy_top1m = manifest_config.get("top1m_list")
+        if legacy_top1m is not None:
+            sys.stderr.write(
+                "[pfBlockerNG]: DNSBL manifest '{}' still carries the retired "
+                "config.top1m_list -- reading TOP1M from it until the next full update "
+                "rewrites the manifest".format(manifest_path)
+            )
+        if not top1m_enabled:
+            top1m_lines: Iterable[str] = ()
+        elif legacy_top1m is not None:
+            top1m_lines = list(legacy_top1m)
+        else:
+            top1m_lines = _dnsbl_fixed_top1m_lines(base_dir)
         result = build(
             manifest,
             config,
