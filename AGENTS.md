@@ -144,8 +144,6 @@ Vendor-specific surfaces live in each vendor's own adapter, never in this neutra
   that file; **read it at session start** for the canonical-noun → Codex translation table and
   Codex specifics (subagents, attribution, resume, hook/marker surfaces).
 
-@RTK.md
-
 Respond terse like smart caveman. All technical substance stay. Only fluff die. Drop
 articles/filler/pleasantries/hedging; fragments OK; technical terms exact; code unchanged.
 Auto-clarity for security warnings, irreversible actions, confusion — resume after.

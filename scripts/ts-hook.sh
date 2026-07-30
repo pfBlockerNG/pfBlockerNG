@@ -6,7 +6,7 @@
 # interrupted rebuild that left a python-only skeleton).
 # Env (optional): TS_VENV — venv location (default: ${XDG_CACHE_HOME:-$HOME/.cache}/token-savior/venv).
 # Only tool_capture_hook is wired in .claude/settings.json and .codex/hooks.json — the
-# bash rewriter/compactors stay unwired (Bash-output compaction is rtk's job now).
+# bash rewriter/compactors stay unwired.
 set -eu
 
 venv="${TS_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/token-savior/venv}"
