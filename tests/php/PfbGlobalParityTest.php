@@ -54,7 +54,7 @@ final class PfbGlobalParityTest extends TestCase
 
 		// Then: PfbToggle::Off -> value ''.
 		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('off', $result->value, 'enable_cb absent -> "" (off, matches pfb_global null-absent)');
+		$this->assertSame('off', $result->value, 'enable_cb absent -> off token (matches pfb_global null-absent)');
 	}
 
 	/**
@@ -176,7 +176,7 @@ final class PfbGlobalParityTest extends TestCase
 		$result = PfbConfig::read('pfb_reuse');
 
 		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('off', $result->value, 'pfb_reuse absent -> "" (off)');
+		$this->assertSame('off', $result->value, 'pfb_reuse absent -> off token');
 	}
 
 	// -----------------------------------------------------------------------
@@ -197,7 +197,7 @@ final class PfbGlobalParityTest extends TestCase
 		$result = PfbConfig::read('pfb_dnsbl');
 
 		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('off', $result->value, 'pfb_dnsbl absent -> "" (off)');
+		$this->assertSame('off', $result->value, 'pfb_dnsbl absent -> off token');
 	}
 
 	/**
@@ -221,7 +221,7 @@ final class PfbGlobalParityTest extends TestCase
 
 		// Then: same value.
 		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('off', $result->value, 'pfb_dnsvip_auto absent -> "" (off, matches old pfb_cfg_toggle_read)');
+		$this->assertSame('off', $result->value, 'pfb_dnsvip_auto absent -> off token (matches the adapter normalisation)');
 	}
 
 	/**

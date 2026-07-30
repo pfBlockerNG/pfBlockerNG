@@ -56,7 +56,8 @@ final class WwwGroupAGatewayTest extends TestCase
 	 * Registry default = 'on' (PfbToggle::On after #484 fix). Page default REMOVED; gateway owns it.
 	 *
 	 * Parity: absent key → PfbConfig::read('pfb_keep')->value === 'on' (was: 'on').
-	 * (#484: adapter changed from PfbToggle to PfbLenient; value unchanged.)
+	 * (#484 gave pfb_keep an explicit-off adapter; #1887 merged it back into PfbToggle,
+	 * whose Off now stores 'off' — the value is unchanged throughout.)
 	 */
 	public function testGeneralPfbKeepAbsentDefaultMatchesPriorPageDefault(): void
 	{

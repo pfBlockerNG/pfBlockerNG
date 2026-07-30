@@ -16,9 +16,8 @@ use PHPUnit\Framework\TestCase;
  * unconditional. This slice's markup is CONDITIONAL (the asset include + the JS init are
  * both gated behind the toggle, per the pivot decision to emit zero highlight bytes when
  * it is off), so this test pins the CONDITIONAL STRUCTURE itself -- the PfbConfig read,
- * the pfb_editor_enabled\(\) accessor (issue #1887; hides the key, default and stored
- * value cannot survive the live config round-trip under PfbToggle; see the registry
- * comment and CfgGatewayTest::testNoToggleFieldDefaultsToOn), and the gated script tag /
+ * the pfb_editor_enabled() accessor (issue #1887 — hides the key, the registered
+ * default and the stored token behind one bool), and the gated script tag /
  * JS init all being driven by the same PHP boolean -- rather than asserting the markup is
  * unconditionally present. A separate exactly-once occurrence count on both the script
  * src and the fromTextarea call is the vacuity-safe proof that "off emits nothing new":
