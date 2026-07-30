@@ -63,8 +63,8 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsblconfig'        => [
-				'tldblacklist' => base64_encode("zip"),
-				'tldexclusion' => base64_encode("excluded.com"),
+				'tld_wildcard_blacklist' => base64_encode("zip"),
+				'tld_wildcard_exclusion' => base64_encode("excluded.com"),
 				'suppression'  => base64_encode("www.adblock.com\r\n.wildwhite.org\r\nphishing.net"),
 			],
 		]);

@@ -292,13 +292,13 @@ if (!$alert_summary) {
 
 	PfbConfig::write('suppression', PfbConfig::read('suppression') ?: '');
 
-	PfbConfig::write('tldexclusion', PfbConfig::read('tldexclusion') ?: '');
+	PfbConfig::write('tld_wildcard_exclusion', PfbConfig::read('tld_wildcard_exclusion') ?: '');
 
 	// ADR-53: 'ipsuppression_v6' is the new v6suppression sibling of
 	// 'ipsuppression' (v4) -- same collection shape, keyed separately so the
 	// addsuppress handler below can dedup/rewrite each family's customlist
 	// independently.
-	foreach (array('ipsuppression', 'ipsuppression_v6', 'dnsblwhitelist', 'tldexclusion') as $key => $type) {
+	foreach (array('ipsuppression', 'ipsuppression_v6', 'dnsblwhitelist', 'tld_wildcard_exclusion') as $key => $type) {
 
 		if (!isset($clists[$type]) || !is_array($clists[$type])) {
 			$clists[$type] = array();
@@ -311,12 +311,12 @@ if (!$alert_summary) {
 		} elseif ($key == 2) {
 			$clists[$type]['base64'] = PfbConfig::read('suppression');
 		} elseif ($key == 3) {
-			$clists[$type]['base64'] = PfbConfig::read('tldexclusion');
+			$clists[$type]['base64'] = PfbConfig::read('tld_wildcard_exclusion');
 		}
 
 		$clists[$type]['data']		= array();
 		if (isset($clists[$type]['base64']) && !empty($clists[$type]['base64'])) {
-			// issue #1782: $idn=TRUE -- 'suppression'/'tldexclusion' are decoded with
+			// issue #1782: $idn=TRUE -- 'suppression'/'tld_wildcard_exclusion' are decoded with
 			// $idn=TRUE by their runtime consumers (pfblockerng.inc); a Unicode key
 			// here would never match a $domain derived from a punycode log field.
 			$decoded = pfb_text_area_decode($clists[$type]['base64'], TRUE, TRUE, TRUE);
@@ -1125,14 +1125,14 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 			$savemsg .= gettext(" to the TLD Exclusion customlist.");
 
-			if (!isset($clists['tldexclusion']['data'][$domain])) {
+			if (!isset($clists['tld_wildcard_exclusion']['data'][$domain])) {
 				$data = '';
-				foreach ($clists['tldexclusion']['data'] as $line) {
+				foreach ($clists['tld_wildcard_exclusion']['data'] as $line) {
 					$data .= "{$line}";
 				}
 				$data .= "{$exclude_string}\r\n";
-				$clists['tldexclusion']['base64'] = pfb_text_area_encode($data);
-				PfbConfig::write('tldexclusion', $clists['tldexclusion']['base64']);
+				$clists['tld_wildcard_exclusion']['base64'] = pfb_text_area_encode($data);
+				PfbConfig::write('tld_wildcard_exclusion', $clists['tld_wildcard_exclusion']['base64']);
 				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL TLD Exclusion customlist.", FALSE);
 			}
 		}
@@ -1238,15 +1238,15 @@ if (isset($_POST) && !empty($_POST)) {
 			case 'delete_exclusion':
 				$type = 'TLD Exclusion';
 				$savemsg = "The Domain [ {$entry} ] has been deleted from the {$type} customlist!";
-				if (isset($clists['tldexclusion']['data'][$entry])) {
-					unset($clists['tldexclusion']['data'][$entry]);
+				if (isset($clists['tld_wildcard_exclusion']['data'][$entry])) {
+					unset($clists['tld_wildcard_exclusion']['data'][$entry]);
 				}
 				$data = '';
-				foreach ($clists['tldexclusion']['data'] as $line) {
+				foreach ($clists['tld_wildcard_exclusion']['data'] as $line) {
 					$data .= "{$line}";
 				}
-				$clists['tldexclusion']['base64'] = pfb_text_area_encode($data);
-				PfbConfig::write('tldexclusion', $clists['tldexclusion']['base64']);
+				$clists['tld_wildcard_exclusion']['base64'] = pfb_text_area_encode($data);
+				PfbConfig::write('tld_wildcard_exclusion', $clists['tld_wildcard_exclusion']['base64']);
 				break;
 			case 'delete_ip':
 				// ADR-53 un-suppress rework (#422): the old flow only understood an
@@ -1976,8 +1976,8 @@ function dnsbl_log_details($fields) {
 	}
 
 	// Determine if blocked Domain is a TLD Exclusion
-	if ($isTLD && isset($clists['tldexclusion']['data'][$fields[7]])) {
-		$wt_line = rtrim($clists['tldexclusion']['data'][$fields[7]], "\x00..\x1F");
+	if ($isTLD && isset($clists['tld_wildcard_exclusion']['data'][$fields[7]])) {
+		$wt_line = rtrim($clists['tld_wildcard_exclusion']['data'][$fields[7]], "\x00..\x1F");
 		$isExclusion = TRUE;
 	}
 
@@ -2001,7 +2001,7 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 
 	$ex_dom = $s_txt = '';
 	if ($isExclusion) {
-		$wt_line = rtrim(array_get_path($clists, "tldexclusion/data/{$fields[7]}", ''), "\x00..\x1F");
+		$wt_line = rtrim(array_get_path($clists, "tld_wildcard_exclusion/data/{$fields[7]}", ''), "\x00..\x1F");
 		$h_wt_line = pfb_hsc($wt_line);
 		$s_txt  = "Note:&emsp;The following Domain is in the TLD Exclusion customlist:\n\n"
 			. "TLD Exclusion:&emsp;[ {$h_wt_line} ]\n\n"
@@ -2504,7 +2504,7 @@ function convert_dns_reply_log($mode, $fields) {
 
 	// Determine if Domain is a TLD Exclusion
 	$isExclusion = FALSE;
-	if (isset($clists['tldexclusion']['data'][$fields[7]])) {
+	if (isset($clists['tld_wildcard_exclusion']['data'][$fields[7]])) {
 		$isExclusion = TRUE;
 	}
 

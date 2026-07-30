@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
  * ADR-29 Phase 8 — www/ group C gateway routing tests.
  *
  * Covers the pages routed in Phase 8:
- *   - pfblockerng_alerts.php   (pfblockerngglobal: foreign section; suppression/tldexclusion/global_log/
+ *   - pfblockerng_alerts.php   (pfblockerngglobal: foreign section; suppression/tld_wildcard_exclusion/global_log/
  *                               v4suppression [ADR-53]: registered)
  *   - pfblockerng_sync.php     (pfblockerngsync/config/0: foreign section)
  *   - pfblockerng_software.php (pfb_software_check: registered)
@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  * Test groups:
  *
  * A — LOAD DEFAULT PARITY
- *   Registered keys (pfb_software_check, global_log, suppression, tldexclusion,
+ *   Registered keys (pfb_software_check, global_log, suppression, tld_wildcard_exclusion,
  *   v4suppression [ADR-53]):
  *     Assert PfbConfig::read($key) on an absent section returns the correct default
  *     (parity with prior page behaviour before routing).
@@ -170,37 +170,37 @@ final class WwwGroupCGatewayTest extends TestCase
 	}
 
 	/**
-	 * tldexclusion: absent → '' (registry default; prior page did `config_get_path(...) ?: ''`).
+	 * tld_wildcard_exclusion: absent → '' (registry default; prior page did `config_get_path(...) ?: ''`).
 	 */
 	public function testTldExclusionAbsentDefaultIsEmptyString(): void
 	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion';
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/tld_wildcard_exclusion';
 
 		// Before: key absent.
-		$this->assertNull(config_get_path($path), 'tldexclusion must be absent before read');
+		$this->assertNull(config_get_path($path), 'tld_wildcard_exclusion must be absent before read');
 
 		// When: gateway read.
-		$result = PfbConfig::read('tldexclusion');
+		$result = PfbConfig::read('tld_wildcard_exclusion');
 
 		// Then: '' — parity with prior page coalesce `?: ''`.
-		$this->assertSame('', $result, 'tldexclusion absent -> "" (parity with prior page fallback)');
+		$this->assertSame('', $result, 'tld_wildcard_exclusion absent -> "" (parity with prior page fallback)');
 	}
 
 	/**
-	 * tldexclusion round-trip: write a base64 blob, read it back byte-identically.
+	 * tld_wildcard_exclusion round-trip: write a base64 blob, read it back byte-identically.
 	 */
 	public function testTldExclusionRoundTrips(): void
 	{
 		$blob = base64_encode("example.com\r\n.test.org\r\n");
 
 		// Before: absent → ''.
-		$this->assertSame('', PfbConfig::read('tldexclusion'), 'initial absent -> ""');
+		$this->assertSame('', PfbConfig::read('tld_wildcard_exclusion'), 'initial absent -> ""');
 
 		// When: write a base64 blob.
-		PfbConfig::write('tldexclusion', $blob);
+		PfbConfig::write('tld_wildcard_exclusion', $blob);
 
 		// Then: read back byte-identically.
-		$this->assertSame($blob, PfbConfig::read('tldexclusion'), 'tldexclusion after write round-trips byte-identically');
+		$this->assertSame($blob, PfbConfig::read('tld_wildcard_exclusion'), 'tld_wildcard_exclusion after write round-trips byte-identically');
 	}
 
 	/**
@@ -420,7 +420,7 @@ final class WwwGroupCGatewayTest extends TestCase
 	}
 
 	/**
-	 * suppression + tldexclusion together in their section: both registered keys.
+	 * suppression + tld_wildcard_exclusion together in their section: both registered keys.
 	 * Write both via PfbConfig::write(), then read both via PfbConfig::read().
 	 */
 	public function testSuppressionAndTldExclusionCoexistInSection(): void
@@ -430,10 +430,10 @@ final class WwwGroupCGatewayTest extends TestCase
 
 		// When: write both registered keys.
 		PfbConfig::write('suppression', $suppblob);
-		PfbConfig::write('tldexclusion', $tldblob);
+		PfbConfig::write('tld_wildcard_exclusion', $tldblob);
 
 		// Then: each reads back independently and byte-identically.
 		$this->assertSame($suppblob, PfbConfig::read('suppression'), 'suppression after write');
-		$this->assertSame($tldblob, PfbConfig::read('tldexclusion'), 'tldexclusion after write');
+		$this->assertSame($tldblob, PfbConfig::read('tld_wildcard_exclusion'), 'tld_wildcard_exclusion after write');
 	}
 }

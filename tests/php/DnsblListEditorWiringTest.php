@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * issue #1875 step 2a (RED, test-first): mounting the CM6 editor on the DNSBL page's
  * five remaining plaintext-list fields (pfb_gp_bypass_list, pfb_noaaaa_list, suppression,
- * tldexclusion, tldblacklist) via a single `window.pfbCM && pfbCM.mountLists([...])` call,
+ * tld_wildcard_exclusion, tld_wildcard_blacklist) via a single `window.pfbCM && pfbCM.mountLists([...])` call,
  * gated by the SAME `$pfb_syntaxhl_on` boolean already established at line 38 (pinned by
  * DnsblRegexHighlightWiringTest) and living inside the SAME events.push() block as the
  * existing pfb_regex_list CM6 init.
@@ -61,8 +61,8 @@ final class DnsblListEditorWiringTest extends TestCase
 			'pfb_gp_bypass_list',
 			'pfb_noaaaa_list',
 			'suppression',
-			'tldexclusion',
-			'tldblacklist',
+			'tld_wildcard_exclusion',
+			'tld_wildcard_blacklist',
 		] as $id) {
 			$this->assertMatchesRegularExpression(
 				"#pfbCM\\.mountLists\\(\\s*\\[(?:(?!\\]).)*?'" . preg_quote($id, '#') . "'(?:(?!\\]).)*?\\]\\s*\\)#s",
@@ -134,18 +134,18 @@ final class DnsblListEditorWiringTest extends TestCase
 	public function testOriginalTldexclusionTextareaFieldIsUnchanged(): void
 	{
 		$this->assertMatchesRegularExpression(
-			"#new Form_Textarea\\(\\s*'tldexclusion',#",
+			"#new Form_Textarea\\(\\s*'tld_wildcard_exclusion',#",
 			self::$src,
-			'expected the underlying tldexclusion Form_Textarea field to remain unchanged'
+			'expected the underlying tld_wildcard_exclusion Form_Textarea field to remain unchanged'
 		);
 	}
 
 	public function testOriginalTldblacklistTextareaFieldIsUnchanged(): void
 	{
 		$this->assertMatchesRegularExpression(
-			"#new Form_Textarea\\(\\s*'tldblacklist',#",
+			"#new Form_Textarea\\(\\s*'tld_wildcard_blacklist',#",
 			self::$src,
-			'expected the underlying tldblacklist Form_Textarea field to remain unchanged'
+			'expected the underlying tld_wildcard_blacklist Form_Textarea field to remain unchanged'
 		);
 	}
 }

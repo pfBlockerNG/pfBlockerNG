@@ -102,7 +102,7 @@ final class Top1mFixedFileManifestTest extends TestCase
 			'dbdir'              => "{$this->tmp}/db",
 			'dnsbl_top1m'        => PfbToggle::Off,
 			'dnsbl_tld_wildcard' => '',
-			'dnsblconfig'        => ['tldblacklist' => '', 'tldexclusion' => '', 'suppression' => ''],
+			'dnsblconfig'        => ['tld_wildcard_blacklist' => '', 'tld_wildcard_exclusion' => '', 'suppression' => ''],
 		]);
 		file_put_contents("{$this->tmp}/dnsbl/feed.txt", "{\"kind\":\"domain\",\"domain\":\"blocked.example\"}\n");
 	}

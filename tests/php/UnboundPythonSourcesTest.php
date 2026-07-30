@@ -65,9 +65,9 @@ final class UnboundPythonSourcesTest extends TestCase
 			// issue #1255: DNSBL Wildcard Blocking (TLD) toggle; OFF by default here.
 			'dnsbl_tld_wildcard' => '',
 			'dnsblconfig'        => [
-				'tldblacklist' => '',
-				'tldexclusion' => '',
-				'suppression'  => '',
+				'tld_wildcard_blacklist' => '',
+				'tld_wildcard_exclusion' => '',
+				'suppression'            => '',
 			],
 		]);
 
@@ -270,8 +270,8 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testTldMasterKeyAbsentAndBlacklistExclusionEmptyWhenDnsblTldOff(): void
 	{
 		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';
-		$GLOBALS['pfb']['dnsblconfig']['tldblacklist'] = base64_encode('evil-tld');
-		$GLOBALS['pfb']['dnsblconfig']['tldexclusion'] = base64_encode('good.example');
+		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_blacklist'] = base64_encode('evil-tld');
+		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_exclusion'] = base64_encode('good.example');
 
 		$m = pfb_unbound_python_sources($this->feeds());
 
@@ -284,8 +284,8 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testTldBlacklistAndExclusionPopulatedWhenDnsblTldOn(): void
 	{
 		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = 'on';
-		$GLOBALS['pfb']['dnsblconfig']['tldblacklist'] = base64_encode('evil-tld');
-		$GLOBALS['pfb']['dnsblconfig']['tldexclusion'] = base64_encode('good.example');
+		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_blacklist'] = base64_encode('evil-tld');
+		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_exclusion'] = base64_encode('good.example');
 
 		$m = pfb_unbound_python_sources($this->feeds());
 

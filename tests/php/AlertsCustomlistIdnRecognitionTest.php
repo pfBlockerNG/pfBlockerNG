@@ -50,14 +50,14 @@ final class AlertsCustomlistIdnRecognitionTest extends TestCase
 	}
 
 	// -------------------------------------------------------------------
-	// alerts.php's 'ipsuppression'/'ipsuppression_v6'/'dnsblwhitelist'/'tldexclusion'
+	// alerts.php's 'ipsuppression'/'ipsuppression_v6'/'dnsblwhitelist'/'tld_wildcard_exclusion'
 	// decode loop must key its map by punycode, matching every runtime decoder.
 	// -------------------------------------------------------------------
 
 	public function testTldExclusionRowKeyedByPunycodeNotUnicode(): void
 	{
 		self::underCLocale(function (): void {
-			$data = pfb_test_alerts_decode_suppression_list('tldexclusion', self::enc('bücher.de'));
+			$data = pfb_test_alerts_decode_suppression_list('tld_wildcard_exclusion', self::enc('bücher.de'));
 
 			$this->assertArrayHasKey('xn--bcher-kva.de', $data, 'expected the punycode key the log/runtime carry');
 			$this->assertArrayNotHasKey('bücher.de', $data, 'a raw-Unicode key can never match a punycode log field');
@@ -74,7 +74,7 @@ final class AlertsCustomlistIdnRecognitionTest extends TestCase
 	{
 		self::underCLocale(function (): void {
 			$GLOBALS['clists'] = [
-				'tldexclusion' => ['data' => pfb_test_alerts_decode_suppression_list('tldexclusion', self::enc('bücher.de # my note'))],
+				'tld_wildcard_exclusion' => ['data' => pfb_test_alerts_decode_suppression_list('tld_wildcard_exclusion', self::enc('bücher.de # my note'))],
 			];
 
 			$fields = [

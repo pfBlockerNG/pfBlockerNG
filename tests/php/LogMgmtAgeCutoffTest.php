@@ -88,13 +88,13 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		config_set_path("{$dnsbl}/pfb_dnsvip6",     '');
 		config_set_path("{$dnsbl}/pfb_dnsport",     '8081');
 		config_set_path("{$dnsbl}/pfb_dnsport_ssl", '8443');
-		config_set_path("{$dnsbl}/alexa_enable",    '');
+		config_set_path("{$dnsbl}/top1m_enable",    '');
 		config_set_path("{$dnsbl}/pfb_cache",       '');
 		config_set_path("{$dnsbl}/pfb_py_reply",    '');
 		config_set_path("{$dnsbl}/pfb_regex",       '');
 		config_set_path("{$dnsbl}/pfb_regex_list",  '');
 		config_set_path("{$dnsbl}/pfb_cname",       '');
-		config_set_path("{$dnsbl}/pfb_pytld",       '');
+		config_set_path("{$dnsbl}/tld_allow",       '');
 		config_set_path("{$dnsbl}/pfb_py_nolog",    '');
 		config_set_path("{$dnsbl}/pfb_noaaaa",      '');
 		config_set_path("{$dnsbl}/pfb_noaaaa_list", '');

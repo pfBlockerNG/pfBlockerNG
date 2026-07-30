@@ -848,7 +848,7 @@ if ($_POST && isset($_POST['save'])) {
 		else {
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/logging", $_POST['logging'] ?: 'Enabled');
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/order", $_POST['order'] ?: 'default');
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/filter_alexa", pfb_filter($_POST['filter_alexa'], PFB_FILTER_ON_OFF, 'Category_edit'));
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/filter_top1m", pfb_filter($_POST['filter_top1m'], PFB_FILTER_ON_OFF, 'Category_edit'));
 		}
 
 		// Set flag to update CustomList on next Cron|Force update|Force reload
@@ -973,7 +973,7 @@ else {
 	else {
 		$pconfig['logging']		= $rowdata[$rowid]['logging'] ?? 'Enabled';
 		$pconfig['order']		= $rowdata[$rowid]['order'] ?? 'default';
-		$pconfig['filter_alexa']	= $rowdata[$rowid]['filter_alexa'] ?? '';
+		$pconfig['filter_top1m']	= $rowdata[$rowid]['filter_top1m'] ?? '';
 	}
 
 	$pconfig['custom']			= base64_decode($rowdata[$rowid]['custom'] ?? '');
@@ -1618,10 +1618,10 @@ if ($gtype == 'dnsbl') {
 	  ->setAttribute('style', 'width: auto');
 
 	$section->addInput(new Form_Checkbox(
-		'filter_alexa',
+		'filter_top1m',
 		'TOP1M Whitelist',
 		'Enable',
-		pfb_cfg_toggle_read($pconfig['filter_alexa']) === PfbToggle::On,
+		pfb_cfg_toggle_read($pconfig['filter_top1m']) === PfbToggle::On,
 		'on'
 	))->setHelp('Filter Group via TOP1M');
 

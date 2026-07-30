@@ -209,8 +209,8 @@ FLOWS: tuple[ToggleFlow, ...] = (
     ToggleFlow(
         name="dnsbl_tld_wildcard",
         page="/pfblockerng/pfblockerng_dnsbl.php",
-        field="pfb_tld",
-        config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_tld",
+        field="tld_wildcard",
+        config_path="installedpackages/pfblockerngdnsblsettings/config/0/tld_wildcard",
     ),
     ToggleFlow(
         name="dnsbl_hsts_mode",

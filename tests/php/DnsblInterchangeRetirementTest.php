@@ -65,8 +65,8 @@ final class DnsblInterchangeRetirementTest extends TestCase
 			'dnsbl_info_stats' => [],
 			'domain_update'    => TRUE,
 			'dnsblconfig'      => [
-				'tldblacklist' => base64_encode('zip'),
-				'tldexclusion' => '',
+				'tld_wildcard_blacklist' => base64_encode('zip'),
+				'tld_wildcard_exclusion' => '',
 			],
 		]);
 

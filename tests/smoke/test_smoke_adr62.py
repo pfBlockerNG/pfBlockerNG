@@ -735,7 +735,7 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
 # the empty-feed-column skip itself) is the Python oracles' job
 # (tests/test_adr62_parity_oracle.py + tests/test_adr62_byte_identity_corpus.py;
 # classification lives in the manifest build since ADR-65) — this row is a coarse live
-# end-to-end regression guard that turning pfb_tld on does not break normal
+# end-to-end regression guard that turning tld_wildcard on does not break normal
 # DNSBL blocking for the plain/anchor rows sharing that same update pass.
 # --------------------------------------------------------------------------- #
 
@@ -745,7 +745,7 @@ def test_adr62_tld_enabled_run_keeps_plain_row_classification(deployed_vm: Smoke
     """Row 7b (issue #1060 regression guard): TLD mode + a mixed feed still blocks both rows.
 
     Given both names RESOLVE via the stub before the feed loads.
-    When ``pfb_tld=on`` (no TLD blacklist configured) and a mixed, HEADER-LESS
+    When ``tld_wildcard=on`` (no TLD blacklist configured) and a mixed, HEADER-LESS
       feed (a hosts line + a verbatim ``||anchor^`` line — no ABP-classified
       feed anywhere in this pass, matching issue #1060's exact trigger shape)
       loads,
@@ -775,7 +775,7 @@ def test_adr62_tld_enabled_run_keeps_plain_row_classification(deployed_vm: Smoke
             h.flush_unbound_name(deployed_vm, name)
             ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
             assert not h.resolves_to(ans, STUB_DNS_A), (
-                f"{name} still resolving with pfb_tld=on (TLD mode broke ordinary plain-row blocking): {ans}"
+                f"{name} still resolving with tld_wildcard=on (TLD mode broke ordinary plain-row blocking): {ans}"
             )
 
 

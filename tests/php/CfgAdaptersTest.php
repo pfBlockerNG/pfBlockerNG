@@ -36,7 +36,7 @@ use PHPUnit\Framework\TestCase;
  *     And write(read('all')) == 'off'  (dropped alpha token -> Off).
  *     And write(read('')) == 'off'    (normalised default).
  *
- * Scenario E — PfbTop1mSource (alexa_type, issue #877): backing values 'tranco' /
+ * Scenario E — PfbTop1mSource (top1m_source, issue #877): backing values 'tranco' /
  *   'cisco' / 'openpagerank' (#928, replacing ADR-59 P4's 'domcop') / 'majestic'
  *   (added ADR-59 P4) TOP1M
  *   source selector; the legacy 'alexa' token (dead service, #872) coalesces
@@ -507,7 +507,7 @@ final class CfgAdaptersTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Scenario E — PfbTop1mSource (alexa_type, issue #877)
+	// Scenario E — PfbTop1mSource (top1m_source, issue #877)
 	//   Stored tokens: 'tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare'
 	//   (live; majestic/cloudflare added ADR-59 P4/P5, openpagerank replaced P4's
 	//   domcop in #928); legacy 'alexa' (dead service,

@@ -14,7 +14,7 @@ declare(strict_types=1);
  */
 
 /**
- * The 'ipsuppression'/'ipsuppression_v6'/'dnsblwhitelist'/'tldexclusion' loop's
+ * The 'ipsuppression'/'ipsuppression_v6'/'dnsblwhitelist'/'tld_wildcard_exclusion' loop's
  * decode block (pfblockerng_alerts.php, inside the `foreach (array(...) as $key
  * => $type)` loop). Pre-seeds $clists[$type]['base64'] and evals the assignment +
  * if-block verbatim; $type/$clists never leak (function-local `eval()` scope).

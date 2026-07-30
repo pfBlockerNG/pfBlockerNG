@@ -161,7 +161,7 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 		// dnsbl-branch-only fields.
 		$this->assertSame('Enabled', $pconfig['logging']);
 		$this->assertSame('default', $pconfig['order']);
-		$this->assertSame('', $pconfig['filter_alexa']);
+		$this->assertSame('', $pconfig['filter_top1m']);
 
 		// 'custom' absent -> base64_decode(null) would Deprecated-warn without
 		// the guard; runExpectingNoDiagnostics already proved zero diagnostics.
@@ -237,7 +237,7 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 			'script_post'  => 'dnsbl_post_x.py',
 			'logging'      => 'Disabled',
 			'order'        => 'reverse',
-			'filter_alexa' => 'on',
+			'filter_top1m' => 'on',
 			'custom'       => base64_encode('example.invalid # existing dnsbl'),
 		]];
 

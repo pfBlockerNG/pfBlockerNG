@@ -35,8 +35,8 @@ $GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
 	'dnsbl_tld_data'      => "{$sandbox}/does_not_exist",
 	'dnsbl_unlock'        => "{$sandbox}/dnsbl_unlock",
 	'dnsblconfig'         => [
-		'tldblacklist' => '',
-		'tldexclusion' => '',
+		'tld_wildcard_blacklist' => '',
+		'tld_wildcard_exclusion' => '',
 		'suppression'  => '',
 	],
 ]);

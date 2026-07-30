@@ -42,23 +42,23 @@ final class Issue1792SweepSitesTest extends TestCase
 	public function testEmptyGtldConfigYieldsTheIntendedDefaultTlds(): void
 	{
 		$default_tlds = ['com', 'net', 'org'];
-		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['pfb_pytlds_gtld']", [
+		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['tld_allow_gtld']", [
 			'pfb'          => ['dconfig' => []],
 			'pconfig'      => [],
 			'default_tlds' => $default_tlds,
 		]);
-		$this->assertSame($default_tlds, $out['pconfig']['pfb_pytlds_gtld'],
-			'an absent pfb_pytlds_gtld scalar must yield the intended default TLD set, never [\'\']');
+		$this->assertSame($default_tlds, $out['pconfig']['tld_allow_gtld'],
+			'an absent tld_allow_gtld scalar must yield the intended default TLD set, never [\'\']');
 	}
 
 	public function testEmptyAlexaInclusionYieldsItsInlineDefault(): void
 	{
-		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['alexa_inclusion']", [
-			'pfb'     => ['dconfig' => ['alexa_inclusion' => '']],
+		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['top1m_inclusion']", [
+			'pfb'     => ['dconfig' => ['top1m_inclusion' => '']],
 			'pconfig' => [],
 		]);
-		$this->assertSame(['com', 'net', 'org', 'ca', 'co', 'io'], $out['pconfig']['alexa_inclusion'],
-			'an empty alexa_inclusion scalar must yield the inline default list, never [\'\']');
+		$this->assertSame(['com', 'net', 'org', 'ca', 'co', 'io'], $out['pconfig']['top1m_inclusion'],
+			'an empty top1m_inclusion scalar must yield the inline default list, never [\'\']');
 	}
 
 	// --- family 1b: csv list whose downstream wants "no entries" -----------
