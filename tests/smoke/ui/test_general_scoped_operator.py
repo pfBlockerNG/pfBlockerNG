@@ -71,6 +71,10 @@ pytestmark = pytest.mark.ui_e2e
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 SOFTWARE_PAGE = "/pfblockerng/pfblockerng_software.php"
 GENERAL_MARKERS = ("General Settings",)
+# Mirrors test_render_smoke.py's _SOFTWARE_PANEL_MARKER: the page's positive-render
+# marker, used here to confirm the provenance sentinel is really ON before trusting
+# that the scoped operator's refusal is the PRIVILEGE gate, not the provenance gate.
+SOFTWARE_PANEL_MARKER = "pfb-software-panel"
 GENERAL_SAVE_TIMEOUT = 300.0
 
 GEN_CFG_SECTION = "installedpackages/pfblockerng/config/0"
@@ -133,11 +137,13 @@ foreach ($users as $i => $u) {
 }
 if ($found) {
     config_set_path('system/user', array_values($users));
-    write_config('[pfBlockerNG] smoke #1904: remove scoped operator');
-    echo 'PFB1904:DELETE:OK';
-} else {
-    echo 'PFB1904:DELETE:MISSING';
 }
+// Restore system/nextuid to its pre-test value regardless of $found -- _create_scoped_user
+// always incremented it, so the whole-config digest (_ui_pfb_isolation) must see it back at
+// baseline too, or every run pays that fixture's ~15-30s full restore for a single stray counter.
+config_set_path('system/nextuid', (int) __NEXTUID__);
+write_config('[pfBlockerNG] smoke #1904: remove scoped operator');
+echo $found ? 'PFB1904:DELETE:OK' : 'PFB1904:DELETE:MISSING';
 """
 
 # The real CLI-verb include chain (read from pfblockerng.sh's `php ... pfblockerng.php
@@ -216,15 +222,20 @@ def _create_scoped_user(vm: helpers.SmokeVM, username: str, password: str) -> No
         )
 
 
-def _delete_scoped_user(vm: helpers.SmokeVM, username: str) -> None:
+def _delete_scoped_user(vm: helpers.SmokeVM, username: str, orig_nextuid: str) -> None:
     """Remove a user created by :func:`_create_scoped_user` -- config AND the OS account.
 
     ``local_user_del()`` is the ``pw userdel`` counterpart to ``local_user_set()``;
     restoring ``/conf/config.xml`` alone (the session isolation fixture's generic
     safety net) never touches the OS-level account, so this is the ONLY thing that
-    actually removes it.
+    actually removes it. ``orig_nextuid`` is the pre-test ``system/nextuid`` value
+    (captured by the caller before :func:`_create_scoped_user` ran) -- restoring it
+    keeps the whole-config digest clean so ``_ui_pfb_isolation`` doesn't pay its
+    ~15-30s full restore for a single stray counter increment.
     """
-    snippet = _DELETE_USER_PHP.replace("__USERNAME__", helpers._php_str(username))
+    snippet = _DELETE_USER_PHP.replace("__USERNAME__", helpers._php_str(username)).replace(
+        "__NEXTUID__", helpers._php_str(orig_nextuid)
+    )
     result = helpers.php_eval(vm, snippet, timeout=90.0)
     out = result.stdout
     if result.returncode != 0 or ("PFB1904:DELETE:OK" not in out and "PFB1904:DELETE:MISSING" not in out):
@@ -258,6 +269,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
     smoke_vm: helpers.SmokeVM,
     deployed_vm: helpers.SmokeVM,
     webgui_protocol: str,
+    webui: WebUI,
 ) -> None:
     """A scoped operator's General save leaves the Package-Manager-gated field untouched.
 
@@ -279,12 +291,17 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
         unchanged field as a non-event rather than asserting a privilege this
         operator does not hold.
 
-      And, as the SAME operator, GETting the Software page (with the page's
-        FIRST/provenance gate forced open so the SECOND/privilege gate is what
-        actually fires) is refused with the page's own shape: a 302 to
-        ``/index.php`` (issue #485's ``isAllowedPage('pkg_mgr_installed.php')``
-        secondary gate) -- this operator has no supported UI path to CHANGE
-        ``pfb_software_check``.
+      And, with the page's FIRST/provenance gate forced open, an ADMIN GET of the
+        Software page first confirms the sentinel actually took (200 + the
+        ``pfb-software-panel`` marker) -- the provenance gate
+        (``pfblockerng_software.php:44``) and the #485 privilege gate (``:59``)
+        share the exact same 302-to-``/index.php`` refusal shape, so without this
+        admin check a provenance-gate false-refusal would look identical to the
+        privilege refusal this test exists to pin. THEN, as the SAME scoped
+        operator, GETting the Software page is refused with the page's own shape:
+        a 302 to ``/index.php`` (issue #485's
+        ``isAllowedPage('pkg_mgr_installed.php')`` secondary gate) -- this operator
+        has no supported UI path to CHANGE ``pfb_software_check``.
 
     Failability (each assertion names the regression that flips it):
       * render-oracle GET assertion -- a presence-based (not delta-aware) gate
@@ -310,6 +327,10 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
       * PhpErrorLogGuard -- a regression that let an uncaught exception reach the
         page (rather than a clean redirect) logs a PHP Fatal/Uncaught line ->
         ``assert_no_growth()`` fails.
+      * admin Software-page render-oracle assertion -- if the provenance sentinel
+        did not actually take, this GET fails (or lacks the ``pfb-software-panel``
+        marker), which would otherwise let a provenance-gate false-refusal masquerade
+        as the privilege refusal below.
       * Software-page refusal shape -- removing/loosening the #485 secondary
         ``isAllowedPage('pkg_mgr_installed.php')`` check makes this GET return 200
         (or a different redirect target) instead of a 302 to ``/index.php``.
@@ -320,6 +341,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
 
     orig_software_check = helpers.config_get(vm, SOFTWARE_CHECK_CFG)
     orig_interval = helpers.config_get(vm, INTERVAL_CFG)
+    orig_nextuid = helpers.config_get(vm, "system/nextuid")
 
     user_created = False
     try:
@@ -372,8 +394,23 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
         )
 
         # Companion: force the page's FIRST (provenance) gate open so its SECOND
-        # (privilege) gate is what this GET actually exercises.
+        # (privilege) gate is what the scoped-operator GET below actually exercises.
+        # The provenance gate (pfblockerng_software.php:44) and the #485 privilege
+        # gate (:59) share the identical 302-to-/index.php refusal shape, so first
+        # confirm -- as the ADMIN -- that the sentinel really took (200 + the
+        # 'pfb-software-panel' marker): only then does the scoped operator's 302
+        # unambiguously prove the PRIVILEGE gate, not a still-hidden page.
         with software_panel_forced(vm, "on"):
+            admin_resp = webui.get(SOFTWARE_PAGE)
+            admin_render = evaluate_render(
+                SOFTWARE_PAGE, admin_resp.status_code, admin_resp.text, (SOFTWARE_PANEL_MARKER,)
+            )
+            assert admin_render.ok, (
+                f"admin GET {SOFTWARE_PAGE} with provenance forced ON failed the render oracle: "
+                f"{admin_render.detail} -- can't trust the scoped operator's refusal below is the "
+                "PRIVILEGE gate unless the provenance sentinel is confirmed ON first"
+            )
+
             sw_resp: requests.Response = scoped.get(SOFTWARE_PAGE, allow_redirects=False)
         assert sw_resp.status_code == 302, (
             f"scoped operator GET {SOFTWARE_PAGE} -> HTTP {sw_resp.status_code} (expected the #485 "
@@ -383,10 +420,12 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
             f"unexpected Software-page refusal redirect target: {sw_resp.headers.get('Location')!r}"
         )
     finally:
-        if user_created:
-            _delete_scoped_user(vm, username)
+        # Field restores run BEFORE the user delete: a raised delete must never skip
+        # putting the box's config back the way it was.
         _set_config_value(vm, SOFTWARE_CHECK_CFG, orig_software_check)
         _set_config_value(vm, INTERVAL_CFG, orig_interval)
+        if user_created:
+            _delete_scoped_user(vm, username, orig_nextuid)
 
 
 def test_cli_gateway_write_fails_closed_writesystem_succeeds(
