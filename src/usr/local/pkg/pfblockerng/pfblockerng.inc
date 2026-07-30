@@ -12213,8 +12213,10 @@ function pfb_download_http_headers(array $extra_headers, string $conditional_hea
 // constructor, an uncaught TypeError that aborted the whole extras run. Normalizing every
 // type here keeps that class of crash out of the call sites. Pure/no I/O.
 //
-// Only NULL/absent means "no credential": unlike the `?: ''` this replaces, a literal "0"
-// password now survives instead of being silently blanked.
+// Only NULL/absent means "no credential" here: unlike the `?: ''` this replaces, a literal "0"
+// credential is reported faithfully rather than blanked. That is this helper's contract only --
+// pfb_download() still gates CURLOPT_USERPWD on !empty(), which drops a "0" credential before
+// curl either way, so no request on the wire changes (issue #1909).
 //
 // $feed: one $pfb['extras'] entry. $maxmind_account/$maxmind_key: the settings' MaxMind
 //   credentials, already coerced to strings by pfb_global().
