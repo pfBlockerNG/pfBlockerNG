@@ -19,10 +19,10 @@ use PHPUnit\Framework\TestCase;
  * "<section>/<key>" per entry — and asserts set-equality against the sniff
  * property, naming any missing/extra path in the failure message.
  *
- * The sniff class implements PHP_CodeSniffer\Sniffs\Sniff. Under
- * vendor/bin/phpunit the composer autoloader provides it; a no-op stub is
- * declared otherwise so the class loads without the phpcs runtime (only the
- * property is inspected here — behaviour is pinned by
+ * The sniff class implements PHP_CodeSniffer\Sniffs\Sniff. phpcs ships no
+ * composer autoload metadata, so that interface is not autoloadable here;
+ * the guarded no-op stub below is what lets the class load without the
+ * phpcs runtime (only the property is inspected — behaviour is pinned by
  * RequireConfigGatewaySniffTest).
  */
 final class SniffRegistryParityTest extends TestCase
