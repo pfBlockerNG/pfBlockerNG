@@ -5,10 +5,12 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-29 enforcement — the PfBlockerNG.Config.RequireConfigGateway sniff.
+ * ADR-29 / issue #1895 enforcement — the PfBlockerNG.Config.RequireConfigGateway
+ * sniff. It carries two independent checks; this suite pins both.
  *
- * Pins both sides of every decision the sniff makes, driving the real `phpcs`
- * binary over fixture files under tests/phpcs/fixtures/:
+ * CHECK 1 — RawRegisteredKeyAccess (ADR-29). Pins both sides of every decision
+ * the check makes, driving the real `phpcs` binary over fixture files under
+ * tests/phpcs/fixtures/:
  *
  *   VIOLATING (gateway_violation.php): raw config_*_path calls each targeting
  *   a REGISTERED installedpackages/pfblockerng* key — the sniff MUST flag
@@ -38,12 +40,36 @@ use PHPUnit\Framework\TestCase;
  *   - widget-* foreign key — silent
  *   - wizard temp section delete — silent
  *
+ * CHECK 2 — SystemWriteInWww (issue #1895). Fixtures live at path-dependent
+ * locations under tests/phpcs/fixtures/usr/local/... so the sniff's
+ * "/usr/local/www/" file-path substring check has real substrings to match
+ * against, mirroring the real src/usr/local/www/ tree layout:
+ *
+ *   tests/phpcs/fixtures/usr/local/www/system_write_violation.php — a www/
+ *   path calling PfbConfig::writeSystem() / writeSectionSystem(), plus a
+ *   case-varied (pfbconfig::WRITESYSTEM()) call — all three MUST be flagged.
+ *
+ *   tests/phpcs/fixtures/usr/local/www/system_write_compliant.php — the same
+ *   www/ path, but PfbConfig::write()/writeSection() (different method),
+ *   SomethingElse::writeSystem() (different class), and a comment/string
+ *   mentioning "PfbConfig::writeSystem" — all MUST stay silent.
+ *
+ *   tests/phpcs/fixtures/usr/local/pkg/pfblockerng/system_write_compliant.php
+ *   — a non-www path with the identical writeSystem()/writeSectionSystem()
+ *   call shapes as the violating fixture — MUST stay silent (the legitimate
+ *   system-caller use case the methods exist for).
+ *
+ * A final real-tree assertion runs the sniff over the actual
+ * src/usr/local/www/ directory and asserts zero SystemWriteInWww findings —
+ * the confinement this check exists to enforce holds today.
+ *
  * If phpcs is not installed the suite SKIPs — CI's php-codesniffer job is the
  * hard gate; never falsely fails in a vendor-less environment.
  */
 final class RequireConfigGatewaySniffTest extends TestCase
 {
 	private const SOURCE = 'PfBlockerNG.Config.RequireConfigGateway.RawRegisteredKeyAccess';
+	private const SOURCE_SYSTEM_WRITE = 'PfBlockerNG.Config.RequireConfigGateway.SystemWriteInWww';
 
 	private static function repoRoot(): string
 	{
@@ -64,18 +90,35 @@ final class RequireConfigGatewaySniffTest extends TestCase
 
 	/**
 	 * Run the custom PfBlockerNG standard over one fixture and return only the
-	 * RequireConfigGateway findings (source = self::SOURCE).
+	 * RequireConfigGateway findings matching $source (default: self::SOURCE,
+	 * the CHECK 1 RawRegisteredKeyAccess code).
 	 *
 	 * @return list<array<string, mixed>>
 	 */
-	private function findingsFor(string $fixture): array
+	private function findingsFor(string $fixture, string $source = self::SOURCE): array
+	{
+		$path = self::repoRoot() . '/tests/phpcs/fixtures/' . $fixture;
+		$this->assertFileExists($path, "fixture {$fixture} must exist");
+
+		return $this->findingsForPath($path, $source);
+	}
+
+	/**
+	 * Run the custom PfBlockerNG standard over an arbitrary file or directory
+	 * (absolute path) and return only the findings matching $source, across
+	 * every file phpcs reports on. Used for CHECK 2's real-tree assertion,
+	 * where the fixture-path convention of findingsFor() does not apply.
+	 *
+	 * @return list<array<string, mixed>>
+	 */
+	private function findingsForPath(string $path, string $source): array
 	{
 		$root = self::repoRoot();
-		$path = $root . '/tests/phpcs/fixtures/' . $fixture;
-		$this->assertFileExists($path, "fixture {$fixture} must exist");
+		$this->assertFileExists($path, "{$path} must exist");
 
 		$cmd = escapeshellarg(self::phpcsBin())
 			. ' --standard=' . escapeshellarg($root . '/tests/phpcs/PfBlockerNG/ruleset.xml')
+			. ' --extensions=php,inc'
 			. ' --report=json'
 			. ' ' . escapeshellarg($path)
 			. ' 2>/dev/null';
@@ -86,11 +129,17 @@ final class RequireConfigGatewaySniffTest extends TestCase
 		$report = json_decode((string) $json, TRUE);
 		$this->assertIsArray($report, 'phpcs JSON report must decode');
 
-		$messages = $report['files'][$path]['messages'] ?? [];
-		return array_values(array_filter(
-			$messages,
-			static fn (array $m): bool => ($m['source'] ?? '') === self::SOURCE
-		));
+		$findings = [];
+		foreach (($report['files'] ?? []) as $file => $data) {
+			$messages = $data['messages'] ?? [];
+			foreach ($messages as $message) {
+				if (($message['source'] ?? '') === $source) {
+					$findings[] = $message + ['file' => $file];
+				}
+			}
+		}
+
+		return $findings;
 	}
 
 	/**
@@ -177,6 +226,119 @@ final class RequireConfigGatewaySniffTest extends TestCase
 			[],
 			$findings,
 			'ADR-28 bool_compliant fixture must produce no RequireConfigGateway findings'
+		);
+	}
+
+	/**
+	 * CHECK 2 — issue #1895 SystemWriteInWww, violating fixture.
+	 *
+	 * tests/phpcs/fixtures/usr/local/www/system_write_violation.php lives at a
+	 * path containing "/usr/local/www/" and calls PfbConfig::writeSystem() /
+	 * PfbConfig::writeSectionSystem(), plus a case-varied
+	 * pfbconfig::WRITESYSTEM() call — every one MUST be flagged.
+	 */
+	public function testFlagsSystemWriteInWww(): void
+	{
+		$findings = $this->findingsFor(
+			'usr/local/www/system_write_violation.php',
+			self::SOURCE_SYSTEM_WRITE
+		);
+
+		$this->assertCount(
+			3,
+			$findings,
+			'writeSystem(), writeSectionSystem(), and the case-varied call must all be flagged'
+		);
+
+		$lines = array_column($findings, 'line');
+		sort($lines);
+
+		// Line 20: PfbConfig::writeSystem(...)
+		// Line 26: PfbConfig::writeSectionSystem(...)
+		// Line 33: pfbconfig::WRITESYSTEM(...) (case variance)
+		$this->assertSame(
+			[20, 26, 33],
+			$lines,
+			'findings must land on the three static system-write call lines'
+		);
+
+		foreach ($findings as $finding) {
+			$this->assertSame(
+				self::SOURCE_SYSTEM_WRITE,
+				$finding['source'],
+				'every finding must carry the SystemWriteInWww source'
+			);
+		}
+	}
+
+	/**
+	 * CHECK 2 — compliant counterpart, same "/usr/local/www/" path.
+	 *
+	 * tests/phpcs/fixtures/usr/local/www/system_write_compliant.php calls
+	 * PfbConfig::write()/writeSection() (different method), SomethingElse::
+	 * writeSystem() (different class), and merely mentions
+	 * "PfbConfig::writeSystem" in a comment/string — none of that is the
+	 * gated static PfbConfig::writeSystem()/writeSectionSystem() call, so the
+	 * sniff MUST stay entirely silent despite sharing the www/ path with the
+	 * violating fixture above.
+	 */
+	public function testSystemWriteCompliantCasesAreClean(): void
+	{
+		$findings = $this->findingsFor(
+			'usr/local/www/system_write_compliant.php',
+			self::SOURCE_SYSTEM_WRITE
+		);
+
+		$this->assertSame(
+			[],
+			$findings,
+			'write()/writeSection(), a foreign class, and a comment/string mention '
+			. 'must produce no SystemWriteInWww findings'
+		);
+	}
+
+	/**
+	 * CHECK 2 — the legitimate system-caller use case, outside www/.
+	 *
+	 * tests/phpcs/fixtures/usr/local/pkg/pfblockerng/system_write_compliant.php
+	 * calls the identical PfbConfig::writeSystem()/writeSectionSystem() shapes
+	 * as the violating www/ fixture, but its path contains no "/usr/local/www/"
+	 * substring — the sniff MUST stay silent. This is the before/after proof
+	 * that the file path, not the call shape, gates this check.
+	 */
+	public function testSystemWriteOutsideWwwIsClean(): void
+	{
+		$findings = $this->findingsFor(
+			'usr/local/pkg/pfblockerng/system_write_compliant.php',
+			self::SOURCE_SYSTEM_WRITE
+		);
+
+		$this->assertSame(
+			[],
+			$findings,
+			'identical writeSystem()/writeSectionSystem() calls outside /usr/local/www/ '
+			. 'must produce no SystemWriteInWww findings'
+		);
+	}
+
+	/**
+	 * CHECK 2 — real-tree assertion. The confinement issue #1895's docblocks
+	 * promise (writeSystem()/writeSectionSystem() are system-caller-only) MUST
+	 * hold mechanically across the actual shipped web UI today: zero
+	 * SystemWriteInWww findings over src/usr/local/www/.
+	 */
+	public function testRealWwwTreeHasNoSystemWriteCalls(): void
+	{
+		$findings = $this->findingsForPath(
+			self::repoRoot() . '/src/usr/local/www',
+			self::SOURCE_SYSTEM_WRITE
+		);
+
+		$this->assertSame(
+			[],
+			$findings,
+			'src/usr/local/www/ must contain zero PfbConfig::writeSystem()/'
+			. 'writeSectionSystem() calls (issue #1895 confinement)'
 		);
 	}
 }
