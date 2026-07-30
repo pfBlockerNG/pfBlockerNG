@@ -483,7 +483,7 @@ if ($clearable) {
 $section = new Form_Section('Log/File Details');
 $section->addInput(new Form_StaticText(
 	NULL,
-	'<div style="display:none;" id="fileStatusBox"><strong id="fileStatus"></strong></div>'
+	'<div id="fileStatusBox"><strong id="fileStatus">' . gettext('Select Log/File to load') . '</strong></div>'
 	. '<div style="display:none;" id="filePathBox"><strong>Log/File Path:&emsp;</strong>'
 	. '<div style="display:inline;" id="fbTarget"></div>'
 	. '<div style="display:inline; margin-right:10px;" class="pull-right" id="fileRefreshBtn">'
