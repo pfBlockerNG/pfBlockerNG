@@ -5260,7 +5260,9 @@ function ip_suppression() {
 function ip_suppression_type() {
 
 	// Confirm if the Suppression option is enabled
-	var is_supp = "<?=$pfb['supp']?>";
+	// issue #1887: the mirror is a PfbToggle — render its token explicitly (echoing
+	// the enum raw is a page-killing fatal: not convertible to string).
+	var is_supp = "<?=($pfb['supp'] === PfbToggle::On ? 'on' : 'off')?>";
 	if (is_supp != 'on') {
 		alert('The IP Suppression option has not been enabled. Please enable this option in the IP Tab to suppress this IP.');
 		return;

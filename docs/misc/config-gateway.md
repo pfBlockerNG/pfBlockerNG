@@ -58,12 +58,16 @@ exclusions.
 
 - **PHP adapters / enums** (`PfbToggle`, `PfbIdnMode` + the thin `pfb_cfg_*_read/write`
   delegations) in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`:
-  - Every checkbox field → `PfbToggle` (`'on'`/`'off'`; issue #1887 merged the former
+  - Every ADAPTER-CARRYING checkbox field → `PfbToggle` (`'on'`/`'off'`; issue #1887 merged the former
     `PfbLenient` into it). Off is an EXPLICIT stored token; a stored `''` is the
     not-configured state and resolves to the field's registered default at the gateway,
     exactly as an absent key does. Tokens are recognised case-insensitively on read;
     writes always emit canonical lowercase. The runtime `$pfb[]` toggle mirrors carry
     the enum itself (never `->value`), so consumers compare `=== PfbToggle::On`.
+    Registered checkbox fields still on `NULL`/`NULL` adapters (e.g. `pfb_regex`,
+    `pfb_noaaaa`, `pfb_gp`, `pfb_cache`, `pfb_py_nolog`, `pfb_tld`, `alexa_enable`)
+    keep the raw `{'on', ''}` storage until they adopt the pair — a field joining the
+    adapter set moves all its consumers in the same commit (see below).
   - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables the post-handshake full Unbound
     cache flush for bulk zero-downtime DNSBL data swaps.
   - **`pfb_alias_delta_mode` → `PfbAliasDeltaMode`** (ADR-40, registry adapters

@@ -382,8 +382,8 @@ final class CfgGatewayTest extends TestCase
 
 	public function testReadReturnsRegisteredDefaultForPfbKeepAbsentKey(): void
 	{
-		// pfb_keep default is 'on' (On enum) — the #281 canonical default.
-		// Uses the lenient adapter so absent key → PfbToggle::On (not PfbToggle::On).
+		// pfb_keep default is 'on' (On enum) — the #281 canonical default; the
+		// merged PfbToggle adapter resolves the absent key to it (issue #1887).
 		// Before: key absent.
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_keep'));
 

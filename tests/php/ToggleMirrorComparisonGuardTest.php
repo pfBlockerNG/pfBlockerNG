@@ -87,6 +87,53 @@ final class ToggleMirrorComparisonGuardTest extends TestCase
 	}
 
 	/**
+	 * Companion lens the comparison sweep is blind to (PR #1899 adversarial review):
+	 * a typed mirror reaching a STRING context. `<?=$pfb['supp']?>` in the Alerts
+	 * page's inline JS was a fatal on every page load — "Object of class PfbToggle
+	 * could not be converted to string" — and no comparison-shaped regex can see it.
+	 * Three sink shapes: echo tags, double-quoted/heredoc interpolation, and string
+	 * concatenation. A mirror needed as a token goes through an explicit
+	 * `=== PfbToggle::On ? 'on' : 'off'` (or `->value` at a boundary), never raw.
+	 */
+	public function testNoTypedMirrorReachesAStringContext(): void
+	{
+		$mirror = '\$pfb\[\'(?:' . implode('|', self::TYPED_MIRRORS) . ')\'\]';
+		$sinks = [
+			'echo tag'      => '/<\?=\s*' . $mirror . '\s*\?>/',
+			'interpolation' => '/\{' . $mirror . '\}/',
+			'concatenation' => '/(?:\.\s*' . $mirror . '|' . $mirror . '\s*\.\s*[\'"])/',
+		];
+
+		$offences = [];
+		$root = dirname(__DIR__, 2) . '/src';
+		$it = new RecursiveIteratorIterator(
+			new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
+		);
+		foreach ($it as $file) {
+			/** @var SplFileInfo $file */
+			if (!$file->isFile() || !preg_match('/\.(php|inc)$/', $file->getPathname())) {
+				continue;
+			}
+			foreach (explode("\n", (string) file_get_contents($file->getPathname())) as $n => $line) {
+				foreach ($sinks as $kind => $rx) {
+					if (preg_match($rx, $line)) {
+						$offences[] = substr($file->getPathname(), strlen($root) + 1) . ':' . ($n + 1)
+							. " [{$kind}]: " . trim($line);
+					}
+				}
+			}
+		}
+
+		$this->assertSame(
+			[],
+			$offences,
+			"typed toggle mirrors must never reach a string context raw — PHP fatals with "
+				. "'Object of class PfbToggle could not be converted to string':\n  "
+				. implode("\n  ", $offences)
+		);
+	}
+
+	/**
 	 * The behavioural half of the smoke defect: with the TOP1M mirror On, the TOP1M
 	 * whitelist file belongs to the ADR-42 reload fingerprint's input set; with it Off,
 	 * it does not. Both directions, so the test cannot pass on a constant.

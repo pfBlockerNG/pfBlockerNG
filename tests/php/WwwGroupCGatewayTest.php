@@ -58,8 +58,8 @@ final class WwwGroupCGatewayTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * pfb_software_check: absent → '' (registry default; page treats absent as enabled
-	 * via pfb_software_check_enabled(null)).
+	 * pfb_software_check: absent → On (the registered default 'on' since issue #1887;
+	 * pfb_software_check_enabled() is zero-arg and reads the gateway itself).
 	 */
 	public function testSoftwareCheckAbsentDefaultIsOn(): void
 	{

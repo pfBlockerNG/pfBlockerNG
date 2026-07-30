@@ -66,6 +66,17 @@ class ToggleFlow:
     config_path: str
     on: str = "on"
     off: str = ""
+    # What an unchecked box SENDS (CR #1899 review): a browser submits ''/nothing for a
+    # cleared checkbox, and every save handler is designed around 'on'/empty input —
+    # PFB_FILTER_ON_OFF rejects a literal 'off' (logs "Invalid on/off" and only lands the
+    # right value via its fallback), and the #1887 ternaries treat any non-'on' as Off.
+    # `off` above stays the STORAGE oracle token; this is the wire representation only.
+    post_off: str = ""
+    # The stored token the ABSENT key is behaviourally equivalent to (issue #1887: an
+    # absent registered field reads as its registry default). Default-on fields set "on"
+    # so the before-state/restore never converts an unconfigured box into an explicit
+    # Off — that would CHANGE the effective state the test promises to preserve.
+    absent: str = ""
     # POST timeout: the General save calls sync_package_pfblockerng() (a full
     # config-rebuild pass) AFTER write_config, so its round-trip can run long;
     # the IP/DNSBL settings saves only write_config(). Generous default covers
@@ -126,6 +137,8 @@ FLOWS: tuple[ToggleFlow, ...] = (
         # issue #484: the General save stores an explicit 'off' for an unchecked
         # pfb_keep (not '') so a default-on flag can persist a deliberate off.
         off="off",
+        # Registry default 'on': an absent key means the feature is ON.
+        absent="on",
     ),
     # ---- IP settings (installedpackages/pfblockerngipsettings/config/0) -------
     # The IP save validates ip_placeholder + maxmind_locale and fires a MaxMind
@@ -255,6 +268,8 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_block_malicious",
         # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
         off="off",
+        # Registry default 'on': an absent key means the feature is ON.
+        absent="on",
     ),
     ToggleFlow(
         name="dnsbl_idn_escalate_suspicious",
@@ -300,13 +315,11 @@ def _set_and_confirm(webui: WebUI, vm: helpers.SmokeVM, flow: ToggleFlow, target
     current value, so only this flag changes. The oracle then re-reads the
     config node over SSH (effective state), never the POST response body.
     """
-    # ON: send the checkbox value flow.on ('on'). OFF: send flow.off -- the form
-    # had it checked (currently ON), so scrape_form_fields would otherwise re-submit
-    # it as 'on'; overriding to flow.off ('' by default) makes pfBlockerNG's
-    # PFB_FILTER_ON_OFF store the cleared value (any value != 'on' -> off). Use the
-    # dataclass's off value, not a hardcoded '', so a flow with a different OFF
-    # token stays correct.
-    overrides = {flow.field: flow.on} if target == flow.on else {flow.field: flow.off}
+    # ON: send the checkbox value flow.on ('on'). OFF: send flow.post_off ('') -- the
+    # form had it checked, so scrape_form_fields would otherwise re-submit it as 'on';
+    # the empty override models the browser's cleared checkbox, which every handler is
+    # designed for. The STORED outcome is asserted against flow.on/flow.off below.
+    overrides = {flow.field: flow.on} if target == flow.on else {flow.field: flow.post_off}
     resp = webui.post(flow.page, overrides, timeout=flow.post_timeout)
     # Sanity only: the POST must not bounce to the login form (a dropped session
     # would otherwise read as "no change" against config). NOT the pass oracle.
@@ -334,11 +347,12 @@ def test_toggle_flow_changes_effective_config(
     final restore leaves the box clean for Tier A / the sibling flows on the
     session VM. The oracle is config.xml read over SSH, never the POST response.
     """
-    # An absent key reads as '' over the raw config path; normalise it to this flow's
-    # canonical off token so the before-state assertion and the restore compare against a
-    # real stored value (issue #1887: every adapter'd toggle stores 'off', never '').
-    # For the raw unregistered fields whose off token IS '', this is a no-op.
-    original = helpers.config_get(smoke_vm, flow.config_path) or flow.off
+    # An absent key reads as '' over the raw config path; resolve it to the token the
+    # absent state is behaviourally equivalent to (flow.absent — the registry default for
+    # adapter'd fields, issue #1887; flow.off otherwise), so the restore drives the box
+    # back to its EFFECTIVE original state instead of pinning an explicit Off onto a
+    # default-on field that was merely unconfigured.
+    original = helpers.config_get(smoke_vm, flow.config_path) or flow.absent or flow.off
     # The toggle's "other" value -- we drive AWAY from original, then BACK.
     flipped = flow.off if original == flow.on else flow.on
 

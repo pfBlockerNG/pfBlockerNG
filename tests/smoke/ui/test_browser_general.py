@@ -106,9 +106,10 @@ def test_gateway_pfb_keep_save_roundtrip(
     page = browser_page
 
     # GIVEN: read the starting value so we know which direction to flip first.
-    # An absent pfb_keep reads as '' over the raw config path; PfbToggle's canonical off
-    # token is 'off' (issue #484), so normalise absent -> 'off' before asserting/flipping.
-    original = helpers.config_get(smoke_vm, _CFG_KEEP) or "off"
+    # An absent pfb_keep reads as the registered default 'on' (issue #1887), so resolve
+    # absent -> 'on': the restore must return the box to its EFFECTIVE original state,
+    # never pin an explicit 'off' onto a merely-unconfigured default-on field.
+    original = helpers.config_get(smoke_vm, _CFG_KEEP) or "on"
     assert original in ("on", "off"), f"pfb_keep starting value {original!r} not in expected vocabulary {{'on', 'off'}}"
     # The two branches: flip to the opposite, then restore. The off-token is the explicit
     # 'off' the save emits for an unchecked box (issue #484), not ''.

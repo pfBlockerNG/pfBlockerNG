@@ -134,10 +134,11 @@ final class SoftwareUpdateDecisionTest extends TestCase
 
 	/*
 	 * ---- pfb_software_check_enabled() — the single "Check for new versions" boolean ----
-	 * Default ENABLED: only an explicit 'off' (the user un-ticking the box, persisted by the
-	 * page) disables it. An unset value (null, never saved), 'on', or any other string reads
-	 * as enabled. Both sides asserted so green proves 'off' is a real disabling branch, not an
-	 * always-enabled path.
+	 * Default ENABLED via the registry (issue #1887): absent and '' are the not-configured
+	 * state and resolve to the registered default 'on'. An explicit 'off' — in any letter
+	 * case — disables; junk tokens fall back to Off like every other toggle (the pre-#1887
+	 * reader treated any non-'off' string as enabled). Both sides asserted so green proves
+	 * 'off' is a real disabling branch, not an always-enabled path.
 	 */
 	public static function checkEnabledProvider(): array
 	{
@@ -158,11 +159,22 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	#[DataProvider('checkEnabledProvider')]
 	public function testCheckEnabled(?string $raw, bool $expected): void
 	{
+		// Swap the process-global config for this case and ALWAYS restore it: the last
+		// data-provider case must not leak its fixture into later tests in the process.
+		$previous = $GLOBALS['config'] ?? NULL;
 		$GLOBALS['config'] = [];
-		if ($raw !== null) {
-			config_set_path('installedpackages/pfblockerng/config/0/pfb_software_check', $raw);
+		try {
+			if ($raw !== null) {
+				config_set_path('installedpackages/pfblockerng/config/0/pfb_software_check', $raw);
+			}
+			$this->assertSame($expected, pfb_software_check_enabled());
+		} finally {
+			if ($previous === NULL) {
+				unset($GLOBALS['config']);
+			} else {
+				$GLOBALS['config'] = $previous;
+			}
 		}
-		$this->assertSame($expected, pfb_software_check_enabled());
 	}
 
 	/*

@@ -55,7 +55,7 @@ $pconfig['pfb_keep']			= PfbConfig::read('pfb_keep')->value;
 
 // Default 'on' — owned by the registry (ADR-29); PfbConfig::read applies it when absent.
 // Pinned 'off' on existing installs by the upgrade migration in pfblockerng_install.inc.
-$pconfig['pfb_feed_internal_filter']	= PfbConfig::read('pfb_feed_internal_filter');
+$pconfig['pfb_feed_internal_filter']	= PfbConfig::read('pfb_feed_internal_filter')->value;
 
 // Exemptions from the internal-address feed-host check: IP addresses / CIDR ranges
 // (one per line) whose feeds are allowed even when they resolve internally.
@@ -92,9 +92,9 @@ $pconfig['log_syslog']			= PfbConfig::read('log_syslog')->value;
 $pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('pfb_log_trim_margin_pct');
 
 // issue #1669 slice C / #1888: client-side editor toggle (default on). Read via
-// PfbConfig::read so the registered default applies; pfb_syntax_highlight uses the
-// LENIENT adapter (default-on checkbox, mirrors pfb_keep) -- extract the scalar .value
-// for pfb_cfg_toggle_read() at render.
+// PfbConfig::read so the registered default applies; pfb_syntax_highlight is a
+// default-on toggle field (merged PfbToggle, issue #1887; mirrors pfb_keep) --
+// extract the scalar .value for pfb_cfg_toggle_read() at render.
 $pconfig['pfb_syntax_highlight']	= PfbConfig::read('pfb_syntax_highlight')->value;
 
 // issue #1875 step 2b: gate the CM6 live-highlight overlay for pfb_feed_internal_allowlist,

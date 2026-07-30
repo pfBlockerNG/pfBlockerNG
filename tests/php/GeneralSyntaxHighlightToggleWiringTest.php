@@ -14,10 +14,9 @@ use PHPUnit\Framework\TestCase;
  * et al.) and cannot be require()d/rendered off-appliance -- same constraint documented on
  * FeedsUrlCompareIconRenderTest/CategoryEditReservedHeaderTest/DnsblRegexHighlightWiringTest.
  * No prior literal-source render test exists for this page, so this one is shaped minimally
- * like DnsblRegexHighlightWiringTest. pfb_syntax_highlight is a default-on checkbox, so it
- * uses the LENIENT adapter (not PfbToggle -- a default-'on' TOGGLE field's '' off-value
- * cannot survive the live config round-trip; see the registry comment and
- * CfgGatewayTest::testNoToggleFieldDefaultsToOn), mirroring this page's existing `pfb_keep`
+ * like DnsblRegexHighlightWiringTest. pfb_syntax_highlight is a default-on checkbox on the
+ * merged PfbToggle adapter (issue #1887: Off stores the explicit 'off' token, so the
+ * default-on round trip is safe), mirroring this page's existing `pfb_keep`
  * field exactly: PfbConfig::read()->value on load, an explicit 'on'/'off' ternary on save
  * (not pfb_filter(..., PFB_FILTER_ON_OFF, ...) -- pfb_keep does not use it either), and
  * pfb_cfg_toggle_read(...) === PfbToggle::On on render (merged enum, issue #1887).
