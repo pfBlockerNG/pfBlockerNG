@@ -59,7 +59,7 @@ final class UnboundPythonSourcesTest extends TestCase
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
 			'unbound_py_top1m'   => "{$this->tmp}/pfb_py_top1m.txt",
 			'dbdir'              => "{$this->tmp}/db",
-			'dnsbl_top1m'        => 'off',
+			'dnsbl_top1m'        => PfbToggle::Off,
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			// issue #1255: DNSBL Wildcard Blocking (TLD) toggle; OFF by default here.
@@ -438,7 +438,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		mkdir($old_generation, 0777, TRUE);
 		file_put_contents("{$old_generation}/old.raw", 'old-raw-secret');
 		$old = $this->seedManifest();
-		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+		$GLOBALS['pfb']['dnsbl_top1m'] = PfbToggle::On;
 		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", $invalid . "\n");
 
 		pfb_unbound_python_sources([], $this->top1mPublicationOps());

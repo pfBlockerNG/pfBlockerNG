@@ -100,7 +100,7 @@ final class Top1mFixedFileManifestTest extends TestCase
 			'unbound_py_top1m'   => "{$this->tmp}/pfb_py_top1m.txt",
 			'dnsdir'             => "{$this->tmp}/dnsbl",
 			'dbdir'              => "{$this->tmp}/db",
-			'dnsbl_top1m'        => 'off',
+			'dnsbl_top1m'        => PfbToggle::Off,
 			'dnsbl_tld_wildcard' => '',
 			'dnsblconfig'        => ['tldblacklist' => '', 'tldexclusion' => '', 'suppression' => ''],
 		]);
@@ -129,7 +129,7 @@ final class Top1mFixedFileManifestTest extends TestCase
 	{
 		$source = "one.example\r\n\r\n two.example \r\none.example\r\n";
 		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", $source);
-		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+		$GLOBALS['pfb']['dnsbl_top1m'] = PfbToggle::On;
 		$manifest = pfb_unbound_python_sources([
 			['header' => 'feed', 'group' => 'g', 'log' => '1', 'provenance' => 'feed'],
 		], [
@@ -322,7 +322,7 @@ final class Top1mFixedFileManifestTest extends TestCase
 		file_put_contents($target, "old.example\n");
 		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"old":true}');
 		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", "new.example\n");
-		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+		$GLOBALS['pfb']['dnsbl_top1m'] = PfbToggle::On;
 
 		$manifest = pfb_unbound_python_sources([], [
 			'top1m_atomic' => [
@@ -343,7 +343,7 @@ final class Top1mFixedFileManifestTest extends TestCase
 		file_put_contents($target, "old.example\n");
 		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"old":true}');
 		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", "new.example\n");
-		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+		$GLOBALS['pfb']['dnsbl_top1m'] = PfbToggle::On;
 		$copy_observed = [];
 		$restore_called = FALSE;
 
@@ -380,7 +380,7 @@ final class Top1mFixedFileManifestTest extends TestCase
 		file_put_contents($target, "old.example\n");
 		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"old":true}');
 		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", "new.example\n");
-		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+		$GLOBALS['pfb']['dnsbl_top1m'] = PfbToggle::On;
 		$restore_observed = [];
 
 		$result = pfb_unbound_python_sources([], [
@@ -412,7 +412,7 @@ final class Top1mFixedFileManifestTest extends TestCase
 
 	private function publishTop1m(array $ops=array())
 	{
-		$GLOBALS['pfb']['dnsbl_top1m'] = 'on';
+		$GLOBALS['pfb']['dnsbl_top1m'] = PfbToggle::On;
 		return pfb_unbound_python_sources([], [
 			'top1m_atomic' => $ops + $this->successfulOwnershipOps(),
 		]);
