@@ -12,6 +12,10 @@ go in; a list of actions comes out. The workflow executes them:
                     matrix does not carry (the ONLY human gate)
   matrix_pr_ga_flip — propose flipping a beta entry to active (final build seen)
   warn            — a rule matched but the plan lacks data to act; message only
+  error           — the booted /etc/version belongs to a DIFFERENT family than
+                    the image tag claims (issue #1857): the image is mislabeled,
+                    none of that boot's facts drive any rule, and the workflow
+                    surfaces the fact as a ::error:: annotation
 
 Sources of truth, in order (owner decisions, 2026-07-28):
   1. `pfSense-upgrade -c` on the booted image's own configured branch — the
@@ -137,6 +141,25 @@ def plan(
     all_branches: list[dict[str, str]] = []
     for boot in boots:
         family = boot["family"]
+        booted_version = boot.get("etc_version", "").strip()
+
+        # Rule: the booted /etc/version must belong to the family its image tag
+        # claims (issue #1857 — a 26.07-tagged image booted 26.03.1-RELEASE and
+        # flipped the beta entry to GA). A mismatch means the published image is
+        # mislabeled: surface it loudly and quarantine ALL of this boot's facts.
+        # An EMPTY etc-version stays a degraded fact (issue #1848), not a mismatch.
+        if booted_version and family_of(booted_version) != family:
+            add(
+                {
+                    "type": "error",
+                    "family": family,
+                    "message": f"booted /etc/version {booted_version} is family "
+                    f"{family_of(booted_version)}, not {family} — mislabeled image; "
+                    "ignoring this boot's facts",
+                }
+            )
+            continue
+
         branches = parse_repoc(boot.get("repoc", ""))
         all_branches.extend(branches)
 
@@ -144,8 +167,6 @@ def plan(
         # fires a republish, independent of branch parsing.
         if _UPGRADE_AVAILABLE_RE.search(boot.get("upgrade_check", "")):
             add({"type": "republish", "family": family, "branch": "", "reason": "upgrade-check"})
-
-        booted_version = boot.get("etc_version", "").strip()
 
         for br in branches:
             if (
