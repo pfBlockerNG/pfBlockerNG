@@ -183,6 +183,11 @@ def test_1906_asn_dispatch_reaches_the_download(deployed_vm: SmokeVM) -> None:
     whether the DOWNLOAD succeeds, not whether the request could be CONSTRUCTED — which
     is the whole of #1906, and is what c1's licensed-token gate hid from CI.
     """
+    # php_eval PERSISTS to config.xml and h.reset() only drops DERIVED state, so the dummy
+    # token would leak into every later case on this VM. Snapshot it now, restore it in the
+    # finally. An absent key reads back as '' and is restored as '': pfb_global() coerces the
+    # field with `?: ''` and the CLI gates on empty(), so the two are the same state.
+    prior_token = h.config_get(deployed_vm, f"{h.CFG_IP_SETTINGS}/asn_token")
     try:
         start_before = h.count_log_marker(deployed_vm, _ASN_EXTRAS_LOG, _EXTRAS_START_MARKER)
         end_before = h.count_log_marker(deployed_vm, _ASN_EXTRAS_LOG, _EXTRAS_END_MARKER)
@@ -222,6 +227,17 @@ def test_1906_asn_dispatch_reaches_the_download(deployed_vm: SmokeVM) -> None:
             "killing the CLI mid-loop"
         )
     finally:
+        restore = (
+            f"$c = config_get_path({h._php_str(h.CFG_IP_SETTINGS)}, array());\n"  # noqa: SLF001
+            f"$c['asn_token'] = {h._php_str(prior_token)};\n"  # noqa: SLF001
+            f"config_set_path({h._php_str(h.CFG_IP_SETTINGS)}, $c);\n"  # noqa: SLF001
+            "write_config('pfBlockerNG smoke #1906: restore ASN token');\n"
+            "echo 'OK';"
+        )
+        assert "OK" in h.php_eval(deployed_vm, restore).stdout, (
+            "could not restore the pre-test ASN token — later cases on this VM would inherit "
+            f"the dummy {_ASN_DUMMY_TOKEN!r}"
+        )
         h.reset(deployed_vm)
 
 
