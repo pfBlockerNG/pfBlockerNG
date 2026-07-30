@@ -374,7 +374,7 @@ function pfBlockerNG_update_table() {
 	}
 
 	// DNSBL collect statistics
-	if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
+	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On) {
 
 		$pfb['dnsbl_missing'] = TRUE;	// Flag to indicate error message to user in widget
 		$db_handle = pfb_open_sqlite(1, 'Widget stats');
@@ -618,7 +618,7 @@ function pfBlockerNG_get_header($mode='') {
 	}
 
 	// Status indicator if pfBlockerNG is enabled/disabled
-	if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
+	if ($pfb['enable'] === PfbToggle::On) {
 		$pfb_status	= 'fa-solid fa-check-circle text-success';
 		$pfb_msg	= 'pfBlockerNG is Active.';
 
@@ -647,7 +647,7 @@ function pfBlockerNG_get_header($mode='') {
 	}
 
 	// Status indicator if DNSBL is actively running
-	if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On && pfb_cfg_toggle_read($pfb['unbound_state']) === PfbToggle::On && $unbound_validate) {
+	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On && $unbound_validate) {
 
 		// ADR-61: yellow on ANY open facility='dnsbl' entry, merged PHP + Python ledgers.
 		$pfb_dnsbl_open = array_merge(pfb_sync_status_list_open($pfb['dbdir'], 'dnsbl'), pfb_py_sync_status_list_open($pfb['dnsbldir']));
@@ -822,7 +822,7 @@ function pfBlockerNG_get_header($mode='') {
 	$dnsbl_last_clear	= '';
 
 	// Collect Last packet clear timestamps
-	if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
+	if ($pfb['enable'] === PfbToggle::On) {
 		$db_handle = pfb_open_sqlite(6, 'Last Clear Stats');
 		$pfb_found = FALSE;
 		if ($db_handle) {

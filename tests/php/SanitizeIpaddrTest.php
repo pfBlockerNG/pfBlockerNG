@@ -24,7 +24,7 @@ final class SanitizeIpaddrTest extends TestCase
 		$this->hadSupp   = array_key_exists('supp', $GLOBALS['pfb'] ?? []);
 		$this->savedSupp = $GLOBALS['pfb']['supp'] ?? null;
 		// Default: suppression OFF (no reserved/private filtering).
-		$GLOBALS['pfb']['supp'] = 'off';
+		$GLOBALS['pfb']['supp'] = PfbToggle::Off;
 	}
 
 	protected function tearDown(): void
@@ -72,7 +72,7 @@ final class SanitizeIpaddrTest extends TestCase
 
 	public function testSuppressionKeepsPublicIp(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		// 192.0.2.5 (RFC 5737 documentation space) no longer qualifies as
 		// "public" under issue #760 — use a genuinely routable address.
 		$this->assertSame('1.1.1.1', sanitize_ipaddr('1.1.1.1/32', false, 'Disabled'));
@@ -80,26 +80,26 @@ final class SanitizeIpaddrTest extends TestCase
 
 	public function testSuppressionDropsPrivateIp(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('10.0.0.5/32', false, 'Disabled'));
 	}
 
 	public function testSuppressionDropsLoopback(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('127.0.0.1/32', false, 'Disabled'));
 	}
 
 	public function testCustomListBypassesSuppression(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		// $custom = true -> private IP retained.
 		$this->assertSame('10.0.0.5', sanitize_ipaddr('10.0.0.5/32', true, 'Disabled'));
 	}
 
 	public function testAdvancedCidrFloorClampsToSlash32(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		// mask 8 < floor 24 -> clamped to /32 (public address survives the filter).
 		// 198.51.100.0 (TEST-NET-2) would no longer survive under issue #760, so
 		// this exemplar uses a genuinely routable /8.
@@ -115,7 +115,7 @@ final class SanitizeIpaddrTest extends TestCase
 
 	public function testSuppressionDropsDocumentationRange(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('192.0.2.5/32', false, 'Disabled'), 'documentation (RFC 5737) is dropped');
 	}
 
@@ -123,31 +123,31 @@ final class SanitizeIpaddrTest extends TestCase
 	// same as a bare host — the mask itself is never inspected.
 	public function testSuppressionDropsDocumentationRangeCidr(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('198.51.100.0/24', false, 'Disabled'), 'documentation (RFC 5737) is dropped');
 	}
 
 	public function testSuppressionDropsMulticastRange(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('224.0.0.1/32', false, 'Disabled'), 'multicast (224.0.0.0/4) is dropped');
 	}
 
 	public function testSuppressionDropsCgnRange(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('100.64.0.1/32', false, 'Disabled'), 'CGN (RFC 6598) is dropped');
 	}
 
 	public function testSuppressionDropsBenchmarkingRange(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('198.18.0.1/32', false, 'Disabled'), 'benchmarking (RFC 2544) is dropped');
 	}
 
 	public function testSuppressionDrops6to4RelayRange(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('192.88.99.1/32', false, 'Disabled'), '6to4 relay anycast (deprecated) is dropped');
 	}
 
@@ -162,7 +162,7 @@ final class SanitizeIpaddrTest extends TestCase
 	// class.
 	public function testCustomListBypassesSuppressionForDocumentationRange(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertSame('192.0.2.5', sanitize_ipaddr('192.0.2.5/32', true, 'Disabled'));
 	}
 
@@ -191,7 +191,7 @@ final class SanitizeIpaddrTest extends TestCase
 	// dropped regardless of suppression state.
 	public function testInvalidMasksDroppedUnderSuppression(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('192.0.2.1/33', false, 'Disabled'));
 		$this->assertNull(sanitize_ipaddr('192.0.2.1/132', false, 'Disabled'));
 		$this->assertNull(sanitize_ipaddr('192.0.2.1/320', false, 'Disabled'));
@@ -244,7 +244,7 @@ final class SanitizeIpaddrTest extends TestCase
 	// routable address (198.51.100.x would now be dropped under issue #760).
 	public function testFeedSlashZeroUnderSuppressionCidrFloorStillSingleHost(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertSame('1.1.1.7', sanitize_ipaddr('1.1.1.7/0', false, 24));
 	}
 
@@ -253,7 +253,7 @@ final class SanitizeIpaddrTest extends TestCase
 	// the line yields nothing, it does not survive as a host entry.
 	public function testFeedZeroSlashZeroUnderSuppressionDropped(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('0.0.0.0/0', false, 'Disabled'));
 	}
 
@@ -267,7 +267,7 @@ final class SanitizeIpaddrTest extends TestCase
 
 	public function testCustomListSlashZeroHonoredUnderSuppression(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertSame('0.0.0.0/0', sanitize_ipaddr('0.0.0.0/0', true, 24));
 	}
 
@@ -281,7 +281,7 @@ final class SanitizeIpaddrTest extends TestCase
 	// testDocumentationRangeCidrStillDroppedUnderFloor).
 	public function testDocumentationRangeCidrStillDroppedUnderFloor(): void
 	{
-		$GLOBALS['pfb']['supp'] = 'on';
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
 		$this->assertNull(sanitize_ipaddr('192.0.2.0/24', false, 28));
 	}
 }

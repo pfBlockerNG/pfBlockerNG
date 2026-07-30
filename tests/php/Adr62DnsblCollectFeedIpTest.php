@@ -20,7 +20,7 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 	{
 		// Default: suppression OFF (no reserved/private filtering) -- matches
 		// SanitizeIpaddrTest's setUp so sanitize_ipaddr() has a defined $pfb['supp'].
-		$GLOBALS['pfb']['supp'] = 'off';
+		$GLOBALS['pfb']['supp'] = PfbToggle::Off;
 	}
 
 	public function testV4CandidateIsSanitizedBeforeAppend(): void

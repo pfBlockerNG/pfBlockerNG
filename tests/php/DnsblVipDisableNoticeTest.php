@@ -113,7 +113,7 @@ final class DnsblVipDisableNoticeTest extends TestCase
 		pfb_global();
 
 		// Then: force-disable still happens (unchanged behaviour) ...
-		$this->assertSame('', $GLOBALS['pfb']['dnsbl'], 'manual mode: an invalid VIP still force-disables DNSBL');
+		$this->assertSame(PfbToggle::Off, $GLOBALS['pfb']['dnsbl'], 'manual mode: an invalid VIP still force-disables DNSBL');
 
 		// ... AND a file_notice() now surfaces the reason (the fix).
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'exactly one notice raised');
@@ -136,7 +136,7 @@ final class DnsblVipDisableNoticeTest extends TestCase
 		// Then: auto-create's deferral is unchanged -- no notice, DNSBL stays enabled
 		// for this same pass (pfb_manage_dnsbl_vip provisions it afterwards).
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'auto mode defers -- no notice fires');
-		$this->assertSame('on', $GLOBALS['pfb']['dnsbl'], 'auto mode: DNSBL is not force-disabled here');
+		$this->assertSame(PfbToggle::On, $GLOBALS['pfb']['dnsbl'], 'auto mode: DNSBL is not force-disabled here');
 	}
 
 	public function testValidVipDoesNotSurfaceNotice(): void
@@ -152,7 +152,7 @@ final class DnsblVipDisableNoticeTest extends TestCase
 		pfb_global();
 
 		// Then: validation passes -- DNSBL stays enabled, no notice.
-		$this->assertSame('on', $GLOBALS['pfb']['dnsbl'], 'a genuinely valid VIP leaves DNSBL enabled');
+		$this->assertSame(PfbToggle::On, $GLOBALS['pfb']['dnsbl'], 'a genuinely valid VIP leaves DNSBL enabled');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'no notice when the VIP is valid');
 	}
 }

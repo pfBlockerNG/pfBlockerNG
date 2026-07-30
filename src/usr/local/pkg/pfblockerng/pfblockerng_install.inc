@@ -201,7 +201,7 @@ link('/usr/local/sbin/lighttpd', '/usr/local/sbin/lighttpd_pfb');
 update_status(" done.\n");
 
 // Create DNSBL Lighttpd config file and DNSBL Certificate and restart DNSBL Service
-if (!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl'] == 'on')) {
+if (!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl'] === PfbToggle::On)) {
 
 	update_status("Creating DNSBL web server config ...");
 	pfb_create_lighttpd();

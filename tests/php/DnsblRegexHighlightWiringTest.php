@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
  * unconditional. This slice's markup is CONDITIONAL (the asset include + the JS init are
  * both gated behind the toggle, per the pivot decision to emit zero highlight bytes when
  * it is off), so this test pins the CONDITIONAL STRUCTURE itself -- the PfbConfig read,
- * the PfbLenient::On comparison (LENIENT, not PfbToggle -- a default-on field's '' off
+ * the pfb_editor_enabled\(\) accessor (issue #1887; hides the key, default and stored
  * value cannot survive the live config round-trip under PfbToggle; see the registry
  * comment and CfgGatewayTest::testNoToggleFieldDefaultsToOn), and the gated script tag /
  * JS init all being driven by the same PHP boolean -- rather than asserting the markup is
@@ -47,13 +47,13 @@ final class DnsblRegexHighlightWiringTest extends TestCase
 	{
 		// The single PHP boolean gating BOTH the asset include and the JS init must be
 		// derived from PfbConfig::read('pfb_syntax_highlight') compared against
-		// PfbLenient::On -- the same enum-comparison idiom this page's existing
+		// pfb_editor_enabled() -- the issue #1887 named accessor every editor page's
 		// pfb_cache_flush read already establishes (PfbConfig::read() returns the enum
 		// directly here, not ->value). LENIENT, not PfbToggle -- see the class docblock.
 		$this->assertMatchesRegularExpression(
-			"#\\\$pfb_syntaxhl_on\\s*=\\s*\\(?\\s*PfbConfig::read\\(\\s*'pfb_syntax_highlight'\\s*\\)\\s*===\\s*PfbLenient::On#",
+			"#\\\$pfb_syntaxhl_on\\s*=\\s*pfb_editor_enabled\\(\\)#",
 			self::$src,
-			'expected a $pfb_syntaxhl_on boolean derived from PfbConfig::read(\'pfb_syntax_highlight\') === PfbLenient::On'
+			'expected a $pfb_syntaxhl_on boolean derived from pfb_editor_enabled() (issue #1887 named accessor)'
 		);
 	}
 

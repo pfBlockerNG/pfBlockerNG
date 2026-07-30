@@ -19,11 +19,9 @@ use PHPUnit\Framework\TestCase;
  *     When pfb_cfg_toggle_read(v) -> enum, pfb_cfg_toggle_write(enum) -> stored.
  *     Then write(read(v)) == v for canonical values; junk -> default ''.
  *
- * Scenario B — PfbLenient (pfb_dnsbl_lenient): 'on' / 'off' / '' flag.
- *   Background: stored as 'on', 'off', or '' (pre-ADR-22 / missing key).
- *     Given a raw stored value v.
- *     When pfb_cfg_lenient_read(v) -> enum, pfb_cfg_lenient_write(enum) -> stored.
- *     Then write(read(v)) == v for 'on'/'off'; '' maps to 'off' (normalised default).
+ * Scenario B — retired by issue #1887: PfbLenient merged into PfbToggle (whose Off is
+ *   now the explicit 'off' token; '' is a legacy read token normalising to Off at the
+ *   adapter and to the registered default at the PfbConfig gateway).
  *
  * Scenario C — PfbIdnMode (pfb_idn / dnsbl_idn): backing values 'on'/'confusable'/'off'.
  *   Background: config.xml stores 'on' (= All, block-all-IDN), 'confusable', 'off'. 'on'
@@ -89,10 +87,10 @@ final class CfgAdaptersTest extends TestCase
 
 	public function testToggleReadJunkReturnsDefault(): void
 	{
-		// Given an unrecognised stored value — maps to Off (the default).
+		// Given an unrecognised stored value — maps to Off (the default). 'off' is NOT
+		// junk since issue #1887 — it is the canonical Off token (round-trip tests below).
 		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read('yes'));
 		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read('1'));
-		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read('off'));
 	}
 
 	public function testToggleReadIsIdempotentForEnumInput(): void
@@ -114,7 +112,6 @@ final class CfgAdaptersTest extends TestCase
 	{
 		// The idempotency guard lives in the shared PfbStoredEnumAdapter trait, so it holds
 		// for every enum using it — not just PfbToggle.
-		$this->assertSame(PfbLenient::On, PfbLenient::fromStored(PfbLenient::On));
 		$this->assertSame(PfbIdnMode::Confusable, PfbIdnMode::fromStored(PfbIdnMode::Confusable));
 		$this->assertSame(PfbAliasDeltaMode::Delta, PfbAliasDeltaMode::fromStored(PfbAliasDeltaMode::Delta));
 		$this->assertSame(PfbTop1mSource::Cisco, PfbTop1mSource::fromStored(PfbTop1mSource::Cisco));
@@ -136,23 +133,26 @@ final class CfgAdaptersTest extends TestCase
 
 	public function testToggleRoundTripOff(): void
 	{
-		// Given: canonical '' (unchecked).  write(read(v)) == v.
-		$v = '';
+		// Given: canonical 'off' (issue #1887 explicit token).  write(read(v)) == v.
+		$v = 'off';
 		$result = pfb_cfg_toggle_write(pfb_cfg_toggle_read($v));
 		$this->assertSame($v, $result);
+		// Legacy '' no longer round-trips: it is the not-configured token and
+		// normalises to the canonical 'off' at the adapter.
+		$this->assertSame('off', pfb_cfg_toggle_write(pfb_cfg_toggle_read('')));
 	}
 
 	public function testToggleDefaultIsOff(): void
 	{
 		$this->assertSame(PfbToggle::Off, PfbToggle::default());
-		$this->assertSame('', PfbToggle::default()->value);
+		$this->assertSame('off', PfbToggle::default()->value);
 	}
 
 	public function testToggleWriteValues(): void
 	{
 		// write produces the exact stored strings — not 'true'/'false' or 1/0.
 		$this->assertSame('on', pfb_cfg_toggle_write(PfbToggle::On));
-		$this->assertSame('', pfb_cfg_toggle_write(PfbToggle::Off));
+		$this->assertSame('off', pfb_cfg_toggle_write(PfbToggle::Off));
 	}
 
 	public function testToggleWriteAcceptsLegacyString(): void
@@ -160,101 +160,18 @@ final class CfgAdaptersTest extends TestCase
 		// PfbConfig::write() advertises an "enum or string" contract; a raw
 		// legacy string must normalise through the read adapter (it was a
 		// TypeError before — pfblockerng_update.php Force Reload passes 'on').
-		// Canonical strings round-trip; junk normalises to the '' default.
+		// Canonical strings round-trip; legacy ''/junk normalise to the explicit 'off'
+		// (issue #1887; a gateway write additionally resolves '' to the field default).
 		$this->assertSame('on', pfb_cfg_toggle_write('on'));
-		$this->assertSame('', pfb_cfg_toggle_write(''));
-		$this->assertSame('', pfb_cfg_toggle_write('off'));
-		$this->assertSame('', pfb_cfg_toggle_write('yes'));
+		$this->assertSame('off', pfb_cfg_toggle_write(''));
+		$this->assertSame('off', pfb_cfg_toggle_write('off'));
+		$this->assertSame('off', pfb_cfg_toggle_write('yes'));
 	}
 
-	// -----------------------------------------------------------------------
-	// Scenario B — PfbLenient
-	// -----------------------------------------------------------------------
-
-	public function testLenientReadOnReturnsOn(): void
-	{
-		// Given 'on' (lenient parsing enabled).
-		$enum = pfb_cfg_lenient_read('on');
-		$this->assertSame(PfbLenient::On, $enum);
-	}
-
-	public function testLenientReadOffReturnsOff(): void
-	{
-		// Given 'off' (strict parsing).
-		$enum = pfb_cfg_lenient_read('off');
-		$this->assertSame(PfbLenient::Off, $enum);
-	}
-
-	public function testLenientReadEmptyReturnsOff(): void
-	{
-		// Given '' (pre-ADR-22 install — key absent / blank).
-		// Before: maps to Off (strict), not the same as PfbToggle::Off=''.
-		$enum = pfb_cfg_lenient_read('');
-		$this->assertSame(PfbLenient::Off, $enum);
-	}
-
-	public function testLenientReadNullReturnsOff(): void
-	{
-		$enum = pfb_cfg_lenient_read(null);
-		$this->assertSame(PfbLenient::Off, $enum);
-	}
-
-	public function testLenientReadJunkReturnsDefault(): void
-	{
-		$this->assertSame(PfbLenient::Off, pfb_cfg_lenient_read('yes'));
-		$this->assertSame(PfbLenient::Off, pfb_cfg_lenient_read('1'));
-		$this->assertSame(PfbLenient::Off, pfb_cfg_lenient_read('enabled'));
-	}
-
-	public function testLenientRoundTripOn(): void
-	{
-		// 'on' round-trips losslessly.
-		$v = 'on';
-		// Before: raw.
-		$this->assertSame('on', $v);
-		// After.
-		$this->assertSame($v, pfb_cfg_lenient_write(pfb_cfg_lenient_read($v)));
-	}
-
-	public function testLenientRoundTripOff(): void
-	{
-		// 'off' round-trips losslessly.
-		$v = 'off';
-		$this->assertSame($v, pfb_cfg_lenient_write(pfb_cfg_lenient_read($v)));
-	}
-
-	public function testLenientEmptyNormalisesToOff(): void
-	{
-		// '' (missing key) maps to 'off' on write — normalised default.
-		// This is the documented non-lossless case for '' (not a canonical
-		// write-back value; pfb_global() also normalises to 'off').
-		$result = pfb_cfg_lenient_write(pfb_cfg_lenient_read(''));
-		$this->assertSame('off', $result);
-		// Confirm it's different from the raw ''.
-		$this->assertNotSame('', $result);
-	}
-
-	public function testLenientDefaultIsOff(): void
-	{
-		$this->assertSame(PfbLenient::Off, PfbLenient::default());
-		$this->assertSame('off', PfbLenient::default()->value);
-	}
-
-	public function testLenientWriteValues(): void
-	{
-		$this->assertSame('on', pfb_cfg_lenient_write(PfbLenient::On));
-		$this->assertSame('off', pfb_cfg_lenient_write(PfbLenient::Off));
-	}
-
-	public function testLenientWriteAcceptsLegacyString(): void
-	{
-		// "enum or string" contract: raw legacy string normalises through read.
-		// 'on'/'off' round-trip; '' and junk normalise to the 'off' default.
-		$this->assertSame('on', pfb_cfg_lenient_write('on'));
-		$this->assertSame('off', pfb_cfg_lenient_write('off'));
-		$this->assertSame('off', pfb_cfg_lenient_write(''));
-		$this->assertSame('off', pfb_cfg_lenient_write('yes'));
-	}
+	// Scenario B (PfbLenient) retired by issue #1887 — the enum merged into PfbToggle,
+	// whose Scenario A now covers the identical vocabulary ('on'/'off', '' legacy-off,
+	// junk/non-scalar fallback). pfb_cfg_lenient_read()/write() are gone; the retired-
+	// token grep guards their return.
 
 	// -----------------------------------------------------------------------
 	// Scenario C — PfbIdnMode
@@ -316,13 +233,6 @@ final class CfgAdaptersTest extends TestCase
 		// return the field default WITHOUT emitting "Array to string conversion" warning.
 		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read(['x']));
 		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read(['on']));
-	}
-
-	public function testLenientReadNonScalarReturnsDefault(): void
-	{
-		// Non-scalar input returns Off (the field default) without casting.
-		$this->assertSame(PfbLenient::Off, pfb_cfg_lenient_read(['x']));
-		$this->assertSame(PfbLenient::Off, pfb_cfg_lenient_read(['on']));
 	}
 
 	public function testIdnModeReadNonScalarReturnsDefault(): void
@@ -418,18 +328,9 @@ final class CfgAdaptersTest extends TestCase
 	// Cross-field: confirm Off values are field-specific (NOT interchangeable)
 	// -----------------------------------------------------------------------
 
-	public function testOffValuesAreDifferentAcrossFields(): void
-	{
-		// PfbToggle::Off = '' -- checkbox unchecked.
-		// PfbLenient::Off = 'off' -- explicit off, not empty.
-		// PfbIdnMode::Off = 'off' -- explicit off, not empty.
-		// These must NOT be confused with each other.
-		$this->assertNotSame(
-			pfb_cfg_toggle_write(PfbToggle::Off),
-			pfb_cfg_lenient_write(PfbLenient::Off),
-			'PfbToggle::Off and PfbLenient::Off must produce different stored strings'
-		);
-	}
+	// testOffValuesAreDifferentAcrossFields retired by issue #1887: the premise inverted.
+	// There is ONE off vocabulary now — PfbToggle::Off and PfbIdnMode::Off both store
+	// 'off' by design, so distinct Off tokens are no longer a property to defend.
 
 	// -----------------------------------------------------------------------
 	// Scenario D — Seam behaviour: pfb_global() adapter expressions produce
@@ -449,80 +350,11 @@ final class CfgAdaptersTest extends TestCase
 	//   ('off'). Seam left as-is; see ADR-28 Phase 4 handoff (04_Results.txt).
 	// -----------------------------------------------------------------------
 
-	/**
-	 * dnsbl_vip_auto seam: adapter expression is byte-identical to the old ternary.
-	 *
-	 * Old: ($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '') == 'on' ? 'on' : ''
-	 * New: pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '')->value
-	 *
-	 * Scenario:
-	 *   Given each reachable stored input for pfb_dnsvip_auto.
-	 *   When run through the old ternary and the new adapter expression.
-	 *   Then both produce the same byte-identical string.
-	 */
-	public function testSeamDnsblVipAutoAdapterMatchesOldTernary(): void
-	{
-		$cases = [
-			['on',  'on', 'on'],      // canonical checked -> 'on'
-			['',    '',   ''],        // canonical unchecked -> ''
-			[null,  '',   ''],        // null (missing key, ?? '' gives '') -> ''
-			['off', '',   ''],        // junk -> ''
-			['yes', '',   ''],        // junk -> ''
-			['1',   '',   ''],        // junk -> ''
-		];
-
-		foreach ($cases as [$raw, $expectedOld, $expectedNew]) {
-			$coalesced = $raw ?? '';
-			// Before: old ternary result (what pfb_global() used to produce).
-			$old = $coalesced == 'on' ? 'on' : '';
-			$this->assertSame($expectedOld, $old, "old ternary for input " . var_export($raw, TRUE));
-
-			// After: adapter expression (what pfb_global() now produces).
-			$new = pfb_cfg_toggle_read($coalesced)->value;
-			$this->assertSame($expectedNew, $new, "adapter for input " . var_export($raw, TRUE));
-
-			// Byte-identical: the seam is unchanged.
-			$this->assertSame($old, $new, "old vs new differ for input " . var_export($raw, TRUE));
-		}
-	}
-
-	/**
-	 * dnsbl_lenient seam: adapter expression is byte-identical to the old ternary.
-	 *
-	 * Old: (($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '') === 'on') ? 'on' : 'off'
-	 * New: pfb_cfg_lenient_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value
-	 *
-	 * Scenario:
-	 *   Given each reachable stored input for pfb_dnsbl_lenient.
-	 *   When run through the old ternary and the new adapter expression.
-	 *   Then both produce the same byte-identical string.
-	 */
-	public function testSeamDnsblLenientAdapterMatchesOldTernary(): void
-	{
-		$cases = [
-			['on',      'on',  'on'],   // enabled -> 'on'
-			['off',     'off', 'off'],  // explicit off -> 'off'
-			['',        'off', 'off'],  // absent/blank pre-ADR-22 -> 'off'
-			[null,      'off', 'off'],  // null (missing key) -> 'off'
-			['yes',     'off', 'off'],  // junk -> 'off'
-			['1',       'off', 'off'],  // junk -> 'off'
-			['enabled', 'off', 'off'],  // junk -> 'off'
-		];
-
-		foreach ($cases as [$raw, $expectedOld, $expectedNew]) {
-			$coalesced = $raw ?? '';
-			// Before: old ternary result.
-			$old = ($coalesced === 'on') ? 'on' : 'off';
-			$this->assertSame($expectedOld, $old, "old ternary for input " . var_export($raw, TRUE));
-
-			// After: adapter expression.
-			$new = pfb_cfg_lenient_read($coalesced)->value;
-			$this->assertSame($expectedNew, $new, "adapter for input " . var_export($raw, TRUE));
-
-			// Byte-identical: the seam is unchanged.
-			$this->assertSame($old, $new, "old vs new differ for input " . var_export($raw, TRUE));
-		}
-	}
+	// The dnsbl_vip_auto and dnsbl_lenient seam-identity tests are retired by issue
+	// #1887: pfb_global() no longer produces ->value strings for those mirrors — they
+	// carry PfbToggle itself (ToggleMirrorTypeTest), so a byte-identity contract with
+	// the pre-ADR-28 ternaries is no longer meaningful. The adapter-level vocabulary
+	// facts they doubled as coverage for live in Scenario A above.
 
 	/**
 	 * dnsbl_idn seam exclusion: prove the adapter would NOT be byte-identical to the

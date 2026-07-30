@@ -54,16 +54,16 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 			'unbound_py_reject_stats' => "{$this->dir}/pfb_py_reject_stats.json",
 			'chroot_cmd' => "{$this->dir}/unbound-control-recorder",
 			'dnsbl_python_unmount' => FALSE,
-			'dnsbl_res_cache' => 'on',
-			'dnsbl_cache_flush' => '',
-			'enable' => 'on',
-			'dnsbl' => 'on',
+			'dnsbl_res_cache' => PfbToggle::On,
+			'dnsbl_cache_flush' => PfbToggle::Off,
+			'enable' => PfbToggle::On,
+			'dnsbl' => PfbToggle::On,
 			'save' => TRUE,
 			'dnsbl_tld_wildcard' => FALSE,
 			'domain_update' => FALSE,
 			'reuse_dnsbl' => '',
 			'dnsbl_unlock' => "{$this->dir}/dnsbl_unlock",
-			'keep' => 'on',
+			'keep' => PfbToggle::On,
 			'install' => FALSE,
 			'errlog' => "{$this->dir}/error.log",
 			'log' => "{$this->dir}/pfblockerng.log",
@@ -174,7 +174,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 		$log = "{$this->dir}/control.log";
 		$this->installRecorder($log);
 		$this->installAppliedMarkerWatcher();
-		$GLOBALS['pfb']['dnsbl_cache_flush'] = 'on';
+		$GLOBALS['pfb']['dnsbl_cache_flush'] = PfbToggle::On;
 		$this->assertTrue(pfb_unbound_py_mode_active(), 'test setup must enable live Python mode');
 		$this->assertTrue(pfb_unbound_py_swap_fits_ram(), 'test setup must allow the data swap');
 		$this->assertTrue(is_process_running('unbound'), 'test setup must keep Unbound running');
@@ -193,7 +193,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 	{
 		$log = "{$this->dir}/control.log";
 		$this->installRecorder($log);
-		$GLOBALS['pfb']['dnsbl_cache_flush'] = 'on';
+		$GLOBALS['pfb']['dnsbl_cache_flush'] = PfbToggle::On;
 		$checks = 0;
 		$GLOBALS['pfb_test_sysctl']['hw.usermem'] = '1';
 		$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&$checks): bool {

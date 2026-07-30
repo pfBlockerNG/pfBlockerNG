@@ -57,9 +57,9 @@ pfb_global();
 
 // issue #1669: General-settings toggle gating the CodeMirror 6
 // live-highlight overlay for the #pfb_hook_editor_content field below (same toggle,
-// same PfbConfig/PfbLenient idiom, as pfblockerng_dnsbl.php's $pfb_syntaxhl_on --
+// same pfb_editor_enabled() accessor, as pfblockerng_dnsbl.php's $pfb_syntaxhl_on --
 // registered in the general section, default on, rendered by pfblockerng_general.php).
-$pfb_syntaxhl_on = (PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On);
+$pfb_syntaxhl_on = pfb_editor_enabled();
 
 // SECONDARY PRIVILEGE GATE (issue #1669 Part B / ADR-12 addendum). Placed
 // immediately after the includes -- before any request superglobal is read -- so

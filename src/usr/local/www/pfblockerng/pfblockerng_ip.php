@@ -31,7 +31,7 @@ $pfb['iconfig'] = PfbConfig::readSection('installedpackages/pfblockerngipsetting
 
 // issue #1875 step 2b: gate the CM6 live-highlight overlay for v4suppression/v6suppression,
 // same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.
-$pfb_syntaxhl_on = (PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On);
+$pfb_syntaxhl_on = pfb_editor_enabled();
 
 $pconfig = array();
 $pconfig['enable_dup']		= $pfb['iconfig']['enable_dup']				?: '';

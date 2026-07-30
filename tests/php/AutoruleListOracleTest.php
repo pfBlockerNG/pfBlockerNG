@@ -511,7 +511,7 @@ final class AutoruleListOracleTest extends TestCase
 	private function assertIdempotent(array $output, array $gen, ?string $order, ?string $float,
 	                                  array $in, array $out, string $ctx): void
 	{
-		$second = pfb_build_autorule_list($output, $gen, $order, $float, $in, $out);
+		$second = pfb_build_autorule_list($output, $gen, $order, pfb_cfg_toggle_read($float), $in, $out);
 		$this->assertSame(
 			$this->shapes($output),
 			$this->shapes($second),
@@ -533,7 +533,7 @@ final class AutoruleListOracleTest extends TestCase
 	{
 		// order_0: pfB pass, pfB block, then ALL user rules (not split), original order.
 		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
-		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_0', '', ['lan'], ['lan']);
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_0', PfbToggle::Off, ['lan'], ['lan']);
 
 		$this->assertShapes([
 			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
@@ -549,7 +549,7 @@ final class AutoruleListOracleTest extends TestCase
 		// order_1: user p/m, pfB p/m, pfB b/r, user b/r. The pfB Permit MUST precede the user
 		// Block (the binary anchor put the user Block first -> pfB Permit lost).
 		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
-		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_1', '', ['lan'], ['lan']);
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_1', PfbToggle::Off, ['lan'], ['lan']);
 
 		$this->assertShapes([
 			['descr' => 'User allow LAN',              'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => ''],
@@ -564,7 +564,7 @@ final class AutoruleListOracleTest extends TestCase
 	{
 		// order_2: pfB p/m, user p/m, pfB b/r, user b/r. pfB Permit still precedes the user Block.
 		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
-		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_2', '', ['lan'], ['lan']);
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_2', PfbToggle::Off, ['lan'], ['lan']);
 
 		$this->assertShapes([
 			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
@@ -579,7 +579,7 @@ final class AutoruleListOracleTest extends TestCase
 	{
 		// order_3: pfB p/m, pfB b/r, user p/m, user b/r.
 		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
-		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_3', '', ['lan'], ['lan']);
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_3', PfbToggle::Off, ['lan'], ['lan']);
 
 		$this->assertShapes([
 			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
@@ -595,7 +595,7 @@ final class AutoruleListOracleTest extends TestCase
 		// order_4: pfB p/m, pfB b/r, user b/r, user p/m. The user's OWN Block precedes its Pass —
 		// an intended pass_order reorder the binary anchor wrongly dropped.
 		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
-		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_4', '', ['lan'], ['lan']);
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_4', PfbToggle::Off, ['lan'], ['lan']);
 
 		$this->assertShapes([
 			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => 'in'],
@@ -645,7 +645,7 @@ final class AutoruleListOracleTest extends TestCase
 			],
 		];
 		foreach ($expected as $order => $shape) {
-			$result = pfb_build_autorule_list($existing, $gen, $order, 'on', ['lan'], []);
+			$result = pfb_build_autorule_list($existing, $gen, $order, PfbToggle::On, ['lan'], []);
 			$this->assertShapes($shape, $result, "float-on {$order}");
 			$this->assertUserRulesIntact($existing, $result, "float-on {$order}");
 		}
@@ -669,7 +669,7 @@ final class AutoruleListOracleTest extends TestCase
 			$this->userMatch('User float match', 'lan'),
 			$this->userBlock('User float block', 'lan', 'yes'),
 		];
-		$result = pfb_build_autorule_list($existing, $gen, 'order_2', 'on', ['lan'], []);
+		$result = pfb_build_autorule_list($existing, $gen, 'order_2', PfbToggle::On, ['lan'], []);
 
 		$this->assertShapes([
 			['descr' => 'pfB_PermitList_v4 Auto Rule', 'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => 'in'],
@@ -690,7 +690,7 @@ final class AutoruleListOracleTest extends TestCase
 	{
 		// Match rules are floating-only and must be emitted ONCE even with multiple inbound ifaces.
 		$result = pfb_build_autorule_list([$this->userPass('User allow LAN')], $this->genWithMatch(),
-		                                  'order_0', '', ['lan', 'opt1'], []);
+		                                  'order_0', PfbToggle::Off, ['lan', 'opt1'], []);
 		$matches = array_filter($result, static fn ($r) => ($r['descr'] ?? '') === 'pfB_MatchList_v4 Auto Rule');
 		$this->assertCount(1, $matches,
 			"Floating Match rule must be emitted exactly once across interfaces.\n\nActual:\n"
@@ -703,7 +703,7 @@ final class AutoruleListOracleTest extends TestCase
 	public function testDnsblFloatPairLeadsThePfbPassBucket(): void
 	{
 		$result = pfb_build_autorule_list([$this->userPass('User allow LAN')], $this->genWithDnsbl(),
-		                                  'order_0', '', ['lan'], []);
+		                                  'order_0', PfbToggle::Off, ['lan'], []);
 		$this->assertShapes([
 			['descr' => 'pfB_DNSBL_Permit',          'type' => 'pass',  'interface' => 'lan', 'floating' => 'yes', 'direction' => ''],
 			['descr' => 'pfB_DenyList_v4 Auto Rule', 'type' => 'block', 'interface' => 'lan', 'floating' => '',    'direction' => 'in'],
@@ -715,7 +715,7 @@ final class AutoruleListOracleTest extends TestCase
 	{
 		// A stale pfB_DenyAlias auto rule in the input must be removed; the fresh pfB Deny appears.
 		$existing = [$this->pfbOwnedDeny('lan'), $this->userPass('User allow LAN')];
-		$result   = pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', '', ['lan'], []);
+		$result   = pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', PfbToggle::Off, ['lan'], []);
 
 		$descrs = array_column($result, 'descr');
 		$this->assertNotContains('pfB_DenyAlias_v4 Auto Rule', $descrs,
@@ -728,7 +728,7 @@ final class AutoruleListOracleTest extends TestCase
 	{
 		// DNS-redirect / DoT-block bypass rules keep their pfB_ prefix but are user-managed.
 		$existing = [$this->dnsRedirectBypass(), $this->dotBlockBypass(), $this->userPass('User allow LAN')];
-		$result   = pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', '', ['lan'], []);
+		$result   = pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', PfbToggle::Off, ['lan'], []);
 
 		$descrs = array_column($result, 'descr');
 		$this->assertContains('pfB_DNS_Redirect_lan_v4', $descrs, 'DNS-redirect bypass kept');
@@ -749,7 +749,7 @@ final class AutoruleListOracleTest extends TestCase
 		$inet6Rule = ['descr' => 'User via pfB alias v6', 'type' => 'pass', 'interface' => 'lan',
 		              'ipprotocol' => 'inet6', 'floating' => '', 'source' => ['address' => 'pfB_CustomList_v6'],
 		              'destination' => ['any' => '']];
-		$result = pfb_build_autorule_list([$inetRule, $inet6Rule], $this->genDenyOnly(), 'order_0', '', ['lan'], []);
+		$result = pfb_build_autorule_list([$inetRule, $inet6Rule], $this->genDenyOnly(), 'order_0', PfbToggle::Off, ['lan'], []);
 
 		$byDescr = [];
 		foreach ($result as $r) {
@@ -772,7 +772,7 @@ final class AutoruleListOracleTest extends TestCase
 		// The #532 dup: a Permit list whose interface is BOTH inbound and outbound previously
 		// emitted the user pass rule twice (once per loop). It must now appear exactly once.
 		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
-		$result   = pfb_build_autorule_list($existing, $this->genPermitDeny(''), 'order_2', '', ['lan'], ['lan']);
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDeny(''), 'order_2', PfbToggle::Off, ['lan'], ['lan']);
 
 		foreach (['User allow LAN', 'User block evil'] as $descr) {
 			$count = count(array_filter($result, static fn ($r) => ($r['descr'] ?? '') === $descr));
@@ -789,7 +789,7 @@ final class AutoruleListOracleTest extends TestCase
 		// inbound loop, so with NO inbound interface (outbound-only list) they vanished. They must
 		// survive — a user rule is never dropped, whatever the iface/order/float combination.
 		$existing = [$this->userPass('User float allow', 'lan', 'yes'), $this->userMatch('User float match', 'lan')];
-		$result   = pfb_build_autorule_list($existing, $this->genPermitDeny('on'), 'order_2', 'on', [], ['lan']);
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDeny('on'), 'order_2', PfbToggle::On, [], ['lan']);
 
 		$descrs = array_column($result, 'descr');
 		$this->assertContains('User float allow', $descrs,
@@ -803,7 +803,7 @@ final class AutoruleListOracleTest extends TestCase
 		// Two user pass rules on the same managed iface land in the same bucket; order_1 must keep
 		// their RELATIVE order (only whole buckets move, never the rules inside one).
 		$existing = [$this->userPass('User allow LAN'), $this->userPass('User allow LAN 2')];
-		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_1', '', ['lan'], ['lan']);
+		$result   = pfb_build_autorule_list($existing, $this->genPermitDenyInbound(), 'order_1', PfbToggle::Off, ['lan'], ['lan']);
 
 		$this->assertShapes([
 			['descr' => 'User allow LAN',              'type' => 'pass',  'interface' => 'lan', 'floating' => '', 'direction' => ''],
@@ -817,27 +817,20 @@ final class AutoruleListOracleTest extends TestCase
 	{
 		// An empty/unknown pass_order must NOT drop a user rule (#532/#539) — it acts as order_0.
 		$existing = [$this->userPass('User allow LAN'), $this->userBlock('User block evil')];
-		$order0   = $this->shapes(pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', '', ['lan'], ['lan']));
+		$order0   = $this->shapes(pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', PfbToggle::Off, ['lan'], ['lan']));
 
 		foreach (['', 'totally_bogus', null] as $order) {
-			$result = pfb_build_autorule_list($existing, $this->genDenyOnly(), $order, '', ['lan'], ['lan']);
+			$result = pfb_build_autorule_list($existing, $this->genDenyOnly(), $order, PfbToggle::Off, ['lan'], ['lan']);
 			$this->assertSame($order0, $this->shapes($result),
 				'order ' . var_export($order, TRUE) . ' must match order_0');
 			$this->assertUserRulesIntact($existing, $result, 'empty/unknown order');
 		}
 	}
 
-	public function testNullFloatTolerated(): void
-	{
-		// $pfb['float'] is null until configured; the helper coerces it to off, never TypeErrors.
-		$existing = [$this->userPass('User allow LAN')];
-		$result   = pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', null, ['lan'], []);
-		$this->assertSame(
-			$this->shapes(pfb_build_autorule_list($existing, $this->genDenyOnly(), 'order_0', '', ['lan'], [])),
-			$this->shapes($result),
-			'null float == off'
-		);
-	}
+	// testNullFloatTolerated retired by issue #1887: $float is a non-nullable PfbToggle
+	// and $pfb['float'] is typed at its single assignment, so the null-until-configured
+	// case this pinned can no longer reach the function (ToggleMirrorTypeTest covers the
+	// mirror's type; the boundary TypeError is PHP's own contract, not ours to test).
 
 	public function testIdempotentAcrossOrdersAndFloat(): void
 	{
@@ -846,7 +839,7 @@ final class AutoruleListOracleTest extends TestCase
 		foreach (['order_0', 'order_1', 'order_2', 'order_3', 'order_4'] as $order) {
 			foreach (['', 'on'] as $float) {
 				$gen   = $this->genPermitDeny($float);
-				$first = pfb_build_autorule_list($existing, $gen, $order, $float, ['lan'], ['opt1']);
+				$first = pfb_build_autorule_list($existing, $gen, $order, pfb_cfg_toggle_read($float), ['lan'], ['opt1']);
 				$this->assertIdempotent($first, $gen, $order, $float, ['lan'], ['opt1'], "{$order} float='{$float}'");
 			}
 		}
@@ -865,7 +858,7 @@ final class AutoruleListOracleTest extends TestCase
 		foreach ($this->differentialMatrix() as $label => $c) {
 			[$existing, $gen, $order, $float, $in, $out] = $c;
 
-			$new = pfb_build_autorule_list($existing, $gen, $order, $float, $in, $out);
+			$new = pfb_build_autorule_list($existing, $gen, $order, pfb_cfg_toggle_read($float), $in, $out);
 
 			// (1) the dup fix holds for EVERY config: no user rule appears more than once.
 			$userShapes = $this->shapes(array_values(array_filter($new, fn ($r) => $this->isUserRule($r))));

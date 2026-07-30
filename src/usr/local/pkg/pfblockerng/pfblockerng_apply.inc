@@ -145,7 +145,7 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 	$custom      = $config['custom'];
 	$pfbcidr     = $config['cidr_floor_v4'];
 	$pfbcidr_v6  = $config['cidr_floor_v6'];
-	$suppression = $config['suppression'];
+	$suppression = pfb_cfg_toggle_read($config['suppression'] ?? '');
 	$parse_error = FALSE;
 
 	if ($vtype == '_v4' && $pftype == 'auto') {
@@ -389,7 +389,7 @@ function sync_package_pfblockerng($cron='') {
 	// Detect boot process or package installation
 	if (is_platform_booting() || $g['pfblockerng_install']) {
 		// Create DNSBL NAT, VIP, Lighttpd service and certs if required on reboot.
-		if ($pfb['dnsbl'] == 'on') {
+		if ($pfb['dnsbl'] === PfbToggle::On) {
 			pfb_create_dnsbl('enabled');
 		}
 		$log = 'Sync terminated during boot process.';
@@ -453,7 +453,7 @@ function sync_package_pfblockerng($cron='') {
 	}
 
 	// Start of pfBlockerNG logging to 'pfblockerng.log'
-	if ($pfb['enable'] == 'on' && !$pfb['save']) {
+	if ($pfb['enable'] === PfbToggle::On && !$pfb['save']) {
 		$log = " UPDATE PROCESS START [ " . pfb_pkg_ver() . " ]\n";
 		pfb_logger("{$log}", 1);
 	} else {
@@ -493,11 +493,11 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['deny_action_inbound']  = $pfb['ipconfig']['inbound_deny_action']	?: 'block';
 	$pfb['deny_action_outbound'] = $pfb['ipconfig']['outbound_deny_action']	?: 'reject';
 
-	$pfb['float']		= $pfb['ipconfig']['enable_float'];				// Enable/Disable floating autorules
-	$pfb['dup']		= $pfb['ipconfig']['enable_dup'];				// Enable remove of duplicate IPs utilizing grepcidr
-	$pfb['agg']		= $pfb['ipconfig']['enable_agg'];				// Enable aggregation of CIDRs
+	$pfb['float']		= pfb_cfg_toggle_read($pfb['ipconfig']['enable_float']);				// Enable/Disable floating autorules
+	$pfb['dup']		= pfb_cfg_toggle_read($pfb['ipconfig']['enable_dup']);				// Enable remove of duplicate IPs utilizing grepcidr
+	$pfb['agg']		= pfb_cfg_toggle_read($pfb['ipconfig']['enable_agg']);				// Enable aggregation of CIDRs
 	$pfb['order']		= $pfb['ipconfig']['pass_order'] ?: 'order_0';			// Order of the autorules (default order_0, matching the IP-settings UI; an empty value drops user pass-rules on a managed interface — issue #532)
-	$pfb['global_log']	= $pfb['ipconfig']['enable_log'];				// Enable Global IP logging
+	$pfb['global_log']	= pfb_cfg_toggle_read($pfb['ipconfig']['enable_log']);				// Enable Global IP logging
 	$pfb['suffix']		= $pfb['ipconfig']['autorule_suffix'];				// Suffix used for autorules
 	$pfb['kstates'] 	= $pfb['ipconfig']['killstates'];				// Firewall states removal
 
@@ -514,8 +514,8 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['dnsbl_decisiondb_max'] = ctype_digit($pfb_dcm_raw) ? (string) min(5000000, (int) $pfb_dcm_raw) : '10000';
 	$pfb['dnsbl_top1m_inc']	= $pfb['dnsblconfig']['alexa_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
 	$pfb['dnsbl_tld_wildcard']	= $pfb['dnsblconfig']['pfb_tld'];				// Enable TLD Function
-	$pfb['dnsbl_control']	= $pfb['dnsblconfig']['pfb_control']	?: '';			// Python Control integration
-	$pfb['dnsbl_control_legacy']	= $pfb['dnsblconfig']['pfb_control_legacy']	?? '';	// PFBL-03: deprecated legacy DNS-TXT control transport
+	$pfb['dnsbl_control']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control']	?: '');			// Python Control integration
+	$pfb['dnsbl_control_legacy']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_control_legacy']	?? '');	// PFBL-03: deprecated legacy DNS-TXT control transport
 
 	// Validate pfB Script variable
 	$pfb['dnsbl_top1m_inc'] = pfb_filter($pfb['dnsbl_top1m_inc'], PFB_FILTER_CSV, 'Validate pfB Script variable');
@@ -552,7 +552,7 @@ function sync_package_pfblockerng($cron='') {
 	// issue #1840: unconditional, like $pfb['repcheck'] just above -- the alias-configure
 	// loop's suppression-body calls (pfb_ip_suppress_body_active(), v4 site further down,
 	// v6 sibling right after it) read this on EVERY pass reachable via
-	// `if (!empty($lists) && $pfb['enable'] == 'on')`, which has no '!save' guard. A
+	// `if (!empty($lists) && $pfb['enable'] === PfbToggle::On)`, which has no '!save' guard. A
 	// POST-INSTALL/GUI resync (custom_php_resync_config_command sets $pfb['save'] = TRUE
 	// before calling this function) still reaches that loop, so this must be seeded here
 	// -- not only inside the `!$pfb['save']` download block below, which a save=TRUE pass
@@ -685,7 +685,7 @@ function sync_package_pfblockerng($cron='') {
 			$pfb["{$type}_floating"]		= ltrim(implode(',', $interfaces), ',');
 
 			// Assign base rule/interfaces
-			if ($pfb['float'] == 'on') {
+			if ($pfb['float'] === PfbToggle::On) {
 				$pfb['base_rule']		= $pfb['base_rule_float'];
 				$pfb["{$type}_interfaces"]	= explode(' ', $pfb["{$type}_floating"]);
 			} else {
@@ -704,7 +704,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['summary']		= FALSE;	// Execute final summary as a list was removed
 
 	// Don't execute this function when pfBlockerNG is disabled and 'keep blocklists' is enabled.
-	if ($pfb['enable'] == '' && $pfb['keep'] == 'on') {
+	if ($pfb['enable'] !== PfbToggle::On && $pfb['keep'] === PfbToggle::On) {
 		$pfb['sync_master'] = FALSE;
 	}
 
@@ -713,7 +713,7 @@ function sync_package_pfblockerng($cron='') {
 		// Find all enabled Continents lists
 		foreach ($pfb['continents'] as $continent => $pfb_alias) {
 			$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
-			if (!empty(config_get_path("installedpackages/{$cont_key}/config")) && $pfb['enable'] == 'on') {
+			if (!empty(config_get_path("installedpackages/{$cont_key}/config")) && $pfb['enable'] === PfbToggle::On) {
 				$continent_config = config_get_path("installedpackages/{$cont_key}/config/0");
 				if (!pfb_group_action_valid($continent_config['action'] ?? NULL, 'geoip')) {
 					continue;
@@ -762,7 +762,7 @@ function sync_package_pfblockerng($cron='') {
 			$dnsblip_lists_key = NULL;	// issue #1270: exempts the package's OWN synthesized DNSBLIP row below
 
 			$type_config = config_get_path("installedpackages/{$ltype}/config");
-			if (!empty($type_config) && $pfb['enable'] == 'on') {
+			if (!empty($type_config) && $pfb['enable'] === PfbToggle::On) {
 				foreach ($type_config as $list) {
 					if (!pfb_group_action_valid($list['action'] ?? NULL, $ltype === 'pfblockerngdnsbl' ? 'dnsbl' : 'ipv4')) {
 						continue;
@@ -785,7 +785,7 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			// ADD DNSBL IP
-			if (($ltype == 'pfblockernglistsv4' || $ltype == 'pfblockernglistsv6') && $pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on'
+			if (($ltype == 'pfblockernglistsv4' || $ltype == 'pfblockernglistsv6') && $pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On
 			    && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4') && $pfb['dnsbl_ip'] != 'Disabled') {
 				$list = array();
 				$list['action'] = "{$pfb['dnsbl_ip']}";
@@ -1004,7 +1004,7 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			// Allow rebuilding of changed Alias to purge 'SKIP' Lists (when pfBlockerNG is enabled)
-			if ($pfb['enable'] == 'on' && $pftype != 'dnsbl') {
+			if ($pfb['enable'] === PfbToggle::On && $pftype != 'dnsbl') {
 				foreach ($ip_types as $ltype => $vtype) {
 					foreach ($results as $removed_header) {
 						foreach (config_get_path("installedpackages/{$ltype}/config", []) as $list) {
@@ -1059,8 +1059,8 @@ function sync_package_pfblockerng($cron='') {
 	#########################################################
 
 	// When pfBlockerNG is Disabled and 'Keep Blocklists' is Disabled.
-	// pfb['keep'] is now 'on'/'off' (PfbLenient); != 'on' covers both 'off' and legacy ''.
-	if ($pfb['enable'] == '' && $pfb['keep'] != 'on' && !$pfb['install']) {
+	// Toggles are 'on'/'off' (PfbToggle, issue #1887); != 'on' covers 'off' and a legacy ''.
+	if ($pfb['enable'] !== PfbToggle::On && $pfb['keep'] !== PfbToggle::On && !$pfb['install']) {
 		$log = "\n  Removing DB Files/Folders \n";
 		pfb_logger("{$log}", 1);
 		pfb_clear_contents();
@@ -1070,7 +1070,7 @@ function sync_package_pfblockerng($cron='') {
 	#	Create IP Suppression Txt File		#
 	#################################################
 
-	if ($pfb['enable'] == 'on' && $pfb['supp'] == 'on') {
+	if ($pfb['enable'] === PfbToggle::On && $pfb['supp'] === PfbToggle::On) {
 		pfb_create_suppression_file();
 	}
 
@@ -1094,7 +1094,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb_fp_old			= null;		// Fingerprint of loaded input files BEFORE this pass (null => DNSBL not active this pass)
 
 	$dnsbl_error = FALSE;
-	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && !$pfb['save']) {
+	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && !$pfb['save']) {
 
 		// Terminate if DNSBL VIP is empty
 		if (empty($pfb['dnsbl_port']) || empty($pfb['dnsbl_port_ssl'])) {
@@ -1104,7 +1104,7 @@ function sync_package_pfblockerng($cron='') {
 		}
 	}
 
-	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && !$pfb['save'] && !$dnsbl_error) {
+	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && !$pfb['save'] && !$dnsbl_error) {
 		if ((config_get_path('installedpackages/pfblockerngdnsbl/config') != null) ||
 		    (config_get_path('installedpackages/pfblockerngblacklist/blacklist_enable') == 'Enable')) {
 
@@ -1342,7 +1342,7 @@ function sync_package_pfblockerng($cron='') {
 
 
 			// Call TOP1M whitelist process
-			if ($pfb['dnsbl_top1m'] == 'on') {
+			if ($pfb['dnsbl_top1m'] === PfbToggle::On) {
 				pfb_logger("\n Loading TOP1M Whitelist...", 1);
 
 				// Check if TOP1M database and the detector's raw baseline exist.
@@ -1957,7 +1957,7 @@ function sync_package_pfblockerng($cron='') {
 											}
 
 											if (!$lite) {
-												$strict = ($pfb['dnsbl_lenient'] !== PfbLenient::On);
+												$strict = ($pfb['dnsbl_lenient'] !== PfbToggle::On);
 												$line = pfb_dnsbl_extract_host($line, $strict, $header, $oline,
 													$dnsbl_lineno, $pfb['dnsbl_parse_err'], $pfb_scheme_skipped);
 												if ($line === FALSE) {
@@ -2204,7 +2204,7 @@ function sync_package_pfblockerng($cron='') {
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Homoglyph_Suspect';
 			dnsbl_stats_update('update', 'DNSBL_Homoglyph_Suspect', 1);
 		}
-		if ($pfb['dnsbl_tld_allow'] == 'on') {
+		if ($pfb['dnsbl_tld_allow'] === PfbToggle::On) {
 			$tld_allow_cnt = 0;
 			foreach (array('gtld', 'cctld', 'itld', 'bgtld') as $tld_allow_bucket) {
 				if (isset($pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow_bucket]) && !empty($pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow_bucket])) {
@@ -2233,7 +2233,7 @@ function sync_package_pfblockerng($cron='') {
 				$py_regex_cnt = (int) $raw_rc;
 			}
 		}
-		if ($pfb['dnsbl_regex'] == 'on' || ($py_regex_cnt !== NULL && $py_regex_cnt > 0)) {
+		if ($pfb['dnsbl_regex'] === PfbToggle::On || ($py_regex_cnt !== NULL && $py_regex_cnt > 0)) {
 			if ($py_regex_cnt !== NULL) {
 				$regex_cnt = $py_regex_cnt;
 			} else {
@@ -2340,7 +2340,7 @@ function sync_package_pfblockerng($cron='') {
 		}
 	}
 	else {
-		if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on') {
+		if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On) {
 
 			// When DNSBL is enabled and no Aliases are defined, or all Aliases are Disabled
 			if (empty($lists_dnsbl_all) && !$pfb['save']) {
@@ -2386,10 +2386,10 @@ function sync_package_pfblockerng($cron='') {
 	// pfb_manage_dnsbl_vip(string $mode)); the if/elseif does not cover every state
 	// (e.g. DNSBL enabled while the DNS Resolver is disabled). '' is a no-op mode.
 	$mode = '';
-	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['unbound_state'] == 'on') {
+	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On) {
 		$mode = 'enabled';
 	}
-	elseif (($pfb['enable'] == '' || $pfb['dnsbl'] == '') && !$pfb['install']) {
+	elseif (($pfb['enable'] !== PfbToggle::On || $pfb['dnsbl'] !== PfbToggle::On) && !$pfb['install']) {
 		$mode = 'disabled';
 	}
 
@@ -2712,7 +2712,7 @@ function sync_package_pfblockerng($cron='') {
 		// identical generated content. Deliberately NOT separately gated: the shipped
 		// HSTS list ships per-release (changes ~never), so the rare extra save isn't
 		// worth a second generated-only fingerprint.
-		if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['unbound_state'] == 'on' &&
+		if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On &&
 		    config_path_enabled('system', 'use_mfs_tmpvar')) {
 			pfb_dnsbl_cache('save');
 		}
@@ -2762,7 +2762,7 @@ function sync_package_pfblockerng($cron='') {
 				continue;
 			}
 			$cc_name = 'pfblockerng' . strtolower(str_replace(' ', '', $continent));
-			if (isset($continent_config['action']) && $continent_config['action'] != 'Disabled' && $pfb['enable'] == 'on') {
+			if (isset($continent_config['action']) && $continent_config['action'] != 'Disabled' && $pfb['enable'] === PfbToggle::On) {
 
 				// Maxmind credential verification and user notification
 				if ($maxmind_run_once && !$maxmind_verify) {
@@ -2877,7 +2877,7 @@ function sync_package_pfblockerng($cron='') {
 									@copy("{$pfborig}/{$cc_alias}.orig", "{$pfbfolder}/{$cc_alias}.txt");
 
 									// Call Aggregate process
-									if ($pfb['agg'] == 'on' && $vtype == '_v4') {
+									if ($pfb['agg'] === PfbToggle::On && $vtype == '_v4') {
 										exec("{$pfb['script']} cidr_aggregate {$cc_alias} {$pfbfolder} {$elog}");
 									}
 
@@ -2957,7 +2957,7 @@ function sync_package_pfblockerng($cron='') {
 	// IPv6 REGEX Definitions - Reference: http://labs.spritelink.net/regex
 	$pfb['ipv6'] = '/(?:(?:(?:[[:xdigit:]]{1,4}:){7}(?:[[:xdigit:]]{1,4}|:))|(?:(?:[[:xdigit:]]{1,4}:){6}(?::[[:xdigit:]]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(?:(?:[[:xdigit:]]{1,4}:){5}(?:(?:(?::[[:xdigit:]]{1,4}){1,2})|:(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(?:(?:[[:xdigit:]]{1,4}:){4}(?:(?:(?::[[:xdigit:]]{1,4}){1,3})|(?:(?::[[:xdigit:]]{1,4})?:(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(?:(?:[[:xdigit:]]{1,4}:){3}(?:(?:(?::[[:xdigit:]]{1,4}){1,4})|(?:(?::[[:xdigit:]]{1,4}){0,2}:(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(?:(?:[[:xdigit:]]{1,4}:){2}(?:(?:(?::[[:xdigit:]]{1,4}){1,5})|(?:(?::[[:xdigit:]]{1,4}){0,3}:(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(?:(?:[[:xdigit:]]{1,4}:){1}(?:(?:(?::[[:xdigit:]]{1,4}){1,6})|(?:(?::[[:xdigit:]]{1,4}){0,4}:(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(?::(?:(?:(?::[[:xdigit:]]{1,4}){1,7})|(?:(?::[[:xdigit:]]{1,4}){0,5}:(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:)))(?:%.+)?(?:\/(?:1(?:2[0-8]|[01]\d)|[1-9]?\d)\b)?/';
 
-	if ($pfb['enable'] == 'on' && !$pfb['save']) {
+	if ($pfb['enable'] === PfbToggle::On && !$pfb['save']) {
 
 		// issue #1840: init moved to the function's unconditional seeds (near
 		// $pfb['repcheck']) -- this loop's TRUE flip below is unaffected.
@@ -3000,7 +3000,7 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			// Add DNSBLIP, if configured (IPv4 + IPv6)
-			if ($pfb['dnsbl'] == 'on' && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4')
+			if ($pfb['dnsbl'] === PfbToggle::On && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4')
 			    && $pfb['dnsbl_ip'] != 'Disabled' && ($vtype == '_v4' || $vtype == '_v6')) {
 
 				$list = array(	'aliasname'	=> 'DNSBLIP',
@@ -3441,7 +3441,7 @@ function sync_package_pfblockerng($cron='') {
 
 								// Call 'shell script' functions (Deny Actions only)
 								if ($pfbadv && $list['vtype'] == '_v4') {
-									$args = pfb_ip_preprocess_args($pfb['dup'] == 'on', $pfb['agg'] == 'on', $pfb['rep'] == 'on');
+									$args = pfb_ip_preprocess_args($pfb['dup'] === PfbToggle::On, $pfb['agg'] === PfbToggle::On, $pfb['rep'] == 'on');
 									if (!empty($args)) {
 										exec("{$pfb['script']} {$args} {$header_esc} {$pfb['max']} {$pfb['drep']} {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
 									}
@@ -3453,7 +3453,7 @@ function sync_package_pfblockerng($cron='') {
 
 								if (!$pfbadv && $list['vtype'] == '_v4') {
 									// Call Aggregate process
-									if ($pfb['agg'] == 'on') {
+									if ($pfb['agg'] === PfbToggle::On) {
 										exec("{$pfb['script']} cidr_aggregate {$header_esc} {$pfbfolder} {$elog}");
 									}
 								}
@@ -3479,7 +3479,7 @@ function sync_package_pfblockerng($cron='') {
 								// Enable suppression process due to updates -- BOTH families
 								// (ADR-53 review finding A): a v6-only Deny alias must also be
 								// able to unlock the v6 suppress pass below, not just v4's.
-								if (pfb_supp_update_active($pfbadv, $pfb['supp'] == 'on')) {
+								if (pfb_supp_update_active($pfbadv, $pfb['supp'] === PfbToggle::On)) {
 									$pfb['supp_update'] = TRUE;
 								}
 							} else {
@@ -3532,10 +3532,10 @@ function sync_package_pfblockerng($cron='') {
 	// issue #1173: a pure priority reorder flips no feed-change repcheck; ownership
 	// follows memberlist order, so compare against the last recompute's memberlist and
 	// recompute on mismatch.
-	if (!$pfb['save'] && $pfb['enable'] == 'on' &&
-	    pfb_cross_list_scope($pfb['dup'] == 'on', $pfb['drep'] == 'on' || $pfb['prep'] == 'on')) {
+	if (!$pfb['save'] && $pfb['enable'] === PfbToggle::On &&
+	    pfb_cross_list_scope($pfb['dup'] === PfbToggle::On, $pfb['drep'] == 'on' || $pfb['prep'] == 'on')) {
 		foreach (array('v4', 'v6') as $pfb_rec_family) {
-			if ($pfb_rec_family === 'v6' && $pfb['dup'] != 'on') {
+			if ($pfb_rec_family === 'v6' && $pfb['dup'] !== PfbToggle::On) {
 				continue;
 			}
 			if (pfb_ip_recompute_order_changed(
@@ -3553,9 +3553,9 @@ function sync_package_pfblockerng($cron='') {
 	// off skips recompute (parse output stands) -- see pfb_ip_recompute_matrix(). The
 	// whole block rides the feed-changed trigger: a quiet pass (no snapshot written, no
 	// removal -- repcheck FALSE) runs no recompute at all.
-	$pfb_rec_trigger = $pfb['repcheck'] && !$pfb['save'] && $pfb['enable'] == 'on';
+	$pfb_rec_trigger = $pfb['repcheck'] && !$pfb['save'] && $pfb['enable'] === PfbToggle::On;
 	$pfb_rec_matrix  = pfb_ip_recompute_matrix(
-		$pfb['dup'] == 'on' && $pfb_rec_trigger,
+		$pfb['dup'] === PfbToggle::On && $pfb_rec_trigger,
 		$pfb_rec_trigger,
 		$pfb['drep'] == 'on',
 		$pfb['prep'] == 'on'
@@ -3626,7 +3626,7 @@ function sync_package_pfblockerng($cron='') {
 	// $pfb_alias_lists_all) are invariant across the $ip_types / $lists loops below.
 	// Avoids redundant recomputation on every list iteration.
 	$pfb_cross_list  = pfb_cross_list_scope(
-		$pfb['dup'] == 'on',
+		$pfb['dup'] === PfbToggle::On,
 		$pfb['drep'] == 'on' || $pfb['prep'] == 'on'
 	);
 	// $final_alias_old: feed-changed aliases only (for suppression gate).
@@ -3648,7 +3648,7 @@ function sync_package_pfblockerng($cron='') {
 		$lists = config_get_path("installedpackages/{$ip_type}/config");
 
 		// Add DNSBLIP, if configured (IPv4 + IPv6)
-		if ($pfb['dnsbl'] == 'on' && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4')
+		if ($pfb['dnsbl'] === PfbToggle::On && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4')
 		    && $pfb['dnsbl_ip'] != 'Disabled' && ($vtype == '_v4' || $vtype == '_v6')) {
 
 			$list = array(	'aliasname'	=> 'DNSBLIP',
@@ -3665,7 +3665,7 @@ function sync_package_pfblockerng($cron='') {
 			$lists[] = $list;
 		}
 
-		if (!empty($lists) && $pfb['enable'] == 'on') {
+		if (!empty($lists) && $pfb['enable'] === PfbToggle::On) {
 			$pfbrunonce = TRUE;
 			foreach ($lists as $key => $list) {
 				if (!pfb_group_action_valid($list['action'] ?? NULL, 'ipv4')) {
@@ -3739,15 +3739,15 @@ function sync_package_pfblockerng($cron='') {
 									|| empty($pfctlck);
 								if (file_exists("{$pfbfolder}/{$header}.txt") && $member_eligible) {
 									// Script to run suppression process (print header only)
-									if ($pfbrunonce && $pfb['supp'] == 'on' && $vtype == '_v4' && $pfb['supp_update']) {
+									if ($pfbrunonce && $pfb['supp'] === PfbToggle::On && $vtype == '_v4' && $pfb['supp_update']) {
 										exec("{$pfb['script']} suppress suppressheader {$elog}");
 										$pfbrunonce = FALSE;
 									}
 									// Script to run suppression process (body) — feed-changed aliases, OR any
 									// alias recompute rewrote this pass (issue #1084 review: recompute rewrites
 									// every family alias on any trigger, not just feed-changed ones).
-									if (pfb_ip_suppress_body_active($pfb['supp'] == 'on', $vtype == '_v4', $pfb['supp_update'], $pfbadv, in_array($alias, $final_alias_old), $pfb_recompute_ran_v4)) {
-										if ($pfb['dup'] == 'on') {
+									if (pfb_ip_suppress_body_active($pfb['supp'] === PfbToggle::On, $vtype == '_v4', $pfb['supp_update'], $pfbadv, in_array($alias, $final_alias_old), $pfb_recompute_ran_v4)) {
+										if ($pfb['dup'] === PfbToggle::On) {
 											exec("{$pfb['script']} suppress {$header_esc} {$pfbfolder} on {$elog}");
 										} else {
 											exec("{$pfb['script']} suppress {$header_esc} {$pfbfolder} off {$elog}");
@@ -3761,14 +3761,14 @@ function sync_package_pfblockerng($cron='') {
 									// the "$pfbrunonce = TRUE;" above the alias loop), so it is still
 									// available -- untouched by the v4 branch above during a '_v6' pass --
 									// to gate this print-once header the same way v4 gates its own.
-									if ($pfbrunonce && $pfb['supp'] == 'on' && $vtype == '_v6' && $pfb['supp_update']) {
+									if ($pfbrunonce && $pfb['supp'] === PfbToggle::On && $vtype == '_v6' && $pfb['supp_update']) {
 										$supp_v6_header = "\n===[ Suppression Stats (v6) ]===============================\n\n"
 											. sprintf("%-20s %-10s %-10s\n", 'List', 'Pre', 'Suppress')
 											. "-------------------------------------------------------------\n";
 										@file_put_contents("{$pfb['log']}", $supp_v6_header, FILE_APPEND);
 										$pfbrunonce = FALSE;
 									}
-									if (pfb_ip_suppress_body_active($pfb['supp'] == 'on', $vtype == '_v6', $pfb['supp_update'], $pfbadv, in_array($alias, $final_alias_old), $pfb_recompute_ran_v6)
+									if (pfb_ip_suppress_body_active($pfb['supp'] === PfbToggle::On, $vtype == '_v6', $pfb['supp_update'], $pfbadv, in_array($alias, $final_alias_old), $pfb_recompute_ran_v6)
 									    && is_readable("{$pfb['supptxt_v6']}") && filesize("{$pfb['supptxt_v6']}") > 0) {
 										$member_file = "{$pfbfolder}/{$header}.txt";
 										$pre_count   = count(@file($member_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: []);
@@ -3869,7 +3869,7 @@ function sync_package_pfblockerng($cron='') {
 
 	// Define DNSBL VIP Ports alias
 	if ($pfb['dnsbl_rule'] != 'Disabled' && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])
-	    && !empty($pfb['dnsblconfig']['dnsbl_allow_int']) && ($pfb['dnsbl'] == 'on')) {
+	    && !empty($pfb['dnsblconfig']['dnsbl_allow_int']) && ($pfb['dnsbl'] === PfbToggle::On)) {
 
 		$new_aliases_list[] = 'pfB_DNSBL_Ports';
 		$new_aliases[] = array( 'name'		=> 'pfB_DNSBL_Ports',
@@ -3938,7 +3938,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb_active_aliases = null;
 
 	// Only execute if autorules are defined or if an alias has been removed.
-	if ($pfb['autorules'] || $pfb['enable'] == '' || $pfb['remove']) {
+	if ($pfb['autorules'] || $pfb['enable'] !== PfbToggle::On || $pfb['remove']) {
 		$pfb_active_aliases = [];
 		$message = '';
 		if (!empty($pfb['deny_inbound']) || !empty($pfb['permit_inbound']) || !empty($pfb['match_inbound'])) {
@@ -3984,7 +3984,7 @@ function sync_package_pfblockerng($cron='') {
 
 			// Build the DNSBL floating pass rules (ping + permit pair) to pass into the helper.
 			$pfb_dnsbl_float = [];
-			if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['dnsbl_rule'] != 'Disabled'
+			if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['dnsbl_rule'] != 'Disabled'
 			    && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])
 			    && !empty($pfb['dnsblconfig']['dnsbl_allow_int'])) {
 
@@ -4086,7 +4086,7 @@ function sync_package_pfblockerng($cron='') {
 	// If 'Rule Changes' are found, utilize the 'filter_configure()' function, if not, utilize 'pfctl replace' command
 	// Captured here (before the if/else) so it is always defined at the post-hook emit.
 	$pfb_ip_unlock_forced = FALSE;
-	if ($pfb['autorules'] && ($orig_rules_nocreated ?? []) != ($new_rules_nocreated ?? []) || $pfb['enable'] == '' || $pfb['remove']) {
+	if ($pfb['autorules'] && ($orig_rules_nocreated ?? []) != ($new_rules_nocreated ?? []) || $pfb['enable'] !== PfbToggle::On || $pfb['remove']) {
 
 		if (!$pfb['save']) {
 			$log = "\n===[  Aliastables / Rules  ]================================\n\n";
@@ -4236,7 +4236,7 @@ function sync_package_pfblockerng($cron='') {
 	// Uncheck the "reuse existing downloads" flag — this update consumed the request,
 	// so clear the one-shot. It is the only setting pfBlockerNG persists on the way out
 	// of the update, so the save is gated directly on it (no staging array needed).
-	if (!$pfb['save'] && $pfb['enable'] == 'on' &&
+	if (!$pfb['save'] && $pfb['enable'] === PfbToggle::On &&
 	    pfb_cfg_toggle_read($pfb['config']['pfb_reuse']) === PfbToggle::On) {
 
 		pfb_logger("\nSaving config changes", 1);
@@ -4299,7 +4299,7 @@ function sync_package_pfblockerng($cron='') {
 		filter_configure();
 
 		// Stop/Restart pfb_filter service for new rule changes
-		if ($pfb['enable'] == '') {
+		if ($pfb['enable'] !== PfbToggle::On) {
 			if (is_service_running('pfb_filter')) {
 				$log = 'Stopping firewall filter daemon';
 				stop_service('pfb_filter');
@@ -4312,11 +4312,11 @@ function sync_package_pfblockerng($cron='') {
 	}
 	else {
 		// Stop/Start Firewall filter daemon
-		if ($pfb['enable'] == '' && is_service_running('pfb_filter')) {
+		if ($pfb['enable'] !== PfbToggle::On && is_service_running('pfb_filter')) {
 			$log = 'Stopping firewall filter daemon';
 			stop_service('pfb_filter');
 		}
-		elseif ($pfb['enable'] == 'on' && !is_service_running('pfb_filter')) {
+		elseif ($pfb['enable'] === PfbToggle::On && !is_service_running('pfb_filter')) {
 			$log = 'Starting firewall filter daemon';
 			start_service('pfb_filter');
 		}
@@ -4353,7 +4353,7 @@ function sync_package_pfblockerng($cron='') {
 	// A single */pfb_tick_interval cron entry fires; the tick reads the due-ledger
 	// and dispatches each job only when its entry says "due". clearip/cleardnsbl
 	// are out of scope (ADR-30 territory) and remain as separate jobs below.
-	pfblockerng_configure_tick_cron($pfb['enable'] == 'on', pfb_tick_interval_clamp(PfbConfig::read('pfb_tick_interval')), $pfb['log']);
+	pfblockerng_configure_tick_cron($pfb['enable'] === PfbToggle::On, pfb_tick_interval_clamp(PfbConfig::read('pfb_tick_interval')), $pfb['log']);
 
 	// Define pfBlockerNG clear [ dnsbl and/or IP ] counter CRON job
 	foreach (array( 'clearip', 'cleardnsbl') as $type) {
@@ -4399,15 +4399,15 @@ function sync_package_pfblockerng($cron='') {
 	#################################
 
 	// Only run with CRON or Force invoked process
-	if ((!$pfb['save'] && $pfb['repcheck'] && $pfb['enable'] == 'on') || $pfb['summary']) {
+	if ((!$pfb['save'] && $pfb['repcheck'] && $pfb['enable'] === PfbToggle::On) || $pfb['summary']) {
 		// issue #1084 review: dedup off + recompute having run the v4 family (the
 		// dup-off+rep-on passthrough) still invokes 'closing off' so emptyfiles() refills
 		// any alias pMax/dMax collapsed to zero rows -- see pfb_ip_closing_pass_active().
-		[$pfb_closing_invoke, $pfb_closing_alias_arg] = pfb_ip_closing_pass_active($pfb['dup'] == 'on', $pfb_recompute_ran_v4);
+		[$pfb_closing_invoke, $pfb_closing_alias_arg] = pfb_ip_closing_pass_active($pfb['dup'] === PfbToggle::On, $pfb_recompute_ran_v4);
 		if ($pfb_closing_invoke) {
 			exec("{$pfb['script']} closing {$pfb_closing_alias_arg} {$elog}");
 		}
-		if ($pfb['dup'] == 'on') {
+		if ($pfb['dup'] === PfbToggle::On) {
 			pfb_sync_status_dedup_check($pfb['log'], $pfb['dbdir']);
 		} else {
 			// ADR-61: dedup disabled -- its sanity signal doesn't apply; clear any stale entry.
@@ -4479,7 +4479,7 @@ function sync_package_pfblockerng($cron='') {
 		pfb_clear_pending_changes();
 	}
 
-	if ($pfb['enable'] == 'on' && !$pfb['save'] || $pfb['summary']) {
+	if ($pfb['enable'] === PfbToggle::On && !$pfb['save'] || $pfb['summary']) {
 		pfb_logger("\n UPDATE PROCESS ENDED\n", 1);
 	}
 

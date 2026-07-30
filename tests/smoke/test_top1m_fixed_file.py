@@ -556,12 +556,12 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     teardown = _json_eval(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
-        "PfbConfig::write('pfb_keep', PfbLenient::On);\n"
+        "PfbConfig::write('pfb_keep', PfbToggle::On);\n"
         "write_config('pfBlockerNG #1542 smoke: keep-on callable teardown');\n"
         "pfb_global();\n"
         "$ok = pfb_unbound_py_teardown_raw_set();\n"
         "$keep = PfbConfig::read('pfb_keep');\n"
-        "$out = array('ok' => $ok, 'keep' => $keep instanceof PfbLenient ? $keep->value : (string) $keep);",
+        "$out = array('ok' => $ok, 'keep' => $keep instanceof PfbToggle ? $keep->value : (string) $keep);",
         "PFB1542TEARDOWN",
     )
     assert teardown == {"ok": True, "keep": "on"}, teardown

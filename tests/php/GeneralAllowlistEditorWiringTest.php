@@ -8,14 +8,14 @@ use PHPUnit\Framework\TestCase;
  * issue #1875 step 2a (RED, test-first): mounting the CM6 editor on the General page's
  * internal-feed-allowlist field (pfb_feed_internal_allowlist), gated by the same
  * `$pfb_syntaxhl_on` boolean idiom pfblockerng_dnsbl.php already establishes
- * (`PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On`).
+ * (`pfb_editor_enabled()`, the issue #1887 named accessor).
  *
  * Not to be confused with GeneralSyntaxHighlightToggleWiringTest, which pins the
  * pfb_syntax_highlight TOGGLE FIELD itself (the checkbox the user flips); this test pins the
  * CM6 mount that the toggle gates on THIS page's own plaintext-list field.
  *
  * pfblockerng_general.php already has a `pfb_syntax_highlight` $pconfig entry and reads it
- * via `pfb_cfg_lenient_read($pconfig['pfb_syntax_highlight']) === PfbLenient::On` for the
+ * via `pfb_cfg_toggle_read($pconfig['pfb_syntax_highlight']) === PfbToggle::On` for the
  * toggle checkbox's `checked` state (line ~353) -- but has NO `$pfb_syntaxhl_on` boolean and
  * NO cm-regex.min.js include today (verified this session); the pre-existing
  * events.push(function() {...}) block at ~line 594 only wires the internal-filter grey-out,
@@ -54,9 +54,9 @@ final class GeneralAllowlistEditorWiringTest extends TestCase
 		// === PfbLenient::On` inline comparison that drives the toggle checkbox's checked
 		// state (line ~353) -- that inline comparison does not assign to $pfb_syntaxhl_on.
 		$this->assertMatchesRegularExpression(
-			"#\\\$pfb_syntaxhl_on\\s*=\\s*\\(?\\s*PfbConfig::read\\(\\s*'pfb_syntax_highlight'\\s*\\)\\s*===\\s*PfbLenient::On#",
+			"#\\\$pfb_syntaxhl_on\\s*=\\s*pfb_editor_enabled\\(\\)#",
 			self::$src,
-			'expected a $pfb_syntaxhl_on boolean derived from PfbConfig::read(\'pfb_syntax_highlight\') === PfbLenient::On'
+			'expected a $pfb_syntaxhl_on boolean derived from pfb_editor_enabled() (issue #1887 named accessor)'
 		);
 	}
 

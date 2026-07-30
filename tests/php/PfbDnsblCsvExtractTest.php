@@ -29,7 +29,7 @@ final class PfbDnsblCsvExtractTest extends TestCase
 		// pon's IP collection routes through pfb_dnsbl_collect_feed_ip() ->
 		// sanitize_ipaddr(), which reads $pfb['supp'] -- suppression OFF matches
 		// Adr62DnsblCollectFeedIpTest's setUp.
-		$GLOBALS['pfb']['supp'] = 'off';
+		$GLOBALS['pfb']['supp'] = PfbToggle::Off;
 	}
 
 	protected function tearDown(): void

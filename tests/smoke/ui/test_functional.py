@@ -114,6 +114,9 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page=GENERAL_PAGE,
         field="enable_cb",
         config_path="installedpackages/pfblockerng/config/0/enable_cb",
+        # issue #1887: enable_cb carries the toggle adapter, so the save's
+        # writeSection ride canonicalises an unchecked '' to the explicit 'off'.
+        off="off",
     ),
     ToggleFlow(
         name="general_keep_settings",
@@ -187,6 +190,8 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_dnsbl",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl",
+        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        off="off",
     ),
     ToggleFlow(
         name="dnsbl_tld_wildcard",
@@ -199,6 +204,8 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_hsts",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts",
+        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        off="off",
     ),
     ToggleFlow(
         name="dnsbl_regex",
@@ -229,6 +236,8 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_cache_flush",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush",
+        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        off="off",
     ),
     ToggleFlow(
         name="dnsbl_py_nolog",
@@ -321,8 +330,8 @@ def test_toggle_flow_changes_effective_config(
     """
     # An absent key reads as '' over the raw config path; normalise it to this flow's
     # canonical off token so the before-state assertion and the restore compare against a
-    # real stored value (PfbLenient pfb_keep stores 'off', never ''). For the PfbToggle
-    # flows whose off token IS '', this is a no-op.
+    # real stored value (issue #1887: every adapter'd toggle stores 'off', never '').
+    # For the raw unregistered fields whose off token IS '', this is a no-op.
     original = helpers.config_get(smoke_vm, flow.config_path) or flow.off
     # The toggle's "other" value -- we drive AWAY from original, then BACK.
     flipped = flow.off if original == flow.on else flow.on

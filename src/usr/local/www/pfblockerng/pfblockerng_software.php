@@ -64,10 +64,9 @@ if (!isAllowedPage('pkg_mgr_installed.php')) {
 $pfb_sw_pkgname	= pfb_pkg_installed_name();
 $pfb_sw_channel	= pfb_channel_from_pkgname($pfb_sw_pkgname);
 
-// The "Check for new versions" setting (default ENABLED). Persisted as 'on'/'off'; an unset
-// value (never saved) reads as enabled via pfb_software_check_enabled().
-$pfb_sw_check_raw = PfbConfig::read('pfb_software_check');
-$pfb_sw_check	= pfb_software_check_enabled(is_string($pfb_sw_check_raw) ? $pfb_sw_check_raw : null);
+// The "Check for new versions" setting (default ENABLED — the registry default since
+// issue #1887). The accessor reads the gateway itself; no raw value handling here.
+$pfb_sw_check	= pfb_software_check_enabled();
 
 // Which (POST-guarded) action was requested. Only the cache-refreshing Check runs here now;
 // Update/Uninstall are plain links to pkg_mgr_install.php, not POST actions.

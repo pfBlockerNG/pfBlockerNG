@@ -654,7 +654,7 @@
                 "name": "float",
                 "byRef": false,
                 "variadic": false,
-                "type": "?string",
+                "type": "PfbToggle",
                 "default": null
             },
             {
@@ -774,32 +774,6 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "PfbIdnMode|string",
-                "default": null
-            }
-        ]
-    },
-    "pfb_cfg_lenient_read": {
-        "returnsRef": false,
-        "returnType": "PfbLenient",
-        "params": [
-            {
-                "name": "stored",
-                "byRef": false,
-                "variadic": false,
-                "type": "mixed",
-                "default": null
-            }
-        ]
-    },
-    "pfb_cfg_lenient_write": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "lenient",
-                "byRef": false,
-                "variadic": false,
-                "type": "PfbLenient|string",
                 "default": null
             }
         ]
@@ -1751,7 +1725,7 @@
                 "name": "nonat",
                 "byRef": false,
                 "variadic": false,
-                "type": "string",
+                "type": "PfbToggle",
                 "default": null
             }
         ]
@@ -2865,6 +2839,11 @@
             }
         ]
     },
+    "pfb_editor_enabled": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_emit_entry_reject_stats": {
         "returnsRef": false,
         "returnType": "void",
@@ -2943,7 +2922,7 @@
     },
     "pfb_feed_filter_enabled": {
         "returnsRef": false,
-        "returnType": null,
+        "returnType": "bool",
         "params": []
     },
     "pfb_feed_filter_install_default": {
@@ -6903,7 +6882,7 @@
                 "name": "supp",
                 "byRef": false,
                 "variadic": false,
-                "type": null,
+                "type": "PfbToggle",
                 "default": null
             }
         ]
@@ -6937,7 +6916,7 @@
                 "name": "supp",
                 "byRef": false,
                 "variadic": false,
-                "type": null,
+                "type": "PfbToggle",
                 "default": null
             }
         ]
@@ -7151,15 +7130,7 @@
     "pfb_software_check_enabled": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": [
-            {
-                "name": "raw",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": null
-            }
-        ]
+        "params": []
     },
     "pfb_software_is_our_build": {
         "returnsRef": false,

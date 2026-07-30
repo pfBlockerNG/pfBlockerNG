@@ -158,9 +158,9 @@ final class PfbSettingsFamilyTest extends TestCase
 
 	public function testKeepOffIsPreservedAtLegacyBoundary(): void
 	{
-		$this->assertSame(PfbLenient::Off, PfbConfig::read('pfb_keep'));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_keep'));
 		$this->assertTrue(pfb_settings_family_save('3.2'));
-		$this->assertSame(PfbLenient::Off, PfbConfig::read('pfb_keep'));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_keep'));
 	}
 
 	public function testSaveWithNoOwnedConfigIsNoOpWithoutCreatingSlot(): void

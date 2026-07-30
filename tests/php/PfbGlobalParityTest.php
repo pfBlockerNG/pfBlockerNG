@@ -54,12 +54,12 @@ final class PfbGlobalParityTest extends TestCase
 
 		// Then: PfbToggle::Off -> value ''.
 		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('', $result->value, 'enable_cb absent -> "" (off, matches pfb_global null-absent)');
+		$this->assertSame('off', $result->value, 'enable_cb absent -> "" (off, matches pfb_global null-absent)');
 	}
 
 	/**
 	 * pfb_keep: OLD pfb_global() = $pfb['config']['pfb_keep'] ?? 'on' = 'on' when absent.
-	 * Via gateway: PfbConfig::read('pfb_keep')->value = 'on' (PfbLenient::On, #484 fix).
+	 * Via gateway: PfbConfig::read('pfb_keep')->value = 'on' (PfbToggle::On, #484 fix).
 	 *
 	 * #281 DEFAULT REPAIR: This is the canonical defect class. The registry default
 	 * is 'on', matching the old ?? 'on' fallback. Both old code and gateway agree.
@@ -79,7 +79,7 @@ final class PfbGlobalParityTest extends TestCase
 
 		// Then: 'on' — matches OLD ?? 'on' AND the repaired registry default.
 		// Adapter is now PfbLenient (not PfbToggle), but the value is unchanged.
-		$this->assertSame(PfbLenient::On, $result);
+		$this->assertSame(PfbToggle::On, $result);
 		$this->assertSame('on', $result->value, 'pfb_keep absent -> "on" (#281: default repaired via registry)');
 	}
 
@@ -176,7 +176,7 @@ final class PfbGlobalParityTest extends TestCase
 		$result = PfbConfig::read('pfb_reuse');
 
 		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('', $result->value, 'pfb_reuse absent -> "" (off)');
+		$this->assertSame('off', $result->value, 'pfb_reuse absent -> "" (off)');
 	}
 
 	// -----------------------------------------------------------------------
@@ -197,7 +197,7 @@ final class PfbGlobalParityTest extends TestCase
 		$result = PfbConfig::read('pfb_dnsbl');
 
 		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('', $result->value, 'pfb_dnsbl absent -> "" (off)');
+		$this->assertSame('off', $result->value, 'pfb_dnsbl absent -> "" (off)');
 	}
 
 	/**
@@ -212,16 +212,16 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto')
 		);
 
-		// Before: old code would produce pfb_cfg_toggle_read('')->value = ''.
+		// The adapter's legacy '' normalises to the canonical 'off' (issue #1887).
 		$old_result = pfb_cfg_toggle_read('')->value;
-		$this->assertSame('', $old_result);
+		$this->assertSame('off', $old_result);
 
 		// When: gateway read.
 		$result = PfbConfig::read('pfb_dnsvip_auto');
 
 		// Then: same value.
 		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('', $result->value, 'pfb_dnsvip_auto absent -> "" (off, matches old pfb_cfg_toggle_read)');
+		$this->assertSame('off', $result->value, 'pfb_dnsvip_auto absent -> "" (off, matches old pfb_cfg_toggle_read)');
 	}
 
 	/**
@@ -280,8 +280,8 @@ final class PfbGlobalParityTest extends TestCase
 	}
 
 	/**
-	 * pfb_dnsbl_lenient: OLD = pfb_cfg_lenient_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value.
-	 * When absent: pfb_cfg_lenient_read('')->value = 'off'.
+	 * pfb_dnsbl_lenient: OLD = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value.
+	 * When absent: pfb_cfg_toggle_read('')->value = 'off'.
 	 * Via gateway: PfbConfig::read('pfb_dnsbl_lenient')->value = 'off' (default 'off', lenient adapter).
 	 * PARITY: identical.
 	 */
@@ -291,16 +291,16 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient')
 		);
 
-		// Before: old code would produce pfb_cfg_lenient_read('')->value = 'off'.
-		$old_result = pfb_cfg_lenient_read('')->value;
+		// Before: old code would produce pfb_cfg_toggle_read('')->value = 'off'.
+		$old_result = pfb_cfg_toggle_read('')->value;
 		$this->assertSame('off', $old_result);
 
 		// When: gateway read.
 		$result = PfbConfig::read('pfb_dnsbl_lenient');
 
 		// Then: same value.
-		$this->assertSame(PfbLenient::Off, $result);
-		$this->assertSame('off', $result->value, 'pfb_dnsbl_lenient absent -> "off" (matches old pfb_cfg_lenient_read)');
+		$this->assertSame(PfbToggle::Off, $result);
+		$this->assertSame('off', $result->value, 'pfb_dnsbl_lenient absent -> "off" (matches old pfb_cfg_toggle_read)');
 	}
 
 	/**
@@ -317,7 +317,7 @@ final class PfbGlobalParityTest extends TestCase
 		$result = PfbConfig::read('pfb_hsts');
 
 		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('', $result->value, 'pfb_hsts absent -> "" (off)');
+		$this->assertSame('off', $result->value, 'pfb_hsts absent -> "" (off)');
 	}
 
 	/**
@@ -390,7 +390,7 @@ final class PfbGlobalParityTest extends TestCase
 	 * Via gateway: PfbConfig::read('pfb_regex_cap') = '' (registered default).
 	 * PARITY: identical.
 	 */
-	public function testParityPfbRegexCapAbsentYieldsEmpty(): void
+	public function testParityPfbRegexCapAbsentYieldsOff(): void
 	{
 		$this->assertNull(
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_cap')
@@ -398,7 +398,9 @@ final class PfbGlobalParityTest extends TestCase
 
 		$result = PfbConfig::read('pfb_regex_cap');
 
-		$this->assertSame('', $result, 'pfb_regex_cap absent -> ""');
+		// issue #1887: the field gained the toggle adapter pair, so the gateway returns
+		// the enum; absent still means the feature is off, just as the raw '' did.
+		$this->assertSame(PfbToggle::Off, $result, 'pfb_regex_cap absent -> Off');
 	}
 
 	// -----------------------------------------------------------------------
@@ -490,7 +492,7 @@ final class PfbGlobalParityTest extends TestCase
 	 *
 	 * #484 FIX: pfb_keep now uses the lenient adapter (PfbLenient) so the GUI stores
 	 * 'off' for unchecked-save — distinguishable from absent (default 'on'). Current code
-	 * reads the legacy '' token (written by the old GUI) as PfbLenient::Off.
+	 * reads the legacy '' token (written by the old GUI) as PfbToggle::Off.
 	 */
 	public function testRepair281PfbKeepDefaultIsFormallyOn(): void
 	{
@@ -503,16 +505,16 @@ final class PfbGlobalParityTest extends TestCase
 		// Then: value is 'on' — same as old ?? 'on' fallback.
 		// The #281 class is now structurally closed: the default is formal,
 		// not scattered, and a missing key cannot diverge from the GUI default.
-		// Adapter is now PfbLenient (not PfbToggle); value is unchanged.
-		$this->assertSame(PfbLenient::On, $result);
+		// Adapter is the merged PfbToggle (issue #1887); value is unchanged.
+		$this->assertSame(PfbToggle::On, $result);
 		$this->assertSame('on', $result->value);
 
-		// Also prove that with an explicit '' (pre-#484 legacy opt-out), the gateway
-		// returns PfbLenient::Off -> value 'off' — a deliberate opt-out is still honoured.
-		// (Write emits 'off', not '' — normalises the legacy empty-string token.)
+		// issue #1887 (owner decision): a stored '' is the SAME not-configured state as an
+		// absent key — pfSense writes an unchecked checkbox as an empty element — so it
+		// resolves to the registered default 'on'. A deliberate opt-out is the explicit
+		// 'off' token, which round-trips (testPfbKeepRoundTrip* in CfgGatewayTest).
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_keep', '');
-		$result_off = PfbConfig::read('pfb_keep');
-		$this->assertSame(PfbLenient::Off, $result_off);
-		$this->assertSame('off', $result_off->value, "legacy '' pfb_keep -> PfbLenient::Off (value 'off')");
+		$result_empty = PfbConfig::read('pfb_keep');
+		$this->assertSame(PfbToggle::On, $result_empty, "stored '' pfb_keep resolves to the registered default On");
 	}
 }

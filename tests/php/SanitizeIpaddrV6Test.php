@@ -31,7 +31,9 @@ final class SanitizeIpaddrV6Test extends TestCase
 	 */
 	private static function sanitize(string $ipaddr, bool $custom, string|int $pfbcidr = 'Disabled', string $supp = 'off'): ?string
 	{
-		return pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, $supp)['address'];
+		// issue #1887: production takes the enum; the helper keeps the terse string
+		// signature and adapts at this single boundary.
+		return pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, pfb_cfg_toggle_read($supp))['address'];
 	}
 
 	// --- Suppression on: reserved/private/loopback dropped -------------------

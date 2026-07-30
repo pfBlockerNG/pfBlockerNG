@@ -65,7 +65,7 @@ final class IpRecomputeRanWiringTest extends TestCase
 	{
 		$source = $this->source();
 		$this->assertStringContainsString(
-			"pfb_ip_suppress_body_active(\$pfb['supp'] == 'on', \$vtype == '_v4', \$pfb['supp_update'], \$pfbadv, in_array(\$alias, \$final_alias_old), \$pfb_recompute_ran_v4)",
+			"pfb_ip_suppress_body_active(\$pfb['supp'] === PfbToggle::On, \$vtype == '_v4', \$pfb['supp_update'], \$pfbadv, in_array(\$alias, \$final_alias_old), \$pfb_recompute_ran_v4)",
 			$source,
 			'the v4 suppression-body gate must call pfb_ip_suppress_body_active() with the v4 recompute-ran flag'
 		);
@@ -75,7 +75,7 @@ final class IpRecomputeRanWiringTest extends TestCase
 	{
 		$source = $this->source();
 		$this->assertStringContainsString(
-			"pfb_ip_suppress_body_active(\$pfb['supp'] == 'on', \$vtype == '_v6', \$pfb['supp_update'], \$pfbadv, in_array(\$alias, \$final_alias_old), \$pfb_recompute_ran_v6)",
+			"pfb_ip_suppress_body_active(\$pfb['supp'] === PfbToggle::On, \$vtype == '_v6', \$pfb['supp_update'], \$pfbadv, in_array(\$alias, \$final_alias_old), \$pfb_recompute_ran_v6)",
 			$source,
 			'the v6 suppression-body gate must call pfb_ip_suppress_body_active() with the v6 recompute-ran flag'
 		);
@@ -85,7 +85,7 @@ final class IpRecomputeRanWiringTest extends TestCase
 	{
 		$source = $this->source();
 		$this->assertStringContainsString(
-			"pfb_ip_closing_pass_active(\$pfb['dup'] == 'on', \$pfb_recompute_ran_v4)",
+			"pfb_ip_closing_pass_active(\$pfb['dup'] === PfbToggle::On, \$pfb_recompute_ran_v4)",
 			$source,
 			'the FINAL REPORTING gate must call pfb_ip_closing_pass_active() with the v4 recompute-ran flag'
 		);

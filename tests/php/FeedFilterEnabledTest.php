@@ -57,11 +57,25 @@ final class FeedFilterEnabledTest extends TestCase
 		$this->assertTrue(pfb_feed_filter_enabled());
 	}
 
-	public function testAnyNonOffValueReadsAsEnabled(): void
+	public function testEmptyStringReadsAsTheRegisteredDefaultOn(): void
 	{
-		// Only the literal 'off' disables; an empty string or stray value reads ON
-		// (fail-safe toward keeping the filter active).
+		// issue #1887: '' is the not-configured state and resolves to the registered
+		// default 'on' at the gateway — same effective result as the old fail-safe.
 		$this->setToggle('');
 		$this->assertTrue(pfb_feed_filter_enabled());
+	}
+
+	public function testJunkTokenFallsBackToOff(): void
+	{
+		// issue #1887 contract change, deliberate: junk used to read as enabled
+		// (`!== 'off'`); under the shared toggle adapter it falls back to Off like
+		// every other toggle. Junk is only reachable via a hand-edited config.xml —
+		// both save paths emit canonical tokens — and the case variants an operator
+		// would actually type ('OFF', 'On') are now recognised instead of being junk.
+		$this->setToggle('yes');
+		$this->assertFalse(pfb_feed_filter_enabled());
+
+		$this->setToggle('OFF');
+		$this->assertFalse(pfb_feed_filter_enabled(), "the 'OFF' case variant must disable, not read as junk");
 	}
 }

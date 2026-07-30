@@ -81,35 +81,43 @@ trait PfbStoredEnumAdapter
 	}
 }
 
-// PfbToggle — checkbox fields stored as 'on' (checked) or '' (unchecked).
-//   Stored vocabulary: 'on' | '' (missing/unchecked = ''). '' is the Off case, so
-//   tryFrom('') resolves it directly; the per-field absent default is the registry's.
+// PfbToggle — the single on/off enum for every checkbox field (issue #1887; absorbed the
+// retired PfbLenient, which existed only to be the variant whose Off survived storage).
+//   Stored vocabulary: 'on' | 'off'. Off is an EXPLICIT token: a checkbox submits nothing
+//   when unchecked, so an Off stored as '' was indistinguishable from "never configured"
+//   and a default-on field silently re-enabled itself on read-back (the #484 bug class).
+//   '' is NOT in the vocabulary — PfbConfig treats a stored '' as "not configured" and
+//   resolves it to the field's registered default, so an install written before this merge
+//   reads as that default rather than as a hard Off. That resolution lives in the gateway
+//   because it needs the per-field default, which an enum cannot see.
 enum PfbToggle: string implements PfbStoredEnum
-{
-	use PfbStoredEnumAdapter;
-
-	case On  = 'on';
-	case Off = '';
-
-	// Parse-fallback ONLY (unknown/non-scalar -> "not On"). NOT the absent default.
-	public static function default(): static
-	{
-		return self::Off;
-	}
-}
-
-// PfbLenient — tri-state {on, off, legacy ''} flag; explicit 'off' survives the config
-// round-trip where a toggle's '' off-value would not. Used by pfb_dnsbl_lenient (ADR-22
-// scheme-parsing leniency) and pfb_keep (#484, default-on keep storing 'off' explicitly).
-// Stored vocabulary: 'on' | 'off' | '' (legacy missing key -> Off, NOT PfbToggle's '').
-enum PfbLenient: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
 
 	case On  = 'on';
 	case Off = 'off';
 
-	// NULL/absent -> registry default; '' (legacy missing) and junk -> Off (via fromLegacy).
+	/**
+	 * Recognise either token in ANY case before giving up (issue #1887).
+	 *
+	 * The write path is unchanged and still emits lowercase, so this only affects input
+	 * the package did not write itself: a hand-edited config.xml, a restored backup, an
+	 * HA sync, another tool touching installedpackages/*. Without it, 'On' or 'OFF' fell
+	 * past tryFrom() into the Off fallback and silently disabled a feature for an
+	 * operator who spelled it the obvious way, with nothing logged.
+	 *
+	 * Deliberately narrow: only a case variant of the two canonical tokens is accepted.
+	 * 'yes', 'true' and '1' remain junk and still fall back to Off, so a typo cannot
+	 * enable something. Pinned in both directions by ToggleCaseInsensitiveTest.
+	 */
+	protected static function fromLegacy(string $raw): static
+	{
+		return self::tryFrom(strtolower($raw)) ?? self::default();
+	}
+
+	// Parse-fallback ONLY (unknown/non-scalar -> "not On"). NOT the absent default: a
+	// direct fromStored('') caller lands here, while a gateway read never does (PfbConfig
+	// has already substituted the registry default for '').
 	public static function default(): static
 	{
 		return self::Off;
@@ -336,6 +344,23 @@ function pfb_cfg_alias_delta_mode_write(PfbAliasDeltaMode|string $mode): string
 // Kept so the registry callables + the direct www/ callers have a free-function
 // handle; all semantics live on the enums.
 
+/**
+ * Whether the Advanced Text Editor (CodeMirror 6) is enabled — issue #1887.
+ *
+ * A named accessor rather than the comparison spelled out at each call site: it was
+ * written identically on five pages (General, DNSBL, IP, Category Edit, Edit Hooks),
+ * and each copy had to name the config key, know the stored vocabulary and get the
+ * enum comparison right. Here the caller asks the question and gets a bool; the key,
+ * the registered default and the stored token stay behind the gateway.
+ *
+ * Reading a toggle is not a privileged operation, so this belongs in the shared file
+ * (contrast the write side — see issue #1895).
+ */
+function pfb_editor_enabled(): bool
+{
+	return PfbConfig::read('pfb_syntax_highlight') === PfbToggle::On;
+}
+
 /** Read a PfbToggle from a raw stored value. */
 function pfb_cfg_toggle_read(mixed $stored): PfbToggle
 {
@@ -346,18 +371,6 @@ function pfb_cfg_toggle_read(mixed $stored): PfbToggle
 function pfb_cfg_toggle_write(PfbToggle|string $toggle): string
 {
 	return ($toggle instanceof PfbToggle ? $toggle : PfbToggle::fromStored($toggle))->toStored();
-}
-
-/** Read a PfbLenient from a raw stored value. */
-function pfb_cfg_lenient_read(mixed $stored): PfbLenient
-{
-	return PfbLenient::fromStored($stored);
-}
-
-/** Write a PfbLenient (enum or legacy string) back to its stored string. */
-function pfb_cfg_lenient_write(PfbLenient|string $lenient): string
-{
-	return ($lenient instanceof PfbLenient ? $lenient : PfbLenient::fromStored($lenient))->toStored();
 }
 
 /** Read a PfbIdnMode from a raw stored value (legacy 'on' -> All). */
@@ -476,8 +489,8 @@ function pfb_cfg_registry(): array
 		'pfb_keep' => [
 			'section'       => $gen,
 			'default'       => 'on',
-			'read_adapter'  => 'pfb_cfg_lenient_read',
-			'write_adapter' => 'pfb_cfg_lenient_write',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Update interval: numeric hour string | 'Disabled'. Default '1'.
@@ -625,19 +638,24 @@ function pfb_cfg_registry(): array
 		],
 
 		// Software update check last-seen version (string or null). Default ''.
+		// issue #1887: toggle adapter adopted, and the effective ON default moves from
+		// the hand-written reader (`!== 'off'`) into the registry where every other
+		// toggle keeps its default. Absent behaves exactly as before (enabled).
 		'pfb_software_check' => [
 			'section'       => $gen,
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'default'       => 'on',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Internal-address feed-host filter toggle: 'on'|'off'. Default 'on' (new install).
+		// issue #1887: toggle adapter adopted; the #1770 install seed still pins 'off'
+		// once on an already-configured box (see pfb_feed_filter_install_default()).
 		'pfb_feed_internal_filter' => [
 			'section'       => $gen,
 			'default'       => 'on',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Allowlist for internal-feed hosts (base64-encoded). Default ''.
@@ -722,8 +740,8 @@ function pfb_cfg_registry(): array
 		'pfb_syntax_highlight' => [
 			'section'       => $gen,
 			'default'       => 'on',
-			'read_adapter'  => 'pfb_cfg_lenient_read',
-			'write_adapter' => 'pfb_cfg_lenient_write',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// -------------------------------------------------------------------
@@ -869,12 +887,12 @@ function pfb_cfg_registry(): array
 		],
 
 		// ADR-22: scheme-parsing leniency: 'on' | 'off' | ''. Default 'off'.
-		// PfbLenient adapter (off-value = 'off', not '').
+		// Toggle adapter: Off stores the explicit 'off' token.
 		'pfb_dnsbl_lenient' => [
 			'section'       => $dnsbl,
 			'default'       => 'off',
-			'read_adapter'  => 'pfb_cfg_lenient_read',
-			'write_adapter' => 'pfb_cfg_lenient_write',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Python DNS reply logging. Default ''.
@@ -943,8 +961,8 @@ function pfb_cfg_registry(): array
 		'pfb_regex_cap' => [
 			'section'       => $dnsbl,
 			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// CNAME validation. Default ''.
@@ -1291,7 +1309,7 @@ final class PfbConfig
 		$entry   = self::entry($key);
 		$path    = $entry['section'] . '/' . $key;
 		$raw     = config_get_path($path, NULL);
-		$stored  = ($raw === NULL) ? $entry['default'] : (string) $raw;
+		$stored  = (string) self::notConfigured($entry, $raw);
 		$adapter = $entry['read_adapter'];
 		return ($adapter !== NULL) ? $adapter($stored) : $stored;
 	}
@@ -1312,6 +1330,7 @@ final class PfbConfig
 		$entry   = self::entry($key);
 		$path    = $entry['section'] . '/' . $key;
 		$adapter = $entry['write_adapter'];
+		$value   = self::notConfigured($entry, $value);
 		$stored  = ($adapter !== NULL) ? $adapter($value) : (string) $value;
 		config_set_path($path, $stored);
 	}
@@ -1388,7 +1407,7 @@ final class PfbConfig
 			if (!array_key_exists($key, $data)) {
 				continue;
 			}
-			$data[$key] = $write_adapter($read_adapter($data[$key]));
+			$data[$key] = $write_adapter($read_adapter(self::notConfigured($entry, $data[$key])));
 		}
 		config_set_path($section, $data);
 	}
@@ -1408,6 +1427,38 @@ final class PfbConfig
 	// -----------------------------------------------------------------------
 	// Private helpers
 	// -----------------------------------------------------------------------
+
+	/**
+	 * Substitute the registered default for a "not configured" value (issue #1887).
+	 *
+	 * NULL (key absent) and '' (key present but empty) are the SAME state: pfSense
+	 * stores an unchecked checkbox as an empty element, so '' carries no more operator
+	 * intent than a missing key does. Both resolve to the field's registered default,
+	 * and no registered field needs them distinguished — one with a non-empty default
+	 * either already coerces '' to that default at save time (the numeric fields' `?:`)
+	 * or cannot legitimately hold '' (the mode selectors); the fields where '' IS
+	 * meaningful (pfb_feed_internal_allowlist, pfb_quiet_hours, global_log,
+	 * dnsbl_allow_int) all have '' as their registered default, making this identity.
+	 *
+	 * Called from read(), write() AND writeSection(), not from read() alone. The two
+	 * write paths apply the adapters directly to raw stored values, bypassing the
+	 * registry default — so resolving '' only in read() would leave a stored '' reading
+	 * as the default while any section save normalised it to 'off': the same value
+	 * meaning two different things at two layers, where saving an unrelated field on
+	 * the page would flip it. Pinned by
+	 * ToggleMergeTest::testReadAndWriteSectionAgreeOnStoredEmptyString().
+	 *
+	 * An enum cannot do this itself — fromStored() has no access to the per-field
+	 * default, which is precisely why the resolution belongs to the gateway.
+	 *
+	 * @param  array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null} $entry
+	 * @param  mixed $value  Raw stored value, or the runtime value on the write paths.
+	 * @return mixed         $entry['default'] when $value is NULL or '', else $value verbatim.
+	 */
+	private static function notConfigured(array $entry, mixed $value): mixed
+	{
+		return ($value === NULL || $value === '') ? $entry['default'] : $value;
+	}
 
 	/**
 	 * Look up a registry entry, throwing on an unregistered key.
@@ -3294,7 +3345,7 @@ function pfblockerng_tick(): void
 	}
 
 	// Blacklist: daily or weekly, jittered. Build bl_string from blconfig.
-	if (($due['bl'] || pfb_due_ledger_is_pending('bl', $dbdir)) && $pfb['enable'] == 'on' &&
+	if (($due['bl'] || pfb_due_ledger_is_pending('bl', $dbdir)) && $pfb['enable'] === PfbToggle::On &&
 	    !empty($pfb['blconfig']) &&
 	    !empty($pfb['blconfig']['blacklist_enable']) && $pfb['blconfig']['blacklist_enable'] != 'Disable' &&
 	    !empty($pfb['blconfig']['blacklist_selected']) && isset($pfb['blconfig']['item'])) {
