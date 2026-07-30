@@ -765,7 +765,7 @@ def test_check_parity_live_repository_user_prompt_submit_clean() -> None:
         "docs/misc/architecture-notes.md",
         "tests/smoke/CLAUDE.md",
         ".claude/rules/smoke.md",
-        ".claude/hooks/rtk-hook.sh",
+        ".claude/hooks/statusline.sh",
         "scripts/ts-hook.sh",
     ],
 )
