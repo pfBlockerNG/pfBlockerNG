@@ -1204,6 +1204,11 @@ final class CfgGatewayTest extends TestCase
 			'v4suppression',
 			'v6suppression',
 
+			// pfblockerngreputation/config/0 scalars (issue #1896)
+			'enable_rep',
+			'enable_pdup',
+			'enable_dedup',
+
 			// Out-of-scope keys (must also appear in $out_of_scope above)
 			'pfb_wizard_skip',
 			'hooks',
@@ -2625,6 +2630,45 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('lo0', $result['dnsbl_interface'], 'unadapted dnsbl_interface is byte-identical');
 		$this->assertSame('', $result['pfb_dnsvip4'], 'unadapted pfb_dnsvip4 is byte-identical');
 		$this->assertSame('QWJjMTIz', $result['top1m_token'], 'unadapted top1m_token is byte-identical');
+	}
+
+	/**
+	 * issue #1896: a realistic Reputation save blob (mirrors
+	 * pfblockerng_geoip.inc's Reputation save handler) mixing the three newly
+	 * registered toggles with unadapted plain fields. The unchecked toggle
+	 * ('') normalises to the canonical 'off' token; every unadapted field
+	 * (p24_dmax_var, et_header, ccexclude) is byte-identical.
+	 *
+	 * Scenario:
+	 *   Given a Reputation section blob with enable_rep checked ('on'),
+	 *     enable_pdup/enable_dedup unchecked (''), and unadapted plain fields.
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then enable_rep stays 'on', enable_pdup/enable_dedup normalise to
+	 *     'off', and every unadapted field is byte-identical to the input.
+	 */
+	public function testWriteSectionReputationBlobNormalisesAdaptedFieldsOnly(): void
+	{
+		$section = 'installedpackages/pfblockerngreputation/config/0';
+
+		$data = [
+			'enable_rep'    => 'on',     // adapted (toggle), canonical.
+			'enable_pdup'   => '',       // adapted (toggle), unchecked -> normalises to 'off'.
+			'enable_dedup'  => '',       // adapted (toggle), unchecked -> normalises to 'off'.
+			'p24_dmax_var'  => '5',      // unadapted, plain.
+			'et_header'     => '',       // unadapted, plain.
+			'ccexclude'     => 'US,CA',  // unadapted, plain.
+		];
+
+		PfbConfig::writeSection($section, $data);
+
+		$result = PfbConfig::readSection($section);
+
+		$this->assertSame('on', $result['enable_rep'], 'enable_rep canonical stays on');
+		$this->assertSame('off', $result['enable_pdup'], "unchecked enable_pdup ('') normalises to 'off'");
+		$this->assertSame('off', $result['enable_dedup'], "unchecked enable_dedup ('') normalises to 'off'");
+		$this->assertSame('5', $result['p24_dmax_var'], 'unadapted p24_dmax_var is byte-identical');
+		$this->assertSame('', $result['et_header'], 'unadapted et_header is byte-identical');
+		$this->assertSame('US,CA', $result['ccexclude'], 'unadapted ccexclude is byte-identical');
 	}
 
 	/**

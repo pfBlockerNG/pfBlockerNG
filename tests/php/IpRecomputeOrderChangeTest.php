@@ -178,7 +178,7 @@ final class IpRecomputeOrderChangeTest extends TestCase
 	{
 		$needle = <<<'EOT'
 	if (!$pfb['save'] && $pfb['enable'] === PfbToggle::On &&
-	    pfb_cross_list_scope($pfb['dup'] === PfbToggle::On, $pfb['drep'] == 'on' || $pfb['prep'] == 'on')) {
+	    pfb_cross_list_scope($pfb['dup'] === PfbToggle::On, $pfb['drep'] === PfbToggle::On || $pfb['prep'] === PfbToggle::On)) {
 EOT;
 		$this->assertStringContainsString(
 			$needle,

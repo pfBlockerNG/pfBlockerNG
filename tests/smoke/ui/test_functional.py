@@ -289,6 +289,21 @@ FLOWS: tuple[ToggleFlow, ...] = (
         # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
         off="off",
     ),
+    # ---- Reputation settings (installedpackages/pfblockerngreputation/config/0) -
+    # issue #1896: enable_dedup ("dMAX") joined the toggle-adapter registry
+    # alongside enable_rep/enable_pdup. The Reputation save only write_config()s +
+    # pfb_mark_pending_changes() (no reload, no egress), so it is as hermetic as
+    # the DNSBL group above; the save re-validates the page's select/multi-select
+    # fields (p24_*_var, ccwhite/ccblack, ccexclude/etblock/etmatch), which
+    # WebUI.post's re-scraped current-value POST satisfies without an override.
+    ToggleFlow(
+        name="reputation_dedup",
+        page="/pfblockerng/pfblockerng_reputation.php",
+        field="enable_dedup",
+        config_path="installedpackages/pfblockerngreputation/config/0/enable_dedup",
+        # issue #1896: toggle-adapter field — unchecked save stores the explicit 'off'.
+        off="off",
+    ),
 )
 
 

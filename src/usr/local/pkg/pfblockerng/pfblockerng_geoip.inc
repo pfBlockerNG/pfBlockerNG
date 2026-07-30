@@ -835,7 +835,7 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
-$pfb['repconfig'] = config_get_path('installedpackages/pfblockerngreputation/config/0', []);
+$pfb['repconfig'] = PfbConfig::readSection('installedpackages/pfblockerngreputation/config/0');
 
 $pconfig = array();
 $pconfig['enable_rep']		= $pfb['repconfig']['enable_rep'];
@@ -984,7 +984,7 @@ if ($_POST) {
 			// Set flag to update ET IQRisk on next Cron|Force update|Force reload
 			$pfb['repconfig']['et_update']	= 'enabled';
 
-			config_set_path('installedpackages/pfblockerngreputation/config/0', $pfb['repconfig']);
+			PfbConfig::writeSection('installedpackages/pfblockerngreputation/config/0', $pfb['repconfig']);
 			write_config('[pfBlockerNG] save Reputation settings');
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			header('Location: /pfblockerng/pfblockerng_reputation.php');

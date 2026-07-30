@@ -70,6 +70,13 @@ exclusions.
     adapter set moves all its consumers in the same commit (see below).
   - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables the post-handshake full Unbound
     cache flush for bulk zero-downtime DNSBL data swaps.
+  - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, the Reputation
+    "Max"/"pMax"/"dMax" toggles): default Off. The section
+    (`pfblockerngreputation/config/0`) also holds unregistered scalars (`p24_*_var`,
+    `ccwhite`/`ccblack`/`ccexclude`, `et_header`/`etblock`/`etmatch`) — only these three
+    toggles are registered; the whole-section read/write routes through
+    `PfbConfig::readSection()`/`writeSection()` so the three normalise while the rest pass
+    through byte-identical.
   - **`pfb_alias_delta_mode` → `PfbAliasDeltaMode`** (ADR-40, registry adapters
     `pfb_cfg_alias_delta_mode_read/write`): tokens `'auto'` (new-install default) / `'delta'` /
     `'replace'`. Unknown or absent token reads as `Auto`. **Grandfather seed:** an already-configured
@@ -206,7 +213,6 @@ registered path set). Each annotation is committed in the relevant source file.
 | `pfblockerngglobal` (section-level) | Dynamic feed-key section |
 | `pfblockerng_wizard/*` | Wizard temp section, entirely foreign |
 | `installedpackages` (bulk blob) | Bulk wizard init write, foreign structure |
-| `pfblockerngreputation/config/0` | Static display section, no registered keys |
 | `pfblockerng{continent}/config/0` | Dynamic per-continent structure |
 | `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope foreign key (ADR-29 §2.5); written directly by `pfblockerng_dnsbl.php`, read via `pfb_dnsbl_webpage()` (issue #713 removed the never-written `dnsblwebpage` registry mis-spelling) |
 | `pfblockerngdnsbl` / `pfblockernglistsv4/v6` (section-level reads) | Dynamic list sections |
