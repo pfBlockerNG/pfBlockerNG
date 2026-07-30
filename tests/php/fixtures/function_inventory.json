@@ -2888,6 +2888,33 @@
         "returnType": "array",
         "params": []
     },
+    "pfb_extras_credentials": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "feed",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "maxmind_account",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "maxmind_key",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_failures": {
         "returnsRef": false,
         "returnType": null,

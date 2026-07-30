@@ -492,21 +492,20 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 			continue;
 		}
 
-		// Add Token/Credentials
-		if ($feed['type'] == 'geoip') {
-			$feed['username'] = $pfb['maxmind_account'];
-			$feed['password'] = $pfb['maxmind_key'];
-		}
-		elseif ($feed['type'] == 'asn') {
+		// Add Credentials. Issue #1906: normalized for EVERY feed type, not per branch --
+		// the ASN feeds carry no username/password keys at all, and the per-type branch this
+		// replaced left them undefined (NULL), fataling on PfbDownloadRequest's string
+		// parameters and aborting the whole extras run.
+		list($feed['username'], $feed['password']) =
+		    pfb_extras_credentials($feed, $pfb['maxmind_account'], $pfb['maxmind_key']);
+
+		// Add Token
+		if ($feed['type'] == 'asn') {
 			// rawurlencode the token so URL correctness does not depend on the input
 			// validator's strictness. Today's tokens are word chars only (rawurlencode
 			// is a no-op on them), but encoding here keeps the query well-formed if the
 			// token format ever changes (e.g. base64/JWT with '=' '.' '/').
 			$feed['url'] = "{$feed['url']}" . rawurlencode($pfb['asn_token']);
-		}
-		else {
-			$feed['username'] = $feed['username'] ?: '';
-			$feed['password'] = $feed['password'] ?: '';
 		}
 
 		$file_dwn = "{$feed['folder']}/{$feed['file_dwn']}";

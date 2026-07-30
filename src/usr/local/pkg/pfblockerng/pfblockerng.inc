@@ -12204,6 +12204,30 @@ function pfb_download_http_headers(array $extra_headers, string $conditional_hea
 }
 
 
+// Issue #1906: normalize an extras feed's download credentials for PfbDownloadRequest, whose
+// $username/$password are non-nullable strings. Each extras feed type carries its credentials
+// differently -- the MaxMind (geoip) feeds take them from the settings, a DNSBL Blacklist
+// category may carry its own, and the IPinfo ASN/TOP1M feeds carry none at all (they
+// authenticate by URL token / header, or not at all) -- so a per-type branch in the caller
+// left the credential-free types passing an undefined array key (NULL) straight into the
+// constructor, an uncaught TypeError that aborted the whole extras run. Normalizing every
+// type here keeps that class of crash out of the call sites. Pure/no I/O.
+//
+// Only NULL/absent means "no credential": unlike the `?: ''` this replaces, a literal "0"
+// password now survives instead of being silently blanked.
+//
+// $feed: one $pfb['extras'] entry. $maxmind_account/$maxmind_key: the settings' MaxMind
+//   credentials, already coerced to strings by pfb_global().
+// @return array{0: string, 1: string} the username and password to download this feed with.
+function pfb_extras_credentials(array $feed, string $maxmind_account, string $maxmind_key): array
+{
+	if (($feed['type'] ?? '') === 'geoip') {
+		return array($maxmind_account, $maxmind_key);
+	}
+	return array((string) ($feed['username'] ?? ''), (string) ($feed['password'] ?? ''));
+}
+
+
 final class PfbDownloadRequest
 {
 	public function __construct(
