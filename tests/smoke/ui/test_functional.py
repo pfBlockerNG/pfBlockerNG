@@ -253,12 +253,16 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_idn_block_malicious",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_block_malicious",
+        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        off="off",
     ),
     ToggleFlow(
         name="dnsbl_idn_escalate_suspicious",
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_idn_escalate_suspicious",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious",
+        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        off="off",
     ),
     # issue #381: opt out of automatic DNSBL NAT-rule creation (default '' = NAT on).
     # The form POST exercises the new save handler; config.xml is the oracle.
@@ -267,6 +271,8 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_dnsbl_nonat",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat",
+        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        off="off",
     ),
 )
 
