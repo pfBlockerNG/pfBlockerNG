@@ -93,6 +93,37 @@ def test_page_renders_no_empty_separator_rows(
     )
 
 
+def test_log_status_row_has_visible_initial_content(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """The Logs status row has visible content before a file is selected."""
+    page = browser_page
+    page.set_viewport_size(DESKTOP)
+    _open(page, webui, LOG_PAGE)
+    _shot(page, screenshot_dir, "anchor_rows_log_initial_status")
+
+    status = page.evaluate(
+        """
+        () => {
+          const el = document.getElementById('fileStatus');
+          if (!el) return { exists: false, visible: false, text: '' };
+          return {
+            exists: true,
+            visible: el.getClientRects().length > 0,
+            text: (el.textContent || '').trim(),
+          };
+        }
+        """
+    )
+    assert status["exists"], "the Logs page has no #fileStatus target"
+    assert status["visible"] and status["text"], (
+        "the initial #fileStatus is hidden or empty, leaving its bordered .form-group "
+        f"as a separator-only row: {status!r}"
+    )
+
+
 @pytest.mark.parametrize(
     ("path", "section_id"),
     [(DNSBL_PAGE, "DNSBL_Whitelist_customlist"), (IP_PAGE, "IPv4_Suppression_customlist")],
