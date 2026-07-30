@@ -926,19 +926,21 @@ function pfb_cfg_registry(): array
 		],
 
 		// Confusable: block malicious homoglyphs (default on). Default 'on'.
+		// issue #1887: toggle adapter — without it, read() resolving a stored '' to the
+		// default 'on' made the page's old ?: '' unchecked save impossible to turn off.
 		'pfb_idn_block_malicious' => [
 			'section'       => $dnsbl,
 			'default'       => 'on',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Confusable: escalate suspicious mixed-script to block (opt-in). Default ''.
 		'pfb_idn_escalate_suspicious' => [
 			'section'       => $dnsbl,
 			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Python regex: 'on' | ''. Default ''.
@@ -1830,6 +1832,25 @@ function pfb_migration_registry(): array
 	$gen   = 'installedpackages/pfblockerng/config/0';
 
 	return [
+		// 0. issue #1887: preserve a pre-merge stored '' as the explicit 'off' it meant
+		// on the default-'on' toggles ('' now resolves to the registered default).
+		// MUST RUN FIRST: every later migration's writeSection() write-back rides the
+		// adapters, which canonicalise a still-present '' to the registered default —
+		// destroying the very intent this conversion exists to preserve.
+		[
+			'id'      => 'issue1887-toggle-empty-preserve-gen',
+			'section' => $gen,
+			'apply'   => 'pfb_toggle_empty_preserve_gen',
+			'message' => 'pfBlockerNG: preserve legacy unchecked Keep as explicit off (issue #1887)',
+			'since'   => '3.2.0',
+		],
+		[
+			'id'      => 'issue1887-toggle-empty-preserve-dnsbl',
+			'section' => $dnsbl,
+			'apply'   => 'pfb_toggle_empty_preserve_dnsbl',
+			'message' => 'pfBlockerNG: preserve legacy unchecked IDN malicious-block as explicit off (issue #1887)',
+			'since'   => '4.0.0',
+		],
 		// 1. ADR-02: force DNSBL to python-only mode.
 		[
 			'id'      => 'adr02-dnsbl-python-mode',

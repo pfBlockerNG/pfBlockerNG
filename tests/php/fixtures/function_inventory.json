@@ -7902,6 +7902,32 @@
         "returnType": "string",
         "params": []
     },
+    "pfb_toggle_empty_preserve_dnsbl": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "dconfig",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfb_toggle_empty_preserve_gen": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "gconfig",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
     "pfb_top1m_active_provider": {
         "returnsRef": false,
         "returnType": "array",

@@ -366,7 +366,7 @@ final class PfbGlobalParityTest extends TestCase
 
 		$result = PfbConfig::read('pfb_idn_block_malicious');
 
-		$this->assertSame('on', $result, 'pfb_idn_block_malicious absent -> "on" (default-on)');
+		$this->assertSame(PfbToggle::On, $result, 'pfb_idn_block_malicious absent -> On (default-on; enum since #1887)');
 	}
 
 	/**
@@ -382,7 +382,7 @@ final class PfbGlobalParityTest extends TestCase
 
 		$result = PfbConfig::read('pfb_idn_escalate_suspicious');
 
-		$this->assertSame('', $result, 'pfb_idn_escalate_suspicious absent -> ""');
+		$this->assertSame(PfbToggle::Off, $result, 'pfb_idn_escalate_suspicious absent -> Off (enum since #1887)');
 	}
 
 	/**

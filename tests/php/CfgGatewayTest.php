@@ -579,8 +579,9 @@ final class CfgGatewayTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_block_malicious')
 		);
 
+		// issue #1887: the field carries the toggle adapter now, so the enum comes back.
 		$result = PfbConfig::read('pfb_idn_block_malicious');
-		$this->assertSame('on', $result);
+		$this->assertSame(PfbToggle::On, $result);
 	}
 
 	// -----------------------------------------------------------------------

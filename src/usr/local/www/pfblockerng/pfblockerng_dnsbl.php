@@ -846,8 +846,10 @@ if ($_POST) {
 			// PfbIdnMode adapter to the stored config token ('on' = All | 'confusable' | 'off').
 			$pfb_idn_mode = pfb_filter($_POST['pfb_idn'], PFB_FILTER_WORD, 'dnsbl');
 			$pfb['dconfig']['pfb_idn']		= pfb_cfg_idn_mode_write($pfb_idn_mode);
-			$pfb['dconfig']['pfb_idn_block_malicious']	= pfb_filter($_POST['pfb_idn_block_malicious'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= pfb_filter($_POST['pfb_idn_escalate_suspicious'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			// issue #1887: stage the explicit token — checkbox-absent means Off, and a
+			// staged '' would resolve to this field's default-ON at the gateway.
+			$pfb['dconfig']['pfb_idn_block_malicious']	= (($_POST['pfb_idn_block_malicious'] ?? '') === 'on') ? 'on' : 'off';
+			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= (($_POST['pfb_idn_escalate_suspicious'] ?? '') === 'on') ? 'on' : 'off';
 			$pfb['dconfig']['pfb_regex']		= pfb_filter($_POST['pfb_regex'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_regex_cap']	= pfb_filter($_POST['pfb_regex_cap'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_cname']		= pfb_filter($_POST['pfb_cname'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
