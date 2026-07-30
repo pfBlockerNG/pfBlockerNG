@@ -3368,7 +3368,7 @@ $group->add(new Form_Select(
 	$options_pfbmaxtable
 ))->setHelp('Select the maximum Stat Table entries to display');
 
-if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
+if ($pfb['dnsbl'] === PfbToggle::On) {
 	$group->add(new Form_Select(
 		'pfbextdns',
 		'DNS lookup',
@@ -3389,7 +3389,7 @@ $group->add(new Form_Input(
 ))->setHelp('IP Filter Limit Entries')
   ->setAttribute('title', 'Enter number of \'Filter Limit Entries\' to view. Set to \'0\' to disable');
 
-if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
+if ($pfb['dnsbl'] === PfbToggle::On) {
 	$group->add(new Form_Input(
 		'dnsblfilterlimitentries',
 		'DNSBL Filter Limit',
@@ -3410,7 +3410,7 @@ if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 }
 $section->add($group);
 
-$uni_dnsbl_on = pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On;
+$uni_dnsbl_on = $pfb['dnsbl'] === PfbToggle::On;
 
 $group = new Form_Group('Unified Log: Light Background Theme. Enter \'none\' to disable.');
 foreach ($uni_defaults as $u_type => $u_cfg) {
@@ -3448,7 +3448,7 @@ foreach ($uni_defaults as $u_type => $u_cfg) {
 }
 $section->add($group);
 
-if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
+if ($pfb['dnsbl'] === PfbToggle::On) {
 	$group = new Form_Group('DNS Reply Log Options');
 	$group->add(new Form_Select(
 		'pfbreplytypes',
@@ -3548,7 +3548,7 @@ $group->add(new Form_Select(
   ->setAttribute('style', 'width: auto; overflow: hidden;')
   ->setAttribute('size', 15);
 
-if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
+if ($pfb['dnsbl'] === PfbToggle::On) {
 	$group->add(new Form_Select(
 		'pfbdnsblstat',
 		'Disabled DNSBL Stats',
@@ -3692,7 +3692,7 @@ if (!$alert_summary && ($alert_title != 'DNS Reply')) {
 	  ->setwidth(2);
 	$section->add($group);
 
-	if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
+	if ($pfb['dnsbl'] === PfbToggle::On) {
 		$group = new Form_Group('DNSBL');
 		$group->add(new Form_Input(
 			'filterlogentries_dnsbldate',
@@ -3999,7 +3999,7 @@ if (!$alert_summary):
 		// Validate Alert view and Log type
 		switch ($alert_view) {
 			case 'alert':
-				if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
+				if ($pfb['dnsbl'] === PfbToggle::On) {
 					$pfbentries = "{$pfbdnscnt}";
 					if ($pfb['filterlogentries'] && $dnsblfilterlimitentries != 0) {
 						$pfbentries = $dnsblfilterlimitentries;

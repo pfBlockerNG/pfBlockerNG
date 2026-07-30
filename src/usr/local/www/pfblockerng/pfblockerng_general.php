@@ -94,12 +94,12 @@ $pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('pfb_log_trim_margin_pct')
 // issue #1669 slice C / #1888: client-side editor toggle (default on). Read via
 // PfbConfig::read so the registered default applies; pfb_syntax_highlight uses the
 // LENIENT adapter (default-on checkbox, mirrors pfb_keep) -- extract the scalar .value
-// for pfb_cfg_lenient_read() at render.
+// for pfb_cfg_toggle_read() at render.
 $pconfig['pfb_syntax_highlight']	= PfbConfig::read('pfb_syntax_highlight')->value;
 
 // issue #1875 step 2b: gate the CM6 live-highlight overlay for pfb_feed_internal_allowlist,
 // same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.
-$pfb_syntaxhl_on = (PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On);
+$pfb_syntaxhl_on = pfb_editor_enabled();
 
 // Select field options
 $options_pfb_interval	= [	'1' => 'Every hour',
@@ -318,7 +318,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_keep',
 	'Keep Settings',
 	gettext('Enable'),
-	pfb_cfg_lenient_read($pconfig['pfb_keep']) === PfbLenient::On,
+	pfb_cfg_toggle_read($pconfig['pfb_keep']) === PfbToggle::On,
 	'on'
 ))->setHelp('<span class="text-danger">Note: </span>'
 		. 'With \'Keep settings\' enabled, pfBlockerNG will maintain run state on Installation/Upgrade.<br />'
@@ -355,7 +355,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_syntax_highlight',
 	'Advanced Text Editor',
 	gettext('Enable'),
-	pfb_cfg_lenient_read($pconfig['pfb_syntax_highlight']) === PfbLenient::On,
+	pfb_cfg_toggle_read($pconfig['pfb_syntax_highlight']) === PfbToggle::On,
 	'on'
 ))->setHelp('Client-side editor for the list and script fields (e.g. the DNSBL Regex '
 		. 'List, custom lists, IP suppression lists, hook scripts): syntax highlighting, '

@@ -113,7 +113,7 @@ final class TldBridgeEmitTest extends TestCase
 	{
 		$body = $this->functionBody('pfb_unbound_python');
 		$this->assertMatchesRegularExpression(
-			"/\\\$tld_allow\s*=\s*'off';\s*\\\$tld_allow_list\s*=\s*'';\s*if\s*\(\s*\\\$pfb\['dnsbl_tld_allow'\]\s*==\s*'on'\s*\)/s",
+			"/\\\$tld_allow\s*=\s*'off';\s*\\\$tld_allow_list\s*=\s*'';\s*if\s*\(\s*\\\$pfb\['dnsbl_tld_allow'\]\s*===\s*PfbToggle::On\s*\)/s",
 			$body,
 			'the tld_allow/tld_allow_list pair must default off/empty and derive from $pfb[\'dnsbl_tld_allow\']'
 		);

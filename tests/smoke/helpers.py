@@ -1659,10 +1659,10 @@ def set_pfb_keep(vm: SmokeVM, keep: bool, *, timeout: float = 60.0) -> None:
     """Set ``pfb_keep`` at ``CFG_GLOBAL``: ``True`` → ``'on'`` (retain settings + data on
     uninstall); ``False`` → ``'off'`` (full removal — live objects + settings + data all gone).
 
-    ``pfb_keep`` uses the lenient adapter (``PfbLenient``) whose stored vocabulary is
-    ``{'on', 'off', ''}``; the off case writes ``'off'`` — the canonical PfbLenient::Off
-    backing value.  The empty string ``''`` is a legacy READ token (installs written before
-    the #484 fix) that maps to Off on read; write always emits ``'off'``.
+    ``pfb_keep`` uses the merged toggle adapter (``PfbToggle``, issue #1887) whose stored
+    vocabulary is ``{'on', 'off'}``; the off case writes the explicit ``'off'`` token.
+    A stored ``''`` is the not-configured state and resolves to the registered default
+    (``'on'`` for pfb_keep) at the PfbConfig gateway; write always emits ``'off'``.
 
     ``pfb_keep`` defaults to ``'on'`` (issue #281), so a test that asserts sections are
     swept after uninstall MUST call ``set_pfb_keep(vm, False)`` explicitly to select the

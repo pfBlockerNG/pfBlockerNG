@@ -172,7 +172,7 @@ final class DnsblWildcardRowValidationTest extends TestCase
 		$src = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
 		$this->assertNotFalse($src, 'failed to read pfblockerng.inc');
 		if (!preg_match(
-			'/\t+if \(\$pfb\[\'dnsbl_noaaaa\'\] == \'on\' && isset.*?\n(?=\t+if \(\$pfb\[\'dnsbl_gp\'\] == \'on\')/s',
+			'/\t+if \(\$pfb\[\'dnsbl_noaaaa\'\] === PfbToggle::On && isset.*?\n(?=\t+if \(\$pfb\[\'dnsbl_gp\'\] === PfbToggle::On)/s',
 			$src,
 			$m
 		)) {
@@ -180,7 +180,7 @@ final class DnsblWildcardRowValidationTest extends TestCase
 		}
 
 		$pfb = [
-			'dnsbl_noaaaa'      => 'on',
+			'dnsbl_noaaaa'      => PfbToggle::On,
 			'dnsbl_noaaaa_list' => base64_encode($decodedList),
 		];
 		$pfb_py_conf = '';

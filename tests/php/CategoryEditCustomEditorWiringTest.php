@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
  * issue #1875 step 2a (RED, test-first): mounting the CM6 editor on the Category-Edit
  * page's custom-list field (custom), gated by the same `$pfb_syntaxhl_on` boolean idiom
  * pfblockerng_dnsbl.php already establishes
- * (`PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On`).
+ * (`pfb_editor_enabled()`, the issue #1887 named accessor).
  *
  * pfblockerng_category_edit.php has NO $pfb_syntaxhl_on boolean and NO cm-regex.min.js
  * include today (verified this session); the pre-existing events.push(function() {...})
@@ -45,9 +45,9 @@ final class CategoryEditCustomEditorWiringTest extends TestCase
 		// LENIENT, not PfbToggle -- same rationale as DnsblRegexHighlightWiringTest's
 		// class docblock.
 		$this->assertMatchesRegularExpression(
-			"#\\\$pfb_syntaxhl_on\\s*=\\s*\\(?\\s*PfbConfig::read\\(\\s*'pfb_syntax_highlight'\\s*\\)\\s*===\\s*PfbLenient::On#",
+			"#\\\$pfb_syntaxhl_on\\s*=\\s*pfb_editor_enabled\\(\\)#",
 			self::$src,
-			'expected a $pfb_syntaxhl_on boolean derived from PfbConfig::read(\'pfb_syntax_highlight\') === PfbLenient::On'
+			'expected a $pfb_syntaxhl_on boolean derived from pfb_editor_enabled() (issue #1887 named accessor)'
 		);
 	}
 

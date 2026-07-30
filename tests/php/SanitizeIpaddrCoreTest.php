@@ -16,7 +16,7 @@ final class SanitizeIpaddrCoreTest extends TestCase
 				'address' => '1.2.3.4',
 				'messages' => ["\n  Feed /0 CIDR clamped to single host: 1.2.3.4/0"],
 			],
-			pfb_sanitize_ipaddr('1.2.3.4/0', FALSE, 'Disabled', 'off')
+			pfb_sanitize_ipaddr('1.2.3.4/0', FALSE, 'Disabled', PfbToggle::Off)
 		);
 	}
 
@@ -27,7 +27,7 @@ final class SanitizeIpaddrCoreTest extends TestCase
 				'address' => NULL,
 				'messages' => ["\n  Suppression CIDR Limit: 10.0.0.5/8"],
 			],
-			pfb_sanitize_ipaddr('10.0.0.5/8', FALSE, 24, 'on')
+			pfb_sanitize_ipaddr('10.0.0.5/8', FALSE, 24, PfbToggle::On)
 		);
 	}
 
@@ -35,7 +35,7 @@ final class SanitizeIpaddrCoreTest extends TestCase
 	{
 		$this->assertSame(
 			['address' => '0.0.0.0/0', 'messages' => []],
-			pfb_sanitize_ipaddr('0.0.0.0/0', TRUE, 'Disabled', 'on')
+			pfb_sanitize_ipaddr('0.0.0.0/0', TRUE, 'Disabled', PfbToggle::On)
 		);
 	}
 
@@ -53,7 +53,7 @@ final class SanitizeIpaddrCoreTest extends TestCase
 		foreach ($addresses as $class => $address) {
 			$this->assertSame(
 				['address' => NULL, 'messages' => []],
-				pfb_sanitize_ipaddr($address, FALSE, 'Disabled', 'on'),
+				pfb_sanitize_ipaddr($address, FALSE, 'Disabled', PfbToggle::On),
 				"{$class} address must be suppressed without a message"
 			);
 		}
@@ -66,7 +66,7 @@ final class SanitizeIpaddrCoreTest extends TestCase
 				'address' => '2001:db8::1',
 				'messages' => ["\n  Feed /0 CIDR clamped to single host: 2001:DB8::1/0"],
 			],
-			pfb_sanitize_ipaddr_v6('2001:DB8::1/0', FALSE, 'Disabled', 'off')
+			pfb_sanitize_ipaddr_v6('2001:DB8::1/0', FALSE, 'Disabled', PfbToggle::Off)
 		);
 	}
 
@@ -77,7 +77,7 @@ final class SanitizeIpaddrCoreTest extends TestCase
 				'address' => NULL,
 				'messages' => ["\n  Suppression CIDR Limit: fc00::1/32"],
 			],
-			pfb_sanitize_ipaddr_v6('fc00::1/32', FALSE, 48, 'on')
+			pfb_sanitize_ipaddr_v6('fc00::1/32', FALSE, 48, PfbToggle::On)
 		);
 	}
 
@@ -85,7 +85,7 @@ final class SanitizeIpaddrCoreTest extends TestCase
 	{
 		$this->assertSame(
 			['address' => NULL, 'messages' => []],
-			pfb_sanitize_ipaddr_v6('fe80::1%igb0', FALSE, 'Disabled', 'off')
+			pfb_sanitize_ipaddr_v6('fe80::1%igb0', FALSE, 'Disabled', PfbToggle::Off)
 		);
 	}
 
@@ -102,7 +102,7 @@ final class SanitizeIpaddrCoreTest extends TestCase
 		foreach ($addresses as $class => $address) {
 			$this->assertSame(
 				['address' => NULL, 'messages' => []],
-				pfb_sanitize_ipaddr_v6($address, FALSE, 'Disabled', 'on'),
+				pfb_sanitize_ipaddr_v6($address, FALSE, 'Disabled', PfbToggle::On),
 				"{$class} address must be suppressed without a message"
 			);
 		}

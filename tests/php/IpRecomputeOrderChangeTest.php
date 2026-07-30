@@ -177,8 +177,8 @@ final class IpRecomputeOrderChangeTest extends TestCase
 	public function testDetectionGuardCombinesTheSaveEnableGateWithCrossListScope(): void
 	{
 		$needle = <<<'EOT'
-	if (!$pfb['save'] && $pfb['enable'] == 'on' &&
-	    pfb_cross_list_scope($pfb['dup'] == 'on', $pfb['drep'] == 'on' || $pfb['prep'] == 'on')) {
+	if (!$pfb['save'] && $pfb['enable'] === PfbToggle::On &&
+	    pfb_cross_list_scope($pfb['dup'] === PfbToggle::On, $pfb['drep'] == 'on' || $pfb['prep'] == 'on')) {
 EOT;
 		$this->assertStringContainsString(
 			$needle,
@@ -206,7 +206,7 @@ EOT;
 	{
 		$needle = <<<'EOT'
 		foreach (array('v4', 'v6') as $pfb_rec_family) {
-			if ($pfb_rec_family === 'v6' && $pfb['dup'] != 'on') {
+			if ($pfb_rec_family === 'v6' && $pfb['dup'] !== PfbToggle::On) {
 				continue;
 			}
 EOT;

@@ -100,7 +100,7 @@ final class CfgGatewayTest extends TestCase
 
 	public function testToggleFieldsRoundTripOff(): void
 	{
-		// pfb_keep is now lenient — see testPfbKeepLenientRoundTrip*() below.
+		// pfb_keep is default-on — see testPfbKeepRoundTrip*() below.
 		$toggle_fields = [
 			'enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
 			'pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
@@ -123,9 +123,9 @@ final class CfgGatewayTest extends TestCase
 			$enum = PfbConfig::read($key);
 			$this->assertSame(PfbToggle::Off, $enum, "read: {$key} '' -> PfbToggle::Off");
 
-			// After: write back produces ''.
+			// After: write back emits the canonical explicit 'off' (issue #1887).
 			PfbConfig::write($key, $enum);
-			$this->assertSame('', config_get_path($path), "write(read(''))=='' for {$key}");
+			$this->assertSame('off', config_get_path($path), "write(read(''))=='off' for {$key}");
 		}
 	}
 
@@ -150,7 +150,7 @@ final class CfgGatewayTest extends TestCase
 
 		// When/After.
 		$enum = PfbConfig::read('pfb_dnsbl_lenient');
-		$this->assertSame(PfbLenient::On, $enum);
+		$this->assertSame(PfbToggle::On, $enum);
 
 		PfbConfig::write('pfb_dnsbl_lenient', $enum);
 		$this->assertSame('on', config_get_path($path));
@@ -168,7 +168,7 @@ final class CfgGatewayTest extends TestCase
 
 		// When/After.
 		$enum = PfbConfig::read('pfb_dnsbl_lenient');
-		$this->assertSame(PfbLenient::Off, $enum);
+		$this->assertSame(PfbToggle::Off, $enum);
 
 		PfbConfig::write('pfb_dnsbl_lenient', $enum);
 		$this->assertSame('off', config_get_path($path));
@@ -186,7 +186,7 @@ final class CfgGatewayTest extends TestCase
 
 		// When/After: normalised to 'off' (documented, matches pfb_global() behaviour).
 		$enum = PfbConfig::read('pfb_dnsbl_lenient');
-		$this->assertSame(PfbLenient::Off, $enum);
+		$this->assertSame(PfbToggle::Off, $enum);
 
 		PfbConfig::write('pfb_dnsbl_lenient', $enum);
 		// Normalised: stored as 'off', NOT ''.
@@ -212,9 +212,9 @@ final class CfgGatewayTest extends TestCase
 		// Before: raw 'on'.
 		$this->assertSame('on', config_get_path($path), 'before: pfb_keep seed is on');
 
-		// When/After: read -> PfbLenient::On; write -> 'on'.
+		// When/After: read -> PfbToggle::On; write -> 'on'.
 		$enum = PfbConfig::read('pfb_keep');
-		$this->assertSame(PfbLenient::On, $enum, "read: pfb_keep 'on' -> PfbLenient::On");
+		$this->assertSame(PfbToggle::On, $enum, "read: pfb_keep 'on' -> PfbToggle::On");
 
 		PfbConfig::write('pfb_keep', $enum);
 		$this->assertSame('on', config_get_path($path), "write(read('on'))==on for pfb_keep");
@@ -230,31 +230,31 @@ final class CfgGatewayTest extends TestCase
 		// Before: raw 'off'.
 		$this->assertSame('off', config_get_path($path), 'before: pfb_keep seed is off');
 
-		// When/After: read -> PfbLenient::Off; write -> 'off'.
+		// When/After: read -> PfbToggle::Off; write -> 'off'.
 		$enum = PfbConfig::read('pfb_keep');
-		$this->assertSame(PfbLenient::Off, $enum, "read: pfb_keep 'off' -> PfbLenient::Off");
+		$this->assertSame(PfbToggle::Off, $enum, "read: pfb_keep 'off' -> PfbToggle::Off");
 
 		PfbConfig::write('pfb_keep', $enum);
 		$this->assertSame('off', config_get_path($path), "write(read('off'))==off for pfb_keep");
 	}
 
-	public function testPfbKeepLenientLegacyEmptyNormalisesToOff(): void
+	public function testPfbKeepEmptyResolvesToRegisteredDefault(): void
 	{
 		$path = 'installedpackages/pfblockerng/config/0/pfb_keep';
 
-		// Given: '' (pre-#484 install — toggle OFF value written by old GUI).
+		// Given: '' — issue #1887: for a registered field a stored '' is the SAME state
+		// as an absent key (pfSense writes an unchecked checkbox as an empty element),
+		// so it resolves to the registered default 'on', not to a hard Off.
 		$this->seedConfig($path, '');
 
-		// Before: raw ''.
 		$this->assertSame('', config_get_path($path), 'before: pfb_keep seed is empty string');
 
-		// When: read maps '' to PfbLenient::Off (legacy token, same as 'off').
 		$enum = PfbConfig::read('pfb_keep');
-		$this->assertSame(PfbLenient::Off, $enum, "read: pfb_keep '' -> PfbLenient::Off (legacy)");
+		$this->assertSame(PfbToggle::On, $enum, "read: pfb_keep '' -> registered default On");
 
-		// After: write emits 'off' (not ''); normalises the legacy token.
+		// After: write emits the canonical token of the default.
 		PfbConfig::write('pfb_keep', $enum);
-		$this->assertSame('off', config_get_path($path), "write(read(''))==off for pfb_keep");
+		$this->assertSame('on', config_get_path($path), "write(read(''))=='on' for pfb_keep");
 	}
 
 	/**
@@ -279,9 +279,9 @@ final class CfgGatewayTest extends TestCase
 		// Before: raw 'on'.
 		$this->assertSame('on', config_get_path($path), 'before: pfb_syntax_highlight seed is on');
 
-		// When/After: read -> PfbLenient::On; write -> 'on'.
+		// When/After: read -> PfbToggle::On; write -> 'on'.
 		$enum = PfbConfig::read('pfb_syntax_highlight');
-		$this->assertSame(PfbLenient::On, $enum, "read: pfb_syntax_highlight 'on' -> PfbLenient::On");
+		$this->assertSame(PfbToggle::On, $enum, "read: pfb_syntax_highlight 'on' -> PfbToggle::On");
 
 		PfbConfig::write('pfb_syntax_highlight', $enum);
 		$this->assertSame('on', config_get_path($path), "write(read('on'))==on for pfb_syntax_highlight");
@@ -297,9 +297,9 @@ final class CfgGatewayTest extends TestCase
 		// Before: raw 'off'.
 		$this->assertSame('off', config_get_path($path), 'before: pfb_syntax_highlight seed is off');
 
-		// When/After: read -> PfbLenient::Off; write -> 'off'.
+		// When/After: read -> PfbToggle::Off; write -> 'off'.
 		$enum = PfbConfig::read('pfb_syntax_highlight');
-		$this->assertSame(PfbLenient::Off, $enum, "read: pfb_syntax_highlight 'off' -> PfbLenient::Off");
+		$this->assertSame(PfbToggle::Off, $enum, "read: pfb_syntax_highlight 'off' -> PfbToggle::Off");
 
 		PfbConfig::write('pfb_syntax_highlight', $enum);
 		$this->assertSame('off', config_get_path($path), "write(read('off'))==off for pfb_syntax_highlight");
@@ -370,20 +370,20 @@ final class CfgGatewayTest extends TestCase
 	 *   Background: config[.../pfb_syntax_highlight] is unset.
 	 *     Given no seed.
 	 *     When PfbConfig::read('pfb_syntax_highlight').
-	 *     Then PfbLenient::On is returned (default 'on').
+	 *     Then PfbToggle::On is returned (default 'on').
 	 */
 	public function testReadReturnsOnDefaultForPfbSyntaxHighlightAbsentKey(): void
 	{
 		$path = 'installedpackages/pfblockerng/config/0/pfb_syntax_highlight';
 		$this->assertNull(config_get_path($path));
-		$this->assertSame(PfbLenient::On, PfbConfig::read('pfb_syntax_highlight'),
+		$this->assertSame(PfbToggle::On, PfbConfig::read('pfb_syntax_highlight'),
 			'pfb_syntax_highlight absent -> On (default)');
 	}
 
 	public function testReadReturnsRegisteredDefaultForPfbKeepAbsentKey(): void
 	{
 		// pfb_keep default is 'on' (On enum) — the #281 canonical default.
-		// Uses the lenient adapter so absent key → PfbLenient::On (not PfbToggle::On).
+		// Uses the lenient adapter so absent key → PfbToggle::On (not PfbToggle::On).
 		// Before: key absent.
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_keep'));
 
@@ -391,12 +391,12 @@ final class CfgGatewayTest extends TestCase
 		$result = PfbConfig::read('pfb_keep');
 
 		// Then: returns On (the registered default 'on', applied through lenient adapter).
-		$this->assertSame(PfbLenient::On, $result, 'pfb_keep absent -> PfbLenient::On (default on)');
+		$this->assertSame(PfbToggle::On, $result, 'pfb_keep absent -> PfbToggle::On (default on)');
 	}
 
 	public function testReadReturnsRegisteredDefaultForLenientAbsentKey(): void
 	{
-		// pfb_dnsbl_lenient default is 'off' -> PfbLenient::Off.
+		// pfb_dnsbl_lenient default is 'off' -> PfbToggle::Off.
 		// Before: key absent.
 		$this->assertNull(
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient')
@@ -406,7 +406,7 @@ final class CfgGatewayTest extends TestCase
 		$result = PfbConfig::read('pfb_dnsbl_lenient');
 
 		// Then: Off.
-		$this->assertSame(PfbLenient::Off, $result, 'pfb_dnsbl_lenient absent -> Off');
+		$this->assertSame(PfbToggle::Off, $result, 'pfb_dnsbl_lenient absent -> Off');
 	}
 
 	public function testReadReturnsRegisteredDefaultForPlainStringAbsentKey(): void
@@ -941,9 +941,9 @@ final class CfgGatewayTest extends TestCase
 		$enum = PfbConfig::read('log_syslog');
 		$this->assertSame(PfbToggle::Off, $enum, "read: log_syslog '' -> PfbToggle::Off");
 
-		// After: write back produces ''.
+		// After: write back emits the canonical explicit 'off' (issue #1887).
 		PfbConfig::write('log_syslog', $enum);
-		$this->assertSame('', config_get_path($path), "write(read(''))=='' for log_syslog");
+		$this->assertSame('off', config_get_path($path), "write(read(''))=='off' for log_syslog");
 	}
 
 	/**
@@ -1333,7 +1333,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('on', config_get_path($path));
 	}
 
-	public function testWriteAppliesLenientAdapterBeforeStorage(): void
+	public function testWriteEmitsExplicitOffTokenBeforeStorage(): void
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient';
 
@@ -1341,9 +1341,9 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path));
 
 		// When: write Off enum.
-		PfbConfig::write('pfb_dnsbl_lenient', PfbLenient::Off);
+		PfbConfig::write('pfb_dnsbl_lenient', PfbToggle::Off);
 
-		// After: stored as 'off' (not '' — PfbLenient::Off = 'off').
+		// After: stored as 'off' (not '' — PfbToggle::Off = 'off').
 		$this->assertSame('off', config_get_path($path));
 	}
 
@@ -1597,26 +1597,10 @@ final class CfgGatewayTest extends TestCase
 	 * the class of bug cannot recur — the off-box config doubles round-trip ''
 	 * faithfully and would otherwise never catch it.
 	 */
-	public function testNoToggleFieldDefaultsToOn(): void
-	{
-		$toggle_count = 0;
-		foreach (pfb_cfg_registry() as $field_key => $entry) {
-			if ($entry['read_adapter'] === 'pfb_cfg_toggle_read') {
-				$toggle_count++;
-				$this->assertNotSame(
-					'on', $entry['default'],
-					"'{$field_key}': a TOGGLE field must not default to 'on' — its '' off-value "
-					. "cannot survive the live config round-trip (becomes absent -> default 'on'). "
-					. "Use the lenient adapter (explicit 'off') or a plain explicit-on/off field."
-				);
-			}
-		}
-		// Anchor against a vacuous pass: if no toggle field exists the loop above
-		// asserts nothing, so this guard would silently stop guarding.
-		$this->assertGreaterThan(0, $toggle_count,
-			'Registry must contain at least one toggle-adapter field for this guard to be meaningful'
-		);
-	}
+	// testNoToggleFieldDefaultsToOn retired by issue #1887: PfbToggle::Off now stores the
+	// explicit 'off' token and the gateway resolves ''/absent to the registered default, so
+	// a default-'on' toggle field is legal — a deliberate Off survives the round trip
+	// (ToggleMergeTest::testExplicitOffOnDefaultOnFieldSurvives pins the #484 bug class).
 
 	/**
 	 * The static cache in pfb_cfg_registry() is stable: multiple calls return the same array.
@@ -1840,9 +1824,9 @@ final class CfgGatewayTest extends TestCase
 
 		PfbConfig::write('dnsbl_redir', $enum);
 
-		// After: stored as ''.
-		$this->assertSame('', config_get_path($path),
-			"write(read('')) == '' for dnsbl_redir"
+		// After: stored as the canonical explicit 'off' (issue #1887).
+		$this->assertSame('off', config_get_path($path),
+			"write(read('')) == 'off' for dnsbl_redir"
 		);
 	}
 
@@ -2094,9 +2078,9 @@ final class CfgGatewayTest extends TestCase
 
 		PfbConfig::write('dnsbl_dot_block', $enum);
 
-		// After: stored as ''.
-		$this->assertSame('', config_get_path($path),
-			"write(read('')) == '' for dnsbl_dot_block"
+		// After: stored as the canonical explicit 'off' (issue #1887).
+		$this->assertSame('off', config_get_path($path),
+			"write(read('')) == 'off' for dnsbl_dot_block"
 		);
 	}
 
@@ -2423,15 +2407,16 @@ final class CfgGatewayTest extends TestCase
 	 *   When PfbConfig::writeSection() persists it.
 	 *   Then the stored pfb_keep is 'off', never the legacy '' token.
 	 */
-	public function testWriteSectionPfbKeepEmptyNormalisesToOff(): void
+	public function testWriteSectionPfbKeepEmptyResolvesToRegisteredDefault(): void
 	{
 		$section = 'installedpackages/pfblockerng/config/0';
 		$path    = $section . '/pfb_keep';
 
 		PfbConfig::writeSection($section, ['pfb_keep' => '']);
 
-		$this->assertSame('off', config_get_path($path),
-			"legacy empty pfb_keep riding a section write normalises to 'off'"
+		$this->assertSame('on', config_get_path($path),
+			"'' is the not-configured state (issue #1887): a section write resolves it to the "
+				. "registered default 'on', matching what read() reports"
 		);
 	}
 
@@ -2451,8 +2436,8 @@ final class CfgGatewayTest extends TestCase
 
 		PfbConfig::writeSection($section, ['pfb_dnsbl' => 'yes']);
 
-		$this->assertSame('', config_get_path($path),
-			"junk toggle value 'yes' riding a section write parse-falls-back to ''"
+		$this->assertSame('off', config_get_path($path),
+			"junk toggle value 'yes' riding a section write parse-falls-back to the canonical 'off'"
 		);
 	}
 
@@ -2496,8 +2481,8 @@ final class CfgGatewayTest extends TestCase
 
 		PfbConfig::writeSection($section, ['pfb_keep' => NULL]);
 
-		$this->assertSame('off', config_get_path($path),
-			'NULL-valued pfb_keep riding a section write collapses to the lenient Off token'
+		$this->assertSame('on', config_get_path($path),
+			'NULL is the not-configured state (issue #1887): a section write resolves it to the registered default'
 		);
 	}
 

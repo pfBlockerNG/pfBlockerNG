@@ -14,7 +14,7 @@ use PHPUnit\Framework\TestCase;
  * pfblockerng_edit_hooks.php carries top-level render execution (require_once('guiconfig.inc')
  * et al.) and cannot be require()d/rendered off-appliance -- same constraint documented on
  * DnsblRegexHighlightWiringTest/FeedsUrlCompareIconRenderTest/CategoryEditReservedHeaderTest.
- * This test pins the CONDITIONAL STRUCTURE itself (the PfbConfig read, the PfbLenient::On
+ * This test pins the CONDITIONAL STRUCTURE itself (the pfb_editor_enabled() accessor
  * comparison, and the gated script tag / JS init all being driven by the same PHP boolean),
  * plus vacuity-safe exactly-once occurrence counts, rather than asserting the markup is
  * unconditionally present. Reading the real source file IS reading the render for this
@@ -39,12 +39,12 @@ final class EditHooksSyntaxHighlightWiringTest extends TestCase
 	public function testGatingBooleanReadsThePfbSyntaxHighlightToggle(): void
 	{
 		// Same enum-comparison idiom as pfblockerng_dnsbl.php's $pfb_syntaxhl_on -- LENIENT
-		// (PfbLenient::On), not PfbToggle -- see DnsblRegexHighlightWiringTest's docblock for
+		// (issue #1887 accessor) -- see DnsblRegexHighlightWiringTest's docblock for
 		// why a default-on field needs the lenient adapter.
 		$this->assertMatchesRegularExpression(
-			"#\\\$pfb_syntaxhl_on\\s*=\\s*\\(?\\s*PfbConfig::read\\(\\s*'pfb_syntax_highlight'\\s*\\)\\s*===\\s*PfbLenient::On#",
+			"#\\\$pfb_syntaxhl_on\\s*=\\s*pfb_editor_enabled\\(\\)#",
 			self::$src,
-			'expected a $pfb_syntaxhl_on boolean derived from PfbConfig::read(\'pfb_syntax_highlight\') === PfbLenient::On'
+			'expected a $pfb_syntaxhl_on boolean derived from pfb_editor_enabled() (issue #1887 named accessor)'
 		);
 	}
 

@@ -75,7 +75,7 @@ pfb_global();
 
 // issue #1875 step 2b: gate the CM6 live-highlight overlay for the custom-list field,
 // same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.
-$pfb_syntaxhl_on = (PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On);
+$pfb_syntaxhl_on = pfb_editor_enabled();
 
 $rowdata	= array();
 $rowid		= 0;

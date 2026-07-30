@@ -2712,7 +2712,7 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 		return;
 	}
 
-	$auto      = ($pfb['dnsbl_vip_auto'] ?? '') == 'on';
+	$auto      = ($pfb['dnsbl_vip_auto'] ?? PfbToggle::Off) == 'on';
 	$interface = $pfb['dnsbl_iface'] ?? 'lo0';
 
 	// PFBL-01: $interface is a singular required parameter -- validate it as a \w-only
@@ -2928,8 +2928,8 @@ function pfb_global() {
 	$pfb['blconfig']	= config_get_path('installedpackages/pfblockerngblacklist', []);
 	$pfb['config_global']	= config_get_path('installedpackages/pfblockerngglobal', []);
 
-	$pfb['enable']		= PfbConfig::read('enable_cb')->value;		// Enable/Disable of pfBlockerNG
-	$pfb['keep']		= PfbConfig::read('pfb_keep')->value;		// Keep blocklists on pfBlockerNG Disable (default ON via registry; #281)
+	$pfb['enable']		= PfbConfig::read('enable_cb');		// Enable/Disable of pfBlockerNG
+	$pfb['keep']		= PfbConfig::read('pfb_keep');		// Keep blocklists on pfBlockerNG Disable (default ON via registry; #281)
 	$pfb['interval']	= PfbConfig::read('pfb_interval')	?: '1';	// Hour cycle for scheduler
 
 	// ADR-11: opt-in per-type aggregate ("Uber") aliases. CSV scalar of the action types
@@ -2956,7 +2956,7 @@ function pfb_global() {
 		}
 	}
 
-	$pfb['supp']		= $pfb['ipconfig']['suppression'] ?? '';		// Enable Suppression
+	$pfb['supp']		= pfb_cfg_toggle_read($pfb['ipconfig']['suppression'] ?? '');		// Enable Suppression
 	$pfb['cc']		= $pfb['ipconfig']['database_cc'] ?? '';		// Disable Country database CRON updates
 	$pfb['maxmind_locale']	= $pfb['ipconfig']['maxmind_locale']	?: 'en';	// MaxMind Localized Language setting
 	$pfb['asn_reporting']	= $pfb['ipconfig']['asn_reporting']	?: 'disabled';	// ASN Reporting
@@ -2966,20 +2966,20 @@ function pfb_global() {
 	$pfb['maxmind_account']	= pfb_filter($pfb['ipconfig']['maxmind_account'], PFB_FILTER_WORD, 'pfb_global')	?: '';		// Maxmind Account ID
 	$pfb['maxmind_key']	= pfb_filter($pfb['ipconfig']['maxmind_key'], PFB_FILTER_WORD, 'maxmind_key')		?: '';		// Maxmind License Key (issue #924: log-safe reference -- a rejected key is never logged on this consumer path either)
 
-	$pfb['dnsbl']		= PfbConfig::read('pfb_dnsbl')->value;							// Enabled state of DNSBL
-	$pfb['dnsbl_vip_auto']	= PfbConfig::read('pfb_dnsvip_auto')->value;						// [ ADR-13 ] Auto-create/remove the DNSBL sinkhole VIP(s) (default off)
-	$pfb['dnsbl_nonat']	= PfbConfig::read('pfb_dnsbl_nonat')->value;						// [ #381 ] Opt out of automatic DNSBL NAT rule generation (default off)
+	$pfb['dnsbl']		= PfbConfig::read('pfb_dnsbl');							// Enabled state of DNSBL
+	$pfb['dnsbl_vip_auto']	= PfbConfig::read('pfb_dnsvip_auto');						// [ ADR-13 ] Auto-create/remove the DNSBL sinkhole VIP(s) (default off)
+	$pfb['dnsbl_nonat']	= PfbConfig::read('pfb_dnsbl_nonat');						// [ #381 ] Opt out of automatic DNSBL NAT rule generation (default off)
 	$pfb['dnsbl_vip4'] = get_configured_vip_ipv4($pfb['dnsblconfig']['pfb_dnsvip4']) ?? '';
 	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb['dnsblconfig']['pfb_dnsvip6']) ?? '';
 	$pfb['dnsbl_iface']	= PfbConfig::read('dnsbl_interface');							// VIP Local Interface setting (default 'lo0')
-	if (!empty($pfb['dnsbl'])) {
+	if ($pfb['dnsbl'] === PfbToggle::On) {
 		// VIP validation: force-disable DNSBL on a genuinely invalid/missing/overlapping
 		// VIP — UNLESS auto-create mode is active, in which case pfb_manage_dnsbl_vip()
 		// owns provisioning and will (re)create a valid VIP during this same update pass.
 		// Disabling DNSBL here in auto mode would prevent the bootstrap from ever running.
 		$vips_valid_result = pfb_validate_vips($pfb['dnsbl_iface'], $pfb['dnsblconfig']['pfb_dnsvip4'], $pfb['dnsblconfig']['pfb_dnsvip6']);
 		if (!$vips_valid_result[0]) {
-			if ($pfb['dnsbl_vip_auto'] === 'on') {
+			if ($pfb['dnsbl_vip_auto'] === PfbToggle::On) {
 				// [ ADR-13 / issue #487 ] Auto-create OWNS the DNSBL sinkhole VIP:
 				// pfb_manage_dnsbl_vip() (re)provisions a valid VIP on the configured
 				// interface during this same update pass. A stale / missing / wrong-interface
@@ -2988,14 +2988,14 @@ function pfb_global() {
 				pfb_logger("\nDNSBL auto-VIP: VIP validation deferred to auto-create ({$vips_valid_result[1]})", 1);
 			} else {
 				// Manual mode: a genuinely invalid/missing/mismatched VIP disables DNSBL.
-				$pfb['dnsbl'] = '';
+				$pfb['dnsbl'] = PfbToggle::Off;
 				$vip_notice = "DNSBL disabled: {$vips_valid_result[1]}";
 				pfb_logger("\n{$vip_notice}", 1);
 				// issue #331: this was log-only, invisible in the GUI. Surface it like
 				// the MaxMind/ASN credential notices below.
 				file_notice('pfBlockerNG DNSBL', $vip_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
 			}
-		} elseif (pfb_dnsbl_v6_vip_required(pfb_unbound_listens_v6(), ($pfb['dnsbl_vip_auto'] === 'on')) && empty($pfb['dnsblconfig']['pfb_dnsvip6'])) {
+		} elseif (pfb_dnsbl_v6_vip_required(pfb_unbound_listens_v6(), ($pfb['dnsbl_vip_auto'] === PfbToggle::On)) && empty($pfb['dnsblconfig']['pfb_dnsvip6'])) {
 			// [ ADR-13 §7 pivot ] NON-BLOCKING: the resolver listens on IPv6 but no v6
 			// sinkhole VIP is configured (manual mode). DNSBL stays enabled on IPv4;
 			// AAAA blocks simply are not sinkholed. Recommend auto-create or a v6 VIP.
@@ -3006,18 +3006,18 @@ function pfb_global() {
 
 	$pfb['dnsbl_port']	= $pfb['dnsblconfig']['pfb_dnsport'];									// Lighttpd web server http port setting
 	$pfb['dnsbl_port_ssl']	= $pfb['dnsblconfig']['pfb_dnsport_ssl'];								// Lighttpd web server https port setting
-	$pfb['dnsbl_top1m']	= $pfb['dnsblconfig']['alexa_enable'];							// TOP1M whitelist
+	$pfb['dnsbl_top1m']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['alexa_enable'] ?? '');							// TOP1M whitelist
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('alexa_type');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
-	$pfb['dnsbl_res_cache']	= $pfb['dnsblconfig']['pfb_cache'];							// DNSBL Option to backup/restore Resolver cache
+	$pfb['dnsbl_res_cache']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cache'] ?? '');							// DNSBL Option to backup/restore Resolver cache
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
 	$pfb['dnsbl_global_log']= PfbConfig::read('global_log');							// Global Logging/Blocking mode (default '')
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
 	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
 	// (strict); existing installs are migrated to 'on' on upgrade (pfb_dnsbl_lenient_migrate).
-	$pfb['dnsbl_lenient']	= PfbConfig::read('pfb_dnsbl_lenient');							// DNSBL scheme-parsing leniency (PfbLenient enum)
+	$pfb['dnsbl_lenient']	= PfbConfig::read('pfb_dnsbl_lenient');							// DNSBL scheme-parsing leniency (PfbToggle enum)
 
-	$pfb['dnsbl_py_reply']	= $pfb['dnsblconfig']['pfb_py_reply'];			// DNSBL Resolver python DNS Reply logging
-	$pfb['dnsbl_hsts']	= PfbConfig::read('pfb_hsts')->value;			// DNSBL Resolver python block HSTS via Null Blocking mode
+	$pfb['dnsbl_py_reply']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_reply'] ?? '');			// DNSBL Resolver python DNS Reply logging
+	$pfb['dnsbl_hsts']	= PfbConfig::read('pfb_hsts');			// DNSBL Resolver python block HSTS via Null Blocking mode
 	// ADR-08: IDN mode selector. PfbConfig::read() returns a PfbIdnMode enum via the
 	// registry adapter: 'on' -> All (preserves block-all-IDN on upgrade); 'confusable'
 	// -> Confusable; '' / 'off' / absent / the dropped 4.0.0-alpha 'all' -> Off. Downstream
@@ -3025,16 +3025,16 @@ function pfb_global() {
 	$pfb['dnsbl_idn']	= PfbConfig::read('pfb_idn');				// DNSBL Resolver python IDN mode (PfbIdnMode enum)
 	$pfb['dnsbl_idn_block_malicious']	= PfbConfig::read('pfb_idn_block_malicious');		// Confusable: block malicious homoglyphs (default 'on')
 	$pfb['dnsbl_idn_escalate_suspicious']	= PfbConfig::read('pfb_idn_escalate_suspicious');	// Confusable: escalate suspicious mixed-script to block (opt-in)
-	$pfb['dnsbl_regex']	= $pfb['dnsblconfig']['pfb_regex'];			// DNSBL Resolver python regex
+	$pfb['dnsbl_regex']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_regex'] ?? '');			// DNSBL Resolver python regex
 	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'] ?? '';	// DNSBL Resolver python regex list
 	$pfb['dnsbl_regex_cap']	= PfbConfig::read('pfb_regex_cap');			// DNSBL Resolver python opt-in "Limit long/complex regex" static cap
-	$pfb['dnsbl_cname']	= $pfb['dnsblconfig']['pfb_cname'];			// DNSBL Resolver python CNAME Validation
-	$pfb['dnsbl_tld_allow']	= $pfb['dnsblconfig']['pfb_pytld'];			// DNSBL Resolver TLD Allow option
-	$pfb['dnsbl_py_nolog']	= $pfb['dnsblconfig']['pfb_py_nolog'];			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
-	$pfb['dnsbl_noaaaa']	= $pfb['dnsblconfig']['pfb_noaaaa'];			// DNSBL Resolver python no AAAA
+	$pfb['dnsbl_cname']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cname'] ?? '');			// DNSBL Resolver python CNAME Validation
+	$pfb['dnsbl_tld_allow']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_pytld'] ?? '');			// DNSBL Resolver TLD Allow option
+	$pfb['dnsbl_py_nolog']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_nolog'] ?? '');			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
+	$pfb['dnsbl_noaaaa']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_noaaaa'] ?? '');			// DNSBL Resolver python no AAAA
 	$pfb['dnsbl_noaaaa_list']=$pfb['dnsblconfig']['pfb_noaaaa_list'] ?? '';	// DNSBL Resolver python no AAAA list
 
-	$pfb['dnsbl_gp']		= $pfb['dnsblconfig']['pfb_gp'];		// DNSBL Resolver python - DNSBL Bypass
+	$pfb['dnsbl_gp']		= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_gp'] ?? '');		// DNSBL Resolver python - DNSBL Bypass
 	$pfb['dnsbl_gp_bypass_list']	= $pfb['dnsblconfig']['pfb_gp_bypass_list'] ?? '';	// DNSBL Resolver python - List of Local IPs to bypass DNSBL
 
 	// SafeSearch — read via gateway (ADR-29).
@@ -3064,9 +3064,9 @@ function pfb_global() {
 	$pfb['skipfeed']	= $pfb['config']['skipfeed'] != '' ? $pfb['config']['skipfeed'] : 0;
 
 	if (config_path_enabled('unbound')) {
-		$pfb['unbound_state'] = 'on';
+		$pfb['unbound_state'] = PfbToggle::On;
 	} else {
-		$pfb['unbound_state'] = '';
+		$pfb['unbound_state'] = PfbToggle::Off;
 	}
 
 	// cURL - system proxy server setttings, if configured
@@ -3086,7 +3086,7 @@ function pfb_global() {
 
 	// Set pfBlockerNG to disabled on 're-install'
 	if (isset($pfb['install']) && $pfb['install']) {
-		$pfb['enable'] = $pfb['dnsbl'] = '';
+		$pfb['enable'] = $pfb['dnsbl'] = PfbToggle::Off;
 		$pfb['install']	= FALSE;
 	}
 }
@@ -4317,8 +4317,9 @@ function pfb_update_available(?string $installed, ?string $latest): bool {
  * an explicit 'off' (the user un-ticking the box, persisted by the Software page) disables it;
  * an unset value (never saved) or 'on' reads as enabled.
  */
-function pfb_software_check_enabled(?string $raw): bool {
-	return $raw !== 'off';
+function pfb_software_check_enabled(): bool {
+	// issue #1887: the ON default lives in the registry now; the accessor just asks.
+	return PfbConfig::read('pfb_software_check') === PfbToggle::On;
 }
 
 /*
@@ -4584,8 +4585,7 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 	// The single "Check for new versions" setting (default ENABLED) gates the BACKGROUND
 	// (cron) check + notifications. A manual "Check now" ($force) always runs, so a user can
 	// do a one-off check without leaving background checking enabled.
-	$check_raw = PfbConfig::read('pfb_software_check');
-	$enabled = pfb_software_check_enabled(is_string($check_raw) ? $check_raw : null);
+	$enabled = pfb_software_check_enabled();
 	if (!$enabled && !$force) {
 		return pfb_software_read_cache();
 	}
@@ -6017,12 +6017,12 @@ function pfb_ip_preprocess_args(bool $dup_on, bool $agg_on, bool $rep_on): strin
  * then the caller runs the legacy pMax exec afterward over the emitted deny files (today's
  * pMax semantics, unmodified).
  *
- * @param bool $dedup_on    Dedup pass due: $pfb['dup'] == 'on' ANDed by the caller with the
+ * @param bool $dedup_on    Dedup pass due: $pfb['dup'] === PfbToggle::On ANDed by the caller with the
  *                          feed-changed trigger (repcheck && !save && enable) -- a quiet pass
  *                          (no IP-Deny snapshot written, no removal) invokes nothing, so the
  *                          placeholder refill from the closing pass is never truncated away.
  * @param bool $rep_trigger dRep/pRep's shared "changes found" gate: $pfb['repcheck'] &&
- *                          !$pfb['save'] && $pfb['enable'] == 'on'.
+ *                          !$pfb['save'] && $pfb['enable'] === PfbToggle::On.
  * @param bool $drep_on     $pfb['drep'] == 'on'.
  * @param bool $prep_on     $pfb['prep'] == 'on'.
  * @return array{invoke_v4:bool,invoke_v6:bool,dedup:string,repmode:string,legacy_pmax_followup:bool}
@@ -6289,7 +6289,7 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 	$selected	= is_array($pfb['agg_types'] ?? null) ? $pfb['agg_types'] : array();
 
 	// Disabled pfBlockerNG => nothing is selected effectively (tear all down below).
-	if ($pfb['enable'] != 'on') {
+	if ($pfb['enable'] !== PfbToggle::On) {
 		$selected = array();
 	}
 
@@ -6577,7 +6577,7 @@ function pfb_supp_update_active(bool $pfbadv, bool $supp_enabled): bool {
  * drove the shared family-wide recompute pass) was never re-suppressed. Fix: EITHER
  * $feed_changed OR $recompute_ran unlocks the body.
  *
- * @param bool $supp_on       $pfb['supp'] == 'on'.
+ * @param bool $supp_on       $pfb['supp'] === PfbToggle::On.
  * @param bool $vtype_matches $vtype == '_v4' (or '_v6' for the sibling call site).
  * @param bool $supp_update   $pfb['supp_update'].
  * @param bool $adv           $pfbadv (Deny-folder alias).
@@ -7075,7 +7075,7 @@ server.pid-file			= "/var/run/dnsbl.pid"
 
 EOF;
 
-if ($pfb['dnsbl_py_nolog'] == 'on') {
+if ($pfb['dnsbl_py_nolog'] === PfbToggle::On) {
 	$pfb_conf .= <<<EOF
 server.errorlog			= "|/usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl"
 
@@ -7083,13 +7083,13 @@ EOF;
 }
 
 	if (file_exists('/usr/local/lib/lighttpd/mod_openssl.so')) {
-		if ($pfb['dnsbl_py_nolog'] == 'on') {
+		if ($pfb['dnsbl_py_nolog'] === PfbToggle::On) {
 			$pfb_conf .= 'server.modules			= ( "mod_access", "mod_accesslog", "mod_fastcgi", "mod_rewrite", "mod_openssl" )';
 		} else {
 			$pfb_conf .= 'server.modules			= ( "mod_fastcgi", "mod_rewrite", "mod_openssl" )';
 		}
 	} else {
-		if ($pfb['dnsbl_py_nolog'] == 'on') {
+		if ($pfb['dnsbl_py_nolog'] === PfbToggle::On) {
 			$pfb_conf .= 'server.modules			= ( "mod_access", "mod_accesslog", "mod_fastcgi", "mod_rewrite" )';
 		} else {
 			$pfb_conf .= 'server.modules			= ( "mod_fastcgi", "mod_rewrite" )';
@@ -7107,7 +7107,7 @@ url.access-deny			= ( "~", ".inc" )
 fastcgi.server			= ( ".php" => ( "localhost" => ( "socket" => "/var/run/php-fpm.socket", "broken-scriptfilename" => "enable" ) ) )
 
 EOF;
-	if ($pfb['dnsbl_py_nolog'] == 'on') {
+	if ($pfb['dnsbl_py_nolog'] === PfbToggle::On) {
 
 	$pfb_conf .= <<<EOF
 debug.log-condition-handling	= "enable"
@@ -7119,7 +7119,7 @@ EOF;
 }
 	// Lighttpd v1.4.58+ conditional error log with 'ssl.verifyclient.activate' to collect the domain name
 	$lighty_ver = exec('/usr/local/sbin/lighttpd -v 2>&1');
-	if (($pfb['dnsbl_py_nolog'] == 'on') &&
+	if (($pfb['dnsbl_py_nolog'] === PfbToggle::On) &&
   	    (strpos($lighty_ver, 'lighttpd/1.4.58') !== FALSE ||
 	    strpos($lighty_ver, 'lighttpd/1.4.59') !== FALSE ||
 	    strpos($lighty_ver, 'lighttpd/1.4.60') !== FALSE ||
@@ -7262,8 +7262,8 @@ function pfb_create_dnsbl_cert() {
 // [ #381 ] DNSBL sinkhole NAT generation is gated on a real (non-lo0) listening
 // interface AND the user not having opted out via pfb_dnsbl_nonat. Pure predicate so
 // the branch is unit-testable off-appliance (PfbDnsblNatEnabledTest).
-function pfb_dnsbl_nat_enabled(string $iface, string $nonat): bool {
-	return $iface !== 'lo0' && empty($nonat);
+function pfb_dnsbl_nat_enabled(string $iface, PfbToggle $nonat): bool {
+	return $iface !== 'lo0' && $nonat !== PfbToggle::On;
 }
 
 // Create DNSBL VIP and NAT rules, lighttpd conf and services
@@ -7281,7 +7281,7 @@ function pfb_create_dnsbl($mode) {
 	$new_nat = $pfb_ex_nat = $dnsbl_ex_nat = array();
 	$pfbupdate = FALSE;
 
-	if ((!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl'] == 'on') && $mode == 'enabled') || $mode == 'disabled') {
+	if ((!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl'] === PfbToggle::On) && $mode == 'enabled') || $mode == 'disabled') {
 
 		// DNSBL NAT rules generation
 		if ($mode == 'enabled') {
@@ -9487,14 +9487,14 @@ function pfb_unbound_python($mode) {
 		}
 
 		$python_reply = 'off';
-		if ($pfb['dnsbl_py_reply'] == 'on') {
+		if ($pfb['dnsbl_py_reply'] === PfbToggle::On) {
 			$python_reply = 'on';
 		}
 
 		$python_blocking = 'on';
 
 		$python_hsts = 'off';
-		if ($pfb['dnsbl_hsts'] == 'on') {
+		if ($pfb['dnsbl_hsts'] === PfbToggle::On) {
 			$python_hsts = 'on';
 		}
 
@@ -9518,12 +9518,12 @@ function pfb_unbound_python($mode) {
 		$python_idn_escalate_suspicious = (pfb_cfg_toggle_read($pfb['dnsbl_idn_escalate_suspicious']) === PfbToggle::On) ? 'on' : 'off';
 
 		$python_cname = 'off';
-		if ($pfb['dnsbl_cname'] == 'on') {
+		if ($pfb['dnsbl_cname'] === PfbToggle::On) {
 			$python_cname = 'on';
 		}
 
 		$python_control = 'off';
-		if ($pfb['dnsbl_control'] == 'on') {
+		if ($pfb['dnsbl_control'] === PfbToggle::On) {
 			$python_control = 'on';
 		}
 
@@ -9531,18 +9531,18 @@ function pfb_unbound_python($mode) {
 		// explicitly opted back in (and the parent DNSBL Control toggle is enabled).
 		// DNSBL control is CLI-driven; this path is slated for removal next release.
 		$python_control_legacy = 'off';
-		if ($pfb['dnsbl_control'] == 'on' && $pfb['dnsbl_control_legacy'] == 'on') {
+		if ($pfb['dnsbl_control'] === PfbToggle::On && $pfb['dnsbl_control_legacy'] === PfbToggle::On) {
 			$python_control_legacy = 'on';
 		}
 
 		$python_noaaaa = 'off';
-		if ($pfb['dnsbl_noaaaa'] == 'on') {
+		if ($pfb['dnsbl_noaaaa'] === PfbToggle::On) {
 			$python_noaaaa = 'on';
 		}
 
 		$tld_allow = 'off';
 		$tld_allow_list = '';
-		if ($pfb['dnsbl_tld_allow'] == 'on') {
+		if ($pfb['dnsbl_tld_allow'] === PfbToggle::On) {
 			if (!empty($pfb['dnsblconfig']['pfb_pytlds_gtld'])) {
 				$tld_allow = 'on';
 				$tld_allow_list = $pfb['dnsblconfig']['pfb_pytlds_gtld'];
@@ -9563,7 +9563,7 @@ function pfb_unbound_python($mode) {
 		}
 
 		$python_nolog = 'off';
-		if ($pfb['dnsbl_py_nolog'] == 'on') {
+		if ($pfb['dnsbl_py_nolog'] === PfbToggle::On) {
 			$python_nolog = 'on';
 		}
 
@@ -9572,7 +9572,7 @@ function pfb_unbound_python($mode) {
 		// runtime warn/evict guard does not need a toggle; its ceilings default in
 		// Python (warn 10 ms / evict 100 ms) and are advanced-only knobs here.
 		$regex_cap = 'off';
-		if ($pfb['dnsbl_regex_cap'] == 'on') {
+		if ($pfb['dnsbl_regex_cap'] === PfbToggle::On) {
 			$regex_cap = 'on';
 		}
 
@@ -9614,11 +9614,11 @@ regex_cap	= {$regex_cap}
 forwarding	= {$forwarding}
 
 EOF;
-		if ($pfb['dnsbl_regex'] == 'on' && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {
+		if ($pfb['dnsbl_regex'] === PfbToggle::On && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {
 			$pfb_py_conf .= "regex_list = {$pfb['dnsbl_regex_list']}\n";
 		}
 
-		if ($pfb['dnsbl_noaaaa'] == 'on' && isset($pfb['dnsbl_noaaaa_list']) && !empty($pfb['dnsbl_noaaaa_list'])) {
+		if ($pfb['dnsbl_noaaaa'] === PfbToggle::On && isset($pfb['dnsbl_noaaaa_list']) && !empty($pfb['dnsbl_noaaaa_list'])) {
 			$noaaaa = '';
 			$noaaaa_list = pfb_text_area_decode($pfb['dnsbl_noaaaa_list'], TRUE, TRUE, TRUE);
 			if (!empty($noaaaa_list)) {
@@ -9643,7 +9643,7 @@ EOF;
 			}
 		}
 
-		if ($pfb['dnsbl_gp'] == 'on' && isset($pfb['dnsbl_gp_bypass_list']) && !empty($pfb['dnsbl_gp_bypass_list'])) {
+		if ($pfb['dnsbl_gp'] === PfbToggle::On && isset($pfb['dnsbl_gp_bypass_list']) && !empty($pfb['dnsbl_gp_bypass_list'])) {
 			$gp_bypass = '';
 			$gp_bypass_list = pfb_text_area_decode($pfb['dnsbl_gp_bypass_list'], TRUE, TRUE, FALSE);
 			if (!empty($gp_bypass_list)) {
@@ -10118,7 +10118,7 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 		$log = "\nReloading Unbound Resolver{$type}";
 		pfb_logger($log, 1);
 
-		if ($cache && $pfb['dnsbl_res_cache'] == 'on') {
+		if ($cache && $pfb['dnsbl_res_cache'] === PfbToggle::On) {
 			exec("{$pfb['chroot_cmd']} dump_cache > " . escapeshellarg($cache_dumpfile) . " 2>&1");
 			pfb_logger('.', 1);
 		}
@@ -10158,7 +10158,7 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 			pfb_logger(" completed", 1);
 
 			// Restore Resolver cache
-			if ($cache && $pfb['dnsbl_res_cache'] == 'on' && file_exists($cache_dumpfile) && filesize($cache_dumpfile) > 0) {
+			if ($cache && $pfb['dnsbl_res_cache'] === PfbToggle::On && file_exists($cache_dumpfile) && filesize($cache_dumpfile) > 0) {
 				exec("{$pfb['chroot_cmd']} load_cache < " . escapeshellarg($cache_dumpfile) . " 2>&1");
 				$log = "\nResolver cache restored";
 				pfb_logger($log, 1);
@@ -10229,7 +10229,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	}
 
 	// Finalize deferred TLD-mode statistics, if configured
-	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && !$pfb['save']) {
+	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && !$pfb['save']) {
 		if ($pfb['dnsbl_tld_wildcard']) {
 			if ($pfb['domain_update']) {
 				pfb_dnsbl_tld_stats_finalize($dnsbl_tld_group_counts);
@@ -10269,13 +10269,13 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	}
 
 	// When pfBlockerNG is disabled and 'keep blocklists' is disabled.
-	// pfb['keep'] is now 'on'/'off' (PfbLenient); != 'on' covers both 'off' and legacy ''.
-	if ($pfb['enable'] == '' && $pfb['keep'] != 'on' && !$pfb['install']) {
+	// Toggles are 'on'/'off' (PfbToggle, issue #1887); != 'on' covers 'off' and a legacy ''.
+	if ($pfb['enable'] !== PfbToggle::On && $pfb['keep'] !== PfbToggle::On && !$pfb['install']) {
 		unlink_if_exists("{$pfb['dnsbl_file']}{$ext}");
 	}
 
 	// Disable DNSBL
-	if (($pfb['enable'] != 'on' || $pfb['dnsbl'] != 'on') && !$pfb['install']) {
+	if (($pfb['enable'] !== PfbToggle::On || $pfb['dnsbl'] !== PfbToggle::On) && !$pfb['install']) {
 
 		pfb_reload_unbound('disabled', FALSE, $pfbpython);
 		if (is_service_running('pfb_dnsbl')) {
@@ -10306,7 +10306,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 		$datapath = !$pfbpython;
 		$swapped = pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath);
 		if ($datapath && $swapped &&
-		    pfb_cfg_toggle_read($pfb['dnsbl_cache_flush'] ?? '') === PfbToggle::On) {
+		    ($pfb['dnsbl_cache_flush'] ?? PfbToggle::Off) === PfbToggle::On) {
 			exec("{$pfb['chroot_cmd']} flush_zone +c . 2>&1");
 		}
 	}
@@ -10606,7 +10606,7 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
  *
  * @return array{address: ?string, messages: list<string>}
  */
-function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, $supp): array {
+function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, PfbToggle $supp): array {
 	$messages = [];
 
 	$parts	= explode('/', $ipaddr);
@@ -10658,7 +10658,7 @@ function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, $supp): array {
 	$ip_final = implode('.', $ip);
 
 	// Exclude private/reserved IPs (bypass exclusion for custom lists)
-	if ($supp == 'on' && !$custom) {
+	if ($supp === PfbToggle::On && !$custom) {
 
 		// Remove 'loopback' and '0.0.0.0' IPs
 		if ($ip[0] == 127 || $ip[0] == 0 || empty($ip[0])) {
@@ -10719,7 +10719,7 @@ function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, $supp): array {
  *
  * @return array{address: ?string, messages: list<string>}
  */
-function pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, $supp): array {
+function pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, PfbToggle $supp): array {
 	$messages = [];
 
 	// Extract the address part (before '/' for a CIDR like 'fc00::/7')
@@ -10750,7 +10750,7 @@ function pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, $supp): array {
 	}
 
 	// Exclude private/reserved IPs (bypass exclusion for custom lists)
-	if ($supp == 'on' && !$custom) {
+	if ($supp === PfbToggle::On && !$custom) {
 
 		// Advanced IPv6 Tunable (Set CIDR Block size limit) (issue #760 §3).
 		// A /0 was already clamped above (mask stays '0', never > 0, so this
@@ -11809,12 +11809,12 @@ function pfb_keep_migrate($gconfig) {
 // Whether the feed-host internal-address filter is enabled. Reads the General-settings
 // 'pfb_feed_internal_filter' on/off flag, defaulting to ON when the key is absent (a
 // fresh install ships the filter active; the install-time migration pins it OFF on an
-// already-configured box so existing feeds are never silently dropped). Any value other
-// than the literal 'off' is treated as ON.
-function pfb_feed_filter_enabled() {
+// already-configured box so existing feeds are never silently dropped). issue #1887:
+// reads the enum through the gateway — junk now falls back to Off like every other
+// toggle (it was "anything but 'off' is ON"), and case variants are recognised.
+function pfb_feed_filter_enabled(): bool {
 
-	$value = PfbConfig::read('pfb_feed_internal_filter');
-	return ($value !== 'off');
+	return PfbConfig::read('pfb_feed_internal_filter') === PfbToggle::On;
 }
 
 
@@ -13581,7 +13581,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if ($vtype == '_v6') {
 				$rule['ipprotocol'] = 'inet6';
 			}
-			if ($pfb['float'] == 'on') {
+			if ($pfb['float'] === PfbToggle::On) {
 				$rule['direction'] = 'out';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
@@ -13604,7 +13604,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($aproto_out)) {
 				$rule['protocol'] = "{$aproto_out}";
 			}
-			if ($pfb['global_log'] == 'on' || $pfb_log == 'enabled') {
+			if ($pfb['global_log'] === PfbToggle::On || $pfb_log == 'enabled') {
 				$rule['log'] = '';
 			}
 			if (!empty($agateway_out) && $agateway_out != 'default') {
@@ -13621,7 +13621,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if ($vtype == '_v6') {
 				$rule['ipprotocol'] = 'inet6';
 			}
-			if ($pfb['float'] == 'on') {
+			if ($pfb['float'] === PfbToggle::On) {
 				$rule['direction'] = 'in';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
@@ -13644,7 +13644,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($aproto_in)) {
 				$rule['protocol'] = "{$aproto_in}";
 			}
-			if ($pfb['global_log'] == 'on' || $pfb_log == 'enabled') {
+			if ($pfb['global_log'] === PfbToggle::On || $pfb_log == 'enabled') {
 				$rule['log'] = '';
 			}
 			if (!empty($agateway_in) && $agateway_in != 'default') {
@@ -13660,7 +13660,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if ($vtype == '_v6') {
 				$rule['ipprotocol'] = 'inet6';
 			}
-			if ($pfb['float'] == 'on') {
+			if ($pfb['float'] === PfbToggle::On) {
 				$rule['direction'] = 'out';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
@@ -13683,7 +13683,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($aproto_out)) {
 				$rule['protocol'] = "{$aproto_out}";
 			}
-			if ($pfb['global_log'] == 'on' || $pfb_log == 'enabled') {
+			if ($pfb['global_log'] === PfbToggle::On || $pfb_log == 'enabled') {
 				$rule['log'] = '';
 			}
 			if (!empty($agateway_out) && $agateway_out != 'default') {
@@ -13700,7 +13700,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if ($vtype == '_v6') {
 				$rule['ipprotocol'] = 'inet6';
 			}
-			if ($pfb['float'] == 'on') {
+			if ($pfb['float'] === PfbToggle::On) {
 				$rule['direction'] = 'in';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
@@ -13723,7 +13723,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($aproto_in)) {
 				$rule['protocol'] = "{$aproto_in}";
 			}
-			if ($pfb['global_log'] == 'on' || $pfb_log == 'enabled') {
+			if ($pfb['global_log'] === PfbToggle::On || $pfb_log == 'enabled') {
 				$rule['log'] = '';
 			}
 			if (!empty($agateway_in) && $agateway_in != 'default') {
@@ -13761,7 +13761,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($aproto_out)) {
 				$rule['protocol'] = "{$aproto_out}";
 			}
-			if ($pfb['global_log'] == 'on' || $pfb_log == 'enabled') {
+			if ($pfb['global_log'] === PfbToggle::On || $pfb_log == 'enabled') {
 				$rule['log'] = '';
 			}
 			if (!empty($agateway_out) && $agateway_out != 'default') {
@@ -13800,7 +13800,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if (!empty($aproto_in)) {
 				$rule['protocol'] = "{$aproto_in}";
 			}
-			if ($pfb['global_log'] == 'on' || $pfb_log == 'enabled') {
+			if ($pfb['global_log'] === PfbToggle::On || $pfb_log == 'enabled') {
 				$rule['log'] = '';
 			}
 			if (!empty($agateway_in) && $agateway_in != 'default') {
@@ -13956,7 +13956,7 @@ function pfb_dnsbl_cache($mode) {
 	$a_shellcmdsettings = config_get_path('installedpackages/shellcmdsettings/config', []);
 
 	// Register only when DNSBL is enabled AND /var is a RAM disk; else deregister.
-	$want = ($pfb['dnsbl'] == 'on' && config_path_enabled('system', 'use_mfs_tmpvar'));
+	$want = ($pfb['dnsbl'] === PfbToggle::On && config_path_enabled('system', 'use_mfs_tmpvar'));
 
 	if ($want) {
 		// Add earlyshellcmd settings (distinct 'dnsbl_cache restore' string).
@@ -17053,8 +17053,9 @@ function pfb_diff_managed_rules(array $old_rules, array $new_rules): array {
  *                                call site already passes `$pfb['order'] ?: 'order_0'`, so this is
  *                                never null/empty there (#532); nullable + the order_0 normalisation
  *                                below are defensive so any empty/unknown value behaves as order_0.
- * @param ?string $float          Float mode: 'on' or '' (off); null (the unconfigured
- *                                $pfb['float']) is coerced to '' (off) — this one IS passed unset.
+ * @param PfbToggle $float        Float mode. Typed since issue #1887: $pfb['float'] is a
+ *                                PfbToggle, so the historical unconfigured-null case (which
+ *                                this used to coerce to '') can no longer reach here.
  * @param array  $in_ifaces       Inbound interface names.
  * @param array  $out_ifaces      Outbound interface names.
  * @return array The new filter/rule array to write back to config.xml.
@@ -17063,18 +17064,17 @@ function pfb_build_autorule_list(
 	array   $existing_rules,
 	array   $pfb_generated,
 	?string $order,
-	?string $float,
+	PfbToggle $float,
 	array   $in_ifaces,
 	array   $out_ifaces
 ): array {
-	// $float comes straight from $pfb['float'], which is unset (null) until configured; $order
+	// $float arrives as a PfbToggle (issue #1887); $order
 	// arrives pre-defaulted to 'order_0' from the call site (#532) but is accepted nullable too.
 	// The historical inline code used these raw values in loose comparisons ('== on' / '== order_N'),
 	// where null simply matches nothing -- so a null is behaviour-equivalent to ''. Coerce here
 	// (the params are nullable) rather than let a strict string typehint TypeError on the null the
 	// call site legitimately passes (e.g. enable_float unset).
 	$order = $order ?? '';
-	$float = $float ?? '';
 
 	// Any value that is not a known order_1..4 behaves as order_0 -- the IP-settings default.
 	// An empty/unknown order must never drop a user rule (issue #532/#539): normalise up front so
@@ -17118,7 +17118,7 @@ function pfb_build_autorule_list(
 		$is_floating = ($rule['floating'] ?? '') === 'yes';
 		$type        = $rule['type'] ?? '';
 
-		if ($float === 'on') {
+		if ($float === PfbToggle::On) {
 			if ($order === 'order_0' && $is_floating) {
 				$fother[]  = $rule;
 			} elseif ($is_floating && $type === 'pass') {
@@ -17213,7 +17213,7 @@ function pfb_build_autorule_list(
 		};
 	};
 
-	if ($float === 'on') {
+	if ($float === PfbToggle::On) {
 		// Float mode on: the pfB permit/deny are floating too, so the whole pass_order reorder
 		// happens in the floating group; the interface group carries only non-floating user rules.
 		$float_seq = $apply($order, array_merge($dnsbl, $ppermit, $pmatch), $pdeny,
@@ -17402,7 +17402,7 @@ function pfblockerng_php_pre_deinstall_command() {
 	}
 
 	// Maintain pfBlockerNG settings and database files if $pfb['keep'] is ON.
-	if ($pfb['keep'] != 'on') {
+	if ($pfb['keep'] !== PfbToggle::On) {
 		update_status(" Removing all customizations/data...");
 		// Remove pfBlockerNG log and DB folder
 		rmdir_recursive("{$pfb['dbdir']}");

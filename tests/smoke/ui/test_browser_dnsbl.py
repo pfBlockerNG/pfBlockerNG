@@ -393,7 +393,7 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
     '' (unchecked) — ``pfb_filter(..., PFB_FILTER_ON_OFF)`` rejects 'off' — but the
     save persists the section via ``PfbConfig::writeSection`` (pfblockerng_dnsbl.php:903),
     which since a2c5c26a round-trips every adapter-carrying key through its read+write
-    adapters, and ``PfbLenient``'s canonical off token is 'off', never '' — so an
+    adapters, and ``PfbToggle``'s canonical off token is 'off', never '' — so an
     unchecked save STORES 'off'. Page-reachable stored tokens: 'on' (checked) and
     'off' (unchecked); the render side maps both correctly
     (``pfb_cfg_toggle_read('off') !== PfbToggle::On`` → unchecked).
@@ -412,7 +412,7 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
     page = browser_page
 
     # GIVEN: the form sends a plain on/'' checkbox, but the save's writeSection adapter
-    # ride coalesces the unchecked '' to PfbLenient's canonical 'off' (issue #964).
+    # ride coalesces the unchecked '' to PfbToggle's canonical 'off' (issue #964/#1887).
     # Map the stored value to its checkbox token ('on' = checked, anything else =
     # unchecked) and each POSTed token to the value the save will STORE.
     original_raw = helpers.config_get(smoke_vm, _CFG_LENIENT)

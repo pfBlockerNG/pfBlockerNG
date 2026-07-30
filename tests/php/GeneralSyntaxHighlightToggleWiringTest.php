@@ -20,7 +20,7 @@ use PHPUnit\Framework\TestCase;
  * CfgGatewayTest::testNoToggleFieldDefaultsToOn), mirroring this page's existing `pfb_keep`
  * field exactly: PfbConfig::read()->value on load, an explicit 'on'/'off' ternary on save
  * (not pfb_filter(..., PFB_FILTER_ON_OFF, ...) -- pfb_keep does not use it either), and
- * pfb_cfg_lenient_read(...) === PfbLenient::On on render.
+ * pfb_cfg_toggle_read(...) === PfbToggle::On on render (merged enum, issue #1887).
  */
 final class GeneralSyntaxHighlightToggleWiringTest extends TestCase
 {
@@ -47,9 +47,9 @@ final class GeneralSyntaxHighlightToggleWiringTest extends TestCase
 
 	public function testSaveWritesAnExplicitOnOffTernaryMatchingPfbKeep(): void
 	{
-		// pfb_keep (the exact same default-on-checkbox/lenient-adapter shape) saves via
+		// pfb_keep (the exact same default-on-checkbox shape, merged PfbToggle) saves via
 		// an explicit ternary, not pfb_filter(..., PFB_FILTER_ON_OFF, ...) -- an explicit
-		// 'off' write (not '') is the whole point of the lenient adapter: it must survive
+		// 'off' write (not '') is the whole point of the explicit Off token: it must survive
 		// the live config round-trip distinguishably from a never-configured install.
 		$this->assertMatchesRegularExpression(
 			"#\\\$pfb\\['gconfig'\\]\\['pfb_syntax_highlight'\\]\\s*=\\s*\\(\\(\\s*\\\$_POST\\['pfb_syntax_highlight'\\]\\s*\\?\\?\\s*''\\s*\\)\\s*===\\s*'on'\\s*\\)\\s*\\?\\s*'on'\\s*:\\s*'off'#",
@@ -79,9 +79,9 @@ final class GeneralSyntaxHighlightToggleWiringTest extends TestCase
 			'expected a Form_Checkbox(\'pfb_syntax_highlight\', ...) field'
 		);
 		$this->assertMatchesRegularExpression(
-			"#pfb_cfg_lenient_read\\(\\\$pconfig\\['pfb_syntax_highlight'\\]\\)\\s*===\\s*PfbLenient::On#",
+			"#pfb_cfg_toggle_read\\(\\\$pconfig\\['pfb_syntax_highlight'\\]\\)\\s*===\\s*PfbToggle::On#",
 			self::$src,
-			'expected the checkbox\'s checked state to be pfb_cfg_lenient_read($pconfig[\'pfb_syntax_highlight\']) === PfbLenient::On'
+			'expected the checkbox\'s checked state to be pfb_cfg_toggle_read($pconfig[\'pfb_syntax_highlight\']) === PfbToggle::On'
 		);
 	}
 

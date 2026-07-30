@@ -61,7 +61,7 @@ final class WwwGroupCGatewayTest extends TestCase
 	 * pfb_software_check: absent → '' (registry default; page treats absent as enabled
 	 * via pfb_software_check_enabled(null)).
 	 */
-	public function testSoftwareCheckAbsentDefaultIsEmptyString(): void
+	public function testSoftwareCheckAbsentDefaultIsOn(): void
 	{
 		$path = 'installedpackages/pfblockerng/config/0/pfb_software_check';
 
@@ -71,8 +71,9 @@ final class WwwGroupCGatewayTest extends TestCase
 		// When: gateway read.
 		$result = PfbConfig::read('pfb_software_check');
 
-		// Then: '' — prior page passed null to pfb_software_check_enabled(); '' is equivalent.
-		$this->assertSame('', $result, 'pfb_software_check absent -> "" (registry default)');
+		// Then: On — issue #1887 moved the effective ON default from the hand-written
+		// reader (`!== 'off'`) into the registry; absent still means enabled.
+		$this->assertSame(PfbToggle::On, $result, 'pfb_software_check absent -> On (registry default)');
 	}
 
 	/**
@@ -80,20 +81,20 @@ final class WwwGroupCGatewayTest extends TestCase
 	 */
 	public function testSoftwareCheckToggleRoundTrips(): void
 	{
-		// Before: absent → ''.
-		$this->assertSame('', PfbConfig::read('pfb_software_check'), 'initial absent -> ""');
+		// Before: absent → the registered default On (issue #1887).
+		$this->assertSame(PfbToggle::On, PfbConfig::read('pfb_software_check'), 'initial absent -> On');
 
 		// When: write 'on'.
 		PfbConfig::write('pfb_software_check', 'on');
 
-		// Then: read back 'on'.
-		$this->assertSame('on', PfbConfig::read('pfb_software_check'), 'after write "on" -> "on"');
+		// Then: read back On.
+		$this->assertSame(PfbToggle::On, PfbConfig::read('pfb_software_check'), 'after write "on" -> On');
 
 		// When: write 'off'.
 		PfbConfig::write('pfb_software_check', 'off');
 
-		// Then: read back 'off'.
-		$this->assertSame('off', PfbConfig::read('pfb_software_check'), 'after write "off" -> "off"');
+		// Then: read back Off.
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_software_check'), 'after write "off" -> Off');
 	}
 
 	/**

@@ -53,7 +53,7 @@ final class WwwGroupAGatewayTest extends TestCase
 
 	/**
 	 * pfb_keep: page used `isset($pfb['gconfig']['pfb_keep']) ? ... : 'on'` — default 'on'.
-	 * Registry default = 'on' (PfbLenient::On after #484 fix). Page default REMOVED; gateway owns it.
+	 * Registry default = 'on' (PfbToggle::On after #484 fix). Page default REMOVED; gateway owns it.
 	 *
 	 * Parity: absent key → PfbConfig::read('pfb_keep')->value === 'on' (was: 'on').
 	 * (#484: adapter changed from PfbToggle to PfbLenient; value unchanged.)
@@ -68,9 +68,9 @@ final class WwwGroupAGatewayTest extends TestCase
 		// When: gateway read (replaces the removed isset() ? ... : 'on').
 		$result = PfbConfig::read('pfb_keep');
 
-		// Then: PfbLenient::On, value 'on' — matches prior page default 'on'.
+		// Then: PfbToggle::On, value 'on' — matches prior page default 'on'.
 		// (#484 fix: pfb_keep now uses the lenient adapter; the value is unchanged.)
-		$this->assertSame(PfbLenient::On, $result, 'pfb_keep absent -> PfbLenient::On');
+		$this->assertSame(PfbToggle::On, $result, 'pfb_keep absent -> PfbToggle::On');
 		$this->assertSame('on', $result->value, 'pfb_keep absent -> value "on" (parity with prior isset default)');
 	}
 
@@ -90,8 +90,8 @@ final class WwwGroupAGatewayTest extends TestCase
 		// When: gateway read (replaces the removed isset() ? ... : 'on').
 		$result = PfbConfig::read('pfb_feed_internal_filter');
 
-		// Then: 'on' — matches prior page default.
-		$this->assertSame('on', $result, 'pfb_feed_internal_filter absent -> "on" (parity with prior isset default)');
+		// Then: On — matches prior page default ('on'); the enum since issue #1887.
+		$this->assertSame(PfbToggle::On, $result, 'pfb_feed_internal_filter absent -> On (parity with prior isset default)');
 	}
 
 	/**
@@ -237,7 +237,7 @@ final class WwwGroupAGatewayTest extends TestCase
 	 * PfbConfig::write()) -- the legacy '' token is coalesced to the explicit
 	 * 'off' token instead of persisting raw.
 	 */
-	public function testGeneralSectionPfbKeepOffRoundTrips(): void
+	public function testGeneralSectionPfbKeepEmptyResolvesToDefault(): void
 	{
 		$section = 'installedpackages/pfblockerng/config/0';
 
@@ -245,11 +245,12 @@ final class WwwGroupAGatewayTest extends TestCase
 		PfbConfig::writeSection($section, ['pfb_keep' => 'on']);
 		$this->assertSame('on', PfbConfig::readSection($section)['pfb_keep'], 'pfb_keep starts as "on"');
 
-		// When: write '' (disabled, legacy empty token).
+		// When: write '' — the not-configured token (issue #1887: '' ≡ absent).
 		PfbConfig::writeSection($section, ['pfb_keep' => '']);
 
-		// Then: reads back as 'off' (lenient-adapter normalisation, issue #930).
-		$this->assertSame('off', PfbConfig::readSection($section)['pfb_keep'], 'pfb_keep "" normalises to "off"');
+		// Then: reads back as the registered default 'on'. A deliberate opt-out is the
+		// explicit 'off' token, which round-trips untouched (CfgGatewayTest).
+		$this->assertSame('on', PfbConfig::readSection($section)['pfb_keep'], "pfb_keep '' resolves to the registered default 'on'");
 	}
 
 	// -----------------------------------------------------------------------
@@ -394,9 +395,14 @@ final class WwwGroupAGatewayTest extends TestCase
 		// When: write (models the page save handler).
 		PfbConfig::writeSection($section, $data);
 
-		// Then: read back is byte-identical.
+		// Then: read back is byte-identical EXCEPT the toggle-adapter fields stored as ''
+		// — issue #1887 canonicalises the not-configured token to each field's registered
+		// default ('off' here; both have default ''). Everything else passes untouched.
+		$expected = $data;
+		$expected['pfb_dnsvip_auto'] = 'off';
+		$expected['pfb_regex_cap']   = 'off';
 		$result = PfbConfig::readSection($section);
-		$this->assertSame($data, $result, 'DNSBL section round-trips identically through gateway');
+		$this->assertSame($expected, $result, 'DNSBL section round-trips with only the #1887 toggle canonicalisation');
 	}
 
 	/**

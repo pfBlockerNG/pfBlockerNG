@@ -48,7 +48,7 @@ final class CreateLighttpdModulesTest extends TestCase
 			'dnsbl_port'     => '8081',
 			'dnsbl_port_ssl' => '8443',
 			'dnsbl_vip6'     => '',
-			'dnsbl_py_nolog' => 'off',
+			'dnsbl_py_nolog' => PfbToggle::Off,
 		]);
 	}
 
@@ -87,7 +87,7 @@ final class CreateLighttpdModulesTest extends TestCase
 	public function testNologOffLoadsModAccessOmitsAccessLogAndModAuth(): void
 	{
 		// Given: py_nolog is off (the shipped default).
-		$GLOBALS['pfb']['dnsbl_py_nolog'] = 'off';
+		$GLOBALS['pfb']['dnsbl_py_nolog'] = PfbToggle::Off;
 
 		// When: conf is generated.
 		$conf    = pfb_create_lighttpd();
@@ -123,7 +123,7 @@ final class CreateLighttpdModulesTest extends TestCase
 	public function testNologFlipDrivesAccessLogWhileModAccessStaysLoaded(): void
 	{
 		// Given: start with py_nolog off (before-state asserted explicitly).
-		$GLOBALS['pfb']['dnsbl_py_nolog'] = 'off';
+		$GLOBALS['pfb']['dnsbl_py_nolog'] = PfbToggle::Off;
 		$confBefore    = pfb_create_lighttpd();
 		$modulesBefore = $this->modulesLine($confBefore);
 
@@ -134,7 +134,7 @@ final class CreateLighttpdModulesTest extends TestCase
 			'before: mod_access present even with py_nolog=off (#279)');
 
 		// When: py_nolog is flipped to on.
-		$GLOBALS['pfb']['dnsbl_py_nolog'] = 'on';
+		$GLOBALS['pfb']['dnsbl_py_nolog'] = PfbToggle::On;
 		$confAfter    = pfb_create_lighttpd();
 		$modulesAfter = $this->modulesLine($confAfter);
 

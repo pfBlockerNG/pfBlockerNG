@@ -23,14 +23,14 @@ final class PfbDnsblNatEnabledTest extends TestCase
 	{
 		// Given: interface is lo0 (localhost), nonat opt-out is off (default).
 		// Then: no NAT — localhost never ports to an external sinkhole.
-		$this->assertFalse(pfb_dnsbl_nat_enabled('lo0', ''));
+		$this->assertFalse(pfb_dnsbl_nat_enabled('lo0', PfbToggle::Off));
 	}
 
 	public function testLocalhostWithNatOptedOutReturnsFalse(): void
 	{
 		// Given: interface is lo0, nonat opt-out is on.
 		// Then: still no NAT (lo0 guard fires before the nonat check).
-		$this->assertFalse(pfb_dnsbl_nat_enabled('lo0', 'on'));
+		$this->assertFalse(pfb_dnsbl_nat_enabled('lo0', PfbToggle::On));
 	}
 
 	// Scenario: real (non-lo0) interface — NAT controlled by the nonat toggle.
@@ -39,13 +39,13 @@ final class PfbDnsblNatEnabledTest extends TestCase
 	{
 		// Given: real interface (lan), nonat opt-out is off ('' = NAT generated, the default).
 		// Then: NAT IS generated — this is the existing/default behaviour.
-		$this->assertTrue(pfb_dnsbl_nat_enabled('lan', ''));
+		$this->assertTrue(pfb_dnsbl_nat_enabled('lan', PfbToggle::Off));
 	}
 
 	public function testRealIfaceWithNatOptedOutReturnsFalse(): void
 	{
 		// Given: real interface (lan), nonat opt-out is on ('on' = user manages NAT manually).
 		// Then: NAT is NOT generated — this is the new #381 behaviour.
-		$this->assertFalse(pfb_dnsbl_nat_enabled('lan', 'on'));
+		$this->assertFalse(pfb_dnsbl_nat_enabled('lan', PfbToggle::On));
 	}
 }

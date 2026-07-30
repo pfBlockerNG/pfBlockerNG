@@ -142,7 +142,7 @@ final class DnsblPlaintextSummaryRetirementTest extends TestCase
 		}
 
 		$reloadBody = $this->functionBody('pfb_update_unbound');
-		$enableGate = strpos($reloadBody, "if (\$pfb['enable'] == 'on' && \$pfb['dnsbl'] == 'on' && !\$pfb['save'])");
+		$enableGate = strpos($reloadBody, "if (\$pfb['enable'] === PfbToggle::On && \$pfb['dnsbl'] === PfbToggle::On && !\$pfb['save'])");
 		$toggleGate = strpos($reloadBody, "if (\$pfb['dnsbl_tld_wildcard'])", $enableGate);
 		$domainGate = strpos($reloadBody, "if (\$pfb['domain_update'])", $toggleGate);
 		$finalizeCall = strpos($reloadBody, 'pfb_dnsbl_tld_stats_finalize($dnsbl_tld_group_counts);', $domainGate);

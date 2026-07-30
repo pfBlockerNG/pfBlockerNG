@@ -142,18 +142,27 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	public static function checkEnabledProvider(): array
 	{
 		return [
+			// issue #1887: the accessor reads the gateway itself (zero-arg); the ON
+			// default lives in the registry. '' and absent are the same not-configured
+			// state; junk now falls back to Off like every other toggle (it read as
+			// enabled under the old hand-written `!== 'off'` reader).
 			'unset (never saved) -> enabled' => [null, true],
 			'on -> enabled'                  => ['on', true],
 			'off -> disabled'                => ['off', false],
+			'OFF (case variant) -> disabled' => ['OFF', false],
 			'empty string -> enabled'        => ['', true],
-			'legacy/other -> enabled'        => ['default', true],
+			'legacy/other -> disabled'       => ['default', false],
 		];
 	}
 
 	#[DataProvider('checkEnabledProvider')]
 	public function testCheckEnabled(?string $raw, bool $expected): void
 	{
-		$this->assertSame($expected, pfb_software_check_enabled($raw));
+		$GLOBALS['config'] = [];
+		if ($raw !== null) {
+			config_set_path('installedpackages/pfblockerng/config/0/pfb_software_check', $raw);
+		}
+		$this->assertSame($expected, pfb_software_check_enabled());
 	}
 
 	/*

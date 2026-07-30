@@ -35,7 +35,7 @@ $pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsett
 // pfblockerng_general.php). Read via the PfbConfig gateway -- matches this page's
 // pfb_cache_flush precedent (PfbConfig::read() returns the enum directly here,
 // compared with ===, not ->value).
-$pfb_syntaxhl_on = (PfbConfig::read('pfb_syntax_highlight') === PfbLenient::On);
+$pfb_syntaxhl_on = pfb_editor_enabled();
 
 // Collect local domain TLD for Python TLD Allow array
 // foreign key — out of ADR-29 gateway scope (system/domain is not a pfblockerng* path)

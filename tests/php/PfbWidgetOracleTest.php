@@ -128,9 +128,9 @@ final class PfbWidgetOracleTest extends TestCase
 	private function basePfb(): array
 	{
 		return [
-			'enable'         => 'on',
-			'dnsbl'          => 'on',
-			'unbound_state'  => 'on',
+			'enable'         => PfbToggle::On,
+			'dnsbl'          => PfbToggle::On,
+			'unbound_state'  => PfbToggle::On,
 			'dbdir'          => $this->dir,	// PHP-owned ledger (pfb_sync_status.json)
 			'dnsbldir'       => $this->dir,	// Python-owned ledger (pfb_py_status.json)
 			'dnsbl_vip4'     => '198.51.100.1',
@@ -160,7 +160,7 @@ final class PfbWidgetOracleTest extends TestCase
 	public function testIpDisabledIsRed(): void
 	{
 		$pfb = $this->basePfb();
-		$pfb['enable'] = '';
+		$pfb['enable'] = PfbToggle::Off;
 
 		[$status, $msg] = pfb_widget_oracle_status($pfb);
 
@@ -174,7 +174,7 @@ final class PfbWidgetOracleTest extends TestCase
 		// ledger -- a disabled facility must never read as yellow just because
 		// a stale entry is still open.
 		$pfb = $this->basePfb();
-		$pfb['enable'] = '';
+		$pfb['enable'] = PfbToggle::Off;
 		pfb_sync_status_open('ip', 'pfB_Stale_v4', 'apply', 'stale entry', $this->dir);
 
 		[$status, $msg] = pfb_widget_oracle_status($pfb);
@@ -251,7 +251,7 @@ final class PfbWidgetOracleTest extends TestCase
 	public function testDnsblEnableOffIsRed(): void
 	{
 		$pfb = $this->liveDnsblPfb();
-		$pfb['enable'] = '';
+		$pfb['enable'] = PfbToggle::Off;
 
 		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
 
@@ -262,7 +262,7 @@ final class PfbWidgetOracleTest extends TestCase
 	public function testDnsblToggleOffIsRed(): void
 	{
 		$pfb = $this->liveDnsblPfb();
-		$pfb['dnsbl'] = '';
+		$pfb['dnsbl'] = PfbToggle::Off;
 
 		[, , $status] = pfb_widget_oracle_status($pfb);
 
@@ -272,7 +272,7 @@ final class PfbWidgetOracleTest extends TestCase
 	public function testDnsblUnboundStateOffIsRed(): void
 	{
 		$pfb = $this->liveDnsblPfb();
-		$pfb['unbound_state'] = '';
+		$pfb['unbound_state'] = PfbToggle::Off;
 
 		[, , $status] = pfb_widget_oracle_status($pfb);
 
@@ -305,7 +305,7 @@ final class PfbWidgetOracleTest extends TestCase
 		// plain "Disabled." wording (Semantics #1: never yellow, but wording still
 		// distinguishes "nothing open" from "something open" while disabled).
 		$pfb = $this->liveDnsblPfb();
-		$pfb['enable'] = '';
+		$pfb['enable'] = PfbToggle::Off;
 
 		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
 
@@ -321,7 +321,7 @@ final class PfbWidgetOracleTest extends TestCase
 		// merged ledger instead of py_error.log's filesize (which the widget no
 		// longer reads at all).
 		$pfb = $this->liveDnsblPfb();
-		$pfb['enable'] = '';
+		$pfb['enable'] = PfbToggle::Off;
 		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply', 'stale dnsbl entry', $this->dir);
 
 		[, , $status, $msg] = pfb_widget_oracle_status($pfb);

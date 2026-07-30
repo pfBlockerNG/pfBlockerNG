@@ -642,7 +642,7 @@ SH;
 		pfb_global();
 		$fakePhp = $this->installPhpArgvRecorder();
 		$GLOBALS['pfb']['php'] = $fakePhp;
-		$GLOBALS['pfb']['enable'] = 'on';
+		$GLOBALS['pfb']['enable'] = PfbToggle::On;
 		$GLOBALS['pfb']['blconfig'] = [
 			'blacklist_enable'   => 'Enable',
 			'blacklist_selected' => 'test-list',

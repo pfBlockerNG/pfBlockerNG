@@ -231,7 +231,7 @@ pfb_print_pending_changes_box(TRUE);
 // per-feed cadence lives in the Schedule view below.
 $pfb_tick_min = pfb_tick_interval_clamp(PfbConfig::read('pfb_tick_interval'));
 
-if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
+if ($pfb['enable'] === PfbToggle::On) {
 	list($next_hour, $next_min, $sec_remain) =
 	    pfb_next_tick_boundary($pfb_tick_min, (int) date('G'), (int) date('i'), (int) date('s'));
 
@@ -253,7 +253,7 @@ $pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-t
 if (pfb_cron_disabled()) {
 	$cronreal = ' [ Disabled by ' . pfb_cron_disable_path() . ' ]';
 	$nextcron = '--';
-} elseif (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
+} elseif ($pfb['enable'] === PfbToggle::On) {
 	if (!pfblockerng_cron_exists($pfb_cmd, '*/' . $pfb_tick_min, '*', '*', '*')) {
 		$cronreal = ' [ Missing cron task ]';
 		$nextcron = '--';
@@ -316,7 +316,7 @@ function pfb_ledger_entry_html(?array $entry): string {
  */
 function pfb_dnsbl_category_schedule_html(array $pfb, ?array $entry): string {
 	$bl = $pfb['blconfig'] ?? array();
-	if (($pfb['enable'] ?? '') !== 'on' ||
+	if (($pfb['enable'] ?? PfbToggle::Off) !== 'on' ||
 	    empty($bl['blacklist_enable']) || $bl['blacklist_enable'] === 'Disable') {
 		return '<em>Disabled</em>';
 	}
@@ -489,7 +489,7 @@ if (isset($pconfig['log_view'])) {
 }
 
 // Run Now handler — dispatches pfb_trigger or forcecheck depending on force mode.
-if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && isset($pconfig['run']) &&
+if ($pfb['enable'] === PfbToggle::On && isset($pconfig['run']) &&
     isset($pconfig['pfb_scope']) && !empty($pconfig['pfb_scope'])) {
 	// A Run Now (or a skip that finds a task already running) tails the live log via the poller.
 	$pfb_poll   = TRUE;

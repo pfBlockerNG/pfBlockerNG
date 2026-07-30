@@ -652,7 +652,7 @@ final class FirewallRuleTest extends TestCase
 			'before: no direction when float=off');
 
 		// When: float flipped to on.
-		$GLOBALS['pfb']['float'] = 'on';
+		$GLOBALS['pfb']['float'] = PfbToggle::On;
 		pfb_firewall_rule('Deny_Inbound', 'pfB_A', '_v4', 'off');
 		$after = $this->lastRule('deny_inbound');
 
@@ -663,7 +663,7 @@ final class FirewallRuleTest extends TestCase
 
 	public function testDenyOutboundFloatOnSetsDirectionOut(): void
 	{
-		$GLOBALS['pfb']['float'] = 'on';
+		$GLOBALS['pfb']['float'] = PfbToggle::On;
 		pfb_firewall_rule('Deny_Outbound', 'pfB_A', '_v4', 'off');
 		$this->assertSame('out', $this->lastRule('deny_outbound')['direction']);
 	}
@@ -676,7 +676,7 @@ final class FirewallRuleTest extends TestCase
 
 	public function testPermitOutboundFloatOnSetsDirectionOut(): void
 	{
-		$GLOBALS['pfb']['float'] = 'on';
+		$GLOBALS['pfb']['float'] = PfbToggle::On;
 		pfb_firewall_rule('Permit_Outbound', 'pfB_A', '_v4', 'off');
 		$this->assertSame('out', $this->lastRule('permit_outbound')['direction']);
 	}
@@ -727,7 +727,7 @@ final class FirewallRuleTest extends TestCase
 			'before: log absent with global_log=off');
 
 		// When: global_log flipped to on.
-		$GLOBALS['pfb']['global_log'] = 'on';
+		$GLOBALS['pfb']['global_log'] = PfbToggle::On;
 		pfb_firewall_rule('Deny_Inbound', 'pfB_A', '_v4', 'off');
 		$after = $this->lastRule('deny_inbound');
 
@@ -756,7 +756,7 @@ final class FirewallRuleTest extends TestCase
 
 	public function testLogPresentOnOutboundWhenGlobalLogOn(): void
 	{
-		$GLOBALS['pfb']['global_log'] = 'on';
+		$GLOBALS['pfb']['global_log'] = PfbToggle::On;
 		pfb_firewall_rule('Deny_Outbound', 'pfB_A', '_v4', 'off');
 		$this->assertArrayHasKey('log', $this->lastRule('deny_outbound'));
 	}

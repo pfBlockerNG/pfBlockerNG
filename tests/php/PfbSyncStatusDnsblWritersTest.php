@@ -543,12 +543,12 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$this->assertStringNotContainsString('pfb_unbound_py_ccache_flush(', $region);
 		$this->assertStringNotContainsString('flush_zone +c .', $region);
 		$this->assertStringContainsString(
-			'if ($cache && $pfb[\'dnsbl_res_cache\'] == \'on\')',
+			'if ($cache && $pfb[\'dnsbl_res_cache\'] === PfbToggle::On)',
 			$region,
 			'generic reload keeps existing cache preservation policy for config restarts'
 		);
 		$this->assertStringContainsString(
-			'if ($cache && $pfb[\'dnsbl_res_cache\'] == \'on\' && file_exists($cache_dumpfile)',
+			'if ($cache && $pfb[\'dnsbl_res_cache\'] === PfbToggle::On && file_exists($cache_dumpfile)',
 			$region,
 			'generic reload restores cache only when its caller preserves it'
 		);
@@ -569,7 +569,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		);
 		$this->assertMatchesRegularExpression(
 			'/if \(\$datapath && \$swapped &&\s*'
-			. 'pfb_cfg_toggle_read\(\$pfb\[\x27dnsbl_cache_flush\x27\] \?\? \x27\x27\) === PfbToggle::On\) \{\s*'
+			. '\(\$pfb\[\x27dnsbl_cache_flush\x27\] \?\? PfbToggle::Off\) === PfbToggle::On\) \{\s*'
 			. 'exec\("\{\$pfb\[\x27chroot_cmd\x27\]\} flush_zone \+c \. 2>&1"\);\s*\}/s',
 			$update_region,
 			'bulk caller must keep the full flush inside the successful data-swap and default-off option guard'
