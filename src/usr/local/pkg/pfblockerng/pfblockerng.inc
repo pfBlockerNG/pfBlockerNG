@@ -2170,7 +2170,7 @@ function pfb_unbound_py_manifest_raw_paths(string $manifest_path, bool $deduplic
 
 function pfb_dnsbl_loaded_input_paths(array $pfb): array {
 	$raw_files = pfb_unbound_py_manifest_raw_paths((string) ($pfb['unbound_py_sources'] ?? ''));
-	$top1m_files = (($pfb['dnsbl_top1m'] ?? '') === 'on')
+	$top1m_files = (($pfb['dnsbl_top1m'] ?? PfbToggle::Off) === PfbToggle::On)
 		? array($pfb['unbound_py_top1m'] ?? '/var/unbound/pfb_py_top1m.txt') : array();
 	return array_merge(
 		array($pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts'], $pfb['unbound_py_tld']),
@@ -2712,7 +2712,7 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 		return;
 	}
 
-	$auto      = ($pfb['dnsbl_vip_auto'] ?? PfbToggle::Off) == 'on';
+	$auto      = ($pfb['dnsbl_vip_auto'] ?? PfbToggle::Off) === PfbToggle::On;
 	$interface = $pfb['dnsbl_iface'] ?? 'lo0';
 
 	// PFBL-01: $interface is a singular required parameter -- validate it as a \w-only
@@ -6330,7 +6330,7 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			$consumer_esc	= escapeshellarg($consumer);
 			// CIDR Aggregation state: with it ON every member feed is already CIDR-collapsed, so
 			// the shell skips the union's redundant iprange for v4 and just sort -u's it (like v6).
-			$agg_esc	= escapeshellarg(($pfb['agg'] ?? '') === 'on' ? 'on' : 'off');
+			$agg_esc	= escapeshellarg((($pfb['agg'] ?? PfbToggle::Off) === PfbToggle::On) ? 'on' : 'off');
 			exec("{$pfb['script']} aggregate {$family_esc} {$memberlist_esc} {$aggout_esc} {$consumer_esc} {$agg_esc} 2>&1");
 
 			$rebuilt = file_exists($aggout) && (pfb_file_mtime($aggout) > $mtime_before);
@@ -9059,7 +9059,7 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	if (!is_array($feeds)) {
 		$feeds = array();
 	}
-	$top1m_enabled = (($pfb['dnsbl_top1m'] ?? '') === 'on');
+	$top1m_enabled = (($pfb['dnsbl_top1m'] ?? PfbToggle::Off) === PfbToggle::On);
 	$top1m_source = "{$pfb['dbdir']}/pfbalexawhitelist.txt";
 	$top1m_target = $pfb['unbound_py_top1m'] ?? '/var/unbound/pfb_py_top1m.txt';
 	if ($top1m_enabled && (is_link($top1m_source) || !is_file($top1m_source) || !is_readable($top1m_source))) {

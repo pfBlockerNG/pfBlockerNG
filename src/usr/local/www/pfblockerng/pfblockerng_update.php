@@ -316,7 +316,7 @@ function pfb_ledger_entry_html(?array $entry): string {
  */
 function pfb_dnsbl_category_schedule_html(array $pfb, ?array $entry): string {
 	$bl = $pfb['blconfig'] ?? array();
-	if (($pfb['enable'] ?? PfbToggle::Off) !== 'on' ||
+	if (($pfb['enable'] ?? PfbToggle::Off) !== PfbToggle::On ||
 	    empty($bl['blacklist_enable']) || $bl['blacklist_enable'] === 'Disable') {
 		return '<em>Disabled</em>';
 	}
