@@ -76,17 +76,22 @@ final class MigrationRegistryTest extends TestCase
 	/**
 	 * Registry returns exactly four entries in the correct declared order.
 	 */
-	public function testRegistryHasFourEntriesInOrder(): void
+	public function testRegistryHasSixEntriesInOrder(): void
 	{
 		$registry = pfb_migration_registry();
 
-		$this->assertCount(4, $registry);
+		$this->assertCount(6, $registry);
 
-		// Order must match the original install.inc sequence.
-		$this->assertSame('adr02-dnsbl-python-mode',    $registry[0]['id']);
-		$this->assertSame('pfbl03-control-legacy-seed', $registry[1]['id']);
-		$this->assertSame('adr22-dnsbl-lenient',        $registry[2]['id']);
-		$this->assertSame('issue281-pfb-keep-seed',     $registry[3]['id']);
+		// The issue #1887 '' preservation pair MUST run first: every later migration's
+		// writeSection() write-back rides the adapters, which would canonicalise a
+		// still-present '' to the registered default before it could be preserved.
+		$this->assertSame('issue1887-toggle-empty-preserve-gen',   $registry[0]['id']);
+		$this->assertSame('issue1887-toggle-empty-preserve-dnsbl', $registry[1]['id']);
+		// Then the original install.inc sequence, order unchanged.
+		$this->assertSame('adr02-dnsbl-python-mode',    $registry[2]['id']);
+		$this->assertSame('pfbl03-control-legacy-seed', $registry[3]['id']);
+		$this->assertSame('adr22-dnsbl-lenient',        $registry[4]['id']);
+		$this->assertSame('issue281-pfb-keep-seed',     $registry[5]['id']);
 	}
 
 	/**
@@ -110,10 +115,12 @@ final class MigrationRegistryTest extends TestCase
 	public function testRegistryEntriesSectionsAreCorrect(): void
 	{
 		$registry = pfb_migration_registry();
-		$this->assertSame(self::DNSBL_SECTION, $registry[0]['section']);
+		$this->assertSame(self::GEN_SECTION,   $registry[0]['section']);
 		$this->assertSame(self::DNSBL_SECTION, $registry[1]['section']);
 		$this->assertSame(self::DNSBL_SECTION, $registry[2]['section']);
-		$this->assertSame(self::GEN_SECTION,   $registry[3]['section']);
+		$this->assertSame(self::DNSBL_SECTION, $registry[3]['section']);
+		$this->assertSame(self::DNSBL_SECTION, $registry[4]['section']);
+		$this->assertSame(self::GEN_SECTION,   $registry[5]['section']);
 	}
 
 	// -----------------------------------------------------------------------

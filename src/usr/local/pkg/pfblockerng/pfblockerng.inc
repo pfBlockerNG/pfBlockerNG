@@ -11806,6 +11806,36 @@ function pfb_keep_migrate($gconfig) {
 }
 
 
+// issue #1887: one-time preservation of a pre-merge stored '' as the explicit 'off'
+// it meant. Under the merged PfbToggle contract a stored '' is the not-configured
+// state and resolves to the REGISTERED DEFAULT — which flips a legacy unchecked save
+// on the two default-'on' toggles a real install can hold '' for: pfb_keep (a 3.2.x
+// operator's deliberate opt-out, which the #281 seed above deliberately never
+// touches) and pfb_idn_block_malicious (the DNSBL page's old ?: '' unchecked save).
+// Rewriting '' -> 'off' preserves the operator's intent and leaves config.xml
+// holding only canonical tokens. Naturally idempotent and run-once by construction:
+// it fires only while a '' exists, and nothing writes '' any more. Absent keys are
+// left alone — recorded intent is preserved, defaults are never materialised here.
+function pfb_toggle_empty_preserve_gen($gconfig) {
+
+	if (!is_array($gconfig) || ($gconfig['pfb_keep'] ?? NULL) !== '') {
+		return NULL;
+	}
+	$gconfig['pfb_keep'] = 'off';
+	return $gconfig;
+}
+
+// The DNSBL-section half of the issue #1887 '' preservation (see above).
+function pfb_toggle_empty_preserve_dnsbl($dconfig) {
+
+	if (!is_array($dconfig) || ($dconfig['pfb_idn_block_malicious'] ?? NULL) !== '') {
+		return NULL;
+	}
+	$dconfig['pfb_idn_block_malicious'] = 'off';
+	return $dconfig;
+}
+
+
 // Whether the feed-host internal-address filter is enabled. Reads the General-settings
 // 'pfb_feed_internal_filter' on/off flag, defaulting to ON when the key is absent (a
 // fresh install ships the filter active; the install-time migration pins it OFF on an

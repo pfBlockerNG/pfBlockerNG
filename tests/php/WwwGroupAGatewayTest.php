@@ -140,7 +140,7 @@ final class WwwGroupAGatewayTest extends TestCase
 		$result = PfbConfig::read('pfb_idn_block_malicious');
 
 		// Then: 'on' — matches prior page default.
-		$this->assertSame('on', $result, 'pfb_idn_block_malicious absent -> "on" (parity with prior isset default)');
+		$this->assertSame(PfbToggle::On, $result, 'pfb_idn_block_malicious absent -> On (parity with prior isset default)');
 	}
 
 	// -----------------------------------------------------------------------
@@ -401,6 +401,7 @@ final class WwwGroupAGatewayTest extends TestCase
 		$expected = $data;
 		$expected['pfb_dnsvip_auto'] = 'off';
 		$expected['pfb_regex_cap']   = 'off';
+		$expected['pfb_idn_escalate_suspicious'] = 'off';
 		$result = PfbConfig::readSection($section);
 		$this->assertSame($expected, $result, 'DNSBL section round-trips with only the #1887 toggle canonicalisation');
 	}
@@ -417,11 +418,16 @@ final class WwwGroupAGatewayTest extends TestCase
 		PfbConfig::writeSection($section, ['pfb_idn_block_malicious' => 'on']);
 		$this->assertSame('on', PfbConfig::readSection($section)['pfb_idn_block_malicious'], 'pfb_idn_block_malicious starts as "on"');
 
-		// When: write '' (disabled).
-		PfbConfig::writeSection($section, ['pfb_idn_block_malicious' => '']);
+		// When: write the explicit 'off' (the page's unchecked-save token since #1887).
+		PfbConfig::writeSection($section, ['pfb_idn_block_malicious' => 'off']);
 
-		// Then: reads back as ''.
-		$this->assertSame('', PfbConfig::readSection($section)['pfb_idn_block_malicious'], 'pfb_idn_block_malicious "" round-trips identically');
+		// Then: reads back as 'off' — the disabled state survives.
+		$this->assertSame('off', PfbConfig::readSection($section)['pfb_idn_block_malicious'], "pfb_idn_block_malicious 'off' round-trips");
+
+		// And a staged '' is the not-configured state: it resolves to the registered
+		// default 'on' — which is exactly why the page must stage the explicit token.
+		PfbConfig::writeSection($section, ['pfb_idn_block_malicious' => '']);
+		$this->assertSame('on', PfbConfig::readSection($section)['pfb_idn_block_malicious'], "a staged '' resolves to the default-on");
 	}
 
 	/**
