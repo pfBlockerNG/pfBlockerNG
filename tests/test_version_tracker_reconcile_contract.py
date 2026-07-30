@@ -342,6 +342,19 @@ class TestDispatchStep:
         )
         assert "workflow run" not in gh_log
 
+    def test_error_action_renders_error_annotation_and_dispatches_nothing(self, tmp_path: Path) -> None:
+        # issue #1857: a mislabeled image surfaces as a loud ::error:: fact
+        (tmp_path / "facts").mkdir()
+        (tmp_path / "facts" / "plan-Plus.json").write_text(
+            json.dumps({"actions": [{"type": "error", "family": "26.07", "message": "mislabeled image"}]}),
+            encoding="utf-8",
+        )
+        proc = _run_step(
+            tmp_path, DISPATCH_STEP, {"ROUTE_MATRIX": json.dumps(BUILD_MATRIX + [BETA_2607]), "DRY_RUN": "false"}
+        )
+        assert "::error::26.07: mislabeled image" in proc.stdout
+        assert "workflow run" not in _log(tmp_path, "gh.log")
+
     def test_dry_run_dispatches_nothing(self, tmp_path: Path) -> None:
         gh_log, _ = self._run(
             tmp_path,

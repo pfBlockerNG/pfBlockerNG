@@ -293,6 +293,47 @@ class TestSteadyState:
         assert actions == []
 
 
+class TestBootedFamilyMismatch:
+    """Scenario (issue #1857): the 26.07-tagged image booted 26.03.1-RELEASE —
+    the run's own uploaded facts (run 30420249611). A mislabeled image must
+    surface an error and drive NO rule, instead of flipping the beta entry to
+    GA and republishing off the wrong box."""
+
+    MISLABELED = _boot("26.07", "26.03.1-RELEASE", REPOC_PLUS, UPGRADE_AVAILABLE)
+
+    def test_wrong_family_boot_surfaces_error_and_plans_nothing_else(self) -> None:
+        # incident shape: -c said update available AND the final-looking
+        # version matched no prerelease marker — both rules must stay silent
+        actions = _plan([PLUS_2603, PLUS_2607_BETA], {"26.03": True, "26.07": True}, [self.MISLABELED])
+        errors = [a for a in actions if a["type"] == "error"]
+        assert len(errors) == 1
+        assert errors[0]["family"] == "26.07"
+        assert "26.03.1-RELEASE" in errors[0]["message"]
+        assert [a for a in actions if a["type"] != "error"] == []
+
+    def test_wrong_family_branches_never_drive_matrix_prs(self) -> None:
+        # the tainted boot's repoc lists an unknown family — an untrusted box
+        # must not open the human-gate PR either
+        boot = _boot("26.07", "26.03.1-RELEASE", REPOC_PLUS + "26_09\t\tBeta Version (26.09)\n")
+        actions = _plan([PLUS_2603, PLUS_2607_BETA], {"26.03": True, "26.07": True}, [boot])
+        assert actions != []
+        assert all(a["type"] == "error" for a in actions)
+
+    def test_healthy_sibling_boot_still_drives_its_own_rules(self) -> None:
+        # the healthy 26.03 box keeps working while the mislabeled 26.07 one
+        # is quarantined
+        healthy = _boot("26.03", "26.03-RELEASE", REPOC_PLUS)
+        actions = _plan([PLUS_2603, PLUS_2607_BETA], {"26.03": True, "26.07": True}, [healthy, self.MISLABELED])
+        assert {"type": "republish", "family": "26.03", "branch": "26_03_1", "reason": "newer-branch"} in actions
+        assert all(a["type"] != "matrix_pr_ga_flip" for a in actions)
+
+    def test_missing_etc_version_is_not_a_mismatch(self) -> None:
+        # a lost etc-version fact stays a degraded fact (issue #1848), not a
+        # mislabeled-image error
+        actions = _plan([PLUS_2603], {"26.03": True}, [_boot("26.03", "", REPOC_PLUS)])
+        assert all(a["type"] != "error" for a in actions)
+
+
 class TestMissingSecondSource:
     """Scenario (issue #1848): the -c fact is optional. A boot that gathered its
     branch list but lost the upgrade check must still drive branch-based rules."""
