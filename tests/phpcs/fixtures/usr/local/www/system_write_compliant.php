@@ -22,7 +22,7 @@
 function pfb_www_write_authorized_variant()
 {
 	// PfbConfig::write() enforces write_priv — must never be flagged.
-	PfbConfig::write('pfb_keep', '30');
+	PfbConfig::write('gen/pfb_keep', '30');
 }
 
 function pfb_www_writesection_authorized_variant()
@@ -34,7 +34,7 @@ function pfb_www_writesection_authorized_variant()
 function pfb_www_foreign_class_writesystem()
 {
 	// Same method name, but the class is not PfbConfig — must never be flagged.
-	SomethingElse::writeSystem('pfb_keep', '30');
+	SomethingElse::writeSystem('gen/pfb_keep', '30');
 }
 
 function pfb_www_writesystem_mentioned_in_comment()

@@ -167,7 +167,7 @@ $before = (string) config_get_path('installedpackages/pfblockerng/config/0/pfb_k
 
 $caught = 'NO_EXCEPTION';
 try {
-    PfbConfig::write('pfb_keep', 'off');
+    PfbConfig::write('gen/pfb_keep', 'off');
 } catch (\\RuntimeException $e) {
     $caught = 'RuntimeException';
 } catch (\\Throwable $e) {
@@ -178,12 +178,12 @@ echo "PFB1904:WRITE_CAUGHT:{$caught}\\n";
 $afterWrite = (string) config_get_path('installedpackages/pfblockerng/config/0/pfb_keep', '');
 echo 'PFB1904:AFTER_WRITE_UNCHANGED:' . (($afterWrite === $before) ? 'YES' : 'NO') . "\\n";
 
-PfbConfig::writeSystem('pfb_keep', 'off');
+PfbConfig::writeSystem('gen/pfb_keep', 'off');
 write_config('[pfBlockerNG] smoke #1904: CLI gateway probe writeSystem off');
 $stored = (string) config_get_path('installedpackages/pfblockerng/config/0/pfb_keep', '');
 echo "PFB1904:WRITESYSTEM_STORED:{$stored}\\n";
 
-PfbConfig::writeSystem('pfb_keep', $before);
+PfbConfig::writeSystem('gen/pfb_keep', $before);
 write_config('[pfBlockerNG] smoke #1904: CLI gateway probe writeSystem restore');
 echo 'PFB1904:RESTORED:OK';
 """
@@ -441,10 +441,10 @@ def test_cli_gateway_write_fails_closed_writesystem_succeeds(
         is genuinely UNDEFINED there, matching the bare pfSsh.php bootstrap --
         see the module docstring for which CAUTION arm this box exercises),
 
-      When ``PfbConfig::write('pfb_keep', 'off')`` is called,
+      When ``PfbConfig::write('gen/pfb_keep', 'off')`` is called,
 
       Then it throws ``RuntimeException`` (fail-closed) and the stored value is
-        UNCHANGED; and ``PfbConfig::writeSystem('pfb_keep', 'off')`` -- the
+        UNCHANGED; and ``PfbConfig::writeSystem('gen/pfb_keep', 'off')`` -- the
         explicit system-caller escape hatch -- succeeds and persists the
         canonical ``'off'`` token.
 

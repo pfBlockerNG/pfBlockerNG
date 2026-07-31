@@ -347,10 +347,10 @@ def _configure_top1m(vm: SmokeVM) -> None:
     result = h.php_eval(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        "PfbConfig::write('top1m_enable', 'on');\n"
-        "PfbConfig::write('top1m_source', PfbTop1mSource::Tranco);\n"
-        "PfbConfig::write('top1m_count', '1');\n"
-        "PfbConfig::write('top1m_inclusion', 'com');\n"
+        "PfbConfig::write('dnsbl/top1m_enable', 'on');\n"
+        "PfbConfig::write('dnsbl/top1m_source', PfbTop1mSource::Tranco);\n"
+        "PfbConfig::write('dnsbl/top1m_count', '1');\n"
+        "PfbConfig::write('dnsbl/top1m_inclusion', 'com');\n"
         "write_config('pfBlockerNG #1542 smoke: enable deterministic TOP1M fixture');\n"
         "echo 'OK';",
     )
@@ -371,7 +371,7 @@ def _stage_top1m_source(vm: SmokeVM, body: str) -> None:
         "$provider = pfb_top1m_active_provider();\n"
         "$source = $pfb['dnsbl_top1m_type'];\n"
         "$source_key = $source instanceof PfbTop1mSource ? $source->value : (string) $source;\n"
-        "$headers = pfb_top1m_auth_headers($provider, (string) PfbConfig::read('top1m_token'));\n"
+        "$headers = pfb_top1m_auth_headers($provider, (string) PfbConfig::read('dnsbl/top1m_token'));\n"
         "$identity = pfb_top1m_source_identity($source_key, $provider['url'], $headers);\n"
         "$source_written = @file_put_contents($base . '.source', $identity, LOCK_EX) !== FALSE;\n"
         "$hash = pfb_hash_read($base);\n"
@@ -400,7 +400,7 @@ def _complete_detector_sidecars(vm: SmokeVM) -> dict:
         "$provider = pfb_top1m_active_provider();\n"
         "$source = $pfb['dnsbl_top1m_type'];\n"
         "$source_key = $source instanceof PfbTop1mSource ? $source->value : (string) $source;\n"
-        "$headers = pfb_top1m_auth_headers($provider, (string) PfbConfig::read('top1m_token'));\n"
+        "$headers = pfb_top1m_auth_headers($provider, (string) PfbConfig::read('dnsbl/top1m_token'));\n"
         "$identity = pfb_top1m_source_identity($source_key, $provider['url'], $headers);\n"
         "$hash = pfb_hash_read($base);\n"
         "$validators = pfb_validator_read($base . '.orig');\n"
@@ -556,11 +556,11 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     teardown = _json_eval(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
-        "PfbConfig::write('pfb_keep', PfbToggle::On);\n"
+        "PfbConfig::write('gen/pfb_keep', PfbToggle::On);\n"
         "write_config('pfBlockerNG #1542 smoke: keep-on callable teardown');\n"
         "pfb_global();\n"
         "$ok = pfb_unbound_py_teardown_raw_set();\n"
-        "$keep = PfbConfig::read('pfb_keep');\n"
+        "$keep = PfbConfig::read('gen/pfb_keep');\n"
         "$out = array('ok' => $ok, 'keep' => $keep instanceof PfbToggle ? $keep->value : (string) $keep);",
         "PFB1542TEARDOWN",
     )

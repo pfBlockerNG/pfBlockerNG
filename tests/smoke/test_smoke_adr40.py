@@ -346,11 +346,11 @@ def _set_delta_mode(vm: h.SmokeVM, mode: str, *, timeout: float = 60.0) -> None:
     the stored value is unambiguous.
 
     Call BEFORE the reload under test.  The next ``reload()`` reads this value
-    once per pass via ``PfbConfig::read('pfb_alias_delta_mode')``.
+    once per pass via ``PfbConfig::read('gen/pfb_alias_delta_mode')``.
     """
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        f"PfbConfig::write('pfb_alias_delta_mode', {h._php_str(mode)});\n"
+        f"PfbConfig::write('gen/pfb_alias_delta_mode', {h._php_str(mode)});\n"
         "write_config('pfBlockerNG smoke: set pfb_alias_delta_mode');\n"
         "echo 'OK';"
     )

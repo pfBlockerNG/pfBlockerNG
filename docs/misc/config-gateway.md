@@ -138,7 +138,7 @@ Authorization is a property of the **write**, not the call site (the
   - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): tokens
     `'on'` (= All) / `'confusable'` / `'off'`. `All` **reuses the original `'on'`** block-all
     token, so current code reading a pre-4.0.0 configuration preserves block-all with no
-    migration. `PfbConfig::read('pfb_idn')` returns the enum;
+    migration. `PfbConfig::read('dnsbl/pfb_idn')` returns the enum;
     `PfbConfig::write()` and the `py_unbound.ini` build both emit `toStored()`; consumers compare
     `=== PfbIdnMode::All` / `::Confusable`. The 4.0.0-alpha-only `'all'` token is **not** carried
     (alpha compatibility is intentionally not maintained) — it reads as Off. One canonical

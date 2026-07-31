@@ -1211,7 +1211,7 @@ in PHP, so nothing needs a chroot-local socket any more.
 
 **Both emit paths live in `pfb_daemon_filterlog()`** (`pfblockerng.inc`) — the single writer of
 `unified.log` and the host-side DNSBL syslog emitter — each gated by
-`PfbConfig::read('log_syslog') === PfbToggle::On`, with the daemon's config refreshed first so
+`PfbConfig::read('gen/log_syslog') === PfbToggle::On`, with the daemon's config refreshed first so
 a LIVE toggle takes effect without a restart:
 
 - **IP events** — `pfb_syslog_event(pfb_syslog_format_ip($fields))` at the pf-filter CSV write
