@@ -89,11 +89,15 @@ def test_catalog_is_unchanged_when_the_matrix_row_builds_no_dep_pkgs(
 def test_a_named_dep_pkg_that_does_not_exist_fails_loudly(
     monkeypatch: pytest.MonkeyPatch, staged: list[tuple[Path, str]], tmp_path: Path
 ) -> None:
-    """A missing dep path must raise, never yield a catalog that is silently short.
+    """A missing dep path must raise BEFORE any guest mutation, never yield a short catalog.
 
     Mirrors ``scripts/install-pkg.sh``'s own ``[ -f "$_dep" ] || exit 1`` guard: a
     catalog missing a dependency fails much later, at ``pkg install``, with an error
     that points at the package rather than at the staging bug.
+
+    Validation runs before the ``rm -rf repo_dir`` that opens the function, so a bad
+    ``SMOKE_DEP_PKGS`` leaves any existing guest catalog intact instead of destroying
+    it on the way out — failing closed means changing nothing, not changing less.
     """
     pkg = tmp_path / "pfSense-pkg-pfBlockerNG-devel-4.0.0.pkg"
     pkg.write_bytes(b"pkg")
@@ -102,6 +106,11 @@ def test_a_named_dep_pkg_that_does_not_exist_fails_loudly(
 
     with pytest.raises(RuntimeError, match="absent-dep.pkg"):
         build_guest_repo(vm, _REPO_DIR, [pkg])  # type: ignore[arg-type]
+
+    assert vm.commands == [], (
+        f"guest was mutated before validation failed: {vm.commands!r} — an existing catalog must survive"
+    )
+    assert staged == [], "nothing may be staged when the dep set does not validate"
 
 
 def test_a_dep_already_passed_by_the_caller_is_not_staged_twice(
