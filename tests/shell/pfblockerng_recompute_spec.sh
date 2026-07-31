@@ -217,6 +217,7 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 	After 'cleanup'
 
 	pfb_counts_line() { grep "^FeedB_v4 " "$countsfile"; }
+	pfb_allnet_log_count() { grep -c 'dropped total-range row(s) from \[ AllNet_v4 \]' "$errorlog"; }
 
 	It "keeps the first-priority feed's copy and prunes a later feed's exact repeat"
 		printf '192.0.2.10\n192.0.2.11\n' > "${snap}/FeedA_v4.orig"
@@ -437,7 +438,7 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The contents of file "$countsfile" should include 'AllNet_v4 2'
 		The contents of file "$countsfile" should include 'LowerA_v4 2'
 		The contents of file "$countsfile" should include 'LowerB_v4 1'
-		The contents of file "${errorlog}" should include 'AllNet_v4'
+		The result of "pfb_allnet_log_count()" should equal 1
 	End
 
 	It 'a broad-but-not-total prefix (10.0.0.0/8) still prunes contained lower rows -- the total-range guard never over-matches (issue #1929 negative control)'
@@ -555,6 +556,8 @@ Describe 'pfb_recompute() v6 dedup (same Stage A/B/D/E loop, per family)'
 	Before 'setup'
 	After 'cleanup'
 
+	pfb_allnet_v6_log_count() { grep -c 'dropped total-range row(s) from \[ AllNet_v6 \]' "$errorlog"; }
+
 	It 'dedups an exact cross-feed repeat and prunes via CIDR containment'
 		printf '2001:db8::/32\n' > "${snap}/SixA_v6.orig"
 		printf '2001:db8:dead:beef::1\nfd12:3456::1\n' > "${snap}/SixB_v6.orig"
@@ -605,7 +608,7 @@ Describe 'pfb_recompute() v6 dedup (same Stage A/B/D/E loop, per family)'
 		The contents of file "${pfbdeny}LowerB_v6.txt" should equal 'fd99::7'
 		The contents of file "$countsfile" should include 'LowerA_v6 1'
 		The contents of file "$countsfile" should include 'LowerB_v6 1'
-		The contents of file "${errorlog}" should include 'AllNet_v6'
+		The result of "pfb_allnet_v6_log_count()" should equal 1
 	End
 
 	It 'keeps v4 and v6 masterfile rows separate: a v6 recompute never touches v4 family rows and vice versa'
