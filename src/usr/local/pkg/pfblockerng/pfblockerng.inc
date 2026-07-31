@@ -11973,13 +11973,14 @@ function pfb_legacy_key_rename_migrate($sections) {
 //                    (same reason pfb_gconfig_operator_view() strips it, #1770/#1771/#1775).
 //   v4suppression    pfblockerng_install.inc's ADR-53 pfBlockerNGSuppress alias conversion is
 //                    gated on "never migrated" (absent) vs "present but empty".
-//   pfb_cache,       pfblockerng_dnsbl.php renders these CHECKED while the key is absent
-//   pfb_py_reply,    (isset(...) ? ... : 'on') though the registry default is '', so seeding
-//   pfb_hsts         would flip the first-open rendering and what a first save stores. That
-//                    page/registry divergence is issue #1907; these join the pass when it is
-//                    resolved.
+//   pfb_cache,       pfblockerng_dnsbl.php / pfblockerng_ip.php render these CHECKED while
+//   pfb_py_reply,    the key is absent (isset(...) ? ... : 'on') though the registry default
+//   pfb_hsts,        is '', so seeding '' would flip the first-open rendering and what a
+//   ip/suppression   first save stores. That page/registry divergence is issue #1907; these
+//                    join the pass when it is resolved (ip/suppression added by issue #1931).
 const PFB_SCALAR_SEED_EXCLUDED = array(
 	'gen/settings_family', 'ip/v4suppression', 'dnsbl/pfb_cache', 'dnsbl/pfb_py_reply', 'dnsbl/pfb_hsts',
+	'ip/suppression',
 );
 
 

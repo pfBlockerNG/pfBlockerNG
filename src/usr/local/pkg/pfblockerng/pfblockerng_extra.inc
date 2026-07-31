@@ -1168,6 +1168,15 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 		],
 
+		// issue #1931: IP page "Enable Suppression" toggle -- path-addressed, no longer
+		// collides with dnsbl/suppression. Page renders 'on' while absent (#1907-class
+		// divergence); 'on'-default + grandfather decision deferred to #1921.
+		'ip/suppression' => [
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+		],
+
 		// -------------------------------------------------------------------
 		// Reputation section (pfblockerngreputation/config/0)
 		// -------------------------------------------------------------------
