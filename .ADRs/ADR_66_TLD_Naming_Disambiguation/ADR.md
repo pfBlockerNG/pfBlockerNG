@@ -246,3 +246,28 @@ classification remains manifest/Python-owned, while the narrow PHP seam is now
 `pfb_dnsbl_tld_stats_finalize()` and consumes only in-memory group counts. The old
 analysis name and redundant plaintext-summary lifecycle no longer exist; the naming
 and stored-config decisions implemented by ADR-66 are unchanged.
+
+## 9. Post-implementation amendment (2026-07-30 — issue #1898)
+
+The owner retired the cross-version stored-key compatibility goal on 2026-07-30. Downgrade
+safety now comes from the settings-family snapshots (`pfb_settings_family_save()` /
+`pfb_settings_family_replace()`), so a stored key no longer has to keep an obsolete spelling for
+a 3.2.x package to read it. This overturns the "stays (stored config / POST)" rows of §2.1 and
+§2.2 and, for those keys only, §2's "no stored config / www-POST changes; no config migration".
+
+- **§2.1 — TLD Allow stored keys renamed.** `pfb_pytld` → `tld_allow`, `pfb_pytld_sort` →
+  `tld_allow_sort`, `pfb_pytlds_{gtld,cctld,itld,bgtld}` → `tld_allow_{gtld,cctld,itld,bgtld}`.
+  The stored vocabulary now matches the §2.1 runtime stem instead of trailing it.
+- **§2.2 — Wildcard Blocking stored keys renamed.** `pfb_tld` → `tld_wildcard`, `tldexclusion` →
+  `tld_wildcard_exclusion`, `tldblacklist` → `tld_wildcard_blacklist` — the same names §2.2
+  already gave the manifest/ini side.
+- **§1.1's "kept verbatim (internal-only depth)" rationale no longer applies** to those keys. It
+  remains the correct record of why they were kept in 2026-07.
+- **§2.3's semantics constraints still hold.** The rename is value-preserving: issue #1898 moves
+  each stored value byte-identically, so the `evaluate_domain` verdict/log-field oracles pinned
+  before ADR-66's rename stay green across it.
+
+Carried forward by the `issue1898-legacy-key-rename` entry in `pfb_migration_registry()` — one
+atomic, idempotent, post-install migration that fails closed on a conflicting old/new pair.
+Current contract and mapping table: `docs/misc/config-gateway.md` → "Stored-key vocabulary
+(issue #1898)". Coverage: `tests/php/LegacyKeyRenameMigrationTest.php`.

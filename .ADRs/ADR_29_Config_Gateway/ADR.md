@@ -356,3 +356,26 @@ needed by supported upgrades, and grandfathering remain authoritative. Package d
 unsupported. The backward/rollback contract, scalar-field `since-version` metadata, per-field
 rollback suite, downgrade smoke leg, and downgrade-only tooling requirements are superseded.
 Migration-registry version gates remain because they order supported forward migrations.
+
+## Amendment — 2026-07-30: stored-key freeze retired (issue #1898)
+
+§5's constraint that registry keys are "the exact existing `config.xml` keys (no renames)" is
+superseded. It existed so 4.x code could share a `config.xml` with the 3.2.x package family; the
+settings-family snapshots (`pfb_settings_family_save()` / `pfb_settings_family_replace()`) now
+own that reversibility, so the freeze bought nothing but obsolete spellings.
+
+A registered key's **name** is current domain vocabulary on the same terms as its stored
+**value**: renaming one ships a one-time, atomic, idempotent entry in `pfb_migration_registry()`,
+and after it runs current code reads and writes only the new name — no dual-read, no fallback, no
+shadow copy. A registry entry may now declare a `sections` list instead of a single `section`,
+so a migration spanning several sections persists under one `write_config()`.
+
+The gateway itself, the field adapters, canonical current storage, ordered forward migrations,
+legacy *token* reads needed by supported upgrades, and grandfathering are all unchanged.
+
+Issue #1898 applied this to the 14 compatibility-only names it inventoried (the dead-Alexa TOP1M
+cluster and ADR-66 §2.1/§2.2's TLD families) and added `pfb_registered_scalars_seed()`, which
+materialises every registered scalar still absent at its registered default — so a key being
+absent afterwards means "this install has not run the seed", never a third semantic state. A
+future grandfather therefore decides from the stored *value* or a dedicated one-shot marker, never
+from key absence. Contract: `docs/misc/config-gateway.md` → "Stored-key vocabulary (issue #1898)".
