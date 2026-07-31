@@ -12410,9 +12410,6 @@ function pfb_download_http_headers(array $extra_headers, string $conditional_hea
 //
 // Only NULL/absent means "no credential" here: unlike the `?: ''` this replaces, a literal "0"
 // credential is reported faithfully rather than blanked. That is this helper's contract only --
-// pfb_download() still gates CURLOPT_USERPWD on !empty(), which drops a "0" credential before
-// curl either way, so no request on the wire changes (issue #1909).
-//
 // $feed: one $pfb['extras'] entry. $maxmind_account/$maxmind_key: the settings' MaxMind
 //   credentials, already coerced to strings by pfb_global().
 // @return array{0: string, 1: string} the username and password to download this feed with.
@@ -12732,7 +12729,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					}
 				}
 
-				if (!empty($username) && !empty($password)) {
+				if (!pfb_is_empty($username) || !pfb_is_empty($password)) {
 					curl_setopt($ch, CURLOPT_USERPWD, "{$username}:{$password}");
 					curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
 				}
