@@ -1258,6 +1258,12 @@ final class CfgGatewayTest extends TestCase
 			'pfb_regex_cap',
 			'pfb_cname',
 			'tld_allow',
+			// issue #1921: TLD Allow sort + bucket scalars (renamed from pfb_pytld* by #1898).
+			'tld_allow_sort',
+			'tld_allow_gtld',
+			'tld_allow_cctld',
+			'tld_allow_itld',
+			'tld_allow_bgtld',
 			'pfb_py_nolog',
 			'pfb_noaaaa',
 			'pfb_noaaaa_list',
