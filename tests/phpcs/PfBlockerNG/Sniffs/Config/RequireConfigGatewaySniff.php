@@ -186,6 +186,12 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_cap',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cname',
 		'installedpackages/pfblockerngdnsblsettings/config/0/tld_allow',
+		// issue #1921: TLD Allow sort + bucket scalars (renamed from pfb_pytld* by #1898).
+		'installedpackages/pfblockerngdnsblsettings/config/0/tld_allow_sort',
+		'installedpackages/pfblockerngdnsblsettings/config/0/tld_allow_gtld',
+		'installedpackages/pfblockerngdnsblsettings/config/0/tld_allow_cctld',
+		'installedpackages/pfblockerngdnsblsettings/config/0/tld_allow_itld',
+		'installedpackages/pfblockerngdnsblsettings/config/0/tld_allow_bgtld',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_nolog',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_noaaaa',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_noaaaa_list',

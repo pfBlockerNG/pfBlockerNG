@@ -185,6 +185,12 @@ Authorization is a property of the **write**, not the call site (the
 When adding a registered key, also add its full path to the `$registeredPaths` property in
 `tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php` (the enforcement sniff).
 
+`tld_allow_sort` and `tld_allow_{gtld,cctld,itld,bgtld}` are plain registered scalars (`NULL`/
+`NULL` adapters) since issue #1921 — they were previously on the foreign-key exclusion list
+below. They still stay legal on `pfblockerng_dnsbl.php`'s direct section-blob read/write (the
+gateway does not require every registered field to move its consumers in the same step); the
+registration exists for `old_name` parity with the rest of the `pfb_pytld*` rename family.
+
 ## Forward-upgrade contract
 
 The gateway preserves existing behaviour while configurations move forward:
@@ -381,7 +387,6 @@ registered path set). Each annotation is committed in the relevant source file.
 | `installedpackages` (bulk blob) | Bulk wizard init write, foreign structure |
 | `pfblockerng{continent}/config/0` | Dynamic per-continent structure |
 | `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope foreign key (ADR-29 §2.5); written directly by `pfblockerng_dnsbl.php`, read via `pfb_dnsbl_webpage()` (issue #713 removed the never-written `dnsblwebpage` registry mis-spelling) |
-| `pfblockerngdnsblsettings/config/0/tld_allow_sort` + `tld_allow_{gtld,cctld,itld,bgtld}` | Unregistered TLD-Allow scalars reached only through the section blob (`$pfb['dconfig']`/`$pfb['dnsblconfig']`), never a per-key `config_*_path`; the bucket keys are built dynamically (`'tld_allow_' . $bucket`). Renamed from the `pfb_pytld*` family by issue #1898 |
 | `pfblockerngdnsbl` / `pfblockernglistsv4/v6` (section-level reads) | Dynamic list sections |
 | `aliases/alias`, `filter/rule`, `system/*`, `interfaces`, `unbound/*` | pfSense core sections |
 
