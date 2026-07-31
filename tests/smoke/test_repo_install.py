@@ -262,6 +262,32 @@ def _ssh_check(vm: SmokeVM, *remote: str, timeout: float = 180.0) -> subprocess.
     return result
 
 
+def _extra_dep_pkgs(pkg_files: list[Path]) -> list[Path]:
+    """The locally built RUN_DEPENDS that must ride along in a guest catalog (issue #1914).
+
+    ``smoke-on-box.sh`` builds any dependency the Netgate repositories do not carry
+    (currently ``py311-charset-normalizer``) and exports their absolute paths as
+    ``SMOKE_DEP_PKGS``; ``scripts/install-pkg.sh`` already consumes it for the direct
+    ``pkg add`` path. A ``file://`` catalog that omits them resolves nothing at
+    ``pkg install`` time — the failure surfaces as "<package> has a missing
+    dependency", pointing at the package rather than at the staging gap.
+
+    Missing paths raise rather than being skipped, mirroring ``install-pkg.sh``'s own
+    ``[ -f "$_dep" ] || exit 1``: a catalog that is silently one package short fails
+    much later and much less legibly.
+    """
+    already = {pkg.name for pkg in pkg_files}
+    extra: list[Path] = []
+    for raw in os.environ.get("SMOKE_DEP_PKGS", "").split():
+        dep = Path(raw)
+        if not dep.is_file():
+            raise RuntimeError(f"SMOKE_DEP_PKGS names a file that does not exist: {dep}")
+        if dep.name not in already:
+            already.add(dep.name)
+            extra.append(dep)
+    return extra
+
+
 def build_guest_repo(vm: SmokeVM, repo_dir: str, pkg_files: list[Path]) -> None:
     """Lay ``pkg_files`` into a fresh ``repo_dir`` on the guest and ``pkg repo`` it.
 
@@ -269,10 +295,14 @@ def build_guest_repo(vm: SmokeVM, repo_dir: str, pkg_files: list[Path]) -> None:
     run on Linux — to turn the dir of ``.pkg`` files into a real catalog
     (``meta.conf`` / ``packagesite.pkg`` / ``data.pkg``). Built with NO signing,
     so the served catalog is NONE-signed (the trust model under test).
+
+    Any locally built RUN_DEPENDS named by ``SMOKE_DEP_PKGS`` is published beside
+    ``pkg_files`` before the catalog is indexed (issue #1914), so an install from the
+    resulting repo can resolve dependencies that exist in no upstream repository.
     """
     _ssh_check(vm, "/bin/rm", "-rf", repo_dir)
     _ssh_check(vm, "/bin/mkdir", "-p", repo_dir)
-    for pkg in pkg_files:
+    for pkg in [*pkg_files, *_extra_dep_pkgs(pkg_files)]:
         _scp_to_guest(vm, pkg, f"{repo_dir}/{pkg.name}")
     # `pkg repo <dir>` with no key argument => an unsigned catalog.
     _ssh_check(vm, "env", "ASSUME_ALWAYS_YES=yes", "pkg", "repo", repo_dir)
