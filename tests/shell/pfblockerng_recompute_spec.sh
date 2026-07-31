@@ -420,6 +420,37 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The contents of file "${pfbdeny}PaddedLower_v4.txt" should equal '198.51.100.76'
 	End
 
+	It 'a 0.0.0.0/0 row never acts as a cumulative dedup pattern: lower-priority disjoint feeds survive, its own alias still ships it, and the drop is logged (issue #1929)'
+		printf '203.0.113.60\n0.0.0.0/0\n' > "${snap}/AllNet_v4.orig"
+		printf '198.51.100.80\n198.51.100.81\n' > "${snap}/LowerA_v4.orig"
+		# a lowest-priority repeat of AllNet's ORDINARY row: proves that row still
+		# reached rec_cumulative -- a bad fix that skips the whole owned file on a
+		# total-range row would leave this repeat undeduped instead of pruned.
+		printf '203.0.113.60\n192.0.2.90\n' > "${snap}/LowerB_v4.orig"
+		printf '%s\n%s\n%s\n' "${snap}/AllNet_v4.orig" "${snap}/LowerA_v4.orig" "${snap}/LowerB_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}AllNet_v4.txt" should equal "$(printf '0.0.0.0/0\n203.0.113.60')"
+		The contents of file "${pfbdeny}LowerA_v4.txt" should equal "$(printf '198.51.100.80\n198.51.100.81')"
+		The contents of file "${pfbdeny}LowerB_v4.txt" should equal '192.0.2.90'
+		The contents of file "$countsfile" should include 'AllNet_v4 2'
+		The contents of file "$countsfile" should include 'LowerA_v4 2'
+		The contents of file "$countsfile" should include 'LowerB_v4 1'
+		The contents of file "${errorlog}" should include 'AllNet_v4'
+	End
+
+	It 'a broad-but-not-total prefix (10.0.0.0/8) still prunes contained lower rows -- the total-range guard never over-matches (issue #1929 negative control)'
+		printf '10.0.0.0/8\n' > "${snap}/Broad_v4.orig"
+		printf '10.1.2.3\n198.51.100.90\n' > "${snap}/UnderBroad_v4.orig"
+		printf '%s\n%s\n' "${snap}/Broad_v4.orig" "${snap}/UnderBroad_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}UnderBroad_v4.txt" should equal '198.51.100.90'
+		The contents of file "$countsfile" should include 'UnderBroad_v4 1'
+	End
+
 	It 'dedups an internal repeat within a single feed snapshot (within-feed dupes, issue #1084 review)'
 		printf '192.0.2.9\n192.0.2.9\n192.0.2.10\n' > "${snap}/DupFeed_v4.orig"
 		printf '%s\n' "${snap}/DupFeed_v4.orig" > "$memberlist"
@@ -557,6 +588,24 @@ Describe 'pfb_recompute() v6 dedup (same Stage A/B/D/E loop, per family)'
 		The contents of file "${pfbdeny}Disjoint_v6.txt" should equal '2001:db8::71'
 		The contents of file "$countsfile" should include 'OnlySpaces_v6 0'
 		The contents of file "$countsfile" should include 'Disjoint_v6 1'
+	End
+
+	It 'a ::/0 row never acts as a cumulative dedup pattern: lower-priority disjoint v6 feeds survive, its own alias still ships it, and the drop is logged (issue #1929)'
+		printf '2001:db8::60\n::/0\n' > "${snap}/AllNet_v6.orig"
+		printf 'fd12:3456::2\n' > "${snap}/LowerA_v6.orig"
+		# a lowest-priority repeat of AllNet's ORDINARY row: proves it still
+		# reached rec_cumulative despite the total-range drop.
+		printf '2001:db8::60\nfd99::7\n' > "${snap}/LowerB_v6.orig"
+		printf '%s\n%s\n%s\n' "${snap}/AllNet_v6.orig" "${snap}/LowerA_v6.orig" "${snap}/LowerB_v6.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v6 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}AllNet_v6.txt" should equal "$(printf '2001:db8::60\n::/0')"
+		The contents of file "${pfbdeny}LowerA_v6.txt" should equal 'fd12:3456::2'
+		The contents of file "${pfbdeny}LowerB_v6.txt" should equal 'fd99::7'
+		The contents of file "$countsfile" should include 'LowerA_v6 1'
+		The contents of file "$countsfile" should include 'LowerB_v6 1'
+		The contents of file "${errorlog}" should include 'AllNet_v6'
 	End
 
 	It 'keeps v4 and v6 masterfile rows separate: a v6 recompute never touches v4 family rows and vice versa'

@@ -969,11 +969,23 @@ pfb_recompute() {
 			# grepcidr with a pattern-free file, which prints NOTHING for -vf (not
 			# "keep everything"): it would wipe every row of every lower-priority
 			# feed sharing this pass.
-			if ! LC_ALL=C awk '{ sub(/\r$/, "") } NF' "${rec_ownedfile}" >> "${rec_cumulative}"; then
+			# issue #1929: a total-range row (0.0.0.0/0, ::/0) as a -vf pattern
+			# MATCHES everything -- the same silent wipe -- so keep it out of the
+			# cumulative stream; it still ships in this alias's own deny file.
+			if ! LC_ALL=C awk -v allnetflag="${rec_scratch}/allnet" '
+				{ sub(/\r$/, "") }
+				!NF { next }
+				$1 == "0.0.0.0/0" || $1 == "::/0" { print > allnetflag; next }
+				{ print }' "${rec_ownedfile}" >> "${rec_cumulative}"; then
 				log="recompute [ ${rec_family} ]: could not extend cumulative dedup stream for [ ${rec_alias} ]; aborting pass, cleaning up partial artifacts"
 				echo "${log}" | tee -a "${errorlog}"
 				pfb_recompute_clean_new
 				return 1
+			fi
+			if [ -s "${rec_scratch}/allnet" ]; then
+				log="recompute [ ${rec_family} ]: dropped total-range row(s) from [ ${rec_alias} ] before cumulative dedup (a 0.0.0.0/0 or ::/0 pattern would empty every lower-priority alias)"
+				echo "${log}" | tee -a "${errorlog}"
+				rm -f "${rec_scratch}/allnet"
 			fi
 		fi
 	done < "${rec_memberlist}"
