@@ -333,19 +333,6 @@
             }
         ]
     },
-    "pfb_alias_delta_mode_install_default": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": [
-            {
-                "name": "gconfig",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            }
-        ]
-    },
     "pfb_alias_entry_count": {
         "returnsRef": false,
         "returnType": "int",
@@ -1653,19 +1640,6 @@
             }
         ]
     },
-    "pfb_dnsbl_lenient_migrate": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": [
-            {
-                "name": "dconfig",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            }
-        ]
-    },
     "pfb_dnsbl_loaded_fingerprint": {
         "returnsRef": false,
         "returnType": "string",
@@ -2951,19 +2925,6 @@
         "returnsRef": false,
         "returnType": "bool",
         "params": []
-    },
-    "pfb_feed_filter_install_default": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": [
-            {
-                "name": "gconfig",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            }
-        ]
     },
     "pfb_feed_host_allowed": {
         "returnsRef": false,
@@ -4735,19 +4696,6 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
-                "default": null
-            }
-        ]
-    },
-    "pfb_keep_migrate": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": [
-            {
-                "name": "gconfig",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
                 "default": null
             }
         ]
@@ -6576,16 +6524,23 @@
             }
         ]
     },
-    "pfb_registered_scalars_seed": {
+    "pfb_registry_pass": {
         "returnsRef": false,
-        "returnType": null,
+        "returnType": "array",
         "params": [
             {
                 "name": "sections",
                 "byRef": false,
                 "variadic": false,
-                "type": null,
+                "type": "array",
                 "default": null
+            },
+            {
+                "name": "registry",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },
@@ -7995,32 +7950,6 @@
         "returnsRef": false,
         "returnType": "string",
         "params": []
-    },
-    "pfb_toggle_empty_preserve_dnsbl": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": [
-            {
-                "name": "dconfig",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            }
-        ]
-    },
-    "pfb_toggle_empty_preserve_gen": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": [
-            {
-                "name": "gconfig",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            }
-        ]
     },
     "pfb_top1m_active_provider": {
         "returnsRef": false,

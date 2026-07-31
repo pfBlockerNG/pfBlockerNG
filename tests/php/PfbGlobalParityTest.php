@@ -63,8 +63,9 @@ final class PfbGlobalParityTest extends TestCase
 	 *
 	 * #281 DEFAULT REPAIR: This is the canonical defect class. The registry default
 	 * is 'on', matching the old ?? 'on' fallback. Both old code and gateway agree.
-	 * The issue #281 migration (pfb_keep_migrate) seeds this into config.xml for
-	 * EXISTING installs; new installs and the runtime both default to 'on'.
+	 * issue #1921's registry pass grandfathers this into config.xml for EXISTING
+	 * installs (gen/pfb_keep's grandfather map); new installs and the runtime both
+	 * default to 'on'.
 	 *
 	 * #484 FIX (merged into PfbToggle by #1887): the GUI stores
 	 * 'off' for unchecked-save — distinguishable from absent (default 'on').
@@ -487,8 +488,8 @@ final class PfbGlobalParityTest extends TestCase
 	 * RESULT: no behaviour change — both old code and gateway agree on 'on'.
 	 *
 	 * The structural fix: the default is now FORMAL (in the registry) instead of
-	 * a scattered per-site ?? fallback. The pfb_keep_migrate() migration seeds
-	 * this into config.xml for existing installs; the runtime default is identical.
+	 * a scattered per-site ?? fallback. issue #1921's registry pass grandfathers this
+	 * into config.xml for existing installs; the runtime default is identical.
 	 *
 	 * #484 FIX (merged into PfbToggle by #1887): the GUI stores
 	 * 'off' for unchecked-save — distinguishable from absent (default 'on'). Current code

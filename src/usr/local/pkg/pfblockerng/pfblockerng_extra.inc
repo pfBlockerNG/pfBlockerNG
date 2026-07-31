@@ -157,7 +157,7 @@ enum PfbIdnMode: string implements PfbStoredEnum
 //   Delta   ('delta')   — ALWAYS forward delta, no large-churn replace fallback.
 //   Replace ('replace') — always full -T replace (pre-ADR-40 behaviour).
 // Absent-default 'auto' reaches only brand-new installs; an existing install is
-// grandfathered to 'replace' at install/upgrade (pfb_alias_delta_mode_install_default()).
+// grandfathered to 'replace' by the registry pass at install/upgrade (issue #1921).
 enum PfbAliasDeltaMode: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
@@ -669,8 +669,8 @@ function pfb_cfg_registry(): array
 		],
 
 		// Internal-address feed-host filter toggle: 'on'|'off'. Default 'on' (new install).
-		// issue #1887: toggle adapter adopted; the #1770 install seed still pins 'off'
-		// once on an already-configured box (see pfb_feed_filter_install_default()).
+		// issue #1887: toggle adapter adopted; the #1770 grandfather still pins 'off'
+		// once on an already-configured box (applied by the registry pass, issue #1921).
 		'gen/pfb_feed_internal_filter' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
@@ -707,8 +707,8 @@ function pfb_cfg_registry(): array
 		// 'auto' = delta for small churn (< ~5%), full replace for initial load / large churn;
 		// 'delta' = ALWAYS forward delta, NO large-churn replace fallback (power-user override);
 		// 'replace' = always full -T replace (pre-ADR-40 behaviour).
-		// Existing installs are grandfather-seeded to 'replace' at install/upgrade
-		// (pfb_alias_delta_mode_install_default); only brand-new installs take the 'auto' default.
+		// Existing installs are grandfather-seeded to 'replace' by the registry pass at
+		// install/upgrade (issue #1921); only brand-new installs take the 'auto' default.
 		'gen/pfb_alias_delta_mode' => [
 			'default'       => 'auto',
 			'read_adapter'  => 'pfb_cfg_alias_delta_mode_read',
@@ -1602,6 +1602,32 @@ final class PfbConfig
 	}
 
 	/**
+	 * Write a whole section array with NO adapter canonicalisation and NO privilege
+	 * check (issue #1921).
+	 *
+	 * writeSectionRaw() (writeSection()/writeSectionSystem()'s shared body) is "raw"
+	 * only with respect to the privilege check -- it still round-trips every
+	 * adapter-bearing registered field present in $data through
+	 * write_adapter(read_adapter(...)). A migration transforms RAW config.xml
+	 * storage: persisting its result through that round-trip would canonicalise a
+	 * still-raw legacy value on a BYSTANDER key (e.g. a stored top1m_source
+	 * 'alexa' the migration never touched) before the registry pass
+	 * (pfb_registry_pass(), issue #1921) gets a chance to see and grandfather it --
+	 * canonicalisation is that pass's job, not a migration's. This method persists
+	 * $data byte-for-byte via config_set_path(), with no adapter involvement at all.
+	 *
+	 * System-context, same no-session contract as writeSystem()/writeSectionSystem()
+	 * (issue #1895) -- for migrations/install/upgrade callers only, never www/.
+	 *
+	 * @param string $section  The full config.xml section path.
+	 * @param array  $data     Section data to persist, byte-identical.
+	 */
+	public static function writeSectionRawSystem(string $section, array $data): void
+	{
+		config_set_path($section, $data);
+	}
+
+	/**
 	 * Delete a whole section (e.g. during package removal / wipe).
 	 *
 	 * Equivalent to config_del_path($section).
@@ -2189,6 +2215,17 @@ function pfb_settings_family_pre_uninstall(): void
 // for a no-op (already migrated / fresh install). The pfblockerng_install.inc driver calls
 // pfb_run_migrations() to execute all entries in registry order; helper bodies are
 // UNCHANGED, this registry only wraps them.
+//
+// issue #1921: the four grandfather/preservation migrations that used to live here
+// (#1887's two '' preservations, ADR-22's lenient seed, issue #281's pfb_keep seed) are
+// folded into pfb_registry_pass() (pfblockerng.inc), the one registry-driven pass the
+// installer runs AFTER this driver. What remains here is genuinely cross-key or
+// per-row work pfb_registry_pass() cannot express: the dynamic per-feed row rename,
+// and two bespoke migrations keyed on ANOTHER field's value (ADR-02, PFBL-03) rather
+// than a simple absent/''-map. write-back MUST stay RAW (writeSectionRawSystem(), not
+// writeSectionSystem()) -- see pfb_run_migrations()'s inline comment: canonicalising a
+// still-raw bystander value here, ahead of the registry pass, would destroy exactly
+// the value that pass needs to grandfather.
 // Tests: tests/php/MigrationRegistryTest.php
 // ---------------------------------------------------------------------------
 
@@ -2207,33 +2244,13 @@ function pfb_settings_family_pre_uninstall(): void
 function pfb_migration_registry(): array
 {
 	$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
-	$gen   = 'installedpackages/pfblockerng/config/0';
 
 	return [
-		// 0. issue #1887: preserve a pre-merge stored '' as the explicit 'off' it meant
-		// on the default-'on' toggles ('' now resolves to the registered default).
-		// MUST RUN FIRST: every later migration's writeSection() write-back rides the
-		// adapters, which canonicalise a still-present '' to the registered default —
-		// destroying the very intent this conversion exists to preserve.
-		[
-			'id'      => 'issue1887-toggle-empty-preserve-gen',
-			'section' => $gen,
-			'apply'   => 'pfb_toggle_empty_preserve_gen',
-			'message' => 'pfBlockerNG: preserve legacy unchecked Keep as explicit off (issue #1887)',
-			'since'   => '3.2.0',
-		],
-		[
-			'id'      => 'issue1887-toggle-empty-preserve-dnsbl',
-			'section' => $dnsbl,
-			'apply'   => 'pfb_toggle_empty_preserve_dnsbl',
-			'message' => 'pfBlockerNG: preserve legacy unchecked IDN malicious-block as explicit off (issue #1887)',
-			'since'   => '4.0.0',
-		],
-		// 1. issue #1898: retire the compatibility-only stored key names. Runs AFTER the
-		// '' preservations above -- they read operator intent out of a legacy stored '',
-		// which this entry's adapter-riding write-back would already have canonicalised
-		// away -- and before the rest. Multi-section ('sections', not 'section'): the
-		// DNSBL settings scalars plus the dynamic per-feed row key.
+		// 0. issue #1898: retire the compatibility-only stored per-row key name. The
+		// scalar-section renames now live as registry 'old_name' slots consumed by
+		// pfb_registry_pass() (issue #1921); this entry keeps only what that pass
+		// cannot reach -- the dynamic per-feed row key. Multi-section ('sections',
+		// not 'section') because the spec still names both affected paths.
 		[
 			'id'       => 'issue1898-legacy-key-rename',
 			'sections' => [$dnsbl, 'installedpackages/pfblockerngdnsbl/config'],
@@ -2241,7 +2258,7 @@ function pfb_migration_registry(): array
 			'message'  => 'pfBlockerNG: retire legacy configuration key names (issue #1898)',
 			'since'    => '3.2.0',
 		],
-		// 2. ADR-02: force DNSBL to python-only mode.
+		// 1. ADR-02: force DNSBL to python-only mode.
 		[
 			'id'      => 'adr02-dnsbl-python-mode',
 			'section' => $dnsbl,
@@ -2249,28 +2266,15 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: migrated DNSBL to Python-only mode',
 			'since'   => '2.0.0',
 		],
-		// 3. PFBL-03: one-time seed of the deprecated legacy DNS-TXT control toggle.
+		// 2. PFBL-03: one-time seed of the deprecated legacy DNS-TXT control toggle --
+		// a cross-key bespoke seed keyed on pfb_control's value, not a simple
+		// absent/''-map, so pfb_registry_pass() cannot express it either
+		// (CfgRegistryGrandfatherGateTest::EXCEPTIONS).
 		[
 			'id'      => 'pfbl03-control-legacy-seed',
 			'section' => $dnsbl,
 			'apply'   => 'pfb_control_legacy_seed',
 			'message' => 'pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)',
-			'since'   => '3.2.0',
-		],
-		// 4. ADR-22: preserve permissive DNSBL scheme parsing for existing installs.
-		[
-			'id'      => 'adr22-dnsbl-lenient',
-			'section' => $dnsbl,
-			'apply'   => 'pfb_dnsbl_lenient_migrate',
-			'message' => 'pfBlockerNG: preserve permissive DNSBL parsing for existing install (ADR-22 migration)',
-			'since'   => '3.2.0',
-		],
-		// 5. Issue #281: seed pfb_keep to preserve settings across pkg upgrade.
-		[
-			'id'      => 'issue281-pfb-keep-seed',
-			'section' => $gen,
-			'apply'   => 'pfb_keep_migrate',
-			'message' => 'pfBlockerNG: preserve settings across upgrade (seed Keep flag, issue #281)',
 			'since'   => '3.2.0',
 		],
 	];
@@ -2300,7 +2304,10 @@ function pfb_run_migrations(): void
 			if ($result !== NULL) {
 				foreach ($result as $section => $data) {
 					// issue #1895: upgrade migrations run with no web session in scope.
-					PfbConfig::writeSectionSystem($section, $data);
+					// issue #1921: RAW write-back -- a migration transforms raw storage;
+					// canonicalising a bystander key here, ahead of pfb_registry_pass(),
+					// would destroy the raw value that pass needs to grandfather.
+					PfbConfig::writeSectionRawSystem($section, $data);
 				}
 				write_config($migration['message']);
 			}
@@ -2310,7 +2317,8 @@ function pfb_run_migrations(): void
 		$result = ($migration['apply'])($cfg);
 		if ($result !== NULL) {
 			// issue #1895: upgrade migrations run with no web session in scope.
-			PfbConfig::writeSectionSystem($migration['section'], $result);
+			// issue #1921: RAW write-back -- see the 'sections' branch above.
+			PfbConfig::writeSectionRawSystem($migration['section'], $result);
 			write_config($migration['message']);
 		}
 	}

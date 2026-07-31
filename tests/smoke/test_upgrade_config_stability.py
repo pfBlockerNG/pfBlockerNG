@@ -10,8 +10,8 @@ TWO CASES:
 
 ``test_pkg_upgrade_preserves_config_values`` — UPGRADE CONTRACT (issue #281)
   Config.xml user settings survive a ``pkg upgrade`` from a prior-release build
-  to the branch build. Proves the pfb_keep_migrate() install-time seed fixes the
-  pre-deinstall hook bug.
+  to the branch build. Proves the install-time registry pass's gen/pfb_keep
+  grandfather (issue #1921) fixes the pre-deinstall hook bug.
 
 ``test_pkg_install_applies_config_migrations`` — INSTALL-TIME MIGRATION CONTRACT
   (issue #795) Proves the three ``pfblockerng_install.inc`` config migrations
@@ -32,11 +32,12 @@ default is 'on' but that default never persists automatically. When the key is a
 the ``!= 'on'`` check is TRUE -> ``pfb_remove_config_settings()`` deletes ALL ~22
 pfBlockerNG config sections -> wholesale config loss on upgrade.
 
-The fix (pfb_keep_migrate + the ?? 'on' runtime default) ensures that:
+The fix (the registry pass's gen/pfb_keep grandfather + the ?? 'on' runtime default,
+issue #1921) ensures that:
 
-  1. The install-time seed (``pfb_keep_migrate``) writes 'on' into config.xml on
-     an existing, already-populated General config section so the pre-deinstall hook
-     finds the key on the NEXT upgrade.
+  1. The install-time registry pass (``pfb_registry_pass()``) writes 'on' into
+     config.xml on an existing, already-populated General config section so the
+     pre-deinstall hook finds the key on the NEXT upgrade.
   2. The runtime default (``?? 'on'`` in ``pfb_global()``) covers the gap between
      installation and the first General-tab save.
 
@@ -47,17 +48,17 @@ WHAT THE CASE PROVES (issue #281 contract):
   to the branch build (``<V>_9``). The test asserts:
 
     (1) BEFORE state: a pre-install General-section seed simulates an existing
-        install (so ``pfb_keep_migrate`` fires without sibling-test help), the
-        LOWER build installs, the DNSBL feed/VIP go live, and ONLY THEN are the
-        canary fields planted and snapshotted. pfb_keep is NOT set by the test
-        (its absence is the bug condition the fix handles) — the install-time
-        seed migration writes pfb_keep='on' automatically and the test asserts it.
-        Canary fields verified before upgrade:
+        install (so the registry pass's gen/pfb_keep grandfather fires without
+        sibling-test help), the LOWER build installs, the DNSBL feed/VIP go live,
+        and ONLY THEN are the canary fields planted and snapshotted. pfb_keep is
+        NOT set by the test (its absence is the bug condition the fix handles) —
+        the install-time registry pass writes pfb_keep='on' automatically and the
+        test asserts it. Canary fields verified before upgrade:
           - ``dnsbl_lenient='on'``    (deliberately package-UNKNOWN key)
           - ``dnsbl_vip_auto='on'``   (deliberately package-UNKNOWN key)
           - ``pfb_dnsbl='on'``        (real control field)
           - ``pfb_idn='on'``          (real registered field, canonical token)
-          - ``pfb_keep='on'``         (seeded by install migration — the fix output)
+          - ``pfb_keep='on'``         (grandfathered by the install-time registry pass — the fix output)
         BEFORE runtime behaviour: a DNSBL-blocked ``unique_domain()`` name returns
         the VIP block shape on-box (proves DNSBL is live before the upgrade).
 
@@ -136,7 +137,7 @@ _SNAPSHOT_FIELDS: list[tuple[str, str]] = [
     (_CFG_DNSBL + "/dnsbl_vip_auto", "on"),  # deliberately package-UNKNOWN key (wholesale-preservation canary)
     (_CFG_DNSBL + "/pfb_dnsbl", "on"),  # real control field (harness sets it too)
     (_CFG_DNSBL + "/pfb_idn", "on"),  # real registered field, canonical stored value
-    (_CFG_GLOBAL + "/pfb_keep", "on"),  # seeded by pfb_keep_migrate (the fix)
+    (_CFG_GLOBAL + "/pfb_keep", "on"),  # grandfathered by the registry pass (issue #1921, the fix)
 ]
 
 # Local feed fixture content used for the DNSBL probe.
@@ -148,16 +149,17 @@ def _seed_existing_install_config(vm: SmokeVM) -> None:
     """Populate the General config section BEFORE the package installs.
 
     Simulates an EXISTING user's box (a populated ``installedpackages/pfblockerng``
-    section) so the install-time ``pfb_keep_migrate`` fires deterministically — its
-    non-empty-section guard treats an empty General section as a fresh install and
-    seeds nothing. Without this pre-seed the test only passed when a sibling repo
-    test had already populated the section (an order dependence, CLAUDE.md
-    "Self-encapsulated — never order-dependent"). pfb_keep is intentionally
-    UNSET — its absence is the exact issue-#281 bug condition the migration
-    handles, and a prior case in this module can leave it 'on' (the keep-gate
-    retains the General section across that case's teardown ``pkg delete``), so
-    without the unset a later case's seed assert would pass on inherited state
-    instead of proving the migration fired.
+    section) so the install-time registry pass's gen/pfb_keep grandfather (issue
+    #1921) fires deterministically — its OLDCFG/NEWCFG mode split treats an empty
+    General section as a fresh install and seeds the plain 'on' default instead
+    (never the ABSENT grandfather value). Without this pre-seed the test only
+    passed when a sibling repo test had already populated the section (an order
+    dependence, CLAUDE.md "Self-encapsulated — never order-dependent"). pfb_keep
+    is intentionally UNSET — its absence is the exact issue-#281 bug condition
+    the grandfather handles, and a prior case in this module can leave it 'on'
+    (the keep-gate retains the General section across that case's teardown
+    ``pkg delete``), so without the unset a later case's seed assert would pass
+    on inherited state instead of proving the grandfather fired.
     """
     snippet = (
         f"$g = config_get_path({h._php_str(_CFG_GLOBAL)}, array());\n"
@@ -258,9 +260,10 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
     before and after ``pkg upgrade`` from the prior-release build to the branch build.
 
     Issue #281: the pre-deinstall hook wipes ALL pfBlockerNG config sections when
-    pfb_keep is absent from config.xml. The fix seeds pfb_keep='on' via
-    pfb_keep_migrate() at install time so the hook is safe on the next upgrade.
-    This test proves the fix works end-to-end on the live VM.
+    pfb_keep is absent from config.xml. The fix grandfathers pfb_keep='on' via
+    the registry pass (``pfb_registry_pass()``, issue #1921) at install time so
+    the hook is safe on the next upgrade. This test proves the fix works
+    end-to-end on the live VM.
 
     NOTE: pfb_keep is intentionally NOT set in _write_representative_config() — its
     absence is the exact bug condition the fix must handle. The test asserts that after
@@ -304,8 +307,8 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
         # ------------------------------------------------------------------ #
 
         # Seed the General section BEFORE the install — simulates an existing
-        # user's box so pfb_keep_migrate's non-empty-section guard fires (no
-        # reliance on a sibling test having populated it first).
+        # user's box so the registry pass's gen/pfb_keep grandfather (issue #1921)
+        # fires (no reliance on a sibling test having populated it first).
         pkg_delete(repo_vm)
         _seed_existing_install_config(repo_vm)
 
@@ -342,13 +345,14 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
         # between here and the upgrade).
         _write_representative_config(repo_vm)
 
-        # Assert the install-time migration seeded pfb_keep='on' into config.xml.
-        # This proves pfb_keep_migrate() ran during install and the fix is in effect.
-        # pfb_keep was NOT written by the seed/canary helpers; only the migration seeds it.
+        # Assert the install-time registry pass grandfathered pfb_keep='on' into config.xml.
+        # This proves pfb_registry_pass() ran during install and the fix is in effect.
+        # pfb_keep was NOT written by the seed/canary helpers; only the registry pass seeds it.
         seeded_keep = h.config_get(repo_vm, _CFG_GLOBAL + "/pfb_keep")
         assert seeded_keep == "on", (
-            f"install-time migration did not seed pfb_keep: got {seeded_keep!r}, expected 'on'. "
-            f"The issue #281 fix (pfb_keep_migrate) did not run or did not write the key."
+            f"install-time registry pass did not grandfather pfb_keep: got {seeded_keep!r}, expected 'on'. "
+            f"The issue #281 fix (the registry pass's gen/pfb_keep grandfather, issue #1921) "
+            f"did not run or did not write the key."
         )
 
         # Snapshot the stored values (BEFORE values — the exact raw strings from config.xml).

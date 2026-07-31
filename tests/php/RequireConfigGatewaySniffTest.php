@@ -46,11 +46,11 @@ use PHPUnit\Framework\TestCase;
  * against, mirroring the real src/usr/local/www/ tree layout:
  *
  *   tests/phpcs/fixtures/usr/local/www/system_write_violation.php — a www/
- *   path calling PfbConfig::writeSystem() / writeSectionSystem(), a
- *   case-varied (pfbconfig::WRITESYSTEM()) call, and three comment-interleaved
- *   shapes (a comment between the class name and '::', one between '::' and
- *   the method name, and one between the method name and '(') — all six MUST
- *   be flagged.
+ *   path calling PfbConfig::writeSystem() / writeSectionSystem() /
+ *   writeSectionRawSystem() (issue #1921), a case-varied
+ *   (pfbconfig::WRITESYSTEM()) call, and three comment-interleaved shapes (a
+ *   comment between the class name and '::', one between '::' and the method
+ *   name, and one between the method name and '(') — all seven MUST be flagged.
  *
  *   tests/phpcs/fixtures/usr/local/www/system_write_compliant.php — the same
  *   www/ path, but PfbConfig::write()/writeSection() (different method),
@@ -264,8 +264,9 @@ final class RequireConfigGatewaySniffTest extends TestCase
 	 *
 	 * tests/phpcs/fixtures/usr/local/www/system_write_violation.php lives at a
 	 * path containing "/usr/local/www/" and calls PfbConfig::writeSystem() /
-	 * PfbConfig::writeSectionSystem(), plus a case-varied
-	 * pfbconfig::WRITESYSTEM() call — every one MUST be flagged.
+	 * PfbConfig::writeSectionSystem() / PfbConfig::writeSectionRawSystem()
+	 * (issue #1921), plus a case-varied pfbconfig::WRITESYSTEM() call — every
+	 * one MUST be flagged.
 	 */
 	public function testFlagsSystemWriteInWww(): void
 	{
@@ -275,10 +276,10 @@ final class RequireConfigGatewaySniffTest extends TestCase
 		);
 
 		$this->assertCount(
-			6,
+			7,
 			$findings,
-			'writeSystem(), writeSectionSystem(), the case-varied call, and all '
-			. 'three comment-interleaved shapes must all be flagged'
+			'writeSystem(), writeSectionSystem(), writeSectionRawSystem(), the case-varied '
+			. 'call, and all three comment-interleaved shapes must all be flagged'
 		);
 
 		$lines = array_column($findings, 'line');
@@ -286,14 +287,15 @@ final class RequireConfigGatewaySniffTest extends TestCase
 
 		// Line 20: PfbConfig::writeSystem(...)
 		// Line 26: PfbConfig::writeSectionSystem(...)
-		// Line 33: pfbconfig::WRITESYSTEM(...) (case variance)
-		// Line 40: PfbConfig/*x*/::writeSystem(...) (comment before '::')
-		// Line 47: PfbConfig::/*x*/writeSystem(...) (comment after '::')
-		// Line 54: PfbConfig::writeSystem/*x*/(...) (comment before '(')
+		// Line 32: PfbConfig::writeSectionRawSystem(...) (issue #1921)
+		// Line 39: pfbconfig::WRITESYSTEM(...) (case variance)
+		// Line 46: PfbConfig/*x*/::writeSystem(...) (comment before '::')
+		// Line 53: PfbConfig::/*x*/writeSystem(...) (comment after '::')
+		// Line 60: PfbConfig::writeSystem/*x*/(...) (comment before '(')
 		$this->assertSame(
-			[20, 26, 33, 40, 47, 54],
+			[20, 26, 32, 39, 46, 53, 60],
 			$lines,
-			'findings must land on all six static system-write call lines'
+			'findings must land on all seven static system-write call lines'
 		);
 
 		foreach ($findings as $finding) {

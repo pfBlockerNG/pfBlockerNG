@@ -264,30 +264,12 @@ final class CfgRegistryGrandfatherGateTest extends TestCase
 			"the multiset of registry 'old_name' values must equal the 13 retired scalar spellings exactly, once each"
 		);
 
-		// Cross-check while PFB_LEGACY_KEY_RENAMES still exists: every non-'rows' old->new
-		// pair corresponds to a registry entry 'dnsbl/<new>' carrying 'old_name' => <old>.
-		$scalar_renames_checked = 0;
-		foreach (PFB_LEGACY_KEY_RENAMES as $rename_set) {
-			if (!empty($rename_set['rows'])) {
-				continue;
-			}
-			foreach ($rename_set['keys'] as $old => $new) {
-				$path_key = 'dnsbl/' . $new;
-				$this->assertArrayHasKey($path_key, $registry,
-					"PFB_LEGACY_KEY_RENAMES pair '{$old}' -> '{$new}' must have a registry entry '{$path_key}'"
-				);
-				$this->assertArrayHasKey('old_name', $registry[$path_key],
-					"registry entry '{$path_key}' must carry 'old_name' for renamed key '{$new}'"
-				);
-				$this->assertSame($old, $registry[$path_key]['old_name'],
-					"registry entry '{$path_key}''s old_name must be '{$old}'"
-				);
-				$scalar_renames_checked++;
-			}
-		}
-		$this->assertGreaterThan(0, $scalar_renames_checked,
-			'PFB_LEGACY_KEY_RENAMES must have exercised at least one scalar rename (vacuity guard)'
-		);
+		// issue #1921: PFB_LEGACY_KEY_RENAMES no longer carries the scalar-section rows
+		// at all -- they moved here, to the registry's own 'old_name' slots, consumed by
+		// pfb_registry_pass() (see RegistryPassTest rows 11-16). What remains in
+		// PFB_LEGACY_KEY_RENAMES is only the dynamic per-feed row rename
+		// (LegacyKeyRenameMigrationTest::testRenameMapIsExactlyTheAuditedRow pins that
+		// shape); there is no longer a scalar cross-check to run against it here.
 	}
 
 	// -----------------------------------------------------------------------

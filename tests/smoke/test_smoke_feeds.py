@@ -1006,29 +1006,30 @@ def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM, client_vm:
 
 @pytest.mark.timeout(300)
 def test_migration_sets_lenient_on_for_existing_install(deployed_vm: SmokeVM) -> None:
-    """ADR-22 §2.2 migration on the live box: an existing install lacking the key -> 'on'.
+    """ADR-22 §2.2 grandfather on the live box: an existing install lacking the key -> 'on'.
 
-    Proves the SHIPPED migration decision (``pfb_dnsbl_lenient_migrate``, pfblockerng.inc)
-    against the REAL on-box config store — exactly the two-line body the upgrade hook in
-    pfblockerng_install.inc runs: read the DNSBL-settings section, run the migration, and
-    if it returns a (changed) array, persist it. An EXISTING install is one with a
-    populated DNSBL config section that merely lacks ``pfb_dnsbl_lenient``; the migration
-    must set it to 'on' (preserving the legacy permissive behaviour), never overwriting a
-    present value.
+    Proves the SHIPPED grandfather decision (issue #1921's ``pfb_registry_pass()``,
+    pfblockerng.inc) against the REAL on-box config store: read the DNSBL-settings
+    section, run the registry pass over just that section, and if it returns a
+    (changed) section, persist it. An EXISTING (OLDCFG) install is one with a
+    populated DNSBL config section that merely lacks ``pfb_dnsbl_lenient``; the pass
+    must set it to 'on' (preserving the legacy permissive behaviour), never
+    overwriting a present value.
 
     Given the live DNSBL-settings section is populated (it always is on the deployed box —
       pfb_dnsbl etc. are set) and ``pfb_dnsbl_lenient`` is REMOVED (the upgrade-from-an-
       older-version state) — asserted absent as the before-state,
-    When  the shipped ``pfb_dnsbl_lenient_migrate`` runs against that section and the
+    When  the shipped ``pfb_registry_pass()`` runs against that section and the
       result is persisted (the install-hook body),
     Then  the live config now reads ``pfb_dnsbl_lenient == 'on'``.
 
     NOTE (out-of-CI limitation): the FULL ``pfblockerng_install.inc`` require-flow (which
-    also runs the unrelated VIP / python-mode / PFBL-03 migrations) is not driven end to
-    end here — that would re-run every install side effect on the live box. This case
-    drives the migration FUNCTION the hook calls, against the live config store, which is
-    the load-bearing ADR-22 behaviour; the surrounding hook plumbing is identical to the
-    in-tree PHPUnit migration coverage (PfbDnsblLenientMigrateTest).
+    also runs the unrelated VIP / python-mode / PFBL-03 migrations, plus the registry
+    pass over every OTHER section) is not driven end to end here — that would re-run
+    every install side effect on the live box. This case drives the registry-pass
+    FUNCTION the hook calls, scoped to just the DNSBL section, against the live config
+    store, which is the load-bearing ADR-22 behaviour; the surrounding hook plumbing is
+    identical to the in-tree PHPUnit coverage (RegistryPassTest row 7).
     """
     sentinel_open = "<<<LENIENT>>>"
     sentinel_close = "<<<END>>>"
@@ -1040,38 +1041,40 @@ def test_migration_sets_lenient_on_for_existing_install(deployed_vm: SmokeVM) ->
         "$d['pfb_dnsbl'] = 'on';\n"  # ensure the section is populated (an existing install)
         "unset($d['pfb_dnsbl_lenient']);\n"
         f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, $d);\n"
-        "write_config('pfBlockerNG smoke: ADR-22 migration before-state');\n"
+        "write_config('pfBlockerNG smoke: ADR-22 grandfather before-state');\n"
         "echo 'OK';"
     )
     res = h.php_eval(deployed_vm, remove)
-    assert "OK" in res.stdout, f"could not stage the migration before-state: {res.stdout!r} {res.stderr!r}"
+    assert "OK" in res.stdout, f"could not stage the grandfather before-state: {res.stdout!r} {res.stderr!r}"
     assert h.config_get(deployed_vm, h.CFG_DNSBL_SETTINGS + "/pfb_dnsbl_lenient") == "", (
-        "pfb_dnsbl_lenient should be ABSENT (empty) before the migration runs"
+        "pfb_dnsbl_lenient should be ABSENT (empty) before the registry pass runs"
     )
 
     try:
-        # WHEN: run the SHIPPED migration function (the install-hook body) against the live
-        # config and persist the (changed) result.
+        # WHEN: run the SHIPPED registry pass (the install-hook body), scoped to just the
+        # DNSBL section, against the live config and persist the (changed) result.
         migrate = (
             "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
-            f"$cfg = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"
-            "$out = pfb_dnsbl_lenient_migrate($cfg);\n"
+            f"$section = {h._php_str(h.CFG_DNSBL_SETTINGS)};\n"
+            "$cfg = config_get_path($section, array());\n"
+            "$result = pfb_registry_pass(array($section => $cfg));\n"
+            "$out = array_key_exists($section, $result) ? $result[$section] : NULL;\n"
             "if ($out !== NULL) {\n"
-            f"  config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, $out);\n"
-            "  write_config('pfBlockerNG: ADR-22 migration (smoke)');\n"
+            "  config_set_path($section, $out);\n"
+            "  write_config('pfBlockerNG: registry pass (smoke)');\n"
             "}\n"
             f"echo {h._php_str(sentinel_open)} . ($out === NULL ? 'NULL' : 'SET') . {h._php_str(sentinel_close)};"
         )
         res = h.php_eval(deployed_vm, migrate)
-        assert sentinel_open in res.stdout, f"migration eval produced no sentinel: {res.stdout!r} {res.stderr!r}"
+        assert sentinel_open in res.stdout, f"registry pass eval produced no sentinel: {res.stdout!r} {res.stderr!r}"
         verdict = res.stdout[res.stdout.find(sentinel_open) + len(sentinel_open) : res.stdout.find(sentinel_close)]
-        assert verdict == "SET", f"migration should SET the missing key (returned {verdict})"
+        assert verdict == "SET", f"registry pass should SET the changed section (returned {verdict})"
 
         # THEN: the live config now carries pfb_dnsbl_lenient == 'on'.
         after = h.config_get(deployed_vm, h.CFG_DNSBL_SETTINGS + "/pfb_dnsbl_lenient")
-        assert after == "on", f"migration must set pfb_dnsbl_lenient='on' for an existing install, got {after!r}"
+        assert after == "on", f"registry pass must set pfb_dnsbl_lenient='on' for an existing install, got {after!r}"
     finally:
-        # Restore the harness default (lenient ON) — same value the migration set, but make
+        # Restore the harness default (lenient ON) — same value the pass set, but make
         # the cleanup explicit + independent of the assertion above.
         h.set_dnsbl_lenient(deployed_vm, True)
 
