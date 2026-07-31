@@ -324,6 +324,7 @@ if (!function_exists('config_set_path')) {
 	// pfSense config.lib.inc: set the value at a '/'-separated path (creating
 	// intermediate arrays), returning the value set.
 	function config_set_path(string $path, $value, $default = null) {
+		$append = ($path !== '' && str_ends_with($path, '/'));
 		$node = &$GLOBALS['config'];
 		if (!is_array($node)) {
 			$node = [];
@@ -337,7 +338,11 @@ if (!function_exists('config_set_path')) {
 			}
 			$node = &$node[$key];
 		}
-		$node = $value;
+		if ($append) {
+			$node[] = $value;
+		} else {
+			$node = $value;
+		}
 		return $value;
 	}
 }
