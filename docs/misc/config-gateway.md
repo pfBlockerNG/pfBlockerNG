@@ -17,6 +17,14 @@ exclusions.
   `config_*_path` on a registered key (enforced by the
   `PfBlockerNG.Config.RequireConfigGateway` sniff; adding a registered key ⇒ also add it to
   the sniff's `$registeredPaths`).
+- **Path addressing (issue #1931):** registry keys are `'<alias>/<config-key>'` path
+  strings — `'gen/pfb_keep'`, `'ip/suppression'` — with the alias resolved through the
+  `PFB_SECTIONS` map (`gen`/`dnsbl`/`ss`/`ip`/`rep`), the single home of the five real
+  section paths. Same-named keys in different sections cannot collide, and bare-name
+  lookups throw (`InvalidArgumentException`) — no dual addressing. Entries carry no
+  `section` attribute; a key prefix outside `PFB_SECTIONS` fails `CfgGatewayTest`'s
+  alias gate, and the pre-change tuple parity is pinned by
+  `tests/php/fixtures/cfg_registry_pre1931_parity.json`.
 - Section helpers (`readSection`/`writeSection`/`deleteSection`) for whole-section,
   non-per-field access. Unregistered key → `InvalidArgumentException`.
 - **No `write_config()` inside the gateway** — the caller decides when to flush. The registry
@@ -162,8 +170,9 @@ Authorization is a property of the **write**, not the call site (the
 
 ## Adding a new registered field
 
-1. Add an entry to `pfb_cfg_registry()` with the exact `config.xml` key, its section path,
-   the default stored string, and the adapter pair (or `NULL`/`NULL` for plain string).
+1. Add an entry to `pfb_cfg_registry()` keyed `'<alias>/<config-key>'` (alias from
+   `PFB_SECTIONS`; the config-key part is the exact `config.xml` key), with the default
+   stored string and the adapter pair (or `NULL`/`NULL` for plain string).
    Giving an EXISTING field an adapter changes what `read()` returns for it (enum, not
    string), so every consumer of that field moves in the same commit — a stale string
    comparison against the enum fails silently in the always-false direction (issue #1887).
@@ -293,15 +302,16 @@ called from `pfblockerng_install.inc` **after** the migration driver *and* after
 end of that file, so a seed inside the migration registry would materialise the registry default
 first and permanently disarm both. It rides the installer's trailing `write_config()`.
 
-`PFB_SCALAR_SEED_EXCLUDED` holds the five keys whose **literal absence** some consumer still
-reads as a distinct state, so materialising them would change behaviour on the way to making
-storage explicit:
+`PFB_SCALAR_SEED_EXCLUDED` holds the six keys (path-form, issue #1931) whose **literal
+absence** some consumer still reads as a distinct state, so materialising them would change
+behaviour on the way to making storage explicit:
 
 | Key | Why absence is load-bearing |
 | --- | --- |
-| `settings_family` | The installer's own schema marker, not operator configuration — the same reason `pfb_gconfig_operator_view()` strips it (#1770/#1771/#1775). |
-| `v4suppression` | `pfblockerng_install.inc`'s ADR-53 `pfBlockerNGSuppress` alias conversion is gated on "never migrated" (absent) versus "present but empty". |
-| `pfb_cache`, `pfb_py_reply`, `pfb_hsts` | `pfblockerng_dnsbl.php` renders these CHECKED while the key is absent (`isset(…) ? … : 'on'`) although the registered default is `''`. Seeding `''` would flip the first-open rendering, and so what a first save stores. That page/registry divergence is **issue #1907**; these three join the pass when it is resolved. |
+| `gen/settings_family` | The installer's own schema marker, not operator configuration — the same reason `pfb_gconfig_operator_view()` strips it (#1770/#1771/#1775). |
+| `ip/v4suppression` | `pfblockerng_install.inc`'s ADR-53 `pfBlockerNGSuppress` alias conversion is gated on "never migrated" (absent) versus "present but empty". |
+| `dnsbl/pfb_cache`, `dnsbl/pfb_py_reply`, `dnsbl/pfb_hsts` | `pfblockerng_dnsbl.php` renders these CHECKED while the key is absent (`isset(…) ? … : 'on'`) although the registered default is `''`. Seeding `''` would flip the first-open rendering, and so what a first save stores. That page/registry divergence is **issue #1907**; these three join the pass when it is resolved. |
+| `ip/suppression` | Same #1907 class on `pfblockerng_ip.php` (renders checked while absent, registered default `''`). Registered by issue #1931 once path addressing removed its name collision with the DNSBL `dnsbl/suppression` whitelist blob; its `'on'` default + grandfather decision is deferred to #1921. |
 
 Nothing else needs excluding — under the issue #1887 `''` ≡ absent identity, seeding a
 `''`-default field (a credential, a base64 blob, an interface multi-select) stores exactly the
