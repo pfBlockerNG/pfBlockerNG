@@ -10623,7 +10623,7 @@ function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, PfbToggle $supp): array
 	// An explicit /0 covers the entire IPv4 space and is never honored from a
 	// downloaded feed: clamp to a single host so the address itself stays
 	// blocked (issue #744). Custom-list entries are user-authored, so /0 is
-	// kept as written — except on 0.0.0.0, rejected below (issue #1922).
+	// kept as written — except 0.x.x.x, rejected below (issue #1922).
 	if ($mask !== '' && (int)$mask === 0 && !$custom) {
 		// Unlike the v6 sibling, callers reach this before validate_ipv4(), so
 		// $ipaddr is raw feed text — strip control chars to keep the log clean.
