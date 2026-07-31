@@ -300,9 +300,13 @@ def build_guest_repo(vm: SmokeVM, repo_dir: str, pkg_files: list[Path]) -> None:
     ``pkg_files`` before the catalog is indexed (issue #1914), so an install from the
     resulting repo can resolve dependencies that exist in no upstream repository.
     """
+    # Resolve (and validate) the full package set BEFORE touching the guest: the rm -rf
+    # below is destructive, so a bad SMOKE_DEP_PKGS must fail with any existing catalog
+    # still intact rather than wiping it on the way out.
+    staged = [*pkg_files, *_extra_dep_pkgs(pkg_files)]
     _ssh_check(vm, "/bin/rm", "-rf", repo_dir)
     _ssh_check(vm, "/bin/mkdir", "-p", repo_dir)
-    for pkg in [*pkg_files, *_extra_dep_pkgs(pkg_files)]:
+    for pkg in staged:
         _scp_to_guest(vm, pkg, f"{repo_dir}/{pkg.name}")
     # `pkg repo <dir>` with no key argument => an unsigned catalog.
     _ssh_check(vm, "env", "ASSUME_ALWAYS_YES=yes", "pkg", "repo", repo_dir)
