@@ -258,17 +258,32 @@ final class SanitizeIpaddrTest extends TestCase
 	}
 
 	// Custom-list entries are user-authored: an explicit /0 is honored as
-	// written, never clamped or collapsed to a bare host (e.g. 0.0.0.0/0 in a
-	// custom list referenced by a manual firewall rule).
-	public function testCustomListSlashZeroHonored(): void
+	// written, never clamped or collapsed to a bare host — for any address
+	// except 0.0.0.0, which issue #1922 rejects unconditionally (below).
+	public function testCustomListSlashZeroHonoredForNonZeroAddress(): void
 	{
-		$this->assertSame('0.0.0.0/0', sanitize_ipaddr('0.0.0.0/0', true, 'Disabled'));
+		$this->assertSame('10.0.0.0/0', sanitize_ipaddr('10.0.0.0/0', true, 'Disabled'));
 	}
 
-	public function testCustomListSlashZeroHonoredUnderSuppression(): void
+	// issue #1922: 0.0.0.0 is never a valid entry under any mask, suppression
+	// setting, or list type. The former custom-list honor of 0.0.0.0/0
+	// (issue #744) is deliberately reversed.
+	public function testCustomListZeroSlashZeroRejected(): void
+	{
+		$this->assertNull(sanitize_ipaddr('0.0.0.0/0', true, 'Disabled'));
+	}
+
+	public function testCustomListZeroSlashZeroRejectedUnderSuppression(): void
 	{
 		$GLOBALS['pfb']['supp'] = PfbToggle::On;
-		$this->assertSame('0.0.0.0/0', sanitize_ipaddr('0.0.0.0/0', true, 24));
+		$this->assertNull(sanitize_ipaddr('0.0.0.0/0', true, 24));
+	}
+
+	// The first-octet-0 reject is no longer gated on Suppression: 0.x.x.x is
+	// "this network" (RFC 791) and never a valid feed or custom entry.
+	public function testZeroFirstOctetRejectedWithSuppressionOff(): void
+	{
+		$this->assertNull(sanitize_ipaddr('0.1.2.3', true, 'Disabled'));
 	}
 
 	// --- Interplay with the issue #760 documentation-range drop ---------------

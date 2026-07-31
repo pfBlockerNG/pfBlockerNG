@@ -171,10 +171,28 @@ final class SanitizeIpaddrV6Test extends TestCase
 	}
 
 	// Custom-list entries are user-authored: an explicit /0 is honored as
-	// written (::/0 stays ::/0).
-	public function testCustomListSlashZeroHonored(): void
+	// written — for any address except '::', which issue #1922 rejects
+	// unconditionally (below).
+	public function testCustomListSlashZeroHonoredForNonZeroAddress(): void
 	{
-		$this->assertSame('::/0', self::sanitize('::/0', true, supp: 'on'));
+		$this->assertSame('2606:4700:4700::1111/0', self::sanitize('2606:4700:4700::1111/0', true, supp: 'on'));
+	}
+
+	// issue #1922: '::' is never a valid entry under any mask, suppression
+	// setting, or list type — rejected even on a custom list.
+	public function testCustomListAllZerosSlashZeroRejected(): void
+	{
+		$this->assertNull(self::sanitize('::/0', true, supp: 'on'));
+	}
+
+	public function testAllZerosRejectedWithSuppressionOff(): void
+	{
+		$this->assertNull(self::sanitize('::', false));
+	}
+
+	public function testAllZerosWithFullMaskRejected(): void
+	{
+		$this->assertNull(self::sanitize('::/128', true));
 	}
 
 	// --- Suppression CIDR floor (issue #760 §3) -------------------------------

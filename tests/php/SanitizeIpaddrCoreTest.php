@@ -31,11 +31,53 @@ final class SanitizeIpaddrCoreTest extends TestCase
 		);
 	}
 
-	public function testIpv4CoreHonorsCustomSlashZero(): void
+	// issue #1922: 0.0.0.0 is never a valid entry under any mask, suppression
+	// setting, or list type — the reject is unconditional, so even a custom
+	// list's 0.0.0.0/0 (previously honored per issue #744) is dropped.
+	public function testIpv4CoreRejectsZeroAddressEvenOnCustomList(): void
 	{
 		$this->assertSame(
-			['address' => '0.0.0.0/0', 'messages' => []],
+			['address' => NULL, 'messages' => []],
 			pfb_sanitize_ipaddr('0.0.0.0/0', TRUE, 'Disabled', PfbToggle::On)
+		);
+	}
+
+	public function testIpv4CoreRejectsZeroAddressWithSuppressionOff(): void
+	{
+		$this->assertSame(
+			['address' => NULL, 'messages' => []],
+			pfb_sanitize_ipaddr('0.0.0.0', FALSE, 'Disabled', PfbToggle::Off)
+		);
+	}
+
+	// issue #1922: the v6 sibling — '::' rejected under any mask, suppression
+	// setting, or list type.
+	public function testIpv6CoreRejectsAllZerosEvenOnCustomList(): void
+	{
+		$this->assertSame(
+			['address' => NULL, 'messages' => []],
+			pfb_sanitize_ipaddr_v6('::/0', TRUE, 'Disabled', PfbToggle::On)
+		);
+	}
+
+	public function testIpv6CoreRejectsAllZerosWithSuppressionOff(): void
+	{
+		$this->assertSame(
+			['address' => NULL, 'messages' => []],
+			pfb_sanitize_ipaddr_v6('::', FALSE, 'Disabled', PfbToggle::Off)
+		);
+	}
+
+	// A feed's ::/0 still logs the issue #744 clamp before the unconditional
+	// reject drops the row — the clamp message is not silently lost.
+	public function testIpv6CoreFeedZeroSlashZeroKeepsClampMessageBeforeReject(): void
+	{
+		$this->assertSame(
+			[
+				'address' => NULL,
+				'messages' => ["\n  Feed /0 CIDR clamped to single host: ::/0"],
+			],
+			pfb_sanitize_ipaddr_v6('::/0', FALSE, 'Disabled', PfbToggle::Off)
 		);
 	}
 
