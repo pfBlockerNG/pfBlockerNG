@@ -187,7 +187,31 @@ The gateway preserves existing behaviour while configurations move forward:
   through one shared helper, so a stored `''` can never mean different things to the read and
   the normalising write paths.
 - **Grandfather invariant**: when an absent current default would change established behaviour,
-  the install/upgrade path writes a one-time seed for existing installations.
+  the install/upgrade path writes a one-time seed for existing installations. **The trigger is
+  "did the behaviour this field controls change for someone upgrading?", never "did this key
+  exist before?"** — a field introduced in 4.0 to make previously *hardcoded* behaviour
+  configurable is the highest-risk case, not a safe one, because its new-install default is
+  chosen for new installs while every upgrader was living under the old hardcoded behaviour.
+  All three of these are new 4.0 fields, and all three needed a grandfather:
+
+  | Field | Pre-4.0 behaviour | New-install default | Grandfathered value |
+  | --- | --- | --- | --- |
+  | `pfb_dnsbl_lenient` (ADR-22) | permissive scheme parsing, hardcoded | `off` (strict) | `on` |
+  | `pfb_alias_delta_mode` (ADR-40) | always full `-T replace` | `auto` | `replace` |
+  | `pfb_feed_internal_filter` (#1770) | no feed-host filtering | `on` | `off` |
+
+  **Ordering — grandfather before seed, always.** `pfb_registered_scalars_seed()` (issue #1898)
+  materialises every still-absent registered scalar at its default, after which an explicit
+  operator setting and a seeded default are indistinguishable in `config.xml` and a grandfather
+  has nothing left to key on. Every grandfather therefore runs earlier — the migration-registry
+  entries, then `pfblockerng_install.inc`'s install-default helpers, then the seed. Pinned by
+  `LegacyKeyRenameMigrationTest::testSeedRunsAfterMigrationsAndBothInstallDefaultGrandfathers`.
+
+  **A grandfather running after the key rename** (the #1898 entry sits before them) is fine, but
+  must target the **current** key name, and must skip a field whose retired name is still
+  stored — the rename is all-or-nothing, so one conflicting pair leaves other keys under their
+  old names and a bare `!isset($new_key)` would fire against an operator who does have a value.
+  `pfb_registered_scalars_seed()` carries exactly this guard; copy it.
 - **Canonical-write invariant**: current code writes the current canonical representation.
 - **Canonical-name invariant** (issue #1898): a registered key's *name* is the current domain
   vocabulary too, not a frozen historical spelling. Renaming one ships a one-time post-install
