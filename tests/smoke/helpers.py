@@ -2104,7 +2104,7 @@ def set_feed_sanity(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     value = "PfbToggle::On" if on else "PfbToggle::Off"
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        f"PfbConfig::write('pfb_feed_sanity', {value});\n"
+        f"PfbConfig::write('gen/pfb_feed_sanity', {value});\n"
         "write_config('pfBlockerNG smoke: set pfb_feed_sanity');\n"
         "echo 'OK';"
     )

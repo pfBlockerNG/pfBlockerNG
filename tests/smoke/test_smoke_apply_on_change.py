@@ -126,7 +126,7 @@ def _set_quiet_hours(vm: SmokeVM, window: str) -> None:
     # Use the config gateway rather than direct xml munging.
     snippet = (
         f"require_once('{_PFB_EXTRA}');"
-        f"PfbConfig::write('pfb_quiet_hours', {json.dumps(window)});"
+        f"PfbConfig::write('gen/pfb_quiet_hours', {json.dumps(window)});"
         "write_config('ADR-43 smoke: set quiet-hours');"
         "echo 'OK';"
     )

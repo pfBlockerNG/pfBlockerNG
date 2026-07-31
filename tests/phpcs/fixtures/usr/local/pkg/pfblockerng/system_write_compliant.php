@@ -15,7 +15,7 @@
 function pfb_pkg_writesystem_system_caller()
 {
 	// System-context caller (e.g. cron/install) — legitimate, must stay silent.
-	PfbConfig::writeSystem('pfb_keep', '30');
+	PfbConfig::writeSystem('gen/pfb_keep', '30');
 }
 
 function pfb_pkg_writesectionsystem_system_caller()

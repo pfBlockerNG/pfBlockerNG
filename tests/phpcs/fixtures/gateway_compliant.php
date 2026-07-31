@@ -44,8 +44,8 @@ function pfb_gateway_compliant_v4suppression_via_gateway()
 	// ADR-53: v4suppression is registered — access via PfbConfig::read/write, never
 	// raw config_get_path/config_set_path. Neither call here is one of the sniff's
 	// gated function names, so this stays silent regardless of the key.
-	$v4 = PfbConfig::read('v4suppression');
-	PfbConfig::write('v4suppression', $v4);
+	$v4 = PfbConfig::read('ip/v4suppression');
+	PfbConfig::write('ip/v4suppression', $v4);
 
 	return $v4;
 }
