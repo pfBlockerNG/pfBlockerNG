@@ -2928,16 +2928,16 @@ function pfb_global() {
 	$pfb['blconfig']	= config_get_path('installedpackages/pfblockerngblacklist', []);
 	$pfb['config_global']	= config_get_path('installedpackages/pfblockerngglobal', []);
 
-	$pfb['enable']		= PfbConfig::read('enable_cb');		// Enable/Disable of pfBlockerNG
-	$pfb['keep']		= PfbConfig::read('pfb_keep');		// Keep blocklists on pfBlockerNG Disable (default ON via registry; #281)
-	$pfb['interval']	= PfbConfig::read('pfb_interval')	?: '1';	// Hour cycle for scheduler
+	$pfb['enable']		= PfbConfig::read('gen/enable_cb');		// Enable/Disable of pfBlockerNG
+	$pfb['keep']		= PfbConfig::read('gen/pfb_keep');		// Keep blocklists on pfBlockerNG Disable (default ON via registry; #281)
+	$pfb['interval']	= PfbConfig::read('gen/pfb_interval')	?: '1';	// Hour cycle for scheduler
 
 	// ADR-11: opt-in per-type aggregate ("Uber") aliases. CSV scalar of the action types
 	// to aggregate (subset of Deny/Permit/Match/Native), default NONE -> [] -> no-op pass.
 	// CSV (a single string, like blacklist_selected) so it round-trips with no '<0>' list XML.
 	$pfb['agg_types']	= array_values(array_intersect(
 					array('Deny', 'Permit', 'Match', 'Native'),
-					array_filter(explode(',', PfbConfig::read('pfb_agg_types')))));
+					array_filter(explode(',', PfbConfig::read('gen/pfb_agg_types')))));
 
 	// Validate Cron settings
 	if (!is_numeric($pfb['interval'])) {
@@ -2966,12 +2966,12 @@ function pfb_global() {
 	$pfb['maxmind_account']	= pfb_filter($pfb['ipconfig']['maxmind_account'], PFB_FILTER_WORD, 'pfb_global')	?: '';		// Maxmind Account ID
 	$pfb['maxmind_key']	= pfb_filter($pfb['ipconfig']['maxmind_key'], PFB_FILTER_WORD, 'maxmind_key')		?: '';		// Maxmind License Key (issue #924: log-safe reference -- a rejected key is never logged on this consumer path either)
 
-	$pfb['dnsbl']		= PfbConfig::read('pfb_dnsbl');							// Enabled state of DNSBL
-	$pfb['dnsbl_vip_auto']	= PfbConfig::read('pfb_dnsvip_auto');						// [ ADR-13 ] Auto-create/remove the DNSBL sinkhole VIP(s) (default off)
-	$pfb['dnsbl_nonat']	= PfbConfig::read('pfb_dnsbl_nonat');						// [ #381 ] Opt out of automatic DNSBL NAT rule generation (default off)
+	$pfb['dnsbl']		= PfbConfig::read('dnsbl/pfb_dnsbl');							// Enabled state of DNSBL
+	$pfb['dnsbl_vip_auto']	= PfbConfig::read('dnsbl/pfb_dnsvip_auto');						// [ ADR-13 ] Auto-create/remove the DNSBL sinkhole VIP(s) (default off)
+	$pfb['dnsbl_nonat']	= PfbConfig::read('dnsbl/pfb_dnsbl_nonat');						// [ #381 ] Opt out of automatic DNSBL NAT rule generation (default off)
 	$pfb['dnsbl_vip4'] = get_configured_vip_ipv4($pfb['dnsblconfig']['pfb_dnsvip4']) ?? '';
 	$pfb['dnsbl_vip6'] = get_configured_vip_ipv6($pfb['dnsblconfig']['pfb_dnsvip6']) ?? '';
-	$pfb['dnsbl_iface']	= PfbConfig::read('dnsbl_interface');							// VIP Local Interface setting (default 'lo0')
+	$pfb['dnsbl_iface']	= PfbConfig::read('dnsbl/dnsbl_interface');							// VIP Local Interface setting (default 'lo0')
 	if ($pfb['dnsbl'] === PfbToggle::On) {
 		// VIP validation: force-disable DNSBL on a genuinely invalid/missing/overlapping
 		// VIP — UNLESS auto-create mode is active, in which case pfb_manage_dnsbl_vip()
@@ -3007,27 +3007,27 @@ function pfb_global() {
 	$pfb['dnsbl_port']	= $pfb['dnsblconfig']['pfb_dnsport'];									// Lighttpd web server http port setting
 	$pfb['dnsbl_port_ssl']	= $pfb['dnsblconfig']['pfb_dnsport_ssl'];								// Lighttpd web server https port setting
 	$pfb['dnsbl_top1m']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['top1m_enable'] ?? '');							// TOP1M whitelist
-	$pfb['dnsbl_top1m_type']	= PfbConfig::read('top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
+	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_res_cache']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cache'] ?? '');							// DNSBL Option to backup/restore Resolver cache
-	$pfb['dnsbl_cache_flush']	= PfbConfig::read('pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
-	$pfb['dnsbl_global_log']= PfbConfig::read('global_log');							// Global Logging/Blocking mode (default '')
+	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
+	$pfb['dnsbl_global_log']= PfbConfig::read('dnsbl/global_log');							// Global Logging/Blocking mode (default '')
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
 	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
 	// (strict); existing installs are migrated to 'on' on upgrade (pfb_dnsbl_lenient_migrate).
-	$pfb['dnsbl_lenient']	= PfbConfig::read('pfb_dnsbl_lenient');							// DNSBL scheme-parsing leniency (PfbToggle enum)
+	$pfb['dnsbl_lenient']	= PfbConfig::read('dnsbl/pfb_dnsbl_lenient');							// DNSBL scheme-parsing leniency (PfbToggle enum)
 
 	$pfb['dnsbl_py_reply']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_reply'] ?? '');			// DNSBL Resolver python DNS Reply logging
-	$pfb['dnsbl_hsts']	= PfbConfig::read('pfb_hsts');			// DNSBL Resolver python block HSTS via Null Blocking mode
+	$pfb['dnsbl_hsts']	= PfbConfig::read('dnsbl/pfb_hsts');			// DNSBL Resolver python block HSTS via Null Blocking mode
 	// ADR-08: IDN mode selector. PfbConfig::read() returns a PfbIdnMode enum via the
 	// registry adapter: 'on' -> All (preserves block-all-IDN on upgrade); 'confusable'
 	// -> Confusable; '' / 'off' / absent / the dropped 4.0.0-alpha 'all' -> Off. Downstream
 	// consumers compare against the enum; the ini build serialises the canonical token.
-	$pfb['dnsbl_idn']	= PfbConfig::read('pfb_idn');				// DNSBL Resolver python IDN mode (PfbIdnMode enum)
-	$pfb['dnsbl_idn_block_malicious']	= PfbConfig::read('pfb_idn_block_malicious');		// Confusable: block malicious homoglyphs (default 'on')
-	$pfb['dnsbl_idn_escalate_suspicious']	= PfbConfig::read('pfb_idn_escalate_suspicious');	// Confusable: escalate suspicious mixed-script to block (opt-in)
+	$pfb['dnsbl_idn']	= PfbConfig::read('dnsbl/pfb_idn');				// DNSBL Resolver python IDN mode (PfbIdnMode enum)
+	$pfb['dnsbl_idn_block_malicious']	= PfbConfig::read('dnsbl/pfb_idn_block_malicious');		// Confusable: block malicious homoglyphs (default 'on')
+	$pfb['dnsbl_idn_escalate_suspicious']	= PfbConfig::read('dnsbl/pfb_idn_escalate_suspicious');	// Confusable: escalate suspicious mixed-script to block (opt-in)
 	$pfb['dnsbl_regex']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_regex'] ?? '');			// DNSBL Resolver python regex
 	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'] ?? '';	// DNSBL Resolver python regex list
-	$pfb['dnsbl_regex_cap']	= PfbConfig::read('pfb_regex_cap');			// DNSBL Resolver python opt-in "Limit long/complex regex" static cap
+	$pfb['dnsbl_regex_cap']	= PfbConfig::read('dnsbl/pfb_regex_cap');			// DNSBL Resolver python opt-in "Limit long/complex regex" static cap
 	$pfb['dnsbl_cname']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cname'] ?? '');			// DNSBL Resolver python CNAME Validation
 	$pfb['dnsbl_tld_allow']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['tld_allow'] ?? '');			// DNSBL Resolver TLD Allow option
 	$pfb['dnsbl_py_nolog']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_nolog'] ?? '');			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
@@ -3038,10 +3038,10 @@ function pfb_global() {
 	$pfb['dnsbl_gp_bypass_list']	= $pfb['dnsblconfig']['pfb_gp_bypass_list'] ?? '';	// DNSBL Resolver python - List of Local IPs to bypass DNSBL
 
 	// SafeSearch — read via gateway (ADR-29).
-	$pfb['safesearch_enable']	= PfbConfig::read('safesearch_enable');
-	$pfb['safesearch_youtube']	= PfbConfig::read('safesearch_youtube');
-	$pfb['safesearch_doh']		= PfbConfig::read('safesearch_doh');
-	$pfb['safesearch_doh_list']	= array_values(array_filter(array_map('trim', explode(',', PfbConfig::read('safesearch_doh_list'))), 'strlen'));
+	$pfb['safesearch_enable']	= PfbConfig::read('ss/safesearch_enable');
+	$pfb['safesearch_youtube']	= PfbConfig::read('ss/safesearch_youtube');
+	$pfb['safesearch_doh']		= PfbConfig::read('ss/safesearch_doh');
+	$pfb['safesearch_doh_list']	= array_values(array_filter(array_map('trim', explode(',', PfbConfig::read('ss/safesearch_doh_list'))), 'strlen'));
 
 	// DNSBL SafeSearch
 	$pfb['dnsbl_safe_search'] = FALSE;
@@ -4319,7 +4319,7 @@ function pfb_update_available(?string $installed, ?string $latest): bool {
  */
 function pfb_software_check_enabled(): bool {
 	// issue #1887: the ON default lives in the registry now; the accessor just asks.
-	return PfbConfig::read('pfb_software_check') === PfbToggle::On;
+	return PfbConfig::read('gen/pfb_software_check') === PfbToggle::On;
 }
 
 /*
@@ -10432,7 +10432,7 @@ function pfblockerng_top1m(?array $provider_override = NULL, array $stream_ops=a
 
 	// ADR-59: the active provider descriptor drives the parse knobs below.
 	// $pfb['dnsbl_top1m_type'] may be unset in an isolated unit-test context
-	// (it is normally set by pfb_global() -- PfbConfig::read('top1m_source') --
+	// (it is normally set by pfb_global() -- PfbConfig::read('dnsbl/top1m_source') --
 	// which some tests never call); default to Tranco, the same absent-default
 	// the registry itself uses, so the resolved shape stays rank_domain/zip.
 	$top1m_type	= $pfb['dnsbl_top1m_type'] ?? PfbTop1mSource::Tranco;
@@ -11645,7 +11645,7 @@ function pfb_ip_is_internal($ip) {
 function pfb_feed_internal_allowlist($ignored = NULL) {
 
 	$ignored = 0;
-	$raw = PfbConfig::read('pfb_feed_internal_allowlist');
+	$raw = PfbConfig::read('gen/pfb_feed_internal_allowlist');
 	if (!is_string($raw) || $raw === '') {
 		return array();
 	}
@@ -11979,7 +11979,7 @@ function pfb_legacy_key_rename_migrate($sections) {
 //                    page/registry divergence is issue #1907; these join the pass when it is
 //                    resolved.
 const PFB_SCALAR_SEED_EXCLUDED = array(
-	'settings_family', 'v4suppression', 'pfb_cache', 'pfb_py_reply', 'pfb_hsts',
+	'gen/settings_family', 'ip/v4suppression', 'dnsbl/pfb_cache', 'dnsbl/pfb_py_reply', 'dnsbl/pfb_hsts',
 );
 
 
@@ -12018,12 +12018,15 @@ function pfb_registered_scalars_seed($sections) {
 
 	$seeded = array();
 
-	foreach (pfb_cfg_registry() as $key => $entry) {
-		if (in_array($key, PFB_SCALAR_SEED_EXCLUDED, TRUE)) {
+	foreach (pfb_cfg_registry() as $path_key => $entry) {
+		if (in_array($path_key, PFB_SCALAR_SEED_EXCLUDED, TRUE)) {
 			continue;
 		}
-		$section = $entry['section'];
-		$blob    = $seeded[$section] ?? ($sections[$section] ?? array());
+		// issue #1931: registry keys are now '<alias>/<bare-key>'; config.xml itself is
+		// untouched, so every blob operation below uses the bare key.
+		[$alias, $key] = explode('/', $path_key, 2);
+		$section       = PFB_SECTIONS[$alias];
+		$blob          = $seeded[$section] ?? ($sections[$section] ?? array());
 		if (!is_array($blob) || array_key_exists($key, $blob)) {
 			continue;
 		}
@@ -12053,7 +12056,7 @@ function pfb_registered_scalars_seed($sections) {
 // toggle (it was "anything but 'off' is ON"), and case variants are recognised.
 function pfb_feed_filter_enabled(): bool {
 
-	return PfbConfig::read('pfb_feed_internal_filter') === PfbToggle::On;
+	return PfbConfig::read('gen/pfb_feed_internal_filter') === PfbToggle::On;
 }
 
 
@@ -12933,7 +12936,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 		// upstream FILE_MIME check above; this gate only narrows to the text types.)
 		// 'application/csv' rides with 'text/csv' -- same CSV body, just a different
 		// libmagic verdict (both are allow-listed synonyms; see pfb_filter FILE_MIME).
-		if (PfbConfig::read('pfb_feed_sanity') === PfbToggle::On &&
+		if (PfbConfig::read('gen/pfb_feed_sanity') === PfbToggle::On &&
 			in_array($file_type, array('text/plain', 'text/html', 'text/csv', 'application/csv'), TRUE)) {
 			// Read UP TO 64 KiB -- a cap, not a minimum; a shorter feed is read whole.
 			// 64 KiB (raised from 8 KiB) because HTML-wrapped real feeds bury their
@@ -15620,7 +15623,7 @@ function pfb_daemon_filterlog() {
 								// no-ops when the toggle is off. Refresh the daemon's config
 								// first so a LIVE log_syslog toggle takes effect (no restart).
 								pfb_filterlog_refresh_config();
-								if (PfbConfig::read('log_syslog') === PfbToggle::On) {
+								if (PfbConfig::read('gen/log_syslog') === PfbToggle::On) {
 									pfb_syslog_event(pfb_syslog_format_dnsbl(array(
 										'q_name' => $df[2], 'q_ip' => $df[3], 'q_type' => $df[10],
 										'group' => $df[6], 'feed' => $df[8], 'b_type' => $df[5],
@@ -16013,7 +16016,7 @@ function pfb_daemon_filterlog() {
 				// Build the field array only when log_syslog is enabled; skip otherwise.
 				// Emitted EXACTLY ONCE here — not again for the unified-log copy below.
 				pfb_filterlog_refresh_config();
-				if (PfbConfig::read('log_syslog') === PfbToggle::On) {
+				if (PfbConfig::read('gen/log_syslog') === PfbToggle::On) {
 					// Map $d[6] back to the canonical act value.
 					// At this point $d[6] is 'block'|'pass'|'unkn(%u)' (match was reversed).
 					$pfb_syslog_act = ($d[6] === 'unkn(%u)') ? 'match' : $d[6];

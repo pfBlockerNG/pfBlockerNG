@@ -55,7 +55,7 @@ final class WwwGroupAGatewayTest extends TestCase
 	 * pfb_keep: page used `isset($pfb['gconfig']['pfb_keep']) ? ... : 'on'` — default 'on'.
 	 * Registry default = 'on' (PfbToggle::On after #484 fix). Page default REMOVED; gateway owns it.
 	 *
-	 * Parity: absent key → PfbConfig::read('pfb_keep')->value === 'on' (was: 'on').
+	 * Parity: absent key → PfbConfig::read('gen/pfb_keep')->value === 'on' (was: 'on').
 	 * (#484 gave pfb_keep an explicit-off adapter; #1887 merged it back into PfbToggle,
 	 * whose Off now stores 'off' — the value is unchanged throughout.)
 	 */
@@ -67,7 +67,7 @@ final class WwwGroupAGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'pfb_keep must be absent for this test');
 
 		// When: gateway read (replaces the removed isset() ? ... : 'on').
-		$result = PfbConfig::read('pfb_keep');
+		$result = PfbConfig::read('gen/pfb_keep');
 
 		// Then: PfbToggle::On, value 'on' — matches prior page default 'on'.
 		// (#484 fix: pfb_keep now uses the lenient adapter; the value is unchanged.)
@@ -79,7 +79,7 @@ final class WwwGroupAGatewayTest extends TestCase
 	 * pfb_feed_internal_filter: page used `isset(...) ? ... : 'on'` — default 'on'.
 	 * Registry default = 'on'. Page default REMOVED; gateway owns it.
 	 *
-	 * Parity: absent key → PfbConfig::read('pfb_feed_internal_filter') === 'on'.
+	 * Parity: absent key → PfbConfig::read('gen/pfb_feed_internal_filter') === 'on'.
 	 */
 	public function testGeneralPfbFeedInternalFilterAbsentDefaultMatchesPriorPageDefault(): void
 	{
@@ -89,7 +89,7 @@ final class WwwGroupAGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'pfb_feed_internal_filter must be absent');
 
 		// When: gateway read (replaces the removed isset() ? ... : 'on').
-		$result = PfbConfig::read('pfb_feed_internal_filter');
+		$result = PfbConfig::read('gen/pfb_feed_internal_filter');
 
 		// Then: On — matches prior page default ('on'); the enum since issue #1887.
 		$this->assertSame(PfbToggle::On, $result, 'pfb_feed_internal_filter absent -> On (parity with prior isset default)');
@@ -105,17 +105,17 @@ final class WwwGroupAGatewayTest extends TestCase
 	{
 		// pfb_cache: registry default = '' (mismatch with page default 'on').
 		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache'));
-		$pfb_cache_registry_default = PfbConfig::read('pfb_cache');
+		$pfb_cache_registry_default = PfbConfig::read('dnsbl/pfb_cache');
 		$this->assertSame('', $pfb_cache_registry_default, 'pfb_cache registry default is "" — page isset default "on" was correctly kept');
 
 		// pfb_py_reply: registry default = '' (mismatch with page default 'on').
 		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply'));
-		$pfb_py_reply_registry_default = PfbConfig::read('pfb_py_reply');
+		$pfb_py_reply_registry_default = PfbConfig::read('dnsbl/pfb_py_reply');
 		$this->assertSame('', $pfb_py_reply_registry_default, 'pfb_py_reply registry default is "" — page isset default "on" was correctly kept');
 
 		// pfb_hsts: registry default = '' (mismatch with page default 'on').
 		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts'));
-		$pfb_hsts_registry_default = PfbConfig::read('pfb_hsts');
+		$pfb_hsts_registry_default = PfbConfig::read('dnsbl/pfb_hsts');
 		$this->assertInstanceOf(PfbToggle::class, $pfb_hsts_registry_default, 'pfb_hsts is toggle-adapted');
 		$this->assertSame(PfbToggle::Off, $pfb_hsts_registry_default, 'pfb_hsts registry default is Off ("") — page isset default "on" was correctly kept');
 	}
@@ -128,7 +128,7 @@ final class WwwGroupAGatewayTest extends TestCase
 	 * pfb_idn_block_malicious: page used `isset(...) ? ... : 'on'` — default 'on'.
 	 * Registry default = 'on'. Page default REMOVED; gateway owns it.
 	 *
-	 * Parity: absent key → PfbConfig::read('pfb_idn_block_malicious') === 'on'.
+	 * Parity: absent key → PfbConfig::read('dnsbl/pfb_idn_block_malicious') === 'on'.
 	 */
 	public function testDnsblPfbIdnBlockMaliciousAbsentDefaultMatchesPriorPageDefault(): void
 	{
@@ -138,7 +138,7 @@ final class WwwGroupAGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'pfb_idn_block_malicious must be absent');
 
 		// When: gateway read (replaces the removed isset() ? ... : 'on').
-		$result = PfbConfig::read('pfb_idn_block_malicious');
+		$result = PfbConfig::read('dnsbl/pfb_idn_block_malicious');
 
 		// Then: 'on' — matches prior page default.
 		$this->assertSame(PfbToggle::On, $result, 'pfb_idn_block_malicious absent -> On (parity with prior isset default)');

@@ -38,8 +38,11 @@ final class SniffRegistryParityTest extends TestCase
 		$actual = (array) (new \PfBlockerNG\Sniffs\Config\RequireConfigGatewaySniff())->registeredPaths;
 
 		$expected = [];
-		foreach (pfb_cfg_registry() as $key => $entry) {
-			$expected[] = $entry['section'] . '/' . $key;
+		foreach (pfb_cfg_registry() as $path_key => $entry) {
+			// issue #1931: $path_key is '<alias>/<bare-key>'; resolve the alias to the
+			// real section path via PFB_SECTIONS.
+			[$alias, $bare] = explode('/', $path_key, 2);
+			$expected[] = PFB_SECTIONS[$alias] . '/' . $bare;
 		}
 
 		$missing = array_values(array_diff($expected, $actual));

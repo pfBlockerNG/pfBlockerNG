@@ -554,9 +554,9 @@ function sync_package_pfblockerng($cron='') {
 	// loop's raw-string-or-'x' shape above (that placeholder exists for the numeric/CSV
 	// fields' shell-arg positional integrity; a toggle already has a well-formed enum for
 	// every input, so it never needs it).
-	$pfb['rep']	= PfbConfig::read('enable_rep');	// Enable/Disable 'Max' Reputation
-	$pfb['prep']	= PfbConfig::read('enable_pdup');	// Enable/Disable 'pRep' Reputation
-	$pfb['drep']	= PfbConfig::read('enable_dedup');	// Enable/Disable 'dRep' Reputation
+	$pfb['rep']	= PfbConfig::read('rep/enable_rep');	// Enable/Disable 'Max' Reputation
+	$pfb['prep']	= PfbConfig::read('rep/enable_pdup');	// Enable/Disable 'pRep' Reputation
+	$pfb['drep']	= PfbConfig::read('rep/enable_dedup');	// Enable/Disable 'dRep' Reputation
 
 	// Starting variable to skip Reputation functions, if no changes are required
 	$pfb['repcheck'] = FALSE;
@@ -2432,7 +2432,7 @@ function sync_package_pfblockerng($cron='') {
 	// are NOT required — only the DNSBL toggle + resolver state.
 	{
 		$redir_changed = FALSE;
-		$redir_toggle  = PfbConfig::read('dnsbl_redir');
+		$redir_toggle  = PfbConfig::read('dnsbl/dnsbl_redir');
 		$redir_enabled = ($mode === 'enabled') && ($redir_toggle instanceof PfbToggle && $redir_toggle === PfbToggle::On);
 
 		if (!$redir_enabled) {
@@ -2442,8 +2442,8 @@ function sync_package_pfblockerng($cron='') {
 			}
 		} else {
 			// ENABLED: read interfaces (comma-separated) and exception alias.
-			$redir_iface_raw = (string) PfbConfig::read('dnsbl_redir_int');
-			$redir_exception = trim((string) PfbConfig::read('dnsbl_redir_exclude'));
+			$redir_iface_raw = (string) PfbConfig::read('dnsbl/dnsbl_redir_int');
+			$redir_exception = trim((string) PfbConfig::read('dnsbl/dnsbl_redir_exclude'));
 
 			$redir_ifaces_raw = array_filter(array_map('trim', explode(',', $redir_iface_raw)), 'strlen');
 			$redir_ifaces     = [];
@@ -2542,7 +2542,7 @@ function sync_package_pfblockerng($cron='') {
 	// are NOT required — only the DNSBL toggle + resolver state.
 	{
 		$dot_changed = FALSE;
-		$dot_toggle  = PfbConfig::read('dnsbl_dot_block');
+		$dot_toggle  = PfbConfig::read('dnsbl/dnsbl_dot_block');
 		$dot_enabled = ($mode === 'enabled') && ($dot_toggle instanceof PfbToggle && $dot_toggle === PfbToggle::On);
 
 		if (!$dot_enabled) {
@@ -2552,10 +2552,10 @@ function sync_package_pfblockerng($cron='') {
 			}
 		} else {
 			// ENABLED: read interfaces (comma-separated), exception alias, rule action, floating mode.
-			$dot_iface_raw    = (string) PfbConfig::read('dnsbl_dot_block_int');
-			$dot_exclude_alias = trim((string) PfbConfig::read('dnsbl_dot_block_exclude'));
-			$dot_action       = pfb_dot_block_action((string) PfbConfig::read('dnsbl_dot_block_action'));
-			$dot_floating_cfg = PfbConfig::read('dnsbl_dot_block_floating');
+			$dot_iface_raw    = (string) PfbConfig::read('dnsbl/dnsbl_dot_block_int');
+			$dot_exclude_alias = trim((string) PfbConfig::read('dnsbl/dnsbl_dot_block_exclude'));
+			$dot_action       = pfb_dot_block_action((string) PfbConfig::read('dnsbl/dnsbl_dot_block_action'));
+			$dot_floating_cfg = PfbConfig::read('dnsbl/dnsbl_dot_block_floating');
 			$dot_floating     = ($dot_floating_cfg instanceof PfbToggle && $dot_floating_cfg === PfbToggle::On);
 
 			$dot_ifaces_raw = array_filter(array_map('trim', explode(',', $dot_iface_raw)), 'strlen');
@@ -4209,8 +4209,8 @@ function sync_package_pfblockerng($cron='') {
 				pfb_logger(localize_text("Alias table changes detected, updating:") . "\n", 1);
 
 				// ADR-40: read mode/batch once for the loop (PfbConfig gateway).
-				$pfb_delta_mode  = (string) PfbConfig::read('pfb_alias_delta_mode')->toStored();
-				$pfb_delta_batch = pfb_alias_delta_batch_clamp((string) PfbConfig::read('pfb_alias_delta_batch'));
+				$pfb_delta_mode  = (string) PfbConfig::read('gen/pfb_alias_delta_mode')->toStored();
+				$pfb_delta_batch = pfb_alias_delta_batch_clamp((string) PfbConfig::read('gen/pfb_alias_delta_batch'));
 
 				foreach ($final_alias as $final) {
 					if (file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
@@ -4276,7 +4276,7 @@ function sync_package_pfblockerng($cron='') {
 		config_read_file(FALSE, TRUE);
 		// issue #1895: this update-apply pass runs with no web session in scope, so the
 		// registered-field write asserts as a system caller, not a page privilege.
-		PfbConfig::writeSystem('pfb_reuse', PfbToggle::Off);
+		PfbConfig::writeSystem('gen/pfb_reuse', PfbToggle::Off);
 		write_config('pfBlockerNG: save settings');
 
 		pfb_logger("... completed", 1);
@@ -4382,7 +4382,7 @@ function sync_package_pfblockerng($cron='') {
 	// A single */pfb_tick_interval cron entry fires; the tick reads the due-ledger
 	// and dispatches each job only when its entry says "due". clearip/cleardnsbl
 	// are out of scope (ADR-30 territory) and remain as separate jobs below.
-	pfblockerng_configure_tick_cron($pfb['enable'] === PfbToggle::On, pfb_tick_interval_clamp(PfbConfig::read('pfb_tick_interval')), $pfb['log']);
+	pfblockerng_configure_tick_cron($pfb['enable'] === PfbToggle::On, pfb_tick_interval_clamp(PfbConfig::read('gen/pfb_tick_interval')), $pfb['log']);
 
 	// Define pfBlockerNG clear [ dnsbl and/or IP ] counter CRON job
 	foreach (array( 'clearip', 'cleardnsbl') as $type) {

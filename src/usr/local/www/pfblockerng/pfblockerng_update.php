@@ -229,7 +229,7 @@ pfb_print_pending_changes_box(TRUE);
 // installed iff pfBlockerNG is enabled (the feed `interval` only gates the feed job *inside* the
 // tick, not the tick itself). So the "NEXT Scheduled CRON Event" tracks the tick boundary; the
 // per-feed cadence lives in the Schedule view below.
-$pfb_tick_min = pfb_tick_interval_clamp(PfbConfig::read('pfb_tick_interval'));
+$pfb_tick_min = pfb_tick_interval_clamp(PfbConfig::read('gen/pfb_tick_interval'));
 
 if ($pfb['enable'] === PfbToggle::On) {
 	list($next_hour, $next_min, $sec_remain) =

@@ -80,9 +80,9 @@ final class PythonWhitelistTldSegTest extends TestCase
 			$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		}
 
-		PfbConfig::write('pfb_dnsbl', 'on');
-		PfbConfig::write('pfb_dnsvip_auto', '');
-		PfbConfig::write('dnsbl_interface', 'lo0');
+		PfbConfig::write('dnsbl/pfb_dnsbl', 'on');
+		PfbConfig::write('dnsbl/pfb_dnsvip_auto', '');
+		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
 	}
 
 	private function setSuppression(string $decoded): void

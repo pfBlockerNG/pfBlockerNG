@@ -40,7 +40,7 @@ final class PfbGlobalParityTest extends TestCase
 
 	/**
 	 * enable_cb: OLD pfb_global() = $pfb['config']['enable_cb'] = null when absent.
-	 * Via gateway: PfbConfig::read('enable_cb')->value = '' (PfbToggle::Off).
+	 * Via gateway: PfbConfig::read('gen/enable_cb')->value = '' (PfbToggle::Off).
 	 * PARITY: null and '' are both falsy; downstream checks == 'on' — equivalent.
 	 * Gateway form emits '' (the registered default), which is the canonical off value.
 	 */
@@ -50,7 +50,7 @@ final class PfbGlobalParityTest extends TestCase
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/enable_cb'));
 
 		// When: gateway read.
-		$result = PfbConfig::read('enable_cb');
+		$result = PfbConfig::read('gen/enable_cb');
 
 		// Then: PfbToggle::Off -> value ''.
 		$this->assertSame(PfbToggle::Off, $result);
@@ -59,7 +59,7 @@ final class PfbGlobalParityTest extends TestCase
 
 	/**
 	 * pfb_keep: OLD pfb_global() = $pfb['config']['pfb_keep'] ?? 'on' = 'on' when absent.
-	 * Via gateway: PfbConfig::read('pfb_keep')->value = 'on' (PfbToggle::On, #484 fix).
+	 * Via gateway: PfbConfig::read('gen/pfb_keep')->value = 'on' (PfbToggle::On, #484 fix).
 	 *
 	 * #281 DEFAULT REPAIR: This is the canonical defect class. The registry default
 	 * is 'on', matching the old ?? 'on' fallback. Both old code and gateway agree.
@@ -75,7 +75,7 @@ final class PfbGlobalParityTest extends TestCase
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_keep'));
 
 		// When: gateway read (the #281-repaired registry default).
-		$result = PfbConfig::read('pfb_keep');
+		$result = PfbConfig::read('gen/pfb_keep');
 
 		// Then: 'on' — matches OLD ?? 'on' AND the repaired registry default.
 		// The merged PfbToggle adapter (issue #1887); the value is unchanged.
@@ -85,65 +85,65 @@ final class PfbGlobalParityTest extends TestCase
 
 	/**
 	 * pfb_interval: OLD = $pfb['config']['pfb_interval'] ?: '1' = '1' when absent.
-	 * Via gateway: PfbConfig::read('pfb_interval') = '1' (registered default).
+	 * Via gateway: PfbConfig::read('gen/pfb_interval') = '1' (registered default).
 	 */
 	public function testParityPfbIntervalAbsentYieldsOne(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_interval'));
 
-		$result = PfbConfig::read('pfb_interval');
+		$result = PfbConfig::read('gen/pfb_interval');
 
 		$this->assertSame('1', $result, 'pfb_interval absent -> "1"');
 	}
 
 	/**
 	 * pfb_agg_types: OLD = $pfb['config']['pfb_agg_types'] ?? '' = '' when absent.
-	 * Via gateway: PfbConfig::read('pfb_agg_types') = '' (registered default).
+	 * Via gateway: PfbConfig::read('gen/pfb_agg_types') = '' (registered default).
 	 */
 	public function testParityPfbAggTypesAbsentYieldsEmpty(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_agg_types'));
 
-		$result = PfbConfig::read('pfb_agg_types');
+		$result = PfbConfig::read('gen/pfb_agg_types');
 
 		$this->assertSame('', $result, 'pfb_agg_types absent -> ""');
 	}
 
 	/**
 	 * pfb_min: OLD = $pfb['config']['pfb_min'] ?: '0' = '0' when absent.
-	 * Via gateway: PfbConfig::read('pfb_min') = '0' (registered default).
+	 * Via gateway: PfbConfig::read('gen/pfb_min') = '0' (registered default).
 	 */
 	public function testParityPfbMinAbsentYieldsZero(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_min'));
 
-		$result = PfbConfig::read('pfb_min');
+		$result = PfbConfig::read('gen/pfb_min');
 
 		$this->assertSame('0', $result, 'pfb_min absent -> "0"');
 	}
 
 	/**
 	 * pfb_hour: OLD = $pfb['config']['pfb_hour'] ?: '0' = '0' when absent.
-	 * Via gateway: PfbConfig::read('pfb_hour') = '0' (registered default).
+	 * Via gateway: PfbConfig::read('gen/pfb_hour') = '0' (registered default).
 	 */
 	public function testParityPfbHourAbsentYieldsZero(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_hour'));
 
-		$result = PfbConfig::read('pfb_hour');
+		$result = PfbConfig::read('gen/pfb_hour');
 
 		$this->assertSame('0', $result, 'pfb_hour absent -> "0"');
 	}
 
 	/**
 	 * pfb_dailystart: OLD = $pfb['config']['pfb_dailystart'] ?: '0' = '0' when absent.
-	 * Via gateway: PfbConfig::read('pfb_dailystart') = '0' (registered default).
+	 * Via gateway: PfbConfig::read('gen/pfb_dailystart') = '0' (registered default).
 	 */
 	public function testParityPfbDailystartAbsentYieldsZero(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_dailystart'));
 
-		$result = PfbConfig::read('pfb_dailystart');
+		$result = PfbConfig::read('gen/pfb_dailystart');
 
 		$this->assertSame('0', $result, 'pfb_dailystart absent -> "0"');
 	}
@@ -151,14 +151,14 @@ final class PfbGlobalParityTest extends TestCase
 	/**
 	 * skipfeed: OLD = $pfb['config']['skipfeed'] != '' ? ... : 0 = 0 when absent
 	 * (absent key = null; null == '' in PHP, so the else branch runs -> 0).
-	 * Via gateway: PfbConfig::read('skipfeed') = '0' (registered default).
+	 * Via gateway: PfbConfig::read('gen/skipfeed') = '0' (registered default).
 	 * PARITY: '0' and 0 are equivalent for the downstream numeric comparisons.
 	 */
 	public function testParitySkipfeedAbsentYieldsZeroString(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/skipfeed'));
 
-		$result = PfbConfig::read('skipfeed');
+		$result = PfbConfig::read('gen/skipfeed');
 
 		// Registry default '0'; old code: null -> 0 (int). Numeric equivalence.
 		$this->assertSame('0', $result, 'skipfeed absent -> "0" (parity with pfb_global null->0)');
@@ -166,14 +166,14 @@ final class PfbGlobalParityTest extends TestCase
 
 	/**
 	 * pfb_reuse: OLD = $pfb['config']['pfb_reuse'] (null when absent — no adapter call in old code).
-	 * Via gateway: PfbConfig::read('pfb_reuse')->value = '' (PfbToggle::Off, default '').
+	 * Via gateway: PfbConfig::read('gen/pfb_reuse')->value = '' (PfbToggle::Off, default '').
 	 * PARITY: null and '' are both falsy; downstream checks == 'on'.
 	 */
 	public function testParityPfbReuseAbsentYieldsOff(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_reuse'));
 
-		$result = PfbConfig::read('pfb_reuse');
+		$result = PfbConfig::read('gen/pfb_reuse');
 
 		$this->assertSame(PfbToggle::Off, $result);
 		$this->assertSame('off', $result->value, 'pfb_reuse absent -> off token');
@@ -185,7 +185,7 @@ final class PfbGlobalParityTest extends TestCase
 
 	/**
 	 * pfb_dnsbl: OLD = $pfb['dnsblconfig']['pfb_dnsbl'] = null when absent.
-	 * Via gateway: PfbConfig::read('pfb_dnsbl')->value = '' (PfbToggle::Off).
+	 * Via gateway: PfbConfig::read('dnsbl/pfb_dnsbl')->value = '' (PfbToggle::Off).
 	 * PARITY: null and '' are both falsy; downstream checks !empty() or == 'on'.
 	 */
 	public function testParityPfbDnsblAbsentYieldsOff(): void
@@ -194,7 +194,7 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl')
 		);
 
-		$result = PfbConfig::read('pfb_dnsbl');
+		$result = PfbConfig::read('dnsbl/pfb_dnsbl');
 
 		$this->assertSame(PfbToggle::Off, $result);
 		$this->assertSame('off', $result->value, 'pfb_dnsbl absent -> off token');
@@ -203,7 +203,7 @@ final class PfbGlobalParityTest extends TestCase
 	/**
 	 * pfb_dnsvip_auto: OLD = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '')->value.
 	 * When absent: pfb_cfg_toggle_read('')->value = ''.
-	 * Via gateway: PfbConfig::read('pfb_dnsvip_auto')->value = '' (default '').
+	 * Via gateway: PfbConfig::read('dnsbl/pfb_dnsvip_auto')->value = '' (default '').
 	 * PARITY: identical.
 	 */
 	public function testParityPfbDnsvipAutoAbsentYieldsOff(): void
@@ -217,7 +217,7 @@ final class PfbGlobalParityTest extends TestCase
 		$this->assertSame('off', $old_result);
 
 		// When: gateway read.
-		$result = PfbConfig::read('pfb_dnsvip_auto');
+		$result = PfbConfig::read('dnsbl/pfb_dnsvip_auto');
 
 		// Then: same value.
 		$this->assertSame(PfbToggle::Off, $result);
@@ -228,7 +228,7 @@ final class PfbGlobalParityTest extends TestCase
 	 * dnsbl_interface: OLD = isset($pfb['dnsblconfig']['dnsbl_interface'])
 	 *                        ? $pfb['dnsblconfig']['dnsbl_interface'] : 'lo0'.
 	 * When absent: 'lo0'.
-	 * Via gateway: PfbConfig::read('dnsbl_interface') = 'lo0' (registered default).
+	 * Via gateway: PfbConfig::read('dnsbl/dnsbl_interface') = 'lo0' (registered default).
 	 * PARITY: identical.
 	 */
 	public function testParityDnsblInterfaceAbsentYieldsLo0(): void
@@ -237,7 +237,7 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_interface')
 		);
 
-		$result = PfbConfig::read('dnsbl_interface');
+		$result = PfbConfig::read('dnsbl/dnsbl_interface');
 
 		$this->assertSame('lo0', $result, 'dnsbl_interface absent -> "lo0"');
 	}
@@ -246,7 +246,7 @@ final class PfbGlobalParityTest extends TestCase
 	 * top1m_source: OLD = isset($pfb['dnsblconfig']['top1m_source'])
 	 *                   ? $pfb['dnsblconfig']['top1m_source'] : 'tranco'.
 	 * When absent: 'tranco'.
-	 * Via gateway: PfbConfig::read('top1m_source') = PfbTop1mSource::Tranco (registered
+	 * Via gateway: PfbConfig::read('dnsbl/top1m_source') = PfbTop1mSource::Tranco (registered
 	 * default 'tranco', adapted through the PfbTop1mSource enum, issue #877 review).
 	 * PARITY: same runtime meaning ('tranco'), now enum-typed instead of a raw string.
 	 */
@@ -256,7 +256,7 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/top1m_source')
 		);
 
-		$result = PfbConfig::read('top1m_source');
+		$result = PfbConfig::read('dnsbl/top1m_source');
 
 		$this->assertSame(PfbTop1mSource::Tranco, $result, 'top1m_source absent -> PfbTop1mSource::Tranco');
 	}
@@ -265,7 +265,7 @@ final class PfbGlobalParityTest extends TestCase
 	 * global_log: OLD = isset($pfb['dnsblconfig']['global_log'])
 	 *                   ? $pfb['dnsblconfig']['global_log'] : ''.
 	 * When absent: ''.
-	 * Via gateway: PfbConfig::read('global_log') = '' (registered default).
+	 * Via gateway: PfbConfig::read('dnsbl/global_log') = '' (registered default).
 	 * PARITY: identical.
 	 */
 	public function testParityGlobalLogAbsentYieldsEmpty(): void
@@ -274,7 +274,7 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/global_log')
 		);
 
-		$result = PfbConfig::read('global_log');
+		$result = PfbConfig::read('dnsbl/global_log');
 
 		$this->assertSame('', $result, 'global_log absent -> ""');
 	}
@@ -282,7 +282,7 @@ final class PfbGlobalParityTest extends TestCase
 	/**
 	 * pfb_dnsbl_lenient: OLD = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value.
 	 * When absent: pfb_cfg_toggle_read('')->value = 'off'.
-	 * Via gateway: PfbConfig::read('pfb_dnsbl_lenient')->value = 'off' (default 'off', lenient adapter).
+	 * Via gateway: PfbConfig::read('dnsbl/pfb_dnsbl_lenient')->value = 'off' (default 'off', lenient adapter).
 	 * PARITY: identical.
 	 */
 	public function testParityPfbDnsblLenientAbsentYieldsOff(): void
@@ -296,7 +296,7 @@ final class PfbGlobalParityTest extends TestCase
 		$this->assertSame('off', $old_result);
 
 		// When: gateway read.
-		$result = PfbConfig::read('pfb_dnsbl_lenient');
+		$result = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
 
 		// Then: same value.
 		$this->assertSame(PfbToggle::Off, $result);
@@ -305,7 +305,7 @@ final class PfbGlobalParityTest extends TestCase
 
 	/**
 	 * pfb_hsts: OLD = $pfb['dnsblconfig']['pfb_hsts'] (null when absent).
-	 * Via gateway: PfbConfig::read('pfb_hsts')->value = '' (PfbToggle::Off, default '').
+	 * Via gateway: PfbConfig::read('dnsbl/pfb_hsts')->value = '' (PfbToggle::Off, default '').
 	 * PARITY: null and '' both falsy; downstream checks == 'on'.
 	 */
 	public function testParityPfbHstsAbsentYieldsOff(): void
@@ -314,7 +314,7 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts')
 		);
 
-		$result = PfbConfig::read('pfb_hsts');
+		$result = PfbConfig::read('dnsbl/pfb_hsts');
 
 		$this->assertSame(PfbToggle::Off, $result);
 		$this->assertSame('off', $result->value, 'pfb_hsts absent -> off token');
@@ -322,7 +322,7 @@ final class PfbGlobalParityTest extends TestCase
 
 	/**
 	 * pfb_idn: OLD = $pfb['dnsblconfig']['pfb_idn'] ?? '' = '' when absent (null-coalesce).
-	 * Via gateway (ADR-28 reframe): PfbConfig::read('pfb_idn') = PfbIdnMode::Off when absent.
+	 * Via gateway (ADR-28 reframe): PfbConfig::read('dnsbl/pfb_idn') = PfbIdnMode::Off when absent.
 	 *
 	 * PARITY: the registry default is '' which the PfbIdnMode adapter normalises to Off.
 	 * OLD code compared the raw string against 'on'/'all'/'confusable' — Off ('off') and
@@ -342,7 +342,7 @@ final class PfbGlobalParityTest extends TestCase
 		$this->assertSame('', $old_result, 'before: old code produces empty string for absent pfb_idn');
 
 		// When: gateway read.
-		$result = PfbConfig::read('pfb_idn');
+		$result = PfbConfig::read('dnsbl/pfb_idn');
 
 		// Then: PfbIdnMode::Off (adapted; '' normalises to Off — IDN disabled).
 		// Effective behaviour unchanged: both '' (old) and Off (new) mean IDN disabled.
@@ -355,7 +355,7 @@ final class PfbGlobalParityTest extends TestCase
 	 * pfb_idn_block_malicious: OLD = isset($pfb['dnsblconfig']['pfb_idn_block_malicious'])
 	 *                                ? $pfb['dnsblconfig']['pfb_idn_block_malicious'] : 'on'.
 	 * When absent: 'on'.
-	 * Via gateway: PfbConfig::read('pfb_idn_block_malicious') = 'on' (registered default).
+	 * Via gateway: PfbConfig::read('dnsbl/pfb_idn_block_malicious') = 'on' (registered default).
 	 * PARITY: identical.
 	 */
 	public function testParityPfbIdnBlockMaliciousAbsentYieldsOn(): void
@@ -364,14 +364,14 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_block_malicious')
 		);
 
-		$result = PfbConfig::read('pfb_idn_block_malicious');
+		$result = PfbConfig::read('dnsbl/pfb_idn_block_malicious');
 
 		$this->assertSame(PfbToggle::On, $result, 'pfb_idn_block_malicious absent -> On (default-on; enum since #1887)');
 	}
 
 	/**
 	 * pfb_idn_escalate_suspicious: OLD = $pfb['dnsblconfig']['pfb_idn_escalate_suspicious'] ?? '' = '' when absent.
-	 * Via gateway: PfbConfig::read('pfb_idn_escalate_suspicious') = '' (registered default).
+	 * Via gateway: PfbConfig::read('dnsbl/pfb_idn_escalate_suspicious') = '' (registered default).
 	 * PARITY: identical.
 	 */
 	public function testParityPfbIdnEscalateSuspiciousAbsentYieldsOff(): void
@@ -380,14 +380,14 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious')
 		);
 
-		$result = PfbConfig::read('pfb_idn_escalate_suspicious');
+		$result = PfbConfig::read('dnsbl/pfb_idn_escalate_suspicious');
 
 		$this->assertSame(PfbToggle::Off, $result, 'pfb_idn_escalate_suspicious absent -> Off (enum since #1887)');
 	}
 
 	/**
 	 * pfb_regex_cap: OLD = $pfb['dnsblconfig']['pfb_regex_cap'] ?? '' = '' when absent.
-	 * Via gateway: PfbConfig::read('pfb_regex_cap') = '' (registered default).
+	 * Via gateway: PfbConfig::read('dnsbl/pfb_regex_cap') = '' (registered default).
 	 * PARITY: identical.
 	 */
 	public function testParityPfbRegexCapAbsentYieldsOff(): void
@@ -396,7 +396,7 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_cap')
 		);
 
-		$result = PfbConfig::read('pfb_regex_cap');
+		$result = PfbConfig::read('dnsbl/pfb_regex_cap');
 
 		// issue #1887: the field gained the toggle adapter pair, so the gateway returns
 		// the enum; absent still means the feature is off, just as the raw '' did.
@@ -409,7 +409,7 @@ final class PfbGlobalParityTest extends TestCase
 
 	/**
 	 * safesearch_enable: OLD = config_get_path('installedpackages/pfblockerngsafesearch/safesearch_enable', 'Disable') = 'Disable'.
-	 * Via gateway: PfbConfig::read('safesearch_enable') = 'Disable' (registered default).
+	 * Via gateway: PfbConfig::read('ss/safesearch_enable') = 'Disable' (registered default).
 	 * PARITY: identical.
 	 */
 	public function testParitySafesearchEnableAbsentYieldsDisable(): void
@@ -421,7 +421,7 @@ final class PfbGlobalParityTest extends TestCase
 		$this->assertSame('Disable', $old_result);
 
 		// When: gateway read.
-		$result = PfbConfig::read('safesearch_enable');
+		$result = PfbConfig::read('ss/safesearch_enable');
 
 		// Then: same value.
 		$this->assertSame('Disable', $result, 'safesearch_enable absent -> "Disable"');
@@ -429,42 +429,42 @@ final class PfbGlobalParityTest extends TestCase
 
 	/**
 	 * safesearch_youtube: OLD = config_get_path(..., 'Disable') = 'Disable'.
-	 * Via gateway: PfbConfig::read('safesearch_youtube') = 'Disable'.
+	 * Via gateway: PfbConfig::read('ss/safesearch_youtube') = 'Disable'.
 	 * PARITY: identical.
 	 */
 	public function testParitySafesearchYoutubeAbsentYieldsDisable(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerngsafesearch/safesearch_youtube'));
 
-		$result = PfbConfig::read('safesearch_youtube');
+		$result = PfbConfig::read('ss/safesearch_youtube');
 
 		$this->assertSame('Disable', $result, 'safesearch_youtube absent -> "Disable"');
 	}
 
 	/**
 	 * safesearch_doh: OLD = config_get_path(..., 'Disable') = 'Disable'.
-	 * Via gateway: PfbConfig::read('safesearch_doh') = 'Disable'.
+	 * Via gateway: PfbConfig::read('ss/safesearch_doh') = 'Disable'.
 	 * PARITY: identical.
 	 */
 	public function testParitySafesearchDohAbsentYieldsDisable(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerngsafesearch/safesearch_doh'));
 
-		$result = PfbConfig::read('safesearch_doh');
+		$result = PfbConfig::read('ss/safesearch_doh');
 
 		$this->assertSame('Disable', $result, 'safesearch_doh absent -> "Disable"');
 	}
 
 	/**
 	 * safesearch_doh_list: OLD = config_get_path(..., '') = '' -> explode -> [''].
-	 * Via gateway: PfbConfig::read('safesearch_doh_list') = '' -> explode -> [''].
+	 * Via gateway: PfbConfig::read('ss/safesearch_doh_list') = '' -> explode -> [''].
 	 * PARITY: identical.
 	 */
 	public function testParitySafesearchDohListAbsentYieldsEmpty(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerngsafesearch/safesearch_doh_list'));
 
-		$result = PfbConfig::read('safesearch_doh_list');
+		$result = PfbConfig::read('ss/safesearch_doh_list');
 
 		$this->assertSame('', $result, 'safesearch_doh_list absent -> ""');
 
@@ -483,7 +483,7 @@ final class PfbGlobalParityTest extends TestCase
 	 *
 	 * The old pfb_global() code: $pfb['keep'] = $pfb['config']['pfb_keep'] ?? 'on'.
 	 * The registry default: 'on'.
-	 * After routing to PfbConfig::read('pfb_keep')->value: 'on'.
+	 * After routing to PfbConfig::read('gen/pfb_keep')->value: 'on'.
 	 * RESULT: no behaviour change — both old code and gateway agree on 'on'.
 	 *
 	 * The structural fix: the default is now FORMAL (in the registry) instead of
@@ -500,7 +500,7 @@ final class PfbGlobalParityTest extends TestCase
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_keep'));
 
 		// When: gateway read (the formal registry default).
-		$result = PfbConfig::read('pfb_keep');
+		$result = PfbConfig::read('gen/pfb_keep');
 
 		// Then: value is 'on' — same as old ?? 'on' fallback.
 		// The #281 class is now structurally closed: the default is formal,
@@ -514,7 +514,7 @@ final class PfbGlobalParityTest extends TestCase
 		// resolves to the registered default 'on'. A deliberate opt-out is the explicit
 		// 'off' token, which round-trips (testPfbKeepRoundTrip* in CfgGatewayTest).
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_keep', '');
-		$result_empty = PfbConfig::read('pfb_keep');
+		$result_empty = PfbConfig::read('gen/pfb_keep');
 		$this->assertSame(PfbToggle::On, $result_empty, "stored '' pfb_keep resolves to the registered default On");
 	}
 }

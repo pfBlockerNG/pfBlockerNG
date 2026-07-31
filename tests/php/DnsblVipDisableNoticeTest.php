@@ -93,9 +93,9 @@ final class DnsblVipDisableNoticeTest extends TestCase
 			$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		}
 
-		PfbConfig::write('pfb_dnsbl', 'on');
-		PfbConfig::write('pfb_dnsvip_auto', '');
-		PfbConfig::write('dnsbl_interface', 'lo0');
+		PfbConfig::write('dnsbl/pfb_dnsbl', 'on');
+		PfbConfig::write('dnsbl/pfb_dnsvip_auto', '');
+		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
 	}
 
 	public function testManualModeInvalidVipSurfacesFileNotice(): void
@@ -103,7 +103,7 @@ final class DnsblVipDisableNoticeTest extends TestCase
 		// Given: manual mode (auto='off'), a VIP id on the matching (doubled) interface
 		// but absent from the (empty) seeded vip list -> pfb_validate_vips() passes the
 		// interface check, then fails "invalid IPv4 VIP" (unresolved).
-		PfbConfig::write('dnsbl_interface', 'opt-double');
+		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
 		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4', '_vip_test_missing');
 
 		// Before: no notices raised yet.
@@ -128,7 +128,7 @@ final class DnsblVipDisableNoticeTest extends TestCase
 	{
 		// Given: the SAME invalid VIP, but auto-create mode owns provisioning.
 		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4', '_vip_test_missing');
-		PfbConfig::write('pfb_dnsvip_auto', 'on');
+		PfbConfig::write('dnsbl/pfb_dnsvip_auto', 'on');
 
 		// When
 		pfb_global();
@@ -145,7 +145,7 @@ final class DnsblVipDisableNoticeTest extends TestCase
 		// pfb_get_vips() finds it, and use the doubled 'opt-double' interface so the
 		// interface check passes too (see pfsense_doubles.php get_configured_vip_interface).
 		$GLOBALS['pfb_test_vip_list'] = ['_vip_test_valid' => '203.0.113.10'];
-		PfbConfig::write('dnsbl_interface', 'opt-double');
+		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
 		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4', '_vip_test_valid');
 
 		// When

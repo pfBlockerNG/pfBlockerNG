@@ -51,7 +51,7 @@ final class InstallGrandfatherChokepointTest extends TestCase
 				. '.*?'
 				// issue #1895: install.inc's writes are system-context (no web session),
 				// converted to the writeSystem() escape hatch.
-				. 'PfbConfig::writeSystem\(\'pfb_alias_delta_mode\', \$pfb_delta_default\);\n\}\n)/s',
+				. 'PfbConfig::writeSystem\(\'gen\/pfb_alias_delta_mode\', \$pfb_delta_default\);\n\}\n)/s',
 				$src,
 				$m
 			)) {

@@ -37,15 +37,15 @@ final class PfbSettingsFamilyTest extends TestCase
 	public function testMissingMarkerDefaultsToThreeTwoAndRecordUsesGateway(): void
 	{
 		$this->assertSame('3.2', pfb_settings_family_current());
-		$this->assertSame('3.2', PfbConfig::read('settings_family'));
+		$this->assertSame('3.2', PfbConfig::read('gen/settings_family'));
 		$this->assertTrue(pfb_settings_family_record('4.0'));
 		$this->assertSame('4.0', pfb_settings_family_current());
-		$this->assertSame('4.0', PfbConfig::read('settings_family'));
+		$this->assertSame('4.0', PfbConfig::read('gen/settings_family'));
 	}
 
 	public function testInvalidMarkerAndUnknownVersionFailClosed(): void
 	{
-		PfbConfig::write('settings_family', '9.0');
+		PfbConfig::write('gen/settings_family', '9.0');
 		$this->assertNull(pfb_settings_family_current());
 		$this->assertSame('3.2', pfb_settings_family_from_version('3.2.0'));
 		$this->assertSame('4.0', pfb_settings_family_from_version('4.0.0'));
@@ -158,9 +158,9 @@ final class PfbSettingsFamilyTest extends TestCase
 
 	public function testKeepOffIsPreservedAtLegacyBoundary(): void
 	{
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_keep'));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_keep'));
 		$this->assertTrue(pfb_settings_family_save('3.2'));
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_keep'));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_keep'));
 	}
 
 	public function testSaveWithNoOwnedConfigIsNoOpWithoutCreatingSlot(): void

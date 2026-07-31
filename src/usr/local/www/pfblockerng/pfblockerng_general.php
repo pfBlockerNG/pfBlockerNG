@@ -51,11 +51,11 @@ $pconfig = array();
 $pconfig['enable_cb']			= $pfb['gconfig']['enable_cb']				?: '';
 
 // Default 'on' — owned by the registry (ADR-29); PfbConfig::read applies it when absent.
-$pconfig['pfb_keep']			= PfbConfig::read('pfb_keep')->value;
+$pconfig['pfb_keep']			= PfbConfig::read('gen/pfb_keep')->value;
 
 // Default 'on' — owned by the registry (ADR-29); PfbConfig::read applies it when absent.
 // Pinned 'off' on existing installs by the upgrade migration in pfblockerng_install.inc.
-$pconfig['pfb_feed_internal_filter']	= PfbConfig::read('pfb_feed_internal_filter')->value;
+$pconfig['pfb_feed_internal_filter']	= PfbConfig::read('gen/pfb_feed_internal_filter')->value;
 
 // Exemptions from the internal-address feed-host check: IP addresses / CIDR ranges
 // (one per line) whose feeds are allowed even when they resolve internally.
@@ -80,22 +80,22 @@ foreach ($log_suffixes as $log_suffix) {
 // ADR-60: per-log age-based retention (days; '0' = disabled). Read via PfbConfig::read
 // so the registered default applies when the key is absent (new install / upgrade).
 foreach ($log_suffixes as $log_suffix) {
-	$pconfig['log_max_days_' . $log_suffix]	= PfbConfig::read('log_max_days_' . $log_suffix);
+	$pconfig['log_max_days_' . $log_suffix]	= PfbConfig::read('gen/log_max_days_' . $log_suffix);
 }
 
 // ADR-38: syslog export toggle. Read via PfbConfig::read so registered default applies.
 // log_syslog uses the PfbToggle adapter — extract the scalar .value for pfb_cfg_toggle_read().
-$pconfig['log_syslog']			= PfbConfig::read('log_syslog')->value;
+$pconfig['log_syslog']			= PfbConfig::read('gen/log_syslog')->value;
 
 // issue #1109: log-trim hysteresis margin (percent, global). Read via PfbConfig::read so
 // the registered default ('0') applies when the key is absent (new install / upgrade).
-$pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('pfb_log_trim_margin_pct');
+$pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('gen/pfb_log_trim_margin_pct');
 
 // issue #1669 slice C / #1888: client-side editor toggle (default on). Read via
 // PfbConfig::read so the registered default applies; pfb_syntax_highlight is a
 // default-on toggle field (merged PfbToggle, issue #1887; mirrors pfb_keep) --
 // extract the scalar .value for pfb_cfg_toggle_read() at render.
-$pconfig['pfb_syntax_highlight']	= PfbConfig::read('pfb_syntax_highlight')->value;
+$pconfig['pfb_syntax_highlight']	= PfbConfig::read('gen/pfb_syntax_highlight')->value;
 
 // issue #1875 step 2b: gate the CM6 live-highlight overlay for pfb_feed_internal_allowlist,
 // same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.

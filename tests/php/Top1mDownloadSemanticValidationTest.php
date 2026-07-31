@@ -75,7 +75,7 @@ final class Top1mDownloadSemanticValidationTest extends TestCase
 		$before = $this->seedLastGoodState($base, $active);
 		$body = "<!doctype html>\n<html><body><h1>503 Service Unavailable</h1></body></html>\n";
 
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_feed_sanity'), 'sanity setting must be off for this gate proof');
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_feed_sanity'), 'sanity setting must be off for this gate proof');
 		$result = $this->downloadBody($body, $base, $active);
 
 		$this->assertFalse($result->success, 'HTML 200 must fail TOP1M semantic publication even with sanity disabled');

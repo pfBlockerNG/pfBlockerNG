@@ -223,7 +223,7 @@ if (!$alert_summary) {
 						$clists[$type][$lname]['base64_idx'] = $row;
 
 						// Collect Global DNSBL Logging type, or Group logging setting
-						$g_log = PfbConfig::read('global_log');
+						$g_log = PfbConfig::read('dnsbl/global_log');
 						if (empty($g_log)) {
 							// foreign structure: pfblockerngdnsbl/config/{row}/logging is a dynamic per-row key, not in registry
 							$d_log = config_get_path("installedpackages/pfblockerngdnsbl/config/{$row}/logging");
@@ -285,14 +285,14 @@ if (!$alert_summary) {
 		}
 	}
 
-	PfbConfig::write('v4suppression', PfbConfig::read('v4suppression') ?: '');
+	PfbConfig::write('ip/v4suppression', PfbConfig::read('ip/v4suppression') ?: '');
 
 	// ADR-53: v6 sibling -- same absent-key normalisation as v4suppression above.
-	PfbConfig::write('v6suppression', PfbConfig::read('v6suppression') ?: '');
+	PfbConfig::write('ip/v6suppression', PfbConfig::read('ip/v6suppression') ?: '');
 
-	PfbConfig::write('suppression', PfbConfig::read('suppression') ?: '');
+	PfbConfig::write('dnsbl/suppression', PfbConfig::read('dnsbl/suppression') ?: '');
 
-	PfbConfig::write('tld_wildcard_exclusion', PfbConfig::read('tld_wildcard_exclusion') ?: '');
+	PfbConfig::write('dnsbl/tld_wildcard_exclusion', PfbConfig::read('dnsbl/tld_wildcard_exclusion') ?: '');
 
 	// ADR-53: 'ipsuppression_v6' is the new v6suppression sibling of
 	// 'ipsuppression' (v4) -- same collection shape, keyed separately so the
@@ -305,13 +305,13 @@ if (!$alert_summary) {
 		}
 
 		if ($key == 0) {
-			$clists[$type]['base64'] = PfbConfig::read('v4suppression');
+			$clists[$type]['base64'] = PfbConfig::read('ip/v4suppression');
 		} elseif ($key == 1) {
-			$clists[$type]['base64'] = PfbConfig::read('v6suppression');
+			$clists[$type]['base64'] = PfbConfig::read('ip/v6suppression');
 		} elseif ($key == 2) {
-			$clists[$type]['base64'] = PfbConfig::read('suppression');
+			$clists[$type]['base64'] = PfbConfig::read('dnsbl/suppression');
 		} elseif ($key == 3) {
-			$clists[$type]['base64'] = PfbConfig::read('tld_wildcard_exclusion');
+			$clists[$type]['base64'] = PfbConfig::read('dnsbl/tld_wildcard_exclusion');
 		}
 
 		$clists[$type]['data']		= array();
@@ -862,7 +862,7 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 			}
 			$clists['dnsblwhitelist']['base64'] = pfb_text_area_encode($data);
-			PfbConfig::write('suppression', $clists['dnsblwhitelist']['base64']);
+			PfbConfig::write('dnsbl/suppression', $clists['dnsblwhitelist']['base64']);
 			// issue #1872: this description is user-facing (Diagnostics > Config History),
 			// so it spells the field the way the UI does -- "Custom List", not the
 			// code-level "Custom_List".
@@ -1032,7 +1032,7 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 				$data .= "{$whitelist}\r\n";
 				$clists['dnsblwhitelist']['base64'] = pfb_text_area_encode($data);
-				PfbConfig::write('suppression', $clists['dnsblwhitelist']['base64']);
+				PfbConfig::write('dnsbl/suppression', $clists['dnsblwhitelist']['base64']);
 				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Whitelist", FALSE);
 			}
 
@@ -1132,7 +1132,7 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 				$data .= "{$exclude_string}\r\n";
 				$clists['tld_wildcard_exclusion']['base64'] = pfb_text_area_encode($data);
-				PfbConfig::write('tld_wildcard_exclusion', $clists['tld_wildcard_exclusion']['base64']);
+				PfbConfig::write('dnsbl/tld_wildcard_exclusion', $clists['tld_wildcard_exclusion']['base64']);
 				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL TLD Exclusion customlist.", FALSE);
 			}
 		}
@@ -1233,7 +1233,7 @@ if (isset($_POST) && !empty($_POST)) {
 					}
 				}
 				$clists['dnsblwhitelist']['base64'] = pfb_text_area_encode($data);
-				PfbConfig::write('suppression', $clists['dnsblwhitelist']['base64']);
+				PfbConfig::write('dnsbl/suppression', $clists['dnsblwhitelist']['base64']);
 				break;
 			case 'delete_exclusion':
 				$type = 'TLD Exclusion';
@@ -1246,7 +1246,7 @@ if (isset($_POST) && !empty($_POST)) {
 					$data .= "{$line}";
 				}
 				$clists['tld_wildcard_exclusion']['base64'] = pfb_text_area_encode($data);
-				PfbConfig::write('tld_wildcard_exclusion', $clists['tld_wildcard_exclusion']['base64']);
+				PfbConfig::write('dnsbl/tld_wildcard_exclusion', $clists['tld_wildcard_exclusion']['base64']);
 				break;
 			case 'delete_ip':
 				// ADR-53 un-suppress rework (#422): the old flow only understood an
@@ -1263,7 +1263,8 @@ if (isset($_POST) && !empty($_POST)) {
 				$type	= "IPv{$family} Suppression";
 
 				$supp_key	= $is_v6 ? 'ipsuppression_v6' : 'ipsuppression';
-				$cfg_key	= $is_v6 ? 'v6suppression' : 'v4suppression';
+				$cfg_key	= $is_v6 ? 'v6suppression' : 'v4suppression';	// bare -- blob index
+				$cfg_key_path	= $is_v6 ? 'ip/v6suppression' : 'ip/v4suppression';	// issue #1931: gateway key
 
 				// Longest-prefix pick: when both a '/32' and a broader entry cover
 				// the host, remove the most specific one -- deterministic, mirrors
@@ -1281,7 +1282,7 @@ if (isset($_POST) && !empty($_POST)) {
 							$data .= "{$line}";
 						}
 						$clists[$supp_key]['base64'] = pfb_text_area_encode($data);
-						PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
+						PfbConfig::write($cfg_key_path, $clists[$supp_key]['base64']);
 
 						// Keep pfbsuppression(_v6).txt in step with the config edit --
 						// same in-memory refresh the addsuppress handler applies.

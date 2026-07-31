@@ -55,7 +55,7 @@ final class ToggleEmptyPreservationTest extends TestCase
 
 		$this->assertSame('off', config_get_path(self::KEEP),
 			"a pre-#1887 stored '' on pfb_keep must be rewritten to the explicit 'off' it meant");
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_keep'),
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_keep'),
 			'the preserved opt-out must read as Off, not resolve to the default-on');
 	}
 
@@ -71,7 +71,7 @@ final class ToggleEmptyPreservationTest extends TestCase
 
 		$this->assertSame('off', config_get_path(self::IDN),
 			"a pre-#1887 stored '' on pfb_idn_block_malicious must be preserved as 'off'");
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_idn_block_malicious'),
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_idn_block_malicious'),
 			'the preserved opt-out must read as Off');
 	}
 
@@ -94,8 +94,8 @@ final class ToggleEmptyPreservationTest extends TestCase
 		$this->assertSame('on', config_get_path(self::KEEP),
 			'absent pfb_keep on an existing install is seeded on by the #281 migration, as before');
 		$this->assertNull(config_get_path(self::IDN), 'absent pfb_idn_block_malicious must stay absent');
-		$this->assertSame(PfbToggle::On, PfbConfig::read('pfb_keep'));
-		$this->assertSame(PfbToggle::On, PfbConfig::read('pfb_idn_block_malicious'));
+		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_keep'));
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_idn_block_malicious'));
 	}
 
 	/**
@@ -133,7 +133,7 @@ final class ToggleEmptyPreservationTest extends TestCase
 
 		$this->assertSame('off', config_get_path(self::IDN),
 			'an unchecked save must persist the explicit off token');
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_idn_block_malicious'),
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_idn_block_malicious'),
 			'an unchecked save must read back as disabled — not resolve to the default-on');
 	}
 

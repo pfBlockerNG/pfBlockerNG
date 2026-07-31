@@ -64,7 +64,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 		];
 
 		try {
-			PfbConfig::write('pfb_keep', PfbToggle::Off);
+			PfbConfig::write('gen/pfb_keep', PfbToggle::Off);
 			$this->fail('expected RuntimeException, none thrown');
 		} catch (RuntimeException $e) {
 			$this->assertStringContainsString('pfb_keep', $e->getMessage(),
@@ -90,7 +90,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 			'pfblockerng/pfblockerng_general.php' => true,
 		];
 
-		PfbConfig::write('pfb_keep', PfbToggle::Off);
+		PfbConfig::write('gen/pfb_keep', PfbToggle::Off);
 
 		$this->assertSame('off', config_get_path($path),
 			'allowed write must persist the canonical stored token'
@@ -112,7 +112,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 		];
 
 		try {
-			PfbConfig::write('pfb_software_check', PfbToggle::Off);
+			PfbConfig::write('gen/pfb_software_check', PfbToggle::Off);
 			$this->fail('expected RuntimeException, none thrown');
 		} catch (RuntimeException $e) {
 			$this->assertStringContainsString('pfb_software_check', $e->getMessage(),
@@ -141,7 +141,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 			'pkg_mgr_installed.php'               => true,
 		];
 
-		PfbConfig::write('pfb_software_check', PfbToggle::Off);
+		PfbConfig::write('gen/pfb_software_check', PfbToggle::Off);
 
 		$this->assertSame('off', config_get_path($path),
 			'write must succeed and persist the canonical stored token'
@@ -207,7 +207,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 
 		// Oracle: single-key write() on a fresh slate.
 		$GLOBALS['config'] = [];
-		PfbConfig::write('pfb_keep', 'junk');
+		PfbConfig::write('gen/pfb_keep', 'junk');
 		$expected_keep = config_get_path(self::GEN . '/pfb_keep');
 
 		// Under test: writeSection() with the same field plus an unregistered/foreign key.
@@ -236,8 +236,8 @@ final class CfgWriteAuthorizationTest extends TestCase
 			'pkg_mgr_installed.php'                => false,
 		];
 
-		PfbConfig::writeSystem('pfb_keep', PfbToggle::On);
-		PfbConfig::writeSystem('pfb_software_check', PfbToggle::On);
+		PfbConfig::writeSystem('gen/pfb_keep', PfbToggle::On);
+		PfbConfig::writeSystem('gen/pfb_software_check', PfbToggle::On);
 
 		$this->assertSame('on', config_get_path(self::GEN . '/pfb_keep'),
 			'writeSystem() must succeed and persist the canonical token regardless of privilege'
@@ -297,7 +297,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 		$GLOBALS['pfb_test_allowed_pages'] = [
 			'pfblockerng/pfblockerng_general.php' => true,
 		];
-		PfbConfig::write('pfb_keep', PfbToggle::On);
+		PfbConfig::write('gen/pfb_keep', PfbToggle::On);
 		$expected = config_get_path($path);
 
 		$GLOBALS['config'] = [];
@@ -305,7 +305,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 		$GLOBALS['pfb_test_allowed_pages'] = [
 			'pfblockerng/pfblockerng_general.php' => false,
 		];
-		PfbConfig::writeSystem('pfb_keep', PfbToggle::On);
+		PfbConfig::writeSystem('gen/pfb_keep', PfbToggle::On);
 		$actual = config_get_path($path);
 
 		$this->assertSame($expected, $actual,

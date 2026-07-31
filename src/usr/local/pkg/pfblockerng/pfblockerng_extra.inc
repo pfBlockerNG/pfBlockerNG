@@ -358,7 +358,7 @@ function pfb_cfg_alias_delta_mode_write(PfbAliasDeltaMode|string $mode): string
  */
 function pfb_editor_enabled(): bool
 {
-	return PfbConfig::read('pfb_syntax_highlight') === PfbToggle::On;
+	return PfbConfig::read('gen/pfb_syntax_highlight') === PfbToggle::On;
 }
 
 /** Read a PfbToggle from a raw stored value. */
@@ -418,12 +418,23 @@ function pfb_cfg_top1m_source_write(PfbTop1mSource|string $source): string
 // Tests: tests/php/CfgGatewayTest.php (round-trip, default, inventory).
 // ---------------------------------------------------------------------------
 
+// issue #1931: the one greppable home of every real config.xml section path. Registry
+// keys below are '<alias>/<bare-key>'; PfbConfig resolves the alias through this map.
+const PFB_SECTIONS = [
+	'gen'   => 'installedpackages/pfblockerng/config/0',
+	'dnsbl' => 'installedpackages/pfblockerngdnsblsettings/config/0',
+	'ss'    => 'installedpackages/pfblockerngsafesearch',
+	'ip'    => 'installedpackages/pfblockerngipsettings/config/0',
+	'rep'   => 'installedpackages/pfblockerngreputation/config/0',
+];
+
 /**
  * pfb_cfg_registry — the declarative field registry for all registered
  * installedpackages/pfblockerng* scalar keys.
  *
- * Returns a flat map of config-key => descriptor. Keys are the exact strings
- * used in config.xml, grouped loosely by config section.
+ * Returns a flat map of path-key => descriptor. A path key is '<alias>/<bare-key>',
+ * where <alias> indexes PFB_SECTIONS for the real config.xml section path and
+ * <bare-key> is the exact field name used in config.xml.
  *
  * Read adapter: callable(mixed $stored): <enum|string>  — stored string -> runtime value.
  * Write adapter: callable(<enum|string> $value): string — runtime value -> stored string.
@@ -431,9 +442,9 @@ function pfb_cfg_top1m_source_write(PfbTop1mSource|string $source): string
  *
  * Optional 'write_priv': overrides PfbConfig::WRITE_PRIV_DEFAULT for this field's
  * write-authorization check (issue #1895). Absent for every entry except
- * 'pfb_software_check' (the #485 Software-page secondary gate).
+ * 'gen/pfb_software_check' (the #485 Software-page secondary gate).
  *
- * @return array<string,array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null,write_priv?:string}>
+ * @return array<string,array{default:string,read_adapter:callable|null,write_adapter:callable|null,write_priv?:string}>
  */
 function pfb_cfg_registry(): array
 {
@@ -442,31 +453,6 @@ function pfb_cfg_registry(): array
 		return $registry;
 	}
 
-	// -----------------------------------------------------------------------
-	// Section: installedpackages/pfblockerng/config/0  (general settings)
-	// -----------------------------------------------------------------------
-	$gen = 'installedpackages/pfblockerng/config/0';
-
-	// -----------------------------------------------------------------------
-	// Section: installedpackages/pfblockerngdnsblsettings/config/0
-	// -----------------------------------------------------------------------
-	$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
-
-	// -----------------------------------------------------------------------
-	// Section: installedpackages/pfblockerngsafesearch  (flat, no /config/0)
-	// -----------------------------------------------------------------------
-	$ss = 'installedpackages/pfblockerngsafesearch';
-
-	// -----------------------------------------------------------------------
-	// Section: installedpackages/pfblockerngipsettings/config/0
-	// -----------------------------------------------------------------------
-	$ip = 'installedpackages/pfblockerngipsettings/config/0';
-
-	// -----------------------------------------------------------------------
-	// Section: installedpackages/pfblockerngreputation/config/0
-	// -----------------------------------------------------------------------
-	$rep = 'installedpackages/pfblockerngreputation/config/0';
-
 	$registry = [
 
 		// -------------------------------------------------------------------
@@ -474,16 +460,14 @@ function pfb_cfg_registry(): array
 		// -------------------------------------------------------------------
 
 		// Settings snapshot schema marker. Missing installs are the legacy 3.2 family.
-		'settings_family' => [
-			'section'       => $gen,
+		'gen/settings_family' => [
 			'default'       => '3.2',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Master enable/disable: 'on' | '' (checkbox).
-		'enable_cb' => [
-			'section'       => $gen,
+		'gen/enable_cb' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -496,124 +480,106 @@ function pfb_cfg_registry(): array
 		// (key absent) which the registry default returns as 'on'. The empty-string
 		// '' is a LEGACY READ token for installs written before this fix; it maps
 		// to Off on read, same as 'off'. Write always emits canonical 'off'.
-		'pfb_keep' => [
-			'section'       => $gen,
+		'gen/pfb_keep' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Update interval: numeric hour string | 'Disabled'. Default '1'.
-		'pfb_interval' => [
-			'section'       => $gen,
+		'gen/pfb_interval' => [
 			'default'       => '1',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Cron start minute ('0'|'15'|'30'|'45'). Default '0'.
-		'pfb_min' => [
-			'section'       => $gen,
+		'gen/pfb_min' => [
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Cron start hour (0-23 as string). Default '0'.
-		'pfb_hour' => [
-			'section'       => $gen,
+		'gen/pfb_hour' => [
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Once-a-day start hour (0-23 as string). Default '0'.
-		'pfb_dailystart' => [
-			'section'       => $gen,
+		'gen/pfb_dailystart' => [
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Max daily download failure threshold ('0' = unlimited). Default '0'.
-		'skipfeed' => [
-			'section'       => $gen,
+		'gen/skipfeed' => [
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// ADR-11: CSV of active aggregate alias types (e.g. 'Deny,Permit'). Default ''.
-		'pfb_agg_types' => [
-			'section'       => $gen,
+		'gen/pfb_agg_types' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Log rotation limits (all numeric strings; default '20000').
-		'log_max_log' => [
-			'section'       => $gen,
+		'gen/log_max_log' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
-		'log_max_errlog' => [
-			'section'       => $gen,
+		'gen/log_max_errlog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
-		'log_max_extraslog' => [
-			'section'       => $gen,
+		'gen/log_max_extraslog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
-		'log_max_ip_blocklog' => [
-			'section'       => $gen,
+		'gen/log_max_ip_blocklog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
-		'log_max_ip_permitlog' => [
-			'section'       => $gen,
+		'gen/log_max_ip_permitlog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
-		'log_max_ip_matchlog' => [
-			'section'       => $gen,
+		'gen/log_max_ip_matchlog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
-		'log_max_ip_parse_err' => [
-			'section'       => $gen,
+		'gen/log_max_ip_parse_err' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
-		'log_max_dnslog' => [
-			'section'       => $gen,
+		'gen/log_max_dnslog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
-		'log_max_dnsbl_parse_err' => [
-			'section'       => $gen,
+		'gen/log_max_dnsbl_parse_err' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
-		'log_max_dnsreplylog' => [
-			'section'       => $gen,
+		'gen/log_max_dnsreplylog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
-		'log_max_unilog' => [
-			'section'       => $gen,
+		'gen/log_max_unilog' => [
 			'default'       => '20000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -628,8 +594,7 @@ function pfb_cfg_registry(): array
 	// ADR-60: per-log age-based retention cap (days; '0' = off), independent of
 	// log_max_<type>'s line-count cap and its 'nolimit' opt-out (S2.2/S2.3 item 3).
 	foreach ($log_types as $log_type) {
-		$registry['log_max_days_' . $log_type] = [
-			'section'       => $gen,
+		$registry['gen/log_max_days_' . $log_type] = [
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -640,8 +605,7 @@ function pfb_cfg_registry(): array
 
 		// issue #1109: log-retention trim hysteresis margin percent (global,
 		// applies uniformly to both the line-count and age caps). Default '0'.
-		'pfb_log_trim_margin_pct' => [
-			'section'       => $gen,
+		'gen/pfb_log_trim_margin_pct' => [
 			'default'       => '0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -651,8 +615,7 @@ function pfb_cfg_registry(): array
 		// issue #1887: toggle adapter adopted, and the effective ON default moves from
 		// the hand-written reader (`!== 'off'`) into the registry where every other
 		// toggle keeps its default. Absent behaves exactly as before (enabled).
-		'pfb_software_check' => [
-			'section'       => $gen,
+		'gen/pfb_software_check' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -664,16 +627,14 @@ function pfb_cfg_registry(): array
 		// Internal-address feed-host filter toggle: 'on'|'off'. Default 'on' (new install).
 		// issue #1887: toggle adapter adopted; the #1770 install seed still pins 'off'
 		// once on an already-configured box (see pfb_feed_filter_install_default()).
-		'pfb_feed_internal_filter' => [
-			'section'       => $gen,
+		'gen/pfb_feed_internal_filter' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Allowlist for internal-feed hosts (base64-encoded). Default ''.
-		'pfb_feed_internal_allowlist' => [
-			'section'       => $gen,
+		'gen/pfb_feed_internal_allowlist' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -681,16 +642,14 @@ function pfb_cfg_registry(): array
 
 		// ADR-49: opt-in plain-text feed sanity scan. Checkbox 'on'|''(off).
 		// Default off (absent = off = today's behaviour: the scan never runs).
-		'pfb_feed_sanity' => [
-			'section'       => $gen,
+		'gen/pfb_feed_sanity' => [
 			'default'       => '',                       // absent -> Off (new-install default too)
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Reuse blocklists across updates: 'on' | '' (checkbox). Default ''.
-		'pfb_reuse' => [
-			'section'       => $gen,
+		'gen/pfb_reuse' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -702,8 +661,7 @@ function pfb_cfg_registry(): array
 		// 'replace' = always full -T replace (pre-ADR-40 behaviour).
 		// Existing installs are grandfather-seeded to 'replace' at install/upgrade
 		// (pfb_alias_delta_mode_install_default); only brand-new installs take the 'auto' default.
-		'pfb_alias_delta_mode' => [
-			'section'       => $gen,
+		'gen/pfb_alias_delta_mode' => [
 			'default'       => 'auto',
 			'read_adapter'  => 'pfb_cfg_alias_delta_mode_read',
 			'write_adapter' => 'pfb_cfg_alias_delta_mode_write',
@@ -712,8 +670,7 @@ function pfb_cfg_registry(): array
 		// ADR-40: alias-table delta batch size (integer as string). Default '512'.
 		// Clamped to [64, 4096] on read. Batch=512 is optimal for sub-1M tables
 		// (zero ICMP stalls at 100k/1k-churn); batch=1024+ for 1M+ tables.
-		'pfb_alias_delta_batch' => [
-			'section'       => $gen,
+		'gen/pfb_alias_delta_batch' => [
 			'default'       => '512',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -722,8 +679,7 @@ function pfb_cfg_registry(): array
 		// ADR-43: tick-cron dispatch interval in minutes (1–60). Default '15'.
 		// One cron tick fires every */pfb_tick_interval; jobs run only when due
 		// per the due-ledger. Default 15 matches the tightest existing job (ss_refresh).
-		'pfb_tick_interval' => [
-			'section'       => $gen,
+		'gen/pfb_tick_interval' => [
 			'default'       => '15',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -733,8 +689,7 @@ function pfb_cfg_registry(): array
 		// When set: detected changes outside the window are deferred (pending); the first tick
 		// inside the window applies them. Empty string (default) = apply immediately (no deferral).
 		// Wrapping windows (e.g. "23:00-03:00") span midnight. Malformed = fail-safe (apply now).
-		'pfb_quiet_hours' => [
-			'section'       => $gen,
+		'gen/pfb_quiet_hours' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -750,8 +705,7 @@ function pfb_cfg_registry(): array
 		// default is 'on' (absent collapses back to the default, silently re-enabling a
 		// deliberate off; the #484 pfb_keep bug class, enforced by
 		// CfgGatewayTest::testNoToggleFieldDefaultsToOn). Mirrors pfb_keep exactly.
-		'pfb_syntax_highlight' => [
-			'section'       => $gen,
+		'gen/pfb_syntax_highlight' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -762,16 +716,14 @@ function pfb_cfg_registry(): array
 		// -------------------------------------------------------------------
 
 		// DNSBL master enable: 'on' | '' (checkbox).
-		'pfb_dnsbl' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_dnsbl' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// ADR-13: auto-create/remove DNSBL sinkhole VIPs: 'on' | '' (checkbox).
-		'pfb_dnsvip_auto' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_dnsvip_auto' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -779,56 +731,49 @@ function pfb_cfg_registry(): array
 
 		// [ #381 ] Opt out of automatic DNSBL sinkhole NAT rule generation: 'on' | '' (checkbox).
 		// Default '' = NAT generated (current behaviour); 'on' = user manages NAT manually.
-		'pfb_dnsbl_nonat' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_dnsbl_nonat' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// VIP interface for DNSBL sinkhole. Default 'lo0'.
-		'dnsbl_interface' => [
-			'section'       => $dnsbl,
+		'dnsbl/dnsbl_interface' => [
 			'default'       => 'lo0',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// DNSBL IPv4 sinkhole VIP id string. Default ''.
-		'pfb_dnsvip4' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_dnsvip4' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// DNSBL IPv6 sinkhole VIP id string. Default ''.
-		'pfb_dnsvip6' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_dnsvip6' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// DNSBL lighttpd HTTP port. Default '' (system default).
-		'pfb_dnsport' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_dnsport' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// DNSBL lighttpd HTTPS port. Default ''.
-		'pfb_dnsport_ssl' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_dnsport_ssl' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// TOP1M whitelist enable. Default ''.
-		'top1m_enable' => [
-			'section'       => $dnsbl,
+		'dnsbl/top1m_enable' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -838,24 +783,21 @@ function pfb_cfg_registry(): array
 		// Legacy 'alexa' (dead service, #872) coalesces to 'tranco', and legacy 'domcop'
 		// (list moved hosting, #928) coalesces to 'openpagerank', at the read boundary
 		// via pfb_cfg_top1m_source_read(). Default 'tranco'.
-		'top1m_source' => [
-			'section'       => $dnsbl,
+		'dnsbl/top1m_source' => [
 			'default'       => 'tranco',
 			'read_adapter'  => 'pfb_cfg_top1m_source_read',
 			'write_adapter' => 'pfb_cfg_top1m_source_write',
 		],
 
 		// TOP1M domain count (numeric string). Default '1000'.
-		'top1m_count' => [
-			'section'       => $dnsbl,
+		'dnsbl/top1m_count' => [
 			'default'       => '1000',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// TOP1M TLD inclusions for whitelisting. Default ''.
-		'top1m_inclusion' => [
-			'section'       => $dnsbl,
+		'dnsbl/top1m_inclusion' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -868,32 +810,28 @@ function pfb_cfg_registry(): array
 		// on GET, and a blank POST preserves the existing value rather than clearing it
 		// (pfblockerng_dnsbl.php's save handler) -- see PFB_FILTER_TOKEN (pfblockerng.inc)
 		// for the accepted charset. Default ''.
-		'top1m_token' => [
-			'section'       => $dnsbl,
+		'dnsbl/top1m_token' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Resolver cache backup/restore option. Default ''.
-		'pfb_cache' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_cache' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Full resolver-cache flush after a successful DNSBL data swap. Default off.
-		'pfb_cache_flush' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_cache_flush' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Global logging/blocking mode. Default ''.
-		'global_log' => [
-			'section'       => $dnsbl,
+		'dnsbl/global_log' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -901,24 +839,21 @@ function pfb_cfg_registry(): array
 
 		// ADR-22: scheme-parsing leniency: 'on' | 'off' | ''. Default 'off'.
 		// Toggle adapter: Off stores the explicit 'off' token.
-		'pfb_dnsbl_lenient' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_dnsbl_lenient' => [
 			'default'       => 'off',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Python DNS reply logging. Default ''.
-		'pfb_py_reply' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_py_reply' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// HSTS null-blocking mode: 'on' | ''. Default ''.
-		'pfb_hsts' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_hsts' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -931,8 +866,7 @@ function pfb_cfg_registry(): array
 		// round-trips with zero migration. Legacy '' and the 4.0.0-alpha 'all' token
 		// read as Off; unknown tokens also fall through to Off.
 		// See ADR-28 §2.2 + CfgAdaptersTest.
-		'pfb_idn' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_idn' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_idn_mode_read',
 			'write_adapter' => 'pfb_cfg_idn_mode_write',
@@ -941,232 +875,203 @@ function pfb_cfg_registry(): array
 		// Confusable: block malicious homoglyphs (default on). Default 'on'.
 		// issue #1887: toggle adapter — without it, read() resolving a stored '' to the
 		// default 'on' made the page's old ?: '' unchecked save impossible to turn off.
-		'pfb_idn_block_malicious' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_idn_block_malicious' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Confusable: escalate suspicious mixed-script to block (opt-in). Default ''.
-		'pfb_idn_escalate_suspicious' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_idn_escalate_suspicious' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// Python regex: 'on' | ''. Default ''.
-		'pfb_regex' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_regex' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Python regex list (textarea). Default ''.
-		'pfb_regex_list' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_regex_list' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Python regex static cap ('on'|''). Default ''.
-		'pfb_regex_cap' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_regex_cap' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// CNAME validation. Default ''.
-		'pfb_cname' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_cname' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// TLD Allow option. Default ''.
-		'tld_allow' => [
-			'section'       => $dnsbl,
+		'dnsbl/tld_allow' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Log events via DNSBL Webserver vs python. Default ''.
-		'pfb_py_nolog' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_py_nolog' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// No AAAA blocking: 'on' | ''. Default ''.
-		'pfb_noaaaa' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_noaaaa' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// No AAAA list (textarea). Default ''.
-		'pfb_noaaaa_list' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_noaaaa_list' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// DNSBL bypass enable: 'on' | ''. Default ''.
-		'pfb_gp' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_gp' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// DNSBL bypass local IP list (textarea). Default ''.
-		'pfb_gp_bypass_list' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_gp_bypass_list' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// TLD blacklist (textarea). Default ''.
-		'tld_wildcard_blacklist' => [
-			'section'       => $dnsbl,
+		'dnsbl/tld_wildcard_blacklist' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// TLD exclusion (textarea). Default ''.
-		'tld_wildcard_exclusion' => [
-			'section'       => $dnsbl,
+		'dnsbl/tld_wildcard_exclusion' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// DNSBL suppression/whitelist (base64). Default ''.
-		'suppression' => [
-			'section'       => $dnsbl,
+		'dnsbl/suppression' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// DNSBL action for IP blocking. Default 'Disabled'.
-		'action' => [
-			'section'       => $dnsbl,
+		'dnsbl/action' => [
 			'default'       => 'Disabled',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Auto-create floating pass rule. Default 'Disabled'.
-		'pfb_dnsbl_rule' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_dnsbl_rule' => [
 			'default'       => 'Disabled',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Allow-interface for DNSBL (multi-select). Default ''.
-		'dnsbl_allow_int' => [
-			'section'       => $dnsbl,
+		'dnsbl/dnsbl_allow_int' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Python control integration. Default ''.
-		'pfb_control' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_control' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Legacy DNS-TXT control transport (deprecated). Default ''.
-		'pfb_control_legacy' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_control_legacy' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Python cache max (numeric string). Default '' (unlimited).
-		'pfb_py_cache_max' => [
-			'section'       => $dnsbl,
+		'dnsbl/pfb_py_cache_max' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// TLD blocking enable. Default ''.
-		'tld_wildcard' => [
-			'section'       => $dnsbl,
+		'dnsbl/tld_wildcard' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// Aliaslog (logging mode). Default ''.
-		'aliaslog' => [
-			'section'       => $dnsbl,
+		'dnsbl/aliaslog' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// ADR-36: NAT DNS-redirect enable: 'on' | '' (checkbox). Default '' (off).
-		'dnsbl_redir' => [
-			'section'       => $dnsbl,
+		'dnsbl/dnsbl_redir' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// ADR-36: NAT DNS-redirect interface multi-select (comma-joined string). Default ''.
-		'dnsbl_redir_int' => [
-			'section'       => $dnsbl,
+		'dnsbl/dnsbl_redir_int' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// ADR-36: NAT DNS-redirect exception alias/IP string. Default ''.
-		'dnsbl_redir_exclude' => [
-			'section'       => $dnsbl,
+		'dnsbl/dnsbl_redir_exclude' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// ADR-37: DoT/DoQ block enable: 'on' | '' (checkbox). Default '' (off).
-		'dnsbl_dot_block' => [
-			'section'       => $dnsbl,
+		'dnsbl/dnsbl_dot_block' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 		],
 
 		// ADR-37: DoT/DoQ block interface multi-select (comma-joined string). Default ''.
-		'dnsbl_dot_block_int' => [
-			'section'       => $dnsbl,
+		'dnsbl/dnsbl_dot_block_int' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// ADR-37: DoT/DoQ block exception alias/IP string. Default ''.
-		'dnsbl_dot_block_exclude' => [
-			'section'       => $dnsbl,
+		'dnsbl/dnsbl_dot_block_exclude' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -1175,8 +1080,7 @@ function pfb_cfg_registry(): array
 		// ADR-37: DoT/DoQ block rule action: 'reject' (default) | 'block'.
 		// Mirrors the IP-settings inbound/outbound Rule Action selector. Reject
 		// fast-fails the client (outbound LAN->WAN rule); block silently drops.
-		'dnsbl_dot_block_action' => [
-			'section'       => $dnsbl,
+		'dnsbl/dnsbl_dot_block_action' => [
 			'default'       => 'reject',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -1185,8 +1089,7 @@ function pfb_cfg_registry(): array
 		// ADR-37: DoT/DoQ block floating mode: 'on' | '' (checkbox). Default '' (off).
 		// On = a single floating rule (direction 'in') over the selected interfaces
 		// instead of one rule per interface. Off preserves the per-interface default.
-		'dnsbl_dot_block_floating' => [
-			'section'       => $dnsbl,
+		'dnsbl/dnsbl_dot_block_floating' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -1203,8 +1106,7 @@ function pfb_cfg_registry(): array
 		// pfb_syslog_event() — events route to the dedicated pfblockerng_syslog.log
 		// by program name, so facility never affects routing, and every event is
 		// the same class of informational record, so a severity picker is moot.
-		'log_syslog' => [
-			'section'       => $gen,
+		'gen/log_syslog' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -1215,32 +1117,28 @@ function pfb_cfg_registry(): array
 		// -------------------------------------------------------------------
 
 		// SafeSearch enable mode. Default 'Disable'.
-		'safesearch_enable' => [
-			'section'       => $ss,
+		'ss/safesearch_enable' => [
 			'default'       => 'Disable',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// YouTube SafeSearch mode. Default 'Disable'.
-		'safesearch_youtube' => [
-			'section'       => $ss,
+		'ss/safesearch_youtube' => [
 			'default'       => 'Disable',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// DNS-over-HTTPS blocking mode. Default 'Disable'.
-		'safesearch_doh' => [
-			'section'       => $ss,
+		'ss/safesearch_doh' => [
 			'default'       => 'Disable',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 		],
 
 		// DoH domain exclusion list (CSV). Default ''.
-		'safesearch_doh_list' => [
-			'section'       => $ss,
+		'ss/safesearch_doh_list' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -1256,8 +1154,7 @@ function pfb_cfg_registry(): array
 		// every call site routes through the gateway; this is a legacy key
 		// from the original addon (mirrors the '1.0.0' vintage of the sibling
 		// DNSBL blob fields). Default ''.
-		'v4suppression' => [
-			'section'       => $ip,
+		'ip/v4suppression' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -1265,8 +1162,7 @@ function pfb_cfg_registry(): array
 
 		// ADR-53: IPv6 suppression customlist -- the v4 blob's v6 sibling
 		// (same base64/newline-separated shape). Default ''.
-		'v6suppression' => [
-			'section'       => $ip,
+		'ip/v6suppression' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
@@ -1277,8 +1173,7 @@ function pfb_cfg_registry(): array
 		// -------------------------------------------------------------------
 
 		// issue #1896: 'Max' per-list Reputation toggle: 'on' | 'off' | ''. Default '' (off).
-		'enable_rep' => [
-			'section'       => $rep,
+		'rep/enable_rep' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -1286,8 +1181,7 @@ function pfb_cfg_registry(): array
 
 		// issue #1896: 'pMax' collective Reputation toggle (no Country Exclusion):
 		// 'on' | 'off' | ''. Default '' (off).
-		'enable_pdup' => [
-			'section'       => $rep,
+		'rep/enable_pdup' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -1295,8 +1189,7 @@ function pfb_cfg_registry(): array
 
 		// issue #1896: 'dMax' collective Reputation toggle (Country Exclusion applied):
 		// 'on' | 'off' | ''. Default '' (off).
-		'enable_dedup' => [
-			'section'       => $rep,
+		'rep/enable_dedup' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
@@ -1372,14 +1265,14 @@ final class PfbConfig
 	 * Returns the registered default when the key is absent/null; applies
 	 * the registered read adapter (stored string -> runtime enum/string).
 	 *
-	 * @param  string $key  The exact config.xml field key (e.g. 'pfb_keep').
+	 * @param  string $key  The registered path-form field key (e.g. 'gen/pfb_keep').
 	 * @return mixed        Runtime value (enum or string).
 	 * @throws InvalidArgumentException When $key is not in the registry.
 	 */
 	public static function read(string $key): mixed
 	{
 		$entry   = self::entry($key);
-		$path    = $entry['section'] . '/' . $key;
+		$path    = self::sectionPath($key);
 		$raw     = config_get_path($path, NULL);
 		$stored  = (string) self::notConfigured($entry, $raw);
 		$adapter = $entry['read_adapter'];
@@ -1404,7 +1297,7 @@ final class PfbConfig
 	 * read-modify-write case (e.g. the General settings page); write() has no such case
 	 * to carve out.
 	 *
-	 * @param  string $key   The exact config.xml field key.
+	 * @param  string $key   The registered path-form field key.
 	 * @param  mixed  $value Runtime value (enum or string).
 	 * @throws InvalidArgumentException When $key is not in the registry.
 	 * @throws RuntimeException         When the caller lacks the field's write_priv.
@@ -1425,7 +1318,7 @@ final class PfbConfig
 	 * on them; this is the explicit escape hatch for that legitimate case. Never
 	 * callable from src/usr/local/www/ (enforced by RequireConfigGatewaySniff).
 	 *
-	 * @param  string $key   The exact config.xml field key.
+	 * @param  string $key   The registered path-form field key.
 	 * @param  mixed  $value Runtime value (enum or string).
 	 * @throws InvalidArgumentException When $key is not in the registry.
 	 */
@@ -1437,13 +1330,13 @@ final class PfbConfig
 	/**
 	 * Delete a single registered field.
 	 *
-	 * @param  string $key  The exact config.xml field key.
+	 * @param  string $key  The registered path-form field key.
 	 * @throws InvalidArgumentException When $key is not in the registry.
 	 */
 	public static function delete(string $key): void
 	{
-		$entry = self::entry($key);
-		$path  = $entry['section'] . '/' . $key;
+		self::entry($key);
+		$path = self::sectionPath($key);
 		config_del_path($path);
 	}
 
@@ -1507,11 +1400,12 @@ final class PfbConfig
 		// field failing its check must never leave an earlier field's config_set_path
 		// already applied. Registered fields only -- a key registered to a DIFFERENT
 		// section, or not registered at all, is foreign data and carries no gate here.
-		foreach (pfb_cfg_registry() as $key => $entry) {
-			if ($entry['section'] !== $section || !array_key_exists($key, $data)) {
+		foreach (pfb_cfg_registry() as $reg_key => $entry) {
+			[$alias, $bare] = explode('/', $reg_key, 2);
+			if ((PFB_SECTIONS[$alias] ?? NULL) !== $section || !array_key_exists($bare, $data)) {
 				continue;
 			}
-			self::assertWriteAllowedOnChange($key, $entry, $section, $data[$key]);
+			self::assertWriteAllowedOnChange($bare, $entry, $section, $data[$bare]);
 		}
 		self::writeSectionRaw($section, $data);
 	}
@@ -1544,17 +1438,35 @@ final class PfbConfig
 	// -----------------------------------------------------------------------
 
 	/**
+	 * Resolve a path-form registry key ('<alias>/<bare-key>') to the real
+	 * config.xml field path via PFB_SECTIONS (issue #1931). Defensive only --
+	 * unreachable for a registered key (CfgGatewayTest's alias-prefix gate).
+	 *
+	 * @param  string $key  A registered path-form key (e.g. 'gen/pfb_keep').
+	 * @return string       The real config.xml field path.
+	 * @throws InvalidArgumentException When $key is malformed or its alias is unknown.
+	 */
+	private static function sectionPath(string $key): string
+	{
+		$slash = strpos($key, '/');
+		if ($slash === FALSE || !array_key_exists(substr($key, 0, $slash), PFB_SECTIONS)) {
+			throw new InvalidArgumentException("PfbConfig: malformed registry key '{$key}'.");
+		}
+		return PFB_SECTIONS[substr($key, 0, $slash)] . substr($key, $slash);
+	}
+
+	/**
 	 * write() body proper, with NO privilege check — shared by write() and
 	 * writeSystem() (issue #1895).
 	 *
-	 * @param  string $key   The exact config.xml field key.
+	 * @param  string $key   The registered path-form field key.
 	 * @param  mixed  $value Runtime value (enum or string).
 	 * @throws InvalidArgumentException When $key is not in the registry.
 	 */
 	private static function writeRaw(string $key, mixed $value): void
 	{
 		$entry   = self::entry($key);
-		$path    = $entry['section'] . '/' . $key;
+		$path    = self::sectionPath($key);
 		$adapter = $entry['write_adapter'];
 		$value   = self::notConfigured($entry, $value);
 		$stored  = ($adapter !== NULL) ? $adapter($value) : (string) $value;
@@ -1570,8 +1482,9 @@ final class PfbConfig
 	 */
 	private static function writeSectionRaw(string $section, array $data): void
 	{
-		foreach (pfb_cfg_registry() as $key => $entry) {
-			if ($entry['section'] !== $section) {
+		foreach (pfb_cfg_registry() as $reg_key => $entry) {
+			[$alias, $bare] = explode('/', $reg_key, 2);
+			if ((PFB_SECTIONS[$alias] ?? NULL) !== $section) {
 				continue;
 			}
 			$read_adapter  = $entry['read_adapter'];
@@ -1579,10 +1492,10 @@ final class PfbConfig
 			if ($read_adapter === NULL || $write_adapter === NULL) {
 				continue;
 			}
-			if (!array_key_exists($key, $data)) {
+			if (!array_key_exists($bare, $data)) {
 				continue;
 			}
-			$data[$key] = $write_adapter($read_adapter(self::notConfigured($entry, $data[$key])));
+			$data[$bare] = $write_adapter($read_adapter(self::notConfigured($entry, $data[$bare])));
 		}
 		config_set_path($section, $data);
 	}
@@ -1606,7 +1519,8 @@ final class PfbConfig
 	 * trap issue #1895 documents. A legitimate system-context caller must say so
 	 * explicitly, via PfbConfig::writeSystem()/writeSectionSystem().
 	 *
-	 * @param  string $key    The exact config.xml field key (named in the exception).
+	 * @param  string $key    The field key, named in the exception exactly as the caller
+	 *                        passed it (path-form from write(); bare from writeSection()).
 	 * @param  array  $entry  The registry entry (consulted for its optional 'write_priv').
 	 * @throws RuntimeException When the caller lacks the field's required page privilege.
 	 */
@@ -1655,7 +1569,8 @@ final class PfbConfig
 	 * always an authorization event, changed or not, because there is no read-modify-
 	 * write section saver behind it carrying an unrelated field's value along.
 	 *
-	 * @param  string $key     The exact config.xml field key (named in the exception).
+	 * @param  string $key     The bare field key (named in the exception; $section . '/' .
+	 *                         $key must be the real config.xml field path).
 	 * @param  array  $entry   The registry entry (consulted for its optional 'write_priv').
 	 * @param  string $section The full config.xml section path $key lives under.
 	 * @param  mixed  $incoming The incoming (pre-normalisation) value for $key in the section blob.
@@ -1730,7 +1645,7 @@ final class PfbConfig
 	 * An enum cannot do this itself — fromStored() has no access to the per-field
 	 * default, which is precisely why the resolution belongs to the gateway.
 	 *
-	 * @param  array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null} $entry
+	 * @param  array{default:string,read_adapter:callable|null,write_adapter:callable|null} $entry
 	 * @param  mixed $value  Raw stored value, or the runtime value on the write paths.
 	 * @return mixed         $entry['default'] when $value is NULL or '', else $value verbatim.
 	 */
@@ -1740,10 +1655,10 @@ final class PfbConfig
 	}
 
 	/**
-	 * Look up a registry entry, throwing on an unregistered key.
+	 * Look up a registry entry by its path-form key, throwing on an unregistered key.
 	 *
-	 * @param  string $key
-	 * @return array{section:string,default:string,read_adapter:callable|null,write_adapter:callable|null,write_priv?:string}
+	 * @param  string $key  A path-form key (e.g. 'gen/pfb_keep').
+	 * @return array{default:string,read_adapter:callable|null,write_adapter:callable|null,write_priv?:string}
 	 * @throws InvalidArgumentException
 	 */
 	private static function entry(string $key): array
@@ -1775,7 +1690,7 @@ function pfb_settings_family_from_version(string $version): ?string
 
 function pfb_settings_family_current(): ?string
 {
-	$value = PfbConfig::read('settings_family');
+	$value = PfbConfig::read('gen/settings_family');
 	return is_string($value) && isset(PFB_SETTINGS_FAMILY_RANK[$value]) ? $value : NULL;
 }
 
@@ -1983,7 +1898,7 @@ function pfb_settings_family_record(string $family): bool
 	try {
 		// issue #1895: called from install/migration/upgrade paths with no web session --
 		// a plain write() would silently fail-closed here and this catch would swallow it.
-		PfbConfig::writeSystem('settings_family', $family);
+		PfbConfig::writeSystem('gen/settings_family', $family);
 		write_config('pfBlockerNG: record settings family');
 		return TRUE;
 	} catch (Throwable) {
@@ -3088,7 +3003,7 @@ function pfb_syslog_event(string $body): void
 	unset($GLOBALS['pfb_test_syslog_reset']);
 
 	// Fresh gate: read the current toggle on every call.
-	if (PfbConfig::read('log_syslog') !== PfbToggle::On) {
+	if (PfbConfig::read('gen/log_syslog') !== PfbToggle::On) {
 		return;
 	}
 
@@ -3399,7 +3314,7 @@ function pfb_due_ledger_mark_ran_anchored(
 /**
  * pfb_tick_interval_clamp — clamp a raw pfb_tick_interval config value to a valid cron minute.
  *
- * Accepts the raw string from PfbConfig::read('pfb_tick_interval') and returns an int
+ * Accepts the raw string from PfbConfig::read('gen/pfb_tick_interval') and returns an int
  * suitable for use as the cron minute field (1–60). Non-numeric or out-of-range values
  * are clamped: 0 → 1, >60 → 60, non-int (e.g. 'abc') → 1.
  *
@@ -3590,7 +3505,7 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
  * inside the window applies it. Default '' = apply immediately on every due tick.
  *
  * Cadence seeding from legacy knobs (§2.G — no config.xml migration):
- *   feed cron : PfbConfig::read('pfb_interval') hours; skip scheduled runs when 'Disabled'.
+ *   feed cron : PfbConfig::read('gen/pfb_interval') hours; skip scheduled runs when 'Disabled'.
  *   dcc       : 86400 s daily, jitter = seeded_jitter (stable per install).
  *   bl        : 86400 or 604800 s, jitter = seeded_jitter (stable per install).
  *
@@ -3616,7 +3531,7 @@ function pfblockerng_tick(): void
 	$dispatched = FALSE;
 
 	// --- Cadence from legacy knobs ---
-	$raw_interval  = PfbConfig::read('pfb_interval');
+	$raw_interval  = PfbConfig::read('gen/pfb_interval');
 	$cron_disabled = ($raw_interval === 'Disabled');
 	$cron_secs     = $cron_disabled ? 0 : (max(1, (int)$raw_interval) * 3600);
 
@@ -3630,7 +3545,7 @@ function pfblockerng_tick(): void
 
 	// --- Apply-on-change window (ADR-43) ---
 	// Empty window = apply immediately (default). Non-empty = defer outside window.
-	$window = (string) PfbConfig::read('pfb_quiet_hours');
+	$window = (string) PfbConfig::read('gen/pfb_quiet_hours');
 	$in_win = pfb_quiet_hours_in_window($now, $window);
 
 	// --- Dispatch due (or pending) jobs; defer when outside the apply window ---
@@ -5020,7 +4935,8 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 		}
 
 		$supp_key       = $is_v6 ? 'ipsuppression_v6' : 'ipsuppression';
-		$cfg_key        = $is_v6 ? 'v6suppression' : 'v4suppression';
+		$cfg_key        = $is_v6 ? 'v6suppression' : 'v4suppression';	// bare -- blob index
+		$cfg_key_path   = $is_v6 ? 'ip/v6suppression' : 'ip/v4suppression';	// issue #1931: gateway key
 		$host_line      = $is_v6 ? "{$ip}/128" : "{$ip}/32";
 		$supp_data      = isset($clists[$supp_key]['data']) && is_array($clists[$supp_key]['data'])
 			? $clists[$supp_key]['data'] : [];
@@ -5042,7 +4958,7 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 			}
 			$data .= "{$supp_dat}\r\n";
 			$clists[$supp_key]['base64'] = pfb_text_area_encode($data);
-			PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
+			PfbConfig::write($cfg_key_path, $clists[$supp_key]['base64']);
 			write_config("pfBlockerNG: Added {$ip} to the IPv{$family} Suppression customlist", FALSE);
 			$refresh_suppfile = TRUE;
 		}

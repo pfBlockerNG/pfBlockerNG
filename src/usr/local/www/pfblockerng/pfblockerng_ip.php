@@ -43,12 +43,12 @@ $pconfig['enable_agg']		= $pfb['iconfig']['enable_agg']				?: '';
 // save-time sanitiser and the rendered select share one source of allowed values.
 // Stored VALUES are Deny/Permit/Match/Native; the labels show the reference-only alias.
 $options_pfb_agg_types		= [ 'Deny' => 'Alias Deny', 'Permit' => 'Alias Permit', 'Match' => 'Alias Match', 'Native' => 'Alias Native' ];
-$pconfig['pfb_agg_types']	= explode(',', (string) PfbConfig::read('pfb_agg_types'));
+$pconfig['pfb_agg_types']	= explode(',', (string) PfbConfig::read('gen/pfb_agg_types'));
 
 // ADR-40: alias-table apply mode (gateway-registered, general section).
 $options_pfb_alias_delta_mode	= [ 'auto' => 'Auto (delta for small churn, replace for large)', 'delta' => 'Delta (-T add/-T delete)', 'replace' => 'Replace (-T replace, pre-4.0 behaviour)' ];
-$pconfig['pfb_alias_delta_mode']	= (string) PfbConfig::read('pfb_alias_delta_mode')->toStored();
-$pconfig['pfb_alias_delta_batch']	= pfb_alias_delta_batch_clamp((string) PfbConfig::read('pfb_alias_delta_batch'));
+$pconfig['pfb_alias_delta_mode']	= (string) PfbConfig::read('gen/pfb_alias_delta_mode')->toStored();
+$pconfig['pfb_alias_delta_batch']	= pfb_alias_delta_batch_clamp((string) PfbConfig::read('gen/pfb_alias_delta_batch'));
 
 // Default to 'on' for new installation only
 $pconfig['suppression']		= isset($pfb['iconfig']['suppression'])			? $pfb['iconfig']['suppression'] : 'on';
@@ -277,18 +277,18 @@ if ($_POST) {
 			$agg_types_post	= array_values(array_intersect(
 						array_keys($options_pfb_agg_types),
 						(array) ($_POST['pfb_agg_types'] ?? array())));
-			PfbConfig::write('pfb_agg_types', implode(',', $agg_types_post));
+			PfbConfig::write('gen/pfb_agg_types', implode(',', $agg_types_post));
 
 			// ADR-40: alias-table apply mode (gateway-registered scalar).
 			$delta_mode_post = array_key_exists($_POST['pfb_alias_delta_mode'] ?? '', $options_pfb_alias_delta_mode)
 				? $_POST['pfb_alias_delta_mode']
 				: 'auto';
-			PfbConfig::write('pfb_alias_delta_mode', $delta_mode_post);
+			PfbConfig::write('gen/pfb_alias_delta_mode', $delta_mode_post);
 
 			// ADR-40: batch size — clamp to [64, 4096].  An empty field (user
 			// cleared the value) must default to 512, not cast to 0 and clamp to 64.
 			$_pfb_batch_raw = trim((string) ($_POST['pfb_alias_delta_batch'] ?? ''));
-			PfbConfig::write('pfb_alias_delta_batch', (string) pfb_alias_delta_batch_resolve($_pfb_batch_raw));
+			PfbConfig::write('gen/pfb_alias_delta_batch', (string) pfb_alias_delta_batch_resolve($_pfb_batch_raw));
 
 			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
 			write_config('[pfBlockerNG] save IP settings');
