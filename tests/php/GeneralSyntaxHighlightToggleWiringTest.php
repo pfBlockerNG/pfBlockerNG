@@ -38,9 +38,9 @@ final class GeneralSyntaxHighlightToggleWiringTest extends TestCase
 	public function testLoadReadsThroughThePfbConfigGateway(): void
 	{
 		$this->assertMatchesRegularExpression(
-			"#\\\$pconfig\\['pfb_syntax_highlight'\\]\\s*=\\s*PfbConfig::read\\(\\s*'pfb_syntax_highlight'\\s*\\)->value#",
+			"#\\\$pconfig\\['pfb_syntax_highlight'\\]\\s*=\\s*PfbConfig::read\\(\\s*'gen/pfb_syntax_highlight'\\s*\\)->value#",
 			self::$src,
-			'expected $pconfig[\'pfb_syntax_highlight\'] to be loaded via PfbConfig::read(\'pfb_syntax_highlight\')->value, matching the log_syslog precedent'
+			'expected $pconfig[\'pfb_syntax_highlight\'] to be loaded via PfbConfig::read(\'gen/pfb_syntax_highlight\')->value, matching the log_syslog precedent'
 		);
 	}
 

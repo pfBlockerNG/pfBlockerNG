@@ -45,7 +45,7 @@ final class ToggleAdapterAdoptionTest extends TestCase
 		$this->assertNull(config_get_path(self::FEED));
 		$this->assertSame(
 			PfbToggle::On,
-			PfbConfig::read('pfb_feed_internal_filter'),
+			PfbConfig::read('gen/pfb_feed_internal_filter'),
 			'absent pfb_feed_internal_filter must read as the registered default On, as the enum'
 		);
 	}
@@ -93,7 +93,7 @@ final class ToggleAdapterAdoptionTest extends TestCase
 		$this->assertNull(config_get_path(self::SW));
 		$this->assertSame(
 			PfbToggle::On,
-			PfbConfig::read('pfb_software_check'),
+			PfbConfig::read('gen/pfb_software_check'),
 			'absent pfb_software_check must read as the registered default On, as the enum'
 		);
 	}
@@ -123,7 +123,7 @@ final class ToggleAdapterAdoptionTest extends TestCase
 	 */
 	public function testSoftwareCheckUncheckedSaveRoundTrips(): void
 	{
-		PfbConfig::write('pfb_software_check', PfbToggle::Off);
+		PfbConfig::write('gen/pfb_software_check', PfbToggle::Off);
 		$this->assertSame('off', config_get_path(self::SW), 'Off must persist as the explicit off token');
 		$this->assertFalse(pfb_software_check_enabled(), 'the persisted off must read back as disabled');
 	}

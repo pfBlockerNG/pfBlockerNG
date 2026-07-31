@@ -670,7 +670,7 @@ $pfb_gcfg = pfb_gconfig_operator_view($pfb_gcfg);
 $pfb_gcfg = empty($pfb_gcfg) ? NULL : $pfb_gcfg;
 $pfb_feed_default = pfb_feed_filter_install_default($pfb_gcfg);
 if ($pfb_feed_default !== null) {
-	PfbConfig::writeSystem('pfb_feed_internal_filter', $pfb_feed_default);
+	PfbConfig::writeSystem('gen/pfb_feed_internal_filter', $pfb_feed_default);
 }
 
 // ADR-40: grandfather an already-configured install to 'replace' (pre-ADR-40 full -T replace) so
@@ -678,7 +678,7 @@ if ($pfb_feed_default !== null) {
 // default. Run-once via the !isset guard in pfb_alias_delta_mode_install_default().
 $pfb_delta_default = pfb_alias_delta_mode_install_default($pfb_gcfg);
 if ($pfb_delta_default !== null) {
-	PfbConfig::writeSystem('pfb_alias_delta_mode', $pfb_delta_default);
+	PfbConfig::writeSystem('gen/pfb_alias_delta_mode', $pfb_delta_default);
 }
 
 // Convert dnsbl_info CSV file to SQLite3 database format
@@ -839,10 +839,10 @@ if ($ufound) {
 update_status(" Migrating legacy Yandex DoH token...");
 $ufound = FALSE;
 
-$doh_list_migrated = pfb_ss_doh_list_yandex_migrate(PfbConfig::read('safesearch_doh_list'));
+$doh_list_migrated = pfb_ss_doh_list_yandex_migrate(PfbConfig::read('ss/safesearch_doh_list'));
 if ($doh_list_migrated !== NULL) {
 	$ufound = TRUE;
-	PfbConfig::writeSystem('safesearch_doh_list', $doh_list_migrated);
+	PfbConfig::writeSystem('ss/safesearch_doh_list', $doh_list_migrated);
 }
 
 if ($ufound) {
@@ -931,13 +931,15 @@ if ($ufound) {
 // trailing write_config() below rather than adding a flush of its own.
 update_status("Recording default settings...");
 $pfb_seed_sections = array();
-foreach (pfb_cfg_registry() as $pfb_seed_entry) {
-	$pfb_seed_sections[$pfb_seed_entry['section']] ??= PfbConfig::readSection($pfb_seed_entry['section']);
+foreach (pfb_cfg_registry() as $pfb_seed_key => $pfb_seed_entry) {
+	// issue #1931: registry keys are '<alias>/<bare-key>'; resolve the real section path.
+	$pfb_seed_section = PFB_SECTIONS[explode('/', $pfb_seed_key, 2)[0]];
+	$pfb_seed_sections[$pfb_seed_section] ??= PfbConfig::readSection($pfb_seed_section);
 }
 foreach (pfb_registered_scalars_seed($pfb_seed_sections) as $pfb_seed_path => $pfb_seed_blob) {
 	PfbConfig::writeSectionSystem($pfb_seed_path, $pfb_seed_blob);
 }
-unset($pfb_seed_sections, $pfb_seed_entry, $pfb_seed_path, $pfb_seed_blob);
+unset($pfb_seed_sections, $pfb_seed_key, $pfb_seed_entry, $pfb_seed_section, $pfb_seed_path, $pfb_seed_blob);
 update_status(" done.\n");
 
 unset($g['pfblockerng_install']);	// Remove 'Install flag'

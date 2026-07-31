@@ -68,7 +68,7 @@ final class WwwGroupBGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'safesearch_enable must be absent for this test');
 
 		// When: gateway read.
-		$result = PfbConfig::read('safesearch_enable');
+		$result = PfbConfig::read('ss/safesearch_enable');
 
 		// Then: 'Disable' — matches prior page default '?: Disable'.
 		$this->assertSame('Disable', $result, 'safesearch_enable absent -> "Disable" (parity with prior page default)');
@@ -86,7 +86,7 @@ final class WwwGroupBGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'safesearch_youtube must be absent');
 
 		// When: gateway read.
-		$result = PfbConfig::read('safesearch_youtube');
+		$result = PfbConfig::read('ss/safesearch_youtube');
 
 		// Then: 'Disable' — matches prior page default.
 		$this->assertSame('Disable', $result, 'safesearch_youtube absent -> "Disable" (parity with prior page default)');
@@ -104,7 +104,7 @@ final class WwwGroupBGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'safesearch_doh must be absent');
 
 		// When: gateway read.
-		$result = PfbConfig::read('safesearch_doh');
+		$result = PfbConfig::read('ss/safesearch_doh');
 
 		// Then: 'Disable' — matches prior page default.
 		$this->assertSame('Disable', $result, 'safesearch_doh absent -> "Disable" (parity with prior page default)');
@@ -124,7 +124,7 @@ final class WwwGroupBGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'safesearch_doh_list must be absent');
 
 		// When: gateway read returns the registry default string.
-		$result = PfbConfig::read('safesearch_doh_list');
+		$result = PfbConfig::read('ss/safesearch_doh_list');
 
 		// Then: '' — the page's ?: array() guard on explode('', '') protects the UI;
 		// the stored/registry value is '' confirming no divergence.

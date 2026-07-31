@@ -14,8 +14,8 @@ function pfb_test_log_types(): array
 {
 	$types = [];
 	foreach (array_keys(pfb_cfg_registry()) as $key) {
-		if (str_starts_with($key, 'log_max_') && !str_starts_with($key, 'log_max_days_')) {
-			$types[] = substr($key, strlen('log_max_'));
+		if (str_starts_with($key, 'gen/log_max_') && !str_starts_with($key, 'gen/log_max_days_')) {
+			$types[] = substr($key, strlen('gen/log_max_'));
 		}
 	}
 	return $types;

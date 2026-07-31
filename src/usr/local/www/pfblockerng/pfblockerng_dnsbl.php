@@ -63,18 +63,18 @@ $pconfig['dnsbl_allow_int']	= pfb_csv_list($pfb['dconfig']['dnsbl_allow_int'] ??
 $pconfig['global_log']		= $pfb['dconfig']['global_log']				?: '';
 $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default.php';
 $pconfig['pfb_cache']		= isset($pfb['dconfig']['pfb_cache'])			? $pfb['dconfig']['pfb_cache'] : 'on';
-$pconfig['pfb_cache_flush']	= PfbConfig::read('pfb_cache_flush');
+$pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
 
 $pconfig['pfb_py_reply']	= isset($pfb['dconfig']['pfb_py_reply'])		? $pfb['dconfig']['pfb_py_reply'] : 'on';
 $pconfig['pfb_hsts']		= isset($pfb['dconfig']['pfb_hsts'])			? $pfb['dconfig']['pfb_hsts'] : 'on';
 // ADR-08: IDN mode selector (Off | All-IDN | Confusable). PfbConfig::read() returns a
 // PfbIdnMode enum (legacy 'on' -> All; alpha-only 'all' and '' -> Off); toStored() gives the
 // canonical config token ('on' | 'confusable' | 'off') that the <select> options below carry.
-$pconfig['pfb_idn']		= PfbConfig::read('pfb_idn')->toStored();
+$pconfig['pfb_idn']		= PfbConfig::read('dnsbl/pfb_idn')->toStored();
 // Confusable-mode sub-toggles: block clearly-malicious homoglyphs is default-on;
 // escalate suspicious mixed-script (else alert only) is opt-in (default off).
 // Default 'on' owned by the registry (ADR-29); PfbConfig::read applies it when absent.
-$pconfig['pfb_idn_block_malicious']	= PfbConfig::read('pfb_idn_block_malicious');
+$pconfig['pfb_idn_block_malicious']	= PfbConfig::read('dnsbl/pfb_idn_block_malicious');
 $pconfig['pfb_idn_escalate_suspicious']	= $pfb['dconfig']['pfb_idn_escalate_suspicious']		?: '';
 $pconfig['pfb_regex']		= $pfb['dconfig']['pfb_regex']				?: '';
 $pconfig['pfb_regex_cap']	= $pfb['dconfig']['pfb_regex_cap']			?: '';
@@ -122,7 +122,7 @@ $pconfig['top1m_enable']	= $pfb['dconfig']['top1m_enable']			?: '';
 // (dead TOP1M source, #872/#877) coalesces to 'tranco' for the form select.
 // ->toStored() unwraps the PfbTop1mSource enum to its scalar option key (a
 // Form_Select selected-value must be the scalar, not the enum instance).
-$pconfig['top1m_source']		= PfbConfig::read('top1m_source')->toStored();
+$pconfig['top1m_source']		= PfbConfig::read('dnsbl/top1m_source')->toStored();
 $pconfig['top1m_count']		= $pfb['dconfig']['top1m_count']			?: '1000';
 // 0 (unlimited) is meaningful, so don't use the ?: idiom (0 is falsy -> would reset to default).
 $pconfig['pfb_py_cache_max']	= (isset($pfb['dconfig']['pfb_py_cache_max']) && $pfb['dconfig']['pfb_py_cache_max'] !== '') ? $pfb['dconfig']['pfb_py_cache_max'] : '10000';
@@ -132,22 +132,22 @@ $pconfig['tld_wildcard_exclusion']	= pfb_b64_text($pfb['dconfig']['tld_wildcard_
 $pconfig['tld_wildcard_blacklist']	= pfb_b64_text($pfb['dconfig']['tld_wildcard_blacklist'] ?? NULL);
 
 // DoH/DoT/DoQ blocking — stored in pfblockerngsafesearch; read via gateway (registered keys)
-$pconfig['safesearch_doh']		= PfbConfig::read('safesearch_doh');
-$pconfig['safesearch_doh_list']		= explode(',', PfbConfig::read('safesearch_doh_list'));
+$pconfig['safesearch_doh']		= PfbConfig::read('ss/safesearch_doh');
+$pconfig['safesearch_doh_list']		= explode(',', PfbConfig::read('ss/safesearch_doh_list'));
 
 // [ ADR-36 ] DNS Redirect — stored in pfblockerngdnsblsettings; read via gateway.
-$pconfig['dnsbl_redir']			= PfbConfig::read('dnsbl_redir');
-$pfb_redir_int_raw			= (string) PfbConfig::read('dnsbl_redir_int');
+$pconfig['dnsbl_redir']			= PfbConfig::read('dnsbl/dnsbl_redir');
+$pfb_redir_int_raw			= (string) PfbConfig::read('dnsbl/dnsbl_redir_int');
 $pconfig['dnsbl_redir_int']		= ($pfb_redir_int_raw !== '') ? explode(',', $pfb_redir_int_raw) : [];
-$pconfig['dnsbl_redir_exclude']		= (string) PfbConfig::read('dnsbl_redir_exclude');
+$pconfig['dnsbl_redir_exclude']		= (string) PfbConfig::read('dnsbl/dnsbl_redir_exclude');
 
 // [ ADR-37 ] DoT/DoQ Block — stored in pfblockerngdnsblsettings; read via gateway.
-$pconfig['dnsbl_dot_block']		= PfbConfig::read('dnsbl_dot_block');
-$pfb_dot_block_int_raw			= (string) PfbConfig::read('dnsbl_dot_block_int');
+$pconfig['dnsbl_dot_block']		= PfbConfig::read('dnsbl/dnsbl_dot_block');
+$pfb_dot_block_int_raw			= (string) PfbConfig::read('dnsbl/dnsbl_dot_block_int');
 $pconfig['dnsbl_dot_block_int']		= ($pfb_dot_block_int_raw !== '') ? explode(',', $pfb_dot_block_int_raw) : [];
-$pconfig['dnsbl_dot_block_exclude']	= (string) PfbConfig::read('dnsbl_dot_block_exclude');
-$pconfig['dnsbl_dot_block_action']	= (string) PfbConfig::read('dnsbl_dot_block_action');
-$pconfig['dnsbl_dot_block_floating']	= PfbConfig::read('dnsbl_dot_block_floating');
+$pconfig['dnsbl_dot_block_exclude']	= (string) PfbConfig::read('dnsbl/dnsbl_dot_block_exclude');
+$pconfig['dnsbl_dot_block_action']	= (string) PfbConfig::read('dnsbl/dnsbl_dot_block_action');
+$pconfig['dnsbl_dot_block_floating']	= PfbConfig::read('dnsbl/dnsbl_dot_block_floating');
 
 // Select field options
 
@@ -963,20 +963,20 @@ if ($_POST) {
 			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 
 			// Save DoH/DoT/DoQ blocking fields via gateway (registered keys in pfblockerngsafesearch)
-			PfbConfig::write('safesearch_doh', $_POST['safesearch_doh'] ?: 'Disable');
-			PfbConfig::write('safesearch_doh_list', implode(',', (array)$_POST['safesearch_doh_list']) ?: '');
+			PfbConfig::write('ss/safesearch_doh', $_POST['safesearch_doh'] ?: 'Disable');
+			PfbConfig::write('ss/safesearch_doh_list', implode(',', (array)$_POST['safesearch_doh_list']) ?: '');
 
 			// [ ADR-36 ] Save DNS Redirect fields via gateway (registered keys in pfblockerngdnsblsettings)
-			PfbConfig::write('dnsbl_redir', pfb_filter($_POST['dnsbl_redir'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
-			PfbConfig::write('dnsbl_redir_int', implode(',', $redir_ifaces_raw));
-			PfbConfig::write('dnsbl_redir_exclude', $redir_alias_raw);
+			PfbConfig::write('dnsbl/dnsbl_redir', pfb_filter($_POST['dnsbl_redir'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
+			PfbConfig::write('dnsbl/dnsbl_redir_int', implode(',', $redir_ifaces_raw));
+			PfbConfig::write('dnsbl/dnsbl_redir_exclude', $redir_alias_raw);
 
 			// [ ADR-37 ] Save DoT/DoQ Block fields via gateway (registered keys in pfblockerngdnsblsettings)
-			PfbConfig::write('dnsbl_dot_block', pfb_filter($_POST['dnsbl_dot_block'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
-			PfbConfig::write('dnsbl_dot_block_int', implode(',', $dot_block_ifaces_raw));
-			PfbConfig::write('dnsbl_dot_block_exclude', $dot_block_alias_raw);
-			PfbConfig::write('dnsbl_dot_block_action', pfb_dot_block_action($dot_block_action_raw));
-			PfbConfig::write('dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
+			PfbConfig::write('dnsbl/dnsbl_dot_block', pfb_filter($_POST['dnsbl_dot_block'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
+			PfbConfig::write('dnsbl/dnsbl_dot_block_int', implode(',', $dot_block_ifaces_raw));
+			PfbConfig::write('dnsbl/dnsbl_dot_block_exclude', $dot_block_alias_raw);
+			PfbConfig::write('dnsbl/dnsbl_dot_block_action', pfb_dot_block_action($dot_block_action_raw));
+			PfbConfig::write('dnsbl/dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
 			write_config('[pfBlockerNG] save DNSBL settings');
 			pfb_mark_pending_changes();	// applies on the next Update, not on save

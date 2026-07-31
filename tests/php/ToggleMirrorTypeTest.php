@@ -94,7 +94,7 @@ final class ToggleMirrorTypeTest extends TestCase
 			$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		}
 
-		PfbConfig::write('dnsbl_interface', 'lo0');
+		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
 	}
 
 	/**
@@ -105,8 +105,8 @@ final class ToggleMirrorTypeTest extends TestCase
 	 */
 	public function testEveryToggleMirrorIsAPfbToggleInstance(): void
 	{
-		PfbConfig::write('enable_cb', PfbToggle::On);
-		PfbConfig::write('pfb_dnsbl', PfbToggle::On);
+		PfbConfig::write('gen/enable_cb', PfbToggle::On);
+		PfbConfig::write('dnsbl/pfb_dnsbl', PfbToggle::On);
 
 		pfb_global();
 
@@ -128,15 +128,15 @@ final class ToggleMirrorTypeTest extends TestCase
 	 */
 	public function testEnabledStateSurfacesAsOn(): void
 	{
-		PfbConfig::write('enable_cb', PfbToggle::On);
-		PfbConfig::write('pfb_dnsbl', PfbToggle::On);
+		PfbConfig::write('gen/enable_cb', PfbToggle::On);
+		PfbConfig::write('dnsbl/pfb_dnsbl', PfbToggle::On);
 
 		// A resolvable VIP on the doubled interface, so pfb_global()'s VIP validation
 		// does not force-disable DNSBL — otherwise this asserts On against a value the
 		// production code is right to have turned Off, and proves nothing about typing.
 		// Same setup as DnsblVipDisableNoticeTest::testValidVipDoesNotSurfaceNotice().
 		$GLOBALS['pfb_test_vip_list'] = ['_vip_test_valid' => '203.0.113.10'];
-		PfbConfig::write('dnsbl_interface', 'opt-double');
+		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
 		config_set_path(
 			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4',
 			'_vip_test_valid'
@@ -153,8 +153,8 @@ final class ToggleMirrorTypeTest extends TestCase
 	 */
 	public function testDisabledStateSurfacesAsOff(): void
 	{
-		PfbConfig::write('enable_cb', PfbToggle::Off);
-		PfbConfig::write('pfb_dnsbl', PfbToggle::Off);
+		PfbConfig::write('gen/enable_cb', PfbToggle::Off);
+		PfbConfig::write('dnsbl/pfb_dnsbl', PfbToggle::Off);
 
 		pfb_global();
 
@@ -173,10 +173,10 @@ final class ToggleMirrorTypeTest extends TestCase
 	 */
 	public function testForceDisableOnInvalidVipPublishesOffNotEmptyString(): void
 	{
-		PfbConfig::write('enable_cb', PfbToggle::On);
-		PfbConfig::write('pfb_dnsbl', PfbToggle::On);
-		PfbConfig::write('pfb_dnsvip_auto', PfbToggle::Off);
-		PfbConfig::write('dnsbl_interface', 'opt-double');
+		PfbConfig::write('gen/enable_cb', PfbToggle::On);
+		PfbConfig::write('dnsbl/pfb_dnsbl', PfbToggle::On);
+		PfbConfig::write('dnsbl/pfb_dnsvip_auto', PfbToggle::Off);
+		PfbConfig::write('dnsbl/dnsbl_interface', 'opt-double');
 		config_set_path(
 			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip4',
 			'_vip_test_missing'
@@ -201,8 +201,8 @@ final class ToggleMirrorTypeTest extends TestCase
 	 */
 	public function testNoToggleMirrorHoldsARawToken(): void
 	{
-		PfbConfig::write('enable_cb', PfbToggle::On);
-		PfbConfig::write('pfb_dnsbl', PfbToggle::On);
+		PfbConfig::write('gen/enable_cb', PfbToggle::On);
+		PfbConfig::write('dnsbl/pfb_dnsbl', PfbToggle::On);
 
 		pfb_global();
 

@@ -45,7 +45,7 @@ final class DnsblRegexHighlightWiringTest extends TestCase
 	public function testGatingBooleanReadsThePfbSyntaxHighlightToggle(): void
 	{
 		// The single PHP boolean gating BOTH the asset include and the JS init must be
-		// derived from PfbConfig::read('pfb_syntax_highlight') compared against
+		// derived from PfbConfig::read('gen/pfb_syntax_highlight') compared against
 		// pfb_editor_enabled() -- the issue #1887 named accessor every editor page's
 		// pfb_cache_flush read already establishes (PfbConfig::read() returns the enum
 		// directly here, not ->value). LENIENT, not PfbToggle -- see the class docblock.

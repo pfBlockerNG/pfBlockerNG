@@ -69,7 +69,7 @@ final class WwwGroupCGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'pfb_software_check must be absent before read');
 
 		// When: gateway read.
-		$result = PfbConfig::read('pfb_software_check');
+		$result = PfbConfig::read('gen/pfb_software_check');
 
 		// Then: On — issue #1887 moved the effective ON default from the hand-written
 		// reader (`!== 'off'`) into the registry; absent still means enabled.
@@ -82,19 +82,19 @@ final class WwwGroupCGatewayTest extends TestCase
 	public function testSoftwareCheckToggleRoundTrips(): void
 	{
 		// Before: absent → the registered default On (issue #1887).
-		$this->assertSame(PfbToggle::On, PfbConfig::read('pfb_software_check'), 'initial absent -> On');
+		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_software_check'), 'initial absent -> On');
 
 		// When: write 'on'.
-		PfbConfig::write('pfb_software_check', 'on');
+		PfbConfig::write('gen/pfb_software_check', 'on');
 
 		// Then: read back On.
-		$this->assertSame(PfbToggle::On, PfbConfig::read('pfb_software_check'), 'after write "on" -> On');
+		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_software_check'), 'after write "on" -> On');
 
 		// When: write 'off'.
-		PfbConfig::write('pfb_software_check', 'off');
+		PfbConfig::write('gen/pfb_software_check', 'off');
 
 		// Then: read back Off.
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_software_check'), 'after write "off" -> Off');
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_software_check'), 'after write "off" -> Off');
 	}
 
 	/**
@@ -108,7 +108,7 @@ final class WwwGroupCGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'global_log must be absent before read');
 
 		// When: gateway read.
-		$result = PfbConfig::read('global_log');
+		$result = PfbConfig::read('dnsbl/global_log');
 
 		// Then: '' — prior page did `config_get_path(...) ?: ''`.
 		$this->assertSame('', $result, 'global_log absent -> "" (parity with prior page fallback)');
@@ -120,19 +120,19 @@ final class WwwGroupCGatewayTest extends TestCase
 	public function testGlobalLogRoundTrips(): void
 	{
 		// Before: absent → ''.
-		$this->assertSame('', PfbConfig::read('global_log'), 'initial absent -> ""');
+		$this->assertSame('', PfbConfig::read('dnsbl/global_log'), 'initial absent -> ""');
 
 		// When: write 'enabled'.
-		PfbConfig::write('global_log', 'enabled');
+		PfbConfig::write('dnsbl/global_log', 'enabled');
 
 		// Then: read back 'enabled'.
-		$this->assertSame('enabled', PfbConfig::read('global_log'), 'after write "enabled" -> "enabled"');
+		$this->assertSame('enabled', PfbConfig::read('dnsbl/global_log'), 'after write "enabled" -> "enabled"');
 
 		// When: write 'disabled_log'.
-		PfbConfig::write('global_log', 'disabled_log');
+		PfbConfig::write('dnsbl/global_log', 'disabled_log');
 
 		// Then: read back 'disabled_log'.
-		$this->assertSame('disabled_log', PfbConfig::read('global_log'), 'after write "disabled_log" -> "disabled_log"');
+		$this->assertSame('disabled_log', PfbConfig::read('dnsbl/global_log'), 'after write "disabled_log" -> "disabled_log"');
 	}
 
 	/**
@@ -146,7 +146,7 @@ final class WwwGroupCGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'suppression must be absent before read');
 
 		// When: gateway read.
-		$result = PfbConfig::read('suppression');
+		$result = PfbConfig::read('dnsbl/suppression');
 
 		// Then: '' — parity with prior page coalesce `?: ''`.
 		$this->assertSame('', $result, 'suppression absent -> "" (parity with prior page fallback)');
@@ -160,13 +160,13 @@ final class WwwGroupCGatewayTest extends TestCase
 		$blob = base64_encode("example.com\r\n.blocked.net\r\n");
 
 		// Before: absent → ''.
-		$this->assertSame('', PfbConfig::read('suppression'), 'initial absent -> ""');
+		$this->assertSame('', PfbConfig::read('dnsbl/suppression'), 'initial absent -> ""');
 
 		// When: write a base64 blob.
-		PfbConfig::write('suppression', $blob);
+		PfbConfig::write('dnsbl/suppression', $blob);
 
 		// Then: read back byte-identically.
-		$this->assertSame($blob, PfbConfig::read('suppression'), 'suppression after write round-trips byte-identically');
+		$this->assertSame($blob, PfbConfig::read('dnsbl/suppression'), 'suppression after write round-trips byte-identically');
 	}
 
 	/**
@@ -180,7 +180,7 @@ final class WwwGroupCGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'tld_wildcard_exclusion must be absent before read');
 
 		// When: gateway read.
-		$result = PfbConfig::read('tld_wildcard_exclusion');
+		$result = PfbConfig::read('dnsbl/tld_wildcard_exclusion');
 
 		// Then: '' — parity with prior page coalesce `?: ''`.
 		$this->assertSame('', $result, 'tld_wildcard_exclusion absent -> "" (parity with prior page fallback)');
@@ -194,13 +194,13 @@ final class WwwGroupCGatewayTest extends TestCase
 		$blob = base64_encode("example.com\r\n.test.org\r\n");
 
 		// Before: absent → ''.
-		$this->assertSame('', PfbConfig::read('tld_wildcard_exclusion'), 'initial absent -> ""');
+		$this->assertSame('', PfbConfig::read('dnsbl/tld_wildcard_exclusion'), 'initial absent -> ""');
 
 		// When: write a base64 blob.
-		PfbConfig::write('tld_wildcard_exclusion', $blob);
+		PfbConfig::write('dnsbl/tld_wildcard_exclusion', $blob);
 
 		// Then: read back byte-identically.
-		$this->assertSame($blob, PfbConfig::read('tld_wildcard_exclusion'), 'tld_wildcard_exclusion after write round-trips byte-identically');
+		$this->assertSame($blob, PfbConfig::read('dnsbl/tld_wildcard_exclusion'), 'tld_wildcard_exclusion after write round-trips byte-identically');
 	}
 
 	/**
@@ -209,7 +209,7 @@ final class WwwGroupCGatewayTest extends TestCase
 	 * page's `config_get_path(...) ?: ''` fallback).
 	 *
 	 * Red->green: before this phase, v4suppression was a foreign key and
-	 * PfbConfig::read('v4suppression') threw InvalidArgumentException (the former
+	 * PfbConfig::read('ip/v4suppression') threw InvalidArgumentException (the former
 	 * testV4SuppressionIsNotInRegistry pin this test-pair replaces).
 	 */
 	public function testV4SuppressionAbsentDefaultIsEmptyString(): void
@@ -220,7 +220,7 @@ final class WwwGroupCGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'v4suppression must be absent before read');
 
 		// When: gateway read.
-		$result = PfbConfig::read('v4suppression');
+		$result = PfbConfig::read('ip/v4suppression');
 
 		// Then: '' — parity with prior page coalesce `?: ''`.
 		$this->assertSame('', $result, 'v4suppression absent -> "" (parity with prior page fallback)');
@@ -234,13 +234,13 @@ final class WwwGroupCGatewayTest extends TestCase
 		$blob = base64_encode("192.168.1.1/32\r\n192.168.1.2/32\r\n");
 
 		// Before: absent → ''.
-		$this->assertSame('', PfbConfig::read('v4suppression'), 'initial absent -> ""');
+		$this->assertSame('', PfbConfig::read('ip/v4suppression'), 'initial absent -> ""');
 
 		// When: write a base64 blob.
-		PfbConfig::write('v4suppression', $blob);
+		PfbConfig::write('ip/v4suppression', $blob);
 
 		// Then: read back byte-identically.
-		$this->assertSame($blob, PfbConfig::read('v4suppression'), 'v4suppression after write round-trips byte-identically');
+		$this->assertSame($blob, PfbConfig::read('ip/v4suppression'), 'v4suppression after write round-trips byte-identically');
 	}
 
 	/**
@@ -429,11 +429,11 @@ final class WwwGroupCGatewayTest extends TestCase
 		$tldblob  = base64_encode(".test.org\r\n");
 
 		// When: write both registered keys.
-		PfbConfig::write('suppression', $suppblob);
-		PfbConfig::write('tld_wildcard_exclusion', $tldblob);
+		PfbConfig::write('dnsbl/suppression', $suppblob);
+		PfbConfig::write('dnsbl/tld_wildcard_exclusion', $tldblob);
 
 		// Then: each reads back independently and byte-identically.
-		$this->assertSame($suppblob, PfbConfig::read('suppression'), 'suppression after write');
-		$this->assertSame($tldblob, PfbConfig::read('tld_wildcard_exclusion'), 'tld_wildcard_exclusion after write');
+		$this->assertSame($suppblob, PfbConfig::read('dnsbl/suppression'), 'suppression after write');
+		$this->assertSame($tldblob, PfbConfig::read('dnsbl/tld_wildcard_exclusion'), 'tld_wildcard_exclusion after write');
 	}
 }

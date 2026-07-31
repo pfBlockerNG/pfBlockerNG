@@ -95,7 +95,7 @@ final class ToggleSectionMirrorTypeTest extends TestCase
 			$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		}
 
-		PfbConfig::write('dnsbl_interface', 'lo0');
+		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
 	}
 
 	/** Seed every section-mirror key to one raw token. */

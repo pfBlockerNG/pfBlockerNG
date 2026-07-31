@@ -582,8 +582,8 @@ SH
 	{
 		$GLOBALS['config'] = [];
 		foreach (['auto', 'delta', 'replace'] as $token) {
-			PfbConfig::write('pfb_alias_delta_mode', $token);
-			$read = PfbConfig::read('pfb_alias_delta_mode');
+			PfbConfig::write('gen/pfb_alias_delta_mode', $token);
+			$read = PfbConfig::read('gen/pfb_alias_delta_mode');
 			$this->assertInstanceOf(PfbAliasDeltaMode::class, $read,
 				"expected: PfbAliasDeltaMode instance; got: " . get_class($read));
 			$written = $read->toStored();
@@ -598,7 +598,7 @@ SH
 	public function testAliasDeltaBatchAbsentDefaultIs512(): void
 	{
 		$GLOBALS['config'] = [];
-		$value = (string) PfbConfig::read('pfb_alias_delta_batch');
+		$value = (string) PfbConfig::read('gen/pfb_alias_delta_batch');
 		$this->assertSame('512', $value,
 			"expected: absent pfb_alias_delta_batch default = '512'; actual: '{$value}'");
 	}

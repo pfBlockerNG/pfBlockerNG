@@ -71,14 +71,14 @@ final class CfgGatewayTest extends TestCase
 	{
 		// Representative toggle-adapted fields (pfb_keep is now lenient — see below).
 		$toggle_fields = [
-			'enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
-			'pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
-			'pfb_dnsvip_auto'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
-			'pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
-			'pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
-			'pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
-			'pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
-			'pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
+			'gen/enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
+			'dnsbl/pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
+			'dnsbl/pfb_dnsvip_auto'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
+			'dnsbl/pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
+			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
+			'dnsbl/pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
+			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
 		foreach ($toggle_fields as $key => $path) {
@@ -102,14 +102,14 @@ final class CfgGatewayTest extends TestCase
 	{
 		// pfb_keep is default-on — see testPfbKeepRoundTrip*() below.
 		$toggle_fields = [
-			'enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
-			'pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
-			'pfb_dnsvip_auto'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
-			'pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
-			'pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
-			'pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
-			'pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
-			'pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
+			'gen/enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
+			'dnsbl/pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
+			'dnsbl/pfb_dnsvip_auto'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
+			'dnsbl/pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
+			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
+			'dnsbl/pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
+			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
 		foreach ($toggle_fields as $key => $path) {
@@ -149,10 +149,10 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('on', config_get_path($path));
 
 		// When/After.
-		$enum = PfbConfig::read('pfb_dnsbl_lenient');
+		$enum = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
 		$this->assertSame(PfbToggle::On, $enum);
 
-		PfbConfig::write('pfb_dnsbl_lenient', $enum);
+		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', $enum);
 		$this->assertSame('on', config_get_path($path));
 	}
 
@@ -167,10 +167,10 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('off', config_get_path($path));
 
 		// When/After.
-		$enum = PfbConfig::read('pfb_dnsbl_lenient');
+		$enum = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
 		$this->assertSame(PfbToggle::Off, $enum);
 
-		PfbConfig::write('pfb_dnsbl_lenient', $enum);
+		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', $enum);
 		$this->assertSame('off', config_get_path($path));
 	}
 
@@ -185,10 +185,10 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('', config_get_path($path));
 
 		// When/After: normalised to 'off' (documented, matches pfb_global() behaviour).
-		$enum = PfbConfig::read('pfb_dnsbl_lenient');
+		$enum = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
 		$this->assertSame(PfbToggle::Off, $enum);
 
-		PfbConfig::write('pfb_dnsbl_lenient', $enum);
+		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', $enum);
 		// Normalised: stored as 'off', NOT ''.
 		$this->assertSame('off', config_get_path($path));
 	}
@@ -213,10 +213,10 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('on', config_get_path($path), 'before: pfb_keep seed is on');
 
 		// When/After: read -> PfbToggle::On; write -> 'on'.
-		$enum = PfbConfig::read('pfb_keep');
+		$enum = PfbConfig::read('gen/pfb_keep');
 		$this->assertSame(PfbToggle::On, $enum, "read: pfb_keep 'on' -> PfbToggle::On");
 
-		PfbConfig::write('pfb_keep', $enum);
+		PfbConfig::write('gen/pfb_keep', $enum);
 		$this->assertSame('on', config_get_path($path), "write(read('on'))==on for pfb_keep");
 	}
 
@@ -231,10 +231,10 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('off', config_get_path($path), 'before: pfb_keep seed is off');
 
 		// When/After: read -> PfbToggle::Off; write -> 'off'.
-		$enum = PfbConfig::read('pfb_keep');
+		$enum = PfbConfig::read('gen/pfb_keep');
 		$this->assertSame(PfbToggle::Off, $enum, "read: pfb_keep 'off' -> PfbToggle::Off");
 
-		PfbConfig::write('pfb_keep', $enum);
+		PfbConfig::write('gen/pfb_keep', $enum);
 		$this->assertSame('off', config_get_path($path), "write(read('off'))==off for pfb_keep");
 	}
 
@@ -249,11 +249,11 @@ final class CfgGatewayTest extends TestCase
 
 		$this->assertSame('', config_get_path($path), 'before: pfb_keep seed is empty string');
 
-		$enum = PfbConfig::read('pfb_keep');
+		$enum = PfbConfig::read('gen/pfb_keep');
 		$this->assertSame(PfbToggle::On, $enum, "read: pfb_keep '' -> registered default On");
 
 		// After: write emits the canonical token of the default.
-		PfbConfig::write('pfb_keep', $enum);
+		PfbConfig::write('gen/pfb_keep', $enum);
 		$this->assertSame('on', config_get_path($path), "write(read(''))=='on' for pfb_keep");
 	}
 
@@ -280,10 +280,10 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('on', config_get_path($path), 'before: pfb_syntax_highlight seed is on');
 
 		// When/After: read -> PfbToggle::On; write -> 'on'.
-		$enum = PfbConfig::read('pfb_syntax_highlight');
+		$enum = PfbConfig::read('gen/pfb_syntax_highlight');
 		$this->assertSame(PfbToggle::On, $enum, "read: pfb_syntax_highlight 'on' -> PfbToggle::On");
 
-		PfbConfig::write('pfb_syntax_highlight', $enum);
+		PfbConfig::write('gen/pfb_syntax_highlight', $enum);
 		$this->assertSame('on', config_get_path($path), "write(read('on'))==on for pfb_syntax_highlight");
 	}
 
@@ -298,10 +298,10 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('off', config_get_path($path), 'before: pfb_syntax_highlight seed is off');
 
 		// When/After: read -> PfbToggle::Off; write -> 'off'.
-		$enum = PfbConfig::read('pfb_syntax_highlight');
+		$enum = PfbConfig::read('gen/pfb_syntax_highlight');
 		$this->assertSame(PfbToggle::Off, $enum, "read: pfb_syntax_highlight 'off' -> PfbToggle::Off");
 
-		PfbConfig::write('pfb_syntax_highlight', $enum);
+		PfbConfig::write('gen/pfb_syntax_highlight', $enum);
 		$this->assertSame('off', config_get_path($path), "write(read('off'))==off for pfb_syntax_highlight");
 	}
 
@@ -324,7 +324,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/enable_cb'));
 
 		// When/Then: returns Off (default '').
-		$result = PfbConfig::read('enable_cb');
+		$result = PfbConfig::read('gen/enable_cb');
 		$this->assertSame(PfbToggle::Off, $result, 'enable_cb absent -> Off (default)');
 	}
 
@@ -336,7 +336,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: config[.../pfb_feed_sanity] is unset (feature is new).
 	 *     Given no seed.
-	 *     When PfbConfig::read('pfb_feed_sanity').
+	 *     When PfbConfig::read('gen/pfb_feed_sanity').
 	 *     Then PfbToggle::Off is returned (default '').
 	 */
 	public function testReadReturnsRegisteredDefaultForPfbFeedSanityAbsentKey(): void
@@ -345,7 +345,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_feed_sanity'));
 
 		// When/Then: returns Off (default '').
-		$result = PfbConfig::read('pfb_feed_sanity');
+		$result = PfbConfig::read('gen/pfb_feed_sanity');
 		$this->assertSame(PfbToggle::Off, $result, 'pfb_feed_sanity absent -> Off (default)');
 	}
 
@@ -353,7 +353,7 @@ final class CfgGatewayTest extends TestCase
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush';
 		$this->assertNull(config_get_path($path));
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('pfb_cache_flush'),
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_cache_flush'),
 			'pfb_cache_flush absent -> Off (default)');
 	}
 
@@ -369,14 +369,14 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: config[.../pfb_syntax_highlight] is unset.
 	 *     Given no seed.
-	 *     When PfbConfig::read('pfb_syntax_highlight').
+	 *     When PfbConfig::read('gen/pfb_syntax_highlight').
 	 *     Then PfbToggle::On is returned (default 'on').
 	 */
 	public function testReadReturnsOnDefaultForPfbSyntaxHighlightAbsentKey(): void
 	{
 		$path = 'installedpackages/pfblockerng/config/0/pfb_syntax_highlight';
 		$this->assertNull(config_get_path($path));
-		$this->assertSame(PfbToggle::On, PfbConfig::read('pfb_syntax_highlight'),
+		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_syntax_highlight'),
 			'pfb_syntax_highlight absent -> On (default)');
 	}
 
@@ -388,7 +388,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_keep'));
 
 		// When: read with no seed.
-		$result = PfbConfig::read('pfb_keep');
+		$result = PfbConfig::read('gen/pfb_keep');
 
 		// Then: returns On (the registered default 'on', applied through lenient adapter).
 		$this->assertSame(PfbToggle::On, $result, 'pfb_keep absent -> PfbToggle::On (default on)');
@@ -403,7 +403,7 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When.
-		$result = PfbConfig::read('pfb_dnsbl_lenient');
+		$result = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
 
 		// Then: Off.
 		$this->assertSame(PfbToggle::Off, $result, 'pfb_dnsbl_lenient absent -> Off');
@@ -414,7 +414,7 @@ final class CfgGatewayTest extends TestCase
 		// pfb_interval default is '1'.
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_interval'));
 
-		$result = PfbConfig::read('pfb_interval');
+		$result = PfbConfig::read('gen/pfb_interval');
 		$this->assertSame('1', $result, 'pfb_interval absent -> "1"');
 	}
 
@@ -425,7 +425,7 @@ final class CfgGatewayTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/top1m_source')
 		);
 
-		$result = PfbConfig::read('top1m_source');
+		$result = PfbConfig::read('dnsbl/top1m_source');
 		$this->assertInstanceOf(PfbTop1mSource::class, $result, 'top1m_source must return a PfbTop1mSource enum');
 		$this->assertSame(PfbTop1mSource::Tranco, $result);
 	}
@@ -437,7 +437,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario: the dropped Alexa TOP1M option still reads safely on an existing
 	 * install that had it selected.
 	 *   Given top1m_source stored as the legacy 'alexa' token.
-	 *   When PfbConfig::read('top1m_source').
+	 *   When PfbConfig::read('dnsbl/top1m_source').
 	 *   Then the result is PfbTop1mSource::Tranco, not the dead 'alexa' token.
 	 */
 	public function testReadCoalescesLegacyAlexaTypeToTranco(): void
@@ -449,7 +449,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('alexa', config_get_path($path), 'before: top1m_source seed is legacy alexa');
 
 		// When/Then: coalesced to PfbTop1mSource::Tranco.
-		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('top1m_source'), "legacy 'alexa' coalesces to Tranco");
+		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('dnsbl/top1m_source'), "legacy 'alexa' coalesces to Tranco");
 	}
 
 	/**
@@ -459,7 +459,7 @@ final class CfgGatewayTest extends TestCase
 	 *
 	 * Scenario: an existing install with DomCop selected still reads safely.
 	 *   Given top1m_source stored as the legacy 'domcop' token.
-	 *   When PfbConfig::read('top1m_source').
+	 *   When PfbConfig::read('dnsbl/top1m_source').
 	 *   Then the result is PfbTop1mSource::OpenPageRank, not the dead 'domcop' token.
 	 */
 	public function testReadCoalescesLegacyDomCopTypeToOpenPageRank(): void
@@ -473,7 +473,7 @@ final class CfgGatewayTest extends TestCase
 		// When/Then: coalesced to PfbTop1mSource::OpenPageRank.
 		$this->assertSame(
 			PfbTop1mSource::OpenPageRank,
-			PfbConfig::read('top1m_source'),
+			PfbConfig::read('dnsbl/top1m_source'),
 			"legacy 'domcop' coalesces to OpenPageRank"
 		);
 	}
@@ -487,19 +487,19 @@ final class CfgGatewayTest extends TestCase
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/top1m_source';
 
 		$this->seedConfig($path, 'cisco');
-		$this->assertSame(PfbTop1mSource::Cisco, PfbConfig::read('top1m_source'), "'cisco' passes through as Cisco");
+		$this->assertSame(PfbTop1mSource::Cisco, PfbConfig::read('dnsbl/top1m_source'), "'cisco' passes through as Cisco");
 
 		$this->seedConfig($path, 'tranco');
-		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('top1m_source'), "'tranco' passes through as Tranco");
+		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('dnsbl/top1m_source'), "'tranco' passes through as Tranco");
 
 		$this->seedConfig($path, 'openpagerank');
-		$this->assertSame(PfbTop1mSource::OpenPageRank, PfbConfig::read('top1m_source'), "'openpagerank' passes through as OpenPageRank");
+		$this->assertSame(PfbTop1mSource::OpenPageRank, PfbConfig::read('dnsbl/top1m_source'), "'openpagerank' passes through as OpenPageRank");
 
 		$this->seedConfig($path, 'majestic');
-		$this->assertSame(PfbTop1mSource::Majestic, PfbConfig::read('top1m_source'), "'majestic' passes through as Majestic");
+		$this->assertSame(PfbTop1mSource::Majestic, PfbConfig::read('dnsbl/top1m_source'), "'majestic' passes through as Majestic");
 
 		$this->seedConfig($path, 'cloudflare');
-		$this->assertSame(PfbTop1mSource::Cloudflare, PfbConfig::read('top1m_source'), "'cloudflare' passes through as Cloudflare");
+		$this->assertSame(PfbTop1mSource::Cloudflare, PfbConfig::read('dnsbl/top1m_source'), "'cloudflare' passes through as Cloudflare");
 	}
 
 	/**
@@ -509,7 +509,7 @@ final class CfgGatewayTest extends TestCase
 	 *
 	 * Scenario: top1m_token default-absent + round-trip.
 	 *   Given the key is absent from config.xml.
-	 *   When PfbConfig::read('top1m_token').
+	 *   When PfbConfig::read('dnsbl/top1m_token').
 	 *   Then the result is '' (the registered default).
 	 *   And when a real-looking token is written then read back, it comes back verbatim.
 	 */
@@ -519,13 +519,13 @@ final class CfgGatewayTest extends TestCase
 
 		// Given/When: absent key.
 		$this->assertNull(config_get_path($path));
-		$this->assertSame('', PfbConfig::read('top1m_token'), 'top1m_token absent -> default ""');
+		$this->assertSame('', PfbConfig::read('dnsbl/top1m_token'), 'top1m_token absent -> default ""');
 
 		// Round-trip: write(read(v)) == v for a real-looking base64url/JWT-charset token.
 		$token = 'cf-abc123._~+/=-XYZ';
-		PfbConfig::write('top1m_token', $token);
+		PfbConfig::write('dnsbl/top1m_token', $token);
 		$this->assertSame($token, config_get_path($path), 'top1m_token write() must store the token verbatim');
-		$this->assertSame($token, PfbConfig::read('top1m_token'), 'top1m_token read() must return the stored token verbatim');
+		$this->assertSame($token, PfbConfig::read('dnsbl/top1m_token'), 'top1m_token read() must return the stored token verbatim');
 	}
 
 	public function testReadReturnsRegisteredDefaultForDnsblInterfaceAbsentKey(): void
@@ -535,7 +535,7 @@ final class CfgGatewayTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_interface')
 		);
 
-		$result = PfbConfig::read('dnsbl_interface');
+		$result = PfbConfig::read('dnsbl/dnsbl_interface');
 		$this->assertSame('lo0', $result);
 	}
 
@@ -547,7 +547,7 @@ final class CfgGatewayTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_action')
 		);
 
-		$result = PfbConfig::read('dnsbl_dot_block_action');
+		$result = PfbConfig::read('dnsbl/dnsbl_dot_block_action');
 		$this->assertSame('reject', $result, 'dnsbl_dot_block_action absent -> reject (default)');
 	}
 
@@ -559,7 +559,7 @@ final class CfgGatewayTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_floating')
 		);
 
-		$result = PfbConfig::read('dnsbl_dot_block_floating');
+		$result = PfbConfig::read('dnsbl/dnsbl_dot_block_floating');
 		$this->assertSame(PfbToggle::Off, $result, 'dnsbl_dot_block_floating absent -> Off (per-interface default)');
 	}
 
@@ -568,7 +568,7 @@ final class CfgGatewayTest extends TestCase
 		// safesearch_enable default is 'Disable'.
 		$this->assertNull(config_get_path('installedpackages/pfblockerngsafesearch/safesearch_enable'));
 
-		$result = PfbConfig::read('safesearch_enable');
+		$result = PfbConfig::read('ss/safesearch_enable');
 		$this->assertSame('Disable', $result);
 	}
 
@@ -580,7 +580,7 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// issue #1887: the field carries the toggle adapter now, so the enum comes back.
-		$result = PfbConfig::read('pfb_idn_block_malicious');
+		$result = PfbConfig::read('dnsbl/pfb_idn_block_malicious');
 		$this->assertSame(PfbToggle::On, $result);
 	}
 
@@ -595,11 +595,11 @@ final class CfgGatewayTest extends TestCase
 	 *   Background: v4suppression is a plain base64-blob field; default = '' --
 	 *     mirrors the DNSBL 'suppression' sibling shape.
 	 *     Given no stored value.
-	 *     When PfbConfig::read('v4suppression').
+	 *     When PfbConfig::read('ip/v4suppression').
 	 *     Then '' is returned (registered default).
 	 *
 	 * Red->green: before this phase, 'v4suppression' was not registered ->
-	 *   PfbConfig::read('v4suppression') threw InvalidArgumentException.
+	 *   PfbConfig::read('ip/v4suppression') threw InvalidArgumentException.
 	 */
 	public function testV4SuppressionAbsentKeyReturnsDefaultEmptyString(): void
 	{
@@ -609,7 +609,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'before: v4suppression must be absent');
 
 		// When/Then.
-		$this->assertSame('', PfbConfig::read('v4suppression'), 'v4suppression absent -> ""');
+		$this->assertSame('', PfbConfig::read('ip/v4suppression'), 'v4suppression absent -> ""');
 	}
 
 	/**
@@ -618,7 +618,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: v4suppression stores a base64-encoded CIDR/host customlist.
 	 *     Given stored = base64_encode("192.168.1.1/32\r\n").
-	 *     When PfbConfig::write('v4suppression', PfbConfig::read('v4suppression')).
+	 *     When PfbConfig::write('ip/v4suppression', PfbConfig::read('ip/v4suppression')).
 	 *     Then the stored string is unchanged (byte-identical round-trip).
 	 */
 	public function testV4SuppressionRoundTrips(): void
@@ -633,11 +633,11 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame($blob, config_get_path($path), 'before: v4suppression seed matches blob');
 
 		// When: read -> write.
-		$val = PfbConfig::read('v4suppression');
+		$val = PfbConfig::read('ip/v4suppression');
 		$this->assertSame($blob, $val, 'read: v4suppression round-trips the blob unchanged');
 
 		// After: write back produces the identical stored string.
-		PfbConfig::write('v4suppression', $val);
+		PfbConfig::write('ip/v4suppression', $val);
 		$this->assertSame($blob, config_get_path($path), 'write(read(blob))==blob for v4suppression');
 	}
 
@@ -652,11 +652,11 @@ final class CfgGatewayTest extends TestCase
 	 *   Background: v6suppression is a plain base64-blob field; default = '' --
 	 *     mirrors the v4suppression sibling shape (this section, above).
 	 *     Given no stored value.
-	 *     When PfbConfig::read('v6suppression').
+	 *     When PfbConfig::read('ip/v6suppression').
 	 *     Then '' is returned (registered default).
 	 *
 	 * Red->green: before Phase 6, 'v6suppression' was not registered at all ->
-	 *   PfbConfig::read('v6suppression') threw InvalidArgumentException.
+	 *   PfbConfig::read('ip/v6suppression') threw InvalidArgumentException.
 	 */
 	public function testV6SuppressionAbsentKeyReturnsDefaultEmptyString(): void
 	{
@@ -666,7 +666,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'before: v6suppression must be absent');
 
 		// When/Then.
-		$this->assertSame('', PfbConfig::read('v6suppression'), 'v6suppression absent -> ""');
+		$this->assertSame('', PfbConfig::read('ip/v6suppression'), 'v6suppression absent -> ""');
 	}
 
 	/**
@@ -675,7 +675,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: v6suppression stores a base64-encoded CIDR customlist.
 	 *     Given stored = base64_encode("2001:db8::1/128\r\n").
-	 *     When PfbConfig::write('v6suppression', PfbConfig::read('v6suppression')).
+	 *     When PfbConfig::write('ip/v6suppression', PfbConfig::read('ip/v6suppression')).
 	 *     Then the stored string is unchanged (byte-identical round-trip).
 	 */
 	public function testV6SuppressionRoundTrips(): void
@@ -690,11 +690,11 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame($blob, config_get_path($path), 'before: v6suppression seed matches blob');
 
 		// When: read -> write.
-		$val = PfbConfig::read('v6suppression');
+		$val = PfbConfig::read('ip/v6suppression');
 		$this->assertSame($blob, $val, 'read: v6suppression round-trips the blob unchanged');
 
 		// After: write back produces the identical stored string.
-		PfbConfig::write('v6suppression', $val);
+		PfbConfig::write('ip/v6suppression', $val);
 		$this->assertSame($blob, config_get_path($path), 'write(read(blob))==blob for v6suppression');
 	}
 
@@ -708,7 +708,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: pfb_tick_interval is a plain-string field; default = '15'.
 	 *     Given no stored value.
-	 *     When PfbConfig::read('pfb_tick_interval').
+	 *     When PfbConfig::read('gen/pfb_tick_interval').
 	 *     Then '15' is returned (registered default).
 	 */
 	public function testPfbTickIntervalAbsentKeyReturnsDefault(): void
@@ -719,7 +719,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'before: pfb_tick_interval must be absent');
 
 		// When/Then: absent → default '15'.
-		$result = PfbConfig::read('pfb_tick_interval');
+		$result = PfbConfig::read('gen/pfb_tick_interval');
 		$this->assertSame('15', $result, 'pfb_tick_interval absent -> default 15');
 	}
 
@@ -729,7 +729,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: pfb_tick_interval is a plain-string field.
 	 *     Given stored = '30'.
-	 *     When PfbConfig::write('pfb_tick_interval', PfbConfig::read('pfb_tick_interval')).
+	 *     When PfbConfig::write('gen/pfb_tick_interval', PfbConfig::read('gen/pfb_tick_interval')).
 	 *     Then stored string == '30' (write(read('30')) == '30').
 	 */
 	public function testPfbTickIntervalRoundTrip(): void
@@ -743,11 +743,11 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('30', config_get_path($path), "before: pfb_tick_interval seed is '30'");
 
 		// When: read -> write.
-		$val = PfbConfig::read('pfb_tick_interval');
+		$val = PfbConfig::read('gen/pfb_tick_interval');
 		$this->assertSame('30', $val, "read: pfb_tick_interval '30' -> '30'");
 
 		// After: write back produces '30'.
-		PfbConfig::write('pfb_tick_interval', $val);
+		PfbConfig::write('gen/pfb_tick_interval', $val);
 		$this->assertSame('30', config_get_path($path), "write(read('30'))=='30' for pfb_tick_interval");
 	}
 
@@ -761,11 +761,11 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: pfb_quiet_hours is a plain-string field; default = '' (apply immediately).
 	 *     Given no stored value.
-	 *     When PfbConfig::read('pfb_quiet_hours').
+	 *     When PfbConfig::read('gen/pfb_quiet_hours').
 	 *     Then '' is returned (registered default = no window, apply immediately).
 	 *
 	 * Red→green: before Phase 5, 'pfb_quiet_hours' was not registered →
-	 *   PfbConfig::read('pfb_quiet_hours') threw InvalidArgumentException.
+	 *   PfbConfig::read('gen/pfb_quiet_hours') threw InvalidArgumentException.
 	 */
 	public function testPfbQuietHoursAbsentKeyReturnsDefault(): void
 	{
@@ -775,7 +775,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'before: pfb_quiet_hours must be absent');
 
 		// When/Then: absent → default '' (no window).
-		$result = PfbConfig::read('pfb_quiet_hours');
+		$result = PfbConfig::read('gen/pfb_quiet_hours');
 		$this->assertSame('', $result, 'pfb_quiet_hours absent -> default empty string');
 	}
 
@@ -785,7 +785,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: pfb_quiet_hours is a plain-string field (no adapter).
 	 *     Given stored = '02:00-06:00'.
-	 *     When PfbConfig::write('pfb_quiet_hours', PfbConfig::read('pfb_quiet_hours')).
+	 *     When PfbConfig::write('gen/pfb_quiet_hours', PfbConfig::read('gen/pfb_quiet_hours')).
 	 *     Then stored string == '02:00-06:00' (lossless round-trip).
 	 *
 	 * Red→green: before Phase 5, read/write threw InvalidArgumentException.
@@ -802,12 +802,12 @@ final class CfgGatewayTest extends TestCase
 			"before: pfb_quiet_hours seed is '02:00-06:00'");
 
 		// When: read -> write.
-		$val = PfbConfig::read('pfb_quiet_hours');
+		$val = PfbConfig::read('gen/pfb_quiet_hours');
 		$this->assertSame('02:00-06:00', $val,
 			"read: pfb_quiet_hours '02:00-06:00' -> '02:00-06:00'");
 
 		// After: write back produces '02:00-06:00'.
-		PfbConfig::write('pfb_quiet_hours', $val);
+		PfbConfig::write('gen/pfb_quiet_hours', $val);
 		$this->assertSame('02:00-06:00', config_get_path($path),
 			"write(read('02:00-06:00'))=='02:00-06:00' for pfb_quiet_hours");
 	}
@@ -823,7 +823,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: pfb_log_trim_margin_pct is a plain-string field; default = '0'.
 	 *     Given no stored value.
-	 *     When PfbConfig::read('pfb_log_trim_margin_pct').
+	 *     When PfbConfig::read('gen/pfb_log_trim_margin_pct').
 	 *     Then '0' is returned.
 	 */
 	public function testPfbLogTrimMarginPctAbsentKeyReturnsDefaultZero(): void
@@ -834,7 +834,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'before: pfb_log_trim_margin_pct must be absent');
 
 		// When/Then: absent -> default '0'.
-		$result = PfbConfig::read('pfb_log_trim_margin_pct');
+		$result = PfbConfig::read('gen/pfb_log_trim_margin_pct');
 		$this->assertSame('0', $result, 'pfb_log_trim_margin_pct absent -> default 0');
 	}
 
@@ -844,7 +844,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: pfb_log_trim_margin_pct is a plain-string field (no adapter).
 	 *     Given stored = '50'.
-	 *     When PfbConfig::write('pfb_log_trim_margin_pct', PfbConfig::read('pfb_log_trim_margin_pct')).
+	 *     When PfbConfig::write('gen/pfb_log_trim_margin_pct', PfbConfig::read('gen/pfb_log_trim_margin_pct')).
 	 *     Then stored string == '50' (write(read('50')) == '50').
 	 */
 	public function testPfbLogTrimMarginPctRoundTrip(): void
@@ -858,11 +858,11 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('50', config_get_path($path), "before: pfb_log_trim_margin_pct seed is '50'");
 
 		// When: read -> write.
-		$val = PfbConfig::read('pfb_log_trim_margin_pct');
+		$val = PfbConfig::read('gen/pfb_log_trim_margin_pct');
 		$this->assertSame('50', $val, "read: pfb_log_trim_margin_pct '50' -> '50'");
 
 		// After: write back produces '50'.
-		PfbConfig::write('pfb_log_trim_margin_pct', $val);
+		PfbConfig::write('gen/pfb_log_trim_margin_pct', $val);
 		$this->assertSame('50', config_get_path($path), "write(read('50'))=='50' for pfb_log_trim_margin_pct");
 	}
 
@@ -885,7 +885,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('50', config_get_path($path),
 			'the section write must carry pfb_log_trim_margin_pct -- a key dropped here saves nothing from the UI'
 		);
-		$this->assertSame('50', PfbConfig::read('pfb_log_trim_margin_pct'), 'and the gateway must read it back');
+		$this->assertSame('50', PfbConfig::read('gen/pfb_log_trim_margin_pct'), 'and the gateway must read it back');
 	}
 
 	// ADR-38 — log_syslog (toggle; Amendment 1: facility/priority removed)
@@ -897,7 +897,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: log_syslog is a PfbToggle field; vocabulary = {'on', ''}.
 	 *     Given stored = 'on'.
-	 *     When PfbConfig::write('log_syslog', PfbConfig::read('log_syslog')).
+	 *     When PfbConfig::write('gen/log_syslog', PfbConfig::read('gen/log_syslog')).
 	 *     Then stored string == 'on' (write(read('on')) == 'on').
 	 */
 	public function testLogSyslogRoundTripOn(): void
@@ -911,11 +911,11 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('on', config_get_path($path), "before: log_syslog seed is 'on'");
 
 		// When: read -> write.
-		$enum = PfbConfig::read('log_syslog');
+		$enum = PfbConfig::read('gen/log_syslog');
 		$this->assertSame(PfbToggle::On, $enum, "read: log_syslog 'on' -> PfbToggle::On");
 
 		// After: write back produces 'on'.
-		PfbConfig::write('log_syslog', $enum);
+		PfbConfig::write('gen/log_syslog', $enum);
 		$this->assertSame('on', config_get_path($path), "write(read('on'))==on for log_syslog");
 	}
 
@@ -925,7 +925,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: log_syslog vocabulary = {'on', ''}.
 	 *     Given stored = '' (unchecked / off).
-	 *     When PfbConfig::write('log_syslog', PfbConfig::read('log_syslog')).
+	 *     When PfbConfig::write('gen/log_syslog', PfbConfig::read('gen/log_syslog')).
 	 *     Then stored string == '' (write(read('')) == '').
 	 */
 	public function testLogSyslogRoundTripOff(): void
@@ -939,11 +939,11 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('', config_get_path($path), "before: log_syslog seed is ''");
 
 		// When: read -> write.
-		$enum = PfbConfig::read('log_syslog');
+		$enum = PfbConfig::read('gen/log_syslog');
 		$this->assertSame(PfbToggle::Off, $enum, "read: log_syslog '' -> PfbToggle::Off");
 
 		// After: write back emits the canonical explicit 'off' (issue #1887).
-		PfbConfig::write('log_syslog', $enum);
+		PfbConfig::write('gen/log_syslog', $enum);
 		$this->assertSame('off', config_get_path($path), "write(read(''))=='off' for log_syslog");
 	}
 
@@ -953,7 +953,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: log_syslog registered default is '' (off).
 	 *     Given no stored value.
-	 *     When PfbConfig::read('log_syslog').
+	 *     When PfbConfig::read('gen/log_syslog').
 	 *     Then PfbToggle::Off is returned (registered default '').
 	 */
 	public function testLogSyslogAbsentKeyReturnsOffDefault(): void
@@ -964,7 +964,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'before: log_syslog must be absent');
 
 		// When/Then: default '' → PfbToggle::Off.
-		$result = PfbConfig::read('log_syslog');
+		$result = PfbConfig::read('gen/log_syslog');
 		$this->assertSame(PfbToggle::Off, $result, 'log_syslog absent -> Off (default)');
 	}
 
@@ -1015,7 +1015,12 @@ final class CfgGatewayTest extends TestCase
 	public function testInventoryCompletenessAllKnownKeysAccountedFor(): void
 	{
 		$registry = pfb_cfg_registry();
-		$registered_keys = array_keys($registry);
+		// issue #1931: registry keys are now '<alias>/<bare-key>'; this inventory compares
+		// against the bare config.xml names below, so strip the alias prefix back off.
+		$registered_keys = array_map(
+			static fn (string $path_key): string => substr($path_key, strpos($path_key, '/') + 1),
+			array_keys($registry)
+		);
 
 		// Out-of-scope keys — foreign, structural, or section-level (§2.5 ADR-29).
 		// Any key listed here must NOT be in the registry (it stays foreign).
@@ -1274,15 +1279,15 @@ final class CfgGatewayTest extends TestCase
 	{
 		// General section key.
 		$this->seedConfig('installedpackages/pfblockerng/config/0/pfb_interval', '6');
-		$this->assertSame('6', PfbConfig::read('pfb_interval'));
+		$this->assertSame('6', PfbConfig::read('gen/pfb_interval'));
 
 		// DNSBL settings section key.
 		$this->seedConfig('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport', '8080');
-		$this->assertSame('8080', PfbConfig::read('pfb_dnsport'));
+		$this->assertSame('8080', PfbConfig::read('dnsbl/pfb_dnsport'));
 
 		// SafeSearch section key (flat, no /config/0).
 		$this->seedConfig('installedpackages/pfblockerngsafesearch/safesearch_enable', 'Google');
-		$this->assertSame('Google', PfbConfig::read('safesearch_enable'));
+		$this->assertSame('Google', PfbConfig::read('ss/safesearch_enable'));
 	}
 
 	/**
@@ -1300,7 +1305,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_interval'));
 
 		// When.
-		PfbConfig::write('pfb_interval', '12');
+		PfbConfig::write('gen/pfb_interval', '12');
 
 		// After: stored.
 		$this->assertSame('12', config_get_path('installedpackages/pfblockerng/config/0/pfb_interval'));
@@ -1315,7 +1320,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path));
 
 		// When: write enum value.
-		PfbConfig::write('enable_cb', PfbToggle::On);
+		PfbConfig::write('gen/enable_cb', PfbToggle::On);
 
 		// After: stored as the string 'on', not an enum object.
 		$this->assertSame('on', config_get_path($path));
@@ -1324,7 +1329,7 @@ final class CfgGatewayTest extends TestCase
 	public function testWriteToggleFieldAcceptsLegacyStringValue(): void
 	{
 		// Regression: pfblockerng_update.php Force Reload calls
-		// PfbConfig::write('pfb_reuse', 'on') with a raw string. The toggle
+		// PfbConfig::write('gen/pfb_reuse', 'on') with a raw string. The toggle
 		// write adapter must accept it (enum-or-string contract) and store
 		// the exact legacy token — previously a TypeError.
 		$path = 'installedpackages/pfblockerng/config/0/pfb_reuse';
@@ -1333,7 +1338,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path));
 
 		// When: write the raw legacy string (not the enum).
-		PfbConfig::write('pfb_reuse', 'on');
+		PfbConfig::write('gen/pfb_reuse', 'on');
 
 		// After: stored as the string 'on'.
 		$this->assertSame('on', config_get_path($path));
@@ -1347,7 +1352,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path));
 
 		// When: write Off enum.
-		PfbConfig::write('pfb_dnsbl_lenient', PfbToggle::Off);
+		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', PfbToggle::Off);
 
 		// After: stored as 'off' (not '' — PfbToggle::Off = 'off').
 		$this->assertSame('off', config_get_path($path));
@@ -1370,7 +1375,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('3', config_get_path($path), 'before: key is set');
 
 		// When.
-		PfbConfig::delete('pfb_interval');
+		PfbConfig::delete('gen/pfb_interval');
 
 		// After.
 		$this->assertNull(config_get_path($path), 'after delete: key is gone');
@@ -1489,7 +1494,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: pfb_idn stored as 'on' (canonical, = All).
 	 *     Given pfb_idn = 'on'.
-	 *     When PfbConfig::read('pfb_idn').
+	 *     When PfbConfig::read('dnsbl/pfb_idn').
 	 *     Then PfbIdnMode::All is returned (adapter is wired).
 	 *     And write(read('on')) stores 'on' (canonical identity — the backing value).
 	 */
@@ -1504,14 +1509,14 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('on', config_get_path($path));
 
 		// When: read.
-		$result = PfbConfig::read('pfb_idn');
+		$result = PfbConfig::read('dnsbl/pfb_idn');
 
 		// Then: PfbIdnMode::All (adapter IS wired — NOT raw string).
 		$this->assertInstanceOf(PfbIdnMode::class, $result, 'pfb_idn must return a PfbIdnMode enum');
 		$this->assertSame(PfbIdnMode::All, $result, "pfb_idn 'on' -> PfbIdnMode::All");
 
 		// And: write(read('on')) stores 'on' — canonical identity.
-		PfbConfig::write('pfb_idn', $result);
+		PfbConfig::write('dnsbl/pfb_idn', $result);
 		$this->assertSame('on', config_get_path($path), "write(read('on')) == 'on' for pfb_idn");
 	}
 
@@ -1526,12 +1531,12 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('all', config_get_path($path));
 
 		// When/Then: 'all' is unrecognised -> PfbIdnMode::Off (canonical block-all is 'on').
-		$result = PfbConfig::read('pfb_idn');
+		$result = PfbConfig::read('dnsbl/pfb_idn');
 		$this->assertInstanceOf(PfbIdnMode::class, $result, 'pfb_idn must return a PfbIdnMode enum');
 		$this->assertSame(PfbIdnMode::Off, $result, "pfb_idn 'all' (dropped alpha token) -> PfbIdnMode::Off");
 
 		// Write emits the canonical 'off' — 'all' is not re-emitted.
-		PfbConfig::write('pfb_idn', $result);
+		PfbConfig::write('dnsbl/pfb_idn', $result);
 		$stored = config_get_path($path);
 		$this->assertSame('off', $stored, "write(read('all')) == 'off' for pfb_idn");
 		$this->assertNotSame('all', $stored, "'all' must not be re-emitted");
@@ -1548,7 +1553,7 @@ final class CfgGatewayTest extends TestCase
 	public function testRegistryEntriesHaveRequiredShape(): void
 	{
 		$registry       = pfb_cfg_registry();
-		$required_keys  = ['section', 'default', 'read_adapter', 'write_adapter'];
+		$required_keys  = ['default', 'read_adapter', 'write_adapter'];
 
 		$this->assertNotEmpty($registry, 'Registry must not be empty');
 
@@ -1559,9 +1564,9 @@ final class CfgGatewayTest extends TestCase
 				);
 			}
 
-			// section must be a non-empty string.
-			$this->assertIsString($entry['section'],  "'{$field_key}'.section must be a string");
-			$this->assertNotEmpty($entry['section'],  "'{$field_key}'.section must not be empty");
+			// issue #1931: entries no longer carry a 'section' -- the path key's alias
+			// prefix resolves through PFB_SECTIONS instead.
+			$this->assertArrayNotHasKey('section', $entry, "'{$field_key}' must not carry a 'section' field");
 
 			// default must be a string.
 			$this->assertIsString($entry['default'],  "'{$field_key}'.default must be a string");
@@ -1640,7 +1645,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNotEmpty($log_types, 'pfb_test_log_types() must not be empty');
 
 		foreach ($log_types as $type) {
-			$key = 'log_max_days_' . $type;
+			$key = 'gen/log_max_days_' . $type;
 			$this->assertArrayHasKey($key, $registry,
 				"log_max_days_{$type} must be in the registry"
 			);
@@ -1675,7 +1680,7 @@ final class CfgGatewayTest extends TestCase
 		$cases  = [];
 		foreach ($log_types as $type) {
 			foreach ($vocab as $token) {
-				$cases["log_max_days_{$type}/{$token}"] = ["log_max_days_{$type}", $token];
+				$cases["log_max_days_{$type}/{$token}"] = ["gen/log_max_days_{$type}", $token];
 			}
 		}
 		return $cases;
@@ -1695,7 +1700,7 @@ final class CfgGatewayTest extends TestCase
 		string $key,
 		string $token
 	): void {
-		$path = 'installedpackages/pfblockerng/config/0/' . $key;
+		$path = 'installedpackages/pfblockerng/config/0/' . substr($key, strlen('gen/'));
 
 		// Given: a vocabulary token stored.
 		$this->seedConfig($path, $token);
@@ -1736,18 +1741,18 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNotEmpty($log_types, 'pfb_test_log_types() must not be empty');
 
 		foreach ($log_types as $type) {
-			$key  = 'log_max_days_' . $type;
-			$path = 'installedpackages/pfblockerng/config/0/' . $key;
+			$bare = 'log_max_days_' . $type;
+			$path = 'installedpackages/pfblockerng/config/0/' . $bare;
 
 			// Before: absent.
 			$this->assertNull(config_get_path($path),
-				"before: {$key} must be absent"
+				"before: {$bare} must be absent"
 			);
 
 			// When/Then: default '0' returned.
-			$result = PfbConfig::read($key);
+			$result = PfbConfig::read('gen/' . $bare);
 			$this->assertSame('0', $result,
-				"{$key} absent must return '0' (registered default)"
+				"{$bare} absent must return '0' (registered default)"
 			);
 		}
 	}
@@ -1759,7 +1764,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: key entirely absent from config.xml.
 	 *     Given no value seeded.
-	 *     When PfbConfig::read('log_max_ip_parse_err').
+	 *     When PfbConfig::read('gen/log_max_ip_parse_err').
 	 *     Then '20000' is returned (registered default; matches every sibling log_max_<type>).
 	 */
 	public function testLogMaxIpParseErrAbsentKeyReturnsDefault20000(): void
@@ -1770,7 +1775,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'before: log_max_ip_parse_err must be absent');
 
 		// When/Then: default '20000' returned.
-		$this->assertSame('20000', PfbConfig::read('log_max_ip_parse_err'),
+		$this->assertSame('20000', PfbConfig::read('gen/log_max_ip_parse_err'),
 			'log_max_ip_parse_err absent must return \'20000\' (registered default)'
 		);
 	}
@@ -1785,7 +1790,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: dnsbl_redir stored as 'on' (enabled) or '' (disabled).
 	 *     Given canonical stored value v in {'on', ''}.
-	 *     When PfbConfig::write('dnsbl_redir', PfbConfig::read('dnsbl_redir')).
+	 *     When PfbConfig::write('dnsbl/dnsbl_redir', PfbConfig::read('dnsbl/dnsbl_redir')).
 	 *     Then stored string equals v (write(read(v)) == v).
 	 */
 	public function testDnsblRedirToggleRoundTripOn(): void
@@ -1801,10 +1806,10 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When: read -> write.
-		$enum = PfbConfig::read('dnsbl_redir');
+		$enum = PfbConfig::read('dnsbl/dnsbl_redir');
 		$this->assertSame(PfbToggle::On, $enum, 'read: on -> PfbToggle::On');
 
-		PfbConfig::write('dnsbl_redir', $enum);
+		PfbConfig::write('dnsbl/dnsbl_redir', $enum);
 
 		// After: stored as 'on'.
 		$this->assertSame('on', config_get_path($path),
@@ -1825,10 +1830,10 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When: read -> write.
-		$enum = PfbConfig::read('dnsbl_redir');
+		$enum = PfbConfig::read('dnsbl/dnsbl_redir');
 		$this->assertSame(PfbToggle::Off, $enum, "read: '' -> PfbToggle::Off");
 
-		PfbConfig::write('dnsbl_redir', $enum);
+		PfbConfig::write('dnsbl/dnsbl_redir', $enum);
 
 		// After: stored as the canonical explicit 'off' (issue #1887).
 		$this->assertSame('off', config_get_path($path),
@@ -1842,7 +1847,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: key absent from config.
 	 *     Given no seed.
-	 *     When PfbConfig::read('dnsbl_redir').
+	 *     When PfbConfig::read('dnsbl/dnsbl_redir').
 	 *     Then PfbToggle::Off is returned (default '').
 	 */
 	public function testDnsblRedirAbsentKeyReturnsOff(): void
@@ -1855,7 +1860,7 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When/Then.
-		$result = PfbConfig::read('dnsbl_redir');
+		$result = PfbConfig::read('dnsbl/dnsbl_redir');
 		$this->assertSame(PfbToggle::Off, $result,
 			"dnsbl_redir absent -> PfbToggle::Off (default '')"
 		);
@@ -1867,7 +1872,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: plain adapter — any stored string passes through unchanged.
 	 *     Given stored value v.
-	 *     When PfbConfig::write('dnsbl_redir_int', PfbConfig::read('dnsbl_redir_int')).
+	 *     When PfbConfig::write('dnsbl/dnsbl_redir_int', PfbConfig::read('dnsbl/dnsbl_redir_int')).
 	 *     Then stored string equals v (write(read(v)) == v).
 	 */
 	public function testDnsblRedirIntPlainRoundTripNonEmpty(): void
@@ -1883,12 +1888,12 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When.
-		$value = PfbConfig::read('dnsbl_redir_int');
+		$value = PfbConfig::read('dnsbl/dnsbl_redir_int');
 		$this->assertSame('lan,opt1', $value,
 			'read: plain adapter returns raw stored string'
 		);
 
-		PfbConfig::write('dnsbl_redir_int', $value);
+		PfbConfig::write('dnsbl/dnsbl_redir_int', $value);
 
 		// After.
 		$this->assertSame('lan,opt1', config_get_path($path),
@@ -1909,10 +1914,10 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When.
-		$value = PfbConfig::read('dnsbl_redir_int');
+		$value = PfbConfig::read('dnsbl/dnsbl_redir_int');
 		$this->assertSame('', $value, "read: '' returns ''");
 
-		PfbConfig::write('dnsbl_redir_int', $value);
+		PfbConfig::write('dnsbl/dnsbl_redir_int', $value);
 
 		// After.
 		$this->assertSame('', config_get_path($path),
@@ -1926,7 +1931,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: key absent from config.
 	 *     Given no seed.
-	 *     When PfbConfig::read('dnsbl_redir_int').
+	 *     When PfbConfig::read('dnsbl/dnsbl_redir_int').
 	 *     Then '' is returned (registered default).
 	 */
 	public function testDnsblRedirIntAbsentKeyReturnsDefaultEmpty(): void
@@ -1939,7 +1944,7 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When/Then.
-		$result = PfbConfig::read('dnsbl_redir_int');
+		$result = PfbConfig::read('dnsbl/dnsbl_redir_int');
 		$this->assertSame('', $result,
 			"dnsbl_redir_int absent -> '' (registered default)"
 		);
@@ -1951,7 +1956,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: plain adapter — any stored string passes through unchanged.
 	 *     Given stored value v.
-	 *     When PfbConfig::write('dnsbl_redir_exclude', PfbConfig::read('dnsbl_redir_exclude')).
+	 *     When PfbConfig::write('dnsbl/dnsbl_redir_exclude', PfbConfig::read('dnsbl/dnsbl_redir_exclude')).
 	 *     Then stored string equals v (write(read(v)) == v).
 	 */
 	public function testDnsblRedirExcludePlainRoundTripNonEmpty(): void
@@ -1967,12 +1972,12 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When.
-		$value = PfbConfig::read('dnsbl_redir_exclude');
+		$value = PfbConfig::read('dnsbl/dnsbl_redir_exclude');
 		$this->assertSame('DNS_Whitelist', $value,
 			'read: plain adapter returns raw stored string'
 		);
 
-		PfbConfig::write('dnsbl_redir_exclude', $value);
+		PfbConfig::write('dnsbl/dnsbl_redir_exclude', $value);
 
 		// After.
 		$this->assertSame('DNS_Whitelist', config_get_path($path),
@@ -1993,10 +1998,10 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When.
-		$value = PfbConfig::read('dnsbl_redir_exclude');
+		$value = PfbConfig::read('dnsbl/dnsbl_redir_exclude');
 		$this->assertSame('', $value, "read: '' returns ''");
 
-		PfbConfig::write('dnsbl_redir_exclude', $value);
+		PfbConfig::write('dnsbl/dnsbl_redir_exclude', $value);
 
 		// After.
 		$this->assertSame('', config_get_path($path),
@@ -2010,7 +2015,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: key absent from config.
 	 *     Given no seed.
-	 *     When PfbConfig::read('dnsbl_redir_exclude').
+	 *     When PfbConfig::read('dnsbl/dnsbl_redir_exclude').
 	 *     Then '' is returned (registered default).
 	 */
 	public function testDnsblRedirExcludeAbsentKeyReturnsDefaultEmpty(): void
@@ -2023,7 +2028,7 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When/Then.
-		$result = PfbConfig::read('dnsbl_redir_exclude');
+		$result = PfbConfig::read('dnsbl/dnsbl_redir_exclude');
 		$this->assertSame('', $result,
 			"dnsbl_redir_exclude absent -> '' (registered default)"
 		);
@@ -2039,7 +2044,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: dnsbl_dot_block stored as 'on' (enabled) or '' (disabled).
 	 *     Given canonical stored value v in {'on', ''}.
-	 *     When PfbConfig::write('dnsbl_dot_block', PfbConfig::read('dnsbl_dot_block')).
+	 *     When PfbConfig::write('dnsbl/dnsbl_dot_block', PfbConfig::read('dnsbl/dnsbl_dot_block')).
 	 *     Then stored string equals v (write(read(v)) == v).
 	 */
 	public function testDnsblDotBlockToggleRoundTripOn(): void
@@ -2055,10 +2060,10 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When: read -> write.
-		$enum = PfbConfig::read('dnsbl_dot_block');
+		$enum = PfbConfig::read('dnsbl/dnsbl_dot_block');
 		$this->assertSame(PfbToggle::On, $enum, 'read: on -> PfbToggle::On');
 
-		PfbConfig::write('dnsbl_dot_block', $enum);
+		PfbConfig::write('dnsbl/dnsbl_dot_block', $enum);
 
 		// After: stored as 'on'.
 		$this->assertSame('on', config_get_path($path),
@@ -2079,10 +2084,10 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When: read -> write.
-		$enum = PfbConfig::read('dnsbl_dot_block');
+		$enum = PfbConfig::read('dnsbl/dnsbl_dot_block');
 		$this->assertSame(PfbToggle::Off, $enum, "read: '' -> PfbToggle::Off");
 
-		PfbConfig::write('dnsbl_dot_block', $enum);
+		PfbConfig::write('dnsbl/dnsbl_dot_block', $enum);
 
 		// After: stored as the canonical explicit 'off' (issue #1887).
 		$this->assertSame('off', config_get_path($path),
@@ -2096,7 +2101,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: key absent from config (feature never enabled).
 	 *     Given no seed.
-	 *     When PfbConfig::read('dnsbl_dot_block').
+	 *     When PfbConfig::read('dnsbl/dnsbl_dot_block').
 	 *     Then PfbToggle::Off is returned (default '').
 	 */
 	public function testDnsblDotBlockAbsentKeyReturnsOff(): void
@@ -2109,7 +2114,7 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When/Then.
-		$result = PfbConfig::read('dnsbl_dot_block');
+		$result = PfbConfig::read('dnsbl/dnsbl_dot_block');
 		$this->assertSame(PfbToggle::Off, $result,
 			"dnsbl_dot_block absent -> PfbToggle::Off (default '')"
 		);
@@ -2121,7 +2126,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: plain adapter — any stored string passes through unchanged.
 	 *     Given stored value v.
-	 *     When PfbConfig::write('dnsbl_dot_block_int', PfbConfig::read('dnsbl_dot_block_int')).
+	 *     When PfbConfig::write('dnsbl/dnsbl_dot_block_int', PfbConfig::read('dnsbl/dnsbl_dot_block_int')).
 	 *     Then stored string equals v (write(read(v)) == v).
 	 */
 	public function testDnsblDotBlockIntPlainRoundTripNonEmpty(): void
@@ -2137,12 +2142,12 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When.
-		$value = PfbConfig::read('dnsbl_dot_block_int');
+		$value = PfbConfig::read('dnsbl/dnsbl_dot_block_int');
 		$this->assertSame('lan,opt1', $value,
 			'read: plain adapter returns raw stored string'
 		);
 
-		PfbConfig::write('dnsbl_dot_block_int', $value);
+		PfbConfig::write('dnsbl/dnsbl_dot_block_int', $value);
 
 		// After.
 		$this->assertSame('lan,opt1', config_get_path($path),
@@ -2156,7 +2161,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: key absent from config.
 	 *     Given no seed.
-	 *     When PfbConfig::read('dnsbl_dot_block_int').
+	 *     When PfbConfig::read('dnsbl/dnsbl_dot_block_int').
 	 *     Then '' is returned (registered default).
 	 */
 	public function testDnsblDotBlockIntAbsentKeyReturnsDefaultEmpty(): void
@@ -2169,7 +2174,7 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When/Then.
-		$result = PfbConfig::read('dnsbl_dot_block_int');
+		$result = PfbConfig::read('dnsbl/dnsbl_dot_block_int');
 		$this->assertSame('', $result,
 			"dnsbl_dot_block_int absent -> '' (registered default)"
 		);
@@ -2181,7 +2186,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: plain adapter — any stored string passes through unchanged.
 	 *     Given stored value v.
-	 *     When PfbConfig::write('dnsbl_dot_block_exclude', PfbConfig::read('dnsbl_dot_block_exclude')).
+	 *     When PfbConfig::write('dnsbl/dnsbl_dot_block_exclude', PfbConfig::read('dnsbl/dnsbl_dot_block_exclude')).
 	 *     Then stored string equals v (write(read(v)) == v).
 	 */
 	public function testDnsblDotBlockExcludePlainRoundTripNonEmpty(): void
@@ -2197,12 +2202,12 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When.
-		$value = PfbConfig::read('dnsbl_dot_block_exclude');
+		$value = PfbConfig::read('dnsbl/dnsbl_dot_block_exclude');
 		$this->assertSame('DoT_Exceptions', $value,
 			'read: plain adapter returns raw stored string'
 		);
 
-		PfbConfig::write('dnsbl_dot_block_exclude', $value);
+		PfbConfig::write('dnsbl/dnsbl_dot_block_exclude', $value);
 
 		// After.
 		$this->assertSame('DoT_Exceptions', config_get_path($path),
@@ -2216,7 +2221,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: key absent from config.
 	 *     Given no seed.
-	 *     When PfbConfig::read('dnsbl_dot_block_exclude').
+	 *     When PfbConfig::read('dnsbl/dnsbl_dot_block_exclude').
 	 *     Then '' is returned (registered default).
 	 */
 	public function testDnsblDotBlockExcludeAbsentKeyReturnsDefaultEmpty(): void
@@ -2229,7 +2234,7 @@ final class CfgGatewayTest extends TestCase
 		);
 
 		// When/Then.
-		$result = PfbConfig::read('dnsbl_dot_block_exclude');
+		$result = PfbConfig::read('dnsbl/dnsbl_dot_block_exclude');
 		$this->assertSame('', $result,
 			"dnsbl_dot_block_exclude absent -> '' (registered default)"
 		);
@@ -2280,8 +2285,11 @@ final class CfgGatewayTest extends TestCase
 				"no sample set registered for adapter type '{$read_adapter}' (field '{$key}') -- extend the sample map"
 			);
 
-			$section = $entry['section'];
-			$path    = $section . '/' . $key;
+			// issue #1931: $key is now '<alias>/<bare>'; resolve the real section path
+			// via PFB_SECTIONS and use the bare part for the section-blob key.
+			[$alias, $bare] = explode('/', $key, 2);
+			$section = PFB_SECTIONS[$alias];
+			$path    = $section . '/' . $bare;
 
 			foreach ($samples_by_read_adapter[$read_adapter] as $raw) {
 				// Oracle: PfbConfig::write() on a fresh slate.
@@ -2291,7 +2299,7 @@ final class CfgGatewayTest extends TestCase
 
 				// Under test: PfbConfig::writeSection() on a fresh slate.
 				$GLOBALS['config'] = [];
-				PfbConfig::writeSection($section, [$key => $raw]);
+				PfbConfig::writeSection($section, [$bare => $raw]);
 				$actual = config_get_path($path);
 
 				$this->assertSame($expected, $actual,
@@ -2313,7 +2321,7 @@ final class CfgGatewayTest extends TestCase
 	 * THE pinning red test (mirrors the issue #930 repro): a legacy 'domcop'
 	 * top1m_source token riding a section blob write is no longer re-emitted raw --
 	 * it is coalesced to the canonical 'openpagerank' token, same as a single-key
-	 * PfbConfig::write('top1m_source', 'domcop') would.
+	 * PfbConfig::write('dnsbl/top1m_source', 'domcop') would.
 	 *
 	 * Scenario:
 	 *   Given a DNSBL settings blob with the legacy 'domcop' top1m_source token.
@@ -2689,9 +2697,9 @@ final class CfgGatewayTest extends TestCase
 	{
 		$GLOBALS['pfb_test_write_config_calls'] = [];
 
-		PfbConfig::write('pfb_keep', 'on');
-		PfbConfig::read('pfb_keep');
-		PfbConfig::delete('pfb_keep');
+		PfbConfig::write('gen/pfb_keep', 'on');
+		PfbConfig::read('gen/pfb_keep');
+		PfbConfig::delete('gen/pfb_keep');
 		PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 		PfbConfig::writeSection('installedpackages/pfblockerng/config/0', ['pfb_keep' => '', 'pfb_interval' => '1']);
 		PfbConfig::deleteSection('installedpackages/pfblockerng/config/0');
@@ -2700,5 +2708,120 @@ final class CfgGatewayTest extends TestCase
 			'PfbConfig must never call write_config() -- the caller flushes');
 
 		unset($GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	// -----------------------------------------------------------------------
+	// F — issue #1931: path-addressed registry parity oracle + alias-prefix gate
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Parity oracle: every fixture entry (bare key -> {section, default,
+	 * read_adapter, write_adapter, write_priv?}), captured from the pre-#1931
+	 * registry, must still resolve identically once its section is flipped to
+	 * an alias via PFB_SECTIONS and joined onto the bare key. Iterates the
+	 * FIXTURE, never the live registry -- additions to the registry stay
+	 * legal; only a removal or a changed field on an existing entry fails.
+	 */
+	public function testPathKeyedRegistryMatchesPre1931ParityFixture(): void
+	{
+		$fixture_path = __DIR__ . '/fixtures/cfg_registry_pre1931_parity.json';
+		$fixture      = json_decode((string) file_get_contents($fixture_path), TRUE);
+		$this->assertIsArray($fixture, 'parity fixture must decode to an array');
+		$this->assertCount(103, $fixture, 'parity fixture must carry exactly 103 entries (guards a truncated oracle)');
+
+		$alias_of_section = array_flip(PFB_SECTIONS);
+		$registry         = pfb_cfg_registry();
+
+		foreach ($fixture as $bare => $expected) {
+			$this->assertArrayHasKey($expected['section'], $alias_of_section,
+				"fixture entry '{$bare}': section '{$expected['section']}' has no PFB_SECTIONS alias"
+			);
+			$path_key = $alias_of_section[$expected['section']] . '/' . $bare;
+
+			$this->assertArrayHasKey($path_key, $registry,
+				"registry must still carry '{$path_key}' (fixture bare key '{$bare}')"
+			);
+			$actual = $registry[$path_key];
+
+			$this->assertSame($expected['default'], $actual['default'], "{$path_key}: default must match the fixture");
+			$this->assertSame($expected['read_adapter'], $actual['read_adapter'], "{$path_key}: read_adapter must match the fixture");
+			$this->assertSame($expected['write_adapter'], $actual['write_adapter'], "{$path_key}: write_adapter must match the fixture");
+			$this->assertSame(
+				array_key_exists('write_priv', $expected),
+				array_key_exists('write_priv', $actual),
+				"{$path_key}: write_priv presence must match the fixture"
+			);
+			if (array_key_exists('write_priv', $expected)) {
+				$this->assertSame($expected['write_priv'], $actual['write_priv'], "{$path_key}: write_priv value must match the fixture");
+			}
+		}
+	}
+
+	/**
+	 * Pure helper: one violation message per registry key that is not exactly
+	 * '<alias>/<bare>' with alias in PFB_SECTIONS and bare non-empty containing
+	 * no '/'. A typo'd alias or a bare (unprefixed) key must fail this gate
+	 * instead of silently minting a new section.
+	 *
+	 * @param  array<string,mixed> $registry
+	 * @return list<string>
+	 */
+	private static function violations(array $registry): array
+	{
+		$violations = [];
+		foreach (array_keys($registry) as $key) {
+			$slash = strpos($key, '/');
+			if ($slash === FALSE) {
+				$violations[] = "'{$key}': no alias prefix";
+				continue;
+			}
+			$alias = substr($key, 0, $slash);
+			$bare  = substr($key, $slash + 1);
+			if (!array_key_exists($alias, PFB_SECTIONS)) {
+				$violations[] = "'{$key}': unknown alias '{$alias}'";
+				continue;
+			}
+			if ($bare === '' || str_contains($bare, '/')) {
+				$violations[] = "'{$key}': malformed bare key '{$bare}'";
+			}
+		}
+		return $violations;
+	}
+
+	public function testRegistryHasNoAliasPrefixViolations(): void
+	{
+		$this->assertSame([], self::violations(pfb_cfg_registry()));
+	}
+
+	/**
+	 * Vacuity proof: violations() actually fires on the three ways a registry
+	 * key can be malformed, so testRegistryHasNoAliasPrefixViolations() is not
+	 * passing by never exercising the check.
+	 */
+	public function testViolationsHelperFiresOnEachMalformedKeyShape(): void
+	{
+		$this->assertNotEmpty(self::violations(['bogus/x' => []]), "a typo'd alias must be a violation");
+		$this->assertNotEmpty(self::violations(['nokey' => []]), 'a bare (unprefixed) key must be a violation');
+		$this->assertNotEmpty(self::violations(['gen/' => []]), 'an empty bare part must be a violation');
+	}
+
+	/**
+	 * PFB_SECTIONS integrity: its values are unique (no two aliases collide on
+	 * one section) and every value is scoped to a pfBlockerNG-owned section.
+	 */
+	public function testPfbSectionsValuesAreUniqueAndScopedToThePackage(): void
+	{
+		$this->assertSame(
+			count(PFB_SECTIONS),
+			count(array_unique(PFB_SECTIONS)),
+			'PFB_SECTIONS values must be unique'
+		);
+		foreach (PFB_SECTIONS as $alias => $path) {
+			$this->assertStringStartsWith(
+				'installedpackages/pfblockerng',
+				$path,
+				"PFB_SECTIONS['{$alias}'] must be a pfBlockerNG-owned installedpackages path"
+			);
+		}
 	}
 }

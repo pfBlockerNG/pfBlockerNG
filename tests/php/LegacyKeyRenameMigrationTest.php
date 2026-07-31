@@ -174,17 +174,18 @@ final class LegacyKeyRenameMigrationTest extends TestCase
 
 		foreach (self::EXPECTED_DNSBL_RENAMES as $old => $new) {
 			$this->assertArrayNotHasKey(
-				$old,
+				'dnsbl/' . $old,
 				$registry,
 				"retired key '{$old}' must no longer be registered (it would keep a compatibility path alive)"
 			);
 		}
 
-		// The eight rows that were registered before the rename stay registered.
+		// The eight rows that were registered before the rename stay registered, under
+		// the same 'dnsbl' alias (issue #1931: PFB_SECTIONS['dnsbl'] is that real path).
+		$this->assertSame(self::DNSBL_SECTION, PFB_SECTIONS['dnsbl']);
 		foreach (['top1m_enable', 'top1m_source', 'top1m_count', 'top1m_inclusion',
 			'tld_allow', 'tld_wildcard', 'tld_wildcard_blacklist', 'tld_wildcard_exclusion'] as $new) {
-			$this->assertArrayHasKey($new, $registry, "renamed key '{$new}' must stay registered");
-			$this->assertSame(self::DNSBL_SECTION, $registry[$new]['section']);
+			$this->assertArrayHasKey('dnsbl/' . $new, $registry, "renamed key '{$new}' must stay registered");
 		}
 	}
 

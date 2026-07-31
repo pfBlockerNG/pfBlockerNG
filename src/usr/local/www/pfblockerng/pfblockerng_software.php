@@ -79,7 +79,7 @@ if ($_POST && !empty($_POST['pfb_sw_action'])) {
 // unticked, so persist an explicit 'on'/'off' — an unset value defaults to enabled, an
 // explicit 'off' is the user opting out.
 if ($_POST && isset($_POST['save'])) {
-	PfbConfig::write('pfb_software_check', isset($_POST['pfb_software_check']) ? 'on' : 'off');
+	PfbConfig::write('gen/pfb_software_check', isset($_POST['pfb_software_check']) ? 'on' : 'off');
 	write_config('[pfBlockerNG] save Software settings');
 	header('Location: /pfblockerng/pfblockerng_software.php');
 	exit;

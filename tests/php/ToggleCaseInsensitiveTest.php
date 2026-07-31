@@ -73,10 +73,10 @@ final class ToggleCaseInsensitiveTest extends TestCase
 		config_set_path(self::KEEP, 'ON');
 		$this->assertSame('ON', config_get_path(self::KEEP), "before: pfb_keep seed is 'ON'");
 
-		$enum = PfbConfig::read('pfb_keep');
+		$enum = PfbConfig::read('gen/pfb_keep');
 		$this->assertSame(PfbToggle::On, $enum, "stored 'ON' must read as On, not fall back to Off");
 
-		PfbConfig::write('pfb_keep', $enum);
+		PfbConfig::write('gen/pfb_keep', $enum);
 		$this->assertSame('on', config_get_path(self::KEEP), "write must re-emit the canonical lowercase 'on'");
 	}
 

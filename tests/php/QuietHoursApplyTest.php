@@ -30,7 +30,7 @@ use PHPUnit\Framework\TestCase;
  *   pfb_quiet_hours_in_window()  → "Call to undefined function pfb_quiet_hours_in_window()"
  *   pfb_due_ledger_set_pending() → "Call to undefined function pfb_due_ledger_set_pending()"
  *   pfb_due_ledger_is_pending()  → "Call to undefined function pfb_due_ledger_is_pending()"
- *   PfbConfig::read('pfb_quiet_hours') → InvalidArgumentException (key not registered)
+ *   PfbConfig::read('gen/pfb_quiet_hours') → InvalidArgumentException (key not registered)
  */
 final class QuietHoursApplyTest extends TestCase
 {

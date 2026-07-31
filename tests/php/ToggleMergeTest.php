@@ -59,7 +59,7 @@ final class ToggleMergeTest extends TestCase
 	 */
 	public function testWritingOffStoresTheExplicitOffToken(): void
 	{
-		foreach (['pfb_keep' => self::KEEP, 'enable_cb' => self::ENABLE] as $key => $path) {
+		foreach (['gen/pfb_keep' => self::KEEP, 'gen/enable_cb' => self::ENABLE] as $key => $path) {
 			PfbConfig::write($key, PfbToggle::Off);
 			$this->assertSame(
 				'off',
@@ -78,7 +78,7 @@ final class ToggleMergeTest extends TestCase
 	 */
 	public function testStoredOffReadsAsOffAndRoundTrips(): void
 	{
-		foreach (['pfb_keep' => self::KEEP, 'enable_cb' => self::ENABLE] as $key => $path) {
+		foreach (['gen/pfb_keep' => self::KEEP, 'gen/enable_cb' => self::ENABLE] as $key => $path) {
 			config_set_path($path, 'off');
 			$this->assertSame('off', config_get_path($path), "before: {$key} seed is 'off'");
 
@@ -100,11 +100,11 @@ final class ToggleMergeTest extends TestCase
 	 */
 	public function testExplicitOffOnDefaultOnFieldSurvives(): void
 	{
-		PfbConfig::write('pfb_syntax_highlight', PfbToggle::Off);
+		PfbConfig::write('gen/pfb_syntax_highlight', PfbToggle::Off);
 
 		$this->assertSame(
 			PfbToggle::Off,
-			PfbConfig::read('pfb_syntax_highlight'),
+			PfbConfig::read('gen/pfb_syntax_highlight'),
 			'a deliberate Off on a default-on field must not read back as On'
 		);
 	}
@@ -127,14 +127,14 @@ final class ToggleMergeTest extends TestCase
 		$this->assertSame('', config_get_path(self::KEEP), "before: pfb_keep seed is ''");
 		$this->assertSame(
 			PfbToggle::On,
-			PfbConfig::read('pfb_keep'),
+			PfbConfig::read('gen/pfb_keep'),
 			"pfb_keep: stored '' must resolve to the registered default 'on', as an absent key does"
 		);
 
 		config_set_path(self::ENABLE, '');
 		$this->assertSame(
 			PfbToggle::Off,
-			PfbConfig::read('enable_cb'),
+			PfbConfig::read('gen/enable_cb'),
 			"enable_cb: stored '' must resolve to the registered default '', i.e. Off"
 		);
 	}
@@ -147,10 +147,10 @@ final class ToggleMergeTest extends TestCase
 	 */
 	public function testStoredEmptyStringIsIndistinguishableFromAbsent(): void
 	{
-		$absent = PfbConfig::read('pfb_keep');
+		$absent = PfbConfig::read('gen/pfb_keep');
 
 		config_set_path(self::KEEP, '');
-		$empty = PfbConfig::read('pfb_keep');
+		$empty = PfbConfig::read('gen/pfb_keep');
 
 		$this->assertSame($absent, $empty, "pfb_keep: stored '' must read identically to an absent key");
 	}
@@ -169,14 +169,14 @@ final class ToggleMergeTest extends TestCase
 	{
 		config_set_path(self::KEEP, '');
 
-		$read_before = PfbConfig::read('pfb_keep');
+		$read_before = PfbConfig::read('gen/pfb_keep');
 
 		// A save of the section exactly as loaded — the shape every www/ save handler uses.
 		PfbConfig::writeSection(self::GENERAL_SECTION, PfbConfig::readSection(self::GENERAL_SECTION));
 
 		$this->assertSame(
 			$read_before,
-			PfbConfig::read('pfb_keep'),
+			PfbConfig::read('gen/pfb_keep'),
 			'pfb_keep: a section save must not change what the field reads as'
 		);
 		$this->assertSame(
@@ -195,7 +195,7 @@ final class ToggleMergeTest extends TestCase
 	 */
 	public function testWriteResolvesLegacyEmptyStringToTheDefault(): void
 	{
-		PfbConfig::write('pfb_keep', '');
+		PfbConfig::write('gen/pfb_keep', '');
 
 		$this->assertSame(
 			'on',
@@ -232,9 +232,9 @@ final class ToggleMergeTest extends TestCase
 	public function testExLenientFieldsUseTheToggleAdapter(): void
 	{
 		$fields = [
-			'pfb_keep'             => ['path' => self::KEEP,   'default' => PfbToggle::On],
-			'pfb_syntax_highlight' => ['path' => self::SYNTAX, 'default' => PfbToggle::On],
-			'pfb_dnsbl_lenient'    => [
+			'gen/pfb_keep'             => ['path' => self::KEEP,   'default' => PfbToggle::On],
+			'gen/pfb_syntax_highlight' => ['path' => self::SYNTAX, 'default' => PfbToggle::On],
+			'dnsbl/pfb_dnsbl_lenient'  => [
 				'path'    => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient',
 				'default' => PfbToggle::Off,
 			],
