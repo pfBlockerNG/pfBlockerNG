@@ -33,8 +33,7 @@ use PHPUnit\Framework\TestCase;
  *   blacklist w/ creds — a per-item username/password is passed through untouched.
  *   blacklist w/o creds / top1m — absent keys: empty strings.
  *   explicit NULLs   — a key present but NULL is coerced too, not just an absent key.
- *   falsy-but-real   — a literal "0" credential is reported, not blanked (the helper's own
- *                      contract; pfb_download() drops it downstream either way — issue #1909).
+ *   falsy-but-real   — a literal "0" credential is reported, not blanked.
  */
 #[CoversFunction('pfb_extras_credentials')]
 final class ExtrasFeedCredentialsTest extends TestCase
@@ -178,10 +177,6 @@ final class ExtrasFeedCredentialsTest extends TestCase
 	/**
 	 * The replaced `?: ''` arm blanked every falsy value. This pins the helper's own contract:
 	 * only NULL/absent means "no credential"; "0" is a credential and is reported as one.
-	 *
-	 * It does not change what reaches the network. pfb_download() gates CURLOPT_USERPWD on
-	 * !empty($username) && !empty($password), so a "0" credential is dropped before curl both
-	 * before and after this change — tracked separately as issue #1909.
 	 */
 	public function testFalsyButRealCredentialsSurvive(): void
 	{
