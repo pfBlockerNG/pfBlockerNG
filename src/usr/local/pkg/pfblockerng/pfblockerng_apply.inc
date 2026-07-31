@@ -149,17 +149,12 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 	$parse_error = FALSE;
 
 	if ($vtype == '_v4' && $pftype == 'auto') {
-		// iBlocklist / PeerGuardian ".p2p" line: "<Org Name>:<start-ip>-<end-ip>"
-		// (sample: "JKS Media, LLC:4.53.2.12-4.53.2.15"). Strip the leading
-		// organisation name and hand the range to the '-' expander below.
-		// iBlocklist URLs resolve to the 'iblock' extension, which is NOT in the
-		// 'regex' parser list, so those feeds reach this branch and depend on it.
-		// Anchored on the WHOLE shape and split at the LAST colon, so an
-		// organisation name containing a colon survives. The former
-		// "contains '-' and ':'" test matched any unrelated line carrying both
-		// characters and rewrote it into a letter-free remnant -- a Maltrail
-		// URL-path trail signature became ")", which the closing gate then
-		// miscounted as a numeric parse failure (issue #1923).
+		// iBlocklist/PeerGuardian ".p2p": "<Org Name>:<start-ip>-<end-ip>" (sample
+		// "JKS Media, LLC:4.53.2.12-4.53.2.15") -- strip the org name, leaving the
+		// range for the '-' expander below. Reached because iBlocklist URLs map to
+		// the 'iblock' extension, absent from the 'regex' parser list. Anchored on
+		// the WHOLE shape, split at the LAST colon (issue #1923: a bare "contains
+		// '-' and ':'" test mangles unrelated lines; an org name may contain ':').
 		if (preg_match('/^.*:((?:\d{1,3}\.){3}\d{1,3}-(?:\d{1,3}\.){3}\d{1,3})$/', $line, $pfb_iblock)) {
 			$line = $pfb_iblock[1];
 		}
