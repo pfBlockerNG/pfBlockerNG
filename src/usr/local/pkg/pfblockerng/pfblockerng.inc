@@ -10623,7 +10623,7 @@ function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, PfbToggle $supp): array
 	// An explicit /0 covers the entire IPv4 space and is never honored from a
 	// downloaded feed: clamp to a single host so the address itself stays
 	// blocked (issue #744). Custom-list entries are user-authored, so /0 is
-	// kept as written (e.g. 0.0.0.0/0 referenced by a manual rule).
+	// kept as written — except on 0.0.0.0, rejected below (issue #1922).
 	if ($mask !== '' && (int)$mask === 0 && !$custom) {
 		// Unlike the v6 sibling, callers reach this before validate_ipv4(), so
 		// $ipaddr is raw feed text — strip control chars to keep the log clean.
@@ -10657,11 +10657,18 @@ function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, PfbToggle $supp): array
 	}
 	$ip_final = implode('.', $ip);
 
+	// issue #1922: 0.x.x.x is "this network" (RFC 791) — never a valid entry
+	// under any mask, suppression setting, or list type. Previously gated on
+	// Suppression, which let a 0.0.0.0/0 reach a live WAN block table.
+	if ($ip[0] == 0 || empty($ip[0])) {
+		return ['address' => NULL, 'messages' => $messages];
+	}
+
 	// Exclude private/reserved IPs (bypass exclusion for custom lists)
 	if ($supp === PfbToggle::On && !$custom) {
 
-		// Remove 'loopback' and '0.0.0.0' IPs
-		if ($ip[0] == 127 || $ip[0] == 0 || empty($ip[0])) {
+		// Remove 'loopback' IPs
+		if ($ip[0] == 127) {
 			return ['address' => NULL, 'messages' => $messages];
 		}
 
@@ -10747,6 +10754,13 @@ function pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, PfbToggle $supp): ar
 	if ($mask !== '' && ctype_digit($mask) && (int)$mask === 0 && !$custom) {
 		$messages[] = "\n  Feed /0 CIDR clamped to single host: {$ipaddr}";
 		$mask_clamped = TRUE;
+	}
+
+	// issue #1922: '::' is never a valid entry under any mask, suppression
+	// setting, or list type — the IPv6 sibling of pfb_sanitize_ipaddr()'s
+	// unconditional 0.x.x.x reject.
+	if ($bin === str_repeat("\x00", 16)) {
+		return ['address' => NULL, 'messages' => $messages];
 	}
 
 	// Exclude private/reserved IPs (bypass exclusion for custom lists)

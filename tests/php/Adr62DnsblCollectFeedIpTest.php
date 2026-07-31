@@ -99,15 +99,17 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 	{
 		// $custom drives sanitize_ipaddr()'s /0-clamp exemption (issue #744): a
 		// downloaded feed's /0 clamps to a bare host, a custom list's /0 is kept.
-		// Proves $custom rides through the helper unchanged either way.
+		// Proves $custom rides through the helper unchanged either way. (The
+		// former 0.0.0.0/0 fixture is rejected unconditionally since issue
+		// #1922, so a non-zero address carries the discrimination now.)
 		$ip4 = [];
 		$ip6 = [];
-		$this->assertTrue(pfb_dnsbl_collect_feed_ip('0.0.0.0', '0.0.0.0/0', FALSE, $ip4, $ip6));
-		$this->assertSame(['0.0.0.0'], $ip4);
+		$this->assertTrue(pfb_dnsbl_collect_feed_ip('1.1.1.7', '1.1.1.7/0', FALSE, $ip4, $ip6));
+		$this->assertSame(['1.1.1.7'], $ip4);
 
 		$ip4 = [];
-		$this->assertTrue(pfb_dnsbl_collect_feed_ip('0.0.0.0', '0.0.0.0/0', TRUE, $ip4, $ip6));
-		$this->assertSame(['0.0.0.0/0'], $ip4);
+		$this->assertTrue(pfb_dnsbl_collect_feed_ip('1.1.1.7', '1.1.1.7/0', TRUE, $ip4, $ip6));
+		$this->assertSame(['1.1.1.7/0'], $ip4);
 	}
 
 	public function testMultipleCallsAppendAcrossSharedArrays(): void
