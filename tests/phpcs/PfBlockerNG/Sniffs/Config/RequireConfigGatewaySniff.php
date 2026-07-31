@@ -30,16 +30,16 @@
  * list must be kept in sync with pfb_cfg_registry() in pfblockerng_extra.inc.
  *
  * CHECK 2 — SystemWriteInWww (issue #1895).
- * PfbConfig::writeSystem() / PfbConfig::writeSectionSystem() write with NO
- * per-field write_priv authorization check (see the docblocks on those two
- * methods in pfblockerng_extra.inc) — they exist only for no-session system
- * callers (cron/install/migrations/CLI/core hooks). Any file whose path
- * (normalised to forward slashes) contains "/usr/local/www/" — the pfSense
- * web UI, which always runs inside an authenticated session — MUST NOT call
- * either variant; it flags a static PfbConfig::writeSystem(...) /
- * PfbConfig::writeSectionSystem(...) call (case-insensitive method AND class
- * name, matching PHP's own case-insensitivity) wherever it appears under
- * www/.
+ * PfbConfig::writeSystem() / PfbConfig::writeSectionSystem() / (issue #1921)
+ * writeSectionRawSystem() write with NO per-field write_priv authorization check
+ * (see the docblocks on those methods in pfblockerng_extra.inc) — they exist only
+ * for no-session system callers (cron/install/migrations/CLI/core hooks). Any file
+ * whose path (normalised to forward slashes) contains "/usr/local/www/" — the
+ * pfSense web UI, which always runs inside an authenticated session — MUST NOT
+ * call any of the three; it flags a static PfbConfig::writeSystem(...) /
+ * PfbConfig::writeSectionSystem(...) / PfbConfig::writeSectionRawSystem(...) call
+ * (case-insensitive method AND class name, matching PHP's own case-insensitivity)
+ * wherever it appears under www/.
  *
  * PRECISE by design, same T_STRING-token mechanism as check 1 — does NOT
  * flag:
@@ -89,6 +89,10 @@ class RequireConfigGatewaySniff implements Sniff
 	private const SYSTEM_WRITE_METHODS = [
 		'writesystem',
 		'writesectionsystem',
+		// issue #1921: writeSectionRawSystem() also bypasses per-field write_priv
+		// authorization (same no-session system-caller contract) -- reserved for
+		// migrations/install/upgrade, never www/.
+		'writesectionrawsystem',
 	];
 
 	/**

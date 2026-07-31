@@ -122,15 +122,18 @@ if (
 	// Reset saved wizard configuration.
 	config_del_path('pfblockerng_wizard'); // foreign key — out of ADR-29 gateway scope (root-level, not installedpackages/pfblockerng*)
 
-	PfbConfig::writeSectionSystem('installedpackages/pfblockerngdnsblsettings/config/0', $pfb_dnsbl_config);
+	// issue #1921: RAW write-back -- this migration transforms raw storage; canonicalising
+	// a bystander adapter-bearing key here, ahead of pfb_registry_pass(), would destroy
+	// the raw value that pass needs to grandfather.
+	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngdnsblsettings/config/0', $pfb_dnsbl_config);
 	write_config('Migrated old pfBlockerNG VIP configuraiton');
 	pfb_global();
 }
 
 // ADR-29: run all registered upgrade migrations in order. Each migration's apply()
 // callable reads the section, returns the updated array or NULL (no-op), and the driver
-// writes back and calls write_config() only when a change is needed. Replaces the four
-// hand-wired blocks (ADR-02, PFBL-03, ADR-22, issue #281) with a single ordered registry.
+// writes back and calls write_config() only when a change is needed. Replaces the
+// hand-wired ADR-02/PFBL-03/#1898 blocks with a single ordered registry.
 pfb_run_migrations();
 
 if (!pfb_settings_family_record($pfb_installed_family)) {
@@ -416,7 +419,10 @@ foreach ($upgrade_type as $type) {
 		}
 	}
 	if ($type_ufound) {
-		PfbConfig::writeSectionSystem("installedpackages/{$type}/config", $pfb_type_items);
+		// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
+		// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
+		// a bystander raw '' to its registered default before the pass grandfathers it).
+		PfbConfig::writeSectionRawSystem("installedpackages/{$type}/config", $pfb_type_items);
 		$ufound = TRUE;
 	}
 }
@@ -500,7 +506,10 @@ if (!empty($pfb_interfaces)) {
 		if (isset($pfb_interfaces['ipsec_action'])) {
 			unset($pfb_interfaces['ipsec_action']);
 		}
-		PfbConfig::writeSectionSystem('installedpackages/pfblockerng/config/0', $pfb_interfaces);
+		// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
+		// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
+		// a bystander raw '' to its registered default before the pass grandfathers it).
+		PfbConfig::writeSectionRawSystem('installedpackages/pfblockerng/config/0', $pfb_interfaces);
 	}
 }
 
@@ -553,7 +562,10 @@ if ($ufound) {
 	foreach ($et_type as $type => $cats) {
 		$pfb_iqrisk[$type] = implode(',', $cats);
 	}
-	PfbConfig::writeSectionSystem('installedpackages/pfblockerngreputation/config/0', $pfb_iqrisk);
+	// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
+	// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
+	// a bystander raw '' to its registered default before the pass grandfathers it).
+	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngreputation/config/0', $pfb_iqrisk);
 } else {
 	update_status(" no changes required ... done.\n");
 }
@@ -585,8 +597,11 @@ if (!empty(pfb_gconfig_operator_view($pfb_gen_section)) && empty($pfb_ip_section
 			unset($pfb['gconfig'][$setting]);
 		}
 	}
-	PfbConfig::writeSectionSystem('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
-	PfbConfig::writeSectionSystem('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
+	// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
+	// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
+	// a bystander raw '' to its registered default before the pass grandfathers it).
+	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
+	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 	update_status(" saving new changes ... done.\n");
 }
 else {
@@ -640,8 +655,11 @@ if (!isset($pfb_ip_cfg['v4suppression'])) {
 			}
 			// ADR-53: write via the same section array read above (a bulk migration
 			// write alongside the rest of $pfb_ip_cfg, not a lone per-field save).
+			// issue #1921: RAW write-back -- this import keys on pre-registry-pass
+			// literal absence; canonicalising a bystander key here would destroy a
+			// raw value the pass still needs to see.
 			$pfb_ip_cfg['v4suppression'] = pfb_text_area_encode($customlist) ?: '';
-			PfbConfig::writeSectionSystem('installedpackages/pfblockerngipsettings/config/0', $pfb_ip_cfg);
+			PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngipsettings/config/0', $pfb_ip_cfg);
 			// unset($config['aliases']['alias'][$key]);
 			$ufound = TRUE;
 			break;
@@ -653,32 +671,6 @@ if ($ufound) {
 	update_status(" saving new changes ... done.\n");
 } else {
 	update_status(" no changes required ... done.\n");
-}
-
-// Feed-host filter defaults ON for new installs; pin OFF once on an already-configured
-// install so existing feeds are never silently dropped (operator can re-enable). The
-// run-once decision is pfb_feed_filter_install_default() (NULL => leave unset => default
-// ON); the !isset guard there makes this idempotent across repeated installs/upgrades.
-$pfb_gcfg = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
-// issue #1770/#1771: settings_family is the installer's own schema marker
-// (pfb_settings_family_replace() seeds it before this read on every install),
-// not operator data -- computing "pre-existing config" over it turned the
-// fresh-install branch of both install-default grandfathers into dead code.
-// pfb_gconfig_operator_view() is the shared chokepoint for this decision
-// (also used by pfb_keep_migrate() and the rdns seed read below -- #1775).
-$pfb_gcfg = pfb_gconfig_operator_view($pfb_gcfg);
-$pfb_gcfg = empty($pfb_gcfg) ? NULL : $pfb_gcfg;
-$pfb_feed_default = pfb_feed_filter_install_default($pfb_gcfg);
-if ($pfb_feed_default !== null) {
-	PfbConfig::writeSystem('gen/pfb_feed_internal_filter', $pfb_feed_default);
-}
-
-// ADR-40: grandfather an already-configured install to 'replace' (pre-ADR-40 full -T replace) so
-// an upgrade keeps its prior alias-apply behaviour; a new install takes the 'auto' registry
-// default. Run-once via the !isset guard in pfb_alias_delta_mode_install_default().
-$pfb_delta_default = pfb_alias_delta_mode_install_default($pfb_gcfg);
-if ($pfb_delta_default !== null) {
-	PfbConfig::writeSystem('gen/pfb_alias_delta_mode', $pfb_delta_default);
 }
 
 // Convert dnsbl_info CSV file to SQLite3 database format
@@ -797,7 +789,10 @@ if (!empty(PfbConfig::readSection('installedpackages/pfblockerngdnsbleasylist'))
 
 		$dnsblcfg   = PfbConfig::readSection('installedpackages/pfblockerngdnsbl/config');
 		$dnsblcfg[] = $add;
-		PfbConfig::writeSectionSystem('installedpackages/pfblockerngdnsbl/config', $dnsblcfg);
+		// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
+		// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
+		// a bystander raw '' to its registered default before the pass grandfathers it).
+		PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngdnsbl/config', $dnsblcfg);
 	}
 
 	// Remove Previous EasyList configuration
@@ -824,7 +819,10 @@ if (!empty($doh_config)) {
 			$doh_config['safesearch_doh_list'] = 'use-application-dns.net';
 		}
 		unset($doh_config['safesearch_firefoxdoh']);
-		PfbConfig::writeSectionSystem('installedpackages/pfblockerngsafesearch', $doh_config);
+		// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
+		// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
+		// a bystander raw '' to its registered default before the pass grandfathers it).
+		PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngsafesearch', $doh_config);
 	}
 }
 
@@ -868,8 +866,11 @@ if (!empty($pfb_maxmind_gen) && !isset($pfb_maxmind_ip['maxmind_key'])) {
 		}
 	}
 	if ($ufound) {
-		PfbConfig::writeSectionSystem('installedpackages/pfblockerngipsettings/config/0', $pfb_maxmind_ip);
-		PfbConfig::writeSectionSystem('installedpackages/pfblockerng/config/0', $maxmind_config);
+		// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
+		// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
+		// a bystander raw '' to its registered default before the pass grandfathers it).
+		PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngipsettings/config/0', $pfb_maxmind_ip);
+		PfbConfig::writeSectionRawSystem('installedpackages/pfblockerng/config/0', $maxmind_config);
 	}
 }
 
@@ -923,23 +924,24 @@ if ($ufound) {
 	update_status(" no changes required ... done.\n");
 }
 
-// issue #1898: with the retired key names migrated away and every grandfather decision above
-// already applied, materialise the still-absent registered scalars at their registered
-// defaults, so config.xml explicitly carries every scalar setting. This MUST stay after
-// pfb_run_migrations() AND after both install-default grandfathers -- seeding a registry
-// default ahead of them would make their !isset() run-once guards permanently false. Rides the
-// trailing write_config() below rather than adding a flush of its own.
+// issue #1921: the ONE registry-driven pass -- rename, grandfather-map, and seed, in
+// that branch order per key -- over every PFB_SECTIONS section. This MUST stay after
+// pfb_run_migrations() (whose write-back is deliberately RAW) AND after the ADR-53
+// v4suppression import above, which keys on literal pre-pass absence and must observe
+// pre-pass state. Rides the trailing write_config() below rather than adding a flush of
+// its own. Adapter canonicalisation on the pass's OUTPUT -- unlike the migration
+// driver's raw write-back -- is correct and deliberate here: it is what coalesces a
+// renamed key's legacy token (e.g. top1m_source 'alexa' -> 'tranco') to its canonical
+// stored form.
 update_status("Recording default settings...");
-$pfb_seed_sections = array();
-foreach (pfb_cfg_registry() as $pfb_seed_key => $pfb_seed_entry) {
-	// issue #1931: registry keys are '<alias>/<bare-key>'; resolve the real section path.
-	$pfb_seed_section = PFB_SECTIONS[explode('/', $pfb_seed_key, 2)[0]];
-	$pfb_seed_sections[$pfb_seed_section] ??= PfbConfig::readSection($pfb_seed_section);
+$pfb_registry_sections = array();
+foreach (PFB_SECTIONS as $pfb_registry_section) {
+	$pfb_registry_sections[$pfb_registry_section] = PfbConfig::readSection($pfb_registry_section);
 }
-foreach (pfb_registered_scalars_seed($pfb_seed_sections) as $pfb_seed_path => $pfb_seed_blob) {
-	PfbConfig::writeSectionSystem($pfb_seed_path, $pfb_seed_blob);
+foreach (pfb_registry_pass($pfb_registry_sections) as $pfb_registry_path => $pfb_registry_blob) {
+	PfbConfig::writeSectionSystem($pfb_registry_path, $pfb_registry_blob);
 }
-unset($pfb_seed_sections, $pfb_seed_key, $pfb_seed_entry, $pfb_seed_section, $pfb_seed_path, $pfb_seed_blob);
+unset($pfb_registry_sections, $pfb_registry_section, $pfb_registry_path, $pfb_registry_blob);
 update_status(" done.\n");
 
 unset($g['pfblockerng_install']);	// Remove 'Install flag'

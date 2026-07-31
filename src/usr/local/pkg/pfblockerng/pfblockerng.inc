@@ -3013,7 +3013,8 @@ function pfb_global() {
 	$pfb['dnsbl_global_log']= PfbConfig::read('dnsbl/global_log');							// Global Logging/Blocking mode (default '')
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
 	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
-	// (strict); existing installs are migrated to 'on' on upgrade (pfb_dnsbl_lenient_migrate).
+	// (strict); existing installs are grandfathered to 'on' by the registry pass at
+	// install/upgrade (issue #1921).
 	$pfb['dnsbl_lenient']	= PfbConfig::read('dnsbl/pfb_dnsbl_lenient');							// DNSBL scheme-parsing leniency (PfbToggle enum)
 
 	$pfb['dnsbl_py_reply']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_reply'] ?? '');			// DNSBL Resolver python DNS Reply logging
@@ -11698,39 +11699,6 @@ function pfb_ip_in_allowlist($ip, array $allowlist) {
 }
 
 
-// Grandfather decision for the feed-host filter at install/upgrade. $gconfig is the
-// existing General-settings 'config/0' node (null on a fresh, never-configured install).
-// Returns 'off' only for an already-configured install that has not yet seen the toggle
-// (so its existing feeds are never silently dropped); otherwise NULL — meaning leave the
-// key unset, which the runtime reader (pfb_feed_filter_enabled) interprets as the ON
-// default. Run-once + idempotent: once the key is set (either value) it returns NULL,
-// never re-disabling an operator who opted back in.
-function pfb_feed_filter_install_default($gconfig) {
-
-	if (is_array($gconfig) && !isset($gconfig['pfb_feed_internal_filter'])) {
-		return 'off';
-	}
-	return NULL;
-}
-
-
-// ADR-40: alias-table apply-mode grandfather decision the install/upgrade hook applies.
-// $gconfig is the existing General-settings 'config/0' node (null on a fresh, never-configured
-// install). A new install takes the registry absent-default 'auto' (delta for small churn, full
-// replace for large churn / boot); an
-// already-configured install that has not yet seen the key is pinned to 'replace' (the pre-ADR-40
-// full -T replace) so the upgrade preserves that operator's prior apply behaviour instead of
-// silently switching to delta. Run-once + idempotent: once the key is set (any value) it returns
-// NULL, so a later save never overrides an operator's explicit choice.
-function pfb_alias_delta_mode_install_default($gconfig) {
-
-	if (is_array($gconfig) && !isset($gconfig['pfb_alias_delta_mode'])) {
-		return 'replace';
-	}
-	return NULL;
-}
-
-
 // ADR-02: one-time upgrade migration for the DNSBL python-only mode. $dconfig is the
 // existing DNSBL-settings 'config/0' node. Forces 'dnsbl_mode' to 'dnsbl_python' and
 // 'pfb_py_block' to 'on'. Idempotent: returns NULL when both keys already carry the target
@@ -11773,113 +11741,12 @@ function pfb_control_legacy_seed($dconfig) {
 }
 
 
-// ADR-22: one-time upgrade migration for the 'pfb_dnsbl_lenient' DNSBL scheme-parsing toggle.
-// New installs default to OFF (strict RFC 3986 parsing); an EXISTING install (non-empty
-// $dconfig, distinguishing upgrade from first-ever install) that predates this key is migrated
-// to 'on' (lenient) to preserve the permissive behaviour it already relies on. Migration ONLY
-// sets a missing key — an existing 'on'/'off' value is never overwritten. Returns the updated
-// config, or NULL when nothing should change (fresh install, or the key already present).
-function pfb_dnsbl_lenient_migrate($dconfig) {
-
-	if (!is_array($dconfig) || empty($dconfig)) {
-		return NULL;
-	}
-	if (isset($dconfig['pfb_dnsbl_lenient'])) {
-		return NULL;
-	}
-	$dconfig['pfb_dnsbl_lenient'] = 'on';
-	return $dconfig;
-}
-
-
-// Issue #281: one-time upgrade seed for the 'pfb_keep' General-settings flag. The
-// pre-deinstall hook wipes ALL pfBlockerNG config sections unless pfb_keep == 'on';
-// the GUI default is 'on' but it only persists to config.xml once General settings are
-// saved. On an EXISTING install (a populated General config section) that predates the
-// key, seed it to 'on' so a later pkg upgrade's pre-deinstall preserves user settings.
-// A fresh install has no prior section -> NULL (no write); the runtime default in
-// pfb_global() covers it. An existing value (including an explicit '' = off) is never
-// overwritten. Returns the updated config array to persist, or NULL when nothing changes.
-// issue #1770 follow-up: "prior section" is decided over pfb_gconfig_operator_view()
-// -- the installer seeds settings_family before pfb_run_migrations() runs on EVERY
-// install, so a marker-only section (General never saved) must read as empty, not
-// as pre-existing config; otherwise the very next upgrade run seeds pfb_keep, which
-// re-arms the #1770/#1771 install-default grandfathers. The mutated/returned
-// $gconfig keeps settings_family (only the emptiness decision uses the stripped
-// view), so the migration write-back never drops the marker.
-function pfb_keep_migrate($gconfig) {
-
-	if (!is_array($gconfig) || empty(pfb_gconfig_operator_view($gconfig))) {
-		return NULL;
-	}
-	if (isset($gconfig['pfb_keep'])) {
-		return NULL;
-	}
-	$gconfig['pfb_keep'] = 'on';
-	return $gconfig;
-}
-
-
-// issue #1887: one-time preservation of a pre-merge stored '' as the explicit 'off'
-// it meant. Under the merged PfbToggle contract a stored '' is the not-configured
-// state and resolves to the REGISTERED DEFAULT — which flips a legacy unchecked save
-// on the two default-'on' toggles a real install can hold '' for: pfb_keep (a 3.2.x
-// operator's deliberate opt-out, which the #281 seed above deliberately never
-// touches) and pfb_idn_block_malicious (the DNSBL page's old ?: '' unchecked save).
-// Rewriting '' -> 'off' preserves the operator's intent and leaves config.xml
-// holding only canonical tokens. Naturally idempotent and run-once by construction:
-// it fires only while a '' exists, and nothing writes '' any more. Absent keys are
-// left alone — recorded intent is preserved, defaults are never materialised here.
-function pfb_toggle_empty_preserve_gen($gconfig) {
-
-	if (!is_array($gconfig) || ($gconfig['pfb_keep'] ?? NULL) !== '') {
-		return NULL;
-	}
-	$gconfig['pfb_keep'] = 'off';
-	return $gconfig;
-}
-
-// The DNSBL-section half of the issue #1887 '' preservation (see above).
-function pfb_toggle_empty_preserve_dnsbl($dconfig) {
-
-	if (!is_array($dconfig) || ($dconfig['pfb_idn_block_malicious'] ?? NULL) !== '') {
-		return NULL;
-	}
-	$dconfig['pfb_idn_block_malicious'] = 'off';
-	return $dconfig;
-}
-
-
-// Issue #1898: the compatibility-only stored-key renames, one entry per affected section.
-// ADR-29 froze registry keys at their exact historical config.xml spelling so 4.x could
-// share a config.xml with the 3.2.x family; the settings-family snapshots now own downgrade
-// safety, so stored keys carry the current domain vocabulary instead. 'rows' distinguishes a
-// scalar section (a flat key => value node) from the dynamic per-feed list section, whose
-// renames apply inside every row.
+// issue #1898: the compatibility-only stored-key rename this migration still owns -- the
+// dynamic per-feed row key. The scalar-section renames (TOP1M, TLD Allow, TLD Wildcard)
+// now live as registry 'old_name' slots consumed by pfb_registry_pass() (issue #1921);
+// this array covers only what that pass cannot reach, a key inside a per-row list section
+// rather than a flat scalar section.
 const PFB_LEGACY_KEY_RENAMES = array(
-	array(
-		'section' => 'installedpackages/pfblockerngdnsblsettings/config/0',
-		'rows'    => FALSE,
-		'keys'    => array(
-			// TOP1M: the Alexa list died in 2022 (#872). The runtime mirrors, the
-			// PfbTop1mSource enum and the sibling top1m_token key already say TOP1M.
-			'alexa_enable'     => 'top1m_enable',
-			'alexa_type'       => 'top1m_source',
-			'alexa_count'      => 'top1m_count',
-			'alexa_inclusion'  => 'top1m_inclusion',
-			// TLD Allow: ADR-66 §2.1's stem, already the ini/runtime vocabulary.
-			'pfb_pytld'        => 'tld_allow',
-			'pfb_pytld_sort'   => 'tld_allow_sort',
-			'pfb_pytlds_gtld'  => 'tld_allow_gtld',
-			'pfb_pytlds_cctld' => 'tld_allow_cctld',
-			'pfb_pytlds_itld'  => 'tld_allow_itld',
-			'pfb_pytlds_bgtld' => 'tld_allow_bgtld',
-			// Wildcard Blocking (TLD): ADR-66 §2.2's stem, already the manifest vocabulary.
-			'pfb_tld'          => 'tld_wildcard',
-			'tldblacklist'     => 'tld_wildcard_blacklist',
-			'tldexclusion'     => 'tld_wildcard_exclusion',
-		),
-	),
 	array(
 		'section' => 'installedpackages/pfblockerngdnsbl/config',
 		'rows'    => TRUE,
@@ -11916,14 +11783,15 @@ function pfb_legacy_key_rename_node(array $node, array $keys, $where, &$changed,
 }
 
 
-// Issue #1898: the one-time forward migration off the retired key names. Pure -- it takes the
-// section blobs the driver read and returns the blobs to persist, or NULL for a no-op (fresh
-// install, already migrated, or a conflict). Atomic across every section: one unresolvable
-// pair abandons the entire migration rather than leaving config.xml half-renamed, and the
-// notice names the two keys but never their values (these fields hold base64 list blobs and
-// multi-selects). Values move byte-identically; the only transformation is the one the renamed
-// key's own registered adapter applies on write-back (top1m_source's 'alexa'/'domcop'
-// coalesce), which is the documented behaviour-equivalent move.
+// Issue #1898: the one-time forward migration off the retired PER-ROW key name(s). Pure --
+// it takes the section blobs the driver read and returns the blobs to persist, or NULL for a
+// no-op (fresh install, already migrated, or a conflict). Atomic across every row: one
+// unresolvable pair abandons the entire migration rather than leaving a row half-renamed, and
+// the notice names the two keys but never their values. issue #1921: the scalar-section half
+// of #1898 (TOP1M, TLD Allow, TLD Wildcard) now lives as registry 'old_name' slots consumed
+// by pfb_registry_pass(), which is per-KEY (a conflict on one key never blocks its siblings);
+// this migration keeps the dynamic per-feed row key, which pfb_registry_pass() cannot reach,
+// and stays all-or-nothing across its rows.
 function pfb_legacy_key_rename_migrate($sections) {
 
 	if (!is_array($sections)) {
@@ -11965,98 +11833,158 @@ function pfb_legacy_key_rename_migrate($sections) {
 }
 
 
-// Registered scalars the seeding pass never materialises, because some consumer still reads
-// their LITERAL ABSENCE as a distinct state -- seeding them would change behaviour on the way
-// to making storage explicit:
-//   gen/settings_family   the installer's own schema marker, not operator configuration;
-//                         seeding the legacy '3.2' default would fight
-//                         pfb_settings_family_record() (same reason
-//                         pfb_gconfig_operator_view() strips it, #1770/#1771/#1775).
-//   ip/v4suppression      pfblockerng_install.inc's ADR-53 pfBlockerNGSuppress alias
-//                         conversion is gated on "never migrated" (absent) vs
-//                         "present but empty".
-//   dnsbl/pfb_cache,      pfblockerng_dnsbl.php / pfblockerng_ip.php render these CHECKED
-//   dnsbl/pfb_py_reply,   while the key is absent (isset(...) ? ... : 'on') though the
-//   dnsbl/pfb_hsts,       registry default is '', so seeding '' would flip the first-open
-//   ip/suppression        rendering and what a first save stores. That page/registry
-//                         divergence is issue #1907; these join the pass when it is
-//                         resolved (ip/suppression added by issue #1931).
-const PFB_SCALAR_SEED_EXCLUDED = array(
-	'gen/settings_family', 'ip/v4suppression', 'dnsbl/pfb_cache', 'dnsbl/pfb_py_reply', 'dnsbl/pfb_hsts',
-	'ip/suppression',
-);
+/**
+ * pfb_registry_pass — the one registry-driven install/upgrade pass (issue #1921).
+ *
+ * Replaces the former seeding pass, the scalar rename migration, and the four
+ * grandfather/preservation migrations (#1887 x2, ADR-22, issue #281). For every
+ * registered key, in registry order: RENAME -> GRANDFATHER-MAP -> SEED, as branch
+ * order within that one key -- never three separate passes over the registry.
+ *
+ * Mode is computed ONCE per section, before any key in that section is mutated:
+ * OLDCFG iff the blob is an array and pfb_gconfig_operator_view() of it is non-empty
+ * (real operator data beyond the installer's own settings_family marker); otherwise
+ * NEWCFG (covers a genuinely fresh install AND a marker-only section -- #1770/#1771/
+ * #1775). A non-array blob is treated as empty. gen/settings_family itself is SKIPPED
+ * entirely -- it is the mode instrument pfb_settings_family_record() owns, never a
+ * peer row this pass renames/maps/seeds.
+ *
+ * NEWCFG: the key takes its registered default -- passed once through the grandfather
+ * map's own non-ABSENT entries (the ABSENT entry itself is never consulted; it
+ * specifically signals an EXISTING install, which a NEWCFG section by definition is
+ * not). A handful of registered defaults happen to collide with their own map's
+ * non-ABSENT input (e.g. a default of '' where 'grandfather' also carries '' => 'off'
+ * -- issue #1907's still-open divergence): materialising the raw default there would
+ * mint a value only to have the very next OLDCFG pass (the section is no longer empty
+ * once seeded) immediately re-map it, breaking idempotency across a fresh install's
+ * first upgrade. Running the default through the SAME lookup once, up front, is a
+ * no-op for every other key and a stable fixed point for these -- the registry gate's
+ * fixpoint rule below then guarantees no later pass can move it again.
+ *
+ * OLDCFG, per key:
+ *   1. RENAME (only when 'old_name' is set and the old key is present): new absent ->
+ *      move the value verbatim (any type, '' and '0' included), old unset. Both present
+ *      and identical (===) -> keep new, drop old. Both present and different -> keep the
+ *      new key's value, LEAVE THE OLD KEY IN PLACE, and record a conflict -- per-key, not
+ *      all-or-nothing; every other key in the section is still processed.
+ *   2. GRANDFATHER MAP: absent -> 'grandfather'[PFB_GF_ABSENT] if declared, else fall to
+ *      SEED below. Present and a string -> 'grandfather'[value] if declared, else the
+ *      value unchanged (identity). Present and NOT a string -> the value untouched,
+ *      never used as a map key.
+ *   3. SEED: absent with no ABSENT grandfather entry -> the registered default.
+ *
+ * Idempotent by construction: a present key short-circuits every RENAME/GRANDFATHER
+ * branch above into identity, and the registry gate (CfgRegistryGrandfatherGateTest's
+ * fixpoint check) guarantees a grandfather map's OUTPUT is never also one of its own
+ * non-ABSENT INPUTs, so a repeat pass can never oscillate a value. '' is a stored value,
+ * not absence -- it moves and maps exactly like any other value; only genuine
+ * array_key_exists() absence is treated as absence.
+ *
+ * After the loop, one file_notice() names every RENAME conflict's key pair (never the
+ * values -- these fields hold base64 blobs) if any fired; it does not abort anything.
+ *
+ * Pure: takes the section blobs the driver read, returns ONLY the sections whose blob
+ * differs (!==) from the input -- the caller persists exactly those.
+ *
+ * @param  array      $sections  Section path => blob map (same shape the former seeding
+ *                                pass took).
+ * @param  array|null $registry  Defaults to pfb_cfg_registry(); parameter exists only so
+ *                                a fixture registry can drive the pass in tests.
+ * @return array                 Section path => blob map, changed sections only.
+ */
+function pfb_registry_pass(array $sections, ?array $registry = NULL): array {
 
+	$registry = $registry ?? pfb_cfg_registry();
 
-// Issue #1898: materialise every registered scalar still absent from its section at its
-// registered default, so config.xml explicitly carries every scalar setting and an absent key
-// only ever means "this install has not run the seed yet". Pure -- takes the section blobs,
-// returns only the sections that gained a key.
-//
-// An existing value is NEVER overwritten, including an explicit 'off' whose registered default
-// is 'on'. Ordering, not special-casing, is what protects the grandfather decisions:
-// pfblockerng_install.inc calls this AFTER pfb_run_migrations() and after both install-default
-// grandfathers, by which point every seeded-by-decision key is present and simply skipped here.
-//
-// Beyond the exclusions above, no user-content carve-out is needed. Under the issue #1887
-// '' == absent identity, seeding a ''-default field (a credential, a base64 list blob, an
-// interface multi-select) stores exactly the value it already had, and the genuinely
-// user-owned structures -- feed rows, group policies, per-continent nodes, MaxMind
-// credentials -- are unregistered, so this pass never reaches them.
-function pfb_registered_scalars_seed($sections) {
-
-	if (!is_array($sections)) {
-		$sections = array();
+	// Mode decided ONCE per section, over the pre-mutation input -- an earlier key's
+	// rename/seed within the same section must never flip a later key's mode.
+	$original = array();
+	$modes    = array();
+	foreach (PFB_SECTIONS as $section) {
+		$blob = $sections[$section] ?? array();
+		if (!is_array($blob)) {
+			$blob = array();
+		}
+		$original[$section] = $blob;
+		$modes[$section]    = !empty(pfb_gconfig_operator_view($blob)) ? 'OLDCFG' : 'NEWCFG';
 	}
 
-	// Current name => the retired name it replaced, per section. Row-section renames are
-	// per-feed keys and never registered scalars, so they cannot reach this pass.
-	$retired = array();
-	foreach (PFB_LEGACY_KEY_RENAMES as $spec) {
-		if ($spec['rows']) {
+	$result    = $original;
+	$conflicts = array();
+
+	foreach ($registry as $path_key => $entry) {
+		if ($path_key === 'gen/settings_family') {
 			continue;
 		}
-		foreach ($spec['keys'] as $old => $new) {
-			$retired[$spec['section']][$new] = $old;
-		}
-	}
-
-	$seeded = array();
-
-	foreach (pfb_cfg_registry() as $path_key => $entry) {
-		if (in_array($path_key, PFB_SCALAR_SEED_EXCLUDED, TRUE)) {
-			continue;
-		}
-		// issue #1931: registry keys are now '<alias>/<bare-key>'; config.xml itself is
-		// untouched, so every blob operation below uses the bare key.
 		[$alias, $key] = explode('/', $path_key, 2);
-		$section       = PFB_SECTIONS[$alias];
-		$blob          = $seeded[$section] ?? ($sections[$section] ?? array());
-		if (!is_array($blob) || array_key_exists($key, $blob)) {
+		$section = PFB_SECTIONS[$alias];
+		$blob    = $result[$section];
+		$map     = $entry['grandfather'] ?? array();
+
+		// issue #1921: the registered default, stabilised through the map's own
+		// non-ABSENT entries once -- a no-op unless the default itself collides with a
+		// map input (see the docblock). Shared by NEWCFG's seed and OLDCFG's
+		// absent-with-no-ABSENT-entry seed below, so a value freshly materialised by
+		// EITHER path can never be moved again by a later OLDCFG pass once the section
+		// is no longer empty.
+		$default        = $entry['default'];
+		$stable_default = (is_string($default) && array_key_exists($default, $map)) ? $map[$default] : $default;
+
+		if ($modes[$section] === 'NEWCFG') {
+			// The ABSENT map entry never applies here -- it specifically signals an
+			// EXISTING install, which a NEWCFG section by definition is not.
+			$blob[$key]      = $stable_default;
+			$result[$section] = $blob;
 			continue;
 		}
-		// A retired name still sitting in the section means the rename did NOT complete
-		// for this key -- it failed closed on a conflicting pair elsewhere in the map, or
-		// has not run yet. Seeding the current name's default on top would hand that key
-		// a both-present-and-different pair of its own next time, escalating a one-key
-		// recovery into an N-key one and destroying the old-present/new-absent path that
-		// migrates it cleanly once the operator resolves the single real conflict.
-		$old_key = $retired[$section][$key] ?? NULL;
-		if ($old_key !== NULL && array_key_exists($old_key, $blob)) {
-			continue;
+
+		// OLDCFG -- 1) RENAME.
+		if (isset($entry['old_name']) && array_key_exists($entry['old_name'], $blob)) {
+			$old = $entry['old_name'];
+			if (!array_key_exists($key, $blob)) {
+				$blob[$key] = $blob[$old];
+				unset($blob[$old]);
+			} elseif ($blob[$key] === $blob[$old]) {
+				unset($blob[$old]);
+			} else {
+				$conflicts[] = "{$section}: [{$old}] and [{$key}] are both present with different values";
+			}
 		}
-		$blob[$key]       = $entry['default'];
-		$seeded[$section] = $blob;
+
+		// 2) GRANDFATHER MAP, then 3) SEED.
+		if (!array_key_exists($key, $blob)) {
+			$blob[$key] = array_key_exists(PFB_GF_ABSENT, $map) ? $map[PFB_GF_ABSENT] : $stable_default;
+		} elseif (is_string($blob[$key]) && array_key_exists($blob[$key], $map)) {
+			$blob[$key] = $map[$blob[$key]];
+		}
+		// else: present and (non-string, or a string with no map entry) -- identity, untouched.
+
+		$result[$section] = $blob;
 	}
 
-	return $seeded;
+	if (!empty($conflicts)) {
+		file_notice('pfBlockerNG',
+			gettext('pfBlockerNG left the legacy configuration key names in place: ')
+			. implode('; ', $conflicts)
+			. gettext('. Remove the stale duplicate, or set both keys to the same value, then reinstall the package.'),
+			'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
+	}
+
+	$changed = array();
+	foreach ($result as $section => $blob) {
+		if ($blob !== $original[$section]) {
+			$changed[$section] = $blob;
+		}
+	}
+	return $changed;
 }
 
 
 // Whether the feed-host internal-address filter is enabled. Reads the General-settings
 // 'pfb_feed_internal_filter' on/off flag, defaulting to ON when the key is absent (a
-// fresh install ships the filter active; the install-time migration pins it OFF on an
-// already-configured box so existing feeds are never silently dropped). issue #1887:
-// reads the enum through the gateway — junk now falls back to Off like every other
+// fresh install ships the filter active; the registry pass's grandfather pins it OFF on an
+// already-configured box so existing feeds are never silently dropped, issue #1921). issue
+// #1887: reads the enum through the gateway — junk now falls back to Off like every other
 // toggle (it was "anything but 'off' is ON"), and case variants are recognised.
 function pfb_feed_filter_enabled(): bool {
 

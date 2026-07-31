@@ -9,17 +9,24 @@ use PHPUnit\Framework\TestCase;
  * ADR-29 Phase 2 — Migration registry + driver.
  *
  * Scenario: pfb_run_migrations() consolidates the independent upgrade migrations
- * (ADR-02 python-mode, PFBL-03 control-legacy seed, ADR-22 lenient, issue #281 pfb_keep)
- * into one ordered, idempotent, registry-driven driver.
+ * (ADR-02 python-mode, PFBL-03 control-legacy seed) into one ordered, idempotent,
+ * registry-driven driver, alongside issue #1898's per-row key rename.
+ *
+ * issue #1921 (S2): the four grandfather/preservation migrations that used to live in
+ * this registry (#1887's two '' preservations, ADR-22's lenient seed, issue #281's
+ * pfb_keep seed) are folded into pfb_registry_pass() (pfblockerng.inc) -- the one
+ * registry-driven pass the installer runs AFTER this driver. Coverage for that
+ * behaviour now lives in RegistryPassTest, not here.
  *
  * Contract (§2.4 ADR-29):
  *   - ORDERING: migrations fire in the documented order; a later migration sees the
  *     section state left by an earlier one in the same run.
  *   - IDEMPOTENCY / RUN-ONCE: a second pfb_run_migrations() call on an already-migrated
  *     config is a no-op (no write_config() calls).
- *   - BEHAVIOUR-PRESERVATION: the driver reproduces the same keys + values that the four
- *     hand-wired install.inc blocks produced on every install state (fresh, legacy-missing-key,
- *     already-migrated).
+ *   - RAW WRITE-BACK (issue #1921): every write this driver performs must persist
+ *     RAW (adapter-free, PfbConfig::writeSectionRawSystem()) -- a migration transforms
+ *     raw storage, and canonicalising a still-raw bystander value here, ahead of
+ *     pfb_registry_pass(), would destroy exactly what that pass needs to grandfather.
  *   - pfb_migration_registry() returns exactly the declared entries in the correct order,
  *     each declaring exactly one of the single-'section' / multi-'sections' target forms.
  */
@@ -75,27 +82,22 @@ final class MigrationRegistryTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Registry returns exactly seven entries in the correct declared order.
+	 * Registry returns exactly three entries in the correct declared order (issue #1921
+	 * S2: the other four migrations folded into pfb_registry_pass()).
 	 */
-	public function testRegistryHasSevenEntriesInOrder(): void
+	public function testRegistryHasThreeEntriesInOrder(): void
 	{
 		$registry = pfb_migration_registry();
 
-		$this->assertCount(7, $registry);
+		$this->assertCount(3, $registry);
 
-		// The issue #1887 '' preservation pair MUST run first: every later migration's
-		// writeSection() write-back rides the adapters, which would canonicalise a
-		// still-present '' to the registered default before it could be preserved.
-		$this->assertSame('issue1887-toggle-empty-preserve-gen',   $registry[0]['id']);
-		$this->assertSame('issue1887-toggle-empty-preserve-dnsbl', $registry[1]['id']);
-		// issue #1898's key rename inherits that constraint (its write-back rides the
-		// same adapters) so it follows the pair and precedes everything else.
-		$this->assertSame('issue1898-legacy-key-rename',   $registry[2]['id']);
-		// Then the original install.inc sequence, order unchanged.
-		$this->assertSame('adr02-dnsbl-python-mode',    $registry[3]['id']);
-		$this->assertSame('pfbl03-control-legacy-seed', $registry[4]['id']);
-		$this->assertSame('adr22-dnsbl-lenient',        $registry[5]['id']);
-		$this->assertSame('issue281-pfb-keep-seed',     $registry[6]['id']);
+		// issue #1898's per-row key rename runs first -- the scalar-section half now
+		// lives as registry 'old_name' slots consumed by pfb_registry_pass(), which
+		// runs AFTER this whole driver.
+		$this->assertSame('issue1898-legacy-key-rename', $registry[0]['id']);
+		// Then the original install.inc sequence for what remains, order unchanged.
+		$this->assertSame('adr02-dnsbl-python-mode',    $registry[1]['id']);
+		$this->assertSame('pfbl03-control-legacy-seed', $registry[2]['id']);
 	}
 
 	/**
@@ -125,23 +127,18 @@ final class MigrationRegistryTest extends TestCase
 	}
 
 	/**
-	 * DNSBL migrations target the DNSBL section; pfb_keep targets the general section;
-	 * the issue #1898 rename spans the DNSBL settings section plus the dynamic per-feed
-	 * row section.
+	 * The issue #1898 rename spans the DNSBL settings section plus the dynamic per-feed
+	 * row section; ADR-02 and PFBL-03 both target the DNSBL section.
 	 */
 	public function testRegistryEntriesSectionsAreCorrect(): void
 	{
 		$registry = pfb_migration_registry();
-		$this->assertSame(self::GEN_SECTION,   $registry[0]['section']);
-		$this->assertSame(self::DNSBL_SECTION, $registry[1]['section']);
 		$this->assertSame(
 			[self::DNSBL_SECTION, 'installedpackages/pfblockerngdnsbl/config'],
-			$registry[2]['sections']
+			$registry[0]['sections']
 		);
-		$this->assertSame(self::DNSBL_SECTION, $registry[3]['section']);
-		$this->assertSame(self::DNSBL_SECTION, $registry[4]['section']);
-		$this->assertSame(self::DNSBL_SECTION, $registry[5]['section']);
-		$this->assertSame(self::GEN_SECTION,   $registry[6]['section']);
+		$this->assertSame(self::DNSBL_SECTION, $registry[1]['section']);
+		$this->assertSame(self::DNSBL_SECTION, $registry[2]['section']);
 	}
 
 	// -----------------------------------------------------------------------
@@ -273,6 +270,43 @@ final class MigrationRegistryTest extends TestCase
 	}
 
 	/**
+	 * issue #1921 (S2) raw-driver regression: pfb_run_migrations()'s write paths must
+	 * persist RAW (adapter-free), so a still-raw legacy value on a BYSTANDER key
+	 * survives to the registry pass (a later step) for grandfathering -- canonicalising
+	 * it here, ahead of that pass, would destroy the value the pass needs to see.
+	 *
+	 * Fixture: a section where ADR-02 (dnsbl_mode/pfb_py_block) fires AND top1m_source
+	 * holds the raw pre-#872 legacy token 'alexa' (an ADR-02-unrelated bystander key,
+	 * carried along by the section-level write-back). Asserts the persisted blob still
+	 * holds 'alexa' -- NOT the adapter-canonicalised 'tranco' -- after the migration
+	 * driver runs. A section-level write that canonicalises adapter-bearing keys (like
+	 * today's PfbConfig::writeSectionSystem()) fails this; only a RAW section write
+	 * (PfbConfig::writeSectionRawSystem()) preserves the bystander byte.
+	 */
+	public function testAdr02FiresButRawWriteBackPreservesBystanderLegacyTop1mSource(): void
+	{
+		$this->seedDnsbl([
+			'pfb_dnsbl'    => 'on',
+			'dnsbl_mode'   => 'dnsbl_unbound', // ADR-02 must fire on this key
+			'pfb_py_block' => '',
+			'top1m_source' => 'alexa',          // bystander: still the raw legacy token
+		]);
+
+		pfb_run_migrations();
+
+		$dnsbl = $this->getDnsbl();
+		// ADR-02 fired (the driver actually ran and rewrote this section).
+		$this->assertSame('dnsbl_python', $dnsbl['dnsbl_mode']);
+		$this->assertSame('on', $dnsbl['pfb_py_block']);
+		// The bystander legacy token must survive RAW -- canonicalisation is the
+		// registry pass's job (issue #1921), not the migration driver's.
+		$this->assertSame('alexa', $dnsbl['top1m_source'],
+			'pfb_run_migrations() write-back must persist RAW -- canonicalising a still-raw '
+			. 'bystander legacy value ahead of the registry pass destroys what the pass needs to grandfather'
+		);
+	}
+
+	/**
 	 * Scenario: existing DNSBL config with DNSBL control enabled but not yet seeded.
 	 *   Given pfb_control = 'on' and no seed marker.
 	 *   When the driver runs.
@@ -300,82 +334,9 @@ final class MigrationRegistryTest extends TestCase
 		);
 	}
 
-	/**
-	 * Scenario: existing DNSBL config missing the lenient key.
-	 *   Given a populated section without pfb_dnsbl_lenient.
-	 *   When the driver runs (with ADR-02 and PFBL-03 already migrated).
-	 *   Then ADR-22 fires: lenient set to 'on'.
-	 */
-	public function testDriverMigratesLenientOnExistingInstall(): void
-	{
-		// Pre-seed the DNSBL section in an already-ADR02+PFBL03 state to isolate ADR-22.
-		$this->seedDnsbl([
-			'pfb_dnsbl'              => 'on',
-			'dnsbl_mode'             => 'dnsbl_python',
-			'pfb_py_block'           => 'on',
-			'pfb_control_legacy_seeded' => 'on',
-		]);
-		$this->assertArrayNotHasKey('pfb_dnsbl_lenient', $this->getDnsbl());
-
-		pfb_run_migrations();
-
-		$dnsbl = $this->getDnsbl();
-		$this->assertSame('on', $dnsbl['pfb_dnsbl_lenient']);
-		$this->assertContains(
-			'pfBlockerNG: preserve permissive DNSBL parsing for existing install (ADR-22 migration)',
-			$this->writeConfigCalls()
-		);
-	}
-
-	/**
-	 * Scenario: existing General config missing pfb_keep.
-	 *   Given a populated General section without pfb_keep.
-	 *   When the driver runs.
-	 *   Then issue-#281 fires: pfb_keep seeded to 'on'.
-	 */
-	public function testDriverSeedsPfbKeepOnExistingInstall(): void
-	{
-		$this->seedGen(['enable_cb' => 'on', 'pfb_interval' => '1']);
-		$this->assertArrayNotHasKey('pfb_keep', $this->getGen());
-
-		pfb_run_migrations();
-
-		$gen = $this->getGen();
-		$this->assertSame('on', $gen['pfb_keep']);
-		$this->assertContains(
-			'pfBlockerNG: preserve settings across upgrade (seed Keep flag, issue #281)',
-			$this->writeConfigCalls()
-		);
-	}
-
-	/**
-	 * Scenario: General section carries ONLY the installer's own settings_family
-	 * marker (issue #1770 follow-up) -- e.g. a fresh install that never saved
-	 * General, then hit a second install/upgrade run. pfb_settings_family_replace()
-	 * seeds the marker before pfb_run_migrations() executes, so the #281 seed must
-	 * not treat a marker-only section as "pre-existing operator config".
-	 *   Given a General section holding only settings_family.
-	 *   When the driver runs.
-	 *   Then issue-#281 must NOT fire: pfb_keep stays unseeded and nothing is written.
-	 */
-	public function testDriverDoesNotSeedPfbKeepOnMarkerOnlyFreshInstall(): void
-	{
-		$this->seedGen(['settings_family' => '4.0']);
-
-		pfb_run_migrations();
-
-		$gen = $this->getGen();
-		$this->assertArrayNotHasKey(
-			'pfb_keep',
-			$gen,
-			'a marker-only General section is a fresh install -- pfb_keep must stay unseeded'
-		);
-		$this->assertSame(
-			[],
-			$this->writeConfigCalls(),
-			'a marker-only General section must not trigger any migration write'
-		);
-	}
+	// issue #1921 (S2): the ADR-22 lenient-seed and issue-#281 pfb_keep-seed driver
+	// tests that used to live here moved to RegistryPassTest (rows 4 and 7) -- that
+	// behaviour is now pfb_registry_pass()'s, not pfb_run_migrations()'s.
 
 	// -----------------------------------------------------------------------
 	// E — Driver: already migrated (idempotency / run-once)
@@ -418,7 +379,7 @@ final class MigrationRegistryTest extends TestCase
 	 */
 	public function testDriverSecondRunAfterFullMigrationIsIdentical(): void
 	{
-		// Start from a legacy state that needs all four migrations.
+		// Start from a legacy state that needs both remaining scalar migrations.
 		$this->seedDnsbl([
 			'pfb_dnsbl'  => 'on',
 			'dnsbl_mode' => 'dnsbl_unbound',
@@ -427,7 +388,7 @@ final class MigrationRegistryTest extends TestCase
 		]);
 		$this->seedGen(['enable_cb' => 'on', 'pfb_interval' => '1']);
 
-		// First run: all four migrations fire.
+		// First run: ADR-02 and PFBL-03 fire.
 		pfb_run_migrations();
 		$dnsbl_after_first = $this->getDnsbl();
 		$gen_after_first   = $this->getGen();
@@ -487,39 +448,12 @@ final class MigrationRegistryTest extends TestCase
 		$this->assertLessThan($pfbl03_pos, $adr02_pos, 'ADR-02 must fire before PFBL-03');
 	}
 
-	/**
-	 * Scenario: DNSBL migrations fire before the General section migration.
-	 *   All three DNSBL migration messages appear before the General #281 message.
-	 */
-	public function testOrderingDnsblMigrationsBeforeGeneralMigration(): void
-	{
-		$this->seedDnsbl([
-			'pfb_dnsbl'  => 'on',
-			'dnsbl_mode' => 'dnsbl_unbound',
-			'pfb_py_block' => '',
-			'pfb_control'  => 'on',
-		]);
-		$this->seedGen(['enable_cb' => 'on']);
-
-		pfb_run_migrations();
-
-		$writes = $this->writeConfigCalls();
-
-		$keep_pos   = array_search(
-			'pfBlockerNG: preserve settings across upgrade (seed Keep flag, issue #281)',
-			$writes,
-			TRUE
-		);
-		$this->assertNotFalse($keep_pos, 'issue #281 write_config must appear');
-
-		// Every DNSBL write must come before the General write.
-		foreach ($writes as $pos => $msg) {
-			if ($pos === $keep_pos) {
-				continue;
-			}
-			$this->assertLessThan($keep_pos, $pos, "DNSBL write '{$msg}' must precede General write");
-		}
-	}
+	// issue #1921 (S2): testOrderingDnsblMigrationsBeforeGeneralMigration used to pin
+	// DNSBL-section migrations firing before the General-section issue-#281 seed. That
+	// seed folded into pfb_registry_pass(); every entry left in pfb_migration_registry()
+	// now targets the DNSBL section exclusively, so there is no cross-section ordering
+	// left for this driver to guarantee (within-DNSBL ordering is
+	// testOrderingAdr02BeforePfbl03WithinOneRun above).
 
 	// -----------------------------------------------------------------------
 	// G — write_config messages match original install.inc messages exactly
@@ -532,14 +466,13 @@ final class MigrationRegistryTest extends TestCase
 	 */
 	public function testWriteConfigMessagesMatchOriginalInstallIncMessages(): void
 	{
-		// Trigger all four migrations.
+		// Trigger both remaining scalar migrations (ADR-02, PFBL-03).
 		$this->seedDnsbl([
 			'pfb_dnsbl'  => 'on',
 			'dnsbl_mode' => 'dnsbl_unbound',
 			'pfb_py_block' => '',
 			'pfb_control'  => 'on',
 		]);
-		$this->seedGen(['enable_cb' => 'on']);
 
 		pfb_run_migrations();
 
@@ -547,13 +480,5 @@ final class MigrationRegistryTest extends TestCase
 
 		$this->assertContains('pfBlockerNG: migrated DNSBL to Python-only mode', $writes);
 		$this->assertContains('pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)', $writes);
-		$this->assertContains(
-			'pfBlockerNG: preserve permissive DNSBL parsing for existing install (ADR-22 migration)',
-			$writes
-		);
-		$this->assertContains(
-			'pfBlockerNG: preserve settings across upgrade (seed Keep flag, issue #281)',
-			$writes
-		);
 	}
 }
