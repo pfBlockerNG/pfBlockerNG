@@ -91,6 +91,64 @@ final class IpParseLineTest extends TestCase
 		));
 	}
 
+	/**
+	 * Scenario: an iBlocklist organisation name that itself contains a colon.
+	 *   Given a PeerGuardian line whose "<Org Name>" part contains ':'
+	 *   When the line is parsed
+	 *   Then the whole range is recovered, exactly as for a colon-free org name.
+	 * The separator is the LAST colon before the range, not the first (issue #1923).
+	 */
+	public function testIpv4AutoIblockOrgNameContainingColonStillYieldsTheRange(): void
+	{
+		$config = $this->config('_v4');
+		$this->assertLine('Foo: Bar Inc:4.53.2.12-4.53.2.15', $config, $this->expectedResult(
+			'4.53.2.12-4.53.2.15',
+			['entries' => ['4.53.2.12/30']]
+		));
+	}
+
+	/**
+	 * Scenario: a non-iBlocklist line that merely happens to contain both '-' and ':'.
+	 *   Given a Maltrail URL-path trail signature, which is not an address at all
+	 *   When the line is parsed
+	 *   Then the iBlocklist rewrite leaves it untouched, so the reported line is the
+	 *        offending input rather than a mangled remnant.
+	 * Before the gate, "…anti-sec:)" was rewritten to ")" (issue #1923).
+	 */
+	public function testIpv4AutoLeavesNonIblockLineWithDashAndColonIntact(): void
+	{
+		$config = $this->config('_v4');
+		$trail = '/w00tw00t.at.blackhats.romanian.anti-sec:)';
+		$this->assertLine($trail, $config, $this->expectedResult($trail));
+	}
+
+	/**
+	 * Scenario: two sibling trail signatures that differ only by containing a '-'.
+	 *   Given the two Maltrail w00tw00t trails, one with '-' and one without
+	 *   When both are parsed
+	 *   Then neither is counted as a parse failure, because neither is an address.
+	 * The '-'-bearing sibling used to be rewritten into a letter-free remnant, which
+	 * the final gate then mistook for a numeric parse failure (issue #1923).
+	 */
+	public function testIpv4AutoTrailSignaturesAreCountedSymmetrically(): void
+	{
+		$config = $this->config('_v4');
+		$withDash = pfb_ip_parse_line('/w00tw00t.at.blackhats.romanian.anti-sec:)', $config);
+		$withoutDash = pfb_ip_parse_line('/w00tw00t.at.ISC.SANS.DFind:)', $config);
+
+		$this->assertSame(0, $withoutDash['parse_fail_delta'], 'dash-free sibling must not count as a parse failure');
+		$this->assertSame(
+			$withoutDash['parse_fail_delta'],
+			$withDash['parse_fail_delta'],
+			'both trail signatures must be counted the same way'
+		);
+		$this->assertSame(
+			$withoutDash['detailed_parse_fail'],
+			$withDash['detailed_parse_fail'],
+			'both trail signatures must produce the same detailed-failure verdict'
+		);
+	}
+
 	public function testIpv4RegexDeduplicatesAndSkipsCloudflare(): void
 	{
 		$config = $this->config('_v4', 'regex');
