@@ -63,7 +63,7 @@ final class DownloadRetryBodyResetTest extends TestCase
 		];
 
 		foreach (['log', 'errlog', 'pnow', 'runlog', 'runlog_active'] as $k) {
-			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
+			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : FALSE;
 		}
 		unset($GLOBALS['pfb']['runlog'], $GLOBALS['pfb']['runlog_active']);
 		$GLOBALS['pfb']['log']    = "{$workdir}/pfblockerng.log";
@@ -80,7 +80,7 @@ final class DownloadRetryBodyResetTest extends TestCase
 			proc_close($this->server);
 		}
 		foreach ($this->saved as $k => $prev) {
-			if ($prev === false) {
+			if ($prev === FALSE) {
 				unset($GLOBALS['pfb'][$k]);
 			} else {
 				$GLOBALS['pfb'][$k] = $prev;
@@ -107,6 +107,16 @@ final class DownloadRetryBodyResetTest extends TestCase
 		$this->assertSame(64, strlen($body));
 		$routerSrc = <<<PHP
 <?php
+\$authLog = getenv('AUTH_LOG');
+if (str_starts_with(\$_SERVER['REQUEST_URI'] ?? '', '/auth')) {
+	file_put_contents(\$authLog, json_encode([
+		\$_SERVER['PHP_AUTH_USER'] ?? null,
+		\$_SERVER['PHP_AUTH_PW'] ?? null,
+	]) . PHP_EOL, FILE_APPEND);
+	header('Content-Length: 64');
+	echo '{$body}';
+	return;
+}
 \$state = getenv('FLAKY_STATE');
 header('Content-Length: 64');
 if (!file_exists(\$state)) {
@@ -127,7 +137,11 @@ PHP;
 				$descriptors,
 				$pipes,
 				$this->workdir,
-				['FLAKY_STATE' => "{$this->workdir}/state.flag", 'PATH' => (string) getenv('PATH')]
+				[
+					'AUTH_LOG' => "{$this->workdir}/auth.log",
+					'FLAKY_STATE' => "{$this->workdir}/state.flag",
+					'PATH' => (string) getenv('PATH'),
+				]
 			);
 			if (!is_resource($proc)) {
 				continue;
@@ -135,7 +149,7 @@ PHP;
 			// Poll readiness instead of a fixed wait (up to ~2s).
 			for ($i = 0; $i < 40; $i++) {
 				$sock = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.05);
-				if ($sock !== false) {
+				if ($sock !== FALSE) {
 					fclose($sock);
 					$this->server = $proc;
 					$this->port = $port;
@@ -184,5 +198,47 @@ PHP;
 			$got,
 			'the retried download must contain only the final response body, got ' . strlen($got) . ' bytes'
 		);
+	}
+
+	/**
+	 * Scenario: HTTP Basic auth is enabled when either credential is present.
+	 * Given literal "0", username-only, and empty-pair credential cases,
+	 * when pfb_download() fetches each feed, the server sees every real value.
+	 */
+	public function testBasicAuthUsesAnyPresentCredentialWithoutDroppingZero(): void
+	{
+		$cases = [
+			['0', 'secret', ['0', 'secret']],
+			['feed', '0', ['feed', '0']],
+			['token', '', ['token', NULL]],
+			['', 'secret', ['', 'secret']],
+			['', '', [NULL, NULL]],
+		];
+
+		foreach ($cases as $index => [$username, $password]) {
+			$result = pfb_download(new PfbDownloadRequest(
+				listUrl: "http://flaky-feed.example:{$this->port}/auth/{$index}",
+				downloadPath: "{$this->workdir}/auth-{$index}.txt",
+				flex: FALSE,
+				header: "AuthFeed{$index}",
+				format: '',
+				logType: 1,
+				type: 'change_detect',
+				username: $username,
+				password: $password,
+			));
+			$this->assertTrue($result->success, "auth case {$index} download must succeed");
+		}
+
+		$lines = file("{$this->workdir}/auth.log", FILE_IGNORE_NEW_LINES);
+		$this->assertIsArray($lines, 'fixture server must record each request credential pair');
+		$this->assertCount(count($cases), $lines, 'fixture server must record exactly one request per auth case');
+		foreach ($cases as $index => [, , $expected]) {
+			$this->assertSame(
+				$expected,
+				json_decode($lines[$index], TRUE),
+				"auth case {$index} must reach the server as the expected credential pair"
+			);
+		}
 	}
 }
