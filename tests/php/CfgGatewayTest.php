@@ -699,6 +699,85 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// issue #1931 — ip/suppression (IP page "Enable Suppression" toggle;
+	// path-addressed so it no longer collides with dnsbl/suppression)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * ip/suppression absent key returns the registered default '' -- NOT the
+	 * page's 'on' render fallback. pfblockerng_ip.php keeps its own
+	 * isset(...) ? ... : 'on' rendering (the #1907-class page/registry
+	 * divergence); the 'on'-default + grandfather decision is deferred to #1921.
+	 *
+	 * Scenario:
+	 *   Background: ip/suppression is plain (NULL/NULL adapters), default ''.
+	 *     Given no stored value.
+	 *     When PfbConfig::read('ip/suppression').
+	 *     Then '' is returned (registered default).
+	 *
+	 * Red->green: before this step, 'ip/suppression' was not registered ->
+	 *   PfbConfig::read('ip/suppression') threw InvalidArgumentException.
+	 */
+	public function testIpSuppressionAbsentKeyReturnsDefaultEmptyString(): void
+	{
+		$path = 'installedpackages/pfblockerngipsettings/config/0/suppression';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path), 'before: ip suppression must be absent');
+
+		// When/Then.
+		$this->assertSame('', PfbConfig::read('ip/suppression'), 'ip/suppression absent -> ""');
+	}
+
+	/**
+	 * writeSystem('ip/suppression', 'on') stores 'on' at the exact ipsettings
+	 * path -- proves the path-addressed registry entry routes to
+	 * pfblockerngipsettings/config/0, never pfblockerngdnsblsettings/config/0.
+	 *
+	 * Scenario:
+	 *   Given no stored value.
+	 *   When PfbConfig::writeSystem('ip/suppression', 'on').
+	 *   Then the ipsettings path stores 'on' and the DNSBL suppression path
+	 *     stays untouched (still absent).
+	 */
+	public function testIpSuppressionWriteStoresAtIpsettingsPath(): void
+	{
+		$ip_path    = 'installedpackages/pfblockerngipsettings/config/0/suppression';
+		$dnsbl_path = 'installedpackages/pfblockerngdnsblsettings/config/0/suppression';
+
+		PfbConfig::writeSystem('ip/suppression', 'on');
+
+		$this->assertSame('on', config_get_path($ip_path),
+			"writeSystem('ip/suppression') must store at the ipsettings path");
+		$this->assertNull(config_get_path($dnsbl_path),
+			'dnsbl/suppression must stay untouched by an ip/suppression write');
+	}
+
+	/**
+	 * 'ip/suppression' and 'dnsbl/suppression' share the same bare key name but
+	 * resolve to different config.xml sections -- the #1931 path-addressing fix
+	 * for their pre-step-A collision. Both stay independently registered and
+	 * readable, each at its own default.
+	 *
+	 * Scenario:
+	 *   When PFB_SECTIONS resolves each alias's section path.
+	 *   Then the two full paths differ, and writing one leaves the other's
+	 *     value untouched.
+	 */
+	public function testIpSuppressionAndDnsblSuppressionResolveToDifferentPaths(): void
+	{
+		$ip_path    = PFB_SECTIONS['ip'] . '/suppression';
+		$dnsbl_path = PFB_SECTIONS['dnsbl'] . '/suppression';
+
+		$this->assertNotSame($ip_path, $dnsbl_path,
+			"'ip/suppression' and 'dnsbl/suppression' must resolve to different config.xml paths");
+
+		PfbConfig::writeSystem('ip/suppression', 'on');
+		$this->assertSame('on', PfbConfig::read('ip/suppression'));
+		$this->assertSame('', PfbConfig::read('dnsbl/suppression'), 'dnsbl/suppression stays at its own default');
+	}
+
+	// -----------------------------------------------------------------------
 	// ADR-43 — pfb_tick_interval (plain string; tick-cron dispatch interval)
 	// -----------------------------------------------------------------------
 
@@ -999,11 +1078,11 @@ final class CfgGatewayTest extends TestCase
 	 *     pfblockerngantartica (typo in old data), pfblockerng{continent}
 	 *   - Dynamic feed/continent keys: feed_alt_*, widget-{type}
 	 *   - pfblockerngipsettings sub-keys (all section-level, handled together):
-	 *     maxmind_key, etc. (suppression key in ipsettings is a distinct concept
-	 *     from pfblockerngdnsblsettings/suppression which IS registered).
-	 *     ADR-53: v4suppression + v6suppression are now registered (see the registered
-	 *     inventory below) -- they are the two ipsettings scalars NOT on this
-	 *     out-of-scope list.
+	 *     maxmind_key, etc. ADR-53 registered v4suppression + v6suppression; issue
+	 *     #1931 registers 'suppression' too, as path-addressed 'ip/suppression' --
+	 *     distinct storage from the already-registered 'dnsbl/suppression' despite
+	 *     the shared bare name. All three are NOT on this out-of-scope list; only
+	 *     their still-foreign ipsettings siblings are.
 	 *   - pfblockerngreputation sub-keys: et_header
 	 *   - pfblockerngsync sub-keys: syncinterfaces, varsynconchanges, row/*
 	 *   - pfblockerngblacklist sub-keys: blacklist_enable, blacklist_freq,
@@ -1015,6 +1094,13 @@ final class CfgGatewayTest extends TestCase
 	public function testInventoryCompletenessAllKnownKeysAccountedFor(): void
 	{
 		$registry = pfb_cfg_registry();
+
+		// issue #1931: 'ip/suppression' shares its bare key with the already-registered
+		// 'dnsbl/suppression', so the bare-key inventory below can't distinguish the two --
+		// assert the alias-qualified registration directly.
+		$this->assertArrayHasKey('ip/suppression', $registry,
+			"'ip/suppression' must be registered (issue #1931)");
+
 		// issue #1931: registry keys are now '<alias>/<bare-key>'; this inventory compares
 		// against the bare config.xml names below, so strip the alias prefix back off.
 		$registered_keys = array_map(

@@ -421,13 +421,21 @@ final class LegacyKeyRenameMigrationTest extends TestCase
 	 *   - `v4suppression` — pfblockerng_install.inc's ADR-53 pfBlockerNGSuppress
 	 *     alias conversion is gated on "never migrated" (absent) versus "present but
 	 *     empty", a distinction its own comment calls out;
-	 *   - `pfb_cache`, `pfb_py_reply`, `pfb_hsts` — pfblockerng_dnsbl.php renders
-	 *     these CHECKED when the key is absent (`isset(...) ? ... : 'on'`) while the
-	 *     registry default is '', so seeding '' would silently flip the first-open
-	 *     rendering, and therefore what a first save stores (issue #1907).
+	 *   - `pfb_cache`, `pfb_py_reply`, `pfb_hsts`, and (issue #1931) ip/suppression's
+	 *     `suppression` — the owning page renders CHECKED when the key is absent
+	 *     (`isset(...) ? ... : 'on'`) while the registry default is '', so seeding ''
+	 *     would silently flip the first-open rendering, and therefore what a first
+	 *     save stores (issue #1907).
 	 */
 	public function testSeedSkipsKeysWhoseAbsenceIsLoadBearing(): void
 	{
+		// issue #1931: 'ip/suppression' must be registered before the seed-exclusion
+		// guard has anything to skip -- read() throwing here means the registry entry
+		// does not exist yet (this precondition is RED for the registration reason,
+		// not only the seed-exclusion reason below).
+		$this->assertSame('', PfbConfig::read('ip/suppression'),
+			"'ip/suppression' must be registered (issue #1931)");
+
 		$changed = pfb_registered_scalars_seed([]);
 
 		$this->assertArrayNotHasKey('v4suppression', $changed[self::IP_SECTION] ?? [],
@@ -436,6 +444,14 @@ final class LegacyKeyRenameMigrationTest extends TestCase
 			$this->assertArrayNotHasKey($key, $changed[self::DNSBL_SECTION] ?? [],
 				"seeding '{$key}' would flip the DNSBL page's absent-default rendering (issue #1907)");
 		}
+		// issue #1931: ip/suppression joins the #1907-class exclusion -- same rendering
+		// hazard, different section/page.
+		$this->assertArrayNotHasKey('suppression', $changed[self::IP_SECTION] ?? [],
+			"seeding ip 'suppression' would flip the IP page's absent-default rendering (issue #1931)");
+		// Control (proves the seed actually ran over the ipsettings section instead of
+		// skipping it wholesale): v6suppression is NOT excluded and still seeds normally.
+		$this->assertSame('', $changed[self::IP_SECTION]['v6suppression'] ?? NULL,
+			'control: v6suppression still seeds normally in the ipsettings section');
 	}
 
 	/**
