@@ -314,6 +314,26 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 	return $result;
 }
 
+/**
+ * pfb_list_script_failure_record -- issue #1958: a per-feed pre-script that
+ * exits non-zero must not let the alias pass close as full success. Opens a
+ * distinct ADR-61 stage='script' ledger entry -- separate from stage='download',
+ * since the download itself genuinely succeeded and only the transform failed
+ * -- and (re)writes the '.update' retry marker. The marker matters because a
+ * row that entered the update branch via a '.fail' marker alone had that
+ * marker unlinked by the successful download; without this write the next
+ * ordinary pass takes the verbatim-reuse fast path and never retries the
+ * transform. The marker write is best-effort (@-suppressed): ledger
+ * visibility must never depend on it succeeding. ADR-61 symmetric ownership:
+ * the paired close is pfb_sync_status_close($facility, $item, 'script',
+ * $ledger_dir) at the alias-pass end.
+ */
+function pfb_list_script_failure_record(string $facility, string $item, string $message,
+    string $ledger_dir, string $update_marker): void {
+	@touch($update_marker);
+	pfb_sync_status_open($facility, $item, 'script', $message, $ledger_dir);
+}
+
 // Main pfBlockerNG function
 function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
@@ -1573,6 +1593,9 @@ function sync_package_pfblockerng($cron='') {
 				// issue #1048: per-alias-pass failure flag -- a sibling feed's success must
 				// never close a DIFFERENT feed's still-open download-failure ledger entry.
 				$pfb_dl_failed		= FALSE;
+				// issue #1958: per-alias-pass script-failure flag -- a sibling feed's
+				// success must never close another feed's still-open script-failure entry.
+				$pfb_script_failed	= FALSE;
 
 				$alias = "DNSBL_{$list['aliasname']}";
 				if (empty(pfb_filter($alias, PFB_FILTER_WORD, 'DNSBL - Processes'))) {
@@ -1827,6 +1850,13 @@ function sync_package_pfblockerng($cron='') {
 									    $pfb_dnsbl_script_pre, $list['script_pre'], $header,
 									    escapeshellarg("{$file_dwn}.pre") . " dnsbl {$elog}");
 									if (!$pfb_pre['ok']) {
+										// issue #1958: pre-script failure genuinely served last-known-good --
+										// mark it in the ledger (distinct 'script' stage, never 'download') and
+										// retry the transform on the next ordinary pass via the '.update' marker.
+										pfb_list_script_failure_record('dnsbl', $alias,
+										    "[ {$alias} - {$header} ] Pre-script FAIL - serving last known-good",
+										    $pfb['dbdir'], "{$pfbfolder}/{$header}.update");
+										$pfb_script_failed = TRUE;
 										// #1083: a stale-generation '.txt' never re-enters the manifest.
 										if ($staging_current_generation && file_exists("{$pfbfolder}/{$header}.txt")) {
 											$lists_dnsbl_all[]	= "{$row['header']}.txt";
@@ -2220,6 +2250,12 @@ function sync_package_pfblockerng($cron='') {
 					// feed's success mask an earlier feed's still-live failure.
 					if (!$pfb_dl_failed) {
 						pfb_dnsbl_download_ledger_update(TRUE, $alias, '', $pfb['dbdir']);
+					}
+
+					// issue #1958: ADR-61 symmetric ownership -- close the 'script' stage
+					// entry once for the WHOLE alias-pass, iff no row's pre-script failed.
+					if (!$pfb_script_failed) {
+						pfb_sync_status_close('dnsbl', $alias, 'script', $pfb['dbdir']);
 					}
 
 					// ADR-12: record GENUINELY-changed DNSBL groups for
@@ -3121,6 +3157,9 @@ function sync_package_pfblockerng($cron='') {
 				// issue #1048: per-alias-pass failure flag -- a sibling feed's success must
 				// never close a DIFFERENT feed's still-open download-failure ledger entry.
 				$pfb_dl_failed = FALSE;
+				// issue #1958: per-alias-pass script-failure flag -- a sibling feed's
+				// success must never close another feed's still-open script-failure entry.
+				$pfb_script_failed = FALSE;
 
 				foreach	($list['row'] as $row) {
 					if (!empty($row['url']) && $row['state'] != 'Disabled') {
@@ -3434,6 +3473,13 @@ function sync_package_pfblockerng($cron='') {
 								    $pfb_script_pre, $list['script_pre'], $header,
 								    escapeshellarg("{$file_dwn}.pre") . " {$list['vtype']} {$elog}");
 								if (!$pfb_pre['ok']) {
+									// issue #1958: pre-script failure genuinely served last-known-good --
+									// mark it in the ledger (distinct 'script' stage, never 'download') and
+									// retry the transform on the next ordinary pass via the '.update' marker.
+									pfb_list_script_failure_record('ip', $alias,
+									    "[ {$alias} - {$header} ] Pre-script FAIL - serving last known-good",
+									    $pfb['dbdir'], "{$pfbfolder}/{$header}.update");
+									$pfb_script_failed = TRUE;
 									continue;
 								}
 								$pfb_parse_path = $pfb_pre['path'];
@@ -3616,6 +3662,12 @@ function sync_package_pfblockerng($cron='') {
 				// feed's success mask an earlier feed's still-live failure.
 				if (!$pfb_dl_failed) {
 					pfb_ip_download_ledger_update(TRUE, $alias, '', $pfb['dbdir']);
+				}
+
+				// issue #1958: ADR-61 symmetric ownership -- close the 'script' stage
+				// entry once for the WHOLE alias-pass, iff no row's pre-script failed.
+				if (!$pfb_script_failed) {
+					pfb_sync_status_close('ip', $alias, 'script', $pfb['dbdir']);
 				}
 			}
 		}
