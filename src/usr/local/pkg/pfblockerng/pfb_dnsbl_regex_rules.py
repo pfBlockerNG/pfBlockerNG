@@ -123,6 +123,33 @@ def _regex_quantifier(pattern: str, index: int) -> tuple[int, bool, bool]:
     return end, unbounded, suffix != "+"
 
 
+def _regex_escape_atom_end(pattern: str, index: int) -> int:
+    """Return the end of the escape atom beginning at ``index``."""
+    marker_index = index + 1
+    if marker_index >= len(pattern):
+        return marker_index
+    marker = pattern[marker_index]
+    if marker in "xuU":
+        width = {"x": 2, "u": 4, "U": 8}[marker]
+        end = marker_index + 1 + width
+        if end <= len(pattern) and all(
+            character in "0123456789abcdefABCDEF" for character in pattern[marker_index + 1 : end]
+        ):
+            return end
+        return marker_index + 1
+    if marker in "Nn" and marker_index + 1 < len(pattern) and pattern[marker_index + 1] == "{":
+        end = marker_index + 2
+        while end < len(pattern) and pattern[end] != "}":
+            end += 1
+        return min(end + 1, len(pattern))
+    if marker in "0123456789":
+        end = marker_index + 1
+        while end < len(pattern) and end < marker_index + 3 and pattern[end] in "0123456789":
+            end += 1
+        return end
+    return marker_index + 1
+
+
 def _regex_has_ungrouped_adjacent_quantifiers(pattern: str) -> bool:
     """Reject adjacent unbounded quantifiers unless either is possessive."""
     previous_unbounded = False
@@ -130,9 +157,13 @@ def _regex_has_ungrouped_adjacent_quantifiers(pattern: str) -> bool:
     while index < len(pattern):
         character = pattern[index]
         if character == "\\":
-            atom_end = index + 2
+            atom_end = _regex_escape_atom_end(pattern, index)
         elif character == "[":
             atom_end = index + 1
+            if atom_end < len(pattern) and pattern[atom_end] == "^":
+                atom_end += 1
+            if atom_end < len(pattern) and pattern[atom_end] == "]":
+                atom_end += 1
             while atom_end < len(pattern):
                 if pattern[atom_end] == "\\":
                     atom_end += 2

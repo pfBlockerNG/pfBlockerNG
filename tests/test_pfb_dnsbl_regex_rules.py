@@ -174,6 +174,17 @@ def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
         ("^.+@.+$", False),
         ("[a-z]{1,3}[a-z]{1,3}", False),
         ("[a-z]+[0-9]+", True),
+        (r"[]a]+[]b]+", True),
+        (r"[^]]+[^]]+", True),
+        (r"\N{LATIN SMALL LETTER A}+\w+", True),
+        (r"\N{LATIN SMALL LETTER A}+\N{LATIN SMALL LETTER B}+", True),
+        (r"\x61+\x61+", True),
+        (r"\u0061+\u0061+", True),
+        (r"\U00000061+\w+", True),
+        (r"\141+\141+", True),
+        (r"[]a]+", False),
+        (r"[^]]+", False),
+        (r"\N{LATIN SMALL LETTER A}+@.+$", False),
     ],
 )
 def test_ungrouped_adjacent_quantifier_shapes_are_consistent(pattern: str, expected_rejected: bool) -> None:
@@ -191,7 +202,7 @@ def test_ungrouped_adjacent_quantifier_shapes_are_consistent(pattern: str, expec
 
 @pytest.mark.parametrize(
     "pattern",
-    ["", "[", "\\", "[a+z+b]+", r"a\+b\*", r"[a\]]+[a\]]+"],
+    ["", "[", "\\", "[a+z+b]+", r"a\+b\*", r"[a\]]+[a\]]+", r"\N{"],
 )
 def test_ungrouped_adjacent_quantifier_scanner_handles_hostile_syntax(pattern: str) -> None:
     """Scanner inspects syntax only; malformed patterns reach compile-error handling."""
