@@ -22,6 +22,10 @@ follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
   a Snyk quota/infra `error` never block a CI wait or a merge. The one exception: a
   terminal Snyk `failure` carrying a **real finding** is a security finding to resolve
   through the review gate before merging.
+- **Copilot code review is banned (owner directive 2026-08-01).** Never request it
+  or enable a `copilot_code_review` rule/auto-request setting (a ruleset may bundle
+  it with branch protection — strip only the rule). One appearing anyway is swept
+  like any unsolicited review, never gate-counted.
 - **Review effort floors:** `xhigh` for the `full` profile, `high` for the `verify`
   profile — never below the profile's floor, never `max`.
 - **Delta-scoped re-reviews.** A feedback-fix re-review covers exactly the fix commits
@@ -64,7 +68,7 @@ Three things start together at the top of the review step:
 1. **The CI wait — arm it NOW.** CI runs on the pushed head regardless of review
    state: start the check-poll (`scripts/agent/wait-checks.sh --repo OWNER/REPO --pr N`,
    a self-exiting background task, stdout to a result file whose LAST line is the
-   verdict; the script header documents semantics) so a clean PR's checks are already
+   verdict) so a clean PR's checks are already
    green when the review gate closes. A fix push re-triggers CI — stop the stale wait
    and re-arm after the LAST fix push. The early verdict is valid only for the head
    SHA it watched. If the flow aborts anywhere, stop this wait as part of the trigger
@@ -72,13 +76,13 @@ Three things start together at the top of the review step:
 2. **The adversarial review — ALWAYS, spawned first.** Every PR gets one independent
    adversarial reviewer in a fresh read-only context via the client's native reviewer
    surface (per-client mapping below). It is client-tracked: never arm a wait for it;
-   act on its completion. It is additive to CodeRabbit, never a fallback — CodeRabbit
-   reviewing does not skip it, and when CodeRabbit never reviews it stands alone.
+   act on its completion. It is additive to CodeRabbit, never a fallback: it runs
+   regardless, and stands alone when CodeRabbit never reviews.
 3. **The CodeRabbit acknowledgement window** (next section) — the one untracked
    external that gets a bounded poll.
 
-Whichever reviews arrive, **every comment of every review received is handled**; how
-each finding is handled (the triage below) never changes with the source.
+Whichever reviews arrive, **every comment of every review received is handled**; the
+triage below never changes with the source.
 
 ### The adversarial reviewer contract
 
@@ -185,9 +189,9 @@ never append `[bot]` yourself):
 - If CodeRabbit acknowledged but never finished, proceed on the adversarial review
   and note the timeout (the nudge is for the no-ack case only). If it turns up late,
   fold its review in before the merge gate.
-- The bot's exact wording drifts — when diagnostics clearly show a finished/declined
-  review the matcher missed, read the actual comment body and adjust the patterns
-  rather than waiting out the timeout.
+- The bot's wording drifts — when diagnostics show a finished/declined review the
+  matcher missed, read the comment body and adjust the patterns instead of waiting
+  out the timeout.
 - Multiple handles (e.g. adding Snyk explicitly): run the wait once per handle,
   continue when all **engaged** reviewers finish; tolerate absent ones. The
   DECLINE/PAUSE/nudge machinery is CodeRabbit-specific; other handles use only
@@ -386,18 +390,17 @@ unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
 - **Trigger sweep (mandatory):** the task reached a terminal state — kill every
   trigger class (background polls, scheduled check-ins, subscriptions), then sweep
   once for stale waits from earlier items (waits.md).
-- **Report:** the PR, whether a rebase was needed, the CI verdict (and that advisory
-  bots were intentionally not waited on), the reviews received (models, profiles,
-  skips surfaced), the merge result, and the cleanup. An abort at any step says
-  exactly why and what is needed to proceed.
+- **Report:** PR, rebase needed or not, CI verdict (advisory bots not waited on),
+  reviews received (models, profiles, skips), merge result, cleanup. An abort at any
+  step says why and what is needed to proceed.
 
 ## Per-client mapping
 
 Behavioral equivalence, not surface parity (workflow.md "Vendor mapping"):
 
 - **Claude:** the adversarial review runs as a fresh read-only sub-agent implementing
-  the reviewer contract above (piloted end-to-end on
-  [#1429](https://github.com/pfBlockerNG/pfBlockerNG/issues/1429) / PR #1433);
+  the reviewer contract above (piloted on
+  [#1429](https://github.com/pfBlockerNG/pfBlockerNG/issues/1429));
   per-finding validation may fan out to fresh read-only validator sub-agents; waits
   stopped via the task tools. Public-body footer:
   `🤖 Generated by [Claude Code](https://claude.com/claude-code), posted via
