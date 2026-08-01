@@ -474,7 +474,11 @@ count=0
 count=$((count + 1))
 [ -z "${GH_STUB_COUNT_FILE:-}" ] || printf '%s\n' "$count" > "$GH_STUB_COUNT_FILE"
 case " ${GH_STUB_FAIL_CALLS:-} " in
-	*" $count "*) printf '%s\n' "${GH_STUB_FAIL_OUTPUT:-HTTP 404}"; exit 1 ;;
+	*" $count "*)
+		printf '%s\n' "${GH_STUB_FAIL_OUTPUT:-HTTP 404}"
+		[ -z "${GH_STUB_MARK_FAILURE:-}" ] || true > "$GH_STUB_POLL_MARKER"
+		exit 1
+		;;
 esac
 case "$*" in
 	*"pr view "*)
@@ -482,7 +486,10 @@ case "$*" in
 		[ -z "${GH_STUB_ARMED_MARKER:-}" ] || true > "$GH_STUB_ARMED_MARKER"
 		;;
 	*"/check-runs"*) printf '%s\n' "$GH_STUB_CHECK_RUNS" ;;
-	*"/status"*) printf '%s\n' "$GH_STUB_STATUS_PAYLOAD" ;;
+	*"/status"*)
+		printf '%s\n' "$GH_STUB_STATUS_PAYLOAD"
+		[ -z "${GH_STUB_MARK_STATUS:-}" ] || true > "$GH_STUB_POLL_MARKER"
+		;;
 esac
 STUB
     chmod +x "$stubdir/gh"
@@ -501,13 +508,18 @@ STUB
   setup_near_deadline() {
     cat > "$stubdir/date" <<'STUB'
 #!/bin/sh
-printf '100\n'
+if [ -e "$GH_STUB_POLL_MARKER" ]; then
+	printf '100\n'
+else
+	printf '0\n'
+fi
 STUB
     cat > "$stubdir/sleep" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$1" >> "$WAIT_SLEEP_FILE"
 STUB
     chmod +x "$stubdir/date" "$stubdir/sleep"
+    export GH_STUB_POLL_MARKER="$stubdir/polled"
     export PFB_WAIT_DEADLINE=103 WAIT_SLEEP_FILE="$stubdir/sleeps"
   }
 
@@ -623,6 +635,7 @@ STUB
 
   It 'caps sleep after a successful pending poll at the remaining deadline'
     setup_near_deadline
+    export GH_STUB_MARK_STATUS=1
     pending_fixture
     When run sh "$script" --repo o/r --pr 1 --interval 99 --max-iter 1
     The line 1 of output should equal 'TIMEOUT'
@@ -631,6 +644,7 @@ STUB
 
   It 'caps sleep after a failed poll at the remaining deadline'
     setup_near_deadline
+    export GH_STUB_MARK_FAILURE=1
     export GH_STUB_COUNT_FILE="$stubdir/count"
     # call 1 = arm `pr view` (must succeed so the loop is reached at all); call 2 =
     # the single iteration's check-runs read, which fails.
