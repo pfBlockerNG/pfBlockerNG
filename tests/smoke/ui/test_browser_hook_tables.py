@@ -35,7 +35,7 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Page
+    from playwright.sync_api import Dialog, Page
 
     from .webui import WebUI
 
@@ -216,8 +216,15 @@ def test_dismissing_the_delete_confirmation_keeps_the_script(
     row = page.locator(f"tr[data-pfb-hook='{probe_hook}']")
     expect(row).to_be_visible(timeout=JS_TIMEOUT_MS)
 
-    page.once("dialog", lambda dialog: dialog.dismiss())
+    dialogs: list[str] = []
+
+    def dismiss_dialog(dialog: Dialog) -> None:
+        dialogs.append(dialog.type)
+        dialog.dismiss()
+
+    page.once("dialog", dismiss_dialog)
     row.locator(".fa-trash-can").click()
+    assert dialogs == ["confirm"], "the delete action must show one confirmation dialog"
     expect(row).to_be_visible(timeout=JS_TIMEOUT_MS)
 
     _open(page, webui, HOOKS_PAGE)
