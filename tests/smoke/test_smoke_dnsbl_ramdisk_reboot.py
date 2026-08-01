@@ -176,17 +176,27 @@ def reboot_observation(dnsbl_vm: SmokeVM) -> DnsblRebootObservation:
     print(f"[smoke] #1357 post-MFS manifest refs: {manifest_state}")
 
     # Poll for self-recovery (pfb_unbound.py staged AND both sinkholes) with NO manual update.
-    waited = 0
     recovered = False
     wild_recovered = False
-    while waited <= RECOVERY_DEADLINE:
+    staged_now = False
+    recovery_started = time.monotonic()
+
+    def recovery_observed() -> bool:
+        nonlocal recovered, staged_now, wild_recovered
         staged_now = vm.ssh("test", "-f", PFB_UNBOUND).returncode == 0
         recovered = recovered or (staged_now and _sinkholes(vm, domain))
         wild_recovered = wild_recovered or (staged_now and _sinkholes(vm, wild_sub_domain))
-        if recovered and wild_recovered:
-            break
-        time.sleep(10)
-        waited += 10
+        return recovered and wild_recovered
+
+    try:
+        h.wait_until(recovery_observed, timeout=RECOVERY_DEADLINE, interval=10.0)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "salvage cap expired / stuck or environment: RAM-disk reboot recovery expected "
+            f"recovered=True and wild_recovered=True; observed recovered={recovered} "
+            f"wild_recovered={wild_recovered} staged={staged_now}"
+        ) from exc
+    waited = int(time.monotonic() - recovery_started)
 
     return DnsblRebootObservation(
         domain=domain,

@@ -18,7 +18,6 @@ via the ui-tests workflow or locally::
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -80,16 +79,20 @@ def test_alerts_row_renders_logged_group_and_feed_live(deployed_vm: helpers.Smok
         answer = helpers.dns_probe(deployed_vm, domain)
         assert helpers.is_vip(answer), f"expected VIP block for {domain!r}, got {answer!r}"
 
-        deadline = time.monotonic() + 30.0
         hits = 0
-        line = ""
-        while time.monotonic() < deadline:
+
+        def log_hit_observed() -> bool:
+            nonlocal hits
             hits = _dnsbl_log_hits(deployed_vm, domain)
-            if hits >= 1:
-                line = _dnsbl_log_line(deployed_vm, domain)
-                break
-            time.sleep(1.0)
-        assert hits >= 1, f"expected a dnsbl.log line for {domain} after the block, found {hits}"
+            return hits >= 1
+
+        try:
+            helpers.wait_until(log_hit_observed, timeout=30.0, interval=1.0)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"salvage cap expired / stuck or environment: ADR-65 dnsbl.log expected hits>=1; observed hits={hits}"
+            ) from exc
+        line = _dnsbl_log_line(deployed_vm, domain)
 
         fields = line.split(",")
         assert len(fields) > 8, f"unexpected dnsbl.log line shape for {domain}: {line!r}"
