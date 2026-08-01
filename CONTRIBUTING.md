@@ -477,7 +477,7 @@ Cases live in `tests/smoke/test_smoke_matrix.py` and compose the Phase-4 helpers
    reload verb; pass `scope="update"` for DNSBL-IP), then assert with
    `h.dns_probe` / `h.is_nxdomain` / `h.is_null_ip` / `h.is_vip` /
    `h.resolves_to`, and `h.pfctl_table_members` / `h.member_present` /
-   `h.rule_references` for the IP side. `__exit__` resets to baseline.
+   `h.pfctl_rule_has_alias` for the IP side. `__exit__` resets to baseline.
 
 ### HTTP feed-load smoke (ADR-16)
 
