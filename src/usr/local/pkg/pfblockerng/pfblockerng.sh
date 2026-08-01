@@ -48,6 +48,7 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	pathaggregate="/usr/local/bin/iprange"
 	pathgeoip="/usr/local/bin/mmdblookup"
 	pathhost=/usr/bin/host
+	pathtimeout=/usr/bin/timeout
 	pathtar=/usr/bin/tar
 	pathpfctl=/sbin/pfctl
 
@@ -1569,7 +1570,7 @@ whoisconvert() {
 			# then keep only the "has (IPv6) address" lines so a failure message
 			# (e.g. "Host x not found: 3(NXDOMAIN)") can never be captured as
 			# data (issue #714). Mirrors the ASN branch below.
-			hostout="$("${pathhost}" -t "${_type}" "${host}")"
+			hostout="$("${pathtimeout}" -s TERM -k 5 30 "${pathhost}" -t "${_type}" "${host}")"
 			hostrc=$?
 			if [ "${hostrc}" -eq 0 ]; then
 				hostips="$(echo "${hostout}" | grep -E 'has( IPv6)? address' | sed 's/^.* //')"

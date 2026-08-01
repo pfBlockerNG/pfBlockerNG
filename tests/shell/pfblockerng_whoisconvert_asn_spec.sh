@@ -12,6 +12,16 @@
 # The asn.csv rows mirror IPinfo's layout: start_ip,end_ip,ASN,name -- the
 # collector greps `,AS<n>,` and emits "start-end" ranges via cut -f1-2 + tr.
 
+make_timeout_passthrough() {
+  pathtimeout="${work}/timeout"
+  cat > "$pathtimeout" <<'EOF'
+#!/bin/sh
+shift 5
+exec "$@"
+EOF
+  chmod +x "$pathtimeout"
+}
+
 Describe 'whoisconvert() ASN branch appends instead of truncating (issue #1075)'
   setup() {
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/whoisasn.XXXXXX")"
@@ -29,6 +39,7 @@ echo "$3 has address 203.0.113.5"
 exit 0
 EOF
     chmod +x "$pathhost"
+    make_timeout_passthrough
 
     pathasncsv="${work}/asn.csv"
     cat > "$pathasncsv" <<'EOF'
