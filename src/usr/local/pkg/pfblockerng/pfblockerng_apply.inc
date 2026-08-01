@@ -123,7 +123,7 @@ function pfb_dnsbl_reload_needed(bool $publish_failed, bool $data_changed, bool 
 
 /**
  * Parse one generic IP-feed line without touching run state or emitting output.
- * @param array{vtype:string,pftype:string,custom:bool,cidr_floor_v4:int|string,cidr_floor_v6:int|string,suppression:string,range:string,ipv4:string,ipv6:string} $config
+ * @param array{vtype:string,pftype:string,custom:bool,cidr_floor_v4:int|string,cidr_floor_v6:int|string,suppression:PfbToggle|string,range:string,ipv4:string,ipv6:string} $config
  * @return array{entries:list<string>,line:string,suppressed:bool,parse_fail_delta:int,detailed_parse_fail:bool,messages:list<string>}
  */
 function pfb_ip_parse_line(string $raw_line, array $config): array {

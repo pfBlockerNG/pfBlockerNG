@@ -126,7 +126,7 @@ if (
 	// a bystander adapter-bearing key here, ahead of pfb_registry_pass(), would destroy
 	// the raw value that pass needs to grandfather.
 	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngdnsblsettings/config/0', $pfb_dnsbl_config);
-	write_config('Migrated old pfBlockerNG VIP configuraiton');
+	write_config('Migrated old pfBlockerNG VIP configuration');
 	pfb_global();
 }
 

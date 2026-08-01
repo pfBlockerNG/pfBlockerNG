@@ -318,7 +318,7 @@ final class PfbGlobalParityTest extends TestCase
 	 * existing installs (RegistryPassTest row 9); a genuinely fresh install and the
 	 * runtime both now default to On.
 	 */
-	public function testParityPfbHstsAbsentYieldsOff(): void
+	public function testParityPfbHstsAbsentYieldsOn(): void
 	{
 		$this->assertNull(
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts')

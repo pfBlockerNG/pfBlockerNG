@@ -167,6 +167,11 @@ final class ToggleEmptyPreservationTest extends TestCase
 				$dnsbl_src,
 				"{$field} must be staged as an explicit 'on'/'off' (checkbox-absent means Off)"
 			);
+			$this->assertStringNotContainsString(
+				"pfb_filter(\$_POST['{$field}'], PFB_FILTER_ON_OFF, 'dnsbl')",
+				$dnsbl_src,
+				"{$field} must not be staged with the pfb_filter(...) ?: '' coalesce"
+			);
 		}
 
 		$ip_src = (string) file_get_contents(
@@ -176,6 +181,48 @@ final class ToggleEmptyPreservationTest extends TestCase
 			"((\$_POST['suppression'] ?? '') === 'on') ? 'on' : 'off'",
 			$ip_src,
 			"suppression must be staged as an explicit 'on'/'off' (checkbox-absent means Off)"
+		);
+		$this->assertStringNotContainsString(
+			"pfb_filter(\$_POST['suppression'], PFB_FILTER_ON_OFF, 'ip')",
+			$ip_src,
+			"suppression must not be staged with the pfb_filter(...) ?: '' coalesce"
+		);
+	}
+
+	/**
+	 * The render expression must survive the validation-error re-render, where
+	 * `$pconfig = $_POST` replaces the gateway enum with the raw POST string ('on',
+	 * or absent when unchecked). A bare `$pconfig[...] === PfbToggle::On` is FALSE
+	 * for the string 'on', so the checkbox re-renders unchecked and the corrected
+	 * resubmit silently stores 'off' — the #1887 enum-in-string-context class.
+	 * pfb_cfg_toggle_read() accepts both (enum passthrough + string parse), and
+	 * `?? ''` covers the unchecked-POST absent key.
+	 */
+	public function testPagesRenderTheIssue1907TogglesThroughTheToggleRead(): void
+	{
+		$dnsbl_src = (string) file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php'
+		);
+		foreach (['pfb_cache', 'pfb_py_reply', 'pfb_hsts'] as $field) {
+			$this->assertStringContainsString(
+				"pfb_cfg_toggle_read(\$pconfig['{$field}'] ?? '') === PfbToggle::On",
+				$dnsbl_src,
+				"{$field} must render through pfb_cfg_toggle_read with the absent-POST fallback"
+			);
+		}
+
+		$ip_src = (string) file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_ip.php'
+		);
+		$this->assertStringContainsString(
+			"pfb_cfg_toggle_read(\$pconfig['suppression'] ?? '') === PfbToggle::On",
+			$ip_src,
+			'suppression must render through pfb_cfg_toggle_read with the absent-POST fallback'
+		);
+		$this->assertStringNotContainsString(
+			"\$pconfig['suppression'] === PfbToggle::On",
+			$ip_src,
+			'a bare enum comparison breaks on the $pconfig = $_POST error re-render path'
 		);
 	}
 }

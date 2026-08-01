@@ -1008,28 +1008,17 @@ def test_lenient_blocks_invalid_scheme_and_path(deployed_vm: SmokeVM, client_vm:
 def test_migration_sets_lenient_on_for_existing_install(deployed_vm: SmokeVM) -> None:
     """ADR-22 §2.2 grandfather on the live box: an existing install lacking the key -> 'on'.
 
-    Proves the SHIPPED grandfather decision (issue #1921's ``pfb_registry_pass()``,
-    pfblockerng.inc) against the REAL on-box config store: read the DNSBL-settings
-    section, run the registry pass over just that section, and if it returns a
-    (changed) section, persist it. An EXISTING (OLDCFG) install is one with a
-    populated DNSBL config section that merely lacks ``pfb_dnsbl_lenient``; the pass
-    must set it to 'on' (preserving the legacy permissive behaviour), never
-    overwriting a present value.
-
     Given the live DNSBL-settings section is populated (it always is on the deployed box —
       pfb_dnsbl etc. are set) and ``pfb_dnsbl_lenient`` is REMOVED (the upgrade-from-an-
       older-version state) — asserted absent as the before-state,
-    When  the shipped ``pfb_registry_pass()`` runs against that section and the
-      result is persisted (the install-hook body),
-    Then  the live config now reads ``pfb_dnsbl_lenient == 'on'``.
+    When  ``pfb_registry_pass()`` runs against that section and the result is persisted
+      (the install-hook body),
+    Then  the live config now reads ``pfb_dnsbl_lenient == 'on'`` — a present value is
+      never overwritten.
 
-    NOTE (out-of-CI limitation): the FULL ``pfblockerng_install.inc`` require-flow (which
-    also runs the unrelated VIP / python-mode / PFBL-03 migrations, plus the registry
-    pass over every OTHER section) is not driven end to end here — that would re-run
-    every install side effect on the live box. This case drives the registry-pass
-    FUNCTION the hook calls, scoped to just the DNSBL section, against the live config
-    store, which is the load-bearing ADR-22 behaviour; the surrounding hook plumbing is
-    identical to the in-tree PHPUnit coverage (RegistryPassTest row 7).
+    Scoped to the DNSBL section only: driving the full ``pfblockerng_install.inc``
+    require-flow would re-run every install side effect (VIP / python-mode / PFBL-03
+    migrations, the pass over every other section) on the live box.
     """
     sentinel_open = "<<<LENIENT>>>"
     sentinel_close = "<<<END>>>"

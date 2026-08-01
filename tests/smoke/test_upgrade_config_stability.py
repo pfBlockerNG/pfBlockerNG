@@ -10,8 +10,8 @@ TWO CASES:
 
 ``test_pkg_upgrade_preserves_config_values`` — UPGRADE CONTRACT (issue #281)
   Config.xml user settings survive a ``pkg upgrade`` from a prior-release build
-  to the branch build. Proves the install-time registry pass's gen/pfb_keep
-  grandfather (issue #1921) fixes the pre-deinstall hook bug.
+  to the branch build, via the install-time registry pass's gen/pfb_keep
+  grandfather (issue #1921).
 
 ``test_pkg_install_applies_config_migrations`` — INSTALL-TIME MIGRATION CONTRACT
   (issue #795) Proves the three ``pfblockerng_install.inc`` config migrations
@@ -32,8 +32,8 @@ default is 'on' but that default never persists automatically. When the key is a
 the ``!= 'on'`` check is TRUE -> ``pfb_remove_config_settings()`` deletes ALL ~22
 pfBlockerNG config sections -> wholesale config loss on upgrade.
 
-The fix (the registry pass's gen/pfb_keep grandfather + the ?? 'on' runtime default,
-issue #1921) ensures that:
+Two mechanisms cover it (the registry pass's gen/pfb_keep grandfather + the ?? 'on'
+runtime default, issue #1921):
 
   1. The install-time registry pass (``pfb_registry_pass()``) writes 'on' into
      config.xml on an existing, already-populated General config section so the
@@ -58,7 +58,7 @@ WHAT THE CASE PROVES (issue #281 contract):
           - ``dnsbl_vip_auto='on'``   (deliberately package-UNKNOWN key)
           - ``pfb_dnsbl='on'``        (real control field)
           - ``pfb_idn='on'``          (real registered field, canonical token)
-          - ``pfb_keep='on'``         (grandfathered by the install-time registry pass — the fix output)
+          - ``pfb_keep='on'``         (grandfathered by the install-time registry pass)
         BEFORE runtime behaviour: a DNSBL-blocked ``unique_domain()`` name returns
         the VIP block shape on-box (proves DNSBL is live before the upgrade).
 
@@ -152,14 +152,10 @@ def _seed_existing_install_config(vm: SmokeVM) -> None:
     section) so the install-time registry pass's gen/pfb_keep grandfather (issue
     #1921) fires deterministically — its OLDCFG/NEWCFG mode split treats an empty
     General section as a fresh install and seeds the plain 'on' default instead
-    (never the ABSENT grandfather value). Without this pre-seed the test only
-    passed when a sibling repo test had already populated the section (an order
-    dependence, CLAUDE.md "Self-encapsulated — never order-dependent"). pfb_keep
-    is intentionally UNSET — its absence is the exact issue-#281 bug condition
-    the grandfather handles, and a prior case in this module can leave it 'on'
-    (the keep-gate retains the General section across that case's teardown
-    ``pkg delete``), so without the unset a later case's seed assert would pass
-    on inherited state instead of proving the grandfather fired.
+    (never the ABSENT grandfather value). pfb_keep is intentionally UNSET — its
+    absence is the exact issue-#281 condition the grandfather handles, and the
+    keep-gate retains the General section across an earlier case's teardown
+    ``pkg delete``, so the explicit unset keeps this case self-contained.
     """
     snippet = (
         f"$g = config_get_path({h._php_str(_CFG_GLOBAL)}, array());\n"
@@ -260,16 +256,14 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
     before and after ``pkg upgrade`` from the prior-release build to the branch build.
 
     Issue #281: the pre-deinstall hook wipes ALL pfBlockerNG config sections when
-    pfb_keep is absent from config.xml. The fix grandfathers pfb_keep='on' via
-    the registry pass (``pfb_registry_pass()``, issue #1921) at install time so
-    the hook is safe on the next upgrade. This test proves the fix works
-    end-to-end on the live VM.
+    pfb_keep is absent from config.xml. The registry pass (``pfb_registry_pass()``,
+    issue #1921) grandfathers pfb_keep='on' at install time so the hook is safe on
+    the next upgrade.
 
     NOTE: pfb_keep is intentionally NOT set in _write_representative_config() — its
-    absence is the exact bug condition the fix must handle. The test asserts that after
-    the lower build installs, pfb_keep='on' appears in config.xml (seeded by the
-    install migration), and that it and all other representative fields survive upgrade
-    byte-identical.
+    absence is the exact issue-#281 condition. After the lower build installs,
+    pfb_keep='on' must appear in config.xml, and it and all other representative
+    fields must survive the upgrade byte-identical.
 
     Scenario: issue #281 fix preserves user settings across pkg upgrade.
       Background: our NONE-signed file:// repo above the Netgate ``pfSense`` repo.
@@ -308,7 +302,7 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
 
         # Seed the General section BEFORE the install — simulates an existing
         # user's box so the registry pass's gen/pfb_keep grandfather (issue #1921)
-        # fires (no reliance on a sibling test having populated it first).
+        # fires.
         pkg_delete(repo_vm)
         _seed_existing_install_config(repo_vm)
 
@@ -345,9 +339,8 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
         # between here and the upgrade).
         _write_representative_config(repo_vm)
 
-        # Assert the install-time registry pass grandfathered pfb_keep='on' into config.xml.
-        # This proves pfb_registry_pass() ran during install and the fix is in effect.
-        # pfb_keep was NOT written by the seed/canary helpers; only the registry pass seeds it.
+        # pfb_keep was NOT written by the seed/canary helpers; only the install-time
+        # registry pass grandfather writes it.
         seeded_keep = h.config_get(repo_vm, _CFG_GLOBAL + "/pfb_keep")
         assert seeded_keep == "on", (
             f"install-time registry pass did not grandfather pfb_keep: got {seeded_keep!r}, expected 'on'. "
@@ -638,6 +631,7 @@ _RENAME_ROWS: tuple[tuple[str, str, str], ...] = (
     ("pfb_pytlds_gtld", "tld_allow_gtld", "arpa,com,net"),
     ("pfb_tld", "tld_wildcard", "on"),
     ("tldblacklist", "tld_wildcard_blacklist", "emlwCm1vdgo="),  # base64 "zip\nmov\n"
+    ("suppression", "whitelist", "ZXhhbXBsZS5jb20K"),  # base64 "example.com\n" (issue #1921)
 )
 
 
