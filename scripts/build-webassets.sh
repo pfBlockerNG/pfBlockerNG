@@ -25,6 +25,20 @@ VENDOR_DIR="${REPO_ROOT}/src/usr/local/www/pfblockerng/vendor/codemirror"
 echo "==> Installing tools/webassets/ (npm ci)"
 (cd "$TOOLS_DIR" && npm ci --no-audit --no-fund)
 
+# Upstream defects we carry a fix for until the release that lands them (issue #1870:
+# the mobile caret rescue in @codemirror/view moves the HORIZONTAL scroll position by
+# the gutter's width on every keystroke with the on-screen keyboard open). npm ci wipes
+# node_modules above, so these apply to a pristine tree every run; a patch that stops
+# applying after a dependency bump fails the build here rather than silently reverting
+# the fix in the shipped bundle.
+if [ -d "${TOOLS_DIR}/patches" ]; then
+    for _patch in "${TOOLS_DIR}"/patches/*.patch; do
+        [ -f "$_patch" ] || continue
+        echo "==> Applying $(basename "$_patch")"
+        patch -p1 -d "$TOOLS_DIR" -i "$_patch"
+    done
+fi
+
 ESBUILD="${TOOLS_DIR}/node_modules/.bin/esbuild"
 NODE_MODULES="${TOOLS_DIR}/node_modules"
 
