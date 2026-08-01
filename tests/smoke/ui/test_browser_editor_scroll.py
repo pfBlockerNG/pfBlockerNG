@@ -336,6 +336,13 @@ def test_hook_editor_does_not_shift_by_the_gutter_width_under_a_shrunken_viewpor
     )
     page.mouse.click(target["x"], target["y"])
 
+    # CodeMirror compares the caret's CLIENT rect against a PAGE coordinate
+    # (``pageYOffset + visualViewport.offsetTop + height``), so a window scrolled down
+    # never satisfies its guard however far under the keyboard the caret really is.
+    # A phone with the keyboard up sits at the top of a short page, which is what this
+    # restores -- and what the reporter's device was doing.
+    page.evaluate("() => window.scrollTo(0, 0)")
+
     reach = content.evaluate(
         "el => { const vv = window.visualViewport, sel = document.getSelection();"
         " const r = sel && sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : null;"
