@@ -3351,32 +3351,16 @@ function sync_package_pfblockerng($cron='') {
 								}
 							}
 
-							// IPv4/6 Advanced Tunable - (Pre Script processing)
-							$pfb_user_script = FALSE;
-							if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {
-								pfb_logger("\nExecuting pre-script: {$list['script_pre']}\n", 1);
-								$pfb_user_script = TRUE;
-								$file_dwn_esc = escapeshellarg("{$file_dwn}.orig");
-								@copy("{$file_dwn}.orig", "{$file_dwn}.orig.pre"); // Save original file for restoration
-								if (pfb_list_script_exec($pfb_script_pre, $list['script_pre'], 'pre', $header,
-								    "{$file_dwn_esc} {$list['vtype']} {$elog}") !== 0) {
-									// issue #1927: restore the download over the failed script's
-									// leftovers and keep the last known-good staged list; '.update'
-									// stays so the next run retries the transform.
-									if (file_exists("{$file_dwn}.orig.pre")) {
-										@rename("{$file_dwn}.orig.pre", "{$file_dwn}.orig");
-									}
-									continue;
-								}
-							}
-							if ($pfb_script_post && is_file("{$pfb_script_post}")) {
-								$pfb_user_script = TRUE;
-							}
+							// IPv4/6 Advanced Tunable - a configured pre or post script means
+							// the feed must reparse every run (#1797 reuse-skip stays off).
+							$pfb_user_script = ($pfb_script_pre && is_file("{$pfb_script_pre}")) ||
+							    ($pfb_script_post && is_file("{$pfb_script_post}"));
 
-							// issue #1797: normalize once per file (after the pre-script has had its
-							// raw look at .orig); the parse below reads .norm (raw .orig on normalize
-							// failure). A fresh download whose NORMALIZED content is byte-identical
-							// to the previous pass keeps the staged '.txt' untouched.
+							// issue #1925: normalize once per file; the parse below reads .norm
+							// (raw .orig on normalize failure). A fresh download whose NORMALIZED
+							// content is byte-identical to the previous pass keeps the staged
+							// '.txt' untouched; any pre-script (below) runs on a staged copy of
+							// this normalized output, never on the raw download.
 							$pfb_norm = pfb_feed_normalize("{$file_dwn}.orig");
 							if (pfb_ip_norm_reuse_skip($downloaded_fresh, (bool) $custom, $orig_content_stale,
 							    $pfb_norm['changed'], file_exists("{$pfbfolder}/{$header}.txt"), $pfb_user_script)) {
@@ -3385,7 +3369,22 @@ function sync_package_pfblockerng($cron='') {
 								continue;
 							}
 
-							if (($fhandle = @fopen($pfb_norm['path'], 'r')) !== FALSE) {
+							// issue #1925: the pre-script runs on a staged copy of the
+							// normalized output -- '.orig' and '.norm' stay untouched; a
+							// failed transform keeps the last known-good staged list.
+							$pfb_parse_path = $pfb_norm['path'];
+							if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {
+								pfb_logger("\nExecuting pre-script: {$list['script_pre']}\n", 1);
+								$pfb_pre = pfb_list_pre_script_run($pfb_norm['path'], "{$file_dwn}.pre",
+								    $pfb_script_pre, $list['script_pre'], $header,
+								    escapeshellarg("{$file_dwn}.pre") . " {$list['vtype']} {$elog}");
+								if (!$pfb_pre['ok']) {
+									continue;
+								}
+								$pfb_parse_path = $pfb_pre['path'];
+							}
+
+							if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
 								while (($line = @fgets($fhandle)) !== FALSE) {
 									// issue #1004: incremented every iteration, regardless of outcome
 									$ip_lineno++;
@@ -3419,6 +3418,8 @@ function sync_package_pfblockerng($cron='') {
 							if ($fhandle) {
 								@fclose($fhandle);
 							}
+							// issue #1925: the staged pre-script copy is transient -- parsed above.
+							unlink_if_exists("{$file_dwn}.pre");
 
 							// One summary line per feed with the final count (mirrors the DNSBL
 							// strict-scheme WARNING) -- was previously one spammed line PER failed
@@ -3546,10 +3547,6 @@ function sync_package_pfblockerng($cron='') {
 							// Restore Original Downloaded file after Post Script function
 							if (file_exists("{$file_dwn}.orig.post")) {
 								@rename("{$file_dwn}.orig.post", "{$file_dwn}.orig");
-							}
-							// Restore Original Downloaded file after Pre Script function
-							if (file_exists("{$file_dwn}.orig.pre")) {
-								@rename("{$file_dwn}.orig.pre", "{$file_dwn}.orig");
 							}
 						}
 					}

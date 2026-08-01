@@ -137,21 +137,29 @@ final class ListScriptExitStatusTest extends TestCase
 
 	public function testPreScriptCallSiteGatesOnExitStatus(): void
 	{
-		$prePos = strpos(self::$applySource, 'Executing pre-script:');
+		// issue #1925: the pre-script now runs AFTER normalize + reuse-skip, on a
+		// staged copy of the normalized output — never before it.
+		$reuseSkipPos = strpos(self::$applySource, 'pfb_ip_norm_reuse_skip(');
+		$this->assertNotFalse($reuseSkipPos, 'vacuity: the IP-loop normalize/reuse-skip step must exist');
+
+		$prePos = strpos(self::$applySource, 'Executing pre-script:', $reuseSkipPos);
 		$this->assertNotFalse($prePos, 'vacuity: the pre-script call site must exist');
+		$this->assertGreaterThan($reuseSkipPos, $prePos,
+			'the pre-script must run after normalize + reuse-skip, never before it');
 
-		$normPos = strpos(self::$applySource, 'pfb_feed_normalize(', $prePos);
-		$this->assertNotFalse($normPos, 'vacuity: the normalize step after the pre-script must exist');
+		$parsePos = strpos(self::$applySource, 'pfb_ip_parse_line(', $prePos);
+		$this->assertNotFalse($parsePos, 'vacuity: the parse step after the pre-script must exist');
 
-		$between = substr(self::$applySource, $prePos, $normPos - $prePos);
-		$this->assertStringContainsString('pfb_list_script_exec(', $between,
-			'the pre-script must run through the exit-status-honouring runner');
-		$this->assertStringContainsString('!== 0', $between,
-			'the pre-script exit status must gate the parse — a failed transform is not feed data');
-		$this->assertStringContainsString('@rename("{$file_dwn}.orig.pre", "{$file_dwn}.orig")', $between,
-			'on failure the saved download must be restored over the failed script\'s leftovers');
+		$between = substr(self::$applySource, $prePos, $parsePos - $prePos);
+		$this->assertStringContainsString('pfb_list_pre_script_run(', $between,
+			'the pre-script must run through the staged-copy runner');
 		$this->assertStringContainsString('continue;', $between,
 			'on failure the row must skip the parse, keeping the last known-good staged list');
+		$this->assertStringContainsString('{$list[\'vtype\']}', $between,
+			'v4/v6 vtype must pass through to the pre-script args');
+
+		$this->assertStringNotContainsString('.orig.pre', self::$applySource,
+			'.orig.pre must be fully retired — the pre-script never touches the raw download');
 	}
 
 	public function testPostScriptCallSiteGatesOnExitStatus(): void
