@@ -4206,6 +4206,35 @@ function pfb_list_script_exec(string $script_path, string $script_name, string $
 }
 
 /*
+ * issue #1925: stage the normalized feed for a pre-script and run it. Copies
+ * $norm_path to $staged_path and hands the script the copy (in-place rewrite
+ * contract unchanged), so neither '.orig' nor '.norm' is ever touched. Honours
+ * the exit status (#1927): 'ok' FALSE on copy failure, non-zero exit, or the
+ * script deleting its input -- the staged copy is removed and the caller keeps
+ * its last known-good staging. On success 'path' is the staged copy to parse.
+ */
+function pfb_list_pre_script_run(string $norm_path, string $staged_path, string $script_path,
+    string $script_name, string $header, string $args_tail, ?string $tmo_prefix = NULL): array {
+
+	if (!@copy($norm_path, $staged_path)) {
+		pfb_logger("\n[ {$header} ] pre-script '{$script_name}' could not stage its input; skipping\n", 2);
+		return array('ok' => FALSE, 'path' => $norm_path);
+	}
+
+	if (pfb_list_script_exec($script_path, $script_name, 'pre', $header, $args_tail, $tmo_prefix) !== 0) {
+		unlink_if_exists($staged_path);
+		return array('ok' => FALSE, 'path' => $norm_path);
+	}
+
+	if (!file_exists($staged_path)) {
+		pfb_logger("\n[ {$header} ] pre-script '{$script_name}' deleted its staged input\n", 2);
+		return array('ok' => FALSE, 'path' => $norm_path);
+	}
+
+	return array('ok' => TRUE, 'path' => $staged_path);
+}
+
+/*
  * Setup-wizard decision helpers (pure; pinned by tests/php/WizardDecisionTest.php).
  * The pfblockerng_wizard.inc / pfblockerng_general.php controllers do the impure work
  * (read $_POST/$_GET/config, redirect, write_config, set $pfb_wizard); the branchy
