@@ -75,10 +75,6 @@ PERMIT_ALIAS = "pfbkillpermit"  # the Permit custom-list aliasname (config row 1
 ALIAS_TABLE = f"pfB_{HEADER}_v4"  # the pf alias table the rule references
 FEED_FILE = "pfb_killstates_ip.txt"
 
-# Settle budget for the alias replace + kill-states to land after a reload.
-SETTLE_SECS = 2.0
-
-
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -217,7 +213,6 @@ def _assert_fresh_connection_blocked(vm: SmokeVM, cl: SmokeVM) -> None:
         f"— is the rule present and referencing {ALIAS_TABLE}?\n{_state_diag(vm)}"
     )
     _civm_connect(cl)
-    time.sleep(1.5)
     pkts_after = _rule_block_packets(vm)
     assert pkts_after >= 0, (
         f"could not read the reject rule's packet counter after the connection attempt.\n{_state_diag(vm)}"
@@ -238,8 +233,9 @@ def _block_victim(vm: SmokeVM, ips: tuple[str, ...] = (VICTIM,), *, timeout: flo
     """
     h.write_local_feed(vm, FEED_FILE, "".join(f"{ip}/32\n" for ip in ips))
     h.force_ip_refetch(vm, f"{HEADER}_v4")
+    # h.reload() is the causal barrier: CLI -> sync_package -> table delta ->
+    # pfb_remove_states -> pfctl -k completes before it returns.
     h.reload(vm, "update", timeout=timeout)
-    time.sleep(SETTLE_SECS)
 
 
 def _unblock_baseline(vm: SmokeVM, *, kill_on: bool, timeout: float = 600.0) -> None:

@@ -87,6 +87,7 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     h.reload(smoke_vm, "update")
     h.wait_unbound_ready(smoke_vm)
     h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
+    smoke_vm._pfb_upstream_barrier = seed  # type: ignore[attr-defined]
     try:
         yield smoke_vm, client_vm
     finally:
@@ -116,11 +117,22 @@ def _upstream_block_lines(log: str, name: str) -> list[str]:
     return out
 
 
-# Absence checks cannot poll for a line that must NOT appear -- they settle, then read
-# once. The settle must cover the SAME async-flush window the positive path budgets
-# (timeout_s=8.0 below): with a shorter settle, an over-trigger whose line lands in the
-# gap reads as a clean pass (#723).
-_ABSENCE_SETTLE_S = 8.0
+def _consume_dnsbl_barrier(vm: SmokeVM, cvm: SmokeVM) -> None:
+    """Consume the fixture DNSBL seed event before asserting an async absence."""
+    barrier: str = vm._pfb_upstream_barrier  # type: ignore[attr-defined]
+    baseline_lines = _read_dnsbl_log(vm).splitlines()
+    h.flush_unbound_name(vm, barrier)
+    before = h.count_log_marker(vm, _DNSBL_LOG, barrier)
+    answer = h.dns_probe_client(cvm, barrier, "A")
+    assert h.is_vip(answer), f"DNSBL barrier {barrier} expected VIP, got {answer}"
+    h.wait_until(
+        lambda: h.count_log_marker(vm, _DNSBL_LOG, barrier) > before,
+        timeout=30.0,
+        interval=1.0,
+    )
+    new_lines = _read_dnsbl_log(vm).splitlines()[len(baseline_lines) :]
+    unexpected = [line for line in new_lines if line.startswith("DNSBL-python") and "Upstream_Block" in line]
+    assert not unexpected, f"Upstream_Block appeared before the absence assertion barrier: {unexpected}"
 
 
 def _wait_for_upstream_block_lines(vm: SmokeVM, name: str, *, timeout_s: float = 8.0, poll_s: float = 0.5) -> list[str]:
@@ -128,8 +140,8 @@ def _wait_for_upstream_block_lines(vm: SmokeVM, name: str, *, timeout_s: float =
 
     The python module logs asynchronously (a queue flush), so a fresh probe's line is
     not instantaneous. Bounded polling is steadier than a fixed sleep on slow CI VMs and
-    returns as soon as the line lands on fast paths. (Absence checks can't poll — they
-    keep a fixed settle, see the control tests.)
+    returns as soon as the line lands on fast paths. Absence controls consume a separate
+    causal DNSBL barrier before reading their target log.
     """
     deadline = time.monotonic() + timeout_s
     lines: list[str] = []
@@ -272,7 +284,7 @@ class TestUpstreamBlockAuthoritativeControl:
         ans = h.dns_probe_client(cvm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
-        time.sleep(_ABSENCE_SETTLE_S)
+        _consume_dnsbl_barrier(vm, cvm)
         log = _read_dnsbl_log(vm)
         lines = _upstream_block_lines(log, name)
         assert not lines, (
@@ -305,7 +317,7 @@ class TestUpstreamBlockForwarderNaturalControl:
         ans = h.dns_probe_client(cvm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
-        time.sleep(_ABSENCE_SETTLE_S)
+        _consume_dnsbl_barrier(vm, cvm)
         log = _read_dnsbl_log(vm)
         lines = _upstream_block_lines(log, name)
         assert not lines, (
@@ -334,7 +346,7 @@ class TestUpstreamBlockNormalControl:
         ans = h.dns_probe_client(cvm, name, "A")
         assert h.resolves_to(ans, h.STUB_DNS_A), f"Control name should resolve to sentinel {h.STUB_DNS_A}, got {ans}"
 
-        time.sleep(_ABSENCE_SETTLE_S)
+        _consume_dnsbl_barrier(vm, cvm)
         log = _read_dnsbl_log(vm)
         lines = _upstream_block_lines(log, name)
         assert not lines, (
@@ -508,7 +520,7 @@ class TestUpstreamCounterIncrement:
         # the log-line check), and the serial pytest run + PFB_DB_FLUSH_INTERVAL=1.0s mean
         # every earlier test's increment (NXRA/EDE15/EDE17 above) is long since flushed into
         # `baseline` by the time this test starts (the three control tests preceding this one
-        # each settle for _ABSENCE_SETTLE_S=8.0s, far past the 1s flush window). A bare
+        # each causal barrier, far past the 1s flush window). A bare
         # `final > baseline` would also pass if some OTHER probe's increment leaked into this
         # window — exact equality is the real proof this probe (and only this probe) counted.
         # A read that is still ERRORED at the deadline is a read problem, not a stuck counter
