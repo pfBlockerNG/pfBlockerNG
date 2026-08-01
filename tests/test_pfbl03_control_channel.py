@@ -971,17 +971,20 @@ class TestControlWatcherLoop:
         assert h.wait_applied(5)
         assert P.pfb["python_blacklist"] is False
 
-        # Re-arm blocking out-of-band, then replay an OLD seq (3, enable). The reader
+        # Re-arm blocking out-of-band, then replay an OLD seq (3, disable). The reader
         # must NOT apply it (3 <= 5), so blocking stays as we set it.
         P.pfb["python_blacklist"] = True
-        h.publish({"seq": 3, "cmd": "enable"})
-        time.sleep(0.3)  # give the watcher a few poll cycles
-        assert P.pfb["python_blacklist"] is True  # unchanged: stale seq ignored.
-        assert (h.read_applied() or 0) == 5  # applied marker did NOT regress.
+        h.publish({"seq": 3, "cmd": "disable"})
 
-        # A genuinely fresh seq (6, disable) IS applied -> blocking OFF again.
-        h.publish({"seq": 6, "cmd": "disable"})
-        assert h.wait_applied(6)
+        # A fresh unknown command proves the watcher consumed/progressed past the stale
+        # record without changing the state.
+        h.publish({"seq": 6, "cmd": "wipe-everything"})
+        assert h.wait_applied(6), f"applied marker after stale record: {h.read_applied()!r}"
+        assert P.pfb["python_blacklist"] is True, "stale disable changed blacklist state"
+
+        # A genuinely fresh seq (7, disable) IS applied -> blocking OFF again.
+        h.publish({"seq": 7, "cmd": "disable"})
+        assert h.wait_applied(7), f"applied marker after fresh disable: {h.read_applied()!r}"
         assert P.pfb["python_blacklist"] is False
 
     def test_preexisting_record_adopted_as_baseline_not_replayed(self, control_harness: _ControlHarness) -> None:
@@ -995,9 +998,8 @@ class TestControlWatcherLoop:
         h.start()
         # wait_applied(9) itself is the started gate here (seq 9 = baseline): the
         # watcher adopts it and publishes it without applying the command.
-        assert h.wait_applied(9)  # baseline adopted + published.
-        time.sleep(0.2)
-        assert P.pfb["python_blacklist"] is True  # NOT replayed.
+        assert h.wait_applied(9), f"applied marker: {h.read_applied()!r}"  # baseline adopted + published.
+        assert P.pfb["python_blacklist"] is True, "pre-existing disable was replayed"
 
         # A future advance (seq 10) DOES apply.
         h.publish({"seq": 10, "cmd": "disable"})
@@ -1034,14 +1036,14 @@ class TestPermissionBoundaryModel:
         before_bytes = open(h.channel, "rb").read()
         h.start()
         try:
-            assert h.wait_applied(1)
-            time.sleep(0.2)
+            assert h.wait_applied(1), f"applied marker: {h.read_applied()!r}"
             # Then: the reader consumed the command and wrote ONLY the applied marker --
             # the command channel itself is byte-for-byte unchanged (the reader is a
             # read-only consumer of it; only root writes the channel).
             after = os.stat(h.channel)
-            assert open(h.channel, "rb").read() == before_bytes
-            assert after.st_mtime == before.st_mtime
+            actual_bytes = open(h.channel, "rb").read()
+            assert actual_bytes == before_bytes, f"channel bytes changed: {actual_bytes!r}"
+            assert after.st_mtime == before.st_mtime, f"channel mtime changed: {after.st_mtime!r}"
             # The applied marker (which the reader DOES own) was written.
             assert os.path.exists(h.applied)
         finally:
