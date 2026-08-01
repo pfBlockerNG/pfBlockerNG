@@ -204,9 +204,9 @@ final class AlertsRowOutputEncodingTest extends TestCase
         // byte substr() -- explicitly OUT OF SCOPE when this test was first written
         // (issue #1814 follow-up) -- and pfb_hsc()'s ENT_SUBSTITUTE made the resulting
         // dangling lead byte render safely (U+FFFD) instead of blanking the cell.
-        // #1815 IS that follow-up: the site is now mb_substr(..., 'UTF-8'), which keeps
-        // the character whole instead of ever leaving a dangling lead byte, so no
-        // substitution is needed here anymore.
+        // #1815 IS that follow-up: the site now calls pfb_truncate() (a character-based
+        // mb_substr() wrapper), which keeps the character whole instead of ever leaving
+        // a dangling lead byte, so no substitution is needed here anymore.
         $domain = str_repeat('a', 58) . "\xC3\xA9" . 'trailing-domain-suffix.example';
         $this->assertGreaterThanOrEqual(60, strlen($domain));
 
