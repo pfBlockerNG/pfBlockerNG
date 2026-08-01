@@ -1367,11 +1367,9 @@ def init_standard(id: int, env: module_env) -> bool:
     # dnsbl_cache_stage() exactly like pfb_py_hsts above.
     pfb["pfb_py_tld"] = "pfb_py_tld.txt"
     pfb["pfb_py_ss"] = "pfb_py_ss.txt"
-    # ADR-06: per-feed manifest (the new shell->Python boundary) and the
-    # Python-emitted entry count. When the manifest is present, init builds the
-    # DNSBL structures from the raw feeds via the pure build() layer; otherwise
-    # it falls back to the legacy data/zone CSV load (shell/PHP still produce
-    # those files for that fallback).
+    # ADR-65: the per-feed manifest is the sole DNSBL source. Init builds matcher
+    # structures from its raw feed snapshots; a missing/invalid manifest fails loud
+    # and leaves them empty. Python emits the loaded entry count separately.
     pfb["pfb_py_sources"] = "pfb_py_sources.json"
     # ADR-10: the zero-downtime RELOAD SENTINEL. Path is chroot-relative (Unbound
     # is chrooted at /var/unbound, the module's CWD) -- so the in-chroot absolute path
@@ -1750,7 +1748,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 dnsbl_emit_reject_stats(pfb["pfb_py_reject_stats"], build_result.rejects)
                 dnsbl_built = True
 
-            # While reading 'data|zone' CSV files: Replace 'Feed/Group' pairs with an index value (Memory performance)
+            # ADR-65: seed the pass-through index for the retired CSV loader's close-only compatibility call.
             feedGroup_index = 0
 
             # Zone/Data dicts -- or close their entries when the manifest built them.

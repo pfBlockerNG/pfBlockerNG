@@ -19,8 +19,8 @@ no-IP-leak guarantee. It also pins the on-box wiring:
   * ``top1m_enabled`` is driven by ``config["top1m_enabled"]`` in the manifest;
   * ``dnsbl_emit_count`` writes the LOADED total (len(dataDB)+len(zoneDB)) to
     ``pfb_py_count`` in the format the UI reads (pfblockerng.inc:3149); and
-  * a missing/broken manifest yields ``None`` (init falls back to the legacy CSV
-    load -- shell/PHP still produce those files until Phase 5).
+  * a missing/broken manifest yields ``None``; manifest-only init fails loud and
+    leaves the matcher databases empty.
 
 The contract is DECISIONS, not list contents/counts (ADR.md SS2): the build's
 dicts differ from today's pruned lists by design (no dedup/collapse/whitelist/
@@ -299,7 +299,7 @@ class TestInitFromRawCounts:
 
 
 # --------------------------------------------------------------------------- #
-# Wiring robustness: absent / broken manifest -> None (init falls back to legacy).
+# Wiring robustness: absent / broken manifest -> None (manifest-only init fails loud).
 # --------------------------------------------------------------------------- #
 
 
