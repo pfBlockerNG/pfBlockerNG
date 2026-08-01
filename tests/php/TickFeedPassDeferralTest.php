@@ -34,8 +34,19 @@ use PHPUnit\Framework\TestCase;
  */
 final class TickFeedPassDeferralTest extends TestCase
 {
+	/**
+	 * Reaper for a stuck run, never a deadline the dispatch contract is judged against
+	 * (#2024, tracker #1517). Its expiry says STUCK/ENVIRONMENT and nothing about tick.
+	 */
+	private const SALVAGE_CAP_S = 30.0;
+
 	/** Per-test private sandbox for $pfb['dbdir'] -- see TickEntrypointTest::setUp(). */
 	private string $dbdir = '';
+
+	/** The argv recorder installPhpArgvRecorder() wrote, and its spawn log. */
+	private string $recorderPath = '';
+
+	private string $spawnLog = '';
 
 	private bool $hadDbdir = FALSE;
 	private mixed $originalDbdir = NULL;
@@ -190,51 +201,65 @@ final class TickFeedPassDeferralTest extends TestCase
 		], $GLOBALS['pfb']['dbdir']);
 	}
 
+	/**
+	 * Install the argv recorder and return the $pfb['php'] value that drives it.
+	 *
+	 * The value is a `<spawn counter>; <recorder>` pair, not a bare path: $pfb['php'] is
+	 * interpolated into exec("{$pfb['php']} <script> <args> ... &"), so the counter runs
+	 * in the FOREGROUND of that exec() -- the shape installLedgerRequeueCommand() already
+	 * relies on -- and only the recorder is backgrounded. exec() returns once the
+	 * foreground segment has run, so the moment pfblockerng_tick() returns the spawn log
+	 * holds exactly one byte per dispatch: the dispatch COUNT is an observed fact rather
+	 * than something awaitRecordedInvocations() has to infer from how long nothing else
+	 * showed up (#2024).
+	 */
 	private function installPhpArgvRecorder(): string
 	{
-		$phpPath = "{$this->dbdir}/php-recorder";
-		$script   = <<<'SH'
+		$this->recorderPath = "{$this->dbdir}/php-recorder";
+		$this->spawnLog     = "{$this->dbdir}/php-spawns";
+		// Created empty up front so an empty spawn log reads as "tick dispatched nothing"
+		// rather than as "the counter never got the chance to run".
+		file_put_contents($this->spawnLog, '');
+		// The argv file is published by rename, so a *.done.* path is never a partial read.
+		$script = <<<'SH'
 #!/bin/sh
-active="${0}.active.$$"
-done="${0}.done.$$"
-tmp="${done}.tmp"
-true > "$active"
-trap 'rm -f "$active" "$tmp"' EXIT HUP INT TERM
+tmp="${0}.tmp.$$"
 printf '%s\0' "$@" > "$tmp"
-mv "$tmp" "$done"
+mv "$tmp" "${0}.done.$$"
 SH;
-		file_put_contents($phpPath, $script . "\n");
-		chmod($phpPath, 0755);
-		return $phpPath;
+		file_put_contents($this->recorderPath, $script . "\n");
+		chmod($this->recorderPath, 0755);
+		return 'printf x >> ' . escapeshellarg($this->spawnLog)
+			. '; ' . escapeshellarg($this->recorderPath);
 	}
 
-	/** @return list<list<string>> */
-	private function awaitRecordedInvocations(string $phpPath): array
+	/**
+	 * Block until every dispatch this tick spawned has published its argv.
+	 *
+	 * The wait ends on the event -- one *.done.* marker per counted spawn -- so a tick
+	 * that dispatched nothing returns [] immediately and a tick that dispatched twice is
+	 * reported as two invocations, both without consulting the clock. The cap below only
+	 * reaps a run whose recorder never finished; its expiry is an environment verdict.
+	 *
+	 * @return list<list<string>>
+	 */
+	private function awaitRecordedInvocations(): array
 	{
-		$deadline    = hrtime(TRUE) + 2_000_000_000;
-		$stableSince = NULL;
-		$donePaths   = [];
-		while (hrtime(TRUE) < $deadline) {
-			$now         = hrtime(TRUE);
-			$currentDone = glob("{$phpPath}.done.*") ?: [];
-			$activePaths = glob("{$phpPath}.active.*") ?: [];
-			sort($currentDone);
-			if ($currentDone !== [] && $activePaths === []) {
-				if ($currentDone !== $donePaths) {
-					$donePaths   = $currentDone;
-					$stableSince = $now;
-				} elseif ($stableSince !== NULL && $now - $stableSince >= 200_000_000) {
-					break;
-				}
-			} else {
-				$stableSince = NULL;
+		$spawned   = strlen((string) @file_get_contents($this->spawnLog));
+		$deadline  = microtime(TRUE) + self::SALVAGE_CAP_S;
+		$donePaths = [];
+		while (TRUE) {
+			$donePaths = glob("{$this->recorderPath}.done.*") ?: [];
+			if (count($donePaths) >= $spawned || microtime(TRUE) >= $deadline) {
+				break;
 			}
 			usleep(1000);
 		}
-		$this->assertNotEmpty($donePaths,
-			'tick dispatch must complete at the configured PHP executable within 2 seconds');
-		$this->assertSame([], glob("{$phpPath}.active.*") ?: [],
-			'all configured PHP invocations must finish before argv is asserted');
+		sort($donePaths);
+		$this->assertCount($spawned, $donePaths, sprintf(
+			'STUCK/ENVIRONMENT: %d of the %d recorder(s) tick spawned published argv within the '
+			. '%ss salvage cap -- the run is stuck or the environment is broken, not a '
+			. 'behavioural failure', count($donePaths), $spawned, self::SALVAGE_CAP_S));
 
 		$recorded = [];
 		foreach ($donePaths as $donePath) {
@@ -501,8 +526,7 @@ SH;
 	{
 		$this->seedTickPrereqs('Disabled');
 		pfb_global();
-		$fakePhp = $this->installPhpArgvRecorder();
-		$GLOBALS['pfb']['php'] = $fakePhp;
+		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
 		if (!is_dir($GLOBALS['pfb']['logdir'])) {
 			@mkdir($GLOBALS['pfb']['logdir'], 0755, TRUE);
 		}
@@ -528,7 +552,7 @@ SH;
 
 		$this->assertSame([
 			['/usr/local/www/pfblockerng/pfblockerng.php', 'pfb_trigger', 'scope=both', 'force=false', 'trigger=manual'],
-		], $this->awaitRecordedInvocations($fakePhp),
+		], $this->awaitRecordedInvocations(),
 			'disabled pending apply must dispatch exactly once with the manual trigger argv');
 		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
 		$this->assertSame([
@@ -604,8 +628,7 @@ SH;
 	{
 		$this->seedTickPrereqs('24');
 		pfb_global();
-		$fakePhp = $this->installPhpArgvRecorder();
-		$GLOBALS['pfb']['php'] = $fakePhp;
+		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
 		$now = time();
 		$this->seedDueLedgerEntry('cron', $now);
 		$this->seedFutureLedgerEntry('dcc', $now);
@@ -615,15 +638,14 @@ SH;
 
 		$this->assertSame([
 			['/usr/local/www/pfblockerng/pfblockerng.php', 'cron'],
-		], $this->awaitRecordedInvocations($fakePhp));
+		], $this->awaitRecordedInvocations());
 	}
 
 	public function testDccUsesConfiguredPhpExactlyOnce(): void
 	{
 		$this->seedTickPrereqs('24');
 		pfb_global();
-		$fakePhp = $this->installPhpArgvRecorder();
-		$GLOBALS['pfb']['php'] = $fakePhp;
+		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
 		$now = time();
 		$this->seedFutureLedgerEntry('cron', $now);
 		$this->seedDueLedgerEntry('dcc', $now);
@@ -633,15 +655,14 @@ SH;
 
 		$this->assertSame([
 			['/usr/local/www/pfblockerng/pfblockerng.php', 'dcc'],
-		], $this->awaitRecordedInvocations($fakePhp));
+		], $this->awaitRecordedInvocations());
 	}
 
 	public function testBlUsesConfiguredPhpExactlyOnce(): void
 	{
 		$this->seedTickPrereqs('24');
 		pfb_global();
-		$fakePhp = $this->installPhpArgvRecorder();
-		$GLOBALS['pfb']['php'] = $fakePhp;
+		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
 		$GLOBALS['pfb']['enable'] = PfbToggle::On;
 		$GLOBALS['pfb']['blconfig'] = [
 			'blacklist_enable'   => 'Enable',
@@ -660,7 +681,7 @@ SH;
 
 		$this->assertSame([
 			['/usr/local/www/pfblockerng/pfblockerng.php', 'bl', 'test-list'],
-		], $this->awaitRecordedInvocations($fakePhp));
+		], $this->awaitRecordedInvocations());
 	}
 
 	public function testDisabledManualChildRequeueSurvivesDispatch(): void
@@ -677,15 +698,17 @@ SH;
 		pfb_due_ledger_write_entry('cron', $expected, $GLOBALS['pfb']['dbdir']);
 		$this->seedFutureLedgerEntry('dcc', $now);
 		$this->seedFutureLedgerEntry('bl', $now);
-		$fakePhp = $this->installPhpArgvRecorder();
-		$requeue = $this->installLedgerRequeueCommand();
-		$GLOBALS['pfb']['php'] = escapeshellarg($requeue) . '; ' . escapeshellarg($fakePhp);
+		$recorderCmd = $this->installPhpArgvRecorder();
+		$requeue     = $this->installLedgerRequeueCommand();
+		// Another foreground segment ahead of the recorder's own -- both run inside the
+		// dispatching exec(), only the recorder is backgrounded.
+		$GLOBALS['pfb']['php'] = escapeshellarg($requeue) . '; ' . $recorderCmd;
 
 		pfblockerng_tick();
 
 		$this->assertSame([
 			['/usr/local/www/pfblockerng/pfblockerng.php', 'pfb_trigger', 'scope=both', 'force=false', 'trigger=manual'],
-		], $this->awaitRecordedInvocations($fakePhp));
+		], $this->awaitRecordedInvocations());
 		$this->assertSame($expected,
 			pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']),
 			'a child lock-loss requeue must survive the parent dispatch path');
