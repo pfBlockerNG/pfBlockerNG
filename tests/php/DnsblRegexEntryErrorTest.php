@@ -38,13 +38,14 @@ final class DnsblRegexEntryErrorTest extends TestCase
 	}
 
 	/** @return array<int, string> */
-	private static function errors(string $contents, bool $regexCap = FALSE, ?string $python = null, ?string $timeout = null): array
+	private static function errors(string $contents, bool $regexCap = FALSE, ?string $python = null, ?string $timeout = null, ?string $script = null): array
 	{
 		return pfb_dnsbl_regex_validation_errors(
 			$contents,
 			$python ?? self::$python,
 			$regexCap,
-			$timeout ?? self::$timeout
+			$timeout ?? self::$timeout,
+			$script
 		);
 	}
 
@@ -237,22 +238,37 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		$this->assertStringContainsString('Python', implode('\n', $missingTimeout));
 	}
 
-	public function testMissingRulesModuleFailsClosedWithoutSpawningAPythonProcess(): void
+	public function testMissingRulesModuleFailsClosed(): void
 	{
-		// issue #1765: the probe is now a shipped script ($script = __DIR__ .
-		// '/pfb_dnsbl_regex_rules.py'), not an embedded nowdoc -- pin the guard
-		// that fires when it is absent/unreadable. The real shipped file is
-		// never deleted: rename it out of the way for the duration of the call.
-		$script = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfb_dnsbl_regex_rules.py';
-		$this->assertFileIsReadable($script);
-		$hidden = $script . '.hidden-for-test';
-		$this->assertTrue(rename($script, $hidden));
+		// issue #1765: the probe is a shipped script now, not an embedded nowdoc --
+		// pin the guard that fires when it is absent. Injected through the same
+		// test seam the interpreter and the timeout launcher already use, so the
+		// tracked production file is never touched (an interrupted run must not be
+		// able to leave the shipped module renamed out of the tree).
+		$missing = sys_get_temp_dir() . '/pfb_absent_rules_' . bin2hex(random_bytes(6)) . '.py';
+		$this->assertFileDoesNotExist($missing);
+		$this->assertSame(
+			['Python regex validator: rules module unavailable'],
+			self::errors("^ads\\.example\\.com$\n", FALSE, null, null, $missing)
+		);
+	}
+
+	public function testUnusableRulesModulePathFailsClosedInsteadOfSpawningPython(): void
+	{
+		// A DIRECTORY is readable, so an is_readable()-only guard would fall through
+		// and hand the path to the interpreter, surfacing a generic launcher/exit
+		// diagnostic instead of the specific one. The guard must require a FILE.
+		$directory = sys_get_temp_dir() . '/pfb_rules_dir_' . bin2hex(random_bytes(6));
+		$this->assertTrue(mkdir($directory));
 		try {
-			$errors = self::errors("^ads\\.example\\.com$\n");
+			$this->assertDirectoryIsReadable($directory);
+			$this->assertSame(
+				['Python regex validator: rules module unavailable'],
+				self::errors("^ads\\.example\\.com$\n", FALSE, null, null, $directory)
+			);
 		} finally {
-			$this->assertTrue(rename($hidden, $script));
+			rmdir($directory);
 		}
-		$this->assertSame(['Python regex validator: rules module unavailable'], $errors);
 	}
 
 	public function testBatchUsesOnePythonLaunch(): void

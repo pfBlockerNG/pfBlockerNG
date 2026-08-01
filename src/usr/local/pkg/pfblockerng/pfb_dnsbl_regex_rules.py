@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 import sys
+import warnings
 
 # Length ceiling (heuristic): a pattern over this many characters is dropped
 # at load ONLY when the opt-in "Limit long/complex regex" setting is enabled.
@@ -170,7 +171,16 @@ def main(argv: list[str]) -> int:
             failed = True
             continue
         try:
-            re.compile(pattern)
+            # Only real "line N:" diagnostics may reach stderr: PHP turns EVERY
+            # non-empty stderr line into an admin-facing validation error. A pattern
+            # that compiles but warns (e.g. "[[a]]" -> FutureWarning "Possible nested
+            # set") would otherwise leak this file's absolute path AND its source line
+            # as two bogus errors -- warnings can resolve the source now that the probe
+            # runs as a FILE rather than via ``python -c``. The resolver compiles the
+            # same patterns at load without surfacing warnings either.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                re.compile(pattern)
         except Exception as error:
             _report(line_number, pattern, f"Python regex compile error: {error}")
             failed = True

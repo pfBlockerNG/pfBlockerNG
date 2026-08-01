@@ -40,7 +40,7 @@ line { (Pattern Comment? | Comment)? }
   // char and the "#" never reaches Comment -- while "\\#" (an escaped BACKSLASH) leaves
   // the following "#" free to start the Comment, because the first alternative already
   // ate both backslashes as a pair. That parity is the whole rule, and it matches
-  // pfb_split_regex_line() in PHP and pfb_unbound.py byte for byte.
+  // pfb_split_regex_line() in PHP and pfb_dnsbl_regex_rules.py byte for byte.
   //
   // The dangling-backslash case (a line ENDING in "\\") is a trailing OPTION on Pattern,
   // never a patternChar alternative: as an alternative it would let the tokenizer take a
