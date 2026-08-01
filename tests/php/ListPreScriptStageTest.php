@@ -43,8 +43,12 @@ final class ListPreScriptStageTest extends TestCase
 		} else {
 			unset($GLOBALS['pfb']);
 		}
-		exec('chmod -R u+rwx ' . escapeshellarg($this->tmp));
-		exec('rm -rf ' . escapeshellarg($this->tmp));
+		// A test may leave a 0555 dir behind (copy-failure case) -- restore write
+		// perms so the house cleanup helper can remove it.
+		foreach (glob("{$this->tmp}/*", GLOB_ONLYDIR) ?: [] as $d) {
+			@chmod($d, 0755);
+		}
+		rmdir_recursive($this->tmp);
 	}
 
 	private function makeScript(string $name, string $body): string

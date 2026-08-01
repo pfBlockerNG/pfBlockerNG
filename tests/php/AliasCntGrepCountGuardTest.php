@@ -44,7 +44,7 @@ final class AliasCntGrepCountGuardTest extends TestCase
 	private const ACCUMULATION_RE = '/\$alias_cnt\s*=\s*\$alias_cnt\s*\+\s*\$list_cnt\s*;/';
 	private const COUNT_ASSIGN_RE = '/\$list_cnt\s*=\s*pfb_count_lines\([^;]*\)\s*\?\?\s*0\s*;/';
 
-	public function testVacuityExactlyThreeAccumulationSitesExist(): void
+	public function testVacuityExactlyFourAccumulationSitesExist(): void
 	{
 		$count = preg_match_all(self::ACCUMULATION_RE, self::$src);
 		$this->assertSame(4, $count,
