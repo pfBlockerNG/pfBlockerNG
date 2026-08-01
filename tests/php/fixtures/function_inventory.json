@@ -1896,6 +1896,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": "'/usr/bin/timeout'"
+            },
+            {
+                "name": "script",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
             }
         ]
     },

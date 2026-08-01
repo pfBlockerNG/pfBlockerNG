@@ -2556,8 +2556,8 @@ const PFB_REGEX_DESCRIPTION_MAX = 15;
  * way to re.compile().
  *
  * Twins that must agree, each with its own tests: pfb_split_regex_line() in
- * pfb_unbound.py (the resolver's load path), the split_line() helper inside this
- * file's validator probe, and the Pattern/Comment token pair in
+ * pfb_dnsbl_regex_rules.py (the ONE Python copy -- the resolver imports it and this
+ * file's validator probe runs it), and the Pattern/Comment token pair in
  * tools/webassets/lezer-pfb-regex-list/src/pfb-regex-list.grammar (the editor).
  *
  * @return array{0: string, 1: ?string} [pattern, description]; description NULL
@@ -2637,9 +2637,11 @@ function pfb_dnsbl_regex_description_warnings(string $contents): array
  *
  * @param bool $regex_cap Mirrors the "Limit long/complex regex" toggle: gates the
  *     save-time length-cap diagnostic so it agrees with the resolver's load-time drop.
+ * @param ?string $script Test seam, like $python and $timeout_bin: NULL resolves the
+ *     shipped module beside this file, which is what production always uses.
  * @return array<int, string> Non-empty validation or infrastructure diagnostics.
  */
-function pfb_dnsbl_regex_validation_errors(string $contents, string $python, bool $regex_cap, string $timeout_bin = '/usr/bin/timeout'): array
+function pfb_dnsbl_regex_validation_errors(string $contents, string $python, bool $regex_cap, string $timeout_bin = '/usr/bin/timeout', ?string $script = NULL): array
 {
 	if ($contents === '') {
 		return [];
@@ -2650,8 +2652,10 @@ function pfb_dnsbl_regex_validation_errors(string $contents, string $python, boo
 	if ($timeout_bin === '' || !is_executable($timeout_bin)) {
 		return ['Python regex validator: timeout launcher unavailable'];
 	}
-	$script = __DIR__ . '/pfb_dnsbl_regex_rules.py';
-	if (!is_readable($script)) {
+	$script = $script ?? __DIR__ . '/pfb_dnsbl_regex_rules.py';
+	// is_file() as well as is_readable(): a directory is readable, and handing one to
+	// the interpreter would surface a generic launcher diagnostic instead of this one.
+	if (!is_file($script) || !is_readable($script)) {
 		return ['Python regex validator: rules module unavailable'];
 	}
 	$stderr = tmpfile();

@@ -274,6 +274,10 @@ class TestStaticCapAtLoad:
 # the module's, not a copy.
 # --------------------------------------------------------------------------- #
 def test_pfb_unbound_reexports_are_the_same_objects_as_pfb_dnsbl_regex_rules() -> None:
+    # Known limit of the `is` check on REGEX_STATIC_LEN_CAP: CPython interns small ints,
+    # so a re-introduced duplicate literal of the SAME value would still pass here. That
+    # case is behaviourally identical, and any DIFFERING value (the drift that matters)
+    # fails, as does a re-defined function -- both mutation-checked.
     for name in ("REGEX_STATIC_LEN_CAP", "_regex_is_catastrophic_shape", "pfb_split_regex_line"):
         assert getattr(pfb_unbound, name) is getattr(pfb_dnsbl_regex_rules, name), (
             f"pfb_unbound.{name} is not the same object as pfb_dnsbl_regex_rules.{name} -- single-source broken"

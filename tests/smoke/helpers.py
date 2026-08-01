@@ -262,8 +262,8 @@ class DnsblCase:
                        len > REGEX_STATIC_LEN_CAP check), so it never enters regexDB
                        or the admitted count. Catastrophic shapes (nested-quantifier
                        / alternation-overlap) are dropped always-on via
-                       pfb_unbound.py:_regex_is_catastrophic_shape, independent of
-                       this flag.
+                       pfb_dnsbl_regex_rules.py:_regex_is_catastrophic_shape (which
+                       pfb_unbound.py imports), independent of this flag.
       custom_domains -> the DNSBL Group "Custom_List" (the list's base64 'custom'
                        field). pfBlockerNG auto-generates a synthetic
                        '{aliasname}_custom' row from it (inc:7752) which the manifest

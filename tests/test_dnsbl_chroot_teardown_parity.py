@@ -77,6 +77,15 @@ def test_both_chroot_teardown_lists_cover_every_shipped_python_file() -> None:
         )
 
 
+def test_an_imported_module_is_staged_before_the_file_that_imports_it() -> None:
+    """`pfb_unbound.py` imports `pfb_dnsbl_regex_rules` at module scope and
+    `dnsbl_cache_stage()` copies `PFB_PY_SHIPPED` in list order, so the dependency has
+    to be staged first: a resolver load landing between the two copies would otherwise
+    find the importer without its module and die with `ModuleNotFoundError`."""
+    shipped = _shipped_files()
+    assert shipped.index("pfb_dnsbl_regex_rules.py") < shipped.index("pfb_unbound.py"), shipped
+
+
 def test_the_shipped_set_actually_reaches_the_parity_check() -> None:
     """Guard against the check above passing vacuously: the shipped set must be
     non-trivial and must really contain the resolver's own entry point."""

@@ -322,9 +322,12 @@ aliastables() {
 # (re-run on every save/restore, never restored stale); save = stage then archive the
 # GENERATED set plus exact TOP1M detector sidecars; restore = boot earlyshellcmd, untar
 # the cached files THEN stage. Naming contract: a new generated file MUST keep the
-# pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED + pkg-plist wiring
-# (a NAME-MAPPED shipped file -- source basename != chroot basename -- is the sole
-# exception: it needs its own explicit stage/save handling instead; see pfb_py_tld.txt).
+# pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED and in the two
+# chroot teardown lists in pfblockerng.inc (the port's plist is GENERATED from the stagedir,
+# so packaging needs nothing) -- a NAME-MAPPED shipped file (source basename != chroot
+# basename) is the sole exception: it needs its own explicit stage/save handling instead;
+# see pfb_py_tld.txt. Order matters: a module goes BEFORE the file that imports it, so a
+# load racing the staging loop never sees the importer without its dependency.
 dnsbl_cache() {
 	# Overridable for unit tests; default to the live locations.
 	pfbchroot="${pfbchroot:-/var/unbound}"
@@ -334,7 +337,7 @@ dnsbl_cache() {
 	pathtar="${pathtar:-/usr/bin/tar}"
 
 	# The shipped (static) DNSBL python files -- the ONE definition of the set.
-	PFB_PY_SHIPPED='pfb_unbound.py pfb_dnsbl_regex_rules.py pfb_unbound_include.inc pfb_py_hsts.txt'
+	PFB_PY_SHIPPED='pfb_dnsbl_regex_rules.py pfb_unbound.py pfb_unbound_include.inc pfb_py_hsts.txt'
 
 	dnsbl_cache_stage() {
 		mkdir -p "${pfbchroot}"
