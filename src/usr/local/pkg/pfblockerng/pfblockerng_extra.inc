@@ -3257,8 +3257,10 @@ function pfb_due_ledger_is_due_from_entry(?array $entry, int $now): bool
 /**
  * pfb_due_ledger_read_entry — read one job entry from the on-disk ledger.
  *
- * Returns NULL on absent file, I/O error, or any corruption (fail-safe: absent
- * is always treated as "due now" by pfb_due_ledger_is_due_from_entry).
+ * Returns NULL on absent file, I/O error, any corruption, OR a lock-acquire
+ * timeout (fail-safe: absent is always treated as "due now" by
+ * pfb_due_ledger_is_due_from_entry). Only the timeout also sets $unavailable --
+ * see below, and never conflate the two.
  *
  * issue #1780: a bounded lock acquire can also EXPIRE -- that is NOT the
  * same as "absent" (NULL already means "absent / corrupt" to every existing
@@ -3891,8 +3893,10 @@ function pfblockerng_tick(?array $ps_lines = NULL): void
 /**
  * pfb_sync_status_read_all — read the full ledger as a nested array.
  *
- * Absent file, unreadable file, or corrupt/non-object JSON all read as an
- * empty ledger (fail-open for display), never throws.
+ * Absent file, unreadable file, corrupt/non-object JSON, or a lock-acquire
+ * timeout all read as an empty ledger (fail-open for display), never throws.
+ * Only the timeout also sets $unavailable -- see below, and never conflate the
+ * two: [] alone cannot tell a caller which happened.
  *
  * issue #1780: a bounded lock acquire can also EXPIRE -- that is NOT the
  * same as "empty" ([] already means "empty ledger" to every existing caller),
