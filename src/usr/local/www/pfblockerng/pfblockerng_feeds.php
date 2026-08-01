@@ -893,7 +893,7 @@ print ($section);
 								// http(s):// scheme becomes a clickable <a href> -- htmlspecialchars
 								// does not neutralise a `javascript:` scheme, so a bare strpos('http')
 								// would render `javascript:...http...` as an executable link.
-								$url_hsc = htmlspecialchars($row['url'], ENT_QUOTES, 'UTF-8');
+								$url_hsc = htmlspecialchars($row['url'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 								if (str_starts_with($row['url'], 'http://') || str_starts_with($row['url'], 'https://')) {
 									print ("<a target=\"_blank\" href=\"{$url_hsc}\">{$url_hsc}</a>");
 								} else {
@@ -906,7 +906,7 @@ print ($section);
 					<?php
 								// issue #1069: the header is another raw feed-derived sink in
 								// this same table row -- HTML-encode it before it enters markup.
-								print (htmlspecialchars($row['header'], ENT_QUOTES, 'UTF-8'));
+								print (htmlspecialchars($row['header'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
 					?>
 				</td>
 			</tr>
