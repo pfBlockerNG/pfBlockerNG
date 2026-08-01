@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import pytest
@@ -30,3 +31,15 @@ def test_applied_marker_expiry_is_distinct(monkeypatch: Any) -> None:
 
     with pytest.raises(RuntimeError, match="salvage cap expired / stuck or environment.*applied marker.*sequence 7"):
         harness.wait_applied(7, timeout=0)
+
+
+def test_record_read_expiry_is_distinct() -> None:
+    harness = object.__new__(channel._ControlHarness)
+    harness.read_condition = threading.Condition()
+    harness.read_seqs = []
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"salvage cap expired / stuck or environment.*record read.*sequence 7.*observed \[\]",
+    ):
+        harness.wait_read(7, timeout=0)

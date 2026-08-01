@@ -711,9 +711,14 @@ class _ControlHarness:
         except (OSError, ValueError):
             return None
 
-    def wait_read(self, seq: int, count: int = 1, timeout: float = 3.0) -> bool:
+    def wait_read(self, seq: int, count: int = 1, timeout: float = 3.0) -> None:
         with self.read_condition:
-            return self.read_condition.wait_for(lambda: self.read_seqs.count(seq) >= count, timeout=timeout)
+            if self.read_condition.wait_for(lambda: self.read_seqs.count(seq) >= count, timeout=timeout):
+                return
+            raise RuntimeError(
+                "salvage cap expired / stuck or environment: control record read marker "
+                f"to observe sequence {seq} {count} time(s); observed {self.read_seqs!r}"
+            )
 
     def pause_read(self, seq: int) -> tuple[threading.Event, threading.Event]:
         started = threading.Event()
@@ -1016,7 +1021,7 @@ class TestControlWatcherLoop:
         # must NOT apply it (3 <= 5), so blocking stays as we set it.
         P.pfb["python_blacklist"] = True
         h.publish({"seq": 3, "cmd": "disable"})
-        assert h.wait_read(3), f"control records read: {h.read_seqs!r}"
+        h.wait_read(3)
 
         # A fresh unknown command proves the watcher consumed/progressed past the stale
         # record without changing the state.
@@ -1041,7 +1046,7 @@ class TestControlWatcherLoop:
         # wait_applied(9) itself is the started gate here (seq 9 = baseline): the
         # watcher adopts it and publishes it without applying the command.
         h.wait_applied(9)  # baseline adopted + published.
-        assert h.wait_read(9, count=2), f"control records read: {h.read_seqs!r}"
+        h.wait_read(9, count=2)
 
         # A fresh unknown command proves the watcher progressed past the baseline
         # without changing the state.
@@ -1084,7 +1089,7 @@ class TestPermissionBoundaryModel:
         release: threading.Event | None = None
         try:
             h.wait_applied(1)
-            assert h.wait_read(1, count=2), f"control records read: {h.read_seqs!r}"
+            h.wait_read(1, count=2)
             read_started, release = h.pause_read(2)
             h.publish({"seq": 2, "cmd": "wipe-everything"})
             assert read_started.wait(3.0), f"control records read: {h.read_seqs!r}"
