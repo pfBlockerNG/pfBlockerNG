@@ -162,6 +162,10 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page=IP_PAGE,
         field="suppression",
         config_path="installedpackages/pfblockerngipsettings/config/0/suppression",
+        # issue #1907: toggle-adapter field -- unchecked save stores the explicit 'off'.
+        off="off",
+        # Registry default 'on': an absent key means the feature is ON.
+        absent="on",
     ),
     ToggleFlow(
         name="ip_global_logging",
@@ -219,6 +223,8 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts",
         # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
         off="off",
+        # Registry default 'on' since issue #1907: an absent key means the feature is ON.
+        absent="on",
     ),
     ToggleFlow(
         name="dnsbl_regex",
@@ -243,6 +249,10 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_cache",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache",
+        # issue #1907: toggle-adapter field -- unchecked save stores the explicit 'off'.
+        off="off",
+        # Registry default 'on': an absent key means the feature is ON.
+        absent="on",
     ),
     ToggleFlow(
         name="dnsbl_cache_flush",
