@@ -170,6 +170,9 @@ def test_pending_system_notices_chrome_is_not_rejected() -> None:
     diagnostics on the page); the shape oracle must accept it -- and must still
     reject a real diagnostic rendered alongside the same chrome.
     """
+    # Premise pin: the chrome really carries the bare level word that tripped the
+    # old substring assert -- an edit dropping it would leave this test vacuous.
+    assert "Notice" in NOTICES_CHROME
     chrome_body = GOOD_BODY.replace("<body>", f"<body>{NOTICES_CHROME}")
     assert body_has_php_error(chrome_body) is None, "pending-notices chrome wrongly flagged as a PHP diagnostic"
     assert evaluate_render("/p", 200, chrome_body, (GOOD_MARKER,)).ok
