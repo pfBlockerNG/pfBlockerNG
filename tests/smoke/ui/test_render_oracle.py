@@ -148,6 +148,41 @@ def test_level_words_in_legit_copy_are_not_rejected(copy: str) -> None:
     assert evaluate_render("/p", 200, body, (GOOD_MARKER,)).ok, f"oracle wrongly rejected legit copy: {copy!r}"
 
 
+# The chrome pfSense renders into EVERY page while a system notice is pending --
+# captured from issue #1856's failing leg (release run 30424647767): the notice
+# bell, the Notices modal, and the pending notice's own text. No PHP diagnostic
+# anywhere in it.
+NOTICES_CHROME = (
+    '<i class="fa-solid fa-bell text-danger" title="Notices"></i>'
+    '<h3 class="modal-title" id="myModalLabel">Notices</h3>'
+    "<h4>warning</h4><ul><li><b></b>"
+    "Boot verification failed for default. Netgate pfSense Plus was automatically "
+    "rebooted back into default_20260729033017.<i>@ 2026-07-29 05:20:16</i></li></ul>"
+)
+
+
+def test_pending_system_notices_chrome_is_not_rejected() -> None:
+    """(b) false-positive guard (#1856): the pending-notices chrome PASSES.
+
+    A box with a pending pfSense system notice renders 'Notices' (bell title +
+    modal heading) plus the notice text into every page. A bare-substring
+    'Notice' assert trips on that chrome (how #1856 failed, with zero PHP
+    diagnostics on the page); the shape oracle must accept it -- and must still
+    reject a real diagnostic rendered alongside the same chrome.
+    """
+    chrome_body = GOOD_BODY.replace("<body>", f"<body>{NOTICES_CHROME}")
+    assert body_has_php_error(chrome_body) is None, "pending-notices chrome wrongly flagged as a PHP diagnostic"
+    assert evaluate_render("/p", 200, chrome_body, (GOOD_MARKER,)).ok
+
+    # Branch coverage: the chrome must not MASK a real diagnostic either.
+    broken = chrome_body.replace(
+        "<body>", "<body>Notice: Undefined variable $x in /usr/local/www/pfblockerng/x.php on line 3<br />"
+    )
+    result = evaluate_render("/p", 200, broken, (GOOD_MARKER,))
+    assert not result.ok, "a real diagnostic next to the Notices chrome must still be rejected"
+    assert any("PHP diagnostic" in r for r in result.reasons)
+
+
 def test_non_200_is_rejected() -> None:
     """(a): a 500 fails even with a clean, marker-bearing body (200-vs-not is a real branch)."""
     assert evaluate_render("/p", 200, GOOD_BODY, (GOOD_MARKER,)).ok  # before: 200 passes
