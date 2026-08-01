@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,7 @@ def test_issue_openers_never_reopen_closed_issues() -> None:
         creators.append(path.name)
         offenders.extend(f"{path.name}: {command}" for command in commands if command.startswith("gh issue reopen "))
         for step in creation_steps:
+            step = re.split(r"\n  [a-z][a-z0-9_-]*:", step, maxsplit=1)[0]
             dedup_commands = [
                 command
                 for command in _commands(step)
