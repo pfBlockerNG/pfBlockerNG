@@ -12,6 +12,8 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 _WORKFLOW_GLOBS = ("*.yml", "*.yaml")
 
 _MAPPING_KEY_RE = re.compile(r"^(?P<key>[A-Za-z0-9_.-]+|'[^']*'|\"[^\"]*\")\s*:(?P<rest>.*)$")
+_CANONICAL_ON_RE = re.compile(r"^on:\s*(?:#.*)?$")
+_CANONICAL_EVENT_RE = re.compile(r"^  [A-Za-z0-9_.-]+:")
 _WORKFLOW_RUN_RE = re.compile(r"^  workflow_run:\s*(?:#.*)?$")
 _WORKFLOWS_RE = re.compile(r"^    workflows:\s*(?:#.*)?$")
 _WORKFLOW_ITEM_RE = re.compile(r"^      -\s*(?P<value>.+?)\s*$")
@@ -49,53 +51,6 @@ def _mapping_key(line: str) -> tuple[str, str] | None:
     return raw_key, match.group("rest")
 
 
-def _flow_mapping_keys(value: str) -> set[str]:
-    opening = value.find("{")
-    if opening < 0:
-        return set()
-    keys: set[str] = set()
-    brace_depth = 0
-    bracket_depth = 0
-    quote: str | None = None
-    escaped = False
-    key_start: int | None = None
-    for index in range(opening, len(value)):
-        char = value[index]
-        if quote is not None:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == quote:
-                quote = None
-            continue
-        if char in "'\"":
-            quote = char
-        elif char == "{":
-            brace_depth += 1
-            if brace_depth == 1 and bracket_depth == 0:
-                key_start = index + 1
-        elif char == "}":
-            if brace_depth == 1 and bracket_depth == 0:
-                key_start = None
-            brace_depth -= 1
-            if brace_depth <= 0:
-                break
-        elif char == "[" and brace_depth:
-            bracket_depth += 1
-        elif char == "]" and bracket_depth:
-            bracket_depth -= 1
-        elif brace_depth == 1 and bracket_depth == 0:
-            if char == ":" and key_start is not None:
-                parsed = _mapping_key(value[key_start:index].strip() + ":")
-                if parsed is not None:
-                    keys.add(parsed[0])
-                key_start = None
-            elif char == ",":
-                key_start = index + 1
-    return keys
-
-
 def _top_level_block(lines: list[str], key: str) -> tuple[int, int] | None:
     for index, line in enumerate(lines):
         if _is_comment(line) or _indent(line) != 0:
@@ -106,33 +61,52 @@ def _top_level_block(lines: list[str], key: str) -> tuple[int, int] | None:
     return None
 
 
+def _canonical_on_block(lines: list[str], *, source: str) -> tuple[int, int]:
+    on_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if not _is_comment(line) and _indent(line) == 0 and (_mapping_key(line) or (None, ""))[0] == "on"
+        ),
+        None,
+    )
+    if on_index is None:
+        raise ValueError(f"{source}: missing canonical top-level on:")
+    if _CANONICAL_ON_RE.fullmatch(lines[on_index]) is None:
+        raise ValueError(f"{source}: noncanonical top-level on: syntax")
+    end = _block_end(lines, on_index, 0)
+    direct_child_seen = False
+    for index in range(on_index + 1, end):
+        line = lines[index]
+        if not line.strip() or _is_comment(line):
+            continue
+        indent = _indent(line)
+        if indent < 2:
+            raise ValueError(f"{source}: noncanonical on child indentation")
+        if not direct_child_seen:
+            if indent != 2:
+                raise ValueError(f"{source}: noncanonical on child indentation")
+            direct_child_seen = True
+        if indent == 2 and _CANONICAL_EVENT_RE.match(line) is None:
+            raise ValueError(f"{source}: noncanonical on child key")
+    return on_index, end
+
+
 def _has_schedule_trigger(text: str) -> bool:
     lines = text.splitlines()
-    block = _top_level_block(lines, "on")
-    if block is None:
-        return False
-    start, end = block
-    on_mapping = _mapping_key(lines[start])
-    if on_mapping is not None and "schedule" in _flow_mapping_keys(on_mapping[1]):
-        return True
-    child_indents = [
-        _indent(lines[index])
-        for index in range(start + 1, end)
-        if lines[index].strip() and not _is_comment(lines[index]) and _indent(lines[index]) > 0
-    ]
-    if not child_indents:
-        return False
-    child_indent = min(child_indents)
+    start, end = _canonical_on_block(lines, source="workflow")
     return any(
-        _indent(lines[index]) == child_indent and (_mapping_key(lines[index]) or (None, ""))[0] == "schedule"
+        _indent(lines[index]) == 2
+        and _CANONICAL_EVENT_RE.match(lines[index]) is not None
+        and lines[index].partition(":")[0].strip() == "schedule"
         for index in range(start + 1, end)
     )
 
 
 def _normalize_scalar(raw: str, *, source: str) -> str:
     value = raw.strip()
-    if not value:
-        raise ValueError(f"{source}: empty scalar")
+    if not value or value.startswith("#"):
+        raise ValueError(f"{source}: invalid workflow name")
     if value[0] in "'\"":
         quote = value[0]
         closing = value.find(quote, 1)
@@ -143,7 +117,10 @@ def _normalize_scalar(raw: str, *, source: str) -> str:
         if closing <= 1:
             raise ValueError(f"{source}: empty or malformed quoted scalar")
         return value[1:closing]
-    return value.split(" #", 1)[0].rstrip()
+    value = value.split(" #", 1)[0].rstrip()
+    if not value or value in {"null", "Null", "NULL", "~"} or value.startswith(("!", "&")):
+        raise ValueError(f"{source}: invalid workflow name")
+    return value
 
 
 def _top_level_workflow_name(text: str, *, source: str) -> str:
@@ -153,6 +130,8 @@ def _top_level_workflow_name(text: str, *, source: str) -> str:
         parsed = _mapping_key(line)
         if parsed is None or parsed[0] != "name":
             continue
+        if not line.startswith("name:"):
+            raise ValueError(f"{source}: noncanonical top-level name: key")
         return _normalize_scalar(parsed[1], source=source)
     raise ValueError(f"{source}: scheduled workflow missing top-level name")
 
@@ -161,8 +140,9 @@ def _scheduled_workflow_names(paths: list[Path]) -> set[str]:
     names: set[str] = set()
     for path in paths:
         text = path.read_text(encoding="utf-8")
+        name = _top_level_workflow_name(text, source=str(path))
         if _has_schedule_trigger(text):
-            names.add(_top_level_workflow_name(text, source=str(path)))
+            names.add(name)
     return names
 
 
@@ -229,10 +209,12 @@ def test_every_scheduled_workflow_is_watched_or_explicitly_exempt() -> None:
     ("text", "expected"),
     [
         ("on:\n  # schedule:\n  push:\n", False),
+        ("on: # {schedule: fake}\n  push:\n", False),
         ("name: Plain\non:\n  schedule:\n    - cron: x\n", True),
+        ('name: Inline schedule\non:\n  schedule: [{cron: "0 0 * * *"}]\n', True),
         ("name: Outside\non:\n  push:\njobs:\n  schedule:\n", False),
         (
-            'name: Nested flow\non: {workflow_dispatch: {inputs: {schedule: {description: "x", required: false}}}}\n',
+            "name: Nested input\non:\n  workflow_dispatch:\n    inputs:\n      schedule:\n        description: x\n",
             False,
         ),
     ],
@@ -245,15 +227,20 @@ def test_schedule_parser_uses_only_top_level_on(text: str, expected: bool) -> No
     "text",
     [
         'name: Flow\non: {schedule: [{cron: "0 0 * * *"}]}\n',
-        'name: Block\non:\n  schedule: [{cron: "0 0 * * *"}]\n',
         'name: Quoted top level\n"on":\n  schedule:\n    - cron: "0 0 * * *"\n',
+        'name: Tagged top level\n!!str on:\n  schedule:\n    - cron: "0 0 * * *"\n',
+        'name: Aliased top level\n&trigger on:\n  schedule:\n    - cron: "0 0 * * *"\n',
         'name: Quoted event\non:\n  "schedule":\n    - cron: "0 0 * * *"\n',
+        'name: Tagged event\non:\n  !!str schedule:\n    - cron: "0 0 * * *"\n',
+        'name: Aliased event\non:\n  &trigger schedule:\n    - cron: "0 0 * * *"\n',
+        'name: Alternate indentation\non:\n    schedule:\n      - cron: "0 0 * * *"\n',
         'name: Whitespace event\non:\n  schedule :\n    - cron: "0 0 * * *"\n',
         'name: Whitespace quoted event\non:\n  "schedule" :\n    - cron: "0 0 * * *"\n',
     ],
 )
-def test_schedule_parser_accepts_valid_schedule_forms(text: str) -> None:
-    assert _has_schedule_trigger(text)
+def test_noncanonical_schedule_forms_fail_closed(text: str) -> None:
+    with pytest.raises(ValueError, match="canonical"):
+        _has_schedule_trigger(text)
 
 
 @pytest.mark.parametrize(
@@ -262,7 +249,6 @@ def test_schedule_parser_accepts_valid_schedule_forms(text: str) -> None:
         ("name: Plain\non:\n  schedule:\n", "Plain"),
         ("name: 'Single quoted'\non:\n  schedule:\n", "Single quoted"),
         ('name: "Double quoted"\non:\n  schedule:\n', "Double quoted"),
-        ('"name": "Quoted key"\non:\n  schedule:\n', "Quoted key"),
     ],
 )
 def test_top_level_workflow_name_normalizes_outer_quotes(text: str, expected: str) -> None:
@@ -274,6 +260,23 @@ def test_scheduled_workflow_name_must_be_top_level_and_well_formed() -> None:
         _top_level_workflow_name("on:\n  schedule:\n", source="missing")
     with pytest.raises(ValueError, match="malformed quoted scalar"):
         _top_level_workflow_name("name: 'broken\non:\n  schedule:\n", source="malformed")
+    with pytest.raises(ValueError, match="canonical"):
+        _top_level_workflow_name('"name": "Quoted key"\non:\n  schedule:\n', source="quoted-key")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "name:\non:\n  push:\n",
+        "name: # comment\non:\n  push:\n",
+        "name: null\non:\n  push:\n",
+        "name: ~\non:\n  push:\n",
+        "name: !!str\non:\n  push:\n",
+    ],
+)
+def test_workflow_name_rejects_null_comment_and_tag_only_values(text: str) -> None:
+    with pytest.raises(ValueError, match="name"):
+        _top_level_workflow_name(text, source="invalid-name")
 
 
 def test_workflow_files_scan_both_yaml_extensions(tmp_path: Path) -> None:
