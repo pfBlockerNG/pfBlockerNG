@@ -13,12 +13,13 @@ surface changed) is exercised through the CLI against real scratch git repos.
 from __future__ import annotations
 
 import importlib.util
-import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from tests.gitenv import scrubbed_git_env
 
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_agent_roles.py"
 _spec = importlib.util.spec_from_file_location("check_agent_roles", _TOOL)
@@ -436,7 +437,7 @@ def test_touches_role_surface_unit() -> None:
 
 
 def _git(root: Path, *args: str) -> None:
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+    env = scrubbed_git_env()
     subprocess.run(
         ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
         check=True,

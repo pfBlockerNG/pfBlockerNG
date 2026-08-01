@@ -21,6 +21,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from tests.gitenv import scrubbed_git_env
+
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_version_literals.py"
 _spec = importlib.util.spec_from_file_location("check_version_literals", _TOOL)
 assert _spec is not None and _spec.loader is not None
@@ -621,6 +623,7 @@ def _git(repo: Path, *args: str) -> None:
         cwd=repo,
         check=True,
         capture_output=True,
+        env=scrubbed_git_env(),
     )
 
 
