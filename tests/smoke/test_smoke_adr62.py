@@ -288,7 +288,8 @@ def test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker(deployed_vm: SmokeVM, cl
         ans = h.dns_probe_client_until(client_vm, domain, h.is_vip)
         assert not h.resolves_to(ans, STUB_DNS_A), f"{domain} still resolving after the feed loaded: {ans}"
 
-        v6_members = h.wait_pfctl_table(deployed_vm, "pfB_DNSBLIP_v6")
+        h.apply_filter_sync(deployed_vm)
+        v6_members = h.pfctl_table_members(deployed_vm, "pfB_DNSBLIP_v6")
         assert h.member_present(v6_members, ipv6_lit), (
             f"bracketed IPv6 literal {ipv6_lit} not collected into pfB_DNSBLIP_v6: {v6_members}"
         )
@@ -298,7 +299,7 @@ def test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker(deployed_vm: SmokeVM, cl
 
         # Delta D6 (ADR §2, PR #1107 review): a plain feed's ||<IPv4>^ anchor
         # collects into the DNSBLIP v4 alias (origin/devel silently dropped it).
-        v4_members = h.wait_pfctl_table(deployed_vm, "pfB_DNSBLIP_v4")
+        v4_members = h.pfctl_table_members(deployed_vm, "pfB_DNSBLIP_v4")
         assert h.member_present(v4_members, ipv4_anchor), (
             f"plain-feed ABP IP anchor ||{ipv4_anchor}^ not collected into pfB_DNSBLIP_v4 (delta D6): {v4_members}"
         )

@@ -144,9 +144,10 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
     spec.feed_url = h.write_local_feed(vm, f"issue334_{'ram' if ramdisk else 'std'}.txt", f"{fed_ip}\n")
     h.inject(vm, spec)
     h.reload(vm, "update")
+    h.apply_filter_sync(vm)
 
-    before_members = h.wait_pfctl_table(vm, spec.alias)
-    before_rule = h.rule_references(vm, spec.alias)
+    before_members = h.pfctl_table_members(vm, spec.alias)
+    before_rule = h.pfctl_rule_has_alias(vm, spec.alias)
     archive_present = ramdisk and h.archive_exists(vm, h.ALIASARCHIVE)
 
     # ramdisk leg: drop a /var sentinel so the post-reboot check can PROVE /var came up
@@ -163,8 +164,8 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
     h.reboot_vm(vm)
 
     # Then (captured): the alias table + its rule reference, post-reboot.
-    after_members = h.wait_pfctl_table(vm, spec.alias)
-    after_rule = h.rule_references(vm, spec.alias)
+    after_members = h.pfctl_table_members(vm, spec.alias)
+    after_rule = h.pfctl_rule_has_alias(vm, spec.alias)
 
     var_wiped: bool | None = None
     var_mount = ""

@@ -145,14 +145,12 @@ def test_ip_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -
     assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the feed was ever loaded"
 
     with h.CaseContext(deployed_vm, spec):
-        # Use wait_pfctl_table instead of the single-shot pfctl_table_members:
-        # filter_configure is async so the pf table may not be populated immediately
-        # after CaseContext.__enter__ completes the reload.
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        # CaseContext.__enter__ applies the blocking filter sync before this read.
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         assert h.member_present(members, member_host), f"{member_host} not in {spec.alias}: {members}"
         assert _covered_by(members, member_in_cidr), f"{member_in_cidr} not covered by {spec.alias}: {members}"
         assert not _covered_by(members, non_member), f"{non_member} unexpectedly in {spec.alias}: {members}"
-        assert h.rule_references(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
+        assert h.pfctl_rule_has_alias(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
 
 
 def test_dnsbl_http_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -247,6 +245,7 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
         refused_before = h.count_log_marker(deployed_vm, main_log, refused_marker)
         h.reload(deployed_vm, "update")
         h.reload(deployed_vm, "updateip")
+        h.apply_filter_sync(deployed_vm)
         assert spec.alias not in h.pfctl_tables(deployed_vm), (
             "filter ON + empty allowlist must BLOCK the internal mock feed (pf table not built)"
         )
@@ -264,9 +263,8 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
         h.set_feed_internal_allowlist(deployed_vm, "192.168.89.0/24")
         h.reload(deployed_vm, "update")
         h.reload(deployed_vm, "updateip")
-        # Use wait_pfctl_table: filter_configure is async; the table may not be
-        # populated immediately after the reloads complete.
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        h.apply_filter_sync(deployed_vm)
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         assert members, "allowlisting the SLIRP CIDR must EXEMPT the feed (pf table built)"
         assert h.member_present(members, "203.0.113.5"), f"listed host missing after exemption: {members}"
     finally:
@@ -301,13 +299,13 @@ def test_ip_http_range_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedSer
     assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the feed was ever loaded"
 
     with h.CaseContext(deployed_vm, spec):
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         assert _covered_by(members, inside), f"{inside} not covered by the range in {spec.alias}: {members}"
         assert not _covered_by(members, just_past), (
             f"{just_past} (one past the range) unexpectedly in {spec.alias}: {members}"
         )
         assert not _covered_by(members, outside), f"{outside} unexpectedly in {spec.alias}: {members}"
-        assert h.rule_references(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
+        assert h.pfctl_rule_has_alias(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
 
 
 def test_ipv6_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -332,7 +330,7 @@ def test_ipv6_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
         assert _covered_by(members, member_host), f"{member_host} not in {spec.alias}: {members}"
         assert _covered_by(members, member_in_prefix), f"{member_in_prefix} not covered by {spec.alias}: {members}"
         assert not _covered_by(members, non_member), f"{non_member} unexpectedly in {spec.alias}: {members}"
-        assert h.rule_references(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
+        assert h.pfctl_rule_has_alias(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
 
 
 # --------------------------------------------------------------------------- #
@@ -390,7 +388,7 @@ def test_ip_generic_parse_failure_logs_line_and_number(deployed_vm: SmokeVM, moc
     summary_before = h.count_log_marker(deployed_vm, h.PFB_LOG, summary_marker)
 
     with h.CaseContext(deployed_vm, spec):
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         assert h.member_present(members, valid_host), f"{valid_host} not in {spec.alias}: {members}"
 
         header_after = h.count_log_marker(deployed_vm, h.IP_PARSE_ERR_LOG, header_marker)
@@ -2111,7 +2109,7 @@ def test_cron_spurious_200_same_bytes_no_reingest(
         # is aliasname_family, not the bare header.
         feed_marker = f"{spec.aliasname}_{spec.family}"
         with h.CaseContext(deployed_vm, spec):
-            members_before = h.wait_pfctl_table(deployed_vm, spec.alias)
+            members_before = h.pfctl_table_members(deployed_vm, spec.alias)
             assert h.member_present(members_before, member_ip), (
                 f"BEFORE: {member_ip} must be in {spec.alias}: {members_before}"
             )
@@ -2126,6 +2124,7 @@ def test_cron_spurious_200_same_bytes_no_reingest(
 
             # WHEN — cron; server returns 200 (no ETag → no If-None-Match → plain 200).
             h.reload(deployed_vm, "cron")
+            h.apply_filter_sync(deployed_vm)
 
             # THEN — "[ feed_marker ] ( content unchanged )" appeared (spurious 200 detected
             # by hash, for THIS feed).
@@ -2356,12 +2355,12 @@ def test_zip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> 
 
     with h.CaseContext(deployed_vm, spec):
         # When — Force Update downloads + file-detects application/zip + bsdtar decompresses.
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         # Then — the member IP loaded (fails if zip bytes were misrouted to the wrong decompressor).
         assert h.member_present(members, _ADR44_MEMBER), (
             f"expected {_ADR44_MEMBER!r} in {spec.alias} after zip decompression, got: {members}"
         )
-        assert h.rule_references(deployed_vm, spec.alias), (
+        assert h.pfctl_rule_has_alias(deployed_vm, spec.alias), (
             f"no loaded pf rule references {spec.alias} after zip feed import"
         )
 
@@ -2391,7 +2390,7 @@ def test_gzip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) ->
 
     with h.CaseContext(deployed_vm, spec):
         # When — Force Update downloads + file-detects application/gzip + gunzip decompresses.
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         # Then — the member IP loaded (fails if gzip was mis-normalised to application/zip).
         assert h.member_present(members, _ADR44_MEMBER), (
             f"expected {_ADR44_MEMBER!r} in {spec.alias} after gzip decompression, "
@@ -2399,7 +2398,7 @@ def test_gzip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) ->
             f"(regression: pfb_mime_normalise() may have rewritten application/gzip → application/zip, "
             f"routing gzip bytes to bsdtar and loading zero entries)"
         )
-        assert h.rule_references(deployed_vm, spec.alias), (
+        assert h.pfctl_rule_has_alias(deployed_vm, spec.alias), (
             f"no loaded pf rule references {spec.alias} after gzip feed import"
         )
 
@@ -2429,7 +2428,7 @@ def test_bzip2_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -
 
     with h.CaseContext(deployed_vm, spec):
         # When — Force Update downloads + file-detects application/x-bzip2 + bzip2 decompresses.
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         # Then — the member IP loaded (fails if bzip2 was mis-normalised to application/zip).
         assert h.member_present(members, _ADR44_MEMBER), (
             f"expected {_ADR44_MEMBER!r} in {spec.alias} after bzip2 decompression, "
@@ -2437,7 +2436,7 @@ def test_bzip2_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -
             f"(regression: pfb_mime_normalise() may have rewritten application/x-bzip2 → application/zip, "
             f"routing bzip2 bytes to bsdtar and loading zero entries)"
         )
-        assert h.rule_references(deployed_vm, spec.alias), (
+        assert h.pfctl_rule_has_alias(deployed_vm, spec.alias), (
             f"no loaded pf rule references {spec.alias} after bzip2 feed import"
         )
 
@@ -2628,7 +2627,7 @@ def test_octet_stream_zip_recovered(deployed_vm: SmokeVM, mock_feeds: _MockFeedS
 
     with h.CaseContext(deployed_vm, spec):
         # When — Force Update fetches the junk-prefixed ZIP.
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         # Then — member is present regardless of which branch handled it.
         # (When recovery_exercised: proves octet-stream was recovered to application/zip and imported.
         #  When not: proves the normal zip branch handled it — still a valid import assertion.)
@@ -2636,7 +2635,7 @@ def test_octet_stream_zip_recovered(deployed_vm: SmokeVM, mock_feeds: _MockFeedS
             f"expected {_ADR45_MEMBER!r} in {spec.alias} after junk-prefixed ZIP, got: {members} "
             f"(box file(1) reported {box_mime!r}; recovery_exercised={recovery_exercised})"
         )
-        assert h.rule_references(deployed_vm, spec.alias), (
+        assert h.pfctl_rule_has_alias(deployed_vm, spec.alias), (
             f"no loaded pf rule references {spec.alias} after octet-stream ZIP recovery"
         )
 
@@ -3147,7 +3146,7 @@ def test_validate_log_healthy_feed_no_spurious_reject(deployed_vm: SmokeVM, mock
 
     with h.CaseContext(deployed_vm, spec):
         # When -- Force Update loads the healthy feed successfully.
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         assert h.member_present(members, member_host), (
             f"expected {member_host!r} in {spec.alias} after the healthy feed load, got: {members}"
         )
@@ -3455,7 +3454,7 @@ def test_feed_sanity_flag_on_still_imports_healthy_feed(deployed_vm: SmokeVM, mo
 
         with h.CaseContext(deployed_vm, spec):
             # When -- Force Update loads the healthy feed with the scan ON.
-            members = h.wait_pfctl_table(deployed_vm, spec.alias)
+            members = h.pfctl_table_members(deployed_vm, spec.alias)
             assert h.member_present(members, member_host), (
                 f"expected {member_host!r} in {spec.alias} after the healthy feed load with "
                 f"pfb_feed_sanity ON, got: {members}"

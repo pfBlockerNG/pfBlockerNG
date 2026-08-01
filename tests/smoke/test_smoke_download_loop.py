@@ -226,6 +226,7 @@ def test_709_invert_v4_list_members_reach_pf_table(download_loop_vm: SmokeVM) ->
 
     # When: a full update runs.
     h.reload(vm, "update")
+    h.apply_filter_sync(vm)
 
     native_member = f"{h.PFB_DBDIR}/native/{header}_v4.txt"
     deny_member = f"{h.PFB_DBDIR}/deny/{header}_v4.txt"
@@ -233,7 +234,7 @@ def test_709_invert_v4_list_members_reach_pf_table(download_loop_vm: SmokeVM) ->
     in_native = _file_present(vm, native_member)
     in_deny = _file_present(vm, deny_member)
     mirror_body = _read_file(vm, mirror)
-    members = h.wait_pfctl_table(vm, spec.alias)
+    members = h.pfctl_table_members(vm, spec.alias)
 
     def _report() -> str:
         return (

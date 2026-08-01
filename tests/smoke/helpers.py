@@ -591,8 +591,8 @@ def _tolerate_timeout(call: Callable[[], subprocess.CompletedProcess[str]]) -> s
 def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     """Return a layered snapshot naming WHERE a pfB alias's auto-rule was lost.
 
-    :func:`rule_references` already polls, so its failure does NOT mean "we read too
-    early" — no rule naming ``alias`` reached live pf within the whole poll window.
+    The single-shot rule read is authoritative after its caller's sync boundary; a
+    missing rule naming ``alias`` is therefore a real assertion failure.
     Two very different causes produce that, and only the layer that still has the rule
     tells them apart, so dump all three:
 
@@ -617,8 +617,8 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     fourth probe, ``pfctl -sTables``, only annotates whether the table exists — a failure
     there reports that line as ``UNKNOWN`` and leaves the verdict to the three layers.
 
-    The ruleset layers use :func:`rule_line_references`, the same match rule
-    :func:`rule_references` applies, so the dump cannot contradict the assertion it explains.
+    The ruleset layers use :func:`_rule_line_has_alias`, the same match rule
+    :func:`pfctl_rule_has_alias` applies, so the dump cannot contradict the assertion it explains.
     """
     # fullmatch, not match: `$` also matches just before a TRAILING newline, so `match()` would
     # admit "pfB_x\n" into the PHP string literal below.
@@ -653,8 +653,8 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     sr = _tolerate_timeout(lambda: vm.ssh(PFCTL, "-sr", timeout=timeout))
     dbg_ok = dbg.returncode in (0, 1)
     sr_ok = sr.returncode == 0
-    dbg_lines = [ln for ln in dbg.stdout.splitlines() if rule_line_references(ln, alias)]
-    live = [ln for ln in sr.stdout.splitlines() if rule_line_references(ln, alias)]
+    dbg_lines = [ln for ln in dbg.stdout.splitlines() if _rule_line_has_alias(ln, alias)]
+    live = [ln for ln in sr.stdout.splitlines() if _rule_line_has_alias(ln, alias)]
 
     tables_res = _tolerate_timeout(lambda: vm.ssh(PFCTL, "-sTables", timeout=timeout))
     tables_ok = tables_res.returncode == 0
@@ -677,7 +677,7 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     elif not live:
         stage = "LIVE PF — emitted but not loaded: filter_configure has not applied it yet (lag), or pfctl refused it"
     else:
-        stage = "NONE — the rule is present at all three layers; the poll read stale state"
+        stage = "NONE — the rule is present at all three layers; the single-shot read saw stale state"
 
     return (
         f"[STAGE LOST] {stage}\n"
@@ -4847,64 +4847,16 @@ def pfctl_tables(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-@timed_step(lambda vm, name, **_k: f"wait_pfctl_table:{name}")
-def wait_pfctl_table(vm: SmokeVM, name: str, *, timeout: float = 30.0, interval: float = 2.0) -> list[str]:
-    """Poll ``pfctl -t <name> -T show`` until the table EXISTS and is NON-EMPTY.
-
-    Returns the members once populated, or ``[]`` on timeout — the caller asserts
-    on the result, so a genuine failure surfaces as a clear assertion (with the
-    per-run diagnostics snapshot already uploaded), never an open-ended hang.
-
-    A BOUNDED poll is the right primitive here precisely because DNSBL-IP table
-    population is legitimately ASYNC: ``filter_configure`` lands ``pfB_DNSBLIP_v4``/
-    ``pfB_DNSBLIP_v6`` slightly AFTER ``pfblockerng.php update`` returns (the tables
-    are absent on a synchronous read right after the reload, but present in teardown
-    diagnostics — issue #35). This is NOT the ADR-04 "first response is authoritative"
-    DNS case (that holds after :func:`wait_unbound_ready`, where the first answer is
-    the truth); it mirrors the :func:`rule_references` reload-lag poll instead.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if name in pfctl_tables(vm):
-            members = pfctl_table_members(vm, name)
-            if members:
-                return members
-        time.sleep(interval)
-    return []
+def pfctl_rule_has_alias(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> bool:
+    """Return whether one authoritative ``pfctl -sr`` snapshot references ``alias``."""
+    result = vm.ssh(PFCTL, "-sr", timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"pfctl -sr failed: rc={result.returncode} stderr={result.stderr!r}")
+    return any(_rule_line_has_alias(line, alias) for line in result.stdout.splitlines())
 
 
-def rule_references(vm: SmokeVM, alias: str, *, timeout: float = 30.0, attempts: int = 10, delay: float = 2.0) -> bool:
-    """True iff a loaded pf rule references ``alias`` (``pfctl -sr`` | grep).
-
-    pfBlockerNG's ``filter_configure`` lands the auto-rule slightly AFTER the
-    update CLI returns, so poll rather than read once (the rule was observed
-    present in on-failure diagnostics dumped moments after a single-shot read
-    returned False — a pure timing race).
-
-    CONTRACT: ``alias`` SHOULD be a pfBlockerNG-owned table name (``pfB_<header>_v{4,6}``,
-    ``pfB_DNSBLIP_v4``, ``pfB_*_Aggregated_v4`` …) — every in-tree caller passes one. The
-    exact ``<alias>`` pf table-reference is always matched; the looser bare-substring
-    fallback (a rule that names the table without the ``<>`` syntax) is gated behind the
-    ``pfB_`` prefix so a generic token can NEVER coincidentally match a FOREIGN rule — e.g.
-    a baked ``CI HARNESS RULE`` or the floating ``REJECT ALL OUT MGT1``. A non-``pfB_``
-    alias is still honoured, via the exact table-reference match alone.
-    """
-    for attempt in range(attempts):
-        result = vm.ssh(PFCTL, "-sr", timeout=timeout)
-        if result.returncode != 0:
-            raise RuntimeError(f"pfctl -sr failed: rc={result.returncode} stderr={result.stderr!r}")
-        if any(rule_line_references(line, alias) for line in result.stdout.splitlines()):
-            return True
-        if attempt < attempts - 1:
-            time.sleep(delay)
-    return False
-
-
-def rule_line_references(line: str, alias: str) -> bool:
-    """True iff one ruleset line references table ``alias`` — the match rule of
-    :func:`rule_references`, shared so :func:`alias_rule_dump` (which exists to EXPLAIN a
-    rule_references failure) cannot disagree with it about what "references" means.
-    """
+def _rule_line_has_alias(line: str, alias: str) -> bool:
+    """Return whether one ruleset line references table ``alias``."""
     return f"<{alias}>" in line or (alias.startswith("pfB_") and alias in line)
 
 
