@@ -4191,8 +4191,9 @@ function pfb_list_script_exec(string $script_path, string $script_name, string $
 	exec("{$tmo_prefix}" . escapeshellarg($script_path) . " {$args_tail}", $discard, $retval);
 
 	if ($retval === 124) {
-		pfb_logger("\n[ {$header} ] {$stage}-script '{$script_name}' TIMED OUT after " . PFB_LIST_SCRIPT_TIMEOUT
-		    . "s (killed); discarding its output\n", 2);
+		// No duration in the message: the budget lives inside $tmo_prefix, so a
+		// restated constant would desync from an injected prefix.
+		pfb_logger("\n[ {$header} ] {$stage}-script '{$script_name}' TIMED OUT (killed); discarding its output\n", 2);
 	} elseif ($retval !== 0) {
 		pfb_logger("\n[ {$header} ] {$stage}-script '{$script_name}' exited non-zero [ {$retval} ]; discarding its output\n", 2);
 	}
