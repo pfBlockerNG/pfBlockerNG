@@ -777,6 +777,8 @@ final class DnsblQueryClientTest extends TestCase
 
 		// B's timeout is generous on purpose: on the passing path it returns the
 		// instant its reply lands, so a large production timeout costs nothing here.
+		// It must stay below SALVAGE_CAP_S, or a regression would expire the cap
+		// below and be reported as STUCK/ENVIRONMENT instead of behaviourally.
 		$callerB = $this->forkQuery('timeout-b.example', 6.0, 'timeout-caller-b');
 
 		// Event: A's call returned, so its timeout cleanup has already run.
@@ -803,7 +805,9 @@ final class DnsblQueryClientTest extends TestCase
 		}
 
 		// Behavioural verdict first: B giving up means A's cleanup raced B's publish.
-		$this->assertFalse($bGaveUp, "caller B returned without ever reaching the channel: caller A's timeout cleanup removed caller B's live request");
+		// Read B's own verdict into the message rather than attributing a cause blind.
+		$bVerdict = $bGaveUp ? var_export($this->awaitQueryResult($callerB), true) : '';
+		$this->assertFalse($bGaveUp, "caller B returned without ever reaching the channel: caller A's timeout cleanup removed caller B's live request -- caller B returned {$bVerdict}");
 		$this->assertNotNull($requestB, 'STUCK/ENVIRONMENT: neither caller B\'s request nor caller B\'s verdict was observed within the ' . self::SALVAGE_CAP_S . 's salvage cap -- the run is stuck or the environment is broken, not a behavioural failure');
 
 		$this->atomicWrite($this->replyPath(), $this->verdictReply($requestB['id'], 'group-b'));
