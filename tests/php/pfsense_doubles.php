@@ -307,14 +307,26 @@ if (!function_exists('is_ipaddr_configured')) {
 // config -- or, just as load-bearing, that an abort path did NOT.
 
 if (!function_exists('config_get_path')) {
-	// pfSense config.lib.inc: walk a '/'-separated path, $default when absent.
+	// pfSense config.lib.inc config_get_path() + util.inc array_get_path().
 	function config_get_path(string $path, $default = null) {
-		$node = $GLOBALS['config'] ?? [];
-		foreach (explode('/', rtrim($path, '/')) as $key) {
+		if (str_ends_with(trim($path), '/') || str_contains($path, '//')) {
+			return $default;
+		}
+		$node = $GLOBALS['config'] ?? null;
+		if (!is_array($node)) {
+			return $default;
+		}
+		foreach (explode('/', $path) as $key) {
+			if (mb_strlen($key) === 0) {
+				continue;
+			}
 			if (!is_array($node) || !array_key_exists($key, $node)) {
 				return $default;
 			}
 			$node = $node[$key];
+		}
+		if ($default !== null && $node === '') {
+			return $default;
 		}
 		return $node;
 	}
