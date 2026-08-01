@@ -34,6 +34,7 @@ import pytest
 from .test_browser_lint import (
     DNSBL_PAGE,
     HOOKS_PAGE,
+    JS_TIMEOUT_MS,
     _clear_and_type,
     _hook_editor,
     _open,
@@ -73,6 +74,14 @@ PHONE_UA = (
 # viewport when the keyboard opens, which re-lays out the page under a focused editable
 # -- the one step of the reported scenario that no device descriptor reproduces.
 PHONE_HEIGHT_KEYBOARD_OPEN = 420
+
+# A page-scale factor shrinks the VISUAL viewport while the layout viewport keeps its
+# size -- the same relationship an on-screen keyboard creates, and the one CodeMirror
+# tests for (`window.innerHeight - window.visualViewport.height > 1`) before it reaches
+# for the caret-rescue path this file pins. A device descriptor alone never gets there,
+# which is why the steady-state assertions above all pass on a defect that is real on a
+# phone. 4x puts the visual viewport comfortably above the editor.
+KEYBOARD_PAGE_SCALE = 4
 
 
 @contextlib.contextmanager
@@ -271,6 +280,87 @@ def test_hook_editor_typing_on_a_short_line_stays_visible(
     _open(page, webui, HOOKS_PAGE)
     content = _hook_editor(page)
     _typing_at_left_keeps_view_at_left(page, content, LONG_SHELL_LINE, "echo")
+
+
+def _gutter_width(content: Locator) -> int:
+    """Width of the editor's gutter column (line numbers + lint marker)."""
+    return int(
+        content.evaluate(
+            "el => { const g = el.closest('.cm-editor').querySelector('.cm-gutters');"
+            " return g ? Math.round(g.getBoundingClientRect().width) : 0; }"
+        )
+    )
+
+
+def test_hook_editor_does_not_shift_by_the_gutter_width_under_a_shrunken_viewport(
+    phone_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """Typing must not shift the view right by the gutter's width (issue #1870).
+
+    With the on-screen keyboard up, CodeMirror rescues a caret that the keyboard has
+    covered by calling ``scrollIntoView({block: "nearest"})`` on the caret's LINE
+    element. That element is a full-width block, so the browser also acts on the inline
+    axis: it aligns the line's start edge to the scrollport's start, and because the
+    content sits one gutter-width inside the scrollport, the view slides right by exactly
+    that width -- hiding the beginning of the line the admin is typing on. Line numbers
+    made the gutter wide enough for it to be unmissable.
+
+    The keyboard is emulated with a page-scale factor: it shrinks the visual viewport
+    while the layout viewport keeps its size, which is the condition CodeMirror gates
+    that rescue on. The preconditions below are asserted rather than assumed, because
+    every one of them silently un-reaches the defect -- a viewport that never shrank, a
+    caret that is not below it, or a document with nothing to scroll horizontally all
+    make this pass on broken code.
+    """
+    page = phone_page
+    _open(page, webui, HOOKS_PAGE)
+    content = _hook_editor(page)
+
+    # Every line overflows, so the scroller has somewhere to slide; enough lines that the
+    # caret can sit below the shrunken visual viewport. Inserted in one shot -- typing
+    # this many characters key-by-key would dominate the runtime and prove nothing extra.
+    page.keyboard.insert_text("\n".join(f"echo {i:02d} " + "a" * 200 for i in range(30)))
+    expect(content).to_contain_text("echo 29", timeout=JS_TIMEOUT_MS)
+
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": KEYBOARD_PAGE_SCALE})
+
+    # Caret onto a line well down the document, a good way in from the left edge.
+    target = content.evaluate(
+        "el => { const s = el.closest('.cm-scroller').getBoundingClientRect();"
+        " const lines = el.querySelectorAll('.cm-line');"
+        " const r = lines[Math.min(lines.length - 1, 20)].getBoundingClientRect();"
+        " return {x: s.left + 150, y: r.top + r.height / 2}; }"
+    )
+    page.mouse.click(target["x"], target["y"])
+
+    reach = content.evaluate(
+        "el => { const vv = window.visualViewport, sel = document.getSelection();"
+        " const r = sel && sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : null;"
+        " const s = el.closest('.cm-scroller');"
+        " return {shrunk: vv ? window.innerHeight - vv.height : 0,"
+        "         belowBy: r && vv ? Math.round(r.top - (window.pageYOffset + vv.offsetTop + vv.height)) : null,"
+        "         scrollable: Math.round(s.scrollWidth - s.clientWidth)}; }"
+    )
+    assert reach["shrunk"] > 1, f"precondition: the visual viewport must shrink; got {reach!r}"
+    assert reach["belowBy"] is not None and reach["belowBy"] > 0, (
+        f"precondition: the caret must sit below the visual viewport; got {reach!r}"
+    )
+    assert reach["scrollable"] > 0, f"precondition: the document must be horizontally scrollable; got {reach!r}"
+
+    content.evaluate("el => { el.closest('.cm-scroller').scrollLeft = 0; }")
+    assert _settled_scroll_left(content) == 0, "precondition: the view starts at the left edge"
+
+    page.keyboard.insert_text("X")
+    offset = _settled_scroll_left(content)
+    _shot(page, screenshot_dir, "hook_editor_gutter_shift")
+
+    assert offset == 0, (
+        f"typing shifted the view right by {offset}px with the caret already on screen "
+        f"(gutter is {_gutter_width(content)}px wide); the start of the edited line is now hidden"
+    )
 
 
 def test_hook_editor_keeps_the_caret_visible_once_the_keyboard_opens(
