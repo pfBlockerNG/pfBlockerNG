@@ -607,7 +607,7 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     generated (a product bug, NOT reload lag); in CONFIG but not RULES.DEBUG ⇒ the pfSense
     rule generator dropped it; in RULES.DEBUG but not LIVE PF ⇒ filter_configure has not
     applied it yet (genuine lag) or pfctl rejected the ruleset; present at all three ⇒ the
-    poll read stale state.
+    single-shot read saw stale state.
 
     A FAILED PROBE is never a missing rule: if one of the three VERDICT probes — the config
     read, the rules.debug grep, or ``pfctl -sr`` — errors out OR its transport stalls
