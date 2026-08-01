@@ -89,7 +89,6 @@ import pytest
 
 from . import helpers as h
 from ._matrix import (
-    matrix_abi,
     matrix_py_flavor,
     opposite_variant,
     own_variant,
@@ -118,8 +117,9 @@ GUEST_FILE_LIST = f"{GUEST_SPIKE_DIR}/installed_files.txt"
 
 # Phase-2 (ADR-17) catalog generator under test. ``build-repo.sh`` is the real,
 # reusable catalog fallback tool; here it is staged to the guest and run with the
-# guest's libpkg to prove the SCRIPT's output (the release/<varver>/<arch>/ tree
-# it lays out, ADR-20) is accepted by a real pfSense ``pkg update`` + install.
+# guest's libpkg to prove the SCRIPT's output (the release/<varver>/ tree it
+# lays out, arch-less NO_ARCH — issue #1806) is accepted by a real pfSense
+# ``pkg update`` + install.
 # (The libpkg-on-Linux half of the build-side premise — that the SAME script +
 # the SAME ``pkg repo`` op runs on a Linux runner — is proven locally in
 # RESULTS/02; the script is identical regardless of which libpkg invokes it.)
@@ -132,11 +132,13 @@ SCRIPT_REPO_ROOT = f"{GUEST_SPIKE_DIR}/script_catalog"  # build-repo.sh --out (v
 # (which needs a libpkg ``pkg`` binary), ``build-repo-portable.py`` builds the
 # catalog WITHOUT libpkg — the way the Phase-3b publish job will, on a plain Linux
 # runner with no ``pkg``. Here it is run ON THE RUNNER (this test process's python,
-# no guest involvement) over the branch ``.pkg``; only the produced ``<ABI>/`` tree
-# is shipped to the guest, proving a real pfSense ``pkg update``/``install`` accepts
+# no guest involvement) over the branch ``.pkg``; a plain run (no ``--catalog-name``)
+# emits the catalog directly at ``--out`` (arch-less, NO_ARCH — issue #1806; a
+# wildcard ABI is required, a concrete ABI is a hard error), and only those files
+# are shipped to the guest, proving a real pfSense ``pkg update``/``install`` accepts
 # the pure-Python catalog. This is the load-bearing fidelity gate for the generator.
 BUILD_REPO_PORTABLE = Path(__file__).resolve().parents[2] / "scripts" / "build-repo-portable.py"
-PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the portable <ABI>/ tree is shipped
+PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the flat portable catalog is shipped
 
 # Phase-4 (ADR-17) SHIPPED client bootstrap under test. ``add-repo.sh`` is the real
 # user-facing script: it writes the production repo conf, runs ``pkg update``, and
@@ -318,17 +320,17 @@ def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
     Stages the real ``build-repo.sh`` and the input ``.pkg`` to the guest, runs
     ``build-repo.sh --in <pkg_in> --out <script_catalog> --varver <varver>`` with
     the guest's own libpkg, then returns the catalog directory it produced. The
-    script lays the release channel under ``<out>/release/<varver>/<arch>/``
-    (ADR-20 varver keying, issue #1081 — matching ``build-repo-portable.py`` and
+    script lays the release channel directly under ``<out>/release/<varver>/``
+    (arch-less, NO_ARCH — issue #1806; matching ``build-repo-portable.py`` and
     the printed conf), so ``<out>`` is the base a ``file://`` repo conf points at
-    and the conf's ``release/<varver>/<arch>`` url resolves to the returned dir.
-    The varver/arch come from the box itself via the ``_box_real_catalog`` oracle.
+    and the conf's ``release/<varver>`` url resolves to the returned dir. The
+    varver comes from the box itself via the ``_box_real_varver`` oracle.
 
-    This validates the SCRIPT's output (the ``release/<varver>/<arch>/`` tree +
-    the catalog triple ``pkg repo`` emits) is accepted by a real pfSense box, the
+    This validates the SCRIPT's output (the ``release/<varver>/`` tree + the
+    catalog triple ``pkg repo`` emits) is accepted by a real pfSense box, the
     live half of the build-side premise.
     """
-    real_varver, real_arch = _box_real_catalog(vm).rsplit("/", 1)
+    real_varver = _box_real_varver(vm)
     _ssh_check(vm, "/bin/rm", "-rf", GUEST_PKG_IN_DIR, SCRIPT_REPO_ROOT)
     _ssh_check(vm, "/bin/mkdir", "-p", GUEST_PKG_IN_DIR, GUEST_SPIKE_DIR)
     _scp_to_guest(vm, BUILD_REPO_SH, GUEST_BUILD_REPO_SH)
@@ -350,9 +352,11 @@ def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
         real_varver,
         timeout=240.0,
     )
-    catalog_dir = f"{SCRIPT_REPO_ROOT}/release/{real_varver}/{real_arch}"
-    # The catalog triple must be present (what `pkg update` consumes).
-    for fname in ("meta.conf", "packagesite.pkg", "data.pkg"):
+    catalog_dir = f"{SCRIPT_REPO_ROOT}/release/{real_varver}"
+    # The catalog quadruple must be present (what `pkg update` consumes) — real `pkg
+    # repo` emits the bare `meta` alongside `meta.conf` (ADR-17 RESULTS/02), matching
+    # the portable generator's own byte-parity claim.
+    for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg"):
         present = vm.ssh("/bin/test", "-f", f"{catalog_dir}/{fname}")
         assert present.returncode == 0, f"build-repo.sh did not emit {fname} under {catalog_dir}"
     return catalog_dir
@@ -365,18 +369,13 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
     (no libpkg, no guest involvement) exactly as the Phase-3b publish job will, then its
     catalog files are copied to the guest. A real pfSense ``pkg update``/``install`` then
     has to accept it — the fidelity gate that the pure-Python catalog is byte-compatible
-    with what real ``pkg repo`` emits. The generator is driven with ``--catalog-name
-    release`` so it produces ``out/release/<ABI>/`` locally.
+    with what real ``pkg repo`` emits. A PLAIN run (no ``--catalog-name``) emits the
+    catalog DIRECTLY at ``--out`` (arch-less, NO_ARCH — issue #1806; every
+    pfSense-pkg-pfBlockerNG ``.pkg`` carries a wildcard ABI, and the generator hard-rejects
+    a concrete one), so there is no per-ABI bucket to discover any more.
 
-    The catalog files are then staged to a FLAT on-guest path, ``PORTABLE_REPO_ROOT/<ABI>/``
-    — the ``release/`` segment is intentionally dropped. That flat ``<ABI>/`` layout is
-    also the legacy "no variant prefix" path that ``test_legacy_abi_path_still_upgrades``
-    (ADR-20 Case 3) reuses this helper to produce, so it must stay flat. The literal
-    ``/release`` end-to-end symmetry is exercised by ``build_repo_via_portable_named``,
-    not here.
-
-    Returns the on-guest flat ``<ABI>/`` directory (the branch ``.pkg`` is one ABI,
-    ``FreeBSD:15:amd64``) that the ``file://`` repo conf points at.
+    The catalog files are then shipped FLAT to ``PORTABLE_REPO_ROOT`` itself. Returns
+    ``PORTABLE_REPO_ROOT`` — the on-guest directory the ``file://`` repo conf points at.
     """
     in_dir = tmp_path / "portable_in"
     out_dir = tmp_path / "portable_out"
@@ -386,7 +385,7 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
         (in_dir / pkg.name).write_bytes(pkg.read_bytes())
 
     # Run the pure-Python generator with THIS process's interpreter — no `pkg`/libpkg.
-    # --catalog-name release nests the channel under out/release/<ABI>/ (literal /release).
+    # No --catalog-name: a plain run emits the catalog directly at --out (arch-less).
     proc = subprocess.run(
         [
             sys.executable,
@@ -395,8 +394,6 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
             str(in_dir),
             "--out",
             str(out_dir),
-            "--catalog-name",
-            "release",
         ],
         capture_output=True,
         text=True,
@@ -408,26 +405,17 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
             f"build-repo-portable.py failed on the runner: rc={proc.returncode}\n"
             f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
         )
-    release_root = out_dir / "release"
-    abi_buckets = sorted(p for p in release_root.iterdir() if p.is_dir()) if release_root.is_dir() else []
-    assert len(abi_buckets) == 1, f"portable generator produced {[p.name for p in abi_buckets]} ABI buckets, expected 1"
-    local_abi_dir = abi_buckets[0]
-    # The catalog triple must be present locally before shipping.
+    # The catalog triple must be present locally, directly at out_dir, before shipping.
     for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg"):
-        assert (local_abi_dir / fname).is_file(), f"portable generator did not emit {fname} under {local_abi_dir}"
+        assert (out_dir / fname).is_file(), f"portable generator did not emit {fname} under {out_dir}"
 
-    # Ship the catalog files to a FLAT on-guest <ABI>/ path (fresh dir per run). The
-    # release/ segment is intentionally dropped so this doubles as the legacy "no variant
-    # prefix" ${ABI}/ layout that test_legacy_abi_path_still_upgrades (ADR-20 Case 3)
-    # reuses this helper to produce; the /release symmetry is covered by
-    # build_repo_via_portable_named.
-    guest_abi_dir = f"{PORTABLE_REPO_ROOT}/{local_abi_dir.name}"
+    # Ship the catalog files FLAT to PORTABLE_REPO_ROOT itself (fresh dir per run).
     _ssh_check(vm, "/bin/rm", "-rf", PORTABLE_REPO_ROOT)
-    _ssh_check(vm, "/bin/mkdir", "-p", guest_abi_dir)
-    for f in sorted(local_abi_dir.iterdir()):
+    _ssh_check(vm, "/bin/mkdir", "-p", PORTABLE_REPO_ROOT)
+    for f in sorted(out_dir.iterdir()):
         if f.is_file():
-            _scp_to_guest(vm, f, f"{guest_abi_dir}/{f.name}")
-    return guest_abi_dir
+            _scp_to_guest(vm, f, f"{PORTABLE_REPO_ROOT}/{f.name}")
+    return PORTABLE_REPO_ROOT
 
 
 def run_add_repo_sh(vm: SmokeVM, base_url: str, *, timeout: float = 300.0) -> subprocess.CompletedProcess[str]:
@@ -440,8 +428,8 @@ def run_add_repo_sh(vm: SmokeVM, base_url: str, *, timeout: float = 300.0) -> su
     update``, and VERIFIES the package is visible from OUR repo. A non-zero exit (its
     verify step failing) raises with the captured output. ``base_url`` points at the
     catalog ROOT; add-repo.sh installs+runs the generator hook, which resolves the
-    box's ``<channel>/<varver>/<arch>`` subtree, so the catalog MUST live under
-    ``<base_url>/<channel>/<varver>/<arch>/``.
+    box's ``<channel>/<varver>`` subtree (arch-less, NO_ARCH — issue #1806), so the
+    catalog MUST live under ``<base_url>/<channel>/<varver>/``.
     """
     _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR, GUEST_ADD_REPO_RCD_DIR)
     _scp_to_guest(vm, ADD_REPO_SH, GUEST_ADD_REPO_SH)
@@ -1024,8 +1012,8 @@ def test_build_repo_script_catalog_is_accepted(repo_vm: SmokeVM) -> None:
     ``pkg repo`` op are identical regardless of which libpkg runs them).
 
     Given the package ABSENT and a catalog produced by ``build-repo.sh`` over the
-      branch ``.pkg`` (its ``release/<varver>/<arch>/`` bucket holds
-      meta.conf/packagesite.pkg/data.pkg),
+      branch ``.pkg`` (its ``release/<varver>/`` bucket holds
+      meta.conf/packagesite.pkg/data.pkg — arch-less, NO_ARCH, issue #1806),
       enabled via a NONE-signed ``file://`` repo above the pfSense repo,
     When ``pkg update`` reads it and ``pkg install -y`` runs (NO ``-r``, NO ``-f``),
     Then ``pkg update`` accepts the script-generated catalog AND the install comes
@@ -1036,11 +1024,11 @@ def test_build_repo_script_catalog_is_accepted(repo_vm: SmokeVM) -> None:
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
 
     # GIVEN: build the catalog with the Phase-2 SCRIPT (not the inline pkg repo), then
-    # point a NONE-signed file:// repo at the produced <ABI>/ dir, above pfSense.
-    abi_dir = build_repo_via_script(repo_vm, [Path(pkg), *_smoke_dep_pkg_paths()])
+    # point a NONE-signed file:// repo at the produced release/<varver>/ dir, above pfSense.
+    catalog_dir = build_repo_via_script(repo_vm, [Path(pkg), *_smoke_dep_pkg_paths()])
     pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
     pkg_delete(repo_vm)
-    write_repo_conf(repo_vm, abi_dir, ours_priority=pfsense_prio + 100)
+    write_repo_conf(repo_vm, catalog_dir, ours_priority=pfsense_prio + 100)
 
     # WHEN: pkg update must ACCEPT the script-generated catalog (rc=0; a rejected
     # catalog would fail here — that is the build-side premise under test).
@@ -1065,13 +1053,13 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM, tmp_path: Path
     add-repo.sh is run hermetically against a LOCAL ``file://`` catalog via its own
     ``--base-url`` override; the github.io default + a live HTTPS add-repo.sh run are
     the post-deploy/Phase-6 note. The hook resolves the conf to the PRODUCTION layout
-    ``release/<varver>/<arch>`` (ADR-39 — the bare arch leaf, not the full ABI), so the
-    catalog must be laid out the same way for ``--base-url file://<root>`` to resolve;
-    we build it at ``<root>/release/<varver>/<arch>/`` with the pure-Python generator
-    (the production ``build_repo_matrix`` layout). The script ships priority 100, above
-    the Netgate ``pfSense`` repo (0), so cross-repo install picks ours.
+    ``release/<varver>`` (ADR-39, arch-less — issue #1806), so the catalog must be
+    laid out the same way for ``--base-url file://<root>`` to resolve; we build it at
+    ``<root>/release/<varver>/`` with the pure-Python generator (the production
+    ``build_repo_matrix`` layout). The script ships priority 100, above the Netgate
+    ``pfSense`` repo (0), so cross-repo install picks ours.
 
-    Given the package ABSENT and a catalog under ``<root>/release/<varver>/<arch>/``,
+    Given the package ABSENT and a catalog under ``<root>/release/<varver>/``,
     When ``add-repo.sh --base-url file://<root>`` runs (default release repo: installs +
       runs the hook, ``pkg update``, verifies) and then ``pkg install -y`` runs (NO -r, NO -f),
     Then add-repo.sh exits 0 (its own verify found the package in our repo), it wrote
@@ -1081,19 +1069,18 @@ def test_shipped_add_repo_sh_bootstrap_installs(repo_vm: SmokeVM, tmp_path: Path
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
 
-    # GIVEN: a catalog at <SCRIPT_REPO_ROOT>/release/<varver>/<arch>/ matching the box's
-    # variant — the exact path add-repo.sh's hook resolves the conf to (ADR-39). The
-    # bare-arch leaf (not the full ABI) mirrors the production build_repo_matrix layout.
-    real_varver, real_arch = _box_real_catalog(repo_vm).rsplit("/", 1)
-    abi_dir = build_repo_via_portable_named(
+    # GIVEN: a catalog at <SCRIPT_REPO_ROOT>/release/<varver>/ matching the box's
+    # variant — the exact path add-repo.sh's hook resolves the conf to (ADR-39,
+    # arch-less — issue #1806).
+    real_varver = _box_real_varver(repo_vm)
+    catalog_dir = build_repo_via_portable_named(
         repo_vm,
         [Path(pkg), *_smoke_dep_pkg_paths()],
         tmp_path,
         catalog_name=f"release/{real_varver}",
         guest_root=SCRIPT_REPO_ROOT,
-        arch_leaf=real_arch,
     )
-    assert abi_dir == f"{SCRIPT_REPO_ROOT}/release/{real_varver}/{real_arch}", f"unexpected catalog dir {abi_dir!r}"
+    assert catalog_dir == f"{SCRIPT_REPO_ROOT}/release/{real_varver}", f"unexpected catalog dir {catalog_dir!r}"
     pkg_delete(repo_vm)
 
     # WHEN: run the SHIPPED bootstrap against the local catalog root. Its verify step
@@ -1129,9 +1116,9 @@ def test_portable_catalog_is_accepted(repo_vm: SmokeVM, tmp_path: Path) -> None:
     ``data.pkg`` AND its blake2b/z-base-32 ``sum`` (the .pkg integrity check passes).
 
     Given the package ABSENT and a catalog produced by ``build-repo-portable.py`` over
-      the branch ``.pkg`` — generated ENTIRELY on the runner in pure Python, then its
-      ``<ABI>/`` tree shipped to the guest — enabled via a NONE-signed ``file://`` repo
-      above the pfSense repo,
+      the branch ``.pkg`` — generated ENTIRELY on the runner in pure Python, then
+      shipped FLAT to the guest (arch-less, NO_ARCH — issue #1806) — enabled via a
+      NONE-signed ``file://`` repo above the pfSense repo,
     When ``pkg update`` reads the pure-Python catalog and ``pkg install -y`` runs
       (NO ``-r``, NO ``-f``),
     Then ``pkg update`` accepts it AND the install comes from OUR repo
@@ -1142,11 +1129,11 @@ def test_portable_catalog_is_accepted(repo_vm: SmokeVM, tmp_path: Path) -> None:
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
 
     # GIVEN: build the catalog with the PURE-PYTHON generator on the runner (no libpkg),
-    # ship its <ABI>/ tree to the guest, point a NONE-signed file:// repo above pfSense.
-    abi_dir = build_repo_via_portable(repo_vm, [Path(pkg), *_smoke_dep_pkg_paths()], tmp_path)
+    # ship it flat to the guest, point a NONE-signed file:// repo above pfSense.
+    catalog_dir = build_repo_via_portable(repo_vm, [Path(pkg), *_smoke_dep_pkg_paths()], tmp_path)
     pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
     pkg_delete(repo_vm)
-    write_repo_conf(repo_vm, abi_dir, ours_priority=pfsense_prio + 100)
+    write_repo_conf(repo_vm, catalog_dir, ours_priority=pfsense_prio + 100)
 
     # WHEN: pkg update must ACCEPT the pure-Python catalog (rc=0; a rejected catalog —
     # bad meta.conf, malformed packagesite, or a mismatched sum — would fail here).
@@ -1196,11 +1183,11 @@ def test_portable_catalog_dedups_duplicate_sources(repo_vm: SmokeVM, tmp_path: P
     # assertion below counts EXACTLY one package .pkg in the bucket (the dedup
     # proof); a dep .pkg would be a second, distinct-named entry and break that
     # count. It has no "Missing dependency" assertion (not this test's concern).
-    abi_dir = build_repo_via_portable(repo_vm, [a, b], tmp_path)
+    catalog_dir = build_repo_via_portable(repo_vm, [a, b], tmp_path)
 
     # THEN (catalog shape): exactly ONE package .pkg, canonically named (no prefix) — the
     # catalog files (packagesite.pkg/data.pkg) also end in .pkg, so exclude them.
-    listing = _ssh_check(repo_vm, "/bin/ls", "-1", abi_dir).stdout.split()
+    listing = _ssh_check(repo_vm, "/bin/ls", "-1", catalog_dir).stdout.split()
     catalog_files = {"packagesite.pkg", "data.pkg", "meta.pkg"}
     pkgs = [n for n in listing if n.endswith(".pkg") and n not in catalog_files]
     assert len(pkgs) == 1, f"expected ONE deduped package .pkg in the bucket, got {pkgs}"
@@ -1211,7 +1198,7 @@ def test_portable_catalog_dedups_duplicate_sources(repo_vm: SmokeVM, tmp_path: P
     # WHEN/THEN (install): a real pkg installs the deduped catalog from OUR repo.
     pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
     pkg_delete(repo_vm)
-    write_repo_conf(repo_vm, abi_dir, ours_priority=pfsense_prio + 100)
+    write_repo_conf(repo_vm, catalog_dir, ours_priority=pfsense_prio + 100)
     pkg_update(repo_vm)
     assert pkg_installed_version(repo_vm) is None, f"{PKG_NAME} unexpectedly present before the dedup install"
     pkg_install_from_repo(repo_vm)
@@ -1239,11 +1226,16 @@ def _live_base_url() -> str | None:
     return val.rstrip("/")
 
 
-def poll_catalog_served(base_url: str, abi: str, *, attempts: int = 30, delay: float = 10.0) -> None:
-    """Poll the live ``<base>/<ABI>/meta.conf`` until it serves (first deploy + DNS/cert lag).
+def poll_catalog_served(base_url: str, catalog_path: str, *, attempts: int = 30, delay: float = 10.0) -> None:
+    """Poll the live ``<base>/<catalog_path>/meta.conf`` until it serves (first deploy + DNS/cert lag).
 
-    The catalog files a client ``pkg update`` consumes are ``meta.conf`` +
-    ``packagesite.pkg``; a 200 on both is the runner-side BACKSTOP that the deploy
+    Arch-less (NO_ARCH — issue #1806): a published catalog is keyed by varver alone,
+    no ``${ABI}``/CPU segment. ``catalog_path`` is the caller's full subtree UNDER
+    ``base_url`` — no channel is hardcoded here, since callers' bases differ (the
+    release check's base is the pkg root, so it passes ``f"release/{varver}"``; the
+    nightly check's base already ends in ``/nightly``, so it passes the bare
+    ``varver``). The catalog files a client ``pkg update`` consumes are ``meta.conf``
+    + ``packagesite.pkg``; a 200 on both is the runner-side BACKSTOP that the deploy
     actually published a usable tree, independent of the guest. Raises with the last
     error if the URL never serves within the budget.
     """
@@ -1251,7 +1243,7 @@ def poll_catalog_served(base_url: str, abi: str, *, attempts: int = 30, delay: f
     for _ in range(attempts):
         try:
             for fname in ("meta.conf", "packagesite.pkg"):
-                url = f"{base_url}/{abi}/{fname}"
+                url = f"{base_url}/{catalog_path}/{fname}"
                 with urllib.request.urlopen(url, timeout=15) as resp:  # noqa: S310 (fixed https Pages URL)
                     if resp.status != 200:
                         raise RuntimeError(f"{url} -> HTTP {resp.status}")
@@ -1261,7 +1253,7 @@ def poll_catalog_served(base_url: str, abi: str, *, attempts: int = 30, delay: f
         except (urllib.error.URLError, RuntimeError, TimeoutError) as exc:
             last_err = f"{type(exc).__name__}: {exc}"
             time.sleep(delay)
-    raise AssertionError(f"live catalog never served {base_url}/{abi}/ within budget; last error: {last_err}")
+    raise AssertionError(f"live catalog never served {base_url}/{catalog_path}/ within budget; last error: {last_err}")
 
 
 def pin_pages_hosts(vm: SmokeVM, host: str, *, timeout: float = 60.0) -> str:
@@ -1319,16 +1311,26 @@ def restore_pages_hosts(vm: SmokeVM, prior_hosts: str, *, timeout: float = 60.0)
         raise RuntimeError(f"restore_pages_hosts failed: rc={result.returncode} {result.stderr!r}")
 
 
-def write_live_repo_conf(vm: SmokeVM, base_url: str, *, priority: int, timeout: float = 60.0) -> None:
-    """Write OUR production conf pointing at the LIVE ``<base>/${ABI}`` Pages URL.
+def write_live_repo_conf(vm: SmokeVM, base_url: str, varver: str, *, priority: int, timeout: float = 60.0) -> None:
+    """Write OUR production conf pointing at the LIVE ``<base>/release/<varver>`` Pages URL.
 
     Built from the SAME generator the publish job emits (``build-repo-portable.py
-    --print-conf --base-url <base>``), but with the ``priority:`` raised above the
-    Netgate ``pfSense`` repo so cross-repo resolution favours ours. The literal
-    ``${ABI}`` is expanded by pkg(8) (not the shell) and follows the box's ABI.
+    --print-conf --base-url <base> --catalog-path <varver>``), but with the
+    ``priority:`` raised above the Netgate ``pfSense`` repo so cross-repo resolution
+    favours ours. The conf URL is fully resolved (``<base>/release/<varver>`` —
+    arch-less, NO_ARCH, issue #1806): there is no ``${ABI}`` pkg(8) variable any
+    more, the caller supplies the concrete varver.
     """
     proc = subprocess.run(
-        [sys.executable, str(BUILD_REPO_PORTABLE), "--print-conf", "--base-url", base_url],
+        [
+            sys.executable,
+            str(BUILD_REPO_PORTABLE),
+            "--print-conf",
+            "--base-url",
+            base_url,
+            "--catalog-path",
+            varver,
+        ],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -1354,16 +1356,18 @@ def write_live_repo_conf(vm: SmokeVM, base_url: str, *, priority: int, timeout: 
 @pytest.mark.timeout(900)  # live deploy/DNS/cert can lag + pkg update + install over the public URL.
 def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     """PHASE-3b LIVE URL: a real pfSense box installs from the DEPLOYED Pages catalog
-    over its public HTTPS ``https://pfblockerng.github.io/pkg/${ABI}`` URL (no ``-f``).
+    over its public HTTPS ``https://pfblockerng.github.io/pkg/release/<varver>`` URL
+    (no ``-f``).
 
     DISPATCH-ONLY + GATED on ``SMOKE_REPO_LIVE_URL`` (unset -> SKIP). The always-on
     proof is the file:// VM-acceptance above; this exercises the REAL transport the
     publish pipeline serves, so it can only run after a publish dispatch has deployed.
 
     Given the publish job has DEPLOYED the catalog to Pages (runner-side backstop:
-      ``<base>/<ABI>/meta.conf`` + ``packagesite.pkg`` serve 200), the guest has the
-      Pages IPs pinned for the host (its DNS is sandboxed), the package is ABSENT, and
-      OUR conf points at the live ``${ABI}`` URL above the Netgate ``pfSense`` repo,
+      ``<base>/release/<varver>/meta.conf`` + ``packagesite.pkg`` serve 200), the guest
+      has the Pages IPs pinned for the host (its DNS is sandboxed), the package is
+      ABSENT, and OUR conf points at the live ``release/<varver>`` URL above the
+      Netgate ``pfSense`` repo,
     When ``pkg update`` reads the live catalog and ``pkg install -y`` runs (NO ``-r``,
       NO ``-f``),
     Then ``pkg update`` accepts the deployed catalog AND the install comes from OUR
@@ -1379,9 +1383,12 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     assert host, f"could not parse a host from {base_url!r}"
 
     # BACKSTOP: prove the deploy actually serves the catalog from the RUNNER first
-    # (independent of the guest) — polls through first-deploy / DNS / cert lag. The ABI to
-    # poll is this leg's own, derived from the matrix (the CE box for the live-pages check).
-    poll_catalog_served(base_url, matrix_abi())
+    # (independent of the guest) — polls through first-deploy / DNS / cert lag. The
+    # varver to poll is this leg's own, derived from the matrix (own_variant().catalog
+    # — the published catalogs are keyed from the matrix; needs no VM round-trip). This
+    # release check's base is the pkg root, so the full subtree is "release/<varver>".
+    varver = own_variant().catalog
+    poll_catalog_served(base_url, f"release/{varver}")
 
     # GIVEN: Pages IPs pinned (guest DNS is sandboxed), package absent, our conf at
     # the LIVE url above pfSense.
@@ -1389,7 +1396,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     try:
         pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
         pkg_delete(repo_vm)
-        write_live_repo_conf(repo_vm, base_url, priority=pfsense_prio + 100)
+        write_live_repo_conf(repo_vm, base_url, varver, priority=pfsense_prio + 100)
 
         # WHEN: pkg update must ACCEPT the live HTTPS catalog (a rejected catalog — bad
         # meta.conf, malformed packagesite, mismatched sum, or an unreachable URL — fails here).
@@ -1410,7 +1417,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
 
 # =========================================================================== #
 # ADR-20 Phase 6 — variant-catalog live-VM cases (CE install, wrong-variant   #
-# guard, legacy path, routing URL).                                            #
+# guard, routing URL).                                                        #
 #                                                                              #
 # Marker: @pytest.mark.repo  (inherited from pytestmark = pytest.mark.repo).  #
 # Deselected from default `python -m pytest` — dispatched via:                #
@@ -1436,26 +1443,18 @@ def build_repo_via_portable_named(
     *,
     catalog_name: str,
     guest_root: str,
-    arch_leaf: str | None = None,
 ) -> str:
-    """Like ``build_repo_via_portable`` but writes under ``<out>/<catalog-name>/<dir>/``.
+    """Like ``build_repo_via_portable`` but writes under ``<out>/<catalog-name>/``.
 
     Uses ``build-repo-portable.py --catalog-name <catalog_name>`` to place the catalog
-    under the named variant directory. The on-guest leaf directory is chosen by
-    ``arch_leaf``:
-
-    * ``arch_leaf=None`` (default) ships under the builder's ``<ABI>/`` bucket
-      (``ce-2.8/FreeBSD:15:amd64/``) and returns that ABI path — for tests whose conf
-      points directly at the returned dir.
-    * ``arch_leaf="amd64"`` ships under the bare-arch leaf (``ce-2.8/amd64/``),
-      mirroring the PRODUCTION ``build_repo_matrix`` layout (release/<varver>/<arch>) —
-      for tests driven by add-repo.sh / the rc.d hook, whose conf resolves to the bare
-      arch leaf (ADR-39), not the full ABI.
+    DIRECTLY under the named variant directory (arch-less, NO_ARCH — issue #1806; no
+    per-ABI bucket any more, ``catalog_name`` may itself contain ``/``, e.g.
+    ``"release/ce-2.8"``). Ships those files to ``<guest_root>/<catalog_name>/``.
 
     Returns the on-guest path the repo conf should point at.
     """
-    in_dir = tmp_path / f"in_{catalog_name}"
-    out_dir = tmp_path / f"out_{catalog_name}"
+    in_dir = tmp_path / f"in_{catalog_name.replace('/', '_')}"
+    out_dir = tmp_path / f"out_{catalog_name.replace('/', '_')}"
     in_dir.mkdir(parents=True, exist_ok=True)
     for pkg in pkg_files:
         (in_dir / pkg.name).write_bytes(pkg.read_bytes())
@@ -1482,26 +1481,20 @@ def build_repo_via_portable_named(
             f"rc={proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
         )
 
-    catalog_root = out_dir / catalog_name
-    abi_buckets = sorted(p for p in catalog_root.iterdir() if p.is_dir())
-    assert len(abi_buckets) == 1, (
-        f"portable generator produced {[p.name for p in abi_buckets]} ABI buckets under {catalog_name}/, expected 1"
-    )
-    local_abi_dir = abi_buckets[0]
+    local_catalog_dir = out_dir / catalog_name
     for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg"):
-        assert (local_abi_dir / fname).is_file(), f"portable generator did not emit {fname} under {local_abi_dir}"
+        assert (local_catalog_dir / fname).is_file(), (
+            f"portable generator did not emit {fname} under {local_catalog_dir}"
+        )
 
-    # Ship the catalog tree to the guest under the chosen leaf dir: the builder's
-    # <ABI>/ bucket by default, or the bare-arch leaf when arch_leaf is given (the
-    # production release/<varver>/<arch> layout the ADR-39 conf resolves to).
-    leaf = arch_leaf if arch_leaf is not None else local_abi_dir.name
-    guest_leaf_dir = f"{guest_root}/{catalog_name}/{leaf}"
-    _ssh_check(vm, "/bin/rm", "-rf", f"{guest_root}/{catalog_name}")
-    _ssh_check(vm, "/bin/mkdir", "-p", guest_leaf_dir)
-    for f in sorted(local_abi_dir.iterdir()):
+    # Ship the catalog files to the guest under <guest_root>/<catalog_name>/.
+    guest_catalog_dir = f"{guest_root}/{catalog_name}"
+    _ssh_check(vm, "/bin/rm", "-rf", guest_catalog_dir)
+    _ssh_check(vm, "/bin/mkdir", "-p", guest_catalog_dir)
+    for f in sorted(local_catalog_dir.iterdir()):
         if f.is_file():
-            _scp_to_guest(vm, f, f"{guest_leaf_dir}/{f.name}")
-    return guest_leaf_dir
+            _scp_to_guest(vm, f, f"{guest_catalog_dir}/{f.name}")
+    return guest_catalog_dir
 
 
 def forge_variant_pkg(src_pkg: Path, out_dir: Path, *, target_php: str, target_abi: str) -> Path:
@@ -1538,7 +1531,10 @@ def forge_variant_pkg(src_pkg: Path, out_dir: Path, *, target_php: str, target_a
                         else:
                             new_deps[key] = val
                     obj["deps"] = new_deps
-                # Set the target ABI so the portable generator buckets it correctly.
+                # Set the target ABI: the box's own `pkg install` ABI-compatibility check is
+                # the guard under test (a concrete-vs-wildcard bucket no longer exists —
+                # issue #1806 — so this must be a wildcard ABI or the portable generator
+                # itself hard-rejects it; callers pass "FreeBSD:<opp_major>:*").
                 obj["abi"] = target_abi
                 pkg_name = obj.get("name", pkg_name)
                 data = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
@@ -1579,15 +1575,17 @@ def pkg_query_deps(vm: SmokeVM, *, timeout: float = 60.0) -> str:
 @pytest.mark.timeout(600)
 def test_install_from_variant_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
     """ADR-20 P6 CASE 1 — the box's package installs from its variant-keyed
-    ``<variant>/${ABI}`` catalog; its own php + Python deps resolve; origin is our repo.
+    ``<variant>/`` catalog (arch-less, NO_ARCH — issue #1806); its own php + Python
+    deps resolve; origin is our repo.
 
     Scenario: package installed from the variant-correct catalog for THIS box.
-      Background: hermetic file:// catalog at ``<own.catalog>/<own.abi>/``. The variant
-      (ABI / php / Python flavor) comes from the ci-metadata matrix (SMOKE_ABI /
-      SMOKE_PHP_VERSION / SMOKE_PY_FLAVOR), so the CE leg asserts php83/FreeBSD:15 and the
-      Plus leg asserts php85/FreeBSD:16 — no hardcoded flavor.
+      Background: hermetic file:// catalog at ``<own.catalog>/`` directly (no ABI
+      leaf). The variant (ABI / php / Python flavor) comes from the ci-metadata
+      matrix (SMOKE_ABI / SMOKE_PHP_VERSION / SMOKE_PY_FLAVOR), so the CE leg
+      asserts php83/FreeBSD:15 and the Plus leg asserts php85/FreeBSD:16 — no
+      hardcoded flavor.
 
-    Given the package ABSENT and a variant-keyed catalog under ``<variant>/${ABI}/``
+    Given the package ABSENT and a variant-keyed catalog under ``<variant>/``
       built from the branch .pkg by the pure-Python generator,
     When ``pkg install -y <pkgname>`` resolves from this catalog,
     Then ``pkg query '%dn %dv' <pkgname>`` shows the box's OWN php dep AND the matrix
@@ -1605,7 +1603,7 @@ def test_install_from_variant_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
 
     # GIVEN: build the box's variant catalog with the variant-keyed dir on the runner,
     # ship to guest, write a NONE-signed file:// repo conf above pfSense.
-    abi_dir = build_repo_via_portable_named(
+    catalog_dir = build_repo_via_portable_named(
         repo_vm,
         [Path(pkg), *_smoke_dep_pkg_paths()],
         tmp_path,
@@ -1614,7 +1612,7 @@ def test_install_from_variant_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
     )
     pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
     pkg_delete(repo_vm)
-    write_repo_conf(repo_vm, abi_dir, ours_priority=pfsense_prio + 100)
+    write_repo_conf(repo_vm, catalog_dir, ours_priority=pfsense_prio + 100)
 
     # Before-state: package absent.
     pkg_update(repo_vm)
@@ -1667,9 +1665,9 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
     (php83/FreeBSD:15) package — no hardcoded direction.
 
     Scenario: installing the opposite-variant package fails with an unsatisfied dep.
-      Background: hermetic file:// catalog at ``<opp.catalog>/<opp.abi>/``.
+      Background: hermetic file:// catalog at ``<opp.catalog>/`` directly (no ABI leaf).
 
-    Before-state ASSERT: the box's OWN package (``<own.catalog>/${ABI}``) installs CLEANLY
+    Before-state ASSERT: the box's OWN package (``<own.catalog>/``) installs CLEANLY
       (own php dep satisfied) — proves the own path is correct and the AFTER failure is
       caused by the variant mismatch, not an unrelated setup issue.
     Given the own package uninstalled and the repo conf pointing at the opposite-variant
@@ -1686,7 +1684,7 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
     opp = opposite_variant()
 
     # ---- Before-state: prove the box's OWN path works (the guard control) ----
-    own_abi_dir = build_repo_via_portable_named(
+    own_catalog_dir = build_repo_via_portable_named(
         repo_vm,
         [src, *_smoke_dep_pkg_paths()],
         tmp_path,
@@ -1695,7 +1693,7 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
     )
     pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
     pkg_delete(repo_vm)
-    write_repo_conf(repo_vm, own_abi_dir, ours_priority=pfsense_prio + 100)
+    write_repo_conf(repo_vm, own_catalog_dir, ours_priority=pfsense_prio + 100)
     pkg_update(repo_vm)
 
     # Assert before-state: absent before the own-variant control install.
@@ -1710,16 +1708,21 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
     assert own.php in own_deps, f"Control ({own.abi}) install: {own.php} not in deps; pkg query '%dn %dv':\n{own_deps}"
     # Own install succeeded — this is the before-state anchor.
 
-    # ---- Forge the OPPOSITE variant's .pkg (opp.php dep, opp.abi ABI) ----
-    opp_pkg = forge_variant_pkg(src, tmp_path / "opp_forge", target_php=opp.php, target_abi=opp.abi)
+    # ---- Forge the OPPOSITE variant's .pkg (opp.php dep, opp's freebsd_major ABI) ----
+    # The portable generator now hard-rejects a concrete ABI (issue #1806 — production
+    # catalogs only ever hold wildcard/NO_ARCH pkgs), so the forged ABI must be
+    # wildcarded to the opposite major: "FreeBSD:<opp_major>:*". This still exercises
+    # the guard under test (the box's own OS-major mismatch), just with the ABI shape
+    # a real catalog would actually carry.
+    opp_major = opp.abi.split(":")[1]
+    opp_pkg = forge_variant_pkg(src, tmp_path / "opp_forge", target_php=opp.php, target_abi=f"FreeBSD:{opp_major}:*")
 
-    # ---- Build the opposite-variant catalog in <opp.catalog>/<opp.abi>/ ----
-    # Deliberately NOT folding _smoke_dep_pkg_paths() here: this leg's dep .pkgs
-    # are built for the box's OWN freebsd_major, which by definition mismatches
-    # opp.abi — adding them would open a SECOND ABI bucket and break the
-    # generator's own `len(abi_buckets) == 1` invariant. This catalog exists to
-    # be REJECTED (wrong variant), not to prove dep resolution.
-    opp_abi_dir = build_repo_via_portable_named(
+    # ---- Build the opposite-variant catalog in <opp.catalog>/ directly (no ABI leaf) ----
+    # Deliberately NOT folding _smoke_dep_pkg_paths() here: this catalog exists only to
+    # be REJECTED (wrong variant, not dep resolution), and its one package already
+    # belongs to the box's own freebsd_major — the dep .pkgs built for this leg would be
+    # redundant, not a second competing ABI (the generator's per-run major is now single).
+    opp_catalog_dir = build_repo_via_portable_named(
         repo_vm,
         [opp_pkg],
         tmp_path,
@@ -1730,7 +1733,7 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
     # Remove the own install; point conf at the opposite-variant catalog.
     pkg_delete(repo_vm)
     assert vm_pkg_query_name(repo_vm) == "", "package still present after pkg_delete"
-    write_repo_conf(repo_vm, opp_abi_dir, ours_priority=pfsense_prio + 100)
+    write_repo_conf(repo_vm, opp_catalog_dir, ours_priority=pfsense_prio + 100)
 
     try:
         pkg_update(repo_vm)
@@ -1769,110 +1772,10 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
     )
 
 
-# --------------------------------------------------------------------------- #
-# ADR-20 Case 3 — legacy ${ABI}/ path still serves CE build                   #
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.timeout(900)
-def test_legacy_abi_path_still_upgrades(repo_vm: SmokeVM, tmp_path: Path) -> None:
-    """ADR-20 P6 CASE 3 — Old-conf CE box (legacy ``${ABI}/`` path, no variant
-    prefix) still upgrades from N to N+1 during the ADR-20 transition window.
-
-    Scenario: Old-conf CE box (legacy ABI/ path) still upgrades.
-      Background: hermetic file:// legacy catalog at FreeBSD:15:amd64/ (no variant prefix).
-
-    Given version N installed from the legacy (no-prefix) ``${ABI}/`` path,
-    When the catalog is rebuilt with version N+1 and ``pkg upgrade -y`` runs,
-    Then the box moves to N+1, still from our repo.
-    Assert BEFORE: version N installed, N+1 available from catalog.
-    Assert AFTER: version N+1 installed.
-    """
-    pkg = os.environ.get("SMOKE_PKG")
-    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
-    src = Path(pkg)
-
-    base_version = read_compact_version(src)
-    low_version = f"{base_version}_1"
-    high_version = f"{base_version}_9"
-    assert low_version != high_version
-
-    low_pkg = reversion_pkg(src, low_version, tmp_path / "legacy_low")
-    high_pkg = reversion_pkg(src, high_version, tmp_path / "legacy_high")
-
-    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
-
-    try:
-        # ---- GIVEN: legacy catalog (no variant prefix) with the LOWER build ----
-        # build_repo_via_portable produces <out>/<ABI>/ (no catalog-name prefix).
-        dep_pkgs = _smoke_dep_pkg_paths()
-        legacy_abi_dir = build_repo_via_portable(repo_vm, [low_pkg, *dep_pkgs], tmp_path)
-        pkg_delete(repo_vm)
-        write_repo_conf(repo_vm, legacy_abi_dir, ours_priority=pfsense_prio + 100)
-        pkg_update(repo_vm)
-        assert vm_pkg_query_name(repo_vm) == "", f"{PKG_NAME} unexpectedly present before legacy upgrade test"
-
-        # Install the LOWER version from the legacy path.
-        pkg_install_from_repo(repo_vm)
-
-        # Assert BEFORE: N installed, from our repo.
-        installed_low = pkg_installed_version(repo_vm)
-        assert installed_low == low_version, (
-            f"Legacy path: expected {low_version!r} installed first, got {installed_low!r}"
-        )
-        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, (
-            f"Legacy low build came from {pkg_repo_origin(repo_vm)!r}, expected our repo"
-        )
-
-        # ---- WHEN: rebuild legacy catalog with HIGHER build, upgrade ----
-        # Must rebuild into the SAME on-guest dir so the existing conf still points at it.
-        # Re-run portable generator into a new runner tmp, ship to the same guest dir.
-        in_high = tmp_path / "legacy_high_in"
-        out_high = tmp_path / "legacy_high_out"
-        in_high.mkdir(parents=True, exist_ok=True)
-        (in_high / high_pkg.name).write_bytes(high_pkg.read_bytes())
-        for _dep in dep_pkgs:
-            (in_high / _dep.name).write_bytes(_dep.read_bytes())
-        proc_high = subprocess.run(
-            [sys.executable, str(BUILD_REPO_PORTABLE), "--in", str(in_high), "--out", str(out_high)],
-            capture_output=True,
-            text=True,
-            timeout=180.0,
-            check=False,
-        )
-        if proc_high.returncode != 0:
-            raise RuntimeError(
-                f"build-repo-portable.py (legacy high) failed: rc={proc_high.returncode}\n"
-                f"stdout:\n{proc_high.stdout}\nstderr:\n{proc_high.stderr}"
-            )
-        high_abi_dirs = sorted(p for p in out_high.iterdir() if p.is_dir())
-        assert len(high_abi_dirs) == 1, (
-            f"legacy high catalog produced {[p.name for p in high_abi_dirs]} ABI dirs, expected 1"
-        )
-        high_local_abi = high_abi_dirs[0]
-
-        # Ship the updated catalog to the SAME guest ABI dir (overwrite in place).
-        for f in sorted(high_local_abi.iterdir()):
-            if f.is_file():
-                _scp_to_guest(repo_vm, f, f"{legacy_abi_dir}/{f.name}")
-
-        pkg_update(repo_vm)
-        proc_upg = pkg_upgrade(repo_vm)
-
-        # THEN: box moves to N+1, still from our repo.
-        upg_combined = proc_upg.stdout + proc_upg.stderr
-        assert "Missing dependency" not in upg_combined, f"Legacy upgrade: RUN_DEPENDS did not resolve:\n{upg_combined}"
-        installed_high = pkg_installed_version(repo_vm)
-        assert installed_high == high_version, (
-            f"Legacy upgrade: expected {high_version!r} after upgrade, got {installed_high!r}"
-        )
-        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME, (
-            f"Legacy upgrade: origin {pkg_repo_origin(repo_vm)!r}, expected our repo"
-        )
-    finally:
-        pkg_delete(repo_vm)
-        repo_vm.ssh("/bin/rm", "-rf", VARIANT_REPO_ROOT, timeout=60.0)
-
+# ADR-20 Case 3 (legacy ${ABI}/ conf transition window) retired: issue #1806 made
+# every catalog arch-less and deliberately broke existing alpha confs (owner decision).
+# N -> N+1 upgrade coverage is retained by test_pkg_upgrade_moves_to_our_newer_build
+# above (uses build_guest_repo, untouched by the arch-less rework).
 
 # =========================================================================== #
 # ADR-27 Phase 10 — EOL route-only install from a frozen catalog              #
@@ -1895,7 +1798,6 @@ def _build_eol_catalog_on_runner(
     eol_pfsense_version: str,
     variant: str,
     freebsd_major: str,
-    arch: str,
     php_version: str,
     py_flavor: str,
     out_dir: Path,
@@ -1905,16 +1807,16 @@ def _build_eol_catalog_on_runner(
     Runs ``build-repo-portable.py --build-matrix`` with a synthetic route-only
     matrix entry and ``--route-only-pkgs <eol_varver>:<frozen_pkg>``.  The new
     Phase-10 CLI flag is exercised end-to-end here — this is the exact invocation
-    shape publish.yml uses for real EOL versions.
+    shape publish.yml uses for real EOL versions. The matrix carries no ``arch`` key
+    any more (retired by issue #1806 — every catalog is arch-less/NO_ARCH).
 
-    Returns the runner-side ``release/<eol_varver>/<arch>/`` directory whose files
-    will be shipped to the guest.
+    Returns the runner-side ``release/<eol_varver>/`` directory whose files will be
+    shipped to the guest.
     """
     matrix_entry = {
         "pfsense_version": eol_pfsense_version,
         "variant": variant,
         "freebsd_major": freebsd_major,
-        "arch": arch,
         "php_version": php_version,
         "py_flavor": py_flavor,
         "status": "EOL",
@@ -1944,8 +1846,8 @@ def _build_eol_catalog_on_runner(
             f"build-repo-portable.py --build-matrix (route-only) failed: rc={proc.returncode}\n"
             f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
         )
-    release_dir = out_dir / "release" / eol_varver / arch
-    assert release_dir.is_dir(), f"route-only generator did not emit release/{eol_varver}/{arch}/ under {out_dir}"
+    release_dir = out_dir / "release" / eol_varver
+    assert release_dir.is_dir(), f"route-only generator did not emit release/{eol_varver}/ under {out_dir}"
     for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg"):
         assert (release_dir / fname).is_file(), f"route-only generator did not emit {fname} under {release_dir}"
     return release_dir
@@ -1994,8 +1896,10 @@ def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: 
     eol_pfsense_version = "1.99"
     eol_varver = f"{own.variant.lower()}-1.99"
 
-    # Split the ABI string "FreeBSD:<major>:<arch>" into its components.
-    _proto, freebsd_major, arch = own.abi.split(":", 2)
+    # Split the ABI string "FreeBSD:<major>:<arch>" to get the major (the arch
+    # segment is no longer needed anywhere — the catalog is arch-less, NO_ARCH,
+    # issue #1806).
+    freebsd_major = own.abi.split(":")[1]
 
     # Derive the PHP version string expected by the matrix entry (e.g. "8.3" from "php83").
     # own.php is "php83" / "php85" — strip "php" and re-insert the dot: "83" → "8.3".
@@ -2025,7 +1929,6 @@ def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: 
         eol_pfsense_version,
         own.variant,
         freebsd_major,
-        arch,
         php_version,
         own.py,
         eol_out_dir,
@@ -2042,18 +1945,18 @@ def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: 
 
     try:
         # ---- Ship the EOL catalog tree to the guest. ----
-        # Ship only the release/<eol_varver>/<arch>/ files (the ABI subtree); the
-        # guest conf points directly at the on-guest ABI directory.
-        guest_abi_dir = f"{EOL_REPO_ROOT}/{eol_varver}/{arch}"
+        # Ship the release/<eol_varver>/ files directly (arch-less, NO_ARCH — issue
+        # #1806); the guest conf points directly at the on-guest varver directory.
+        guest_catalog_dir = f"{EOL_REPO_ROOT}/{eol_varver}"
         _ssh_check(repo_vm, "/bin/rm", "-rf", EOL_REPO_ROOT)
-        _ssh_check(repo_vm, "/bin/mkdir", "-p", guest_abi_dir)
+        _ssh_check(repo_vm, "/bin/mkdir", "-p", guest_catalog_dir)
         for f in sorted(local_release_dir.iterdir()):
             if f.is_file():
-                _scp_to_guest(repo_vm, f, f"{guest_abi_dir}/{f.name}")
+                _scp_to_guest(repo_vm, f, f"{guest_catalog_dir}/{f.name}")
 
         # --- GIVEN: package absent; EOL catalog enabled above the pfSense repo. ---
         pkg_delete(repo_vm)
-        write_repo_conf(repo_vm, guest_abi_dir, ours_priority=pfsense_prio + 100)
+        write_repo_conf(repo_vm, guest_catalog_dir, ours_priority=pfsense_prio + 100)
         pkg_update(repo_vm)
         before_version = pkg_installed_version(repo_vm)
         assert before_version is None, (
@@ -2089,9 +1992,10 @@ def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: 
 #   1. ORPHAN path: no conf -> hook exits 0, writes nothing (boot-safe).      #
 #   2. REGENERATE path: a conf carrying a STALE varver (as after an OS        #
 #      upgrade) is unconditionally overwritten with the box's CURRENT         #
-#      <varver>/<arch>; the corrected conf then resolves our package via      #
-#      pkg update + install (end-to-end, file:// catalog). The hook's folded  #
-#      detection is cross-checked against an independent Python oracle.        #
+#      <varver> (arch-less, NO_ARCH — issue #1806); the corrected conf then   #
+#      resolves our package via pkg update + install (end-to-end, file://    #
+#      catalog). The hook's folded detection is cross-checked against an     #
+#      independent Python oracle.                                            #
 #   3. IDEMPOTENCE: a second run leaves the conf byte-identical (pure regen).  #
 #                                                                              #
 # The hook runs as a POSIX-sh rc.d script. Off the rc(8) framework it runs    #
@@ -2121,21 +2025,24 @@ def _stage_generate_hook(vm: SmokeVM, *, guest_hook: str) -> None:
     _ssh_check(vm, "/bin/chmod", "755", guest_hook)
 
 
-def _box_real_catalog(vm: SmokeVM) -> str:
-    """Independent Python oracle for the box's ``<varver>/<arch>`` (cross-checks the hook).
+def _box_real_varver(vm: SmokeVM) -> str:
+    """Independent Python oracle for the box's ``<varver>`` (cross-checks the hook).
 
     Mirrors the hook's folded detection: edition = "/etc/product_label contains 'Plus'"
     (absent file -> CE, matching the hook's grep-on-missing-file = CE), version =
-    major.minor of /etc/version, arch = the leaf of ``pkg config abi``.
+    major.minor of /etc/version with any ``-BETA``-style dash suffix stripped FIRST
+    (mirrors the production hook's own strip, issue #1806: a bare ``ver.split(".")[:2]``
+    over ``"26.07-BETA"`` yields ``"plus-26.07-BETA"``, a varver ``build-repo.sh``'s
+    lowercase-varver guard rejects). The catalog is arch-less (NO_ARCH; issue #1806) —
+    there is no ``arch`` component any more.
     """
     label = vm.ssh("/bin/cat", "/etc/product_label", timeout=30.0)
     edition = "plus" if (label.returncode == 0 and "Plus" in label.stdout) else "ce"
     ver = _ssh_check(vm, "/bin/cat", "/etc/version").stdout.strip()
+    ver = ver.split("-", 1)[0]
     mm = ".".join(ver.split(".")[:2])
-    abi = _ssh_check(vm, "/usr/local/sbin/pkg", "config", "abi").stdout.strip()
-    arch = abi.rsplit(":", 1)[-1]
-    assert mm and arch, f"oracle could not resolve box catalog: ver={ver!r} abi={abi!r}"
-    return f"{edition}-{mm}/{arch}"
+    assert mm, f"oracle could not resolve box varver: ver={ver!r}"
+    return f"{edition}-{mm}"
 
 
 def _read_conf_url_on_guest(vm: SmokeVM, conf_path: str) -> str:
@@ -2236,16 +2143,17 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
     """ADR-39 REGENERATE PATH: a stale ``<varver>`` in the conf is rewritten to the box's current one.
 
     Simulates a post-OS-upgrade boot where the conf still points at an OLD varver. The
-    hook unconditionally REGENERATES the conf for the box's CURRENT ``<varver>/<arch>``
-    (folded detection), and the corrected conf then resolves our package end-to-end via
-    ``pkg update`` + ``pkg install`` against a file:// catalog. The hook's detection is
-    cross-checked against an independent Python oracle (``_box_real_catalog``) — if they
-    disagree the catalog is not found and ``pkg install`` fails loud. A second run leaves
-    the conf byte-identical (pure regenerate, no patching).
+    hook unconditionally REGENERATES the conf for the box's CURRENT ``<varver>``
+    (folded detection; arch-less, NO_ARCH — issue #1806), and the corrected conf then
+    resolves our package end-to-end via ``pkg update`` + ``pkg install`` against a
+    file:// catalog. The hook's detection is cross-checked against an independent
+    Python oracle (``_box_real_varver``) — if they disagree the catalog is not found
+    and ``pkg install`` fails loud. A second run leaves the conf byte-identical (pure
+    regenerate, no patching).
 
     Scenario:
-      Background: a file:// catalog at ``<base>/release/<real_varver>/<arch>/``; the
-        seeded conf url initially points at ``<base>/release/stale-9.9/<arch>`` (wrong).
+      Background: a file:// catalog at ``<base>/release/<real_varver>/``; the seeded
+        conf url initially points at ``<base>/release/stale-9.9`` (wrong).
       Given the conf carries the stale varver (BEFORE asserted),
       When  the generator hook runs with ``PFB_BASE_URL=<file:// base>``,
       Then  the conf url contains the box's REAL varver (stale gone) and the canonical
@@ -2257,31 +2165,27 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
 
     _stage_generate_hook(repo_vm, guest_hook=GUEST_HOOK_PATH)
 
-    # Independent oracle for the box's real <varver>/<arch> (cross-checks the hook's
-    # folded detection — a disagreement makes the catalog unreachable below).
-    real_catalog = _box_real_catalog(repo_vm)
-    real_varver, real_arch = real_catalog.rsplit("/", 1)
+    # Independent oracle for the box's real <varver> (cross-checks the hook's folded
+    # detection — a disagreement makes the catalog unreachable below).
+    real_varver = _box_real_varver(repo_vm)
 
     STALE_VARVER = "stale-9.9"
-    stale_catalog = f"{STALE_VARVER}/{real_arch}"
 
     catalog_base = f"{GENERATE_DIR}/catalog"
     base_url = f"file://{catalog_base}"
-    guest_real_dir = f"{catalog_base}/release/{real_catalog}"
+    guest_real_dir = f"{catalog_base}/release/{real_varver}"
     test_conf_path = f"{GENERATE_DIR}/pfblockerng_test.conf"
 
     try:
-        # 1. Build the real catalog on the guest under release/<real_varver>/<arch-leaf>/
-        #    — the PRODUCTION layout (build_repo_matrix) that the hook's regenerated conf
-        #    resolves to (the bare arch leaf, NOT the full ABI). arch_leaf pins the leaf
-        #    dir so the file:// URL the hook writes actually finds the catalog.
+        # 1. Build the real catalog on the guest under release/<real_varver>/ — the
+        #    PRODUCTION layout (build_repo_matrix, arch-less — issue #1806) that the
+        #    hook's regenerated conf resolves to.
         shipped_dir = build_repo_via_portable_named(
             repo_vm,
             [Path(pkg), *_smoke_dep_pkg_paths()],
             tmp_path,
             catalog_name=f"release/{real_varver}",
             guest_root=catalog_base,
-            arch_leaf=real_arch,
         )
         assert shipped_dir == guest_real_dir, f"catalog shipped to {shipped_dir!r}, expected {guest_real_dir!r}"
         assert _ssh_check(repo_vm, "/bin/test", "-d", guest_real_dir).returncode == 0, (
@@ -2289,7 +2193,7 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
         )
 
         # 2. Seed the TEST conf with a STALE varver url (canonical body shape).
-        stale_url = f"{base_url}/release/{stale_catalog}"
+        stale_url = f"{base_url}/release/{STALE_VARVER}"
         stale_conf_body = (
             "# pending boot-time generation\n"
             "pfblockerng: {\n"
@@ -2313,11 +2217,9 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
 
         # BEFORE: conf carries the stale varver, not the real one.
         url_before = _read_conf_url_on_guest(repo_vm, test_conf_path)
-        assert stale_catalog in url_before, (
-            f"BEFORE: expected stale catalog {stale_catalog!r} in url, got {url_before!r}"
-        )
-        assert real_catalog not in url_before, (
-            f"BEFORE: conf url already contains the real catalog {real_catalog!r}: {url_before!r}"
+        assert STALE_VARVER in url_before, f"BEFORE: expected stale varver {STALE_VARVER!r} in url, got {url_before!r}"
+        assert real_varver not in url_before, (
+            f"BEFORE: conf url already contains the real varver {real_varver!r}: {url_before!r}"
         )
 
         # WHEN: run the generator hook (file:// base) — it regenerates the conf.
@@ -2325,12 +2227,12 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
 
         # AFTER: conf url has the box's REAL varver (stale gone) + the canonical marker.
         url_after = _read_conf_url_on_guest(repo_vm, test_conf_path)
-        assert real_catalog in url_after, (
-            f"AFTER: hook did not regenerate to {real_catalog!r}, got {url_after!r}\n"
+        assert real_varver in url_after, (
+            f"AFTER: hook did not regenerate to {real_varver!r}, got {url_after!r}\n"
             f"Hook stdout:\n{hook_result.stdout}\nHook stderr:\n{hook_result.stderr}"
         )
-        assert stale_catalog not in url_after, (
-            f"AFTER: stale catalog {stale_catalog!r} still in conf url after hook ran: {url_after!r}"
+        assert STALE_VARVER not in url_after, (
+            f"AFTER: stale varver {STALE_VARVER!r} still in conf url after hook ran: {url_after!r}"
         )
         marker = _ssh_check(repo_vm, "grep", "-q", "Generated at boot by pfblockerng_repo_generate", test_conf_path)
         assert marker.returncode == 0, "AFTER: regenerated conf is missing the marker line"
