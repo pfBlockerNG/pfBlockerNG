@@ -145,7 +145,7 @@ final class TickEntrypointTest extends TestCase
 		$this->hadUnboundChroot      = array_key_exists('unbound_chroot_path', $GLOBALS['g'] ?? []);
 		$this->originalUnboundChroot = $GLOBALS['g']['unbound_chroot_path'] ?? NULL;
 
-		$this->dbdir = sys_get_temp_dir() . '/pfb_tick_entrypoint_' . uniqid('', TRUE);
+		$this->dbdir = $this->dbdirPrefix() . uniqid('', TRUE);
 		mkdir($this->dbdir, 0755, TRUE);
 		$GLOBALS['pfb']['dbdir']     = $this->dbdir;
 		$GLOBALS['pfb']['runlog']    = "{$this->dbdir}/pfblockerng_run.log";
@@ -226,17 +226,8 @@ final class TickEntrypointTest extends TestCase
 	 * "pfblockerng.php cron" background process. Mirrors
 	 * TickFeedPassDeferralTest::installPhpArgvRecorder().
 	 *
-	 * Unavoidable residual race: pfblockerng_tick() execs the stub as
-	 * "{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php cron ... &" --
-	 * production builds that argv, so the stub's own `ps -wax` command line
-	 * still CONTAINS the literal substring "pfblockerng.php cron" for the
-	 * stub's brief (sub-ms to low-ms) lifetime. pfb_update_pass_running()'s
-	 * precondition assert below scans the real process table and cannot
-	 * distinguish this from a genuine dispatch, so a phpunit run of THIS suite
-	 * happening concurrently with another checkout's run through this same
-	 * dispatch path could cross-trip that precondition. Not fixable from the
-	 * test side without faking argv; accepted because suites are never run
-	 * concurrently against one checkout (see .agents/policy/testing.md).
+	 * issue #2006: suite process-table checks retain only this PHPUnit process's
+	 * sandbox prefix, so another checkout's recorder cannot cross-trip them.
 	 */
 	private function installPhpArgvRecorder(): string
 	{
@@ -245,6 +236,37 @@ final class TickEntrypointTest extends TestCase
 		file_put_contents($path, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> {$log}\n");
 		chmod($path, 0755);
 		return $path;
+	}
+
+	private function dbdirPrefix(): string
+	{
+		return sys_get_temp_dir() . '/pfb_tick_entrypoint_' . (int) getmypid() . '_';
+	}
+
+	/** Return only worker command lines carrying this PHPUnit process's sandbox prefix. */
+	private function suiteWorkerPsLines(): array
+	{
+		$psLines = [];
+		exec('/bin/ps -wax', $psLines);
+		$prefix = $this->dbdirPrefix();
+		return array_values(array_filter(
+			$psLines,
+			static fn (string $line): bool => str_contains($line, $prefix)
+		));
+	}
+
+	/** Allow a background recorder one second to exit; persistent workers remain visible. */
+	private function settledSuiteWorkerPsLines(): array
+	{
+		$psLines = [];
+		for ($attempt = 0; $attempt < 50; $attempt++) {
+			$psLines = $this->suiteWorkerPsLines();
+			if (!pfb_update_pass_running($psLines)) {
+				return $psLines;
+			}
+			usleep(20000);
+		}
+		return $psLines;
 	}
 
 	private function rrmdir(string $dir): void
@@ -393,7 +415,7 @@ final class TickEntrypointTest extends TestCase
 			. '  content=' . var_export(file_get_contents($logPath), TRUE));
 
 		// Act.
-		pfblockerng_tick();
+		pfblockerng_tick($this->settledSuiteWorkerPsLines());
 
 		// After: pfb_log_mgmt() trimmed 'log' to its last 3 lines.
 		clearstatcache(TRUE, $logPath);
@@ -444,19 +466,14 @@ final class TickEntrypointTest extends TestCase
 		$this->assertSame(5, $linesBefore,
 			"Before: expected 'log' to have 5 lines, got {$linesBefore}");
 
-		// Ordering-regression tripwire (issue #1666): pfb_update_pass_running()
-		// scans the REAL `ps -wax` table for a "pfblockerng.php <verb>" line -- a
-		// process leaked from an earlier, un-neutered sibling test would make this
-		// test's own tick() wrongly skip pfb_log_mgmt() below, exactly reproducing
-		// the flake. Assert the process table is clean BEFORE the tick so a leak
-		// fails loudly here instead of silently failing the trim assertion after.
-		// NOTE: this scan can also cross-trip on the recorder stub's own brief
-		// command line -- see installPhpArgvRecorder()'s docblock.
-		$this->assertFalse(pfb_update_pass_running(),
-			'a pfblockerng.php worker process leaked from an earlier test -- see issue #1666');
+		// Ordering-regression tripwire (issue #1666/#2006): reject workers leaked
+		// by this PHPUnit run without consulting unrelated host workers.
+		$psLines = $this->settledSuiteWorkerPsLines();
+		$this->assertFalse(pfb_update_pass_running($psLines),
+			'a pfblockerng.php worker owned by this PHPUnit run leaked from an earlier test');
 
 		// Act.
-		pfblockerng_tick();
+		pfblockerng_tick($psLines);
 
 		// The feed cron ledger entry must be unchanged (no mark_ran) -- confirms
 		// the tick genuinely treated 'cron' as not-due this pass.
@@ -473,6 +490,37 @@ final class TickEntrypointTest extends TestCase
 			"After tick with feed cron NOT due: expected 'log' still trimmed to [l3,l4,l5], got "
 			. var_export($linesAfter, TRUE)
 			. ' -- log maintenance must be unconditional, not gated behind the feed-cron due check');
+	}
+
+	/** issue #2006: an injected empty process snapshot isolates an idle tick from host workers. */
+	public function testIdleTickIgnoresUnrelatedHostWorker(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		pfb_global();
+		$this->ensureLogDir();
+
+		$now = time();
+		$this->seedFutureLedgerEntry('cron', $now);
+		$this->seedFutureLedgerEntry('dcc',  $now);
+		$this->seedFutureLedgerEntry('bl',   $now);
+
+		$logPath = $this->logPath('log');
+		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
+
+		[$proc, $pid, $stdin] = $this->spawnStrayUpdatePassProcess();
+		try {
+			$this->assertTrue(pfb_update_pass_running(), 'fixture worker must be visible in the host process table');
+			pfblockerng_tick([]);
+
+			$linesAfter = array_values(array_filter(
+				explode("\n", (string) file_get_contents($logPath)),
+				'strlen'
+			));
+			$this->assertSame(['l3', 'l4', 'l5'], $linesAfter,
+				'an injected empty process snapshot must keep an unrelated host worker out of the idle tick');
+		} finally {
+			$this->killStrayUpdatePassProcess($proc, $pid, $stdin);
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -527,7 +575,7 @@ final class TickEntrypointTest extends TestCase
 		$this->seedFutureLedgerEntry('bl',  $now);
 
 		// Act.
-		pfblockerng_tick();
+		pfblockerng_tick($this->suiteWorkerPsLines());
 
 		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
 		$expected  = $oldNextDue + $interval;
@@ -596,7 +644,7 @@ final class TickEntrypointTest extends TestCase
 			"Before: expected 'log' to have 5 lines, got {$linesBefore}");
 
 		// Act.
-		pfblockerng_tick();
+		pfblockerng_tick($this->suiteWorkerPsLines());
 
 		// The feed cron WAS dispatched -- mark_ran_anchored advanced 'cron' past its
 		// pre-tick next_due, proving this tick genuinely took the dispatch branch.
@@ -622,9 +670,9 @@ final class TickEntrypointTest extends TestCase
 	// SILENT on skip: a stray process matching the ps-scan regex closed the
 	// gate with zero trace, which cost a live-tier diagnosis (the smoke suite's
 	// seeded log rode this same unsynchronized gate). This test drives a REAL
-	// background process through the REAL, uninjected pfb_update_pass_running()
-	// ps scan (PfbUpdatePassRunningTest covers the regex itself via an injected
-	// array; this pins the live gate) and asserts BOTH halves of the fix: the
+	// background process through a REAL, suite-scoped `ps` snapshot
+	// (PfbUpdatePassRunningTest covers the regex itself via synthetic arrays) and
+	// asserts BOTH halves of the fix: the
 	// skip still holds (log untrimmed) AND it is no longer silent (a
 	// deferred-maintenance line lands in the log).
 	// -----------------------------------------------------------------------
@@ -675,9 +723,9 @@ final class TickEntrypointTest extends TestCase
 
 		[$proc, $pid, $stdin] = $this->spawnStrayUpdatePassProcess();
 		try {
-			// Prove the fixture BEFORE trusting the tick's own scan of it: a real,
-			// uninjected pfb_update_pass_running() call must see this process.
-			$this->assertTrue(pfb_update_pass_running(),
+			// Prove this PHPUnit run's filtered process snapshot sees its fixture.
+			$psLines = $this->suiteWorkerPsLines();
+			$this->assertTrue(pfb_update_pass_running($psLines),
 				'fixture process does not satisfy pfb_update_pass_running() -- ps line does not '
 				. 'match; see spawnStrayUpdatePassProcess()');
 
@@ -686,7 +734,7 @@ final class TickEntrypointTest extends TestCase
 			$this->assertSame(5, $linesBefore, "Before: expected 'log' to have 5 lines, got {$linesBefore}");
 
 			// Act.
-			pfblockerng_tick();
+			pfblockerng_tick($psLines);
 
 			// (a) 'log' was NOT trimmed -- the original 5 lines are all still present
 			// (pfb_log_mgmt()'s tail-to-3 trim never ran).
@@ -751,10 +799,9 @@ final class TickEntrypointTest extends TestCase
 		$status = proc_get_status($proc);
 		$pid    = $status['pid'];
 
-		// Give the ps table a moment to pick the new process up before the caller
-		// trusts it.
+		// Give the ps table a moment to pick the new process up before the caller trusts it.
 		for ($i = 0; $i < 50; $i++) {
-			if (pfb_update_pass_running()) {
+			if (pfb_update_pass_running($this->suiteWorkerPsLines())) {
 				break;
 			}
 			usleep(20000);
@@ -772,7 +819,7 @@ final class TickEntrypointTest extends TestCase
 		if (is_resource($stdin)) {
 			fclose($stdin);
 		}
-		$reaped = false;
+		$reaped = FALSE;
 		if (is_resource($proc)) {
 			proc_terminate($proc, 9);	// SIGKILL: no cleanup path runs in the child
 			// proc_close() BLOCKS until the process changes state (waitpid()
@@ -780,7 +827,7 @@ final class TickEntrypointTest extends TestCase
 			// probe below, or a not-yet-reaped zombie reads as "still alive"
 			// (kill(pid, 0) succeeds against a zombie; bit this fix once).
 			proc_close($proc);
-			$reaped = true;
+			$reaped = TRUE;
 		}
 		// Assert it is actually gone. posix_kill(pid, 0) is the standard "is this
 		// pid alive" probe (no signal sent, just an existence check) -- guarded by
@@ -850,7 +897,7 @@ final class TickEntrypointTest extends TestCase
 		$this->seedFutureLedgerEntry('bl',  $now);
 
 		// Act.
-		pfblockerng_tick();
+		pfblockerng_tick($this->suiteWorkerPsLines());
 
 		// The feed cron WAS dispatched -- same tripwire as Case D.
 		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
@@ -902,9 +949,7 @@ final class TickEntrypointTest extends TestCase
 	 *         pending_apply flag is cleared by the dispatch branch).
 	 *   And   'log' is NOT trimmed -- log maintenance was skipped this tick, caused
 	 *         by $dispatched (pfb_update_pass_running() was FALSE going in, per the
-	 *         precondition below -- not re-checked after the tick, since the
-	 *         dispatch's own recorder-stub argv line would then race the same regex;
-	 *         see installPhpArgvRecorder()'s docblock).
+	 *         precondition below).
 	 */
 	public function testPendingCronApplyBypassesDisabledIntervalAndSkipsLogMaintenance(): void
 	{
@@ -918,7 +963,8 @@ final class TickEntrypointTest extends TestCase
 		$this->seedFutureLedgerEntry('dcc', $now);
 		$this->seedFutureLedgerEntry('bl',  $now);
 
-		$this->assertFalse(pfb_update_pass_running(),
+		$psLines = $this->settledSuiteWorkerPsLines();
+		$this->assertFalse(pfb_update_pass_running($psLines),
 			'precondition: no stray/leaked process may satisfy pfb_update_pass_running() -- '
 			. 'this test isolates to the $dispatched half of the gate (issue #1769)');
 
@@ -930,7 +976,7 @@ final class TickEntrypointTest extends TestCase
 		$this->assertSame(5, $linesBefore, "Before: expected 'log' to have 5 lines, got {$linesBefore}");
 
 		// Act.
-		pfblockerng_tick();
+		pfblockerng_tick($psLines);
 
 		// The pending cron entry WAS dispatched despite pfb_interval='Disabled' --
 		// pending_apply bypasses $cron_disabled (pfblockerng_extra.inc).
@@ -940,12 +986,7 @@ final class TickEntrypointTest extends TestCase
 			'pending_apply must have been cleared by the dispatch branch -- proves the pending '
 			. 'entry genuinely dispatched, not merely persisted untouched');
 
-		// NOT re-checked here: installPhpArgvRecorder()'s docblock above documents why --
-		// the recorder stub's OWN "pfblockerng.php pfb_trigger ..." argv line matches
-		// pfb_update_pass_running()'s regex for its brief post-exec() lifetime, so a
-		// check placed here races that stub, not a real update pass. The precondition
-		// assertion above (BEFORE the tick) is what proves this test isolates to the
-		// $dispatched half of the gate -- pfb_update_pass_running() was FALSE going in.
+		// The precondition above proves this test entered through the $dispatched half.
 		// After: log maintenance was skipped -- 'log' still has its original 5 lines.
 		clearstatcache(TRUE, $logPath);
 		$linesAfter = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
@@ -985,11 +1026,12 @@ final class TickEntrypointTest extends TestCase
 		$logPath = $this->logPath('log');
 		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
 
-		$this->assertFalse(pfb_update_pass_running(),
-			'a pfblockerng.php worker process leaked from an earlier test -- see issue #1666');
+		$psLines = $this->settledSuiteWorkerPsLines();
+		$this->assertFalse(pfb_update_pass_running($psLines),
+			'a pfblockerng.php worker owned by this PHPUnit run leaked from an earlier test');
 
 		// Act.
-		pfblockerng_tick();
+		pfblockerng_tick($psLines);
 
 		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
 		$this->assertNotNull($cronEntry, 'cron ledger entry must still exist after the tick');

@@ -9917,7 +9917,15 @@
     "pfblockerng_tick": {
         "returnsRef": false,
         "returnType": "void",
-        "params": []
+        "params": [
+            {
+                "name": "ps_lines",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
+            }
+        ]
     },
     "pfblockerng_top1m": {
         "returnsRef": false,
