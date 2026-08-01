@@ -64,6 +64,9 @@ def _write_pkg(
     omit_manifest: bool = False,
     corrupt_manifest_json: bool = False,
     extra_manifest: dict | None = None,
+    compact_overrides: dict | None = None,
+    link_members: tuple[tuple[str, str, int], ...] = (),
+    duplicate_manifest: bool = False,
 ) -> None:
     """Write a libpkg-shaped .pkg (zstd tar, +COMPACT_MANIFEST + +MANIFEST + payload)."""
     manifest: dict = {
@@ -85,7 +88,10 @@ def _write_pkg(
         manifest["deps"] = deps
     if extra_manifest:
         manifest.update(extra_manifest)
-    compact_raw = json.dumps(manifest, separators=(",", ":")).encode() + b"\n"
+    compact_manifest = dict(manifest)
+    if compact_overrides:
+        compact_manifest.update(compact_overrides)
+    compact_raw = json.dumps(compact_manifest, separators=(",", ":")).encode() + b"\n"
 
     full = dict(manifest)
     full["files"] = {
@@ -111,8 +117,21 @@ def _write_pkg(
             _add_member(tf, "+COMPACT_MANIFEST", compact_raw)
         if not omit_manifest:
             _add_member(tf, "+MANIFEST", full_raw)
+        if duplicate_manifest:
+            # libarchive/libpkg reads the FIRST member of a duplicated name, Python's
+            # tarfile the LAST — so a second +MANIFEST is a validator/consumer split.
+            _add_member(tf, "+MANIFEST", full_raw)
         for p, b in (files or {}).items():
             _add_member(tf, p, b)
+        for link_name, link_target, link_type in link_members:
+            ti = tarfile.TarInfo(name=link_name)
+            ti.type = link_type  # type: ignore[assignment]
+            ti.linkname = link_target
+            ti.mode = 0o644
+            ti.uid = ti.gid = 0
+            ti.uname, ti.gname = "root", "wheel"
+            ti.mtime = 0
+            tf.addfile(ti)
     path.write_bytes(pfb_pkg.zstd_compress(raw.getvalue(), RuntimeError, "zstd unavailable for tests"))
 
 
@@ -550,6 +569,108 @@ def test_missing_compact_manifest_rejected(tmp_path: Path) -> None:
         bfv.validate_artifact(pkg_path, export_dir, STABLE, ROW_15)
 
 
+@pytest.mark.parametrize(
+    ("label", "overrides"),
+    [
+        ("version", {"version": "4.9.9"}),
+        ("abi", {"abi": "FreeBSD:15:amd64"}),
+        ("arch", {"arch": "freebsd:15:amd64"}),
+        ("name", {"name": "pfSense-pkg-somethingelse"}),
+        ("origin", {"origin": "net/somethingelse"}),
+    ],
+)
+def test_compact_manifest_disagreeing_with_full_manifest_rejected(tmp_path: Path, label: str, overrides: dict) -> None:
+    """The two manifests must agree on identity, because consumers read different ones.
+
+    Intent: identity validation here reads +MANIFEST, but the catalog generator reads
+    +COMPACT_MANIFEST. A package whose two documents disagree would be validated as one
+    identity and published as another, so the divergence itself is the defect.
+    """
+    export_dir = _write_export(tmp_path, _demo_payload(STABLE.portname))
+    pkg_path = tmp_path / f"{STABLE.portname}-{STABLE.portversion}.pkg"
+    _write_pkg(
+        pkg_path,
+        name=STABLE.portname,
+        version=STABLE.portversion,
+        deps=_deps_for(ROW_15),
+        scripts=DEMO_SCRIPTS,
+        files=_packaged_payload(STABLE.portname, STABLE.portversion),
+        compact_overrides=overrides,
+    )
+    with pytest.raises(bfv.ArtifactValidationError, match="COMPACT_MANIFEST disagrees"):
+        bfv.validate_artifact(pkg_path, export_dir, STABLE, ROW_15)
+
+
+@pytest.mark.parametrize(
+    ("label", "link_type"),
+    [("symlink", tarfile.SYMTYPE), ("hardlink", tarfile.LNKTYPE)],
+)
+def test_non_regular_payload_member_rejected(tmp_path: Path, label: str, link_type: int) -> None:
+    """A link member smuggled into the payload is rejected, not silently ignored.
+
+    Intent: payload parity compares regular files against the tag export, so a member
+    that is not a regular file would never enter the comparison at all — it must be
+    refused outright rather than travelling in the artifact unexamined.
+    """
+    export_dir = _write_export(tmp_path, _demo_payload(STABLE.portname))
+    pkg_path = tmp_path / f"{STABLE.portname}-{STABLE.portversion}.pkg"
+    _write_pkg(
+        pkg_path,
+        name=STABLE.portname,
+        version=STABLE.portversion,
+        deps=_deps_for(ROW_15),
+        scripts=DEMO_SCRIPTS,
+        files=_packaged_payload(STABLE.portname, STABLE.portversion),
+        link_members=(("/usr/local/pkg/pfblockerng/backdoor.inc", "../../../../etc/passwd", link_type),),
+    )
+    with pytest.raises(bfv.ArtifactValidationError, match="not a regular file"):
+        bfv.validate_artifact(pkg_path, export_dir, STABLE, ROW_15)
+
+
+def test_duplicate_member_name_rejected(tmp_path: Path) -> None:
+    """A duplicated archive member is refused rather than resolved by reader order.
+
+    Intent: libpkg takes the first member of a duplicated name and Python's tarfile the
+    last, so tolerating duplicates lets the validator and the installer read different
+    documents from the same artifact.
+    """
+    export_dir = _write_export(tmp_path, _demo_payload(STABLE.portname))
+    pkg_path = tmp_path / f"{STABLE.portname}-{STABLE.portversion}.pkg"
+    _write_pkg(
+        pkg_path,
+        name=STABLE.portname,
+        version=STABLE.portversion,
+        deps=_deps_for(ROW_15),
+        scripts=DEMO_SCRIPTS,
+        files=_packaged_payload(STABLE.portname, STABLE.portversion),
+        duplicate_manifest=True,
+    )
+    with pytest.raises(bfv.ArtifactValidationError, match="duplicate archive member"):
+        bfv.validate_artifact(pkg_path, export_dir, STABLE, ROW_15)
+
+
+@pytest.mark.parametrize("row", [ROW_15, ROW_16])
+def test_build_leg_argv_pins_the_frozen_ports_ref_and_forces_no_arch(tmp_path: Path, row: dict) -> None:
+    """The two arguments the frozen build cannot lose are pinned by an assertion.
+
+    Intent: dropping --no-arch yields a concrete-ABI package that leaves aarch64
+    unserved, and dropping the pinned ports ref builds the frozen payload against a
+    moving ports tree — the exact drift this tool exists to prevent.
+    """
+    argv = bfv._build_leg_argv(
+        tmp_path / "build-leg.sh",
+        target=STABLE,
+        row=row,
+        local_src=tmp_path / "src",
+        out_dir=tmp_path / "out",
+        ports_dir=None,
+    )
+
+    assert "--no-arch" in argv, f"--no-arch missing from {argv!r}"
+    assert "--ports-ref" in argv, f"--ports-ref missing from {argv!r}"
+    assert argv[argv.index("--ports-ref") + 1] == bfv.FROZEN_PORTS_REF
+
+
 @pytest.mark.parametrize("missing_key", ["install", "deinstall"])
 def test_missing_lifecycle_script_rejected(tmp_path: Path, missing_key: str) -> None:
     scripts = dict(DEMO_SCRIPTS)
@@ -850,7 +971,10 @@ def test_full_pipeline_two_targets_two_rows_report_and_determinism(
     assert len(report["artifacts"]) == 4
     for artifact in report["artifacts"]:
         assert artifact["channel"] in ("stable", "devel")
-        assert artifact["artifact_sha256"]
+        # The recorded checksum must be the STAGED bytes' — that is the file a later
+        # publication step uploads, so hashing anything else makes the report unverifiable.
+        staged_bytes = (out_dir / artifact["staged_path"]).read_bytes()
+        assert artifact["artifact_sha256"] == hashlib.sha256(staged_bytes).hexdigest()
         assert artifact["payload_file_count"] == 3
         assert list(artifact["payload_files"]) == sorted(artifact["payload_files"])  # sorted inventory
 
@@ -866,6 +990,52 @@ def test_full_pipeline_two_targets_two_rows_report_and_determinism(
     ):
         assert a["artifact_sha256"] == b["artifact_sha256"]
         assert a["payload_files"] == b["payload_files"]
+
+
+def test_determinism_failure_leaves_no_staged_artifact_behind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row that fails the determinism re-build must not leave a publish candidate.
+
+    Intent: staging is what makes an artifact eligible for the later publication step, so
+    a row whose second build disagreed must disappear from the staging root entirely —
+    otherwise a subsequent --verify-only would bless bytes this run rejected.
+    """
+    export_stable = _write_export(tmp_path / "src_stable", _demo_payload(STABLE.portname))
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE,))
+    _stub_git(monkeypatch, {STABLE.commit: export_stable})
+
+    inner = _fake_build_leg({"stable": STABLE})
+    calls = {"n": 0}
+
+    def flaky(argv: list[str], *, cwd: Path) -> str:
+        produced = inner(argv, cwd=cwd)
+        calls["n"] += 1
+        if calls["n"] == 2:  # the determinism re-build disagrees by one byte
+            Path(produced).write_bytes(Path(produced).read_bytes() + b"\0")
+        return produced
+
+    monkeypatch.setattr(bfv, "_invoke_build_leg", flaky)
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15]))
+    out_dir = tmp_path / "stage"
+
+    rc = bfv.main(["--out", str(out_dir), "--matrix-cmd", f"cat {matrix_file}", "--repo", str(tmp_path)])
+
+    assert rc != 0, "a non-deterministic build must not exit 0"
+    assert sorted(out_dir.glob("fbsd*/*.pkg")) == [], "staged artifact left behind after a determinism failure"
+
+
+@pytest.mark.parametrize("field", ["php_version", "py_flavor"])
+def test_matrix_row_with_non_string_scalar_rejected_cleanly(field: str) -> None:
+    """A non-string matrix scalar is a named MatrixError, not a downstream crash.
+
+    Intent: the hostile-input contract requires malformed matrix input to be rejected in
+    the matrix validator, where the offending field can be named.
+    """
+    row: dict[str, Any] = dict(ROW_15)
+    row[field] = 8.3
+
+    with pytest.raises(bfv.MatrixError, match=field):
+        bfv.validate_matrix([row])
 
 
 def test_verify_only_validates_staged_dir_without_invoking_build_seam(

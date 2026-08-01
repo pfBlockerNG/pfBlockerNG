@@ -138,6 +138,9 @@ def validate_matrix(obj: object) -> list[dict]:
         missing = [k for k in _REQUIRED_ROW_FIELDS if k not in row]
         if missing:
             raise MatrixError(f"BUILD matrix row {i} missing required field(s): {', '.join(missing)}")
+        for key in ("php_version", "py_flavor"):
+            if not isinstance(row[key], str):
+                raise MatrixError(f"BUILD matrix row {i}: {key} must be a string, got {row[key]!r}")
         major = row["freebsd_major"]
         if not isinstance(major, str) or not _MAJOR_RE.fullmatch(major):
             raise MatrixError(f"BUILD matrix row {i}: freebsd_major must be a positive-integer string, got {major!r}")
@@ -235,12 +238,26 @@ def _read_pkg(pkg_path: Path) -> tuple[dict, dict[str, bytes]]:
                 raise ArtifactValidationError(f"{pkg_path.name}: missing +COMPACT_MANIFEST")
             if "+MANIFEST" not in names:
                 raise ArtifactValidationError(f"{pkg_path.name}: missing +MANIFEST")
+            # libarchive/libpkg resolves a duplicated member name to the FIRST copy while
+            # Python's tarfile resolves it to the LAST, so a duplicate would let this
+            # validator and the installer read different bytes from one artifact.
+            duplicates = sorted({n for n in names if names.count(n) > 1})
+            if duplicates:
+                raise ArtifactValidationError(f"{pkg_path.name}: duplicate archive member(s): {', '.join(duplicates)}")
             compact_raw = tf.extractfile("+COMPACT_MANIFEST").read()  # type: ignore[union-attr]
             manifest_raw = tf.extractfile("+MANIFEST").read()  # type: ignore[union-attr]
             payload: dict[str, bytes] = {}
             for member in tf.getmembers():
-                if member.name in ("+MANIFEST", "+COMPACT_MANIFEST") or not member.isfile():
+                if member.name in ("+MANIFEST", "+COMPACT_MANIFEST"):
                     continue
+                # Only regular files are comparable against the tag export. A symlink,
+                # hardlink, dir or device would skip payload parity entirely, so refuse
+                # it rather than let it ride along unexamined.
+                if not member.isfile():
+                    raise ArtifactValidationError(
+                        f"{pkg_path.name}: payload member {member.name!r} is not a regular file "
+                        f"(tar type {member.type!r})"
+                    )
                 extracted = tf.extractfile(member)
                 payload[member.name] = extracted.read() if extracted is not None else b""
     except ArtifactValidationError:
@@ -260,6 +277,18 @@ def _read_pkg(pkg_path: Path) -> tuple[dict, dict[str, bytes]]:
         raise ArtifactValidationError(f"{pkg_path.name}: +MANIFEST is not valid JSON: {e}") from None
     if not isinstance(manifest, dict):
         raise ArtifactValidationError(f"{pkg_path.name}: +MANIFEST is not a JSON object")
+    # Identity is validated below against +MANIFEST, but the catalog generator
+    # (build-repo-portable.py, via pfb_pkg.read_compact_manifest) routes on
+    # +COMPACT_MANIFEST. Divergence would validate one identity and publish another.
+    disagreements = [
+        f"{key}: +MANIFEST={manifest.get(key)!r} vs +COMPACT_MANIFEST={compact_obj.get(key)!r}"
+        for key in ("name", "origin", "version", "abi", "arch")
+        if manifest.get(key) != compact_obj.get(key)
+    ]
+    if disagreements:
+        raise ArtifactValidationError(
+            f"{pkg_path.name}: +COMPACT_MANIFEST disagrees with +MANIFEST — {'; '.join(disagreements)}"
+        )
     return manifest, payload
 
 
@@ -479,6 +508,9 @@ def build_and_stage_one(
         leg_dir.mkdir(parents=True, exist_ok=True)
         staged_path = leg_dir / pkg_path.name
         shutil.copy2(pkg_path, staged_path)
+        # Re-hash the STAGED file: the report's checksum must describe the bytes a later
+        # publication step would upload, not the scratch copy they were taken from.
+        identity["artifact_sha256"] = hashlib.sha256(staged_path.read_bytes()).hexdigest()
         identity["staged_path"] = staged_path
         return identity
     finally:
@@ -541,7 +573,15 @@ def build_all(
                         ports_dir=ports_dir,
                     )
                     pkg2_path = Path(_invoke_build_leg(argv, cwd=repo))
-                    check_determinism(staged_path, pkg2_path)
+                    try:
+                        check_determinism(staged_path, pkg2_path)
+                    except DeterminismError:
+                        # Staging is what makes an artifact a publication candidate, so a
+                        # row that failed its re-build must not survive in the staging root
+                        # for a later --verify-only to bless.
+                        staged_path.unlink(missing_ok=True)
+                        staged.discard(staged_path)
+                        raise
                 finally:
                     shutil.rmtree(scratch2, ignore_errors=True)
 

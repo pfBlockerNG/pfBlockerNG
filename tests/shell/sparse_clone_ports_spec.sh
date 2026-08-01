@@ -233,7 +233,9 @@ PYEOF
   End
 
   It 'REF with a leading dash is never taken as a git option -> branch path, treated as literal data'
-    When call run_clone_hostile '--upload-pack=touch INJECTED'
+    # Absolute payload path on purpose: a bare 'touch INJECTED' would land in the
+    # shellspec CWD, so asserting on ${WORK} would pass even if the option were honoured.
+    When call run_clone_hostile "--upload-pack=touch ${WORK}/INJECTED"
     The status should be failure
     The output should include 'Remote branch'
     The path "${WORK}/INJECTED" should not be exist
@@ -246,9 +248,10 @@ PYEOF
   End
 
   It 'REF containing shell metacharacters is treated as literal data, never interpolated/executed'
-    # Single-quoted on purpose: proves the shell never expands it.
-    # shellcheck disable=SC2016
-    When call run_clone_hostile '$(touch INJECTED); `touch INJECTED2`'
+    # The $( and backticks are escaped so THIS shell leaves them literal, while ${WORK}
+    # expands to an absolute path — so if anything downstream did evaluate the REF, the
+    # files below would really appear and these assertions would really fail.
+    When call run_clone_hostile "\$(touch ${WORK}/INJECTED); \`touch ${WORK}/INJECTED2\`"
     The status should be failure
     The output should include 'Remote branch'
     The path "${WORK}/INJECTED" should not be exist
