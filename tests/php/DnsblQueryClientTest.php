@@ -326,8 +326,11 @@ final class DnsblQueryClientTest extends TestCase
 	/** Block on a forkQuery() handle's verdict pipe. */
 	private function awaitQueryResult(array $child): ?array
 	{
-		$raw = $this->awaitSignal($child['signal'], "{$child['label']} query result", $child['pid']);
-		fclose($child['signal']);
+		try {
+			$raw = $this->awaitSignal($child['signal'], "{$child['label']} query result", $child['pid']);
+		} finally {
+			fclose($child['signal']); // also on the salvage-cap and EOF failure paths
+		}
 		$result = json_decode($raw, true);
 		$this->assertSame(JSON_ERROR_NONE, json_last_error(), json_last_error_msg());
 		if ($result !== null && !is_array($result)) {
