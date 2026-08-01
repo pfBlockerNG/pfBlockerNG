@@ -7,7 +7,7 @@
 #   build-leg.sh [--ports-repo OWNER/NAME|URL] [--ports-ref REF]
 #                [--channel devel|stable|nightly] [--abi ABI]
 #                [--py-flavor PYxx] [--php X.Y] [--local-src DIR]
-#                [--pkgversion V] [--annotate K=V]...
+#                [--pkgversion V] [--annotate K=V]... [--no-arch]
 #                [--ports-dir DEST] [--out-dir OUT]
 #
 # Prints the resolved absolute .pkg path (and NOTHING else) on stdout.
@@ -25,6 +25,7 @@
 #   --local-src   .              (→ builder --local-src)
 #   --pkgversion  (empty)        → flag omitted; builder derives from ports Makefile
 #   --annotate    (none)         repeatable; each → --annotate K=V to builder
+#   --no-arch     off            → passed through to the builder verbatim when given
 #   --ports-dir   (run-keyed)    ${PFB_PORTS_DIR:-$PFB_RUN_DIR/ports}
 #   --out-dir     (run-keyed)    ${PFB_OUT_DIR:-$PFB_RUN_DIR/out}
 #
@@ -68,6 +69,7 @@ LOCAL_SRC='.'
 PKGVERSION=''
 PORTS_DIR=''
 OUT_DIR=''
+NO_ARCH=''
 
 # Collect --annotate K=V items into a temp file (POSIX-clean repeatable accumulation).
 # ponytail: temp file for repeatable args — arrays don't exist in POSIX sh.
@@ -90,6 +92,7 @@ while [ $# -gt 0 ]; do
         --annotate)    printf '%s\n' "${1?build-leg.sh: --annotate requires an argument}" >> "$_BL_ANN_FILE"; shift ;;
         --ports-dir)   PORTS_DIR="${1?build-leg.sh: --ports-dir requires an argument}";  shift ;;
         --out-dir)     OUT_DIR="${1?build-leg.sh: --out-dir requires an argument}";       shift ;;
+        --no-arch)     NO_ARCH=1 ;;
         --) break ;;
         -*)
             printf '%s: unknown option: %s\n' "$0" "$_opt" >&2
@@ -165,6 +168,9 @@ set -- \
 
 # Append --pkgversion only when supplied (empty → omit so builder uses Makefile).
 [ -n "$PKGVERSION" ] && set -- "$@" --pkgversion "$PKGVERSION"
+
+# Append --no-arch only when the flag was given (default off).
+[ -n "$NO_ARCH" ] && set -- "$@" --no-arch
 
 # Append one --annotate K=V per collected item.
 while IFS= read -r _ann; do

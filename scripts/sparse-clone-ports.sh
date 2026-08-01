@@ -10,7 +10,7 @@
 #   sparse-clone-ports.sh URL REF DEST CHANNEL PHP PYFLAVOR
 #
 #   URL        FreeBSD-ports HTTPS clone URL
-#   REF        branch or ref to fetch (e.g. pfblockerng/use-github)
+#   REF        branch, tag, or full 40-hex commit SHA to fetch (e.g. pfblockerng/use-github)
 #   DEST       destination directory — created (fresh clone) if absent; an EXISTING
 #              git work-tree is fetched + checked out at REF (idempotent reuse)
 #   CHANNEL    build-pkg-portable --channel value (devel|stable|nightly)
@@ -58,6 +58,16 @@ PORT_DIR="$(python3 "$BUILDER" --print-port-origin --channel "$CHANNEL")" || exi
 # 1. Acquire the tree at REF — fresh blobless clone if DEST is absent, else fetch REF
 #    into an EXISTING git work-tree and check it out (idempotent reuse). Either way the
 #    tree ends on REF; no blobs are fetched yet, git knows all tree paths.
+#
+# issue #1676: `-b REF` only accepts a branch/tag name; a bare 40-hex commit SHA fails
+# ("Remote branch <sha> not found") — fetch-by-oid instead (mirrors reuse below).
+_pfb_is_full_sha() {
+	[ "${#1}" -eq 40 ] || return 1
+	case "$1" in
+		*[!0-9a-f]*) return 1 ;;
+	esac
+}
+
 if [ -e "${DEST}/.git" ]; then
 	# Reuse an existing git work-tree (-e, not -d: a linked worktree's .git is a FILE). Point
 	# origin at the canonical URL (the clone's origin may differ) and fetch REF
@@ -70,6 +80,13 @@ if [ -e "${DEST}/.git" ]; then
 elif [ -e "$DEST" ]; then
 	printf '%s: %s exists but is not a git work-tree — refusing to overwrite\n' "$0" "$DEST" >&2
 	exit 1
+elif _pfb_is_full_sha "$REF"; then
+	# Fresh clone by SHA (issue #1676): init + fetch-by-oid; -b cannot take a SHA.
+	mkdir -p "$DEST"
+	git -C "$DEST" init -q
+	git -C "$DEST" remote add origin "$URL"
+	git -C "$DEST" fetch --depth 1 --filter=blob:none origin -- "$REF"
+	co_target=FETCH_HEAD
 else
 	git clone --depth 1 --filter=blob:none --no-checkout -b "$REF" "$URL" "$DEST"
 	co_target="$REF"
