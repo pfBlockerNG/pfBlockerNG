@@ -446,7 +446,7 @@ def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) 
         )
 
     catalog_root = out_dir / catalog_name if catalog_name else out_dir
-    n = _emit_catalog_from_paths(catalog_root, pkgs)
+    n = _emit_catalog_from_paths(catalog_root, pkgs, root=out_dir)
     sys.stderr.write(f"==> built catalog {catalog_root} ({n} package(s))\n")
     return sorted(abis)
 
@@ -537,7 +537,37 @@ def _pkg_version_key(version: str) -> tuple[list[int], int, int]:
     return pkg_version_sort_key(version)
 
 
-def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path]) -> int:
+def _require_contained(root: Path, dest: Path) -> Path:
+    """Return ``dest`` if it really lands inside ``root``, else raise (issue #1972).
+
+    ``_validate_catalog_name`` checks the catalog name as a STRING; the FILESYSTEM
+    decides where that string lands. A symlink at any component — including an
+    intermediate one, which ``shutil.rmtree`` follows happily — redirects the
+    wipe-and-rebuild outside the output root while every segment still looks like a
+    legitimate varver. Resolving both sides and requiring containment is the check the
+    name guard structurally cannot make.
+
+    A symlinked LEAF is refused outright even when it points back inside the root: the
+    catalog directory is wiped and recreated, so it has to be a real directory this
+    tool owns (``rmtree`` declines a symlink, which would surface as a raw ``OSError``).
+    """
+    resolved_root = root.resolve()
+    resolved_dest = dest.resolve()
+    if not resolved_dest.is_relative_to(resolved_root):
+        raise BuildRepoError(
+            f"catalog destination {str(dest)!r} escapes the output root {str(root)!r} "
+            f"(resolves to {str(resolved_dest)!r}) — a symlinked path component redirects "
+            f"the rmtree+rebuild outside --out"
+        )
+    if dest.is_symlink():
+        raise BuildRepoError(
+            f"catalog destination {str(dest)!r} is a symlink — the catalog directory is wiped "
+            f"and rebuilt, so it must be a real directory"
+        )
+    return dest
+
+
+def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path], *, root: Path) -> int:
     """Read each .pkg's manifest, dedup by (name, version), collision-check, emit at dest.
 
     Every package here MUST carry a NO_ARCH (wildcard) ABI (``_is_wildcard_abi``,
@@ -547,7 +577,13 @@ def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path]) -> int:
     one. A concrete ABI reaching catalog emission is a hard error — the
     tripwire that forces a conscious layout decision if a compiled, per-arch
     dependency is ever added.
+
+    ``root`` is the output root ``dest`` must stay inside. This is the single
+    destructive choke point (``_write_catalog_dir`` is reached only from here), so the
+    containment check lives here rather than at each composition site — a future
+    caller cannot forget it (issue #1972).
     """
+    _require_contained(root, dest)
     entries: list[tuple[Path, dict]] = [(p, read_compact_manifest(p)) for p in sorted(set(pkg_paths))]
     _check_collisions(entries)
     for path, manifest in entries:
@@ -886,7 +922,7 @@ def build_repo_matrix(
                     f"frozen .pkg, but none match ABI {abi!r} — supply a frozen .pkg for this ABI."
                 )
             release_dir = out_dir / "release" / varver
-            n_release = _emit_catalog_from_paths(release_dir, frozen)
+            n_release = _emit_catalog_from_paths(release_dir, frozen, root=out_dir)
             built.append(str(release_dir))
             sys.stderr.write(f"==> route-only release catalog {release_dir} ({n_release} package(s), frozen)\n")
             # No nightly subtree — route-only entries never get a nightly build.
@@ -920,7 +956,7 @@ def build_repo_matrix(
                 )
                 if kept_release:
                     # dep_for_abi folds in AFTER retention (never competes for a slot).
-                    n_release = _emit_catalog_from_paths(release_dir, kept_release + dep_for_abi)
+                    n_release = _emit_catalog_from_paths(release_dir, kept_release + dep_for_abi, root=out_dir)
                     built.append(str(release_dir))
                     sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s), consumed)\n")
                     dep_pkgs_matched.update(dep_for_abi)
@@ -952,7 +988,7 @@ def build_repo_matrix(
                         keep_stable=release_keep_stable,
                     )
                     # dep_for_abi folds in AFTER retention (never competes for a slot).
-                    n_release = _emit_catalog_from_paths(release_dir, kept_release + dep_for_abi)
+                    n_release = _emit_catalog_from_paths(release_dir, kept_release + dep_for_abi, root=out_dir)
                 built.append(str(release_dir))
                 sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s))\n")
                 dep_pkgs_matched.update(dep_for_abi)
@@ -976,7 +1012,7 @@ def build_repo_matrix(
                     kept = _retain_newest([*existing, new_nightly], nightly_keep)
                     # dep_for_abi folds in AFTER retention here too — the SAME dep pkg
                     # belongs in both the release and nightly catalogs of this ABI train.
-                    n = _emit_catalog_from_paths(nightly_dir, kept + dep_for_abi)
+                    n = _emit_catalog_from_paths(nightly_dir, kept + dep_for_abi, root=out_dir)
                 built.append(str(nightly_dir))
                 sys.stderr.write(f"==> nightly catalog {nightly_dir} ({n} package(s), kept ≤{nightly_keep})\n")
                 dep_pkgs_matched.update(dep_for_abi)
