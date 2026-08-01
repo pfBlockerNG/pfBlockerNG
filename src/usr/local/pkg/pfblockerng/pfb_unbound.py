@@ -2966,7 +2966,7 @@ def _log_entry_direct(line: str, log: str) -> None:
     # init, in the test suite, or if it failed to start): open/append/close per line.
     for i in range(1, 5):
         try:
-            with open(log, "a") as append_log:
+            with open(log, "a", encoding="utf-8") as append_log:
                 append_log.write(line + "\n")
         except Exception as e:
             if i == 4:
@@ -3021,7 +3021,7 @@ def pfb_setup_logging() -> None:
             logger.handlers = [_PfbDropQueueHandler(pfb_log_queue)]
             pfb_loggers[path] = logger
 
-            handler = logging.handlers.WatchedFileHandler(path, mode="a", delay=True)
+            handler = logging.handlers.WatchedFileHandler(path, mode="a", encoding="utf-8", delay=True)
             handler.setFormatter(logging.Formatter("%(message)s"))
             handler.addFilter(_PfbLogFilter(name))
             handlers.append(handler)

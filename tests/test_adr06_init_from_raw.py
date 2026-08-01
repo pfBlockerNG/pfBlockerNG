@@ -30,6 +30,7 @@ outcome is identical.
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import shutil
@@ -300,6 +301,42 @@ class TestInitFromRawCounts:
 # --------------------------------------------------------------------------- #
 # Wiring robustness: absent / broken manifest -> None (init falls back to legacy).
 # --------------------------------------------------------------------------- #
+
+
+class TestLogWriterEncoding:
+    def test_direct_writer_opens_with_explicit_utf8(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        log = os.path.join(str(tmp_path), "dnsbl.log")
+        encodings: list[str | None] = []
+        real_open = builtins.open
+
+        def spy_open(file: Any, mode: str = "r", *, encoding: str | None = None, **kwargs: Any) -> Any:
+            encodings.append(encoding)
+            return real_open(file, mode, encoding=encoding, **kwargs)
+
+        monkeypatch.setattr(pfb_unbound, "open", spy_open, raising=False)
+        pfb_unbound._log_entry_direct("Grüppe", log)
+
+        assert encodings == ["utf-8"]
+        assert open(log, "rb").read() == "Grüppe\n".encode()
+
+    def test_watched_file_handlers_open_with_explicit_utf8(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        paths = (str(tmp_path / "dnsbl.log"), str(tmp_path / "dns_reply.log"))
+        encodings: list[str] = []
+        real_handler = pfb_unbound.logging.handlers.WatchedFileHandler
+
+        def spy_handler(path: str, *, mode: str, encoding: str, delay: bool) -> Any:
+            encodings.append(encoding)
+            return real_handler(path, mode=mode, encoding=encoding, delay=delay)
+
+        monkeypatch.setattr(pfb_unbound, "PFB_LOG_FILES", paths)
+        monkeypatch.setattr(pfb_unbound.logging.handlers, "WatchedFileHandler", spy_handler)
+        pfb_unbound.pfb_setup_logging()
+        pfb_unbound.pfb_log_listener.stop()
+        pfb_unbound.pfb["log_listener"] = False
+
+        assert encodings == ["utf-8", "utf-8"]
 
 
 class TestManifestFallback:
