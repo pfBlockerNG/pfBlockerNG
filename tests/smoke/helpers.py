@@ -429,6 +429,23 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
     # Re-assert after POST-INSTALL: idempotent, and it fails loudly if the install removed dbdir.
     _write_cron_disable_flag(vm, timeout=timeout)
 
+    # issue #1946: the install-time registry pass seeds ip/suppression at its #1907
+    # default 'on', and Suppression drops the RFC 5737 documentation ranges (issue
+    # #760) the fixture policy mandates — IP tables would never populate. Pin the
+    # operator-uncheck baseline; suppression-semantics tests arrange the toggle
+    # themselves. (reset_pfb_baseline() re-pins it after each module wipe.)
+    pin = php_eval(
+        vm,
+        f"$ipcfg = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
+        "$ipcfg['suppression'] = 'off';\n"
+        f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ipcfg);\n"
+        "write_config('pfBlockerNG smoke: pin suppression off baseline');\n"
+        "echo 'OK';",
+        timeout=timeout,
+    )
+    if pin.returncode != 0 or "OK" not in pin.stdout:
+        raise RuntimeError(f"suppression-off baseline pin failed: rc={pin.returncode} {pin.stderr!r} {pin.stdout!r}")
+
 
 def _write_cron_disable_flag(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     """Write the cron-disable sentinel on the guest, raising loudly on failure.
@@ -3376,6 +3393,14 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
         f"  return ($r['descr'] ?? '') !== {_php_str(CONTROL_DESCR)};\n"
         "}));\n"
         f"config_set_path({_php_str(CFG_UNBOUND_HOSTS)}, $hosts);\n"
+        # issue #1946: with the ip section wiped, an absent 'suppression' resolves to the
+        # #1907 registry default ON, and Suppression drops the RFC 5737 documentation
+        # ranges (issue #760) the fixture policy mandates — every IP table would come up
+        # empty. Pin the operator-uncheck baseline so inert fixtures keep populating;
+        # suppression-semantics tests arrange the toggle themselves.
+        f"$ipcfg = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
+        "$ipcfg['suppression'] = 'off';\n"
+        f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ipcfg);\n"
         "write_config('pfBlockerNG smoke: reset to clean baseline');\n"
         # Regenerate host_entries.conf so the live resolver matches the emptied config —
         # the control-record removal only takes effect after an unbound reconfigure.
