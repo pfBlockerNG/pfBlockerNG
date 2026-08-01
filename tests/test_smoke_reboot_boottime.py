@@ -1,12 +1,9 @@
 """Issue #738 finding F4 — ``reboot_vm`` must PROVE the guest actually rebooted.
 
-``tests/smoke/helpers.reboot_vm`` replaced the old ``kern.boottime``-change POLL with a fixed
-settle sleep (see ``_REBOOT_SETTLE_SECS``): if shutdown outlasts that settle on a slow host, the
-still-up PRE-reboot sshd answers the readiness gate as "ready", and every downstream assertion
-(the reboot-persistence tests in ``tests/smoke/test_smoke_boot_reload.py`` and
-``tests/smoke/test_smoke_tick.py``) silently runs against stale pre-reboot state. The fix restores
-proof WITHOUT restoring the poll: a single ``kern.boottime`` read before the reboot and a single
-read after the full readiness gate, compared by ``_assert_boottime_advanced``.
+``tests/smoke/helpers.reboot_vm`` now polls the observable ``kern.boottime`` token after issuing
+the reboot, tolerating SSH failures while the guest is down. A generous timeout is a salvage cap
+that raises loudly if the token never changes; once it does, the full readiness gate receives its
+own independent budget.
 
 This module pins that PURE comparison seam off-VM (no VM I/O, no network) — it lives under
 ``tests/`` (NOT ``tests/smoke/``) so it runs in the default suite. Importing
