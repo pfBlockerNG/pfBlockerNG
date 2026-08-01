@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
  *                          string $message, string $ledger_dir, ?callable $clock_fn = null): void
  *   pfb_sync_status_close(string $facility, string $item, string $stage, string $ledger_dir): void
  *   pfb_sync_status_list_open(string $ledger_dir, ?string $facility = null): array
- *   pfb_sync_status_locked(string $ledger_dir, callable $fn): void
+ *   pfb_sync_status_locked(string $ledger_dir, callable $fn, float $timeout_s = 5.0): void
  *
  * Coverage mandate (CLAUDE.md "Test coverage") — every branch:
  *   open:  new key creates an entry; an already-open key refreshes message/
@@ -32,7 +32,10 @@ use PHPUnit\Framework\TestCase;
  *          exclusive lock (proven against an actual second process, not a
  *          single-process simulation) — closes the TOCTOU window between a
  *          read and its paired write that would otherwise let two concurrent
- *          writers silently discard one another's update.
+ *          writers silently discard one another's update. issue #1780: the
+ *          acquire is now BOUNDED -- a real, still-held lock past the budget
+ *          logs an observable timeout and still runs $fn() (fail-open), and
+ *          that signal discriminates (never fires on an uncontended success).
  */
 #[CoversFunction('pfb_sync_status_open')]
 #[CoversFunction('pfb_sync_status_close')]
@@ -297,6 +300,97 @@ final class PfbSyncStatusLedgerTest extends TestCase
 			$elapsed,
 			'pfb_sync_status_open() must block on the lock file until the real concurrent holder releases it -- a near-instant return means the read-modify-write span is not actually protected'
 		);
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1780 — pfb_sync_status_locked()'s EX acquire must be BOUNDED: on a
+	// real, still-held lock it logs the timeout loudly (observable) and still
+	// runs $fn() (fail-open contract unchanged), and that signal must
+	// DISCRIMINATE -- never fire on an ordinary uncontended success.
+	// -----------------------------------------------------------------------
+
+	public function testSyncStatusLockedExpiryIsObservableAndStillRunsFn(): void
+	{
+		if (!function_exists('pcntl_fork')) {
+			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		}
+
+		$originalPfb = $GLOBALS['pfb'] ?? [];
+		$GLOBALS['pfb'] = array_merge($originalPfb, [
+			'log'    => $this->dir . '/pfblockerng.log',
+			'errlog' => $this->dir . '/error.log',
+		]);
+
+		$lockPath   = $this->dir . '/pfb_sync_status.json.lock';
+		$markerPath = $this->dir . '/child_locked_expiry.marker';
+		$pid        = pcntl_fork();
+		if ($pid === -1) {
+			$GLOBALS['pfb'] = $originalPfb;
+			$this->markTestSkipped('pcntl_fork() failed.');
+		}
+
+		if ($pid === 0) {
+			// Child: fresh fopen() (not an inherited fd) -- a genuine second,
+			// independent lock holder. Holds well past the parent's small budget.
+			$fp = fopen($lockPath, 'c');
+			flock($fp, LOCK_EX);
+			touch($markerPath);
+			usleep(500000);
+			flock($fp, LOCK_UN);
+			fclose($fp);
+			exit(0);
+		}
+
+		$deadline = microtime(TRUE) + 2.0;
+		while (!file_exists($markerPath)) {
+			if (microtime(TRUE) >= $deadline) {
+				pcntl_waitpid($pid, $waitStatus);
+				$GLOBALS['pfb'] = $originalPfb;
+				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
+			}
+			usleep(1000);
+		}
+
+		try {
+			$fnRan = FALSE;
+			pfb_sync_status_locked($this->dir, function () use (&$fnRan) {
+				$fnRan = TRUE;
+			}, 0.1);
+
+			$this->assertTrue($fnRan,
+				'the callable must still run under the fail-open contract even after the lock acquire times out');
+
+			$log = (string) file_get_contents($GLOBALS['pfb']['log']);
+			$this->assertStringContainsString('sync-status ledger lock timed out', $log,
+				'a timed-out acquire must be logged loudly -- an operator-observable signal, never silent');
+		} finally {
+			pcntl_waitpid($pid, $waitStatus);
+			$GLOBALS['pfb'] = $originalPfb;
+		}
+	}
+
+	public function testSyncStatusLockedSuccessDoesNotEmitTimeoutSignal(): void
+	{
+		$originalPfb = $GLOBALS['pfb'] ?? [];
+		$GLOBALS['pfb'] = array_merge($originalPfb, [
+			'log'    => $this->dir . '/pfblockerng_success.log',
+			'errlog' => $this->dir . '/error_success.log',
+		]);
+
+		try {
+			$fnRan = FALSE;
+			pfb_sync_status_locked($this->dir, function () use (&$fnRan) {
+				$fnRan = TRUE;
+			}, 5.0);
+
+			$this->assertTrue($fnRan, 'the callable must run on the ordinary uncontended success path');
+
+			$log = file_exists($GLOBALS['pfb']['log']) ? (string) file_get_contents($GLOBALS['pfb']['log']) : '';
+			$this->assertStringNotContainsString('lock timed out', $log,
+				'the timeout signal must DISCRIMINATE -- it must never fire on an uncontended success');
+		} finally {
+			$GLOBALS['pfb'] = $originalPfb;
+		}
 	}
 
 	// -----------------------------------------------------------------------
