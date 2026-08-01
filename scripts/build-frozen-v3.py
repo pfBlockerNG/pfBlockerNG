@@ -370,6 +370,21 @@ def validate_artifact(pkg_path: Path, export_dir: Path, target: FrozenTarget, ro
     export_root = export_dir.resolve()
     payload_inventory: dict[str, str] = {}
     for member_name, data in sorted(payload.items()):
+        manifest_entry = files_manifest[member_name]
+        if not isinstance(manifest_entry, dict):
+            raise ArtifactValidationError(f"{pkg_path.name}: manifest file entry {member_name!r} must be an object")
+        manifest_sum = manifest_entry.get("sum")
+        if not isinstance(manifest_sum, str) or re.fullmatch(r"1\$[0-9a-f]{64}", manifest_sum) is None:
+            raise ArtifactValidationError(
+                f"{pkg_path.name}: manifest file entry {member_name!r} has malformed sum {manifest_sum!r}"
+            )
+        payload_sha256 = hashlib.sha256(data).hexdigest()
+        expected_sum = f"1${payload_sha256}"
+        if manifest_sum != expected_sum:
+            raise ArtifactValidationError(
+                f"{pkg_path.name}: manifest checksum mismatch for payload file {member_name!r}: "
+                f"expected {expected_sum!r}, actual {manifest_sum!r}"
+            )
         rel = member_name.lstrip("/")
         export_path = (export_dir / rel).resolve()
         if export_path != export_root and export_root not in export_path.parents:
@@ -390,7 +405,7 @@ def validate_artifact(pkg_path: Path, export_dir: Path, target: FrozenTarget, ro
                 )
         elif data != export_bytes:
             raise ArtifactValidationError(f"{pkg_path.name}: payload file {member_name!r} diverges from the tag export")
-        payload_inventory[member_name] = hashlib.sha256(data).hexdigest()
+        payload_inventory[member_name] = payload_sha256
 
     artifact_sha256 = hashlib.sha256(pkg_path.read_bytes()).hexdigest()
 

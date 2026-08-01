@@ -67,6 +67,7 @@ def _write_pkg(
     compact_overrides: dict | None = None,
     link_members: tuple[tuple[str, str, int], ...] = (),
     duplicate_manifest: bool = False,
+    manifest_file_overrides: dict[str, object] | None = None,
 ) -> None:
     """Write a libpkg-shaped .pkg (zstd tar, +COMPACT_MANIFEST + +MANIFEST + payload)."""
     manifest: dict = {
@@ -105,6 +106,8 @@ def _write_pkg(
         }
         for p, b in (files or {}).items()
     }
+    if manifest_file_overrides:
+        full["files"].update(manifest_file_overrides)
     if scripts is not None:
         full["scripts"] = scripts
     full_raw = json.dumps(full, separators=(",", ":")).encode() + b"\n"
@@ -760,6 +763,105 @@ def test_info_xml_unsubstituted_pkgversion_token_rejected(tmp_path: Path) -> Non
     )
     with pytest.raises(bfv.ArtifactValidationError, match="info.xml"):
         bfv.validate_artifact(pkg_path, export_dir, STABLE, ROW_15)
+
+
+# Issue #2020: every +MANIFEST files[].sum must match packaged member bytes.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(("target", "row"), [(STABLE, ROW_15), (DEVEL, ROW_15)])
+def test_issue_2020_manifest_checksum_accepts_stable_and_devel(tmp_path: Path, target: Any, row: dict) -> None:
+    pkg_path, export_dir = _happy_fixture(tmp_path, target, row)
+    record = bfv.validate_artifact(pkg_path, export_dir, target, row)
+    assert record["payload_file_count"] == 3
+
+
+@pytest.mark.parametrize(
+    "member_name",
+    [
+        "/usr/local/pkg/pfblockerng/pfblockerng.inc",
+        "/usr/local/share/demo-pkg/info.xml",
+        "/usr/local/www/pfblockerng/index.php",
+    ],
+)
+def test_issue_2020_manifest_checksum_mismatch_rejected_for_each_member(tmp_path: Path, member_name: str) -> None:
+    files = _packaged_payload(STABLE.portname, STABLE.portversion)
+    expected = f"1${hashlib.sha256(files[member_name]).hexdigest()}"
+    wrong = "1$" + "0" * 64
+    export_dir = _write_export(tmp_path, _demo_payload(STABLE.portname))
+    pkg_path = tmp_path / f"{STABLE.portname}-{STABLE.portversion}.pkg"
+    _write_pkg(
+        pkg_path,
+        name=STABLE.portname,
+        version=STABLE.portversion,
+        deps=_deps_for(ROW_15),
+        scripts=DEMO_SCRIPTS,
+        files=files,
+        manifest_file_overrides={member_name: {"sum": wrong}},
+    )
+
+    with pytest.raises(bfv.ArtifactValidationError) as exc_info:
+        bfv.validate_artifact(pkg_path, export_dir, STABLE, ROW_15)
+    message = str(exc_info.value)
+    assert member_name in message
+    assert expected in message
+    assert wrong in message
+
+
+def test_issue_2020_info_xml_export_checksum_rejected(tmp_path: Path) -> None:
+    files = _packaged_payload(STABLE.portname, STABLE.portversion)
+    info_path = f"/usr/local/share/{STABLE.portname}/info.xml"
+    export_sum = f"1${hashlib.sha256(_demo_payload(STABLE.portname)[info_path]).hexdigest()}"
+    packaged_sum = f"1${hashlib.sha256(files[info_path]).hexdigest()}"
+    export_dir = _write_export(tmp_path, _demo_payload(STABLE.portname))
+    pkg_path = tmp_path / f"{STABLE.portname}-{STABLE.portversion}.pkg"
+    _write_pkg(
+        pkg_path,
+        name=STABLE.portname,
+        version=STABLE.portversion,
+        deps=_deps_for(ROW_15),
+        scripts=DEMO_SCRIPTS,
+        files=files,
+        manifest_file_overrides={info_path: {"sum": export_sum}},
+    )
+
+    with pytest.raises(bfv.ArtifactValidationError) as exc_info:
+        bfv.validate_artifact(pkg_path, export_dir, STABLE, ROW_15)
+    message = str(exc_info.value)
+    assert info_path in message
+    assert packaged_sum in message
+    assert export_sum in message
+
+
+@pytest.mark.parametrize(
+    ("label", "entry"),
+    [
+        ("wrong_digest", {"sum": "1$" + "0" * 64}),
+        ("missing_sum", {}),
+        ("wrong_prefix", {"sum": "2$" + "0" * 64}),
+        ("string_entry", "not-an-object"),
+        ("list_entry", []),
+        ("null_entry", None),
+    ],
+)
+def test_issue_2020_malformed_manifest_file_entry_rejected(tmp_path: Path, label: str, entry: object) -> None:
+    del label
+    member_name = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
+    export_dir = _write_export(tmp_path, _demo_payload(STABLE.portname))
+    pkg_path = tmp_path / f"{STABLE.portname}-{STABLE.portversion}.pkg"
+    _write_pkg(
+        pkg_path,
+        name=STABLE.portname,
+        version=STABLE.portversion,
+        deps=_deps_for(ROW_15),
+        scripts=DEMO_SCRIPTS,
+        files=_packaged_payload(STABLE.portname, STABLE.portversion),
+        manifest_file_overrides={member_name: entry},
+    )
+
+    with pytest.raises(bfv.ArtifactValidationError) as exc_info:
+        bfv.validate_artifact(pkg_path, export_dir, STABLE, ROW_15)
+    assert member_name in str(exc_info.value)
 
 
 # --------------------------------------------------------------------------- #
