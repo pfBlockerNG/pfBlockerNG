@@ -624,6 +624,7 @@ def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(120)
 def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -> None:
     """A post hook's output reaches the PER-RUN log WHILE it runs — the file the live tail reads.
 
