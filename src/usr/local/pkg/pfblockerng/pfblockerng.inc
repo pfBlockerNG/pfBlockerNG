@@ -8551,6 +8551,51 @@ function pfb_unbound_py_top1m_atomic_copy(string $source, string $path, array $s
 	return TRUE;
 }
 
+// issue #1780: bounded flock() acquire -- a wall-clock deadline AND an independent
+// poll cap both bound the wait (a stalled/backward clock still terminates). ORs in
+// LOCK_NB itself; never fclose()s -- the caller owns the handle.
+function pfb_flock_bounded($fp, int $operation, float $timeout_s): bool {
+	$wait_s = max($timeout_s, 0.0);
+	$deadline = microtime(TRUE) + $wait_s;
+	// Independent poll cap bounds the wait if the wall clock stalls or moves backward.
+	$max_polls = (int) ceil($wait_s / 0.02) + 2;
+	$polls = 0;
+	$first_attempt = TRUE;
+	do {
+		$allow_expired_attempt = $first_attempt && $wait_s <= 0.0;
+		$first_attempt = FALSE;
+		if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
+			break;
+		}
+		$would_block = 0;
+		if (@flock($fp, $operation | LOCK_NB, $would_block)) {
+			if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
+				@flock($fp, LOCK_UN);
+				break;
+			}
+			return TRUE;
+		}
+		if ($would_block !== 1) {
+			return FALSE;
+		}
+		$polls++;
+		$remaining_s = $deadline - microtime(TRUE);
+		if ($polls >= $max_polls || $remaining_s <= 0.0) {
+			break;
+		}
+		usleep((int) min(20000, ceil($remaining_s * 1000000)));
+	} while (TRUE);
+
+	return FALSE;
+}
+
+// issue #1780: the bounded default every NULL caller of the publication lock
+// resolves to. 60s -- the holders are local manifest/GC/teardown file writes,
+// far beyond any legitimate hold, but still finite.
+function pfb_unbound_py_publication_lock_timeout(): float {
+	return 60.0;
+}
+
 // #1357: one exclusive lock serializes full-set publication, scalar manifest patches,
 // convergence-gated generation GC, and teardown. Python readers never take this lock.
 function pfb_unbound_py_publication_lock(?float $timeout_s=NULL) {
@@ -8568,46 +8613,12 @@ function pfb_unbound_py_publication_lock(?float $timeout_s=NULL) {
 	}
 
 	if ($timeout_s === NULL) {
-		if (!@flock($lock, LOCK_EX)) {
-			@fclose($lock);
-			pfb_logger("\nDNSBL publication lock unavailable", 2);
-			return FALSE;
-		}
-		return $lock;
+		$timeout_s = pfb_unbound_py_publication_lock_timeout();
 	}
 
-	$wait_s = max($timeout_s, 0.0);
-	$deadline = microtime(TRUE) + $wait_s;
-	// Independent poll cap bounds the wait if the wall clock stalls or moves backward.
-	$max_polls = (int) ceil($wait_s / 0.02) + 2;
-	$polls = 0;
-	$first_attempt = TRUE;
-	do {
-		$allow_expired_attempt = $first_attempt && $wait_s <= 0.0;
-		$first_attempt = FALSE;
-		if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
-			break;
-		}
-		$would_block = 0;
-		if (@flock($lock, LOCK_EX | LOCK_NB, $would_block)) {
-			if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
-				@flock($lock, LOCK_UN);
-				break;
-			}
-			return $lock;
-		}
-		if ($would_block !== 1) {
-			@fclose($lock);
-			pfb_logger("\nDNSBL publication lock unavailable", 2);
-			return FALSE;
-		}
-		$polls++;
-		$remaining_s = $deadline - microtime(TRUE);
-		if ($polls >= $max_polls || $remaining_s <= 0.0) {
-			break;
-		}
-		usleep((int) min(20000, ceil($remaining_s * 1000000)));
-	} while (TRUE);
+	if (pfb_flock_bounded($lock, LOCK_EX, $timeout_s)) {
+		return $lock;
+	}
 
 	@fclose($lock);
 	pfb_logger("\nDNSBL publication lock timed out", 2);
@@ -8950,9 +8961,9 @@ function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '', $wait_time
 		pfb_logger("\nPFBL-03: control channel lock open failed [ {$lockpath} ]", 2);
 		return FALSE;
 	}
-	if (!@flock($lock, LOCK_EX)) {
+	if (!pfb_flock_bounded($lock, LOCK_EX, 5.0)) {
 		@fclose($lock);
-		pfb_logger("\nPFBL-03: control channel lock acquire failed [ {$lockpath} ]", 2);
+		pfb_logger("\nPFBL-03: control channel lock acquire timed out [ {$lockpath} ]", 2);
 		return FALSE;
 	}
 

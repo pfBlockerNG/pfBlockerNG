@@ -3274,8 +3274,9 @@ function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir): ?array
 	if ($fp === FALSE) {
 		return NULL;
 	}
-	if (!flock($fp, LOCK_SH)) {
+	if (!pfb_flock_bounded($fp, LOCK_SH, 5.0)) {
 		fclose($fp);
+		pfb_logger("\nADR-43: due-ledger read lock timed out [ {$path} ]", 2);
 		return NULL;
 	}
 	$raw = stream_get_contents($fp);
@@ -3851,8 +3852,9 @@ function pfb_sync_status_read_all(string $ledger_dir): array
 	if ($fp === FALSE) {
 		return [];
 	}
-	if (!flock($fp, LOCK_SH)) {
+	if (!pfb_flock_bounded($fp, LOCK_SH, 5.0)) {
 		fclose($fp);
+		pfb_logger("\nADR-61: sync-status ledger read lock timed out [ {$path} ]", 2);
 		return [];
 	}
 	$raw = stream_get_contents($fp);
@@ -3903,17 +3905,23 @@ function pfb_sync_status_write_all(array $data, string $ledger_dir): void
  *
  * @param string   $ledger_dir Directory that contains pfb_sync_status.json.
  * @param callable $fn         The read-modify-write body to run under the lock.
+ * @param float    $timeout_s  Bounded EX-acquire budget in seconds (issue #1780).
  * @return void
  */
-function pfb_sync_status_locked(string $ledger_dir, callable $fn): void
+function pfb_sync_status_locked(string $ledger_dir, callable $fn, float $timeout_s = 5.0): void
 {
 	$lock_path = $ledger_dir . '/pfb_sync_status.json.lock';
 	$fp        = @fopen($lock_path, 'c');
-	if ($fp === FALSE || !flock($fp, LOCK_EX)) {
-		if ($fp !== FALSE) {
-			fclose($fp);
-		}
-		$fn();	// can't lock (unwritable dir) -- degrade to best-effort, same fail-open contract as write_all()
+	if ($fp === FALSE) {
+		$fn();	// can't open (unwritable dir) -- degrade to best-effort, same fail-open contract as write_all()
+		return;
+	}
+	if (!pfb_flock_bounded($fp, LOCK_EX, $timeout_s)) {
+		fclose($fp);
+		// issue #1780: the acquire timed out -- log it loudly (observable, was
+		// silent) before degrading to the same fail-open contract as above.
+		pfb_logger("\nADR-61: sync-status ledger lock timed out [ {$lock_path} ] -- proceeding unlocked", 2);
+		$fn();
 		return;
 	}
 	try {

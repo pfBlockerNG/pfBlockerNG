@@ -3490,6 +3490,33 @@
             }
         ]
     },
+    "pfb_flock_bounded": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "fp",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "operation",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": null
+            }
+        ]
+    },
     "pfb_force_clear_validators": {
         "returnsRef": false,
         "returnType": "int",
@@ -7788,6 +7815,13 @@
                 "variadic": false,
                 "type": "callable",
                 "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
             }
         ]
     },
@@ -8582,6 +8616,11 @@
                 "default": "NULL"
             }
         ]
+    },
+    "pfb_unbound_py_publication_lock_timeout": {
+        "returnsRef": false,
+        "returnType": "float",
+        "params": []
     },
     "pfb_unbound_py_publication_unlock": {
         "returnsRef": false,
