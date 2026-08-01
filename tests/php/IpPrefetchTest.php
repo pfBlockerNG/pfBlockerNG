@@ -999,24 +999,32 @@ final class IpPrefetchTest extends TestCase
 	 */
 	public function test_prefetch_leaves_no_temp_pattern_files_behind(): void
 	{
-		$fields = $this->buildBlockFields('192.0.2.77');
-		$rq     = pfb_ip_render_query($fields);
+		$tempDir = sys_get_temp_dir() . '/pfb_ip_prefetch_cleanup_' . bin2hex(random_bytes(6));
+		$this->assertTrue(mkdir($tempDir, 0755), "failed to create owned temp dir {$tempDir}");
 
-		$rows = [[
-			'host'              => $rq['host'],
-			'folder'            => $rq['folder'],
-			'validate_file_cmd' => $rq['validate_file_cmd'],
-			'validate_cmd'      => $rq['validate_cmd'],
-			'eval_ip_raw'       => $fields[14],
-		]];
+		$repo = dirname(__DIR__, 2);
+		$code = 'require ' . var_export("{$repo}/tests/php/bootstrap.php", TRUE) . ';'
+			. '$lines = pfb_ip_prefetch_grep_lines(\'/bin/echo\', \'\', [\'^probe$\']);'
+			. 'echo json_encode(['
+			. '\'ran\' => is_array($lines),'
+			. '\'leftover\' => glob(sys_get_temp_dir() . \'/pfb_ip_prefetch_*\') ?: []'
+			. ']);';
+		try {
+			$cmd = 'TMPDIR=' . escapeshellarg($tempDir) . ' ' . escapeshellarg(PHP_BINARY)
+				. ' -d ' . escapeshellarg("sys_temp_dir={$tempDir}") . ' -r ' . escapeshellarg($code);
+			$output = shell_exec($cmd);
+		} finally {
+			rmdir_recursive($tempDir);
+		}
 
-		pfb_ip_prefetch($rows);
-
-		$leftover = glob(sys_get_temp_dir() . '/pfb_ip_prefetch_*') ?: [];
+		$decoded = json_decode((string) $output, TRUE);
+		$this->assertIsArray($decoded, 'expected valid child JSON, got ' . var_export($output, TRUE));
+		$this->assertTrue($decoded['ran'] ?? FALSE, 'expected the helper to create and process its pattern file');
 		$this->assertSame(
 			[],
-			$leftover,
-			'expected no pfb_ip_prefetch_* temp files to remain, found ' . var_export($leftover, true)
+			$decoded['leftover'] ?? NULL,
+			'expected no pfb_ip_prefetch_* temp files to remain in the test-owned temp dir, found '
+				. var_export($decoded['leftover'] ?? NULL, TRUE)
 		);
 	}
 
