@@ -133,25 +133,16 @@ final class LogTimestampBaselineTest extends TestCase
 	}
 
 	/**
-	 * The dedup bug (ADR.md §1.4) is retired: two calls landing in the SAME
-	 * wall-clock second must BOTH carry a real, non-blank ISO timestamp --
-	 * neither strips the other's.
-	 *
-	 * Bounded retry: only proves the same-second premise if the wall-clock
-	 * second does not roll over between the two calls -- an inherent race
-	 * with no injectable clock in production code today.
+	 * The dedup bug (ADR.md §1.4) is retired: repeated calls must each carry
+	 * a real, non-blank ISO timestamp -- neither strips the other's.
 	 */
-	public function testLogRepeatedSameSecondCallsBothStamped(): void
+	public function testLogRepeatedCallsAreIndependentlyStamped(): void
 	{
 		$log = $this->tempFile('pfb_log_dedup_');
 		$GLOBALS['pfb']['log'] = $log;
 
-		[$before, $after] = $this->runWithinSameSecond(function () use ($log) {
-			file_put_contents($log, '');
-			pfb_logger("pfb-baseline dedup line\n", 1);
-			pfb_logger("pfb-baseline dedup line\n", 1);
-		});
-		$this->assertSame($before, $after, 'wall-clock second rolled over on every retry attempt (flaky env)');
+		pfb_logger("pfb-baseline dedup line\n", 1);
+		pfb_logger("pfb-baseline dedup line\n", 1);
 
 		$lines = explode("\n", rtrim((string) file_get_contents($log), "\n"));
 		$this->assertCount(2, $lines, 'expected two independently-stamped lines');
@@ -159,7 +150,7 @@ final class LogTimestampBaselineTest extends TestCase
 			$this->assertMatchesRegularExpression(
 				'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} pfb-baseline dedup line$/',
 				$line,
-				"line {$i} must carry its own real ISO timestamp even though both calls landed in the same second; got: {$line}"
+				"line {$i} must carry its own real ISO timestamp; got: {$line}"
 			);
 		}
 	}
@@ -167,8 +158,7 @@ final class LogTimestampBaselineTest extends TestCase
 	/**
 	 * ADR.md §1.4's 'pnow' was a single process-global shared across every
 	 * logtype; it is deleted, so a log (logtype 1) call can no longer poison
-	 * a LATER, same-second extraslog (logtype 3) call -- each is now stamped
-	 * independently.
+	 * a later extraslog (logtype 3) call -- each is now stamped independently.
 	 */
 	public function testLogAndExtrasLogCallsAreIndependent(): void
 	{
@@ -177,13 +167,8 @@ final class LogTimestampBaselineTest extends TestCase
 		$GLOBALS['pfb']['log'] = $log;
 		$GLOBALS['pfb']['extraslog'] = $extraslog;
 
-		[$before, $after] = $this->runWithinSameSecond(function () use ($log, $extraslog) {
-			file_put_contents($log, '');
-			file_put_contents($extraslog, '');
-			pfb_logger("pfb-cross-a\n", 1);
-			pfb_logger("pfb-cross-b\n", 3);
-		});
-		$this->assertSame($before, $after, 'wall-clock second rolled over on every retry attempt (flaky env)');
+		pfb_logger("pfb-cross-a\n", 1);
+		pfb_logger("pfb-cross-b\n", 3);
 
 		$logWritten    = (string) file_get_contents($log);
 		$extrasWritten = (string) file_get_contents($extraslog);
@@ -596,22 +581,4 @@ final class LogTimestampBaselineTest extends TestCase
 		);
 	}
 
-	/**
-	 * Runs $work() with a best-effort guarantee that no wall-clock second
-	 * boundary was crossed during it, retrying up to 5 times.
-	 *
-	 * @return array{0:string,1:string} [$before, $after] -- equal on success.
-	 */
-	private function runWithinSameSecond(callable $work): array {
-		$before = $after = '';
-		for ($attempt = 0; $attempt < 5; $attempt++) {
-			$before = date('Y-m-d H:i:s', time());
-			$work();
-			$after = date('Y-m-d H:i:s', time());
-			if ($before === $after) {
-				break;
-			}
-		}
-		return [$before, $after];
-	}
 }

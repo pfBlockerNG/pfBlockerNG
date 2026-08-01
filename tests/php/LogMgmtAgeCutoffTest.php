@@ -251,10 +251,10 @@ final class LogMgmtAgeCutoffTest extends TestCase
 			$this->now()       . ' e',
 		]) . "\n";
 		file_put_contents($logPath, $content);
-		$mtimeBefore = filemtime($logPath);
-
-		// A real filesystem mtime tick so an accidental touch would be visible.
-		usleep(1_100_000);
+		$mtimeBefore = time() - 3600;
+		touch($logPath, $mtimeBefore);
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($mtimeBefore, filemtime($logPath), 'before: forced mtime must take');
 
 		pfb_log_mgmt();
 
@@ -344,10 +344,10 @@ final class LogMgmtAgeCutoffTest extends TestCase
 			$this->now() . ' e',
 		]) . "\n";
 		file_put_contents($logPath, $content);
-		$mtimeBefore = filemtime($logPath);
-
-		// A real filesystem mtime tick so an accidental rewrite would be visible.
-		usleep(1_100_000);
+		$mtimeBefore = time() - 3600;
+		touch($logPath, $mtimeBefore);
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($mtimeBefore, filemtime($logPath), 'before: forced mtime must take');
 
 		pfb_log_mgmt();
 
