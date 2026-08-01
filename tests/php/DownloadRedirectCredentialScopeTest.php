@@ -11,9 +11,11 @@ use PHPUnit\Framework\TestCase;
  * The manual redirect loop keeps CURLOPT_USERPWD/CURLOPT_HTTPAUTH configured on
  * the one cURL handle for every hop, so a credentialed feed that answers with a
  * CROSS-HOST redirect leaks the operator's Basic username and password to the
- * redirect target. Credentials must be scoped to the ORIGINAL feed host —
- * libcurl's own FOLLOWLOCATION policy: a cross-host hop gets no Authorization,
- * a hop back onto the origin host regains it, and a same-host redirect keeps it.
+ * redirect target. Credentials must be scoped to the ORIGINAL feed origin —
+ * host AND scheme AND port, libcurl's FOLLOWLOCATION policy since 7.83.0
+ * (CVE-2022-27774): a cross-host or same-host-different-port hop gets no
+ * Authorization, a hop back onto the origin regains it, and a same-origin
+ * redirect keeps it.
  *
  * Exercised through the REAL pfb_download() against TWO local `php -S` fixture
  * servers on distinct hostnames (both resolved to 127.0.0.1 through the
@@ -35,6 +37,7 @@ final class DownloadRedirectCredentialScopeTest extends TestCase
 	private string $workdir = '';
 	private int $originPort = 0;
 	private int $targetPort = 0;
+	private int $altPort = 0;
 
 	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
 	private array $saved = [];
@@ -104,10 +107,11 @@ final class DownloadRedirectCredentialScopeTest extends TestCase
 	 * One shared router serves both servers (URIs are disjoint). Every request
 	 * appends [server-port, uri, PHP_AUTH_USER, PHP_AUTH_PW] to AUTH_LOG.
 	 *
-	 *   /same  -> 302 /final            (same-host redirect on the origin)
-	 *   /cross -> 302 TARGET/hop        (cross-host redirect to the target)
-	 *   /hop   -> 302 ORIGIN/back       (target bounces back to the origin)
-	 *   other  -> 200 body
+	 *   /same     -> 302 /final          (same-origin redirect on the origin)
+	 *   /cross    -> 302 TARGET/hop      (cross-host redirect to the target)
+	 *   /hop      -> 302 ORIGIN/back     (target bounces back to the origin)
+	 *   /portjump -> 302 ALT/land        (same host, DIFFERENT port)
+	 *   other     -> 200 body
 	 */
 	private function startServers(): void
 	{
@@ -136,6 +140,10 @@ if ($uri === '/hop') {
 	header('Location: ' . $bases['origin'] . '/back', true, 302);
 	return;
 }
+if ($uri === '/portjump') {
+	header('Location: ' . $bases['alt'] . '/land', true, 302);
+	return;
+}
 header('Content-Length: 4');
 echo 'BODY';
 PHP;
@@ -143,9 +151,11 @@ PHP;
 
 		$this->originPort = $this->startOneServer($router, self::ORIGIN_HOST);
 		$this->targetPort = $this->startOneServer($router, self::TARGET_HOST);
+		$this->altPort    = $this->startOneServer($router, self::ORIGIN_HOST . ' (alt port)');
 		$this->assertNotFalse(file_put_contents("{$this->workdir}/ports.json", json_encode([
 			'origin' => 'http://' . self::ORIGIN_HOST . ":{$this->originPort}",
 			'target' => 'http://' . self::TARGET_HOST . ":{$this->targetPort}",
+			'alt'    => 'http://' . self::ORIGIN_HOST . ":{$this->altPort}",
 		])));
 	}
 
@@ -237,9 +247,33 @@ PHP;
 	}
 
 	/**
-	 * Scenario: a credentialed feed answers with a same-host redirect.
-	 * Given Basic credentials configured for the origin feed host,
-	 * when the origin 302s to another path on the SAME host,
+	 * Scenario: a credentialed feed answers with a same-host but
+	 * DIFFERENT-PORT redirect (the CVE-2022-27774 axis: another port is a
+	 * different trust domain even on the same host).
+	 * Given Basic credentials configured for the origin feed origin,
+	 * when the origin 302s to the SAME host on another port,
+	 * then the different-port hop receives NO credentials.
+	 */
+	public function testSameHostDifferentPortHopReceivesNoCredentials(): void
+	{
+		$result = $this->downloadFrom('/portjump');
+		$this->assertTrue($result->success, 'redirected download must succeed');
+		$this->assertSame('200', $result->responseMeta['status'] ?? '', 'probe metadata must carry the final 200');
+
+		$this->assertSame(
+			[
+				[$this->originPort, '/portjump', 'user', 'secret'],
+				[$this->altPort, '/land', NULL, NULL],
+			],
+			$this->authLog(),
+			'a same-host different-port hop must see no Basic credentials'
+		);
+	}
+
+	/**
+	 * Scenario: a credentialed feed answers with a same-origin redirect.
+	 * Given Basic credentials configured for the origin feed origin,
+	 * when the origin 302s to another path on the SAME host and port,
 	 * then both requests receive the credentials.
 	 */
 	public function testSameHostRedirectKeepsCredentials(): void
