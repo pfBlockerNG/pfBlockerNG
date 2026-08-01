@@ -12699,6 +12699,15 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					curl_setopt($ch, CURLOPT_HTTPHEADER, $http_headers);
 				}
 
+				// Issue #1953: a caller-supplied Authorization header (the TOP1M
+				// Radar Bearer token) is an origin credential like CURLOPT_USERPWD
+				// and must not ride an off-origin redirect hop; the redirect loop
+				// below swaps between the full list and this one. Non-credential
+				// headers (e.g. If-None-Match) stay on every hop.
+				$offorigin_http_headers = array_values(array_filter($http_headers,
+					fn (string $hdr): bool => stripos($hdr, 'Authorization:') !== 0));
+				$headers_have_auth = count($offorigin_http_headers) !== count($http_headers);
+
 				if ($srcint) {
 					curl_setopt($ch, CURLOPT_INTERFACE, $srcint);	// Use a specific interface when downloading lists
 					pfb_logger("\nList: {$header} will be downloaded via interface: {$srcint}\n", 1);
@@ -12835,16 +12844,24 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					// back onto the origin regains it. CURLAUTH_NONE (with
 					// the userpwd blanked) stops libcurl from sending any
 					// Authorization header.
+					$hop_on_origin = (strcasecmp($next['host'], $feed_host) === 0 &&
+							  $next['scheme'] === $feed_scheme &&
+							  $next['port'] === $feed_port);
 					if ($feed_has_creds) {
-						if (strcasecmp($next['host'], $feed_host) === 0 &&
-						    $next['scheme'] === $feed_scheme &&
-						    $next['port'] === $feed_port) {
+						if ($hop_on_origin) {
 							curl_setopt($ch, CURLOPT_USERPWD, "{$username}:{$password}");
 							curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
 						} else {
 							curl_setopt($ch, CURLOPT_USERPWD, '');
 							curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_NONE);
 						}
+					}
+					// Issue #1953: the caller-supplied Authorization header gets
+					// the same origin scope (an empty off-origin list resets
+					// CURLOPT_HTTPHEADER to cURL defaults).
+					if ($headers_have_auth) {
+						curl_setopt($ch, CURLOPT_HTTPHEADER,
+							$hop_on_origin ? $http_headers : $offorigin_http_headers);
 					}
 
 					// Re-point cURL at the vetted target and re-pin its address. The
