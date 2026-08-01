@@ -282,6 +282,16 @@ CFG_IPV4_FEEDS = "installedpackages/pfblockernglistsv4/config"
 FEEDS_PAGE_IPV4 = "/pfblockerng/pfblockerng_feeds.php?type=ipv4"
 FEEDS_PAGE_MARKERS = ("Pre-defined Alias/Group/Feeds", "IPv4 Alias name(s):")
 
+# Valid UTF-8 values whose escaped forms place the old byte cut in the middle
+# of an entity or multibyte character. The raw-character prefixes are the
+# intended 15-character display values on all three render sites.
+CATEGORY_ALIAS = "i2039aliasé&abcdefghij"
+CATEGORY_ALIAS_PREFIX = "i2039aliasé&amp;abc..."
+CATEGORY_ALIAS_ESCAPED = "i2039aliasé&amp;abcdefghij"
+CATEGORY_DESCRIPTION = "d2039des&aébcdefghijklmnop"
+CATEGORY_DESCRIPTION_PREFIX = "d2039des&amp;aébcde..."
+CATEGORY_DESCRIPTION_ESCAPED = "d2039des&amp;aébcdefghijklmnop"
+
 # Hostile-input fixture: an "http" URL (hits the <a href> render branch) that
 # breaks out of the href attribute and opens a <script> tag.
 XSS_FEED_URL = 'http://a"><script>xss</script>.evil.example/list.txt'
@@ -311,7 +321,14 @@ def _free_rowid(vm: helpers.SmokeVM, cfg_root: str) -> int:
     return int(helpers._php_read_scalar(vm, pre, "$free", timeout=60.0))
 
 
-def _seed_custom_feed_row(vm: helpers.SmokeVM, cfg_root: str, rowid: int, aliasname: str, url: str) -> None:
+def _seed_custom_feed_row(
+    vm: helpers.SmokeVM,
+    cfg_root: str,
+    rowid: int,
+    aliasname: str,
+    url: str,
+    description: str | None = None,
+) -> None:
     """Write one custom-feed alias (unmatched by the predefined catalog) via the config API.
 
     Direct ``config_set_path`` + ``write_config`` (not the save form) -- a pure
@@ -319,16 +336,85 @@ def _seed_custom_feed_row(vm: helpers.SmokeVM, cfg_root: str, rowid: int, aliasn
     idiom (``_mk_alias``).
     """
     row = {"state": "Enabled", "url": url, "header": XSS_FEED_HEADER}
+    description_item = f", 'description' => {helpers._php_str(description)}" if description is not None else ""
+    entry = (
+        f"array('aliasname' => {helpers._php_str(aliasname)}, 'action' => 'Deny_Both'{description_item}, "
+        f"'row' => array({helpers._php_kv_array(row)}))"
+    )
     snippet = (
-        f"config_set_path({helpers._php_str(f'{cfg_root}/{rowid}/aliasname')}, {helpers._php_str(aliasname)});\n"
-        f"config_set_path({helpers._php_str(f'{cfg_root}/{rowid}/action')}, {helpers._php_str('Deny_Both')});\n"
-        f"config_set_path({helpers._php_str(f'{cfg_root}/{rowid}/row/0')}, {helpers._php_kv_array(row)});\n"
+        f"config_set_path({helpers._php_str(f'{cfg_root}/{rowid}')}, {entry});\n"
         "write_config('pfBlockerNG smoke: seed XSS feed row');\n"
         "echo 'OK';"
     )
     result = helpers.php_eval(vm, snippet, timeout=60.0)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"_seed_custom_feed_row failed: rc={result.returncode} {result.stdout!r} {result.stderr!r}")
+
+
+def test_category_and_feeds_truncation(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """All three long cells truncate valid UTF-8 before HTML escaping."""
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_IPV4_FEEDS)
+    try:
+        _seed_custom_feed_row(
+            vm,
+            CFG_IPV4_FEEDS,
+            rowid,
+            CATEGORY_ALIAS,
+            XSS_FEED_URL,
+            CATEGORY_DESCRIPTION,
+        )
+        base = f"{CFG_IPV4_FEEDS}/{rowid}"
+        got_alias = helpers.config_get(vm, f"{base}/aliasname")
+        assert got_alias == CATEGORY_ALIAS, f"config alias mismatch: expected {CATEGORY_ALIAS!r}, got {got_alias!r}"
+        got_description = helpers.config_get(vm, f"{base}/description")
+        assert got_description == CATEGORY_DESCRIPTION, (
+            f"config description mismatch: expected {CATEGORY_DESCRIPTION!r}, got {got_description!r}"
+        )
+
+        feeds_url = FEEDS_PAGE_IPV4
+        feeds = webui.get(feeds_url)
+        category_url = "/pfblockerng/pfblockerng_category.php?type=ipv4"
+        category = webui.get(category_url)
+        failures: list[str] = []
+
+        try:
+            feeds_body = feeds.content.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            failures.append(f"Feeds response is not valid UTF-8: {exc}")
+            feeds_body = feeds.content.decode("utf-8", errors="replace")
+
+        try:
+            category_body = category.content.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            failures.append(f"Category response is not valid UTF-8: {exc}")
+            category_body = category.content.decode("utf-8", errors="replace")
+
+        feeds_result = evaluate_render(feeds_url, feeds.status_code, feeds_body, FEEDS_PAGE_MARKERS)
+        category_result = evaluate_render(category_url, category.status_code, category_body, ("Summary", "pfBlockerNG"))
+        if not feeds_result.ok:
+            failures.append(f"Feeds Tier-A render oracle failed: {feeds_result.detail}")
+        if not category_result.ok:
+            failures.append(f"Category Tier-A render oracle failed: {category_result.detail}")
+        if looks_like_login_page(feeds_body):
+            failures.append("Feeds GET returned the login form")
+        if looks_like_login_page(category_body):
+            failures.append("Category GET returned the login form")
+
+        for label, expected, body in (
+            ("Category alias prefix", CATEGORY_ALIAS_PREFIX, category_body),
+            ("Category alias title", f'title="{CATEGORY_ALIAS_ESCAPED}"', category_body),
+            ("Category description prefix", CATEGORY_DESCRIPTION_PREFIX, category_body),
+            ("Category description title", f'title="{CATEGORY_DESCRIPTION_ESCAPED}"', category_body),
+            ("Feeds alias prefix", CATEGORY_ALIAS_PREFIX, feeds_body),
+            ("Feeds alias title", f'title="{CATEGORY_ALIAS_ESCAPED}"', feeds_body),
+        ):
+            if expected not in body:
+                failures.append(f"{label} missing or split: expected {expected!r}")
+
+        assert not failures, "truncation render failures:\n" + "\n".join(f"- {failure}" for failure in failures)
+    finally:
+        _del_rowid(vm, CFG_IPV4_FEEDS, rowid)
 
 
 def _del_rowid(vm: helpers.SmokeVM, cfg_root: str, rowid: int) -> None:
