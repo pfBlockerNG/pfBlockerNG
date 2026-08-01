@@ -615,25 +615,21 @@ final class AlertsMultibyteTruncationTest extends TestCase
 	}
 
 	// =========================================================================
-	// Row 14: invalid UTF-8 byte before the cut -- DEVIATION from the literal
-	// issue #1815 coverage-matrix wording (see docblock below for the evidence).
+	// Row 14: invalid UTF-8 byte before the cut -- the #1814 contract (invalid byte
+	// substituted with U+FFFD, never blanked/fabricated) must survive truncation.
 	// =========================================================================
 
 	/**
-	 * DEVIATION (recorded in the #1815 handoff): the coverage matrix expected an
-	 * invalid byte positioned before the cut to still render as U+FFFD after the
-	 * fix (mirroring pfb_hsc()'s #1814 ENT_SUBSTITUTE contract). Empirically it does
-	 * NOT: mb_substr() itself decodes the string to count characters up to the
-	 * requested length, and a byte it cannot decode is replaced INLINE by
-	 * mb_substitute_character() (default ASCII '?', confirmed via
-	 * `php -r 'var_dump(mb_substitute_character());'` => int(63)) BEFORE pfb_hsc()'s
-	 * htmlspecialchars(ENT_SUBSTITUTE) ever sees the string -- so this call site's
-	 * invalid byte never reaches the #1814 substitution path at all once it falls
-	 * inside a truncated (mb_substr'd) prefix. What DOES survive, and what this test
-	 * proves instead: the byte is never dropped/blanked and the surrounding text is
-	 * untouched -- pinned below as the actual, verified post-fix contract.
+	 * A raw 0xFF byte (never valid in any UTF-8 sequence) sitting inside the
+	 * truncated prefix must still render as U+FFFD -- the exact symbol pfb_hsc()'s
+	 * ENT_SUBSTITUTE produces for it elsewhere (issue #1814) -- and must NEVER
+	 * render as a literal '?': mb_substr()'s own default substitute character
+	 * would otherwise fabricate a character the input never carried, before
+	 * pfb_hsc() ever sees the string. pfb_truncate() pins
+	 * mb_substitute_character(0xFFFD) around its mb_substr() call for exactly this
+	 * reason (issue #1815 review).
 	 */
-	public function test_row14_dnsbl_agent_field_invalid_byte_before_cut_is_substituted_by_mb_substr_not_pfb_hsc(): void
+	public function test_row14_dnsbl_agent_field_invalid_byte_before_cut_renders_fffd_not_a_fabricated_question_mark(): void
 	{
 		$agent  = 'R14Agent' . "\xFF" . str_repeat('a', 30) . '.trailing-tail';
 		$fields = $this->dnsblFields('benign-domain-15.example', '10.1.0.15', 'Grp15', 'Feed15', $agent);
@@ -643,34 +639,21 @@ final class AlertsMultibyteTruncationTest extends TestCase
 		$this->assertStringContainsString('<small>...</small>', $html, 'the value must actually be truncated');
 		$this->assertStringContainsString('R14Agent', $html, 'the text before the invalid byte must survive');
 		$this->assertStringContainsString('aaaaaaaaaaaaaaa', $html, 'the text after the invalid byte must survive (not blanked)');
-		// A bare '?' is NOT a discriminating assertion -- the static template markup
-		// already contains literal '?' characters elsewhere (e.g. "from DNSBL?").
-		// Pin the substitute character AT the exact position the invalid byte occupied.
-		// This site also emits a title="" attribute carrying the FULL, UNTRUNCATED
-		// value (pfb_hsc($fields[4]) on the raw string, line ~2307) -- that copy never
-		// goes through mb_substr at all, so its own raw 0xFF byte is still substituted
-		// by pfb_hsc()'s ENT_SUBSTITUTE the #1814 way (U+FFFD) -- expected, unrelated to
-		// this fix, and asserted explicitly so it is not mistaken for a regression.
-		$this->assertStringContainsString(
-			"\u{FFFD}",
-			$html,
-			'the UNTRUNCATED title="" copy of the value must still substitute the raw invalid byte as U+FFFD (#1814, unaffected by this fix)'
-		);
-		// The DISPLAYED (truncated) span content is the part this fix touches: pin the
-		// exact substitute character mb_substr() produces AT the invalid byte's position.
-		$this->assertStringContainsString(
-			'R14Agent?aaaaaaaaaaaaaaa',
-			$html,
-			"mb_substr replaces the invalid byte with its own substitute character (default '?') at that exact position, not U+FFFD"
-		);
 		// Anchored with the immediately-following ellipsis marker so this checks ONLY the
-		// DISPLAYED (truncated) span text, never the title="" attribute above (which
-		// legitimately contains this same "R14Agent<FFFD>aaa..." prefix, followed by
-		// ".trailing-tail" instead of "<small>...</small>").
-		$this->assertStringNotContainsString(
+		// DISPLAYED (truncated) span text, never the title="" attribute (which carries the
+		// FULL, untruncated value and legitimately shows this same U+FFFD substitution
+		// regardless -- pfb_hsc() alone, unaffected by truncation).
+		$this->assertStringContainsString(
 			'R14Agent' . "\u{FFFD}" . 'aaaaaaaaaaaaaaa<small>...</small>',
 			$html,
-			'the DISPLAYED (truncated) span content must never show U+FFFD at this position -- mb_substr already consumed the byte before pfb_hsc() ran (see this test\'s docblock deviation note)'
+			'the invalid byte inside the truncated prefix must render substituted as U+FFFD (issue #1814 contract), not silently dropped'
+		);
+		$this->assertStringNotContainsString(
+			'R14Agent?aaaaaaaaaaaaaaa<small>...</small>',
+			$html,
+			"the truncated span must never show a literal '?' at this position -- that character was NOT in the input; "
+				. 'mb_substr()\'s own default substitute character would fabricate it if pfb_truncate() did not pin '
+				. 'mb_substitute_character(0xFFFD) around the cut'
 		);
 	}
 
@@ -716,5 +699,62 @@ final class AlertsMultibyteTruncationTest extends TestCase
 		$this->assertStringContainsString('<small>...</small>', $html);
 		$this->assertStringNotContainsString("\u{FFFD}", $html, 'the idn_to_utf8()-produced text must not dangle at the cut');
 		$this->assertStringContainsString('тест', $html, 'the whole IDN-converted Cyrillic word must survive the cut');
+	}
+
+	// =========================================================================
+	// State restoration: pfb_truncate() pins mb_substitute_character(0xFFFD)
+	// around its mb_substr() call (issue #1815 review) -- mb_substitute_character()
+	// is REQUEST-GLOBAL state, so a row render must never leave it changed for
+	// whatever renders next on the same page load.
+	// =========================================================================
+
+	public function test_truncation_sites_restore_prior_mb_substitute_character_across_all_three_builders(): void
+	{
+		// A conspicuously non-default sentinel: if pfb_truncate() ever failed to
+		// restore this, every OTHER render in the same request would silently start
+		// substituting invalid bytes with 'Z' instead of the caller's own setting.
+		$sentinel = ord('Z');
+		$original = mb_substitute_character();
+
+		try {
+			$cases = [
+				'convert_dnsbl_log' => function (): string {
+					$fields = $this->dnsblFields(
+						str_repeat('a', 70) . 'é' . 'trailing-domain.example',
+						'10.1.0.18', 'GrpRestore', 'FeedRestore'
+					);
+					return $this->renderDnsblRow($fields);
+				},
+				'convert_dns_reply_log' => function (): string {
+					$srcIp = '10.1.0.19';
+					$GLOBALS['local_hosts'] = [$srcIp => ''];
+					$fields = $this->replyFields(str_repeat('a', 50) . 'é' . 'trailing-domain.example', $srcIp);
+					return $this->renderReplyRow($fields);
+				},
+				'convert_ip_log' => function (): string {
+					$fields = $this->ipRawFields([
+						8 => '192.0.2.130', 15 => '192.0.2.130',
+						14 => 'pfB_RowRestore_v4', 16 => str_repeat('a', 20) . 'é' . 'trailing-feed',
+					]);
+					return $this->renderIpRow($fields, 'Block');
+				},
+			];
+
+			foreach ($cases as $builder => $render) {
+				mb_substitute_character($sentinel);
+				$html = $render();
+
+				$this->assertNotSame('', $html, "fixture sanity: {$builder} must actually render a row");
+				$this->assertSame(
+					$sentinel,
+					mb_substitute_character(),
+					"pfb_truncate() must restore mb_substitute_character() to its caller's prior value -- "
+						. "a {$builder} row render leaked a changed request-global substitute-character state"
+				);
+			}
+		} finally {
+			// Never leak a changed global state to sibling tests in this same process.
+			mb_substitute_character($original);
+		}
 	}
 }

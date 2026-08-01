@@ -1880,6 +1880,24 @@ function pfb_hsc($value) {
 	return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+// Truncate a RAW log/host-derived token to $length CHARACTERS (never bytes), so a
+// multibyte character straddling the cut survives whole instead of leaving a
+// dangling lead byte for pfb_hsc()'s ENT_SUBSTITUTE to replace (issue #1815). An
+// invalid byte within the kept prefix is still replaced with U+FFFD -- the same
+// symbol pfb_hsc()'s ENT_SUBSTITUTE produces (issue #1814) -- by pinning
+// mb_substitute_character() for the duration of the call; mb_substr()'s own
+// default substitute ('?') would otherwise fabricate a character the input never
+// carried. mb_substitute_character() is request-global state, so the prior value
+// is always restored before returning, even though this file never changes it
+// elsewhere.
+function pfb_truncate($value, $length) {
+	$prev = mb_substitute_character();
+	mb_substitute_character(0xFFFD);
+	$cut = mb_substr((string) $value, 0, $length, 'UTF-8');
+	mb_substitute_character($prev);
+	return $cut;
+}
+
 // Compose the resolved-hostname stats cell for the IP src/dst-in stats. The raw
 // hostname is attacker-influenceable, so HTML-encode it; a >=45-char value is
 // truncated for display with the full value kept in the title attribute.
@@ -2227,7 +2245,7 @@ function convert_dnsbl_log($mode, $fields) {
 		$h_title		= '';
 		if (strlen($hostname) >= 25) {
 			$h_title	= pfb_hsc($hostname);
-			$hostname	= pfb_hsc(mb_substr($hostname, 0, 24, 'UTF-8')) . "<small>...</small>";
+			$hostname	= pfb_hsc(pfb_truncate($hostname, 24)) . "<small>...</small>";
 		} else {
 			$hostname	= pfb_hsc($hostname);
 		}
@@ -2244,7 +2262,7 @@ function convert_dnsbl_log($mode, $fields) {
 		$f2 = "{$f2} [" . idn_to_utf8($f2) . "]";
 	}
 	if (strlen($f2) >= ($mode != 'unified' ? 60 : 40)) {
-		$f2 = pfb_hsc(mb_substr($f2, 0, ($mode != 'unified' ? 59 : 39), 'UTF-8')) . "<small>...</small>";
+		$f2 = pfb_hsc(pfb_truncate($f2, ($mode != 'unified' ? 59 : 39))) . "<small>...</small>";
 	} else {
 		$f2 = pfb_hsc($f2);
 	}
@@ -2255,7 +2273,7 @@ function convert_dnsbl_log($mode, $fields) {
 			$f7		= "{$f7} [" . idn_to_utf8($f7) . "]";
 		}
 		if (strlen($f7) >= ($mode != 'unified' ? 52 : 32)) {
-			$f7		= pfb_hsc(mb_substr($f7, 0, ($mode != 'unified' ? 51 : 31), 'UTF-8')) . "<small>...</small>";
+			$f7		= pfb_hsc(pfb_truncate($f7, ($mode != 'unified' ? 51 : 31))) . "<small>...</small>";
 		} else {
 			$f7		= pfb_hsc($f7);
 		}
@@ -2303,7 +2321,7 @@ function convert_dnsbl_log($mode, $fields) {
 
 	if (!empty($fields[4])) {
 		if (strlen($fields[4]) >= 25) {
-			$f4 = pfb_hsc(mb_substr($fields[4], 0, 24, 'UTF-8')) . "<small>...</small>";
+			$f4 = pfb_hsc(pfb_truncate($fields[4], 24)) . "<small>...</small>";
 			$fields[4] = "<span title=\"" . pfb_hsc($fields[4]) . "\">{$f4}</span>";
 		} else {
 			$fields[4] = pfb_hsc($fields[4]);
@@ -2498,7 +2516,7 @@ function convert_dns_reply_log($mode, $fields) {
 	$title_hostname = '';
 	if (!empty($hostname) && strlen($hostname) >= 25) {
 		$title_hostname = pfb_hsc($hostname);
-		$hostname	= pfb_hsc(mb_substr($hostname, 0, 24, 'UTF-8')) . "<small>...</small>";
+		$hostname	= pfb_hsc(pfb_truncate($hostname, 24)) . "<small>...</small>";
 	} else {
 		$hostname	= pfb_hsc($hostname);
 	}
@@ -2580,7 +2598,7 @@ function convert_dns_reply_log($mode, $fields) {
 	$pfb_title5 = '';
 	if (strlen($fields[5]) >= 6) {
 		$pfb_title5	= pfb_hsc($fields[5]);
-		$fields[5]	= pfb_hsc(mb_substr($fields[5], 0, 5, 'UTF-8')) . "<small>...</small>";
+		$fields[5]	= pfb_hsc(pfb_truncate($fields[5], 5)) . "<small>...</small>";
 	} else {
 		$fields[5]	= pfb_hsc($fields[5]);
 	}
@@ -2589,7 +2607,7 @@ function convert_dns_reply_log($mode, $fields) {
 	$pfb_title6 = '';
 	if (strlen($fields[6]) >= ($mode != 'unified' ? 45 : 30)) {
 		$pfb_title6	= pfb_hsc($fields[6]);
-		$fields[6]	= pfb_hsc(mb_substr($fields[6], 0, ($mode != 'unified' ? 44 : 29), 'UTF-8')) . "<small>...</small>";
+		$fields[6]	= pfb_hsc(pfb_truncate($fields[6], ($mode != 'unified' ? 44 : 29))) . "<small>...</small>";
 	} else {
 		$fields[6]	= pfb_hsc($fields[6]);
 	}
@@ -2598,7 +2616,7 @@ function convert_dns_reply_log($mode, $fields) {
 	$pfb_title8 = '';
 	if (strlen($fields[8]) >= 17) {
 		$pfb_title8	= pfb_hsc($fields[8]);
-		$fields[8]	= pfb_hsc(mb_substr($fields[8], 0, 16, 'UTF-8')) . "<small>...</small>";
+		$fields[8]	= pfb_hsc(pfb_truncate($fields[8], 16)) . "<small>...</small>";
 	} else {
 		$fields[8]	= pfb_hsc($fields[8]);
 	}
@@ -3064,7 +3082,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			$pfb_matchtitle .= '&#013;';
 		}
 		$pfb_matchtitle .= "Feed: " . pfb_hsc($fields[15]);
-		$fields[15]	= pfb_hsc(mb_substr($fields[15], 0, 16, 'UTF-8')) . "<small>...</small>";
+		$fields[15]	= pfb_hsc(pfb_truncate($fields[15], 16)) . "<small>...</small>";
 	} else {
 		$fields[15]	= pfb_hsc($fields[15]);
 	}
@@ -3073,7 +3091,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			$pfb_matchtitle .= '&#013;';
 		}
 		$pfb_matchtitle .= "Feed new: " . pfb_hsc($feed_new);
-		$feed_new	= pfb_hsc(mb_substr($feed_new, 0, 16, 'UTF-8')) . "<small>...</small>";
+		$feed_new	= pfb_hsc(pfb_truncate($feed_new, 16)) . "<small>...</small>";
 	} else {
 		$feed_new	= pfb_hsc($feed_new);
 	}
@@ -3085,7 +3103,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$fields[16] = 'Unknown';
 	}
 	elseif (strlen($fields[16]) >= 22) {
-		$fields[16] = "<span title=\"" . pfb_hsc($fields[16]) . "\">" . pfb_hsc(mb_substr($fields[16], 0, 21, 'UTF-8')) . "<small>...</small></span>";
+		$fields[16] = "<span title=\"" . pfb_hsc($fields[16]) . "\">" . pfb_hsc(pfb_truncate($fields[16], 21)) . "<small>...</small></span>";
 	}
 
 	// Interface / Protocol / GeoIP code / Timestamp printed verbatim
