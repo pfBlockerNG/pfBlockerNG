@@ -156,8 +156,12 @@ final class Issue1787BlankEmptyCallSitesTest extends TestCase
 
 	public function testShUnicodeWhitespaceOnlyStderrIsNoDiagnosticWarning(): void
 	{
-		// Nonzero exit, stderr = NBSP + newline: no diagnostic to parse.
-		$timeoutFixture = $this->fixture('printf "\302\240\n" 1>&2' . "\n" . 'exit 1');
+		// Consume the complete probe before the nonzero exit; stderr = NBSP + newline.
+		$timeoutFixture = $this->fixture(
+			'cat >/dev/null' . "\n" .
+			'printf "\302\240\n" 1>&2' . "\n" .
+			'exit 1'
+		);
 		$shFixture = $this->fixture('exit 0'); // never exec'd — fake timeout ignores argv
 		$diagnostics = pfb_lint_sh_diagnostics("echo ok\n", $shFixture, $timeoutFixture);
 		$this->assertCount(1, $diagnostics);
@@ -189,7 +193,11 @@ final class Issue1787BlankEmptyCallSitesTest extends TestCase
 
 	public function testPyUnicodeWhitespaceOnlyStderrIsNoDiagnosticWarning(): void
 	{
-		$timeoutFixture = $this->fixture('printf "\302\240\n" 1>&2' . "\n" . 'exit 1');
+		$timeoutFixture = $this->fixture(
+			'cat >/dev/null' . "\n" .
+			'printf "\302\240\n" 1>&2' . "\n" .
+			'exit 1'
+		);
 		$pythonFixture = $this->fixture('exit 0'); // never exec'd — fake timeout ignores argv
 		$diagnostics = pfb_lint_py_diagnostics("print('ok')\n", $pythonFixture, $timeoutFixture);
 		$this->assertCount(1, $diagnostics);
