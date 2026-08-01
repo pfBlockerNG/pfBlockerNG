@@ -11,10 +11,12 @@
 #   --plan           print the gate commands that WOULD run, one per line, and exit
 #   --allow-missing  a missing tool reports SKIP without failing the run (default: fails)
 #
-# Per-gate lines `GATE PASS|FAIL|SKIP: <cmd>`; final line `GATES: PASS|FAIL`. Exit 0 only
-# when nothing failed (and nothing skipped without --allow-missing). A diff touching
-# www/ additionally prints a REMINDER that Tier-A ui_render coverage is a judgment gate
-# this script cannot run (test mandate #4).
+# Per-gate lines `GATE PASS|FAIL|SKIP: <cmd>`; a FAILING gate additionally prints its own
+# captured stdout+stderr immediately before its `GATE FAIL` line (a passing gate stays
+# fully suppressed); final line `GATES: PASS|FAIL`. Exit 0 only when nothing failed (and
+# nothing skipped without --allow-missing). A diff touching www/ additionally prints a
+# REMINDER that Tier-A ui_render coverage is a judgment gate this script cannot run (test
+# mandate #4).
 
 worktree='' base='origin/devel' plan=0 allow_missing=0
 overall=0
@@ -84,14 +86,17 @@ run_gate() {
 	# issue #1194: </dev/null -- a stdin-reading gate (full PHPUnit) otherwise eats
 	# the command loop's remaining gate lines, silently skipping those gates.
 	# issue #1865: capture combined stdout+stderr so a failing gate's own output
-	# surfaces before its GATE FAIL line; a passing gate stays fully suppressed.
+	# surfaces before its GATE FAIL line; a passing gate stays fully suppressed. Runs
+	# under $(...), so the capture also waits for EOF from any background child the
+	# gate leaves holding stdout (e.g. shellspec's own backgrounded cleanup `rm -rf`) --
+	# negligible today, but a future daemonizing gate would otherwise look hung.
 	gate_output=$(cd "$worktree" && sh -c "$1" </dev/null 2>&1)
 	gate_status=$?
 	if [ "$gate_status" -eq 0 ]; then
 		printf 'GATE PASS: %s\n' "$1"
 		return 0
 	fi
-	printf '%s\n' "$gate_output"
+	[ -z "$gate_output" ] || printf '%s\n' "$gate_output"
 	printf 'GATE FAIL: %s\n' "$1"
 	overall=1
 	[ "$1" = 'python3 scripts/check_composer_vendor.py' ] && return 1
@@ -147,7 +152,7 @@ main() {
 		echo "OVERALL=$overall"
 	})
 	overall_status=${report##*OVERALL=}
-	printf '%s\n' "$report" | grep -v '^OVERALL='
+	printf '%s' "${report%OVERALL=*}"
 	if printf '%s\n' "$files" | grep -q '^src/usr/local/www/'; then
 		printf 'REMINDER: www/ touched -- Tier-A ui_render coverage is required and cannot be script-checked (test mandate #4)\n'
 	fi
