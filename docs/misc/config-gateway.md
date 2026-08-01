@@ -77,9 +77,10 @@ Authorization is a property of the **write**, not the call site (the
   when behaviour-equivalent). The goal is to preserve *behaviour* on upgrade, not bytes.
 - **Forward-compat (upgrade) has two cases:** an existing config with the key absent reads to
   a value that **preserves that user's prior behaviour**; a brand-new config gets the new
-  default. When those differ, a one-time grandfather seed sets the key for existing installs
-  at upgrade (e.g. `pfb_rdns_seed_value`, `pfb_feed_filter_install_default`) so the
-  absent-default never silently changes an existing user's behaviour.
+  default. When those differ, the registry entry carries a `grandfather` map (issue #1921)
+  that the one-pass registry reconciliation applies for existing installs at upgrade (the
+  bespoke `pfb_rdns_seed_value` cross-section seed is the exception that stays hand-written),
+  so the absent-default never silently changes an existing user's behaviour.
 - **Canonical current storage.** Read adapters accept legacy tokens needed by supported forward
   upgrades; writes emit the current canonical token. They do not constrain new storage to what an
   older package understands.
@@ -112,9 +113,17 @@ Authorization is a property of the **write**, not the call site (the
     writes always emit canonical lowercase. The runtime `$pfb[]` toggle mirrors carry
     the enum itself (never `->value`), so consumers compare `=== PfbToggle::On`.
     Registered checkbox fields still on `NULL`/`NULL` adapters (e.g. `pfb_regex`,
-    `pfb_noaaaa`, `pfb_gp`, `pfb_cache`, `pfb_py_nolog`, `tld_wildcard`, `top1m_enable`)
+    `pfb_noaaaa`, `pfb_gp`, `pfb_py_nolog`, `tld_wildcard`, `top1m_enable`)
     keep the raw `{'on', ''}` storage until they adopt the pair — a field joining the
     adapter set moves all its consumers in the same commit (see below).
+  - **`pfb_cache`/`pfb_py_reply`/`pfb_hsts`/ip-section `suppression` → `PfbToggle`**
+    (issue #1907): default **On** — the de-facto default every settings page has claimed
+    since 3.2. Each carries the registry grandfather map `['' => 'off']` (a 3.2 deliberate
+    uncheck stored `''` and must not resolve to the new `'on'` default), and
+    `pfb_py_reply`/`pfb_hsts` additionally get the `issue1907-python-gated-toggles`
+    migration: a stored `'on'` beside a pre-upgrade `dnsbl_mode` that is present and not
+    `'dnsbl_python'` was inert (both consumers were python-gated in 3.2) and is disabled
+    before the ADR-02 python force would otherwise activate it.
   - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables the post-handshake full Unbound
     cache flush for bulk zero-downtime DNSBL data swaps.
   - **`enable_rep`/`enable_pdup`/`enable_dedup` → `PfbToggle`** (issue #1896, the Reputation
@@ -127,11 +136,11 @@ Authorization is a property of the **write**, not the call site (the
     the sniff gates exact key paths only).
   - **`pfb_alias_delta_mode` → `PfbAliasDeltaMode`** (ADR-40, registry adapters
     `pfb_cfg_alias_delta_mode_read/write`): tokens `'auto'` (new-install default) / `'delta'` /
-    `'replace'`. Unknown or absent token reads as `Auto`. **Grandfather seed:** an already-configured
-    install is pinned to `'replace'` (pre-ADR-40 full `-T replace`) at install/upgrade by
-    `pfb_alias_delta_mode_install_default()` + `pfblockerng_install.inc` — run-once via its `!isset`
-    guard — so only a brand-new install takes the `'auto'` absent-default; an upgrade keeps full
-    replace.
+    `'replace'`. Unknown or absent token reads as `Auto`. **Grandfather:** an already-configured
+    install is pinned to `'replace'` (pre-ADR-40 full `-T replace`) by the registry entry's
+    `grandfather => [PFB_GF_ABSENT => 'replace']` map, applied once by the registry pass at
+    install/upgrade — so only a brand-new install takes the `'auto'` absent-default; an
+    upgrade keeps full replace.
     `pfb_alias_delta_batch` (plain string, `NULL`/`NULL` adapters) is the batch-size companion
     field; its stored value is a decimal integer string, clamped to `[64, 4096]` at read time by
     `pfb_alias_delta_batch_clamp()`.
@@ -181,6 +190,9 @@ Authorization is a property of the **write**, not the call site (the
    page), set `write_priv` on the entry (see "Write authorization" above).
 3. Add a test in `tests/php/CfgGatewayTest.php` (round-trip + default-absent cases).
 4. Update the `$inventory` in `testInventoryCompletenessAllKnownKeysAccountedFor()`.
+5. Classify the grandfathering decision on the entry itself — a `grandfather` map or a
+   `no_grandfather` reason (issue #1921; the trigger question is under "Forward-upgrade
+   contract"). `CfgRegistryGrandfatherGateTest` fails the suite on an unclassified entry.
 
 When adding a registered key, also add its full path to the `$registeredPaths` property in
 `tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php` (the enforcement sniff).
@@ -201,32 +213,40 @@ The gateway preserves existing behaviour while configurations move forward:
   entry point (`read()`, `write()`, `writeSection()`) resolves both to the registered default
   through one shared helper, so a stored `''` can never mean different things to the read and
   the normalising write paths.
-- **Grandfather invariant**: when an absent current default would change established behaviour,
-  the install/upgrade path writes a one-time seed for existing installations. **The trigger is
-  "did the behaviour this field controls change for someone upgrading?", never "did this key
-  exist before?"** — a field introduced in 4.0 to make previously *hardcoded* behaviour
+- **Grandfather invariant (issue #1921)**: when an absent current default — or a raw legacy
+  stored value — would change established behaviour, the registry entry carries a
+  `grandfather` map: raw stored value → new value, with the dedicated `PFB_GF_ABSENT` marker
+  keying genuine absence (a PHP array literal coerces a `NULL` key to `''`, so absence needs
+  an explicit marker). The one-pass registry reconciliation (below) applies the map once at
+  install/upgrade; unmapped values pass through unchanged. **The trigger is "did the
+  behaviour this field controls change for someone upgrading?", never "did this key exist
+  before?"** — a field introduced in 4.0 to make previously *hardcoded* behaviour
   configurable is the highest-risk case, not a safe one, because its new-install default is
   chosen for new installs while every upgrader was living under the old hardcoded behaviour.
-  All three of these are new 4.0 fields, and all three needed a grandfather:
+  The shipped maps:
 
-  | Field | Pre-4.0 behaviour | New-install default | Grandfathered value |
-  | --- | --- | --- | --- |
-  | `pfb_dnsbl_lenient` (ADR-22) | permissive scheme parsing, hardcoded | `off` (strict) | `on` |
-  | `pfb_alias_delta_mode` (ADR-40) | always full `-T replace` | `auto` | `replace` |
-  | `pfb_feed_internal_filter` (#1770) | no feed-host filtering | `on` | `off` |
+  | Field | Grandfather map | Why |
+  | --- | --- | --- |
+  | `gen/pfb_keep` | `[ABSENT => 'on', '' => 'off']` | #281 upgrade keeps settings; #1887 preserves a 3.2 deliberate uncheck |
+  | `gen/pfb_feed_internal_filter` | `[ABSENT => 'off']` | #1770 — existing feeds are never silently dropped |
+  | `gen/pfb_alias_delta_mode` | `[ABSENT => 'replace']` | ADR-40 — an upgrade keeps the pre-ADR-40 full replace |
+  | `dnsbl/pfb_dnsbl_lenient` | `[ABSENT => 'on']` | ADR-22 — an upgrade keeps permissive parsing |
+  | `dnsbl/pfb_idn_block_malicious` | `['' => 'off']` | #1887 — the old `?: ''` unchecked save |
+  | `dnsbl/pfb_cache` · `dnsbl/pfb_py_reply` · `dnsbl/pfb_hsts` · `ip/suppression` | `['' => 'off']` | #1907 — default flipped to the page-claimed `'on'`; a 3.2 uncheck stored `''` |
 
-  **Ordering — grandfather before seed, always.** `pfb_registered_scalars_seed()` (issue #1898)
-  materialises every still-absent registered scalar at its default, after which an explicit
-  operator setting and a seeded default are indistinguishable in `config.xml` and a grandfather
-  has nothing left to key on. Every grandfather therefore runs earlier — the migration-registry
-  entries, then `pfblockerng_install.inc`'s install-default helpers, then the seed. Pinned by
-  `LegacyKeyRenameMigrationTest::testSeedRunsAfterMigrationsAndBothInstallDefaultGrandfathers`.
+  **Every entry carries its decision.** Exactly one of a `grandfather` map or a
+  `no_grandfather` reason string per registry entry, with two exceptions carrying neither:
+  `gen/settings_family` (the mode instrument, recorded by `pfb_settings_family_record()`)
+  and `dnsbl/pfb_control_legacy` (the PFBL-03 cross-key bespoke seed).
+  `tests/php/CfgRegistryGrandfatherGateTest.php` enforces the partition **totally** — a new
+  registered field with neither fails the suite — plus the **fixpoint rule** (no map output
+  is also a map input; `['on'=>'off','off'=>'on']` would oscillate across reinstalls) and
+  `old_name` parity. Issue #1920's one-time 103-row audit is thereby a standing gate.
 
-  **A grandfather running after the key rename** (the #1898 entry sits before them) is fine, but
-  must target the **current** key name, and must skip a field whose retired name is still
-  stored — the rename is all-or-nothing, so one conflicting pair leaves other keys under their
-  old names and a bare `!isset($new_key)` would fire against an operator who does have a value.
-  `pfb_registered_scalars_seed()` carries exactly this guard; copy it.
+  **Ordering is branch order, not pass order.** The former three-stage hazard (rename
+  migration, then grandfather helpers, then the seeding pass, with their mutual order pinned
+  by a test) is structurally gone: `pfb_registry_pass()` does rename → grandfather-map →
+  seed as branch order inside one loop (see "The registry pass" below).
 - **Canonical-write invariant**: current code writes the current canonical representation.
 - **Canonical-name invariant** (issue #1898): a registered key's *name* is the current domain
   vocabulary too, not a frozen historical spelling. Renaming one ships a one-time post-install
@@ -272,9 +292,10 @@ on 2026-07-30 — downgrade safety now comes from the settings-family snapshots
 keys therefore carry the **current** domain vocabulary, and an existing installation is carried
 forward by one migration.
 
-**The 14 retired names.** Three landed decisions had frozen a stored key while the runtime/UI
-vocabulary moved on: the dead-Alexa TOP1M cluster (#872/#877) and ADR-66 §2.1/§2.2's TLD Allow
-and TLD Wildcard families.
+**The 15 retired names.** Four landed decisions had frozen a stored key while the runtime/UI
+vocabulary moved on: the dead-Alexa TOP1M cluster (#872/#877), ADR-66 §2.1/§2.2's TLD Allow
+and TLD Wildcard families, and the DNSBL whitelist blob (stored as `suppression` until
+issue #1921 renamed it to its true name).
 
 | Old stored key | Current stored key |
 | --- | --- |
@@ -282,71 +303,76 @@ and TLD Wildcard families.
 | `filter_alexa` (dynamic `pfblockerngdnsbl/config/{row}`) | `filter_top1m` |
 | `pfb_pytld` · `pfb_pytld_sort` · `pfb_pytlds_{gtld,cctld,itld,bgtld}` | `tld_allow` · `tld_allow_sort` · `tld_allow_{gtld,cctld,itld,bgtld}` |
 | `pfb_tld` · `tldblacklist` · `tldexclusion` | `tld_wildcard` · `tld_wildcard_blacklist` · `tld_wildcard_exclusion` |
+| `suppression` (DNSBL settings section) | `whitelist` |
 
-**The migration.** `PFB_LEGACY_KEY_RENAMES` + `pfb_legacy_key_rename_migrate()`
-(`pfblockerng.inc`), wired as the `issue1898-legacy-key-rename` entry in
-`pfb_migration_registry()`. It runs **after** the two `issue1887-toggle-empty-preserve-*`
-conversions — those read operator intent out of a legacy stored `''`, which any adapter-riding
-write-back would have already canonicalised away — and before the remaining entries. Because it
-spans two sections, registry entries may carry a `sections` list instead of a single `section`;
-`pfb_run_migrations()` then hands the `apply` callable a `section => blob` map, persists every
-returned section, and calls `write_config()` **once**.
+**Scalar renames are `old_name` slots (issue #1921).** Every retired *scalar* spelling lives
+as the `old_name` slot on its registry entry; the rename is the first branch of the registry
+pass (below), so no later branch can ever observe a value still under its old name. The one
+per-feed **row** rename (`filter_alexa` → `filter_top1m`) stays a migration —
+`PFB_LEGACY_KEY_RENAMES` + `pfb_legacy_key_rename_migrate()`, the `issue1898-legacy-key-rename`
+entry in `pfb_migration_registry()` — because feed rows are not registered scalars; that
+migration keeps the original #1898 semantics: per-row preflight, all-or-nothing across rows,
+fail-closed on a conflicting pair with a `file_notice()` naming keys and never values.
+`CfgRegistryGrandfatherGateTest`'s `old_name` parity pins the retired-spelling set.
 
-Per-key preflight, all-or-nothing across every section: old absent → no-op; old present and new
-absent → move; old absent and new present → already migrated; both present and equal → keep the
-new key, drop the old; **both present and different → fail closed**, leave the entire config
-untouched and raise a `file_notice()` naming the two keys and never their values. Values move
-byte-identically, except where the renamed key's own registered adapter canonicalises a legacy
-token (`top1m_source`'s `'alexa'`/`'domcop'` coalesce) — the documented behaviour-equivalent
-move, not a value change.
+## The registry pass (issue #1921)
 
-**The seeding pass.** `pfb_registered_scalars_seed()` (`pfblockerng.inc`) materialises every
-registered scalar that is still absent from its section at its registered default, so `config.xml`
-explicitly carries every scalar setting and "absent" stops being a third semantic state. It is
-called from `pfblockerng_install.inc` **after** the migration driver *and* after the
-`pfb_feed_internal_filter` / `pfb_alias_delta_mode` install-default grandfathers — they run at the
-end of that file, so a seed inside the migration registry would materialise the registry default
-first and permanently disarm both. It rides the installer's trailing `write_config()`.
+`pfb_registry_pass()` (`pfblockerng.inc`) replaces the rename migration's scalar half, the
+grandfather helpers, and the #1898 seeding pass with **one registry-driven loop**, called at
+the end of `pfblockerng_install.inc` after `pfb_run_migrations()` and after the ADR-53
+`pfBlockerNGSuppress` alias conversion (which keys on the literal absence of
+`ip/v4suppression` and must observe pre-pass state). Mode is computed **per section**:
+`OLDCFG` iff the section is non-empty under `pfb_gconfig_operator_view()` (the installer's
+`settings_family` marker never reads as operator data — #1770/#1771/#1775). Per key:
 
-`PFB_SCALAR_SEED_EXCLUDED` holds the six keys (path-form, issue #1931) whose **literal
-absence** some consumer still reads as a distinct state, so materialising them would change
-behaviour on the way to making storage explicit:
+- **NEWCFG** — seed the registry default (stabilised through the entry's own grandfather map
+  so a seeded value can never be re-mapped by a later run).
+- **OLDCFG** — rename (an `old_name` value moves verbatim, `''` and `'0'` included; a
+  conflicting pair keeps the new name, leaves the old in place, and raises one
+  `file_notice()` naming keys, never values — per-key, not all-or-nothing); then the
+  grandfather map (`PFB_GF_ABSENT` covers genuine absence; unmapped values are identity;
+  `''` is a stored value and moves/maps as one); then seed the default if still absent.
 
-| Key | Why absence is load-bearing |
-| --- | --- |
-| `gen/settings_family` | The installer's own schema marker, not operator configuration — the same reason `pfb_gconfig_operator_view()` strips it (#1770/#1771/#1775). |
-| `ip/v4suppression` | `pfblockerng_install.inc`'s ADR-53 `pfBlockerNGSuppress` alias conversion is gated on "never migrated" (absent) versus "present but empty". |
-| `dnsbl/pfb_cache`, `dnsbl/pfb_py_reply`, `dnsbl/pfb_hsts` | `pfblockerng_dnsbl.php` renders these CHECKED while the key is absent (`isset(…) ? … : 'on'`) although the registered default is `''`. Seeding `''` would flip the first-open rendering, and so what a first save stores. That page/registry divergence is **issue #1907**; these three join the pass when it is resolved. |
-| `ip/suppression` | Same #1907 class on `pfblockerng_ip.php` (renders checked while absent, registered default `''`). Registered by issue #1931 once path addressing removed its name collision with the DNSBL `dnsbl/suppression` whitelist blob; its `'on'` default + grandfather decision is deferred to #1921. |
+Idempotent by construction: a present key short-circuits everything except the conflict
+warning, and the gate's fixpoint rule guarantees a map output is never a map input. The pass
+returns only changed sections; the caller persists them via `PfbConfig::writeSectionSystem()`
+(the pass's output riding the adapters is deliberate — it is what coalesces a renamed key's
+legacy token, e.g. `top1m_source` `'alexa'` → `'tranco'`).
 
-Nothing else needs excluding — under the issue #1887 `''` ≡ absent identity, seeding a
-`''`-default field (a credential, a base64 blob, an interface multi-select) stores exactly the
-value it already had, and every genuinely user-owned structure (feed rows, group policies,
-MaxMind credentials) is unregistered and therefore never reached.
+**Migrations persist raw.** `pfb_run_migrations()` and every legacy-reshape write earlier in
+`pfblockerng_install.inc` persist via `PfbConfig::writeSectionRawSystem()` (direct
+`config_set_path()`, no adapter round-trip) — an adapter-riding write-back before the pass
+would resolve a bystander raw `''` to its registered default (`gen/pfb_keep` `''` → `'on'`)
+and destroy the very evidence the grandfather maps key on. Canonicalisation is the pass's
+job. Pinned by `tests/php/InstallPrePassWriteOrderTest.php` (no `writeSectionSystem` before
+the pass call in the installer) and the raw-bystander regression in
+`MigrationRegistryTest`.
 
-The pass also skips any key whose **retired name is still stored**. The rename is
-all-or-nothing, so a fail-closed conflict leaves every other retired key unmigrated; seeding
-their current names would give each one a conflicting pair of its own on the next install,
-escalating a single-key recovery into an N-key one and destroying the old-present/new-absent
-path that migrates them cleanly once the operator resolves the one real conflict.
+**What stays outside the loop:**
 
-**Consequence for future fields:** after this pass a bare `!isset($cfg[$key])` no longer means
-"an existing install that predates this setting". A new grandfather decides from the *value*, or
-from a dedicated one-shot marker (`pfb_control_legacy_seeded`'s shape), never from key absence.
-The same applies to whole-section emptiness: `pfb_dnsbl_python_migrate()` and
-`pfb_control_legacy_seed()` use `empty($dconfig)` as their fresh-install discriminator, so on the
-install *after* a fresh one they now fire against a seeded section and write their (vestigial)
-`dnsbl_mode` / `pfb_py_block` / `pfb_control_legacy_seeded` keys. Behaviour is unchanged —
-`pfb_control_legacy` is still only set when `pfb_control` is `'on'`, which a seeded section is
-not — but the write is spurious. New run-once logic uses a marker, not emptiness.
+| Piece | Why | Fate |
+| --- | --- | --- |
+| PFBL-03 `pfb_control_legacy_seed()` | cross-key: value depends on `pfb_control`, plus its own run-once marker | migration; runs before the pass, which then sees the key present and skips |
+| `issue1907-python-gated-toggles` | cross-key: stored `'on'` + pre-upgrade `dnsbl_mode` present and ≠ `'dnsbl_python'` → `'off'` | migration; MUST run before the ADR-02 python force, which overwrites the `dnsbl_mode` evidence |
+| ADR-02 python-mode force | not a grandfather — forces unregistered keys regardless of value | migration, after the #1907 exception |
+| Row rename `filter_alexa` → `filter_top1m` | feed rows are not registered scalars | the residual `issue1898-legacy-key-rename` migration |
+| `gen/settings_family` | the mode instrument, valued by the installing package | recorded by `pfb_settings_family_record()`; the pass skips it entirely |
 
-**Conflict comparison is strict on the raw stored value.** The `both present and semantically
-equal` row converges only on a byte-identical pair: `top1m_source` holding `'tranco'` beside a
-retired `alexa_type` holding the adapter-equivalent `'alexa'` is reported as a conflict, not
-coalesced. This is a deliberate narrowing — inferring which side an operator meant is the guess
-the ticket forbids, and failing closed leaves the configuration intact with an actionable notice.
+**Consequence for future fields:** after the pass a bare `!isset($cfg[$key])` no longer means
+"an existing install that predates this setting". A new grandfather decides from the *value*
+via its map, or from a dedicated one-shot marker (`pfb_control_legacy_seeded`'s shape), never
+from key absence. The same applies to whole-section emptiness: `pfb_dnsbl_python_migrate()`
+and `pfb_control_legacy_seed()` use `empty($dconfig)` as their fresh-install discriminator,
+so on the install *after* a fresh one they fire against a seeded section and write their
+(vestigial) `dnsbl_mode` / `pfb_py_block` / `pfb_control_legacy_seeded` keys. Behaviour is
+unchanged — `pfb_control_legacy` is still only set when `pfb_control` is `'on'`, which a
+seeded section is not — but the write is spurious. New run-once logic uses a marker, not
+emptiness.
 
-Coverage: `tests/php/LegacyKeyRenameMigrationTest.php`.
+Coverage: `tests/php/RegistryPassTest.php` (mode, grandfathers, rename branch, idempotency,
+hostile rows), `tests/php/CfgRegistryGrandfatherGateTest.php` (partition totality, fixpoint,
+`old_name` parity), `tests/php/MigrationRegistryTest.php` (driver, raw persistence, #1907
+ordering), `tests/php/LegacyKeyRenameMigrationTest.php` (row rename).
 
 ## Field vocabularies
 

@@ -422,11 +422,12 @@ membership is the canonical desired set — identical to what a full replace wou
 | `pfb_alias_delta_mode` | `alias_delta_mode` | `'auto'` † | `PfbAliasDeltaMode` enum: `auto`/`delta`/`replace` |
 | `pfb_alias_delta_batch` | `plain` | `'512'` | Chunk size for `-T add`/`-T delete`; clamped to \[64, 4096\] |
 
-† New-install default. An already-configured install is **grandfather-seeded to `'replace'`** (the
-pre-ADR-40 full `-T replace`) at install/upgrade by `pfb_alias_delta_mode_install_default()` +
-`pfblockerng_install.inc`, so an upgrade preserves the operator's prior apply path instead of
-silently switching to delta; only a brand-new install takes the `'auto'` absent-default. Run-once
-via the `!isset` guard, so an explicit operator choice (incl. an explicit `'auto'`) is never overridden.
+† New-install default. An already-configured install is **grandfathered to `'replace'`** (the
+pre-ADR-40 full `-T replace`) by the registry entry's `grandfather => [PFB_GF_ABSENT => 'replace']`
+map, applied once by `pfb_registry_pass()` at install/upgrade (issue #1921), so an upgrade
+preserves the operator's prior apply path instead of silently switching to delta; only a
+brand-new install takes the `'auto'` absent-default. A present key short-circuits the map, so
+an explicit operator choice (incl. an explicit `'auto'`) is never overridden.
 
 **Cross-list correctness.** When dedup (`enable_dup`) or reputation is active, a feed-A change
 that shifts sibling table B's effective membership (through the shared `masterfile` dedup path)
