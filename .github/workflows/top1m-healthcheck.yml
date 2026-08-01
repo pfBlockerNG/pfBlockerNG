@@ -109,6 +109,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      RUN_NUMBER: ${{ github.run_number }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
     steps:
       - name: Close the recovered tracking issue
         run: |
@@ -123,6 +125,19 @@ jobs:
           if [ -z "$MATCH" ]; then
             echo "[noop] No open Top1M provider tracking issue"
             exit 0
+          fi
+
+          FAILURE_RUN=$(gh issue view "$MATCH" --repo "$REPO" --json body \
+            --jq '.body | try capture("<!-- failure-run: (?<run>[0-9]+):(?<attempt>[0-9]+) -->") | "\(.run) \(.attempt)"')
+          if [ -n "$FAILURE_RUN" ]; then
+            FAILURE_RUN_NUMBER=${FAILURE_RUN%% *}
+            FAILURE_RUN_ATTEMPT=${FAILURE_RUN#* }
+            if [ "$RUN_NUMBER" -lt "$FAILURE_RUN_NUMBER" ] ||
+              { [ "$RUN_NUMBER" -eq "$FAILURE_RUN_NUMBER" ] &&
+                [ "$RUN_ATTEMPT" -le "$FAILURE_RUN_ATTEMPT" ]; }; then
+              echo "[noop] Successful run is not newer than tracking issue failure"
+              exit 0
+            fi
           fi
 
           echo "[close] Closing recovered tracking issue #${MATCH}"
@@ -143,6 +158,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      RUN_NUMBER: ${{ github.run_number }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
       # See the "check" job -- same secret, same derivation rule.
       CLOUDFLARE_RADAR_TOKEN: ${{ secrets.CLOUDFLARE_RADAR_TOKEN }}
     steps:
@@ -163,6 +180,7 @@ jobs:
 
           BODY_FILE=$(mktemp)
           {
+            printf '<!-- failure-run: %s:%s -->\n\n' "$RUN_NUMBER" "$RUN_ATTEMPT"
             printf '## Top1M provider health check failed\n\n'
             printf 'Run: %s\n\n' "$RUN_URL"
           } > "$BODY_FILE"

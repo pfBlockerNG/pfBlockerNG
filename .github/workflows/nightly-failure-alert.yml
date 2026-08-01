@@ -1,13 +1,9 @@
 name: Nightly failure alert
 
 # File ONE deduped tracking issue when a NIGHTLY (schedule-triggered) run of a
-# live-VM suite fails, then close it when that suite next passes, so a red
-# nightly becomes a work item instead of waiting for someone to notice. Issue
-# #820 sat red DAILY for 8 days (2026-06-26 ->
-# 07-04, a real config-loss bug shipping in alphas) precisely because nothing
-# watches these: smoke/ui/repo-install are schedule+dispatch only (no PR gate),
-# and dispatch failures are already watched by whoever dispatched them — so
-# this alerts on the `schedule` event only.
+# live-VM suite fails, then close it when that suite next passes. These suites
+# are schedule+dispatch only (no PR gate), and dispatch failures are already
+# watched by whoever dispatched them — so this alerts on `schedule` only.
 #
 # Pattern follows top1m-healthcheck.yml's alert job (dedup by label + exact
 # title, update-in-place). WHY workflow_run and not an `if: failure()` job in
@@ -51,6 +47,8 @@ jobs:
       REPO: ${{ github.repository }}
       WF_NAME: ${{ github.event.workflow_run.name }}
       RUN_URL: ${{ github.event.workflow_run.html_url }}
+      RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+      RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
       BRANCH: ${{ github.event.workflow_run.head_branch }}
     steps:
       - name: Close the recovered tracking issue
@@ -66,6 +64,19 @@ jobs:
           if [ -z "$MATCH" ]; then
             echo "[noop] No open tracking issue for ${WF_NAME}"
             exit 0
+          fi
+
+          FAILURE_RUN=$(gh issue view "$MATCH" --repo "$REPO" --json body \
+            --jq '.body | try capture("<!-- failure-run: (?<run>[0-9]+):(?<attempt>[0-9]+) -->") | "\(.run) \(.attempt)"')
+          if [ -n "$FAILURE_RUN" ]; then
+            FAILURE_RUN_NUMBER=${FAILURE_RUN%% *}
+            FAILURE_RUN_ATTEMPT=${FAILURE_RUN#* }
+            if [ "$RUN_NUMBER" -lt "$FAILURE_RUN_NUMBER" ] ||
+              { [ "$RUN_NUMBER" -eq "$FAILURE_RUN_NUMBER" ] &&
+                [ "$RUN_ATTEMPT" -le "$FAILURE_RUN_ATTEMPT" ]; }; then
+              echo "[noop] Successful run is not newer than tracking issue failure"
+              exit 0
+            fi
           fi
 
           echo "[close] Closing recovered tracking issue #${MATCH}"
@@ -94,6 +105,8 @@ jobs:
       # Dispatch drill: the run link points at THIS run, clearly labeled below.
       WF_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.workflow_name || github.event.workflow_run.name }}
       RUN_URL: ${{ github.event_name == 'workflow_dispatch' && format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) || github.event.workflow_run.html_url }}
+      RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+      RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
       HEAD_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
       # Nightlies run on the default branch; read it from the payload rather than
       # hardcoding it (PR #958 review) — the title doubles as the dedup key.
@@ -117,6 +130,9 @@ jobs:
 
           BODY_FILE=$(mktemp)
           {
+            if [ -n "${RUN_NUMBER:-}" ]; then
+              printf '<!-- failure-run: %s:%s -->\n\n' "$RUN_NUMBER" "${RUN_ATTEMPT:-}"
+            fi
             printf '## Nightly run failed: %s\n\n' "$WF_NAME"
             if [ -n "$DRILL" ]; then
               printf '**DRILL** — manual red-path test of the alert wiring, not a real failure. Close me.\n\n'
