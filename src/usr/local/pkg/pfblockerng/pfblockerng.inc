@@ -4170,6 +4170,36 @@ if (!defined('PFB_HOOK_SCRIPT_DIR')) {
 }
 
 /*
+ * issue #1927: run a per-feed list pre/post transform script and HONOUR its exit
+ * status — a failed transform's leftovers are not feed data; the caller decides
+ * what to keep. Non-zero (124 = timed out) is logged to the pfBlockerNG log AND
+ * the error log, naming the stage, script, and feed. timeout(1) stays in default
+ * (reaper) mode on purpose: a hung transform pipeline must die as a whole tree
+ * (docs/misc/external-process-waits.md "Choosing the mode"). $tmo_prefix is
+ * injectable for off-appliance tests. $args_tail (pre-escaped args + the log
+ * redirect) is appended verbatim.
+ */
+function pfb_list_script_exec(string $script_path, string $script_name, string $stage,
+    string $header, string $args_tail, ?string $tmo_prefix = NULL): int {
+
+	if ($tmo_prefix === NULL) {
+		$tmo_prefix = '/usr/bin/timeout -s TERM -k ' . PFB_HOOK_KILL_GRACE . ' ' . PFB_LIST_SCRIPT_TIMEOUT . ' ';
+	}
+
+	$discard = array();
+	$retval  = 0;
+	exec("{$tmo_prefix}" . escapeshellarg($script_path) . " {$args_tail}", $discard, $retval);
+
+	if ($retval === 124) {
+		pfb_logger("\n[ {$header} ] {$stage}-script '{$script_name}' TIMED OUT after " . PFB_LIST_SCRIPT_TIMEOUT
+		    . "s (killed); discarding its output\n", 2);
+	} elseif ($retval !== 0) {
+		pfb_logger("\n[ {$header} ] {$stage}-script '{$script_name}' exited non-zero [ {$retval} ]; discarding its output\n", 2);
+	}
+	return $retval;
+}
+
+/*
  * Setup-wizard decision helpers (pure; pinned by tests/php/WizardDecisionTest.php).
  * The pfblockerng_wizard.inc / pfblockerng_general.php controllers do the impure work
  * (read $_POST/$_GET/config, redirect, write_config, set $pfb_wizard); the branchy
