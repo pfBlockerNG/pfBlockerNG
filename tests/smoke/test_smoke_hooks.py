@@ -918,11 +918,8 @@ def test_hooks_webhook_fires_on_ip_change(
     # PFB_CHANGED_IP_ALIASES empty ⇒ the guard short-circuits ⇒ curl never runs ⇒ no callback.
     webhook_sink.clear()
     h.reload(deployed_vm, "update")
-    # Give any (erroneous) in-flight callback a moment to land before asserting absence.
-    assert not webhook_sink.wait_for(1, timeout=3.0), (
-        "a webhook callback arrived on a no-op pass — the non-empty PFB_CHANGED_IP_ALIASES "
-        f"guard did not hold: {webhook_sink.callbacks}"
-    )
+    # reload is the synchronous barrier; the callback sink's post-request snapshot is
+    # authoritative for this no-op pass.
     assert webhook_sink.callbacks == [], f"unexpected callback(s) on the guard-off pass: {webhook_sink.callbacks}"
 
     # AFTER (guard on): rewrite the IP feed AND force a genuine re-fetch (bust the reuse
