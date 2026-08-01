@@ -3607,7 +3607,7 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
     Once observed, each readiness gate receives its own full ``timeout`` budget.
     """
     # Fail FAST on an unreadable before-side: without it the proof is already lost, so
-    # refusing to reboot saves the whole settle+readiness cycle and leaves the box up in
+    # refusing to reboot saves the whole reboot+readiness cycle and leaves the box up in
     # its pre-reboot state for diagnosis (#761 review).
     try:
         before_read = vm.ssh(_BOOTTIME_SYSCTL, timeout=15.0)
@@ -4948,8 +4948,7 @@ def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise RuntimeError(f"stuck/environment: wait_until predicate not observed before salvage cap {timeout}s")
-        # Clamp the sleep to the time left so the poll never overshoots `timeout` by a
-        # full interval (keeps the "well under the body timeout" guarantee in the docstring).
+        # Clamp the sleep to the time left so the salvage cap is not overshot by a full interval.
         time.sleep(min(interval, remaining))
 
 
