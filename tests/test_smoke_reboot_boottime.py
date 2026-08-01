@@ -99,7 +99,11 @@ def test_reboot_vm_waits_for_changed_boottime_before_readiness(monkeypatch: pyte
             self.calls.append(command)
             if command == helpers._BOOTTIME_SYSCTL:
                 self.boottime_reads += 1
-                value = _BEFORE if self.boottime_reads <= 3 else _AFTER
+                if self.boottime_reads == 1:
+                    return subprocess.CompletedProcess(remote, 0, _BEFORE, "")
+                if self.boottime_reads == 2:
+                    return subprocess.CompletedProcess(remote, 1, _AFTER, "sysctl failed")
+                value = _BEFORE if self.boottime_reads == 3 else _AFTER
                 return subprocess.CompletedProcess(remote, 0, value, "")
             if command == "/sbin/reboot":
                 return subprocess.CompletedProcess(remote, 0, "", "")
