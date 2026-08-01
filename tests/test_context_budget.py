@@ -784,6 +784,19 @@ def test_touches_context_surface_false_on_unrelated() -> None:
 # --- CLI against scratch repos -------------------------------------------------
 
 
+def _git_commit(root: str | Path, message: str) -> None:
+    """Commit everything staged in a scratch repo under a synthetic identity.
+
+    One definition rather than four copies, and the single place the config-scope scrub
+    has to be right for this file (issue #1967).
+    """
+    subprocess.run(
+        ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", message],
+        check=True,
+        env=scrubbed_git_env(),
+    )
+
+
 def _run_cli(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(_TOOL), *args, "--root", str(root)],
@@ -795,11 +808,7 @@ def _run_cli(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def test_cli_staged_skips_when_no_context_surface_staged(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
-    subprocess.run(
-        ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
-        check=True,
-        env=scrubbed_git_env(),
-    )
+    _git_commit(root, "base")
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
     _write(root, "src/thing.inc", "<?php\n")
     subprocess.run(["git", "-C", root, "add", "src/thing.inc"], check=True, env=scrubbed_git_env())
@@ -810,11 +819,7 @@ def test_cli_staged_skips_when_no_context_surface_staged(tmp_path: Path) -> None
 
 def test_cli_staged_runs_and_fails_on_staged_over_budget_policy(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
-    subprocess.run(
-        ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
-        check=True,
-        env=scrubbed_git_env(),
-    )
+    _git_commit(root, "base")
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
     subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     proc = _run_cli(root, "--staged")
@@ -826,11 +831,7 @@ def test_cli_staged_checks_index_content_not_working_tree(tmp_path: Path) -> Non
     # Staged over-budget + worktree fixed back under budget: the commit would
     # still ship the violation, so --staged must fail (index is the snapshot).
     root = _scratch_repo(tmp_path)
-    subprocess.run(
-        ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
-        check=True,
-        env=scrubbed_git_env(),
-    )
+    _git_commit(root, "base")
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
     subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     _write(root, ".agents/policy/alpha.md", f"# Alpha\n\n{_HEADER}")
@@ -843,11 +844,7 @@ def test_cli_staged_ignores_unstaged_working_tree_violation(tmp_path: Path) -> N
     # Staged content clean + worktree bloated: the commit ships the clean index,
     # so --staged must pass instead of false-failing on the dirty worktree.
     root = _scratch_repo(tmp_path)
-    subprocess.run(
-        ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
-        check=True,
-        env=scrubbed_git_env(),
-    )
+    _git_commit(root, "base")
     _write(root, ".agents/policy/alpha.md", f"# Alpha (tweaked)\n\n{_HEADER}")
     subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)

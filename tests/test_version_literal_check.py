@@ -632,7 +632,9 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _rev(repo: Path) -> str:
-    out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True)
+    out = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True, env=scrubbed_git_env()
+    )
     return out.stdout.strip()
 
 
