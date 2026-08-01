@@ -426,6 +426,40 @@ final class EditHooksPageWiringTest extends TestCase
 		);
 	}
 
+	/**
+	 * issue #1884: Enter in the Name field submits as Create (only text input +
+	 * first submit button), so the create-failure path fires from a stray
+	 * keypress. It must restore the loaded script and the unsaved buffer from
+	 * the posted cur_ and content fields — the same shape the failed-delete
+	 * branch uses — instead of blanking the editor.
+	 */
+	public function testCreateFailureRestoresTheLoadedScriptAndBuffer(): void
+	{
+		$src = $this->readSource(self::PAGE_PATH);
+
+		$createPos = strpos($src, "isset(\$_POST['pfb_eh_create'])");
+		$this->assertNotFalse($createPos, 'vacuity: the create branch must exist');
+		$deletePos = strpos($src, "isset(\$_POST['pfb_eh_delete'])", $createPos);
+		$this->assertNotFalse($deletePos, 'vacuity: the delete branch must follow the create branch');
+
+		$branch = substr($src, $createPos, $deletePos - $createPos);
+		$this->assertStringContainsString("\$pfb_eh_sel_when   = (string) (\$_POST['pfb_eh_cur_when'] ?? '');", $branch,
+			'a failed create must restore the loaded Pre/Post from the posted cur_when');
+		$this->assertStringContainsString("\$pfb_eh_sel_script = (string) (\$_POST['pfb_eh_cur_script'] ?? '');", $branch,
+			'a failed create must restore the loaded script from the posted cur_script');
+		$this->assertStringContainsString("\$pfb_eh_content    = pfb_sanitize_text_area((string) (\$_POST['pfb_eh_content'] ?? ''));", $branch,
+			'a failed create must restore the unsaved buffer (sanitized at ingestion, #1723) instead of blanking it');
+		$this->assertStringNotContainsString("\$pfb_eh_content      = '';", $branch,
+			'the blanking assignment is the data-loss defect — it must be gone');
+
+		// The typed create-When echo must survive the restore: the create-When
+		// select prefers the explicit echo over the restored loaded-script when.
+		$this->assertStringContainsString('$pfb_eh_new_when_echo = $post_when;', $branch,
+			'the typed create-When choice must still echo after a validation error');
+		$this->assertStringContainsString("\$pfb_eh_new_when_val = (\$pfb_eh_new_when_echo === 'pre' || \$pfb_eh_new_when_echo === 'post')", $src,
+			'the create-When select must prefer the typed echo over the restored loaded-script when');
+	}
+
 	public function testEditHooksTabOnUpdatePage(): void
 	{
 		$this->assertEditHooksTabDirectlyAfterHooksTab($this->readSource(self::UPDATE_PAGE_PATH), 'pfblockerng_update.php');

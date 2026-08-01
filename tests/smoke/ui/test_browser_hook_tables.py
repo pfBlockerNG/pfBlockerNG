@@ -222,3 +222,52 @@ def test_dismissing_the_delete_confirmation_keeps_the_script(
 
     _open(page, webui, HOOKS_PAGE)
     expect(page.locator(f"tr[data-pfb-hook='{probe_hook}']")).to_have_count(1, timeout=JS_TIMEOUT_MS)
+
+
+def test_enter_in_name_field_never_discards_unsaved_editor_content(
+    browser_page: Page,
+    webui: WebUI,
+    probe_hook: str,
+) -> None:
+    """A stray Enter in the Name field must not cost unsaved editor work (#1884).
+
+    ``#pfb_eh_new_core`` is the form's only text input and Create is its first
+    submit button, so the browser treats Enter there as a Create click. When
+    that create fails validation, the page must come back with the loaded
+    script still loaded and the unsaved buffer intact -- not the empty
+    "Load an existing script above" state.
+    """
+    page = browser_page
+    _open(page, webui, HOOKS_PAGE)
+
+    row = page.locator(f"tr[data-pfb-hook='{probe_hook}']")
+    expect(row).to_be_visible(timeout=JS_TIMEOUT_MS)
+    row.locator("a .fa-pencil").click()
+    page.wait_for_load_state("networkidle", timeout=JS_TIMEOUT_MS * 3)
+    assert page.locator("#pfb_eh_cur_script").input_value() == probe_hook, "precondition: the script is loaded"
+
+    marker = "# pfb-uitest-enter-keeps-buffer"
+    content = page.locator(".cm-content")
+    expect(content).to_be_visible(timeout=JS_TIMEOUT_MS)
+    content.click()
+    page.keyboard.press("ControlOrMeta+a")
+    page.keyboard.press("Delete")
+    content.press_sequentially(f"#!/bin/sh\n{marker}\nexit 0", delay=20)
+
+    # A hyphen fails the compose validation (letters/digits/underscores only),
+    # and Enter submits the form as Create.
+    name = page.locator("#pfb_eh_new_core")
+    name.click()
+    name.fill("bad-name")
+    name.press("Enter")
+    page.wait_for_load_state("networkidle", timeout=JS_TIMEOUT_MS * 3)
+
+    # Before-state of the defect: the create DID run and DID fail validation --
+    # so green proves the restore, not that the submit never happened.
+    expect(page.locator(".input-errors")).to_contain_text("Invalid new-hook fields", timeout=JS_TIMEOUT_MS)
+
+    # The data-loss pin: the loaded script and the unsaved buffer both survive.
+    assert page.locator("#pfb_eh_cur_script").input_value() == probe_hook, (
+        "a failed create must keep the loaded script loaded"
+    )
+    expect(page.locator("#pfb_hook_editor_content")).to_have_value(re.compile(re.escape(marker)), timeout=JS_TIMEOUT_MS)
