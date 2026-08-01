@@ -12711,11 +12711,9 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				// destination address). The destination port is derived from the URL
 				// or its scheme when implicit.
 				$scheme_ports	= array('http' => 80, 'https' => 443, 'ftp' => 21, 'rsync' => 873);
-				if ($feed_pinned !== '' && $feed_host !== '' && !empty($feed_scheme)) {
-					$feed_port	= $url_parts['port'] ?? ($scheme_ports[$feed_scheme] ?? 0);
-					if ($feed_port > 0) {
-						curl_setopt($ch, CURLOPT_RESOLVE, array("{$feed_host}:{$feed_port}:{$feed_pinned}"));
-					}
+				$feed_port	= (int) ($url_parts['port'] ?? ($scheme_ports[$feed_scheme] ?? 0));
+				if ($feed_pinned !== '' && $feed_host !== '' && !empty($feed_scheme) && $feed_port > 0) {
+					curl_setopt($ch, CURLOPT_RESOLVE, array("{$feed_host}:{$feed_port}:{$feed_pinned}"));
 				}
 
 				$feed_has_creds = !pfb_is_empty($username) || !pfb_is_empty($password);
@@ -12828,14 +12826,19 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					ftruncate($fhandle, 0);
 					rewind($fhandle);
 
-					// Scope the Basic credentials to the ORIGINAL feed host
-					// (issue #1919) — libcurl's own FOLLOWLOCATION policy: a
-					// cross-host hop must not receive the origin's
-					// Authorization, and a hop back onto the origin host
-					// regains it. CURLAUTH_NONE (with the userpwd blanked)
-					// stops libcurl from sending any Authorization header.
+					// Scope the Basic credentials to the ORIGINAL feed origin —
+					// host AND scheme AND port (issue #1919) — libcurl's own
+					// FOLLOWLOCATION policy since 7.83.0 (CVE-2022-27774): a
+					// hop to any other origin must not receive the feed's
+					// Authorization (another port or a downgraded scheme on
+					// the same host is a different trust domain), and a hop
+					// back onto the origin regains it. CURLAUTH_NONE (with
+					// the userpwd blanked) stops libcurl from sending any
+					// Authorization header.
 					if ($feed_has_creds) {
-						if (strcasecmp($next['host'], $feed_host) === 0) {
+						if (strcasecmp($next['host'], $feed_host) === 0 &&
+						    $next['scheme'] === $feed_scheme &&
+						    $next['port'] === $feed_port) {
 							curl_setopt($ch, CURLOPT_USERPWD, "{$username}:{$password}");
 							curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
 						} else {
