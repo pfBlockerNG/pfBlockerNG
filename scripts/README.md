@@ -74,6 +74,16 @@ The `role` field controls how the catalog generator treats an entry:
   so existing boxes can `pkg install`/`upgrade`. A truly dropped entry (no route at all) is
   simply absent from the JSON.
 
+Route-only starts with release assets produced by issue #1806. Older tags contain
+concrete-ABI `.pkg` files, but the current catalog is arch-less and cannot serve them safely.
+Those pre-#1806 tags are **unservable as route-only**: `build-repo-portable.py` rejects the
+asset explicitly instead of emitting a single-architecture catalog. Drop the matrix entry
+when no post-#1806 wildcard-ABI asset exists; do not repackage the frozen tag at EOL.
+
+> **KNOWN GAP / owner call:** a post-#1806 wildcard-ABI frozen `.pkg` may still declare
+> dependencies represented by the family's `extra_pkgs`. Route-only catalogs do not fold in
+> `--dep-pkgs`; whether they must do so remains undecided in issue #1828.
+
 `--print-route` emits the **ROUTE matrix** — build-role-eligible entries (one row per version,
 never deduped) UNION `role=route-only` entries. This is every entry with an actively served
 `release/<varver>/` catalog. The publish pipeline uses `--print-route` minus `--print-build`
@@ -105,8 +115,9 @@ default.
   status flip when it sees a final build). The matrix is the desired state; the box is
   the source of truth.
 - **Drop** an entry when it should be fully removed (no catalog served). For an EOL version
-  that still has users, set `role: "route-only"` instead of dropping it — the last `.pkg` keeps
-  being served. Drop only when you want a clean 404 (no route).
+  that still has users, set `role: "route-only"` only when its last tag has a post-#1806
+  wildcard-ABI `.pkg`; otherwise it is unservable and must be dropped. Drop also when you
+  intentionally want a clean 404 (no route).
 - **Plus** entries set `ci: true` to run the smoke fan-out from a **PRIVATE, licensed** GHCR
   image (`pfsense-plus`, ADR-24); their VM identity comes from the `SMOKE_PLUS_*` secrets,
   never the matrix, and is redacted from the uploaded diagnostics.
@@ -121,7 +132,7 @@ default.
 | --- | --- | --- | --- |
 | CE — `build` (default) | yes (portable Linux builder) | yes (`ci: true`) | yes |
 | Plus — `build` (default) | yes (portable Linux builder; build needs only the right FreeBSD-major target, no license) | yes (`ci: true`, from a private licensed image — ADR-24) | yes |
-| Any — `route-only` | **no** (frozen `.pkg` reused) | **no** | yes (from frozen `.pkg`) |
+| Any — `route-only` | **no** (post-#1806 frozen `.pkg` reused) | **no** | yes (wildcard-ABI asset required) |
 
 **Portable Linux builder** (`build-pkg-linux.yml` / `scripts/build-pkg-portable.py`) is the
 **sole** `.pkg` builder for both CI and releases: it runs on a plain Linux runner and

@@ -2927,27 +2927,30 @@ def test_route_only_wildcard_frozen_pkg_serves_all_arch_rows_of_varver(tmp_path:
     assert [o["version"] for o in objs] == ["3.1.0_5"]
 
 
-def test_route_only_concrete_abi_frozen_pkg_rejected_at_emission(tmp_path: Path) -> None:
-    """A concrete-ABI frozen .pkg is a hard error — the arch-less catalog HARD-REQUIRES
-    a NO_ARCH (wildcard-ABI) package (issue #1806), even for a route-only (frozen
-    EOL) entry: a concrete one would silently install on only one arch.
+def test_route_only_pre_1806_concrete_abi_fails_explicitly(tmp_path: Path) -> None:
+    """A concrete-ABI frozen .pkg identifies a pre-#1806 tag, which is explicitly
+    unservable as route-only rather than emitted into an arch-less catalog.
 
     Scenario: a concrete FreeBSD:14:amd64 frozen .pkg served via route_only_pkgs
       When build_repo_matrix runs
-      Then it raises BuildRepoError naming the concrete ABI
+      Then it raises BuildRepoError naming the concrete ABI and settled policy
+       And it emits no route-only catalog
     """
     out = tmp_path / "site"
     frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
     frozen_pkg.parent.mkdir()
     make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
 
-    with pytest.raises(brp.BuildRepoError, match="NO_ARCH"):
+    with pytest.raises(brp.BuildRepoError, match=r"pre-#1806 tag is unservable as route-only") as exc_info:
         brp.build_repo_matrix(
             [_CE_EOL],
             out,
             builder=_stub_builder,
             route_only_pkgs={"ce-2.7": [frozen_pkg]},
         )
+
+    assert "FreeBSD:14:amd64" in str(exc_info.value)
+    assert not (out / "release" / "ce-2.7").exists()
 
 
 def test_route_only_no_frozen_pkg_for_abi_raises(tmp_path: Path) -> None:

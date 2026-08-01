@@ -94,7 +94,9 @@ def _require_wildcard_abi(path: Path, abi: object) -> str:
             f"{path.name}: catalog requires a NO_ARCH (wildcard-ABI) package — got "
             f"concrete ABI {abi!r}. The catalog tree is arch-less (one directory serves "
             f"every arch of a FreeBSD major); a concrete-ABI package would silently "
-            f"install on only one arch. Ship a wildcard-ABI (NO_ARCH) build instead."
+            f"install on only one arch. For a frozen route-only package, a concrete ABI "
+            f"identifies a pre-#1806 tag; a pre-#1806 tag is unservable as route-only. "
+            f"Refusing to emit it."
         )
     return abi
 
