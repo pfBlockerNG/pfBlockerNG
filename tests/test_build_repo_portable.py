@@ -3206,7 +3206,8 @@ def test_consume_mode_concrete_abi_pkg_rejected_at_emission(tmp_path: Path) -> N
 
     Scenario: a concrete FreeBSD:16:amd64 devel .pkg served via release_pkgs
       When build_repo_matrix runs
-      Then it raises BuildRepoError naming the concrete ABI
+      Then it raises BuildRepoError with generic NO_ARCH guidance
+       And it does not mislabel the package as a pre-#1806 route-only asset
     """
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
@@ -3214,7 +3215,7 @@ def test_consume_mode_concrete_abi_pkg_rejected_at_emission(tmp_path: Path) -> N
     pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
     make_pkg(pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:16:amd64")
 
-    with pytest.raises(brp.BuildRepoError, match="NO_ARCH"):
+    with pytest.raises(brp.BuildRepoError, match="NO_ARCH") as exc_info:
         brp.build_repo_matrix(
             [_PLUS],
             out,
@@ -3222,6 +3223,11 @@ def test_consume_mode_concrete_abi_pkg_rejected_at_emission(tmp_path: Path) -> N
             build_nightly=False,
             release_pkgs={"plus-26.03": [pkg]},
         )
+
+    message = str(exc_info.value)
+    assert "Ship a wildcard-ABI (NO_ARCH) build instead." in message
+    assert "pre-#1806" not in message
+    assert "route-only" not in message
 
 
 def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
