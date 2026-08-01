@@ -761,21 +761,22 @@ class _ControlHarness:
             f"to reach sequence {seq}; observed {self.read_applied()!r}"
         )
 
-    def stop_join(self) -> bool:
+    def stop_join(self) -> None:
         """Signal the watcher to stop and wait until it dies.
 
         Loops in 0.5-second slices for up to 10 seconds so that CPU contention
-        does not cause a single long join to return prematurely.  Returns True
-        when the thread has fully exited, False when it outlived the budget."""
+        does not cause a single long join to return prematurely."""
         P.pfb_control_stop.set()
         if self.thread is None:
-            return True
+            return
         deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline:
+        while self.thread.is_alive() and time.monotonic() < deadline:
             self.thread.join(timeout=0.5)
-            if not self.thread.is_alive():
-                return True
-        return False
+        if self.thread.is_alive():
+            raise RuntimeError(
+                "salvage cap expired / stuck or environment: control watcher thread "
+                f"{self.thread.name!r} to stop; still alive"
+            )
 
 
 # Sentinel used in the snapshot below to distinguish "key absent" from "key = None"
@@ -825,15 +826,10 @@ def control_harness(tmp_path: Any, monkeypatch: Any) -> Any:
         teardown_errors: list[str] = []
         try:
             # Stop the watcher and confirm it is dead.
-            died = h.stop_join()
-            if not died:
+            h.stop_join()
+            if h.thread is not None and h.thread.is_alive():
                 teardown_errors.append(
-                    f"control_harness teardown: watcher thread '{h.thread!r}' did not exit "
-                    "within 10 s — the watcher is still alive after stop_join."
-                )
-            elif h.thread is not None and h.thread.is_alive():
-                teardown_errors.append(
-                    f"control_harness teardown: thread {h.thread!r} is still alive after stop_join reported death."
+                    f"control_harness teardown: thread {h.thread!r} is still alive after stop_join returned."
                 )
 
             # Confirm no pfb_control_watcher_test thread survives in the process.
