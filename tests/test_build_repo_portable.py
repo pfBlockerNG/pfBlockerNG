@@ -838,6 +838,27 @@ def test_catalog_dest_that_is_a_plain_file_is_refused(tmp_path: Path) -> None:
     assert (out / "ce-2.8").read_text() == "not a directory"
 
 
+def test_catalog_dest_with_a_non_directory_parent_is_refused(tmp_path: Path) -> None:
+    """A plain FILE at an INTERMEDIATE component is refused, like one at the leaf.
+
+    ``dest.exists()`` is False when an ancestor is a file (it does not raise), and
+    ``resolve()`` passes straight through such a component, so a leaf-only check misses
+    this — ``mkdir(parents=True)`` then raises a raw NotADirectoryError from inside the
+    writer. Same contract hole as the leaf case, one path level up (issue #1972).
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "release").write_text("not a directory")
+
+    with pytest.raises(brp.BuildRepoError, match="not a directory"):
+        brp.build_repo(in_dir, out, catalog_name="release/ce-2.8")
+
+    assert (out / "release").read_text() == "not a directory"
+
+
 def test_catalog_dest_containment_allows_a_real_nested_dir(tmp_path: Path) -> None:
     """The containment guard must not refuse the layout the publisher actually writes.
 
