@@ -896,6 +896,7 @@ def _tag_still_there(tmp_path: Path, tag: str) -> bool:
             ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
             cwd=tmp_path / "work",
             capture_output=True,
+            env=scrubbed_git_env(),
         ).returncode
         == 0
     )

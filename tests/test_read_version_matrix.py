@@ -26,7 +26,6 @@ No network; needs git + jq (both present on the CI runner and locally).
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -34,11 +33,13 @@ from typing import Any
 
 import pytest
 
+from tests.gitenv import scrubbed_git_env
+
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "read-version-matrix.sh"
 
 
 def _clean_git_env() -> dict[str, str]:
-    """Env with every GIT_* var stripped.
+    """Env with every GIT_* var stripped AND both Git config scopes neutralised.
 
     The test drives git in a throwaway repo (cwd=tmp_path) and the script itself
     shells out to git. When the suite runs under the pre-commit hook, git exports
@@ -47,8 +48,13 @@ def _clean_git_env() -> dict[str, str]:
     REAL repo (where a `ci-metadata` ref already exists — `git branch ci-metadata`
     then fails rc 128, and `git show` reads the wrong matrix). Scrub them so the
     temp repo is the sole git context, matching a clean standalone `pytest` run.
+
+    Delegates to ``scrubbed_git_env`` so the config-scope half has ONE definition
+    across the suite (issue #1967): stripping GIT_* alone still let the developer's
+    global config reach the scratch repo — a global ``core.hooksPath`` that resolves
+    makes every commit here run foreign hooks.
     """
-    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return scrubbed_git_env(drop_git_vars=True)
 
 
 CE_DEFAULT_IMAGE_NAME = "pfsense-ce"
