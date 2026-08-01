@@ -196,14 +196,17 @@ final class AlertsRowOutputEncodingTest extends TestCase
         $this->assertTrue(mb_check_encoding($html, 'UTF-8'), 'the rendered row must be valid UTF-8');
     }
 
-    public function test_truncated_multibyte_lead_byte_in_domain_renders_substituted_not_blanked(): void
+    public function test_truncated_multibyte_char_in_domain_survives_whole_after_mb_substr_conversion(): void
     {
-        // A >=60-char domain whose 59th raw BYTE is the lead byte of a 2-byte UTF-8
-        // sequence ("\xC3\xA9" = e-acute), straddling convert_dnsbl_log's
-        // substr($f2, 0, 59) truncation boundary (pfblockerng_alerts.php ~line 2231).
-        // That byte-substr call site is explicitly OUT OF SCOPE for conversion to
-        // mb_substr (issue #1814 follow-up) -- pfb_hsc()'s ENT_SUBSTITUTE is what makes
-        // the resulting dangling lead byte render safely instead of blanking the cell.
+        // issue #1815: a >=60-char domain whose 59th raw BYTE is the lead byte of a
+        // 2-byte UTF-8 sequence ("\xC3\xA9" = e-acute), straddling convert_dnsbl_log's
+        // truncation boundary (pfblockerng_alerts.php ~line 2247). This call site was
+        // byte substr() -- explicitly OUT OF SCOPE when this test was first written
+        // (issue #1814 follow-up) -- and pfb_hsc()'s ENT_SUBSTITUTE made the resulting
+        // dangling lead byte render safely (U+FFFD) instead of blanking the cell.
+        // #1815 IS that follow-up: the site is now mb_substr(..., 'UTF-8'), which keeps
+        // the character whole instead of ever leaving a dangling lead byte, so no
+        // substitution is needed here anymore.
         $domain = str_repeat('a', 58) . "\xC3\xA9" . 'trailing-domain-suffix.example';
         $this->assertGreaterThanOrEqual(60, strlen($domain));
 
@@ -212,7 +215,8 @@ final class AlertsRowOutputEncodingTest extends TestCase
         $html = $this->renderDnsblRow($fields);
 
         $this->assertStringContainsString(str_repeat('a', 58), $html, 'the domain text before the truncation point must survive');
-        $this->assertStringContainsString("\u{FFFD}", $html, 'the dangling lead byte left by the truncation must render substituted (U+FFFD)');
+        $this->assertStringContainsString('é', $html, 'the whole multibyte character must survive the cut intact');
+        $this->assertStringNotContainsString("\u{FFFD}", $html, 'mb_substr must keep the character whole -- U+FFFD must not appear');
         $this->assertStringContainsString('<small>...</small>', $html, 'the truncation ellipsis must still render');
         $this->assertTrue(mb_check_encoding($html, 'UTF-8'), 'the rendered row must be valid UTF-8');
     }

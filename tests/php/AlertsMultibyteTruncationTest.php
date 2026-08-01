@@ -646,15 +646,31 @@ final class AlertsMultibyteTruncationTest extends TestCase
 		// A bare '?' is NOT a discriminating assertion -- the static template markup
 		// already contains literal '?' characters elsewhere (e.g. "from DNSBL?").
 		// Pin the substitute character AT the exact position the invalid byte occupied.
+		// This site also emits a title="" attribute carrying the FULL, UNTRUNCATED
+		// value (pfb_hsc($fields[4]) on the raw string, line ~2307) -- that copy never
+		// goes through mb_substr at all, so its own raw 0xFF byte is still substituted
+		// by pfb_hsc()'s ENT_SUBSTITUTE the #1814 way (U+FFFD) -- expected, unrelated to
+		// this fix, and asserted explicitly so it is not mistaken for a regression.
+		$this->assertStringContainsString(
+			"\u{FFFD}",
+			$html,
+			'the UNTRUNCATED title="" copy of the value must still substitute the raw invalid byte as U+FFFD (#1814, unaffected by this fix)'
+		);
+		// The DISPLAYED (truncated) span content is the part this fix touches: pin the
+		// exact substitute character mb_substr() produces AT the invalid byte's position.
 		$this->assertStringContainsString(
 			'R14Agent?aaaaaaaaaaaaaaa',
 			$html,
 			"mb_substr replaces the invalid byte with its own substitute character (default '?') at that exact position, not U+FFFD"
 		);
+		// Anchored with the immediately-following ellipsis marker so this checks ONLY the
+		// DISPLAYED (truncated) span text, never the title="" attribute above (which
+		// legitimately contains this same "R14Agent<FFFD>aaa..." prefix, followed by
+		// ".trailing-tail" instead of "<small>...</small>").
 		$this->assertStringNotContainsString(
-			"\u{FFFD}",
+			'R14Agent' . "\u{FFFD}" . 'aaaaaaaaaaaaaaa<small>...</small>',
 			$html,
-			'post-fix, U+FFFD is NOT produced for this byte -- mb_substr already consumed it before pfb_hsc() ran (see this test\'s docblock deviation note)'
+			'the DISPLAYED (truncated) span content must never show U+FFFD at this position -- mb_substr already consumed the byte before pfb_hsc() ran (see this test\'s docblock deviation note)'
 		);
 	}
 
