@@ -78,6 +78,11 @@ def test_scratch_git_helper_commits_under_a_hostile_config(
     Given a global+system config demanding a signature from an unusable key,
     When the module's own scratch-repo helper inits, stages and commits,
     Then the commit succeeds — the helper neutralised both scopes rather than inheriting.
+
+    The identity is set repo-locally rather than relied upon: only some of these helpers
+    inject ``-c user.email``/``-c user.name`` themselves (the others configure it on the
+    scratch repo), and with both config scopes neutralised there is no global identity to
+    fall back on — git's implicit username@hostname guess is not available everywhere.
     """
     _hostile_config(tmp_path, monkeypatch)
     git = importlib.import_module(module_name)._git
@@ -85,6 +90,8 @@ def test_scratch_git_helper_commits_under_a_hostile_config(
     repo = tmp_path / module_name.rsplit(".", 1)[-1]
     repo.mkdir()
     git(repo, "init", "-q", "-b", "devel")
+    git(repo, "config", "user.email", "t@example.invalid")
+    git(repo, "config", "user.name", "t")
     (repo / "a.txt").write_text("one\n")
     git(repo, "add", "a.txt")
     git(repo, "commit", "-qm", "base")
