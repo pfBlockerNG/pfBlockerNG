@@ -27,12 +27,12 @@ design accepts but the tests must not pay).
 
 from __future__ import annotations
 
-import ast
 import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import pfb_dnsbl_regex_rules
 import pfb_unbound
 from pfb_unbound import (
     DNSBL_KIND_BLOCK,
@@ -151,7 +151,7 @@ class TestCatastrophicShapeHeuristic:
     def test_complexity_budget_backstop_flagged(self) -> None:
         # A pattern with no single matching structural template but a large combined
         # count of unbounded quantifiers + alternations is caught by the budget backstop.
-        over_budget = "".join(f"a{i}*|" for i in range(pfb_unbound._REGEX_BUDGET_MAX + 2))
+        over_budget = "".join(f"a{i}*|" for i in range(pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX + 2))
         assert _regex_is_catastrophic_shape(over_budget) is True
 
     def test_complexity_budget_at_threshold_not_flagged(self) -> None:
@@ -160,12 +160,12 @@ class TestCatastrophicShapeHeuristic:
         # would flag this). Build a pattern whose budget is EXACTLY MAX -- `_REGEX_BUDGET_MAX`
         # unbounded `*` quantifiers, zero alternations, and no other catastrophic shape (no
         # nested/adjacent quantified group, no stacked bounded repeat).
-        at_budget = "a*" * pfb_unbound._REGEX_BUDGET_MAX
+        at_budget = "a*" * pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX
         # Compute the budget the SAME way the code does and pin it to MAX before asserting.
-        budget = len(pfb_unbound._REGEX_UNBOUNDED_QUANTIFIER.findall(at_budget)) + len(
-            pfb_unbound._REGEX_ALTERNATION.findall(at_budget)
+        budget = len(pfb_dnsbl_regex_rules._REGEX_UNBOUNDED_QUANTIFIER.findall(at_budget)) + len(
+            pfb_dnsbl_regex_rules._REGEX_ALTERNATION.findall(at_budget)
         )
-        assert budget == pfb_unbound._REGEX_BUDGET_MAX
+        assert budget == pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX
         assert _regex_is_catastrophic_shape(at_budget) is False
 
     # --- false-positive guard: realistic benign feed regex must NOT be flagged ----- #
@@ -266,129 +266,32 @@ class TestStaticCapAtLoad:
         assert cap_on.regex_count < cap_off.regex_count
 
 
-def test_save_time_probe_length_cap_matches_runtime_constant() -> None:
-    """Issue #1688 parity: pfblockerng_extra.inc's embedded save-time probe rejects a
-    pattern the SAME length that this module's REGEX_STATIC_LEN_CAP drops at load, so
-    the save-time verdict cannot silently drift from the resolver's."""
-    inc_path = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
-    source = inc_path.read_text()
-    match = re.search(r"len\(pattern\)\s*>\s*(\d+):\s*#\s*REGEX_STATIC_LEN_CAP", source)
-    assert match is not None, (
-        "expected the PHP probe's length-cap comparison, tagged '# REGEX_STATIC_LEN_CAP', in pfblockerng_extra.inc"
-    )
-    php_cap = int(match.group(1))
-    runtime_cap = pfb_unbound.REGEX_STATIC_LEN_CAP
-    assert php_cap == runtime_cap, f"probe cap={php_cap} != pfb_unbound.REGEX_STATIC_LEN_CAP={runtime_cap}"
-
-
 # --------------------------------------------------------------------------- #
-# Issue #1711: extend #1688 parity pinning to EVERY rule the save-time probe
-# duplicates from the resolver -- the four shape literals, the two budget
-# literals, the budget threshold, the length-cap comparator strictness, and the
-# runtime's exact-boundary admission behaviour.
+# Issue #1765: the admission rules moved to pfb_dnsbl_regex_rules.py, imported
+# by pfb_unbound.py -- ONE literal now, not two, so the #1688/#1711 duplication
+# pins above (deleted) are unsatisfiable and their drift class cannot occur.
+# This pin replaces them: pfb_unbound's imported names are the SAME objects as
+# the module's, not a copy.
 # --------------------------------------------------------------------------- #
-def _probe_source() -> str:
-    """Extract pfblockerng_extra.inc's embedded save-time probe nowdoc verbatim (the
-    text between <<<'PYTHON' and the closing PYTHON; delimiter) so probe/runtime parity
-    is pinned against the actual nowdoc bytes. Anchored past the function name because a
-    second, unrelated nowdoc probe exists later in the file."""
-    inc_path = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
-    source = inc_path.read_text()
-    anchor = source.index("function pfb_dnsbl_regex_validation_errors")
-    match = re.search(r"<<<'PYTHON'\n(.*?)\nPYTHON;", source[anchor:], re.S)
-    assert match is not None, "expected the probe's <<<'PYTHON' nowdoc after pfb_dnsbl_regex_validation_errors"
-    return match.group(1)
-
-
-_PROBE_SINGLE_TAG_RE = re.compile(r'r"((?:[^"\\]|\\.)*)"\s*\)?,?\s*#\s*(_REGEX_\w+) mirror \(pfb_unbound\.py\)')
-_PROBE_COMBINED_TAG_RE = re.compile(r"#\s*(_REGEX_\w+)\s*\+\s*(_REGEX_\w+) mirror \(pfb_unbound\.py\)")
-
-
-def _runtime_admission_regex_names() -> set[str]:
-    """Issue #1711 completeness pin: the set of module-level `_REGEX_*` compiled
-    patterns actually used as admission checks inside `_regex_is_catastrophic_shape`
-    -- the shape patterns invoked via `.search(` plus the budget patterns invoked via
-    `.findall(` in that same function's complexity-budget backstop.
-
-    Extracted from the FUNCTION BODY TEXT (anchored on the `def` line, not a
-    hardcoded name list and not a line-number offset) so this stays robust to
-    unrelated edits elsewhere in the file: a NEW `_REGEX_*` pattern wired into the
-    guard via `.search(`/`.findall(` is picked up automatically, and the parity
-    test below then requires the probe to tag-mirror it too -- a 7th runtime shape
-    added without a matching probe tag makes this set diverge from the probe's
-    tagged literals and fails loudly instead of the previous hardcoded six staying
-    silently in sync with nothing."""
-    unbound_path = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/pfb_unbound.py"
-    source = unbound_path.read_text()
-    start = source.index("def _regex_is_catastrophic_shape")
-    next_def = re.search(r"\ndef ", source[start + 1 :])
-    body = source[start : start + 1 + next_def.start()] if next_def else source[start:]
-    names = set(re.findall(r"(_REGEX_\w+)\.(?:search|findall)\(", body))
-    assert names, "expected at least one _REGEX_*.search(/.findall( admission check in _regex_is_catastrophic_shape"
-    return names
-
-
-def test_probe_regex_literals_match_runtime_shape_and_budget_patterns() -> None:
-    """Issue #1711: every regex LITERAL the save-time probe duplicates from the
-    resolver's shape gate + complexity budget is tagged '<name> mirror (pfb_unbound.py)'
-    in the probe source. Extract each tagged literal and assert it is byte-identical to
-    the runtime pattern of the same name -- and that the tagged set is EXACTLY the set
-    of `_REGEX_*` patterns `_regex_is_catastrophic_shape` actually consults (extracted
-    from source, not hardcoded -- see `_runtime_admission_regex_names()`), so a
-    renamed/added/removed runtime pattern that forgets to update the probe tag fails
-    loudly instead of silently drifting."""
-    probe = _probe_source()
-
-    literals: dict[str, str] = {}
-    for match in _PROBE_SINGLE_TAG_RE.finditer(probe):
-        literals[match.group(2)] = match.group(1)
-
-    combined = _PROBE_COMBINED_TAG_RE.search(probe)
-    assert combined is not None, "expected the combined budget-literal tag comment in the probe"
-    combined_line = next(line for line in probe.splitlines() if combined.group(0) in line)
-    raw_literals = re.findall(r'r"((?:[^"\\]|\\.)*)"', combined_line)
-    assert len(raw_literals) == 2, (
-        f"expected exactly 2 raw-string literals on the combined-tag line, got {raw_literals}"
-    )
-    literals[combined.group(1)] = raw_literals[0]
-    literals[combined.group(2)] = raw_literals[1]
-
-    expected_names = _runtime_admission_regex_names()
-    assert set(literals) == expected_names, (
-        f"probe mirror tags drifted: extracted={sorted(literals)} expected={sorted(expected_names)}"
-    )
-
-    for name, raw in literals.items():
-        pattern = ast.literal_eval(f'r"{raw}"')
-        runtime_pattern = getattr(pfb_unbound, name).pattern
-        assert pattern == runtime_pattern, f"{name}: probe={pattern!r} != runtime={runtime_pattern!r}"
-
-
-def test_probe_budget_threshold_matches_runtime_budget_max() -> None:
-    """Issue #1711: the probe's complexity-budget threshold (tagged '_REGEX_BUDGET_MAX
-    mirror') must match pfb_unbound._REGEX_BUDGET_MAX, and the comparison on both sides
-    must be a STRICT '>' -- a '>=' regression would silently shift the admissible budget
-    down by one."""
-    probe = _probe_source()
-    match = re.search(r"if budget > (\d+):\s*#\s*_REGEX_BUDGET_MAX mirror \(pfb_unbound\.py\)", probe)
-    assert match is not None, "expected the probe's tagged budget threshold comparison"
-    probe_budget_max = int(match.group(1))
-    assert probe_budget_max == pfb_unbound._REGEX_BUDGET_MAX, (
-        f"probe budget max={probe_budget_max} != pfb_unbound._REGEX_BUDGET_MAX={pfb_unbound._REGEX_BUDGET_MAX}"
-    )
-    assert "budget >=" not in probe, "probe budget threshold regressed from strict '>' to '>='"
+def test_pfb_unbound_reexports_are_the_same_objects_as_pfb_dnsbl_regex_rules() -> None:
+    for name in ("REGEX_STATIC_LEN_CAP", "_regex_is_catastrophic_shape", "pfb_split_regex_line"):
+        assert getattr(pfb_unbound, name) is getattr(pfb_dnsbl_regex_rules, name), (
+            f"pfb_unbound.{name} is not the same object as pfb_dnsbl_regex_rules.{name} -- single-source broken"
+        )
 
 
 def test_runtime_length_cap_comparator_is_strict_at_every_site() -> None:
-    """Issue #1711: pin the runtime's exact-200-character admission boundary. All three
-    REGEX_STATIC_LEN_CAP comparisons in pfb_unbound.py (the build-time compile helper
-    plus the two save-time www/ probes) use a STRICT '>' -- a '>=' regression at any site
-    would silently drop a pattern exactly at the cap, which the resolver, this probe, and
-    the PHP DnsblRegexEntryErrorTest suite all admit."""
+    """Issue #1711/#1765: pin the runtime's exact-200-character admission boundary. All
+    FOUR REGEX_STATIC_LEN_CAP comparisons -- the three call sites left in pfb_unbound.py
+    (the build-time compile helper plus the two save-time-mirroring load paths) and the
+    one inside pfb_dnsbl_regex_rules.py's save-time probe ``main()`` -- use a STRICT '>':
+    a '>=' regression at any site would silently drop a pattern exactly at the cap, which
+    the resolver, the probe, and the PHP DnsblRegexEntryErrorTest suite all admit."""
     unbound_path = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/pfb_unbound.py"
-    source = unbound_path.read_text()
+    rules_path = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/pfb_dnsbl_regex_rules.py"
+    source = unbound_path.read_text() + "\n" + rules_path.read_text()
     strict = re.findall(r"len\([^)\n]*\)\s*>\s*REGEX_STATIC_LEN_CAP", source)
-    assert len(strict) == 3, f"expected exactly 3 strict '>' comparisons, found {len(strict)}: {strict}"
+    assert len(strict) == 4, f"expected exactly 4 strict '>' comparisons, found {len(strict)}: {strict}"
     non_strict = re.findall(r"len\([^)\n]*\)\s*>=\s*REGEX_STATIC_LEN_CAP", source)
     assert non_strict == [], f"found a non-strict '>=' REGEX_STATIC_LEN_CAP comparison: {non_strict}"
 

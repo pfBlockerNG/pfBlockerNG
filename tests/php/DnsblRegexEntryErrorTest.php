@@ -237,6 +237,24 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		$this->assertStringContainsString('Python', implode('\n', $missingTimeout));
 	}
 
+	public function testMissingRulesModuleFailsClosedWithoutSpawningAPythonProcess(): void
+	{
+		// issue #1765: the probe is now a shipped script ($script = __DIR__ .
+		// '/pfb_dnsbl_regex_rules.py'), not an embedded nowdoc -- pin the guard
+		// that fires when it is absent/unreadable. The real shipped file is
+		// never deleted: rename it out of the way for the duration of the call.
+		$script = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfb_dnsbl_regex_rules.py';
+		$this->assertFileIsReadable($script);
+		$hidden = $script . '.hidden-for-test';
+		$this->assertTrue(rename($script, $hidden));
+		try {
+			$errors = self::errors("^ads\\.example\\.com$\n");
+		} finally {
+			$this->assertTrue(rename($hidden, $script));
+		}
+		$this->assertSame(['Python regex validator: rules module unavailable'], $errors);
+	}
+
 	public function testBatchUsesOnePythonLaunch(): void
 	{
 		$dir = sys_get_temp_dir() . '/pfb_regex_wrapper_' . getmypid() . '_' . bin2hex(random_bytes(3));
@@ -403,15 +421,13 @@ final class DnsblRegexEntryErrorTest extends TestCase
 
 	public function testProbeDefaultsCapOffWhenTheArgvFlagIsAbsent(): void
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
-		$source = file_get_contents($path);
-		$this->assertNotFalse($source);
-		$this->assertMatchesRegularExpression("/\\\$probe = <<<'PYTHON'\\n(.*?)\\nPYTHON;/s", $source);
-		preg_match("/\\\$probe = <<<'PYTHON'\\n(.*?)\\nPYTHON;/s", $source, $matches);
-		$probe = $matches[1];
+		// issue #1765: the probe is the shipped pfb_dnsbl_regex_rules.py script now,
+		// not an embedded nowdoc -- invoke it directly, with no argv[1].
+		$script = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfb_dnsbl_regex_rules.py';
+		$this->assertFileIsReadable($script);
 
 		$descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-		$process = proc_open([self::$python, '-c', $probe], $descriptors, $pipes);
+		$process = proc_open([self::$python, $script], $descriptors, $pipes);
 		$this->assertIsResource($process);
 		fwrite($pipes[0], self::anchoredPattern(300) . "\n");
 		fclose($pipes[0]);

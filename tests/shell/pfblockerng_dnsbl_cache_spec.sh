@@ -43,6 +43,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     mkdir -p "${pfbpkgdir}" "${pfbdb}"
     # The shipped files (current code in /usr/local).
     echo 'PY-CODE-v1' > "${pfbpkgdir}/pfb_unbound.py"
+    echo 'RULES-CODE-v1' > "${pfbpkgdir}/pfb_dnsbl_regex_rules.py"
     echo 'INC-CODE-v1' > "${pfbpkgdir}/pfb_unbound_include.inc"
     echo 'HSTS-v1' > "${pfbpkgdir}/pfb_py_hsts.txt"
     # issue #1255: the TLD-Wildcard public-suffix oracle -- name-mapped (source
@@ -87,6 +88,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     When call dc stage
     # The shipped files landed in the chroot.
     The path "${pfbchroot}/pfb_unbound.py" should be exist
+    The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should be exist
     The path "${pfbchroot}/pfb_unbound_include.inc" should be exist
     The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
     # The mount-point dirs exist (the fresh-MFS fix).
@@ -158,6 +160,10 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # ... and NOT the shipped files (re-staged from /usr/local on restore).
     The result of "tar_list()" should not include 'pfb_py_hsts.txt'
     The result of "tar_list()" should not include 'pfb_unbound_include.inc'
+    # ... nor pfb_dnsbl_regex_rules.py (issue #1765): its basename matches
+    # neither the pfb_unbound*/pfb_py_* archive glob, so it is shipped, not
+    # generated -- re-staged from /usr/local on restore, same as the others.
+    The result of "tar_list()" should not include 'pfb_dnsbl_regex_rules.py'
     # ... nor the name-mapped TLD oracle (issue #1255: matches the pfb_py_* glob
     # but is shipped, not generated -- archiving it would reinstate a stale oracle).
     The result of "tar_list()" should not include 'pfb_py_tld.txt'

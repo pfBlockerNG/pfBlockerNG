@@ -79,7 +79,7 @@ ignore = [
 "tests/smoke/ui/test_category_ledger_close.py"  = ["F811"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["pfb_unbound"]
+known-first-party = ["pfb_unbound", "pfb_dnsbl_regex_rules"]
 
 [tool.mypy]
 python_version       = "3.11"
