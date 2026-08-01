@@ -545,11 +545,9 @@ def test_the_shipped_baseline_parses_and_is_burning_down() -> None:
 
 
 def test_stale_baseline_entries_names_what_a_full_sweep_never_saw() -> None:
-    """A grandfathered site nobody observes any more is a FIXED site -- and its entry has
-    to go, or a regression there would be silently forgiven again.
+    """A grandfathered site unobserved in a full sweep is a removal candidate.
 
-    That is the failure mode the whole issue is about, reintroduced through the back door
-    by a baseline nobody prunes.
+    One green sweep does not prove a fix because config-dependent paths may not be reached.
     """
     baseline = frozenset({"a|Warning|gone", "b|Warning|still here"})
     assert stale_baseline_entries(frozenset({"b|Warning|still here"}), baseline=baseline) == ("a|Warning|gone",)
