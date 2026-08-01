@@ -3603,8 +3603,8 @@ def _assert_boottime_advanced(before: str, after: str) -> None:
 def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
     """Reboot, observe a changed ``kern.boottime``, then await full readiness.
 
-    The boottime poll is the reboot event; ``timeout`` is only a salvage cap for a stuck guest.
-    Once observed, each readiness gate receives its own full ``timeout`` budget.
+    The boottime poll is the reboot event; ``timeout`` supplies independent salvage caps for
+    that event and the subsequent readiness gate. No duration is asserted.
     """
     # Fail FAST on an unreadable before-side: without it the proof is already lost, so
     # refusing to reboot saves the whole reboot+readiness cycle and leaves the box up in
@@ -4401,9 +4401,9 @@ def dns_probe_until(
     moment later (the watcher rebuilds + atomically swaps the snapshot once the sentinel
     advances — "briefly stale by design", ADR.md SS2). So the restart-era "first response
     is authoritative, never loop" rule does NOT apply to the swap transition: there is no
-    down/up edge to make the first post-readiness answer the new one. The guarantee under
-    test is "the new decision applies within a BOUNDED window WITHOUT a restart". The observed
-    predicate event decides success; expiry is a loud ``stuck/environment`` salvage failure.
+    down/up edge to make the first post-readiness answer the new one. The observed predicate
+    event decides success; expiry is only a loud ``stuck/environment`` salvage failure, not a
+    duration assertion.
 
     Use ONLY for the swap transition (a data update / #51 toggle whose decision must flip).
     Keep :func:`dns_probe` for steady-state and restart-class reads where the first answer
