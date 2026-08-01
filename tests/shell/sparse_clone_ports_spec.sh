@@ -52,8 +52,10 @@ Describe 'sparse-clone-ports.sh'
       git checkout -q -b pfblockerng/use-github
       printf 'PORTNAME=pfBlockerNG-devel\nUSE_GITHUB=yes\n' > "${PORT_SUB}/Makefile"
       git add -A && git -c commit.gpgsign=false commit -qm use-github
+      git tag use-github-tag
       git checkout -q devel
     ) >/dev/null 2>&1
+    USE_GITHUB_SHA="$(cd "$REMOTE" && git rev-parse pfblockerng/use-github)"
     BIN="${WORK}/bin"
     mkdir -p "$BIN"
     cat > "${BIN}/python3" <<'PYEOF'
@@ -89,6 +91,55 @@ PYEOF
     The output should equal 'variant=usegithub'
   End
 
+  # issue #1676: `git clone -b REF` only accepts a branch/tag NAME — a bare 40-hex
+  # commit SHA fails ("fatal: Remote branch <sha> not found in upstream origin").
+  # Fresh clone with a full-SHA REF must still land on that commit.
+  run_clone_sha() { sh "$SCRIPT" "$URL" "$USE_GITHUB_SHA" "$DEST" devel 8.3 py311; }
+
+  fresh_sha_result() {
+    run_clone_sha >/dev/null 2>&1 || { echo "script-failed=$?"; return 1; }
+    if is_build_input_variant; then echo 'variant=usegithub'; else echo 'variant=stub'; fi
+    echo "head=$(git -C "$DEST" rev-parse HEAD)"
+  }
+  It 'fresh-clone-by-sha: DEST absent, REF a full 40-hex commit SHA -> clones + checks out that commit'
+    When call fresh_sha_result
+    The status should be success
+    The line 1 of output should equal 'variant=usegithub'
+    The line 2 of output should equal "head=${USE_GITHUB_SHA}"
+  End
+
+  run_clone_tag() { sh "$SCRIPT" "$URL" use-github-tag "$DEST" devel 8.3 py311; }
+  fresh_tag_result() {
+    run_clone_tag >/dev/null 2>&1 || { echo "script-failed=$?"; return 1; }
+    if is_build_input_variant; then echo 'variant=usegithub'; else echo 'variant=stub'; fi
+  }
+  It 'fresh-clone-by-tag: DEST absent, REF a tag name -> clones + checks out the tag commit'
+    When call fresh_tag_result
+    The status should be success
+    The output should equal 'variant=usegithub'
+  End
+
+  # REF is 40 chars but not hex ("z" is outside [0-9a-f]) -> not a SHA -> unchanged
+  # branch/tag fast path -> fails exactly as before (no branch named this).
+  run_clone_zzz() { sh "$SCRIPT" "$URL" 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz' "$DEST" devel 8.3 py311 2>&1; }
+  It 'fresh-clone: a 40-char non-hex REF (40 zs) is not a SHA -> branch path, fails as before'
+    When call run_clone_zzz
+    The status should be failure
+    The output should include 'Remote branch'
+  End
+
+  # A short abbreviation of a real commit SHA is not a FULL SHA -> unchanged branch/tag
+  # fast path (git's fetch-by-oid needs the full oid, not an abbreviation) -> fails.
+  run_clone_short_sha() {
+    _short="$(printf '%.7s' "$USE_GITHUB_SHA")"
+    sh "$SCRIPT" "$URL" "$_short" "$DEST" devel 8.3 py311 2>&1
+  }
+  It 'fresh-clone: a short 7-hex SHA abbreviation is not a full SHA -> branch path, fails as before'
+    When call run_clone_short_sha
+    The status should be failure
+    The output should include 'Remote branch'
+  End
+
   # GIVEN an existing clone parked on the wrong branch (devel, the stub), WHEN the shared
   # prepare step runs, THEN the tree ends on REF (use-github). before/after both asserted so
   # green proves the switch caused it — and the old `git clone`-into-existing-DEST path is red.
@@ -105,6 +156,19 @@ PYEOF
     The line 2 of output should equal 'after=usegithub'
   End
 
+  # Regression guard: the reuse branch already fetches a full-SHA REF (fetch + FETCH_HEAD,
+  # not `-b`) — this must keep working unchanged by the fresh-clone REF-shape guard above.
+  reuse_sha_result() {
+    git clone -q "$URL" "$DEST" >/dev/null 2>&1            # full clone, checks out devel
+    run_clone_sha >/dev/null 2>&1 || { echo "script-failed=$?"; return 1; }
+    echo "head=$(git -C "$DEST" rev-parse HEAD)"
+  }
+  It 'reuse-by-sha: an existing work-tree fetches + checks out a full-SHA REF'
+    When call reuse_sha_result
+    The status should be success
+    The output should equal "head=${USE_GITHUB_SHA}"
+  End
+
   refuse_result() {
     mkdir -p "$DEST" && true > "${DEST}/not-a-clone"
     run_clone 2>&1  # merge the refusal (stderr) into output for a single clean assertion
@@ -113,5 +177,81 @@ PYEOF
     When call refuse_result
     The status should be failure
     The output should include 'not a git work-tree'
+  End
+
+  # ── REF-shape hostile inputs (issue #1676) ────────────────────────────────
+  #
+  # None of these REF values may be misclassified as a full 40-hex SHA — each must take
+  # the pre-existing `git clone -b REF` fast path unchanged (not the new fetch-by-oid
+  # path) and fail exactly as it always did. `git clone -b` prints "Remote branch ...
+  # not found" only on that fast path (the fetch-by-oid path, when reachable, prints a
+  # different message) — asserting that phrase proves the REF was NOT treated as a SHA.
+  run_clone_hostile() { sh "$SCRIPT" "$URL" "$1" "$DEST" devel 8.3 py311 2>&1; }
+
+  It 'empty REF is not a SHA -> branch path (not fetch-by-oid)'
+    When call run_clone_hostile ''
+    The status should be failure
+    The output should include 'Remote branch'
+  End
+
+  It '39-hex (one short) REF is not a SHA -> branch path'
+    When call run_clone_hostile '0123456789012345678901234567890123456'
+    The status should be failure
+    The output should include 'Remote branch'
+  End
+
+  It '41-hex (one long) REF is not a SHA -> branch path'
+    When call run_clone_hostile '012345678901234567890123456789012345678'
+    The status should be failure
+    The output should include 'Remote branch'
+  End
+
+  It '40 chars with one non-hex char is not a SHA -> branch path'
+    When call run_clone_hostile '012345678901234567890123456789012345678g'
+    The status should be failure
+    The output should include 'Remote branch'
+  End
+
+  # Decision (pinned): git object ids are lowercase hex only — an UPPERCASE 40-char
+  # hex string is deliberately NOT treated as a SHA and takes the branch/tag path.
+  It 'UPPERCASE 40-hex REF is not treated as a SHA (git object ids are lowercase) -> branch path'
+    When call run_clone_hostile 'ABCDEF0123456789ABCDEF0123456789ABCDEF01'
+    The status should be failure
+    The output should include 'Remote branch'
+  End
+
+  It "REF containing '/' is not a SHA -> branch path"
+    When call run_clone_hostile 'origin/main'
+    The status should be failure
+    The output should include 'Remote branch'
+  End
+
+  It 'REF containing whitespace is not a SHA -> branch path'
+    When call run_clone_hostile 'abc def'
+    The status should be failure
+    The output should include 'Remote branch'
+  End
+
+  It 'REF with a leading dash is never taken as a git option -> branch path, treated as literal data'
+    When call run_clone_hostile '--upload-pack=touch INJECTED'
+    The status should be failure
+    The output should include 'Remote branch'
+    The path "${WORK}/INJECTED" should not be exist
+  End
+
+  It "REF containing '..' is not a SHA -> branch path"
+    When call run_clone_hostile 'abc..def'
+    The status should be failure
+    The output should include 'Remote branch'
+  End
+
+  It 'REF containing shell metacharacters is treated as literal data, never interpolated/executed'
+    # Single-quoted on purpose: proves the shell never expands it.
+    # shellcheck disable=SC2016
+    When call run_clone_hostile '$(touch INJECTED); `touch INJECTED2`'
+    The status should be failure
+    The output should include 'Remote branch'
+    The path "${WORK}/INJECTED" should not be exist
+    The path "${WORK}/INJECTED2" should not be exist
   End
 End
