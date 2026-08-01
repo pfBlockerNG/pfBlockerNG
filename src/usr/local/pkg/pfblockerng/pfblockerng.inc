@@ -7769,6 +7769,7 @@ function pfb_unbound_dnsbl($mode) {
 			exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');
 		} else {
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
+			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_dnsbl_regex_rules.py");
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_tld.txt");
@@ -17739,6 +17740,7 @@ function pfblockerng_php_pre_deinstall_command() {
 	}
 
 	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
+	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_dnsbl_regex_rules.py");
 	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
 	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
 	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_tld.txt");
