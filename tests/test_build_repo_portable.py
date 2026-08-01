@@ -671,6 +671,109 @@ def test_catalog_name_from_version() -> None:
     assert brp.catalog_name_from_version("26.03.1", "Plus") == "plus-26.03"
 
 
+def test_catalog_name_from_version_strips_prerelease_suffix() -> None:
+    """A pre-release publishes under the SAME catalog as its release line (issue #1965).
+
+    A pfSense pre-release carries a dash suffix inside the minor field
+    ("26.07-BETA", "2.9-RC1"), so a bare major.minor split keeps it. The consumer
+    side — the rc.d repo-generate hook — strips the suffix before deriving the
+    varver, so a box on 26.07-BETA resolves ``release/plus-26.07/``. The producer
+    must strip identically, or it publishes ``release/plus-26.07-BETA/`` that no
+    box ever asks for.
+    """
+    assert brp.catalog_name_from_version("26.07-BETA", "Plus") == "plus-26.07"
+    assert brp.catalog_name_from_version("2.9-RC1", "CE") == "ce-2.9"
+    assert brp.catalog_name_from_version("2.8.1-RELEASE", "CE") == "ce-2.8"
+    # The channel prefix rides along unchanged.
+    assert brp.catalog_name_from_version("26.07-BETA", "Plus", channel="nightly") == "nightly/plus-26.07"
+
+
+def test_catalog_name_from_version_rejects_unsafe_segment() -> None:
+    """The derived varver becomes an rmtree'd path segment — a hostile version is refused.
+
+    ``pfsense_version``/``variant`` come from the ci-metadata matrix, so a bad entry
+    would otherwise be joined straight onto the output root. Same safety rule as
+    build-repo.sh's ``--varver`` guard: no traversal, no separator, lowercase class
+    only, and never a leading '-' (an empty variant yields "-2.8").
+    """
+    for version, variant in (
+        ("/etc", "CE"),  # separator surviving the major.minor split
+        ("2.8", "../evil"),  # traversal in the variant
+        ("2.8", "CE/x"),  # separator in the variant
+        ("2.8", ""),  # empty variant -> a segment starting with '-'
+    ):
+        with pytest.raises(brp.BuildRepoError):
+            brp.catalog_name_from_version(version, variant)
+
+
+def test_build_repo_rejects_unsafe_catalog_name(tmp_path: Path) -> None:
+    """``--catalog-name`` is an rmtree'd path segment — traversal/absolute/foreign chars refused.
+
+    A channel prefix ("release/ce-2.8", "nightly/ce-2.8") is legitimate, so the value
+    is a relative path — but every component still has to clear the varver class.
+
+    Scenario: a hostile or malformed --catalog-name reaches the generator
+      Given a sibling directory holding a file that must survive
+      When build_repo() is called with '../victim', an absolute path, or a component
+        outside build-repo.sh's ``[a-z0-9.-]`` class
+      Then BuildRepoError is raised BEFORE anything is written
+      And the sibling directory is untouched (the rmtree never escaped --out)
+      And a legitimate channel-prefixed name still builds.
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    out = tmp_path / "out"
+    out.mkdir()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("must survive")
+
+    unsafe = (
+        "../victim",  # traversal: wipes a sibling of --out
+        str(tmp_path / "victim"),  # absolute: Path.__truediv__ discards --out entirely
+        "ce-2.8/../../victim",  # traversal after a legitimate-looking prefix
+        "CE-2.8",  # outside the lowercase class build-repo.sh enforces
+        "ce 2.8",  # whitespace
+        "release/CE-2.8",  # a bad component behind a legitimate channel prefix
+        "",  # empty: never silently "no catalog name"
+    )
+    for bad in unsafe:
+        with pytest.raises(brp.BuildRepoError):
+            brp.build_repo(in_dir, out, catalog_name=bad)
+
+    assert (victim / "keep.txt").read_text() == "must survive"
+
+    # The legitimate channel-prefixed form is NOT collateral damage.
+    brp.build_repo(in_dir, out, catalog_name="nightly/ce-2.8")
+    assert (out / "nightly" / "ce-2.8" / "meta.conf").is_file()
+
+
+def test_catalog_rejects_unsafe_manifest_name_and_version(tmp_path: Path) -> None:
+    """A manifest's name/version becomes the published .pkg filename — traversal is refused.
+
+    ``<name>-<version>.pkg`` is written into the catalog directory, so an input .pkg
+    whose manifest carries a separator or traversal in either field would write
+    OUTSIDE the catalog. The manifest is attacker-controlled input (it is read from
+    the .pkg, never derived), so it gets the same segment guard as the varver.
+    """
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("must survive")
+
+    for field in ("name", "version"):
+        in_dir = tmp_path / f"in_{field}"
+        in_dir.mkdir()
+        kwargs = {field: "../victim/evil"}
+        make_pkg(in_dir / "evil.pkg", abi="FreeBSD:15:*", **kwargs)  # type: ignore[arg-type]
+        out = tmp_path / f"out_{field}"
+        out.mkdir()
+        with pytest.raises(brp.BuildRepoError):
+            brp.build_repo(in_dir, out)
+
+    assert (victim / "keep.txt").read_text() == "must survive"
+
+
 def test_catalog_under_versioned_subdir(tmp_path: Path) -> None:
     """--catalog-name writes the FLAT catalog directly at <out>/<catalog-name>/, no ABI subdir.
 

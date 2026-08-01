@@ -63,6 +63,18 @@ def test_catalog_name_maps_version_and_variant() -> None:
     assert mx.catalog_name("2.8", "CE") == "ce-2.8"  # two-component version
 
 
+def test_catalog_name_strips_prerelease_suffix() -> None:
+    """A pre-release box resolves its release line's catalog (issue #1965).
+
+    "26.07-BETA" carries the suffix inside the minor field; the production rc.d
+    hook strips it before deriving the varver, so this oracle must too — otherwise
+    the smoke expects a ``plus-26.07-BETA`` catalog no producer ever publishes.
+    """
+    assert mx.catalog_name("26.07-BETA", "Plus") == "plus-26.07"
+    assert mx.catalog_name("2.9-RC1", "CE") == "ce-2.9"
+    assert mx.catalog_name("2.8.1-RELEASE", "CE") == "ce-2.8"
+
+
 def test_build_matrix_parses_env_json(monkeypatch: pytest.MonkeyPatch) -> None:
     """A well-formed SMOKE_MATRIX_JSON array is returned as a tuple of entries."""
     _set_env(monkeypatch, SMOKE_MATRIX_JSON=_MATRIX)

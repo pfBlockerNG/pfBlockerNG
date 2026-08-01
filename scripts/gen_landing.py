@@ -425,11 +425,14 @@ def _edition_key(variant: str) -> str:
 def _matrix_varver(pfsense_version: str, variant: str) -> str:
     """The catalog dir name (varver) a matrix entry's packages are published under.
 
-    Mirrors build-repo-portable.py's catalog_name_from_version (major.minor only):
-      "2.7" + "CE"   -> "ce-2.7"
-      "25.03"+ "Plus" -> "plus-25.03"
+    Mirrors build-repo-portable.py's catalog_name_from_version (major.minor only,
+    pre-release suffix stripped first — it sits inside the minor field, so a bare
+    split would keep it and pin the row to a varver nothing publishes, issue #1965):
+      "2.7" + "CE"           -> "ce-2.7"
+      "25.03"+ "Plus"        -> "plus-25.03"
+      "26.07-BETA" + "Plus"  -> "plus-26.07"
     """
-    major_minor = ".".join(pfsense_version.split(".")[:2])
+    major_minor = ".".join(pfsense_version.split("-")[0].split(".")[:2])
     return f"{variant.lower()}-{major_minor}"
 
 
