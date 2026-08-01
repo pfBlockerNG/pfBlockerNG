@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
+define('PFB_ISSUE1840_PFB_BASELINE', $GLOBALS['pfb']);
+
 /**
  * issue #1840 -- POST-INSTALL sync fatal: pfb_ip_suppress_body_active() receives a
  * NULL $supp_update.
@@ -62,7 +64,7 @@ final class Issue1840SuppUpdateNullPostinstallTest extends TestCase
 		mkdir($this->dbdir, 0755, TRUE);
 		mkdir("{$this->dbdir}/deny", 0755, TRUE);
 
-		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
+		$GLOBALS['pfb'] = array_merge(PFB_ISSUE1840_PFB_BASELINE, [
 			'dbdir'    => $this->dbdir,
 			'log'      => "{$this->dbdir}/pfblockerng.log",
 			'errlog'   => "{$this->dbdir}/error.log",
