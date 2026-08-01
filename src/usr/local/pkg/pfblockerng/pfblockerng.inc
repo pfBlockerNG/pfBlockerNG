@@ -4188,7 +4188,12 @@ function pfb_list_script_exec(string $script_path, string $script_name, string $
 
 	$discard = array();
 	$retval  = 0;
-	exec("{$tmo_prefix}" . escapeshellarg($script_path) . " {$args_tail}", $discard, $retval);
+	if (exec("{$tmo_prefix}" . escapeshellarg($script_path) . " {$args_tail}", $discard, $retval) === FALSE &&
+	    $retval === 0) {
+		// exec() itself failed to launch (fork/pipe): a script that never ran
+		// must never read as success.
+		$retval = -1;
+	}
 
 	if ($retval === 124) {
 		// No duration in the message: the budget lives inside $tmo_prefix, so a
