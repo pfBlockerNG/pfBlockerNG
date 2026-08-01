@@ -1827,7 +1827,8 @@ function sync_package_pfblockerng($cron='') {
 									    $pfb_dnsbl_script_pre, $list['script_pre'], $header,
 									    escapeshellarg("{$file_dwn}.pre") . " dnsbl {$elog}");
 									if (!$pfb_pre['ok']) {
-										if (file_exists("{$pfbfolder}/{$header}.txt")) {
+										// #1083: a stale-generation '.txt' never re-enters the manifest.
+										if ($staging_current_generation && file_exists("{$pfbfolder}/{$header}.txt")) {
 											$lists_dnsbl_all[]	= "{$row['header']}.txt";
 											$pfb_py_feeds[]		= pfb_feed_manifest_row(
 												$header, $alias, $logging_type,
@@ -2100,6 +2101,8 @@ function sync_package_pfblockerng($cron='') {
 										pfb_list_script_exec($pfb_dnsbl_script_post, $list['script_post'], 'post', $header,
 										    escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}");
 										unlink_if_exists("{$file_dwn}.post");
+									} else {
+										pfb_logger("\n[ {$header} ] post-script '{$list['script_post']}' could not stage its input; skipping\n", 2);
 									}
 								}
 
@@ -3470,8 +3473,6 @@ function sync_package_pfblockerng($cron='') {
 							if ($fhandle) {
 								@fclose($fhandle);
 							}
-							// issue #1925: the staged pre-script copy is transient -- parsed above.
-							unlink_if_exists("{$file_dwn}.pre");
 
 							// One summary line per feed with the final count (mirrors the DNSBL
 							// strict-scheme WARNING) -- was previously one spammed line PER failed
@@ -3502,10 +3503,13 @@ function sync_package_pfblockerng($cron='') {
 
 							if (!$custom) {
 								// Check to see if list actually failed download or has no IPs listed.
+								// issue #1925: probe the content the parse consumed -- a pre-script
+								// synthesizes or reduces entries, so the raw download's emptiness is
+								// not the feed's (post-script-only feeds still probe '.orig').
+								$pfb_probe = ($pfb_parse_path === $pfb_norm['path']) ? "{$file_dwn}.orig" : $pfb_parse_path;
 								$file_chk = '';
-								if (file_exists("{$file_dwn}.orig") && @filesize("{$file_dwn}.orig") > 0) {
-									$file_org_esc = escapeshellarg("{$file_dwn}.orig");
-									$file_chk = exec("{$pfb['grep']} -cv '^#\|^\$' {$file_org_esc}");
+								if (file_exists($pfb_probe) && @filesize($pfb_probe) > 0) {
+									$file_chk = exec("{$pfb['grep']} -cv '^#\|^\$' " . escapeshellarg($pfb_probe));
 								}
 
 								if ($file_chk == 0) {
@@ -3520,6 +3524,9 @@ function sync_package_pfblockerng($cron='') {
 									pfb_logger("{$log}", 1);
 								}
 							}
+							// issue #1925: the staged pre-script copy is transient -- parsed and
+							// probed above.
+							unlink_if_exists("{$file_dwn}.pre");
 
 							// All parsed IPv6 entries were suppressed; replace the list with the IPv6
 							// placeholder so stale (previously-loaded) entries are not left in the alias.

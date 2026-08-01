@@ -4220,6 +4220,7 @@ function pfb_list_pre_script_run(string $norm_path, string $staged_path, string 
 
 	if (!@copy($norm_path, $staged_path)) {
 		pfb_logger("\n[ {$header} ] pre-script '{$script_name}' could not stage its input; skipping\n", 2);
+		unlink_if_exists($staged_path);
 		return array('ok' => FALSE, 'path' => $norm_path);
 	}
 

@@ -162,6 +162,28 @@ final class ListScriptExitStatusTest extends TestCase
 			'.orig.pre must be fully retired — the pre-script never touches the raw download');
 	}
 
+	public function testEmptyFeedProbeReadsTheContentTheParseConsumed(): void
+	{
+		$probePos = strpos(self::$applySource, 'Check to see if list actually failed download');
+		$this->assertNotFalse($probePos, 'vacuity: the empty-feed probe must exist');
+
+		$suppressedPos = strpos(self::$applySource, 'All parsed IPv6 entries were suppressed', $probePos);
+		$this->assertNotFalse($suppressedPos, 'vacuity: the v6-suppression block after the probe must exist');
+
+		$between = substr(self::$applySource, $probePos, $suppressedPos - $probePos);
+		$this->assertStringContainsString("\$pfb_parse_path === \$pfb_norm['path']", $between,
+			'the probe must select the content the parse consumed — a pre-script synthesizes or '
+			. 'reduces entries, so the raw download\'s emptiness is not the feed\'s');
+
+		// The staged copy must outlive the probe: its unlink sits after the probe
+		// block, not right after the parse loop.
+		$unlinkPos = strpos(self::$applySource, 'unlink_if_exists("{$file_dwn}.pre")', $probePos);
+		$this->assertNotFalse($unlinkPos,
+			'the staged pre-script copy must be unlinked AFTER the empty-feed probe consumed it');
+		$this->assertLessThan($suppressedPos, $unlinkPos,
+			'the staged-copy unlink must sit between the probe and the v6-suppression block');
+	}
+
 	public function testPostScriptCallSiteGatesOnExitStatus(): void
 	{
 		// issue #1926: the DNSBL loop now logs the same "Executing post-script:" line

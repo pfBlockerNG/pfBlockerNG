@@ -139,7 +139,7 @@ final class DnsblListScriptWiringTest extends TestCase
 		$this->assertStringContainsString('pfb_feed_manifest_row(', $window,
 			'the failure branch must still emit a manifest row when a staged .txt exists -- '
 			. 'dropping it would relocate the outage (#1841 class), not fix it');
-		$this->assertStringContainsString('file_exists("{$pfbfolder}/{$header}.txt")', $window,
+		$this->assertStringContainsString('$staging_current_generation && file_exists("{$pfbfolder}/{$header}.txt")', $window,
 			'the manifest-on-failure emission must be guarded on an existing staged .txt');
 		$this->assertStringContainsString('" dnsbl {$elog}"', $window,
 			'the pre-script args tail must carry the stable "dnsbl" discriminator -- DNSBL has no vtype');
@@ -184,6 +184,8 @@ final class DnsblListScriptWiringTest extends TestCase
 			'the post-script must run on a throwaway copy of the download, not the .orig itself');
 		$this->assertStringContainsString('unlink_if_exists("{$file_dwn}.post");', $window,
 			'the throwaway post-script copy must be cleaned up -- nothing downstream re-parses it');
+		$this->assertStringContainsString('could not stage its input', $window,
+			'a post-script staging copy failure must be logged naming the script -- a silent skip is undebuggable');
 		$this->assertStringNotContainsString('.orig.post', $window,
 			'the IP loop\'s backup/restore machinery is deliberately NOT mirrored -- the post-script '
 			. 'edits a throwaway copy instead of an .orig that would be restored anyway');
@@ -207,16 +209,29 @@ final class DnsblListScriptWiringTest extends TestCase
 			'@@||allow.example.net^',
 			'another-domain.test',
 			'203.0.113.5',
+			'||192.0.2.9^',
+			'||2001:db8::9^',
 		];
 	}
 
-	/** @return array{v4: int, v6: int} */
+	/**
+	 * Mirrors the DNSBL loop's two collection sites: the ABP network anchor is
+	 * unwrapped by pfb_dnsbl_abp_extract_ip() first, plain lines go straight to
+	 * the collector.
+	 *
+	 * @return array{v4: int, v6: int}
+	 */
 	private function collectIpCounts(string $content): array
 	{
 		$ip4 = [];
 		$ip6 = [];
 		foreach (preg_split('/\R/', $content) as $line) {
 			if ($line === '') {
+				continue;
+			}
+			$abp_ip = pfb_dnsbl_abp_extract_ip($line);
+			if ($abp_ip !== '') {
+				pfb_dnsbl_collect_feed_ip($abp_ip, $abp_ip, FALSE, $ip4, $ip6);
 				continue;
 			}
 			pfb_dnsbl_collect_feed_ip($line, $line, FALSE, $ip4, $ip6);
@@ -229,10 +244,11 @@ final class DnsblListScriptWiringTest extends TestCase
 		$lines = $this->mixedFeedLines();
 		$content = implode("\n", $lines) . "\n";
 
-		// Before-state: the ORIGINAL content extracts exactly the 3 v4 + 2 v6 lines above.
+		// Before-state: the ORIGINAL content extracts exactly the 3 plain + 1 ABP v4
+		// lines and the 2 plain + 1 ABP v6 lines above.
 		$before = $this->collectIpCounts($content);
-		$this->assertSame(3, $before['v4'], 'sanity: fixture must carry exactly 3 v4-shaped lines');
-		$this->assertSame(2, $before['v6'], 'sanity: fixture must carry exactly 2 v6-shaped lines');
+		$this->assertSame(4, $before['v4'], 'sanity: fixture must carry exactly 4 v4-shaped lines (incl. one ABP-anchored)');
+		$this->assertSame(3, $before['v6'], 'sanity: fixture must carry exactly 3 v6-shaped lines (incl. one ABP-anchored)');
 
 		$norm = "{$this->tmp}/feed.norm";
 		file_put_contents($norm, $content);
@@ -259,11 +275,11 @@ final class DnsblListScriptWiringTest extends TestCase
 		$norm = "{$this->tmp}/feed.norm";
 		file_put_contents($norm, $content);
 		$staged = "{$this->tmp}/feed.pre";
-		// Strips every IP-shaped line (v4 or v6) -- the exact hazard the DNSBL
-		// help-text warning names: a careless pre-process script silently
-		// shrinks the DNSBLIP alias.
+		// Strips every IP-shaped line -- plain AND ABP-anchored (||IP^) -- the exact
+		// hazard the DNSBL help-text warning names: a careless pre-process script
+		// silently shrinks the DNSBLIP alias.
 		$script = $this->makeScript('dnsbl_pre_strip_ips.sh',
-			"grep -Ev '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\$|^[0-9a-fA-F:]+\$' \"\$1\" > \"\$1.tmp\" && mv \"\$1.tmp\" \"\$1\"");
+			"grep -Ev '^(\\|\\|)?[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\\^?\$|^(\\|\\|)?[0-9a-fA-F:]+\\^?\$' \"\$1\" > \"\$1.tmp\" && mv \"\$1.tmp\" \"\$1\"");
 
 		$result = pfb_list_pre_script_run($norm, $staged, $script, 'dnsbl_pre_strip_ips.sh', 'MyFeed',
 			escapeshellarg($staged) . ' dnsbl', '');

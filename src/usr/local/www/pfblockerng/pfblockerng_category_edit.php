@@ -1675,7 +1675,9 @@ $section->addInput(new Form_Select(
 	'Pre-process Script',
 	$pconfig['script_pre'],
 	$options_script_pre
-))->sethelp("Pre-processing Shell script after download.<br />"
+))->sethelp("Pre-processing Shell script, run after download and charset normalization: "
+	. "it receives a staged copy of the normalized feed text (UTF-8, control characters stripped, "
+	. "lines right-trimmed) and rewrites that copy in place.<br />"
 	. "Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_pre_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_pre_SCRIPT NAME.sh|py</strong>"
 	. $script_dnsbl_note)
   ->setAttribute('style', 'width: auto')

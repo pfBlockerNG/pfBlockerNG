@@ -175,7 +175,9 @@ PAGE_TABLE: tuple[Page, ...] = (
     # category_edit.php: default IP view AND the DNSBL view; Form_Section('Advanced Tuneables') is unique to it.
     Page("category_edit_ip", "/pfblockerng/pfblockerng_category_edit.php?type=ipv4", ("Advanced Tuneables",)),
     # issue #1926: the DNSBL-only pre-script warning (script_pre help text) must render
-    # on the dnsbl view and must NEVER leak onto the IP view above.
+    # on the dnsbl view. Markers assert presence only, so the IP view's tuple simply
+    # omits it; the DNSBL-only conditioning is pinned server-side by
+    # DnsblListScriptWiringTest's help-note test.
     Page(
         "category_edit_dnsbl",
         "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl",
