@@ -3358,8 +3358,16 @@ function sync_package_pfblockerng($cron='') {
 								$pfb_user_script = TRUE;
 								$file_dwn_esc = escapeshellarg("{$file_dwn}.orig");
 								@copy("{$file_dwn}.orig", "{$file_dwn}.orig.pre"); // Save original file for restoration
-								$tmo = '/usr/bin/timeout -s TERM -k ' . PFB_HOOK_KILL_GRACE . ' ' . PFB_LIST_SCRIPT_TIMEOUT . ' ';
-								exec("{$tmo}" . escapeshellarg($pfb_script_pre) . " {$file_dwn_esc} {$list['vtype']} {$elog}");
+								if (pfb_list_script_exec($pfb_script_pre, $list['script_pre'], 'pre', $header,
+								    "{$file_dwn_esc} {$list['vtype']} {$elog}") !== 0) {
+									// issue #1927: restore the download over the failed script's
+									// leftovers and keep the last known-good staged list; '.update'
+									// stays so the next run retries the transform.
+									if (file_exists("{$file_dwn}.orig.pre")) {
+										@rename("{$file_dwn}.orig.pre", "{$file_dwn}.orig");
+									}
+									continue;
+								}
 							}
 							if ($pfb_script_post && is_file("{$pfb_script_post}")) {
 								$pfb_user_script = TRUE;
@@ -3429,8 +3437,14 @@ function sync_package_pfblockerng($cron='') {
 								pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
 								$file_org_esc = escapeshellarg("{$file_dwn}.orig");
 								@copy("{$file_dwn}.orig", "{$file_dwn}.orig.post"); // Save original file for restoration
-								$tmo = '/usr/bin/timeout -s TERM -k ' . PFB_HOOK_KILL_GRACE . ' ' . PFB_LIST_SCRIPT_TIMEOUT . ' ';
-								exec("{$tmo}" . escapeshellarg($pfb_script_post) . " {$file_org_esc} {$list['vtype']} {$elog}");
+								if (pfb_list_script_exec($pfb_script_post, $list['script_post'], 'post', $header,
+								    "{$file_org_esc} {$list['vtype']} {$elog}") !== 0) {
+									// issue #1927: restore the download now so the empty-feed check
+									// below reads it, not the failed script's leftovers.
+									if (file_exists("{$file_dwn}.orig.post")) {
+										@rename("{$file_dwn}.orig.post", "{$file_dwn}.orig");
+									}
+								}
 							}
 
 							if (!$custom) {
