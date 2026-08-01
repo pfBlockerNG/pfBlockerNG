@@ -757,4 +757,39 @@ final class AlertsMultibyteTruncationTest extends TestCase
 			mb_substitute_character($original);
 		}
 	}
+
+	/**
+	 * The pinned substitute character is restored even when the truncation itself
+	 * throws. pfb_truncate() casts $value to string INSIDE the pinned region, so an
+	 * object with no __toString() raises after the pin and before any ordinary
+	 * return -- without the finally, the caller's setting stays clobbered for the
+	 * rest of the request and every later render silently substitutes the wrong
+	 * symbol.
+	 */
+	public function test_pfb_truncate_restores_substitute_character_when_the_cut_throws(): void
+	{
+		$sentinel = ord('Z');
+		$original = mb_substitute_character();
+
+		try {
+			mb_substitute_character($sentinel);
+
+			$threw = FALSE;
+			try {
+				pfb_truncate(new stdClass(), 10);
+			} catch (Throwable $e) {
+				$threw = TRUE;
+			}
+
+			$this->assertTrue($threw, 'fixture sanity: casting a stdClass to string must raise, or this proves nothing');
+			$this->assertSame(
+				$sentinel,
+				mb_substitute_character(),
+				'pfb_truncate() must restore mb_substitute_character() on the throwing path too, '
+					. 'not just on a normal return'
+			);
+		} finally {
+			mb_substitute_character($original);
+		}
+	}
 }

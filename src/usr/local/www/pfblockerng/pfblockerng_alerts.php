@@ -1888,14 +1888,16 @@ function pfb_hsc($value) {
 // mb_substitute_character() for the duration of the call; mb_substr()'s own
 // default substitute ('?') would otherwise fabricate a character the input never
 // carried. mb_substitute_character() is request-global state, so the prior value
-// is always restored before returning, even though this file never changes it
-// elsewhere.
+// is restored on every exit path -- the finally is what makes that true for a
+// throwing $value cast as well as the normal return.
 function pfb_truncate($value, $length) {
 	$prev = mb_substitute_character();
 	mb_substitute_character(0xFFFD);
-	$cut = mb_substr((string) $value, 0, $length, 'UTF-8');
-	mb_substitute_character($prev);
-	return $cut;
+	try {
+		return mb_substr((string) $value, 0, $length, 'UTF-8');
+	} finally {
+		mb_substitute_character($prev);
+	}
 }
 
 // Compose the resolved-hostname stats cell for the IP src/dst-in stats. The raw
