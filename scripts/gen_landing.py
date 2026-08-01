@@ -456,10 +456,12 @@ def _join_matrix(rows: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     php/py, so nothing published is ever hidden. Input order is preserved.
 
     A NO_ARCH package's manifest ABI is CPU-wildcarded (issue #1806, e.g.
-    "FreeBSD:16:*") — the exact-string index never hits it (a matrix row's own
-    ABI is always concrete), so a wildcarded row falls back to an OS+major scan
-    across every matrix entry (``_abi_matches``), joining EVERY row of that
-    major instead of dropping to "Other".
+    "FreeBSD:16:*"). The matrix row's own ABI is wildcarded too (pfBlockerNG/pkg
+    emits ``FreeBSD:<major>:*`` since `arch` was retired), so the exact-string
+    index normally hits; a row it misses — a legacy concrete-ABI asset, or a
+    matrix that still records one — falls back to an OS+major scan across every
+    matrix entry (``_abi_matches``), joining EVERY row of that major instead of
+    dropping to "Other". Both paths yield the same rows.
 
     An ABI match alone over-joins when two pfSense versions share it: the catalog is
     published per varver, so each varver dir holds its OWN copy of the .pkg, and
@@ -716,8 +718,9 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
 
     out: list[tuple[str, str, dict]] = []
     for varver, entries in by_varver.items():
-        # Matched via _abi_matches (OS+major, issue #1806): the served .pkg may be
-        # NO_ARCH/wildcarded even when the matrix still records a concrete ABI.
+        # Matched via _abi_matches (OS+major, issue #1806) rather than string equality:
+        # the served .pkg and the matrix entry may disagree on the CPU segment (a legacy
+        # concrete-ABI asset against today's wildcarded matrix, or the reverse).
         served = varver_pkgs.get(varver, [])
         pool = [p for p in served if any(_abi_matches(p["abi"], e.get("abi", "")) for e in entries)]
         if not pool:

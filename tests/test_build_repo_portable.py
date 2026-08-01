@@ -701,9 +701,39 @@ def test_catalog_name_from_version_rejects_unsafe_segment() -> None:
         ("2.8", "../evil"),  # traversal in the variant
         ("2.8", "CE/x"),  # separator in the variant
         ("2.8", ""),  # empty variant -> a segment starting with '-'
+        ("", "CE"),  # empty version -> the mirror case, a segment ending in '-'
+        ("-BETA", "CE"),  # a version that is nothing BUT a pre-release suffix
     ):
         with pytest.raises(brp.BuildRepoError):
             brp.catalog_name_from_version(version, variant)
+
+    # The channel is an argument too — it must not ride into the path unchecked.
+    for channel in ("../evil", "/abs", "nightly/../.."):
+        with pytest.raises(brp.BuildRepoError):
+            brp.catalog_name_from_version("2.8", "CE", channel=channel)
+    # ...while the legitimate channel still composes.
+    assert brp.catalog_name_from_version("2.8", "CE", channel="nightly") == "nightly/ce-2.8"
+
+
+def test_catalog_name_rejects_pkg_catalog_plumbing_names(tmp_path: Path) -> None:
+    """A catalog name equal to a pkg(8) catalog file is refused, not a raw traceback.
+
+    ``meta`` / ``meta.conf`` / ``data.pkg`` / ``packagesite.pkg`` are written at the
+    catalog root, so ``out_dir / catalog_name`` would name an existing FILE and the
+    rmtree/mkdir would escape this module's BuildRepoError contract.
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    out = tmp_path / "out"
+    out.mkdir()
+    brp.build_repo(in_dir, out)  # lay a root-level catalog, so the names exist as FILES
+    assert (out / "meta.conf").is_file()
+
+    for reserved in ("meta", "meta.conf", "data.pkg", "packagesite.pkg"):
+        with pytest.raises(brp.BuildRepoError, match="catalog plumbing"):
+            brp.build_repo(in_dir, out, catalog_name=reserved)
+        assert (out / reserved).is_file(), f"{reserved} must survive the rejected call"
 
 
 def test_build_repo_rejects_unsafe_catalog_name(tmp_path: Path) -> None:
@@ -768,9 +798,13 @@ def test_catalog_rejects_unsafe_manifest_name_and_version(tmp_path: Path) -> Non
         make_pkg(in_dir / "evil.pkg", abi="FreeBSD:15:*", **kwargs)  # type: ignore[arg-type]
         out = tmp_path / f"out_{field}"
         out.mkdir()
-        with pytest.raises(brp.BuildRepoError):
+        with pytest.raises(brp.BuildRepoError, match=f"manifest {field}"):
             brp.build_repo(in_dir, out)
 
+    # The pre-fix defect WRITES into victim/ rather than deleting from it, so the
+    # failable oracle is "no package landed here" — a surviving keep.txt would be
+    # true either way.
+    assert not list(victim.glob("*.pkg")), f"a manifest field escaped the catalog dir: {list(victim.iterdir())}"
     assert (victim / "keep.txt").read_text() == "must survive"
 
 

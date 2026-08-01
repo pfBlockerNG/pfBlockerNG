@@ -1762,12 +1762,15 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
         f"pkg install output:\n{install_output}\n"
         f"pkg query '%n': {vm_pkg_query_name(repo_vm)!r}"
     )
-    # AND the failure is ATTRIBUTABLE to the variant mismatch — not merely non-zero.
-    # `install_failed` is deliberately NOT one of these clauses: it is already asserted
-    # above, so including it made every other clause unreachable and the intent
-    # ("the error names the opposite php or an ABI rejection") went unpinned (issue
-    # #1965). A failure with none of these markers is a DIFFERENT failure — an unusable
-    # box, a broken catalog, a transport error — and must not read as the guard firing.
+    # AND the failure names a CAUSE, not merely a non-zero exit. `install_failed` is
+    # deliberately NOT one of these clauses: it is already asserted above, so including
+    # it made every other clause unreachable and the intent ("the error names the
+    # opposite php or an ABI rejection") went unpinned (issue #1965).
+    #
+    # These markers do not fully separate "wrong variant" from "empty/broken catalog":
+    # pkg reports both as "No packages available…". What they DO exclude is a failure
+    # that names no pkg-level cause at all — an unusable box, a transport error, a
+    # crashed ssh — which the old clause set silently accepted as the guard firing.
     lowered = install_output.lower()
     reasons = {
         f"names the opposite php dep ({opp.php})": opp.php in install_output,
