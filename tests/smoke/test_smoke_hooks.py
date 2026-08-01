@@ -548,6 +548,7 @@ def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
     """
     token = "bgdaemon"
     pre_marker = h.hook_marker_path(token, "pre")
+    waiting_marker = h.hook_marker_path(token, "waiting")
     child_marker = h.hook_marker_path(token, "child")
     post_marker = h.hook_marker_path(token, "post")
     release_marker = h.hook_marker_path(token, "release")
@@ -559,7 +560,8 @@ def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
         "_body": (
             "#!/bin/sh\n"
             f"/bin/echo START > {pre_marker}\n"
-            f"/bin/sh -c 'while [ ! -f {release_marker} ]; do /bin/sleep 1; done; "
+            f"/bin/sh -c '/bin/touch {waiting_marker}; "
+            f"while [ ! -f {release_marker} ]; do /bin/sleep 1; done; "
             f"/bin/echo CHILD_FINISHED > {child_marker}' &\n"
             f"/bin/echo HOOK_DONE >> {pre_marker}\n"
         ),
@@ -570,9 +572,10 @@ def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
     }
     h.set_update_hooks(deployed_vm, [pre_hook, h.env_dump_hook(token, "post")])
     h.clear_hook_markers(deployed_vm, token)
-    deployed_vm.ssh("/bin/rm", "-f", child_marker, release_marker)
+    deployed_vm.ssh("/bin/rm", "-f", waiting_marker, child_marker, release_marker)
     h.wait_no_active_pfb_task(deployed_vm)  # a clean baseline — no prior pass in flight
     assert not h.hook_marker_exists(deployed_vm, pre_marker), "pre marker present before launch (stale state?)"
+    assert not h.hook_marker_exists(deployed_vm, waiting_marker), "waiting marker present before launch (stale state?)"
     assert not h.hook_marker_exists(deployed_vm, post_marker), "post marker present before launch (stale state?)"
     assert not h.hook_marker_exists(deployed_vm, child_marker), "child marker present before launch (stale state?)"
     assert not h.hook_marker_exists(deployed_vm, release_marker), "release marker present before launch (stale state?)"
@@ -589,6 +592,11 @@ def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
         # pre hook while the child remains blocked on the unreleased event.
         h.wait_until(
             lambda: h.hook_marker_exists(deployed_vm, post_marker),
+            timeout=30.0,
+            interval=1.0,
+        )
+        h.wait_until(
+            lambda: h.hook_marker_exists(deployed_vm, waiting_marker),
             timeout=30.0,
             interval=1.0,
         )
@@ -614,7 +622,7 @@ def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
         # path) — then let any pass settle before clearing.
         deployed_vm.ssh("/bin/touch", release_marker)
         h.wait_no_active_pfb_task(deployed_vm, timeout=30.0)
-        deployed_vm.ssh("/bin/rm", "-f", child_marker, release_marker)
+        deployed_vm.ssh("/bin/rm", "-f", waiting_marker, child_marker, release_marker)
         h.clear_update_hooks(deployed_vm)
         h.clear_hook_markers(deployed_vm, token)
 
@@ -658,13 +666,14 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
     token = "stream"
     stream_marker = f"STREAM_{token}_MARK"
     done_marker = f"DONE_{token}_MARK"
+    emitted_marker = h.hook_marker_path(token, "emitted")
     release_marker = h.hook_marker_path(token, "release")
     post_hook = {
         "script": f"hook_post_{token}_slow.sh",
         # Emit the marker FIRST (streams immediately if live), then hold the hook open until
         # release before the closing marker + exit.
         "_body": (
-            f"#!/bin/sh\n/bin/echo {stream_marker}\n"
+            f"#!/bin/sh\n/bin/echo {stream_marker}\n/bin/touch {emitted_marker}\n"
             f"while [ ! -f {release_marker} ]; do /bin/sleep 1; done\n"
             f"/bin/echo {done_marker}\n"
         ),
@@ -674,9 +683,10 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
         "timeout": "60",
     }
     h.set_update_hooks(deployed_vm, [post_hook])
-    deployed_vm.ssh("/bin/rm", "-f", release_marker)
+    deployed_vm.ssh("/bin/rm", "-f", emitted_marker, release_marker)
     h.wait_no_active_pfb_task(deployed_vm)  # clean baseline — no prior pass in flight
     assert not h.hook_marker_exists(deployed_vm, release_marker), "release marker present before launch (stale state?)"
+    assert not h.hook_marker_exists(deployed_vm, emitted_marker), "emitted marker present before launch (stale state?)"
     persisted_before = h.count_log_marker(deployed_vm, h.PFB_LOG, stream_marker)
     persisted_before_done = h.count_log_marker(deployed_vm, h.PFB_LOG, done_marker)
 
@@ -697,11 +707,11 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
             interval=1.0,
         )
 
-        # THE DISCRIMINATOR: while the hook waits for release, its leading marker must be in the
-        # PER-RUN log — proof the hook's output is routed there and streams. Pre-fix it went to
-        # the cumulative log only, so the per-run log would never see it.
+        # THE BARRIER: the script creates emitted_marker only after echo(1) has appended the
+        # leading marker. Once observed, the per-run log read is authoritative; elapsed time
+        # performs no assertion work.
         h.wait_until(
-            lambda: stream_marker in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout,
+            lambda: h.hook_marker_exists(deployed_vm, emitted_marker),
             timeout=30.0,
             interval=1.0,
         )
@@ -730,7 +740,7 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
             persisted_delta_done = h.count_log_marker(deployed_vm, h.PFB_LOG, done_marker) - persisted_before_done
         finally:
             h.clear_update_hooks(deployed_vm)
-            deployed_vm.ssh("/bin/rm", "-f", release_marker)
+            deployed_vm.ssh("/bin/rm", "-f", emitted_marker, release_marker)
         assert persisted_delta == 1, (
             f"hook marker {stream_marker!r} was persisted into {h.PFB_LOG} {persisted_delta} time(s) "
             "for one hook run (expected exactly 1 — pfb_persist_hook_output double-fired):\n"
