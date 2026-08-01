@@ -2956,7 +2956,7 @@ function pfb_global() {
 		}
 	}
 
-	$pfb['supp']		= pfb_cfg_toggle_read($pfb['ipconfig']['suppression'] ?? '');		// Enable Suppression
+	$pfb['supp']		= PfbConfig::read('ip/suppression');					// Enable Suppression (default on, issue #1907)
 	$pfb['cc']		= $pfb['ipconfig']['database_cc'] ?? '';		// Disable Country database CRON updates
 	$pfb['maxmind_locale']	= $pfb['ipconfig']['maxmind_locale']	?: 'en';	// MaxMind Localized Language setting
 	$pfb['asn_reporting']	= $pfb['ipconfig']['asn_reporting']	?: 'disabled';	// ASN Reporting
@@ -3008,7 +3008,7 @@ function pfb_global() {
 	$pfb['dnsbl_port_ssl']	= $pfb['dnsblconfig']['pfb_dnsport_ssl'];								// Lighttpd web server https port setting
 	$pfb['dnsbl_top1m']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['top1m_enable'] ?? '');							// TOP1M whitelist
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
-	$pfb['dnsbl_res_cache']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cache'] ?? '');							// DNSBL Option to backup/restore Resolver cache
+	$pfb['dnsbl_res_cache']	= PfbConfig::read('dnsbl/pfb_cache');							// DNSBL Option to backup/restore Resolver cache (default on, issue #1907)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
 	$pfb['dnsbl_global_log']= PfbConfig::read('dnsbl/global_log');							// Global Logging/Blocking mode (default '')
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
@@ -3017,8 +3017,8 @@ function pfb_global() {
 	// install/upgrade (issue #1921).
 	$pfb['dnsbl_lenient']	= PfbConfig::read('dnsbl/pfb_dnsbl_lenient');							// DNSBL scheme-parsing leniency (PfbToggle enum)
 
-	$pfb['dnsbl_py_reply']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_reply'] ?? '');			// DNSBL Resolver python DNS Reply logging
-	$pfb['dnsbl_hsts']	= PfbConfig::read('dnsbl/pfb_hsts');			// DNSBL Resolver python block HSTS via Null Blocking mode
+	$pfb['dnsbl_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');			// DNSBL Resolver python DNS Reply logging (default on, issue #1907)
+	$pfb['dnsbl_hsts']	= PfbConfig::read('dnsbl/pfb_hsts');			// DNSBL Resolver python block HSTS via Null Blocking mode (default on, issue #1907)
 	// ADR-08: IDN mode selector. PfbConfig::read() returns a PfbIdnMode enum via the
 	// registry adapter: 'on' -> All (preserves block-all-IDN on upgrade); 'confusable'
 	// -> Confusable; '' / 'off' / absent / the dropped 4.0.0-alpha 'all' -> Off. Downstream
@@ -11696,6 +11696,41 @@ function pfb_ip_in_allowlist($ip, array $allowlist) {
 	}
 
 	return FALSE;
+}
+
+
+// issue #1907: one-time upgrade migration disabling pfb_py_reply/pfb_hsts when a stored
+// 'on' was inert under pre-upgrade Unbound mode. Both were python-gated in 3.2
+// ($mode == 'enabled' && dnsbl_mode == 'dnsbl_python'), so a stored 'on' under Unbound
+// mode never actually took effect -- the #1907 default-on flip would otherwise silently
+// activate it on upgrade. MUST run before adr02-dnsbl-python-mode, which overwrites
+// dnsbl_mode and destroys the evidence this migration reads.
+//
+// $dconfig is the existing DNSBL-settings 'config/0' node. Guard: 'dnsbl_mode' must be
+// PRESENT and NOT 'dnsbl_python' -- key-present-and-non-python is the only reliable
+// pre-upgrade-Unbound-mode evidence. A fresh-4.0 install's registry-seeded section never
+// carries 'dnsbl_mode' at all (the registry pass seeds only registered keys, and
+// dnsbl_mode is unregistered), so an absent key must never be treated as pre-upgrade
+// evidence -- that would wrongly disable a fresh install's seeded default-on toggle.
+// Returns the updated config array to persist, or NULL when nothing should change.
+function pfb_python_gated_toggles_migrate($dconfig) {
+
+	if (!is_array($dconfig) || empty($dconfig)) {
+		return NULL;
+	}
+	if (!array_key_exists('dnsbl_mode', $dconfig) || $dconfig['dnsbl_mode'] === 'dnsbl_python') {
+		return NULL;
+	}
+
+	$changed = FALSE;
+	foreach (array('pfb_py_reply', 'pfb_hsts') as $key) {
+		if (($dconfig[$key] ?? '') === 'on') {
+			$dconfig[$key] = 'off';
+			$changed = TRUE;
+		}
+	}
+
+	return $changed ? $dconfig : NULL;
 }
 
 

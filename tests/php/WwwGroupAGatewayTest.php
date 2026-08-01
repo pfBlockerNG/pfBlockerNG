@@ -96,28 +96,32 @@ final class WwwGroupAGatewayTest extends TestCase
 	}
 
 	/**
-	 * Confirm fields left on section-array access: pfb_cache, pfb_py_reply, pfb_hsts.
-	 * Their registry defaults are '' but the DNSBL page used isset() ? ... : 'on'.
-	 * These were NOT changed (mismatch) — assert the registry default is '' (not 'on'),
-	 * proving the decision to keep the page-local default was correct.
+	 * issue #1907: pfb_cache, pfb_py_reply, pfb_hsts -- the #1907-class page/registry
+	 * divergence this closes. Their page-local `isset(...) ? ... : 'on'` defaults were
+	 * REMOVED and replaced by PfbConfig::read(); the registry default flipped from ''
+	 * to 'on' to match, closing the mismatch this test used to document (previously
+	 * the page and registry defaults disagreed, so the page-local default was
+	 * deliberately kept -- issue #1921 S3 resolves that by adopting the toggle
+	 * adapter and matching default, same as pfb_idn_block_malicious already had).
+	 *
+	 * Parity: absent key -> PfbConfig::read($key) === On (matches the prior page default).
 	 */
-	public function testDnsblPageLocalDefaultsNotRemovedWhenRegistryDefaultDiffers(): void
+	public function testDnsblPfbCachePfbPyReplyPfbHstsAbsentDefaultMatchesPriorPageDefault(): void
 	{
-		// pfb_cache: registry default = '' (mismatch with page default 'on').
+		// pfb_cache: registry default now 'on' (matches the removed page default).
 		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache'));
-		$pfb_cache_registry_default = PfbConfig::read('dnsbl/pfb_cache');
-		$this->assertSame('', $pfb_cache_registry_default, 'pfb_cache registry default is "" — page isset default "on" was correctly kept');
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_cache'),
+			'pfb_cache absent -> On (parity with prior isset default)');
 
-		// pfb_py_reply: registry default = '' (mismatch with page default 'on').
+		// pfb_py_reply: registry default now 'on' (matches the removed page default).
 		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply'));
-		$pfb_py_reply_registry_default = PfbConfig::read('dnsbl/pfb_py_reply');
-		$this->assertSame('', $pfb_py_reply_registry_default, 'pfb_py_reply registry default is "" — page isset default "on" was correctly kept');
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_py_reply'),
+			'pfb_py_reply absent -> On (parity with prior isset default)');
 
-		// pfb_hsts: registry default = '' (mismatch with page default 'on').
+		// pfb_hsts: registry default now 'on' (matches the removed page default).
 		$this->assertNull(config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts'));
-		$pfb_hsts_registry_default = PfbConfig::read('dnsbl/pfb_hsts');
-		$this->assertInstanceOf(PfbToggle::class, $pfb_hsts_registry_default, 'pfb_hsts is toggle-adapted');
-		$this->assertSame(PfbToggle::Off, $pfb_hsts_registry_default, 'pfb_hsts registry default is Off ("") — page isset default "on" was correctly kept');
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_hsts'),
+			'pfb_hsts absent -> On (parity with prior isset default)');
 	}
 
 	// -----------------------------------------------------------------------
@@ -305,8 +309,11 @@ final class WwwGroupAGatewayTest extends TestCase
 	}
 
 	/**
-	 * IP section: suppression toggled from 'on' → '' round-trips correctly.
-	 * Asserts the before-state ('on') and the after-state ('') are distinct.
+	 * IP section: suppression toggled from 'on' -> 'off' round-trips correctly. issue
+	 * #1907 adopted the toggle adapter (default on) -- mirrors
+	 * testDnsblPfbIdnBlockMaliciousOffRoundTrips: a staged '' is now the not-configured
+	 * state and resolves to the registered default 'on', which is exactly why the
+	 * page's save handler stages the explicit 'off' token instead.
 	 */
 	public function testIpSectionSuppressionOffRoundTrips(): void
 	{
@@ -316,11 +323,16 @@ final class WwwGroupAGatewayTest extends TestCase
 		PfbConfig::writeSection($section, ['suppression' => 'on']);
 		$this->assertSame('on', PfbConfig::readSection($section)['suppression'], 'suppression starts as "on"');
 
-		// When: write '' (disabled).
-		PfbConfig::writeSection($section, ['suppression' => '']);
+		// When: write the explicit 'off' (the page's unchecked-save token since #1907).
+		PfbConfig::writeSection($section, ['suppression' => 'off']);
 
-		// Then: reads back as ''.
-		$this->assertSame('', PfbConfig::readSection($section)['suppression'], 'suppression "" round-trips identically');
+		// Then: reads back as 'off' -- the disabled state survives.
+		$this->assertSame('off', PfbConfig::readSection($section)['suppression'], "suppression 'off' round-trips");
+
+		// And a staged '' is the not-configured state: it resolves to the registered
+		// default 'on' -- which is exactly why the page must stage the explicit token.
+		PfbConfig::writeSection($section, ['suppression' => '']);
+		$this->assertSame('on', PfbConfig::readSection($section)['suppression'], "a staged '' resolves to the default-on");
 	}
 
 	// -----------------------------------------------------------------------

@@ -332,9 +332,9 @@
     },
     "pfb_cache": {
         "section": "installedpackages/pfblockerngdnsblsettings/config/0",
-        "default": "",
-        "read_adapter": null,
-        "write_adapter": null
+        "default": "on",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
     },
     "pfb_cache_flush": {
         "section": "installedpackages/pfblockerngdnsblsettings/config/0",
@@ -356,13 +356,13 @@
     },
     "pfb_py_reply": {
         "section": "installedpackages/pfblockerngdnsblsettings/config/0",
-        "default": "",
-        "read_adapter": null,
-        "write_adapter": null
+        "default": "on",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
     },
     "pfb_hsts": {
         "section": "installedpackages/pfblockerngdnsblsettings/config/0",
-        "default": "",
+        "default": "on",
         "read_adapter": "pfb_cfg_toggle_read",
         "write_adapter": "pfb_cfg_toggle_write"
     },

@@ -246,18 +246,16 @@ final class RegistryPassTest extends TestCase
 
 	/**
 	 * Row 9: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
-	 * '' -> 'off'; 'on' -> 'on'.
+	 * issue #1907 owner decision: default flipped to 'on' (the de-facto page default
+	 * since 3.2). '' -> 'off' (the grandfather map's one entry, unchanged -- a 3.2
+	 * deliberate uncheck still survives upgrade); 'on' -> 'on'; absent (OLDCFG and
+	 * NEWCFG alike) -> 'on'.
 	 *
-	 * DEVIATION from the row's literal "absent -> '' " text: these four keys' registered
-	 * default ('') is ITSELF one of their own grandfather map's non-ABSENT inputs
-	 * (['' => 'off']). Seeding the raw '' verbatim would satisfy this one call, but the
-	 * very next pass -- once the section is no longer empty -- would see that '' as a
-	 * PRESENT value and immediately remap it to 'off', breaking the mandatory
-	 * verification-4 idempotency (fixture 1's fresh-install second-pass-is-empty proof).
-	 * pfb_registry_pass() closes that hole by stabilising the default through the map's
-	 * own non-ABSENT entries before seeding it -- so "absent" here seeds the already-
-	 * stable 'off', not the raw, about-to-be-remapped ''. See pfb_registry_pass()'s
-	 * docblock ("NEWCFG" paragraph, shared with OLDCFG's absent-seed branch).
+	 * OLDCFG-absent seeds 'on' because this map carries no PFB_GF_ABSENT entry (only
+	 * '' => 'off'), so the OLDCFG absent-seed branch falls straight to the stabilised
+	 * default -- see pfb_registry_pass()'s docblock. Stabilisation is a no-op here: 'on'
+	 * is not itself one of the map's non-ABSENT inputs (only '' is), unlike before this
+	 * default flip when the default ('') collided with the map's own '' => 'off' entry.
 	 */
 	public function testGrandfatherEmptyStringToOffGroup(): void
 	{
@@ -272,16 +270,21 @@ final class RegistryPassTest extends TestCase
 			$empty = pfb_registry_pass([$section => $populated + [$key => '']]);
 			$this->assertSame('off', $empty[$section][$key] ?? NULL, "{$key}: '' must map to 'off'");
 
-			$absent = pfb_registry_pass([$section => $populated]);
-			$this->assertSame('off', $absent[$section][$key] ?? '__missing__',
-				"{$key}: absent must seed the STABILISED default -- the raw '' default would "
-				. 'be remapped to \'off\' by the very next pass, violating idempotency');
+			$oldcfg_absent = pfb_registry_pass([$section => $populated]);
+			$this->assertSame('on', $oldcfg_absent[$section][$key] ?? '__missing__',
+				"{$key}: OLDCFG absent must seed the registry default 'on' -- this map carries no "
+				. 'PFB_GF_ABSENT entry');
+
+			$newcfg_absent = pfb_registry_pass([$section => []]);
+			$this->assertSame('on', $newcfg_absent[$section][$key] ?? '__missing__',
+				"{$key}: NEWCFG absent (fresh install) must seed the registry default 'on'");
 
 			$on = pfb_registry_pass([$section => $populated + [$key => 'on']]);
 			$this->assertSame('on', $on[$section][$key] ?? NULL, "{$key}: 'on' must be left untouched");
 
 			$this->assertSecondPassIsEmpty([$section => $populated + [$key => '']]);
 			$this->assertSecondPassIsEmpty([$section => $populated]);
+			$this->assertSecondPassIsEmpty([$section => []]);
 		}
 	}
 

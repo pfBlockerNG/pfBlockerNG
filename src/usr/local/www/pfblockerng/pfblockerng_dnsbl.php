@@ -62,11 +62,13 @@ $pconfig['pfb_dnsbl_rule']	= $pfb['dconfig']['pfb_dnsbl_rule']			?: '';
 $pconfig['dnsbl_allow_int']	= pfb_csv_list($pfb['dconfig']['dnsbl_allow_int'] ?? NULL);
 $pconfig['global_log']		= $pfb['dconfig']['global_log']				?: '';
 $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default.php';
-$pconfig['pfb_cache']		= isset($pfb['dconfig']['pfb_cache'])			? $pfb['dconfig']['pfb_cache'] : 'on';
+// Default 'on' owned by the registry (ADR-29, issue #1907); PfbConfig::read applies it
+// when absent.
+$pconfig['pfb_cache']		= PfbConfig::read('dnsbl/pfb_cache');
 $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
 
-$pconfig['pfb_py_reply']	= isset($pfb['dconfig']['pfb_py_reply'])		? $pfb['dconfig']['pfb_py_reply'] : 'on';
-$pconfig['pfb_hsts']		= isset($pfb['dconfig']['pfb_hsts'])			? $pfb['dconfig']['pfb_hsts'] : 'on';
+$pconfig['pfb_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');
+$pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
 // ADR-08: IDN mode selector (Off | All-IDN | Confusable). PfbConfig::read() returns a
 // PfbIdnMode enum (legacy 'on' -> All; alpha-only 'all' and '' -> Off); toStored() gives the
 // canonical config token ('on' | 'confusable' | 'off') that the <select> options below carry.
@@ -80,7 +82,7 @@ $pconfig['pfb_regex']		= $pfb['dconfig']['pfb_regex']				?: '';
 $pconfig['pfb_regex_cap']	= $pfb['dconfig']['pfb_regex_cap']			?: '';
 $pconfig['pfb_cname']		= $pfb['dconfig']['pfb_cname']				?: '';
 // ADR-22: lenient scheme parsing. Absent = unchecked (strict) for new installs; existing
-// installs are migrated to 'on' on upgrade (pfb_dnsbl_lenient_migrate).
+// installs are grandfathered to 'on' by the registry pass at install/upgrade (issue #1921).
 $pconfig['pfb_dnsbl_lenient']	= $pfb['dconfig']['pfb_dnsbl_lenient']			?: '';
 $pconfig['pfb_noaaaa']		= $pfb['dconfig']['pfb_noaaaa']				?: '';
 $pconfig['pfb_gp']		= $pfb['dconfig']['pfb_gp']				?: '';
@@ -837,11 +839,15 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_dnsbl_rule']	= pfb_filter($_POST['pfb_dnsbl_rule'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['dnsbl_allow_int']	= implode(',', (array)$_POST['dnsbl_allow_int'])			?: '';
 			$pfb['dconfig']['global_log']		= $_POST['global_log']							?: '';
-			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			// issue #1907: stage the explicit token -- checkbox-absent means Off, and a
+			// staged '' would resolve to this field's default-ON at the gateway.
+			$pfb['dconfig']['pfb_cache']		= (($_POST['pfb_cache'] ?? '') === 'on') ? 'on' : 'off';
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
-			$pfb['dconfig']['pfb_py_reply']		= pfb_filter($_POST['pfb_py_reply'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			// issue #1907: stage the explicit token -- checkbox-absent means Off, and a
+			// staged '' would resolve to these fields' default-ON at the gateway.
+			$pfb['dconfig']['pfb_py_reply']		= (($_POST['pfb_py_reply'] ?? '') === 'on') ? 'on' : 'off';
+			$pfb['dconfig']['pfb_hsts']		= (($_POST['pfb_hsts'] ?? '') === 'on') ? 'on' : 'off';
 			// ADR-08: IDN mode selector. Validate the raw word, then canonicalise via the
 			// PfbIdnMode adapter to the stored config token ('on' = All | 'confusable' | 'off').
 			$pfb_idn_mode = pfb_filter($_POST['pfb_idn'], PFB_FILTER_WORD, 'dnsbl');

@@ -50,8 +50,9 @@ $options_pfb_alias_delta_mode	= [ 'auto' => 'Auto (delta for small churn, replac
 $pconfig['pfb_alias_delta_mode']	= (string) PfbConfig::read('gen/pfb_alias_delta_mode')->toStored();
 $pconfig['pfb_alias_delta_batch']	= pfb_alias_delta_batch_clamp((string) PfbConfig::read('gen/pfb_alias_delta_batch'));
 
-// Default to 'on' for new installation only
-$pconfig['suppression']		= isset($pfb['iconfig']['suppression'])			? $pfb['iconfig']['suppression'] : 'on';
+// Default 'on' owned by the registry (ADR-29, issue #1907); PfbConfig::read applies it
+// when absent.
+$pconfig['suppression']		= PfbConfig::read('ip/suppression');
 
 $pconfig['enable_log']		= $pfb['iconfig']['enable_log']				?: '';
 $pconfig['enable_rdns']		= $pfb['iconfig']['enable_rdns']				?: '';
@@ -243,7 +244,9 @@ if ($_POST) {
 
 			$pfb['iconfig']['enable_dup']		= pfb_filter($_POST['enable_dup'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['enable_agg']		= pfb_filter($_POST['enable_agg'], PFB_FILTER_ON_OFF, 'ip')	?: '';
-			$pfb['iconfig']['suppression']		= pfb_filter($_POST['suppression'], PFB_FILTER_ON_OFF, 'ip')	?: '';
+			// issue #1907: stage the explicit token -- checkbox-absent means Off, and a
+			// staged '' would resolve to this field's default-ON at the gateway.
+			$pfb['iconfig']['suppression']		= (($_POST['suppression'] ?? '') === 'on') ? 'on' : 'off';
 			$pfb['iconfig']['enable_log']		= pfb_filter($_POST['enable_log'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['enable_rdns']		= pfb_filter($_POST['enable_rdns'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['ip_placeholder']	= $_POST['ip_placeholder']					?: '127.1.7.7';
@@ -416,7 +419,7 @@ $section->addInput(new Form_Checkbox(
 	'suppression',
 	'Suppression',
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['suppression']) === PfbToggle::On,
+	$pconfig['suppression'] === PfbToggle::On,
 	'on'
 ))->setHelp('Default enabled. This will prevent Selected IPs (and private/reserved addresses) from being blocked. For IPv4 lists (/8 through /32) and IPv6 lists (/32 through /128).'
 	. '<div class="infoblock">'

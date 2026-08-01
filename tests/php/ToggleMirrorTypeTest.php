@@ -40,6 +40,11 @@ final class ToggleMirrorTypeTest extends TestCase
 		'dnsbl_vip_auto',
 		'dnsbl_nonat',
 		'dnsbl_hsts',
+		// issue #1907 (#1921 S3): moved from ToggleSectionMirrorTypeTest -- now sourced
+		// through PfbConfig::read() (registered, default 'on'), not a raw section reach.
+		'dnsbl_res_cache',
+		'dnsbl_py_reply',
+		'supp',
 		'unbound_state',
 	];
 

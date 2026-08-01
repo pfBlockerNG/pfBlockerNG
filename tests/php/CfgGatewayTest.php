@@ -79,6 +79,10 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl/pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
+			// issue #1907: adopted onto the toggle adapter (default flipped to 'on').
+			'dnsbl/pfb_cache'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
+			'dnsbl/pfb_py_reply'     => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply',
+			'ip/suppression'         => 'installedpackages/pfblockerngipsettings/config/0/suppression',
 		];
 
 		foreach ($toggle_fields as $key => $path) {
@@ -100,14 +104,18 @@ final class CfgGatewayTest extends TestCase
 
 	public function testToggleFieldsRoundTripOff(): void
 	{
-		// pfb_keep is default-on — see testPfbKeepRoundTrip*() below.
+		// pfb_keep is default-on — see testPfbKeepRoundTrip*() below. issue #1907:
+		// dnsbl/pfb_hsts, dnsbl/pfb_cache, dnsbl/pfb_py_reply, ip/suppression joined
+		// that same default-on class -- a stored '' no longer resolves to Off for any
+		// of the four, so they are excluded here too (see testParityPfbHstsAbsentYieldsOff
+		// and its pfb_cache/pfb_py_reply siblings in PfbGlobalParityTest, and
+		// testIpSuppressionAbsentKeyReturnsOnDefault above).
 		$toggle_fields = [
 			'gen/enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
 			'dnsbl/pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
 			'dnsbl/pfb_dnsvip_auto'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
 			'dnsbl/pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
-			'dnsbl/pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
@@ -584,6 +592,36 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame(PfbToggle::On, $result);
 	}
 
+	/**
+	 * issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
+	 * same default-on shape as pfb_idn_block_malicious/pfb_keep above. Absent AND a
+	 * stored '' both resolve to On (the '' ≡ absent gateway identity -- ADR-28); a
+	 * stored 'off'/'on' round-trip losslessly.
+	 */
+	public function testIssue1907FieldsResolveAbsentAndEmptyStringToOnDefault(): void
+	{
+		$fields = [
+			'dnsbl/pfb_cache'    => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
+			'dnsbl/pfb_py_reply' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply',
+			'dnsbl/pfb_hsts'     => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'ip/suppression'     => 'installedpackages/pfblockerngipsettings/config/0/suppression',
+		];
+
+		foreach ($fields as $key => $path) {
+			$this->assertNull(config_get_path($path), "before: {$key} must be absent");
+			$this->assertSame(PfbToggle::On, PfbConfig::read($key), "{$key}: absent -> On (default)");
+
+			$this->seedConfig($path, '');
+			$this->assertSame(PfbToggle::On, PfbConfig::read($key), "{$key}: stored '' -> On (== absent)");
+
+			$this->seedConfig($path, 'off');
+			$this->assertSame(PfbToggle::Off, PfbConfig::read($key), "{$key}: stored 'off' -> Off");
+
+			$this->seedConfig($path, 'on');
+			$this->assertSame(PfbToggle::On, PfbConfig::read($key), "{$key}: stored 'on' -> On");
+		}
+	}
+
 	// -----------------------------------------------------------------------
 	// ADR-53 — v4suppression (plain base64 blob; IPv4 suppression customlist)
 	// -----------------------------------------------------------------------
@@ -704,21 +742,21 @@ final class CfgGatewayTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * ip/suppression absent key returns the registered default '' -- NOT the
-	 * page's 'on' render fallback. pfblockerng_ip.php keeps its own
-	 * isset(...) ? ... : 'on' rendering (the #1907-class page/registry
-	 * divergence); the 'on'-default + grandfather decision is deferred to #1921.
+	 * ip/suppression absent key returns the registered default PfbToggle::On -- issue
+	 * #1907 owner decision: this key now carries the toggle adapter, default 'on' (the
+	 * de-facto page default since 3.2, matching pfblockerng_ip.php's own
+	 * isset(...) ? ... : 'on' render fallback -- the #1907-class page/registry
+	 * divergence this closes).
 	 *
 	 * Scenario:
-	 *   Background: ip/suppression is plain (NULL/NULL adapters), default ''.
+	 *   Background: ip/suppression carries the toggle adapter, default 'on'.
 	 *     Given no stored value.
 	 *     When PfbConfig::read('ip/suppression').
-	 *     Then '' is returned (registered default).
+	 *     Then PfbToggle::On is returned (registered default).
 	 *
-	 * Red->green: before this step, 'ip/suppression' was not registered ->
-	 *   PfbConfig::read('ip/suppression') threw InvalidArgumentException.
+	 * Red->green: before this step, 'ip/suppression' resolved to the plain default ''.
 	 */
-	public function testIpSuppressionAbsentKeyReturnsDefaultEmptyString(): void
+	public function testIpSuppressionAbsentKeyReturnsOnDefault(): void
 	{
 		$path = 'installedpackages/pfblockerngipsettings/config/0/suppression';
 
@@ -726,7 +764,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertNull(config_get_path($path), 'before: ip suppression must be absent');
 
 		// When/Then.
-		$this->assertSame('', PfbConfig::read('ip/suppression'), 'ip/suppression absent -> ""');
+		$this->assertSame(PfbToggle::On, PfbConfig::read('ip/suppression'), 'ip/suppression absent -> On (default)');
 	}
 
 	/**
@@ -773,7 +811,7 @@ final class CfgGatewayTest extends TestCase
 			"'ip/suppression' and 'dnsbl/suppression' must resolve to different config.xml paths");
 
 		PfbConfig::writeSystem('ip/suppression', 'on');
-		$this->assertSame('on', PfbConfig::read('ip/suppression'));
+		$this->assertSame(PfbToggle::On, PfbConfig::read('ip/suppression'));
 		$this->assertSame('', PfbConfig::read('dnsbl/suppression'), 'dnsbl/suppression stays at its own default');
 	}
 
@@ -2813,6 +2851,12 @@ final class CfgGatewayTest extends TestCase
 	 * an alias via PFB_SECTIONS and joined onto the bare key. Iterates the
 	 * FIXTURE, never the live registry -- additions to the registry stay
 	 * legal; only a removal or a changed field on an existing entry fails.
+	 *
+	 * issue #1907: the fixture pins the #1931 re-key TRANSITION (that flipping bare
+	 * keys to alias/bare paths changed nothing else), not future default-value
+	 * decisions -- so pfb_cache/pfb_py_reply/pfb_hsts's rows were updated in step with
+	 * the registry (default '' -> 'on'; pfb_cache/pfb_py_reply additionally gained the
+	 * toggle adapter pfb_hsts already carried) rather than frozen against it.
 	 */
 	public function testPathKeyedRegistryMatchesPre1931ParityFixture(): void
 	{

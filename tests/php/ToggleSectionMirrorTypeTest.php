@@ -29,6 +29,11 @@ use PHPUnit\Framework\TestCase;
  * same pass but are not asserted here — invoking that function off-box is not viable, so
  * their coverage rides the existing apply-path suites.
  *
+ * issue #1907 (#1921 S3): dnsbl_res_cache and dnsbl_py_reply moved OUT of this file --
+ * pfb_global() now sources both through PfbConfig::read() (registered, default 'on'), so
+ * their absent-key polarity is no longer PfbToggle::Off; they belong to ToggleMirrorTypeTest
+ * now, alongside dnsbl_hsts.
+ *
  * Seeding mirrors DnsblVipDisableNoticeTest::seedGlobalPrereqs().
  */
 #[CoversFunction('pfb_global')]
@@ -40,8 +45,6 @@ final class ToggleSectionMirrorTypeTest extends TestCase
 	 */
 	private const SECTION_MIRRORS = [
 		'dnsbl_top1m'     => 'top1m_enable',
-		'dnsbl_res_cache' => 'pfb_cache',
-		'dnsbl_py_reply'  => 'pfb_py_reply',
 		'dnsbl_regex'     => 'pfb_regex',
 		'dnsbl_regex_cap' => 'pfb_regex_cap',
 		'dnsbl_cname'     => 'pfb_cname',

@@ -12,9 +12,12 @@ use PHPUnit\Framework\TestCase;
  * SAME effective value the OLD pfb_global() code produced (registered default
  * == prior per-site default).
  *
- * The ONLY intentional divergence is pfb_keep: the OLD code used `?? 'on'`
- * (PHP null-coalesce), which the registry formalises as default 'on'. Both
- * yield 'on'; the test asserts the repaired value and documents the #281 fix.
+ * The intentional divergences are the #281/#1907 default-repair class: pfb_keep (OLD
+ * code used `?? 'on'`, PHP null-coalesce) and, per the #1907 owner decision,
+ * pfb_hsts/pfb_cache/pfb_py_reply (OLD code called the toggle adapter directly on the
+ * raw section value, bypassing the gateway's registry default entirely). All four now
+ * default to On, formalising what was already the de-facto page default since 3.2;
+ * each test below asserts the repaired value and documents its origin.
  *
  * Scenario (all tests):
  *   Background: config.xml is empty — no pfblockerng* sections.
@@ -305,9 +308,15 @@ final class PfbGlobalParityTest extends TestCase
 	}
 
 	/**
-	 * pfb_hsts: OLD = $pfb['dnsblconfig']['pfb_hsts'] (null when absent).
-	 * Via gateway: PfbConfig::read('dnsbl/pfb_hsts')->value = '' (PfbToggle::Off, default '').
-	 * PARITY: null and '' both falsy; downstream checks == 'on'.
+	 * pfb_hsts (issue #1907 DEFAULT REPAIR): OLD = $pfb['dnsblconfig']['pfb_hsts']
+	 * (null when absent) -> effectively Off. Via gateway (owner decision, #1907): the
+	 * registry default flipped to 'on' -- the de-facto page default since 3.2
+	 * (pfblockerng_dnsbl.php's own isset(...) ? ... : 'on' render fallback), so
+	 * PfbConfig::read('dnsbl/pfb_hsts') now resolves absent to PfbToggle::On.
+	 * DIVERGENCE (intentional, same class as #281's pfb_keep repair below): the
+	 * registry pass's ['' => 'off'] grandfather preserves a 3.2 deliberate uncheck for
+	 * existing installs (RegistryPassTest row 9); a genuinely fresh install and the
+	 * runtime both now default to On.
 	 */
 	public function testParityPfbHstsAbsentYieldsOff(): void
 	{
@@ -317,8 +326,54 @@ final class PfbGlobalParityTest extends TestCase
 
 		$result = PfbConfig::read('dnsbl/pfb_hsts');
 
-		$this->assertSame(PfbToggle::Off, $result);
-		$this->assertSame('off', $result->value, 'pfb_hsts absent -> off token');
+		$this->assertSame(PfbToggle::On, $result, 'pfb_hsts absent -> On (issue #1907 default repair)');
+		$this->assertSame('on', $result->value, 'pfb_hsts absent -> on token');
+	}
+
+	/**
+	 * pfb_cache (issue #1907 DEFAULT REPAIR): OLD pfb_global() =
+	 * pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cache'] ?? '') -- a DIRECT adapter
+	 * call bypassing the gateway entirely, so absent/'' fell to the adapter's bare
+	 * parse-fallback (Off), never the registry default. Post-#1907, pfb_global() routes
+	 * this key through PfbConfig::read('dnsbl/pfb_cache'), whose registry default is
+	 * now 'on' -- the de-facto page default since 3.2 (pfblockerng_dnsbl.php's own
+	 * isset(...) ? ... : 'on' render fallback). DIVERGENCE (intentional): adopting the
+	 * gateway repairs the same #281-class defect pfb_keep already had fixed.
+	 */
+	public function testParityPfbCacheAbsentYieldsOn(): void
+	{
+		$this->assertNull(
+			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache')
+		);
+
+		// Before: the OLD direct-adapter call (bypassing the gateway) fell to Off.
+		$old_result = pfb_cfg_toggle_read('');
+		$this->assertSame(PfbToggle::Off, $old_result, 'before: the pre-#1907 direct adapter call fell to Off');
+
+		// When: gateway read (the #1907-repaired registry default).
+		$result = PfbConfig::read('dnsbl/pfb_cache');
+
+		// Then: On -- the registry default, adopted at pfb_global()'s assignment site.
+		$this->assertSame(PfbToggle::On, $result, 'pfb_cache absent -> On (issue #1907 default repair)');
+		$this->assertSame('on', $result->value, 'pfb_cache absent -> on token');
+	}
+
+	/**
+	 * pfb_py_reply (issue #1907 DEFAULT REPAIR): same shape as pfb_cache above.
+	 */
+	public function testParityPfbPyReplyAbsentYieldsOn(): void
+	{
+		$this->assertNull(
+			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply')
+		);
+
+		$old_result = pfb_cfg_toggle_read('');
+		$this->assertSame(PfbToggle::Off, $old_result, 'before: the pre-#1907 direct adapter call fell to Off');
+
+		$result = PfbConfig::read('dnsbl/pfb_py_reply');
+
+		$this->assertSame(PfbToggle::On, $result, 'pfb_py_reply absent -> On (issue #1907 default repair)');
+		$this->assertSame('on', $result->value, 'pfb_py_reply absent -> on token');
 	}
 
 	/**
