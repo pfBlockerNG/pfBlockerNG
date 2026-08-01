@@ -420,20 +420,104 @@ class _QueryHarness:
         monkeypatch.setattr(P, "RELOAD_POLL_INTERVAL", 0.05)
         P.pfb_query_stop = threading.Event()
         self.thread: Any = None
+        self._condition = threading.Condition(threading.RLock())
+        self._read_observations: list[bytes] = []
+        self._replies: list[dict[str, Any]] = []
+        original_read_record = P._control_read_record
+        original_write_reply = P._pfb_write_query_reply
+
+        def observed_read_record(path: str) -> dict[str, Any] | None:
+            with self._condition:
+                try:
+                    with open(path, "rb") as fh:
+                        raw = fh.read()
+                except OSError:
+                    raw = None
+                record = original_read_record(path)
+                if raw is not None:
+                    self._read_observations.append(raw)
+                    self._condition.notify_all()
+                return record
+
+        def observed_write_reply(reply: dict[str, Any]) -> None:
+            with self._condition:
+                before = self._reply_file_identity()
+                original_write_reply(reply)
+                after = self._reply_file_identity()
+                if before is not None and after == before:
+                    return
+                try:
+                    with open(P.pfb["pfb_py_query_reply"], encoding="utf-8") as fh:
+                        published = json.load(fh)
+                except (OSError, ValueError):
+                    return
+                if published != reply:
+                    return
+                self._replies.append(dict(reply))
+                self._condition.notify_all()
+
+        monkeypatch.setattr(P, "_control_read_record", observed_read_record)
+        monkeypatch.setattr(P, "_pfb_write_query_reply", observed_write_reply)
 
     def publish(self, record: dict[str, Any]) -> None:
-        tmp = self.channel + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(record))
-        os.replace(tmp, self.channel)
+        self._write_raw(json.dumps(record))
 
     def write_raw(self, raw: str) -> None:
         """Write RAW (possibly non-JSON) content straight to the channel -- for the
         hostile-input rows (malformed JSON, non-dict, empty, oversized junk)."""
+        self._write_raw(raw)
+
+    def _write_raw_locked(self, raw: str) -> None:
         tmp = self.channel + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(raw)
         os.replace(tmp, self.channel)
+
+    def _write_raw(self, raw: str) -> None:
+        with self._condition:
+            self._write_raw_locked(raw)
+
+    def _wait_for(self, predicate: Any, timeout: float, message: str) -> Any:
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while not predicate():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not self._condition.wait(remaining):
+                    raise RuntimeError(f"stuck/environment: {message}")
+            return predicate()
+
+    def _reply_file_identity(self) -> tuple[int, int] | None:
+        path = P.pfb.get("pfb_py_query_reply")
+        if not isinstance(path, str) or not path:
+            return None
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return None
+        return stat.st_dev, stat.st_ino
+
+    def wait_consumed(self, raw: str, *, after: int = 0, timeout: float = 3.0) -> int:
+        expected = raw.encode("utf-8")
+
+        def consumed() -> bool:
+            return any(observed == expected for observed in self._read_observations[after:])
+
+        self._wait_for(consumed, timeout, f"request bytes were not consumed: {expected[:80]!r}")
+        with self._condition:
+            return next(i for i, observed in enumerate(self._read_observations[after:], after) if observed == expected)
+
+    def publish_and_wait_consumed(self, record: dict[str, Any], *, timeout: float = 3.0) -> int:
+        raw = json.dumps(record)
+        with self._condition:
+            before = len(self._read_observations)
+            self._write_raw_locked(raw)
+        return self.wait_consumed(raw, after=before, timeout=timeout)
+
+    def write_raw_and_wait_consumed(self, raw: str, *, timeout: float = 3.0) -> int:
+        with self._condition:
+            before = len(self._read_observations)
+            self._write_raw_locked(raw)
+        return self.wait_consumed(raw, after=before, timeout=timeout)
 
     def read_reply(self) -> dict[str, Any] | None:
         try:
@@ -453,14 +537,21 @@ class _QueryHarness:
         self.thread = threading.Thread(name="pfb_query_watcher_test", target=P.pfb_query_watcher, daemon=True)
         self.thread.start()
 
-    def wait_reply(self, req_id: str, timeout: float = 3.0) -> dict[str, Any] | None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            rec = self.read_reply()
-            if rec is not None and rec.get("id") == req_id:
-                return rec
-            time.sleep(0.01)
-        return None
+    def reply_count(self) -> int:
+        with self._condition:
+            return len(self._replies)
+
+    def replies_since(self, after: int = 0) -> list[dict[str, Any]]:
+        with self._condition:
+            return [dict(reply) for reply in self._replies[after:]]
+
+    def wait_reply(self, req_id: str, timeout: float = 3.0, *, after: int = 0) -> dict[str, Any]:
+        def reply_written() -> bool:
+            return any(reply.get("id") == req_id for reply in self._replies[after:])
+
+        self._wait_for(reply_written, timeout, f"reply was not written for request id {req_id!r}")
+        with self._condition:
+            return next(reply for reply in self._replies[after:] if reply.get("id") == req_id)
 
     def stop_join(self) -> bool:
         """Bounded, sliced join (mirrors _ControlHarness.stop_join) so CPU contention
@@ -533,6 +624,26 @@ def _seed_blocked_domain(q: str) -> None:
     P.feedGroupIndexDB[0] = {"feed": "TestFeed", "group": "TestGroup"}
 
 
+def _assert_hostile_no_reply_then_barrier(
+    h: _QueryHarness,
+    *,
+    barrier_id: str,
+    barrier_domain: str,
+    records: tuple[dict[str, Any], ...] = (),
+    raws: tuple[str, ...] = (),
+) -> None:
+    before_replies = h.reply_count()
+    for record in records:
+        h.publish_and_wait_consumed(record)
+    for raw in raws:
+        h.write_raw_and_wait_consumed(raw)
+
+    barrier = {"id": barrier_id, "domain": barrier_domain, "qtype": "A"}
+    h.publish(barrier)
+    barrier_reply = h.wait_reply(barrier_id, after=before_replies)
+    assert h.replies_since(before_replies) == [barrier_reply]
+
+
 # --------------------------------------------------------------------------- #
 # Axis 4 -- watcher lifecycle.
 # --------------------------------------------------------------------------- #
@@ -568,6 +679,21 @@ class TestQueryWatcherLoop:
         assert h.wait_reply("req3") is not None
         assert not os.path.exists(h.reply_path + ".tmp")
 
+    def test_failed_reply_write_is_not_reported_as_published(self, query_harness: _QueryHarness) -> None:
+        h = query_harness
+        P.pfb["pfb_py_query_reply"] = h.reply_path + ".missing/reply"
+        h.start()
+        h.publish_and_wait_consumed({"id": "write-fail", "domain": "clean.uuidquery2003.com", "qtype": "A"})
+        with pytest.raises(RuntimeError, match="stuck/environment"):
+            h.wait_reply("write-fail", timeout=0)
+        assert h.replies_since() == []
+
+        before_barrier = h.reply_count()
+        P.pfb["pfb_py_query_reply"] = h.reply_path
+        h.publish({"id": "write-success-barrier", "domain": "barrier.uuidquery2003.com", "qtype": "A"})
+        barrier_reply = h.wait_reply("write-success-barrier", after=before_barrier)
+        assert h.replies_since(before_barrier) == [barrier_reply]
+
     def test_identical_record_answered_once_changed_record_reanswered(
         self, query_harness: _QueryHarness, monkeypatch: Any
     ) -> None:
@@ -587,17 +713,14 @@ class TestQueryWatcherLoop:
 
         h.publish({"id": "dup1", "domain": q1, "qtype": "A"})
         assert h.wait_reply("dup1") is not None
-        time.sleep(0.2)
         assert len(calls) == 1  # answered once
 
-        h.publish({"id": "dup1", "domain": q1, "qtype": "A"})  # byte-identical redelivery
-        time.sleep(0.3)
+        first_reply = h.reply_count()
+        h.publish_and_wait_consumed({"id": "dup1", "domain": q1, "qtype": "A"})  # byte-identical redelivery
         assert len(calls) == 1  # settle: NOT re-answered
 
-        h.publish({"id": "dup1", "domain": q2, "qtype": "A"})  # same id, NEW domain
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline and len(calls) < 2:
-            time.sleep(0.01)
+        h.publish_and_wait_consumed({"id": "dup1", "domain": q2, "qtype": "A"})  # same id, NEW domain
+        h.wait_reply("dup1", after=first_reply)  # changed record is answered again
         assert len(calls) == 2  # a changed record IS re-answered
 
     def test_preexisting_request_answered_at_startup(self, query_harness: _QueryHarness) -> None:
@@ -619,7 +742,6 @@ class TestQueryWatcherLoop:
         before_mtime = os.stat(h.channel).st_mtime
         h.start()
         assert h.wait_reply("ro1") is not None
-        time.sleep(0.2)
         assert os.path.exists(h.channel)  # never deleted
         assert open(h.channel, "rb").read() == before_bytes  # never rewritten
         assert os.stat(h.channel).st_mtime == before_mtime
@@ -648,16 +770,16 @@ class TestQueryWatcherLoop:
 
         # The poison request raises inside the watcher; it must get NO reply and NOT
         # take the thread down with it.
-        h.publish({"id": "poison1", "domain": poison, "qtype": "A"})
-        time.sleep(0.3)
-        assert h.wait_reply("poison1", timeout=0.5) is None
+        before_replies = h.reply_count()
+        h.publish_and_wait_consumed({"id": "poison1", "domain": poison, "qtype": "A"})
         live = [th for th in threading.enumerate() if th.name == "pfb_query_watcher_test"]
         assert live and live[0].is_alive(), "the watcher thread died on a raising request"
 
         # A subsequent valid request is still answered -- the channel survived.
         h.publish({"id": "survivor1", "domain": good, "qtype": "A"})
-        reply = h.wait_reply("survivor1")
+        reply = h.wait_reply("survivor1", after=before_replies)
         assert reply is not None and reply["blocked"] is True
+        assert [record["id"] for record in h.replies_since(before_replies)] == ["survivor1"]
 
     def test_stop_event_terminates_the_thread(self, query_harness: _QueryHarness) -> None:
         h = query_harness
@@ -721,52 +843,63 @@ class TestSideEffectFree:
 class TestHostileInputRows:
     def test_row1_malformed_json_no_reply_watcher_alive(self, query_harness: _QueryHarness) -> None:
         h = query_harness
-        h.write_raw('{"id":"x",')
         h.start()
-        time.sleep(0.3)
-        assert h.read_reply() is None
+        _assert_hostile_no_reply_then_barrier(
+            h,
+            raws=('{"id":"x",',),
+            barrier_id="barrier-row1",
+            barrier_domain="barrier-row1.uuidquery3001.com",
+        )
         assert h.thread is not None and h.thread.is_alive()
 
     def test_row2_non_dict_json_top_level_no_reply(self, query_harness: _QueryHarness) -> None:
         h = query_harness
-        h.write_raw("[1, 2]")
         h.start()
-        time.sleep(0.3)
-        assert h.read_reply() is None
-        assert h.thread is not None and h.thread.is_alive()
         # A bare JSON string top-level is also non-dict.
-        h.write_raw('"just a string"')
-        time.sleep(0.3)
-        assert h.read_reply() is None
+        _assert_hostile_no_reply_then_barrier(
+            h,
+            raws=("[1, 2]", '"just a string"'),
+            barrier_id="barrier-row2",
+            barrier_domain="barrier-row2.uuidquery3002.com",
+        )
         assert h.thread.is_alive()
 
     def test_row3_empty_or_whitespace_request_no_reply(self, query_harness: _QueryHarness) -> None:
         h = query_harness
-        h.write_raw("   \n  ")
         h.start()
-        time.sleep(0.3)
-        assert h.read_reply() is None
+        _assert_hostile_no_reply_then_barrier(
+            h,
+            raws=("   \n  ",),
+            barrier_id="barrier-row3",
+            barrier_domain="barrier-row3.uuidquery3003.com",
+        )
         assert h.thread is not None and h.thread.is_alive()
 
     def test_row4_missing_id_no_reply(self, query_harness: _QueryHarness) -> None:
         h = query_harness
         q = "hostile-missing-id.uuidquery3004.com"
         h.start()
-        h.publish({"domain": q, "qtype": "A"})
-        time.sleep(0.3)
-        assert h.read_reply() is None
+        _assert_hostile_no_reply_then_barrier(
+            h,
+            records=({"domain": q, "qtype": "A"},),
+            barrier_id="barrier-row4",
+            barrier_domain="barrier-row4.uuidquery3004.com",
+        )
         assert h.thread is not None and h.thread.is_alive()
 
     def test_row5_non_string_or_empty_id_no_reply(self, query_harness: _QueryHarness) -> None:
         h = query_harness
         q = "hostile-bad-id.uuidquery3005.com"
         h.start()
-        h.publish({"id": "", "domain": q, "qtype": "A"})
-        time.sleep(0.2)
-        assert h.read_reply() is None
-        h.publish({"id": 123, "domain": q, "qtype": "A"})
-        time.sleep(0.2)
-        assert h.read_reply() is None
+        _assert_hostile_no_reply_then_barrier(
+            h,
+            records=(
+                {"id": "", "domain": q, "qtype": "A"},
+                {"id": 123, "domain": q, "qtype": "A"},
+            ),
+            barrier_id="barrier-row5",
+            barrier_domain="barrier-row5.uuidquery3005.com",
+        )
         assert h.thread is not None and h.thread.is_alive()
 
     def test_row6_missing_empty_non_string_domain_gets_miss_shaped_reply(self, query_harness: _QueryHarness) -> None:
@@ -845,9 +978,12 @@ class TestHostileInputRows:
     def test_row11_one_mb_of_junk_no_crash_no_reply(self, query_harness: _QueryHarness) -> None:
         h = query_harness
         h.start()
-        h.write_raw("x" * (1024 * 1024))
-        time.sleep(0.3)
-        assert h.read_reply() is None
+        _assert_hostile_no_reply_then_barrier(
+            h,
+            raws=("x" * (1024 * 1024),),
+            barrier_id="barrier-row11",
+            barrier_domain="barrier-row11.uuidquery3011.com",
+        )
         assert h.thread is not None and h.thread.is_alive()
 
     def test_row12_settle_semantics(self, query_harness: _QueryHarness) -> None:
