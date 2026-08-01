@@ -474,6 +474,9 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
     now_ts = int(vm.ssh("date +%s").stdout.strip())
     _write_ledger_entry(vm, "cron", now_ts - 86400, now_ts + 3600)
     before_entry = _read_ledger(vm).get("cron")
+    assert before_entry is not None and before_entry.get("next_due", 0) > now_ts, (
+        f"test setup failed to arrange a future cron entry (now={now_ts}, entry={before_entry!r})"
+    )
     h.wait_no_active_pfb_task(vm)
 
     # Positive control: a resolvable CNAME target the stub answers, baked stale in the CSV.

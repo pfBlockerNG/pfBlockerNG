@@ -3573,33 +3573,6 @@ def pfb_config_digest(vm: SmokeVM, *, timeout: float = 30.0) -> str:
 _BOOTTIME_SYSCTL = "sysctl -n kern.boottime"
 
 
-def _assert_boottime_advanced(before: str, after: str) -> None:
-    """Raise AssertionError unless ``kern.boottime`` genuinely changed across a reboot (#738 F4).
-
-    Pure comparison, no VM I/O, so it is unit-testable off-VM. ``before``/``after`` are the raw
-    ``sysctl -n kern.boottime`` output captured immediately before issuing ``/sbin/reboot`` and
-    immediately after the readiness gate clears. An unchanged value means the readiness gate
-    answered on the PRE-reboot instance -- the guest never actually went down and back up. An
-    empty side means the sysctl read itself failed (e.g. a dropped SSH connection mid-boot),
-    which is just as fatal to the proof, so it raises too, naming which side was empty.
-    """
-    before_val = before.strip()
-    after_val = after.strip()
-    if not before_val:
-        raise AssertionError(
-            "reboot_vm: could not read kern.boottime BEFORE the reboot (empty output) -- cannot prove a reboot happened"
-        )
-    if not after_val:
-        raise AssertionError(
-            "reboot_vm: could not read kern.boottime AFTER the reboot (empty output) -- cannot prove a reboot happened"
-        )
-    if before_val == after_val:
-        raise AssertionError(
-            f"reboot_vm: kern.boottime unchanged (before={before_val!r} after={after_val!r}) -- "
-            "the guest never rebooted; the readiness gate answered on the PRE-reboot instance"
-        )
-
-
 def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
     """Reboot, observe a changed ``kern.boottime``, then await full readiness.
 
