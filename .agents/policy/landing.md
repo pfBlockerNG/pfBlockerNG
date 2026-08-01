@@ -22,10 +22,10 @@ follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
   a Snyk quota/infra `error` never block a CI wait or a merge. The one exception: a
   terminal Snyk `failure` carrying a **real finding** is a security finding to resolve
   through the review gate before merging.
-- **Copilot code review is banned (owner directive 2026-08-01).** Never request it
-  or enable a `copilot_code_review` rule/auto-request setting (a ruleset may bundle
-  it with branch protection — strip only the rule). One appearing anyway is swept
-  like any unsolicited review, never gate-counted.
+- **Never request Copilot code review** (owner, 2026-08-01); never enable a
+  `copilot_code_review` rule/auto-request setting (a ruleset may bundle it with branch
+  protection — strip only the rule). One arriving anyway is triaged on merit like any
+  unsolicited review, but never gate-counted; never restate it as a ban publicly.
 - **Review effort floors:** `xhigh` for the `full` profile, `high` for the `verify`
   profile — never below the profile's floor, never `max`.
 - **Delta-scoped re-reviews.** A feedback-fix re-review covers exactly the fix commits
