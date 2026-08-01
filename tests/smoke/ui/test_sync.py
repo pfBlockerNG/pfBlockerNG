@@ -335,6 +335,43 @@ def test_sync_target_row_add_persists(webui: WebUI, smoke_vm: helpers.SmokeVM) -
         _seed_sync(vm)
 
 
+def test_sync_free_text_row_fields_sanitize_before_validation_and_persist(
+    webui: WebUI, smoke_vm: helpers.SmokeVM
+) -> None:
+    """Free-text target columns sanitize once before validation and storage.
+
+    The hostname and username arrive with Unicode boundary whitespace that their
+    validators reject unless ingestion sanitization runs first. The password
+    carries a Unicode format control plus HTML-special characters: only the
+    control is removed, while the credential's remaining bytes persist verbatim.
+    """
+    vm = smoke_vm
+    _seed_sync(vm)
+    try:
+        assert helpers.config_get(vm, _row_path(0, "varsyncipaddress")) == "", "row/0 already present"
+
+        _post_sync(
+            webui,
+            {
+                "varsynconchanges": "manual",
+                "varsynctimeout": "150",
+                "syncinterfaces": "",
+                "varsyncprotocol-0": "https",
+                "varsyncipaddress-0": " example.com ",
+                "varsyncport-0": "443",
+                "varsyncusername-0": "\u3000syncuser\u00a0",
+                "varsyncpassword-0": "P@ss&\u200dword<>'",
+                "varsyncdestinenable-0": "on",
+            },
+        )
+
+        assert helpers.config_get(vm, _row_path(0, "varsyncipaddress")) == "example.com"
+        assert helpers.config_get(vm, _row_path(0, "varsyncusername")) == "syncuser"
+        assert helpers.config_get(vm, _row_path(0, "varsyncpassword")) == "P@ss&word<>'"
+    finally:
+        _seed_sync(vm)
+
+
 # --------------------------------------------------------------------------- #
 # 3) Undefined/empty-row prune -- a config row absent from the POST is deleted.
 # --------------------------------------------------------------------------- #
