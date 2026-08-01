@@ -715,7 +715,7 @@ final class DnsblQueryClientTest extends TestCase
 				usleep(20000);
 			}
 			if (file_exists($this->replyPath())) {
-				throw new RuntimeException('first caller did not consume its reply');
+				throw new RuntimeException('salvage cap expired / stuck or environment: waiting for first caller to consume its reply; reply file still exists');
 			}
 			$second = $this->waitForRequest('concurrent-b.example');
 			$this->atomicWrite($this->replyPath(), $this->verdictReply($second['id'], 'group-b'));
