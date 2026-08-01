@@ -1066,9 +1066,9 @@ class _MockCallbackSink:
         with self._condition:
             if self._condition.wait_for(lambda: len(self._callbacks) >= n, timeout=timeout):
                 return True
+            observed = len(self._callbacks)
         raise RuntimeError(
-            f"stuck/environment: callback count did not reach {n} before salvage cap {timeout}s "
-            f"(observed {len(self._callbacks)})"
+            f"stuck/environment: callback count did not reach {n} before salvage cap {timeout}s (observed {observed})"
         )
 
     def start(self) -> None:

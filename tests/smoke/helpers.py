@@ -3618,11 +3618,12 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
             f"reboot_vm: kern.boottime read timed out BEFORE the reboot ({exc}) -- refusing to "
             "reboot without the before-side of the proof"
         ) from exc
-    before_boottime = before_read.stdout
-    if not before_boottime.strip():
+    before_token = before_read.stdout.strip()
+    if before_read.returncode != 0 or not before_token:
         raise AssertionError(
             f"reboot_vm: kern.boottime unreadable BEFORE the reboot (rc={before_read.returncode} "
-            f"stderr={before_read.stderr!r}) -- refusing to reboot without the before-side of the proof"
+            f"stdout={before_read.stdout!r} stderr={before_read.stderr!r}) -- refusing to reboot "
+            "without the before-side of the proof"
         )
 
     # Issue the reboot; it drops our SSH connection, so a non-zero/dropped result is EXPECTED.
@@ -3637,13 +3638,13 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
         if remaining <= 0:
             raise RuntimeError(
                 "stuck/environment: reboot_vm kern.boottime did not change before salvage cap "
-                f"({timeout:.0f}s); before={before_boottime.strip()!r} last={last_boottime!r}"
+                f"({timeout:.0f}s); before={before_token!r} last={last_boottime!r}"
             )
         try:
             read = vm.ssh(_BOOTTIME_SYSCTL, timeout=min(15.0, max(1.0, remaining)))
             token = read.stdout.strip()
-            last_boottime = token or f"empty (rc={read.returncode} stderr={read.stderr!r})"
-            if token and token != before_boottime.strip():
+            last_boottime = f"rc={read.returncode} stdout={read.stdout!r} stderr={read.stderr!r}"
+            if read.returncode == 0 and token and token != before_token:
                 break
         except (OSError, subprocess.TimeoutExpired) as exc:
             last_boottime = f"{type(exc).__name__}: {exc}"
