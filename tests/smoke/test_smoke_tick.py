@@ -285,7 +285,7 @@ def test_tick_cron_entry_installed(deployed_vm: SmokeVM) -> None:
             f"the legacy 'pfblockerng.php tick' entry must not survive; got {after[0]!r}"
         )
     finally:
-        h.set_package_enabled(vm, original_enabled == "on")
+        h.config_set(vm, _ENABLE_CB_CFG, original_enabled)
         h.reload(vm, "update")
 
 

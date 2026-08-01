@@ -904,7 +904,7 @@ def test_ip_attribution_cache_invalidated_after_feed_ownership_change(deployed_v
                 header="pfb_syslog_ip",
             ),
         )
-        _set_syslog_enabled(vm, on=original_syslog == "on")
+        h.config_set(vm, CFG_GENERAL + "/log_syslog", original_syslog)
         h.force_ip_refetch(vm, feed_a_header)
         h.reload(vm, "update")
         vm.ssh(
