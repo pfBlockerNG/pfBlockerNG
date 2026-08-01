@@ -441,7 +441,11 @@ final class UnboundPyControlWriteTest extends TestCase
 		}
 		if ($pid === 0) {
 			$fp = fopen($lockPath, 'c');
-			flock($fp, LOCK_EX);
+			if ($fp === FALSE || !flock($fp, LOCK_EX)) {
+				exit(1);	// never signal readiness without a REAL hold -- the parent
+					// would then run with no contention and a negative assertion
+					// ("no dispatch", "entry survived") would pass for the wrong reason
+			}
 			touch($markerPath);
 			usleep(5500000);	// past the hardcoded 5.0s lock-acquire budget
 			flock($fp, LOCK_UN);

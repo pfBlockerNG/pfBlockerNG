@@ -3457,6 +3457,12 @@ function pfb_due_ledger_mark_ran(
  *     boundary by a fraction of a tick" case this fix targets ⇒ base = the entry's
  *     next_due, so the new next_due advances by exactly $interval every cycle.
  *
+ * issue #1780: deliberately takes NO $unavailable channel, unlike its sibling
+ * readers. Its own read is a best-effort ANCHOR lookup, not a dispatch or
+ * persistence decision: an unreadable entry falls through to the base = $now
+ * branch above, which is the same conservative catch-up-from-now the NULL case
+ * already takes. There is no "looks due when it is not" collision to close here.
+ *
  * @param string $job_key     Job identifier (e.g. 'cron').
  * @param int    $interval    Job cadence in seconds.
  * @param int    $now         Current epoch timestamp (injectable in tests).
