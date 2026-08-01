@@ -199,8 +199,8 @@ final class AlertsRowOutputEncodingTest extends TestCase
     public function test_truncated_multibyte_char_in_domain_survives_whole_after_mb_substr_conversion(): void
     {
         // issue #1815: a >=60-char domain whose 59th raw BYTE is the lead byte of a
-        // 2-byte UTF-8 sequence ("\xC3\xA9" = e-acute), straddling convert_dnsbl_log's
-        // truncation boundary (pfblockerng_alerts.php ~line 2247). This call site was
+        // 2-byte UTF-8 sequence ("\xC3\xA9" = e-acute), straddling the blocked-domain
+        // ($f2) truncation boundary in convert_dnsbl_log(). This call site was
         // byte substr() -- explicitly OUT OF SCOPE when this test was first written
         // (issue #1814 follow-up) -- and pfb_hsc()'s ENT_SUBSTITUTE made the resulting
         // dangling lead byte render safely (U+FFFD) instead of blanking the cell.
