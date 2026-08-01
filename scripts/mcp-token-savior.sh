@@ -49,32 +49,41 @@ TS_SOURCE="${TS_SOURCE:-token-savior-recall[mcp,memory-vector]==4.21.0}"
 if [ ! -x "$bin" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$TS_SOURCE" ]; then
 	lock="${venv}.rebuild.lock"
 	mkdir -p "$(dirname "$venv")"
-	if mkdir "$lock" 2>/dev/null; then
-		# set -e: a failed install still fires the trap, so a crashed rebuild
-		# never leaves the lock behind for the next session to time out on.
-		trap 'rmdir "$lock" 2>/dev/null' EXIT
-		# Re-check under the lock — a concurrent session may have finished the
-		# same rebuild while this one waited on mkdir.
-		if [ ! -x "$bin" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$TS_SOURCE" ]; then
-			rm -rf "$venv"
-			python3 -m venv "$venv" 1>&2
-			"$venv/bin/pip" install --quiet "$TS_SOURCE" 1>&2
-			printf '%s\n' "$TS_SOURCE" > "$stamp"
+	waited=0
+	max_wait="${TS_LOCK_WAIT:-300}"
+	# A SIGKILLed holder can never run its EXIT trap, so its lock outlived it and
+	# blocked every later session until max_wait expired — nine days, undiagnosed,
+	# in issue #1969. So the lock is not trusted on existence alone: the holder
+	# records its PID inside it, and a waiter that finds that PID dead reaps the
+	# lock and retries the acquisition. A lock carrying no readable PID is never
+	# reaped — that is a live holder caught between mkdir and the PID write.
+	while ! mkdir "$lock" 2>/dev/null; do
+		holder="$(cat "$lock/pid" 2>/dev/null || true)"
+		if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+			rm -rf "$lock"
+			continue
 		fi
-		rmdir "$lock" 2>/dev/null
-		trap - EXIT
-	else
-		waited=0
-		max_wait="${TS_LOCK_WAIT:-300}"
-		while [ -d "$lock" ] && [ "$waited" -lt "$max_wait" ]; do
-			sleep 1
-			waited=$((waited + 1))
-		done
-		if [ ! -x "$bin" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$TS_SOURCE" ]; then
+		if [ "$waited" -ge "$max_wait" ]; then
 			echo "mcp-token-savior: concurrent rebuild did not complete within ${max_wait}s — if no other session is installing, remove '$lock' and retry" >&2
 			exit 1
 		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+	# set -e: a failed install still fires the trap, so a crashed rebuild
+	# never leaves the lock behind for the next session to time out on.
+	trap 'rm -rf "$lock" 2>/dev/null' EXIT
+	printf '%s\n' "$$" > "$lock/pid"
+	# Re-check under the lock — a concurrent session may have finished the
+	# same rebuild while this one waited on mkdir.
+	if [ ! -x "$bin" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$TS_SOURCE" ]; then
+		rm -rf "$venv"
+		python3 -m venv "$venv" 1>&2
+		"$venv/bin/pip" install --quiet "$TS_SOURCE" 1>&2
+		printf '%s\n' "$TS_SOURCE" > "$stamp"
 	fi
+	rm -rf "$lock"
+	trap - EXIT
 fi
 
 workspace_root=$PWD

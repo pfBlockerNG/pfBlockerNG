@@ -287,6 +287,48 @@ EOF
     The stderr should include 'concurrent rebuild'
   End
 
+  It 'reaps a rebuild lock whose recorded holder PID is dead (issue #1969)'
+    # A SIGKILLed holder can never run its EXIT trap, so its lock outlives it and
+    # blocked every later session until TS_LOCK_WAIT expired (nine days, in the
+    # incident). A dead recorded PID proves the holder is gone: reap and rebuild.
+    # TS_LOCK_WAIT=2 keeps a non-reaping launcher failing fast instead of hanging.
+    sh -c 'exit 0' &
+    dead_pid=$!
+    wait "${dead_pid}"
+    mkdir -p "${WORK}/venv.rebuild.lock"
+    printf '%s\n' "${dead_pid}" > "${WORK}/venv.rebuild.lock/pid"
+    When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}/venv" TS_LOCK_WAIT=2 sh "${SCRIPT}"
+    The status should be success
+    The output should equal 'INSTALLED'
+    The stderr should equal ''
+    The directory "${WORK}/venv.rebuild.lock" should not be exist
+  End
+
+  It 'records its own live PID in the lock it holds'
+    # Without this, the reap above would be unreachable in production: no holder
+    # would ever leave a PID for a later session to test. The python3 wrapper runs
+    # under the lock, i.e. exactly while the holder is installing.
+    mkdir -p "${WORK}/probe"
+    cat > "${WORK}/probe/python3" << EOF
+#!/bin/sh
+holder="\$(cat "${WORK}/venv.rebuild.lock/pid" 2>/dev/null || true)"
+if [ -z "\${holder}" ]; then
+	printf 'MISSING\n' > "${WORK}/observed"
+elif kill -0 "\${holder}" 2>/dev/null; then
+	printf 'LIVE\n' > "${WORK}/observed"
+else
+	printf 'DEAD\n' > "${WORK}/observed"
+fi
+exec "${WORK}/shim/python3" "\$@"
+EOF
+    chmod +x "${WORK}/probe/python3"
+    When run env PATH="${WORK}/probe:${WORK}/shim:${PATH}" TS_VENV="${WORK}/venv" sh "${SCRIPT}"
+    The status should be success
+    The output should equal 'INSTALLED'
+    The stderr should equal ''
+    The contents of file "${WORK}/observed" should equal 'LIVE'
+  End
+
   It 'refuses a non-absolute TS_VENV instead of rm -rf-ing a relative path'
     # Contained sandbox: an unguarded launcher would rm -rf . right here.
     mkdir -p "${WORK}/sandbox"
