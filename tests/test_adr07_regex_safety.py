@@ -158,9 +158,9 @@ class TestCatastrophicShapeHeuristic:
         # The budget comparison is strictly `>` _REGEX_BUDGET_MAX, so a pattern whose budget
         # equals MAX exactly is the last admissible value (off-by-one guard: a `>=` regression
         # would flag this). Build a pattern whose budget is EXACTLY MAX -- `_REGEX_BUDGET_MAX`
-        # unbounded `*` quantifiers, zero alternations, and no other catastrophic shape (no
-        # nested/adjacent quantified group, no stacked bounded repeat).
-        at_budget = "a*" * pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX
+        # unbounded `*` quantifiers, zero alternations, and no other catastrophic shape (the
+        # literal separators prevent the adjacent-atom shape; no nested group or stacked repeat).
+        at_budget = "a*x" * pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX
         # Compute the budget the SAME way the code does and pin it to MAX before asserting.
         budget = len(pfb_dnsbl_regex_rules._REGEX_UNBOUNDED_QUANTIFIER.findall(at_budget)) + len(
             pfb_dnsbl_regex_rules._REGEX_ALTERNATION.findall(at_budget)

@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PKG_DIR = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng"
 SCRIPT = PKG_DIR / "pfb_dnsbl_regex_rules.py"
 
@@ -107,6 +109,17 @@ def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
     corpus = [
         "^ads\\.example\\.com$",
         "^(.+\\.)?ads?[0-9]*\\.example\\.(com|net|org)$",
+        "[a-z]+[a-z]+",
+        "a+a+",
+        r".+\w+",
+        r"\w+\d+",
+        "[a-z]*[a-z]+",
+        "[a-z]{1,}[a-z]{2,}",
+        "[a-z]+?[a-z]+",
+        "[a-z]++[a-z]++",
+        "^.+@.+$",
+        "[a-z]{1,3}[a-z]{1,3}",
+        "[a-z]+[0-9]+",
         "(a+)+",
         "(a*)*",
         "(\\w+\\.)+",
@@ -144,6 +157,60 @@ def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
     # Guard against a vacuously one-sided corpus.
     assert any(_regex_is_catastrophic_shape(pattern) for pattern in corpus)
     assert any(not _regex_is_catastrophic_shape(pattern) for pattern in corpus)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "expected_rejected"),
+    [
+        ("[a-z]+[a-z]+", True),
+        ("a+a+", True),
+        (r".+\w+", True),
+        (r"\w+\d+", True),
+        ("[a-z]*[a-z]+", True),
+        ("[a-z]{1,}[a-z]{2,}", True),
+        ("[a-z]+?[a-z]+", True),
+        ("[a-z]++[a-z]++", False),
+        ("a+a+a+a+", True),
+        ("^.+@.+$", False),
+        ("[a-z]{1,3}[a-z]{1,3}", False),
+        ("[a-z]+[0-9]+", True),
+    ],
+)
+def test_ungrouped_adjacent_quantifier_shapes_are_consistent(pattern: str, expected_rejected: bool) -> None:
+    """The shared gate rejects adjacent backtracking quantifiers conservatively."""
+    from pfb_dnsbl_regex_rules import _regex_is_catastrophic_shape
+
+    assert _regex_is_catastrophic_shape(pattern) is expected_rejected
+    proc = run_probe((pattern + "\n").encode("utf-8"))
+    assert (proc.returncode == 1) is expected_rejected, proc.stderr.decode()
+    if expected_rejected:
+        assert b"catastrophic-backtracking shape" in proc.stderr
+    else:
+        assert proc.stderr == b""
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["", "[", "\\", "[a+z+b]+", r"a\+b\*", r"[a\]]+[a\]]+"],
+)
+def test_ungrouped_adjacent_quantifier_scanner_handles_hostile_syntax(pattern: str) -> None:
+    """Scanner inspects syntax only; malformed patterns reach compile-error handling."""
+    from pfb_dnsbl_regex_rules import _regex_is_catastrophic_shape
+
+    proc = run_probe((pattern + "\n").encode("utf-8"))
+    assert proc.returncode in (0, 1), proc.stderr.decode()
+    assert isinstance(_regex_is_catastrophic_shape(pattern), bool)
+    if pattern in ("", "[a+z+b]+", r"a\+b\*"):
+        assert _regex_is_catastrophic_shape(pattern) is False
+    if pattern == r"[a\]]+[a\]]+":
+        assert _regex_is_catastrophic_shape(pattern) is True
+
+
+def test_ungrouped_adjacent_quantifier_scanner_handles_oversized_line() -> None:
+    """A 100,000-character valid line stays bounded and does not crash the probe."""
+    proc = run_probe(("a" * 100_000 + "\n").encode("ascii"))
+    assert proc.returncode == 0, proc.stderr.decode()
+    assert proc.stderr == b""
 
 
 def test_main_treats_crlf_terminated_lines_like_lf() -> None:

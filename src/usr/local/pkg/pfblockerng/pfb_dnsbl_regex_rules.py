@@ -80,9 +80,86 @@ _REGEX_SHAPE_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+def _regex_quantifier(pattern: str, index: int) -> tuple[int, bool, bool]:
+    """Return (end, unbounded, backtracking) for a quantifier at ``index``."""
+    if index >= len(pattern):
+        return index, False, False
+    marker = pattern[index]
+    if marker in "+*":
+        end = index + 1
+        suffix = pattern[end] if end < len(pattern) else ""
+        if suffix in "?+":
+            end += 1
+        return end, True, suffix != "+"
+    if marker == "?":
+        end = index + 1
+        if end < len(pattern) and pattern[end] in "?+":
+            end += 1
+        return end, False, False
+    if marker != "{":
+        return index, False, False
+    end = index + 1
+    while end < len(pattern) and pattern[end] != "}":
+        end += 1
+    if end >= len(pattern):
+        return index, False, False
+    body = pattern[index + 1 : end]
+    unbounded = body.endswith(",") and body[:-1].isdigit()
+    end += 1
+    suffix = pattern[end] if end < len(pattern) else ""
+    if suffix in "?+":
+        end += 1
+    return end, unbounded, suffix != "+"
+
+
+def _regex_has_ungrouped_adjacent_quantifiers(pattern: str) -> bool:
+    """Reject adjacent unbounded quantifiers unless either is possessive."""
+    previous_unbounded = False
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        if character == "\\":
+            atom_end = index + 2
+        elif character == "[":
+            atom_end = index + 1
+            while atom_end < len(pattern):
+                if pattern[atom_end] == "\\":
+                    atom_end += 2
+                    continue
+                if pattern[atom_end] == "]":
+                    atom_end += 1
+                    break
+                atom_end += 1
+            else:
+                previous_unbounded = False
+                break
+        elif character == "." or character not in "()|?*+{}[]^$":
+            atom_end = index + 1
+        else:
+            previous_unbounded = False
+            index += 1
+            continue
+
+        if atom_end > len(pattern):
+            previous_unbounded = False
+            break
+        quantifier_end, unbounded, backtracking = _regex_quantifier(pattern, atom_end)
+        if quantifier_end == atom_end:
+            previous_unbounded = False
+            index = atom_end
+            continue
+        if previous_unbounded and unbounded and backtracking:
+            return True
+        previous_unbounded = unbounded and backtracking
+        index = quantifier_end
+    return False
+
+
 def _regex_has_catastrophic_shape(pattern: str) -> bool:
-    """True when ``pattern`` matches any of the four structural shapes above."""
-    return any(shape.search(pattern) is not None for shape in _REGEX_SHAPE_PATTERNS)
+    """True when ``pattern`` matches any known catastrophic structural shape."""
+    return _regex_has_ungrouped_adjacent_quantifiers(pattern) or any(
+        shape.search(pattern) is not None for shape in _REGEX_SHAPE_PATTERNS
+    )
 
 
 def _regex_complexity_budget(pattern: str) -> int:
