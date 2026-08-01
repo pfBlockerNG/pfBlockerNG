@@ -42,7 +42,7 @@ from pathlib import Path
 import pytest
 
 from . import helpers as h
-from ._matrix import matrix_abi
+from ._matrix import own_variant
 from .conftest import SmokeVM
 from .test_repo_install import (
     _ensure_egress_open,
@@ -351,10 +351,10 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
     nightly publish dispatch has deployed the catalog.
 
     Given the nightly publish pipeline has DEPLOYED the catalog to Pages (runner-side
-      backstop: ``<base>/<ABI>/meta.conf`` + ``packagesite.pkg`` serve 200), the guest
-      has the Pages IPs pinned for the host (its DNS is sandboxed), the package is
-      ABSENT, and our nightly conf points at the live ``nightly/${ABI}`` URL above the
-      Netgate ``pfSense`` repo,
+      backstop: ``<base>/<varver>/meta.conf`` + ``packagesite.pkg`` serve 200), the
+      guest has the Pages IPs pinned for the host (its DNS is sandboxed), the package
+      is ABSENT, and our nightly conf points at the live ``nightly/<varver>`` URL
+      above the Netgate ``pfSense`` repo,
     When ``pkg update`` reads the live nightly catalog and ``pkg install -y`` runs
       (NO ``-r``, NO ``-f``),
     Then the install comes from our nightly repo (``pkg query %R`` ==
@@ -373,7 +373,9 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
 
     # BACKSTOP: prove the deploy actually serves the nightly catalog from the runner
     # first (independent of the guest) — polls through first-deploy / DNS / cert lag.
-    poll_catalog_served(base_url, matrix_abi())
+    # This base already ends in /nightly, so the full subtree is the bare varver.
+    varver = own_variant().catalog
+    poll_catalog_served(base_url, varver)
 
     _ensure_egress_open()
 
@@ -393,10 +395,11 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
         pkg_delete(smoke_vm, NIGHTLY_NAME)
 
         # Write the production nightly conf: pfblockerng-nightly, HTTPS live URL, NONE-signed.
-        # ${ABI} is a pkg(8) variable — must survive in the file as-is (not shell-expanded).
+        # The URL is fully resolved (arch-less, NO_ARCH — issue #1806): no ${ABI} pkg(8)
+        # variable any more, just the box's own varver under the nightly base.
         conf = (
             f"{NIGHTLY_REPO}: {{\n"
-            f'  url: "{base_url}/${{ABI}}",\n'
+            f'  url: "{base_url}/{varver}",\n'
             "  mirror_type: none,\n"
             "  signature_type: none,\n"
             f"  priority: {pfsense_prio + 100},\n"
