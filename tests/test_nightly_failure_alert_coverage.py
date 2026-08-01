@@ -282,8 +282,15 @@ def test_workflow_name_rejects_null_comment_and_tag_only_values(text: str) -> No
 
 
 def test_workflow_files_scan_both_yaml_extensions(tmp_path: Path) -> None:
-    (tmp_path / "scheduled.yml").write_text("name: YML\non:\n  schedule:\n", encoding="utf-8")
-    (tmp_path / "scheduled.yaml").write_text("name: YAML\non:\n  schedule:\n", encoding="utf-8")
+    workflow_tail = "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n"
+    (tmp_path / "scheduled.yml").write_text(
+        "name: YML\non:\n  schedule:\n" + workflow_tail,
+        encoding="utf-8",
+    )
+    (tmp_path / "scheduled.yaml").write_text(
+        "name: YAML\non:\n  schedule:\n" + workflow_tail,
+        encoding="utf-8",
+    )
 
     paths = _workflow_files(tmp_path)
     assert {path.suffix for path in paths} == {".yml", ".yaml"}
@@ -291,12 +298,47 @@ def test_workflow_files_scan_both_yaml_extensions(tmp_path: Path) -> None:
 
 
 def test_duplicate_scheduled_workflow_names_fail_closed(tmp_path: Path) -> None:
-    workflow = 'name: Top1M Provider Health Check\non:\n  schedule:\n    - cron: "0 0 * * *"\n'
+    workflow = (
+        'name: Top1M Provider Health Check\non:\n  schedule:\n    - cron: "0 0 * * *"\n'
+        "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n"
+    )
+    first = tmp_path / "first.yml"
+    second = tmp_path / "second.yml"
+    first.write_text(workflow, encoding="utf-8")
+    second.write_text(workflow, encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        _scheduled_workflow_names(_workflow_files(tmp_path))
+    message = str(exc_info.value)
+    assert "duplicate scheduled workflow name 'Top1M Provider Health Check'" in message
+    assert str(first) in message
+    assert str(second) in message
+
+
+def test_duplicate_manual_workflow_names_are_allowed(tmp_path: Path) -> None:
+    workflow = (
+        "name: Manual duplicate\non:\n  workflow_dispatch:\n"
+        "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n"
+    )
     (tmp_path / "first.yml").write_text(workflow, encoding="utf-8")
     (tmp_path / "second.yml").write_text(workflow, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="duplicate scheduled workflow name.*Top1M Provider Health Check"):
-        _scheduled_workflow_names(_workflow_files(tmp_path))
+    assert _scheduled_workflow_names(_workflow_files(tmp_path)) == set()
+
+
+def test_manual_and_scheduled_name_collision_is_allowed(tmp_path: Path) -> None:
+    manual = (
+        "name: Mixed trigger\non:\n  workflow_dispatch:\n"
+        "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n"
+    )
+    scheduled = (
+        'name: Mixed trigger\non:\n  schedule:\n    - cron: "0 0 * * *"\n'
+        "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n"
+    )
+    (tmp_path / "manual.yml").write_text(manual, encoding="utf-8")
+    (tmp_path / "scheduled.yml").write_text(scheduled, encoding="utf-8")
+
+    assert _scheduled_workflow_names(_workflow_files(tmp_path)) == {"Mixed trigger"}
 
 
 def test_nightly_workflow_run_parser_ignores_decoy_workflow_lists() -> None:
