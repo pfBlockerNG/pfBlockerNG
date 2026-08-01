@@ -434,9 +434,10 @@ if (isset($savemsg)) {
 				<tr style="vertical-align: top"<?php if ($gtype != 'geoip'): ?> class="sortable"<?php endif; ?> id="pfb_r<?=$r_id;?>">
 					<td>
 					<?php
-						$row['aliasname'] = htmlspecialchars($row['aliasname']);
+						$aliasname_raw = $row['aliasname'];
+						$row['aliasname'] = htmlspecialchars($aliasname_raw);
 						if (strlen($row['aliasname']) >= 20) {
-							print ("<p title=\"{$row['aliasname']}\">" . substr($row['aliasname'], 0, 15) . '...</p>');
+							print ("<p title=\"{$row['aliasname']}\">" . htmlspecialchars(mb_substr($aliasname_raw, 0, 15, 'UTF-8')) . '...</p>');
 						} else {
 							print ($row['aliasname']);
 						}
@@ -445,9 +446,10 @@ if (isset($savemsg)) {
 
 					<td>
 					<?php
-						$row['description'] = htmlspecialchars($row['description']);
+						$description_raw = $row['description'];
+						$row['description'] = htmlspecialchars($description_raw);
 						if (strlen($row['description']) >= 20) {
-							print ("<p title=\"{$row['description']}\">" . substr($row['description'], 0, 15) . '...</p>');
+							print ("<p title=\"{$row['description']}\">" . htmlspecialchars(mb_substr($description_raw, 0, 15, 'UTF-8')) . '...</p>');
 						} else {
 							print ($row['description']);
 						}
