@@ -25,6 +25,11 @@ use PHPUnit\Framework\TestCase;
  * default-'on' pfb_idn_block_malicious that meant the checkbox could never be turned off
  * again. The save path stages the explicit token instead (the general.php idiom), and
  * both IDN toggles carry the toggle adapter.
+ *
+ * issue #1907 (#1921 S3): the same save-path shape, extended to dnsbl/pfb_cache,
+ * dnsbl/pfb_py_reply, dnsbl/pfb_hsts, and ip/suppression -- all four adopted the toggle
+ * adapter and flipped their registry default to 'on', so their pages' saves needed the
+ * same explicit-token staging fix.
  */
 final class ToggleEmptyPreservationTest extends TestCase
 {
@@ -82,5 +87,95 @@ final class ToggleEmptyPreservationTest extends TestCase
 				"{$field} must not be staged with the ?: '' coalesce"
 			);
 		}
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1907 — the same shape for dnsbl/pfb_cache, dnsbl/pfb_py_reply,
+	// dnsbl/pfb_hsts, and ip/suppression: all four flipped to a default-'on'
+	// registry entry, so an unchecked save staging '' would resolve back to On at
+	// the gateway unless the page stages the explicit 'off' token.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * @return array<string,array{0:string,1:string,2:string}> label => [gateway key, section path, bare key]
+	 */
+	private static function issue1907Fields(): array
+	{
+		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$ip    = 'installedpackages/pfblockerngipsettings/config/0';
+		return [
+			'pfb_cache'    => ['dnsbl/pfb_cache',    $dnsbl, 'pfb_cache'],
+			'pfb_py_reply' => ['dnsbl/pfb_py_reply', $dnsbl, 'pfb_py_reply'],
+			'pfb_hsts'     => ['dnsbl/pfb_hsts',     $dnsbl, 'pfb_hsts'],
+			'suppression'  => ['ip/suppression',     $ip,    'suppression'],
+		];
+	}
+
+	/**
+	 * An unchecked save (POST key absent, staged via the page's explicit ternary)
+	 * must persist and read back as disabled -- not resolve to the new default-on.
+	 */
+	public function testUncheckedIssue1907FieldsSaveDisables(): void
+	{
+		foreach (self::issue1907Fields() as $label => [$gateway_key, $section, $bare]) {
+			$GLOBALS['config'] = [];
+
+			$post_value = NULL; // checkbox absent from $_POST
+			$staged     = (($post_value ?? '') === 'on') ? 'on' : 'off';
+			PfbConfig::writeSection($section, [$bare => $staged]);
+
+			$this->assertSame('off', config_get_path("{$section}/{$bare}"),
+				"{$label}: an unchecked save must persist the explicit off token");
+			$this->assertSame(PfbToggle::Off, PfbConfig::read($gateway_key),
+				"{$label}: an unchecked save must read back as disabled -- not resolve to the default-on");
+		}
+	}
+
+	/**
+	 * The before-state for the flip: a checked save stages 'on' and reads back as
+	 * enabled -- the polarity pair for the unchecked case above.
+	 */
+	public function testCheckedIssue1907FieldsSaveEnables(): void
+	{
+		foreach (self::issue1907Fields() as $label => [$gateway_key, $section, $bare]) {
+			$GLOBALS['config'] = [];
+
+			$post_value = 'on'; // checkbox checked
+			$staged     = (($post_value ?? '') === 'on') ? 'on' : 'off';
+			PfbConfig::writeSection($section, [$bare => $staged]);
+
+			$this->assertSame('on', config_get_path("{$section}/{$bare}"),
+				"{$label}: a checked save must persist the explicit on token");
+			$this->assertSame(PfbToggle::On, PfbConfig::read($gateway_key),
+				"{$label}: a checked save must read back as enabled");
+		}
+	}
+
+	/**
+	 * The page source stages all four checkboxes with the explicit-token ternary, not
+	 * the `pfb_filter(...) ?: ''` coalesce whose '' now means "not configured" and
+	 * would silently re-enable an unchecked save now these fields default on.
+	 */
+	public function testPagesStageTheIssue1907TogglesExplicitly(): void
+	{
+		$dnsbl_src = (string) file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php'
+		);
+		foreach (['pfb_cache', 'pfb_py_reply', 'pfb_hsts'] as $field) {
+			$this->assertStringContainsString(
+				"((\$_POST['{$field}'] ?? '') === 'on') ? 'on' : 'off'",
+				$dnsbl_src,
+				"{$field} must be staged as an explicit 'on'/'off' (checkbox-absent means Off)"
+			);
+		}
+
+		$ip_src = (string) file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_ip.php'
+		);
+		$this->assertStringContainsString(
+			"((\$_POST['suppression'] ?? '') === 'on') ? 'on' : 'off'",
+			$ip_src,
+			"suppression must be staged as an explicit 'on'/'off' (checkbox-absent means Off)"
+		);
 	}
 }

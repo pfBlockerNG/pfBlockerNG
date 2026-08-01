@@ -6438,6 +6438,19 @@
             }
         ]
     },
+    "pfb_python_gated_toggles_migrate": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "dconfig",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
     "pfb_python_interpreter": {
         "returnsRef": false,
         "returnType": "string",

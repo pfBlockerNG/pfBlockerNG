@@ -18,6 +18,11 @@ use PHPUnit\Framework\TestCase;
  * registry-driven pass the installer runs AFTER this driver. Coverage for that
  * behaviour now lives in RegistryPassTest, not here.
  *
+ * issue #1907 (S3): pfb_python_gated_toggles_migrate() joins the registry, positioned
+ * immediately before adr02-dnsbl-python-mode -- it disables a stored 'on' for
+ * pfb_py_reply/pfb_hsts that was inert under pre-upgrade Unbound mode (both were
+ * python-gated in 3.2), reading dnsbl_mode as evidence BEFORE ADR-02 overwrites it.
+ *
  * Contract (§2.4 ADR-29):
  *   - ORDERING: migrations fire in the documented order; a later migration sees the
  *     section state left by an earlier one in the same run.
@@ -33,6 +38,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_run_migrations')]
 #[CoversFunction('pfb_migration_registry')]
 #[CoversFunction('pfb_dnsbl_python_migrate')]
+#[CoversFunction('pfb_python_gated_toggles_migrate')]
 final class MigrationRegistryTest extends TestCase
 {
 	// -----------------------------------------------------------------------
@@ -82,22 +88,28 @@ final class MigrationRegistryTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Registry returns exactly three entries in the correct declared order (issue #1921
-	 * S2: the other four migrations folded into pfb_registry_pass()).
+	 * Registry returns exactly four entries in the correct declared order (issue #1921
+	 * S2: the other four migrations folded into pfb_registry_pass(); issue #1907 adds
+	 * the bespoke python-gated-toggles migration, positioned immediately before ADR-02
+	 * -- it must run while dnsbl_mode still evidences pre-upgrade Unbound mode, which
+	 * ADR-02 overwrites).
 	 */
-	public function testRegistryHasThreeEntriesInOrder(): void
+	public function testRegistryHasFourEntriesInOrder(): void
 	{
 		$registry = pfb_migration_registry();
 
-		$this->assertCount(3, $registry);
+		$this->assertCount(4, $registry);
 
 		// issue #1898's per-row key rename runs first -- the scalar-section half now
 		// lives as registry 'old_name' slots consumed by pfb_registry_pass(), which
 		// runs AFTER this whole driver.
 		$this->assertSame('issue1898-legacy-key-rename', $registry[0]['id']);
+		// issue #1907: must run BEFORE ADR-02 -- it reads dnsbl_mode as evidence of a
+		// pre-upgrade Unbound install, and ADR-02 immediately overwrites that same key.
+		$this->assertSame('issue1907-python-gated-toggles', $registry[1]['id']);
 		// Then the original install.inc sequence for what remains, order unchanged.
-		$this->assertSame('adr02-dnsbl-python-mode',    $registry[1]['id']);
-		$this->assertSame('pfbl03-control-legacy-seed', $registry[2]['id']);
+		$this->assertSame('adr02-dnsbl-python-mode',    $registry[2]['id']);
+		$this->assertSame('pfbl03-control-legacy-seed', $registry[3]['id']);
 	}
 
 	/**
@@ -139,6 +151,7 @@ final class MigrationRegistryTest extends TestCase
 		);
 		$this->assertSame(self::DNSBL_SECTION, $registry[1]['section']);
 		$this->assertSame(self::DNSBL_SECTION, $registry[2]['section']);
+		$this->assertSame(self::DNSBL_SECTION, $registry[3]['section']);
 	}
 
 	// -----------------------------------------------------------------------
@@ -213,6 +226,87 @@ final class MigrationRegistryTest extends TestCase
 		$this->assertIsArray($out2);
 		$this->assertSame('dnsbl_python', $out2['dnsbl_mode']);
 		$this->assertSame('on', $out2['pfb_py_block']);
+	}
+
+	// -----------------------------------------------------------------------
+	// B2 — pfb_python_gated_toggles_migrate() unit tests (issue #1907): both
+	//      pfb_py_reply and pfb_hsts were python-gated in 3.2
+	//      ($mode == 'enabled' && dnsbl_mode == 'dnsbl_python'), so a stored 'on' under
+	//      Unbound mode was inert -- disable it before ADR-02 forces python mode and
+	//      would otherwise activate it. dnsbl_mode is unregistered, so its PRESENCE
+	//      (not its value) is the only reliable pre-upgrade-Unbound-mode evidence: a
+	//      fresh-4.0 install's registry-seeded section never carries it.
+	// -----------------------------------------------------------------------
+
+	public function testPythonGatedTogglesMigrateSkipsEmptyOrNonArray(): void
+	{
+		$this->assertNull(pfb_python_gated_toggles_migrate([]));
+		$this->assertNull(pfb_python_gated_toggles_migrate(null));
+	}
+
+	/**
+	 * Row (ii): dnsbl_mode ABSENT -- must stay a no-op even though pfb_py_reply is
+	 * stored 'on', because a fresh-4.0-seeded section has NO dnsbl_mode key at all (the
+	 * registry pass seeds only registered keys, and dnsbl_mode is unregistered). The
+	 * regression this pins: loosening the guard to
+	 * `($dconfig['dnsbl_mode'] ?? '') !== 'dnsbl_python'` would fire here and wrongly
+	 * disable a fresh install's seeded default-on toggle.
+	 */
+	public function testPythonGatedTogglesMigrateNoOpWhenDnsblModeAbsent(): void
+	{
+		$out = pfb_python_gated_toggles_migrate(['pfb_dnsbl' => 'on', 'pfb_py_reply' => 'on']);
+		$this->assertNull($out);
+	}
+
+	/** Row (iii): dnsbl_mode already 'dnsbl_python' -- no-op (ADR-02 already ran, or a new install that later wrote it). */
+	public function testPythonGatedTogglesMigrateNoOpWhenAlreadyPythonMode(): void
+	{
+		$out = pfb_python_gated_toggles_migrate([
+			'pfb_dnsbl' => 'on', 'dnsbl_mode' => 'dnsbl_python', 'pfb_py_reply' => 'on', 'pfb_hsts' => 'on',
+		]);
+		$this->assertNull($out);
+	}
+
+	/** Row (iv): dnsbl_mode present, non-python -- but both toggles absent/''/'off' -- no-op. */
+	public function testPythonGatedTogglesMigrateNoOpWhenTogglesNotOn(): void
+	{
+		$absent = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound']);
+		$this->assertNull($absent);
+
+		$empty = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => '', 'pfb_hsts' => '']);
+		$this->assertNull($empty);
+
+		$off = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => 'off', 'pfb_hsts' => 'off']);
+		$this->assertNull($off);
+	}
+
+	/** Row (i): dnsbl_mode present, non-python, both toggles stored 'on' -- both flip to 'off'. */
+	public function testPythonGatedTogglesMigrateDisablesBothWhenModeIsPreUpgradeUnbound(): void
+	{
+		$dconfig = ['pfb_dnsbl' => 'on', 'dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => 'on', 'pfb_hsts' => 'on'];
+
+		$out = pfb_python_gated_toggles_migrate($dconfig);
+
+		$this->assertIsArray($out);
+		$this->assertSame('off', $out['pfb_py_reply']);
+		$this->assertSame('off', $out['pfb_hsts']);
+		// Other keys preserved; this migration never touches dnsbl_mode itself.
+		$this->assertSame('on', $out['pfb_dnsbl']);
+		$this->assertSame('dnsbl_unbound', $out['dnsbl_mode']);
+	}
+
+	/** Only one of the two toggles is 'on' -- still fires, flips only that one. */
+	public function testPythonGatedTogglesMigrateFlipsOnlyTheOnToggle(): void
+	{
+		$out1 = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => 'on', 'pfb_hsts' => 'off']);
+		$this->assertIsArray($out1);
+		$this->assertSame('off', $out1['pfb_py_reply']);
+		$this->assertSame('off', $out1['pfb_hsts']);
+
+		$out2 = pfb_python_gated_toggles_migrate(['dnsbl_mode' => 'dnsbl_unbound', 'pfb_py_reply' => 'off', 'pfb_hsts' => 'on']);
+		$this->assertIsArray($out2);
+		$this->assertSame('off', $out2['pfb_py_reply']);
+		$this->assertSame('off', $out2['pfb_hsts']);
 	}
 
 	// -----------------------------------------------------------------------
@@ -304,6 +398,71 @@ final class MigrationRegistryTest extends TestCase
 			'pfb_run_migrations() write-back must persist RAW -- canonicalising a still-raw '
 			. 'bystander legacy value ahead of the registry pass destroys what the pass needs to grandfather'
 		);
+	}
+
+	/**
+	 * Row (i) driver half (mirrors testAdr02FiresButRawWriteBackPreservesBystanderLegacyTop1mSource
+	 * above): issue #1907's write-back through pfb_run_migrations() must also persist RAW --
+	 * a bystander legacy top1m_source token must survive untouched alongside the disabled
+	 * toggles.
+	 */
+	public function testDriverPythonGatedTogglesFiresWithRawWriteBackPreservingBystander(): void
+	{
+		$this->seedDnsbl([
+			'pfb_dnsbl'    => 'on',
+			'dnsbl_mode'   => 'dnsbl_unbound',
+			'pfb_py_reply' => 'on',
+			'pfb_hsts'     => 'on',
+			'top1m_source' => 'alexa', // bystander: still the raw legacy token
+		]);
+
+		pfb_run_migrations();
+
+		$dnsbl = $this->getDnsbl();
+		$this->assertSame('off', $dnsbl['pfb_py_reply'], 'issue #1907 migration must disable pfb_py_reply');
+		$this->assertSame('off', $dnsbl['pfb_hsts'], 'issue #1907 migration must disable pfb_hsts');
+		$this->assertSame('alexa', $dnsbl['top1m_source'],
+			'the bystander legacy token must survive RAW write-back');
+		$this->assertContains(
+			'pfBlockerNG: disable python-gated DNSBL toggles inert under pre-upgrade Unbound mode (issue #1907)',
+			$this->writeConfigCalls()
+		);
+	}
+
+	/**
+	 * Row (vi): full driver run -- issue #1907 must fire and consume the pre-upgrade
+	 * dnsbl_mode evidence BEFORE ADR-02 overwrites it. If ordered the other way, ADR-02
+	 * would already have forced dnsbl_mode to 'dnsbl_python' and issue #1907's guard
+	 * would see "already python" and never fire -- the disable would silently vanish.
+	 */
+	public function testDriverIssue1907FiresBeforeAdr02DestroysTheModeEvidence(): void
+	{
+		$this->seedDnsbl([
+			'pfb_dnsbl'    => 'on',
+			'dnsbl_mode'   => 'dnsbl_unbound',
+			'pfb_py_block' => '',
+			'pfb_py_reply' => 'on',
+			'pfb_hsts'     => 'on',
+		]);
+
+		pfb_run_migrations();
+
+		$dnsbl = $this->getDnsbl();
+		$this->assertSame('off', $dnsbl['pfb_py_reply'],
+			'issue #1907 must have fired while dnsbl_mode still evidenced pre-upgrade Unbound mode');
+		$this->assertSame('dnsbl_python', $dnsbl['dnsbl_mode'], 'ADR-02 still forces python-only mode afterward');
+
+		$writes         = $this->writeConfigCalls();
+		$issue1907_pos  = array_search(
+			'pfBlockerNG: disable python-gated DNSBL toggles inert under pre-upgrade Unbound mode (issue #1907)',
+			$writes,
+			TRUE
+		);
+		$adr02_pos = array_search('pfBlockerNG: migrated DNSBL to Python-only mode', $writes, TRUE);
+		$this->assertNotFalse($issue1907_pos, 'issue #1907 write_config must be called');
+		$this->assertNotFalse($adr02_pos, 'ADR-02 write_config must be called');
+		$this->assertLessThan($adr02_pos, $issue1907_pos,
+			'issue #1907 must fire before ADR-02 destroys the dnsbl_mode evidence');
 	}
 
 	/**

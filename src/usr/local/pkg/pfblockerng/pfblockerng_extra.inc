@@ -886,11 +886,13 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'ADR-59 Cloudflare Radar credential; new 4.0 field, \'\' = none',
 		],
 
-		// Resolver cache backup/restore option. Default ''.
+		// Resolver cache backup/restore option. Default on (the de-facto page default
+		// since 3.2 -- #1907 owner decision). '' grandfather preserves a 3.2 deliberate
+		// uncheck.
 		'dnsbl/pfb_cache' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'default'       => 'on',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 			'grandfather'   => ['' => 'off'],
 		],
 
@@ -919,17 +921,24 @@ function pfb_cfg_registry(): array
 			'grandfather'   => [PFB_GF_ABSENT => 'on'],
 		],
 
-		// Python DNS reply logging. Default ''.
+		// Python DNS reply logging. Default on (the de-facto page default since 3.2 --
+		// #1907 owner decision). '' grandfather preserves a 3.2 deliberate uncheck.
+		// Bespoke pre-ADR-02 migration (pfb_python_gated_toggles_migrate) additionally
+		// disables a stored 'on' that was inert under pre-upgrade Unbound mode.
 		'dnsbl/pfb_py_reply' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'default'       => 'on',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 			'grandfather'   => ['' => 'off'],
 		],
 
-		// HSTS null-blocking mode: 'on' | ''. Default ''.
+		// HSTS null-blocking mode: 'on' | ''. Default on (the de-facto page default
+		// since 3.2 -- #1907 owner decision). '' grandfather preserves a 3.2 deliberate
+		// uncheck. Bespoke pre-ADR-02 migration (pfb_python_gated_toggles_migrate)
+		// additionally disables a stored 'on' that was inert under pre-upgrade Unbound
+		// mode.
 		'dnsbl/pfb_hsts' => [
-			'default'       => '',
+			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'grandfather'   => ['' => 'off'],
@@ -1336,12 +1345,13 @@ function pfb_cfg_registry(): array
 		],
 
 		// issue #1931: IP page "Enable Suppression" toggle -- path-addressed, no longer
-		// collides with dnsbl/suppression. Page renders 'on' while absent (#1907-class
-		// divergence); 'on'-default + grandfather decision deferred to #1921.
+		// collides with dnsbl/suppression. Default on (the de-facto page default since
+		// 3.2 -- #1907 owner decision). '' grandfather preserves a 3.2 deliberate
+		// uncheck.
 		'ip/suppression' => [
-			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'default'       => 'on',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 			'grandfather'   => ['' => 'off'],
 		],
 
@@ -2258,7 +2268,17 @@ function pfb_migration_registry(): array
 			'message'  => 'pfBlockerNG: retire legacy configuration key names (issue #1898)',
 			'since'    => '3.2.0',
 		],
-		// 1. ADR-02: force DNSBL to python-only mode.
+		// 1. issue #1907: disable pfb_py_reply/pfb_hsts when inert under pre-upgrade
+		// Unbound mode. MUST run immediately before adr02-dnsbl-python-mode -- it reads
+		// 'dnsbl_mode' as pre-upgrade evidence that the very next entry overwrites.
+		[
+			'id'      => 'issue1907-python-gated-toggles',
+			'section' => $dnsbl,
+			'apply'   => 'pfb_python_gated_toggles_migrate',
+			'message' => 'pfBlockerNG: disable python-gated DNSBL toggles inert under pre-upgrade Unbound mode (issue #1907)',
+			'since'   => '3.2.0',
+		],
+		// 2. ADR-02: force DNSBL to python-only mode.
 		[
 			'id'      => 'adr02-dnsbl-python-mode',
 			'section' => $dnsbl,
@@ -2266,7 +2286,7 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: migrated DNSBL to Python-only mode',
 			'since'   => '2.0.0',
 		],
-		// 2. PFBL-03: one-time seed of the deprecated legacy DNS-TXT control toggle --
+		// 3. PFBL-03: one-time seed of the deprecated legacy DNS-TXT control toggle --
 		// a cross-key bespoke seed keyed on pfb_control's value, not a simple
 		// absent/''-map, so pfb_registry_pass() cannot express it either
 		// (CfgRegistryGrandfatherGateTest::EXCEPTIONS).
