@@ -12,13 +12,31 @@ use PHPUnit\Framework\TestCase;
  * capped") was refuted for five blocking flock() acquires with no bound. This
  * suite pins the shared helper those five call sites were rewritten to use:
  *
- *   pfb_flock_bounded($fp, int $operation, float $timeout_s): bool
+ *   pfb_flock_bounded($fp, int $operation, float $timeout_s, ?bool &$timed_out = NULL): bool
  *   pfb_unbound_py_publication_lock_timeout(): float
  *
  * Contention tests use a REAL second process (pcntl_fork), not a single-process
  * simulation, mirroring the harness shape in PfbSyncStatusLedgerTest.php: a child
  * takes a real flock() on a temp file, signals readiness via a marker file (never
  * a guessed sleep), and holds the lock LONGER than the parent's injected budget.
+ *
+ * F4 review round (issue #1780): the helper originally collapsed "a genuine
+ * flock() error" (would-block byref stays 0 -- not a contention signal at all)
+ * and "the wait genuinely expired" into the same bare FALSE, so every caller lost
+ * the ability to tell them apart (the pre-refactor code DID distinguish: see
+ * pfb_unbound_py_publication_lock()'s "unavailable" vs "timed out" messages).
+ * $timed_out is the restored signal: TRUE only when the deadline/poll-cap
+ * genuinely elapsed; FALSE on every other return (a real flock() error, or
+ * success). testBoundedAcquireRealErrorReturnsFalsePromptlyWithTimedOutFalse
+ * proves the FALSE side with a real, portable flock() error (a php://memory
+ * stream, whose stream wrapper never implements locking -- verified on both
+ * Linux and macOS, unlike a FIFO, which is lockable on Linux) instead of a
+ * contended wait.
+ *
+ * F7: the two contention tests below now also assert a LOWER bound on elapsed
+ * time (previously upper-bound-only) -- a broken helper that returned FALSE
+ * instantly, without ever attempting the lock, would have passed the old
+ * assertions.
  */
 #[CoversFunction('pfb_flock_bounded')]
 #[CoversFunction('pfb_unbound_py_publication_lock_timeout')]
@@ -95,16 +113,23 @@ final class PfbFlockBoundedTest extends TestCase
 		$this->waitForMarker($markerPath, $pid);
 
 		$fp = fopen($lockPath, 'c');	// fresh handle -- genuine second contender
-		$start   = microtime(TRUE);
-		$ok      = pfb_flock_bounded($fp, LOCK_EX, 0.2);
-		$elapsed = microtime(TRUE) - $start;
+		$start     = microtime(TRUE);
+		$timedOut  = FALSE;
+		$ok        = pfb_flock_bounded($fp, LOCK_EX, 0.2, $timedOut);
+		$elapsed   = microtime(TRUE) - $start;
 		fclose($fp);
 
 		pcntl_waitpid($pid, $waitStatus);
 
 		$this->assertFalse($ok, 'a bounded LOCK_EX acquire against a real, still-held lock must return FALSE, not block');
+		// F7: LOWER bound -- a helper that returned FALSE instantly, never actually
+		// attempting/polling the lock, must not pass. 0.15s (budget 0.2s minus margin).
+		$this->assertGreaterThanOrEqual(0.15, $elapsed,
+			'bounded acquire must have actually waited ~its budget (0.2s), not returned instantly; elapsed=' . $elapsed);
 		$this->assertLessThan(0.6, $elapsed,
 			'bounded acquire must expire near its own budget (0.2s), not wait out the holder\'s 0.8s hold; elapsed=' . $elapsed);
+		// F4: a genuine expiry must set the out-param TRUE.
+		$this->assertTrue($timedOut, 'a genuine deadline expiry must set $timed_out = TRUE');
 	}
 
 	public function testBoundedShAcquireExpiresAtBudgetNotAtRealHolderRelease(): void
@@ -120,16 +145,22 @@ final class PfbFlockBoundedTest extends TestCase
 		$this->waitForMarker($markerPath, $pid);
 
 		$fp = fopen($lockPath, 'c');
-		$start   = microtime(TRUE);
-		$ok      = pfb_flock_bounded($fp, LOCK_SH, 0.2);
-		$elapsed = microtime(TRUE) - $start;
+		$start    = microtime(TRUE);
+		$timedOut = FALSE;
+		$ok       = pfb_flock_bounded($fp, LOCK_SH, 0.2, $timedOut);
+		$elapsed  = microtime(TRUE) - $start;
 		fclose($fp);
 
 		pcntl_waitpid($pid, $waitStatus);
 
 		$this->assertFalse($ok, 'a bounded LOCK_SH acquire against a real EX holder must return FALSE, not block');
+		// F7: LOWER bound -- see the EX test above for rationale.
+		$this->assertGreaterThanOrEqual(0.15, $elapsed,
+			'bounded SH acquire must have actually waited ~its budget (0.2s), not returned instantly; elapsed=' . $elapsed);
 		$this->assertLessThan(0.6, $elapsed,
 			'bounded SH acquire must expire near its own budget (0.2s), not wait out the holder\'s 0.8s hold; elapsed=' . $elapsed);
+		// F4: a genuine expiry must set the out-param TRUE.
+		$this->assertTrue($timedOut, 'a genuine deadline expiry must set $timed_out = TRUE');
 	}
 
 	// -----------------------------------------------------------------------
@@ -142,13 +173,16 @@ final class PfbFlockBoundedTest extends TestCase
 		$path = $this->dir . '/uncontended.lock';
 		$fp   = fopen($path, 'c');
 
-		$start   = microtime(TRUE);
-		$ok      = pfb_flock_bounded($fp, LOCK_EX, 5.0);
-		$elapsed = microtime(TRUE) - $start;
+		$start    = microtime(TRUE);
+		$timedOut = TRUE;	// deliberately wrong initial value -- success must flip it to FALSE
+		$ok       = pfb_flock_bounded($fp, LOCK_EX, 5.0, $timedOut);
+		$elapsed  = microtime(TRUE) - $start;
 
 		$this->assertTrue($ok, 'an uncontended acquire must succeed');
 		$this->assertLessThan(0.5, $elapsed,
 			'an uncontended acquire must return promptly, not consume the full 5.0s budget; elapsed=' . $elapsed);
+		// F4 discrimination: success must never report a timeout.
+		$this->assertFalse($timedOut, 'an uncontended success must never set $timed_out = TRUE');
 
 		// Prove the lock is REALLY held: an independent second handle on the
 		// SAME file must fail a non-blocking probe while $fp still holds it.
@@ -161,6 +195,47 @@ final class PfbFlockBoundedTest extends TestCase
 		flock($fp, LOCK_UN);
 		fclose($fp);
 		fclose($probe);
+	}
+
+	// -----------------------------------------------------------------------
+	// C. F4 — a genuine flock() ERROR (not contention) must be distinguishable
+	// from a genuine timeout: $timed_out stays FALSE, and the call returns
+	// immediately (it never entered the poll-wait loop at all).
+	//
+	// A php://memory stream is the portable way to force this deterministically:
+	// its stream wrapper implements no locking at all, so flock() on it fails
+	// immediately with the would-block byref left at 0 (verified on both Linux
+	// and macOS) -- a REAL, non-contention error, unlike e.g. a FIFO, which is
+	// lockable (and so merely contends, never errors) on Linux.
+	// -----------------------------------------------------------------------
+
+	public function testBoundedAcquireRealErrorReturnsFalsePromptlyWithTimedOutFalse(): void
+	{
+		$fp = fopen('php://memory', 'r+');
+
+		// Pre-flight: confirm this environment's flock() really does treat
+		// php://memory as a genuine error (would-block byref stays 0), not
+		// would-block -- otherwise this test would silently prove nothing.
+		$probeWouldBlock = 99;
+		$probeOk = @flock($fp, LOCK_EX | LOCK_NB, $probeWouldBlock);
+		if ($probeOk !== FALSE || $probeWouldBlock === 1) {
+			$this->markTestSkipped('this PHP build\'s php://memory does not fail flock() as a real error -- cannot force the scenario this test needs.');
+		}
+
+		$start    = microtime(TRUE);
+		$timedOut = TRUE;	// deliberately wrong initial value -- a real error must set it FALSE
+		$ok       = pfb_flock_bounded($fp, LOCK_EX, 5.0, $timedOut);
+		$elapsed  = microtime(TRUE) - $start;
+		fclose($fp);
+
+		$this->assertFalse($ok, 'a genuine flock() error must return FALSE');
+		$this->assertFalse($timedOut,
+			'a genuine flock() error (not a would-block/timeout) must leave $timed_out = FALSE -- '
+			. 'collapsing it into TRUE is exactly the F4 defect (both consumer sites would then '
+			. 'misreport a real error as "timed out")');
+		$this->assertLessThan(0.5, $elapsed,
+			'a genuine flock() error must be reported immediately, never after waiting out the '
+			. "budget (5.0s) as if it were contention; elapsed={$elapsed}");
 	}
 
 	// -----------------------------------------------------------------------

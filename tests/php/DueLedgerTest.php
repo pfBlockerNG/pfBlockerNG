@@ -14,10 +14,14 @@ use PHPUnit\Framework\TestCase;
  * Functions under test:
  *   pfb_due_ledger_seeded_jitter(string $job_key, string $seed, int $max): int
  *   pfb_due_ledger_is_due_from_entry(?array $entry, int $now): bool
- *   pfb_due_ledger_read_entry(string $job_key, string $ledger_dir): ?array
+ *   pfb_due_ledger_read_entry(string $job_key, string $ledger_dir, float $timeout_s = 5.0,
+ *                          ?bool &$unavailable = NULL): ?array
  *   pfb_due_ledger_write_entry(string $job_key, array $entry, string $ledger_dir): void
  *   pfb_due_ledger_is_due(string $job_key, int $interval, int $now,
- *                          string $seed, int $jitter_max, string $ledger_dir): bool
+ *                          string $seed, int $jitter_max, string $ledger_dir,
+ *                          float $timeout_s = 5.0): bool
+ *   pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0): bool
+ *   pfb_due_ledger_set_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0): void
  *   pfb_due_ledger_mark_ran(string $job_key, int $interval, int $now,
  *                            string $seed, int $jitter_max, string $ledger_dir): void
  *   pfb_due_ledger_mark_ran_anchored(string $job_key, int $interval, int $now,
@@ -42,6 +46,18 @@ use PHPUnit\Framework\TestCase;
  * Fixed constants used throughout (pre-verified by unit, not re-derived at runtime):
  *   seed='test-seed', job='dcc', max=86400  ⇒  seeded_jitter = 35079
  *   seed='test-seed', job='bl',  max=86400  ⇒  seeded_jitter = 79870
+ *
+ * issue #1780 F1/F2/F9 — a bounded lock acquire that EXPIRES is NOT the same as
+ * "absent" or "corrupt" (NULL already means both of those to every existing
+ * caller): read_entry signals it out-of-band via $unavailable, and every
+ * dispatch/persistence-critical caller (is_due, is_pending, set_pending) must
+ * fail closed on it ("I do not know") rather than fall into read_entry's
+ * existing NULL-is-absent handling (which would otherwise make an unreadable
+ * ledger look due-now / not-pending's opposite / safe-to-clobber). $timeout_s
+ * is injectable end-to-end (is_due/is_pending/set_pending gained an optional
+ * trailing param alongside the two low-level readers) so every expiry branch
+ * below is driven deterministically with a REAL second process (pcntl_fork),
+ * never a guessed sleep, mirroring PfbFlockBoundedTest.php's harness shape.
  */
 final class DueLedgerTest extends TestCase
 {
@@ -955,5 +971,217 @@ final class DueLedgerTest extends TestCase
 			"{$entry['next_due']} -- set_pending must not prevent anchoring on a REAL prior schedule");
 		$this->assertArrayNotHasKey('pending_apply', $entry,
 			'mark_ran_anchored must clear pending_apply by writing a clean entry');
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1780 F1/F2/F9 — lock-acquire expiry: $unavailable discrimination,
+	// and every fail-closed caller (is_due / is_pending / set_pending).
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Fork a child that opens $lockPath fresh (never an inherited fd -- a genuine
+	 * second, independent lock holder), takes LOCK_EX, signals readiness via a
+	 * marker file, holds for $holdMicros, then releases. Mirrors
+	 * PfbFlockBoundedTest::forkRealLockHolder().
+	 *
+	 * @return int the child pid (caller must pcntl_waitpid it).
+	 */
+	private function forkRealLockHolder(string $lockPath, string $markerPath, int $holdMicros): int
+	{
+		if (!function_exists('pcntl_fork')) {
+			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		}
+		$pid = pcntl_fork();
+		if ($pid === -1) {
+			$this->markTestSkipped('pcntl_fork() failed.');
+		}
+		if ($pid === 0) {
+			$fp = fopen($lockPath, 'c');
+			flock($fp, LOCK_EX);
+			touch($markerPath);
+			usleep($holdMicros);
+			flock($fp, LOCK_UN);
+			fclose($fp);
+			exit(0);
+		}
+		return $pid;
+	}
+
+	private function waitForMarker(string $markerPath, int $pid): void
+	{
+		$deadline = microtime(TRUE) + 2.0;
+		while (!file_exists($markerPath)) {
+			if (microtime(TRUE) >= $deadline) {
+				pcntl_waitpid($pid, $waitStatus);
+				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
+			}
+			usleep(1000);
+		}
+	}
+
+	/**
+	 * $unavailable discriminates: TRUE only on a genuine lock-acquire expiry;
+	 * FALSE on every other path (absent file, corrupt JSON, success). An
+	 * always-TRUE or always-FALSE flag must fail this test.
+	 *
+	 * Scenario:
+	 *   Given a real second process holding LOCK_EX on pfb_due_ledger.json past
+	 *   the parent's small injected budget.
+	 *   When  read_entry runs with that small budget.
+	 *   Then  it returns NULL (same as absent) AND $unavailable = TRUE.
+	 *   And   an absent file / corrupt JSON / a genuine success all set
+	 *         $unavailable = FALSE.
+	 */
+	public function testReadEntryUnavailableDiscriminatesLockTimeoutFromEveryOtherPath(): void
+	{
+		pfb_due_ledger_write_entry('dcc', [
+			'last_run' => self::NOW, 'next_due' => self::NOW + 1, 'jitter' => 0,
+		], $this->dir);
+
+		$lockPath   = $this->dir . '/pfb_due_ledger.json';
+		$markerPath = $this->dir . '/read_entry_timeout.marker';
+		// Holder keeps the lock for 400ms -- well past the 150ms budget under test.
+		$pid = $this->forkRealLockHolder($lockPath, $markerPath, 400000);
+		$this->waitForMarker($markerPath, $pid);
+
+		$unavailable = FALSE;
+		$entry = pfb_due_ledger_read_entry('dcc', $this->dir, 0.15, $unavailable);
+		pcntl_waitpid($pid, $waitStatus);
+
+		$this->assertNull($entry, 'an expired read must still return NULL (same as absent), never a stale/partial entry');
+		$this->assertTrue($unavailable, 'a genuine lock-acquire expiry must set $unavailable = TRUE');
+
+		// FALSE: absent ledger file (no is_file() match -- never even attempts the lock).
+		$absentDir = $this->dir . '/absent_subdir';
+		mkdir($absentDir, 0777, TRUE);
+		$absentUnavailable = TRUE;	// deliberately wrong initial value
+		$absentEntry = pfb_due_ledger_read_entry('dcc', $absentDir, 5.0, $absentUnavailable);
+		$this->assertNull($absentEntry);
+		$this->assertFalse($absentUnavailable, 'an absent ledger file must never report $unavailable = TRUE');
+
+		// FALSE: corrupt JSON.
+		$corruptDir = $this->dir . '/corrupt_subdir';
+		mkdir($corruptDir, 0777, TRUE);
+		file_put_contents($corruptDir . '/pfb_due_ledger.json', 'not valid json {{{{');
+		$corruptUnavailable = TRUE;
+		$corruptEntry = pfb_due_ledger_read_entry('dcc', $corruptDir, 5.0, $corruptUnavailable);
+		$this->assertNull($corruptEntry);
+		$this->assertFalse($corruptUnavailable, 'a corrupt JSON ledger must never report $unavailable = TRUE');
+
+		// FALSE: genuine success (the lock was released -- read the real entry).
+		$successUnavailable = TRUE;
+		$successEntry = pfb_due_ledger_read_entry('dcc', $this->dir, 5.0, $successUnavailable);
+		$this->assertNotNull($successEntry, 'the lock was released by the child above -- this read must succeed');
+		$this->assertFalse($successUnavailable, 'a successful read must never report $unavailable = TRUE');
+	}
+
+	/**
+	 * is_due() must fail CLOSED (not due) on a lock-acquire expiry, even for an
+	 * entry that IS genuinely due on disk -- the whole point of failing closed
+	 * is that the tick cannot safely confirm that on this read, so it must never
+	 * dispatch on a guess. The entry is seeded genuinely DUE (next_due in the
+	 * past) specifically so this test discriminates a real fix from a no-op:
+	 * code that merely waits out the contention and then reads the real (due)
+	 * entry would return TRUE here, not FALSE.
+	 *
+	 * Scenario:
+	 *   Given an entry that IS due (next_due in the past), and a real lock
+	 *   holder past is_due's injected budget.
+	 *   When  is_due() runs.
+	 *   Then  it returns FALSE (fail closed) -- NOT the TRUE the on-disk entry
+	 *         actually calls for.
+	 */
+	public function testIsDueFailsClosedOnLockTimeoutEvenWhenGenuinelyDue(): void
+	{
+		pfb_due_ledger_write_entry('dcc', [
+			'last_run' => self::NOW - self::INTERVAL_DAILY - 1, 'next_due' => self::NOW - 1, 'jitter' => 0,
+		], $this->dir);
+
+		$lockPath   = $this->dir . '/pfb_due_ledger.json';
+		$markerPath = $this->dir . '/is_due_timeout.marker';
+		$pid = $this->forkRealLockHolder($lockPath, $markerPath, 400000);
+		$this->waitForMarker($markerPath, $pid);
+
+		$result = pfb_due_ledger_is_due('dcc', self::INTERVAL_DAILY, self::NOW, self::SEED, self::MAX, $this->dir, 0.15);
+		pcntl_waitpid($pid, $waitStatus);
+
+		$this->assertFalse($result,
+			'is_due() must fail CLOSED (FALSE) on a lock-acquire expiry, even though the on-disk entry is '
+			. 'genuinely due -- treating an unreadable ledger as "absent" (is_due_from_entry(NULL, ...) '
+			. 'reads absent as due-now) or simply waiting out the contention and reading the real (due) '
+			. 'entry would both spuriously dispatch the job');
+	}
+
+	/**
+	 * is_pending() must return FALSE (not pending) on a lock-acquire expiry: an
+	 * unreadable ledger is not evidence of a pending deferred apply.
+	 *
+	 * Scenario:
+	 *   Given a REAL pending entry (pending_apply=TRUE) -- so, absent lock
+	 *   contention, is_pending() would return TRUE -- and a real lock holder
+	 *   past the injected budget.
+	 *   When  is_pending() runs.
+	 *   Then  it returns FALSE (fail closed), not the TRUE the on-disk entry
+	 *         actually holds -- proving this is genuinely the lock-timeout path,
+	 *         not an accidental "never was pending" result.
+	 */
+	public function testIsPendingReturnsFalseOnLockTimeout(): void
+	{
+		pfb_due_ledger_set_pending('cron', $this->dir);
+		$pending = pfb_due_ledger_read_entry('cron', $this->dir);
+		$this->assertTrue($pending['pending_apply'] ?? FALSE, 'precondition: the entry must genuinely be pending');
+
+		$lockPath   = $this->dir . '/pfb_due_ledger.json';
+		$markerPath = $this->dir . '/is_pending_timeout.marker';
+		$pid = $this->forkRealLockHolder($lockPath, $markerPath, 400000);
+		$this->waitForMarker($markerPath, $pid);
+
+		$result = pfb_due_ledger_is_pending('cron', $this->dir, 0.15);
+		pcntl_waitpid($pid, $waitStatus);
+
+		$this->assertFalse($result,
+			'is_pending() must return FALSE on a lock-acquire expiry, even though the on-disk entry is '
+			. 'genuinely pending_apply=TRUE -- an unreadable ledger must never be reported as pending');
+	}
+
+	/**
+	 * set_pending() must ABORT (write nothing) on a lock-acquire expiry, never
+	 * fall into read_entry's "absent ⇒ NULL" branch and persist a zeroed
+	 * {last_run:0, next_due:0, jitter:0, pending_apply:TRUE} placeholder over a
+	 * REAL, intact entry that merely could not be read this instant --
+	 * write_entry's own unlocked merge-read would otherwise pick the real entry
+	 * back up off disk and stomp its next_due/last_run to 0 with the placeholder.
+	 *
+	 * Scenario:
+	 *   Given a REAL entry with non-zero last_run/next_due, and a real lock
+	 *   holder past set_pending's injected budget.
+	 *   When  set_pending() runs.
+	 *   Then  the on-disk entry is BYTE-IDENTICAL afterwards -- no placeholder
+	 *         was written, the real schedule survives untouched.
+	 */
+	public function testSetPendingAbortsWriteOnLockTimeoutPreservingRealEntry(): void
+	{
+		$real = ['last_run' => self::NOW, 'next_due' => self::NOW + self::INTERVAL_DAILY, 'jitter' => 4242];
+		pfb_due_ledger_write_entry('cron', $real, $this->dir);
+		$ledgerPath = $this->dir . '/pfb_due_ledger.json';
+		$before     = file_get_contents($ledgerPath);
+
+		$markerPath = $this->dir . '/set_pending_timeout.marker';
+		$pid = $this->forkRealLockHolder($ledgerPath, $markerPath, 400000);
+		$this->waitForMarker($markerPath, $pid);
+
+		pfb_due_ledger_set_pending('cron', $this->dir, 0.15);
+		pcntl_waitpid($pid, $waitStatus);
+
+		$after = file_get_contents($ledgerPath);
+		$this->assertSame($before, $after,
+			'set_pending() must abort its write on a lock-acquire expiry -- the real entry must survive '
+			. 'byte-identical, never overwritten by a zeroed placeholder');
+
+		$entry = pfb_due_ledger_read_entry('cron', $this->dir);
+		$this->assertSame($real['next_due'], $entry['next_due'] ?? NULL,
+			'the real next_due must survive the aborted set_pending() call');
+		$this->assertArrayNotHasKey('pending_apply', $entry ?? [],
+			'set_pending() must not have applied pending_apply when it aborted');
 	}
 }

@@ -1162,4 +1162,127 @@ final class TickEntrypointTest extends TestCase
 			. 'expected \'log\' trimmed to [l3,l4,l5] (genuinely idle tick), got '
 			. var_export($linesAfter, TRUE));
 	}
+
+	// -----------------------------------------------------------------------
+	// issue #1780 F1/F2 (review round) — a bounded due-ledger lock acquire that
+	// EXPIRES must not be treated as "absent" (pfb_due_ledger_is_due_from_entry
+	// reads absent as due-now): a lock timeout must never spuriously dispatch a
+	// job that is NOT actually due, and the resulting $dispatched=TRUE must not
+	// suppress log maintenance (the whole point of this ticket).
+	//
+	// pfblockerng_tick() itself takes no injectable timeout override -- by
+	// design, it is the real, un-parameterized entrypoint, same as every other
+	// case in this suite -- so proving a genuine expiry needs the holder to
+	// outlive every read's production 5.0s default. This is the one genuinely
+	// slow (~5.5s) test in the issue #1780 suite; every other review-round test
+	// drives an injectable low-level budget directly and stays fast.
+	// -----------------------------------------------------------------------
+
+	private function forkRealDueLedgerHolder(string $lockPath, string $markerPath, int $holdMicros): int
+	{
+		if (!function_exists('pcntl_fork')) {
+			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		}
+		$pid = pcntl_fork();
+		if ($pid === -1) {
+			$this->markTestSkipped('pcntl_fork() failed.');
+		}
+		if ($pid === 0) {
+			$fp = fopen($lockPath, 'c');
+			flock($fp, LOCK_EX);
+			touch($markerPath);
+			usleep($holdMicros);
+			flock($fp, LOCK_UN);
+			fclose($fp);
+			exit(0);
+		}
+		return $pid;
+	}
+
+	private function waitForDueLedgerMarker(string $markerPath, int $pid): void
+	{
+		$deadline = microtime(TRUE) + 2.0;
+		while (!file_exists($markerPath)) {
+			if (microtime(TRUE) >= $deadline) {
+				pcntl_waitpid($pid, $waitStatus);
+				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
+			}
+			usleep(1000);
+		}
+	}
+
+	/**
+	 * Red->green (this is the review-round defect on top of #573/#1769, not
+	 * either of those originals): before this fix, a due-ledger lock timeout
+	 * made pfb_due_ledger_is_due() fall through to
+	 * pfb_due_ledger_is_due_from_entry(NULL, ...)'s "absent ⇒ due" rule, so a
+	 * job that was NOT actually due got dispatched anyway -- and the resulting
+	 * $dispatched=TRUE then suppressed the very log maintenance this ticket
+	 * exists to unblock.
+	 *
+	 * Scenario:
+	 *   Given NOT-due cron/dcc/bl ledger entries, and a real second process
+	 *   holding an exclusive flock() on pfb_due_ledger.json for 5.5s (past
+	 *   every read's 5.0s production budget) for the whole tick.
+	 *   When  pfblockerng_tick() runs.
+	 *   Then  no job is dispatched (the ledger file is byte-identical before
+	 *         and after), $dispatched stayed FALSE so log maintenance still
+	 *         ran (no "skipped"/"deferred" syslog line), and the lock-acquire
+	 *         expiry was logged loudly.
+	 */
+	public function testDueLedgerLockTimeoutFailsClosedAndStillRunsLogMaintenance(): void
+	{
+		if (!function_exists('pcntl_fork')) {
+			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		}
+
+		$this->seedTickPrereqs('24');
+		// Mirrors src/usr/local/www/pfblockerng/pfblockerng.php:63 -- see Case A.
+		pfb_global();
+		$this->ensureLogDir();
+
+		$now = time();
+		$this->seedFutureLedgerEntry('cron', $now);
+		$this->seedFutureLedgerEntry('dcc',  $now);
+		$this->seedFutureLedgerEntry('bl',   $now);
+
+		$this->assertFalse(pfb_update_pass_running(),
+			'a pfblockerng.php worker process leaked from an earlier test -- see issue #1666');
+
+		$ledgerPath = $GLOBALS['pfb']['dbdir'] . '/pfb_due_ledger.json';
+		$before     = (string) file_get_contents($ledgerPath);
+
+		$markerPath = $GLOBALS['pfb']['dbdir'] . '/due_ledger_lock_holder.marker';
+		// 5.5s: past every read's production 5.0s default (see suite-level comment above).
+		$pid = $this->forkRealDueLedgerHolder($ledgerPath, $markerPath, 5500000);
+		$this->waitForDueLedgerMarker($markerPath, $pid);
+
+		// Act.
+		pfblockerng_tick();
+
+		pcntl_waitpid($pid, $waitStatus);
+
+		// No dispatch: the ledger file must be byte-identical (no mark_ran/
+		// mark_ran_anchored write, no set_pending write).
+		clearstatcache(TRUE, $ledgerPath);
+		$after = (string) file_get_contents($ledgerPath);
+		$this->assertSame($before, $after,
+			'a due-ledger lock timeout must never dispatch -- the ledger file must be byte-identical '
+			. 'before and after the tick (a spurious dispatch would have rewritten cron\'s next_due)');
+
+		// $dispatched stayed FALSE: log maintenance still ran (no skip/defer message).
+		$skippedOrDeferred = array_values(array_filter(
+			$GLOBALS['pfb_test_syslog_calls'] ?? [],
+			static fn (array $c) => str_contains($c['body'], 'log maintenance skipped')
+				|| str_contains($c['body'], 'log maintenance deferred')
+		));
+		$this->assertSame([], $skippedOrDeferred,
+			'a due-ledger lock timeout must NOT dispatch, so it must NOT suppress log maintenance either '
+			. '($dispatched must stay FALSE) -- got ' . var_export($GLOBALS['pfb_test_syslog_calls'] ?? [], TRUE));
+
+		// The expiry was logged loudly (pfb_due_ledger_read_entry's own ADR-43 message).
+		$errLog = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('due-ledger read lock timed out', $errLog,
+			'the lock-acquire expiry must be logged loudly, got errlog=' . var_export($errLog, TRUE));
+	}
 }
