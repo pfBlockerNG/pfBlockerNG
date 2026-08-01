@@ -42,20 +42,20 @@ Describe 'sparse-clone-ports.sh'
     mkdir -p "${REMOTE}/${PORT_SUB}"
     (
       cd "$REMOTE" || exit 1
-      git init -q
-      git config user.email ci@example.invalid
-      git config user.name CI
-      git config uploadpack.allowFilter true
-      git checkout -q -b devel
+      git_fixture init -q
+      git_fixture config user.email ci@example.invalid
+      git_fixture config user.name CI
+      git_fixture config uploadpack.allowFilter true
+      git_fixture checkout -q -b devel
       printf 'PORTNAME=pfBlockerNG-devel\n# classic: pfblockerng_extra.inc from FILESDIR (stub)\n' > "${PORT_SUB}/Makefile"
-      git add -A && git -c commit.gpgsign=false commit -qm devel
-      git checkout -q -b pfblockerng/use-github
+      git_fixture add -A && git_fixture -c commit.gpgsign=false commit -qm devel
+      git_fixture checkout -q -b pfblockerng/use-github
       printf 'PORTNAME=pfBlockerNG-devel\nUSE_GITHUB=yes\n' > "${PORT_SUB}/Makefile"
-      git add -A && git -c commit.gpgsign=false commit -qm use-github
-      git tag use-github-tag
-      git checkout -q devel
+      git_fixture add -A && git_fixture -c commit.gpgsign=false commit -qm use-github
+      git_fixture tag use-github-tag
+      git_fixture checkout -q devel
     ) >/dev/null 2>&1
-    USE_GITHUB_SHA="$(cd "$REMOTE" && git rev-parse pfblockerng/use-github)"
+    USE_GITHUB_SHA="$(cd "$REMOTE" && git_fixture rev-parse pfblockerng/use-github)"
     BIN="${WORK}/bin"
     mkdir -p "$BIN"
     cat > "${BIN}/python3" <<'PYEOF'
@@ -99,7 +99,7 @@ PYEOF
   fresh_sha_result() {
     run_clone_sha >/dev/null 2>&1 || { echo "script-failed=$?"; return 1; }
     if is_build_input_variant; then echo 'variant=usegithub'; else echo 'variant=stub'; fi
-    echo "head=$(git -C "$DEST" rev-parse HEAD)"
+    echo "head=$(git_fixture -C "$DEST" rev-parse HEAD)"
   }
   It 'fresh-clone-by-sha: DEST absent, REF a full 40-hex commit SHA -> clones + checks out that commit'
     When call fresh_sha_result
@@ -144,7 +144,7 @@ PYEOF
   # prepare step runs, THEN the tree ends on REF (use-github). before/after both asserted so
   # green proves the switch caused it — and the old `git clone`-into-existing-DEST path is red.
   reuse_before_after() {
-    git clone -q "$URL" "$DEST" >/dev/null 2>&1            # full clone, checks out devel
+    git_fixture clone -q "$URL" "$DEST" >/dev/null 2>&1            # full clone, checks out devel
     if is_build_input_variant; then echo 'before=usegithub'; else echo 'before=stub'; fi
     run_clone >/dev/null 2>&1 || { echo "script-failed=$?"; return 1; }
     if is_build_input_variant; then echo 'after=usegithub'; else echo 'after=stub'; fi
@@ -159,9 +159,9 @@ PYEOF
   # Regression guard: the reuse branch already fetches a full-SHA REF (fetch + FETCH_HEAD,
   # not `-b`) — this must keep working unchanged by the fresh-clone REF-shape guard above.
   reuse_sha_result() {
-    git clone -q "$URL" "$DEST" >/dev/null 2>&1            # full clone, checks out devel
+    git_fixture clone -q "$URL" "$DEST" >/dev/null 2>&1            # full clone, checks out devel
     run_clone_sha >/dev/null 2>&1 || { echo "script-failed=$?"; return 1; }
-    echo "head=$(git -C "$DEST" rev-parse HEAD)"
+    echo "head=$(git_fixture -C "$DEST" rev-parse HEAD)"
   }
   It 'reuse-by-sha: an existing work-tree fetches + checks out a full-SHA REF'
     When call reuse_sha_result

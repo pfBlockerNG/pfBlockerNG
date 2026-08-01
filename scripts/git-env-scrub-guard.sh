@@ -10,16 +10,13 @@
 #      (scripts/lib/git-env-scrub.sh) is a violation: the class must be
 #      suppressed at the lib chokepoint, not scattered.
 #
-#   2. Any spec that shells out to `git` must call scrub_git_env.
-#      A spec file (*_spec.sh) that contains the token `git ` (bare git command)
-#      but does NOT call `scrub_git_env` is a violation: inherited GIT_DIR from
-#      the pre-commit hook would corrupt its fixture repo operations.
+#   2. Fixture/setup Git calls use git_fixture(). Raw Git command positions in
+#      specs are violations unless a same-line marker carries a non-empty reason.
+#      The lexical scan ignores comments and inert quoted text, while retaining
+#      active command substitutions and handling env/assignment prefixes.
 #
-# Note: `git -C` and `git fetch` etc. all start with `git ` (space after git).
-# `git` in a comment is not excluded — the check is a heuristic; if the file
-# only mentions git in a comment but scrub_git_env is not called, that is fine
-# in practice (the check may false-positive but the cost is adding the call,
-# which is cheap and defensive).
+# Intentional Git calls exercising a hook under test may use a same-line marker;
+# an empty marker or a marker on a prior line does not exempt the command.
 #
 # Usage: sh scripts/git-env-scrub-guard.sh [ROOT]
 #   ROOT defaults to the repo root (parent of scripts/).
@@ -55,20 +52,140 @@ grep -Ern --include='*.sh' \
     | grep -v "${GUARD_SELF}" \
     | grep -v "${SCRUB_SPEC}" >> "$TMPF" || true
 
-# ── Clause 2: any spec with `git ` must call scrub_git_env ──────────────── #
+# ── Clause 2: raw fixture Git calls use git_fixture. ────────────────────── #
+# Strip comments and quoted text before checking command positions. The guard is
+# intentionally lexical rather than a shell evaluator: it catches direct Git at
+# indentation, after `&&`/`;`/`!`, and in `$(git ...)` without executing fixtures.
+scan_raw_git() {
+    awk '
+    function unquoted(line,    i,c,state,out,depth) {
+        state=""
+        out=""
+        depth=0
+        for (i = 1; i <= length(line); i++) {
+            c = substr(line, i, 1)
+            if (state == "single") {
+                if (c == "\047") state = ""
+                out = out " "
+                continue
+            }
+            if (state == "double") {
+                if (c == "\\") {
+                    i++
+                    out = out "  "
+                } else if (c == "$" && substr(line, i + 1, 1) == "(") {
+                    out = out "$("
+                    i++
+                    depth=1
+                    state="cmd"
+                } else if (c == "\"") {
+                    state = ""
+                    out = out " "
+                } else {
+                    out = out " "
+                }
+                continue
+            }
+            if (state == "cmd_single") {
+                if (c == "\047") state = "cmd"
+                out = out " "
+                continue
+            }
+            if (state == "cmd_double") {
+                if (c == "\\") {
+                    i++
+                    out = out "  "
+                } else if (c == "\"") {
+                    state = "cmd"
+                    out = out " "
+                } else if (c == "$" && substr(line, i + 1, 1) == "(") {
+                    out = out "$("
+                    i++
+                    depth++
+                    state="cmd"
+                } else {
+                    out = out " "
+                }
+                continue
+            }
+            if (state == "cmd") {
+                if (c == "\047") {
+                    state="cmd_single"
+                    out = out " "
+                } else if (c == "\"") {
+                    state="cmd_double"
+                    out = out " "
+                } else if (c == "$" && substr(line, i + 1, 1) == "(") {
+                    out = out "$("
+                    i++
+                    depth++
+                } else if (c == ")") {
+                    depth--
+                    out = out " "
+                    if (depth == 0) state="double"
+                } else {
+                    out = out c
+                }
+                continue
+            }
+            if (c == "#") {
+                tail = substr(line, i)
+                if (match(tail, /^#[[:space:]]*git-env-scrub-guard:/)) {
+                    out = out "# git-env-scrub-guard:" substr(tail, RLENGTH + 1)
+                }
+                break
+            }
+            if (c == "\047" || c == "\"") {
+                state = c == "\047" ? "single" : "double"
+                out = out " "
+            } else if (c == "\\") {
+                i++
+                out = out "  "
+            } else {
+                out = out c
+            }
+        }
+        return out
+    }
+    function raw_git(line) {
+        prefix="([[:alnum:]_]+=[^[:space:]]+[[:space:]]+)*"
+        env_prefix="env([[:space:]]+[^;&|[:space:]]+)*[[:space:]]+"
+        boundary="(^[[:space:]]*|[;&|!][[:space:]]*)"
+        sub_boundary="\\$\\([[:space:]]*"
+        return line ~ (boundary prefix "git([[:space:]]|$)") \
+            || line ~ (boundary env_prefix "git([[:space:]]|$)") \
+            || line ~ (sub_boundary prefix "git([[:space:]]|$)") \
+            || line ~ (sub_boundary env_prefix "git([[:space:]]|$)")
+    }
+    {
+        original = $0
+        cleaned = unquoted(original)
+        if (!raw_git(cleaned)) next
+        marker = "# git-env-scrub-guard:"
+        marker_at = index(cleaned, marker)
+        if (marker_at) {
+            reason = substr(cleaned, marker_at + length(marker))
+            sub(/[[:space:]]+$/, "", reason)
+            if (reason !~ /^[[:space:]]*$/) next
+        }
+        printf "%s:%d: raw git setup without fixture helper\n", FILENAME, FNR
+    }' "$1"
+}
+
 find "${ROOT}/tests/shell" -name '*_spec.sh' | LC_ALL=C sort \
 | while IFS= read -r _spec; do
-    if grep -q 'git ' "$_spec" 2>/dev/null; then
-        if ! grep -q 'scrub_git_env' "$_spec" 2>/dev/null; then
-            printf '%s: calls git without scrub_git_env (GIT_DIR may corrupt fixture repos)\n' \
-                "$_spec" >> "$TMPF"
-        fi
-    fi
+    scan_raw_git "$_spec" >> "$TMPF"
 done
 
 if [ -s "$TMPF" ]; then
     cat "$TMPF" >&2
-    printf 'git-env-scrub-guard: violations found — add scrub_git_env or move unset to the lib\n' >&2
+    printf 'git-env-scrub-guard: violations found\n' >&2
+    if grep -q 'raw git setup without fixture helper' "$TMPF"; then
+        printf 'git-env-scrub-guard: add git_fixture for fixture/setup Git calls\n' >&2
+    fi
+    if grep -Eq 'unset (GIT_DIR|GIT_INDEX_FILE|GIT_WORK_TREE|GIT_PREFIX|GIT_OBJECT_DIRECTORY|GIT_COMMON_DIR)' "$TMPF"; then
+        printf 'git-env-scrub-guard: move GIT_* unsets to the lib\n' >&2
+    fi
     exit 1
 fi
 

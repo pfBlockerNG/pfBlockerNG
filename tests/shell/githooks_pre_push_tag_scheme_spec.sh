@@ -10,12 +10,12 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
   setup() {
     scrub_git_env
     base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/prepushtag.XXXXXX")"
-    git init -q -b devel "${base}/repo"
-    git -C "${base}/repo" config user.email t@example.com
-    git -C "${base}/repo" config user.name T
-    git -C "${base}/repo" config commit.gpgsign false
-    ( cd "${base}/repo" && echo one > f && git add f && git commit -q -m c1 )
-    sha="$(git -C "${base}/repo" rev-parse HEAD)"
+    git_fixture init -q -b devel "${base}/repo"
+    git_fixture -C "${base}/repo" config user.email t@example.com
+    git_fixture -C "${base}/repo" config user.name T
+    git_fixture -C "${base}/repo" config commit.gpgsign false
+    ( cd "${base}/repo" && echo one > f && git_fixture add f && git_fixture commit -q -m c1 )
+    sha="$(git_fixture -C "${base}/repo" rev-parse HEAD)"
   }
 
   cleanup() {

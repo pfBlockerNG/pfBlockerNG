@@ -12,44 +12,44 @@ Describe 'session-branch-sync shallow-history recovery'
     remote="$base/remote.git"
     seed="$base/seed"
     session="$base/session"
-    git init -q --bare "$remote"
-    git clone -q "$remote" "$seed" 2>/dev/null
-    git -C "$seed" config user.email seed@example.com
-    git -C "$seed" config user.name Seed
-    git -C "$seed" config commit.gpgsign false
-    git -C "$seed" checkout -q -b devel
+    git_fixture init -q --bare "$remote"
+    git_fixture clone -q "$remote" "$seed" 2>/dev/null
+    git_fixture -C "$seed" config user.email seed@example.com
+    git_fixture -C "$seed" config user.name Seed
+    git_fixture -C "$seed" config commit.gpgsign false
+    git_fixture -C "$seed" checkout -q -b devel
     i=1
     while [ "$i" -le 3 ]; do
       printf 'base-%s\n' "$i" >> "$seed/base.txt"
-      git -C "$seed" add base.txt
-      git -C "$seed" commit -q -m "base-$i"
+      git_fixture -C "$seed" add base.txt
+      git_fixture -C "$seed" commit -q -m "base-$i"
       i=$((i + 1))
     done
-    git -C "$seed" push -q origin devel
+    git_fixture -C "$seed" push -q origin devel
 
-    git clone -q --depth=2 --branch devel "file://$remote" "$session"
-    git -C "$session" config user.email agent@example.com
-    git -C "$session" config user.name Agent
-    git -C "$session" config commit.gpgsign false
-    git -C "$session" checkout -q -b topic
+    git_fixture clone -q --depth=2 --branch devel "file://$remote" "$session"
+    git_fixture -C "$session" config user.email agent@example.com
+    git_fixture -C "$session" config user.name Agent
+    git_fixture -C "$session" config commit.gpgsign false
+    git_fixture -C "$session" checkout -q -b topic
     printf '%s\n' topic > "$session/topic.txt"
-    git -C "$session" add topic.txt
-    git -C "$session" commit -q -m topic
+    git_fixture -C "$session" add topic.txt
+    git_fixture -C "$session" commit -q -m topic
 
     i=4
     while [ "$i" -le 7 ]; do
       printf 'base-%s\n' "$i" >> "$seed/base.txt"
-      git -C "$seed" add base.txt
-      git -C "$seed" commit -q -m "base-$i"
+      git_fixture -C "$seed" add base.txt
+      git_fixture -C "$seed" commit -q -m "base-$i"
       i=$((i + 1))
     done
-    git -C "$seed" push -q origin devel
-    git -C "$session" fetch -q --depth=2 origin devel
+    git_fixture -C "$seed" push -q origin devel
+    git_fixture -C "$session" fetch -q --depth=2 origin devel
 
     # origin/devel's new shallow boundary is newer than topic's base. The
     # commits exist on one real history, but this clone cannot yet see that.
-    [ "$(git -C "$session" rev-parse --is-shallow-repository)" = true ]
-    ! git -C "$session" merge-base HEAD origin/devel >/dev/null 2>&1
+    [ "$(git_fixture -C "$session" rev-parse --is-shallow-repository)" = true ]
+    ! git_fixture -C "$session" merge-base HEAD origin/devel >/dev/null 2>&1
   }
 
   cleanup() {
@@ -63,10 +63,10 @@ Describe 'session-branch-sync shallow-history recovery'
     sync_and_verify() {
       cd "$session" || return 1
       sh "$hook" \
-        && [ "$(git rev-parse --is-shallow-repository)" = false ] \
-        && git merge-base --is-ancestor origin/devel HEAD \
-        && [ "$(git rev-list --count origin/devel..HEAD)" -eq 1 ] \
-        && [ "$(git log -1 --format=%s)" = topic ]
+        && [ "$(git_fixture rev-parse --is-shallow-repository)" = false ] \
+        && git_fixture merge-base --is-ancestor origin/devel HEAD \
+        && [ "$(git_fixture rev-list --count origin/devel..HEAD)" -eq 1 ] \
+        && [ "$(git_fixture log -1 --format=%s)" = topic ]
     }
     When run sync_and_verify
     The status should equal 0
@@ -83,27 +83,27 @@ Describe 'session-branch-sync unrelated-history refusal'
     remote="$base/remote.git"
     seed="$base/seed"
     session="$base/session"
-    git init -q --bare "$remote"
-    git clone -q "$remote" "$seed" 2>/dev/null
-    git -C "$seed" config user.email seed@example.com
-    git -C "$seed" config user.name Seed
-    git -C "$seed" config commit.gpgsign false
-    git -C "$seed" checkout -q -b devel
+    git_fixture init -q --bare "$remote"
+    git_fixture clone -q "$remote" "$seed" 2>/dev/null
+    git_fixture -C "$seed" config user.email seed@example.com
+    git_fixture -C "$seed" config user.name Seed
+    git_fixture -C "$seed" config commit.gpgsign false
+    git_fixture -C "$seed" checkout -q -b devel
     printf '%s\n' base > "$seed/base.txt"
-    git -C "$seed" add base.txt
-    git -C "$seed" commit -q -m base
-    git -C "$seed" push -q origin devel
+    git_fixture -C "$seed" add base.txt
+    git_fixture -C "$seed" commit -q -m base
+    git_fixture -C "$seed" push -q origin devel
 
-    git init -q -b topic "$session"
-    git -C "$session" config user.email agent@example.com
-    git -C "$session" config user.name Agent
-    git -C "$session" config commit.gpgsign false
+    git_fixture init -q -b topic "$session"
+    git_fixture -C "$session" config user.email agent@example.com
+    git_fixture -C "$session" config user.name Agent
+    git_fixture -C "$session" config commit.gpgsign false
     printf '%s\n' topic > "$session/topic.txt"
-    git -C "$session" add topic.txt
-    git -C "$session" commit -q -m topic
-    git -C "$session" remote add origin "$remote"
-    git -C "$session" fetch -q origin devel
-    tip="$(git -C "$session" rev-parse HEAD)"
+    git_fixture -C "$session" add topic.txt
+    git_fixture -C "$session" commit -q -m topic
+    git_fixture -C "$session" remote add origin "$remote"
+    git_fixture -C "$session" fetch -q origin devel
+    tip="$(git_fixture -C "$session" rev-parse HEAD)"
   }
 
   cleanup() {
@@ -117,8 +117,8 @@ Describe 'session-branch-sync unrelated-history refusal'
     sync_and_verify() {
       cd "$session" || return 1
       sh "$hook" \
-        && [ "$(git rev-parse HEAD)" = "$tip" ] \
-        && [ "$(git rev-parse --is-shallow-repository)" = false ]
+        && [ "$(git_fixture rev-parse HEAD)" = "$tip" ] \
+        && [ "$(git_fixture rev-parse --is-shallow-repository)" = false ]
     }
     When run sync_and_verify
     The status should equal 0

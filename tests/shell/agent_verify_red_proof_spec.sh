@@ -6,10 +6,10 @@
 Describe 'verify-red-proof.sh'
   script="scripts/agent/verify-red-proof.sh"
 
-  gitc() { git -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
+  gitc() { git_fixture -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
 
   assert_repo_clean() {
-    status_output=$(git -C "$repo" status --porcelain "$@")
+    status_output=$(git_fixture -C "$repo" status --porcelain "$@")
     status_code=$?
     if [ "$status_code" -ne 0 ]; then
       return "$status_code"
@@ -27,7 +27,7 @@ Describe 'verify-red-proof.sh'
     # aim every fixture git op at the REAL repo -- scrub before any git runs.
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     printf '%s\n' "$1" > "$repo/src.txt"
     printf 'grep -q GOOD src.txt\n' > "$repo/test_pin.sh"
     gitc add -A
@@ -43,7 +43,7 @@ Describe 'verify-red-proof.sh'
     # src.txt unchanged) -- mirrors PR #1247's da2d7820 (fix) + 501deb92 (follow-up).
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof3.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     printf '%s\n' "$1" > "$repo/src.txt"
     printf 'grep -q GOOD src.txt\n' > "$repo/test_pin.sh"
     gitc add -A
@@ -62,7 +62,7 @@ Describe 'verify-red-proof.sh'
     # HEAD~1 tracks old.txt; HEAD deletes it. $1 is the test command.
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-del.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     echo OLD > "$repo/old.txt"
     printf '%s\n' "$1" > "$repo/test_pin.sh"
     gitc add -A
@@ -75,7 +75,7 @@ Describe 'verify-red-proof.sh'
   make_deleted_directory_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-del-dir.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     mkdir "$repo/gone"
     echo OLD > "$repo/gone/a.txt"
     printf 'test ! -e gone\n' > "$repo/test_pin.sh"
@@ -89,7 +89,7 @@ Describe 'verify-red-proof.sh'
   make_deleted_directory_with_red_descendants_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-del-dir-desc.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     mkdir "$repo/gone"
     echo OLD > "$repo/gone/a.txt"
     printf 'gone/ignored.txt\n' > "$repo/.gitignore"
@@ -104,7 +104,7 @@ Describe 'verify-red-proof.sh'
   make_ignored_deleted_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-ignored.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     mkdir "$repo/gone"
     echo OLD > "$repo/gone/a.txt"
     printf 'gone/ignored.txt\nunrelated/\n' > "$repo/.gitignore"
@@ -119,7 +119,7 @@ Describe 'verify-red-proof.sh'
   make_deleted_overlap_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-overlap.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     mkdir "$repo/gone"
     echo OLD > "$repo/gone/a.txt"
     printf 'test ! -e gone/a.txt\n' > "$repo/test_pin.sh"
@@ -133,7 +133,7 @@ Describe 'verify-red-proof.sh'
   make_deleted_directory_with_nested_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-nested.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     mkdir "$repo/gone"
     echo OLD > "$repo/gone/a.txt"
     printf 'if test -e gone/a.txt; then\n  mkdir -p gone/nested\n  git -C gone/nested init -q\n  %s\nelse\n  test ! -e gone\nfi\n' "$1" > "$repo/test_pin.sh"
@@ -147,7 +147,7 @@ Describe 'verify-red-proof.sh'
   make_mixed_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-mixed.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     echo BAD > "$repo/src.txt"
     echo OLD > "$repo/old.txt"
     printf 'grep -q GOOD src.txt && test ! -e old.txt\n' > "$repo/test_pin.sh"
@@ -161,7 +161,7 @@ Describe 'verify-red-proof.sh'
   make_added_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof-add.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     printf 'test -e added.txt\n' > "$repo/test_pin.sh"
     gitc add -A
     gitc commit -qm v1

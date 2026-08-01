@@ -104,10 +104,10 @@ EOF
     # Turn the WORK fixture dir into a git repo with both files committed, so
     # the guard's HEAD comparison has a baseline to diff against.
     commit_baseline() {
-      git -C "$WORK" init -q
-      git -C "$WORK" -c user.name=spec -c user.email=spec@example.invalid \
+      git_fixture -C "$WORK" init -q
+      git_fixture -C "$WORK" -c user.name=spec -c user.email=spec@example.invalid \
         add composer.json composer.lock
-      git -C "$WORK" -c user.name=spec -c user.email=spec@example.invalid \
+      git_fixture -C "$WORK" -c user.name=spec -c user.email=spec@example.invalid \
         commit -qm baseline
     }
 
@@ -130,7 +130,7 @@ EOF
     It 'refuses STAGED composer.lock edits'
       commit_baseline
       echo '{"packages": []}' > "${WORK}/composer.lock"
-      git -C "$WORK" add composer.lock
+      git_fixture -C "$WORK" add composer.lock
       When call refuse_if_composer_files_dirty "$WORK"
       The status should be failure
       The stderr should include 'uncommitted changes'

@@ -123,6 +123,93 @@ Describe 'scripts/git-env-scrub-guard.sh'
             The error should include 'violations found'
         End
 
+        It 'fails when a spec calls raw git setup without the fixture helper'
+            setup_violating_spec() {
+                WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/guardspec.XXXXXX")"
+                mkdir -p "${WORK}/scripts/lib" "${WORK}/tests/shell"
+                printf '#!/bin/sh\npfb_scrub_git_env() { unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_COMMON_DIR; }\n' \
+                    > "${WORK}/scripts/lib/git-env-scrub.sh"
+                printf '#!/bin/sh\nDescribe foo\n  It bar\n    scrub_git_env\n    git init /tmp/x 2>/dev/null || true\n  End\nEnd\n' \
+                    > "${WORK}/tests/shell/bad_spec.sh"
+                sh "$GUARD" "$WORK"
+            }
+            When run setup_violating_spec
+            The status should be failure
+            The error should include 'raw git setup without fixture helper'
+        End
+
+        It 'scans direct git command positions without matching prose or quoted fixtures'
+            setup_hostile_specs() {
+                WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/guardspec.XXXXXX")"
+                mkdir -p "${WORK}/scripts/lib" "${WORK}/tests/shell"
+                printf '#!/bin/sh\npfb_scrub_git_env() { :; }\n' \
+                    > "${WORK}/scripts/lib/git-env-scrub.sh"
+                printf '%s\n' \
+                    'scrub_git_env' \
+                    '# comment: git status' \
+                    "It 'title mentions git status'" \
+                    "printf '%s' 'git status'" \
+                    'gitc status' \
+                    '    git init' \
+                    'true && git status' \
+                    'true; git status' \
+                    '! git status' \
+                    'value=$(git status)' \
+                    'git  status' \
+                    "git$(printf '\t')status" \
+                    'printf "%s" '\''$(git status)'\''' \
+                    > "${WORK}/tests/shell/hostile_spec.sh"
+                sh "$GUARD" "$WORK"
+            }
+            When run setup_hostile_specs
+            The status should be failure
+            The error should include 'hostile_spec.sh'
+            The error should include 'raw git setup without fixture helper'
+        End
+
+        It 'requires a same-line non-empty reason for a raw git escape'
+            setup_marker_specs() {
+                WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/guardspec.XXXXXX")"
+                mkdir -p "${WORK}/scripts/lib" "${WORK}/tests/shell"
+                printf '#!/bin/sh\npfb_scrub_git_env() { :; }\n' \
+                    > "${WORK}/scripts/lib/git-env-scrub.sh"
+                printf '%s\n' \
+                    'scrub_git_env' \
+                    'git status # git-env-scrub-guard: allow hook under test' \
+                    > "${WORK}/tests/shell/good_marker_spec.sh"
+                printf '%s\n' \
+                    'git status # git-env-scrub-guard:' \
+                    > "${WORK}/tests/shell/empty_marker_spec.sh"
+                printf '%s\n%s\n%s\n' \
+                    'scrub_git_env' \
+                    '# git-env-scrub-guard: allow prior line is not valid' \
+                    'git status' \
+                    > "${WORK}/tests/shell/prior_marker_spec.sh"
+                sh "$GUARD" "$WORK"
+            }
+            When run setup_marker_specs
+            The status should be failure
+            The error should include 'empty_marker_spec.sh'
+            The error should include 'prior_marker_spec.sh'
+            The error should not include 'good_marker_spec.sh'
+        End
+
+        It 'does not truncate oversized lines before scanning command separators'
+            setup_oversized_spec() {
+                WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/guardspec.XXXXXX")"
+                mkdir -p "${WORK}/scripts/lib" "${WORK}/tests/shell"
+                printf '#!/bin/sh\npfb_scrub_git_env() { :; }\n' \
+                    > "${WORK}/scripts/lib/git-env-scrub.sh"
+                printf '%s\n%s; git status\n' 'scrub_git_env' \
+                    "$(awk 'BEGIN { for (i = 0; i < 10000; i++) printf "x" }')" \
+                    > "${WORK}/tests/shell/oversized_spec.sh"
+                sh "$GUARD" "$WORK"
+            }
+            When run setup_oversized_spec
+            The status should be failure
+            The error should include 'oversized_spec.sh'
+        End
+
     End
 
 End

@@ -21,15 +21,15 @@ Describe 'git-no-docs.sh'
   setup() {
     scrub_git_env
     repo=$(mktemp -d)
-    git -C "$repo" init -q
-    git -C "$repo" config user.name t
-    git -C "$repo" config user.email t@t
+    git_fixture -C "$repo" init -q
+    git_fixture -C "$repo" config user.name t
+    git_fixture -C "$repo" config user.email t@t
     printf '%s\n' 'docsdir/** linguist-documentation' > "$repo/.gitattributes"
     mkdir -p "$repo/docsdir"
     printf 'doc line\n' > "$repo/docsdir/notes.md"
     printf 'code line\n' > "$repo/code.sh"
-    git -C "$repo" add -A
-    git -C "$repo" commit -qm 'mixed commit'
+    git_fixture -C "$repo" add -A
+    git_fixture -C "$repo" commit -qm 'mixed commit'
   }
   cleanup() {
     rm -rf "$repo"

@@ -21,24 +21,24 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   setup() {
     scrub_git_env
     base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/prepushlease.XXXXXX")"
-    git init -q --bare "${base}/remote.git"
-    git clone -q "${base}/remote.git" "${base}/A" 2>/dev/null
-    git -C "${base}/A" config user.email a@example.com
-    git -C "${base}/A" config user.name A
-    git -C "${base}/A" config commit.gpgsign false
-    ( cd "${base}/A" && git checkout -q -b devel && echo one > f \
-        && git add f && git commit -q -m c1 && git push -q origin devel )
-    git clone -q "${base}/remote.git" "${base}/B" 2>/dev/null
-    git -C "${base}/B" config user.email b@example.com
-    git -C "${base}/B" config user.name B
-    git -C "${base}/B" config commit.gpgsign false
-    ( cd "${base}/B" && git checkout -q devel && echo two >> f \
-        && git add f && git commit -q -m c2-other && git push -q origin devel )
+    git_fixture init -q --bare "${base}/remote.git"
+    git_fixture clone -q "${base}/remote.git" "${base}/A" 2>/dev/null
+    git_fixture -C "${base}/A" config user.email a@example.com
+    git_fixture -C "${base}/A" config user.name A
+    git_fixture -C "${base}/A" config commit.gpgsign false
+    ( cd "${base}/A" && git_fixture checkout -q -b devel && echo one > f \
+        && git_fixture add f && git_fixture commit -q -m c1 && git_fixture push -q origin devel )
+    git_fixture clone -q "${base}/remote.git" "${base}/B" 2>/dev/null
+    git_fixture -C "${base}/B" config user.email b@example.com
+    git_fixture -C "${base}/B" config user.name B
+    git_fixture -C "${base}/B" config commit.gpgsign false
+    ( cd "${base}/B" && git_fixture checkout -q devel && echo two >> f \
+        && git_fixture add f && git_fixture commit -q -m c2-other && git_fixture push -q origin devel )
     # A now diverges; its tracking ref still holds c1 while the remote is at c2.
-    ( cd "${base}/A" && git commit -q --amend -m c1-amended )
-    a_local="$(git -C "${base}/A" rev-parse devel)"
-    a_tracking="$(git -C "${base}/A" rev-parse refs/remotes/origin/devel)"
-    remote_tip="$(git -C "${base}/remote.git" rev-parse refs/heads/devel)"
+    ( cd "${base}/A" && git_fixture commit -q --amend -m c1-amended )
+    a_local="$(git_fixture -C "${base}/A" rev-parse devel)"
+    a_tracking="$(git_fixture -C "${base}/A" rev-parse refs/remotes/origin/devel)"
+    remote_tip="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/devel)"
   }
 
   cleanup() {
@@ -49,7 +49,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   AfterEach 'cleanup'
 
   remote_tip_now() {
-    git -C "${base}/remote.git" rev-parse refs/heads/devel
+    git_fixture -C "${base}/remote.git" rev-parse refs/heads/devel
   }
 
   # Feed one stdin line to the hook from inside clone A, agent env explicit
@@ -77,9 +77,9 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   End
 
   It 'allows the same rewrite once the tracking ref matches the advertised remote'
-    git -C "${base}/A" fetch -q origin
+    git_fixture -C "${base}/A" fetch -q origin
     fresh_tracking() {
-      tracking="$(git -C "${base}/A" rev-parse refs/remotes/origin/devel)"
+      tracking="$(git_fixture -C "${base}/A" rev-parse refs/remotes/origin/devel)"
       [ "$tracking" = "$remote_tip" ] || { echo "tracking=$tracking != remote=$remote_tip" >&2; return 1; }
       agent_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
     }
@@ -96,11 +96,11 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
 
   It 'allows an agent fast-forward push with a stale tracking ref'
     ff_push() {
-      cd "${base}/A" && git fetch -q origin \
-        && git update-ref refs/remotes/origin/devel "$a_tracking" \
-        && git checkout -q -B devel "$remote_tip" && echo three >> f \
-        && git add f && git commit -q -m c3 \
-        && agent_hook "refs/heads/devel $(git rev-parse devel) refs/heads/devel $remote_tip"
+      cd "${base}/A" && git_fixture fetch -q origin \
+        && git_fixture update-ref refs/remotes/origin/devel "$a_tracking" \
+        && git_fixture checkout -q -B devel "$remote_tip" && echo three >> f \
+        && git_fixture add f && git_fixture commit -q -m c3 \
+        && agent_hook "refs/heads/devel $(git_fixture rev-parse devel) refs/heads/devel $remote_tip"
     }
     When run ff_push
     The status should equal 0
@@ -148,9 +148,9 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   It 'blocks a real agent force-push and leaves the remote tip untouched'
     real_force() {
       cd "${base}/A" \
-        && git config core.hooksPath "${PFB_ROOT}/.githooks" \
+        && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 git push --force origin devel
+        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
     }
     When run real_force
     The status should not equal 0
@@ -161,9 +161,9 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   It 'blocks the same real force-push for a Codex agent marker'
     real_force_codex() {
       cd "${base}/A" \
-        && git config core.hooksPath "${PFB_ROOT}/.githooks" \
+        && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL CODEX_THREAD_ID=codex-test git push --force origin devel
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL CODEX_THREAD_ID=codex-test git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
     }
     When run real_force_codex
     The status should not equal 0
@@ -174,9 +174,9 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   It 'lands the same real force-push for a human (control)'
     real_force_human() {
       cd "${base}/A" \
-        && git config core.hooksPath "${PFB_ROOT}/.githooks" \
+        && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID git push --force origin devel
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
     }
     When run real_force_human
     The status should equal 0

@@ -18,13 +18,13 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pcmguard.XXXXXX")"
     primary="${base}/primary"
     wt="${base}/wt"
-    git init -q -b devel "$primary"
-    git -C "$primary" config user.email human@example.com
-    git -C "$primary" config user.name Human
-    git -C "$primary" config commit.gpgsign false
-    ( cd "$primary" && echo seed > seed.txt && git add seed.txt \
-        && git commit -q -m seed )
-    git -C "$primary" worktree add -q "$wt" -b spec-branch
+    git_fixture init -q -b devel "$primary"
+    git_fixture -C "$primary" config user.email human@example.com
+    git_fixture -C "$primary" config user.name Human
+    git_fixture -C "$primary" config commit.gpgsign false
+    ( cd "$primary" && echo seed > seed.txt && git_fixture add seed.txt \
+        && git_fixture commit -q -m seed )
+    git_fixture -C "$primary" worktree add -q "$wt" -b spec-branch
     printf '%s\n' 'msg' > "${primary}/.git/PCM_MSG"
     printf '%s\n' 'msg' > "${primary}/.git/worktrees/wt/PCM_MSG"
   }
@@ -37,7 +37,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   AfterEach 'cleanup'
 
   commit_count() {
-    git -C "$primary" rev-list --count HEAD
+    git_fixture -C "$primary" rev-list --count HEAD
   }
 
   # Direct hook invocations: cwd selects primary vs linked worktree; env is
@@ -81,16 +81,16 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   End
 
   It 'does not apply a legacy Claude coauthor identity to a Codex commit'
-    git -C "$primary" config coauthor.name Claude
-    git -C "$primary" config coauthor.email noreply@anthropic.com
+    git_fixture -C "$primary" config coauthor.name Claude
+    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
     When run codex_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
   End
 
   It 'keeps the legacy coauthor identity for a Claude commit'
-    git -C "$primary" config coauthor.name Claude
-    git -C "$primary" config coauthor.email noreply@anthropic.com
+    git_fixture -C "$primary" config coauthor.name Claude
+    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
     When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include 'Co-Authored-By: Claude <noreply@anthropic.com>'
@@ -103,7 +103,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   End
 
   It 'passes an agent commit when the valve marks the checkout agent-dedicated'
-    git -C "$primary" config pfblockerng.allowprimarycommit true
+    git_fixture -C "$primary" config pfblockerng.allowprimarycommit true
     When run agent_hook_in "$primary" .git/PCM_MSG
     The status should equal 0
     The stderr should equal ''
@@ -125,9 +125,9 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   It 'aborts a verify-skipping agent commit in the primary checkout'
     real_commit() {
       cd "$primary" \
-        && git config core.hooksPath "${PFB_ROOT}/.githooks" \
-        && echo change >> seed.txt && git add seed.txt \
-        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 git commit -n -m blocked
+        && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
+        && echo change >> seed.txt && git_fixture add seed.txt \
+        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 git commit -n -m blocked # git-env-scrub-guard: allow hook-under-test commit
     }
     When run real_commit
     The status should not equal 0
@@ -138,9 +138,9 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   It 'lands the same verify-skipping commit for a human (control)'
     real_commit_human() {
       cd "$primary" \
-        && git config core.hooksPath "${PFB_ROOT}/.githooks" \
-        && echo change >> seed.txt && git add seed.txt \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID git commit -n -m allowed
+        && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
+        && echo change >> seed.txt && git_fixture add seed.txt \
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID git commit -n -m allowed # git-env-scrub-guard: allow hook-under-test commit
     }
     When run real_commit_human
     The status should equal 0

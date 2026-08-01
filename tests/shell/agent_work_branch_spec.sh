@@ -68,10 +68,10 @@ Describe 'work-branch.sh --worktree anchors at the primary checkout'
     fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_spec.XXXXXX") || return 1
     fixture=$(cd "$fixture" && pwd -P) || return 1
     primary="$fixture/primary"
-    git init -q "$primary" &&
-      git -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+    git_fixture init -q "$primary" &&
+      git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init &&
-      git -C "$primary" worktree add -q --detach "$fixture/session" >/dev/null 2>&1
+      git_fixture -C "$primary" worktree add -q --detach "$fixture/session" >/dev/null 2>&1
   }
   cleanup() { rm -rf "$fixture"; }
   BeforeEach 'setup'
@@ -115,9 +115,10 @@ Describe 'work-branch.sh --worktree anchors at the primary checkout'
   End
 
   It 'refuses a --separate-git-dir layout instead of anchoring outside the checkout'
-    When run sh -c 'git init -q --separate-git-dir "$1/gitmeta" "$1/sep" &&
-      git -C "$1/sep" -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q --allow-empty -m init &&
-      cd "$1/sep" && exec sh "$2" issue 11 tld --worktree --base HEAD' _ "$fixture" "$script_abs"
+    git_fixture init -q --separate-git-dir "$fixture/gitmeta" "$fixture/sep" &&
+      git_fixture -C "$fixture/sep" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q --allow-empty -m init
+    When run sh -c 'cd "$1/sep" && exec sh "$2" issue 11 tld --worktree --base HEAD' _ "$fixture" "$script_abs"
     The status should equal 2
     The stderr should include 'separate-git-dir'
   End

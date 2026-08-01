@@ -123,11 +123,11 @@ Describe 'run-gates.sh gates_for()'
 End
 
 Describe 'run-gates.sh Composer vendor guard'
-  gitc() { git -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
+  gitc() { git_fixture -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
   make_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesphp.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     gitc config commit.gpgsign false
     mkdir -p "$repo/src" "$repo/vendor/bin" "$repo/scripts"
     printf 'base\n' > "$repo/README"
@@ -222,11 +222,11 @@ Describe 'run-gates.sh Composer vendor guard'
 End
 
 Describe 'run-gates.sh main (fixture repo, stubbed tools)'
-  gitc() { git -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
+  gitc() { git_fixture -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
   make_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungates.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     # Under scripts/ so the files are in shellcheck's scope (src, scripts, .claude/hooks).
     mkdir -p "$repo/scripts"
     printf '#!/bin/sh\n# gone-marker: content distinct from kept.sh so git reports a\n# genuine deletion (identical content collapses to an R100 rename)\ntrue\n' > "$repo/scripts/gone.sh"
