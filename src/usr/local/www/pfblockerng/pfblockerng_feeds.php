@@ -867,10 +867,11 @@ print ($section);
 				<td>
 					<?php
 								$title = '';
-								$row['aliasname'] = htmlspecialchars($row['aliasname']);
+								$aliasname_raw = $row['aliasname'];
+								$row['aliasname'] = htmlspecialchars($aliasname_raw);
 								if (strlen($row['aliasname']) >= 15) {
 									$title 			= $row['aliasname'];
-									$row['aliasname']	= substr($row['aliasname'], 0, 15) . '...';
+									$row['aliasname']	= htmlspecialchars(mb_substr($aliasname_raw, 0, 15, 'UTF-8')) . '...';
 								}
 
 								if ($row['aliasname'] != $p_aliasname) {
