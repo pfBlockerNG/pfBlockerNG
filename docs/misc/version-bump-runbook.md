@@ -57,12 +57,16 @@ entry — no new shipped file, no extra deploy wiring.
    **version-tracker** (`version-tracker.yml`) run (or dispatching it) triggers
    `build-pkg-linux.yml`, `image-refresh.yml` (CE **and** Plus — see step 2), `smoke.yml`
    automatically — **no workflow YAML edit needed**. When the bump **drops the old minimum**,
-   do not delete its matrix entry while boxes still run it — in the same `ci-metadata` PR flip
-   its `role` to `"route-only"` (ADR-27 Part 2): the version leaves build/CI/smoke
-   (`--print-build`/`--print-ci`/`--print-test` exclude it) but its release catalog keeps being
-   served, regenerated from its **last released `.pkg`**, so existing installs keep a route
-   instead of a Worker 404. Delete the entry outright only for a deliberate clean 404.
-   Semantics + lifecycle table: `scripts/README.md`.
+   inspect its last released `.pkg` before choosing the EOL state. In the same `ci-metadata` PR,
+   set `role` to `"route-only"` (ADR-27 Part 2) only when the last tag has a post-#1806
+   wildcard-ABI asset. The version then leaves build/CI/smoke
+   (`--print-build`/`--print-ci`/`--print-test` exclude it) while its frozen release catalog
+   remains served. A pre-#1806 tag has only concrete-ABI assets and is unservable route-only:
+   drop its matrix entry, producing a clean 404, and do not repackage the frozen tag at EOL.
+   Whether a post-#1806 family whose last `.pkg` declares dependencies represented by
+   `extra_pkgs` needs those packages folded into its frozen catalog remains an open question in
+   [issue #1828](https://github.com/pfBlockerNG/pfBlockerNG/issues/1828). Semantics + lifecycle
+   table: `scripts/README.md`.
 2. **Refresh the smoke images** (ADR-04 + ADR-09) — `image-refresh.yml` (`Upgrade pfSense smoke
    images`) is a **CE + Plus matrix fan-out**: a `plan` job reads `ci-metadata`, and each
    `ci:true` variant is refreshed **only when its `upgrade.available` flag is set** (a curated
