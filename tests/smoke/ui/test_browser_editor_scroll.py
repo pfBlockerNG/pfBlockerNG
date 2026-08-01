@@ -44,13 +44,59 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
-    from playwright.sync_api import Locator, Page
+    from playwright.sync_api import BrowserContext, Locator, Page
 
     from .webui import WebUI
 
 pytestmark = pytest.mark.ui_browser
+
+# The reported scenario is a phone: a narrow field, so nearly every line overflows, and
+# a touch/mobile Chrome whose input path (composition, focus scrolling) differs from the
+# desktop one. Emulation cannot reproduce the on-screen keyboard, but it does give the
+# narrow viewport, the mobile UA string, touch events and the device pixel ratio.
+PHONE_CONTEXT = {
+    "viewport": {"width": 412, "height": 915},
+    "device_scale_factor": 2.625,
+    "is_mobile": True,
+    "has_touch": True,
+    "user_agent": (
+        "Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36"
+    ),
+}
+
+
+@pytest.fixture(params=["desktop", "phone"])
+def editor_page(
+    request: pytest.FixtureRequest,
+    browser_page: Page,
+    browser_context: BrowserContext,
+    webui: WebUI,
+) -> Iterator[tuple[Page, str]]:
+    """The authenticated page under test, once per form factor.
+
+    ``desktop`` is the session-scoped context every other browser test uses. ``phone``
+    is a second context on the SAME browser, emulating the device the failure was
+    reported on; it re-uses the desktop context's cookies rather than logging in again
+    (a second login is a second flake source), and is torn down with the test.
+    """
+    if request.param == "desktop":
+        yield browser_page, request.param
+        return
+
+    browser = browser_context.browser
+    assert browser is not None, "browser_context must come from a live browser"
+    context = browser.new_context(ignore_https_errors=webui.base_url.startswith("https://"), **PHONE_CONTEXT)
+    context.add_cookies(browser_context.cookies())
+    page = context.new_page()
+    try:
+        yield page, request.param
+    finally:
+        context.close()
+
 
 # Long enough that the line cannot fit any plausible field width, so the editor is
 # genuinely scrolled right before the action under test. Regex-list syntax on one
@@ -142,46 +188,50 @@ def _typing_at_left_keeps_view_at_left(page: Page, content: Locator, long_line: 
 
 
 def test_regex_editor_newline_scrolls_back_to_the_left(
-    browser_page: Page,
+    editor_page: tuple[Page, str],
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
     """DNSBL regex list: Enter at the end of a long line brings the view back left."""
-    page = browser_page
+    page, form_factor = editor_page
     _open(page, webui, DNSBL_PAGE)
     content = _regex_editor(page)
-    _newline_returns_to_left(page, content, LONG_REGEX_LINE, screenshot_dir, "regex_editor_newline_scroll")
+    _newline_returns_to_left(
+        page, content, LONG_REGEX_LINE, screenshot_dir, f"regex_editor_newline_scroll_{form_factor}"
+    )
 
 
 def test_regex_editor_typing_on_a_short_line_stays_visible(
-    browser_page: Page,
+    editor_page: tuple[Page, str],
     webui: WebUI,
 ) -> None:
     """DNSBL regex list: each keystroke on a short line keeps the caret on screen."""
-    page = browser_page
+    page, _ = editor_page
     _open(page, webui, DNSBL_PAGE)
     content = _regex_editor(page)
     _typing_at_left_keeps_view_at_left(page, content, LONG_REGEX_LINE, "^ok")
 
 
 def test_hook_editor_newline_scrolls_back_to_the_left(
-    browser_page: Page,
+    editor_page: tuple[Page, str],
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
     """Edit Hooks: separate bundle, same caret-tracking requirement."""
-    page = browser_page
+    page, form_factor = editor_page
     _open(page, webui, HOOKS_PAGE)
     content = _hook_editor(page)
-    _newline_returns_to_left(page, content, LONG_SHELL_LINE, screenshot_dir, "hook_editor_newline_scroll")
+    _newline_returns_to_left(
+        page, content, LONG_SHELL_LINE, screenshot_dir, f"hook_editor_newline_scroll_{form_factor}"
+    )
 
 
 def test_hook_editor_typing_on_a_short_line_stays_visible(
-    browser_page: Page,
+    editor_page: tuple[Page, str],
     webui: WebUI,
 ) -> None:
     """Edit Hooks: each keystroke on a short line keeps the caret on screen."""
-    page = browser_page
+    page, _ = editor_page
     _open(page, webui, HOOKS_PAGE)
     content = _hook_editor(page)
     _typing_at_left_keeps_view_at_left(page, content, LONG_SHELL_LINE, "echo")
