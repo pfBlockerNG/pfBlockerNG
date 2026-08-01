@@ -86,9 +86,10 @@ $pfb_eh_sel_script = '';
 $pfb_eh_content    = '';
 
 // Create-flow field echo -- only re-populated on a failed create POST, so the user
-// doesn't have to retype Name/Language after fixing a validation error.
-$pfb_eh_new_core_val = '';
-$pfb_eh_new_lang_val = 'sh';
+// doesn't have to retype When/Name/Language after fixing a validation error.
+$pfb_eh_new_core_val  = '';
+$pfb_eh_new_lang_val  = 'sh';
+$pfb_eh_new_when_echo = '';
 
 if ($_POST) {
 	if (isset($_POST['pfb_eh_create'])) {
@@ -150,10 +151,17 @@ if ($_POST) {
 
 		// Preserve the create-flow fields the user typed so a validation error doesn't
 		// silently clear the form.
-		$pfb_eh_sel_when     = $post_when;
-		$pfb_eh_content      = '';
-		$pfb_eh_new_core_val = $post_core;
-		$pfb_eh_new_lang_val = ($post_lang === 'py') ? 'py' : 'sh';
+		$pfb_eh_new_core_val  = $post_core;
+		$pfb_eh_new_lang_val  = ($post_lang === 'py') ? 'py' : 'sh';
+		$pfb_eh_new_when_echo = $post_when;
+
+		// issue #1884: a failed create must not cost the admin their unsaved edits --
+		// Enter in the Name field (the form's only text input) submits as Create, so
+		// this error path fires from a stray keypress. Same cur_-restore shape as the
+		// failed-delete branch below; the save branch re-validates both before writing.
+		$pfb_eh_sel_when   = (string) ($_POST['pfb_eh_cur_when'] ?? '');
+		$pfb_eh_sel_script = (string) ($_POST['pfb_eh_cur_script'] ?? '');
+		$pfb_eh_content    = pfb_sanitize_text_area((string) ($_POST['pfb_eh_content'] ?? ''));
 	} elseif (isset($_POST['pfb_eh_delete']) && $_POST['pfb_eh_delete'] !== '') {
 		// The emptiness check is load-bearing, not defensive: pfb_eh_delete is a
 		// hidden field rendered on EVERY request, and a browser submits hidden inputs
@@ -439,7 +447,10 @@ $section->addInput(new Form_StaticText(
 		'-- you never type a path or a full filename. Creation is rejected if that exact file already exists.') . '</small>'
 ));
 
-$pfb_eh_new_when_val = ($pfb_eh_sel_when === 'pre' || $pfb_eh_sel_when === 'post') ? $pfb_eh_sel_when : 'post';
+// The typed create-When echo (failed create) wins over the loaded script's own
+// when; a fresh render follows the loaded script, defaulting to 'post'.
+$pfb_eh_new_when_val = ($pfb_eh_new_when_echo === 'pre' || $pfb_eh_new_when_echo === 'post') ? $pfb_eh_new_when_echo
+	: (($pfb_eh_sel_when === 'pre' || $pfb_eh_sel_when === 'post') ? $pfb_eh_sel_when : 'post');
 $group = new Form_Group('New Hook');
 $group->add(new Form_Select(
 	'pfb_eh_new_when',
