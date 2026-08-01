@@ -81,22 +81,27 @@ class BuildRepoError(Exception):
     """A fatal, user-facing error (bad input / collision / missing tool)."""
 
 
-def _require_wildcard_abi(path: Path, abi: object) -> str:
+def _require_wildcard_abi(path: Path, abi: object, *, route_only: bool = False) -> str:
     """Validate ``abi`` is a NO_ARCH package's wildcard ABI, or raise ``BuildRepoError``.
 
     Shared by ``build_repo()`` and ``_emit_catalog_from_paths()`` so the reject wording
     (and the NO_ARCH policy behind it) has exactly one canonical source instead of two
     verbatim-duplicated copies. Returns the validated ABI as ``str`` (narrowed via
-    ``_is_wildcard_abi``'s ``TypeGuard``) so callers need no further cast.
+    ``_is_wildcard_abi``'s ``TypeGuard``) so callers need no further cast. ``route_only``
+    selects the settled pre-#1806 frozen-tag remedy without mislabeling other inputs.
     """
     if not _is_wildcard_abi(abi):
+        remedy = (
+            "For a frozen route-only package, a concrete ABI identifies a pre-#1806 tag; "
+            "a pre-#1806 tag is unservable as route-only. Refusing to emit it."
+            if route_only
+            else "Ship a wildcard-ABI (NO_ARCH) build instead."
+        )
         raise BuildRepoError(
             f"{path.name}: catalog requires a NO_ARCH (wildcard-ABI) package — got "
             f"concrete ABI {abi!r}. The catalog tree is arch-less (one directory serves "
             f"every arch of a FreeBSD major); a concrete-ABI package would silently "
-            f"install on only one arch. For a frozen route-only package, a concrete ABI "
-            f"identifies a pre-#1806 tag; a pre-#1806 tag is unservable as route-only. "
-            f"Refusing to emit it."
+            f"install on only one arch. {remedy}"
         )
     return abi
 
@@ -591,7 +596,7 @@ def _require_contained(root: Path, dest: Path) -> Path:
     return dest
 
 
-def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path], *, root: Path) -> int:
+def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path], *, root: Path, route_only: bool = False) -> int:
     """Read each .pkg's manifest, dedup by (name, version), collision-check, emit at dest.
 
     Every package here MUST carry a NO_ARCH (wildcard) ABI (``_is_wildcard_abi``,
@@ -611,7 +616,7 @@ def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path], *, root: Path) -
     entries: list[tuple[Path, dict]] = [(p, read_compact_manifest(p)) for p in sorted(set(pkg_paths))]
     _check_collisions(entries)
     for path, manifest in entries:
-        _require_wildcard_abi(path, manifest.get("abi"))
+        _require_wildcard_abi(path, manifest.get("abi"), route_only=route_only)
     items: dict[tuple[str, str], tuple[Path, dict]] = {}
     for path, manifest in entries:
         nv = (manifest["name"], manifest["version"])
@@ -946,7 +951,7 @@ def build_repo_matrix(
                     f"frozen .pkg, but none match ABI {abi!r} — supply a frozen .pkg for this ABI."
                 )
             release_dir = out_dir / "release" / varver
-            n_release = _emit_catalog_from_paths(release_dir, frozen, root=out_dir)
+            n_release = _emit_catalog_from_paths(release_dir, frozen, root=out_dir, route_only=True)
             built.append(str(release_dir))
             sys.stderr.write(f"==> route-only release catalog {release_dir} ({n_release} package(s), frozen)\n")
             # No nightly subtree — route-only entries never get a nightly build.
