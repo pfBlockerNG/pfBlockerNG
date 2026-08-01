@@ -1905,10 +1905,9 @@ def test_ip_suppression_renders_unchecked_when_stored_off(
 def test_ip_suppression_stays_checked_on_validation_error_rerender(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """issue #1907 review F1: the error re-render path swaps ``$pconfig`` for raw
-    ``$_POST`` strings, so the checked-state expression must accept both the enum and
-    the POST string 'on'. A bare enum comparison rendered the box unchecked here, and
-    the corrected resubmit then silently stored 'off'."""
+    """The validation-error re-render swaps ``$pconfig`` for raw ``$_POST`` strings, so
+    the checked-state expression must accept both the enum and the POST string 'on' —
+    an enabled box must stay checked through a failed save."""
     resp = webui.post(
         _IP_PAGE,
         {"save": "Save", "ip_placeholder": "not-an-ip", "suppression": "on"},
