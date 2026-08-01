@@ -289,6 +289,8 @@ XSS_FEED_URL = 'http://a"><script>xss</script>.evil.example/list.txt'
 # encoded URL (not a fragment) proves the seeded row rendered, encoded.
 XSS_FEED_URL_ENCODED = "http://a&quot;&gt;&lt;script&gt;xss&lt;/script&gt;.evil.example/list.txt"
 XSS_FEED_URL_MARKER = "evil.example/list.txt"
+XSS_FEED_HEADER = "<header>\"'.header.evil.example"
+XSS_FEED_HEADER_ENCODED = "&lt;header&gt;&quot;&#039;.header.evil.example"
 
 # A "javascript:" scheme URL that still contains "http": the pre-fix
 # strpos('http') gate would have wrapped it in <a href="javascript:...">, and
@@ -316,7 +318,7 @@ def _seed_custom_feed_row(vm: helpers.SmokeVM, cfg_root: str, rowid: int, aliasn
     render-path seed, mirroring ``test_category_edit.py``'s config-injection
     idiom (``_mk_alias``).
     """
-    row = {"state": "Enabled", "url": url, "header": "xss-header"}
+    row = {"state": "Enabled", "url": url, "header": XSS_FEED_HEADER}
     snippet = (
         f"config_set_path({helpers._php_str(f'{cfg_root}/{rowid}/aliasname')}, {helpers._php_str(aliasname)});\n"
         f"config_set_path({helpers._php_str(f'{cfg_root}/{rowid}/action')}, {helpers._php_str('Deny_Both')});\n"
@@ -352,9 +354,9 @@ def test_feeds_custom_url_escapes_hostile_input(webui: WebUI, smoke_vm: helpers.
             ``url_compare`` never marks it ``found``).
       Then  the Tier-A render oracle passes AND the FULLY-encoded URL
             (``http://a&quot;&gt;&lt;script&gt;xss&lt;/script&gt;.evil.example/list.txt``)
-            appears in the body AND the raw breakout (``a"><script>``) never
-            appears anywhere (issue #1069 -- pre-fix, the URL printed raw in
-            both the href attribute and the link text).
+            and header appear in the body AND their raw markup never appears,
+            preserving the existing escaping while exercising both reachable
+            cells alongside issue #1819's exact invalid-byte PHPUnit proof.
     """
     vm = smoke_vm
     rowid = _free_rowid(vm, CFG_IPV4_FEEDS)
@@ -376,6 +378,11 @@ def test_feeds_custom_url_escapes_hostile_input(webui: WebUI, smoke_vm: helpers.
         )
         assert XSS_FEED_URL_ENCODED in body, (
             f"the Custom Feeds URL column did not HTML-encode the whole hostile URL (expected {XSS_FEED_URL_ENCODED!r})"
+        )
+        assert XSS_FEED_HEADER not in body, "the raw Custom Feeds header rendered verbatim"
+        assert XSS_FEED_HEADER_ENCODED in body, (
+            f"the Custom Feeds header column did not HTML-encode the whole hostile header "
+            f"(expected {XSS_FEED_HEADER_ENCODED!r})"
         )
     finally:
         _del_rowid(vm, CFG_IPV4_FEEDS, rowid)
