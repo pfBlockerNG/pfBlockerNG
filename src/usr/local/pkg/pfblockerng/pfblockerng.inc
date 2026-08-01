@@ -10610,7 +10610,7 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, PfbToggle $supp): array {
 	$messages = [];
 
-	$parts	= explode('/', $ipaddr);
+	$parts	= explode('/', $ipaddr, 3);
 	$subnet	= $parts[0];
 	// issue #1933: with more than one '/', $parts[1] is a URL path segment, not
 	// a mask — recover the bare host (the issue #1922 regex mask-guard outcome);

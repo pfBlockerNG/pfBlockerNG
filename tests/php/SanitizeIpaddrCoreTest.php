@@ -109,12 +109,17 @@ final class SanitizeIpaddrCoreTest extends TestCase
 	}
 
 	// Custom lists get the same bare-host recovery: a path segment is never a
-	// user-authored mask, so the custom /0-honor rule does not apply either.
+	// user-authored mask, so the custom /0-honor rule (issue #744) does not
+	// apply either — a '/0' path segment on a custom list is still path junk.
 	public function testIpv4CorePathSegmentsRecoverBareHostOnCustomList(): void
 	{
 		$this->assertSame(
 			['address' => '1.2.3.4', 'messages' => []],
 			pfb_sanitize_ipaddr('1.2.3.4/8/junk', TRUE, 'Disabled', PfbToggle::Off)
+		);
+		$this->assertSame(
+			['address' => '1.2.3.4', 'messages' => []],
+			pfb_sanitize_ipaddr('1.2.3.4/0/path', TRUE, 'Disabled', PfbToggle::Off)
 		);
 	}
 
