@@ -1,6 +1,6 @@
 --- a/node_modules/@codemirror/view/dist/index.js
 +++ b/node_modules/@codemirror/view/dist/index.js
-@@ -3461,8 +3461,17 @@
+@@ -3461,8 +3461,16 @@
              (rect.top > window.pageYOffset + window.visualViewport.offsetTop + window.visualViewport.height ||
                  rect.bottom < window.pageYOffset + window.visualViewport.offsetTop)) {
              let line = this.view.docView.lineAt(range.head, 1);
@@ -13,8 +13,7 @@
 +            if (line) {
 +                let { scrollLeft } = this.view.scrollDOM;
                  line.dom.scrollIntoView({ block: "nearest" });
-+                if (this.view.scrollDOM.scrollLeft != scrollLeft)
-+                    this.view.scrollDOM.scrollLeft = scrollLeft;
++                this.view.scrollDOM.scrollLeft = scrollLeft;
 +            }
          }
      }
