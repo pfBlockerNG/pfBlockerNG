@@ -859,6 +859,25 @@ def test_catalog_dest_with_a_non_directory_parent_is_refused(tmp_path: Path) -> 
     assert (out / "release").read_text() == "not a directory"
 
 
+def test_output_root_that_is_not_a_directory_is_refused(tmp_path: Path) -> None:
+    """The output ROOT is a component too — a file there is refused, with or without a name.
+
+    The root is where the walk stops, so it is the component most easily excluded from
+    its own check. Both shapes reach it: without a catalog name the destination IS the
+    root, and with one the root is its furthest ancestor (issue #1972).
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+
+    for catalog_name in (None, "release/ce-2.8"):
+        out = tmp_path / f"out_{catalog_name or 'bare'}".replace("/", "_")
+        out.write_text("not a directory")
+        with pytest.raises(brp.BuildRepoError, match="not a directory"):
+            brp.build_repo(in_dir, out, catalog_name=catalog_name)
+        assert out.read_text() == "not a directory"
+
+
 def test_catalog_dest_containment_allows_a_real_nested_dir(tmp_path: Path) -> None:
     """The containment guard must not refuse the layout the publisher actually writes.
 

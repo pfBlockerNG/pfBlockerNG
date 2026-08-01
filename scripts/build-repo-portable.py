@@ -573,8 +573,12 @@ def _require_contained(root: Path, dest: Path) -> Path:
     # file (it does not raise), and resolve() passes straight through such a component, so
     # a leaf-only check lets `mkdir(parents=True)` raise a raw NotADirectoryError from
     # inside the writer. Walk from the root outwards so the message names the real culprit.
+    # `is_relative_to` alone is the stop condition: the root IS a component that must be a
+    # real directory (without a catalog name the destination simply IS the root), and the
+    # first ancestor ABOVE it is not relative to it, so the walk never inspects anything
+    # outside the output root.
     for component in (dest, *dest.parents):
-        if not component.is_relative_to(root) or component == root:
+        if not component.is_relative_to(root):
             break
         if component.exists() and not component.is_dir():
             raise BuildRepoError(
