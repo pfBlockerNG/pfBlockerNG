@@ -45,6 +45,9 @@ def _await_control_thread_stopped(name: str, timeout: float = 2.0) -> None:
         if not P.python_control_thread(name):
             return
         time.sleep(0.01)
+    raise RuntimeError(
+        f"salvage cap expired / stuck or environment: control timer thread {name!r} to stop; still active"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -723,7 +726,7 @@ class _ControlHarness:
         self.thread = threading.Thread(name="pfb_control_watcher_test", target=P.pfb_control_watcher, daemon=True)
         self.thread.start()
 
-    def wait_started(self, timeout: float = 5.0) -> bool:
+    def wait_started(self, timeout: float = 5.0) -> None:
         """Wait until the watcher has written its startup baseline to the applied file.
 
         The watcher writes its baseline applied marker (seq 0, or the seq of any
@@ -735,17 +738,23 @@ class _ControlHarness:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.read_applied() is not None:
-                return True
+                return
             time.sleep(0.005)
-        return False
+        raise RuntimeError(
+            "salvage cap expired / stuck or environment: control watcher startup baseline "
+            f"marker; observed {self.read_applied()!r}"
+        )
 
-    def wait_applied(self, seq: int, timeout: float = 3.0) -> bool:
+    def wait_applied(self, seq: int, timeout: float = 3.0) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if (self.read_applied() or -1) >= seq:
-                return True
+                return
             time.sleep(0.01)
-        return False
+        raise RuntimeError(
+            "salvage cap expired / stuck or environment: control applied marker "
+            f"to reach sequence {seq}; observed {self.read_applied()!r}"
+        )
 
     def stop_join(self) -> bool:
         """Signal the watcher to stop and wait until it dies.
@@ -896,17 +905,17 @@ class TestControlWatcherLoop:
         monkeypatch.setattr(P, "pfb_apply_control_command", apply_command)
         P.pfb["python_blacklist"] = False
         h.start()
-        assert h.wait_started()
+        h.wait_started()
         assert P.pfb["python_blacklist"] is False
 
         h.publish({"seq": 1, "cmd": "disable"})
         assert first_call.wait(3.0), f"handler calls: {handler_calls!r}"
-        assert h.wait_applied(1), f"applied marker: {h.read_applied()!r}"
+        h.wait_applied(1)
         assert h.thread.is_alive(), "control watcher exited after hostile stderr fallback"
 
         h.publish({"seq": 2, "cmd": "enable"})
         assert later_call.wait(3.0), f"handler calls: {handler_calls!r}"
-        assert h.wait_applied(2), f"applied marker: {h.read_applied()!r}"
+        h.wait_applied(2)
         assert handler_calls == ["disable", "enable"]
         assert P.pfb["python_blacklist"] is True
 
@@ -939,18 +948,18 @@ class TestControlWatcherLoop:
         monkeypatch.setattr(P, "pfb_apply_control_command", apply_command)
         P.pfb["python_blacklist"] = False
         h.start()
-        assert h.wait_started()
+        h.wait_started()
         assert P.pfb["python_blacklist"] is False
 
         h.publish({"seq": 1, "cmd": "disable"})
         assert first_call.wait(3.0), f"handler calls: {handler_calls!r}"
-        assert h.wait_applied(1), f"applied marker: {h.read_applied()!r}"
+        h.wait_applied(1)
         assert "[pfBlockerNG]: control command failed: control handler failed\n" in stderr_fallback
         assert h.thread.is_alive(), "control watcher exited after handler exception"
 
         h.publish({"seq": 2, "cmd": "enable"})
         assert later_call.wait(3.0), f"handler calls: {handler_calls!r}"
-        assert h.wait_applied(2), f"applied marker: {h.read_applied()!r}"
+        h.wait_applied(2)
         assert handler_calls == ["disable", "enable"]
         assert P.pfb["python_blacklist"] is True
 
@@ -962,7 +971,7 @@ class TestControlWatcherLoop:
         h.start()
         # Wait for the watcher's startup baseline before publishing -- prevents the
         # command from being mistaken for a pre-existing record under CPU contention.
-        assert h.wait_started()
+        h.wait_started()
 
         assert P.pfb["python_blacklist"] is True  # BEFORE: still on, nothing applied.
 
@@ -970,7 +979,7 @@ class TestControlWatcherLoop:
         h.publish({"seq": 1, "cmd": "disable"})
 
         # Then: the reader applies it -- blocking goes OFF and the applied marker reaches 1.
-        assert h.wait_applied(1)
+        h.wait_applied(1)
         assert P.pfb["python_blacklist"] is False
 
     def test_addbypass_then_removebypass_via_channel(self, control_harness: _ControlHarness) -> None:
@@ -979,14 +988,14 @@ class TestControlWatcherLoop:
         assert P.gpListDB.get("192.0.2.10") is None
         h.start()
         # Wait for the watcher's startup baseline before publishing.
-        assert h.wait_started()
+        h.wait_started()
 
         h.publish({"seq": 1, "cmd": "addbypass", "ip": "192.0.2.10"})
-        assert h.wait_applied(1)
+        h.wait_applied(1)
         assert P.gpListDB.get("192.0.2.10") == 0  # AFTER add: bypassed.
 
         h.publish({"seq": 2, "cmd": "removebypass", "ip": "192.0.2.10"})
-        assert h.wait_applied(2)
+        h.wait_applied(2)
         assert P.gpListDB.get("192.0.2.10") is None  # AFTER remove: gone again.
 
     def test_stale_seq_is_ignored_fresh_is_applied(self, control_harness: _ControlHarness) -> None:
@@ -996,11 +1005,11 @@ class TestControlWatcherLoop:
         P.pfb["python_blacklist"] = True
         h.start()
         # Wait for the watcher's startup baseline before publishing.
-        assert h.wait_started()
+        h.wait_started()
 
         # Apply seq 5 (disable): blocking OFF.
         h.publish({"seq": 5, "cmd": "disable"})
-        assert h.wait_applied(5)
+        h.wait_applied(5)
         assert P.pfb["python_blacklist"] is False
 
         # Re-arm blocking out-of-band, then replay an OLD seq (3, disable). The reader
@@ -1012,12 +1021,12 @@ class TestControlWatcherLoop:
         # A fresh unknown command proves the watcher consumed/progressed past the stale
         # record without changing the state.
         h.publish({"seq": 6, "cmd": "wipe-everything"})
-        assert h.wait_applied(6), f"applied marker after stale record: {h.read_applied()!r}"
+        h.wait_applied(6)
         assert P.pfb["python_blacklist"] is True, "stale disable changed blacklist state"
 
         # A genuinely fresh seq (7, disable) IS applied -> blocking OFF again.
         h.publish({"seq": 7, "cmd": "disable"})
-        assert h.wait_applied(7), f"applied marker after fresh disable: {h.read_applied()!r}"
+        h.wait_applied(7)
         assert P.pfb["python_blacklist"] is False
 
     def test_preexisting_record_adopted_as_baseline_not_replayed(self, control_harness: _ControlHarness) -> None:
@@ -1031,18 +1040,18 @@ class TestControlWatcherLoop:
         h.start()
         # wait_applied(9) itself is the started gate here (seq 9 = baseline): the
         # watcher adopts it and publishes it without applying the command.
-        assert h.wait_applied(9), f"applied marker: {h.read_applied()!r}"  # baseline adopted + published.
+        h.wait_applied(9)  # baseline adopted + published.
         assert h.wait_read(9, count=2), f"control records read: {h.read_seqs!r}"
 
         # A fresh unknown command proves the watcher progressed past the baseline
         # without changing the state.
         h.publish({"seq": 10, "cmd": "wipe-everything"})
-        assert h.wait_applied(10), f"applied marker after baseline: {h.read_applied()!r}"
+        h.wait_applied(10)
         assert P.pfb["python_blacklist"] is True, "pre-existing disable was replayed"
 
         # A future advance (seq 11) DOES apply.
         h.publish({"seq": 11, "cmd": "disable"})
-        assert h.wait_applied(11)
+        h.wait_applied(11)
         assert P.pfb["python_blacklist"] is False
 
     def test_unknown_command_record_consumed_without_side_effect(self, control_harness: _ControlHarness) -> None:
@@ -1050,10 +1059,10 @@ class TestControlWatcherLoop:
         h = control_harness
         P.pfb["python_blacklist"] = True
         h.start()
-        assert h.wait_started()  # ensure baseline before publishing
+        h.wait_started()  # ensure baseline before publishing
         assert P.pfb["python_blacklist"] is True  # BEFORE: on, nothing applied yet.
         h.publish({"seq": 1, "cmd": "wipe-everything"})
-        assert h.wait_applied(1)  # consumed (marker advances) ...
+        h.wait_applied(1)  # consumed (marker advances) ...
         assert P.pfb["python_blacklist"] is True  # ... but no side effect.
 
 
@@ -1074,7 +1083,7 @@ class TestPermissionBoundaryModel:
         h.start()
         release: threading.Event | None = None
         try:
-            assert h.wait_applied(1), f"applied marker: {h.read_applied()!r}"
+            h.wait_applied(1)
             assert h.wait_read(1, count=2), f"control records read: {h.read_seqs!r}"
             read_started, release = h.pause_read(2)
             h.publish({"seq": 2, "cmd": "wipe-everything"})
@@ -1083,7 +1092,7 @@ class TestPermissionBoundaryModel:
             with open(h.channel, "rb") as fh:
                 before_bytes = fh.read()
             release.set()
-            assert h.wait_applied(2), f"applied marker after baseline: {h.read_applied()!r}"
+            h.wait_applied(2)
             # Then: the reader consumed the command and wrote ONLY the applied marker --
             # the command channel itself is byte-for-byte unchanged (the reader is a
             # read-only consumer of it; only root writes the channel).
