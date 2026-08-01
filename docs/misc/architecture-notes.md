@@ -991,11 +991,14 @@ never wrong. Key properties:
   by the time the box first reaches for a catalog. Running this early is safe precisely because it
   is local-file-only (no network, no daemon).
 - **Folded detection (KISS):** edition = "`/etc/product_label` contains `Plus`" → `plus`, else
-  `ce`; version = major.minor of `/etc/version`. This mirrors `catalog_name_from_version()` in
-  `scripts/build-repo-portable.py`; there is **no** separate `/lib` detection helper (it is folded
-  into the one self-contained hook file). **issue #1806:** the catalog is arch-less, so the hook no
-  longer calls `pkg config abi` at all (it used to read the arch leaf; there is no arch leaf to
-  read any more) — one fewer moving part, and it no longer needs `pkg` on the PATH.
+  `ce`; version = major.minor of `/etc/version`, with any dash suffix (e.g. `-BETA`/`-RC`)
+  stripped FIRST. This deliberately **diverges** from `catalog_name_from_version()` in
+  `scripts/build-repo-portable.py` by that one strip — a live box's `/etc/version` can carry a
+  pre-release suffix the matrix's version never does (issue #1786) — otherwise it is the same
+  edition + major.minor derivation; there is **no** separate `/lib` detection helper (it is
+  folded into the one self-contained hook file). **issue #1806:** the catalog is arch-less, so
+  the hook no longer calls `pkg config abi` at all (it used to read the arch leaf; there is no
+  arch leaf to read any more) — one fewer moving part, and it no longer needs `pkg` on the PATH.
 - **Byte-identical output:** the conf body the hook writes is byte-for-byte identical to
   `add-repo.sh --print-conf`, `build-repo.sh --print-conf`, and `build-repo-portable.py
   --print-conf` (drift-pinned by `tests/test_add_repo_conf.py` across all four producers).

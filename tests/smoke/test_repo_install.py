@@ -1384,10 +1384,12 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
 
     # BACKSTOP: prove the deploy actually serves the catalog from the RUNNER first
     # (independent of the guest) — polls through first-deploy / DNS / cert lag. The
-    # varver to poll is this leg's own, derived from the matrix (own_variant().catalog
-    # — the published catalogs are keyed from the matrix; needs no VM round-trip). This
+    # varver to poll is read from the BOX itself via the _box_real_varver oracle —
+    # NEVER own_variant().catalog / the matrix: matrix_variants() dedupes by (abi,
+    # variant), so two same-major editions (e.g. Plus 26.03 + 26.07) collapse onto
+    # the first, which would poll/serve the wrong catalog for this leg. This
     # release check's base is the pkg root, so the full subtree is "release/<varver>".
-    varver = own_variant().catalog
+    varver = _box_real_varver(repo_vm)
     poll_catalog_served(base_url, f"release/{varver}")
 
     # GIVEN: Pages IPs pinned (guest DNS is sandboxed), package absent, our conf at
