@@ -68,10 +68,13 @@ _detect_catalog() {
     else
         _dc_edition='ce'
     fi
-    # Version: major.minor of /etc/version (e.g. "2.8.1" -> "2.8").
+    # Version: major.minor of /etc/version, pre-release suffix stripped first
+    # (e.g. "2.8.1" -> "2.8"; "26.07-BETA" -> "26.07"; issue #1786: a dash
+    # suffix sitting inside the minor field, e.g. "-BETA"/"-RC"/"-RELEASE",
+    # must not leak into the catalog varver — cut on '-' before cut on '.').
     _dc_ver=''
     [ -r "${PFB_VERSION_FILE}" ] && IFS= read -r _dc_ver < "${PFB_VERSION_FILE}"
-    _dc_mm="$(printf '%s' "${_dc_ver}" | cut -d. -f1,2)"
+    _dc_mm="$(printf '%s' "${_dc_ver}" | cut -d- -f1 | cut -d. -f1,2)"
     [ -n "${_dc_mm}" ] || return 1
     printf '%s-%s' "${_dc_edition}" "${_dc_mm}"
 }

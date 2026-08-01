@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-# build-repo-portable.py — turn a directory of pfBlockerNG .pkg files into a
-# per-ABI FreeBSD `pkg` repository tree WITHOUT libpkg, in pure Python (ADR-17):
-# for a plain Linux CI runner with no real `pkg` binary, hand-rolling the same
-# catalog `pkg repo` produces (meta.conf/packagesite.pkg/data.pkg, incl. the
-# libpkg `sum` checksum — see pkg_checksum()) from each .pkg's manifest,
-# deterministically and without network. (scripts/build-repo.sh drives a real
-# `pkg repo` and stays the FreeBSD/pfSense-side fallback; this is the CI/release
-# builder.) FLAVOR-COLLISION GUARD, version-keyed catalogs (ADR-20), the
-# matrix-driven build, and release retention are each documented at their own
-# function; see --help for full CLI usage.
+# build-repo-portable.py — turn a directory of pfBlockerNG .pkg files into an
+# ARCH-LESS FreeBSD `pkg` repository catalog WITHOUT libpkg, in pure Python
+# (ADR-17): for a plain Linux CI runner with no real `pkg` binary, hand-rolling
+# the same catalog `pkg repo` produces (meta.conf/packagesite.pkg/data.pkg,
+# incl. the libpkg `sum` checksum — see pkg_checksum()) from each .pkg's
+# manifest, deterministically and without network. Every pfBlockerNG .pkg is
+# NO_ARCH (issue #1806): its manifest ABI is CPU-wildcarded (e.g.
+# "FreeBSD:15:*"), so the catalog has no per-ABI subdirectory — one directory
+# serves every arch of a FreeBSD major (see _is_wildcard_abi / build_repo).
+# (scripts/build-repo.sh drives a real `pkg repo` and stays the FreeBSD/
+# pfSense-side fallback; this is the CI/release builder.) FLAVOR-COLLISION
+# GUARD, version-keyed catalogs (ADR-20), the matrix-driven build, and release
+# retention are each documented at their own function; see --help for full CLI
+# usage.
 
 from __future__ import annotations
 
@@ -52,12 +56,6 @@ META_CONF = (
 # (ADR-39; the Cloudflare Worker has been retired).
 DEFAULT_BASE_URL = "https://pfblockerng.github.io/pkg"
 CONF_PRIORITY = 100
-
-# A safe single path segment: an ABI is used UNVALIDATED from manifest data as a
-# directory name (out_dir / abi) that is rmtree'd + rebuilt, so reject anything
-# that could escape out_dir. FreeBSD ABIs look like `FreeBSD:15:amd64` (the `:` is
-# allowed); `/`, `\`, whitespace, and traversal are not.
-_ABI_RE = re.compile(r"^[A-Za-z0-9:._+-]+$")
 
 # A NO_ARCH package's manifest ABI wildcards ONLY the final CPU segment — e.g.
 # "FreeBSD:15:*" (probed live against a real Netgate noarch package; issue
@@ -298,53 +296,53 @@ def catalog_name_from_version(pfsense_version: str, variant: str, *, channel: st
 
 
 def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) -> list[str]:
-    """Build the per-ABI catalog tree. Returns the list of ABIs built (sorted).
+    """Build the arch-less (NO_ARCH-only) catalog from a directory of .pkg files.
 
-    When ``catalog_name`` is supplied (e.g. ``"ce-2.8"``), the ABI subtrees are
-    written under ``out_dir / catalog_name / <ABI>/`` instead of ``out_dir / <ABI>/``.
-    When absent, the legacy ``out_dir / <ABI>/`` layout is used (unchanged behaviour).
+    Every pfBlockerNG .pkg is NO_ARCH (issue #1806): its manifest ABI is
+    CPU-wildcarded (e.g. ``"FreeBSD:15:*"``, see ``_is_wildcard_abi``), so the
+    catalog has no per-ABI subdirectory to bucket into — one directory serves
+    every CPU arch of a FreeBSD major (mirrors ``scripts/build-repo.sh``'s
+    ``require_noarch_abi``). A concrete-ABI package is a hard error — the
+    tripwire that would otherwise let it install silently on only one arch.
+    Mixing more than one ABI in a single call is also a hard error: filter
+    ``in_dir`` to one ABI and invoke once per major (mirrors build-repo.sh's
+    "mixed ABIs in one run" guard).
+
+    The catalog is written DIRECTLY at ``out_dir`` (or ``out_dir / catalog_name``
+    when supplied, e.g. ``"ce-2.8"``) — meta.conf, meta, packagesite.pkg, data.pkg,
+    plus each canonically-named ``<name>-<version>.pkg``. Emission (dedup by
+    (name, version), the flavor-collision guard, the catalog descriptor) is
+    delegated to ``_emit_catalog_from_paths``. Returns the single wildcard ABI
+    built, as a one-element sorted list.
     """
     pkgs = sorted(p for p in in_dir.glob("*.pkg") if p.is_file())
     if not pkgs:
         raise BuildRepoError(f"no .pkg files in {in_dir}")
 
-    # Read every manifest ONCE (the ABI/name/version/flavor source of truth).
-    entries: list[tuple[Path, dict]] = [(p, read_compact_manifest(p)) for p in pkgs]
-
-    # Collision guard before laying anything out (fail-closed, never a silent drop).
-    _check_collisions(entries)
-
-    # Bucket by ABI, deduping by (name, version). The same package from multiple
-    # sources (e.g. the branch build + a release artifact) is interchangeable —
-    # `_check_collisions` already rejected a same-name+version+ABI/different-flavor
-    # clash — so keep ONE. The published .pkg is named CANONICALLY
-    # (`<name>-<version>.pkg`), never the staging input filename, so the catalog path
-    # is clean + stable regardless of how the publish job staged the inputs.
-    by_abi: dict[str, dict[tuple[str, str], tuple[Path, dict]]] = {}
-    for path, manifest in entries:
-        abi = manifest["abi"]
-        # Validate before it becomes a filesystem path segment (rmtree target below).
-        if not isinstance(abi, str) or not _ABI_RE.fullmatch(abi) or ".." in abi:
-            raise BuildRepoError(f"{path.name}: unsafe or invalid ABI segment {abi!r}")
-        nv = (manifest["name"], manifest["version"])
-        bucket_nv = by_abi.setdefault(abi, {})
-        if nv in bucket_nv:
-            sys.stderr.write(
-                f"==> dedup: {path.name} duplicates {bucket_nv[nv][0].name} "
-                f"({nv[0]}-{nv[1]}, {abi}) — keeping the first\n"
+    # Validate every input is NO_ARCH and shares one ABI BEFORE emitting anything
+    # (fail-closed; mirrors build-repo.sh's require_noarch_abi + mixed-ABI guard).
+    abis: set[str] = set()
+    for path in pkgs:
+        manifest = read_compact_manifest(path)
+        abi = manifest.get("abi")
+        if not _is_wildcard_abi(abi):
+            raise BuildRepoError(
+                f"{path.name}: catalog requires a NO_ARCH (wildcard-ABI) package — got "
+                f"concrete ABI {abi!r}. The catalog tree is arch-less (one directory serves "
+                f"every arch of a FreeBSD major); a concrete-ABI package would silently "
+                f"install on only one arch. Ship a wildcard-ABI (NO_ARCH) build instead."
             )
-            continue
-        bucket_nv[nv] = (path, manifest)
+        abis.add(abi)
+    if len(abis) > 1:
+        raise BuildRepoError(
+            f"mixed ABIs in one build_repo() call: {sorted(abis)} — filter in_dir to one "
+            f"ABI and invoke once per major (mirrors build-repo.sh's per-run ABI requirement)."
+        )
 
-    # When catalog_name is given, place all ABI subtrees under out_dir/catalog_name/.
     catalog_root = out_dir / catalog_name if catalog_name else out_dir
-    catalog_root.mkdir(parents=True, exist_ok=True)
-    for abi in sorted(by_abi):
-        bucket = catalog_root / abi
-        n = _write_catalog_dir(bucket, by_abi[abi])
-        sys.stderr.write(f"==> built catalog {bucket} ({n} package(s))\n")
-
-    return sorted(by_abi)
+    n = _emit_catalog_from_paths(catalog_root, pkgs)
+    sys.stderr.write(f"==> built catalog {catalog_root} ({n} package(s))\n")
+    return sorted(abis)
 
 
 def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict]]) -> int:
@@ -924,7 +922,7 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         prog="build-repo-portable.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Generate a per-ABI FreeBSD pkg repository catalog in pure Python (no libpkg). ADR-17.",
+        description="Generate an arch-less FreeBSD pkg repository catalog in pure Python (no libpkg). ADR-17.",
         epilog=(
             "examples:\n"
             "  # build a catalog tree from a dir of release .pkg\n"
@@ -940,7 +938,7 @@ def main(argv: list[str]) -> int:
         ),
     )
     ap.add_argument("--in", dest="in_dir", help="directory holding the input .pkg files (searched, non-recursive)")
-    ap.add_argument("--out", dest="out_dir", help="output root; one <ABI>/ catalog subtree is created per ABI")
+    ap.add_argument("--out", dest="out_dir", help="output root; the flat, arch-less catalog is written directly here")
     ap.add_argument("--print-conf", action="store_true", help="print the client repo-conf template to stdout and exit")
     ap.add_argument(
         "--base-url",
@@ -963,9 +961,11 @@ def main(argv: list[str]) -> int:
         dest="catalog_name",
         default=None,
         help=(
-            "when supplied, write the per-ABI tree under <out>/<catalog-name>/<ABI>/ "
-            "instead of the legacy <out>/<ABI>/ path (e.g. 'ce-2.8', 'plus-26.03'). "
-            "Derive from pfsense_version + variant via catalog_name_from_version()."
+            "when supplied, write the flat catalog under <out>/<catalog-name>/ "
+            "instead of directly at <out>/ (e.g. 'ce-2.8', 'plus-26.03'); the "
+            "catalog is arch-less (NO_ARCH; issue #1806), so there is no <ABI>/ "
+            "subdir either way. Derive from pfsense_version + variant via "
+            "catalog_name_from_version()."
         ),
     )
     g_matrix = ap.add_argument_group("matrix-driven build (ADR-20 routing rework)")
@@ -1172,7 +1172,7 @@ def main(argv: list[str]) -> int:
     except (BuildRepoError, PkgError) as e:
         sys.stderr.write(f"build-repo-portable: {e}\n")
         return 1
-    sys.stderr.write(f"==> built catalogs for ABI: {' '.join(abis)}\n")
+    sys.stderr.write(f"==> built catalog for ABI: {' '.join(abis)}\n")
     return 0
 
 

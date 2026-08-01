@@ -176,6 +176,55 @@ Describe 'generate hook — regenerate nightly conf (Plus)'
     End
 End
 
+# ── PRE-RELEASE SUFFIX STRIP: a dash-suffixed /etc/version must not leak into
+#    the varver (issue #1786) ────────────────────────────────────────────────
+
+Describe 'generate hook — pre-release suffix strip (Plus BETA)'
+    setup() {
+        _pb_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_plusbeta.XXXXXX")"
+        _make_box "${_pb_dir}" "pfSense Plus" "26.07-BETA"
+        printf '# stub pending\n' > "${PFB_RELEASE_CONF}"
+    }
+    cleanup() { rm -rf "${_pb_dir}"; _unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: release conf is the unresolved stub'
+      The contents of file "${PFB_RELEASE_CONF}" should include "pending"
+    End
+
+    It 'strips the -BETA suffix before major.minor, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "regenerated"
+      The contents of file "${PFB_RELEASE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/release/plus-26.07"'
+      The contents of file "${PFB_RELEASE_CONF}" should not include "plus-26.07-BETA"
+    End
+End
+
+Describe 'generate hook — pre-release suffix strip (CE RC)'
+    setup() {
+        _cr_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_cerc.XXXXXX")"
+        _make_box "${_cr_dir}" "pfSense" "2.9-RC"
+        printf '# stub pending\n' > "${PFB_RELEASE_CONF}"
+    }
+    cleanup() { rm -rf "${_cr_dir}"; _unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: release conf is the unresolved stub'
+      The contents of file "${PFB_RELEASE_CONF}" should include "pending"
+    End
+
+    It 'strips the -RC suffix before major.minor, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "regenerated"
+      The contents of file "${PFB_RELEASE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/release/ce-2.9"'
+      The contents of file "${PFB_RELEASE_CONF}" should not include "ce-2.9-RC"
+    End
+End
+
 # ── UNCONDITIONAL: a STALE-varver conf is rewritten to the current varver ──────
 
 Describe 'generate hook — unconditional rewrite of a stale-varver conf'

@@ -64,7 +64,7 @@ def make_pkg(
     *,
     name: str = "demo",
     version: str = "1.0_1",
-    abi: str = "FreeBSD:15:amd64",
+    abi: str = "FreeBSD:15:*",
     deps: dict[str, dict[str, str]] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict:
@@ -190,7 +190,7 @@ def test_meta_conf_is_byte_exact(tmp_path: Path) -> None:
     make_pkg(in_dir / "demo-1.0_1.pkg")
     out = tmp_path / "out"
     brp.build_repo(in_dir, out)
-    bucket = out / "FreeBSD:15:amd64"
+    bucket = out  # arch-less (issue #1806/#1786): catalog lands directly at out_dir
     expected = (
         "version = 2;\n"
         'packing_format = "tzst";\n'
@@ -222,7 +222,7 @@ def test_published_pkg_preserves_source_mtime(tmp_path: Path) -> None:
     out = tmp_path / "out"
     brp.build_repo(in_dir, out)
 
-    dest = out / "FreeBSD:15:amd64" / "demo-1.0_1.pkg"
+    dest = out / "demo-1.0_1.pkg"  # arch-less (issue #1806/#1786): no ABI subdir
     assert dest.is_file()
     assert int(dest.stat().st_mtime) == build_mtime
 
@@ -245,7 +245,7 @@ def test_packagesite_object_order_and_injected_fields(tmp_path: Path) -> None:
     out = tmp_path / "out"
     brp.build_repo(in_dir, out)
 
-    raw = _read_member(out / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml")
+    raw = _read_member(out / "packagesite.pkg", "packagesite.yaml")  # arch-less: flat at out_dir
     assert raw.endswith(b"\n"), "packagesite.yaml is newline-delimited JSON"
     lines = [ln for ln in raw.decode().splitlines() if ln]
     assert len(lines) == 1
@@ -290,7 +290,7 @@ def test_packagesite_is_compact_json_no_spaces(tmp_path: Path) -> None:
     make_pkg(in_dir / "demo-1.0_1.pkg")
     out = tmp_path / "out"
     brp.build_repo(in_dir, out)
-    raw = _read_member(out / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
+    raw = _read_member(out / "packagesite.pkg", "packagesite.yaml").decode()
     assert '", "' not in raw and '": "' not in raw  # no ", " / ": " separators
 
 
@@ -306,79 +306,106 @@ def test_data_blob_shape_and_no_trailing_newline(tmp_path: Path) -> None:
     make_pkg(in_dir / "demo-1.0_1.pkg")
     out = tmp_path / "out"
     brp.build_repo(in_dir, out)
-    raw = _read_member(out / "FreeBSD:15:amd64" / "data.pkg", "data")
+    raw = _read_member(out / "data.pkg", "data")  # arch-less: flat at out_dir
     assert not raw.endswith(b"\n"), "data has no trailing newline (matches real pkg repo)"
     obj = json.loads(raw)
     assert obj["groups"] == []
     assert obj["expired_packages"] == []
     assert len(obj["packages"]) == 1
     # The package object equals the packagesite object.
-    psite = json.loads(_read_member(out / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml").decode())
+    psite = json.loads(_read_member(out / "packagesite.pkg", "packagesite.yaml").decode())
     assert obj["packages"][0] == psite
 
 
 # --------------------------------------------------------------------------- #
-# Layout + ABI bucketing + the verbatim .pkg copy
+# Arch-less catalog contract (issue #1786): plain build_repo() is now NO_ARCH-only
+# and flat — every real pfBlockerNG .pkg carries a wildcard ABI (issue #1806), so
+# there is no per-ABI subdirectory to bucket into; a concrete ABI or a mixed-major
+# run is a hard error, mirroring build-repo.sh's require_noarch_abi + "mixed ABIs
+# in one run" guards.
 # --------------------------------------------------------------------------- #
 
 
 def test_layout_and_verbatim_pkg_copy(tmp_path: Path) -> None:
-    """Each <ABI>/ holds the .pkg (byte-verbatim) + the catalog triple + meta."""
+    """A NO_ARCH (wildcard-ABI) pkg emits the catalog DIRECTLY at out_dir — no
+    per-ABI subdirectory — holding the .pkg (byte-verbatim) + the catalog triple
+    + meta."""
     in_dir = tmp_path / "in"
     in_dir.mkdir()
     pkg = in_dir / "demo-1.0_1.pkg"
-    original = make_pkg(pkg)
+    original = make_pkg(pkg, abi="FreeBSD:15:*")
     del original
     out = tmp_path / "out"
     abis = brp.build_repo(in_dir, out)
-    assert abis == ["FreeBSD:15:amd64"]
-    bucket = out / "FreeBSD:15:amd64"
+    assert abis == ["FreeBSD:15:*"]
     for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg", "demo-1.0_1.pkg"):
-        assert (bucket / fname).is_file(), f"missing {fname}"
+        assert (out / fname).is_file(), f"missing {fname}"
     # The .pkg is copied verbatim (no re-archiving).
-    assert (bucket / "demo-1.0_1.pkg").read_bytes() == pkg.read_bytes()
+    assert (out / "demo-1.0_1.pkg").read_bytes() == pkg.read_bytes()
+    # No per-ABI subdirectory of any shape is created.
+    assert not (out / "FreeBSD:15:amd64").exists()
+    assert not (out / "FreeBSD:15:*").exists()
 
 
-def test_per_abi_bucketing(tmp_path: Path) -> None:
-    """Two ABIs -> two <ABI>/ subtrees, each catalog scoped to its own ABI's pkg."""
+def test_catalog_name_places_flat_catalog_under_out_dir(tmp_path: Path) -> None:
+    """catalog_name="release/ce-2.8" writes the flat catalog at out_dir/release/ce-2.8/
+    — still no ABI subdir beneath it."""
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "a15.pkg", name="a", abi="FreeBSD:15:amd64")
-    make_pkg(in_dir / "b16.pkg", name="b", abi="FreeBSD:16:amd64")
+    make_pkg(in_dir / "demo-1.0_1.pkg", abi="FreeBSD:15:*")
     out = tmp_path / "out"
-    abis = brp.build_repo(in_dir, out)
-    assert abis == ["FreeBSD:15:amd64", "FreeBSD:16:amd64"]
-    # Each bucket's packagesite names exactly its own package; its .pkg lands there
-    # under the CANONICAL `<name>-<version>.pkg` (NOT the staging input filename
-    # `a15.pkg`/`b16.pkg`).
-    for abi, pkgname, fname in (("FreeBSD:15:amd64", "a", "a-1.0_1.pkg"), ("FreeBSD:16:amd64", "b", "b-1.0_1.pkg")):
-        raw = _read_member(out / abi / "packagesite.pkg", "packagesite.yaml").decode()
-        objs = [json.loads(ln) for ln in raw.splitlines() if ln]
-        assert [o["name"] for o in objs] == [pkgname]
-        assert [o["path"] for o in objs] == [fname]
-        assert (out / abi / fname).is_file()
+    brp.build_repo(in_dir, out, catalog_name="release/ce-2.8")
+    bucket = out / "release" / "ce-2.8"
+    for fname in ("meta.conf", "meta", "packagesite.pkg", "data.pkg", "demo-1.0_1.pkg"):
+        assert (bucket / fname).is_file(), f"missing {fname}"
+    assert not (bucket / "FreeBSD:15:amd64").exists()
+    assert not (bucket / "FreeBSD:15:*").exists()
+
+
+def test_concrete_abi_pkg_is_rejected(tmp_path: Path) -> None:
+    """A CONCRETE-ABI package (not NO_ARCH) is rejected — the catalog is
+    arch-less/NO_ARCH-only since issue #1806; a concrete-ABI .pkg would silently
+    install on only one arch."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "demo-1.0_1.pkg", abi="FreeBSD:15:amd64")
+    out = tmp_path / "out"
+    with pytest.raises(brp.BuildRepoError, match="NO_ARCH"):
+        brp.build_repo(in_dir, out)
+
+
+def test_mixed_majors_in_one_run_are_rejected(tmp_path: Path) -> None:
+    """Two wildcard-ABI pkgs of DIFFERENT FreeBSD majors in one build_repo() call
+    is a hard error (mirrors build-repo.sh's "mixed ABIs in one run" guard): the
+    caller must filter the input to one major and invoke once per major."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "a15.pkg", name="a", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "b16.pkg", name="b", abi="FreeBSD:16:*")
+    out = tmp_path / "out"
+    with pytest.raises(brp.BuildRepoError, match="mixed"):
+        brp.build_repo(in_dir, out)
 
 
 def test_duplicate_sources_dedup_to_one_canonical(tmp_path: Path) -> None:
     """The SAME package staged from two sources (the publish job's `built-<source>-`
     prefixed copies of the branch build + a release artifact) publishes exactly ONE
     canonical `.pkg` + ONE catalog entry — not two prefixed duplicates (the bug the
-    first live deploy surfaced)."""
+    first live deploy surfaced) — flat at out_dir (arch-less, issue #1806/#1786)."""
     in_dir = tmp_path / "in"
     in_dir.mkdir()
     # Same name+version+ABI+flavor; different staging input filenames.
-    make_pkg(in_dir / "built-incoming_branch-pfb.pkg", name="pfb", version="3.2.16")
-    make_pkg(in_dir / "built-incoming_release-freebsd-pfb.pkg", name="pfb", version="3.2.16")
+    make_pkg(in_dir / "built-incoming_branch-pfb.pkg", name="pfb", version="3.2.16", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "built-incoming_release-freebsd-pfb.pkg", name="pfb", version="3.2.16", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     brp.build_repo(in_dir, out)
-    bucket = out / "FreeBSD:15:amd64"
     # Exactly one package .pkg on disk, canonically named (no `built-incoming_*`
     # prefix); the catalog files (packagesite.pkg/data.pkg) also end in `.pkg`.
     catalog_files = {"packagesite.pkg", "data.pkg", "meta.pkg"}
-    pkgs = sorted(p.name for p in bucket.glob("*.pkg") if p.name not in catalog_files)
+    pkgs = sorted(p.name for p in out.glob("*.pkg") if p.name not in catalog_files)
     assert pkgs == ["pfb-3.2.16.pkg"]
     # The catalog lists it once, at the canonical path/repopath.
-    raw = _read_member(bucket / "packagesite.pkg", "packagesite.yaml").decode()
+    raw = _read_member(out / "packagesite.pkg", "packagesite.yaml").decode()
     objs = [json.loads(ln) for ln in raw.splitlines() if ln]
     assert len(objs) == 1
     assert objs[0]["path"] == "pfb-3.2.16.pkg"
@@ -399,8 +426,8 @@ def test_deterministic_two_runs_byte_identical(tmp_path: Path) -> None:
     brp.build_repo(in_dir, out1)
     brp.build_repo(in_dir, out2)
     for rel in ("meta.conf", "meta", "packagesite.pkg", "data.pkg", "demo-1.0_1.pkg"):
-        a = (out1 / "FreeBSD:15:amd64" / rel).read_bytes()
-        b = (out2 / "FreeBSD:15:amd64" / rel).read_bytes()
+        a = (out1 / rel).read_bytes()
+        b = (out2 / rel).read_bytes()
         assert a == b, f"{rel} differs between runs"
 
 
@@ -412,12 +439,12 @@ def test_rebuild_wipes_removed_pkg(tmp_path: Path) -> None:
     make_pkg(in_dir / "b-1.0.pkg", name="b")
     out = tmp_path / "out"
     brp.build_repo(in_dir, out)
-    assert (out / "FreeBSD:15:amd64" / "b-1.0_1.pkg").is_file()  # canonical <name>-<version>
+    assert (out / "b-1.0_1.pkg").is_file()  # canonical <name>-<version>, flat at out_dir
     # Remove one input and rebuild.
     (in_dir / "b-1.0.pkg").unlink()
     brp.build_repo(in_dir, out)
-    assert not (out / "FreeBSD:15:amd64" / "b-1.0_1.pkg").exists(), "stale .pkg lingered after rebuild"
-    raw = _read_member(out / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
+    assert not (out / "b-1.0_1.pkg").exists(), "stale .pkg lingered after rebuild"
+    raw = _read_member(out / "packagesite.pkg", "packagesite.yaml").decode()
     assert [json.loads(ln)["name"] for ln in raw.splitlines() if ln] == ["a"]
 
 
@@ -446,22 +473,23 @@ def test_same_flavor_duplicate_passes(tmp_path: Path) -> None:
     make_pkg(in_dir / "x-b.pkg", name="x", version="1.0", deps=deps)
     out = tmp_path / "out"
     abis = brp.build_repo(in_dir, out)  # must not raise
-    assert abis == ["FreeBSD:15:amd64"]
+    assert abis == ["FreeBSD:15:*"]
 
 
 def test_unsafe_abi_is_rejected(tmp_path: Path) -> None:
-    """A traversal/odd ABI in manifest data is rejected BEFORE it becomes a path
-    segment — `out_dir / abi` is rmtree'd + rebuilt, so an unsafe value could escape
-    out_dir. The valid form (`FreeBSD:15:amd64`, with colons) is accepted by every
-    other test, so this pins the reject side of the branch."""
-    # Non-empty but unsafe values (traversal / slash / space) — an empty ABI is
-    # already rejected upstream by the missing-name/version/abi guard.
+    """A traversal/odd (and, since issue #1786, any non-wildcard) ABI in manifest
+    data is rejected. The ABI is no longer used as a directory name (arch-less
+    catalog), but every one of these shapes still fails ``_is_wildcard_abi`` and
+    is rejected by the NO_ARCH gate — the valid wildcard form (`FreeBSD:15:*`) is
+    accepted by every other test, so this pins the reject side of the branch."""
+    # Non-empty but unsafe/non-wildcard values (traversal / slash / space) — an
+    # empty ABI is already rejected upstream by the missing-name/version/abi guard.
     out = tmp_path / "out"
     for i, bad in enumerate(("../../evil", "FreeBSD/15/amd64", "a b")):
         in_dir = tmp_path / f"in{i}"
         in_dir.mkdir()
         make_pkg(in_dir / "p.pkg", name="p", version="1.0", abi=bad)
-        with pytest.raises(brp.BuildRepoError, match="unsafe or invalid ABI"):
+        with pytest.raises(brp.BuildRepoError, match="NO_ARCH"):
             brp.build_repo(in_dir, out)
 
 
@@ -590,17 +618,17 @@ def test_catalog_name_from_version() -> None:
 
 
 def test_catalog_under_versioned_subdir(tmp_path: Path) -> None:
-    """--catalog-name writes the ABI tree under <out>/<catalog-name>/<ABI>/, not <out>/<ABI>/.
+    """--catalog-name writes the FLAT catalog directly at <out>/<catalog-name>/, no ABI subdir.
 
     Scenario: CE 2.8 build
       Given no ce-2.8/ dir exists in <out>
-      When build_repo(catalog_name="ce-2.8") is called with a CE pkg (ABI=FreeBSD:15:amd64)
-      Then meta.conf exists at ce-2.8/FreeBSD:15:amd64/meta.conf
-      And no meta.conf exists at the plain FreeBSD:15:amd64/meta.conf (root-level)
+      When build_repo(catalog_name="ce-2.8") is called with a CE NO_ARCH pkg (ABI=FreeBSD:15:*)
+      Then meta.conf exists at ce-2.8/meta.conf
+      And no meta.conf exists at the plain root-level out/meta.conf
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:amd64")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
 
@@ -609,24 +637,24 @@ def test_catalog_under_versioned_subdir(tmp_path: Path) -> None:
 
     brp.build_repo(in_dir, out, catalog_name="ce-2.8")
 
-    # Versioned path exists
-    assert (out / "ce-2.8" / "FreeBSD:15:amd64" / "meta.conf").is_file()
-    # Legacy root-level path does NOT exist
-    assert not (out / "FreeBSD:15:amd64" / "meta.conf").exists()
+    # Versioned path exists, flat (no ABI subdir)
+    assert (out / "ce-2.8" / "meta.conf").is_file()
+    # Root-level path does NOT exist
+    assert not (out / "meta.conf").exists()
 
 
 def test_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
-    """--catalog-name plus-26.03 writes under plus-26.03/<ABI>/, no ce-2.8/ dir created.
+    """--catalog-name plus-26.03 writes flat under plus-26.03/, no ce-2.8/ dir created.
 
     Scenario: Plus 26.03 build
       Given no plus-26.03/ or ce-2.8/ dir exists
-      When build_repo(catalog_name="plus-26.03") with Plus pkg (ABI=FreeBSD:16:amd64)
-      Then meta.conf at plus-26.03/FreeBSD:16:amd64/meta.conf
+      When build_repo(catalog_name="plus-26.03") with Plus NO_ARCH pkg (ABI=FreeBSD:16:*)
+      Then meta.conf at plus-26.03/meta.conf
       And no ce-2.8/ dir exists
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "plus-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:16:amd64")
+    make_pkg(in_dir / "plus-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:16:*")
     out = tmp_path / "out"
     out.mkdir()
 
@@ -636,24 +664,25 @@ def test_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
 
     brp.build_repo(in_dir, out, catalog_name="plus-26.03")
 
-    assert (out / "plus-26.03" / "FreeBSD:16:amd64" / "meta.conf").is_file()
+    assert (out / "plus-26.03" / "meta.conf").is_file()
     # CE dir must NOT have been created as a side-effect
     assert not (out / "ce-2.8").exists()
 
 
 def test_legacy_path_retained(tmp_path: Path) -> None:
-    """Without --catalog-name, meta.conf lands at <out>/<ABI>/meta.conf (legacy layout unchanged).
+    """Without --catalog-name, meta.conf lands DIRECTLY at <out>/meta.conf (flat, arch-less).
 
-    This is the regression guard: passing catalog_name=None must NOT change existing behaviour.
+    This is the regression guard: passing catalog_name=None must NOT change existing behaviour
+    beyond the arch-less layout change (issue #1806/#1786).
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "demo.pkg", abi="FreeBSD:15:amd64")
+    make_pkg(in_dir / "demo.pkg", abi="FreeBSD:15:*")
     out = tmp_path / "out"
 
     brp.build_repo(in_dir, out)  # no catalog_name
 
-    assert (out / "FreeBSD:15:amd64" / "meta.conf").is_file()
+    assert (out / "meta.conf").is_file()
     # No versioned subdirs created
     assert not (out / "ce-2.8").exists()
     assert not (out / "plus-26.03").exists()
@@ -663,8 +692,8 @@ def test_wrong_variant_pkg_excluded(tmp_path: Path) -> None:
     """A CE pkg built into ce-2.8/ does NOT appear in plus-26.03/ and vice-versa.
 
     Scenario: cross-variant contamination guard
-      Given a CE pkg named "pfBlockerNG-ce" (ABI FreeBSD:15:amd64)
-        And a Plus pkg named "pfBlockerNG-plus" (ABI FreeBSD:16:amd64)
+      Given a CE pkg named "pfBlockerNG-ce" (NO_ARCH ABI FreeBSD:15:*)
+        And a Plus pkg named "pfBlockerNG-plus" (NO_ARCH ABI FreeBSD:16:*)
       When each is built into its own versioned catalog dir
       Then the CE packagesite contains only "pfBlockerNG-ce"
        And the Plus packagesite contains only "pfBlockerNG-plus"
@@ -675,43 +704,43 @@ def test_wrong_variant_pkg_excluded(tmp_path: Path) -> None:
     ce_dir.mkdir()
     plus_dir = tmp_path / "plus_in"
     plus_dir.mkdir()
-    make_pkg(ce_dir / "ce.pkg", name="pfBlockerNG-ce", abi="FreeBSD:15:amd64")
-    make_pkg(plus_dir / "plus.pkg", name="pfBlockerNG-plus", abi="FreeBSD:16:amd64")
+    make_pkg(ce_dir / "ce.pkg", name="pfBlockerNG-ce", abi="FreeBSD:15:*")
+    make_pkg(plus_dir / "plus.pkg", name="pfBlockerNG-plus", abi="FreeBSD:16:*")
     out = tmp_path / "out"
 
     brp.build_repo(ce_dir, out, catalog_name="ce-2.8")
     brp.build_repo(plus_dir, out, catalog_name="plus-26.03")
 
     # CE packagesite names
-    ce_raw = _read_member(out / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
+    ce_raw = _read_member(out / "ce-2.8" / "packagesite.pkg", "packagesite.yaml").decode()
     ce_names = {json.loads(ln)["name"] for ln in ce_raw.splitlines() if ln}
     assert "pfBlockerNG-ce" in ce_names
     assert "pfBlockerNG-plus" not in ce_names
 
     # Plus packagesite names
-    plus_raw = _read_member(out / "plus-26.03" / "FreeBSD:16:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
+    plus_raw = _read_member(out / "plus-26.03" / "packagesite.pkg", "packagesite.yaml").decode()
     plus_names = {json.loads(ln)["name"] for ln in plus_raw.splitlines() if ln}
     assert "pfBlockerNG-plus" in plus_names
     assert "pfBlockerNG-ce" not in plus_names
 
 
 def test_two_ce_entries_produce_two_versioned_dirs(tmp_path: Path) -> None:
-    """Two CE builds (different versions, different ABIs) each get their own versioned dir.
+    """Two CE builds (different versions, different majors) each get their own flat versioned dir.
 
     Scenario: transition window with two active CE versions
       Given no ce-2.8/ or ce-2.9/ dir exists
-      When build_repo(catalog_name="ce-2.8") with ABI=FreeBSD:15:amd64
-       And build_repo(catalog_name="ce-2.9") with ABI=FreeBSD:16:amd64
-      Then ce-2.8/FreeBSD:15:amd64/meta.conf exists
-       And ce-2.9/FreeBSD:16:amd64/meta.conf exists
+      When build_repo(catalog_name="ce-2.8") with NO_ARCH ABI=FreeBSD:15:*
+       And build_repo(catalog_name="ce-2.9") with NO_ARCH ABI=FreeBSD:16:*
+      Then ce-2.8/meta.conf exists
+       And ce-2.9/meta.conf exists
        And each packagesite contains only its own pkg (no cross-contamination)
     """
     in28 = tmp_path / "in28"
     in28.mkdir()
     in29 = tmp_path / "in29"
     in29.mkdir()
-    make_pkg(in28 / "pkg28.pkg", name="pfBlockerNG-2.8", abi="FreeBSD:15:amd64")
-    make_pkg(in29 / "pkg29.pkg", name="pfBlockerNG-2.9", abi="FreeBSD:16:amd64")
+    make_pkg(in28 / "pkg28.pkg", name="pfBlockerNG-2.8", abi="FreeBSD:15:*")
+    make_pkg(in29 / "pkg29.pkg", name="pfBlockerNG-2.9", abi="FreeBSD:16:*")
     out = tmp_path / "out"
 
     # Before-state: neither dir exists
@@ -721,15 +750,15 @@ def test_two_ce_entries_produce_two_versioned_dirs(tmp_path: Path) -> None:
     brp.build_repo(in28, out, catalog_name="ce-2.8")
     brp.build_repo(in29, out, catalog_name="ce-2.9")
 
-    assert (out / "ce-2.8" / "FreeBSD:15:amd64" / "meta.conf").is_file()
-    assert (out / "ce-2.9" / "FreeBSD:16:amd64" / "meta.conf").is_file()
+    assert (out / "ce-2.8" / "meta.conf").is_file()
+    assert (out / "ce-2.9" / "meta.conf").is_file()
 
     # No cross-contamination: each packagesite has only its pkg
-    raw28 = _read_member(out / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
+    raw28 = _read_member(out / "ce-2.8" / "packagesite.pkg", "packagesite.yaml").decode()
     names28 = [json.loads(ln)["name"] for ln in raw28.splitlines() if ln]
     assert names28 == ["pfBlockerNG-2.8"]
 
-    raw29 = _read_member(out / "ce-2.9" / "FreeBSD:16:amd64" / "packagesite.pkg", "packagesite.yaml").decode()
+    raw29 = _read_member(out / "ce-2.9" / "packagesite.pkg", "packagesite.yaml").decode()
     names29 = [json.loads(ln)["name"] for ln in raw29.splitlines() if ln]
     assert names29 == ["pfBlockerNG-2.9"]
 
@@ -759,18 +788,18 @@ def test_catalog_name_from_version_nightly() -> None:
 
 
 def test_nightly_catalog_under_versioned_subdir(tmp_path: Path) -> None:
-    """build_repo with catalog_name="nightly/ce-2.8" writes tree under nightly/ce-2.8/<ABI>/.
+    """build_repo with catalog_name="nightly/ce-2.8" writes the flat tree under nightly/ce-2.8/.
 
     Scenario: nightly CE build
       Given no nightly/ dir exists in <out>
-      When build_repo(catalog_name="nightly/ce-2.8") with a CE pkg (ABI=FreeBSD:15:amd64)
-      Then meta.conf exists at nightly/ce-2.8/FreeBSD:15:amd64/meta.conf
-       And no meta.conf exists at ce-2.8/FreeBSD:15:amd64/meta.conf (release path untouched)
-       And no meta.conf exists at FreeBSD:15:amd64/meta.conf (legacy root untouched)
+      When build_repo(catalog_name="nightly/ce-2.8") with a CE NO_ARCH pkg (ABI=FreeBSD:15:*)
+      Then meta.conf exists at nightly/ce-2.8/meta.conf
+       And no meta.conf exists at ce-2.8/meta.conf (release path untouched)
+       And no meta.conf exists at the legacy root out/meta.conf
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "nightly-ce.pkg", name="pfBlockerNG-nightly", abi="FreeBSD:15:amd64")
+    make_pkg(in_dir / "nightly-ce.pkg", name="pfBlockerNG-nightly", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
 
@@ -779,31 +808,31 @@ def test_nightly_catalog_under_versioned_subdir(tmp_path: Path) -> None:
 
     brp.build_repo(in_dir, out, catalog_name="nightly/ce-2.8")
 
-    # Nightly versioned path exists
-    assert (out / "nightly" / "ce-2.8" / "FreeBSD:15:amd64" / "meta.conf").is_file()
+    # Nightly versioned path exists, flat (no ABI subdir)
+    assert (out / "nightly" / "ce-2.8" / "meta.conf").is_file()
     # Release path NOT created as side-effect
     assert not (out / "ce-2.8").exists()
-    # Legacy root-level ABI path NOT created
-    assert not (out / "FreeBSD:15:amd64" / "meta.conf").exists()
+    # Legacy root-level path NOT created
+    assert not (out / "meta.conf").exists()
 
 
 def test_nightly_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
-    """build_repo with catalog_name="nightly/plus-26.03" writes under nightly/plus-26.03/<ABI>/.
+    """build_repo with catalog_name="nightly/plus-26.03" writes flat under nightly/plus-26.03/.
 
     Scenario: nightly Plus build, nightly CE build in same output tree
       Given no nightly/ dir exists
-      When build_repo(catalog_name="nightly/ce-2.8") with CE pkg (FreeBSD:15:amd64)
-       And build_repo(catalog_name="nightly/plus-26.03") with Plus pkg (FreeBSD:16:amd64)
-      Then nightly/ce-2.8/FreeBSD:15:amd64/meta.conf exists
-       And nightly/plus-26.03/FreeBSD:16:amd64/meta.conf exists
+      When build_repo(catalog_name="nightly/ce-2.8") with CE NO_ARCH pkg (FreeBSD:15:*)
+       And build_repo(catalog_name="nightly/plus-26.03") with Plus NO_ARCH pkg (FreeBSD:16:*)
+      Then nightly/ce-2.8/meta.conf exists
+       And nightly/plus-26.03/meta.conf exists
        And the CE and Plus nightly packagesite contents do not cross-contaminate
     """
     ce_dir = tmp_path / "ce_in"
     ce_dir.mkdir()
     plus_dir = tmp_path / "plus_in"
     plus_dir.mkdir()
-    make_pkg(ce_dir / "ce-nightly.pkg", name="pfBlockerNG-nightly-ce", abi="FreeBSD:15:amd64")
-    make_pkg(plus_dir / "plus-nightly.pkg", name="pfBlockerNG-nightly-plus", abi="FreeBSD:16:amd64")
+    make_pkg(ce_dir / "ce-nightly.pkg", name="pfBlockerNG-nightly-ce", abi="FreeBSD:15:*")
+    make_pkg(plus_dir / "plus-nightly.pkg", name="pfBlockerNG-nightly-plus", abi="FreeBSD:16:*")
     out = tmp_path / "out"
 
     # Before-state: no nightly dir
@@ -812,19 +841,15 @@ def test_nightly_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
     brp.build_repo(ce_dir, out, catalog_name="nightly/ce-2.8")
     brp.build_repo(plus_dir, out, catalog_name="nightly/plus-26.03")
 
-    assert (out / "nightly" / "ce-2.8" / "FreeBSD:15:amd64" / "meta.conf").is_file()
-    assert (out / "nightly" / "plus-26.03" / "FreeBSD:16:amd64" / "meta.conf").is_file()
+    assert (out / "nightly" / "ce-2.8" / "meta.conf").is_file()
+    assert (out / "nightly" / "plus-26.03" / "meta.conf").is_file()
 
-    ce_raw = _read_member(
-        out / "nightly" / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg", "packagesite.yaml"
-    ).decode()
+    ce_raw = _read_member(out / "nightly" / "ce-2.8" / "packagesite.pkg", "packagesite.yaml").decode()
     ce_names = {json.loads(ln)["name"] for ln in ce_raw.splitlines() if ln}
     assert "pfBlockerNG-nightly-ce" in ce_names
     assert "pfBlockerNG-nightly-plus" not in ce_names
 
-    plus_raw = _read_member(
-        out / "nightly" / "plus-26.03" / "FreeBSD:16:amd64" / "packagesite.pkg", "packagesite.yaml"
-    ).decode()
+    plus_raw = _read_member(out / "nightly" / "plus-26.03" / "packagesite.pkg", "packagesite.yaml").decode()
     plus_names = {json.loads(ln)["name"] for ln in plus_raw.splitlines() if ln}
     assert "pfBlockerNG-nightly-plus" in plus_names
     assert "pfBlockerNG-nightly-ce" not in plus_names
