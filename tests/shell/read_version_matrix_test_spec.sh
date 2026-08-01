@@ -27,12 +27,12 @@ Describe 'read-version-matrix.sh derived test matrices'
       # `commit -qm fixture` would otherwise land on the live branch (resetting
       # user.* + polluting history). Mirrors tests/test_read_version_matrix.py.
       scrub_git_env
-      git init -q
-      git config user.email ci@example.invalid
-      git config user.name CI
+      git_fixture init -q
+      git_fixture config user.email ci@example.invalid
+      git_fixture config user.name CI
       printf '%s\n' "$_mm_json" > supported-versions.json
-      git add supported-versions.json
-      git -c commit.gpgsign=false commit -qm fixture
+      git_fixture add supported-versions.json
+      git_fixture -c commit.gpgsign=false commit -qm fixture
     )
     printf '%s' "$_mm_repo"
   }

@@ -2,11 +2,11 @@
 # .githooks/pre-commit Composer vendor guard: a failed guard blocks Composer tools.
 
 Describe '.githooks/pre-commit Composer vendor guard'
-  gitc() { git -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
+  gitc() { git_fixture -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
   make_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommitphp.XXXXXX")"
-    git -C "$repo" init -q
+    git_fixture -C "$repo" init -q
     gitc config commit.gpgsign false
     mkdir -p "$repo/.githooks" "$repo/src" "$repo/vendor/bin"
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"

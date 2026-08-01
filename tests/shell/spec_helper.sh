@@ -17,6 +17,11 @@ PFB_SHIMS="${PFB_ROOT}/tests/shell/bin"
 . "${PFB_ROOT}/scripts/lib/git-env-scrub.sh"
 scrub_git_env() { pfb_scrub_git_env; }
 
+# Run fixture/setup Git calls without developer global or system config.
+git_fixture() {
+	GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git "$@"
+}
+
 # Put the iprange shim ahead of the real PATH -- pfb_real_iprange() (see
 # pfblockerng_suppress_spec.sh) strips PFB_SHIMS back off to find a genuine
 # system iprange when one is present.

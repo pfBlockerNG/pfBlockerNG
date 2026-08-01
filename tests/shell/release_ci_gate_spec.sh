@@ -54,12 +54,12 @@ EOF
 
     # A 2-commit repo: ancestor then tip (first-parent walk = tip, ancestor).
     repo="${work}/repo"
-    git init -q -b main "$repo"
+    git_fixture init -q -b main "$repo"
     ( cd "$repo" \
-      && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ancestor \
-      && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m tip )
-    ancestor="$(git -C "$repo" rev-parse HEAD~1)"
-    tip="$(git -C "$repo" rev-parse HEAD)"
+      && git_fixture -c user.name=t -c user.email=t@t commit -q --allow-empty -m ancestor \
+      && git_fixture -c user.name=t -c user.email=t@t commit -q --allow-empty -m tip )
+    ancestor="$(git_fixture -C "$repo" rev-parse HEAD~1)"
+    tip="$(git_fixture -C "$repo" rev-parse HEAD)"
   }
   cleanup() { rm -rf "$work"; }
   Before 'setup'
@@ -75,13 +75,13 @@ EOF
     message="$1"
     mode="$2"
     shift 2
-    blob="$(printf '%s\n' "$message" | git -C "$repo" hash-object -w --stdin)"
+    blob="$(printf '%s\n' "$message" | git_fixture -C "$repo" hash-object -w --stdin)"
     for path do
       printf '%s %s\t%s\0' "$mode" "$blob" "$path" |
-        git -C "$repo" update-index -z --index-info
+        git_fixture -C "$repo" update-index -z --index-info
     done
-    git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m "$message"
-    tip="$(git -C "$repo" rev-parse HEAD)"
+    git_fixture -C "$repo" -c user.name=t -c user.email=t@t commit -q -m "$message"
+    tip="$(git_fixture -C "$repo" rev-parse HEAD)"
   }
   commit_paths() {
     message="$1"
@@ -89,8 +89,8 @@ EOF
     commit_index_paths "$message" 100644 "$@"
   }
   commit_empty() {
-    git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1"
-    tip="$(git -C "$repo" rev-parse HEAD)"
+    git_fixture -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1"
+    tip="$(git_fixture -C "$repo" rev-parse HEAD)"
   }
   run_gate() {
     ( cd "$repo" && PATH="${work}/bin:${PATH}" REPO="own/repo" GH_TOKEN=x \
@@ -276,13 +276,13 @@ EOF
 
   It 'accepts a green check on the 20th queried commit'
     deep20="${work}/deep20"
-    git init -q -b main "$deep20"
+    git_fixture init -q -b main "$deep20"
     i=1
     while [ "$i" -le 20 ]; do
-      git -C "$deep20" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "c$i"
+      git_fixture -C "$deep20" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "c$i"
       i=$((i + 1))
     done
-    green20="$(git -C "$deep20" rev-parse HEAD~19)"
+    green20="$(git_fixture -C "$deep20" rev-parse HEAD~19)"
     payload "$green20" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"}]}'
     run_gate_deep20() {
       ( cd "$deep20" && PATH="${work}/bin:${PATH}" REPO="own/repo" GH_TOKEN=x \
@@ -295,13 +295,13 @@ EOF
 
   It 'rejects a green check on the 21st commit outside the query window'
     deep21="${work}/deep21"
-    git init -q -b main "$deep21"
+    git_fixture init -q -b main "$deep21"
     i=1
     while [ "$i" -le 21 ]; do
-      git -C "$deep21" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "c$i"
+      git_fixture -C "$deep21" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "c$i"
       i=$((i + 1))
     done
-    green21="$(git -C "$deep21" rev-parse HEAD~20)"
+    green21="$(git_fixture -C "$deep21" rev-parse HEAD~20)"
     payload "$green21" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"}]}'
     run_gate_deep21() {
       ( cd "$deep21" && PATH="${work}/bin:${PATH}" REPO="own/repo" GH_TOKEN=x \
@@ -315,28 +315,28 @@ EOF
 
   It 'walks merge commits through the first parent before accepting green'
     merge_repo="${work}/merge"
-    git init -q -b main "$merge_repo"
-    git -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m root
+    git_fixture init -q -b main "$merge_repo"
+    git_fixture -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m root
 
-    code_blob="$(printf 'unchecked code\n' | git -C "$merge_repo" hash-object -w --stdin)"
+    code_blob="$(printf 'unchecked code\n' | git_fixture -C "$merge_repo" hash-object -w --stdin)"
     printf '100644 %s\tscripts/unchecked.sh\0' "$code_blob" |
-      git -C "$merge_repo" update-index -z --index-info
-    git -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q -m code
-    code_sha="$(git -C "$merge_repo" rev-parse HEAD)"
+      git_fixture -C "$merge_repo" update-index -z --index-info
+    git_fixture -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q -m code
+    code_sha="$(git_fixture -C "$merge_repo" rev-parse HEAD)"
 
-    git -C "$merge_repo" checkout -q -b side
-    side_blob="$(printf 'side docs\n' | git -C "$merge_repo" hash-object -w --stdin)"
+    git_fixture -C "$merge_repo" checkout -q -b side
+    side_blob="$(printf 'side docs\n' | git_fixture -C "$merge_repo" hash-object -w --stdin)"
     printf '100644 %s\tdocs/side.txt\0' "$side_blob" |
-      git -C "$merge_repo" update-index -z --index-info
-    git -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q -m side-docs
-    side_sha="$(git -C "$merge_repo" rev-parse HEAD)"
+      git_fixture -C "$merge_repo" update-index -z --index-info
+    git_fixture -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q -m side-docs
+    side_sha="$(git_fixture -C "$merge_repo" rev-parse HEAD)"
 
-    git -C "$merge_repo" checkout -q main
-    main_blob="$(printf 'main docs\n' | git -C "$merge_repo" hash-object -w --stdin)"
+    git_fixture -C "$merge_repo" checkout -q main
+    main_blob="$(printf 'main docs\n' | git_fixture -C "$merge_repo" hash-object -w --stdin)"
     printf '100644 %s\tdocs/main.txt\0' "$main_blob" |
-      git -C "$merge_repo" update-index -z --index-info
-    git -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q -m main-docs
-    git -C "$merge_repo" -c user.name=t -c user.email=t@t merge -q --no-ff side -m merge
+      git_fixture -C "$merge_repo" update-index -z --index-info
+    git_fixture -C "$merge_repo" -c user.name=t -c user.email=t@t commit -q -m main-docs
+    git_fixture -C "$merge_repo" -c user.name=t -c user.email=t@t merge -q --no-ff side -m merge
 
     payload "$side_sha" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"}]}'
     run_gate_merge() {
