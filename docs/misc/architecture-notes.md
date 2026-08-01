@@ -992,10 +992,11 @@ never wrong. Key properties:
   is local-file-only (no network, no daemon).
 - **Folded detection (KISS):** edition = "`/etc/product_label` contains `Plus`" → `plus`, else
   `ce`; version = major.minor of `/etc/version`, with any dash suffix (e.g. `-BETA`/`-RC`)
-  stripped FIRST. This deliberately **diverges** from `catalog_name_from_version()` in
-  `scripts/build-repo-portable.py` by that one strip — a live box's `/etc/version` can carry a
-  pre-release suffix the matrix's version never does (issue #1786) — otherwise it is the same
-  edition + major.minor derivation; there is **no** separate `/lib` detection helper (it is
+  stripped FIRST. This **mirrors** `catalog_name_from_version()` in
+  `scripts/build-repo-portable.py` exactly, including that strip — a live box's `/etc/version`
+  can carry a pre-release suffix the matrix's version never does (issue #1786), and the
+  producers strip it identically so a pre-release box and the publisher agree on one catalog
+  dir (issue #1965); there is **no** separate `/lib` detection helper (it is
   folded into the one self-contained hook file). **issue #1806:** the catalog is arch-less, so
   the hook no longer calls `pkg config abi` at all (it used to read the arch leaf; there is no
   arch leaf to read any more) — one fewer moving part, and it no longer needs `pkg` on the PATH.

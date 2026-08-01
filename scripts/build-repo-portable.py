@@ -343,7 +343,13 @@ def catalog_name_from_version(pfsense_version: str, variant: str, *, channel: st
     major_minor = ".".join(pfsense_version.split("-")[0].split(".")[:2])
     name = f"{variant.lower()}-{major_minor}"
     _validate_catalog_name(name, single_segment=True)
-    return f"{channel}/{name}" if channel else name
+    if not channel:
+        return name
+    # The channel is an argument like any other — validate the COMPOSED value, or a
+    # caller-supplied channel would ride into the path unchecked (issue #1965).
+    composed = f"{channel}/{name}"
+    _validate_catalog_name(composed)
+    return composed
 
 
 # --------------------------------------------------------------------------- #
@@ -353,11 +359,18 @@ def catalog_name_from_version(pfsense_version: str, variant: str, *, channel: st
 # A catalog_name segment is a rm-rf'd + rebuilt path component (_write_catalog_dir
 # shutil.rmtree()s it) — same safety rule as build-repo.sh's --varver guard, tightened
 # to lowercase-only. '/' is allowed only BETWEEN segments (a legitimate catalog_name
-# carries a channel prefix, e.g. "nightly/plus-26.03"). The leading character is
-# alphanumeric so a segment can never open with '-' or '.': every real varver does
-# (ce-2.8, plus-26.03, nightly, release), while a missing variant would otherwise
-# derive the silently-wrong "-2.8" (issue #1965).
-_CATALOG_NAME_SEGMENT_RE = re.compile(r"[a-z0-9][a-z0-9.-]*")
+# carries a channel prefix, e.g. "nightly/plus-26.03"). BOTH ends are alphanumeric so a
+# segment can never open or close with '-' or '.': every real varver does (ce-2.8,
+# plus-26.03, nightly, release), while an absent variant would otherwise derive the
+# silently-wrong "-2.8" and an absent version the equally wrong "ce-" (issue #1965).
+_CATALOG_NAME_SEGMENT_RE = re.compile(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?")
+
+# pkg(8) catalog plumbing: a catalog_name equal to one of these collides with a file
+# _write_catalog_dir writes at the catalog root, so `out_dir / catalog_name` would name
+# an existing FILE and rmtree/mkdir would escape this module's BuildRepoError contract
+# with a raw NotADirectoryError. A manifest can never reach these (the published name is
+# always "<name>-<version>.pkg"), so this guards the catalog_name path only.
+_RESERVED_CATALOG_NAMES = frozenset({"meta", "meta.conf", "data.pkg", "packagesite.pkg"})
 
 
 def _validate_catalog_name(name: str, *, single_segment: bool = False) -> None:
@@ -376,6 +389,11 @@ def _validate_catalog_name(name: str, *, single_segment: bool = False) -> None:
         raise BuildRepoError(
             f"unsafe catalog_name {name!r}: a derived varver is ONE segment — a '/' means "
             f"an input field carried a path separator"
+        )
+    if any(seg in _RESERVED_CATALOG_NAMES for seg in segments):
+        raise BuildRepoError(
+            f"unsafe catalog_name {name!r}: a segment collides with pkg(8) catalog plumbing "
+            f"({', '.join(sorted(_RESERVED_CATALOG_NAMES))}) — it would name an existing file, not a directory"
         )
     if any(not seg or seg in (".", "..") or not _CATALOG_NAME_SEGMENT_RE.fullmatch(seg) for seg in segments):
         raise BuildRepoError(

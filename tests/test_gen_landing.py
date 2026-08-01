@@ -405,6 +405,44 @@ def test_build_edition_sections_wildcard_abi_joins_every_row_of_its_major() -> N
     assert (plus["pfsense_version"], plus["php"], plus["py"]) == ("26.03", "8.5", "3.12")
 
 
+def test_build_edition_sections_wildcard_MATRIX_abi_joins_identically() -> None:
+    """The MATRIX side is wildcarded too, and the join is unchanged by that.
+
+    Every other matrix fixture here records a concrete ABI, but the publisher emits
+    ``FreeBSD:<major>:*`` (pfBlockerNG/pkg: `arch` was retired from the matrix by
+    issue #1806, so interpolating it produced the literal "FreeBSD:16:null"). With
+    both sides wildcarded the exact-string index now HITS instead of falling back to
+    the OS+major scan — a different code path in ``_join_matrix`` reaching the same
+    rows. Pins that equivalence, so the production shape is covered and not merely
+    assumed harmless.
+
+    Given the same package set joined against a concrete-ABI matrix and a
+      wildcard-ABI one,
+    When the edition sections are built from each,
+    Then both yield identical editions, versions, php and py.
+    """
+    pkgs = [_pkg("devel", "d", "3.2.16", "FreeBSD:16:*", "w.pkg")]
+    concrete = [
+        _mx("FreeBSD:16:amd64", "2.9", "CE", "8.4", "py311"),
+        _mx("FreeBSD:16:amd64", "26.03", "Plus", "8.5", "py312"),
+    ]
+    wildcard = [
+        _mx("FreeBSD:16:*", "2.9", "CE", "8.4", "py311"),
+        _mx("FreeBSD:16:*", "26.03", "Plus", "8.5", "py312"),
+    ]
+
+    def shape(matrix: list[dict[str, str]]) -> list[tuple[str, str, str, str]]:
+        return [
+            (edition, r["pfsense_version"], r["php"], r["py"])
+            for edition, rows in gl.build_edition_sections(pkgs, matrix)
+            for r in rows
+        ]
+
+    assert shape(wildcard) == shape(concrete)
+    # ...and the join really happened — nothing degraded to the unmatched section.
+    assert shape(wildcard) == [("CE", "2.9", "8.4", "3.11"), ("Plus", "26.03", "8.5", "3.12")]
+
+
 def test_build_edition_sections_pins_a_published_row_to_its_own_varver_dir() -> None:
     """A published file is listed under the pfSense version of the dir it was published to.
 
