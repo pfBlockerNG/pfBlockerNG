@@ -21,21 +21,49 @@ use PHPUnit\Framework\TestCase;
  */
 final class SyslogEventTest extends TestCase
 {
-	/** Install the spy; no cache-reset needed (function reads fresh each call). */
+	private bool $hadConfig = false;
+	private mixed $savedConfig = null;
+	private bool $hadSyslogSpy = false;
+	private mixed $savedSyslogSpy = null;
+	private bool $hadSyslogCalls = false;
+	private mixed $savedSyslogCalls = null;
+	private bool $hadSyslogReset = false;
+	private mixed $savedSyslogReset = null;
+
+	/** Install clean owned state; no cache-reset needed (function reads fresh each call). */
 	protected function setUp(): void
 	{
+		$this->hadConfig = array_key_exists('config', $GLOBALS);
+		$this->savedConfig = $GLOBALS['config'] ?? null;
+		$this->hadSyslogSpy = array_key_exists('pfb_test_syslog_spy', $GLOBALS);
+		$this->savedSyslogSpy = $GLOBALS['pfb_test_syslog_spy'] ?? null;
+		$this->hadSyslogCalls = array_key_exists('pfb_test_syslog_calls', $GLOBALS);
+		$this->savedSyslogCalls = $GLOBALS['pfb_test_syslog_calls'] ?? null;
+		$this->hadSyslogReset = array_key_exists('pfb_test_syslog_reset', $GLOBALS);
+		$this->savedSyslogReset = $GLOBALS['pfb_test_syslog_reset'] ?? null;
+
+		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_syslog_spy']   = TRUE;
 		$GLOBALS['pfb_test_syslog_calls'] = [];
+		unset($GLOBALS['pfb_test_syslog_reset']);
 	}
 
 	protected function tearDown(): void
 	{
-		unset(
-			$GLOBALS['pfb_test_syslog_spy'],
-			$GLOBALS['pfb_test_syslog_calls']
-		);
-		// Wipe any log_syslog config seeded by individual tests.
-		config_del_path('installedpackages/pfblockerng/config/0/log_syslog');
+		foreach (
+			[
+				'config'                => [$this->hadConfig, $this->savedConfig],
+				'pfb_test_syslog_spy'   => [$this->hadSyslogSpy, $this->savedSyslogSpy],
+				'pfb_test_syslog_calls' => [$this->hadSyslogCalls, $this->savedSyslogCalls],
+				'pfb_test_syslog_reset' => [$this->hadSyslogReset, $this->savedSyslogReset],
+			] as $name => [$had, $value]
+		) {
+			if ($had) {
+				$GLOBALS[$name] = $value;
+			} else {
+				unset($GLOBALS[$name]);
+			}
+		}
 	}
 
 	// -----------------------------------------------------------------------
