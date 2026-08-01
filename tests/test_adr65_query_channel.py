@@ -477,14 +477,13 @@ class _QueryHarness:
         with self._condition:
             self._write_raw_locked(raw)
 
-    def _wait_for(self, predicate: Any, timeout: float, message: str) -> Any:
+    def _wait_for(self, predicate: Any, timeout: float, message: str) -> None:
         deadline = time.monotonic() + timeout
         with self._condition:
             while not predicate():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or not self._condition.wait(remaining):
                     raise RuntimeError(f"stuck/environment: {message}")
-            return predicate()
 
     def _reply_file_identity(self) -> tuple[int, int] | None:
         path = P.pfb.get("pfb_py_query_reply")
