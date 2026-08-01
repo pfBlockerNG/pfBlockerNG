@@ -28,7 +28,7 @@ use PHPUnit\Framework\TestCase;
  *   11 convert_ip_log        $fields[16] (gethostbyaddr hostname)       cut=21
  *   12 short-side branch coverage, one per builder (no truncation, no U+FFFD)
  *   13 4-byte character (emoji) straddling the cut
- *   14 invalid UTF-8 byte before the cut -- DEVIATION, see that test's docblock
+ *   14 invalid UTF-8 byte before the cut -- see that test's docblock
  *   15 HTML metacharacter at the character-cut boundary -- entity stays complete
  *   16 punycode/xn-- domain whose idn_to_utf8()-produced text straddles the cut
  *
@@ -484,20 +484,19 @@ final class AlertsMultibyteTruncationTest extends TestCase
 	}
 
 	/**
-	 * DEVIATION (recorded in the #1815 handoff): row 11's site --
-	 * `$fields[16] = "<span title=\"...\">" . pfb_hsc(substr($fields[16], 0, 21)) . ...`
-	 * (pfblockerng_alerts.php ~:3088) -- is DEAD CODE in the current production
-	 * source, discovered empirically while writing this test (the content
-	 * assertion the other 10 rows use never passed, in EITHER direction). Verified
-	 * via `grep -n '\$fields\[16\]' pfblockerng_alerts.php`: the ONLY two hits are
-	 * the assignment itself (:3084/:3087-3088); the value that variable holds is
-	 * never read again anywhere in the function or its two <tr> print templates.
-	 * What the row actually PRINTS for the resolved hostname is
-	 * `$hostname['src']`/`$hostname['dst']` (pfblockerng_alerts.php :3118/:3120,
-	 * :3149/:3153) -- a SEPARATE copy captured earlier by pfb_ip_render_query()
-	 * (via pfb_ip_render_attribution(), called BEFORE this site runs) straight from
-	 * the ORIGINAL, untruncated $fields[16]/[17] -- so mutating $fields[16] here
-	 * has zero effect on the rendered output, before or after this fix.
+	 * Row 11's site -- convert_ip_log()'s rDNS-hostname cell, which wraps a
+	 * truncated `$fields[16]` in a `<span title="...">` -- is DEAD CODE in the
+	 * current production source, discovered empirically while writing this test
+	 * (the content assertion the other 10 rows use never passed, in EITHER
+	 * direction). Verified via `grep -n '\$fields\[16\]'`: inside convert_ip_log()
+	 * the only hits are the 'Unknown' default and this truncating assignment; the
+	 * value that variable holds is never read again in the function or in either of
+	 * its <tr> print templates. What the row actually PRINTS for the resolved
+	 * hostname is `$hostname['src']`/`$hostname['dst']` -- a SEPARATE copy captured
+	 * earlier by pfb_ip_render_query() (via pfb_ip_render_attribution(), called
+	 * BEFORE this site runs) straight from the ORIGINAL, untruncated
+	 * $fields[16]/[17] -- so mutating $fields[16] here has zero effect on the
+	 * rendered output, before or after this fix. Tracked as issue #2008.
 	 *
 	 * Consequence: the rendered-HTML oracle every other row uses (no U+FFFD,
 	 * multibyte char present) cannot discriminate this site at all -- both the
@@ -627,7 +626,7 @@ final class AlertsMultibyteTruncationTest extends TestCase
 	 * would otherwise fabricate a character the input never carried, before
 	 * pfb_hsc() ever sees the string. pfb_truncate() pins
 	 * mb_substitute_character(0xFFFD) around its mb_substr() call for exactly this
-	 * reason (issue #1815 review).
+	 * reason.
 	 */
 	public function test_row14_dnsbl_agent_field_invalid_byte_before_cut_renders_fffd_not_a_fabricated_question_mark(): void
 	{
@@ -682,7 +681,8 @@ final class AlertsMultibyteTruncationTest extends TestCase
 
 	// =========================================================================
 	// Row 16: punycode/xn-- domain whose idn_to_utf8()-produced text (appended in
-	// brackets at ~:2244) is what straddles the cut, not the raw ASCII label.
+	// brackets by convert_dnsbl_log() just before the cut) is what straddles the
+	// cut, not the raw ASCII label.
 	// =========================================================================
 
 	public function test_row16_dnsbl_idn_domain_conversion_truncation_keeps_multibyte_char_whole(): void
@@ -703,7 +703,7 @@ final class AlertsMultibyteTruncationTest extends TestCase
 
 	// =========================================================================
 	// State restoration: pfb_truncate() pins mb_substitute_character(0xFFFD)
-	// around its mb_substr() call (issue #1815 review) -- mb_substitute_character()
+	// around its mb_substr() call -- mb_substitute_character()
 	// is REQUEST-GLOBAL state, so a row render must never leave it changed for
 	// whatever renders next on the same page load.
 	// =========================================================================
