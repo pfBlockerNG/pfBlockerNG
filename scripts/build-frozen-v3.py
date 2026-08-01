@@ -517,13 +517,54 @@ def build_and_stage_one(
         shutil.rmtree(scratch, ignore_errors=True)
 
 
-def _assert_no_stray_pkgs(out_dir: Path, staged: set[Path]) -> None:
-    found = set(out_dir.glob("fbsd*/*.pkg"))
-    extra = sorted(p.name for p in found - staged)
+def _assert_no_stray_pkgs(
+    out_dir: Path,
+    staged: set[Path],
+    *,
+    plan: list[tuple[FrozenTarget, dict]],
+    target_filter: str | None,
+    major_filter: str | None,
+) -> None:
+    owned_majors = {row["freebsd_major"] for _, row in plan}
+    extra: list[str] = []
+    for path in sorted(out_dir.rglob("*.pkg")):
+        relative = path.relative_to(out_dir)
+        layout = relative.parts
+        if len(layout) != 2:
+            extra.append(relative.as_posix())
+            continue
+        major_match = re.fullmatch(r"fbsd([1-9][0-9]*)", layout[0])
+        if major_match is None:
+            extra.append(relative.as_posix())
+            continue
+        major = major_match.group(1)
+        if major_filter is not None and major != major_filter:
+            continue
+        if major_filter is None and major not in owned_majors:
+            extra.append(relative.as_posix())
+            continue
+        if path in staged:
+            continue
+        if target_filter is not None and any(
+            target.channel != target_filter
+            and re.fullmatch(
+                rf"{re.escape(target.portname)}-{re.escape(target.portversion)}(?:_[0-9]+)?(?:,[0-9]+)?\.pkg",
+                path.name,
+            )
+            for target in FROZEN_TARGETS
+        ):
+            continue
+        extra.append(relative.as_posix())
     if extra:
         raise ArtifactValidationError(
             f"{out_dir}: unexpected staged file(s) beyond the planned artifacts: {', '.join(extra)}"
         )
+
+
+def _assert_no_staging_symlinks(out_dir: Path) -> None:
+    links = sorted(path.relative_to(out_dir).as_posix() for path in out_dir.rglob("*") if path.is_symlink())
+    if links:
+        raise ArtifactValidationError(f"{out_dir}: staging symlink(s) are not allowed: {', '.join(links)}")
 
 
 def build_all(
@@ -534,7 +575,10 @@ def build_all(
     out_dir: Path,
     ports_dir: str | None,
     do_determinism: bool,
+    target_filter: str | None,
+    major_filter: str | None,
 ) -> dict:
+    _assert_no_staging_symlinks(out_dir)
     export_cache: dict[str, Path] = {}
     artifacts: list[dict] = []
     staged: set[Path] = set()
@@ -596,11 +640,25 @@ def build_all(
                     **identity,
                 }
             )
-    _assert_no_stray_pkgs(out_dir, staged)
+    _assert_no_stray_pkgs(
+        out_dir,
+        staged,
+        plan=plan,
+        target_filter=target_filter,
+        major_filter=major_filter,
+    )
     return {"ports_ref": FROZEN_PORTS_REF, "artifacts": artifacts}
 
 
-def verify_staged(dir_: Path, plan: list[tuple[FrozenTarget, dict]], *, repo: Path) -> dict:
+def verify_staged(
+    dir_: Path,
+    plan: list[tuple[FrozenTarget, dict]],
+    *,
+    repo: Path,
+    target_filter: str | None,
+    major_filter: str | None,
+) -> dict:
+    _assert_no_staging_symlinks(dir_)
     export_cache: dict[str, Path] = {}
     artifacts: list[dict] = []
     staged: set[Path] = set()
@@ -640,7 +698,13 @@ def verify_staged(dir_: Path, plan: list[tuple[FrozenTarget, dict]], *, repo: Pa
                     **identity,
                 }
             )
-    _assert_no_stray_pkgs(dir_, staged)
+    _assert_no_stray_pkgs(
+        dir_,
+        staged,
+        plan=plan,
+        target_filter=target_filter,
+        major_filter=major_filter,
+    )
     return {"ports_ref": FROZEN_PORTS_REF, "artifacts": artifacts}
 
 
@@ -735,7 +799,13 @@ def main(argv: list[str] | None = None) -> int:
             raise MatrixError("nothing to do: --target/--major filters excluded every BUILD-matrix row")
 
         if args.verify_only is not None:
-            report = verify_staged(args.verify_only.resolve(), plan, repo=repo)
+            report = verify_staged(
+                args.verify_only.resolve(),
+                plan,
+                repo=repo,
+                target_filter=args.target,
+                major_filter=major_filter,
+            )
         else:
             out_dir.mkdir(parents=True, exist_ok=True)
             report = build_all(
@@ -745,6 +815,8 @@ def main(argv: list[str] | None = None) -> int:
                 out_dir=out_dir,
                 ports_dir=args.ports_dir,
                 do_determinism=not args.no_deterministic_check,
+                target_filter=args.target,
+                major_filter=major_filter,
             )
 
         report_path.parent.mkdir(parents=True, exist_ok=True)
