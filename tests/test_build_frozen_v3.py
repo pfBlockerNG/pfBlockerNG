@@ -1082,6 +1082,337 @@ def test_verify_only_validates_staged_dir_without_invoking_build_seam(
     assert len(report["artifacts"]) == 1
 
 
+def _stage_valid_artifact(tmp_path: Path, stage: Path, target: Any, row: dict) -> Path:
+    """Stage one identity-valid fixture and return its export directory."""
+    fixture_root = tmp_path / f"fixture-{target.channel}-{row['freebsd_major']}"
+    _, export_dir = _happy_fixture(
+        fixture_root,
+        target,
+        row,
+        out_dir=stage / f"fbsd{row['freebsd_major']}",
+    )
+    return export_dir
+
+
+def _stub_verify_exports(monkeypatch: pytest.MonkeyPatch, exports: dict[str, Path]) -> None:
+    _stub_git(monkeypatch, exports)
+
+
+def test_issue_2019_filtered_target_accepts_other_frozen_target_but_rejects_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Target-filtered verification accepts the sibling target in the selected major."""
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE, DEVEL))
+    stage = tmp_path / "stage"
+    exports = {
+        STABLE.commit: _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15),
+        DEVEL.commit: _stage_valid_artifact(tmp_path, stage, DEVEL, ROW_15),
+    }
+    _stub_verify_exports(monkeypatch, exports)
+
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15]))
+    rc = bfv.main(
+        [
+            "--out",
+            str(stage),
+            "--verify-only",
+            str(stage),
+            "--target",
+            "stable",
+            "--matrix-cmd",
+            f"cat {matrix_file}",
+            "--repo",
+            str(tmp_path),
+        ]
+    )
+    assert rc == 0, "a legitimate sibling target in the selected major must be ignored"
+
+    _write_pkg(stage / "fbsd15" / "random-extra-1.0.pkg", name="random-extra", version="1.0")
+    rc = bfv.main(
+        [
+            "--out",
+            str(stage),
+            "--verify-only",
+            str(stage),
+            "--target",
+            "stable",
+            "--matrix-cmd",
+            f"cat {matrix_file}",
+            "--repo",
+            str(tmp_path),
+        ]
+    )
+    assert rc == 1, "an unknown selected-major package must be rejected"
+
+
+def test_issue_2019_major_filter_ignores_unselected_valid_major_pkg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Major-filtered verification ignores valid-layout packages in unselected majors."""
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE,))
+    stage = tmp_path / "stage"
+    export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
+    _stub_verify_exports(monkeypatch, {STABLE.commit: export})
+    (stage / "fbsd16").mkdir(parents=True)
+    _write_pkg(stage / "fbsd16" / "random-extra-1.0.pkg", name="random-extra", version="1.0")
+
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15, ROW_16]))
+    rc = bfv.main(
+        [
+            "--out",
+            str(stage),
+            "--verify-only",
+            str(stage),
+            "--major",
+            "15",
+            "--matrix-cmd",
+            f"cat {matrix_file}",
+            "--repo",
+            str(tmp_path),
+        ]
+    )
+    assert rc == 0
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "root-extra.pkg",
+        "not-fbsd/random-extra.pkg",
+        "fbsd15/nested/random-extra.pkg",
+    ],
+)
+def test_issue_2019_invalid_pkg_layout_rejected_recursively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative_path: str
+) -> None:
+    """Stray scan rejects root, non-fbsd, and deeper package paths under every filter."""
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE,))
+    stage = tmp_path / "stage"
+    export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
+    _stub_verify_exports(monkeypatch, {STABLE.commit: export})
+    stray = stage / relative_path
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    _write_pkg(stray, name="random-extra", version="1.0")
+
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15]))
+    rc = bfv.main(
+        [
+            "--out",
+            str(stage),
+            "--verify-only",
+            str(stage),
+            "--target",
+            "stable",
+            "--major",
+            "15",
+            "--matrix-cmd",
+            f"cat {matrix_file}",
+            "--repo",
+            str(tmp_path),
+        ]
+    )
+    assert rc == 1
+
+
+def test_issue_2019_stray_diagnostics_report_relative_paths_for_duplicate_basenames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No-filter stray diagnostics include both selected relative paths for one basename."""
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE,))
+    stage = tmp_path / "stage"
+    export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
+    _stage_valid_artifact(tmp_path, stage, STABLE, ROW_16)
+    _stub_verify_exports(monkeypatch, {STABLE.commit: export})
+    for major in ("15", "16"):
+        _write_pkg(stage / f"fbsd{major}" / "same-extra.pkg", name="same-extra", version="1.0")
+
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15, ROW_16]))
+    rc = bfv.main(
+        [
+            "--out",
+            str(stage),
+            "--verify-only",
+            str(stage),
+            "--matrix-cmd",
+            f"cat {matrix_file}",
+            "--repo",
+            str(tmp_path),
+        ]
+    )
+    assert rc == 1
+    stderr = capsys.readouterr().err
+    assert "fbsd15/same-extra.pkg" in stderr
+    assert "fbsd16/same-extra.pkg" in stderr
+
+
+def test_issue_2019_stable_filename_boundary_does_not_claim_devel_pkg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stable's shorter port name cannot claim the legitimate devel sibling filename."""
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE, DEVEL))
+    stage = tmp_path / "stage"
+    stable_export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
+    _stage_valid_artifact(tmp_path, stage, DEVEL, ROW_15)
+    _stub_verify_exports(monkeypatch, {STABLE.commit: stable_export, DEVEL.commit: stable_export})
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15]))
+
+    rc = bfv.main(
+        [
+            "--out",
+            str(stage),
+            "--verify-only",
+            str(stage),
+            "--target",
+            "stable",
+            "--matrix-cmd",
+            f"cat {matrix_file}",
+            "--repo",
+            str(tmp_path),
+        ]
+    )
+    assert rc == 0, "stable candidate boundary must not claim the devel sibling"
+
+
+@pytest.mark.parametrize("target_filter", [None, "stable"])
+def test_issue_2019_selected_scope_rejects_stale_frozen_target_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target_filter: str | None
+) -> None:
+    """A build rejects extra revisions of a selected frozen target."""
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE,))
+    export = _write_export(tmp_path, _demo_payload(STABLE.portname))
+    _stub_git(monkeypatch, {STABLE.commit: export})
+    monkeypatch.setattr(bfv, "_invoke_build_leg", _fake_build_leg({"stable": STABLE}))
+    stage = tmp_path / "stage"
+    (stage / "fbsd15").mkdir(parents=True)
+    _write_pkg(
+        stage / "fbsd15" / f"{STABLE.portname}-{STABLE.portversion}_1.pkg",
+        name=STABLE.portname,
+        version=f"{STABLE.portversion}_1",
+        files=_demo_payload(STABLE.portname),
+    )
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15]))
+
+    assert (
+        bfv.main(
+            [
+                "--out",
+                str(stage),
+                "--matrix-cmd",
+                f"cat {matrix_file}",
+                "--repo",
+                str(tmp_path),
+                "--no-deterministic-check",
+            ]
+            + (["--target", target_filter] if target_filter is not None else [])
+        )
+        == 1
+    )
+
+
+def test_issue_2019_build_rejects_symlinked_leg_before_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Build mode cannot stage through a symlinked FreeBSD leg directory."""
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE,))
+    export = _write_export(tmp_path, _demo_payload(STABLE.portname))
+    _stub_git(monkeypatch, {STABLE.commit: export})
+    monkeypatch.setattr(bfv, "_invoke_build_leg", _fake_build_leg({"stable": STABLE}))
+    stage = tmp_path / "stage"
+    outside = tmp_path / "outside"
+    stage.mkdir()
+    outside.mkdir()
+    (stage / "fbsd15").symlink_to(outside, target_is_directory=True)
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15]))
+
+    assert (
+        bfv.main(
+            [
+                "--out",
+                str(stage),
+                "--matrix-cmd",
+                f"cat {matrix_file}",
+                "--repo",
+                str(tmp_path),
+                "--no-deterministic-check",
+            ]
+        )
+        == 1
+    )
+    assert not (outside / f"{STABLE.portname}-{STABLE.portversion}.pkg").exists()
+
+
+def test_issue_2019_verify_rejects_packages_hidden_by_symlinked_leg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify mode cannot overlook packages behind a symlinked leg directory."""
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE,))
+    stage = tmp_path / "stage"
+    outside = tmp_path / "outside"
+    stage.mkdir()
+    outside.mkdir()
+    (stage / "fbsd15").symlink_to(outside, target_is_directory=True)
+    export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
+    _write_pkg(outside / "random-extra-1.0.pkg", name="random-extra", version="1.0")
+    _stub_verify_exports(monkeypatch, {STABLE.commit: export})
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15]))
+
+    assert (
+        bfv.main(
+            [
+                "--out",
+                str(stage),
+                "--verify-only",
+                str(stage),
+                "--matrix-cmd",
+                f"cat {matrix_file}",
+                "--repo",
+                str(tmp_path),
+            ]
+        )
+        == 1
+    )
+
+
+def test_issue_2019_target_and_major_filters_scope_strays_to_intersection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Combined filters accept sibling/other-major staging but reject selected-scope extras."""
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE, DEVEL))
+    stage = tmp_path / "stage"
+    stable_export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
+    _stage_valid_artifact(tmp_path, stage, DEVEL, ROW_15)
+    _stub_verify_exports(monkeypatch, {STABLE.commit: stable_export, DEVEL.commit: stable_export})
+    (stage / "fbsd16").mkdir(parents=True)
+    _write_pkg(stage / "fbsd16" / "random-extra-1.0.pkg", name="random-extra", version="1.0")
+
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15, ROW_16]))
+    args = [
+        "--out",
+        str(stage),
+        "--verify-only",
+        str(stage),
+        "--target",
+        "stable",
+        "--major",
+        "15",
+        "--matrix-cmd",
+        f"cat {matrix_file}",
+        "--repo",
+        str(tmp_path),
+    ]
+    assert bfv.main(args) == 0
+
+    _write_pkg(stage / "fbsd15" / "random-extra-1.0.pkg", name="random-extra", version="1.0")
+    assert bfv.main(args) == 1
+
+
 def test_staging_layout_no_extra_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     export_dir = _write_export(tmp_path, _demo_payload(STABLE.portname))
     monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE,))
