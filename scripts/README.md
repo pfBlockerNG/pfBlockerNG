@@ -313,8 +313,10 @@ python3 scripts/build-frozen-v3.py --out /tmp/frozen-v3-stage
 
 Writes `<out>/fbsd<major>/<pkgname>-<version>.pkg` per row plus a JSON identity report
 (`<out>/frozen-v3-report.json`: source commit, artifact SHA-256, payload inventory with
-per-file SHA-256, dependency/ABI facts). `--verify-only DIR` re-validates an already-staged
-directory with no build seam invoked at all. See `--help` for the full flag set.
+per-file SHA-256, dependency/ABI facts). `--verify-only DIR` requires that report (or the
+path passed with `--report`), re-validates an already-staged directory against its exact
+recorded identities, and never rewrites the report; no build seam is invoked. See `--help`
+for the full flag set.
 
 **This tool never publishes anything** — no GitHub Release upload, no catalog write, no
 network write of any kind. Publication is a separate, maintainer-gated step.
