@@ -10612,7 +10612,10 @@ function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, PfbToggle $supp): array
 
 	$parts	= explode('/', $ipaddr);
 	$subnet	= $parts[0];
-	$mask	= $parts[1] ?? '';	// '' (not undef) when no CIDR
+	// issue #1933: with more than one '/', $parts[1] is a URL path segment, not
+	// a mask — recover the bare host (the issue #1922 regex mask-guard outcome);
+	// discarding $parts[2..] read the first path segment as the prefix length.
+	$mask	= isset($parts[2]) ? '' : ($parts[1] ?? '');	// '' (not undef) when no CIDR
 
 	// An IPv4 prefix length must be 0..32; drop the line outright. A substring
 	// strip here (str_replace('32', '')) used to rewrite an invalid mask into a

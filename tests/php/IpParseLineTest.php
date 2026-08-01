@@ -149,6 +149,23 @@ final class IpParseLineTest extends TestCase
 		);
 	}
 
+	/**
+	 * Scenario: an auto-typed feed ships a bare "IP/path" URL line (issue #1933).
+	 *   Given the exact line shape that caused the issue #1922 outage
+	 *   When the auto (non-regex) parser path handles it
+	 *   Then the bare host is recovered — the first path segment is never read
+	 *        as a CIDR mask (the regex path's owner-ruled outcome, PR #1932).
+	 * Before, the auto path emitted '84.38.133.113/1' (= 0.0.0.0/1 aggregated).
+	 */
+	public function testIpv4AutoUrlPathSegmentIsNotACidrMask(): void
+	{
+		$line = '84.38.133.113/1/webpanel/login.php';
+		$this->assertLine($line, $this->config('_v4', 'auto', FALSE), $this->expectedResult(
+			$line,
+			['entries' => ['84.38.133.113']]
+		));
+	}
+
 	public function testIpv4RegexDeduplicatesAndSkipsCloudflare(): void
 	{
 		$config = $this->config('_v4', 'regex');

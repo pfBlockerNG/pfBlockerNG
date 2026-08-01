@@ -81,6 +81,56 @@ final class SanitizeIpaddrCoreTest extends TestCase
 		);
 	}
 
+	/**
+	 * Scenario: an auto-typed feed ships a bare "IP/path" URL line.
+	 *   Given a line whose first path segment is a small number (the #1922 shape)
+	 *   When the IPv4 core sanitizer splits on '/'
+	 *   Then the path segment is NOT read as a CIDR mask — the bare host is
+	 *        recovered, matching the regex path's mask-internal guard outcome.
+	 * Before, parts[2..] were silently discarded and '/1' became the prefix
+	 * length (= 0.0.0.0/1 after aggregation — the issue #1922 outage shape).
+	 */
+	public function testIpv4CorePathSegmentsRecoverBareHostNotMask(): void
+	{
+		$this->assertSame(
+			['address' => '84.38.133.113', 'messages' => []],
+			pfb_sanitize_ipaddr('84.38.133.113/1/webpanel/login.php', FALSE, 'Disabled', PfbToggle::Off)
+		);
+	}
+
+	// A '/0' path segment is path junk, not a feed /0 — the bare host comes
+	// back WITHOUT the issue #744 clamp message (no mask was ever present).
+	public function testIpv4CoreZeroPathSegmentIsNotAFeedZeroClamp(): void
+	{
+		$this->assertSame(
+			['address' => '1.2.3.4', 'messages' => []],
+			pfb_sanitize_ipaddr('1.2.3.4/0/path', FALSE, 'Disabled', PfbToggle::Off)
+		);
+	}
+
+	// Custom lists get the same bare-host recovery: a path segment is never a
+	// user-authored mask, so the custom /0-honor rule does not apply either.
+	public function testIpv4CorePathSegmentsRecoverBareHostOnCustomList(): void
+	{
+		$this->assertSame(
+			['address' => '1.2.3.4', 'messages' => []],
+			pfb_sanitize_ipaddr('1.2.3.4/8/junk', TRUE, 'Disabled', PfbToggle::Off)
+		);
+	}
+
+	// Degenerate multi-slash shapes: an empty middle part or a trailing slash
+	// also recover the bare host — only a genuine two-part 'addr/<n>' is a CIDR.
+	public function testIpv4CoreDegenerateSlashShapesRecoverBareHost(): void
+	{
+		foreach (['1.2.3.4//24', '1.2.3.4/24/'] as $shape) {
+			$this->assertSame(
+				['address' => '1.2.3.4', 'messages' => []],
+				pfb_sanitize_ipaddr($shape, FALSE, 'Disabled', PfbToggle::Off),
+				"{$shape} must recover the bare host"
+			);
+		}
+	}
+
 	public function testIpv4CoreSuppressesReservedClassesWithoutMessages(): void
 	{
 		$addresses = [
