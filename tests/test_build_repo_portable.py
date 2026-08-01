@@ -736,6 +736,84 @@ def test_catalog_name_rejects_pkg_catalog_plumbing_names(tmp_path: Path) -> None
         assert (out / reserved).is_file(), f"{reserved} must survive the rejected call"
 
 
+def test_catalog_dest_symlinked_prefix_cannot_escape_out(tmp_path: Path) -> None:
+    """A symlink at an INTERMEDIATE path component must not steer the write out of --out.
+
+    The catalog name is validated as a string, so every component is a legitimate
+    varver token — but the filesystem decides where that string lands. With
+    ``<out>/nightly`` a symlink to a directory outside ``--out``, the whole catalog
+    (which is rmtree'd and rebuilt) is written through it (issue #1972).
+
+    Scenario: an attacker plants a symlink inside the CI output root
+      Given <out>/nightly is a symlink to an outside directory holding a file
+       When build_repo() is called with the legitimate name 'nightly/ce-2.8'
+       Then BuildRepoError is raised
+        And the outside directory keeps its file and gains no catalog.
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    out = tmp_path / "out"
+    out.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("must survive")
+    (out / "nightly").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(brp.BuildRepoError, match="escapes"):
+        brp.build_repo(in_dir, out, catalog_name="nightly/ce-2.8")
+
+    assert (outside / "precious.txt").read_text() == "must survive"
+    assert sorted(p.name for p in outside.iterdir()) == ["precious.txt"], (
+        f"the write escaped --out: {sorted(p.name for p in outside.iterdir())}"
+    )
+
+
+def test_catalog_dest_symlinked_leaf_cannot_escape_out(tmp_path: Path) -> None:
+    """The LEAF is a symlink too: rmtree refuses it, but with a raw OSError.
+
+    ``shutil.rmtree`` declines to follow a symlinked leaf, so nothing outside is
+    deleted — but the failure escapes this module's BuildRepoError contract, and the
+    caller cannot tell a hostile layout from a bad input. Refuse it up front instead
+    (issue #1972).
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    out = tmp_path / "out"
+    out.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("must survive")
+    (out / "ce-2.8").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(brp.BuildRepoError, match="escapes"):
+        brp.build_repo(in_dir, out, catalog_name="ce-2.8")
+
+    assert sorted(p.name for p in outside.iterdir()) == ["precious.txt"]
+
+
+def test_catalog_dest_containment_allows_a_real_nested_dir(tmp_path: Path) -> None:
+    """The containment guard must not refuse the layout the publisher actually writes.
+
+    ``release/<varver>/`` and ``nightly/<varver>/`` are ordinary nested directories
+    under --out; only a symlink escaping the root is hostile. Pins that the guard
+    added for issue #1972 costs the legitimate case nothing.
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    brp.build_repo(in_dir, out, catalog_name="release/ce-2.8")
+    assert (out / "release" / "ce-2.8" / "meta.conf").is_file()
+
+    # Idempotent: a rebuild over the existing (real) directory still works.
+    brp.build_repo(in_dir, out, catalog_name="release/ce-2.8")
+    assert (out / "release" / "ce-2.8" / "meta.conf").is_file()
+
+
 def test_build_repo_rejects_unsafe_catalog_name(tmp_path: Path) -> None:
     """``--catalog-name`` is an rmtree'd path segment — traversal/absolute/foreign chars refused.
 
