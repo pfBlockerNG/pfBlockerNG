@@ -463,6 +463,19 @@ def _assert_state(snap: Any, expected: dict[str, bool], label: str) -> None:
     )
 
 
+def _matching_applied_generation(
+    before: int | None,
+    after: int | None,
+    got: dict[str, bool],
+    expected_gen1: dict[str, bool],
+    expected_gen2: dict[str, bool],
+) -> int | None:
+    if before is None or before != after:
+        return None
+    expected = expected_gen1 if after % 2 else expected_gen2
+    return after if got == expected else None
+
+
 # --------------------------------------------------------------------------- #
 # THE test
 # --------------------------------------------------------------------------- #
@@ -548,6 +561,7 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
         local = {"n": 0, "gen1": 0, "gen2": 0, "torn": 0}
         try:
             while not stop.is_set():
+                applied_before = P._reload_read_generation(applied)
                 snap = P._snapshot  # capture ONCE per scan, exactly as operate() does
                 got = _scan(snap)
                 local["n"] += 1
@@ -563,8 +577,14 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
                         _torn_samples.append(
                             {n: got[n] for n in _PROBE_NAMES if got[n] not in (expected_gen1[n], expected_gen2[n])}
                         )
-                applied_generation = P._reload_read_generation(applied)
-                if applied_generation and got == (expected_gen1 if applied_generation % 2 else expected_gen2):
+                applied_generation = _matching_applied_generation(
+                    applied_before,
+                    P._reload_read_generation(applied),
+                    got,
+                    expected_gen1,
+                    expected_gen2,
+                )
+                if applied_generation is not None:
                     record_observed(index, applied_generation)
         except Exception as e:  # noqa: BLE001 -- record, never let a query crash silently
             errors.append(repr(e))
@@ -666,11 +686,35 @@ def _build_snapshot_from(manifest: str, ini: str) -> Any:
         P.pfb["pfb_unbound.ini"] = saved_i
 
 
-def test_reload_trigger_marker_waiter_reports_stuck_environment(tmp_path: Any) -> None:
+def _load_reload_trigger() -> Any:
     spec = importlib.util.spec_from_file_location("adr10_reload_trigger", _TRIGGER)
     assert spec is not None and spec.loader is not None, "trigger module could not be loaded"
     trigger = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(trigger)
+    return trigger
+
+
+def test_same_parity_stale_scan_is_not_credited_to_later_generation() -> None:
+    expected_gen1 = {"probe.example": False}
+    expected_gen2 = {"probe.example": True}
+
+    assert _matching_applied_generation(2, 6, expected_gen2, expected_gen1, expected_gen2) is None
+    assert _matching_applied_generation(6, 6, expected_gen2, expected_gen1, expected_gen2) == 6
+
+
+def test_reload_trigger_marker_waiter_reports_stuck_environment(tmp_path: Any) -> None:
+    trigger = _load_reload_trigger()
 
     with pytest.raises(RuntimeError, match=r"stuck/environment.*target generation 7.*actual=None"):
         trigger._wait_generation_marker(str(tmp_path / "missing"), 7, timeout=0.0)
+
+
+def test_reload_trigger_marker_waiter_accepts_successful_final_recheck(monkeypatch: Any) -> None:
+    trigger = _load_reload_trigger()
+    times = iter((0.0, 0.0, 1.0))
+    reads = iter((None, 7))
+    monkeypatch.setattr(trigger.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(trigger.time, "sleep", lambda _: None)
+    monkeypatch.setattr(trigger, "_read_gen", lambda _: next(reads))
+
+    trigger._wait_generation_marker("marker", 7, timeout=1.0)

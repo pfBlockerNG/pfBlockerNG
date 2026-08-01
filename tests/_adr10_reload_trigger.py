@@ -35,8 +35,8 @@ This serialises the writer against the builder so the builder always reads a CON
 (manifest, ini) pair -- the snapshot swap under test is atomic, but the build *input*
 (two separate files read in sequence) would otherwise race a mid-build overwrite and
 yield a self-consistent-but-cross-gen snapshot. The atomic _snapshot rebind is still
-exercised ``flips`` times, each a genuine generation advance every query thread must
-observe without a torn (mixed) view.
+exercised ``flips`` times; a query observes every intermediate generation, and every
+query thread observes the baseline and final generation without a torn (mixed) view.
 """
 
 from __future__ import annotations
@@ -87,6 +87,8 @@ def _wait_generation_marker(path: str, target: int, timeout: float) -> None:
             return
         time.sleep(0.01)
     actual = _read_gen(path)
+    if (actual or 0) >= target:
+        return
     raise RuntimeError(
         "wait_generation_marker stuck/environment: expected target generation {} at {!r}; actual={!r}".format(
             target, path, actual
