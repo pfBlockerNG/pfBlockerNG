@@ -137,13 +137,15 @@ def _top_level_workflow_name(text: str, *, source: str) -> str:
 
 
 def _scheduled_workflow_names(paths: list[Path]) -> set[str]:
-    names: set[str] = set()
+    scheduled_owners: dict[str, Path] = {}
     for path in paths:
         text = path.read_text(encoding="utf-8")
         name = _top_level_workflow_name(text, source=str(path))
         if _has_schedule_trigger(text):
-            names.add(name)
-    return names
+            if name in scheduled_owners:
+                raise ValueError(f"duplicate scheduled workflow name {name!r}: {scheduled_owners[name]} and {path}")
+            scheduled_owners[name] = path
+    return set(scheduled_owners)
 
 
 def _nightly_watched_workflows(text: str) -> set[str]:
@@ -286,6 +288,15 @@ def test_workflow_files_scan_both_yaml_extensions(tmp_path: Path) -> None:
     paths = _workflow_files(tmp_path)
     assert {path.suffix for path in paths} == {".yml", ".yaml"}
     assert _scheduled_workflow_names(paths) == {"YML", "YAML"}
+
+
+def test_duplicate_scheduled_workflow_names_fail_closed(tmp_path: Path) -> None:
+    workflow = 'name: Top1M Provider Health Check\non:\n  schedule:\n    - cron: "0 0 * * *"\n'
+    (tmp_path / "first.yml").write_text(workflow, encoding="utf-8")
+    (tmp_path / "second.yml").write_text(workflow, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate scheduled workflow name.*Top1M Provider Health Check"):
+        _scheduled_workflow_names(_workflow_files(tmp_path))
 
 
 def test_nightly_workflow_run_parser_ignores_decoy_workflow_lists() -> None:
