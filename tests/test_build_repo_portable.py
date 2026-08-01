@@ -793,6 +793,51 @@ def test_catalog_dest_symlinked_leaf_cannot_escape_out(tmp_path: Path) -> None:
     assert sorted(p.name for p in outside.iterdir()) == ["precious.txt"]
 
 
+def test_catalog_dest_symlinked_leaf_inside_root_is_still_refused(tmp_path: Path) -> None:
+    """A symlinked leaf is refused even when it points back INSIDE the output root.
+
+    Containment cannot decide this one — the target is legitimately inside --out — but
+    the catalog directory is wiped and recreated, so it has to be a real directory this
+    tool owns. ``shutil.rmtree`` declines to follow a symlink, which would otherwise
+    surface as a raw OSError instead of a BuildRepoError (issue #1972).
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    out = tmp_path / "out"
+    out.mkdir()
+    real = out / "real"
+    real.mkdir()
+    (real / "keep.txt").write_text("must survive")
+    (out / "ce-2.8").symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(brp.BuildRepoError, match="is a symlink"):
+        brp.build_repo(in_dir, out, catalog_name="ce-2.8")
+
+    assert (real / "keep.txt").read_text() == "must survive"
+    assert not list(real.glob("*.pkg")), f"the symlinked leaf was written through: {list(real.iterdir())}"
+
+
+def test_catalog_dest_that_is_a_plain_file_is_refused(tmp_path: Path) -> None:
+    """A catalog name naming an existing FILE is refused, not a raw traceback.
+
+    ``_RESERVED_CATALOG_NAMES`` covers only the four pkg(8) plumbing names, but any
+    regular file at the destination (a stray published .pkg, say) hits the same path:
+    ``mkdir`` on it raises NotADirectoryError, escaping the BuildRepoError contract.
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "ce-2.8").write_text("not a directory")
+
+    with pytest.raises(brp.BuildRepoError, match="not a directory"):
+        brp.build_repo(in_dir, out, catalog_name="ce-2.8")
+
+    assert (out / "ce-2.8").read_text() == "not a directory"
+
+
 def test_catalog_dest_containment_allows_a_real_nested_dir(tmp_path: Path) -> None:
     """The containment guard must not refuse the layout the publisher actually writes.
 

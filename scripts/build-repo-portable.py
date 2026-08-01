@@ -451,7 +451,7 @@ def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) 
     return sorted(abis)
 
 
-def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict]]) -> int:
+def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict]], *, root: Path) -> int:
     """Write one pkg catalog at ``dest`` from a ``{(name, version): (path, manifest)}`` map.
 
     Wipes + rebuilds ``dest`` for determinism (a removed .pkg never lingers), copies each
@@ -472,6 +472,11 @@ def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict
         canonical = f"{name}-{version}.pkg"
         staged.append((canonical, path.read_bytes(), path.stat().st_mtime, manifest))
 
+    # Re-checked HERE, immediately before the wipe, not only at the caller: staging above
+    # reads every input .pkg, and a layout that changed under us in that window would
+    # otherwise be acted on. This narrows the race to no intervening I/O; it does not
+    # eliminate it (only an O_NOFOLLOW/dir_fd walk would). Issue #1972.
+    _require_contained(root, dest)
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
@@ -564,6 +569,11 @@ def _require_contained(root: Path, dest: Path) -> Path:
             f"catalog destination {str(dest)!r} is a symlink — the catalog directory is wiped "
             f"and rebuilt, so it must be a real directory"
         )
+    if dest.exists() and not dest.is_dir():
+        raise BuildRepoError(
+            f"catalog destination {str(dest)!r} exists and is not a directory — the catalog "
+            f"directory is wiped and rebuilt, so it cannot be an existing file"
+        )
     return dest
 
 
@@ -578,10 +588,10 @@ def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path], *, root: Path) -
     tripwire that forces a conscious layout decision if a compiled, per-arch
     dependency is ever added.
 
-    ``root`` is the output root ``dest`` must stay inside. This is the single
-    destructive choke point (``_write_catalog_dir`` is reached only from here), so the
-    containment check lives here rather than at each composition site — a future
-    caller cannot forget it (issue #1972).
+    ``root`` is the output root ``dest`` must stay inside. Checked here to fail before
+    reading every input package, and again in ``_write_catalog_dir`` immediately before
+    the wipe — that second one is authoritative, so the guard holds even for a future
+    caller that reaches the writer by another route (issue #1972).
     """
     _require_contained(root, dest)
     entries: list[tuple[Path, dict]] = [(p, read_compact_manifest(p)) for p in sorted(set(pkg_paths))]
@@ -595,7 +605,7 @@ def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path], *, root: Path) -
             sys.stderr.write(f"==> dedup: {path.name} duplicates {items[nv][0].name} ({nv[0]}-{nv[1]})\n")
             continue
         items[nv] = (path, manifest)
-    return _write_catalog_dir(dest, items)
+    return _write_catalog_dir(dest, items, root=root)
 
 
 def _retain_newest(pkg_paths: list[Path], keep: int) -> list[Path]:
