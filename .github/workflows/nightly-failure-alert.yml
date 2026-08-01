@@ -67,10 +67,29 @@ jobs:
           fi
 
           FAILURE_RUN=$(gh issue view "$MATCH" --repo "$REPO" --json body \
-            --jq '.body | try capture("<!-- failure-run: (?<run>[0-9]+):(?<attempt>[0-9]+) -->") | "\(.run) \(.attempt)"')
-          if [ -n "$FAILURE_RUN" ]; then
+            --jq '(.body // "")
+              | if contains("<!-- failure-run:") | not then "legacy"
+                elif (split("<!-- failure-run:") | length) != 2 then "malformed"
+                else ([capture("<!-- failure-run: (?<run>[0-9]+):(?<attempt>[0-9]+) -->")]
+                  | if length == 1 then "\(.[0].run) \(.[0].attempt)" else "malformed" end)
+                end')
+          if [ "$FAILURE_RUN" = "malformed" ]; then
+            echo "[noop] Tracking issue has malformed failure-run metadata"
+            exit 0
+          fi
+          if [ -n "$FAILURE_RUN" ] && [ "$FAILURE_RUN" != "legacy" ]; then
             FAILURE_RUN_NUMBER=${FAILURE_RUN%% *}
             FAILURE_RUN_ATTEMPT=${FAILURE_RUN#* }
+            case "${FAILURE_RUN_NUMBER}${FAILURE_RUN_ATTEMPT}" in
+              ""|*[!0-9]*)
+                echo "[noop] Tracking issue has malformed failure-run metadata"
+                exit 0
+                ;;
+            esac
+            if [ "${#FAILURE_RUN_NUMBER}" -gt 18 ] || [ "${#FAILURE_RUN_ATTEMPT}" -gt 18 ]; then
+              echo "[noop] Tracking issue has oversized failure-run metadata"
+              exit 0
+            fi
             if [ "$RUN_NUMBER" -lt "$FAILURE_RUN_NUMBER" ] ||
               { [ "$RUN_NUMBER" -eq "$FAILURE_RUN_NUMBER" ] &&
                 [ "$RUN_ATTEMPT" -le "$FAILURE_RUN_ATTEMPT" ]; }; then
@@ -154,8 +173,12 @@ jobs:
                  | .[0].number // empty')
 
           if [ -n "$MATCH" ]; then
-            echo "[update] Updating tracking issue #${MATCH}"
-            gh issue edit "$MATCH" --repo "$REPO" --body-file "$BODY_FILE"
+            if [ -n "$DRILL" ]; then
+              echo "[noop] Manual drill did not overwrite tracking issue #${MATCH}"
+            else
+              echo "[update] Updating tracking issue #${MATCH}"
+              gh issue edit "$MATCH" --repo "$REPO" --body-file "$BODY_FILE"
+            fi
           else
             echo "[create] Opening tracking issue"
             gh issue create \
