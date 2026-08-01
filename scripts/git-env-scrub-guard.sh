@@ -10,10 +10,10 @@
 #      (scripts/lib/git-env-scrub.sh) is a violation: the class must be
 #      suppressed at the lib chokepoint, not scattered.
 #
-#   2. Fixture/setup Git calls use git_fixture(). Raw Git command positions in
-#      specs are violations unless a same-line marker carries a non-empty reason.
-#      The lexical scan ignores comments and inert quoted text, while retaining
-#      active command substitutions and handling env/assignment prefixes.
+#   2. The swept scratch-repo specs retain every git_fixture() pin. An explicit
+#      per-file count catches removal without pretending this guard is a shell
+#      parser. A lexical scan also catches common raw Git command forms unless a
+#      same-line marker carries a non-empty reason.
 #
 # Intentional Git calls exercising a hook under test may use a same-line marker;
 # an empty marker or a marker on a prior line does not exempt the command.
@@ -53,9 +53,51 @@ grep -Ern --include='*.sh' \
     | grep -v "${SCRUB_SPEC}" >> "$TMPF" || true
 
 # ── Clause 2: raw fixture Git calls use git_fixture. ────────────────────── #
-# Strip comments and quoted text before checking command positions. The guard is
-# intentionally lexical rather than a shell evaluator: it catches direct Git at
-# indentation, after `&&`/`;`/`!`, and in `$(git ...)` without executing fixtures.
+# The manifest pins the completed sweep. The lexical lint below keeps common raw
+# command mistakes visible without claiming to parse arbitrary shell programs.
+check_fixture_manifest() {
+    marker="${ROOT}/tests/shell/agent_run_gates_spec.sh"
+    [ -f "$marker" ] || return 0
+
+    while IFS=: read -r spec expected; do
+        path="${ROOT}/tests/shell/${spec}"
+        if [ ! -f "$path" ]; then
+            printf '%s: swept fixture spec is missing\n' "$path" >> "$TMPF"
+            continue
+        fi
+        actual=$(awk '{
+            line=$0
+            while (match(line, /(^|[^[:alnum:]_])git_fixture([^[:alnum:]_]|$)/)) {
+                count++
+                line=substr(line, RSTART + RLENGTH)
+            }
+        } END { print count + 0 }' "$path")
+        if [ "$actual" -ne "$expected" ]; then
+            printf '%s: git_fixture pin count changed (expected %s, found %s)\n' \
+                "$path" "$expected" "$actual" >> "$TMPF"
+        fi
+    done <<'EOF'
+agent_run_gates_spec.sh:4
+agent_verify_red_proof_spec.sh:12
+agent_work_branch_spec.sh:5
+composer_cloud_install_spec.sh:4
+git_no_docs_spec.sh:5
+githooks_pre_push_lease_spec.sh:33
+githooks_pre_push_tag_scheme_spec.sh:7
+githooks_prepare_commit_msg_guard_spec.sh:17
+pfblockerng_truncate_survival_spec.sh:4
+precommit_composer_vendor_spec.sh:2
+read_version_matrix_test_spec.sh:5
+release_ci_gate_spec.sh:33
+session_branch_sync_spec.sh:46
+sparse_clone_ports_spec.sh:17
+EOF
+}
+
+check_fixture_manifest
+
+# This lexical lint covers common direct-command mistakes. The manifest above,
+# rather than this deliberately small scanner, is the completed-sweep invariant.
 scan_raw_git() {
     awk '
     function unquoted(line,    i,c,state,out,depth) {
