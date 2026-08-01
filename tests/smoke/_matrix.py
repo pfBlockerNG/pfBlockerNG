@@ -47,8 +47,12 @@ class Variant:
 def catalog_name(pfsense_version: str, variant: str) -> str:
     """``("2.8.1", "CE") -> "ce-2.8"`` / ``("26.03.1", "Plus") -> "plus-26.03"`` — the
     variant-keyed catalog dir (variant + the pfSense major.minor; mirrors
-    build-repo-portable.py:catalog_name_from_version)."""
-    parts = [p for p in str(pfsense_version).split(".") if p != ""]
+    build-repo-portable.py:catalog_name_from_version).
+
+    A pre-release suffix is stripped first (``"26.07-BETA" -> "plus-26.07"``): it sits
+    inside the minor field, and both the producer and the on-box rc.d hook drop it
+    before deriving the varver (issue #1965)."""
+    parts = [p for p in str(pfsense_version).split("-")[0].split(".") if p != ""]
     return f"{variant.lower()}-{'.'.join(parts[:2])}"
 
 

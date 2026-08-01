@@ -318,6 +318,21 @@ def _mx(abi: str, ver: str, variant: str, php: str, py: str) -> dict[str, str]:
     return {"abi": abi, "pfsense_version": ver, "variant": variant, "php_version": php, "py_flavor": py}
 
 
+def test_matrix_varver_strips_prerelease_suffix() -> None:
+    """The landing page pins a row to the varver its packages are PUBLISHED under.
+
+    A pre-release matrix entry ("26.07-BETA") carries the suffix inside the minor
+    field; the publisher strips it (build-repo-portable.catalog_name_from_version),
+    so this mirror must strip identically — otherwise the varver pin matches nothing
+    and every row falls back to the unpinned pool (issue #1965).
+    """
+    assert gl._matrix_varver("26.07-BETA", "Plus") == "plus-26.07"
+    assert gl._matrix_varver("2.9-RC1", "CE") == "ce-2.9"
+    # Release versions are unaffected.
+    assert gl._matrix_varver("26.03.1", "Plus") == "plus-26.03"
+    assert gl._matrix_varver("2.8.1", "CE") == "ce-2.8"
+
+
 def test_dotted_and_dep_flavor_formatting() -> None:
     """A flavor token / dep name formats to a dotted version; sub-packages don't match."""
     assert gl._dotted_ver("py311") == "3.11"

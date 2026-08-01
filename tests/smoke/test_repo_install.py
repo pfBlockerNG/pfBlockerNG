@@ -1675,7 +1675,9 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
     Given the own package uninstalled and the repo conf pointing at the opposite-variant
       catalog (ABI mismatch),
     When ``pkg install -y <pkgname>`` from the opposite catalog,
-    Then exit code is non-zero OR the error output mentions the opposite php / ABI mismatch,
+    Then the guard fires (non-zero exit, or the package is absent),
+      AND the error output is variant-attributable — it names the opposite php dep,
+      the opposite ABI, an ABI/OS-version rejection, or no installable candidate,
       AND ``pkg query '%n' <pkgname>`` confirms the package is NOT installed.
     """
     pkg = os.environ.get("SMOKE_PKG")
@@ -1760,11 +1762,28 @@ def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
         f"pkg install output:\n{install_output}\n"
         f"pkg query '%n': {vm_pkg_query_name(repo_vm)!r}"
     )
-    # The error output should mention the opposite php or an ABI mismatch (informational — soft).
-    has_opp_php_error = opp.php in install_output
-    has_abi_error = any(kw in install_output.lower() for kw in ("abi", "mismatch", "incompatible", "not found"))
-    assert has_opp_php_error or has_abi_error or install_failed, (
-        f"Wrong-variant install: expected {opp.php}/ABI error or non-zero exit; got:\n"
+    # AND the failure is ATTRIBUTABLE to the variant mismatch — not merely non-zero.
+    # `install_failed` is deliberately NOT one of these clauses: it is already asserted
+    # above, so including it made every other clause unreachable and the intent
+    # ("the error names the opposite php or an ABI rejection") went unpinned (issue
+    # #1965). A failure with none of these markers is a DIFFERENT failure — an unusable
+    # box, a broken catalog, a transport error — and must not read as the guard firing.
+    lowered = install_output.lower()
+    reasons = {
+        f"names the opposite php dep ({opp.php})": opp.php in install_output,
+        f"names the opposite ABI (FreeBSD:{opp_major})": f"freebsd:{opp_major}" in lowered,
+        "reports an ABI / OS-version rejection": any(
+            kw in lowered for kw in ("wrong abi", "wrong os version", "mismatch", "incompatible")
+        ),
+        "reports no installable candidate from the catalog": any(
+            kw in lowered for kw in ("no packages available", "not found", "missing dependency", "unable to find")
+        ),
+    }
+    assert any(reasons.values()), (
+        f"Wrong-variant install failed, but for no variant-attributable reason — the guard "
+        f"under test may not be what fired.\n"
+        f"expected the output to satisfy at least one of: {sorted(reasons)}\n"
+        f"actual: {reasons}\n"
         f"rc={install_result.returncode}\n{install_output}"
     )
     # Package must NOT be installed after the failed attempt.

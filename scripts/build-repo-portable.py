@@ -70,6 +70,13 @@ def _is_wildcard_abi(abi: object) -> TypeGuard[str]:
     return isinstance(abi, str) and bool(_ABI_WILDCARD_RE.fullmatch(abi))
 
 
+# A .pkg's manifest name/version become the published filename ``<name>-<version>.pkg``.
+# The manifest is READ from the package (attacker-controlled input, never derived), so
+# both fields get a segment guard too. Wider class than a varver — real pkg names and
+# versions carry uppercase, '_' (port revision, "1.0_1") and ',' (PORTEPOCH, "1.0,1").
+_PKG_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._,+-]*$")
+
+
 class BuildRepoError(Exception):
     """A fatal, user-facing error (bad input / collision / missing tool)."""
 
@@ -90,6 +97,24 @@ def _require_wildcard_abi(path: Path, abi: object) -> str:
             f"install on only one arch. Ship a wildcard-ABI (NO_ARCH) build instead."
         )
     return abi
+
+
+def _safe_segment(value: object, *, what: str, pattern: re.Pattern[str]) -> str:
+    """Return ``value`` if it is safe to use as ONE path segment, else raise.
+
+    Everything joined onto the output root here is either read from an untrusted
+    manifest or passed in from the CLI/matrix, and the destination directory is
+    ``rmtree``'d before it is rebuilt — so an unvalidated segment is an arbitrary
+    directory wipe (``".."``) or an escape from the output root entirely (an
+    absolute path makes ``Path.__truediv__`` discard its left operand). Mirrors the
+    guard ``scripts/build-repo.sh`` applies to ``--varver``.
+    """
+    if not isinstance(value, str) or not pattern.fullmatch(value) or ".." in value:
+        raise BuildRepoError(
+            f"unsafe or invalid {what}: {value!r} — must be a single path segment "
+            f"matching {pattern.pattern} with no '..' (it becomes an rm -rf'd directory)"
+        )
+    return value
 
 
 # --------------------------------------------------------------------------- #
@@ -300,12 +325,24 @@ def catalog_name_from_version(pfsense_version: str, variant: str, *, channel: st
       "26.03"  + "Plus"           -> "plus-26.03"
       "26.03.1"+ "Plus"           -> "plus-26.03"
 
+    A pre-release suffix is stripped BEFORE the split, so a pre-release publishes
+    under its release line's catalog — the same strip the rc.d repo-generate hook
+    applies on the box (issue #1965; the suffix sits inside the minor field, so a
+    bare split would keep it and publish a directory no box ever resolves):
+      "26.07-BETA" + "Plus"       -> "plus-26.07"
+      "2.8.1-RELEASE" + "CE"      -> "ce-2.8"
+
     When channel is supplied (e.g. "nightly"), it is prepended as a path prefix:
       "2.8.1"  + "CE"   + "nightly" -> "nightly/ce-2.8"
       "26.03.1"+ "Plus" + "nightly" -> "nightly/plus-26.03"
+
+    The derived name becomes an rmtree'd path segment, so it goes through the same
+    ``_validate_catalog_name`` guard a caller-supplied ``--catalog-name`` does — the
+    matrix fields it is built from are inputs, not constants.
     """
-    major_minor = ".".join(pfsense_version.split(".")[:2])
+    major_minor = ".".join(pfsense_version.split("-")[0].split(".")[:2])
     name = f"{variant.lower()}-{major_minor}"
+    _validate_catalog_name(name, single_segment=True)
     return f"{channel}/{name}" if channel else name
 
 
@@ -316,21 +353,34 @@ def catalog_name_from_version(pfsense_version: str, variant: str, *, channel: st
 # A catalog_name segment is a rm-rf'd + rebuilt path component (_write_catalog_dir
 # shutil.rmtree()s it) — same safety rule as build-repo.sh's --varver guard, tightened
 # to lowercase-only. '/' is allowed only BETWEEN segments (a legitimate catalog_name
-# carries a channel prefix, e.g. "nightly/plus-26.03").
-_CATALOG_NAME_SEGMENT_RE = re.compile(r"[a-z0-9.-]+")
+# carries a channel prefix, e.g. "nightly/plus-26.03"). The leading character is
+# alphanumeric so a segment can never open with '-' or '.': every real varver does
+# (ce-2.8, plus-26.03, nightly, release), while a missing variant would otherwise
+# derive the silently-wrong "-2.8" (issue #1965).
+_CATALOG_NAME_SEGMENT_RE = re.compile(r"[a-z0-9][a-z0-9.-]*")
 
 
-def _validate_catalog_name(name: str) -> None:
+def _validate_catalog_name(name: str, *, single_segment: bool = False) -> None:
     """Reject an unsafe ``catalog_name`` before it becomes ``out_dir / catalog_name``
     (issue #1786): a ``".."`` segment escapes sideways/upward, and an ABSOLUTE value
     makes ``Path.__truediv__`` discard ``out_dir`` entirely — either lets a caller
     point ``_write_catalog_dir``'s ``shutil.rmtree()`` at an arbitrary directory.
+
+    ``single_segment`` additionally forbids the channel prefix. A value DERIVED from
+    matrix fields (``catalog_name_from_version``) is one segment by construction, so a
+    '/' there means a field carried a separator — which this guard would otherwise read
+    as a legitimate prefix and wave through (issue #1965).
     """
     segments = name.split("/")
+    if single_segment and len(segments) != 1:
+        raise BuildRepoError(
+            f"unsafe catalog_name {name!r}: a derived varver is ONE segment — a '/' means "
+            f"an input field carried a path separator"
+        )
     if any(not seg or seg in (".", "..") or not _CATALOG_NAME_SEGMENT_RE.fullmatch(seg) for seg in segments):
         raise BuildRepoError(
             f"unsafe catalog_name {name!r}: each '/'-separated segment must be non-empty, "
-            f"not '.'/'..', and match [a-z0-9.-]+ (e.g. 'ce-2.8', 'release/ce-2.8')"
+            f"not '.'/'..', and match [a-z0-9][a-z0-9.-]* (e.g. 'ce-2.8', 'release/ce-2.8')"
         )
 
 
@@ -356,7 +406,9 @@ def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) 
     delegated to ``_emit_catalog_from_paths``. Returns the single wildcard ABI
     built, as a one-element sorted list.
     """
-    if catalog_name:
+    # `is not None`, not truthiness: an empty catalog_name is a caller bug, and
+    # silently treating it as "no catalog name" would publish at the output root.
+    if catalog_name is not None:
         _validate_catalog_name(catalog_name)
 
     pkgs = sorted(p for p in in_dir.glob("*.pkg") if p.is_file())
@@ -395,6 +447,10 @@ def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict
     # Read every source up front (sources may live inside dest — see nightly retention).
     staged: list[tuple[str, bytes, float, dict]] = []
     for (name, version), (path, manifest) in sorted(items.items()):
+        # name/version come from the .pkg's own manifest and become the published
+        # filename — guard both before either is joined onto dest (issue #1965).
+        _safe_segment(name, what=f"{path.name}: manifest name", pattern=_PKG_SEGMENT_RE)
+        _safe_segment(version, what=f"{path.name}: manifest version", pattern=_PKG_SEGMENT_RE)
         canonical = f"{name}-{version}.pkg"
         staged.append((canonical, path.read_bytes(), path.stat().st_mtime, manifest))
 
