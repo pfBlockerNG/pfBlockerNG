@@ -327,6 +327,7 @@ final class DnsblQueryClientTest extends TestCase
 	private function awaitQueryResult(array $child): ?array
 	{
 		$raw = $this->awaitSignal($child['signal'], "{$child['label']} query result", $child['pid']);
+		fclose($child['signal']);
 		$result = json_decode($raw, true);
 		$this->assertSame(JSON_ERROR_NONE, json_last_error(), json_last_error_msg());
 		if ($result !== null && !is_array($result)) {
@@ -407,7 +408,7 @@ final class DnsblQueryClientTest extends TestCase
 
 	/**
 	 * Spawn a background PHP process that plays the Python side of the
-	 * channel: it polls for the request (3s locally, 12s in CI; 20ms steps), records
+	 * channel: it polls for the request under the salvage cap (20ms steps), records
 	 * the decoded request JSON + the request file's permission bits into
 	 * observed.json, substitutes the request's real id for the literal
 	 * "__ID__" placeholder in $replyTemplateJson, and writes the reply.
@@ -415,7 +416,7 @@ final class DnsblQueryClientTest extends TestCase
 	private function spawnResponder(string $replyTemplateJson): void
 	{
 		$this->forkChild(function () use ($replyTemplateJson): void {
-			$deadline = microtime(true) + $this->testTimeout(3.0);
+			$deadline = microtime(true) + self::SALVAGE_CAP_S;
 			$request = null;
 			do {
 				$raw = @file_get_contents($this->channel());
@@ -427,7 +428,7 @@ final class DnsblQueryClientTest extends TestCase
 				usleep(20000);
 			} while (microtime(true) < $deadline);
 			if ($request === null) {
-				throw new RuntimeException('responder did not observe a request');
+				throw new RuntimeException('STUCK/ENVIRONMENT: the responder never observed a request within the ' . self::SALVAGE_CAP_S . 's salvage cap -- the run is stuck or the environment is broken, not a behavioural failure');
 			}
 			$perm = substr(sprintf('%o', fileperms($this->channel())), -4);
 			$this->atomicWriteJson("{$this->tmp}/observed.json", [
@@ -733,7 +734,7 @@ final class DnsblQueryClientTest extends TestCase
 			$this->readMarker('release-first');
 			$this->atomicWrite($this->replyPath(), $this->verdictReply($first['id'], 'group-a'));
 
-			$deadline = microtime(true) + $this->testTimeout(2.0);
+			$deadline = microtime(true) + self::SALVAGE_CAP_S;
 			while (file_exists($this->replyPath()) && microtime(true) < $deadline) {
 				usleep(20000);
 			}
