@@ -256,12 +256,23 @@ def _caret_offset_x(content: Locator) -> int | None:
     )
 
 
-def _assert_the_rescue_path_is_reachable(content: Locator) -> None:
-    """Preconditions for the emulated keyboard actually reaching the caret rescue.
+def _assert_the_keyboard_is_up(content: Locator) -> dict[str, float]:
+    """Preconditions every keyboard-open test shares, and returns the reading.
 
-    Every one of these silently un-reaches the defect, so each is asserted rather than
-    assumed: a viewport that never shrank, a caret that is not below it, or a document
-    with nothing to scroll horizontally all make the tests below pass on broken code.
+    A page-scale factor that silently failed to apply, or a document with nothing to
+    scroll sideways, makes these tests pass on broken code without exercising anything.
+    """
+    reach = content.evaluate(_REACH_JS)
+    assert reach["shrunk"] > 1, f"precondition: the visual viewport must shrink; got {reach!r}"
+    assert reach["scrollable"] > 0, f"precondition: the document must be horizontally scrollable; got {reach!r}"
+    return reach
+
+
+def _assert_the_rescue_path_is_reachable(content: Locator) -> None:
+    """Additionally: the caret is far enough down that CodeMirror's rescue really runs.
+
+    Only for the tests that need the rescue itself -- a caret CodeMirror has already
+    scrolled into view (pressing End, say) legitimately fails these.
 
     ``belowLayoutBy`` is the subtle one. CodeMirror gates the rescue on the VISUAL
     viewport, but Chromium pans the visual viewport to the caret by itself whenever the
@@ -269,10 +280,9 @@ def _assert_the_rescue_path_is_reachable(content: Locator) -> None:
     page every other precondition holds, the rescue never runs, and the defective bundle
     passes. Requiring the caret below ``innerHeight`` too pins the band where the browser
     cannot rescue it first; if a future page layout lifts the editor out of that band,
-    these tests fail loudly here instead of quietly measuring nothing.
+    the test fails loudly here instead of quietly measuring nothing.
     """
-    reach = content.evaluate(_REACH_JS)
-    assert reach["shrunk"] > 1, f"precondition: the visual viewport must shrink; got {reach!r}"
+    reach = _assert_the_keyboard_is_up(content)
     assert reach["belowBy"] is not None and reach["belowBy"] > 0, (
         f"precondition: the caret must sit below the visual viewport; got {reach!r}"
     )
@@ -280,7 +290,6 @@ def _assert_the_rescue_path_is_reachable(content: Locator) -> None:
         f"precondition: the caret must sit below the LAYOUT viewport too, or Chromium "
         f"pans it into view before CodeMirror's rescue can run; got {reach!r}"
     )
-    assert reach["scrollable"] > 0, f"precondition: the document must be horizontally scrollable; got {reach!r}"
 
 
 def _newline_returns_to_left(page: Page, content: Locator, long_line: str, screenshot_dir: Path, name: str) -> None:
@@ -468,10 +477,12 @@ def test_hook_editor_still_follows_the_caret_off_the_right_edge(
     page.evaluate("() => window.scrollTo(0, 0)")
     page.keyboard.press("End")
 
-    # Same preconditions as the sibling test: this one guards against a fix that pins the
-    # horizontal position while the keyboard is up, so the keyboard state has to be
-    # genuinely reached or the bad fix it exists to catch would sail through.
-    _assert_the_rescue_path_is_reachable(content)
+    # The keyboard state has to be genuinely reached, or the fix this guards against --
+    # pinning the horizontal position while the keyboard is up -- would sail through. Not
+    # the sibling's caret-below-the-viewport preconditions though: End makes CodeMirror
+    # scroll to the caret, which brings it back into view vertically (measured on the live
+    # VM: belowBy=-1162), so requiring it below the viewport here can never hold.
+    _assert_the_keyboard_is_up(content)
 
     before = _settled_scroll_left(content)
     assert before > 0, f"precondition: reaching a long line's end must scroll the view right; got {before}"
