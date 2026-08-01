@@ -145,6 +145,29 @@ final class PfbFilterContractTest extends TestCase
 		$this->assertSame("\u{0646}\u{0627}\u{0645}\u{0647}\u{200C}\u{0627}\u{06CC}", pfb_filter("\u{0646}\u{0627}\u{0645}\u{0647}\u{200C}\u{0627}\u{06CC}", PFB_FILTER_TLD, 'PFBL-01 contract'));
 	}
 
+	// --- PFB_FILTER_{TLD,DOMAIN,HOSTNAME}: emoji label acceptance (issue #1779) --
+	// Pin both the Unicode representation and its accepted A-label equivalent;
+	// successful filtering preserves whichever representation the caller supplied.
+
+	/** @return array<string, array{0: string, 1: int}> label => input and filter type */
+	public static function emojiLabelAcceptedProvider(): array
+	{
+		return [
+			'TLD Unicode emoji'          => ['😀', PFB_FILTER_TLD],
+			'TLD equivalent A-label'     => ['xn--e28h', PFB_FILTER_TLD],
+			'DOMAIN Unicode emoji'       => ['😀.example', PFB_FILTER_DOMAIN],
+			'DOMAIN equivalent A-label'  => ['xn--e28h.example', PFB_FILTER_DOMAIN],
+			'HOSTNAME Unicode emoji'     => ['😀.example', PFB_FILTER_HOSTNAME],
+			'HOSTNAME equivalent A-label' => ['xn--e28h.example', PFB_FILTER_HOSTNAME],
+		];
+	}
+
+	#[DataProvider('emojiLabelAcceptedProvider')]
+	public function testEmojiLabelsAcceptedAndPreserved(string $input, int $filterType): void
+	{
+		$this->assertSame($input, pfb_filter($input, $filterType, 'PFBL-01 contract'));
+	}
+
 	/** @return array<string, array{0: string}> label => CONTEXTJ-forbidden TLD */
 	public static function tldContextjRejectedProvider(): array
 	{
