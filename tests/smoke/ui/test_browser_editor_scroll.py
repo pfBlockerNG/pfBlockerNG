@@ -47,7 +47,7 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator
+    from collections.abc import Iterator
     from pathlib import Path
 
     from playwright.sync_api import BrowserContext, Locator, Page
@@ -89,7 +89,7 @@ def _phone_page(
     browser_context: BrowserContext,
     webui: WebUI,
     smoke_vm: SmokeVM,
-) -> Generator[Page]:
+) -> Iterator[Page]:
     """An authenticated page on a second, phone-emulating context of the same browser.
 
     Re-uses the session cookie rather than logging in again (a second login is a second
@@ -198,6 +198,89 @@ def _assert_scrolled_right(content: Locator, where: str) -> int:
         "long line never scrolled the view right and the test below proves nothing"
     )
     return offset
+
+
+# Caret a dozen characters into a line well down the document. Set through the DOM
+# selection rather than a click: under a page-scale factor, input coordinates no longer
+# map to the layout box a click target is computed from, and a click that misses leaves
+# the caret at the end of the inserted text -- genuinely off screen, where CodeMirror
+# scrolling to it is CORRECT and the tests below would fail on a healthy editor.
+_PLACE_CARET_JS = """
+el => { const lines = el.querySelectorAll('.cm-line');
+ const line = lines[Math.min(lines.length - 1, 20)];
+ const walk = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+ let node, seen = 0, target = null, off = 0;
+ while ((node = walk.nextNode())) {
+   if (seen + node.length >= 12) { target = node; off = 12 - seen; break; }
+   seen += node.length; }
+ if (!target) return false;
+ const r = document.createRange(); r.setStart(target, off); r.collapse(true);
+ const sel = document.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+ return true; }
+"""
+
+# Where the caret sits relative to both viewports, and how much room there is to slide
+# sideways -- the conditions that decide whether the caret-rescue path is reached at all.
+_REACH_JS = """
+el => { const vv = window.visualViewport, sel = document.getSelection();
+ const r = sel && sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : null;
+ const s = el.closest('.cm-scroller');
+ return {shrunk: vv ? window.innerHeight - vv.height : 0,
+         belowBy: r && vv ? Math.round(r.top - (window.pageYOffset + vv.offsetTop + vv.height)) : null,
+         belowLayoutBy: r ? Math.round(r.top - window.innerHeight) : null,
+         scrollable: Math.round(s.scrollWidth - s.clientWidth)}; }
+"""
+
+
+def _seed_overflowing_document(page: Page, content: Locator) -> None:
+    """Thirty overflowing lines: every line has somewhere to slide, and the caret can
+    sit far enough down the document to be out of the shrunken viewport's reach.
+
+    Inserted in one shot -- typing this many characters key-by-key would dominate the
+    runtime and prove nothing extra.
+    """
+    page.keyboard.insert_text("\n".join(f"echo {i:02d} " + "a" * 200 for i in range(30)))
+    expect(content).to_contain_text("echo 29", timeout=JS_TIMEOUT_MS)
+
+
+def _place_caret_inside_a_line(content: Locator) -> None:
+    assert content.evaluate(_PLACE_CARET_JS), "precondition: could not place the caret inside a line"
+
+
+def _caret_offset_x(content: Locator) -> int | None:
+    """The caret's distance from the scroller's left edge, or ``None`` with no selection."""
+    return content.evaluate(
+        "el => { const s = el.closest('.cm-scroller'); const sel = document.getSelection();"
+        " if (!sel || !sel.rangeCount) return null;"
+        " return Math.round(sel.getRangeAt(0).getBoundingClientRect().left - s.getBoundingClientRect().left); }"
+    )
+
+
+def _assert_the_rescue_path_is_reachable(content: Locator) -> None:
+    """Preconditions for the emulated keyboard actually reaching the caret rescue.
+
+    Every one of these silently un-reaches the defect, so each is asserted rather than
+    assumed: a viewport that never shrank, a caret that is not below it, or a document
+    with nothing to scroll horizontally all make the tests below pass on broken code.
+
+    ``belowLayoutBy`` is the subtle one. CodeMirror gates the rescue on the VISUAL
+    viewport, but Chromium pans the visual viewport to the caret by itself whenever the
+    caret is still within the LAYOUT viewport -- so with the editor high enough on the
+    page every other precondition holds, the rescue never runs, and the defective bundle
+    passes. Requiring the caret below ``innerHeight`` too pins the band where the browser
+    cannot rescue it first; if a future page layout lifts the editor out of that band,
+    these tests fail loudly here instead of quietly measuring nothing.
+    """
+    reach = content.evaluate(_REACH_JS)
+    assert reach["shrunk"] > 1, f"precondition: the visual viewport must shrink; got {reach!r}"
+    assert reach["belowBy"] is not None and reach["belowBy"] > 0, (
+        f"precondition: the caret must sit below the visual viewport; got {reach!r}"
+    )
+    assert reach["belowLayoutBy"] is not None and reach["belowLayoutBy"] > 0, (
+        f"precondition: the caret must sit below the LAYOUT viewport too, or Chromium "
+        f"pans it into view before CodeMirror's rescue can run; got {reach!r}"
+    )
+    assert reach["scrollable"] > 0, f"precondition: the document must be horizontally scrollable; got {reach!r}"
 
 
 def _newline_returns_to_left(page: Page, content: Locator, long_line: str, screenshot_dir: Path, name: str) -> None:
@@ -318,35 +401,12 @@ def test_hook_editor_does_not_shift_by_the_gutter_width_under_a_shrunken_viewpor
     _open(page, webui, HOOKS_PAGE)
     content = _hook_editor(page)
 
-    # Every line overflows, so the scroller has somewhere to slide; enough lines that the
-    # caret can sit below the shrunken visual viewport. Inserted in one shot -- typing
-    # this many characters key-by-key would dominate the runtime and prove nothing extra.
-    page.keyboard.insert_text("\n".join(f"echo {i:02d} " + "a" * 200 for i in range(30)))
-    expect(content).to_contain_text("echo 29", timeout=JS_TIMEOUT_MS)
+    _seed_overflowing_document(page, content)
 
     cdp = page.context.new_cdp_session(page)
     cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": KEYBOARD_PAGE_SCALE})
 
-    # Caret a dozen characters into a line well down the document. Set through the DOM
-    # selection rather than a click: under a page-scale factor, input coordinates no
-    # longer map to the layout box a click target is computed from, and a click that
-    # misses leaves the caret at the end of the inserted text -- genuinely off screen,
-    # where CodeMirror scrolling to it is CORRECT and this test would fail on a healthy
-    # editor.
-    placed = content.evaluate(
-        "el => { const lines = el.querySelectorAll('.cm-line');"
-        " const line = lines[Math.min(lines.length - 1, 20)];"
-        " const walk = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);"
-        " let node, seen = 0, target = null, off = 0;"
-        " while ((node = walk.nextNode())) {"
-        "   if (seen + node.length >= 12) { target = node; off = 12 - seen; break; }"
-        "   seen += node.length; }"
-        " if (!target) return false;"
-        " const r = document.createRange(); r.setStart(target, off); r.collapse(true);"
-        " const sel = document.getSelection(); sel.removeAllRanges(); sel.addRange(r);"
-        " return true; }"
-    )
-    assert placed, "precondition: could not place the caret inside a line"
+    _place_caret_inside_a_line(content)
 
     # CodeMirror compares the caret's CLIENT rect against a PAGE coordinate
     # (``pageYOffset + visualViewport.offsetTop + height``), so a window scrolled down
@@ -355,30 +415,14 @@ def test_hook_editor_does_not_shift_by_the_gutter_width_under_a_shrunken_viewpor
     # restores -- and what the reporter's device was doing.
     page.evaluate("() => window.scrollTo(0, 0)")
 
-    reach = content.evaluate(
-        "el => { const vv = window.visualViewport, sel = document.getSelection();"
-        " const r = sel && sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : null;"
-        " const s = el.closest('.cm-scroller');"
-        " return {shrunk: vv ? window.innerHeight - vv.height : 0,"
-        "         belowBy: r && vv ? Math.round(r.top - (window.pageYOffset + vv.offsetTop + vv.height)) : null,"
-        "         scrollable: Math.round(s.scrollWidth - s.clientWidth)}; }"
-    )
-    assert reach["shrunk"] > 1, f"precondition: the visual viewport must shrink; got {reach!r}"
-    assert reach["belowBy"] is not None and reach["belowBy"] > 0, (
-        f"precondition: the caret must sit below the visual viewport; got {reach!r}"
-    )
-    assert reach["scrollable"] > 0, f"precondition: the document must be horizontally scrollable; got {reach!r}"
+    _assert_the_rescue_path_is_reachable(content)
 
     content.evaluate("el => { el.closest('.cm-scroller').scrollLeft = 0; }")
     assert _settled_scroll_left(content) == 0, "precondition: the view starts at the left edge"
 
     # With the view at the left edge the caret must already be visible, or scrolling to
     # it is the editor doing its job rather than the defect under test.
-    caret_x = content.evaluate(
-        "el => { const s = el.closest('.cm-scroller'); const sel = document.getSelection();"
-        " if (!sel || !sel.rangeCount) return null;"
-        " return Math.round(sel.getRangeAt(0).getBoundingClientRect().left - s.getBoundingClientRect().left); }"
-    )
+    caret_x = _caret_offset_x(content)
     width = int(content.evaluate("el => Math.round(el.closest('.cm-scroller').clientWidth)"))
     assert caret_x is not None and _gutter_width(content) < caret_x < width, (
         f"precondition: the caret must be on screen before typing; caret_x={caret_x}, width={width}"
@@ -410,8 +454,7 @@ def test_hook_editor_still_follows_the_caret_off_the_right_edge(
     _open(page, webui, HOOKS_PAGE)
     content = _hook_editor(page)
 
-    page.keyboard.insert_text("\n".join(f"echo {i:02d} " + "a" * 200 for i in range(30)))
-    expect(content).to_contain_text("echo 29", timeout=JS_TIMEOUT_MS)
+    _seed_overflowing_document(page, content)
 
     cdp = page.context.new_cdp_session(page)
     cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": KEYBOARD_PAGE_SCALE})
@@ -420,25 +463,15 @@ def test_hook_editor_still_follows_the_caret_off_the_right_edge(
     # the state the previous test never visits. Seed the caret inside the line the same
     # way as the sibling test, then let CodeMirror itself move it to the line end -- a
     # DOM range collapsed past the line's contents is not necessarily adopted into
-    # CodeMirror's own selection, and its scrolling then targets a stale position (that
-    # mistake made an earlier version of this test fail identically with and without the
-    # fix, i.e. measure nothing).
-    placed = content.evaluate(
-        "el => { const lines = el.querySelectorAll('.cm-line');"
-        " const line = lines[Math.min(lines.length - 1, 20)];"
-        " const walk = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);"
-        " let node, seen = 0, target = null, off = 0;"
-        " while ((node = walk.nextNode())) {"
-        "   if (seen + node.length >= 12) { target = node; off = 12 - seen; break; }"
-        "   seen += node.length; }"
-        " if (!target) return false;"
-        " const r = document.createRange(); r.setStart(target, off); r.collapse(true);"
-        " const sel = document.getSelection(); sel.removeAllRanges(); sel.addRange(r);"
-        " return true; }"
-    )
-    assert placed, "precondition: could not place the caret inside a line"
+    # CodeMirror's own selection, and its scrolling would then target a stale position.
+    _place_caret_inside_a_line(content)
     page.evaluate("() => window.scrollTo(0, 0)")
     page.keyboard.press("End")
+
+    # Same preconditions as the sibling test: this one guards against a fix that pins the
+    # horizontal position while the keyboard is up, so the keyboard state has to be
+    # genuinely reached or the bad fix it exists to catch would sail through.
+    _assert_the_rescue_path_is_reachable(content)
 
     before = _settled_scroll_left(content)
     assert before > 0, f"precondition: reaching a long line's end must scroll the view right; got {before}"
@@ -446,11 +479,7 @@ def test_hook_editor_still_follows_the_caret_off_the_right_edge(
     page.keyboard.insert_text("Z")
     after = _settled_scroll_left(content)
 
-    caret_x = content.evaluate(
-        "el => { const s = el.closest('.cm-scroller'); const sel = document.getSelection();"
-        " if (!sel || !sel.rangeCount) return null;"
-        " return Math.round(sel.getRangeAt(0).getBoundingClientRect().left - s.getBoundingClientRect().left); }"
-    )
+    caret_x = _caret_offset_x(content)
     width = int(content.evaluate("el => Math.round(el.closest('.cm-scroller').clientWidth)"))
     assert after >= before, f"the view stopped following the caret rightwards: {before} -> {after}"
     assert caret_x is not None and _gutter_width(content) <= caret_x <= width, (
