@@ -1447,8 +1447,8 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 	// issue #1723: narrowed from \p{C} (Cc+Cf+Co+Cs+Cn) to \p{Cc}+BOM (\x{FEFF}).
 	// Unicode format characters (Cf: ZWJ/ZWNJ, bidi marks, zero-width) are no
 	// longer grounds to reject a whole field -- free-text fields must accept
-	// Unicode; domain-shaped fields still exclude them via their type-specific
-	// validation below (ASCII regex or IDNA). Cc and the BOM stay rejected;
+	// Unicode; domain-shaped fields validate them via their type-specific
+	// ASCII/IDNA rules below. Cc and the BOM stay rejected;
 	// invalid UTF-8 stays fail-closed.
 	if (is_array($input)) {
 		foreach ($input as $vline) {
@@ -1708,10 +1708,11 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		case PFB_FILTER_TLD:
 			// Validate TLD. issue #1723: a non-ASCII (IDN) TLD is converted to its
 			// punycode candidate before the charset check; on success the ORIGINAL
-			// input is returned (the read path IDN-converts separately).
+			// input is returned (the read path IDN-converts separately). issue #1812:
+			// nontransitional CONTEXTJ validation rejects forbidden joiner placements.
 			$candidate = $input;
 			if (preg_match('/[^\x00-\x7F]/', $input)) {
-				$candidate = idn_to_ascii($input);
+				$candidate = idn_to_ascii($input, IDNA_CHECK_CONTEXTJ | IDNA_NONTRANSITIONAL_TO_ASCII);
 				$candidate = empty($candidate) ? FALSE : $candidate;
 			}
 			if (($candidate !== FALSE) && preg_match("/^[a-zA-Z0-9_\.\-]+$/", $candidate)) {
@@ -1725,11 +1726,19 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			// input is returned (htmlspecialchars'd) -- callers use the return as
 			// a pass/fail gate and persist the raw text, the read path
 			// (pfb_text_area_decode()'s IDN branch) IDN-converts separately at
-			// read time, so what is returned on success must not change.
+			// read time, so what is returned on success must not change. issue #1812:
+			// validation uses nontransitional CONTEXTJ checks; read conversion stays
+			// on pfb_idn_to_ascii_wildcard()'s existing default semantics.
 			$candidate = $input;
 			if (preg_match('/[^\x00-\x7F]/', $input)) {
-				$candidate = pfb_idn_to_ascii_wildcard($input);
-				$candidate = ($candidate === '') ? FALSE : $candidate;
+				$wildcard = str_starts_with($input, '.');
+				$host      = $wildcard ? substr($input, 1) : $input;
+				if (pfb_is_blank($host)) {
+					$candidate = FALSE;
+				} else {
+					$ascii = idn_to_ascii($host, IDNA_CHECK_CONTEXTJ | IDNA_NONTRANSITIONAL_TO_ASCII);
+					$candidate = empty($ascii) ? FALSE : ($wildcard ? ".{$ascii}" : $ascii);
+				}
 			}
 			if (($candidate !== FALSE) &&
 			    (strpos($candidate, '.') !== FALSE) &&			// Exclude no dots

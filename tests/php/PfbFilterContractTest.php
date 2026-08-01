@@ -117,14 +117,9 @@ final class PfbFilterContractTest extends TestCase
 			'IDN domain (latin)'        => ['bücher.de'],
 			'IDN domain (CJK)'          => ['日本語.example'],
 			'IDN leading-dot wildcard'  => ['.bücher.de'],
-			// PR #1729 review: ZWNJ/ZWJ (U+200C/U+200D) are UTS46 CONTEXTJ/
-			// deviation characters, contextually legal in real IDNA labels
-			// (e.g. Persian); PHP's idn_to_ascii(IDNA_DEFAULT) has no
-			// CHECK_CONTEXTJ, so the punycode candidate validates and the
-			// original Unicode is returned -- same stance as mixed-script
-			// acceptance above.
-			'ZWNJ inside a label'       => ["exam\xE2\x80\x8Cple.com"],
-			'ZWJ inside a label'        => ["exam\xE2\x80\x8Dple.com"],
+			// Persian "nameh-i": ZWNJ in a valid joining context (CONTEXTJ-valid).
+			'CONTEXTJ-valid ZWNJ (Persian)' => ["\u{0646}\u{0627}\u{0645}\u{0647}\u{200C}\u{0627}\u{06CC}.example"],
+			'CONTEXTJ-valid ZWNJ leading-dot wildcard' => [".\u{0646}\u{0627}\u{0645}\u{0647}\u{200C}\u{0627}\u{06CC}.example"],
 			// Mid-label U+200B (ZWSP) is silently MAPPED AWAY by UTS46 --
 			// probed: idn_to_ascii("exam\u{200B}ple.com") === 'example.com' --
 			// so the row is accepted and blocks the mapped target; an invisible
@@ -145,11 +140,23 @@ final class PfbFilterContractTest extends TestCase
 		$this->assertSame('рф', pfb_filter('рф', PFB_FILTER_TLD, 'PFBL-01 contract'));
 	}
 
-	public function testTldFilterAcceptsZeroWidthJoiner(): void
+	public function testTldFilterAcceptsContextjValidPersianZwnj(): void
 	{
-		// PR #1729 review: same ZWJ-accepted-by-design stance as the domain
-		// pins above, pinned for PFB_FILTER_TLD too.
-		$this->assertSame("\xD1\x80\xE2\x80\x8D\xD1\x84", pfb_filter("\xD1\x80\xE2\x80\x8D\xD1\x84", PFB_FILTER_TLD, 'PFBL-01 contract'));
+		$this->assertSame("\u{0646}\u{0627}\u{0645}\u{0647}\u{200C}\u{0627}\u{06CC}", pfb_filter("\u{0646}\u{0627}\u{0645}\u{0647}\u{200C}\u{0627}\u{06CC}", PFB_FILTER_TLD, 'PFBL-01 contract'));
+	}
+
+	/** @return array<string, array{0: string}> label => CONTEXTJ-forbidden TLD */
+	public static function tldContextjRejectedProvider(): array
+	{
+		return [
+			'leading ZWJ' => ["\u{200D}рф"],
+		];
+	}
+
+	#[DataProvider('tldContextjRejectedProvider')]
+	public function testTldFilterRejectsContextjForbiddenJoiners(string $input): void
+	{
+		$this->assertSame('', pfb_filter($input, PFB_FILTER_TLD, 'PFBL-01 contract'));
 	}
 
 	/** @return array<string, array{0: string}> label => hostile/boundary value the DOMAIN filter must still reject */
@@ -174,6 +181,9 @@ final class PfbFilterContractTest extends TestCase
 			// returns FALSE (UTS46 rejects it), so the candidate stays FALSE and
 			// the domain is rejected before the charset/label checks run.
 			'zero-width leading label'    => ["\xE2\x80\x8B.com"],
+			// A leading ZWJ is forbidden by IDNA2008 CONTEXTJ; nontransitional
+			// conversion must reject it instead of deleting it.
+			'leading ZWJ'                 => ["\u{200D}example.com"],
 			// U+202E (RIGHT-TO-LEFT OVERRIDE) inside a label -- probed:
 			// idn_to_ascii() returns FALSE (UTS46 disallows bidi control
 			// characters), so the candidate stays FALSE and the domain is
@@ -495,13 +505,10 @@ final class PfbFilterContractTest extends TestCase
 		//
 		// PR #1729 review: in domain-shaped input, ZWSP as an entire label
 		// ("​.com") IS rejected -- idn_to_ascii() itself refuses it, UTS46
-		// disallows it (see 'zero-width leading label' below). ZWNJ/ZWJ
-		// (U+200C/U+200D) are ACCEPTED by design in domain-shaped input --
-		// both are UTS46 CONTEXTJ/deviation characters, contextually legal in
-		// real IDNA labels (e.g. Persian), and PHP's idn_to_ascii(IDNA_DEFAULT)
-		// has no CHECK_CONTEXTJ, so the punycode candidate is exactly what the
-		// resolver queries (same stance as mixed-script acceptance, see
-		// domainUnicodeAcceptedProvider). Free-text keeps all of them.
+		// disallows it (see 'zero-width leading label' below). In
+		// domain-shaped input, CONTEXTJ-valid ZWNJ/ZWJ placements (e.g. Persian)
+		// remain accepted, while IDNA2008-forbidden placements are rejected by
+		// nontransitional CHECK_CONTEXTJ validation. Free-text keeps all of them.
 		$this->assertSame("\xE2\x80\x8B", pfb_filter("\xE2\x80\x8B", PFB_FILTER_HTML, 'ref', 'DEF'));
 	}
 
