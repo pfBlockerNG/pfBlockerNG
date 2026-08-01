@@ -450,11 +450,11 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
     """Tick does NOT dispatch a feed sync when the cron ledger entry is not yet due —
     yet the tick itself genuinely ran (issue #582 positive control).
 
-    The tick logs its dispatch decision before any background cron process starts, so observe
-    the synchronous ``Tick: dispatching feed cron.`` marker: a non-due cron must produce none.
+    The due ledger is the synchronous dispatch-decision observable: a non-due cron must leave
+    its entry exactly unchanged across the tick.
 
-    On its own, "no dispatch marker" cannot distinguish "tick correctly skipped the non-due
-    cron" from "tick never ran at all" — both look identical. The positive control:
+    On its own, "unchanged ledger" cannot distinguish "tick correctly skipped the non-due cron"
+    from "tick never ran at all" — both look identical. The positive control:
     ss_refresh rides every tick unconditionally (pfblockerng_tick calls it regardless of what
     is due), so a SafeSearch CNAME row seeded with a STALE baked IP and a resolver (the
     'pfbextdns' setting) pointed at the hermetic stub DNS makes THIS tick's ss_refresh
@@ -465,17 +465,16 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
             Given the 'cron' ledger entry has next_due = now + 1 hour, and a SafeSearch
                 CNAME row is seeded with a baked IP the stub will not repeat.
             When pfblockerng.php tick runs.
-            Then NO new 'Tick: dispatching feed cron.' marker appears (the cron was skipped),
+            Then the 'cron' ledger entry is exactly unchanged (the cron was skipped),
             And  the ss_refresh marker DOES appear (the tick still ran).
     """
     vm = deployed_vm
-    marker = "Tick: dispatching feed cron."
     ss_marker = "SafeSearch CNAME fallback IPs refreshed"
 
     now_ts = int(vm.ssh("date +%s").stdout.strip())
     _write_ledger_entry(vm, "cron", now_ts - 86400, now_ts + 3600)
+    before_entry = _read_ledger(vm).get("cron")
     h.wait_no_active_pfb_task(vm)
-    before = h.count_log_marker(vm, h.PFB_LOG, marker)
 
     # Positive control: a resolvable CNAME target the stub answers, baked stale in the CSV.
     target = h.unique_domain("tickssrefresh")
@@ -487,11 +486,11 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
         # When: tick fires — cron is not due, but ss_refresh always runs.
         _run_tick(vm)
 
-        # Then: no dispatch decision was logged (cron skipped). _run_tick returns after this
-        # synchronous decision log, so the post-tick marker snapshot is authoritative.
-        after = h.count_log_marker(vm, h.PFB_LOG, marker)
-        assert after == before, (
-            f"tick dispatched a cron for a NON-due feed — ' {marker}' marker count rose from {before}"
+        # Then: the synchronous ledger decision is unchanged (cron skipped).
+        after_entry = _read_ledger(vm).get("cron")
+        assert after_entry == before_entry, (
+            "tick dispatched a cron for a NON-due feed — cron ledger entry changed: "
+            f"before={before_entry!r}, after={after_entry!r}"
         )
 
         # Then: the ss_refresh marker DID appear — the tick genuinely ran; this is what
