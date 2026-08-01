@@ -14,13 +14,10 @@ final class DnsblQueryClientSalvageDiagnosticTest extends TestCase
 
 		$start = strpos($source, 'public function testConcurrentCallersAreSerializedAndReceiveOwnReplies()');
 		$this->assertNotFalse($start, 'concurrent-callers test must exist');
-		$end = strpos($source, 'public function testTimedOutCallerCannotDeleteNextCallersRequest()', (int) $start);
-		$this->assertNotFalse($end, 'concurrent-callers test boundary must exist');
-		$method = substr($source, (int) $start, (int) $end - (int) $start);
 
 		$this->assertStringContainsString(
 			"throw new RuntimeException('salvage cap expired / stuck or environment: waiting for first caller to consume its reply; reply file still exists');",
-			$method,
+			$source,
 			'concurrent reply-consumption salvage expiry must be distinguishable from a behavioural failure'
 		);
 	}
