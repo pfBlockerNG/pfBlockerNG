@@ -560,7 +560,7 @@ def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
         "_body": (
             "#!/bin/sh\n"
             f"/bin/echo START > {pre_marker}\n"
-            f"/bin/sh -c '/bin/touch {waiting_marker}; "
+            f"/bin/sh -c '/usr/bin/touch {waiting_marker}; "
             f"while [ ! -f {release_marker} ]; do /bin/sleep 1; done; "
             f"/bin/echo CHILD_FINISHED > {child_marker}' &\n"
             f"/bin/echo HOOK_DONE >> {pre_marker}\n"
@@ -620,7 +620,7 @@ def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
     finally:
         # Release the child first — that also unblocks a pass still stalled on it (broken-runner
         # path) — then let any pass settle before clearing.
-        deployed_vm.ssh("/bin/touch", release_marker)
+        deployed_vm.ssh("/usr/bin/touch", release_marker)
         h.wait_no_active_pfb_task(deployed_vm, timeout=30.0)
         deployed_vm.ssh("/bin/rm", "-f", waiting_marker, child_marker, release_marker)
         h.clear_update_hooks(deployed_vm)
@@ -673,7 +673,7 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
         # Emit the marker FIRST (streams immediately if live), then hold the hook open until
         # release before the closing marker + exit.
         "_body": (
-            f"#!/bin/sh\n/bin/echo {stream_marker}\n/bin/touch {emitted_marker}\n"
+            f"#!/bin/sh\n/bin/echo {stream_marker}\n/usr/bin/touch {emitted_marker}\n"
             f"while [ ! -f {release_marker} ]; do /bin/sleep 1; done\n"
             f"/bin/echo {done_marker}\n"
         ),
@@ -729,7 +729,7 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
         )
     finally:
         # Release the hook first, then let the pass settle before cleanup and persistence checks.
-        deployed_vm.ssh("/bin/touch", release_marker)
+        deployed_vm.ssh("/usr/bin/touch", release_marker)
         persisted_delta = -1
         persisted_delta_done = -1
         try:
