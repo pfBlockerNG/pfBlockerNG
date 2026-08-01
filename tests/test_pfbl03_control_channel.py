@@ -670,6 +670,27 @@ class _ControlHarness:
         monkeypatch.setattr(P, "RELOAD_POLL_INTERVAL", 0.05)
         P.pfb_control_stop = threading.Event()
         self.thread: Any = None
+        self.read_condition = threading.Condition()
+        self.read_seqs: list[int] = []
+        self.read_pauses: dict[int, tuple[threading.Event, threading.Event]] = {}
+        read_record = P._control_read_record
+
+        def record_read(path: str) -> dict[str, Any] | None:
+            record = read_record(path)
+            seq = record.get("seq") if record is not None else None
+            if isinstance(seq, int):
+                with self.read_condition:
+                    self.read_seqs.append(seq)
+                    pause = self.read_pauses.pop(seq, None)
+                    self.read_condition.notify_all()
+                if pause is not None:
+                    started, release = pause
+                    started.set()
+                    if not release.wait(3.0):
+                        raise RuntimeError(f"stuck/environment: test did not release control record {seq}")
+            return record
+
+        monkeypatch.setattr(P, "_control_read_record", record_read)
 
     def publish(self, record: dict[str, Any]) -> None:
         import json
@@ -686,6 +707,17 @@ class _ControlHarness:
                 return int(fh.readline().strip())
         except (OSError, ValueError):
             return None
+
+    def wait_read(self, seq: int, count: int = 1, timeout: float = 3.0) -> bool:
+        with self.read_condition:
+            return self.read_condition.wait_for(lambda: self.read_seqs.count(seq) >= count, timeout=timeout)
+
+    def pause_read(self, seq: int) -> tuple[threading.Event, threading.Event]:
+        started = threading.Event()
+        release = threading.Event()
+        with self.read_condition:
+            self.read_pauses[seq] = (started, release)
+        return started, release
 
     def start(self) -> None:
         self.thread = threading.Thread(name="pfb_control_watcher_test", target=P.pfb_control_watcher, daemon=True)
@@ -975,6 +1007,7 @@ class TestControlWatcherLoop:
         # must NOT apply it (3 <= 5), so blocking stays as we set it.
         P.pfb["python_blacklist"] = True
         h.publish({"seq": 3, "cmd": "disable"})
+        assert h.wait_read(3), f"control records read: {h.read_seqs!r}"
 
         # A fresh unknown command proves the watcher consumed/progressed past the stale
         # record without changing the state.
@@ -999,11 +1032,17 @@ class TestControlWatcherLoop:
         # wait_applied(9) itself is the started gate here (seq 9 = baseline): the
         # watcher adopts it and publishes it without applying the command.
         assert h.wait_applied(9), f"applied marker: {h.read_applied()!r}"  # baseline adopted + published.
+        assert h.wait_read(9, count=2), f"control records read: {h.read_seqs!r}"
+
+        # A fresh unknown command proves the watcher progressed past the baseline
+        # without changing the state.
+        h.publish({"seq": 10, "cmd": "wipe-everything"})
+        assert h.wait_applied(10), f"applied marker after baseline: {h.read_applied()!r}"
         assert P.pfb["python_blacklist"] is True, "pre-existing disable was replayed"
 
-        # A future advance (seq 10) DOES apply.
-        h.publish({"seq": 10, "cmd": "disable"})
-        assert h.wait_applied(10)
+        # A future advance (seq 11) DOES apply.
+        h.publish({"seq": 11, "cmd": "disable"})
+        assert h.wait_applied(11)
         assert P.pfb["python_blacklist"] is False
 
     def test_unknown_command_record_consumed_without_side_effect(self, control_harness: _ControlHarness) -> None:
@@ -1032,21 +1071,32 @@ class TestPermissionBoundaryModel:
         h.publish({"seq": 1, "cmd": "enable"})
         import os
 
-        before = os.stat(h.channel)
-        before_bytes = open(h.channel, "rb").read()
         h.start()
+        release: threading.Event | None = None
         try:
             assert h.wait_applied(1), f"applied marker: {h.read_applied()!r}"
+            assert h.wait_read(1, count=2), f"control records read: {h.read_seqs!r}"
+            read_started, release = h.pause_read(2)
+            h.publish({"seq": 2, "cmd": "wipe-everything"})
+            assert read_started.wait(3.0), f"control records read: {h.read_seqs!r}"
+            before = os.stat(h.channel)
+            with open(h.channel, "rb") as fh:
+                before_bytes = fh.read()
+            release.set()
+            assert h.wait_applied(2), f"applied marker after baseline: {h.read_applied()!r}"
             # Then: the reader consumed the command and wrote ONLY the applied marker --
             # the command channel itself is byte-for-byte unchanged (the reader is a
             # read-only consumer of it; only root writes the channel).
             after = os.stat(h.channel)
-            actual_bytes = open(h.channel, "rb").read()
+            with open(h.channel, "rb") as fh:
+                actual_bytes = fh.read()
             assert actual_bytes == before_bytes, f"channel bytes changed: {actual_bytes!r}"
             assert after.st_mtime == before.st_mtime, f"channel mtime changed: {after.st_mtime!r}"
             # The applied marker (which the reader DOES own) was written.
             assert os.path.exists(h.applied)
         finally:
+            if release is not None:
+                release.set()
             h.stop_join()
 
     def test_applied_marker_is_separate_file_from_channel(self) -> None:
