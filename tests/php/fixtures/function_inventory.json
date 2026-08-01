@@ -5101,6 +5101,47 @@
             }
         ]
     },
+    "pfb_list_script_failure_record": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "facility",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "item",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "message",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "update_marker",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_list_section_for_vtype": {
         "returnsRef": false,
         "returnType": "string",
