@@ -263,10 +263,9 @@ def load_baseline(path: Path | None = None) -> frozenset[str]:
     return frozenset(line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#"))
 
 
-# Fingerprints from the SHIPPED baseline actually seen during this session. A baseline
-# entry nobody observes any more is a site that got FIXED, and leaving it in the file
-# would silently forgive that diagnostic if it ever came back -- so a full sweep fails on
-# unobserved entries and the fix is to delete them (see stale_baseline_entries).
+# Fingerprints from the SHIPPED baseline actually seen during this session. A full,
+# successful sweep reports unobserved entries as removal candidates; see
+# stale_baseline_entries for why their absence does not fail the sweep.
 _observed_baseline: set[str] = set()
 
 
@@ -276,10 +275,14 @@ def observed_baseline_entries() -> frozenset[str]:
 
 
 def stale_baseline_entries(observed: frozenset[str], baseline: frozenset[str] | None = None) -> tuple[str, ...]:
-    """Baseline entries never observed -- fixed sites whose grandfathering must go.
+    """Baseline entries never observed -- candidates for removing grandfathering.
 
     Only meaningful after a FULL sweep: a filtered or sharded run visits a subset of the
     pages, so almost every entry would read as stale. The caller owns that condition.
+
+    These entries are reported, not gated: one green sweep does not prove a fix because
+    some config-dependent paths may not be reached. Confirm removal by deleting the entry;
+    the sweep then fails if that diagnostic is still emitted.
     """
     grandfathered = load_baseline() if baseline is None else baseline
     return tuple(sorted(grandfathered - observed))

@@ -493,17 +493,8 @@ def browser_context(webui: WebUI, smoke_vm: SmokeVM) -> Iterator[BrowserContext]
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:  # noqa: ARG001 - pytest hook signature
     """Report grandfathered diagnostics a FULL sweep never observed (#1218).
 
-    A baseline entry nobody sees any more is a site that got fixed, and leaving it in
-    ``php_diagnostic_baseline.txt`` would silently forgive that diagnostic if it ever came
-    back -- the same blindness this issue exists to remove. So the list has to shed entries
-    as the burn-down (#1712) lands them, and this names the candidates.
-
-    It REPORTS rather than fails, because one green sweep does not prove a fix: several
-    pages read config keys that exist only in some states (the Feeds catalogue loop is the
-    worst), so a given entry legitimately goes unobserved in a run that did not reach its
-    state. Deletion is confirmed the honest way instead -- a burn-down PR removes the entry
-    and the sweep goes RED if the diagnostic is still emitted, which is a stronger proof
-    than any single run's silence.
+    :func:`stale_baseline_entries` owns the report-not-fail rationale and confirmation
+    contract.
 
     Only a full sweep may report at all -- a ``--filter``ed or sharded run visits a subset
     of the pages, so nearly every entry would look stale. ``run-smoke.sh`` exports
