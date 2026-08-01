@@ -183,8 +183,7 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
   latest round has a blocking finding; hard cap 3 rounds, then a human decides.
 - **Independence:** required — a fresh context, never the author of the change.
 - **Tier intent:** small by default; top for a large/complex PR (whole-PR
-  cross-referencing is the point); mid alone when top is unavailable on such a PR — on
-  Claude both tiers are Opus 5 for review, so that choice picks the label, not the model.
+  cross-referencing is the point); mid alone when top is unavailable on such a PR.
 
 ### publisher
 

@@ -135,9 +135,10 @@ Mechanics that hold for every pass:
   more than 300 changed lines, more than 6 files, or any behaviour change in `src/`
   parsing/guard/scheduling logic — where whole-PR cross-referencing pays. Record the
   chosen model + the size metric that drove it in the audit comment. **Top tier
-  unavailable on such a PR:** mid reviews it alone, same contract (2026-08-01: the dual
-  small+mid pass is retired; on Claude both tiers are Opus 5 for review). Never a
-  multi-agent fan-out except on explicit user request; never a dated model ID.
+  unavailable on such a PR:** mid reviews it alone, same contract — now that the mid tier
+  is Opus 5, a complex review routes there rather than to the retired small+mid duo
+  (2026-08-01). Never a multi-agent fan-out except on explicit user request; never a
+  dated model ID.
 - **No build-mode styling propagates to a reviewer** — reviewers build nothing.
 
 ### CodeRabbit availability (bounded, never blocking)
