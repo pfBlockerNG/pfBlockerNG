@@ -285,7 +285,11 @@ final class PfbSyncStatusLedgerTest extends TestCase
 			// read-modify-write), then release. A fresh fopen() (not an inherited fd)
 			// makes this a genuine second, independent lock holder.
 			$fp = fopen($lockPath, 'c');
-			flock($fp, LOCK_EX);
+			if ($fp === FALSE || !flock($fp, LOCK_EX)) {
+				exit(1);	// never signal readiness without a REAL hold -- the parent
+					// would then run with no contention and a negative assertion
+					// ("no dispatch", "entry survived") would pass for the wrong reason
+			}
 			touch($markerPath);
 			usleep(500000);
 			flock($fp, LOCK_UN);
@@ -349,7 +353,11 @@ final class PfbSyncStatusLedgerTest extends TestCase
 			// Child: fresh fopen() (not an inherited fd) -- a genuine second,
 			// independent lock holder. Holds well past the parent's small budget.
 			$fp = fopen($lockPath, 'c');
-			flock($fp, LOCK_EX);
+			if ($fp === FALSE || !flock($fp, LOCK_EX)) {
+				exit(1);	// never signal readiness without a REAL hold -- the parent
+					// would then run with no contention and a negative assertion
+					// ("no dispatch", "entry survived") would pass for the wrong reason
+			}
 			touch($markerPath);
 			usleep(500000);
 			flock($fp, LOCK_UN);
@@ -525,7 +533,11 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		}
 		if ($pid === 0) {
 			$fp = fopen($lockPath, 'c');
-			flock($fp, LOCK_EX);
+			if ($fp === FALSE || !flock($fp, LOCK_EX)) {
+				exit(1);	// never signal readiness without a REAL hold -- the parent
+					// would then run with no contention and a negative assertion
+					// ("no dispatch", "entry survived") would pass for the wrong reason
+			}
 			touch($markerPath);
 			usleep($holdMicros);
 			flock($fp, LOCK_UN);
