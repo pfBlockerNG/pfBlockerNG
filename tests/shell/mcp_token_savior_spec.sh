@@ -304,6 +304,34 @@ EOF
     The directory "${WORK}/venv.rebuild.lock" should not be exist
   End
 
+  It 'rejects a non-numeric TS_LOCK_WAIT instead of spinning on it forever'
+    # The cap check is an integer comparison: a non-numeric bound made it error
+    # every iteration without ever being true, so the launcher spun forever on an
+    # unreapable lock - the exact hang class #1969 exists to remove. The lock here
+    # carries no PID, so nothing can reap it; only a validated bound ends the run.
+    mkdir -p "${WORK}/venv.rebuild.lock"
+    When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}/venv" TS_LOCK_WAIT='abc' timeout 15 sh "${SCRIPT}"
+    The status should be failure
+    The status should not equal 124
+    The stderr should include 'TS_LOCK_WAIT'
+  End
+
+  It 'keeps a lock whose holder PID is alive but unsignalable (EPERM)'
+    # kill -0 fails with EPERM for a live process this user may not signal, which
+    # is not proof of death: reaping on it destroys a running holder's lock. PID 1
+    # is the portable always-alive, never-ours case - unless this user IS root,
+    # where kill -0 1 succeeds and the example would assert the plain live-holder
+    # path instead, proving nothing about EPERM.
+    Skip if "running as root: kill -0 1 succeeds, so the fixture is not EPERM" [ "$(id -u)" -eq 0 ]
+    mkdir -p "${WORK}/venv.rebuild.lock"
+    printf '1\n' > "${WORK}/venv.rebuild.lock/pid"
+    When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}/venv" TS_LOCK_WAIT=2 sh "${SCRIPT}"
+    The status should be failure
+    The stderr should include 'concurrent rebuild'
+    The directory "${WORK}/venv.rebuild.lock" should be exist
+    The file "${WORK}/venv/pip-args.log" should not be exist
+  End
+
   It 'records its own live PID in the lock it holds'
     # Without this, the reap above would be unreachable in production: no holder
     # would ever leave a PID for a later session to test. The python3 wrapper runs

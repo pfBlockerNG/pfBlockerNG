@@ -5,7 +5,8 @@
 # upstream token-savior-recall 4.21.0 with the MCP and vector-memory extras. A TS_SOURCE change
 # is detected via the .pfb-ts-source stamp and triggers a clean venv rebuild;
 # a mkdir lock serializes concurrent sessions racing that rebuild (the venv is one shared
-# per-user cache). Requires python3 >= 3.11.
+# per-user cache). The lock holder records its PID inside the lock so a waiter can reap a
+# lock whose holder died without releasing it. Requires python3 >= 3.11.
 # Env (all optional):
 #   WORKSPACE_ROOTS        comma-separated project roots (default: every usable worktree
 #                          of the current Git repository, otherwise current directory)
@@ -45,12 +46,30 @@ bin="$venv/bin/token-savior"
 stamp="$venv/.pfb-ts-source"
 TS_SOURCE="${TS_SOURCE:-token-savior-recall[mcp,memory-vector]==4.21.0}"
 
+holder_alive() {
+	kill -0 "$1" 2>/dev/null && return 0
+	# kill -0 also fails with EPERM for a LIVE process this user may not signal,
+	# so its failure is not proof of death. ps answers regardless of ownership;
+	# no ps at all is no evidence, and doubt must never reap a held lock.
+	command -v ps >/dev/null 2>&1 || return 0
+	ps -p "$1" >/dev/null 2>&1
+}
+
 # stdout is the MCP stdio channel — install chatter must stay on stderr
 if [ ! -x "$bin" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$TS_SOURCE" ]; then
 	lock="${venv}.rebuild.lock"
 	mkdir -p "$(dirname "$venv")"
 	waited=0
 	max_wait="${TS_LOCK_WAIT:-300}"
+	# The cap below is an integer comparison, and a non-numeric bound makes it
+	# error every iteration without ever being true — an unbounded spin, the very
+	# hang this lock handling exists to remove. Refuse the bound instead.
+	case "$max_wait" in
+		''|*[!0-9]*)
+			echo "mcp-token-savior: refusing TS_LOCK_WAIT '$max_wait' — it must be a non-negative whole number of seconds" >&2
+			exit 1
+			;;
+	esac
 	# A SIGKILLed holder can never run its EXIT trap, so its lock outlived it and
 	# blocked every later session until max_wait expired — nine days, undiagnosed,
 	# in issue #1969. So the lock is not trusted on existence alone: the holder
@@ -59,7 +78,7 @@ if [ ! -x "$bin" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$TS_SOURCE" ];
 	# reaped — that is a live holder caught between mkdir and the PID write.
 	while ! mkdir "$lock" 2>/dev/null; do
 		holder="$(cat "$lock/pid" 2>/dev/null || true)"
-		if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+		if [ -n "$holder" ] && ! holder_alive "$holder"; then
 			rm -rf "$lock"
 			continue
 		fi
