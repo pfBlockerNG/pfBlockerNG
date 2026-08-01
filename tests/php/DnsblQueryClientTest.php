@@ -45,7 +45,12 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_query')]
 final class DnsblQueryClientTest extends TestCase
 {
+	// issue #1517: test-side coordination no longer waits on a duration (see
+	// testTimeout() below) -- this factor now only scales assertions about
+	// PRODUCTION's own timing (e.g. "a publish failure must return immediately").
 	private const CI_TEST_TIMEOUT_FACTOR = 4.0;
+	/** Salvage only: expiry means the run is stuck or the box is broken, never that behaviour is wrong. */
+	private const SALVAGE_CAP_S = 30.0;
 	private string $tmp;
 	private array $originalPfb = [];
 	private bool $hadPfb = false;
@@ -67,7 +72,7 @@ final class DnsblQueryClientTest extends TestCase
 			'errlog'   => "{$this->tmp}/error.log",
 		]);
 
-		foreach (['pcntl_fork', 'pcntl_waitpid', 'pcntl_wifexited', 'pcntl_wexitstatus', 'pcntl_wifstopped', 'posix_kill'] as $function) {
+		foreach (['pcntl_fork', 'pcntl_waitpid', 'pcntl_wifexited', 'pcntl_wexitstatus', 'pcntl_wifstopped', 'posix_kill', 'stream_socket_pair'] as $function) {
 			if (!function_exists($function)) {
 				$this->markTestSkipped("{$function}() is unavailable -- cannot run cross-process query-channel tests.");
 			}
@@ -175,10 +180,9 @@ final class DnsblQueryClientTest extends TestCase
 		return $pid;
 	}
 
-	/** Reap a tracked child under a hard deadline; kill it rather than orphaning it. */
-	private function reapChild(int $pid, float $timeout_s = 5.0): void
+	/** Reap a tracked child under a salvage cap; kill it rather than orphaning it. */
+	private function reapChild(int $pid, float $timeout_s = self::SALVAGE_CAP_S): void
 	{
-		$timeout_s = $this->testTimeout($timeout_s);
 		$deadline = microtime(true) + $timeout_s;
 		do {
 			$waited = pcntl_waitpid($pid, $status, WNOHANG);
@@ -195,7 +199,7 @@ final class DnsblQueryClientTest extends TestCase
 		@posix_kill($pid, 9);
 		pcntl_waitpid($pid, $status);
 		unset($this->children[$pid]);
-		$this->fail("child {$pid} exceeded the {$timeout_s}s test deadline");
+		$this->fail("STUCK/ENVIRONMENT: child {$pid} did not exit within the {$timeout_s}s salvage cap -- the run is stuck or the environment is broken, not a behavioural failure");
 	}
 
 	private function childFailureMessage(int $pid): string
@@ -205,9 +209,8 @@ final class DnsblQueryClientTest extends TestCase
 	}
 
 	/** Prove SIGSTOP reached a live child rather than an already-exited zombie. */
-	private function waitForStoppedChild(int $pid, float $timeout_s = 1.0): void
+	private function waitForStoppedChild(int $pid, float $timeout_s = self::SALVAGE_CAP_S): void
 	{
-		$timeout_s = $this->testTimeout($timeout_s);
 		$deadline = microtime(true) + $timeout_s;
 		do {
 			$waited = pcntl_waitpid($pid, $status, WNOHANG | WUNTRACED);
@@ -224,13 +227,12 @@ final class DnsblQueryClientTest extends TestCase
 			}
 			usleep(20000);
 		} while (microtime(true) < $deadline);
-		$this->fail("child {$pid} did not stop within {$timeout_s}s");
+		$this->fail("STUCK/ENVIRONMENT: child {$pid} did not stop within the {$timeout_s}s salvage cap -- the run is stuck or the environment is broken, not a behavioural failure");
 	}
 
 	/** Read a non-empty file under a bounded test-side deadline. */
-	private function readMarker(string $name, float $timeout_s = 4.0): string
+	private function readMarker(string $name, float $timeout_s = self::SALVAGE_CAP_S): string
 	{
-		$timeout_s = $this->testTimeout($timeout_s);
 		$path = "{$this->tmp}/{$name}";
 		$deadline = microtime(true) + $timeout_s;
 		do {
@@ -240,13 +242,12 @@ final class DnsblQueryClientTest extends TestCase
 			}
 			usleep(20000);
 		} while (microtime(true) < $deadline);
-		$this->fail("marker {$name} did not appear within {$timeout_s}s");
+		$this->fail("STUCK/ENVIRONMENT: marker {$name} did not appear within the {$timeout_s}s salvage cap -- the run is stuck or the environment is broken, not a behavioural failure");
 	}
 
 	/** Wait for a request with the requested domain and return its decoded record. */
-	private function waitForRequest(string $domain, float $timeout_s = 4.0): array
+	private function waitForRequest(string $domain, float $timeout_s = self::SALVAGE_CAP_S): array
 	{
-		$timeout_s = $this->testTimeout($timeout_s);
 		$deadline = microtime(true) + $timeout_s;
 		do {
 			$raw = @file_get_contents($this->channel());
@@ -256,7 +257,7 @@ final class DnsblQueryClientTest extends TestCase
 			}
 			usleep(20000);
 		} while (microtime(true) < $deadline);
-		throw new RuntimeException("request for {$domain} did not appear within {$timeout_s}s");
+		throw new RuntimeException("STUCK/ENVIRONMENT: no request for {$domain} arrived within the {$timeout_s}s salvage cap -- the run is stuck or the environment is broken, not a behavioural failure");
 	}
 
 	private function verdictReply(string $id, string $group): string
@@ -267,16 +268,75 @@ final class DnsblQueryClientTest extends TestCase
 		]);
 	}
 
-	private function forkQuery(string $domain, float $timeout_s, string $marker): int
+	/** Open a bidirectional pipe for parent/child event signalling. */
+	private function signalPair(): array
 	{
-		return $this->forkChild(function () use ($domain, $timeout_s, $marker): void {
-			file_put_contents("{$this->tmp}/{$marker}.started", '1');
-			$result = pfb_dnsbl_query($domain, 'A', $timeout_s);
-			$this->atomicWriteJson("{$this->tmp}/{$marker}.json", $result);
-		});
+		$pair = @stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		if ($pair === false) {
+			$this->markTestSkipped('stream_socket_pair() failed -- cannot signal across the fork.');
+		}
+		return $pair;
 	}
 
-	private function readQueryResult(string $marker, float $timeout_s = 4.0): ?array
+	/** Block until a "\n"-terminated payload is readable on $stream; salvage-capped. */
+	private function awaitSignal($stream, string $what, ?int $pid = null): string
+	{
+		$buffer = '';
+		$deadline = microtime(true) + self::SALVAGE_CAP_S;
+		while (true) {
+			$newlineAt = strpos($buffer, "\n");
+			if ($newlineAt !== false) {
+				return substr($buffer, 0, $newlineAt);
+			}
+			$remaining = $deadline - microtime(true);
+			if ($remaining <= 0.0) {
+				$this->fail("STUCK/ENVIRONMENT: no {$what} arrived on the pipe within the " . self::SALVAGE_CAP_S . "s salvage cap -- the run is stuck or the environment is broken, not a behavioural failure");
+			}
+			$read = [$stream]; $write = []; $except = [];
+			$tv_sec = (int) floor($remaining);
+			$tv_usec = (int) (($remaining - $tv_sec) * 1000000);
+			$ready = @stream_select($read, $write, $except, $tv_sec, $tv_usec);
+			if ($ready === false || $ready === 0) {
+				continue; // re-check the deadline at the loop top
+			}
+			$chunk = fread($stream, 8192);
+			if ($chunk === false || $chunk === '') {
+				$detail = $pid !== null ? $this->childFailureMessage($pid) : 'no child pid was given to inspect';
+				$this->fail("{$what} never arrived: the child closed the pipe without writing -- {$detail}");
+			}
+			$buffer .= $chunk;
+		}
+	}
+
+	/** Fork a query child; its verdict comes back over a pipe the parent blocks on. */
+	private function forkQuery(string $domain, float $timeout_s, string $marker): array
+	{
+		[$parentEnd, $childEnd] = $this->signalPair();
+		$pid = $this->forkChild(function () use ($domain, $timeout_s, $marker, $parentEnd, $childEnd): void {
+			fclose($parentEnd);
+			file_put_contents("{$this->tmp}/{$marker}.started", '1');
+			$result = pfb_dnsbl_query($domain, 'A', $timeout_s);
+			fwrite($childEnd, json_encode($result) . "\n");
+			fclose($childEnd);
+		});
+		fclose($childEnd);
+		return ['pid' => $pid, 'signal' => $parentEnd, 'label' => $marker];
+	}
+
+	/** Block on a forkQuery() handle's verdict pipe. */
+	private function awaitQueryResult(array $child): ?array
+	{
+		$raw = $this->awaitSignal($child['signal'], "{$child['label']} query result", $child['pid']);
+		$result = json_decode($raw, true);
+		$this->assertSame(JSON_ERROR_NONE, json_last_error(), json_last_error_msg());
+		if ($result !== null && !is_array($result)) {
+			$this->fail('expected query result array or NULL, got: ' . var_export($result, true));
+		}
+		return $result;
+	}
+
+	/** Poll a JSON marker file; still used by the one hand-rolled late-lock child. */
+	private function readQueryResult(string $marker, float $timeout_s = self::SALVAGE_CAP_S): ?array
 	{
 		$raw = $this->readMarker("{$marker}.json", $timeout_s);
 		$result = json_decode($raw, true);
@@ -380,9 +440,8 @@ final class DnsblQueryClientTest extends TestCase
 	}
 
 	/** Poll (bounded, test-side only) for the responder's observed.json. */
-	private function readObserved(float $timeout_s = 4.0): array
+	private function readObserved(float $timeout_s = self::SALVAGE_CAP_S): array
 	{
-		$timeout_s = $this->testTimeout($timeout_s);
 		$path = "{$this->tmp}/observed.json";
 		$deadline = microtime(true) + $timeout_s;
 		while (microtime(true) < $deadline) {
@@ -397,7 +456,7 @@ final class DnsblQueryClientTest extends TestCase
 			}
 			usleep(50000);
 		}
-		$this->fail('responder never observed a request within the test timeout');
+		$this->fail("STUCK/ENVIRONMENT: responder never observed a request within the {$timeout_s}s salvage cap -- the run is stuck or the environment is broken, not a behavioural failure");
 	}
 
 	// --- invalid input -> NULL, no request written, no wait ----------------
@@ -579,15 +638,15 @@ final class DnsblQueryClientTest extends TestCase
 
 		$child = $this->forkQuery('late-reply.example', 0.5, 'late-reply');
 		$request = $this->waitForRequest('late-reply.example');
-		$this->assertTrue(posix_kill($child, (int) constant('SIGSTOP')));
+		$this->assertTrue(posix_kill($child['pid'], (int) constant('SIGSTOP')));
 		usleep(600000);
 		$late_reply = $this->verdictReply($request['id'], 'late-group');
 		$this->atomicWrite($this->replyPath(), $late_reply);
 		$this->assertFileExists($this->replyPath());
-		$this->assertTrue(posix_kill($child, (int) constant('SIGCONT')));
+		$this->assertTrue(posix_kill($child['pid'], (int) constant('SIGCONT')));
 
-		$this->assertNull($this->readQueryResult('late-reply', 2.0));
-		$this->reapChild($child);
+		$this->assertNull($this->awaitQueryResult($child));
+		$this->reapChild($child['pid']);
 		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
 		$this->assertStringContainsString('timed out waiting for a verdict', $logs);
 		$this->assertFileDoesNotExist($this->channel());
@@ -692,12 +751,12 @@ final class DnsblQueryClientTest extends TestCase
 		usleep(100000);
 		file_put_contents("{$this->tmp}/release-first", '1');
 
-		$resultA = $this->readQueryResult('caller-a', 4.0);
-		$resultB = $this->readQueryResult('caller-b', 4.0);
+		$resultA = $this->awaitQueryResult($callerA);
+		$resultB = $this->awaitQueryResult($callerB);
 		$this->assertSame('group-a', $resultA['group'] ?? null);
 		$this->assertSame('group-b', $resultB['group'] ?? null);
-		$this->reapChild($callerA);
-		$this->reapChild($callerB);
+		$this->reapChild($callerA['pid']);
+		$this->reapChild($callerB['pid']);
 		$this->reapChild($server);
 		$this->assertFileDoesNotExist($this->channel());
 		$this->assertFileDoesNotExist($this->replyPath());
@@ -705,35 +764,53 @@ final class DnsblQueryClientTest extends TestCase
 
 	public function testTimedOutCallerCannotDeleteNextCallersRequest(): void
 	{
-		// A receives no reply and must time out. The server records B's request,
-		// then waits until after A's timeout before replying. Without serialization
-		// A unlinks B's live request; with the lock B publishes only after A cleans
-		// up and releases, so B's request remains intact for its own responder.
-		$server = $this->forkChild(function (): void {
-			$this->waitForRequest('timeout-a.example');
-			file_put_contents("{$this->tmp}/timeout-a-ready", '1');
-			$second = $this->waitForRequest('timeout-b.example');
-			usleep(500000);
-			$raw = @file_get_contents($this->channel());
-			$current = $raw === false ? null : json_decode($raw, true);
-			$intact = is_array($current) && (($current['id'] ?? null) === $second['id']);
-			file_put_contents("{$this->tmp}/timeout-b-intact", $intact ? 'yes' : 'no');
-			if ($intact) {
-				$this->atomicWrite($this->replyPath(), $this->verdictReply($second['id'], 'group-b'));
+		// Scenario: caller A's request occupies the channel slot only for A's own
+		// timeout window, then pfb_dnsbl_query() unlinks it. Without the channel
+		// lock, caller B's live request can land in that window and A's cleanup
+		// destroys it; with the lock B cannot publish until A's timeout path has
+		// released it, so B's request survives untouched. This process plays the
+		// responder role itself -- it is already warm and scheduled, unlike a
+		// cold fork racing to catch A's transient window.
+		$callerA = $this->forkQuery('timeout-a.example', 1.5, 'timeout-caller-a');
+		$this->waitForRequest('timeout-a.example');
+
+		// B's timeout is generous on purpose: on the passing path it returns the
+		// instant its reply lands, so a large production timeout costs nothing here.
+		$callerB = $this->forkQuery('timeout-b.example', 6.0, 'timeout-caller-b');
+
+		// Event: A's call returned, so its timeout cleanup has already run.
+		$this->assertNull($this->awaitQueryResult($callerA));
+
+		// Wait for B's request to land on the cleaned slot, or for B to give up
+		// first, whichever happens first; stream_select()'s own timeout doubles
+		// as the poll cadence, no separate usleep().
+		$requestB = null;
+		$bGaveUp  = false;
+		$deadline = microtime(true) + self::SALVAGE_CAP_S;
+		while (microtime(true) < $deadline) {
+			$raw    = @file_get_contents($this->channel());
+			$record = $raw === false ? null : json_decode($raw, true);
+			if (is_array($record) && ($record['domain'] ?? null) === 'timeout-b.example') {
+				$requestB = $record;
+				break;
 			}
-		});
+			$read = [$callerB['signal']]; $write = []; $except = [];
+			if (@stream_select($read, $write, $except, 0, 20000) === 1) {
+				$bGaveUp = true;
+				break;
+			}
+		}
 
-		$callerA = $this->forkQuery('timeout-a.example', 0.3, 'timeout-caller-a');
-		$this->readMarker('timeout-a-ready');
-		$callerB = $this->forkQuery('timeout-b.example', 1.8, 'timeout-caller-b');
+		// Behavioural verdict first: B giving up means A's cleanup raced B's publish.
+		$this->assertFalse($bGaveUp, "caller B returned without ever reaching the channel: caller A's timeout cleanup removed caller B's live request");
+		$this->assertNotNull($requestB, 'STUCK/ENVIRONMENT: neither caller B\'s request nor caller B\'s verdict was observed within the ' . self::SALVAGE_CAP_S . 's salvage cap -- the run is stuck or the environment is broken, not a behavioural failure');
 
-		$this->assertNull($this->readQueryResult('timeout-caller-a', 2.0));
-		$resultB = $this->readQueryResult('timeout-caller-b', 3.0);
-		$this->assertSame('yes', $this->readMarker('timeout-b-intact'));
-		$this->assertSame('group-b', $resultB['group'] ?? null);
-		$this->reapChild($callerA);
-		$this->reapChild($callerB);
-		$this->reapChild($server);
+		$this->atomicWrite($this->replyPath(), $this->verdictReply($requestB['id'], 'group-b'));
+		$resultB = $this->awaitQueryResult($callerB);
+		$this->assertSame('group-b', $resultB['group'] ?? null, 'caller B must receive its own verdict');
+
+		$this->reapChild($callerA['pid']);
+		$this->reapChild($callerB['pid']);
 		$this->assertFileDoesNotExist($this->channel());
 		$this->assertFileDoesNotExist($this->replyPath());
 	}
