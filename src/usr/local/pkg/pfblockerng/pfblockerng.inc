@@ -12703,7 +12703,11 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				// Radar Bearer token) is an origin credential like CURLOPT_USERPWD
 				// and must not ride an off-origin redirect hop; the redirect loop
 				// below swaps between the full list and this one. Non-credential
-				// headers (e.g. If-None-Match) stay on every hop.
+				// headers (e.g. If-None-Match) stay on every hop. The literal
+				// prefix matches the only credential header any caller passes
+				// today (pfb_top1m_auth_headers); a provider descriptor
+				// introducing a different credential header name must extend
+				// this filter.
 				$offorigin_http_headers = array_values(array_filter($http_headers,
 					fn (string $hdr): bool => stripos($hdr, 'Authorization:') !== 0));
 				$headers_have_auth = count($offorigin_http_headers) !== count($http_headers);
