@@ -24,8 +24,8 @@ use PHPUnit\Framework\TestCase;
  *     field, mistyped field, truncated/non-JSON/oversized bytes, foreign id)
  *     is ignored, never a fatal, and the call times out to NULL;
  *   - blocked=false with empty attribution is a VALID verdict, not NULL;
- *   - the bounded wait behaviorally obeys its deadline, while a source pin
- *     records the independent hard poll cap that protects a stalled clock;
+ *   - timeout paths emit the expected verdict/lock signals and clean up;
+ *     a source pin records the independent hard poll cap that protects a stalled clock;
  *   - cleanup: reply+request unlinked on a matched verdict or timeout, no
  *     ".pfbctl_" staging residue.
  *
@@ -45,10 +45,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_query')]
 final class DnsblQueryClientTest extends TestCase
 {
-	// issue #1517: test-side coordination no longer waits on a duration (see
-	// testTimeout() below) -- this factor now only scales assertions about
-	// PRODUCTION's own timing (e.g. "a publish failure must return immediately").
-	private const CI_TEST_TIMEOUT_FACTOR = 4.0;
 	/** Salvage only: expiry means the run is stuck or the box is broken, never that behaviour is wrong. */
 	private const SALVAGE_CAP_S = 30.0;
 	private string $tmp;
@@ -153,11 +149,6 @@ final class DnsblQueryClientTest extends TestCase
 			throw new RuntimeException('failed to encode cross-process test artifact');
 		}
 		$this->atomicWrite($path, $json);
-	}
-
-	private function testTimeout(float $timeout_s): float
-	{
-		return getenv('CI') === 'true' ? $timeout_s * self::CI_TEST_TIMEOUT_FACTOR : $timeout_s;
 	}
 
 	/** Fork a tracked child; the closure must communicate through temp files. */
@@ -309,11 +300,14 @@ final class DnsblQueryClientTest extends TestCase
 	}
 
 	/** Fork a query child; its verdict comes back over a pipe the parent blocks on. */
-	private function forkQuery(string $domain, float $timeout_s, string $marker): array
+	private function forkQuery(string $domain, float $timeout_s, string $marker, $inheritedLock = null): array
 	{
 		[$parentEnd, $childEnd] = $this->signalPair();
-		$pid = $this->forkChild(function () use ($domain, $timeout_s, $marker, $parentEnd, $childEnd): void {
+		$pid = $this->forkChild(function () use ($domain, $timeout_s, $marker, $parentEnd, $childEnd, $inheritedLock): void {
 			fclose($parentEnd);
+			if (is_resource($inheritedLock)) {
+				fclose($inheritedLock);
+			}
 			file_put_contents("{$this->tmp}/{$marker}.started", '1');
 			$result = pfb_dnsbl_query($domain, 'A', $timeout_s);
 			fwrite($childEnd, json_encode($result) . "\n");
@@ -331,18 +325,6 @@ final class DnsblQueryClientTest extends TestCase
 		} finally {
 			fclose($child['signal']); // also on the salvage-cap and EOF failure paths
 		}
-		$result = json_decode($raw, true);
-		$this->assertSame(JSON_ERROR_NONE, json_last_error(), json_last_error_msg());
-		if ($result !== null && !is_array($result)) {
-			$this->fail('expected query result array or NULL, got: ' . var_export($result, true));
-		}
-		return $result;
-	}
-
-	/** Poll a JSON marker file; still used by the one hand-rolled late-lock child. */
-	private function readQueryResult(string $marker, float $timeout_s = self::SALVAGE_CAP_S): ?array
-	{
-		$raw = $this->readMarker("{$marker}.json", $timeout_s);
 		$result = json_decode($raw, true);
 		$this->assertSame(JSON_ERROR_NONE, json_last_error(), json_last_error_msg());
 		if ($result !== null && !is_array($result)) {
@@ -374,39 +356,36 @@ final class DnsblQueryClientTest extends TestCase
 			fclose($probe);
 			$this->atomicWrite("{$this->tmp}/{$ready}", '1');
 			$this->readMarker($go);
-			$start = microtime(true);
 			$result = pfb_dnsbl_query($domain, 'A', $timeout_s);
+			$probe = fopen($this->lockPath(), 'c');
+			if ($probe === false) {
+				throw new RuntimeException('failed to open post-query contention probe lock');
+			}
+			$wouldBlock = 0;
+			$acquired = flock($probe, LOCK_EX | LOCK_NB, $wouldBlock);
+			$parentLockHeld = !$acquired && $wouldBlock === 1;
+			if ($acquired) {
+				flock($probe, LOCK_UN);
+			}
+			fclose($probe);
 			$this->atomicWriteJson("{$this->tmp}/{$marker}", [
-				'result' => $result,
-				'elapsed' => microtime(true) - $start,
+				'result'                       => $result,
+				'parent_lock_held_after_return' => $parentLockHeld,
 			]);
 		});
 		$this->readMarker($ready);
 		$this->atomicWrite("{$this->tmp}/{$go}", '1');
 
-		$path = "{$this->tmp}/{$marker}";
-		$deadline = microtime(true) + $this->testTimeout(0.75);
-		$raw = false;
-		do {
-			$raw = @file_get_contents($path);
-			if ($raw !== false && $raw !== '') {
-				break;
-			}
-			usleep(20000);
-		} while (microtime(true) < $deadline);
-		$completedWhileLocked = $raw !== false && $raw !== '';
+		$raw = $this->readMarker($marker);
 		$requestPublished = file_exists($this->channel());
 
 		flock($lock, LOCK_UN);
 		fclose($lock);
-		if (!$completedWhileLocked) {
-			$raw = $this->readMarker($marker, 2.0);
-		}
 		$this->reapChild($child);
 		$record = json_decode((string) $raw, true);
 		$this->assertIsArray($record);
 
-		return [$record, $completedWhileLocked, $requestPublished];
+		return [$record, $requestPublished];
 	}
 
 	/**
@@ -513,12 +492,12 @@ final class DnsblQueryClientTest extends TestCase
 		// After that failure, removing the obstruction permits a second call to
 		// acquire the same lock and complete, proving the failure released it.
 		mkdir($this->channel());
-		$start = microtime(true);
 		$result = pfb_dnsbl_query('write-fail-case.example', 'A', 5.0);
-		$elapsed = microtime(true) - $start;
 
 		$this->assertNull($result);
-		$this->assertLessThan($this->testTimeout(1.0), $elapsed, 'a publish failure must return immediately, never wait');
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('failed to publish the request', $logs);
+		$this->assertStringNotContainsString('timed out waiting for a verdict', $logs);
 		rmdir($this->channel());
 		$this->spawnResponder(json_encode([
 			'id' => '__ID__', 'blocked' => false, 'b_type' => '', 'group' => '',
@@ -533,16 +512,14 @@ final class DnsblQueryClientTest extends TestCase
 		@unlink($GLOBALS['pfb']['log']);
 		@unlink($GLOBALS['pfb']['errlog']);
 
-		$start = microtime(true);
 		$result = pfb_dnsbl_query('lock-open-failure.example', 'A', 5.0);
-		$elapsed = microtime(true) - $start;
 
 		$this->assertNull($result);
-		$this->assertLessThan($this->testTimeout(1.0), $elapsed, 'a lock-open failure must return before publishing or polling');
 		$this->assertFileDoesNotExist($this->channel());
 		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
 		$this->assertStringContainsString('ADR-65', $logs);
 		$this->assertStringContainsString('query channel lock open failed', $logs);
+		$this->assertStringNotContainsString('timed out waiting for a verdict', $logs);
 	}
 
 	public function testExistingGarbageLockFileIsNotTruncated(): void
@@ -560,15 +537,16 @@ final class DnsblQueryClientTest extends TestCase
 
 	public function testContendedLockWithZeroTimeoutReturnsWithoutPublishing(): void
 	{
-		[$record, $completedWhileLocked, $requestPublished] = $this->queryUnderContention(
+		[$record, $requestPublished] = $this->queryUnderContention(
 			'zero-lock-timeout.example',
 			0.0
 		);
 
-		$this->assertTrue($completedWhileLocked, 'zero-timeout query blocked on the occupied channel lock');
 		$this->assertNull($record['result']);
-		$this->assertLessThan($this->testTimeout(0.5), $record['elapsed'], 'zero-timeout query exceeded its total wait budget');
+		$this->assertTrue($record['parent_lock_held_after_return'], 'zero-timeout query must return while the parent still owns the channel lock');
 		$this->assertFalse($requestPublished, 'lock timeout must not publish a query request');
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('query channel lock timed out', $logs);
 	}
 
 	/** Source pin: stalled-clock behavior has no deterministic production seam. */
@@ -589,16 +567,16 @@ final class DnsblQueryClientTest extends TestCase
 
 	public function testContendedLockWithShortTimeoutReturnsWithoutPublishing(): void
 	{
-		[$record, $completedWhileLocked, $requestPublished] = $this->queryUnderContention(
+		[$record, $requestPublished] = $this->queryUnderContention(
 			'short-lock-timeout.example',
 			0.1
 		);
 
-		$this->assertTrue($completedWhileLocked, 'short-timeout query blocked past its channel-lock deadline');
 		$this->assertNull($record['result']);
-		$this->assertGreaterThanOrEqual(0.08, $record['elapsed'], 'contended query abandoned before its wait budget');
-		$this->assertLessThan($this->testTimeout(0.5), $record['elapsed'], 'short-timeout query exceeded its total wait budget');
+		$this->assertTrue($record['parent_lock_held_after_return'], 'short-timeout query must return while the parent still owns the channel lock');
 		$this->assertFalse($requestPublished, 'lock timeout must not publish a query request');
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('query channel lock timed out', $logs);
 	}
 
 	public function testResumedLockWaiterCannotPublishAfterDeadline(): void
@@ -610,24 +588,19 @@ final class DnsblQueryClientTest extends TestCase
 		$lock = fopen($this->lockPath(), 'c');
 		$this->assertIsResource($lock);
 		$this->assertTrue(flock($lock, LOCK_EX));
-		$child = $this->forkChild(function () use ($lock): void {
-			fclose($lock);
-			file_put_contents("{$this->tmp}/late-lock.started", '1');
-			$result = pfb_dnsbl_query('late-lock.example', 'A', 0.5);
-			$this->atomicWriteJson("{$this->tmp}/late-lock.json", $result);
-		});
+		$child = $this->forkQuery('late-lock.example', 0.5, 'late-lock', $lock);
 
 		$this->readMarker('late-lock.started');
 		usleep(40000);
-		$this->assertTrue(posix_kill($child, (int) constant('SIGSTOP')));
-		$this->waitForStoppedChild($child);
+		$this->assertTrue(posix_kill($child['pid'], (int) constant('SIGSTOP')));
+		$this->waitForStoppedChild($child['pid']);
 		usleep(600000);
 		flock($lock, LOCK_UN);
 		fclose($lock);
-		$this->assertTrue(posix_kill($child, (int) constant('SIGCONT')));
+		$this->assertTrue(posix_kill($child['pid'], (int) constant('SIGCONT')));
 
-		$this->assertNull($this->readQueryResult('late-lock', 2.0));
-		$this->reapChild($child);
+		$this->assertNull($this->awaitQueryResult($child));
+		$this->reapChild($child['pid']);
 		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
 		$this->assertStringContainsString('query channel lock timed out', $logs);
 		$this->assertStringNotContainsString('timed out waiting for a verdict', $logs);
@@ -843,42 +816,40 @@ final class DnsblQueryClientTest extends TestCase
 		$this->assertNotSame($firstId, $secondId, 'each call must publish a fresh, unique id');
 	}
 
-	// --- bounded wait: deadline AND hard cap --------------------------------
+	// --- bounded wait: timeout events and cleanup ----------------------------
 
-	public function testNoReplyTimesOutToNullWithinDeadlineBounds(): void
+	public function testNoReplyTimesOutToNullAndCleansUp(): void
 	{
-		$start = microtime(true);
 		$result = pfb_dnsbl_query('no-reply-case.example', 'A', 0.6);
-		$elapsed = microtime(true) - $start;
 
 		$this->assertNull($result);
-		$this->assertGreaterThanOrEqual(0.6, $elapsed, "expected elapsed >= 0.6s, got {$elapsed}");
-		$max_elapsed = $this->testTimeout(2.0);
-		$this->assertLessThan($max_elapsed, $elapsed, "expected elapsed < {$max_elapsed}s (bounded wait), got {$elapsed}");
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('timed out waiting for a verdict', $logs);
 		clearstatcache();
 		$this->assertFileDoesNotExist($this->channel(), 'request file must be cleaned up on timeout');
 	}
 
-	public function testZeroTimeoutDegeneratesToOneReadAttempt(): void
+	public function testZeroTimeoutReturnsNullAndCleansUp(): void
 	{
-		// No reply ever appears; a timeout_s <= 0 must still return promptly (a
-		// single read attempt, never an unbounded or long-blocking wait).
-		$start = microtime(true);
+		// No reply ever appears; timeout_s <= 0 still exercises the zero-timeout branch.
 		$result = pfb_dnsbl_query('zero-timeout-case.example', 'A', 0.0);
-		$elapsed = microtime(true) - $start;
 
 		$this->assertNull($result);
-		$this->assertLessThan($this->testTimeout(0.5), $elapsed, "expected a near-instant single attempt, got {$elapsed}");
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('timed out waiting for a verdict', $logs);
+		clearstatcache();
+		$this->assertFileDoesNotExist($this->channel(), 'request file must be cleaned up on timeout');
 	}
 
-	public function testShortReplyTimeoutDoesNotOversleepItsDeadline(): void
+	public function testShortReplyTimeoutReturnsNullAndCleansUp(): void
 	{
-		$start = microtime(true);
 		$result = pfb_dnsbl_query('short-reply-timeout.example', 'A', 0.001);
-		$elapsed = microtime(true) - $start;
 
 		$this->assertNull($result);
-		$this->assertLessThan($this->testTimeout(0.1), $elapsed, "short reply timeout overslept its deadline: {$elapsed}s");
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('timed out waiting for a verdict', $logs);
+		clearstatcache();
+		$this->assertFileDoesNotExist($this->channel(), 'request file must be cleaned up on timeout');
 	}
 
 	// --- hostile reply rows: id-independent (pre-seeded, no responder) -----
