@@ -582,6 +582,142 @@ def _assert_no_staging_symlinks(out_dir: Path) -> None:
         raise ArtifactValidationError(f"{out_dir}: staging symlink(s) are not allowed: {', '.join(links)}")
 
 
+_REPORT_ARTIFACT_FIELDS = (
+    "channel",
+    "tag",
+    "source_commit",
+    "ports_ref",
+    "matrix_row",
+    "staged_path",
+    "name",
+    "version",
+    "origin",
+    "abi",
+    "arch",
+    "artifact_sha256",
+    "payload_file_count",
+    "payload_files",
+    "install_script_sha256",
+    "deinstall_script_sha256",
+)
+_REPORT_HASH_FIELDS = ("artifact_sha256", "install_script_sha256", "deinstall_script_sha256")
+
+
+def _validate_report_staged_path(value: object, *, index: int) -> str:
+    if not isinstance(value, str) or "\x00" in value or value.startswith("/"):
+        raise ArtifactValidationError(f"identity report artifact {index}: staged_path is unsafe: {value!r}")
+    parts = value.split("/")
+    if len(parts) != 2 or re.fullmatch(r"fbsd[1-9][0-9]*", parts[0]) is None:
+        raise ArtifactValidationError(f"identity report artifact {index}: staged_path is unsafe: {value!r}")
+    filename = parts[1]
+    if not filename.endswith(".pkg"):
+        raise ArtifactValidationError(f"identity report artifact {index}: staged_path is unsafe: {value!r}")
+    _safe_segment(filename, f"identity report artifact {index} staged_path")
+    return value
+
+
+def _read_identity_report(
+    report_path: Path,
+    plan: list[tuple[FrozenTarget, dict]],
+    *,
+    allow_missing: bool = False,
+    reject_unselected: bool = False,
+) -> dict:
+    try:
+        raw = report_path.read_bytes()
+    except OSError as e:
+        raise ArtifactValidationError(f"identity report {report_path}: unreadable ({e})") from None
+    try:
+        obj = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as e:
+        raise ArtifactValidationError(f"identity report {report_path}: malformed JSON ({e})") from None
+    if not isinstance(obj, dict):
+        raise ArtifactValidationError(f"identity report {report_path}: top level must be an object")
+    if obj.get("ports_ref") != FROZEN_PORTS_REF:
+        raise ArtifactValidationError(
+            f"identity report mismatch for ports_ref: expected {FROZEN_PORTS_REF!r}, actual {obj.get('ports_ref')!r}"
+        )
+    report_artifacts = obj.get("artifacts")
+    if not isinstance(report_artifacts, list):
+        raise ArtifactValidationError(f"identity report {report_path}: artifacts must be a list")
+
+    selected = {(target.channel, row["freebsd_major"]) for target, row in plan}
+    indexed: dict[tuple[str, str], dict] = {}
+    for index, artifact in enumerate(report_artifacts):
+        if not isinstance(artifact, dict):
+            raise ArtifactValidationError(f"identity report artifact {index}: must be an object")
+        missing = [field for field in _REPORT_ARTIFACT_FIELDS if field not in artifact]
+        if missing:
+            raise ArtifactValidationError(f"identity report artifact {index}: missing field(s): {', '.join(missing)}")
+        for field in ("channel", "tag", "source_commit", "ports_ref", "name", "version", "origin", "abi", "arch"):
+            if not isinstance(artifact[field], str):
+                raise ArtifactValidationError(
+                    f"identity report artifact {index}: {field} must be a string, got {artifact[field]!r}"
+                )
+        try:
+            row = validate_matrix([artifact["matrix_row"]])[0]
+        except MatrixError as e:
+            raise ArtifactValidationError(f"identity report artifact {index}: malformed matrix_row ({e})") from None
+        _validate_report_staged_path(artifact["staged_path"], index=index)
+        for field in _REPORT_HASH_FIELDS:
+            if not isinstance(artifact[field], str) or re.fullmatch(r"[0-9a-f]{64}", artifact[field]) is None:
+                raise ArtifactValidationError(
+                    f"identity report artifact {index}: {field} has malformed SHA-256 {artifact[field]!r}"
+                )
+        count = artifact["payload_file_count"]
+        if type(count) is not int or count < 0:
+            raise ArtifactValidationError(
+                f"identity report artifact {index}: payload_file_count must be a non-negative integer"
+            )
+        payload_files = artifact["payload_files"]
+        if not isinstance(payload_files, dict):
+            raise ArtifactValidationError(f"identity report artifact {index}: payload_files must be an object")
+        for path, digest in payload_files.items():
+            if (
+                not isinstance(path, str)
+                or not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            ):
+                raise ArtifactValidationError(
+                    f"identity report artifact {index}: payload_files contains malformed entry {path!r}: {digest!r}"
+                )
+        key = (artifact["channel"], row["freebsd_major"])
+        if key in selected:
+            if key in indexed:
+                raise ArtifactValidationError(f"identity report: duplicate selected identity {key!r}")
+            indexed[key] = artifact
+        elif reject_unselected:
+            raise ArtifactValidationError(f"identity report: unexpected identity {key!r}")
+
+    missing = sorted(selected - indexed.keys())
+    if missing and not allow_missing:
+        raise ArtifactValidationError(f"identity report: missing selected identity {missing[0]!r}")
+    return {"ports_ref": obj["ports_ref"], "artifacts": indexed, "document": obj}
+
+
+def _merge_identity_report(existing: dict, updated: dict, plan: list[tuple[FrozenTarget, dict]]) -> dict:
+    artifacts = dict(existing["artifacts"])
+    for artifact in updated["artifacts"]:
+        key = (artifact["channel"], artifact["matrix_row"]["freebsd_major"])
+        artifacts[key] = artifact
+    document = dict(existing["document"])
+    document["ports_ref"] = FROZEN_PORTS_REF
+    document["artifacts"] = []
+    for target, row in plan:
+        key = (target.channel, row["freebsd_major"])
+        if key in artifacts:
+            document["artifacts"].append(artifacts[key])
+    return document
+
+
+def _compare_report_identity(actual: dict, expected: dict) -> None:
+    for field in _REPORT_ARTIFACT_FIELDS:
+        if actual[field] != expected[field]:
+            raise ArtifactValidationError(
+                f"identity report mismatch for {field}: expected {expected[field]!r}, actual {actual[field]!r}"
+            )
+
+
 def build_all(
     plan: list[tuple[FrozenTarget, dict]],
     *,
@@ -672,6 +808,7 @@ def verify_staged(
     repo: Path,
     target_filter: str | None,
     major_filter: str | None,
+    oracle: dict,
 ) -> dict:
     _assert_no_staging_symlinks(dir_)
     export_cache: dict[str, Path] = {}
@@ -702,17 +839,17 @@ def verify_staged(
             pkg_path = candidates[0]
             identity = validate_artifact(pkg_path, export_dir, target, row)
             staged.add(pkg_path)
-            artifacts.append(
-                {
-                    "channel": target.channel,
-                    "tag": target.tag,
-                    "source_commit": target.commit,
-                    "ports_ref": FROZEN_PORTS_REF,
-                    "matrix_row": row,
-                    "staged_path": str(pkg_path.relative_to(dir_)),
-                    **identity,
-                }
-            )
+            actual = {
+                "channel": target.channel,
+                "tag": target.tag,
+                "source_commit": target.commit,
+                "ports_ref": FROZEN_PORTS_REF,
+                "matrix_row": row,
+                "staged_path": str(pkg_path.relative_to(dir_)),
+                **identity,
+            }
+            _compare_report_identity(actual, oracle["artifacts"][(target.channel, row["freebsd_major"])])
+            artifacts.append(actual)
     _assert_no_stray_pkgs(
         dir_,
         staged,
@@ -751,7 +888,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--report",
         type=Path,
         default=None,
-        help="JSON identity report path (default: <out>/frozen-v3-report.json).",
+        help="build mode writes the identity report here (default: <out>/frozen-v3-report.json).",
     )
     p.add_argument(
         "--ports-dir",
@@ -781,7 +918,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         metavar="DIR",
-        help="validate an already-staged DIR against the BUILD matrix without building anything.",
+        help=(
+            "verify-only requires the identity report as an oracle.\n"
+            "verify-only does not rewrite the identity report; validate DIR against the BUILD matrix "
+            "without building anything."
+        ),
     )
     p.add_argument(
         "--target",
@@ -814,15 +955,26 @@ def main(argv: list[str] | None = None) -> int:
             raise MatrixError("nothing to do: --target/--major filters excluded every BUILD-matrix row")
 
         if args.verify_only is not None:
+            oracle = _read_identity_report(report_path, plan)
             report = verify_staged(
                 args.verify_only.resolve(),
                 plan,
                 repo=repo,
                 target_filter=args.target,
                 major_filter=major_filter,
+                oracle=oracle,
             )
         else:
             out_dir.mkdir(parents=True, exist_ok=True)
+            full_plan = plan_artifacts(rows, target_filter=None, major_filter=None)
+            existing = None
+            if (args.target is not None or major_filter is not None) and report_path.exists():
+                existing = _read_identity_report(
+                    report_path,
+                    full_plan,
+                    allow_missing=True,
+                    reject_unselected=True,
+                )
             report = build_all(
                 plan,
                 repo=repo,
@@ -833,10 +985,11 @@ def main(argv: list[str] | None = None) -> int:
                 target_filter=args.target,
                 major_filter=major_filter,
             )
-
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-        print(f"build-frozen-v3.py: wrote {report_path} ({len(report['artifacts'])} artifact(s))", file=sys.stderr)
+            if existing is not None:
+                report = _merge_identity_report(existing, report, full_plan)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+            print(f"build-frozen-v3.py: wrote {report_path} ({len(report['artifacts'])} artifact(s))", file=sys.stderr)
         return 0
     except (MatrixError, TagResolutionError, BuildLegError, ArtifactValidationError, DeterminismError) as e:
         print(f"build-frozen-v3.py: {e}", file=sys.stderr)

@@ -1140,32 +1140,53 @@ def test_matrix_row_with_non_string_scalar_rejected_cleanly(field: str) -> None:
         bfv.validate_matrix([row])
 
 
-def test_verify_only_validates_staged_dir_without_invoking_build_seam(
+def test_issue_2021_verify_only_uses_build_report_without_invoking_build_seam(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    export_dir = _write_export(tmp_path, _demo_payload(STABLE.portname))
     monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE,))
+    export_dir = _write_export(tmp_path / "src", _demo_payload(STABLE.portname))
     _stub_git(monkeypatch, {STABLE.commit: export_dir})
+    monkeypatch.setattr(bfv, "_invoke_build_leg", _fake_build_leg({"stable": STABLE}))
+
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps([ROW_15]))
+    stage_dir = tmp_path / "stage"
+    report_path = stage_dir / "frozen-v3-report.json"
+    report_writes: list[Path] = []
+    real_write_text = Path.write_text
+
+    def track_report_write(path: Path, *args: Any, **kwargs: Any) -> int:
+        if path == report_path:
+            report_writes.append(path)
+        return real_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", track_report_write)
+    assert (
+        bfv.main(
+            [
+                "--out",
+                str(stage_dir),
+                "--matrix-cmd",
+                f"cat {matrix_file}",
+                "--repo",
+                str(tmp_path),
+                "--no-deterministic-check",
+            ]
+        )
+        == 0
+    )
+    assert report_writes == [report_path]
+    report_bytes = report_path.read_bytes()
 
     def boom(argv: list[str], *, cwd: Path) -> str:
         raise AssertionError("build seam must not be invoked in --verify-only mode")
 
     monkeypatch.setattr(bfv, "_invoke_build_leg", boom)
 
-    stage_dir = tmp_path / "stage"
-    (stage_dir / "fbsd15").mkdir(parents=True)
-    pkg_path = stage_dir / "fbsd15" / f"{STABLE.portname}-{STABLE.portversion}.pkg"
-    _write_pkg(
-        pkg_path,
-        name=STABLE.portname,
-        version=STABLE.portversion,
-        deps=_deps_for(ROW_15),
-        scripts=DEMO_SCRIPTS,
-        files=_packaged_payload(STABLE.portname, STABLE.portversion),
-    )
+    def fail_write(self: Path, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("verify-only must not rewrite the identity report")
 
-    matrix_file = tmp_path / "matrix.json"
-    matrix_file.write_text(json.dumps([ROW_15]))
+    monkeypatch.setattr(Path, "write_text", fail_write)
 
     rc = bfv.main(
         [
@@ -1180,8 +1201,7 @@ def test_verify_only_validates_staged_dir_without_invoking_build_seam(
         ]
     )
     assert rc == 0
-    report = json.loads((stage_dir / "frozen-v3-report.json").read_text())
-    assert len(report["artifacts"]) == 1
+    assert report_path.read_bytes() == report_bytes
 
 
 def _stage_valid_artifact(tmp_path: Path, stage: Path, target: Any, row: dict) -> Path:
@@ -1200,6 +1220,500 @@ def _stub_verify_exports(monkeypatch: pytest.MonkeyPatch, exports: dict[str, Pat
     _stub_git(monkeypatch, exports)
 
 
+def _issue_2021_build_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    targets: tuple[Any, ...] = (STABLE,),
+    rows: tuple[dict, ...] = (ROW_15,),
+) -> tuple[Path, Path, Path]:
+    """Build a real fixture so verify-only consumes the exact emitted report bytes."""
+    exports = {
+        target.commit: _write_export(tmp_path / f"src-{target.channel}", _demo_payload(target.portname))
+        for target in targets
+    }
+    monkeypatch.setattr(bfv, "FROZEN_TARGETS", targets)
+    _stub_git(monkeypatch, exports)
+    monkeypatch.setattr(bfv, "_invoke_build_leg", _fake_build_leg({t.channel: t for t in targets}))
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text(json.dumps(list(rows)))
+    stage = tmp_path / "stage"
+    assert (
+        bfv.main(
+            [
+                "--out",
+                str(stage),
+                "--matrix-cmd",
+                f"cat {matrix_file}",
+                "--repo",
+                str(tmp_path),
+                "--no-deterministic-check",
+            ]
+        )
+        == 0
+    )
+    return stage, matrix_file, stage / "frozen-v3-report.json"
+
+
+def _run_issue_2021_verify(
+    stage: Path,
+    matrix_file: Path,
+    tmp_path: Path,
+    *,
+    report: Path | None = None,
+    target: str | None = None,
+    major: int | None = None,
+) -> int:
+    args = [
+        "--out",
+        str(stage),
+        "--verify-only",
+        str(stage),
+        "--matrix-cmd",
+        f"cat {matrix_file}",
+        "--repo",
+        str(tmp_path),
+    ]
+    if report is not None:
+        args += ["--report", str(report)]
+    if target is not None:
+        args += ["--target", target]
+    if major is not None:
+        args += ["--major", str(major)]
+    return bfv.main(args)
+
+
+def _load_report(report_path: Path) -> dict:
+    return json.loads(report_path.read_text())
+
+
+def _write_report(report_path: Path, report: dict) -> bytes:
+    raw = json.dumps(report, indent=2, sort_keys=True).encode() + b"\n"
+    report_path.write_bytes(raw)
+    return raw
+
+
+def _strip_pkg_payload(pkg_path: Path, member_to_remove: str) -> None:
+    manifest, payload = bfv._read_pkg(pkg_path)
+    assert member_to_remove in payload
+    payload.pop(member_to_remove)
+    _write_pkg(
+        pkg_path,
+        name=manifest["name"],
+        version=manifest["version"],
+        origin=manifest["origin"],
+        abi=manifest["abi"],
+        arch=manifest["arch"],
+        deps=manifest["deps"],
+        scripts=manifest["scripts"],
+        files=payload,
+    )
+
+
+def _seed_verify_report(stage: Path, entries: list[tuple[Any, dict, Path]]) -> None:
+    artifacts = []
+    for target, row, export_dir in entries:
+        pkg_path = stage / f"fbsd{row['freebsd_major']}" / f"{target.portname}-{target.portversion}.pkg"
+        identity = bfv.validate_artifact(pkg_path, export_dir, target, row)
+        artifacts.append(
+            {
+                "channel": target.channel,
+                "tag": target.tag,
+                "source_commit": target.commit,
+                "ports_ref": bfv.FROZEN_PORTS_REF,
+                "matrix_row": row,
+                "staged_path": str(pkg_path.relative_to(stage)),
+                **identity,
+            }
+        )
+    _write_report(stage / "frozen-v3-report.json", {"ports_ref": bfv.FROZEN_PORTS_REF, "artifacts": artifacts})
+
+
+def test_issue_2021_full_report_binds_selected_identity_and_ignores_extra_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(
+        tmp_path, monkeypatch, targets=(STABLE, DEVEL), rows=(ROW_15, ROW_16)
+    )
+    report = _load_report(report_path)
+    report["metadata"] = {"producer": "fixture", "ignored": [1, 2, 3]}
+    report["artifacts"][0]["extra_metadata"] = {"ignored": True}
+    explicit_report = tmp_path / "oracle.json"
+    original = _write_report(explicit_report, report)
+    report_path.unlink()
+
+    monkeypatch.setattr(bfv, "_invoke_build_leg", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path, report=explicit_report) == 0
+    assert explicit_report.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("target", "major"),
+    [("stable", None), (None, 15)],
+)
+def test_issue_2021_filtered_verify_compares_selected_rows_and_preserves_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str | None, major: int | None
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(
+        tmp_path, monkeypatch, targets=(STABLE, DEVEL), rows=(ROW_15, ROW_16)
+    )
+    original = report_path.read_bytes()
+    monkeypatch.setattr(bfv, "_invoke_build_leg", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path, target=target, major=major) == 0
+    assert report_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("filter_args", [["--target", "stable"], ["--major", "15"]])
+def test_issue_2021_filtered_rebuild_preserves_full_stage_oracle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filter_args: list[str]
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(
+        tmp_path, monkeypatch, targets=(STABLE, DEVEL), rows=(ROW_15, ROW_16)
+    )
+    report = _load_report(report_path)
+    report["metadata"] = {"preserve": True}
+    _write_report(report_path, report)
+    args = [
+        "--out",
+        str(stage),
+        "--matrix-cmd",
+        f"cat {matrix_file}",
+        "--repo",
+        str(tmp_path),
+        "--no-deterministic-check",
+        *filter_args,
+    ]
+
+    assert bfv.main(args) == 0
+    rebuilt = _load_report(report_path)
+    assert rebuilt["metadata"] == {"preserve": True}
+    assert len(rebuilt["artifacts"]) == 4
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 0
+
+
+def test_issue_2021_filtered_rebuild_merges_partial_known_oracle_without_fabrication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(
+        tmp_path, monkeypatch, targets=(STABLE, DEVEL), rows=(ROW_15, ROW_16)
+    )
+    report = _load_report(report_path)
+    report["artifacts"] = [
+        artifact
+        for artifact in report["artifacts"]
+        if (artifact["channel"], artifact["matrix_row"]["freebsd_major"]) == ("devel", "15")
+    ]
+    _write_report(report_path, report)
+
+    assert (
+        bfv.main(
+            [
+                "--out",
+                str(stage),
+                "--matrix-cmd",
+                f"cat {matrix_file}",
+                "--repo",
+                str(tmp_path),
+                "--no-deterministic-check",
+                "--target",
+                "stable",
+            ]
+        )
+        == 0
+    )
+    rebuilt = _load_report(report_path)
+    keys = {(a["channel"], a["matrix_row"]["freebsd_major"]) for a in rebuilt["artifacts"]}
+    assert keys == {("stable", "15"), ("stable", "16"), ("devel", "15")}
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path, target="stable") == 0
+
+
+def test_issue_2021_filtered_rebuild_rejects_unknown_oracle_identity_before_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(
+        tmp_path, monkeypatch, targets=(STABLE, DEVEL), rows=(ROW_15, ROW_16)
+    )
+    report = _load_report(report_path)
+    report["artifacts"][0]["channel"] = "unknown"
+    original = _write_report(report_path, report)
+    monkeypatch.setattr(bfv, "_invoke_build_leg", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+
+    rc = bfv.main(
+        [
+            "--out",
+            str(stage),
+            "--matrix-cmd",
+            f"cat {matrix_file}",
+            "--repo",
+            str(tmp_path),
+            "--no-deterministic-check",
+            "--target",
+            "stable",
+        ]
+    )
+    assert rc == 1
+    assert "unexpected identity" in capsys.readouterr().err
+    assert report_path.read_bytes() == original
+
+
+def test_issue_2021_filtered_rebuild_restores_full_plan_order_and_preserves_unselected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(
+        tmp_path, monkeypatch, targets=(STABLE, DEVEL), rows=(ROW_15, ROW_16)
+    )
+    report = _load_report(report_path)
+    devel_15 = next(
+        artifact
+        for artifact in report["artifacts"]
+        if (artifact["channel"], artifact["matrix_row"]["freebsd_major"]) == ("devel", "15")
+    )
+    devel_15["preserved"] = True
+    report["artifacts"].reverse()
+    _write_report(report_path, report)
+
+    assert (
+        bfv.main(
+            [
+                "--out",
+                str(stage),
+                "--matrix-cmd",
+                f"cat {matrix_file}",
+                "--repo",
+                str(tmp_path),
+                "--no-deterministic-check",
+                "--target",
+                "stable",
+            ]
+        )
+        == 0
+    )
+    rebuilt = _load_report(report_path)
+    keys = [(a["channel"], a["matrix_row"]["freebsd_major"]) for a in rebuilt["artifacts"]]
+    assert keys == [("stable", "15"), ("stable", "16"), ("devel", "15"), ("devel", "16")]
+    assert next(a for a in rebuilt["artifacts"] if a["channel"] == "devel" and a["matrix_row"] == ROW_15)["preserved"]
+
+
+def test_issue_2021_stripped_real_payload_is_rejected_and_oracle_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(tmp_path, monkeypatch)
+    pkg_path = next(stage.glob("fbsd15/*.pkg"))
+    _strip_pkg_payload(pkg_path, "/usr/local/www/pfblockerng/index.php")
+    original = report_path.read_bytes()
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 1
+    assert report_path.read_bytes() == original
+
+
+def test_issue_2021_artifact_checksum_mismatch_rejected_independently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(tmp_path, monkeypatch)
+    pkg_path = next(stage.glob("fbsd15/*.pkg"))
+    _strip_pkg_payload(pkg_path, "/usr/local/www/pfblockerng/index.php")
+    _, payload = bfv._read_pkg(pkg_path)
+    report = _load_report(report_path)
+    report["artifacts"][0]["payload_file_count"] = len(payload)
+    report["artifacts"][0]["payload_files"] = {
+        path: hashlib.sha256(data).hexdigest() for path, data in sorted(payload.items())
+    }
+    report["artifacts"][0]["artifact_sha256"] = "0" * 64
+    original = _write_report(report_path, report)
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 1
+    assert report_path.read_bytes() == original
+
+
+def test_issue_2021_payload_inventory_mismatch_rejected_when_oracle_checksum_matches_stripped_pkg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(tmp_path, monkeypatch)
+    pkg_path = next(stage.glob("fbsd15/*.pkg"))
+    _strip_pkg_payload(pkg_path, "/usr/local/www/pfblockerng/index.php")
+    report = _load_report(report_path)
+    report["artifacts"][0]["artifact_sha256"] = hashlib.sha256(pkg_path.read_bytes()).hexdigest()
+    original = _write_report(report_path, report)
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 1
+    assert report_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("field", "mutate"),
+    [
+        ("channel", lambda a: "devel"),
+        ("tag", lambda a: "v999"),
+        ("source_commit", lambda a: "0" * 40),
+        ("ports_ref", lambda a: "1" * 40),
+        ("record_ports_ref", lambda a: "1" * 40),
+        ("matrix_row", lambda a: dict(ROW_16)),
+        ("staged_path", lambda a: "fbsd15/$([ -f PWNED ]).pkg"),
+        ("name", lambda a: "other"),
+        ("version", lambda a: "9.9.9"),
+        ("origin", lambda a: "evil/origin"),
+        ("abi", lambda a: "FreeBSD:99:*"),
+        ("arch", lambda a: "freebsd:99:*"),
+        ("artifact_sha256", lambda a: "0" * 64),
+        ("payload_file_count", lambda a: a["payload_file_count"] + 1),
+        ("payload_files", lambda a: {**a["payload_files"], next(iter(a["payload_files"])): "f" * 64}),
+        ("install_script_sha256", lambda a: "0" * 64),
+        ("deinstall_script_sha256", lambda a: "0" * 64),
+    ],
+)
+def test_issue_2021_every_emitted_identity_field_mismatch_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    mutate: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(tmp_path, monkeypatch)
+    report = _load_report(report_path)
+    artifact = report["artifacts"][0]
+    if field == "ports_ref":
+        report["ports_ref"] = mutate(artifact)
+    elif field == "record_ports_ref":
+        artifact["ports_ref"] = mutate(artifact)
+    else:
+        artifact[field] = mutate(artifact)
+    original = _write_report(report_path, report)
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 1
+    stderr = capsys.readouterr().err
+    expected_field = "ports_ref" if field == "record_ports_ref" else field
+    assert expected_field in stderr or "missing selected identity" in stderr
+    assert report_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, "unreadable"),
+        (b"", "malformed JSON"),
+        (b"{not-json", "malformed JSON"),
+        (b"\xff\xfe", "malformed JSON"),
+        (b"[]", "top level must be an object"),
+        (json.dumps({"ports_ref": bfv.FROZEN_PORTS_REF, "artifacts": {}}).encode(), "artifacts must be a list"),
+        (
+            json.dumps({"ports_ref": bfv.FROZEN_PORTS_REF, "artifacts": ["not-an-object"]}).encode(),
+            "artifact 0: must be an object",
+        ),
+        (
+            json.dumps({"ports_ref": bfv.FROZEN_PORTS_REF, "artifacts": [{"channel": "stable"}]}).encode(),
+            "artifact 0: missing field(s)",
+        ),
+    ],
+)
+def test_issue_2021_missing_or_hostile_oracle_rejected_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raw: bytes | None,
+    expected: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(tmp_path, monkeypatch)
+    if raw is None:
+        report_path.unlink()
+        before = None
+    else:
+        report_path.write_bytes(raw)
+        before = raw
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 1
+    stderr = capsys.readouterr().err
+    assert expected in stderr
+    assert "Traceback" not in stderr
+    if before is not None:
+        assert report_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        (
+            "matrix_row",
+            {"freebsd_major": "../15", "php_version": "8.3", "py_flavor": "py311"},
+            "malformed matrix_row",
+        ),
+        ("staged_path", None, "staged_path is unsafe"),
+        ("staged_path", "fbsd15/demo\x00.pkg", "staged_path is unsafe"),
+        ("staged_path", "/absolute.pkg", "staged_path is unsafe"),
+        ("staged_path", "fbsd15/nested/demo.pkg", "staged_path is unsafe"),
+        ("staged_path", "other/demo.pkg", "staged_path is unsafe"),
+        ("staged_path", "fbsd15/demo.txt", "staged_path is unsafe"),
+        ("staged_path", "fbsd15/$unsafe.pkg", "unsafe path segment"),
+        ("channel", 1, "channel must be a string"),
+        ("tag", 1, "tag must be a string"),
+        ("source_commit", 1, "source_commit must be a string"),
+        ("ports_ref", 1, "ports_ref must be a string"),
+        ("name", 1, "name must be a string"),
+        ("version", 1, "version must be a string"),
+        ("origin", 1, "origin must be a string"),
+        ("abi", 1, "abi must be a string"),
+        ("arch", 1, "arch must be a string"),
+        ("payload_file_count", True, "payload_file_count must be a non-negative integer"),
+        ("payload_file_count", -1, "payload_file_count must be a non-negative integer"),
+        ("payload_files", [], "payload_files must be an object"),
+        ("payload_files", {"/payload": None}, "payload_files contains malformed entry"),
+        ("payload_files", {"/payload": "not-a-sha256"}, "payload_files contains malformed entry"),
+        ("artifact_sha256", "0" * 63, "artifact_sha256 has malformed SHA-256"),
+        ("install_script_sha256", "g" * 64, "install_script_sha256 has malformed SHA-256"),
+        ("deinstall_script_sha256", "1$" + "0" * 64, "deinstall_script_sha256 has malformed SHA-256"),
+    ],
+)
+def test_issue_2021_hostile_oracle_branch_rejected_with_specific_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+    expected: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(tmp_path, monkeypatch)
+    report = _load_report(report_path)
+    report["artifacts"][0][field] = value
+    original = _write_report(report_path, report)
+
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 1
+    stderr = capsys.readouterr().err
+    assert expected in stderr
+    assert "Traceback" not in stderr
+    assert report_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("field", ["artifact_sha256", "install_script_sha256", "deinstall_script_sha256"])
+@pytest.mark.parametrize("value", [None, 123, [], {}])
+def test_issue_2021_non_string_report_hash_rejected_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    field: str,
+    value: object,
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(tmp_path, monkeypatch)
+    report = _load_report(report_path)
+    report["artifacts"][0][field] = value
+    original = _write_report(report_path, report)
+
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 1
+    stderr = capsys.readouterr().err
+    assert field in stderr
+    assert "Traceback" not in stderr
+    assert report_path.read_bytes() == original
+
+
+def test_issue_2021_help_describes_report_oracle_contract() -> None:
+    help_text = bfv.build_arg_parser().format_help().lower()
+    assert "build mode writes the identity report" in help_text
+    assert "verify-only requires the identity report as an oracle" in help_text
+    assert "verify-only does not rewrite the identity report" in help_text
+
+
+def test_issue_2021_duplicate_selected_identity_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(tmp_path, monkeypatch)
+    report = _load_report(report_path)
+    report["artifacts"].append(dict(report["artifacts"][0]))
+    original = _write_report(report_path, report)
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 1
+    assert report_path.read_bytes() == original
+
+
 def test_issue_2019_filtered_target_accepts_other_frozen_target_but_rejects_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1211,6 +1725,7 @@ def test_issue_2019_filtered_target_accepts_other_frozen_target_but_rejects_unkn
         DEVEL.commit: _stage_valid_artifact(tmp_path, stage, DEVEL, ROW_15),
     }
     _stub_verify_exports(monkeypatch, exports)
+    _seed_verify_report(stage, [(STABLE, ROW_15, exports[STABLE.commit]), (DEVEL, ROW_15, exports[DEVEL.commit])])
 
     matrix_file = tmp_path / "matrix.json"
     matrix_file.write_text(json.dumps([ROW_15]))
@@ -1256,6 +1771,7 @@ def test_issue_2019_major_filter_ignores_unselected_valid_major_pkg(
     stage = tmp_path / "stage"
     export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
     _stub_verify_exports(monkeypatch, {STABLE.commit: export})
+    _seed_verify_report(stage, [(STABLE, ROW_15, export)])
     (stage / "fbsd16").mkdir(parents=True)
     _write_pkg(stage / "fbsd16" / "random-extra-1.0.pkg", name="random-extra", version="1.0")
 
@@ -1328,6 +1844,7 @@ def test_issue_2019_stray_diagnostics_report_relative_paths_for_duplicate_basena
     export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
     _stage_valid_artifact(tmp_path, stage, STABLE, ROW_16)
     _stub_verify_exports(monkeypatch, {STABLE.commit: export})
+    _seed_verify_report(stage, [(STABLE, ROW_15, export), (STABLE, ROW_16, export)])
     for major in ("15", "16"):
         _write_pkg(stage / f"fbsd{major}" / "same-extra.pkg", name="same-extra", version="1.0")
 
@@ -1358,8 +1875,9 @@ def test_issue_2019_stable_filename_boundary_does_not_claim_devel_pkg(
     monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE, DEVEL))
     stage = tmp_path / "stage"
     stable_export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
-    _stage_valid_artifact(tmp_path, stage, DEVEL, ROW_15)
-    _stub_verify_exports(monkeypatch, {STABLE.commit: stable_export, DEVEL.commit: stable_export})
+    devel_export = _stage_valid_artifact(tmp_path, stage, DEVEL, ROW_15)
+    _stub_verify_exports(monkeypatch, {STABLE.commit: stable_export, DEVEL.commit: devel_export})
+    _seed_verify_report(stage, [(STABLE, ROW_15, stable_export), (DEVEL, ROW_15, devel_export)])
     matrix_file = tmp_path / "matrix.json"
     matrix_file.write_text(json.dumps([ROW_15]))
 
@@ -1461,24 +1979,11 @@ def test_issue_2019_verify_rejects_packages_hidden_by_symlinked_leg(
     export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
     _write_pkg(outside / "random-extra-1.0.pkg", name="random-extra", version="1.0")
     _stub_verify_exports(monkeypatch, {STABLE.commit: export})
+    _seed_verify_report(stage, [(STABLE, ROW_15, export)])
     matrix_file = tmp_path / "matrix.json"
     matrix_file.write_text(json.dumps([ROW_15]))
 
-    assert (
-        bfv.main(
-            [
-                "--out",
-                str(stage),
-                "--verify-only",
-                str(stage),
-                "--matrix-cmd",
-                f"cat {matrix_file}",
-                "--repo",
-                str(tmp_path),
-            ]
-        )
-        == 1
-    )
+    assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 1
 
 
 def test_issue_2019_target_and_major_filters_scope_strays_to_intersection(
@@ -1488,8 +1993,9 @@ def test_issue_2019_target_and_major_filters_scope_strays_to_intersection(
     monkeypatch.setattr(bfv, "FROZEN_TARGETS", (STABLE, DEVEL))
     stage = tmp_path / "stage"
     stable_export = _stage_valid_artifact(tmp_path, stage, STABLE, ROW_15)
-    _stage_valid_artifact(tmp_path, stage, DEVEL, ROW_15)
-    _stub_verify_exports(monkeypatch, {STABLE.commit: stable_export, DEVEL.commit: stable_export})
+    devel_export = _stage_valid_artifact(tmp_path, stage, DEVEL, ROW_15)
+    _stub_verify_exports(monkeypatch, {STABLE.commit: stable_export, DEVEL.commit: devel_export})
+    _seed_verify_report(stage, [(STABLE, ROW_15, stable_export), (DEVEL, ROW_15, devel_export)])
     (stage / "fbsd16").mkdir(parents=True)
     _write_pkg(stage / "fbsd16" / "random-extra-1.0.pkg", name="random-extra", version="1.0")
 
