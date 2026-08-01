@@ -22,6 +22,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     git_fixture -C "$primary" config user.email human@example.com
     git_fixture -C "$primary" config user.name Human
     git_fixture -C "$primary" config commit.gpgsign false
+    git_fixture -C "$primary" config maintenance.auto false
     ( cd "$primary" && echo seed > seed.txt && git_fixture add seed.txt \
         && git_fixture commit -q -m seed )
     git_fixture -C "$primary" worktree add -q "$wt" -b spec-branch
