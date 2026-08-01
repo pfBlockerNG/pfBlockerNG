@@ -9,7 +9,7 @@ Provider-neutral procedures name three capability tiers — **top / mid / small*
 (deliberately disjoint from the effort-level words, so "high" always means an
 effort value). The machine-readable mapping is `.agents/model-tiers.conf`: the
 **top tier** means `claude-fable-5` in Claude and `gpt-5.6-sol` in Codex; the
-**mid tier** means `claude-opus-4-8` and `gpt-5.6-terra`; the **small tier**
+**mid tier** means `claude-opus-5` and `gpt-5.6-terra`; the **small tier**
 means `claude-sonnet-5` and `gpt-5.6-luna`. A tier selects the model, not
 the effort knob: workflows still set their required effort independently.
 The role families built on these tiers (explorer, planner, implementer,
