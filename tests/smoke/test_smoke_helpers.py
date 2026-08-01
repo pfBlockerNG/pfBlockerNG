@@ -160,13 +160,11 @@ def test_ip_probe_membership_and_rule(deployed_vm: SmokeVM, mock_feeds: object) 
     feed_url = h.write_local_feed(deployed_vm, "smoke_ip_selftest.txt", f"{fed_ip}\n")
     spec = h.IpCase(aliasname="smokeipself", feed_url=feed_url, header="smokeipself")
     with h.CaseContext(deployed_vm, spec):
-        # Use wait_pfctl_table rather than the single-shot pfctl_table_members:
-        # filter_configure is async, so the pf table may not yet be populated
-        # immediately after CaseContext.__enter__ completes the reload.
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        # CaseContext.__enter__ applies the blocking filter sync before this read.
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         assert h.member_present(members, fed_ip), f"{fed_ip} not in {spec.alias}: {members}"
         assert not h.member_present(members, non_fed), f"{non_fed} unexpectedly in {spec.alias}"
-        assert h.rule_references(deployed_vm, spec.alias), f"no rule references {spec.alias}"
+        assert h.pfctl_rule_has_alias(deployed_vm, spec.alias), f"no rule references {spec.alias}"
 
 
 # The dump's own body runs two full three-layer probes on top of the case reload, so the
@@ -175,7 +173,7 @@ def test_ip_probe_membership_and_rule(deployed_vm: SmokeVM, mock_feeds: object) 
 def test_alias_rule_dump_localises_a_present_and_an_absent_rule(deployed_vm: SmokeVM, mock_feeds: object) -> None:
     """``alias_rule_dump``'s [STAGE LOST] verdict must be right against the REAL box.
 
-    A future rule_references failure will be BELIEVED on this verdict — "the rule was never
+    A future pfctl_rule_has_alias failure will be BELIEVED on this verdict — "the rule was never
     generated" accuses the product, "not loaded yet" accuses the test — so the verdict is
     pinned on the live surface, where the pfSsh.php config read, the rules.debug grep and the
     pfctl reads must genuinely work (fakes cannot prove any of those three).
@@ -191,8 +189,8 @@ def test_alias_rule_dump_localises_a_present_and_an_absent_rule(deployed_vm: Smo
     feed_url = h.write_local_feed(deployed_vm, "smoke_dump_selftest.txt", "198.51.100.9\n")
     spec = h.IpCase(aliasname="smokedump", feed_url=feed_url, header="smokedump")
     with h.CaseContext(deployed_vm, spec):
-        assert h.wait_pfctl_table(deployed_vm, spec.alias), f"{spec.alias} never populated"
-        assert h.rule_references(deployed_vm, spec.alias), f"no rule references {spec.alias}"
+        assert h.pfctl_table_members(deployed_vm, spec.alias), f"{spec.alias} never populated"
+        assert h.pfctl_rule_has_alias(deployed_vm, spec.alias), f"no rule references {spec.alias}"
 
         present = h.alias_rule_dump(deployed_vm, spec.alias)
         assert "[STAGE LOST] NONE" in present, f"a rule loaded at every layer was misreported:\n{present}"

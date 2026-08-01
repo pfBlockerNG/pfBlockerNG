@@ -808,13 +808,14 @@ def test_hooks_changed_aliases_ip_and_dnsbl(deployed_vm: SmokeVM, mock_feeds: _M
     # Settle: a first full update processes both feeds (their aliases ARE updated here).
     h.clear_hook_markers(deployed_vm, token)
     h.reload(deployed_vm, "update")
-    # Wait until the IP alias kernel table is actually LOADED before the no-op pass. ADR-40's gate
+    h.apply_filter_sync(deployed_vm)
+    # Ensure the IP alias kernel table is actually LOADED before the no-op pass. ADR-40's gate
     # lists an alias on a reuse-cached pass iff its kernel table is empty (empty($pfctlck) → the #468
     # empty-table self-heal). If the settle update's `pfctl -T replace` load races the next pass's
     # $pfctlck read (slow/contended box), the no-op pass sees an empty table, self-heals, and reports
     # the alias — a non-deterministic false failure of the "empty changed-list" assertion below.
-    # Polling the table non-empty here removes that race (it stays loaded between the two passes).
-    assert h.wait_pfctl_table(deployed_vm, ip_spec.alias), (
+    # The blocking filter apply above makes this one-shot table read authoritative.
+    assert h.pfctl_table_members(deployed_vm, ip_spec.alias), (
         f"IP kernel table {ip_spec.alias} did not populate after the settle update"
     )
 
@@ -914,10 +915,11 @@ def test_hooks_webhook_fires_on_ip_change(
     # this pass WOULD fire the hook — clear the sink afterwards so the no-op assertion
     # below is clean).
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
     # Settle the IP kernel table before the no-op pass — see the race note in
     # test_hooks_changed_aliases_ip_and_dnsbl: an unloaded table makes the no-op pass self-heal
     # (#468) and populate PFB_CHANGED_IP_ALIASES, firing the guard and producing a flaky callback.
-    assert h.wait_pfctl_table(deployed_vm, ip_spec.alias), (
+    assert h.pfctl_table_members(deployed_vm, ip_spec.alias), (
         f"IP kernel table {ip_spec.alias} did not populate after the settle update"
     )
 
@@ -1012,10 +1014,11 @@ def test_hooks_webhook_dnsbl_guard_branch(
     # Settle: a first full update processes both feeds (both WOULD fire here); clear the
     # sink afterwards so the DNSBL-only assertion below is clean.
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
     # Settle the IP kernel table before the DNSBL-only pass — see the race note in
     # test_hooks_changed_aliases_ip_and_dnsbl: an unloaded IP table makes the no-op pass self-heal
     # (#468) and populate PFB_CHANGED_IP_ALIASES, firing the IP guard on a DNSBL-only change.
-    assert h.wait_pfctl_table(deployed_vm, ip_spec.alias), (
+    assert h.pfctl_table_members(deployed_vm, ip_spec.alias), (
         f"IP kernel table {ip_spec.alias} did not populate after the settle update"
     )
     webhook_sink.clear()

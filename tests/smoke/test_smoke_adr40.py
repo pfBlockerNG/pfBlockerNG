@@ -177,9 +177,9 @@ def test_adr40_content_gate_idempotence(adr40_vm: SmokeVM) -> None:
     )
 
     # Before-state: pf table is populated with the settled IP.
-    # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns;
-    # a bare pfctl_table_members read can race and miss the table.
-    members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
+    # Wait for the blocking filter apply before the authoritative table read.
+    h.apply_filter_sync(adr40_vm)
+    members_before = h.pfctl_table_members(adr40_vm, ip_spec.alias)
     assert any(fed_ip in m for m in members_before), (
         f"before-state: pf table {ip_spec.alias} does not contain {fed_ip}: {members_before}"
     )
@@ -194,6 +194,7 @@ def test_adr40_content_gate_idempotence(adr40_vm: SmokeVM) -> None:
     h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
     h.clear_hook_markers(adr40_vm, token)
     h.reload(adr40_vm, "update")
+    h.apply_filter_sync(adr40_vm)
     env_second = h.read_hook_env(adr40_vm, marker)
     assert env_second is not None, "post hook did not fire on the idempotence update"
 
@@ -264,8 +265,8 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
     assert env_settle is not None, "post hook did not fire on the settling update"
 
     # Before-state: only old_ip in the table; new_ip absent.
-    # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns.
-    members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
+    h.apply_filter_sync(adr40_vm)
+    members_before = h.pfctl_table_members(adr40_vm, ip_spec.alias)
     assert any(old_ip in m for m in members_before), (
         f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
     )
@@ -285,6 +286,7 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
     # inspects ONLY this reload's output, not the session-accumulated log (order-independent).
     log_len_before = len(adr40_vm.ssh("cat", h.PFB_LOG).stdout)
     h.reload(adr40_vm, "update")
+    h.apply_filter_sync(adr40_vm)
     env_changed = h.read_hook_env(adr40_vm, marker)
     assert env_changed is not None, "post hook did not fire after feed content change"
 
@@ -418,12 +420,13 @@ def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
         # Settle with OLD IP.
         h.clear_hook_markers(adr40_vm, token)
         h.reload(adr40_vm, "update")
+        h.apply_filter_sync(adr40_vm)
         env_settle = h.read_hook_env(adr40_vm, marker)
         assert env_settle is not None, "post hook did not fire on settling update"
 
         # Before-state: old_ip in table, new_ip absent.
-        # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns.
-        members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
+        # The blocking filter apply above makes this one-shot read authoritative.
+        members_before = h.pfctl_table_members(adr40_vm, ip_spec.alias)
         assert any(old_ip in m for m in members_before), (
             f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
         )
@@ -445,6 +448,7 @@ def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
 
         h.clear_hook_markers(adr40_vm, token)
         h.reload(adr40_vm, "update")
+        h.apply_filter_sync(adr40_vm)
         env_changed = h.read_hook_env(adr40_vm, marker)
         assert env_changed is not None, "post hook did not fire after feed content change (delta mode)"
 
@@ -545,12 +549,13 @@ def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
         # Settle.
         h.clear_hook_markers(adr40_vm, token)
         h.reload(adr40_vm, "update")
+        h.apply_filter_sync(adr40_vm)
         env_settle = h.read_hook_env(adr40_vm, marker)
         assert env_settle is not None, "post hook did not fire on settling update"
 
         # Before-state: old_ip in table, new_ip absent.
-        # Use wait_pfctl_table — filter_configure is async after pfblockerng.php returns.
-        members_before = h.wait_pfctl_table(adr40_vm, ip_spec.alias)
+        # The blocking filter apply above makes this one-shot read authoritative.
+        members_before = h.pfctl_table_members(adr40_vm, ip_spec.alias)
         assert any(old_ip in m for m in members_before), (
             f"before-state: pf table {ip_spec.alias} missing {old_ip}: {members_before}"
         )
@@ -572,6 +577,7 @@ def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
 
         h.clear_hook_markers(adr40_vm, token)
         h.reload(adr40_vm, "update")
+        h.apply_filter_sync(adr40_vm)
         env_changed = h.read_hook_env(adr40_vm, marker)
         assert env_changed is not None, "post hook did not fire after feed change (replace mode)"
 

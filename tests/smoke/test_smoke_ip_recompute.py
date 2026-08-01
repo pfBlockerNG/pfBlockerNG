@@ -214,6 +214,7 @@ def test_recompute_dedup_ownership_across_overlapping_feeds(deployed_vm: SmokeVM
     # priority, pfb_ip_recompute_family_headers()).
     h.inject_ip_lists(deployed_vm, [spec_a, spec_b])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
     a_lines = _lines(deployed_vm, f"{DENYDIR}/r1a_v4.txt")
     b_lines = _lines(deployed_vm, f"{DENYDIR}/r1b_v4.txt")
@@ -227,8 +228,8 @@ def test_recompute_dedup_ownership_across_overlapping_feeds(deployed_vm: SmokeVM
     assert "r1b_v4 203.0.113.44" not in master, f"masterfile kept B's pruned containment row: {master}"
     assert "r1b_v4 198.51.100.211" not in master, f"masterfile kept B's pruned exact-repeat row: {master}"
 
-    a_members = h.wait_pfctl_table(deployed_vm, spec_a.alias)
-    b_members = h.wait_pfctl_table(deployed_vm, spec_b.alias)
+    a_members = h.pfctl_table_members(deployed_vm, spec_a.alias)
+    b_members = h.pfctl_table_members(deployed_vm, spec_b.alias)
     assert h.member_present(a_members, "198.51.100.211"), (
         f"pf table {spec_a.alias} missing exact-repeat winner: {a_members}"
     )
@@ -271,19 +272,21 @@ def test_recompute_v6_snapshot_round_trips_across_static_pass(deployed_vm: Smoke
     h.inject_ip_lists(deployed_vm, [spec])
 
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
     snap_lines = _lines(deployed_vm, f"{SNAPDIR}/r2v6_v6.snap")
     deny_lines_pass1 = _lines(deployed_vm, f"{DENYDIR}/r2v6_v6.txt")
     deny_raw_pass1 = _raw(deployed_vm, f"{DENYDIR}/r2v6_v6.txt")
     expected = sorted(["2001:db8:5678::/64", "2001:db8:5678:1::42"])
     assert sorted(snap_lines) == expected, f"snapshot content wrong after first ingest: {snap_lines}"
     assert sorted(deny_lines_pass1) == expected, f"deny file content wrong after first ingest: {deny_lines_pass1}"
-    members_pass1 = h.wait_pfctl_table(deployed_vm, spec.alias)
+    members_pass1 = h.pfctl_table_members(deployed_vm, spec.alias)
     assert h.member_present(members_pass1, "2001:db8:5678:1::42"), f"pf table missing bare host: {members_pass1}"
     assert h.member_covers(members_pass1, "2001:db8:5678::1"), f"pf table missing /64 coverage: {members_pass1}"
 
     # Held static: no edit, no force_ip_refetch -- updateip's force=true alone
     # reprocesses this alias again from its cached raw body.
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
     deny_raw_pass2 = _raw(deployed_vm, f"{DENYDIR}/r2v6_v6.txt")
     assert deny_raw_pass2 == deny_raw_pass1, (
         f"deny file not byte-identical across a static pass: pass1={deny_raw_pass1!r} pass2={deny_raw_pass2!r}"
@@ -291,7 +294,7 @@ def test_recompute_v6_snapshot_round_trips_across_static_pass(deployed_vm: Smoke
     master = _lines(deployed_vm, MASTERFILE)
     assert "r2v6_v6 2001:db8:5678::/64" in master, f"masterfile missing v6 /64 row after round-trip: {master}"
     assert "r2v6_v6 2001:db8:5678:1::42" in master, f"masterfile missing v6 host row after round-trip: {master}"
-    members_pass2 = h.wait_pfctl_table(deployed_vm, spec.alias)
+    members_pass2 = h.pfctl_table_members(deployed_vm, spec.alias)
     assert h.member_present(members_pass2, "2001:db8:5678:1::42"), (
         f"pf table lost bare host after round-trip: {members_pass2}"
     )
@@ -331,6 +334,7 @@ def test_recompute_rewrites_unchanged_sibling_across_passes(deployed_vm: SmokeVM
     spec_b = h.IpCase(aliasname="r4b", feed_url=feed_b, header="r4b", action="Deny_Both")
     h.inject_ip_lists(deployed_vm, [spec_a, spec_b])
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
 
     # BEFORE: both settle correctly.
     a_before = _lines(deployed_vm, f"{DENYDIR}/r4a_v4.txt")
@@ -342,6 +346,7 @@ def test_recompute_rewrites_unchanged_sibling_across_passes(deployed_vm: SmokeVM
     h.write_local_feed(deployed_vm, "r4_feed_a.txt", "198.51.100.31\n198.51.100.32\n")
     h.force_ip_refetch(deployed_vm, "r4a_v4")
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
 
     a_after = _lines(deployed_vm, f"{DENYDIR}/r4a_v4.txt")
     b_after = _lines(deployed_vm, f"{DENYDIR}/r4b_v4.txt")
@@ -352,7 +357,7 @@ def test_recompute_rewrites_unchanged_sibling_across_passes(deployed_vm: SmokeVM
     assert "r4a_v4 198.51.100.32" in master, f"masterfile missing A's new row: {master}"
     assert "r4b_v4 198.51.100.41" in master, f"masterfile missing B's unchanged row after the family rewrite: {master}"
 
-    b_members = h.wait_pfctl_table(deployed_vm, spec_b.alias)
+    b_members = h.pfctl_table_members(deployed_vm, spec_b.alias)
     assert h.member_present(b_members, "198.51.100.41"), f"pf table {spec_b.alias} lost its member: {b_members}"
 
 
@@ -433,6 +438,7 @@ def test_recompute_closing_refills_placeholder_dup_off_pmax(deployed_vm: SmokeVM
     # collapsed /24; "collapse" (listed 2nd) is the one that ends up empty.
     h.inject_ip_lists(deployed_vm, [spec_anchor, spec_collapse])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
     anchor_lines = _lines(deployed_vm, f"{DENYDIR}/r9hi_v4.txt")
     collapse_lines = _lines(deployed_vm, f"{DENYDIR}/r9lo_v4.txt")
@@ -442,7 +448,7 @@ def test_recompute_closing_refills_placeholder_dup_off_pmax(deployed_vm: SmokeVM
     # No pf-table assertion for the collapsed alias: its mirror is unlinked while the
     # deny file is still empty, before the closing pass refills the placeholder (see
     # test_recompute_closing_refills_placeholder_dup_on).
-    anchor_members = h.wait_pfctl_table(deployed_vm, spec_anchor.alias)
+    anchor_members = h.pfctl_table_members(deployed_vm, spec_anchor.alias)
     assert h.member_covers(anchor_members, "192.0.2.21"), (
         f"pf table lost the anchor's own offending host: {anchor_members}"
     )
@@ -495,6 +501,7 @@ def test_recompute_suppression_realigns_across_sibling_change(deployed_vm: Smoke
     spec_b = h.IpCase(aliasname="r6b", feed_url=feed_b, header="r6b", action="Deny_Both")
     h.inject_ip_lists(deployed_vm, [spec_a, spec_b])
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
 
     # BEFORE: the suppressed IP is genuinely absent (not merely "never checked").
     a_before = _lines(deployed_vm, f"{DENYDIR}/r6a_v4.txt")
@@ -505,6 +512,7 @@ def test_recompute_suppression_realigns_across_sibling_change(deployed_vm: Smoke
     h.write_local_feed(deployed_vm, "r6_feed_b.txt", "172.104.92.31\n")
     h.force_ip_refetch(deployed_vm, "r6b_v4")
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
 
     a_after = _lines(deployed_vm, f"{DENYDIR}/r6a_v4.txt")
     assert suppressed_ip not in a_after, (
@@ -515,7 +523,7 @@ def test_recompute_suppression_realigns_across_sibling_change(deployed_vm: Smoke
         f"unrelated survivor {survivor_ip} dropped by the sibling-triggered rewrite: {a_after}"
     )
 
-    a_members = h.wait_pfctl_table(deployed_vm, spec_a.alias)
+    a_members = h.pfctl_table_members(deployed_vm, spec_a.alias)
     assert not h.member_present(a_members, suppressed_ip), (
         f"pf table {spec_a.alias} still carries the suppressed IP: {a_members}"
     )

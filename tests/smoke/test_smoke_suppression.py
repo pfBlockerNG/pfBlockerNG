@@ -246,9 +246,10 @@ def test_suppression_v4_carves_containing_range_spares_sibling(deployed_vm: Smok
     # needed (unlike the ADR-40 tests, which use the force=false 'update'
     # verb and must call force_ip_refetch explicitly).
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
     # BEFORE: both addresses match the freshly-loaded, UNSUPPRESSED table.
-    members = h.wait_pfctl_table(deployed_vm, spec.alias)
+    members = h.pfctl_table_members(deployed_vm, spec.alias)
     assert members, f"pf table {spec.alias} never populated after the settling update"
     matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, target)
     assert matched, f"expected {target} to MATCH {spec.alias} before suppression; pfctl said: {raw!r}"
@@ -258,6 +259,7 @@ def test_suppression_v4_carves_containing_range_spares_sibling(deployed_vm: Smok
     # WHEN: configure suppression for the target host only, then re-run.
     _set_suppression(deployed_vm, v4=[host_entry])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
     # THEN: the target is carved out; the sibling -- an unrelated feed entry -- is untouched.
     matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, target)
@@ -319,8 +321,9 @@ def test_suppression_v6_carves_containing_range_spares_sibling(deployed_vm: Smok
 
     h.inject_ip_lists(deployed_vm, [companion_spec, v6spec])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
-    members = h.wait_pfctl_table(deployed_vm, v6spec.alias)
+    members = h.pfctl_table_members(deployed_vm, v6spec.alias)
     assert members, f"pf table {v6spec.alias} never populated after the settling update"
     matched, raw = h.pfctl_table_test_raw(deployed_vm, v6spec.alias, target)
     assert matched, f"expected {target} to MATCH {v6spec.alias} before suppression; pfctl said: {raw!r}"
@@ -333,6 +336,7 @@ def test_suppression_v6_carves_containing_range_spares_sibling(deployed_vm: Smok
     # mixed-family case in the same pass.
     _set_suppression(deployed_vm, v6=[host_entry])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
     matched, raw = h.pfctl_table_test_raw(deployed_vm, v6spec.alias, target)
     assert not matched, f"expected {target} to NO LONGER match {v6spec.alias} after suppression; pfctl said: {raw!r}"
@@ -381,8 +385,9 @@ def test_suppression_v4_bare_host_removed(deployed_vm: SmokeVM) -> None:
 
     h.inject(deployed_vm, spec)
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
-    members = h.wait_pfctl_table(deployed_vm, spec.alias)
+    members = h.pfctl_table_members(deployed_vm, spec.alias)
     assert members, f"pf table {spec.alias} never populated after the settling update"
     for ip in (inside_16, removed_host, kept_host):
         matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, ip)
@@ -390,6 +395,7 @@ def test_suppression_v4_bare_host_removed(deployed_vm: SmokeVM) -> None:
 
     _set_suppression(deployed_vm, v4=[host_entry])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
     matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, removed_host)
     assert not matched, f"expected {removed_host} to be REMOVED from {spec.alias}; pfctl said: {raw!r}"
@@ -433,8 +439,9 @@ def test_suppression_v4_subnet_mask_carves_at_granularity(deployed_vm: SmokeVM) 
 
     h.inject(deployed_vm, spec)
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
-    members = h.wait_pfctl_table(deployed_vm, spec.alias)
+    members = h.pfctl_table_members(deployed_vm, spec.alias)
     assert members, f"pf table {spec.alias} never populated after the settling update"
     for ip in (hole_ip, sibling_ip):
         matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, ip)
@@ -442,6 +449,7 @@ def test_suppression_v4_subnet_mask_carves_at_granularity(deployed_vm: SmokeVM) 
 
     _set_suppression(deployed_vm, v4=[hole_subnet])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
     matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, hole_ip)
     assert not matched, (
@@ -501,10 +509,11 @@ def test_suppression_drops_reserved_classes_keeps_public(deployed_vm: SmokeVM) -
 
     h.inject_ip_lists(deployed_vm, [v4spec, v6spec])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
-    members_v6 = h.wait_pfctl_table(deployed_vm, v6spec.alias)
+    members_v6 = h.pfctl_table_members(deployed_vm, v6spec.alias)
     assert members_v6, f"pf table {v6spec.alias} never populated after the update"
-    members_v4 = h.wait_pfctl_table(deployed_vm, v4spec.alias)
+    members_v4 = h.pfctl_table_members(deployed_vm, v4spec.alias)
     assert members_v4, f"pf table {v4spec.alias} never populated after the update"
 
     matched, raw = h.pfctl_table_test_raw(deployed_vm, v6spec.alias, public_v6)
@@ -554,9 +563,10 @@ def test_suppression_cidr_v6_floor_clamps_wide_cidr_to_bare_host(deployed_vm: Sm
 
     h.inject(deployed_vm, spec)
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
     # BEFORE: the floor is absent (Disabled) -- the /48 loads unclamped.
-    members = h.wait_pfctl_table(deployed_vm, spec.alias)
+    members = h.pfctl_table_members(deployed_vm, spec.alias)
     assert members, f"pf table {spec.alias} never populated after the settling update"
     matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, inside_cidr)
     assert matched, f"expected {inside_cidr} (inside the un-floored /48) to MATCH {spec.alias}; pfctl said: {raw!r}"
@@ -566,6 +576,7 @@ def test_suppression_cidr_v6_floor_clamps_wide_cidr_to_bare_host(deployed_vm: Sm
     # WHEN: set the floor above the feed's /48, then re-run.
     _set_suppression_cidr_v6(deployed_vm, "56")
     h.reload(deployed_vm, "updateip", wait_unbound=False)
+    h.apply_filter_sync(deployed_vm)
 
     # THEN: the /48 collapsed to its bare base address -- the wide span no longer matches...
     matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, inside_cidr)

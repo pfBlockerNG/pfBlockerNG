@@ -472,13 +472,14 @@ def test_714_b3_v6_regex_parser_success_not_double_counted(deployed_vm: SmokeVM)
 
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "update")
+        h.apply_filter_sync(deployed_vm)
 
         # THEN: both addresses reached the pf table (proves they were actually parsed
         # and collected, not silently dropped by some other mechanism). By-VALUE
         # comparison (h.ip_in): pf/pfBlockerNG may render a compressed literal
         # differently (e.g. an equivalent expanded form), which a substring check
         # would miss.
-        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
         for ip in good_lines:
             assert h.ip_in(ip, members), f"expected valid IPv6 {ip} in pf table {spec.alias}: {members}"
 

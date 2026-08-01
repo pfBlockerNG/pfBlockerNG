@@ -1,22 +1,10 @@
-"""``alias_rule_dump`` must name WHICH layer lost a pfB alias's auto-rule.
-
-Issue #1239 filed a ``rule_references`` smoke flake with a fabricated cause ("the check
-does not poll" — it has polled since PR #133). The real cause is still unknown, and the two
-candidates demand opposite responses: the rule was never written to config.xml (a PRODUCT
-bug — a populated block table with nothing enforcing it) versus the rule was written and
-emitted but pf had not loaded it yet (a genuine reload lag, i.e. a test-only flake).
-
-Only the layer that still holds the rule tells them apart, so the on-failure dump reports a
-``[STAGE LOST]`` verdict across CONFIG -> RULES.DEBUG -> LIVE PF. This module pins that
-verdict for every layer combination off-VM (``tests.smoke.helpers`` is import-safe —
-precedent: ``test_smoke_unbound_ready.py``), so the next live occurrence localises itself
-instead of being re-guessed.
-"""
+"""Pin the layered alias-rule diagnostic and forbid retired pfctl polls."""
 
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -111,7 +99,7 @@ def _fake_php_eval(rows: str, *, returncode: int = 0, raw: str | None = None, ra
         # Scenario: emitted into rules.debug but not yet loaded into pf -> the genuine
         # reload-lag verdict (or a pfctl load rejection), i.e. a test-only flake.
         (CFG_ROW, DEBUG_ROW, "", "LIVE PF"),
-        # Scenario: present at all three layers -> rule_references' poll read stale state;
+        # Scenario: present at all three layers -> the read saw stale state;
         # the rule IS there, so the assertion, not the product, is what to look at.
         (CFG_ROW, DEBUG_ROW, LIVE_ROW, "NONE"),
     ],
@@ -382,18 +370,36 @@ def _php_snippet_for(alias: str) -> str:
     return captured[0]
 
 
-def test_ruleset_layers_use_the_same_match_rule_as_the_assertion_they_explain() -> None:
-    """The dump explains a rule_references failure, so it must not disagree with it.
+def test_public_dump_uses_exact_alias_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The public dump includes only rules that reference the requested table."""
+    monkeypatch.setattr(helpers, "php_eval", _fake_php_eval(CFG_ROW))
+    foreign = "block drop in quick from <pfB_Other_v4> to any"
+    generic = "block drop in quick on em0 # mentions harness"
+    vm = _FakeVM(
+        rules_debug=f"{DEBUG_ROW}\n{foreign}\n{generic}\n",
+        live_rules=f"{LIVE_ROW}\n{foreign}\n{generic}\n",
+        tables=f"{ALIAS}\npfB_Other_v4\n",
+    )
 
-    If the dump applied a looser (or stricter) match than rule_references, it could report
-    the rule as PRESENT at live pf on the very run where rule_references declared it absent —
-    a self-contradicting diagnostic. Both route through rule_line_references.
-    """
-    assert helpers.rule_line_references(f"block drop in quick from <{ALIAS}> to any", ALIAS)
-    assert not helpers.rule_line_references("block drop in quick from <pfB_Other_v4> to any", ALIAS)
-    # A non-pfB_ alias gets the exact table-reference match ONLY — a bare token must not
-    # match a foreign rule (the baked CI harness rules mention plenty of generic words).
-    assert not helpers.rule_line_references("block drop in quick on em0 # mentions harness", "harness")
+    dump = helpers.alias_rule_dump(vm, ALIAS)  # type: ignore[arg-type]
+
+    assert f"[RULES.DEBUG {ALIAS}: 1] {DEBUG_ROW}" in dump
+    assert f"[LIVE PF -sr {ALIAS}: 1] {LIVE_ROW}" in dump
+    assert foreign not in dump
+    assert generic not in dump
+
+
+def test_no_retired_pf_poll_names_remain() -> None:
+    """Every Python smoke file must use sync boundaries plus one-shot reads."""
+    retired = ["_".join(("wait", "pfctl", "table")), "_".join(("rule", "references"))]
+    root = Path(__file__).parent
+    hits = [
+        (str(path), token)
+        for path in sorted(root.rglob("*.py"))
+        for token in retired
+        if token in path.read_text(encoding="utf-8")
+    ]
+    assert not hits, "retired pf poll names found:\n" + "\n".join(f"{path}: {token}" for path, token in hits)
 
 
 @pytest.mark.parametrize(

@@ -142,7 +142,7 @@ def test_ip_alias_table_and_rule(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
         members = h.pfctl_table_members(deployed_vm, spec.alias)
         assert h.member_present(members, fed_ip), f"{fed_ip} not in {spec.alias}: {members}"
         assert not h.member_present(members, non_fed), f"{non_fed} unexpectedly in {spec.alias}: {members}"
-        assert h.rule_references(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
+        assert h.pfctl_rule_has_alias(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
 
 
 # --------------------------------------------------------------------------- #
@@ -1029,8 +1029,7 @@ def test_dnsbl_fail_closed_broken_manifest(
 # --------------------------------------------------------------------------- #
 
 
-# The 30s default body cap cannot cover reload + two 30s table polls + two ~20s
-# rule_references polls + the on-failure dump: it kills the diagnostic before it prints
+# The 30s default body cap cannot cover reload + two table reads + the on-failure dump.
 # (issue #1239). The budget is a deadlock guard here, not a pacer.
 @pytest.mark.timeout(180)
 def test_dnsblip_dual_stack_partition(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -1050,12 +1049,8 @@ def test_dnsblip_dual_stack_partition(deployed_vm: SmokeVM, mock_feeds: _MockFee
     this pins is specifically the dual-stack PARTITION (families never collide on one
     table).
 
-    ``pfB_DNSBLIP_v4`` / ``pfB_DNSBLIP_v6`` are populated ASYNC — ``filter_configure``
-    lands them slightly after ``pfblockerng.php update`` returns (absent on a sync read
-    right after the reload, present in teardown diagnostics — issue #35). So the table
-    read goes through the bounded :func:`~helpers.wait_pfctl_table` poll, mirroring the
-    ``rule_references`` reload-lag pattern; a real miss surfaces as an assertion on the
-    empty list (with diagnostics uploaded), never a hang.
+    ``pfB_DNSBLIP_v4`` / ``pfB_DNSBLIP_v6`` are read after one blocking filter apply,
+    making each single-shot table result authoritative.
     """
     # Given: a feed carrying exactly one literal per family.
     v4 = "203.0.113.7"  # RFC 5737 documentation range
@@ -1072,12 +1067,13 @@ def test_dnsblip_dual_stack_partition(deployed_vm: SmokeVM, mock_feeds: _MockFee
         dnsbl_ip_action="Deny_Both",
     )
     with h.CaseContext(deployed_vm, spec, scope="update"):
-        # When: read each per-family table through the bounded async-population poll.
-        # Then: both tables exist and are non-empty (empty list -> clear assertion).
-        v4_members = h.wait_pfctl_table(deployed_vm, "pfB_DNSBLIP_v4")
-        v6_members = h.wait_pfctl_table(deployed_vm, "pfB_DNSBLIP_v6")
-        assert v4_members, "pfB_DNSBLIP_v4 never appeared/populated within the poll window"
-        assert v6_members, "pfB_DNSBLIP_v6 never appeared/populated within the poll window"
+        h.apply_filter_sync(deployed_vm)
+        # When: read each per-family table once after the sync boundary.
+        # Then: both tables exist and are non-empty.
+        v4_members = h.pfctl_table_members(deployed_vm, "pfB_DNSBLIP_v4")
+        v6_members = h.pfctl_table_members(deployed_vm, "pfB_DNSBLIP_v6")
+        assert v4_members, "pfB_DNSBLIP_v4 missing after filter sync"
+        assert v6_members, "pfB_DNSBLIP_v6 missing after filter sync"
 
         # Then: each table holds ONLY its own family (the partition — no collision / merge).
         assert h.member_present(v4_members, v4), f"{v4} not in pfB_DNSBLIP_v4: {v4_members}"
@@ -1086,13 +1082,12 @@ def test_dnsblip_dual_stack_partition(deployed_vm: SmokeVM, mock_feeds: _MockFee
         assert any(":" in m for m in v6_members), f"no IPv6 in pfB_DNSBLIP_v6: {v6_members}"
         assert not any(_is_v4_literal(m) for m in v6_members), f"IPv4 leaked into pfB_DNSBLIP_v6: {v6_members}"
 
-        # Then: inet/inet6 rules reference the matching per-family table. rule_references
-        # already polls, so a False here is NOT an early read — dump the three layers so the
-        # failure says WHICH one lost the rule (issue #1239) instead of being re-guessed.
-        assert h.rule_references(deployed_vm, "pfB_DNSBLIP_v4"), (
+        # Then: inet/inet6 rules reference the matching per-family table. On failure, dump
+        # the three layers so the report says WHICH one lost the rule (issue #1239).
+        assert h.pfctl_rule_has_alias(deployed_vm, "pfB_DNSBLIP_v4"), (
             "no rule references pfB_DNSBLIP_v4\n" + h.alias_rule_dump(deployed_vm, "pfB_DNSBLIP_v4")
         )
-        assert h.rule_references(deployed_vm, "pfB_DNSBLIP_v6"), (
+        assert h.pfctl_rule_has_alias(deployed_vm, "pfB_DNSBLIP_v6"), (
             "no rule references pfB_DNSBLIP_v6\n" + h.alias_rule_dump(deployed_vm, "pfB_DNSBLIP_v6")
         )
 

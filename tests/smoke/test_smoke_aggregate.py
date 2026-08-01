@@ -26,7 +26,7 @@ WHAT THIS FILE AUTOMATES (ADR §7 manual-smoke checklist):
   ``pfB_Deny_Aggregated_v4`` table is ABSENT and its ``.lst`` does not exist (the OFF
   branch / byte-identical baseline).
 * **Deny aggregate on + Native = no rule** -- select ``["Deny"]`` ⇒ the table is built
-  with the fed IP and ``rule_references`` is FALSE (Native ⇒ no firewall rule); the
+  with the fed IP and ``pfctl_rule_has_alias`` is FALSE (Native ⇒ no firewall rule); the
   member table ``pfB_<x>_v4`` stays present (additive).
 * **Cross-type, no leakage** -- a Permit member with ``["Permit"]`` selected ⇒ its IP is
   in ``pfB_Permit_Aggregated_v4`` and ABSENT from ``pfB_Deny_Aggregated_v4`` (which is
@@ -154,12 +154,14 @@ def test_aggregate_none_selected_is_noop(deployed_vm: SmokeVM) -> None:
     spec = h.IpCase(aliasname="aggnoop", feed_url=feed, header="aggnoop", action="Deny_Both")
     h.inject(deployed_vm, spec)
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
 
     # The member table DID build (the denydir has content) — so the aggregate's absence
-    # is a real OFF-branch result, not just "nothing ran". Poll: the member pf table lands
-    # via filter_configure slightly AFTER the update CLI returns (issue #35), so a synchronous
-    # pfctl_tables read races it; wait_pfctl_table polls until it is present + non-empty.
-    assert h.wait_pfctl_table(deployed_vm, spec.alias), f"member table {spec.alias} missing — injection did not build"
+    # is a real OFF-branch result, not just "nothing ran". The blocking filter apply above
+    # makes the following one-shot table read authoritative.
+    assert h.pfctl_table_members(deployed_vm, spec.alias), (
+        f"member table {spec.alias} missing — injection did not build"
+    )
     assert agg not in h.pfctl_tables(deployed_vm), f"aggregate {agg} built with NOTHING selected (OFF branch broken)"
     assert deployed_vm.ssh("test", "-f", consumer).returncode != 0, (
         f"aggregate consumer {consumer} exists with NOTHING selected (OFF branch broken)"
@@ -179,7 +181,7 @@ def test_aggregate_deny_builds_table_native_no_rule(deployed_vm: SmokeVM) -> Non
         ``pfB_aggdeny_v4`` therefore builds,
       When ``pfb_agg_types`` selects ``["Deny"]`` and a full ``update`` runs,
       Then ``pfB_Deny_Aggregated_v4`` is loaded and CONTAINS the fed IP (the union of the
-        denydir), and ``rule_references(pfB_Deny_Aggregated_v4)`` is FALSE — Native means
+        denydir), and ``pfctl_rule_has_alias(pfB_Deny_Aggregated_v4)`` is FALSE — Native means
         NO firewall rule, the load-bearing ADR-11 contract. The member table stays present
         (the aggregate is ADDITIVE — it does not consume/replace the per-feed table).
     """
@@ -191,14 +193,19 @@ def test_aggregate_deny_builds_table_native_no_rule(deployed_vm: SmokeVM) -> Non
     h.inject(deployed_vm, spec)
     h.set_aggregate_types(deployed_vm, ["Deny"])
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
 
-    members = h.wait_pfctl_table(deployed_vm, agg)
+    members = h.pfctl_table_members(deployed_vm, agg)
     assert h.member_present(members, fed_ip), f"fed Deny IP {fed_ip} not in aggregate {agg}: {members}"
     # Native ⇒ no firewall rule references the aggregate alias.
-    assert not h.rule_references(deployed_vm, agg), f"aggregate {agg} is referenced by a pf rule — Native must add NONE"
+    assert not h.pfctl_rule_has_alias(deployed_vm, agg), (
+        f"aggregate {agg} is referenced by a pf rule — Native must add NONE"
+    )
     # Additive: the per-feed member table is untouched/present alongside the aggregate
-    # (poll — the member table can land via filter_configure after the CLI returns, issue #35).
-    assert h.wait_pfctl_table(deployed_vm, spec.alias), f"member table {spec.alias} vanished — aggregate not additive"
+    # One sync covers both member-table reads below.
+    assert h.pfctl_table_members(deployed_vm, spec.alias), (
+        f"member table {spec.alias} vanished — aggregate not additive"
+    )
     assert h.member_present(h.pfctl_table_members(deployed_vm, spec.alias), fed_ip), (
         f"member table {spec.alias} lost {fed_ip} — aggregate perturbed the source table"
     )
@@ -230,8 +237,9 @@ def test_aggregate_permit_does_not_leak_into_deny(deployed_vm: SmokeVM) -> None:
     h.inject(deployed_vm, spec)
     h.set_aggregate_types(deployed_vm, ["Permit"])
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
 
-    permit_members = h.wait_pfctl_table(deployed_vm, permit_agg)
+    permit_members = h.pfctl_table_members(deployed_vm, permit_agg)
     assert h.member_present(permit_members, fed_ip), f"Permit IP {fed_ip} not in {permit_agg}: {permit_members}"
     # Deny aggregate is NOT selected ⇒ never built ⇒ absent/empty and free of the Permit IP.
     assert _table_absent_or_empty(deployed_vm, deny_agg), (
@@ -282,7 +290,8 @@ def test_aggregate_additive_across_combination(deployed_vm: SmokeVM) -> None:
     # BEFORE: only Deny selected ⇒ Deny aggregate present, Permit aggregate absent.
     h.set_aggregate_types(deployed_vm, ["Deny"])
     h.reload(deployed_vm, "update")
-    deny_members_before = h.wait_pfctl_table(deployed_vm, deny_agg)
+    h.apply_filter_sync(deployed_vm)
+    deny_members_before = h.pfctl_table_members(deployed_vm, deny_agg)
     assert h.member_present(deny_members_before, deny_ip), f"Deny IP {deny_ip} not in {deny_agg}: {deny_members_before}"
     assert _table_absent_or_empty(deployed_vm, permit_agg), (
         f"{permit_agg} present though only Deny selected: {h.pfctl_tables(deployed_vm)}"
@@ -291,10 +300,11 @@ def test_aggregate_additive_across_combination(deployed_vm: SmokeVM) -> None:
     # AFTER: grow to {Deny,Permit} ⇒ both aggregates present with their own contents.
     h.set_aggregate_types(deployed_vm, ["Deny", "Permit"])
     h.reload(deployed_vm, "update")
-    assert h.member_present(h.wait_pfctl_table(deployed_vm, deny_agg), deny_ip), (
+    h.apply_filter_sync(deployed_vm)
+    assert h.member_present(h.pfctl_table_members(deployed_vm, deny_agg), deny_ip), (
         f"Deny IP {deny_ip} dropped from {deny_agg} after adding Permit"
     )
-    assert h.member_present(h.wait_pfctl_table(deployed_vm, permit_agg), permit_ip), (
+    assert h.member_present(h.pfctl_table_members(deployed_vm, permit_agg), permit_ip), (
         f"Permit IP {permit_ip} not in {permit_agg} after selecting it"
     )
     # The per-feed member tables are unchanged (additive): both still present + hold their IP.
@@ -327,6 +337,7 @@ def test_aggregate_empty_union_writes_never_empty_consumer(deployed_vm: SmokeVM)
 
     h.set_aggregate_types(deployed_vm, ["Match"])
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
 
     assert deployed_vm.ssh("test", "-f", consumer).returncode == 0, f"never-empty consumer {consumer} missing"
     body = deployed_vm.ssh("cat", consumer).stdout
@@ -362,12 +373,14 @@ def test_aggregate_teardown_on_deselect(deployed_vm: SmokeVM) -> None:
     # BEFORE: Deny selected ⇒ table + consumer exist.
     h.set_aggregate_types(deployed_vm, ["Deny"])
     h.reload(deployed_vm, "update")
-    assert h.member_present(h.wait_pfctl_table(deployed_vm, agg), fed_ip), f"{agg} not built before teardown"
+    h.apply_filter_sync(deployed_vm)
+    assert h.member_present(h.pfctl_table_members(deployed_vm, agg), fed_ip), f"{agg} not built before teardown"
     assert deployed_vm.ssh("test", "-f", consumer).returncode == 0, f"consumer {consumer} missing before teardown"
 
     # AFTER: deselect everything ⇒ table gone + consumer removed.
     h.set_aggregate_types(deployed_vm, [])
     h.reload(deployed_vm, "update")
+    h.apply_filter_sync(deployed_vm)
     assert agg not in h.pfctl_tables(deployed_vm), f"{agg} still loaded after deselect — teardown left an orphan table"
     assert deployed_vm.ssh("test", "-f", consumer).returncode != 0, (
         f"consumer {consumer} still present after deselect — teardown left an orphan file"
@@ -429,9 +442,10 @@ def test_aggregate_post_hook_sees_fresh_table_and_changed_alias(deployed_vm: Smo
         h.clear_hook_markers(deployed_vm, token)
         deployed_vm.ssh("/bin/rm", "-f", table_marker)
         h.reload(deployed_vm, "update")
+        h.apply_filter_sync(deployed_vm)
 
         # BEFORE: the settled aggregate does NOT yet contain the new IP.
-        settled = h.wait_pfctl_table(deployed_vm, agg)
+        settled = h.pfctl_table_members(deployed_vm, agg)
         assert h.member_present(settled, settle_ip), f"settle IP {settle_ip} not in {agg} after settle: {settled}"
         assert not h.member_present(settled, new_ip), (
             f"new IP {new_ip} already in {agg} before the feed change — cannot prove freshness"
@@ -444,6 +458,7 @@ def test_aggregate_post_hook_sees_fresh_table_and_changed_alias(deployed_vm: Smo
         h.clear_hook_markers(deployed_vm, token)
         deployed_vm.ssh("/bin/rm", "-f", table_marker)
         h.reload(deployed_vm, "update")
+        h.apply_filter_sync(deployed_vm)
 
         # (a) The table the hook recorded contains the NEW IP — proof the hook saw the FRESH,
         #     loaded aggregate (built before the post hook), never the stale pre-update content.
@@ -480,8 +495,8 @@ def test_aggregate_deny_includes_dnsblip(deployed_vm: SmokeVM) -> None:
         ``dnsbl_ip_action="Deny_Both"`` (collect DNSBL-IP into the Deny dir),
       When ``pfb_agg_types=["Deny"]`` and a full ``update`` runs,
       Then ``198.51.100.17`` (via ``pfB_DNSBLIP_v4``) is present in
-        ``pfB_Deny_Aggregated_v4``. The DNSBLIP table population is legitimately async
-        (issue #35), so we ``wait_pfctl_table`` on the aggregate (bounded poll).
+        ``pfB_Deny_Aggregated_v4``. A blocking filter apply precedes the authoritative
+        ``pfctl_table_members`` reads on both tables.
     """
     dnsblip = "198.51.100.17"
     agg = h.aggregate_table("Deny", "v4")
@@ -501,13 +516,14 @@ def test_aggregate_deny_includes_dnsblip(deployed_vm: SmokeVM) -> None:
     h.set_aggregate_types(deployed_vm, ["Deny"])
     h.reload(deployed_vm, "update")
 
+    h.apply_filter_sync(deployed_vm)
     # Sanity: the DNSBLIP member table itself collected the literal (the fold's source).
-    dnsblip_members = h.wait_pfctl_table(deployed_vm, "pfB_DNSBLIP_v4")
+    dnsblip_members = h.pfctl_table_members(deployed_vm, "pfB_DNSBLIP_v4")
     assert h.member_present(dnsblip_members, dnsblip), (
         f"DNSBLIP {dnsblip} not collected into pfB_DNSBLIP_v4: {dnsblip_members}"
     )
     # The Deny aggregate folds the denydir (incl. DNSBLIP) in. Use CIDR COVERAGE, not exact
     # membership: the aggregate is iprange-collapsed, so the DNSBLIP IP can be folded into a
     # supernet (e.g. .16 + .17 -> .16/31) — present in the set, but not as its bare literal.
-    agg_members = h.wait_pfctl_table(deployed_vm, agg)
+    agg_members = h.pfctl_table_members(deployed_vm, agg)
     assert h.member_covers(agg_members, dnsblip), f"DNSBLIP {dnsblip} did not fold into {agg}: {agg_members}"

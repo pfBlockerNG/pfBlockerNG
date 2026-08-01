@@ -520,14 +520,14 @@ def test_alerts_invalid_actions_leave_state_unchanged_and_addsuppress_writes_exa
         custom_path = f"{CFG_IPV4_LISTS}/0/custom"
         helpers.inject(vm, spec)
         helpers.reload(vm, "updateip")
-        table_before = sorted(helpers.wait_pfctl_table(vm, hostile_table))
+        helpers.apply_filter_sync(vm)
+        table_before = sorted(helpers.pfctl_table_members(vm, hostile_table))
         assert table_before, f"{hostile_table} did not populate before hostile action"
         # Build the live table under Deny_Both first, then change only the
         # persisted row classification. Permit_Inbound with the harness's
         # default protocol does not declare a live table, while Alerts derives
-        # whitelist metadata from the current config row. The bounded table
-        # wait must finish before this write because filter_configure can land
-        # asynchronously after updateip returns. Avoiding a second reload then
+        # whitelist metadata from the current config row. The blocking filter
+        # apply above settles the table before this write. Avoiding a second reload then
         # leaves one real table plus matching Permit metadata: exactly the two
         # preconditions raw ip_white forwarding needs to mutate state.
         classify_result = helpers.php_eval(
@@ -616,10 +616,11 @@ def test_addsuppress_v4_carves_containing_range_and_spares_sibling(
 
     helpers.inject(vm, spec)
     helpers.reload(vm, "updateip")
+    helpers.apply_filter_sync(vm)
     try:
-        # BEFORE: the table is populated (filter_configure lands async after the
-        # CLI returns, hence the poll) and both addresses match it live.
-        members = helpers.wait_pfctl_table(vm, table)
+        # BEFORE: the table is populated after the blocking filter apply and both
+        # addresses match it live.
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
         assert matched, f"{target} expected to match pf table {table} before suppression; pfctl said: {raw!r}"
@@ -687,8 +688,9 @@ def test_addsuppress_v6_carves_containing_range_and_spares_sibling(
 
     helpers.inject(vm, spec)
     helpers.reload(vm, "updateip")
+    helpers.apply_filter_sync(vm)
     try:
-        members = helpers.wait_pfctl_table(vm, table)
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
         assert matched, f"{target} expected to match pf table {table} before suppression; pfctl said: {raw!r}"
@@ -753,6 +755,7 @@ def test_addsuppress_v4_already_covered_by_broader_entry_skips_duplicate(
 
     helpers.inject(vm, spec)
     helpers.reload(vm, "updateip")
+    helpers.apply_filter_sync(vm)
     try:
         # GIVEN: a broader manual suppression entry already covers the target
         # -- seeded directly via config (mirroring a prior manual "+"/edit),
@@ -768,7 +771,7 @@ def test_addsuppress_v4_already_covered_by_broader_entry_skips_duplicate(
         # BEFORE: the target still matches the live table (the broader
         # suppression entry is config-only until this point -- no reload ran
         # since it was seeded).
-        members = helpers.wait_pfctl_table(vm, table)
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
         assert matched, (
@@ -848,6 +851,7 @@ def test_delete_ip_v4_unsuppresses_broader_entry_and_restores_block(
 
     helpers.inject(vm, spec)
     helpers.reload(vm, "updateip")
+    helpers.apply_filter_sync(vm)
     try:
         # GIVEN: seed the broader manual suppression entry directly (mirrors a
         # prior manual customlist edit, not one produced by addsuppress here).
@@ -861,7 +865,7 @@ def test_delete_ip_v4_unsuppresses_broader_entry_and_restores_block(
 
         # BEFORE: the table exists (the sibling populated it) and does NOT cover
         # the suppressed hole; the /28 entry is present in v4suppression.
-        members = helpers.wait_pfctl_table(vm, table)
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         assert supp_entry in _suppression_entries(vm, CFG_V4SUPPRESSION), (
             f"{supp_entry} not present in v4suppression before the un-suppress POST"
@@ -928,6 +932,7 @@ def test_delete_ip_v6_unsuppresses_entry_and_restores_block(
 
     helpers.inject(vm, spec)
     helpers.reload(vm, "updateip")
+    helpers.apply_filter_sync(vm)
     try:
         supp_b64 = base64.b64encode(f"{supp_entry} # smoke-unsuppress\r\n".encode()).decode()
         helpers.php_eval(
@@ -939,7 +944,7 @@ def test_delete_ip_v6_unsuppresses_entry_and_restores_block(
 
         # BEFORE: the table exists (the sibling populated it) and does NOT cover
         # the suppressed hole; the /64 entry is present in v6suppression.
-        members = helpers.wait_pfctl_table(vm, table)
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         assert supp_entry in _suppression_entries(vm, CFG_V6SUPPRESSION), (
             f"{supp_entry} not present in v6suppression before the un-suppress POST"
@@ -1123,9 +1128,10 @@ def test_ip_unlock_v4_carves_containing_range_relock_restores_and_spares_sibling
 
     helpers.inject(vm, spec)
     helpers.reload(vm, "updateip")
+    helpers.apply_filter_sync(vm)
     try:
         # BEFORE: the table is populated and both addresses match it live.
-        members = helpers.wait_pfctl_table(vm, table)
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
         assert matched, f"{target} expected to match pf table {table} before unlock; pfctl said: {raw!r}"
@@ -1201,8 +1207,9 @@ def test_ip_unlock_v6_carves_containing_range_relock_restores_and_spares_sibling
 
     helpers.inject(vm, spec)
     helpers.reload(vm, "updateip")
+    helpers.apply_filter_sync(vm)
     try:
-        members = helpers.wait_pfctl_table(vm, table)
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
         assert matched, f"{target} expected to match pf table {table} before unlock; pfctl said: {raw!r}"
@@ -1273,8 +1280,9 @@ def test_ip_unlock_rejects_invalid_ip_no_mutation(
 
     helpers.inject(vm, spec)
     helpers.reload(vm, "updateip")
+    helpers.apply_filter_sync(vm)
     try:
-        members = helpers.wait_pfctl_table(vm, table)
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
 
         store_before = _ip_unlock_hosts(vm)
@@ -1375,8 +1383,9 @@ def test_ip_unlock_double_punch_v4_second_punch_keeps_first_carved(
         # must still hit `finally: helpers.reset(vm)`.
         helpers.inject(vm, spec)
         helpers.reload(vm, "updateip")
+        helpers.apply_filter_sync(vm)
         # BEFORE: the table is populated and every address matches it live.
-        members = helpers.wait_pfctl_table(vm, table)
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         for host in (first, second, third_inside, sibling):
             matched, raw = helpers.pfctl_table_test_raw(vm, table, host)
@@ -1472,7 +1481,8 @@ def test_ip_unlock_double_punch_v6_second_punch_keeps_first_carved(
         # must still hit `finally: helpers.reset(vm)`.
         helpers.inject(vm, spec)
         helpers.reload(vm, "updateip")
-        members = helpers.wait_pfctl_table(vm, table)
+        helpers.apply_filter_sync(vm)
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         for host in (first, second, third_inside, sibling):
             matched, raw = helpers.pfctl_table_test_raw(vm, table, host)
@@ -1564,9 +1574,10 @@ def test_ip_unlock_not_currently_blocked_records_nothing(
         # must still hit `finally: helpers.reset(vm)`.
         helpers.inject(vm, spec)
         helpers.reload(vm, "updateip")
+        helpers.apply_filter_sync(vm)
         # BEFORE: the table is populated; the member matches, the target does not
         # (the before-state gate -- "not currently blocked" must be genuinely true).
-        members = helpers.wait_pfctl_table(vm, table)
+        members = helpers.pfctl_table_members(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
         matched, raw = helpers.pfctl_table_test_raw(vm, table, member)
         assert matched, f"{member} expected to match pf table {table} before the test; pfctl said: {raw!r}"
