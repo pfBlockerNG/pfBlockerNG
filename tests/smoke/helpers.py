@@ -1075,6 +1075,24 @@ def config_get(vm: SmokeVM, path: str, *, timeout: float = 60.0) -> str:
     return out[start + len(_CFG_VAL_OPEN) : end]
 
 
+def config_set(vm: SmokeVM, path: str, value: str, *, timeout: float = 60.0) -> None:
+    """Write one scalar config value back VERBATIM (the restore half of config_get).
+
+    Restores must preserve the stored token exactly: a captured canonical ``'off'``
+    round-trips as ``'off'``, never degraded to the raw ``''`` the boolean toggle
+    helpers write (issue #1947 — ``'' != 'off'`` fails a strict restore assert even
+    though both mean Off under the #1887 toggle vocabulary).
+    """
+    snippet = (
+        f"config_set_path({_php_str(path)}, {_php_str(value)});\n"
+        "write_config('pfBlockerNG smoke: restore config value verbatim');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"config_set({path!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
 def _php_str(value: str) -> str:
     """Render a Python str as a single-quoted PHP string literal."""
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
