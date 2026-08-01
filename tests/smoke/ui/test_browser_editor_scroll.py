@@ -256,7 +256,7 @@ def _caret_offset_x(content: Locator) -> int | None:
     )
 
 
-def _assert_the_keyboard_is_up(content: Locator) -> dict[str, float]:
+def _assert_the_keyboard_is_up(content: Locator) -> dict[str, float | None]:
     """Preconditions every keyboard-open test shares, and returns the reading.
 
     A page-scale factor that silently failed to apply, or a document with nothing to
@@ -480,8 +480,8 @@ def test_hook_editor_still_follows_the_caret_off_the_right_edge(
     # The keyboard state has to be genuinely reached, or the fix this guards against --
     # pinning the horizontal position while the keyboard is up -- would sail through. Not
     # the sibling's caret-below-the-viewport preconditions though: End makes CodeMirror
-    # scroll to the caret, which brings it back into view vertically (measured on the live
-    # VM: belowBy=-1162), so requiring it below the viewport here can never hold.
+    # scroll to the caret, bringing it back into view vertically, so requiring it below
+    # the viewport here can never hold.
     _assert_the_keyboard_is_up(content)
 
     before = _settled_scroll_left(content)
