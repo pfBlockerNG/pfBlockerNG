@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
+from .render_oracle import body_has_php_error
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
@@ -1082,8 +1083,8 @@ def test_ipv6_suppression_cidr_select_persists_and_reloads(
             "category GET (reload) returned the login form (session lost)"
         )
         body = reload_resp.text
-        for bad in ("Fatal error", "Parse error", "Warning", "Notice", "Uncaught"):
-            assert bad not in body, f"reloaded v6 edit page contains PHP error: {bad!r}"
+        diag = body_has_php_error(body)
+        assert diag is None, f"reloaded v6 edit page contains PHP diagnostic: {diag!r}"
         assert 'name="suppression_cidr_v6"' in body, "reloaded v6 form has no suppression_cidr_v6 select"
         assert _option_selected(body, "32"), (
             "reloaded v6 form did not render suppression_cidr_v6 option '32' as selected"
@@ -1103,8 +1104,8 @@ def test_ipv6_suppression_cidr_select_persists_and_reloads(
             _post_form(webui, _ipv4_payload(v4_rowid, "smokeip4sym", action="Deny_Both"))
             v4_resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4", "rowid": str(v4_rowid)})
             assert not looks_like_login_page(v4_resp.text), "v4 category GET returned the login form (session lost)"
-            for bad in ("Fatal error", "Parse error", "Warning", "Notice", "Uncaught"):
-                assert bad not in v4_resp.text, f"existing-row v4 edit page contains PHP error: {bad!r}"
+            v4_diag = body_has_php_error(v4_resp.text)
+            assert v4_diag is None, f"existing-row v4 edit page contains PHP diagnostic: {v4_diag!r}"
             assert 'name="suppression_cidr_v6"' not in v4_resp.text, (
                 "v4 edit page must not render the v6-only 'suppression_cidr_v6' select"
             )
@@ -1150,15 +1151,16 @@ def test_ipv4_category_edit_renders_alias_type_help_text(
         - HTTP 200.
         - Body contains ``Must be a Port-type alias.``
         - Body contains ``Must be an address-type (Host, Network, URL or URL Table) alias.``
-        - Body free of ``Fatal error``, ``Parse error``, ``Warning``, ``Notice``,
-          ``Uncaught`` (standard ui_render guarantee).
+        - Body free of any rendered PHP-diagnostic SHAPE (:func:`body_has_php_error`;
+          the standard ui_render guarantee -- never a bare level-word substring,
+          which false-positives on the pfSense Notices chrome, #1856).
     """
     resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4"})
     assert resp.status_code == 200, f"IPv4 category-edit GET returned HTTP {resp.status_code} (expected 200)"
     body = resp.text
     assert not looks_like_login_page(body), "IPv4 category-edit GET returned the login form (session lost)"
-    for bad in ("Fatal error", "Parse error", "Warning", "Notice", "Uncaught"):
-        assert bad not in body, f"IPv4 category-edit page contains PHP error: {bad!r}"
+    diag = body_has_php_error(body)
+    assert diag is None, f"IPv4 category-edit page contains PHP diagnostic: {diag!r}"
     assert "Must be a Port-type alias." in body, (
         "IPv4 category-edit page is missing help text 'Must be a Port-type alias.'"
     )
@@ -1189,7 +1191,7 @@ def test_ipv4_category_edit_renders_four_alias_select_fields(
     When:
         GET ``pfblockerng_category_edit.php?type=ipv4``.
     Then:
-        - HTTP 200, no PHP errors.
+        - HTTP 200, no rendered PHP-diagnostic shape (:func:`body_has_php_error`).
         - Each of ``aliasports_in``, ``aliasports_out``, ``aliasaddr_in``,
           ``aliasaddr_out`` appears as a ``<select name="...">`` in the body.
     """
@@ -1197,7 +1199,61 @@ def test_ipv4_category_edit_renders_four_alias_select_fields(
     assert resp.status_code == 200, f"IPv4 category-edit GET returned HTTP {resp.status_code} (expected 200)"
     body = resp.text
     assert not looks_like_login_page(body), "IPv4 category-edit GET returned the login form (session lost)"
-    for bad in ("Fatal error", "Parse error", "Warning", "Notice", "Uncaught"):
-        assert bad not in body, f"IPv4 category-edit page contains PHP error: {bad!r}"
+    diag = body_has_php_error(body)
+    assert diag is None, f"IPv4 category-edit page contains PHP diagnostic: {diag!r}"
     for field in ("aliasports_in", "aliasports_out", "aliasaddr_in", "aliasaddr_out"):
         assert f'name="{field}"' in body, f'IPv4 category-edit page is missing <select name="{field}"> field'
+
+
+@pytest.mark.ui_render
+def test_ipv4_category_edit_renders_clean_with_a_pending_system_notice(
+    webui: "WebUI",
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A pending pfSense system notice must not fail the category-edit render tests.
+
+    Scenario: issue #1856 -- a box carrying a pending system notice renders the
+    Notices bell chrome and the notice text into EVERY page (release run
+    30424647767: the mislabeled 26.07 box held a "Boot verification failed"
+    notice, and a naive ``'Notice' not in body`` assert tripped on the chrome
+    with zero PHP diagnostics on the page). This pins the fixed oracle: with a
+    notice pending, the page still renders clean under the SHAPE check.
+
+    Given:
+        A pfSense system notice is filed on the box (``file_notice``).
+    When:
+        GET ``pfblockerng_category_edit.php?type=ipv4``.
+    Then:
+        - The notice text is IN the body (the collision condition is real,
+          not vacuously absent).
+        - HTTP 200, page marker present, and no rendered PHP-diagnostic shape
+          (:func:`body_has_php_error`) -- the chrome must not read as an error.
+    """
+    vm = smoke_vm
+    notice_text = "pfBlockerNG smoke notice fixture (#1856)"
+    try:
+        res = helpers.php_eval(
+            vm,
+            f"require_once('notices.inc');\nfile_notice('pfb-smoke-1856', '{notice_text}', 'pfBlockerNG');\necho 'OK';",
+        )
+        assert res.returncode == 0 and "OK" in res.stdout, (
+            f"file_notice fixture failed: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr!r}"
+        )
+
+        resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4"})
+        assert resp.status_code == 200, f"IPv4 category-edit GET returned HTTP {resp.status_code} (expected 200)"
+        body = resp.text
+        assert not looks_like_login_page(body), "IPv4 category-edit GET returned the login form (session lost)"
+
+        # BEFORE-state: the pending notice actually reached the page chrome --
+        # otherwise the oracle assertion below would pass vacuously.
+        assert notice_text in body, "pending system notice did not surface in the page chrome"
+
+        diag = body_has_php_error(body)
+        assert diag is None, f"notice-bearing category-edit page reads as a PHP diagnostic: {diag!r}"
+        assert "Must be a Port-type alias." in body, "category-edit page marker missing with a notice pending"
+    finally:
+        clear = helpers.php_eval(vm, "require_once('notices.inc');\nclose_notice('all');\necho 'OK';")
+        assert clear.returncode == 0 and "OK" in clear.stdout, (
+            f"close_notice teardown failed: rc={clear.returncode} stdout={clear.stdout!r} stderr={clear.stderr!r}"
+        )
