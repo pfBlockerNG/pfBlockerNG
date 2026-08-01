@@ -1057,8 +1057,8 @@ final class TickEntrypointTest extends TestCase
 	 * Scenario:
 	 *   Given pfb_interval='Disabled' and a PENDING 'cron' ledger entry
 	 *   (pfb_due_ledger_set_pending -- e.g. left behind by an install-time feed
-	 *   pass that lost the pfb_feed_pass_begin() race); dcc/bl future-seeded; NO
-	 *   stray process anywhere.
+	 *   pass that lost the pfb_feed_pass_begin() race); dcc/bl future-seeded; no
+	 *   worker owned by this PHPUnit run.
 	 *   When  pfblockerng_tick() is called.
 	 *   Then  the pending 'cron' entry IS dispatched despite $cron_disabled (its
 	 *         pending_apply flag is cleared by the dispatch branch).
