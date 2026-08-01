@@ -4935,27 +4935,11 @@ def rule_line_references(line: str, alias: str) -> bool:
 
 
 def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval: float = 2.0) -> bool:
-    """Poll until the observed predicate event occurs; timeout is a salvage cap only.
+    """Poll until the predicate event is observed; expiry is salvage only.
 
-    A BOUNDED poll for the same documented
-    reason as :func:`rule_references` / :func:`wait_pfctl_table`: pfBlockerNG's
-    ``filter_configure`` is ASYNC (``send_event("filter reload")``), so a pf-level
-    rule (rdr / block) lands a few seconds AFTER ``reload()`` returns — a single-shot
-    ``pfctl -sr``/``-sn`` read right after the reload races the event and reads the
-    pre-reload ruleset. Wrap such an assertion in ``wait_until`` so green proves the
-    rule actually landed (and, for an absence check, that it was actually removed),
-    not that the read happened to win/lose the race.
-
-    Default ``timeout`` is deliberately well under the smoke harness's 30s per-test
-    body cap (``smoke-single.yml`` ``--timeout=30 --timeout-method=signal``,
-    ``timeout_func_only=true``): the test body has already spent time in ``reload()``,
-    so a 30s poll here would trip the body timeout FIRST and kill the test before its
-    assertion (and the ``pf_state_dump`` it prints) can run — turning a real "rule did
-    not load" into an opaque ``Timeout``. A short poll gives up in time for the
-    assertion to fire with diagnostics. The async lag is a few seconds; if the rule is
-    not present within this window it is genuinely absent, which is what we want to see.
-    Success requires an observed truthy predicate. Expiry raises ``stuck/environment`` rather
-    than returning a false verdict, distinguishing a stuck environment from a valid negative.
+    ``filter_configure`` is asynchronous (``send_event("filter reload")``), so a pf-level
+    rule can land after ``reload()`` returns. A truthy predicate observation is the verdict;
+    expiry raises ``stuck/environment`` and is never a false observation.
     """
     deadline = time.monotonic() + timeout
     while True:

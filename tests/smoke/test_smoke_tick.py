@@ -619,9 +619,8 @@ def mfs_var(deployed_vm: SmokeVM, request: pytest.FixtureRequest) -> Iterator[Sm
 @pytest.mark.reboot
 @pytest.mark.tick
 # Unlike the boot_reload siblings (which reboot in a FIXTURE, exempt from the workflow's
-# 30s func-only body cap), this test reboots in its BODY too: the 30s settle alone exhausts
-# the default cap, so it could never pass a dispatch without its own budget (#738 F4
-# validation run). Reboot ~90-150s (settle + readiness gate) + ledger checks + margin. The
+# 30s func-only body cap), this test reboots in its BODY too. The reboot helper first consumes
+# the observable boottime-change event, then runs readiness with its own full budget; the
 # mfs_var fixture reboots twice more (arrange + teardown) — exempt from the func-only cap,
 # same as boot_reload's fixture reboots — so the body still contains exactly ONE reboot.
 @pytest.mark.timeout(300)
