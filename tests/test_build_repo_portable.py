@@ -362,6 +362,57 @@ def test_catalog_name_places_flat_catalog_under_out_dir(tmp_path: Path) -> None:
     assert not (bucket / "FreeBSD:15:*").exists()
 
 
+@pytest.mark.parametrize("kind", ["traversal", "absolute", "empty-segment", "bare-dotdot"])
+def test_catalog_name_rejects_unsafe_paths(tmp_path: Path, kind: str) -> None:
+    """An unsafe ``--catalog-name`` is rejected BEFORE it becomes ``out_dir / catalog_name``
+    (issue #1786): ``_write_catalog_dir`` ``shutil.rmtree()``s that path, so an unvalidated
+    segment lets a caller wipe an arbitrary directory — ``"../victim"`` escapes sideways to a
+    sibling of ``out_dir``, and an ABSOLUTE value makes ``Path.__truediv__`` discard ``out_dir``
+    entirely, replacing it outright. A sentinel file OUTSIDE ``out_dir`` must survive every one
+    of these attempts, and every one of them must raise ``BuildRepoError`` (never silently
+    proceed, even the ones that happen not to escape, like a doubled-slash empty segment)."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "demo-1.0_1.pkg", abi="FreeBSD:15:*")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    # A sentinel directory the traversal/absolute/bare-".." cases must never touch.
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    sentinel = victim / "sentinel.txt"
+    sentinel.write_text("do not delete me")
+
+    bad = {
+        "traversal": "../victim",
+        "absolute": str(victim),
+        "empty-segment": "a//b",
+        "bare-dotdot": "..",
+    }[kind]
+
+    exc: Exception | None = None
+    try:
+        brp.build_repo(in_dir, out, catalog_name=bad)
+    except Exception as e:  # capture ANY failure mode, including an unvalidated crash
+        exc = e
+
+    assert sentinel.is_file(), f"catalog_name={bad!r} ({kind}) let the catalog write escape out_dir"
+    assert isinstance(exc, brp.BuildRepoError) and "unsafe" in str(exc).lower(), (
+        f"catalog_name={bad!r} ({kind}) must be rejected with a clear BuildRepoError; got {exc!r}"
+    )
+
+
+def test_catalog_name_with_channel_prefix_still_works(tmp_path: Path) -> None:
+    """A legitimate channel-prefixed catalog_name ("release/ce-2.8") still works — the
+    traversal guard must allow '/' BETWEEN segments (issue #1786), never just a bare varver."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "demo-1.0_1.pkg", abi="FreeBSD:15:*")
+    out = tmp_path / "out"
+    brp.build_repo(in_dir, out, catalog_name="release/ce-2.8")
+    assert (out / "release" / "ce-2.8" / "meta.conf").is_file()
+
+
 def test_concrete_abi_pkg_is_rejected(tmp_path: Path) -> None:
     """A CONCRETE-ABI package (not NO_ARCH) is rejected — the catalog is
     arch-less/NO_ARCH-only since issue #1806; a concrete-ABI .pkg would silently
@@ -482,8 +533,10 @@ def test_unsafe_abi_is_rejected(tmp_path: Path) -> None:
     catalog), but every one of these shapes still fails ``_is_wildcard_abi`` and
     is rejected by the NO_ARCH gate — the valid wildcard form (`FreeBSD:15:*`) is
     accepted by every other test, so this pins the reject side of the branch."""
-    # Non-empty but unsafe/non-wildcard values (traversal / slash / space) — an
-    # empty ABI is already rejected upstream by the missing-name/version/abi guard.
+    # Non-empty but unsafe/non-wildcard values (traversal / slash / space). A
+    # missing/empty ABI is rejected by this SAME NO_ARCH gate (_require_wildcard_abi),
+    # not by some separate upstream guard — build_repo()'s ABI loop runs before
+    # _emit_catalog_from_paths ever reaches _check_collisions' missing-field check.
     out = tmp_path / "out"
     for i, bad in enumerate(("../../evil", "FreeBSD/15/amd64", "a b")):
         in_dir = tmp_path / f"in{i}"
@@ -569,7 +622,8 @@ def test_print_conf_matches_template(capsys: pytest.CaptureFixture[str]) -> None
     """--print-conf emits the NONE-signed direct Pages URL / priority-100 client stanza (ADR-39).
 
     ADR-39: the url is fully resolved (no ${ABI} token) — supply --catalog-path to
-    determine the <varver>/<arch> segment.  The default base is the direct GitHub Pages URL.
+    determine the <varver> segment (arch-less; issue #1806). The default base is the
+    direct GitHub Pages URL.
     """
     rc = brp.main(["--print-conf", "--catalog-path", "ce-2.8/amd64"])
     assert rc == 0
@@ -583,7 +637,7 @@ def test_print_conf_matches_template(capsys: pytest.CaptureFixture[str]) -> None
 
 
 def test_print_conf_base_url_override(capsys: pytest.CaptureFixture[str]) -> None:
-    """--base-url overrides the host; --catalog-path supplies the varver/arch segment."""
+    """--base-url overrides the host; --catalog-path supplies the varver segment (arch-less)."""
     rc = brp.main(["--print-conf", "--base-url", "https://fork.example.io/p/", "--catalog-path", "ce-2.8/amd64"])
     assert rc == 0
     out = capsys.readouterr().out
@@ -2278,7 +2332,7 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
 # .pkg is served from a frozen GitHub Release asset — no fresh build, no nightly.
 #
 # These tests pin every guarantee of the route-only path:
-#   * release/<varver>/<arch>/ catalog lists exactly the frozen .pkg version(s)
+#   * release/<varver>/ catalog lists exactly the frozen .pkg version(s)
 #   * NO nightly/<varver>/ subtree ever exists for a route-only entry
 #   * build-entry parity: with route-only entries added, the build entry's release
 #     + nightly subtrees are BYTE-IDENTICAL to a run without the route-only entries
@@ -2317,7 +2371,7 @@ def test_route_only_release_catalog_contains_exactly_frozen_pkg(tmp_path: Path) 
     Scenario: EOL CE 2.7 with one frozen .pkg
       Given a frozen CE 2.7 .pkg (version 3.1.0_5) in route_only_pkgs
        When build_repo_matrix runs with role=route-only for CE 2.7
-      Then release/ce-2.7/amd64/packagesite.pkg lists exactly that one package
+      Then release/ce-2.7/packagesite.pkg lists exactly that one package
        And the name is pfBlockerNG-devel and the version is 3.1.0_5
     """
     out = tmp_path / "site"
@@ -2420,8 +2474,8 @@ def test_route_only_ce_and_plus_both_served(tmp_path: Path) -> None:
     Scenario: one build CE 2.8 + route-only CE 2.7 + route-only Plus 25.03
       Given separate frozen .pkg for each route-only entry
        When build_repo_matrix runs
-      Then release/ce-2.7/amd64/ catalog lists the frozen CE pkg
-       And release/plus-25.03/amd64/ catalog lists the frozen Plus pkg
+      Then release/ce-2.7/ catalog lists the frozen CE pkg
+       And release/plus-25.03/ catalog lists the frozen Plus pkg
        And NO nightly/ subtrees exist for either route-only entry
     """
     out = tmp_path / "site"
@@ -2631,7 +2685,7 @@ def test_cli_route_only_pkgs_flag_builds_frozen_catalog(tmp_path: Path) -> None:
         And --route-only-pkgs ce-2.7:<path> passed on the CLI
       When ``brp.main(["--build-matrix", ...])`` is called
       Then rc == 0
-       And release/ce-2.7/amd64/ catalog exists with the frozen version
+       And release/ce-2.7/ catalog exists with the frozen version
        And nightly/ce-2.7/ does NOT exist (no nightly for route-only)
     """
     out = tmp_path / "site"
@@ -2740,14 +2794,14 @@ def test_cli_route_only_pkgs_bad_format_errors(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # Consume-mode: release_pkgs= parameter
 #
-# When release_pkgs is supplied to build_repo_matrix, the release/<varver>/<arch>/
+# When release_pkgs is supplied to build_repo_matrix, the release/<varver>/
 # catalog is served from caller-supplied pre-built .pkg files (ABI-filtered, pruned
 # via retain_by_channel) instead of rebuilding devel+stable from source.
 # Nightly is always built from source regardless.
 #
 # These tests pin every guarantee of the consume-mode path:
-#   * release/<varver>/<arch>/ catalog lists exactly the consumed .pkg(s)
-#   * ABI filter: a mixed-ABI pool yields arch-specific catalogs
+#   * release/<varver>/ catalog lists exactly the consumed .pkg(s)
+#   * ABI filter: a mixed-ABI pool is filtered to the matching FreeBSD major
 #   * devel + stable both present in one pool -> retain_by_channel keeps both
 #   * empty pool for a varver -> no release catalog emitted, no exception, nightly OK
 #   * nightly is still built from source when build_nightly=True
@@ -2758,13 +2812,13 @@ def test_cli_route_only_pkgs_bad_format_errors(tmp_path: Path) -> None:
 
 
 def test_consume_mode_release_catalog_contains_consumed_pkg(tmp_path: Path) -> None:
-    """Consume mode places the pool into release/<varver>/<arch>/ under the canonical name.
+    """Consume mode places the pool into release/<varver>/ under the canonical name.
 
     Scenario: CE 2.8 build entry + one pre-built devel .pkg supplied via release_pkgs
       Given a pre-built pfBlockerNG-devel 4.0.0_1 .pkg (amd64)
         And release_pkgs={"ce-2.8": [pkg]} passed to build_repo_matrix
        When build_repo_matrix runs with build_nightly=False
-      Then release/ce-2.8/amd64/packagesite.pkg lists that package
+      Then release/ce-2.8/packagesite.pkg lists that package
        And the catalog entry name is pfBlockerNG-devel and version is 4.0.0_1
        And the builder was NOT called for devel/stable (consume, not rebuild)
     """
@@ -2873,7 +2927,7 @@ def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
     Scenario: pool carries one devel and one stable .pkg for ce-2.8
       Given pfBlockerNG-devel (devel channel) + pfBlockerNG (stable channel) .pkg in pool
        When build_repo_matrix runs in consume mode (release_keep_devel=1, release_keep_stable=1)
-      Then release/ce-2.8/amd64 catalog lists BOTH the devel and stable packages
+      Then release/ce-2.8 catalog lists BOTH the devel and stable packages
     """
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
@@ -2958,7 +3012,7 @@ def test_consume_mode_empty_pool_skips_release_catalog_no_exception(tmp_path: Pa
        When build_repo_matrix runs with build_nightly=True
       Then NO release catalog is emitted (the release dir is absent or has no packagesite)
        And NO exception is raised
-       And the nightly/ce-2.8/amd64/ catalog IS still built from source
+       And the nightly/ce-2.8/ catalog IS still built from source
     """
     out = tmp_path / "site"
 
@@ -2991,8 +3045,8 @@ def test_consume_mode_nightly_still_built_from_source(tmp_path: Path) -> None:
       Given a pre-built devel .pkg in release_pkgs for ce-2.8
         And build_nightly=True
        When build_repo_matrix runs
-      Then nightly/ce-2.8/amd64/ catalog exists (builder called for 'nightly')
-       And release/ce-2.8/amd64/ catalog lists only the consumed pkg (not a nightly build)
+      Then nightly/ce-2.8/ catalog exists (builder called for 'nightly')
+       And release/ce-2.8/ catalog lists only the consumed pkg (not a nightly build)
     """
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
@@ -3037,8 +3091,8 @@ def test_consume_mode_none_reproduces_source_build_path(tmp_path: Path) -> None:
     Scenario: CE 2.8 entry, release_pkgs omitted
       Given build_repo_matrix called WITHOUT release_pkgs (default None)
        When the matrix runs with the stub builder
-      Then release/ce-2.8/amd64/ catalog exists (built via _stub_builder for 'devel')
-       And nightly/ce-2.8/amd64/ catalog exists (built via _stub_builder for 'nightly')
+      Then release/ce-2.8/ catalog exists (built via _stub_builder for 'devel')
+       And nightly/ce-2.8/ catalog exists (built via _stub_builder for 'nightly')
     """
     out = tmp_path / "site"
 
@@ -3067,7 +3121,7 @@ def test_cli_release_pkgs_flag_serves_consumed_catalog(tmp_path: Path) -> None:
         And --release-pkgs ce-2.8:<path> passed on the CLI
        When brp.main is called with --no-nightly
       Then rc == 0
-       And release/ce-2.8/amd64/ catalog exists with the consumed version
+       And release/ce-2.8/ catalog exists with the consumed version
     """
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"

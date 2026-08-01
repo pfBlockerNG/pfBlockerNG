@@ -42,9 +42,9 @@ from pathlib import Path
 import pytest
 
 from . import helpers as h
-from ._matrix import own_variant
 from .conftest import SmokeVM
 from .test_repo_install import (
+    _box_real_varver,
     _ensure_egress_open,
     _ssh_check,
     build_guest_repo,
@@ -373,8 +373,12 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
 
     # BACKSTOP: prove the deploy actually serves the nightly catalog from the runner
     # first (independent of the guest) — polls through first-deploy / DNS / cert lag.
-    # This base already ends in /nightly, so the full subtree is the bare varver.
-    varver = own_variant().catalog
+    # The varver to poll is read from the BOX itself via the _box_real_varver oracle —
+    # NEVER own_variant().catalog / the matrix: matrix_variants() dedupes by (abi,
+    # variant), so two same-major editions collapse onto the first, which would
+    # poll/serve the wrong catalog for this leg. This base already ends in /nightly,
+    # so the full subtree is the bare varver.
+    varver = _box_real_varver(smoke_vm)
     poll_catalog_served(base_url, varver)
 
     _ensure_egress_open()

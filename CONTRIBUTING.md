@@ -316,19 +316,26 @@ The self-hosted repository (installed per the [README](README.md#option-2--this-
 is a **derived index** — there is no stateful store to maintain. It is hosted and
 deployed by the **separate [`pfBlockerNG/pkg`](https://github.com/pfBlockerNG/pkg) repo**
 (its `publish.yml`), which deploys to **its own** GitHub Pages via same-repo OIDC — no
-cross-repo deploy key. On each run it builds the current **devel** `.pkg` (running this
-repo's `scripts/build-pkg-portable.py` against a checkout of the source), folds in the
-`.pkg` assets of **all** GitHub Releases, buckets by ABI, **regenerates** a fresh `pkg`
-catalog (`meta.conf`/`packagesite.pkg`/`data.pkg`) per ABI, and deploys the whole
-`${ABI}/` tree. The site is replaced each run (no history), so every published version/ABI
-is retained for free and a rollback is a re-deploy.
+cross-repo deploy key. On each run it builds the current **devel** `.pkg` per matrix entry
+(running this repo's `scripts/build-pkg-portable.py` against a checkout of the source),
+folds in the `.pkg` assets of **all** GitHub Releases, buckets by `<varver>` (edition +
+pfSense major.minor, e.g. `ce-2.8` / `plus-26.03` — **arch-less**: every pfBlockerNG `.pkg`
+is NO_ARCH, so one directory serves every CPU arch of a FreeBSD major; issue #1806),
+**regenerates** a fresh `pkg` catalog (`meta.conf`/`packagesite.pkg`/`data.pkg`) per
+varver, and deploys the whole `release/<varver>/` (+ `nightly/<varver>/`) tree. The site is
+replaced each run (no history), so every published version is retained for free and a
+rollback is a re-deploy.
 
-- **Per-`${ABI}` tree.** One catalog under `…/<ABI>/` per ABI present in the ci-metadata
-  version matrix (`supported-versions.json`). The client conf's literal `${ABI}` lets one
-  conf follow the box across a pfSense OS upgrade.
+- **Per-`<varver>` tree, arch-less.** One catalog under `release/<varver>/` (and
+  `nightly/<varver>/` for the nightly channel) per edition + pfSense major.minor present in
+  the ci-metadata version matrix (`supported-versions.json`) — no per-ABI/arch subdirectory.
+  The client conf's `url:` is fully resolved for the box's own edition/version at bootstrap
+  time — there is no `${ABI}` pkg(8) variable any more; a boot-time `rc.d` hook
+  (`pfblockerng_repo_generate.sh`, ADR-39) rewrites the conf on a pfSense OS upgrade that
+  moves the box to a different varver.
 - **NONE-signed, TLS-anchored.** No signing key in CI; trust is HTTPS to the Pages host. The
-  catalog is served at the project's GitHub Pages URL
-  **`https://pfblockerng.github.io/pkg/${ABI}`**.
+  catalog is served at the project's GitHub Pages URL, e.g.
+  **`https://pfblockerng.github.io/pkg/release/ce-2.8`**.
 - **Generators.** `scripts/build-repo-portable.py` is the primary — pure Python (stdlib +
   `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
   in a FreeBSD VM) is the fidelity fallback, and is also the single `--print-conf` source the

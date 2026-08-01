@@ -29,6 +29,7 @@ import tarfile
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypeGuard
 
 from pfb_pkg import PkgError, pkg_version_sort_key, read_compact_manifest, zstd_compress
 
@@ -64,13 +65,31 @@ CONF_PRIORITY = 100
 _ABI_WILDCARD_RE = re.compile(r"^[A-Za-z0-9._+-]+:[A-Za-z0-9._+-]+:\*$")
 
 
-def _is_wildcard_abi(abi: object) -> bool:
+def _is_wildcard_abi(abi: object) -> TypeGuard[str]:
     """True if ``abi`` is a NO_ARCH package's tight, CPU-wildcarded ABI string."""
     return isinstance(abi, str) and bool(_ABI_WILDCARD_RE.fullmatch(abi))
 
 
 class BuildRepoError(Exception):
     """A fatal, user-facing error (bad input / collision / missing tool)."""
+
+
+def _require_wildcard_abi(path: Path, abi: object) -> str:
+    """Validate ``abi`` is a NO_ARCH package's wildcard ABI, or raise ``BuildRepoError``.
+
+    Shared by ``build_repo()`` and ``_emit_catalog_from_paths()`` so the reject wording
+    (and the NO_ARCH policy behind it) has exactly one canonical source instead of two
+    verbatim-duplicated copies. Returns the validated ABI as ``str`` (narrowed via
+    ``_is_wildcard_abi``'s ``TypeGuard``) so callers need no further cast.
+    """
+    if not _is_wildcard_abi(abi):
+        raise BuildRepoError(
+            f"{path.name}: catalog requires a NO_ARCH (wildcard-ABI) package — got "
+            f"concrete ABI {abi!r}. The catalog tree is arch-less (one directory serves "
+            f"every arch of a FreeBSD major); a concrete-ABI package would silently "
+            f"install on only one arch. Ship a wildcard-ABI (NO_ARCH) build instead."
+        )
+    return abi
 
 
 # --------------------------------------------------------------------------- #
@@ -294,6 +313,26 @@ def catalog_name_from_version(pfsense_version: str, variant: str, *, channel: st
 # Orchestration
 # --------------------------------------------------------------------------- #
 
+# A catalog_name segment is a rm-rf'd + rebuilt path component (_write_catalog_dir
+# shutil.rmtree()s it) — same safety rule as build-repo.sh's --varver guard, tightened
+# to lowercase-only. '/' is allowed only BETWEEN segments (a legitimate catalog_name
+# carries a channel prefix, e.g. "nightly/plus-26.03").
+_CATALOG_NAME_SEGMENT_RE = re.compile(r"[a-z0-9.-]+")
+
+
+def _validate_catalog_name(name: str) -> None:
+    """Reject an unsafe ``catalog_name`` before it becomes ``out_dir / catalog_name``
+    (issue #1786): a ``".."`` segment escapes sideways/upward, and an ABSOLUTE value
+    makes ``Path.__truediv__`` discard ``out_dir`` entirely — either lets a caller
+    point ``_write_catalog_dir``'s ``shutil.rmtree()`` at an arbitrary directory.
+    """
+    segments = name.split("/")
+    if any(not seg or seg in (".", "..") or not _CATALOG_NAME_SEGMENT_RE.fullmatch(seg) for seg in segments):
+        raise BuildRepoError(
+            f"unsafe catalog_name {name!r}: each '/'-separated segment must be non-empty, "
+            f"not '.'/'..', and match [a-z0-9.-]+ (e.g. 'ce-2.8', 'release/ce-2.8')"
+        )
+
 
 def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) -> list[str]:
     """Build the arch-less (NO_ARCH-only) catalog from a directory of .pkg files.
@@ -310,11 +349,16 @@ def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) 
 
     The catalog is written DIRECTLY at ``out_dir`` (or ``out_dir / catalog_name``
     when supplied, e.g. ``"ce-2.8"``) — meta.conf, meta, packagesite.pkg, data.pkg,
-    plus each canonically-named ``<name>-<version>.pkg``. Emission (dedup by
+    plus each canonically-named ``<name>-<version>.pkg``. ``catalog_name`` is
+    validated (``_validate_catalog_name``, issue #1786) before anything is read or
+    written — it becomes a ``shutil.rmtree()``d path segment. Emission (dedup by
     (name, version), the flavor-collision guard, the catalog descriptor) is
     delegated to ``_emit_catalog_from_paths``. Returns the single wildcard ABI
     built, as a one-element sorted list.
     """
+    if catalog_name:
+        _validate_catalog_name(catalog_name)
+
     pkgs = sorted(p for p in in_dir.glob("*.pkg") if p.is_file())
     if not pkgs:
         raise BuildRepoError(f"no .pkg files in {in_dir}")
@@ -324,15 +368,7 @@ def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) 
     abis: set[str] = set()
     for path in pkgs:
         manifest = read_compact_manifest(path)
-        abi = manifest.get("abi")
-        if not _is_wildcard_abi(abi):
-            raise BuildRepoError(
-                f"{path.name}: catalog requires a NO_ARCH (wildcard-ABI) package — got "
-                f"concrete ABI {abi!r}. The catalog tree is arch-less (one directory serves "
-                f"every arch of a FreeBSD major); a concrete-ABI package would silently "
-                f"install on only one arch. Ship a wildcard-ABI (NO_ARCH) build instead."
-            )
-        abis.add(abi)
+        abis.add(_require_wildcard_abi(path, manifest.get("abi")))
     if len(abis) > 1:
         raise BuildRepoError(
             f"mixed ABIs in one build_repo() call: {sorted(abis)} — filter in_dir to one "
@@ -441,14 +477,7 @@ def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path]) -> int:
     entries: list[tuple[Path, dict]] = [(p, read_compact_manifest(p)) for p in sorted(set(pkg_paths))]
     _check_collisions(entries)
     for path, manifest in entries:
-        abi = manifest.get("abi")
-        if not _is_wildcard_abi(abi):
-            raise BuildRepoError(
-                f"{path.name}: catalog requires a NO_ARCH (wildcard-ABI) package — got "
-                f"concrete ABI {abi!r}. The catalog tree is arch-less (one directory serves "
-                f"every arch of a FreeBSD major); a concrete-ABI package would silently "
-                f"install on only one arch. Ship a wildcard-ABI (NO_ARCH) build instead."
-            )
+        _require_wildcard_abi(path, manifest.get("abi"))
     items: dict[tuple[str, str], tuple[Path, dict]] = {}
     for path, manifest in entries:
         nv = (manifest["name"], manifest["version"])

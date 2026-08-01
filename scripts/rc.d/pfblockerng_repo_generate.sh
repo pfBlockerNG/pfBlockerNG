@@ -22,11 +22,14 @@
 # HARD RULE: every path ends in `exit 0`. This hook MUST NEVER wedge boot.
 #
 # Detection (KISS): edition = "/etc/product_label contains 'Plus'" -> plus, else
-# ce; version = major.minor of /etc/version. This mirrors
-# catalog_name_from_version() in scripts/build-repo-portable.py. Arch-less
-# since issue #1806 (NO_ARCH) — the catalog no longer has a per-arch leaf, so
-# this hook no longer calls `pkg` at all (it used to read `pkg config abi`
-# only to derive that leaf).
+# ce; version = major.minor of /etc/version, with any dash suffix (e.g.
+# "-BETA"/"-RC") stripped FIRST. This deliberately DIVERGES from
+# catalog_name_from_version() in scripts/build-repo-portable.py by that one
+# strip: a live box's /etc/version can carry a pre-release suffix the matrix's
+# version never does (issue #1786) — otherwise it is the same edition +
+# major.minor derivation. Arch-less since issue #1806 (NO_ARCH) — the catalog
+# no longer has a per-arch leaf, so this hook no longer calls `pkg` at all (it
+# used to read `pkg config abi` only to derive that leaf).
 #
 # The emitted conf body is BYTE-IDENTICAL to `add-repo.sh --print-conf`,
 # `build-repo.sh --print-conf`, and `build-repo-portable.py --print-conf`
