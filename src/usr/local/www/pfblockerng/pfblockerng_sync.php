@@ -67,6 +67,9 @@ if ($_POST) {
 			// Parse 'rowhelper' fields and save new values
 			if (strpos($key, '-') !== FALSE) {
 				$k_field = explode('-', $key);
+				if (in_array($k_field[0], array('varsyncipaddress', 'varsyncusername', 'varsyncpassword'), TRUE)) {
+					$value = pfb_sanitize_text((string) $value);
+				}
 
 				// Collect all rowhelper keys
 				$rowhelper_exist[$k_field[1]] = '';
