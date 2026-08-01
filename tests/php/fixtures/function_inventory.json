@@ -1782,6 +1782,13 @@
                 "variadic": false,
                 "type": "bool",
                 "default": null
+            },
+            {
+                "name": "has_user_script",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
             }
         ]
     },
