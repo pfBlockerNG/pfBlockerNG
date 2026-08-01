@@ -6,6 +6,21 @@ use PHPUnit\Framework\TestCase;
 
 final class PfbSettingsFamilyTest extends TestCase
 {
+	/**
+	 * How far ahead of the clock a "created in the future" fixture is written (#2029).
+	 *
+	 * pfb_settings_downgrade_context_target() reads its own time(), so such a fixture is
+	 * only in the future while the wall clock stays behind its created_at. Every rejection
+	 * row is therefore written against the clock read immediately before ITS OWN write --
+	 * never one array-literal snapshot shared by all rows, which made each row's verdict
+	 * depend on how long the preceding rows took to validate (a one-second margin lost that
+	 * race on CI). The margin is a salvage bound, not an assertion: the guard beside it
+	 * reports STUCK/ENVIRONMENT if the clock ever overtakes it. Its mirror-image sibling,
+	 * the "older than the window" row, drifts the safe way -- it only gets older -- and so
+	 * needs no such guard.
+	 */
+	private const FUTURE_MARGIN_S = 300;
+
 	private string $root;
 
 	protected function setUp(): void
@@ -98,18 +113,33 @@ final class PfbSettingsFamilyTest extends TestCase
 
 	public function testInvalidContextsRejectAndRegularFilesAreConsumed(): void
 	{
+		// 'created_at' is an OFFSET, resolved against the clock read immediately before
+		// that row's OWN write (#2029) -- see FUTURE_MARGIN_S.
 		$contexts = [
-			['version' => 2, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => time()],
-			['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => time() - 301],
-			['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => time() + 1],
-			['version' => 1, 'source_family' => '3.2', 'target_family' => '3.2', 'created_at' => time()],
-			['version' => 1, 'source_family' => '4.0', 'target_family' => '4.0', 'created_at' => time()],
-			['version' => '1', 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => time()],
-			['version' => 1, 'source_family' => ['4.0'], 'target_family' => '3.2', 'created_at' => time()],
+			'with an unsupported version'          => ['version' => 2, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => 0],
+			'older than the 300-second window'     => ['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => -301],
+			'created in the future'                => ['version' => 1, 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => self::FUTURE_MARGIN_S],
+			'whose source family is not the live family' => ['version' => 1, 'source_family' => '3.2', 'target_family' => '3.2', 'created_at' => 0],
+			'whose target family does not rank below its source' => ['version' => 1, 'source_family' => '4.0', 'target_family' => '4.0', 'created_at' => 0],
+			'whose version is a string, not an int' => ['version' => '1', 'source_family' => '4.0', 'target_family' => '3.2', 'created_at' => 0],
+			'whose source family is an array, not a string' => ['version' => 1, 'source_family' => ['4.0'], 'target_family' => '3.2', 'created_at' => 0],
 		];
-		foreach ($contexts as $context) {
+		foreach ($contexts as $why => $context) {
+			$offset                = (int) $context['created_at'];
+			$context['created_at'] = time() + $offset;
 			$this->writeContext($context);
-			$this->assertNull(pfb_settings_downgrade_context_target('4.0'));
+			$target = pfb_settings_downgrade_context_target('4.0');
+			if ($offset > 0) {
+				// Salvage guard, never the verdict: re-read the clock AFTER the call, so a
+				// pass proves the fixture was still in the future when the validator read
+				// time(). Only its expiry is time-shaped, and it says so.
+				$this->assertGreaterThan(time(), $context['created_at'],
+					'STUCK/ENVIRONMENT: the wall clock consumed the whole ' . self::FUTURE_MARGIN_S
+					. 's future margin during one validation call -- the run is stuck or the '
+					. 'environment is broken, not a behavioural failure');
+			}
+			$this->assertNull($target, "a context {$why} must be rejected, got "
+				. var_export($target, TRUE));
 			pfb_settings_downgrade_context_consume();
 			$this->assertFileDoesNotExist($this->contextPath());
 		}
