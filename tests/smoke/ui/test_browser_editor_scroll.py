@@ -327,14 +327,26 @@ def test_hook_editor_does_not_shift_by_the_gutter_width_under_a_shrunken_viewpor
     cdp = page.context.new_cdp_session(page)
     cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": KEYBOARD_PAGE_SCALE})
 
-    # Caret onto a line well down the document, a good way in from the left edge.
-    target = content.evaluate(
-        "el => { const s = el.closest('.cm-scroller').getBoundingClientRect();"
-        " const lines = el.querySelectorAll('.cm-line');"
-        " const r = lines[Math.min(lines.length - 1, 20)].getBoundingClientRect();"
-        " return {x: s.left + 150, y: r.top + r.height / 2}; }"
+    # Caret a dozen characters into a line well down the document. Set through the DOM
+    # selection rather than a click: under a page-scale factor, input coordinates no
+    # longer map to the layout box a click target is computed from, and a click that
+    # misses leaves the caret at the end of the inserted text -- genuinely off screen,
+    # where CodeMirror scrolling to it is CORRECT and this test would fail on a healthy
+    # editor.
+    placed = content.evaluate(
+        "el => { const lines = el.querySelectorAll('.cm-line');"
+        " const line = lines[Math.min(lines.length - 1, 20)];"
+        " const walk = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);"
+        " let node, seen = 0, target = null, off = 0;"
+        " while ((node = walk.nextNode())) {"
+        "   if (seen + node.length >= 12) { target = node; off = 12 - seen; break; }"
+        "   seen += node.length; }"
+        " if (!target) return false;"
+        " const r = document.createRange(); r.setStart(target, off); r.collapse(true);"
+        " const sel = document.getSelection(); sel.removeAllRanges(); sel.addRange(r);"
+        " return true; }"
     )
-    page.mouse.click(target["x"], target["y"])
+    assert placed, "precondition: could not place the caret inside a line"
 
     # CodeMirror compares the caret's CLIENT rect against a PAGE coordinate
     # (``pageYOffset + visualViewport.offsetTop + height``), so a window scrolled down
@@ -359,6 +371,18 @@ def test_hook_editor_does_not_shift_by_the_gutter_width_under_a_shrunken_viewpor
 
     content.evaluate("el => { el.closest('.cm-scroller').scrollLeft = 0; }")
     assert _settled_scroll_left(content) == 0, "precondition: the view starts at the left edge"
+
+    # With the view at the left edge the caret must already be visible, or scrolling to
+    # it is the editor doing its job rather than the defect under test.
+    caret_x = content.evaluate(
+        "el => { const s = el.closest('.cm-scroller'); const sel = document.getSelection();"
+        " if (!sel || !sel.rangeCount) return null;"
+        " return Math.round(sel.getRangeAt(0).getBoundingClientRect().left - s.getBoundingClientRect().left); }"
+    )
+    width = int(content.evaluate("el => Math.round(el.closest('.cm-scroller').clientWidth)"))
+    assert caret_x is not None and _gutter_width(content) < caret_x < width, (
+        f"precondition: the caret must be on screen before typing; caret_x={caret_x}, width={width}"
+    )
 
     page.keyboard.insert_text("X")
     offset = _settled_scroll_left(content)
