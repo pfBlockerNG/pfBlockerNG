@@ -135,10 +135,9 @@ Mechanics that hold for every pass:
   more than 300 changed lines, more than 6 files, or any behaviour change in `src/`
   parsing/guard/scheduling logic — where whole-PR cross-referencing pays. Record the
   chosen model + the size metric that drove it in the audit comment. **Top tier
-  unavailable on such a PR:** run TWO passes over the same diff — one small-tier, one
-  mid-tier — and treat the UNION of findings as the review (dedup by file/line before
-  triage). Never the mid tier as a sole reviewer; never a multi-agent fan-out except
-  on explicit user request; never a dated model ID.
+  unavailable on such a PR:** the mid tier reviews it alone, same contract (2026-08-01:
+  the small+mid dual pass is retired). Never a multi-agent fan-out except on explicit
+  user request; never a dated model ID.
 - **No build-mode styling propagates to a reviewer** — reviewers build nothing.
 
 ### CodeRabbit availability (bounded, never blocking)

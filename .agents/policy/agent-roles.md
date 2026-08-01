@@ -41,9 +41,9 @@ policy corpus.
   failed executed attempt, a falsified packet premise, or cross-cutting design surfaced
   mid-step; "feels hard" is not evidence ([`workflow.md`](workflow.md) "Model escalation
   and risk triggers").
-- **mid** is a fallback tier only: it substitutes when top is unavailable (planning), or
-  runs as the second pass of the documented dual-review fallback — never a sole
-  reviewer, never a default route.
+- **mid** is a fallback tier: it substitutes an unavailable top, for planning and review
+  alike, and reviews alone in that case — never a default route (2026-08-01: the former
+  small+mid dual pass is retired).
 
 ## Role registry (machine-readable)
 
@@ -115,7 +115,7 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
 - **Independence:** not independent of the work item, but producer≠gater: the per-step
   verifier and PR reviewer are always different agents.
 - **Tier intent:** top — every downstream artifact leans on the brief, and brief bugs
-  demonstrably ship defects; mid only as the documented fallback when top is
+  demonstrably ship defects; mid as the documented sole fallback when top is
   unavailable.
 
 ### implementer
@@ -183,8 +183,7 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
   latest round has a blocking finding; hard cap 3 rounds, then a human decides.
 - **Independence:** required — a fresh context, never the author of the change.
 - **Tier intent:** small by default; top for a large/complex PR (whole-PR
-  cross-referencing is the point); mid only as the second pass of the documented
-  top-unavailable dual fallback, never a sole reviewer.
+  cross-referencing is the point); mid alone when top is unavailable on such a PR.
 
 ### publisher
 
@@ -243,7 +242,7 @@ goes through [`model-tiers.conf`](../model-tiers.conf).
 | planner | the top-level session itself (delegation.md "Plan top-tier, implement small-tier") |
 | implementer | a fresh small-tier sub-agent executing THE BRIEF in the assigned worktree |
 | verifier | a fresh small-tier sub-agent (never the brief author's model) re-deriving one step; fresh read-only validator sub-agents for per-finding validation |
-| reviewer | a fresh read-only sub-agent implementing the [`landing.md`](landing.md) reviewer contract (small default; top for large/complex; mid only in the dual fallback) |
+| reviewer | a fresh read-only sub-agent implementing the [`landing.md`](landing.md) reviewer contract (small default; top for large/complex; mid when top is unavailable) |
 | publisher | the session (or a small-tier delegate) following [`landing.md`](landing.md) |
 | coordinator | the session following [`workflow.md`](workflow.md) |
 
@@ -255,7 +254,7 @@ goes through [`model-tiers.conf`](../model-tiers.conf).
 | planner | `.codex/agents/planner.toml` (top) |
 | implementer | `.codex/agents/implementer.toml` (small, workspace-write) |
 | verifier | `.codex/agents/adversarial-reviewer.toml` (small) |
-| reviewer | `.codex/agents/adversarial-reviewer.toml` (small), `.codex/agents/adversarial-reviewer-top.toml` (top), `.codex/agents/adversarial-reviewer-mid.toml` (mid, fallback second pass only) |
+| reviewer | `.codex/agents/adversarial-reviewer.toml` (small), `.codex/agents/adversarial-reviewer-top.toml` (top), `.codex/agents/adversarial-reviewer-mid.toml` (mid, top-unavailable substitute) |
 | publisher | the session following [`landing.md`](landing.md) |
 | coordinator | the session following [`workflow.md`](workflow.md) |
 
