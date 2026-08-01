@@ -13,9 +13,12 @@ use PHPUnit\Framework\TestCase;
  *
  * Functions under test:
  *   pfb_sync_status_open(string $facility, string $item, string $stage,
- *                          string $message, string $ledger_dir, ?callable $clock_fn = null): void
- *   pfb_sync_status_close(string $facility, string $item, string $stage, string $ledger_dir): void
+ *                          string $message, string $ledger_dir, ?callable $clock_fn = null,
+ *                          float $timeout_s = 5.0): void
+ *   pfb_sync_status_close(string $facility, string $item, string $stage, string $ledger_dir,
+ *                          float $timeout_s = 5.0): void
  *   pfb_sync_status_list_open(string $ledger_dir, ?string $facility = null): array
+ *   pfb_sync_status_read_all(string $ledger_dir, float $timeout_s = 5.0, ?bool &$unavailable = NULL): array
  *   pfb_sync_status_locked(string $ledger_dir, callable $fn, float $timeout_s = 5.0): void
  *
  * Coverage mandate (CLAUDE.md "Test coverage") — every branch:
@@ -36,6 +39,19 @@ use PHPUnit\Framework\TestCase;
  *          acquire is now BOUNDED -- a real, still-held lock past the budget
  *          logs an observable timeout and still runs $fn() (fail-open), and
  *          that signal discriminates (never fires on an uncontended success).
+ *
+ * issue #1780 F1/F2/F9 (review round) — unlike pfb_sync_status_locked() above
+ * (whose EX acquire on pfb_sync_status.json.lock keeps its EXISTING fail-open
+ * contract: still runs $fn() after a timeout), read_all()'s OWN SH acquire on
+ * the DATA file (pfb_sync_status.json) itself is a SEPARATE lock. A bounded
+ * expiry there returns [] — a value that already means "empty ledger" to every
+ * caller — so open()/close() (both read-modify-write through read_all() inside
+ * the _locked() span) must fail closed on it: ABORT, never write back an
+ * (apparently empty, actually just-unreadable) ledger over intact data. The
+ * signal is the read_all() out-param $unavailable — never conflated with []'s
+ * existing "empty" meaning. $timeout_s is injectable end-to-end (open/close
+ * gained an optional trailing param alongside read_all itself) so the expiry
+ * branch is driven deterministically with a REAL second process (pcntl_fork).
  */
 #[CoversFunction('pfb_sync_status_open')]
 #[CoversFunction('pfb_sync_status_close')]
@@ -484,5 +500,154 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		$open = pfb_sync_status_list_open($this->dir, 'ip');
 		$this->assertCount(1, $open, 'closing Foo must close only its exact key, leaving prefix-adjacent FooBar open');
 		$this->assertSame('pfB_FooBar_v4', $open[0]['item']);
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1780 F1/F2/F9 — read_all()'s $unavailable discrimination, and the
+	// two read-modify-write callers (open/close) failing closed on it.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Fork a child that opens $lockPath fresh (never an inherited fd -- a genuine
+	 * second, independent lock holder), takes LOCK_EX, signals readiness via a
+	 * marker file, holds for $holdMicros, then releases.
+	 *
+	 * @return int the child pid (caller must pcntl_waitpid it).
+	 */
+	private function forkRealDataFileHolder(string $lockPath, string $markerPath, int $holdMicros): int
+	{
+		if (!function_exists('pcntl_fork')) {
+			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		}
+		$pid = pcntl_fork();
+		if ($pid === -1) {
+			$this->markTestSkipped('pcntl_fork() failed.');
+		}
+		if ($pid === 0) {
+			$fp = fopen($lockPath, 'c');
+			flock($fp, LOCK_EX);
+			touch($markerPath);
+			usleep($holdMicros);
+			flock($fp, LOCK_UN);
+			fclose($fp);
+			exit(0);
+		}
+		return $pid;
+	}
+
+	private function waitForDataFileMarker(string $markerPath, int $pid): void
+	{
+		$deadline = microtime(TRUE) + 2.0;
+		while (!file_exists($markerPath)) {
+			if (microtime(TRUE) >= $deadline) {
+				pcntl_waitpid($pid, $waitStatus);
+				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
+			}
+			usleep(1000);
+		}
+	}
+
+	/**
+	 * read_all()'s $unavailable discriminates: TRUE only on a genuine
+	 * lock-acquire expiry against the DATA file (pfb_sync_status.json) itself --
+	 * a SEPARATE lock from pfb_sync_status_locked()'s .json.lock EX acquire.
+	 * FALSE on every other path (absent file, corrupt JSON, success). An
+	 * always-TRUE or always-FALSE flag must fail this test.
+	 */
+	public function testReadAllUnavailableDiscriminatesLockTimeoutFromEveryOtherPath(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+
+		$dataPath   = $this->dir . '/pfb_sync_status.json';
+		$markerPath = $this->dir . '/read_all_timeout.marker';
+		// Holder keeps the lock for 400ms -- well past the 150ms budget under test.
+		$pid = $this->forkRealDataFileHolder($dataPath, $markerPath, 400000);
+		$this->waitForDataFileMarker($markerPath, $pid);
+
+		$unavailable = FALSE;
+		$data = pfb_sync_status_read_all($this->dir, 0.15, $unavailable);
+		pcntl_waitpid($pid, $waitStatus);
+
+		$this->assertSame([], $data, 'an expired read must still return [] (same as empty), never a stale/partial ledger');
+		$this->assertTrue($unavailable, 'a genuine lock-acquire expiry must set $unavailable = TRUE');
+
+		// FALSE: absent ledger file.
+		$absentDir = $this->dir . '/absent_subdir';
+		mkdir($absentDir, 0777, TRUE);
+		$absentUnavailable = TRUE;	// deliberately wrong initial value
+		$absentData = pfb_sync_status_read_all($absentDir, 5.0, $absentUnavailable);
+		$this->assertSame([], $absentData);
+		$this->assertFalse($absentUnavailable, 'an absent ledger file must never report $unavailable = TRUE');
+
+		// FALSE: corrupt JSON.
+		$corruptDir = $this->dir . '/corrupt_subdir';
+		mkdir($corruptDir, 0777, TRUE);
+		file_put_contents($corruptDir . '/pfb_sync_status.json', 'not valid json {{{{');
+		$corruptUnavailable = TRUE;
+		$corruptData = pfb_sync_status_read_all($corruptDir, 5.0, $corruptUnavailable);
+		$this->assertSame([], $corruptData);
+		$this->assertFalse($corruptUnavailable, 'a corrupt JSON ledger must never report $unavailable = TRUE');
+
+		// FALSE: genuine success (the lock was released -- read the real data).
+		$successUnavailable = TRUE;
+		$successData = pfb_sync_status_read_all($this->dir, 5.0, $successUnavailable);
+		$this->assertNotSame([], $successData, 'the lock was released by the child above -- this read must succeed');
+		$this->assertFalse($successUnavailable, 'a successful read must never report $unavailable = TRUE');
+	}
+
+	/**
+	 * pfb_sync_status_open() must ABORT its read-modify-write on a lock-acquire
+	 * expiry against the DATA file -- never persist an apparently-empty (in
+	 * truth just-unreadable) ledger over an intact pre-existing entry, and never
+	 * add the NEW key it was asked to open either (the read it needed to merge
+	 * against never completed). Discriminates a real fix from a no-op: code
+	 * that merely waits out the contention and then reads the real ledger would
+	 * successfully add the new key here, not abort.
+	 */
+	public function testSyncStatusOpenAbortsRmwOnDataFileLockTimeout(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Existing_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir), 'precondition: one entry exists before the contended open()');
+
+		$dataPath   = $this->dir . '/pfb_sync_status.json';
+		$markerPath = $this->dir . '/open_abort_timeout.marker';
+		$pid = $this->forkRealDataFileHolder($dataPath, $markerPath, 400000);
+		$this->waitForDataFileMarker($markerPath, $pid);
+
+		pfb_sync_status_open('dnsbl', 'SomeGroup', 'apply', 'should never persist', $this->dir, self::clockAt(2000), 0.15);
+		pcntl_waitpid($pid, $waitStatus);
+
+		$open = pfb_sync_status_list_open($this->dir);
+		$this->assertCount(1, $open,
+			'open() must have aborted on the lock-acquire expiry -- the new key must NOT have been added, '
+			. 'got ' . var_export($open, TRUE));
+		$this->assertSame('pfB_Existing_v4', $open[0]['item'],
+			'the pre-existing entry must survive an aborted open() untouched');
+	}
+
+	/**
+	 * pfb_sync_status_close() must ABORT its read-modify-write on a lock-acquire
+	 * expiry against the DATA file -- the entry it was asked to close must
+	 * still be OPEN afterwards (the read it needed never completed, so it never
+	 * learned the key was even there to remove).
+	 */
+	public function testSyncStatusCloseAbortsRmwOnDataFileLockTimeout(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_StillOpen_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir), 'precondition: the entry must be open before the contended close()');
+
+		$dataPath   = $this->dir . '/pfb_sync_status.json';
+		$markerPath = $this->dir . '/close_abort_timeout.marker';
+		$pid = $this->forkRealDataFileHolder($dataPath, $markerPath, 400000);
+		$this->waitForDataFileMarker($markerPath, $pid);
+
+		pfb_sync_status_close('ip', 'pfB_StillOpen_v4', 'download', $this->dir, 0.15);
+		pcntl_waitpid($pid, $waitStatus);
+
+		$open = pfb_sync_status_list_open($this->dir);
+		$this->assertCount(1, $open,
+			'close() must have aborted on the lock-acquire expiry -- the entry must still be OPEN, '
+			. 'got ' . var_export($open, TRUE));
+		$this->assertSame('pfB_StillOpen_v4', $open[0]['item']);
 	}
 }

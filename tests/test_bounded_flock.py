@@ -22,7 +22,13 @@ needs no bound). A call written as plain `flock($fp, LOCK_EX)` /
 The scan is intentionally low-false-positive: it only inspects the literal text
 inside a `flock(...)` call's parentheses on the line where the call starts (every
 call in this codebase is single-line, no call nests parentheses in its argument
-list), so it cannot mis-flag unrelated code and needs no PHP parser.
+list), so it needs no PHP parser. It is comment-BLIND, not comment-aware: it does
+not parse `//`/`#`/`/* */` at all, so a comment line containing a literal
+`flock($var, LOCK_EX)`-shaped example (a `$`-prefixed first argument, no
+LOCK_NB/LOCK_UN) would match exactly like real code -- the false-positive floor
+comes solely from requiring that `$`-prefixed first argument, which rules out an
+argument-less prose mention like "...deadline check and flock()." (no `$` inside
+the parens at all), not from any code/comment distinction.
 """
 
 from __future__ import annotations
@@ -65,8 +71,19 @@ def _scanned_files() -> list[Path]:
 
 
 def test_real_source_tree_has_no_unbounded_flock_calls() -> None:
+    scanned = _scanned_files()
+
+    # issue #1780 F8: a tree relocation (src/ renamed, .inc/.php files moved out from
+    # under _SCAN_ROOT) would silently shrink the scan to an empty list -- offenders
+    # would then vacuously stay [] and this pin would "pass" while checking nothing.
+    # Guard the scan itself, not just its output.
+    assert len(scanned) > 0, (
+        f"expected at least one .inc/.php file under {_SCAN_ROOT} -- got zero; "
+        "the scan root or suffix filter has rotted (issue #1780 F8), or src/ moved"
+    )
+
     offenders: list[str] = []
-    for path in _scanned_files():
+    for path in scanned:
         text = path.read_text(encoding="utf-8", errors="replace")
         for line_no, line in find_unbounded_flock_calls(text):
             offenders.append(f"{path.relative_to(_REPO_ROOT)}:{line_no}: {line}")

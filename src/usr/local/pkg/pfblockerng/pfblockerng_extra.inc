@@ -3260,12 +3260,26 @@ function pfb_due_ledger_is_due_from_entry(?array $entry, int $now): bool
  * Returns NULL on absent file, I/O error, or any corruption (fail-safe: absent
  * is always treated as "due now" by pfb_due_ledger_is_due_from_entry).
  *
- * @param string $job_key     Job identifier (e.g. 'dcc', 'bl').
- * @param string $ledger_dir  Directory that contains pfb_due_ledger.json.
- * @return array|null         {last_run: int, next_due: int, jitter: int} or NULL.
+ * issue #1780: a bounded lock acquire can also EXPIRE -- that is NOT the
+ * same as "absent" (NULL already means "absent / corrupt" to every existing
+ * caller), so it is signalled out-of-band via $unavailable, never via the
+ * return value (the public return type/contract is unchanged, so every www/
+ * consumer keeps compiling and rendering exactly as before). $unavailable is
+ * set TRUE ONLY when the lock acquire itself timed out; every other path
+ * (success, absent file, corrupt JSON, unreadable file) sets it FALSE. A
+ * caller that gates a dispatch or persistence decision on this read MUST
+ * treat $unavailable===TRUE as "I do not know" -- fail closed, never write
+ * back, never treat it as "due" or "absent".
+ *
+ * @param string    $job_key      Job identifier (e.g. 'dcc', 'bl').
+ * @param string    $ledger_dir   Directory that contains pfb_due_ledger.json.
+ * @param float     $timeout_s    Bounded SH-acquire budget in seconds (issue #1780).
+ * @param bool|null $unavailable  Out param: TRUE iff the lock acquire expired.
+ * @return array|null             {last_run: int, next_due: int, jitter: int} or NULL.
  */
-function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir): ?array
+function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir, float $timeout_s = 5.0, ?bool &$unavailable = NULL): ?array
 {
+	$unavailable = FALSE;
 	$path = $ledger_dir . '/pfb_due_ledger.json';
 	if (!is_file($path)) {
 		return NULL;
@@ -3274,9 +3288,10 @@ function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir): ?array
 	if ($fp === FALSE) {
 		return NULL;
 	}
-	if (!pfb_flock_bounded($fp, LOCK_SH, 5.0)) {
+	if (!pfb_flock_bounded($fp, LOCK_SH, $timeout_s)) {
 		fclose($fp);
 		pfb_logger("\nADR-43: due-ledger read lock timed out [ {$path} ]", 2);
+		$unavailable = TRUE;
 		return NULL;
 	}
 	$raw = stream_get_contents($fp);
@@ -3347,12 +3362,18 @@ function pfb_due_ledger_write_entry(string $job_key, array $entry, string $ledge
  * next_due ≤ $now         ⇒ TRUE (catch-up: missed window runs on the next tick).
  * next_due >  $now        ⇒ FALSE (not yet due).
  *
+ * issue #1780: a lock-acquire expiry on the underlying read must fail
+ * CLOSED (FALSE), never fall through to is_due_from_entry(NULL, ...)'s
+ * "absent ⇒ due" rule -- an unreadable (but not actually absent) ledger must
+ * never look spuriously due.
+ *
  * @param string $job_key     Job identifier (e.g. 'dcc', 'bl_weekly').
  * @param int    $interval    Job cadence in seconds (for API parity; not used here).
  * @param int    $now         Current epoch timestamp (injectable in tests).
  * @param string $seed        Per-install seed (for API parity; not used here).
  * @param int    $jitter_max  Max jitter in seconds (for API parity; not used here).
  * @param string $ledger_dir  Directory that contains pfb_due_ledger.json.
+ * @param float  $timeout_s   Bounded lock-acquire budget in seconds (issue #1780; injectable for tests).
  * @return bool               TRUE iff the job should run this tick.
  */
 function pfb_due_ledger_is_due(
@@ -3361,12 +3382,15 @@ function pfb_due_ledger_is_due(
 	int    $now,
 	string $seed,
 	int    $jitter_max,
-	string $ledger_dir
+	string $ledger_dir,
+	float  $timeout_s = 5.0
 ): bool {
-	return pfb_due_ledger_is_due_from_entry(
-		pfb_due_ledger_read_entry($job_key, $ledger_dir),
-		$now
-	);
+	$unavailable = FALSE;
+	$entry = pfb_due_ledger_read_entry($job_key, $ledger_dir, $timeout_s, $unavailable);
+	if ($unavailable) {
+		return FALSE;
+	}
+	return pfb_due_ledger_is_due_from_entry($entry, $now);
 }
 
 /**
@@ -3606,13 +3630,27 @@ function pfb_quiet_hours_in_window(int $now, string $window): bool
  * The pending flag is cleared implicitly when pfb_due_ledger_mark_ran() writes a clean
  * {last_run, next_due, jitter} entry (no pending_apply key).
  *
+ * issue #1780: a lock-acquire expiry on the underlying read must ABORT
+ * this write entirely -- falling through to the "absent" placeholder branch
+ * would persist a ZEROED {last_run:0, next_due:0, jitter:0} entry over a REAL
+ * (but momentarily unreadable) schedule, since write_entry()'s own unlocked
+ * merge-read would pick the real entry back up off disk and stomp its
+ * next_due/last_run to 0 with the placeholder.
+ *
  * @param string $job_key    Job identifier (e.g. 'cron', 'dcc', 'bl').
  * @param string $ledger_dir Directory that contains pfb_due_ledger.json.
+ * @param float  $timeout_s  Bounded lock-acquire budget in seconds (issue #1780; injectable for tests).
  * @return void
  */
-function pfb_due_ledger_set_pending(string $job_key, string $ledger_dir): void
+function pfb_due_ledger_set_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0): void
 {
-	$entry = pfb_due_ledger_read_entry($job_key, $ledger_dir);
+	$unavailable = FALSE;
+	$entry = pfb_due_ledger_read_entry($job_key, $ledger_dir, $timeout_s, $unavailable);
+	if ($unavailable) {
+		// The read already logged the expiry loudly -- abort, never persist a
+		// zeroed placeholder over a real entry we simply could not read this instant.
+		return;
+	}
 	if ($entry === NULL) {
 		$entry = ['last_run' => 0, 'next_due' => 0, 'jitter' => 0];
 	}
@@ -3626,13 +3664,21 @@ function pfb_due_ledger_set_pending(string $job_key, string $ledger_dir): void
  * Returns TRUE iff pfb_due_ledger_set_pending() has been called for this job and
  * pfb_due_ledger_mark_ran() has not yet cleared it.
  *
+ * issue #1780: a lock-acquire expiry on the underlying read must return
+ * FALSE -- an unreadable ledger is not evidence of a pending deferred apply.
+ *
  * @param string $job_key    Job identifier (e.g. 'cron', 'dcc', 'bl').
  * @param string $ledger_dir Directory that contains pfb_due_ledger.json.
+ * @param float  $timeout_s  Bounded lock-acquire budget in seconds (issue #1780; injectable for tests).
  * @return bool              TRUE when pending_apply is set and not yet cleared.
  */
-function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
+function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0): bool
 {
-	$entry = pfb_due_ledger_read_entry($job_key, $ledger_dir);
+	$unavailable = FALSE;
+	$entry = pfb_due_ledger_read_entry($job_key, $ledger_dir, $timeout_s, $unavailable);
+	if ($unavailable) {
+		return FALSE;
+	}
 	return $entry !== NULL && !empty($entry['pending_apply']);
 }
 
@@ -3716,9 +3762,18 @@ function pfblockerng_tick(?array $ps_lines = NULL): void
 	// (IP) + ADR-10 (DNSBL) inside that final sync. Backgrounded so the tick stays
 	// fast. The scheduled log trim no longer rides this dispatch (issue #573) --
 	// see pfb_log_mgmt() at the end of this function.
-	$cron_entry   = pfb_due_ledger_read_entry('cron', $dbdir);
-	$cron_pending = $cron_entry !== NULL && !empty($cron_entry['pending_apply']);
-	if ((!$cron_disabled && $due['cron']) || $cron_pending) {
+	// issue #1780: a lock-acquire expiry on this read must NOT dispatch,
+	// NOT mark ran, and must leave the ledger untouched -- $cron_unavailable
+	// gates the whole decision below regardless of what $due['cron'] (a
+	// SEPARATE read, inside pfb_tick_due_jobs() above) came back as, so a
+	// timeout here can never be raced into a spurious dispatch by that other
+	// read having happened to succeed. $dispatched stays FALSE, so log
+	// maintenance below still runs; the read itself already logged the expiry
+	// loudly. The next tick retries.
+	$cron_unavailable = FALSE;
+	$cron_entry        = pfb_due_ledger_read_entry('cron', $dbdir, 5.0, $cron_unavailable);
+	$cron_pending      = !$cron_unavailable && $cron_entry !== NULL && !empty($cron_entry['pending_apply']);
+	if (!$cron_unavailable && ((!$cron_disabled && $due['cron']) || $cron_pending)) {
 		if ($in_win && pfb_feed_pass_busy()) {
 			// issue #1175: a running feed pass would race the shared recompute staging --
 			// defer via pending so the NEXT tick retries. busy() is advisory only: the
@@ -3839,11 +3894,25 @@ function pfblockerng_tick(?array $ps_lines = NULL): void
  * Absent file, unreadable file, or corrupt/non-object JSON all read as an
  * empty ledger (fail-open for display), never throws.
  *
- * @param string $ledger_dir Directory that contains pfb_sync_status.json.
+ * issue #1780: a bounded lock acquire can also EXPIRE -- that is NOT the
+ * same as "empty" ([] already means "empty ledger" to every existing caller),
+ * so it is signalled out-of-band via $unavailable, never via the return value
+ * (the public return type/contract is unchanged, so every www/ consumer keeps
+ * compiling and rendering exactly as before). $unavailable is set TRUE ONLY
+ * when the lock acquire itself timed out; every other path (success, absent
+ * file, corrupt JSON, unreadable file) sets it FALSE. A caller that performs a
+ * read-modify-write on this data (open/close, below) MUST treat
+ * $unavailable===TRUE as "I do not know" -- abort, never write back an
+ * apparently-empty (in truth just-unreadable) ledger over intact data.
+ *
+ * @param string    $ledger_dir   Directory that contains pfb_sync_status.json.
+ * @param float     $timeout_s    Bounded SH-acquire budget in seconds (issue #1780).
+ * @param bool|null $unavailable  Out param: TRUE iff the lock acquire expired.
  * @return array<string,array<string,array<string,array{message:string,first_seen:int,last_seen:int}>>>
  */
-function pfb_sync_status_read_all(string $ledger_dir): array
+function pfb_sync_status_read_all(string $ledger_dir, float $timeout_s = 5.0, ?bool &$unavailable = NULL): array
 {
+	$unavailable = FALSE;
 	$path = $ledger_dir . '/pfb_sync_status.json';
 	if (!is_file($path)) {
 		return [];
@@ -3852,9 +3921,10 @@ function pfb_sync_status_read_all(string $ledger_dir): array
 	if ($fp === FALSE) {
 		return [];
 	}
-	if (!pfb_flock_bounded($fp, LOCK_SH, 5.0)) {
+	if (!pfb_flock_bounded($fp, LOCK_SH, $timeout_s)) {
 		fclose($fp);
 		pfb_logger("\nADR-61: sync-status ledger read lock timed out [ {$path} ]", 2);
+		$unavailable = TRUE;
 		return [];
 	}
 	$raw = stream_get_contents($fp);
@@ -3938,12 +4008,19 @@ function pfb_sync_status_locked(string $ledger_dir, callable $fn, float $timeout
  * Idempotent by key: opening an already-open key updates message/last_seen in
  * place and preserves the original first_seen — it never duplicates the entry.
  *
+ * issue #1780: if the read-modify-write's own read of the ledger
+ * (pfb_sync_status_read_all(), a SEPARATE lock from this function's outer EX
+ * span below) expires, this call ABORTS -- it never persists an
+ * apparently-empty (in truth just-unreadable) ledger over intact data, and
+ * never adds the new key it was asked to open either.
+ *
  * @param string        $facility   'ip' | 'dnsbl'.
  * @param string        $item       The alias/group/feed name the entry is about.
  * @param string        $stage      'download' | 'parse' | 'apply' | 'dedup'.
  * @param string        $message    Human-readable failure description.
  * @param string        $ledger_dir Directory that contains pfb_sync_status.json.
  * @param callable|null $clock_fn   Returns the current epoch timestamp; defaults to time().
+ * @param float         $timeout_s  Bounded lock-acquire budget in seconds (issue #1780; injectable for tests).
  * @return void
  */
 function pfb_sync_status_open(
@@ -3952,11 +4029,18 @@ function pfb_sync_status_open(
 	string    $stage,
 	string    $message,
 	string    $ledger_dir,
-	?callable $clock_fn = null
+	?callable $clock_fn = null,
+	float     $timeout_s = 5.0
 ): void {
 	$now = ($clock_fn !== NULL) ? $clock_fn() : time();
-	pfb_sync_status_locked($ledger_dir, function () use ($facility, $item, $stage, $message, $now, $ledger_dir) {
-		$data       = pfb_sync_status_read_all($ledger_dir);
+	pfb_sync_status_locked($ledger_dir, function () use ($facility, $item, $stage, $message, $now, $ledger_dir, $timeout_s) {
+		$unavailable = FALSE;
+		$data = pfb_sync_status_read_all($ledger_dir, $timeout_s, $unavailable);
+		if ($unavailable) {
+			// The read already logged the expiry loudly -- abort the read-modify-write
+			// rather than risk persisting an empty-looking ledger over intact data.
+			return;
+		}
 		$existing   = $data[$facility][$item][$stage] ?? NULL;
 		$first_seen = (is_array($existing) && isset($existing['first_seen'])) ? $existing['first_seen'] : $now;
 
@@ -3966,7 +4050,7 @@ function pfb_sync_status_open(
 			'last_seen'  => $now,
 		];
 		pfb_sync_status_write_all($data, $ledger_dir);
-	});
+	}, $timeout_s);
 }
 
 /**
@@ -3974,16 +4058,24 @@ function pfb_sync_status_open(
  *
  * Closing an absent key is a safe no-op — no write, no exception.
  *
+ * issue #1780: if the read-modify-write's own read of the ledger
+ * expires, this call ABORTS -- same rationale as pfb_sync_status_open() above.
+ *
  * @param string $facility   'ip' | 'dnsbl'.
  * @param string $item       The alias/group/feed name the entry is about.
  * @param string $stage      'download' | 'parse' | 'apply' | 'dedup'.
  * @param string $ledger_dir Directory that contains pfb_sync_status.json.
+ * @param float  $timeout_s  Bounded lock-acquire budget in seconds (issue #1780; injectable for tests).
  * @return void
  */
-function pfb_sync_status_close(string $facility, string $item, string $stage, string $ledger_dir): void
+function pfb_sync_status_close(string $facility, string $item, string $stage, string $ledger_dir, float $timeout_s = 5.0): void
 {
-	pfb_sync_status_locked($ledger_dir, function () use ($facility, $item, $stage, $ledger_dir) {
-		$data = pfb_sync_status_read_all($ledger_dir);
+	pfb_sync_status_locked($ledger_dir, function () use ($facility, $item, $stage, $ledger_dir, $timeout_s) {
+		$unavailable = FALSE;
+		$data = pfb_sync_status_read_all($ledger_dir, $timeout_s, $unavailable);
+		if ($unavailable) {
+			return;
+		}
 		if (!isset($data[$facility][$item][$stage])) {
 			return;	// absent key -- safe no-op
 		}
@@ -3995,7 +4087,7 @@ function pfb_sync_status_close(string $facility, string $item, string $stage, st
 			unset($data[$facility]);
 		}
 		pfb_sync_status_write_all($data, $ledger_dir);
-	});
+	}, $timeout_s);
 }
 
 /**

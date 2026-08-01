@@ -401,4 +401,72 @@ final class UnboundPyControlWriteTest extends TestCase
 		$this->assertSame(2, $seq2);
 		$this->assertSame(2, $this->readRecord()['seq']);
 	}
+
+	// -----------------------------------------------------------------------
+	// issue #1780 F4 (review round) — restore the error-vs-timeout distinction
+	// the bounded refactor collapsed: the PFBL-03 control-channel lock must
+	// still log "acquire timed out" (not "acquire failed") on a genuine
+	// lock-acquire expiry.
+	//
+	// This does NOT by itself discriminate the F4 defect for the same reason as
+	// DnsblManifestAtomicGenerationTest::testPublicationLockTimeoutLogsTimedOutNotUnavailable
+	// (the pre-refactor code already logged "timed out" unconditionally on ANY
+	// pfb_flock_bounded() failure) -- it is a regression guard confirming the
+	// restored $timed_out-based branching did not swap the messages. See that
+	// test's docblock for why the genuine discriminating proof lives at the
+	// shared helper level instead, and why this consumer's own real-flock-error
+	// branch is not portably testable without new scope.
+	//
+	// pfb_unbound_py_write_control() has no injectable lock-acquire budget of
+	// its own (unlike pfb_unbound_py_publication_lock()) -- $wait_timeout is a
+	// SEPARATE concept (how long to wait for the watcher to APPLY the command
+	// after it publishes, not the lock acquire itself) -- so proving a genuine
+	// expiry here needs the holder to outlive the hardcoded 5.0s lock budget.
+	// -----------------------------------------------------------------------
+
+	public function testWriteControlLockTimeoutLogsTimedOutNotFailed(): void
+	{
+		if (!function_exists('pcntl_fork')) {
+			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		}
+
+		$GLOBALS['pfb']['log']    = "{$this->tmp}/pfblockerng.log";
+		$GLOBALS['pfb']['errlog'] = "{$this->tmp}/error.log";
+
+		$lockPath   = "{$this->tmp}/pfb_py_control.lock";
+		$markerPath = "{$this->tmp}/control_lock_timeout.marker";
+		$pid = pcntl_fork();
+		if ($pid === -1) {
+			$this->markTestSkipped('pcntl_fork() failed.');
+		}
+		if ($pid === 0) {
+			$fp = fopen($lockPath, 'c');
+			flock($fp, LOCK_EX);
+			touch($markerPath);
+			usleep(5500000);	// past the hardcoded 5.0s lock-acquire budget
+			flock($fp, LOCK_UN);
+			fclose($fp);
+			exit(0);
+		}
+		$deadline = microtime(TRUE) + 2.0;
+		while (!file_exists($markerPath)) {
+			if (microtime(TRUE) >= $deadline) {
+				pcntl_waitpid($pid, $waitStatus);
+				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
+			}
+			usleep(1000);
+		}
+
+		$result = pfb_unbound_py_write_control('enable');
+		pcntl_waitpid($pid, $waitStatus);
+
+		$this->assertFalse($result, 'a contended control-channel lock acquire must return FALSE');
+
+		$log = (string) file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('PFBL-03: control channel lock acquire timed out', $log,
+			'a genuine lock-acquire expiry must log "acquire timed out", got errlog=' . var_export($log, TRUE));
+		$this->assertStringNotContainsString('PFBL-03: control channel lock acquire failed', $log,
+			'a genuine expiry must NOT log "acquire failed" -- that string is reserved for a real '
+			. 'flock() error, never a mere timeout');
+	}
 }

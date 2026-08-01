@@ -490,4 +490,68 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			$this->assertSame('keep', file_get_contents($decoy));
 		}
 	}
+
+	// -----------------------------------------------------------------------
+	// issue #1780 F4 (review round) — restore the error-vs-timeout distinction
+	// the bounded refactor collapsed: pfb_unbound_py_publication_lock() must
+	// still log "timed out" (not "unavailable") on a genuine lock-acquire
+	// expiry.
+	//
+	// This does NOT by itself discriminate the F4 defect: the pre-refactor code
+	// already logged "timed out" unconditionally on ANY pfb_flock_bounded()
+	// failure (timeout or a real flock() error alike), so a genuine timeout
+	// scenario produces the SAME message before and after this fix -- it is a
+	// regression guard confirming the restored $timed_out-based branching did
+	// not swap the two messages. The genuine discriminating proof (a REAL
+	// flock() error, as opposed to a timeout) lives at the shared helper level:
+	// PfbFlockBoundedTest::testBoundedAcquireRealErrorReturnsFalsePromptlyWithTimedOutFalse
+	// forces an actual (non-would-block) flock() failure via a php://memory
+	// stream (portable across platforms, verified). Forcing that SAME kind of
+	// failure through this consumer's own fopen() of a real regular file is not
+	// portably/deterministically reproducible without new dependency injection
+	// this fix does not add (documented as a deviation in the PR handoff).
+	// -----------------------------------------------------------------------
+
+	public function testPublicationLockTimeoutLogsTimedOutNotUnavailable(): void
+	{
+		if (!function_exists('pcntl_fork')) {
+			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		}
+
+		$lockPath   = dirname($GLOBALS['pfb']['unbound_py_sources']) . '/pfb_py_sources.lock';
+		$markerPath = "{$this->tmp}/publock_timeout.marker";
+		$pid = pcntl_fork();
+		if ($pid === -1) {
+			$this->markTestSkipped('pcntl_fork() failed.');
+		}
+		if ($pid === 0) {
+			$fp = fopen($lockPath, 'c');
+			flock($fp, LOCK_EX);
+			touch($markerPath);
+			usleep(400000);
+			flock($fp, LOCK_UN);
+			fclose($fp);
+			exit(0);
+		}
+		$deadline = microtime(TRUE) + 2.0;
+		while (!file_exists($markerPath)) {
+			if (microtime(TRUE) >= $deadline) {
+				pcntl_waitpid($pid, $waitStatus);
+				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
+			}
+			usleep(1000);
+		}
+
+		$result = pfb_unbound_py_publication_lock(0.15);
+		pcntl_waitpid($pid, $waitStatus);
+
+		$this->assertFalse($result, 'a contended publication lock acquire past its own budget must return FALSE');
+
+		$log = (string) file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('DNSBL publication lock timed out', $log,
+			'a genuine lock-acquire expiry must log "timed out", got errlog=' . var_export($log, TRUE));
+		$this->assertStringNotContainsString('DNSBL publication lock unavailable', $log,
+			'a genuine expiry must NOT log "unavailable" -- that string is reserved for a real flock() '
+			. 'error or an fopen() failure, never a mere timeout');
+	}
 }

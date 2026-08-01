@@ -2594,6 +2594,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
             }
         ]
     },
@@ -2634,6 +2641,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
             }
         ]
     },
@@ -2750,6 +2764,20 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
+            },
+            {
+                "name": "unavailable",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
             }
         ]
     },
@@ -2797,6 +2825,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
             }
         ]
     },
@@ -3514,6 +3549,13 @@
                 "variadic": false,
                 "type": "float",
                 "default": null
+            },
+            {
+                "name": "timed_out",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
             }
         ]
     },
@@ -7728,6 +7770,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
             }
         ]
     },
@@ -7870,6 +7919,13 @@
                 "variadic": false,
                 "type": "?callable",
                 "default": "NULL"
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
             }
         ]
     },
@@ -7883,6 +7939,20 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
+            },
+            {
+                "name": "unavailable",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
             }
         ]
     },

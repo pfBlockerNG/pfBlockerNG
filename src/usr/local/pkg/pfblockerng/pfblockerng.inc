@@ -8554,7 +8554,14 @@ function pfb_unbound_py_top1m_atomic_copy(string $source, string $path, array $s
 // issue #1780: bounded flock() acquire -- a wall-clock deadline AND an independent
 // poll cap both bound the wait (a stalled/backward clock still terminates). ORs in
 // LOCK_NB itself; never fclose()s -- the caller owns the handle.
-function pfb_flock_bounded($fp, int $operation, float $timeout_s): bool {
+//
+// issue #1780: $timed_out distinguishes a genuine flock() error (would-block
+// byref never reaches 1 -- not a contention signal at all) from a genuine
+// deadline/poll-cap expiry, so a caller can log the correct one instead of a
+// single ambiguous FALSE. Set TRUE ONLY when the wait genuinely expired; left
+// FALSE on every other return (a real flock() error, or success).
+function pfb_flock_bounded($fp, int $operation, float $timeout_s, ?bool &$timed_out = NULL): bool {
+	$timed_out = FALSE;
 	$wait_s = max($timeout_s, 0.0);
 	$deadline = microtime(TRUE) + $wait_s;
 	// Independent poll cap bounds the wait if the wall clock stalls or moves backward.
@@ -8576,6 +8583,7 @@ function pfb_flock_bounded($fp, int $operation, float $timeout_s): bool {
 			return TRUE;
 		}
 		if ($would_block !== 1) {
+			// A real flock() error -- never a timeout/contention signal.
 			return FALSE;
 		}
 		$polls++;
@@ -8586,6 +8594,7 @@ function pfb_flock_bounded($fp, int $operation, float $timeout_s): bool {
 		usleep((int) min(20000, ceil($remaining_s * 1000000)));
 	} while (TRUE);
 
+	$timed_out = TRUE;
 	return FALSE;
 }
 
@@ -8616,12 +8625,15 @@ function pfb_unbound_py_publication_lock(?float $timeout_s=NULL) {
 		$timeout_s = pfb_unbound_py_publication_lock_timeout();
 	}
 
-	if (pfb_flock_bounded($lock, LOCK_EX, $timeout_s)) {
+	$timed_out = FALSE;
+	if (pfb_flock_bounded($lock, LOCK_EX, $timeout_s, $timed_out)) {
 		return $lock;
 	}
 
 	@fclose($lock);
-	pfb_logger("\nDNSBL publication lock timed out", 2);
+	// issue #1780: "timed out" only on a genuine deadline expiry; a real
+	// flock() error is "unavailable", matching every other hard failure above.
+	pfb_logger($timed_out ? "\nDNSBL publication lock timed out" : "\nDNSBL publication lock unavailable", 2);
 	return FALSE;
 }
 
@@ -8961,9 +8973,14 @@ function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '', $wait_time
 		pfb_logger("\nPFBL-03: control channel lock open failed [ {$lockpath} ]", 2);
 		return FALSE;
 	}
-	if (!pfb_flock_bounded($lock, LOCK_EX, 5.0)) {
+	$timed_out = FALSE;
+	if (!pfb_flock_bounded($lock, LOCK_EX, 5.0, $timed_out)) {
 		@fclose($lock);
-		pfb_logger("\nPFBL-03: control channel lock acquire timed out [ {$lockpath} ]", 2);
+		// issue #1780: "timed out" only on a genuine deadline expiry; a real
+		// flock() error is "acquire failed", matching every other hard failure above.
+		pfb_logger($timed_out
+			? "\nPFBL-03: control channel lock acquire timed out [ {$lockpath} ]"
+			: "\nPFBL-03: control channel lock acquire failed [ {$lockpath} ]", 2);
 		return FALSE;
 	}
 
