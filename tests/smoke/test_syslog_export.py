@@ -324,15 +324,22 @@ def _wait_for_event(
     timeout: float = EVENT_WAIT_SECS,
     interval: float = 1.0,
 ) -> str:
-    """Poll the dedicated file for a NEW event line; return it, or '' on timeout."""
+    """Poll the dedicated file for a NEW event line or raise a salvage-only expiry."""
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    last_new: list[str] = []
+    while True:
         new = _pfb_event_lines(vm)[baseline_len:]
+        last_new = new
         for ln in new:
             if all(tok in ln for tok in want) and (not any_of or any(tok in ln for tok in any_of)):
                 return ln
-        time.sleep(interval)
-    return ""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                f"salvage cap expired / stuck or environment: _wait_for_event expected want={want!r} "
+                f"and any_of={any_of!r}; observed last new lines={last_new!r}"
+            )
+        time.sleep(min(interval, remaining))
 
 
 def _unified_dnsbl_lines(vm: SmokeVM) -> list[str]:
@@ -622,14 +629,7 @@ def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM
     # Then: a NEW dedicated-file record (poll — tail/daemon latency). Match on
     # act=dnsbl + the queried name (qname=). NOTE: b_type is the MATCH type
     # ('DNSBL'/'TLD'/'Python'), NOT the sinkhole mode — there is no 'VIP' b_type.
-    line = _wait_for_event(
-        vm, baseline_len=barrier_baseline, want=("act=dnsbl", f"qname={barrier_domain}", f"qip={civm_ip}")
-    )
-    assert line, (
-        f"No new DNSBL export record after enabling export (LIVE, no restart) and probing {barrier_domain}.\n"
-        f"  expected a new line in {PFB_SYSLOG_LOG} with: act=dnsbl qname={barrier_domain} qip={civm_ip}\n"
-        f"  {syslog_export_state_snapshot(vm)}"
-    )
+    _wait_for_event(vm, baseline_len=barrier_baseline, want=("act=dnsbl", f"qname={barrier_domain}", f"qip={civm_ip}"))
 
     # This qname is unique to the module and queried only while export is OFF.
     # Search rotations too so newsyslog cannot erase the negative evidence.
@@ -703,8 +703,9 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
 
     _trigger_ip_block(client_vm)
 
-    line = _wait_for_event(vm, baseline_len=len(before), want=(TEST_IP_BLOCK_DST,), any_of=IP_ACT_TOKENS)
-    if not line:
+    try:
+        _wait_for_event(vm, baseline_len=len(before), want=(TEST_IP_BLOCK_DST,), any_of=IP_ACT_TOKENS)
+    except RuntimeError as exc:
         ps = vm.ssh("/bin/ps", "-wax", timeout=30)
         daemon_running = "pfblockerng.inc filterlog" in ps.stdout
         pfctl = vm.ssh("/sbin/pfctl", "-t", "pfB_pfb_syslog_iptest_v4", "-T", "show", timeout=30)
@@ -738,8 +739,9 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
             )
         else:
             precondition = "none — daemon running and alias populated"
-        raise AssertionError(
-            f"No new IP-block export record referencing {TEST_IP_BLOCK_DST} after connection to it.\n"
+        raise RuntimeError(
+            f"salvage cap expired / stuck or environment: no new IP-block export record referencing "
+            f"{TEST_IP_BLOCK_DST} after connection to it.\n"
             f"  expected a new line in {PFB_SYSLOG_LOG} with {TEST_IP_BLOCK_DST!r} and one of {list(IP_ACT_TOKENS)!r}\n"
             f"  actual:   no matching line found\n"
             f"  new pfB events that did NOT reference the victim dst (last {min(len(near_misses), 5)}):\n"
@@ -749,7 +751,7 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
             f"  ps: {ps.stdout[:400]!r}\n"
             f"  pfctl: {pfctl.stdout!r}\n"
             f"  {syslog_export_state_snapshot(vm)}"
-        )
+        ) from exc
 
     ip_block_after = h.read_log_file(vm, IP_BLOCK_LOG)
     assert len(ip_block_after) > len(ip_block_before), (
@@ -816,7 +818,6 @@ def test_ip_attribution_cache_invalidated_after_feed_ownership_change(deployed_v
             want=(TEST_IP_BLOCK_DST, "dport=18080"),
             any_of=IP_ACT_TOKENS,
         )
-        assert initial_syslog, f"initial FeedA event absent\n{syslog_export_state_snapshot(vm)}"
         assert f"feed={feed_a_header}" in initial_syslog, (
             f"initial event did not attribute {TEST_IP_BLOCK_DST} to FeedA {feed_a_header!r}: {initial_syslog!r}"
         )
@@ -1004,10 +1005,7 @@ def test_syslog_off_no_new_records(deployed_vm: SmokeVM, client_vm: SmokeVM) -> 
     h.flush_unbound_name(vm, domain)
     ans = h.dns_probe_client(client_vm, domain, "A")
     assert h.is_vip(ans), f"DNSBL block should fire while seeding the ON record, got {ans}"
-    seed_line = _wait_for_event(vm, baseline_len=seed_baseline, want=("act=dnsbl", f"qname={domain}", f"qip={civm_ip}"))
-    assert seed_line, (
-        f"Seeding failed: no export record for {domain} with export ON.\n{syslog_export_state_snapshot(vm)}"
-    )
+    _wait_for_event(vm, baseline_len=seed_baseline, want=("act=dnsbl", f"qname={domain}", f"qip={civm_ip}"))
     unified_baseline = len(_unified_dnsbl_lines(vm))
     dnsbl_csv_before = h.count_log_marker(vm, DNSBL_LOG, domain_off)
 
@@ -1040,13 +1038,7 @@ def test_syslog_off_no_new_records(deployed_vm: SmokeVM, client_vm: SmokeVM) -> 
     h.flush_unbound_name(vm, barrier_domain)
     barrier_answer = h.dns_probe_client(client_vm, barrier_domain, "A")
     assert h.is_vip(barrier_answer), f"DNSBL barrier should be VIP after re-enabling syslog, got {barrier_answer}"
-    barrier_line = _wait_for_event(
-        vm, baseline_len=barrier_baseline, want=("act=dnsbl", f"qname={barrier_domain}", f"qip={civm_ip}")
-    )
-    assert barrier_line, (
-        f"No dedicated syslog export for barrier {barrier_domain} after re-enabling export.\n"
-        f"{syslog_export_state_snapshot(vm)}"
-    )
+    _wait_for_event(vm, baseline_len=barrier_baseline, want=("act=dnsbl", f"qname={barrier_domain}", f"qip={civm_ip}"))
 
     # This qname is unique to the module and queried only while export is OFF.
     # Search rotations too so newsyslog cannot erase the negative evidence.

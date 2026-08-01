@@ -145,12 +145,18 @@ def _wait_for_upstream_block_lines(vm: SmokeVM, name: str, *, timeout_s: float =
     """
     deadline = time.monotonic() + timeout_s
     lines: list[str] = []
-    while time.monotonic() < deadline:
+    while True:
         lines = _upstream_block_lines(_read_dnsbl_log(vm), name)
         if lines:
             return lines
-        time.sleep(poll_s)
-    return lines
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            tail = _read_dnsbl_log(vm)[-3000:]
+            raise RuntimeError(
+                f"salvage cap expired / stuck or environment: _wait_for_upstream_block_lines expected nonempty "
+                f"Upstream_Block lines matching {name!r}; observed lines={lines!r}; log tail={tail!r}"
+            )
+        time.sleep(min(poll_s, remaining))
 
 
 # ---------------------------------------------------------------------------
@@ -185,10 +191,6 @@ class TestUpstreamBlockNXRA:
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
         lines = _wait_for_upstream_block_lines(vm, name)
-        assert lines, (
-            f"No Upstream_Block log line for {name} after NXRA probe.\n"
-            f"Log excerpt (last 3000 chars):\n{_read_dnsbl_log(vm)[-3000:]}"
-        )
         assert any("NXRA" in line for line in lines), (
             f"Upstream_Block line found but b_eval is not NXRA.\nLines: {lines}"
         )
@@ -216,7 +218,6 @@ class TestUpstreamBlockEDE15:
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
         lines = _wait_for_upstream_block_lines(vm, name)
-        assert lines, f"No Upstream_Block log line for {name} (EDE15).\nLog excerpt:\n{_read_dnsbl_log(vm)[-3000:]}"
         assert any("EDE15 (Blocked)" in line for line in lines), f"b_eval is not 'EDE15 (Blocked)'.\nLines: {lines}"
         assert any("Quad9" in line for line in lines), (
             f"Provider 'Quad9' not found in Upstream_Block line.\nLines: {lines}"
@@ -249,7 +250,6 @@ class TestUpstreamBlockEDE17:
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
         lines = _wait_for_upstream_block_lines(vm, name)
-        assert lines, f"No Upstream_Block log line for {name} (EDE17).\nLog excerpt:\n{_read_dnsbl_log(vm)[-3000:]}"
         assert any("EDE17 (Filtered)" in line for line in lines), f"b_eval is not 'EDE17 (Filtered)'.\nLines: {lines}"
         assert any("Quad9" in line for line in lines), (
             f"Provider 'Quad9' not found in Upstream_Block line.\nLines: {lines}"
@@ -447,16 +447,21 @@ def _wait_for_counter_above(
     lock race) is polled through like any other non-matching value — the deadline
     already bounds it.
 
-    Returns the final observed ``(value, detail)`` (may equal ``baseline`` on timeout).
+    Raises a salvage-only error if the counter never exceeds ``baseline``.
     """
     deadline = time.monotonic() + timeout_s
     current: tuple[int, str] = (baseline, "")
-    while time.monotonic() < deadline:
+    while True:
         current = _read_upstream_counter(vm)
         if current[0] > baseline:
             return current
-        time.sleep(poll_s)
-    return current
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                f"salvage cap expired / stuck or environment: _wait_for_counter_above expected counter > "
+                f"{baseline}; observed value={current[0]} detail={current[1]!r}"
+            )
+        time.sleep(min(poll_s, remaining))
 
 
 class TestUpstreamCounterIncrement:
@@ -508,28 +513,18 @@ class TestUpstreamCounterIncrement:
 
         # Confirm the block line was logged (proves the detection fired, not just a
         # natural NXDOMAIN — the counter increment is meaningless without this).
-        lines = _wait_for_upstream_block_lines(vm, name)
-        assert lines, (
-            f"No Upstream_Block log line for {name} — detection did not fire; "
-            f"counter increment cannot be attributed to an upstream block.\n"
-            f"Log excerpt:\n{_read_dnsbl_log(vm)[-2000:]}"
-        )
-
+        _wait_for_upstream_block_lines(vm, name)
         # Then: wait for the async flush and assert an EXACT +1 delta, not merely "some
         # increase". Only one NXRA probe happens in this test's window (asserted above via
         # the log-line check), and the serial pytest run + PFB_DB_FLUSH_INTERVAL=1.0s mean
         # every earlier test's increment (NXRA/EDE15/EDE17 above) is long since flushed into
-        # `baseline` by the time this test starts (the three control tests preceding this one
-        # each causal barrier, far past the 1s flush window). A bare
+        # `baseline` by the time this test starts (each of the three preceding control tests
+        # consumes a causal barrier, far past the 1s flush window). A bare
         # `final > baseline` would also pass if some OTHER probe's increment leaked into this
         # window — exact equality is the real proof this probe (and only this probe) counted.
-        # A read that is still ERRORED at the deadline is a read problem, not a stuck counter
-        # — keep the two failure modes distinct here too (mirrors the baseline assert).
-        final, final_detail = _wait_for_counter_above(vm, baseline)
-        assert final != -2, (
-            f"Upstream counter read ERRORED while waiting for the increase "
-            f"(NOT a stuck counter — do not blame the enqueue/flush): {final_detail!r}"
-        )
+        # A persistent read error (-2) at the deadline surfaces in the raised diagnostic's
+        # detail field, so the read-vs-stuck distinction remains visible in the failure text.
+        final, _ = _wait_for_counter_above(vm, baseline)
         delta = final - baseline
         assert delta == 1, (
             f"Upstream counter delta after NXRA block: expected=1 actual={delta} "

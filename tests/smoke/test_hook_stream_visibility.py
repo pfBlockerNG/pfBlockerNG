@@ -16,6 +16,7 @@ log. RED against the block-behavior (LINE1 absent mid-hook); GREEN once the hook
 
 from __future__ import annotations
 
+import sys
 import time
 
 import pytest
@@ -70,34 +71,92 @@ def _streaming_hook(token: str) -> dict[str, str]:
     }
 
 
-def _wait_for_guest_file(vm: SmokeVM, path: str, *, deadline_s: float, poll_s: float = 1.0) -> bool:
-    """Poll until ``path`` exists on the guest or the deadline passes. Returns True iff it appeared.
+def _wait_for_guest_file(vm: SmokeVM, path: str, *, deadline_s: float, poll_s: float = 1.0) -> None:
+    """Poll until ``path`` exists on the guest or raise a salvage-only expiry.
 
     A bounded poll on a REMOTE file the hook creates — the only side we cannot signal — with a
-    hard deadline (never an open wait). This is the sanctioned last-resort poll, kept loud: the
-    caller asserts the return.
+    hard deadline (never an open wait). This is the sanctioned last-resort poll.
     """
     end = time.monotonic() + deadline_s
-    while time.monotonic() < end:
-        if vm.ssh("/bin/test", "-f", path).returncode == 0:
-            return True
-        time.sleep(poll_s)
-    return False
+    result = None
+    while True:
+        result = vm.ssh("/bin/test", "-f", path)
+        if result.returncode == 0:
+            return
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                f"salvage cap expired / stuck or environment: guest file {path!r} expected test -f rc=0; "
+                f"actual rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+            )
+        time.sleep(min(poll_s, remaining))
 
 
-def _wait_upgrade_gone(vm: SmokeVM, *, deadline_s: float, poll_s: float = 2.0) -> bool:
-    """Poll (bounded) until no pfSense-upgrade process remains. Returns True iff it drained.
+def _wait_upgrade_gone(vm: SmokeVM, *, deadline_s: float, poll_s: float = 2.0) -> None:
+    """Poll (bounded) until no pfSense-upgrade process remains or raise expiry.
 
     The test launches pfSense-upgrade DETACHED, so the wrapping pkg transaction (and its pkg
     lock) outlives the hook itself. Wait for it to exit before touching the package again; a
     bounded wait, never open-ended (pgrep rc 1 = none left).
     """
     end = time.monotonic() + deadline_s
-    while time.monotonic() < end:
-        if vm.ssh("/bin/sh", "-c", "pgrep -f pfSense-upgrade >/dev/null").returncode != 0:
-            return True
-        time.sleep(poll_s)
-    return False
+    result = None
+    while True:
+        result = vm.ssh("/bin/sh", "-c", "pgrep -f pfSense-upgrade >/dev/null")
+        if result.returncode == 1:
+            return
+        if result.returncode != 0:
+            raise RuntimeError(
+                "salvage cap expired / stuck or environment: _wait_upgrade_gone expected pgrep rc=0 "
+                f"(running) or rc=1 (gone); actual rc={result.returncode} "
+                f"stdout={result.stdout!r} stderr={result.stderr!r}"
+            )
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                "salvage cap expired / stuck or environment: _wait_upgrade_gone expected pgrep rc!=0; "
+                f"actual rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+            )
+        time.sleep(min(poll_s, remaining))
+
+
+def _cleanup_hook_run(vm: SmokeVM) -> None:
+    """Release the hook and clean up without hiding the test's primary failure."""
+    primary_error = sys.exception()
+    cleanup_errors: list[Exception] = []
+    upgrade_running = False
+    try:
+        vm.ssh("/usr/bin/touch", PROCEED)
+    except Exception as exc:
+        cleanup_errors.append(exc)
+        upgrade_running = True
+    else:
+        try:
+            _wait_upgrade_gone(vm, deadline_s=60.0)
+        except Exception as exc:
+            cleanup_errors.append(exc)
+            upgrade_running = True
+    try:
+        h.clear_update_hooks(vm)
+    except Exception as exc:
+        cleanup_errors.append(exc)
+    try:
+        vm.ssh("/bin/rm", "-f", GUI_LOG, WAITING, PROCEED)
+    except Exception as exc:
+        cleanup_errors.append(exc)
+    if not upgrade_running:
+        try:
+            pkg_delete(vm)
+        except Exception as exc:
+            cleanup_errors.append(exc)
+    if cleanup_errors:
+        if primary_error is not None:
+            for cleanup_error in cleanup_errors:
+                primary_error.add_note(f"hook cleanup: {cleanup_error}")
+        else:
+            for cleanup_error in cleanup_errors[1:]:
+                cleanup_errors[0].add_note(f"additional hook cleanup failure: {cleanup_error}")
+            raise cleanup_errors[0]
 
 
 @pytest.mark.timeout(1200)
@@ -144,10 +203,7 @@ def test_hook_output_streams_to_gui_while_running(repo_vm: SmokeVM) -> None:
         )
 
         # The hook fires late in the resync; wait (bounded) for it to print LINE1 and block.
-        assert _wait_for_guest_file(vm, WAITING, deadline_s=300.0), (
-            "the streaming hook never reached its wait state within 300s — the reinstall resync "
-            "did not fire the post hook (was pfSense-upgrade -i -f run and the hook configured?)"
-        )
+        _wait_for_guest_file(vm, WAITING, deadline_s=300.0)
 
         # ---- THEN (streaming): LINE1 visible mid-hook, LINE2 not yet --------------- #
         # The hook is provably still blocked: it touched WAITING (removed only after LINE2),
@@ -157,19 +213,21 @@ def test_hook_output_streams_to_gui_while_running(repo_vm: SmokeVM) -> None:
         # only appears AFTER it exits (block-behaviour) never shows LINE1 here — the hook cannot
         # exit until PROCEED, which is created only after this loop.
         mid = ""
-        end = time.monotonic() + 20.0
-        while time.monotonic() < end:
+
+        def line1_observed() -> bool:
+            nonlocal mid
             mid = vm.ssh("cat", GUI_LOG).stdout
-            if LINE1 in mid:
-                break
-            time.sleep(1.0)
+            return LINE1 in mid
+
+        try:
+            h.wait_until(line1_observed, timeout=20.0, interval=1.0)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"salvage cap expired / stuck or environment: hook GUI log expected marker {LINE1!r}; "
+                f"observed tail={mid[-3000:]!r}"
+            ) from exc
         assert vm.ssh("/bin/test", "-f", WAITING).returncode == 0, (
             "the hook left its wait state before LINE1 was checked — timing invariant broken"
-        )
-        assert LINE1 in mid, (
-            f"the hook's first line {LINE1!r} did NOT reach the GUI log while the hook is still "
-            f"blocked — its output is buffered until the hook exits instead of streaming to the pkg "
-            f"Software page. GUI log so far:\n{mid[-3000:]}"
         )
         assert LINE2 not in mid, (
             f"{LINE2!r} appeared before the hook was released — the block-on-signal setup is "
@@ -178,34 +236,30 @@ def test_hook_output_streams_to_gui_while_running(repo_vm: SmokeVM) -> None:
 
         # ---- WHEN: release the hook, let the op finish ----------------------------- #
         vm.ssh("/usr/bin/touch", PROCEED)
-        assert _wait_for_guest_file(vm, GUI_LOG, deadline_s=60.0), "GUI log vanished after release"
 
         # Wait (bounded) for LINE2 to land — the op is done once the final line is mirrored.
-        end = time.monotonic() + 120.0
         final = ""
-        while time.monotonic() < end:
+
+        def line2_observed() -> bool:
+            nonlocal final
             final = vm.ssh("cat", GUI_LOG).stdout
-            if LINE2 in final:
-                break
-            time.sleep(1.0)
+            return LINE2 in final
+
+        try:
+            h.wait_until(line2_observed, timeout=120.0, interval=1.0)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"salvage cap expired / stuck or environment: hook GUI log expected marker {LINE2!r}; "
+                f"observed tail={final[-3000:]!r}"
+            ) from exc
 
         # ---- THEN: both lines present at the end ----------------------------------- #
-        assert LINE1 in final and LINE2 in final, (
-            f"after releasing the hook, the GUI log is missing a line (LINE1={LINE1 in final}, "
-            f"LINE2={LINE2 in final}):\n{final[-3000:]}"
-        )
+        assert LINE1 in final, f"after releasing the hook, GUI log missing {LINE1!r}:\n{final[-3000:]}"
 
         # LINE2 means the HOOK finished, but the wrapping detached pfSense-upgrade keeps its pkg
         # lock through the rest of the resync. Drain it before cleanup so pkg_delete() below (in
         # finally) doesn't race the still-held lock. Assert (loud timeout): if it never exits the
         # test is not deterministic — surface that rather than proceed into a lock race.
-        assert _wait_upgrade_gone(vm, deadline_s=120.0), (
-            "pfSense-upgrade did not exit within 120s after the hook finished — cleanup would race "
-            "its still-held pkg lock"
-        )
+        _wait_upgrade_gone(vm, deadline_s=120.0)
     finally:
-        vm.ssh("/usr/bin/touch", PROCEED)  # never leave a blocked hook behind
-        _wait_upgrade_gone(vm, deadline_s=60.0)  # let a failed-path run release its pkg lock too
-        h.clear_update_hooks(vm)
-        vm.ssh("/bin/rm", "-f", GUI_LOG, WAITING, PROCEED)
-        pkg_delete(vm)
+        _cleanup_hook_run(vm)
