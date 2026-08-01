@@ -1234,7 +1234,9 @@ def test_ipv4_category_edit_renders_clean_with_a_pending_system_notice(
     try:
         res = helpers.php_eval(
             vm,
-            f"require_once('notices.inc');\nfile_notice('pfb-smoke-1856', '{notice_text}', 'pfBlockerNG');\necho 'OK';",
+            "require_once('notices.inc');\n"
+            f"file_notice('pfb-smoke-1856', {helpers._php_str(notice_text)}, 'pfBlockerNG');\n"
+            "echo 'OK';",
         )
         assert res.returncode == 0 and "OK" in res.stdout, (
             f"file_notice fixture failed: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr!r}"
@@ -1253,7 +1255,9 @@ def test_ipv4_category_edit_renders_clean_with_a_pending_system_notice(
         assert diag is None, f"notice-bearing category-edit page reads as a PHP diagnostic: {diag!r}"
         assert "Must be a Port-type alias." in body, "category-edit page marker missing with a notice pending"
     finally:
-        clear = helpers.php_eval(vm, "require_once('notices.inc');\nclose_notice('all');\necho 'OK';")
+        # Scope the teardown to OUR notice id -- 'all' would also erase any genuine
+        # pre-existing system notice on the shared session VM.
+        clear = helpers.php_eval(vm, "require_once('notices.inc');\nclose_notice('pfb-smoke-1856');\necho 'OK';")
         assert clear.returncode == 0 and "OK" in clear.stdout, (
             f"close_notice teardown failed: rc={clear.returncode} stdout={clear.stdout!r} stderr={clear.stderr!r}"
         )
