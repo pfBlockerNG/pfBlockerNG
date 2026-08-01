@@ -1939,13 +1939,13 @@ def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: 
 
     # ---- Build the route-only (EOL) catalog ON THE RUNNER (no guest involved). ----
     # Uses --build-matrix + --route-only-pkgs — the exact CLI shape publish.yml will use.
-    # issue #1806 D3 KNOWN GAP (deliberately not addressed here): --dep-pkgs never
+    # issue #1828 KNOWN GAP / owner call (deliberately not addressed here): this
+    # post-#1806 wildcard-ABI asset is eligible for route-only, but --dep-pkgs never
     # folds into a route-only entry (test_dep_pkgs_route_only_entry_never_folds_
-    # dep_shared_major_build_entry_does pins that exclusion), so this frozen
-    # catalog cannot carry SMOKE_DEP_PKGS even though the frozen .pkg's payload
-    # (a reversion_pkg of the branch build) declares the SAME RUN_DEPENDS. If the
-    # branch's RUN_DEPENDS set ever needs a repo-supplied dep, an EOL/route-only
-    # install of it stays unresolved by design — a product question beyond D3.
+    # dep_shared_major_build_entry_does pins that exclusion). This frozen catalog
+    # therefore cannot carry SMOKE_DEP_PKGS even though the frozen .pkg declares the
+    # same RUN_DEPENDS. Whether such post-#1806 families need their dependencies
+    # frozen alongside the last .pkg remains an owner decision.
     eol_out_dir = tmp_path / "eol_catalog_out"
     local_release_dir = _build_eol_catalog_on_runner(
         frozen_pkg,
