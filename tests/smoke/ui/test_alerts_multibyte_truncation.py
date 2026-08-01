@@ -111,8 +111,12 @@ _ALL_LINES = _IP_LINE + _DNSBL_LINE + _DNS_REPLY_LINE
 
 
 @pytest.fixture
-def _seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[None]:
+def seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[tuple[str, ...]]:
     """Append the three straddling rows to ``unified.log``; restore its exact byte size after.
+
+    Yields the markers it actually seeded, so the test iterates over the
+    fixture's own output rather than module constants -- the assertions cannot
+    run against data this fixture did not write.
 
     Self-encapsulated (this module is ``ui_render``-only, so the shared
     ``_ui_pfb_isolation`` restore fixture does not run for it): the log
@@ -138,7 +142,7 @@ def _seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[None]:
     )
     assert append.returncode == 0, f"failed to append the fixture rows to {UNIFIED_LOG}: stderr={append.stderr!r}"
 
-    yield
+    yield (IP_MARKER, DNSBL_MARKER, REPLY_MARKER)
 
     restore = vm.ssh(f"truncate -s {original_size} {UNIFIED_LOG}", timeout=15)
     assert restore.returncode == 0, f"failed to restore {UNIFIED_LOG} size: stderr={restore.stderr!r}"
@@ -149,7 +153,7 @@ def _seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[None]:
 
 
 def test_unified_rows_keep_straddling_multibyte_char_whole(
-    smoke_vm: SmokeVM, webui: WebUI, _seeded_unified_rows: None
+    smoke_vm: SmokeVM, webui: WebUI, seeded_unified_rows: tuple[str, ...]
 ) -> None:
     """Every seeded row's straddling character survives whole; none renders U+FFFD."""
     guard = PhpErrorLogGuard(smoke_vm)
@@ -160,7 +164,8 @@ def test_unified_rows_keep_straddling_multibyte_char_whole(
     assert result.ok, f"Tier-A render oracle failed for the Alerts Unified view: {result.detail}"
 
     body = resp.text
-    for marker in (IP_MARKER, DNSBL_MARKER, REPLY_MARKER):
+    assert seeded_unified_rows, "the seeding fixture yielded no markers -- nothing would be asserted"
+    for marker in seeded_unified_rows:
         row = row_containing(body, marker)
         assert "�" not in row, (
             f"row for marker {marker!r} rendered U+FFFD -- a byte-based cut dangled the "
