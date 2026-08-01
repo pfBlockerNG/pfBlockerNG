@@ -251,4 +251,45 @@ final class PfbFlockBoundedTest extends TestCase
 		$this->assertTrue(is_finite($timeout), 'the default publication-lock timeout must be finite -- got ' . var_export($timeout, TRUE));
 		$this->assertGreaterThan(0.0, $timeout, 'the default publication-lock timeout must be strictly positive -- got ' . $timeout);
 	}
+
+	// -----------------------------------------------------------------------
+	// E. A budget that is not representable as an int must not silently UNBIND
+	// the poll cap. $timeout_s is a public float parameter, so INF (or any float
+	// whose /0.02 quotient overflows int) reaches the `(int) ceil(...)` poll-cap
+	// computation; that cast raises "not representable as an int" and yields 0,
+	// collapsing the cap from "one poll per 20ms of budget" to 2 attempts total.
+	// The second of the two independent bounds then stops bounding anything.
+	// -----------------------------------------------------------------------
+
+	public function testNonRepresentableBudgetRaisesNoDiagnosticAndStillAcquires(): void
+	{
+		foreach (['INF' => INF, 'huge' => 1e300] as $label => $budget) {
+			$path = tempnam(sys_get_temp_dir(), 'pfbflock');
+			$fp   = fopen($path, 'c');
+
+			$diagnostics = [];
+			set_error_handler(function (int $no, string $str) use (&$diagnostics): bool {
+				$diagnostics[] = "[{$no}] {$str}";
+				return TRUE;
+			});
+			try {
+				$acquired = pfb_flock_bounded($fp, LOCK_EX, $budget);
+			} finally {
+				restore_error_handler();
+			}
+
+			$this->assertSame(
+				[],
+				$diagnostics,
+				"a {$label} budget must not raise a PHP diagnostic: the poll-cap cast warns and "
+				. 'collapses the cap to 2 attempts, so the wait is no longer bounded by polls -- got '
+				. implode('; ', $diagnostics)
+			);
+			$this->assertTrue($acquired, "an uncontended acquire must still succeed with a {$label} budget");
+
+			flock($fp, LOCK_UN);
+			fclose($fp);
+			@unlink($path);
+		}
+	}
 }

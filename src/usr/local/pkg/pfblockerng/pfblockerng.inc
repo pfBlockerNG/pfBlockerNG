@@ -8562,7 +8562,9 @@ function pfb_unbound_py_top1m_atomic_copy(string $source, string $path, array $s
 // FALSE on every other return (a real flock() error, or success).
 function pfb_flock_bounded($fp, int $operation, float $timeout_s, ?bool &$timed_out = NULL): bool {
 	$timed_out = FALSE;
-	$wait_s = max($timeout_s, 0.0);
+	// Clamp before the poll-cap cast below: a budget whose /0.02 quotient overflows int
+	// makes that cast warn and yield 0, collapsing the cap to 2 attempts (unbounding it).
+	$wait_s = min(max($timeout_s, 0.0), 3600.0);
 	$deadline = microtime(TRUE) + $wait_s;
 	// Independent poll cap bounds the wait if the wall clock stalls or moves backward.
 	$max_polls = (int) ceil($wait_s / 0.02) + 2;
