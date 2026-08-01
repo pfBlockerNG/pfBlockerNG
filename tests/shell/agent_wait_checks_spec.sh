@@ -286,13 +286,52 @@ printf '%s' "${GH_STUB_STDOUT-partial stdout}"
 printf '%s' "${GH_STUB_STDERR- + stderr}" >&2
 if [ -n "${GH_STUB_HANG:-}" ]; then
 	[ -z "${GH_STUB_IGNORE_TERM:-}" ] || trap '' TERM
-	sleep "${GH_STUB_HANG_SECONDS:-4}"
+	printf 'ready\n' > "$GH_STUB_READY_FIFO"
+	exec 9< "$GH_STUB_RELEASE_FIFO"
 	[ -z "${GH_STUB_HANG_MARKER:-}" ] || printf done > "$GH_STUB_HANG_MARKER"
 fi
 exit "${GH_STUB_STATUS:-0}"
 STUB
     chmod +x "$stubdir/gh"
     PATH="$stubdir:$PATH"
+  }
+
+  setup_synchronised_timeout() {
+    export REAL_TIMEOUT
+    REAL_TIMEOUT=$(command -v timeout)
+    mkfifo "$stubdir/ready" "$stubdir/release"
+    export GH_STUB_READY_FIFO="$stubdir/ready" GH_STUB_RELEASE_FIFO="$stubdir/release"
+    export TIMEOUT_STUB_ARGS="$stubdir/timeout-args"
+    cat > "$stubdir/date" <<'STUB'
+#!/bin/sh
+printf '100\n'
+STUB
+    cat > "$stubdir/timeout" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" > "$TIMEOUT_STUB_ARGS"
+case "$1" in
+	-k|-s) shift 2 ;;
+esac
+shift
+"$@" &
+child=$!
+if ! "$REAL_TIMEOUT" 10 sh -c 'IFS= read -r event < "$GH_STUB_READY_FIFO"'; then
+	echo 'stuck/environment: gh stub did not signal readiness' >&2
+	kill -KILL "$child" 2>/dev/null || :
+	wait "$child" 2>/dev/null || :
+	exit 125
+fi
+kill -TERM "$child"
+if [ -n "${GH_STUB_IGNORE_TERM:-}" ]; then
+	kill -0 "$child" || exit 125
+	[ -z "${TIMEOUT_STUB_KILL_MARKER:-}" ] || true > "$TIMEOUT_STUB_KILL_MARKER"
+	kill -KILL "$child"
+fi
+wait "$child" 2>/dev/null || :
+exit 124
+STUB
+    chmod +x "$stubdir/date" "$stubdir/timeout"
+    deadline=102
   }
   cleanup_stub() { rm -rf "$stubdir"; }
   Before 'setup_stub'
@@ -337,20 +376,23 @@ STUB
   End
 
   It 'returns timeout status with partial output when the remaining deadline expires'
-    deadline=$(( $(date +%s) + 2 ))
+    setup_synchronised_timeout
     export GH_STUB_HANG=1
     When call gh_bounded api endpoint
     The status should equal 124
     The output should equal 'partial stdout + stderr'
+    The contents of file "$TIMEOUT_STUB_ARGS" should equal '-k 1 1 gh api endpoint'
   End
 
   It 'kills a TERM-ignoring gh child before it can outlive the deadline'
-    deadline=$(( $(date +%s) + 2 ))
-    export GH_STUB_HANG=1 GH_STUB_IGNORE_TERM=1 GH_STUB_HANG_SECONDS=3
+    setup_synchronised_timeout
+    export GH_STUB_HANG=1 GH_STUB_IGNORE_TERM=1
     export GH_STUB_HANG_MARKER="$stubdir/outlived"
+    export TIMEOUT_STUB_KILL_MARKER="$stubdir/killed"
     When call gh_bounded api endpoint
-    The status should not equal 0
+    The status should equal 124
     The output should include 'partial stdout + stderr'
+    The file "$TIMEOUT_STUB_KILL_MARKER" should be exist
     The file "$GH_STUB_HANG_MARKER" should not be exist
   End
 End
@@ -435,7 +477,10 @@ case " ${GH_STUB_FAIL_CALLS:-} " in
 	*" $count "*) printf '%s\n' "${GH_STUB_FAIL_OUTPUT:-HTTP 404}"; exit 1 ;;
 esac
 case "$*" in
-	*"pr view "*) printf '%s\n' "${GH_STUB_SHA:-deadbeef}" ;;
+	*"pr view "*)
+		printf '%s\n' "${GH_STUB_SHA:-deadbeef}"
+		[ -z "${GH_STUB_ARMED_MARKER:-}" ] || true > "$GH_STUB_ARMED_MARKER"
+		;;
 	*"/check-runs"*) printf '%s\n' "$GH_STUB_CHECK_RUNS" ;;
 	*"/status"*) printf '%s\n' "$GH_STUB_STATUS_PAYLOAD" ;;
 esac
@@ -546,23 +591,18 @@ STUB
   It 'honours the wall-clock deadline even when a verdict would be reached'
     export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
     export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
-    # date returns "100" for the arm-time gh_bounded call (deadline 101 still ahead of
-    # it) then "200" for the loop's own check -- the loop must break on ITS deadline
-    # check even though the (unfetched) checks would otherwise pass.
+    # Advance the fake clock only after the gh stub signals that SHA arming completed.
+    # The loop must then break on its own deadline check before fetching the checks.
     cat > "$stubdir/date" <<'STUB'
 #!/bin/sh
-n=0
-[ ! -f "${DATE_COUNT_FILE:-}" ] || n=$(cat "$DATE_COUNT_FILE")
-n=$((n + 1))
-[ -z "${DATE_COUNT_FILE:-}" ] || printf '%s\n' "$n" > "$DATE_COUNT_FILE"
-if [ "$n" -le 1 ]; then
-	printf '100\n'
-else
+if [ -e "$GH_STUB_ARMED_MARKER" ]; then
 	printf '200\n'
+else
+	printf '0\n'
 fi
 STUB
     chmod +x "$stubdir/date"
-    export DATE_COUNT_FILE="$stubdir/date-count"
+    export GH_STUB_ARMED_MARKER="$stubdir/armed"
     export PFB_WAIT_DEADLINE=101
     When run sh "$script" --repo o/r --pr 1 --interval 0 --max-iter 3
     The line 1 of output should equal 'TIMEOUT'
