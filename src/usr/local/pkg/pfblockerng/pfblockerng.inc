@@ -12718,7 +12718,8 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					}
 				}
 
-				if (!pfb_is_empty($username) || !pfb_is_empty($password)) {
+				$feed_has_creds = !pfb_is_empty($username) || !pfb_is_empty($password);
+				if ($feed_has_creds) {
 					curl_setopt($ch, CURLOPT_USERPWD, "{$username}:{$password}");
 					curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
 				}
@@ -12826,6 +12827,22 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					// remains in the feed file.
 					ftruncate($fhandle, 0);
 					rewind($fhandle);
+
+					// Scope the Basic credentials to the ORIGINAL feed host
+					// (issue #1919) — libcurl's own FOLLOWLOCATION policy: a
+					// cross-host hop must not receive the origin's
+					// Authorization, and a hop back onto the origin host
+					// regains it. CURLAUTH_NONE (with the userpwd blanked)
+					// stops libcurl from sending any Authorization header.
+					if ($feed_has_creds) {
+						if (strcasecmp($next['host'], $feed_host) === 0) {
+							curl_setopt($ch, CURLOPT_USERPWD, "{$username}:{$password}");
+							curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+						} else {
+							curl_setopt($ch, CURLOPT_USERPWD, '');
+							curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_NONE);
+						}
+					}
 
 					// Re-point cURL at the vetted target and re-pin its address. The
 					// '-host:port' entry removes any prior pin for the same host:port
