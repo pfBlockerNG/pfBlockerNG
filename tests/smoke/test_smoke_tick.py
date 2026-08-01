@@ -491,14 +491,12 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
         # When: tick fires — cron is not due, but ss_refresh always runs.
         _run_tick(vm)
 
-        # Then: no new CRON PROCESS pass appeared (cron skipped). The bounded poll gives any
-        # erroneous late dispatch a window to show; wait_until returns False (good) when the
-        # count never rises.
-        assert not h.wait_until(
-            lambda: h.count_log_marker(vm, h.PFB_LOG, marker) > before,
-            timeout=20,
-            interval=4,
-        ), f"tick dispatched a cron for a NON-due feed — ' {marker}' marker count rose from {before}"
+        # Then: no new CRON PROCESS pass appeared (cron skipped). _run_tick is the synchronous
+        # barrier, so the post-tick marker snapshot is authoritative.
+        after = h.count_log_marker(vm, h.PFB_LOG, marker)
+        assert after == before, (
+            f"tick dispatched a cron for a NON-due feed — ' {marker}' marker count rose from {before}"
+        )
 
         # Then: the ss_refresh marker DID appear — the tick genuinely ran; this is what
         # distinguishes "skipped correctly" from "never ran" above.

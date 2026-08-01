@@ -16,8 +16,12 @@ mirrors the precedent in ``tests/test_smoke_diag_redaction.py``).
 
 from __future__ import annotations
 
+import subprocess
+from typing import cast
+
 import pytest
 
+from tests.smoke import helpers
 from tests.smoke.helpers import _assert_boottime_advanced
 
 _BEFORE = "{ sec = 1751500000, usec = 123456 }"
@@ -79,3 +83,48 @@ def test_assert_boottime_advanced_strips_whitespace_before_comparing() -> None:
     """
     with pytest.raises(AssertionError):
         _assert_boottime_advanced(_BEFORE, f"{_BEFORE}\n")
+
+
+def test_reboot_vm_waits_for_changed_boottime_before_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeVM:
+        ssh_key_path = "/tmp/id_ed25519"
+        host = "127.0.0.1"
+        ssh_port = 2222
+        vm_pid = None
+        web_port = 8080
+
+        def __init__(self) -> None:
+            self.boottime_reads = 0
+            self.calls: list[str] = []
+
+        def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+            command = " ".join(remote)
+            self.calls.append(command)
+            if command == helpers._BOOTTIME_SYSCTL:
+                self.boottime_reads += 1
+                value = _BEFORE if self.boottime_reads <= 3 else _AFTER
+                return subprocess.CompletedProcess(remote, 0, value, "")
+            if command == "/sbin/reboot":
+                return subprocess.CompletedProcess(remote, 0, "", "")
+            raise AssertionError(f"unexpected ssh command: {command}")
+
+    fake_vm = FakeVM()
+    vm = cast(helpers.SmokeVM, fake_vm)
+    ready_calls: list[list[str]] = []
+    sleep_calls: list[float] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        ready_calls.append(argv)
+        assert fake_vm.boottime_reads == 4, "changed boottime must be observed before readiness"
+        return subprocess.CompletedProcess(argv, 0, "ready", "")
+
+    monkeypatch.setattr(helpers.subprocess, "run", fake_run)
+    monkeypatch.setattr(helpers.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(helpers, "wait_boot_complete", lambda vm: None)
+    monkeypatch.setattr(helpers, "wait_unbound_ready", lambda vm: None)
+
+    helpers.reboot_vm(vm, timeout=5)
+
+    assert ready_calls
+    assert fake_vm.boottime_reads == 4
+    assert all(delay < 30 for delay in sleep_calls)

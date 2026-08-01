@@ -43,7 +43,6 @@ import socket
 import subprocess
 import tempfile
 import threading
-import time
 from collections.abc import Generator, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1005,9 +1004,10 @@ class _MockCallbackSink:
 
     def __init__(self) -> None:
         self._callbacks: list[CallbackRecord] = []
-        self._lock = threading.Lock()
+        self._condition = threading.Condition()
+        self._lock = self._condition
         callbacks = self._callbacks
-        lock = self._lock
+        condition = self._condition
 
         class Handler(BaseHTTPRequestHandler):
             def _record(self) -> None:
@@ -1019,8 +1019,9 @@ class _MockCallbackSink:
                     form=parse_qs(body),
                     query=parse_qs(urlsplit(self.path).query),
                 )
-                with lock:
+                with condition:
                     callbacks.append(rec)
+                    condition.notify_all()
                 self.send_response(200)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -1058,20 +1059,17 @@ class _MockCallbackSink:
         return f"http://{GUEST_TO_HOST_ALIAS}:{self.port}{path}"
 
     def wait_for(self, n: int, timeout: float = 10.0) -> bool:
-        """Poll until at least ``n`` callbacks are recorded, or time out.
+        """Wait for the callback-count event; timeout is a salvage cap only.
 
-        The hook ``curl`` is synchronous within the update pass, but the sink's
-        handler thread records a moment later — poll (no fixed sleep) so the
-        assertion is not racy. Returns True iff the count was reached.
+        Raises a loud ``stuck/environment`` failure when the event is not observed.
         """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            with self._lock:
-                if len(self._callbacks) >= n:
-                    return True
-            time.sleep(0.1)
-        with self._lock:
-            return len(self._callbacks) >= n
+        with self._condition:
+            if self._condition.wait_for(lambda: len(self._callbacks) >= n, timeout=timeout):
+                return True
+        raise RuntimeError(
+            f"stuck/environment: callback count did not reach {n} before salvage cap {timeout}s "
+            f"(observed {len(self._callbacks)})"
+        )
 
     def start(self) -> None:
         self._thread.start()
@@ -1436,17 +1434,6 @@ def webhook_sink(smoke_vm: SmokeVM) -> Iterator[_MockCallbackSink]:
 # --------------------------------------------------------------------------- #
 # Small probe helpers shared by smoke tests
 # --------------------------------------------------------------------------- #
-
-
-def wait_for_tcp(host: str, port: int, timeout: float = 5.0) -> bool:
-    """Best-effort TCP reachability check (no fixed sleep elsewhere)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        with contextlib.suppress(OSError):
-            with socket.create_connection((host, port), timeout=2.0):
-                return True
-        time.sleep(0.2)
-    return False
 
 
 def resolve_a(name: str, host: str, port: int, timeout: float = 5.0) -> list[str]:

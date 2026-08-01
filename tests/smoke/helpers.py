@@ -3570,13 +3570,6 @@ def pfb_config_digest(vm: SmokeVM, *, timeout: float = 30.0) -> str:
 # it must run in its own dispatch, not interleaved with the per-case smoke matrix.
 
 
-# Fixed settle after issuing /sbin/reboot, before probing readiness: long enough that the box
-# is actually shutting down (so we never read the still-up pre-reboot sshd as "ready"), short
-# relative to the boot it precedes. A deliberate shutdown wait -- not concurrency coordination
-# (issue #456's exception: we are waiting out a real OS shutdown we cannot signal, not
-# coordinating two sides of our own async code).
-_REBOOT_SETTLE_SECS = 30
-
 _BOOTTIME_SYSCTL = "sysctl -n kern.boottime"
 
 
@@ -3608,30 +3601,10 @@ def _assert_boottime_advanced(before: str, after: str) -> None:
 
 
 def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
-    """Reboot the guest OS and block until it is ready again, reusing the SAME readiness gate
-    as the initial boot.
+    """Reboot, observe a changed ``kern.boottime``, then await full readiness.
 
-      1. Read ``kern.boottime`` once, BEFORE issuing the reboot -- the "before" side of the
-         post-reboot proof (#738 F4).
-      2. Issue ``/sbin/reboot`` -- best-effort: the command tears down our SSH session, so a
-         non-zero / dropped result is EXPECTED, not an error.
-      3. Sleep a fixed SETTLE so the box is actually DOWN before we probe; otherwise the
-         still-up pre-reboot sshd answers and ``wait_ready.sh`` false-positives "ready" before
-         the reboot has even happened. This replaces the previous ``kern.boottime``-change poll,
-         which was fragile and consumed the readiness budget (timing out even when the box came
-         back fine). Deliberate shutdown wait, not concurrency coordination -- issue #456's
-         documented exception (no side of our own code to signal; we are waiting out a real OS
-         shutdown).
-      4. Run the SAME readiness gate the initial boot uses (conftest ``boot_vm``): ``wait_ready.sh``
-         (QEMU pid + web port: nginx + PHP up) with the FULL budget, then ``wait_boot_complete``
-         (``is_platform_booting()`` cleared, so a post-reboot pfBlockerNG sync cannot race boot --
-         the #559 guard). THEN ``wait_unbound_ready`` so DNS assertions are safe immediately (the
-         reboot tests probe DNS, which a bare boot does not).
-      5. Read ``kern.boottime`` once more, AFTER the full readiness gate completes, and compare
-         against the "before" reading (#738 F4) -- a SINGLE post-readiness check, so it consumes
-         no readiness budget (unlike the removed poll). If the value never changed (or either
-         side was unreadable), the readiness gate answered on the pre-reboot instance and this
-         raises loudly instead of letting the caller assert against stale state.
+    The boottime poll is the reboot event; ``timeout`` is only a salvage cap for a stuck guest.
+    Once observed, each readiness gate receives its own full ``timeout`` budget.
     """
     # Fail FAST on an unreadable before-side: without it the proof is already lost, so
     # refusing to reboot saves the whole settle+readiness cycle and leaves the box up in
@@ -3655,9 +3628,26 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
     # Issue the reboot; it drops our SSH connection, so a non-zero/dropped result is EXPECTED.
     vm.ssh("/sbin/reboot", timeout=30.0)
 
-    # Settle: let the box shut down before we probe, so we never read the still-up pre-reboot
-    # sshd as "ready". Deliberate shutdown wait -- see the docstring's step 3.
-    time.sleep(_REBOOT_SETTLE_SECS)
+    # Observe the reboot event. SSH failures while the guest is down are expected; only a
+    # non-empty token different from the pre-reboot value completes this gate.
+    deadline = time.monotonic() + timeout
+    last_boottime = "<not observed>"
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                "stuck/environment: reboot_vm kern.boottime did not change before salvage cap "
+                f"({timeout:.0f}s); before={before_boottime.strip()!r} last={last_boottime!r}"
+            )
+        try:
+            read = vm.ssh(_BOOTTIME_SYSCTL, timeout=min(15.0, max(1.0, remaining)))
+            token = read.stdout.strip()
+            last_boottime = token or f"empty (rc={read.returncode} stderr={read.stderr!r})"
+            if token and token != before_boottime.strip():
+                break
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            last_boottime = f"{type(exc).__name__}: {exc}"
+        time.sleep(min(2.0, remaining))
 
     # Full readiness via the SAME shell gate the initial boot uses. wait_ready.sh's positional
     # args are <ssh-key> [host] [port] [timeout] [vm-pid] [web-port]; pass the vm-pid + web-port
@@ -3689,19 +3679,6 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
     wait_boot_complete(vm)
     # Extra over a bare boot: the reboot tests probe DNS, so wait for Unbound to answer.
     wait_unbound_ready(vm)
-
-    # Single post-readiness proof (#738 F4): the readiness gate above can false-positive on the
-    # still-up pre-reboot instance if shutdown outlasted the settle on a slow host. Compare
-    # kern.boottime now that readiness is fully established -- this is the ONE extra guest round
-    # trip, not a poll, so it never eats into the readiness budget.
-    try:
-        after_boottime = vm.ssh(_BOOTTIME_SYSCTL, timeout=15.0).stdout
-    except subprocess.TimeoutExpired as exc:
-        raise AssertionError(
-            f"reboot_vm: kern.boottime read timed out AFTER the readiness gate ({exc}) -- the boot "
-            f"proof is incomplete (before={before_boottime.strip()!r}); treat the reboot as unproven"
-        ) from exc
-    _assert_boottime_advanced(before_boottime, after_boottime)
 
 
 # pfBlockerNG archives its IP aliastables + DNSBL DB here for RAMDISK installs; the
@@ -4424,25 +4401,24 @@ def dns_probe_until(
     advances — "briefly stale by design", ADR.md SS2). So the restart-era "first response
     is authoritative, never loop" rule does NOT apply to the swap transition: there is no
     down/up edge to make the first post-readiness answer the new one. The guarantee under
-    test is "the new decision applies within a BOUNDED window WITHOUT a restart" — so we
-    poll until it does, and RAISE on timeout (a real failure: the swap did not apply in
-    budget — never a mask that loops forever).
+    test is "the new decision applies within a BOUNDED window WITHOUT a restart". The observed
+    predicate event decides success; expiry is a loud ``stuck/environment`` salvage failure.
 
     Use ONLY for the swap transition (a data update / #51 toggle whose decision must flip).
     Keep :func:`dns_probe` for steady-state and restart-class reads where the first answer
     is authoritative. Caller MUST pass a non-RFC-6761, non-HSTS-preload name (see
     :func:`unique_domain`).
     """
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
     last: DnsAnswer | None = None
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         last = dns_probe(vm, name, rtype, timeout=15.0, attempts=2, delay=2.0)
         if predicate(last):
             return last
         time.sleep(interval)
     raise RuntimeError(
-        f"dns_probe_until({name}, {rtype}) predicate never held within {timeout}s "
-        f"(last answer: {last}) — the zero-downtime swap decision did not apply in budget"
+        f"stuck/environment: dns_probe_until({name}, {rtype}) observed no matching predicate "
+        f"before salvage cap {timeout}s (last answer: {last})"
     )
 
 
@@ -4545,25 +4521,25 @@ def dns_probe_client_until(
     timeout: float = 60.0,
     interval: float = 3.0,
 ) -> DnsAnswer:
-    """Poll ``dig @server <name> <rtype>`` from civm until ``predicate(answer)`` holds; raise on timeout.
+    """Poll until the observed client DNS answer satisfies ``predicate``; raise on salvage expiry.
 
     The client-side analog of :func:`dns_probe_until` — for the zero-downtime swap
-    transition (ADR-10) observed from a real LAN client. Polls with bounded backoff and
-    raises on timeout (a genuine failure, never a silent infinite loop).
+    transition (ADR-10) observed from a real LAN client. The observed predicate event decides
+    success; expiry is a loud ``stuck/environment`` salvage failure.
 
     Use ONLY for swap/toggle transitions. Keep :func:`dns_probe_client` for steady-state
     reads. Caller MUST pass a non-RFC-6761, non-HSTS-preload name (see :func:`unique_domain`).
     """
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
     last: DnsAnswer | None = None
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         last = dns_probe_client(client_vm, name, rtype, server=server, timeout=15.0, attempts=2, delay=2.0)
         if predicate(last):
             return last
         time.sleep(interval)
     raise RuntimeError(
-        f"dns_probe_client_until({name}, {rtype}) predicate never held within {timeout}s "
-        f"(last answer: {last}) — the zero-downtime swap decision did not apply in budget"
+        f"stuck/environment: dns_probe_client_until({name}, {rtype}) observed no matching predicate "
+        f"before salvage cap {timeout}s (last answer: {last})"
     )
 
 
@@ -4959,9 +4935,9 @@ def rule_line_references(line: str, alias: str) -> bool:
 
 
 def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval: float = 2.0) -> bool:
-    """Poll ``predicate()`` until it returns truthy, or until ``timeout`` elapses.
+    """Poll until the observed predicate event occurs; timeout is a salvage cap only.
 
-    Returns the final ``bool(predicate())``. A BOUNDED poll for the same documented
+    A BOUNDED poll for the same documented
     reason as :func:`rule_references` / :func:`wait_pfctl_table`: pfBlockerNG's
     ``filter_configure`` is ASYNC (``send_event("filter reload")``), so a pf-level
     rule (rdr / block) lands a few seconds AFTER ``reload()`` returns — a single-shot
@@ -4978,8 +4954,8 @@ def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval
     not load" into an opaque ``Timeout``. A short poll gives up in time for the
     assertion to fire with diagnostics. The async lag is a few seconds; if the rule is
     not present within this window it is genuinely absent, which is what we want to see.
-    The predicate is re-evaluated once more at the deadline so a slow box still gets a
-    final, authoritative read.
+    Success requires an observed truthy predicate. Expiry raises ``stuck/environment`` rather
+    than returning a false verdict, distinguishing a stuck environment from a valid negative.
     """
     deadline = time.monotonic() + timeout
     while True:
@@ -4987,7 +4963,7 @@ def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval
             return True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return bool(predicate())
+            raise RuntimeError(f"stuck/environment: wait_until predicate not observed before salvage cap {timeout}s")
         # Clamp the sleep to the time left so the poll never overshoots `timeout` by a
         # full interval (keeps the "well under the body timeout" guarantee in the docstring).
         time.sleep(min(interval, remaining))
