@@ -192,11 +192,8 @@ final class ToggleEmptyPreservationTest extends TestCase
 	/**
 	 * The render expression must survive the validation-error re-render, where
 	 * `$pconfig = $_POST` replaces the gateway enum with the raw POST string ('on',
-	 * or absent when unchecked). A bare `$pconfig[...] === PfbToggle::On` is FALSE
-	 * for the string 'on', so the checkbox re-renders unchecked and the corrected
-	 * resubmit silently stores 'off' — the #1887 enum-in-string-context class.
-	 * pfb_cfg_toggle_read() accepts both (enum passthrough + string parse), and
-	 * `?? ''` covers the unchecked-POST absent key.
+	 * or absent when unchecked): pfb_cfg_toggle_read() accepts both (enum
+	 * passthrough + string parse), and `?? ''` covers the unchecked-POST absent key.
 	 */
 	public function testPagesRenderTheIssue1907TogglesThroughTheToggleRead(): void
 	{
