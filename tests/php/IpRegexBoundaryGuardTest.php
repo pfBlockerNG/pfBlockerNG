@@ -70,6 +70,12 @@ final class IpRegexBoundaryGuardTest extends TestCase
 		return preg_match_all($re, $line, $m) ? $m[0] : [];
 	}
 
+	/** Range extraction: the [start, end] capture pair, or the empty set. */
+	private function extractRange(string $line): array
+	{
+		return preg_match(self::$reRange, $line, $m) ? [$m[1], $m[2]] : [];
+	}
+
 	/**
 	 * The issue #1922 spec table for IPv4: line => [regex match set, parser entries].
 	 * A '-' spec row is the empty set. Parity rows pin today's behaviour as the
@@ -141,6 +147,46 @@ final class IpRegexBoundaryGuardTest extends TestCase
 			// rather than risking a wrong extraction from comment text
 			'trailing period'           => ['2001:db8::1.', [], []],
 		];
+	}
+
+	/**
+	 * The issue #1934 spec table for the v4 range regex: line => [[start, end]
+	 * capture pair, parser entries]. Same boundary rule as ipv4: a quad glued to
+	 * word chars or extra octets is not a range endpoint, so a malformed line
+	 * drops the range instead of expanding fabricated endpoints into a subnet
+	 * span; the ipv4 fallback still recovers any genuinely present address.
+	 */
+	public static function rangeRows(): array
+	{
+		return [
+			// CHANGED: garbage-adjacent endpoints no longer slice a range out of the line
+			'malformed octet 999.'      => ['999.1.2.3.4-5.6.7.8', [], ['5.6.7.8']],
+			'version label v4.'         => ['v4.1.2.3.4-5.6.7.8', [], ['5.6.7.8']],
+			'glued label foo.'          => ['foo.1.2.3.4-5.6.7.8', [], ['5.6.7.8']],
+			'glued letter start'        => ['x1.2.3.4-5.6.7.8', [], ['5.6.7.8']],
+			'five-octet end'            => ['1.2.3.4-5.6.7.8.9', [], ['1.2.3.4']],
+			'glued letter end'          => ['1.2.3.4-5.6.7.8beta', [], ['1.2.3.4']],
+			// Parity: genuine quad-quad ranges expand exactly as today
+			'plain range'               => ['10.0.0.0-10.0.0.3', ['10.0.0.0', '10.0.0.3'], ['10.0.0.0/30']],
+			'single-address range'      => ['10.0.0.1-10.0.0.1', ['10.0.0.1', '10.0.0.1'], ['10.0.0.1']],
+			'iblocklist range'          => ['4.53.2.12-4.53.2.15', ['4.53.2.12', '4.53.2.15'], ['4.53.2.12/30']],
+			'range then comment'        => ['10.0.0.0-10.0.0.3 # comment', ['10.0.0.0', '10.0.0.3'], ['10.0.0.0/30']],
+		];
+	}
+
+	#[DataProvider('rangeRows')]
+	public function testRangeRegexExtractionMatchesSpec(string $line, array $matches, array $entries): void
+	{
+		$this->assertSame($matches, $this->extractRange($line),
+			"range regex extraction differs from the issue #1934 spec for: {$line}");
+	}
+
+	#[DataProvider('rangeRows')]
+	public function testRangeParserEntriesMatchSpec(string $line, array $matches, array $entries): void
+	{
+		$result = pfb_ip_parse_line($line, $this->config('_v4'));
+		$this->assertSame($entries, $result['entries'],
+			"pfb_ip_parse_line() entries differ from the issue #1934 spec for: {$line}");
 	}
 
 	#[DataProvider('ipv4Rows')]

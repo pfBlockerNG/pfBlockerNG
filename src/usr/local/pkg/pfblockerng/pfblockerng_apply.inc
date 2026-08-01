@@ -2962,7 +2962,10 @@ function sync_package_pfblockerng($cron='') {
 	#################################################
 
 	// IPv4 REGEX Definitions
-	$pfb['range']	= '/((?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))-((?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))/';
+	// issue #1934: same [\w.] boundary classes as $pfb['ipv4'] below, so a
+	// garbage-adjacent endpoint (999.1.2.3.4-5.6.7.8) drops the range instead
+	// of expanding fabricated endpoints into a subnet span.
+	$pfb['range']	= '/(?<![\w.])((?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))-((?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))(?![\w.])/';
 	// issue #1922: boundary class = word chars + the family's own separator
 	// ('.'), so a glued-on neighbour (v4.1.2.3.4, 999.1.2.3.4) drops instead of
 	// fabricating an address; the mask guard sits INSIDE the optional group so
