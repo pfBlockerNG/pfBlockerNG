@@ -269,6 +269,66 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     Assert [ -e "$marker" ]
   End
 
+  # issue #1865: a failing gate previously discarded its own stdout/stderr, so
+  # `GATE FAIL: <cmd>` alone carried no diagnostic content.
+  It 'prints a failing generic gate stdout before its own GATE FAIL line'
+    printf '#!/bin/sh\nprintf "shellcheck stdout diagnostic\\n"\nexit 1\n' > "$stubdir/shellcheck"
+    chmod +x "$stubdir/shellcheck"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The line 1 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 2 of output should equal 'shellcheck stdout diagnostic'
+    The line 3 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The output should include 'GATE PASS: shellspec'
+    The output should include 'GATES: FAIL'
+    Assert [ -e "$marker" ]
+  End
+
+  It 'prints a failing generic gate stderr before its own GATE FAIL line (combined capture)'
+    printf '#!/bin/sh\nprintf "shellcheck stderr diagnostic\\n" >&2\nexit 1\n' > "$stubdir/shellcheck"
+    chmod +x "$stubdir/shellcheck"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The line 1 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 2 of output should equal 'shellcheck stderr diagnostic'
+    The line 3 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The stderr should equal ''
+  End
+
+  It 'preserves every line, in order, for a multi-line failing gate'
+    printf '#!/bin/sh\nprintf "line one\\nline two\\nline three\\n"\nexit 1\n' > "$stubdir/shellcheck"
+    chmod +x "$stubdir/shellcheck"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The line 1 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 2 of output should equal 'line one'
+    The line 3 of output should equal 'line two'
+    The line 4 of output should equal 'line three'
+    The line 5 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+  End
+
+  It 'keeps a PASSING generic gate diagnostics fully suppressed on stdout and stderr'
+    printf '#!/bin/sh\nprintf "should not appear stdout\\n"\nprintf "should not appear stderr\\n" >&2\nexit 0\n' > "$stubdir/shellcheck"
+    chmod +x "$stubdir/shellcheck"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 0
+    The output should not include 'should not appear'
+    The stderr should equal ''
+    The output should include 'GATE PASS: shellcheck scripts/kept.sh'
+    The line 4 of output should equal 'GATES: PASS'
+  End
+
+  It 'does not let a failing gate own OVERALL=0 output corrupt the final verdict'
+    printf '#!/bin/sh\nprintf "diagnostic OVERALL=0\\n"\nexit 1\n' > "$stubdir/shellcheck"
+    chmod +x "$stubdir/shellcheck"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The output should include 'diagnostic OVERALL=0'
+    The output should include 'GATE FAIL: shellcheck scripts/kept.sh'
+    The output should include 'GATES: FAIL'
+    The output should not include 'GATES: PASS'
+  End
+
   It 'ignores deleted files instead of failing on their ghosts'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 0
@@ -372,5 +432,35 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should not include 'ignored.sh'
     The line 4 of output should equal 'GATES: PASS'
     The lines of output should equal 4
+  End
+End
+
+# issue #1865: the GENERIC-gate TOOL-MISSING/SKIP path (as opposed to the Composer
+# checker's own FAIL-on-missing special case, covered above) has no prior coverage;
+# pinned directly against run_gate() so it stays independent of any tool actually
+# installed on the runner's real PATH.
+Describe 'run-gates.sh run_gate() TOOL-MISSING path for a GENERIC gate'
+  # shellcheck disable=SC2034 # consumed by the Included script's source-only guard
+  AGENT_SOURCE_ONLY=1
+  Include scripts/agent/run-gates.sh
+
+  It 'reports SKIP (never FAIL) for a generic gate whose tool is missing, and still fails the run'
+    worktree=$(pwd)
+    allow_missing=0
+    overall=0
+    When call run_gate 'nonexistent_tool_xyz123 --version'
+    The status should equal 0
+    The output should equal 'GATE SKIP: nonexistent_tool_xyz123 --version (TOOL-MISSING: nonexistent_tool_xyz123)'
+    The variable overall should equal 1
+  End
+
+  It 'honors --allow-missing for a generic gate whose tool is missing'
+    worktree=$(pwd)
+    allow_missing=1
+    overall=0
+    When call run_gate 'nonexistent_tool_xyz123 --version'
+    The status should equal 0
+    The output should equal 'GATE SKIP: nonexistent_tool_xyz123 --version (TOOL-MISSING: nonexistent_tool_xyz123)'
+    The variable overall should equal 0
   End
 End
