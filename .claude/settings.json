@@ -10,7 +10,8 @@
   },
   "enabledPlugins": {
     "ponytail@ponytail": true,
-    "caveman@caveman": true
+    "caveman@caveman": true,
+    "mattpocock-skills@mattpocock": true
   },
   "extraKnownMarketplaces": {
     "ponytail": {
@@ -23,6 +24,12 @@
       "source": {
         "source": "github",
         "repo": "JuliusBrussee/caveman"
+      }
+    },
+    "mattpocock": {
+      "source": {
+        "source": "directory",
+        "path": "./plugins/mattpocock-skills"
       }
     }
   },
@@ -86,7 +93,7 @@
           },
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"MANDATORY: AGENTS.md is the canonical agent bootstrap of this repo (CLAUDE.md is the thin Claude adapter importing it) — follow it, especially Working principles (investigate, do not assume; confirm genuine forks) and the never-list. The .agents/policy/ and .agents/context/ files and the docs/misc/ annexes are POLICY, binding like the bootstrap itself; read the relevant file whenever a routing-table trigger matches the task. Activate BOTH modes: ponytail at full (/ponytail:ponytail plugin form or /ponytail vendored form, whichever exists — laziest working solution) and /caveman (terse, no filler, full technical accuracy); when only one mode exists, activate it alone. This step CANNOT be skipped. Exception for external or public-facing text and documentation (GitHub issue and PR/MR comments, PR bodies, commit messages, docs): stay concise and to the point but use normal professional grammar, toning the caveman style down. Org rule: in ANY pfBlockerNG-org repository, the pfBlockerNG/pfBlockerNG canonical bootstrap (AGENTS.md) and its project plus user settings are the default way of working unless that repo overrides a rule in its own canonical policy file; the pfBlockerNG-package-specific mechanics and language or runtime specifics do not carry over.\"}}'"
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"MANDATORY: AGENTS.md is the canonical agent bootstrap of this repo (CLAUDE.md is the thin Claude adapter importing it) — follow it, especially Working principles (investigate, do not assume; confirm genuine forks) and the never-list. The .agents/policy/ and .agents/context/ files and the docs/misc/ annexes are POLICY, binding like the bootstrap itself; read the relevant file whenever a routing-table trigger matches the task. Activate PONYTAIL full (laziest working solution) and CAVEMAN full (terse, no filler, full technical accuracy). TOKEN-SAVIOR MCP stays active for code recall: prefer mcp__token-savior-recall__ symbol/search tools over raw whole-file Grep/Read. Bash compaction and rewriting remain opt-in. This step CANNOT be skipped. Exception for external or public-facing text and documentation (GitHub issue and PR/MR comments, PR bodies, commit messages, docs): stay concise and to the point but use normal professional grammar, toning the caveman style down. Org rule: in ANY pfBlockerNG-org repository, the pfBlockerNG/pfBlockerNG canonical bootstrap (AGENTS.md) and its project plus user settings are the default way of working unless that repo overrides a rule in its own canonical policy file; the pfBlockerNG-package-specific mechanics and language or runtime specifics do not carry over.\"}}'"
           }
         ]
       }

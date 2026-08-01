@@ -21,7 +21,9 @@ Codex translates canonical nouns mechanically:
 Skills with `policy.allow_implicit_invocation: false` may be absent from startup metadata but
 remain explicitly invokable. Never report an explicitly named `$name` unavailable from startup metadata alone; first resolve `.agents/skills/<name>/SKILL.md`.
 
-Codex specifics: reviews use `adversarial-reviewer`(-`top`/-`mid`) per
+Codex specifics: `SessionStart` and `SubagentStart` hooks inject ponytail + caveman and the
+Token Savior recall preference; Bash compaction and rewriting remain opt-in. Reviews use
+`adversarial-reviewer`(-`top`/-`mid`) per
 `.agents/policy/landing.md`; `work-branch.sh --worktree` resolves the primary checkout from
 a Codex session worktree; the Codex `SessionStart` hook runs the branch-freshness check; in
 Codex desktop, sandboxed `gh auth status` failure is not conclusive — retry via the approved
