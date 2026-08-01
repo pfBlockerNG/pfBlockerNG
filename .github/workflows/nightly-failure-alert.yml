@@ -1,15 +1,13 @@
 name: Nightly failure alert
 
-# File ONE deduped tracking issue when a NIGHTLY (schedule-triggered) run of a
-# live-VM suite fails, then close it when that suite next passes. These suites
-# are schedule+dispatch only (no PR gate), and dispatch failures are already
-# watched by whoever dispatched them — so this alerts on `schedule` only.
+# File ONE deduped tracking issue when a schedule-triggered run of any watched
+# workflow fails, then close it when that workflow next passes. This shared
+# workflow_run alert owns the issue lifecycle for all watched schedules.
 #
 # Pattern follows top1m-healthcheck.yml's alert job (dedup by label + exact
-# title, update-in-place). WHY workflow_run and not an `if: failure()` job in
-# each suite: one file, no edits to the three fan-out matrices, and it runs
-# with its own token even when the failing run's jobs are all red (see
-# module-durations.yml for the same trigger shape).
+# title, update-in-place). WHY workflow_run and not a failure job in each
+# producer: one file, and it runs with its own token even when the failing
+# run's jobs are all red.
 
 on:
   workflow_run:
