@@ -1902,6 +1902,27 @@ def test_ip_suppression_renders_unchecked_when_stored_off(
         _set_scalar_or_absent(vm, path, prior)
 
 
+def test_ip_suppression_stays_checked_on_validation_error_rerender(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #1907 review F1: the error re-render path swaps ``$pconfig`` for raw
+    ``$_POST`` strings, so the checked-state expression must accept both the enum and
+    the POST string 'on'. A bare enum comparison rendered the box unchecked here, and
+    the corrected resubmit then silently stored 'off'."""
+    resp = webui.post(
+        _IP_PAGE,
+        {"save": "Save", "ip_placeholder": "not-an-ip", "suppression": "on"},
+    )
+    assert "Placeholder IP" in resp.text, (
+        "expected the Placeholder-IP validation error to fire (the error re-render under test)"
+    )
+    fields = scrape_form_fields(resp.text)
+    assert fields.get("suppression") == "on", (
+        f"suppression must stay CHECKED on the validation-error re-render "
+        f"(raw POST 'on' in $pconfig), got {fields.get('suppression')!r}"
+    )
+
+
 def test_states_removal_help_references_ip_tab(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The category-edit 'States Removal' help points at the IP tab, where 'Kill States' lives.
 

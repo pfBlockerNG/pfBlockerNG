@@ -11998,6 +11998,8 @@ function pfb_registry_pass(array $sections, ?array $registry = NULL): array {
 	}
 
 	if (!empty($conflicts)) {
+		// The notice links the DNSBL settings page because every current 'old_name'
+		// lives in that section; a future gen/ip old_name needs a per-section link.
 		file_notice('pfBlockerNG',
 			gettext('pfBlockerNG left the legacy configuration key names in place: ')
 			. implode('; ', $conflicts)

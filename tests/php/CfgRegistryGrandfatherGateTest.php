@@ -266,6 +266,18 @@ final class CfgRegistryGrandfatherGateTest extends TestCase
 			"the multiset of registry 'old_name' values must equal the 14 retired scalar spellings exactly, once each"
 		);
 
+		// No DNSBL-section bare key may itself be a retired spelling -- a re-registration
+		// under an old name would shadow the rename branch. (Scoped to 'dnsbl/': every
+		// retired spelling lived in that section; 'suppression' lives on legitimately as
+		// the ip/suppression toggle's bare key.)
+		foreach ($registry as $key => $entry) {
+			if (str_starts_with($key, 'dnsbl/')) {
+				$this->assertNotContains(substr($key, strlen('dnsbl/')), self::RETIRED_SCALAR_SPELLINGS,
+					"{$key}: a dnsbl-section bare key must never reuse a retired spelling"
+				);
+			}
+		}
+
 		// issue #1921: PFB_LEGACY_KEY_RENAMES no longer carries the scalar-section rows
 		// at all -- they moved here, to the registry's own 'old_name' slots, consumed by
 		// pfb_registry_pass() (see RegistryPassTest rows 11-16). What remains in

@@ -1161,7 +1161,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_py_reply',
 	gettext('DNS Reply Logging'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_py_reply']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['pfb_py_reply'] ?? '') === PfbToggle::On,
 	'on'
 ))->setHelp('Enable the logging of all DNS Replies that were not blocked via DNSBL.');
 
@@ -1169,7 +1169,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_hsts',
 	gettext('HSTS mode'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_hsts']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['pfb_hsts'] ?? '') === PfbToggle::On,
 	'on'
 ))->setHelp('Enable the DNSBL <strong title="Utilizes 0.0.0.0 instead of the DNSBL VIP">Null Blocking mode</strong> for HSTS domains.<br />'
 	. 'Blocked domains that are in the <a target=_"blank" href="https://hstspreload.org/">HSTS preload</a> browser'
@@ -3258,7 +3258,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_cache',
 	gettext('Resolver cache'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_cache']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['pfb_cache'] ?? '') === PfbToggle::On,
 	'on'
 ))->setHelp('Default: <strong>Enabled</strong><br />Enable the backup and restore of the DNS Resolver Cache on DNSBL Update|Reload|Cron events');
 

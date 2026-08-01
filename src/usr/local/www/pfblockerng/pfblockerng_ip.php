@@ -419,7 +419,7 @@ $section->addInput(new Form_Checkbox(
 	'suppression',
 	'Suppression',
 	'Enable',
-	$pconfig['suppression'] === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['suppression'] ?? '') === PfbToggle::On,
 	'on'
 ))->setHelp('Default enabled. This will prevent Selected IPs (and private/reserved addresses) from being blocked. For IPv4 lists (/8 through /32) and IPv6 lists (/32 through /128).'
 	. '<div class="infoblock">'
