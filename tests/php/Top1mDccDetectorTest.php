@@ -187,6 +187,7 @@ final class Top1mDccDetectorTest extends TestCase
 		if (!extension_loaded('curl')) {
 			$this->markTestSkipped('curl extension not available');
 		}
+		$this->requireLocalListenerCapability();
 		$body = "1,example.com\n";
 		$router = "{$this->dir}/router.php";
 		$this->assertNotFalse(file_put_contents($router, "<?php\nheader('ETag: \\\"followup-v1\\\"');\necho " . var_export($body, TRUE) . ";\n"));
@@ -437,6 +438,7 @@ final class Top1mDccDetectorTest extends TestCase
 	private function downloadTop1m(string $source, string $base, string $target): bool
 	{
 		$this->stopServer();
+		$this->requireLocalListenerCapability();
 		$GLOBALS['pfb']['dbdir'] = $this->dir . '/db';
 		$this->assertTrue(is_dir($GLOBALS['pfb']['dbdir']) || mkdir($GLOBALS['pfb']['dbdir']));
 		$router = $this->dir . '/router.php';
@@ -471,7 +473,7 @@ final class Top1mDccDetectorTest extends TestCase
 			}
 		}
 		if ($port === 0) {
-			$this->markTestSkipped('loopback HTTP fixture unavailable');
+			$this->fail('could not start local HTTP fixture');
 		}
 		return pfb_download(new PfbDownloadRequest(
 			listUrl: "http://127.0.0.1:{$port}/feed",
@@ -483,6 +485,19 @@ final class Top1mDccDetectorTest extends TestCase
 			timeout: 30,
 			type: 'top1m',
 		))->success;
+	}
+
+	private function requireLocalListenerCapability(): void
+	{
+		$errno = 0;
+		$error = '';
+		$listener = @stream_socket_server('tcp://127.0.0.1:0', $errno, $error);
+		if ($listener === FALSE) {
+			$reason = $error !== '' ? $error : "socket error {$errno}";
+			$this->markTestSkipped("environment cannot bind a loopback listener: {$reason}");
+			return;
+		}
+		fclose($listener);
 	}
 
 	private function stopServer(): void
