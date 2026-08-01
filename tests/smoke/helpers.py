@@ -3059,7 +3059,8 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     if spec.regex_cap:
         # Opt-in length cap (inc:2685 -> ini regex_cap=on). Drops over-LENGTH feed AND
         # user regex at load. The catastrophic-SHAPE gate is separate and ALWAYS on
-        # (pfb_unbound.py:_regex_is_catastrophic_shape), independent of this flag.
+        # (pfb_dnsbl_regex_rules.py:_regex_is_catastrophic_shape, imported by
+        # pfb_unbound.py), independent of this flag.
         settings["pfb_regex_cap"] = "on"
     if spec.cname_validation:
         # "CNAME Validation" (inc:852 -> ini python_cname). Walk a resolved answer's

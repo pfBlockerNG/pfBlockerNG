@@ -2632,6 +2632,8 @@ function pfb_dnsbl_regex_description_warnings(string $contents): array
 /**
  * pfb_dnsbl_regex_validation_errors — validate the DNSBL regex form in one
  * bounded Python pass, preserving source line numbers and resolver semantics.
+ * Runs pfb_dnsbl_regex_rules.py (issue #1765) as the save-time probe -- the
+ * SAME module pfb_unbound.py imports, not a duplicated nowdoc.
  *
  * @param bool $regex_cap Mirrors the "Limit long/complex regex" toggle: gates the
  *     save-time length-cap diagnostic so it agrees with the resolver's load-time drop.
@@ -2648,78 +2650,16 @@ function pfb_dnsbl_regex_validation_errors(string $contents, string $python, boo
 	if ($timeout_bin === '' || !is_executable($timeout_bin)) {
 		return ['Python regex validator: timeout launcher unavailable'];
 	}
+	$script = __DIR__ . '/pfb_dnsbl_regex_rules.py';
+	if (!is_readable($script)) {
+		return ['Python regex validator: rules module unavailable'];
+	}
 	$stderr = tmpfile();
 	if ($stderr === FALSE) {
 		return ['Python regex validator: unable to create diagnostics file'];
 	}
 	$stderr_path = stream_get_meta_data($stderr)['uri'];
-	$probe = <<<'PYTHON'
-import re
-import sys
-
-shapes = (
-    re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]"),  # _REGEX_NESTED_QUANTIFIER mirror (pfb_unbound.py)
-    re.compile(r"\([^()]*\|[^()]*\)\s*[+*{]"),  # _REGEX_ALTERNATION_OVERLAP mirror (pfb_unbound.py)
-    re.compile(r"\([^()]*[+*][^()]*\)\([^()]*\)\s*[+*]"),  # _REGEX_ADJACENT_GROUP_QUANTIFIER mirror (pfb_unbound.py)
-    re.compile(r"(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?:,\d*)?\}"),  # _REGEX_STACKED_BOUNDED_REPEAT mirror (pfb_unbound.py)
-)
-
-failed = False
-
-def report(line_number, pattern, message):
-    print(f"line {line_number}: {pattern!r}: {message}", file=sys.stderr)
-
-regex_cap = len(sys.argv) > 1 and sys.argv[1] == "1"
-
-
-def split_line(line):
-    # issue #1867 mirror of pfb_split_regex_line() (PHP) and pfb_unbound.py's
-    # twin: the description starts at the first '#' preceded by an EVEN number
-    # of backslashes, so an escaped "\#" stays in the pattern.
-    backslashes = 0
-    for index, character in enumerate(line):
-        if character == "\\":
-            backslashes += 1
-            continue
-        if character == "#" and backslashes % 2 == 0:
-            return line[:index]
-        backslashes = 0
-    return line
-
-
-for line_number, line in enumerate(sys.stdin, start=1):
-    line = line.rstrip("\r\n")
-    if not line.strip() or line.lstrip().startswith("#"):
-        continue
-    pattern = split_line(line).strip().lower()
-    if not pattern:
-        continue
-    if any(ord(character) < 0x20 or ord(character) == 0x7f for character in pattern):
-        report(line_number, pattern, "contains ASCII control character")
-        failed = True
-        continue
-    if any(shape.search(pattern) is not None for shape in shapes):
-        report(line_number, pattern, "catastrophic-backtracking shape")
-        failed = True
-        continue
-    budget = len(re.findall(r"(?<!\\)[+*]", pattern)) + len(re.findall(r"(?<!\\)\|", pattern))  # _REGEX_UNBOUNDED_QUANTIFIER + _REGEX_ALTERNATION mirror (pfb_unbound.py)
-    if budget > 12:  # _REGEX_BUDGET_MAX mirror (pfb_unbound.py)
-        report(line_number, pattern, "too many quantifiers/alternations")
-        failed = True
-        continue
-    if regex_cap and len(pattern) > 200:  # REGEX_STATIC_LEN_CAP mirror (pfb_unbound.py)
-        report(line_number, pattern, 'over the 200-character length cap ("Limit long/complex regex")')
-        failed = True
-        continue
-    try:
-        re.compile(pattern)
-    except Exception as error:
-        report(line_number, pattern, f"Python regex compile error: {error}")
-        failed = True
-
-raise SystemExit(1 if failed else 0)
-PYTHON;
-	$command = array($timeout_bin, '-s', 'TERM', '-k', '1', '5', $python, '-c', $probe, $regex_cap ? '1' : '0');
+	$command = array($timeout_bin, '-s', 'TERM', '-k', '1', '5', $python, $script, $regex_cap ? '1' : '0');
 	$descriptors = array(
 		0 => array('pipe', 'r'),
 		1 => array('file', '/dev/null', 'w'),
