@@ -686,13 +686,12 @@ class TestQueryWatcherLoop:
         h.publish_and_wait_consumed({"id": "write-fail", "domain": "clean.uuidquery2003.com", "qtype": "A"})
         with pytest.raises(RuntimeError, match="stuck/environment"):
             h.wait_reply("write-fail", timeout=0)
-        assert h.replies_since() == []
 
         before_barrier = h.reply_count()
         P.pfb["pfb_py_query_reply"] = h.reply_path
         h.publish({"id": "write-success-barrier", "domain": "barrier.uuidquery2003.com", "qtype": "A"})
         barrier_reply = h.wait_reply("write-success-barrier", after=before_barrier)
-        assert h.replies_since(before_barrier) == [barrier_reply]
+        assert h.replies_since() == [barrier_reply]
 
     def test_identical_record_answered_once_changed_record_reanswered(
         self, query_harness: _QueryHarness, monkeypatch: Any
@@ -717,11 +716,10 @@ class TestQueryWatcherLoop:
 
         first_reply = h.reply_count()
         h.publish_and_wait_consumed({"id": "dup1", "domain": q1, "qtype": "A"})  # byte-identical redelivery
-        assert len(calls) == 1  # settle: NOT re-answered
 
         h.publish_and_wait_consumed({"id": "dup1", "domain": q2, "qtype": "A"})  # same id, NEW domain
         h.wait_reply("dup1", after=first_reply)  # changed record is answered again
-        assert len(calls) == 2  # a changed record IS re-answered
+        assert [(call["id"], call["blocked"]) for call in calls] == [("dup1", True), ("dup1", False)]
 
     def test_preexisting_request_answered_at_startup(self, query_harness: _QueryHarness) -> None:
         h = query_harness
