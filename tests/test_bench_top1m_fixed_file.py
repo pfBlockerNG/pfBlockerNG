@@ -31,13 +31,15 @@ def _pid_exists(pid: int) -> bool:
     return True
 
 
-def _wait_pid_gone(pid: int, timeout: float = 5.0) -> bool:
+def _wait_pid_gone(pid: int, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not _pid_exists(pid):
-            return True
+            return
         time.sleep(0.05)
-    return not _pid_exists(pid)
+    if not _pid_exists(pid):
+        return
+    raise RuntimeError(f"stuck/environment: pid={pid}; expected absence, actual presence")
 
 
 def test_benchmark_default_is_exactly_one_million() -> None:
@@ -48,6 +50,11 @@ def test_generated_input_is_bounded_at_one_million() -> None:
     assert _BENCH._line_count("1000000") == 1_000_000
     with pytest.raises(_BENCH.argparse.ArgumentTypeError, match="must not exceed"):
         _BENCH._line_count("1000001")
+
+
+def test_wait_pid_gone_reports_stuck_environment_for_live_pid() -> None:
+    with pytest.raises(RuntimeError, match=r"stuck/environment.*pid=.*expected absence.*actual presence"):
+        _wait_pid_gone(os.getpid(), timeout=0)
 
 
 def test_streamed_fixture_is_deterministic_unique_and_bounded(tmp_path: Path) -> None:
@@ -156,7 +163,7 @@ def test_timed_timeout_kills_descendant_process_group(tmp_path: Path) -> None:
 
     child_pid = int(child_pid_path.read_text())
     try:
-        assert _wait_pid_gone(child_pid), f"timed-out child survived: pid={child_pid}"
+        _wait_pid_gone(child_pid)
     finally:
         if _pid_exists(child_pid):
             with contextlib.suppress(ProcessLookupError):
@@ -198,7 +205,7 @@ def test_timed_parent_signal_kills_worker_process_group(tmp_path: Path) -> None:
 
         os.kill(driver.pid, signal.SIGTERM)
         assert driver.wait(timeout=10) == 77
-        assert _wait_pid_gone(worker_pid), f"worker survived benchmark driver signal: pid={worker_pid}"
+        _wait_pid_gone(worker_pid)
     finally:
         with contextlib.suppress(ProcessLookupError):
             os.kill(driver.pid, signal.SIGKILL)
