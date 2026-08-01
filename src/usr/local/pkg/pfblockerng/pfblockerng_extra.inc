@@ -3727,8 +3727,11 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
  * $pfb['log']/$pfb['extraslog'] for potentially minutes; pfb_log_mgmt()'s
  * tail-to-temp-then-cat-over trim is a read/truncate/rewrite window that would lose any
  * lines the concurrent writer appends during it.
+ *
+ * $ps_lines is injectable for hermetic off-appliance tests; NULL preserves the
+ * appliance's host process-table scan.
  */
-function pfblockerng_tick(): void
+function pfblockerng_tick(?array $ps_lines = NULL): void
 {
 	global $pfb;
 
@@ -3861,7 +3864,7 @@ function pfblockerng_tick(): void
 	// (pfb_update_pass_running()) -- both append to the same log files pfb_log_mgmt()'s
 	// tail-to-temp-then-cat-over trim reads/truncates/rewrites, and racing that window
 	// against a live writer loses whatever it appends meanwhile.
-	if (!$dispatched && !pfb_update_pass_running()) {
+	if (!$dispatched && !pfb_update_pass_running($ps_lines)) {
 		pfb_log_mgmt();
 	} elseif ($dispatched) {
 		// Skip is observable on the pfblockerng_syslog.log surface (issue #1769
