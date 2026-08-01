@@ -17,6 +17,16 @@
 #      Previously each iteration overwrote found, so a multi-entry list whose LAST
 #      entry failed discarded the good data collected from earlier entries.
 
+make_timeout_passthrough() {
+  pathtimeout="${work}/timeout"
+  cat > "$pathtimeout" <<'EOF'
+#!/bin/sh
+shift 5
+exec "$@"
+EOF
+  chmod +x "$pathtimeout"
+}
+
 Describe 'whoisconvert() domain branch checks the host(1) result (issue #714)'
   setup() {
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/whoisdom.XXXXXX")"
@@ -35,6 +45,7 @@ echo "Host $3 not found: 3(NXDOMAIN)"
 exit 1
 EOF
     chmod +x "$pathhost"
+    make_timeout_passthrough
 
     # Last-good data already on disk before this run -- whoisconvert() must
     # preserve it (via its .bk backup/restore) when the lookup fails.
@@ -83,6 +94,7 @@ case "$name" in
 esac
 EOF
     chmod +x "$pathhost"
+    make_timeout_passthrough
 
     # An OLD .orig so a .bk is created at the top of whoisconvert(); if found
     # wrongly ended false, the restore would bring this back.
@@ -125,6 +137,7 @@ echo "$3 has address 203.0.113.5"
 exit 0
 EOF
     chmod +x "$pathhost"
+    make_timeout_passthrough
 
     # A prior .orig so a .bk is created; on success it must be removed.
     printf '198.51.100.7\n' > "${pfborig}${alias}.orig"
@@ -141,5 +154,56 @@ EOF
     The contents of file "${pfborig}${alias}.orig" should include '203.0.113.5'
     The path "${pfborig}${alias}.fail" should not be exist
     The path "${pfborig}${alias}.bk" should not be exist
+  End
+End
+
+Describe 'whoisconvert() bounds an IPv6 domain lookup (issue #2015)'
+  setup() {
+    work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/whoistimeout.XXXXXX")"
+    pfborig="${work}/orig/"; mkdir -p "$pfborig"
+    alias="TimeoutList"
+    max="_v6"
+    dedup="slow-v6.example"
+    timeout_args="${work}/timeout.args"
+
+    pathhost="${work}/host"
+    cat > "$pathhost" <<'EOF'
+#!/bin/sh
+echo "$3 has IPv6 address 2001:db8::5"
+exit 0
+EOF
+    chmod +x "$pathhost"
+
+    pathtimeout="${work}/timeout"
+    cat > "$pathtimeout" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$@" > "${TIMEOUT_ARGS}"
+exit 124
+EOF
+    chmod +x "$pathtimeout"
+    export TIMEOUT_ARGS="$timeout_args"
+
+    # A prior .orig proves timeout follows the existing failure/restore path.
+    printf '2001:db8::9\n' > "${pfborig}${alias}.orig"
+  }
+  cleanup() { rm -rf "$work"; unset TIMEOUT_ARGS; }
+  BeforeAll 'pfb_source'
+  Before 'setup'
+  After 'cleanup'
+
+  It 'uses default reaper mode, the AAAA lookup type, and restores after timeout 124'
+    When call whoisconvert
+    The status should be success
+    The stdout should include 'Restoring previous data'
+    The contents of file "$timeout_args" should include '-s'
+    The contents of file "$timeout_args" should include 'TERM'
+    The contents of file "$timeout_args" should include '-k'
+    The contents of file "$timeout_args" should include '5'
+    The contents of file "$timeout_args" should include '30'
+    The contents of file "$timeout_args" should include '-t'
+    The contents of file "$timeout_args" should include 'AAAA'
+    The contents of file "$timeout_args" should not include '--foreground'
+    The path "${pfborig}${alias}.fail" should be exist
+    The contents of file "${pfborig}${alias}.orig" should equal '2001:db8::9'
   End
 End
