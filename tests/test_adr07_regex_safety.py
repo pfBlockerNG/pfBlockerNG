@@ -189,6 +189,18 @@ class TestCatastrophicShapeHeuristic:
         # And a SHORT catastrophic shape IS flagged regardless of being well under length.
         assert _regex_is_catastrophic_shape(r"(a+)+") is True
 
+    def test_malformed_brace_scan_is_linear(self) -> None:
+        class CountingPattern(str):
+            reads = 0
+
+            def __getitem__(self, key: Any) -> str:
+                type(self).reads += 1
+                return super().__getitem__(key)
+
+        pattern = CountingPattern("a{" * 256)
+        assert _regex_is_catastrophic_shape(pattern) is False
+        assert pattern.reads <= len(pattern) * 16, pattern.reads
+
 
 # --------------------------------------------------------------------------- #
 # (1) STATIC CAP -- applied at LOAD (feed regex via _dnsbl_compile_regex_rules)

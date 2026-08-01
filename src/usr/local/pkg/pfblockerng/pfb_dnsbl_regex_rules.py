@@ -99,13 +99,24 @@ def _regex_quantifier(pattern: str, index: int) -> tuple[int, bool, bool]:
     if marker != "{":
         return index, False, False
     end = index + 1
-    while end < len(pattern) and pattern[end] != "}":
+    while end < len(pattern) and "0" <= pattern[end] <= "9":
         end += 1
-    if end >= len(pattern):
+    if end == index + 1:
         return index, False, False
-    body = pattern[index + 1 : end]
-    unbounded = body.endswith(",") and body[:-1].isdigit()
-    end += 1
+    if end < len(pattern) and pattern[end] == "}":
+        end += 1
+        unbounded = False
+    elif end < len(pattern) and pattern[end] == ",":
+        end += 1
+        upper_start = end
+        while end < len(pattern) and "0" <= pattern[end] <= "9":
+            end += 1
+        if end >= len(pattern) or pattern[end] != "}":
+            return index, False, False
+        unbounded = end == upper_start
+        end += 1
+    else:
+        return index, False, False
     suffix = pattern[end] if end < len(pattern) else ""
     if suffix in "?+":
         end += 1
