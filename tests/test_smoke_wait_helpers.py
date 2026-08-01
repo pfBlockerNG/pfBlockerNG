@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from typing import cast
+from urllib.error import URLError
 from urllib.request import urlopen
 
 import pytest
@@ -37,8 +38,22 @@ def test_dns_probe_client_until_expiry_is_loud_environment_failure(monkeypatch: 
 
 
 def _request_callback(sink: _MockCallbackSink, path: str = "/reload") -> None:
-    with urlopen(f"http://127.0.0.1:{sink.port}{path}", timeout=2.0):  # noqa: S310 - local test server
-        pass
+    try:
+        with urlopen(f"http://127.0.0.1:{sink.port}{path}", timeout=2.0):  # noqa: S310 - local test server
+            pass
+    except (OSError, URLError) as exc:
+        raise RuntimeError(f"stuck/environment: callback request {path} did not complete") from exc
+
+
+def _wait_event(event: threading.Event, label: str) -> None:
+    if not event.wait(timeout=2.0):
+        raise RuntimeError(f"stuck/environment: {label} event was not observed before salvage cap")
+
+
+def _join_thread(thread: threading.Thread, label: str) -> None:
+    thread.join(timeout=2.0)
+    if thread.is_alive():
+        raise RuntimeError(f"stuck/environment: {label} did not terminate before salvage cap")
 
 
 def test_callback_sink_wait_for_observes_existing_and_later_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -68,15 +83,16 @@ def test_callback_sink_wait_for_observes_existing_and_later_callbacks(monkeypatc
 
         waiter = threading.Thread(target=wait_for_callback)
         waiter.start()
-        assert wait_entered.wait(timeout=2.0), "waiter did not enter Condition.wait_for"
+        _wait_event(wait_entered, "waiter-entry")
         _request_callback(sink, "/later")
-        waiter.join(timeout=2.0)
-        assert not waiter.is_alive(), "callback notification did not release waiter"
+        _join_thread(waiter, "callback waiter")
         assert outcome == [True]
     finally:
         if waiter is not None and waiter.is_alive():
-            _request_callback(sink, "/release")
-            waiter.join(timeout=2.0)
+            try:
+                _request_callback(sink, "/release")
+            finally:
+                _join_thread(waiter, "callback waiter cleanup")
         sink.stop()
 
 
