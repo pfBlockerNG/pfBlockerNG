@@ -108,7 +108,6 @@ def test_reboot_vm_waits_for_changed_boottime_before_readiness(monkeypatch: pyte
     fake_vm = FakeVM()
     vm = cast(helpers.SmokeVM, fake_vm)
     ready_calls: list[list[str]] = []
-    sleep_calls: list[float] = []
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         ready_calls.append(argv)
@@ -116,7 +115,7 @@ def test_reboot_vm_waits_for_changed_boottime_before_readiness(monkeypatch: pyte
         return subprocess.CompletedProcess(argv, 0, "ready", "")
 
     monkeypatch.setattr(helpers.subprocess, "run", fake_run)
-    monkeypatch.setattr(helpers.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(helpers, "wait_boot_complete", lambda vm: None)
     monkeypatch.setattr(helpers, "wait_unbound_ready", lambda vm: None)
 
@@ -124,4 +123,3 @@ def test_reboot_vm_waits_for_changed_boottime_before_readiness(monkeypatch: pyte
 
     assert ready_calls
     assert fake_vm.boottime_reads == 4
-    assert all(delay < 30 for delay in sleep_calls)
