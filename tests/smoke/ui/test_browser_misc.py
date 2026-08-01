@@ -403,9 +403,10 @@ def test_update_runnow_does_not_scroll_the_page(
     assert page.evaluate("window.pageYOffset") == 0, "the page should start at the top"
 
     page.locator('button[name="run"], #run').first.click()
-    # Bounded wait to prove ABSENCE of the scroll: outlast the old 2000ms animate window so a
-    # regression would have moved the page by the time we read the offset.
-    page.wait_for_timeout(2500)
+    page.wait_for_function(
+        "() => window.jQuery && window.jQuery(':animated').length === 0",
+        timeout=JS_TIMEOUT_MS,
+    )
 
     offset = page.evaluate("window.pageYOffset")
     assert offset == 0, f"Run Now must not auto-scroll the page; expected top (0), got pageYOffset={offset}"
