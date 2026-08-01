@@ -240,18 +240,48 @@ final class TickEntrypointTest extends TestCase
 
 	private function dbdirPrefix(): string
 	{
-		return sys_get_temp_dir() . '/pfb_tick_entrypoint_' . (int) getmypid() . '_';
+		$pid = getmypid();
+		if (!is_int($pid)) {
+			throw new RuntimeException('PHPUnit process PID is unavailable');
+		}
+		return sys_get_temp_dir() . '/pfb_tick_entrypoint_' . $pid . '_';
+	}
+
+	private function hostPsLines(): array
+	{
+		$psLines = [];
+		exec('/bin/ps -wax', $psLines, $rc);
+		if ($rc !== 0) {
+			throw new RuntimeException('/bin/ps -wax failed while inspecting test workers');
+		}
+		return $psLines;
+	}
+
+	private function monotonicTime(): int
+	{
+		$now = hrtime(TRUE);
+		if (!is_int($now)) {
+			throw new RuntimeException('monotonic clock is unavailable');
+		}
+		return $now;
 	}
 
 	/** Return only worker command lines carrying this PHPUnit process's sandbox prefix. */
 	private function suiteWorkerPsLines(): array
 	{
-		$psLines = [];
-		exec('/bin/ps -wax', $psLines);
 		$prefix = $this->dbdirPrefix();
 		return array_values(array_filter(
-			$psLines,
+			$this->hostPsLines(),
 			static fn (string $line): bool => str_contains($line, $prefix)
+		));
+	}
+
+	private function workerPsLines(int $pid): array
+	{
+		$pidPattern = '/^\s*' . preg_quote((string) $pid, '/') . '\s/';
+		return array_values(array_filter(
+			$this->hostPsLines(),
+			static fn (string $line): bool => preg_match($pidPattern, $line) === 1
 		));
 	}
 
@@ -259,12 +289,17 @@ final class TickEntrypointTest extends TestCase
 	private function settledSuiteWorkerPsLines(): array
 	{
 		$psLines = [];
+		$deadline = $this->monotonicTime() + 1_000_000_000;
 		for ($attempt = 0; $attempt < 50; $attempt++) {
 			$psLines = $this->suiteWorkerPsLines();
 			if (!pfb_update_pass_running($psLines)) {
 				return $psLines;
 			}
-			usleep(20000);
+			$now = $this->monotonicTime();
+			if ($attempt === 49 || $now >= $deadline) {
+				break;
+			}
+			usleep((int) min(20000, intdiv($deadline - $now, 1000)));
 		}
 		return $psLines;
 	}
@@ -414,8 +449,12 @@ final class TickEntrypointTest extends TestCase
 			"Before: expected 'log' to have 5 lines, got {$linesBefore};\n"
 			. '  content=' . var_export(file_get_contents($logPath), TRUE));
 
+		$psLines = $this->settledSuiteWorkerPsLines();
+		$this->assertFalse(pfb_update_pass_running($psLines),
+			'a pfblockerng.php worker owned by this PHPUnit run leaked from an earlier test');
+
 		// Act.
-		pfblockerng_tick($this->settledSuiteWorkerPsLines());
+		pfblockerng_tick($psLines);
 
 		// After: pfb_log_mgmt() trimmed 'log' to its last 3 lines.
 		clearstatcache(TRUE, $logPath);
@@ -518,6 +557,62 @@ final class TickEntrypointTest extends TestCase
 			));
 			$this->assertSame(['l3', 'l4', 'l5'], $linesAfter,
 				'an injected empty process snapshot must keep an unrelated host worker out of the idle tick');
+		} finally {
+			$this->killStrayUpdatePassProcess($proc, $pid, $stdin);
+		}
+	}
+
+	/** issue #2006: the suite snapshot excludes matching workers from another run. */
+	public function testSuiteSnapshotExcludesForeignHostWorker(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		pfb_global();
+		$this->ensureLogDir();
+
+		$now = time();
+		$this->seedFutureLedgerEntry('cron', $now);
+		$this->seedFutureLedgerEntry('dcc',  $now);
+		$this->seedFutureLedgerEntry('bl',   $now);
+
+		$logPath = $this->logPath('log');
+		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
+
+		$foreignDir = sys_get_temp_dir() . '/pfb_tick_foreign_' . uniqid('', TRUE);
+		[$proc, $pid, $stdin] = $this->spawnStrayUpdatePassProcess($foreignDir);
+		try {
+			$this->assertTrue(pfb_update_pass_running($this->workerPsLines($pid)),
+				'foreign fixture worker must match pfb_update_pass_running()');
+			$psLines = $this->suiteWorkerPsLines();
+			$this->assertFalse(pfb_update_pass_running($psLines),
+				'this PHPUnit run snapshot must exclude the foreign fixture worker');
+			pfblockerng_tick($psLines);
+
+			$linesAfter = array_values(array_filter(
+				explode("\n", (string) file_get_contents($logPath)),
+				'strlen'
+			));
+			$this->assertSame(['l3', 'l4', 'l5'], $linesAfter,
+				'a foreign host worker must not close this PHPUnit run idle-tick gate');
+		} finally {
+			$this->killStrayUpdatePassProcess($proc, $pid, $stdin);
+			$this->rrmdir($foreignDir);
+		}
+	}
+
+	public function testPersistentSuiteWorkerSettlingHasHardDeadline(): void
+	{
+		[$proc, $pid, $stdin] = $this->spawnStrayUpdatePassProcess();
+		try {
+			$started = hrtime(TRUE);
+			$this->assertIsInt($started, 'monotonic clock is unavailable');
+			$psLines = $this->settledSuiteWorkerPsLines();
+			$finished = hrtime(TRUE);
+			$this->assertIsInt($finished, 'monotonic clock is unavailable');
+
+			$this->assertTrue(pfb_update_pass_running($psLines),
+				'a persistent worker must remain visible after the settling deadline');
+			$this->assertLessThan(2.0, ($finished - $started) / 1_000_000_000,
+				'settling must stop near its one-second monotonic deadline');
 		} finally {
 			$this->killStrayUpdatePassProcess($proc, $pid, $stdin);
 		}
@@ -787,9 +882,13 @@ final class TickEntrypointTest extends TestCase
 	 *         the write end of the piped stdin descriptor; the caller must fclose()
 	 *         it (see killStrayUpdatePassProcess()).
 	 */
-	private function spawnStrayUpdatePassProcess(): array
+	private function spawnStrayUpdatePassProcess(?string $dir = NULL): array
 	{
-		$script = "{$this->dbdir}/pfblockerng.php";
+		$dir ??= $this->dbdir;
+		if (!is_dir($dir)) {
+			mkdir($dir, 0755, TRUE);
+		}
+		$script = "{$dir}/pfblockerng.php";
 		file_put_contents($script, "#!/bin/sh\nread x\n");
 
 		$descriptors = [0 => ['pipe', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
@@ -800,11 +899,16 @@ final class TickEntrypointTest extends TestCase
 		$pid    = $status['pid'];
 
 		// Give the ps table a moment to pick the new process up before the caller trusts it.
+		$deadline = $this->monotonicTime() + 1_000_000_000;
 		for ($i = 0; $i < 50; $i++) {
-			if (pfb_update_pass_running($this->suiteWorkerPsLines())) {
+			if (pfb_update_pass_running($this->workerPsLines($pid))) {
 				break;
 			}
-			usleep(20000);
+			$now = $this->monotonicTime();
+			if ($i === 49 || $now >= $deadline) {
+				break;
+			}
+			usleep((int) min(20000, intdiv($deadline - $now, 1000)));
 		}
 
 		return [$proc, $pid, $pipes[0]];
