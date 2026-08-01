@@ -285,17 +285,23 @@ final class TickEntrypointTest extends TestCase
 		));
 	}
 
-	/** Allow a background recorder one second to exit; persistent workers remain visible. */
-	private function settledSuiteWorkerPsLines(): array
+	/**
+	 * Allow a background recorder one second to exit; persistent workers remain visible.
+	 *
+	 * @param null|callable(): int $clock
+	 * @param null|list<string> $psLinesOverride
+	 */
+	private function settledSuiteWorkerPsLines(?callable $clock = NULL, ?array $psLinesOverride = NULL): array
 	{
+		$clock ??= fn (): int => $this->monotonicTime();
 		$psLines = [];
-		$deadline = $this->monotonicTime() + 1_000_000_000;
+		$deadline = $clock() + 1_000_000_000;
 		for ($attempt = 0; $attempt < 50; $attempt++) {
-			$psLines = $this->suiteWorkerPsLines();
+			$psLines = $psLinesOverride ?? $this->suiteWorkerPsLines();
 			if (!pfb_update_pass_running($psLines)) {
 				return $psLines;
 			}
-			$now = $this->monotonicTime();
+			$now = $clock();
 			if ($attempt === 49 || $now >= $deadline) {
 				break;
 			}
@@ -599,23 +605,28 @@ final class TickEntrypointTest extends TestCase
 		}
 	}
 
-	public function testPersistentSuiteWorkerSettlingHasHardDeadline(): void
+	public function testPersistentSuiteWorkerSettlingHonorsDeadlineAndIterationCap(): void
 	{
-		[$proc, $pid, $stdin] = $this->spawnStrayUpdatePassProcess();
-		try {
-			$started = hrtime(TRUE);
-			$this->assertIsInt($started, 'monotonic clock is unavailable');
-			$psLines = $this->settledSuiteWorkerPsLines();
-			$finished = hrtime(TRUE);
-			$this->assertIsInt($finished, 'monotonic clock is unavailable');
+		$workerLines = ['  1234  -  Ss  0:00 /usr/local/www/pfblockerng/pfblockerng.php cron'];
 
-			$this->assertTrue(pfb_update_pass_running($psLines),
-				'a persistent worker must remain visible after the settling deadline');
-			$this->assertLessThan(2.0, ($finished - $started) / 1_000_000_000,
-				'settling must stop near its one-second monotonic deadline');
-		} finally {
-			$this->killStrayUpdatePassProcess($proc, $pid, $stdin);
-		}
+		$deadlineReads = 0;
+		$deadlineClock = static function () use (&$deadlineReads): int {
+			return $deadlineReads++ === 0 ? 0 : 1_000_000_000;
+		};
+		$psLines = $this->settledSuiteWorkerPsLines($deadlineClock, $workerLines);
+		$this->assertSame(2, $deadlineReads, 'deadline arm must stop after its second clock read');
+		$this->assertTrue(pfb_update_pass_running($psLines),
+			'a persistent worker must remain visible after the settling deadline');
+
+		$capReads = 0;
+		$fixedClock = static function () use (&$capReads): int {
+			$capReads++;
+			return 0;
+		};
+		$psLines = $this->settledSuiteWorkerPsLines($fixedClock, $workerLines);
+		$this->assertSame(51, $capReads, 'iteration-cap arm must stop after 50 observations');
+		$this->assertTrue(pfb_update_pass_running($psLines),
+			'a persistent worker must remain visible after the iteration cap');
 	}
 
 	// -----------------------------------------------------------------------
