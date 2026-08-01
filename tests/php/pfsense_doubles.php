@@ -469,10 +469,16 @@ if (!function_exists('config_del_path')) {
 }
 
 if (!function_exists('config_path_enabled')) {
-	// pfSense config.lib.inc: node exists, is an array and carries the enable key.
-	function config_path_enabled(string $path, $enable_key = 'enable') {
-		$node = config_get_path($path);
-		return (is_array($node) && array_key_exists($enable_key, $node));
+	// pfSense config.lib.inc config_path_enabled() + util.inc array_path_enabled().
+	function config_path_enabled(string $path, $enable_key = 'enable', $default = false) {
+		if (str_ends_with(trim($path), '/') || str_contains($path, '//')) {
+			return $default;
+		}
+		if (!is_array($GLOBALS['config'] ?? null)) {
+			return $default;
+		}
+		$node = config_get_path($path, $default);
+		return is_array($node) ? isset($node[$enable_key]) : $default;
 	}
 }
 
