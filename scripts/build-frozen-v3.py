@@ -210,10 +210,14 @@ def export_tag(repo: Path, commit: str, dest: Path) -> None:
     if proc.returncode != 0:
         raise TagResolutionError(f"git archive {commit} failed: {proc.stderr.decode(errors='replace').strip()}")
     with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as tf:
+        # Mirrors build-pkg-portable.py's _safe_extract: the stdlib 'data' filter (PEP 706,
+        # Python 3.11.4+ — the repo's floor is 3.11) rejects absolute paths, parent-dir
+        # traversal, and link-based escapes. There is deliberately NO unfiltered fallback:
+        # degrading to a bare extractall would silently drop that guard in a supply-chain step.
         try:
             tf.extractall(dest, filter="data")
-        except TypeError:  # pre-3.12 tarfile without the `filter` kwarg (PEP 706 backport absent)
-            tf.extractall(dest)
+        except tarfile.FilterError as e:
+            raise TagResolutionError(f"unsafe member in the {commit} tag export: {e}") from None
 
 
 # --------------------------------------------------------------------------- #

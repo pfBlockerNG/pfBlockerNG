@@ -339,6 +339,57 @@ def test_export_tag_is_clean_and_matches_tree(tiny_repo: tuple[Path, str]) -> No
     assert (dest / "usr" / "marker").read_text() == "hi\n"
 
 
+def _tar_bytes_with(member: tarfile.TarInfo, payload: bytes = b"pwned\n") -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        member.size = len(payload)
+        tf.addfile(member, io.BytesIO(payload))
+    return buf.getvalue()
+
+
+def _stub_git_archive(monkeypatch: pytest.MonkeyPatch, tar_bytes: bytes) -> None:
+    monkeypatch.setattr(
+        bfv.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(args=a, returncode=0, stdout=tar_bytes, stderr=b""),
+    )
+
+
+def test_export_tag_rejects_escaping_member_as_clean_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A tag export whose member would land outside the export dir is a clean refusal.
+
+    Intent: the frozen build is a supply-chain step, so an escaping member is reported as
+    the module's own named error — never a raw tarfile traceback — and nothing is written
+    outside the destination.
+    """
+    _stub_git_archive(monkeypatch, _tar_bytes_with(tarfile.TarInfo("../escaped")))
+    dest = tmp_path / "export-dest"
+    dest.mkdir()
+
+    with pytest.raises(bfv.TagResolutionError, match="unsafe member"):
+        bfv.export_tag(tmp_path / "repo", "0" * 40, dest)
+
+    assert not (tmp_path / "escaped").exists(), "wrote outside the export dir"
+    assert sorted(p.name for p in dest.iterdir()) == [], "extracted despite the escape"
+
+
+def test_export_tag_keeps_an_absolute_member_inside_the_export_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An absolute member name is contained, not honoured as an absolute write.
+
+    Intent: pins the PEP 706 `data` filter's containment guarantee, so a future change of
+    extraction strategy cannot silently regain the ability to write to `/`.
+    """
+    _stub_git_archive(monkeypatch, _tar_bytes_with(tarfile.TarInfo("/tmp/escaped")))
+    dest = tmp_path / "export-dest"
+    dest.mkdir()
+
+    bfv.export_tag(tmp_path / "repo", "0" * 40, dest)
+
+    assert (dest / "tmp" / "escaped").read_bytes() == b"pwned\n"
+
+
 # --------------------------------------------------------------------------- #
 # Row 14-15: name/version identity rejection (PORTREVISION/epoch accepted).
 # --------------------------------------------------------------------------- #
