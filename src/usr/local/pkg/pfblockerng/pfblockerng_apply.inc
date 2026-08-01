@@ -1317,7 +1317,7 @@ function sync_package_pfblockerng($cron='') {
 
 			// Collect Whitelist, create string, and save to file (for grep -vF -f cmd)
 			pfb_logger("\n Loading DNSBL Whitelist...", 1);
-			$pfb_white = pfb_text_area_decode($pfb['dnsblconfig']['suppression'], TRUE, FALSE, TRUE);
+			$pfb_white = pfb_text_area_decode($pfb['dnsblconfig']['whitelist'], TRUE, FALSE, TRUE);
 			if (!empty($pfb_white)) {
 				foreach ($pfb_white as $line) {
 					if (!empty($line)) {

@@ -456,7 +456,7 @@
         "read_adapter": null,
         "write_adapter": null
     },
-    "suppression": {
+    "whitelist": {
         "section": "installedpackages/pfblockerngdnsblsettings/config/0",
         "default": "",
         "read_adapter": null,

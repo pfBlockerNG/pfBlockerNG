@@ -290,7 +290,7 @@ if (!$alert_summary) {
 	// ADR-53: v6 sibling -- same absent-key normalisation as v4suppression above.
 	PfbConfig::write('ip/v6suppression', PfbConfig::read('ip/v6suppression') ?: '');
 
-	PfbConfig::write('dnsbl/suppression', PfbConfig::read('dnsbl/suppression') ?: '');
+	PfbConfig::write('dnsbl/whitelist', PfbConfig::read('dnsbl/whitelist') ?: '');
 
 	PfbConfig::write('dnsbl/tld_wildcard_exclusion', PfbConfig::read('dnsbl/tld_wildcard_exclusion') ?: '');
 
@@ -309,14 +309,14 @@ if (!$alert_summary) {
 		} elseif ($key == 1) {
 			$clists[$type]['base64'] = PfbConfig::read('ip/v6suppression');
 		} elseif ($key == 2) {
-			$clists[$type]['base64'] = PfbConfig::read('dnsbl/suppression');
+			$clists[$type]['base64'] = PfbConfig::read('dnsbl/whitelist');
 		} elseif ($key == 3) {
 			$clists[$type]['base64'] = PfbConfig::read('dnsbl/tld_wildcard_exclusion');
 		}
 
 		$clists[$type]['data']		= array();
 		if (isset($clists[$type]['base64']) && !empty($clists[$type]['base64'])) {
-			// issue #1782: $idn=TRUE -- 'suppression'/'tld_wildcard_exclusion' are decoded with
+			// issue #1782: $idn=TRUE -- 'whitelist'/'tld_wildcard_exclusion' are decoded with
 			// $idn=TRUE by their runtime consumers (pfblockerng.inc); a Unicode key
 			// here would never match a $domain derived from a punycode log field.
 			$decoded = pfb_text_area_decode($clists[$type]['base64'], TRUE, TRUE, TRUE);
@@ -862,7 +862,7 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 			}
 			$clists['dnsblwhitelist']['base64'] = pfb_text_area_encode($data);
-			PfbConfig::write('dnsbl/suppression', $clists['dnsblwhitelist']['base64']);
+			PfbConfig::write('dnsbl/whitelist', $clists['dnsblwhitelist']['base64']);
 			// issue #1872: this description is user-facing (Diagnostics > Config History),
 			// so it spells the field the way the UI does -- "Custom List", not the
 			// code-level "Custom_List".
@@ -1032,7 +1032,7 @@ if (isset($_POST) && !empty($_POST)) {
 				}
 				$data .= "{$whitelist}\r\n";
 				$clists['dnsblwhitelist']['base64'] = pfb_text_area_encode($data);
-				PfbConfig::write('dnsbl/suppression', $clists['dnsblwhitelist']['base64']);
+				PfbConfig::write('dnsbl/whitelist', $clists['dnsblwhitelist']['base64']);
 				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL Whitelist", FALSE);
 			}
 
@@ -1233,7 +1233,7 @@ if (isset($_POST) && !empty($_POST)) {
 					}
 				}
 				$clists['dnsblwhitelist']['base64'] = pfb_text_area_encode($data);
-				PfbConfig::write('dnsbl/suppression', $clists['dnsblwhitelist']['base64']);
+				PfbConfig::write('dnsbl/whitelist', $clists['dnsblwhitelist']['base64']);
 				break;
 			case 'delete_exclusion':
 				$type = 'TLD Exclusion';

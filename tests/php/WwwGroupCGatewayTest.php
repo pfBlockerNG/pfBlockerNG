@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
  * ADR-29 Phase 8 — www/ group C gateway routing tests.
  *
  * Covers the pages routed in Phase 8:
- *   - pfblockerng_alerts.php   (pfblockerngglobal: foreign section; suppression/tld_wildcard_exclusion/global_log/
+ *   - pfblockerng_alerts.php   (pfblockerngglobal: foreign section; whitelist/tld_wildcard_exclusion/global_log/
  *                               v4suppression [ADR-53]: registered)
  *   - pfblockerng_sync.php     (pfblockerngsync/config/0: foreign section)
  *   - pfblockerng_software.php (pfb_software_check: registered)
@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  * Test groups:
  *
  * A — LOAD DEFAULT PARITY
- *   Registered keys (pfb_software_check, global_log, suppression, tld_wildcard_exclusion,
+ *   Registered keys (pfb_software_check, global_log, whitelist, tld_wildcard_exclusion,
  *   v4suppression [ADR-53]):
  *     Assert PfbConfig::read($key) on an absent section returns the correct default
  *     (parity with prior page behaviour before routing).
@@ -136,37 +136,37 @@ final class WwwGroupCGatewayTest extends TestCase
 	}
 
 	/**
-	 * suppression: absent → '' (registry default; prior page did `config_get_path(...) ?: ''`).
+	 * whitelist: absent → '' (registry default; prior page did `config_get_path(...) ?: ''`).
 	 */
-	public function testSuppressionAbsentDefaultIsEmptyString(): void
+	public function testWhitelistAbsentDefaultIsEmptyString(): void
 	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/suppression';
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/whitelist';
 
 		// Before: key absent.
-		$this->assertNull(config_get_path($path), 'suppression must be absent before read');
+		$this->assertNull(config_get_path($path), 'whitelist must be absent before read');
 
 		// When: gateway read.
-		$result = PfbConfig::read('dnsbl/suppression');
+		$result = PfbConfig::read('dnsbl/whitelist');
 
 		// Then: '' — parity with prior page coalesce `?: ''`.
-		$this->assertSame('', $result, 'suppression absent -> "" (parity with prior page fallback)');
+		$this->assertSame('', $result, 'whitelist absent -> "" (parity with prior page fallback)');
 	}
 
 	/**
-	 * suppression round-trip: write a base64 blob, read it back byte-identically.
+	 * whitelist round-trip: write a base64 blob, read it back byte-identically.
 	 */
-	public function testSuppressionRoundTrips(): void
+	public function testWhitelistRoundTrips(): void
 	{
 		$blob = base64_encode("example.com\r\n.blocked.net\r\n");
 
 		// Before: absent → ''.
-		$this->assertSame('', PfbConfig::read('dnsbl/suppression'), 'initial absent -> ""');
+		$this->assertSame('', PfbConfig::read('dnsbl/whitelist'), 'initial absent -> ""');
 
 		// When: write a base64 blob.
-		PfbConfig::write('dnsbl/suppression', $blob);
+		PfbConfig::write('dnsbl/whitelist', $blob);
 
 		// Then: read back byte-identically.
-		$this->assertSame($blob, PfbConfig::read('dnsbl/suppression'), 'suppression after write round-trips byte-identically');
+		$this->assertSame($blob, PfbConfig::read('dnsbl/whitelist'), 'whitelist after write round-trips byte-identically');
 	}
 
 	/**
@@ -420,20 +420,20 @@ final class WwwGroupCGatewayTest extends TestCase
 	}
 
 	/**
-	 * suppression + tld_wildcard_exclusion together in their section: both registered keys.
+	 * whitelist + tld_wildcard_exclusion together in their section: both registered keys.
 	 * Write both via PfbConfig::write(), then read both via PfbConfig::read().
 	 */
-	public function testSuppressionAndTldExclusionCoexistInSection(): void
+	public function testWhitelistAndTldExclusionCoexistInSection(): void
 	{
-		$suppblob = base64_encode("example.com\r\n");
-		$tldblob  = base64_encode(".test.org\r\n");
+		$whiteblob = base64_encode("example.com\r\n");
+		$tldblob   = base64_encode(".test.org\r\n");
 
 		// When: write both registered keys.
-		PfbConfig::write('dnsbl/suppression', $suppblob);
+		PfbConfig::write('dnsbl/whitelist', $whiteblob);
 		PfbConfig::write('dnsbl/tld_wildcard_exclusion', $tldblob);
 
 		// Then: each reads back independently and byte-identically.
-		$this->assertSame($suppblob, PfbConfig::read('dnsbl/suppression'), 'suppression after write');
+		$this->assertSame($whiteblob, PfbConfig::read('dnsbl/whitelist'), 'whitelist after write');
 		$this->assertSame($tldblob, PfbConfig::read('dnsbl/tld_wildcard_exclusion'), 'tld_wildcard_exclusion after write');
 	}
 }

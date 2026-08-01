@@ -6,7 +6,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #1875 step 2a (RED, test-first): mounting the CM6 editor on the DNSBL page's
- * five remaining plaintext-list fields (pfb_gp_bypass_list, pfb_noaaaa_list, suppression,
+ * five remaining plaintext-list fields (pfb_gp_bypass_list, pfb_noaaaa_list, whitelist,
  * tld_wildcard_exclusion, tld_wildcard_blacklist) via a single `window.pfbCM && pfbCM.mountLists([...])` call,
  * gated by the SAME `$pfb_syntaxhl_on` boolean already established at line 38 (pinned by
  * DnsblRegexHighlightWiringTest) and living inside the SAME events.push() block as the
@@ -60,7 +60,7 @@ final class DnsblListEditorWiringTest extends TestCase
 		foreach ([
 			'pfb_gp_bypass_list',
 			'pfb_noaaaa_list',
-			'suppression',
+			'whitelist',
 			'tld_wildcard_exclusion',
 			'tld_wildcard_blacklist',
 		] as $id) {
@@ -122,12 +122,12 @@ final class DnsblListEditorWiringTest extends TestCase
 		);
 	}
 
-	public function testOriginalSuppressionTextareaFieldIsUnchanged(): void
+	public function testOriginalWhitelistTextareaFieldIsUnchanged(): void
 	{
 		$this->assertMatchesRegularExpression(
-			"#new Form_Textarea\\(\\s*'suppression',#",
+			"#new Form_Textarea\\(\\s*'whitelist',#",
 			self::$src,
-			'expected the underlying suppression Form_Textarea field to remain unchanged'
+			'expected the underlying whitelist Form_Textarea field to remain unchanged'
 		);
 	}
 

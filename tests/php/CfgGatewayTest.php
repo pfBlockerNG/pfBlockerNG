@@ -631,7 +631,7 @@ final class CfgGatewayTest extends TestCase
 	 *
 	 * Scenario:
 	 *   Background: v4suppression is a plain base64-blob field; default = '' --
-	 *     mirrors the DNSBL 'suppression' sibling shape.
+	 *     mirrors the DNSBL 'whitelist' sibling shape.
 	 *     Given no stored value.
 	 *     When PfbConfig::read('ip/v4suppression').
 	 *     Then '' is returned (registered default).
@@ -738,7 +738,7 @@ final class CfgGatewayTest extends TestCase
 
 	// -----------------------------------------------------------------------
 	// issue #1931 — ip/suppression (IP page "Enable Suppression" toggle;
-	// path-addressed so it no longer collides with dnsbl/suppression)
+	// path-addressed so it no longer collides with dnsbl/whitelist)
 	// -----------------------------------------------------------------------
 
 	/**
@@ -775,27 +775,29 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Given no stored value.
 	 *   When PfbConfig::writeSystem('ip/suppression', 'on').
-	 *   Then the ipsettings path stores 'on' and the DNSBL suppression path
+	 *   Then the ipsettings path stores 'on' and the DNSBL whitelist path
 	 *     stays untouched (still absent).
 	 */
 	public function testIpSuppressionWriteStoresAtIpsettingsPath(): void
 	{
 		$ip_path    = 'installedpackages/pfblockerngipsettings/config/0/suppression';
-		$dnsbl_path = 'installedpackages/pfblockerngdnsblsettings/config/0/suppression';
+		$dnsbl_path = 'installedpackages/pfblockerngdnsblsettings/config/0/whitelist';
 
 		PfbConfig::writeSystem('ip/suppression', 'on');
 
 		$this->assertSame('on', config_get_path($ip_path),
 			"writeSystem('ip/suppression') must store at the ipsettings path");
 		$this->assertNull(config_get_path($dnsbl_path),
-			'dnsbl/suppression must stay untouched by an ip/suppression write');
+			'dnsbl/whitelist must stay untouched by an ip/suppression write');
 	}
 
 	/**
-	 * 'ip/suppression' and 'dnsbl/suppression' share the same bare key name but
-	 * resolve to different config.xml sections -- the #1931 path-addressing fix
-	 * for their pre-step-A collision. Both stay independently registered and
-	 * readable, each at its own default.
+	 * 'ip/suppression' and 'dnsbl/whitelist' used to share the same bare key name
+	 * ('suppression', pre-#1921 rename) despite resolving to different config.xml
+	 * sections -- the #1931 path-addressing fix for that pre-step-A collision. The
+	 * #1921 rename removes the shared spelling entirely; this test now just pins
+	 * that the two keys stay independently registered and readable, each at its
+	 * own default, at their own distinct paths.
 	 *
 	 * Scenario:
 	 *   When PFB_SECTIONS resolves each alias's section path.
@@ -805,14 +807,14 @@ final class CfgGatewayTest extends TestCase
 	public function testIpSuppressionAndDnsblSuppressionResolveToDifferentPaths(): void
 	{
 		$ip_path    = PFB_SECTIONS['ip'] . '/suppression';
-		$dnsbl_path = PFB_SECTIONS['dnsbl'] . '/suppression';
+		$dnsbl_path = PFB_SECTIONS['dnsbl'] . '/whitelist';
 
 		$this->assertNotSame($ip_path, $dnsbl_path,
-			"'ip/suppression' and 'dnsbl/suppression' must resolve to different config.xml paths");
+			"'ip/suppression' and 'dnsbl/whitelist' must resolve to different config.xml paths");
 
 		PfbConfig::writeSystem('ip/suppression', 'on');
 		$this->assertSame(PfbToggle::On, PfbConfig::read('ip/suppression'));
-		$this->assertSame('', PfbConfig::read('dnsbl/suppression'), 'dnsbl/suppression stays at its own default');
+		$this->assertSame('', PfbConfig::read('dnsbl/whitelist'), 'dnsbl/whitelist stays at its own default');
 	}
 
 	// -----------------------------------------------------------------------
@@ -1118,9 +1120,10 @@ final class CfgGatewayTest extends TestCase
 	 *   - pfblockerngipsettings sub-keys (all section-level, handled together):
 	 *     maxmind_key, etc. ADR-53 registered v4suppression + v6suppression; issue
 	 *     #1931 registers 'suppression' too, as path-addressed 'ip/suppression' --
-	 *     distinct storage from the already-registered 'dnsbl/suppression' despite
-	 *     the shared bare name. All three are NOT on this out-of-scope list; only
-	 *     their still-foreign ipsettings siblings are.
+	 *     distinct storage from the already-registered 'dnsbl/whitelist' (pre-#1921
+	 *     rename: dnsbl alias, bare key suppression, despite the shared bare name).
+	 *     All three are NOT on this out-of-scope list; only their still-foreign
+	 *     ipsettings siblings are.
 	 *   - pfblockerngreputation sub-keys: et_header
 	 *   - pfblockerngsync sub-keys: syncinterfaces, varsynconchanges, row/*
 	 *   - pfblockerngblacklist sub-keys: blacklist_enable, blacklist_freq,
@@ -1133,9 +1136,10 @@ final class CfgGatewayTest extends TestCase
 	{
 		$registry = pfb_cfg_registry();
 
-		// issue #1931: 'ip/suppression' shares its bare key with the already-registered
-		// 'dnsbl/suppression', so the bare-key inventory below can't distinguish the two --
-		// assert the alias-qualified registration directly.
+		// issue #1931 (pre-#1921 rename: shared its bare key with the then-registered
+		// dnsbl alias's bare-key suppression, so the bare-key inventory below couldn't
+		// distinguish the two) -- assert the alias-qualified registration directly
+		// regardless.
 		$this->assertArrayHasKey('ip/suppression', $registry,
 			"'ip/suppression' must be registered (issue #1931)");
 
@@ -1309,7 +1313,7 @@ final class CfgGatewayTest extends TestCase
 			'pfb_gp_bypass_list',
 			'tld_wildcard_blacklist',
 			'tld_wildcard_exclusion',
-			'suppression',
+			'whitelist',
 			'action',
 			'pfb_dnsbl_rule',
 			'dnsbl_allow_int',

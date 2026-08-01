@@ -84,23 +84,23 @@ final class Issue1792SweepSitesTest extends TestCase
 
 	// --- family 2: base64 text field eats a stored "0" ---------------------
 
-	public function testStoredZeroSuppressionSurvivesToTheForm(): void
+	public function testStoredZeroWhitelistSurvivesToTheForm(): void
 	{
-		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['suppression']", [
-			'pfb'     => ['dconfig' => ['suppression' => base64_encode('0')]],
+		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['whitelist']", [
+			'pfb'     => ['dconfig' => ['whitelist' => base64_encode('0')]],
 			'pconfig' => [],
 		]);
-		$this->assertSame('0', $out['pconfig']['suppression'],
-			'a suppression textarea holding exactly "0" must re-render as "0", not empty');
+		$this->assertSame('0', $out['pconfig']['whitelist'],
+			'a whitelist textarea holding exactly "0" must re-render as "0", not empty');
 	}
 
-	public function testAbsentSuppressionStillRendersEmpty(): void
+	public function testAbsentWhitelistStillRendersEmpty(): void
 	{
-		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['suppression']", [
+		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['whitelist']", [
 			'pfb'     => ['dconfig' => []],
 			'pconfig' => [],
 		]);
-		$this->assertSame('', $out['pconfig']['suppression']);
+		$this->assertSame('', $out['pconfig']['whitelist']);
 	}
 
 	// --- family 3: alerts stat label '0' reads as "Unknown" ----------------

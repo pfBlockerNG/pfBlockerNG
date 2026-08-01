@@ -88,10 +88,10 @@ final class DnsblWildcardRowValidationTest extends TestCase
 		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
 	}
 
-	private function setSuppression(string $decoded): void
+	private function setWhitelist(string $decoded): void
 	{
 		config_set_path(
-			'installedpackages/pfblockerngdnsblsettings/config/0/suppression',
+			'installedpackages/pfblockerngdnsblsettings/config/0/whitelist',
 			base64_encode($decoded)
 		);
 	}
@@ -100,13 +100,13 @@ final class DnsblWildcardRowValidationTest extends TestCase
 
 	public function testPythonWhitelistDropsDoubleDotRow(): void
 	{
-		$this->setSuppression("..example.com\n");
+		$this->setWhitelist("..example.com\n");
 		$this->assertSame('', pfb_unbound_python_whitelist());
 	}
 
 	public function testPythonWhitelistKeepsNeighboursOfADroppedRow(): void
 	{
-		$this->setSuppression("good.com\n..example.com\n.wild.org\n");
+		$this->setWhitelist("good.com\n..example.com\n.wild.org\n");
 		$this->assertSame("good.com,0\nwild.org,1\n", pfb_unbound_python_whitelist());
 	}
 
@@ -114,7 +114,7 @@ final class DnsblWildcardRowValidationTest extends TestCase
 	{
 		// The valid wildcard form is the whole point of the ',1' suffix — it
 		// must survive the row gate untouched.
-		$this->setSuppression(".wild.org\nplain.net\nwww.stripme.net\n");
+		$this->setWhitelist(".wild.org\nplain.net\nwww.stripme.net\n");
 		$this->assertSame("wild.org,1\nplain.net,0\nstripme.net,0\n", pfb_unbound_python_whitelist());
 	}
 
@@ -147,13 +147,13 @@ final class DnsblWildcardRowValidationTest extends TestCase
 
 	public function testApplyWhitelistDropsDoubleDotRow(): void
 	{
-		$this->setSuppression("..example.com\n");
+		$this->setWhitelist("..example.com\n");
 		$this->assertSame('', $this->collectApplyWhitelist());
 	}
 
 	public function testApplyWhitelistKeepsNeighboursOfADroppedRow(): void
 	{
-		$this->setSuppression("..example.com\n.wild.org\nplain.net\n");
+		$this->setWhitelist("..example.com\n.wild.org\nplain.net\n");
 		$this->assertSame(
 			".wild.org,,\n,wild.org,,\n,plain.net,,\n,www.plain.net,,\n",
 			$this->collectApplyWhitelist()

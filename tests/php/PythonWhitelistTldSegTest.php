@@ -85,10 +85,10 @@ final class PythonWhitelistTldSegTest extends TestCase
 		PfbConfig::write('dnsbl/dnsbl_interface', 'lo0');
 	}
 
-	private function setSuppression(string $decoded): void
+	private function setWhitelist(string $decoded): void
 	{
 		config_set_path(
-			'installedpackages/pfblockerngdnsblsettings/config/0/suppression',
+			'installedpackages/pfblockerngdnsblsettings/config/0/whitelist',
 			base64_encode($decoded)
 		);
 	}
@@ -104,7 +104,7 @@ final class PythonWhitelistTldSegTest extends TestCase
 	 */
 	public function testMixedSuppressionListProducesExpectedCsv(): void
 	{
-		$this->setSuppression("example.com\r\n.wild.org\r\nwww.stripme.net\r\n\r\n");
+		$this->setWhitelist("example.com\r\n.wild.org\r\nwww.stripme.net\r\n\r\n");
 
 		$this->assertSame(
 			"example.com,0\nwild.org,1\nstripme.net,0\n",
@@ -114,19 +114,19 @@ final class PythonWhitelistTldSegTest extends TestCase
 
 	public function testLeadingDotWildcardEntryGetsSuffixOne(): void
 	{
-		$this->setSuppression(".wild.org\r\n");
+		$this->setWhitelist(".wild.org\r\n");
 		$this->assertSame("wild.org,1\n", pfb_unbound_python_whitelist());
 	}
 
 	public function testWwwPrefixIsStrippedAndSuffixedZero(): void
 	{
-		$this->setSuppression("www.stripme.net\r\n");
+		$this->setWhitelist("www.stripme.net\r\n");
 		$this->assertSame("stripme.net,0\n", pfb_unbound_python_whitelist());
 	}
 
 	public function testEmptySuppressionReturnsEmptyString(): void
 	{
-		$this->setSuppression('');
+		$this->setWhitelist('');
 		$this->assertSame('', pfb_unbound_python_whitelist());
 	}
 

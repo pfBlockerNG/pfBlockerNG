@@ -36,7 +36,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsbl_tld_wildcard' => '',
-			'dnsblconfig'        => ['tld_wildcard_blacklist' => '', 'tld_wildcard_exclusion' => '', 'suppression' => ''],
+			'dnsblconfig'        => ['tld_wildcard_blacklist' => '', 'tld_wildcard_exclusion' => '', 'whitelist' => ''],
 		]);
 		$this->writeFeed('one.example');
 	}

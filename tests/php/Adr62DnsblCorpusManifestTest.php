@@ -65,7 +65,7 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 			'dnsblconfig'        => [
 				'tld_wildcard_blacklist' => base64_encode("zip"),
 				'tld_wildcard_exclusion' => base64_encode("excluded.com"),
-				'suppression'  => base64_encode("www.adblock.com\r\n.wildwhite.org\r\nphishing.net"),
+				'whitelist'  => base64_encode("www.adblock.com\r\n.wildwhite.org\r\nphishing.net"),
 			],
 		]);
 		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", "popularcdn.com\n");

@@ -130,7 +130,7 @@ def test_dnsbl_textarea_save_normalizes_line_endings_and_controls(
       ("DNSBL Regex list contains non-ascii characters") -- so, unlike every
       other field this issue touches, this one cannot carry an NBSP-only-row
       (or any non-ASCII byte) at all; that Unicode-aware-strip property is
-      pinned on ``suppression`` instead (next test below), which has no such
+      pinned on ``whitelist`` instead (next test below), which has no such
       gate and already needs Unicode content for its own assertion.
 
     RED (before commit 2): ``base64_encode($_POST['pfb_regex_list'])`` stores
@@ -156,19 +156,19 @@ def test_dnsbl_textarea_save_normalizes_line_endings_and_controls(
     assert _decoded(after) == expected, f"pfb_regex_list not normalized: expected {expected!r}, got {_decoded(after)!r}"
 
 
-def test_dnsbl_suppression_comment_control_char_stripped(
+def test_dnsbl_whitelist_comment_control_char_stripped(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     dnsbl_vip_ready: None,  # noqa: ARG001
 ) -> None:
-    """DNSBL ``suppression`` save strips a control char from a comment, keeps Unicode.
+    """DNSBL ``whitelist`` save strips a control char from a comment, keeps Unicode.
 
     Also carries the NBSP-only-row property originally planned for the
     ``pfb_regex_list`` test (test 1): that field has its OWN, unrelated
     ``mb_detect_encoding($_POST['pfb_regex_list'], 'ASCII', TRUE)`` save-time
     gate ("DNSBL Regex list contains non-ascii characters") that rejects ANY
     non-ASCII byte outright -- NBSP included -- so it structurally cannot
-    carry this property; ``suppression`` has no such gate and already needs
+    carry this property; ``whitelist`` has no such gate and already needs
     Unicode content for the control-char/comment assertion above, so it is
     the natural home for it. The two-line raw body stays validation-inert:
     pfBlockerNG's customlist validator here also splits on the LITERAL
@@ -190,15 +190,15 @@ def test_dnsbl_suppression_comment_control_char_stripped(
     domain = helpers.unique_domain("pfbsupp")
     raw = f"{domain} # caf\x07é ☕\n\xa0"
     expected = f"{domain} # café ☕\n"
-    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/suppression"
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/whitelist"
 
     before = helpers.config_get(vm, cfg)
-    resp = webui.post(DNSBL_PAGE, {"suppression": raw}, timeout=SETTINGS_SAVE_TIMEOUT)
+    resp = webui.post(DNSBL_PAGE, {"whitelist": raw}, timeout=SETTINGS_SAVE_TIMEOUT)
     assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
 
     after = helpers.config_get(vm, cfg)
-    assert after != before, "suppression did not change -- the save did not take (POST must CAUSE the change)"
-    assert _decoded(after) == expected, f"suppression control-char not stripped: got {_decoded(after)!r}"
+    assert after != before, "whitelist did not change -- the save did not take (POST must CAUSE the change)"
+    assert _decoded(after) == expected, f"whitelist control-char not stripped: got {_decoded(after)!r}"
 
 
 def test_ip_suppression_cr_only_rows_persist_as_lf(
@@ -583,12 +583,12 @@ def test_category_edit_rowhelper_url_sanitized(
         tce._restore_maxmind_creds(vm, orig_key, orig_account)
 
 
-def test_dnsbl_suppression_accepts_single_dot_wildcard_row(
+def test_dnsbl_whitelist_accepts_single_dot_wildcard_row(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     dnsbl_vip_ready: None,  # noqa: ARG001
 ) -> None:
-    """The Suppression list keeps taking the single-dot wildcard row (issue #1741).
+    """The Whitelist list keeps taking the single-dot wildcard row (issue #1741).
 
     The before-state half of the pair below: ``.example.com`` is the legal
     wildcard form and must still save, so the rejection of ``..example.com``
@@ -596,25 +596,25 @@ def test_dnsbl_suppression_accepts_single_dot_wildcard_row(
     """
     vm = smoke_vm
     domain = helpers.unique_domain("pfbwild")
-    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/suppression"
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/whitelist"
 
     before = helpers.config_get(vm, cfg)
-    resp = webui.post(DNSBL_PAGE, {"suppression": f".{domain}"}, timeout=SETTINGS_SAVE_TIMEOUT)
+    resp = webui.post(DNSBL_PAGE, {"whitelist": f".{domain}"}, timeout=SETTINGS_SAVE_TIMEOUT)
     assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
 
     after = helpers.config_get(vm, cfg)
-    assert after != before, "suppression did not change -- the save did not take (POST must CAUSE the change)"
+    assert after != before, "whitelist did not change -- the save did not take (POST must CAUSE the change)"
     assert _decoded(after) == f".{domain}", (
         f"the single-dot wildcard row must persist verbatim, got {_decoded(after)!r}"
     )
 
 
-def test_dnsbl_suppression_rejects_double_dot_row(
+def test_dnsbl_whitelist_rejects_double_dot_row(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     dnsbl_vip_ready: None,  # noqa: ARG001
 ) -> None:
-    """The Suppression list refuses a multi-dot row (issue #1741).
+    """The Whitelist list refuses a multi-dot row (issue #1741).
 
     ``..example.com`` is not a wildcard row. The page validated a
     ``trim($value[0], '.')`` copy, which drops EVERY leading dot, so the row
@@ -627,15 +627,15 @@ def test_dnsbl_suppression_rejects_double_dot_row(
     """
     vm = smoke_vm
     domain = helpers.unique_domain("pfbdotdot")
-    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/suppression"
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/whitelist"
 
     before = helpers.config_get(vm, cfg)
-    resp = webui.post(DNSBL_PAGE, {"suppression": f"..{domain}"}, timeout=SETTINGS_SAVE_TIMEOUT)
+    resp = webui.post(DNSBL_PAGE, {"whitelist": f"..{domain}"}, timeout=SETTINGS_SAVE_TIMEOUT)
     assert not looks_like_login_page(resp.text), "DNSBL POST returned the login form (session lost)"
 
     # The rejection must be THIS row's, not an unrelated save-wide abort: assert the
     # page's own per-row message before asserting that nothing persisted.
-    expected_error = f"Customlist suppression: Invalid Domain name entry: [ ..{domain} ]"
+    expected_error = f"Customlist whitelist: Invalid Domain name entry: [ ..{domain} ]"
     assert expected_error in resp.text, (
         f"the page did not report the multi-dot row as invalid (expected {expected_error!r}) -- "
         "an unrelated validation failure would abort the save too"
@@ -643,7 +643,7 @@ def test_dnsbl_suppression_rejects_double_dot_row(
 
     after = helpers.config_get(vm, cfg)
     assert after == before, (
-        f"the multi-dot row was saved -- suppression changed from {_decoded(before)!r} "
+        f"the multi-dot row was saved -- whitelist changed from {_decoded(before)!r} "
         f"to {_decoded(after)!r}; the validator must refuse it"
     )
 

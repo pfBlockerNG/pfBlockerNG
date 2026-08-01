@@ -231,7 +231,7 @@ class DnsblCase:
                        (on ``next`` python mode is always on; dnsbl_mode /
                        pfb_py_block are dead config keys)
       wildcard      -> feed entry style; a wildcard feed line blocks subdomains
-      whitelist     -> CFG_DNSBL_SETTINGS/suppression (newline list; a leading
+      whitelist     -> CFG_DNSBL_SETTINGS/whitelist (newline list; a leading
                        '.' suppresses the whole subtree)
       dnsbl_ip_action -> CFG_DNSBL_SETTINGS/action (the "DNSBL IP" firewall
                        feature): "" (Disabled) or e.g. "Deny_Both". When set,
@@ -1355,7 +1355,7 @@ def enable_strict_php_error_reporting(vm: SmokeVM, *, timeout: float = 30.0) -> 
 def _b64_textarea(lines: list[str]) -> str:
     """Base64-encode a CRLF-joined textarea value — the shape pfBlockerNG stores.
 
-    pfBlockerNG TEXTAREA settings (``suppression``, ``pfb_regex_list``, ``custom``, …)
+    pfBlockerNG TEXTAREA settings (``whitelist``, ``pfb_regex_list``, ``custom``, …)
     are kept base64-encoded in config (the GUI base64_encodes on save). Python regex
     transport decodes ``pfb_regex_list`` from MAIN.regex_list; other textareas use
     ``pfb_text_area_decode()``. Encode with CRLF separators so every consumer sees
@@ -2946,7 +2946,7 @@ def inject_dnsbl_lists(
     settings = _dnsbl_mode_settings(primary_spec.mode)
     settings["pfb_dnsbl"] = "on"
     if primary_spec.whitelist:
-        settings["suppression"] = _b64_textarea(primary_spec.whitelist)
+        settings["whitelist"] = _b64_textarea(primary_spec.whitelist)
     if primary_spec.dnsbl_ip_action:
         settings["action"] = primary_spec.dnsbl_ip_action
     if primary_spec.user_regex:
@@ -3005,10 +3005,11 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     settings = _dnsbl_mode_settings(spec.mode)
     settings["pfb_dnsbl"] = "on"
     if spec.whitelist:
-        # suppression is a pfBlockerNG TEXTAREA field: config stores it base64-encoded
-        # (GUI pfblockerng_dnsbl.php:555) and pfb_text_area_decode() base64_decodes +
-        # splits on CRLF. A PLAIN value here decodes to GARBAGE — so encode it.
-        settings["suppression"] = _b64_textarea(spec.whitelist)
+        # whitelist is a pfBlockerNG TEXTAREA field (stored as 'suppression' until
+        # issue #1921): config stores it base64-encoded (GUI pfblockerng_dnsbl.php:555)
+        # and pfb_text_area_decode() base64_decodes + splits on CRLF. A PLAIN value here
+        # decodes to GARBAGE — so encode it.
+        settings["whitelist"] = _b64_textarea(spec.whitelist)
     if spec.dnsbl_ip_action:
         # The "DNSBL IP" firewall feature: collect IP literals from the DNSBL
         # feed into the pfB_DNSBLIP_{v4,v6} alias tables (inc:7022 reads this

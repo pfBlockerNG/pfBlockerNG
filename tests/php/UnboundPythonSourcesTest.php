@@ -67,7 +67,7 @@ final class UnboundPythonSourcesTest extends TestCase
 			'dnsblconfig'        => [
 				'tld_wildcard_blacklist' => '',
 				'tld_wildcard_exclusion' => '',
-				'suppression'            => '',
+				'whitelist'              => '',
 			],
 		]);
 
@@ -619,7 +619,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testWhitelistKeepsValidDomainAndWildcardLinesUnchanged(): void
 	{
 		// Plain domain + leading-dot wildcard both pass through unchanged, no log.
-		$GLOBALS['pfb']['dnsblconfig']['suppression'] =
+		$GLOBALS['pfb']['dnsblconfig']['whitelist'] =
 			base64_encode("good.example.com\r\n.wild.example.com");
 
 		$this->assertSame(['good.example.com', '.wild.example.com'], pfb_dnsbl_whitelist_lines());
@@ -629,7 +629,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testWhitelistSkipsAndLogsNonDomainLine(): void
 	{
 		// Given one failing line among valid ones, and an empty log
-		$GLOBALS['pfb']['dnsblconfig']['suppression'] =
+		$GLOBALS['pfb']['dnsblconfig']['whitelist'] =
 			base64_encode("good.example.com\r\nbad domain;ls\r\n.wild.example.com");
 		$this->assertSame('', $this->logContents(), 'log must start empty');
 

@@ -1124,12 +1124,13 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as tldexclusion)',
 		],
 
-		// DNSBL suppression/whitelist (base64). Default ''.
-		'dnsbl/suppression' => [
+		// DNSBL whitelist (base64), stored as 'suppression' until issue #1921. Default ''.
+		'dnsbl/whitelist' => [
 			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (dnsbl-section suppression blob)',
+			'old_name'      => 'suppression',
+			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (dnsbl-section whitelist blob, as suppression)',
 		],
 
 		// DNSBL action for IP blocking. Default 'Disabled'.
@@ -1345,7 +1346,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// issue #1931: IP page "Enable Suppression" toggle -- path-addressed, no longer
-		// collides with dnsbl/suppression. Default on (the de-facto page default since
+		// collides with dnsbl/whitelist. Default on (the de-facto page default since
 		// 3.2 -- #1907 owner decision). '' grandfather preserves a 3.2 deliberate
 		// uncheck.
 		'ip/suppression' => [
