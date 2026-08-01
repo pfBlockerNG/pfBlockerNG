@@ -354,13 +354,8 @@ include_once('head.inc');
 // Collect pre/post processing scripts
 $options_script_pre = $options_script_post = array();
 $indexdir = '/usr/local/pkg/pfblockerng/';
+$list_prefix = ($gtype == 'ipv4' || $gtype == 'ipv6') ? 'ip' : 'dnsbl';
 if (is_dir("{$indexdir}")) {
-
-	if ($gtype == 'ipv4' || $gtype == 'ipv6') {
-		$list_prefix = 'ip';
-	} else {
-		$list_prefix = 'dnsbl';
-	}
 
 	// List scripts live under list_scripts/; also scan the legacy package root so
 	// a not-yet-migrated custom script still appears during the upgrade transition.
@@ -386,6 +381,13 @@ if (is_dir("{$indexdir}")) {
 }
 $options_script_pre		= array_merge(array('' => 'None'), $options_script_pre);
 $options_script_pre_cnt		= count($options_script_pre) ?: '1';
+
+// issue #1926: the DNSBLIP alias is synthesized from addresses extracted out of
+// domain feeds -- a pre-script that removes IP/ABP-shaped lines silently shrinks it.
+$script_dnsbl_note = ($list_prefix == 'dnsbl') ? "<br /><span class=\"text-danger\">Note:</span>&nbsp;"
+	. "A DNSBL pre-process script must not remove IP-shaped or ABP-shaped lines: the "
+	. "DNSBLIP alias is synthesized from addresses extracted out of domain feeds, and "
+	. "removed lines silently shrink it." : '';
 
 $options_script_post		= array_merge(array('' => 'None'), $options_script_post);
 $options_script_post_cnt	= count($options_script_post) ?: '1';
@@ -1674,7 +1676,8 @@ $section->addInput(new Form_Select(
 	$pconfig['script_pre'],
 	$options_script_pre
 ))->sethelp("Pre-processing Shell script after download.<br />"
-	. "Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_pre_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_pre_SCRIPT NAME.sh|py</strong>")
+	. "Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_pre_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_pre_SCRIPT NAME.sh|py</strong>"
+	. $script_dnsbl_note)
   ->setAttribute('style', 'width: auto')
   ->setAttribute('size', $options_script_pre_cnt);
 

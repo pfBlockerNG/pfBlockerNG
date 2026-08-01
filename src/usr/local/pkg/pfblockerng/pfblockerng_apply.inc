@@ -1590,6 +1590,17 @@ function sync_package_pfblockerng($cron='') {
 					// config with no srcint field warning-free.
 					$srcint = $list['srcint'] ?? '' ?: FALSE;
 
+					// DNSBL Advanced Tunable - (Pre/Post Script processing) — issue #1926:
+					// pickers were saved but never executed; mirrors the IP loop.
+					$pfb_dnsbl_script_pre  = FALSE;
+					$pfb_dnsbl_script_post = FALSE;
+					if (!empty($list['script_pre'])) {
+						$pfb_dnsbl_script_pre = pfb_resolve_list_script($list['script_pre']);
+					}
+					if (!empty($list['script_post'])) {
+						$pfb_dnsbl_script_post = pfb_resolve_list_script($list['script_post']);
+					}
+
 					foreach ($list['row'] as $key => $row) {
 						if (!empty($row['url']) && $row['state'] != 'Disabled') {
 
@@ -1788,8 +1799,11 @@ function sync_package_pfblockerng($cron='') {
 								// content is byte-identical to the previous pass reuses the staged
 								// '.txt' the same way the verbatim-reuse branch does.
 								$pfb_norm = pfb_feed_normalize("{$file_dwn}.orig");
+								$pfb_dnsbl_user_script = ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) ||
+								    ($pfb_dnsbl_script_post && is_file("{$pfb_dnsbl_script_post}"));
 								if (pfb_dnsbl_norm_reuse_skip($downloaded_fresh, (bool) $custom, $orig_content_stale,
-								    $pfb_norm['changed'], file_exists("{$pfbfolder}/{$header}.txt"), $staging_current_generation)) {
+								    $pfb_norm['changed'], file_exists("{$pfbfolder}/{$header}.txt"), $staging_current_generation,
+								    $pfb_dnsbl_user_script)) {
 									pfb_logger("\n[ {$header} ]{$logtab} unchanged after normalization.", 1);
 									$lists_dnsbl_all[]	= "{$row['header']}.txt";
 									// ADR-31: same manifest-row shape as the verbatim-reuse branch above.
@@ -1803,6 +1817,30 @@ function sync_package_pfblockerng($cron='') {
 									continue;
 								}
 
+								// issue #1926: DNSBL pre-script runs on a staged copy of the
+								// normalized output (#1925 shape); a failed transform keeps the
+								// last known-good staging and the '.update' marker for retry.
+								$pfb_parse_path = $pfb_norm['path'];
+								if ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) {
+									pfb_logger("\nExecuting pre-script: {$list['script_pre']}\n", 1);
+									$pfb_pre = pfb_list_pre_script_run($pfb_norm['path'], "{$file_dwn}.pre",
+									    $pfb_dnsbl_script_pre, $list['script_pre'], $header,
+									    escapeshellarg("{$file_dwn}.pre") . " dnsbl {$elog}");
+									if (!$pfb_pre['ok']) {
+										if (file_exists("{$pfbfolder}/{$header}.txt")) {
+											$lists_dnsbl_all[]	= "{$row['header']}.txt";
+											$pfb_py_feeds[]		= pfb_feed_manifest_row(
+												$header, $alias, $logging_type,
+												$custom ? 'user' : 'feed',
+												$mode);
+											$list_cnt		= pfb_count_lines("{$pfbfolder}/{$header}.txt") ?? 0;
+											$alias_cnt		= $alias_cnt + $list_cnt;
+										}
+										continue;
+									}
+									$pfb_parse_path = $pfb_pre['path'];
+								}
+
 								$run_once = $csv_parser = FALSE;
 								$csv_type = '';
 								$ipcount = $ip_cnt = $ip_cnt6 = 0;
@@ -1810,7 +1848,7 @@ function sync_package_pfblockerng($cron='') {
 								$dnsbl_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
 
 								// Parse downloaded file for Domain names
-								if (($fhandle = @fopen($pfb_norm['path'], 'r')) !== FALSE) {
+								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
 									if (($dhandle = @fopen("{$pfbfolder}/{$header}.bk", 'w')) !== FALSE) {
 										while (($line = @fgets($fhandle)) !== FALSE) {
 
@@ -2039,6 +2077,8 @@ function sync_package_pfblockerng($cron='') {
 								if ($fhandle) {
 									@fclose($fhandle);
 								}
+								// issue #1926: the staged pre-script copy is transient -- parsed above.
+								unlink_if_exists("{$file_dwn}.pre");
 
 								// Close the "Reload . completed ." progress line with its trailing dot
 								// BEFORE the strict-parsing WARNING below, else the warning's own
@@ -2050,6 +2090,18 @@ function sync_package_pfblockerng($cron='') {
 								// ADR-22: one WARNING per feed summarising strict-mode skips (silent
 								// when none -- lenient never increments the counter).
 								pfb_dnsbl_scheme_skip_warn($pfb_scheme_skipped, $header);
+
+								// issue #1926: DNSBL post-script runs on a throwaway copy of the
+								// download — nothing downstream re-parses it (same observable as
+								// the IP loop, which discards post-script edits via restore).
+								if ($pfb_dnsbl_script_post && is_file("{$pfb_dnsbl_script_post}")) {
+									pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
+									if (@copy("{$file_dwn}.orig", "{$file_dwn}.post")) {
+										pfb_list_script_exec($pfb_dnsbl_script_post, $list['script_post'], 'post', $header,
+										    escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}");
+										unlink_if_exists("{$file_dwn}.post");
+									}
+								}
 
 								if (isset($csvline)) {
 									unset($csvline);

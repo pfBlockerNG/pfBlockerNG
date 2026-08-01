@@ -164,7 +164,14 @@ final class ListScriptExitStatusTest extends TestCase
 
 	public function testPostScriptCallSiteGatesOnExitStatus(): void
 	{
-		$postPos = strpos(self::$applySource, 'Executing post-script:');
+		// issue #1926: the DNSBL loop now logs the same "Executing post-script:" line
+		// earlier in the file -- anchor past the IP-loop's own reuse-skip call site
+		// (same technique as testPreScriptCallSiteGatesOnExitStatus) so this finds the
+		// IP-loop's occurrence, not the DNSBL one.
+		$reuseSkipPos = strpos(self::$applySource, 'pfb_ip_norm_reuse_skip(');
+		$this->assertNotFalse($reuseSkipPos, 'vacuity: the IP-loop normalize/reuse-skip step must exist');
+
+		$postPos = strpos(self::$applySource, 'Executing post-script:', $reuseSkipPos);
 		$this->assertNotFalse($postPos, 'vacuity: the post-script call site must exist');
 
 		$chkPos = strpos(self::$applySource, 'if (!$custom) {', $postPos);

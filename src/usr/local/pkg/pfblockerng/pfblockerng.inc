@@ -2484,12 +2484,14 @@ function pfb_dnsbl_verbatim_reuse_active(bool $txt_exists, bool $update_exists, 
 // completed non-custom download qualifies (a Reload/Force pass must keep its
 // reparse-everything semantics; a custom list re-synthesizes per pass; a
 // stale-.orig download-failure fallback stays fail-safe like #1022/#1031),
-// and only onto a current-generation staged '.txt' (#1083).
+// and only onto a current-generation staged '.txt' (#1083). issue #1926: a
+// configured pre/post script never skips either -- its contract is a full
+// pass over the normalized output every run.
 function pfb_dnsbl_norm_reuse_skip(bool $downloaded_fresh, bool $custom, bool $orig_content_stale,
-	bool $norm_changed, bool $txt_exists, bool $staging_current_generation): bool
+	bool $norm_changed, bool $txt_exists, bool $staging_current_generation, bool $has_user_script): bool
 {
 	return $downloaded_fresh && !$custom && !$orig_content_stale && !$norm_changed &&
-		$txt_exists && $staging_current_generation;
+		$txt_exists && $staging_current_generation && !$has_user_script;
 }
 
 // issue #1797: the IP-loop counterpart of pfb_dnsbl_norm_reuse_skip(). Feeds

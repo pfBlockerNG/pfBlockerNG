@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
  * $alias_cnt accumulation from a per-file line count (issue #1162; issue
  * #1261: the exec("grep -c ^ <file>") fork is replaced by pfb_count_lines()).
  *
- * sync_package_pfblockerng() has two sites that feed a file's line count into
+ * sync_package_pfblockerng() has sites that feed a file's line count into
  * `+` arithmetic: `$alias_cnt = $alias_cnt + $list_cnt;`. Before #1261,
  * $list_cnt came from exec()'s raw output (a non-numeric string on a failed
  * grep, needing an inline (int) cast). Now pfb_count_lines() returns ?int
@@ -47,18 +47,19 @@ final class AliasCntGrepCountGuardTest extends TestCase
 	public function testVacuityExactlyThreeAccumulationSitesExist(): void
 	{
 		$count = preg_match_all(self::ACCUMULATION_RE, self::$src);
-		$this->assertSame(3, $count,
-			'expected exactly 3 $alias_cnt = $alias_cnt + $list_cnt; accumulation sites '
-			. '(list-reuse branch, the issue #1797 norm-unchanged skip branch, and the '
-			. "downloaded/rebuilt branch); found {$count}");
+		$this->assertSame(4, $count,
+			'expected exactly 4 $alias_cnt = $alias_cnt + $list_cnt; accumulation sites '
+			. '(list-reuse branch, the issue #1797 norm-unchanged skip branch, the '
+			. 'downloaded/rebuilt branch, and the issue #1926 DNSBL pre-script-failure '
+			. "manifest-kept branch); found {$count}");
 	}
 
 	public function testAllSitesAssignListCntFromPfbCountLinesWithNullFallback(): void
 	{
 		$count = preg_match_all(self::COUNT_ASSIGN_RE, self::$src);
-		$this->assertSame(3, $count,
-			'expected exactly 3 `$list_cnt = pfb_count_lines(...) ?? 0;` assignments feeding '
-			. "the accumulation sites (issue #1261); found {$count}");
+		$this->assertSame(4, $count,
+			'expected exactly 4 `$list_cnt = pfb_count_lines(...) ?? 0;` assignments feeding '
+			. "the accumulation sites (issue #1261, extended by issue #1926); found {$count}");
 	}
 
 	public function testNoExecGrepForkSurvivesForListCnt(): void

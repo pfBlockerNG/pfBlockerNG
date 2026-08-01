@@ -18,28 +18,29 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_ip_norm_reuse_skip')]
 final class PfbNormReuseSkipTest extends TestCase
 {
-	public function testDnsblSkipsOnlyForAFreshUnchangedDownloadOntoCurrentStaging(): void
+	public function testDnsblSkipsOnlyForAFreshUnchangedDownloadOntoCurrentStagingWithoutAUserScript(): void
 	{
-		$this->assertTrue(pfb_dnsbl_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, TRUE));
+		$this->assertTrue(pfb_dnsbl_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE));
 	}
 
-	/** @return array<string, array{bool,bool,bool,bool,bool,bool}> */
+	/** @return array<string, array{bool,bool,bool,bool,bool,bool,bool}> */
 	public static function dnsblNoSkipRows(): array
 	{
 		return [
-			'no fresh download (Reload/Force reparses)' => [FALSE, FALSE, FALSE, FALSE, TRUE, TRUE],
-			'custom list (re-synthesized per pass)'     => [TRUE, TRUE, FALSE, FALSE, TRUE, TRUE],
-			'stale-.orig download-failure fallback'     => [TRUE, FALSE, TRUE, FALSE, TRUE, TRUE],
-			'normalized content changed'                => [TRUE, FALSE, FALSE, TRUE, TRUE, TRUE],
-			'no staged .txt to reuse'                   => [TRUE, FALSE, FALSE, FALSE, FALSE, TRUE],
-			'stale staging generation (#1083)'          => [TRUE, FALSE, FALSE, FALSE, TRUE, FALSE],
+			'no fresh download (Reload/Force reparses)' => [FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE],
+			'custom list (re-synthesized per pass)'     => [TRUE, TRUE, FALSE, FALSE, TRUE, TRUE, FALSE],
+			'stale-.orig download-failure fallback'     => [TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE],
+			'normalized content changed'                => [TRUE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE],
+			'no staged .txt to reuse'                   => [TRUE, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE],
+			'stale staging generation (#1083)'          => [TRUE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE],
+			'user pre/post script owns the full pass'   => [TRUE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE],
 		];
 	}
 
 	#[DataProvider('dnsblNoSkipRows')]
-	public function testDnsblNeverSkipsWhenAnyGuardFails(bool $fresh, bool $custom, bool $stale, bool $changed, bool $txt, bool $generation): void
+	public function testDnsblNeverSkipsWhenAnyGuardFails(bool $fresh, bool $custom, bool $stale, bool $changed, bool $txt, bool $generation, bool $script): void
 	{
-		$this->assertFalse(pfb_dnsbl_norm_reuse_skip($fresh, $custom, $stale, $changed, $txt, $generation));
+		$this->assertFalse(pfb_dnsbl_norm_reuse_skip($fresh, $custom, $stale, $changed, $txt, $generation, $script));
 	}
 
 	public function testIpSkipsOnlyForAFreshUnchangedDownloadWithoutUserScripts(): void
