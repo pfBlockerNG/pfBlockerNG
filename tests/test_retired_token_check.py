@@ -21,6 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.gitenv import scrubbed_git_env
+
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_retired_tokens.py"
 _spec = importlib.util.spec_from_file_location("check_retired_tokens", _TOOL)
 assert _spec is not None and _spec.loader is not None
@@ -75,7 +77,9 @@ def _retired(diff_text: str) -> list[str]:
 
 
 def _init_repo(repo: Path) -> None:
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main"], cwd=repo, check=True, capture_output=True, env=scrubbed_git_env()
+    )
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -84,6 +88,7 @@ def _git(repo: Path, *args: str) -> None:
         cwd=repo,
         check=True,
         capture_output=True,
+        env=scrubbed_git_env(),
     )
 
 

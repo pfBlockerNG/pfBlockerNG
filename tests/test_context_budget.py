@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.gitenv import scrubbed_git_env
+
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_context_budget.py"
 _spec = importlib.util.spec_from_file_location("check_context_budget", _TOOL)
 assert _spec is not None and _spec.loader is not None
@@ -88,13 +90,15 @@ def _scratch_repo(tmp_path: Path) -> Path:
     _write(root, ".agents/context/lang-php.md", f"# PHP\n\n{_HEADER}")
     _write(root, ".agents/context/lang-python.md", f"# Python\n\n{_HEADER}")
     _write(root, ".agents/context/lang-shell.md", f"# Shell\n\n{_HEADER}")
-    subprocess.run(["git", "init", "-q", root], check=True)
-    subprocess.run(["git", "-C", root, "add", "-A"], check=True)
+    subprocess.run(["git", "init", "-q", root], check=True, env=scrubbed_git_env())
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     return root
 
 
 def _tracked(root: Path) -> list[str]:
-    out = subprocess.run(["git", "-C", root, "ls-files"], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(
+        ["git", "-C", root, "ls-files"], capture_output=True, text=True, check=True, env=scrubbed_git_env()
+    ).stdout
     return [line for line in out.split("\n") if line]
 
 
@@ -794,10 +798,11 @@ def test_cli_staged_skips_when_no_context_surface_staged(tmp_path: Path) -> None
     subprocess.run(
         ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
         check=True,
+        env=scrubbed_git_env(),
     )
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
     _write(root, "src/thing.inc", "<?php\n")
-    subprocess.run(["git", "-C", root, "add", "src/thing.inc"], check=True)
+    subprocess.run(["git", "-C", root, "add", "src/thing.inc"], check=True, env=scrubbed_git_env())
     proc = _run_cli(root, "--staged")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "skipped" in proc.stdout
@@ -808,9 +813,10 @@ def test_cli_staged_runs_and_fails_on_staged_over_budget_policy(tmp_path: Path) 
     subprocess.run(
         ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
         check=True,
+        env=scrubbed_git_env(),
     )
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
-    subprocess.run(["git", "-C", root, "add", "-A"], check=True)
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     proc = _run_cli(root, "--staged")
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert ".agents/policy/alpha.md" in proc.stdout and "> budget 12288" in proc.stdout
@@ -823,9 +829,10 @@ def test_cli_staged_checks_index_content_not_working_tree(tmp_path: Path) -> Non
     subprocess.run(
         ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
         check=True,
+        env=scrubbed_git_env(),
     )
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
-    subprocess.run(["git", "-C", root, "add", "-A"], check=True)
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     _write(root, ".agents/policy/alpha.md", f"# Alpha\n\n{_HEADER}")
     proc = _run_cli(root, "--staged")
     assert proc.returncode == 1, proc.stdout + proc.stderr
@@ -839,9 +846,10 @@ def test_cli_staged_ignores_unstaged_working_tree_violation(tmp_path: Path) -> N
     subprocess.run(
         ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"],
         check=True,
+        env=scrubbed_git_env(),
     )
     _write(root, ".agents/policy/alpha.md", f"# Alpha (tweaked)\n\n{_HEADER}")
-    subprocess.run(["git", "-C", root, "add", "-A"], check=True)
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
     proc = _run_cli(root, "--staged")
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -850,10 +858,10 @@ def test_cli_staged_ignores_unstaged_working_tree_violation(tmp_path: Path) -> N
 def test_cli_diff_fires_on_over_budget_commit_vs_base(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
     git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com"]
-    subprocess.run([*git, "commit", "-qm", "base"], check=True)
+    subprocess.run([*git, "commit", "-qm", "base"], check=True, env=scrubbed_git_env())
     _write(root, ".agents/policy/alpha.md", "# Alpha\n\n" + _HEADER + "x" * 20_000)
-    subprocess.run(["git", "-C", root, "add", "-A"], check=True)
-    subprocess.run([*git, "commit", "-qm", "bloat"], check=True)
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
+    subprocess.run([*git, "commit", "-qm", "bloat"], check=True, env=scrubbed_git_env())
     proc = _run_cli(root, "--diff", "HEAD~1")
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert ".agents/policy/alpha.md" in proc.stdout and "> budget 12288" in proc.stdout
@@ -864,7 +872,7 @@ def test_cli_all_flags_non_ascii_named_policy_file(tmp_path: Path) -> None:
     # quoted string would match no budget — the checker must still see the file.
     root = _scratch_repo(tmp_path)
     _write(root, ".agents/policy/pölicy.md", "# P\n\n" + _HEADER + "x" * 20_000)
-    subprocess.run(["git", "-C", root, "add", "-A"], check=True)
+    subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=scrubbed_git_env())
     proc = _run_cli(root, "--all")
     assert proc.returncode == 1, proc.stdout + proc.stderr
     # NFC/NFD filename normalization differs per OS — match the ASCII tail only.

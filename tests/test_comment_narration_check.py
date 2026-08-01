@@ -18,6 +18,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from tests.gitenv import scrubbed_git_env
+
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_comment_narration.py"
 _spec = importlib.util.spec_from_file_location("check_comment_narration", _TOOL)
 assert _spec is not None and _spec.loader is not None
@@ -284,11 +288,48 @@ def _git(repo: Path, *args: str) -> None:
         cwd=repo,
         check=True,
         capture_output=True,
+        env=scrubbed_git_env(),
     )
 
 
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(_TOOL), *args], cwd=repo, capture_output=True, text=True)
+
+
+def test_scratch_git_helper_ignores_a_hostile_global_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A scratch commit must succeed on a machine whose global config signs commits.
+
+    With ``commit.gpgsign=true`` visible, the synthetic ``user.name=t`` identity attempts
+    a signed commit it has no key for and git exits 128 (``fatal: failed to write commit
+    object``) before the checker under test ever runs — the whole CLI section of this file
+    then fails for a reason that has nothing to do with narration (issue #1967).
+
+    Given a global Git config that forces signing with an unusable key,
+    When the scratch-repo helper initialises a repo and commits,
+    Then the commit succeeds and HEAD resolves — the helper neutralises both config scopes.
+    """
+    hostile = tmp_path / "hostile-gitconfig"
+    hostile.write_text("[commit]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n[user]\n\tsigningkey = /nonexistent/key\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(hostile))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(hostile))
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "devel")
+    (repo / "src").mkdir()
+    (repo / "src" / "thing.inc").write_text("// clean\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "base")
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=scrubbed_git_env(),
+    ).stdout.strip()
+    assert len(head) == 40, f"scratch commit did not produce a resolvable HEAD: {head!r}"
 
 
 def test_cli_escape_requires_colon_and_reason(tmp_path: Path) -> None:

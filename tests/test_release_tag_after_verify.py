@@ -43,6 +43,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.gitenv import scrubbed_git_env
+
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
 PUBLISHED_WORKFLOW = ROOT / ".github/workflows/release-published.yml"
@@ -709,6 +711,7 @@ def _git(repo: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        env=scrubbed_git_env(),
     ).stdout.strip()
 
 
@@ -716,8 +719,8 @@ def _tag_repo(tmp_path: Path) -> tuple[Path, str, str]:
     """A work repo with a bare `origin`, two commits; returns (repo, head_sha, older_sha)."""
     origin = tmp_path / "origin.git"
     repo = tmp_path / "work"
-    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)  # noqa: S603
-    subprocess.run(["git", "init", "-q", "-b", "devel", str(repo)], check=True)  # noqa: S603
+    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True, env=scrubbed_git_env())  # noqa: S603
+    subprocess.run(["git", "init", "-q", "-b", "devel", str(repo)], check=True, env=scrubbed_git_env())  # noqa: S603
     _git(repo, "config", "user.email", "t@example.invalid")
     _git(repo, "config", "user.name", "t")
     (repo / "a.txt").write_text("one\n")
