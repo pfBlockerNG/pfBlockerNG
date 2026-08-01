@@ -218,7 +218,7 @@ def test_dismissing_the_delete_confirmation_keeps_the_script(
 
     page.once("dialog", lambda dialog: dialog.dismiss())
     row.locator(".fa-trash-can").click()
-    page.wait_for_timeout(1000)
+    expect(row).to_be_visible(timeout=JS_TIMEOUT_MS)
 
     _open(page, webui, HOOKS_PAGE)
     expect(page.locator(f"tr[data-pfb-hook='{probe_hook}']")).to_have_count(1, timeout=JS_TIMEOUT_MS)
