@@ -175,11 +175,19 @@ final class ListScriptExitStatusTest extends TestCase
 			'the probe must select the content the parse consumed — a pre-script synthesizes or '
 			. 'reduces entries, so the raw download\'s emptiness is not the feed\'s');
 
-		// The staged copy must outlive the probe: its unlink sits after the probe
-		// block, not right after the parse loop.
+		// The staged copy must outlive the probe READ: the grep on $pfb_probe comes
+		// first, the unlink after it — a cleanup hoisted above the read would probe
+		// a deleted file.
+		$readPos = strpos(self::$applySource, 'escapeshellarg($pfb_probe)', $probePos);
+		$this->assertNotFalse($readPos, 'vacuity: the probe must read $pfb_probe');
+		$this->assertLessThan($suppressedPos, $readPos,
+			'the probe read must sit inside the empty-feed block');
+
 		$unlinkPos = strpos(self::$applySource, 'unlink_if_exists("{$file_dwn}.pre")', $probePos);
 		$this->assertNotFalse($unlinkPos,
 			'the staged pre-script copy must be unlinked AFTER the empty-feed probe consumed it');
+		$this->assertGreaterThan($readPos, $unlinkPos,
+			'the staged-copy unlink must come after the probe read, never before it');
 		$this->assertLessThan($suppressedPos, $unlinkPos,
 			'the staged-copy unlink must sit between the probe and the v6-suppression block');
 	}
