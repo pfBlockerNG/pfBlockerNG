@@ -394,6 +394,58 @@ def test_hook_editor_does_not_shift_by_the_gutter_width_under_a_shrunken_viewpor
     )
 
 
+def test_hook_editor_still_follows_the_caret_off_the_right_edge(
+    phone_page: Page,
+    webui: WebUI,
+) -> None:
+    """Typing PAST the right edge must still scroll the view after the caret (#1870).
+
+    The sibling test above requires the view to hold still when the caret is already on
+    screen. The obvious way to satisfy that -- pinning the horizontal position while the
+    keyboard is up -- would break the case that matters more: a caret typed off the right
+    edge has to be followed, or the admin types blind. Same shrunken viewport, caret at
+    the END of a long line instead of the middle.
+    """
+    page = phone_page
+    _open(page, webui, HOOKS_PAGE)
+    content = _hook_editor(page)
+
+    page.keyboard.insert_text("\n".join(f"echo {i:02d} " + "a" * 200 for i in range(30)))
+    expect(content).to_contain_text("echo 29", timeout=JS_TIMEOUT_MS)
+
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": KEYBOARD_PAGE_SCALE})
+
+    # Caret at the end of a long line: the view is scrolled right to reach it, which is
+    # the state the previous test never visits.
+    placed = content.evaluate(
+        "el => { const lines = el.querySelectorAll('.cm-line');"
+        " const line = lines[Math.min(lines.length - 1, 20)];"
+        " const r = document.createRange(); r.selectNodeContents(line); r.collapse(false);"
+        " const sel = document.getSelection(); sel.removeAllRanges(); sel.addRange(r);"
+        " return true; }"
+    )
+    assert placed, "precondition: could not place the caret at a line end"
+    page.evaluate("() => window.scrollTo(0, 0)")
+
+    before = _settled_scroll_left(content)
+    assert before > 0, f"precondition: reaching a long line's end must scroll the view right; got {before}"
+
+    page.keyboard.insert_text("Z")
+    after = _settled_scroll_left(content)
+
+    caret_x = content.evaluate(
+        "el => { const s = el.closest('.cm-scroller'); const sel = document.getSelection();"
+        " if (!sel || !sel.rangeCount) return null;"
+        " return Math.round(sel.getRangeAt(0).getBoundingClientRect().left - s.getBoundingClientRect().left); }"
+    )
+    width = int(content.evaluate("el => Math.round(el.closest('.cm-scroller').clientWidth)"))
+    assert after >= before, f"the view stopped following the caret rightwards: {before} -> {after}"
+    assert caret_x is not None and _gutter_width(content) <= caret_x <= width, (
+        f"the caret typed off the right edge is no longer visible; caret_x={caret_x}, width={width}"
+    )
+
+
 def test_hook_editor_keeps_the_caret_visible_once_the_keyboard_opens(
     phone_page: Page,
     webui: WebUI,
