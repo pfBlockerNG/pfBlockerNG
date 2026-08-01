@@ -14,8 +14,12 @@ name: Nightly failure alert
 on:
   workflow_run:
     workflows:
+      - "HSTS preload refresh (pfb_py_hsts)"
+      - "PSL Refresh (dnsbl_tld)"
       - "Smoke fan-out (all CI legs, live pfSense VM)"
+      - "TLD List Refresh"
       - "UI tests fan-out (all CI legs, live pfSense VM)"
+      - "Version Tracker"
       - "Repo install (live pfSense VM)"
     types: [completed]
   # Red-path test handle (CLAUDE.md: a newly wired gate demonstrates its red
