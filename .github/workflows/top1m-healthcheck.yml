@@ -95,11 +95,46 @@ jobs:
           fi
           python3 scripts/misc/check_top1m_providers.py "${args[@]}"
 
-  # ── 3. On any failed leg, open/update ONE deduped tracking issue ──────────
+  # ── 3. On a green run, close the matching open tracking issue ─────────────
+  recovery:
+    name: Close the recovered Top1M provider tracker
+    needs: check
+    if: success()
+    concurrency:
+      group: top1m-provider-alert
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Close the recovered tracking issue
+        run: |
+          set -euo pipefail
+          TITLE="[top1m-healthcheck] provider URL unhealthy"
+          MATCH=$(gh issue list --repo "$REPO" --state open \
+            --label "top1m-provider" --limit 500 --json number,title,state \
+            | jq -r --arg t "$TITLE" \
+                '[.[] | select(.title == $t)] | sort_by(.number)
+                 | .[0].number // empty')
+
+          if [ -z "$MATCH" ]; then
+            echo "[noop] No open Top1M provider tracking issue"
+            exit 0
+          fi
+
+          echo "[close] Closing recovered tracking issue #${MATCH}"
+          gh issue close "$MATCH" --repo "$REPO" --reason completed \
+            --comment "Recovered automatically after successful run: ${RUN_URL}"
+
   alert:
     name: Alert on unhealthy provider(s)
     needs: check
     if: failure()
+    concurrency:
+      group: top1m-provider-alert
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -163,7 +198,7 @@ jobs:
             fi
           done
 
-          printf '_Opened automatically by the top1m-healthcheck workflow._\n' >> "$BODY_FILE"
+          printf '_Opened automatically by the top1m-healthcheck workflow. Closes automatically after the next successful run._\n' >> "$BODY_FILE"
           echo "body_file=${BODY_FILE}" >> "$GITHUB_OUTPUT"
 
       - name: Ensure the tracking label exists

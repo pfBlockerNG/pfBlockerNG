@@ -46,7 +46,8 @@ def _run_script(
     extra_env: dict[str, str] | None = None,
 ) -> list[str]:
     source = path.read_text(encoding="utf-8")
-    step = source.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
+    tail = source.split(f"      - name: {step_name}\n", 1)[1]
+    step = re.split(r"\n(?:      - name:|  [a-z][a-z0-9_-]*:)", tail, maxsplit=1)[0]
     script = _script(step).replace("${{ steps.report.outputs.body_file }}", str(tmp_path / "body.md"))
     log = tmp_path / "gh.log"
     fake_gh = tmp_path / "gh"
@@ -57,6 +58,7 @@ case "$*" in
   "issue list "*) printf '%s\\n' "$GH_OPEN" ;;
   "issue edit "*) printf 'edit %s\\n' "$3" >> "$GH_LOG" ;;
   "issue create "*) printf 'create\\n' >> "$GH_LOG" ;;
+  "issue close "*) printf 'close %s\\n' "$3" >> "$GH_LOG" ;;
   "issue reopen "*) printf 'reopen %s\\n' "$3" >> "$GH_LOG" ;;
 esac
 """,
@@ -147,3 +149,71 @@ def test_top1m_open_match_updates_and_closed_only_creates(tmp_path: Path, opened
         )
         == expected
     )
+
+
+@pytest.mark.parametrize(
+    ("workflow", "opened", "expected"),
+    [
+        (
+            "nightly-failure-alert.yml",
+            '[{"number":42,"title":"[nightly-red] Smoke failing on devel","state":"OPEN"}]',
+            ["close 42"],
+        ),
+        ("nightly-failure-alert.yml", '[{"number":42,"title":"different","state":"OPEN"}]', []),
+        (
+            "top1m-healthcheck.yml",
+            '[{"number":42,"title":"[top1m-healthcheck] provider URL unhealthy","state":"OPEN"}]',
+            ["close 42"],
+        ),
+        ("top1m-healthcheck.yml", '[{"number":42,"title":"different","state":"OPEN"}]', []),
+    ],
+)
+def test_success_closes_only_the_matching_open_tracker(
+    tmp_path: Path, workflow: str, opened: str, expected: list[str]
+) -> None:
+    assert (
+        _run_script(
+            WORKFLOWS / workflow,
+            "Close the recovered tracking issue",
+            tmp_path,
+            opened=opened,
+            extra_env={"WF_NAME": "Smoke", "BRANCH": "devel", "RUN_URL": "https://example.invalid/run"},
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize("workflow", ["nightly-failure-alert.yml", "top1m-healthcheck.yml"])
+def test_success_without_an_open_tracker_is_a_no_op(tmp_path: Path, workflow: str) -> None:
+    assert (
+        _run_script(
+            WORKFLOWS / workflow,
+            "Close the recovered tracking issue",
+            tmp_path,
+            opened="[]",
+            extra_env={"WF_NAME": "Smoke", "BRANCH": "devel", "RUN_URL": "https://example.invalid/run"},
+        )
+        == []
+    )
+
+
+def test_recovery_runs_only_for_successful_matching_pipeline_events() -> None:
+    nightly = (WORKFLOWS / "nightly-failure-alert.yml").read_text(encoding="utf-8")
+    top1m = (WORKFLOWS / "top1m-healthcheck.yml").read_text(encoding="utf-8")
+
+    nightly_success = "\n".join(
+        (
+            "github.event.workflow_run.event == 'schedule' &&",
+            "       github.event.workflow_run.conclusion == 'success'",
+        )
+    )
+    assert nightly_success in nightly
+    assert "if: success()" in top1m
+
+
+def test_failure_and_recovery_reconciliation_are_serialized() -> None:
+    nightly = (WORKFLOWS / "nightly-failure-alert.yml").read_text(encoding="utf-8")
+    top1m = (WORKFLOWS / "top1m-healthcheck.yml").read_text(encoding="utf-8")
+
+    assert nightly.count("group: nightly-red-") == 2
+    assert top1m.count("group: top1m-provider-alert") == 2
