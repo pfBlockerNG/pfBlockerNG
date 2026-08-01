@@ -254,6 +254,10 @@ def test_enter_in_name_field_never_discards_unsaved_editor_content(
     page.keyboard.press("Delete")
     content.press_sequentially(f"#!/bin/sh\n{marker}\nexit 0", delay=20)
 
+    # The probe hook is a POST hook -- pick the OPPOSITE create-When so the echo
+    # assertion below cannot be satisfied by the restored loaded-script when.
+    page.select_option("#pfb_eh_new_when", "pre")
+
     # A hyphen fails the compose validation (letters/digits/underscores only),
     # and Enter submits the form as Create.
     name = page.locator("#pfb_eh_new_core")
@@ -271,3 +275,9 @@ def test_enter_in_name_field_never_discards_unsaved_editor_content(
         "a failed create must keep the loaded script loaded"
     )
     expect(page.locator("#pfb_hook_editor_content")).to_have_value(re.compile(re.escape(marker)), timeout=JS_TIMEOUT_MS)
+
+    # The typed create-When echo also survives the error -- distinct from the
+    # loaded script's own when (set to the opposite above).
+    assert page.locator("#pfb_eh_new_when").input_value() == "pre", (
+        "the typed create-When choice must still be selected after a validation error"
+    )
