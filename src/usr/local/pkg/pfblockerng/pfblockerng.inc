@@ -8599,8 +8599,9 @@ function pfb_flock_bounded($fp, int $operation, float $timeout_s, ?bool &$timed_
 }
 
 // issue #1780: the bounded default every NULL caller of the publication lock
-// resolves to. 60s -- the holders are local manifest/GC/teardown file writes,
-// far beyond any legitimate hold, but still finite.
+// resolves to. Holders are local manifest/GC/teardown file writes; the worst-case
+// hold is unmeasured, so 60s is a deliberately loose finite cap -- it exists to
+// terminate a wedged acquire, not to time a healthy one.
 function pfb_unbound_py_publication_lock_timeout(): float {
 	return 60.0;
 }
