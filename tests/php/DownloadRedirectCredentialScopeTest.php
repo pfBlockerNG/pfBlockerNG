@@ -105,9 +105,10 @@ final class DownloadRedirectCredentialScopeTest extends TestCase
 
 	/**
 	 * One shared router serves both servers (URIs are disjoint). Every request
-	 * appends [server-port, uri, PHP_AUTH_USER, PHP_AUTH_PW, HTTP_AUTHORIZATION]
-	 * to AUTH_LOG (the raw Authorization header covers non-Basic credentials —
-	 * the issue #1953 Bearer-token axis).
+	 * appends [server-port, uri, PHP_AUTH_USER, PHP_AUTH_PW, HTTP_AUTHORIZATION,
+	 * HTTP_X_FEED_PROBE] to AUTH_LOG (the raw Authorization header covers
+	 * non-Basic credentials — the issue #1953 Bearer-token axis; X-Feed-Probe
+	 * stands in for a non-credential extra header that must ride every hop).
 	 *
 	 *   /same     -> 302 /final          (same-origin redirect on the origin)
 	 *   /cross    -> 302 TARGET/hop      (cross-host redirect to the target)
@@ -126,6 +127,7 @@ file_put_contents(getenv('AUTH_LOG'), json_encode([
 	$_SERVER['PHP_AUTH_USER'] ?? null,
 	$_SERVER['PHP_AUTH_PW'] ?? null,
 	$_SERVER['HTTP_AUTHORIZATION'] ?? null,
+	$_SERVER['HTTP_X_FEED_PROBE'] ?? null,
 ]) . PHP_EOL, FILE_APPEND);
 $uri = $_SERVER['REQUEST_URI'] ?? '';
 // Both bases come from a ports file written AFTER both servers are up (the
@@ -225,7 +227,7 @@ PHP;
 		return 'Basic ' . base64_encode('user:secret');
 	}
 
-	/** @return array<int,array{0:int,1:string,2:?string,3:?string,4:?string}> decoded auth-log lines */
+	/** @return array<int,array{0:int,1:string,2:?string,3:?string,4:?string,5:?string}> decoded auth-log lines */
 	private function authLog(): array
 	{
 		$lines = file("{$this->workdir}/auth.log", FILE_IGNORE_NEW_LINES);
@@ -251,9 +253,9 @@ PHP;
 
 		$this->assertSame(
 			[
-				[$this->originPort, '/cross', 'user', 'secret', $this->basicHeader()],
-				[$this->targetPort, '/hop', NULL, NULL, NULL],
-				[$this->originPort, '/back', 'user', 'secret', $this->basicHeader()],
+				[$this->originPort, '/cross', 'user', 'secret', $this->basicHeader(), NULL],
+				[$this->targetPort, '/hop', NULL, NULL, NULL, NULL],
+				[$this->originPort, '/back', 'user', 'secret', $this->basicHeader(), NULL],
 			],
 			$this->authLog(),
 			'the cross-host hop must see no Basic credentials; both origin-host hops must see them'
@@ -277,12 +279,41 @@ PHP;
 
 		$this->assertSame(
 			[
-				[$this->originPort, '/cross', NULL, NULL, 'Bearer SECRET-TOKEN'],
-				[$this->targetPort, '/hop', NULL, NULL, NULL],
-				[$this->originPort, '/back', NULL, NULL, 'Bearer SECRET-TOKEN'],
+				[$this->originPort, '/cross', NULL, NULL, 'Bearer SECRET-TOKEN', NULL],
+				[$this->targetPort, '/hop', NULL, NULL, NULL, NULL],
+				[$this->originPort, '/back', NULL, NULL, 'Bearer SECRET-TOKEN', NULL],
 			],
 			$this->authLog(),
 			'the cross-host hop must see no Authorization header; both origin-host hops must see the token'
+		);
+	}
+
+	/**
+	 * Scenario: the extra-header list mixes a credential and a non-credential
+	 * header (the real shape: the Radar Bearer token beside an ADR-42
+	 * conditional-GET header).
+	 * Given both an Authorization header and a non-credential extra header,
+	 * when the origin 302s cross-host and that host 302s back,
+	 * then the off-origin hop keeps the non-credential header while losing
+	 * ONLY the Authorization header (the filter must not drop the whole list).
+	 */
+	public function testCrossHostRedirectKeepsNonCredentialExtraHeaders(): void
+	{
+		$result = $this->downloadFrom('/cross', '', '', [
+			'Authorization: Bearer SECRET-TOKEN',
+			'X-Feed-Probe: keep',
+		]);
+		$this->assertTrue($result->success, 'redirected download must succeed');
+		$this->assertSame('200', $result->responseMeta['status'] ?? '', 'probe metadata must carry the final 200');
+
+		$this->assertSame(
+			[
+				[$this->originPort, '/cross', NULL, NULL, 'Bearer SECRET-TOKEN', 'keep'],
+				[$this->targetPort, '/hop', NULL, NULL, NULL, 'keep'],
+				[$this->originPort, '/back', NULL, NULL, 'Bearer SECRET-TOKEN', 'keep'],
+			],
+			$this->authLog(),
+			'the off-origin hop must keep non-credential extra headers while losing only Authorization'
 		);
 	}
 
@@ -302,8 +333,8 @@ PHP;
 
 		$this->assertSame(
 			[
-				[$this->originPort, '/portjump', 'user', 'secret', $this->basicHeader()],
-				[$this->altPort, '/land', NULL, NULL, NULL],
+				[$this->originPort, '/portjump', 'user', 'secret', $this->basicHeader(), NULL],
+				[$this->altPort, '/land', NULL, NULL, NULL, NULL],
 			],
 			$this->authLog(),
 			'a same-host different-port hop must see no Basic credentials'
@@ -324,8 +355,8 @@ PHP;
 
 		$this->assertSame(
 			[
-				[$this->originPort, '/same', 'user', 'secret', $this->basicHeader()],
-				[$this->originPort, '/final', 'user', 'secret', $this->basicHeader()],
+				[$this->originPort, '/same', 'user', 'secret', $this->basicHeader(), NULL],
+				[$this->originPort, '/final', 'user', 'secret', $this->basicHeader(), NULL],
 			],
 			$this->authLog(),
 			'a same-host redirect must keep sending the feed credentials'
