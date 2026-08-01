@@ -329,6 +329,32 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should not include 'GATES: PASS'
   End
 
+  # issue #1865: the OVERALL= sentinel strip must be positional, not pattern-based --
+  # a captured gate line beginning at column 0 with `OVERALL=` must survive.
+  It 'keeps a captured column-0 OVERALL= line in a failing gate report'
+    printf '#!/bin/sh\nprintf "before\\nOVERALL=0\\nafter\\n"\nexit 1\n' > "$stubdir/shellcheck"
+    chmod +x "$stubdir/shellcheck"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The line 1 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 2 of output should equal 'before'
+    The line 3 of output should equal 'OVERALL=0'
+    The line 4 of output should equal 'after'
+    The line 5 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The output should include 'GATES: FAIL'
+    The output should not include 'GATES: PASS'
+  End
+
+  # issue #1865: an empty capture must not leave a stray blank line before GATE FAIL.
+  It 'emits no blank line for a failing gate with empty stdout and stderr'
+    printf '#!/bin/sh\nexit 1\n' > "$stubdir/shellcheck"
+    chmod +x "$stubdir/shellcheck"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The line 1 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 2 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+  End
+
   It 'ignores deleted files instead of failing on their ghosts'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 0
