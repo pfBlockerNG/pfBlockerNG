@@ -26,6 +26,7 @@ expands) rather than re-deriving the panel-expansion dance.
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING
 
 import pytest
@@ -45,7 +46,7 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator, Iterator
     from pathlib import Path
 
     from playwright.sync_api import BrowserContext, Locator, Page
@@ -68,25 +69,23 @@ PHONE_UA = (
 )
 
 
-@pytest.fixture(params=["desktop", "phone"])
-def editor_page(
-    request: pytest.FixtureRequest,
-    browser_page: Page,
+# Viewport height once the on-screen keyboard is up. Android Chrome shrinks the layout
+# viewport when the keyboard opens, which re-lays out the page under a focused editable
+# -- the one step of the reported scenario that no device descriptor reproduces.
+PHONE_HEIGHT_KEYBOARD_OPEN = 420
+
+
+@contextlib.contextmanager
+def _phone_page(
     browser_context: BrowserContext,
     webui: WebUI,
     smoke_vm: SmokeVM,
-) -> Iterator[tuple[Page, str]]:
-    """The authenticated page under test, once per form factor.
+) -> Generator[Page]:
+    """An authenticated page on a second, phone-emulating context of the same browser.
 
-    ``desktop`` is the session-scoped context every other browser test uses. ``phone``
-    is a second context on the SAME browser, emulating the device the failure was
-    reported on; it re-uses the desktop context's cookies rather than logging in again
-    (a second login is a second flake source), and is torn down with the test.
+    Re-uses the session cookie rather than logging in again (a second login is a second
+    flake source). Torn down with the test that asked for it.
     """
-    if request.param == "desktop":
-        yield browser_page, request.param
-        return
-
     browser = browser_context.browser
     assert browser is not None, "browser_context must come from a live browser"
     cookie = webui.session_cookie()
@@ -103,9 +102,36 @@ def editor_page(
     context.add_cookies([{"name": SESSION_COOKIE, "value": cookie, "domain": smoke_vm.host, "path": "/"}])
     page = context.new_page()
     try:
-        yield page, request.param
+        yield page
     finally:
         context.close()
+
+
+@pytest.fixture(params=["desktop", "phone"])
+def editor_page(
+    request: pytest.FixtureRequest,
+    browser_page: Page,
+    browser_context: BrowserContext,
+    webui: WebUI,
+    smoke_vm: SmokeVM,
+) -> Iterator[tuple[Page, str]]:
+    """The authenticated page under test, once per form factor.
+
+    ``desktop`` is the session-scoped context every other browser test uses; ``phone``
+    emulates the device the failure was reported on.
+    """
+    if request.param == "desktop":
+        yield browser_page, request.param
+        return
+    with _phone_page(browser_context, webui, smoke_vm) as page:
+        yield page, request.param
+
+
+@pytest.fixture
+def phone_page(browser_context: BrowserContext, webui: WebUI, smoke_vm: SmokeVM) -> Iterator[Page]:
+    """A phone-emulating authenticated page, for the mobile-only steps."""
+    with _phone_page(browser_context, webui, smoke_vm) as page:
+        yield page
 
 
 # Long enough that the line cannot fit any plausible field width, so the editor is
@@ -245,3 +271,42 @@ def test_hook_editor_typing_on_a_short_line_stays_visible(
     _open(page, webui, HOOKS_PAGE)
     content = _hook_editor(page)
     _typing_at_left_keeps_view_at_left(page, content, LONG_SHELL_LINE, "echo")
+
+
+def test_hook_editor_keeps_the_caret_visible_once_the_keyboard_opens(
+    phone_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """Phone only: the view stays with the caret across the keyboard opening.
+
+    The reported sequence happens with the on-screen keyboard already up, which on
+    Android shrinks the layout viewport under a focused editable and forces a re-layout
+    (and, in Chrome, a scroll-the-focused-editable-into-view pass) that the steady-state
+    emulation above never triggers. Shrinking the viewport mid-edit is the closest a
+    headless browser gets to it.
+    """
+    page = phone_page
+    _open(page, webui, HOOKS_PAGE)
+    content = _hook_editor(page)
+
+    _clear_and_type(content, LONG_SHELL_LINE)
+    _assert_scrolled_right(content, "end of the long line")
+    page.keyboard.press("Enter")
+    assert _settled_scroll_left(content) <= AT_LEFT_PX, "precondition: Enter returns the view to the left edge"
+
+    page.set_viewport_size({"width": PHONE_WIDTH, "height": PHONE_HEIGHT_KEYBOARD_OPEN})
+    offset = _settled_scroll_left(content)
+    _shot(page, screenshot_dir, "hook_editor_keyboard_open")
+    assert offset <= AT_LEFT_PX, (
+        f"the keyboard opening moved the view to scrollLeft={offset} (max {_max_scroll_left(content)}) "
+        "while the caret sat at the start of an empty line"
+    )
+
+    for char in "echo":
+        content.press_sequentially(char, delay=20)
+        offset = _settled_scroll_left(content)
+        assert offset <= AT_LEFT_PX, (
+            f"with the keyboard up, typing {char!r} snapped the view to scrollLeft={offset} "
+            f"(max {_max_scroll_left(content)}); the text being typed is off-screen"
+        )
