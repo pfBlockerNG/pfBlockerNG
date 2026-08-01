@@ -791,7 +791,7 @@ final class DnsblQueryClientTest extends TestCase
 		while (microtime(true) < $deadline) {
 			$raw    = @file_get_contents($this->channel());
 			$record = $raw === false ? null : json_decode($raw, true);
-			if (is_array($record) && ($record['domain'] ?? null) === 'timeout-b.example') {
+			if (is_array($record) && isset($record['id']) && ($record['domain'] ?? null) === 'timeout-b.example') {
 				$requestB = $record;
 				break;
 			}
