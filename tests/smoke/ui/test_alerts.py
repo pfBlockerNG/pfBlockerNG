@@ -49,7 +49,7 @@ pytestmark = pytest.mark.ui_e2e
 ALERTS_PAGE = "/pfblockerng/pfblockerng_alerts.php"
 
 # config.xml nodes the alerts handlers write (all base64 textarea fields).
-CFG_SUPPRESSION = "installedpackages/pfblockerngdnsblsettings/config/0/suppression"
+CFG_WHITELIST = "installedpackages/pfblockerngdnsblsettings/config/0/whitelist"
 CFG_TLD_WILDCARD_EXCLUSION = "installedpackages/pfblockerngdnsblsettings/config/0/tld_wildcard_exclusion"
 CFG_V4SUPPRESSION = "installedpackages/pfblockerngipsettings/config/0/v4suppression"
 CFG_V6SUPPRESSION = "installedpackages/pfblockerngipsettings/config/0/v6suppression"
@@ -330,10 +330,10 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
     """
     vm = smoke_vm
     domain = helpers.unique_domain("uiwl")
-    original = helpers.config_get(vm, CFG_SUPPRESSION)
+    original = helpers.config_get(vm, CFG_WHITELIST)
     try:
         # BEFORE: the unique domain is not in the whitelist.
-        assert domain not in _suppression_entries(vm, CFG_SUPPRESSION), (
+        assert domain not in _suppression_entries(vm, CFG_WHITELIST), (
             f"{domain} already in the DNSBL Whitelist before the add"
         )
 
@@ -350,14 +350,14 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
             },
         )
         assert not looks_like_login_page(resp.text), "addwhitelistdom POST returned the login form (session lost)"
-        assert domain in _suppression_entries(vm, CFG_SUPPRESSION), (
+        assert domain in _suppression_entries(vm, CFG_WHITELIST), (
             f"{domain} not written to the DNSBL Whitelist (suppression) config node after addwhitelistdom"
         )
 
         # RESTORE via entry_delete=delete_domain (reverse transition + entry_delete coverage).
         resp = _post_action(webui, {"entry_delete": "delete_domain", "domain": domain, "table": "DNSBL"})
         assert not looks_like_login_page(resp.text), "entry_delete POST returned the login form (session lost)"
-        assert domain not in _suppression_entries(vm, CFG_SUPPRESSION), (
+        assert domain not in _suppression_entries(vm, CFG_WHITELIST), (
             f"{domain} still in the DNSBL Whitelist after entry_delete=delete_domain"
         )
 
@@ -374,19 +374,19 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
             },
         )
         assert not looks_like_login_page(resp.text), "wildcard whitelist POST returned the login form"
-        assert f".{domain}" in _suppression_entries(vm, CFG_SUPPRESSION), (
+        assert f".{domain}" in _suppression_entries(vm, CFG_WHITELIST), (
             f".{domain} not written to the DNSBL Whitelist after wildcard add"
         )
 
         resp = _post_action(webui, {"entry_delete": "delete_domainwildcard", "domain": domain, "table": "DNSBL"})
         assert not looks_like_login_page(resp.text), "wildcard whitelist delete returned the login form"
-        assert f".{domain}" not in _suppression_entries(vm, CFG_SUPPRESSION), (
+        assert f".{domain}" not in _suppression_entries(vm, CFG_WHITELIST), (
             f".{domain} still in the DNSBL Whitelist after entry_delete=delete_domainwildcard"
         )
     finally:
         helpers.php_eval(
             vm,
-            f"config_set_path('{CFG_SUPPRESSION}', '{original}');\n"
+            f"config_set_path('{CFG_WHITELIST}', '{original}');\n"
             "write_config('pfBlockerNG smoke: restore suppression');\n"
             "echo 'OK';",
         )

@@ -391,7 +391,7 @@ final class WwwGroupAGatewayTest extends TestCase
 			'pfb_regex_list'             => '',
 			'pfb_noaaaa_list'            => '',
 			'pfb_gp_bypass_list'         => '',
-			'suppression'                => '',
+			'whitelist'                  => '',
 			'tld_wildcard_exclusion'     => '',
 			'tld_wildcard_blacklist'     => '',
 			'action'                     => 'Disabled',

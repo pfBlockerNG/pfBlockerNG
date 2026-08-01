@@ -399,6 +399,27 @@ final class RegistryPassTest extends TestCase
 	}
 
 	/**
+	 * Row 17: issue #1921 owner directive -- the DNSBL whitelist blob's registry key
+	 * (dnsbl alias, bare key renamed suppression -> whitelist) carries 'old_name' =>
+	 * 'suppression'. Old-only (base64-ish blob) moves verbatim to 'whitelist', old key
+	 * gone; idempotent second pass.
+	 */
+	public function testRenameDnsblSuppressionToWhitelistMovesVerbatim(): void
+	{
+		$blob = base64_encode("example.com\r\n.blocked.net\r\n");
+		$sections = [self::DNSBL_SECTION => ['pfb_dnsbl' => 'on', 'suppression' => $blob]];
+
+		$result = pfb_registry_pass($sections);
+
+		$this->assertSame($blob, $result[self::DNSBL_SECTION]['whitelist'] ?? NULL,
+			'the pass moves the RAW blob verbatim to the new whitelist key');
+		$this->assertArrayNotHasKey('suppression', $result[self::DNSBL_SECTION],
+			'the old suppression key must be gone after the rename');
+
+		$this->assertSecondPassIsEmpty($sections);
+	}
+
+	/**
 	 * Row 16: fixture registry -- old_name + [''=>'x'] map: old-only stored '' moves then
 	 * maps to 'x' (grandfather maps apply to values the rename JUST moved).
 	 */

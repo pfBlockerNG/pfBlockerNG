@@ -57,7 +57,7 @@ final class TldBridgeEmitTest extends TestCase
 			'dnsblconfig'        => [
 				'tld_wildcard_blacklist' => '',
 				'tld_wildcard_exclusion' => '',
-				'suppression'            => '',
+				'whitelist'              => '',
 			],
 		]);
 	}

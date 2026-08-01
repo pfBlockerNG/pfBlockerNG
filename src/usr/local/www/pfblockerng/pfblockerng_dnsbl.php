@@ -117,7 +117,7 @@ $pconfig['aliasaddr_out']	= $pfb['dconfig']['aliasaddr_out']			?: '';
 $pconfig['autoproto_out']	= $pfb['dconfig']['autoproto_out']			?: 'any';
 $pconfig['agateway_out']	= $pfb['dconfig']['agateway_out']			?: 'default';
 
-$pconfig['suppression']		= pfb_b64_text($pfb['dconfig']['suppression'] ?? NULL);
+$pconfig['whitelist']		= pfb_b64_text($pfb['dconfig']['whitelist'] ?? NULL);
 
 $pconfig['top1m_enable']	= $pfb['dconfig']['top1m_enable']			?: '';
 // Routed via the gateway (not the section array) so a stored legacy 'alexa'
@@ -549,7 +549,7 @@ if ($_POST) {
 				'top1m_token', 'aliasaddr_in', 'aliasaddr_out', 'aliasports_in', 'aliasports_out') as $pfb_text_field) {
 			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
 		}
-		foreach (array('pfb_regex_list', 'pfb_noaaaa_list', 'pfb_gp_bypass_list', 'suppression', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist') as $pfb_text_area_field) {
+		foreach (array('pfb_regex_list', 'pfb_noaaaa_list', 'pfb_gp_bypass_list', 'whitelist', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist') as $pfb_text_area_field) {
 			$_POST[$pfb_text_area_field] = pfb_sanitize_text_area((string) ($_POST[$pfb_text_area_field] ?? ''));
 		}
 
@@ -666,7 +666,7 @@ if ($_POST) {
 		foreach (array(
 				'pfb_noaaaa_list'	=> 'domain',
 				'pfb_gp_bypass_list'	=> 'ip',
-				'suppression'		=> 'domain',
+				'whitelist'		=> 'domain',
 				'tld_wildcard_exclusion'		=> 'hostname',
 				'tld_wildcard_blacklist'		=> 'tld' ) as $custom_type => $custom_format) {
 
@@ -908,7 +908,7 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_regex_list']	= base64_encode($_POST['pfb_regex_list'] ?? '');
 			$pfb['dconfig']['pfb_noaaaa_list']	= base64_encode($_POST['pfb_noaaaa_list'] ?? '');
 			$pfb['dconfig']['pfb_gp_bypass_list']	= base64_encode($_POST['pfb_gp_bypass_list'] ?? '');
-			$pfb['dconfig']['suppression']		= base64_encode($_POST['suppression'] ?? '');
+			$pfb['dconfig']['whitelist']		= base64_encode($_POST['whitelist'] ?? '');
 			$pfb['dconfig']['tld_wildcard_exclusion']		= base64_encode($_POST['tld_wildcard_exclusion'] ?? '');
 			$pfb['dconfig']['tld_wildcard_blacklist']		= base64_encode($_POST['tld_wildcard_blacklist'] ?? '');
 
@@ -3289,7 +3289,7 @@ $section->addInput(new Form_Input(
 // the DNSBL Whitelist section's own id (#DNSBL_Whitelist_customlist) instead.
 $form->add($section);
 
-$suppression_text = 'No Regex Entries Allowed!&emsp;
+$whitelist_text = 'No Regex Entries Allowed!&emsp;
 			<div class="infoblock">
 				Enter one &emsp; <strong>Domain Name</strong>&emsp; per line<br />
 				Prefix Domain with a "." to Whitelist all Sub-Domains. &emsp;IE: (.example.com)<br />
@@ -3306,16 +3306,16 @@ $suppression_text = 'No Regex Entries Allowed!&emsp;
 
 $section = new Form_Section('DNSBL Whitelist', 'DNSBL_Whitelist_customlist', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_Textarea(
-	'suppression',
+	'whitelist',
 	NULL,
-	$pconfig['suppression']
+	$pconfig['whitelist']
 ))->removeClass('form-control')
   ->addClass('row-fluid col-sm-12')
   ->setAttribute('columns', '90')
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
   ->setAttribute('style', 'background:#fafafa; width: 100%')
-  ->setHelp($suppression_text);
+  ->setHelp($whitelist_text);
 
 $form->add($section);
 
@@ -3814,7 +3814,7 @@ events.push(function(){
 
 	// issue #1875 step 2b: plain-list fields share this page's CM6 bundle; mountLists skips absent ids
 	if (window.pfbCM) {
-		window.pfbCM.mountLists(['pfb_gp_bypass_list', 'pfb_noaaaa_list', 'suppression', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist']);
+		window.pfbCM.mountLists(['pfb_gp_bypass_list', 'pfb_noaaaa_list', 'whitelist', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist']);
 	}
 <?php endif; ?>
 

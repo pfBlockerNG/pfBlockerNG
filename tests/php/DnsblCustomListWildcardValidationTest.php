@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * pfblockerng_dnsbl.php's "Validate customlists" block — issue #1741.
  *
- * The Suppression and No-AAAA lists accept the leading-dot wildcard form
+ * The Whitelist and No-AAAA lists accept the leading-dot wildcard form
  * ('.example.com'), so the validator strips the marker before handing the row
  * to pfb_filter(). It stripped with trim($value[0], '.'), which takes ALL the
  * leading dots, so an invalid '..example.com' row validated as 'example.com'
@@ -57,27 +57,27 @@ final class DnsblCustomListWildcardValidationTest extends TestCase
 		return $input_errors;
 	}
 
-	public function testSuppressionWildcardRowAccepted(): void
+	public function testWhitelistWildcardRowAccepted(): void
 	{
-		$this->assertSame([], $this->validateRow('suppression', '.example.com'));
+		$this->assertSame([], $this->validateRow('whitelist', '.example.com'));
 	}
 
-	public function testSuppressionPlainRowAccepted(): void
+	public function testWhitelistPlainRowAccepted(): void
 	{
-		$this->assertSame([], $this->validateRow('suppression', 'example.com'));
+		$this->assertSame([], $this->validateRow('whitelist', 'example.com'));
 	}
 
-	public function testSuppressionTrailingDotRowStillAccepted(): void
+	public function testWhitelistTrailingDotRowStillAccepted(): void
 	{
 		// The trailing-dot (FQDN root) tolerance predates this change.
-		$this->assertSame([], $this->validateRow('suppression', 'example.com.'));
+		$this->assertSame([], $this->validateRow('whitelist', 'example.com.'));
 	}
 
-	public function testSuppressionDoubleDotRowRejected(): void
+	public function testWhitelistDoubleDotRowRejected(): void
 	{
 		$this->assertSame(
-			['Customlist suppression: Invalid Domain name entry: [ ..example.com ]'],
-			$this->validateRow('suppression', '..example.com')
+			['Customlist whitelist: Invalid Domain name entry: [ ..example.com ]'],
+			$this->validateRow('whitelist', '..example.com')
 		);
 	}
 

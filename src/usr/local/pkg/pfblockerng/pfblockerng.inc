@@ -7720,7 +7720,7 @@ function pfb_unbound_python_whitelist($mode='') {
 	pfb_global();
 
 	$dnsbl_whitelist = '';
-	$dnsbl_white = pfb_text_area_decode($pfb['dnsblconfig']['suppression'], TRUE, FALSE, TRUE);
+	$dnsbl_white = pfb_text_area_decode($pfb['dnsblconfig']['whitelist'], TRUE, FALSE, TRUE);
 	if (!empty($dnsbl_white)) {
 		foreach ($dnsbl_white as $key => $line) {
 			if (!empty($line)) {
@@ -7758,7 +7758,7 @@ function pfb_unbound_python_whitelist($mode='') {
 function pfb_dnsbl_whitelist_lines() {
 	global $pfb;
 
-	$lines = pfb_text_area_decode($pfb['dnsblconfig']['suppression'], TRUE, FALSE, TRUE);
+	$lines = pfb_text_area_decode($pfb['dnsblconfig']['whitelist'], TRUE, FALSE, TRUE);
 	$out = array();
 	if (!empty($lines)) {
 		foreach ($lines as $line) {

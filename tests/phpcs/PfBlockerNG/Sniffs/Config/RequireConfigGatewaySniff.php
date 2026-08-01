@@ -203,7 +203,7 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_gp_bypass_list',
 		'installedpackages/pfblockerngdnsblsettings/config/0/tld_wildcard_blacklist',
 		'installedpackages/pfblockerngdnsblsettings/config/0/tld_wildcard_exclusion',
-		'installedpackages/pfblockerngdnsblsettings/config/0/suppression',
+		'installedpackages/pfblockerngdnsblsettings/config/0/whitelist',
 		'installedpackages/pfblockerngdnsblsettings/config/0/action',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_rule',
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_allow_int',

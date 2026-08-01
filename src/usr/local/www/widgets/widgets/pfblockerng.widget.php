@@ -682,7 +682,7 @@ function pfBlockerNG_get_header($mode='') {
 				array (	'DNSBL'		=> '',
 					'Queries'	=> '',
 					'Percent'	=> '',
-					'Whitelist'	=> "{$pfb['dnsblconfig']['suppression']}"));
+					'Whitelist'	=> "{$pfb['dnsblconfig']['whitelist']}"));
 
 	foreach ($widget_head as $key => $line) {
 		foreach ($line as $type => $config_path) {

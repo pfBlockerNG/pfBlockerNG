@@ -151,7 +151,7 @@ def _prep_category_custom(page: Page) -> None:
 FIELDS: list[tuple[str, str, str, "Callable[[Page], None]"]] = [
     ("dnsbl", DNSBL_PAGE, "pfb_gp_bypass_list", _prep_gp),
     ("dnsbl", DNSBL_PAGE, "pfb_noaaaa_list", _prep_noaaaa),
-    ("dnsbl", DNSBL_PAGE, "suppression", _prep_whitelist),
+    ("dnsbl", DNSBL_PAGE, "whitelist", _prep_whitelist),
     ("dnsbl", DNSBL_PAGE, "tld_wildcard_exclusion", _prep_tld_exclusion),
     ("dnsbl", DNSBL_PAGE, "tld_wildcard_blacklist", _prep_tld_blacklist),
     ("ip", IP_PAGE, "v4suppression", _prep_v4_suppression),
@@ -177,16 +177,16 @@ def test_editor_mounts_on_every_wired_field(
     _open(page, webui, path)
     prep(page)
     _assert_mounted(page, f"{page_label} ({path})", field_id)
-    if field_id in ("suppression", "custom"):
+    if field_id in ("whitelist", "custom"):
         _shot(page, screenshot_dir, f"list_editor_mount_{page_label.split('(')[0]}_{field_id}")
 
 
-def test_suppression_editor_types_and_syncs_hidden_textarea(
+def test_whitelist_editor_types_and_syncs_hidden_textarea(
     browser_page: Page,
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
-    """Interactive spot-check on one representative plain-list field (DNSBL suppression):
+    """Interactive spot-check on one representative plain-list field (DNSBL whitelist):
     typing 3 lines numbers the gutter 1-3 AND syncs the hidden textarea's value -- the
     data-loss contract a plain-list mount must honour (a mount that replaced the textarea
     but never wired ``updateListener`` would pass the mount-presence test above and still
@@ -196,20 +196,20 @@ def test_suppression_editor_types_and_syncs_hidden_textarea(
     _open(page, webui, DNSBL_PAGE)
     _expand(page, "DNSBL_Whitelist_customlist")
 
-    textarea = page.locator("#suppression")
-    content = _editor_for(page, "suppression").locator(".cm-content")
+    textarea = page.locator("#whitelist")
+    content = _editor_for(page, "whitelist").locator(".cm-content")
     expect(content).to_be_visible(timeout=JS_TIMEOUT_MS)
 
     _clear_and_type(content, THREE_IPS)
 
     numbers = _line_numbers(content)
-    assert numbers == ["1", "2", "3"], f"suppression editor gutter: expected ['1', '2', '3'], got {numbers!r}"
+    assert numbers == ["1", "2", "3"], f"whitelist editor gutter: expected ['1', '2', '3'], got {numbers!r}"
 
     synced = textarea.input_value()
     assert synced == THREE_IPS, (
-        f"suppression editor: hidden textarea did not sync typed content -- expected {THREE_IPS!r}, got {synced!r}"
+        f"whitelist editor: hidden textarea did not sync typed content -- expected {THREE_IPS!r}, got {synced!r}"
     )
-    _shot(page, screenshot_dir, "suppression_editor_typed_and_synced")
+    _shot(page, screenshot_dir, "whitelist_editor_typed_and_synced")
 
 
 def test_general_allowlist_editor_follows_disabled_state(

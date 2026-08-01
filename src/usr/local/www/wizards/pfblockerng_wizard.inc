@@ -212,7 +212,7 @@ function step4_submitphpaction() {
 	// foreign section: pfblockerng_wizard/step3/suppression is a wizard temp key, not in registry
 	if (pfb_cfg_toggle_read(config_get_path('pfblockerng_wizard/step3/suppression')) === PfbToggle::On) {
 
-		$new_config['pfblockerngdnsblsettings']['config'][0]['suppression']	= 
+		$new_config['pfblockerngdnsblsettings']['config'][0]['whitelist']	=
 
 "czMuYW1hem9uYXdzLmNvbQ0KczMtMS5hbWF6b25hd3MuY29tICMgQ05BTUUgZm9yIChzMy5hbWF6
 b25hd3MuY29tKQ0KLmdpdGh1Yi5jb20NCi5naXRodWJ1c2VyY29udGVudC5jb20gDQpnaXRodWIu

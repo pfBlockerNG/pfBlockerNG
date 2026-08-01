@@ -117,7 +117,7 @@ final class DnsblFreshPconfigTest extends TestCase
 			'pfb_regex_list'         => base64_encode("foo\nbar"),
 			'pfb_noaaaa_list'        => base64_encode('example.com'),
 			'pfb_gp_bypass_list'     => base64_encode('192.0.2.1'),
-			'suppression'            => base64_encode('192.0.2.0/24'),
+			'whitelist'              => base64_encode('192.0.2.0/24'),
 			'top1m_inclusion'        => 'com,net,org',
 			'tld_wildcard_exclusion' => base64_encode('example.test'),
 			'tld_wildcard_blacklist' => base64_encode('bad.example'),
@@ -137,7 +137,7 @@ final class DnsblFreshPconfigTest extends TestCase
 		$this->assertSame("foo\nbar", $pconfig['pfb_regex_list']);
 		$this->assertSame('example.com', $pconfig['pfb_noaaaa_list']);
 		$this->assertSame('192.0.2.1', $pconfig['pfb_gp_bypass_list']);
-		$this->assertSame('192.0.2.0/24', $pconfig['suppression']);
+		$this->assertSame('192.0.2.0/24', $pconfig['whitelist']);
 		$this->assertSame(['com', 'net', 'org'], $pconfig['top1m_inclusion']);
 		$this->assertSame('example.test', $pconfig['tld_wildcard_exclusion']);
 		$this->assertSame('bad.example', $pconfig['tld_wildcard_blacklist']);

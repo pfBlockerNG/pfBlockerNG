@@ -34,7 +34,7 @@ final class CfgRegistryGrandfatherGateTest extends TestCase
 	];
 
 	/**
-	 * Pinned list of the 13 retired scalar spellings PFB_LEGACY_KEY_RENAMES' scalar half
+	 * Pinned list of the 14 retired scalar spellings PFB_LEGACY_KEY_RENAMES' scalar half
 	 * (pfblockerng.inc) carries -- the multiset of registry 'old_name' values must equal
 	 * this set exactly, each appearing exactly once (issue #1921).
 	 *
@@ -54,6 +54,8 @@ final class CfgRegistryGrandfatherGateTest extends TestCase
 		'pfb_tld',
 		'tldblacklist',
 		'tldexclusion',
+		// issue #1921: the DNSBL whitelist blob's own retired spelling.
+		'suppression',
 	];
 
 	// -----------------------------------------------------------------------
@@ -261,7 +263,7 @@ final class CfgRegistryGrandfatherGateTest extends TestCase
 		$expected = self::RETIRED_SCALAR_SPELLINGS;
 		sort($expected);
 		$this->assertSame($expected, $old_names,
-			"the multiset of registry 'old_name' values must equal the 13 retired scalar spellings exactly, once each"
+			"the multiset of registry 'old_name' values must equal the 14 retired scalar spellings exactly, once each"
 		);
 
 		// issue #1921: PFB_LEGACY_KEY_RENAMES no longer carries the scalar-section rows

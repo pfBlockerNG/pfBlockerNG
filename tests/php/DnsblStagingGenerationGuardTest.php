@@ -204,7 +204,7 @@ final class DnsblStagingGenerationGuardTest extends TestCase
 			'dnsbl_top1m'        => 'off',
 			'dnsbl_tld_data'     => "{$tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$tmp}/dnsbl_unlock",
-			'dnsblconfig'        => ['tld_wildcard_blacklist' => '', 'tld_wildcard_exclusion' => '', 'suppression' => ''],
+			'dnsblconfig'        => ['tld_wildcard_blacklist' => '', 'tld_wildcard_exclusion' => '', 'whitelist' => ''],
 		]);
 		try {
 			// Given: the fork VERBATIM-REUSED this stale file (today's pre-guard
