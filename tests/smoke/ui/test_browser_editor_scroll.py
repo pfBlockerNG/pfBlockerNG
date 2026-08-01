@@ -417,16 +417,28 @@ def test_hook_editor_still_follows_the_caret_off_the_right_edge(
     cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": KEYBOARD_PAGE_SCALE})
 
     # Caret at the end of a long line: the view is scrolled right to reach it, which is
-    # the state the previous test never visits.
+    # the state the previous test never visits. Seed the caret inside the line the same
+    # way as the sibling test, then let CodeMirror itself move it to the line end -- a
+    # DOM range collapsed past the line's contents is not necessarily adopted into
+    # CodeMirror's own selection, and its scrolling then targets a stale position (that
+    # mistake made an earlier version of this test fail identically with and without the
+    # fix, i.e. measure nothing).
     placed = content.evaluate(
         "el => { const lines = el.querySelectorAll('.cm-line');"
         " const line = lines[Math.min(lines.length - 1, 20)];"
-        " const r = document.createRange(); r.selectNodeContents(line); r.collapse(false);"
+        " const walk = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);"
+        " let node, seen = 0, target = null, off = 0;"
+        " while ((node = walk.nextNode())) {"
+        "   if (seen + node.length >= 12) { target = node; off = 12 - seen; break; }"
+        "   seen += node.length; }"
+        " if (!target) return false;"
+        " const r = document.createRange(); r.setStart(target, off); r.collapse(true);"
         " const sel = document.getSelection(); sel.removeAllRanges(); sel.addRange(r);"
         " return true; }"
     )
-    assert placed, "precondition: could not place the caret at a line end"
+    assert placed, "precondition: could not place the caret inside a line"
     page.evaluate("() => window.scrollTo(0, 0)")
+    page.keyboard.press("End")
 
     before = _settled_scroll_left(content)
     assert before > 0, f"precondition: reaching a long line's end must scroll the view right; got {before}"
