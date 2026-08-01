@@ -191,18 +191,21 @@ EOF
   Before 'setup'
   After 'cleanup'
 
+  It 'uses the exact timeout contract for an IPv4 lookup'
+    max="_v4"
+    dedup="slow-v4.example"
+    When call whoisconvert
+    The status should be success
+    The stdout should include 'Restoring previous data'
+    The contents of file "$timeout_args" should equal "$(printf '%s\n' -s TERM -k 5 30 "$pathhost" -t A "$dedup")"
+    The path "${pfborig}${alias}.fail" should be exist
+  End
+
   It 'uses default reaper mode, the AAAA lookup type, and restores after timeout 124'
     When call whoisconvert
     The status should be success
     The stdout should include 'Restoring previous data'
-    The contents of file "$timeout_args" should include '-s'
-    The contents of file "$timeout_args" should include 'TERM'
-    The contents of file "$timeout_args" should include '-k'
-    The contents of file "$timeout_args" should include '5'
-    The contents of file "$timeout_args" should include '30'
-    The contents of file "$timeout_args" should include '-t'
-    The contents of file "$timeout_args" should include 'AAAA'
-    The contents of file "$timeout_args" should not include '--foreground'
+    The contents of file "$timeout_args" should equal "$(printf '%s\n' -s TERM -k 5 30 "$pathhost" -t AAAA "$dedup")"
     The path "${pfborig}${alias}.fail" should be exist
     The contents of file "${pfborig}${alias}.orig" should equal '2001:db8::9'
   End
