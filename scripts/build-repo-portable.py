@@ -569,11 +569,19 @@ def _require_contained(root: Path, dest: Path) -> Path:
             f"catalog destination {str(dest)!r} is a symlink — the catalog directory is wiped "
             f"and rebuilt, so it must be a real directory"
         )
-    if dest.exists() and not dest.is_dir():
-        raise BuildRepoError(
-            f"catalog destination {str(dest)!r} exists and is not a directory — the catalog "
-            f"directory is wiped and rebuilt, so it cannot be an existing file"
-        )
+    # Every component, not just the leaf: `dest.exists()` is False when an ANCESTOR is a
+    # file (it does not raise), and resolve() passes straight through such a component, so
+    # a leaf-only check lets `mkdir(parents=True)` raise a raw NotADirectoryError from
+    # inside the writer. Walk from the root outwards so the message names the real culprit.
+    for component in (dest, *dest.parents):
+        if not component.is_relative_to(root) or component == root:
+            break
+        if component.exists() and not component.is_dir():
+            raise BuildRepoError(
+                f"catalog destination {str(dest)!r} is unusable: {str(component)!r} exists and is "
+                f"not a directory — the catalog directory is wiped and rebuilt, so every component "
+                f"of its path must be a real directory"
+            )
     return dest
 
 
