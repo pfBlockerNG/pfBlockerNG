@@ -30,12 +30,15 @@ echo "==> Installing tools/webassets/ (npm ci)"
 # the gutter's width on every keystroke with the on-screen keyboard open). npm ci wipes
 # node_modules above, so these apply to a pristine tree every run; a patch that stops
 # applying after a dependency bump fails the build here rather than silently reverting
-# the fix in the shipped bundle.
+# the fix in the shipped bundle. -F 0 is what makes that strict: patch(1)'s default
+# fuzz factor would let a hunk whose context has drifted apply at a guessed location
+# and still exit 0. -f keeps it non-interactive, so a mismatch fails instead of
+# prompting. Both are portable to BSD patch(1); --fuzz=0 would not be.
 if [ -d "${TOOLS_DIR}/patches" ]; then
     for _patch in "${TOOLS_DIR}"/patches/*.patch; do
         [ -f "$_patch" ] || continue
         echo "==> Applying $(basename "$_patch")"
-        patch -p1 -d "$TOOLS_DIR" -i "$_patch"
+        patch -f -F 0 -p1 -d "$TOOLS_DIR" -i "$_patch"
     done
 fi
 
