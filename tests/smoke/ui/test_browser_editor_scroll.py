@@ -39,6 +39,7 @@ from .test_browser_lint import (
     _regex_editor,
     _shot,
 )
+from .webui import SESSION_COOKIE
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 expect = sync_api.expect
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
 
     from playwright.sync_api import BrowserContext, Locator, Page
 
+    from ..conftest import SmokeVM
     from .webui import WebUI
 
 pytestmark = pytest.mark.ui_browser
@@ -57,16 +59,13 @@ pytestmark = pytest.mark.ui_browser
 # a touch/mobile Chrome whose input path (composition, focus scrolling) differs from the
 # desktop one. Emulation cannot reproduce the on-screen keyboard, but it does give the
 # narrow viewport, the mobile UA string, touch events and the device pixel ratio.
-PHONE_CONTEXT = {
-    "viewport": {"width": 412, "height": 915},
-    "device_scale_factor": 2.625,
-    "is_mobile": True,
-    "has_touch": True,
-    "user_agent": (
-        "Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36"
-    ),
-}
+PHONE_WIDTH = 412
+PHONE_HEIGHT = 915
+PHONE_SCALE = 2.625
+PHONE_UA = (
+    "Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36"
+)
 
 
 @pytest.fixture(params=["desktop", "phone"])
@@ -75,6 +74,7 @@ def editor_page(
     browser_page: Page,
     browser_context: BrowserContext,
     webui: WebUI,
+    smoke_vm: SmokeVM,
 ) -> Iterator[tuple[Page, str]]:
     """The authenticated page under test, once per form factor.
 
@@ -89,8 +89,18 @@ def editor_page(
 
     browser = browser_context.browser
     assert browser is not None, "browser_context must come from a live browser"
-    context = browser.new_context(ignore_https_errors=webui.base_url.startswith("https://"), **PHONE_CONTEXT)
-    context.add_cookies(browser_context.cookies())
+    cookie = webui.session_cookie()
+    if cookie is None:
+        pytest.skip("no PHPSESSID on the webui session -- cannot authenticate the phone context")
+    context = browser.new_context(
+        ignore_https_errors=webui.base_url.startswith("https://"),
+        viewport={"width": PHONE_WIDTH, "height": PHONE_HEIGHT},
+        device_scale_factor=PHONE_SCALE,
+        is_mobile=True,
+        has_touch=True,
+        user_agent=PHONE_UA,
+    )
+    context.add_cookies([{"name": SESSION_COOKIE, "value": cookie, "domain": smoke_vm.host, "path": "/"}])
     page = context.new_page()
     try:
         yield page, request.param
