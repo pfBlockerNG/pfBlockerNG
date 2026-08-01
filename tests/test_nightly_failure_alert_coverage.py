@@ -11,8 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 _WORKFLOW_GLOBS = ("*.yml", "*.yaml")
 
-_TOP_LEVEL_KEY_RE = re.compile(r"^(?P<key>[A-Za-z0-9_.-]+|['\"](?P<quoted>[^'\"]+)['\"]):(?:\s|$)")
-_SCHEDULE_RE = re.compile(r"^  schedule:\s*(?:#.*)?$")
+_MAPPING_KEY_RE = re.compile(r"^(?P<key>[A-Za-z0-9_.-]+|'[^']*'|\"[^\"]*\")\s*:(?P<rest>.*)$")
 _WORKFLOW_RUN_RE = re.compile(r"^  workflow_run:\s*(?:#.*)?$")
 _WORKFLOWS_RE = re.compile(r"^    workflows:\s*(?:#.*)?$")
 _WORKFLOW_ITEM_RE = re.compile(r"^      -\s*(?P<value>.+?)\s*$")
@@ -40,12 +39,69 @@ def _block_end(lines: list[str], start: int, indent: int) -> int:
     return len(lines)
 
 
+def _mapping_key(line: str) -> tuple[str, str] | None:
+    match = _MAPPING_KEY_RE.match(line.lstrip(" "))
+    if match is None:
+        return None
+    raw_key = match.group("key")
+    if raw_key[0] in "'\"":
+        return raw_key[1:-1], match.group("rest")
+    return raw_key, match.group("rest")
+
+
+def _flow_mapping_keys(value: str) -> set[str]:
+    opening = value.find("{")
+    if opening < 0:
+        return set()
+    keys: set[str] = set()
+    brace_depth = 0
+    bracket_depth = 0
+    quote: str | None = None
+    escaped = False
+    key_start: int | None = None
+    for index in range(opening, len(value)):
+        char = value[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in "'\"":
+            quote = char
+        elif char == "{":
+            brace_depth += 1
+            if brace_depth == 1 and bracket_depth == 0:
+                key_start = index + 1
+        elif char == "}":
+            if brace_depth == 1 and bracket_depth == 0:
+                key_start = None
+            brace_depth -= 1
+            if brace_depth <= 0:
+                break
+        elif char == "[" and brace_depth:
+            bracket_depth += 1
+        elif char == "]" and bracket_depth:
+            bracket_depth -= 1
+        elif brace_depth == 1 and bracket_depth == 0:
+            if char == ":" and key_start is not None:
+                parsed = _mapping_key(value[key_start:index].strip() + ":")
+                if parsed is not None:
+                    keys.add(parsed[0])
+                key_start = None
+            elif char == ",":
+                key_start = index + 1
+    return keys
+
+
 def _top_level_block(lines: list[str], key: str) -> tuple[int, int] | None:
     for index, line in enumerate(lines):
         if _is_comment(line) or _indent(line) != 0:
             continue
-        match = _TOP_LEVEL_KEY_RE.match(line)
-        if match and (match.group("key") or match.group("quoted")) == key:
+        parsed = _mapping_key(line)
+        if parsed is not None and parsed[0] == key:
             return index, _block_end(lines, index, 0)
     return None
 
@@ -56,7 +112,21 @@ def _has_schedule_trigger(text: str) -> bool:
     if block is None:
         return False
     start, end = block
-    return any(_SCHEDULE_RE.fullmatch(lines[index]) for index in range(start + 1, end))
+    on_mapping = _mapping_key(lines[start])
+    if on_mapping is not None and "schedule" in _flow_mapping_keys(on_mapping[1]):
+        return True
+    child_indents = [
+        _indent(lines[index])
+        for index in range(start + 1, end)
+        if lines[index].strip() and not _is_comment(lines[index]) and _indent(lines[index]) > 0
+    ]
+    if not child_indents:
+        return False
+    child_indent = min(child_indents)
+    return any(
+        _indent(lines[index]) == child_indent and (_mapping_key(lines[index]) or (None, ""))[0] == "schedule"
+        for index in range(start + 1, end)
+    )
 
 
 def _normalize_scalar(raw: str, *, source: str) -> str:
@@ -80,9 +150,10 @@ def _top_level_workflow_name(text: str, *, source: str) -> str:
     for line in text.splitlines():
         if _is_comment(line) or _indent(line) != 0:
             continue
-        if not line.startswith("name:"):
+        parsed = _mapping_key(line)
+        if parsed is None or parsed[0] != "name":
             continue
-        return _normalize_scalar(line.partition(":")[2], source=source)
+        return _normalize_scalar(parsed[1], source=source)
     raise ValueError(f"{source}: scheduled workflow missing top-level name")
 
 
@@ -160,10 +231,29 @@ def test_every_scheduled_workflow_is_watched_or_explicitly_exempt() -> None:
         ("on:\n  # schedule:\n  push:\n", False),
         ("name: Plain\non:\n  schedule:\n    - cron: x\n", True),
         ("name: Outside\non:\n  push:\njobs:\n  schedule:\n", False),
+        (
+            'name: Nested flow\non: {workflow_dispatch: {inputs: {schedule: {description: "x", required: false}}}}\n',
+            False,
+        ),
     ],
 )
 def test_schedule_parser_uses_only_top_level_on(text: str, expected: bool) -> None:
     assert _has_schedule_trigger(text) is expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'name: Flow\non: {schedule: [{cron: "0 0 * * *"}]}\n',
+        'name: Block\non:\n  schedule: [{cron: "0 0 * * *"}]\n',
+        'name: Quoted top level\n"on":\n  schedule:\n    - cron: "0 0 * * *"\n',
+        'name: Quoted event\non:\n  "schedule":\n    - cron: "0 0 * * *"\n',
+        'name: Whitespace event\non:\n  schedule :\n    - cron: "0 0 * * *"\n',
+        'name: Whitespace quoted event\non:\n  "schedule" :\n    - cron: "0 0 * * *"\n',
+    ],
+)
+def test_schedule_parser_accepts_valid_schedule_forms(text: str) -> None:
+    assert _has_schedule_trigger(text)
 
 
 @pytest.mark.parametrize(
@@ -172,6 +262,7 @@ def test_schedule_parser_uses_only_top_level_on(text: str, expected: bool) -> No
         ("name: Plain\non:\n  schedule:\n", "Plain"),
         ("name: 'Single quoted'\non:\n  schedule:\n", "Single quoted"),
         ('name: "Double quoted"\non:\n  schedule:\n', "Double quoted"),
+        ('"name": "Quoted key"\non:\n  schedule:\n', "Quoted key"),
     ],
 )
 def test_top_level_workflow_name_normalizes_outer_quotes(text: str, expected: str) -> None:
