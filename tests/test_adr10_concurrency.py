@@ -10,7 +10,7 @@ hammer the matcher. It proves the zero-downtime swap is:
   * REAL per lane -- gen1 and gen2 differ across EVERY block/allow mechanism, and the
     final state is verified down to a per-mechanism CONTROL domain, so a degenerate
     empty/all-blocked build cannot masquerade as a valid generation;
-  * non-stalling -- queries keep flowing throughout (high total count, no crash).
+  * synchronized -- every query thread observes the baseline and final generations.
 
 The trigger is a real second process (no shared GIL with the query process, like the
 PHP trigger on a box), so it genuinely races atomic-publish against concurrent-read.
@@ -44,14 +44,16 @@ repo's branch + before/after coverage rules.
 from __future__ import annotations
 
 import base64
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Any
+
+import pytest
 
 import pfb_unbound as P
 
@@ -311,6 +313,15 @@ def _write(path: str, data: str) -> None:
         fh.write(data)
 
 
+def _write_observed(path: str, generation: int) -> None:
+    tmp = "{}.tmp".format(path)
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write("{}\n".format(generation))
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
 def _manifest_json(tld_master: str, plain_raw: str, user_raw: str, abp_raw: str, spec: GenSpec) -> str:
     return json.dumps(
         {
@@ -469,6 +480,7 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
     live_ini = os.path.join(tmp_dir, "live_pfb_unbound.ini")
     sentinel = os.path.join(tmp_dir, "pfb_py_reload")
     applied = os.path.join(tmp_dir, "pfb_py_reload.applied")
+    observed = os.path.join(tmp_dir, "pfb_py_reload.observed")
     _write(live_manifest, _read_file(g1_manifest))
     _write(live_ini, _read_file(g1_ini))
     _write(sentinel, "1\n")
@@ -507,8 +519,32 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
     stats: list[dict[str, int]] = []
     _torn_samples: list[dict[str, bool]] = []
     n_threads = 6
+    observed_condition = threading.Condition()
+    observed_generations = [0] * n_threads
+    observed_marker_generation = 0
 
-    def query_loop() -> None:
+    def record_observed(index: int, generation: int) -> None:
+        nonlocal observed_marker_generation
+        with observed_condition:
+            if generation <= observed_generations[index]:
+                return
+            observed_generations[index] = generation
+            if generation > observed_marker_generation:
+                observed_marker_generation = generation
+                _write_observed(observed, generation)
+            observed_condition.notify_all()
+
+    def wait_observed(target: int) -> None:
+        with observed_condition:
+            if not observed_condition.wait_for(
+                lambda: all(generation >= target for generation in observed_generations), timeout=60.0
+            ):
+                raise RuntimeError(
+                    "observed generation stuck/environment: expected target {} for every query thread; "
+                    "actual={!r}".format(target, observed_generations)
+                )
+
+    def query_loop(index: int) -> None:
         local = {"n": 0, "gen1": 0, "gen2": 0, "torn": 0}
         try:
             while not stop.is_set():
@@ -527,52 +563,55 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
                         _torn_samples.append(
                             {n: got[n] for n in _PROBE_NAMES if got[n] not in (expected_gen1[n], expected_gen2[n])}
                         )
+                applied_generation = P._reload_read_generation(applied)
+                if applied_generation and got == (expected_gen1 if applied_generation % 2 else expected_gen2):
+                    record_observed(index, applied_generation)
         except Exception as e:  # noqa: BLE001 -- record, never let a query crash silently
             errors.append(repr(e))
         stats.append(local)
 
-    threads = [threading.Thread(target=query_loop, daemon=True) for _ in range(n_threads)]
+    threads = [threading.Thread(target=query_loop, args=(index,), daemon=True) for index in range(n_threads)]
     for t in threads:
         t.start()
 
-    # BEFORE: let the loops read a gen1 baseline before the first flip.
-    time.sleep(0.15)
-    assert _scan(P._snapshot) == expected_gen1, "expected gen1 live before the trigger"
-
-    # Fire the trigger: it sleeps wait_before, then ALTERNATES gen2/gen1/gen2/... K times,
-    # waiting for the watcher to APPLY each generation before the next flip (so the build
-    # input never races a mid-build overwrite -- the atomic _snapshot swap is still
-    # exercised once per flip).
-    wait_before = 0.3
+    # BEFORE: every loop must scan and record the gen1 baseline before the trigger starts.
     flips = 5
-    gap = 0.05
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            _TRIGGER,
-            str(wait_before),
-            str(flips),
-            str(gap),
-            live_manifest,
-            live_ini,
-            sentinel,
-            applied,
-            g1_manifest,
-            g1_ini,
-            g2_manifest,
-            g2_ini,
-        ]
-    )
     last_gen_expected = expected_gen2 if flips % 2 == 1 else expected_gen1
     last_applied = 1 + flips
+    proc = None
     try:
+        wait_observed(1)
+        with observed_condition:
+            baseline_observed = observed_generations.copy()
+        assert baseline_observed == [1] * n_threads, "not every query thread observed gen1: {}".format(
+            baseline_observed
+        )
+        assert _scan(P._snapshot) == expected_gen1, "expected gen1 live before the trigger"
+
+        # Fire the trigger: it ALTERNATES gen2/gen1/gen2/... K times, waiting for the
+        # watcher to APPLY and a query to OBSERVE each generation before the next flip.
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                _TRIGGER,
+                str(flips),
+                live_manifest,
+                live_ini,
+                sentinel,
+                applied,
+                observed,
+                g1_manifest,
+                g1_ini,
+                g2_manifest,
+                g2_ini,
+            ]
+        )
         assert proc.wait(timeout=60) == 0, "trigger process failed to publish + flip"
-        # Wait (bounded) for the watcher to APPLY the LAST generation under query load.
-        deadline = time.monotonic() + 15.0
-        while time.monotonic() < deadline and P._reload_read_generation(applied) != last_applied:
-            time.sleep(0.02)
-        time.sleep(0.2)  # let the loops observe the final generation a bit
+        wait_observed(last_applied)
     finally:
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.wait()
         stop.set()
         for t in threads:
             t.join(timeout=5)
@@ -583,7 +622,6 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
     assert not watcher.is_alive(), "watcher did not join cleanly"
     assert errors == [], "query thread(s) raised: {}".format(errors)
 
-    total_n = sum(s["n"] for s in stats)
     total_gen1 = sum(s["gen1"] for s in stats)
     total_gen2 = sum(s["gen2"] for s in stats)
     total_torn = sum(s["torn"] for s in stats)
@@ -595,14 +633,12 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
     # Both patterns were observed under load -- a genuine generational swap, both ways.
     assert total_gen1 > 0, "no gen1 pattern observed (baseline + odd flips)"
     assert total_gen2 > 0, "no gen2 pattern observed under load"
-    # Queries kept flowing (no stall) -- every thread did real, repeated work. The
-    # floor is deliberately conservative (>= ~10 scans/thread): a genuine stall leaves
-    # total_n on the order of n_threads (each loop ran once or twice before blocking),
-    # which this still catches, while the previous 50/thread floor was timing-fragile
-    # and flaked under the slower coverage-instrumented run on a busy CI runner. The
-    # per-thread liveness guarantee is pinned exactly by the next assertion.
-    assert total_n > n_threads * 10, "suspiciously few scans ({}) -- a stall?".format(total_n)
-    assert all(s["n"] > 0 for s in stats), "a query thread never ran"
+
+    with observed_condition:
+        final_observed = observed_generations.copy()
+    assert all(generation >= last_applied for generation in final_observed), (
+        "not every query thread observed final generation {}: {}".format(last_applied, final_observed)
+    )
 
     # FINAL state: the watcher applied the LAST published generation, and the live
     # snapshot grades EXACTLY as that generation's oracle -- per-mechanism CONTROLs
@@ -628,3 +664,13 @@ def _build_snapshot_from(manifest: str, ini: str) -> Any:
     finally:
         P.pfb["pfb_py_sources"] = saved_m
         P.pfb["pfb_unbound.ini"] = saved_i
+
+
+def test_reload_trigger_marker_waiter_reports_stuck_environment(tmp_path: Any) -> None:
+    spec = importlib.util.spec_from_file_location("adr10_reload_trigger", _TRIGGER)
+    assert spec is not None and spec.loader is not None, "trigger module could not be loaded"
+    trigger = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(trigger)
+
+    with pytest.raises(RuntimeError, match=r"stuck/environment.*target generation 7.*actual=None"):
+        trigger._wait_generation_marker(str(tmp_path / "missing"), 7, timeout=0.0)
