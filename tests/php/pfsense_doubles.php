@@ -321,28 +321,107 @@ if (!function_exists('config_get_path')) {
 }
 
 if (!function_exists('config_set_path')) {
-	// pfSense config.lib.inc: set the value at a '/'-separated path (creating
-	// intermediate arrays), returning the value set.
+	// pfSense config.lib.inc config_set_path() wrapping util.inc array_set_path()
+	// (issue #1918) -- ported onto $GLOBALS['config'] directly (the double has no
+	// separate array_set_path()/$config global to pass by reference).
+	// array_set_path() verified byte-identical across three refs on the public
+	// pfsense/pfsense mirror (.agents/context/lang-php.md "Resolving pfSense-provided
+	// PHP functions from upstream"): `master`, `ed6c2eb8` (CE 2.8.0), `9363ac5b`.
+	//
+	// Departures from a byte-for-byte transcription, each probed inert: upstream's
+	// loose `==`/`!=` on $path/$vkey and its `mb_strlen(...) == 0` are strict here
+	// ($path and $vkey are always strings, mb_strlen() always an int), and
+	// upstream's log_invalid_config_path() side effect is dropped -- pure logging,
+	// with no double in this file and no caller that observes it.
+	//
+	// Deliberately NOT `global $config;`: upstream's `global` statement itself
+	// materialises $GLOBALS['config'] = null the first time it runs, so a config
+	// that never existed still ends up present-and-null upstream. Reading
+	// $GLOBALS['config'] directly here instead leaves it genuinely absent when
+	// unset -- identical to every consumer in this tree, since config_get_path(),
+	// config_del_path() and config_path_enabled() all treat absent and null the
+	// same; only array_key_exists('config', $GLOBALS) tells the two apart. Pinned
+	// by ConfigSetPathParityTest's "$config unset" row (NOTE-A: the one relaxed
+	// assertion in that matrix).
+	//
+	// The `!empty($el[$key])` intermediate check below is deliberate, upstream
+	// verbatim: it is what makes a '', '0', 0, false, null or [] intermediate get
+	// OVERWRITTEN rather than descended into. PHPStan's NoEmptyOnStringRule does
+	// not analyse tests/, so it does not flag it here.
 	function config_set_path(string $path, $value, $default = null) {
-		$append = ($path !== '' && str_ends_with($path, '/'));
-		$node = &$GLOBALS['config'];
-		if (!is_array($node)) {
-			$node = [];
+		// config_set_path() wrapper.
+		if (str_contains($path, '//')) {
+			return $default;
 		}
-		foreach (explode('/', rtrim($path, '/')) as $key) {
-			if (!is_array($node)) {
+		if ($path === '') {
+			if (!is_array($value)) {
 				return $default;
 			}
-			if (!array_key_exists($key, $node) || !is_array($node[$key])) {
-				$node[$key] = [];
+			if (!is_array($GLOBALS['config'] ?? null)) {
+				// initialize config when it's being completely replaced
+				$GLOBALS['config'] = [];
 			}
-			$node = &$node[$key];
+		} elseif ($path === '/') {
+			// prevent unintentionally treating $config as a list array
+			return $default;
 		}
+		if (!is_array($GLOBALS['config'] ?? null)) {
+			return $default;
+		}
+
+		// array_set_path() body, operating on $GLOBALS['config'] as the root array.
+		$vpath = explode('/', $path);
+		// check for trailing forward-slash
+		$append = ($path !== '' && $vpath[array_key_last($vpath)] === '');
+
+		// get the path's leaf node; ignore trailing and contiguous forward-slashes
+		do {
+			$vkey = array_pop($vpath);
+		} while (isset($vkey) && mb_strlen($vkey) === 0);
+
+		$arr = &$GLOBALS['config'];
+
+		// path is root, make sure $arr is always an array
+		if ($vkey === null) {
+			// avoid creating a single-element root (e.g. [0 => []])
+			if ($append) {
+				$arr[] = is_array($value) ? $value : [$value];
+			} else {
+				$arr = is_array($value) ? $value : [$value];
+			}
+			return $value;
+		}
+
+		// traverse the array and get a reference to the leaf node
+		$el = &$arr;
+		foreach ($vpath as $key) {
+			if (mb_strlen($key) === 0) {
+				continue;
+			}
+			if (array_key_exists($key, $el) && !empty($el[$key])) {
+				if (!is_array($el[$key])) {
+					return $default;
+				}
+			} else {
+				$el[$key] = [];
+			}
+			$el = &$el[$key];
+		}
+
+		// set the leaf node value
 		if ($append) {
-			$node[] = $value;
+			// upstream reads bare `is_array($el[$vkey])`; `?? null` avoids an
+			// "Undefined array key" warning under PHPUnit for the same branch
+			// when $vkey is not yet a key of $el.
+			if (is_array($el[$vkey] ?? null)) {
+				$el[$vkey][] = $value;
+			} else {
+				$el[$vkey] = [$value];
+			}
 		} else {
-			$node = $value;
+			$el[$vkey] = $value;
 		}
+
 		return $value;
 	}
 }
