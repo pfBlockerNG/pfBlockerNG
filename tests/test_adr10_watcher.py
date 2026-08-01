@@ -220,8 +220,35 @@ class _Harness:
         self._lock = threading.Lock()
         # issue #456: the builder SIGNALS each recorded build on this Condition so
         # wait_builds blocks deterministically on the daemon thread instead of polling
-        # a deadline and hoping -- the latter races (and returns silently) under load.
+        # and hoping -- the latter races (and returns silently) under load.
         self._builds_cond = threading.Condition(self._lock)
+        orig_run_swap = P._reload_run_swap
+        orig_write_applied = P._reload_write_applied
+
+        def _applied_identity() -> tuple[int, int] | None:
+            try:
+                stat = os.stat(self.applied)
+            except OSError:
+                return None
+            return stat.st_dev, stat.st_ino
+
+        def _signaling_run_swap(builder: Any) -> bool:
+            swapped = orig_run_swap(builder)
+            if swapped:
+                with self._builds_cond:
+                    self._builds_cond.notify_all()
+            return swapped
+
+        def _signaling_write_applied(gen: int) -> None:
+            before = _applied_identity()
+            orig_write_applied(gen)
+            after = _applied_identity()
+            if after is not None and after != before and self.read_applied() == gen:
+                with self._builds_cond:
+                    self._builds_cond.notify_all()
+
+        monkeypatch.setattr(P, "_reload_run_swap", _signaling_run_swap)
+        monkeypatch.setattr(P, "_reload_write_applied", _signaling_write_applied)
         self.fail = False
         self.os = os
         P.pfb_reload_stop = threading.Event()
@@ -306,22 +333,12 @@ class _Harness:
                 )
 
     def wait_snapshot_contains(self, tag: str, timeout: float = 10.0) -> None:
-        # wait_builds/wait_sentinel_reads return before the swap is installed, so this
-        # stays a poll on the module-level P._snapshot we cannot signal from here --
-        # but with a loud timeout (issue #456). Check-then-deadline-then-final-recheck
-        # ordering (#729/#551) matches wait_snapshot_changed below: the tag may land
-        # during the final sleep, so always re-check once more right before giving up.
-        deadline = time.monotonic() + timeout
-        while True:
-            if tag in P._snapshot.data_db:
-                return
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.005)
-        raise AssertionError(
-            "wait_snapshot_contains timed out after {:.1f}s: {!r} was never present in "
-            "P._snapshot.data_db (keys={!r})".format(timeout, tag, sorted(P._snapshot.data_db.keys()))
-        )
+        with self._builds_cond:
+            if not self._builds_cond.wait_for(lambda: tag in P._snapshot.data_db, timeout=timeout):
+                raise RuntimeError(
+                    "wait_snapshot_contains stuck/environment after {:.1f}s: expected {!r} in "
+                    "P._snapshot.data_db; actual keys={!r}".format(timeout, tag, sorted(P._snapshot.data_db.keys()))
+                )
 
     def wait_builds(self, n: int, timeout: float = 10.0) -> None:
         # Block on the builder's signal until >= n builds are recorded. The timeout is a
@@ -336,24 +353,21 @@ class _Harness:
                 )
 
     def wait_snapshot_changed(self, old: Any, timeout: float = 10.0) -> None:
-        # wait_builds returns when a build is RECORDED (before the builder returns), so
-        # P._snapshot may not be swapped yet. The swap is done by production code on a
-        # module-level variable we cannot signal from here, so this stays a poll -- but
-        # with a loud timeout assertion (safety-guard, never a silent return; issue #456).
-        # Check-then-deadline order (#729/#551): the swap may land during the final sleep,
-        # after the last check but before the deadline expires -- always re-check once more
-        # right before giving up, or that in-flight swap reads as a false "never swapped".
-        deadline = time.monotonic() + timeout
-        while True:
-            if P._snapshot is not old:
-                return
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.005)
-        raise AssertionError(
-            "wait_snapshot_changed timed out after {:.1f}s: P._snapshot was never swapped "
-            "from the old snapshot (expected a new snapshot to be installed)".format(timeout)
-        )
+        with self._builds_cond:
+            if not self._builds_cond.wait_for(lambda: P._snapshot is not old, timeout=timeout):
+                raise RuntimeError(
+                    "wait_snapshot_changed stuck/environment after {:.1f}s: expected P._snapshot "
+                    "to differ from {!r}; actual is old snapshot={!r}".format(timeout, old, P._snapshot)
+                )
+
+    def wait_applied(self, target: int, timeout: float = 10.0) -> None:
+        with self._builds_cond:
+            if not self._builds_cond.wait_for(lambda: self.read_applied() == target, timeout=timeout):
+                raise RuntimeError(
+                    "wait_applied stuck/environment after {:.1f}s: expected applied generation {}; actual={!r}".format(
+                        timeout, target, self.read_applied()
+                    )
+                )
 
     def stop_join(self, timeout: float = 30.0) -> None:
         P.pfb_reload_stop.set()
@@ -369,7 +383,8 @@ class TestHarnessWaiterDiagnostics:
     came from wait_builds returning silently when the daemon thread was starved, so the
     real symptom -- "the build never happened in time" -- was masked into a misleading
     downstream ``builds == [2, 3]`` equality mismatch. These pin the contract directly:
-    when the awaited condition is never met, the waiter raises a descriptive AssertionError.
+    snapshot/applied waiters raise descriptive RuntimeErrors; existing build/read waiters
+    retain their AssertionError contracts.
     (Against the pre-fix silent-return waiters these tests FAIL -- no exception is raised.)
 
     issue #957 adds a second contract: start() must not return before the watcher's
@@ -389,15 +404,12 @@ class TestHarnessWaiterDiagnostics:
         h = _Harness(tmp_path, monkeypatch)
         old = _snapshot(tag="old.example.com", counts=0)
         P._snapshot = old
-        with pytest.raises(AssertionError, match=r"wait_snapshot_changed timed out"):
+        with pytest.raises(RuntimeError, match=r"wait_snapshot_changed stuck/environment"):
             h.wait_snapshot_changed(old, timeout=0.1)
 
-    def test_wait_snapshot_changed_returns_when_swap_lands_at_deadline(self, tmp_path: Any, monkeypatch: Any) -> None:
-        # #729/#551: a swap that lands during the FINAL sleep (after the last check, before
-        # the deadline expires) must still be observed, not read as a false "never swapped".
-        # timeout=0.0 makes the deadline already-expired at call time, so the loop's ONLY
-        # chance to see the swap is the check-before-give-up -- this is what the old
-        # check-then-sleep-then-recheck-deadline ordering skipped.
+    def test_wait_snapshot_changed_returns_when_already_changed(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # A swap already visible before waiting must return immediately, even with no wait
+        # budget, rather than report a false stuck/environment timeout.
         h = _Harness(tmp_path, monkeypatch)
         old = _snapshot(tag="old.example.com", counts=0)
         new = _snapshot(tag="new.example.com", counts=1)
@@ -414,13 +426,37 @@ class TestHarnessWaiterDiagnostics:
         # No watcher thread -> the tag is never added. wait_snapshot_contains must raise.
         h = _Harness(tmp_path, monkeypatch)
         P._snapshot = _snapshot(tag="old.example.com", counts=0)
-        with pytest.raises(AssertionError, match=r"wait_snapshot_contains timed out"):
+        with pytest.raises(RuntimeError, match=r"wait_snapshot_contains stuck/environment"):
             h.wait_snapshot_contains("gen1.example.com", timeout=0.1)
 
+    def test_wait_applied_raises_on_timeout(self, tmp_path: Any, monkeypatch: Any) -> None:
+        h = _Harness(tmp_path, monkeypatch)
+        with pytest.raises(RuntimeError, match=r"wait_applied stuck/environment"):
+            h.wait_applied(1, timeout=0.1)
+
+    def test_applied_write_failure_does_not_signal_stale_marker(self, tmp_path: Any, monkeypatch: Any) -> None:
+        h = _Harness(tmp_path, monkeypatch)
+        with open(h.applied, "w", encoding="utf-8") as fh:
+            fh.write("42\n")
+        notifications = 0
+
+        def _record_notification() -> None:
+            nonlocal notifications
+            notifications += 1
+
+        monkeypatch.setattr(h._builds_cond, "notify_all", _record_notification)
+
+        def _fail_replace(source: str, destination: str) -> None:
+            raise OSError("forced marker replace failure")
+
+        monkeypatch.setattr(P.os, "replace", _fail_replace)
+        P._reload_write_applied(42)
+
+        assert notifications == 0
+        assert h.read_applied() == 42
+
     def test_wait_snapshot_contains_returns_when_tag_already_present(self, tmp_path: Any, monkeypatch: Any) -> None:
-        # #729/#551: timeout=0.0 makes the deadline already-expired at call time, so the
-        # loop's ONLY chance to see the tag is the check-before-give-up -- this must
-        # still return, not raise, when the tag is already present.
+        # An already-present tag must return immediately, even with no wait budget.
         h = _Harness(tmp_path, monkeypatch)
         P._snapshot = _snapshot(tag="gen1.example.com", counts=1)
         h.wait_snapshot_contains("gen1.example.com", timeout=0.0)  # must return, not raise.
@@ -499,9 +535,7 @@ class TestWatcherLoop:
             h.publish(2)
             h.wait_builds(1, timeout=3.0)
             h.wait_snapshot_contains("gen2.example.com", timeout=3.0)
-            deadline = time.monotonic() + 3.0
-            while time.monotonic() < deadline and h.read_applied() != 2:
-                time.sleep(0.01)
+            h.wait_applied(2, timeout=3.0)
             assert h.read_applied() == 2
             assert h.thread.is_alive()
         finally:
@@ -724,9 +758,7 @@ class TestAppliedMarker:
         assert h.read_applied() is None  # BEFORE: no marker yet.
         h.start()
         try:
-            deadline = time.monotonic() + 10.0
-            while time.monotonic() < deadline and h.read_applied() != 5:
-                time.sleep(0.01)
+            h.wait_applied(5)
             assert h.read_applied() == 5  # AFTER: baseline published.
             assert h.builds == []  # baseline adoption did NOT rebuild.
         finally:
@@ -740,9 +772,7 @@ class TestAppliedMarker:
             assert h.read_applied() is None  # BEFORE: nothing applied (no sentinel yet).
             h.publish(1)
             h.wait_builds(1)
-            deadline = time.monotonic() + 10.0
-            while time.monotonic() < deadline and h.read_applied() != 1:
-                time.sleep(0.01)
+            h.wait_applied(1)
             assert h.read_applied() == 1  # AFTER: marker advanced to the swapped gen.
         finally:
             h.stop_join()
