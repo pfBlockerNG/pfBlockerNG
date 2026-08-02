@@ -173,30 +173,6 @@ def _read_group_counter(vm: SmokeVM, group: str, *, timeout: float = 60.0) -> tu
     return _parse_counter_output(res.stdout or "")
 
 
-def _wait_group_counter_at_least(
-    vm: SmokeVM, group: str, target: int, *, timeout: float = 30.0, poll: float = 2.0
-) -> tuple[int, str]:
-    """Poll the group's counter until it is >= ``target`` or fail with a salvage expiry.
-
-    The counter flush rides the async db_worker thread, so a freshly-logged
-    block does not appear instantly.
-    """
-    deadline = time.monotonic() + timeout
-    current: tuple[int, str] = (-1, "")
-    while True:
-        current = _read_group_counter(vm, group)
-        if current[0] >= target:
-            return current
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise RuntimeError(
-                "salvage cap expired / stuck or environment: "
-                f"_wait_group_counter_at_least awaited group={group!r} counter >= target={target}; "
-                f"observed current={current[0]} detail={current[1]!r}"
-            )
-        time.sleep(min(poll, remaining))
-
-
 def _query_domain(vm: SmokeVM, domain: str, *, timeout: float = 60.0) -> dict[str, Any]:
     """Call the ADR-65 read-only query channel (pfb_dnsbl_query) for ``domain``."""
     snippet = (
