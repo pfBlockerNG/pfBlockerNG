@@ -7,11 +7,10 @@ use PHPUnit\Framework\TestCase;
 /**
  * pfb_daemon_filterlog()'s CSV field-count guard (issue #1768).
  *
- * pfb_daemon_filterlog() reads php://stdin in an unbounded daemon loop and
- * is not directly callable from a unit test (see LogTimestampBaselineTest's
- * docblock -- the same constraint applies here; no test in this suite calls
- * it directly, confirmed by grep). A short/malformed filterlog line (fewer
- * space-separated fields than the BSD/syslog $f_pos offset expects) left
+ * SyslogEventTest exercises the daemon's DNSBL stdin branch in a bounded child
+ * process. This filter.log field-split path stays a pure extracted test because
+ * reaching it also requires pfSense firewall state. A short/malformed filterlog
+ * line (fewer space-separated fields than the BSD/syslog $f_pos offset expects) left
  * $f[$f_pos] undefined, and `explode(',', $f[$f_pos])` on that undefined
  * offset passed NULL to explode() -- a PHP 8.1+ deprecation, and part of the
  * #1768 "Passing null" gate failure.

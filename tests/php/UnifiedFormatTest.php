@@ -7,6 +7,8 @@ use PHPUnit\Framework\TestCase;
 /**
  * ADR-38 Amendment 1 — DNSBL syslog + unified.log formatter tests.
  * ADR-38 Amendment 3 (issue #1369) — ASN CSV-column helper tests.
+ * ADR-38 Amendment 4 (issue #2075) — the DNSBL formatter remains a pure
+ * fixed-column compatibility/schema oracle, not the production RFC4180 writer.
  *
  * Pins the behaviour of:
  *   pfb_syslog_format_dnsbl(array $fields): string
@@ -286,7 +288,7 @@ final class UnifiedFormatTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * 11 named fields joined in the dnsbl.log column order.
+	 * 11 plain named fields joined in the legacy dnsbl.log column order.
 	 *
 	 * Scenario:
 	 *   Given the 11 fields from a representative real dnsbl.log line.

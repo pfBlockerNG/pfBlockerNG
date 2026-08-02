@@ -39,7 +39,7 @@ behind.
 | `dnsbl.log` | `pfb_unbound.py` (`_log_dnsbl` path) | full verdict: block type, group, evaluated domain/zone, feed, query type |
 | `dns_reply.log` | `pfb_unbound.py` | reply type/record, TTL, resolved address, GeoIP iso code |
 | `ip_block/permit/match.log` | filterlog daemon (`pfb_daemon_filterlog`, `pfblockerng.inc`) | pf tracker → pfB rule/alias, matching feed + IP/CIDR entry (`find_reported_header()`), GeoIP (`mmdblookup`), rDNS, ASN (3 CSV columns, issue #1369 — see below) |
-| `unified.log` | filterlog daemon (sole writer, ADR-38 Amendment 1) | reformatted copies of the three streams above |
+| `unified.log` | filterlog daemon (sole writer, ADR-38 Amendments 1/4) | reformatted IP/DNS-reply rows; byte-identical RFC4180 DNSBL rows |
 
 The daemon reconstructs the bare pf event into a fully attributed record **once**, at
 event time, and caches its lookups in the `ipcache` SQLite table so repeated offenders
