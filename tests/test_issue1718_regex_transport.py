@@ -1,8 +1,9 @@
-"""Issue #1718: opaque base64 regex transport reaches both Python load sites."""
+"""Issue #2079: opaque base64 regex transport reaches both Python load sites."""
 
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 from typing import Any
 
@@ -44,8 +45,10 @@ def test_initial_load_decodes_base64_rows_and_preserves_names(tmp_path: Path, mo
     try:
         _initial_load(tmp_path, monkeypatch, _ini(encoded))
         assert set(P.regexDB) == {"foo_desc", "foo_desc_2", "inline_description", "regex_4"}
-        assert P.regexDB["foo_desc"]["re"].pattern == 'a%=:;"\\d'
-        assert P.regexDB["foo_desc_2"]["re"].pattern == 'b%=:;"\\d'
+        assert P.regexDB["foo_desc"]["re"].pattern == 'A%=:;"\\D'
+        assert P.regexDB["foo_desc"]["re"].flags & re.IGNORECASE
+        assert P.regexDB["foo_desc_2"]["re"].pattern == 'B%=:;"\\D'
+        assert P.regexDB["foo_desc_2"]["re"].flags & re.IGNORECASE
         assert P.regexDB["inline_description"]["re"].pattern == "unnamed"
         assert P.regexDB["regex_4"]["re"].pattern == "blank"
     finally:
@@ -68,6 +71,7 @@ def test_swap_load_matches_initial(tmp_path: Path, monkeypatch: Any) -> None:
         swapped = P._build_swap_snapshot()
         assert swapped is not None
         assert {name: entry["re"].pattern for name, entry in swapped.regex_db.items()} == initial
+        assert all(entry["re"].flags & re.IGNORECASE for entry in swapped.regex_db.values())
     finally:
         P.deinit(0)
 

@@ -11,7 +11,7 @@ use PHPUnit\Framework\TestCase;
  *
  * The DNSBL custom-list validator makes one bounded Python re pass over the
  * original form text. Python reports only rejected entries on stderr, retaining
- * source line numbers and the lowercased, inline-comment-stripped pattern.
+ * source line numbers and the raw, inline-comment-stripped pattern.
  */
 #[CoversFunction('pfb_dnsbl_regex_validation_errors')]
 final class DnsblRegexEntryErrorTest extends TestCase
@@ -149,16 +149,13 @@ final class DnsblRegexEntryErrorTest extends TestCase
 
 		$this->assertCount(1, $errors);
 		$this->assertStringContainsString('line 5:', $errors[0]);
-		$this->assertStringContainsString("'(?r)'", $errors[0]);
+		$this->assertStringContainsString("'(?R)'", $errors[0]);
 		$this->assertStringContainsString('Python', $errors[0]);
 	}
 
-	public function testUppercaseNamedGroupIsRejectedAfterResolverLowercases(): void
+	public function testUppercaseNamedGroupIsAcceptedWithoutResolverLowercasing(): void
 	{
-		$error = self::oneError("(?P<X>A)\n");
-		$this->assertStringContainsString('line 1:', $error);
-		$this->assertStringContainsString("'(?p<x>a)'", $error);
-		$this->assertStringContainsString('unknown extension', $error);
+		$this->assertSame([], self::errors("(?P<X>A)\n"));
 	}
 
 	/** @return array<string, array{string}> */
@@ -191,7 +188,7 @@ final class DnsblRegexEntryErrorTest extends TestCase
 	{
 		$error = self::oneError($pattern . "\n");
 		$this->assertStringContainsString('line 1:', $error);
-		$this->assertStringContainsString("'" . strtolower($pattern) . "'", $error);
+		$this->assertStringContainsString("'{$pattern}'", $error);
 		$this->assertStringContainsString('Python', $error);
 	}
 
@@ -346,7 +343,7 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		$this->assertSame(
 			[],
 			self::errors($line . "\n", TRUE),
-			'the resolver measures the stripped/trimmed/lowercased pattern, not the raw line'
+			'the resolver measures the stripped/trimmed pattern, not the raw line'
 		);
 	}
 

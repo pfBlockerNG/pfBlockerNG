@@ -306,8 +306,8 @@ class TestCatastrophicShapeHeuristic:
         # The two spellings are different regexes and each pins one half of the scanner.
         # Lowercase `\n{2,}` is a newline carrying an open-ended REPEAT; reading it as the
         # named-Unicode escape swallows the quantifier and blinds the gate to the run. This
-        # is the spelling the gate meets in production, because both consumers lowercase a
-        # pattern before admission (that fold is itself a defect -- issue #2079).
+        # is the spelling the gate meets in production; admission preserves raw pattern
+        # syntax (issue #2079), while query normalization stays separate.
         assert _regex_is_catastrophic_shape(r"\n{2,}\n{2,}\n{2,}") is True
         # Capital-N `\N{BULLET}` IS the named escape and is ONE atom, so its quantified run
         # is a run of three too -- green here only if the braces are consumed as part of the
