@@ -476,6 +476,15 @@ def _matching_applied_generation(
     return after if got == expected else None
 
 
+def _torn_sample(
+    got: dict[str, bool], expected_gen1: dict[str, bool], expected_gen2: dict[str, bool]
+) -> dict[str, dict[str, bool]]:
+    return {
+        "not_gen1": {n: got[n] for n in got if got[n] != expected_gen1[n]},
+        "not_gen2": {n: got[n] for n in got if got[n] != expected_gen2[n]},
+    }
+
+
 # --------------------------------------------------------------------------- #
 # THE test
 # --------------------------------------------------------------------------- #
@@ -530,7 +539,7 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
     stop = threading.Event()
     errors: list[str] = []
     stats: list[dict[str, int]] = []
-    _torn_samples: list[dict[str, bool]] = []
+    _torn_samples: list[dict[str, dict[str, bool]]] = []
     n_threads = 6
     observed_condition = threading.Condition()
     observed_generations = [0] * n_threads
@@ -572,11 +581,9 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
                 else:
                     local["torn"] += 1  # a mixed view -- the atomic swap must prevent this
                     if len(_torn_samples) < 4:
-                        # Capture which domains diverge from BOTH oracles, to make a
+                        # Capture which domains diverge from each oracle, to make a
                         # failure self-explanatory (which lane tore).
-                        _torn_samples.append(
-                            {n: got[n] for n in _PROBE_NAMES if got[n] not in (expected_gen1[n], expected_gen2[n])}
-                        )
+                        _torn_samples.append(_torn_sample(got, expected_gen1, expected_gen2))
                 applied_generation = _matching_applied_generation(
                     applied_before,
                     P._reload_read_generation(applied),
