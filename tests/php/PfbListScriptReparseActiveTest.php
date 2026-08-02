@@ -26,8 +26,8 @@ use PHPUnit\Framework\TestCase;
  * local-reuse branch instead of the network. No baseline -> the row stays on
  * the fast path; there is no Hold-specific branch anywhere.
  *
- * Full 2^3 truth table over (verbatim_reuse_ok, has_user_script, orig_exists);
- * only (TRUE, TRUE, TRUE) is TRUE.
+ * Full 2^3 truth table over (verbatim_reuse_ok, has_user_script, orig_exists):
+ * all eight rows are asserted below, and only (TRUE, TRUE, TRUE) is TRUE.
  */
 #[CoversFunction('pfb_list_script_reparse_active')]
 final class PfbListScriptReparseActiveTest extends TestCase
@@ -98,7 +98,50 @@ final class PfbListScriptReparseActiveTest extends TestCase
 	}
 
 	/**
-	 * Row 5 -- full truth table closed: all three conditions FALSE. FALSE.
+	 * Row 5 -- verbatim-reuse conditions hold, but neither a script nor a
+	 * baseline: the plain no-script feed on its unchanged fast path. FALSE.
+	 */
+	public function testVerbatimReuseOkNoScriptNoOrigIsFalse(): void
+	{
+		$this->assertFalse(
+			pfb_list_script_reparse_active(TRUE, FALSE, FALSE),
+			"verbatim_reuse_ok=TRUE, has_user_script=FALSE, orig_exists=FALSE -> FALSE\n" .
+			"expected: false\n" .
+			"got:      true"
+		);
+	}
+
+	/**
+	 * Row 6 -- reuse already rejected AND no baseline, script configured: the
+	 * normal download path owns this row. FALSE.
+	 */
+	public function testVerbatimReuseRejectedScriptConfiguredNoOrigIsFalse(): void
+	{
+		$this->assertFalse(
+			pfb_list_script_reparse_active(FALSE, TRUE, FALSE),
+			"verbatim_reuse_ok=FALSE, has_user_script=TRUE, orig_exists=FALSE -> FALSE\n" .
+			"expected: false\n" .
+			"got:      true"
+		);
+	}
+
+	/**
+	 * Row 7 -- reuse already rejected, no script, but a baseline exists: a
+	 * surviving '.orig' alone must never route a row to the reparse branch.
+	 * FALSE.
+	 */
+	public function testVerbatimReuseRejectedNoScriptOrigExistsIsFalse(): void
+	{
+		$this->assertFalse(
+			pfb_list_script_reparse_active(FALSE, FALSE, TRUE),
+			"verbatim_reuse_ok=FALSE, has_user_script=FALSE, orig_exists=TRUE -> FALSE\n" .
+			"expected: false\n" .
+			"got:      true"
+		);
+	}
+
+	/**
+	 * Row 8 -- full truth table closed: all three conditions FALSE. FALSE.
 	 */
 	public function testAllThreeFalseIsFalse(): void
 	{
