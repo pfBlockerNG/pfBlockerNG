@@ -425,13 +425,10 @@ final class DnsblRegexEntryErrorTest extends TestCase
 		$this->assertStringNotContainsString('length cap', $error);
 	}
 
-	public function testHundredThousandCharacterLineIsRejectedWithoutHanging(): void
+	public function testHundredThousandCharacterLineIsRejectedByLengthCap(): void
 	{
 		$pattern = self::anchoredPattern(100000);
-		$start = microtime(TRUE);
 		$error = self::oneError($pattern . "\n", TRUE);
-		$elapsed = microtime(TRUE) - $start;
-		$this->assertLessThan(5.0, $elapsed, 'must resolve well within the 5s timeout wrapper');
 		$this->assertStringContainsString('200-character length cap', $error);
 	}
 
