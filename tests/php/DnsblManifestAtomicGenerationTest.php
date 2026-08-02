@@ -115,6 +115,41 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		}
 	}
 
+	private function cleanupPublicationHolder(?int &$pid, mixed &$parent, ?Throwable &$cleanupError): void
+	{
+		if (is_resource($parent)) {
+			@fwrite($parent, "RELEASE\n");
+			try {
+				$event = trim($this->readEvent($parent, 'publication timeout holder cleanup'));
+				if ($event !== 'UNLOCKED') {
+					throw new RuntimeException(
+						"publication timeout holder cleanup expected UNLOCKED, got {$event}"
+					);
+				}
+			} catch (Throwable $error) {
+				$cleanupError ??= $error;
+			}
+			@fclose($parent);
+			$parent = NULL;
+		}
+		if (is_int($pid) && $pid > 0) {
+			$waited = pcntl_waitpid($pid, $status, WNOHANG);
+			if ($waited === 0 && function_exists('posix_kill')) {
+				@posix_kill($pid, SIGKILL);
+				$waited = pcntl_waitpid($pid, $status);
+			} elseif ($waited === 0) {
+				$waited = pcntl_waitpid($pid, $status);
+			}
+			if ($waited < 0 && $cleanupError === NULL) {
+				$cleanupError = new RuntimeException('publication timeout holder waitpid failed');
+			} elseif ($waited > 0 && (!pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0)
+				&& $cleanupError === NULL) {
+				$cleanupError = new RuntimeException('publication timeout holder exited unsuccessfully');
+			}
+			$pid = NULL;
+		}
+	}
+
 	private function assertContendedOperationTimesOut(callable $operation): void
 	{
 		$manifestBefore = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
@@ -587,47 +622,69 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		}
 
 		$lockPath   = dirname($GLOBALS['pfb']['unbound_py_sources']) . '/pfb_py_sources.lock';
-		[$holderParent, $holderChild] = $this->signalPair();
-		stream_set_timeout($holderParent, 5);
-		stream_set_timeout($holderChild, 5);
-		$pid = pcntl_fork();
-		if ($pid === -1) {
-			$this->markTestSkipped('pcntl_fork() failed.');
-		}
-		if ($pid === 0) {
-			fclose($holderParent);
-			$fp = fopen($lockPath, 'c');
-			if ($fp === FALSE || !flock($fp, LOCK_EX)) {
-				exit(1);	// never signal readiness without a REAL hold -- the parent
-					// would then run with no contention and a negative assertion
-					// ("no dispatch", "entry survived") would pass for the wrong reason
+		$holderParent = NULL;
+		$holderChild = NULL;
+		$pid = NULL;
+		$primaryError = NULL;
+		$cleanupError = NULL;
+		try {
+			[$holderParent, $holderChild] = $this->signalPair();
+			stream_set_timeout($holderParent, 5);
+			stream_set_timeout($holderChild, 5);
+			$pid = pcntl_fork();
+			if ($pid === -1) {
+				$this->markTestSkipped('pcntl_fork() failed.');
 			}
-			fwrite($holderChild, "LOCKED\n");
-			$this->expectChildEvent($holderChild, 'RELEASE', 'publication timeout holder release');
-			flock($fp, LOCK_UN);
-			fclose($fp);
-			fwrite($holderChild, "UNLOCKED\n");
+			if ($pid === 0) {
+				fclose($holderParent);
+				$fp = @fopen($lockPath, 'c');
+				if ($fp === FALSE || !@flock($fp, LOCK_EX)) {
+					@fwrite($holderChild, "HOLDER_ERROR\n");
+					@fclose($holderChild);
+					exit(1);
+				}
+				fwrite($holderChild, "LOCKED\n");
+				$this->expectChildEvent($holderChild, 'RELEASE', 'publication timeout holder release');
+				@flock($fp, LOCK_UN);
+				fclose($fp);
+				fwrite($holderChild, "UNLOCKED\n");
+				fclose($holderChild);
+				exit(0);
+			}
 			fclose($holderChild);
-			exit(0);
+			$holderChild = NULL;
+			$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'publication timeout holder acquisition'));
+
+			$result = pfb_unbound_py_publication_lock(0.15);
+
+			$this->assertFalse($result, 'a contended publication lock acquire past its own budget must return FALSE');
+
+			$log = (string) file_get_contents($GLOBALS['pfb']['errlog']);
+			$this->assertStringContainsString('DNSBL publication lock timed out', $log,
+				'a genuine lock-acquire expiry must log "timed out", got errlog=' . var_export($log, TRUE));
+			$this->assertStringNotContainsString('DNSBL publication lock unavailable', $log,
+				'a genuine expiry must NOT log "unavailable" -- that string is reserved for a real flock() '
+				. 'error or an fopen() failure, never a mere timeout');
+			fwrite($holderParent, "RELEASE\n");
+			$this->assertSame("UNLOCKED\n", $this->readEvent($holderParent, 'publication timeout holder release'));
+			fclose($holderParent);
+			$holderParent = NULL;
+			pcntl_waitpid($pid, $waitStatus);
+			$this->assertTrue(pcntl_wifexited($waitStatus) && pcntl_wexitstatus($waitStatus) === 0,
+				'publication timeout holder must exit cleanly after the release event');
+			$pid = NULL;
+		} catch (Throwable $error) {
+			$primaryError = $error;
 		}
-		fclose($holderChild);
-		$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'publication timeout holder acquisition'));
-
-		$result = pfb_unbound_py_publication_lock(0.15);
-
-		$this->assertFalse($result, 'a contended publication lock acquire past its own budget must return FALSE');
-
-		$log = (string) file_get_contents($GLOBALS['pfb']['errlog']);
-		$this->assertStringContainsString('DNSBL publication lock timed out', $log,
-			'a genuine lock-acquire expiry must log "timed out", got errlog=' . var_export($log, TRUE));
-		$this->assertStringNotContainsString('DNSBL publication lock unavailable', $log,
-			'a genuine expiry must NOT log "unavailable" -- that string is reserved for a real flock() '
-			. 'error or an fopen() failure, never a mere timeout');
-		fwrite($holderParent, "RELEASE\n");
-		$this->assertSame("UNLOCKED\n", $this->readEvent($holderParent, 'publication timeout holder release'));
-		fclose($holderParent);
-		pcntl_waitpid($pid, $waitStatus);
-		$this->assertTrue(pcntl_wifexited($waitStatus) && pcntl_wexitstatus($waitStatus) === 0,
-			'publication timeout holder must exit cleanly after the release event');
+		$this->cleanupPublicationHolder($pid, $holderParent, $cleanupError);
+		if (is_resource($holderChild)) {
+			@fclose($holderChild);
+		}
+		if ($primaryError !== NULL) {
+			throw $primaryError;
+		}
+		if ($cleanupError !== NULL) {
+			throw $cleanupError;
+		}
 	}
 }
