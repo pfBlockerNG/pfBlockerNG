@@ -5142,6 +5142,33 @@
             }
         ]
     },
+    "pfb_list_script_reparse_active": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "verbatim_reuse_ok",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "has_user_script",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "orig_exists",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_list_section_for_vtype": {
         "returnsRef": false,
         "returnType": "string",

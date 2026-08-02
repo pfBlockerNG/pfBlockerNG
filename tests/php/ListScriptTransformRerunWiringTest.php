@@ -50,9 +50,16 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 
 		$window = substr(self::$applySource, $asnTouchPos, $staticHoldPos - $asnTouchPos);
 
-		$this->assertStringContainsString('!$pfb_user_script', $window,
-			'issue #1960: the IP fast path must be gated by the user-script term -- a configured '
-			. 'script must re-run its transform every pass instead of requiring Force Reload');
+		// issue #1278: supersedes the bare !$pfb_user_script gate this row originally pinned --
+		// that shape forced a Hold row with a configured script through to a network download
+		// every pass (the #1278 regression). The script term now only pushes a row off the fast
+		// path when a local '.orig' baseline exists to reparse (see PfbListScriptReparseActiveTest
+		// / ListScriptReparseWiringTest for the full fix and its own coverage).
+		$this->assertStringContainsString('!$pfb_script_reparse', $window,
+			'issue #1960/#1278: the IP fast path must be gated by the script-reparse term (which '
+			. 'requires a local .orig baseline) -- a configured script re-runs its transform every '
+			. 'pass it has a baseline to reparse, but a Hold row with none stays on the fast path '
+			. 'instead of falling through to the network');
 	}
 
 	// -----------------------------------------------------------------
@@ -87,20 +94,22 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 
 	public function testDnsblFastPathCarriesUserScriptTerm(): void
 	{
-		// Pinned as the whole gated statement head rather than a window opened on a
-		// bare 'pfb_dnsbl_verbatim_reuse_active(' token: that token also occurs inside
-		// the production comments describing this gate and the #1083 asymmetry, so a
-		// window anchored on it opens on prose instead of the call it claims to pin.
+		// issue #1278: supersedes the bare '!$pfb_dnsbl_user_script && pfb_dnsbl_verbatim_reuse_active('
+		// shape this row originally pinned -- that gate forced a Hold row with a configured script
+		// through to a network download every pass (the #1278 regression). Pinned as the whole
+		// gated statement head rather than a window opened on a bare token: 'pfb_dnsbl_verbatim_reuse_active('
+		// also occurs inside the production comments describing this gate and the #1083 asymmetry,
+		// so a window anchored on it opens on prose instead of the call it claims to pin.
 		$this->assertStringContainsString(
-			'if (!$pfb_dnsbl_user_script && pfb_dnsbl_verbatim_reuse_active(',
+			'if ($pfb_dnsbl_verbatim_reuse && !$pfb_dnsbl_script_reparse) {',
 			self::$applySource,
-			'issue #1960: the DNSBL fast path must be gated by the user-script term at the call '
-			. 'site -- pfb_dnsbl_verbatim_reuse_active() itself is untouched (owned elsewhere), '
-			. 'same contract as the IP loop');
+			'issue #1960/#1278: the DNSBL fast path must be gated by the script-reparse term (which '
+			. 'requires a local .orig baseline), not the bare has_user_script term -- same contract '
+			. 'as the IP loop');
 
 		// The gate must sit on the fast path that logs "exists."/"static hold.", not on
 		// some other caller: the gated head is the LAST thing before that log.
-		$gatePos = strpos(self::$applySource, 'if (!$pfb_dnsbl_user_script && pfb_dnsbl_verbatim_reuse_active(');
+		$gatePos = strpos(self::$applySource, 'if ($pfb_dnsbl_verbatim_reuse && !$pfb_dnsbl_script_reparse) {');
 		$this->assertNotFalse($gatePos, 'vacuity: the gated DNSBL fast-path statement must exist');
 		$existsPos = strpos(self::$applySource, '{$logtab} exists.', $gatePos);
 		$this->assertNotFalse($existsPos,
@@ -125,7 +134,10 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 		// Anchored on the gated statement head, not a bare
 		// 'pfb_dnsbl_verbatim_reuse_active(' token -- that token also occurs in the
 		// production comments above the call, which would move this anchor onto prose.
-		$fastPathPos = strpos(self::$applySource, 'if (!$pfb_dnsbl_user_script && pfb_dnsbl_verbatim_reuse_active(');
+		// issue #1278: the gate itself moved from the bare user-script term to the
+		// script-reparse term, but $pfb_dnsbl_user_script is still consumed just before it
+		// (now via pfb_list_script_reparse_active()), so the ordering this row pins is unchanged.
+		$fastPathPos = strpos(self::$applySource, 'if ($pfb_dnsbl_verbatim_reuse && !$pfb_dnsbl_script_reparse) {');
 		$this->assertNotFalse($fastPathPos, 'vacuity: the gated DNSBL fast path must exist');
 		$this->assertLessThan($fastPathPos, $assignPos,
 			'$pfb_dnsbl_user_script must be computed before the fast path that consumes it');
@@ -160,6 +172,12 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 			. "(pfb_dnsbl_norm_reuse_skip() is FALSE there since \$downloaded_fresh is FALSE), silently "
 			. 'changing #1083 Rebuild/pfb_dnsbl_hold_stale_rebuild_skip/'
 			. 'pfb_dnsbl_stale_rebuild_converge_txt behaviour that nobody asked for');
+
+		// issue #1278: the same asymmetry applies to the NEW script-reparse term -- this
+		// re-call must stay ungated by it too, same reasoning as $pfb_dnsbl_user_script above.
+		$this->assertStringNotContainsString('$pfb_dnsbl_script_reparse', $statement,
+			'issue #1960/#1278: the #1083 stale-generation rebuild re-call must stay ungated by the '
+			. 'new script-reparse term too -- same asymmetry reasoning as $pfb_dnsbl_user_script above');
 	}
 
 	// -----------------------------------------------------------------
@@ -175,6 +193,27 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 		$this->assertSame(2, $count,
 			'a term added to one loop only is the exact defect issue #1960 forbids -- both the IP '
 			. 'and DNSBL loops must call the shared helper exactly once each');
+
+		// N4: a global count of 2 passes even if BOTH call sites sat inside the SAME loop --
+		// prove they straddle the two loops instead. The IP loop's own list-collection
+		// comment sits strictly AFTER the whole DNSBL alias loop and BEFORE the IP loop's
+		// per-row body, so it is a token that only occurs between the two loops.
+		$firstCallPos = strpos(self::$applySource, 'pfb_list_user_script_active($pfb_');
+		$this->assertNotFalse($firstCallPos, 'vacuity: the first call site must exist');
+		$secondCallPos = strpos(self::$applySource, 'pfb_list_user_script_active($pfb_', $firstCallPos + 1);
+		$this->assertNotFalse($secondCallPos, 'vacuity: the second call site must exist');
+
+		$boundaryPos = strpos(self::$applySource,
+			'// Collect lists and custom list configuration and format into one array ($lists).');
+		$this->assertNotFalse($boundaryPos, "vacuity: the IP loop's list-collection boundary comment must exist");
+
+		$this->assertLessThan($boundaryPos, $firstCallPos,
+			'the first pfb_list_user_script_active( call site must sit in the DNSBL loop, before the '
+			. "IP loop's boundary comment");
+		$this->assertGreaterThan($boundaryPos, $secondCallPos,
+			'the second pfb_list_user_script_active( call site must sit in the IP loop, after the '
+			. 'DNSBL loop -- a regression that moved both calls into ONE loop must fail here even '
+			. 'though the global count above stays 2');
 	}
 
 	// -----------------------------------------------------------------
