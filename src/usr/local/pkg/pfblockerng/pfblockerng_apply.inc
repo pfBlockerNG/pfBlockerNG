@@ -127,7 +127,7 @@ function pfb_ip_parse_line_replay(string $raw_line, array $config, int $line_num
 	];
 }
 
-function pfb_ip_recompute_order_scope(bool $save, bool $enabled, bool $dup_on, bool $drep_on,
+function pfb_ip_recompute_order_scope(mixed $save, bool $enabled, bool $dup_on, bool $drep_on,
     bool $prep_on): bool {
 	return !$save && $enabled && pfb_cross_list_scope($dup_on, $drep_on || $prep_on);
 }
