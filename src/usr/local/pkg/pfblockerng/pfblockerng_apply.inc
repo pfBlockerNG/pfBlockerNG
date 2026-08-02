@@ -334,6 +334,21 @@ function pfb_list_script_failure_record(string $facility, string $item, string $
 	pfb_sync_status_open($facility, $item, 'script', $message, $ledger_dir);
 }
 
+/**
+ * pfb_list_user_script_active -- issue #1960: a feed with a configured
+ * pre/post script must never take an early verbatim-reuse fast path, because
+ * the transform has to re-run every pass; this is the same has_user_script
+ * term the IP and DNSBL loops' normalization-level reuse-skip gates (the
+ * norm_reuse_skip pair, one per loop) already carry at the normalization
+ * level. One helper for both loops keeps them in lock-step by construction.
+ * $script_pre/$script_post stay untyped: pfb_resolve_list_script() returns
+ * FALSE or a string, and both call sites hold that same union.
+ */
+function pfb_list_user_script_active($script_pre, $script_post): bool {
+	return ($script_pre && is_file("{$script_pre}")) ||
+	    ($script_post && is_file("{$script_post}"));
+}
+
 // Main pfBlockerNG function
 function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
@@ -1623,6 +1638,10 @@ function sync_package_pfblockerng($cron='') {
 					if (!empty($list['script_post'])) {
 						$pfb_dnsbl_script_post = pfb_resolve_list_script($list['script_post']);
 					}
+					// issue #1960: computed once per ALIAS (mirrors where the scripts
+					// are resolved above) -- must dominate both the verbatim fast path
+					// below and the later normalize/reuse-skip call it also gates.
+					$pfb_dnsbl_user_script = pfb_list_user_script_active($pfb_dnsbl_script_pre, $pfb_dnsbl_script_post);
 
 					foreach ($list['row'] as $key => $row) {
 						if (!empty($row['url']) && $row['state'] != 'Disabled') {
@@ -1693,7 +1712,13 @@ function sync_package_pfblockerng($cron='') {
 							$staging_current_generation = pfb_dnsbl_staging_is_current_generation(
 								pfb_dnsbl_staging_first_line("{$pfbfolder}/{$header}.txt"));
 
-							if (pfb_dnsbl_verbatim_reuse_active(
+							// issue #1960: a configured pre/post script must never take this
+							// verbatim fast path -- applied at the call site (not as a
+							// parameter) so pfb_dnsbl_verbatim_reuse_active() keeps its
+							// existing signature and its other caller's meaning (the
+							// #1083 stale-generation re-call below is a DIFFERENT question
+							// and stays deliberately ungated -- see the comment there).
+							if (!$pfb_dnsbl_user_script && pfb_dnsbl_verbatim_reuse_active(
 								$txt_exists,
 								file_exists("{$pfbfolder}/{$header}.update"),
 								file_exists("{$pfbfolder}/{$header}.fail"),
@@ -1722,10 +1747,21 @@ function sync_package_pfblockerng($cron='') {
 								$alias_cnt		= $alias_cnt + $list_cnt;
 							}
 							else {
-								// #1083: verbatim reuse was rejected ONLY for stale staging
-								// generation (every other reuse condition still holds) -- rebuild
-								// via the same reparse-from-.orig machinery a Reload uses, never a
-								// network refetch when .orig is available.
+								// #1083: verbatim reuse was rejected because of the FILE-STATE
+								// conditions (staging generation, txt/update/fail existence, reuse
+								// toggle) -- rebuild via the same reparse-from-.orig machinery a
+								// Reload uses, never a network refetch when .orig is available.
+								// issue #1960: this re-call is deliberately NOT gated by
+								// $pfb_dnsbl_user_script -- it answers a DIFFERENT question than the
+								// fast path above ("among the file-state conditions, was stale
+								// staging generation the ONLY reason reuse was rejected?"). A
+								// stale-generation .txt with a configured script still re-runs its
+								// pre-script on this cheaper reparse (the normalize/reuse-skip call
+								// below is FALSE anyway here, since $downloaded_fresh is FALSE);
+								// gating this call would only force an unneeded network refetch for
+								// that case, silently changing #1083's Rebuild /
+								// pfb_dnsbl_hold_stale_rebuild_skip / pfb_dnsbl_stale_rebuild_converge_txt
+								// behaviour that nobody asked for.
 								$stale_generation_rebuild = !$staging_current_generation &&
 									pfb_dnsbl_verbatim_reuse_active(
 										$txt_exists,
@@ -1822,8 +1858,6 @@ function sync_package_pfblockerng($cron='') {
 								// content is byte-identical to the previous pass reuses the staged
 								// '.txt' the same way the verbatim-reuse branch does.
 								$pfb_norm = pfb_feed_normalize("{$file_dwn}.orig");
-								$pfb_dnsbl_user_script = ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) ||
-								    ($pfb_dnsbl_script_post && is_file("{$pfb_dnsbl_script_post}"));
 								if (pfb_dnsbl_norm_reuse_skip($downloaded_fresh, (bool) $custom, $orig_content_stale,
 								    $pfb_norm['changed'], file_exists("{$pfbfolder}/{$header}.txt"), $staging_current_generation,
 								    $pfb_dnsbl_user_script)) {
@@ -3233,6 +3267,10 @@ function sync_package_pfblockerng($cron='') {
 						if (isset($list['script_post']) && !empty($list['script_post'])) {
 							$pfb_script_post = pfb_resolve_list_script($list['script_post']);
 						}
+						// issue #1960: computed once per ROW (mirrors where the scripts are
+						// resolved above) -- must dominate both the verbatim fast path below
+						// and the later normalize/reuse-skip call it also gates.
+						$pfb_user_script = pfb_list_user_script_active($pfb_script_pre, $pfb_script_post);
 
 						// Determine 'list' details (return array $pfbarr)
 						if (isset($list['dnsblip'])) {
@@ -3261,7 +3299,11 @@ function sync_package_pfblockerng($cron='') {
 							touch("{$pfbfolder}/{$header}.update");
 						}
 
-						if (file_exists("{$pfbfolder}/{$header}.txt") &&
+						// issue #1960: a configured pre/post script must never take this
+						// verbatim fast path -- its transform has to re-run every pass, or an
+						// edited script would silently require a Force Reload to take effect.
+						if (!$pfb_user_script &&
+						    file_exists("{$pfbfolder}/{$header}.txt") &&
 						    !file_exists("{$pfbfolder}/{$header}.update") &&
 						    !file_exists("{$pfbfolder}/{$header}.fail") &&
 						    $pfbreuse == '') {
@@ -3444,11 +3486,6 @@ function sync_package_pfblockerng($cron='') {
 									$pftype = 'auto';
 								}
 							}
-
-							// IPv4/6 Advanced Tunable - a configured pre or post script means
-							// the feed must reparse every run (#1797 reuse-skip stays off).
-							$pfb_user_script = ($pfb_script_pre && is_file("{$pfb_script_pre}")) ||
-							    ($pfb_script_post && is_file("{$pfb_script_post}"));
 
 							// issue #1925: normalize once per file; the parse below reads .norm
 							// (raw .orig on normalize failure). A fresh download whose NORMALIZED
