@@ -7,15 +7,17 @@ with a spurious U+FFFD.
 Scenario (self-encapsulated: log truncated back to its exact pre-test byte
 size in teardown, loud assertion that the restore took):
   Given three ``unified.log`` rows -- one ``Block,``-prefixed IP row, one
-        verbatim DNSBL row, one verbatim DNS-reply row -- each carrying a
-        value shaped ``<marker><'a' padding><'é'><tail>`` so its multibyte
-        character's lead byte lands exactly on that row's truncation cut
+        ``DNSBL_CNAME`` row carrying blocked-domain and CNAME values, one
+        verbatim DNS-reply row -- each value shaped
+        ``<marker><'a' padding><'é'><tail>`` so its multibyte character's lead
+        byte lands exactly on that value's truncation cut
         (see ``pfblockerng_alerts.php``'s ``convert_ip_log`` /
         ``convert_dnsbl_log`` / ``convert_dns_reply_log``)
   When  GET ``pfblockerng_alerts.php?view=unified``
   Then  the Tier-A render oracle passes
-  And   each row is truncated (the ``<small>...</small>`` ellipsis renders)
-  And   each row's multibyte character survives WHOLE (no U+FFFD, 'é' present)
+  And   all four markers locate their rows
+  And   each value is truncated (the ``<small>...</small>`` ellipsis renders)
+  And   each value's multibyte character survives WHOLE (no U+FFFD, 'é' present)
 
 ``?view=unified`` needs no config precondition (no ``pfb_dnsbl`` toggle, no
 sinkhole VIP): the Unified loop reads only ``unified.log``, and its
@@ -83,14 +85,17 @@ def _mb_straddle(cut: int, marker: str, tail: str, mb_char: str = "é") -> str:
 IP_MARKER = "SMKIP09"
 IP_FEED = _mb_straddle(16, IP_MARKER, "trailingfeed")
 
-# Site 2 (convert_dnsbl_log, blocked domain $f2): wide-gate cut=59 (mode
-# 'Unified' != 'unified' is case-sensitive, so the narrow arm is unreachable).
+# Site 2 (convert_dnsbl_log, blocked domain $f2): Unified cut=39; below wide gate 60.
 DNSBL_MARKER = "SMKDNSBL02"
-DNSBL_DOMAIN = _mb_straddle(59, DNSBL_MARKER, "trailing-domain-suffix.example")
+DNSBL_DOMAIN = _mb_straddle(39, DNSBL_MARKER, "tail")
 
-# Site 7 (convert_dns_reply_log, replied domain $fields[6]): wide-gate cut=44.
+# Site 3 (convert_dnsbl_log, CNAME evaluated domain $f7): Unified cut=31; below wide gate 52.
+CNAME_MARKER = "SMKDNSBL03"
+CNAME_DOMAIN = _mb_straddle(31, CNAME_MARKER, "tail")
+
+# Site 7 (convert_dns_reply_log, replied domain $fields[6]): Unified cut=29; below wide gate 45.
 REPLY_MARKER = "SMKREPLY07"
-REPLY_DOMAIN = _mb_straddle(44, REPLY_MARKER, "trailing-domain-suffix.example")
+REPLY_DOMAIN = _mb_straddle(29, REPLY_MARKER, "tail")
 
 # unified.log row shapes (test_alerts_render_verify.py's _ip_line/_dnsbl_line/
 # _dns_reply_line document the exact CSV layouts these mirror):
@@ -104,15 +109,17 @@ _IP_LINE = (
     f"192.0.2.201,10.0.0.5,12345,443,in,US,RVMbAlias,192.0.2.201,{IP_FEED},"
     "Unknown,Unknown,Unknown,,,+\n"
 )
-_DNSBL_LINE = f"DNSBL-python,{FIXED_TS},{DNSBL_DOMAIN},127.0.0.1,Python,DNSBL,RVMbGroup,{DNSBL_DOMAIN},RVMbFeed,+,A\n"
+_DNSBL_LINE = "DNSBL-python,{},{},127.0.0.1,Python,DNSBL_CNAME,RVMbGroup,{},RVMbFeed,+,A\n".format(
+    FIXED_TS, DNSBL_DOMAIN, CNAME_DOMAIN
+)
 _DNS_REPLY_LINE = f"DNS-reply,{FIXED_TS},A,A,A,300,{REPLY_DOMAIN},127.0.0.1,203.0.113.9,US\n"
 
 _ALL_LINES = _IP_LINE + _DNSBL_LINE + _DNS_REPLY_LINE
 
 
 @pytest.fixture
-def seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[tuple[str, ...]]:
-    """Append the three straddling rows to ``unified.log``; restore its exact byte size after.
+def seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[tuple[tuple[str, str, int], ...]]:
+    """Append the three rows carrying four straddling values; restore log size after.
 
     Yields the markers it actually seeded, so the test iterates over the
     fixture's own output rather than module constants -- the assertions cannot
@@ -142,7 +149,12 @@ def seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[tuple[str, ...]]:
     )
     assert append.returncode == 0, f"failed to append the fixture rows to {UNIFIED_LOG}: stderr={append.stderr!r}"
 
-    yield (IP_MARKER, DNSBL_MARKER, REPLY_MARKER)
+    yield (
+        (IP_MARKER, IP_FEED, 16),
+        (DNSBL_MARKER, DNSBL_DOMAIN, 39),
+        (CNAME_MARKER, CNAME_DOMAIN, 31),
+        (REPLY_MARKER, REPLY_DOMAIN, 29),
+    )
 
     restore = vm.ssh(f"truncate -s {original_size} {UNIFIED_LOG}", timeout=15)
     assert restore.returncode == 0, f"failed to restore {UNIFIED_LOG} size: stderr={restore.stderr!r}"
@@ -153,9 +165,9 @@ def seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[tuple[str, ...]]:
 
 
 def test_unified_rows_keep_straddling_multibyte_char_whole(
-    smoke_vm: SmokeVM, webui: WebUI, seeded_unified_rows: tuple[str, ...]
+    smoke_vm: SmokeVM, webui: WebUI, seeded_unified_rows: tuple[tuple[str, str, int], ...]
 ) -> None:
-    """Every seeded row's straddling character survives whole; none renders U+FFFD."""
+    """Every seeded value's straddling character survives whole; none renders U+FFFD."""
     guard = PhpErrorLogGuard(smoke_vm)
     guard.snapshot()
 
@@ -165,8 +177,18 @@ def test_unified_rows_keep_straddling_multibyte_char_whole(
 
     body = resp.text
     assert seeded_unified_rows, "the seeding fixture yielded no markers -- nothing would be asserted"
-    for marker in seeded_unified_rows:
+    for marker, value, cut in seeded_unified_rows:
         row = row_containing(body, marker)
+        expected = value[:cut] + "<small>...</small>"
+        assert expected in row, (
+            f"row for marker {marker!r} did not show exact cut {cut} with ellipsis; "
+            f"expected fragment {expected!r}:\n{row}"
+        )
+        unexpected = expected + value[cut:]
+        assert unexpected not in row, (
+            f"row for marker {marker!r} rendered the seeded tail after its ellipsis "
+            f"(unexpected fragment {unexpected!r}):\n{row}"
+        )
         assert "�" not in row, (
             f"row for marker {marker!r} rendered U+FFFD -- a byte-based cut dangled the "
             f"straddling multibyte character's lead byte instead of keeping it whole:\n{row}"

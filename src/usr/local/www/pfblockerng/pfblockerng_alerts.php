@@ -2263,8 +2263,8 @@ function convert_dnsbl_log($mode, $fields) {
 	if (strpos($f2, 'xn--') !== FALSE) {
 		$f2 = "{$f2} [" . idn_to_utf8($f2) . "]";
 	}
-	if (strlen($f2) >= ($mode != 'unified' ? 60 : 40)) {
-		$f2 = pfb_hsc(pfb_truncate($f2, ($mode != 'unified' ? 59 : 39))) . "<small>...</small>";
+	if (strlen($f2) >= ($mode != 'Unified' ? 60 : 40)) {
+		$f2 = pfb_hsc(pfb_truncate($f2, ($mode != 'Unified' ? 59 : 39))) . "<small>...</small>";
 	} else {
 		$f2 = pfb_hsc($f2);
 	}
@@ -2274,8 +2274,8 @@ function convert_dnsbl_log($mode, $fields) {
 		if (strpos($f7, 'xn--') !== FALSE) {
 			$f7		= "{$f7} [" . idn_to_utf8($f7) . "]";
 		}
-		if (strlen($f7) >= ($mode != 'unified' ? 52 : 32)) {
-			$f7		= pfb_hsc(pfb_truncate($f7, ($mode != 'unified' ? 51 : 31))) . "<small>...</small>";
+		if (strlen($f7) >= ($mode != 'Unified' ? 52 : 32)) {
+			$f7		= pfb_hsc(pfb_truncate($f7, ($mode != 'Unified' ? 51 : 31))) . "<small>...</small>";
 		} else {
 			$f7		= pfb_hsc($f7);
 		}
@@ -2607,9 +2607,9 @@ function convert_dns_reply_log($mode, $fields) {
 
 	// Truncate long Domain names
 	$pfb_title6 = '';
-	if (strlen($fields[6]) >= ($mode != 'unified' ? 45 : 30)) {
+	if (strlen($fields[6]) >= ($mode != 'Unified' ? 45 : 30)) {
 		$pfb_title6	= pfb_hsc($fields[6]);
-		$fields[6]	= pfb_hsc(pfb_truncate($fields[6], ($mode != 'unified' ? 44 : 29))) . "<small>...</small>";
+		$fields[6]	= pfb_hsc(pfb_truncate($fields[6], ($mode != 'Unified' ? 44 : 29))) . "<small>...</small>";
 	} else {
 		$fields[6]	= pfb_hsc($fields[6]);
 	}

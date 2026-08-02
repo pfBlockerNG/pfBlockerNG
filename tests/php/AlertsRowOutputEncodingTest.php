@@ -177,6 +177,40 @@ final class AlertsRowOutputEncodingTest extends TestCase
         $this->assertStringNotContainsString('&amp;', $html, 'benign input has no & to encode');
     }
 
+    public function test_reports_dnsbl_domain_and_cname_keep_wide_truncation_widths(): void
+    {
+        $domain = 'WIDE-DNSBL02-' . str_repeat('a', 55) . '-tail';
+        $cname  = 'WIDE-DNSBL03-' . str_repeat('b', 47) . '-tail';
+        $this->assertGreaterThan(60, strlen($domain));
+        $this->assertGreaterThan(52, strlen($cname));
+        $fields    = $this->dnsblFields($domain, '10.0.0.8', 'WideGroup', 'WideFeed');
+        $fields[5] = 'DNSBL_CNAME';
+        $fields[7] = $cname;
+
+        $html = $this->renderDnsblRow($fields);
+
+        $this->assertStringContainsString(
+            'Domain: ' . substr($domain, 0, 59) . '<small>...</small>',
+            $html,
+            'Reports DNSBL domains must retain the existing 59-character display width'
+        );
+        $this->assertStringContainsString(
+            'CNAME: ' . substr($cname, 0, 51) . '<small>...</small>',
+            $html,
+            'Reports DNSBL CNAMEs must retain the existing 51-character display width'
+        );
+        $this->assertStringNotContainsString(
+            'Domain: ' . substr($domain, 0, 39) . '<small>...</small>',
+            $html,
+            'Reports DNSBL domains must not use the Unified 39-character display width'
+        );
+        $this->assertStringNotContainsString(
+            'CNAME: ' . substr($cname, 0, 31) . '<small>...</small>',
+            $html,
+            'Reports DNSBL CNAMEs must not use the Unified 31-character display width'
+        );
+    }
+
     public function test_invalid_utf8_byte_in_domain_renders_substituted_not_blanked(): void
     {
         // issue #1814: a single invalid-UTF-8 byte (0xFF is never valid in any UTF-8
