@@ -101,4 +101,21 @@ final class AlertsStatHostnameCellTest extends TestCase
         $this->assertStringNotContainsString('&lt;', $cell, 'benign input must not produce stray entities');
         $this->assertStringNotContainsString('&amp;', $cell, 'benign input has no & to encode');
     }
+
+    public function test_character_gate_hostname_renders_complete_value_without_ellipsis(): void
+    {
+        $resolved = 'CG11' . str_repeat('界', 14);
+        while (strlen($resolved) < 45) {
+            $resolved .= '界';
+        }
+        $this->assertGreaterThanOrEqual(45, strlen($resolved));
+        $this->assertLessThan(45, mb_strlen($resolved, 'UTF-8'));
+
+        $cell = pfb_stat_hostname_cell($resolved);
+        $escaped = pfb_hsc($resolved);
+
+        $this->assertStringContainsString("<small>{$escaped}</small>", $cell);
+        $this->assertStringNotContainsString($escaped . '<small>...</small>', $cell);
+        $this->assertStringNotContainsString('title="', $cell);
+    }
 }
