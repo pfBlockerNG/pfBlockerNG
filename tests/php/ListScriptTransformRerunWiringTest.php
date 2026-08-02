@@ -87,18 +87,24 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 
 	public function testDnsblFastPathCarriesUserScriptTerm(): void
 	{
-		$callPos = strpos(self::$applySource, 'pfb_dnsbl_verbatim_reuse_active(');
-		$this->assertNotFalse($callPos, 'vacuity: the DNSBL verbatim-reuse call site must exist');
-
-		$existsPos = strpos(self::$applySource, '{$logtab} exists.', $callPos);
-		$this->assertNotFalse($existsPos, 'vacuity: the DNSBL fast-path "exists." log must exist');
-
-		$window = substr(self::$applySource, $callPos, $existsPos - $callPos);
-
-		$this->assertStringContainsString('!$pfb_dnsbl_user_script', $window,
+		// Pinned as the whole gated statement head rather than a window opened on a
+		// bare 'pfb_dnsbl_verbatim_reuse_active(' token: that token also occurs inside
+		// the production comments describing this gate and the #1083 asymmetry, so a
+		// window anchored on it opens on prose instead of the call it claims to pin.
+		$this->assertStringContainsString(
+			'if (!$pfb_dnsbl_user_script && pfb_dnsbl_verbatim_reuse_active(',
+			self::$applySource,
 			'issue #1960: the DNSBL fast path must be gated by the user-script term at the call '
 			. 'site -- pfb_dnsbl_verbatim_reuse_active() itself is untouched (owned elsewhere), '
 			. 'same contract as the IP loop');
+
+		// The gate must sit on the fast path that logs "exists."/"static hold.", not on
+		// some other caller: the gated head is the LAST thing before that log.
+		$gatePos = strpos(self::$applySource, 'if (!$pfb_dnsbl_user_script && pfb_dnsbl_verbatim_reuse_active(');
+		$this->assertNotFalse($gatePos, 'vacuity: the gated DNSBL fast-path statement must exist');
+		$existsPos = strpos(self::$applySource, '{$logtab} exists.', $gatePos);
+		$this->assertNotFalse($existsPos,
+			'the gated statement must be the DNSBL verbatim-reuse fast path -- its branch logs "exists."');
 	}
 
 	// -----------------------------------------------------------------
@@ -116,8 +122,11 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 		$assignPos = strpos(self::$applySource, '$pfb_dnsbl_user_script = ');
 		$this->assertNotFalse($assignPos, 'vacuity: the assignment must exist');
 
-		$fastPathPos = strpos(self::$applySource, 'pfb_dnsbl_verbatim_reuse_active(');
-		$this->assertNotFalse($fastPathPos, 'vacuity: the DNSBL fast path must exist');
+		// Anchored on the gated statement head, not a bare
+		// 'pfb_dnsbl_verbatim_reuse_active(' token -- that token also occurs in the
+		// production comments above the call, which would move this anchor onto prose.
+		$fastPathPos = strpos(self::$applySource, 'if (!$pfb_dnsbl_user_script && pfb_dnsbl_verbatim_reuse_active(');
+		$this->assertNotFalse($fastPathPos, 'vacuity: the gated DNSBL fast path must exist');
 		$this->assertLessThan($fastPathPos, $assignPos,
 			'$pfb_dnsbl_user_script must be computed before the fast path that consumes it');
 
