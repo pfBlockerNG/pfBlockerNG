@@ -57,6 +57,7 @@ final class TickSafeSearchReservationTest extends TestCase
 		$startedPath = "{$this->dir}/started.log";
 		$callsPath   = "{$this->dir}/calls.log";
 		$goPath      = "{$this->dir}/go";
+		$openersReleasePath = "{$this->dir}/openers-release";
 		$releasePath = "{$this->dir}/release";
 		$pids = [];
 
@@ -69,7 +70,18 @@ final class TickSafeSearchReservationTest extends TestCase
 				try {
 					file_put_contents($readyPath, getmypid() . "\n", FILE_APPEND | LOCK_EX);
 					$this->waitForPath($goPath, 3.0);
-					file_put_contents($startedPath, getmypid() . "\n", FILE_APPEND | LOCK_EX);
+					$opener = static function (string $lockPath) use ($startedPath, $openersReleasePath): mixed {
+						file_put_contents($startedPath, getmypid() . "\n", FILE_APPEND | LOCK_EX);
+						$deadline = microtime(TRUE) + 3.0;
+						while (!is_file($openersReleasePath) && microtime(TRUE) < $deadline) {
+							usleep(1000);
+						}
+						if (!is_file($openersReleasePath)) {
+							throw new RuntimeException('timed out waiting for opener release');
+						}
+						$handle = fopen($lockPath, 'c');
+						return $handle;
+					};
 					$refresh = static function () use ($callsPath, $releasePath): void {
 						file_put_contents($callsPath, getmypid() . "\n", FILE_APPEND | LOCK_EX);
 						$deadline = microtime(TRUE) + 3.0;
@@ -77,7 +89,7 @@ final class TickSafeSearchReservationTest extends TestCase
 							usleep(1000);
 						}
 					};
-					pfblockerng_tick(['pfblockerng.php dcc'], $refresh);
+					pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener);
 					exit(0);
 				} catch (Throwable $e) {
 					file_put_contents("{$this->dir}/worker-error.log", $e::class . ': ' . $e->getMessage());
@@ -94,6 +106,7 @@ final class TickSafeSearchReservationTest extends TestCase
 			touch($goPath);
 			$this->assertTrue($this->waitForLineCount($startedPath, 2, 3.0),
 				'overlap workers did not both reach started barrier; lines=' . $this->lineCount($startedPath));
+			touch($openersReleasePath);
 			// Both workers reached the overlap barrier. One callback is the expected
 			// winner; the second worker either waits on the lock or races the old code.
 			$this->assertTrue($this->waitForLineCount($callsPath, 1, 3.0),
@@ -102,6 +115,7 @@ final class TickSafeSearchReservationTest extends TestCase
 			// Release every worker even when a milestone assertion fails, then reap
 			// the children so a timed-out assertion cannot orphan processes.
 			touch($goPath);
+			touch($openersReleasePath);
 			touch($releasePath);
 			foreach ($pids as $pid) {
 				pcntl_waitpid($pid, $status);
