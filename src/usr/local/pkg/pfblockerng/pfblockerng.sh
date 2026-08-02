@@ -320,14 +320,15 @@ aliastables() {
 # wiped on reboot, so DNSBL comes up dead; this keeps it alive across reboot with PURE FILE
 # OPS (no reload/restart), kept SEPARATE from the IP aliastables flow above (different
 # lifecycles). stage = copy the SHIPPED set (PFB_PY_SHIPPED) from /usr/local into the chroot
-# (re-run on every save/restore, never restored stale); save = stage then archive the
+# (re-run on every save/restore, never restored stale); teardown = remove the SHIPPED set
+# plus its mapped TLD copy; save = stage then archive the
 # GENERATED set plus exact TOP1M detector sidecars; restore = boot earlyshellcmd, untar
 # the cached files THEN stage. Naming contract: a new generated file MUST keep the
-# pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED and in the two
-# chroot teardown lists in pfblockerng.inc (the port's plist is GENERATED from the stagedir,
-# so packaging needs nothing) -- a NAME-MAPPED shipped file (source basename != chroot
-# basename) is the sole exception: it needs its own explicit stage/save handling instead;
-# see pfb_py_tld.txt. Order matters: a module goes BEFORE the file that imports it, so a
+# pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED (the port's plist
+# is GENERATED from the stagedir, so packaging needs nothing) -- a NAME-MAPPED shipped file
+# (source basename != chroot basename) is the sole exception: it needs its own explicit
+# stage/save/teardown handling instead; see pfb_py_tld.txt. Order matters: a module goes
+# BEFORE the file that imports it, so a
 # load racing the staging loop never sees the importer without its dependency.
 dnsbl_cache() {
 	# Overridable for unit tests; default to the live locations.
@@ -362,10 +363,19 @@ dnsbl_cache() {
 			chown -f unbound:unbound "${pfbchroot}/pfb_py_tld.txt"
 		fi
 	}
+	dnsbl_cache_teardown() {
+		for _f in ${PFB_PY_SHIPPED}; do
+			rm -f "${pfbchroot}/${_f}"
+		done
+		rm -f "${pfbchroot}/pfb_py_tld.txt"
+	}
 
 	case "${1}" in
 		stage)
 			dnsbl_cache_stage
+			;;
+		teardown)
+			dnsbl_cache_teardown
 			;;
 		save)
 			dnsbl_cache_stage
