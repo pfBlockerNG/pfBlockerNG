@@ -211,7 +211,12 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
     ``(...)``/``(?:...)``/``(?P<n>...)`` is scanned through as if the parentheses were not
     there; one wrapping a single atom IS that atom when the quantifier sits outside it."""
     if pattern[index] == ")":
-        return "", "bridge", index + 1
+        quantifier_end, role = _regex_quantifier(pattern, index + 1)
+        return (
+            "",
+            "break" if role == "break" and quantifier_end > index + 1 else "bridge",
+            max(quantifier_end, index + 1),
+        )
     if pattern[index] != "(":
         if pattern[index] in "|^$*+?{}":
             return "", "break", index + 1
@@ -220,8 +225,10 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
         return pattern[index:atom_end], role, max(quantifier_end, atom_end)
 
     group_end = _regex_group_end(pattern, index)
+    closed = pattern[group_end - 1 : group_end] == ")"
     if pattern.startswith(("(?#", "(?=", "(?!", "(?<=", "(?<!"), index):
-        return "", "bridge", group_end
+        # Skipping an UNCLOSED construct would blind the scan to everything after it.
+        return "", "bridge" if closed else "break", group_end if closed else index + 2
     if pattern.startswith("(?P<", index):
         name_end = pattern.find(">", index)
         if name_end == -1:
@@ -234,15 +241,16 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
     else:
         body_start = index + 1
     quantifier_end, role = _regex_quantifier(pattern, group_end)
-    if quantifier_end == group_end:
-        return "", "bridge", body_start  # unquantified: scan the body in place
     body = pattern[body_start : group_end - 1]
     # A quantified group repeats its body, so the body IS the run's atom -- one atom
     # (`(?:[a-z])+` is `[a-z]+`) or a plain sequence (`(ab)+(ab)+(ab)+` repeats too). A body
     # carrying its own group or alternation belongs to the shapes above instead.
     if role == "run" and body and not any(character in body for character in "()|"):
         return body, "run", quantifier_end
-    return "", "break" if role == "run" else role, quantifier_end
+    # Every other group is entered rather than skipped: parentheses hide a run from the
+    # reader, never from the engine. Only what the group does to its NEIGHBOURS varies --
+    # one that may match nothing cannot separate them; one that must match does.
+    return "", "bridge" if quantifier_end == group_end or role == "bridge" else "break", body_start
 
 
 def _regex_has_adjacent_unbounded_atoms(pattern: str) -> bool:

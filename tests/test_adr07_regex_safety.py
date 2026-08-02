@@ -206,6 +206,20 @@ class TestCatastrophicShapeHeuristic:
         ):
             assert _regex_is_catastrophic_shape(pat) is True, pat
 
+    def test_group_body_is_scanned_for_a_run_of_its_own(self) -> None:
+        # Wrapping a run in a group hides it from nothing: the engine still backtracks over
+        # the body (measured 24.8 ms at 81 characters for the first row, doubling every ten
+        # further characters). Whatever a group does to its NEIGHBOURS, its body is scanned.
+        for pat in (
+            r"^([a-z]+[a-z]+[a-z]+[a-z]+)?@example\.com$",
+            r"^([a-z]+(x)?[a-z]+[a-z]+[a-z]+)+@example\.com$",
+            r"^(?:[a-z]+[a-z]+[a-z]+){0,3}@example\.com$",
+            r"^[a-z]+([a-z]+)?[a-z]+[a-z]+@example\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+        # An optional group of literals is still just a literal prefix.
+        assert _regex_is_catastrophic_shape(r"^(www\.)?ads?\.example\.com$") is False
+
     def test_quantified_group_run_over_distinct_bodies_not_flagged(self) -> None:
         # Two quantified groups only partition the span when they can consume the same
         # input; `(ab)+(cd)+` has exactly one way to split, so it stays admitted.
