@@ -59,11 +59,7 @@ final class IpRecomputeOrderChangeTest extends TestCase
 	/** Baseline content the invocation loop would write for these headers, in order. */
 	private function writeBaseline(array $headers): void
 	{
-		$paths = array();
-		foreach ($headers as $header) {
-			$paths[] = pfb_ip_recompute_snapshot_path($this->snapdir, $header);
-		}
-		file_put_contents($this->memberlist, pfb_ip_recompute_memberlist_content($paths));
+		$this->writeBaselineFor($this->memberlist, $headers);
 	}
 
 	private function applyScope(string $source, string $start, string $end): string

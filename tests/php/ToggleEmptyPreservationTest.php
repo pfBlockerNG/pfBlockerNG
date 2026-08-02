@@ -86,6 +86,15 @@ final class ToggleEmptyPreservationTest extends TestCase
 			$this->assertNotFalse($to, "config gateway write missing for {$needle}");
 			$window = substr($source, $from, $to - $from);
 			$this->assertSame(1, substr_count($window, $needle), "save binding must be unique: {$needle}");
+
+			$otherPage = $page === self::DNSBL_PAGE ? self::IP_PAGE : self::DNSBL_PAGE;
+			$otherSource = php_strip_whitespace($otherPage);
+			$otherFrom = strpos($otherSource, $start);
+			$otherTo = $otherFrom === FALSE ? FALSE : strpos($otherSource, $end, $otherFrom + strlen($start));
+			$this->assertNotFalse($otherFrom, "other-page save branch missing for {$needle}");
+			$this->assertNotFalse($otherTo, "other-page config gateway write missing for {$needle}");
+			$otherWindow = substr($otherSource, $otherFrom, $otherTo - $otherFrom);
+			$this->assertStringNotContainsString($needle, $otherWindow, "save binding must stay off the other page: {$needle}");
 		}
 	}
 }

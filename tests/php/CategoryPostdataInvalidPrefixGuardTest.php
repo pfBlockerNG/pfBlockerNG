@@ -48,7 +48,7 @@ final class CategoryPostdataInvalidPrefixGuardTest extends TestCase
 		// The executable foreach body is bounded by the following table-order
 		// condition; source comments are stripped before extraction.
 		if (!preg_match(
-			'/(foreach \(\$post_data as \$key => \$value\) \{.*\})'
+			'/(foreach \(\$post_data as \$key => \$value\) \{.*?\})'
 			. '\s*\}\s*if \(!empty\(\$post_ids\[\x27ids\x27\]\) && is_array\(\$post_ids\[\x27ids\x27\]\)\)/s',
 			$src,
 			$m

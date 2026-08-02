@@ -171,9 +171,39 @@ final class IpRegexPrefilterGuardTest extends TestCase
 
 	public function testGuardRejectsUnknownFamilyWithoutRunningARegex(): void
 	{
-		$this->assertSame([], pfb_ip_regex_matches('other', '192.0.2.1', [
-			'ipv4' => '(?!)',
-			'ipv6' => '(?!)',
-		]));
+		$diagnostics = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
+			$diagnostics[] = $errstr;
+			return TRUE;
+		});
+		try {
+			$result = pfb_ip_regex_matches('other', '192.0.2.1', [
+				'ipv4' => '/[/',
+				'ipv6' => '/[/',
+			]);
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame([], $result);
+		$this->assertSame([], $diagnostics, 'an unknown family must never reach preg_match_all');
+	}
+
+	public function testV4ControlWouldWarnIfItsRegexRan(): void
+	{
+		$diagnostics = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
+			$diagnostics[] = $errstr;
+			return TRUE;
+		});
+		try {
+			$result = pfb_ip_regex_matches('v4', '192.0.2.1', [
+				'ipv4' => '/[/',
+				'ipv6' => '/[/',
+			]);
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame([], $result);
+		$this->assertNotEmpty($diagnostics, 'the v4 control must prove its malformed regex was evaluated');
 	}
 }

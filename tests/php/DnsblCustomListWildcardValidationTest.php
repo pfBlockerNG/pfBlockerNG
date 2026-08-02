@@ -34,7 +34,7 @@ final class DnsblCustomListWildcardValidationTest extends TestCase
 		}
 		if (!preg_match(
 			'/(foreach \(array\(\s*\x27pfb_noaaaa_list\x27\s*=>\s*\x27domain\x27.*?\)'
-			. ' as \$custom_type => \$custom_format\) \{.*\})'
+			. ' as \$custom_type => \$custom_format\) \{.*?\})'
 			. '\s*\$pfb_regex_python = pfb_python_interpreter\(\)/s',
 			$src,
 			$m

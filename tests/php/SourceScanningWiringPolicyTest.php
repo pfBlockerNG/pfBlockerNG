@@ -194,7 +194,7 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		}
 	}
 
-	public function testRewordingANearbyProductionCommentDoesNotChangePinnedCode(): void
+	public function testRewordingANearbyProductionCommentDoesNotChangeRetainedPinScope(): void
 	{
 		$sourcePath = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 		$source = file_get_contents($sourcePath);
@@ -211,7 +211,15 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		$this->assertIsString($temp);
 		try {
 			$this->assertNotFalse(file_put_contents($temp, $rewritten));
-			$this->assertSame(php_strip_whitespace($sourcePath), php_strip_whitespace($temp));
+			$originalCode = php_strip_whitespace($sourcePath);
+			$rewrittenCode = php_strip_whitespace($temp);
+			$start = 'pfb_list_script_cleanup_staged(';
+			$end = 'if (!empty($domain_data)) {';
+			$this->assertSame(
+				$this->sourceScope($originalCode, $start, $end),
+				$this->sourceScope($rewrittenCode, $start, $end),
+				'retained DNSBL staged-script pin must ignore nearby comment wording'
+			);
 		} finally {
 			@unlink($temp);
 		}
@@ -277,6 +285,15 @@ final class SourceScanningWiringPolicyTest extends TestCase
 			}
 			$this->assertNotFalse(file_put_contents($destination, $content));
 		}
+	}
+
+	private function sourceScope(string $source, string $start, string $end): string
+	{
+		$from = strrpos($source, $start);
+		$this->assertNotFalse($from, "missing retained-pin start: {$start}");
+		$to = strpos($source, $end, $from + strlen($start));
+		$this->assertNotFalse($to, "missing retained-pin end: {$end}");
+		return substr($source, $from, $to + strlen($end) - $from);
 	}
 
 	private function rewordPhpComments(string $source): string

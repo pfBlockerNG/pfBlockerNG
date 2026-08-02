@@ -547,18 +547,24 @@ function pfb_dnsbl_script_failure_continue(string $item, string $message, string
 	    $state, $staging_current_generation, $staged_txt, $manifest);
 }
 
+/** Remove the transient staged path and known cleanup path after a list-script pass. */
+function pfb_list_script_cleanup_staged(string $parse_path, ?string $staged_path,
+    ?string $known_path = NULL): void {
+	if ($staged_path !== NULL && $parse_path === $staged_path) {
+		unlink_if_exists($staged_path);
+	}
+	if ($known_path !== NULL) {
+		unlink_if_exists($known_path);
+	}
+}
+
 /** Consume a staged pre-script path, then remove transient and known copies. */
 function pfb_list_script_consume_staged(string $parse_path, ?string $staged_path, callable $consumer,
     ?string $known_path = NULL): mixed {
 	try {
 		return $consumer($parse_path);
 	} finally {
-		if ($staged_path !== NULL && $parse_path === $staged_path) {
-			unlink_if_exists($staged_path);
-		}
-		if ($known_path !== NULL) {
-			unlink_if_exists($known_path);
-		}
+		pfb_list_script_cleanup_staged($parse_path, $staged_path, $known_path);
 	}
 }
 
@@ -2429,19 +2435,7 @@ function sync_package_pfblockerng($cron='') {
 									@fclose($fhandle);
 								}
 								// issue #1926: the staged pre-script copy is transient -- parsed above.
-								pfb_dnsbl_script_consume_staged($pfb_parse_path, $pfb_staged_path,
-									static function (string $path) use ($pfb_staged_path): bool {
-										if ($pfb_staged_path === NULL) {
-											return TRUE;
-										}
-										$handle = @fopen($path, 'rb');
-										if ($handle === FALSE) {
-											return FALSE;
-										}
-										@fread($handle, 1);
-										@fclose($handle);
-										return TRUE;
-									}, "{$file_dwn}.pre");
+								pfb_list_script_cleanup_staged($pfb_parse_path, $pfb_staged_path, "{$file_dwn}.pre");
 
 								// Close the "Reload . completed ." progress line with its trailing dot
 								// BEFORE the strict-parsing WARNING below, else the warning's own
@@ -3374,7 +3368,10 @@ function sync_package_pfblockerng($cron='') {
 	#	Download and Collect IPv4/IPv6 lists	#
 	#################################################
 
-	[$pfb['range'], $pfb['ipv4'], $pfb['ipv6']] = array_values(pfb_ip_regex_config());
+	$pfb_ip_regex = pfb_ip_regex_config();
+	$pfb['range'] = $pfb_ip_regex['range'];
+	$pfb['ipv4'] = $pfb_ip_regex['ipv4'];
+	$pfb['ipv6'] = $pfb_ip_regex['ipv6'];
 
 	if ($pfb['enable'] === PfbToggle::On && !$pfb['save']) {
 

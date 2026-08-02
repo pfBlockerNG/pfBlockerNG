@@ -17,7 +17,7 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+		require_once self::APPLY;
 	}
 
 	protected function setUp(): void
@@ -193,14 +193,30 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 	public function testEachFamilyBindsFailureContinueAndCloseOnce(): void
 	{
 		$source       = php_strip_whitespace(self::APPLY);
-		$dnsbl_cont   = $this->applyScope($source, 'if ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) {', 'pfb_dnsbl_script_failure_continue($alias,');
-		$dnsbl_close  = $this->applyScope($source, "pfb_download_ledger_close_if_clean('dnsbl',", 'pfb_dnsbl_script_failure_close($alias,');
-		$ip_cont      = $this->applyScope($source, 'if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', 'pfb_ip_script_failure_continue($alias,');
-		$ip_close     = $this->applyScope($source, "pfb_download_ledger_close_if_clean('ip',", 'pfb_ip_script_failure_close($alias,');
+		$dnsbl_cont   = $this->applyScope($source, 'if ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) {', "pfb_download_ledger_close_if_clean('dnsbl',");
+		$dnsbl_close  = $this->applyScope($source, "pfb_download_ledger_close_if_clean('dnsbl',", "if (\$pfb['aliasupdate']) {");
+		$ip_cont      = $this->applyScope($source, 'if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', "pfb_download_ledger_close_if_clean('ip',");
+		$ip_close     = $this->applyScope($source, "pfb_download_ledger_close_if_clean('ip',", 'unlink_if_exists("{$pfb[\'dbdir\']}/geoip.update");');
 
 		$this->assertSame(1, substr_count($dnsbl_cont, 'pfb_dnsbl_script_failure_continue($alias,'), 'DNSBL failure continue must stay in its loop');
 		$this->assertSame(1, substr_count($dnsbl_close, 'pfb_dnsbl_script_failure_close($alias,'), 'DNSBL failure close must stay at alias-pass end');
 		$this->assertSame(1, substr_count($ip_cont, 'pfb_ip_script_failure_continue($alias,'), 'IP failure continue must stay in its loop');
 		$this->assertSame(1, substr_count($ip_close, 'pfb_ip_script_failure_close($alias,'), 'IP failure close must stay at alias-pass end');
+
+		foreach ([
+			['if ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) {', "pfb_download_ledger_close_if_clean('dnsbl',", 'pfb_dnsbl_script_failure_continue($alias,'],
+			["pfb_download_ledger_close_if_clean('dnsbl',", "if (\$pfb['aliasupdate']) {", 'pfb_dnsbl_script_failure_close($alias,'],
+			['if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', "pfb_download_ledger_close_if_clean('ip',", 'pfb_ip_script_failure_continue($alias,'],
+			["pfb_download_ledger_close_if_clean('ip',", 'unlink_if_exists("{$pfb[\'dbdir\']}/geoip.update");', 'pfb_ip_script_failure_close($alias,'],
+		] as [$start, $end, $needle]) {
+			$removed = 0;
+			$mutant = str_replace($needle, '', $source, $removed);
+			$this->assertSame(1, $removed, "mutation fixture must remove {$needle} once");
+			$endPos = strpos($mutant, $end);
+			$this->assertNotFalse($endPos, "mutation fixture must retain {$end}");
+			$mutant = substr_replace($mutant, $needle, $endPos + strlen($end), 0);
+			$mutantScope = $this->applyScope($mutant, $start, $end);
+			$this->assertSame(0, substr_count($mutantScope, $needle), "a {$needle} relocation after its loop boundary must fail the scope pin");
+		}
 	}
 }

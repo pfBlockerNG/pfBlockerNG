@@ -38,10 +38,10 @@
 // framework at all). That keeps the ADR-12 addendum's picker-trust-boundary guarantee
 // intact: a user holding only the ordinary pfBlockerNG page privileges must stay unable
 // to author or edit hook content -- they can still PICK a vetted file on the Hooks tab,
-// nothing here changes that. The isAllowedPage() check immediately below is the SECOND,
-// LOAD-BEARING gate (mirrors pfblockerng_software.php's SECONDARY PRIVILEGE GATE,
-// issue #485): it is what actually decides who may render or save on this page, and it
-// covers the GET render path and BOTH POST actions with a single check.
+// nothing here changes that. The controller call immediately below is the SECOND,
+// LOAD-BEARING gate (mirrors pfblockerng_software.php's secondary privilege gate,
+// issue #485): it decides who may render or save this page, redirects denied requests,
+// and invokes the request callbacks only when access is allowed.
 
 require_once('guiconfig.inc');
 require_once('globals.inc');
@@ -128,18 +128,6 @@ if ($input_errors) {
 if ($pfb_eh_state['notice'] !== NULL) {
 	print_info_box($pfb_eh_state['notice'], 'success');
 }
-// issue #1871: a delete removes the row it acted on, so without this the page comes
-// back with the script simply absent and no statement that anything happened -- the
-// same silent-success problem the save flow already avoids. The name is echoed
-// through htmlspecialchars() because it reaches this point from a query string.
-// Deliberately does NOT echo the name back. The value is HTML-escaped either way, so
-// this is not about injection -- it is that a crafted link would otherwise render an
-// arbitrary attacker-chosen sentence inside a success box on an admin's screen, which
-// is a credible way to talk somebody into believing something happened that did not.
-// Validating the name here instead would mean inlining the hook naming rule on the
-// page, which belongs to pfb_hook_editor_compose_filename() alone (pinned by
-// EditHooksPageWiringTest). The row is already gone from the table above, so a fixed
-// message carries the confirmation without carrying attacker-controlled text.
 // Define default Alerts Tab href link (Top row)
 $get_req = pfb_alerts_default_page();
 
@@ -173,9 +161,9 @@ pfb_print_pending_changes_box();
 // the load-bearing equivalent, not a decoration.
 $pfb_eh_warning = pfb_edit_hooks_warning();
 print_callout(
-	gettext($pfb_eh_warning['message']),
+	$pfb_eh_warning['message'],
 	$pfb_eh_warning['style'],
-	gettext($pfb_eh_warning['title'])
+	$pfb_eh_warning['title']
 );
 
 $form = new Form(FALSE);

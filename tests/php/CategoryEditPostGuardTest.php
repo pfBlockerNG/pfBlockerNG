@@ -85,7 +85,7 @@ final class CategoryEditPostGuardTest extends TestCase
 		// Region 2: the rowhelper state-loop (URL/header/format validation).
 		if (!function_exists('pfb_category_oracle_state_loop')) {
 			if (!preg_match(
-				'/(foreach \(\$_POST as \$key => \$value\) \{.*\})'
+				'/(foreach \(\$_POST as \$key => \$value\) \{.*?\})'
 				. '\s*foreach \(pfb_adv_alias_field_errors\(\$_POST\) as \$pfb_alias_error\)/s',
 				$src,
 				$m
@@ -106,7 +106,7 @@ final class CategoryEditPostGuardTest extends TestCase
 		// Region 3: the custom-list block.
 		if (!function_exists('pfb_category_oracle_custom_block')) {
 			if (!preg_match(
-				'/(if \(!empty\(\$_POST\[\x27custom\x27\]\)\) \{.*\})'
+				'/(if \(!empty\(\$_POST\[\x27custom\x27\]\)\) \{.*?\})'
 				. '\s*if \(!\$input_errors\) \{/s',
 				$src,
 				$m
@@ -191,7 +191,7 @@ final class CategoryEditPostGuardTest extends TestCase
 		// coverage), bounded by its executable config-write loop and cleanup loop.
 		if (!function_exists('pfb_category_oracle_persist_rowhelper_loop')) {
 			if (!preg_match(
-				'/(\$rowhelper_exist = array\(\);\s*foreach \(\$_POST as \$key => \$value\) \{.*\})'
+				'/(\$rowhelper_exist = array\(\);\s*foreach \(\$_POST as \$key => \$value\) \{.*?\})'
 				. '\s*foreach \(config_get_path\("installedpackages\/\{\$conf_type\}\/config\/\{\$rowid\}\/row", \[\]\) as \$r_key => \$row\)/s',
 				$src,
 				$m
