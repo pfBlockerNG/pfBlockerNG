@@ -215,6 +215,7 @@ class _Harness:
             (lambda: 8 * 1024 * 1024 * 1024) if ram_ok else (lambda: 1),
         )
         self.builds: list[int] = []
+        self._builder_error: RuntimeError | None = None
         self._gate = threading.Event()
         self._gate.set()  # un-gated by default; tests can clear() to make a build block
         self._lock = threading.Lock()
@@ -277,7 +278,13 @@ class _Harness:
         with self._builds_cond:
             self.builds.append(gen)
             self._builds_cond.notify_all()  # wake any wait_builds waiter.
-        self._gate.wait(10.0)  # safety-guard only; stop_join() always sets the gate.
+        if not self._gate.wait(10.0):
+            error = RuntimeError(
+                "salvage cap expired / stuck or environment: gated reload-builder release "
+                "after 10.0s (observed generation {})".format(gen)
+            )
+            self._builder_error = error
+            raise error
         if self.fail:
             return None
         return _snapshot(tag="gen{}.example.com".format(gen), counts=gen)
@@ -374,6 +381,14 @@ class _Harness:
         self._gate.set()  # release a blocked build so the thread can exit promptly
         if self.thread is not None:
             self.thread.join(timeout=timeout)
+            if self.thread.is_alive():
+                raise RuntimeError(
+                    "salvage cap expired / stuck or environment: watcher thread {!r} still alive after {:.1f}s".format(
+                        self.thread.name, timeout
+                    )
+                )
+        if self._builder_error is not None:
+            raise self._builder_error
 
 
 class TestHarnessWaiterDiagnostics:
