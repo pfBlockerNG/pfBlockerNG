@@ -3072,6 +3072,16 @@ def test_pfblockerng_download_extras_uses_typed_download_result() -> None:
     )
 
 
+def test_pfblockerng_tick_delegates_safesearch_to_due_ledger() -> None:
+    """Pin the CLI-only tick dispatch that Tier-A HTTP rendering cannot execute."""
+    source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng.php"
+    source = source_path.read_text(encoding="utf-8")
+
+    tick_branch = source.split("elseif ($argv[1] == 'tick') {", 1)[1].split("elseif ($argv[1] == 'cron-tick') {", 1)[0]
+    assert tick_branch.count("pfblockerng_tick();") == 1
+    assert "pfblockerng_ss_refresh" not in tick_branch
+
+
 def test_reputation_page_help_text_names_relocated_matchgen_paths(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:  # noqa: ARG001
