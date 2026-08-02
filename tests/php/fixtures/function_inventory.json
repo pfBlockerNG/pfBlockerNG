@@ -10047,6 +10047,20 @@
                 "variadic": false,
                 "type": "?callable",
                 "default": "NULL"
+            },
+            {
+                "name": "ss_lock_opener",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "ss_lock_timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
             }
         ]
     },

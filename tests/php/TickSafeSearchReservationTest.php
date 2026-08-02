@@ -54,6 +54,7 @@ final class TickSafeSearchReservationTest extends TestCase
 		}
 
 		$readyPath   = "{$this->dir}/ready.log";
+		$startedPath = "{$this->dir}/started.log";
 		$callsPath   = "{$this->dir}/calls.log";
 		$goPath      = "{$this->dir}/go";
 		$releasePath = "{$this->dir}/release";
@@ -68,6 +69,7 @@ final class TickSafeSearchReservationTest extends TestCase
 				try {
 					file_put_contents($readyPath, getmypid() . "\n", FILE_APPEND | LOCK_EX);
 					$this->waitForPath($goPath, 3.0);
+					file_put_contents($startedPath, getmypid() . "\n", FILE_APPEND | LOCK_EX);
 					$refresh = static function () use ($callsPath, $releasePath): void {
 						file_put_contents($callsPath, getmypid() . "\n", FILE_APPEND | LOCK_EX);
 						$deadline = microtime(TRUE) + 3.0;
@@ -85,15 +87,29 @@ final class TickSafeSearchReservationTest extends TestCase
 			$pids[] = $pid;
 		}
 
-		$this->waitForLineCount($readyPath, 2, 3.0);
-		touch($goPath);
-		// Old behavior reaches two callbacks quickly; new behavior holds the second
-		// process at the bounded lock while the first callback waits for release.
-		$this->waitForLineCount($callsPath, 2, 1.0);
-		touch($releasePath);
+		$statuses = [];
+		try {
+			$this->assertTrue($this->waitForLineCount($readyPath, 2, 3.0),
+				'overlap workers did not both reach ready barrier; lines=' . $this->lineCount($readyPath));
+			touch($goPath);
+			$this->assertTrue($this->waitForLineCount($startedPath, 2, 3.0),
+				'overlap workers did not both reach started barrier; lines=' . $this->lineCount($startedPath));
+			// Both workers reached the overlap barrier. One callback is the expected
+			// winner; the second worker either waits on the lock or races the old code.
+			$this->assertTrue($this->waitForLineCount($callsPath, 1, 3.0),
+				'no SafeSearch callback reached overlap; lines=' . $this->lineCount($callsPath));
+		} finally {
+			// Release every worker even when a milestone assertion fails, then reap
+			// the children so a timed-out assertion cannot orphan processes.
+			touch($goPath);
+			touch($releasePath);
+			foreach ($pids as $pid) {
+				pcntl_waitpid($pid, $status);
+				$statuses[$pid] = $status;
+			}
+		}
 
-		foreach ($pids as $pid) {
-			pcntl_waitpid($pid, $status);
+		foreach ($statuses as $pid => $status) {
 			$this->assertTrue(pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0,
 				"tick worker {$pid} failed: " . (string) @file_get_contents("{$this->dir}/worker-error.log"));
 		}
@@ -116,7 +132,7 @@ final class TickSafeSearchReservationTest extends TestCase
 		}
 	}
 
-	private function waitForLineCount(string $path, int $expected, float $timeout): void
+	private function waitForLineCount(string $path, int $expected, float $timeout): bool
 	{
 		$deadline = microtime(TRUE) + $timeout;
 		while (microtime(TRUE) < $deadline) {
@@ -124,9 +140,18 @@ final class TickSafeSearchReservationTest extends TestCase
 				? array_values(array_filter(explode("\n", (string) file_get_contents($path)), 'strlen'))
 				: [];
 			if (count($lines) >= $expected) {
-				return;
+				return TRUE;
 			}
 			usleep(1000);
 		}
+		return FALSE;
+	}
+
+	private function lineCount(string $path): int
+	{
+		$lines = is_file($path)
+			? array_values(array_filter(explode("\n", (string) file_get_contents($path)), 'strlen'))
+			: [];
+		return count($lines);
 	}
 }
