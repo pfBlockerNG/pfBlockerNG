@@ -4932,7 +4932,7 @@ def _dnsbl_compile_regex_rules(
             )
             continue
         try:
-            compiled = re.compile(rule.pattern)
+            compiled = re.compile(rule.pattern, re.IGNORECASE)
         except re.error as e:
             sys.stderr.write(
                 "[pfBlockerNG]: ABP regex compile error feed [ {} ] pattern [ {} ]: {}".format(

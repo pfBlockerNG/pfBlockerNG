@@ -124,11 +124,11 @@ def _resolve(result: P.ReconcileResult, query: str) -> str:
     import re
 
     for rr in result.block_regex_irreducible:
-        if re.search(rr.pattern, q):
+        if re.search(rr.pattern, q, flags=re.IGNORECASE):
             matched = True
             bp = max(bp, rr.band)
     for rr in result.allow_regex_irreducible:
-        if re.search(rr.pattern, q):
+        if re.search(rr.pattern, q, flags=re.IGNORECASE):
             matched = True
             ap = max(ap, rr.band)
 
@@ -444,7 +444,7 @@ class TestPrecedenceVsOracle:
             (["||x.example.com^$important", "@@||x.example.com^"], "x.example.com"),
             (["@@||y.example.com^$important", "||y.example.com^"], "y.example.com"),
             (["/^(.+\\.)?doubleclick\\.net$/"], "ad.doubleclick.net"),
-            (["/ad[0-9]\\.example\\.com$/"], "ad7.example.com"),
+            (["/AD[0-9]\\.EXAMPLE\\.COM$/"], "ad7.example.com"),
             (["||example.com^", "@@/^(.+\\.)?cdn\\.example\\.com$/"], "cdn.example.com"),
             (["||a.example.com^", "||a.example.com^$badfilter"], "a.example.com"),
         ],
