@@ -23,6 +23,7 @@ final class DnsblLogEventQueryAttributionSalvageDiagnosticTest extends TestCase
 		$this->assertStringContainsString('if ($written !== strlen($reply))', $spawnResponder);
 		$this->assertStringContainsString("throw new RuntimeException('query responder reply write failed');", $spawnResponder);
 		$this->assertStringContainsString('$this->forkChild(', $spawnResponder, 'the responder must be a tracked child');
+		$this->assertStringNotContainsString('> /dev/null 2>&1 &', $spawnResponder, 'the responder must not use the old detached shell');
 		foreach (['exec(', 'proc_open(', 'shell_exec(', 'system(', 'passthru('] as $sink) {
 			$this->assertStringNotContainsString($sink, $spawnResponder, "responder must not invoke process sink {$sink}");
 		}
@@ -47,11 +48,19 @@ final class DnsblLogEventQueryAttributionSalvageDiagnosticTest extends TestCase
 			$callerEnd = strpos($source, "\n\tpublic function ", $callerStart + 1);
 			$callerEnd = $callerEnd === false ? strlen($source) : $callerEnd;
 			$callerSource = substr($source, $callerStart, $callerEnd - $callerStart);
-			$reap = strpos($callerSource, '$this->reapResponders();');
-			$assert = strpos($callerSource, '$this->assert');
-			$this->assertNotFalse($reap, "{$caller}() must reap its responder");
-			$this->assertNotFalse($assert, "{$caller}() must retain product assertions");
-			$this->assertLessThan($assert, $reap, "{$caller}() must reap before product assertions");
+			$reapMatch = [];
+			$assertMatch = [];
+			$this->assertSame(
+				1,
+				preg_match('/^[ \t]*\$this->reapResponders\(\);[ \t]*$/m', $callerSource, $reapMatch, PREG_OFFSET_CAPTURE),
+				"{$caller}() must reap its responder on an executable line"
+			);
+			$this->assertSame(
+				1,
+				preg_match('/^[ \t]*\$this->assert[A-Za-z]+\(/m', $callerSource, $assertMatch, PREG_OFFSET_CAPTURE),
+				"{$caller}() must retain product assertions on executable lines"
+			);
+			$this->assertLessThan($assertMatch[0][1], $reapMatch[0][1], "{$caller}() must reap before product assertions");
 		}
 	}
 }
