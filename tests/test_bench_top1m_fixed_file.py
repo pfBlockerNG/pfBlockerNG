@@ -200,7 +200,12 @@ def test_timed_parent_signal_kills_worker_process_group(tmp_path: Path) -> None:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and not worker_pid_path.exists():
             time.sleep(0.05)
-        assert worker_pid_path.exists(), "timed worker did not start"
+        marker_exists = worker_pid_path.exists()
+        if not marker_exists:
+            raise RuntimeError(
+                f"salvage cap expired / stuck or environment: timed worker startup marker {worker_pid_path}; "
+                f"observed exists={marker_exists}"
+            )
         worker_pid = int(worker_pid_path.read_text())
 
         os.kill(driver.pid, signal.SIGTERM)
