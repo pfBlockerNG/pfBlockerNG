@@ -389,6 +389,37 @@ def test_public_dump_uses_exact_alias_match(monkeypatch: pytest.MonkeyPatch) -> 
     assert generic not in dump
 
 
+@pytest.mark.parametrize(
+    ("live_rules", "alias", "expected"),
+    [
+        ("block drop in quick from <pfB_Foo_v4> to any", "pfB_Foo_v4", True),
+        ("block drop in quick from <pfB_Foo_v4_other_v4> to any", "pfB_Foo_v4", False),
+        ("block drop in quick from <pfB_Other_v4> to any", "pfB_Foo_v4", False),
+        ("block drop in quick from pfB_Foo_v4, to any", "pfB_Foo_v4", True),
+        ("block drop in quick from pfB_Foo_v4_other_v4 to any", "pfB_Foo_v4", False),
+        ("block drop in quick from harness to any", "harness", False),
+        ("block drop in quick from <harness> to any", "harness", True),
+        # Bare-token matching must quote an unvalidated alias before compiling it as regex.
+        ("block drop in quick from pfB_FooXv4 to any", "pfB_Foo.v4", False),
+    ],
+    ids=[
+        "exact-angle-token",
+        "longer-angle-token",
+        "foreign-angle-token",
+        "bare-token-punctuation-boundary",
+        "longer-bare-token",
+        "generic-bare-word",
+        "generic-angle-token",
+        "metacharacter-is-literal",
+    ],
+)
+def test_pfctl_rule_has_alias_matches_complete_tokens(live_rules: str, alias: str, expected: bool) -> None:
+    """Match only the complete requested table token in an authoritative pfctl snapshot."""
+    actual = helpers.pfctl_rule_has_alias(_FakeVM(live_rules=live_rules), alias)  # type: ignore[arg-type]
+
+    assert actual == expected, f"alias={alias!r} live_rules={live_rules!r}: expected {expected}, got {actual}"
+
+
 def test_no_retired_pf_poll_names_remain() -> None:
     """Every Python smoke file must use sync boundaries plus one-shot reads."""
     retired = ["_".join(("wait", "pfctl", "table")), "_".join(("rule", "references"))]
