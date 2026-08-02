@@ -21,6 +21,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class SyslogEventTest extends TestCase
 {
+	private const DAEMON_DEADLINE_S = 3.0;
+
 	private bool $hadConfig = false;
 	private mixed $savedConfig = null;
 	private bool $hadSyslogSpy = false;
@@ -29,6 +31,8 @@ final class SyslogEventTest extends TestCase
 	private mixed $savedSyslogCalls = null;
 	private bool $hadSyslogReset = false;
 	private mixed $savedSyslogReset = null;
+	/** @var string[] */
+	private array $daemonTempFiles = [];
 
 	/** Install clean owned state; no cache-reset needed (function reads fresh each call). */
 	protected function setUp(): void
@@ -64,6 +68,77 @@ final class SyslogEventTest extends TestCase
 				unset($GLOBALS[$name]);
 			}
 		}
+		foreach ($this->daemonTempFiles as $path) {
+			if (is_file($path)) {
+				unlink($path);
+			}
+		}
+		$this->daemonTempFiles = [];
+	}
+
+	/** @return array{0: array<int, array<string, mixed>>, 1: string} */
+	private function runFilterlogDaemon(string $row): array
+	{
+		$unilog = tempnam(sys_get_temp_dir(), 'pfb_dnsbl_unilog_');
+		$calls = tempnam(sys_get_temp_dir(), 'pfb_dnsbl_calls_');
+		$done = tempnam(sys_get_temp_dir(), 'pfb_dnsbl_done_');
+		$stderr = tempnam(sys_get_temp_dir(), 'pfb_dnsbl_stderr_');
+		foreach ([$unilog, $calls, $done, $stderr] as $path) {
+			$this->assertIsString($path, 'test setup: temp file creation failed');
+			$this->daemonTempFiles[] = $path;
+		}
+		unlink($done);
+		$bootstrap = __DIR__ . '/bootstrap.php';
+		$childCode = <<<'PHP'
+			$args = $argv;
+			require $args[4];
+			$GLOBALS['pfb']['unilog'] = $args[1];
+			$GLOBALS['pfb']['asn_reporting'] = 'disabled';
+			$GLOBALS['pfb']['geoipshare'] = '';
+			$GLOBALS['config'] = [];
+			config_set_path('installedpackages/pfblockerng/config/0/log_syslog', 'on');
+			$GLOBALS['pfb_test_syslog_spy'] = TRUE;
+			$GLOBALS['pfb_test_syslog_calls'] = [];
+			pfb_daemon_filterlog();
+			file_put_contents($args[2], json_encode($GLOBALS['pfb_test_syslog_calls'], JSON_THROW_ON_ERROR));
+			file_put_contents($args[3], 'done');
+			PHP;
+		$descriptors = [
+			0 => ['pipe', 'r'],
+			1 => ['file', '/dev/null', 'w'],
+			2 => ['file', $stderr, 'w'],
+		];
+		$proc = proc_open([PHP_BINARY, '-r', $childCode, $unilog, $calls, $done, $bootstrap], $descriptors, $pipes);
+		$this->assertIsResource($proc, 'test setup: failed to spawn filterlog daemon child');
+		fwrite($pipes[0], $row . "\n");
+		fclose($pipes[0]);
+
+		$deadline = microtime(TRUE) + self::DAEMON_DEADLINE_S;
+		while (!is_file($done) && microtime(TRUE) < $deadline) {
+			$status = proc_get_status($proc);
+			if (!$status['running']) {
+				break;
+			}
+			usleep(10000);
+		}
+		$status = proc_get_status($proc);
+		if (!is_file($done)) {
+			if ($status['running']) {
+				proc_terminate($proc, 9);
+				proc_close($proc);
+				$this->fail('STUCK/ENVIRONMENT: filterlog daemon child did not complete before the hard deadline');
+			}
+			$exitCode = proc_close($proc);
+			$this->fail(
+				'filterlog daemon child exited before completion (exit ' . $exitCode . '): '
+				. (string) file_get_contents($stderr)
+			);
+		}
+		$exitCode = proc_close($proc);
+		$this->assertSame(0, $exitCode, 'filterlog daemon child must exit cleanly');
+		$decoded = json_decode((string) file_get_contents($calls), TRUE, 512, JSON_THROW_ON_ERROR);
+		$this->assertIsArray($decoded, 'child syslog spy output must be an array');
+		return [$decoded, (string) file_get_contents($unilog)];
 	}
 
 	// -----------------------------------------------------------------------
@@ -231,5 +306,46 @@ final class SyslogEventTest extends TestCase
 		$this->assertSame($body, $calls_after[0]['body'], 'after flip: body matches');
 		$this->assertSame(LOG_LOCAL6, $calls_after[0]['facility'], 'after flip: facility is LOG_LOCAL6');
 		$this->assertSame(LOG_INFO, $calls_after[0]['severity'], 'after flip: severity is LOG_INFO');
+	}
+
+	/**
+	 * The daemon reads Python's RFC4180 DNSBL rows at its public stdin boundary.
+	 * Each row must be written to unified.log byte-for-byte, while only a logical
+	 * 11-field row emits the dedicated DNSBL syslog event.
+	 */
+	public function testFilterlogDaemonPreservesDnsblRowsAndParsesQuotedFields(): void
+	{
+		$plain = 'DNSBL-python,2026-08-02 12:34:56,plain.example.com,192.0.2.7,Python,DNSBL_Python,real_group,example.com,real_feed,+,A';
+		$quoted = 'DNSBL-python,2026-08-02 12:34:56,"a,""quoted"".example.com",192.0.2.7,Python,DNSBL_Python,real_group,example.com,real_feed,+,A';
+		$malformed = 'DNSBL-python,2026-08-02 12:34:56,too-short,192.0.2.7,Python,DNSBL_Python';
+
+		$cases = [
+			[
+				'label' => 'plain 11-field row',
+				'row' => $plain,
+				'body' => 'act=dnsbl qname=plain.example.com qip=192.0.2.7 qtype=A group=real_group feed=real_feed btype=DNSBL_Python eval=example.com',
+			],
+			[
+				'label' => 'quoted comma and quote q_name',
+				'row' => $quoted,
+				'body' => 'act=dnsbl qname="a,\\"quoted\\".example.com" qip=192.0.2.7 qtype=A group=real_group feed=real_feed btype=DNSBL_Python eval=example.com',
+			],
+			[
+				'label' => 'malformed row',
+				'row' => $malformed,
+				'body' => NULL,
+			],
+		];
+
+		foreach ($cases as $case) {
+			[$calls, $unified] = $this->runFilterlogDaemon($case['row']);
+			$this->assertSame($case['row'] . "\n", $unified, $case['label'] . ': unified.log must preserve raw row bytes');
+			if ($case['body'] === NULL) {
+				$this->assertSame([], $calls, $case['label'] . ': malformed row must emit no syslog event');
+				continue;
+			}
+			$this->assertCount(1, $calls, $case['label'] . ': exactly one syslog event expected');
+			$this->assertSame($case['body'], $calls[0]['body'], $case['label'] . ': syslog body fields must remain exact');
+		}
 	}
 }
