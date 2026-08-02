@@ -16741,6 +16741,7 @@ function pfb_log_event($type, $domain, $src_ip, $req_agent) {
 		}
 		pfb_close_sqlite($db_handle);
 	}
+	@file_put_contents("{$pfb['dnslog']}.applied", "{$type},{$domain}\n", LOCK_EX);
 }
 
 
