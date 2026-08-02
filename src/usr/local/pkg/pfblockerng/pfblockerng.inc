@@ -7508,14 +7508,31 @@ function pfb_ss_resolve_target($target) {
 	// DNS traffic (a box with a loopback resolver made the real exec succeed and the
 	// off-appliance test fail). Production default unchanged.
 	$drill_esc = escapeshellarg($pfb['drill'] ?? '/usr/bin/drill');
+	// Bound the transient drill | awk pipeline as a whole. FreeBSD timeout's default
+	// reaper mode kills every descendant on expiry; --foreground would orphan awk/drill.
+	$timeout_esc = escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
 
 	$out4 = array();
-	exec("{$drill_esc} A {$target_esc} {$extdns_esc} | /usr/bin/awk '/[ \\t]IN[ \\t]+A[ \\t]/ {print \$5; exit}'", $out4);
-	$v4 = filter_var(trim($out4[0] ?? ''), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ?: '';
+	$ret4 = 0;
+	$pipeline4 = "{$drill_esc} A {$target_esc} {$extdns_esc} | /usr/bin/awk '/[ \\t]IN[ \\t]+A[ \\t]/ {print \$5; exit}'";
+	exec("{$timeout_esc} -s TERM -k 5 30 /bin/sh -c " . escapeshellarg($pipeline4), $out4, $ret4);
+	if ($ret4 === 124) {
+		pfb_logger("\npfb_ss_resolve_target: A lookup TIMED OUT (killed); treating as unresolved\n", 2);
+		$v4 = '';
+	} else {
+		$v4 = filter_var(trim($out4[0] ?? ''), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ?: '';
+	}
 
 	$out6 = array();
-	exec("{$drill_esc} AAAA {$target_esc} {$extdns_esc} | /usr/bin/awk '/[ \\t]IN[ \\t]+AAAA[ \\t]/ {print \$5; exit}'", $out6);
-	$v6 = filter_var(trim($out6[0] ?? ''), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ?: '';
+	$ret6 = 0;
+	$pipeline6 = "{$drill_esc} AAAA {$target_esc} {$extdns_esc} | /usr/bin/awk '/[ \\t]IN[ \\t]+AAAA[ \\t]/ {print \$5; exit}'";
+	exec("{$timeout_esc} -s TERM -k 5 30 /bin/sh -c " . escapeshellarg($pipeline6), $out6, $ret6);
+	if ($ret6 === 124) {
+		pfb_logger("\npfb_ss_resolve_target: AAAA lookup TIMED OUT (killed); treating as unresolved\n", 2);
+		$v6 = '';
+	} else {
+		$v6 = filter_var(trim($out6[0] ?? ''), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ?: '';
+	}
 
 	return array($v4, $v6);
 }
