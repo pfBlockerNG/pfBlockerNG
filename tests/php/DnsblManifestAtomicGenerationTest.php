@@ -86,14 +86,24 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			}
 			return $line;
 		}
-		$message = "salvage cap expired / stuck or environment: awaiting {$awaited}";
-		if ($child) {
-			@fwrite($stream, "SALVAGE_EXPIRED {$message}\n");
-			exit(2);
-		}
 		$meta = stream_get_meta_data($stream);
 		$reason = ($meta['timed_out'] ?? FALSE) ? 'timeout' : (feof($stream) ? 'EOF' : 'read failure');
+		$message = "salvage cap expired / stuck or environment: awaiting {$awaited}";
+		if ($child) {
+			@fwrite($stream, "SALVAGE_EXPIRED {$message} ({$reason})\n");
+			exit(2);
+		}
 		$this->fail("{$message} ({$reason})");
+	}
+
+	/** @return array{0:mixed,1:mixed} */
+	private function signalPair(): array
+	{
+		$pair = @stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		if ($pair === FALSE) {
+			$this->markTestSkipped('stream_socket_pair() failed -- cannot signal across the fork.');
+		}
+		return $pair;
 	}
 
 	private function expectChildEvent(mixed $stream, string $expected, string $awaited): void
@@ -113,7 +123,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$holderParent = NULL;
 		$operationParent = NULL;
 		try {
-			[$holderParent, $holderChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+			[$holderParent, $holderChild] = $this->signalPair();
 			stream_set_timeout($holderParent, 5);
 			stream_set_timeout($holderChild, 5);
 			$holderPid = pcntl_fork();
@@ -136,7 +146,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			fclose($holderChild);
 			$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'publication holder acquisition'));
 
-			[$operationParent, $operationChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+			[$operationParent, $operationChild] = $this->signalPair();
 			stream_set_timeout($operationParent, 5);
 			stream_set_timeout($operationChild, 5);
 			$operationPid = pcntl_fork();
@@ -334,7 +344,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$holderParent = NULL;
 		$patchParent = NULL;
 		try {
-			[$holderParent, $holderChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+			[$holderParent, $holderChild] = $this->signalPair();
 			stream_set_timeout($holderParent, 5);
 			stream_set_timeout($holderChild, 5);
 			$holderPid = pcntl_fork();
@@ -356,7 +366,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			fclose($holderChild);
 			$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'scalar patch holder acquisition'));
 
-			[$patchParent, $patchChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+			[$patchParent, $patchChild] = $this->signalPair();
 			stream_set_timeout($patchParent, 5);
 			stream_set_timeout($patchChild, 5);
 			$patchPid = pcntl_fork();
@@ -577,7 +587,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		}
 
 		$lockPath   = dirname($GLOBALS['pfb']['unbound_py_sources']) . '/pfb_py_sources.lock';
-		[$holderParent, $holderChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		[$holderParent, $holderChild] = $this->signalPair();
 		stream_set_timeout($holderParent, 5);
 		stream_set_timeout($holderChild, 5);
 		$pid = pcntl_fork();

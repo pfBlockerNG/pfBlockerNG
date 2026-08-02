@@ -86,7 +86,7 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		return static fn (): int => $ts;
 	}
 
-	private function readEvent(mixed $stream, string $awaited, bool $child = FALSE): string
+	private function readEvent(mixed $stream, string $awaited, bool $child = FALSE, mixed $report = NULL): string
 	{
 		$line = @fgets($stream);
 		if ($line !== FALSE) {
@@ -95,23 +95,35 @@ final class PfbSyncStatusLedgerTest extends TestCase
 			}
 			return $line;
 		}
-		$message = "salvage cap expired / stuck or environment: awaiting {$awaited}";
-		if ($child) {
-			@fwrite($stream, "SALVAGE_EXPIRED {$message}\n");
-			exit(2);
-		}
 		$meta = stream_get_meta_data($stream);
 		$reason = ($meta['timed_out'] ?? FALSE) ? 'timeout' : (feof($stream) ? 'EOF' : 'read failure');
+		$message = "salvage cap expired / stuck or environment: awaiting {$awaited}";
+		if ($child) {
+			$destination = is_resource($report) ? $report : $stream;
+			@fwrite($destination, "SALVAGE_EXPIRED {$message} ({$reason})\n");
+			exit(2);
+		}
 		$this->fail("{$message} ({$reason})");
 	}
 
-	private function expectChildEvent(mixed $stream, string $expected, string $awaited): void
+	private function expectChildEvent(mixed $stream, string $expected, string $awaited, mixed $report = NULL): void
 	{
-		$event = trim($this->readEvent($stream, $awaited, TRUE));
+		$event = trim($this->readEvent($stream, $awaited, TRUE, $report));
 		if ($event !== $expected) {
-			@fwrite($stream, "EVENT_ERROR awaiting {$awaited}; expected {$expected}; got {$event}\n");
+			$destination = is_resource($report) ? $report : $stream;
+			@fwrite($destination, "EVENT_ERROR awaiting {$awaited}; expected {$expected}; got {$event}\n");
 			exit(2);
 		}
+	}
+
+	/** @return array{0:mixed,1:mixed} */
+	private function signalPair(): array
+	{
+		$pair = @stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		if ($pair === FALSE) {
+			$this->markTestSkipped('stream_socket_pair() failed -- cannot signal across the fork.');
+		}
+		return $pair;
 	}
 
 	/** @return array{0:int,1:mixed} */
@@ -120,7 +132,7 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		if (!function_exists('pcntl_fork')) {
 			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
 		}
-		[$parent, $child] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		[$parent, $child] = $this->signalPair();
 		stream_set_timeout($parent, 5);
 		stream_set_timeout($child, 5);
 		$pid = pcntl_fork();
@@ -355,79 +367,142 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 	public function testOpenBlocksUntilARealConcurrentProcessReleasesTheLedgerLock(): void
 	{
-		if (!function_exists('pcntl_fork')) {
+		if (!function_exists('pcntl_fork') || !function_exists('pcntl_async_signals')
+			|| !function_exists('pcntl_signal') || !function_exists('posix_kill') || !defined('SIGUSR1')) {
 			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
 		}
 
 		$lockPath   = $this->dir . '/pfb_sync_status.json.lock';
-		[$controlParent, $controlChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
-		stream_set_timeout($controlParent, 5);
-		stream_set_timeout($controlChild, 5);
-		[$eventParent, $eventChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
-		stream_set_timeout($eventParent, 5);
-		stream_set_timeout($eventChild, 5);
-		$holderPid = pcntl_fork();
-		if ($holderPid === -1) {
-			$this->markTestSkipped('pcntl_fork() failed.');
-		}
-		if ($holderPid === 0) {
-			fclose($controlParent);
-			fclose($eventParent);
-			$fp = @fopen($lockPath, 'c');
-			if ($fp === FALSE || !@flock($fp, LOCK_EX)) {
-				@fwrite($eventChild, "HOLDER_ERROR\n");
-				exit(1);
+		$controlParent = NULL;
+		$controlChild = NULL;
+		$eventParent = NULL;
+		$eventChild = NULL;
+		$holderPid = NULL;
+		$openerPid = NULL;
+		try {
+			[$controlParent, $controlChild] = $this->signalPair();
+			stream_set_timeout($controlParent, 5);
+			stream_set_timeout($controlChild, 5);
+			[$eventParent, $eventChild] = $this->signalPair();
+			stream_set_timeout($eventParent, 5);
+			stream_set_timeout($eventChild, 5);
+			$holderPid = pcntl_fork();
+			if ($holderPid === -1) {
+				$this->markTestSkipped('pcntl_fork() failed.');
 			}
-			fwrite($eventChild, "LOCKED\n");
-			$this->expectChildEvent($controlChild, 'RELEASE', 'ledger lock holder release');
-			fwrite($eventChild, "RELEASING\n");
-			@flock($fp, LOCK_UN);
-			fclose($fp);
+			if ($holderPid === 0) {
+				fclose($controlParent);
+				fclose($eventParent);
+				$fp = @fopen($lockPath, 'c');
+				if ($fp === FALSE || !@flock($fp, LOCK_EX)) {
+					@fwrite($eventChild, "HOLDER_ERROR\n");
+					exit(1);
+				}
+				fwrite($eventChild, "LOCKED\n");
+				$this->expectChildEvent($controlChild, 'RELEASE', 'ledger lock holder release', $eventChild);
+				fwrite($eventChild, "RELEASING\n");
+				@flock($fp, LOCK_UN);
+				fclose($fp);
+				fclose($controlChild);
+				fclose($eventChild);
+				exit(0);
+			}
 			fclose($controlChild);
-			fclose($eventChild);
-			exit(0);
-		}
-		fclose($controlChild);
-		$this->assertSame("LOCKED\n", $this->readEvent($eventParent, 'ledger lock holder acquisition'));
+			$controlChild = NULL;
+			$this->assertSame("LOCKED\n", $this->readEvent($eventParent, 'ledger lock holder acquisition'));
 
-		$openerPid = pcntl_fork();
-		if ($openerPid === -1) {
-			$this->markTestSkipped('pcntl_fork() failed.');
-		}
-		if ($openerPid === 0) {
-			fclose($controlParent);
-			fclose($eventParent);
-			$probe = @fopen($lockPath, 'c');
-			$wouldBlock = 0;
-			$contended = $probe !== FALSE
-				&& !@flock($probe, LOCK_EX | LOCK_NB, $wouldBlock)
-				&& $wouldBlock === 1;
-			if (is_resource($probe)) {
-				fclose($probe);
+			$openerPid = pcntl_fork();
+			if ($openerPid === -1) {
+				$this->markTestSkipped('pcntl_fork() failed.');
 			}
-			if (!$contended) {
-				fwrite($eventChild, "PROBE_FAILED\n");
-				exit(1);
+			if ($openerPid === 0) {
+				fclose($controlParent);
+				fclose($eventParent);
+				pcntl_async_signals(TRUE);
+				pcntl_signal(SIGUSR1, static function () use ($eventChild): void {
+					$functions = array_values(array_filter(array_map(
+						static fn(array $frame): string => (string) ($frame['function'] ?? ''),
+						debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)
+					), static fn(string $name): bool => $name !== ''));
+					$required = ['pfb_flock_bounded', 'pfb_sync_status_locked', 'pfb_sync_status_open'];
+					$blocked = count(array_intersect($required, $functions)) === count($required)
+						&& !in_array('pfb_sync_status_read_all', $functions, TRUE);
+					$event = $blocked ? 'BLOCKED' : 'NOT_BLOCKED ' . implode('|', array_slice($functions, 0, 24));
+					@fwrite($eventChild, $event . "\n");
+				});
+				$probe = @fopen($lockPath, 'c');
+				$wouldBlock = 0;
+				$contended = $probe !== FALSE
+					&& !@flock($probe, LOCK_EX | LOCK_NB, $wouldBlock)
+					&& $wouldBlock === 1;
+				if (is_resource($probe)) {
+					fclose($probe);
+				}
+				if (!$contended) {
+					fwrite($eventChild, "PROBE_FAILED\n");
+					exit(1);
+				}
+				fwrite($eventChild, "CONTENDED\n");
+				pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+				fwrite($eventChild, "RETURNED\n");
+				fclose($eventChild);
+				exit(0);
 			}
-			fwrite($eventChild, "CONTENDED\n");
-			pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
-			fwrite($eventChild, "RETURNED\n");
 			fclose($eventChild);
-			exit(0);
+			$eventChild = NULL;
+			$this->assertSame("CONTENDED\n", $this->readEvent($eventParent, 'concurrent opener contention'));
+			$blocked = FALSE;
+			$notBlockedSignals = [];
+			for ($attempt = 0; $attempt < 32; $attempt++) {
+				if (!@posix_kill($openerPid, SIGUSR1)) {
+					$this->fail('salvage cap expired / stuck or environment: awaiting BLOCKED signal before release; opener exited');
+				}
+				$signalEvent = trim($this->readEvent($eventParent, 'opener blocked-state signal'));
+				if ($signalEvent === 'BLOCKED') {
+					$blocked = TRUE;
+					break;
+				}
+				if (!str_starts_with($signalEvent, 'NOT_BLOCKED ')) {
+					$this->fail('unexpected opener signal event: expected BLOCKED or NOT_BLOCKED, got ' . $signalEvent);
+				}
+				$notBlockedSignals[] = $signalEvent;
+			}
+			$this->assertTrue($blocked,
+				'salvage cap expired / stuck or environment: awaiting BLOCKED opener state after signal retries; '
+				. 'observed=' . implode(';', $notBlockedSignals));
+			fwrite($controlParent, "RELEASE\n");
+			$this->assertSame("RELEASING\n", $this->readEvent($eventParent, 'ledger lock holder release while still locked'));
+			$this->assertSame("RETURNED\n", $this->readEvent($eventParent, 'concurrent opener return after unlock'));
+			fclose($controlParent);
+			$controlParent = NULL;
+			fclose($eventParent);
+			$eventParent = NULL;
+			pcntl_waitpid($holderPid, $holderStatus);
+			$holderPid = NULL;
+			pcntl_waitpid($openerPid, $openerStatus);
+			$openerPid = NULL;
+			$this->assertTrue(pcntl_wifexited($holderStatus) && pcntl_wexitstatus($holderStatus) === 0,
+				'ledger lock holder must exit cleanly after the release event');
+			$this->assertTrue(pcntl_wifexited($openerStatus) && pcntl_wexitstatus($openerStatus) === 0,
+				'concurrent opener must return cleanly after the release event');
+		} finally {
+			if (is_resource($controlParent)) {
+				@fwrite($controlParent, "RELEASE\n");
+			}
+			foreach ([$controlParent, $controlChild, $eventParent, $eventChild] as $stream) {
+				if (is_resource($stream)) {
+					@fclose($stream);
+				}
+			}
+			foreach ([$holderPid, $openerPid] as $pid) {
+				if (is_int($pid) && $pid > 0) {
+					if (pcntl_waitpid($pid, $childStatus, WNOHANG) === 0 && function_exists('posix_kill')) {
+						@posix_kill($pid, SIGKILL);
+					}
+					pcntl_waitpid($pid, $childStatus);
+				}
+			}
 		}
-		fclose($eventChild);
-		$this->assertSame("CONTENDED\n", $this->readEvent($eventParent, 'concurrent opener contention'));
-		fwrite($controlParent, "RELEASE\n");
-		$this->assertSame("RELEASING\n", $this->readEvent($eventParent, 'ledger lock holder release while still locked'));
-		$this->assertSame("RETURNED\n", $this->readEvent($eventParent, 'concurrent opener return after unlock'));
-		fclose($controlParent);
-		fclose($eventParent);
-		pcntl_waitpid($holderPid, $holderStatus);
-		pcntl_waitpid($openerPid, $openerStatus);
-		$this->assertTrue(pcntl_wifexited($holderStatus) && pcntl_wexitstatus($holderStatus) === 0,
-			'ledger lock holder must exit cleanly after the release event');
-		$this->assertTrue(pcntl_wifexited($openerStatus) && pcntl_wexitstatus($openerStatus) === 0,
-			'concurrent opener must return cleanly after the release event');
 	}
 
 	// -----------------------------------------------------------------------
@@ -450,7 +525,7 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		]);
 
 		$lockPath   = $this->dir . '/pfb_sync_status.json.lock';
-		[$holderParent, $holderChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		[$holderParent, $holderChild] = $this->signalPair();
 		stream_set_timeout($holderParent, 5);
 		stream_set_timeout($holderChild, 5);
 		$pid        = pcntl_fork();
