@@ -92,8 +92,8 @@ if (isset($argv[1])) {
 		pfb_run_hooks($when, $ctx);
 		exit;
 	}
-	// issue #149: SafeSearch CNAME fallback freshness. Light cron path (every 15
-	// min): re-resolves the SafeSearch CNAME targets (duckduckgo/pixabay) and
+	// issue #149: SafeSearch CNAME fallback freshness. Legacy direct verb:
+	// re-resolves the SafeSearch CNAME targets (duckduckgo/pixabay) and
 	// refreshes their baked #2-fallback IPs in the SafeSearch CSV, triggering a
 	// python reload only on change. Does NOT run sync_package_pfblockerng.
 	elseif ($argv[1] == 'ss_refresh') {
@@ -101,7 +101,7 @@ if (isset($argv[1])) {
 		exit;
 	}
 	// ADR-43: due-ledger trigger-tick. Reads the ledger, dispatches each job
-	// that is due (feeds, dcc, bl), then calls ss_refresh unconditionally (cheap).
+	// that is due (feeds, dcc, bl), then runs due SafeSearch refresh work (cheap).
 	elseif ($argv[1] == 'tick') {
 		pfblockerng_tick();
 		exit;

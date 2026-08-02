@@ -455,8 +455,8 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
 
     On its own, "unchanged ledger" cannot distinguish "tick correctly skipped the non-due cron"
     from "tick never ran at all" — both look identical. The positive control:
-    ss_refresh rides every tick unconditionally (pfblockerng_tick calls it regardless of what
-    is due), so a SafeSearch CNAME row seeded with a STALE baked IP and a resolver (the
+    an absent ss_refresh ledger entry is due on this first tick (pfblockerng_tick calls it
+    when due), so a SafeSearch CNAME row seeded with a STALE baked IP and a resolver (the
     'pfbextdns' setting) pointed at the hermetic stub DNS makes THIS tick's ss_refresh
     deterministically detect a change and log its own marker — proving the tick executed.
 
@@ -486,7 +486,7 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
     ss_before = h.count_log_marker(vm, h.PFB_LOG, ss_marker)
 
     try:
-        # When: tick fires — cron is not due, but ss_refresh always runs.
+        # When: tick fires — cron is not due, and the absent ss_refresh entry is due.
         _run_tick(vm)
 
         # Then: the synchronous ledger decision is unchanged (cron skipped).

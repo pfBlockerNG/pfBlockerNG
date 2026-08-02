@@ -3851,12 +3851,32 @@ function pfblockerng_tick(?array $ps_lines = NULL, ?callable $ss_refresh = NULL)
 
 	// SafeSearch CNAME freshness: independent 900-second due-ledger cadence.
 	if ($due['ss_refresh']) {
-		if ($ss_refresh !== NULL) {
-			$ss_refresh();
+		$ss_lock = @fopen("{$dbdir}/pfb_ss_refresh.lock", 'c');
+		if ($ss_lock === FALSE) {
+			pfb_logger("\nTick: SafeSearch lock open failed [ {$dbdir}/pfb_ss_refresh.lock ]", 2);
 		} else {
-			pfblockerng_ss_refresh();
+			$ss_lock_timed_out = FALSE;
+			if (!pfb_flock_bounded($ss_lock, LOCK_EX, 5.0, $ss_lock_timed_out)) {
+				$reason = $ss_lock_timed_out ? 'timed out' : 'acquire failed';
+				pfb_logger("\nTick: SafeSearch lock {$reason} [ {$dbdir}/pfb_ss_refresh.lock ]", 2);
+				@fclose($ss_lock);
+			} else {
+				try {
+					// Another tick may have completed while this one waited for the lock.
+					if (pfb_due_ledger_is_due('ss_refresh', 900, $now, $seed, 0, $dbdir)) {
+						if ($ss_refresh !== NULL) {
+							$ss_refresh();
+						} else {
+							pfblockerng_ss_refresh();
+						}
+						pfb_due_ledger_mark_ran_anchored('ss_refresh', 900, $now, $seed, 0, $dbdir);
+					}
+				} finally {
+					@flock($ss_lock, LOCK_UN);
+					@fclose($ss_lock);
+				}
+			}
 		}
-		pfb_due_ledger_mark_ran_anchored('ss_refresh', 900, $now, $seed, 0, $dbdir);
 	}
 
 	// ADR-61: apply-stage reconciliation. Unconditional -- never gated on $due or
