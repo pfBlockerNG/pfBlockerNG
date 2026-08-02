@@ -6,7 +6,7 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1815: the 11 byte-substr() display-truncation sites in
+ * issue #1815: the 10 byte-substr() display-truncation sites in
  * pfblockerng_alerts.php's row builders (convert_dnsbl_log / convert_dns_reply_log /
  * convert_ip_log) cut on BYTES, not characters. A multibyte character straddling the
  * cut leaves a dangling lead byte; pfb_hsc()'s ENT_SUBSTITUTE (issue #1814) then
@@ -14,7 +14,7 @@ use PHPUnit\Framework\TestCase;
  * whole. This file pins every site converted to mb_substr(..., 'UTF-8') (the #1069
  * exemplar's own form, pfb_stat_hostname_cell()).
  *
- * Coverage matrix (rows 1-11 = the 11 sites; 12-16 = branch/hostile-input axes):
+ * Coverage matrix (rows 1-10 = the 10 sites; 12-16 = branch/hostile-input axes):
  *   1  convert_dnsbl_log     $hostname (SRC-IP resolved name)          cut=24
  *   2  convert_dnsbl_log     $f2 (blocked domain)                      cut=59 (wide arm)
  *   3  convert_dnsbl_log     $f7 (CNAME evaluated domain)              cut=51 (wide arm)
@@ -25,7 +25,6 @@ use PHPUnit\Framework\TestCase;
  *   8  convert_dns_reply_log $fields[8] (resolved value)               cut=16
  *   9  convert_ip_log        $fields[15] (logged Feed Name)             cut=16
  *   10 convert_ip_log        $feed_new (re-attributed feed)             cut=16
- *   11 convert_ip_log        $fields[16] (gethostbyaddr hostname)       cut=21
  *   12 short-side branch coverage, one per builder (no truncation, no U+FFFD)
  *   13 4-byte character (emoji) straddling the cut
  *   14 invalid UTF-8 byte before the cut -- see that test's docblock
@@ -307,7 +306,7 @@ final class AlertsMultibyteTruncationTest extends TestCase
 	}
 
 	// =========================================================================
-	// Rows 1-11: the 11 truncation sites
+	// Rows 1-10: the 10 truncation sites
 	// =========================================================================
 
 	public function test_row01_dnsbl_srcip_hostname_truncation_keeps_multibyte_char_whole(): void
@@ -481,64 +480,6 @@ final class AlertsMultibyteTruncationTest extends TestCase
 		$this->assertStringContainsString('<small>...</small>', $html);
 		$this->assertStringNotContainsString("\u{FFFD}", $html);
 		$this->assertStringContainsString('é', $html);
-	}
-
-	/**
-	 * Row 11's site -- convert_ip_log()'s rDNS-hostname cell, which wraps a
-	 * truncated `$fields[16]` in a `<span title="...">` -- is DEAD CODE in the
-	 * current production source, discovered empirically while writing this test
-	 * (the content assertion the other 10 rows use never passed, in EITHER
-	 * direction). Verified via `grep -n '\$fields\[16\]'`: inside convert_ip_log()
-	 * the only hits are the 'Unknown' default and this truncating assignment; the
-	 * value that variable holds is never read again in the function or in either of
-	 * its <tr> print templates. What the row actually PRINTS for the resolved
-	 * hostname is `$hostname['src']`/`$hostname['dst']` -- a SEPARATE copy captured
-	 * earlier by pfb_ip_render_query() (via pfb_ip_render_attribution(), called
-	 * BEFORE this site runs) straight from the ORIGINAL, untruncated
-	 * $fields[16]/[17] -- so mutating $fields[16] here has zero effect on the
-	 * rendered output, before or after this fix. Tracked as issue #2008.
-	 *
-	 * Consequence: the rendered-HTML oracle every other row uses (no U+FFFD,
-	 * multibyte char present) cannot discriminate this site at all -- both the
-	 * byte-substr() original and the mb_substr() fix produce IDENTICAL rendered
-	 * output (the computed span never reaches it). This test instead proves the
-	 * one thing that IS observable: the conversion executes cleanly (no PHP
-	 * warning/notice) against both a short and a straddling-multibyte value. The
-	 * src edit at this site is still applied, per the issue's literal "convert all
-	 * 11 sites" scope and because it is a safe, behaviour-preserving textual
-	 * change regardless of reachability.
-	 */
-	public function test_row11_ip_resolved_hostname_truncation_executes_without_warning_dead_code(): void
-	{
-		file_put_contents("{$this->denydir}/Row11Feed.txt", "192.0.2.110\n192.0.2.111\n");
-		$rdnsLong  = $this->mbStraddle(21, 'R11', 'é', 'trailing-rdns.example');
-		$rdnsShort = 'short-rdns.example';
-		$this->assertLessThan(22, strlen($rdnsShort), 'fixture sanity: must be under the 22-char gate');
-
-		foreach ([$rdnsLong, $rdnsShort] as $rdns) {
-			$fields = $this->ipRawFields([
-				8 => '192.0.2.110', 15 => '192.0.2.110',
-				14 => 'pfB_Row11_v4', 16 => 'Row11Feed', 17 => $rdns,
-			]);
-
-			$warnings = [];
-			set_error_handler(function (int $errno, string $errstr) use (&$warnings): bool {
-				$warnings[] = $errstr;
-				return TRUE;
-			});
-			try {
-				$html = $this->renderIpRow($fields, 'Block');
-			} finally {
-				restore_error_handler();
-			}
-
-			$this->assertSame(
-				[],
-				$warnings,
-				"convert_ip_log() must render {$rdns} at the fields[16] site without a PHP warning/notice, got:\n" . implode("\n", $warnings)
-			);
-			$this->assertNotSame('', $html, 'the row must still render (this site being dead code must not break the rest of the row)');
-		}
 	}
 
 	// =========================================================================

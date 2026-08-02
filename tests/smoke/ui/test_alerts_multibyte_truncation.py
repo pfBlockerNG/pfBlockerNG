@@ -29,12 +29,12 @@ site; the row renders a delisted/"Not listed!" state harmlessly either way.
 
 The IP row deliberately targets the logged Feed Name (``$fields[15]``) rather
 than the ``rhost`` (gethostbyaddr-resolved hostname) cell, which is the more
-obvious candidate: ``convert_ip_log()`` computes the truncated/wrapped rDNS
-value into ``$fields[16]`` but never reads that variable again -- the row's
-actually-rendered resolved-hostname cell comes from ``$hostname['src']`` /
-``$hostname['dst']``, a SEPARATE copy captured earlier, straight from the
-untruncated original (issue #2008). Asserting on ``rhost`` here would be a
-vacuous check, and this module cannot be executed locally to catch that.
+obvious candidate: the former discarded ``$fields[16]`` default/truncation
+block was removed by issue #2008, and the row's actually-rendered
+resolved-hostname cell comes from ``$hostname['src']`` / ``$hostname['dst']``,
+a SEPARATE copy captured earlier, straight from the untruncated original.
+Asserting on ``rhost`` here would be a vacuous check, and this module cannot be
+executed locally to catch that.
 
 HONESTY NOTE (no local smoke VM in this environment, precedent: commit
 9fd4bfce, issue #1814): this module has NOT been executed against a live

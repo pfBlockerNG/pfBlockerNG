@@ -3101,13 +3101,6 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	$fields[14]		= pfb_hsc($fields[14]);
 	$feed_match_cell	= pfb_ip_feed_match_cell($fields[15], $feed_new, $fields[14], pfb_hsc($eval_new));
 
-	if (empty($fields[16])) {
-		$fields[16] = 'Unknown';
-	}
-	elseif (strlen($fields[16]) >= 22) {
-		$fields[16] = "<span title=\"" . pfb_hsc($fields[16]) . "\">" . pfb_hsc(pfb_truncate($fields[16], 21)) . "<small>...</small></span>";
-	}
-
 	// Interface / Protocol / GeoIP code / Timestamp printed verbatim
 	$fields[2]	= pfb_hsc($fields[2]);
 	$fields[6]	= pfb_hsc($fields[6]);
