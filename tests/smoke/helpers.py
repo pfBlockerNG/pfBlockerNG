@@ -4857,7 +4857,10 @@ def pfctl_rule_has_alias(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> b
 
 def _rule_line_has_alias(line: str, alias: str) -> bool:
     """Return whether one ruleset line references table ``alias``."""
-    return f"<{alias}>" in line or (alias.startswith("pfB_") and alias in line)
+    escaped = re.escape(alias)
+    if re.search(rf"<{escaped}>", line):
+        return True
+    return alias.startswith("pfB_") and re.search(rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])", line) is not None
 
 
 def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval: float = 2.0) -> bool:
