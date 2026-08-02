@@ -117,7 +117,7 @@ final class TickCronTest extends TestCase
 	 *   Background: ledger absent (dir is empty).
 	 *     Given an empty ledger directory.
 	 *     When pfb_tick_due_jobs($now, $seed, $dir, $cron_interval, $bl_interval).
-	 *     Then cron, dcc, bl are all TRUE (fail-safe: run now, jitter on mark_ran).
+	 *     Then cron, dcc, bl, ss_refresh are all TRUE (fail-safe: run now, jitter on mark_ran).
 	 */
 	public function testAllDueWhenLedgerAbsent(): void
 	{
@@ -132,6 +132,9 @@ final class TickCronTest extends TestCase
 		$this->assertTrue($due['bl'],
 			"bl: expected TRUE (absent ledger => due-now), got FALSE;\n"
 			. "  now=" . self::NOW . " dir={$this->dir}");
+		$this->assertTrue($due['ss_refresh'],
+			"ss_refresh: expected TRUE (absent ledger => due-now), got FALSE;\n"
+			. "  now=" . self::NOW . " dir={$this->dir}");
 	}
 
 	// -----------------------------------------------------------------------
@@ -143,14 +146,14 @@ final class TickCronTest extends TestCase
 	 *
 	 * Scenario:
 	 *   Background: all jobs have next_due = now + 1 hour.
-	 *     Given ledger entries with next_due > now for cron, dcc, bl.
+	 *     Given ledger entries with next_due > now for cron, dcc, bl, ss_refresh.
 	 *     When pfb_tick_due_jobs($now, ...).
-	 *     Then cron, dcc, bl are all FALSE (not yet due).
+	 *     Then cron, dcc, bl, ss_refresh are all FALSE (not yet due).
 	 */
 	public function testNoneDueWhenAllFuture(): void
 	{
 		$future = self::NOW + 3600;
-		foreach (['cron', 'dcc', 'bl'] as $job) {
+		foreach (['cron', 'dcc', 'bl', 'ss_refresh'] as $job) {
 			pfb_due_ledger_write_entry($job, [
 				'last_run' => self::NOW - self::DAILY,
 				'next_due' => $future,
@@ -169,6 +172,9 @@ final class TickCronTest extends TestCase
 		$this->assertFalse($due['bl'],
 			"bl: expected FALSE (next_due in future), got TRUE;\n"
 			. "  now=" . self::NOW . " next_due={$future}");
+		$this->assertFalse($due['ss_refresh'],
+			"ss_refresh: expected FALSE (next_due in future), got TRUE;\n"
+			. "  now=" . self::NOW . " next_due={$future}");
 	}
 
 	// -----------------------------------------------------------------------
@@ -180,9 +186,9 @@ final class TickCronTest extends TestCase
 	 *
 	 * Scenario:
 	 *   Background: cron is overdue; dcc and bl are not yet due.
-	 *     Given cron.next_due = now - 1 (past); dcc/bl.next_due = now + 1h (future).
+	 *     Given cron.next_due = now - 1 (past); dcc/bl/ss_refresh.next_due = now + 1h (future).
 	 *     When pfb_tick_due_jobs($now, ...).
-	 *     Then cron = TRUE, dcc = FALSE, bl = FALSE (catch-up for cron only).
+	 *     Then cron = TRUE, dcc = FALSE, bl = FALSE, ss_refresh = FALSE (catch-up for cron only).
 	 */
 	public function testOnlyCronDueWhenOnlyCronPast(): void
 	{
@@ -195,7 +201,7 @@ final class TickCronTest extends TestCase
 
 		// dcc and bl are not yet due.
 		$future = self::NOW + 3600;
-		foreach (['dcc', 'bl'] as $job) {
+		foreach (['dcc', 'bl', 'ss_refresh'] as $job) {
 			pfb_due_ledger_write_entry($job, [
 				'last_run' => self::NOW - self::DAILY,
 				'next_due' => $future,
@@ -213,6 +219,9 @@ final class TickCronTest extends TestCase
 			. "  now=" . self::NOW . " next_due={$future}");
 		$this->assertFalse($due['bl'],
 			"bl: expected FALSE (next_due in future), got TRUE;\n"
+			. "  now=" . self::NOW . " next_due={$future}");
+		$this->assertFalse($due['ss_refresh'],
+			"ss_refresh: expected FALSE (next_due in future), got TRUE;\n"
 			. "  now=" . self::NOW . " next_due={$future}");
 	}
 

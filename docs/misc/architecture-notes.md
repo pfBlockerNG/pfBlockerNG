@@ -1364,8 +1364,9 @@ case it logs `[ Disabled by … ]` and dispatches nothing (issue #1204 — the s
 off switch; the Update page reports the suppression). The direct `pfblockerng.php tick` verb is
 never gated. The tick carries **no**
 scheduling logic: it reads the due-ledger, dispatches each **due** job through the new API
-(`pfb_trigger scope=both force=false trigger=cron` for the feed pass), runs `ss_refresh` every tick
-(cheap DNS re-resolution), then `mark_ran`s each dispatched job. `clearip`/`cleardnsbl` (ADR-30) and
+(`pfb_trigger scope=both force=false trigger=cron` for the feed pass), runs `ss_refresh` when its
+dedicated zero-jitter 900-second entry is due (cheap DNS re-resolution), then `mark_ran`s each
+dispatched job. `clearip`/`cleardnsbl` (ADR-30) and
 non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
 and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
 

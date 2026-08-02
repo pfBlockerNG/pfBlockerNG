@@ -10040,6 +10040,13 @@
                 "variadic": false,
                 "type": "?array",
                 "default": "NULL"
+            },
+            {
+                "name": "ss_refresh",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },

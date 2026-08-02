@@ -3558,8 +3558,7 @@ function pfb_tick_seed(): string
  *
  * Delegates to the due-ledger API for each job. The $now, $seed, and
  * $dbdir are injectable so PHPUnit can verify cadence without filesystem or
- * wall-clock dependencies. ss_refresh is not returned — it runs every tick
- * unconditionally (called directly by pfblockerng_tick()).
+ * wall-clock dependencies. SafeSearch has its own zero-jitter 900-second entry.
  *
  * @param int    $now            Current epoch timestamp.
  * @param string $seed           Per-install seed for seeded_jitter.
@@ -3576,11 +3575,13 @@ function pfb_tick_due_jobs(
 	int    $bl_interval
 ): array {
 	$jitter_max = 23 * 3600;	// 82800 s mirrors the old rand(0,23)*3600 spread
+	$ss_refresh_due = pfb_due_ledger_is_due('ss_refresh', 900, $now, $seed, 0, $dbdir);
 
 	return [
-		'cron' => pfb_due_ledger_is_due('cron', $cron_interval, $now, $seed, 0,           $dbdir),
-		'dcc'  => pfb_due_ledger_is_due('dcc',  86400,          $now, $seed, $jitter_max,  $dbdir),
-		'bl'   => pfb_due_ledger_is_due('bl',   $bl_interval,   $now, $seed, $jitter_max,  $dbdir),
+		'cron'       => pfb_due_ledger_is_due('cron',       $cron_interval, $now, $seed, 0,          $dbdir),
+		'dcc'        => pfb_due_ledger_is_due('dcc',        86400,          $now, $seed, $jitter_max, $dbdir),
+		'bl'         => pfb_due_ledger_is_due('bl',         $bl_interval,   $now, $seed, $jitter_max, $dbdir),
+		'ss_refresh' => $ss_refresh_due,
 	];
 }
 
@@ -3694,8 +3695,8 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $t
  * pfblockerng_tick — ADR-43: apply-on-change due-ledger tick dispatcher.
  *
  * Reads the ledger and handles both cadence advancement and separate-process dispatch via
- * exec() for each due job (feeds, dcc, bl). ss_refresh runs every tick; the scheduled
- * log maintenance (pfb_log_mgmt) runs only on an idle tick (see below).
+ * exec() for each due job (feeds, dcc, bl). SafeSearch runs when its own due-ledger entry
+ * is due; the scheduled log maintenance (pfb_log_mgmt) runs only on an idle tick (see below).
  *
  * Lives here (not in the www/ dispatcher script) rather than the reverse so the
  * PHPUnit bootstrap can load and call the real entrypoint off-appliance: the www
@@ -3728,9 +3729,10 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $t
  * lines the concurrent writer appends during it.
  *
  * $ps_lines is injectable for hermetic off-appliance tests; NULL preserves the
- * appliance's host process-table scan.
+ * appliance's host process-table scan. $ss_refresh is an optional test seam; NULL calls
+ * the production SafeSearch refresher.
  */
-function pfblockerng_tick(?array $ps_lines = NULL): void
+function pfblockerng_tick(?array $ps_lines = NULL, ?callable $ss_refresh = NULL): void
 {
 	global $pfb;
 
@@ -3847,8 +3849,15 @@ function pfblockerng_tick(?array $ps_lines = NULL): void
 		}
 	}
 
-	// SafeSearch CNAME freshness: every tick (cheap DNS re-resolution).
-	pfblockerng_ss_refresh();
+	// SafeSearch CNAME freshness: independent 900-second due-ledger cadence.
+	if ($due['ss_refresh']) {
+		if ($ss_refresh !== NULL) {
+			$ss_refresh();
+		} else {
+			pfblockerng_ss_refresh();
+		}
+		pfb_due_ledger_mark_ran_anchored('ss_refresh', 900, $now, $seed, 0, $dbdir);
+	}
 
 	// ADR-61: apply-stage reconciliation. Unconditional -- never gated on $due or
 	// pending state -- and touches ONLY stage='apply' entries (Semantics #5);
