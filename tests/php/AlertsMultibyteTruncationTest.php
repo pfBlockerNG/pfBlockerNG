@@ -14,7 +14,8 @@ use PHPUnit\Framework\TestCase;
  * whole. This file pins every site converted to mb_substr(..., 'UTF-8') (the #1069
  * exemplar's own form, pfb_stat_hostname_cell()).
  *
- * Coverage matrix (rows 1-10 = the 10 sites; 12-16 = branch/hostile-input axes):
+ * Coverage matrix (rows 1-10 = the 10 sites; 12-16 = branch/hostile-input axes;
+ * 17-19 = Unified-view narrow-width arms):
  *   1  convert_dnsbl_log     $hostname (SRC-IP resolved name)          cut=24
  *   2  convert_dnsbl_log     $f2 (blocked domain)                      cut=59 (wide arm)
  *   3  convert_dnsbl_log     $f7 (CNAME evaluated domain)              cut=51 (wide arm)
@@ -30,11 +31,9 @@ use PHPUnit\Framework\TestCase;
  *   14 invalid UTF-8 byte before the cut -- see that test's docblock
  *   15 HTML metacharacter at the character-cut boundary -- entity stays complete
  *   16 punycode/xn-- domain whose idn_to_utf8()-produced text straddles the cut
- *
- * DEFERRED (not tested here): the mode=='unified' (lowercase) narrow-arm ternaries
- * on sites 2/3/7 are unreachable in production (callers only ever pass the literals
- * 'Unified'/'non_unified' -- never lowercase 'unified' -- so `$mode != 'unified'` is
- * always TRUE). Tracked separately by the issue #1815 planner; out of scope here.
+ *   17 Unified DNSBL domain narrow cut=39 (wide side remains row 2)
+ *   18 Unified DNSBL CNAME narrow cut=31 (wide side remains row 3)
+ *   19 Unified DNS reply domain narrow cut=29 (wide side remains row 7)
  *
  * Every test drives the value through the row builder's OWN production surface
  * (convert_dnsbl_log() / convert_dns_reply_log() / convert_ip_log()), capturing
@@ -118,6 +117,10 @@ final class AlertsMultibyteTruncationTest extends TestCase
 			'aliasdir'         => $this->aliasdir,
 			'asn_reporting'    => 'disabled',
 			'supp'             => '',	// PfbToggle::Off -- suppression-list lookup skipped
+			'unidnsbl'         => '#f0f0f0',
+			'unidnsbl2'        => '#202020',
+			'unireply'         => '#f0f0f0',
+			'unireply2'        => '#202020',
 		];
 		$GLOBALS['local_hosts']              = [];
 		$GLOBALS['dnsbl_int']                = [];
@@ -222,10 +225,10 @@ final class AlertsMultibyteTruncationTest extends TestCase
 		];
 	}
 
-	private function renderDnsblRow(array $fields): string
+	private function renderDnsblRow(array $fields, string $mode = 'Reports'): string
 	{
 		ob_start();
-		convert_dnsbl_log('Reports', $fields);
+		convert_dnsbl_log($mode, $fields);
 		return (string) ob_get_clean();
 	}
 
@@ -250,10 +253,10 @@ final class AlertsMultibyteTruncationTest extends TestCase
 		];
 	}
 
-	private function renderReplyRow(array $fields): string
+	private function renderReplyRow(array $fields, string $mode = 'Reports'): string
 	{
 		ob_start();
-		convert_dns_reply_log('Reports', $fields);
+		convert_dns_reply_log($mode, $fields);
 		return (string) ob_get_clean();
 	}
 
@@ -640,6 +643,63 @@ final class AlertsMultibyteTruncationTest extends TestCase
 		$this->assertStringContainsString('<small>...</small>', $html);
 		$this->assertStringNotContainsString("\u{FFFD}", $html, 'the idn_to_utf8()-produced text must not dangle at the cut');
 		$this->assertStringContainsString('тест', $html, 'the whole IDN-converted Cyrillic word must survive the cut');
+	}
+
+	// =========================================================================
+	// Rows 17-19: Unified-view narrow-width arms. Values stay below the Reports
+	// gates so a still-wide implementation renders them verbatim.
+	// =========================================================================
+
+	public function test_row17_unified_dnsbl_domain_uses_narrow_truncation_width(): void
+	{
+		$domain = 'R17' . str_repeat('a', 36) . 'TAIL';
+		$expected = 'R17' . str_repeat('a', 36);
+		$this->assertGreaterThanOrEqual(40, strlen($domain));
+		$this->assertLessThan(60, strlen($domain));
+		$fields = $this->dnsblFields($domain, '10.1.0.20', 'Grp17', 'Feed17');
+
+		$html = $this->renderDnsblRow($fields, 'Unified');
+
+		$this->assertStringContainsString("<td>{$expected}<small>...</small></td>", $html);
+		$this->assertStringNotContainsString("<td>{$domain}</td>", $html);
+	}
+
+	public function test_row18_unified_dnsbl_cname_uses_narrow_truncation_width(): void
+	{
+		$cname = 'R18' . str_repeat('b', 28) . 'TAIL';
+		$expected = 'R18' . str_repeat('b', 28);
+		$this->assertGreaterThanOrEqual(32, strlen($cname));
+		$this->assertLessThan(52, strlen($cname));
+		$fields = $this->dnsblFields(
+			'blocked-domain-18.example',
+			'10.1.0.21',
+			'Grp18',
+			'Feed18',
+			'',
+			'DNSBL_CNAME',
+			$cname
+		);
+
+		$html = $this->renderDnsblRow($fields, 'Unified');
+
+		$this->assertStringContainsString("CNAME: {$expected}<small>...</small>", $html);
+		$this->assertStringNotContainsString("CNAME: {$cname}", $html);
+	}
+
+	public function test_row19_unified_dnsreply_domain_uses_narrow_truncation_width(): void
+	{
+		$domain = 'R19' . str_repeat('c', 26) . 'TAIL';
+		$expected = 'R19' . str_repeat('c', 26);
+		$this->assertGreaterThanOrEqual(30, strlen($domain));
+		$this->assertLessThan(45, strlen($domain));
+		$srcIp = '10.1.0.22';
+		$GLOBALS['local_hosts'] = [$srcIp => ''];
+		$fields = $this->replyFields($domain, $srcIp);
+
+		$html = $this->renderReplyRow($fields, 'Unified');
+
+		$this->assertStringContainsString("<td title=\"{$domain}\">{$expected}<small>...</small></td>", $html);
+		$this->assertStringNotContainsString("<td title=\"{$domain}\">{$domain}</td>", $html);
 	}
 
 	// =========================================================================

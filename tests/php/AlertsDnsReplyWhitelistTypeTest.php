@@ -202,4 +202,30 @@ final class AlertsDnsReplyWhitelistTypeTest extends TestCase
 			'the pre-fix classification renders the "Add Domain to DNSBL" icon, not the wildcard-whitelist delete icon'
 		);
 	}
+
+	public function testConvertDnsReplyLogReportsKeepsWideDomainTruncationWidth(): void
+	{
+		$domain = 'WIDE-REPLY07-' . str_repeat('c', 40) . '-tail';
+		$this->assertGreaterThan(45, strlen($domain));
+		$fields = $this->replyFields($domain, '10.0.0.9');
+
+		$output = '';
+		$diagnostics = $this->runCapturing(function () use ($fields, &$output): void {
+			ob_start();
+			convert_dns_reply_log('Reports', $fields);
+			$output = ob_get_clean();
+		});
+
+		$this->assertSame([], $diagnostics, 'wide Reports rendering must not add PHP diagnostics');
+		$this->assertStringContainsString(
+			'<td title="' . $domain . '">' . substr($domain, 0, 44) . '<small>...</small></td>',
+			$output,
+			'Reports DNS-reply domains must retain the existing 44-character display width'
+		);
+		$this->assertStringNotContainsString(
+			'<td title="' . $domain . '">' . substr($domain, 0, 29) . '<small>...</small></td>',
+			$output,
+			'Reports DNS-reply domains must not use the Unified 29-character display width'
+		);
+	}
 }
