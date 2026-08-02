@@ -456,7 +456,7 @@ def _domain_matches(rule: Rule, query: str) -> bool:
 
 
 def _regex_matches(rule: Rule, query: str) -> bool:
-    return re.search(rule.key, query.strip(".").lower()) is not None
+    return re.search(rule.key, query.strip(".").lower(), flags=re.IGNORECASE) is not None
 
 
 def _matches(rule: Rule, query: str) -> bool:
@@ -616,8 +616,8 @@ def test_regex_reducible_allow_folds_to_whitelist() -> None:
 
 
 # --- 4. REGEX IRREDUCIBLE: matches as written ------------------------------ #
-def test_regex_irreducible_block_matches_as_written() -> None:
-    rs = rules_from([r"/ad[0-9]\.example\.com$/"])
+def test_regex_irreducible_block_matches_case_insensitively() -> None:
+    rs = rules_from([r"/AD[0-9]\.EXAMPLE\.COM$/"])
     assert any(r.target is Target.REGEX for r in rs)
     assert decide(rs, "ad7.example.com").outcome == "block"
     assert decide(rs, "ads.example.com").outcome == "pass"  # 's' is not [0-9]

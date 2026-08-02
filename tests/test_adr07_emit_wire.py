@@ -280,6 +280,21 @@ class TestUserUnlock:
 # 3. ON -- the live 6-band matcher == the Phase-2 oracle decide()
 # --------------------------------------------------------------------------- #
 class TestLiveMatcherEqualsOracle:
+    def test_feed_block_and_allow_regex_are_case_insensitive_without_rewriting(self) -> None:
+        feeds = {
+            "f": [
+                r"/AD[0-9]\.EXAMPLE\.COM$/",
+                "||safe7.example.com^",
+                r"@@/SAFE[0-9]\.EXAMPLE\.COM$/",
+            ]
+        }
+        res = _build(feeds)
+
+        assert {entry["re"].pattern for entry in res.regex_db.values()} == {r"AD[0-9]\.EXAMPLE\.COM$"}
+        assert {entry["re"].pattern for entry in res.allow_regex_db.values()} == {r"SAFE[0-9]\.EXAMPLE\.COM$"}
+        assert _live_label(res, "ad7.example.com") == "block"
+        assert _live_label(res, "safe7.example.com") == "resolve"
+
     def test_feed_allow_unblocks_globally(self) -> None:
         feeds = {"f": ["||example.com^", "@@||safe.example.com^"]}
         res = _build(feeds)
