@@ -146,6 +146,55 @@ def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
     assert any(not _regex_is_catastrophic_shape(pattern) for pattern in corpus)
 
 
+def test_probe_and_resolver_both_reject_an_adjacent_quantifier_run() -> None:
+    """issue #2035: the shape gate's structural rules all keyed on a parenthesised group,
+    so a run of ungrouped adjacent quantified atoms reached BOTH consumers unflagged --
+    the save-time probe returned 0 and the resolver's load-time gate returned False.
+
+    The rule lives in the one shared module, so this drives both surfaces the way they are
+    really used: ``main()`` through a subprocess (what pfb_dnsbl_regex_validation_errors()
+    runs) and the composed predicate (what pfb_unbound.py imports).
+    """
+    from pfb_dnsbl_regex_rules import _regex_is_catastrophic_shape
+
+    pattern = r"^[a-z]+[a-z]+[a-z]+[a-z]+@example\.com$"
+    assert _regex_is_catastrophic_shape(pattern) is True
+
+    proc = run_probe((pattern + "\n").encode("utf-8"), "1")
+    assert proc.returncode == 1, f"probe admitted {pattern!r}"
+    assert proc.stderr.decode("utf-8").splitlines() == [f"line 1: {pattern!r}: catastrophic-backtracking shape"], (
+        proc.stderr
+    )
+
+
+def test_shape_gate_stays_total_on_malformed_pattern_fragments() -> None:
+    """The gate reads the pattern STRING before anything compiles it, so it is handed
+    fragments ``re`` itself would reject -- an unterminated class, a dangling backslash, a
+    half-written repeat. Each must return a verdict rather than raise, or a single bad feed
+    line becomes an unhandled exception on the resolver's load path."""
+    from pfb_dnsbl_regex_rules import _regex_is_catastrophic_shape
+
+    for fragment in (
+        "",
+        "[a-z",
+        "[^",
+        "[]",
+        "\\",
+        "\\x",
+        "\\u00",
+        "\\N{",
+        "a{",
+        "a{2,",
+        "**",
+        "((((",
+        ")+",
+        "(?",
+        "[a-z]+" * 500,
+        "a" * 5000 + "+",
+    ):
+        assert isinstance(_regex_is_catastrophic_shape(fragment), bool), fragment
+
+
 def test_main_treats_crlf_terminated_lines_like_lf() -> None:
     """A regex-list body with CRLF line endings splits into the same lines (and
     reports the same line numbers) as an LF-only body."""

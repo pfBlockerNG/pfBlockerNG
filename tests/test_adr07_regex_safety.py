@@ -143,6 +143,83 @@ class TestCatastrophicShapeHeuristic:
         for pat in (r"(a+)(a+)+", r"(a+)(b+)*", r"(\w+)(\d+)+$", r"^(x+)(y+)*\.example$"):
             assert _regex_is_catastrophic_shape(pat) is True, pat
 
+    def test_ungrouped_adjacent_quantifier_run_flagged(self) -> None:
+        # issue #2035: a run of back-to-back atoms that each carry an unbounded quantifier
+        # and whose character sets OVERLAP partitions the matched span the same way the
+        # grouped shapes do -- every atom can cede characters to its neighbour. The four
+        # group-keyed shapes above all miss it (no parentheses anywhere) and four
+        # quantifiers sit well under the complexity budget. Measured at the maximum DNS
+        # name length (253 characters, the longest input the matcher can ever be handed):
+        # three adjacent `[a-z]+` cost 7 ms per query and four cost 462 ms.
+        for pat in (
+            r"^[a-z]+[a-z]+[a-z]+[a-z]+@example\.com$",  # the issue's console reproduction
+            r"^[a-z]+[a-z]+[a-z]+\.example\.com$",
+            r"\w+\w+\w+",
+            r".*.*.*",
+            r"[a-z]+[a-z0-9]+[0-9a-z]+",  # overlap does not require identical atoms
+            r"^a{2,}a{2,}a{2,}$",  # `{m,}` is unbounded too
+            r"^[a-z]+?[a-z]+?[a-z]+?$",  # lazy quantifiers backtrack just as hard
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_grouped_adjacent_quantifier_run_flagged(self) -> None:
+        # The SAME shape wearing parentheses. Plain `(...)`/`(?:...)` groups do not change
+        # what the engine backtracks over, so `([a-z]+)([a-z]+)([a-z]+)` is the ungrouped
+        # run above -- and it is the more expensive form, measured at 1277 ms per query for
+        # four groups against a 253-character name (vs 462 ms ungrouped). No group-keyed
+        # shape above catches it: none of these carries a quantifier ON a group.
+        for pat in (
+            r"^([a-z]+)([a-z]+)([a-z]+)([a-z]+)@example\.com$",
+            r"^([a-z]+)([a-z]+)([a-z]+)\.example\.com$",
+            r"^(?:\w+)(?:\w+)(?:\w+)\.example$",
+            r"^[a-z]+(\w+)[a-z]+\.example$",  # grouped and ungrouped atoms in one run
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_adjacent_quantifiers_over_disjoint_atoms_not_flagged(self) -> None:
+        # Adjacency alone is NOT the danger: when neighbouring atoms cannot match the same
+        # character there is exactly ONE way to split the input, so the engine never
+        # backtracks (measured 0.00 ms at 253 characters for the four-atom row below).
+        # Rejecting these would silently drop legitimate feed entries.
+        for pat in (
+            r"^cdn[a-z]+[0-9]*\.example\.com$",
+            r"^[a-z]+[0-9]+[a-z]+[0-9]+@example\.com$",
+            r"^\w+\.\w+$",
+            r"^.+@.+$",  # a literal separator ends the run
+        ):
+            assert _regex_is_catastrophic_shape(pat) is False, pat
+
+    def test_two_adjacent_overlapping_quantifiers_not_flagged(self) -> None:
+        # The rule flags runs LONGER than _REGEX_ADJACENT_ATOM_MAX (2), because a pair
+        # splits the input linearly: measured 0.08 ms at the 253-character maximum, three
+        # orders of magnitude under the 100 ms eviction ceiling and under the 10 ms warn
+        # ceiling. A pair is the shape realistic host patterns actually use, so flagging it
+        # would cost false positives to buy no measurable safety.
+        for pat in (
+            r"^[a-z]+[a-z0-9-]*\.doubleclick\.net$",
+            r"^\w+\w+$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is False, pat
+
+    def test_non_backtracking_adjacent_quantifiers_not_flagged(self) -> None:
+        # A possessive quantifier (`a++`) never gives characters back, and a FIXED repeat
+        # (`a{3}`) has nothing to give -- neither can partition the span, so neither starts
+        # or continues a run.
+        for pat in (r"^[a-z]++[a-z]++[a-z]++$", r"^[a-z]{3}[a-z]{3}[a-z]{3}$"):
+            assert _regex_is_catastrophic_shape(pat) is False, pat
+
+    def test_newline_repeat_is_not_read_as_a_named_unicode_escape(self) -> None:
+        # `\N{...}` (capital N) is a named-Unicode escape whose braces are part of the
+        # atom; `\n{2,}` (lowercase) is a newline carrying an open-ended REPEAT. Reading
+        # the lowercase form as the escape swallows the quantifier and blinds the gate to
+        # the run -- and lowercase is what the gate actually sees, since both consumers
+        # lowercase every pattern before admission.
+        assert _regex_is_catastrophic_shape(r"\n{2,}\n{2,}\n{2,}") is True
+        # The capital-N form is ONE atom, so its quantified run is a run of three too --
+        # green here only if `\N{BULLET}` is consumed whole and `+` is read as its
+        # quantifier (mis-parsing the braces as a repeat breaks the run and returns False).
+        assert _regex_is_catastrophic_shape("\\N{BULLET}+\\N{BULLET}+\\N{BULLET}+") is True
+
     def test_stacked_bounded_repeat_flagged(self) -> None:
         # Two consecutive {m}/{m,n} repeats multiply -> a tiny source string explodes.
         for pat in (r"a{500}{500}", r"(x){500}{500}", r"[a-z]{50}{50}", r"\w{20}{20}$"):
@@ -159,8 +236,10 @@ class TestCatastrophicShapeHeuristic:
         # equals MAX exactly is the last admissible value (off-by-one guard: a `>=` regression
         # would flag this). Build a pattern whose budget is EXACTLY MAX -- `_REGEX_BUDGET_MAX`
         # unbounded `*` quantifiers, zero alternations, and no other catastrophic shape (no
-        # nested/adjacent quantified group, no stacked bounded repeat).
-        at_budget = "a*" * pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX
+        # nested/adjacent quantified group, no stacked bounded repeat, and -- issue #2035 --
+        # no run of adjacent quantified atoms either, so the unquantified `b` separators
+        # keep every quantifier in a run of one).
+        at_budget = "a*b" * pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX
         # Compute the budget the SAME way the code does and pin it to MAX before asserting.
         budget = len(pfb_dnsbl_regex_rules._REGEX_UNBOUNDED_QUANTIFIER.findall(at_budget)) + len(
             pfb_dnsbl_regex_rules._REGEX_ALTERNATION.findall(at_budget)

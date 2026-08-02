@@ -24,8 +24,10 @@ Probe usage: <pfb_python_interpreter()> pfb_dnsbl_regex_rules.py [1]
 from __future__ import annotations
 
 import re
+import string
 import sys
 import warnings
+from functools import lru_cache
 
 # Length ceiling (heuristic): a pattern over this many characters is dropped
 # at load ONLY when the opt-in "Limit long/complex regex" setting is enabled.
@@ -59,6 +61,22 @@ _REGEX_ADJACENT_GROUP_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)\([^()]*\)\s
 # group/atom (optionally already quantified) then two consecutive brace quantifiers.
 _REGEX_STACKED_BOUNDED_REPEAT = re.compile(r"(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?:,\d*)?\}")
 
+# Adjacent unbounded quantifiers over OVERLAPPING atoms, grouped or not: [a-z]+[a-z]+[a-z]+,
+# ([a-z]+)([a-z]+)([a-z]+), \w+\w+\w+, a{2,}a{2,}a{2,}. Each atom can cede characters to its
+# neighbour, so a failing tail walks a partition of the matched span -- the mechanism the
+# group-keyed shapes above already cover, minus the parentheses they all key on. Measured
+# against a 253-character name (the longest the matcher can be handed): a run of 3 costs
+# 7 ms and a run of 4 costs 462 ms, versus 0.08 ms for a run of 2 -- so runs LONGER than
+# this bound are rejected and a pair stays admitted (a pair is what real host patterns use).
+_REGEX_ADJACENT_ATOM_MAX = 2
+
+# Character sets are compared by probing both atoms with one character at a time: this
+# alphabet only has to be big enough to separate the classes a domain pattern is written
+# over (letters, digits, punctuation, whitespace, non-ASCII word characters).
+_REGEX_OVERLAP_ALPHABET = string.printable + "é"
+
+_REGEX_OPEN_ENDED_REPEAT = re.compile(r"\{\d+,\}")
+
 # Complexity-budget backstop: cap the combined count of unbounded quantifiers (`+`/`*`,
 # unescaped) and alternations (`|`, unescaped) in one pattern. The structural regexes
 # above catch KNOWN bad shapes; this catches novel compositions of many quantifiers /
@@ -71,7 +89,8 @@ _REGEX_BUDGET_MAX = 12
 _REGEX_UNBOUNDED_QUANTIFIER = re.compile(r"(?<!\\)[+*]")
 _REGEX_ALTERNATION = re.compile(r"(?<!\\)\|")
 
-# The four structural shapes, tried in the order above.
+# The four regex-matched structural shapes, tried in the order above (the adjacent-atom
+# run below needs a scan rather than a pattern, so it is a predicate of its own).
 _REGEX_SHAPE_PATTERNS: tuple[re.Pattern[str], ...] = (
     _REGEX_NESTED_QUANTIFIER,
     _REGEX_ALTERNATION_OVERLAP,
@@ -80,9 +99,120 @@ _REGEX_SHAPE_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+def _regex_atom_end(pattern: str, index: int) -> int:
+    """End offset of the single-character atom starting at ``index`` -- a character class,
+    an escape, ``.``, or a literal. An unterminated class swallows the rest of the string."""
+    character = pattern[index]
+    if character == "\\":
+        marker = pattern[index + 1 : index + 2]
+        width = {"x": 2, "u": 4, "U": 8}.get(marker, 0)
+        if width:
+            end = index + 2 + width
+            if end <= len(pattern) and all(digit in string.hexdigits for digit in pattern[index + 2 : end]):
+                return end
+        # `\N{NAME}` is one atom; lowercase `\n{2,}` is a newline carrying a REPEAT.
+        elif marker == "N" and pattern[index + 2 : index + 3] == "{":
+            closing = pattern.find("}", index + 3)
+            if closing != -1:
+                return closing + 1
+        return min(index + 2, len(pattern))
+    if character != "[":
+        return index + 1
+    end = index + 1
+    if pattern[end : end + 1] == "^":
+        end += 1
+    if pattern[end : end + 1] == "]":
+        end += 1
+    while end < len(pattern):
+        if pattern[end] == "\\":
+            end += 2
+            continue
+        if pattern[end] == "]":
+            return end + 1
+        end += 1
+    return len(pattern)
+
+
+def _regex_backtracking_quantifier_end(pattern: str, index: int) -> int:
+    """End offset of a BACKTRACKING unbounded quantifier at ``index`` (``+``/``*``/``{m,}``,
+    optionally lazy), else ``index``. A possessive quantifier never gives characters back."""
+    end = index
+    if pattern[index : index + 1] in ("+", "*"):
+        end = index + 1
+    elif pattern[index : index + 1] == "{":
+        repeat = _REGEX_OPEN_ENDED_REPEAT.match(pattern, index)
+        if repeat is not None:
+            end = repeat.end()
+    if end == index:
+        return index
+    modifier = pattern[end : end + 1]
+    if modifier == "+":
+        return index
+    return end + 1 if modifier == "?" else end
+
+
+@lru_cache(maxsize=512)
+def _regex_atoms_overlap(first: str, second: str) -> bool:
+    """True when both atoms can match the same character, i.e. the pair is ambiguous."""
+    if first == second:
+        return True
+    try:
+        left = re.compile(first)
+        right = re.compile(second)
+    except re.error:
+        return False
+    return any(left.fullmatch(probe) and right.fullmatch(probe) for probe in _REGEX_OVERLAP_ALPHABET)
+
+
+def _regex_has_adjacent_unbounded_atoms(pattern: str) -> bool:
+    """True when ``pattern`` carries a run of more than ``_REGEX_ADJACENT_ATOM_MAX``
+    back-to-back atoms that each take a backtracking unbounded quantifier and whose
+    character sets overlap along the run. Plain ``(...)``/``(?:...)`` parentheses are
+    transparent -- they do not change what the engine backtracks over -- while a quantified
+    group, an alternation, or any other ``(?...)`` construct ends the run (the shapes above
+    own those). Pure string analysis: nothing here runs the candidate against an input."""
+    run: list[str] = []
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        if character == "(":
+            if pattern.startswith("(?:", index):
+                index += 3
+            elif pattern.startswith("(?", index):
+                run = []
+                index += 2
+            else:
+                index += 1
+            continue
+        if character == ")":
+            index += 1
+            if pattern[index : index + 1] in ("*", "+", "?", "{"):
+                run = []
+            continue
+        if character in "|^$*+?{}":
+            run = []
+            index += 1
+            continue
+        atom_end = _regex_atom_end(pattern, index)
+        atom = pattern[index:atom_end]
+        quantifier_end = _regex_backtracking_quantifier_end(pattern, atom_end)
+        if quantifier_end == atom_end:
+            run = []
+            index = atom_end
+            continue
+        run = [*run, atom] if not run or _regex_atoms_overlap(run[-1], atom) else [atom]
+        if len(run) > _REGEX_ADJACENT_ATOM_MAX:
+            return True
+        index = quantifier_end
+    return False
+
+
 def _regex_has_catastrophic_shape(pattern: str) -> bool:
-    """True when ``pattern`` matches any of the four structural shapes above."""
-    return any(shape.search(pattern) is not None for shape in _REGEX_SHAPE_PATTERNS)
+    """True when ``pattern`` matches any of the four structural shapes above or carries a
+    run of adjacent unbounded quantifiers over overlapping atoms."""
+    return _regex_has_adjacent_unbounded_atoms(pattern) or any(
+        shape.search(pattern) is not None for shape in _REGEX_SHAPE_PATTERNS
+    )
 
 
 def _regex_complexity_budget(pattern: str) -> int:
