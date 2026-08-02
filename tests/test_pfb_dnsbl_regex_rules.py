@@ -196,6 +196,11 @@ def test_shape_gate_stays_total_on_malformed_pattern_fragments() -> None:
         "a" * 5000 + "+",
     ):
         assert isinstance(_regex_is_catastrophic_shape(fragment), bool), fragment
+    # A construct that is never closed must not swallow the rest of the scan: such a pattern
+    # cannot compile, so it never reaches the resolver, but the gate still reads what is
+    # there rather than going blind from the first `(?#` onwards.
+    assert _regex_is_catastrophic_shape(r"(?#x\w+\w+\w+") is True
+    assert _regex_is_catastrophic_shape(r"(?=a\w+\w+\w+") is True
 
 
 def test_main_treats_crlf_terminated_lines_like_lf() -> None:
