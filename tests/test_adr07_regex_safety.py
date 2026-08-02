@@ -176,6 +176,51 @@ class TestCatastrophicShapeHeuristic:
         ):
             assert _regex_is_catastrophic_shape(pat) is True, pat
 
+    def test_zero_width_construct_does_not_split_a_run(self) -> None:
+        # A comment or a lookaround consumes NOTHING, so dropping one into the middle of a
+        # run leaves the engine backtracking over exactly the same span -- each row below
+        # is the issue's own reproduction plus one inert construct, and each still costs
+        # ~460 ms per query. Treating these as a run boundary would make the whole rule a
+        # one-token bypass.
+        for pat in (
+            r"^[a-z]+[a-z]+(?#c)[a-z]+[a-z]+@example\.com$",
+            r"^[a-z]+[a-z]+(?=a)[a-z]+[a-z]+@example\.com$",
+            r"^[a-z]+[a-z]+(?!b)[a-z]+[a-z]+@example\.com$",
+            r"^[a-z]+[a-z]+(?<=a)[a-z]+[a-z]+@example\.com$",
+            r"^[a-z]+[a-z]+(?<!b)[a-z]+[a-z]+@example\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_quantified_single_atom_group_counts_as_its_atom(self) -> None:
+        # `(?:[a-z])+` IS `[a-z]+` -- the group wraps one atom and the quantifier sits
+        # outside it. Measured at 475 ms per query for the four-group row, so a run spelled
+        # this way is the same defect, not a different one.
+        for pat in (
+            r"^(?:[a-z])+(?:[a-z])+(?:[a-z])+(?:[a-z])+@example\.com$",
+            r"^([a-z])+([a-z])+([a-z])+@example\.com$",
+            r"^(?P<a>\w)+(?P<b>\w)+(?P<c>\w)+@example\.com$",
+            # A group body wider than one atom repeats the same way: measured 238 ms per
+            # query for the four-group row against a matching 253-character name.
+            r"^(ab)+(ab)+(ab)+@example\.com$",
+            r"^(?:ab)+(?:ab)+(?:ab)+(?:ab)+@example\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_quantified_group_run_over_distinct_bodies_not_flagged(self) -> None:
+        # Two quantified groups only partition the span when they can consume the same
+        # input; `(ab)+(cd)+` has exactly one way to split, so it stays admitted.
+        assert _regex_is_catastrophic_shape(r"^(ab)+(cd)+(ef)+@example\.com$") is False
+
+    def test_optional_atom_does_not_split_a_run(self) -> None:
+        # An atom that may match nothing cannot separate its neighbours: when it matches
+        # empty the runs on either side are one run, and the engine explores that partition
+        # too (measured 7.8 ms per query, over the warn ceiling and under the evict one).
+        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+x?[a-z]+@example\.com$") is True
+        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(?P<g>x?)[a-z]+[a-z]+@example\.com$") is True
+        # …but an optional atom only BRIDGES a run, it never starts or extends one: the
+        # canonical `ads?` shape keeps its two quantifiers in runs of one.
+        assert _regex_is_catastrophic_shape(r"^ads?[0-9]*\.example\.(com|net)$") is False
+
     def test_adjacent_quantifiers_over_disjoint_atoms_not_flagged(self) -> None:
         # Adjacency alone is NOT the danger: when neighbouring atoms cannot match the same
         # character there is exactly ONE way to split the input, so the engine never
@@ -205,19 +250,21 @@ class TestCatastrophicShapeHeuristic:
         # A possessive quantifier (`a++`) never gives characters back, and a FIXED repeat
         # (`a{3}`) has nothing to give -- neither can partition the span, so neither starts
         # or continues a run.
-        for pat in (r"^[a-z]++[a-z]++[a-z]++$", r"^[a-z]{3}[a-z]{3}[a-z]{3}$"):
+        # The middle row is the discriminating one: its first two atoms already form a run,
+        # so it stays admitted ONLY because the possessive third atom is refused entry.
+        for pat in (r"^[a-z]++[a-z]++[a-z]++$", r"^[a-z]+[a-z]+[a-z]++$", r"^[a-z]{3}[a-z]{3}[a-z]{3}$"):
             assert _regex_is_catastrophic_shape(pat) is False, pat
 
     def test_newline_repeat_is_not_read_as_a_named_unicode_escape(self) -> None:
-        # `\N{...}` (capital N) is a named-Unicode escape whose braces are part of the
-        # atom; `\n{2,}` (lowercase) is a newline carrying an open-ended REPEAT. Reading
-        # the lowercase form as the escape swallows the quantifier and blinds the gate to
-        # the run -- and lowercase is what the gate actually sees, since both consumers
-        # lowercase every pattern before admission.
+        # The two spellings are different regexes and each pins one half of the scanner.
+        # Lowercase `\n{2,}` is a newline carrying an open-ended REPEAT; reading it as the
+        # named-Unicode escape swallows the quantifier and blinds the gate to the run. This
+        # is the spelling the gate meets in production, because both consumers lowercase a
+        # pattern before admission (that fold is itself a defect -- issue #2079).
         assert _regex_is_catastrophic_shape(r"\n{2,}\n{2,}\n{2,}") is True
-        # The capital-N form is ONE atom, so its quantified run is a run of three too --
-        # green here only if `\N{BULLET}` is consumed whole and `+` is read as its
-        # quantifier (mis-parsing the braces as a repeat breaks the run and returns False).
+        # Capital-N `\N{BULLET}` IS the named escape and is ONE atom, so its quantified run
+        # is a run of three too -- green here only if the braces are consumed as part of the
+        # atom and `+` is read as its quantifier, the exact opposite parse from the row above.
         assert _regex_is_catastrophic_shape("\\N{BULLET}+\\N{BULLET}+\\N{BULLET}+") is True
 
     def test_stacked_bounded_repeat_flagged(self) -> None:

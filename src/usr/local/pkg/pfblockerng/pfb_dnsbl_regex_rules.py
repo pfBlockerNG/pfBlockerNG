@@ -75,7 +75,7 @@ _REGEX_ADJACENT_ATOM_MAX = 2
 # over (letters, digits, punctuation, whitespace, non-ASCII word characters).
 _REGEX_OVERLAP_ALPHABET = string.printable + "é"
 
-_REGEX_OPEN_ENDED_REPEAT = re.compile(r"\{\d+,\}")
+_REGEX_REPEAT = re.compile(r"\{(?P<min>\d+)(?P<comma>,?)(?P<max>\d*)\}")
 
 # Complexity-budget backstop: cap the combined count of unbounded quantifiers (`+`/`*`,
 # unescaped) and alternations (`|`, unescaped) in one pattern. The structural regexes
@@ -133,22 +133,58 @@ def _regex_atom_end(pattern: str, index: int) -> int:
     return len(pattern)
 
 
-def _regex_backtracking_quantifier_end(pattern: str, index: int) -> int:
-    """End offset of a BACKTRACKING unbounded quantifier at ``index`` (``+``/``*``/``{m,}``,
-    optionally lazy), else ``index``. A possessive quantifier never gives characters back."""
+def _regex_quantifier(pattern: str, index: int) -> tuple[int, str]:
+    """Classify the quantifier at ``index`` as ``(end offset, role in a run)``:
+
+    "run"    -- backtracking and unbounded (`+`, `*`, `{m,}`, lazy forms): extends a run.
+    "bridge" -- can match nothing (`?`, `{0,n}`): cannot separate its neighbours, so it
+                neither extends nor ends a run.
+    "break"  -- absent, fixed (`{m}`, `{m,n}`), or possessive: ends the run. A possessive
+                quantifier never gives characters back, so it cannot partition a span.
+    """
     end = index
+    unbounded = True
     if pattern[index : index + 1] in ("+", "*"):
         end = index + 1
+        optional = pattern[index] == "*"
     elif pattern[index : index + 1] == "{":
-        repeat = _REGEX_OPEN_ENDED_REPEAT.match(pattern, index)
-        if repeat is not None:
-            end = repeat.end()
-    if end == index:
-        return index
+        repeat = _REGEX_REPEAT.match(pattern, index)
+        if repeat is None:
+            return index, "break"
+        end = repeat.end()
+        unbounded = repeat.group("max") == "" and repeat.group("comma") == ","
+        optional = repeat.group("min") == "0"
+    elif pattern[index : index + 1] == "?":
+        end = index + 1
+        unbounded = False
+        optional = True
+    else:
+        return index, "break"
     modifier = pattern[end : end + 1]
-    if modifier == "+":
-        return index
-    return end + 1 if modifier == "?" else end
+    if modifier == "+":  # possessive
+        return end + 1, "bridge" if optional else "break"
+    if modifier == "?":  # lazy
+        end += 1
+    return end, "run" if unbounded else ("bridge" if optional else "break")
+
+
+def _regex_group_end(pattern: str, index: int) -> int:
+    """End offset past the ``)`` closing the group that opens at ``index`` (the end of the
+    string when it is never closed). Parentheses inside a class or an escape do not count."""
+    depth = 0
+    while index < len(pattern):
+        character = pattern[index]
+        if character in ("\\", "["):
+            index = _regex_atom_end(pattern, index)
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return len(pattern)
 
 
 @lru_cache(maxsize=512)
@@ -157,61 +193,83 @@ def _regex_atoms_overlap(first: str, second: str) -> bool:
     if first == second:
         return True
     try:
-        left = re.compile(first)
-        right = re.compile(second)
+        # Warnings are suppressed for the same reason main() suppresses them: PHP turns
+        # every stderr line into an admin-facing validation error.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            left = re.compile(first)
+            right = re.compile(second)
     except re.error:
         return False
     return any(left.fullmatch(probe) and right.fullmatch(probe) for probe in _REGEX_OVERLAP_ALPHABET)
 
 
+def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
+    """Read one unit at ``index``, returning ``(atom, role, next index)`` with the roles of
+    ``_regex_quantifier``. A group contributes by what it does to the engine, not by its
+    punctuation: a comment or a lookaround consumes nothing and bridges; a plain
+    ``(...)``/``(?:...)``/``(?P<n>...)`` is scanned through as if the parentheses were not
+    there; one wrapping a single atom IS that atom when the quantifier sits outside it."""
+    if pattern[index] == ")":
+        return "", "bridge", index + 1
+    if pattern[index] != "(":
+        if pattern[index] in "|^$*+?{}":
+            return "", "break", index + 1
+        atom_end = _regex_atom_end(pattern, index)
+        quantifier_end, role = _regex_quantifier(pattern, atom_end)
+        return pattern[index:atom_end], role, max(quantifier_end, atom_end)
+
+    group_end = _regex_group_end(pattern, index)
+    if pattern.startswith(("(?#", "(?=", "(?!", "(?<=", "(?<!"), index):
+        return "", "bridge", group_end
+    if pattern.startswith("(?P<", index):
+        name_end = pattern.find(">", index)
+        if name_end == -1:
+            return "", "break", group_end
+        body_start = name_end + 1
+    elif pattern.startswith("(?:", index):
+        body_start = index + 3
+    elif pattern.startswith("(?", index):
+        return "", "break", group_end  # atomic, flags, conditionals: not a plain group
+    else:
+        body_start = index + 1
+    quantifier_end, role = _regex_quantifier(pattern, group_end)
+    if quantifier_end == group_end:
+        return "", "bridge", body_start  # unquantified: scan the body in place
+    body = pattern[body_start : group_end - 1]
+    # A quantified group repeats its body, so the body IS the run's atom -- one atom
+    # (`(?:[a-z])+` is `[a-z]+`) or a plain sequence (`(ab)+(ab)+(ab)+` repeats too). A body
+    # carrying its own group or alternation belongs to the shapes above instead.
+    if role == "run" and body and not any(character in body for character in "()|"):
+        return body, "run", quantifier_end
+    return "", "break" if role == "run" else role, quantifier_end
+
+
 def _regex_has_adjacent_unbounded_atoms(pattern: str) -> bool:
     """True when ``pattern`` carries a run of more than ``_REGEX_ADJACENT_ATOM_MAX``
     back-to-back atoms that each take a backtracking unbounded quantifier and whose
-    character sets overlap along the run. Plain ``(...)``/``(?:...)`` parentheses are
-    transparent -- they do not change what the engine backtracks over -- while a quantified
-    group, an alternation, or any other ``(?...)`` construct ends the run (the shapes above
-    own those). Pure string analysis: nothing here runs the candidate against an input."""
+    character sets overlap along the run -- every atom in such a run can cede characters to
+    its neighbour. Pure string analysis: nothing here runs the candidate against an input."""
     run: list[str] = []
     index = 0
     while index < len(pattern):
-        character = pattern[index]
-        if character == "(":
-            if pattern.startswith("(?:", index):
-                index += 3
-            elif pattern.startswith("(?", index):
-                run = []
-                index += 2
-            else:
-                index += 1
+        atom, role, index = _regex_next_unit(pattern, index)
+        if role == "bridge":
             continue
-        if character == ")":
-            index += 1
-            if pattern[index : index + 1] in ("*", "+", "?", "{"):
-                run = []
-            continue
-        if character in "|^$*+?{}":
+        if role != "run":
             run = []
-            index += 1
-            continue
-        atom_end = _regex_atom_end(pattern, index)
-        atom = pattern[index:atom_end]
-        quantifier_end = _regex_backtracking_quantifier_end(pattern, atom_end)
-        if quantifier_end == atom_end:
-            run = []
-            index = atom_end
             continue
         run = [*run, atom] if not run or _regex_atoms_overlap(run[-1], atom) else [atom]
         if len(run) > _REGEX_ADJACENT_ATOM_MAX:
             return True
-        index = quantifier_end
     return False
 
 
 def _regex_has_catastrophic_shape(pattern: str) -> bool:
     """True when ``pattern`` matches any of the four structural shapes above or carries a
     run of adjacent unbounded quantifiers over overlapping atoms."""
-    return _regex_has_adjacent_unbounded_atoms(pattern) or any(
-        shape.search(pattern) is not None for shape in _REGEX_SHAPE_PATTERNS
+    return any(shape.search(pattern) is not None for shape in _REGEX_SHAPE_PATTERNS) or (
+        _regex_has_adjacent_unbounded_atoms(pattern)
     )
 
 
