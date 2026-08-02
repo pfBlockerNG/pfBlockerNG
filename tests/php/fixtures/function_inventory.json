@@ -5155,6 +5155,26 @@
             }
         ]
     },
+    "pfb_list_user_script_active": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "script_pre",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "script_post",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
     "pfb_live_punch_apply": {
         "returnsRef": false,
         "returnType": "array",
