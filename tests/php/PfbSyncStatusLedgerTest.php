@@ -129,8 +129,8 @@ final class PfbSyncStatusLedgerTest extends TestCase
 	/** @return array{0:int,1:mixed} */
 	private function forkRealDataFileHolder(string $lockPath): array
 	{
-		if (!function_exists('pcntl_fork')) {
-			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+			$this->markTestSkipped('pcntl_fork() and posix_kill() required for fork cleanup.');
 		}
 		[$parent, $child] = $this->signalPair();
 		stream_set_timeout($parent, 5);
@@ -184,8 +184,8 @@ final class PfbSyncStatusLedgerTest extends TestCase
 				if ($waited === 0 && function_exists('posix_kill')) {
 					@posix_kill($pid, SIGKILL);
 					$waited = pcntl_waitpid($pid, $status);
-				} elseif ($waited === 0) {
-					$waited = pcntl_waitpid($pid, $status);
+				} elseif ($waited === 0 && $cleanupError === NULL) {
+					$cleanupError = new RuntimeException('data-file holder cannot be reaped: posix_kill unavailable');
 				}
 			}
 			if ($waited < 0 && $cleanupError === NULL) {
@@ -529,8 +529,8 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 	public function testSyncStatusLockedExpiryIsObservableAndStillRunsFn(): void
 	{
-		if (!function_exists('pcntl_fork')) {
-			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+			$this->markTestSkipped('pcntl_fork() and posix_kill() required for fork cleanup.');
 		}
 
 		$originalPfb = $GLOBALS['pfb'] ?? [];
@@ -612,8 +612,8 @@ final class PfbSyncStatusLedgerTest extends TestCase
 				if ($waited === 0 && function_exists('posix_kill')) {
 					@posix_kill($pid, SIGKILL);
 					$waited = pcntl_waitpid($pid, $waitStatus);
-				} elseif ($waited === 0) {
-					$waited = pcntl_waitpid($pid, $waitStatus);
+				} elseif ($waited === 0 && $cleanupError === NULL) {
+					$cleanupError = new RuntimeException('sync-status expiry holder cannot be reaped: posix_kill unavailable');
 				}
 			}
 			if ($waited < 0 && $cleanupError === NULL) {

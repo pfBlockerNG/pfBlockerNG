@@ -134,11 +134,13 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		}
 		if (is_int($pid) && $pid > 0) {
 			$waited = pcntl_waitpid($pid, $status, WNOHANG);
-			if ($waited === 0 && function_exists('posix_kill')) {
-				@posix_kill($pid, SIGKILL);
-				$waited = pcntl_waitpid($pid, $status);
-			} elseif ($waited === 0) {
-				$waited = pcntl_waitpid($pid, $status);
+			if ($waited === 0) {
+				if (function_exists('posix_kill')) {
+					@posix_kill($pid, SIGKILL);
+					$waited = pcntl_waitpid($pid, $status);
+				} elseif ($cleanupError === NULL) {
+					$cleanupError = new RuntimeException('publication timeout holder cannot be reaped: posix_kill unavailable');
+				}
 			}
 			if ($waited < 0 && $cleanupError === NULL) {
 				$cleanupError = new RuntimeException('publication timeout holder waitpid failed');
@@ -152,6 +154,10 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 
 	private function assertContendedOperationTimesOut(callable $operation): void
 	{
+		if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+			$this->markTestSkipped('pcntl_fork() and posix_kill() required for fork cleanup.');
+		}
+
 		$manifestBefore = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
 		$holderPid = NULL;
 		$operationPid = NULL;
@@ -186,17 +192,30 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			stream_set_timeout($operationChild, 5);
 			$operationPid = pcntl_fork();
 			if ($operationPid === 0) {
+				fclose($holderParent);
 				fclose($operationParent);
-				$ok = $operation();
-				fwrite($operationChild, "RESULT\n");
-				fwrite($operationChild, json_encode(['ok' => $ok]) . "\n");
+				try {
+					$ok = $operation();
+					fwrite($operationChild, "RESULT\n");
+					fwrite($operationChild, json_encode(['ok' => $ok]) . "\n");
+				} catch (Throwable $error) {
+					$message = preg_replace('/\s+/', ' ', trim($error->getMessage()));
+					$message = is_string($message) && $message !== '' ? substr($message, 0, 512) : get_class($error);
+					@fwrite($operationChild, "OPERATION_ERROR {$message}\n");
+					@fclose($operationChild);
+					exit(1);
+				}
 				fclose($operationChild);
 				exit(0);
 			}
 			$this->assertGreaterThan(0, $operationPid);
 			fclose($operationChild);
 
-			$this->assertSame("RESULT\n", $this->readEvent($operationParent, 'contended operation verdict'));
+			$operationVerdict = $this->readEvent($operationParent, 'contended operation verdict');
+			if (str_starts_with($operationVerdict, 'OPERATION_ERROR ')) {
+				throw new RuntimeException(trim($operationVerdict));
+			}
+			$this->assertSame("RESULT\n", $operationVerdict);
 			$result = json_decode($this->readEvent($operationParent, 'contended operation result'), TRUE);
 			$this->assertIsArray($result);
 			$this->assertArrayHasKey('ok', $result);
@@ -371,6 +390,10 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 
 	public function testDefaultScalarPatchRetriesUntilPublicationLockIsReleased(): void
 	{
+		if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+			$this->markTestSkipped('pcntl_fork() and posix_kill() required for fork cleanup.');
+		}
+
 		$manifest = $this->publish();
 		$this->assertIsArray($manifest);
 		$rawRefs = array_column($manifest['feeds'], 'raw');
@@ -406,6 +429,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			stream_set_timeout($patchChild, 5);
 			$patchPid = pcntl_fork();
 			if ($patchPid === 0) {
+				fclose($holderParent);
 				fclose($patchParent);
 				fwrite($patchChild, "ATTEMPT\n");
 				$ok = pfb_unbound_python_sources_patch('user_unlock', ['allow.example'], [
@@ -468,6 +492,10 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 
 	public function testScalarPatchTimesOutWithoutMutatingManifest(): void
 	{
+		if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+			$this->markTestSkipped('pcntl_fork() and posix_kill() required for fork cleanup.');
+		}
+
 		$manifest = $this->publish();
 		$this->assertIsArray($manifest);
 
@@ -479,6 +507,17 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$this->assertSame([], $patched['config']['user_unlock']);
 		$log = (string) file_get_contents($GLOBALS['pfb']['log']);
 		$this->assertStringContainsString('retry the action or run a DNSBL update', $log);
+	}
+
+	public function testContendedOperationExceptionIsReportedAndReaped(): void
+	{
+		$this->publish();
+		$this->expectException(RuntimeException::class);
+		$this->expectExceptionMessage('OPERATION_ERROR operation exploded with a second line');
+
+		$this->assertContendedOperationTimesOut(static function (): bool {
+			throw new RuntimeException("operation exploded\nwith a second line");
+		});
 	}
 
 	public function testGarbageCollectionTimesOutWithoutRemovingRawGenerations(): void
@@ -617,8 +656,8 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 
 	public function testPublicationLockTimeoutLogsTimedOutNotUnavailable(): void
 	{
-		if (!function_exists('pcntl_fork')) {
-			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+			$this->markTestSkipped('pcntl_fork() and posix_kill() required for fork cleanup.');
 		}
 
 		$lockPath   = dirname($GLOBALS['pfb']['unbound_py_sources']) . '/pfb_py_sources.lock';
