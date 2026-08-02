@@ -28,8 +28,12 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_log_event')]
 final class DnsblLogEventQueryAttributionTest extends TestCase
 {
+	/** Salvage only: expiry means the run is stuck or the box is broken. */
+	private const SALVAGE_CAP_S = 30.0;
 	private string $tmp;
 	private array $savedPfb = [];
+	/** @var array<int, true> */
+	private array $children = [];
 
 	protected function setUp(): void
 	{
@@ -72,12 +76,32 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 			'supp'     => 'off',
 		];
 		touch($GLOBALS['pfb']['unbound_py_zone']);
+
+		foreach (['pcntl_fork', 'pcntl_waitpid', 'pcntl_wifexited', 'pcntl_wexitstatus', 'posix_kill'] as $function) {
+			if (!function_exists($function)) {
+				$this->markTestSkipped("{$function}() is unavailable -- cannot run cross-process query-channel tests.");
+			}
+		}
 	}
 
 	protected function tearDown(): void
 	{
-		$GLOBALS['pfb'] = $this->savedPfb;
-		$this->rrmdir($this->tmp);
+		$failure = null;
+		try {
+			foreach (array_keys($this->children) as $pid) {
+				try {
+					$this->reapChild($pid);
+				} catch (Throwable $e) {
+					$failure ??= $e;
+				}
+			}
+		} finally {
+			$GLOBALS['pfb'] = $this->savedPfb;
+			$this->rrmdir($this->tmp);
+		}
+		if ($failure !== null) {
+			throw $failure;
+		}
 	}
 
 	private function rrmdir(string $dir): void
@@ -128,43 +152,92 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 		return $row ? (int) $row['counter'] : 0;
 	}
 
+	/** Fork a tracked child; the closure must communicate through temp files. */
+	private function forkChild(callable $task): int
+	{
+		$pid = pcntl_fork();
+		if ($pid === -1) {
+			$this->markTestSkipped('pcntl_fork() failed.');
+		}
+		if ($pid === 0) {
+			try {
+				$task();
+				exit(0);
+			} catch (Throwable $e) {
+				@file_put_contents("{$this->tmp}/child-error-" . getmypid(), $e->getMessage());
+				exit(1);
+			}
+		}
+		$this->children[$pid] = true;
+		return $pid;
+	}
+
+	/** Reap a tracked responder under the salvage cap; terminate it rather than orphaning it. */
+	private function reapChild(int $pid, float $timeout_s = self::SALVAGE_CAP_S): void
+	{
+		$deadline = microtime(true) + $timeout_s;
+		do {
+			$waited = pcntl_waitpid($pid, $status, WNOHANG);
+			if ($waited === $pid) {
+				unset($this->children[$pid]);
+				$failure = $this->childFailureMessage($pid);
+				if (!pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0) {
+					throw new RuntimeException($failure);
+				}
+				return;
+			}
+			usleep(20000);
+		} while (microtime(true) < $deadline);
+
+		@posix_kill($pid, 9);
+		pcntl_waitpid($pid, $status);
+		unset($this->children[$pid]);
+		throw new RuntimeException("salvage cap expired / stuck or environment: responder process {$pid} did not exit");
+	}
+
+	private function childFailureMessage(int $pid): string
+	{
+		$error = @file_get_contents("{$this->tmp}/child-error-{$pid}");
+		return $error !== false && $error !== '' ? "child {$pid} failed: {$error}" : "child {$pid} failed";
+	}
+
+	private function reapResponders(): void
+	{
+		foreach (array_keys($this->children) as $pid) {
+			$this->reapChild($pid);
+		}
+	}
+
 	/**
-	 * Spawn a background PHP process playing the query channel's Python side --
+	 * Spawn a tracked process playing the query channel's Python side --
 	 * mirrors DnsblQueryClientTest::spawnResponder(). Answers with $replyTemplateJson
 	 * (its "__ID__" placeholder substituted for the request's real id).
 	 */
 	private function spawnResponder(string $replyTemplateJson): void
 	{
-		$code = <<<'PHP'
-			$dir = $argv[1];
-			$tpl = $argv[2];
-			$reqPath = $dir . '/pfb_py_query';
-			$deadline = microtime(true) + 3.0;
-			$req = null;
+		$this->forkChild(function () use ($replyTemplateJson): void {
+			$reqPath = "{$this->tmp}/query/pfb_py_query";
+			$deadline = microtime(true) + self::SALVAGE_CAP_S;
+			$request = null;
 			while (microtime(true) < $deadline) {
 				if (file_exists($reqPath)) {
 					$raw = @file_get_contents($reqPath);
 					if ($raw !== false && trim($raw) !== '') {
-						$dec = json_decode($raw, true);
-						if (is_array($dec) && isset($dec['id'])) {
-							$req = $dec;
+						$decoded = json_decode($raw, true);
+						if (is_array($decoded) && isset($decoded['id'])) {
+							$request = $decoded;
 							break;
 						}
 					}
 				}
 				usleep(50000);
 			}
-			if ($req === null) {
-				exit(1);
+			if ($request === null) {
+				throw new RuntimeException('salvage cap expired / stuck or environment: waiting for the query-channel request marker');
 			}
-			$reply = str_replace('__ID__', (string) $req['id'], $tpl);
-			file_put_contents($dir . '/pfb_py_query.reply', $reply);
-			PHP;
-
-		$cmd = escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($code)
-			. ' ' . escapeshellarg("{$this->tmp}/query") . ' ' . escapeshellarg($replyTemplateJson)
-			. ' > /dev/null 2>&1 &';
-		exec($cmd);
+			$reply = str_replace('__ID__', (string) $request['id'], $replyTemplateJson);
+			file_put_contents("{$this->tmp}/query/pfb_py_query.reply", $reply);
+		});
 	}
 
 	/**
@@ -223,6 +296,7 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 		$unexpected = $this->callCapturingUnexpectedWarnings(function () use ($domain) {
 			pfb_log_event('DNSBL-HTTPS', $domain, '203.0.113.10', 'Mozilla/5.0');
 		});
+		$this->reapResponders();
 		$this->assertSame([], $unexpected, 'expected no unrelated PHP warning; got: ' . var_export($unexpected, true));
 
 		$fields = $this->logFields();
@@ -251,6 +325,7 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 		]));
 
 		pfb_log_event('DNSBL-HTTPS', $domain, '203.0.113.11', 'Mozilla/5.0');
+		$this->reapResponders();
 
 		$fields = $this->logFields();
 		$this->assertSame('Unknown', $fields[5], "expected mode(5)='Unknown', got: {$fields[5]}");
@@ -298,6 +373,7 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 		]));
 
 		pfb_log_event('DNSBL-HTTPS', $domain, '203.0.113.13', 'Mozilla/5.0');
+		$this->reapResponders();
 
 		$fields = $this->logFields();
 		$this->assertSame('Unknown', $fields[5], "expected mode(5)='Unknown' (never empty), got: '{$fields[5]}'");
@@ -329,6 +405,7 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 		]));
 
 		pfb_log_event('DNSBL-HTTPS', $domain, '203.0.113.14', 'Mozilla/5.0');
+		$this->reapResponders();
 
 		$fields = $this->logFields();
 		// (before) the raw responder value carries live HTML metacharacters.
