@@ -539,3 +539,14 @@ or TLD decisions.
 The 1,000,000-line base-versus-branch benchmark stayed within the 10% gate: PHP
 publication was +6.97% wall / +0.19% peak RSS, while Python manifest build was -0.23%
 wall / -1.74% peak RSS.
+
+---
+
+## 12. Post-implementation addendum (2026-08-02 — issue #2075)
+
+The Python writer remains the authoritative serializer for each fixed 11-field DNSBL
+event. It emits RFC4180 CSV with minimal quoting, doubles embedded quotes, and normalizes
+CR/LF to spaces so every event occupies one physical line. The filterlog daemon parses
+that row with the matching CSV grammar for syslog export, then preserves the original
+encoded bytes in `unified.log`; it no longer reconstructs production DNSBL rows through
+`pfb_unified_format_dnsbl()`. Attribution and field order remain unchanged.
