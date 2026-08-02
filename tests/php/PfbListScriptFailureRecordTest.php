@@ -31,15 +31,19 @@ final class PfbListScriptFailureRecordTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->dir = sys_get_temp_dir() . '/pfb_list_script_failure_' . getmypid() . '_' . uniqid();
-		mkdir($this->dir, 0777, TRUE);
+		// 0700 + random_bytes: a world-writable scratch dir under a shared /tmp,
+		// named from the time-based uniqid(), is guessable and pre-creatable by
+		// another local user. Mode asserted, never assumed.
+		$this->dir = sys_get_temp_dir() . '/pfb_list_script_failure_' . getmypid() . '_' . bin2hex(random_bytes(4));
+		$this->assertTrue(mkdir($this->dir, 0700, TRUE), "failed to create the scratch dir {$this->dir}");
 	}
 
 	protected function tearDown(): void
 	{
-		@chmod($this->dir, 0777);
+		// No chmod during cleanup: chmod() follows symlinks, so a planted entry
+		// would retarget it. No test here creates a read-only fixture, so the
+		// unlink alone is sufficient.
 		foreach (glob($this->dir . '/*') ?: [] as $file) {
-			@chmod($file, 0777);
 			@unlink($file);
 		}
 		@rmdir($this->dir);
