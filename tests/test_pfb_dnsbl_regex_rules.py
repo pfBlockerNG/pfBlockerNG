@@ -82,7 +82,10 @@ def test_main_reports_only_its_own_diagnostics_for_a_pattern_that_warns() -> Non
     """
     # Line 1 warns but compiles (accepted); line 2 is a genuine rejection, so the
     # process exits 1 and PHP reads stderr -- the case where a leak would surface.
-    proc = run_probe(b"[[a]]\n(a+)+\n", "0")
+    # Line 1 also carries two DIFFERENT quantified atoms, which is what drives the shape
+    # gate's atom-overlap probe to compile a fragment of its own: the leak has two possible
+    # sources now, and neither may reach the admin.
+    proc = run_probe(b"[[a]+[c]+x\n(a+)+\n", "0")
     assert proc.returncode == 1
     assert proc.stderr.decode("utf-8").splitlines() == ["line 2: '(a+)+': catastrophic-backtracking shape"], proc.stderr
 
