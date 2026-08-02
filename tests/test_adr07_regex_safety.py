@@ -234,6 +234,24 @@ class TestCatastrophicShapeHeuristic:
         # so its atoms never join the outer run.
         assert _regex_is_catastrophic_shape(r"^(?=.*ad)[a-z]+[a-z]+\.example$") is False
         assert _regex_is_catastrophic_shape(r"^(?=[a-z]+)[a-z]+[a-z]+\.example$") is False
+        # A COMMENT is inert text rather than a pattern, so what looks like a run inside one
+        # is not a run at all and must not be read as one.
+        assert _regex_is_catastrophic_shape(r"^(?#[a-z]+[a-z]+[a-z]+)x$") is False
+
+    def test_nested_lookaround_scan_stops_at_its_depth_bound(self) -> None:
+        # The recursion into lookaround bodies is bounded so a hostile line cannot exhaust
+        # the stack. Pin the ceiling from BOTH sides: a run at the deepest scanned nesting is
+        # still found, and one nested a level deeper is deliberately not looked for -- which
+        # is the documented cost of the bound, not an accident.
+        run = "[a-z]+[a-z]+[a-z]+"
+        at_bound = "(?=" * pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + run
+        past_bound = "(?=" * (pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + 1) + run
+        assert _regex_is_catastrophic_shape(at_bound + ")" * pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX) is True
+        assert (
+            _regex_is_catastrophic_shape(past_bound + ")" * (pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + 1)) is False
+        )
+        # Nesting far past the bound is answered rather than crashing the load path.
+        assert _regex_is_catastrophic_shape("(?=" * 5000 + "a" + ")" * 5000) is False
 
     def test_quantified_group_run_over_distinct_bodies_not_flagged(self) -> None:
         # Two quantified groups only partition the span when they can consume the same
