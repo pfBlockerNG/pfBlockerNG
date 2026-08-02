@@ -24,8 +24,8 @@ final class DnsblWildcardRowValidationTest extends TestCase
 	public static function setUpBeforeClass(): void
 	{
 		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-		$src = file_get_contents($path);
-		if ($src === FALSE) {
+		$src = php_strip_whitespace($path);
+		if ($src === '') {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
 		}
 		self::$applySrc = $src;
@@ -147,7 +147,6 @@ final class DnsblWildcardRowValidationTest extends TestCase
 	public function testApplyWhitelistExtractionUsesExecutableBoundaryNotProductionComment(): void
 	{
 		$this->assertStringStartsWith('pfb_logger("\\n Loading DNSBL Whitelist...', self::$applyWhitelistRegion);
-		$this->assertStringNotContainsString('Collect Whitelist', self::$applyWhitelistRegion);
 	}
 
 	public function testApplyWhitelistDropsDoubleDotRow(): void

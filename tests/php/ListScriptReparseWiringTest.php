@@ -17,10 +17,8 @@ final class ListScriptReparseWiringTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		foreach (glob("{$this->dir}/*") ?: [] as $file) {
-			@unlink($file);
-		}
-		@rmdir($this->dir);
+		rmdir_recursive($this->dir);
+		$this->assertDirectoryDoesNotExist($this->dir);
 	}
 
 	private function script(string $name): string

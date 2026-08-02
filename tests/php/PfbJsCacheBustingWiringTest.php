@@ -6,6 +6,8 @@ use PHPUnit\Framework\TestCase;
 
 final class PfbJsCacheBustingWiringTest extends TestCase
 {
+	private const ASSET_PATH = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfBlockerNG.js';
+
 	private const PAGE_FUNCTIONS = [
 		'pfblockerng_category.php' => 'pfb_category_js_asset_render',
 		'pfblockerng_category_edit.php' => 'pfb_category_edit_js_asset_render',
@@ -17,17 +19,15 @@ final class PfbJsCacheBustingWiringTest extends TestCase
 	private function renderScript(string $name): string
 	{
 		$function = self::PAGE_FUNCTIONS[$name];
-		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfBlockerNG.js';
-		return $function($path);
+		return $function(self::ASSET_PATH);
 	}
 
 	public function testAssetCarriesTheRuntimeModificationVersion(): void
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfBlockerNG.js';
+		$expected = 'src="pfBlockerNG.js?v=' . pfb_file_mtime(self::ASSET_PATH) . '"';
 		foreach (array_keys(self::PAGE_FUNCTIONS) as $page) {
 			$script = $this->renderScript($page);
-			$this->assertStringContainsString('src="pfBlockerNG.js?v=', $script, $page);
-			$this->assertStringContainsString((string) pfb_file_mtime($path), $script, $page);
+			$this->assertStringContainsString($expected, $script, $page);
 			$this->assertStringContainsString('type="text/javascript"', $script, $page);
 		}
 	}

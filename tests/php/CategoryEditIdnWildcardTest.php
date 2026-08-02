@@ -33,7 +33,7 @@ final class CategoryEditIdnWildcardTest extends TestCase
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_category_edit.php');
 		}
 		if (!preg_match(
-			'/(if \(!empty\(\$_POST\[\x27custom\x27\]\)\) \{.*\})\s*if \(!\$input_errors\) \{/s',
+			'/(if \(!empty\(\$_POST\[\x27custom\x27\]\)\) \{.*?\})\s*if \(!\$input_errors\) \{/s',
 			$src,
 			$m
 		)) {

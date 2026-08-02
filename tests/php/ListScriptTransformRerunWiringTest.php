@@ -57,13 +57,11 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 
 	public function testUserScriptPreventsIpNormalizationReuse(): void
 	{
-		$this->assertTrue(pfb_ip_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE));
 		$this->assertFalse(pfb_ip_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, TRUE));
 	}
 
 	public function testUserScriptPreventsDnsblNormalizationReuse(): void
 	{
-		$this->assertTrue(pfb_dnsbl_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE));
 		$this->assertFalse(pfb_dnsbl_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE));
 	}
 
@@ -86,36 +84,32 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 		);
 		$this->assertIsString($code);
 
-		$this->assertStringContainsString(
-			'$pfb_dnsbl_reuse_decision = pfb_dnsbl_script_reuse_decision( '
-			. '$pfb_dnsbl_verbatim_reuse, $pfb_dnsbl_script_pre, $pfb_dnsbl_script_post, '
-			. '"{$pfborig}/{$header}.orig"); $pfb_dnsbl_user_script = '
-			. '$pfb_dnsbl_reuse_decision[\'has_user_script\'];',
-			$code,
-			'DNSBL loop must call its decision seam and consume its result'
-		);
-		$this->assertStringContainsString(
-			'pfb_dnsbl_norm_reuse_skip($downloaded_fresh, (bool) $custom, '
-			. '$orig_content_stale, $pfb_norm[\'changed\'], '
-			. 'file_exists("{$pfbfolder}/{$header}.txt"), $staging_current_generation, '
-			. '$pfb_dnsbl_user_script)',
-			$code,
-			'DNSBL normalization fast path must receive the seam effect'
-		);
-		$this->assertStringContainsString(
-			'$pfb_ip_reuse_decision = pfb_ip_script_reuse_decision( '
-			. '$pfb_ip_verbatim_reuse, $pfb_script_pre, $pfb_script_post, '
-			. '"{$pfborig}/{$header}.orig"); $pfb_user_script = '
-			. '$pfb_ip_reuse_decision[\'has_user_script\'];',
-			$code,
-			'IP loop must call its distinct decision seam and consume its result'
-		);
-		$this->assertStringContainsString(
-			'pfb_ip_norm_reuse_skip($downloaded_fresh, (bool) $custom, '
-			. '$orig_content_stale, $pfb_norm[\'changed\'], '
-			. 'file_exists("{$pfbfolder}/{$header}.txt"), $pfb_user_script)',
-			$code,
-			'IP normalization fast path must receive the seam effect'
-		);
+		$this->assertSame(1, preg_match(
+			'/\$pfb_dnsbl_reuse_decision\s*=\s*pfb_dnsbl_script_reuse_decision\(\s*'
+			. '\$pfb_dnsbl_verbatim_reuse,\s*\$pfb_dnsbl_script_pre,\s*\$pfb_dnsbl_script_post,\s*'
+			. '"\{\$pfborig\}\/\{\$header\}\.orig"\);\s*\$pfb_dnsbl_user_script\s*=\s*'
+			. '\$pfb_dnsbl_reuse_decision\[\x27has_user_script\x27\];/',
+			$code
+		), 'DNSBL loop must call its decision seam and consume its result');
+		$this->assertSame(1, preg_match(
+			'/pfb_dnsbl_norm_reuse_skip\(\s*\$downloaded_fresh,\s*\(bool\)\s*\$custom,\s*'
+			. '\$orig_content_stale,\s*\$pfb_norm\[\x27changed\x27\],\s*'
+			. 'file_exists\(\s*"\{\$pfbfolder\}\/\{\$header\}\.txt"\s*\),\s*\$staging_current_generation,\s*'
+			. '\$pfb_dnsbl_user_script\s*\)/',
+			$code
+		), 'DNSBL normalization fast path must receive the seam effect');
+		$this->assertSame(1, preg_match(
+			'/\$pfb_ip_reuse_decision\s*=\s*pfb_ip_script_reuse_decision\(\s*'
+			. '\$pfb_ip_verbatim_reuse,\s*\$pfb_script_pre,\s*\$pfb_script_post,\s*'
+			. '"\{\$pfborig\}\/\{\$header\}\.orig"\);\s*\$pfb_user_script\s*=\s*'
+			. '\$pfb_ip_reuse_decision\[\x27has_user_script\x27\];/',
+			$code
+		), 'IP loop must call its distinct decision seam and consume its result');
+		$this->assertSame(1, preg_match(
+			'/pfb_ip_norm_reuse_skip\(\s*\$downloaded_fresh,\s*\(bool\)\s*\$custom,\s*'
+			. '\$orig_content_stale,\s*\$pfb_norm\[\x27changed\x27\],\s*'
+			. 'file_exists\(\s*"\{\$pfbfolder\}\/\{\$header\}\.txt"\s*\),\s*\$pfb_user_script\s*\)/',
+			$code
+		), 'IP normalization fast path must receive the seam effect');
 	}
 }

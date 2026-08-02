@@ -461,10 +461,10 @@ function pfb_editor_mount_hook(bool $enabled, string $language): string
 		return '';
 	}
 
-	$language = htmlspecialchars($language, ENT_QUOTES, 'UTF-8');
+	$language = json_encode($language, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR);
 	return "var pfbHookEditorEl = document.getElementById('pfb_hook_editor_content');\n"
 		. "if (pfbHookEditorEl && window.pfbHooksCM) {\n"
-		. "\twindow.pfbHooksCM.fromTextarea(pfbHookEditorEl, '{$language}', {\n"
+		. "\twindow.pfbHooksCM.fromTextarea(pfbHookEditorEl, {$language}, {\n"
 		. "\t\tlintUrl: '/pfblockerng/pfblockerng_lint.php'\n"
 		. "\t});\n"
 		. "}";
@@ -6017,13 +6017,23 @@ function pfb_edit_hooks_tabs(string $active): array
 	];
 }
 
+/** Build the default Edit Hooks request state, with an optional redirect. */
+function pfb_edit_hooks_default_state(?string $redirect = NULL): array
+{
+	return [
+		'errors' => [], 'sel_when' => '', 'sel_script' => '', 'content' => '',
+		'new_core' => '', 'new_lang' => 'sh', 'new_when' => '', 'notice' => NULL,
+		'redirect' => $redirect,
+	];
+}
+
 /** Shared warning content for the root-equivalent Edit Hooks surface. */
 function pfb_edit_hooks_warning(): array
 {
 	return [
 		'style' => 'danger',
-		'title' => 'Advanced Users Only',
-		'message' => 'The capabilities offered here can be dangerous. No support is available. Scripts you create or edit on this page run as ROOT during every pfBlockerNG update pass -- the same trust class as pfSense Diagnostics > Command Prompt / Edit File. Use them at your own risk!',
+		'title' => gettext('Advanced Users Only'),
+		'message' => gettext('The capabilities offered here can be dangerous. No support is available. Scripts you create or edit on this page run as ROOT during every pfBlockerNG update pass -- the same trust class as pfSense Diagnostics > Command Prompt / Edit File. Use them at your own risk!'),
 	];
 }
 

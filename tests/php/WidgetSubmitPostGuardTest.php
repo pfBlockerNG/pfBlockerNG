@@ -68,8 +68,15 @@ require {$root} . '/tests/php/bootstrap.php';
 \$_POST = {$postCode};
 \$_SERVER = ['HTTP_SEC_FETCH_SITE' => 'same-origin'];
 \$widgetname = 'pfblockerng';
-\$shim = sys_get_temp_dir() . '/pfb_widget_shim_' . getmypid();
-mkdir(\$shim, 0777, TRUE);
+\$shim = sys_get_temp_dir() . '/pfb_widget_shim_' . getmypid() . '_' . bin2hex(random_bytes(8));
+if (!mkdir(\$shim, 0700, TRUE)) {
+	fwrite(STDERR, "widget include shim creation failed\\n");
+	exit(1);
+}
+register_shutdown_function(static function () use (\$shim): void {
+	@unlink(\$shim . '/guiconfig.inc');
+	@rmdir(\$shim);
+});
 file_put_contents(\$shim . '/guiconfig.inc', "<?php");
 set_include_path(\$shim . PATH_SEPARATOR . get_include_path());
 set_error_handler(static function (int \$severity, string \$message): bool {

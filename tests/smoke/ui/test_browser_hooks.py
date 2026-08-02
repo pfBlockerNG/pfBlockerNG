@@ -1,15 +1,16 @@
 """Tier-B browser test: the Update sub-tabs (Run | Hooks | Edit Hooks).
 
 The browser half of the "Update Hooks moved under the Update tab" change: a headless
-Chromium on the live ADR-04 smoke VM opens ``pfblockerng_update.php`` and
-``pfblockerng_hooks.php`` (reusing the Phase-1 authenticated session — the injected
+Chromium on the live ADR-04 smoke VM opens each of the three linked pages
+(``pfblockerng_update.php``, ``pfblockerng_hooks.php``, and
+``pfblockerng_edit_hooks.php``; reusing the Phase-1 authenticated session — the injected
 ``PHPSESSID`` cookie, no second login) and asserts, per page:
 
 * the SECOND ``display_top_tabs`` row ``[Run | Hooks | Edit Hooks]`` is present (all sub-tab
   anchors, pointing at the update, hooks, and edit-hooks pages), and
 * the CURRENT page's sub-tab is the ACTIVE one (its ``<li>`` carries pfSense's
   ``active`` class — emitted by ``display_top_tabs`` for the highlighted tab) while
-  the sibling sub-tab is NOT active — so the highlight tracks the page (a real branch,
+  both sibling sub-tabs are NOT active — so the highlight tracks the page (a real branch,
   not an always-active tab).
 
 A per-page full-page screenshot is written to the ``screenshot_dir`` artifact tree
@@ -93,8 +94,8 @@ def _subtab_nav(page: Page) -> Locator:
 
     The main top bar carries an "Update" tab linking the update page but has NO hooks
     anchor (that top tab was removed by this change), so the sub-tab row is the only
-    ``<ul class="nav …">`` that contains BOTH the update-page anchor and the hooks-page
-    anchor -- filter on that. Version-tolerant (independent of nav-pills/nav-tabs).
+    ``<ul class="nav …">`` that contains all three sub-tab anchors -- filter on that.
+    Version-tolerant (independent of nav-pills/nav-tabs).
     """
     nav = page.locator("ul.nav")
     nav = nav.filter(has=page.locator(f'a[href="{UPDATE_PAGE}"]'))
@@ -132,22 +133,22 @@ def test_update_subtab_active_tracks_page(
     Given one of the three Update sub-tab pages opened,
     Then the second shared sub-tab row is present exactly once, carrying all three anchors,
     And the OPEN page's own sub-tab is the ACTIVE one (its ``<li>`` carries the ``active``
-      class ``display_top_tabs`` puts on the highlighted tab) while the SIBLING sub-tab is
-      NOT active -- so the highlight tracks the page (a real branch: Run is active on the
-      update page, hooks page, or edit-hooks page, and the other two are inactive).
+      class ``display_top_tabs`` puts on the highlighted tab) while both SIBLING sub-tabs
+      are NOT active -- so the highlight tracks the page (a real branch: the corresponding
+      page tab is active on each of the three pages, and the other two are inactive).
     A per-page screenshot is written for the visual record.
     """
     page = browser_page
     _open(page, webui, path)
 
-    # The sub-tab row exists exactly once -- the only nav carrying BOTH anchors.
+    # The sub-tab row exists exactly once -- the only nav carrying all three anchors.
     nav = _subtab_nav(page)
     expect(nav).to_have_count(1, timeout=JS_TIMEOUT_MS)
     expect(_subtab_anchor(nav, UPDATE_PAGE)).to_have_count(1, timeout=JS_TIMEOUT_MS)
     expect(_subtab_anchor(nav, HOOKS_PAGE)).to_have_count(1, timeout=JS_TIMEOUT_MS)
     expect(_subtab_anchor(nav, EDIT_HOOKS_PAGE)).to_have_count(1, timeout=JS_TIMEOUT_MS)
 
-    # The open page's sub-tab is ACTIVE; the sibling is not. pfSense's display_top_tabs
+    # The open page's sub-tab is ACTIVE; both siblings are not. pfSense's display_top_tabs
     # puts the `active` class on the highlighted tab's <li> (the anchor's parent) -- the
     # version-tolerant handle. Scope to the sub-tab row so the top bar's own "Update" tab
     # (also linking the update page) cannot confuse the match.

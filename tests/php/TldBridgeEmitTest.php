@@ -12,6 +12,8 @@ final class TldBridgeEmitTest extends TestCase
 {
 	private string $tmp;
 	private bool $hadPfb = FALSE;
+	private bool $hadConfig = FALSE;
+	private bool $hadG = FALSE;
 	private array $originalPfb = [];
 	private array $originalConfig = [];
 	private array $originalG = [];
@@ -19,6 +21,8 @@ final class TldBridgeEmitTest extends TestCase
 	protected function setUp(): void
 	{
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
+		$this->hadConfig = array_key_exists('config', $GLOBALS);
+		$this->hadG = array_key_exists('g', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
 		$this->originalConfig = $GLOBALS['config'] ?? [];
 		$this->originalG = $GLOBALS['g'] ?? [];
@@ -60,8 +64,16 @@ final class TldBridgeEmitTest extends TestCase
 		} else {
 			unset($GLOBALS['pfb']);
 		}
-		$GLOBALS['config'] = $this->originalConfig;
-		$GLOBALS['g'] = $this->originalG;
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->originalConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
+		if ($this->hadG) {
+			$GLOBALS['g'] = $this->originalG;
+		} else {
+			unset($GLOBALS['g']);
+		}
 		rmdir_recursive($this->tmp);
 	}
 

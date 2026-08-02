@@ -22,7 +22,7 @@ final class EditHooksSyntaxHighlightWiringTest extends TestCase
 		$this->assertStringContainsString('cm-hooks.min.js?v=', $asset);
 		$this->assertStringContainsString("getElementById('pfb_hook_editor_content')", $init);
 		$this->assertStringContainsString('window.pfbHooksCM', $init);
-		$this->assertStringContainsString("fromTextarea(pfbHookEditorEl, 'py'", $init);
+		$this->assertStringContainsString('fromTextarea(pfbHookEditorEl, "py"', $init);
 		$this->assertStringContainsString("lintUrl: '/pfblockerng/pfblockerng_lint.php'", $init);
 	}
 
@@ -31,9 +31,10 @@ final class EditHooksSyntaxHighlightWiringTest extends TestCase
 		$python = pfb_hooks_editor_render(TRUE, 'py')['mount'];
 		$shell  = pfb_hooks_editor_render(TRUE, 'sh')['mount'];
 
-		$this->assertStringContainsString("'py'", $python);
-		$this->assertStringNotContainsString("'sh'", $python);
-		$this->assertStringContainsString("'sh'", $shell);
+		$this->assertStringContainsString('"py"', $python);
+		$this->assertStringNotContainsString('"sh"', $python);
+		$this->assertStringContainsString('"sh"', $shell);
+		$this->assertStringNotContainsString('"py"', $shell);
 	}
 
 	public function testHookEditorAssetAndLintEachRenderOnce(): void

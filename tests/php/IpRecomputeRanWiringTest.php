@@ -16,10 +16,8 @@ final class IpRecomputeRanWiringTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		foreach (glob("{$this->root}/*") ?: [] as $path) {
-			@unlink($path);
-		}
-		@rmdir($this->root);
+		rmdir_recursive($this->root);
+		$this->assertDirectoryDoesNotExist($this->root);
 	}
 
 	public function testRanFlagIsSetOnlyAfterTheMatchingFamilyRunnerCompletes(): void

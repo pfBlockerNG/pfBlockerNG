@@ -228,13 +228,6 @@ final class LogTimestampBaselineTest extends TestCase
 		try {
 			$this->assertFalse(pfb_open_sqlite(1, 'Query ip cache'), 'an SQLite directory path must fail open and exercise the errlog bypass');
 		} finally {
-			foreach (['dnsbl_info', 'sqlite_timeout', 'errlog'] as $key) {
-				if ($this->saved[$key] === FALSE) {
-					unset($GLOBALS['pfb'][$key]);
-				} else {
-					$GLOBALS['pfb'][$key] = $this->saved[$key];
-				}
-			}
 			rmdir($dir);
 		}
 

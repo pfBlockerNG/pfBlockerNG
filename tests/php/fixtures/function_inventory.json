@@ -3579,6 +3579,19 @@
             }
         ]
     },
+    "pfb_edit_hooks_default_state": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "redirect",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_edit_hooks_form_value": {
         "returnsRef": false,
         "returnType": "mixed",
@@ -6774,6 +6787,33 @@
             },
             {
                 "name": "tmo_prefix",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_list_script_cleanup_staged": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "parse_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "staged_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            },
+            {
+                "name": "known_path",
                 "byRef": false,
                 "variadic": false,
                 "type": "?string",

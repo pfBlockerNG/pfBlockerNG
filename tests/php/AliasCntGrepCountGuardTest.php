@@ -15,7 +15,7 @@ final class AliasCntGrepCountGuardTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+		require_once self::APPLY;
 	}
 
 	protected function setUp(): void
@@ -80,7 +80,9 @@ final class AliasCntGrepCountGuardTest extends TestCase
 		$source = php_strip_whitespace(self::APPLY);
 		$start = strpos($source, 'function sync_package_pfblockerng(');
 		$this->assertNotFalse($start);
-		$sync = substr($source, $start);
+		$end = strrpos($source, 'pfb_feed_pass_release();');
+		$this->assertNotFalse($end);
+		$sync = substr($source, $start, $end + strlen('pfb_feed_pass_release();') - $start);
 		foreach (self::aliasSeams() as [$seam]) {
 			$this->assertSame(1, substr_count($sync, "{$seam}("), "sync pass must dispatch {$seam} exactly once");
 		}

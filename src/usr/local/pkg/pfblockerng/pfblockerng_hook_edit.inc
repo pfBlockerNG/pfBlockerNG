@@ -55,11 +55,7 @@ function pfb_edit_hooks_controller(bool $allowed, callable $post, callable $get,
 {
 	$redirect = pfb_edit_hooks_access($allowed);
 	if ($redirect !== NULL) {
-		return [
-			'errors' => [], 'sel_when' => '', 'sel_script' => '', 'content' => '',
-			'new_core' => '', 'new_lang' => 'sh', 'new_when' => '', 'notice' => NULL,
-			'redirect' => $redirect,
-		];
+		return pfb_edit_hooks_default_state($redirect);
 	}
 
 	return pfb_edit_hooks_request((array) $post(), (array) $get(), $dir);
@@ -68,11 +64,7 @@ function pfb_edit_hooks_controller(bool $allowed, callable $post, callable $get,
 /** Shared Edit Hooks request path; returns state plus a PRG redirect when complete. */
 function pfb_edit_hooks_request(array $post, array $get, ?string $dir = null): array
 {
-	$state = [
-		'errors' => [], 'sel_when' => '', 'sel_script' => '', 'content' => '',
-		'new_core' => '', 'new_lang' => 'sh', 'new_when' => '', 'notice' => NULL,
-		'redirect' => NULL,
-	];
+	$state = pfb_edit_hooks_default_state();
 	if (!$post) {
 		if (isset($get['saved'])) {
 			$state['notice'] = gettext('Hook script saved.');
