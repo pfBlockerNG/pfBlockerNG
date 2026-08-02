@@ -3730,9 +3730,15 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $t
  *
  * $ps_lines is injectable for hermetic off-appliance tests; NULL preserves the
  * appliance's host process-table scan. $ss_refresh is an optional test seam; NULL calls
- * the production SafeSearch refresher.
+ * the production SafeSearch refresher. $ss_lock_opener and $ss_lock_timeout are test seams
+ * for the bounded refresh lock; defaults use fopen() and a 5-second budget.
  */
-function pfblockerng_tick(?array $ps_lines = NULL, ?callable $ss_refresh = NULL): void
+function pfblockerng_tick(
+	?array $ps_lines = NULL,
+	?callable $ss_refresh = NULL,
+	?callable $ss_lock_opener = NULL,
+	float $ss_lock_timeout = 5.0
+): void
 {
 	global $pfb;
 
@@ -3851,15 +3857,19 @@ function pfblockerng_tick(?array $ps_lines = NULL, ?callable $ss_refresh = NULL)
 
 	// SafeSearch CNAME freshness: independent 900-second due-ledger cadence.
 	if ($due['ss_refresh']) {
-		$ss_lock = @fopen("{$dbdir}/pfb_ss_refresh.lock", 'c');
+		$ss_lock_path = "{$dbdir}/pfb_ss_refresh.lock";
+		$ss_default_opener = ($ss_lock_opener === NULL);
+		$ss_lock = $ss_default_opener ? @fopen($ss_lock_path, 'c') : $ss_lock_opener($ss_lock_path);
 		if ($ss_lock === FALSE) {
-			pfb_logger("\nTick: SafeSearch lock open failed [ {$dbdir}/pfb_ss_refresh.lock ]", 2);
+			pfb_logger("\nTick: SafeSearch lock open failed [ {$ss_lock_path} ]", 2);
 		} else {
 			$ss_lock_timed_out = FALSE;
-			if (!pfb_flock_bounded($ss_lock, LOCK_EX, 5.0, $ss_lock_timed_out)) {
+			if (!pfb_flock_bounded($ss_lock, LOCK_EX, $ss_lock_timeout, $ss_lock_timed_out)) {
 				$reason = $ss_lock_timed_out ? 'timed out' : 'acquire failed';
-				pfb_logger("\nTick: SafeSearch lock {$reason} [ {$dbdir}/pfb_ss_refresh.lock ]", 2);
-				@fclose($ss_lock);
+				pfb_logger("\nTick: SafeSearch lock {$reason} [ {$ss_lock_path} ]", 2);
+				if ($ss_default_opener) {
+					@fclose($ss_lock);
+				}
 			} else {
 				try {
 					// Another tick may have completed while this one waited for the lock.
