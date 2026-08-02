@@ -7785,11 +7785,7 @@ function pfb_unbound_dnsbl($mode) {
 			// source of truth); it also mkdirs the chroot + nullfs mount-point dirs.
 			exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');
 		} else {
-			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
-			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_dnsbl_regex_rules.py");
-			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
-			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
-			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_tld.txt");
+			exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache teardown >/dev/null 2>&1');
 		}
 
 		// Save changes to unbound.conf
@@ -17787,11 +17783,7 @@ function pfblockerng_php_pre_deinstall_command() {
 		}
 	}
 
-	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
-	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_dnsbl_regex_rules.py");
-	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
-	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
-	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_tld.txt");
+	exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache teardown >/dev/null 2>&1');
 
 	// Remove widget (code from Snort deinstall)
 	$pfb['widgets'] = config_get_path('widgets/sequence', '');

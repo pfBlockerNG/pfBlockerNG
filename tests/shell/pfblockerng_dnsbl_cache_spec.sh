@@ -4,6 +4,7 @@
 # Pins the three subcommands against a sandbox chroot:
 #   stage   -- copies the SHIPPED files into the chroot and creates the nullfs/devfs
 #              mount-point dirs (the fresh-MFS fix that made pfb_python_mount fail).
+#   teardown -- removes the SHIPPED files and mapped TLD copy from the chroot.
 #   save    -- archives ONLY the GENERATED set (pfb_py_* + pfb_unbound.ini), never the
 #              shipped files (those come from /usr/local on restore -> no stale code).
 #   restore -- untars the generated set THEN stages the shipped files; round-trips the
@@ -82,7 +83,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     dc restore
   }
 
-  It 'stage copies the shipped files and creates the nullfs/devfs mount-point dirs'
+  It 'stage copies all shipped files and the mapped TLD file, then creates mount-point dirs'
     setup_sandbox
     # Before: the chroot does not exist at all (fresh MFS).
     When call dc stage
@@ -91,11 +92,45 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should be exist
     The path "${pfbchroot}/pfb_unbound_include.inc" should be exist
     The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
+    The path "${pfbchroot}/pfb_py_tld.txt" should be exist
     # The mount-point dirs exist (the fresh-MFS fix).
     The path "${pfbchroot}/lib" should be directory
     The path "${pfbchroot}/dev" should be directory
     The path "${pfbchroot}/var/log/pfblockerng" should be directory
     The path "${pfbchroot}/usr/local/share/GeoIP" should be directory
+    cleanup_sandbox
+  End
+
+  It 'teardown removes all shipped files and the mapped TLD file from a chroot path with spaces'
+    setup_sandbox
+    pfbchroot="${sandbox}/chroot path"
+    dc stage
+    When call dc teardown
+    The status should be success
+    The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should not be exist
+    The path "${pfbchroot}/pfb_unbound.py" should not be exist
+    The path "${pfbchroot}/pfb_unbound_include.inc" should not be exist
+    The path "${pfbchroot}/pfb_py_hsts.txt" should not be exist
+    The path "${pfbchroot}/pfb_py_tld.txt" should not be exist
+    cleanup_sandbox
+  End
+
+  teardown_twice() {
+    dnsbl_cache teardown 2>/dev/null
+    first=$?
+    dnsbl_cache teardown 2>/dev/null
+    second=$?
+    printf '%s:%s\n' "${first}" "${second}"
+  }
+
+  It 'teardown is idempotent when all files are already absent'
+    setup_sandbox
+    pfbchroot="${sandbox}/chroot path"
+    dc stage
+    dc teardown
+    When call teardown_twice
+    The output should equal '0:0'
+    The path "${pfbchroot}/pfb_py_tld.txt" should not be exist
     cleanup_sandbox
   End
 
