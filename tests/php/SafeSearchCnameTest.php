@@ -55,7 +55,7 @@ final class SafeSearchCnameTest extends TestCase
 		// Per-test log + extdns sandbox for the resolve_target boundary assertions.
 		$this->tmp = sys_get_temp_dir() . '/pfb_ss_' . uniqid('', true);
 		mkdir($this->tmp, 0777, true);
-		foreach (['log', 'errlog', 'extdns'] as $key) {
+		foreach (['log', 'errlog', 'extdns', 'drill', 'timeout'] as $key) {
 			$this->hadPfbKeys[$key]   = array_key_exists($key, $GLOBALS['pfb'] ?? []);
 			$this->savedPfbKeys[$key] = $GLOBALS['pfb'][$key] ?? null;
 		}
@@ -81,6 +81,66 @@ final class SafeSearchCnameTest extends TestCase
 	{
 		$path = $GLOBALS['pfb']['log'];
 		return file_exists($path) ? (string) file_get_contents($path) : '';
+	}
+
+	private function makeFixture(string $name, string $body): string
+	{
+		$path = "{$this->tmp}/{$name}";
+		file_put_contents($path, "#!/bin/sh\n{$body}\n");
+		chmod($path, 0755);
+		return $path;
+	}
+
+	/** @return array{timeoutLog:string, drillLog:string} */
+	private function installLookupFixtures(bool $expire): array
+	{
+		$timeoutLog = "{$this->tmp}/timeout args.log";
+		$drillLog = "{$this->tmp}/drill args.log";
+		$timeoutLogEsc = escapeshellarg($timeoutLog);
+		$drillLogEsc = escapeshellarg($drillLog);
+
+		if ($expire) {
+			$timeoutBody = "printf '%s\\n' --CALL-- >> {$timeoutLogEsc}\nprintf '%s\\n' \"$@\" >> {$timeoutLogEsc}\nprintf '%b\\n' 'partial.example.com.\\t300\\tIN\\tA\\t192.0.2.99' 'partial.example.com.\\t300\\tIN\\tAAAA\\t2001:db8::99'\nexit 124";
+		} else {
+			$timeoutBody = "printf '%s\\n' --CALL-- >> {$timeoutLogEsc}\nprintf '%s\\n' \"$@\" >> {$timeoutLogEsc}\nshift 5\nexec \"$@\"";
+		}
+		$timeout = $this->makeFixture('timeout fixture.sh', $timeoutBody);
+		$drill = $this->makeFixture('drill fixture.sh',
+			"printf '%s\\n' \"$@\" >> {$drillLogEsc}\n"
+			. "case \"$1\" in\n"
+			. "A) printf '%b\\n' 'safe.duckduckgo.com.\\t300\\tIN\\tA\\t192.0.2.10' ;;\n"
+			. "AAAA) printf '%b\\n' 'safe.duckduckgo.com.\\t300\\tIN\\tAAAA\\t2001:db8::10' ;;\n"
+			. "esac");
+
+		$GLOBALS['pfb']['timeout'] = $timeout;
+		$GLOBALS['pfb']['drill'] = $drill;
+		$GLOBALS['pfb']['extdns'] = '127.0.0.1; echo no';
+		return ['timeoutLog' => $timeoutLog, 'drillLog' => $drillLog];
+	}
+
+	/** @return list<list<string>> */
+	private function timeoutCalls(string $path): array
+	{
+		if (!is_file($path)) {
+			return [];
+		}
+		$lines = file($path, FILE_IGNORE_NEW_LINES);
+		$calls = [];
+		$call = [];
+		foreach ($lines ?: [] as $line) {
+			if ($line === '--CALL--') {
+				if ($call !== []) {
+					$calls[] = $call;
+					$call = [];
+				}
+				continue;
+			}
+			$call[] = $line;
+		}
+		if ($call !== []) {
+			$calls[] = $call;
+		}
+		return $calls;
 	}
 	// --- pfb_ss_csv_rows -------------------------------------------------------
 
@@ -260,6 +320,7 @@ final class SafeSearchCnameTest extends TestCase
 		$stub = tempnam(sys_get_temp_dir(), 'pfb_drill_stub_');
 		file_put_contents($stub, "#!/bin/sh\nexit 0\n");
 		chmod($stub, 0755);
+		$this->installLookupFixtures(false);
 		$GLOBALS['pfb']['drill'] = $stub;
 		try {
 			$result = pfb_ss_resolve_target('safe.duckduckgo.com');
@@ -272,6 +333,57 @@ final class SafeSearchCnameTest extends TestCase
 		$this->assertStringNotContainsString('failed validation', $this->logContents());
 	}
 
+	public function test_resolve_target_a_result_runs_through_default_reaper_timeout(): void
+	{
+		$logs = $this->installLookupFixtures(false);
+
+		$result = pfb_ss_resolve_target('safe.duckduckgo.com');
+
+		$this->assertSame(['192.0.2.10', '2001:db8::10'], $result);
+		$calls = $this->timeoutCalls($logs['timeoutLog']);
+		$this->assertCount(2, $calls);
+		$this->assertSame(['-s', 'TERM', '-k', '5', '30', '/bin/sh', '-c'], array_slice($calls[0], 0, 7));
+		$this->assertNotContains('--foreground', $calls[0]);
+		$this->assertSame(
+			['A', 'safe.duckduckgo.com', '@127.0.0.1; echo no', 'AAAA', 'safe.duckduckgo.com', '@127.0.0.1; echo no'],
+			file($logs['drillLog'], FILE_IGNORE_NEW_LINES)
+		);
+	}
+
+	public function test_resolve_target_aaaa_result_runs_through_default_reaper_timeout(): void
+	{
+		$this->installLookupFixtures(false);
+		// The fixture serves both families; isolate the AAAA leg by using a drill fixture
+		// whose A output is intentionally not an IPv4 answer.
+		$GLOBALS['pfb']['drill'] = $this->makeFixture('aaaa drill fixture.sh',
+			"case \"$1\" in\n"
+			. "A) exit 0 ;;\n"
+			. "AAAA) printf '%b\\n' 'safe.duckduckgo.com.\\t300\\tIN\\tAAAA\\t2001:db8::10' ;;\n"
+			. "esac");
+
+		$result = pfb_ss_resolve_target('safe.duckduckgo.com');
+
+		$this->assertSame(['', '2001:db8::10'], $result);
+	}
+
+	public function test_resolve_target_timeout_discards_partial_a_and_aaaa_results_and_logs_both_expiries(): void
+	{
+		$logs = $this->installLookupFixtures(true);
+
+		$result = pfb_ss_resolve_target('safe.duckduckgo.com');
+
+		$this->assertSame(['', ''], $result);
+		$log = $this->logContents();
+		$this->assertStringContainsString('A lookup TIMED OUT', $log);
+		$this->assertStringContainsString('AAAA lookup TIMED OUT', $log);
+		$calls = $this->timeoutCalls($logs['timeoutLog']);
+		$this->assertCount(2, $calls);
+		foreach ($calls as $call) {
+			$this->assertSame(['-s', 'TERM', '-k', '5', '30', '/bin/sh', '-c'], array_slice($call, 0, 7));
+			$this->assertNotContains('--foreground', $call);
+		}
+	}
+
 	public function test_resolve_target_uses_injected_resolver_binary(): void
 	{
 		// Seam proof (#723): a stub resolver that EMITS a drill-shaped answer must have
@@ -281,6 +393,7 @@ final class SafeSearchCnameTest extends TestCase
 		$stub = tempnam(sys_get_temp_dir(), 'pfb_drill_stub_');
 		file_put_contents($stub, "#!/bin/sh\n[ \"\$1\" = \"A\" ] && printf 'stub.example.com.\\t300\\tIN\\tA\\t192.0.2.99\\n'\nexit 0\n");
 		chmod($stub, 0755);
+		$this->installLookupFixtures(false);
 		$GLOBALS['pfb']['drill'] = $stub;
 		try {
 			$result = pfb_ss_resolve_target('safe.duckduckgo.com');
