@@ -590,7 +590,10 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
             errors.append(repr(e))
         stats.append(local)
 
-    threads = [threading.Thread(target=query_loop, args=(index,), daemon=True) for index in range(n_threads)]
+    threads = [
+        threading.Thread(target=query_loop, args=(index,), name="adr10-query-{}".format(index), daemon=True)
+        for index in range(n_threads)
+    ]
     for t in threads:
         t.start()
 
@@ -635,8 +638,15 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
         stop.set()
         for t in threads:
             t.join(timeout=5)
+        live_query_threads = [t for t in threads if t.is_alive()]
         P.pfb_reload_stop.set()
         watcher.join(timeout=5)
+        if live_query_threads:
+            raise RuntimeError(
+                "salvage cap expired / stuck or environment: query threads/workers awaited; still alive: {}".format(
+                    ", ".join(t.name for t in live_query_threads)
+                )
+            )
 
     # --- assertions ------------------------------------------------------------- #
     assert not watcher.is_alive(), "watcher did not join cleanly"
