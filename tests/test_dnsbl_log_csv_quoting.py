@@ -176,10 +176,9 @@ class TestDnsReplyWriterCommaInQName:
 class TestPlainNameRowStaysBareCsv:
     """Comma-free rows must stay byte-identical to the historical format.
 
-    The filterlog daemon (pfb_daemon_filterlog) fast-paths dnsbl.log lines with
-    a plain explode(',') == 11 check before re-emitting them verbatim into
-    unified.log; gratuitous quoting of clean fields would knock every ordinary
-    row off that path. QUOTE_MINIMAL semantics are the pinned contract.
+    QUOTE_MINIMAL preserves the historical bare row for ordinary names while
+    still producing valid input for the daemon's str_getcsv() and the Alerts
+    page's fgetcsv() readers. That byte compatibility is the pinned contract.
     """
 
     def test_plain_fields_are_not_quoted(self, monkeypatch: pytest.MonkeyPatch) -> None:

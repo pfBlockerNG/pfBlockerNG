@@ -621,3 +621,23 @@ Proposed phase is eventually implemented. **No edit needed**; ADR-32 is not stal
 Syslog behaviour is unchanged. The requirement to emit tokens consumable by older packages and the
 inherited `RollbackContractTest` requirement are superseded. Current canonical storage and
 supported forward-upgrade legacy reads remain required; package downgrade is unsupported.
+
+## Amendment 4 (2026-08-02, issue #2075) — Preserve RFC4180 DNSBL rows in Unified
+
+**Scope.** Corrects Amendment 1's A1.3/A1.6 claim that every feature row is reconstructed through a
+`pfb_unified_format_*` formatter and that this fully decouples `unified.log` from its producers. The
+daemon remains the sole `unified.log` writer, and the host-side DNSBL syslog decision remains
+unchanged.
+
+The Python DNSBL writers now own RFC4180 serialization for their fixed 11-field rows: minimal
+quoting, doubled embedded quotes, and CR/LF normalized to spaces before encoding so each event stays
+one physical line. The daemon parses each `DNSBL-python` row with the matching CSV grammar to derive
+the syslog fields, but appends the original encoded row to `unified.log` byte-for-byte. Rebuilding a
+parsed row with the legacy comma-join formatter would discard required quoting from a comma-bearing
+query name and corrupt the Unified read path.
+
+IP rows and DNS-reply rows continue through `pfb_unified_format_ip()` and
+`pfb_unified_format_dnsreply()`. `pfb_unified_format_dnsbl()` remains a pure fixed-column
+compatibility/schema oracle for existing callers and unit tests, not the production DNSBL
+serialization boundary. The invariant is now **semantic schema parity plus encoded-byte fidelity**,
+not producer-independent DNSBL serialization.

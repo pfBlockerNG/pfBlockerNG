@@ -2869,8 +2869,9 @@ function pfb_syslog_format_ip(array $fields): string
 // ADR-38 Amendment 1 — DNSBL syslog + unified.log formatters. pfb_syslog_format_dnsbl()
 // (PHP port of the retired Python syslog_format_dnsbl()) formats a DNSBL block event as
 // key=value; fixed order act qname qip qtype [group] [feed] btype eval (group/feed omitted
-// when ''); escaping matches pfb_syslog_format_ip. pfb_unified_format_ip/_dnsbl/_dnsreply
-// render comma-joined unified.log/dnsbl.log rows in FIXED column order — no escaping.
+// when ''); escaping matches pfb_syslog_format_ip. pfb_unified_format_ip/_dnsreply
+// render comma-joined unified.log rows; Amendment 4 keeps the DNSBL formatter as a
+// pure schema oracle while production preserves the Python writer's RFC4180 bytes.
 // All four are PURE — no globals, no I/O, no config reads.
 // ---------------------------------------------------------------------------
 
@@ -2938,10 +2939,11 @@ function pfb_unified_format_ip(array $fields): string
 }
 
 /**
- * pfb_unified_format_dnsbl — render a dnsbl.log CSV line as a comma-joined string.
+ * pfb_unified_format_dnsbl — render plain DNSBL fields as a comma-joined string.
  *
- * Owns the 11-column schema for DNSBL rows in unified.log (mirrors dnsbl.log
- * exactly).  Raw passthrough — no escaping; the caller appends "\n".
+ * Retained as the pure 11-column schema/compatibility oracle. ADR-38 Amendment 4:
+ * the production daemon preserves the Python writer's RFC4180 row bytes instead,
+ * because this formatter deliberately applies no escaping.
  *
  * Column order: l_type, datetime, q_name, q_ip, p_type, b_type, group,
  *               b_eval, feed, dup, q_type.

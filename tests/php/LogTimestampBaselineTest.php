@@ -12,13 +12,11 @@ use PHPUnit\Framework\TestCase;
  * (below) to pin the FIXED, always-on ISO-8601 behaviour instead: all 10 log
  * types now share the same 'Y-m-d H:i:s' shape.
  *
- * pfb_daemon_filterlog() reads php://stdin in an unbounded daemon loop and is
- * not directly callable from a unit test; its 'BSD'/'syslog' timestamp branch
- * (§1.3's ip_blocklog/ip_permitlog/ip_matchlog row) was extracted into the
- * pure, directly-callable pfb_filterlog_timestamp() and is exercised for real
- * below. Only the REST of pfb_daemon_filterlog() -- the stdin daemon loop
- * itself -- remains untestable directly. pfb_log_event() (§1.8's dnsbl.log
- * twin writer) IS directly callable and is exercised for real below too.
+ * SyslogEventTest exercises the daemon's DNSBL stdin branch in a bounded child
+ * process. This file keeps the 'BSD'/'syslog' timestamp branch (§1.3's
+ * ip_blocklog/ip_permitlog/ip_matchlog row) on its smaller pure seam,
+ * pfb_filterlog_timestamp(). pfb_log_event() (§1.8's dnsbl.log twin writer) is
+ * directly callable and exercised below too.
  */
 #[CoversFunction('pfb_logger')]
 #[CoversFunction('pfb_parse_fail_log')]
