@@ -7,17 +7,28 @@ use PHPUnit\Framework\TestCase;
 /**
  * Independent coverage for issue #1576's package seam.
  *
- * The installer is deliberately checked statically: executing install.inc would
- * perform appliance-only config migrations and service changes. Live install
- * smoke remains an explicit appliance validation step.
+ * Generation runs behaviorally against temporary output. Installer dispatch stays
+ * static because executing install.inc performs appliance-only migrations and
+ * service changes; comment-free PHP keeps that pin independent of prose.
  */
 final class GeoipPackageGenerationCoverageTest extends TestCase
 {
+	private static string $installSource;
 	private string $tmp;
 	private string $ccdir;
 	private string $output;
 	private mixed $originalPfb;
 	private bool $hadPfb = FALSE;
+
+	public static function setUpBeforeClass(): void
+	{
+		self::$installSource = php_strip_whitespace(
+			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc'
+		);
+		if (self::$installSource === '') {
+			throw new RuntimeException('test bootstrap: failed to read comment-free install source');
+		}
+	}
 
 	protected function setUp(): void
 	{
@@ -59,30 +70,25 @@ final class GeoipPackageGenerationCoverageTest extends TestCase
 		}
 	}
 
-	public function testPackageBootstrapAndInstallerWiring(): void
+	public function testPackageGeoipInterfaceGeneratesCountryAndReputationArtifacts(): void
 	{
 		$this->assertTrue(function_exists('pfblockerng_get_countries'));
 		$this->assertTrue(function_exists('pfb_build_reputation_tab'));
-
-		$phpunit = (string) file_get_contents(dirname(__DIR__, 2) . '/phpunit.xml');
-		$this->assertStringContainsString(
-			'<file>src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc</file>',
-			$phpunit
-		);
-
-		$installer = (string) file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc'
-		);
-		$this->assertStringContainsString(
-			"require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');",
-			$installer
-		);
-		$this->assertStringNotContainsString(
-			"require_once('/usr/local/www/pfblockerng/pfblockerng.php');",
-			$installer
-		);
-		$this->assertMatchesRegularExpression('/(?m)^\\s*pfblockerng_get_countries\\(\\);/', $installer);
-		$this->assertMatchesRegularExpression('/(?m)^\\s*pfb_build_reputation_tab\\(\\);/', $installer);
+		foreach ([
+			'Africa' => 'Africa', 'Antarctica' => 'Antarctica', 'Asia' => 'Asia', 'Europe' => 'Europe',
+			'North America' => 'North_America', 'Oceania' => 'Oceania', 'South America' => 'South_America',
+			'Proxy and Satellite' => 'Proxy_and_Satellite', 'Top Spammers' => 'Top_Spammers',
+		] as $continent => $slug) {
+			$this->writeContinent($continent, $slug, '4', []);
+			$this->writeContinent($continent, $slug, '6', []);
+		}
+		$this->writeContinent('Africa', 'Africa', '4', [['Alpha', 'AA', ['1.1.1.1']]]);
+		$this->generateWithoutWarnings();
+		$this->assertFileExists("{$this->output}/pfblockerng_Africa.php");
+		$this->assertFileExists("{$this->output}/pfblockerng_reputation.php");
+		$africa = $this->page('Africa');
+		$this->assertStringContainsString('"AA" => "Alpha AA (1)"', $africa);
+		$this->assertStringContainsString('"AA" => "Alpha AA (1)"', (string) file_get_contents("{$this->output}/pfblockerng_reputation.php"));
 	}
 
 	public function testStateMatrixAndSpecialCountryOptionsThroughPackageInterface(): void
@@ -165,6 +171,38 @@ final class GeoipPackageGenerationCoverageTest extends TestCase
 		$this->assertIsInt($zulu);
 		$this->assertLessThan($zulu, $alpha);
 		$this->assertStringNotContainsString('"US_rep" =>', $reputation);
+	}
+
+	/**
+	 * install.inc performs destructive migrations/config writes and cannot be
+	 * included off-appliance; pin its two executable generator dispatches without
+	 * source comments, then verify the generated page emits the shared helper call.
+	 * Comments/docblocks cannot define this dispatch boundary.
+	 */
+	public function testInstallerDispatchesCountryAndReputationGenerators(): void
+	{
+		$countries = strpos(self::$installSource, 'pfblockerng_get_countries();');
+		$reputation = strpos(self::$installSource, 'pfb_build_reputation_tab();');
+		$this->assertNotFalse($countries, 'install.inc must dispatch country-page generation');
+		$this->assertNotFalse($reputation, 'install.inc must dispatch reputation-page generation');
+		$this->assertLessThan($reputation, $countries);
+
+		foreach ([
+			'Africa' => 'Africa',
+			'Antarctica' => 'Antarctica',
+			'Asia' => 'Asia',
+			'Europe' => 'Europe',
+			'North America' => 'North_America',
+			'Oceania' => 'Oceania',
+			'South America' => 'South_America',
+			'Proxy and Satellite' => 'Proxy_and_Satellite',
+			'Top Spammers' => 'Top_Spammers',
+		] as $continent => $slug) {
+			$this->writeContinent($continent, $slug, '4', []);
+			$this->writeContinent($continent, $slug, '6', []);
+		}
+		$this->generateWithoutWarnings();
+		$this->assertStringContainsString('pfb_geoip_doc_link()', $this->page('Africa'));
 	}
 
 	private function generateWithoutWarnings(): void

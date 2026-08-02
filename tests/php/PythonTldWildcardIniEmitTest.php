@@ -4,73 +4,82 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/**
- * issue #1255 — pfb_unbound_python() must emit the `python_tld_wildcard` ini
- * flag, derived from $pfb['dnsbl_tld_wildcard'] via the SAME on/off pattern as the
- * sibling `python_hsts` key (HSTS parity: a shipped static file + an ini
- * boolean enable flag). pfb_unbound_python() needs a live pfSense/VIP/DNS
- * environment to execute end-to-end (no lighter harness exists for ANY of
- * its ini keys — python_hsts/python_idn/python_cname are pinned the same
- * source-inspection way in PythonWhitelistTldSegTest.php; true end-to-end
- * ini + Python behaviour is proven by the live-VM smoke suite), so this pins
- * the wiring at the source level: the derivation reads dnsbl_tld_wildcard and the
- * heredoc emits the key.
- */
+/** The Python INI carries the configured DNSBL TLD-wildcard toggle. */
 final class PythonTldWildcardIniEmitTest extends TestCase
 {
-	private const SRC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
+	private string $tmp;
+	private array $originalPfb = [];
+	private array $originalConfig = [];
+	private array $originalG = [];
 
-	/**
-	 * Brace-counts from `function {$name}(` to its matching closing brace, so the
-	 * assertions below inspect ONLY that function's body (mirrors
-	 * PythonWhitelistTldSegTest::functionBody()).
-	 */
-	private function functionBody(string $name): string
+	protected function setUp(): void
 	{
-		$source = file_get_contents(self::SRC);
-		$this->assertNotFalse($source, 'failed to read pfblockerng.inc');
-
-		$needle = "\nfunction {$name}(";
-		$start = strpos($source, $needle);
-		$this->assertNotFalse($start, "function {$name}() not found in source");
-		$start++; // step past the leading \n onto 'function'
-
-		$braceOpen = strpos($source, '{', $start);
-		$this->assertNotFalse($braceOpen, "no opening brace found for {$name}()");
-
-		$depth = 0;
-		for ($i = $braceOpen, $len = strlen($source); $i < $len; $i++) {
-			if ($source[$i] === '{') {
-				$depth++;
-			} elseif ($source[$i] === '}') {
-				$depth--;
-				if ($depth === 0) {
-					$body = substr($source, $start, $i - $start + 1);
-					$this->assertNotSame('', trim($body), "empty body extracted for {$name}() -- vacuous extraction");
-					return $body;
-				}
-			}
-		}
-		$this->fail("no matching closing brace found for {$name}()");
+		$this->originalPfb = $GLOBALS['pfb'] ?? [];
+		$this->originalConfig = $GLOBALS['config'] ?? [];
+		$this->originalG = $GLOBALS['g'] ?? [];
+		$GLOBALS['config'] = [];
+		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
+		$this->tmp = sys_get_temp_dir() . '/pfb_tld_ini_' . uniqid('', TRUE);
+		mkdir($this->tmp, 0777, TRUE);
+		$GLOBALS['pfb'] = array_merge($this->originalPfb, [
+			'logdir'          => $this->tmp,
+			'unbound_py_conf' => "{$this->tmp}/pfb_unbound.ini",
+			'unbound_py_wh'   => "{$this->tmp}/pfb_whitelist.txt",
+			'unbound_py_sources' => "{$this->tmp}/pfb_sources.json",
+		]);
+		$this->seedConfig();
 	}
 
-	public function testPythonTldWildcardDerivedFromDnsblTld(): void
+	protected function tearDown(): void
 	{
-		$body = $this->functionBody('pfb_unbound_python');
-		$this->assertMatchesRegularExpression(
-			"/\\\$python_tld_wildcard\s*=\s*'off';.*if\s*\(\s*\\\$pfb\['dnsbl_tld_wildcard'\]/s",
-			$body,
-			'issue #1255: python_tld_wildcard must default off and flip on $pfb[\'dnsbl_tld_wildcard\'] (mirrors python_hsts @ $pfb[\'dnsbl_hsts\'])'
-		);
+		$GLOBALS['pfb'] = $this->originalPfb;
+		$GLOBALS['config'] = $this->originalConfig;
+		$GLOBALS['g'] = $this->originalG;
+		rmdir_recursive($this->tmp);
 	}
 
-	public function testManifestEmitsPythonTldWildcardKey(): void
+	private function seedConfig(): void
 	{
-		$body = $this->functionBody('pfb_unbound_python');
-		$this->assertMatchesRegularExpression(
-			'/python_tld_wildcard\s*=\s*\{\$python_tld_wildcard\}/',
-			$body,
-			'issue #1255: the ini heredoc must carry a python_tld_wildcard key'
-		);
+		$gen = 'installedpackages/pfblockerng/config/0';
+		$ip = 'installedpackages/pfblockerngipsettings/config/0';
+		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		PfbConfig::writeSectionSystem($gen, ['pfb_min' => '0', 'pfb_hour' => '0', 'pfb_dailystart' => '0', 'skipfeed' => '0']);
+		PfbConfig::writeSectionSystem($ip, [
+			'suppression' => '', 'database_cc' => '', 'asn_token' => '', 'maxmind_account' => '',
+			'maxmind_key' => '', 'maxmind_locale' => 'en', 'asn_reporting' => 'disabled',
+		]);
+		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
+		PfbConfig::writeSectionSystem($dnsbl, [
+			'pfb_dnsvip4' => '', 'pfb_dnsvip6' => '', 'pfb_dnsport' => '8081', 'pfb_dnsport_ssl' => '8443',
+			'top1m_enable' => '', 'pfb_cache' => '', 'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '',
+			'pfb_cname' => '', 'tld_allow' => '', 'pfb_py_nolog' => '', 'pfb_noaaaa' => '', 'pfb_noaaaa_list' => '',
+			'pfb_gp' => '', 'pfb_gp_bypass_list' => '', 'whitelist' => '', 'tld_wildcard' => '',
+			'pfb_dnsbl' => '', 'pfb_dnsvip_auto' => '', 'dnsbl_interface' => 'lo0',
+		]);
+		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';
+		$GLOBALS['pfb']['dnsbl_control'] = PfbToggle::Off;
+		$GLOBALS['pfb']['dnsbl_control_legacy'] = PfbToggle::Off;
+	}
+
+	private function emit(string $toggle): string
+	{
+		PfbConfig::writeSystem('dnsbl/tld_wildcard', $toggle);
+		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = $toggle;
+		pfb_unbound_python('enabled');
+		$ini = file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+		$this->assertNotFalse($ini, 'writer must create the Python INI');
+		return $ini;
+	}
+
+	public function testOffToggleEmitsOffKey(): void
+	{
+		$ini = $this->emit('');
+		$this->assertMatchesRegularExpression('/^python_tld_wildcard\s*=\s*off$/m', $ini);
+	}
+
+	public function testOnToggleEmitsOnKey(): void
+	{
+		$ini = $this->emit('on');
+		$this->assertMatchesRegularExpression('/^python_tld_wildcard\s*=\s*on$/m', $ini);
 	}
 }

@@ -2,29 +2,11 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
-/**
- * issue #1927: the per-feed list pre/post transform scripts' exit status must be
- * honoured — a failed transform is not feed data.
- *
- * pfb_list_script_exec() runs a vetted list script under timeout(1) and returns
- * its exit code; non-zero (124 = timed out) is logged to the pfBlockerNG log AND
- * the error log, naming the stage, the script, and the feed. $tmo_prefix is
- * injectable for off-appliance tests (the appliance default wraps /usr/bin/timeout).
- *
- * The apply-loop call sites gate on that code — a failed pre-script's leftovers
- * are never parsed (the download is restored and the last known-good staged list
- * kept), and a failed post-script's leftovers never feed the empty-feed check.
- * Those sites sit inside the thousands-of-lines sync loop driving real appliance
- * exec, so they are pinned by source inspection (same technique as
- * GunzipTrailingNewlineWiringTest); the behaviour itself is proven on the helper.
- */
-#[CoversFunction('pfb_list_script_exec')]
 final class ListScriptExitStatusTest extends TestCase
 {
-	private static string $applySource;
+	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 
 	private string $tmp;
 	/** @var array<string, mixed> */
@@ -33,20 +15,13 @@ final class ListScriptExitStatusTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		$source = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc'
-		);
-		if ($source === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
-		}
-		self::$applySource = $source;
+		require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	}
 
 	protected function setUp(): void
 	{
-		$this->tmp = sys_get_temp_dir() . '/pfb_lse_' . getmypid() . '_' . bin2hex(random_bytes(4));
-		mkdir($this->tmp, 0755, TRUE);
-
+		$this->tmp = sys_get_temp_dir() . '/pfb_script_exit_' . getmypid() . '_' . bin2hex(random_bytes(4));
+		$this->assertTrue(mkdir($this->tmp, 0700, TRUE));
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
@@ -62,10 +37,10 @@ final class ListScriptExitStatusTest extends TestCase
 		} else {
 			unset($GLOBALS['pfb']);
 		}
-		foreach (glob("{$this->tmp}/*") ?: [] as $f) {
-			unlink($f);
+		foreach (glob("{$this->tmp}/*") ?: [] as $file) {
+			@unlink($file);
 		}
-		rmdir($this->tmp);
+		@rmdir($this->tmp);
 	}
 
 	private function makeScript(string $name, string $body): string
@@ -76,143 +51,201 @@ final class ListScriptExitStatusTest extends TestCase
 		return $path;
 	}
 
-	private function mainLog(): string
+	private function log(string $name): string
 	{
-		return (string) @file_get_contents("{$this->tmp}/pfblockerng.log");
+		return (string) @file_get_contents("{$this->tmp}/{$name}");
 	}
 
-	private function errorLog(): string
+	private function applyScope(string $source, string $start, string $end): string
 	{
-		return (string) @file_get_contents("{$this->tmp}/error.log");
+		$from = strrpos($source, $start);
+		if ($from === FALSE) {
+			throw new RuntimeException("missing apply scope start: {$start}");
+		}
+		$to = strpos($source, $end, $from + strlen($start));
+		if ($to === FALSE) {
+			throw new RuntimeException("missing apply scope end: {$end}");
+		}
+		return substr($source, $from, $to + strlen($end) - $from);
 	}
 
-	public function testZeroExitReturnsZeroAndLogsNoFailure(): void
+	public function testZeroExitIsReturnedWithoutFailureLog(): void
 	{
-		$script = $this->makeScript('ip_pre_ok.sh', 'exit 0');
+		$script = $this->makeScript('ok.sh', 'exit 0');
 
-		$ret = pfb_list_script_exec($script, 'ip_pre_ok.sh', 'pre', 'MyFeed_v4', '', '');
-
-		$this->assertSame(0, $ret, 'a successful script must report exit 0 to the caller');
-		$this->assertStringNotContainsString('exited non-zero', $this->mainLog(),
-			'a zero exit must not log a failure');
-		$this->assertStringNotContainsString('TIMED OUT', $this->mainLog(),
-			'a zero exit must not log a timeout');
+		$this->assertSame(0, pfb_list_script_exec($script, 'ok.sh', 'pre', 'Feed', '', ''));
+		$this->assertStringNotContainsString('exited non-zero', $this->log('pfblockerng.log'));
 	}
 
-	public function testNonZeroExitIsReturnedAndLoggedNamingStageScriptAndFeed(): void
+	public function testNonZeroExitIsReturnedAndNamesStageScriptAndFeed(): void
 	{
-		$script = $this->makeScript('ip_pre_AWS_fail.sh', 'exit 7');
+		$script = $this->makeScript('fail.sh', 'exit 7');
 
-		$ret = pfb_list_script_exec($script, 'ip_pre_AWS_fail.sh', 'pre', 'MyFeed_v4', '', '');
-
-		$this->assertSame(7, $ret, 'the script exit code must be surfaced, not discarded');
-		$log = $this->mainLog();
-		$this->assertStringContainsString("pre-script 'ip_pre_AWS_fail.sh'", $log,
-			'the failure log line must name the stage and the script');
-		$this->assertStringContainsString('MyFeed_v4', $log,
-			'the failure log line must name the feed');
-		$this->assertStringContainsString('[ 7 ]', $log,
-			'the failure log line must carry the exit code');
-		$this->assertStringContainsString('exited non-zero', $this->errorLog(),
-			'the failure must also surface in the error log');
+		$this->assertSame(7, pfb_list_script_exec($script, 'fail.sh', 'pre', 'Feed', '', ''));
+		$log = $this->log('pfblockerng.log');
+		$this->assertStringContainsString("pre-script 'fail.sh'", $log);
+		$this->assertStringContainsString('Feed', $log);
+		$this->assertStringContainsString('[ 7 ]', $log);
+		$this->assertStringContainsString('exited non-zero', $this->log('error.log'));
 	}
 
-	public function testExit124IsLoggedAsTimedOut(): void
+	public function testExit124IsReportedAsTimeout(): void
 	{
-		// timeout(1) reports an overrun as exit 124 — indistinguishable from the
-		// script exiting 124 itself, which is exactly what the helper keys on.
-		$script = $this->makeScript('ip_post_slow.sh', 'exit 124');
+		$script = $this->makeScript('slow.sh', 'exit 124');
 
-		$ret = pfb_list_script_exec($script, 'ip_post_slow.sh', 'post', 'SlowFeed_v6', '', '');
-
-		$this->assertSame(124, $ret);
-		$log = $this->mainLog();
-		$this->assertStringContainsString('TIMED OUT', $log,
-			'exit 124 must be reported as a timeout, not a generic non-zero');
-		$this->assertStringContainsString("post-script 'ip_post_slow.sh'", $log);
-		$this->assertStringContainsString('SlowFeed_v6', $log);
-		$this->assertStringContainsString('TIMED OUT', $this->errorLog(),
-			'the timeout must also surface in the error log');
+		$this->assertSame(124, pfb_list_script_exec($script, 'slow.sh', 'post', 'Feed', '', ''));
+		$this->assertStringContainsString('TIMED OUT', $this->log('pfblockerng.log'));
+		$this->assertStringContainsString('TIMED OUT', $this->log('error.log'));
 	}
 
-	public function testPreScriptCallSiteGatesOnExitStatus(): void
+	public function testSuccessfulPreScriptUsesStagedCopyAndLeavesNormalizedInput(): void
 	{
-		// issue #1925: the pre-script now runs AFTER normalize + reuse-skip, on a
-		// staged copy of the normalized output — never before it.
-		$reuseSkipPos = strpos(self::$applySource, 'pfb_ip_norm_reuse_skip(');
-		$this->assertNotFalse($reuseSkipPos, 'vacuity: the IP-loop normalize/reuse-skip step must exist');
+		$norm   = "{$this->tmp}/feed.norm";
+		$staged = "{$this->tmp}/feed.pre";
+		$script = $this->makeScript('rewrite.sh', 'printf changed > "$1"');
+		file_put_contents($norm, 'original');
 
-		$prePos = strpos(self::$applySource, 'Executing pre-script:', $reuseSkipPos);
-		$this->assertNotFalse($prePos, 'vacuity: the pre-script call site must exist');
-		$this->assertGreaterThan($reuseSkipPos, $prePos,
-			'the pre-script must run after normalize + reuse-skip, never before it');
+		$result = pfb_list_pre_script_run($norm, $staged, $script, 'rewrite.sh', 'Feed', escapeshellarg($staged), '');
 
-		$parsePos = strpos(self::$applySource, 'pfb_ip_parse_line(', $prePos);
-		$this->assertNotFalse($parsePos, 'vacuity: the parse step after the pre-script must exist');
-
-		$between = substr(self::$applySource, $prePos, $parsePos - $prePos);
-		$this->assertStringContainsString('pfb_list_pre_script_run(', $between,
-			'the pre-script must run through the staged-copy runner');
-		$this->assertStringContainsString('continue;', $between,
-			'on failure the row must skip the parse, keeping the last known-good staged list');
-		$this->assertStringContainsString('{$list[\'vtype\']}', $between,
-			'v4/v6 vtype must pass through to the pre-script args');
-
-		$this->assertStringNotContainsString('.orig.pre', self::$applySource,
-			'.orig.pre must be fully retired — the pre-script never touches the raw download');
+		$this->assertTrue($result['ok']);
+		$this->assertSame($staged, $result['path']);
+		$this->assertSame('original', file_get_contents($norm));
+		$this->assertSame('changed', file_get_contents($staged));
 	}
 
-	public function testEmptyFeedProbeReadsTheContentTheParseConsumed(): void
+	public function testFailedPreScriptDiscardsStagedOutputAndKeepsNormalizedInput(): void
 	{
-		$probePos = strpos(self::$applySource, 'Check to see if list actually failed download');
-		$this->assertNotFalse($probePos, 'vacuity: the empty-feed probe must exist');
+		$norm   = "{$this->tmp}/feed.norm";
+		$staged = "{$this->tmp}/feed.pre";
+		$script = $this->makeScript('fail-rewrite.sh', 'printf bad > "$1"; exit 7');
+		file_put_contents($norm, 'original');
 
-		$suppressedPos = strpos(self::$applySource, 'All parsed IPv6 entries were suppressed', $probePos);
-		$this->assertNotFalse($suppressedPos, 'vacuity: the v6-suppression block after the probe must exist');
+		$result = pfb_list_pre_script_run($norm, $staged, $script, 'fail-rewrite.sh', 'Feed', escapeshellarg($staged), '');
 
-		$between = substr(self::$applySource, $probePos, $suppressedPos - $probePos);
-		$this->assertStringContainsString("\$pfb_parse_path === \$pfb_norm['path']", $between,
-			'the probe must select the content the parse consumed — a pre-script synthesizes or '
-			. 'reduces entries, so the raw download\'s emptiness is not the feed\'s');
-
-		// The staged copy must outlive the probe READ: the grep on $pfb_probe comes
-		// first, the unlink after it — a cleanup hoisted above the read would probe
-		// a deleted file.
-		$readPos = strpos(self::$applySource, 'escapeshellarg($pfb_probe)', $probePos);
-		$this->assertNotFalse($readPos, 'vacuity: the probe must read $pfb_probe');
-		$this->assertLessThan($suppressedPos, $readPos,
-			'the probe read must sit inside the empty-feed block');
-
-		$unlinkPos = strpos(self::$applySource, 'unlink_if_exists("{$file_dwn}.pre")', $probePos);
-		$this->assertNotFalse($unlinkPos,
-			'the staged pre-script copy must be unlinked AFTER the empty-feed probe consumed it');
-		$this->assertGreaterThan($readPos, $unlinkPos,
-			'the staged-copy unlink must come after the probe read, never before it');
-		$this->assertLessThan($suppressedPos, $unlinkPos,
-			'the staged-copy unlink must sit between the probe and the v6-suppression block');
+		$this->assertFalse($result['ok']);
+		$this->assertSame($norm, $result['path']);
+		$this->assertFileDoesNotExist($staged);
+		$this->assertSame('original', file_get_contents($norm));
 	}
 
-	public function testPostScriptCallSiteGatesOnExitStatus(): void
+	public function testPreScriptWithMissingInputFailsWithoutProducingData(): void
 	{
-		// issue #1926: the DNSBL loop now logs the same "Executing post-script:" line
-		// earlier in the file -- anchor past the IP-loop's own reuse-skip call site
-		// (same technique as testPreScriptCallSiteGatesOnExitStatus) so this finds the
-		// IP-loop's occurrence, not the DNSBL one.
-		$reuseSkipPos = strpos(self::$applySource, 'pfb_ip_norm_reuse_skip(');
-		$this->assertNotFalse($reuseSkipPos, 'vacuity: the IP-loop normalize/reuse-skip step must exist');
+		$staged = "{$this->tmp}/feed.pre";
+		$script = $this->makeScript('unused.sh', 'exit 0');
 
-		$postPos = strpos(self::$applySource, 'Executing post-script:', $reuseSkipPos);
-		$this->assertNotFalse($postPos, 'vacuity: the post-script call site must exist');
+		$result = pfb_list_pre_script_run("{$this->tmp}/missing.norm", $staged, $script, 'unused.sh', 'Feed', escapeshellarg($staged), '');
 
-		$chkPos = strpos(self::$applySource, 'if (!$custom) {', $postPos);
-		$this->assertNotFalse($chkPos, 'vacuity: the empty-feed check after the post-script must exist');
+		$this->assertFalse($result['ok']);
+		$this->assertFileDoesNotExist($staged);
+	}
 
-		$between = substr(self::$applySource, $postPos, $chkPos - $postPos);
-		$this->assertStringContainsString('pfb_list_script_exec(', $between,
-			'the post-script must run through the exit-status-honouring runner');
-		$this->assertStringContainsString('!== 0', $between,
-			'the post-script exit status must be examined, not discarded');
-		$this->assertStringContainsString('@rename("{$file_dwn}.orig.post", "{$file_dwn}.orig")', $between,
-			'on failure the saved download must be restored before the empty-feed check reads it');
+	public function testDnsblSuccessfulPreScriptConsumesBeforeCleanup(): void
+	{
+		$staged = "{$this->tmp}/feed.pre";
+		file_put_contents($staged, 'dnsbl-data');
+		$events = [];
+
+		$result = pfb_dnsbl_script_consume_staged($staged, $staged, function (string $path) use (&$events): string {
+			$events[] = 'consume:' . file_get_contents($path);
+			return 'parsed';
+		});
+
+		$this->assertSame('parsed', $result);
+		$this->assertSame(['consume:dnsbl-data'], $events);
+		$this->assertFileDoesNotExist($staged);
+	}
+
+	public function testIpSuccessfulPreScriptConsumesBeforeCleanup(): void
+	{
+		$staged = "{$this->tmp}/feed.pre";
+		file_put_contents($staged, 'ip-data');
+		$events = [];
+
+		$result = pfb_ip_script_consume_staged($staged, $staged, function (string $path) use (&$events): string {
+			$events[] = 'consume:' . file_get_contents($path);
+			return 'probed';
+		});
+
+		$this->assertSame('probed', $result);
+		$this->assertSame(['consume:ip-data'], $events);
+		$this->assertFileDoesNotExist($staged);
+	}
+
+	public function testCustomIpFeedSkipsProbeButStillRemovesTheStagedCopy(): void
+	{
+		$staged = "{$this->tmp}/custom.pre";
+		file_put_contents($staged, 'custom-data');
+		$probes = 0;
+
+		$result = pfb_ip_script_probe_staged(TRUE, $staged, $staged, static function () use (&$probes): string {
+			$probes++;
+			return 'unexpected';
+		});
+
+		$this->assertNull($result);
+		$this->assertSame(0, $probes);
+		$this->assertFileDoesNotExist($staged);
+	}
+
+	public function testDnsblKnownPrePathIsRemovedWithoutAnActiveStagedCopy(): void
+	{
+		$norm  = "{$this->tmp}/feed.norm";
+		$known = "{$this->tmp}/feed.pre";
+		file_put_contents($known, 'stale-dnsbl-data');
+
+		$result = pfb_dnsbl_script_consume_staged(
+			$norm,
+			NULL,
+			static fn(string $path): string => $path,
+			$known
+		);
+
+		$this->assertSame($norm, $result);
+		$this->assertFileDoesNotExist($known,
+			'a processed DNSBL row must remove a stale known .pre path even without a pre-script stage');
+	}
+
+	public function testIpKnownPrePathIsRemovedWithoutAnActiveStagedCopy(): void
+	{
+		$norm  = "{$this->tmp}/feed.norm";
+		$known = "{$this->tmp}/feed.pre";
+		file_put_contents($known, 'stale-ip-data');
+
+		$result = pfb_ip_script_probe_staged(
+			FALSE,
+			$norm,
+			NULL,
+			static fn(string $path): string => $path,
+			$known
+		);
+
+		$this->assertSame($norm, $result);
+		$this->assertFileDoesNotExist($known,
+			'a processed IP row must remove a stale known .pre path even without a pre-script stage');
+	}
+
+	/**
+	 * #993: sync_package_pfblockerng() is a top-level appliance orchestration path that
+	 * downloads feeds and mutates firewall/service state, so it has no safe off-appliance
+	 * driver. php_strip_whitespace() makes these six route pins independent of comments.
+	 */
+	public function testEachFeedFamilyDispatchesEveryScriptStageOnce(): void
+	{
+		$source      = php_strip_whitespace(self::APPLY);
+		$dnsbl_pre   = $this->applyScope($source, 'if ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) {', 'pfb_dnsbl_script_failure_continue($alias,');
+		$dnsbl_stage = $this->applyScope($source, 'pfb_dnsbl_script_consume_staged(', 'if (!empty($domain_data)) {');
+		$dnsbl_post  = $this->applyScope($source, 'if ($pfb_dnsbl_script_post && is_file("{$pfb_dnsbl_script_post}")) {', 'if (isset($csvline)) {');
+		$ip_pre      = $this->applyScope($source, 'if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', 'pfb_ip_script_failure_continue($alias,');
+		$ip_stage    = $this->applyScope($source, '$file_chk = pfb_ip_script_probe_staged(', 'if (!$custom && $file_chk == 0) {');
+		$ip_post     = $this->applyScope($source, 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {', '$file_chk = pfb_ip_script_probe_staged(');
+
+		$this->assertSame(1, substr_count($dnsbl_pre, 'pfb_list_pre_script_run($pfb_norm[\'path\']'), 'DNSBL pre-script dispatch must stay in its loop');
+		$this->assertSame(1, substr_count($dnsbl_stage, 'pfb_dnsbl_script_consume_staged('), 'DNSBL staged input must be consumed once');
+		$this->assertStringContainsString('"{$file_dwn}.pre"', $dnsbl_stage, 'DNSBL staged seam must receive its known cleanup path');
+		$this->assertSame(1, substr_count($dnsbl_post, 'pfb_list_script_exec($pfb_dnsbl_script_post, $list[\'script_post\'], \'post\''), 'DNSBL post-script dispatch must stay in its loop');
+		$this->assertSame(1, substr_count($ip_pre, 'pfb_list_pre_script_run($pfb_norm[\'path\']'), 'IP pre-script dispatch must stay in its loop');
+		$this->assertSame(1, substr_count($ip_stage, 'pfb_ip_script_probe_staged('), 'IP staged input must be probed once');
+		$this->assertStringContainsString('"{$file_dwn}.pre"', $ip_stage, 'IP staged seam must receive its known cleanup path');
+		$this->assertSame(1, substr_count($ip_post, 'pfb_list_script_exec($pfb_script_post, $list[\'script_post\'], \'post\''), 'IP post-script dispatch must stay in its loop');
 	}
 }

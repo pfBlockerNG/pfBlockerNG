@@ -643,18 +643,18 @@ _LOG_PAGE = "/pfblockerng/pfblockerng_log.php"
 
 
 def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
-    """Update Hooks moved from a top-level tab to an Update sub-tab (Run | Hooks).
+    """Update Hooks moved from a top-level tab to an Update sub-tab row.
 
     The standalone 'Update Hooks' top tab was replaced by a second display_top_tabs
-    row under Update — Run -> the update page, Hooks -> the hooks page (the same
+    row under Update — Run -> the update page, Hooks -> the hooks page, Edit Hooks ->
+    the gated editor (the same
     sub-tab idiom the Feeds page uses). Assert the new shape AND that the old
     top-level tab is gone (hermetic — all three pages render from local config).
 
     Given the restructured tabs,
     When GET pfblockerng_update.php and pfblockerng_hooks.php,
-    Then each renders the sub-tab row: a 'Run' anchor and a 'Hooks' anchor, with the
-      Hooks one linking the hooks page and the Run one linking the update page (both
-      anchors are NEW — neither page exposed a 'Run' or bare 'Hooks' tab before).
+    Then each renders the sub-tab row: 'Run', 'Hooks', and 'Edit Hooks' anchors with
+      the expected links.
     And the old standalone 'Update Hooks' tab is gone: it is ABSENT from the update
       page entirely, and from the General witness page (a page that is neither Update
       nor Hooks) — while that page keeps its 'Update' top tab. The absence is the
@@ -663,25 +663,29 @@ def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
       move. (The hooks page itself still contains the literal 'Update Hooks' in its
       Form_Section title, so absence is asserted on the update + witness pages, not it.)
 
-    The active-tab-tracks-the-page branch (Run active on the update page, Hooks active
-    on the hooks page) is the Tier-B browser half (test_browser_hooks.py).
+    The active-tab-tracks-the-page branch (Run, Hooks, or Edit Hooks active on its page)
+    is the Tier-B browser half (test_browser_hooks.py).
     """
-    # --- Run page (pfblockerng_update.php): both sub-tabs render; old top tab gone. ---
+    # --- Run page (pfblockerng_update.php): all sub-tabs render; old top tab gone. ---
     body = webui.get(_UPDATE_PAGE).text
     assert ">Run</a>" in body, "update page is missing the 'Run' sub-tab anchor"
     assert ">Hooks</a>" in body, "update page is missing the 'Hooks' sub-tab anchor"
+    assert ">Edit Hooks</a>" in body, "update page is missing the 'Edit Hooks' sub-tab anchor"
     assert _HOOKS_PAGE in body, "update page 'Hooks' sub-tab does not link the hooks page"
+    assert _EDIT_HOOKS_PAGE in body, "update page 'Edit Hooks' sub-tab does not link the editor page"
     # "Update Hooks" is a tab-nav guard: the removed top tab was the ONLY occurrence of
     # that literal on the update page, so its absence proves the tab is gone. (If future
     # help text on this page ever references the hooks page by that name, narrow this to
     # the nav element rather than the whole body.)
     assert "Update Hooks" not in body, "stale 'Update Hooks' top-level tab still rendered on the update page"
 
-    # --- Hooks page (pfblockerng_hooks.php): both sub-tabs render. ---
+    # --- Hooks page (pfblockerng_hooks.php): all sub-tabs render. ---
     body = webui.get(_HOOKS_PAGE).text
     assert ">Run</a>" in body, "hooks page is missing the 'Run' sub-tab anchor"
     assert ">Hooks</a>" in body, "hooks page is missing the 'Hooks' sub-tab anchor"
+    assert ">Edit Hooks</a>" in body, "hooks page is missing the 'Edit Hooks' sub-tab anchor"
     assert _UPDATE_PAGE in body, "hooks page 'Run' sub-tab does not link the update page"
+    assert _EDIT_HOOKS_PAGE in body, "hooks page 'Edit Hooks' sub-tab does not link the editor page"
 
     # --- Witness page (General): the 'Update Hooks' top tab is gone; 'Update' remains. ---
     body = webui.get(_GENERAL_PAGE).text
@@ -773,6 +777,13 @@ def test_update_page_cron_status_without_flag_never_misreports_missing_cron(
         touch = smoke_vm.ssh("/usr/bin/touch", flag)
         if touch.returncode != 0:
             raise AssertionError(f"failed to restore {flag}: rc={touch.returncode} {touch.stderr!r}")
+
+
+def test_geoip_page_renders_current_maxmind_document_link(webui: WebUI) -> None:
+    """Generated continent output proves the shared document-link call ran."""
+    body = webui.get("/pfblockerng/pfblockerng_Africa.php").text
+    assert 'href="https://dev.maxmind.com/geoip/whats-new-in-geoip2/"' in body
+    assert "https://dev.maxmind.com/geoip/geoip2/whats-new-in-geoip2/" not in body
 
 
 def test_geoip_pages_render_the_seeded_csv_rows(

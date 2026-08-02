@@ -20,19 +20,16 @@ use PHPUnit\Framework\TestCase;
  *                                         the shared serializer, strict FALSE check, logged
  *                                         failure (issue #1184).
  *
- * Part A exercises the pure helpers directly; Part C does the same for the write helper's
- * success/failure/empty-content behaviour. Part B is a source tripwire suite: the
- * detection wiring lives in sync_package_pfblockerng(), thousands of lines of top-level
- * script code that PHPUnit cannot call as a function -- so wiring correctness is pinned by
- * exact substring assertions against the CURRENT file content (house pattern:
- * IpRecomputeRanWiringTest), which fail for as long as the old (missing) wiring is what is
- * actually shipped.
+ * Part A exercises the pure helpers directly; Part B drives the whole order-check decision
+ * matrix; Part C does the same for the write helper's success/failure/empty-content behaviour.
  */
 #[CoversFunction('pfb_ip_recompute_memberlist_content')]
 #[CoversFunction('pfb_ip_recompute_memberlist_write')]
 #[CoversFunction('pfb_ip_recompute_order_changed')]
 final class IpRecomputeOrderChangeTest extends TestCase
 {
+	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+
 	private string $root;
 	private string $snapdir;
 	private string $memberlist;
@@ -42,7 +39,7 @@ final class IpRecomputeOrderChangeTest extends TestCase
 		$this->root       = sys_get_temp_dir() . '/pfb_rec_order_' . getmypid() . '_' . uniqid();
 		$this->snapdir    = "{$this->root}/snapshot";
 		$this->memberlist = "{$this->root}/pfb_recompute_v4.members";
-		$this->assertTrue(@mkdir($this->snapdir, 0777, true), "could not create {$this->snapdir}");
+		$this->assertTrue(@mkdir($this->snapdir, 0777, TRUE), "could not create {$this->snapdir}");
 	}
 
 	protected function tearDown(): void
@@ -51,6 +48,9 @@ final class IpRecomputeOrderChangeTest extends TestCase
 			@unlink($f);
 		}
 		@rmdir($this->snapdir);
+		foreach (@glob("{$this->root}/*.members") ?: [] as $f) {
+			@unlink($f);
+		}
 		@chmod($this->memberlist, 0644);
 		@unlink($this->memberlist);
 		@rmdir($this->root);
@@ -64,6 +64,19 @@ final class IpRecomputeOrderChangeTest extends TestCase
 			$paths[] = pfb_ip_recompute_snapshot_path($this->snapdir, $header);
 		}
 		file_put_contents($this->memberlist, pfb_ip_recompute_memberlist_content($paths));
+	}
+
+	private function applyScope(string $source, string $start, string $end): string
+	{
+		$from = strpos($source, $start);
+		if ($from === FALSE) {
+			throw new RuntimeException("missing apply scope start: {$start}");
+		}
+		$to = strpos($source, $end, $from + strlen($start));
+		if ($to === FALSE) {
+			throw new RuntimeException("missing apply scope end: {$end}");
+		}
+		return substr($source, $from, $to - $from);
 	}
 
 	// --- Part A: pfb_ip_recompute_order_changed() behaviour rows -----------------------
@@ -167,74 +180,63 @@ final class IpRecomputeOrderChangeTest extends TestCase
 		$this->assertSame("a\nb\n", pfb_ip_recompute_memberlist_content(array('a', 'b')), 'paths are newline-joined with a trailing newline');
 	}
 
-	// --- Part B: sync_package_pfblockerng() wiring tripwires ----------------------------
+	// --- Part B: complete order-check decision matrix -------------------------------
 
-	private function source(): string
+	public function testOrderCheckRequiresLiveEnabledCrossListScope(): void
 	{
-		return (string) file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertTrue(pfb_ip_recompute_order_scope(FALSE, TRUE, TRUE, FALSE, FALSE));
+		$this->assertTrue(pfb_ip_recompute_order_scope(FALSE, TRUE, FALSE, TRUE, FALSE));
+		$this->assertTrue(pfb_ip_recompute_order_scope(FALSE, TRUE, FALSE, FALSE, TRUE));
+		$this->assertFalse(pfb_ip_recompute_order_scope(TRUE, TRUE, TRUE, FALSE, FALSE));
+		$this->assertFalse(pfb_ip_recompute_order_scope(FALSE, FALSE, TRUE, FALSE, FALSE));
+		$this->assertFalse(pfb_ip_recompute_order_scope(FALSE, TRUE, FALSE, FALSE, FALSE));
 	}
 
-	public function testDetectionGuardCombinesTheSaveEnableGateWithCrossListScope(): void
+	public function testOrderCheckFamiliesKeepV6ScopedToDedup(): void
 	{
-		$needle = <<<'EOT'
-	if (!$pfb['save'] && $pfb['enable'] === PfbToggle::On &&
-	    pfb_cross_list_scope($pfb['dup'] === PfbToggle::On, $pfb['drep'] === PfbToggle::On || $pfb['prep'] === PfbToggle::On)) {
-EOT;
-		$this->assertStringContainsString(
-			$needle,
-			$this->source(),
-			'the order-change detection block must gate on !save && enable, scoped by pfb_cross_list_scope() -- order only matters when dedup or reputation is on'
-		);
+		$this->assertSame(['v4', 'v6'], pfb_ip_recompute_order_families(TRUE));
+		$this->assertSame(['v4'], pfb_ip_recompute_order_families(FALSE));
 	}
 
-	public function testDetectionBlockCallsOrderChangedWithFamilyHeadersAndTheMemberlistPath(): void
+	public function testV4AndV6OrderChangesAreIndependent(): void
 	{
-		$needle = <<<'EOT'
-			if (pfb_ip_recompute_order_changed(
-			    pfb_ip_recompute_family_headers($pfb['existing']['deny'] ?? [], $pfb_rec_family),
-			    $pfb['snapdir'],
-			    "{$pfb['dbdir']}/pfb_recompute_{$pfb_rec_family}.members")) {
-EOT;
-		$this->assertStringContainsString(
-			$needle,
-			$this->source(),
-			'the checker must be called with the config-order family headers and the exact memberlist path the invocation loop writes'
-		);
+		$v4 = $this->root . '/v4.members';
+		$v6 = $this->root . '/v6.members';
+		$this->writeBaselineFor($v4, ['FeedA_v4', 'FeedB_v4']);
+		$this->writeBaselineFor($v6, ['FeedA_v6', 'FeedB_v6']);
+
+		$this->assertFalse(pfb_ip_recompute_order_changed(['FeedA_v4', 'FeedB_v4'], $this->snapdir, $v4));
+		$this->assertTrue(pfb_ip_recompute_order_changed(['FeedB_v4', 'FeedA_v4'], $this->snapdir, $v4));
+		$this->assertFalse(pfb_ip_recompute_order_changed(['FeedA_v6', 'FeedB_v6'], $this->snapdir, $v6));
+		$this->assertTrue(pfb_ip_recompute_order_changed(['FeedB_v6', 'FeedA_v6'], $this->snapdir, $v6));
 	}
 
-	public function testDetectionBlockOnlyChecksV6UnderDedup(): void
+	private function writeBaselineFor(string $path, array $headers): void
 	{
-		$needle = <<<'EOT'
-		foreach (array('v4', 'v6') as $pfb_rec_family) {
-			if ($pfb_rec_family === 'v6' && $pfb['dup'] !== PfbToggle::On) {
-				continue;
-			}
-EOT;
-		$this->assertStringContainsString(
-			$needle,
-			$this->source(),
-			"v6 joins recompute only via dedup (pfb_ip_recompute_matrix's contract: invoke_v6 TRUE only when dedup is on)"
+		$paths = array_map(
+			fn (string $header): string => pfb_ip_recompute_snapshot_path($this->snapdir, $header),
+			$headers
 		);
+		file_put_contents($path, pfb_ip_recompute_memberlist_content($paths));
 	}
 
-	public function testMemberlistWriteSiteRoutesThroughTheSharedSerializationHelper(): void
+	/**
+	 * #993: recompute orchestration is embedded in the appliance apply pass; it cannot be
+	 * safely executed off-appliance. These comment-free windows pin each decision binding,
+	 * while the helper matrix and write behavior above remain executable unit coverage.
+	 */
+	public function testApplyBindsRecomputeScopeFamilyChangeAndWriteSeparately(): void
 	{
-		$source = $this->source();
-		$this->assertStringContainsString(
-			"\t\tpfb_ip_recompute_memberlist_write(\$pfb_rec_memberlist, \$pfb_rec_paths);",
-			$source,
-			'the invocation loop must write the memberlist through the failure-checked helper (issue #1184)'
-		);
-		$this->assertStringNotContainsString(
-			'@file_put_contents($pfb_rec_memberlist',
-			$source,
-			'the raw suppressed write must be gone -- a write failure must be logged, not silently swallowed'
-		);
-		$this->assertStringNotContainsString(
-			"\$pfb_rec_paths ? (implode(\"\\n\", \$pfb_rec_paths) . \"\\n\") : ''",
-			$source,
-			'the old inline implode ternary must be gone -- otherwise the checker and the writer could drift out of format sync'
-		);
+		$source  = php_strip_whitespace(self::APPLY);
+		$scope   = $this->applyScope($source, 'if (pfb_ip_recompute_order_scope(', 'foreach (pfb_ip_recompute_order_families(');
+		$family  = $this->applyScope($source, 'foreach (pfb_ip_recompute_order_families(', 'if (pfb_ip_recompute_order_changed(');
+		$changed = $this->applyScope($source, 'if (pfb_ip_recompute_order_changed(', '$pfb_rec_trigger =');
+		$write   = $this->applyScope($source, "foreach (array('v4', 'v6') as \$pfb_rec_family) {", 'pfb_ip_recompute_mark_ran(');
+
+		$this->assertSame(1, substr_count($scope, 'if (pfb_ip_recompute_order_scope('), 'apply must bind the live recompute scope once');
+		$this->assertSame(1, substr_count($family, 'foreach (pfb_ip_recompute_order_families('), 'apply must select families through the order helper');
+		$this->assertSame(1, substr_count($changed, 'if (pfb_ip_recompute_order_changed('), 'apply must compare each selected family order');
+		$this->assertSame(1, substr_count($write, 'pfb_ip_recompute_memberlist_write($pfb_rec_memberlist, $pfb_rec_paths)'), 'each recompute pass must write the shared memberlist');
 	}
 
 	// --- Part C: pfb_ip_recompute_memberlist_write() behaviour rows (issue #1184) --------

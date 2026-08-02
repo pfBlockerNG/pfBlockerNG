@@ -26,31 +26,17 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $g, $pfb;
 pfb_global();
 
-// Capture the surviving live source family before restoring the package target family. Missing
-// markers resolve to the legacy 3.2 family through PfbConfig's registered default.
-$pfb_source_family = pfb_settings_family_current();
-if ($pfb_source_family === NULL || !pfb_settings_family_save($pfb_source_family)) {
-	throw new RuntimeException('pfBlockerNG: unable to save source settings family');
-}
-
-// Restore exact-family settings before legacy migrations read their sections. Missing slot is a
-// valid fresh install; unsupported package versions or corrupt slots fail closed.
-$pfb_installed_family = pfb_settings_family_from_version((string) pfb_pkg_ver());
-if ($pfb_installed_family === NULL || !pfb_settings_family_replace($pfb_installed_family)) {
-	throw new RuntimeException('pfBlockerNG: unable to restore settings family');
-}
+$pfb_installed_family = pfb_install_settings_family_capture_restore();
 pfb_global();
-
 // Set 'Install flag' to skip sync process during installations.
 $g['pfblockerng_install'] = TRUE;
+$pfb['hook_lifecycle'] = 'install';
 
 // #684: mark this process an install/upgrade so the resync (custom_php_resync_config_command,
 // run next in the same install_package_xml process) publishes PFB_POST_INSTALL=1 to the hooks its
 // turn-ON pass fires. Scoped to install.inc, so a boot/config-restore resync -- which does NOT run
 // this file -- carries PFB_POST_INSTALL=0 (the vars are always emitted as '1'/'0', #695). Context
 // only: pfBlockerNG never branches on it.
-$pfb['hook_lifecycle'] = 'install';
-
 // Migrate old VIP configuration.
 $pfb_dnsbl_config = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
 if (
@@ -134,11 +120,7 @@ if (
 // callable reads the section, returns the updated array or NULL (no-op), and the driver
 // writes back and calls write_config() only when a change is needed. Replaces the
 // hand-wired ADR-02/PFBL-03/#1898 blocks with a single ordered registry.
-pfb_run_migrations();
-
-if (!pfb_settings_family_record($pfb_installed_family)) {
-	throw new RuntimeException('pfBlockerNG: unable to record settings family');
-}
+pfb_install_settings_family_finalize($pfb_installed_family);
 
 // MaxMind Database is no longer pre-installed during package installation
 if (empty($pfb['maxmind_key'])) {
@@ -707,7 +689,7 @@ unlink_if_exists('/var/db/pfblockerng/dnsbl_info');
 
 // issue #1098: purge any leftover change-detect probe body ({header}.md5.raw) so a
 // pre-#1072 corrupted one is never reused verbatim by the next sync ingest.
-pfb_purge_probe_bodies();
+pfb_install_probe_cleanup();
 
 // Move dnsbl_levent.sqlite -> /var/unbound folder
 $ufound = FALSE;
@@ -938,16 +920,13 @@ $pfb_registry_sections = array();
 foreach (PFB_SECTIONS as $pfb_registry_section) {
 	$pfb_registry_sections[$pfb_registry_section] = PfbConfig::readSection($pfb_registry_section);
 }
-foreach (pfb_registry_pass($pfb_registry_sections) as $pfb_registry_path => $pfb_registry_blob) {
-	PfbConfig::writeSectionSystem($pfb_registry_path, $pfb_registry_blob);
-}
-unset($pfb_registry_sections, $pfb_registry_section, $pfb_registry_path, $pfb_registry_blob);
+pfb_install_registry_writeback($pfb_registry_sections);
+unset($pfb_registry_sections, $pfb_registry_section);
 update_status(" done.\n");
 
 unset($g['pfblockerng_install']);	// Remove 'Install flag'
 update_status("Upgrading... done\n\nCustom commands completed ... ");
 
-write_config('[pfBlockerNG] Save installation settings');
 return TRUE;
 
 ?>

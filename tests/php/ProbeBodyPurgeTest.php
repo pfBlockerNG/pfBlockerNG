@@ -15,6 +15,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_purge_probe_bodies')]
 final class ProbeBodyPurgeTest extends TestCase
 {
+	private const INSTALL = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_install.inc';
 	private string $dir;
 	private string $origdir;
 	private string $dnsorigdir;
@@ -73,7 +74,7 @@ final class ProbeBodyPurgeTest extends TestCase
 		file_put_contents($probe, 'corrupted probe body bytes');
 		$this->assertFileExists($probe, 'Precondition: probe body must exist before purge');
 
-		pfb_purge_probe_bodies();
+		pfb_install_probe_cleanup();
 
 		$this->assertFileDoesNotExist(
 			$probe,
@@ -94,7 +95,7 @@ final class ProbeBodyPurgeTest extends TestCase
 		file_put_contents($probe, 'corrupted probe body bytes');
 		$this->assertFileExists($probe, 'Precondition: probe body must exist before purge');
 
-		pfb_purge_probe_bodies();
+		pfb_install_probe_cleanup();
 
 		$this->assertFileDoesNotExist(
 			$probe,
@@ -124,7 +125,7 @@ final class ProbeBodyPurgeTest extends TestCase
 			}
 		}
 
-		pfb_purge_probe_bodies();
+		pfb_install_probe_cleanup();
 
 		foreach (array($this->origdir, $this->dnsorigdir) as $dir) {
 			$this->assertFileDoesNotExist(
@@ -158,7 +159,7 @@ final class ProbeBodyPurgeTest extends TestCase
 			return TRUE;
 		});
 		try {
-			pfb_purge_probe_bodies();
+			pfb_install_probe_cleanup();
 		} finally {
 			restore_error_handler();
 		}
@@ -191,7 +192,7 @@ final class ProbeBodyPurgeTest extends TestCase
 			return TRUE;
 		});
 		try {
-			pfb_purge_probe_bodies();
+			pfb_install_probe_cleanup();
 		} finally {
 			restore_error_handler();
 		}
@@ -220,7 +221,7 @@ final class ProbeBodyPurgeTest extends TestCase
 		file_put_contents($probe, 'stale probe body');
 		$this->assertFileExists($probe, 'Precondition: probe body with embedded space must exist before purge');
 
-		pfb_purge_probe_bodies();
+		pfb_install_probe_cleanup();
 
 		$this->assertFileDoesNotExist(
 			$probe,
@@ -248,7 +249,7 @@ final class ProbeBodyPurgeTest extends TestCase
 		$this->assertFileExists($target, 'Precondition: bracket-named probe body must exist before purge');
 		$this->assertFileExists($decoy, 'Precondition: decoy probe body must exist before purge');
 
-		pfb_purge_probe_bodies();
+		pfb_install_probe_cleanup();
 
 		$this->assertFileDoesNotExist(
 			$target,
@@ -260,24 +261,18 @@ final class ProbeBodyPurgeTest extends TestCase
 		);
 	}
 
-	/**
-	 * R6: source-pin (install.inc is not loadable by the unit harness — see
-	 * InstallDnsblMoveRestartGuardTest). Pins the install-time wiring the harness
-	 * cannot execute: a LIVE (uncommented) pfb_purge_probe_bodies() call.
-	 *
-	 *  GIVEN the pfblockerng_install.inc source;
-	 *   THEN a line calls pfb_purge_probe_bodies(); with no comment marker before it.
-	 */
-	public function test_install_inc_calls_purge_probe_bodies(): void
+	public function testInstallCleanupDispatchesToInjectedPurgeOperation(): void
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc';
-		$src = @file_get_contents($path);
-		$this->assertIsString($src, "could not read {$path}");
+		$called = 0;
+		pfb_install_probe_cleanup(static function () use (&$called): void { $called++; });
+		$this->assertSame(1, $called);
+	}
 
-		$this->assertMatchesRegularExpression(
-			'/^[ \t]*pfb_purge_probe_bodies\(\);/m',
-			$src,
-			'pfblockerng_install.inc must contain a live (uncommented, statement-position) pfb_purge_probe_bodies() call'
-		);
+	/** install.inc is appliance-only; pin its executable cleanup dispatch without including it. */
+	public function testInstallerDispatchesProbeCleanup(): void
+	{
+		$source = php_strip_whitespace(self::INSTALL);
+		$this->assertNotSame('', $source, 'installer source must be readable');
+		$this->assertSame(1, substr_count($source, 'pfb_install_probe_cleanup();'));
 	}
 }

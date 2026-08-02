@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * IP regex prefilter guards in pfb_ip_parse_line() (pfblockerng_apply.inc),
- * pinned here against the real regex literals extracted from the production file.
+ * exercised through the production regex-match seam.
  *
  * The two preg_match_all fallback parsers run on $raw_line (the original feed line,
  * which may carry IPs embedded in mid-line noise) and are gated by a cheap
@@ -36,40 +36,24 @@ final class IpRegexPrefilterGuardTest extends TestCase
 {
 	private static string $reV4;
 	private static string $reV6;
-	private static string $src;
 
 	public static function setUpBeforeClass(): void
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-		self::$src = (string) file_get_contents($path);
-
-		// Extract the real regex literals (single-line, single-quoted) so the
-		// invariant tracks the shipped regex — a regex change that let a guarded
-		// line slip through would break the equivalence assertions below.
-		self::assertSame(1, preg_match("/\\\$pfb\\['ipv4'\\]\\s*=\\s*'(.*)';/", self::$src, $m4),
-			'could not locate $pfb[\'ipv4\'] literal');
-		self::assertSame(1, preg_match("/\\\$pfb\\['ipv6'\\]\\s*=\\s*'(.*)';/", self::$src, $m6),
-			'could not locate $pfb[\'ipv6\'] literal');
-		self::$reV4 = $m4[1];
-		self::$reV6 = $m6[1];
+		$config = pfb_ip_regex_config();
+		self::$reV4 = $config['ipv4'];
+		self::$reV6 = $config['ipv6'];
 	}
 
 	/** Mimic the production IPv4 guarded path: dot-count guard then regex. */
 	private function guardedV4(string $line): array
 	{
-		if (substr_count($line, '.') >= 3 && preg_match_all(self::$reV4, $line, $m)) {
-			return $m[0];
-		}
-		return [];
+		return pfb_ip_regex_matches('v4', $line, ['ipv4' => self::$reV4, 'ipv6' => self::$reV6]);
 	}
 
 	/** Mimic the production IPv6 guarded path: colon-presence guard then regex. */
 	private function guardedV6(string $line): array
 	{
-		if (strpos($line, ':') !== FALSE && preg_match_all(self::$reV6, $line, $m)) {
-			return $m[0];
-		}
-		return [];
+		return pfb_ip_regex_matches('v6', $line, ['ipv4' => self::$reV4, 'ipv6' => self::$reV6]);
 	}
 
 	/** The unguarded reference: raw regex, exactly the pre-guard behaviour. */
@@ -185,19 +169,11 @@ final class IpRegexPrefilterGuardTest extends TestCase
 		$this->assertSame([], $this->guardedV6($line));
 	}
 
-	/**
-	 * Source-pin: the shipped guards are the necessary-condition (presence) form,
-	 * NOT a start-anchored one. If someone rewrites either guard to test the line
-	 * START, the embedded-match data-provider cases above already fail; this pins
-	 * the exact predicate so the guard cannot be silently dropped or re-shaped.
-	 */
-	public function testProductionGuardsArePresenceChecks(): void
+	public function testGuardRejectsUnknownFamilyWithoutRunningARegex(): void
 	{
-		$this->assertStringContainsString(
-			"substr_count(\$raw_line, '.') >= 3 && preg_match_all(\$config['ipv4'], \$raw_line, \$matches)",
-			self::$src, 'IPv4 dot-count prefilter guard missing or altered');
-		$this->assertStringContainsString(
-			"strpos(\$raw_line, ':') !== FALSE && preg_match_all(\$config['ipv6'], \$raw_line, \$matches)",
-			self::$src, 'IPv6 colon prefilter guard missing or altered');
+		$this->assertSame([], pfb_ip_regex_matches('other', '192.0.2.1', [
+			'ipv4' => '(?!)',
+			'ipv6' => '(?!)',
+		]));
 	}
 }

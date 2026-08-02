@@ -17,13 +17,14 @@ use PHPUnit\Framework\TestCase;
  *
  * Like WidgetSubmitPostGuardTest, the page carries top-level execution and
  * cannot be require()d off-appliance, so the REAL alt_selected block is
- * eval-extracted verbatim (its leading comment and the following
- * ``if ($config_mod)`` line are the unique anchors).
+ * eval-extracted verbatim (the executable ``if (isset($_POST['alt_selected']))``
+ * start and following ``if ($config_mod)`` line are the unique anchors).
  */
 final class FeedsAltSelectedKeyTest extends TestCase
 {
 	private array $savedPost = [];
 	private mixed $savedConfig = null;
+	private static string $altRegion;
 
 	public static function setUpBeforeClass(): void
 	{
@@ -36,12 +37,13 @@ final class FeedsAltSelectedKeyTest extends TestCase
 
 		if (!function_exists('pfb_feeds_oracle_alt_selected')) {
 			if (!preg_match(
-				'/\/\/ Save all .selected. Alternate URL feeds\.\n(.*?)(?=\n\n\t\tif \(\$config_mod\))/s',
+				'/(if \(isset\(\$_POST\[\'alt_selected\'\]\)\) \{.*?)(?=\n\n\t\tif \(\$config_mod\))/s',
 				$src,
 				$m
 			)) {
 				throw new RuntimeException('test bootstrap: alt_selected block not found in feeds source');
 			}
+			self::$altRegion = $m[1];
 			eval(
 				'function pfb_feeds_oracle_alt_selected(): array {'
 				. ' $fconfig = array(); $input_errors = array(); $config_mod = FALSE; '
@@ -49,6 +51,12 @@ final class FeedsAltSelectedKeyTest extends TestCase
 				. ' return $input_errors; }'
 			);
 		}
+	}
+
+	public function testExtractionStartsAtExecutableCodeNotProductionComment(): void
+	{
+		$this->assertStringStartsWith("if (isset(\$_POST['alt_selected']))", self::$altRegion);
+		$this->assertStringNotContainsString('Save all', self::$altRegion);
 	}
 
 	protected function setUp(): void

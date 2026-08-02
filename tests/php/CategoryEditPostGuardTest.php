@@ -22,10 +22,8 @@ use PHPUnit\Framework\TestCase;
  * Lmove included, is rejected the same way.
  *
  * The page carries top-level execution and cannot be require()d off-appliance,
- * so each region below is eval-extracted
- * verbatim from the REAL source, anchored on text stable across both the
- * pre-fix and post-fix code so the same test file proves red on the old
- * code and green on the new.
+ * so each region below is eval-extracted from the REAL source using executable
+ * boundaries; comments are stripped before extraction.
  */
 final class CategoryEditPostGuardTest extends TestCase
 {
@@ -33,15 +31,15 @@ final class CategoryEditPostGuardTest extends TestCase
 	private array $savedGet = [];
 	private array $savedRequest = [];
 	private mixed $savedPfb = null;
-	private bool $hadConfig = false;
+	private bool $hadConfig = FALSE;
 	private mixed $savedConfig = null;
 
 	public static function setUpBeforeClass(): void
 	{
-		$src = file_get_contents(
+		$src = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php'
 		);
-		if ($src === false) {
+		if ($src === '') {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_category_edit.php');
 		}
 
@@ -53,27 +51,27 @@ final class CategoryEditPostGuardTest extends TestCase
 			}
 		}
 
-		// Region 1: the #1106 ingress guard + #1723 sanitize prologue (issue #1723
-		// moved these ahead of the select_options-normalisation loop so sanitize
-		// runs before ANY evaluation, including that loop's coercion of
-		// aliasports_in/srcint/etc -- two non-adjacent stretches of source,
-		// concatenated here), THEN (unchanged position) the select_options loop's
-		// close through the aliasname checks and the CIDR checks -- up to the
-		// state-loop foreach.
+		// Region 1: the #1106 ingress guard + #1723 sanitize prologue through the
+		// select-options loop's executable close, then the aliasname/CIDR checks
+		// up to the state-loop foreach.
 		if (!function_exists('pfb_category_oracle_aliasname_region')) {
 			if (!preg_match(
-				'/(\t\/\/ issue #1106: reject an array-valued field.*?)\n\n\t\/\/ Validate Select field options/s',
+				'/(foreach \(\$_POST as \$pfb_post_key => \$pfb_post_value\) \{.*?)(?=\$select_options = array\()/s',
 				$src,
 				$guard
 			)) {
-				throw new RuntimeException('test bootstrap: #1106/#1723 guard region not found');
+				throw new RuntimeException('test bootstrap: #1106/#1723 executable guard region not found');
 			}
 			if (!preg_match(
-				'/\$_POST\[\$s_option\] = \$s_default;\n\t\t\}\n\t\}\n(.*?)(?=\n\tforeach \(\$_POST as \$key => \$value\) \{)/s',
+				'/\$_POST\[\$s_option\] = \$s_default;\s*\}\s*\}\s*(.*?)(?=foreach \(\$_POST as \$key => \$value\) \{)/s',
 				$src,
 				$m
 			)) {
-				throw new RuntimeException('test bootstrap: aliasname/CIDR region not found');
+				throw new RuntimeException('test bootstrap: aliasname/CIDR executable region not found');
+			}
+			if (strpos($guard[1], 'pfb_sanitize_text_area') === FALSE ||
+			    strpos($m[1], 'suppression_cidr_v6') === FALSE) {
+				throw new RuntimeException('test bootstrap: aliasname ingress executable region incomplete');
 			}
 			eval(
 				'function pfb_category_oracle_aliasname_region(string $gtype): array {'
@@ -87,11 +85,15 @@ final class CategoryEditPostGuardTest extends TestCase
 		// Region 2: the rowhelper state-loop (URL/header/format validation).
 		if (!function_exists('pfb_category_oracle_state_loop')) {
 			if (!preg_match(
-				'/(\tforeach \(\$_POST as \$key => \$value\) \{\n.*?\n\t\})\n\n\n\t\/\/ Validate Adv\. firewall rule settings/s',
+				'/(foreach \(\$_POST as \$key => \$value\) \{.*\})'
+				. '\s*foreach \(pfb_adv_alias_field_errors\(\$_POST\) as \$pfb_alias_error\)/s',
 				$src,
 				$m
 			)) {
-				throw new RuntimeException('test bootstrap: state validation loop not found');
+				throw new RuntimeException('test bootstrap: state validation executable region not found');
+			}
+			if (strpos($m[1], 'pfb_header_reserved_error') === FALSE) {
+				throw new RuntimeException('test bootstrap: state validation executable region incomplete');
 			}
 			eval(
 				'function pfb_category_oracle_state_loop(string $type): array {'
@@ -104,11 +106,15 @@ final class CategoryEditPostGuardTest extends TestCase
 		// Region 3: the custom-list block.
 		if (!function_exists('pfb_category_oracle_custom_block')) {
 			if (!preg_match(
-				'/(\t\/\/ Validate Custom List\n\tif \(!empty\(\$_POST\[\'custom\'\]\)\) \{\n.*?\n\t\})\n\n\tif \(!\$input_errors\) \{/s',
+				'/(if \(!empty\(\$_POST\[\x27custom\x27\]\)\) \{.*\})'
+				. '\s*if \(!\$input_errors\) \{/s',
 				$src,
 				$m
 			)) {
-				throw new RuntimeException('test bootstrap: custom-list block not found');
+				throw new RuntimeException('test bootstrap: custom-list executable region not found');
+			}
+			if (strpos($m[1], 'pfb_idn_to_ascii_wildcard') === FALSE) {
+				throw new RuntimeException('test bootstrap: custom-list executable region incomplete');
 			}
 			eval(
 				'function pfb_category_oracle_custom_block(string $gtype): array {'
@@ -121,11 +127,15 @@ final class CategoryEditPostGuardTest extends TestCase
 		// Region 4: the GET 'atype' ingress block.
 		if (!function_exists('pfb_category_oracle_get_atype')) {
 			if (!preg_match(
-				'/(\tif \(isset\(\$_GET\[\'atype\'\]\).*?\n\t\})\n\}\n\nif \(isset\(\$_POST\)\) \{/s',
+				'/(if \(isset\(\$_GET\[\x27atype\x27\]\).*?\})'
+				. '\s*\}\s*if \(isset\(\$_POST\)\) \{/s',
 				$src,
 				$m
 			)) {
-				throw new RuntimeException('test bootstrap: GET atype block not found');
+				throw new RuntimeException('test bootstrap: GET atype executable region not found');
+			}
+			if (strpos($m[1], 'pfb_filter_whitelist_atype') === FALSE) {
+				throw new RuntimeException('test bootstrap: GET atype executable region incomplete');
 			}
 			eval(
 				'function pfb_category_oracle_get_atype(): string {'
@@ -138,11 +148,15 @@ final class CategoryEditPostGuardTest extends TestCase
 		// Region 5: the POST 'atype' ingress block.
 		if (!function_exists('pfb_category_oracle_post_atype')) {
 			if (!preg_match(
-				'/(\tif \(isset\(\$_POST\[\'atype\'\]\).*?\n\t\})\n\tif \(isset\(\$_POST\[\'chgstate\'\]\)/s',
+				'/(if \(isset\(\$_POST\[\x27atype\x27\]\).*?\})'
+				. '\s*if \(isset\(\$_POST\[\x27chgstate\x27\]\)/s',
 				$src,
 				$m
 			)) {
-				throw new RuntimeException('test bootstrap: POST atype block not found');
+				throw new RuntimeException('test bootstrap: POST atype executable region not found');
+			}
+			if (strpos($m[1], 'pfb_filter_whitelist_atype') === FALSE) {
+				throw new RuntimeException('test bootstrap: POST atype executable region incomplete');
 			}
 			eval(
 				'function pfb_category_oracle_post_atype(): string {'
@@ -155,11 +169,16 @@ final class CategoryEditPostGuardTest extends TestCase
 		// Region 6: the '$_REQUEST[savemsg]' render-time block.
 		if (!function_exists('pfb_category_oracle_savemsg')) {
 			if (!preg_match(
-				'/if \(isset\(\$savemsg\)\) \{\n\tprint_info_box\(\$savemsg\);\n\}\n\n(if \(isset\(\$_REQUEST\[\'savemsg\'\]\).*?\n\})\n\n\$form = new Form\(/s',
+				'/if \(isset\(\$savemsg\)\) \{\s*print_info_box\(\$savemsg\);\s*\}'
+				. '\s*(if \(isset\(\$_REQUEST\[\x27savemsg\x27\]\).*?\})'
+				. '\s*\$form = new Form\(/s',
 				$src,
 				$m
 			)) {
-				throw new RuntimeException('test bootstrap: savemsg block not found');
+				throw new RuntimeException('test bootstrap: savemsg executable region not found');
+			}
+			if (strpos($m[1], 'is_string($_REQUEST[\'savemsg\'])') === FALSE) {
+				throw new RuntimeException('test bootstrap: savemsg executable region incomplete');
 			}
 			eval(
 				'function pfb_category_oracle_savemsg(): ?string {'
@@ -169,17 +188,18 @@ final class CategoryEditPostGuardTest extends TestCase
 		}
 
 		// Region 7: the persist rowhelper loop (issue #1737 persist-parity
-		// coverage). Anchored on text stable either side of the #1723 in-loop
-		// sanitize block this issue removes -- never on that block itself --
-		// so the same anchors match the region red (block present) and green
-		// (block removed).
+		// coverage), bounded by its executable config-write loop and cleanup loop.
 		if (!function_exists('pfb_category_oracle_persist_rowhelper_loop')) {
 			if (!preg_match(
-				'/(\t\t\$rowhelper_exist = array\(\);\n\t\tforeach \(\$_POST as \$key => \$value\) \{\n.*?\n\t\t\})\n\n\t\t\/\/ Remove all undefined rowhelpers/s',
+				'/(\$rowhelper_exist = array\(\);\s*foreach \(\$_POST as \$key => \$value\) \{.*\})'
+				. '\s*foreach \(config_get_path\("installedpackages\/\{\$conf_type\}\/config\/\{\$rowid\}\/row", \[\]\) as \$r_key => \$row\)/s',
 				$src,
 				$m
 			)) {
-				throw new RuntimeException('test bootstrap: persist rowhelper loop not found');
+				throw new RuntimeException('test bootstrap: persist rowhelper executable region not found');
+			}
+			if (strpos($m[1], 'config_set_path("installedpackages/{$conf_type}/config/{$rowid}/row') === FALSE) {
+				throw new RuntimeException('test bootstrap: persist rowhelper executable region incomplete');
 			}
 			eval(
 				'function pfb_category_oracle_persist_rowhelper_loop(string $conf_type, $rowid): void {'
@@ -325,7 +345,7 @@ final class CategoryEditPostGuardTest extends TestCase
 		try {
 			$errors = pfb_category_oracle_aliasname_region('dnsbl');
 		} catch (\TypeError $e) {
-			$this->fail("shape " . var_export($shape, true) . " under 'url-0' must not TypeError: " . $e->getMessage());
+			$this->fail("shape " . var_export($shape, TRUE) . " under 'url-0' must not TypeError: " . $e->getMessage());
 		}
 		$this->assertNotEmpty($errors);
 		$this->assertSame('', $_POST['url-0']);
@@ -338,7 +358,7 @@ final class CategoryEditPostGuardTest extends TestCase
 		try {
 			$errors = pfb_category_oracle_aliasname_region('dnsbl');
 		} catch (\TypeError $e) {
-			$this->fail("shape " . var_export($shape, true) . " under an unknown key must not TypeError: " . $e->getMessage());
+			$this->fail("shape " . var_export($shape, TRUE) . " under an unknown key must not TypeError: " . $e->getMessage());
 		}
 		$this->assertNotEmpty($errors);
 		$this->assertSame('', $_POST['zzz']);
@@ -438,7 +458,7 @@ final class CategoryEditPostGuardTest extends TestCase
 		$errors = pfb_category_oracle_state_loop($type);
 		$this->assertNotEmpty(
 			array_filter($errors, static fn (string $e): bool => str_contains($e, 'disallowed character')),
-			'expected the url-N character guard to reject: ' . var_export($post['url-0'] ?? null, true)
+			'expected the url-N character guard to reject: ' . var_export($post['url-0'] ?? null, TRUE)
 		);
 		$this->assertNotEmpty($errors, 'a rejected row must leave $input_errors non-empty (blocks the atomic save)');
 		return $errors;
@@ -451,7 +471,7 @@ final class CategoryEditPostGuardTest extends TestCase
 		$errors = pfb_category_oracle_state_loop($type);
 		$this->assertEmpty(
 			array_filter($errors, static fn (string $e): bool => str_contains($e, 'disallowed character')),
-			'expected the url-N character guard to accept: ' . var_export($post['url-0'] ?? null, true)
+			'expected the url-N character guard to accept: ' . var_export($post['url-0'] ?? null, TRUE)
 		);
 		return $errors;
 	}

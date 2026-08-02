@@ -2,96 +2,87 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * $alias_cnt accumulation from a per-file line count (issue #1162; issue
- * #1261: the exec("grep -c ^ <file>") fork is replaced by pfb_count_lines()).
- *
- * sync_package_pfblockerng() has sites that feed a file's line count into
- * `+` arithmetic: `$alias_cnt = $alias_cnt + $list_cnt;`. Before #1261,
- * $list_cnt came from exec()'s raw output (a non-numeric string on a failed
- * grep, needing an inline (int) cast). Now pfb_count_lines() returns ?int
- * directly, and NULL (read failure) is coerced to 0 at the assignment
- * (`?? 0`) -- so $list_cnt is always a plain int by the time it reaches the
- * accumulation, and the accumulation itself needs no cast. Both sites are
- * inside sync_package_pfblockerng(), not unit-reachable directly -- pinned
- * here via source-inspection (house precedent:
- * tests/php/DownloadRetvalFailsafeTest.php) plus a mirrored-expression data
- * provider (house precedent: tests/php/IpRegexPrefilterGuardTest.php).
+ * Alias totals use the apply-pass count seam: unreadable input contributes zero,
+ * while empty and unterminated files retain their real line counts.
  */
 final class AliasCntGrepCountGuardTest extends TestCase
 {
-	private static string $src;
+	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+	private string $dir;
 
 	public static function setUpBeforeClass(): void
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-		$src = file_get_contents($path);
-		if ($src === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
+		require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+	}
+
+	protected function setUp(): void
+	{
+		$this->dir = sys_get_temp_dir() . '/pfb_alias_count_' . getmypid() . '_' . bin2hex(random_bytes(4));
+		$this->assertTrue(mkdir($this->dir, 0700, TRUE));
+	}
+
+	protected function tearDown(): void
+	{
+		foreach (glob("{$this->dir}/*") ?: [] as $path) {
+			is_dir($path) ? @rmdir($path) : @unlink($path);
 		}
-		self::$src = $src;
+		@rmdir($this->dir);
 	}
 
-	// -----------------------------------------------------------------------
-	// Source-inspection pin -- both $alias_cnt accumulation sites exist, both
-	// feed from pfb_count_lines() with a `?? 0` NULL fallback, and no exec()
-	// grep fork survives at either site.
-	// -----------------------------------------------------------------------
-
-	private const ACCUMULATION_RE = '/\$alias_cnt\s*=\s*\$alias_cnt\s*\+\s*\$list_cnt\s*;/';
-	private const COUNT_ASSIGN_RE = '/\$list_cnt\s*=\s*pfb_count_lines\([^;]*\)\s*\?\?\s*0\s*;/';
-
-	public function testVacuityExactlyFourAccumulationSitesExist(): void
-	{
-		$count = preg_match_all(self::ACCUMULATION_RE, self::$src);
-		$this->assertSame(4, $count,
-			'expected exactly 4 $alias_cnt = $alias_cnt + $list_cnt; accumulation sites '
-			. '(list-reuse branch, the issue #1797 norm-unchanged skip branch, the '
-			. 'downloaded/rebuilt branch, and the issue #1926 DNSBL pre-script-failure '
-			. "manifest-kept branch); found {$count}");
-	}
-
-	public function testAllSitesAssignListCntFromPfbCountLinesWithNullFallback(): void
-	{
-		$count = preg_match_all(self::COUNT_ASSIGN_RE, self::$src);
-		$this->assertSame(4, $count,
-			'expected exactly 4 `$list_cnt = pfb_count_lines(...) ?? 0;` assignments feeding '
-			. "the accumulation sites (issue #1261, extended by issue #1926); found {$count}");
-	}
-
-	public function testNoExecGrepForkSurvivesForListCnt(): void
-	{
-		$this->assertDoesNotMatchRegularExpression(
-			'/\$list_cnt\s*=\s*exec\(/',
-			self::$src,
-			'a $list_cnt = exec(...) fork survives -- issue #1261 must replace it with pfb_count_lines()'
-		);
-	}
-
-	// -----------------------------------------------------------------------
-	// Mirrored-expression hostile-input rows (issue #1162's failure mode +
-	// the happy path). Mirrors the production expressions exactly.
-	// -----------------------------------------------------------------------
-
-	public static function accumulationRows(): array
+	/** @return array<string, array{string}> */
+	public static function aliasSeams(): array
 	{
 		return [
-			'NULL count (pfb_count_lines() read failure)' => [NULL, 0],
-			'happy path count'                             => [42, 42],
-			'zero count (empty file)'                      => [0, 0],
+			'verbatim reuse'    => ['pfb_dnsbl_alias_count_verbatim'],
+			'normalize skip'    => ['pfb_dnsbl_alias_count_norm_skip'],
+			'pre-script failure' => ['pfb_dnsbl_alias_count_script_failure'],
+			'rebuilt feed'      => ['pfb_dnsbl_alias_count_rebuild'],
 		];
 	}
 
-	/** Mirror of the post-#1261 `$list_cnt = pfb_count_lines(...) ?? 0; $alias_cnt = $alias_cnt + $list_cnt;`. */
-	#[DataProvider('accumulationRows')]
-	public function testAccumulationNeverThrowsAndCoercesNullToZero(?int $pfbCountLinesResult, int $expect): void
+	#[\PHPUnit\Framework\Attributes\DataProvider('aliasSeams')]
+	public function testEveryAliasRouteUsesSafeFileLineCount(string $seam): void
 	{
-		$alias_cnt = 0;
-		$list_cnt  = $pfbCountLinesResult ?? 0;
-		$alias_cnt = $alias_cnt + $list_cnt;
-		$this->assertSame($expect, $alias_cnt);
+		$path = "{$this->dir}/feed.txt";
+		$this->assertNotFalse(file_put_contents($path, "one\ntwo\n"));
+
+		$this->assertSame(12, $seam($path, 10));
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('aliasSeams')]
+	public function testEveryAliasRouteCountsAnUnterminatedLastLine(string $seam): void
+	{
+		$path = "{$this->dir}/unterminated.txt";
+		$this->assertNotFalse(file_put_contents($path, "one\ntwo"));
+		$this->assertSame(12, $seam($path, 10));
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('aliasSeams')]
+	public function testEveryAliasRouteTurnsReadFailureIntoZero(string $seam): void
+	{
+		$path = "{$this->dir}/unreadable";
+		$this->assertTrue(mkdir($path, 0700));
+
+		$this->assertSame(10, $seam($path, 10));
+	}
+
+	/**
+	 * sync_package_pfblockerng() has no safe off-appliance driver (#993); it performs live
+	 * downloads, firewall changes, and service work. These four thin executable-code pins are
+	 * therefore retained only for outer dispatch. Comments/docblocks are stripped first; each
+	 * route's count behavior is executed above.
+	 */
+	public function testSyncPassDispatchesEveryDistinctAliasCountRoute(): void
+	{
+		$source = php_strip_whitespace(self::APPLY);
+		$start = strpos($source, 'function sync_package_pfblockerng(');
+		$this->assertNotFalse($start);
+		$sync = substr($source, $start);
+		foreach (self::aliasSeams() as [$seam]) {
+			$this->assertSame(1, substr_count($sync, "{$seam}("), "sync pass must dispatch {$seam} exactly once");
+		}
 	}
 }

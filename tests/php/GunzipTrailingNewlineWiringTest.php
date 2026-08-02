@@ -4,41 +4,79 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/**
- * issue #1263: the ET-IQRisk reuse path rebuilds '.orig' via a raw gunzip exec()
- * OUTSIDE pfb_download() -- pfb_download()'s own newline-termination guarantee
- * (DownloadTrailingNewlineWiringTest) never runs on this path. Source-inspection
- * pin (same technique as DownloadTrailingNewlineWiringTest): the surrounding
- * sync_package_pfblockerng() is thousands of lines and drives real cURL/appliance
- * exec, so this is not behaviourally exercised here -- the append behaviour itself
- * is proven in EnsureTrailingNewlineTest.
- */
+/** ET-IQRisk publication orders gunzip, newline normalization, then ET consumer. */
 final class GunzipTrailingNewlineWiringTest extends TestCase
 {
-	private static string $source;
+	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+	private string $dir;
 
 	public static function setUpBeforeClass(): void
 	{
-		$source = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc'
-		);
-		if ($source === false) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
-		}
-		self::$source = $source;
+		require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	}
 
-	public function testEnsureTrailingNewlineRunsAfterTheGunzipExec(): void
+	protected function setUp(): void
 	{
-		$gunzipPos = strpos(self::$source, 'exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$file_org_esc}");');
-		$this->assertNotFalse($gunzipPos, 'vacuity: the ET-IQRisk gunzip exec site must exist');
+		$this->dir = sys_get_temp_dir() . '/pfb gunzip; ' . getmypid() . " 'fixture'";
+		$this->assertTrue(mkdir($this->dir, 0700, TRUE));
+	}
 
-		$nextExecPos = strpos(self::$source, "exec(\"{\$pfb['script']} et {\$header_esc}", $gunzipPos);
-		$this->assertNotFalse($nextExecPos, 'vacuity: the following ET-processing exec must exist');
+	protected function tearDown(): void
+	{
+		foreach (glob("{$this->dir}/*") ?: [] as $path) {
+			@unlink($path);
+		}
+		@rmdir($this->dir);
+	}
 
-		$between = substr(self::$source, $gunzipPos, $nextExecPos - $gunzipPos);
-		$this->assertStringContainsString('pfb_ensure_trailing_newline("{$file_dwn}.orig")', $between,
-			'the reuse path must normalize the rebuilt .orig -- else a gzip payload without a trailing '
-			. 'newline stays welded downstream, exactly like the pfb_download() path this bypasses');
+	public function testGunzipPipelineTerminatesBeforeEtConsumer(): void
+	{
+		$raw = "{$this->dir}/feed; 'raw'";
+		$orig = "{$this->dir}/feed.orig";
+		$events = [];
+		$this->assertNotFalse(file_put_contents($raw, (string) gzencode('iprep-data')));
+
+		$this->assertTrue(pfb_apply_gunzip_orig_pipeline($raw, $orig,
+			static function (string $published) use (&$events): void {
+				$events[] = is_file($published) ? (string) file_get_contents($published) : 'missing';
+			}
+		));
+
+		$this->assertSame(["iprep-data\n"], $events);
+		$this->assertSame("iprep-data\n", file_get_contents($orig));
+	}
+
+	public function testGunzipFailurePreservesLegacyEtConsumerAttempt(): void
+	{
+		$raw = "{$this->dir}/bad.raw";
+		$orig = "{$this->dir}/bad.orig";
+		$events = [];
+		$this->assertNotFalse(file_put_contents($raw, 'not-gzip'));
+
+		$this->assertFalse(pfb_apply_gunzip_orig_pipeline($raw, $orig,
+			static function () use (&$events): void { $events[] = 'consume'; }
+		));
+
+		$this->assertSame(['consume'], $events);
+		$this->assertFileExists($raw);
+		$this->assertFileExists($orig);
+	}
+
+	public function testMissingRawStillRunsLegacyEtConsumer(): void
+	{
+		$events = [];
+		$this->assertFalse(pfb_apply_gunzip_orig_pipeline("{$this->dir}/missing.raw", "{$this->dir}/missing.orig",
+			static function () use (&$events): void { $events[] = 'consume'; }
+		));
+		$this->assertSame(['consume'], $events);
+	}
+
+	/** The ET reuse path lives in the #993 sync monolith; behavior runs above. */
+	public function testSyncPassDispatchesTheGunzipPublicationPipeline(): void
+	{
+		$source = php_strip_whitespace(self::APPLY);
+		$start = strpos($source, 'function sync_package_pfblockerng(');
+		$this->assertNotFalse($start);
+		$this->assertSame(1, substr_count(substr($source, $start), 'pfb_apply_gunzip_orig_pipeline('));
 	}
 }

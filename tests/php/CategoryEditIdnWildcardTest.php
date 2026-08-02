@@ -16,7 +16,8 @@ use PHPUnit\Framework\TestCase;
  * oracle — it has always accepted the wildcard IDN row.
  *
  * The page carries top-level execution and cannot be require()d off-appliance,
- * so the validation block is eval-extracted verbatim from the REAL source.
+ * so the validation block is eval-extracted from the REAL source using its
+ * executable custom-list condition and following save guard.
  */
 final class CategoryEditIdnWildcardTest extends TestCase
 {
@@ -27,12 +28,19 @@ final class CategoryEditIdnWildcardTest extends TestCase
 	public static function setUpBeforeClass(): void
 	{
 		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php';
-		$src = file_get_contents($path);
-		if ($src === FALSE) {
+		$src = php_strip_whitespace($path);
+		if ($src === '') {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_category_edit.php');
 		}
-		if (!preg_match('/(\t\/\/ Validate Custom List\n.*?)\n\n\tif \(!\$input_errors\) \{/s', $src, $m)) {
-			throw new RuntimeException('test bootstrap: "Validate Custom List" region not found');
+		if (!preg_match(
+			'/(if \(!empty\(\$_POST\[\x27custom\x27\]\)\) \{.*\})\s*if \(!\$input_errors\) \{/s',
+			$src,
+			$m
+		)) {
+			throw new RuntimeException('test bootstrap: custom-list executable region not found');
+		}
+		if (strpos($m[1], 'pfb_idn_to_ascii_wildcard') === FALSE) {
+			throw new RuntimeException('test bootstrap: IDN conversion disappeared from custom-list region');
 		}
 		self::$region = $m[1];
 	}

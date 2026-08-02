@@ -50,6 +50,131 @@
 // a real property, and it is a different claim from "every gate is individually
 // load-bearing" -- which mutation testing disproves.
 
+/** Check access before invoking the request callbacks or touching request data. */
+function pfb_edit_hooks_controller(bool $allowed, callable $post, callable $get, ?string $dir = null): array
+{
+	$redirect = pfb_edit_hooks_access($allowed);
+	if ($redirect !== NULL) {
+		return [
+			'errors' => [], 'sel_when' => '', 'sel_script' => '', 'content' => '',
+			'new_core' => '', 'new_lang' => 'sh', 'new_when' => '', 'notice' => NULL,
+			'redirect' => $redirect,
+		];
+	}
+
+	return pfb_edit_hooks_request((array) $post(), (array) $get(), $dir);
+}
+
+/** Shared Edit Hooks request path; returns state plus a PRG redirect when complete. */
+function pfb_edit_hooks_request(array $post, array $get, ?string $dir = null): array
+{
+	$state = [
+		'errors' => [], 'sel_when' => '', 'sel_script' => '', 'content' => '',
+		'new_core' => '', 'new_lang' => 'sh', 'new_when' => '', 'notice' => NULL,
+		'redirect' => NULL,
+	];
+	if (!$post) {
+		if (isset($get['saved'])) {
+			$state['notice'] = gettext('Hook script saved.');
+		} elseif (!empty($get['deleted'])) {
+			$state['notice'] = gettext('Hook script deleted.');
+		}
+	}
+
+	if ($post) {
+		if (isset($post['pfb_eh_create'])) {
+			$post_when = (string) ($post['pfb_eh_new_when'] ?? '');
+			$post_core = (string) ($post['pfb_eh_new_core'] ?? '');
+			$post_lang = (string) ($post['pfb_eh_new_lang'] ?? '');
+			$filename = pfb_hook_editor_compose_filename($post_when, $post_core, $post_lang);
+			$path = ($filename !== NULL) ? pfb_hook_editor_path($filename, $dir) : NULL;
+			if ($filename === NULL || $path === NULL) {
+				$state['errors'][] = gettext('Invalid new-hook fields: When must be Pre/Post, Name must be letters, digits, and underscores only, and Language must be Shell or Python.');
+			} else {
+				$handle = @fopen($path, 'x');
+				if ($handle === FALSE) {
+					$state['errors'][] = gettext('A hook script with that composed name already exists, or the hook-script directory is not writable -- pick a different Name.');
+				} else {
+					$template = pfb_hook_editor_template($post_when, $post_lang);
+					$written = @fwrite($handle, $template);
+					@fclose($handle);
+					if ($written !== strlen($template) || !@chmod($path, 0700)) {
+						@unlink($path);
+						$state['errors'][] = gettext('Failed to write the hook script file -- check that the hook-script directory is writable.');
+					} else {
+						$state['redirect'] = '/pfblockerng/pfblockerng_edit_hooks.php?' . http_build_query(['when' => $post_when, 'script' => $filename]);
+						return $state;
+					}
+				}
+			}
+			$state['new_core'] = $post_core;
+			$state['new_lang'] = $post_lang === 'py' ? 'py' : 'sh';
+			$state['new_when'] = $post_when;
+			$state['sel_when'] = (string) ($post['pfb_eh_cur_when'] ?? '');
+			$state['sel_script'] = (string) ($post['pfb_eh_cur_script'] ?? '');
+			$state['content'] = pfb_sanitize_text_area((string) ($post['pfb_eh_content'] ?? ''));
+		} elseif (isset($post['pfb_eh_delete']) && $post['pfb_eh_delete'] !== '') {
+			$post_when = (string) ($post['pfb_eh_del_when'] ?? '');
+			$post_script = (string) ($post['pfb_eh_del_script'] ?? '');
+			if (pfb_hook_editor_delete($post_script, $post_when, $dir)) {
+				$state['redirect'] = '/pfblockerng/pfblockerng_edit_hooks.php?' . http_build_query(['deleted' => $post_script]);
+				return $state;
+			}
+			$state['errors'][] = gettext('That hook script could not be deleted -- reload the page and try again (it may already be gone, or the hook-script directory may not be writable).');
+			$state['sel_when'] = (string) ($post['pfb_eh_cur_when'] ?? '');
+			$state['sel_script'] = (string) ($post['pfb_eh_cur_script'] ?? '');
+			$state['content'] = pfb_sanitize_text_area((string) ($post['pfb_eh_content'] ?? ''));
+		} elseif (isset($post['pfb_eh_save'])) {
+			$post_when = (string) ($post['pfb_eh_cur_when'] ?? '');
+			$post_script = (string) ($post['pfb_eh_cur_script'] ?? '');
+			$post_content = pfb_sanitize_text_area((string) ($post['pfb_eh_content'] ?? ''));
+			if (!pfb_hook_script_valid($post_script, $post_when, $dir)) {
+				$state['errors'][] = gettext('Select a valid, existing hook script for this Pre/Post before saving (load it from the picker above first).');
+			} else {
+				$path = pfb_hook_editor_path($post_script, $dir);
+				if ($path === NULL || !is_file($path)) {
+					$state['errors'][] = gettext('The selected hook script could not be resolved on disk.');
+				} else {
+					$tmp = @tempnam(dirname($path), '.pfbeh_');
+					$written = $tmp !== FALSE ? @file_put_contents($tmp, $post_content) : FALSE;
+					if ($tmp === FALSE || $written !== strlen($post_content) || !@chmod($tmp, 0700) || !@rename($tmp, $path)) {
+						if ($tmp !== FALSE) {
+							@unlink($tmp);
+						}
+						$state['errors'][] = gettext('Failed to save the hook script file -- check that the hook-script directory is writable.');
+					} else {
+						$state['redirect'] = '/pfblockerng/pfblockerng_edit_hooks.php?' . http_build_query(['when' => $post_when, 'script' => $post_script, 'saved' => '1']);
+						return $state;
+					}
+				}
+			}
+			$state['sel_when'] = $post_when;
+			$state['sel_script'] = $post_script;
+			$state['content'] = $post_content;
+		}
+	} elseif (isset($get['when'], $get['script'])) {
+		$get_when = (string) $get['when'];
+		$get_script = (string) $get['script'];
+		if (pfb_hook_script_valid($get_script, $get_when, $dir)) {
+			$path = pfb_hook_editor_path($get_script, $dir);
+			$body = ($path !== NULL && is_file($path)) ? @file_get_contents($path) : FALSE;
+			if ($body === FALSE) {
+				$state['errors'][] = gettext('Failed to read the selected hook script.');
+			} elseif (!mb_check_encoding($body, 'UTF-8')) {
+				$state['errors'][] = gettext('The selected hook script file is not valid UTF-8 -- fix it on disk before editing it here (loading it into this editor would corrupt invalid byte sequences on display).');
+			} else {
+				$state['sel_when'] = $get_when;
+				$state['sel_script'] = $get_script;
+				$state['content'] = $body;
+			}
+		} else {
+			$state['errors'][] = gettext('That script is not a valid hook file for the selected Pre/Post.');
+		}
+	}
+
+	return $state;
+}
+
 /*
  * issue #1871: remove a hook script on behalf of the Edit Hooks page.
  *
@@ -69,13 +194,10 @@ function pfb_hook_editor_delete(string $script, string $when, ?string $dir = nul
 {
 	// GATE 1 -- PRIVILEGE, asserted here and not only at the page.
 	//
-	// This performs a root-privileged unlink(), and it lives in a file that
-	// pfblockerng.inc pulls into essentially every page of the package -- the
-	// alerts page, the dashboard, even the firewall_aliases_edit config hook all
-	// have this function in scope. The Edit Hooks page's own isAllowedPage() gate
-	// protects that page, not this operation: nothing stops a future caller
-	// elsewhere from invoking the helper with no gate at all. Re-asserting the
-	// same privilege the hook editor demands (diag_command.php -- the
+	// This page-only helper performs a root-privileged unlink(). The Edit Hooks
+	// controller checks the page privilege too, but a future caller could invoke
+	// this destructive operation without that controller. Re-asserting the same
+	// privilege the hook editor demands (diag_command.php -- the
 	// shell-equivalent trust class, ADR-12) makes the authorization a property of
 	// the DELETION rather than of one call site.
 	//

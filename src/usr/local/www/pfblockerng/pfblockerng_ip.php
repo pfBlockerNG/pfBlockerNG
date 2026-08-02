@@ -33,6 +33,8 @@ $pfb['iconfig'] = PfbConfig::readSection('installedpackages/pfblockerngipsetting
 // same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.
 $pfb_syntaxhl_on = pfb_editor_enabled();
 
+$pfb_ip_editor = pfb_ip_editor_render($pfb_syntaxhl_on);
+
 $pconfig = array();
 $pconfig['enable_dup']		= $pfb['iconfig']['enable_dup']				?: '';
 $pconfig['enable_agg']		= $pfb['iconfig']['enable_agg']				?: '';
@@ -246,7 +248,7 @@ if ($_POST) {
 			$pfb['iconfig']['enable_agg']		= pfb_filter($_POST['enable_agg'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			// issue #1907: stage the explicit token -- checkbox-absent means Off, and a
 			// staged '' would resolve to this field's default-ON at the gateway.
-			$pfb['iconfig']['suppression']		= (($_POST['suppression'] ?? '') === 'on') ? 'on' : 'off';
+			$pfb['iconfig']['suppression']		= pfb_ip_suppression_stored($_POST['suppression'] ?? NULL);
 			$pfb['iconfig']['enable_log']		= pfb_filter($_POST['enable_log'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['enable_rdns']		= pfb_filter($_POST['enable_rdns'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['ip_placeholder']	= $_POST['ip_placeholder']					?: '127.1.7.7';
@@ -419,7 +421,7 @@ $section->addInput(new Form_Checkbox(
 	'suppression',
 	'Suppression',
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['suppression'] ?? '') === PfbToggle::On,
+	pfb_ip_suppression_enabled($pconfig['suppression'] ?? NULL),
 	'on'
 ))->setHelp('Default enabled. This will prevent Selected IPs (and private/reserved addresses) from being blocked. For IPv4 lists (/8 through /32) and IPv6 lists (/32 through /128).'
 	. '<div class="infoblock">'
@@ -550,7 +552,8 @@ $section->addInput(new Form_Checkbox(
 $form->add($section);
 
 // Print Custom List TextArea section
-$section = new Form_Section('IPv4 Suppression', 'IPv4_Suppression_customlist', COLLAPSIBLE|SEC_CLOSED);
+$pfb_ip_anchor_layout = pfb_ip_anchor_layout_render();
+$section = new Form_Section('IPv4 Suppression', $pfb_ip_anchor_layout['suppression'], COLLAPSIBLE|SEC_CLOSED);
 $suppression_text = '<strong><u>This suppression list is for [ /8 through /32 ] IPv4 addresses only!</u></strong><br /><br />
 
 			When \'Suppression\' is enabled, all RFC1918, loopback and reserved (documentation, multicast, CGN, benchmarking, 6to4)
@@ -698,25 +701,17 @@ print ($form);
 print_callout('<strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong>');
 
 ?>
-<?php if ($pfb_syntaxhl_on): ?>
-<!-- issue #1875 step 2b: live syntax highlighting for the suppression list fields -->
-<script src="vendor/codemirror/cm-regex.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-regex.min.js')?>"></script>
-<?php endif; ?>
+<?=$pfb_ip_editor['asset']?>
 <script type="text/javascript">
 //<![CDATA[
 
 var pagetype = null;
 
 events.push(function(){
-<?php if ($pfb_syntaxhl_on): ?>
-	// issue #1875 step 2b: plain-list fields share the regex page's CM6 bundle; mountLists skips absent ids
-	if (window.pfbCM) {
-		window.pfbCM.mountLists(['v4suppression', 'v6suppression']);
-	}
-<?php endif; ?>
+<?=$pfb_ip_editor['lists']?>
 });
 
 //]]>
 </script>
-<script src="pfBlockerNG.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/pfBlockerNG.js')?>" type="text/javascript"></script>
+<?=pfb_ip_js_asset_render()?>
 <?php include('foot.inc');?>

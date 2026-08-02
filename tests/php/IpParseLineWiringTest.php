@@ -4,67 +4,89 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/**
- * The feed loop must delegate each raw line to the pure parser seam.  This
- * source pin keeps the extraction honest: the old family/parser branches must
- * not remain inline where they can silently diverge from the helper.
- */
 final class IpParseLineWiringTest extends TestCase
 {
-	private static string $source;
-
-	public static function setUpBeforeClass(): void
+	/** @return array{vtype:string,pftype:string,custom:bool,cidr_floor_v4:int|string,cidr_floor_v6:int|string,suppression:string,range:string,ipv4:string,ipv6:string} */
+	private function config(string $vtype, string $pftype = 'regex', string $suppression = 'off'): array
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-		self::$source = (string) file_get_contents($path);
+		return [
+			'vtype'         => $vtype,
+			'pftype'        => $pftype,
+			'custom'        => FALSE,
+			'cidr_floor_v4' => 'Disabled',
+			'cidr_floor_v6' => 'Disabled',
+			'suppression'   => $suppression,
+			'range'         => pfb_ip_regex_config()['range'],
+			'ipv4'          => pfb_ip_regex_config()['ipv4'],
+			'ipv6'          => pfb_ip_regex_config()['ipv6'],
+		];
 	}
 
-	public function testSyncLoopDelegatesRawLineToPureParser(): void
+	public function testReplayAppendsEntriesInParserOrderAndAdvancesLineNumber(): void
 	{
-		$ipPass = strpos(self::$source, '$ip_lineno = 0');
-		$this->assertNotFalse($ipPass, 'IP feed parser setup not found');
-		$loopStart = strpos(self::$source, 'while (($line = @fgets($fhandle)) !== FALSE)', (int) $ipPass);
-		$this->assertNotFalse($loopStart, 'sync feed loop not found');
-		$loopEnd = strpos(self::$source, 'if ($fhandle)', (int) $loopStart);
-		$this->assertNotFalse($loopEnd, 'sync feed loop end not found');
-		$loop = substr(self::$source, (int) $loopStart, (int) $loopEnd - (int) $loopStart);
+		$state = pfb_ip_parse_line_replay(
+			"from 192.0.2.1 to 198.51.100.7\n",
+			$this->config('_v4'),
+			4,
+			"10.0.0.1\n",
+			FALSE,
+			2
+		);
 
-		$this->assertStringContainsString('pfb_ip_parse_line(', $loop);
-		$this->assertStringContainsString('$raw_line', $loop);
-		$this->assertStringNotContainsString("if (\$list['vtype'] == '_v4'", $loop);
-		$this->assertStringNotContainsString("if (\$list['vtype'] == '_v6'", $loop);
-		$this->assertStringNotContainsString('preg_match_all($pfb[\'ipv4\']', $loop);
-		$this->assertStringNotContainsString('preg_match_all($pfb[\'ipv6\']', $loop);
+		$this->assertSame(5, $state['line_number']);
+		$this->assertSame("from 192.0.2.1 to 198.51.100.7", $state['line']);
+		$this->assertSame("10.0.0.1\n192.0.2.1\n198.51.100.7\n", $state['ip_data']);
+		$this->assertFalse($state['ip_suppressed']);
+		$this->assertSame(2, $state['parse_fail']);
+		$this->assertSame([], $state['messages']);
+		$this->assertFalse($state['detailed_parse_fail']);
+	}
 
-		$replayContract = [
-			'normalized line'       => '$line = $parsed_line[\'line\'];',
-			'ordered messages'      => 'foreach ($parsed_line[\'messages\'] as $message)',
-			'message logging'       => 'pfb_logger($message, 1);',
-			'ordered entries'       => 'foreach ($parsed_line[\'entries\'] as $entry)',
-			'newline-delimited data' => '$ip_data .= $entry . "\\n";',
-			'suppression state'     => '$ip_suppressed = $ip_suppressed || $parsed_line[\'suppressed\'];',
-			'parse-failure count'   => '$parse_fail += $parsed_line[\'parse_fail_delta\'];',
-			'detailed-failure gate' => 'if ($parsed_line[\'detailed_parse_fail\'])',
-			'detailed-failure data' => 'pfb_parse_fail_log($header, $line, $raw_line, $pfb[\'ip_parse_err\'], $ip_lineno, TRUE);',
-		];
-		foreach ($replayContract as $effect => $needle) {
-			$this->assertStringContainsString($needle, $loop, "missing parser replay effect: {$effect}");
-		}
-		$lineNumber = strpos($loop, '$ip_lineno++;');
-		$parseCall = strpos($loop, '$parsed_line = pfb_ip_parse_line(');
-		$this->assertNotFalse($lineNumber, 'line-number increment missing');
-		$this->assertNotFalse($parseCall, 'parser invocation missing');
-		$this->assertLessThan($parseCall, $lineNumber, 'line number must increment before parsing and diagnostics');
-		$this->assertStringContainsString('pfb_ip_parse_fail_warn($parse_fail, $header);', self::$source);
+	public function testReplayCarriesV6SuppressionAndExistingState(): void
+	{
+		$state = pfb_ip_parse_line_replay(
+			'fc00::1',
+			$this->config('_v6', 'auto', 'on'),
+			0,
+			'',
+			TRUE,
+			1
+		);
 
-		$placeholderStart = strpos(self::$source, "if (empty(\$ip_data) && \$ip_suppressed && \$list['vtype'] == '_v6')");
-		$this->assertNotFalse($placeholderStart, 'suppressed-IPv6 placeholder gate missing');
-		$placeholderEnd = strpos(self::$source, 'if (!empty($ip_data))', (int) $placeholderStart);
-		$this->assertNotFalse($placeholderEnd, 'suppressed-IPv6 placeholder block end missing');
-		$placeholder = substr(self::$source, (int) $placeholderStart, (int) $placeholderEnd - (int) $placeholderStart);
-		$this->assertStringContainsString('$p_ip     = "::{$pfb[\'ip_ph\']}";', $placeholder);
-		$this->assertStringContainsString('$ip_data  = "{$p_ip}\\n";', $placeholder);
-		$this->assertStringContainsString('All IPv6 entries suppressed', $placeholder);
-		$this->assertStringContainsString('pfb_logger(', $placeholder);
+		$this->assertSame(1, $state['line_number']);
+		$this->assertSame('fc00::1', $state['line']);
+		$this->assertSame('', $state['ip_data']);
+		$this->assertTrue($state['ip_suppressed']);
+		$this->assertSame(1, $state['parse_fail']);
+		$this->assertSame([], $state['messages']);
+	}
+
+	public function testReplayReturnsDetailedFailureWithRawLineForDiagnostics(): void
+	{
+		$state = pfb_ip_parse_line_replay(
+			" 999.999.999.999 \n",
+			$this->config('_v4', 'auto'),
+			9,
+			'',
+			FALSE,
+			0
+		);
+
+		$this->assertSame(10, $state['line_number']);
+		$this->assertSame('999.999.999.999', $state['line']);
+		$this->assertSame(1, $state['parse_fail']);
+		$this->assertTrue($state['detailed_parse_fail']);
+		$this->assertSame(" 999.999.999.999 \n", $state['raw_line']);
+	}
+
+	/** #993: the live sync/download/firewall monolith is unsafe off-appliance; comments are stripped. */
+	public function testLiveFeedDispatchUsesReplaySeam(): void
+	{
+		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertStringContainsString(
+			'$replayed_line = pfb_ip_parse_line_replay($line',
+			$source,
+			'live feed dispatch must replay parser state before writing firewall alias data'
+		);
 	}
 }

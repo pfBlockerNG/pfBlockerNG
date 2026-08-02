@@ -32,7 +32,7 @@ final class DnsblFeedIdnWildcardTest extends TestCase
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
 		}
 		if (!preg_match(
-			'/(\t+\/\/ Convert IDN \(Unicode domains\) to ASCII \(punycode\)\n.*?\$line = trim\(\$line, \'\.\'\);)/s',
+			'/((?:\t+if \(!empty\(\$line\) && !ctype_print\(\$line\)\) \{).*?\$line = trim\(\$line, \'\.\'\);)/s',
 			$src,
 			$m
 		)) {
@@ -41,6 +41,12 @@ final class DnsblFeedIdnWildcardTest extends TestCase
 		// The region uses `continue` to drop a line; wrap it in a loop of its
 		// own so that keeps working inside eval().
 		self::$region = "foreach ([0] as \$pfb_test_iter) {\n{$m[1]}\n\$pfb_test_kept = TRUE;\n}\n";
+	}
+
+	public function testExtractionStartsAtExecutableCodeNotProductionComment(): void
+	{
+		$this->assertStringContainsString("if (!empty(\$line) && !ctype_print(\$line))", self::$region);
+		$this->assertStringNotContainsString('Convert IDN (Unicode domains)', self::$region);
 	}
 
 	protected function setUp(): void

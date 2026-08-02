@@ -7,6 +7,8 @@ use PHPUnit\Framework\TestCase;
 /**
  * Issue #1615 -- Alerts generation changes flush only allow-to-block deltas:
  * exact names target one cache entry; wildcard removals flush the full cache.
+ * The page dispatch is top-level and has no off-appliance callable seam; retained
+ * wiring pins therefore read php_strip_whitespace() output, never production prose.
  */
 final class AlertsUnboundCachePolicyTest extends TestCase
 {
@@ -14,9 +16,11 @@ final class AlertsUnboundCachePolicyTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		self::$source = (string) file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php'
-		);
+		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php';
+		self::$source = php_strip_whitespace($path);
+		if (self::$source === '') {
+			throw new RuntimeException('test bootstrap: failed to read Alerts source');
+		}
 	}
 
 	private function region(string $startMarker, string $endMarker): string
@@ -42,17 +46,17 @@ final class AlertsUnboundCachePolicyTest extends TestCase
 	public function testKnownAllowToBlockChangesFlushTheirFiniteNameSetAfterReload(): void
 	{
 		$this->assertOrdered(
-			$this->region('// Add Domain to DNSBL Customlist', '// Add Domain/CNAME(s) to the DNSBL Whitelist'),
+			$this->region("elseif (isset(\$_POST['dnsbl_add'])", "} elseif (isset(\$_POST['addwhitelistdom'])"),
 			"pfb_reload_unbound('enabled', FALSE, TRUE, TRUE);",
 			'pfb_unbound_py_ccache_flush(array($domain));'
 		);
 		$this->assertOrdered(
-			$this->region("if (\$_POST['entry_delete'] == 'delete_domainwildcard')", '// Unlock/Lock DNSBL events'),
+			$this->region("if (\$_POST['entry_delete'] == 'delete_domainwildcard')", "} elseif (isset(\$_POST['dnsbl_remove'])"),
 			"pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);",
 			'pfb_unbound_py_ccache_flush(array($entry));'
 		);
 		$this->assertOrdered(
-			$this->region('// Unlock/Lock DNSBL events', '// sprintf with the (domain-filtered'),
+			$this->region("elseif (isset(\$_POST['dnsbl_remove'])", "} elseif (isset(\$_POST['ip_remove'])"),
 			"pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);",
 			'pfb_unbound_py_ccache_flush(array($domain));'
 		);
@@ -60,7 +64,7 @@ final class AlertsUnboundCachePolicyTest extends TestCase
 
 	public function testWildcardWhitelistRemovalFlushesFullCacheAfterSuccessfulSwap(): void
 	{
-		$delete = $this->region('// Delete entry from customlists', '// Unlock/Lock DNSBL events');
+		$delete = $this->region("elseif (isset(\$_POST['entry_delete'])", "} elseif (isset(\$_POST['dnsbl_remove'])");
 
 		$this->assertOrdered(
 			$delete,
@@ -75,10 +79,10 @@ final class AlertsUnboundCachePolicyTest extends TestCase
 	public function testBlockToAllowAlertsChangesDoNotFlushUnboundCache(): void
 	{
 		$whitelist = $this->region(
-			'// Add Domain/CNAME(s) to the DNSBL Whitelist',
-			'// Save Domain/CNAME(s) to the TLD Exclusion customlist'
+			"elseif (isset(\$_POST['addwhitelistdom'])",
+			"} elseif (isset(\$_POST['entry_delete'])"
 		);
-		$unlock = $this->region('// Unlock/Lock DNSBL events', '// sprintf with the (domain-filtered');
+		$unlock = $this->region("elseif (isset(\$_POST['dnsbl_remove'])", "} elseif (isset(\$_POST['ip_remove'])");
 
 		$this->assertStringNotContainsString('flush {$domain_esc}', $whitelist);
 		$this->assertStringNotContainsString('if ($action == \'unlock\')', $unlock);

@@ -29,6 +29,7 @@ use PHPUnit\Framework\TestCase;
 final class AlertsFilterFieldsInitTest extends TestCase
 {
 	private const ALERTS_PHP = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_alerts.php';
+	private static string $initRegion;
 
 	public static function setUpBeforeClass(): void
 	{
@@ -40,17 +41,24 @@ final class AlertsFilterFieldsInitTest extends TestCase
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_alerts.php');
 		}
 		if (!preg_match(
-			'/\/\/ Initialize filterfieldsarray\n(.*?\$filterfieldsarray\[\d\]\[\$field_2\] = \'\';\n\})\n/s',
+			'/((?:\$filterfieldsarray\s*=\s*array\(\);\n).*?\$filterfieldsarray\[\d\]\[\$field_2\] = \'\';\n\})\n/s',
 			$src,
 			$m
 		)) {
 			throw new RuntimeException('test bootstrap: filterfieldsarray init block not found');
 		}
+		self::$initRegion = $m[1];
 		eval(
 			'function pfb_alerts_oracle_filterfieldsarray_init(): array {'
 			. $m[1]
 			. ' return $filterfieldsarray; }'
 		);
+	}
+
+	public function testExtractionStartsAtExecutableCodeNotProductionComment(): void
+	{
+		$this->assertStringStartsWith('$filterfieldsarray', self::$initRegion);
+		$this->assertStringNotContainsString('Initialize filterfieldsarray', self::$initRegion);
 	}
 
 	public function testSlotTwoIsSeededWithItsOwn81Through89KeySet(): void

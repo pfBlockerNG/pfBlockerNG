@@ -12,8 +12,8 @@ use PHPUnit\Framework\TestCase;
  * (pfblockerng_<Continent>.php) via file_put_contents. On a POST save those pages
  * process the four Advanced alias fields (aliasports_in / aliasaddr_in /
  * aliasports_out / aliasaddr_out) in TWO steps that this suite exercises together,
- * both extracted verbatim from the shipped template source so the real page code
- * runs — not a copy:
+ * both extracted from executable boundaries in the shipped template source so
+ * the real page code runs — not a copy:
  *
  *   1. Select-option normalization: each field whose submitted value is not a key
  *      in its dropdown options is reset to '' (its default). The options are built
@@ -50,30 +50,34 @@ final class IpSettingsAdvAliasValidationTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		$src = file_get_contents(
+		$src = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc'
 		);
-		self::assertNotFalse($src, 'could not read pfblockerng_geoip.inc');
+		self::assertNotSame('', $src, 'could not read pfblockerng_geoip.inc');
 
 		// Slice 1: build $options_aliasports_* / $options_aliasaddr_* from config.
 		$ok = preg_match(
-			'/\/\/ Collect all pfSense .Port. Aliases.*?(?=\$ports_list\s*=)/s',
+			'/(\$pfb_ac_lists\s*=\s*pfb_alias_autocomplete_lists\(config_get_path\(\x27aliases\/alias\x27, \[\]\)\);'
+			. '.*?)(?=\$ports_list\s*=)/s',
 			$src,
 			$m
 		);
 		self::assertSame(1, $ok, 'could not locate the alias-options block in pfblockerng_geoip.inc');
-		self::$optionsBlock = $m[0];
+		self::assertStringContainsString('$options_aliasaddr_out', $m[1]);
+		self::$optionsBlock = $m[1];
 
 		// Slice 2: the select-option normalization foreach(es) + the Advanced In/Out
 		// validation — the full save-time processing of the four alias fields.
 		$ok = preg_match(
-			'/\/\/ Validate Select field options.*?' .
-			'(?=\/\/ Validate Adv\. firewall rule \x27Protocol\x27 setting)/s',
+			'/(\$select_options\s*=\s*array\(\s*\x27action\x27\s*=>\s*\x27Disabled\x27'
+			. '.*?foreach \(pfb_adv_alias_field_errors\(\$_POST\) as \$pfb_alias_error\) \{.*?\})'
+			. '.*?(?=if \(!empty\(\$_POST\[\x27autoports_in\x27\]\))/s',
 			$src,
 			$m
 		);
 		self::assertSame(1, $ok, 'could not locate the alias normalization/validation block in pfblockerng_geoip.inc');
-		self::$processBlock = $m[0];
+		self::assertStringContainsString('pfb_adv_alias_field_errors', $m[1]);
+		self::$processBlock = $m[1];
 	}
 
 	protected function setUp(): void

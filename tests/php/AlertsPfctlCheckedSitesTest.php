@@ -49,28 +49,27 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		$src = file_get_contents(
+		$src = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php'
 		);
-		if ($src === false) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_alerts.php');
+		if ($src === '') {
+			throw new RuntimeException('test bootstrap: failed to read comment-free pfblockerng_alerts.php');
 		}
 
 		// Region 1: the delete_ip case body (own trailing break;) -- wrapped in a
 		// throwaway switch so `break;` has a valid target.
 		if (!function_exists('pfb_alerts_oracle_delete_ip')) {
-			if (!preg_match(
-				'/case \'delete_ip\':\n(.*?)\n\t\t\tcase \'delete_ipwhitelist\':/s',
-				$src,
-				$m
-			)) {
+			$start = strpos($src, "case 'delete_ip':");
+			$end = strpos($src, "case 'delete_ipwhitelist':", $start === FALSE ? 0 : $start);
+			if ($start === FALSE || $end === FALSE || $end <= $start) {
 				throw new RuntimeException('test bootstrap: delete_ip region not found');
 			}
+			$region = substr($src, $start + strlen("case 'delete_ip':"), $end - $start - strlen("case 'delete_ip':"));
 			eval(
 				'function pfb_alerts_oracle_delete_ip(string $entry, string $table, array &$clists): array {'
 				. ' global $pfb; $pfb_found = TRUE; $savemsg = \'\'; $type = \'\';'
 				. ' switch (1) { case 1:'
-				. $m[1]
+				. $region
 				. ' }'
 				. ' return [\'pfb_found\' => $pfb_found, \'savemsg\' => $savemsg]; }'
 			);
@@ -78,18 +77,17 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 
 		// Region 2: the delete_ipwhitelist case body (own trailing break;).
 		if (!function_exists('pfb_alerts_oracle_delete_ipwhitelist')) {
-			if (!preg_match(
-				'/case \'delete_ipwhitelist\':\n(.*?)\n\t\t\tdefault:/s',
-				$src,
-				$m
-			)) {
+			$start = strpos($src, "case 'delete_ipwhitelist':");
+			$end = strpos($src, 'default:', $start === FALSE ? 0 : $start);
+			if ($start === FALSE || $end === FALSE || $end <= $start) {
 				throw new RuntimeException('test bootstrap: delete_ipwhitelist region not found');
 			}
+			$region = substr($src, $start + strlen("case 'delete_ipwhitelist':"), $end - $start - strlen("case 'delete_ipwhitelist':"));
 			eval(
 				'function pfb_alerts_oracle_delete_ipwhitelist(string $entry, string $table, array &$clists): array {'
 				. ' global $pfb; $pfb_found = TRUE; $savemsg = \'\'; $type = \'\';'
 				. ' switch (1) { case 1:'
-				. $m[1]
+				. $region
 				. ' }'
 				. ' if ($pfb_found) { write_config("pfBlockerNG: Deleted [ {$entry} ] from {$type} customlist", FALSE); }'
 				. ' return [\'pfb_found\' => $pfb_found, \'savemsg\' => $savemsg]; }'
@@ -785,8 +783,10 @@ SH
 
 	public function testAlertsPageDispatchKeepsFiltersNavigationAndStrictIpActions(): void
 	{
-		$src = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php');
-		$this->assertNotFalse($src);
+		// Top-level POST dispatch has no off-appliance callable seam; this retained
+		// pin uses comment-free PHP tokens so nearby production prose is irrelevant.
+		$src = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php');
+		$this->assertNotSame('', $src, 'comment-free Alerts source must be readable');
 
 		$this->assertStringContainsString("pfb_filter(\$_POST['ip'], PFB_FILTER_IP, 'alerts addsuppress')", $src);
 		$this->assertStringContainsString("pfb_filter(\$_POST['table'], PFB_FILTER_WORD, 'alerts addsuppress')", $src);
@@ -797,8 +797,8 @@ SH
 		$this->assertStringContainsString("pfb_filter(\$_POST['table'], PFB_FILTER_WORD, 'alerts ip_remove')", $src);
 		$this->assertStringContainsString('header("Location: /pfblockerng/pfblockerng_category_edit.php?type=ipv{$vtype}&act=addgroup', $src);
 
-		$remove_start = strpos($src, "\telseif (isset(\$_POST['ip_remove'])");
-		$remove_end = strpos($src, "\n\t// Whitelist IP events", $remove_start);
+		$remove_start = strpos($src, "} elseif (isset(\$_POST['ip_remove'])");
+		$remove_end = strpos($src, "} elseif (isset(\$_POST['ip_white'])", $remove_start === FALSE ? 0 : $remove_start);
 		$this->assertNotFalse($remove_start);
 		$this->assertNotFalse($remove_end);
 		$remove = substr($src, $remove_start, $remove_end - $remove_start);

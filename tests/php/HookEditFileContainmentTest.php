@@ -5,137 +5,151 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1871 — pfblockerng_hook_edit.inc is reachable from ONE page and no other.
- *
- * The file holds the only destructive hook-script operation in the package: a
- * root-privileged unlink() driven by a GUI request. Its safety rests on two
- * independent things, and this class pins the second one.
- *
- * The first is the set of gates inside the function itself (privilege, allow-list,
- * resolved directory, original path, existence, true resolved path, writability) —
- * covered by HookEditorDeleteTest.
- *
- * The second is EXISTENCE: the function is only in scope where it is allowed to be
- * used. The read-only hook helpers live in pfblockerng_extra.inc, which
- * pfblockerng.inc pulls into essentially every page of the package; anything
- * defined there is callable from the dashboard, the alerts page, and the
- * firewall_aliases_edit config hook. Putting a destructive primitive in that
- * blast radius and relying on callers to behave is exactly the arrangement this
- * separation exists to prevent.
- *
- * Convention alone does not hold that line — a future contributor adding one
- * require_once would silently undo it, and no other test in the suite would
- * notice. So the containment is asserted here, over the real shipping tree.
- *
- * KNOWN CEILING: these are text scans, so they catch a LITERAL reference to the
- * filename. A path assembled at runtime ('..._hook_' . 'edit.inc') is out of
- * reach and always will be — mutation-tested, it passes. That is an accepted
- * limit, not an oversight: the realistic regression is somebody adding a plain
- * require_once, which is caught. The scans deliberately cover .xml too, because
- * pfblockerng.xml uses <include_file> as a real load mechanism for this package
- * and an entry there would otherwise evade every assertion below.
+ * Package pages cannot be included as a whole off-appliance: they require pfSense's absolute
+ * runtime files, read live config, and several perform config/service/file mutations before exit.
+ * The recursive code/XML audit therefore pins containment without executing unrelated pages;
+ * php_strip_whitespace excludes comments/docblocks from every PHP/INC assertion.
  */
 final class HookEditFileContainmentTest extends TestCase
 {
-	private const INC = 'pfblockerng_hook_edit.inc';
+	private const ROOT = __DIR__ . '/../..';
+	private const SRC = self::ROOT . '/src';
+	private const HOOK_EDIT = self::ROOT . '/src/usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc';
+	private const MUTATING_FUNCTIONS = [
+		'pfb_hook_editor_delete',
+		'pfb_edit_hooks_controller',
+		'pfb_edit_hooks_request',
+	];
 
-	/** The one page permitted to include it. */
-	private const ALLOWED_INCLUDER = 'src/usr/local/www/pfblockerng/pfblockerng_edit_hooks.php';
-
-	private static string $root = '';
-
-	public static function setUpBeforeClass(): void
+	public function testExactlyOneShippingPhpIncluderAndNoXmlIncluder(): void
 	{
-		parent::setUpBeforeClass();
-		self::$root = dirname(__DIR__, 2);
+		$php = $this->phpReferences();
+		$this->assertSame(
+			['usr/local/www/pfblockerng/pfblockerng_edit_hooks.php'],
+			$php,
+			'only the privilege-gated Edit Hooks page may include the destructive hook file'
+		);
+		$this->assertSame([], $this->xmlReferences(), 'package XML must not widen destructive hook scope');
 	}
 
-	/** @return list<string> every shipping file that names the include, repo-relative */
-	private static function referencingFiles(): array
+	public function testExactlyOneShippingDefinition(): void
 	{
-		$found = [];
-		$directory = new RecursiveDirectoryIterator(self::$root . '/src', FilesystemIterator::SKIP_DOTS);
-		foreach (new RecursiveIteratorIterator($directory) as $file) {
-			/** @var SplFileInfo $file */
-			if (!$file->isFile()) {
-				continue;
-			}
-			$path = $file->getPathname();
-			if (!preg_match('/\.(php|inc|xml)$/', $path)) {
-				continue;
-			}
-			$contents = (string) file_get_contents($path);
-			if (str_contains($contents, self::INC)) {
-				$found[] = ltrim(str_replace(self::$root, '', $path), '/');
+		$definitions = array_fill_keys(self::MUTATING_FUNCTIONS, []);
+		foreach ($this->shippingFiles() as $path) {
+			$source = php_strip_whitespace($path);
+			foreach (self::MUTATING_FUNCTIONS as $function) {
+				if (str_contains($source, "function {$function}(")) {
+					$definitions[$function][] = $this->relative($path);
+				}
 			}
 		}
-		sort($found);
-		return $found;
-	}
-
-	public function testTheIncludeFileExists(): void
-	{
-		// Guards the assertions below against vacuity: if the file were renamed or
-		// removed, "nothing includes it" would otherwise read as a clean pass.
-		$this->assertFileExists(self::$root . '/src/usr/local/pkg/pfblockerng/' . self::INC);
-	}
-
-	public function testExactlyOnePageIncludesIt(): void
-	{
-		$referencing = self::referencingFiles();
-		// The file names itself in its own header comment; that is not an include.
-		$referencing = array_values(array_filter(
-			$referencing,
-			static fn (string $path): bool => !str_ends_with($path, self::INC)
-		));
-
-		$this->assertSame(
-			[self::ALLOWED_INCLUDER],
-			$referencing,
-			"pfblockerng_hook_edit.inc holds a root-privileged unlink() and must stay reachable from the "
-				. "privilege-gated Edit Hooks page ONLY. Files naming it now:\n  " . implode("\n  ", $referencing)
-				. "\nIf a second page genuinely needs hook deletion, it needs its own privilege gate first — "
-				. "and this list needs updating deliberately, not incidentally."
-		);
-	}
-
-	public function testThePackageWideIncludesDoNotPullItIn(): void
-	{
-		// The specific regression that matters: pfblockerng.inc and
-		// pfblockerng_extra.inc are loaded almost everywhere, so either one taking a
-		// dependency on this file would restore the blast radius the split removed,
-		// while the test above would still pass if the reference were indirect.
-		foreach (['pfblockerng.inc', 'pfblockerng_extra.inc'] as $wide) {
-			$contents = (string) file_get_contents(self::$root . '/src/usr/local/pkg/pfblockerng/' . $wide);
-			// str_contains() rather than assertStringNotContainsString(): the latter
-			// prints the whole ~700 KB file into the failure output and buries the
-			// one line that matters.
-			$this->assertFalse(
-				str_contains($contents, self::INC),
-				"{$wide} is included by nearly every page; it must not pull in the destructive hook-edit file"
+		foreach ($definitions as $function => $files) {
+			$this->assertSame(
+				['usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc'],
+				$files,
+				"{$function} must exist only in the page-scoped destructive include"
 			);
 		}
 	}
 
-	public function testTheDeleteFunctionIsDefinedNowhereElse(): void
+	public function testPackageWideIncludeDoesNotLoadDestructiveOperation(): void
 	{
-		// Belt and braces on the whole arrangement: the containment is worthless if
-		// a copy of the function is also defined in a widely-included file.
-		$definitions = [];
-		$directory = new RecursiveDirectoryIterator(self::$root . '/src', FilesystemIterator::SKIP_DOTS);
-		foreach (new RecursiveIteratorIterator($directory) as $file) {
-			/** @var SplFileInfo $file */
-			if (!$file->isFile() || !preg_match('/\.(php|inc|xml)$/', $file->getPathname())) {
-				continue;
-			}
-			$contents = (string) file_get_contents($file->getPathname());
-			// Unanchored on purpose: a duplicate planted INDENTED inside an
-			// if (!function_exists(...)) { ... } block is exactly the shape that would
-			// restore the blast radius, and a ^-anchored scan misses it.
-			if (preg_match('/(?<![\w$>])function\s+pfb_hook_editor_delete\s*\(/', $contents)) {
-				$definitions[] = basename($file->getPathname());
+		$result = $this->runChild(<<<'PHP'
+require %s . '/tests/php/bootstrap.php';
+foreach (['pfb_hook_editor_delete', 'pfb_edit_hooks_controller', 'pfb_edit_hooks_request'] as $function) {
+	if (function_exists($function)) {
+		exit(1);
+	}
+}
+PHP
+);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+	}
+
+	public function testIntendedHookFileLoadsOperation(): void
+	{
+		$result = $this->runChild(<<<'PHP'
+require %s . '/src/usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc';
+foreach (['pfb_hook_editor_delete', 'pfb_edit_hooks_controller', 'pfb_edit_hooks_request'] as $function) {
+	if (!function_exists($function)) {
+		exit(1);
+	}
+	$reflection = new ReflectionFunction($function);
+	if (realpath((string) $reflection->getFileName()) !== realpath(%s . '/src/usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc')) {
+		exit(2);
+	}
+}
+PHP
+);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+	}
+
+	/** @return list<string> */
+	private function phpReferences(): array
+	{
+		$references = [];
+		foreach ($this->shippingFiles() as $path) {
+			$source = php_strip_whitespace($path);
+			if (str_contains($source, 'pfblockerng_hook_edit.inc')) {
+				$references[] = $this->relative($path);
 			}
 		}
-		$this->assertSame([self::INC], $definitions, 'the delete function must be defined in exactly one file');
+		return $references;
+	}
+
+	/** @return list<string> */
+	private function xmlReferences(): array
+	{
+		$references = [];
+		foreach ($this->shippingFiles('xml') as $path) {
+			$xml = simplexml_load_file($path, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOBLANKS);
+			$this->assertNotFalse($xml, "invalid shipping XML: {$path}");
+			foreach ($xml->xpath('//include_file') ?: [] as $include) {
+				if (trim((string) $include) === '/usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc') {
+					$references[] = $this->relative($path);
+				}
+			}
+		}
+		return $references;
+	}
+
+	/** @return list<string> */
+	private function shippingFiles(string $extension = ''): array
+	{
+		$files = [];
+		$iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(self::SRC, FilesystemIterator::SKIP_DOTS));
+		foreach ($iterator as $file) {
+			/** @var SplFileInfo $file */
+			if (!$file->isFile()) {
+				continue;
+			}
+			if ($extension !== '' ? $file->getExtension() !== $extension : !in_array($file->getExtension(), ['php', 'inc'], TRUE)) {
+				continue;
+			}
+			$files[] = $file->getPathname();
+		}
+		sort($files, SORT_STRING);
+		return $files;
+	}
+
+	private function relative(string $path): string
+	{
+		return ltrim(str_replace(self::SRC, '', $path), '/');
+	}
+
+	/** @return array{status:int,stdout:string,stderr:string} */
+	private function runChild(string $template): array
+	{
+		$root = var_export(self::ROOT, TRUE);
+		$script = sprintf($template, $root, $root);
+		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+		$process = proc_open([PHP_BINARY, '-r', $script], $descriptors, $pipes);
+		$this->assertIsResource($process);
+		$stdout = stream_get_contents($pipes[1]);
+		$stderr = stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		$status = proc_close($process);
+		return ['status' => $status, 'stdout' => (string) $stdout, 'stderr' => (string) $stderr];
 	}
 }

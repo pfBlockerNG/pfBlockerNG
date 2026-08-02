@@ -45,12 +45,20 @@
 
 require_once('guiconfig.inc');
 require_once('globals.inc');
-require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
+$pfb_eh_pkg = '/usr/local/pkg/pfblockerng/pfblockerng.inc';
+if (!file_exists($pfb_eh_pkg)) {
+	$pfb_eh_pkg = dirname(__DIR__, 2) . '/pkg/pfblockerng/pfblockerng.inc';
+}
+require_once($pfb_eh_pkg);
 // Destructive hook-script operations, deliberately NOT in the package-wide includes:
 // this file is included by THIS PAGE ONLY, so a root-privileged unlink() is never in
 // scope on a page that has no business holding one. Containment is pinned by
 // tests/php/HookEditFileContainmentTest.php.
-require_once('/usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc');
+$pfb_eh_hook_edit = '/usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc';
+if (!file_exists($pfb_eh_hook_edit)) {
+	$pfb_eh_hook_edit = dirname(__DIR__, 2) . '/pkg/pfblockerng/pfblockerng_hook_edit.inc';
+}
+require_once($pfb_eh_hook_edit);
 
 global $pfb;
 pfb_global();
@@ -71,11 +79,6 @@ $pfb_syntaxhl_on = pfb_editor_enabled();
 // a page-all admin (who lacks the literal 'page-diagnostics-command' priv) -- that
 // would lock admins out. pfSense match-based privilege is OR across groups, so this
 // extra AND-requirement can only be enforced by an explicit in-page check.
-if (!isAllowedPage('diag_command.php')) {
-	header('Location: /index.php');
-	exit;
-}
-
 $input_errors = array();
 
 // The currently loaded/edited script, and its content -- populated below from either
@@ -91,205 +94,21 @@ $pfb_eh_new_core_val  = '';
 $pfb_eh_new_lang_val  = 'sh';
 $pfb_eh_new_when_echo = '';
 
-if ($_POST) {
-	if (isset($_POST['pfb_eh_create'])) {
-		// Create flow (issue #1669 design comment): the user supplies only When/Name
-		// core/Language -- the server COMPOSES the filename. pfb_hook_editor_compose_filename()
-		// is the single source of truth for every validation decision here; this
-		// handler never inlines a regex or a naming rule of its own.
-		$post_when = (string) ($_POST['pfb_eh_new_when'] ?? '');
-		$post_core = (string) ($_POST['pfb_eh_new_core'] ?? '');
-		$post_lang = (string) ($_POST['pfb_eh_new_lang'] ?? '');
-
-		$filename = pfb_hook_editor_compose_filename($post_when, $post_core, $post_lang);
-		$path     = ($filename !== NULL) ? pfb_hook_editor_path($filename) : NULL;
-
-		if ($filename === NULL || $path === NULL) {
-			$input_errors[] = gettext('Invalid new-hook fields: When must be Pre/Post, Name must be letters, ' .
-				'digits, and underscores only, and Language must be Shell or Python.');
-		} else {
-			// Mode 0700: the runner execs the vetted script directly under timeout(1)
-			// via its own shebang (pfb_run_hooks()), so a freshly created file must be
-			// executable to ever actually run -- but the runner always execs as root,
-			// and pfb_hook_scripts() has no is_executable filter, so nothing else on
-			// the system needs the group/other bits; owner-only is least privilege.
-			//
-			// 'x' mode: atomic create-exclusive open -- fails outright if the target
-			// already exists, closing the TOCTOU race a separate file_exists() check
-			// followed by a plain write left open: two concurrent creates racing the
-			// same composed name could otherwise both pass the existence check and one
-			// clobber the other.
-			$pfb_eh_new_handle = @fopen($path, 'x');
-			if ($pfb_eh_new_handle === FALSE) {
-				// fopen(..., 'x') returns FALSE
-				// for EVERY failure reason (name collision, unwritable directory, etc.) --
-				// the prior message named only the collision case, which misled an admin
-				// hitting a permissions problem into repeatedly retyping a "different Name"
-				// that would never help.
-				$input_errors[] = gettext('A hook script with that composed name already exists, or the ' .
-					'hook-script directory is not writable -- pick a different Name.');
-			} else {
-				$pfb_eh_new_template = pfb_hook_editor_template($post_when, $post_lang);
-				$pfb_eh_new_written  = @fwrite($pfb_eh_new_handle, $pfb_eh_new_template);
-				@fclose($pfb_eh_new_handle);
-				if ($pfb_eh_new_written !== strlen($pfb_eh_new_template) || !@chmod($path, 0700)) {
-					// Partial/failed write or chmod -- never leave a half-written file
-					// behind for a later create attempt (with a different name) to trip
-					// over, or for the picker to ever list.
-					@unlink($path);
-					$input_errors[] = gettext('Failed to write the hook script file -- check that the ' .
-						'hook-script directory is writable.');
-				} else {
-					// PRG: redirect straight into the picker-load state for the new file so
-					// the admin lands in the editor, ready to fill in the hello-world stub.
-					header('Location: /pfblockerng/pfblockerng_edit_hooks.php?' .
-						http_build_query(array('when' => $post_when, 'script' => $filename)));
-					exit;
-				}
-			}
-		}
-
-		// Preserve the create-flow fields the user typed so a validation error doesn't
-		// silently clear the form.
-		$pfb_eh_new_core_val  = $post_core;
-		$pfb_eh_new_lang_val  = ($post_lang === 'py') ? 'py' : 'sh';
-		$pfb_eh_new_when_echo = $post_when;
-
-		// issue #1884: a failed create must not cost the admin their unsaved edits --
-		// Enter in the Name field (the form's only text input) submits as Create, so
-		// this error path fires from a stray keypress. Same cur_-restore shape as the
-		// failed-delete branch below; the save branch re-validates both before writing.
-		$pfb_eh_sel_when   = (string) ($_POST['pfb_eh_cur_when'] ?? '');
-		$pfb_eh_sel_script = (string) ($_POST['pfb_eh_cur_script'] ?? '');
-		$pfb_eh_content    = pfb_sanitize_text_area((string) ($_POST['pfb_eh_content'] ?? ''));
-	} elseif (isset($_POST['pfb_eh_delete']) && $_POST['pfb_eh_delete'] !== '') {
-		// The emptiness check is load-bearing, not defensive: pfb_eh_delete is a
-		// hidden field rendered on EVERY request, and a browser submits hidden inputs
-		// whether or not the delete button was the thing clicked. isset() alone is
-		// therefore true on a Save too, which would route Save into this branch,
-		// fail, and discard the admin's unsaved editor content. Only the click
-		// handler ever gives the field a value. Same idiom as
-		// pfblockerng_alerts.php's entry_delete guard.
-		//
-		// issue #1871: every decision is delegated to pfb_hook_editor_delete(), which
-		// refuses anything the shared allow-list (pfb_hook_script_valid()) does not
-		// already vouch for -- this handler never inlines a path or naming rule of
-		// its own, exactly like the create and save handlers above and below it.
-		$post_when   = (string) ($_POST['pfb_eh_del_when'] ?? '');
-		$post_script = (string) ($_POST['pfb_eh_del_script'] ?? '');
-
-		if (pfb_hook_editor_delete($post_script, $post_when)) {
-			// PRG, and deliberately WITHOUT when/script: the editor must not come
-			// back pointing at a file that no longer exists.
-			header('Location: /pfblockerng/pfblockerng_edit_hooks.php?' .
-				http_build_query(array('deleted' => $post_script)));
-			exit;
-		}
-		$input_errors[] = gettext('That hook script could not be deleted -- reload the page and try again ' .
-			'(it may already be gone, or the hook-script directory may not be writable).');
-
-		// A FAILED delete must not cost the admin their unsaved edits. Falling through
-		// with these empty re-renders the page as "Load an existing script above..."
-		// and silently discards whatever was in the editor -- the same data-loss shape
-		// as the presence-only guard this branch already had to fix, just behind a
-		// narrower trigger (a double submit, or a hook removed from another tab). The
-		// loaded script is re-derived from the SAME cur_* fields the save branch
-		// trusts, and both are re-validated there before anything is written.
-		$pfb_eh_sel_when   = (string) ($_POST['pfb_eh_cur_when'] ?? '');
-		$pfb_eh_sel_script = (string) ($_POST['pfb_eh_cur_script'] ?? '');
-		$pfb_eh_content    = pfb_sanitize_text_area((string) ($_POST['pfb_eh_content'] ?? ''));
-	} elseif (isset($_POST['pfb_eh_save'])) {
-		// Save flow: edit the CONTENT of an EXISTING, already-vetted script only --
-		// this never creates a new file. pfb_hook_script_valid() is the same allow-list
-		// gate the Hooks tab's save handler and the runner itself use, so a stale pick
-		// or a crafted POST can never write outside a file the picker already offers.
-		$post_when    = (string) ($_POST['pfb_eh_cur_when'] ?? '');
-		$post_script  = (string) ($_POST['pfb_eh_cur_script'] ?? '');
-		// issue #1734: shared persist-boundary sanitizer (#1723), run at INGESTION.
-		// Its leading CRLF/CR -> LF fold is load-bearing: HTML5 makes the browser submit
-		// a <textarea> as CRLF, and a saved "#!/bin/sh\r" shebang execs the nonexistent
-		// path "/bin/sh\r" (ENOENT) -- the hook then silently never fires again. A
-		// literal control byte must be written as an escape (\033); issue #1728.
-		$post_content = pfb_sanitize_text_area((string) ($_POST['pfb_eh_content'] ?? ''));
-
-		if (!pfb_hook_script_valid($post_script, $post_when)) {
-			$input_errors[] = gettext('Select a valid, existing hook script for this Pre/Post before saving ' .
-				'(load it from the picker above first).');
-		} else {
-			$path = pfb_hook_editor_path($post_script);
-			if ($path === NULL || !is_file($path)) {
-				$input_errors[] = gettext('The selected hook script could not be resolved on disk.');
-			} else {
-				// pfb_run_hooks() may exec
-				// this exact file as root concurrently with a save -- an in-place
-				// truncate-and-write straight to the live target leaves a window where a
-				// concurrent reader/exec sees an empty or partial script. Stage to a temp
-				// file in the SAME directory (same idiom as pfb_utf16_transcode_file() /
-				// pfb_apply_publish() in pfblockerng.inc), verify the full byte count
-				// landed, chmod, then rename() over the target -- rename() is atomic on
-				// the same filesystem, so a concurrent exec always observes either the
-				// old or the new content in full, never a partial write.
-				$pfb_eh_tmp = @tempnam(dirname($path), '.pfbeh_');
-				$pfb_eh_written = ($pfb_eh_tmp !== FALSE) ? @file_put_contents($pfb_eh_tmp, $post_content) : FALSE;
-				if (
-					$pfb_eh_tmp === FALSE ||
-					$pfb_eh_written !== strlen($post_content) ||
-					!@chmod($pfb_eh_tmp, 0700) ||
-					!@rename($pfb_eh_tmp, $path)
-				) {
-					if ($pfb_eh_tmp !== FALSE) {
-						@unlink($pfb_eh_tmp);
-					}
-					$input_errors[] = gettext('Failed to save the hook script file -- check that the ' .
-						'hook-script directory is writable.');
-				} else {
-					header('Location: /pfblockerng/pfblockerng_edit_hooks.php?' .
-						http_build_query(array('when' => $post_when, 'script' => $post_script, 'saved' => '1')));
-					exit;
-				}
-			}
-		}
-
-		// Re-render the sanitized content so a validation/write error doesn't lose the
-		// user's in-progress work -- it is what a retry would persist, so echoing the
-		// raw typed bytes back would misreport what Save is about to write.
-		$pfb_eh_sel_when   = $post_when;
-		$pfb_eh_sel_script = $post_script;
-		$pfb_eh_content    = $post_content;
-	}
-}
-
-// GET picker load -- reached on a plain click from the picker links below, or via the
-// PRG redirect right after a successful create/save. $_GET['script'] is NEVER treated
-// as a path: pfb_hook_script_valid() checks it against pfb_hook_scripts()'s own
-// allow-list (an exact basename match against what is actually on disk for this
-// Pre/Post) before pfb_hook_editor_path() resolves it and anything is read.
-if (!$_POST && isset($_GET['when'], $_GET['script'])) {
-	$get_when   = (string) $_GET['when'];
-	$get_script = (string) $_GET['script'];
-	if (pfb_hook_script_valid($get_script, $get_when)) {
-		$path = pfb_hook_editor_path($get_script);
-		$body = ($path !== NULL && is_file($path)) ? @file_get_contents($path) : FALSE;
-		if ($body === FALSE) {
-			$input_errors[] = gettext('Failed to read the selected hook script.');
-		} elseif (!mb_check_encoding($body, 'UTF-8')) {
-			// htmlspecialchars(ENT_SUBSTITUTE)
-			// (used by Form_Textarea::_getInput() at render) silently replaces every
-			// invalid byte with U+FFFD -- loading an invalid-UTF-8 file into this editor
-			// would corrupt it, and re-saving would persist that corruption to disk.
-			// Refuse to populate the editor for this load; leaving $pfb_eh_sel_script
-			// empty also disables the Save path (pfb_hook_script_valid('', ...) fails),
-			// so there is nothing to click that could write the corrupted view back.
-			$input_errors[] = gettext('The selected hook script file is not valid UTF-8 -- fix it on disk before ' .
-				'editing it here (loading it into this editor would corrupt invalid byte sequences on display).');
-		} else {
-			$pfb_eh_sel_when   = $get_when;
-			$pfb_eh_sel_script = $get_script;
-			$pfb_eh_content    = $body;
-		}
-	} else {
-		$input_errors[] = gettext('That script is not a valid hook file for the selected Pre/Post.');
-	}
+$pfb_eh_state = pfb_edit_hooks_controller(
+	isAllowedPage('diag_command.php'),
+	static fn (): array => $_POST,
+	static fn (): array => $_GET
+);
+$input_errors = $pfb_eh_state['errors'];
+$pfb_eh_sel_when = $pfb_eh_state['sel_when'];
+$pfb_eh_sel_script = $pfb_eh_state['sel_script'];
+$pfb_eh_content = $pfb_eh_state['content'];
+$pfb_eh_new_core_val = $pfb_eh_state['new_core'];
+$pfb_eh_new_lang_val = $pfb_eh_state['new_lang'];
+$pfb_eh_new_when_echo = $pfb_eh_state['new_when'];
+if ($pfb_eh_state['redirect'] !== NULL) {
+	header('Location: ' . $pfb_eh_state['redirect']);
+	exit;
 }
 
 // issue #1669: the CM6 editor mode -- follows the loaded script's own
@@ -306,8 +125,8 @@ include_once('head.inc');
 if ($input_errors) {
 	print_input_errors($input_errors);
 }
-if (!$_POST && isset($_GET['saved'])) {
-	print_info_box(gettext('Hook script saved.'), 'success');
+if ($pfb_eh_state['notice'] !== NULL) {
+	print_info_box($pfb_eh_state['notice'], 'success');
 }
 // issue #1871: a delete removes the row it acted on, so without this the page comes
 // back with the script simply absent and no statement that anything happened -- the
@@ -321,10 +140,6 @@ if (!$_POST && isset($_GET['saved'])) {
 // page, which belongs to pfb_hook_editor_compose_filename() alone (pinned by
 // EditHooksPageWiringTest). The row is already gone from the table above, so a fixed
 // message carries the confirmation without carrying attacker-controlled text.
-if (!$_POST && isset($_GET['deleted']) && $_GET['deleted'] !== '') {
-	print_info_box(gettext('Hook script deleted.'), 'success');
-}
-
 // Define default Alerts Tab href link (Top row)
 $get_req = pfb_alerts_default_page();
 
@@ -345,10 +160,7 @@ display_top_tabs($tab_array, TRUE);
 // re-declares it in full with its OWN tab marked active (pfblockerng_update.php,
 // pfblockerng_hooks.php, and this page); see EditHooksPageWiringTest for the coverage
 // pin across all three.
-$tab_array_sub	= array();
-$tab_array_sub[]	= array(gettext('Run'),		FALSE,	'/pfblockerng/pfblockerng_update.php');
-$tab_array_sub[]	= array(gettext('Hooks'),	FALSE,	'/pfblockerng/pfblockerng_hooks.php');
-$tab_array_sub[]	= array(gettext('Edit Hooks'),	TRUE,	'/pfblockerng/pfblockerng_edit_hooks.php');
+$tab_array_sub = pfb_edit_hooks_tabs('edit');
 display_top_tabs($tab_array_sub, TRUE);
 pfb_print_pending_changes_box();
 
@@ -359,12 +171,11 @@ pfb_print_pending_changes_box();
 // page deliberately is not (see the top-of-file comment), so that generic mechanism
 // never fires here and would give a false sense of coverage. This explicit callout is
 // the load-bearing equivalent, not a decoration.
+$pfb_eh_warning = pfb_edit_hooks_warning();
 print_callout(
-	gettext('The capabilities offered here can be dangerous. No support is available. Scripts you ' .
-		'create or edit on this page run as ROOT during every pfBlockerNG update pass -- the same ' .
-		'trust class as pfSense Diagnostics > Command Prompt / Edit File. Use them at your own risk!'),
-	'danger',
-	gettext('Advanced Users Only')
+	gettext($pfb_eh_warning['message']),
+	$pfb_eh_warning['style'],
+	gettext($pfb_eh_warning['title'])
 );
 
 $form = new Form(FALSE);
@@ -465,7 +276,7 @@ $group->add(new Form_Input(
 	// RAW value: Form_Input::_getInput() already HTML-escapes it at render
 	// -- escaping it again at the page
 	// level would double-escape it.
-	$pfb_eh_new_core_val,
+	pfb_edit_hooks_form_value($pfb_eh_new_core_val),
 	array('placeholder' => 'name_core')
 ))->setHelp('Name (letters, digits, underscore only)')->setWidth(4);
 $group->add(new Form_Select(
@@ -481,7 +292,7 @@ $section->add($group);
 // natively -- exactly what isset($_POST['pfb_eh_create']) above keys on -- so no
 // click-handler JS is needed to make this submit as the create action.
 $pfb_eh_create_btn = new Form_Button(
-	'pfb_eh_create',
+	pfb_edit_hooks_submit_field('create'),
 	gettext('Create'),
 	NULL,
 	'fa-solid fa-plus'
@@ -508,8 +319,8 @@ $section->addInput(new Form_StaticText('Now editing', $pfb_eh_loaded_label));
 // RAW values: Form_Element/Form_Input already HTML-escape every attribute at
 // render -- escaping them again at the
 // page level would double-escape them.
-$form->addGlobal(new Form_Input('pfb_eh_cur_when', 'pfb_eh_cur_when', 'hidden', $pfb_eh_sel_when));
-$form->addGlobal(new Form_Input('pfb_eh_cur_script', 'pfb_eh_cur_script', 'hidden', $pfb_eh_sel_script));
+$form->addGlobal(new Form_Input('pfb_eh_cur_when', 'pfb_eh_cur_when', 'hidden', pfb_edit_hooks_form_value($pfb_eh_sel_when)));
+$form->addGlobal(new Form_Input('pfb_eh_cur_script', 'pfb_eh_cur_script', 'hidden', pfb_edit_hooks_form_value($pfb_eh_sel_script)));
 
 $pfb_eh_textarea = new Form_Textarea(
 	'pfb_eh_content',
@@ -522,7 +333,7 @@ $pfb_eh_textarea = new Form_Textarea(
 	// RELENG_2_7_2), so escaping it again here would double-escape it: the browser
 	// decodes only ONE layer, leaving mangled entities (e.g. "&quot;") in what the
 	// user sees and re-saves.
-	$pfb_eh_content
+	pfb_edit_hooks_form_value($pfb_eh_content)
 );
 $pfb_eh_textarea->setAttribute('id', 'pfb_hook_editor_content');
 $pfb_eh_textarea->removeClass('form-control')
@@ -540,7 +351,7 @@ $section->addInput($pfb_eh_textarea);
 // Named pfb_eh_save directly -- same native-submit reasoning as the Create button
 // above.
 $pfb_eh_save_btn = new Form_Button(
-	'pfb_eh_save',
+	pfb_edit_hooks_submit_field('save'),
 	gettext('Save'),
 	NULL,
 	'fa-solid fa-floppy-disk'
@@ -553,10 +364,8 @@ $form->add($section);
 
 print($form);
 ?>
-<?php if ($pfb_syntaxhl_on): ?>
-<!-- issue #1669: live syntax highlighting for the pfb_eh_content field -->
-<script src="vendor/codemirror/cm-hooks.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-hooks.min.js')?>"></script>
-<?php endif; ?>
+<?php $pfb_hooks_editor = pfb_hooks_editor_render($pfb_syntaxhl_on, $pfb_eh_lang); ?>
+<?=$pfb_hooks_editor['asset']?>
 <script type="text/javascript">
 //<![CDATA[
 // issue #1871: deleting a hook script is irreversible from the UI (the file is
@@ -575,21 +384,7 @@ function pfb_eh_delete_hook(when, script) {
 }
 
 events.push(function() {
-<?php if ($pfb_syntaxhl_on): ?>
-	// issue #1669 / #1732 step 2: progressively enhance pfb_eh_content into a
-	// CodeMirror 6 live-highlight editor (python or shell mode, per $pfb_eh_lang)
-	// with advisory server lint. window.pfbHooksCM is the global the vendored
-	// bundle exposes (IIFE --global-name=pfbHooksCM); fromTextarea() hides the
-	// textarea, mounts the editor before it, keeps name/value synced so the save
-	// handler's $_POST read is unaffected, and (via opts.lintUrl) wires an async
-	// POST to pfblockerng_lint.php.
-	var pfbHookEditorEl = document.getElementById('pfb_hook_editor_content');
-	if (pfbHookEditorEl && window.pfbHooksCM) {
-		window.pfbHooksCM.fromTextarea(pfbHookEditorEl, '<?=$pfb_eh_lang?>', {
-			lintUrl: '/pfblockerng/pfblockerng_lint.php'
-		});
-	}
-<?php endif; ?>
+<?=$pfb_hooks_editor['mount']?>
 });
 //]]>
 </script>

@@ -63,7 +63,8 @@ final class ToggleMirrorComparisonGuardTest extends TestCase
 			if (!$file->isFile() || !preg_match('/\.(php|inc)$/', $file->getPathname())) {
 				continue;
 			}
-			foreach (explode("\n", (string) file_get_contents($file->getPathname())) as $n => $line) {
+			// Whole-tree static type rule: comments are not executable input.
+			foreach (explode("\n", php_strip_whitespace($file->getPathname())) as $n => $line) {
 				// Adapter feeds are fine: the raw section value is compared/coalesced
 				// BEFORE pfb_cfg_toggle_read() types it.
 				if (str_contains($line, 'pfb_cfg_toggle_read(')) {
@@ -113,7 +114,7 @@ final class ToggleMirrorComparisonGuardTest extends TestCase
 			if (!$file->isFile() || !preg_match('/\.(php|inc)$/', $file->getPathname())) {
 				continue;
 			}
-			foreach (explode("\n", (string) file_get_contents($file->getPathname())) as $n => $line) {
+			foreach (explode("\n", php_strip_whitespace($file->getPathname())) as $n => $line) {
 				foreach ($sinks as $kind => $rx) {
 					if (preg_match($rx, $line)) {
 						$offences[] = substr($file->getPathname(), strlen($root) + 1) . ':' . ($n + 1)

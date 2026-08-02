@@ -380,14 +380,7 @@ if (is_dir("{$indexdir}")) {
 	}
 }
 $options_script_pre		= array_merge(array('' => 'None'), $options_script_pre);
-$options_script_pre_cnt		= count($options_script_pre) ?: '1';
-
-// issue #1926: the DNSBLIP alias is synthesized from addresses extracted out of
-// domain feeds -- a pre-script that removes IP/ABP-shaped lines silently shrinks it.
-$script_dnsbl_note = ($list_prefix == 'dnsbl') ? "<br /><span class=\"text-danger\">Note:</span>&nbsp;"
-	. "A DNSBL pre-process script must not remove IP-shaped or ABP-shaped lines: the "
-	. "DNSBLIP alias is synthesized from addresses extracted out of domain feeds, and "
-	. "removed lines silently shrink it." : '';
+$script_pre_settings = pfb_category_script_pre_render($list_prefix, $options_script_pre);
 
 $options_script_post		= array_merge(array('' => 'None'), $options_script_post);
 $options_script_post_cnt	= count($options_script_post) ?: '1';
@@ -1675,13 +1668,9 @@ $section->addInput(new Form_Select(
 	'Pre-process Script',
 	$pconfig['script_pre'],
 	$options_script_pre
-))->sethelp("Pre-processing Shell script, run after download and charset normalization: "
-	. "it receives a staged copy of the normalized feed text (UTF-8, control characters stripped, "
-	. "lines right-trimmed) and rewrites that copy in place.<br />"
-	. "Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_pre_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_pre_SCRIPT NAME.sh|py</strong>"
-	. $script_dnsbl_note)
+))->sethelp($script_pre_settings['help'])
   ->setAttribute('style', 'width: auto')
-  ->setAttribute('size', $options_script_pre_cnt);
+  ->setAttribute('size', $script_pre_settings['size']);
 
 $section->addInput(new Form_Select(
 	'script_post',
@@ -1774,10 +1763,8 @@ else {
 }
 
 ?>
-<?php if ($pfb_syntaxhl_on): ?>
-<!-- issue #1875 step 2b: live syntax highlighting for the custom-list field -->
-<script src="vendor/codemirror/cm-regex.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-regex.min.js')?>"></script>
-<?php endif; ?>
+<?php $pfb_category_editor = pfb_category_editor_render($pfb_syntaxhl_on, (string) ($rowdata[$rowid]['sort'] ?? '')); ?>
+<?=$pfb_category_editor['asset']?>
 <script type="text/javascript">
 //<![CDATA[
 
@@ -1809,11 +1796,7 @@ else if (gtype == 'dnsbl') {
 // skips absent ids. Own events.push, OUTSIDE the no-sort conditional below -- the
 // 'custom' textarea renders in every sort mode and for new groups (no rowid).
 events.push(function() {
-<?php if ($pfb_syntaxhl_on): ?>
-	if (window.pfbCM) {
-		window.pfbCM.mountLists(['custom']);
-	}
-<?php endif; ?>
+<?=$pfb_category_editor['mount']?>
 });
 
 <?php if (($rowdata[$rowid]['sort'] ?? '') == 'no-sort') { ?>
@@ -1853,5 +1836,5 @@ events.push(function() {
 
 //]]
 </script>
-<script src="pfBlockerNG.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/pfBlockerNG.js')?>" type="text/javascript"></script>
+<?=pfb_category_edit_js_asset_render()?>
 <?php include('foot.inc');?>

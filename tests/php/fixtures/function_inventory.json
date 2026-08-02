@@ -494,6 +494,80 @@
             }
         ]
     },
+    "pfb_apply_geoip_orig_pipeline": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "source",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "orig",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "mirror",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "consumer",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_apply_gunzip_orig_pipeline": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "source",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "orig",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "consumer",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_apply_trailing_newline_ok": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_archive_member_names": {
         "returnsRef": false,
         "returnType": "?array",
@@ -709,6 +783,92 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_category_edit_js_asset_render": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/www/pfblockerng/pfBlockerNG.js'"
+            }
+        ]
+    },
+    "pfb_category_editor_render": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "sort",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_category_js_asset_render": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/www/pfblockerng/pfBlockerNG.js'"
+            }
+        ]
+    },
+    "pfb_category_script_pre_render": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "listPrefix",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "options",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_category_script_pre_settings": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "listPrefix",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "options",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
                 "default": null
             }
         ]
@@ -1219,6 +1379,91 @@
             }
         ]
     },
+    "pfb_dnsbl_alias_count_norm_skip": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "current",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_alias_count_rebuild": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "current",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_alias_count_script_failure": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "current",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_alias_count_verbatim": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "current",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_anchor_layout_render": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_dnsbl_apply_ledger_update": {
         "returnsRef": false,
         "returnType": "bool",
@@ -1432,6 +1677,26 @@
             }
         ]
     },
+    "pfb_dnsbl_custom_row": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "aliasname",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "custom",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_download_ledger_update": {
         "returnsRef": false,
         "returnType": "void",
@@ -1462,6 +1727,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_editor_render": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
                 "default": null
             }
         ]
@@ -1587,6 +1865,32 @@
             }
         ]
     },
+    "pfb_dnsbl_ipv4_count_decision": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_ipv6_count_decision": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_is_abp_rule_line": {
         "returnsRef": false,
         "returnType": "bool",
@@ -1610,6 +1914,19 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_js_asset_render": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/www/pfblockerng/pfBlockerNG.js'"
             }
         ]
     },
@@ -1849,6 +2166,13 @@
                 "variadic": false,
                 "type": "float",
                 "default": "5.0"
+            },
+            {
+                "name": "now",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },
@@ -1864,6 +2188,16 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dnsbl_regex_help_render": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_dnsbl_regex_help_text": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
     },
     "pfb_dnsbl_regex_validation_errors": {
         "returnsRef": false,
@@ -1903,6 +2237,46 @@
                 "variadic": false,
                 "type": "?string",
                 "default": "NULL"
+            }
+        ]
+    },
+    "pfb_dnsbl_regex_validation_required": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "interpreterUsable",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "featureToggle",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_regex_validation_required_page": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "interpreterUsable",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "featureToggle",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
             }
         ]
     },
@@ -2042,6 +2416,163 @@
             }
         ]
     },
+    "pfb_dnsbl_script_consume_staged": {
+        "returnsRef": false,
+        "returnType": "mixed",
+        "params": [
+            {
+                "name": "parse_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "staged_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            },
+            {
+                "name": "consumer",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "known_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_dnsbl_script_failure_close": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "item",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_script_failure_continue": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "item",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "message",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "update_marker",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "staging_current_generation",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "staged_txt",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "manifest",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_dnsbl_script_reuse_decision": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "verbatim_reuse_ok",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "script_pre",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "script_post",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "orig_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_scrub_line": {
         "returnsRef": false,
         "returnType": "string",
@@ -2148,6 +2679,32 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_toggle_enabled": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "stored",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_toggle_stored": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "posted",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
                 "default": null
             }
         ]
@@ -2481,6 +3038,19 @@
             }
         ]
     },
+    "pfb_download_extraction_succeeded": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "retval",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
     "pfb_download_failure": {
         "returnsRef": false,
         "returnType": null,
@@ -2529,6 +3099,54 @@
             }
         ]
     },
+    "pfb_download_finalize_text": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "orig_download",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "hash_base",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "hash_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "hash_write",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "transcode",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "newline",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_download_http_headers": {
         "returnsRef": false,
         "returnType": "array",
@@ -2546,6 +3164,92 @@
                 "variadic": false,
                 "type": "string",
                 "default": "''"
+            }
+        ]
+    },
+    "pfb_download_initial_retval": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": []
+    },
+    "pfb_download_ledger_close_if_clean": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "facility",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "alias",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "failed",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_download_ledger_failure": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "facility",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "alias",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "header",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_download_retval_success": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "retval",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": null
             }
         ]
     },
@@ -2862,10 +3566,190 @@
             }
         ]
     },
+    "pfb_edit_hooks_access": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "allowed",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_edit_hooks_form_value": {
+        "returnsRef": false,
+        "returnType": "mixed",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_edit_hooks_submit_field": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "action",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_edit_hooks_tabs": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "active",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_edit_hooks_warning": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_editor_asset": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "asset",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_editor_enabled": {
         "returnsRef": false,
         "returnType": "bool",
         "params": []
+    },
+    "pfb_editor_mount_hook": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "language",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_editor_mount_lists": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "fields",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_editor_mount_lists_for_sort": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "fields",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "sort",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_editor_mount_regex": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_editor_toggle_help": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_editor_toggle_label": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_editor_toggle_stored_value": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "posted",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
     },
     "pfb_emit_entry_reject_stats": {
         "returnsRef": false,
@@ -3619,6 +4503,149 @@
             }
         ]
     },
+    "pfb_general_editor_render": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_general_toggle_help": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_general_toggle_label": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_general_toggle_stored_value": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "posted",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_geoip_append_iso_data": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "cat",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "iso_file",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "pfb_file",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "build_tmp",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "iso",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "type",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "logger",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_geoip_doc_link": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
+    "pfb_geoip_js_asset_render": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/www/pfblockerng/pfBlockerNG.js'"
+            }
+        ]
+    },
+    "pfb_geoip_networks_header": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "iso_file",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "country",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "geoip_id",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "iso",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_get_gateways": {
         "returnsRef": false,
         "returnType": null,
@@ -3940,6 +4967,26 @@
             }
         ]
     },
+    "pfb_hooks_editor_render": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "language",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_idn_to_ascii_wildcard": {
         "returnsRef": false,
         "returnType": "string",
@@ -3952,6 +4999,126 @@
                 "default": null
             }
         ]
+    },
+    "pfb_install_probe_cleanup": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "purge",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_install_registry_writeback": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "pass",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "write_section",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "flush",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_install_settings_family_capture_restore": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "current",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "save",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "version",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "from_version",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "replace",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_install_settings_family_finalize": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "installed_family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "migrations",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "record",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_ip_anchor_layout_render": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
     },
     "pfb_ip_apply_retry": {
         "returnsRef": false,
@@ -4016,6 +5183,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_ip_editor_render": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
                 "default": null
             }
         ]
@@ -4116,6 +5296,19 @@
                 "variadic": false,
                 "type": null,
                 "default": null
+            }
+        ]
+    },
+    "pfb_ip_js_asset_render": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/www/pfblockerng/pfBlockerNG.js'"
             }
         ]
     },
@@ -4228,6 +5421,54 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_ip_parse_line_replay": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "raw_line",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "config",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "line_number",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "ip_data",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ip_suppressed",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "parse_fail",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
                 "default": null
             }
         ]
@@ -4366,6 +5607,40 @@
             }
         ]
     },
+    "pfb_ip_recompute_mark_ran": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "runner",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "ran_v4",
+                "byRef": true,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "ran_v6",
+                "byRef": true,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_ip_recompute_matrix": {
         "returnsRef": false,
         "returnType": "array",
@@ -4460,6 +5735,87 @@
             }
         ]
     },
+    "pfb_ip_recompute_order_families": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "dup_on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_ip_recompute_order_scope": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "save",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "enabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "dup_on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "drep_on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "prep_on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_ip_recompute_ran_for_vtype": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "vtype",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ran_v4",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "ran_v6",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_ip_recompute_seed_snapshot": {
         "returnsRef": false,
         "returnType": "string",
@@ -4541,6 +5897,38 @@
             }
         ]
     },
+    "pfb_ip_regex_config": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
+    "pfb_ip_regex_matches": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "line",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "config",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_ip_render_attribution": {
         "returnsRef": false,
         "returnType": "array",
@@ -4604,6 +5992,204 @@
             }
         ]
     },
+    "pfb_ip_script_consume_staged": {
+        "returnsRef": false,
+        "returnType": "mixed",
+        "params": [
+            {
+                "name": "parse_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "staged_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            },
+            {
+                "name": "consumer",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "known_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_ip_script_failure_close": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "item",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_ip_script_failure_continue": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "item",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "message",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "update_marker",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "staging_current_generation",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "staged_txt",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "manifest",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_ip_script_probe_staged": {
+        "returnsRef": false,
+        "returnType": "mixed",
+        "params": [
+            {
+                "name": "custom",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "parse_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "staged_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            },
+            {
+                "name": "probe",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "known_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_ip_script_reuse_decision": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "verbatim_reuse_ok",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "script_pre",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "script_post",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "orig_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_ip_suppress_body_active": {
         "returnsRef": false,
         "returnType": "bool",
@@ -4652,6 +6238,61 @@
             }
         ]
     },
+    "pfb_ip_suppress_body_for_vtype": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "supp_on",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "vtype",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "supp_update",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "adv",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "feed_changed",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "ran_v4",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "ran_v6",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_ip_suppressed": {
         "returnsRef": false,
         "returnType": "bool",
@@ -4688,6 +6329,32 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_ip_suppression_enabled": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "stored",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_ip_suppression_stored": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "posted",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
                 "default": null
             }
         ]
@@ -4767,6 +6434,33 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            }
+        ]
+    },
+    "pfb_js_asset": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "src",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "attributes",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "''"
             }
         ]
     },
@@ -4971,6 +6665,40 @@
             }
         ]
     },
+    "pfb_lint_response": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "server",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "post",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "allowed",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "diagnostics",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            }
+        ]
+    },
     "pfb_lint_sh_diagnostics": {
         "returnsRef": false,
         "returnType": "array",
@@ -5053,6 +6781,40 @@
             }
         ]
     },
+    "pfb_list_script_consume_staged": {
+        "returnsRef": false,
+        "returnType": "mixed",
+        "params": [
+            {
+                "name": "parse_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "staged_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            },
+            {
+                "name": "consumer",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "known_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_list_script_exec": {
         "returnsRef": false,
         "returnType": "int",
@@ -5101,6 +6863,109 @@
             }
         ]
     },
+    "pfb_list_script_failure_close": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "facility",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "item",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_list_script_failure_continue": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "facility",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "item",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "message",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "update_marker",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "staging_current_generation",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "staged_txt",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "manifest",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_list_script_failure_record": {
         "returnsRef": false,
         "returnType": "void",
@@ -5139,6 +7004,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "state",
+                "byRef": true,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },
@@ -5165,6 +7037,40 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "bool",
+                "default": null
+            }
+        ]
+    },
+    "pfb_list_script_reuse_decision": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "verbatim_reuse_ok",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "script_pre",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "script_post",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "orig_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
                 "default": null
             }
         ]
@@ -5518,6 +7424,11 @@
                 "default": null
             }
         ]
+    },
+    "pfb_log_anchor_layout_render": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
     },
     "pfb_log_event": {
         "returnsRef": false,
@@ -6223,6 +8134,19 @@
             }
         ]
     },
+    "pfb_page_anchor_layout": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "page",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_parse_fail_log": {
         "returnsRef": false,
         "returnType": null,
@@ -6875,6 +8799,13 @@
                 "variadic": false,
                 "type": null,
                 "default": "false"
+            },
+            {
+                "name": "apply_ledger",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },
@@ -8278,6 +10209,26 @@
         "returnType": "array",
         "params": []
     },
+    "pfb_top1m_apply_reprocess_if_ready": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "reprocess",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            }
+        ]
+    },
     "pfb_top1m_auth_headers": {
         "returnsRef": false,
         "returnType": "array",
@@ -8527,6 +10478,19 @@
                 "variadic": false,
                 "type": "array",
                 "default": "array (\n)"
+            }
+        ]
+    },
+    "pfb_top1m_teardown_call": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "teardown",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },
@@ -9011,6 +10975,26 @@
             }
         ]
     },
+    "pfb_unbound_python_ini": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "mode",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "now",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_unbound_python_sources": {
         "returnsRef": false,
         "returnType": null,
@@ -9328,6 +11312,26 @@
             }
         ]
     },
+    "pfb_update_tail_response": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "query",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "tail",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            }
+        ]
+    },
     "pfb_update_unbound": {
         "returnsRef": false,
         "returnType": null,
@@ -9359,6 +11363,26 @@
                 "variadic": false,
                 "type": "array",
                 "default": "array (\n)"
+            }
+        ]
+    },
+    "pfb_update_unbound_feed_count": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "counter",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },
@@ -9820,6 +11844,73 @@
                 "variadic": false,
                 "type": null,
                 "default": null
+            }
+        ]
+    },
+    "pfb_widget_anchor_layout_render": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "page",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_widget_post_guard": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "post",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "server",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "field",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_widget_table_call": {
+        "returnsRef": false,
+        "returnType": "mixed",
+        "params": [
+            {
+                "name": "table",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "mode",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "''"
+            },
+            {
+                "name": "render",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },

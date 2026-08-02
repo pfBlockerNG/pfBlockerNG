@@ -4,50 +4,61 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/**
- * issue #1263: pfb_update_unbound()'s DNSBL feed-count site must call
- * pfb_dnsbl_feed_count($pfb['dnsdir']) -- the old `/bin/cat *.txt | grep -c ^`
- * exec() shell-out is gone entirely. pfb_update_unbound() restarts real
- * services, so this is a source-inspection pin (same technique as
- * DownloadExtractionExitCodeTest); pfb_dnsbl_feed_count()'s own behaviour is
- * proven directly in DnsblFeedCountTest.
- */
 final class DnsblFeedCountWiringTest extends TestCase
 {
-	private static string $body;
+	private string $dir;
 
-	public static function setUpBeforeClass(): void
+	protected function setUp(): void
 	{
-		$source = file_get_contents(
+		$this->dir = sys_get_temp_dir() . '/pfb_dnsbl_count_wiring_' . bin2hex(random_bytes(8));
+		$this->assertTrue(mkdir($this->dir, 0700, TRUE));
+	}
+
+	protected function tearDown(): void
+	{
+		foreach (glob($this->dir . '/*') ?: [] as $file) {
+			@unlink($file);
+		}
+		@rmdir($this->dir);
+	}
+
+	public function testUpdateCountDelegatesToTheConfiguredCounter(): void
+	{
+		$calls = [];
+		$count = pfb_update_unbound_feed_count(
+			$this->dir,
+			static function (string $dir) use (&$calls): int {
+				$calls[] = $dir;
+				return 17;
+			}
+		);
+
+		$this->assertSame(17, $count);
+		$this->assertSame([$this->dir], $calls);
+	}
+
+	public function testDefaultCounterCountsEachFeedWithoutWeldingFiles(): void
+	{
+		file_put_contents($this->dir . '/first.txt', "one\ntwo");
+		file_put_contents($this->dir . '/second.txt', "three\n");
+
+		$this->assertSame(3, pfb_update_unbound_feed_count($this->dir));
+	}
+
+	/**
+	 * pfb_update_unbound() restarts live DNSBL/Unbound services, so PHPUnit
+	 * cannot execute its caller. This comment-free pin is only the outer
+	 * dispatch; the injected counter above proves the observable call effect.
+	 */
+	public function testLiveUpdateDispatchesThroughTheCountSeam(): void
+	{
+		$code = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc'
 		);
-		if ($source === false) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng.inc');
-		}
-
-		$start = strpos($source, 'function pfb_update_unbound(');
-		if ($start === false) {
-			throw new RuntimeException('test bootstrap: function pfb_update_unbound( not found');
-		}
-
-		if (!preg_match('/^function\s+\w+/m', $source, $m, PREG_OFFSET_CAPTURE, $start + 20)) {
-			throw new RuntimeException('test bootstrap: end-of-function boundary not found');
-		}
-		$end = $m[0][1];
-
-		self::$body = substr($source, $start, $end - $start);
-	}
-
-	public function testCallsPfbDnsblFeedCountOnTheDnsdir(): void
-	{
-		$this->assertStringContainsString("pfb_dnsbl_feed_count(\$pfb['dnsdir'])", self::$body,
-			'the per-file sum must replace the exec()d cat|grep -c ^ shell-out');
-	}
-
-	public function testNoLongerShellsOutToCatGrepForTheDnsblCount(): void
-	{
-		$this->assertDoesNotMatchRegularExpression('/exec\(\s*"\/bin\/cat/', self::$body,
-			'the cat|grep -c ^ exec() shell-out must be gone -- an unterminated feed file welds into the next '
-			. 'one and undercounts through it');
+		$this->assertIsString($code);
+		$this->assertStringContainsString(
+			'$dnsbl_cnt = pfb_update_unbound_feed_count($pfb[\'dnsdir\']);',
+			$code
+		);
 	}
 }

@@ -44,6 +44,7 @@ final class PfbWidgetOracleTest extends TestCase
 	private const ICON_GREEN  = 'fa-solid fa-check-circle text-success';
 	private const ICON_YELLOW = 'fa-solid fa-exclamation-circle text-warning';
 	private const ICON_RED    = 'fa-solid fa-times-circle text-danger';
+	private static string $iconRegion;
 
 	public static function setUpBeforeClass(): void
 	{
@@ -55,18 +56,14 @@ final class PfbWidgetOracleTest extends TestCase
 		}
 
 		if (!function_exists('pfb_widget_oracle_status')) {
-			// Extract the icon-decision block VERBATIM (the two "Status indicator"
-			// sections), up to (not including) the next section's comment, which
-			// serves only as a unique end-anchor via lookahead.
-			if (!preg_match(
-				'/\/\/ Status indicator if pfBlockerNG is enabled\/disabled.*?\n\t\}(?=\n\n\t\/\/ Collect folder\/file counts)/s',
-				$src,
-				$m
-			)) {
+			$start = strpos($src, "\tif (\$pfb['enable'] === PfbToggle::On) {");
+			$end = strpos($src, "\t\$stats = array();", $start === false ? 0 : $start);
+			if ($start === false || $end === false || $end <= $start) {
 				throw new RuntimeException('test bootstrap: icon-status block not found in widget source');
 			}
+			self::$iconRegion = substr($src, $start, $end - $start);
 			eval(
-				'function pfb_widget_oracle_status(array $pfb): array { ' . $m[0]
+				'function pfb_widget_oracle_status(array $pfb): array { ' . self::$iconRegion
 				. ' return [$pfb_status, $pfb_msg, $dnsbl_status, $dnsbl_msg]; }'
 			);
 		}
@@ -84,6 +81,12 @@ final class PfbWidgetOracleTest extends TestCase
 			}
 			eval($m[0]);
 		}
+	}
+
+	public function testIconExtractionUsesExecutableBoundaryNotProductionComment(): void
+	{
+		$this->assertStringStartsWith("\tif (\$pfb['enable'] === PfbToggle::On)", self::$iconRegion);
+		$this->assertStringNotContainsString('Status indicator if pfBlockerNG is enabled/disabled', self::$iconRegion);
 	}
 
 	private string $dir;

@@ -19,6 +19,7 @@ use PHPUnit\Framework\TestCase;
 final class DnsblWildcardRowValidationTest extends TestCase
 {
 	private static string $applySrc;
+	private static string $applyWhitelistRegion;
 
 	public static function setUpBeforeClass(): void
 	{
@@ -28,6 +29,12 @@ final class DnsblWildcardRowValidationTest extends TestCase
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
 		}
 		self::$applySrc = $src;
+		$start = strpos(self::$applySrc, 'pfb_logger("\\n Loading DNSBL Whitelist...", 1);');
+		$end = strpos(self::$applySrc, '$pfb_whitelist .= ",localhost.localdomain,,\\n";', $start === false ? 0 : $start);
+		if ($start === false || $end === false || $end <= $start) {
+			throw new RuntimeException('test bootstrap: apply-side whitelist region not found');
+		}
+		self::$applyWhitelistRegion = substr(self::$applySrc, $start, $end - $start);
 	}
 
 	protected function setUp(): void
@@ -129,20 +136,18 @@ final class DnsblWildcardRowValidationTest extends TestCase
 	 */
 	private function collectApplyWhitelist(): string
 	{
-		if (!preg_match(
-			'/\t+\/\/ Collect Whitelist, create string, and save to file.*?\n(?=\t+\/\/  Added due to SWC Feed)/s',
-			self::$applySrc,
-			$m
-		)) {
-			throw new RuntimeException('test bootstrap: apply-side whitelist region not found');
-		}
-
 		pfb_global();
 		$pfb = $GLOBALS['pfb'];
 		$pfb_whitelist = '';
-		eval($m[0]);
+		eval(self::$applyWhitelistRegion);
 
 		return $pfb_whitelist;
+	}
+
+	public function testApplyWhitelistExtractionUsesExecutableBoundaryNotProductionComment(): void
+	{
+		$this->assertStringStartsWith('pfb_logger("\\n Loading DNSBL Whitelist...', self::$applyWhitelistRegion);
+		$this->assertStringNotContainsString('Collect Whitelist', self::$applyWhitelistRegion);
 	}
 
 	public function testApplyWhitelistDropsDoubleDotRow(): void

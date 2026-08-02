@@ -513,7 +513,7 @@ print($form);
 ?>
 <!-- issue #1881: the auto-scroll target lives OUTSIDE the form -- as a Form_StaticText
      row it was an empty .form-group whose theme border drew a stray separator. -->
-<div id="endofpage"></div>
+<?=pfb_log_anchor_layout_render()['endofpage']?>
 
 <script type="text/javascript">	
 //<![CDATA[

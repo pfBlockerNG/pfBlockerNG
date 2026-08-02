@@ -712,5 +712,5 @@ events.push(function() {
 
 //]]>
 </script>
-<script src="pfBlockerNG.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/pfBlockerNG.js')?>" type="text/javascript"></script>
+<?=pfb_category_js_asset_render()?>
 <?php include('foot.inc');?>

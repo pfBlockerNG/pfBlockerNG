@@ -142,6 +142,14 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 		$this->assertSame('HTTP 500', $open[0]['message'], 'message must be the LATEST refresh');
 	}
 
+	public function testUnknownLedgerFacilityIsIgnored(): void
+	{
+		pfb_download_ledger_failure('other', 'item', 'header', $this->dir);
+		pfb_download_ledger_close_if_clean('other', 'item', FALSE, $this->dir);
+		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_status.json',
+			'an unsupported facility must not write a ledger entry');
+	}
+
 	public function testDownloadCallSitesKeyOnTheAliasNotTheHeader(): void
 	{
 		// Regression pin: pfb_ip_download_ledger_update() was called with $header (the
@@ -154,16 +162,16 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 		// rather than a functional call: narrow, but it catches a regression of this
 		// specific defect, which the function-level unit tests above cannot (they call
 		// the helper directly with an already-correct item name).
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		$this->assertNotFalse($source, 'pfblockerng_apply.inc must be readable');
+		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertNotSame('', $source, 'pfblockerng_apply.inc must be readable');
 
 		$this->assertMatchesRegularExpression(
-			'/pfb_ip_download_ledger_update\(FALSE, \$alias,/',
+			'/pfb_download_ledger_failure\(\x27ip\x27, \$alias,/',
 			$source,
 			'the download-fail call must key on $alias, not $header, or the widget deep link breaks'
 		);
 		$this->assertMatchesRegularExpression(
-			'/pfb_ip_download_ledger_update\(TRUE, \$alias,/',
+			'/pfb_download_ledger_close_if_clean\(\x27ip\x27, \$alias, \$pfb_dl_failed,/',
 			$source,
 			'the paired success-close call must key on the SAME $alias for symmetry'
 		);
@@ -178,19 +186,13 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 	 */
 	public function testIpDownloadCloseFiresOncePerAliasPassNotPerRow(): void
 	{
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		$this->assertNotFalse($source, 'pfblockerng_apply.inc must be readable');
+		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertNotSame('', $source, 'pfblockerng_apply.inc must be readable');
 
-		$this->assertDoesNotMatchRegularExpression(
-			'/unlink_if_exists\("\{\$pfbfolder\}\/\{\$header\}\.fail"\);\s*\n\s*pfb_ip_download_ledger_update\(TRUE,/',
-			$source,
-			'a row\'s success branch must not close the download ledger directly -- masks a sibling row\'s failure'
-		);
-		$this->assertMatchesRegularExpression(
-			'/if \(!\$pfb_dl_failed\) \{\s*\n\s*pfb_ip_download_ledger_update\(TRUE, \$alias, \'\', \$pfb\[\'dbdir\'\]\);/',
-			$source,
-			'the close call must be gated by the once-per-alias-pass $pfb_dl_failed flag'
-		);
+		$this->assertSame(1, substr_count($source, "pfb_download_ledger_close_if_clean('ip', \$alias, \$pfb_dl_failed, \$pfb['dbdir']);"),
+			'the IP loop must close its ledger exactly once after the alias pass');
+		$this->assertSame(1, substr_count($source, "pfb_ip_download_ledger_update(TRUE, \$alias,"),
+			'only the shared close helper may call the IP ledger close');
 	}
 
 	/**
@@ -211,12 +213,10 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 		foreach ($rowOutcomes as $i => $ok) {
 			if (!$ok) {
 				$failed = TRUE;
-				pfb_ip_download_ledger_update(FALSE, $alias, "[ {$alias} - row{$i} ] Download FAIL", $this->dir);
+				pfb_download_ledger_failure('ip', $alias, "row{$i}", $this->dir);
 			}
 		}
-		if (!$failed) {
-			pfb_ip_download_ledger_update(TRUE, $alias, '', $this->dir);
-		}
+		pfb_download_ledger_close_if_clean('ip', $alias, $failed, $this->dir);
 	}
 
 	public function testAliasPassFailThenSucceedLeavesEntryOpen(): void

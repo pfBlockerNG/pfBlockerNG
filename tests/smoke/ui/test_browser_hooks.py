@@ -1,12 +1,12 @@
-"""Tier-B browser test: the Update sub-tabs (Run | Hooks).
+"""Tier-B browser test: the Update sub-tabs (Run | Hooks | Edit Hooks).
 
 The browser half of the "Update Hooks moved under the Update tab" change: a headless
 Chromium on the live ADR-04 smoke VM opens ``pfblockerng_update.php`` and
 ``pfblockerng_hooks.php`` (reusing the Phase-1 authenticated session — the injected
 ``PHPSESSID`` cookie, no second login) and asserts, per page:
 
-* the SECOND ``display_top_tabs`` row ``[Run | Hooks]`` is present (both sub-tab
-  anchors, pointing at the update and hooks pages), and
+* the SECOND ``display_top_tabs`` row ``[Run | Hooks | Edit Hooks]`` is present (all sub-tab
+  anchors, pointing at the update, hooks, and edit-hooks pages), and
 * the CURRENT page's sub-tab is the ACTIVE one (its ``<li>`` carries pfSense's
   ``active`` class — emitted by ``display_top_tabs`` for the highlighted tab) while
   the sibling sub-tab is NOT active — so the highlight tracks the page (a real branch,
@@ -23,8 +23,8 @@ HTTP-body oracle cannot see. No ``src/`` change here.
 DOM-FRAGILITY NOTE: ``display_top_tabs`` renders each tab row as a ``<ul class="nav
 …">``; the page has TWO (the main top bar + this sub-tab row). The top bar links the
 update page (its "Update" tab) but NOT the hooks page (that tab was removed), so the
-sub-tab row is the ONLY ``<ul class="nav …">`` carrying BOTH the update-page anchor
-AND the hooks-page anchor — we locate that row first (``_subtab_nav``) and scope the
+sub-tab row is the ONLY ``<ul class="nav …">`` carrying the update, hooks, and edit-hooks
+anchors — we locate that row first (``_subtab_nav``) and scope the
 presence/active assertions to it. The load-bearing, version-tolerant handles are the
 anchor ``href`` and the ``active`` class on the highlighted ``<li>`` — not a brittle
 DOM path.
@@ -55,9 +55,10 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.ui_browser
 
-# The two pages the Update sub-tab row links (each renders the same [Run | Hooks] row).
+# The three pages the Update sub-tab row links (each renders the same row).
 UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
 HOOKS_PAGE = "/pfblockerng/pfblockerng_hooks.php"
+EDIT_HOOKS_PAGE = "/pfblockerng/pfblockerng_edit_hooks.php"
 
 # A short, explicit timeout (ms): the page renders server-side, so this is a flake
 # ceiling for the post-load DOM, not a wait knob.
@@ -88,7 +89,7 @@ def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
 
 
 def _subtab_nav(page: Page) -> Locator:
-    """The SECOND ``display_top_tabs`` row -- the ``[Run | Hooks]`` sub-tab ``<ul>``.
+    """The SECOND ``display_top_tabs`` row -- the shared sub-tab ``<ul>``.
 
     The main top bar carries an "Update" tab linking the update page but has NO hooks
     anchor (that top tab was removed by this change), so the sub-tab row is the only
@@ -97,7 +98,8 @@ def _subtab_nav(page: Page) -> Locator:
     """
     nav = page.locator("ul.nav")
     nav = nav.filter(has=page.locator(f'a[href="{UPDATE_PAGE}"]'))
-    return nav.filter(has=page.locator(f'a[href="{HOOKS_PAGE}"]'))
+    nav = nav.filter(has=page.locator(f'a[href="{HOOKS_PAGE}"]'))
+    return nav.filter(has=page.locator(f'a[href="{EDIT_HOOKS_PAGE}"]'))
 
 
 def _subtab_anchor(nav: Locator, href: str) -> Locator:
@@ -106,10 +108,11 @@ def _subtab_anchor(nav: Locator, href: str) -> Locator:
 
 
 @pytest.mark.parametrize(
-    ("path", "active_href", "other_href", "name"),
+    ("path", "active_href", "other_hrefs", "name"),
     [
-        (UPDATE_PAGE, UPDATE_PAGE, HOOKS_PAGE, "run"),
-        (HOOKS_PAGE, HOOKS_PAGE, UPDATE_PAGE, "hooks"),
+        (UPDATE_PAGE, UPDATE_PAGE, (HOOKS_PAGE, EDIT_HOOKS_PAGE), "run"),
+        (HOOKS_PAGE, HOOKS_PAGE, (UPDATE_PAGE, EDIT_HOOKS_PAGE), "hooks"),
+        (EDIT_HOOKS_PAGE, EDIT_HOOKS_PAGE, (UPDATE_PAGE, HOOKS_PAGE), "edit-hooks"),
     ],
 )
 def test_update_subtab_active_tracks_page(
@@ -118,22 +121,20 @@ def test_update_subtab_active_tracks_page(
     screenshot_dir: Path,
     path: str,
     active_href: str,
-    other_href: str,
+    other_hrefs: tuple[str, ...],
     name: str,
 ) -> None:
-    """The [Run | Hooks] sub-tab row renders and highlights the sub-tab of the open page.
+    """The shared sub-tab row renders and highlights the sub-tab of the open page.
 
-    Scenario (one parametrization per page -- BOTH sub-tabs are exercised as the active
+    Scenario (one parametrization per page -- all three sub-tabs are exercised as the active
     one, so this is full branch coverage of the active-state, not just one side):
 
-    Given the Update Run page (``pfblockerng_update.php``) OR the Hooks page
-      (``pfblockerng_hooks.php``) opened,
-    Then the second ``[Run | Hooks]`` sub-tab row is present exactly once, carrying both
-      the Run (update-page) and Hooks (hooks-page) anchors,
+    Given one of the three Update sub-tab pages opened,
+    Then the second shared sub-tab row is present exactly once, carrying all three anchors,
     And the OPEN page's own sub-tab is the ACTIVE one (its ``<li>`` carries the ``active``
       class ``display_top_tabs`` puts on the highlighted tab) while the SIBLING sub-tab is
       NOT active -- so the highlight tracks the page (a real branch: Run is active on the
-      update page and inactive on the hooks page, and vice-versa).
+      update page, hooks page, or edit-hooks page, and the other two are inactive).
     A per-page screenshot is written for the visual record.
     """
     page = browser_page
@@ -144,6 +145,7 @@ def test_update_subtab_active_tracks_page(
     expect(nav).to_have_count(1, timeout=JS_TIMEOUT_MS)
     expect(_subtab_anchor(nav, UPDATE_PAGE)).to_have_count(1, timeout=JS_TIMEOUT_MS)
     expect(_subtab_anchor(nav, HOOKS_PAGE)).to_have_count(1, timeout=JS_TIMEOUT_MS)
+    expect(_subtab_anchor(nav, EDIT_HOOKS_PAGE)).to_have_count(1, timeout=JS_TIMEOUT_MS)
 
     # The open page's sub-tab is ACTIVE; the sibling is not. pfSense's display_top_tabs
     # puts the `active` class on the highlighted tab's <li> (the anchor's parent) -- the
@@ -151,7 +153,8 @@ def test_update_subtab_active_tracks_page(
     # (also linking the update page) cannot confuse the match.
     active_li = _subtab_anchor(nav, active_href).locator("xpath=ancestor::li[1]")
     expect(active_li).to_have_class(re.compile(r"\bactive\b"), timeout=JS_TIMEOUT_MS)
-    other_li = _subtab_anchor(nav, other_href).locator("xpath=ancestor::li[1]")
-    expect(other_li).not_to_have_class(re.compile(r"\bactive\b"), timeout=JS_TIMEOUT_MS)
+    for other_href in other_hrefs:
+        other_li = _subtab_anchor(nav, other_href).locator("xpath=ancestor::li[1]")
+        expect(other_li).not_to_have_class(re.compile(r"\bactive\b"), timeout=JS_TIMEOUT_MS)
 
     _shot(page, screenshot_dir, f"update_subtab_{name}")

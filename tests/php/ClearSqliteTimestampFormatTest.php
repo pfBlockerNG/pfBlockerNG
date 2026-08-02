@@ -155,23 +155,4 @@ final class ClearSqliteTimestampFormatTest extends TestCase
 		$this->assertSame('2024-12-31 23:00:00', $displayed, 'the ISO value must display unchanged (no HTML-escapable characters)');
 	}
 
-	/**
-	 * Source tripwire: pins the exact format strings so this oracle goes red the
-	 * moment either call site's format string changes again.
-	 */
-	public function testSourceUsesYearBearingFormatAtBothCallSites(): void
-	{
-		$source = (string) file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertStringContainsString(
-			"\$lastipclear = date('Y-m-d H:i:s', time());",
-			$source,
-			"pfBlockerNG_clearsqlite()'s 'clearip' timestamp format changed -- update this oracle"
-		);
-		$this->assertStringContainsString(
-			"\$lastdnsblclear = date('Y-m-d H:i:s', time());",
-			$source,
-			"pfBlockerNG_clearsqlite()'s 'cleardnsbl' timestamp format changed -- update this oracle"
-		);
-		$this->assertStringNotContainsString("date('M j H:i:s', time());", $source, 'the OLD no-year format must be gone from BOTH call sites');
-	}
 }

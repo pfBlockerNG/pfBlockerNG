@@ -8,8 +8,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Boundary + mask guards on the production IP extraction regexes (issue #1922),
- * pinned against the real $pfb['ipv4'] / $pfb['ipv6'] / $pfb['range'] literals
- * extracted from pfblockerng_apply.inc.
+ * exercised through the production regex configuration seam.
  *
  * The defect class is silent address fabrication: a valid-looking address that
  * appears nowhere in the input is extracted and blocked (v4.1.2.3.4 -> 4.1.2.3),
@@ -34,18 +33,10 @@ final class IpRegexBoundaryGuardTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-		$src = (string) file_get_contents($path);
-
-		self::assertSame(1, preg_match("/\\\$pfb\\['ipv4'\\]\\s*=\\s*'(.*)';/", $src, $m4),
-			'could not locate $pfb[\'ipv4\'] literal');
-		self::assertSame(1, preg_match("/\\\$pfb\\['ipv6'\\]\\s*=\\s*'(.*)';/", $src, $m6),
-			'could not locate $pfb[\'ipv6\'] literal');
-		self::assertSame(1, preg_match("/\\\$pfb\\['range'\\]\\s*=\\s*'(.*)';/", $src, $mr),
-			'could not locate $pfb[\'range\'] literal');
-		self::$reV4    = $m4[1];
-		self::$reV6    = $m6[1];
-		self::$reRange = $mr[1];
+		$config = pfb_ip_regex_config();
+		self::$reV4    = $config['ipv4'];
+		self::$reV6    = $config['ipv6'];
+		self::$reRange = $config['range'];
 	}
 
 	/** @return array{vtype:string,pftype:string,custom:bool,cidr_floor_v4:int|string,cidr_floor_v6:int|string,suppression:string,range:string,ipv4:string,ipv6:string} */

@@ -14,12 +14,9 @@ use PHPUnit\Framework\TestCase;
  * $pflex use), so this pins warning hygiene and the per-row invariant,
  * not a TLS behaviour change.
  *
- * The cron module is loaded through the package umbrella; this suite reads
- * its source text and pins the ORDER of the two statements: the first
- * `$pflex = FALSE` derivation line must precede the first `pfb_update_check(`
- * call site (the .fail retry) textually.
- * Whole-line comments are stripped before scanning so a comment mentioning
- * either token cannot satisfy or break the ordering assertion.
+ * The cron module is an appliance-only scheduler surface. This suite scans executable
+ * tokens with php_strip_whitespace and pins the ORDER of the two statements: the first
+ * `$pflex = FALSE` derivation line must precede the first `pfb_update_check(` call site.
  */
 final class SyncCronPflexOrderTest extends TestCase
 {
@@ -27,10 +24,10 @@ final class SyncCronPflexOrderTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		$src = file_get_contents(
+		$src = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc'
 		);
-		if ($src === false) {
+		if ($src === '') {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_cron.inc');
 		}
 
@@ -42,9 +39,7 @@ final class SyncCronPflexOrderTest extends TestCase
 			throw new RuntimeException('test bootstrap: pfblockerng_sync_cron() body not found');
 		}
 
-		// Scan code only: a whole-line comment naming either token must not
-		// shift the first-occurrence offsets (bit this PR once mid-review).
-		self::$functionBody = preg_replace('#^\s*//.*$#m', '', $m[0]);
+		self::$functionBody = $m[0];
 	}
 
 	public function testDerivationAndCallSiteBothPresentExactlyOnceAndTwoOrMoreTimes(): void

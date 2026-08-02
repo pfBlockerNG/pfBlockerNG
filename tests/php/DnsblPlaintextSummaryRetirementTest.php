@@ -19,11 +19,11 @@ final class DnsblPlaintextSummaryRetirementTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$umbrella = file_get_contents(self::INC);
-		$apply = file_get_contents(self::APPLY);
-		$installSource = file_get_contents(self::INSTALL);
-		$this->assertNotFalse($umbrella, 'failed to read pfblockerng.inc');
-		$this->assertNotFalse($installSource, 'failed to read pfblockerng_install.inc');
+		$umbrella = php_strip_whitespace(self::INC);
+		$apply = php_strip_whitespace(self::APPLY);
+		$installSource = php_strip_whitespace(self::INSTALL);
+		$this->assertNotSame('', $umbrella, 'failed to read pfblockerng.inc');
+		$this->assertNotSame('', $installSource, 'failed to read pfblockerng_install.inc');
 		$source = $umbrella . "\n" . $apply;
 		$this->assertNotSame('', trim($source), 'pfblockerng.inc + pfblockerng_apply.inc must be nonempty');
 		$this->assertStringContainsString('function dnsbl_save_stats(', $source);
@@ -104,7 +104,7 @@ final class DnsblPlaintextSummaryRetirementTest extends TestCase
 
 	public function testDisabledGroupHasValidatedAliasBeforeStatsUpdate(): void
 	{
-		$groupLoop = strpos($this->source, '// Reset variables once per alias');
+		$groupLoop = strpos($this->source, 'foreach ($lists as $list)');
 		$this->assertNotFalse($groupLoop);
 		$assignmentMatched = preg_match(
 			'/\$alias\s*=\s*"DNSBL_\{\$list\[\'aliasname\'\]\}";/',

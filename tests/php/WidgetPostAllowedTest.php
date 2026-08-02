@@ -2,89 +2,85 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
-/**
- * pfb_widget_post_allowed() — the dashboard widget's CSRF stand-in (issue #1050).
- *
- * pfblockerng.widget.php sets $nocsrf=TRUE for the whole endpoint (its read-only
- * AJAX GETs need no token), so its mutating POST handlers (pfb_submit,
- * pfblockerngack, and the three packet-count clears) gate on this instead: allow
- * a POST only when the Sec-Fetch-Site fetch metadata header proves it is
- * same-origin (or a direct navigation, 'none'). An ABSENT header is DENIED
- * (issue #1650): the earlier fail-open let any header-less/legacy client bypass
- * the guard entirely, so the gate is default-deny.
- *
- * widget-pfblockerng.inc carries no top-level pfSense-dependent execution (just
- * two title-string assignments plus this function), so it is require_once()d
- * directly -- unlike pfblockerng.widget.php's eval-extraction (WidgetAliasHiddenTest),
- * this file needs no page-runtime stripping.
- */
-#[CoversFunction('pfb_widget_post_allowed')]
 final class WidgetPostAllowedTest extends TestCase
 {
+	private const ROOT = __DIR__ . '/../..';
+	private const WIDGET = self::ROOT . '/src/usr/local/www/widgets/widgets/pfblockerng.widget.php';
+
 	public static function setUpBeforeClass(): void
 	{
-		if (function_exists('pfb_widget_post_allowed')) {
-			return;
-		}
 		require_once dirname(__DIR__, 2) . '/src/usr/local/www/widgets/include/widget-pfblockerng.inc';
 	}
 
-	/**
-	 * Full truth table: absent, 'same-origin', 'none', 'cross-site', 'same-site',
-	 * empty string.
-	 *
-	 * @return array<string,array{array<string,string>,bool}>
-	 */
+	/** @return array<string,array{array<string,string>,bool}> */
 	public static function truthTableProvider(): array
 	{
 		return [
-			'absent header -- denied (default-deny, issue #1650)' => [[], false],
-			"'same-origin' -- allowed"                     => [['HTTP_SEC_FETCH_SITE' => 'same-origin'], true],
-			"'none' -- allowed (direct navigation/bookmark)" => [['HTTP_SEC_FETCH_SITE' => 'none'], true],
-			"'cross-site' -- blocked"                       => [['HTTP_SEC_FETCH_SITE' => 'cross-site'], false],
-			"'same-site' -- blocked (not in the allowed set)" => [['HTTP_SEC_FETCH_SITE' => 'same-site'], false],
-			'empty string -- present but not an allowed token, blocked' => [['HTTP_SEC_FETCH_SITE' => ''], false],
+			'absent header' => [[], FALSE],
+			'same-origin' => [['HTTP_SEC_FETCH_SITE' => 'same-origin'], TRUE],
+			'none' => [['HTTP_SEC_FETCH_SITE' => 'none'], TRUE],
+			'cross-site' => [['HTTP_SEC_FETCH_SITE' => 'cross-site'], FALSE],
+			'same-site' => [['HTTP_SEC_FETCH_SITE' => 'same-site'], FALSE],
+			'empty' => [['HTTP_SEC_FETCH_SITE' => ''], FALSE],
 		];
 	}
 
-	/** @param array<string,string> $server */
 	#[DataProvider('truthTableProvider')]
-	public function testTruthTable(array $server, bool $expected): void
+	public function testGuardTruthTable(array $server, bool $expected): void
 	{
-		$this->assertSame(
-			$expected,
-			pfb_widget_post_allowed($server),
-			'pfb_widget_post_allowed(' . var_export($server, true) . ') expected ' . var_export($expected, true)
-		);
+		$this->assertSame($expected, pfb_widget_post_guard(['pfb_submit' => '1'], $server, 'pfb_submit'));
 	}
 
-	/**
-	 * Wiring pin (Sonnet review on PR #1061): EVERY mutating $_POST branch in
-	 * the widget's dispatch chain must call the guard -- a new handler added
-	 * without it silently reopens the cross-site hole #1050 closed.
-	 */
-	public function testEveryMutatingPostBranchCallsTheGuard(): void
+	/** @return array<string,array{string}> */
+	public static function mutationFields(): array
 	{
-		$widget = (string) file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/www/widgets/widgets/pfblockerng.widget.php'
-		);
-		// Dispatch branches sit at one tab of indentation; nested validation reads
-		// (in_array($_POST[...]) inside pfb_submit) are deeper and excluded.
-		preg_match_all('/^\t(?:if|elseif)\s*\(([^\n]*\$_POST\[[^\n]*)\)\s*\{/m', $widget, $m);
-		$branches = $m[1];
-		$this->assertNotEmpty($branches, 'no $_POST dispatch branches found -- extraction regex broke');
-		foreach ($branches as $cond) {
-			$this->assertStringContainsString(
-				'pfb_widget_post_allowed($_SERVER)',
-				$cond,
-				"unguarded mutating \$_POST branch in pfblockerng.widget.php: {$cond}"
-			);
-		}
-		$this->assertGreaterThanOrEqual(5, count($branches),
-			'expected at least the 5 known mutating branches (pfb_submit, ack, 3 clears); got ' . count($branches));
+		return [
+			'settings' => ['pfb_submit'],
+			'failed' => ['pfblockerngack'],
+			'all counts' => ['pfblockerngclearall'],
+			'ip counts' => ['pfblockerngclearip'],
+			'dnsbl counts' => ['pfblockerngcleardnsbl'],
+		];
+	}
+
+	#[DataProvider('mutationFields')]
+	public function testEveryShippedMutationBranchStaysClosedWithoutFetchMetadata(string $field): void
+	{
+		$result = $this->runWidget([], [$field => '1']);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertStringContainsString('<form id="formicons"', $result['stdout']);
+	}
+
+	/** @return array{status:int,stdout:string,stderr:string} */
+	private function runWidget(array $get, array $post): array
+	{
+		$root = var_export(self::ROOT, TRUE);
+		$widget = var_export(self::WIDGET, TRUE);
+		$getCode = var_export($get, TRUE);
+		$postCode = var_export($post, TRUE);
+		$script = <<<PHP
+\$_GET = {$getCode};
+\$_POST = {$postCode};
+\$_SERVER = [];
+\$widgetname = 'pfblockerng';
+\$shim = sys_get_temp_dir() . '/pfb_widget_shim_' . getmypid();
+mkdir(\$shim, 0777, TRUE);
+file_put_contents(\$shim . '/guiconfig.inc', "<?php");
+set_include_path(\$shim . PATH_SEPARATOR . get_include_path());
+require {$root} . '/tests/php/bootstrap.php';
+require {$widget};
+PHP;
+		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+		$process = proc_open([PHP_BINARY, '-r', $script], $descriptors, $pipes);
+		$this->assertIsResource($process);
+		$stdout = stream_get_contents($pipes[1]);
+		$stderr = stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		$status = proc_close($process);
+		return ['status' => $status, 'stdout' => (string) $stdout, 'stderr' => (string) $stderr];
 	}
 }

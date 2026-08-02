@@ -38,6 +38,121 @@ if (!is_array($pfb)) {
 	$pfb = array();
 }
 
+/**
+ * Capture the installed settings family, then restore the package snapshot for the current
+ * version. Install callers run migrations separately so the legacy VIP migration retains its
+ * historical position between restore and migration.
+ */
+function pfb_install_settings_family_capture_restore(
+	?callable $current = NULL,
+	?callable $save = NULL,
+	?callable $version = NULL,
+	?callable $from_version = NULL,
+	?callable $replace = NULL
+): string {
+	$current ??= 'pfb_settings_family_current';
+	$save ??= 'pfb_settings_family_save';
+	$version ??= 'pfb_pkg_ver';
+	$from_version ??= 'pfb_settings_family_from_version';
+	$replace ??= 'pfb_settings_family_replace';
+	$source_family = $current();
+	if ($source_family === NULL || !$save($source_family)) {
+		throw new RuntimeException('pfBlockerNG: unable to save source settings family');
+	}
+	$installed_family = $from_version((string) $version());
+	if ($installed_family === NULL || !$replace($installed_family)) {
+		throw new RuntimeException('pfBlockerNG: unable to restore settings family');
+	}
+	return $installed_family;
+}
+
+function pfb_install_settings_family_finalize(
+	string $installed_family,
+	?callable $migrations = NULL,
+	?callable $record = NULL
+): void {
+	$migrations ??= 'pfb_run_migrations';
+	$record ??= 'pfb_settings_family_record';
+	$migrations();
+	if (!$record($installed_family)) {
+		throw new RuntimeException('pfBlockerNG: unable to record settings family');
+	}
+}
+
+function pfb_install_registry_writeback(
+	array $sections,
+	?callable $pass = NULL,
+	?callable $write_section = NULL,
+	?callable $flush = NULL
+): void {
+	$pass ??= 'pfb_registry_pass';
+	$write_section ??= 'PfbConfig::writeSectionSystem';
+	$flush ??= 'write_config';
+	foreach ($pass($sections) as $path => $blob) {
+		$write_section($path, $blob);
+	}
+	$flush('[pfBlockerNG] Save installation settings');
+}
+
+function pfb_install_probe_cleanup(?callable $purge = NULL): void {
+	$purge ??= 'pfb_purge_probe_bodies';
+	$purge();
+}
+
+function pfb_lint_response(array $server, array $post, callable $allowed, callable $diagnostics): array {
+	$reply = static function (int $status, array $payload): array {
+		return [
+			'status'  => $status,
+			'headers' => ['Content-Type: application/json; charset=utf-8'],
+			'body'    => (string) json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE),
+		];
+	};
+	if (($server['REQUEST_METHOD'] ?? '') !== 'POST') {
+		return $reply(405, ['error' => 'POST only']);
+	}
+	$lang = $post['lang'] ?? NULL;
+	if (!is_string($lang) || !in_array($lang, ['regex', 'sh', 'py'], TRUE)) {
+		return $reply(400, ['error' => 'lang must be one of regex, sh, py']);
+	}
+	$privilege = $lang === 'regex' ? 'pfblockerng/pfblockerng_dnsbl.php' : 'diag_command.php';
+	if (!$allowed($privilege)) {
+		return $reply(403, ['error' => 'insufficient privilege']);
+	}
+	$content = $post['content'] ?? '';
+	if (!is_string($content)) {
+		return $reply(400, ['error' => 'content must be a string']);
+	}
+	if (strlen($content) > 1048576) {
+		return $reply(413, ['error' => 'content too large']);
+	}
+	$cap = ($post['cap'] ?? '') === '1';
+	return $reply(200, ['diagnostics' => $diagnostics($lang, $content, $cap)]);
+}
+
+function pfb_update_tail_response(array $query, callable $tail): array {
+	$has_offset = isset($query['offset']) && ctype_digit((string) $query['offset']);
+	$payload = $tail('update', $has_offset ? (int) $query['offset'] : -1, $has_offset);
+	return [
+		'headers' => ['Content-Type: application/json', 'Cache-Control: no-cache, no-store, must-revalidate'],
+		'body'    => (string) json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE),
+	];
+}
+
+function pfb_widget_table_call(array $table, string $mode = '', ?callable $render = NULL): mixed {
+	$render ??= 'pfBlockerNG_get_table';
+	return $render($table, $mode);
+}
+
+function pfb_widget_post_guard(array $post, array $server, string $field): bool {
+	$present = $field === 'pfb_submit' ? isset($post[$field]) : !empty($post[$field]);
+	return $present && pfb_widget_post_allowed($server);
+}
+
+function pfb_geoip_doc_link(): string {
+	return '<a target="_blank" rel="noopener noreferrer" href="https://dev.maxmind.com/geoip/whats-new-in-geoip2/">'
+		. '<span class="text-danger"><strong>What\'s new in GeoIP2</strong></span></a>';
+}
+
 // Folders
 $pfb['dbdir']		= "{$g['vardb_path']}/pfblockerng";
 $pfb['aliasdir']	= "{$g['vardb_path']}/aliastables";
@@ -3831,6 +3946,55 @@ function pfb_dnsbl_feed_count(string $dir): int {
 	return $total;
 }
 
+function pfb_update_unbound_feed_count(string $dir, ?callable $counter = NULL): int {
+	$counter ??= 'pfb_dnsbl_feed_count';
+	return $counter($dir);
+}
+
+function pfb_geoip_networks_header(string $iso_file, string $country, string $geoip_id, string $iso): string {
+	$networks = pfb_count_lines($iso_file) ?? 'ERROR';
+	$geoip_id = $geoip_id === '' || str_starts_with($geoip_id, ' [') ? $geoip_id : " [{$geoip_id}]";
+	return "# Country: {$country}{$geoip_id}\n# ISO Code: {$iso}\n# Total Networks: {$networks}\n";
+}
+
+function pfb_geoip_append_iso_data(
+	string $cat,
+	string $iso_file,
+	string $pfb_file,
+	string $build_tmp,
+	string $iso,
+	string $type,
+	?callable $logger = NULL
+): bool {
+	$logger ??= 'pfb_logger';
+	$output = array();
+	$status = 0;
+	exec(
+		$cat . ' ' . escapeshellarg($iso_file) . ' >> ' . escapeshellarg($pfb_file),
+		$output,
+		$status
+	);
+	if ($status !== 0) {
+		$logger("\n Failed to append ISO data [ {$iso} IPv{$type} ] (cat status {$status})\n", 4);
+		@unlink($pfb_file);
+		rmdir_recursive($build_tmp);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+function pfb_download_extraction_succeeded(int $retval): bool {
+	return $retval === 0;
+}
+
+function pfb_download_initial_retval(): int {
+	return 1;
+}
+
+function pfb_download_retval_success(?int $retval): bool {
+	return $retval === 0;
+}
+
 // issue #1109/#1258: ONE unified high-water guard for both pfb_log_mgmt()
 // branches -- fires past a margin-widened high-water mark; $margin_raw is
 // parsed HERE (self-defending). $logmax unclamped -- float math, not intdiv().
@@ -6666,6 +6830,16 @@ function pfb_ip_suppress_body_active(bool $supp_on, bool $vtype_matches, bool $s
 	return $supp_on && $vtype_matches && $supp_update && $adv && ($feed_changed || $recompute_ran);
 }
 
+function pfb_ip_recompute_ran_for_vtype(string $vtype, bool $ran_v4, bool $ran_v6): bool {
+	return $vtype === '_v4' ? $ran_v4 : ($vtype === '_v6' ? $ran_v6 : FALSE);
+}
+
+function pfb_ip_suppress_body_for_vtype(bool $supp_on, string $vtype, bool $supp_update, bool $adv,
+    bool $feed_changed, bool $ran_v4, bool $ran_v6): bool {
+	return pfb_ip_suppress_body_active($supp_on, $vtype === '_v4' || $vtype === '_v6', $supp_update,
+	    $adv, $feed_changed, pfb_ip_recompute_ran_for_vtype($vtype, $ran_v4, $ran_v6));
+}
+
 // ---------------------------------------------------------------------------
 // ADR-40 — forward-delta alias-table apply
 // ---------------------------------------------------------------------------
@@ -7811,7 +7985,7 @@ function pfb_unbound_python_whitelist($mode='') {
 	pfb_global();
 
 	$dnsbl_whitelist = '';
-	$dnsbl_white = pfb_text_area_decode($pfb['dnsblconfig']['whitelist'], TRUE, FALSE, TRUE);
+	$dnsbl_white = pfb_text_area_decode($pfb['dnsblconfig']['whitelist'] ?? '', TRUE, FALSE, TRUE);
 	if (!empty($dnsbl_white)) {
 		foreach ($dnsbl_white as $key => $line) {
 			if (!empty($line)) {
@@ -7849,7 +8023,7 @@ function pfb_unbound_python_whitelist($mode='') {
 function pfb_dnsbl_whitelist_lines() {
 	global $pfb;
 
-	$lines = pfb_text_area_decode($pfb['dnsblconfig']['whitelist'], TRUE, FALSE, TRUE);
+	$lines = pfb_text_area_decode($pfb['dnsblconfig']['whitelist'] ?? '', TRUE, FALSE, TRUE);
 	$out = array();
 	if (!empty($lines)) {
 		foreach ($lines as $line) {
@@ -8780,6 +8954,11 @@ function pfb_unbound_py_teardown_raw_set(): bool {
 	}
 }
 
+function pfb_top1m_teardown_call(?callable $teardown = NULL): bool {
+	$teardown ??= 'pfb_unbound_py_teardown_raw_set';
+	return (bool) $teardown();
+}
+
 
 // ADR-10: flip the zero-downtime RELOAD SENTINEL (the all-or-nothing commit that
 // wakes the Python reload-watcher). The sentinel host path is /var/unbound/pfb_py_reload
@@ -9530,6 +9709,122 @@ function pfb_unbound_python_sources_unlock() {
 }
 
 
+// Build the Python INI from the current, gateway-loaded DNSBL settings.
+function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
+	global $pfb;
+
+	$python_enable = ($mode == 'enabled') ? 'on' : 'off';
+	$python_reply = ($pfb['dnsbl_py_reply'] === PfbToggle::On) ? 'on' : 'off';
+	$python_blocking = 'on';
+	$python_hsts = ($pfb['dnsbl_hsts'] === PfbToggle::On) ? 'on' : 'off';
+	$dnsbl_tld_wildcard = $pfb['dnsbl_tld_wildcard'];
+	$python_tld_wildcard = !empty($dnsbl_tld_wildcard) ? 'on' : 'off';
+
+	$idn_mode = $pfb['dnsbl_idn']->toStored();
+	$python_idn = ($pfb['dnsbl_idn'] === PfbIdnMode::All) ? 'on' : 'off';
+	$python_idn_block_malicious = (pfb_cfg_toggle_read($pfb['dnsbl_idn_block_malicious']) === PfbToggle::On) ? 'on' : 'off';
+	$python_idn_escalate_suspicious = (pfb_cfg_toggle_read($pfb['dnsbl_idn_escalate_suspicious']) === PfbToggle::On) ? 'on' : 'off';
+	$python_cname = ($pfb['dnsbl_cname'] === PfbToggle::On) ? 'on' : 'off';
+
+	$dnsbl_control = $pfb['dnsbl_control'];
+	$dnsbl_control_legacy = $pfb['dnsbl_control_legacy'];
+	$python_control = ($dnsbl_control === PfbToggle::On) ? 'on' : 'off';
+	$python_control_legacy = ($dnsbl_control === PfbToggle::On && $dnsbl_control_legacy === PfbToggle::On) ? 'on' : 'off';
+	$python_noaaaa = ($pfb['dnsbl_noaaaa'] === PfbToggle::On) ? 'on' : 'off';
+
+	$tld_allow = 'off';
+	$tld_allow_list = '';
+	if ($pfb['dnsbl_tld_allow'] === PfbToggle::On) {
+		foreach (['tld_allow_gtld', 'tld_allow_cctld', 'tld_allow_itld', 'tld_allow_bgtld'] as $field) {
+			if (!empty($pfb['dnsblconfig'][$field])) {
+				$tld_allow = 'on';
+				$tld_allow_list .= ',' . $pfb['dnsblconfig'][$field];
+			}
+		}
+		$tld_allow_list = ltrim($tld_allow_list, ',');
+	}
+
+	$python_nolog = ($pfb['dnsbl_py_nolog'] === PfbToggle::On) ? 'on' : 'off';
+	$regex_cap = ($pfb['dnsbl_regex_cap'] === PfbToggle::On) ? 'on' : 'off';
+	$decisiondb_max = $pfb['dnsbl_decisiondb_max'] ?? '10000';
+	$forwarding = (config_get_path('unbound/forwarding') == 'on') ? 'on' : 'off';
+	$now ??= date('Y-m-d H:i:s', time());
+
+	$pfb_py_conf = <<<EOF
+; pfBlockerNG DNSBL Unbound python configuration file
+; pfb_unbound.ini [ File created: {$now} ]
+[MAIN]
+dnsbl_ipv4	= {$pfb['dnsbl_vip4']}
+dnsbl_ipv6	= {$pfb['dnsbl_vip6']}
+python_enable	= {$python_enable}
+python_reply	= {$python_reply}
+python_blocking	= {$python_blocking}
+python_hsts	= {$python_hsts}
+python_tld_wildcard	= {$python_tld_wildcard}
+python_idn	= {$python_idn}
+idn_mode	= {$idn_mode}
+python_idn_block_malicious	= {$python_idn_block_malicious}
+python_idn_escalate_suspicious	= {$python_idn_escalate_suspicious}
+python_tld_seg	= 1
+decisiondb_max	= {$decisiondb_max}
+tld_allow	= {$tld_allow}
+tld_allow_list	= {$tld_allow_list}
+python_nolog	= {$python_nolog}
+python_cname	= {$python_cname}
+python_control	= {$python_control}
+python_control_legacy	= {$python_control_legacy}
+regex_cap	= {$regex_cap}
+forwarding	= {$forwarding}
+
+EOF;
+	if ($pfb['dnsbl_regex'] === PfbToggle::On && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {
+		$pfb_py_conf .= "regex_list = {$pfb['dnsbl_regex_list']}\n";
+	}
+
+	if ($pfb['dnsbl_noaaaa'] === PfbToggle::On && isset($pfb['dnsbl_noaaaa_list']) && !empty($pfb['dnsbl_noaaaa_list'])) {
+		$noaaaa = '';
+		$noaaaa_list = pfb_text_area_decode($pfb['dnsbl_noaaaa_list'], TRUE, TRUE, TRUE);
+		if (!empty($noaaaa_list)) {
+			foreach ($noaaaa_list as $key => $list) {
+				if (str_starts_with($list[0], '.')) {
+					$list[0] = pfb_strip_wildcard_marker($list[0], 'pfb_unbound_python noAAAA');
+					if (pfb_is_blank($list[0])) {
+						continue;
+					}
+					$noaaaa .= "{$key} = {$list[0]},1\n";
+				} else {
+					$noaaaa .= "{$key} = {$list[0]},0\n";
+				}
+			}
+			if (!pfb_is_blank($noaaaa)) {
+				$pfb_py_conf .= <<<EOF
+
+[noAAAA]
+{$noaaaa}
+EOF;
+			}
+		}
+	}
+
+	if ($pfb['dnsbl_gp'] === PfbToggle::On && isset($pfb['dnsbl_gp_bypass_list']) && !empty($pfb['dnsbl_gp_bypass_list'])) {
+		$gp_bypass = '';
+		$gp_bypass_list = pfb_text_area_decode($pfb['dnsbl_gp_bypass_list'], TRUE, TRUE, FALSE);
+		if (!empty($gp_bypass_list)) {
+			foreach ($gp_bypass_list as $key => $list) {
+				$gp_bypass .= "{$key} = {$list[0]}\n";
+			}
+			$pfb_py_conf .= <<<EOF
+
+[GP_Bypass_List]
+{$gp_bypass}
+EOF;
+		}
+	}
+
+	return $pfb_py_conf;
+}
+
+
 // ADR-06 (#51): map a per-alert DNSBL Lock/Unlock action (dnsbl_remove POST value) to its
 // temporary-unlock STORE operation + status message. The four icon actions collapse onto two
 // pfb_unlock modes: unlock/relock ADD the domain ('unlock'), lock/reunlock REMOVE it ('lock').
@@ -9575,10 +9870,7 @@ function pfb_unbound_python($mode) {
 	}
 
 	// Add python settings to DNS Resolver configuration
-	$python_enable = 'off';
 	if ($mode == 'enabled') {
-		$python_enable = 'on';
-
 		if (!config_path_enabled('unbound', 'python') ||
 		    config_get_path('unbound/python_script') != 'pfb_unbound') {
 
@@ -9609,177 +9901,8 @@ function pfb_unbound_python($mode) {
 			pfb_unbound_python_sources_whitelist();
 		}
 
-		$python_reply = 'off';
-		if ($pfb['dnsbl_py_reply'] === PfbToggle::On) {
-			$python_reply = 'on';
-		}
-
-		$python_blocking = 'on';
-
-		$python_hsts = 'off';
-		if ($pfb['dnsbl_hsts'] === PfbToggle::On) {
-			$python_hsts = 'on';
-		}
-
-		// issue #1255: DNSBL Wildcard Blocking (TLD) -- HSTS parity (shipped file +
-		// ini enable flag). $pfb['dnsbl_tld_wildcard'] is used as a bare truthy check
-		// elsewhere (the deferred stats branch), not an == 'on' comparison.
-		$python_tld_wildcard = 'off';
-		if ($pfb['dnsbl_tld_wildcard']) {
-			$python_tld_wildcard = 'on';
-		}
-
-		// ADR-08: emit the IDN mode + the legacy python_idn flag + the Confusable sub-toggles.
-		// python_idn = on ONLY for All-IDN, so the legacy flag (and its blacklist side-effect)
-		// stays byte-identical to today; Confusable rides the explicit idn_mode key instead.
-		// py_unbound.ini IDN mode: the SAME canonical token as config.xml (toStored):
-		// 'on' (= All) | 'confusable' | 'off'. The Python IdnMode enum reads it directly.
-		$idn_mode = $pfb['dnsbl_idn']->toStored();
-		$python_idn = ($pfb['dnsbl_idn'] === PfbIdnMode::All) ? 'on' : 'off';
-
-		$python_idn_block_malicious = (pfb_cfg_toggle_read($pfb['dnsbl_idn_block_malicious']) === PfbToggle::On) ? 'on' : 'off';
-		$python_idn_escalate_suspicious = (pfb_cfg_toggle_read($pfb['dnsbl_idn_escalate_suspicious']) === PfbToggle::On) ? 'on' : 'off';
-
-		$python_cname = 'off';
-		if ($pfb['dnsbl_cname'] === PfbToggle::On) {
-			$python_cname = 'on';
-		}
-
-		$python_control = 'off';
-		if ($pfb['dnsbl_control'] === PfbToggle::On) {
-			$python_control = 'on';
-		}
-
-		// PFBL-03: deprecated legacy DNS-TXT control transport. OFF unless the operator
-		// explicitly opted back in (and the parent DNSBL Control toggle is enabled).
-		// DNSBL control is CLI-driven; this path is slated for removal next release.
-		$python_control_legacy = 'off';
-		if ($pfb['dnsbl_control'] === PfbToggle::On && $pfb['dnsbl_control_legacy'] === PfbToggle::On) {
-			$python_control_legacy = 'on';
-		}
-
-		$python_noaaaa = 'off';
-		if ($pfb['dnsbl_noaaaa'] === PfbToggle::On) {
-			$python_noaaaa = 'on';
-		}
-
-		$tld_allow = 'off';
-		$tld_allow_list = '';
-		if ($pfb['dnsbl_tld_allow'] === PfbToggle::On) {
-			if (!empty($pfb['dnsblconfig']['tld_allow_gtld'])) {
-				$tld_allow = 'on';
-				$tld_allow_list = $pfb['dnsblconfig']['tld_allow_gtld'];
-			}
-			if (!empty($pfb['dnsblconfig']['tld_allow_cctld'])) {
-				$tld_allow = 'on';
-				$tld_allow_list .= ',' . $pfb['dnsblconfig']['tld_allow_cctld'];
-			}
-			if (!empty($pfb['dnsblconfig']['tld_allow_itld'])) {
-				$tld_allow = 'on';
-				$tld_allow_list .= ',' . $pfb['dnsblconfig']['tld_allow_itld'];
-			}
-			if (!empty($pfb['dnsblconfig']['tld_allow_bgtld'])) {
-				$tld_allow = 'on';
-				$tld_allow_list .= ',' . $pfb['dnsblconfig']['tld_allow_bgtld'];
-			}
-			$tld_allow_list = ltrim($tld_allow_list, ',');
-		}
-
-		$python_nolog = 'off';
-		if ($pfb['dnsbl_py_nolog'] === PfbToggle::On) {
-			$python_nolog = 'on';
-		}
-
-		// ADR-07: opt-in "Limit long/complex regex" static cap (drops over-long /
-		// nested-quantifier patterns at load -- feed AND user regex). The always-on
-		// runtime warn/evict guard does not need a toggle; its ceilings default in
-		// Python (warn 10 ms / evict 100 ms) and are advanced-only knobs here.
-		$regex_cap = 'off';
-		if ($pfb['dnsbl_regex_cap'] === PfbToggle::On) {
-			$regex_cap = 'on';
-		}
-
-		// DNSBL Python decision-cache cap (LRU); WebUI-configurable, 0 = unlimited.
-		// Already validated + clamped (digits-only) in pfb_global().
-		$decisiondb_max = $pfb['dnsbl_decisiondb_max'] ?? '10000';
-
-		$forwarding = (config_get_path('unbound/forwarding') == 'on') ? 'on' : 'off';
-
-		$now = date('Y-m-d H:i:s', time());	// ISO-8601 (py_unbound.ini "File created" comment)
-
-		// issue #1155: fixed at 1 -- the min-segment optimization was computed-and-discarded
-		// in pfb_unbound_python_whitelist() since extraction; 1 is behaviourally identical
-		// (only wildcard entries can match the Python suffix walk it gates).
-		$pfb_py_conf = <<<EOF
-; pfBlockerNG DNSBL Unbound python configuration file
-; pfb_unbound.ini [ File created: {$now} ]
-[MAIN]
-dnsbl_ipv4	= {$pfb['dnsbl_vip4']}
-dnsbl_ipv6	= {$pfb['dnsbl_vip6']}
-python_enable	= {$python_enable}
-python_reply	= {$python_reply}
-python_blocking	= {$python_blocking}
-python_hsts	= {$python_hsts}
-python_tld_wildcard	= {$python_tld_wildcard}
-python_idn	= {$python_idn}
-idn_mode	= {$idn_mode}
-python_idn_block_malicious	= {$python_idn_block_malicious}
-python_idn_escalate_suspicious	= {$python_idn_escalate_suspicious}
-python_tld_seg	= 1
-decisiondb_max	= {$decisiondb_max}
-tld_allow	= {$tld_allow}
-tld_allow_list	= {$tld_allow_list}
-python_nolog	= {$python_nolog}
-python_cname	= {$python_cname}
-python_control	= {$python_control}
-python_control_legacy	= {$python_control_legacy}
-regex_cap	= {$regex_cap}
-forwarding	= {$forwarding}
-
-EOF;
-		if ($pfb['dnsbl_regex'] === PfbToggle::On && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {
-			$pfb_py_conf .= "regex_list = {$pfb['dnsbl_regex_list']}\n";
-		}
-
-		if ($pfb['dnsbl_noaaaa'] === PfbToggle::On && isset($pfb['dnsbl_noaaaa_list']) && !empty($pfb['dnsbl_noaaaa_list'])) {
-			$noaaaa = '';
-			$noaaaa_list = pfb_text_area_decode($pfb['dnsbl_noaaaa_list'], TRUE, TRUE, TRUE);
-			if (!empty($noaaaa_list)) {
-				foreach ($noaaaa_list as $key => $list) {
-					if (str_starts_with($list[0], '.')) {
-						$list[0] = pfb_strip_wildcard_marker($list[0], 'pfb_unbound_python noAAAA');
-						if (pfb_is_blank($list[0])) {
-							continue;
-						}
-						$noaaaa .= "{$key} = {$list[0]},1\n";
-					} else {
-						$noaaaa .= "{$key} = {$list[0]},0\n";
-					}
-				}
-				if (!pfb_is_blank($noaaaa)) {
-					$pfb_py_conf .= <<<EOF
-
-[noAAAA]
-{$noaaaa}
-EOF;
-				}
-			}
-		}
-
-		if ($pfb['dnsbl_gp'] === PfbToggle::On && isset($pfb['dnsbl_gp_bypass_list']) && !empty($pfb['dnsbl_gp_bypass_list'])) {
-			$gp_bypass = '';
-			$gp_bypass_list = pfb_text_area_decode($pfb['dnsbl_gp_bypass_list'], TRUE, TRUE, FALSE);
-			if (!empty($gp_bypass_list)) {
-				foreach ($gp_bypass_list as $key => $list) {
-					$gp_bypass .= "{$key} = {$list[0]}\n";
-				}
-				$pfb_py_conf .= <<<EOF
-
-[GP_Bypass_List]
-{$gp_bypass}
-EOF;
-			}
-		}
+		$now = date('Y-m-d H:i:s', time());
+		$pfb_py_conf = pfb_unbound_python_ini($mode, $now);
 
 		// Compare previous ini file to new ini (bypass file timestamp string)
 		$pfb_py_conf_ex		= @file_get_contents($pfb['unbound_py_conf']);
@@ -10152,8 +10275,11 @@ function pfb_dnsbl_manifest_failure_notice(): bool {
 // fast path (flip the reload sentinel, no restart). Any other case falls back to the restart
 // (fail-safe; PHP is the PRIMARY gate — never "flip and hope"). Returns TRUE only after the
 // applied-generation handshake; restart fallback returns FALSE.
-function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FALSE) {
+function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FALSE, ?callable $apply_ledger = NULL) {
 	global $g, $pfb;
+	$apply_ledger ??= static function (): bool {
+		return pfb_dnsbl_apply_ledger_update();
+	};
 
 	$final = array();
 	$type = '';
@@ -10196,7 +10322,7 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 					unlink_if_exists("{$pfb['dnsbl_file']}.sync");
 					// ADR-61: this swap just confirmed applied == sentinel -- a second,
 					// independent convergence point besides the restart path's completion.
-					$converged = pfb_dnsbl_apply_ledger_update();
+					$converged = $apply_ledger();
 					pfb_unbound_py_gc($converged);
 					return TRUE;
 				}
@@ -10301,7 +10427,7 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 	// a deliberate 'disabled' teardown clears any stale entry rather than flagging its
 	// own (expected) non-convergence as a failure.
 	if ($mode == 'enabled') {
-		$converged = pfb_dnsbl_apply_ledger_update();
+		$converged = $apply_ledger();
 		pfb_unbound_py_gc($converged);
 	} else {
 		pfb_sync_status_close('dnsbl', 'dnsbl', 'apply', $pfb['dbdir']);
@@ -10449,7 +10575,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	// issue #1263: per-file sum, not cat|grep -c ^ -- differs from the old count
 	// when a stored feed lacks a trailing newline (the old command welded two
 	// records into one and undercounted); the sum is the correct total.
-	$dnsbl_cnt = pfb_dnsbl_feed_count($pfb['dnsdir']);
+	$dnsbl_cnt = pfb_update_unbound_feed_count($pfb['dnsdir']);
 
 	// ADR-06: pfb_py_count is now Python-emitted and means the LOADED entry total
 	// (len(dataDB)+len(zoneDB)), written by pfb_unbound.py dnsbl_emit_count(). The
@@ -12509,6 +12635,22 @@ function pfb_download_http_headers(array $extra_headers, string $conditional_hea
 	return $headers;
 }
 
+function pfb_download_finalize_text(
+	string $orig_download,
+	string $hash_base,
+	string $hash_path,
+	?callable $hash_write = NULL,
+	?callable $transcode = NULL,
+	?callable $newline = NULL
+): void {
+	$hash_write ??= 'pfb_hash_write';
+	$transcode ??= 'pfb_utf16_transcode_file';
+	$newline ??= 'pfb_ensure_trailing_newline';
+	$hash_write($hash_base, $hash_path);
+	$transcode($orig_download);
+	$newline($orig_download);
+}
+
 
 // Issue #1906: normalize an extras feed's download credentials for PfbDownloadRequest, whose
 // $username/$password are non-nullable strings. Each extras feed type carries its credentials
@@ -13054,7 +13196,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 
 		// issue #1158: fail-safe default -- with unset(), paths that assigned nothing fell
 		// through $retval == 0 as success
-		$retval = 1;
+		$retval = pfb_download_initial_retval();
 
 		// Validate File Mime-type
 		$reject_detail = array();
@@ -13128,7 +13270,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				}
 				exec("/usr/bin/tar -xzf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1", $output, $retval);
 				unlink_if_exists($file_download);
-				if ($retval != 0) {
+				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] geoip extraction failed (tar exit {$retval})", 2);
 					return PfbDownloadResult::failure();
 				}
@@ -13136,7 +13278,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			}
 			elseif ($type == 'asn') {
 				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
-				if ($retval != 0) {
+				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] asn extraction failed (gunzip exit {$retval})", 2);
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
@@ -13159,7 +13301,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				}
 				$header_esc = escapeshellarg($top1m_stage);
 				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
-				if ($retval != 0) {
+				if (!pfb_download_extraction_succeeded($retval)) {
 					unlink_if_exists($file_download);
 					unlink_if_exists($top1m_stage);
 					pfb_logger("\n[pfb_download] top1m extraction failed (gunzip exit {$retval})", 2);
@@ -13276,7 +13418,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					}
 
 					// Create update file indicator for update process
-					if ($retval == 0) {
+					if (pfb_download_extraction_succeeded($retval)) {
 						touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
 					}
 				}
@@ -13335,7 +13477,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					// ADR-46: stdout extraction -- member names never reach the filesystem.
 					exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}", $output, $retval);
 				}
-				if ($retval != 0) {
+				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
@@ -13367,7 +13509,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				$header_esc = escapeshellarg($top1m_stage);
 				$strip = $top1m_target_dir ? ' --strip=1' : '';
 				exec("/usr/bin/tar -xf {$file_dwn_esc}{$strip} -C {$header_esc} >/dev/null 2>&1", $output, $retval);
-				if ($retval != 0) {
+				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
 					rmdir_recursive($top1m_stage);
 					unlink_if_exists($file_download);
@@ -13635,7 +13777,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			}
 		}
 
-		if ($retval == 0) {
+		if (pfb_download_retval_success($retval)) {
 			// Set downloaded file timestamp to remote timestamp
 			if (isset($remote_stamp) && $remote_stamp != -1) {
 				@touch("{$orig_download}", $remote_stamp);
@@ -13655,20 +13797,11 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// exact, not an approximation.  This covers both local and remote standard feeds
 			// (any path that finalises a plain .orig here).  The geoip/asn early-returns
 			// above do not reach this block, so they correctly never get a sidecar.
-			pfb_hash_write("{$orig_download}", pfb_source_hash_target($file_download, $orig_download));
-
-			// issue #946: transcode a UTF-16/UTF-32-BOM-marked feed to UTF-8 AFTER the
-			// hash sidecar above -- the sidecar hashes the RAW wire bytes (ADR-42), so
-			// transcoding first would make the persisted digest diverge from the
-			// change-probe's wire hash and re-ingest the feed every cron. No-op (FALSE,
-			// file untouched) for every feed that isn't UTF-16/32-BOM-marked.
-			pfb_utf16_transcode_file("{$orig_download}");
-
-			// issue #1263: guarantee a trailing newline on the STORED .orig -- after
-			// transcode (operates on final bytes) and after the hash write (ADR-42
-			// digest must stay over the untouched wire/raw body, same reasoning as
-			// the transcode-ordering comment above).
-			pfb_ensure_trailing_newline("{$orig_download}");
+			pfb_download_finalize_text(
+				"{$orig_download}",
+				"{$orig_download}",
+				pfb_source_hash_target($file_download, $orig_download)
+			);
 
 			// issue #1797: normalization deliberately does NOT run here. Only the
 			// parse-loop consumers normalize: the helper's changed-verdict means
@@ -17661,7 +17794,7 @@ function pfblockerng_php_pre_deinstall_command() {
 
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();
-	pfb_unbound_py_teardown_raw_set();
+	pfb_top1m_teardown_call();
 
 	// Live-object teardown always runs regardless of $pfb['keep'], so that uninstalling
 	// with the default keep=on still removes active pf tables, boot hooks, owned firewall

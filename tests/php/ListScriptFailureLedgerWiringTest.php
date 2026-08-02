@@ -5,156 +5,202 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1958: a per-feed pre-script that exits non-zero must not let the
- * alias pass close as full success. The IP and DNSBL loops inside
- * sync_package_pfblockerng() drive real appliance exec and have no PHPUnit
- * harness of their own (issue #993), so -- same technique as
- * DnsblListScriptWiringTest / PfbSyncStatusIpWritersTest -- the wiring is
- * pinned by source inspection with vacuity-guarded windows: each window's
- * start/end anchors are asserted present BEFORE the content assertion inside
- * them is trusted.
- *
- * Pins, per loop:
- *   - the pre-script failure branch records the new ADR-61 'script' stage
- *     ledger entry + '.update' retry marker via pfb_list_script_failure_record(),
- *     sets $pfb_script_failed, and STILL falls through to the existing
- *     continue; (DNSBL: the existing #1841-class manifest-row re-emission on a
- *     stale-generation .txt must also survive, untouched).
- *   - the alias-pass end closes the 'script' stage ledger entry, guarded by
- *     !$pfb_script_failed, beside the existing download-ledger close.
- *   - both loops declare their own per-alias-pass $pfb_script_failed reset --
- *     a reset dropped from one loop is the #1048-class bug (a sibling feed's
- *     success masking this feed's still-open failure).
+ * Script failures are observable through the retry marker and sync-status
+ * ledger. PRODUCTION COMMENTS AND DOCBLOCKS MUST NEVER BE LOAD-BEARING FOR A
+ * TEST. If a mechanism makes them so, the mechanism is wrong.
  */
 final class ListScriptFailureLedgerWiringTest extends TestCase
 {
-	private static string $applySource;
+	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+
+	private string $dir;
 
 	public static function setUpBeforeClass(): void
 	{
-		$source = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc'
-		);
-		if ($source === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
+		require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+	}
+
+	protected function setUp(): void
+	{
+		$this->dir = sys_get_temp_dir() . '/pfb_script_state_' . getmypid() . '_' . bin2hex(random_bytes(4));
+		$this->assertTrue(mkdir($this->dir, 0700, TRUE));
+	}
+
+	protected function tearDown(): void
+	{
+		foreach (glob("{$this->dir}/*") ?: [] as $file) {
+			@unlink($file);
 		}
-		self::$applySource = $source;
+		@rmdir($this->dir);
 	}
 
-	// -----------------------------------------------------------------
-	// Row 7 -- IP pre-script failure branch.
-	// -----------------------------------------------------------------
-
-	public function testIpPreScriptFailureBranchRecordsLedgerAndMarkerBeforeContinue(): void
+	private function applyScope(string $source, string $start, string $end): string
 	{
-		$dnsblCallPos = strpos(self::$applySource, 'pfb_list_pre_script_run(');
-		$this->assertNotFalse($dnsblCallPos, 'vacuity: the DNSBL pre-script call site must exist (first occurrence)');
-
-		$ipCallPos = strpos(self::$applySource, 'pfb_list_pre_script_run(', $dnsblCallPos + 1);
-		$this->assertNotFalse($ipCallPos, 'vacuity: the IP pre-script call site must exist (second occurrence)');
-
-		$ipFopenPos = strpos(self::$applySource, '@fopen($pfb_parse_path', $ipCallPos);
-		$this->assertNotFalse($ipFopenPos, 'vacuity: the IP parse-open that follows the IP pre-script call must exist');
-		$this->assertGreaterThan($ipCallPos, $ipFopenPos, 'the IP parse-open must sit after the IP pre-script call');
-
-		$window = substr(self::$applySource, $ipCallPos, $ipFopenPos - $ipCallPos);
-
-		$this->assertStringContainsString('" {$list[\'vtype\']} {$elog}"', $window,
-			'vacuity: this window must be the IP call (carries the vtype args-tail discriminator, not "dnsbl")');
-
-		$this->assertStringContainsString("pfb_list_script_failure_record('ip', \$alias,", $window,
-			'a pre-script failure must record the ADR-61 script-stage ledger entry, keyed on the IP facility');
-		$this->assertStringContainsString('$pfb_script_failed = TRUE;', $window,
-			'a pre-script failure must raise the per-alias-pass script-failure flag');
-		$this->assertStringContainsString('.update"', $window,
-			'a pre-script failure must (re)write the .update retry marker so the next ordinary pass retries the transform');
-		$this->assertStringContainsString('continue;', $window,
-			'the existing continue; (serving last-known-good, #1927) must survive untouched');
+		$from = strrpos($source, $start);
+		if ($from === FALSE) {
+			throw new RuntimeException("missing apply scope start: {$start}");
+		}
+		$to = strpos($source, $end, $from + strlen($start));
+		if ($to === FALSE) {
+			throw new RuntimeException("missing apply scope end: {$end}");
+		}
+		return substr($source, $from, $to + strlen($end) - $from);
 	}
 
-	// -----------------------------------------------------------------
-	// Row 8 -- DNSBL pre-script failure branch.
-	// -----------------------------------------------------------------
-
-	public function testDnsblPreScriptFailureBranchRecordsLedgerAndMarkerKeepingManifestRow(): void
+	public function testIpFailureRecordsRetryMarkerAndLedgerRow(): void
 	{
-		$dnsblCallPos = strpos(self::$applySource, 'pfb_list_pre_script_run(');
-		$this->assertNotFalse($dnsblCallPos, 'vacuity: the DNSBL pre-script call site must exist (first occurrence)');
+		$state  = ['failed' => FALSE];
+		$marker = "{$this->dir}/pfB_Example_v4.update";
+		pfb_list_script_failure_record('ip', 'pfB_Example_v4', 'Pre-script FAIL', $this->dir, $marker, $state);
 
-		$dnsblFopenPos = strpos(self::$applySource, '@fopen($pfb_parse_path', $dnsblCallPos);
-		$this->assertNotFalse($dnsblFopenPos, 'vacuity: the DNSBL parse-open that follows the DNSBL pre-script call must exist');
-		$this->assertGreaterThan($dnsblCallPos, $dnsblFopenPos, 'the DNSBL parse-open must sit after the DNSBL pre-script call');
-
-		$window = substr(self::$applySource, $dnsblCallPos, $dnsblFopenPos - $dnsblCallPos);
-
-		$this->assertStringContainsString('" dnsbl {$elog}"', $window,
-			'vacuity: this window must be the DNSBL call (carries the stable "dnsbl" args-tail discriminator)');
-
-		$this->assertStringContainsString("pfb_list_script_failure_record('dnsbl', \$alias,", $window,
-			'a pre-script failure must record the ADR-61 script-stage ledger entry, keyed on the DNSBL facility');
-		$this->assertStringContainsString('$pfb_script_failed = TRUE;', $window,
-			'a pre-script failure must raise the per-alias-pass script-failure flag');
-		$this->assertStringContainsString('.update"', $window,
-			'a pre-script failure must (re)write the .update retry marker so the next ordinary pass retries the transform');
-		$this->assertStringContainsString('pfb_feed_manifest_row(', $window,
-			'the existing manifest-row re-emission on a stale-generation .txt must survive -- '
-			. 'dropping it would relocate the outage (#1841-class), not fix it');
-		$this->assertStringContainsString('continue;', $window,
-			'the existing continue; (serving last-known-good, #1927) must survive untouched');
+		$this->assertTrue($state['failed']);
+		$this->assertFileExists($marker);
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open);
+		$this->assertSame('pfB_Example_v4', $open[0]['item']);
+		$this->assertSame('script', $open[0]['stage']);
 	}
 
-	// -----------------------------------------------------------------
-	// Row 9 -- IP alias-pass close, guarded by !$pfb_script_failed.
-	// -----------------------------------------------------------------
-
-	public function testIpAliasPassClosesScriptStageGuardedByScriptFailedFlag(): void
+	public function testDnsblFailureRecordsRetryMarkerAndLedgerRow(): void
 	{
-		$closePos = strpos(self::$applySource, "pfb_ip_download_ledger_update(TRUE,");
-		$this->assertNotFalse($closePos, 'vacuity: the IP download-ledger success-close call site must exist');
+		$state  = ['failed' => FALSE];
+		$marker = "{$this->dir}/DNSBL_Example.update";
+		pfb_list_script_failure_record('dnsbl', 'DNSBL_Example', 'Pre-script FAIL', $this->dir, $marker, $state);
 
-		$endPos = strpos(self::$applySource, 'Remove database update file markers', $closePos);
-		$this->assertNotFalse($endPos, 'vacuity: the end-of-loop epilogue marker must exist after the IP close');
-
-		$window = substr(self::$applySource, $closePos, $endPos - $closePos);
-
-		$this->assertStringContainsString("pfb_sync_status_close('ip', \$alias, 'script'", $window,
-			'the alias-pass end must close the ADR-61 script-stage entry for this alias');
-		$this->assertStringContainsString('!$pfb_script_failed', $window,
-			'the script-stage close must be gated by the once-per-alias-pass flag, symmetric with the download-ledger close');
+		$this->assertTrue($state['failed']);
+		$this->assertFileExists($marker);
+		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
+		$this->assertCount(1, $open);
+		$this->assertSame('DNSBL_Example', $open[0]['item']);
+		$this->assertSame('script', $open[0]['stage']);
 	}
 
-	// -----------------------------------------------------------------
-	// Row 10 -- DNSBL alias-pass close, guarded by !$pfb_script_failed.
-	// -----------------------------------------------------------------
-
-	public function testDnsblAliasPassClosesScriptStageGuardedByScriptFailedFlag(): void
+	public function testMarkerWriteDoesNotTruncateExistingData(): void
 	{
-		$closePos = strpos(self::$applySource, "pfb_dnsbl_download_ledger_update(TRUE,");
-		$this->assertNotFalse($closePos, 'vacuity: the DNSBL download-ledger success-close call site must exist');
+		$marker = "{$this->dir}/pfB_Example_v4.update";
+		file_put_contents($marker, 'keep-this-marker');
+		$state = ['failed' => FALSE];
 
-		$endPos = strpos(self::$applySource, 'ADR-12: record GENUINELY-changed DNSBL groups', $closePos);
-		$this->assertNotFalse($endPos, 'vacuity: the ADR-12 change-tracking comment must exist after the DNSBL close');
+		pfb_list_script_failure_record('ip', 'pfB_Example_v4', 'msg', $this->dir, $marker, $state);
 
-		$window = substr(self::$applySource, $closePos, $endPos - $closePos);
-
-		$this->assertStringContainsString("pfb_sync_status_close('dnsbl', \$alias, 'script'", $window,
-			'the alias-pass end must close the ADR-61 script-stage entry for this alias');
-		$this->assertStringContainsString('!$pfb_script_failed', $window,
-			'the script-stage close must be gated by the once-per-alias-pass flag, symmetric with the download-ledger close');
+		$this->assertSame('keep-this-marker', file_get_contents($marker));
 	}
 
-	// -----------------------------------------------------------------
-	// Row 11 -- both per-alias resets exist, one per loop.
-	// -----------------------------------------------------------------
-
-	public function testBothLoopsDeclareTheirOwnPerAliasScriptFailedReset(): void
+	public function testLedgerStillOpensWhenMarkerParentIsMissing(): void
 	{
-		$count = preg_match_all('/\$pfb_script_failed\s*=\s*FALSE;/', self::$applySource);
-		$this->assertNotFalse($count, 'the reset regex itself must be well-formed');
-		$this->assertSame(2, $count,
-			'exactly one $pfb_script_failed = FALSE; reset per loop (IP + DNSBL) must exist -- '
-			. 'a reset dropped from one loop is the #1048-class bug (a sibling feed\'s success '
-			. 'masking this feed\'s still-open failure)'
+		$marker = "{$this->dir}/missing/pfB_Example_v4.update";
+		$state  = ['failed' => FALSE];
+
+		pfb_list_script_failure_record('ip', 'pfB_Example_v4', 'msg', $this->dir, $marker, $state);
+
+		$this->assertTrue($state['failed']);
+		$this->assertFileDoesNotExist($marker);
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+	}
+
+	public function testIndependentAliasStatesCloseOnlySuccessfulSibling(): void
+	{
+		$failed = ['failed' => TRUE];
+		$ok     = ['failed' => FALSE];
+		pfb_sync_status_open('ip', 'pfB_Failed_v4', 'script', 'failure', $this->dir);
+		pfb_sync_status_open('ip', 'pfB_Ok_v4', 'script', 'success', $this->dir);
+
+		pfb_list_script_failure_close('ip', 'pfB_Failed_v4', $this->dir, $failed);
+		pfb_list_script_failure_close('ip', 'pfB_Ok_v4', $this->dir, $ok);
+
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open);
+		$this->assertSame('pfB_Failed_v4', $open[0]['item']);
+	}
+
+	public function testFailureStateIsIndependentAcrossFacilities(): void
+	{
+		$ipState    = ['failed' => TRUE];
+		$dnsblState = ['failed' => FALSE];
+		pfb_sync_status_open('ip', 'pfB_Failed_v4', 'script', 'failure', $this->dir);
+		pfb_sync_status_open('dnsbl', 'DNSBL_Ok', 'script', 'success', $this->dir);
+
+		pfb_list_script_failure_close('ip', 'pfB_Failed_v4', $this->dir, $ipState);
+		pfb_list_script_failure_close('dnsbl', 'DNSBL_Ok', $this->dir, $dnsblState);
+
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'));
+	}
+
+	public function testDnsblFailureRecordsBeforeManifestAndContinuesWithCurrentStagedTxt(): void
+	{
+		$state  = ['failed' => FALSE];
+		$marker = "{$this->dir}/DNSBL_Example.update";
+		$txt    = "{$this->dir}/feed.txt";
+		file_put_contents($txt, "known-good\n");
+		$events = [];
+
+		$result = pfb_dnsbl_script_failure_continue(
+			'DNSBL_Example', 'Pre-script FAIL', $this->dir, $marker, $state, TRUE, $txt,
+			function () use (&$events, $marker, $txt): void {
+				$events[] = file_exists($marker) ? 'marker' : 'marker-missing';
+				$events[] = count(pfb_sync_status_list_open(dirname($marker), 'dnsbl')) > 0
+					? 'ledger' : 'ledger-missing';
+				$events[] = 'manifest:' . file_get_contents($txt);
+			}
 		);
+
+		$this->assertTrue($result);
+		$this->assertSame(['marker', 'ledger', "manifest:known-good\n"], $events);
+		$this->assertSame("known-good\n", file_get_contents($txt));
+	}
+
+	public function testDnsblFailureSkipsManifestWhenGenerationOrStagedTxtIsMissing(): void
+	{
+		$state  = ['failed' => FALSE];
+		$marker = "{$this->dir}/DNSBL_Example.update";
+		$events = [];
+
+		$this->assertTrue(pfb_dnsbl_script_failure_continue(
+			'DNSBL_Example', 'Pre-script FAIL', $this->dir, $marker, $state, FALSE,
+			"{$this->dir}/missing.txt", static function () use (&$events): void { $events[] = 'manifest'; }
+		));
+		$this->assertSame([], $events);
+
+		$state  = ['failed' => FALSE];
+		$marker = "{$this->dir}/DNSBL_Example_2.update";
+		$this->assertTrue(pfb_dnsbl_script_failure_continue(
+			'DNSBL_Example_2', 'Pre-script FAIL', $this->dir, $marker, $state, TRUE,
+			"{$this->dir}/missing.txt", static function () use (&$events): void { $events[] = 'manifest'; }
+		));
+		$this->assertSame([], $events);
+	}
+
+	public function testIpFailureLeavesPriorStagedTxtBytesUntouched(): void
+	{
+		$state  = ['failed' => FALSE];
+		$marker = "{$this->dir}/pfB_Example_v4.update";
+		$txt    = "{$this->dir}/pfB_Example_v4.txt";
+		file_put_contents($txt, "192.0.2.1\n");
+
+		$this->assertTrue(pfb_ip_script_failure_continue(
+			'pfB_Example_v4', 'Pre-script FAIL', $this->dir, $marker, $state, TRUE, $txt,
+			static function (): void {}
+		));
+		$this->assertSame("192.0.2.1\n", file_get_contents($txt));
+	}
+
+	/**
+	 * #993: the apply monolith owns feed download and appliance side effects, so its loop
+	 * cannot be driven safely off-appliance. Pin each live failure binding in a route scope;
+	 * php_strip_whitespace() removes comments/docblocks from the source under test.
+	 */
+	public function testEachFamilyBindsFailureContinueAndCloseOnce(): void
+	{
+		$source       = php_strip_whitespace(self::APPLY);
+		$dnsbl_cont   = $this->applyScope($source, 'if ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) {', 'pfb_dnsbl_script_failure_continue($alias,');
+		$dnsbl_close  = $this->applyScope($source, "pfb_download_ledger_close_if_clean('dnsbl',", 'pfb_dnsbl_script_failure_close($alias,');
+		$ip_cont      = $this->applyScope($source, 'if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', 'pfb_ip_script_failure_continue($alias,');
+		$ip_close     = $this->applyScope($source, "pfb_download_ledger_close_if_clean('ip',", 'pfb_ip_script_failure_close($alias,');
+
+		$this->assertSame(1, substr_count($dnsbl_cont, 'pfb_dnsbl_script_failure_continue($alias,'), 'DNSBL failure continue must stay in its loop');
+		$this->assertSame(1, substr_count($dnsbl_close, 'pfb_dnsbl_script_failure_close($alias,'), 'DNSBL failure close must stay at alias-pass end');
+		$this->assertSame(1, substr_count($ip_cont, 'pfb_ip_script_failure_continue($alias,'), 'IP failure continue must stay in its loop');
+		$this->assertSame(1, substr_count($ip_close, 'pfb_ip_script_failure_close($alias,'), 'IP failure close must stay at alias-pass end');
 	}
 }

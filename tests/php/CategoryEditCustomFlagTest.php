@@ -16,8 +16,7 @@ use PHPUnit\Framework\TestCase;
  *
  * Like WidgetSubmitPostGuardTest, the page carries top-level execution and
  * cannot be require()d off-appliance, so the REAL custom-flag block is
- * eval-extracted verbatim (its leading comment and the following
- * config_set_path('.../custom', ...) line are the unique anchors).
+ * eval-extracted between its executable condition and following config write.
  */
 final class CategoryEditCustomFlagTest extends TestCase
 {
@@ -31,20 +30,25 @@ final class CategoryEditCustomFlagTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		$src = file_get_contents(
+		$src = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php'
 		);
-		if ($src === false) {
+		if ($src === '') {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_category_edit.php');
 		}
 
 		if (!function_exists('pfb_category_edit_oracle_customflag')) {
 			if (!preg_match(
-				'/\/\/ Set flag to update CustomList on next Cron.*?\n(.*?)(?=\n\n\t\tconfig_set_path\("installedpackages\/\{\$conf_type\}\/config\/\{\$rowid\}\/custom",)/s',
+				'/(if \(base64_decode\(config_get_path\("installedpackages\/\{\$conf_type\}\/config\/\{\$rowid\}\/custom", \x27\x27\)\) != \$_POST\[\x27custom\x27\]\) \{'
+				. '.*?touch\([^;]+;\s*\}\s*\})'
+				. '\s*config_set_path\("installedpackages\/\{\$conf_type\}\/config\/\{\$rowid\}\/custom", base64_encode/s',
 				$src,
 				$m
 			)) {
 				throw new RuntimeException('test bootstrap: custom-flag block not found in category_edit source');
+			}
+			if (strpos($m[1], 'pfb_determine_list_detail($action, \'\', $conf_type, $rowid)') === FALSE) {
+				throw new RuntimeException('test bootstrap: custom-flag executable boundary lost list-detail dispatch');
 			}
 			eval(
 				'function pfb_category_edit_oracle_customflag(string $conf_type, int $rowid, string $suffix): void {'
@@ -110,7 +114,7 @@ final class CategoryEditCustomFlagTest extends TestCase
 		set_error_handler(
 			static function (int $errno, string $errstr) use (&$warnings): bool {
 				$warnings[] = $errstr;
-				return true;
+				return TRUE;
 			},
 			E_WARNING | E_NOTICE
 		);

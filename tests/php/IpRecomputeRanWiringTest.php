@@ -4,114 +4,107 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/**
- * issue #1084 review — pfblockerng_apply.inc source tripwires for wiring that cannot be driven
- * as a unit under PHPUnit (the reload pass is thousands of lines of top-level script code,
- * not a callable function): the recompute-invocation loop must record, per family, whether
- * the batch recompute verb actually ran THIS pass, and both the v4/v6 suppression-body
- * gates and the FINAL REPORTING closing-pass gate must consume that signal via the new
- * pure helpers (pfb_ip_suppress_body_active(), pfb_ip_closing_pass_active()) rather than
- * their old feed-changed-only / dedup-only conditions.
- *
-	 * Assertions scan the CURRENT file content with PHP comments removed, so comment-only
-	 * identifiers cannot satisfy the wiring oracle. A stale rename/refactor of any pinned
-	 * line fails this oracle immediately.
- */
 final class IpRecomputeRanWiringTest extends TestCase
 {
-	private const PFBLOCKERNG_APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+	private string $root;
 
-	private function source(): string
+	protected function setUp(): void
 	{
-		$source = '';
-		foreach (token_get_all((string) file_get_contents(self::PFBLOCKERNG_APPLY)) as $token) {
-			if (is_array($token)) {
-				if (in_array($token[0], [T_COMMENT, T_DOC_COMMENT], TRUE)) {
-					continue;
-				}
-				$token = $token[1];
-			}
-			$source .= $token;
+		$this->root = sys_get_temp_dir() . '/pfb_recompute_ran_' . getmypid() . '_' . uniqid();
+		$this->assertTrue(mkdir($this->root, 0777, TRUE));
+	}
+
+	protected function tearDown(): void
+	{
+		foreach (glob("{$this->root}/*") ?: [] as $path) {
+			@unlink($path);
 		}
-		return $source;
+		@rmdir($this->root);
 	}
 
-	public function testInvocationLoopRecordsWhetherRecomputeRanPerFamily(): void
+	public function testRanFlagIsSetOnlyAfterTheMatchingFamilyRunnerCompletes(): void
 	{
-		$source = $this->source();
-		$this->assertMatchesRegularExpression(
-			'/^\s*\$pfb_recompute_ran_v4 = FALSE;$/m',
-			$source,
-			'the v4 recompute-ran flag must initialize FALSE in executable code'
-		);
-		$this->assertMatchesRegularExpression(
-			'/^\s*\$pfb_recompute_ran_v6 = FALSE;$/m',
-			$source,
-			'the v6 recompute-ran flag must initialize FALSE in executable code'
-		);
-		$this->assertMatchesRegularExpression(
-			'/^\s*\$pfb_recompute_ran_v4 = TRUE;$/m',
-			$source,
-			'the v4 recompute-ran flag must become TRUE after the recompute exec'
-		);
-		$this->assertMatchesRegularExpression(
-			'/^\s*\$pfb_recompute_ran_v6 = TRUE;$/m',
-			$source,
-			'the v6 recompute-ran flag must become TRUE after the recompute exec'
-		);
+		$ranV4 = $ranV6 = FALSE;
+		$families = [];
+		pfb_ip_recompute_mark_ran('v4', static function () use (&$families): void {
+			$families[] = 'v4';
+		}, $ranV4, $ranV6);
+		$this->assertSame(['v4'], $families);
+		$this->assertTrue($ranV4);
+		$this->assertFalse($ranV6);
+
+		pfb_ip_recompute_mark_ran('v6', static function () use (&$families): void {
+			$families[] = 'v6';
+		}, $ranV4, $ranV6);
+		$this->assertSame(['v4', 'v6'], $families);
+		$this->assertTrue($ranV6);
 	}
 
-	public function testV4SuppressionBodyGateConsumesTheSuppressBodyActiveHelperAndV4Flag(): void
+	public function testFailedRecomputeDoesNotAdvertiseThatFamilyAsRan(): void
 	{
-		$source = $this->source();
+		$ranV4 = $ranV6 = FALSE;
+		$this->expectException(RuntimeException::class);
+		try {
+			pfb_ip_recompute_mark_ran('v4', static function (): void {
+				throw new RuntimeException('recompute failed');
+			}, $ranV4, $ranV6);
+		} finally {
+			$this->assertFalse($ranV4);
+			$this->assertFalse($ranV6);
+		}
+	}
+
+	public function testSuppressionBodyUsesTheFamilySpecificRecomputeSignal(): void
+	{
+		$this->assertTrue(pfb_ip_suppress_body_active(TRUE, TRUE, TRUE, TRUE, FALSE, TRUE));
+		$this->assertFalse(pfb_ip_suppress_body_active(TRUE, TRUE, TRUE, TRUE, FALSE, FALSE));
+		$this->assertFalse(pfb_ip_suppress_body_active(TRUE, FALSE, TRUE, TRUE, FALSE, TRUE));
+		$this->assertTrue(pfb_ip_suppress_body_active(TRUE, TRUE, TRUE, TRUE, TRUE, FALSE));
+	}
+
+	public function testRecomputeSignalSelectionFollowsTheRequestedAddressFamily(): void
+	{
+		$this->assertTrue(pfb_ip_suppress_body_for_vtype(TRUE, '_v4', TRUE, TRUE, FALSE, TRUE, FALSE));
+		$this->assertFalse(pfb_ip_suppress_body_for_vtype(TRUE, '_v4', TRUE, TRUE, FALSE, FALSE, TRUE));
+		$this->assertTrue(pfb_ip_suppress_body_for_vtype(TRUE, '_v6', TRUE, TRUE, FALSE, FALSE, TRUE));
+		$this->assertFalse(pfb_ip_suppress_body_for_vtype(TRUE, '_v6', TRUE, TRUE, FALSE, TRUE, FALSE));
+		$this->assertFalse(pfb_ip_suppress_body_for_vtype(TRUE, '_bogus', TRUE, TRUE, FALSE, TRUE, TRUE));
+	}
+
+	public function testClosingPassRequiresV4RecomputeWhenDedupIsOff(): void
+	{
+		$this->assertSame([TRUE, 'on'], pfb_ip_closing_pass_active(TRUE, FALSE));
+		$this->assertSame([TRUE, 'off'], pfb_ip_closing_pass_active(FALSE, TRUE));
+		$this->assertSame([FALSE, 'off'], pfb_ip_closing_pass_active(FALSE, FALSE));
+	}
+
+	public function testV6SnapshotPipelineWritesTheFamilySnapshot(): void
+	{
+		$source = "{$this->root}/Feed_v6.txt";
+		$snapdir = "{$this->root}/snap";
+		$origdir = "{$this->root}/orig";
+		mkdir($snapdir);
+		mkdir($origdir);
+		file_put_contents($source, "2001:db8::1\n");
+
+		pfb_ip_recompute_write_snapshot($source, 'Feed_v6', $snapdir, $origdir);
+
+		$this->assertSame("2001:db8::1\n", file_get_contents("{$snapdir}/Feed_v6.snap"));
+		$this->assertSame("1\n", file_get_contents("{$origdir}/Feed_v6.aggcount"));
+	}
+
+	public function testLiveFirewallDispatchConsumesFamilyRecomputeSignals(): void
+	{
+		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
 		$this->assertStringContainsString(
-			"pfb_ip_suppress_body_active(\$pfb['supp'] === PfbToggle::On, \$vtype == '_v4', \$pfb['supp_update'], \$pfbadv, in_array(\$alias, \$final_alias_old), \$pfb_recompute_ran_v4)",
+			'$suppression_body_active = pfb_ip_suppress_body_for_vtype($pfb[\'supp\'] === PfbToggle::On, $vtype, $pfb[\'supp_update\'], $pfbadv, in_array($alias, $final_alias_old), $pfb_recompute_ran_v4, $pfb_recompute_ran_v6)',
 			$source,
-			'the v4 suppression-body gate must call pfb_ip_suppress_body_active() with the v4 recompute-ran flag'
-		);
-	}
-
-	public function testV6SuppressionBodyGateConsumesTheSuppressBodyActiveHelperAndV6Flag(): void
-	{
-		$source = $this->source();
-		$this->assertStringContainsString(
-			"pfb_ip_suppress_body_active(\$pfb['supp'] === PfbToggle::On, \$vtype == '_v6', \$pfb['supp_update'], \$pfbadv, in_array(\$alias, \$final_alias_old), \$pfb_recompute_ran_v6)",
-			$source,
-			'the v6 suppression-body gate must call pfb_ip_suppress_body_active() with the v6 recompute-ran flag'
-		);
-	}
-
-	public function testFinalReportingClosingGateConsumesTheClosingPassActiveHelperAndV4Flag(): void
-	{
-		$source = $this->source();
-		$this->assertStringContainsString(
-			"pfb_ip_closing_pass_active(\$pfb['dup'] === PfbToggle::On, \$pfb_recompute_ran_v4)",
-			$source,
-			'the FINAL REPORTING gate must call pfb_ip_closing_pass_active() with the v4 recompute-ran flag'
-		);
-	}
-
-	public function testContinentSnapshotWriteIsNoLongerGatedToV4Only(): void
-	{
-		$source = $this->source();
-		$needle = 'pfb_ip_recompute_write_snapshot("{$pfbfolder}/{$cc_alias}.txt", $cc_alias, $pfb[\'snapdir\'], $pfb[\'origdir\']);';
-		$pos    = strpos($source, $needle);
-		$this->assertNotFalse($pos, "continent snapshot call site not found -- update this oracle if it moved/changed shape\nsource file: " . self::PFBLOCKERNG_APPLY);
-
-		// The gating "if" immediately precedes the call; a v6 continent's live .txt IS
-		// regenerated every GeoIP change (unconditional on $vtype -- see the sibling
-		// @copy() calls a few lines up), so a v4-only snapshot gate freezes its recompute
-		// memberlist entry at the one-time upgrade seed forever (issue #1084 review).
-		$precedingWindow = substr($source, max(0, $pos - 200), 200);
-		$this->assertStringNotContainsString(
-			"\$vtype == '_v4' && \$pfbadv",
-			$precedingWindow,
-			'the continent snapshot write must no longer be gated to v4 only -- v6 continents need their own recompute snapshot too'
+			'issue #993: live firewall orchestration has no safe off-box driver; its one code-only pin must dispatch through the tested family seam'
 		);
 		$this->assertStringContainsString(
-			'if ($pfbadv) {',
-			$precedingWindow,
-			'expected the gate to be $pfbadv alone (both v4 and v6 continents snapshot)'
+			'pfb_ip_closing_pass_active($pfb[\'dup\'] === PfbToggle::On, $pfb_recompute_ran_v4)',
+			$source,
+			'issue #993: final live closing dispatch is appliance-only; its code-only pin must pass the behavior-tested v4 recompute signal'
 		);
 	}
 }

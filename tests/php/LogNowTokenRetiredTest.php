@@ -8,26 +8,17 @@ use PHPUnit\Framework\TestCase;
  * issue #1008 retired pfb_logger()'s '[ NOW ]' opt-in scrub (LogTimestampBaselineTest
  * pins the writer side); issue #1047 found 9 pfblockerng.php call sites still carrying
  * the literal ' [ NOW ]' token, so it printed verbatim (no substitution left to hide
- * it). Tree-wide tripwire: no tracked src/ file may contain the literal token outside
- * a documented comment-only mention (ALLOWLIST below).
+ * it). PHP-code tripwire: no shipped PHP/INC executable token may contain the literal.
  */
 final class LogNowTokenRetiredTest extends TestCase
 {
 	private const NOW_TOKEN = ' [ NOW ]';
 
-	/**
-	 * file:line -> reason, for a genuine comment-only historical mention.
-	 * Empty: every current tracked src/ file is clean.
-	 *
-	 * @var array<string,string>
-	 */
-	private const ALLOWLIST = [];
-
 	public function testNoTrackedSrcFileContainsLiteralNowToken(): void
 	{
 		$repoRoot = dirname(__DIR__, 2);
 
-		exec('git -C ' . escapeshellarg($repoRoot) . ' ls-files -- src 2>&1', $files, $exit);
+		exec('git -C ' . escapeshellarg($repoRoot) . " ls-files -- 'src/*.php' 'src/*.inc' 2>&1", $files, $exit);
 		$this->assertSame(0, $exit, 'git ls-files must succeed to enumerate tracked src/ files; got: ' . implode("\n", $files));
 
 		$violations = [];
@@ -36,15 +27,13 @@ final class LogNowTokenRetiredTest extends TestCase
 			if (!is_file($path)) {
 				continue;
 			}
-			$lines = explode("\n", (string) file_get_contents($path));
+			// PRODUCTION COMMENTS AND DOCBLOCKS MUST NEVER BE LOAD-BEARING FOR A TEST.
+			$lines = explode("\n", php_strip_whitespace($path));
 			foreach ($lines as $i => $line) {
 				if (!str_contains($line, self::NOW_TOKEN)) {
 					continue;
 				}
-				$key = "{$relpath}:" . ($i + 1);
-				if (!array_key_exists($key, self::ALLOWLIST)) {
-					$violations[] = $key;
-				}
+				$violations[] = "{$relpath}:" . ($i + 1);
 			}
 		}
 

@@ -27,7 +27,7 @@ final class PfbFeedNormalizeTest extends TestCase
 	protected function setUp(): void
 	{
 		$this->dir = sys_get_temp_dir() . '/pfb_norm_' . getmypid() . '_' . bin2hex(random_bytes(4));
-		mkdir($this->dir, 0777, true);
+		mkdir($this->dir, 0777, TRUE);
 	}
 
 	protected function tearDown(): void
@@ -227,19 +227,15 @@ final class PfbFeedNormalizeTest extends TestCase
 
 	// --- wiring guard: only the parse-loop consumers normalize ---
 
-	public function testOnlyTheParseLoopConsumersCallNormalize(): void
+	/** #993: both live parse loops are unsafe off-appliance; only comment-free outer pins remain. */
+	public function testLiveFeedDispatchNormalizesOnlyAtParseConsumers(): void
 	{
-		// The changed-verdict means "changed since the last CONSUMER normalize".
-		// A download-time (pfb_download finalize) call records the fresh source
-		// digest first, so the consumer then reads 'unchanged' for genuinely-new
-		// content and the norm-skip gate strands stale staging -- caught live by
-		// tests/smoke/test_smoke_feeds.py::test_cron_detects_changed_local_feed.
-		$inc = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertSame(0, preg_match_all('/=\s*pfb_feed_normalize\(/', $inc),
-			'pfblockerng.inc must contain no pfb_feed_normalize() call site -- never a download-time call');
-		$apply = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		$this->assertSame(2, preg_match_all('/=\s*pfb_feed_normalize\(/', $apply),
-			'exactly the two parse loops (DNSBL + IP) consume pfb_feed_normalize');
+		$apply = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertSame(2, substr_count($apply, '$pfb_norm = pfb_feed_normalize('),
+			'live download consumers must normalize exactly once per DNSBL/IP parse loop');
+		$inc = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+		$this->assertSame(0, substr_count($inc, '$pfb_norm = pfb_feed_normalize('),
+			'the download/firewall orchestration include must not normalize before its live parse consumers');
 	}
 
 	// --- the Python converter leg (real charset_normalizer where available) ---

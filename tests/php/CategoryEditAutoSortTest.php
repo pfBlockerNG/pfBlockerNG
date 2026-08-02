@@ -16,28 +16,31 @@ use PHPUnit\Framework\TestCase;
  *
  * Like CategoryEditRowMoveTest, the page carries top-level execution and
  * cannot be require()d off-appliance: the sort block is eval-extracted
- * verbatim from the REAL source, anchored on its own leading comment, as a
+ * from the REAL source using its executable if/assignment boundaries, as a
  * pure array transform.
  */
 final class CategoryEditAutoSortTest extends TestCase
 {
 	public static function setUpBeforeClass(): void
 	{
-		$src = file_get_contents(
+		$src = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php'
 		);
-		if ($src === false) {
+		if ($src === '') {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_category_edit.php');
 		}
 
 		if (!function_exists('pfb_category_oracle_auto_sort')) {
 			if (!preg_match(
-				'/\/\/ Sort row by Header\/Label field followed by Enabled\/Disabled State settings\n'
-				. '(if \(empty\(\$input_errors\).*?\$rowdata\[\$rowid\]\[\'row\'\] = \$final;\n)/s',
+				'/(if \(empty\(\$input_errors\).*?\$rowdata\[\$rowid\]\[\'row\'\] = \$final;)'
+				. '\s*\}\s*\$numrows/s',
 				$src,
 				$m
 			)) {
 				throw new RuntimeException('test bootstrap: auto-sort block not found');
+			}
+			if (strpos($m[1], '$rowdata[$rowid][\'row\'] = $final;') === FALSE) {
+				throw new RuntimeException('test bootstrap: auto-sort executable boundary lost its assignment');
 			}
 			eval(
 				'function pfb_category_oracle_auto_sort(array $rowdata, $rowid): array {'

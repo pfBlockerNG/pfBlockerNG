@@ -1173,7 +1173,6 @@ function pfblockerng_uc_countries() {
 						if (!empty($geoip['continent_en']) && !empty(pfb_filter($geoip['continent_en'], PFB_FILTER_WORD, 'php'))) {
 
 							$pfb_file	= "{$pfb['ccdir']}/{$geoip['continent_en']}_v{$type}.txt";
-							$pfb_file_esc	= escapeshellarg($pfb_file);
 
 							if (!file_exists($pfb_file)) {
 								$header  = '# Generated from MaxMind Inc. on: ' . date('Y-m-d H:i:s', time()) . "\n";
@@ -1187,33 +1186,17 @@ function pfblockerng_uc_countries() {
 									if (!empty(pfb_filter($iso, PFB_FILTER_WORD, 'php'))) {
 
 										$iso_file	= "{$pfb['ccdir_tmp']}/{$iso}_v{$type}.txt";
-										$iso_file_esc	= escapeshellarg($iso_file);
 										$geoip_id = '';
 										if (!empty($geoip['id'])) {
 											$geoip_id = " [{$geoip['id']}]";
 										}
 
 										if (file_exists($iso_file)) {
-											// issue #1261: NULL (read failure) -> 'ERROR', not 0 -- "0" trips the
-											// placeholder-blank branch below and would empty a country's list on
-											// a transient read error.
-											$networks = pfb_count_lines($iso_file) ?? 'ERROR';
-											$iso_header  = "# Country: {$geoip['name']}{$geoip_id}\n";
-											$iso_header .= "# ISO Code: {$iso}\n";
-											$iso_header .= "# Total Networks: {$networks}\n";
+											$iso_header = pfb_geoip_networks_header($iso_file, $geoip['name'], $geoip_id, $iso);
 											@file_put_contents($pfb_file, $iso_header, FILE_APPEND | LOCK_EX);
 
 											// Concat ISO Networks to Continent file
-											// issue #1299: no 2>&1 -- merging cat's stderr into this
-											// data file lets a cat failure corrupt it on reparse.
-											$cat_output = array();
-											$cat_status = 0;
-											exec("{$pfb['cat']} {$iso_file_esc} >> {$pfb_file_esc}", $cat_output, $cat_status);
-											if ($cat_status !== 0) {
-												$log = "\n Failed to append ISO data [ {$iso} IPv{$type} ] (cat status {$cat_status})\n";
-												pfb_logger("{$log}", 4);
-												@unlink($pfb_file);
-												rmdir_recursive("{$pfb['ccdir_tmp']}");
+											if (!pfb_geoip_append_iso_data($pfb['cat'], $iso_file, $pfb_file, $pfb['ccdir_tmp'], $iso, $type)) {
 												return FALSE;
 											}
 										}
