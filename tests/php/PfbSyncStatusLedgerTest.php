@@ -86,6 +86,94 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		return static fn (): int => $ts;
 	}
 
+	private function readEvent(mixed $stream, string $awaited, bool $child = FALSE): string
+	{
+		$line = @fgets($stream);
+		if ($line !== FALSE) {
+			if (str_starts_with($line, 'SALVAGE_EXPIRED ')) {
+				$this->fail(trim(substr($line, strlen('SALVAGE_EXPIRED '))));
+			}
+			return $line;
+		}
+		$message = "salvage cap expired / stuck or environment: awaiting {$awaited}";
+		if ($child) {
+			@fwrite($stream, "SALVAGE_EXPIRED {$message}\n");
+			exit(2);
+		}
+		$meta = stream_get_meta_data($stream);
+		$reason = ($meta['timed_out'] ?? FALSE) ? 'timeout' : (feof($stream) ? 'EOF' : 'read failure');
+		$this->fail("{$message} ({$reason})");
+	}
+
+	private function expectChildEvent(mixed $stream, string $expected, string $awaited): void
+	{
+		$event = trim($this->readEvent($stream, $awaited, TRUE));
+		if ($event !== $expected) {
+			@fwrite($stream, "EVENT_ERROR awaiting {$awaited}; expected {$expected}; got {$event}\n");
+			exit(2);
+		}
+	}
+
+	/** @return array{0:int,1:mixed} */
+	private function forkRealDataFileHolder(string $lockPath): array
+	{
+		if (!function_exists('pcntl_fork')) {
+			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		}
+		[$parent, $child] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		stream_set_timeout($parent, 5);
+		stream_set_timeout($child, 5);
+		$pid = pcntl_fork();
+		if ($pid === -1) {
+			$this->markTestSkipped('pcntl_fork() failed.');
+		}
+		if ($pid === 0) {
+			fclose($parent);
+			$fp = @fopen($lockPath, 'c');
+			if ($fp === FALSE || !@flock($fp, LOCK_EX)) {
+				@fwrite($child, "HOLDER_ERROR\n");
+				exit(1);
+			}
+			fwrite($child, "LOCKED\n");
+			$this->expectChildEvent($child, 'RELEASE', 'data-file holder release');
+			@flock($fp, LOCK_UN);
+			fclose($fp);
+			fwrite($child, "UNLOCKED\n");
+			fclose($child);
+			exit(0);
+		}
+		fclose($child);
+		return [$pid, $parent];
+	}
+
+	private function releaseDataFileHolder(?int &$pid, mixed $parent): void
+	{
+		if (!is_resource($parent)) {
+			return;
+		}
+		@fwrite($parent, "RELEASE\n");
+		try {
+			$this->assertSame("UNLOCKED\n", $this->readEvent($parent, 'data-file holder unlock'));
+		} catch (Throwable $error) {
+			if (is_int($pid) && $pid > 0 && function_exists('posix_kill')) {
+				@posix_kill($pid, SIGKILL);
+			}
+			fclose($parent);
+			if (is_int($pid) && $pid > 0) {
+				pcntl_waitpid($pid, $status);
+			}
+			$pid = NULL;
+			throw $error;
+		}
+		fclose($parent);
+		if (is_int($pid) && $pid > 0) {
+			pcntl_waitpid($pid, $status);
+			$this->assertTrue(pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0,
+				'data-file holder must exit cleanly after the release event');
+		}
+		$pid = NULL;
+	}
+
 	// -----------------------------------------------------------------------
 	// open() — new key, refresh-in-place, injectable clock.
 	// -----------------------------------------------------------------------
@@ -272,54 +360,74 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		}
 
 		$lockPath   = $this->dir . '/pfb_sync_status.json.lock';
-		$markerPath = $this->dir . '/child_locked.marker';
-		$pid        = pcntl_fork();
-		if ($pid === -1) {
+		[$controlParent, $controlChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		stream_set_timeout($controlParent, 5);
+		stream_set_timeout($controlChild, 5);
+		[$eventParent, $eventChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		stream_set_timeout($eventParent, 5);
+		stream_set_timeout($eventChild, 5);
+		$holderPid = pcntl_fork();
+		if ($holderPid === -1) {
 			$this->markTestSkipped('pcntl_fork() failed.');
 		}
-
-		if ($pid === 0) {
-			// Child: acquire the SAME lock file pfb_sync_status_locked() uses, signal
-			// readiness (issue #1055 -- a marker file, not a guessed sleep), hold the
-			// lock briefly (simulating a still-running backgrounded pass mid
-			// read-modify-write), then release. A fresh fopen() (not an inherited fd)
-			// makes this a genuine second, independent lock holder.
-			$fp = fopen($lockPath, 'c');
-			if ($fp === FALSE || !flock($fp, LOCK_EX)) {
-				exit(1);	// never signal readiness without a REAL hold -- the parent
-					// would then run with no contention and a negative assertion
-					// ("no dispatch", "entry survived") would pass for the wrong reason
+		if ($holderPid === 0) {
+			fclose($controlParent);
+			fclose($eventParent);
+			$fp = @fopen($lockPath, 'c');
+			if ($fp === FALSE || !@flock($fp, LOCK_EX)) {
+				@fwrite($eventChild, "HOLDER_ERROR\n");
+				exit(1);
 			}
-			touch($markerPath);
-			usleep(500000);
-			flock($fp, LOCK_UN);
+			fwrite($eventChild, "LOCKED\n");
+			$this->expectChildEvent($controlChild, 'RELEASE', 'ledger lock holder release');
+			fwrite($eventChild, "RELEASING\n");
+			@flock($fp, LOCK_UN);
 			fclose($fp);
+			fclose($controlChild);
+			fclose($eventChild);
 			exit(0);
 		}
+		fclose($controlChild);
+		$this->assertSame("LOCKED\n", $this->readEvent($eventParent, 'ledger lock holder acquisition'));
 
-		// issue #1055: poll for the child's readiness marker instead of guessing a
-		// fixed delay -- a bounded poll is the accepted last resort across this
-		// fork boundary (no in-process signal reaches across processes).
-		$deadline = microtime(TRUE) + 2.0;
-		while (!file_exists($markerPath)) {
-			if (microtime(TRUE) >= $deadline) {
-				pcntl_waitpid($pid, $waitStatus);
-				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
-			}
-			usleep(1000);
+		$openerPid = pcntl_fork();
+		if ($openerPid === -1) {
+			$this->markTestSkipped('pcntl_fork() failed.');
 		}
-
-		$start = microtime(TRUE);
-		pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
-		$elapsed = microtime(TRUE) - $start;
-
-		pcntl_waitpid($pid, $waitStatus);
-
-		$this->assertGreaterThanOrEqual(
-			0.3,
-			$elapsed,
-			'pfb_sync_status_open() must block on the lock file until the real concurrent holder releases it -- a near-instant return means the read-modify-write span is not actually protected'
-		);
+		if ($openerPid === 0) {
+			fclose($controlParent);
+			fclose($eventParent);
+			$probe = @fopen($lockPath, 'c');
+			$wouldBlock = 0;
+			$contended = $probe !== FALSE
+				&& !@flock($probe, LOCK_EX | LOCK_NB, $wouldBlock)
+				&& $wouldBlock === 1;
+			if (is_resource($probe)) {
+				fclose($probe);
+			}
+			if (!$contended) {
+				fwrite($eventChild, "PROBE_FAILED\n");
+				exit(1);
+			}
+			fwrite($eventChild, "CONTENDED\n");
+			pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+			fwrite($eventChild, "RETURNED\n");
+			fclose($eventChild);
+			exit(0);
+		}
+		fclose($eventChild);
+		$this->assertSame("CONTENDED\n", $this->readEvent($eventParent, 'concurrent opener contention'));
+		fwrite($controlParent, "RELEASE\n");
+		$this->assertSame("RELEASING\n", $this->readEvent($eventParent, 'ledger lock holder release while still locked'));
+		$this->assertSame("RETURNED\n", $this->readEvent($eventParent, 'concurrent opener return after unlock'));
+		fclose($controlParent);
+		fclose($eventParent);
+		pcntl_waitpid($holderPid, $holderStatus);
+		pcntl_waitpid($openerPid, $openerStatus);
+		$this->assertTrue(pcntl_wifexited($holderStatus) && pcntl_wexitstatus($holderStatus) === 0,
+			'ledger lock holder must exit cleanly after the release event');
+		$this->assertTrue(pcntl_wifexited($openerStatus) && pcntl_wexitstatus($openerStatus) === 0,
+			'concurrent opener must return cleanly after the release event');
 	}
 
 	// -----------------------------------------------------------------------
@@ -342,7 +450,9 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		]);
 
 		$lockPath   = $this->dir . '/pfb_sync_status.json.lock';
-		$markerPath = $this->dir . '/child_locked_expiry.marker';
+		[$holderParent, $holderChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		stream_set_timeout($holderParent, 5);
+		stream_set_timeout($holderChild, 5);
 		$pid        = pcntl_fork();
 		if ($pid === -1) {
 			$GLOBALS['pfb'] = $originalPfb;
@@ -350,30 +460,23 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		}
 
 		if ($pid === 0) {
-			// Child: fresh fopen() (not an inherited fd) -- a genuine second,
-			// independent lock holder. Holds well past the parent's small budget.
+			fclose($holderParent);
 			$fp = fopen($lockPath, 'c');
 			if ($fp === FALSE || !flock($fp, LOCK_EX)) {
-				exit(1);	// never signal readiness without a REAL hold -- the parent
-					// would then run with no contention and a negative assertion
-					// ("no dispatch", "entry survived") would pass for the wrong reason
+				@fwrite($holderChild, "HOLDER_ERROR\n");
+				exit(1);
 			}
-			touch($markerPath);
-			usleep(500000);
+			fwrite($holderChild, "LOCKED\n");
+			$this->expectChildEvent($holderChild, 'RELEASE', 'sync-status expiry holder release');
 			flock($fp, LOCK_UN);
 			fclose($fp);
+			fwrite($holderChild, "UNLOCKED\n");
+			fclose($holderChild);
 			exit(0);
 		}
 
-		$deadline = microtime(TRUE) + 2.0;
-		while (!file_exists($markerPath)) {
-			if (microtime(TRUE) >= $deadline) {
-				pcntl_waitpid($pid, $waitStatus);
-				$GLOBALS['pfb'] = $originalPfb;
-				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
-			}
-			usleep(1000);
-		}
+		fclose($holderChild);
+		$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'sync-status expiry holder acquisition'));
 
 		try {
 			$fnRan = FALSE;
@@ -388,7 +491,12 @@ final class PfbSyncStatusLedgerTest extends TestCase
 			$this->assertStringContainsString('sync-status ledger lock timed out', $log,
 				'a timed-out acquire must be logged loudly -- an operator-observable signal, never silent');
 		} finally {
+			fwrite($holderParent, "RELEASE\n");
+			$this->assertSame("UNLOCKED\n", $this->readEvent($holderParent, 'sync-status expiry holder unlock'));
+			fclose($holderParent);
 			pcntl_waitpid($pid, $waitStatus);
+			$this->assertTrue(pcntl_wifexited($waitStatus) && pcntl_wexitstatus($waitStatus) === 0,
+				'sync-status expiry holder must exit cleanly after the release event');
 			$GLOBALS['pfb'] = $originalPfb;
 		}
 	}
@@ -516,50 +624,6 @@ final class PfbSyncStatusLedgerTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Fork a child that opens $lockPath fresh (never an inherited fd -- a genuine
-	 * second, independent lock holder), takes LOCK_EX, signals readiness via a
-	 * marker file, holds for $holdMicros, then releases.
-	 *
-	 * @return int the child pid (caller must pcntl_waitpid it).
-	 */
-	private function forkRealDataFileHolder(string $lockPath, string $markerPath, int $holdMicros): int
-	{
-		if (!function_exists('pcntl_fork')) {
-			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
-		}
-		$pid = pcntl_fork();
-		if ($pid === -1) {
-			$this->markTestSkipped('pcntl_fork() failed.');
-		}
-		if ($pid === 0) {
-			$fp = fopen($lockPath, 'c');
-			if ($fp === FALSE || !flock($fp, LOCK_EX)) {
-				exit(1);	// never signal readiness without a REAL hold -- the parent
-					// would then run with no contention and a negative assertion
-					// ("no dispatch", "entry survived") would pass for the wrong reason
-			}
-			touch($markerPath);
-			usleep($holdMicros);
-			flock($fp, LOCK_UN);
-			fclose($fp);
-			exit(0);
-		}
-		return $pid;
-	}
-
-	private function waitForDataFileMarker(string $markerPath, int $pid): void
-	{
-		$deadline = microtime(TRUE) + 2.0;
-		while (!file_exists($markerPath)) {
-			if (microtime(TRUE) >= $deadline) {
-				pcntl_waitpid($pid, $waitStatus);
-				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
-			}
-			usleep(1000);
-		}
-	}
-
-	/**
 	 * read_all()'s $unavailable discriminates: TRUE only on a genuine
 	 * lock-acquire expiry against the DATA file (pfb_sync_status.json) itself --
 	 * a SEPARATE lock from pfb_sync_status_locked()'s .json.lock EX acquire.
@@ -571,17 +635,16 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
 
 		$dataPath   = $this->dir . '/pfb_sync_status.json';
-		$markerPath = $this->dir . '/read_all_timeout.marker';
-		// Holder keeps the lock for 400ms -- well past the 150ms budget under test.
-		$pid = $this->forkRealDataFileHolder($dataPath, $markerPath, 400000);
-		$this->waitForDataFileMarker($markerPath, $pid);
-
-		$unavailable = FALSE;
-		$data = pfb_sync_status_read_all($this->dir, 0.15, $unavailable);
-		pcntl_waitpid($pid, $waitStatus);
-
-		$this->assertSame([], $data, 'an expired read must still return [] (same as empty), never a stale/partial ledger');
-		$this->assertTrue($unavailable, 'a genuine lock-acquire expiry must set $unavailable = TRUE');
+		[$pid, $holderParent] = $this->forkRealDataFileHolder($dataPath);
+		$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'read_all data-file holder acquisition'));
+		try {
+			$unavailable = FALSE;
+			$data = pfb_sync_status_read_all($this->dir, 0.15, $unavailable);
+			$this->assertSame([], $data, 'an expired read must still return [] (same as empty), never a stale/partial ledger');
+			$this->assertTrue($unavailable, 'a genuine lock-acquire expiry must set $unavailable = TRUE');
+		} finally {
+			$this->releaseDataFileHolder($pid, $holderParent);
+		}
 
 		// FALSE: absent ledger file.
 		$absentDir = $this->dir . '/absent_subdir';
@@ -622,12 +685,13 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		$this->assertCount(1, pfb_sync_status_list_open($this->dir), 'precondition: one entry exists before the contended open()');
 
 		$dataPath   = $this->dir . '/pfb_sync_status.json';
-		$markerPath = $this->dir . '/open_abort_timeout.marker';
-		$pid = $this->forkRealDataFileHolder($dataPath, $markerPath, 400000);
-		$this->waitForDataFileMarker($markerPath, $pid);
-
-		pfb_sync_status_open('dnsbl', 'SomeGroup', 'apply', 'should never persist', $this->dir, self::clockAt(2000), 0.15);
-		pcntl_waitpid($pid, $waitStatus);
+		[$pid, $holderParent] = $this->forkRealDataFileHolder($dataPath);
+		$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'open abort data-file holder acquisition'));
+		try {
+			pfb_sync_status_open('dnsbl', 'SomeGroup', 'apply', 'should never persist', $this->dir, self::clockAt(2000), 0.15);
+		} finally {
+			$this->releaseDataFileHolder($pid, $holderParent);
+		}
 
 		$open = pfb_sync_status_list_open($this->dir);
 		$this->assertCount(1, $open,
@@ -649,12 +713,13 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		$this->assertCount(1, pfb_sync_status_list_open($this->dir), 'precondition: the entry must be open before the contended close()');
 
 		$dataPath   = $this->dir . '/pfb_sync_status.json';
-		$markerPath = $this->dir . '/close_abort_timeout.marker';
-		$pid = $this->forkRealDataFileHolder($dataPath, $markerPath, 400000);
-		$this->waitForDataFileMarker($markerPath, $pid);
-
-		pfb_sync_status_close('ip', 'pfB_StillOpen_v4', 'download', $this->dir, 0.15);
-		pcntl_waitpid($pid, $waitStatus);
+		[$pid, $holderParent] = $this->forkRealDataFileHolder($dataPath);
+		$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'close abort data-file holder acquisition'));
+		try {
+			pfb_sync_status_close('ip', 'pfB_StillOpen_v4', 'download', $this->dir, 0.15);
+		} finally {
+			$this->releaseDataFileHolder($pid, $holderParent);
+		}
 
 		$open = pfb_sync_status_list_open($this->dir);
 		$this->assertCount(1, $open,

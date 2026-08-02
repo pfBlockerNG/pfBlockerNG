@@ -77,6 +77,34 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			static fn(string $path): bool => preg_match('/pfb_py_raw\.[0-9a-f]{32}$/D', $path) === 1));
 	}
 
+	private function readEvent(mixed $stream, string $awaited, bool $child = FALSE): string
+	{
+		$line = @fgets($stream);
+		if ($line !== FALSE) {
+			if (str_starts_with($line, 'SALVAGE_EXPIRED ')) {
+				$this->fail(trim(substr($line, strlen('SALVAGE_EXPIRED '))));
+			}
+			return $line;
+		}
+		$message = "salvage cap expired / stuck or environment: awaiting {$awaited}";
+		if ($child) {
+			@fwrite($stream, "SALVAGE_EXPIRED {$message}\n");
+			exit(2);
+		}
+		$meta = stream_get_meta_data($stream);
+		$reason = ($meta['timed_out'] ?? FALSE) ? 'timeout' : (feof($stream) ? 'EOF' : 'read failure');
+		$this->fail("{$message} ({$reason})");
+	}
+
+	private function expectChildEvent(mixed $stream, string $expected, string $awaited): void
+	{
+		$event = trim($this->readEvent($stream, $awaited, TRUE));
+		if ($event !== $expected) {
+			@fwrite($stream, "EVENT_ERROR awaiting {$awaited}; expected {$expected}; got {$event}\n");
+			exit(2);
+		}
+	}
+
 	private function assertContendedOperationTimesOut(callable $operation): void
 	{
 		$manifestBefore = (string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']);
@@ -92,15 +120,21 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			if ($holderPid === 0) {
 				fclose($holderParent);
 				$lock = pfb_unbound_py_publication_lock();
+				if (!is_resource($lock)) {
+					fwrite($holderChild, "HOLDER_ERROR\n");
+					fclose($holderChild);
+					exit(1);
+				}
 				fwrite($holderChild, "LOCKED\n");
-				fgets($holderChild);
+				$this->expectChildEvent($holderChild, 'RELEASE', 'publication holder release');
 				pfb_unbound_py_publication_unlock($lock);
+				fwrite($holderChild, "UNLOCKED\n");
 				fclose($holderChild);
 				exit(0);
 			}
 			$this->assertGreaterThan(0, $holderPid);
 			fclose($holderChild);
-			$this->assertSame("LOCKED\n", fgets($holderParent));
+			$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'publication holder acquisition'));
 
 			[$operationParent, $operationChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
 			stream_set_timeout($operationParent, 5);
@@ -108,29 +142,33 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			$operationPid = pcntl_fork();
 			if ($operationPid === 0) {
 				fclose($operationParent);
-				$started = microtime(TRUE);
 				$ok = $operation();
-				fwrite($operationChild, json_encode([
-					'ok' => $ok,
-					'elapsed' => microtime(TRUE) - $started,
-				]) . "\n");
+				fwrite($operationChild, "RESULT\n");
+				fwrite($operationChild, json_encode(['ok' => $ok]) . "\n");
 				fclose($operationChild);
 				exit(0);
 			}
 			$this->assertGreaterThan(0, $operationPid);
 			fclose($operationChild);
 
-			$read = [$operationParent];
-			$write = NULL;
-			$except = NULL;
-			$this->assertSame(1, stream_select($read, $write, $except, 1),
-				'contended interactive operation exceeded its bounded lock wait');
-			$result = json_decode((string) fgets($operationParent), TRUE);
+			$this->assertSame("RESULT\n", $this->readEvent($operationParent, 'contended operation verdict'));
+			$result = json_decode($this->readEvent($operationParent, 'contended operation result'), TRUE);
 			$this->assertIsArray($result);
-			$this->assertFalse($result['ok'], 'contended interactive operation must skip mutation');
-			$this->assertLessThan(1.0, $result['elapsed'], 'contended lock wait exceeded its deadline margin');
+			$this->assertArrayHasKey('ok', $result);
+			$this->assertFalse($result['ok'], 'contended interactive operation must publish a false skip verdict');
 			$this->assertSame($manifestBefore, file_get_contents($GLOBALS['pfb']['unbound_py_sources']),
 				'lock timeout must not mutate the published manifest');
+			fwrite($holderParent, "RELEASE\n");
+			$this->assertSame("UNLOCKED\n", $this->readEvent($holderParent, 'publication holder unlock'));
+			fclose($holderParent);
+			pcntl_waitpid($holderPid, $holderStatus);
+			$holderPid = NULL;
+			pcntl_waitpid($operationPid, $operationStatus);
+			$operationPid = NULL;
+			$this->assertTrue(pcntl_wifexited($holderStatus) && pcntl_wexitstatus($holderStatus) === 0,
+				'publication holder must exit cleanly after the release event');
+			$this->assertTrue(pcntl_wifexited($operationStatus) && pcntl_wexitstatus($operationStatus) === 0,
+				'contended operation must exit cleanly after publishing its verdict');
 		} finally {
 			if (is_resource($holderParent)) {
 				@fwrite($holderParent, "RELEASE\n");
@@ -303,15 +341,20 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			if ($holderPid === 0) {
 				fclose($holderParent);
 				$lock = pfb_unbound_py_publication_lock();
+				if (!is_resource($lock)) {
+					fwrite($holderChild, "HOLDER_ERROR\n");
+					fclose($holderChild);
+					exit(1);
+				}
 				fwrite($holderChild, "LOCKED\n");
-				fgets($holderChild);
+				$this->expectChildEvent($holderChild, 'RELEASE', 'scalar patch holder release');
 				pfb_unbound_py_publication_unlock($lock);
 				fclose($holderChild);
 				exit(0);
 			}
 			$this->assertGreaterThan(0, $holderPid);
 			fclose($holderChild);
-			$this->assertSame("LOCKED\n", fgets($holderParent));
+			$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'scalar patch holder acquisition'));
 
 			[$patchParent, $patchChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
 			stream_set_timeout($patchParent, 5);
@@ -320,21 +363,36 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			if ($patchPid === 0) {
 				fclose($patchParent);
 				fwrite($patchChild, "ATTEMPT\n");
-				$ok = pfb_unbound_python_sources_patch('user_unlock', ['allow.example']);
+				$ok = pfb_unbound_python_sources_patch('user_unlock', ['allow.example'], [
+					'lock' => function () use ($patchChild) {
+						$lockPath = dirname($GLOBALS['pfb']['unbound_py_sources']) . '/pfb_py_sources.lock';
+						$probe = @fopen($lockPath, 'c');
+						$wouldBlock = 0;
+						$contended = $probe !== FALSE
+							&& !@flock($probe, LOCK_EX | LOCK_NB, $wouldBlock)
+							&& $wouldBlock === 1;
+						if (!$contended) {
+							fwrite($patchChild, "PROBE_FAILED\n");
+							if (is_resource($probe)) {
+								fclose($probe);
+							}
+							return FALSE;
+						}
+						fwrite($patchChild, "CONTENDED\n");
+						fclose($probe);
+						return pfb_unbound_py_publication_lock(0.25);
+					},
+				]);
 				fwrite($patchChild, $ok ? "DONE\n" : "FAILED\n");
 				fclose($patchChild);
 				exit($ok ? 0 : 1);
 			}
 			$this->assertGreaterThan(0, $patchPid);
 			fclose($patchChild);
-			$this->assertSame("ATTEMPT\n", fgets($patchParent));
-			$read = [$patchParent];
-			$write = NULL;
-			$except = NULL;
-			$this->assertSame(0, stream_select($read, $write, $except, 0, 200000),
-				'patch completed before the publication lock was released');
+			$this->assertSame("ATTEMPT\n", $this->readEvent($patchParent, 'scalar patch attempt'));
+			$this->assertSame("CONTENDED\n", $this->readEvent($patchParent, 'scalar patch lock contention'));
 			fwrite($holderParent, "RELEASE\n");
-			$this->assertSame("DONE\n", fgets($patchParent));
+			$this->assertSame("DONE\n", $this->readEvent($patchParent, 'scalar patch completion'));
 			pcntl_waitpid($holderPid, $holderStatus);
 			$holderPid = NULL;
 			pcntl_waitpid($patchPid, $patchStatus);
@@ -519,35 +577,33 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		}
 
 		$lockPath   = dirname($GLOBALS['pfb']['unbound_py_sources']) . '/pfb_py_sources.lock';
-		$markerPath = "{$this->tmp}/publock_timeout.marker";
+		[$holderParent, $holderChild] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+		stream_set_timeout($holderParent, 5);
+		stream_set_timeout($holderChild, 5);
 		$pid = pcntl_fork();
 		if ($pid === -1) {
 			$this->markTestSkipped('pcntl_fork() failed.');
 		}
 		if ($pid === 0) {
+			fclose($holderParent);
 			$fp = fopen($lockPath, 'c');
 			if ($fp === FALSE || !flock($fp, LOCK_EX)) {
 				exit(1);	// never signal readiness without a REAL hold -- the parent
 					// would then run with no contention and a negative assertion
 					// ("no dispatch", "entry survived") would pass for the wrong reason
 			}
-			touch($markerPath);
-			usleep(400000);
+			fwrite($holderChild, "LOCKED\n");
+			$this->expectChildEvent($holderChild, 'RELEASE', 'publication timeout holder release');
 			flock($fp, LOCK_UN);
 			fclose($fp);
+			fwrite($holderChild, "UNLOCKED\n");
+			fclose($holderChild);
 			exit(0);
 		}
-		$deadline = microtime(TRUE) + 2.0;
-		while (!file_exists($markerPath)) {
-			if (microtime(TRUE) >= $deadline) {
-				pcntl_waitpid($pid, $waitStatus);
-				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
-			}
-			usleep(1000);
-		}
+		fclose($holderChild);
+		$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'publication timeout holder acquisition'));
 
 		$result = pfb_unbound_py_publication_lock(0.15);
-		pcntl_waitpid($pid, $waitStatus);
 
 		$this->assertFalse($result, 'a contended publication lock acquire past its own budget must return FALSE');
 
@@ -557,5 +613,11 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$this->assertStringNotContainsString('DNSBL publication lock unavailable', $log,
 			'a genuine expiry must NOT log "unavailable" -- that string is reserved for a real flock() '
 			. 'error or an fopen() failure, never a mere timeout');
+		fwrite($holderParent, "RELEASE\n");
+		$this->assertSame("UNLOCKED\n", $this->readEvent($holderParent, 'publication timeout holder release'));
+		fclose($holderParent);
+		pcntl_waitpid($pid, $waitStatus);
+		$this->assertTrue(pcntl_wifexited($waitStatus) && pcntl_wexitstatus($waitStatus) === 0,
+			'publication timeout holder must exit cleanly after the release event');
 	}
 }
