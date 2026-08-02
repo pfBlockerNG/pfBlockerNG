@@ -13,6 +13,8 @@ use PHPUnit\Framework\TestCase;
 final class LogSelectedTypeTest extends TestCase
 {
 	private array $savedPost = [];
+	private static string $pconfigRegion;
+	private static string $selectedRegion;
 
 	public static function setUpBeforeClass(): void
 	{
@@ -28,42 +30,38 @@ final class LogSelectedTypeTest extends TestCase
 
 		// Region 1: $_POST ingress -> $pconfig['logtype']/'logFile' defaults.
 		if (!function_exists('pfb_log_oracle_pconfig')) {
-			if (!preg_match('/\$pconfig = array\(\);\n(.*?)\n\n\/\/ Send logfile to screen/s', $src, $m)) {
+			if (!preg_match('/\$pconfig = array\(\);\n(.*?\$pconfig\[[\'\"]logFile[\'\"]\] = \'\';\n\})/s', $src, $m)) {
 				throw new RuntimeException('test bootstrap: pconfig ingress region not found');
 			}
+			self::$pconfigRegion = $m[1];
 			eval('function pfb_log_oracle_pconfig(): array { $pconfig = array(); ' . $m[1] . ' return $pconfig; }');
 		}
 
 		// Region 5: 'logtype' -> $selected -> $pfb_logtypes[$selected] offset,
 		// through $logs/getlogs()/$clearable/$downloadable (issues #1198/#1207).
 		if (!function_exists('pfb_log_oracle_selected_logtype')) {
-			// Match the selected-logtype block while retaining the production
-			// scalar fallback and its downstream consumer matrix.
-			if (!preg_match(
-				'/\/\/ Collect selected logs\n\$logs = array\(\);\n\$clearable = \$downloadable = FALSE;\n'
-				. '((?:\/\/[^\n]*\n)*\$selected = .*?;\n'
-				. '\$pfb_sel = \$pfb_logtypes\[\$selected\];\n'
-				. '\n'
-				. 'if \(isset\(\$pfb_sel\[\'logs\'\]\)\) \{\n'
-				. '\t\$logs = \$pfb_sel\[\'logs\'\];\n'
-				. '\} else \{\n'
-				. '\t\$logs = getlogs\(\$pfb_sel\[\'logdir\'\], \$pfb_sel\[\'ext\'\]\);\n'
-				. '\}\n'
-				. '\n'
-				. '\$logdir\t\t= \$pfb_sel\[\'logdir\'\] \?: \'\/var\/db\/pfblockerng\';\n'
-				. '\$clearable\t= \$pfb_sel\[\'clear\'\] \?: FALSE;\n'
-				. '\$downloadable\t= \$pfb_sel\[\'download\'\] \?: FALSE;)/',
-				$src,
-				$m
-			)) {
+			$start = strpos($src, '$logs = array();');
+			$selected = strpos($src, '$selected =', $start === false ? 0 : $start);
+			$downloadable = strpos($src, '$downloadable', $selected === false ? 0 : $selected);
+			$end = $downloadable === false ? false : strpos($src, ";\n", $downloadable);
+			if ($start === false || $selected === false || $downloadable === false || $end === false || $end <= $start) {
 				throw new RuntimeException('test bootstrap: selected-logtype region not found');
 			}
+			self::$selectedRegion = substr($src, $start, $end + 2 - $start);
 			eval(
 				'function pfb_log_oracle_selected_logtype(array $pconfig, array $pfb_logtypes): array { '
-				. $m[1]
+				. self::$selectedRegion
 				. ' return compact(\'pfb_sel\', \'logs\', \'clearable\', \'downloadable\'); }'
 			);
 		}
+	}
+
+	public function testExtractionUsesExecutableBoundariesNotProductionComments(): void
+	{
+		$this->assertStringStartsWith('if ($_POST)', self::$pconfigRegion);
+		$this->assertStringNotContainsString('Send logfile to screen', self::$pconfigRegion);
+		$this->assertStringStartsWith('$logs = array();', self::$selectedRegion);
+		$this->assertStringNotContainsString('Collect selected logs', self::$selectedRegion);
 	}
 
 	protected function setUp(): void

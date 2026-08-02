@@ -49,13 +49,11 @@ if (($_GET['ajax'] ?? '') === 'tail') {
 	// e.g. an HAProxy graceful-restart drain in an update hook -- one such blocked poll leaves the
 	// client's in-flight guard stuck and freezes the live tail until a manual reload.
 	session_write_close();
-	header('Content-Type: application/json');
-	header('Cache-Control: no-cache, no-store, must-revalidate');
-	$pfb_has_off = isset($_GET['offset']) && ctype_digit((string) $_GET['offset']);
-	// JSON_INVALID_UTF8_SUBSTITUTE: without it, an invalid-UTF-8 byte in the tailed log
-	// line makes json_encode() return FALSE -- print(FALSE) is an empty response body,
-	// which fails the client's JSON.parse() and stalls the live tail (issue #1814).
-	print(json_encode(pfb_log_tail_payload('update', $pfb_has_off ? (int) $_GET['offset'] : -1, $pfb_has_off), JSON_INVALID_UTF8_SUBSTITUTE));
+	$pfb_tail_response = pfb_update_tail_response($_GET, 'pfb_log_tail_payload');
+	foreach ($pfb_tail_response['headers'] as $pfb_tail_header) {
+		header($pfb_tail_header);
+	}
+	print($pfb_tail_response['body']);
 	exit;
 }
 
@@ -218,10 +216,7 @@ display_top_tabs($tab_array, TRUE);
 // Update sub-tabs: Run (this page), Hooks (pre/post update scripts), and Edit Hooks
 // (issue #1669 Part B: the gated hook-script authoring editor, directly after Hooks).
 // Second display_top_tabs row, matching the Feeds page IPv4/IPv6/DNSBL sub-tab idiom.
-$tab_array_sub	= array();
-$tab_array_sub[]	= array(gettext('Run'),		TRUE,	'/pfblockerng/pfblockerng_update.php');
-$tab_array_sub[]	= array(gettext('Hooks'),	FALSE,	'/pfblockerng/pfblockerng_hooks.php');
-$tab_array_sub[]	= array(gettext('Edit Hooks'),	FALSE,	'/pfblockerng/pfblockerng_edit_hooks.php');
+$tab_array_sub = pfb_edit_hooks_tabs('run');
 display_top_tabs($tab_array_sub, TRUE);
 pfb_print_pending_changes_box(TRUE);
 

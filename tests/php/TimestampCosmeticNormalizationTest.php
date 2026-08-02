@@ -9,9 +9,8 @@ use PHPUnit\Framework\TestCase;
  * outside the two genuine wrong-year bugs (DnsblAliasUpdateTimestampFormatTest /
  * ClearSqliteTimestampFormatTest cover those). Each site here already carried a
  * year (or, for the debug filename, has zero external consumer); the changes are
- * pure format polish, verified with a source tripwire (so this oracle goes red the
- * moment the format string drifts again) plus a reproduction of the exact new
- * behaviour.
+ * pure format polish. Top-level producers have no off-appliance callable seam, so
+ * retained pins use php_strip_whitespace() and never production comments.
  */
 final class TimestampCosmeticNormalizationTest extends TestCase
 {
@@ -34,13 +33,20 @@ final class TimestampCosmeticNormalizationTest extends TestCase
 		date_default_timezone_set($this->savedTz);
 	}
 
+	private function codeSource(string $path): string
+	{
+		$source = php_strip_whitespace($path);
+		$this->assertNotSame('', $source, "could not read comment-free source: {$path}");
+		return $source;
+	}
+
 	// -----------------------------------------------------------------------
 	// pfblockerng_apply.inc:1791 -- the /tmp debug-snapshot filename ('M_j' -> 'Y-m-d')
 	// -----------------------------------------------------------------------
 
 	public function testDebugFilenameSourceUsesFixedWidthFormat(): void
 	{
-		$source = (string) file_get_contents(self::PFBLOCKERNG_APPLY);
+		$source = $this->codeSource(self::PFBLOCKERNG_APPLY);
 		$this->assertStringContainsString(
 			"\$ts = date('Y-m-d', time());",
 			$source,
@@ -77,7 +83,7 @@ final class TimestampCosmeticNormalizationTest extends TestCase
 
 	public function testMaxmindGmdateSourceUsesIsoFormat(): void
 	{
-		$source = (string) file_get_contents(self::PFBLOCKERNG_PHP);
+		$source = $this->codeSource(self::PFBLOCKERNG_PHP);
 		$this->assertStringContainsString(
 			"@gmdate('Y-m-d H:i:s', pfb_file_mtime(\$maxmind_cont));",
 			$source,
@@ -156,7 +162,7 @@ final class TimestampCosmeticNormalizationTest extends TestCase
 	 */
 	public function testExpiresHttpHeaderIsByteForByteUnchanged(): void
 	{
-		$source = (string) file_get_contents(self::INDEX_PHP);
+		$source = $this->codeSource(self::INDEX_PHP);
 		$this->assertStringContainsString(
 			'header("Expires: Sat, 26 Jul 2014 05:00:00 GMT");',
 			$source,

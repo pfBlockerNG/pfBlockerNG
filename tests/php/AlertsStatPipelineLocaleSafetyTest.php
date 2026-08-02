@@ -34,6 +34,8 @@ use PHPUnit\Framework\TestCase;
  *     pin (same convention as UpdateAjaxTailJsonEncodingTest's call-site flag
  *     pin) covering EVERY exec( in the block -- the coverage axis the brief
  *     asks for, cheaper than eval-extracting and driving all ~20 pipelines.
+ *     This top-level block has no off-appliance callable seam, so the retained
+ *     pin scans php_strip_whitespace() output and cannot depend on comments.
  */
 #[CoversNothing]
 final class AlertsStatPipelineLocaleSafetyTest extends TestCase
@@ -41,8 +43,7 @@ final class AlertsStatPipelineLocaleSafetyTest extends TestCase
 	private const ALERTS_PHP = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_alerts.php';
 
 	/** Bounds the whole per-$stat_type stats/chart section (both anchors are unique in the file). */
-	private const BLOCK_START_ANCHOR = "\$cut_cmd = \"{\$pfb['cut']} -d ',' -f{\$column}\";";
-	private const BLOCK_END_ANCHOR = '// Collect DNSBL widget statistics';
+	private const BLOCK_END_ANCHOR = 'function pfb_hsc(';
 
 	private string|false $prevLcAll = FALSE;
 	private string $tmpLog = '';
@@ -52,21 +53,19 @@ final class AlertsStatPipelineLocaleSafetyTest extends TestCase
 		if (function_exists('pfb_alerts_oracle_default_stat_pipeline')) {
 			return;
 		}
-		$src = self::readSource();
-
 		// Anchored on the literal `default:` case of the $stat_type switch -- the
 		// simplest pipeline in the block (fewest interpolated command vars), verbatim.
-		$block = self::boundedBlock($src);
-		$defPos = strpos($block, "default:\n");
+		$block = self::boundedCodeBlock();
+		$defPos = strpos($block, 'default:');
 		if ($defPos === FALSE) {
 			throw new RuntimeException('test bootstrap: default: case not found in the stats/chart switch');
 		}
-		$lineStart = $defPos + strlen("default:\n");
-		$lineEnd = strpos($block, "\n", $lineStart);
-		if ($lineEnd === FALSE) {
+		$lineStart = strpos($block, 'exec("', $defPos);
+		$lineEnd = strpos($block, ');', $lineStart === FALSE ? 0 : $lineStart);
+		if ($lineStart === FALSE || $lineEnd === FALSE) {
 			throw new RuntimeException('test bootstrap: could not find the end of the default: case exec() line');
 		}
-		$execLine = trim(substr($block, $lineStart, $lineEnd - $lineStart));
+		$execLine = substr($block, $lineStart, $lineEnd + 2 - $lineStart);
 		if (strpos($execLine, 'exec(') !== 0) {
 			throw new RuntimeException("test bootstrap: default: case body was not the expected single exec() line, got: {$execLine}");
 		}
@@ -101,26 +100,18 @@ final class AlertsStatPipelineLocaleSafetyTest extends TestCase
 		}
 	}
 
-	private static function readSource(): string
+	private static function boundedCodeBlock(): string
 	{
-		$src = file_get_contents(self::ALERTS_PHP);
-		if ($src === FALSE) {
-			throw new RuntimeException('test oracle: failed to read ' . self::ALERTS_PHP);
+		$code = php_strip_whitespace(self::ALERTS_PHP);
+		if ($code === '') {
+			throw new RuntimeException('test oracle: failed to read comment-free Alerts source');
 		}
-		return $src;
-	}
-
-	private static function boundedBlock(string $src): string
-	{
-		$start = strpos($src, self::BLOCK_START_ANCHOR);
-		if ($start === FALSE) {
-			throw new RuntimeException('test oracle: stats/chart block start anchor not found');
+		$start = strpos($code, '$cut_cmd =');
+		$end = strpos($code, self::BLOCK_END_ANCHOR, $start === FALSE ? 0 : $start);
+		if ($start === FALSE || $end === FALSE || $end <= $start) {
+			throw new RuntimeException('test oracle: comment-free stats/chart block bounds not found');
 		}
-		$end = strpos($src, self::BLOCK_END_ANCHOR, $start);
-		if ($end === FALSE || $end <= $start) {
-			throw new RuntimeException('test oracle: stats/chart block end anchor not found');
-		}
-		return substr($src, $start, $end - $start);
+		return substr($code, $start, $end - $start);
 	}
 
 	public function testDefaultStatPipelineSurvivesAnInvalidUtf8ByteUnderAUtf8Locale(): void
@@ -161,7 +152,7 @@ final class AlertsStatPipelineLocaleSafetyTest extends TestCase
 
 	public function testEveryStatChartExecCarriesTheByteSafeLocalePrefix(): void
 	{
-		$block = self::boundedBlock(self::readSource());
+		$block = self::boundedCodeBlock();
 
 		// Every site in this block calls exec("...") -- a double-quoted string
 		// literal as the first argument -- never exec($var) or a single-quoted one.

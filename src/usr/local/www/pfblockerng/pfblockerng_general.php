@@ -101,6 +101,8 @@ $pconfig['pfb_syntax_highlight']	= PfbConfig::read('gen/pfb_syntax_highlight')->
 // same $pfb_syntaxhl_on idiom pfblockerng_dnsbl.php establishes at its line 38.
 $pfb_syntaxhl_on = pfb_editor_enabled();
 
+$pfb_general_editor = pfb_general_editor_render($pfb_syntaxhl_on);
+
 // Select field options
 $options_pfb_interval	= [	'1' => 'Every hour',
 				'2' => 'Every 2 hours',
@@ -245,7 +247,7 @@ if ($_POST) {
 			// pfb_keep precedent (lenient adapter). Written into $pfb['gconfig'] so the
 			// writeSection() call below includes it -- a bare PfbConfig::write() before
 			// writeSection() would be clobbered by the section-level write.
-			$pfb['gconfig']['pfb_syntax_highlight']	= (($_POST['pfb_syntax_highlight'] ?? '') === 'on') ? 'on' : 'off';
+			$pfb['gconfig']['pfb_syntax_highlight']	= pfb_general_toggle_stored_value($_POST['pfb_syntax_highlight'] ?? '');
 
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
@@ -353,17 +355,11 @@ $section->addInput(new Form_Textarea(
 // help cover the whole editor (issue #1888) -- the config key stays pfb_syntax_highlight.
 $section->addInput(new Form_Checkbox(
 	'pfb_syntax_highlight',
-	'Advanced Text Editor',
+	pfb_general_toggle_label(),
 	gettext('Enable'),
 	pfb_cfg_toggle_read($pconfig['pfb_syntax_highlight']) === PfbToggle::On,
 	'on'
-))->setHelp('Client-side editor for the list and script fields (e.g. the DNSBL Regex '
-		. 'List, custom lists, IP suppression lists, hook scripts): syntax highlighting, '
-		. 'line numbers and undo/redo everywhere, plus inline linting on the DNSBL Regex '
-		. 'List and hook scripts. Unchecking this leaves those fields as plain text boxes '
-		. 'and skips loading the editor assets &mdash; useful for low-end client machines. '
-		. 'Validation always stays server-side either way.'
-);
+))->setHelp(pfb_general_toggle_help());
 
 $group = new Form_Group('CRON Settings');
 $group->add(new Form_Select(
@@ -595,10 +591,7 @@ $form->add($section);
 print($form);
 print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
 ?>
-<?php if ($pfb_syntaxhl_on): ?>
-<!-- issue #1875 step 2b: live syntax highlighting for the internal-feed-host allowlist field -->
-<script src="vendor/codemirror/cm-regex.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-regex.min.js')?>"></script>
-<?php endif; ?>
+<?=$pfb_general_editor['asset']?>
 
 <script type="text/javascript">
 //<![CDATA[
@@ -614,12 +607,7 @@ events.push(function() {
 	$('#pfb_feed_internal_filter').click(pfb_sync_internal_filter);
 	pfb_sync_internal_filter();
 
-<?php if ($pfb_syntaxhl_on): ?>
-	// issue #1875 step 2b: plain-list field shares the regex page's CM6 bundle; mountLists skips absent ids
-	if (window.pfbCM) {
-		window.pfbCM.mountLists(['pfb_feed_internal_allowlist']);
-	}
-<?php endif; ?>
+<?=$pfb_general_editor['lists']?>
 
 });
 //]]>

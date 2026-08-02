@@ -20,11 +20,13 @@ final class FeedsCustomOutputEncodingTest extends TestCase
 			throw new RuntimeException('failed to read pfblockerng_feeds.php');
 		}
 
-		$start = strpos($src, "\t\t\t\t<?php\n\t\t\t\t// issue #1496:");
+		$table = strpos($src, "\n\t\t\t<tbody>\n");
+		$start = strpos($src, "\t\t\t\t\$p_type = '';", $table === false ? 0 : $table);
 		$end   = strpos($src, "\n\t\t\t<tbody>\n\t\t\t</table>", $start === false ? 0 : $start);
 		if ($start === false || $end === false || $end <= $start) {
 			throw new RuntimeException('could not locate the custom-feed row template');
 		}
+		$this->assertStringNotContainsString('issue #1496', substr($src, $start, $end - $start));
 
 		$ex_feeds = ['ipv4' => [[
 			'aliasname' => 'InvalidUtf8Feed',
@@ -36,7 +38,7 @@ final class FeedsCustomOutputEncodingTest extends TestCase
 		$type_label = ['ipv4' => 'IPv4'];
 
 		ob_start();
-		eval('?>' . substr($src, $start, $end - $start));
+		eval('?>' . "<?php\n" . substr($src, $start, $end - $start));
 		return (string) ob_get_clean();
 	}
 

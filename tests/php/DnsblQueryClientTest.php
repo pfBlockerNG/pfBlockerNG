@@ -25,7 +25,7 @@ use PHPUnit\Framework\TestCase;
  *     is ignored, never a fatal, and the call times out to NULL;
  *   - blocked=false with empty attribution is a VALID verdict, not NULL;
  *   - timeout paths emit the expected verdict/lock signals and clean up;
- *     a source pin records the independent hard poll cap that protects a stalled clock;
+ *     an injected stalled clock proves the independent hard poll cap runs;
  *   - cleanup: reply+request unlinked on a matched verdict or timeout, no
  *     ".pfbctl_" staging residue.
  *
@@ -549,20 +549,25 @@ final class DnsblQueryClientTest extends TestCase
 		$this->assertStringContainsString('query channel lock timed out', $logs);
 	}
 
-	/** Source pin: stalled-clock behavior has no deterministic production seam. */
-	public function testSourcePinLockWaitContainsIndependentHardPollCap(): void
+	public function testLockWaitHardPollCapStopsEvenWhenClockStalls(): void
 	{
-		$function = new ReflectionFunction('pfb_dnsbl_query');
-		$lines = file($function->getFileName());
-		$this->assertIsArray($lines);
-		$source = implode('', array_slice(
-			$lines,
-			$function->getStartLine() - 1,
-			$function->getEndLine() - $function->getStartLine() + 1
-		));
-
-		$this->assertStringContainsString('$lock_polls++;', $source);
-		$this->assertStringContainsString('$lock_polls >= $max_lock_polls', $source);
+		$lock = fopen($this->lockPath(), 'c');
+		$this->assertIsResource($lock);
+		$this->assertTrue(flock($lock, LOCK_EX));
+		$reads = 0;
+		$stalledClock = static function () use (&$reads): float {
+			$reads++;
+			return 100.0;
+		};
+		$started = microtime(TRUE);
+		try {
+			$this->assertNull(pfb_dnsbl_query('stalled-clock.example', 'A', 0.01, $stalledClock));
+		} finally {
+			flock($lock, LOCK_UN);
+			fclose($lock);
+		}
+		$this->assertGreaterThan(1, $reads, 'the shipped wait must consult the injected clock');
+		$this->assertLessThan(0.5, microtime(TRUE) - $started, 'the independent poll cap must stop a stalled clock');
 	}
 
 	public function testContendedLockWithShortTimeoutReturnsWithoutPublishing(): void

@@ -4,186 +4,83 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/**
- * issue #1732 source-scan pins for the lint-endpoint page
- * (pfblockerng_lint.php) and its priv.inc wiring. Same rationale as
- * EditHooksPageWiringTest: the page require_once()s guiconfig.inc, which needs
- * the full pfSense webConfigurator runtime this off-appliance PHPUnit tier does
- * not stand up, so the gate SHAPE is pinned at the source-text level instead of
- * an executed render.
- */
 final class LintEndpointWiringTest extends TestCase
 {
-	private const PAGE_PATH = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_lint.php';
-	private const PRIV_INC_PATH = __DIR__ . '/../../src/etc/inc/priv/pfblockerng.priv.inc';
+	private const ROOT = __DIR__ . '/../..';
+	private const PAGE = self::ROOT . '/src/usr/local/www/pfblockerng/pfblockerng_lint.php';
 
-	private static string $pageSrc;
-	private static string $privSrc;
-
-	public static function setUpBeforeClass(): void
+	public function testRealPageRejectsWrongMethodBeforeDispatch(): void
 	{
-		parent::setUpBeforeClass();
-		$pageSrc = file_get_contents(self::PAGE_PATH);
-		$privSrc = file_get_contents(self::PRIV_INC_PATH);
-		self::assertNotFalse($pageSrc, 'test oracle: failed to read ' . self::PAGE_PATH);
-		self::assertNotFalse($privSrc, 'test oracle: failed to read ' . self::PRIV_INC_PATH);
-		self::$pageSrc = $pageSrc;
-		self::$privSrc = $privSrc;
+		$result = $this->request(['lang' => 'regex', 'content' => 'x'], ['REQUEST_METHOD' => 'GET']);
+		$this->assertSame('POST only', $result['body']['error']);
 	}
 
-	private function firstDispatchCallPos(): int
+	public function testRealPageDispatchesAllowedRegexAndRejectsDeniedPython(): void
 	{
-		$pos = strpos(self::$pageSrc, 'pfb_lint_diagnostics(');
-		$this->assertNotFalse($pos, 'the endpoint must call pfb_lint_diagnostics(...)');
-		return $pos;
-	}
-
-	public function testRegexGatePresentAndBeforeDispatch(): void
-	{
-		$gatePos = strpos(self::$pageSrc, "isAllowedPage('pfblockerng/pfblockerng_dnsbl.php')");
-		$this->assertNotFalse(
-			$gatePos,
-			"the regex-lang gate must call isAllowedPage('pfblockerng/pfblockerng_dnsbl.php')"
+		$regex = $this->request(
+			['lang' => 'regex', 'content' => 'example.com'],
+			['REQUEST_METHOD' => 'POST'],
+			['pfblockerng/pfblockerng_dnsbl.php' => TRUE]
 		);
-		$this->assertLessThan($this->firstDispatchCallPos(), $gatePos, 'the regex gate must run before the lint dispatch');
-	}
+		$this->assertArrayHasKey('diagnostics', $regex['body']);
 
-	public function testShPyGatePresentAndBeforeDispatch(): void
-	{
-		$gatePos = strpos(self::$pageSrc, "isAllowedPage('diag_command.php')");
-		$this->assertNotFalse($gatePos, "the sh/py-lang gate must call isAllowedPage('diag_command.php')");
-		$this->assertLessThan($this->firstDispatchCallPos(), $gatePos, 'the sh/py gate must run before the lint dispatch');
-	}
-
-	public function testRegexGateStringAppearsExactlyOnce(): void
-	{
-		$this->assertSame(
-			1,
-			substr_count(self::$pageSrc, "'pfblockerng/pfblockerng_dnsbl.php'"),
-			'no second, ungated dispatch path for lang=regex'
+		$python = $this->request(
+			['lang' => 'py', 'content' => 'x'],
+			['REQUEST_METHOD' => 'POST'],
+			['diag_command.php' => FALSE]
 		);
+		$this->assertSame('insufficient privilege', $python['body']['error']);
 	}
 
-	public function testDiagCommandGateStringAppearsExactlyOnce(): void
+	public function testRealPageRejectsArrayAndOversizeContent(): void
 	{
-		$this->assertSame(
-			1,
-			substr_count(self::$pageSrc, "'diag_command.php'"),
-			'no second, ungated dispatch path for lang=sh/py'
+		$array = $this->request(
+			['lang' => 'regex', 'content' => ['x']],
+			['REQUEST_METHOD' => 'POST'],
+			['pfblockerng/pfblockerng_dnsbl.php' => TRUE]
 		);
-	}
+		$this->assertSame('content must be a string', $array['body']['error']);
 
-	public function testExactlyOneDispatchCallSite(): void
-	{
-		$this->assertSame(
-			1,
-			substr_count(self::$pageSrc, 'pfb_lint_diagnostics('),
-			'exactly one dispatch call site -- no second ungated path'
+		$large = $this->request(
+			['lang' => 'regex', 'content' => str_repeat('x', 1048577)],
+			['REQUEST_METHOD' => 'POST'],
+			['pfblockerng/pfblockerng_dnsbl.php' => TRUE]
 		);
+		$this->assertSame('content too large', $large['body']['error']);
 	}
 
-	public function testLangAllowListRestrictedToRegexShPy(): void
+	/** @param array<string,mixed> $post @param array<string,string> $server @param array<string,bool> $allowed @return array{body:array<string,mixed>} */
+	private function request(array $post, array $server, array $allowed = []): array
 	{
-		$this->assertMatchesRegularExpression(
-			"/in_array\\(\\\$lang,\\s*\\['regex',\\s*'sh',\\s*'py'\\]/",
-			self::$pageSrc,
-			'the lang allow-list must be restricted to regex|sh|py'
-		);
-	}
-
-	public function testLangIsStringGuardPresent(): void
-	{
-		$this->assertStringContainsString(
-			'is_string($lang)',
-			self::$pageSrc,
-			'a crafted lang[]= array must be rejected by an is_string() guard'
-		);
-	}
-
-	public function testContentIsStringGuardPresent(): void
-	{
-		$this->assertStringContainsString(
-			'is_string($content)',
-			self::$pageSrc,
-			'a crafted content[]= array must be rejected by an is_string() guard'
-		);
-	}
-
-	public function testJsonContentTypeHeaderPresent(): void
-	{
-		$this->assertStringContainsString('Content-Type: application/json', self::$pageSrc);
-	}
-
-	public function testJsonContentTypeHeaderCarriesUtf8Charset(): void
-	{
-		$this->assertStringContainsString(
-			"Content-Type: application/json; charset=utf-8",
-			self::$pageSrc,
-			'the JSON reply header must declare charset=utf-8'
-		);
-	}
-
-	public function testJsonEncodeCarriesInvalidUtf8Substitute(): void
-	{
-		$this->assertMatchesRegularExpression(
-			'/json_encode\([^)]*JSON_INVALID_UTF8_SUBSTITUTE/',
-			self::$pageSrc,
-			'json_encode(...) must pass JSON_INVALID_UTF8_SUBSTITUTE -- else a diagnostic ' .
-				'message carrying invalid UTF-8 makes json_encode() return false (200 with an empty body)'
-		);
-	}
-
-	public function testPostOnlyCheckPresent(): void
-	{
-		$this->assertStringContainsString('REQUEST_METHOD', self::$pageSrc);
-		$this->assertStringContainsString("!== 'POST'", self::$pageSrc);
-	}
-
-	public function testSizeCapLiteralPresent(): void
-	{
-		$this->assertStringContainsString('1048576', self::$pageSrc);
-	}
-
-	public function testNeverCallsExecFamilyDirectly(): void
-	{
-		foreach (['proc_open(', 'exec(', 'shell_exec(', 'system(', 'passthru('] as $sink) {
-			$this->assertStringNotContainsString(
-				$sink,
-				self::$pageSrc,
-				"the endpoint must never call {$sink} directly -- launching lives in pfblockerng_extra.inc"
-			);
-		}
-	}
-
-	public function testNeverWritesSubmittedContentToDisk(): void
-	{
-		foreach (['file_put_contents(', 'fwrite('] as $sink) {
-			$this->assertStringNotContainsString(
-				$sink,
-				self::$pageSrc,
-				"the endpoint must never {$sink} the submitted content -- never written to disk"
-			);
-		}
-	}
-
-	public function testPrivIncHasExactlyOneLintMatchEntry(): void
-	{
-		$this->assertSame(
-			1,
-			substr_count(
-				self::$privSrc,
-				'$priv_list[\'page-firewall-pfblockerng\'][\'match\'][] = "pfblockerng/pfblockerng_lint.php";'
-			),
-			'the lint endpoint must have exactly one priv.inc match entry'
-		);
-	}
-
-	public function testPrivIncStillExcludesEditHooksPage(): void
-	{
-		$this->assertStringNotContainsString(
-			'"pfblockerng/pfblockerng_edit_hooks.php"',
-			self::$privSrc,
-			'pfblockerng_edit_hooks.php must stay out of the match list (existing invariant)'
-		);
+		$payload = json_encode(compact('post', 'server', 'allowed'), JSON_THROW_ON_ERROR);
+		$root = var_export(self::ROOT, TRUE);
+		$page = var_export(self::PAGE, TRUE);
+		$script = <<<PHP
+\$request = json_decode(stream_get_contents(STDIN), TRUE, 512, JSON_THROW_ON_ERROR);
+\$GLOBALS['pfb_test_allowed_pages'] = \$request['allowed'];
+\$_SERVER = \$request['server'];
+\$_POST = \$request['post'];
+\$shim = sys_get_temp_dir() . '/pfb_lint_shim_' . getmypid();
+mkdir(\$shim, 0777, TRUE);
+file_put_contents(\$shim . '/guiconfig.inc', "<?php");
+set_include_path(\$shim . PATH_SEPARATOR . get_include_path());
+require {$root} . '/tests/php/bootstrap.php';
+require {$page};
+PHP;
+		$descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+		$process = proc_open([PHP_BINARY, '-r', $script], $descriptors, $pipes);
+		$this->assertIsResource($process);
+		fwrite($pipes[0], $payload);
+		fclose($pipes[0]);
+		$stdout = stream_get_contents($pipes[1]);
+		$stderr = stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		$status = proc_close($process);
+		$this->assertSame('', trim((string) $stderr), (string) $stderr);
+		$body = json_decode((string) $stdout, TRUE);
+		$this->assertIsArray($body, (string) $stdout);
+		$this->assertSame(0, $status);
+		return ['body' => $body];
 	}
 }

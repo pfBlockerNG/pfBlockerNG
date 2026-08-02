@@ -26,8 +26,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_log_event')]
 final class LogTimestampBaselineTest extends TestCase
 {
-	private const PFBLOCKERNG_INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
-
 	/** @var string[] temp files to remove in tearDown */
 	private array $tmpfiles = [];
 
@@ -216,26 +214,40 @@ final class LogTimestampBaselineTest extends TestCase
 
 	public function testErrlogBypassWriteAlwaysStamped(): void
 	{
-		// Tripwire: pin the exact (now-stamped) bypass shape from pfb_open_sqlite() so
-		// this oracle goes red if that call site's format ever changes.
-		$source = (string) file_get_contents(self::PFBLOCKERNG_INC);
-		$this->assertStringContainsString(
-			'@file_put_contents($pfb[\'errlog\'], "\n{$now} DNSBL_SQL: Failed to open DB - {$message}", FILE_APPEND | LOCK_EX);',
-			$source,
-			'pfb_open_sqlite() bypass write shape changed -- update this baseline oracle'
-		);
-
 		$errlog = $this->tempFile('pfb_errlog_bypass_');
-		$now = date('Y-m-d H:i:s', time());
-		// Reproduces that exact (now-stamped) write: a direct file_put_contents(), no pfb_logger().
-		file_put_contents($errlog, "\n{$now} DNSBL_SQL: Failed to open DB - Query ip cache", FILE_APPEND | LOCK_EX);
+		$dir = $this->tempFile('pfb_sqlite_dir_');
+		unlink($dir);
+		mkdir($dir);
+		$this->saved['dnsbl_info'] = array_key_exists('dnsbl_info', $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb']['dnsbl_info'] : FALSE;
+		$this->saved['sqlite_timeout'] = array_key_exists('sqlite_timeout', $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb']['sqlite_timeout'] : FALSE;
+		$this->saved['errlog'] = array_key_exists('errlog', $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb']['errlog'] : FALSE;
+		$GLOBALS['pfb']['dnsbl_info'] = $dir;
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$GLOBALS['pfb']['errlog'] = $errlog;
+
+		try {
+			$this->assertFalse(pfb_open_sqlite(1, 'Query ip cache'), 'an SQLite directory path must fail open and exercise the errlog bypass');
+		} finally {
+			foreach (['dnsbl_info', 'sqlite_timeout', 'errlog'] as $key) {
+				if ($this->saved[$key] === FALSE) {
+					unset($GLOBALS['pfb'][$key]);
+				} else {
+					$GLOBALS['pfb'][$key] = $this->saved[$key];
+				}
+			}
+			rmdir($dir);
+		}
 
 		$written = (string) file_get_contents($errlog);
-		$this->assertMatchesRegularExpression(
-			'/^\n\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} DNSBL_SQL: Failed to open DB - Query ip cache$/',
-			$written,
-			"the pfb_open_sqlite() bypass write must always carry a real ISO timestamp now; got: {$written}"
-		);
+		$lines = array_values(array_filter(explode("\n", $written), static fn (string $line): bool => $line !== ''));
+		$this->assertCount(2, $lines, "the failed first and second SQLite opens must both log a stamped line; got: {$written}");
+		foreach ($lines as $line) {
+			$this->assertMatchesRegularExpression(
+				'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} DNSBL_SQL: Failed to open DB(?: 2nd attempt)? - Query ip cache$/',
+				$line,
+				"the pfb_open_sqlite() bypass write must carry a real ISO timestamp now; got: {$line}"
+			);
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -532,13 +544,6 @@ final class LogTimestampBaselineTest extends TestCase
 	 */
 	public function testDnsblLogUniformAcrossBothWritersAfterFix(): void
 	{
-		$pySource = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfb_unbound.py');
-		$this->assertStringContainsString(
-			'datetime.now().strftime("%Y-%m-%d %H:%M:%S")',
-			$pySource,
-			"pfb_unbound.py's make_timestamp() format changed -- update this synthetic python-writer line to match"
-		);
-
 		[$dnslog] = $this->seedLogEventSandbox('uuid-logevent-mixed.example.com', '203.0.113.78');
 
 		$unexpected = $this->callCapturingUnexpectedWarnings(function () {
@@ -546,8 +551,8 @@ final class LogTimestampBaselineTest extends TestCase
 		});
 		$this->assertSame([], $unexpected, 'expected no unrelated PHP warning from pfb_log_event(); got: ' . var_export($unexpected, true));
 
-		// Synthetic python-mode line -- same 'Y-m-d H:i:s' shape make_timestamp()
-		// now produces (pinned by the source tripwire above), same file.
+		// Synthetic python-mode line mirrors tests/test_pfb_unbound_log_timestamp_baseline.py;
+		// Python's writer is exercised by that suite, while this test checks the shared log shape.
 		$pyLine = 'DNSBL-python,' . date('Y-m-d H:i:s', time())
 			. ',uuid-pyrow.example.com,203.0.113.79,Python,VIP,TestGroup,uuid-pyrow.example.com,TestFeed,+,A';
 		file_put_contents($dnslog, "{$pyLine}\n", FILE_APPEND | LOCK_EX);

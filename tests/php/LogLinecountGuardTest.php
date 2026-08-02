@@ -21,7 +21,7 @@ use PHPUnit\Framework\TestCase;
  * The file executes top-level code on include (needs a live pfSense
  * session -- $pfb, $_REQUEST routing, real file I/O) and cannot be
  * require()d off-appliance. The guard + cap block is extracted verbatim from
- * the real source into a callable oracle (the count injected as the argument, print
+ * comment-free source into a callable oracle (the count injected as the argument, print
  * captured, exit becomes an early return), so the branch logic is exercised
  * behaviourally, not just shape-matched.
  *
@@ -40,9 +40,9 @@ final class LogLinecountGuardTest extends TestCase
 	public static function setUpBeforeClass(): void
 	{
 		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_log.php';
-		$src = file_get_contents($path);
-		if ($src === false) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_log.php');
+		$src = php_strip_whitespace($path);
+		if ($src === '') {
+			throw new RuntimeException('test bootstrap: failed to read comment-free pfblockerng_log.php');
 		}
 		self::$src = $src;
 
@@ -50,9 +50,11 @@ final class LogLinecountGuardTest extends TestCase
 		// as committed. print -> capture, exit -> early return, gettext
 		// stripped (plain PHP string stays). If extraction fails the guard block
 		// changed shape -- fail loudly rather than skip.
-		if (!function_exists('pfb_log_linecount_oracle')
-			&& preg_match('/(if \(\$linecnt === NULL\).*?Displaying last.*?\n[\t ]*\})\n/s', $src, $m)) {
-			$block = strtr($m[1], [
+		$start = strpos($src, 'if ($linecnt === NULL)');
+		$end = strpos($src, '$data =', $start === FALSE ? 0 : $start);
+		if (!function_exists('pfb_log_linecount_oracle') && $start !== FALSE && $end !== FALSE && $end > $start) {
+			$block = substr($src, $start, $end - $start);
+			$block = strtr($block, [
 				'print ('  => '$out .= (',
 				'exit;'    => 'return array($out, NULL, NULL, NULL);',
 				'gettext(' => '(',
@@ -112,8 +114,8 @@ final class LogLinecountGuardTest extends TestCase
 	 */
 	public function testNullGuardAnswersWithErrorConvention(): void
 	{
-		$this->assertMatchesRegularExpression(
-			'/if\s*\(\s*\$linecnt\s*===\s*NULL\s*\)\s*\{\s*\n\s*print \("\|2\|"/',
+		$this->assertStringContainsString(
+			'if ($linecnt === NULL) { print ("|2|',
 			self::$src,
 			'a NULL $linecnt must answer with the handler\'s |2| error convention before any cap math'
 		);

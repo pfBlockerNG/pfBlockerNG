@@ -5,75 +5,84 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
-/**
- * $ip_cnt / $ip_cnt6 -- the IPv4/IPv6 line counts extracted from a DNSBL
- * domain feed's `_v4.ip`/`_v6.ip` sidecar files inside
- * sync_package_pfblockerng() (issue #1261). Both gate only a log line
- * (`if ($ip_cnt > 0) pfb_logger(...)`), never arithmetic -- display-only, so
- * a pfb_count_lines() NULL (read failure) must fall back to 0, exactly as
- * exec()'s falsy "" fell through the pre-#1261 `> 0` comparison. Not
- * unit-reachable directly (deep inside sync_package_pfblockerng()) -- pinned
- * via source-inspection, house precedent: tests/php/AliasCntGrepCountGuardTest.php.
- */
+/** IPv4 and IPv6 sidecars each expose a safe count and positive log decision. */
 final class DnsblIpCountGuardTest extends TestCase
 {
-	private static string $src;
+	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+	private string $dir;
 
 	public static function setUpBeforeClass(): void
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-		$src = file_get_contents($path);
-		if ($src === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
+		require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
+	}
+
+	protected function setUp(): void
+	{
+		$this->dir = sys_get_temp_dir() . '/pfb_ip_count_' . getmypid() . '_' . bin2hex(random_bytes(4));
+		$this->assertTrue(mkdir($this->dir, 0700, TRUE));
+	}
+
+	protected function tearDown(): void
+	{
+		foreach (glob("{$this->dir}/*") ?: [] as $path) {
+			is_dir($path) ? @rmdir($path) : @unlink($path);
 		}
-		self::$src = $src;
+		@rmdir($this->dir);
 	}
 
-	public function testIpCntAssignedFromPfbCountLinesWithNullFallback(): void
-	{
-		$this->assertMatchesRegularExpression(
-			'/\$ip_cnt\s*=\s*pfb_count_lines\([^;]*_v4\.ip[^;]*\)\s*\?\?\s*0\s*;/',
-			self::$src,
-			'$ip_cnt must be assigned from pfb_count_lines(..._v4.ip) ?? 0 (issue #1261)'
-		);
-	}
-
-	public function testIpCnt6AssignedFromPfbCountLinesWithNullFallback(): void
-	{
-		$this->assertMatchesRegularExpression(
-			'/\$ip_cnt6\s*=\s*pfb_count_lines\([^;]*_v6\.ip[^;]*\)\s*\?\?\s*0\s*;/',
-			self::$src,
-			'$ip_cnt6 must be assigned from pfb_count_lines(..._v6.ip) ?? 0 (issue #1261)'
-		);
-	}
-
-	public function testNoExecGrepForkSurvivesForIpCnt(): void
-	{
-		$this->assertDoesNotMatchRegularExpression(
-			'/\$ip_cnt6?\s*=\s*exec\(/',
-			self::$src,
-			'an $ip_cnt/$ip_cnt6 = exec(...) fork survives -- issue #1261 must replace it with pfb_count_lines()'
-		);
-	}
-
-	// -----------------------------------------------------------------------
-	// Mirrored-expression hostile-input rows: the `> 0` log-gate must never
-	// throw and must treat a NULL (read failure) as "nothing to log".
-	// -----------------------------------------------------------------------
-
-	public static function gateRows(): array
+	/** @return array<string, array{string, string}> */
+	public static function sidecarSeams(): array
 	{
 		return [
-			'NULL count (pfb_count_lines() read failure)' => [NULL, FALSE],
-			'zero count (empty file)'                      => [0, FALSE],
-			'happy path count'                              => [7, TRUE],
+			'IPv4' => ['pfb_dnsbl_ipv4_count_decision', 'feed_v4.ip'],
+			'IPv6' => ['pfb_dnsbl_ipv6_count_decision', 'feed_v6.ip'],
 		];
 	}
 
-	#[DataProvider('gateRows')]
-	public function testLogGateNeverThrowsAndSkipsOnNullOrZero(?int $pfbCountLinesResult, bool $expectGateOpen): void
+	#[DataProvider('sidecarSeams')]
+	public function testEachSidecarReturnsCountAndPositiveDecision(string $seam, string $name): void
 	{
-		$ip_cnt = $pfbCountLinesResult ?? 0;
-		$this->assertSame($expectGateOpen, $ip_cnt > 0);
+		$path = "{$this->dir}/{$name}";
+		$this->assertNotFalse(file_put_contents($path, "one\ntwo\n"));
+
+		$this->assertSame(['count' => 2, 'loggable' => TRUE], $seam($path));
+	}
+
+	#[DataProvider('sidecarSeams')]
+	public function testEachSidecarCountsAnUnterminatedLastLine(string $seam, string $name): void
+	{
+		$path = "{$this->dir}/{$name}";
+		$this->assertNotFalse(file_put_contents($path, "one\ntwo"));
+		$this->assertSame(['count' => 2, 'loggable' => TRUE], $seam($path));
+	}
+
+	#[DataProvider('sidecarSeams')]
+	public function testEachSidecarTurnsReadFailureIntoNonLoggableZero(string $seam, string $name): void
+	{
+		$path = "{$this->dir}/{$name}";
+		$this->assertTrue(mkdir($path, 0700));
+
+		$this->assertSame(['count' => 0, 'loggable' => FALSE], $seam($path));
+	}
+
+	#[DataProvider('sidecarSeams')]
+	public function testEachSidecarSkipsLogForEmptyFile(string $seam, string $name): void
+	{
+		$path = "{$this->dir}/{$name}";
+		$this->assertNotFalse(file_put_contents($path, ''));
+
+		$this->assertSame(['count' => 0, 'loggable' => FALSE], $seam($path));
+	}
+
+	/** #993: the live sync/download/firewall monolith is unsafe off-appliance; comments are stripped. */
+	public function testSyncPassDispatchesBothDistinctSidecarDecisions(): void
+	{
+		$source = php_strip_whitespace(self::APPLY);
+		$start = strpos($source, 'function sync_package_pfblockerng(');
+		$this->assertNotFalse($start);
+		$sync = substr($source, $start);
+		foreach (self::sidecarSeams() as [$seam]) {
+			$this->assertSame(1, substr_count($sync, "{$seam}("), "sync pass must dispatch {$seam} exactly once");
+		}
 	}
 }

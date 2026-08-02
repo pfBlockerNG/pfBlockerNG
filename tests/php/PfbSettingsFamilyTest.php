@@ -265,45 +265,44 @@ final class PfbSettingsFamilyTest extends TestCase
 
 	public function testLifecycleOrdersReplaceAndContextConsumptionBeforeMigrations(): void
 	{
-		$install = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
-		$this->assertIsString($install);
-		$replace = strpos($install, 'pfb_settings_family_replace');
-		$migrations = strpos($install, 'pfb_run_migrations();');
-		$this->assertNotFalse($replace);
-		$this->assertNotFalse($migrations);
-		$this->assertLessThan($migrations, $replace);
-
-		$extra = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');
-		$this->assertIsString($extra);
-		$this->assertStringContainsString('/var/run/pfblockerng-downgrade-context.json', $extra);
-		$this->assertStringContainsString('pfb_settings_downgrade_context_consume', $extra);
-
-		$installed = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
-		$this->assertIsString($installed);
-		$installMigrations = strpos($installed, 'pfb_run_migrations();');
-		$installRecord = strpos($installed, 'pfb_settings_family_record');
-		$installReplace = strpos($installed, 'pfb_settings_family_replace');
-		$installFamily = strpos($installed, '$pfb_installed_family = pfb_settings_family_from_version((string) pfb_pkg_ver());');
-		$this->assertNotFalse($installFamily);
-		$this->assertNotFalse(strpos($installed, 'pfb_settings_family_replace($pfb_installed_family)'));
-		$this->assertNotFalse(strpos($installed, 'pfb_settings_family_record($pfb_installed_family)'));
-		$this->assertLessThan($installReplace, $installFamily);
-		$this->assertLessThan($installMigrations, $installReplace);
-		$this->assertLessThan($installRecord, $installMigrations);
-		$this->assertStringContainsString('installedpackages/pfblockerng', $installed);
+		$order = [];
+		$family = pfb_install_settings_family_capture_restore(
+			static function () use (&$order): string { $order[] = 'current'; return '3.2'; },
+			static function (string $value) use (&$order): bool { $order[] = 'save'; return TRUE; },
+			static function () use (&$order): string { $order[] = 'version'; return '4.0.0'; },
+			static function (string $value) use (&$order): string { $order[] = 'from-version'; return '4.0'; },
+			static function (string $value) use (&$order): bool { $order[] = 'replace'; return TRUE; },
+		);
+		pfb_install_settings_family_finalize(
+			$family,
+			static function () use (&$order): void { $order[] = 'migrations'; },
+			static function (string $value) use (&$order): bool { $order[] = 'record'; return TRUE; }
+		);
+		$this->assertSame('4.0', $family);
+		$this->assertSame(['current', 'save', 'version', 'from-version', 'replace', 'migrations', 'record'], $order);
 	}
 
-	public function testLifecycleSavePrecedesOperationAndConditionalRestore(): void
+	/**
+	 * The pre-deinstall hook reads live process/config state and can tear down firewall, DNSBL,
+	 * mounts, files, and services, so only its executable order is pinned off-appliance.
+	 */
+	public function testPreDeinstallSavesAndRestoresBeforePackageOperationAndHonorsKeepBoundary(): void
 	{
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertIsString($source);
+		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
 		$start = strpos($source, 'function pfblockerng_php_pre_deinstall_command');
-		$pre = strpos($source, 'pfb_settings_family_pre_uninstall()', $start);
-		$operation = strpos($source, 'pfb_pkg_operation()', $start);
-		$this->assertNotFalse($start);
-		$this->assertNotFalse($pre);
-		$this->assertLessThan($operation, $pre);
-		$this->assertStringContainsString('Keep Settings', $source);
+		$this->assertNotFalse($start, 'pre-deinstall controller must remain defined');
+		$save = strpos($source, 'pfb_settings_family_pre_uninstall();', $start);
+		$operation = strpos($source, 'pfb_pkg_operation();', $start);
+		$this->assertNotFalse($save, 'pre-deinstall must enter settings-family save/restore boundary');
+		$this->assertNotFalse($operation, 'pre-deinstall must inspect package operation after settings boundary');
+		$this->assertLessThan($operation, $save);
+		$this->assertSame(1, substr_count(substr($source, $start, $operation - $start), 'pfb_settings_family_pre_uninstall();'));
+
+		$keep = strpos($source, "\$pfb['keep'] !== PfbToggle::On", $start);
+		$remove = strpos($source, 'pfb_remove_config_settings();', $start);
+		$this->assertNotFalse($keep, 'keep setting must guard config removal');
+		$this->assertNotFalse($remove, 'keep-off branch must remove package config');
+		$this->assertLessThan($remove, $keep);
 	}
 
 	private function contextPath(): string

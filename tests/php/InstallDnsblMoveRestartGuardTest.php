@@ -15,17 +15,17 @@ use PHPUnit\Framework\TestCase;
  * but never read), so `$ufound` was NOT reset and carried the prior block's value
  * into the `if ($ufound) { pfb_stop_start_unbound('') }` guard.
  *
- * install.inc is a procedural migration script (host-absolute requires, sqlite,
- * exec, real Unbound control) and is not loadable by the unit harness, so this pins
- * the invariant at the source level — the same approach as the custom-sniff tests.
+	 * install.inc is a procedural migration script (host-absolute requires, sqlite,
+	 * exec, real Unbound control) and is not loadable by the unit harness. The pin therefore
+	 * scans executable tokens only; comments/docblocks cannot satisfy it.
  */
 final class InstallDnsblMoveRestartGuardTest extends TestCase
 {
 	private static function installSource(): string
 	{
 		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc';
-		$src = @file_get_contents($path);
-		self::assertIsString($src, "could not read {$path}");
+		$src = @php_strip_whitespace($path);
+		self::assertNotSame('', $src, "could not read {$path}");
 		return $src;
 	}
 
@@ -37,20 +37,13 @@ final class InstallDnsblMoveRestartGuardTest extends TestCase
 	{
 		$src = self::installSource();
 
-		// The section runs from its "Move dnsbl_levent.sqlite" header to the guarded
-		// pfb_stop_start_unbound() call. NOTE: this header string is load-bearing — it
-		// bounds the window this test inspects; testNoOrphanUfoundTypo() is the
-		// header-independent backstop for the exact regression class.
-		$start = strpos($src, '// Move dnsbl_levent.sqlite');
-		$this->assertNotFalse($start, 'the "Move dnsbl_levent.sqlite" migration block is missing');
+		$start = strpos($src, "\$ufound = FALSE; if (file_exists('/var/db/pfblockerng/dnsbl_levent.sqlite')");
+		$this->assertNotFalse($start, 'the dnsbl-move migration guard reset is missing');
 		$guard = strpos($src, 'pfb_stop_start_unbound', $start);
-		$this->assertNotFalse($guard, 'the dnsbl-move block no longer guards a pfb_stop_start_unbound() call');
+		$this->assertNotFalse($guard, 'the dnsbl-move block no longer guards a restart call');
 
 		$section = substr($src, $start, $guard - $start);
 
-		// Before: $ufound = FALSE; reset must appear at the top of the block, ahead of
-		// the conditional `$ufound = TRUE;` move flags — else a prior block's TRUE leaks
-		// into the restart guard.
 		$reset = strpos($section, '$ufound = FALSE;');
 		$this->assertNotFalse($reset, 'the dnsbl-move block does not reset $ufound before its restart guard');
 		$firstSet = strpos($section, '$ufound = TRUE;');

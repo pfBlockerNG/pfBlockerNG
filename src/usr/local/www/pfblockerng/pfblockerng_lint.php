@@ -34,53 +34,21 @@
 
 require_once('guiconfig.inc');
 require_once('globals.inc');
-require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
-
-/*
- * Single JSON-reply exit point -- every guard below routes through this so no branch
- * can fall through to rendering HTML.
- */
-function pfb_lint_reply(int $status, array $payload): never {
-	http_response_code($status);
-	header('Content-Type: application/json; charset=utf-8');
-	// JSON_INVALID_UTF8_SUBSTITUTE: a diagnostic message carrying invalid UTF-8 (e.g. a
-	// mis-decoded stderr byte) would otherwise make json_encode() return FALSE, shipping
-	// a 200 with an empty body instead of a diagnostic.
-	echo json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE);
-	exit;
+$pfb_lint_include = '/usr/local/pkg/pfblockerng/pfblockerng.inc';
+if (!file_exists($pfb_lint_include)) {
+	$pfb_lint_include = dirname(__DIR__, 2) . '/pkg/pfblockerng/pfblockerng.inc';
 }
+require_once($pfb_lint_include);
 
-if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
-	pfb_lint_reply(405, ['error' => 'POST only']);
+$pfb_lint_response = pfb_lint_response(
+	$_SERVER,
+	$_POST,
+	static fn (string $page): bool => isAllowedPage($page),
+	static fn (string $lang, string $content, bool $cap): array => pfb_lint_diagnostics($lang, $content, $cap)
+);
+http_response_code($pfb_lint_response['status']);
+foreach ($pfb_lint_response['headers'] as $header) {
+	header($header);
 }
-
-$lang = $_POST['lang'] ?? null;
-if (!is_string($lang) || !in_array($lang, ['regex', 'sh', 'py'], TRUE)) {
-	// A crafted lang[]= array fails is_string() before in_array() ever runs.
-	pfb_lint_reply(400, ['error' => 'lang must be one of regex, sh, py']);
-}
-
-if ($lang === 'regex') {
-	if (!isAllowedPage('pfblockerng/pfblockerng_dnsbl.php')) {
-		pfb_lint_reply(403, ['error' => 'insufficient privilege']);
-	}
-} else {
-	// sh/py exec a real interpreter's parser -- the same Command-Prompt-equivalent
-	// trust class pfblockerng_edit_hooks.php gates on (issue #1669), not the ordinary
-	// DNSBL page priv.
-	if (!isAllowedPage('diag_command.php')) {
-		pfb_lint_reply(403, ['error' => 'insufficient privilege']);
-	}
-}
-
-$content = $_POST['content'] ?? '';
-if (!is_string($content)) {
-	pfb_lint_reply(400, ['error' => 'content must be a string']);
-}
-if (strlen($content) > 1048576) {
-	pfb_lint_reply(413, ['error' => 'content too large']);
-}
-
-$cap = (($_POST['cap'] ?? '') === '1');
-
-pfb_lint_reply(200, ['diagnostics' => pfb_lint_diagnostics($lang, $content, $cap)]);
+echo $pfb_lint_response['body'];
+exit;

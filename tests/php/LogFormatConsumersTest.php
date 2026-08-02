@@ -14,9 +14,8 @@ use PHPUnit\Framework\TestCase;
  * script code (`www/index.php` runs at include time; the alerts stat loop
  * is guarded by a live `$alert_summary`/`$alert_log`, not wrapped in a
  * function AlertsPageLoader.php's eval window covers). Each fixed formula
- * below is pinned by a source tripwire (assertStringContainsString on the
- * exact current line, so this oracle goes red the moment the formula
- * drifts) and then reproduced -- not `include`d -- and executed for REAL via
+ * below is pinned by a comment-free code tripwire (php_strip_whitespace(), so
+ * production prose can never satisfy the oracle) and then reproduced -- not included -- and executed for REAL via
  * `exec()`/`shell_exec()` against synthetic fixture files, mirroring Phase
  * 1/3's convention for daemon code that cannot be called directly.
  */
@@ -55,6 +54,13 @@ final class LogFormatConsumersTest extends TestCase
 		return $f;
 	}
 
+	private function codeSource(string $path): string
+	{
+		$source = php_strip_whitespace($path);
+		$this->assertNotSame('', $source, "could not read comment-free source: {$path}");
+		return $source;
+	}
+
 	// -----------------------------------------------------------------------
 	// www/index.php -- the DNSBL block page's dnsbl.log correlation grep key
 	// -----------------------------------------------------------------------
@@ -67,7 +73,7 @@ final class LogFormatConsumersTest extends TestCase
 	 */
 	public function testBlockPageGuardCharsetAcceptsIsoTimestamp(): void
 	{
-		$source = (string) file_get_contents(self::INDEX_PHP);
+		$source = $this->codeSource(self::INDEX_PHP);
 		$needle = 'preg_match("/^[a-zA-Z0-9:\- ]+$/"';
 		$this->assertStringContainsString(
 			$needle,
@@ -107,7 +113,7 @@ final class LogFormatConsumersTest extends TestCase
 	 */
 	public function testBlockPageCorrelationMatchesNewIsoFormatLogLine(): void
 	{
-		$source = (string) file_get_contents(self::INDEX_PHP);
+		$source = $this->codeSource(self::INDEX_PHP);
 		$this->assertStringContainsString(
 			"date('Y-m-d H:i', htmlspecialchars(\$_SERVER['REQUEST_TIME']))",
 			$source,
@@ -192,9 +198,9 @@ final class LogFormatConsumersTest extends TestCase
 	 */
 	public function testBlockPageCorrelationNeverMatchesLookalikeHostRow(): void
 	{
-		$source = (string) file_get_contents(self::INDEX_PHP);
+		$source = $this->codeSource(self::INDEX_PHP);
 		$matched = preg_match(
-			'#exec\("(/usr/bin/tail -n50 /var/log/pfblockerng/dnsbl\.log[^"]+)", \$data, \$retval\);#',
+			'#exec\("(/usr/bin/tail -n50 /var/log/pfblockerng/dnsbl\.log[^"]+)",\s*\$data,\s*\$retval\);#',
 			$source,
 			$m
 		);
@@ -245,7 +251,7 @@ final class LogFormatConsumersTest extends TestCase
 	 */
 	public function testDayBucketCutFieldSelectionGroupsIsoLinesByDate(): void
 	{
-		$source = (string) file_get_contents(self::ALERTS_PHP);
+		$source = $this->codeSource(self::ALERTS_PHP);
 		$needle = "{\$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c";
 		$this->assertStringContainsString($needle, $source, "pfblockerng_alerts.php's day-bucket cut changed -- update this oracle");
 		$this->assertStringNotContainsString("cut -d ' ' -f1-2", $source, 'the OLD 3-token field selection must be gone');
@@ -299,7 +305,7 @@ final class LogFormatConsumersTest extends TestCase
 	 */
 	public function testHourlyChartLabelAwkShowsCorrectHourForIsoLines(): void
 	{
-		$source = (string) file_get_contents(self::ALERTS_PHP);
+		$source = $this->codeSource(self::ALERTS_PHP);
 		// Nowdoc: zero escape processing, so this holds the exact RAW source bytes
 		// (literal backslashes and all) for a byte-for-byte tripwire against the file.
 		$rawSourceNeedle = <<<'EOT'
@@ -360,7 +366,7 @@ EOT;
 	 */
 	public function testDnsblDateHrAndHrMinBucketsUnaffectedByFormatChange(): void
 	{
-		$source = (string) file_get_contents(self::ALERTS_PHP);
+		$source = $this->codeSource(self::ALERTS_PHP);
 		$this->assertStringContainsString(
 			"{\$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1 | sort | uniq -c | sort -nr",
 			$source,
@@ -554,7 +560,7 @@ EOT;
 	 */
 	public function testBucketLabelIssetGuardPreventsWarningOnKeyWithoutSpace(): void
 	{
-		$source = (string) file_get_contents(self::ALERTS_PHP);
+		$source = $this->codeSource(self::ALERTS_PHP);
 		$needle = '$data = isset($d[1]) ? "{$d[0]}&emsp;({$d[1]})" : $d[0];';
 		$this->assertStringContainsString($needle, $source, 'the $d[1] render guard changed -- update this oracle');
 
@@ -596,10 +602,14 @@ EOT;
 	 */
 	public function testTopAsnStatPipelineSourceHasSchemaGate(): void
 	{
-		$source = (string) file_get_contents(self::ALERTS_PHP);
+		$source = $this->codeSource(self::ALERTS_PHP);
 		$needle = "{\$pfb['awk']} -F',' 'NF == 23' {\$alert_log} | {\$cut_cmd} | {\$agent_cmd} {\$su_cmd} | sort -nr 2>&1";
 		$this->assertStringContainsString($needle, $source, "pfblockerng_alerts.php's Top ASN ('ipasn') pipeline changed -- update this oracle");
-		$this->assertStringContainsString("'ipasn'\t\t=> 20", $source, "the 'ipasn' cut-column position changed -- update this oracle (must stay 20: the 2 new columns were appended AFTER it)");
+		$this->assertSame(
+			1,
+			preg_match("/'ipasn'\s*=>\s*20/", $source),
+			"the 'ipasn' cut-column position changed -- update this oracle (must stay 20: the 2 new columns were appended AFTER it)"
+		);
 	}
 
 	/**

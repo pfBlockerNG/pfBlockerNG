@@ -34,6 +34,7 @@ final class BlacklistLangFallbackTest extends TestCase
 {
 	private const BLACKLIST_PHP = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_blacklist.php';
 	private const UT1_FILE = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/ut1_global_usage';
+	private static string $parseRegion;
 
 	/** Matches pfblockerng_blacklist.php's own $options_blacklist_lang (:143-144). */
 	private const LANGS = ['EN', 'DE', 'FR', 'IT', 'NL', 'PT', 'ES', 'RU'];
@@ -47,12 +48,13 @@ final class BlacklistLangFallbackTest extends TestCase
 
 		if (!function_exists('pfb_blacklist_oracle_parse_data')) {
 			if (!preg_match(
-				'/(\/\/ Build array of Blacklist categories and descriptions by language\n.*?\n\tksort\(\$data, SORT_NATURAL\);\n)/s',
+				'/((?:\$data\s*=\s*array\(\);\n).*?\n\tksort\(\$data, SORT_NATURAL\);\n)/s',
 				$src,
 				$m
 			)) {
 				throw new RuntimeException('test bootstrap: blacklist category/description parse block not found');
 			}
+			self::$parseRegion = $m[1];
 			eval(
 				'function pfb_blacklist_oracle_parse_data(array $contents): array {'
 				. ' $type = \'x\'; $blacklist_types = [\'x\' => [\'CONTENTS\' => $contents]];'
@@ -87,6 +89,12 @@ final class BlacklistLangFallbackTest extends TestCase
 				. ' return [$category_lang, $name_lang]; }'
 			);
 		}
+	}
+
+	public function testParseExtractionStartsAtExecutableCodeNotProductionComment(): void
+	{
+		$this->assertStringStartsWith('$data', self::$parseRegion);
+		$this->assertStringNotContainsString('Build array of Blacklist categories', self::$parseRegion);
 	}
 
 	/**

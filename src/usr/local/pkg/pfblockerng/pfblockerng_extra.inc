@@ -361,6 +361,300 @@ function pfb_editor_enabled(): bool
 	return PfbConfig::read('gen/pfb_syntax_highlight') === PfbToggle::On;
 }
 
+function pfb_dnsbl_toggle_stored(mixed $posted): string
+{
+	return $posted === 'on' ? 'on' : 'off';
+}
+
+function pfb_dnsbl_toggle_enabled(mixed $stored): bool
+{
+	return pfb_cfg_toggle_read($stored) === PfbToggle::On;
+}
+
+function pfb_ip_suppression_stored(mixed $posted): string
+{
+	return $posted === 'on' ? 'on' : 'off';
+}
+
+function pfb_ip_suppression_enabled(mixed $stored): bool
+{
+	return pfb_cfg_toggle_read($stored) === PfbToggle::On;
+}
+
+/** Normalize the General-page editor checkbox to its persisted token. */
+function pfb_editor_toggle_stored_value(mixed $posted): string
+{
+	return $posted === 'on' ? 'on' : 'off';
+}
+
+/** Keep list-editor mounting independent from the row-reorder mode. */
+function pfb_editor_mount_lists_for_sort(array $fields, string $sort, bool $enabled): string
+{
+	return pfb_editor_mount_lists($fields, $enabled);
+}
+
+/** Label and help rendered for the General-page editor toggle. */
+function pfb_editor_toggle_label(): string
+{
+	return 'Advanced Text Editor';
+}
+
+function pfb_editor_toggle_help(): string
+{
+	return 'Client-side editor for the list and script fields (e.g. the DNSBL Regex '
+		. 'List, custom lists, IP suppression lists, hook scripts): syntax highlighting, '
+		. 'line numbers and undo/redo everywhere, plus inline linting on the DNSBL Regex '
+		. 'List and hook scripts. Unchecking this leaves those fields as plain text boxes '
+		. 'and skips loading the editor assets &mdash; useful for low-end client machines. '
+		. 'Validation always stays server-side either way.';
+}
+
+/** Render one CodeMirror asset tag when the Advanced Text Editor is enabled. */
+function pfb_editor_asset(string $asset, bool $enabled): string
+{
+	if (!$enabled) {
+		return '';
+	}
+
+	$asset = basename($asset);
+	return '<script src="vendor/codemirror/' . htmlspecialchars($asset, ENT_QUOTES, 'UTF-8')
+		. '?v=' . pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/' . $asset)
+		. '"></script>';
+}
+
+/** Render the shared plain-list CodeMirror mount call. */
+function pfb_editor_mount_lists(array $fields, bool $enabled): string
+{
+	if (!$enabled) {
+		return '';
+	}
+
+	$fields = array_values(array_map('strval', $fields));
+	return "if (window.pfbCM) {\n\twindow.pfbCM.mountLists(" . json_encode($fields, JSON_THROW_ON_ERROR) . ");\n}";
+}
+
+/** Render the DNSBL regex-list CodeMirror mount, including live lint options. */
+function pfb_editor_mount_regex(bool $enabled): string
+{
+	if (!$enabled) {
+		return '';
+	}
+
+	return <<<'JS'
+var pfbRegexListEl = document.getElementById('pfb_regex_list');
+if (pfbRegexListEl && window.pfbCM) {
+	window.pfbCM.fromTextarea(pfbRegexListEl, {
+		lintUrl: '/pfblockerng/pfblockerng_lint.php',
+		lintExtraParams: function() {
+			var capEl = document.getElementById('pfb_regex_cap');
+			return { cap: (capEl && capEl.checked) ? '1' : '0' };
+		}
+	});
+}
+JS;
+}
+
+/** Render the hook editor mount using the server-selected language. */
+function pfb_editor_mount_hook(bool $enabled, string $language): string
+{
+	if (!$enabled) {
+		return '';
+	}
+
+	$language = htmlspecialchars($language, ENT_QUOTES, 'UTF-8');
+	return "var pfbHookEditorEl = document.getElementById('pfb_hook_editor_content');\n"
+		. "if (pfbHookEditorEl && window.pfbHooksCM) {\n"
+		. "\twindow.pfbHooksCM.fromTextarea(pfbHookEditorEl, '{$language}', {\n"
+		. "\t\tlintUrl: '/pfblockerng/pfblockerng_lint.php'\n"
+		. "\t});\n"
+		. "}";
+}
+
+/** Render a shipped JavaScript asset URL with the package mtime cache-buster. */
+function pfb_js_asset(string $src, string $path, string $attributes = ''): string
+{
+	return '<script src="' . htmlspecialchars($src, ENT_QUOTES, 'UTF-8')
+		. '?v=' . pfb_file_mtime($path) . '"' . $attributes . '></script>';
+}
+
+/** The DNSBL regex-list help shown by the Form_Textarea field. */
+function pfb_dnsbl_regex_help_text(): string
+{
+	return 'List of Regex\'s to block via DNSBL:<br /><br />
+		Enter a single regex per line.<br /><br />
+		End a line with "<strong>#</strong>" to give it a Description, as in&emsp;"regex (Regular Expression) # Regex Description".<br /><br />
+		The first <strong>unescaped</strong> "#" on the line starts the Description, whether or not a space precedes it. To match a literal "#" inside a pattern, escape it as "<strong>\\#</strong>".<br /><br />
+		Keep the Description to 15 characters or fewer — it is shown on the Alerts Tab, and a longer one is flagged in this editor. If no Description is entered a default Regex line number will be utilized.<br /><br />
+		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
+		Changes to this option will require a Force Update to take effect.';
+}
+
+/** Whether regex validation must run for a save request. */
+function pfb_dnsbl_regex_validation_required(bool $interpreterUsable, mixed $featureToggle): bool
+{
+	return $interpreterUsable || $featureToggle === 'on';
+}
+
+/** Render the category editor pre-script help and select size for the current feed type. */
+function pfb_category_script_pre_settings(string $listPrefix, array $options): array
+{
+	$help = 'Pre-processing Shell script, run after download and charset normalization: '
+		. 'it receives a staged copy of the normalized feed text (UTF-8, control characters stripped, '
+		. 'lines right-trimmed) and rewrites that copy in place.<br />'
+		. 'Script location: /usr/local/pkg/pfblockerng/list_scripts/<strong>ip_pre_SCRIPT NAME.sh|py</strong> or <strong>dnsbl_pre_SCRIPT NAME.sh|py</strong>';
+	if ($listPrefix === 'dnsbl') {
+		$help .= '<br /><span class="text-danger">Note:</span>&nbsp;'
+			. 'A DNSBL pre-process script must not remove IP-shaped or ABP-shaped lines: the '
+			. 'DNSBLIP alias is synthesized from addresses extracted out of domain feeds, and '
+			. 'removed lines silently shrink it.';
+	}
+
+	return [
+		'help' => $help,
+		'size' => count($options) ?: '1',
+	];
+}
+
+/** Render the stable anchor/section layout shared by DNSBL, IP, widget, and log pages. */
+function pfb_page_anchor_layout(string $page): array
+{
+	return match ($page) {
+		'dnsbl' => [
+			'legacy_rows' => [],
+			'whitelist' => 'DNSBL_Whitelist_customlist',
+		],
+		'ip' => [
+			'legacy_rows' => [],
+			'suppression' => 'IPv4_Suppression_customlist',
+		],
+		'log' => [
+			'legacy_rows' => [],
+			'endofpage' => '<div id="endofpage"></div>',
+			'outside_form' => TRUE,
+		],
+		default => throw new InvalidArgumentException("unknown anchor layout: {$page}"),
+	};
+}
+
+// Page-specific render seams.  Pages keep their request handling and markup here,
+// while these small callables let the same shipped wiring be exercised without loading
+// a full pfSense request off-appliance.
+function pfb_dnsbl_editor_render(bool $enabled): array
+{
+	return [
+		'asset' => pfb_editor_asset('cm-regex.min.js', $enabled),
+		'regex' => pfb_editor_mount_regex($enabled),
+		'lists' => pfb_editor_mount_lists(['pfb_gp_bypass_list', 'pfb_noaaaa_list', 'whitelist', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist'], $enabled),
+	];
+}
+
+function pfb_dnsbl_regex_help_render(): string
+{
+	return pfb_dnsbl_regex_help_text();
+}
+
+function pfb_dnsbl_regex_validation_required_page(bool $interpreterUsable, mixed $featureToggle): bool
+{
+	return pfb_dnsbl_regex_validation_required($interpreterUsable, $featureToggle);
+}
+
+function pfb_dnsbl_anchor_layout_render(): array
+{
+	return pfb_page_anchor_layout('dnsbl');
+}
+
+function pfb_dnsbl_js_asset_render(string $path = '/usr/local/www/pfblockerng/pfBlockerNG.js'): string
+{
+	return pfb_js_asset('pfBlockerNG.js', $path, ' type="text/javascript"');
+}
+
+function pfb_ip_editor_render(bool $enabled): array
+{
+	return [
+		'asset' => pfb_editor_asset('cm-regex.min.js', $enabled),
+		'lists' => pfb_editor_mount_lists(['v4suppression', 'v6suppression'], $enabled),
+	];
+}
+
+function pfb_ip_anchor_layout_render(): array
+{
+	return pfb_page_anchor_layout('ip');
+}
+
+function pfb_ip_js_asset_render(string $path = '/usr/local/www/pfblockerng/pfBlockerNG.js'): string
+{
+	return pfb_js_asset('pfBlockerNG.js', $path, ' type="text/javascript"');
+}
+
+function pfb_general_editor_render(bool $enabled): array
+{
+	return [
+		'asset' => pfb_editor_asset('cm-regex.min.js', $enabled),
+		'lists' => pfb_editor_mount_lists(['pfb_feed_internal_allowlist'], $enabled),
+	];
+}
+
+function pfb_general_toggle_stored_value(mixed $posted): string
+{
+	return pfb_editor_toggle_stored_value($posted);
+}
+
+function pfb_general_toggle_label(): string
+{
+	return pfb_editor_toggle_label();
+}
+
+function pfb_general_toggle_help(): string
+{
+	return pfb_editor_toggle_help();
+}
+
+function pfb_category_editor_render(bool $enabled, string $sort): array
+{
+	return [
+		'asset' => pfb_editor_asset('cm-regex.min.js', $enabled),
+		'mount' => pfb_editor_mount_lists_for_sort(['custom'], $sort, $enabled),
+	];
+}
+
+function pfb_category_script_pre_render(string $listPrefix, array $options): array
+{
+	return pfb_category_script_pre_settings($listPrefix, $options);
+}
+
+function pfb_category_edit_js_asset_render(string $path = '/usr/local/www/pfblockerng/pfBlockerNG.js'): string
+{
+	return pfb_js_asset('pfBlockerNG.js', $path, ' type="text/javascript"');
+}
+
+function pfb_hooks_editor_render(bool $enabled, string $language): array
+{
+	return [
+		'asset' => pfb_editor_asset('cm-hooks.min.js', $enabled),
+		'mount' => pfb_editor_mount_hook($enabled, $language),
+	];
+}
+
+function pfb_category_js_asset_render(string $path = '/usr/local/www/pfblockerng/pfBlockerNG.js'): string
+{
+	return pfb_js_asset('pfBlockerNG.js', $path, ' type="text/javascript"');
+}
+
+function pfb_geoip_js_asset_render(string $path = '/usr/local/www/pfblockerng/pfBlockerNG.js'): string
+{
+	return pfb_js_asset('pfBlockerNG.js', $path, ' type="text/javascript"');
+}
+
+function pfb_log_anchor_layout_render(): array
+{
+	return pfb_page_anchor_layout('log');
+}
+
+function pfb_widget_anchor_layout_render(string $page): array
+{
+	return pfb_page_anchor_layout($page);
+}
+
 /** Read a PfbToggle from a raw stored value. */
 function pfb_cfg_toggle_read(mixed $stored): PfbToggle
 {
@@ -5359,14 +5653,16 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
  * @param string $qtype     Informational only -- the matcher's decision ignores it.
  * @param float  $timeout_s Bounded-wait budget in seconds (a deadline AND a hard poll
  *                          cap both bound the wait -- CLAUDE.md "No orphaned waits").
+ * @param callable|null $now Monotonic clock seam for deterministic wait tests.
  * @return array{blocked:bool,b_type:string,group:string,b_eval:string,feed:string,p_type:string}|null
  *         The matcher's verdict, or NULL when none was obtained (invalid domain,
  *         request-encode, lock open/acquire, or write failure; timeout; or a malformed reply)
  *         -- callers must treat NULL and blocked=false identically ("no block"),
  *         never distinguish them.
  */
-function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s = 5.0): ?array {
+function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s = 5.0, ?callable $now = NULL): ?array {
 	global $pfb;
+	$now ??= static fn (): float => microtime(TRUE);
 
 	$channel    = "{$pfb['dnsbldir']}/pfb_py_query";
 	$reply_path = "{$pfb['dnsbldir']}/pfb_py_query.reply";
@@ -5388,7 +5684,7 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 	// The two Lighttpd hit parsers share one request/reply slot. Serialize the
 	// complete transaction so neither can overwrite or clean up the other's files.
 	$wait_s    = max($timeout_s, 0.0);
-	$deadline  = microtime(TRUE) + $wait_s;
+	$deadline  = $now() + $wait_s;
 	$lock_path = "{$pfb['dnsbldir']}/pfb_py_query.lock";
 	$lock = is_dir($lock_path) ? FALSE : @fopen($lock_path, 'c');
 	if ($lock === FALSE) {
@@ -5403,7 +5699,7 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 	do {
 		$allow_expired_attempt = $first_lock_attempt && $wait_s <= 0.0;
 		$first_lock_attempt = FALSE;
-		if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
+		if (!$allow_expired_attempt && $now() >= $deadline) {
 			break;
 		}
 		$would_block = 0;
@@ -5411,7 +5707,7 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 			// A waiter can be descheduled between its deadline check and flock().
 			// Never publish after that budget expires; timeout=0 still gets one
 			// immediate non-blocking attempt.
-			if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
+			if (!$allow_expired_attempt && $now() >= $deadline) {
 				@flock($lock, LOCK_UN);
 				break;
 			}
@@ -5424,7 +5720,7 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 			return NULL;
 		}
 		$lock_polls++;
-		$remaining_s = $deadline - microtime(TRUE);
+		$remaining_s = $deadline - $now();
 		if ($lock_polls >= $max_lock_polls || $remaining_s <= 0.0) {
 			break;
 		}
@@ -5456,7 +5752,7 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 		do {
 			$allow_expired_poll = $first_poll && $wait_s <= 0.0;
 			$first_poll = FALSE;
-			if (!$allow_expired_poll && microtime(TRUE) >= $deadline) {
+			if (!$allow_expired_poll && $now() >= $deadline) {
 				break;
 			}
 			if (file_exists($reply_path)) {
@@ -5476,7 +5772,7 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 					) {
 						// A reply that becomes readable after the shared deadline is
 						// late even if this process was descheduled while reading it.
-						if (!$allow_expired_poll && microtime(TRUE) >= $deadline) {
+						if (!$allow_expired_poll && $now() >= $deadline) {
 							break;
 						}
 						$verdict = array(
@@ -5492,7 +5788,7 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 				}
 			}
 			$polls++;
-			$remaining_s = $deadline - microtime(TRUE);
+			$remaining_s = $deadline - $now();
 			if ($polls >= $max_polls || $remaining_s <= 0.0) {
 				break;
 			}
@@ -5709,6 +6005,44 @@ function pfb_hook_editor_lang_for(string $script, string $fallback): string {
 		}
 	}
 	return ($fallback === 'py') ? 'py' : 'sh';
+}
+
+/** Return the shared Update sub-tabs with the requested tab active. */
+function pfb_edit_hooks_tabs(string $active): array
+{
+	return [
+		[gettext('Run'), $active === 'run', '/pfblockerng/pfblockerng_update.php'],
+		[gettext('Hooks'), $active === 'hooks', '/pfblockerng/pfblockerng_hooks.php'],
+		[gettext('Edit Hooks'), $active === 'edit', '/pfblockerng/pfblockerng_edit_hooks.php'],
+	];
+}
+
+/** Shared warning content for the root-equivalent Edit Hooks surface. */
+function pfb_edit_hooks_warning(): array
+{
+	return [
+		'style' => 'danger',
+		'title' => 'Advanced Users Only',
+		'message' => 'The capabilities offered here can be dangerous. No support is available. Scripts you create or edit on this page run as ROOT during every pfBlockerNG update pass -- the same trust class as pfSense Diagnostics > Command Prompt / Edit File. Use them at your own risk!',
+	];
+}
+
+/** Return the redirect used when the page's secondary privilege gate refuses access. */
+function pfb_edit_hooks_access(bool $allowed): ?string
+{
+	return $allowed ? NULL : '/index.php';
+}
+
+/** Preserve form values exactly; Form_Input/Form_Textarea escape at render. */
+function pfb_edit_hooks_form_value(mixed $value): mixed
+{
+	return $value;
+}
+
+/** Native submit-field names used by the create/save buttons. */
+function pfb_edit_hooks_submit_field(string $action): string
+{
+	return in_array($action, ['create', 'save'], TRUE) ? 'pfb_eh_' . $action : '';
 }
 
 /*

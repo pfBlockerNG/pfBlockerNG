@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_top1m_refresh_needed')]
 #[CoversFunction('pfb_top1m_fetch_if_needed')]
 #[CoversFunction('pfb_top1m_reprocess_needed')]
+#[CoversFunction('pfb_top1m_apply_reprocess_if_ready')]
 #[CoversFunction('pfb_dnsbl_publish_result')]
 #[CoversFunction('pfb_dnsbl_reload_needed')]
 final class Top1mApplyRefreshMatrixTest extends TestCase
@@ -102,16 +103,21 @@ final class Top1mApplyRefreshMatrixTest extends TestCase
 		$this->assertSame('pending-combined-change', file_get_contents($marker));
 	}
 
-	public function testApplyWiresTheIdentityGateBeforeTop1mConversion(): void
+	public function testApplyReprocessesOnlyWhenIdentityGateIsReady(): void
 	{
-		$source = (string) file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc'
-		);
-		$gate = strpos($source, "if (pfb_top1m_reprocess_needed(\$pfb['dbdir']))");
-		$this->assertNotFalse($gate, 'apply path must gate TOP1M conversion on current identity');
-		$converter = strpos($source, 'pfblockerng_top1m();', $gate);
-		$this->assertNotFalse($converter);
-		$this->assertLessThan($converter, $gate);
+		$attempts = 0;
+		$this->assertFalse(pfb_top1m_apply_reprocess_if_ready($this->dbdir, static function () use (&$attempts): void {
+			$attempts++;
+		}), 'missing active identity must not convert');
+		$this->assertSame(0, $attempts);
+
+		file_put_contents("{$this->dbdir}/top-1m.csv", "live\n");
+		file_put_contents("{$this->dbdir}/top-1m.csv.zip.orig", "raw\n");
+		file_put_contents("{$this->dbdir}/top-1m.update", 'pending');
+		$this->assertTrue(pfb_top1m_apply_reprocess_if_ready($this->dbdir, static function () use (&$attempts): void {
+			$attempts++;
+		}), 'current identity plus update marker must convert');
+		$this->assertSame(1, $attempts);
 	}
 
 	public function testPublishResultLogsOnlyTheTruthfulOutcome(): void

@@ -16,9 +16,8 @@ use PHPUnit\Framework\TestCase;
  *
  * Like CategoryEditPostGuardTest, the page carries top-level execution and
  * cannot be require()d off-appliance, so the rowhelper state-loop region is
- * eval-extracted verbatim from the REAL source, anchored on text stable
- * across the pre-fix and post-fix code -- the same test proves red on the
- * old code and green on the new.
+ * eval-extracted from the REAL source using its executable foreach boundary
+ * and following advanced-alias loop.
  */
 final class CategoryEditReservedHeaderTest extends TestCase
 {
@@ -29,23 +28,27 @@ final class CategoryEditReservedHeaderTest extends TestCase
 	{
 		$continents = $GLOBALS['pfb']['continents'] ?? null;
 		if (!is_array($continents) || count($continents) !== 9) {
-			throw new RuntimeException('$pfb[continents] must have exactly 9 entries; got: ' . var_export($continents, true));
+			throw new RuntimeException('$pfb[continents] must have exactly 9 entries; got: ' . var_export($continents, TRUE));
 		}
 
-		$src = file_get_contents(
+		$src = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php'
 		);
-		if ($src === false) {
+		if ($src === '') {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_category_edit.php');
 		}
 
 		if (!function_exists('pfb_category_oracle_reserved_header_state_loop')) {
 			if (!preg_match(
-				'/(\tforeach \(\$_POST as \$key => \$value\) \{\n.*?\n\t\})\n\n\n\t\/\/ Validate Adv\. firewall rule settings/s',
+				'/(foreach \(\$_POST as \$key => \$value\) \{.*\})'
+				. '\s*foreach \(pfb_adv_alias_field_errors\(\$_POST\) as \$pfb_alias_error\)/s',
 				$src,
 				$m
 			)) {
-				throw new RuntimeException('test bootstrap: state validation loop not found');
+				throw new RuntimeException('test bootstrap: state validation executable region not found');
+			}
+			if (strpos($m[1], 'pfb_header_reserved_error') === FALSE) {
+				throw new RuntimeException('test bootstrap: reserved-header executable check disappeared');
 			}
 			eval(
 				'function pfb_category_oracle_reserved_header_state_loop(string $type): array {'

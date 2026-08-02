@@ -16,7 +16,8 @@ use PHPUnit\Framework\TestCase;
  * itself; the trailing-dot tolerance stays.
  *
  * The page carries top-level execution and cannot be require()d off-appliance,
- * so the validation block is eval-extracted verbatim from the REAL source.
+ * so the validation block is eval-extracted from the REAL source using its
+ * executable custom-type loop and following regex-validation statement.
  */
 final class DnsblCustomListWildcardValidationTest extends TestCase
 {
@@ -27,12 +28,21 @@ final class DnsblCustomListWildcardValidationTest extends TestCase
 	public static function setUpBeforeClass(): void
 	{
 		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php';
-		$src = file_get_contents($path);
-		if ($src === FALSE) {
+		$src = php_strip_whitespace($path);
+		if ($src === '') {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_dnsbl.php');
 		}
-		if (!preg_match('/(\t\t\/\/ Validate customlists\n.*?)\n\t\t\/\/ A usable validator always runs/s', $src, $m)) {
-			throw new RuntimeException('test bootstrap: "Validate customlists" region not found');
+		if (!preg_match(
+			'/(foreach \(array\(\s*\x27pfb_noaaaa_list\x27\s*=>\s*\x27domain\x27.*?\)'
+			. ' as \$custom_type => \$custom_format\) \{.*\})'
+			. '\s*\$pfb_regex_python = pfb_python_interpreter\(\)/s',
+			$src,
+			$m
+		)) {
+			throw new RuntimeException('test bootstrap: custom-list executable region not found');
+		}
+		if (strpos($m[1], 'rtrim($value[0], \'.\')') === FALSE) {
+			throw new RuntimeException('test bootstrap: custom-list wildcard trim decision disappeared');
 		}
 		self::$region = $m[1];
 	}

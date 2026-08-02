@@ -32,8 +32,16 @@
  */
 
 $nocsrf = TRUE;
-@require_once('/usr/local/www/widgets/include/widget-pfblockerng.inc');
-@require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
+$pfb_widget_include = '/usr/local/www/widgets/include/widget-pfblockerng.inc';
+if (!file_exists($pfb_widget_include)) {
+	$pfb_widget_include = dirname(__DIR__) . '/include/widget-pfblockerng.inc';
+}
+@require_once($pfb_widget_include);
+$pfb_widget_pkg_include = '/usr/local/pkg/pfblockerng/pfblockerng.inc';
+if (!file_exists($pfb_widget_pkg_include)) {
+	$pfb_widget_pkg_include = dirname(__DIR__, 3) . '/pkg/pfblockerng/pfblockerng.inc';
+}
+@require_once($pfb_widget_pkg_include);
 @require_once('guiconfig.inc');
 
 pfb_global();
@@ -63,7 +71,7 @@ if ($_GET) {
 	// Called by Ajax to update widget contents
 	elseif ($_GET['getNewWidget']) {
 		$pfb_table = pfBlockerNG_get_header('js');
-		pfBlockerNG_get_table($pfb_table, 'js');
+		pfb_widget_table_call($pfb_table, 'js');
 		return;
 	}
 }
@@ -73,7 +81,7 @@ if ($_POST) {
 	// Save widget customizations
 	// issue #1050: $nocsrf=TRUE means csrf-magic never runs here -- gate the mutation itself.
 	// issue #1064: per-field reads use ?? '' -- a crafted POST (or an unchecked checkbox) omits keys.
-	if (isset($_POST['pfb_submit']) && pfb_widget_post_allowed($_SERVER)) {
+	if (pfb_widget_post_guard($_POST, $_SERVER, 'pfb_submit')) {
 		$pfb['wglobal']['widget-popup']			= pfb_filter($_POST['pfb_popup'] ?? '', PFB_FILTER_ON_OFF, 'widget');
 		$pfb['wglobal']['widget-sortmix']		= pfb_filter($_POST['pfb_sortmix'] ?? '', PFB_FILTER_ON_OFF, 'widget');
 		$pfb['wglobal']['widget-show_agg']		= pfb_filter($_POST['pfb_show_agg'] ?? '', PFB_FILTER_ON_OFF, 'widget');
@@ -179,7 +187,7 @@ if ($_POST) {
 
 	// Clear widget Failed downloads
 	// issue #1050: $nocsrf=TRUE means csrf-magic never runs here -- gate the mutation itself.
-	elseif (!empty($_POST['pfblockerngack']) && pfb_widget_post_allowed($_SERVER)) {
+	elseif (pfb_widget_post_guard($_POST, $_SERVER, 'pfblockerngack')) {
 		exec("{$pfb['sed']} -i '' 's/FAIL/Fail/g' /var/log/pfblockerng/error.log");
 		// issue #999: ADR-61 moved the reporting list to the sync-status ledger --
 		// close the entries it actually reads, not just the retired error.log.
@@ -189,7 +197,7 @@ if ($_POST) {
 	}
 
 	// Clear widget IP/DNSBL Packet Counts
-	elseif (!empty($_POST['pfblockerngclearall']) && pfb_widget_post_allowed($_SERVER)) {
+	elseif (pfb_widget_post_guard($_POST, $_SERVER, 'pfblockerngclearall')) {
 		pfBlockerNG_clearip();
 		pfBlockerNG_clearsqlite('clearip');
 		pfBlockerNG_clearsqlite('cleardnsbl');
@@ -198,7 +206,7 @@ if ($_POST) {
 	}
 
 	// Clear widget IP Packet Counts
-	elseif (!empty($_POST['pfblockerngclearip']) && pfb_widget_post_allowed($_SERVER)) {
+	elseif (pfb_widget_post_guard($_POST, $_SERVER, 'pfblockerngclearip')) {
 		pfBlockerNG_clearip();
 		pfBlockerNG_clearsqlite('clearip');
 		header("Location: /");
@@ -206,7 +214,7 @@ if ($_POST) {
 	}
 
 	// Clear widget DNSBL Packet Counts
-	elseif (!empty($_POST['pfblockerngcleardnsbl']) && pfb_widget_post_allowed($_SERVER)) {
+	elseif (pfb_widget_post_guard($_POST, $_SERVER, 'pfblockerngcleardnsbl')) {
 		pfBlockerNG_clearsqlite('cleardnsbl');
 		header("Location: /");
 		exit(0);
@@ -935,10 +943,7 @@ function pfBlockerNG_get_header($mode='') {
 
 				if ($data == 'Suppression' || $data == 'Whitelist') {
 					$d_type = ($data == 'Suppression') ? 'ip' : 'dnsbl';
-					// issue #1881: link the target section's own id -- the dedicated
-					// "#Suppression"/"#Whitelist" anchor rows were empty form rows
-					// drawing stray separators and are gone.
-					$d_anchor = ($data == 'Suppression') ? 'IPv4_Suppression_customlist' : 'DNSBL_Whitelist_customlist';
+					$d_anchor = pfb_widget_anchor_layout_render($d_type)[$data === 'Suppression' ? 'suppression' : 'whitelist'];
 					print("{$tab5}<td {$tdl} title=\"{$titles[$key][$data]}\"><i class=\"{$faicon[$key][$col]}\"></i>&nbsp;&nbsp;"
 						. "<a target=\"_blank\" href=\"/pfblockerng/pfblockerng_{$d_type}.php#{$d_anchor}\" title=\"Link to {$data}\">"
 						. "<small><span class=\"pfb_{$data}\">{$value}</span></small></a></td>\n");
@@ -1096,7 +1101,7 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 			</thead>
 			<tbody id="pfBNG-table">
 				<!-- Print table contents, subsequent refresh by javascript function -->
-				<?=pfBlockerNG_get_table($pfb_table);?>
+				<?=pfb_widget_table_call($pfb_table);?>
 			</tbody>
 		</table>
 	</div>

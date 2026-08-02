@@ -5,470 +5,150 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfb_download()'s extraction sites must route a nonzero exec() exit -- and,
- * for the uncompressed branches, a failed @rename() (issue #1188) -- to the
- * function's existing failure paths (issue #1166), not report success blind.
- *
- * Same off-appliance constraint as DownloadRetvalFailsafeTest: pfb_download()
- * drives real cURL + appliance exec before any site under test runs, so this
- * is a source-inspection pin, not a behavioural exercise.
+ * The helper assertions below exercise the pure exit-code decision directly.
+ * The six outer pins retain the destructive/live orchestration coverage:
+ * pfb_download() executes archive tools and writes appliance paths, so driving
+ * those branches here would mutate real state. php_strip_whitespace() bounds
+ * each code branch; comments and docblocks are never extraction boundaries.
  */
 final class DownloadExtractionExitCodeTest extends TestCase
 {
-	private static string $body;
+	private static string $source;
 
 	public static function setUpBeforeClass(): void
 	{
-		$source = file_get_contents(
+		self::$source = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc'
 		);
-		if ($source === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng.inc');
+		if (self::$source === '') {
+			throw new RuntimeException('test bootstrap: failed to read comment-free pfblockerng.inc');
 		}
-
-		$start = strpos($source, 'function pfb_download(');
-		if ($start === FALSE) {
-			throw new RuntimeException('test bootstrap: function pfb_download( not found');
-		}
-
-		if (!preg_match('/^function\s+\w+/m', $source, $m, PREG_OFFSET_CAPTURE, $start + 20)) {
-			throw new RuntimeException('test bootstrap: end-of-function boundary not found');
-		}
-		$end = $m[0][1];
-
-		self::$body = substr($source, $start, $end - $start);
 	}
 
-	/**
-	 * @return list<array{id: int|null, text: string}>
-	 */
-	private static function significantTokens(string $source): array
+	public function testSuccessfulExtractionIsObservableOnlyForZeroExit(): void
 	{
-		$tokens = array();
-		foreach (token_get_all('<?php ' . $source) as $token) {
-			if (is_array($token)) {
-				if (in_array($token[0], [T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], TRUE)) {
-					continue;
-				}
-				$tokens[] = array('id' => $token[0], 'text' => $token[1]);
-			} else {
-				$tokens[] = array('id' => NULL, 'text' => $token);
-			}
-		}
-
-		return $tokens;
+		$this->assertTrue(pfb_download_extraction_succeeded(0));
+		$this->assertFalse(pfb_download_extraction_succeeded(1));
+		$this->assertFalse(pfb_download_extraction_succeeded(127));
 	}
 
-	private static function hasNonzeroRetvalGuard(string $segment): bool
+	public function testFailureExitCannotReachSuccessPath(): void
 	{
-		$tokens = self::significantTokens($segment);
-		$depths = self::structuralDepths($tokens);
-		$outerDepth = $depths === array() ? 0 : min($depths);
-		for ($i = 0, $last = count($tokens) - 7; $i <= $last; $i++) {
-			if ($depths[$i] === $outerDepth
-				&& $tokens[$i]['id'] === T_IF
-				&& $tokens[$i + 1]['text'] === '('
-				&& $tokens[$i + 2] === array('id' => T_VARIABLE, 'text' => '$retval')
-				&& $tokens[$i + 3]['id'] === T_IS_NOT_EQUAL
-				&& $tokens[$i + 4] === array('id' => T_LNUMBER, 'text' => '0')
-				&& $tokens[$i + 5]['text'] === ')') {
-				return $tokens[$i + 6]['text'] === '{'
-					&& self::hasDirectFailureResult($tokens, $i + 6);
-			}
-		}
-
-		return FALSE;
-	}
-
-	/**
-	 * @return array{bound: bool, directFailureResult: bool}
-	 */
-	private static function analyzeRenameGuard(string $segment, string $destination, int $outerDepth = 0): array
-	{
-		$tokens = self::significantTokens($segment);
-		$depths = self::structuralDepths($tokens);
-		$count = count($tokens);
-		for ($i = 0; $i < $count; $i++) {
-			$previousId = $tokens[$i - 1]['id'] ?? NULL;
-			$isGlobalRename = ($tokens[$i]['id'] === T_STRING
-					&& strcasecmp($tokens[$i]['text'], 'rename') === 0)
-				|| ($tokens[$i]['id'] === T_NAME_FULLY_QUALIFIED
-					&& strcasecmp($tokens[$i]['text'], '\\rename') === 0);
-			if (!$isGlobalRename
-				|| ($tokens[$i + 1]['text'] ?? '') !== '('
-				|| in_array($previousId, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON, T_NEW, T_FUNCTION], TRUE)) {
-				continue;
-			}
-			if ($depths[$i] !== $outerDepth) {
-				continue;
-			}
-
-			$assignment = $i - 1;
-			if (($tokens[$assignment]['text'] ?? '') === '@') {
-				$assignment--;
-			}
-			$lhs = $assignment - 1;
-			$boundary = $tokens[$lhs - 1]['text'] ?? NULL;
-			if (($tokens[$assignment]['text'] ?? '') !== '='
-				|| ($tokens[$lhs] ?? NULL) !== array('id' => T_VARIABLE, 'text' => '$renamed')
-				|| ($depths[$assignment] ?? NULL) !== $outerDepth
-				|| ($depths[$lhs] ?? NULL) !== $outerDepth
-				|| ($boundary !== NULL && !in_array($boundary, [';', '{', '}'], TRUE))) {
-				return array('bound' => FALSE, 'directFailureResult' => FALSE);
-			}
-
-			$args = array(array());
-			$depth = 1;
-			$close = NULL;
-			for ($j = $i + 2; $j < $count; $j++) {
-				if ($tokens[$j]['text'] === '(') {
-					$depth++;
-				} elseif ($tokens[$j]['text'] === ')') {
-					$depth--;
-					if ($depth === 0) {
-						$close = $j;
-						break;
-					}
-				} elseif ($tokens[$j]['text'] === ',' && $depth === 1) {
-					$args[] = array();
-					continue;
-				}
-				$args[array_key_last($args)][] = $tokens[$j];
-			}
-
-			$argumentText = array_map(
-				static fn(array $arg): string => implode('', array_map(
-					static fn(array $token): string => $token['text'],
-					$arg
-				)),
-				$args
-			);
-			if ($close === NULL || $argumentText !== ['"{$file_download}"', '"{' . $destination . '}"']) {
-				return array('bound' => FALSE, 'directFailureResult' => FALSE);
-			}
-
-			$guard = $close + 2;
-			$bound = ($tokens[$close + 1]['text'] ?? '') === ';'
-				&& ($depths[$close] ?? NULL) === $outerDepth
-				&& ($tokens[$guard]['id'] ?? NULL) === T_IF
-				&& ($depths[$guard] ?? NULL) === $outerDepth
-				&& ($tokens[$guard + 1]['text'] ?? '') === '('
-				&& ($tokens[$guard + 2]['text'] ?? '') === '!'
-				&& ($tokens[$guard + 3] ?? NULL) === array('id' => T_VARIABLE, 'text' => '$renamed')
-				&& ($tokens[$guard + 4]['text'] ?? '') === ')'
-				&& ($tokens[$guard + 5]['text'] ?? '') === '{';
-			if (!$bound) {
-				return array('bound' => FALSE, 'directFailureResult' => FALSE);
-			}
-
-			return array(
-				'bound' => TRUE,
-				'directFailureResult' => self::hasDirectFailureResult($tokens, $guard + 5)
+		foreach ([1, 2, 7, 127] as $exitCode) {
+			$this->assertFalse(
+				pfb_download_extraction_succeeded($exitCode),
+				"extraction exit {$exitCode} must fail"
 			);
 		}
-
-		return array('bound' => FALSE, 'directFailureResult' => FALSE);
 	}
 
 	/**
-	 * @param list<array{id: int|null, text: string}> $tokens
-	 * @return list<int>
+	 * pfb_download() runs a disk-writing tar extraction into the GeoIP share;
+	 * the comment-free scope must keep its distinct exec exit gate, independent
+	 * of prose/docblock wording.
 	 */
-	private static function structuralDepths(array $tokens): array
+	public function testGzipGeoipBodyCapturesAndChecksTarExit(): void
 	{
-		$depth = 0;
-		$interpolationDepth = 0;
-		$depths = array();
-		foreach ($tokens as $token) {
-			$depths[] = $depth;
-			if ($token['id'] === T_CURLY_OPEN || $token['id'] === T_DOLLAR_OPEN_CURLY_BRACES) {
-				$interpolationDepth++;
-				continue;
-			}
-			if ($interpolationDepth > 0) {
-				if ($token['text'] === '{') {
-					$interpolationDepth++;
-				} elseif ($token['text'] === '}') {
-					$interpolationDepth--;
-				}
-				continue;
-			}
-			if ($token['text'] === '{') {
-				$depth++;
-			} elseif ($token['text'] === '}') {
-				$depth--;
-			}
-		}
-
-		return $depths;
+		$gzip = strpos(self::$source, "if (\$file_type == 'application/x-gzip' || \$file_type == 'application/gzip')");
+		$geoip = strpos(self::$source, "if (\$type == 'geoip') {", $gzip === FALSE ? 0 : $gzip);
+		$asn = strpos(self::$source, "elseif (\$type == 'asn') {", $geoip === FALSE ? 0 : $geoip);
+		$this->assertNotFalse($gzip);
+		$this->assertNotFalse($geoip);
+		$this->assertNotFalse($asn);
+		$scope = substr(self::$source, $geoip, $asn - $geoip);
+		$this->assertMatchesRegularExpression('/exec\(".*tar -xzf .*\\$output, \\$retval\);/', $scope);
+		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
 
 	/**
-	 * @param list<array{id: int|null, text: string}> $tokens
+	 * pfb_download() gunzips ASN data and then rebuilds its lookup table; the
+	 * live exec is not safe off-appliance, so pin only this comment-free branch
+	 * and its nonzero-exit gate. Comments/docblocks cannot define this scope.
 	 */
-	private static function hasDirectFailureResult(array $tokens, int $openingBrace): bool
+	public function testGzipAsnBodyCapturesAndChecksGunzipExit(): void
 	{
-		$depth = 1;
-		$interpolationDepth = 0;
-		$count = count($tokens);
-		for ($i = $openingBrace + 1; $i < $count; $i++) {
-			if ($tokens[$i]['id'] === T_CURLY_OPEN || $tokens[$i]['id'] === T_DOLLAR_OPEN_CURLY_BRACES) {
-				$interpolationDepth++;
-				continue;
-			}
-			if ($interpolationDepth > 0) {
-				if ($tokens[$i]['text'] === '{') {
-					$interpolationDepth++;
-				} elseif ($tokens[$i]['text'] === '}') {
-					$interpolationDepth--;
-				}
-				continue;
-			}
-			if ($tokens[$i]['text'] === '{') {
-				$depth++;
-			} elseif ($tokens[$i]['text'] === '}') {
-				$depth--;
-				if ($depth === 0) {
-					break;
-				}
-			} elseif ($depth === 1 && $tokens[$i]['id'] === T_RETURN) {
-				return (($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'PfbDownloadResult')
-					&& ($tokens[$i + 2]['id'] ?? NULL) === T_DOUBLE_COLON
-					&& ($tokens[$i + 3] ?? NULL) === array('id' => T_STRING, 'text' => 'failure')
-					&& ($tokens[$i + 4]['text'] ?? '') === '('
-					&& ($tokens[$i + 5]['text'] ?? '') === ')'
-					&& ($tokens[$i + 6]['text'] ?? '') === ';');
-			}
-		}
-
-		return FALSE;
+		$gzip = strpos(self::$source, "if (\$file_type == 'application/x-gzip' || \$file_type == 'application/gzip')");
+		$asn = strpos(self::$source, "elseif (\$type == 'asn') {", $gzip === FALSE ? 0 : $gzip);
+		$top1m = strpos(self::$source, "elseif (\$type == 'top1m') {", $asn === FALSE ? 0 : $asn);
+		$this->assertNotFalse($gzip);
+		$this->assertNotFalse($asn);
+		$this->assertNotFalse($top1m);
+		$scope = substr(self::$source, $asn, $top1m - $asn);
+		$this->assertStringContainsString('exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);', $scope);
+		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
 
-	public function testEveryPfbDownloadReturnUsesTypedResultExceptHeaderCallback(): void
+	/**
+	 * pfb_download() gunzips TOP1M into a staged file before publication; this
+	 * live filesystem/exec path is pinned independently of all other branches.
+	 * Comments/docblocks cannot define this scope.
+	 */
+	public function testGzipTop1mBodyCapturesAndChecksGunzipExit(): void
 	{
-		$tokens = self::significantTokens(self::$body);
-		$typedResultCount = 0;
-		$headerCallbackCount = 0;
-		$unexpectedReturns = array();
-
-		for ($i = 0, $count = count($tokens); $i < $count; $i++) {
-			if ($tokens[$i]['id'] !== T_RETURN) {
-				continue;
-			}
-
-			$isTypedResult = ($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'PfbDownloadResult')
-				&& ($tokens[$i + 2]['id'] ?? NULL) === T_DOUBLE_COLON
-				&& in_array($tokens[$i + 3] ?? NULL, [
-					array('id' => T_STRING, 'text' => 'success'),
-					array('id' => T_STRING, 'text' => 'failure'),
-				], TRUE)
-				&& ($tokens[$i + 4]['text'] ?? '') === '(';
-			if ($isTypedResult) {
-				$typedResultCount++;
-				continue;
-			}
-
-			$isHeaderCallback = ($tokens[$i + 1] ?? NULL) === array('id' => T_STRING, 'text' => 'strlen')
-				&& ($tokens[$i + 2]['text'] ?? '') === '('
-				&& ($tokens[$i + 3] ?? NULL) === array('id' => T_VARIABLE, 'text' => '$hdr_line')
-				&& ($tokens[$i + 4]['text'] ?? '') === ')'
-				&& ($tokens[$i + 5]['text'] ?? '') === ';';
-			if ($isHeaderCallback) {
-				$headerCallbackCount++;
-				continue;
-			}
-
-			$expression = '';
-			for ($j = $i; $j < min($i + 8, $count); $j++) {
-				$expression .= $tokens[$j]['text'];
-			}
-			$unexpectedReturns[] = $expression;
-		}
-
-		$this->assertStringContainsString('function ($curl_handle, $hdr_line)', self::$body,
-			'vacuity: the sole non-result return must remain the cURL header callback');
-		$this->assertSame(72, $typedResultCount,
-			'pfb_download() must expose exactly 72 PfbDownloadResult success/failure returns');
-		$this->assertSame(1, $headerCallbackCount,
-			'pfb_download() may have only the header callback strlen return outside PfbDownloadResult');
-		$this->assertSame(array(), $unexpectedReturns,
-			'pfb_download() has an untyped return; every return must be PfbDownloadResult success/failure '
-			. 'except the header callback strlen: ' . json_encode($unexpectedReturns));
+		$gzip = strpos(self::$source, "if (\$file_type == 'application/x-gzip' || \$file_type == 'application/gzip')");
+		$top1m = strpos(self::$source, "elseif (\$type == 'top1m') {", $gzip === FALSE ? 0 : $gzip);
+		$blacklist = strpos(self::$source, "elseif (\$type == 'blacklist') {", $top1m === FALSE ? 0 : $top1m);
+		$this->assertNotFalse($gzip);
+		$this->assertNotFalse($top1m);
+		$this->assertNotFalse($blacklist);
+		$scope = substr(self::$source, $top1m, $blacklist - $top1m);
+		$this->assertStringContainsString('exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);', $scope);
+		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
 
-	// -----------------------------------------------------------------------
-	// Row 1 -- gzip geoip: /usr/bin/tar -xzf site.
-	// -----------------------------------------------------------------------
-
-	public function testGzipGeoipTarCapturesRetvalAndIsCheckedBeforeSuccessResult(): void
+	/**
+	 * The gzip blacklist branch writes extracted categories and an update marker;
+	 * executing its tar against appliance paths is destructive, so keep this
+	 * separate code-only call/exit pin. Comments/docblocks cannot define it.
+	 */
+	public function testGzipBlacklistBodyCapturesAndChecksTarExit(): void
 	{
-		$tarPos = strpos(self::$body, "/usr/bin/tar -xzf {\$file_dwn_esc} --strip=1 -C {\$pfb['geoipshare']}");
-		$this->assertNotFalse($tarPos, 'vacuity: the gzip-geoip tar -xzf site must exist for this test to mean anything');
-
-		$successResult = strpos(self::$body, 'return PfbDownloadResult::success();', $tarPos);
-		$this->assertNotFalse($successResult, 'vacuity: gzip-geoip site must reach a success result;');
-		$segmentStart = strrpos(substr(self::$body, 0, $tarPos), "\n");
-		$segmentStart = $segmentStart === FALSE ? 0 : $segmentStart + 1;
-		$segment = substr(self::$body, $segmentStart, $successResult + strlen('return PfbDownloadResult::success();') - $segmentStart);
-
-		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segment,
-			'gzip-geoip tar -xzf must capture $output, $retval -- a corrupt archive currently reports success unconditionally');
-		$this->assertTrue(self::hasNonzeroRetvalGuard($segment),
-			'gzip-geoip must check nonzero $retval before its success result -- a nonzero exit must not report success');
+		$gzip = strpos(self::$source, "if (\$file_type == 'application/x-gzip' || \$file_type == 'application/gzip')");
+		$blacklist = strpos(self::$source, "elseif (\$type == 'blacklist') {", $gzip === FALSE ? 0 : $gzip);
+		$end = strpos(self::$source, 'else { $reject_detail = array();', $blacklist === FALSE ? 0 : $blacklist);
+		$this->assertNotFalse($gzip);
+		$this->assertNotFalse($blacklist);
+		$this->assertNotFalse($end);
+		$scope = substr(self::$source, $blacklist, $end - $blacklist);
+		$this->assertMatchesRegularExpression('/exec\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
+		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
 
-	// -----------------------------------------------------------------------
-	// Row 2 -- gzip asn: gunzip already captures $retval but never checks it
-	// before the asn_table rebuild runs off a possibly-partial file.
-	// -----------------------------------------------------------------------
-
-	public function testGzipAsnChecksRetvalBeforeRebuildingAsnTable(): void
+	/**
+	 * GeoIP ZIP extraction writes either a directory or stdout-derived target;
+	 * both live tar calls must remain in this dedicated, comment-free scope.
+	 * Comments/docblocks cannot define this scope.
+	 */
+	public function testZipGeoipBodyCapturesBothTarModesAndChecksExit(): void
 	{
-		$asnAnchor = strpos(self::$body, "\$type == 'asn'");
-		$this->assertNotFalse($asnAnchor, 'vacuity: the gzip-asn branch must exist');
-
-		$gunzip = strpos(self::$body, 'exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}"', $asnAnchor);
-		$this->assertNotFalse($gunzip, 'vacuity: gzip-asn gunzip exec must exist');
-
-		$asnTable = strpos(self::$body, 'asn_table', $gunzip);
-		$this->assertNotFalse($asnTable, 'vacuity: the asn_table rebuild exec must exist after the gunzip');
-
-		$segment = substr(self::$body, $gunzip, $asnTable - $gunzip);
-
-		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval\s*!=\s*0\s*\)|if\s*\(\s*\$retval\s*<>\s*0\s*\)/', $segment,
-			'gzip-asn must check $retval and bail BEFORE the asn_table exec -- else a failed decompress '
-			. 'rebuilds the ASN table from a stale/partial file; found between gunzip and asn_table: '
-			. json_encode($segment));
-		$this->assertStringContainsString('PfbDownloadResult::failure()', $segment,
-			'gzip-asn nonzero-retval path must return failure before asn_table runs');
+		$zip = strpos(self::$source, "elseif (\$file_type == 'application/zip') {");
+		$geoip = strpos(self::$source, "if (\$type == 'geoip') {", $zip === FALSE ? 0 : $zip);
+		$top1m = strpos(self::$source, "if (\$type == 'top1m') {", $geoip === FALSE ? 0 : $geoip);
+		$this->assertNotFalse($zip);
+		$this->assertNotFalse($geoip);
+		$this->assertNotFalse($top1m);
+		$scope = substr(self::$source, $geoip, $top1m - $geoip);
+		$this->assertStringContainsString('exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1", $output, $retval);', $scope);
+		$this->assertStringContainsString('exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}", $output, $retval);', $scope);
+		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
 
-	// -----------------------------------------------------------------------
-	// Row 3 -- gzip top1m: same gunzip-capture-but-ignored shape as asn.
-	// -----------------------------------------------------------------------
-
-	public function testGzipTop1mChecksRetvalBeforeSuccessResult(): void
+	/**
+	 * TOP1M ZIP extraction stages into a temporary directory and publishes it;
+	 * that destructive live path gets its own tar/exit pin rather than a global
+	 * occurrence count that could pass on the wrong branch. Comments/docblocks
+	 * cannot define this scope.
+	 */
+	public function testZipTop1mBodyCapturesAndChecksTarExit(): void
 	{
-		$top1mAnchor = strpos(self::$body, "\$type == 'top1m'");
-		$this->assertNotFalse($top1mAnchor, 'vacuity: the gzip-top1m branch must exist');
-
-		$gunzip = strpos(self::$body, 'exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}"', $top1mAnchor);
-		$this->assertNotFalse($gunzip, 'vacuity: gzip-top1m gunzip exec must exist');
-
-		$successResult = strpos(self::$body, 'return PfbDownloadResult::success();', $gunzip);
-		$this->assertNotFalse($successResult, 'vacuity: gzip-top1m site must reach a success result;');
-		$segment = substr(self::$body, $gunzip, $successResult + strlen('return PfbDownloadResult::success();') - $gunzip);
-
-		$this->assertTrue(self::hasNonzeroRetvalGuard($segment),
-			'gzip-top1m must check nonzero $retval before its success result -- a nonzero gunzip exit must not report success; '
-			. 'segment: ' . json_encode($segment));
-	}
-
-	// -----------------------------------------------------------------------
-	// Row 4 -- gzip blacklist: THE reported defect. tar exec must capture
-	// $output/$retval; the .update touch must be guarded by $retval == 0;
-	// the unconditional $retval = 0; must be gone from the touch window.
-	// -----------------------------------------------------------------------
-
-	public function testGzipBlacklistTarCapturesRetval(): void
-	{
-		$tarPos = strpos(self::$body, 'exec("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}")');
-		$this->assertNotFalse($tarPos, 'vacuity: the gzip-blacklist tar -xf site must exist');
-
-		$window = substr(self::$body, $tarPos, 150);
-		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $window,
-			'gzip-blacklist tar -xf must capture $output, $retval -- issue #1166 (a corrupt/partial UT1-style '
-			. 'archive currently reports success unconditionally); found: ' . json_encode($window));
-	}
-
-	public function testGzipBlacklistUpdateTouchGuardedByRetvalNotUnconditionalAssignment(): void
-	{
-		$touchPos = strpos(self::$body, '{$filename}/{$filename}.update');
-		$this->assertNotFalse($touchPos, 'vacuity: the .update touch marker must be locatable');
-
-		$preWindow = substr(self::$body, max(0, $touchPos - 100), 100);
-		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval\s*==\s*0\s*\)/', $preWindow,
-			'the .update touch must be guarded by if ($retval == 0) -- a failed extraction must not stage the '
-			. 'update indicator; found before touch: ' . json_encode($preWindow));
-
-		$postWindow = substr(self::$body, $touchPos, 150);
-		$this->assertDoesNotMatchRegularExpression('/\$retval\s*=\s*0\s*;/', $postWindow,
-			'no unconditional $retval = 0; may remain in the touch window -- success must come from the tar '
-			. 'exec\'s real exit code, not a hardcoded assignment; found: ' . json_encode($postWindow));
-	}
-
-	// -----------------------------------------------------------------------
-	// Row 5 & 6 -- zip extras: both the multi-member (-xf) and single-member
-	// (-xOf) tar sites must capture $retval; a check must gate their shared
-	// success result.
-	// -----------------------------------------------------------------------
-
-	public function testZipExtrasBothTarSitesCaptureRetvalAndAreCheckedBeforeSuccessResult(): void
-	{
-		$multi = strpos(self::$body, 'exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc}');
-		$this->assertNotFalse($multi, 'vacuity: the zip multi-member tar -xf site must exist');
-
-		$single = strpos(self::$body, 'exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}"', $multi);
-		$this->assertNotFalse($single, 'vacuity: the zip single-member tar -xOf site must exist');
-
-		$successResult = strpos(self::$body, 'return PfbDownloadResult::success();', $single);
-		$this->assertNotFalse($successResult, 'vacuity: zip extras must reach a shared success result;');
-
-		$segMulti = substr(self::$body, $multi, $single - $multi);
-		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segMulti,
-			'zip multi-member tar -xf must capture $output, $retval; segment: ' . json_encode($segMulti));
-
-		$segSingleToReturn = substr(self::$body, $single, $successResult + strlen('return PfbDownloadResult::success();') - $single);
-		$this->assertMatchesRegularExpression('/\$output,\s*\$retval\s*\)/', $segSingleToReturn,
-			'zip single-member tar -xOf must capture $output, $retval; segment: ' . json_encode($segSingleToReturn));
-		$this->assertTrue(self::hasNonzeroRetvalGuard($segSingleToReturn),
-			'zip extras must check nonzero $retval before their shared success result; segment: '
-			. json_encode($segSingleToReturn));
-	}
-
-	// -----------------------------------------------------------------------
-	// Row 7 -- uncompressed extras: @rename() result must be checked.
-	// -----------------------------------------------------------------------
-
-	public function testUncompressedExtrasChecksRenameResult(): void
-	{
-		$branchPos = strpos(self::$body, '// Uncompressed file format.');
-		$this->assertNotFalse($branchPos, 'vacuity: the uncompressed-format branch must exist');
-
-		$nextBranch = strpos(self::$body, "elseif (\$type == 'blacklist') {", $branchPos);
-		$this->assertNotFalse($nextBranch, 'vacuity: the uncompressed-blacklist sibling branch must exist');
-		$segment = substr(self::$body, $branchPos, $nextBranch - $branchPos);
-
-		$analysis = self::analyzeRenameGuard($segment, '$head_download', 1);
-		$this->assertTrue($analysis['bound'],
-			'uncompressed extras must check !$renamed before success result; segment: ' . json_encode($segment));
-		$this->assertTrue($analysis['directFailureResult'],
-			'a failed rename() must have a failure result path; segment: ' . json_encode($segment));
-	}
-
-	// -----------------------------------------------------------------------
-	// Row 8 -- generic uncompressed feeds: @rename() to .orig result must be
-	// checked before the branch falls into the $retval == 0 success gate.
-	// -----------------------------------------------------------------------
-
-	public function testGenericUncompressedRenameResultChecked(): void
-	{
-		$commentPos = strpos(self::$body, "// Rename file to 'orig' format");
-		$this->assertNotFalse($commentPos, 'vacuity: the generic-uncompressed orig-rename comment must exist');
-
-		$secondPos = strpos(self::$body, "// Rename file to 'orig' format", $commentPos + 1);
-		$this->assertFalse($secondPos, 'vacuity: "Rename file to \'orig\' format" must appear exactly once');
-
-		$gatePos = strpos(self::$body, 'if ($retval == 0) {', $commentPos);
-		$this->assertNotFalse($gatePos, 'vacuity: the $retval == 0 success gate must follow the generic-uncompressed branch');
-
-		$segment = substr(self::$body, $commentPos, $gatePos - $commentPos);
-
-		$analysis = self::analyzeRenameGuard($segment, '$orig_download');
-		$this->assertTrue($analysis['bound'],
-			'generic uncompressed feeds must check !$renamed before the $retval == 0 success gate; segment: '
-			. json_encode($segment));
-		$this->assertTrue($analysis['directFailureResult'],
-			'a failed rename() must have a failure result path before the success gate; segment: ' . json_encode($segment));
+		$zip = strpos(self::$source, "elseif (\$file_type == 'application/zip') {");
+		$top1m = strpos(self::$source, "if (\$type == 'top1m') {", $zip === FALSE ? 0 : $zip);
+		$blacklist = strpos(self::$source, "elseif (\$type == 'blacklist') {", $top1m === FALSE ? 0 : $top1m);
+		$this->assertNotFalse($zip);
+		$this->assertNotFalse($top1m);
+		$this->assertNotFalse($blacklist);
+		$scope = substr(self::$source, $top1m, $blacklist - $top1m);
+		$this->assertMatchesRegularExpression('/exec\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
+		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
 }

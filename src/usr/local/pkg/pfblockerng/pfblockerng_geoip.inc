@@ -503,8 +503,7 @@ $section->addInput(new Form_StaticText(
 	'NOTES:',
 	'GeoIP data by MaxMind Inc. - GeoLite2<br />'
 	. 'Click here for IMPORTANT info&emsp;-->&emsp;'
-	. '<a target="_blank" rel="noopener noreferrer" href="https://dev.maxmind.com/geoip/whats-new-in-geoip2/">'
-	. '<span class="text-danger"><strong>What\'s new in GeoIP2</strong></span></a>'
+	. pfb_geoip_doc_link()
 
 	. '<hr style="height: 1px; border: none; background-color: #d6d6d6;"/>'
 
@@ -752,7 +751,7 @@ events.push(function() {
 
 //]]
 </script>
-<script src="pfBlockerNG.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/pfBlockerNG.js')?>" type="text/javascript"></script>
+<?=pfb_geoip_js_asset_render()?>
 <?php include('foot.inc');?>
 
 EOF;

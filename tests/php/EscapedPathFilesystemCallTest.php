@@ -71,6 +71,8 @@ final class EscapedPathFilesystemCallTest extends TestCase
 	 */
 	public function test_no_filesystem_call_receives_escaped_path(): void
 	{
+		// This is a whole-tree static safety rule, not one runnable call path.
+		// PRODUCTION COMMENTS AND DOCBLOCKS MUST NEVER BE LOAD-BEARING FOR A TEST.
 		$root = dirname(__DIR__, 2);
 		$violations = [];
 
@@ -81,7 +83,7 @@ final class EscapedPathFilesystemCallTest extends TestCase
 			if (!in_array($file->getExtension(), ['php', 'inc'], TRUE)) {
 				continue;
 			}
-			$source = file_get_contents($file->getPathname());
+			$source = php_strip_whitespace($file->getPathname());
 			$this->assertNotFalse($source, "Failed to read {$file->getPathname()}");
 			$count = preg_match_all(self::FS_CALL_PATTERN, $source, $m, PREG_OFFSET_CAPTURE);
 			// FALSE = regex-engine error, which must fail loud — not read as "no match".

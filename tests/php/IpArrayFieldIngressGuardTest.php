@@ -28,8 +28,8 @@ use PHPUnit\Framework\TestCase;
  * genuinely scalar fields (int/bool/null POST values).
  *
  * The ingress+sanitize loops are eval-extracted as a pure function of $_POST
- * (top-level page script, not require()-able off-appliance) -- matching
- * DnsblFreshPconfigTest's convention for this same page family.
+ * (top-level page script, not require()-able off-appliance), bounded by their
+ * executable POST-key loop and following select-options assignment.
  */
 final class IpArrayFieldIngressGuardTest extends TestCase
 {
@@ -40,23 +40,20 @@ final class IpArrayFieldIngressGuardTest extends TestCase
 		if (function_exists('pfb_ip_oracle_sanitize_prologue')) {
 			return;
 		}
-		$src = file_get_contents(self::IP_PHP);
-		if ($src === FALSE) {
+		$src = php_strip_whitespace(self::IP_PHP);
+		if ($src === '') {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_ip.php');
 		}
-		// Anchored on the issue #1777 guard comment's stable opening line through
-		// to the stable "// Validate Select field options" comment that follows
-		// the whole ingress+sanitize prologue -- captures the region as raw text
-		// regardless of the guard's internal shape (unconditional, allow-listed
-		// or multi-select-excluding), so the SAME oracle extraction works
-		// whichever shape the guard currently carries.
 		if (!preg_match(
-			'/(\t\t\/\/ issue #1777: reject an array-valued field \(\'asn_token\[\]=x\'\) before any\n.*?\n)'
-			. '\n\t\t\/\/ Validate Select field options\n/s',
+			'/(\$pfb_multiselect_fields = array\(.*?\);\s*'
+			. 'foreach \(array_keys\(\$_POST\) as \$pfb_post_field\) \{.*?)(?=\$select_options = array\()/s',
 			$src,
 			$m
 		)) {
-			throw new RuntimeException('test bootstrap: ip.php ingress guard + sanitize prologue not found');
+			throw new RuntimeException('test bootstrap: ip.php ingress guard + sanitize executable region not found');
+		}
+		if (strpos($m[1], 'pfb_sanitize_text_area') === FALSE) {
+			throw new RuntimeException('test bootstrap: IP sanitize executable region is incomplete');
 		}
 		eval(
 			'function pfb_ip_oracle_sanitize_prologue(array $post): array {'

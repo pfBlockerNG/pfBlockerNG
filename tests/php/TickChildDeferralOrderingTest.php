@@ -44,7 +44,10 @@ final class TickChildDeferralOrderingTest extends TestCase
 
 	public function testChildLockLossAfterLaunchKeepsPendingRetry(): void
 	{
-		$src = file_get_contents(
+		// Scheduling is off-limits for #2103 and the background child cannot be made
+		// deterministic off-appliance. Keep the ordering pin against comment-free PHP.
+		// PRODUCTION COMMENTS AND DOCBLOCKS MUST NEVER BE LOAD-BEARING FOR A TEST.
+		$src = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc'
 		);
 		$this->assertNotFalse($src, 'test oracle: failed to read pfblockerng_extra.inc');

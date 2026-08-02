@@ -37,6 +37,8 @@ $pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsett
 // compared with ===, not ->value).
 $pfb_syntaxhl_on = pfb_editor_enabled();
 
+$pfb_dnsbl_editor = pfb_dnsbl_editor_render($pfb_syntaxhl_on);
+
 // Collect local domain TLD for Python TLD Allow array
 // foreign key — out of ADR-29 gateway scope (system/domain is not a pfblockerng* path)
 if (strpos(config_get_path('system/domain'), '.') !== FALSE) {
@@ -722,8 +724,10 @@ if ($_POST) {
 		// no usable interpreter, pfb_unbound.py loads Regex List patterns solely when this
 		// toggle is on, so an unloaded list must not make the whole page unsavable.
 		$pfb_regex_python = pfb_python_interpreter();
-		if (($pfb_regex_python !== '' && is_executable($pfb_regex_python)) ||
-		    (($_POST['pfb_regex'] ?? '') === 'on')) {
+		if (pfb_dnsbl_regex_validation_required_page(
+			$pfb_regex_python !== '' && is_executable($pfb_regex_python),
+			$_POST['pfb_regex'] ?? ''
+		)) {
 			foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_list'] ?? ''), $pfb_regex_python, ($_POST['pfb_regex_cap'] ?? '') === 'on') as $regex_error) {
 				$input_errors[] = 'Customlist pfb_regex_list: ' . htmlspecialchars($regex_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 			}
@@ -841,21 +845,21 @@ if ($_POST) {
 			$pfb['dconfig']['global_log']		= $_POST['global_log']							?: '';
 			// issue #1907: stage the explicit token -- checkbox-absent means Off, and a
 			// staged '' would resolve to this field's default-ON at the gateway.
-			$pfb['dconfig']['pfb_cache']		= (($_POST['pfb_cache'] ?? '') === 'on') ? 'on' : 'off';
+			$pfb['dconfig']['pfb_cache']		= pfb_dnsbl_toggle_stored($_POST['pfb_cache'] ?? NULL);
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
 			// issue #1907: stage the explicit token -- checkbox-absent means Off, and a
 			// staged '' would resolve to these fields' default-ON at the gateway.
-			$pfb['dconfig']['pfb_py_reply']		= (($_POST['pfb_py_reply'] ?? '') === 'on') ? 'on' : 'off';
-			$pfb['dconfig']['pfb_hsts']		= (($_POST['pfb_hsts'] ?? '') === 'on') ? 'on' : 'off';
+			$pfb['dconfig']['pfb_py_reply']		= pfb_dnsbl_toggle_stored($_POST['pfb_py_reply'] ?? NULL);
+			$pfb['dconfig']['pfb_hsts']		= pfb_dnsbl_toggle_stored($_POST['pfb_hsts'] ?? NULL);
 			// ADR-08: IDN mode selector. Validate the raw word, then canonicalise via the
 			// PfbIdnMode adapter to the stored config token ('on' = All | 'confusable' | 'off').
 			$pfb_idn_mode = pfb_filter($_POST['pfb_idn'], PFB_FILTER_WORD, 'dnsbl');
 			$pfb['dconfig']['pfb_idn']		= pfb_cfg_idn_mode_write($pfb_idn_mode);
 			// issue #1887: stage the explicit token — checkbox-absent means Off, and a
 			// staged '' would resolve to this field's default-ON at the gateway.
-			$pfb['dconfig']['pfb_idn_block_malicious']	= (($_POST['pfb_idn_block_malicious'] ?? '') === 'on') ? 'on' : 'off';
-			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= (($_POST['pfb_idn_escalate_suspicious'] ?? '') === 'on') ? 'on' : 'off';
+			$pfb['dconfig']['pfb_idn_block_malicious']	= pfb_dnsbl_toggle_stored($_POST['pfb_idn_block_malicious'] ?? NULL);
+			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= pfb_dnsbl_toggle_stored($_POST['pfb_idn_escalate_suspicious'] ?? NULL);
 			$pfb['dconfig']['pfb_regex']		= pfb_filter($_POST['pfb_regex'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_regex_cap']	= pfb_filter($_POST['pfb_regex_cap'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_cname']		= pfb_filter($_POST['pfb_cname'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
@@ -1161,7 +1165,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_py_reply',
 	gettext('DNS Reply Logging'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_py_reply'] ?? '') === PfbToggle::On,
+	pfb_dnsbl_toggle_enabled($pconfig['pfb_py_reply'] ?? NULL),
 	'on'
 ))->setHelp('Enable the logging of all DNS Replies that were not blocked via DNSBL.');
 
@@ -1169,7 +1173,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_hsts',
 	gettext('HSTS mode'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_hsts'] ?? '') === PfbToggle::On,
+	pfb_dnsbl_toggle_enabled($pconfig['pfb_hsts'] ?? NULL),
 	'on'
 ))->setHelp('Enable the DNSBL <strong title="Utilizes 0.0.0.0 instead of the DNSBL VIP">Null Blocking mode</strong> for HSTS domains.<br />'
 	. 'Blocked domains that are in the <a target=_"blank" href="https://hstspreload.org/">HSTS preload</a> browser'
@@ -2801,7 +2805,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_idn_block_malicious',
 	gettext('Block clearly-malicious homoglyphs'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_idn_block_malicious']) === PfbToggle::On,
+	pfb_dnsbl_toggle_enabled($pconfig['pfb_idn_block_malicious'] ?? NULL),
 	'on'
 ))->setHelp('Confusable mode: block names that mix confusable scripts in one label (clearly malicious). Disable to alert only.');
 
@@ -2809,7 +2813,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_idn_escalate_suspicious',
 	gettext('Block suspicious mixed-script'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_idn_escalate_suspicious']) === PfbToggle::On,
+	pfb_dnsbl_toggle_enabled($pconfig['pfb_idn_escalate_suspicious'] ?? NULL),
 	'on'
 ))->setHelp('Confusable mode: escalate suspicious mixed-script names to a block. Default alerts only (no block).');
 
@@ -3054,13 +3058,7 @@ $section->addInput(new Form_Select(
 
 $form->add($section);
 
-$regex_text = 'List of Regex\'s to block via DNSBL:<br /><br />
-		Enter a single regex per line.<br /><br />
-		End a line with "<strong>#</strong>" to give it a Description, as in&emsp;"regex (Regular Expression) # Regex Description".<br /><br />
-		The first <strong>unescaped</strong> "#" on the line starts the Description, whether or not a space precedes it. To match a literal "#" inside a pattern, escape it as "<strong>\#</strong>".<br /><br />
-		Keep the Description to 15 characters or fewer — it is shown on the Alerts Tab, and a longer one is flagged in this editor. If no Description is entered a default Regex line number will be utilized.<br /><br />
-		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
-		Changes to this option will require a Force Update to take effect.';
+$regex_text = pfb_dnsbl_regex_help_render();
 
 $section = new Form_Section('Regex List', 'Python_regex_list', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_Textarea(
@@ -3258,7 +3256,7 @@ $section->addInput(new Form_Checkbox(
 	'pfb_cache',
 	gettext('Resolver cache'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_cache'] ?? '') === PfbToggle::On,
+	pfb_dnsbl_toggle_enabled($pconfig['pfb_cache'] ?? NULL),
 	'on'
 ))->setHelp('Default: <strong>Enabled</strong><br />Enable the backup and restore of the DNS Resolver Cache on DNSBL Update|Reload|Cron events');
 
@@ -3304,7 +3302,8 @@ $whitelist_text = 'No Regex Entries Allowed!&emsp;
 				&emsp; ie: \'drill @8.8.8.8 example.com\'
 			</div>';
 
-$section = new Form_Section('DNSBL Whitelist', 'DNSBL_Whitelist_customlist', COLLAPSIBLE|SEC_CLOSED);
+$pfb_dnsbl_anchor_layout = pfb_dnsbl_anchor_layout_render();
+$section = new Form_Section('DNSBL Whitelist', $pfb_dnsbl_anchor_layout['whitelist'], COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_Textarea(
 	'whitelist',
 	NULL,
@@ -3621,10 +3620,7 @@ print ($form);
 print_callout('<strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong>');
 
 ?>
-<?php if ($pfb_syntaxhl_on): ?>
-<!-- issue #1669 slice C: live syntax highlighting for the pfb_regex_list field -->
-<script src="vendor/codemirror/cm-regex.min.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/cm-regex.min.js')?>"></script>
-<?php endif; ?>
+<?=$pfb_dnsbl_editor['asset']?>
 <script type="text/javascript">
 //<![CDATA[
 
@@ -3792,31 +3788,8 @@ function enable_dnsblip() {
 }
 
 events.push(function(){
-<?php if ($pfb_syntaxhl_on): ?>
-	// issue #1669 slice C / #1732 step 2: progressively enhance pfb_regex_list into a
-	// CodeMirror 6 live-highlight editor with advisory server lint. window.pfbCM is
-	// the global the vendored bundle exposes (IIFE --global-name=pfbCM);
-	// fromTextarea() hides the textarea, mounts the editor before it, keeps
-	// name/value synced so the save handler's $_POST read is unaffected, and (via
-	// opts.lintUrl) wires an async POST to pfblockerng_lint.php plus the offline
-	// bracket lint. lintExtraParams reads the cap checkbox's LIVE state so the lint
-	// agrees with what save would enforce right now.
-	var pfbRegexListEl = document.getElementById('pfb_regex_list');
-	if (pfbRegexListEl && window.pfbCM) {
-		window.pfbCM.fromTextarea(pfbRegexListEl, {
-			lintUrl: '/pfblockerng/pfblockerng_lint.php',
-			lintExtraParams: function() {
-				var capEl = document.getElementById('pfb_regex_cap');
-				return { cap: (capEl && capEl.checked) ? '1' : '0' };
-			}
-		});
-	}
-
-	// issue #1875 step 2b: plain-list fields share this page's CM6 bundle; mountLists skips absent ids
-	if (window.pfbCM) {
-		window.pfbCM.mountLists(['pfb_gp_bypass_list', 'pfb_noaaaa_list', 'whitelist', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist']);
-	}
-<?php endif; ?>
+<?=$pfb_dnsbl_editor['regex']?>
+<?=$pfb_dnsbl_editor['lists']?>
 
 	$('#tld_wildcard').click(function() {
 		enable_tld();
@@ -3873,5 +3846,5 @@ events.push(function(){
 
 //]]>
 </script>
-<script src="pfBlockerNG.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/pfBlockerNG.js')?>" type="text/javascript"></script>
+<?=pfb_dnsbl_js_asset_render()?>
 <?php include('foot.inc');?>

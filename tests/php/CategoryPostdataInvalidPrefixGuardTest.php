@@ -18,10 +18,9 @@ require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
  *
  * The file carries top-level execution and cannot be require()d off-appliance
  * (house precedent: CountryNetworksCountGuardTest.php, GeoipPackageGenerationTest.php).
- * This test eval-extracts the postdata foreach fragment VERBATIM and POSITIONALLY
- * (anchored on the foreach's own open/close braces plus the next statement's
- * comment as an end-anchor) from the real shipped source, so it drives the actual
- * fix landing in the right place rather than a hand-copied guess.
+ * This test eval-extracts the postdata foreach fragment from the real shipped
+ * source using its foreach boundary and following table-order condition, so it
+ * drives the actual fix rather than a hand-copied guess.
  *
  * Feature: an invalid variable-name-prefix key must short-circuit its iteration
  *          with exactly one recorded error, never fall through to an undefined
@@ -41,20 +40,23 @@ final class CategoryPostdataInvalidPrefixGuardTest extends TestCase
 		}
 
 		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_category.php';
-		$src = file_get_contents($path);
-		if ($src === FALSE) {
+		$src = php_strip_whitespace($path);
+		if ($src === '') {
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_category.php');
 		}
 
-		// Anchored on the foreach's own braces (5 tabs) plus the next statement's
-		// comment as an end-anchor, so only the foreach block itself is captured --
-		// not the enclosing `if (!empty($post_data)...)`'s own closing brace.
+		// The executable foreach body is bounded by the following table-order
+		// condition; source comments are stripped before extraction.
 		if (!preg_match(
-			'/(foreach \(\$post_data as \$key => \$value\) \{.*?\n\t{5}\})\n\t{4}\}\n\n\t{4}\/\/ Save new Table order format/s',
+			'/(foreach \(\$post_data as \$key => \$value\) \{.*\})'
+			. '\s*\}\s*if \(!empty\(\$post_ids\[\x27ids\x27\]\) && is_array\(\$post_ids\[\x27ids\x27\]\)\)/s',
 			$src,
 			$m
 		)) {
-			throw new RuntimeException('oracle extraction failed: the postdata foreach block was not found in pfblockerng_category.php');
+			throw new RuntimeException('oracle extraction failed: postdata foreach executable boundary not found');
+		}
+		if (strpos($m[1], 'Failed Variable:') === FALSE || strpos($m[1], 'switch ($variable)') === FALSE) {
+			throw new RuntimeException('oracle extraction failed: postdata validation body incomplete');
 		}
 
 		eval(

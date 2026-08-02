@@ -5,47 +5,35 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
-/**
- * ADR-66 Phase 1 -- the PHP-side halves of the two TLD cross-language
- * bridges (the Python-side reader halves live in
- * tests/test_adr66_tld_bridges.py, sharing the same key-name seam so a
- * half-renamed bridge fails loudly in Phases 2/3).
- *
- * C1 -- ini bridge writer: pfb_unbound_python() derives tld_allow/
- * tld_allow_list from $pfb['dnsbl_tld_allow'] + the four tld_allow_{gtld,cctld,
- * itld,bgtld} config fields and emits them into the MAIN-ini heredoc
- * (mirrors PythonTldWildcardIniEmitTest.php's structural pin -- no lighter
- * harness exists for pfb_unbound_python(), a live pfSense/VIP/DNS
- * environment; true end-to-end ini + Python behaviour is proven by the
- * live-VM smoke suite).
- *
- * C3 -- manifest bridge writer: a LIVE call of pfb_unbound_python_sources()
- * (mirrors UnboundPythonSourcesTest.php's $pfb setup) proving
- * config.tld_wildcard_blacklist/tld_wildcard_exclusion carry the configured
- * values when $pfb['dnsbl_tld_wildcard'] is truthy, and are emptied when falsy.
- */
+/** PHP-side TLD bridge tests exercise the writer and manifest at runtime. */
 #[CoversFunction('pfb_unbound_python')]
 #[CoversFunction('pfb_unbound_python_sources')]
 final class TldBridgeEmitTest extends TestCase
 {
-	private const SRC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
-
 	private string $tmp;
-	private bool $hadPfb = false;
+	private bool $hadPfb = FALSE;
 	private array $originalPfb = [];
+	private array $originalConfig = [];
+	private array $originalG = [];
 
 	protected function setUp(): void
 	{
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
+		$this->originalConfig = $GLOBALS['config'] ?? [];
+		$this->originalG = $GLOBALS['g'] ?? [];
+		$GLOBALS['config'] = [];
+		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
+		$this->tmp = sys_get_temp_dir() . '/pfb_tldbridge_' . uniqid('', TRUE);
+		mkdir("{$this->tmp}/dnsbl", 0777, TRUE);
+		mkdir("{$this->tmp}/db", 0777, TRUE);
 
-		$this->tmp = sys_get_temp_dir() . '/pfb_tldbridge_' . uniqid('', true);
-		mkdir("{$this->tmp}/dnsbl", 0777, true);
-		mkdir("{$this->tmp}/db", 0777, true);
-
-		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
+		$GLOBALS['pfb'] = array_merge($this->originalPfb, [
 			'log'                => "{$this->tmp}/pfblockerng.log",
 			'errlog'             => "{$this->tmp}/error.log",
+			'logdir'             => $this->tmp,
+			'unbound_py_conf'    => "{$this->tmp}/pfb_unbound.ini",
+			'unbound_py_wh'      => "{$this->tmp}/pfb_whitelist.txt",
 			'unbound_py_rawdir'  => "{$this->tmp}/pfb_py_raw",
 			'dnsdir'             => "{$this->tmp}/dnsbl",
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
@@ -54,12 +42,15 @@ final class TldBridgeEmitTest extends TestCase
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsbl_tld_wildcard' => '',
+			'dnsbl_control'      => PfbToggle::Off,
+			'dnsbl_control_legacy' => PfbToggle::Off,
 			'dnsblconfig'        => [
 				'tld_wildcard_blacklist' => '',
 				'tld_wildcard_exclusion' => '',
 				'whitelist'              => '',
 			],
 		]);
+		$this->seedConfig();
 	}
 
 	protected function tearDown(): void
@@ -69,99 +60,91 @@ final class TldBridgeEmitTest extends TestCase
 		} else {
 			unset($GLOBALS['pfb']);
 		}
-
+		$GLOBALS['config'] = $this->originalConfig;
+		$GLOBALS['g'] = $this->originalG;
 		rmdir_recursive($this->tmp);
 	}
 
-	/**
-	 * Brace-counts from `function {$name}(` to its matching closing brace
-	 * (mirrors PythonTldWildcardIniEmitTest::functionBody()).
-	 */
-	private function functionBody(string $name): string
+	private function seedConfig(): void
 	{
-		$source = file_get_contents(self::SRC);
-		$this->assertNotFalse($source, 'failed to read pfblockerng.inc');
+		$gen = 'installedpackages/pfblockerng/config/0';
+		$ip = 'installedpackages/pfblockerngipsettings/config/0';
+		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		PfbConfig::writeSectionSystem($gen, ['pfb_min' => '0', 'pfb_hour' => '0', 'pfb_dailystart' => '0', 'skipfeed' => '0']);
+		PfbConfig::writeSectionSystem($ip, [
+			'suppression' => '', 'database_cc' => '', 'asn_token' => '', 'maxmind_account' => '',
+			'maxmind_key' => '', 'maxmind_locale' => 'en', 'asn_reporting' => 'disabled',
+		]);
+		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
+		PfbConfig::writeSectionSystem($dnsbl, [
+			'pfb_dnsvip4' => '', 'pfb_dnsvip6' => '', 'pfb_dnsport' => '8081', 'pfb_dnsport_ssl' => '8443',
+			'top1m_enable' => '', 'pfb_cache' => '', 'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '',
+			'pfb_cname' => '', 'tld_allow' => '', 'pfb_py_nolog' => '', 'pfb_noaaaa' => '', 'pfb_noaaaa_list' => '',
+			'pfb_gp' => '', 'pfb_gp_bypass_list' => '', 'whitelist' => '', 'tld_wildcard' => '',
+			'tld_wildcard_blacklist' => '', 'tld_wildcard_exclusion' => '',
+			'pfb_dnsbl' => '', 'pfb_dnsvip_auto' => '', 'dnsbl_interface' => 'lo0',
+		]);
+	}
 
-		$needle = "\nfunction {$name}(";
-		$start = strpos($source, $needle);
-		$this->assertNotFalse($start, "function {$name}() not found in source");
-		$start++;
-
-		$braceOpen = strpos($source, '{', $start);
-		$this->assertNotFalse($braceOpen, "no opening brace found for {$name}()");
-
-		$depth = 0;
-		for ($i = $braceOpen, $len = strlen($source); $i < $len; $i++) {
-			if ($source[$i] === '{') {
-				$depth++;
-			} elseif ($source[$i] === '}') {
-				$depth--;
-				if ($depth === 0) {
-					$body = substr($source, $start, $i - $start + 1);
-					$this->assertNotSame('', trim($body), "empty body extracted for {$name}() -- vacuous extraction");
-					return $body;
-				}
-			}
+	private function emitIni(string $toggle, array $fields): string
+	{
+		PfbConfig::writeSystem('dnsbl/tld_allow', $toggle);
+		foreach ($fields as $key => $value) {
+			PfbConfig::writeSystem("dnsbl/{$key}", $value);
 		}
-		$this->fail("no matching closing brace found for {$name}()");
+		pfb_unbound_python('enabled');
+		$ini = file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+		$this->assertNotFalse($ini, 'writer must create the Python INI');
+		return $ini;
 	}
 
-	// ------------------------------------------------------------------ //
-	// C1 -- ini bridge writer (structural).
-	// ------------------------------------------------------------------ //
-	public function testIniWriterDerivesTldAllowFromDnsblTldAllowToggle(): void
+	public function testIniBridgeReadsAllTldAllowFieldsWhenOn(): void
 	{
-		$body = $this->functionBody('pfb_unbound_python');
-		$this->assertMatchesRegularExpression(
-			"/\\\$tld_allow\s*=\s*'off';\s*\\\$tld_allow_list\s*=\s*'';\s*if\s*\(\s*\\\$pfb\['dnsbl_tld_allow'\]\s*===\s*PfbToggle::On\s*\)/s",
-			$body,
-			'the tld_allow/tld_allow_list pair must default off/empty and derive from $pfb[\'dnsbl_tld_allow\']'
-		);
+		$ini = $this->emitIni('on', [
+			'tld_allow_gtld' => 'com,net',
+			'tld_allow_cctld' => 'uk',
+			'tld_allow_itld' => '公司',
+			'tld_allow_bgtld' => 'example',
+		]);
+		$this->assertMatchesRegularExpression('/^tld_allow\s*=\s*on$/m', $ini);
+		$this->assertMatchesRegularExpression('/^tld_allow_list\s*=\s*com,net,uk,公司,example$/m', $ini);
 	}
 
-	public function testIniWriterReadsAllFourTldAllowConfigFields(): void
+	public function testIniBridgeOffToggleSuppressesConfiguredTldList(): void
 	{
-		$body = $this->functionBody('pfb_unbound_python');
-		foreach (['tld_allow_gtld', 'tld_allow_cctld', 'tld_allow_itld', 'tld_allow_bgtld'] as $field) {
-			$this->assertStringContainsString(
-				"dnsblconfig']['{$field}']",
-				$body,
-				"pfb_unbound_python() must read dnsblconfig['{$field}'] into tld_allow_list"
-			);
-		}
+		$ini = $this->emitIni('', [
+			'tld_allow_gtld' => 'com',
+			'tld_allow_cctld' => 'uk',
+			'tld_allow_itld' => '公司',
+			'tld_allow_bgtld' => 'example',
+		]);
+		$this->assertMatchesRegularExpression('/^tld_allow\s*=\s*off$/m', $ini);
+		$this->assertMatchesRegularExpression('/^tld_allow_list\s*=\s*$/m', $ini);
 	}
 
-	public function testIniHeredocEmitsTldAllowKeys(): void
+	public function testIniBridgeOnWithEmptyFieldsEmitsOffAndEmptyList(): void
 	{
-		$body = $this->functionBody('pfb_unbound_python');
-		$this->assertMatchesRegularExpression(
-			'/tld_allow\s*=\s*\{\$tld_allow\}/',
-			$body,
-			'the ini heredoc must carry a tld_allow key'
-		);
-		$this->assertMatchesRegularExpression(
-			'/tld_allow_list\s*=\s*\{\$tld_allow_list\}/',
-			$body,
-			'the ini heredoc must carry a tld_allow_list key'
-		);
+		$ini = $this->emitIni('on', [
+			'tld_allow_gtld' => '',
+			'tld_allow_cctld' => '',
+			'tld_allow_itld' => '',
+			'tld_allow_bgtld' => '',
+		]);
+		$this->assertMatchesRegularExpression('/^tld_allow\s*=\s*off$/m', $ini);
+		$this->assertMatchesRegularExpression('/^tld_allow_list\s*=\s*$/m', $ini);
 	}
 
-	// ------------------------------------------------------------------ //
-	// C3 -- manifest bridge writer (live call).
-	// ------------------------------------------------------------------ //
 	public function testManifestTldKeysEmptyWhenDnsblTldOff(): void
 	{
 		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';
-		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_blacklist'] = base64_encode('evil-tld');
+		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_blacklist'] = base64_encode("evil-tld\n\xff");
 		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_exclusion'] = base64_encode('good.example');
 
-		$m = pfb_unbound_python_sources([]);
-
-		// issue #1328: the oracle must never ride the manifest under its post-rename
-		// (ADR-66) blob name either.
-		$this->assertArrayNotHasKey('tld_wildcard_master', $m['config'], 'tld_wildcard_master must never appear in the manifest');
-		$this->assertSame([], $m['config']['tld_wildcard_blacklist'], 'OFF must empty tld_wildcard_blacklist even though it was configured');
-		$this->assertSame([], $m['config']['tld_wildcard_exclusion'], 'OFF must empty tld_wildcard_exclusion even though it was configured');
+		$manifest = pfb_unbound_python_sources([]);
+		$this->assertIsArray($manifest);
+		$this->assertArrayNotHasKey('tld_wildcard_master', $manifest['config']);
+		$this->assertSame([], $manifest['config']['tld_wildcard_blacklist']);
+		$this->assertSame([], $manifest['config']['tld_wildcard_exclusion']);
 	}
 
 	public function testManifestTldKeysPopulatedWhenDnsblTldOn(): void
@@ -170,10 +153,10 @@ final class TldBridgeEmitTest extends TestCase
 		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_blacklist'] = base64_encode('evil-tld');
 		$GLOBALS['pfb']['dnsblconfig']['tld_wildcard_exclusion'] = base64_encode('good.example');
 
-		$m = pfb_unbound_python_sources([]);
-
-		$this->assertArrayNotHasKey('tld_wildcard_master', $m['config'], 'tld_wildcard_master must never appear in the manifest, even ON');
-		$this->assertSame(['evil-tld'], $m['config']['tld_wildcard_blacklist'], 'ON must populate tld_wildcard_blacklist from config');
-		$this->assertSame(['good.example'], $m['config']['tld_wildcard_exclusion'], 'ON must populate tld_wildcard_exclusion from config');
+		$manifest = pfb_unbound_python_sources([]);
+		$this->assertIsArray($manifest);
+		$this->assertArrayNotHasKey('tld_wildcard_master', $manifest['config']);
+		$this->assertSame(['evil-tld'], $manifest['config']['tld_wildcard_blacklist']);
+		$this->assertSame(['good.example'], $manifest['config']['tld_wildcard_exclusion']);
 	}
 }
