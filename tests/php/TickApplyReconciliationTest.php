@@ -110,7 +110,7 @@ final class TickApplyReconciliationTest extends TestCase
 
 	/**
 	 * Minimum config keys pfb_global() reads (avoids undefined-array-key warnings --
-	 * pfblockerng_ss_refresh() calls pfb_global() internally every tick), plus
+	 * pfblockerng_ss_refresh() calls pfb_global() internally when its job is due), plus
 	 * pfb_interval='Disabled' so the tick's own cron dispatch branch never fires.
 	 *
 	 * NOTE (issue #1666): 'Disabled' alone does NOT gate the dcc/bl dispatch
