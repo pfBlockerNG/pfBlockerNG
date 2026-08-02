@@ -5756,7 +5756,7 @@
                 "name": "save",
                 "byRef": false,
                 "variadic": false,
-                "type": "bool",
+                "type": "mixed",
                 "default": null
             },
             {

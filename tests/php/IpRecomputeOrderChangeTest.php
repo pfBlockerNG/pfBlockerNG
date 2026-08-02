@@ -185,6 +185,7 @@ final class IpRecomputeOrderChangeTest extends TestCase
 	public function testOrderCheckRequiresLiveEnabledCrossListScope(): void
 	{
 		$this->assertTrue(pfb_ip_recompute_order_scope(FALSE, TRUE, TRUE, FALSE, FALSE));
+		$this->assertTrue(pfb_ip_recompute_order_scope(NULL, TRUE, TRUE, FALSE, FALSE));
 		$this->assertTrue(pfb_ip_recompute_order_scope(FALSE, TRUE, FALSE, TRUE, FALSE));
 		$this->assertTrue(pfb_ip_recompute_order_scope(FALSE, TRUE, FALSE, FALSE, TRUE));
 		$this->assertFalse(pfb_ip_recompute_order_scope(TRUE, TRUE, TRUE, FALSE, FALSE));
