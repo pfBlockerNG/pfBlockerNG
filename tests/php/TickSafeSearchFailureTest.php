@@ -78,6 +78,7 @@ final class TickSafeSearchFailureTest extends TestCase
 
 		$lockPath = "{$this->dir}/pfb_ss_refresh.lock";
 		$marker = "{$this->dir}/holder.ready";
+		$holderReleasePath = "{$this->dir}/holder.release";
 		$pid = pcntl_fork();
 		if ($pid === -1) {
 			$this->fail('pcntl_fork() failed while creating the lock holder');
@@ -88,26 +89,38 @@ final class TickSafeSearchFailureTest extends TestCase
 				exit(2);
 			}
 			touch($marker);
-			usleep(500000);
+			$deadline = microtime(TRUE) + 3.0;
+			while (!is_file($holderReleasePath) && microtime(TRUE) < $deadline) {
+				usleep(1000);
+			}
 			flock($holder, LOCK_UN);
 			fclose($holder);
-			exit(0);
+			exit(is_file($holderReleasePath) ? 0 : 3);
 		}
-		$this->waitForPath($marker, 2.0);
 
 		$calls = 0;
 		$refresh = static function () use (&$calls): void {
 			$calls++;
 		};
 		$opener = static fn(string $path): mixed => fopen($path, 'c');
-		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, 0.01);
+		$waitResult = NULL;
+		$status = NULL;
+		try {
+			$this->waitForPath($marker, 2.0);
+			pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, 0.01);
 
-		$this->assertSame(0, $calls, 'lock timeout must not call SafeSearch');
-		$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $this->dir),
-			'lock timeout must not advance ss_refresh ledger');
-		$this->assertStringContainsString('SafeSearch lock timed out', $this->errorLog());
+			$this->assertSame(0, $calls, 'lock timeout must not call SafeSearch');
+			$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $this->dir),
+				'lock timeout must not advance ss_refresh ledger');
+			$this->assertStringContainsString('SafeSearch lock timed out', $this->errorLog());
+		} finally {
+			// Always release and reap the holder, including when any post-fork
+			// assertion or tick call throws.
+			touch($holderReleasePath);
+			$waitResult = pcntl_waitpid($pid, $status);
+		}
 
-		pcntl_waitpid($pid, $status);
+		$this->assertSame($pid, $waitResult, 'lock holder must be reaped after timeout attempt');
 		$this->assertTrue(pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0,
 			'lock holder must exit cleanly before retry');
 		pfblockerng_tick(['pfblockerng.php dcc'], $refresh);
