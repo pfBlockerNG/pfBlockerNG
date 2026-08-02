@@ -414,6 +414,21 @@ final class TickEntrypointTest extends TestCase
 		], $GLOBALS['pfb']['dbdir']);
 	}
 
+	/** Seed an idle tick with only the SafeSearch ledger state under test due. */
+	private function prepareSafeSearchTick(): int
+	{
+		$this->seedTickPrereqs('Disabled');
+		pfb_global();
+		$this->ensureLogDir();
+
+		$now = time();
+		$this->seedFutureLedgerEntry('cron', $now);
+		$this->seedFutureLedgerEntry('dcc',  $now);
+		$this->seedFutureLedgerEntry('bl',   $now);
+
+		return $now;
+	}
+
 	// -----------------------------------------------------------------------
 	// Case A — the bug: pfb_interval='Disabled' must not silently stop log
 	// maintenance.
@@ -691,6 +706,99 @@ final class TickEntrypointTest extends TestCase
 			"cron next_due: expected old_next_due + interval ({$expected} = {$oldNextDue} + {$interval}), "
 			. "got {$cronEntry['next_due']} -- pfblockerng_tick() must anchor the feed-cron next_due to "
 			. 'its own previous schedule, not to wall-clock time() (issue #573 phase creep)');
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #2089 — SafeSearch refresh is its own zero-jitter 900-second job.
+	// -----------------------------------------------------------------------
+
+	/** An absent SafeSearch entry runs once and seeds a zero-jitter 900-second slot. */
+	public function testSafeSearchAbsentEntryRunsOnceAndSeedsCadence(): void
+	{
+		$now = $this->prepareSafeSearchTick();
+		$calls = 0;
+		$refresh = static function () use (&$calls): void {
+			$calls++;
+		};
+
+		pfblockerng_tick($this->suiteWorkerPsLines(), $refresh);
+
+		$this->assertSame(1, $calls, 'absent ss_refresh entry must invoke SafeSearch exactly once');
+		$entry = pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']);
+		$this->assertNotNull($entry, 'due SafeSearch tick must create its ledger entry');
+		$this->assertSame(0, $entry['jitter'], 'ss_refresh cadence must have zero jitter');
+		$this->assertSame(900, $entry['next_due'] - $entry['last_run'],
+			'ss_refresh next_due must be exactly 900 seconds after last_run');
+		$this->assertGreaterThan($now, $entry['next_due'],
+			'ss_refresh next_due must be in the future after its first run');
+	}
+
+	/** A future SafeSearch entry does not call or rewrite the observer/ledger. */
+	public function testSafeSearchFutureEntryDoesNotRunOrChangeLedger(): void
+	{
+		$now = $this->prepareSafeSearchTick();
+		$this->seedFutureLedgerEntry('ss_refresh', $now);
+		$before = pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']);
+		$calls = 0;
+		$refresh = static function () use (&$calls): void {
+			$calls++;
+		};
+
+		pfblockerng_tick($this->suiteWorkerPsLines(), $refresh);
+
+		$this->assertSame(0, $calls, 'future ss_refresh entry must not invoke SafeSearch');
+		$after = pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']);
+		$this->assertSame($before, $after, 'future ss_refresh entry must remain unchanged');
+	}
+
+	/** A slightly overdue SafeSearch entry advances from its prior slot, not wall clock. */
+	public function testSafeSearchSlightlyOverdueEntryReanchorsFromPriorSlot(): void
+	{
+		$now = $this->prepareSafeSearchTick();
+		$oldNextDue = $now - 10;
+		pfb_due_ledger_write_entry('ss_refresh', [
+			'last_run' => $oldNextDue - 900,
+			'next_due' => $oldNextDue,
+			'jitter'   => 0,
+		], $GLOBALS['pfb']['dbdir']);
+		$calls = 0;
+		$refresh = static function () use (&$calls): void {
+			$calls++;
+		};
+
+		pfblockerng_tick($this->suiteWorkerPsLines(), $refresh);
+
+		$this->assertSame(1, $calls, 'overdue ss_refresh entry must invoke SafeSearch once');
+		$entry = pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']);
+		$this->assertNotNull($entry, 'overdue ss_refresh entry must remain present');
+		$this->assertSame($oldNextDue + 900, $entry['next_due'],
+			'slightly overdue ss_refresh must advance from prior next_due exactly 900 seconds');
+	}
+
+	/** A multi-interval overdue SafeSearch entry runs once and catches up past now. */
+	public function testSafeSearchMultiIntervalOverdueEntryDoesNotBurst(): void
+	{
+		$now = $this->prepareSafeSearchTick();
+		$oldNextDue = $now - 1800;
+		pfb_due_ledger_write_entry('ss_refresh', [
+			'last_run' => $oldNextDue - 900,
+			'next_due' => $oldNextDue,
+			'jitter'   => 0,
+		], $GLOBALS['pfb']['dbdir']);
+		$calls = 0;
+		$refresh = static function () use (&$calls): void {
+			$calls++;
+		};
+
+		pfblockerng_tick($this->suiteWorkerPsLines(), $refresh);
+
+		$this->assertSame(1, $calls, 'multi-interval overdue ss_refresh must not replay missed slots');
+		$entry = pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']);
+		$this->assertNotNull($entry, 'overdue ss_refresh entry must remain present');
+		$this->assertSame(900, $entry['next_due'] - $entry['last_run'],
+			'multi-interval catch-up must write one 900-second cadence slot');
+		$this->assertGreaterThan($now, $entry['next_due'],
+			'multi-interval catch-up must advance ss_refresh next_due past now');
 	}
 
 	// -----------------------------------------------------------------------
