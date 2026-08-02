@@ -15741,18 +15741,11 @@ function pfb_daemon_filterlog() {
 					if (strncmp($line, 'DNSBL-python,', 13) === 0) {
 						$dnsline = rtrim($line, "\r\n");
 						if ($dnsline !== '') {
-							$df = explode(',', $dnsline);
-							// Reformat through the schema-owning formatter when well-formed;
-							// fall back to the raw line otherwise so a malformed row is never
-							// dropped or corrupted.
+							$df = str_getcsv($dnsline, ',', '"', '');
+							@file_put_contents("{$pfb['unilog']}", "{$dnsline}\n", FILE_APPEND | LOCK_EX);
+							// Emit syslog only for a well-formed logical row; raw unified.log
+							// preservation above covers malformed rows without corruption.
 							if (count($df) === 11) {
-								$uni = pfb_unified_format_dnsbl(array(
-									'l_type' => $df[0], 'datetime' => $df[1], 'q_name' => $df[2],
-									'q_ip' => $df[3], 'p_type' => $df[4], 'b_type' => $df[5],
-									'group' => $df[6], 'b_eval' => $df[7], 'feed' => $df[8],
-									'dup' => $df[9], 'q_type' => $df[10],
-								));
-								@file_put_contents("{$pfb['unilog']}", "{$uni}\n", FILE_APPEND | LOCK_EX);
 								// Every DNSBL block line syslogs uniformly (incl. the PHP-path
 								// block the old python-only emitter missed). pfb_syslog_event
 								// no-ops when the toggle is off. Refresh the daemon's config
@@ -15765,8 +15758,6 @@ function pfb_daemon_filterlog() {
 										'b_eval' => $df[7],
 									)));
 								}
-							} else {
-								@file_put_contents("{$pfb['unilog']}", "{$dnsline}\n", FILE_APPEND | LOCK_EX);
 							}
 						}
 						continue;
