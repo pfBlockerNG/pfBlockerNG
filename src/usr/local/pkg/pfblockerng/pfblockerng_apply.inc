@@ -357,10 +357,8 @@ function pfb_list_user_script_active($script_pre, $script_post): bool {
  * baseline exists to reparse -- the row then routes to the existing
  * local-reuse branch (Reload/Rebuild) and never reaches the network. No
  * baseline -> stay on the fast path; there is no Hold-specific branch
- * anywhere. Sibling one-purpose `_active` predicates already in this style
- * (name deliberately not followed by a literal paren here -- a source-scan
- * test elsewhere counts real call sites of this file's helpers by that exact
- * token): pfb_ip_reuse_skip_active, pfb_dnsbl_verbatim_reuse_active, and
+ * anywhere. Sibling one-purpose `_active` predicates in this style:
+ * pfb_ip_reuse_skip_active, pfb_dnsbl_verbatim_reuse_active,
  * pfb_supp_update_active. Both the DNSBL and IP loops call this ONCE per
  * row, keeping them in lock-step by construction.
  */
