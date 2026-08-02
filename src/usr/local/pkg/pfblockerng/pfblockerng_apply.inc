@@ -349,6 +349,25 @@ function pfb_list_user_script_active($script_pre, $script_post): bool {
 	    ($script_post && is_file("{$script_post}"));
 }
 
+/**
+ * pfb_list_script_reparse_active -- issue #1960 re-runs a configured script's
+ * transform every pass, but issue #1278's Hold contract ("download once,
+ * never again") is protected ONLY by the early verbatim-reuse fast path, so
+ * the script term may push a row off that path SOLELY when a local '.orig'
+ * baseline exists to reparse -- the row then routes to the existing
+ * local-reuse branch (Reload/Rebuild) and never reaches the network. No
+ * baseline -> stay on the fast path; there is no Hold-specific branch
+ * anywhere. Sibling one-purpose `_active` predicates already in this style
+ * (name deliberately not followed by a literal paren here -- a source-scan
+ * test elsewhere counts real call sites of this file's helpers by that exact
+ * token): pfb_ip_reuse_skip_active, pfb_dnsbl_verbatim_reuse_active, and
+ * pfb_supp_update_active. Both the DNSBL and IP loops call this ONCE per
+ * row, keeping them in lock-step by construction.
+ */
+function pfb_list_script_reparse_active(bool $verbatim_reuse_ok, bool $has_user_script, bool $orig_exists): bool {
+	return $verbatim_reuse_ok && $has_user_script && $orig_exists;
+}
+
 // Main pfBlockerNG function
 function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
@@ -1712,18 +1731,24 @@ function sync_package_pfblockerng($cron='') {
 							$staging_current_generation = pfb_dnsbl_staging_is_current_generation(
 								pfb_dnsbl_staging_first_line("{$pfbfolder}/{$header}.txt"));
 
-							// issue #1960: a configured pre/post script must never take this
-							// verbatim fast path -- applied at the call site (not as a
-							// parameter) so pfb_dnsbl_verbatim_reuse_active() keeps its
-							// existing signature and its other caller's meaning (the
-							// #1083 stale-generation re-call below is a DIFFERENT question
+							// issue #1960/#1278: a configured pre/post script re-runs its transform
+							// every pass, but the Hold contract ("download once, never again") is
+							// protected ONLY by this fast path -- so the script term may push a row
+							// off it solely when a local '.orig' baseline exists to reparse (routes
+							// to the existing local-reuse branch below, never the network). No
+							// baseline -> stay on the fast path; no Hold-specific branch anywhere.
+							// (the #1083 stale-generation re-call below is a DIFFERENT question
 							// and stays deliberately ungated -- see the comment there).
-							if (!$pfb_dnsbl_user_script && pfb_dnsbl_verbatim_reuse_active(
+							$pfb_dnsbl_verbatim_reuse = pfb_dnsbl_verbatim_reuse_active(
 								$txt_exists,
 								file_exists("{$pfbfolder}/{$header}.update"),
 								file_exists("{$pfbfolder}/{$header}.fail"),
 								$reuse_unset,
-								$staging_current_generation)) {
+								$staging_current_generation);
+							$pfb_dnsbl_script_reparse = pfb_list_script_reparse_active($pfb_dnsbl_verbatim_reuse,
+								$pfb_dnsbl_user_script, file_exists("{$pfborig}/{$header}.orig"));
+
+							if ($pfb_dnsbl_verbatim_reuse && !$pfb_dnsbl_script_reparse) {
 
 
 								if ($row['state'] == 'Hold') {
@@ -1747,21 +1772,24 @@ function sync_package_pfblockerng($cron='') {
 								$alias_cnt		= $alias_cnt + $list_cnt;
 							}
 							else {
-								// #1083: verbatim reuse was rejected because of the FILE-STATE
-								// conditions (staging generation, txt/update/fail existence, reuse
-								// toggle) -- rebuild via the same reparse-from-.orig machinery a
-								// Reload uses, never a network refetch when .orig is available.
+								// #1083/#1960: this branch is entered when the fast-path check above
+								// is FALSE -- either the FILE-STATE conditions rejected verbatim reuse
+								// (staging generation, txt/update/fail existence, reuse toggle), OR
+								// they all held but $pfb_dnsbl_script_reparse pushed the row off the
+								// fast path (a configured script with a local '.orig' baseline to
+								// reparse). Rebuild via the same reparse-from-.orig machinery a Reload
+								// uses, never a network refetch when .orig is available.
 								// issue #1960: this re-call is deliberately NOT gated by
-								// $pfb_dnsbl_user_script -- it answers a DIFFERENT question than the
-								// fast path above ("among the file-state conditions, was stale
-								// staging generation the ONLY reason reuse was rejected?"). A
-								// stale-generation .txt with a configured script still re-runs its
-								// pre-script on this cheaper reparse (the normalize/reuse-skip call
-								// below is FALSE anyway here, since $downloaded_fresh is FALSE);
-								// gating this call would only force an unneeded network refetch for
-								// that case, silently changing #1083's Rebuild /
-								// pfb_dnsbl_hold_stale_rebuild_skip / pfb_dnsbl_stale_rebuild_converge_txt
-								// behaviour that nobody asked for.
+								// $pfb_dnsbl_user_script/$pfb_dnsbl_script_reparse -- it answers a
+								// DIFFERENT question than the fast path above ("among the file-state
+								// conditions, was stale staging generation the ONLY reason reuse was
+								// rejected?"). A stale-generation .txt with a configured script still
+								// re-runs its pre-script on this cheaper reparse (the
+								// normalize/reuse-skip call below is FALSE anyway here, since
+								// $downloaded_fresh is FALSE); gating this call would only force an
+								// unneeded network refetch for that case, silently changing #1083's
+								// Rebuild / pfb_dnsbl_hold_stale_rebuild_skip /
+								// pfb_dnsbl_stale_rebuild_converge_txt behaviour that nobody asked for.
 								$stale_generation_rebuild = !$staging_current_generation &&
 									pfb_dnsbl_verbatim_reuse_active(
 										$txt_exists,
@@ -1769,7 +1797,12 @@ function sync_package_pfblockerng($cron='') {
 										file_exists("{$pfbfolder}/{$header}.fail"),
 										$reuse_unset,
 										TRUE);
-								$pfbreuse_effective = $pfbreuse == 'on' || $stale_generation_rebuild;
+								// issue #1278: OR in the script-reparse route so a scripted row with
+								// a local '.orig' baseline reuses it (Reload, never a network
+								// refetch); a Hold row with no baseline never reaches this branch at
+								// all (see the fast path above).
+								$pfbreuse_effective = $pfbreuse == 'on' || $stale_generation_rebuild ||
+									$pfb_dnsbl_script_reparse;
 
 								if ($stale_generation_rebuild) {
 									$log = "\n[ {$header} ]{$logtab} Rebuild";
@@ -3299,14 +3332,20 @@ function sync_package_pfblockerng($cron='') {
 							touch("{$pfbfolder}/{$header}.update");
 						}
 
-						// issue #1960: a configured pre/post script must never take this
-						// verbatim fast path -- its transform has to re-run every pass, or an
-						// edited script would silently require a Force Reload to take effect.
-						if (!$pfb_user_script &&
-						    file_exists("{$pfbfolder}/{$header}.txt") &&
+						// issue #1960/#1278: a configured pre/post script re-runs its transform
+						// every pass, but the Hold contract ("download once, never again") is
+						// protected ONLY by this fast path -- so the script term may push a row
+						// off it solely when a local '.orig' baseline exists to reparse (routes
+						// to the existing local-reuse branch below, never the network). No
+						// baseline -> stay on the fast path; no Hold-specific branch anywhere.
+						$pfb_ip_verbatim_reuse = file_exists("{$pfbfolder}/{$header}.txt") &&
 						    !file_exists("{$pfbfolder}/{$header}.update") &&
 						    !file_exists("{$pfbfolder}/{$header}.fail") &&
-						    $pfbreuse == '') {
+						    $pfbreuse == '';
+						$pfb_script_reparse = pfb_list_script_reparse_active($pfb_ip_verbatim_reuse,
+						    $pfb_user_script, file_exists("{$pfborig}/{$header}.orig"));
+
+						if ($pfb_ip_verbatim_reuse && !$pfb_script_reparse) {
 
 							if ($row['state'] == 'Hold') {
 								$log = "\n[ {$header} ]{$logtab} static hold.";
@@ -3318,7 +3357,10 @@ function sync_package_pfblockerng($cron='') {
 						else {
 							// Short-circuit: skip the stat() below when reuse is off (ADR-28);
 							// FALSE here is truth-functionally identical since the callee ANDs $reuse_on anyway.
-							$pfbreuse_on = $pfbreuse == 'on';
+							// issue #1278: OR in the script-reparse route -- a scripted row with a
+							// local '.orig' baseline reuses it (never a network refetch); a Hold row
+							// with no baseline never reaches this branch (see the fast path above).
+							$pfbreuse_on = $pfbreuse == 'on' || $pfb_script_reparse;
 							$orig_exists_if_reused = $pfbreuse_on && file_exists("{$pfborig}/{$header}.orig");
 							if (pfb_ip_reuse_skip_active($pfbreuse_on, $orig_exists_if_reused, isset($list['dnsblip']))) {
 								$log = "\n[ {$header} ]{$logtab} Reload";
