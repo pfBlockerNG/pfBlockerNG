@@ -236,7 +236,10 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 				throw new RuntimeException('salvage cap expired / stuck or environment: waiting for the query-channel request marker');
 			}
 			$reply = str_replace('__ID__', (string) $request['id'], $replyTemplateJson);
-			file_put_contents("{$this->tmp}/query/pfb_py_query.reply", $reply);
+			$written = file_put_contents("{$this->tmp}/query/pfb_py_query.reply", $reply);
+			if ($written !== strlen($reply)) {
+				throw new RuntimeException('query responder reply write failed');
+			}
 		});
 	}
 
