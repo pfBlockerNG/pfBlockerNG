@@ -360,7 +360,7 @@ def main(argv: list[str]) -> int:
         line = raw_line.rstrip("\r\n")
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        pattern = pfb_split_regex_line(line)[0].strip().lower()
+        pattern = pfb_split_regex_line(line)[0].strip()
         if not pattern:
             continue
         if any(ord(character) < 0x20 or ord(character) == 0x7F for character in pattern):
@@ -393,7 +393,7 @@ def main(argv: list[str]) -> int:
             # same patterns at load without surfacing warnings either.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                re.compile(pattern)
+                re.compile(pattern, re.IGNORECASE)
         except Exception as error:
             _report(line_number, pattern, f"Python regex compile error: {error}")
             failed = True

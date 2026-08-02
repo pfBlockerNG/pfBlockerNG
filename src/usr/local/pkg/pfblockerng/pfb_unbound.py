@@ -529,7 +529,7 @@ def _build_swap_snapshot() -> Snapshot | None:
                     continue
                 try:
                     regex_db[name] = {
-                        "re": re.compile(pattern),
+                        "re": re.compile(pattern, re.IGNORECASE),
                         "important": False,
                         "band": PRIO_USER_BLOCK,
                     }
@@ -1137,7 +1137,7 @@ def _load_user_regex_entries(config: ConfigParser) -> list[tuple[str, str]]:
                 continue
             row_number += 1
             pattern, description = pfb_split_regex_line(line)
-            pattern = pattern.rstrip().encode("utf-8").lower().decode("utf-8")
+            pattern = pattern.rstrip()
             if not pattern:
                 continue
             if description is not None:
@@ -1635,7 +1635,7 @@ def init_standard(id: int, env: module_env) -> bool:
                     # ADR-07: a USER regex is SOVEREIGN -- band 5 (user block),
                     # so it beats feed allows and remains user-owned.
                     regexDB[name] = {
-                        "re": re.compile(pattern),
+                        "re": re.compile(pattern, re.IGNORECASE),
                         "important": False,
                         "band": PRIO_USER_BLOCK,
                     }
