@@ -158,32 +158,47 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		return [$pid, $parent];
 	}
 
-	private function releaseDataFileHolder(?int &$pid, mixed $parent): void
+	private function releaseDataFileHolder(?int &$pid, mixed &$parent): void
 	{
-		if (!is_resource($parent)) {
-			return;
-		}
-		@fwrite($parent, "RELEASE\n");
-		try {
-			$this->assertSame("UNLOCKED\n", $this->readEvent($parent, 'data-file holder unlock'));
-		} catch (Throwable $error) {
-			if (is_int($pid) && $pid > 0 && function_exists('posix_kill')) {
-				@posix_kill($pid, SIGKILL);
+		$cleanupError = NULL;
+		$released = FALSE;
+		if (is_resource($parent)) {
+			@fwrite($parent, "RELEASE\n");
+			try {
+				$event = trim($this->readEvent($parent, 'data-file holder unlock'));
+				if ($event !== 'UNLOCKED') {
+					throw new RuntimeException("data-file holder cleanup expected UNLOCKED, got {$event}");
+				}
+				$released = TRUE;
+			} catch (Throwable $error) {
+				$cleanupError = $error;
 			}
-			fclose($parent);
-			if (is_int($pid) && $pid > 0) {
-				pcntl_waitpid($pid, $status);
+			@fclose($parent);
+			$parent = NULL;
+		}
+		if (is_int($pid) && $pid > 0) {
+			if ($released) {
+				$waited = pcntl_waitpid($pid, $status);
+			} else {
+				$waited = pcntl_waitpid($pid, $status, WNOHANG);
+				if ($waited === 0 && function_exists('posix_kill')) {
+					@posix_kill($pid, SIGKILL);
+					$waited = pcntl_waitpid($pid, $status);
+				} elseif ($waited === 0) {
+					$waited = pcntl_waitpid($pid, $status);
+				}
+			}
+			if ($waited < 0 && $cleanupError === NULL) {
+				$cleanupError = new RuntimeException('data-file holder waitpid failed');
+			} elseif ($waited > 0 && (!pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0)
+				&& $cleanupError === NULL) {
+				$cleanupError = new RuntimeException('data-file holder exited unsuccessfully');
 			}
 			$pid = NULL;
-			throw $error;
 		}
-		fclose($parent);
-		if (is_int($pid) && $pid > 0) {
-			pcntl_waitpid($pid, $status);
-			$this->assertTrue(pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0,
-				'data-file holder must exit cleanly after the release event');
+		if ($cleanupError !== NULL) {
+			throw $cleanupError;
 		}
-		$pid = NULL;
 	}
 
 	// -----------------------------------------------------------------------
@@ -525,35 +540,41 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		]);
 
 		$lockPath   = $this->dir . '/pfb_sync_status.json.lock';
-		[$holderParent, $holderChild] = $this->signalPair();
-		stream_set_timeout($holderParent, 5);
-		stream_set_timeout($holderChild, 5);
-		$pid        = pcntl_fork();
-		if ($pid === -1) {
-			$GLOBALS['pfb'] = $originalPfb;
-			$this->markTestSkipped('pcntl_fork() failed.');
-		}
-
-		if ($pid === 0) {
-			fclose($holderParent);
-			$fp = fopen($lockPath, 'c');
-			if ($fp === FALSE || !flock($fp, LOCK_EX)) {
-				@fwrite($holderChild, "HOLDER_ERROR\n");
-				exit(1);
-			}
-			fwrite($holderChild, "LOCKED\n");
-			$this->expectChildEvent($holderChild, 'RELEASE', 'sync-status expiry holder release');
-			flock($fp, LOCK_UN);
-			fclose($fp);
-			fwrite($holderChild, "UNLOCKED\n");
-			fclose($holderChild);
-			exit(0);
-		}
-
-		fclose($holderChild);
-		$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'sync-status expiry holder acquisition'));
-
+		$holderParent = NULL;
+		$holderChild = NULL;
+		$pid = NULL;
+		$primaryError = NULL;
+		$cleanupError = NULL;
 		try {
+			[$holderParent, $holderChild] = $this->signalPair();
+			stream_set_timeout($holderParent, 5);
+			stream_set_timeout($holderChild, 5);
+			$pid = pcntl_fork();
+			if ($pid === -1) {
+				$this->markTestSkipped('pcntl_fork() failed.');
+			}
+
+			if ($pid === 0) {
+				fclose($holderParent);
+				$fp = @fopen($lockPath, 'c');
+				if ($fp === FALSE || !@flock($fp, LOCK_EX)) {
+					@fwrite($holderChild, "HOLDER_ERROR\n");
+					@fclose($holderChild);
+					exit(1);
+				}
+				fwrite($holderChild, "LOCKED\n");
+				$this->expectChildEvent($holderChild, 'RELEASE', 'sync-status expiry holder release');
+				@flock($fp, LOCK_UN);
+				fclose($fp);
+				fwrite($holderChild, "UNLOCKED\n");
+				fclose($holderChild);
+				exit(0);
+			}
+
+			fclose($holderChild);
+			$holderChild = NULL;
+			$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'sync-status expiry holder acquisition'));
+
 			$fnRan = FALSE;
 			pfb_sync_status_locked($this->dir, function () use (&$fnRan) {
 				$fnRan = TRUE;
@@ -565,14 +586,53 @@ final class PfbSyncStatusLedgerTest extends TestCase
 			$log = (string) file_get_contents($GLOBALS['pfb']['log']);
 			$this->assertStringContainsString('sync-status ledger lock timed out', $log,
 				'a timed-out acquire must be logged loudly -- an operator-observable signal, never silent');
-		} finally {
-			fwrite($holderParent, "RELEASE\n");
-			$this->assertSame("UNLOCKED\n", $this->readEvent($holderParent, 'sync-status expiry holder unlock'));
-			fclose($holderParent);
-			pcntl_waitpid($pid, $waitStatus);
-			$this->assertTrue(pcntl_wifexited($waitStatus) && pcntl_wexitstatus($waitStatus) === 0,
-				'sync-status expiry holder must exit cleanly after the release event');
-			$GLOBALS['pfb'] = $originalPfb;
+		} catch (Throwable $error) {
+			$primaryError = $error;
+		}
+		$released = FALSE;
+		if (is_resource($holderParent)) {
+			@fwrite($holderParent, "RELEASE\n");
+			try {
+				$event = trim($this->readEvent($holderParent, 'sync-status expiry holder cleanup'));
+				if ($event !== 'UNLOCKED') {
+					throw new RuntimeException("sync-status expiry holder cleanup expected UNLOCKED, got {$event}");
+				}
+				$released = TRUE;
+			} catch (Throwable $error) {
+				$cleanupError = $error;
+			}
+			@fclose($holderParent);
+			$holderParent = NULL;
+		}
+		if (is_int($pid) && $pid > 0) {
+			if ($released) {
+				$waited = pcntl_waitpid($pid, $waitStatus);
+			} else {
+				$waited = pcntl_waitpid($pid, $waitStatus, WNOHANG);
+				if ($waited === 0 && function_exists('posix_kill')) {
+					@posix_kill($pid, SIGKILL);
+					$waited = pcntl_waitpid($pid, $waitStatus);
+				} elseif ($waited === 0) {
+					$waited = pcntl_waitpid($pid, $waitStatus);
+				}
+			}
+			if ($waited < 0 && $cleanupError === NULL) {
+				$cleanupError = new RuntimeException('sync-status expiry holder waitpid failed');
+			} elseif ($waited > 0 && (!pcntl_wifexited($waitStatus) || pcntl_wexitstatus($waitStatus) !== 0)
+				&& $cleanupError === NULL) {
+				$cleanupError = new RuntimeException('sync-status expiry holder exited unsuccessfully');
+			}
+			$pid = NULL;
+		}
+		if (is_resource($holderChild)) {
+			@fclose($holderChild);
+		}
+		$GLOBALS['pfb'] = $originalPfb;
+		if ($primaryError !== NULL) {
+			throw $primaryError;
+		}
+		if ($cleanupError !== NULL) {
+			throw $cleanupError;
 		}
 	}
 
@@ -711,14 +771,27 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 		$dataPath   = $this->dir . '/pfb_sync_status.json';
 		[$pid, $holderParent] = $this->forkRealDataFileHolder($dataPath);
-		$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'read_all data-file holder acquisition'));
+		$primaryError = NULL;
+		$cleanupError = NULL;
 		try {
+			$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'read_all data-file holder acquisition'));
 			$unavailable = FALSE;
 			$data = pfb_sync_status_read_all($this->dir, 0.15, $unavailable);
 			$this->assertSame([], $data, 'an expired read must still return [] (same as empty), never a stale/partial ledger');
 			$this->assertTrue($unavailable, 'a genuine lock-acquire expiry must set $unavailable = TRUE');
-		} finally {
+		} catch (Throwable $error) {
+			$primaryError = $error;
+		}
+		try {
 			$this->releaseDataFileHolder($pid, $holderParent);
+		} catch (Throwable $error) {
+			$cleanupError = $error;
+		}
+		if ($primaryError !== NULL) {
+			throw $primaryError;
+		}
+		if ($cleanupError !== NULL) {
+			throw $cleanupError;
 		}
 
 		// FALSE: absent ledger file.
@@ -761,11 +834,24 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 		$dataPath   = $this->dir . '/pfb_sync_status.json';
 		[$pid, $holderParent] = $this->forkRealDataFileHolder($dataPath);
-		$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'open abort data-file holder acquisition'));
+		$primaryError = NULL;
+		$cleanupError = NULL;
 		try {
+			$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'open abort data-file holder acquisition'));
 			pfb_sync_status_open('dnsbl', 'SomeGroup', 'apply', 'should never persist', $this->dir, self::clockAt(2000), 0.15);
-		} finally {
+		} catch (Throwable $error) {
+			$primaryError = $error;
+		}
+		try {
 			$this->releaseDataFileHolder($pid, $holderParent);
+		} catch (Throwable $error) {
+			$cleanupError = $error;
+		}
+		if ($primaryError !== NULL) {
+			throw $primaryError;
+		}
+		if ($cleanupError !== NULL) {
+			throw $cleanupError;
 		}
 
 		$open = pfb_sync_status_list_open($this->dir);
@@ -789,11 +875,24 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 		$dataPath   = $this->dir . '/pfb_sync_status.json';
 		[$pid, $holderParent] = $this->forkRealDataFileHolder($dataPath);
-		$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'close abort data-file holder acquisition'));
+		$primaryError = NULL;
+		$cleanupError = NULL;
 		try {
+			$this->assertSame("LOCKED\n", $this->readEvent($holderParent, 'close abort data-file holder acquisition'));
 			pfb_sync_status_close('ip', 'pfB_StillOpen_v4', 'download', $this->dir, 0.15);
-		} finally {
+		} catch (Throwable $error) {
+			$primaryError = $error;
+		}
+		try {
 			$this->releaseDataFileHolder($pid, $holderParent);
+		} catch (Throwable $error) {
+			$cleanupError = $error;
+		}
+		if ($primaryError !== NULL) {
+			throw $primaryError;
+		}
+		if ($cleanupError !== NULL) {
+			throw $cleanupError;
 		}
 
 		$open = pfb_sync_status_list_open($this->dir);
