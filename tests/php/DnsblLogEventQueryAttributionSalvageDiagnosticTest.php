@@ -19,23 +19,45 @@ final class DnsblLogEventQueryAttributionSalvageDiagnosticTest extends TestCase
 		$this->assertNotFalse($end, 'spawnResponder() must have a following private method boundary');
 		$spawnResponder = substr($source, $start, $end - $start);
 
-		$this->assertStringContainsString('$written = file_put_contents(', $spawnResponder);
-		$this->assertStringContainsString('if ($written !== strlen($reply))', $spawnResponder);
-		$this->assertStringContainsString("throw new RuntimeException('query responder reply write failed');", $spawnResponder);
-		$this->assertStringContainsString('$this->forkChild(', $spawnResponder, 'the responder must be a tracked child');
+		$this->assertSame(
+			1,
+			preg_match('/^[ \t]*\$this->forkChild\(function \(\) use \(\$replyTemplateJson\): void \{$/m', $spawnResponder),
+			'the responder must fork on an executable line'
+		);
+		$this->assertSame(
+			1,
+			preg_match('/^[ \t]*\$deadline = microtime\(true\) \+ self::SALVAGE_CAP_S;[ \t]*$/m', $spawnResponder),
+			'the responder deadline must use the salvage cap on an executable line'
+		);
+		$this->assertSame(
+			1,
+			preg_match('/^[ \t]*\$written = file_put_contents\([^;]+, \$reply\);[ \t]*$/m', $spawnResponder),
+			'the reply write count must be captured on an executable line'
+		);
+		$this->assertSame(
+			1,
+			preg_match('/^[ \t]*if \(\$written !== strlen\(\$reply\)\) \{$/m', $spawnResponder),
+			'the reply write count must be checked on an executable line'
+		);
+		$this->assertSame(
+			1,
+			preg_match('/^[ \t]*throw new RuntimeException\(\'query responder reply write failed\'\);[ \t]*$/m', $spawnResponder),
+			'the reply-write failure must throw on an executable line'
+		);
 		$this->assertStringNotContainsString('> /dev/null 2>&1 &', $spawnResponder, 'the responder must not use the old detached shell');
 		foreach (['exec(', 'proc_open(', 'shell_exec(', 'system(', 'passthru('] as $sink) {
 			$this->assertStringNotContainsString($sink, $spawnResponder, "responder must not invoke process sink {$sink}");
 		}
 
-		$this->assertStringContainsString(
-			'salvage cap expired / stuck or environment',
-			$spawnResponder,
-			'query-channel request-marker salvage expiry must be distinguishable from a behavioural failure'
+		$this->assertSame(
+			1,
+			preg_match(
+				'/^[ \t]*throw new RuntimeException\((?:"|\')[^"\']*salvage cap expired \/ stuck or environment[^"\']*query-channel request marker[^"\']*(?:"|\')\);[ \t]*$/m',
+				$spawnResponder
+			),
+			'query-channel request-marker salvage expiry must be typed on an executable line'
 		);
-		$this->assertStringContainsString('query-channel request marker', $spawnResponder);
-		$this->assertStringContainsString("\tprivate const SALVAGE_CAP_S = 30.0;", $source);
-		$this->assertStringContainsString('self::SALVAGE_CAP_S', $spawnResponder, 'the responder poll must use the salvage cap');
+		$this->assertSame(1, preg_match('/^[ \t]*private const SALVAGE_CAP_S = 30\.0;[ \t]*$/m', $source));
 
 		foreach ([
 			'testBlockedVerdictAttributesLiveGroupAndBumpsLiveCounter',
