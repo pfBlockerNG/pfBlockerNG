@@ -1268,4 +1268,17 @@ def test_dnsbl_block_writes_persistent_log_line(
             if hits >= 1:
                 break
             time.sleep(1.0)
+        if hits < 1:
+            observed = deployed_vm.ssh(
+                "cat",
+                "/var/log/pfblockerng/dnsbl.log",
+                "/var/unbound/var/log/pfblockerng/dnsbl.log",
+                timeout=15.0,
+            )
+            raise RuntimeError(
+                "salvage cap expired / stuck or environment: "
+                f"test_dnsbl_block_writes_persistent_log_line awaited dnsbl.log marker "
+                f"containing domain {domain!r}; observed hits={hits}; "
+                f"cat rc={observed.returncode} stdout={observed.stdout!r} stderr={observed.stderr!r}"
+            )
         assert hits >= 1, f"no dnsbl.log line for {domain} after a VIP block (ADR-03 persistent log handle)"

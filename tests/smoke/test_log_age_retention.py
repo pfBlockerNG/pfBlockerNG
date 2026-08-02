@@ -291,9 +291,10 @@ def _wait_update_pass_idle(vm: SmokeVM, *, timeout: float = 60.0, poll_interval:
     if not _update_pass_running(vm):
         return
     raise RuntimeError(
-        f"stuck/environment: pfb_update_pass_running() never went idle within {timeout}s -- "
-        "an update pass (or a stray matching process) held the tick's log-maintenance gate "
-        "closed for the whole wait (issue #1769)"
+        "salvage cap expired / stuck or environment: _wait_update_pass_idle awaited "
+        f"pfb_update_pass_running() == False within {timeout}s; observed running=True "
+        "(an update pass or stray matching process held the tick log-maintenance gate "
+        "closed; issue #1769)"
     )
 
 

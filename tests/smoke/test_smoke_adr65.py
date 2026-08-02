@@ -84,6 +84,7 @@ def adr65_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
 # --------------------------------------------------------------------------- #
 
 _DNSBL_LOG_PATHS = ("/var/log/pfblockerng/dnsbl.log",)
+_DNSBL_LOG_EVENT_APPLIED = "/var/log/pfblockerng/dnsbl.log.applied"
 
 
 def _dnsbl_log_hits(vm: SmokeVM, needle: str, *, timeout: float = 30.0) -> int:
@@ -101,6 +102,26 @@ def _dnsbl_log_line(vm: SmokeVM, needle: str, *, timeout: float = 30.0) -> str:
             f"no dnsbl.log line found for {needle!r}: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr!r}"
         )
     return lines[0]
+
+
+def _wait_dnsbl_log_event_applied(vm: SmokeVM, domain: str, *, timeout: float = 30.0, poll: float = 2.0) -> None:
+    """Poll the exact post-``pfb_log_event`` marker for ``domain`` or fail loudly."""
+    expected = f"DNSBL-Full,{domain}"
+    deadline = time.monotonic() + timeout
+    result = None
+    while True:
+        result = vm.ssh("cat", _DNSBL_LOG_EVENT_APPLIED, timeout=15.0)
+        if result.stdout.splitlines() == [expected]:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                "salvage cap expired / stuck or environment: "
+                f"_wait_dnsbl_log_event_applied awaited exact single-line marker {expected!r} "
+                f"at {_DNSBL_LOG_EVENT_APPLIED}; observed cat rc={result.returncode} "
+                f"stdout={result.stdout!r} stderr={result.stderr!r}"
+            )
+        time.sleep(min(poll, remaining))
 
 
 # --------------------------------------------------------------------------- #
@@ -155,20 +176,25 @@ def _read_group_counter(vm: SmokeVM, group: str, *, timeout: float = 60.0) -> tu
 def _wait_group_counter_at_least(
     vm: SmokeVM, group: str, target: int, *, timeout: float = 30.0, poll: float = 2.0
 ) -> tuple[int, str]:
-    """Poll the group's counter until it is >= ``target`` or the deadline expires.
+    """Poll the group's counter until it is >= ``target`` or fail with a salvage expiry.
 
     The counter flush rides the async db_worker thread, so a freshly-logged
-    block does not appear instantly. Returns the final observed value (may be
-    below ``target`` on timeout -- the caller asserts).
+    block does not appear instantly.
     """
     deadline = time.monotonic() + timeout
     current: tuple[int, str] = (-1, "")
-    while time.monotonic() < deadline:
+    while True:
         current = _read_group_counter(vm, group)
         if current[0] >= target:
             return current
-        time.sleep(poll)
-    return current
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                "salvage cap expired / stuck or environment: "
+                f"_wait_group_counter_at_least awaited group={group!r} counter >= target={target}; "
+                f"observed current={current[0]} detail={current[1]!r}"
+            )
+        time.sleep(min(poll, remaining))
 
 
 def _query_domain(vm: SmokeVM, domain: str, *, timeout: float = 60.0) -> dict[str, Any]:
@@ -231,11 +257,18 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
 
         deadline = time.monotonic() + 30.0
         hits1 = 0
-        while time.monotonic() < deadline:
+        while True:
             hits1 = _dnsbl_log_hits(adr65_vm, domain1)
             if hits1 >= 1:
                 break
-            time.sleep(1.0)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "salvage cap expired / stuck or environment: "
+                    f"query-channel domain1 awaited dnsbl.log marker containing {domain1!r}; "
+                    f"observed hits={hits1}"
+                )
+            time.sleep(min(1.0, remaining))
         assert hits1 == 1, f"expected exactly one dnsbl.log line for {domain1}, got {hits1}"
 
         line1 = _dnsbl_log_line(adr65_vm, domain1)
@@ -244,7 +277,7 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
         group1, feed1 = fields1[6], fields1[8]
         assert group1, f"empty group parsed from dnsbl.log line: {line1!r}"
 
-        c1, detail1 = _wait_group_counter_at_least(adr65_vm, group1, 0)
+        c1, detail1 = _read_group_counter(adr65_vm, group1)
         assert c1 >= 0, f"could not read the {group1!r} counter after {domain1}'s block: {detail1}"
 
         # THE QUERY: same domain, read-only channel.
@@ -266,12 +299,21 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
         deadline = time.monotonic() + 30.0
         hits2 = 0
         c2 = c1
-        while time.monotonic() < deadline:
+        detail2 = ""
+        while True:
             hits2 = _dnsbl_log_hits(adr65_vm, domain2)
-            c2, _ = _read_group_counter(adr65_vm, group1)
+            c2, detail2 = _read_group_counter(adr65_vm, group1)
             if hits2 >= 1 and c2 >= c1 + 1:
                 break
-            time.sleep(1.0)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "salvage cap expired / stuck or environment: "
+                    f"query-channel domain2 awaited dnsbl.log marker containing {domain2!r} "
+                    f"and group={group1!r} counter >= target={c1 + 1}; observed hits={hits2} "
+                    f"current={c2} detail={detail2!r}"
+                )
+            time.sleep(min(1.0, remaining))
         assert hits2 == 1, f"expected exactly one dnsbl.log line for {domain2}, got {hits2}"
         assert c2 == c1 + 1, (
             f"expected group {group1!r} counter to be EXACTLY {c1 + 1} after {domain2}'s block "
@@ -612,7 +654,7 @@ def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -
                 f"expected a real (non-Unknown) group from pfb_dnsbl_query({domain!r}), got {verdict!r}"
             )
 
-            c0, detail0 = _wait_group_counter_at_least(adr65_vm, expected_group, 0)
+            c0, detail0 = _read_group_counter(adr65_vm, expected_group)
             assert c0 >= 0, f"could not read the baseline counter for group {expected_group!r}: {detail0}"
 
             curl_argv = (
@@ -648,17 +690,11 @@ def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -
                     f"lighttpd_pfb/:80 snapshot (rc={diag.returncode}):\n{diag.stdout}{diag.stderr}"
                 )
 
-            deadline = time.monotonic() + 30.0
-            n = 0
-            first_line = ""
-            while time.monotonic() < deadline:
-                res_lines = adr65_vm.ssh("grep", "-hF", "--", "DNSBL-Full,", _DNSBL_LOG_PATHS[0], timeout=15.0)
-                matching = [ln for ln in res_lines.stdout.splitlines() if ln and domain in ln]
-                n = len(matching)
-                if n >= 1:
-                    first_line = matching[0]
-                    break
-                time.sleep(2.0)
+            _wait_dnsbl_log_event_applied(adr65_vm, domain)
+            res_lines = adr65_vm.ssh("grep", "-hF", "--", "DNSBL-Full,", _DNSBL_LOG_PATHS[0], timeout=15.0)
+            matching = [ln for ln in res_lines.stdout.splitlines() if ln and domain in ln]
+            n = len(matching)
+            first_line = matching[0] if matching else ""
             assert n >= 1, f"expected >=1 'DNSBL-Full,' host dnsbl.log line for {domain}, found {n}"
 
             fields = first_line.split(",")
@@ -673,7 +709,7 @@ def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -
                 f"(line: {first_line!r})"
             )
 
-            c_after, detail_after = _wait_group_counter_at_least(adr65_vm, expected_group, c0 + n)
+            c_after, detail_after = _read_group_counter(adr65_vm, expected_group)
             assert c_after == c0 + n, (
                 f"expected group {expected_group!r} counter to be EXACTLY {c0 + n} (baseline {c0} + "
                 f"{n} observed 'DNSBL-Full,' line(s)), got {c_after} ({detail_after})"
