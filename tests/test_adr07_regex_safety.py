@@ -220,6 +220,21 @@ class TestCatastrophicShapeHeuristic:
         # An optional group of literals is still just a literal prefix.
         assert _regex_is_catastrophic_shape(r"^(www\.)?ads?\.example\.com$") is False
 
+    def test_lookaround_body_is_scanned_for_a_run_of_its_own(self) -> None:
+        # A lookaround consumes nothing, so it bridges the run around it -- but the engine
+        # still backtracks over what is INSIDE it (measured 18.5 ms at 110 characters), so
+        # its body is scanned on its own terms rather than skipped with the construct.
+        for pat in (
+            r"^(?=([a-z]+[a-z]+[a-z]+[a-z]+x))\@example\.com$",
+            r"^(?!(\w+\w+\w+y))[a-z]+\.example$",
+            r"^(?<=([a-z]+[a-z]+[a-z]+))x$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+        # A lookahead body is NOT adjacent to what follows it -- it matches no characters --
+        # so its atoms never join the outer run.
+        assert _regex_is_catastrophic_shape(r"^(?=.*ad)[a-z]+[a-z]+\.example$") is False
+        assert _regex_is_catastrophic_shape(r"^(?=[a-z]+)[a-z]+[a-z]+\.example$") is False
+
     def test_quantified_group_run_over_distinct_bodies_not_flagged(self) -> None:
         # Two quantified groups only partition the span when they can consume the same
         # input; `(ab)+(cd)+` has exactly one way to split, so it stays admitted.
