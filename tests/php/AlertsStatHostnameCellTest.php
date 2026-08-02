@@ -102,6 +102,25 @@ final class AlertsStatHostnameCellTest extends TestCase
         $this->assertStringNotContainsString('&amp;', $cell, 'benign input has no & to encode');
     }
 
+    public function test_invalid_utf8_in_truncated_hostname_uses_replacement_character(): void
+    {
+        $resolved = str_repeat('a', 40) . "\xFF" . str_repeat('b', 10);
+        $this->assertGreaterThanOrEqual(45, mb_strlen($resolved, 'UTF-8'));
+
+        $cell = pfb_stat_hostname_cell($resolved);
+
+        $this->assertStringContainsString(
+            str_repeat('a', 40) . "\u{FFFD}" . str_repeat('b', 4) . '<small>...</small>',
+            $cell,
+            'the displayed cut must represent an invalid byte with U+FFFD'
+        );
+        $this->assertStringNotContainsString(
+            str_repeat('a', 40) . '?' . str_repeat('b', 4) . '<small>...</small>',
+            $cell,
+            "the displayed cut must not fabricate '?' for an invalid byte"
+        );
+    }
+
     public function test_character_gate_hostname_renders_complete_value_without_ellipsis(): void
     {
         $resolved = 'CG11' . str_repeat('界', 14);

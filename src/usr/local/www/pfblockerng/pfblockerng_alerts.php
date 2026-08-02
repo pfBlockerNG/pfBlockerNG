@@ -1910,7 +1910,7 @@ function pfb_stat_hostname_cell($resolved) {
 	$full = pfb_hsc($resolved);
 	if (mb_strlen($resolved, 'UTF-8') >= 45) {
 		$title = "title=\"{$full}\"";
-		$cell  = pfb_hsc(mb_substr($resolved, 0, 45, 'UTF-8')) . "<small>...</small>";
+		$cell  = pfb_hsc(pfb_truncate($resolved, 45)) . "<small>...</small>";
 	} else {
 		$title = '';
 		$cell  = $full;
