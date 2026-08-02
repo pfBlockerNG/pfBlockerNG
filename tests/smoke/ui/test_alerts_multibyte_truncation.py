@@ -1,23 +1,25 @@
-"""Tier-A ``ui_render`` coverage for issue #1815: the Alerts page's row-cell
-display-truncation sites cut on CHARACTERS (``mb_substr(..., 'UTF-8')``), not
-BYTES, so a multibyte character straddling the cut renders whole instead of
-leaving a dangling lead byte for ``pfb_hsc()``'s ``ENT_SUBSTITUTE`` to replace
-with a spurious U+FFFD.
+"""Tier-A ``ui_render`` coverage for issues #1815, #2007, and #2009: Alerts
+row-cell truncation uses the Unified widths and matching UTF-8 character units.
+Four values straddle their character cuts and remain valid; a fifth value is
+long in bytes but short in characters and renders complete without an ellipsis.
 
 Scenario (self-encapsulated: log truncated back to its exact pre-test byte
 size in teardown, loud assertion that the restore took):
-  Given three ``unified.log`` rows -- one ``Block,``-prefixed IP row, one
+  Given four ``unified.log`` rows -- one ``Block,``-prefixed IP row, one
         ``DNSBL_CNAME`` row carrying blocked-domain and CNAME values, one
-        verbatim DNS-reply row -- each value shaped
+        verbatim DNS-reply row with a truncating value, and one DNS-reply row
+        whose multibyte domain reaches the old byte gate but stays below the
+        character gate -- with each truncating value shaped
         ``<marker><'a' padding><'é'><tail>`` so its multibyte character's lead
         byte lands exactly on that value's truncation cut
         (see ``pfblockerng_alerts.php``'s ``convert_ip_log`` /
         ``convert_dnsbl_log`` / ``convert_dns_reply_log``)
   When  GET ``pfblockerng_alerts.php?view=unified``
   Then  the Tier-A render oracle passes
-  And   all four markers locate their rows
-  And   each value is truncated (the ``<small>...</small>`` ellipsis renders)
-  And   each value's multibyte character survives WHOLE (no U+FFFD, 'é' present)
+  And   all five markers locate their rows
+  And   the four long values render exact truncated prefixes and ellipses
+  And   the code-point-short value renders complete without an ellipsis
+  And   each truncated value's multibyte character survives whole
 
 ``?view=unified`` needs no config precondition (no ``pfb_dnsbl`` toggle, no
 sinkhole VIP): the Unified loop reads only ``unified.log``, and its
@@ -113,13 +115,16 @@ _DNSBL_LINE = "DNSBL-python,{},{},127.0.0.1,Python,DNSBL_CNAME,RVMbGroup,{},RVMb
     FIXED_TS, DNSBL_DOMAIN, CNAME_DOMAIN
 )
 _DNS_REPLY_LINE = f"DNS-reply,{FIXED_TS},A,A,A,300,{REPLY_DOMAIN},127.0.0.1,203.0.113.9,US\n"
+CJK_REPLY_MARKER = "SMKREPLYCG"
+CJK_REPLY_DOMAIN = CJK_REPLY_MARKER + "界" * 7
+_DNS_REPLY_CHARACTER_GATE_LINE = f"DNS-reply,{FIXED_TS},A,A,A,300,{CJK_REPLY_DOMAIN},127.0.0.1,203.0.113.10,US\n"
 
-_ALL_LINES = _IP_LINE + _DNSBL_LINE + _DNS_REPLY_LINE
+_ALL_LINES = _IP_LINE + _DNSBL_LINE + _DNS_REPLY_LINE + _DNS_REPLY_CHARACTER_GATE_LINE
 
 
 @pytest.fixture
-def seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[tuple[tuple[str, str, int], ...]]:
-    """Append the three rows carrying four straddling values; restore log size after.
+def seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[tuple[tuple[str, str, int | None], ...]]:
+    """Append four rows carrying five values; restore log size after.
 
     Yields the markers it actually seeded, so the test iterates over the
     fixture's own output rather than module constants -- the assertions cannot
@@ -154,6 +159,7 @@ def seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[tuple[tuple[str, str, int
         (DNSBL_MARKER, DNSBL_DOMAIN, 39),
         (CNAME_MARKER, CNAME_DOMAIN, 31),
         (REPLY_MARKER, REPLY_DOMAIN, 29),
+        (CJK_REPLY_MARKER, CJK_REPLY_DOMAIN, None),
     )
 
     restore = vm.ssh(f"truncate -s {original_size} {UNIFIED_LOG}", timeout=15)
@@ -165,7 +171,7 @@ def seeded_unified_rows(smoke_vm: SmokeVM) -> Iterator[tuple[tuple[str, str, int
 
 
 def test_unified_rows_keep_straddling_multibyte_char_whole(
-    smoke_vm: SmokeVM, webui: WebUI, seeded_unified_rows: tuple[tuple[str, str, int], ...]
+    smoke_vm: SmokeVM, webui: WebUI, seeded_unified_rows: tuple[tuple[str, str, int | None], ...]
 ) -> None:
     """Every seeded value's straddling character survives whole; none renders U+FFFD."""
     guard = PhpErrorLogGuard(smoke_vm)
@@ -177,7 +183,10 @@ def test_unified_rows_keep_straddling_multibyte_char_whole(
 
     body = resp.text
     assert seeded_unified_rows, "the seeding fixture yielded no markers -- nothing would be asserted"
-    for marker, value, cut in seeded_unified_rows:
+    truncation_rows = tuple(case for case in seeded_unified_rows if case[2] is not None)
+    assert len(truncation_rows) == 4, f"fixture must yield four truncation cases, got {truncation_rows!r}"
+    for marker, value, cut in truncation_rows:
+        assert cut is not None
         row = row_containing(body, marker)
         expected = value[:cut] + "<small>...</small>"
         assert expected in row, (
@@ -197,5 +206,26 @@ def test_unified_rows_keep_straddling_multibyte_char_whole(
         assert "<small>...</small>" in row, (
             f"row for marker {marker!r} did not truncate at all -- fixture broken, not a #1815 signal:\n{row}"
         )
+
+    guard.assert_no_growth()
+
+
+def test_unified_character_gate_domain_renders_complete_without_lying_ellipsis(
+    smoke_vm: SmokeVM, webui: WebUI, seeded_unified_rows: tuple[tuple[str, str, int | None], ...]
+) -> None:
+    """A byte-long/CJK-short DNS reply domain must render complete in Unified view."""
+    guard = PhpErrorLogGuard(smoke_vm)
+    guard.snapshot()
+
+    resp = webui.get(UNIFIED_VIEW)
+    result = evaluate_render(UNIFIED_VIEW, resp.status_code, resp.text, ("Alert Settings",))
+    assert result.ok, f"Tier-A render oracle failed for the Alerts Unified view: {result.detail}"
+
+    character_gate_rows = tuple(case for case in seeded_unified_rows if case[2] is None)
+    assert len(character_gate_rows) == 1, f"fixture must yield one character-gate case, got {character_gate_rows!r}"
+    marker, value, _ = character_gate_rows[0]
+    row = row_containing(resp.text, marker)
+    assert f'<td title="">{value}</td>' in row, f"complete value missing from marker row {marker!r}:\n{row}"
+    assert value + "<small>...</small>" not in row, f"marker-local value received a lying ellipsis:\n{row}"
 
     guard.assert_no_growth()

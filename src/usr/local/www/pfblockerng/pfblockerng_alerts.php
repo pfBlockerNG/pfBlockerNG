@@ -1908,7 +1908,7 @@ function pfb_truncate($value, $length) {
 function pfb_stat_hostname_cell($resolved) {
 	$resolved = (string) $resolved;
 	$full = pfb_hsc($resolved);
-	if (strlen($resolved) >= 45) {
+	if (mb_strlen($resolved, 'UTF-8') >= 45) {
 		$title = "title=\"{$full}\"";
 		$cell  = pfb_hsc(mb_substr($resolved, 0, 45, 'UTF-8')) . "<small>...</small>";
 	} else {
@@ -2245,7 +2245,7 @@ function convert_dnsbl_log($mode, $fields) {
 	$hostname = array_key_exists($fields[3], $local_hosts) ? $local_hosts[$fields[3]] : '';
 	if (!empty($hostname)) {
 		$h_title		= '';
-		if (strlen($hostname) >= 25) {
+		if (mb_strlen($hostname, 'UTF-8') >= 25) {
 			$h_title	= pfb_hsc($hostname);
 			$hostname	= pfb_hsc(pfb_truncate($hostname, 24)) . "<small>...</small>";
 		} else {
@@ -2263,7 +2263,7 @@ function convert_dnsbl_log($mode, $fields) {
 	if (strpos($f2, 'xn--') !== FALSE) {
 		$f2 = "{$f2} [" . idn_to_utf8($f2) . "]";
 	}
-	if (strlen($f2) >= ($mode != 'Unified' ? 60 : 40)) {
+	if (mb_strlen($f2, 'UTF-8') >= ($mode != 'Unified' ? 60 : 40)) {
 		$f2 = pfb_hsc(pfb_truncate($f2, ($mode != 'Unified' ? 59 : 39))) . "<small>...</small>";
 	} else {
 		$f2 = pfb_hsc($f2);
@@ -2274,7 +2274,7 @@ function convert_dnsbl_log($mode, $fields) {
 		if (strpos($f7, 'xn--') !== FALSE) {
 			$f7		= "{$f7} [" . idn_to_utf8($f7) . "]";
 		}
-		if (strlen($f7) >= ($mode != 'Unified' ? 52 : 32)) {
+		if (mb_strlen($f7, 'UTF-8') >= ($mode != 'Unified' ? 52 : 32)) {
 			$f7		= pfb_hsc(pfb_truncate($f7, ($mode != 'Unified' ? 51 : 31))) . "<small>...</small>";
 		} else {
 			$f7		= pfb_hsc($f7);
@@ -2322,7 +2322,7 @@ function convert_dnsbl_log($mode, $fields) {
 	}
 
 	if (!empty($fields[4])) {
-		if (strlen($fields[4]) >= 25) {
+		if (mb_strlen($fields[4], 'UTF-8') >= 25) {
 			$f4 = pfb_hsc(pfb_truncate($fields[4], 24)) . "<small>...</small>";
 			$fields[4] = "<span title=\"" . pfb_hsc($fields[4]) . "\">{$f4}</span>";
 		} else {
@@ -2516,7 +2516,7 @@ function convert_dns_reply_log($mode, $fields) {
 
 	$hostname = $local_hosts[$fields[7]] ?: '';
 	$title_hostname = '';
-	if (!empty($hostname) && strlen($hostname) >= 25) {
+	if (!empty($hostname) && mb_strlen($hostname, 'UTF-8') >= 25) {
 		$title_hostname = pfb_hsc($hostname);
 		$hostname	= pfb_hsc(pfb_truncate($hostname, 24)) . "<small>...</small>";
 	} else {
@@ -2598,7 +2598,7 @@ function convert_dns_reply_log($mode, $fields) {
 
 	// Truncate long TTLs
 	$pfb_title5 = '';
-	if (strlen($fields[5]) >= 6) {
+	if (mb_strlen($fields[5], 'UTF-8') >= 6) {
 		$pfb_title5	= pfb_hsc($fields[5]);
 		$fields[5]	= pfb_hsc(pfb_truncate($fields[5], 5)) . "<small>...</small>";
 	} else {
@@ -2607,7 +2607,7 @@ function convert_dns_reply_log($mode, $fields) {
 
 	// Truncate long Domain names
 	$pfb_title6 = '';
-	if (strlen($fields[6]) >= ($mode != 'Unified' ? 45 : 30)) {
+	if (mb_strlen($fields[6], 'UTF-8') >= ($mode != 'Unified' ? 45 : 30)) {
 		$pfb_title6	= pfb_hsc($fields[6]);
 		$fields[6]	= pfb_hsc(pfb_truncate($fields[6], ($mode != 'Unified' ? 44 : 29))) . "<small>...</small>";
 	} else {
@@ -2616,7 +2616,7 @@ function convert_dns_reply_log($mode, $fields) {
 
 	// Truncate long Resolved names
 	$pfb_title8 = '';
-	if (strlen($fields[8]) >= 17) {
+	if (mb_strlen($fields[8], 'UTF-8') >= 17) {
 		$pfb_title8	= pfb_hsc($fields[8]);
 		$fields[8]	= pfb_hsc(pfb_truncate($fields[8], 16)) . "<small>...</small>";
 	} else {
@@ -3079,7 +3079,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$fields[98] = pfb_hsc($fields[8]);
 	}
 
-	if (strlen($fields[15]) >= 17) {
+	if (mb_strlen($fields[15], 'UTF-8') >= 17) {
 		if (!empty($pfb_matchtitle)) {
 			$pfb_matchtitle .= '&#013;';
 		}
@@ -3088,7 +3088,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	} else {
 		$fields[15]	= pfb_hsc($fields[15]);
 	}
-	if (strlen($feed_new) >= 17) {
+	if (mb_strlen($feed_new, 'UTF-8') >= 17) {
 		if (!empty($pfb_matchtitle)) {
 			$pfb_matchtitle .= '&#013;';
 		}

@@ -196,6 +196,21 @@ final class AlertsMultibyteTruncationTest extends TestCase
 		return $marker . str_repeat('a', $cut - 3 - strlen($marker)) . $mbChar . $mbChar . $metachar . $tail;
 	}
 
+	/**
+	 * Build a value that reaches a byte gate but stays below that gate in UTF-8
+	 * code points, so the gate itself (not the cut) is the regression oracle.
+	 */
+	private function characterGateValue(int $gate, string $marker): string
+	{
+		$value = $marker;
+		while (strlen($value) < $gate) {
+			$value .= '界';
+		}
+		$this->assertGreaterThanOrEqual($gate, strlen($value));
+		$this->assertLessThan($gate, mb_strlen($value, 'UTF-8'));
+		return $value;
+	}
+
 	// -----------------------------------------------------------------------
 	// convert_dnsbl_log() harness
 	// -----------------------------------------------------------------------
@@ -700,6 +715,141 @@ final class AlertsMultibyteTruncationTest extends TestCase
 
 		$this->assertStringContainsString("<td title=\"{$domain}\">{$expected}<small>...</small></td>", $html);
 		$this->assertStringNotContainsString("<td title=\"{$domain}\">{$domain}</td>", $html);
+	}
+
+	// =========================================================================
+	// Character-count gates: byte length reaches each gate while code-point
+	// length stays below it, so no display ellipsis is justified.
+	// =========================================================================
+
+	public function test_character_gate_dnsbl_srcip_hostname_renders_complete_value(): void
+	{
+		$srcIp = '10.1.0.31';
+		$value = $this->characterGateValue(25, 'CG01');
+		$GLOBALS['local_hosts'] = [$srcIp => $value];
+		$html = $this->renderDnsblRow($this->dnsblFields('cg-domain-01.example', $srcIp, 'CG', 'Feed'));
+		$escaped = pfb_hsc($value);
+
+		$this->assertStringContainsString("<span title=\"\">{$escaped}</span>", $html);
+		$this->assertStringNotContainsString($escaped . '<small>...</small>', $html);
+	}
+
+	public function test_character_gate_dnsbl_domain_renders_complete_value(): void
+	{
+		$value = $this->characterGateValue(40, 'CG02');
+		$html = $this->renderDnsblRow(
+			$this->dnsblFields($value, '10.1.0.32', 'CG', 'Feed'),
+			'Unified'
+		);
+		$escaped = pfb_hsc($value);
+
+		$this->assertStringContainsString("<td>{$escaped}</td>", $html);
+		$this->assertStringNotContainsString($escaped . '<small>...</small>', $html);
+	}
+
+	public function test_character_gate_dnsbl_cname_renders_complete_value(): void
+	{
+		$value = $this->characterGateValue(32, 'CG03');
+		$fields = $this->dnsblFields('cg-domain-03.example', '10.1.0.33', 'CG', 'Feed', '', 'DNSBL_CNAME', $value);
+		$html = $this->renderDnsblRow($fields, 'Unified');
+		$escaped = pfb_hsc($value);
+
+		$this->assertStringContainsString("CNAME: {$escaped}</td>", $html);
+		$this->assertStringNotContainsString($escaped . '<small>...</small>', $html);
+	}
+
+	public function test_character_gate_dnsbl_agent_renders_complete_value(): void
+	{
+		$value = $this->characterGateValue(25, 'CG04');
+		$html = $this->renderDnsblRow($this->dnsblFields('cg-domain-04.example', '10.1.0.34', 'CG', 'Feed', $value));
+		$escaped = pfb_hsc($value);
+
+		$this->assertStringContainsString("<br /><small>DNSBL-python | {$escaped} | A</small>", $html);
+		$this->assertStringNotContainsString($escaped . '<small>...</small>', $html);
+	}
+
+	public function test_character_gate_dnsreply_srcip_hostname_renders_complete_value(): void
+	{
+		$srcIp = '10.1.0.35';
+		$value = $this->characterGateValue(25, 'CG05');
+		$GLOBALS['local_hosts'] = [$srcIp => $value];
+		$html = $this->renderReplyRow($this->replyFields('cg-domain-05.example', $srcIp));
+		$escaped = pfb_hsc($value);
+
+		$this->assertStringContainsString("<td title=\"\">{$srcIp}<br /><small>{$escaped}</small></td>", $html);
+		$this->assertStringNotContainsString($escaped . '<small>...</small>', $html);
+	}
+
+	public function test_character_gate_dnsreply_ttl_renders_complete_value(): void
+	{
+		$srcIp = '10.1.0.36';
+		$GLOBALS['local_hosts'] = [$srcIp => ''];
+		$fields = $this->replyFields('cg-domain-06.example', $srcIp);
+		$fields[5] = $this->characterGateValue(6, 'CG');
+		$html = $this->renderReplyRow($fields);
+		$escaped = pfb_hsc($fields[5]);
+
+		$this->assertStringContainsString("<td title=\"\">{$escaped}</td>", $html);
+		$this->assertStringNotContainsString($escaped . '<small>...</small>', $html);
+	}
+
+	public function test_character_gate_dnsreply_domain_renders_complete_value(): void
+	{
+		$srcIp = '10.1.0.37';
+		$GLOBALS['local_hosts'] = [$srcIp => ''];
+		$value = $this->characterGateValue(30, 'CG07');
+		$html = $this->renderReplyRow($this->replyFields($value, $srcIp), 'Unified');
+		$escaped = pfb_hsc($value);
+
+		$this->assertStringContainsString("<td title=\"\">{$escaped}</td>", $html);
+		$this->assertStringNotContainsString($escaped . '<small>...</small>', $html);
+	}
+
+	public function test_character_gate_dnsreply_resolved_value_renders_complete_value(): void
+	{
+		$srcIp = '10.1.0.38';
+		$GLOBALS['local_hosts'] = [$srcIp => ''];
+		$fields = $this->replyFields('cg-domain-08.example', $srcIp);
+		$fields[8] = $this->characterGateValue(17, 'CG08');
+		$html = $this->renderReplyRow($fields);
+		$escaped = pfb_hsc($fields[8]);
+
+		$this->assertStringContainsString("<td title=\"\">{$escaped}</td>", $html);
+		$this->assertStringNotContainsString($escaped . '<small>...</small>', $html);
+	}
+
+	public function test_character_gate_ip_logged_feed_renders_complete_value(): void
+	{
+		$value = $this->characterGateValue(17, 'CG09');
+		file_put_contents("{$this->denydir}/{$value}.txt", "192.0.2.190\n");
+		$fields = $this->ipRawFields([
+			8 => '192.0.2.190', 15 => '192.0.2.190',
+			14 => 'pfB_CG09_v4', 16 => $value,
+		]);
+		$html = $this->renderIpRow($fields, 'Block');
+		$escaped = pfb_hsc($value);
+
+		$this->assertStringContainsString($escaped . '<br /><small>', $html);
+		$this->assertStringNotContainsString($escaped . '<small>...</small>', $html);
+	}
+
+	public function test_character_gate_ip_re_attributed_feed_renders_complete_value(): void
+	{
+		$value = $this->characterGateValue(17, 'CG10');
+		file_put_contents("{$this->denydir}/{$value}.txt", "192.0.2.191\n");
+		$oldFeed = 'CG10Old';
+		$fields = $this->ipRawFields([
+			8 => '192.0.2.191', 15 => '192.0.2.191',
+			14 => 'pfB_CG10_v4', 16 => $oldFeed,
+		]);
+		$html = $this->renderIpRow($fields, 'Block');
+		$escaped = pfb_hsc($value);
+
+		$this->assertStringContainsString(
+			"<s>{$oldFeed}</s><br /><small><s>192.0.2.191</s></small><br />{$escaped}<br /><small>",
+			$html
+		);
+		$this->assertStringNotContainsString($escaped . '<small>...</small>', $html);
 	}
 
 	// =========================================================================
