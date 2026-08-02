@@ -77,6 +77,10 @@ _REGEX_OVERLAP_ALPHABET = string.printable + "é"
 
 _REGEX_REPEAT = re.compile(r"\{(?P<min>\d+)(?P<comma>,?)(?P<max>\d*)\}")
 
+# How deep the scan follows lookarounds nested inside lookarounds. Real patterns never nest
+# more than one or two; the bound only stops a hostile line from exhausting the stack.
+_REGEX_NESTED_SCAN_MAX = 8
+
 # Complexity-budget backstop: cap the combined count of unbounded quantifiers (`+`/`*`,
 # unescaped) and alternations (`|`, unescaped) in one pattern. The structural regexes
 # above catch KNOWN bad shapes; this catches novel compositions of many quantifiers /
@@ -228,7 +232,14 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
     closed = pattern[group_end - 1 : group_end] == ")"
     if pattern.startswith(("(?#", "(?=", "(?!", "(?<=", "(?<!"), index):
         # Skipping an UNCLOSED construct would blind the scan to everything after it.
-        return "", "bridge" if closed else "break", group_end if closed else index + 2
+        if not closed:
+            return "", "break", index + 2
+        if pattern.startswith("(?#", index):
+            return "", "bridge", group_end  # a comment is inert text, not a pattern
+        # A lookaround matches no characters, so it cannot join or separate the run around
+        # it -- but the engine still backtracks over its body, which is scanned on its own.
+        body_start = index + 4 if pattern[index + 2] == "<" else index + 3
+        return pattern[body_start : group_end - 1], "nested", group_end
     if pattern.startswith("(?P<", index):
         name_end = pattern.find(">", index)
         if name_end == -1:
@@ -253,15 +264,21 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
     return "", "bridge" if quantifier_end == group_end or role == "bridge" else "break", body_start
 
 
-def _regex_has_adjacent_unbounded_atoms(pattern: str) -> bool:
+def _regex_has_adjacent_unbounded_atoms(pattern: str, depth: int = 0) -> bool:
     """True when ``pattern`` carries a run of more than ``_REGEX_ADJACENT_ATOM_MAX``
     back-to-back atoms that each take a backtracking unbounded quantifier and whose
     character sets overlap along the run -- every atom in such a run can cede characters to
-    its neighbour. Pure string analysis: nothing here runs the candidate against an input."""
+    its neighbour. A lookaround's body is scanned as a pattern of its own, bounded by
+    ``_REGEX_NESTED_SCAN_MAX`` so nested lookarounds cannot exhaust the stack. Pure string
+    analysis: nothing here runs the candidate against an input."""
     run: list[str] = []
     index = 0
     while index < len(pattern):
         atom, role, index = _regex_next_unit(pattern, index)
+        if role == "nested":
+            if depth < _REGEX_NESTED_SCAN_MAX and _regex_has_adjacent_unbounded_atoms(atom, depth + 1):
+                return True
+            continue
         if role == "bridge":
             continue
         if role != "run":
