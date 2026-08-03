@@ -957,7 +957,24 @@ if (isset($_POST) && !empty($_POST)) {
 		if (!empty(pfb_filter($pfb['extdns'], PFB_FILTER_IP, 'alerts addwhitelistdom'))) {
 			$domain_esc	= escapeshellarg($domain);
 			$ext_dns 	= escapeshellarg("@{$pfb['extdns']}");
-			exec("/usr/bin/drill {$domain_esc} {$ext_dns} | /usr/bin/awk '/CNAME/ {sub(\"\.\$\", \"\", \$5); print \$5;}' 2>&1", $cname_list);
+			$drill_esc	= escapeshellarg($pfb['drill'] ?? '/usr/bin/drill');
+			$timeout_esc	= escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
+			// 30s DNS ceiling matches the established SafeSearch and whoisconvert lookups (#2014/#2015).
+			$cname_lookup_timeout = 30;
+			$cname_lookup_kill_grace = 5;
+			$cname_lookup_file = "{$g['tmp_path']}/pfb_alerts_cname_" . getmypid() . '_' . bin2hex(random_bytes(8));
+			$cname_lookup_pipeline = "{$drill_esc} {$domain_esc} {$ext_dns} | /usr/bin/awk '/CNAME/ {sub(\"\.\$\", \"\", \$5); print \$5;}'";
+			$cname_lookup_cmd = "{$timeout_esc} -s TERM -k {$cname_lookup_kill_grace} {$cname_lookup_timeout} /bin/sh -c " .
+				escapeshellarg($cname_lookup_pipeline) . ' > ' . escapeshellarg($cname_lookup_file) . " 2>&1 < /dev/null";
+			$cname_lookup_output = array();
+			$cname_lookup_status = 0;
+			exec($cname_lookup_cmd, $cname_lookup_output, $cname_lookup_status);
+			if ($cname_lookup_status === 124) {
+				pfb_logger("\npfblockerng_alerts: CNAME lookup TIMED OUT (killed); discarding partial output\n", 2);
+			} else {
+				$cname_list = file($cname_lookup_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: array();
+			}
+			@unlink($cname_lookup_file);
 		}
 
 		// Remove 'www.' prefix
