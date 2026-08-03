@@ -125,11 +125,33 @@ def test_clean_php_is_not_flagged(tmp_path: Path) -> None:
     assert _find(tmp_path, clean) == [], "PHP via php_eval must stay clean"
 
 
-def test_bare_python3_is_not_flagged(tmp_path: Path) -> None:
+def test_bare_python3_client_vm_is_not_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Bare `python3` names the dev-host / client-VM interpreter (e.g. the civm tcp probe,
     # or scripts/ bench tooling on the dev box) — out of scope, must NOT be flagged.
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path.resolve())
     bare = '    client_vm.ssh("python3 /tmp/tcp_rst_probe.py 2.0")\n'
-    assert _find(tmp_path, bare) == [], "bare python3 (dev/client) must not be flagged"
+    assert _find(tmp_path, bare, "tests/smoke/probe.py") == [], "client-VM python3 must not be flagged"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        '    vm.ssh("python3 -c x")\n',
+        '    smoke_vm.ssh("python3.11 -c x")\n',
+    ],
+)
+def test_bare_python_guest_ssh_in_smoke_is_flagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path.resolve())
+    violations = _find(tmp_path, command, "tests/smoke/probe.py")
+    assert len(violations) == 1, f"pfSense guest Python command must be flagged; got {violations}"
+
+
+def test_bare_python_dev_host_command_in_smoke_is_not_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path.resolve())
+    command = '    subprocess.run(["python3", "tool.py"], check=True)\n'
+    assert _find(tmp_path, command, "tests/smoke/probe.py") == []
 
 
 def test_bare_python3_source_command_is_flagged(tmp_path: Path) -> None:
