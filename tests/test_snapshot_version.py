@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import date, datetime
 
 import pytest
@@ -64,6 +64,7 @@ def test_next_patch_target_accepts_only_bare_strict_core() -> None:
 
 
 def test_snapshot_record_is_frozen() -> None:
+    assert [field.name for field in fields(SnapshotRecord)] == ["source_sha", "result"]
     assert SnapshotRecord.__dataclass_params__.frozen  # type: ignore[attr-defined]
 
 
