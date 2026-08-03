@@ -1392,7 +1392,7 @@ function sync_package_pfblockerng($cron='') {
 	#########################################################
 
 	// When pfBlockerNG is Disabled and 'Keep Blocklists' is Disabled.
-	// Toggles are 'on'/'off' (PfbToggle, issue #1887); != 'on' covers 'off' and a legacy ''.
+	// Runtime toggles are enums; any state other than On disables this path.
 	if ($pfb['enable'] !== PfbToggle::On && $pfb['keep'] !== PfbToggle::On && !$pfb['install']) {
 		$log = "\n  Removing DB Files/Folders \n";
 		pfb_logger("{$log}", 1);
@@ -3888,7 +3888,7 @@ function sync_package_pfblockerng($cron='') {
 									$args = pfb_ip_preprocess_args($pfb['dup'] === PfbToggle::On, $pfb['agg'] === PfbToggle::On, $pfb['rep'] === PfbToggle::On);
 									if (!empty($args)) {
 										// issue #1896: boundary conversion -- the shell script reads this
-										// positional token raw ('on'/'off'), never the enum itself.
+										// positional token raw ('on'/''), never the enum itself.
 										$pfb_drep_token = $pfb['drep']->toStored();
 										exec("{$pfb['script']} {$args} {$header_esc} {$pfb['max']} " . escapeshellarg($pfb_drep_token) . " {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
 									}

@@ -646,7 +646,7 @@ if ($_POST) {
 
 		// ADR-08: IDN Blocking mode must be one of the <select> options. PFB_FILTER_WORD
 		// only checks shape, so without this an out-of-vocabulary value (e.g. a tampered
-		// POST) would canonicalise to 'off' and silently disable IDN blocking.
+		// POST) would canonicalise to Off and silently disable IDN blocking.
 		if (!in_array(pfb_filter($_POST['pfb_idn'] ?? '', PFB_FILTER_WORD, 'dnsbl'),
 			array('off', 'confusable', 'on'), TRUE)) {
 			$input_errors[] = 'DNSBL IDN Blocking mode is invalid!';

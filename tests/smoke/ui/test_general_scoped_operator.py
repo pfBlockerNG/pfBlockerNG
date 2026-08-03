@@ -277,7 +277,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
     ``pfb_software_check`` sits at a seeded non-default value.
 
       Given a webConfigurator user holding ONLY ``page-firewall-pfblockerng`` (no
-        Package Manager privilege), and ``pfb_software_check`` stored as ``'off'``
+        Package Manager privilege), and ``pfb_software_check`` stored as legacy ``'off'``
         (the pass-through cell; non-default so a "reset to default" bug would also
         be visible),
 
@@ -287,7 +287,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
 
       Then the save succeeds (200, still authenticated, no new gated PHP
         diagnostic), the changed field persists, and ``pfb_software_check`` is
-        STILL ``'off'`` -- the delta-aware pass-through carve-out treated the
+        canonical ``''`` -- the delta-aware pass-through carve-out treated the
         unchanged field as a non-event rather than asserting a privilege this
         operator does not hold.
 
@@ -316,14 +316,9 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
       * ``pfb_interval`` persisted -- a regression that made the save silently
         no-op (e.g. an over-broad early return) leaves the stored value at its
         PRE-save baseline -> the equality assertion fails.
-      * ``pfb_software_check`` still ``'off'`` -- a regression that dropped the
-        delta-aware carve-out entirely (reverting to writeSection() unconditionally
-        re-persisting every registered field through its adapter) would still
-        store ``'off'`` byte-identically in THIS case (no accidental value change),
-        so this assertion alone does not catch that regression -- it is the
-        status/session assertions above that do; this assertion instead catches a
-        regression that makes the pass-through cell get OVERWRITTEN with some
-        other value (e.g. a stray default-coercion bug).
+      * ``pfb_software_check`` canonicalised to ``''`` -- the legacy read-only
+        ``'off'`` seed must become canonical empty storage without requiring that
+        field's separate privilege because both tokens represent the same Off value.
       * PhpErrorLogGuard -- a regression that let an uncaught exception reach the
         page (rather than a clean redirect) logs a PHP Fatal/Uncaught line ->
         ``assert_no_growth()`` fails.
@@ -388,9 +383,9 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
         assert helpers.config_get(vm, INTERVAL_CFG) == new_interval, (
             "the scoped operator's save of the UNRELATED pfb_interval field did not persist"
         )
-        assert helpers.config_get(vm, SOFTWARE_CHECK_CFG) == "off", (
-            "pfb_software_check changed as a side effect of an unrelated General save -- the "
-            "writeSection() delta-aware pass-through carve-out (issue #1895 addendum) regressed"
+        assert helpers.config_get(vm, SOFTWARE_CHECK_CFG) == "", (
+            "pfb_software_check did not canonicalise legacy 'off' during an unrelated General save -- "
+            "the writeSection() adapter round-trip or delta-aware privilege carve-out regressed"
         )
 
         # Companion: force the page's FIRST (provenance) gate open so its SECOND
@@ -446,7 +441,7 @@ def test_cli_gateway_write_fails_closed_writesystem_succeeds(
       Then it throws ``RuntimeException`` (fail-closed) and the stored value is
         UNCHANGED; and ``PfbConfig::writeSystem('gen/pfb_keep', 'off')`` -- the
         explicit system-caller escape hatch -- succeeds and persists the
-        canonical ``'off'`` token.
+        canonical empty token.
 
     Failability:
       * ``ISALLOWEDPAGE_DEFINED`` -- documents which CAUTION arm this box hits;

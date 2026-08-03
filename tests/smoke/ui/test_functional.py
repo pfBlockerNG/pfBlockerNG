@@ -125,16 +125,14 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page=GENERAL_PAGE,
         field="enable_cb",
         config_path="installedpackages/pfblockerng/config/0/enable_cb",
-        # issue #1887: enable_cb carries the toggle adapter, so the save's
-        # writeSection ride canonicalises an unchecked '' to the explicit 'off'.
+        # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
     ToggleFlow(
         name="general_keep_settings",
         page=GENERAL_PAGE,
         field="pfb_keep",
         config_path="installedpackages/pfblockerng/config/0/pfb_keep",
-        # issue #484: the General save stores an explicit 'off' for an unchecked
-        # pfb_keep (not '') so a default-on flag can persist a deliberate off.
+        # A present empty token preserves a deliberate Off.
         # Registry default 'on': an absent key means the feature is ON.
         absent="on",
     ),
@@ -160,7 +158,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page=IP_PAGE,
         field="suppression",
         config_path="installedpackages/pfblockerngipsettings/config/0/suppression",
-        # issue #1907: toggle-adapter field -- unchecked save stores the explicit 'off'.
+        # Adapter-backed unchecked saves use the canonical empty Off token.
         # Registry default 'on': an absent key means the feature is ON.
         absent="on",
     ),
@@ -204,7 +202,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_dnsbl",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl",
-        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
     ToggleFlow(
         name="dnsbl_tld_wildcard",
@@ -217,7 +215,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_hsts",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts",
-        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        # Adapter-backed unchecked saves use the canonical empty Off token.
         # Registry default 'on' since issue #1907: an absent key means the feature is ON.
         absent="on",
     ),
@@ -244,7 +242,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_cache",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache",
-        # issue #1907: toggle-adapter field -- unchecked save stores the explicit 'off'.
+        # Adapter-backed unchecked saves use the canonical empty Off token.
         # Registry default 'on': an absent key means the feature is ON.
         absent="on",
     ),
@@ -253,7 +251,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_cache_flush",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush",
-        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
     ToggleFlow(
         name="dnsbl_py_nolog",
@@ -269,7 +267,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_idn_block_malicious",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_block_malicious",
-        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        # Adapter-backed unchecked saves use the canonical empty Off token.
         # Registry default 'on': an absent key means the feature is ON.
         absent="on",
     ),
@@ -278,7 +276,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_idn_escalate_suspicious",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious",
-        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
     # issue #381: opt out of automatic DNSBL NAT-rule creation (default '' = NAT on).
     # The form POST exercises the new save handler; config.xml is the oracle.
@@ -287,7 +285,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_dnsbl.php",
         field="pfb_dnsbl_nonat",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat",
-        # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
+        # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
     # ---- Reputation settings (installedpackages/pfblockerngreputation/config/0) -
     # issue #1896: enable_dedup ("dMAX") joined the toggle-adapter registry
@@ -301,7 +299,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page="/pfblockerng/pfblockerng_reputation.php",
         field="enable_dedup",
         config_path="installedpackages/pfblockerngreputation/config/0/enable_dedup",
-        # issue #1896: toggle-adapter field — unchecked save stores the explicit 'off'.
+        # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
 )
 
@@ -456,10 +454,10 @@ def test_dnsbl_idn_mode_select_round_trips_all_modes(
 ) -> None:
     """The 'IDN Blocking' select (``pfb_idn``) round-trips all three modes via config.xml.
 
-    Off (``'off'``) / Confusable (``'confusable'``) / Always (``'on'``) are the options
+    Off (``'off'``) / Confusable (``'confusable'``) / Always (``'on'``) are the form options
     (ADR-08 reuses the legacy ``'on'`` token to back the "Always"/block-all-IDN mode, so it
-    round-trips with no migration); the save stores the posted token verbatim for each
-    (off->off, confusable->confusable, on->on). The 4.0.0-alpha ``'all'`` token no longer
+    round-trips with no migration); storage canonicalises Off to ``''`` while preserving
+    Confusable and Always. The 4.0.0-alpha ``'all'`` token no longer
     exists. Drives EACH mode and asserts the effective config node (branch coverage: every
     selectable value, not just one), restoring the original at the end. The DNSBL save only
     write_config()s (config.xml is the oracle) and needs the sinkhole VIP -- supplied by
@@ -469,9 +467,9 @@ def test_dnsbl_idn_mode_select_round_trips_all_modes(
     cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn"
     original = helpers.config_get(smoke_vm, cfg)
     try:
-        for mode in ("confusable", "on", "off"):
-            got = _post_and_get(webui, smoke_vm, page, {"pfb_idn": mode}, cfg)
-            assert got == mode, f"pfb_idn select: POSTing {mode!r} stored {got!r} (expected {mode!r})"
+        for posted, expected in (("confusable", "confusable"), ("on", "on"), ("off", "")):
+            got = _post_and_get(webui, smoke_vm, page, {"pfb_idn": posted}, cfg)
+            assert got == expected, f"pfb_idn select: POSTing {posted!r} stored {got!r} (expected {expected!r})"
     finally:
         # Restore the original; fall back to 'off' since the save validator rejects an
         # empty/absent value (only off/confusable/on are accepted), leaving the box clean.
