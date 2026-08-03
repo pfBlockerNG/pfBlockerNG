@@ -8,8 +8,8 @@ use PHPUnit\Framework\TestCase;
 /**
  * ADR-61 Phase 5 — tick-driven apply-stage reconciliation.
  *
- * pfblockerng_tick() gains one unconditional step (fires every tick, never
- * $due-gated) that retries every open stage='apply' ledger entry against
+ * pfblockerng_tick() gains one independent 900-second due-ledger step that retries
+ * every open stage='apply' ledger entry against
  * already-persisted content -- no re-download, re-parse, or re-dedup:
  *   - ip:    pfb_ip_apply_retry() -- a pfctl replace/kill against the aliasdir
  *            mirror, reusing pfb_pfctl_table_op()'s own ledger wiring.
@@ -17,18 +17,16 @@ use PHPUnit\Framework\TestCase;
  *            (no wait, no restart -- see RESULTS/05_Results.txt), then re-run
  *            the existing convergence decision.
  * Unbounded (ADR SS2.4): no attempt counter, no backoff -- a continued failure
- * simply stays open for the next tick. Semantics #5: download/parse/dedup
+ * simply stays open for the next reconciliation slot. Semantics #5: download/parse/dedup
  * stages are never touched by this step.
  *
- * Red→green: before this phase pfblockerng_tick() never read the ledger at
- * all -- every VERIFICATION case below fails against the pre-change worktree
- * because nothing retries (the seeded entry's underlying probe is never
- * invoked a second time).
+ * Red→green: before this phase pfblockerng_tick() had no scheduled apply
+ * reconciliation step.
  *
  * Functions under test:
  *   pfb_ip_apply_retry(string $item): void
  *   pfb_dnsbl_apply_retry(): void
- *   pfblockerng_tick() -- the new unconditional reconciliation step.
+ *   pfblockerng_tick() -- the new due-ledger reconciliation step.
  */
 #[CoversFunction('pfb_ip_apply_retry')]
 #[CoversFunction('pfb_dnsbl_apply_retry')]
@@ -71,7 +69,7 @@ final class TickApplyReconciliationTest extends TestCase
 		// issue #1666: pfb_interval='Disabled' (seeded above) only gates the tick's
 		// cron dispatch branch -- dcc/bl dispatch off the due-ledger regardless of
 		// pfb_interval, and an absent ledger entry reads as due NOW
-		// (pfb_due_ledger_is_due_from_entry()). Without seeding, every tick() call
+		// (pfb_due_ledger_is_due_from_entry()). Without seeding, every reconciliation call
 		// in this suite dispatched a REAL "pfblockerng.php dcc" background shell
 		// that a sibling suite's pfb_update_pass_running() `ps` scan could then see.
 		// Future-date every job so no dispatch branch fires here at all, and neuter
@@ -228,6 +226,15 @@ final class TickApplyReconciliationTest extends TestCase
 		return count(array_filter(explode("\n", (string) file_get_contents($counterFile)), 'strlen'));
 	}
 
+	private function assertApplyReservation(): void
+	{
+		$entry = pfb_due_ledger_read_entry('apply_reconcile', $this->dir);
+		$this->assertNotNull($entry, 'completed reconciliation must reserve apply_reconcile');
+		$this->assertSame(0, $entry['jitter'], 'apply_reconcile must have zero jitter');
+		$this->assertSame(900, $entry['next_due'] - $entry['last_run'], 'apply_reconcile cadence must be exactly 900 seconds');
+		$this->assertGreaterThan(time(), $entry['next_due'], 'completed reconciliation must reserve a future slot');
+	}
+
 	private function writeSentinel(int $gen): void
 	{
 		file_put_contents("{$this->dir}/pfb_py_reload", "{$gen}\n");
@@ -265,9 +272,8 @@ final class TickApplyReconciliationTest extends TestCase
 	 *         proving a real retry attempt happened, not just "no crash".
 	 *   And   the entry is STILL open (continued failure, no backoff, no counter).
 	 *
-	 * Red->green: on pre-Phase-5 code, pfblockerng_tick() never reads the ledger
-	 * at all, so the mock pfctl is never invoked a second time -- the spy count
-	 * stays at 1 (only the seed call), not 2+.
+	 * Red->green: on the pre-reconciliation tick, the apply job was not paced by
+	 * its own due-ledger reservation, so this scheduled retry did not exist.
 	 */
 	public function testTickRetriesOpenIpApplyEntryAndLeavesItOpenOnContinuedFailure(): void
 	{
@@ -297,6 +303,7 @@ final class TickApplyReconciliationTest extends TestCase
 		$this->assertCount(1, $open, 'a continued pfctl failure must leave the entry open (no backoff, no counter)');
 		$this->assertSame('pfB_Test_v4', $open[0]['item']);
 		$this->assertSame('apply', $open[0]['stage']);
+		$this->assertApplyReservation();
 	}
 
 	/**
@@ -306,7 +313,7 @@ final class TickApplyReconciliationTest extends TestCase
 	 *         mock pfctl is swapped in, simulating the table's real state
 	 *         resolving out-of-band).
 	 *   When  pfblockerng_tick() runs once.
-	 *   Then  the entry clears -- self-healed within one tick interval, no
+	 *   Then  the entry clears -- self-healed within one reconciliation interval, no
 	 *         source change / Force Reload required (ADR SS4 item 4).
 	 */
 	public function testTickClearsIpApplyEntryOnceUnderlyingConditionIsFixed(): void
@@ -328,7 +335,7 @@ final class TickApplyReconciliationTest extends TestCase
 		$this->tick();
 
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'ip'),
-			'a fixed underlying pfctl condition must clear the entry within one tick');
+			'a fixed underlying pfctl condition must clear the entry within one reconciliation interval');
 	}
 
 	/**
@@ -339,9 +346,8 @@ final class TickApplyReconciliationTest extends TestCase
 	 *   longer has one).
 	 *   When  pfblockerng_tick() runs once.
 	 *   Then  pfctl is invoked with the KILL op, not REPLACE -- there is no
-	 *         mirror content to replace with (pfb_ip_apply_retry()'s branch
-	 *         coverage: every prior test here seeds a mirror file and only
-	 *         exercises the replace branch).
+	 *         mirror content to replace with, and the continued KILL failure
+	 *         leaves the apply entry open for a later retry.
 	 */
 	public function testTickRetriesIpApplyEntryWithKillWhenMirrorFileIsAbsent(): void
 	{
@@ -351,7 +357,7 @@ final class TickApplyReconciliationTest extends TestCase
 		$mockBin = tempnam(sys_get_temp_dir(), 'pfb_pfctl_mock_');
 		$this->tmpfiles[] = $mockBin;
 		$argsLogEsc = escapeshellarg($argsLog);
-		file_put_contents($mockBin, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> {$argsLogEsc}\nexit 0\n");
+		file_put_contents($mockBin, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> {$argsLogEsc}\nprintf 'pfctl: EINVAL' >&2\nexit 1\n");
 		chmod($mockBin, 0755);
 
 		// Seed directly -- no mirror file is ever written for this alias.
@@ -368,16 +374,23 @@ final class TickApplyReconciliationTest extends TestCase
 			"expected the mirror-absent retry to invoke pfctl's KILL op, got: {$invocation}");
 		$this->assertStringNotContainsString('-T replace', $invocation,
 			"mirror-absent retry must not invoke REPLACE -- there is no mirror content, got: {$invocation}");
+
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open, 'continued KILL failure must leave the apply entry open');
+		$this->assertSame('pfB_NoMirror_v4', $open[0]['item']);
+		$this->assertSame('apply', $open[0]['stage']);
+		$this->assertApplyReservation();
 	}
 
 	// -----------------------------------------------------------------------
-	// VERIFICATION (c) — Semantics #5: download/parse entries are untouched
+	// VERIFICATION (c) — Semantics #5: non-apply entries are untouched
 	// -----------------------------------------------------------------------
 
 	/**
 	 * Scenario:
 	 *   Given an open (ip,'pfB_Test_v4',apply) entry (retried/cleared this tick)
-	 *   ALONGSIDE an open (ip,'pfB_Other_v4',download) entry.
+	 *   ALONGSIDE open (ip,'pfB_Other_v4',download), (ip,'pfB_Other_v4',dedup),
+	 *         (ip,'pfB_Other_v4',script), and (dnsbl,'pfb_py_zone.txt',parse) entries.
 	 *   When  pfblockerng_tick() runs once.
 	 *   Then  the download entry's message/first_seen/last_seen are BYTE-IDENTICAL
 	 *         before and after -- proving the tick genuinely never touched it,
@@ -386,10 +399,12 @@ final class TickApplyReconciliationTest extends TestCase
 	public function testTickNeverTouchesDownloadOrParseStageEntries(): void
 	{
 		pfb_sync_status_open('ip', 'pfB_Other_v4', 'download', 'HTTP 404', $this->dir, static fn() => 1000);
+		pfb_sync_status_open('ip', 'pfB_Other_v4', 'dedup', 'dedup failed', $this->dir, static fn() => 1000);
+		pfb_sync_status_open('ip', 'pfB_Other_v4', 'script', 'pre-script failed', $this->dir, static fn() => 1000);
 		pfb_sync_status_open('dnsbl', 'pfb_py_zone.txt', 'parse', 'csv read failed', $this->dir, static fn() => 1000);
 
 		$before = pfb_sync_status_list_open($this->dir);
-		$this->assertCount(2, $before, 'seed: exactly the two non-apply entries must be open, nothing else');
+		$this->assertCount(4, $before, 'seed: exactly the four non-apply entries must be open, nothing else');
 
 		// An apply-stage entry too, so the tick genuinely has an apply row to act on.
 		file_put_contents("{$this->dir}/pfB_Test_v4.txt", "10.0.0.1\n");
@@ -417,7 +432,7 @@ final class TickApplyReconciliationTest extends TestCase
 		$beforeByKey = $byKey($before);
 		$afterByKey  = $byKey($after);
 
-		foreach (['ip|pfB_Other_v4|download', 'dnsbl|pfb_py_zone.txt|parse'] as $key) {
+		foreach (['ip|pfB_Other_v4|download', 'ip|pfB_Other_v4|dedup', 'ip|pfB_Other_v4|script', 'dnsbl|pfb_py_zone.txt|parse'] as $key) {
 			$this->assertArrayHasKey($key, $afterByKey, "expected {$key} to still be open after the tick");
 			$this->assertSame($beforeByKey[$key], $afterByKey[$key],
 				"expected {$key} to be BYTE-IDENTICAL before/after the tick (Semantics #5), got before="
@@ -467,6 +482,7 @@ final class TickApplyReconciliationTest extends TestCase
 			. 'broken -- the entry must stay open (no backoff, no counter)');
 		$this->assertSame('dnsbl', $open[0]['item']);
 		$this->assertSame('apply', $open[0]['stage']);
+		$this->assertApplyReservation();
 	}
 
 	/**
@@ -475,7 +491,7 @@ final class TickApplyReconciliationTest extends TestCase
 	 *   And   the underlying condition is FIXED before the tick runs (applied
 	 *         catches up to sentinel out-of-band -- e.g. the watcher finished).
 	 *   When  pfblockerng_tick() runs once.
-	 *   Then  the entry clears within one tick, no restart / Force Reload.
+	 *   Then  the entry clears within one due reconciliation attempt, no restart / Force Reload.
 	 */
 	public function testTickClearsDnsblApplyEntryOnceUnderlyingConditionIsFixed(): void
 	{
@@ -493,7 +509,7 @@ final class TickApplyReconciliationTest extends TestCase
 		$this->tick();
 
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
-			'a fixed underlying convergence condition must clear the entry within one tick');
+			'a fixed underlying convergence condition must clear within one due reconciliation attempt');
 	}
 
 	// -----------------------------------------------------------------------

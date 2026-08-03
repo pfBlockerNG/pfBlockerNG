@@ -399,6 +399,9 @@ final class TickEntrypointTest extends TestCase
 		// pfb_log_mgmt(): cap 'log' to 3 lines; every other type stays at the
 		// registry default (20000) -> no-op trim, keeping the test single-purpose.
 		config_set_path("{$gen}/log_max_log", '3');
+		// Apply reconciliation has an independent cadence; keep it idle unless a
+		// test explicitly seeds that job due.
+		$this->seedFutureLedgerEntry('apply_reconcile', time());
 	}
 
 	/**

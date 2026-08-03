@@ -3854,7 +3854,7 @@ function pfb_tick_seed(): string
  *
  * Delegates to the due-ledger API for each job. The $now, $seed, and
  * $dbdir are injectable so PHPUnit can verify cadence without filesystem or
- * wall-clock dependencies. SafeSearch has its own zero-jitter 900-second entry.
+ * wall-clock dependencies. SafeSearch and apply reconciliation have their own zero-jitter 900-second entries.
  *
  * @param int    $now            Current epoch timestamp.
  * @param string $seed           Per-install seed for seeded_jitter.
@@ -3878,6 +3878,7 @@ function pfb_tick_due_jobs(
 		'dcc'        => pfb_due_ledger_is_due('dcc',        86400,          $now, $seed, $jitter_max, $dbdir),
 		'bl'         => pfb_due_ledger_is_due('bl',         $bl_interval,   $now, $seed, $jitter_max, $dbdir),
 		'ss_refresh' => $ss_refresh_due,
+		'apply_reconcile' => pfb_due_ledger_is_due('apply_reconcile', 900, $now, $seed, 0, $dbdir),
 	];
 }
 
@@ -3991,8 +3992,9 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $t
  * pfblockerng_tick — ADR-43: apply-on-change due-ledger tick dispatcher.
  *
  * Reads the ledger and handles both cadence advancement and separate-process dispatch via
- * exec() for each due job (feeds, dcc, bl). SafeSearch runs when its own due-ledger entry
- * is due; the scheduled log maintenance (pfb_log_mgmt) runs only on an idle tick (see below).
+ * exec() for each due job (feeds, dcc, bl). SafeSearch and apply reconciliation run when
+ * their own due-ledger entries are due; scheduled log maintenance (pfb_log_mgmt) runs only
+ * on an idle tick (see below).
  *
  * Lives here (not in the www/ dispatcher script) rather than the reverse so the
  * PHPUnit bootstrap can load and call the real entrypoint off-appliance: the www
@@ -4027,13 +4029,17 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $t
  * $ps_lines is injectable for hermetic off-appliance tests; NULL preserves the
  * appliance's host process-table scan. $ss_refresh is an optional test seam; NULL calls
  * the production SafeSearch refresher. $ss_lock_opener and $ss_lock_timeout are test seams
- * for the bounded refresh lock; defaults use fopen() and a 5-second budget.
+ * for the bounded refresh lock; defaults use fopen() and a 5-second budget. The apply
+ * reconciliation callable, lock opener, and timeout are equivalent test seams.
  */
 function pfblockerng_tick(
 	?array $ps_lines = NULL,
 	?callable $ss_refresh = NULL,
 	?callable $ss_lock_opener = NULL,
-	float $ss_lock_timeout = 5.0
+	float $ss_lock_timeout = 5.0,
+	?callable $apply_reconcile = NULL,
+	?callable $apply_lock_opener = NULL,
+	float $apply_lock_timeout = 5.0
 ): void
 {
 	global $pfb;
@@ -4185,17 +4191,51 @@ function pfblockerng_tick(
 		}
 	}
 
-	// ADR-61: apply-stage reconciliation. Unconditional -- never gated on $due or
-	// pending state -- and touches ONLY stage='apply' entries (Semantics #5);
-	// download/parse/dedup stages keep their normal cadence, untouched here.
-	foreach (pfb_sync_status_list_open($dbdir) as $entry) {
-		if ($entry['stage'] !== 'apply') {
-			continue;
-		}
-		if ($entry['facility'] === 'ip') {
-			pfb_ip_apply_retry($entry['item']);
-		} elseif ($entry['facility'] === 'dnsbl') {
-			pfb_dnsbl_apply_retry();
+	// ADR-61: apply-stage reconciliation has its own zero-jitter 900-second
+	// ledger entry, independent of feed tick cadence. Only apply entries are touched.
+	if ($due['apply_reconcile']) {
+		$apply_lock_path = "{$dbdir}/pfb_apply_reconcile.lock";
+		$apply_default_opener = ($apply_lock_opener === NULL);
+		$apply_lock = $apply_default_opener ? @fopen($apply_lock_path, 'c') : $apply_lock_opener($apply_lock_path);
+		if ($apply_lock === FALSE || !is_resource($apply_lock)) {
+			pfb_logger("\nTick: apply reconciliation lock open failed [ {$apply_lock_path} ]", 2);
+		} else {
+			$apply_lock_timed_out = FALSE;
+			if (!pfb_flock_bounded($apply_lock, LOCK_EX, $apply_lock_timeout, $apply_lock_timed_out)) {
+				$reason = $apply_lock_timed_out ? 'timed out' : 'acquire failed';
+				pfb_logger("\nTick: apply reconciliation lock {$reason} [ {$apply_lock_path} ]", 2);
+				if ($apply_default_opener) {
+					@fclose($apply_lock);
+				}
+			} else {
+				try {
+					// Another tick may have completed while this one waited for the lock.
+					if (pfb_due_ledger_is_due('apply_reconcile', 900, $now, $seed, 0, $dbdir)) {
+						if ($apply_reconcile !== NULL) {
+							$apply_reconcile();
+						} else {
+							foreach (pfb_sync_status_list_open($dbdir) as $entry) {
+								if ($entry['stage'] !== 'apply') {
+									continue;
+								}
+								if ($entry['facility'] === 'ip') {
+									pfb_ip_apply_retry($entry['item']);
+								} elseif ($entry['facility'] === 'dnsbl') {
+									pfb_dnsbl_apply_retry();
+								}
+							}
+						}
+						pfb_due_ledger_mark_ran_anchored('apply_reconcile', 900, $now, $seed, 0, $dbdir);
+					}
+				} catch (Throwable $e) {
+					pfb_logger("\nTick: apply reconciliation failed: {$e->getMessage()}", 2);
+				} finally {
+					@flock($apply_lock, LOCK_UN);
+					if ($apply_default_opener) {
+						@fclose($apply_lock);
+					}
+				}
+			}
 		}
 	}
 
@@ -4228,7 +4268,7 @@ function pfblockerng_tick(
 // pfb_sync_status.json under a ledger dir, mirroring pfb_due_ledger_*'s pure,
 // clock-injectable, atomic-write idiom above. Writers/clearers live in
 // pfblockerng.inc; pfblockerng_tick() (above) retries open stage=apply entries
-// every tick. Tests: tests/php/PfbSyncStatusLedgerTest.php
+// when apply_reconcile is due. Tests: tests/php/PfbSyncStatusLedgerTest.php
 // ---------------------------------------------------------------------------
 
 /**

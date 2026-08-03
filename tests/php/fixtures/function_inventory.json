@@ -12280,6 +12280,27 @@
                 "variadic": false,
                 "type": "float",
                 "default": "5.0"
+            },
+            {
+                "name": "apply_reconcile",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "apply_lock_opener",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "apply_lock_timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
             }
         ]
     },
