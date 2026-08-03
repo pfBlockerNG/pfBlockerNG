@@ -22,9 +22,6 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 		$GLOBALS['pfb']['dbdir'] = $this->dbdir;
 		$GLOBALS['pfb']['log'] = "{$this->dbdir}/pfblockerng.log";
 
-		$this->lockFp = fopen("{$this->dbdir}/pfb_feed_pass.lock", 'c');
-		$this->assertNotFalse($this->lockFp, 'test setup: failed to open feed-pass lock');
-		$this->assertTrue(flock($this->lockFp, LOCK_EX), 'test setup: failed to hold feed-pass lock');
 	}
 
 	protected function tearDown(): void
@@ -41,7 +38,7 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 		rmdir($this->dbdir);
 	}
 
-	public function testLockLossSetsPendingApplyWithoutAdvancingNextDue(): void
+	public function testLockTimeoutLeavesLedgerUntouched(): void
 	{
 		$nextDue = time() + 3600;
 		pfb_due_ledger_write_entry('cron', [
@@ -52,11 +49,14 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 
 		$before = pfb_due_ledger_read_entry('cron', $this->dbdir);
 		$this->assertSame($nextDue, $before['next_due'], 'test setup: future next_due must be seeded');
+		$this->lockFp = fopen("{$this->dbdir}/pfb_feed_pass.lock", 'c');
+		$this->assertNotFalse($this->lockFp, 'test setup: failed to open feed-pass lock');
+		$this->assertTrue(flock($this->lockFp, LOCK_EX), 'test setup: failed to hold feed-pass lock');
 
-		pfblockerng_sync_cron();
+		$this->assertFalse(pfb_feed_pass_wait(FALSE, 0.0, NULL, NULL, $this->dbdir));
 
 		$after = pfb_due_ledger_read_entry('cron', $this->dbdir);
 		$this->assertSame($nextDue, $after['next_due'], 'lost lock must preserve next_due');
-		$this->assertTrue(!empty($after['pending_apply']), 'lost lock must schedule retry on next enabled tick');
+		$this->assertArrayNotHasKey('pending_apply', $after, 'a non-owner must not mutate the ledger');
 	}
 }

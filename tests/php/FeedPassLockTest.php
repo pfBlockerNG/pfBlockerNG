@@ -205,32 +205,24 @@ final class FeedPassLockTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Row 8 -- fail-open on an unwritable dbdir.
+	// Row 8 -- fail closed when the lock path cannot be opened.
 	// -----------------------------------------------------------------------
 
-	public function testFailOpenOnUnwritableDbdirAcquireTrueWarnsBusyFalse(): void
+	public function testUnopenableLockFailsClosedForAcquireAndBusy(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable dbdir');
-		}
+		$notDir = "{$this->dbdir}/not-a-directory";
+		file_put_contents($notDir, 'fixture');
+		$GLOBALS['pfb']['dbdir'] = $notDir;
 
-		$denydir = "{$this->dbdir}/deny";
-		mkdir($denydir, 0755, TRUE);
-		$GLOBALS['pfb']['dbdir'] = $denydir;
-		chmod($denydir, 0555);
-
-		try {
-			$this->assertTrue(pfb_feed_pass_acquire(),
-				'an unwritable dbdir must fail OPEN -- acquire returns TRUE rather than blocking legitimate work');
-			$this->assertFileExists($GLOBALS['pfb']['errlog'], 'the fail-open path must log a warning');
-			$this->assertStringContainsString('lock', strtolower((string) file_get_contents($GLOBALS['pfb']['errlog'])),
-				'the warning must reference the lock failure');
-
-			$this->assertFalse(pfb_feed_pass_busy(),
-				'busy() must also fail OPEN (FALSE, never reports busy) on an unwritable dbdir');
-		} finally {
-			chmod($denydir, 0755);
-		}
+		$this->assertFalse(pfb_feed_pass_acquire(),
+			'an unopenable lock must fail CLOSED -- acquire returns FALSE');
+		$this->assertFileExists($GLOBALS['pfb']['errlog'], 'the fail-closed path must log the open failure');
+		$this->assertStringContainsString('open failed', strtolower((string) file_get_contents($GLOBALS['pfb']['errlog'])),
+			'the warning must name the lock open failure');
+		$this->assertStringNotContainsString('proceeding unlocked', (string) file_get_contents($GLOBALS['pfb']['errlog']),
+			'the old unlocked fallback must be retired');
+		$this->assertTrue(pfb_feed_pass_busy(),
+			'busy() must fail CLOSED when it cannot establish that the lock is free');
 	}
 
 	// -----------------------------------------------------------------------
@@ -370,25 +362,15 @@ final class FeedPassLockTest extends TestCase
 			'the outer guarded release (owner flag TRUE) must free the lock');
 	}
 
-	// Hostile row -- lock file unopenable: begin() inherits acquire()'s fail-open
-	// (an unwritable dbdir must never block a legitimate pass).
-	public function testBeginFailsOpenWhenLockFileUnopenable(): void
+	// Hostile row -- lock file unopenable: begin() fails closed.
+	public function testBeginFailsClosedWhenLockFileUnopenable(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable dbdir');
-		}
+		$notDir = "{$this->dbdir}/not-a-directory-begin";
+		file_put_contents($notDir, 'fixture');
+		$GLOBALS['pfb']['dbdir'] = $notDir;
 
-		$denydir = "{$this->dbdir}/deny_begin";
-		mkdir($denydir, 0755, TRUE);
-		$GLOBALS['pfb']['dbdir'] = $denydir;
-		chmod($denydir, 0555);
-
-		try {
-			$this->assertTrue(pfb_feed_pass_begin('sync'),
-				'an unwritable dbdir must fail OPEN -- begin() returns TRUE rather than blocking legitimate work');
-		} finally {
-			chmod($denydir, 0755);
-		}
+		$this->assertFalse(pfb_feed_pass_begin('sync'),
+			'an unopenable lock must fail CLOSED -- begin() returns FALSE');
 	}
 
 	// -----------------------------------------------------------------------

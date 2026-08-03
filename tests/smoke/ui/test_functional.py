@@ -1860,9 +1860,8 @@ def test_update_runnow_scope_guard_and_ledger(
         )
 
         # Run Now no longer blocks (the live log is AJAX-polled, #671), so the scope=ip dispatched
-        # process may still be alive. Wait for it to exit before the next POST — otherwise
-        # pfb_active_task_running() would refuse the scope=both dispatch and the cron ledger would
-        # not advance (a race the old blocking pfb_livetail() masked). Mirrors isvalidpid: read the
+        # process may still be alive. Wait for it to exit before the next POST so each assertion
+        # observes one completed child rather than a queued successor. Mirrors isvalidpid: read the
         # pidfile daemon(8) self-clears on exit and probe the pid with kill -0.
         def _runnow_idle() -> bool:
             probe = vm.ssh(
@@ -1875,7 +1874,7 @@ def test_update_runnow_scope_guard_and_ledger(
 
         assert helpers.wait_until(_runnow_idle, timeout=25.0), (
             "scope=ip Run Now process did not exit before the scope=both POST — "
-            "pfb_active_task_running() would refuse the next dispatch"
+            "cannot isolate the next child cadence assertion"
         )
 
         # ACT 2: POST scope=both — a full-pass run; the cron ledger MUST advance.

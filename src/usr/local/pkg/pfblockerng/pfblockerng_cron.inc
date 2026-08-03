@@ -247,15 +247,19 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 //   Defaults to FALSE to preserve the existing cron behaviour byte-identically.
 // $scope — 'both' (default), 'ip', or 'dnsbl'; filters which list types are probed.
 //   Defaults to 'both' so existing callers (case 'cron') are unchanged.
-function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
+function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both', $manual = FALSE, $force_mode = 'download') {
 	global $pfb, $pfbarr;
 
 	// issue #1175: serialize feed passes -- same ownership discipline as
 	// sync_package_pfblockerng(); its tail call below reenters the SAME lock.
-	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock']);
-	if (!pfb_feed_pass_begin('cron')) {
-		pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock'])
+		|| !is_resource($GLOBALS['pfb_feed_pass_lock']);
+	if (!pfb_feed_pass_begin('cron',TRUE,$manual)) {
 		return;
+	}
+	if ($force_all && $manual) {
+		$dirs = pfb_force_scope_dirs($scope, $pfb['origdir'], $pfb['dnsorigdir']);
+		pfb_force_clear_validators($dirs, $force_mode === 'both');
 	}
 
 	// Open the per-run log window BEFORE the first log line so the live viewer mirrors the whole
@@ -379,6 +383,10 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	// not affect the feed cron timing/outcome. Provenance-gated: a no-op on a
 	// Netgate-installed build.
 	pfb_software_update_check();
+	if ($manual && $scope === 'both') {
+		$interval = ((int) ($pfb['interval'] ?: 1)) * 3600;
+		pfb_due_ledger_mark_ran('cron', $interval, time(), pfb_tick_seed(), 0, $pfb['dbdir']);
+	}
 
 	// issue #1175: release only if this call transitioned the lock (see head of function) --
 	// the tail sync_package_pfblockerng() calls above reentered the SAME lock and no-op'd.

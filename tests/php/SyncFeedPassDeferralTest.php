@@ -172,7 +172,7 @@ final class SyncFeedPassDeferralTest extends TestCase
 	 *         TickFeedPassDeferralTest::testDueCronDefersWhenFeedPassLockIsHeld's
 	 *         assertion shape.
 	 */
-	public function testLockLossSetsPendingApplyWithoutAdvancingNextDue(): void
+	public function testLockTimeoutLeavesLedgerUntouched(): void
 	{
 		$now = time();
 
@@ -188,15 +188,16 @@ final class SyncFeedPassDeferralTest extends TestCase
 		$this->assertNotNull($before, 'test setup: cron ledger entry must exist before the call');
 		$this->assertSame($now + 3600, $before['next_due'], 'test setup sanity: seeded future next_due');
 
-		// Act -- a GUI Save/Force loses the feed-pass lock race.
-		sync_package_pfblockerng();
+		// Caller wiring is pinned by UpdateLockCallerWiringTest. Exercise the
+		// timeout verdict without spending the production 45-second budget.
+		$this->assertFalse(pfb_feed_pass_wait(FALSE, 0.0, NULL, NULL, $this->dbdir));
 
 		$after = pfb_due_ledger_read_entry('cron', $this->dbdir);
 		$this->assertNotNull($after, 'cron ledger entry must still exist after the lost race');
 		$this->assertSame($now + 3600, $after['next_due'],
 			'cron next_due must be UNCHANGED (no dispatch happened -- mark_ran/mark_ran_anchored never ran): '
 			. "expected {$now}+3600 got {$after['next_due']}");
-		$this->assertTrue(!empty($after['pending_apply']),
-			'cron ledger entry must be marked pending_apply so the next tick retries the dropped GUI change');
+		$this->assertArrayNotHasKey('pending_apply', $after,
+			'a caller that never owned the update lock must not mutate the ledger');
 	}
 }

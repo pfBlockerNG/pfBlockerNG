@@ -104,11 +104,11 @@ final class TickSafeSearchReservationTest extends TestCase
 			$this->assertTrue($this->waitForLineCount($readyPath, 2, 3.0),
 				'overlap workers did not both reach ready barrier; lines=' . $this->lineCount($readyPath));
 			touch($goPath);
-			$this->assertTrue($this->waitForLineCount($startedPath, 2, 3.0),
-				'overlap workers did not both reach started barrier; lines=' . $this->lineCount($startedPath));
+			$this->assertTrue($this->waitForLineCount($startedPath, 1, 3.0),
+				'one update-lock owner did not reach the refresh barrier; lines=' . $this->lineCount($startedPath));
 			touch($openersReleasePath);
-			// Both workers reached the overlap barrier. One callback is the expected
-			// winner; the second worker either waits on the lock or races the old code.
+			// The winner holds the outer update lock; the second tick cannot read the
+			// ledger or enter this callback until the first publishes its cadence.
 			$this->assertTrue($this->waitForLineCount($callsPath, 1, 3.0),
 				'no SafeSearch callback reached overlap; lines=' . $this->lineCount($callsPath));
 		} finally {

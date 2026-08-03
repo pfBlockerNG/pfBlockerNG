@@ -3506,6 +3506,130 @@ function pfb_flock_bounded($fp, int $operation, float $timeout_s, ?bool &$timed_
 	return FALSE;
 }
 
+// issue #1175: cross-process, non-blocking mutual exclusion for update passes.
+// Kept in extra.inc so standalone due-ledger writers use the same lock.
+function pfb_feed_pass_acquire(?string $dbdir = NULL, ?bool &$unavailable = NULL): bool {
+	global $pfb;
+	$unavailable = FALSE;
+
+	if (isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock'])) {
+		return TRUE;
+	}
+
+	$dbdir ??= $pfb['dbdir'];
+	$lockpath = "{$dbdir}/pfb_feed_pass.lock";
+	$lock = @fopen($lockpath, 'c');
+	if ($lock === FALSE) {
+		$message = "\nFeed pass lock: open failed [ {$lockpath} ]";
+		if (function_exists('pfb_logger')) {
+			pfb_logger($message, 2);
+		} else {
+			logger(LOG_ERR, $message);
+		}
+		$unavailable = TRUE;
+		return FALSE;
+	}
+	if (!@flock($lock, LOCK_EX | LOCK_NB)) {
+		@fclose($lock);
+		return FALSE;
+	}
+
+	$GLOBALS['pfb_feed_pass_lock'] = $lock;
+	$GLOBALS['pfb_feed_pass_lock_path'] = $lockpath;
+	if (empty($GLOBALS['pfb_feed_pass_lock_shutdown_registered'])) {
+		register_shutdown_function('pfb_feed_pass_release');
+		$GLOBALS['pfb_feed_pass_lock_shutdown_registered'] = TRUE;
+	}
+	return TRUE;
+}
+
+function pfb_feed_pass_wait(
+	bool $progress = FALSE,
+	float $timeout_s = 45.0,
+	?callable $clock = NULL,
+	?callable $sleep = NULL,
+	?string $dbdir = NULL
+): bool {
+	$clock ??= static fn (): float => microtime(TRUE);
+	$sleep ??= static function (int $seconds): void {
+		sleep($seconds);
+	};
+	$unavailable = FALSE;
+	if (pfb_feed_pass_acquire($dbdir, $unavailable)) {
+		return TRUE;
+	}
+	if ($unavailable) {
+		return FALSE;
+	}
+	if ($progress) {
+		print "\nWaiting for another pfBlockerNG update to finish\n";
+	}
+	$wait_s = min(max($timeout_s, 0.0), 3600.0);
+	$deadline = $clock() + $wait_s;
+	$retry_limit = (int) ceil($wait_s);
+	$retries = 0;
+	while ($clock() < $deadline && $retries < $retry_limit) {
+		$sleep(1);
+		$retries++;
+		if ($progress) {
+			print '.';
+		}
+		if (pfb_feed_pass_acquire($dbdir, $unavailable)) {
+			if ($progress) {
+				print "\n";
+			}
+			return TRUE;
+		}
+		if ($unavailable) {
+			break;
+		}
+	}
+	if ($progress) {
+		print "\nTimed out waiting for the update lock\n";
+	}
+	return FALSE;
+}
+
+function pfb_feed_pass_release(): void {
+	if (!isset($GLOBALS['pfb_feed_pass_lock']) || !is_resource($GLOBALS['pfb_feed_pass_lock'])) {
+		return;
+	}
+	@flock($GLOBALS['pfb_feed_pass_lock'], LOCK_UN);
+	@fclose($GLOBALS['pfb_feed_pass_lock']);
+	unset($GLOBALS['pfb_feed_pass_lock'], $GLOBALS['pfb_feed_pass_lock_path']);
+}
+
+function pfb_feed_pass_busy(?string $dbdir = NULL): bool {
+	global $pfb;
+
+	if (isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock'])) {
+		return FALSE;
+	}
+
+	$dbdir ??= $pfb['dbdir'];
+	$probe = @fopen("{$dbdir}/pfb_feed_pass.lock", 'c');
+	if ($probe === FALSE) {
+		return TRUE;
+	}
+	if (!@flock($probe, LOCK_EX | LOCK_NB)) {
+		@fclose($probe);
+		return TRUE;
+	}
+	@flock($probe, LOCK_UN);
+	@fclose($probe);
+	return FALSE;
+}
+
+function pfb_feed_pass_begin(string $label, bool $wait = FALSE, bool $progress = FALSE): bool {
+	if (($wait && pfb_feed_pass_wait($progress)) || (!$wait && pfb_feed_pass_acquire())) {
+		return TRUE;
+	}
+	pfb_logger("\nFeed pass [ {$label} ] skipped -- another pfBlockerNG feed pass is running.\n", 1);
+	logger(LOG_NOTICE, localize_text('Feed pass [ %s ] skipped - another pfBlockerNG feed pass is running.', $label),
+		LOG_PREFIX_PKG_PFBLOCKERNG);
+	return FALSE;
+}
+
 // ---------------------------------------------------------------------------
 // ADR-43 — Due-ledger library: persisted per-job next-due ledger (pfb_due_ledger.json under
 // $pfb['dbdir']) recording {last_run, next_due, jitter} so a tick decides what's due without
@@ -3563,6 +3687,65 @@ function pfb_due_ledger_is_due_from_entry(?array $entry, int $now): bool
 		return TRUE;
 	}
 	return $entry['next_due'] <= $now;
+}
+
+/** Read one complete due-ledger snapshot. Caller must own the update lock. */
+function pfb_due_ledger_read_all(string $ledger_dir): array
+{
+	$path = $ledger_dir . '/pfb_due_ledger.json';
+	if (!is_file($path)) {
+		return [];
+	}
+	$raw = @file_get_contents($path);
+	if ($raw === FALSE || $raw === '') {
+		return [];
+	}
+	$data = json_decode($raw, TRUE);
+	return is_array($data) ? $data : [];
+}
+
+/** Validate and select one entry from an already-read snapshot. */
+function pfb_due_ledger_entry(array $ledger, string $job_key): ?array
+{
+	$entry = $ledger[$job_key] ?? NULL;
+	if (!is_array($entry)
+	    || !isset($entry['last_run'], $entry['next_due'], $entry['jitter'])
+	    || !is_int($entry['last_run'])
+	    || !is_int($entry['next_due'])
+	    || !is_int($entry['jitter'])) {
+		return NULL;
+	}
+	return $entry;
+}
+
+/** Atomically publish one complete due-ledger snapshot. Caller must own the update lock. */
+function pfb_due_ledger_write_all(
+	array $ledger,
+	string $ledger_dir,
+	?callable $temp_factory = NULL,
+	?callable $writer = NULL,
+	?callable $renamer = NULL
+): bool {
+	$path = $ledger_dir . '/pfb_due_ledger.json';
+	$temp_factory ??= static fn(string $dir, string $prefix) => @tempnam($dir, $prefix);
+	$writer ??= static fn(string $file, string $data) => @file_put_contents($file, $data);
+	$renamer ??= static fn(string $from, string $to) => @rename($from, $to);
+	$json = json_encode($ledger, JSON_PRETTY_PRINT);
+	$tmp = ($json === FALSE) ? FALSE : $temp_factory($ledger_dir, '.pfb_due_ledger.');
+	$written = ($tmp === FALSE || $json === FALSE) ? FALSE : $writer($tmp, $json);
+	$ok = is_int($written) && $written === strlen($json) && $renamer($tmp, $path);
+	if (!$ok) {
+		if (is_string($tmp)) {
+			@unlink($tmp);
+		}
+		$message = "\nADR-43: due-ledger write failed [ {$path} ]";
+		if (function_exists('pfb_logger')) {
+			pfb_logger($message, 2);
+		} else {
+			logger(LOG_ERR, $message);
+		}
+	}
+	return $ok;
 }
 
 /**
@@ -3651,22 +3834,58 @@ function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir, float $t
 function pfb_due_ledger_write_entry(string $job_key, array $entry, string $ledger_dir): void
 {
 	$path = $ledger_dir . '/pfb_due_ledger.json';
-	$tmp  = $path . '.tmp';
+	$owned = !isset($GLOBALS['pfb_feed_pass_lock']) || !is_resource($GLOBALS['pfb_feed_pass_lock']);
+	if (!pfb_feed_pass_wait(FALSE, 45.0, NULL, NULL, $ledger_dir)) {
+		$message = "\nADR-43: due-ledger update lock timed out [ {$path} ]";
+		if (function_exists('pfb_logger')) {
+			pfb_logger($message, 2);
+		} else {
+			logger(LOG_ERR, $message);
+		}
+		return;
+	}
 
-	// Merge with existing data (tolerate absent/corrupt: start with empty object).
-	$data = [];
-	if (is_file($path)) {
-		$raw = @file_get_contents($path);
-		if ($raw !== FALSE && $raw !== '') {
-			$decoded = json_decode($raw, TRUE);
-			if (is_array($decoded)) {
-				$data = $decoded;
-			}
+	try {
+		$data = pfb_due_ledger_read_all($ledger_dir);
+		$data[$job_key] = $entry;
+		pfb_due_ledger_write_all($data, $ledger_dir);
+	} finally {
+		if ($owned) {
+			pfb_feed_pass_release();
 		}
 	}
-	$data[$job_key] = $entry;
-	file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT), LOCK_EX);
-	rename($tmp, $path);
+}
+
+/** Record one scheduled tick update-lock timeout and notify once at 15 in a row. */
+function pfb_tick_lock_timeout_record(string $dbdir): void
+{
+	$path = $dbdir . '/pfb_tick_lock_timeouts';
+	$previous = max(0, min(15, (int) trim((string) @file_get_contents($path))));
+	$count = min(15, $previous + 1);
+	$tmp = @tempnam($dbdir, '.pfb_tick_lock_timeouts.');
+	if ($tmp === FALSE || @file_put_contents($tmp, (string) $count) !== strlen((string) $count)
+	    || !@rename($tmp, $path)) {
+		if (is_string($tmp)) {
+			@unlink($tmp);
+		}
+		pfb_logger("\nTick: update-lock timeout counter write failed [ {$path} ]", 2);
+		return;
+	}
+	if ($previous < 15 && $count === 15) {
+		file_notice(
+			'pfBlockerNG Update Lock',
+			gettext('pfBlockerNG scheduled updates timed out waiting for the update lock for 15 consecutive scheduled ticks.'),
+			'pfBlockerNG',
+			'/pfblockerng/pfblockerng_update.php',
+			2
+		);
+	}
+}
+
+/** A successful scheduled tick lock acquisition starts a fresh timeout sequence. */
+function pfb_tick_lock_timeout_reset(string $dbdir): void
+{
+	@unlink($dbdir . '/pfb_tick_lock_timeouts');
 }
 
 /**
@@ -3813,6 +4032,57 @@ function pfb_due_ledger_mark_ran_anchored(
 	], $ledger_dir);
 }
 
+/** Replace one snapshot entry after a successful run. */
+function pfb_due_ledger_mark_entry(
+	array &$ledger,
+	string $job_key,
+	int $interval,
+	int $now,
+	string $seed,
+	int $jitter_max
+): void {
+	$jitter = pfb_due_ledger_seeded_jitter($job_key, $seed, $jitter_max);
+	$ledger[$job_key] = [
+		'last_run' => $now,
+		'next_due' => $now + $interval + $jitter,
+		'jitter'   => $jitter,
+	];
+}
+
+/** Replace one snapshot entry while preserving the established cadence anchor. */
+function pfb_due_ledger_mark_entry_anchored(
+	array &$ledger,
+	string $job_key,
+	int $interval,
+	int $now,
+	string $seed,
+	int $jitter_max
+): void {
+	$entry = pfb_due_ledger_entry($ledger, $job_key);
+	$base = $now;
+	if ($entry !== NULL
+	    && $entry['next_due'] > 0
+	    && $now >= $entry['next_due']
+	    && ($now - $entry['next_due']) < $interval) {
+		$base = $entry['next_due'];
+	}
+	$jitter = pfb_due_ledger_seeded_jitter($job_key, $seed, $jitter_max);
+	$ledger[$job_key] = [
+		'last_run' => $now,
+		'next_due' => $base + $interval + $jitter,
+		'jitter'   => $jitter,
+	];
+}
+
+/** Mark an entry pending in a snapshot without discarding existing cadence fields. */
+function pfb_due_ledger_set_pending_entry(array &$ledger, string $job_key): void
+{
+	$entry = pfb_due_ledger_entry($ledger, $job_key)
+		?? ['last_run' => 0, 'next_due' => 0, 'jitter' => 0];
+	$entry['pending_apply'] = TRUE;
+	$ledger[$job_key] = $entry;
+}
+
 /**
  * pfb_tick_interval_clamp — clamp a raw pfb_tick_interval config value to a valid cron minute.
  *
@@ -3888,17 +4158,24 @@ function pfb_tick_due_jobs(
 	string $seed,
 	string $dbdir,
 	int    $cron_interval,
-	int    $bl_interval
+	int    $bl_interval,
+	?array $ledger = NULL
 ): array {
 	$jitter_max = 23 * 3600;	// 82800 s mirrors the old rand(0,23)*3600 spread
-	$ss_refresh_due = pfb_due_ledger_is_due('ss_refresh', 900, $now, $seed, 0, $dbdir);
+	$is_due = static function (string $job_key, int $interval, int $jitter) use ($ledger, $now, $seed, $dbdir): bool {
+		if ($ledger !== NULL) {
+			return pfb_due_ledger_is_due_from_entry(pfb_due_ledger_entry($ledger, $job_key), $now);
+		}
+		return pfb_due_ledger_is_due($job_key, $interval, $now, $seed, $jitter, $dbdir);
+	};
+	$ss_refresh_due = $is_due('ss_refresh', 900, 0);
 
 	return [
-		'cron'       => pfb_due_ledger_is_due('cron',       $cron_interval, $now, $seed, 0,          $dbdir),
-		'dcc'        => pfb_due_ledger_is_due('dcc',        86400,          $now, $seed, $jitter_max, $dbdir),
-		'bl'         => pfb_due_ledger_is_due('bl',         $bl_interval,   $now, $seed, $jitter_max, $dbdir),
+		'cron'       => $is_due('cron',       $cron_interval, 0),
+		'dcc'        => $is_due('dcc',        86400,          $jitter_max),
+		'bl'         => $is_due('bl',         $bl_interval,   $jitter_max),
 		'ss_refresh' => $ss_refresh_due,
-		'apply_reconcile' => pfb_due_ledger_is_due('apply_reconcile', 900, $now, $seed, 0, $dbdir),
+		'apply_reconcile' => $is_due('apply_reconcile', 900, 0),
 	];
 }
 
@@ -4059,7 +4336,10 @@ function pfblockerng_tick(
 	float $ss_lock_timeout = 5.0,
 	?callable $apply_reconcile = NULL,
 	?callable $apply_lock_opener = NULL,
-	float $apply_lock_timeout = 5.0
+	float $apply_lock_timeout = 5.0,
+	float $update_lock_timeout = 45.0,
+	?callable $update_lock_clock = NULL,
+	?callable $update_lock_sleep = NULL
 ): void
 {
 	global $pfb;
@@ -4067,6 +4347,16 @@ function pfblockerng_tick(
 	$now   = time();
 	$seed  = pfb_tick_seed();
 	$dbdir = $pfb['dbdir'];
+	if (!pfb_feed_pass_wait(FALSE,$update_lock_timeout,$update_lock_clock,$update_lock_sleep,$dbdir)) {
+		pfb_tick_lock_timeout_record($dbdir);
+		return;
+	}
+	pfb_tick_lock_timeout_reset($dbdir);
+	$ledger = pfb_due_ledger_read_all($dbdir);
+	$ledger_dirty = FALSE;
+	$ledger_write_ok = TRUE;
+	$commands = [];
+	try {
 	// Set TRUE by any branch below that actually dispatches (exec()s) an update pass
 	// this tick -- gates the log-maintenance race guard at the tail of this function.
 	$dispatched = FALSE;
@@ -4082,7 +4372,7 @@ function pfblockerng_tick(
 	}
 
 	// --- Due check ---
-	$due = pfb_tick_due_jobs($now, $seed, $dbdir, $cron_secs, $bl_secs);
+	$due = pfb_tick_due_jobs($now, $seed, $dbdir, $cron_secs, $bl_secs, $ledger);
 
 	// --- Apply-on-change window (ADR-43) ---
 	// Empty window = apply immediately (default). Non-empty = defer outside window.
@@ -4100,57 +4390,50 @@ function pfblockerng_tick(
 	// (IP) + ADR-10 (DNSBL) inside that final sync. Backgrounded so the tick stays
 	// fast. The scheduled log trim no longer rides this dispatch (issue #573) --
 	// see pfb_log_mgmt() at the end of this function.
-	// issue #1780: a lock-acquire expiry on this read must NOT dispatch,
-	// NOT mark ran, and must leave the ledger untouched -- $cron_unavailable
-	// gates the whole decision below regardless of what $due['cron'] (a
-	// SEPARATE read, inside pfb_tick_due_jobs() above) came back as, so a
-	// timeout here can never be raced into a spurious dispatch by that other
-	// read having happened to succeed. $dispatched stays FALSE, so log
-	// maintenance below still runs; the read itself already logged the expiry
-	// loudly. The next tick retries.
-	$cron_unavailable = FALSE;
-	$cron_entry        = pfb_due_ledger_read_entry('cron', $dbdir, 5.0, $cron_unavailable);
-	$cron_pending      = !$cron_unavailable && $cron_entry !== NULL && !empty($cron_entry['pending_apply']);
-	if (!$cron_unavailable && ((!$cron_disabled && $due['cron']) || $cron_pending)) {
-		if ($in_win && pfb_feed_pass_busy()) {
-			// issue #1175: a running feed pass would race the shared recompute staging --
-			// defer via pending so the NEXT tick retries. busy() is advisory only: the
-			// child's atomic begin() may still lose a dispatcher race and skip one cycle.
-			logger(LOG_INFO, localize_text('Tick: feed cron deferred (another feed pass is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			pfb_due_ledger_set_pending('cron', $dbdir);
-		} elseif ($in_win) {
+	// The tick owns the update lock and uses this one snapshot for due, pending,
+	// cadence, and persistence decisions. No second ledger read can race this decision.
+	$cron_entry = pfb_due_ledger_entry($ledger, 'cron');
+	$cron_pending = $cron_entry !== NULL && !empty($cron_entry['pending_apply']);
+	if ((!$cron_disabled && $due['cron']) || $cron_pending) {
+		if ($in_win) {
 			if ($cron_disabled) {
 				logger(LOG_NOTICE, localize_text('Tick: dispatching pending manual apply.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 				unset($cron_entry['pending_apply']);
-				pfb_due_ledger_write_entry('cron', $cron_entry, $dbdir);
-				exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=both force=false trigger=manual >> {$pfb['runlog']} 2>&1 &");
+				$ledger['cron'] = $cron_entry;
+				$commands[] = "{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=both force=false trigger=manual >> {$pfb['runlog']} 2>&1 &";
 			} else {
 				logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-				pfb_due_ledger_mark_ran_anchored('cron', $cron_secs, $now, $seed, 0, $dbdir);
-				exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['runlog']} 2>&1 &");
+				pfb_due_ledger_mark_entry_anchored($ledger, 'cron', $cron_secs, $now, $seed, 0);
+				$commands[] = "{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['runlog']} 2>&1 &";
 			}
+			$ledger_dirty = TRUE;
 			$dispatched = TRUE;
 		} else {
 			logger(LOG_INFO, localize_text('Tick: feed cron deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			pfb_due_ledger_set_pending('cron', $dbdir);
+			pfb_due_ledger_set_pending_entry($ledger, 'cron');
+			$ledger_dirty = TRUE;
 		}
 	}
 
 	// MaxMind/TOP1M/ASN: daily, jittered.
-	if ($due['dcc'] || pfb_due_ledger_is_pending('dcc', $dbdir)) {
+	$dcc_entry = pfb_due_ledger_entry($ledger, 'dcc');
+	if ($due['dcc'] || ($dcc_entry !== NULL && !empty($dcc_entry['pending_apply']))) {
 		if ($in_win) {
 			logger(LOG_NOTICE, localize_text('Tick: dispatching dcc.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1 &");
-			pfb_due_ledger_mark_ran('dcc', 86400, $now, $seed, 23 * 3600, $dbdir);
+			pfb_due_ledger_mark_entry($ledger, 'dcc', 86400, $now, $seed, 23 * 3600);
+			$ledger_dirty = TRUE;
+			$commands[] = "{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1 &";
 			$dispatched = TRUE;
 		} else {
 			logger(LOG_INFO, localize_text('Tick: dcc deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			pfb_due_ledger_set_pending('dcc', $dbdir);
+			pfb_due_ledger_set_pending_entry($ledger, 'dcc');
+			$ledger_dirty = TRUE;
 		}
 	}
 
 	// Blacklist: daily or weekly, jittered. Build bl_string from blconfig.
-	if (($due['bl'] || pfb_due_ledger_is_pending('bl', $dbdir)) && $pfb['enable'] === PfbToggle::On &&
+	$bl_entry = pfb_due_ledger_entry($ledger, 'bl');
+	if (($due['bl'] || ($bl_entry !== NULL && !empty($bl_entry['pending_apply']))) && $pfb['enable'] === PfbToggle::On &&
 	    !empty($pfb['blconfig']) &&
 	    !empty($pfb['blconfig']['blacklist_enable']) && $pfb['blconfig']['blacklist_enable'] != 'Disable' &&
 	    !empty($pfb['blconfig']['blacklist_selected']) && isset($pfb['blconfig']['item'])) {
@@ -4167,13 +4450,15 @@ function pfblockerng_tick(
 
 			if (!empty($bl_str)) {
 				logger(LOG_NOTICE, localize_text('Tick: dispatching bl.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-				exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php bl " . escapeshellarg($bl_str) . " >> {$pfb['extraslog']} 2>&1 &");
-				pfb_due_ledger_mark_ran('bl', $bl_secs, $now, $seed, 23 * 3600, $dbdir);
+				pfb_due_ledger_mark_entry($ledger, 'bl', $bl_secs, $now, $seed, 23 * 3600);
+				$ledger_dirty = TRUE;
+				$commands[] = "{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php bl " . escapeshellarg($bl_str) . " >> {$pfb['extraslog']} 2>&1 &";
 				$dispatched = TRUE;
 			}
 		} else {
 			logger(LOG_INFO, localize_text('Tick: bl deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			pfb_due_ledger_set_pending('bl', $dbdir);
+			pfb_due_ledger_set_pending_entry($ledger, 'bl');
+			$ledger_dirty = TRUE;
 		}
 	}
 
@@ -4194,15 +4479,13 @@ function pfblockerng_tick(
 				}
 			} else {
 				try {
-					// Another tick may have completed while this one waited for the lock.
-					if (pfb_due_ledger_is_due('ss_refresh', 900, $now, $seed, 0, $dbdir)) {
-						if ($ss_refresh !== NULL) {
-							$ss_refresh();
-						} else {
-							pfblockerng_ss_refresh();
-						}
-						pfb_due_ledger_mark_ran_anchored('ss_refresh', 900, $now, $seed, 0, $dbdir);
+					if ($ss_refresh !== NULL) {
+						$ss_refresh();
+					} else {
+						pfblockerng_ss_refresh();
 					}
+					pfb_due_ledger_mark_entry_anchored($ledger, 'ss_refresh', 900, $now, $seed, 0);
+					$ledger_dirty = TRUE;
 				} finally {
 					@flock($ss_lock, LOCK_UN);
 					@fclose($ss_lock);
@@ -4229,24 +4512,22 @@ function pfblockerng_tick(
 				}
 			} else {
 				try {
-					// Another tick may have completed while this one waited for the lock.
-					if (pfb_due_ledger_is_due('apply_reconcile', 900, $now, $seed, 0, $dbdir)) {
-						if ($apply_reconcile !== NULL) {
-							$apply_reconcile();
-						} else {
-							foreach (pfb_sync_status_list_open($dbdir) as $entry) {
-								if ($entry['stage'] !== 'apply') {
-									continue;
-								}
-								if ($entry['facility'] === 'ip') {
-									pfb_ip_apply_retry($entry['item']);
-								} elseif ($entry['facility'] === 'dnsbl') {
-									pfb_dnsbl_apply_retry();
-								}
+					if ($apply_reconcile !== NULL) {
+						$apply_reconcile();
+					} else {
+						foreach (pfb_sync_status_list_open($dbdir) as $entry) {
+							if ($entry['stage'] !== 'apply') {
+								continue;
+							}
+							if ($entry['facility'] === 'ip') {
+								pfb_ip_apply_retry($entry['item']);
+							} elseif ($entry['facility'] === 'dnsbl') {
+								pfb_dnsbl_apply_retry();
 							}
 						}
-						pfb_due_ledger_mark_ran_anchored('apply_reconcile', 900, $now, $seed, 0, $dbdir);
 					}
+					pfb_due_ledger_mark_entry_anchored($ledger, 'apply_reconcile', 900, $now, $seed, 0);
+					$ledger_dirty = TRUE;
 				} catch (Throwable $e) {
 					pfb_logger("\nTick: apply reconciliation failed: {$e->getMessage()}", 2);
 				} finally {
@@ -4279,6 +4560,18 @@ function pfblockerng_tick(
 		// Same surface as the $dispatched arm (issue #1769 B4): writing this to
 		// $pfb['log'] would grow the very file whose trim is being deferred.
 		pfb_syslog_emit(localize_text('Tick: log maintenance deferred (an update pass is running).'));
+	}
+		if ($ledger_dirty) {
+			$ledger_write_ok = pfb_due_ledger_write_all($ledger, $dbdir);
+		}
+	} finally {
+		pfb_feed_pass_release();
+	}
+	if (!$ledger_write_ok) {
+		return;
+	}
+	foreach ($commands as $command) {
+		exec($command);
 	}
 }
 

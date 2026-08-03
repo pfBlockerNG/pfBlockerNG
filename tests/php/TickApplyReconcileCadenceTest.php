@@ -73,7 +73,7 @@ final class TickApplyReconcileCadenceTest extends TestCase
 			'jitter' => 0,
 		], $this->dir);
 
-		pfblockerng_tick();
+		pfblockerng_tick(['pfblockerng.php dcc']);
 
 		$this->assertFileDoesNotExist($counter, 'future apply_reconcile entry must suppress the retry');
 		$entry = pfb_due_ledger_read_entry('apply_reconcile', $this->dir);

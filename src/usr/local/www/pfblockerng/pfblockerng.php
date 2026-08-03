@@ -287,21 +287,26 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 			sync_package_pfblockerng(array('scope' => $pfb_tscope, 'force' => $pfb_tforce, 'trigger' => $pfb_ttrigger));
 			break;
 		case 'forcecheck':	// On-demand detector: bypass hour-gate, run pfb_update_check for all in-scope feeds.
-			// Usage: pfblockerng.php forcecheck scope=<both|ip|dnsbl>
-			// Validators (and optionally hashes) must be cleared by the caller before dispatching
-			// this verb so the detector re-fetches and re-evaluates feed content.
+			// Usage: pfblockerng.php forcecheck scope=<both|ip|dnsbl> mode=<download|both>
 			$pfb_fcscope = 'both';
+			$pfb_fcmode = 'download';
 			foreach (array_slice($argv, 2) as $pfb_fcarg) {
 				if (str_starts_with($pfb_fcarg, 'scope=')) {
 					$pfb_fcscope = substr($pfb_fcarg, 6);
+				} elseif (str_starts_with($pfb_fcarg, 'mode=')) {
+					$pfb_fcmode = substr($pfb_fcarg, 5);
 				}
 			}
 			if (!in_array($pfb_fcscope, array('ip', 'dnsbl', 'both'), TRUE)) {
 				pfb_logger("forcecheck: unknown scope={$pfb_fcscope} ignored — defaulting to 'both'\n", 1);
 				$pfb_fcscope = 'both';
 			}
+			if (!in_array($pfb_fcmode, array('download', 'both'), TRUE)) {
+				pfb_logger("forcecheck: unknown mode={$pfb_fcmode} ignored — defaulting to 'download'\n", 1);
+				$pfb_fcmode = 'download';
+			}
 			pfb_logger("\n [ Force check - scope={$pfb_fcscope} ]\n", 1);
-			pfblockerng_sync_cron(TRUE, $pfb_fcscope);
+			pfblockerng_sync_cron(TRUE, $pfb_fcscope, TRUE, $pfb_fcmode);
 			break;
 		case 'dc':		// Update Extras - MaxMind/TOP1M/ASN database files
 		case 'dcc':

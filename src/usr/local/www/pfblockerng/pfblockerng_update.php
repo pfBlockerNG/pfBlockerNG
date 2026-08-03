@@ -70,22 +70,15 @@ function pfbupdate_status($status) {
 
 
 // TRUE when a pfBlockerNG feed task (cron/update/trigger/tick/forcecheck) is already running.
-// The active-process guard used by the Run Now dispatchers and the status line; delegates to
-// pfb_feed_task_running() (pfblockerng.inc).
+// Used for the status line and auto-tail only; the update lock serializes Run Now children.
 function pfb_active_task_running(): bool {
 	return pfb_feed_task_running();
 }
 
-// Dispatch pfb_trigger via the explicit API, then update the due ledger so the Schedule
-// view reflects the manual run. The page returns immediately; the client polls ?ajax=tail.
+// Dispatch pfb_trigger via the explicit API. The child owns the update lock and advances
+// cadence after a successful full pass. The page returns immediately; the client polls ?ajax=tail.
 function pfb_runnow(string $scope, bool $force): void {
 	global $pfb;
-
-	// Check for any active pfBlockerNG process before dispatching.
-	if (pfb_active_task_running()) {
-		pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
-		return;
-	}
 
 	if (!file_exists("{$pfb['log']}")) {
 		touch("{$pfb['log']}");
@@ -98,14 +91,8 @@ function pfb_runnow(string $scope, bool $force): void {
 
 	pfbupdate_status(gettext("Running: scope={$scope} force={$force_val}"));
 
-	// Remove the tick cron to prevent overlap; sync_package_pfblockerng() restores it.
-	install_cron_job('pfblockerng.php cron-tick', FALSE);
-	install_cron_job('pfblockerng.php tick', FALSE);	// issue #1204: legacy pre-#1204 entry, if present
-
 	pfb_logger("\n [ Run Now - scope={$scope} force={$force_val} trigger={$trigger} ]\n", 1);
 
-	// Record $now before dispatching so last_run reflects when the run was requested.
-	$now = time();
 	// Launch detached under daemon(8) with a pidfile so the livetail can track THIS
 	// dispatched process by pid (isvalidpid) rather than a ps-pattern guess. daemon writes
 	// the child pid to $pidfile and removes it on exit; mwexec_bg keeps the robust detach.
@@ -118,59 +105,34 @@ function pfb_runnow(string $scope, bool $force): void {
 	// The page no longer blocks tailing here: it returns immediately (so foot.inc loads and the
 	// nav menu works) and the client polls ?ajax=tail for the live log, keyed on $pidfile.
 
-	// Update the 'cron' ledger entry so the Schedule view reflects this manual run.
-	// Only advance the full-pass ledger when scope=both — a partial scope=ip/dnsbl run
-	// does not complete a full cron pass, and advancing next_due here would suppress the
-	// next DNSBL-inclusive tick for up to pfb_interval hours.
-	// jitter_max=0 mirrors the tick's cron dispatch (no spread for manual runs).
-	if ($scope === 'both') {
-		$interval = ((int)($pfb['interval'] ?: 1)) * 3600;
-		pfb_due_ledger_mark_ran('cron', $interval, $now, pfb_tick_seed(), 0, $pfb['dbdir']);
-	}
 }
 
 // Dispatch the on-demand detector (forcecheck verb) via mwexec_bg, stream log output,
-// and update the due ledger — same active-process guard and livetail as pfb_runnow().
-// Callers must clear the appropriate sidecars (pfb_force_clear_validators) BEFORE calling
-// this so pfblockerng_sync_cron($force_all=TRUE) re-fetches every in-scope feed.
-function pfb_runnow_forcecheck(string $scope): void {
+// with the same livetail as pfb_runnow(). The child clears validators only after locking.
+function pfb_runnow_forcecheck(string $scope, string $force_mode): void {
 	global $pfb;
-
-	// Active-process guard — TOCTOU backstop; the POST handler also pre-checks before
-	// clearing any sidecars (so a skipped run never leaves the box primed for a re-fetch).
-	if (pfb_active_task_running()) {
-		pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
-		return;
-	}
 
 	if (!file_exists("{$pfb['log']}")) {
 		touch("{$pfb['log']}");
 	}
 
 	$scope_esc = escapeshellarg($scope);
+	$force_mode_esc = escapeshellarg($force_mode);
 
 	pfbupdate_status(gettext("Running: scope={$scope} force=download/both (on-demand detector)"));
 
-	install_cron_job('pfblockerng.php cron-tick', FALSE);
-	install_cron_job('pfblockerng.php tick', FALSE);	// issue #1204: legacy pre-#1204 entry, if present
-
 	pfb_logger("\n [ Force check - scope={$scope} ]\n", 1);
 
-	$now = time();
 	// Launch detached under daemon(8) with a pidfile — see pfb_runnow(); the livetail
 	// tracks this dispatched process by pid (isvalidpid), not a ps-pattern.
 	$pidfile = '/var/run/pfb_runnow.pid';
 	@unlink($pidfile);
 	@file_put_contents($pfb['runlog'], '');	// fresh per-run log for the live viewer to tail
 	mwexec_bg("/usr/sbin/daemon -p " . escapeshellarg($pidfile) .
-		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php forcecheck scope={$scope_esc} >> {$pfb['runlog']} 2>&1");
+		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php forcecheck scope={$scope_esc} mode={$force_mode_esc} >> {$pfb['runlog']} 2>&1");
 
 	// Page returns immediately; the client polls ?ajax=tail for the live log (see pfb_runnow).
 
-	if ($scope === 'both') {
-		$interval = ((int)($pfb['interval'] ?: 1)) * 3600;
-		pfb_due_ledger_mark_ran('cron', $interval, $now, pfb_tick_seed(), 0, $pfb['dbdir']);
-	}
 }
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Update'));
@@ -494,18 +456,7 @@ if ($pfb['enable'] === PfbToggle::On && isset($pconfig['run']) &&
 		$force_mode = 'none';
 	}
 	if ($force_mode === 'download' || $force_mode === 'both') {
-		// Pre-check the active-task guard BEFORE clearing any sidecars: if a run is already
-		// in progress, clearing them here (then skipping the dispatch) would leave the box
-		// primed for an unrequested re-fetch on the next scheduled tick.
-		if (pfb_active_task_running()) {
-			pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
-		} else {
-			// Clear the scoped conditional-GET sidecars, then run the detector on-demand so it
-			// re-fetches (200) and re-ingests changed feeds (Both also clears the hash => all).
-			$dirs = pfb_force_scope_dirs($scope, $pfb['origdir'], $pfb['dnsorigdir']);
-			pfb_force_clear_validators($dirs, $force_mode === 'both');
-			pfb_runnow_forcecheck($scope);
-		}
+		pfb_runnow_forcecheck($scope, $force_mode);
 	} else {
 		// none -> plain pass; parse -> reuse=on (reparse cached, no download).
 		pfb_runnow($scope, $force_mode === 'parse');

@@ -42,53 +42,25 @@ final class TickChildDeferralOrderingTest extends TestCase
 		rmdir($this->dbdir);
 	}
 
-	public function testChildLockLossAfterLaunchKeepsPendingRetry(): void
+	public function testParentCommitsCadenceAndReleasesBeforeLaunchingChild(): void
 	{
-		// Scheduling is off-limits for #2103 and the background child cannot be made
-		// deterministic off-appliance. Keep the ordering pin against comment-free PHP.
-		// PRODUCTION COMMENTS AND DOCBLOCKS MUST NEVER BE LOAD-BEARING FOR A TEST.
 		$src = php_strip_whitespace(
 			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc'
 		);
 		$this->assertNotFalse($src, 'test oracle: failed to read pfblockerng_extra.inc');
 
-		$branchStart = strpos($src, "logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.')");
-		$this->assertNotFalse($branchStart, 'test oracle: numeric feed-cron dispatch branch not found');
-		$branchEnd = strpos($src, '$dispatched = TRUE;', $branchStart);
-		$this->assertNotFalse($branchEnd, 'test oracle: feed-cron dispatch branch end not found');
-		$branch = substr($src, $branchStart, $branchEnd - $branchStart);
-
-		$launchPos = strpos($branch, 'exec("{$pfb[\'php\']} /usr/local/www/pfblockerng/pfblockerng.php cron');
-		$markPos = strpos($branch, "pfb_due_ledger_mark_ran_anchored('cron'");
-		$this->assertNotFalse($launchPos, 'test oracle: exact cron background launch not found');
-		$this->assertNotFalse($markPos, 'test oracle: anchored cadence update not found');
-
-		$now = time();
-		$interval = 86400;
-		$oldNextDue = $now - 10;
-		pfb_due_ledger_write_entry('cron', [
-			'last_run' => $oldNextDue - $interval,
-			'next_due' => $oldNextDue,
-			'jitter'   => 0,
-		], $this->dbdir);
-
-		$operations = [
-			$launchPos => static function (): void {
-				pfblockerng_sync_cron();
-			},
-			$markPos => function () use ($interval, $now): void {
-				pfb_due_ledger_mark_ran_anchored('cron', $interval, $now, 'test-seed', 0, $this->dbdir);
-			},
-		];
-		ksort($operations);
-		foreach ($operations as $operation) {
-			$operation();
-		}
-
-		$after = pfb_due_ledger_read_entry('cron', $this->dbdir);
-		$this->assertSame($oldNextDue + $interval, $after['next_due'],
-			'numeric cadence must still advance from the previous anchored due time');
-		$this->assertTrue(!empty($after['pending_apply']),
-			'child lock loss after launch must remain pending for the next enabled tick');
+		$start = strpos($src, 'function pfblockerng_tick(');
+		$end = strpos($src, 'function pfb_sync_status_read_all(', $start);
+		$this->assertNotFalse($start);
+		$this->assertNotFalse($end);
+		$body = substr($src, $start, $end - $start);
+		$mark = strpos($body, 'pfb_due_ledger_mark_entry_anchored($ledger, \'cron\'');
+		$release = strrpos($body, 'pfb_feed_pass_release();');
+		$launch = strpos($body, 'exec($command);');
+		$this->assertNotFalse($mark);
+		$this->assertNotFalse($release);
+		$this->assertNotFalse($launch);
+		$this->assertLessThan($release, $mark, 'cadence is committed while parent owns the lock');
+		$this->assertLessThan($launch, $release, 'parent releases before any async child launch');
 	}
 }

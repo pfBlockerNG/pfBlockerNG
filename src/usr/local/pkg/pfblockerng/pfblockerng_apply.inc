@@ -644,14 +644,15 @@ function pfb_dnsbl_script_reuse_decision(bool $verbatim_reuse_ok, $script_pre, $
 function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
 	pfb_global();
+	$pfb_manual_progress = is_array($cron)
+		? in_array(($cron['trigger'] ?? ''), array('manual', 'force'), TRUE)
+		: in_array((string) $cron, array('update', 'updateip', 'updatednsbl'), TRUE);
 
 	// issue #1175: serialize feed passes. Capture ownership BEFORE acquiring -- only the
 	// invocation that transitions the lock releases it (a nested reentrant call no-ops).
-	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock']);
-	if (!pfb_feed_pass_begin('sync')) {
-		// issue #1277: a lost race must not silently drop the GUI Save/Force --
-		// mirror pfblockerng_tick()'s 'cron' deferral so the next tick retries.
-		pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock'])
+		|| !is_resource($GLOBALS['pfb_feed_pass_lock']);
+	if (!pfb_feed_pass_begin('sync',TRUE,$pfb_manual_progress)) {
 		return;
 	}
 
@@ -4928,6 +4929,11 @@ function sync_package_pfblockerng($cron='') {
 	// changes stay flagged until a genuine cron/Run-Now Update applies them.
 	if (!$pfb['save']) {
 		pfb_clear_pending_changes();
+		if (($pfb_req['scope'] ?? 'both') === 'both' &&
+		    in_array(($pfb_req['trigger'] ?? ''), array('manual', 'force'), TRUE)) {
+			$interval = ((int) ($pfb['interval'] ?: 1)) * 3600;
+			pfb_due_ledger_mark_ran('cron', $interval, time(), pfb_tick_seed(), 0, $pfb['dbdir']);
+		}
 	}
 
 	if ($pfb['enable'] === PfbToggle::On && !$pfb['save'] || $pfb['summary']) {

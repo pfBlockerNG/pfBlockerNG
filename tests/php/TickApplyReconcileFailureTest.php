@@ -303,8 +303,8 @@ final class TickApplyReconcileFailureTest extends TestCase
 			$this->assertTrue($this->waitForLineCount($ready, 2, 3.0),
 				'overlap workers did not reach ready barrier; lines=' . $this->lineCount($ready));
 			touch($go);
-			$this->assertTrue($this->waitForLineCount($openerStarted, 2, 3.0),
-				'both workers must pass the outer due check and reach opener; lines=' . $this->lineCount($openerStarted));
+			$this->assertTrue($this->waitForLineCount($openerStarted, 1, 3.0),
+				'one update-lock owner must reach the reconciliation opener; lines=' . $this->lineCount($openerStarted));
 			touch($openersRelease);
 		} finally {
 			touch($go);
@@ -318,7 +318,7 @@ final class TickApplyReconcileFailureTest extends TestCase
 		}
 		$this->assertSame([], $workerFailures, implode("\n", $workerFailures));
 		$lines = is_file($calls) ? array_values(array_filter(explode("\n", (string) file_get_contents($calls)), 'strlen')) : [];
-		$this->assertCount(1, $lines, 'in-lock due recheck must allow one overlapping reconciliation');
+		$this->assertCount(1, $lines, 'the outer update lock must allow one overlapping reconciliation');
 	}
 
 	private function waitForPath(string $path, float $timeout): void

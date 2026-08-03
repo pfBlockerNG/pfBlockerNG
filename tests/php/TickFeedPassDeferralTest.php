@@ -347,15 +347,18 @@ SH;
 		$this->assertSame($now - 10, $before['next_due'], 'test setup sanity: cron ledger entry pre-seeded due');
 
 		// Act.
-		pfblockerng_tick();
+		pfblockerng_tick(update_lock_timeout: 0.0);
 
 		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
 		$this->assertNotNull($after, 'cron ledger entry must still exist after the tick');
 		$this->assertSame($now - 10, $after['next_due'],
 			'cron next_due must be UNCHANGED (no dispatch while a feed pass is running): expected '
 			. ($now - 10) . " got {$after['next_due']}");
-		$this->assertTrue(!empty($after['pending_apply']),
-			'cron ledger entry must be marked pending_apply so the NEXT tick retries the deferred dispatch');
+		$this->assertArrayNotHasKey('pending_apply', $after,
+			'a scheduled tick that never acquired the update lock must leave the ledger untouched');
+		$this->assertSame('1', trim((string) file_get_contents(
+			"{$GLOBALS['pfb']['dbdir']}/pfb_tick_lock_timeouts"
+		)));
 	}
 
 	// -----------------------------------------------------------------------
@@ -400,7 +403,7 @@ SH;
 		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
 
 		// Act -- no lock held anywhere.
-		pfblockerng_tick();
+		pfblockerng_tick(update_lock_timeout: 0.0);
 
 		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
 		$this->assertNotNull($after, 'cron ledger entry must exist after the tick');
@@ -455,7 +458,7 @@ SH;
 		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
 
 		// Act -- lock is free this time.
-		pfblockerng_tick();
+		pfblockerng_tick(update_lock_timeout: 0.0);
 
 		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
 		$this->assertNotNull($after, 'cron ledger entry must exist after the retry tick');
@@ -504,13 +507,12 @@ SH;
 		$this->holdLockAsAnotherProcess();
 
 		// Act -- must not throw.
-		pfblockerng_tick();
+		pfblockerng_tick(update_lock_timeout: 0.0);
 
 		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
 		$this->assertNotNull($after, 'cron ledger entry must exist after the tick');
-		$this->assertTrue(!empty($after['pending_apply']),
-			'outside the quiet-hours window the tick must defer via pending_apply, whether or not '
-			. 'a feed pass is running');
+		$this->assertArrayNotHasKey('pending_apply', $after,
+			'a tick that times out before reading must leave quiet-hours state untouched');
 	}
 
 	/**
@@ -548,7 +550,7 @@ SH;
 			pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']),
 			'test setup: disabled cron must start future, pending, and byte-for-byte known');
 
-		pfblockerng_tick();
+		pfblockerng_tick(update_lock_timeout: 0.0);
 
 		$this->assertSame([
 			['/usr/local/www/pfblockerng/pfblockerng.php', 'pfb_trigger', 'scope=both', 'force=false', 'trigger=manual'],
@@ -589,7 +591,7 @@ SH;
 		$this->seedFutureLedgerEntry('bl',  $now);
 		$this->holdLockAsAnotherProcess();
 
-		pfblockerng_tick();
+		pfblockerng_tick(update_lock_timeout: 0.0);
 
 		$this->assertSame($expected,
 			pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']),

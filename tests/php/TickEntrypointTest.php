@@ -1345,7 +1345,7 @@ final class TickEntrypointTest extends TestCase
 	 *         ran (no "skipped"/"deferred" syslog line), and the lock-acquire
 	 *         expiry was logged loudly.
 	 */
-	public function testDueLedgerLockTimeoutFailsClosedAndStillRunsLogMaintenance(): void
+	public function testUpdateLockTimeoutFailsClosedBeforeLedgerRead(): void
 	{
 		if (!function_exists('pcntl_fork')) {
 			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
@@ -1361,19 +1361,16 @@ final class TickEntrypointTest extends TestCase
 		$this->seedFutureLedgerEntry('dcc',  $now);
 		$this->seedFutureLedgerEntry('bl',   $now);
 
-		$this->assertFalse(pfb_update_pass_running(),
-			'a pfblockerng.php worker process leaked from an earlier test -- see issue #1666');
-
 		$ledgerPath = $GLOBALS['pfb']['dbdir'] . '/pfb_due_ledger.json';
 		$before     = (string) file_get_contents($ledgerPath);
 
-		$markerPath = $GLOBALS['pfb']['dbdir'] . '/due_ledger_lock_holder.marker';
-		// 5.5s: past every read's production 5.0s default (see suite-level comment above).
-		$pid = $this->forkRealDueLedgerHolder($ledgerPath, $markerPath, 5500000);
+		$updateLockPath = $GLOBALS['pfb']['dbdir'] . '/pfb_feed_pass.lock';
+		$markerPath = $GLOBALS['pfb']['dbdir'] . '/update_lock_holder.marker';
+		$pid = $this->forkRealDueLedgerHolder($updateLockPath, $markerPath, 1000000);
 		$this->waitForDueLedgerMarker($markerPath, $pid);
 
 		// Act.
-		pfblockerng_tick();
+		pfblockerng_tick(update_lock_timeout: 0.0);
 
 		pcntl_waitpid($pid, $waitStatus);
 
@@ -1385,19 +1382,16 @@ final class TickEntrypointTest extends TestCase
 			'a due-ledger lock timeout must never dispatch -- the ledger file must be byte-identical '
 			. 'before and after the tick (a spurious dispatch would have rewritten cron\'s next_due)');
 
-		// $dispatched stayed FALSE: log maintenance still ran (no skip/defer message).
+		// No phase of the scheduled tick runs without update-lock ownership.
 		$skippedOrDeferred = array_values(array_filter(
 			$GLOBALS['pfb_test_syslog_calls'] ?? [],
 			static fn (array $c) => str_contains($c['body'], 'log maintenance skipped')
 				|| str_contains($c['body'], 'log maintenance deferred')
 		));
 		$this->assertSame([], $skippedOrDeferred,
-			'a due-ledger lock timeout must NOT dispatch, so it must NOT suppress log maintenance either '
-			. '($dispatched must stay FALSE) -- got ' . var_export($GLOBALS['pfb_test_syslog_calls'] ?? [], TRUE));
-
-		// The expiry was logged loudly (pfb_due_ledger_read_entry's own ADR-43 message).
-		$errLog = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
-		$this->assertStringContainsString('due-ledger read lock timed out', $errLog,
-			'the lock-acquire expiry must be logged loudly, got errlog=' . var_export($errLog, TRUE));
+			'a timeout before the transaction must neither dispatch nor run its maintenance branches');
+		$this->assertSame('1', trim((string) file_get_contents(
+			$GLOBALS['pfb']['dbdir'] . '/pfb_tick_lock_timeouts'
+		)));
 	}
 }

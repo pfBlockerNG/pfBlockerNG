@@ -1370,15 +1370,24 @@ job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
 non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
 and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
 
-**Feed-pass serialization (issue #1175):** feed passes are mutually exclusive via a cross-process,
-non-blocking flock (`pfb_feed_pass.lock` under `$pfb['dbdir']`; helpers `pfb_feed_pass_*` in
-`pfblockerng.inc`). Both funnels — `sync_package_pfblockerng()` and `pfblockerng_sync_cron()` —
-acquire it at entry (`pfb_feed_pass_begin()`) and skip with a logged message when another pass
-holds it; the tick pre-checks a busy probe and **defers** (not skips) a busy feed-cron dispatch via
-the existing `pending` mechanism, so the run retries next tick. The `bl`/`bls`/`dcc` download verbs
-are deliberately unguarded (`bls` runs synchronously inside a pass — a pass-level lock there would
-deadlock the parent). The lock is kernel-released on process death; a crashed pass never wedges
-scheduling.
+**Update serialization (issues #1175/#2122):** the scheduled tick and both feed-pass funnels
+(`sync_package_pfblockerng()` and `pfblockerng_sync_cron()`) share one cross-process flock,
+`pfb_feed_pass.lock` under `$pfb['dbdir']`. Acquisition uses `LOCK_NB` once per second for exactly
+45 seconds. Manual runs print a wait message and one dot per retry; scheduled callers stay quiet.
+Failure is closed: a caller that never owns the lock does not dispatch or mutate the due-ledger.
+The tick acquires before its single ledger read, makes every cadence/pending mutation against that
+snapshot, publishes it atomically, releases, and only then starts background children. Direct
+ledger writers use the same lock plus a unique temporary file, checked write, and checked rename,
+so concurrent read-modify-write calls cannot lose unrelated keys. Low-level `bl`/`bls`/`dcc`
+children remain unguarded because `bls` can run synchronously inside an already-locked pass. The
+lock is kernel-released on process death; a crashed pass never wedges scheduling.
+
+A scheduled tick that exhausts the lock wait increments `pfb_tick_lock_timeouts` under
+`$pfb['dbdir']`. Attempts 1–14 are silent; transition to 15 raises one `file_notice`; later failures
+do not repeat it. Only a successful scheduled-tick acquisition removes the counter—manual and
+dispatched-child successes do not reset the sequence. The counter joins the due-ledger in the
+RAM-disk archive, survives reinstall/upgrade and keep-on uninstall, and is removed with `$pfb['dbdir']`
+by a keep-off uninstall or any other true database-directory wipe.
 
 **The due-ledger** is a single JSON sidecar `pfb_due_ledger.json` under `$pfb['dbdir']`, one entry
 per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helpers in

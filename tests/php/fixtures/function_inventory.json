@@ -3240,6 +3240,26 @@
             }
         ]
     },
+    "pfb_due_ledger_entry": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "ledger",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "job_key",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_due_ledger_is_due": {
         "returnsRef": false,
         "returnType": "bool",
@@ -3342,6 +3362,102 @@
             }
         ]
     },
+    "pfb_due_ledger_mark_entry": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "ledger",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "job_key",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "interval",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "now",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "seed",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "jitter_max",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_due_ledger_mark_entry_anchored": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "ledger",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "job_key",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "interval",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "now",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "seed",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "jitter_max",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
     "pfb_due_ledger_mark_ran": {
         "returnsRef": false,
         "returnType": "void",
@@ -3438,6 +3554,19 @@
             }
         ]
     },
+    "pfb_due_ledger_read_all": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_due_ledger_read_entry": {
         "returnsRef": false,
         "returnType": "?array",
@@ -3523,6 +3652,67 @@
                 "variadic": false,
                 "type": "float",
                 "default": "5.0"
+            }
+        ]
+    },
+    "pfb_due_ledger_set_pending_entry": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "ledger",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "job_key",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_due_ledger_write_all": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "ledger",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "temp_factory",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "writer",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "renamer",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },
@@ -3977,7 +4167,22 @@
     "pfb_feed_pass_acquire": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": []
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "unavailable",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_feed_pass_begin": {
         "returnsRef": false,
@@ -3989,18 +4194,81 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "wait",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
+            },
+            {
+                "name": "progress",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
             }
         ]
     },
     "pfb_feed_pass_busy": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": []
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_feed_pass_release": {
         "returnsRef": false,
         "returnType": "void",
         "params": []
+    },
+    "pfb_feed_pass_wait": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "progress",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "45.0"
+            },
+            {
+                "name": "clock",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "sleep",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_feed_redirect_target": {
         "returnsRef": false,
@@ -10171,6 +10439,13 @@
                 "variadic": false,
                 "type": "int",
                 "default": null
+            },
+            {
+                "name": "ledger",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
             }
         ]
     },
@@ -10180,6 +10455,32 @@
         "params": [
             {
                 "name": "raw",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_tick_lock_timeout_record": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "dbdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_tick_lock_timeout_reset": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "dbdir",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
@@ -12176,6 +12477,20 @@
                 "variadic": false,
                 "type": null,
                 "default": "'both'"
+            },
+            {
+                "name": "manual",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "false"
+            },
+            {
+                "name": "force_mode",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "'download'"
             }
         ]
     },
@@ -12249,6 +12564,27 @@
                 "variadic": false,
                 "type": "float",
                 "default": "5.0"
+            },
+            {
+                "name": "update_lock_timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "45.0"
+            },
+            {
+                "name": "update_lock_clock",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "update_lock_sleep",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },
