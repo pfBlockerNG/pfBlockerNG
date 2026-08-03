@@ -455,3 +455,16 @@ All five are GREEN on the live pfSense CE VM via `tests/smoke/test_repo_install.
   (nothing depends on it) and is gated `if: always()`, copied from `attach-pkgs` — so a
   repo-publish failure (build / generator / Pages deploy) cannot gate or break
   `release`/`ports-pr`/`attach-pkgs`. *(Job-isolation review, P3 — `RESULTS/03_Results.txt`.)*
+
+## Amendment — 2026-08-03: one identity, four channel catalogs (issue #2140)
+
+The target release model uses the exact package identity `pfSense-pkg-pfBlockerNG` for Stable,
+Testing, Edge, and Nightly. Channel is catalog metadata, not a package-name suffix. Stable and
+Testing may coexist for each maintained `release/X.Y`; exactly one configured line supplies Edge;
+Nightly follows `devel`. Equal-priority project catalogs remain supported, and neither package-name
+variation nor branch sorting selects a release line.
+
+Issue #2140 defines the version/classification and mutation-precondition seams only. It does not
+change this ADR's deployed catalogs. Issues #2144–#2147 own builder, publisher, and catalog
+migration; issue #2148 owns the client transition. Existing catalogs stay operational until those
+changes land.

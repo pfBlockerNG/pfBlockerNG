@@ -555,3 +555,16 @@ Nightly publication, the nightly channel, and last-14 nightly retention remain u
 Retained nightlies provide artifact availability, diagnostics, and reproducibility; they do not
 promise that package state written by a newer build is consumable by an older build. Package
 downgrade is unsupported, and no backward-compatibility engineering follows from retention.
+
+## Amendment — 2026-08-03: snapshot rank and publication shape (issue #2140)
+
+Nightly becomes an untagged `devel` snapshot targeting the next final version. Its authored version
+is `X.Y.Z.nightly.YYYYMMDD.N`; its FreeBSD package version is
+`X.Y.Z.snapshot.2.YYYYMMDD.N`. It creates no tag, GitHub Release, or release notes. Edge uses
+`X.Y.Z.snapshot.1.YYYYMMDD.N`, so live libpkg ordering is
+`rc < Edge < Nightly < final`. Both streams use deterministic UTC daily counters and return the
+same identifier when the same immutable source is retried.
+
+The package identity converges to `pfSense-pkg-pfBlockerNG`; the current `-nightly` package and
+publication path remain untouched in #2140. Builder/publisher/catalog/client issues #2144–#2148
+own that migration. Retention still provides availability, not downgrade support.

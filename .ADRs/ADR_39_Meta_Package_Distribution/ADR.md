@@ -359,3 +359,13 @@ Once this branch merges and `pfBlockerNG/pkg`'s `publish.yml` no longer deploys 
 
 This is an **operational step** (no code PR needed) that should happen after confirming
 the direct-URL path is live and serving on `pfblockerng.github.io/pkg`.
+
+## Amendment — 2026-08-03: release-channel catalog boundary (issue #2140)
+
+The future four-channel layout keeps this ADR's on-box variant routing and exact package identity
+`pfSense-pkg-pfBlockerNG`. Channel selection belongs to the project catalog/client contract, not
+to package-name suffixes or the boot hook's pfSense edition/version detection. The hook continues
+to resolve the box's catalog variant; #2140 changes neither its files nor its runtime behavior.
+
+Issues #2144–#2148 own the catalog and client migration. EOL `route-only` resolution, matrix
+collision checks, and the no-Worker architecture remain unchanged.
