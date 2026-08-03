@@ -30,26 +30,17 @@ requirement (a docs-only diff must not fire) nor satisfies one (a `.md` explaini
 a change is not a test). This is checked first, so a `.md` file physically living
 under ``src/`` is still neutral, not "src code with no test".
 
-The exact paths in ``_DATA_ONLY`` are neutral the same way (issue #2132). They
-are verbatim upstream snapshots living under ``src/``, machine-regenerated (the
-weekly refresh workflows; the webassets vendor build), whose SHAPE is already
-pinned by shipped-file tests that run on every PR regardless of this gate. A
-diff that only regenerates one carries no hand-authored change to pair a test
-with, and the pairing prompt would land on an automated PR nobody can act on.
-
-Note this is NOT "the file encodes no behaviour" — ``pfb_py_hsts.txt`` feeds
-``hstsDB`` and decides NULL-vs-VIP on a DNSBL hit, ``dnsbl_tld`` is the
-public-suffix oracle behind wildcard classification. The justification is the
-machine-regenerated provenance plus that standing coverage, so do not
-generalise the exemption to any file that merely looks like data.
+The exact paths in ``_DATA_ONLY`` are neutral the same way (issue #2132):
+machine-regenerated upstream snapshots whose shape is already pinned by
+shipped-file tests, so a regeneration diff has no hand-authored change to pair
+with. Exempt on that provenance, NOT on "encodes no behaviour" —
+``pfb_py_hsts.txt`` decides NULL-vs-VIP on a DNSBL hit and ``dnsbl_tld`` is the
+public-suffix oracle — so do not extend the set to a hand-maintained file that
+merely looks like data (``pfb_dnsbl.*.conf``, the feed/ASN catalogs, the
+``*_global_usage`` provider definitions all stay gated).
 
 Neutral means IGNORED, not "satisfies": a real ``src/**`` file in the same diff
-still demands its paired test. The set is deliberately narrow and matched by
-whole path — hand-maintained files under ``src/`` that decide behaviour stay
-fully gated: ``pfb_dnsbl.*.conf`` unbound config, the feed/ASN catalogs the UI
-reads, and the ``*_global_usage`` blacklist provider definitions (each carries
-a feed download URL and the category allowlist the Blacklist page validates
-POSTs against).
+still demands its paired test.
 
 ESCAPE HATCH
 ------------
@@ -99,12 +90,9 @@ def _is_docs(path: str) -> bool:
 def _is_neutral(path: str) -> bool:
     """True if ``path`` counts toward NEITHER side of EITHER rule.
 
-    Two neutral classes: documentation (see ``_is_docs``), and the exact
-    ``_DATA_ONLY`` paths — machine-regenerated upstream snapshots under
-    ``src/`` with standing shipped-file coverage, so a diff that only
-    regenerates one has no hand-authored change to pair a test with (issue
-    #2132). Membership is by WHOLE path, never prefix: a neighbour whose name
-    merely extends an exempt one is ordinary src code and stays gated.
+    Two neutral classes: documentation (see ``_is_docs``) and the exact
+    ``_DATA_ONLY`` paths. Membership is by WHOLE path, never prefix: a
+    neighbour whose name merely extends an exempt one stays gated.
     """
     return _is_docs(path) or path in _DATA_ONLY
 
