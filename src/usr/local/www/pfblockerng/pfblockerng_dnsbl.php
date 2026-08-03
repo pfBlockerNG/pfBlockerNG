@@ -72,9 +72,9 @@ $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
 $pconfig['pfb_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');
 $pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
 // ADR-08: IDN mode selector (Off | All-IDN | Confusable). PfbConfig::read() returns a
-// PfbIdnMode enum (legacy 'on' -> All; alpha-only 'all' and '' -> Off); toStored() gives the
-// canonical config token ('on' | 'confusable' | 'off') that the <select> options below carry.
-$pconfig['pfb_idn']		= PfbConfig::read('dnsbl/pfb_idn')->toStored();
+// PfbIdnMode enum (legacy 'on' -> All; alpha-only 'all', legacy 'off', and '' -> Off);
+// enum value gives the runtime option key that the <select> options below carry.
+$pconfig['pfb_idn']		= PfbConfig::read('dnsbl/pfb_idn')->value;
 // Confusable-mode sub-toggles: block clearly-malicious homoglyphs is default-on;
 // escalate suspicious mixed-script (else alert only) is opt-in (default off).
 // Default 'on' owned by the registry (ADR-29); PfbConfig::read applies it when absent.
@@ -843,23 +843,20 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_dnsbl_rule']	= pfb_filter($_POST['pfb_dnsbl_rule'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['dnsbl_allow_int']	= implode(',', (array)$_POST['dnsbl_allow_int'])			?: '';
 			$pfb['dconfig']['global_log']		= $_POST['global_log']							?: '';
-			// issue #1907: stage the explicit token -- checkbox-absent means Off, and a
-			// staged '' would resolve to this field's default-ON at the gateway.
-			$pfb['dconfig']['pfb_cache']		= pfb_dnsbl_toggle_stored($_POST['pfb_cache'] ?? NULL);
+			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
+			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 
-			// issue #1907: stage the explicit token -- checkbox-absent means Off, and a
-			// staged '' would resolve to these fields' default-ON at the gateway.
-			$pfb['dconfig']['pfb_py_reply']		= pfb_dnsbl_toggle_stored($_POST['pfb_py_reply'] ?? NULL);
-			$pfb['dconfig']['pfb_hsts']		= pfb_dnsbl_toggle_stored($_POST['pfb_hsts'] ?? NULL);
+			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
+			$pfb['dconfig']['pfb_py_reply']		= pfb_filter($_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
+			$pfb['dconfig']['pfb_hsts']		= pfb_filter($_POST['pfb_hsts'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			// ADR-08: IDN mode selector. Validate the raw word, then canonicalise via the
-			// PfbIdnMode adapter to the stored config token ('on' = All | 'confusable' | 'off').
+			// PfbIdnMode adapter to ('on' = All | 'confusable' | '' = Off).
 			$pfb_idn_mode = pfb_filter($_POST['pfb_idn'], PFB_FILTER_WORD, 'dnsbl');
 			$pfb['dconfig']['pfb_idn']		= pfb_cfg_idn_mode_write($pfb_idn_mode);
-			// issue #1887: stage the explicit token — checkbox-absent means Off, and a
-			// staged '' would resolve to this field's default-ON at the gateway.
-			$pfb['dconfig']['pfb_idn_block_malicious']	= pfb_dnsbl_toggle_stored($_POST['pfb_idn_block_malicious'] ?? NULL);
-			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= pfb_dnsbl_toggle_stored($_POST['pfb_idn_escalate_suspicious'] ?? NULL);
+			// issue #1887: checkbox-absent is the owner-ruled empty Off token.
+			$pfb['dconfig']['pfb_idn_block_malicious']	= pfb_filter($_POST['pfb_idn_block_malicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
+			$pfb['dconfig']['pfb_idn_escalate_suspicious']	= pfb_filter($_POST['pfb_idn_escalate_suspicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_regex']		= pfb_filter($_POST['pfb_regex'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_regex_cap']	= pfb_filter($_POST['pfb_regex_cap'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_cname']		= pfb_filter($_POST['pfb_cname'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';

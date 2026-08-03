@@ -2696,19 +2696,6 @@
             }
         ]
     },
-    "pfb_dnsbl_toggle_stored": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "posted",
-                "byRef": false,
-                "variadic": false,
-                "type": "mixed",
-                "default": null
-            }
-        ]
-    },
     "pfb_dnsbl_unbracket_ip6": {
         "returnsRef": false,
         "returnType": "string",
@@ -3751,19 +3738,6 @@
         "returnType": "string",
         "params": []
     },
-    "pfb_editor_toggle_stored_value": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "posted",
-                "byRef": false,
-                "variadic": false,
-                "type": "mixed",
-                "default": null
-            }
-        ]
-    },
     "pfb_emit_entry_reject_stats": {
         "returnsRef": false,
         "returnType": "void",
@@ -4538,19 +4512,6 @@
         "returnsRef": false,
         "returnType": "string",
         "params": []
-    },
-    "pfb_general_toggle_stored_value": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "posted",
-                "byRef": false,
-                "variadic": false,
-                "type": "mixed",
-                "default": null
-            }
-        ]
     },
     "pfb_geoip_append_iso_data": {
         "returnsRef": false,
@@ -6352,19 +6313,6 @@
         "params": [
             {
                 "name": "stored",
-                "byRef": false,
-                "variadic": false,
-                "type": "mixed",
-                "default": null
-            }
-        ]
-    },
-    "pfb_ip_suppression_stored": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "posted",
                 "byRef": false,
                 "variadic": false,
                 "type": "mixed",

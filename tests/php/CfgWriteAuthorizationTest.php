@@ -92,7 +92,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 
 		PfbConfig::write('gen/pfb_keep', PfbToggle::Off);
 
-		$this->assertSame('off', config_get_path($path),
+		$this->assertSame('', config_get_path($path),
 			'allowed write must persist the canonical stored token'
 		);
 	}
@@ -143,7 +143,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 
 		PfbConfig::write('gen/pfb_software_check', PfbToggle::Off);
 
-		$this->assertSame('off', config_get_path($path),
+		$this->assertSame('', config_get_path($path),
 			'write must succeed and persist the canonical stored token'
 		);
 	}
@@ -339,7 +339,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 
 		PfbConfig::writeSection(self::GEN, $data);
 
-		$this->assertSame('off', config_get_path(self::GEN . '/pfb_keep'),
+		$this->assertSame('', config_get_path(self::GEN . '/pfb_keep'),
 			'the unrelated, actually-changed field must persist canonically'
 		);
 		$this->assertSame('on', config_get_path(self::GEN . '/pfb_software_check'),
@@ -407,7 +407,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 			'pfb_software_check' => 'on',
 		]);
 
-		$this->assertSame('off', config_get_path(self::GEN . '/pfb_keep'),
+		$this->assertSame('', config_get_path(self::GEN . '/pfb_keep'),
 			'the unrelated, actually-changed field must persist canonically'
 		);
 		$this->assertSame('on', config_get_path(self::GEN . '/pfb_software_check'),

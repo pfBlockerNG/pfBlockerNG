@@ -51,7 +51,7 @@ final class ToggleMergeTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Writing Off stores the explicit 'off' token for every toggle field.
+	 * Writing Off stores the empty checkbox token for every toggle field.
 	 *
 	 * Asserted across a default-on and a default-off field together: the point is
 	 * that the stored vocabulary is now uniform, so a field's default no longer
@@ -62,9 +62,9 @@ final class ToggleMergeTest extends TestCase
 		foreach (['gen/pfb_keep' => self::KEEP, 'gen/enable_cb' => self::ENABLE] as $key => $path) {
 			PfbConfig::write($key, PfbToggle::Off);
 			$this->assertSame(
-				'off',
+				'',
 				config_get_path($path),
-				"{$key}: writing PfbToggle::Off must store the explicit 'off' token, not ''"
+				"{$key}: writing PfbToggle::Off must store the empty checkbox token"
 			);
 		}
 	}
@@ -86,7 +86,7 @@ final class ToggleMergeTest extends TestCase
 			$this->assertSame(PfbToggle::Off, $enum, "{$key}: stored 'off' must read as PfbToggle::Off");
 
 			PfbConfig::write($key, $enum);
-			$this->assertSame('off', config_get_path($path), "{$key}: write(read('off')) must be 'off'");
+			$this->assertSame('', config_get_path($path), "{$key}: write(read('off')) must be empty checkbox storage");
 		}
 	}
 
@@ -126,9 +126,9 @@ final class ToggleMergeTest extends TestCase
 		config_set_path(self::KEEP, '');
 		$this->assertSame('', config_get_path(self::KEEP), "before: pfb_keep seed is ''");
 		$this->assertSame(
-			PfbToggle::On,
+			PfbToggle::Off,
 			PfbConfig::read('gen/pfb_keep'),
-			"pfb_keep: stored '' must resolve to the registered default 'on', as an absent key does"
+			"pfb_keep: stored '' must resolve to Off, while an absent key resolves to On"
 		);
 
 		config_set_path(self::ENABLE, '');
@@ -152,7 +152,7 @@ final class ToggleMergeTest extends TestCase
 		config_set_path(self::KEEP, '');
 		$empty = PfbConfig::read('gen/pfb_keep');
 
-		$this->assertSame($absent, $empty, "pfb_keep: stored '' must read identically to an absent key");
+		$this->assertNotSame($absent, $empty, "pfb_keep: stored '' must remain distinct from an absent key");
 	}
 
 	/**
@@ -180,10 +180,10 @@ final class ToggleMergeTest extends TestCase
 			'pfb_keep: a section save must not change what the field reads as'
 		);
 		$this->assertSame(
-			'on',
+			'',
 			config_get_path(self::KEEP),
 			"pfb_keep: writeSection() must normalise a stored '' to the canonical form of the "
-				. "registered default, not to 'off'"
+				. "empty checkbox storage"
 		);
 	}
 
@@ -198,9 +198,9 @@ final class ToggleMergeTest extends TestCase
 		PfbConfig::write('gen/pfb_keep', '');
 
 		$this->assertSame(
-			'on',
+			'',
 			config_get_path(self::KEEP),
-			"pfb_keep: write('') must resolve to the registered default, not store 'off'"
+			"pfb_keep: write('') must store empty checkbox storage"
 		);
 	}
 
@@ -251,7 +251,7 @@ final class ToggleMergeTest extends TestCase
 			$this->assertSame(PfbToggle::On, PfbConfig::read($key), "{$key}: 'on' must read as PfbToggle::On");
 
 			PfbConfig::write($key, PfbToggle::Off);
-			$this->assertSame('off', config_get_path($spec['path']), "{$key}: Off must store as 'off'");
+			$this->assertSame('', config_get_path($spec['path']), "{$key}: Off must store as empty checkbox storage");
 		}
 	}
 }

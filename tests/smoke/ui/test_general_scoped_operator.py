@@ -461,7 +461,7 @@ def test_cli_gateway_write_fails_closed_writesystem_succeeds(
         BEFORE the privilege check (reordering ``writeRaw()`` ahead of
         ``assertWriteAllowed()``) flips this to ``'NO'`` even though the
         exception still fires.
-      * ``WRITESYSTEM_STORED == 'off'`` -- a regression that made
+      * ``WRITESYSTEM_STORED == ''`` -- a regression that made
         ``writeSystem()`` ALSO gate on ``isAllowedPage()`` (collapsing the
         escape hatch into ``write()``) makes this call throw instead of storing,
         and the sentinel is never reached / the snippet aborts.
@@ -492,7 +492,7 @@ def test_cli_gateway_write_fails_closed_writesystem_succeeds(
         assert unchanged == "YES", "PfbConfig::write() mutated pfb_keep despite throwing RuntimeException"
 
         stored = _extract_sentinel(out, "PFB1904:WRITESYSTEM_STORED:")
-        assert stored == "off", f"PfbConfig::writeSystem() did not persist the canonical 'off' token: {stored!r}"
+        assert stored == "", f"PfbConfig::writeSystem() did not persist canonical empty storage: {stored!r}"
 
         # Confirms the in-snippet writeSystem() restore call itself did not throw
         # (its exact resulting stored token is not asserted -- notConfigured()

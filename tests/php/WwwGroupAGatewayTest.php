@@ -233,7 +233,7 @@ final class WwwGroupAGatewayTest extends TestCase
 	}
 
 	/**
-	 * General section: pfb_keep = '' (disabled) is normalised, not round-tripped raw.
+	 * General section: pfb_keep = '' (disabled) is preserved byte-for-byte.
 	 * Asserts the before-state ('on') and the after-state ('off') are distinct —
 	 * proving the write changed the value rather than being an always-equal no-op.
 	 *
@@ -250,12 +250,11 @@ final class WwwGroupAGatewayTest extends TestCase
 		PfbConfig::writeSection($section, ['pfb_keep' => 'on']);
 		$this->assertSame('on', PfbConfig::readSection($section)['pfb_keep'], 'pfb_keep starts as "on"');
 
-		// When: write '' — the not-configured token (issue #1887: '' ≡ absent).
+		// When: write '' — the owner-ruled Off token.
 		PfbConfig::writeSection($section, ['pfb_keep' => '']);
 
-		// Then: reads back as the registered default 'on'. A deliberate opt-out is the
-		// explicit 'off' token, which round-trips untouched (CfgGatewayTest).
-		$this->assertSame('on', PfbConfig::readSection($section)['pfb_keep'], "pfb_keep '' resolves to the registered default 'on'");
+		// Then: reads back as the owner-ruled empty Off token.
+		$this->assertSame('', PfbConfig::readSection($section)['pfb_keep'], "pfb_keep '' remains empty");
 	}
 
 	// -----------------------------------------------------------------------
@@ -309,11 +308,9 @@ final class WwwGroupAGatewayTest extends TestCase
 	}
 
 	/**
-	 * IP section: suppression toggled from 'on' -> 'off' round-trips correctly. issue
-	 * #1907 adopted the toggle adapter (default on) -- mirrors
-	 * testDnsblPfbIdnBlockMaliciousOffRoundTrips: a staged '' is now the not-configured
-	 * state and resolves to the registered default 'on', which is exactly why the
-	 * page's save handler stages the explicit 'off' token instead.
+	 * IP section: suppression toggled from 'on' -> '' round-trips correctly. issue
+	 * #1907 adopted the toggle adapter (default on); present empty is the owner-ruled Off
+	 * state while an absent key resolves to the registered default.
 	 */
 	public function testIpSectionSuppressionOffRoundTrips(): void
 	{
@@ -323,16 +320,11 @@ final class WwwGroupAGatewayTest extends TestCase
 		PfbConfig::writeSection($section, ['suppression' => 'on']);
 		$this->assertSame('on', PfbConfig::readSection($section)['suppression'], 'suppression starts as "on"');
 
-		// When: write the explicit 'off' (the page's unchecked-save token since #1907).
-		PfbConfig::writeSection($section, ['suppression' => 'off']);
-
-		// Then: reads back as 'off' -- the disabled state survives.
-		$this->assertSame('off', PfbConfig::readSection($section)['suppression'], "suppression 'off' round-trips");
-
-		// And a staged '' is the not-configured state: it resolves to the registered
-		// default 'on' -- which is exactly why the page must stage the explicit token.
+		// When: write the owner-ruled empty Off token.
 		PfbConfig::writeSection($section, ['suppression' => '']);
-		$this->assertSame('on', PfbConfig::readSection($section)['suppression'], "a staged '' resolves to the default-on");
+
+		// Then: reads back as empty -- the disabled state survives.
+		$this->assertSame('', PfbConfig::readSection($section)['suppression'], "suppression empty round-trips");
 	}
 
 	// -----------------------------------------------------------------------
@@ -408,13 +400,13 @@ final class WwwGroupAGatewayTest extends TestCase
 		// When: write (models the page save handler).
 		PfbConfig::writeSection($section, $data);
 
-		// Then: read back is byte-identical EXCEPT the toggle-adapter fields stored as ''
-		// — issue #1887 canonicalises the not-configured token to each field's registered
-		// default ('off' here; both have default ''). Everything else passes untouched.
+		// Then: read back is byte-identical. Toggle Off values are stored as empty.
 		$expected = $data;
-		$expected['pfb_dnsvip_auto'] = 'off';
-		$expected['pfb_regex_cap']   = 'off';
-		$expected['pfb_idn_escalate_suspicious'] = 'off';
+		$expected['pfb_dnsvip_auto'] = '';
+		$expected['pfb_regex_cap']   = '';
+		$expected['pfb_idn_escalate_suspicious'] = '';
+		$expected['pfb_idn'] = '';
+		$expected['pfb_dnsbl_lenient'] = '';
 		$result = PfbConfig::readSection($section);
 		$this->assertSame($expected, $result, 'DNSBL section round-trips with only the #1887 toggle canonicalisation');
 	}
@@ -431,21 +423,16 @@ final class WwwGroupAGatewayTest extends TestCase
 		PfbConfig::writeSection($section, ['pfb_idn_block_malicious' => 'on']);
 		$this->assertSame('on', PfbConfig::readSection($section)['pfb_idn_block_malicious'], 'pfb_idn_block_malicious starts as "on"');
 
-		// When: write the explicit 'off' (the page's unchecked-save token since #1887).
-		PfbConfig::writeSection($section, ['pfb_idn_block_malicious' => 'off']);
-
-		// Then: reads back as 'off' — the disabled state survives.
-		$this->assertSame('off', PfbConfig::readSection($section)['pfb_idn_block_malicious'], "pfb_idn_block_malicious 'off' round-trips");
-
-		// And a staged '' is the not-configured state: it resolves to the registered
-		// default 'on' — which is exactly why the page must stage the explicit token.
+		// When: write the owner-ruled empty Off token.
 		PfbConfig::writeSection($section, ['pfb_idn_block_malicious' => '']);
-		$this->assertSame('on', PfbConfig::readSection($section)['pfb_idn_block_malicious'], "a staged '' resolves to the default-on");
+
+		// Then: reads back as empty — the disabled state survives.
+		$this->assertSame('', PfbConfig::readSection($section)['pfb_idn_block_malicious'], "pfb_idn_block_malicious empty round-trips");
 	}
 
 	/**
-	 * pfb_feed_internal_filter toggled from 'on' → 'off' round-trips correctly.
-	 * Asserts the before-state ('on') and the after-state ('off') are distinct.
+	 * pfb_feed_internal_filter toggled from 'on' → empty round-trips correctly.
+	 * Asserts the before-state ('on') and the after-state (empty) are distinct.
 	 */
 	public function testGeneralPfbFeedInternalFilterOffRoundTrips(): void
 	{
@@ -455,10 +442,10 @@ final class WwwGroupAGatewayTest extends TestCase
 		PfbConfig::writeSection($section, ['pfb_feed_internal_filter' => 'on']);
 		$this->assertSame('on', PfbConfig::readSection($section)['pfb_feed_internal_filter'], 'pfb_feed_internal_filter starts as "on"');
 
-		// When: write 'off' (user unchecked the box and saved).
-		PfbConfig::writeSection($section, ['pfb_feed_internal_filter' => 'off']);
+		// When: write empty (user unchecked the box and saved).
+		PfbConfig::writeSection($section, ['pfb_feed_internal_filter' => '']);
 
-		// Then: reads back as 'off'.
-		$this->assertSame('off', PfbConfig::readSection($section)['pfb_feed_internal_filter'], 'pfb_feed_internal_filter "off" round-trips identically');
+		// Then: reads back as empty.
+		$this->assertSame('', PfbConfig::readSection($section)['pfb_feed_internal_filter'], 'pfb_feed_internal_filter empty round-trips identically');
 	}
 }

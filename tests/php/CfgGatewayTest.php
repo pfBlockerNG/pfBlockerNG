@@ -131,9 +131,9 @@ final class CfgGatewayTest extends TestCase
 			$enum = PfbConfig::read($key);
 			$this->assertSame(PfbToggle::Off, $enum, "read: {$key} '' -> PfbToggle::Off");
 
-			// After: write back emits the canonical explicit 'off' (issue #1887).
+			// After: write back emits the empty checkbox token.
 			PfbConfig::write($key, $enum);
-			$this->assertSame('off', config_get_path($path), "write(read(''))=='off' for {$key}");
+			$this->assertSame('', config_get_path($path), "write(read(''))=='' for {$key}");
 		}
 	}
 
@@ -179,7 +179,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame(PfbToggle::Off, $enum);
 
 		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', $enum);
-		$this->assertSame('off', config_get_path($path));
+		$this->assertSame('', config_get_path($path));
 	}
 
 	public function testLenientFieldEmptyNormalisesToOff(): void
@@ -197,8 +197,8 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame(PfbToggle::Off, $enum);
 
 		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', $enum);
-		// Normalised: stored as 'off', NOT ''.
-		$this->assertSame('off', config_get_path($path));
+		// Checkbox Off stores as ''.
+		$this->assertSame('', config_get_path($path));
 	}
 
 	/**
@@ -243,7 +243,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame(PfbToggle::Off, $enum, "read: pfb_keep 'off' -> PfbToggle::Off");
 
 		PfbConfig::write('gen/pfb_keep', $enum);
-		$this->assertSame('off', config_get_path($path), "write(read('off'))==off for pfb_keep");
+		$this->assertSame('', config_get_path($path), "write(read('off'))=='' for pfb_keep");
 	}
 
 	public function testPfbKeepEmptyResolvesToRegisteredDefault(): void
@@ -258,11 +258,11 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('', config_get_path($path), 'before: pfb_keep seed is empty string');
 
 		$enum = PfbConfig::read('gen/pfb_keep');
-		$this->assertSame(PfbToggle::On, $enum, "read: pfb_keep '' -> registered default On");
+		$this->assertSame(PfbToggle::Off, $enum, "read: pfb_keep '' -> PfbToggle::Off");
 
 		// After: write emits the canonical token of the default.
 		PfbConfig::write('gen/pfb_keep', $enum);
-		$this->assertSame('on', config_get_path($path), "write(read(''))=='on' for pfb_keep");
+		$this->assertSame('', config_get_path($path), "write(read(''))=='' for pfb_keep");
 	}
 
 	/**
@@ -310,7 +310,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame(PfbToggle::Off, $enum, "read: pfb_syntax_highlight 'off' -> PfbToggle::Off");
 
 		PfbConfig::write('gen/pfb_syntax_highlight', $enum);
-		$this->assertSame('off', config_get_path($path), "write(read('off'))==off for pfb_syntax_highlight");
+		$this->assertSame('', config_get_path($path), "write(read('off'))=='' for pfb_syntax_highlight");
 	}
 
 	// -----------------------------------------------------------------------
@@ -595,7 +595,7 @@ final class CfgGatewayTest extends TestCase
 	/**
 	 * issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
 	 * same default-on shape as pfb_idn_block_malicious/pfb_keep above. Absent AND a
-	 * stored '' both resolve to On (the '' ≡ absent gateway identity -- ADR-28); a
+	 * stored '' resolves to Off (presence is the adapter discriminator); a
 	 * stored 'off'/'on' round-trip losslessly.
 	 */
 	public function testIssue1907FieldsResolveAbsentAndEmptyStringToOnDefault(): void
@@ -612,7 +612,7 @@ final class CfgGatewayTest extends TestCase
 			$this->assertSame(PfbToggle::On, PfbConfig::read($key), "{$key}: absent -> On (default)");
 
 			$this->seedConfig($path, '');
-			$this->assertSame(PfbToggle::On, PfbConfig::read($key), "{$key}: stored '' -> On (== absent)");
+			$this->assertSame(PfbToggle::Off, PfbConfig::read($key), "{$key}: stored '' -> Off");
 
 			$this->seedConfig($path, 'off');
 			$this->assertSame(PfbToggle::Off, PfbConfig::read($key), "{$key}: stored 'off' -> Off");
@@ -1061,9 +1061,9 @@ final class CfgGatewayTest extends TestCase
 		$enum = PfbConfig::read('gen/log_syslog');
 		$this->assertSame(PfbToggle::Off, $enum, "read: log_syslog '' -> PfbToggle::Off");
 
-		// After: write back emits the canonical explicit 'off' (issue #1887).
+		// After: write back emits the empty checkbox token.
 		PfbConfig::write('gen/log_syslog', $enum);
-		$this->assertSame('off', config_get_path($path), "write(read(''))=='off' for log_syslog");
+		$this->assertSame('', config_get_path($path), "write(read(''))=='' for log_syslog");
 	}
 
 	/**
@@ -1488,8 +1488,8 @@ final class CfgGatewayTest extends TestCase
 		// When: write Off enum.
 		PfbConfig::write('dnsbl/pfb_dnsbl_lenient', PfbToggle::Off);
 
-		// After: stored as 'off' (not '' — PfbToggle::Off = 'off').
-		$this->assertSame('off', config_get_path($path));
+		// After: stored as the empty checkbox token; PfbToggle::Off backing remains 'off'.
+		$this->assertSame('', config_get_path($path));
 	}
 
 	/**
@@ -1672,7 +1672,7 @@ final class CfgGatewayTest extends TestCase
 		// Write emits the canonical 'off' — 'all' is not re-emitted.
 		PfbConfig::write('dnsbl/pfb_idn', $result);
 		$stored = config_get_path($path);
-		$this->assertSame('off', $stored, "write(read('all')) == 'off' for pfb_idn");
+		$this->assertSame('', $stored, "write(read('all')) == '' for pfb_idn");
 		$this->assertNotSame('all', $stored, "'all' must not be re-emitted");
 	}
 
@@ -1969,9 +1969,9 @@ final class CfgGatewayTest extends TestCase
 
 		PfbConfig::write('dnsbl/dnsbl_redir', $enum);
 
-		// After: stored as the canonical explicit 'off' (issue #1887).
-		$this->assertSame('off', config_get_path($path),
-			"write(read('')) == 'off' for dnsbl_redir"
+		// After: stored as the empty checkbox token.
+		$this->assertSame('', config_get_path($path),
+			"write(read('')) == '' for dnsbl_redir"
 		);
 	}
 
@@ -2223,9 +2223,9 @@ final class CfgGatewayTest extends TestCase
 
 		PfbConfig::write('dnsbl/dnsbl_dot_block', $enum);
 
-		// After: stored as the canonical explicit 'off' (issue #1887).
-		$this->assertSame('off', config_get_path($path),
-			"write(read('')) == 'off' for dnsbl_dot_block"
+		// After: stored as the empty checkbox token.
+		$this->assertSame('', config_get_path($path),
+			"write(read('')) == '' for dnsbl_dot_block"
 		);
 	}
 
@@ -2534,8 +2534,8 @@ final class CfgGatewayTest extends TestCase
 
 		// Alpha-only 'all' -> normalised to 'off'.
 		PfbConfig::writeSection($section, ['pfb_idn' => 'all']);
-		$this->assertSame('off', config_get_path($path),
-			"dropped alpha-only 'all' riding a section write normalises to 'off'"
+		$this->assertSame('', config_get_path($path),
+			"dropped alpha-only 'all' riding a section write normalises to ''"
 		);
 
 		// Canonical 'on' -> stays 'on'.
@@ -2562,9 +2562,8 @@ final class CfgGatewayTest extends TestCase
 
 		PfbConfig::writeSection($section, ['pfb_keep' => '']);
 
-		$this->assertSame('on', config_get_path($path),
-			"'' is the not-configured state (issue #1887): a section write resolves it to the "
-				. "registered default 'on', matching what read() reports"
+		$this->assertSame('', config_get_path($path),
+			"'' is the checkbox Off token and remains empty on a section write"
 		);
 	}
 
@@ -2584,8 +2583,8 @@ final class CfgGatewayTest extends TestCase
 
 		PfbConfig::writeSection($section, ['pfb_dnsbl' => 'yes']);
 
-		$this->assertSame('off', config_get_path($path),
-			"junk toggle value 'yes' riding a section write parse-falls-back to the canonical 'off'"
+		$this->assertSame('', config_get_path($path),
+			"junk toggle value 'yes' riding a section write parse-falls-back to empty"
 		);
 	}
 
@@ -2614,13 +2613,12 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * Hostile input: a NULL value on an adapted key riding a section blob write
-	 * is not a TypeError -- the read adapter's NULL->'' collapse feeds the write
-	 * adapter a well-formed enum, landing on the field's Off/legacy-empty token.
+	 * is not a TypeError -- NULL deletes the adapted key.
 	 *
 	 * Scenario:
 	 *   Given a General settings blob with pfb_keep = NULL.
 	 *   When PfbConfig::writeSection() persists it.
-	 *   Then the stored pfb_keep is 'off' (lenient NULL-collapse path), no crash.
+	 *   Then the stored pfb_keep key is absent, no crash.
 	 */
 	public function testWriteSectionNullValueNormalisesViaDefaultCollapse(): void
 	{
@@ -2629,9 +2627,7 @@ final class CfgGatewayTest extends TestCase
 
 		PfbConfig::writeSection($section, ['pfb_keep' => NULL]);
 
-		$this->assertSame('on', config_get_path($path),
-			'NULL is the not-configured state (issue #1887): a section write resolves it to the registered default'
-		);
+		$this->assertNull(config_get_path($path), 'NULL section writes delete adapted keys');
 	}
 
 	/**
@@ -2767,7 +2763,7 @@ final class CfgGatewayTest extends TestCase
 
 		$this->assertSame('on', $result['pfb_dnsbl'], 'pfb_dnsbl canonical stays on');
 		$this->assertSame('openpagerank', $result['top1m_source'], "legacy 'domcop' normalises to 'openpagerank'");
-		$this->assertSame('off', $result['pfb_idn'], "alpha-only 'all' normalises to 'off'");
+		$this->assertSame('', $result['pfb_idn'], "alpha-only 'all' normalises to empty");
 		$this->assertSame('on', $result['pfb_hsts'], 'pfb_hsts canonical stays on');
 		$this->assertSame('lo0', $result['dnsbl_interface'], 'unadapted dnsbl_interface is byte-identical');
 		$this->assertSame('', $result['pfb_dnsvip4'], 'unadapted pfb_dnsvip4 is byte-identical');
@@ -2806,8 +2802,8 @@ final class CfgGatewayTest extends TestCase
 		$result = PfbConfig::readSection($section);
 
 		$this->assertSame('on', $result['enable_rep'], 'enable_rep canonical stays on');
-		$this->assertSame('off', $result['enable_pdup'], "unchecked enable_pdup ('') normalises to 'off'");
-		$this->assertSame('off', $result['enable_dedup'], "unchecked enable_dedup ('') normalises to 'off'");
+		$this->assertSame('', $result['enable_pdup'], "unchecked enable_pdup ('') remains empty");
+		$this->assertSame('', $result['enable_dedup'], "unchecked enable_dedup ('') remains empty");
 		$this->assertSame('5', $result['p24_dmax_var'], 'unadapted p24_dmax_var is byte-identical');
 		$this->assertSame('', $result['et_header'], 'unadapted et_header is byte-identical');
 		$this->assertSame('US,CA', $result['ccexclude'], 'unadapted ccexclude is byte-identical');

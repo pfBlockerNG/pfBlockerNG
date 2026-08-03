@@ -10,10 +10,10 @@ final class GeneralSyntaxHighlightToggleWiringTest extends TestCase
 
 	public function testSavePersistsExplicitOnAndOffTokens(): void
 	{
-		$this->assertSame('on', pfb_general_toggle_stored_value('on'));
-		$this->assertSame('off', pfb_general_toggle_stored_value(''));
-		$this->assertSame('off', pfb_general_toggle_stored_value(NULL));
-		$this->assertSame('off', pfb_general_toggle_stored_value(['on']));
+		$this->assertSame('on', pfb_filter('on', PFB_FILTER_ON_OFF, 'general'));
+		$this->assertSame('', pfb_filter('', PFB_FILTER_ON_OFF, 'general'));
+		$this->assertSame('', pfb_filter(NULL, PFB_FILTER_ON_OFF, 'general'));
+		$this->assertSame('', pfb_filter(['on'], PFB_FILTER_ON_OFF, 'general'));
 	}
 
 	/**
@@ -32,7 +32,7 @@ final class GeneralSyntaxHighlightToggleWiringTest extends TestCase
 		$this->assertNotFalse($from, 'general page save branch must remain present');
 		$this->assertNotFalse($to, 'general page save must persist through the config gateway');
 		$window = substr($source, $from, $to - $from);
-		$needle = "\$pfb['gconfig']['pfb_syntax_highlight'] = pfb_general_toggle_stored_value(";
+		$needle = "\$pfb['gconfig']['pfb_syntax_highlight'] = pfb_filter(";
 		$this->assertSame(1, substr_count($window, $needle), 'save branch must bind the toggle helper exactly once');
 	}
 }

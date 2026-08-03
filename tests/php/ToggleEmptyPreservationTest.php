@@ -32,12 +32,12 @@ final class ToggleEmptyPreservationTest extends TestCase
 
 		foreach ($fields as $bare => $key) {
 			$GLOBALS['config'] = [];
-			$unchecked = pfb_dnsbl_toggle_stored(NULL);
+			$unchecked = pfb_filter(NULL, PFB_FILTER_ON_OFF, 'dnsbl');
 			PfbConfig::writeSection($section, [$bare => $unchecked]);
-			$this->assertSame('off', config_get_path("{$section}/{$bare}"), "{$bare}: absent POST must persist Off");
+			$this->assertSame('', config_get_path("{$section}/{$bare}"), "{$bare}: absent POST must persist empty");
 			$this->assertFalse(pfb_dnsbl_toggle_enabled(PfbConfig::read($key)), "{$bare}: unchecked render must be disabled");
 
-			$checked = pfb_dnsbl_toggle_stored('on');
+			$checked = pfb_filter('on', PFB_FILTER_ON_OFF, 'dnsbl');
 			PfbConfig::writeSection($section, [$bare => $checked]);
 			$this->assertSame('on', config_get_path("{$section}/{$bare}"), "{$bare}: checked POST must persist On");
 			$this->assertTrue(pfb_dnsbl_toggle_enabled(PfbConfig::read($key)), "{$bare}: checked render must be enabled");
@@ -50,12 +50,12 @@ final class ToggleEmptyPreservationTest extends TestCase
 		$section = 'installedpackages/pfblockerngipsettings/config/0';
 		$key = 'ip/suppression';
 
-		$unchecked = pfb_ip_suppression_stored(NULL);
+		$unchecked = pfb_filter(NULL, PFB_FILTER_ON_OFF, 'ip');
 		PfbConfig::writeSection($section, ['suppression' => $unchecked]);
-		$this->assertSame('off', config_get_path("{$section}/suppression"), 'IP unchecked POST must persist Off');
+		$this->assertSame('', config_get_path("{$section}/suppression"), 'IP unchecked POST must persist empty');
 		$this->assertFalse(pfb_ip_suppression_enabled(PfbConfig::read($key)), 'IP unchecked render must be disabled');
 
-		$checked = pfb_ip_suppression_stored('on');
+		$checked = pfb_filter('on', PFB_FILTER_ON_OFF, 'ip');
 		PfbConfig::writeSection($section, ['suppression' => $checked]);
 		$this->assertSame('on', config_get_path("{$section}/suppression"), 'IP checked POST must persist On');
 		$this->assertTrue(pfb_ip_suppression_enabled(PfbConfig::read($key)), 'IP checked render must be enabled');
@@ -69,12 +69,12 @@ final class ToggleEmptyPreservationTest extends TestCase
 	public function testShippedSaveBindingsKeepEachToggleOnItsPage(): void
 	{
 		foreach ([
-			"\$pfb['dconfig']['pfb_cache'] = pfb_dnsbl_toggle_stored(" => self::DNSBL_PAGE,
-			"\$pfb['dconfig']['pfb_py_reply'] = pfb_dnsbl_toggle_stored(" => self::DNSBL_PAGE,
-			"\$pfb['dconfig']['pfb_hsts'] = pfb_dnsbl_toggle_stored(" => self::DNSBL_PAGE,
-			"\$pfb['dconfig']['pfb_idn_block_malicious'] = pfb_dnsbl_toggle_stored(" => self::DNSBL_PAGE,
-			"\$pfb['dconfig']['pfb_idn_escalate_suspicious'] = pfb_dnsbl_toggle_stored(" => self::DNSBL_PAGE,
-			"\$pfb['iconfig']['suppression'] = pfb_ip_suppression_stored(" => self::IP_PAGE,
+			"\$pfb['dconfig']['pfb_cache'] = pfb_filter(" => self::DNSBL_PAGE,
+			"\$pfb['dconfig']['pfb_py_reply'] = pfb_filter(" => self::DNSBL_PAGE,
+			"\$pfb['dconfig']['pfb_hsts'] = pfb_filter(" => self::DNSBL_PAGE,
+			"\$pfb['dconfig']['pfb_idn_block_malicious'] = pfb_filter(" => self::DNSBL_PAGE,
+			"\$pfb['dconfig']['pfb_idn_escalate_suspicious'] = pfb_filter(" => self::DNSBL_PAGE,
+			"\$pfb['iconfig']['suppression'] = pfb_filter(" => self::IP_PAGE,
 		] as $needle => $page) {
 			$source = php_strip_whitespace($page);
 			$start  = "if (isset(\$_POST['save'])) {";

@@ -191,16 +191,9 @@ if ($_POST) {
 		if (!$input_errors) {
 
 			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
-			// Store as explicit 'on'/'off' (not '' for unchecked) so an unchecked save
-			// (off) is distinguishable from a never-configured install (key absent =>
-			// default on). Mirrors the pfb_feed_internal_filter precedent.
-			$pfb['gconfig']['pfb_keep']			= (($_POST['pfb_keep'] ?? '') === 'on') ? 'on' : 'off';
+			$pfb['gconfig']['pfb_keep']			= pfb_filter($_POST['pfb_keep'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
 
-			// Store the master feed-host filter toggle as an explicit 'on'/'off' (a
-			// checkbox submits 'on' when checked, nothing when unchecked) so the
-			// runtime reader can tell an unchecked save (off) from a never-configured
-			// install (key absent => default on).
-			$pfb['gconfig']['pfb_feed_internal_filter']	= (($_POST['pfb_feed_internal_filter'] ?? '') === 'on') ? 'on' : 'off';
+			$pfb['gconfig']['pfb_feed_internal_filter']	= pfb_filter($_POST['pfb_feed_internal_filter'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
 
 			// The allowlist textarea is greyed (disabled) when the filter is off, so the
 			// browser does not submit it. Preserve the previously stored value in that
@@ -241,13 +234,7 @@ if ($_POST) {
 			// service restart is needed when the toggle changes.
 			$pfb['gconfig']['log_syslog']	= pfb_filter($_POST['log_syslog'], PFB_FILTER_ON_OFF, 'general', '');
 
-			// issue #1669 slice C: persist the syntax-highlight toggle as an explicit
-			// 'on'/'off' (not '' for unchecked) so an unchecked save is distinguishable
-			// from a never-configured install (key absent => default on) -- mirrors the
-			// pfb_keep precedent (lenient adapter). Written into $pfb['gconfig'] so the
-			// writeSection() call below includes it -- a bare PfbConfig::write() before
-			// writeSection() would be clobbered by the section-level write.
-			$pfb['gconfig']['pfb_syntax_highlight']	= pfb_general_toggle_stored_value($_POST['pfb_syntax_highlight'] ?? '');
+			$pfb['gconfig']['pfb_syntax_highlight']	= pfb_filter($_POST['pfb_syntax_highlight'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
 
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');

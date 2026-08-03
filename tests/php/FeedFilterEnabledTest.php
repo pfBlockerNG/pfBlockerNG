@@ -57,12 +57,11 @@ final class FeedFilterEnabledTest extends TestCase
 		$this->assertTrue(pfb_feed_filter_enabled());
 	}
 
-	public function testEmptyStringReadsAsTheRegisteredDefaultOn(): void
+	public function testEmptyStringReadsAsExplicitOff(): void
 	{
-		// issue #1887: '' is the not-configured state and resolves to the registered
-		// default 'on' at the gateway — same effective result as the old fail-safe.
+		// issue #2120: the owner-ruled toggle contract preserves present '' as Off.
 		$this->setToggle('');
-		$this->assertTrue(pfb_feed_filter_enabled());
+		$this->assertFalse(pfb_feed_filter_enabled());
 	}
 
 	public function testJunkTokenFallsBackToOff(): void

@@ -392,11 +392,8 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
     NOTE on the stored vocabulary (issue #964): the page form sends 'on' (checked) or
     '' (unchecked) — ``pfb_filter(..., PFB_FILTER_ON_OFF)`` rejects 'off' — but the
     save persists the section via ``PfbConfig::writeSection`` (pfblockerng_dnsbl.php:903),
-    which since a2c5c26a round-trips every adapter-carrying key through its read+write
-    adapters, and ``PfbToggle``'s canonical off token is 'off', never '' — so an
-    unchecked save STORES 'off'. Page-reachable stored tokens: 'on' (checked) and
-    'off' (unchecked); the render side maps both correctly
-    (``pfb_cfg_toggle_read('off') !== PfbToggle::On`` → unchecked).
+    which round-trips every adapter-carrying key through its read+write adapters;
+    unchecked saves store the empty token. Legacy ``'off'`` remains readable.
 
     Scenario: ADR-29 gateway save→reload round-trip for pfb_dnsbl_lenient on the DNSBL page.
       Background: pfBlockerNG deployed; DNSBL VIP seeded; webConfigurator authenticated.
@@ -412,13 +409,12 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
     page = browser_page
 
     # GIVEN: the form sends a plain on/'' checkbox, but the save's writeSection adapter
-    # ride coalesces the unchecked '' to PfbToggle's canonical 'off' (issue #964/#1887).
     # Map the stored value to its checkbox token ('on' = checked, anything else =
-    # unchecked) and each POSTed token to the value the save will STORE.
+    # unchecked) and each POSTed token to the value the save will store.
     original_raw = helpers.config_get(smoke_vm, _CFG_LENIENT)
     original_box = "on" if original_raw == "on" else ""
     flipped = "" if original_box == "on" else "on"
-    stored_token = {"on": "on", "": "off"}  # POSTed checkbox token -> canonical stored token
+    stored_token = {"on": "on", "": ""}  # POSTed checkbox token -> canonical stored token
 
     try:
         # ---- FLIP: POST the checkbox to the opposite state ---- #
@@ -429,8 +425,7 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
         stored_flip = helpers.config_get(smoke_vm, _CFG_LENIENT)
         assert stored_flip == stored_token[flipped], (
             f"pfb_dnsbl_lenient gateway FAIL after flip: stored {stored_flip!r}, "
-            f"expected {stored_token[flipped]!r} (the writeSection adapter ride stores "
-            f"canonical 'on'/'off', issue #964)"
+            f"expected {stored_token[flipped]!r} (the writeSection adapter stores canonical on/empty)"
         )
 
         # DOM oracle: reload the DNSBL page and assert the checkbox state matches.
@@ -451,7 +446,7 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
         stored_restore = helpers.config_get(smoke_vm, _CFG_LENIENT)
         assert stored_restore == stored_token[original_box], (
             f"pfb_dnsbl_lenient gateway FAIL after restore: stored {stored_restore!r}, "
-            f"expected {stored_token[original_box]!r} (canonical 'on'/'off', issue #964)"
+            f"expected {stored_token[original_box]!r} (canonical on/empty)"
         )
 
         # DOM oracle: reload and assert the checkbox matches the restored value.
