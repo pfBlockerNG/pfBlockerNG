@@ -134,9 +134,9 @@ final class SoftwareUpdateDecisionTest extends TestCase
 
 	/*
 	 * ---- pfb_software_check_enabled() — the single "Check for new versions" boolean ----
-	 * Default ENABLED via the registry (issue #1887): absent and '' are the not-configured
-	 * state and resolve to the registered default 'on'. An explicit 'off' — in any letter
-	 * case — disables; junk tokens fall back to Off like every other toggle (the pre-#1887
+	 * Default ENABLED via the registry (issue #1887): absent resolves to the registered
+	 * default 'on'; present '' is explicit Off. Legacy 'off' — in any letter case —
+	 * also disables; junk tokens fall back to Off like every other toggle (the pre-#1887
 	 * reader treated any non-'off' string as enabled). Both sides asserted so green proves
 	 * 'off' is a real disabling branch, not an always-enabled path.
 	 */
@@ -144,8 +144,8 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	{
 		return [
 			// issue #1887: the accessor reads the gateway itself (zero-arg); the ON
-			// default lives in the registry. '' and absent are the same not-configured
-			// state; junk now falls back to Off like every other toggle (it read as
+			// default lives in the registry. Present '' is explicit Off; absent uses
+			// that default. Junk falls back to Off like every other toggle (it read as
 			// enabled under the old hand-written `!== 'off'` reader).
 			'unset (never saved) -> enabled' => [null, true],
 			'on -> enabled'                  => ['on', true],

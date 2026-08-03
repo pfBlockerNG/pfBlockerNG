@@ -13,7 +13,7 @@ final class ConfigEmptyStorageContractTest extends TestCase
 		'ip'    => 'installedpackages/pfblockerngipsettings/config/0',
 	];
 
-	/** @var array<string,array{path:string,default:PfbToggle}> */
+	/** @var array<string,array{section:string,bare:string}> */
 	private const DEFAULT_ON_TOGGLES = [
 		'gen/pfb_keep'                    => ['section' => 'gen', 'bare' => 'pfb_keep'],
 		'gen/pfb_software_check'          => ['section' => 'gen', 'bare' => 'pfb_software_check'],

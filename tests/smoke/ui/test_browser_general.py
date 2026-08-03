@@ -102,12 +102,11 @@ def test_gateway_pfb_keep_save_roundtrip(
     """
     page = browser_page
 
-    # GIVEN: read the starting value so we know which direction to flip first.
-    # An absent pfb_keep reads as the registered default 'on' (issue #1887), so resolve
-    # absent -> 'on': the restore must return the box to its EFFECTIVE original state,
-    # never pin an explicit Off onto a merely-unconfigured default-on field.
-    original_raw = helpers.config_get(smoke_vm, _CFG_KEEP)
-    original = "on" if original_raw in (None, "on") else ""
+    # GIVEN: capture exact presence/raw state, then resolve the effective state.
+    # An absent pfb_keep reads as the registered default 'on'; explicit empty is Off.
+    original_state = helpers.config_get_state(smoke_vm, _CFG_KEEP)
+    original_raw = original_state[1]
+    original = "on" if not original_state[0] or original_raw == "on" else ""
     flipped = "" if original == "on" else "on"
 
     try:
@@ -156,16 +155,14 @@ def test_gateway_pfb_keep_save_roundtrip(
         else:
             expect(box_restore).not_to_be_checked(timeout=JS_TIMEOUT_MS)
         _shot(page, screenshot_dir, "gateway_general_pfb_keep_after_restore")
+        helpers.config_restore_state(smoke_vm, _CFG_KEEP, original_state)
+        assert helpers.config_get_state(smoke_vm, _CFG_KEEP) == original_state
 
     finally:
         # Belt-and-suspenders: ensure box is always left at its original value even
         # if an assertion above aborted mid-flip, so the session VM is left clean.
-        if helpers.config_get(smoke_vm, _CFG_KEEP) != original:
-            webui.post(
-                GENERAL_PAGE,
-                {"pfb_keep": original} if original == "on" else {"pfb_keep": original},
-                timeout=_GENERAL_POST_TIMEOUT,
-            )
+        if helpers.config_get_state(smoke_vm, _CFG_KEEP) != original_state:
+            helpers.config_restore_state(smoke_vm, _CFG_KEEP, original_state)
 
 
 # --------------------------------------------------------------------------- #

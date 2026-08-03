@@ -39,7 +39,8 @@ import pytest
 
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard
-from .webui import looks_like_login_page
+from .test_render_smoke import software_panel_forced
+from .webui import looks_like_login_page, scrape_form_fields
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -359,11 +360,14 @@ def test_toggle_flow_changes_effective_config(
     final restore leaves the box clean for Tier A / the sibling flows on the
     session VM. The oracle is config.xml read over SSH, never the POST response.
     """
-    # Resolve absence to registered behavior, plus accepted unchecked read
-    # representations to canonical empty Off, so restoration tests the writer.
-    stored_original = helpers.config_get(smoke_vm, flow.config_path)
+    # Capture exact presence/raw state. Effective state resolves absent to the
+    # registered default, while an explicit empty token remains Off.
+    original_state = helpers.config_get_state(smoke_vm, flow.config_path)
+    stored_original = original_state[1]
     original = (
-        flow.off if stored_original.casefold() in {"off", "disabled"} else stored_original or flow.absent or flow.off
+        flow.absent
+        if not original_state[0]
+        else (flow.off if stored_original.casefold() in {"", "off", "disabled"} else stored_original)
     )
     # The toggle's "other" value -- we drive AWAY from original, then BACK.
     flipped = flow.off if original == flow.on else flow.on
@@ -377,15 +381,53 @@ def test_toggle_flow_changes_effective_config(
         # 2) Flip via the form; assert config.xml moved to the flipped value.
         _set_and_confirm(webui, smoke_vm, flow, flipped)
         # 3) Flip back via the form; assert config.xml returned to the original
-        #    (the reverse transition -- proves the change is the POST's doing).
+        #    effective state (the reverse transition -- proves the change is the POST's doing).
         _set_and_confirm(webui, smoke_vm, flow, original)
+        # A POST cannot recreate an originally absent key; restore exact raw
+        # presence after the transition and assert the snapshot is byte-identical.
+        helpers.config_restore_state(smoke_vm, flow.config_path, original_state)
+        assert helpers.config_get_state(smoke_vm, flow.config_path) == original_state
     finally:
         # Belt-and-suspenders: if an assertion above aborted mid-flip, force the
         # box back to its original value so a failure here can't poison Tier A or
         # the next flow on the session-scoped VM.
-        if helpers.config_get(smoke_vm, flow.config_path) != original:
-            overrides = {flow.field: flow.on} if original == flow.on else {flow.field: flow.post_off}
-            webui.post(flow.page, overrides, timeout=flow.post_timeout)
+        if helpers.config_get_state(smoke_vm, flow.config_path) != original_state:
+            helpers.config_restore_state(smoke_vm, flow.config_path, original_state)
+
+
+def test_software_page_toggle_post_roundtrip(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Software-page checkbox stores checked ``on`` and unchecked ``''`` tokens."""
+    flow = ToggleFlow(
+        name="software_update_check",
+        page="/pfblockerng/pfblockerng_software.php",
+        field="pfb_software_check",
+        config_path="installedpackages/pfblockerng/config/0/pfb_software_check",
+        absent="on",
+    )
+    original_state = helpers.config_get_state(smoke_vm, flow.config_path)
+    original = flow.absent if not original_state[0] else (flow.off if original_state[1] != flow.on else flow.on)
+    flipped = flow.off if original == flow.on else flow.on
+    try:
+        with software_panel_forced(smoke_vm, "on"):
+            page = webui.get(flow.page)
+            assert "pfb-software-panel" in page.text, "Software panel override must expose reachable POST form"
+            assert scrape_form_fields(page.text).get(flow.field) == ("on" if original == flow.on else None)
+            _set_and_confirm(webui, smoke_vm, flow, flipped)
+            page = webui.get(flow.page)
+            assert "pfb-software-panel" in page.text
+            assert scrape_form_fields(page.text).get(flow.field) == ("on" if flipped == flow.on else None)
+            _set_and_confirm(webui, smoke_vm, flow, original)
+            page = webui.get(flow.page)
+            assert "pfb-software-panel" in page.text
+            assert scrape_form_fields(page.text).get(flow.field) == ("on" if original == flow.on else None)
+        helpers.config_restore_state(smoke_vm, flow.config_path, original_state)
+        assert helpers.config_get_state(smoke_vm, flow.config_path) == original_state
+    finally:
+        if helpers.config_get_state(smoke_vm, flow.config_path) != original_state:
+            helpers.config_restore_state(smoke_vm, flow.config_path, original_state)
 
 
 # --------------------------------------------------------------------------- #

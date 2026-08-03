@@ -1075,6 +1075,48 @@ def config_get(vm: SmokeVM, path: str, *, timeout: float = 60.0) -> str:
     return out[start + len(_CFG_VAL_OPEN) : end]
 
 
+def config_get_state(vm: SmokeVM, path: str, *, timeout: float = 60.0) -> tuple[bool, str]:
+    """Read exact stored presence and raw scalar token for a config path."""
+    marker = "<<<CFGABSENT>>>"
+    snippet = (
+        f"$v = config_get_path({_php_str(path)}, NULL); "
+        f"echo {_php_str(_CFG_VAL_OPEN)} . "
+        f"($v === NULL ? {_php_str(marker)} : 'PRESENT|' . (string) $v) . "
+        f"{_php_str(_CFG_VAL_CLOSE)};"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"config_get_state({path!r}) failed: {result.stderr!r}")
+    out = result.stdout
+    start = out.find(_CFG_VAL_OPEN)
+    end = out.find(_CFG_VAL_CLOSE)
+    if start == -1 or end == -1:
+        raise RuntimeError(f"config_get_state({path!r}): no delimited value in pfSsh.php output: {out!r}")
+    value = out[start + len(_CFG_VAL_OPEN) : end]
+    if value == marker:
+        return False, ""
+    if not value.startswith("PRESENT|"):
+        raise RuntimeError(f"config_get_state({path!r}): malformed value {value!r}")
+    return True, value[len("PRESENT|") :]
+
+
+def config_restore_state(vm: SmokeVM, path: str, state: tuple[bool, str], *, timeout: float = 60.0) -> None:
+    """Restore exact presence/raw state captured by :func:`config_get_state`."""
+    if state[0]:
+        config_set(vm, path, state[1], timeout=timeout)
+        return
+    snippet = (
+        f"config_del_path({_php_str(path)});\n"
+        "write_config('pfBlockerNG smoke: restore absent config value');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"config_restore_state({path!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
 def config_set(vm: SmokeVM, path: str, value: str, *, timeout: float = 60.0) -> None:
     """Write one scalar config value back VERBATIM (the restore half of config_get).
 

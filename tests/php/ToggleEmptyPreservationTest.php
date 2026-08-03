@@ -69,12 +69,12 @@ final class ToggleEmptyPreservationTest extends TestCase
 	public function testShippedSaveBindingsKeepEachToggleOnItsPage(): void
 	{
 		foreach ([
-			"\$pfb['dconfig']['pfb_cache'] = pfb_filter(" => self::DNSBL_PAGE,
-			"\$pfb['dconfig']['pfb_py_reply'] = pfb_filter(" => self::DNSBL_PAGE,
-			"\$pfb['dconfig']['pfb_hsts'] = pfb_filter(" => self::DNSBL_PAGE,
-			"\$pfb['dconfig']['pfb_idn_block_malicious'] = pfb_filter(" => self::DNSBL_PAGE,
-			"\$pfb['dconfig']['pfb_idn_escalate_suspicious'] = pfb_filter(" => self::DNSBL_PAGE,
-			"\$pfb['iconfig']['suppression'] = pfb_filter(" => self::IP_PAGE,
+			"\$pfb['dconfig']['pfb_cache'] = pfb_filter(\$_POST['pfb_cache'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
+			"\$pfb['dconfig']['pfb_py_reply'] = pfb_filter(\$_POST['pfb_py_reply'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
+			"\$pfb['dconfig']['pfb_hsts'] = pfb_filter(\$_POST['pfb_hsts'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
+			"\$pfb['dconfig']['pfb_idn_block_malicious'] = pfb_filter(\$_POST['pfb_idn_block_malicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
+			"\$pfb['dconfig']['pfb_idn_escalate_suspicious'] = pfb_filter(\$_POST['pfb_idn_escalate_suspicious'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';" => self::DNSBL_PAGE,
+			"\$pfb['iconfig']['suppression'] = pfb_filter(\$_POST['suppression'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';" => self::IP_PAGE,
 		] as $needle => $page) {
 			$source = php_strip_whitespace($page);
 			$start  = "if (isset(\$_POST['save'])) {";

@@ -401,7 +401,7 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
     Given the current checkbox state of pfb_dnsbl_lenient (read via config_get oracle —
       'on' = checked, anything else = unchecked),
     When the DNSBL page is POST-saved with the checkbox flipped,
-    Then config.xml holds the CANONICAL token ('on' or 'off'); AND the DNSBL page,
+    Then config.xml holds the CANONICAL token ('on' or ''); AND the DNSBL page,
       navigated fresh in the browser, renders the checkbox in the matching state; AND a
       second POST restores the original state with the same two assertions (both
       directions).
@@ -411,8 +411,8 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
     # GIVEN: the form sends a plain on/'' checkbox, but the save's writeSection adapter
     # Map the stored value to its checkbox token ('on' = checked, anything else =
     # unchecked) and each POSTed token to the value the save will store.
-    original_raw = helpers.config_get(smoke_vm, _CFG_LENIENT)
-    original_box = "on" if original_raw == "on" else ""
+    original_state = helpers.config_get_state(smoke_vm, _CFG_LENIENT)
+    original_box = "on" if original_state[0] and original_state[1] == "on" else ""
     flipped = "" if original_box == "on" else "on"
     stored_token = {"on": "on", "": ""}  # POSTed checkbox token -> canonical stored token
 
@@ -458,12 +458,14 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
         else:
             expect(box_restore).not_to_be_checked(timeout=JS_TIMEOUT_MS)
         _shot(page, screenshot_dir, "gateway_dnsbl_lenient_after_restore")
+        helpers.config_restore_state(smoke_vm, _CFG_LENIENT, original_state)
+        assert helpers.config_get_state(smoke_vm, _CFG_LENIENT) == original_state
 
     finally:
         # Belt-and-suspenders: restore to the original checkbox value on any mid-flip
         # abort (compare against the canonical stored token an unchecked save leaves).
-        if helpers.config_get(smoke_vm, _CFG_LENIENT) != stored_token[original_box]:
-            webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": original_box}, timeout=_DNSBL_POST_TIMEOUT)
+        if helpers.config_get_state(smoke_vm, _CFG_LENIENT) != original_state:
+            helpers.config_restore_state(smoke_vm, _CFG_LENIENT, original_state)
 
 
 # --------------------------------------------------------------------------- #

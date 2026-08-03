@@ -98,9 +98,8 @@ final class RegistryPassTest extends TestCase
 	}
 
 	/**
-	 * Row 2: a marker-only gen section (settings_family only) is NEWCFG -- the two
-	 * grandfathered fields must take their registered ('on'-side) default, not the
-	 * absent-grandfather value.
+	 * Row 2: a marker-only gen section (settings_family only) is NEWCFG -- registered
+	 * defaults must win over any OLDCFG-only grandfather decisions.
 	 */
 	public function testMarkerOnlyGenSectionIsNewcfgAndTakesRegistryDefaults(): void
 	{
@@ -109,7 +108,7 @@ final class RegistryPassTest extends TestCase
 		$result = pfb_registry_pass($sections);
 
 		$this->assertSame('on', $result[self::GEN_SECTION]['pfb_feed_internal_filter'] ?? NULL,
-			'NEWCFG must take the registry default, not the OLDCFG absent-grandfather (off)');
+			'NEWCFG must take the registry default for the feed filter');
 		$this->assertSame('auto', $result[self::GEN_SECTION]['pfb_alias_delta_mode'] ?? NULL,
 			'NEWCFG must take the registry default, not the OLDCFG absent-grandfather (replace)');
 	}
@@ -124,8 +123,8 @@ final class RegistryPassTest extends TestCase
 
 		$result = pfb_registry_pass($sections);
 
-		$this->assertSame('off', $result[self::GEN_SECTION]['pfb_feed_internal_filter'] ?? NULL,
-			'gen is OLDCFG (populated) -- the feed-filter grandfather must fire');
+		$this->assertSame('on', $result[self::GEN_SECTION]['pfb_feed_internal_filter'] ?? NULL,
+			'gen is OLDCFG (populated) -- feed-filter absent uses registered default');
 		$this->assertSame('tranco', $result[self::DNSBL_SECTION]['top1m_source'] ?? NULL,
 			'dnsbl is NEWCFG (empty) -- fields seed at their registry default');
 
@@ -174,13 +173,18 @@ final class RegistryPassTest extends TestCase
 		$this->assertSecondPassIsEmpty([self::GEN_SECTION => $populated + ['pfb_keep' => '']]);
 	}
 
-	/** Row 5: gen/pfb_feed_internal_filter -- absent -> 'off'; stored empty is untouched. */
+	/** Row 5: gen/pfb_feed_internal_filter -- absent -> registered default 'on'; empty stays empty. */
 	public function testGrandfatherFeedInternalFilter(): void
 	{
 		$populated = ['pfb_interval' => '4'];
 
 		$absent = pfb_registry_pass([self::GEN_SECTION => $populated]);
-		$this->assertSame('off', $absent[self::GEN_SECTION]['pfb_feed_internal_filter'] ?? NULL);
+		$this->assertSame('on', $absent[self::GEN_SECTION]['pfb_feed_internal_filter'] ?? NULL);
+
+		$empty = pfb_registry_pass([self::GEN_SECTION => $populated + ['pfb_feed_internal_filter' => '']]);
+		$this->assertSame('', $empty[self::GEN_SECTION]['pfb_feed_internal_filter'] ?? NULL,
+			'present empty must stay the canonical Off token'
+		);
 
 		$on = pfb_registry_pass([self::GEN_SECTION => $populated + ['pfb_feed_internal_filter' => 'on']]);
 		$this->assertSame('on', $on[self::GEN_SECTION]['pfb_feed_internal_filter'] ?? NULL);
@@ -188,6 +192,7 @@ final class RegistryPassTest extends TestCase
 		$off = pfb_registry_pass([self::GEN_SECTION => $populated + ['pfb_feed_internal_filter' => 'off']]);
 		$this->assertSame('off', $off[self::GEN_SECTION]['pfb_feed_internal_filter'] ?? NULL);
 
+		$this->assertSecondPassIsEmpty([self::GEN_SECTION => $populated + ['pfb_feed_internal_filter' => '']]);
 		$this->assertSecondPassIsEmpty([self::GEN_SECTION => $populated]);
 	}
 
