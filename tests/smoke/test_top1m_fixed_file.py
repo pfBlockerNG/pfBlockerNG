@@ -344,9 +344,9 @@ def _runtime_state(vm: SmokeVM, *, root: str = "") -> dict:
 
 
 def _configure_top1m(vm: SmokeVM) -> None:
-    """Configure TOP1M via pfSsh.php -- a no-session CLI caller, hence writeSystem()
+    """Configure TOP1M via pfSsh.php -- a no-session CLI caller, hence PfbConfig::writeSystem()
     (the gateway's system-context entry point) rather than the page-authorized
-    writeSection() the DNSBL UI save uses (issue #2071)."""
+    PfbConfig::writeSection() the DNSBL UI save uses (issue #2071)."""
     result = h.php_eval(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
