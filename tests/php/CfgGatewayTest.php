@@ -244,7 +244,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('', config_get_path($path), "write(read('off'))=='' for pfb_keep");
 	}
 
-	public function testPfbKeepEmptyResolvesToRegisteredDefault(): void
+	public function testPfbKeepEmptyPreservesExplicitOff(): void
 	{
 		$path = 'installedpackages/pfblockerng/config/0/pfb_keep';
 
@@ -2538,7 +2538,7 @@ final class CfgGatewayTest extends TestCase
 	 *   When PfbConfig::writeSection() persists it.
 	 *   Then the stored pfb_keep remains '', and legacy 'off' is never written.
 	 */
-	public function testWriteSectionPfbKeepEmptyResolvesToRegisteredDefault(): void
+	public function testWriteSectionPfbKeepEmptyPreservesExplicitOff(): void
 	{
 		$section = 'installedpackages/pfblockerng/config/0';
 		$path    = $section . '/pfb_keep';
