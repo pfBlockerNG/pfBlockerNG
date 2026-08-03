@@ -1078,10 +1078,8 @@ def config_get(vm: SmokeVM, path: str, *, timeout: float = 60.0) -> str:
 def config_set(vm: SmokeVM, path: str, value: str, *, timeout: float = 60.0) -> None:
     """Write one scalar config value back VERBATIM (the restore half of config_get).
 
-    Restores must preserve the stored token exactly: a captured canonical ``'off'``
-    round-trips as ``'off'``, never degraded to the raw ``''`` the boolean toggle
-    helpers write (issue #1947 — ``'' != 'off'`` fails a strict restore assert even
-    though both mean Off under the #1887 toggle vocabulary).
+    Restores preserve the captured stored token exactly. This raw helper deliberately
+    bypasses adapter canonicalisation, including for legacy ``'off'`` toggle values.
     """
     snippet = (
         f"config_set_path({_php_str(path)}, {_php_str(value)});\n"
@@ -1692,12 +1690,10 @@ def set_package_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None
 
 def set_pfb_keep(vm: SmokeVM, keep: bool, *, timeout: float = 60.0) -> None:
     """Set ``pfb_keep`` at ``CFG_GLOBAL``: ``True`` → ``'on'`` (retain settings + data on
-    uninstall); ``False`` → ``'off'`` (full removal — live objects + settings + data all gone).
+    uninstall); ``False`` → ``''`` (full removal — live objects + settings + data all gone).
 
-    ``pfb_keep`` uses the merged toggle adapter (``PfbToggle``, issue #1887) whose stored
-    vocabulary is ``{'on', 'off'}``; the off case writes the explicit ``'off'`` token.
-    A stored ``''`` is the not-configured state and resolves to the registered default
-    (``'on'`` for pfb_keep) at the PfbConfig gateway; write always emits ``'off'``.
+    ``pfb_keep`` uses the merged toggle adapter (``PfbToggle``): a present empty token is
+    canonical Off while an absent key resolves to the registered default On.
 
     ``pfb_keep`` defaults to ``'on'`` (issue #281), so a test that asserts sections are
     swept after uninstall MUST call ``set_pfb_keep(vm, False)`` explicitly to select the
@@ -1705,7 +1701,7 @@ def set_pfb_keep(vm: SmokeVM, keep: bool, *, timeout: float = 60.0) -> None:
     #484 fix) uses ``set_pfb_keep(vm, True)`` (or relies on the default, but explicit
     is clearer).
     """
-    val = "on" if keep else "off"
+    val = "on" if keep else ""
     snippet = (
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         f"$g['pfb_keep'] = {_php_str(val)};\n"

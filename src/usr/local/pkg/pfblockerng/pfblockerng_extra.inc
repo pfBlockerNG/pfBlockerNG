@@ -648,8 +648,8 @@ function pfb_cfg_idn_mode_read(mixed $stored): PfbIdnMode
 
 /**
  * Write a PfbIdnMode (enum or legacy string) back to its canonical stored token
- * ('on' | 'confusable' | 'off'). All persists as the legacy 'on' token (reproduces
- * the prior block-all-IDN behaviour); the 4.0.0-alpha 'all' token is dropped to 'off'.
+ * ('on' | 'confusable' | ''). All persists as the legacy 'on' token (reproduces
+ * the prior block-all-IDN behaviour); the 4.0.0-alpha 'all' token falls back to Off.
  */
 function pfb_cfg_idn_mode_write(PfbIdnMode|string $mode): string
 {
