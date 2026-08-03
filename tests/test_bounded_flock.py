@@ -6,7 +6,7 @@ five flock() acquires that violated that premise -- plain blocking LOCK_EX/LOCK_
 calls with no LOCK_NB and no deadline, so a wedged holder (a crashed writer that
 never released, a stuck NFS mount, ...) hung the caller forever. All five were
 rewritten to go through the shared bounded helper (pfb_flock_bounded() in
-pfblockerng.inc), which ORs in LOCK_NB itself and polls against a wall-clock
+pfblockerng_extra.inc), which ORs in LOCK_NB itself and polls against a wall-clock
 deadline.
 
 This module scans the SHIPPED source tree (scan roots: every ``*.inc``/``*.php``

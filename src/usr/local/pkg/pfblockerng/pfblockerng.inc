@@ -8738,55 +8738,6 @@ function pfb_unbound_py_top1m_atomic_copy(string $source, string $path, array $s
 	return TRUE;
 }
 
-// issue #1780: bounded flock() acquire -- a wall-clock deadline AND an independent
-// poll cap both bound the wait (a stalled/backward clock still terminates). ORs in
-// LOCK_NB itself; never fclose()s -- the caller owns the handle.
-//
-// issue #1780: $timed_out distinguishes a genuine flock() error (would-block
-// byref never reaches 1 -- not a contention signal at all) from a genuine
-// deadline/poll-cap expiry, so a caller can log the correct one instead of a
-// single ambiguous FALSE. Set TRUE ONLY when the wait genuinely expired; left
-// FALSE on every other return (a real flock() error, or success).
-function pfb_flock_bounded($fp, int $operation, float $timeout_s, ?bool &$timed_out = NULL): bool {
-	$timed_out = FALSE;
-	// Clamp before the poll-cap cast below: a budget whose /0.02 quotient overflows int
-	// makes that cast warn and yield 0, collapsing the cap to 2 attempts (unbounding it).
-	$wait_s = min(max($timeout_s, 0.0), 3600.0);
-	$deadline = microtime(TRUE) + $wait_s;
-	// Independent poll cap bounds the wait if the wall clock stalls or moves backward.
-	$max_polls = (int) ceil($wait_s / 0.02) + 2;
-	$polls = 0;
-	$first_attempt = TRUE;
-	do {
-		$allow_expired_attempt = $first_attempt && $wait_s <= 0.0;
-		$first_attempt = FALSE;
-		if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
-			break;
-		}
-		$would_block = 0;
-		if (@flock($fp, $operation | LOCK_NB, $would_block)) {
-			if (!$allow_expired_attempt && microtime(TRUE) >= $deadline) {
-				@flock($fp, LOCK_UN);
-				break;
-			}
-			return TRUE;
-		}
-		if ($would_block !== 1) {
-			// A real flock() error -- never a timeout/contention signal.
-			return FALSE;
-		}
-		$polls++;
-		$remaining_s = $deadline - microtime(TRUE);
-		if ($polls >= $max_polls || $remaining_s <= 0.0) {
-			break;
-		}
-		usleep((int) min(20000, ceil($remaining_s * 1000000)));
-	} while (TRUE);
-
-	$timed_out = TRUE;
-	return FALSE;
-}
-
 // issue #1780: the bounded default every NULL caller of the publication lock
 // resolves to. Holders are local manifest/GC/teardown file writes; the worst-case
 // hold is unmeasured, so 60s is a deliberately loose finite cap -- it exists to
