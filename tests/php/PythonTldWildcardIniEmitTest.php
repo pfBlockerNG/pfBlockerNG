@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/** The Python INI carries the configured DNSBL TLD-wildcard toggle. */
+/** The Python INI carries configured DNSBL toggles. */
 final class PythonTldWildcardIniEmitTest extends TestCase
 {
 	private string $tmp;
@@ -99,5 +99,19 @@ final class PythonTldWildcardIniEmitTest extends TestCase
 	{
 		$ini = $this->emit('on');
 		$this->assertMatchesRegularExpression('/^python_tld_wildcard\s*=\s*on$/m', $ini);
+	}
+
+	public function testStoredIdnMaliciousOffReachesPythonIni(): void
+	{
+		PfbConfig::writeSystem('dnsbl/pfb_idn', 'confusable');
+		PfbConfig::writeSystem('dnsbl/pfb_idn_block_malicious', '');
+
+		pfb_global();
+		pfb_unbound_python('enabled');
+		$ini = file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+
+		$this->assertNotFalse($ini, 'writer must create the Python INI');
+		$this->assertMatchesRegularExpression('/^idn_mode\s*=\s*confusable$/m', $ini);
+		$this->assertMatchesRegularExpression('/^python_idn_block_malicious\s*=\s*off$/m', $ini);
 	}
 }
