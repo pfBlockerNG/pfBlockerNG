@@ -724,11 +724,12 @@ if ($_POST) {
 		// no usable interpreter, pfb_unbound.py loads Regex List patterns solely when this
 		// toggle is on, so an unloaded list must not make the whole page unsavable.
 		$pfb_regex_python = pfb_python_interpreter();
+		$pfb_regex_ready = $pfb_regex_python !== '';
 		if (pfb_dnsbl_regex_validation_required_page(
-			$pfb_regex_python !== '' && is_executable($pfb_regex_python),
+			$pfb_regex_ready,
 			$_POST['pfb_regex'] ?? ''
 		)) {
-			foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_list'] ?? ''), $pfb_regex_python, ($_POST['pfb_regex_cap'] ?? '') === 'on') as $regex_error) {
+			foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_list'] ?? ''), PFB_PYTHON_WRAPPER, ($_POST['pfb_regex_cap'] ?? '') === 'on') as $regex_error) {
 				$input_errors[] = 'Customlist pfb_regex_list: ' . htmlspecialchars($regex_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 			}
 		}

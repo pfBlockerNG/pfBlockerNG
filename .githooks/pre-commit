@@ -231,8 +231,8 @@ if [ "$staged_php" = 1 ] || [ "$staged_xml" = 1 ]; then
 	fi
 fi
 
-# --- Forbid direct Python interpreter paths ON the pfSense appliance. Only the
-#     annotated dependency-derived construction in pfb_python_interpreter() is allowed. ---
+# --- Forbid direct Python interpreter paths ON the pfSense appliance. Consumers
+#     invoke pfb_python.sh, the sole dependency-derived resolver. ---
 if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then
 	if [ -n "$py_bin" ]; then
 		step 'no-direct-appliance-python'

@@ -1358,13 +1358,13 @@ function pfb_feed_normalize_generate(string $src, string $dst, ?string $interpre
 
 
 // issue #1797: detect + convert a non-UTF-8 feed file to UTF-8 via
-// pfb_feed_normalize.py (charset_normalizer, a RUN_DEPENDS). The interpreter
-// comes ONLY from pfb_python_interpreter() on the appliance ($interpreter is
-// a test seam). U+FFFD replacements reported by the script are logged: a high
+// pfb_feed_normalize.py (charset_normalizer, a RUN_DEPENDS). The wrapper
+// resolves the interpreter on the appliance ($interpreter is a test seam).
+// U+FFFD replacements reported by the script are logged: a high
 // count means the detection was probably wrong, and silence here would be
 // silent data corruption.
 function pfb_feed_convert_encoding(string $src, string $dst, ?string $interpreter = NULL): bool {
-	$py = $interpreter ?? pfb_python_interpreter();
+	$py = $interpreter ?? PFB_PYTHON_WRAPPER;
 	if ($py === '') {
 		return FALSE;
 	}
@@ -4597,6 +4597,10 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  */
 define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
 
+if (!defined('PFB_PYTHON_WRAPPER')) {
+	define('PFB_PYTHON_WRAPPER', __DIR__ . '/pfb_python.sh');
+}
+
 /*
  * The installed pfBlockerNG package NAME (e.g. 'pfSense-pkg-pfBlockerNG-devel'), read
  * from `pkg query '%n'` filtered to our prefix; '' when not installed via pkg or the
@@ -4622,11 +4626,9 @@ function pfb_pkg_installed_name(): string {
 }
 
 /*
- * Resolve the package-provided Python interpreter. Direct dependencies use either
- * py311 or python311 naming; module dependencies such as py311-sqlite3 are ignored.
- * A supplied dependency list is a pure off-box/test path. The live path reads the
- * installed package's direct dependencies once and fails closed when the resulting
- * versioned interpreter is not executable.
+ * Resolve the package-provided Python interpreter through the single POSIX wrapper.
+ * A supplied dependency list is a pure off-box/test path marshalled into the
+ * wrapper. The live path invokes the wrapper once and caches success or failure.
  */
 function pfb_python_interpreter(?array $dependencies = null): string {
 	$live_lookup = $dependencies === null;
@@ -4635,38 +4637,26 @@ function pfb_python_interpreter(?array $dependencies = null): string {
 		if ($live_result !== null) {
 			return $live_result;
 		}
-		$pkgname = pfb_pkg_installed_name();
-		if ($pkgname === '') {
-			return $live_result = '';
-		}
-		$dependencies = array();
-		$ret = -1;
-		exec(escapeshellarg(PFB_PKG_BIN) . " query '%dn' " . escapeshellarg($pkgname) . ' 2>/dev/null', $dependencies, $ret);
-		if ($ret !== 0) {
-			return $live_result = '';
-		}
 	}
 
-	$versions = array();
-	foreach ($dependencies as $dependency) {
-		if (!is_string($dependency)
-			|| preg_match('/^(?:py|python)([0-9]+)$/', trim($dependency), $match) !== 1
-			|| strlen($match[1]) < 2) {
-			continue;
+	$env = '';
+	if (!$live_lookup) {
+		$marshalled = array();
+		foreach ($dependencies as $dependency) {
+			if (is_string($dependency)) {
+				$marshalled[] = $dependency;
+			}
 		}
-		$version = $match[1][0] . '.' . substr($match[1], 1);
-		$versions[$version] = TRUE;
+		$env = 'PFB_PYTHON_DEPENDENCIES=' . escapeshellarg(implode("\n", $marshalled)) . ' ';
 	}
-	if (count($versions) !== 1) {
+	$output = array();
+	$ret = -1;
+	exec($env . escapeshellarg(PFB_PYTHON_WRAPPER) . ' --print-interpreter 2>/dev/null', $output, $ret);
+	if ($ret !== 0 || !isset($output[0])) {
 		return $live_lookup ? ($live_result = '') : '';
 	}
-
-	$version = (string) array_key_first($versions);
-	$interpreter = '/usr/local/bin/python' . $version; // appliance-python-ok: dependency-derived
-	if ($live_lookup && !is_executable($interpreter)) {
-		return $live_result = '';
-	}
-	return $interpreter;
+	$interpreter = trim((string) $output[0]);
+	return $live_lookup ? ($live_result = $interpreter) : $interpreter;
 }
 
 /*
@@ -5159,8 +5149,7 @@ function pfb_hook_script_valid($script, $when, $dir = null) {
 
 /*
  * Build the command for an allow-listed hook. Python hooks are dispatched through
- * the package's versioned interpreter because appliances do not promise a python3
- * symlink; shell hooks retain their direct execution/shebang behavior.
+ * the package wrapper; shell hooks retain their direct execution/shebang behavior.
  */
 function pfb_hook_script_command(string $script, string $path, string $python): string {
 	if (str_ends_with($script, '.py')) {
@@ -5480,11 +5469,11 @@ function pfb_run_hooks($when, $ctx = array()) {
 		}
 		$path = PFB_HOOK_SCRIPT_DIR . '/' . basename($script);
 		if (str_ends_with($script, '.py') && $python === null) {
-			$python = pfb_python_interpreter();
+			$python = pfb_python_interpreter() !== '' ? PFB_PYTHON_WRAPPER : '';
 		}
 		$hookcmd = pfb_hook_script_command($script, $path, (string) $python);
 		if ($hookcmd === '') {
-			pfb_logger("[ pfB Hook ] {$when} {$label} script '{$script}' has no usable Python interpreter; skipping\n", 2);
+			pfb_logger("[ pfB Hook ] {$when} {$label} script '{$script}' has no usable launcher; skipping\n", 2);
 			continue;
 		}
 
@@ -5496,7 +5485,7 @@ function pfb_run_hooks($when, $ctx = array()) {
 		// Run the vetted script as root under timeout(1): SIGTERM at $timeout,
 		// SIGKILL after the grace period. The PFB_* context rides the env prefix
 		// (the script reads it from the environment). Shell scripts run via their own
-		// shebang + execute bit; Python scripts use the dependency-derived interpreter.
+		// shebang + execute bit; Python scripts use the package wrapper.
 		//
 		// Two independent reasons a hook that (re)starts a daemon -- e.g. the documented
 		// HAProxy graceful-reload recipe -- would otherwise hang the WHOLE pass for the

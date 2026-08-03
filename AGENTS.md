@@ -49,9 +49,10 @@ worktrees, landing, tests, issues, commits) carries over; *this package's mechan
 - Every change ships WITH its tests; no coverage theater (every test carries an assertion
   that fails on regression); a `www/` change carries the reachable UI coverage required by
   `.agents/policy/testing.md`.
-- No direct Python interpreter invocation ON the appliance. Only
-  `pfb_python_interpreter()` may derive the exact versioned path from the installed package
-  dependency; consumers use that resolver. Otherwise use PHP or POSIX sh. Shell is POSIX sh
+- No direct Python interpreter invocation ON the appliance. Consumers invoke
+  `/usr/local/pkg/pfblockerng/pfb_python.sh`; that wrapper alone derives the exact versioned
+  path from the installed package dependency. `pfb_python_interpreter()` delegates to the
+  wrapper for compatibility and test probes. Otherwise use PHP or POSIX sh. Shell is POSIX sh
   under strict ash/dash semantics.
 - Every registered config field goes through `PfbConfig` — never direct `config_*_path`.
 - No orphaned waits: harness-tracked work gets no timer; every untracked wait has a hard

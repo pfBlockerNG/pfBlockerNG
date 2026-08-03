@@ -1,6 +1,6 @@
 """Detect a downloaded feed file's encoding and convert it to UTF-8 (issue #1797).
 
-Usage: <pfb_python_interpreter()> pfb_feed_normalize.py <src> <dst>
+Usage: pfb_python.sh pfb_feed_normalize.py <src> <dst>
 
 Runs only for files that already FAILED the iconv UTF-8 validity gate in
 pfb_feed_normalize_generate(); the caller never hands it valid UTF-8.

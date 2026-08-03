@@ -3,7 +3,7 @@
 
 PROBLEM
 -------
-pfSense ships ``python3.11`` but NO ``python3`` symlink, so a command that
+pfSense ships a versioned Python dependency but NO ``python3`` symlink, so a command that
 shells out to the interpreter on the box —
 
     vm.ssh(f"/usr/local/bin/python3 -c {snippet}")     # smoke test -> pfSense VM
@@ -15,13 +15,12 @@ no-ops and the surrounding logic proceeds on stale/empty state. This bit the
 ``apply_on_change`` and ``tick`` smoke modules — their ledger writes silently did
 nothing, leaving the tests passing or failing by accident of unrelated state.
 
-The package dependency does provide a versioned interpreter. Package code may
-construct that exact path only through the dependency resolver; all other
-appliance paths remain forbidden. Tests and ad-hoc appliance commands should use
-**PHP** (``/usr/local/bin/php`` / ``pfSsh.php``) or **POSIX sh** unless they are
-exercising the dependency-derived launcher.
+The package dependency does provide a versioned interpreter. Package code must
+invoke it through ``/usr/local/pkg/pfblockerng/pfb_python.sh``, which is the sole
+dependency resolver. Tests and ad-hoc appliance commands should use **PHP**
+(``/usr/local/bin/php`` / ``pfSsh.php``), **POSIX sh**, or that wrapper.
 
-This check is the mechanical backstop for that rule (CLAUDE.md, "Python"). It is
+This check is the mechanical backstop for that rule (AGENTS.md, "Python"). It is
 PREVENTATIVE — there are no offenders in shipped code today; it guards against
 re-introducing the footgun.
 
@@ -32,18 +31,16 @@ SCOPE (deliberately low false-positive)
   ``scripts/`` is dev/CI-host tooling (it runs on the developer's box, which DOES
   have ``python3``) and is intentionally NOT scanned.
 * Flags the literal appliance interpreter path ``/usr/local/bin/python`` (covers
-  ``python``, ``python3``, ``python3.11``, ...). The sole spawn-path exception is
-  the annotated dependency-derived construction in ``pfb_python_interpreter()``.
-  Bare ``python3`` is NOT flagged:
-  it legitimately names the dev-host / client-VM interpreter, and the appliance
-  footgun has always used the full path. The CLAUDE.md rule covers the rest as
-  human discipline.
+  ``python``, ``python3``, ``python3.11``, ...) everywhere in the scan roots.
+* Also flags bare ``python3`` and hardcoded ``python3.NN`` commands in shipped
+  source. Test-runner and client-VM commands remain outside that appliance rule.
 
 Exit status: 0 = clean, 1 = one or more violations (printed with file:line).
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -53,24 +50,26 @@ from pathlib import Path
 # for this per-line scan (ADR-28). This file lives under scripts/, which is not
 # scanned, so the literal here is harmless.
 _FORBIDDEN = "/usr/local/bin/python"
-_DERIVED_CONSTRUCTION = "$interpreter = '/usr/local/bin/python' . $version; // appliance-python-ok: dependency-derived"
-_RESOLVER_PATH = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
+_BARE_PYTHON = re.compile(r"(?<![A-Za-z0-9_./-])python3(?:\.[0-9]+)?(?=$|[\s\"'`;|&()<>\[\],])")
+_SOURCE_EXTENSIONS = {"", ".html", ".inc", ".js", ".php", ".py", ".sh", ".xml"}
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Tracked-tree roots that run ON the appliance.
 _SCAN_ROOTS = ("src", "tests")
 
 
-def _is_resolver_path(path: Path) -> bool:
-    """True iff *path* IS the sole exempted resolver file, compared as a
-    normalized repo-relative path — not merely a string/suffix match, so a
-    same-named file nested elsewhere (e.g. ``nested/`` + this path) does not
-    inherit the exemption."""
+def _is_source_line(path: Path, line: str) -> bool:
+    """Return whether a line belongs to executable shipped source."""
+    if path.suffix.lower() not in _SOURCE_EXTENSIONS:
+        return False
+    stripped = line.lstrip()
+    if not stripped or stripped.startswith(("#", "//", "/*", "*")) or "client_vm" in line:
+        return False
     try:
         relative = path.resolve().relative_to(_REPO_ROOT)
     except (OSError, ValueError):
-        return False
-    return relative.as_posix() == _RESOLVER_PATH
+        return True
+    return bool(relative.parts) and relative.parts[0] == "src"
 
 
 def _tracked_files(roots: tuple[str, ...]) -> list[Path]:
@@ -94,8 +93,7 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
         except (OSError, UnicodeError):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            allowed = _is_resolver_path(path) and line.strip() == _DERIVED_CONSTRUCTION
-            if _FORBIDDEN in line and not allowed:
+            if _FORBIDDEN in line or (_is_source_line(path, line) and _BARE_PYTHON.search(line)):
                 violations.append((path, lineno, line.strip()))
     return violations
 
@@ -110,7 +108,7 @@ def main(argv: list[str]) -> int:
         print(f"  {path}:{lineno}: {line}", file=sys.stderr)
     print(
         "\nThe appliance has no `python` or `python3` symlink. Use PHP/POSIX sh, "
-        "or the exact versioned interpreter returned by pfb_python_interpreter(). "
+        "or /usr/local/pkg/pfblockerng/pfb_python.sh. "
         'See AGENTS.md ("Python").',
         file=sys.stderr,
     )

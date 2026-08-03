@@ -249,8 +249,8 @@ jobs:
         run: python3 scripts/check_noopener.py
 
       - name: Forbid direct Python paths on the pfSense appliance
-        # Only pfb_python_interpreter() may construct the dependency-derived versioned
-        # path. All appliance consumers use that resolver. Scans tracked src/ + tests.
+        # pfb_python.sh alone constructs the dependency-derived versioned path; all
+        # appliance consumers invoke that wrapper. Scans tracked src/ + tests.
         run: python3 scripts/check_appliance_python.py
 
       - name: Forbid hardcoded pfSense/FreeBSD version literals

@@ -338,8 +338,8 @@ dnsbl_cache() {
 	dnsblarchive="${dnsblarchive:-/usr/local/etc/pfb_dnsbl_cache.tar}"
 	pathtar="${pathtar:-/usr/bin/tar}"
 
-	# The shipped (static) DNSBL python files -- the ONE definition of the set.
-	PFB_PY_SHIPPED='pfb_dnsbl_regex_rules.py pfb_unbound.py pfb_unbound_include.inc pfb_py_hsts.txt'
+	# The shipped (static) DNSBL Python files + their launcher -- the ONE definition of the set.
+	PFB_PY_SHIPPED='pfb_dnsbl_regex_rules.py pfb_unbound.py pfb_unbound_include.inc pfb_py_hsts.txt pfb_python.sh'
 
 	dnsbl_cache_stage() {
 		mkdir -p "${pfbchroot}"

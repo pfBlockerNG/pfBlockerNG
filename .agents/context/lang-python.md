@@ -6,9 +6,11 @@ Scope: writing or changing Python. Load when: any touched `*.py` file.
   new functions; no bare `except:` (`except Exception` minimum).
 - `pfb_unbound.py` runs in Unbound's Python loader — **stdlib only, no external deps**.
 - **No direct Python interpreter invocation ON the appliance.** There is no
-  `python`/`python3` symlink. Only `pfb_python_interpreter()` may construct the exact
-  versioned path from the installed package dependency; appliance consumers use that
-  resolver. Otherwise drive the box via PHP (`php`/`pfSsh.php`/`h.php_eval`) or POSIX sh.
+  `python`/`python3` symlink. Appliance consumers invoke
+  `/usr/local/pkg/pfblockerng/pfb_python.sh`, the only resolver allowed to construct the exact
+  versioned path from the installed package dependency. `pfb_python_interpreter()` delegates
+  to it for compatibility and test probes. Otherwise drive the box via PHP
+  (`php`/`pfSsh.php`/`h.php_eval`) or POSIX sh.
   Enforced by `scripts/check_appliance_python.py` (pre-commit + CI). Bare `python3` in
   dev/CI tooling under `scripts/` is fine — it names the developer's interpreter.
 - **Content hashing:** the Python side uses `hashlib.md5` for its own self-comparisons only,
