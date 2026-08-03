@@ -350,6 +350,7 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
             },
         )
         assert not looks_like_login_page(resp.text), "addwhitelistdom POST returned the login form (session lost)"
+        assert "Alert Settings" in resp.text, "addwhitelistdom redirect did not render the Alerts page"
         assert domain in _suppression_entries(vm, CFG_WHITELIST), (
             f"{domain} not written to the DNSBL whitelist config node after addwhitelistdom"
         )
