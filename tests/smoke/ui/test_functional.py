@@ -1837,9 +1837,8 @@ def test_update_runnow_scope_guard_and_ledger(
             )
 
         # ACT 1: POST scope=ip — a partial run; the cron ledger must NOT advance.
-        # pfb_runnow() dispatches a detached process and returns immediately (the live log is
-        # AJAX-polled since #671); mark_ran('cron') still runs synchronously in the page process,
-        # so the ledger assertions below read the intended state regardless of the run's progress.
+        # pfb_runnow() dispatches a detached process and returns immediately. The child owns
+        # the update lock and the success-side cadence write; partial scope must never write it.
         resp = webui.post(
             UPDATE_PAGE,
             overrides={"pfb_scope": "ip"},
@@ -1888,6 +1887,9 @@ def test_update_runnow_scope_guard_and_ledger(
             timeout=SAVE_TIMEOUT,
         )
         assert not looks_like_login_page(resp2.text), "scope=both POST returned the login form (session lost)"
+        assert helpers.wait_until(_runnow_idle, timeout=60.0), (
+            "scope=both Run Now child did not finish before its success-side ledger assertion"
+        )
 
         # AFTER scope=both: cron ledger must reflect the full-pass run.
         result2 = vm.ssh("/bin/cat", _LEDGER_PATH, timeout=30.0)
@@ -1911,6 +1913,94 @@ def test_update_runnow_scope_guard_and_ledger(
         )
 
     finally:
+        if original_enabled != "on":
+            helpers.set_package_enabled(vm, False)
+
+
+def test_update_runnow_waits_for_update_lock_then_records_success(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Run Now queues behind an active update lock instead of barging or skipping."""
+    vm = smoke_vm
+    holder = "/tmp/pfb_issue_2122_holder.php"
+    ready = "/tmp/pfb_issue_2122_holder.ready"
+    stop = "/tmp/pfb_issue_2122_holder.stop"
+    original_enabled = helpers.config_get(vm, _ENABLE_CB_CFG)
+    if original_enabled != "on":
+        helpers.set_package_enabled(vm, True)
+
+    holder_php = f"""<?php
+$fp = fopen('{helpers.PFB_DBDIR}/pfb_feed_pass.lock', 'c');
+if ($fp === false || !flock($fp, LOCK_EX)) {{ exit(1); }}
+touch('{ready}');
+while (!file_exists('{stop}')) {{ usleep(100000); }}
+flock($fp, LOCK_UN);
+fclose($fp);
+@unlink('{ready}');
+"""
+
+    try:
+        helpers.wait_no_active_pfb_task(vm)
+        vm.ssh("/bin/rm", "-f", holder, ready, stop)
+        vm.ssh(
+            "/bin/sh",
+            "-c",
+            f"cat > {holder} <<'PFBEOF'\n{holder_php}\nPFBEOF\n"
+            f"nohup /usr/local/bin/php {holder} >/tmp/pfb_issue_2122_holder.out 2>&1 &",
+        )
+        assert helpers.wait_until(
+            lambda: vm.ssh("/usr/bin/test", "-f", ready).returncode == 0,
+            timeout=10.0,
+        ), "test holder did not acquire the update lock"
+
+        before_ts = int(vm.ssh("/bin/date", "+%s").stdout.strip())
+        response = webui.post(
+            UPDATE_PAGE,
+            overrides={"pfb_scope": "both"},
+            submit=("run", "Run Now"),
+            timeout=SAVE_TIMEOUT,
+        )
+        assert not looks_like_login_page(response.text), "Run Now POST returned login form"
+
+        def _child_waiting() -> bool:
+            probe = vm.ssh(
+                "/bin/sh",
+                "-c",
+                "p=$(cat /var/run/pfb_runnow.pid 2>/dev/null); "
+                'test -n "$p" && kill -0 "$p" 2>/dev/null && '
+                f"grep -q 'Waiting for another pfBlockerNG update to finish' {helpers.PFB_RUNLOG}",
+            )
+            return probe.returncode == 0
+
+        assert helpers.wait_until(_child_waiting, timeout=10.0), (
+            "Run Now child did not stay alive and report update-lock wait progress"
+        )
+        vm.ssh("/usr/bin/touch", stop)
+        assert helpers.wait_until(
+            lambda: (
+                vm.ssh(
+                    "/bin/sh",
+                    "-c",
+                    "p=$(cat /var/run/pfb_runnow.pid 2>/dev/null); "
+                    'if test -n "$p" && kill -0 "$p" 2>/dev/null; then exit 1; fi',
+                ).returncode
+                == 0
+            ),
+            timeout=70.0,
+        ), "Run Now child did not complete after lock release"
+
+        ledger = json.loads(vm.ssh("/bin/cat", _LEDGER_PATH, timeout=30.0).stdout)
+        assert ledger.get("cron", {}).get("last_run", 0) >= before_ts, (
+            f"successful queued child did not advance cron cadence: {ledger!r}"
+        )
+    finally:
+        vm.ssh("/usr/bin/touch", stop)
+        helpers.wait_until(
+            lambda: vm.ssh("/usr/bin/test", "!", "-f", ready).returncode == 0,
+            timeout=10.0,
+        )
+        vm.ssh("/bin/rm", "-f", holder, ready, stop, "/tmp/pfb_issue_2122_holder.out")
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)
 
