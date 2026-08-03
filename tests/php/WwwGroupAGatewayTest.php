@@ -239,7 +239,7 @@ final class WwwGroupAGatewayTest extends TestCase
 	 * Issue #930: writeSection() applies the toggle adapter to every registered
 	 * field of the target section, preserving the canonical empty Off token.
 	 */
-	public function testGeneralSectionPfbKeepEmptyResolvesToDefault(): void
+	public function testGeneralSectionPfbKeepEmptyPreservesExplicitOff(): void
 	{
 		$section = 'installedpackages/pfblockerng/config/0';
 

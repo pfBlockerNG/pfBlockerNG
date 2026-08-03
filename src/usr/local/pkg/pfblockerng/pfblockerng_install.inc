@@ -108,9 +108,8 @@ if (
 	// Reset saved wizard configuration.
 	config_del_path('pfblockerng_wizard'); // foreign key — out of ADR-29 gateway scope (root-level, not installedpackages/pfblockerng*)
 
-	// issue #1921: RAW write-back -- this migration transforms raw storage; canonicalising
-	// a bystander adapter-bearing key here, ahead of pfb_registry_pass(), would destroy
-	// the raw value that pass needs to grandfather.
+	// issue #1921: RAW write-back keeps bystander values byte-identical so
+	// pfb_registry_pass() receives exact stored inputs for rename/grandfather decisions.
 	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngdnsblsettings/config/0', $pfb_dnsbl_config);
 	write_config('Migrated old pfBlockerNG VIP configuration');
 	pfb_global();
@@ -401,9 +400,8 @@ foreach ($upgrade_type as $type) {
 		}
 	}
 	if ($type_ufound) {
-		// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
-		// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
-		// a bystander raw '' to its registered default before the pass grandfathers it).
+		// issue #1921: pre-pass legacy reshape -- raw write-back keeps bystander values
+		// byte-identical for pfb_registry_pass()'s rename/grandfather decisions.
 		PfbConfig::writeSectionRawSystem("installedpackages/{$type}/config", $pfb_type_items);
 		$ufound = TRUE;
 	}
@@ -488,9 +486,8 @@ if (!empty($pfb_interfaces)) {
 		if (isset($pfb_interfaces['ipsec_action'])) {
 			unset($pfb_interfaces['ipsec_action']);
 		}
-		// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
-		// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
-		// a bystander raw '' to its registered default before the pass grandfathers it).
+		// issue #1921: pre-pass legacy reshape -- raw write-back keeps bystander values
+		// byte-identical for pfb_registry_pass()'s rename/grandfather decisions.
 		PfbConfig::writeSectionRawSystem('installedpackages/pfblockerng/config/0', $pfb_interfaces);
 	}
 }
@@ -544,9 +541,8 @@ if ($ufound) {
 	foreach ($et_type as $type => $cats) {
 		$pfb_iqrisk[$type] = implode(',', $cats);
 	}
-	// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
-	// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
-	// a bystander raw '' to its registered default before the pass grandfathers it).
+	// issue #1921: pre-pass legacy reshape -- raw write-back keeps bystander values
+	// byte-identical for pfb_registry_pass()'s rename/grandfather decisions.
 	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngreputation/config/0', $pfb_iqrisk);
 } else {
 	update_status(" no changes required ... done.\n");
@@ -579,9 +575,8 @@ if (!empty(pfb_gconfig_operator_view($pfb_gen_section)) && empty($pfb_ip_section
 			unset($pfb['gconfig'][$setting]);
 		}
 	}
-	// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
-	// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
-	// a bystander raw '' to its registered default before the pass grandfathers it).
+	// issue #1921: pre-pass legacy reshape -- raw write-back keeps bystander values
+	// byte-identical for pfb_registry_pass()'s rename/grandfather decisions.
 	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
 	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 	update_status(" saving new changes ... done.\n");
@@ -771,9 +766,8 @@ if (!empty(PfbConfig::readSection('installedpackages/pfblockerngdnsbleasylist'))
 
 		$dnsblcfg   = PfbConfig::readSection('installedpackages/pfblockerngdnsbl/config');
 		$dnsblcfg[] = $add;
-		// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
-		// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
-		// a bystander raw '' to its registered default before the pass grandfathers it).
+		// issue #1921: pre-pass legacy reshape -- raw write-back keeps bystander values
+		// byte-identical for pfb_registry_pass()'s rename/grandfather decisions.
 		PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngdnsbl/config', $dnsblcfg);
 	}
 
@@ -801,9 +795,8 @@ if (!empty($doh_config)) {
 			$doh_config['safesearch_doh_list'] = 'use-application-dns.net';
 		}
 		unset($doh_config['safesearch_firefoxdoh']);
-		// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
-		// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
-		// a bystander raw '' to its registered default before the pass grandfathers it).
+		// issue #1921: pre-pass legacy reshape -- raw write-back keeps bystander values
+		// byte-identical for pfb_registry_pass()'s rename/grandfather decisions.
 		PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngsafesearch', $doh_config);
 	}
 }
@@ -848,9 +841,8 @@ if (!empty($pfb_maxmind_gen) && !isset($pfb_maxmind_ip['maxmind_key'])) {
 		}
 	}
 	if ($ufound) {
-		// issue #1921: pre-pass legacy reshape -- raw write-back; canonicalisation is
-		// pfb_registry_pass()'s job (a section write riding the adapters here would resolve
-		// a bystander raw '' to its registered default before the pass grandfathers it).
+		// issue #1921: pre-pass legacy reshape -- raw write-back keeps bystander values
+		// byte-identical for pfb_registry_pass()'s rename/grandfather decisions.
 		PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngipsettings/config/0', $pfb_maxmind_ip);
 		PfbConfig::writeSectionRawSystem('installedpackages/pfblockerng/config/0', $maxmind_config);
 	}

@@ -1881,10 +1881,10 @@ final class PfbConfig
 	 * write_adapter(read_adapter(...)). A migration transforms RAW config.xml
 	 * storage: persisting its result through that round-trip would canonicalise a
 	 * still-raw legacy value on a BYSTANDER key (e.g. a stored top1m_source
-	 * 'alexa' the migration never touched) before the registry pass
-	 * (pfb_registry_pass(), issue #1921) gets a chance to see and grandfather it --
-	 * canonicalisation is that pass's job, not a migration's. This method persists
-	 * $data byte-for-byte via config_set_path(), with no adapter involvement at all.
+	 * 'alexa' the migration never touched). pfb_registry_pass() (issue #1921) must
+	 * receive exact stored inputs for its rename/grandfather decisions; unrelated
+	 * legacy tokens remain read-compatible until an ordinary write canonicalises them.
+	 * This method persists $data byte-for-byte via config_set_path().
 	 *
 	 * System-context, same no-session contract as writeSystem()/writeSectionSystem()
 	 * (issue #1895) -- for migrations/install/upgrade callers only, never www/.
@@ -2488,16 +2488,16 @@ function pfb_settings_family_pre_uninstall(): void
 // pfb_run_migrations() to execute all entries in registry order; helper bodies are
 // UNCHANGED, this registry only wraps them.
 //
-// issue #1921: the four grandfather/preservation migrations that used to live here
-// (#1887's two '' preservations, ADR-22's lenient seed, issue #281's pfb_keep seed) are
-// folded into pfb_registry_pass() (pfblockerng.inc), the one registry-driven pass the
-// installer runs AFTER this driver. What remains here is genuinely cross-key or
+// issue #1921 moved the old grandfather/preservation migrations into
+// pfb_registry_pass() (pfblockerng.inc), the one registry-driven pass the installer
+// runs AFTER this driver; issue #2120 later retired its raw-empty maps while retaining
+// the absence maps. What remains here is genuinely cross-key or
 // per-row work pfb_registry_pass() cannot express: the dynamic per-feed row rename,
 // and two bespoke migrations keyed on ANOTHER field's value (ADR-02, PFBL-03) rather
 // than a simple absent/''-map. write-back MUST stay RAW (writeSectionRawSystem(), not
 // writeSectionSystem()) -- see pfb_run_migrations()'s inline comment: canonicalising a
-// still-raw bystander value here, ahead of the registry pass, would destroy exactly
-// the value that pass needs to grandfather.
+// still-raw bystander would mutate a key outside the migration's declared work and hide
+// the exact stored input from the later registry pass.
 // Tests: tests/php/MigrationRegistryTest.php
 // ---------------------------------------------------------------------------
 
@@ -2586,9 +2586,8 @@ function pfb_run_migrations(): void
 			if ($result !== NULL) {
 				foreach ($result as $section => $data) {
 					// issue #1895: upgrade migrations run with no web session in scope.
-					// issue #1921: RAW write-back -- a migration transforms raw storage;
-					// canonicalising a bystander key here, ahead of pfb_registry_pass(),
-					// would destroy the raw value that pass needs to grandfather.
+					// issue #1921: RAW write-back keeps bystander values byte-identical so
+					// pfb_registry_pass() receives exact stored inputs for rename/grandfather decisions.
 					PfbConfig::writeSectionRawSystem($section, $data);
 				}
 				write_config($migration['message']);

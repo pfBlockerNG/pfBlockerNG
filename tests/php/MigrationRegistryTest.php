@@ -30,8 +30,8 @@ use PHPUnit\Framework\TestCase;
  *     config is a no-op (no write_config() calls).
  *   - RAW WRITE-BACK (issue #1921): every write this driver performs must persist
  *     RAW (adapter-free, PfbConfig::writeSectionRawSystem()) -- a migration transforms
- *     raw storage, and canonicalising a still-raw bystander value here, ahead of
- *     pfb_registry_pass(), would destroy exactly what that pass needs to grandfather.
+ *     raw storage, and canonicalising a bystander would mutate a key outside the
+ *     migration's declared work and hide the exact input from pfb_registry_pass().
  *   - pfb_migration_registry() returns exactly the declared entries in the correct order,
  *     each declaring exactly one of the single-'section' / multi-'sections' target forms.
  */
@@ -392,11 +392,10 @@ final class MigrationRegistryTest extends TestCase
 		// ADR-02 fired (the driver actually ran and rewrote this section).
 		$this->assertSame('dnsbl_python', $dnsbl['dnsbl_mode']);
 		$this->assertSame('on', $dnsbl['pfb_py_block']);
-		// The bystander legacy token must survive RAW -- canonicalisation is the
-		// registry pass's job (issue #1921), not the migration driver's.
+		// The bystander legacy token must survive RAW: this migration does not own it.
+		// An ordinary adapter-backed write may canonicalise it later (issue #1921).
 		$this->assertSame('alexa', $dnsbl['top1m_source'],
-			'pfb_run_migrations() write-back must persist RAW -- canonicalising a still-raw '
-			. 'bystander legacy value ahead of the registry pass destroys what the pass needs to grandfather'
+			'pfb_run_migrations() write-back must persist unrelated bystander values byte-identical'
 		);
 	}
 
