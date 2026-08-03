@@ -151,7 +151,7 @@ final class SoftwareUpdateDecisionTest extends TestCase
 			'on -> enabled'                  => ['on', true],
 			'off -> disabled'                => ['off', false],
 			'OFF (case variant) -> disabled' => ['OFF', false],
-			'empty string -> enabled'        => ['', true],
+			'empty string -> disabled'       => ['', false],
 			'legacy/other -> disabled'       => ['default', false],
 		];
 	}

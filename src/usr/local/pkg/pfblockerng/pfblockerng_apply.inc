@@ -3890,7 +3890,7 @@ function sync_package_pfblockerng($cron='') {
 										// issue #1896: boundary conversion -- the shell script reads this
 										// positional token raw ('on'/'off'), never the enum itself.
 										$pfb_drep_token = $pfb['drep']->toStored();
-										exec("{$pfb['script']} {$args} {$header_esc} {$pfb['max']} {$pfb_drep_token} {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
+										exec("{$pfb['script']} {$args} {$header_esc} {$pfb['max']} " . escapeshellarg($pfb_drep_token) . " {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
 									}
 
 									// issue #1084: snapshot the pristine post-preprocessing feed for the

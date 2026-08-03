@@ -38,6 +38,8 @@ Scenario D — IdnMode enum invariants.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 # conftest.py adds src/usr/local/pkg/pfblockerng to sys.path and injects
@@ -83,12 +85,24 @@ def _boundary(ini_value: str | None, python_idn: bool) -> IdnMode:
     """
     if ini_value is not None:
         raw = ini_value.strip().lower()
+        if raw == "":
+            return IdnMode.Off
         if raw in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
             return IdnMode(raw)
         # Unrecognised string -> legacy fallback.
         return idn_mode_from_legacy(python_idn)
     # Key absent -> legacy fallback.
     return idn_mode_from_legacy(python_idn)
+
+
+def test_present_empty_idn_mode_is_explicit_off() -> None:
+    # Present idn_mode='' is the PHP gateway's empty Off token; it must not
+    # fall back to python_idn as an absent key does.
+    assert _boundary("", True) is IdnMode.Off
+    assert _boundary("", False) is IdnMode.Off
+
+    source = Path(__file__).parents[1].joinpath("src/usr/local/pkg/pfblockerng/pfb_unbound.py")
+    assert 'if _raw_idn == "":' in source.read_text()
 
 
 # ===========================================================================
@@ -163,7 +177,7 @@ class TestIdnModeDecisionEnum:
 # Scenario C — boundary truth-table (12 combinations)
 # ===========================================================================
 #
-# 6 ini values × 2 python_idn values = 12 combinations.
+# 7 ini values × 2 python_idn values = 14 combinations.
 # For each, assert:
 #   1. The BEFORE-state (what the pre-adoption code produced — a string).
 #   2. The AFTER-state (what the adopted boundary produces — an IdnMode).
@@ -173,7 +187,7 @@ class TestIdnModeDecisionEnum:
 #   canonical ini -> store that string;  unrecognised/absent -> IDN_MODE_ALL if python_idn else IDN_MODE_OFF.
 #
 # Post-adoption logic (enums):
-#   canonical ini -> IdnMode(raw);  unrecognised/absent -> idn_mode_from_legacy(python_idn).
+#   canonical ini -> IdnMode(raw);  present empty -> Off; unrecognised/absent -> legacy fallback.
 #   IdnMode.value == the canonical string -> byte-identical.
 #
 # The 12 combos below are (ini_value, python_idn) -> expected_mode.
@@ -195,8 +209,8 @@ _TRUTH_TABLE: list[tuple[str | None, bool, IdnMode, str]] = [
     ("all", False, IdnMode.Off, IDN_MODE_OFF),
     ("bogus", True, IdnMode.All, IDN_MODE_ALL),
     ("bogus", False, IdnMode.Off, IDN_MODE_OFF),
-    # Empty string -> treated as unrecognised (not in canonical set) -> legacy fallback.
-    ("", True, IdnMode.All, IDN_MODE_ALL),
+    # Present empty string -> explicit Off, independent of python_idn.
+    ("", True, IdnMode.Off, IDN_MODE_OFF),
     ("", False, IdnMode.Off, IDN_MODE_OFF),
     # Absent key (None) -> legacy fallback.
     (None, True, IdnMode.All, IDN_MODE_ALL),

@@ -548,7 +548,7 @@ final class PfbGlobalParityTest extends TestCase
 	 *
 	 * #484 FIX (merged into PfbToggle by #1887): the GUI stores
 	 * 'off' for unchecked-save — distinguishable from absent (default 'on'). Current code
-	 * reads the legacy '' token (written by the old GUI) as PfbToggle::Off.
+	 * reads a present empty token as PfbToggle::Off.
 	 */
 	public function testRepair281PfbKeepDefaultIsFormallyOn(): void
 	{
@@ -565,12 +565,10 @@ final class PfbGlobalParityTest extends TestCase
 		$this->assertSame(PfbToggle::On, $result);
 		$this->assertSame('on', $result->value);
 
-		// issue #1887 (owner decision): a stored '' is the SAME not-configured state as an
-		// absent key — pfSense writes an unchecked checkbox as an empty element — so it
-		// resolves to the registered default 'on'. A deliberate opt-out is the explicit
-		// 'off' token, which round-trips (testPfbKeepRoundTrip* in CfgGatewayTest).
+		// issue #2120: a present empty token is the owner-ruled Off state; only an
+		// absent key resolves to the registered default On.
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_keep', '');
 		$result_empty = PfbConfig::read('gen/pfb_keep');
-		$this->assertSame(PfbToggle::On, $result_empty, "stored '' pfb_keep resolves to the registered default On");
+		$this->assertSame(PfbToggle::Off, $result_empty, "stored '' pfb_keep resolves to Off");
 	}
 }

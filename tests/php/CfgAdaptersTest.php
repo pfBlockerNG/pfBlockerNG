@@ -136,10 +136,9 @@ final class CfgAdaptersTest extends TestCase
 		// Given: canonical 'off' (issue #1887 explicit token).  write(read(v)) == v.
 		$v = 'off';
 		$result = pfb_cfg_toggle_write(pfb_cfg_toggle_read($v));
-		$this->assertSame($v, $result);
-		// Legacy '' no longer round-trips: it is the not-configured token and
-		// normalises to the canonical 'off' at the adapter.
-		$this->assertSame('off', pfb_cfg_toggle_write(pfb_cfg_toggle_read('')));
+		$this->assertSame('', $result);
+		// Legacy '' reads as Off; the current checkbox storage writes empty.
+		$this->assertSame('', pfb_cfg_toggle_write(pfb_cfg_toggle_read('')));
 	}
 
 	public function testToggleDefaultIsOff(): void
@@ -152,7 +151,7 @@ final class CfgAdaptersTest extends TestCase
 	{
 		// write produces the exact stored strings — not 'true'/'false' or 1/0.
 		$this->assertSame('on', pfb_cfg_toggle_write(PfbToggle::On));
-		$this->assertSame('off', pfb_cfg_toggle_write(PfbToggle::Off));
+		$this->assertSame('', pfb_cfg_toggle_write(PfbToggle::Off));
 	}
 
 	public function testToggleWriteAcceptsLegacyString(): void
@@ -160,12 +159,11 @@ final class CfgAdaptersTest extends TestCase
 		// PfbConfig::write() advertises an "enum or string" contract; a raw
 		// legacy string must normalise through the read adapter (it was a
 		// TypeError before — pfblockerng_update.php Force Reload passes 'on').
-		// Canonical strings round-trip; legacy ''/junk normalise to the explicit 'off'
-		// (issue #1887; a gateway write additionally resolves '' to the field default).
+		// Canonical strings normalize to checkbox storage; legacy ''/junk are Off.
 		$this->assertSame('on', pfb_cfg_toggle_write('on'));
-		$this->assertSame('off', pfb_cfg_toggle_write(''));
-		$this->assertSame('off', pfb_cfg_toggle_write('off'));
-		$this->assertSame('off', pfb_cfg_toggle_write('yes'));
+		$this->assertSame('', pfb_cfg_toggle_write(''));
+		$this->assertSame('', pfb_cfg_toggle_write('off'));
+		$this->assertSame('', pfb_cfg_toggle_write('yes'));
 	}
 
 	// Scenario B (PfbLenient) retired by issue #1887 — the enum merged into PfbToggle,
@@ -254,7 +252,7 @@ final class CfgAdaptersTest extends TestCase
 		$result = pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read($v));
 
 		// Then: 'off' (unrecognised -> Off).
-		$this->assertSame('off', $result);
+		$this->assertSame('', $result);
 		$this->assertNotSame('all', $result);
 	}
 
@@ -267,7 +265,7 @@ final class CfgAdaptersTest extends TestCase
 	public function testIdnModeRoundTripOff(): void
 	{
 		$v = 'off';
-		$this->assertSame($v, pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read($v)));
+		$this->assertSame('', pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read($v)));
 	}
 
 	public function testIdnModeCanonicalOnRoundTripsLosslessly(): void
@@ -290,9 +288,9 @@ final class CfgAdaptersTest extends TestCase
 
 	public function testIdnModeEmptyNormalisesToOff(): void
 	{
-		// '' normalises to 'off' on write.
+		// '' remains the empty Off token on write.
 		$result = pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read(''));
-		$this->assertSame('off', $result);
+		$this->assertSame('', $result);
 	}
 
 	public function testIdnModeDefaultIsOff(): void
@@ -307,7 +305,7 @@ final class CfgAdaptersTest extends TestCase
 		// token, reused for current canonical round-trip correctness).
 		$this->assertSame('on', pfb_cfg_idn_mode_write(PfbIdnMode::All));
 		$this->assertSame('confusable', pfb_cfg_idn_mode_write(PfbIdnMode::Confusable));
-		$this->assertSame('off', pfb_cfg_idn_mode_write(PfbIdnMode::Off));
+		$this->assertSame('', pfb_cfg_idn_mode_write(PfbIdnMode::Off));
 	}
 
 	public function testIdnModeWriteAcceptsLegacyString(): void
@@ -318,10 +316,10 @@ final class CfgAdaptersTest extends TestCase
 		// '', junk, and the dropped 4.0.0-alpha 'all' normalise to Off -> 'off'.
 		$this->assertSame('on',          pfb_cfg_idn_mode_write('on'));
 		$this->assertSame('confusable',  pfb_cfg_idn_mode_write('confusable'));
-		$this->assertSame('off',         pfb_cfg_idn_mode_write('off'));
-		$this->assertSame('off',         pfb_cfg_idn_mode_write(''));
-		$this->assertSame('off',         pfb_cfg_idn_mode_write('yes'));
-		$this->assertSame('off',         pfb_cfg_idn_mode_write('all'));   // dropped alpha token
+		$this->assertSame('',             pfb_cfg_idn_mode_write('off'));
+		$this->assertSame('',             pfb_cfg_idn_mode_write(''));
+		$this->assertSame('',             pfb_cfg_idn_mode_write('yes'));
+		$this->assertSame('',             pfb_cfg_idn_mode_write('all'));   // dropped alpha token
 	}
 
 	// -----------------------------------------------------------------------

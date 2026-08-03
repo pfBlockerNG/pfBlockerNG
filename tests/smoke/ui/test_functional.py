@@ -127,7 +127,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerng/config/0/enable_cb",
         # issue #1887: enable_cb carries the toggle adapter, so the save's
         # writeSection ride canonicalises an unchecked '' to the explicit 'off'.
-        off="off",
     ),
     ToggleFlow(
         name="general_keep_settings",
@@ -136,7 +135,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerng/config/0/pfb_keep",
         # issue #484: the General save stores an explicit 'off' for an unchecked
         # pfb_keep (not '') so a default-on flag can persist a deliberate off.
-        off="off",
         # Registry default 'on': an absent key means the feature is ON.
         absent="on",
     ),
@@ -163,7 +161,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="suppression",
         config_path="installedpackages/pfblockerngipsettings/config/0/suppression",
         # issue #1907: toggle-adapter field -- unchecked save stores the explicit 'off'.
-        off="off",
         # Registry default 'on': an absent key means the feature is ON.
         absent="on",
     ),
@@ -208,7 +205,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="pfb_dnsbl",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl",
         # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
-        off="off",
     ),
     ToggleFlow(
         name="dnsbl_tld_wildcard",
@@ -222,7 +218,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="pfb_hsts",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts",
         # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
-        off="off",
         # Registry default 'on' since issue #1907: an absent key means the feature is ON.
         absent="on",
     ),
@@ -250,7 +245,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="pfb_cache",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache",
         # issue #1907: toggle-adapter field -- unchecked save stores the explicit 'off'.
-        off="off",
         # Registry default 'on': an absent key means the feature is ON.
         absent="on",
     ),
@@ -260,7 +254,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="pfb_cache_flush",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush",
         # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
-        off="off",
     ),
     ToggleFlow(
         name="dnsbl_py_nolog",
@@ -277,7 +270,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="pfb_idn_block_malicious",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_block_malicious",
         # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
-        off="off",
         # Registry default 'on': an absent key means the feature is ON.
         absent="on",
     ),
@@ -287,7 +279,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="pfb_idn_escalate_suspicious",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious",
         # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
-        off="off",
     ),
     # issue #381: opt out of automatic DNSBL NAT-rule creation (default '' = NAT on).
     # The form POST exercises the new save handler; config.xml is the oracle.
@@ -297,7 +288,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="pfb_dnsbl_nonat",
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat",
         # issue #1887: toggle-adapter field — unchecked save stores the explicit 'off'.
-        off="off",
     ),
     # ---- Reputation settings (installedpackages/pfblockerngreputation/config/0) -
     # issue #1896: enable_dedup ("dMAX") joined the toggle-adapter registry
@@ -312,7 +302,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         field="enable_dedup",
         config_path="installedpackages/pfblockerngreputation/config/0/enable_dedup",
         # issue #1896: toggle-adapter field — unchecked save stores the explicit 'off'.
-        off="off",
     ),
 )
 

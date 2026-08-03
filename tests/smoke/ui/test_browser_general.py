@@ -82,19 +82,16 @@ def test_gateway_pfb_keep_save_roundtrip(
     """pfb_keep (PfbToggle gateway field) persists via the General page and reflects in the DOM.
 
     Proves that the ADR-29 gateway routing on ``pfblockerng_general.php`` stores
-    the exact legacy token for ``pfb_keep`` ('on'/'off'), and that the General page
+    the canonical checkbox token for ``pfb_keep`` ('on'/''), and that the General page
     re-renders the checkbox in the correct state when the page is reloaded.
 
-    NOTE on the off-token (issue #484): the General save persists an EXPLICIT 'off'
-    for an unchecked pfb_keep (``(($_POST['pfb_keep'] ?? '') === 'on') ? 'on' : 'off'``),
-    not '' -- so a default-on flag can record a deliberate off across a pkg upgrade.
-    The two page-reachable tokens are therefore 'on' (checked) and 'off' (unchecked).
+    Unchecked saves persist the empty checkbox token; legacy ``'off'`` remains readable.
 
     Scenario: ADR-29 gateway save→reload round-trip for pfb_keep on the General page.
       Background: pfBlockerNG deployed; webConfigurator authenticated; wizard dismissed.
 
     Given the current stored value of pfb_keep (read via config_get oracle) is one
-      of the two legal tokens ('on' or 'off'),
+      of the two canonical tokens ('on' or ''),
 
     When the General page is POST-saved with pfb_keep set to the OTHER value,
 
@@ -109,11 +106,9 @@ def test_gateway_pfb_keep_save_roundtrip(
     # An absent pfb_keep reads as the registered default 'on' (issue #1887), so resolve
     # absent -> 'on': the restore must return the box to its EFFECTIVE original state,
     # never pin an explicit 'off' onto a merely-unconfigured default-on field.
-    original = helpers.config_get(smoke_vm, _CFG_KEEP) or "on"
-    assert original in ("on", "off"), f"pfb_keep starting value {original!r} not in expected vocabulary {{'on', 'off'}}"
-    # The two branches: flip to the opposite, then restore. The off-token is the explicit
-    # 'off' the save emits for an unchecked box (issue #484), not ''.
-    flipped = "off" if original == "on" else "on"
+    original_raw = helpers.config_get(smoke_vm, _CFG_KEEP)
+    original = "on" if original_raw in (None, "on") else ""
+    flipped = "" if original == "on" else "on"
 
     try:
         # ---- FLIP: POST pfb_keep to the opposite value ---- #
@@ -123,7 +118,7 @@ def test_gateway_pfb_keep_save_roundtrip(
         resp = webui.post(GENERAL_PAGE, overrides_flip, timeout=_GENERAL_POST_TIMEOUT)
         assert "Sign In" not in resp.text, "pfb_keep flip POST lost the session (got login page)"
 
-        # Config oracle: stored token must equal the flipped value.
+        # Config oracle: stored token must equal the canonical flipped value.
         stored_flip = helpers.config_get(smoke_vm, _CFG_KEEP)
         assert stored_flip == flipped, (
             f"pfb_keep gateway FAIL after flip: stored {stored_flip!r}, expected {flipped!r} "
@@ -146,7 +141,7 @@ def test_gateway_pfb_keep_save_roundtrip(
         resp = webui.post(GENERAL_PAGE, overrides_restore, timeout=_GENERAL_POST_TIMEOUT)
         assert "Sign In" not in resp.text, "pfb_keep restore POST lost the session (got login page)"
 
-        # Config oracle: stored token must equal the original.
+        # Config oracle: stored token must equal the canonical original.
         stored_restore = helpers.config_get(smoke_vm, _CFG_KEEP)
         assert stored_restore == original, (
             f"pfb_keep gateway FAIL after restore: stored {stored_restore!r}, expected {original!r}"

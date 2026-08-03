@@ -23,15 +23,14 @@
 // This file is used to 'include functions' not yet merged into pfSense
 
 // ---------------------------------------------------------------------------
-// ADR-28 — config field enums (PfbStoredEnum contract): read = EnumClass::fromStored($raw)
-// (registry default applied first; '' / legacy / junk resolved by the enum), write =
-// $enum->toStored(). Goal: preserve forward-upgrade behaviour while keeping current
-// canonical storage; an unknown token falls through to the safe default.
+// ADR-28 — config field enums (PfbStoredEnum contract): adapter fields use the
+// registered default only for an absent key; present empty, legacy, and junk tokens are
+// parsed by the enum. Writes use $enum->toStored(), with Off represented by '' on disk.
 // Tests: tests/php/CfgAdaptersTest.php.
 // ---------------------------------------------------------------------------
 
-// PfbStoredEnum — the contract every config-backed enum implements. Keeps the
-// reader/writer dumb: read = EnumClass::fromStored($raw), write = $enum->toStored().
+// PfbStoredEnum — the contract every config-backed enum implements. Reads own raw-token
+// fallback; field-aware gateway writes own empty Off storage and absence deletion.
 interface PfbStoredEnum
 {
 	// Parse-fallback for unknown/non-scalar input. NOT the per-field absent default
@@ -77,19 +76,13 @@ trait PfbStoredEnumAdapter
 
 	public function toStored(): string
 	{
-		return $this->value;
+		return $this->value === 'off' ? '' : $this->value;
 	}
 }
 
-// PfbToggle — the single on/off enum for every checkbox field (issue #1887; absorbed the
-// retired PfbLenient, which existed only to be the variant whose Off survived storage).
-//   Stored vocabulary: 'on' | 'off'. Off is an EXPLICIT token: a checkbox submits nothing
-//   when unchecked, so an Off stored as '' was indistinguishable from "never configured"
-//   and a default-on field silently re-enabled itself on read-back (the #484 bug class).
-//   '' is NOT in the vocabulary — PfbConfig treats a stored '' as "not configured" and
-//   resolves it to the field's registered default, so an install written before this merge
-//   reads as that default rather than as a hard Off. That resolution lives in the gateway
-//   because it needs the per-field default, which an enum cannot see.
+// PfbToggle — the single on/off enum for every checkbox field. The enum keeps 'off' as
+// its runtime/backing value while PfbStoredEnumAdapter::toStored() emits '' on disk;
+// absent adapter keys alone use the field's registered default.
 enum PfbToggle: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
@@ -126,8 +119,8 @@ enum PfbToggle: string implements PfbStoredEnum
 
 // PfbIdnMode — ADR-08 IDN-feature mode selector, adopted into the PfbConfig gateway.
 // Used by pfb_idn / $pfb['dnsbl_idn']. Canonical tokens (config.xml, py_unbound.ini, and
-// the Python IdnMode enum share one vocabulary): 'on' (=All), 'confusable', 'off'; '' /
-// unknown -> Off. Reusing 'on' for All keeps existing installs migration-free and
+// the Python IdnMode enum share one vocabulary): 'on' (=All), 'confusable', with '' as
+// stored Off; legacy 'off' and unknown values also parse as Off. Reusing 'on' for All keeps existing installs migration-free and
 // preserves the established block-all-IDN behaviour.
 enum PfbIdnMode: string implements PfbStoredEnum
 {
@@ -361,30 +354,14 @@ function pfb_editor_enabled(): bool
 	return PfbConfig::read('gen/pfb_syntax_highlight') === PfbToggle::On;
 }
 
-function pfb_dnsbl_toggle_stored(mixed $posted): string
-{
-	return $posted === 'on' ? 'on' : 'off';
-}
-
 function pfb_dnsbl_toggle_enabled(mixed $stored): bool
 {
 	return pfb_cfg_toggle_read($stored) === PfbToggle::On;
 }
 
-function pfb_ip_suppression_stored(mixed $posted): string
-{
-	return $posted === 'on' ? 'on' : 'off';
-}
-
 function pfb_ip_suppression_enabled(mixed $stored): bool
 {
 	return pfb_cfg_toggle_read($stored) === PfbToggle::On;
-}
-
-/** Normalize the General-page editor checkbox to its persisted token. */
-function pfb_editor_toggle_stored_value(mixed $posted): string
-{
-	return $posted === 'on' ? 'on' : 'off';
 }
 
 /** Keep list-editor mounting independent from the row-reorder mode. */
@@ -594,11 +571,6 @@ function pfb_general_editor_render(bool $enabled): array
 	];
 }
 
-function pfb_general_toggle_stored_value(mixed $posted): string
-{
-	return pfb_editor_toggle_stored_value($posted);
-}
-
 function pfb_general_toggle_label(): string
 {
 	return pfb_editor_toggle_label();
@@ -664,7 +636,8 @@ function pfb_cfg_toggle_read(mixed $stored): PfbToggle
 /** Write a PfbToggle (enum or legacy string) back to its stored string. */
 function pfb_cfg_toggle_write(PfbToggle|string $toggle): string
 {
-	return ($toggle instanceof PfbToggle ? $toggle : PfbToggle::fromStored($toggle))->toStored();
+	$toggle = $toggle instanceof PfbToggle ? $toggle : PfbToggle::fromStored($toggle);
+	return $toggle->toStored();
 }
 
 /** Read a PfbIdnMode from a raw stored value (legacy 'on' -> All). */
@@ -680,7 +653,8 @@ function pfb_cfg_idn_mode_read(mixed $stored): PfbIdnMode
  */
 function pfb_cfg_idn_mode_write(PfbIdnMode|string $mode): string
 {
-	return ($mode instanceof PfbIdnMode ? $mode : PfbIdnMode::fromStored($mode))->toStored();
+	$mode = $mode instanceof PfbIdnMode ? $mode : PfbIdnMode::fromStored($mode);
+	return $mode->toStored();
 }
 
 /** Read a PfbTop1mSource from a raw stored value (legacy 'alexa' -> Tranco, 'domcop' -> OpenPageRank). */
@@ -790,18 +764,15 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
-		// Keep blocklists when pfBlockerNG is disabled: 'on' | 'off' | ''.
+		// Keep blocklists when pfBlockerNG is disabled: 'on' | ''.
 		// Default ON — the #281 canonical default; GUI and pfb_global() agree.
-		// Uses the lenient adapter so an unchecked-save (off) is stored as the
-		// explicit 'off' token, distinguishable from a never-configured install
-		// (key absent) which the registry default returns as 'on'. The empty-string
-		// '' is a LEGACY READ token for installs written before this fix; it maps
-		// to Off on read, same as 'off'. Write always emits canonical 'off'.
+		// A present empty unchecked-save is Off; only a never-configured (absent)
+		// key uses the registered default On.
 		'gen/pfb_keep' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'grandfather'   => [PFB_GF_ABSENT => 'on', '' => 'off'],
+			'grandfather'   => [PFB_GF_ABSENT => 'on'],
 		],
 
 		// Update interval: numeric hour string | 'Disabled'. Default '1'.
@@ -1187,7 +1158,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'grandfather'   => ['' => 'off'],
+			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
 		// Full resolver-cache flush after a successful DNSBL data swap. Default off.
@@ -1206,8 +1177,8 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
-		// ADR-22: scheme-parsing leniency: 'on' | 'off' | ''. Default 'off'.
-		// Toggle adapter: Off stores the explicit 'off' token.
+		// ADR-22: scheme-parsing leniency: 'on' | ''. Default 'off'.
+		// Toggle adapter: Off stores the empty token.
 		'dnsbl/pfb_dnsbl_lenient' => [
 			'default'       => 'off',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
@@ -1216,32 +1187,32 @@ function pfb_cfg_registry(): array
 		],
 
 		// Python DNS reply logging. Default on (the de-facto page default since 3.2 --
-		// #1907 owner decision). '' grandfather preserves a 3.2 deliberate uncheck.
+		// #1907 owner decision). A present empty token is deliberate Off.
 		// Bespoke pre-ADR-02 migration (pfb_python_gated_toggles_migrate) additionally
 		// disables a stored 'on' that was inert under pre-upgrade Unbound mode.
 		'dnsbl/pfb_py_reply' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'grandfather'   => ['' => 'off'],
+			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
 		// HSTS null-blocking mode: 'on' | ''. Default on (the de-facto page default
-		// since 3.2 -- #1907 owner decision). '' grandfather preserves a 3.2 deliberate
-		// uncheck. Bespoke pre-ADR-02 migration (pfb_python_gated_toggles_migrate)
+		// since 3.2 -- #1907 owner decision). A present empty token is deliberate Off.
+		// Bespoke pre-ADR-02 migration (pfb_python_gated_toggles_migrate)
 		// additionally disables a stored 'on' that was inert under pre-upgrade Unbound
 		// mode.
 		'dnsbl/pfb_hsts' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'grandfather'   => ['' => 'off'],
+			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
 		// ADR-08: IDN mode — adopted into the gateway as a PfbIdnMode enum (ADR-28
 		// reframe: preserve behaviour on upgrade, not byte-identical storage). Read
 		// normalises legacy 'on' -> All; write persists the canonical token
-		// ('on'=All | 'confusable' | 'off'), reusing the pre-4.0.0 'on' token so All
+		// ('on'=All | 'confusable' | ''=Off), reusing the pre-4.0.0 'on' token so All
 		// round-trips with zero migration. Legacy '' and the 4.0.0-alpha 'all' token
 		// read as Off; unknown tokens also fall through to Off.
 		// See ADR-28 §2.2 + CfgAdaptersTest.
@@ -1252,14 +1223,13 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
-		// Confusable: block malicious homoglyphs (default on). Default 'on'.
-		// issue #1887: toggle adapter — without it, read() resolving a stored '' to the
-		// default 'on' made the page's old ?: '' unchecked save impossible to turn off.
+		// Confusable: block malicious homoglyphs (default on). A present empty token is
+		// deliberate Off; only an absent key receives the registered default On.
 		'dnsbl/pfb_idn_block_malicious' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'grandfather'   => ['' => 'off'],
+			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
 		// Confusable: escalate suspicious mixed-script to block (opt-in). Default ''.
@@ -1647,7 +1617,7 @@ function pfb_cfg_registry(): array
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'grandfather'   => ['' => 'off'],
+			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
 		// -------------------------------------------------------------------
@@ -1759,9 +1729,9 @@ final class PfbConfig
 		$entry   = self::entry($key);
 		$path    = self::sectionPath($key);
 		$raw     = config_get_path($path, NULL);
-		$stored  = (string) self::notConfigured($entry, $raw);
+		$stored  = self::notConfigured($entry, $raw);
 		$adapter = $entry['read_adapter'];
-		return ($adapter !== NULL) ? $adapter($stored) : $stored;
+		return ($adapter !== NULL) ? $adapter($stored) : (string) $stored;
 	}
 
 	/**
@@ -1849,11 +1819,11 @@ final class PfbConfig
 	 * For each key in $data that is registered to this EXACT section (a
 	 * registered key name living under a DIFFERENT section path is foreign
 	 * data and is left untouched) and carries BOTH a read and a write
-	 * adapter, the value is round-tripped read_adapter() then
+	 * adapter, a present value is round-tripped read_adapter() then
 	 * write_adapter() — coalescing a legacy/read-only token (e.g. top1m_source
-	 * 'domcop'/'alexa', pfb_idn 'all'), a NULL, a non-scalar (a crafted POST
-	 * array), or junk input to the field's canonical stored form, exactly as
-	 * a single-key PfbConfig::write() would. Unregistered keys and
+	 * 'domcop'/'alexa', pfb_idn 'all'), a non-scalar (a crafted POST array),
+	 * or junk input to the field's canonical stored form. NULL omits the
+	 * adapter key, exactly as a single-key PfbConfig::write() would. Unregistered keys and
 	 * adapter-less (plain-string) registered keys pass through byte-identical.
 	 * Consequence: canonical storage is enforced on section writes too — a
 	 * legacy token riding a readSection()->writeSection()
@@ -1862,10 +1832,10 @@ final class PfbConfig
 	 * write_config() — callers persist.
 	 *
 	 * Read adapter runs FIRST (mixed -> runtime value; the non-scalar guard
-	 * handles arrays/NULL/junk and is idempotent on an already-adapted enum
+	 * handles arrays/junk and is idempotent on an already-adapted enum
 	 * instance), write adapter SECOND (runtime value -> canonical stored
-	 * string) — calling the write adapter directly on a raw array or NULL
-	 * would TypeError (write adapters are typed EnumClass|string).
+	 * string). NULL is omitted before adapter dispatch, so it cannot reach a
+	 * typed write adapter.
 	 *
 	 * Privilege gate is DELTA-AWARE (issue #1895 addendum): a registered field
 	 * present in $data is only an authorization event when its canonical
@@ -1979,6 +1949,10 @@ final class PfbConfig
 		$entry   = self::entry($key);
 		$path    = self::sectionPath($key);
 		$adapter = $entry['write_adapter'];
+		if ($adapter !== NULL && $value === NULL) {
+			config_del_path($path);
+			return;
+		}
 		$value   = self::notConfigured($entry, $value);
 		$stored  = ($adapter !== NULL) ? $adapter($value) : (string) $value;
 		config_set_path($path, $stored);
@@ -2006,7 +1980,11 @@ final class PfbConfig
 			if (!array_key_exists($bare, $data)) {
 				continue;
 			}
-			$data[$bare] = $write_adapter($read_adapter(self::notConfigured($entry, $data[$bare])));
+			if ($data[$bare] === NULL) {
+				unset($data[$bare]);
+				continue;
+			}
+			$data[$bare] = $write_adapter($read_adapter($data[$bare]));
 		}
 		config_set_path($section, $data);
 	}
@@ -2121,6 +2099,9 @@ final class PfbConfig
 	 */
 	private static function canonicalize(array $entry, mixed $value): string
 	{
+		if ($entry['read_adapter'] !== NULL && $value === NULL) {
+			return $entry['write_adapter']($entry['read_adapter']($entry['default']));
+		}
 		$value         = self::notConfigured($entry, $value);
 		$read_adapter  = $entry['read_adapter'];
 		$write_adapter = $entry['write_adapter'];
@@ -2134,34 +2115,23 @@ final class PfbConfig
 	}
 
 	/**
-	 * Substitute the registered default for a "not configured" value (issue #1887).
+	 * Substitute a registered default at the configuration boundary.
 	 *
-	 * NULL (key absent) and '' (key present but empty) are the SAME state: pfSense
-	 * stores an unchecked checkbox as an empty element, so '' carries no more operator
-	 * intent than a missing key does. Both resolve to the field's registered default,
-	 * and no registered field needs them distinguished — one with a non-empty default
-	 * either already coerces '' to that default at save time (the numeric fields' `?:`)
-	 * or cannot legitimately hold '' (the mode selectors); the fields where '' IS
-	 * meaningful (pfb_feed_internal_allowlist, pfb_quiet_hours, global_log,
-	 * dnsbl_allow_int) all have '' as their registered default, making this identity.
-	 *
-	 * Called from read(), write() AND writeSection(), not from read() alone. The two
-	 * write paths apply the adapters directly to raw stored values, bypassing the
-	 * registry default — so resolving '' only in read() would leave a stored '' reading
-	 * as the default while any section save normalised it to 'off': the same value
-	 * meaning two different things at two layers, where saving an unrelated field on
-	 * the page would flip it. Pinned by
-	 * ToggleMergeTest::testReadAndWriteSectionAgreeOnStoredEmptyString().
-	 *
-	 * An enum cannot do this itself — fromStored() has no access to the per-field
-	 * default, which is precisely why the resolution belongs to the gateway.
+	 * Adapter-backed fields distinguish absence (NULL) from a present empty token:
+	 * NULL uses the registered default, while '' remains raw and the adapter parses it
+	 * as Off. Plain scalar fields retain their existing NULL/'' defaulting behaviour.
+	 * This shared rule is used by read(), write(), and canonicalize(); section writes
+	 * apply adapter round-tripping directly so present empty values stay byte-identical.
 	 *
 	 * @param  array{default:string,read_adapter:callable|null,write_adapter:callable|null} $entry
-	 * @param  mixed $value  Raw stored value, or the runtime value on the write paths.
-	 * @return mixed         $entry['default'] when $value is NULL or '', else $value verbatim.
+	 * @param  mixed $value  Raw stored value, or the runtime value on a write path.
+	 * @return mixed         Registered default only for the field's not-configured state.
 	 */
 	private static function notConfigured(array $entry, mixed $value): mixed
 	{
+		if ($entry['read_adapter'] !== NULL) {
+			return $value === NULL ? $entry['default'] : $value;
+		}
 		return ($value === NULL || $value === '') ? $entry['default'] : $value;
 	}
 

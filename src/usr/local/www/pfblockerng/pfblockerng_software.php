@@ -76,10 +76,9 @@ if ($_POST && !empty($_POST['pfb_sw_action'])) {
 }
 
 // "Save" the settings (standard pfSense CSRF POST). A checkbox is absent from the POST when
-// unticked, so persist an explicit 'on'/'off' — an unset value defaults to enabled, an
-// explicit 'off' is the user opting out.
+// unticked, so persist the owner-ruled empty Off token; an absent config key defaults On.
 if ($_POST && isset($_POST['save'])) {
-	PfbConfig::write('gen/pfb_software_check', isset($_POST['pfb_software_check']) ? 'on' : 'off');
+	PfbConfig::write('gen/pfb_software_check', pfb_filter($_POST['pfb_software_check'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '');
 	write_config('[pfBlockerNG] save Software settings');
 	header('Location: /pfblockerng/pfblockerng_software.php');
 	exit;

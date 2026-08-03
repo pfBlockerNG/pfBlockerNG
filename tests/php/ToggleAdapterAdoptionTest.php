@@ -124,7 +124,7 @@ final class ToggleAdapterAdoptionTest extends TestCase
 	public function testSoftwareCheckUncheckedSaveRoundTrips(): void
 	{
 		PfbConfig::write('gen/pfb_software_check', PfbToggle::Off);
-		$this->assertSame('off', config_get_path(self::SW), 'Off must persist as the explicit off token');
+		$this->assertSame('', config_get_path(self::SW), 'Off must persist as the canonical empty token');
 		$this->assertFalse(pfb_software_check_enabled(), 'the persisted off must read back as disabled');
 	}
 }

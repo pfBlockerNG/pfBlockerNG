@@ -152,7 +152,7 @@ final class RegistryPassTest extends TestCase
 	// 2 -- Grandfathers (OLDCFG, per key x state)
 	// -----------------------------------------------------------------------
 
-	/** Row 4: gen/pfb_keep -- absent -> 'on'; '' -> 'off'; 'on' -> 'on'; 'off' -> 'off'. */
+	/** Row 4: gen/pfb_keep -- absent -> 'on'; empty remains empty; canonical tokens unchanged. */
 	public function testGrandfatherPfbKeep(): void
 	{
 		$populated = ['pfb_interval' => '4']; // OLDCFG discriminator
@@ -161,7 +161,7 @@ final class RegistryPassTest extends TestCase
 		$this->assertSame('on', $absent[self::GEN_SECTION]['pfb_keep'] ?? NULL);
 
 		$empty = pfb_registry_pass([self::GEN_SECTION => $populated + ['pfb_keep' => '']]);
-		$this->assertSame('off', $empty[self::GEN_SECTION]['pfb_keep'] ?? NULL);
+		$this->assertSame('', $empty[self::GEN_SECTION]['pfb_keep'] ?? NULL);
 
 		$on = pfb_registry_pass([self::GEN_SECTION => $populated + ['pfb_keep' => 'on']]);
 		$this->assertSame('on', $on[self::GEN_SECTION]['pfb_keep'] ?? NULL,
@@ -174,7 +174,7 @@ final class RegistryPassTest extends TestCase
 		$this->assertSecondPassIsEmpty([self::GEN_SECTION => $populated + ['pfb_keep' => '']]);
 	}
 
-	/** Row 5: gen/pfb_feed_internal_filter -- absent -> 'off'; 'on' -> 'on'; 'off' -> 'off'. */
+	/** Row 5: gen/pfb_feed_internal_filter -- absent -> 'off'; stored empty is untouched. */
 	public function testGrandfatherFeedInternalFilter(): void
 	{
 		$populated = ['pfb_interval' => '4'];
@@ -225,13 +225,13 @@ final class RegistryPassTest extends TestCase
 		$this->assertSecondPassIsEmpty([self::DNSBL_SECTION => $populated]);
 	}
 
-	/** Row 8: dnsbl/pfb_idn_block_malicious -- '' -> 'off'; absent -> 'on' (seeded default); 'on' -> 'on'. */
+	/** Row 8: dnsbl/pfb_idn_block_malicious -- empty remains empty; absent -> 'on'; 'on' -> 'on'. */
 	public function testGrandfatherIdnBlockMalicious(): void
 	{
 		$populated = ['pfb_dnsbl' => 'on'];
 
 		$empty = pfb_registry_pass([self::DNSBL_SECTION => $populated + ['pfb_idn_block_malicious' => '']]);
-		$this->assertSame('off', $empty[self::DNSBL_SECTION]['pfb_idn_block_malicious'] ?? NULL);
+		$this->assertSame('', $empty[self::DNSBL_SECTION]['pfb_idn_block_malicious'] ?? NULL);
 
 		$absent = pfb_registry_pass([self::DNSBL_SECTION => $populated]);
 		$this->assertSame('on', $absent[self::DNSBL_SECTION]['pfb_idn_block_malicious'] ?? NULL,
@@ -268,7 +268,7 @@ final class RegistryPassTest extends TestCase
 
 		foreach ($cases as [$section, $key, $populated]) {
 			$empty = pfb_registry_pass([$section => $populated + [$key => '']]);
-			$this->assertSame('off', $empty[$section][$key] ?? NULL, "{$key}: '' must map to 'off'");
+			$this->assertSame('', $empty[$section][$key] ?? NULL, "{$key}: '' must remain empty");
 
 			$oldcfg_absent = pfb_registry_pass([$section => $populated]);
 			$this->assertSame('on', $oldcfg_absent[$section][$key] ?? '__missing__',

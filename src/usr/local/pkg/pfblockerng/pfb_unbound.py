@@ -1496,13 +1496,15 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_tld_wildcard"] = config.getboolean("MAIN", "python_tld_wildcard")
             if config.has_option("MAIN", "python_idn"):
                 pfb["python_idn"] = config.getboolean("MAIN", "python_idn")
-            # ADR-08: the IDN mode. The PHP ini writer emits an explicit
-            # idn_mode = off|all|confusable key; honour it when present, else fall
+            # ADR-08: the IDN mode. The PHP ini writer emits idn_mode = ''|on|confusable;
+            # honour it when present, else fall
             # back to the legacy derivation ('on'->All-IDN, off->Off) for a config
             # written before the key existed.
             if config.has_option("MAIN", "idn_mode"):
                 _raw_idn = config.get("MAIN", "idn_mode").strip().lower()
-                if _raw_idn in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
+                if _raw_idn == "":
+                    pfb["idn_mode"] = IdnMode.Off
+                elif _raw_idn in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
                     pfb["idn_mode"] = IdnMode(_raw_idn)
                 else:
                     pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])

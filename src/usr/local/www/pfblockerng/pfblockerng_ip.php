@@ -246,9 +246,8 @@ if ($_POST) {
 
 			$pfb['iconfig']['enable_dup']		= pfb_filter($_POST['enable_dup'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['enable_agg']		= pfb_filter($_POST['enable_agg'], PFB_FILTER_ON_OFF, 'ip')	?: '';
-			// issue #1907: stage the explicit token -- checkbox-absent means Off, and a
-			// staged '' would resolve to this field's default-ON at the gateway.
-			$pfb['iconfig']['suppression']		= pfb_ip_suppression_stored($_POST['suppression'] ?? NULL);
+			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
+			$pfb['iconfig']['suppression']		= pfb_filter($_POST['suppression'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			$pfb['iconfig']['enable_log']		= pfb_filter($_POST['enable_log'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['enable_rdns']		= pfb_filter($_POST['enable_rdns'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['ip_placeholder']	= $_POST['ip_placeholder']					?: '127.1.7.7';
