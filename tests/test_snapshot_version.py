@@ -107,16 +107,33 @@ def test_nightly_snapshot_has_distinct_nightly_and_pkg_versions() -> None:
     )
 
 
-def test_oversized_but_valid_target_is_rejected_before_edge_emission() -> None:
-    major = "1" * 110
+@pytest.mark.parametrize("channel", ["edge", "nightly"])
+def test_oversized_but_valid_target_is_rejected_before_snapshot_emission(channel: str) -> None:
+    major = "1" * 103
+    release_line = f"release/{major}.0" if channel == "edge" else "devel"
     with pytest.raises(ValueError):
         generate_snapshot(
-            channel="edge",
+            channel=channel,  # type: ignore[arg-type]
             target_final=f"{major}.0.0",
-            release_line=f"release/{major}.0",
+            release_line=release_line,
             source_sha=SOURCE_A,
             build_date=DAY_ONE,
         )
+
+
+@pytest.mark.parametrize("channel", ["edge", "nightly"])
+def test_maximum_generated_identity_is_exactly_128_characters(channel: str) -> None:
+    major = "1" * 102
+    release_line = f"release/{major}.0" if channel == "edge" else "devel"
+    result = generate_snapshot(
+        channel=channel,  # type: ignore[arg-type]
+        target_final=f"{major}.0.0",
+        release_line=release_line,
+        source_sha=SOURCE_A,
+        build_date=DAY_ONE,
+    )
+    assert max(len(result.version), len(result.pkg_version), len(result.tag or "")) == 128
+    validate_release_info(result)
 
 
 @pytest.mark.parametrize("generator", [_generate_edge, _generate_nightly])

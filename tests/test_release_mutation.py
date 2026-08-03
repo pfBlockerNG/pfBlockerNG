@@ -108,7 +108,16 @@ def test_assetless_draft_same_tag_and_source_recovers_equal_candidate() -> None:
         release_state="draft_assetless",
         latest_pkg_version="opaque-latest",
         candidate_vs_latest="=",
+        existing_pkg_version=STABLE.pkg_version,
+        existing_artifact_sha256=ARTIFACT_SHA,
     )
+    outcome, calls = _run(observed=observed)
+    assert outcome == "mutated"
+    assert calls == ["mutate"]
+
+
+def test_absent_exact_tag_and_source_recovers_after_tag_creation() -> None:
+    observed = _observed_with_tag(STABLE.tag, tag_source_sha=SOURCE_SHA, release_state="absent")
     outcome, calls = _run(observed=observed)
     assert outcome == "mutated"
     assert calls == ["mutate"]
@@ -116,7 +125,6 @@ def test_assetless_draft_same_tag_and_source_recovers_equal_candidate() -> None:
 
 def test_assetless_recovery_requires_exact_observed_tag_and_source() -> None:
     invalid = [
-        _observed_with_tag(STABLE.tag, tag_source_sha=SOURCE_SHA),
         _observed_with_tag(None, tag_source_sha=SOURCE_SHA, release_state="draft_assetless"),
         _observed_with_tag(STABLE.tag, release_state="draft_assetless"),
         _observed_with_tag("v4.0.1", tag_source_sha=SOURCE_SHA, release_state="draft_assetless"),
@@ -132,7 +140,9 @@ def test_assetless_recovery_requires_exact_observed_tag_and_source() -> None:
 def test_fresh_and_nightly_mutations_require_absent_observed_tag_identity() -> None:
     for request, observed in (
         (_request(), _observed_with_tag(STABLE.tag)),
-        (_request(), _observed_with_tag(STABLE.tag, tag_source_sha=SOURCE_SHA)),
+        (_request(), _observed_with_tag(None, tag_source_sha=SOURCE_SHA)),
+        (_request(), _observed_with_tag("v4.0.1", tag_source_sha=SOURCE_SHA)),
+        (_request(), _observed_with_tag(STABLE.tag, tag_source_sha=OTHER_SOURCE_SHA)),
         (_request(NIGHTLY), _observed_with_tag("v4.0.0")),
     ):
         calls: list[str] = []
@@ -152,22 +162,24 @@ def test_observed_tag_must_be_printable_ascii_release_tag_sized(tag: str) -> Non
 
 def test_assetless_recovery_still_rejects_stale_or_artifact_collision() -> None:
     cases = [
-        _observed(
+        _observed_with_tag(
+            STABLE.tag,
             tag_source_sha=SOURCE_SHA,
             release_state="draft_assetless",
             latest_pkg_version="opaque-latest",
             candidate_vs_latest="<",
         ),
-        _observed(
+        _observed_with_tag(
+            STABLE.tag,
             tag_source_sha=SOURCE_SHA,
             release_state="draft_assetless",
             existing_pkg_version=STABLE.pkg_version,
             existing_artifact_sha256=OTHER_ARTIFACT_SHA,
         ),
     ]
-    for observed in cases:
+    for observed, message in zip(cases, ("stale", "collision"), strict=True):
         calls: list[str] = []
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=message):
             apply_release_mutation(_request(), observed, lambda: calls.append("mutate"))
         assert calls == []
 
@@ -342,7 +354,13 @@ def test_inconsistent_tagged_and_nightly_shapes_reject(result: Any) -> None:
 
 
 def test_pkg_collision_with_different_artifact_rejects() -> None:
-    observed = _observed(existing_pkg_version=STABLE.pkg_version, existing_artifact_sha256=OTHER_ARTIFACT_SHA)
+    observed = _observed_with_tag(
+        STABLE.tag,
+        tag_source_sha=SOURCE_SHA,
+        release_state="draft_assetless",
+        existing_pkg_version=STABLE.pkg_version,
+        existing_artifact_sha256=OTHER_ARTIFACT_SHA,
+    )
     calls: list[str] = []
     with pytest.raises(ValueError, match="collision"):
         apply_release_mutation(_request(), observed, lambda: calls.append("mutate"))
@@ -362,11 +380,24 @@ def test_immutable_release_state_wins_over_identical_artifact_noop(release_state
     assert calls == []
 
 
-@pytest.mark.parametrize("comparison", ["<", "="])
-def test_stale_or_repeated_catalogue_candidate_rejects(comparison: str) -> None:
-    observed = _observed(latest_pkg_version="opaque-latest", candidate_vs_latest=comparison)
+def test_stale_catalogue_candidate_rejects_with_exact_tag_source() -> None:
+    observed = _observed_with_tag(
+        STABLE.tag,
+        tag_source_sha=SOURCE_SHA,
+        release_state="draft_assetless",
+        latest_pkg_version="opaque-latest",
+        candidate_vs_latest="<",
+    )
     calls: list[str] = []
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="stale"):
+        apply_release_mutation(_request(), observed, lambda: calls.append("mutate"))
+    assert calls == []
+
+
+def test_repeated_catalogue_candidate_rejects_without_recovery() -> None:
+    observed = _observed(latest_pkg_version="opaque-latest", candidate_vs_latest="=")
+    calls: list[str] = []
+    with pytest.raises(ValueError, match="already exists"):
         apply_release_mutation(_request(), observed, lambda: calls.append("mutate"))
     assert calls == []
 

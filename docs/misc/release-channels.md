@@ -106,7 +106,8 @@ permits a mutation only when all caller-observed facts are valid:
 - package identity and selected source line exactly match the canonical result;
 - the immutable source commit is reachable and an existing tag has not moved;
 - an existing published Release or draft with assets is never modified;
-- only an assetless draft at the exact tag and source is eligible for safe recovery;
+- an assetless draft, or an absent release after creating the exact tag at the exact source,
+  is eligible for safe recovery;
 - `pkg`/libpkg reports the candidate newer than the current package version;
 - one package version cannot map to different artifact bytes; identical bytes are a no-op.
 

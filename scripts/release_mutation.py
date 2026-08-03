@@ -117,9 +117,11 @@ def _validate_tag_state(result: ReleaseInfo, request: MutationRequest, observed:
         return False
 
     if observed.release_state == "absent":
-        if observed.tag is not None or observed.tag_source_sha is not None:
-            raise ValueError("existing tag is already present")
-        return False
+        if observed.tag is None and observed.tag_source_sha is None:
+            return False
+        if observed.tag == result.tag and observed.tag_source_sha == request.source_sha:
+            return True
+        raise ValueError("existing tag is already present or moved")
     if observed.release_state == "draft_assetless":
         if observed.tag != result.tag:
             raise ValueError("assetless draft has a different tag")
@@ -151,9 +153,12 @@ def apply_release_mutation(
         raise ValueError("candidate package is stale")
 
     if state.existing_pkg_version == result.pkg_version:
-        if state.existing_artifact_sha256 == request.artifact_sha256:
-            return "unchanged"
-        raise ValueError("artifact collision for existing package version")
+        if state.existing_artifact_sha256 != request.artifact_sha256:
+            raise ValueError("artifact collision for existing package version")
+        if recovery:
+            mutate()
+            return "mutated"
+        return "unchanged"
 
     if comparison == "=" and not recovery:
         raise ValueError("candidate package already exists")

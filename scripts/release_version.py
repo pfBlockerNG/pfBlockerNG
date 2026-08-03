@@ -27,6 +27,7 @@ _EDGE_RE = re.compile(
 _BARE_VERSION_RE = re.compile(rf"^(?P<major>{_CORE})\.(?P<minor>{_CORE})\.(?P<patch>{_CORE})$")
 _SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _SEQUENCE_RE = re.compile(r"^(?P<date>[0-9]{8})\.(?P<count>[1-9][0-9]*)$")
+_MAX_RELEASE_TEXT = 128
 
 
 @dataclass(frozen=True)
@@ -198,9 +199,10 @@ def validate_release_info(info: ReleaseInfo) -> None:
         raise TypeError("release info must be ReleaseInfo")
     if info.tag is None:
         _validate_nightly_result(info)
-        return
-    if parse_release_tag(info.tag) != info:
+    elif parse_release_tag(info.tag) != info:
         raise ValueError("release info does not match its release tag")
+    if len(info.version) > _MAX_RELEASE_TEXT or len(info.pkg_version) > _MAX_RELEASE_TEXT:
+        raise ValueError(f"release identity exceeds {_MAX_RELEASE_TEXT} characters")
 
 
 def _validate_snapshot_result(result: ReleaseInfo) -> tuple[date, int]:
