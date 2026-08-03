@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pytest
 
 from .conftest import SmokeVM
@@ -29,7 +31,7 @@ def test_supported_pkg_orders_every_release_channel(smoke_vm: SmokeVM) -> None:
     assert implementation.returncode == 0, implementation.stderr
 
     observed: list[str] = []
-    for older, newer in zip(ORDERED_VERSIONS, ORDERED_VERSIONS[1:], strict=True):
+    for older, newer in pairwise(ORDERED_VERSIONS):
         result = smoke_vm.ssh(PKG, "version", "-t", older, newer)
         assert result.returncode == 0, result.stderr
         comparison = result.stdout.strip()
