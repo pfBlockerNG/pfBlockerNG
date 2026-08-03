@@ -42,7 +42,7 @@ def _capture_php_eval(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def test_explicit_off_toggle_helpers_write_canonical_adapter_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Adapter-backed boolean Off writes use ``'off'` instead of the absent ``''`` state."""
+    """Adapter-backed boolean Off writes use ``'off'`` instead of the absent ``''`` state."""
     snippets = _capture_php_eval(monkeypatch)
     vm = SmokeVM("")
 
