@@ -157,8 +157,6 @@ def test_docs_only_diff_is_neutral() -> None:
 _EXEMPT_DATA_PATHS = (
     "src/usr/local/pkg/pfblockerng/dnsbl_tld",
     "src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt",
-    "src/usr/local/pkg/pfblockerng/shallalist_global_usage",
-    "src/usr/local/pkg/pfblockerng/ut1_global_usage",
     "src/usr/local/www/pfblockerng/vendor/codemirror/MANIFEST.sha256",
 )
 
@@ -194,8 +192,10 @@ def test_every_exempt_path_still_exists_in_the_tree() -> None:
     # silently exempting nothing while the renamed file goes back to being
     # gated with no one noticing. Pin each entry to a real tracked file.
     repo = Path(__file__).resolve().parent.parent
+    # splitlines(), not split(): git emits one path per line and a path may
+    # legitimately contain spaces.
     tracked = set(
-        subprocess.run(["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True).stdout.split()
+        subprocess.run(["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True).stdout.splitlines()
     )
     dead = [p for p in _EXEMPT_DATA_PATHS if p not in tracked]
     assert dead == [], f"exempt paths no longer tracked (renamed/deleted?): {dead}"
@@ -231,12 +231,16 @@ def test_behaviour_bearing_data_files_stay_gated() -> None:
     # The exemption is deliberately narrow: files under src/ that LOOK like data
     # but change what the appliance does are NOT exempt (issue #2132's
     # out-of-scope list). Unbound config decides what the resolver answers; the
-    # feed/ASN catalogs decide what the UI offers.
+    # feed/ASN catalogs decide what the UI offers; a *_global_usage file carries
+    # a blacklist provider's download URL and the category allowlist the
+    # Blacklist page validates against, so editing one is a behaviour change.
     for path in (
         "src/usr/local/pkg/pfblockerng/pfb_dnsbl.safesearch.conf",
         "src/usr/local/pkg/pfblockerng/pfb_dnsbl.doh.conf",
         "src/usr/local/www/pfblockerng/pfblockerng_feeds.json",
         "src/usr/local/www/pfblockerng/pfblockerng_asn.txt",
+        "src/usr/local/pkg/pfblockerng/ut1_global_usage",
+        "src/usr/local/pkg/pfblockerng/shallalist_global_usage",
     ):
         assert ccp.evaluate([path]) != [], f"{path} is behaviour, not data -- it must stay gated"
 
