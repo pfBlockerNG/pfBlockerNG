@@ -333,6 +333,23 @@ def test_wrapper_emits_canonical_keys_and_accepts_release_branch() -> None:
     """The shell facade preserves legacy keys and appends canonical parser fields."""
     result = _run("v4.0.0.edge.20240229.3", "release/4.0")
     assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "version=4.0.0.edge.20240229.3",
+        "channel=edge",
+        "prerelease=true",
+        "prekind=edge",
+        "portversion=4.0.0.snapshot.1.20240229.3",
+        "release_channel=edge",
+        "tag=v4.0.0.edge.20240229.3",
+        "stage=edge",
+        "sequence=20240229.3",
+        "target_final=4.0.0",
+        "release_line=release/4.0",
+        "final=false",
+        "notes_required=true",
+        "github_release=prerelease",
+        "package=pfSense-pkg-pfBlockerNG",
+    ]
     fields_out = _fields(result.stdout)
     assert fields_out == {
         "version": "4.0.0.edge.20240229.3",
@@ -362,3 +379,10 @@ def test_wrapper_rejects_wrong_or_unknown_branches_without_assignments(tag: str,
     result = _run(tag, branch)
     assert result.returncode != 0
     assert result.stdout == ""
+
+
+def test_validate_branch_rejects_non_boolean_legacy_flag() -> None:
+    """Legacy compatibility is an explicit boolean, never a truthy string."""
+    _, _, parse_release_tag, validate_branch = _api()
+    with pytest.raises(TypeError):
+        validate_branch(parse_release_tag("v4.0.0"), "main", legacy="false")
