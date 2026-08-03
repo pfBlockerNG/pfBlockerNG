@@ -1493,10 +1493,13 @@ next success. Open is idempotent-by-key: opening an already-open key refreshes
 
 ### Tick-driven reconciliation — apply stage only
 
-`pfblockerng_tick()` gains one **unconditional** step (runs every tick regardless of due-ness,
-placed after conditional SafeSearch handling and before the log-maintenance tail — it never sets
-`$dispatched`, so it doesn't interact with the log-trim race guard) that, for every open
-`stage=apply` entry:
+`pfblockerng_tick()` gains an independent `apply_reconcile` due-ledger job with a fixed
+zero-jitter **900-second** interval, placed after conditional SafeSearch handling and before the
+log-maintenance tail. It takes `pfb_apply_reconcile.lock`, rechecks due-ness under the bounded
+exclusive lock, runs one reconciliation scan, and marks the anchored next slot only after that
+scan completes. It never sets `$dispatched`, so it does not interact with the log-trim race
+guard. A lock/open failure or thrown scan remains due for the next scheduled attempt. The scan handles every
+open `stage=apply` entry:
 
 - **IP:** re-applies the already-persisted mirror directly — `pfb_pfctl_table_op($item,
   'replace', '-f '.escapeshellarg("{$pfb['aliasdir']}/{$item}.txt"))` when the mirror exists
@@ -1508,17 +1511,17 @@ placed after conditional SafeSearch handling and before the log-maintenance tail
   re-runs `pfb_dnsbl_apply_ledger_update()` to re-settle the entry either way.
 
 **Deliberate narrowing (permanent, not a stopgap):** the DNSBL retry is a sentinel-re-flip only,
-**not** a full stop/restart. Re-invoking `pfb_reload_unbound()`'s restart fallback from every
-15-minute tick would restart a live DNS resolver indefinitely for a condition that stays
+**not** a full stop/restart. Re-invoking `pfb_reload_unbound()`'s restart fallback from each
+reconciliation attempt would restart a live DNS resolver indefinitely for a condition that stays
 genuinely stuck — heavier than this mechanism's own "no network I/O, no feed re-parse" premise.
 Consequence: a **genuinely** stuck DNSBL apply condition (Unbound fully down, a real conf/build
-failure) does **not** self-heal via the tick alone — it stays open/yellow until an operator's own
+failure) does **not** self-heal via the reconciliation job alone — it stays open/yellow until an operator's own
 Force Reload/Update pass (which does run the full restart path) or Unbound's own recovery
-resolves it. A stuck IP `pfctl` condition, by contrast, self-heals within one tick interval —
+resolves it. A stuck IP `pfctl` condition, by contrast, self-heals within one reconciliation interval —
 the two facilities are not symmetric on this specific point, by design.
 
 Retry is unbounded and uncounted — no attempt-count field, no backoff timer, per direct
-instruction (a genuinely un-fixable condition retries forever at tick cadence; cheap
+instruction (a genuinely un-fixable condition retries forever at the 900-second reconciliation cadence; cheap
 per-attempt, accepted as fine). Download/parse-stage entries are never touched by this step —
 those failures stay ledger-visible but retry only at their normal fetch/parse cadence.
 
