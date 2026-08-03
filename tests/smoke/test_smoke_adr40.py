@@ -334,10 +334,12 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
 
 
 def _set_delta_mode(vm: h.SmokeVM, mode: str, *, timeout: float = 60.0) -> None:
-    """Persist ``pfb_alias_delta_mode`` through ``PfbConfig::write``.
+    """Persist ``pfb_alias_delta_mode`` through ``PfbConfig::writeSystem``.
 
-    Mirrors the UI save path (pfblockerng_ip.php POST → PfbConfig::write).
-    The key is REGISTERED UNDER THE GENERAL SECTION (config/0), so the gateway
+    Runs from ``pfSsh.php``, a no-session CLI caller -- not the page-authorized
+    UI save path (pfblockerng_ip.php POST → PfbConfig::write), which enforces
+    a page privilege this fixture cannot present (issue #2071). The key is
+    REGISTERED UNDER THE GENERAL SECTION (config/0), so the gateway
     is the section-proof way to land it where ``PfbConfig::read`` looks: a
     hand-rolled ``config_set_path`` into CFG_IP_SETTINGS wrote a value
     production never read, so the apply path silently kept the box's own mode
@@ -352,7 +354,7 @@ def _set_delta_mode(vm: h.SmokeVM, mode: str, *, timeout: float = 60.0) -> None:
     """
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        f"PfbConfig::write('gen/pfb_alias_delta_mode', {h._php_str(mode)});\n"
+        f"PfbConfig::writeSystem('gen/pfb_alias_delta_mode', {h._php_str(mode)});\n"
         "write_config('pfBlockerNG smoke: set pfb_alias_delta_mode');\n"
         "echo 'OK';"
     )
