@@ -138,6 +138,7 @@ def test_bare_python3_client_vm_is_not_flagged(tmp_path: Path, monkeypatch: pyte
     [
         '    vm.ssh("python3 -c x")\n',
         '    smoke_vm.ssh("python3.11 -c x")\n',
+        '    vm.ssh("python3 -c x")  # unlike client_vm\n',
     ],
 )
 def test_bare_python_guest_ssh_in_smoke_is_flagged(
