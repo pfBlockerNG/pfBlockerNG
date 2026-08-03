@@ -25,13 +25,14 @@ GitHub Actions. These are the things that cost real time to (re)learn; the CI wo
 
 The orchestrator leases a box and runs EVERYTHING on it — images, build, pytest:
 
-`PFB_BOXES` is the pool of ssh targets to lease from — the one input this repo cannot supply.
-It is the box owner's inventory, so **get the current list from the owner** (agents: from your
-session memory) rather than copying the line below: the addresses here are an illustrative
-two-box pool, not a live inventory, and a stale list is why a run "cannot find a box".
+`PFB_BOXES` is the pool of ssh targets to lease from. **The current pool is `10.0.0.31`
+through `10.0.0.38` (eight boxes, ssh as `root`)** — copy the line below verbatim. Do not infer
+the pool from anywhere else in the tree: `tests/shell/select_box_spec.sh` uses `10.0.0.23` and
+`10.0.0.24` as *fake* boxes for lease-token assertions, and a run pointed at those fails with
+`No route to host` and reads like the harness is broken.
 
 ```sh
-export PFB_BOXES="root@10.0.0.23 root@10.0.0.24"   # space-separated SSH targets (ILLUSTRATIVE)
+export PFB_BOXES="root@10.0.0.31 root@10.0.0.32 root@10.0.0.33 root@10.0.0.34 root@10.0.0.35 root@10.0.0.36 root@10.0.0.37 root@10.0.0.38"
 
 # Full smoke (marker=smoke, current HEAD):
 scripts/local-smoke.sh
