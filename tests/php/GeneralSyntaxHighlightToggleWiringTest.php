@@ -32,7 +32,7 @@ final class GeneralSyntaxHighlightToggleWiringTest extends TestCase
 		$this->assertNotFalse($from, 'general page save branch must remain present');
 		$this->assertNotFalse($to, 'general page save must persist through the config gateway');
 		$window = substr($source, $from, $to - $from);
-		$needle = "\$pfb['gconfig']['pfb_syntax_highlight'] = pfb_filter(";
+		$needle = "\$pfb['gconfig']['pfb_syntax_highlight'] = pfb_filter(\$_POST['pfb_syntax_highlight'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';";
 		$this->assertSame(1, substr_count($window, $needle), 'save branch must bind the toggle helper exactly once');
 	}
 }

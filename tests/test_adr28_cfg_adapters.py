@@ -4,11 +4,13 @@ Pins the ACTUAL adoption contract after the dead pfb_cfg_* helpers were removed
 and the IdnMode enum is now the live in-memory representation for idn_mode.
 
 Policy (ADR-28 §2.2):
-  - The ini wire value stays the canonical string ('off'/'all'/'confusable').
+  - The ini wire value stays the recognised string ('off'/'on'/'confusable');
+    present empty is an explicit Off token at this boundary.
   - The in-memory value is IdnMode (converted at the read boundary).
   - Unrecognised / absent ini key falls back to idn_mode_from_legacy(python_idn)
     (NOT pfb_cfg_idn_mode_read semantics — the legacy fallback preserves python_idn).
-  - Round-trip: IdnMode backing value == the canonical stored string.
+  - IdnMode backing values remain the existing internal tokens; the PHP adapter owns
+    canonical empty Off storage.
 
 Scenario A — idn_mode_from_legacy: bool -> IdnMode migration.
   Background: the legacy python_idn on/off toggle maps to All or Off.
@@ -22,25 +24,27 @@ Scenario B — idn_mode_decision: the All-IDN gate (pure unit).
     When idn_mode_decision(q, mode) is called.
     Then True IFF mode is All AND the name has an xn-- label.
 
-Scenario C — boundary truth-table: 12 combinations of ini value x python_idn.
+Scenario C — boundary truth-table: 14 combinations of ini value x python_idn.
   Background: the ini_read boundary in pfb_global converts raw string -> IdnMode,
     with a legacy fallback when the key is absent or unrecognised.
-    Given idn_mode ini value in {'off','all','confusable','bogus','',ABSENT}
+    Given idn_mode ini value in {'off','on','confusable','all','bogus','',ABSENT}
     And python_idn in {True, False}.
     When the boundary logic (as in pfb_global) is applied.
-    Then the resulting IdnMode is byte-identical to the pre-adoption behaviour.
-    And the before-state (prior to adoption) is asserted explicitly per combination.
+    Then the resulting IdnMode and backing token match the production read boundary.
 
 Scenario D — IdnMode enum invariants.
-  Round-trip: IdnMode.value == the canonical ini string for each member.
+  IdnMode.value retains the enum's internal token for each member.
   default() == Off.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
 
 import pytest
+import unboundmodule
+
+import pfb_unbound
 
 # conftest.py adds src/usr/local/pkg/pfblockerng to sys.path and injects
 # Unbound globals onto builtins — mirror the pattern from test_adr06_build_module.py.
@@ -71,38 +75,30 @@ _NON_IDN_QUERIES = (
 
 
 # ---------------------------------------------------------------------------
-# Helper: replicate the ini read-boundary logic from pfb_global() exactly
-# (lines 1095-1102 of pfb_unbound.py) so the truth-table test is a genuine
-# re-implementation, not just calling the function under test.
+# Helper: drive the actual init_standard() MAIN-section reader so the truth-table
+# test exercises the production boundary rather than a copied implementation.
 # ---------------------------------------------------------------------------
 
 
-def _boundary(ini_value: str | None, python_idn: bool) -> IdnMode:
-    """Replicate the pfb_global ini read-boundary for idn_mode.
-
-    ini_value=None means the key is absent from the ini.
-    Returned value must be byte-identical to what pfb_global sets in pfb["idn_mode"].
-    """
+def _production_boundary(tmp_path: Any, monkeypatch: Any, ini_value: str | None, python_idn: bool) -> IdnMode:
+    lines = ["[MAIN]", "python_enable = false", f"python_idn = {'true' if python_idn else 'false'}"]
     if ini_value is not None:
-        raw = ini_value.strip().lower()
-        if raw == "":
-            return IdnMode.Off
-        if raw in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
-            return IdnMode(raw)
-        # Unrecognised string -> legacy fallback.
-        return idn_mode_from_legacy(python_idn)
-    # Key absent -> legacy fallback.
-    return idn_mode_from_legacy(python_idn)
+        lines.append(f"idn_mode = {ini_value}")
+    (tmp_path / "pfb_unbound.ini").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    pfb_unbound.pfb["mod_maxminddb_e"] = "stub"
+    try:
+        assert pfb_unbound.init_standard(0, unboundmodule.module_env()) is True
+        return pfb_unbound.pfb["idn_mode"]
+    finally:
+        pfb_unbound.deinit(0)
 
 
-def test_present_empty_idn_mode_is_explicit_off() -> None:
+def test_present_empty_idn_mode_is_explicit_off(tmp_path: Any, monkeypatch: Any) -> None:
     # Present idn_mode='' is the PHP gateway's empty Off token; it must not
     # fall back to python_idn as an absent key does.
-    assert _boundary("", True) is IdnMode.Off
-    assert _boundary("", False) is IdnMode.Off
-
-    source = Path(__file__).parents[1].joinpath("src/usr/local/pkg/pfblockerng/pfb_unbound.py")
-    assert 'if _raw_idn == "":' in source.read_text()
+    assert _production_boundary(tmp_path, monkeypatch, "", True) is IdnMode.Off
+    assert _production_boundary(tmp_path, monkeypatch, "", False) is IdnMode.Off
 
 
 # ===========================================================================
@@ -174,27 +170,21 @@ class TestIdnModeDecisionEnum:
 
 
 # ===========================================================================
-# Scenario C — boundary truth-table (12 combinations)
+# Scenario C — boundary truth-table (14 combinations)
 # ===========================================================================
 #
 # 7 ini values × 2 python_idn values = 14 combinations.
 # For each, assert:
-#   1. The BEFORE-state (what the pre-adoption code produced — a string).
-#   2. The AFTER-state (what the adopted boundary produces — an IdnMode).
-#   3. That the IdnMode backing value matches the pre-adoption string (byte-identical).
+#   1. The IdnMode selected by the production boundary.
+#   2. The enum backing value used by existing runtime consumers.
 #
-# Pre-adoption logic (strings):
-#   canonical ini -> store that string;  unrecognised/absent -> IDN_MODE_ALL if python_idn else IDN_MODE_OFF.
-#
-# Post-adoption logic (enums):
+# Current boundary logic:
 #   canonical ini -> IdnMode(raw);  present empty -> Off; unrecognised/absent -> legacy fallback.
-#   IdnMode.value == the canonical string -> byte-identical.
-#
-# The 12 combos below are (ini_value, python_idn) -> expected_mode.
+#   IdnMode.value remains the existing enum's internal token.
 
 
 _TRUTH_TABLE: list[tuple[str | None, bool, IdnMode, str]] = [
-    # (ini_value, python_idn, expected_IdnMode, pre_adoption_string)
+    # (ini_value, python_idn, expected_IdnMode, expected_backing_value)
     # Canonical ini values — python_idn is IGNORED when ini is recognised.
     # 'on' (reused legacy token) is the canonical block-all value (IdnMode.All).
     ("off", True, IdnMode.Off, IDN_MODE_OFF),
@@ -218,35 +208,36 @@ _TRUTH_TABLE: list[tuple[str | None, bool, IdnMode, str]] = [
 ]
 
 
-@pytest.mark.parametrize("ini_value,python_idn,expected_mode,pre_adoption_str", _TRUTH_TABLE)
+@pytest.mark.parametrize("ini_value,python_idn,expected_mode,expected_value", _TRUTH_TABLE)
 def test_boundary_truth_table(
-    ini_value: str | None, python_idn: bool, expected_mode: IdnMode, pre_adoption_str: str
+    tmp_path: Any,
+    monkeypatch: Any,
+    ini_value: str | None,
+    python_idn: bool,
+    expected_mode: IdnMode,
+    expected_value: str,
 ) -> None:
-    """Boundary truth-table: each of the 12 (ini_value x python_idn) combos is byte-identical
-    to the pre-adoption behaviour.
+    """Boundary truth-table: all 14 ``ini_value``/``python_idn`` combinations.
 
     Given a raw ini_value and python_idn toggle.
-    When the read-boundary logic is applied.
-    Then the resulting IdnMode matches expected_mode AND its .value equals the pre-adoption string.
+    When the production read boundary runs.
+    Then the IdnMode and its existing backing value match the contract.
     """
-    # Before-state: the pre-adoption code produced a specific string for this combination.
-    # Assert it is as documented so a drift in the spec fails explicitly.
-    assert pre_adoption_str in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE), (
-        f"pre_adoption_str {pre_adoption_str!r} must be one of the canonical strings"
+    assert expected_value in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE), (
+        f"expected_value {expected_value!r} must be an enum backing token"
     )
 
-    # When: apply the boundary.
-    result = _boundary(ini_value, python_idn)
+    # When: execute the production init boundary.
+    result = _production_boundary(tmp_path, monkeypatch, ini_value, python_idn)
 
     # Then: the IdnMode matches the expected value.
     assert result is expected_mode, (
         f"ini={ini_value!r}, python_idn={python_idn}: expected {expected_mode}, got {result}"
     )
 
-    # And: the backing value is byte-identical to the pre-adoption string.
-    assert result.value == pre_adoption_str, (
-        f"ini={ini_value!r}, python_idn={python_idn}: "
-        f"IdnMode.value {result.value!r} != pre-adoption string {pre_adoption_str!r}"
+    # And: the backing value remains the enum's existing internal token.
+    assert result.value == expected_value, (
+        f"ini={ini_value!r}, python_idn={python_idn}: IdnMode.value {result.value!r} != expected {expected_value!r}"
     )
 
 
@@ -258,7 +249,7 @@ def test_boundary_truth_table(
 class TestIdnModeEnumInvariants:
     """IdnMode enum structural guarantees (backing value, default)."""
 
-    def test_backing_values_equal_canonical_ini_strings(self) -> None:
+    def test_backing_values_remain_internal_tokens(self) -> None:
         assert IdnMode.Off.value == IDN_MODE_OFF
         assert IdnMode.All.value == IDN_MODE_ALL
         assert IdnMode.Confusable.value == IDN_MODE_CONFUSABLE

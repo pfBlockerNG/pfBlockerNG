@@ -13,8 +13,9 @@ require_once __DIR__ . '/LogTypesFixture.php';
  * Three test groups per the phase requirements:
  *
  * A — ROUND-TRIP IDENTITY
- *   For every registered field that carries a read+write adapter pair:
- *   write(read(v)) == v for every canonical stored vocabulary value.
+ *   For every registered field that carries a read+write adapter pair, recognised
+ *   values preserve their case; toggle Off writes the canonical empty token and
+ *   legacy 'off' remains read-compatible only.
  *   Mirrors the ADR-28 §2.2 contract.
  *
  * B — DEFAULT ON ABSENT KEY
@@ -55,7 +56,7 @@ final class CfgGatewayTest extends TestCase
 
 	// -----------------------------------------------------------------------
 	// A — Round-trip identity for adapter-bearing fields
-	//     (toggle and lenient adapters; idn-mode exclusion documented below)
+	//     (toggle adapters; multi-valued enum handling documented below)
 	// -----------------------------------------------------------------------
 
 	/**
@@ -69,7 +70,7 @@ final class CfgGatewayTest extends TestCase
 	 */
 	public function testToggleFieldsRoundTripOn(): void
 	{
-		// Representative toggle-adapted fields (pfb_keep is now lenient — see below).
+		// Representative toggle-adapted fields (pfb_keep is default-on).
 		$toggle_fields = [
 			'gen/enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
 			'dnsbl/pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
@@ -106,10 +107,8 @@ final class CfgGatewayTest extends TestCase
 	{
 		// pfb_keep is default-on — see testPfbKeepRoundTrip*() below. issue #1907:
 		// dnsbl/pfb_hsts, dnsbl/pfb_cache, dnsbl/pfb_py_reply, ip/suppression joined
-		// that same default-on class -- a stored '' no longer resolves to Off for any
-		// of the four, so they are excluded here too (see testParityPfbHstsAbsentYieldsOff
-		// and its pfb_cache/pfb_py_reply siblings in PfbGlobalParityTest, and
-		// testIpSuppressionAbsentKeyReturnsOnDefault above).
+		// that same default-on class. Their present empty token is explicit Off and is
+		// covered by ConfigEmptyStorageContractTest.
 		$toggle_fields = [
 			'gen/enable_cb'        => 'installedpackages/pfblockerng/config/0/enable_cb',
 			'dnsbl/pfb_dnsbl'        => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
@@ -138,13 +137,13 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * PfbLenient field (pfb_dnsbl_lenient): 'on'/'off' round-trip; '' -> 'off' (documented).
+	 * Toggle field (pfb_dnsbl_lenient): 'on'/'off' read; Off writes ''.
 	 *
 	 * Scenario:
-	 *   Background: pfb_dnsbl_lenient stored as 'on', 'off', or '' (pre-ADR-22).
+	 *   Background: pfb_dnsbl_lenient stored as 'on', legacy 'off', or ''.
 	 *     Given v.  When read/write.
 	 *     Then 'on' and 'off' round-trip losslessly.
-	 *     And '' normalises to 'off' on write (documented default normalisation).
+	 *     And Off writes the canonical empty token.
 	 */
 	public function testLenientFieldRoundTripOn(): void
 	{
@@ -168,7 +167,7 @@ final class CfgGatewayTest extends TestCase
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient';
 
-		// Given: canonical 'off'.
+		// Given: legacy 'off' (read-compatible; never written).
 		$this->seedConfig($path, 'off');
 
 		// Before: raw 'off'.
@@ -192,7 +191,7 @@ final class CfgGatewayTest extends TestCase
 		// Before: raw ''.
 		$this->assertSame('', config_get_path($path));
 
-		// When/After: normalised to 'off' (documented, matches pfb_global() behaviour).
+		// When/After: Off remains the canonical empty token.
 		$enum = PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
 		$this->assertSame(PfbToggle::Off, $enum);
 
@@ -202,13 +201,13 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * pfb_keep (lenient adapter): 'on'/'off'/'' round-trips and legacy '' normalises.
+	 * pfb_keep (toggle adapter): 'on'/'off'/'' reads; Off writes the empty token.
 	 *
 	 * Scenario:
 	 *   Background: pfb_keep stored as 'on', 'off', or '' (pre-#484-fix legacy empty).
 	 *     Given v.  When read/write.
-	 *     Then 'on' round-trips to 'on'; 'off' round-trips to 'off'.
-	 *     And '' (legacy) normalises to the current canonical 'off' on write.
+	 *     Then 'on' round-trips to 'on'; legacy 'off' reads Off and writes ''.
+	 *     And '' is preserved as the canonical empty token on write.
 	 */
 	public function testPfbKeepLenientRoundTripOn(): void
 	{
@@ -232,13 +231,13 @@ final class CfgGatewayTest extends TestCase
 	{
 		$path = 'installedpackages/pfblockerng/config/0/pfb_keep';
 
-		// Given: canonical 'off' (the new stored value for unchecked-save after #484 fix).
+		// Given: legacy 'off' (accepted on read; no longer written).
 		$this->seedConfig($path, 'off');
 
 		// Before: raw 'off'.
 		$this->assertSame('off', config_get_path($path), 'before: pfb_keep seed is off');
 
-		// When/After: read -> PfbToggle::Off; write -> 'off'.
+		// When/After: read -> PfbToggle::Off; write -> ''.
 		$enum = PfbConfig::read('gen/pfb_keep');
 		$this->assertSame(PfbToggle::Off, $enum, "read: pfb_keep 'off' -> PfbToggle::Off");
 
@@ -250,9 +249,8 @@ final class CfgGatewayTest extends TestCase
 	{
 		$path = 'installedpackages/pfblockerng/config/0/pfb_keep';
 
-		// Given: '' — issue #1887: for a registered field a stored '' is the SAME state
-		// as an absent key (pfSense writes an unchecked checkbox as an empty element),
-		// so it resolves to the registered default 'on', not to a hard Off.
+		// Given: '' — an adapter-bearing field's present empty token is explicit Off;
+		// only an absent key resolves to its registered default.
 		$this->seedConfig($path, '');
 
 		$this->assertSame('', config_get_path($path), 'before: pfb_keep seed is empty string');
@@ -266,16 +264,14 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * issue #1669 slice C: pfb_syntax_highlight (lenient adapter, default on):
+	 * issue #1669 slice C: pfb_syntax_highlight (toggle adapter, default on):
 	 * 'on'/'off' round-trip losslessly. Mirrors testPfbKeepLenientRoundTripOn/Off --
-	 * this field is the same default-on-checkbox shape as pfb_keep, using the LENIENT
-	 * adapter (not PfbToggle) for the same #484-class reason (see the registry comment
-	 * and CfgGatewayTest::testNoToggleFieldDefaultsToOn).
+	 * this field is the same default-on-checkbox shape as pfb_keep, using PfbToggle.
 	 *
 	 * Scenario:
 	 *   Background: pfb_syntax_highlight stored as 'on' or 'off'.
 	 *     Given v.  When read/write.
-	 *     Then 'on' round-trips to 'on'; 'off' round-trips to 'off'.
+	 *     Then 'on' round-trips to 'on'; legacy 'off' reads Off and writes ''.
 	 */
 	public function testPfbSyntaxHighlightLenientRoundTripOn(): void
 	{
@@ -299,13 +295,13 @@ final class CfgGatewayTest extends TestCase
 	{
 		$path = 'installedpackages/pfblockerng/config/0/pfb_syntax_highlight';
 
-		// Given: canonical 'off' (the explicit unchecked-save token).
+		// Given: legacy 'off' (accepted on read; no longer written).
 		$this->seedConfig($path, 'off');
 
 		// Before: raw 'off'.
 		$this->assertSame('off', config_get_path($path), 'before: pfb_syntax_highlight seed is off');
 
-		// When/After: read -> PfbToggle::Off; write -> 'off'.
+		// When/After: read -> PfbToggle::Off; write -> ''.
 		$enum = PfbConfig::read('gen/pfb_syntax_highlight');
 		$this->assertSame(PfbToggle::Off, $enum, "read: pfb_syntax_highlight 'off' -> PfbToggle::Off");
 
@@ -398,7 +394,7 @@ final class CfgGatewayTest extends TestCase
 		// When: read with no seed.
 		$result = PfbConfig::read('gen/pfb_keep');
 
-		// Then: returns On (the registered default 'on', applied through lenient adapter).
+		// Then: returns On (the registered default 'on').
 		$this->assertSame(PfbToggle::On, $result, 'pfb_keep absent -> PfbToggle::On (default on)');
 	}
 
@@ -595,7 +591,7 @@ final class CfgGatewayTest extends TestCase
 	/**
 	 * issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
 	 * same default-on shape as pfb_idn_block_malicious/pfb_keep above. Absent AND a
-	 * stored '' resolves to Off (presence is the adapter discriminator); a
+	 * stored '' resolves to Off (presence is the adapter discriminator); an
 	 * stored 'off'/'on' round-trip losslessly.
 	 */
 	public function testIssue1907FieldsResolveAbsentAndEmptyStringToOnDefault(): void
@@ -1669,7 +1665,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertInstanceOf(PfbIdnMode::class, $result, 'pfb_idn must return a PfbIdnMode enum');
 		$this->assertSame(PfbIdnMode::Off, $result, "pfb_idn 'all' (dropped alpha token) -> PfbIdnMode::Off");
 
-		// Write emits the canonical 'off' — 'all' is not re-emitted.
+		// Write emits the canonical empty Off token — 'all' is not re-emitted.
 		PfbConfig::write('dnsbl/pfb_idn', $result);
 		$stored = config_get_path($path);
 		$this->assertSame('', $stored, "write(read('all')) == '' for pfb_idn");
@@ -1730,22 +1726,12 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * No registered field may be a TOGGLE adapter (off-value '') while defaulting
-	 * to 'on'. Such a field cannot represent "off" on a live pfSense config: an
-	 * empty stored value does not persist distinguishably from absent, and an
-	 * absent value re-applies the registry default 'on' — silently flipping a
-	 * deliberate "off" back to "on". (This is the pfb_keep bug: #484 fan-out.)
-	 *
-	 * A default-'on' field MUST therefore use the LENIENT adapter (off persists as
-	 * the explicit 'off' token) or a PLAIN field that writes an explicit 'on'/'off'
-	 * (as pfb_feed_internal_filter does). This guard makes the rule mechanical so
-	 * the class of bug cannot recur — the off-box config doubles round-trip ''
-	 * faithfully and would otherwise never catch it.
+	 * Default-on adapter fields are valid: adapter presence distinguishes absent
+	 * (registered default) from present empty (Off), and PfbToggle writes empty.
+	 * The old no-default-on invariant was retired by issue #2120.
 	 */
-	// testNoToggleFieldDefaultsToOn retired by issue #1887: PfbToggle::Off now stores the
-	// explicit 'off' token and the gateway resolves ''/absent to the registered default, so
-	// a default-'on' toggle field is legal — a deliberate Off survives the round trip
-	// (ToggleMergeTest::testExplicitOffOnDefaultOnFieldSurvives pins the #484 bug class).
+	// testNoToggleFieldDefaultsToOn retired by issue #1887/#2120; the adapter-presence
+	// distinction is pinned by ConfigEmptyStorageContractTest.
 
 	/**
 	 * The static cache in pfb_cfg_registry() is stable: multiple calls return the same array.
@@ -2402,7 +2388,6 @@ final class CfgGatewayTest extends TestCase
 	{
 		$samples_by_read_adapter = [
 			'pfb_cfg_toggle_read'           => ['on', '', 'junk'],
-			'pfb_cfg_lenient_read'          => ['on', 'off', '', 'junk'],
 			'pfb_cfg_idn_mode_read'         => ['on', 'confusable', 'off', 'all', 'junk'],
 			'pfb_cfg_top1m_source_read'     => ['tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare', 'alexa', 'domcop', 'junk'],
 			'pfb_cfg_alias_delta_mode_read' => ['auto', 'delta', 'replace', '', 'junk'],
@@ -2518,7 +2503,7 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * pfb_idn: the dropped 4.0.0-alpha-only 'all' token riding a section blob
-	 * write normalises to 'off' (never re-emitted); the canonical 'on' token
+	 * write normalises to empty (never re-emits legacy 'off'); the canonical 'on' token
 	 * (= PfbIdnMode::All) stays 'on' unchanged.
 	 *
 	 * Scenario:
@@ -2532,7 +2517,7 @@ final class CfgGatewayTest extends TestCase
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
 		$path    = $section . '/pfb_idn';
 
-		// Alpha-only 'all' -> normalised to 'off'.
+		// Alpha-only 'all' -> normalised to empty Off.
 		PfbConfig::writeSection($section, ['pfb_idn' => 'all']);
 		$this->assertSame('', config_get_path($path),
 			"dropped alpha-only 'all' riding a section write normalises to ''"
@@ -2547,13 +2532,13 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * pfb_keep: the legacy empty-string token (pre-#484 absent-key install)
-	 * riding a section blob write normalises to the explicit 'off' token, same
-	 * as the single-key PfbConfig::write() lenient-adapter contract.
+	 * riding a section blob write preserves the explicit empty Off token, same
+	 * as the single-key PfbConfig::write() toggle contract.
 	 *
 	 * Scenario:
 	 *   Given a General settings blob with pfb_keep = '' (legacy empty).
 	 *   When PfbConfig::writeSection() persists it.
-	 *   Then the stored pfb_keep is 'off', never the legacy '' token.
+	 *   Then the stored pfb_keep remains '', and legacy 'off' is never written.
 	 */
 	public function testWriteSectionPfbKeepEmptyResolvesToRegisteredDefault(): void
 	{
@@ -2774,7 +2759,7 @@ final class CfgGatewayTest extends TestCase
 	 * issue #1896: a realistic Reputation save blob (mirrors
 	 * pfblockerng_geoip.inc's Reputation save handler) mixing the three newly
 	 * registered toggles with unadapted plain fields. The unchecked toggle
-	 * ('') normalises to the canonical 'off' token; every unadapted field
+	 * ('') remains the canonical empty Off token; every unadapted field
 	 * (p24_dmax_var, et_header, ccexclude) is byte-identical.
 	 *
 	 * Scenario:
@@ -2790,8 +2775,8 @@ final class CfgGatewayTest extends TestCase
 
 		$data = [
 			'enable_rep'    => 'on',     // adapted (toggle), canonical.
-			'enable_pdup'   => '',       // adapted (toggle), unchecked -> normalises to 'off'.
-			'enable_dedup'  => '',       // adapted (toggle), unchecked -> normalises to 'off'.
+			'enable_pdup'   => '',       // adapted (toggle), unchecked -> remains empty.
+			'enable_dedup'  => '',       // adapted (toggle), unchecked -> remains empty.
 			'p24_dmax_var'  => '5',      // unadapted, plain.
 			'et_header'     => '',       // unadapted, plain.
 			'ccexclude'     => 'US,CA',  // unadapted, plain.

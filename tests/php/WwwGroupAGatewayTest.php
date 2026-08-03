@@ -53,11 +53,10 @@ final class WwwGroupAGatewayTest extends TestCase
 
 	/**
 	 * pfb_keep: page used `isset($pfb['gconfig']['pfb_keep']) ? ... : 'on'` — default 'on'.
-	 * Registry default = 'on' (PfbToggle::On after #484 fix). Page default REMOVED; gateway owns it.
+	 * Registry default = 'on' (PfbToggle::On). Page default REMOVED; gateway owns it.
 	 *
 	 * Parity: absent key → PfbConfig::read('gen/pfb_keep')->value === 'on' (was: 'on').
-	 * (#484 gave pfb_keep an explicit-off adapter; #1887 merged it back into PfbToggle,
-	 * whose Off now stores 'off' — the value is unchanged throughout.)
+	 * Present empty is explicit Off; legacy 'off' remains read-compatible and is never written.
 	 */
 	public function testGeneralPfbKeepAbsentDefaultMatchesPriorPageDefault(): void
 	{
@@ -70,7 +69,7 @@ final class WwwGroupAGatewayTest extends TestCase
 		$result = PfbConfig::read('gen/pfb_keep');
 
 		// Then: PfbToggle::On, value 'on' — matches prior page default 'on'.
-		// (#484 fix: pfb_keep now uses the lenient adapter; the value is unchanged.)
+		// PfbToggle owns the default-on adapter contract.
 		$this->assertSame(PfbToggle::On, $result, 'pfb_keep absent -> PfbToggle::On');
 		$this->assertSame('on', $result->value, 'pfb_keep absent -> value "on" (parity with prior isset default)');
 	}
@@ -237,10 +236,8 @@ final class WwwGroupAGatewayTest extends TestCase
 	 * Asserts the before-state ('on') and the after-state ('off') are distinct —
 	 * proving the write changed the value rather than being an always-equal no-op.
 	 *
-	 * Issue #930: writeSection() now applies the lenient adapter to every
-	 * registered field of the target section (same as a single-key
-	 * PfbConfig::write()) -- the legacy '' token is coalesced to the explicit
-	 * 'off' token instead of persisting raw.
+	 * Issue #930: writeSection() applies the toggle adapter to every registered
+	 * field of the target section, preserving the canonical empty Off token.
 	 */
 	public function testGeneralSectionPfbKeepEmptyResolvesToDefault(): void
 	{
@@ -340,9 +337,7 @@ final class WwwGroupAGatewayTest extends TestCase
 	 *   Then PfbConfig::readSection() returns an identical array.
 	 *
 	 * Issue #930: pfb_idn is adapter-bearing (PfbIdnMode); its fixture value uses
-	 * the canonical 'off' token (not the legacy '' — writeSection() now normalises
-	 * every registered field of the target section, and the real save handler's
-	 * 3-way select never emits '' either) so this stays a true byte-identical
+	 * the canonical empty Off token so this stays a true byte-identical
 	 * round-trip assertion.
 	 */
 	public function testDnsblSectionWriteReadRoundTrip(): void

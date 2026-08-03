@@ -9,14 +9,12 @@ final class ApplyDrepShellBoundaryTest extends TestCase
 {
 	public function testDrepTokenIsShellQuotedAtTheOnlyEmptyCapableCrossing(): void
 	{
-		$source = file_get_contents(
-			__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc'
-		);
-		$this->assertIsString($source);
-		$this->assertStringContainsString(
-			'escapeshellarg($pfb_drep_token)',
-			$source,
-			'empty drep tokens need shell quoting so argv[4] stays present'
+		$executable = php_strip_whitespace(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$binding = <<<'PHP'
+$pfb_drep_token = $pfb['drep']->toStored(); exec("{$pfb['script']} {$args} {$header_esc} {$pfb['max']} " . escapeshellarg($pfb_drep_token) . " {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
+PHP;
+		$this->assertSame(1, substr_count($executable, $binding),
+			'the drep token must stay quoted in argv[4] before ccexclude/ccwhite/ccblack'
 		);
 	}
 }

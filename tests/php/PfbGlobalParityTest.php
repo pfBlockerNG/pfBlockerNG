@@ -8,9 +8,10 @@ use PHPUnit\Framework\TestCase;
  * ADR-29 Phase 4 — Default-parity tests for pfb_global() seam routing.
  *
  * For every key that pfb_global() reads from a registered section, this file
- * asserts that PfbConfig::read($key) on an absent/empty section returns the
- * SAME effective value the OLD pfb_global() code produced (registered default
- * == prior per-site default).
+ * asserts that PfbConfig::read($key) on an absent section returns the SAME
+ * effective value the OLD pfb_global() code produced (registered default ==
+ * prior per-site default). Present empty adapter tokens are explicit Off and
+ * are covered by the storage contract suite.
  *
  * The intentional divergences are the #281/#1907 default-repair class: pfb_keep (OLD
  * code used `?? 'on'`, PHP null-coalesce) and, per the #1907 owner decision,
@@ -45,7 +46,7 @@ final class PfbGlobalParityTest extends TestCase
 	 * enable_cb: OLD pfb_global() = $pfb['config']['enable_cb'] = null when absent.
 	 * Via gateway: PfbConfig::read('gen/enable_cb')->value = '' (PfbToggle::Off).
 	 * PARITY: null and '' are both falsy; downstream checks == 'on' — equivalent.
-	 * Gateway form emits '' (the registered default), which is the canonical off value.
+	 * Gateway storage emits the canonical empty Off token.
 	 */
 	public function testParityEnableCbAbsentYieldsOff(): void
 	{
@@ -70,8 +71,8 @@ final class PfbGlobalParityTest extends TestCase
 	 * installs (gen/pfb_keep's grandfather map); new installs and the runtime both
 	 * default to 'on'.
 	 *
-	 * #484 FIX (merged into PfbToggle by #1887): the GUI stores
-	 * 'off' for unchecked-save — distinguishable from absent (default 'on').
+	 * The GUI stores the canonical empty token for unchecked-save — distinguishable
+	 * from absent (default 'on'). Legacy 'off' remains read-compatible only.
 	 */
 	public function testParityPfbKeepAbsentYieldsOn(): void
 	{
@@ -216,7 +217,7 @@ final class PfbGlobalParityTest extends TestCase
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto')
 		);
 
-		// The adapter's legacy '' normalises to the canonical 'off' (issue #1887).
+		// The adapter's empty Off token remains empty on write.
 		$old_result = pfb_cfg_toggle_read('')->value;
 		$this->assertSame('off', $old_result);
 
@@ -286,7 +287,7 @@ final class PfbGlobalParityTest extends TestCase
 	/**
 	 * pfb_dnsbl_lenient: OLD = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value.
 	 * When absent: pfb_cfg_toggle_read('')->value = 'off'.
-	 * Via gateway: PfbConfig::read('dnsbl/pfb_dnsbl_lenient')->value = 'off' (default 'off', lenient adapter).
+	 * Via gateway: PfbConfig::read('dnsbl/pfb_dnsbl_lenient')->value = 'off' (default Off).
 	 * PARITY: identical.
 	 */
 	public function testParityPfbDnsblLenientAbsentYieldsOff(): void
@@ -314,9 +315,8 @@ final class PfbGlobalParityTest extends TestCase
 	 * (pfblockerng_dnsbl.php's own isset(...) ? ... : 'on' render fallback), so
 	 * PfbConfig::read('dnsbl/pfb_hsts') now resolves absent to PfbToggle::On.
 	 * DIVERGENCE (intentional, same class as #281's pfb_keep repair below): the
-	 * registry pass's ['' => 'off'] grandfather preserves a 3.2 deliberate uncheck for
-	 * existing installs (RegistryPassTest row 9); a genuinely fresh install and the
-	 * runtime both now default to On.
+	 * Existing stored empty values remain explicit Off; absent values and fresh
+	 * installs use the registered On default.
 	 */
 	public function testParityPfbHstsAbsentYieldsOn(): void
 	{
@@ -547,8 +547,8 @@ final class PfbGlobalParityTest extends TestCase
 	 * into config.xml for existing installs; the runtime default is identical.
 	 *
 	 * #484 FIX (merged into PfbToggle by #1887): the GUI stores
-	 * 'off' for unchecked-save — distinguishable from absent (default 'on'). Current code
-	 * reads a present empty token as PfbToggle::Off.
+	 * The empty token is used for unchecked-save — distinguishable from absent
+	 * (default 'on'). Current code reads a present empty token as PfbToggle::Off.
 	 */
 	public function testRepair281PfbKeepDefaultIsFormallyOn(): void
 	{

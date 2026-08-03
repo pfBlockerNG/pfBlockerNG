@@ -5,24 +5,19 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1887 — merging PfbToggle and PfbLenient into one explicit on/off enum.
+ * issue #1887/#2120 — merging PfbToggle and PfbLenient while preserving canonical
+ * empty Off storage and legacy 'off' read compatibility.
  *
  * Two independent changes are proved here, because each fixes a different defect:
  *
  * A — EXPLICIT OFF SURVIVES THE ROUND TRIP
- *   PfbToggle::Off serialises to 'off', not ''. A checkbox submits nothing when
- *   unchecked, so an Off stored as '' is indistinguishable from "never configured"
- *   for a default-on field: the registry default reasserts itself and silently
- *   re-enables the setting. That is the #484 bug class, and it is the whole reason
- *   the separate PfbLenient enum existed.
+ *   PfbToggle::Off serialises to ''. A present empty token is an explicit Off,
+ *   while an absent key resolves to the registered default on default-on fields.
  *
- * B — '' AND ABSENT ARE THE SAME STATE
- *   For a registered field, a stored '' means "not configured" exactly as an absent
- *   key does, so both resolve to the field's registered default. This has to hold at
- *   EVERY gateway entry point, not just read(): write() and writeSection() apply the
- *   adapters directly to raw stored values, so resolving '' in read() alone would
- *   leave a stored '' reading as the default while any section save normalised it to
- *   'off' — the same value meaning two different things at two layers.
+ * B — EMPTY AND ABSENT ARE DISTINCT STATES
+ *   For adapter-backed fields, a present '' reads as Off while an absent key reads
+ *   as the field's registered default. All gateway entry points preserve that
+ *   distinction and writeSection() keeps present empty byte-identical.
  *
  * The enum cannot resolve B on its own: fromStored() has no access to the field's
  * registered default, so "'' means this field's default" is only expressible at the
@@ -110,16 +105,11 @@ final class ToggleMergeTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// B — '' is the same state as absent
+	// B — '' is explicit Off; absence resolves to the registered default
 	// -----------------------------------------------------------------------
 
 	/**
-	 * A stored '' resolves to the field's registered default, exactly as absent does.
-	 *
-	 * Both directions are asserted so the test cannot pass by treating '' as a fixed
-	 * Off: on a default-ON field '' must read On, and on a default-OFF field it must
-	 * still read Off. A single-field version of this test would be satisfied by the
-	 * current always-Off behaviour.
+	 * A stored '' is explicit Off; absent uses the field's registered default.
 	 */
 	public function testStoredEmptyStringResolvesToTheRegisteredDefault(): void
 	{
@@ -140,10 +130,7 @@ final class ToggleMergeTest extends TestCase
 	}
 
 	/**
-	 * A stored '' and an absent key are indistinguishable through the gateway.
-	 *
-	 * Stated as an equivalence rather than against a literal so it keeps holding if a
-	 * field's registered default is ever changed.
+	 * A stored '' and an absent key remain distinguishable through the gateway.
 	 */
 	public function testStoredEmptyStringIsIndistinguishableFromAbsent(): void
 	{
@@ -152,7 +139,7 @@ final class ToggleMergeTest extends TestCase
 		config_set_path(self::KEEP, '');
 		$empty = PfbConfig::read('gen/pfb_keep');
 
-		$this->assertNotSame($absent, $empty, "pfb_keep: stored '' must remain distinct from an absent key");
+		$this->assertNotSame($absent, $empty, "pfb_keep: stored '' must remain Off while absent defaults On");
 	}
 
 	/**
@@ -161,7 +148,7 @@ final class ToggleMergeTest extends TestCase
 	 * writeSection() applies read_adapter() then write_adapter() to the raw stored
 	 * value, bypassing read() and therefore the registry default. Without the ''
 	 * resolution being shared by both entry points, a section save rewrites a stored
-	 * '' to 'off' while read() reports the default — so merely saving an unrelated
+	 * '' to a different token while read() reports Off — so merely saving an unrelated
 	 * field on the page flips this one. Asserting the two agree is what forces the
 	 * resolution into shared code rather than into read() alone.
 	 */

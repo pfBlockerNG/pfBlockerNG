@@ -7,24 +7,24 @@ use PHPUnit\Framework\TestCase;
 /**
  * ADR-28 Phase 1 — round-trip identity tests for the field-aware config adapters.
  *
- * Rule (ADR-28 §2.2 reframe): for every adapted field, every existing stored value
- * (incl. empty / unset / any legacy variant) must satisfy write(read(v)) == v for
- * canonical values, or must map to a behaviour-equivalent canonical token for legacy
- * migration values (behaviour preserved on forward upgrade).  Fields that
- * cannot satisfy this are excluded (documented in 01_Results.txt).
+ * Rule (ADR-28 §2.2 reframe): adapters preserve recognised stored cases. Toggle Off
+ * writes the canonical empty token; legacy 'off' remains read-compatible only.
+ * Multi-valued enums preserve each recognised token, while unknown tokens retain
+ * their adapter default fallback. Gateway absence/default handling lives in the
+ * gateway contract suites.
  *
  * Scenario A — PfbToggle (pfb_dnsvip_auto): 'on' / '' checkbox.
- *   Background: stored as 'on' (checked) or '' (unchecked / missing key).
+ *   Background: stored as 'on' (checked) or '' (unchecked). Direct adapter NULL
+ *   also falls back Off; PfbConfig applies registered defaults to gateway absence.
  *     Given a raw stored value v.
  *     When pfb_cfg_toggle_read(v) -> enum, pfb_cfg_toggle_write(enum) -> stored.
  *     Then write(read(v)) == v for canonical values; junk -> default ''.
  *
- * Scenario B — retired by issue #1887: PfbLenient merged into PfbToggle (whose Off is
- *   now the explicit 'off' token; '' is a legacy read token normalising to Off at the
- *   adapter and to the registered default at the PfbConfig gateway).
+ * Scenario B — retired by issue #1887: PfbLenient merged into PfbToggle. The shared
+ *   toggle adapter accepts legacy 'off' on read and writes the empty Off token.
  *
- * Scenario C — PfbIdnMode (pfb_idn / dnsbl_idn): backing values 'on'/'confusable'/'off'.
- *   Background: config.xml stores 'on' (= All, block-all-IDN), 'confusable', 'off'. 'on'
+ * Scenario C — PfbIdnMode (pfb_idn / dnsbl_idn): backing values 'on'/'confusable'/''.
+ *   Background: config.xml stores 'on' (= All, block-all-IDN), 'confusable', or ''. 'on'
  *     reuses the pre-4.0.0 block-all token, preserving established block-all-IDN
  *     behaviour. The 4.0.0-alpha-only 'all' token is dropped (unrecognised ->
  *     Off), and '' (absent/disabled) is Off.
@@ -32,9 +32,9 @@ use PHPUnit\Framework\TestCase;
  *     When pfb_cfg_idn_mode_read(v) -> enum, pfb_cfg_idn_mode_write(enum) -> stored.
  *     Then write(read('on')) == 'on'  (canonical identity).
  *     And write(read('confusable')) == 'confusable'  (identity).
- *     And write(read('off')) == 'off'  (identity).
- *     And write(read('all')) == 'off'  (dropped alpha token -> Off).
- *     And write(read('')) == 'off'    (normalised default).
+ *     And write(read('off')) == ''       (legacy Off -> canonical empty).
+ *     And write(read('all')) == ''       (dropped alpha token -> Off fallback).
+ *     And write(read('')) == ''          (canonical Off identity).
  *
  * Scenario E — PfbTop1mSource (top1m_source, issue #877): backing values 'tranco' /
  *   'cisco' / 'openpagerank' (#928, replacing ADR-59 P4's 'domcop') / 'majestic'
@@ -133,7 +133,7 @@ final class CfgAdaptersTest extends TestCase
 
 	public function testToggleRoundTripOff(): void
 	{
-		// Given: canonical 'off' (issue #1887 explicit token).  write(read(v)) == v.
+		// Given: legacy 'off' (read-compatible). Off writes the canonical empty token.
 		$v = 'off';
 		$result = pfb_cfg_toggle_write(pfb_cfg_toggle_read($v));
 		$this->assertSame('', $result);
@@ -159,7 +159,7 @@ final class CfgAdaptersTest extends TestCase
 		// PfbConfig::write() advertises an "enum or string" contract; a raw
 		// legacy string must normalise through the read adapter (it was a
 		// TypeError before — pfblockerng_update.php Force Reload passes 'on').
-		// Canonical strings normalize to checkbox storage; legacy ''/junk are Off.
+		// Strings normalize to checkbox storage; legacy 'off', empty, and junk are Off.
 		$this->assertSame('on', pfb_cfg_toggle_write('on'));
 		$this->assertSame('', pfb_cfg_toggle_write(''));
 		$this->assertSame('', pfb_cfg_toggle_write('off'));
@@ -167,9 +167,8 @@ final class CfgAdaptersTest extends TestCase
 	}
 
 	// Scenario B (PfbLenient) retired by issue #1887 — the enum merged into PfbToggle,
-	// whose Scenario A now covers the identical vocabulary ('on'/'off', '' legacy-off,
-	// junk/non-scalar fallback). pfb_cfg_lenient_read()/write() are gone; the retired-
-	// token grep guards their return.
+	// whose Scenario A now covers the shared toggle vocabulary and fallback.
+	// pfb_cfg_lenient_read()/write() are gone; the retired-token grep guards their return.
 
 	// -----------------------------------------------------------------------
 	// Scenario C — PfbIdnMode
@@ -243,7 +242,7 @@ final class CfgAdaptersTest extends TestCase
 	public function testIdnModeDroppedAlphaAllNormalisesToOff(): void
 	{
 		// 'all' (4.0.0-alpha only; compatibility intentionally dropped) is unrecognised
-		// -> Off, so a write-back emits 'off' — NOT the legacy 'all'.
+		// -> Off, so a write-back emits the canonical empty token — NOT 'all'.
 		$v = 'all';
 		// Before: raw.
 		$this->assertSame('all', $v);
@@ -251,7 +250,7 @@ final class CfgAdaptersTest extends TestCase
 		// When round-tripped.
 		$result = pfb_cfg_idn_mode_write(pfb_cfg_idn_mode_read($v));
 
-		// Then: 'off' (unrecognised -> Off).
+		// Then: '' (unrecognised -> Off).
 		$this->assertSame('', $result);
 		$this->assertNotSame('all', $result);
 	}
@@ -313,7 +312,7 @@ final class CfgAdaptersTest extends TestCase
 		// "enum or string" contract: raw string normalises through read adapter.
 		// 'on'  -> All (canonical) — round-trips losslessly.
 		// 'confusable' and 'off' are canonical and round-trip.
-		// '', junk, and the dropped 4.0.0-alpha 'all' normalise to Off -> 'off'.
+		// '', junk, and the dropped 4.0.0-alpha 'all' normalise to Off -> ''.
 		$this->assertSame('on',          pfb_cfg_idn_mode_write('on'));
 		$this->assertSame('confusable',  pfb_cfg_idn_mode_write('confusable'));
 		$this->assertSame('',             pfb_cfg_idn_mode_write('off'));
@@ -341,7 +340,7 @@ final class CfgAdaptersTest extends TestCase
 	//   Replaced by: pfb_cfg_toggle_read($raw ?? '')->value
 	//
 	// dnsbl_lenient (line ~1364): old = (($raw ?? '') === 'on') ? 'on' : 'off'
-	//   Replaced by: pfb_cfg_lenient_read($raw ?? '')->value
+	//   Replaced by the shared PfbToggle adapter.
 	//
 	// dnsbl_idn (lines ~1372-1373): EXCLUDED — old ternary passes '' through
 	//   as '' (not 'off'), which differs from pfb_cfg_idn_mode_read('')->value
@@ -371,7 +370,7 @@ final class CfgAdaptersTest extends TestCase
 		$oldResult = ($raw === 'on') ? 'all' : $raw;
 		$this->assertSame('', $oldResult, 'old ternary must pass empty string through as empty string');
 
-		// Adapter: '' normalises to Off = 'off'.
+		// Adapter: '' parses as Off (the enum backing value is 'off').
 		$adapterResult = pfb_cfg_idn_mode_read($raw)->value;
 		$this->assertSame('off', $adapterResult, 'adapter must return off for empty string');
 

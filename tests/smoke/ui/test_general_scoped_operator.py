@@ -316,9 +316,6 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
       * ``pfb_interval`` persisted -- a regression that made the save silently
         no-op (e.g. an over-broad early return) leaves the stored value at its
         PRE-save baseline -> the equality assertion fails.
-      * ``pfb_software_check`` canonicalised to ``''`` -- the legacy read-only
-        ``'off'`` seed must become canonical empty storage without requiring that
-        field's separate privilege because both tokens represent the same Off value.
       * PhpErrorLogGuard -- a regression that let an uncaught exception reach the
         page (rather than a clean redirect) logs a PHP Fatal/Uncaught line ->
         ``assert_no_growth()`` fails.
@@ -452,10 +449,6 @@ def test_cli_gateway_write_fails_closed_writesystem_succeeds(
         ``assertWriteAllowed()`` pass when ``isAllowedPage`` is undefined (e.g.
         inverting the ``!function_exists(...) || !isAllowedPage(...)`` guard)
         flips this to ``'NO_EXCEPTION'``.
-      * ``AFTER_WRITE_UNCHANGED == 'YES'`` -- a regression that mutated config
-        BEFORE the privilege check (reordering ``writeRaw()`` ahead of
-        ``assertWriteAllowed()``) flips this to ``'NO'`` even though the
-        exception still fires.
       * ``WRITESYSTEM_STORED == ''`` -- a regression that made
         ``writeSystem()`` ALSO gate on ``isAllowedPage()`` (collapsing the
         escape hatch into ``write()``) makes this call throw instead of storing,

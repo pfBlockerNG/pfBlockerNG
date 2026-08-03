@@ -385,15 +385,13 @@ final class CfgWriteAuthorizationTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// L - equivalence subtlety: stored ABSENT canonicalises identical to the incoming
-	//     registered default.
+	// L - deletion subtlety: stored ABSENT canonicalises identical to incoming NULL.
 	// -----------------------------------------------------------------------
 
 	public function testWriteSectionAbsentStoredFieldEqualsIncomingDefaultIsPassThrough(): void
 	{
 		// pfb_software_check is entirely ABSENT from the stored section -- never saved
-		// on this box before. notConfigured() must resolve the missing key to the
-		// registered default ('on'), the same as it would for an explicit 'on'.
+		// on this box before. An incoming NULL is the same deletion/no-op state.
 		config_set_path(self::GEN, ['pfb_keep' => 'on']);
 
 		$GLOBALS['pfb_test_allowed_pages'] = [
@@ -403,16 +401,61 @@ final class CfgWriteAuthorizationTest extends TestCase
 
 		PfbConfig::writeSection(self::GEN, [
 			'pfb_keep'           => 'off',
-			// The registered default -- canonically identical to "absent".
-			'pfb_software_check' => 'on',
+			// NULL means delete; absent -> NULL is a no-op and needs no privilege.
+			'pfb_software_check' => NULL,
 		]);
 
 		$this->assertSame('', config_get_path(self::GEN . '/pfb_keep'),
 			'the unrelated, actually-changed field must persist canonically'
 		);
-		$this->assertSame('on', config_get_path(self::GEN . '/pfb_software_check'),
-			'absent-stored must canonicalise identically to the registered default and be '
-			. 'treated as an unchanged pass-through, not an authorization event'
+		$this->assertNull(config_get_path(self::GEN . '/pfb_software_check'),
+			'absent-stored must canonicalise identically to incoming NULL and remain absent'
+		);
+	}
+
+	public function testWriteSectionDefaultValueToNullRequiresPrivilegeAndLeavesSectionUnchanged(): void
+	{
+		$baseline = [
+			'pfb_keep'           => 'on',
+			'pfb_software_check' => 'on',
+		];
+		config_set_path(self::GEN, $baseline);
+		$GLOBALS['pfb_test_allowed_pages'] = [
+			'pfblockerng/pfblockerng_general.php' => true,
+			'pkg_mgr_installed.php'                => false,
+		];
+
+		try {
+			PfbConfig::writeSection(self::GEN, [
+				'pfb_keep'           => 'on',
+				'pfb_software_check' => NULL,
+			]);
+			$this->fail('expected RuntimeException, none thrown');
+		} catch (RuntimeException $e) {
+			$this->assertStringContainsString('pfb_software_check', $e->getMessage());
+		}
+
+		$this->assertSame($baseline, config_get_path(self::GEN),
+			'blocked deletion must leave the whole section unchanged'
+		);
+	}
+
+	public function testWriteSectionAbsentValueToNullIsNoOpWithoutPrivilege(): void
+	{
+		$baseline = ['pfb_keep' => 'on'];
+		config_set_path(self::GEN, $baseline);
+		$GLOBALS['pfb_test_allowed_pages'] = [
+			'pfblockerng/pfblockerng_general.php' => true,
+			'pkg_mgr_installed.php'                => false,
+		];
+
+		PfbConfig::writeSection(self::GEN, [
+			'pfb_keep'           => 'on',
+			'pfb_software_check' => NULL,
+		]);
+
+		$this->assertSame($baseline, config_get_path(self::GEN),
+			'absent deletion must remain a no-op without privilege'
 		);
 	}
 

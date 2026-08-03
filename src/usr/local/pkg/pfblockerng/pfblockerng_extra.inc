@@ -648,7 +648,7 @@ function pfb_cfg_idn_mode_read(mixed $stored): PfbIdnMode
 
 /**
  * Write a PfbIdnMode (enum or legacy string) back to its canonical stored token
- * ('on' | 'confusable' | ''). All persists as the legacy 'on' token (reproduces
+ * ('on' | 'confusable' | ''). All persists as its recognised 'on' token (preserving
  * the prior block-all-IDN behaviour); the 4.0.0-alpha 'all' token falls back to Off.
  */
 function pfb_cfg_idn_mode_write(PfbIdnMode|string $mode): string
@@ -933,14 +933,13 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'ADR-19 Software page capability; #1887 relocated the pre-existing ON default into the registry, absent unchanged',
 		],
 
-		// Internal-address feed-host filter toggle: 'on'|'off'. Default 'on' (new install).
-		// issue #1887: toggle adapter adopted; the #1770 grandfather still pins 'off'
-		// once on an already-configured box (applied by the registry pass, issue #1921).
+		// Internal-address feed-host filter toggle: 'on'|''. Default 'on'.
+		// A present empty token is explicit Off; absent uses the registered default.
 		'gen/pfb_feed_internal_filter' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'grandfather'   => [PFB_GF_ABSENT => 'off'],
+			'no_grandfather' => 'legacy absent state now matches the registered default',
 		],
 
 		// Allowlist for internal-feed hosts (base64-encoded). Default ''.
@@ -1017,11 +1016,8 @@ function pfb_cfg_registry(): array
 		// (CodeMirror 6), gating asset emission on pfblockerng_dnsbl.php. NEW feature --
 		// no prior behaviour to preserve, so both fresh installs and upgraders take the
 		// same 'on' absent-default; no grandfather seed is needed (config-gateway.md's
-		// two-case forward-compat rule). Uses the LENIENT adapter, not PfbToggle -- a
-		// TOGGLE field's '' off-value cannot survive the live config round-trip when the
-		// default is 'on' (absent collapses back to the default, silently re-enabling a
-		// deliberate off; the #484 pfb_keep bug class, enforced by
-		// CfgGatewayTest::testNoToggleFieldDefaultsToOn). Mirrors pfb_keep exactly.
+		// two-case forward-compat rule). PfbToggle presence handling preserves a
+		// present empty Off while absent resolves to the default. Mirrors pfb_keep.
 		'gen/pfb_syntax_highlight' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
@@ -2045,14 +2041,13 @@ final class PfbConfig
 	 *
 	 * Both sides are canonicalised through the exact same pipeline write() and
 	 * writeSectionRaw() already use, so this can never disagree with what actually gets
-	 * stored: notConfigured() resolves NULL/'' to the registered default first; an
-	 * adapter-bearing field then round-trips write_adapter(read_adapter($value)) (the
-	 * same normalisation writeSectionRaw()'s loop applies to the incoming side); a plain
+	 * stored: adapter NULL carries a deletion sentinel, present empty remains Off, and
+	 * other adapter values round-trip write_adapter(read_adapter($value)) (the same
+	 * normalisation writeSectionRaw()'s loop applies to the incoming side); a plain
 	 * field is cast (string) (matching writeRaw()'s cast). The stored side reads via
 	 * config_get_path() directly (bypassing the registry default, then applying it here)
-	 * -- an absent key canonicalises identically to an explicit registered-default value,
-	 * so a field that has never been saved and a field just re-saved at its default both
-	 * correctly read as "unchanged" against an incoming default.
+	 * -- adapter absence remains distinct from an explicit registered-default value,
+	 * while plain-field absence still canonicalises to its registered default.
 	 *
 	 * write() has no equivalent carve-out -- an explicit single-key write() call is
 	 * always an authorization event, changed or not, because there is no read-modify-
@@ -2083,8 +2078,9 @@ final class PfbConfig
 	 * Mirrors the two normalisation pipelines already in this class byte-for-byte so the
 	 * comparison can never diverge from what an actual write would store:
 	 *   - adapter-bearing field (both read_adapter and write_adapter set, always paired
-	 *     -- see pfb_cfg_registry()): write_adapter(read_adapter(notConfigured($value))),
-	 *     the same round trip writeSectionRaw()'s normalisation loop applies.
+	 *     -- see pfb_cfg_registry()): NULL is a deletion sentinel; other values use
+	 *     write_adapter(read_adapter(notConfigured($value))), the same round trip
+	 *     writeSectionRaw()'s normalisation loop applies.
 	 *   - plain scalar field: (string) notConfigured($value), matching writeRaw()'s cast.
 	 *   - plain NON-scalar (a crafted-POST array riding the section blob):
 	 *     writeSectionRaw() persists it verbatim, so it must compare by SHAPE -- a
@@ -2100,7 +2096,10 @@ final class PfbConfig
 	private static function canonicalize(array $entry, mixed $value): string
 	{
 		if ($entry['read_adapter'] !== NULL && $value === NULL) {
-			return $entry['write_adapter']($entry['read_adapter']($entry['default']));
+			// Keep deletion distinct from an explicit stored default. This makes a
+			// section write from default -> NULL an authorization event, while
+			// absent -> NULL remains a no-op (both sides carry this sentinel).
+			return "\0PfbConfig::delete";
 		}
 		$value         = self::notConfigured($entry, $value);
 		$read_adapter  = $entry['read_adapter'];
