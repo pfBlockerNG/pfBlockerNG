@@ -359,12 +359,12 @@ def test_toggle_flow_changes_effective_config(
     final restore leaves the box clean for Tier A / the sibling flows on the
     session VM. The oracle is config.xml read over SSH, never the POST response.
     """
-    # An absent key reads as '' over the raw config path; resolve it to the token the
-    # absent state is behaviourally equivalent to (flow.absent — the registry default for
-    # adapter'd fields, issue #1887; flow.off otherwise), so the restore drives the box
-    # back to its EFFECTIVE original state instead of pinning an explicit Off onto a
-    # default-on field that was merely unconfigured.
-    original = helpers.config_get(smoke_vm, flow.config_path) or flow.absent or flow.off
+    # Resolve absence to registered behavior, plus accepted unchecked read
+    # representations to canonical empty Off, so restoration tests the writer.
+    stored_original = helpers.config_get(smoke_vm, flow.config_path)
+    original = (
+        flow.off if stored_original.casefold() in {"off", "disabled"} else stored_original or flow.absent or flow.off
+    )
     # The toggle's "other" value -- we drive AWAY from original, then BACK.
     flipped = flow.off if original == flow.on else flow.on
 
