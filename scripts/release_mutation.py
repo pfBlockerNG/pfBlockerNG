@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Literal
 
-from scripts.release_version import PACKAGE, ReleaseInfo
+from scripts.release_version import ReleaseInfo, validate_release_info
 
 ReleaseState = Literal["absent", "draft_assetless", "draft_with_assets", "published"]
 Comparison = Literal["<", "=", ">"]
@@ -16,8 +16,6 @@ _SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _ARTIFACT_RE = re.compile(r"^[0-9a-f]{64}$")
 _RELEASE_STATES = ("absent", "draft_assetless", "draft_with_assets", "published")
 _COMPARISONS = ("<", "=", ">")
-_TAGGED_CHANNELS = {"stable", "testing", "edge"}
-_TAGGED_STAGES = {"final", "alpha", "beta", "rc", "edge"}
 
 
 @dataclass(frozen=True)
@@ -31,6 +29,7 @@ class MutationRequest:
 @dataclass(frozen=True)
 class ObservedMutationState:
     source_reachable: bool
+    tag: str | None = None
     tag_source_sha: str | None = None
     release_state: ReleaseState = "absent"
     latest_pkg_version: str | None = None
@@ -61,46 +60,21 @@ def _validate_pkg_observation(value: object, *, name: str) -> None:
         raise ValueError(f"{name} must be nonempty ASCII of at most 128 characters")
 
 
+def _validate_observed_tag(value: object) -> None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 128
+        or not value.startswith("v")
+        or not all(0x20 <= ord(char) <= 0x7E for char in value)
+    ):
+        raise ValueError("tag must be a printable ASCII release tag of at most 128 characters")
+
+
 def _validate_result(result: object) -> ReleaseInfo:
     if type(result) is not ReleaseInfo:
         raise TypeError("request.result must be ReleaseInfo")
-    if result.package != PACKAGE:
-        raise ValueError("request result has wrong package")
-    if result.tag is None:
-        if result.stage != "nightly" or result.channel != "nightly":
-            raise ValueError("only Nightly results may omit a tag")
-        if result.release_line != "devel":
-            raise ValueError("Nightly results require devel")
-        if result.prerelease is not True or result.final is not False:
-            raise ValueError("Nightly result flags are inconsistent")
-        if result.notes_required is not False or result.github_release != "none":
-            raise ValueError("Nightly result release metadata is inconsistent")
-    else:
-        if (
-            not isinstance(result.tag, str)
-            or not result.tag
-            or not result.tag.startswith("v")
-            or not result.tag.isascii()
-            or len(result.tag) > 128
-        ):
-            raise ValueError("tagged result has invalid tag")
-        if result.stage not in _TAGGED_STAGES or result.channel not in _TAGGED_CHANNELS:
-            raise ValueError("tagged result has invalid stage or channel")
-        if (result.stage == "final") != (result.channel == "stable"):
-            raise ValueError("Stable result stage/channel mismatch")
-        if result.stage in {"alpha", "beta", "rc"} and result.channel != "testing":
-            raise ValueError("Testing result stage/channel mismatch")
-        if result.stage == "edge" and result.channel != "edge":
-            raise ValueError("Edge result stage/channel mismatch")
-        if result.stage == "final":
-            if result.prerelease is not False or result.final is not True:
-                raise ValueError("Stable result flags are inconsistent")
-            if result.notes_required is not True or result.github_release != "final":
-                raise ValueError("Stable result release metadata is inconsistent")
-        elif result.prerelease is not True or result.final is not False:
-            raise ValueError("prerelease result flags are inconsistent")
-        elif result.notes_required is not True or result.github_release != "prerelease":
-            raise ValueError("prerelease result release metadata is inconsistent")
+    validate_release_info(result)
     return result
 
 
@@ -111,6 +85,8 @@ def _validate_observed(observed: object) -> ObservedMutationState:
         raise ValueError("source must be reachable")
     if not isinstance(observed.release_state, str) or observed.release_state not in _RELEASE_STATES:
         raise ValueError("invalid release state")
+    if observed.tag is not None:
+        _validate_observed_tag(observed.tag)
     if observed.candidate_vs_latest is not None and (
         not isinstance(observed.candidate_vs_latest, str) or observed.candidate_vs_latest not in _COMPARISONS
     ):
@@ -125,6 +101,8 @@ def _validate_observed(observed: object) -> ObservedMutationState:
         _validate_artifact_sha(observed.existing_artifact_sha256)
     if observed.tag_source_sha is not None:
         _validate_sha(observed.tag_source_sha, name="tag_source_sha")
+    if (observed.tag is None) != (observed.tag_source_sha is None):
+        raise ValueError("observed tag and tag source must be paired")
     return observed
 
 
@@ -134,19 +112,19 @@ def _validate_tag_state(result: ReleaseInfo, request: MutationRequest, observed:
     if observed.release_state in {"draft_with_assets", "published"}:
         raise ValueError("existing release is immutable")
     if nightly:
-        if observed.tag_source_sha is not None or observed.release_state != "absent":
+        if observed.tag is not None or observed.tag_source_sha is not None or observed.release_state != "absent":
             raise ValueError("Nightly mutation requires an absent untagged release")
         return False
 
-    if observed.tag_source_sha is not None and observed.tag_source_sha != request.source_sha:
-        raise ValueError("tag moved to a different source")
     if observed.release_state == "absent":
-        if observed.tag_source_sha is not None:
+        if observed.tag is not None or observed.tag_source_sha is not None:
             raise ValueError("existing tag is already present")
         return False
     if observed.release_state == "draft_assetless":
+        if observed.tag != result.tag:
+            raise ValueError("assetless draft has a different tag")
         if observed.tag_source_sha != request.source_sha:
-            raise ValueError("assetless draft is not this source")
+            raise ValueError("tag moved to a different source")
         return True
     raise ValueError("invalid tagged release state")
 

@@ -192,18 +192,22 @@ def _validate_nightly_result(result: ReleaseInfo) -> None:
         raise ValueError("invalid Nightly snapshot result")
 
 
+def validate_release_info(info: ReleaseInfo) -> None:
+    """Require a ReleaseInfo value to be exactly one canonical release identity."""
+    if type(info) is not ReleaseInfo:
+        raise TypeError("release info must be ReleaseInfo")
+    if info.tag is None:
+        _validate_nightly_result(info)
+        return
+    if parse_release_tag(info.tag) != info:
+        raise ValueError("release info does not match its release tag")
+
+
 def _validate_snapshot_result(result: ReleaseInfo) -> tuple[date, int]:
-    if not isinstance(result, ReleaseInfo) or result.package != PACKAGE:
-        raise ValueError("invalid snapshot result")
+    validate_release_info(result)
     if result.channel == "edge":
-        if not isinstance(result.tag, str):
-            raise ValueError("invalid Edge snapshot result")
-        parsed = parse_release_tag(result.tag)
-        if parsed != result:
-            raise ValueError("invalid Edge snapshot result")
         return _sequence_parts(result.sequence or "")
     if result.channel == "nightly":
-        _validate_nightly_result(result)
         return _sequence_parts(result.sequence or "")
     raise ValueError("existing records must contain Edge or Nightly snapshots")
 

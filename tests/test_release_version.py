@@ -15,11 +15,14 @@ rejects malformed tags, and (when a branch is supplied) enforces branch<->channe
 from __future__ import annotations
 
 import subprocess
-from dataclasses import fields
+from dataclasses import fields, replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from scripts.release_version import generate_snapshot, validate_release_info
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "release-version.sh"
 
@@ -260,6 +263,59 @@ def test_parse_release_tag_derives_canonical_release_info(tag: str, expected: di
     for field, value in expected.items():
         assert getattr(info, field) == value, f"{field}: expected {value!r}, got {getattr(info, field)!r}"
     assert info.package == PACKAGE
+
+
+def test_validate_release_info_accepts_every_release_stage() -> None:
+    infos = [
+        _api()[2](tag)
+        for tag in (
+            "v4.0.0",
+            "v4.0.0.alpha.1",
+            "v4.0.0.beta.1",
+            "v4.0.0.rc.1",
+            "v4.0.0.edge.20260804.1",
+        )
+    ]
+    infos.append(
+        generate_snapshot(
+            channel="nightly",
+            target_final="4.0.0",
+            release_line="devel",
+            source_sha="a" * 40,
+            build_date=date(2026, 8, 4),
+        )
+    )
+    for info in infos:
+        validate_release_info(info)
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        _api()[2]("v4.0.0"),
+        _api()[2]("v4.0.0.edge.20260804.1"),
+        generate_snapshot(
+            channel="nightly",
+            target_final="4.0.0",
+            release_line="devel",
+            source_sha="a" * 40,
+            build_date=date(2026, 8, 4),
+        ),
+    ],
+)
+def test_validate_release_info_rejects_dataclass_tampering(info: Any) -> None:
+    tampered = [
+        replace(info, version=info.version + ".forged"),
+        replace(info, target_final="4.0.1"),
+        replace(info, release_line="devel" if info.tag is not None else "devel/forged"),
+        replace(info, pkg_version=info.pkg_version + ".forged"),
+        replace(info, sequence="20260804.2"),
+    ]
+    for forged in tampered:
+        with pytest.raises(ValueError):
+            validate_release_info(forged)
+    with pytest.raises(TypeError):
+        validate_release_info(object())  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

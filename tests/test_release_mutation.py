@@ -39,6 +39,10 @@ def _observed(**changes: Any) -> ObservedMutationState:
     return ObservedMutationState(**{"source_reachable": True, **changes})
 
 
+def _observed_with_tag(tag: str | None, **changes: Any) -> ObservedMutationState:
+    return ObservedMutationState(source_reachable=True, tag=tag, **changes)
+
+
 def _run(
     request: MutationRequest | None = None, observed: ObservedMutationState | None = None
 ) -> tuple[str, list[str]]:
@@ -65,6 +69,7 @@ def test_public_dataclasses_have_exact_frozen_shapes() -> None:
     ]
     assert [field.name for field in fields(ObservedMutationState)] == [
         "source_reachable",
+        "tag",
         "tag_source_sha",
         "release_state",
         "latest_pkg_version",
@@ -97,7 +102,8 @@ def test_exact_existing_artifact_is_unchanged_without_callback() -> None:
 
 
 def test_assetless_draft_same_tag_and_source_recovers_equal_candidate() -> None:
-    observed = _observed(
+    observed = _observed_with_tag(
+        STABLE.tag,
         tag_source_sha=SOURCE_SHA,
         release_state="draft_assetless",
         latest_pkg_version="opaque-latest",
@@ -106,6 +112,42 @@ def test_assetless_draft_same_tag_and_source_recovers_equal_candidate() -> None:
     outcome, calls = _run(observed=observed)
     assert outcome == "mutated"
     assert calls == ["mutate"]
+
+
+def test_assetless_recovery_requires_exact_observed_tag_and_source() -> None:
+    invalid = [
+        _observed_with_tag(STABLE.tag, tag_source_sha=SOURCE_SHA),
+        _observed_with_tag(None, tag_source_sha=SOURCE_SHA, release_state="draft_assetless"),
+        _observed_with_tag(STABLE.tag, release_state="draft_assetless"),
+        _observed_with_tag("v4.0.1", tag_source_sha=SOURCE_SHA, release_state="draft_assetless"),
+        _observed_with_tag(STABLE.tag, tag_source_sha=OTHER_SOURCE_SHA, release_state="draft_assetless"),
+    ]
+    for observed in invalid:
+        calls = []
+        with pytest.raises((TypeError, ValueError)):
+            apply_release_mutation(_request(), observed, lambda: calls.append("mutate"))
+        assert calls == []
+
+
+def test_fresh_and_nightly_mutations_require_absent_observed_tag_identity() -> None:
+    for request, observed in (
+        (_request(), _observed_with_tag(STABLE.tag)),
+        (_request(), _observed_with_tag(STABLE.tag, tag_source_sha=SOURCE_SHA)),
+        (_request(NIGHTLY), _observed_with_tag("v4.0.0")),
+    ):
+        calls: list[str] = []
+        with pytest.raises((TypeError, ValueError)):
+            apply_release_mutation(request, observed, lambda: calls.append("mutate"))
+        assert calls == []
+
+
+@pytest.mark.parametrize("tag", ["", "v" + "x" * 128, "v4.0.0\n", "v4.0.0é"])
+def test_observed_tag_must_be_printable_ascii_release_tag_sized(tag: str) -> None:
+    observed = _observed_with_tag(tag)
+    calls: list[str] = []
+    with pytest.raises((TypeError, ValueError)):
+        apply_release_mutation(_request(), observed, lambda: calls.append("mutate"))
+    assert calls == []
 
 
 def test_assetless_recovery_still_rejects_stale_or_artifact_collision() -> None:
@@ -141,6 +183,50 @@ def test_callback_exception_propagates_after_valid_preconditions() -> None:
     with pytest.raises(RuntimeError, match="mutation failed"):
         apply_release_mutation(_request(), _observed(), mutate)
     assert calls == ["mutate"]
+
+
+@pytest.mark.parametrize(
+    "result,selected_release_line",
+    [
+        (replace(STABLE, version="4.0.99"), STABLE.release_line),
+        (replace(STABLE, target_final="4.0.99"), STABLE.release_line),
+        (replace(STABLE, release_line="release/4.1"), "release/4.1"),
+        (replace(STABLE, pkg_version="4.0.99"), STABLE.release_line),
+        (replace(STABLE, sequence="1"), STABLE.release_line),
+        (replace(STABLE, tag="vgarbage"), STABLE.release_line),
+    ],
+)
+def test_tagged_canonical_field_tampering_never_calls_mutator(result: Any, selected_release_line: str) -> None:
+    calls: list[str] = []
+    request = MutationRequest(result, selected_release_line, SOURCE_SHA, ARTIFACT_SHA)
+    with pytest.raises((TypeError, ValueError)):
+        apply_release_mutation(request, _observed(), lambda: calls.append("mutate"))
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "result,selected_release_line",
+    [
+        (replace(NIGHTLY, version="4.0.0.nightly.20260804.2"), NIGHTLY.release_line),
+        (replace(NIGHTLY, target_final="4.0.1"), NIGHTLY.release_line),
+        (replace(NIGHTLY, release_line="devel/forged"), "devel/forged"),
+        (replace(NIGHTLY, pkg_version="4.0.0.snapshot.2.20260804.2"), NIGHTLY.release_line),
+        (replace(NIGHTLY, sequence="20260804.2"), NIGHTLY.release_line),
+        (replace(NIGHTLY, package="wrong"), NIGHTLY.release_line),
+        (replace(NIGHTLY, prerelease=False), NIGHTLY.release_line),
+        (replace(NIGHTLY, final=True), NIGHTLY.release_line),
+        (replace(NIGHTLY, notes_required=True), NIGHTLY.release_line),
+        (replace(NIGHTLY, github_release="prerelease"), NIGHTLY.release_line),
+        (replace(NIGHTLY, stage="edge"), NIGHTLY.release_line),
+        (replace(NIGHTLY, channel="edge"), NIGHTLY.release_line),
+    ],
+)
+def test_nightly_canonical_field_tampering_never_calls_mutator(result: Any, selected_release_line: str) -> None:
+    calls: list[str] = []
+    request = MutationRequest(result, selected_release_line, SOURCE_SHA, ARTIFACT_SHA)
+    with pytest.raises((TypeError, ValueError)):
+        apply_release_mutation(request, _observed(), lambda: calls.append("mutate"))
+    assert calls == []
 
 
 @pytest.mark.parametrize(
@@ -286,8 +372,7 @@ def test_stale_or_repeated_catalogue_candidate_rejects(comparison: str) -> None:
 
 
 def test_greater_and_empty_catalogue_candidates_mutate_without_package_parsing() -> None:
-    opaque = replace(STABLE, pkg_version="opaque candidate !")
-    request = _request(opaque)
+    request = _request()
     for observed in (_observed(), _observed(latest_pkg_version="opaque latest !", candidate_vs_latest=">")):
         outcome, calls = _run(request=request, observed=observed)
         assert outcome == "mutated"
