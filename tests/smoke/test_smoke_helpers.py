@@ -19,6 +19,7 @@ primitives.
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,78 @@ from . import helpers as h
 from .conftest import STUB_DNS_A, SmokeVM, _StubDnsServer, expected_control_answer
 
 pytestmark = pytest.mark.smoke
+
+
+def _capture_php_eval(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    snippets: list[str] = []
+
+    def capture(_vm: object, snippet: str, *, timeout: float = 60.0) -> SimpleNamespace:
+        del timeout
+        snippets.append(snippet)
+        return SimpleNamespace(returncode=0, stdout="OK", stderr="")
+
+    monkeypatch.setattr(h, "php_eval", capture)
+    return snippets
+
+
+def test_explicit_off_toggle_helpers_write_canonical_adapter_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adapter-backed boolean Off writes use ``'off'` instead of the absent ``''`` state."""
+    snippets = _capture_php_eval(monkeypatch)
+    vm = SmokeVM("")
+
+    h.set_dnsvip_auto(vm, False)
+    h.set_dnsbl_enabled(vm, False)
+    h.set_dnsbl_cache_flush(vm, False)
+    h.set_package_enabled(vm, False)
+    h.set_ip_reputation(vm)
+    h.set_ip_suppression(vm)
+    h.set_dnsbl_nonat(vm, False)
+
+    expected = (
+        "$d['pfb_dnsvip_auto'] = 'off';",
+        "$d['pfb_dnsbl'] = 'off';",
+        "$d['pfb_cache_flush'] = 'off';",
+        "$g['enable_cb'] = 'off';",
+        "$rep['enable_dedup'] = 'off';",
+        "$rep['enable_pdup'] = 'off';",
+        "$ip['suppression'] = 'off';",
+        "$d['pfb_dnsbl_nonat'] = 'off';",
+    )
+    for assignment in expected:
+        assert any(assignment in snippet for snippet in snippets), f"missing explicit Off assignment: {assignment}"
+
+
+def test_explicit_off_inject_dnsbl_lists_writes_idn_adapter_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Multi-list injection keeps both adapter-backed IDN Off toggles canonical."""
+    snippets = _capture_php_eval(monkeypatch)
+    monkeypatch.setattr(h, "set_control_records", lambda *args, **kwargs: None)
+    spec = h.DnsblCase(
+        aliasname="idn-off",
+        feed_url="/var/db/pfblockerng/idn-off.txt",
+        idn_block_malicious=False,
+        idn_escalate_suspicious=False,
+    )
+
+    h.inject_dnsbl_lists(SmokeVM(""), [(spec, "Deny")])
+
+    assert len(snippets) == 1
+    assert "'pfb_idn_block_malicious' => 'off'" in snippets[0]
+    assert "'pfb_idn_escalate_suspicious' => 'off'" in snippets[0]
+
+
+def test_explicit_off_dnsbl_inject_snippet_writes_idn_adapter_tokens() -> None:
+    """Single-list injection uses the same canonical IDN Off representation."""
+    spec = h.DnsblCase(
+        aliasname="idn-off",
+        feed_url="/var/db/pfblockerng/idn-off.txt",
+        idn_block_malicious=False,
+        idn_escalate_suspicious=False,
+    )
+
+    snippet = h._dnsbl_inject_snippet(spec)
+
+    assert "'pfb_idn_block_malicious' => 'off'" in snippet
+    assert "'pfb_idn_escalate_suspicious' => 'off'" in snippet
 
 
 @pytest.fixture(scope="module")

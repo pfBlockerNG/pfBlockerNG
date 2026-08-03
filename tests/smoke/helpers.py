@@ -1595,7 +1595,7 @@ def _php_read_scalar(vm: SmokeVM, pre: str, expr: str, *, timeout: float = 60.0)
 
 def set_dnsvip_auto(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Toggle the ADR-13 'Create VIPs automatically' setting (``pfb_dnsvip_auto``)."""
-    val = "on" if on else ""
+    val = "on" if on else "off"
     snippet = (
         f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
         f"$d['pfb_dnsvip_auto'] = {_php_str(val)};\n"
@@ -1611,7 +1611,7 @@ def set_dnsvip_auto(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
 def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Toggle the DNSBL component (``pfb_dnsbl``) so the next reload runs
     pfb_create_dnsbl in 'enabled' / 'disabled' mode (mode keys on dnsbl=='on')."""
-    val = "on" if on else ""
+    val = "on" if on else "off"
     snippet = (
         f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
         f"$d['pfb_dnsbl'] = {_php_str(val)};\n"
@@ -1628,7 +1628,7 @@ def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
 
 def set_dnsbl_cache_flush(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Toggle the opt-in full resolver-cache flush after DNSBL data swaps."""
-    val = "on" if on else ""
+    val = "on" if on else "off"
     snippet = (
         f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
         f"$d['pfb_cache_flush'] = {_php_str(val)};\n"
@@ -1671,11 +1671,11 @@ def set_package_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None
 
     ``enable_cb='on'`` → master ON (``$pfb['enable']=='on'``; ``$mode=='enabled'``
     when DNSBL is also on and the DNS resolver is up).
-    ``enable_cb=''`` → master OFF (``$mode`` never reaches ``'enabled'``).
+    ``enable_cb='off'`` → master OFF (``$mode`` never reaches ``'enabled'``).
 
     Written via the same section-read/write pattern as :func:`set_dnsbl_enabled`.
     """
-    val = "on" if on else ""
+    val = "on" if on else "off"
     snippet = (
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         f"$g['enable_cb'] = {_php_str(val)};\n"
@@ -1760,8 +1760,8 @@ def set_ip_reputation(
     merged through untouched.
     """
     settings = {
-        "enable_dedup": "on" if drep else "",
-        "enable_pdup": "on" if prep else "",
+        "enable_dedup": "on" if drep else "off",
+        "enable_pdup": "on" if prep else "off",
         "p24_dmax_var": str(dmax),
         "p24_pmax_var": str(pmax),
         "ccwhite": ccwhite,
@@ -1799,7 +1799,7 @@ def set_ip_suppression(
     """
     snippet = (
         f"$ip = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
-        f"$ip['suppression'] = {_php_str('on' if enabled else '')};\n"
+        f"$ip['suppression'] = {_php_str('on' if enabled else 'off')};\n"
         f"$ip['v4suppression'] = {_php_str(_b64_textarea(v4 or []))};\n"
         f"$ip['v6suppression'] = {_php_str(_b64_textarea(v6 or []))};\n"
         f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ip);\n"
@@ -1876,7 +1876,7 @@ def set_dnsbl_nonat(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     managed ``pfB DNSBL`` NAT on the next reload.  When False (the default),
     the NAT is created whenever ``dnsbl_interface`` is not ``lo0``.
     """
-    val = "on" if on else ""
+    val = "on" if on else "off"
     snippet = (
         f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
         f"$d['pfb_dnsbl_nonat'] = {_php_str(val)};\n"
@@ -2996,9 +2996,9 @@ def inject_dnsbl_lists(
     if primary_spec.idn_mode is not None:
         settings["pfb_idn"] = primary_spec.idn_mode
     if primary_spec.idn_block_malicious is not None:
-        settings["pfb_idn_block_malicious"] = "on" if primary_spec.idn_block_malicious else ""
+        settings["pfb_idn_block_malicious"] = "on" if primary_spec.idn_block_malicious else "off"
     if primary_spec.idn_escalate_suspicious is not None:
-        settings["pfb_idn_escalate_suspicious"] = "on" if primary_spec.idn_escalate_suspicious else ""
+        settings["pfb_idn_escalate_suspicious"] = "on" if primary_spec.idn_escalate_suspicious else "off"
 
     # Build each list-group PHP literal.
     lists_php = ", ".join(_dnsbl_list_php(spec, action) for spec, action in specs_and_actions)
@@ -3079,9 +3079,9 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         # Only emitted when the case sets it, so the default matrix is unchanged.
         settings["pfb_idn"] = spec.idn_mode
     if spec.idn_block_malicious is not None:
-        settings["pfb_idn_block_malicious"] = "on" if spec.idn_block_malicious else ""
+        settings["pfb_idn_block_malicious"] = "on" if spec.idn_block_malicious else "off"
     if spec.idn_escalate_suspicious is not None:
-        settings["pfb_idn_escalate_suspicious"] = "on" if spec.idn_escalate_suspicious else ""
+        settings["pfb_idn_escalate_suspicious"] = "on" if spec.idn_escalate_suspicious else "off"
     if spec.control is not None:
         # "DNSBL Control" (CFG_DNSBL_SETTINGS/pfb_control -> ini python_control). Folded into
         # the replace so the control state rides the same write as every other toggle — see
