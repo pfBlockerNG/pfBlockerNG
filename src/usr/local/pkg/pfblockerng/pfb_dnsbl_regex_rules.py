@@ -14,7 +14,9 @@ Two consumers share this ONE module instead of duplicating the literals:
 Stdlib only, no ``unboundmodule`` reference at module scope or in any
 function here -- import-safe standalone in a plain interpreter.
 
-Probe usage: pfb_python.sh pfb_dnsbl_regex_rules.py [1]
+Probe usage:
+  /usr/local/pkg/pfblockerng/pfb_python.sh \
+    /usr/local/pkg/pfblockerng/pfb_dnsbl_regex_rules.py [1]
   argv[1] == "1" enables the opt-in length cap (absent argv -> cap off).
   Reads regex-list lines from stdin; each rejected line is reported on
   stderr as ``line <n>: <pattern!r>: <message>``. Exits 1 if any line

@@ -52,7 +52,7 @@ from pathlib import Path
 # scanned, so the literal here is harmless.
 _FORBIDDEN = "/usr/local/bin/python"
 _BARE_PYTHON = re.compile(r"(?<![A-Za-z0-9_./-])python3(?:\.[0-9]+)?(?=$|[\s\"'`;|&()<>\[\],])")
-_GUEST_SSH = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.ssh\s*\(")
+_GUEST_SSH = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\.ssh\s*\(")
 _SOURCE_EXTENSIONS = {"", ".html", ".inc", ".js", ".php", ".py", ".sh", ".xml"}
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -65,7 +65,7 @@ def _is_appliance_line(path: Path, line: str) -> bool:
     if path.suffix.lower() not in _SOURCE_EXTENSIONS:
         return False
     stripped = line.lstrip()
-    if not stripped or stripped.startswith(("#", "//", "/*", "*")) or "client_vm" in line:
+    if not stripped or stripped.startswith(("#", "//", "/*", "*")):
         return False
     try:
         relative = path.resolve().relative_to(_REPO_ROOT)
@@ -73,8 +73,9 @@ def _is_appliance_line(path: Path, line: str) -> bool:
         return True
     if relative.parts and relative.parts[0] == "src":
         return True
-    is_smoke_guest = relative.parts[:2] == ("tests", "smoke") and _GUEST_SSH.search(line) is not None
-    return is_smoke_guest and "client_vm.ssh" not in line
+    return relative.parts[:2] == ("tests", "smoke") and any(
+        match.group(1) != "client_vm" for match in _GUEST_SSH.finditer(line)
+    )
 
 
 def _tracked_files(roots: tuple[str, ...]) -> list[Path]:

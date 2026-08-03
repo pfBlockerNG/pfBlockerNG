@@ -48,6 +48,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     echo 'INC-CODE-v1' > "${pfbpkgdir}/pfb_unbound_include.inc"
     echo 'HSTS-v1' > "${pfbpkgdir}/pfb_py_hsts.txt"
     echo 'WRAPPER-CODE-v1' > "${pfbpkgdir}/pfb_python.sh"
+    chmod +x "${pfbpkgdir}/pfb_python.sh"
     # issue #1255: the TLD-Wildcard public-suffix oracle -- name-mapped (source
     # basename 'dnsbl_tld', chroot copy 'pfb_py_tld.txt'), NOT in PFB_PY_SHIPPED
     # (whose same-basename cp -f loop cannot rename).
@@ -93,7 +94,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should be exist
     The path "${pfbchroot}/pfb_unbound_include.inc" should be exist
     The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
-    The path "${pfbchroot}/pfb_python.sh" should be exist
+    The path "${pfbchroot}/pfb_python.sh" should be executable
     The path "${pfbchroot}/pfb_py_tld.txt" should be exist
     # The mount-point dirs exist (the fresh-MFS fix).
     The path "${pfbchroot}/lib" should be directory

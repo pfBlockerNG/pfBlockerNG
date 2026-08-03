@@ -35,7 +35,7 @@ final class PythonRuntimeResolutionTest extends TestCase
 		return trim($output[0]);
 	}
 
-	/** @return array<string, array{array<int, string>}> */
+	/** @return array<string, array{array<int, string|int>}> */
 	public static function supportedDependencyProvider(): array
 	{
 		return [
