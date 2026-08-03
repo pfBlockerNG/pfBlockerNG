@@ -758,6 +758,44 @@ final class PfbSyncStatusLedgerTest extends TestCase
 	// two read-modify-write callers (open/close) failing closed on it.
 	// -----------------------------------------------------------------------
 
+	public function testExtraOnlyLockTimeoutDoesNotRequireMain(): void
+	{
+		$dataPath = $this->dir . '/pfb_sync_status.json';
+		file_put_contents($dataPath, '{}');
+		$holder = fopen($dataPath, 'c');
+		$this->assertNotFalse($holder, 'test fixture must open the sync-status data file');
+		$this->assertTrue(flock($holder, LOCK_EX), 'test fixture must hold the sync-status data lock');
+
+		$extraPath = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
+		$childCode = <<<'PHP'
+require $argv[1];
+if (function_exists('pfb_logger') || !function_exists('logger')) {
+	exit(3);
+}
+$unavailable = FALSE;
+$data = pfb_sync_status_read_all($argv[2], 0.05, $unavailable);
+echo json_encode(['data' => $data, 'unavailable' => $unavailable], JSON_THROW_ON_ERROR), "\n";
+PHP;
+		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+		$process = proc_open([PHP_BINARY, '-r', $childCode, $extraPath, $this->dir], $descriptors, $pipes);
+		$this->assertIsResource($process, 'test fixture must launch an extra-only child process');
+		stream_set_timeout($pipes[1], 5);
+		stream_set_timeout($pipes[2], 5);
+		$output = stream_get_contents($pipes[1]);
+		$errors = stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		$exitCode = proc_close($process);
+		flock($holder, LOCK_UN);
+		fclose($holder);
+
+		$this->assertSame(0, $exitCode, "extra-only child failed: {$errors}");
+		$result = json_decode($output, TRUE);
+		$this->assertIsArray($result, "extra-only child output was invalid JSON: {$output}");
+		$this->assertSame([], $result['data'] ?? NULL, 'a timed-out extra-only read must return an empty ledger');
+		$this->assertTrue($result['unavailable'] ?? FALSE, 'a timed-out extra-only read must report unavailable');
+	}
+
 	/**
 	 * read_all()'s $unavailable discriminates: TRUE only on a genuine
 	 * lock-acquire expiry against the DATA file (pfb_sync_status.json) itself --
