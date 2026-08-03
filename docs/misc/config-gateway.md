@@ -84,6 +84,12 @@ Authorization is a property of the **write**, not the call site (the
 - **Canonical current storage.** Read adapters accept legacy tokens needed by supported forward
   upgrades; writes emit the current canonical token. They do not constrain new storage to what an
   older package understands.
+- **Adapter presence owns empty-string semantics (issue #2120).** A genuinely absent/`NULL`
+  value resolves to the registry default before every read adapter. A stored `''` reaches an
+  adapter-bearing entry's read adapter, while a plain scalar still treats `''` as not configured
+  and resolves it to the registry default. `PfbConfig::read()` never exposes absence. Writing
+  `NULL` to an adapter-bearing entry deletes that key (and a section write omits it), so absence
+  stays truthful instead of materialising a default; plain-scalar behaviour is unchanged.
 - Enums/booleans are the **internal runtime representation**; conversion at the boundary:
   stored string → enum on read; enum → canonical stored string on write.
 - **The enum owns its stored-value semantics** via the `PfbStoredEnum` interface +
@@ -106,21 +112,28 @@ Authorization is a property of the **write**, not the call site (the
 
 - **PHP adapters / enums** (`PfbToggle`, `PfbIdnMode` + the thin `pfb_cfg_*_read/write`
   delegations) in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`:
-  - Every ADAPTER-CARRYING checkbox field → `PfbToggle` (`'on'`/`'off'`; issue #1887 merged the former
-    `PfbLenient` into it). Off is an EXPLICIT stored token; a stored `''` is the
-    not-configured state and resolves to the field's registered default at the gateway,
-    exactly as an absent key does. Tokens are recognised case-insensitively on read;
-    writes always emit canonical lowercase. The runtime `$pfb[]` toggle mirrors carry
+  - Every ADAPTER-CARRYING checkbox field → `PfbToggle` (issue #1887 merged the former
+    `PfbLenient` into it). Read is deliberately narrow and case-insensitive: `on` in any
+    case is `On`; every other present token (`''`, legacy `'off'`, junk) is `Off`.
+    Only genuine absence consults the field's registered default. Writes emit `'on'` for
+    `On` and canonical `''` for `Off`; `'off'` is accepted forever but never written
+    (issue #2120, deliberately reversing #1887's explicit-`'off'` writer). The enum's
+    `Off = 'off'` backing value remains its internal/render identity. The runtime `$pfb[]`
+    toggle mirrors carry
     the enum itself (never `->value`), so consumers compare `=== PfbToggle::On`.
     Registered checkbox fields still on `NULL`/`NULL` adapters (e.g. `pfb_regex`,
     `pfb_noaaaa`, `pfb_gp`, `pfb_py_nolog`, `tld_wildcard`, `top1m_enable`)
     keep the raw `{'on', ''}` storage until they adopt the pair — a field joining the
     adapter set moves all its consumers in the same commit (see below).
-  - **`pfb_cache`/`pfb_py_reply`/`pfb_hsts`/ip-section `suppression` → `PfbToggle`**
-    (issue #1907): default **On** — the de-facto default every settings page has claimed
-    since 3.2. Each carries the registry grandfather map `['' => 'off']` (a 3.2 deliberate
-    uncheck stored `''` and must not resolve to the new `'on'` default), and
-    `pfb_py_reply`/`pfb_hsts` additionally get the `issue1907-python-gated-toggles`
+  - **Nine adapter-bearing toggles default On:** `pfb_keep`, `pfb_software_check`,
+    `pfb_feed_internal_filter`, `pfb_syntax_highlight`, `pfb_cache`, `pfb_py_reply`,
+    `pfb_hsts`, `pfb_idn_block_malicious`, and ip-section `suppression`. For all nine,
+    absence reads On while a stored `''` reads Off. The six former `'' => 'off'`
+    grandfather arms (`pfb_keep`, `pfb_cache`, `pfb_py_reply`, `pfb_hsts`,
+    `pfb_idn_block_malicious`, `suppression`) were retired by #2120 because the runtime
+    adapter now preserves that legacy uncheck and canonical writes use `''`; the separate
+    `pfb_keep` absent → `'on'` grandfather remains. `pfb_py_reply`/`pfb_hsts`
+    additionally get the `issue1907-python-gated-toggles`
     migration: a stored `'on'` beside a pre-upgrade `dnsbl_mode` that is present and not
     `'dnsbl_python'` was inert (both consumers were python-gated in 3.2) and is disabled
     before the ADR-02 python force would otherwise activate it.
@@ -144,14 +157,16 @@ Authorization is a property of the **write**, not the call site (the
     `pfb_alias_delta_batch` (plain string, `NULL`/`NULL` adapters) is the batch-size companion
     field; its stored value is a decimal integer string, clamped to `[64, 4096]` at read time by
     `pfb_alias_delta_batch_clamp()`.
-  - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): tokens
-    `'on'` (= All) / `'confusable'` / `'off'`. `All` **reuses the original `'on'`** block-all
+  - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): live
+    cases are `'on'` (= All), `'confusable'`, and Off. `All` **reuses the original `'on'`** block-all
     token, so current code reading a pre-4.0.0 configuration preserves block-all with no
     migration. `PfbConfig::read('dnsbl/pfb_idn')` returns the enum;
-    `PfbConfig::write()` and the `py_unbound.ini` build both emit `toStored()`; consumers compare
-    `=== PfbIdnMode::All` / `::Confusable`. The 4.0.0-alpha-only `'all'` token is **not** carried
-    (alpha compatibility is intentionally not maintained) — it reads as Off. One canonical
-    vocabulary spans `config.xml`, the ini, and the Python `IdnMode` enum.
+    `PfbConfig::write()` and the `py_unbound.ini` build both emit `toStored()`: Off → `''`,
+    All → `'on'`, Confusable → `'confusable'`. Reads accept both `''` and legacy `'off'`
+    as Off. The 4.0.0-alpha-only `'all'` token is **not** carried (alpha compatibility is
+    intentionally not maintained) — like other unrecognised junk, it keeps the enum's
+    existing `default()` fallback to Off. Consumers compare `=== PfbIdnMode::All` /
+    `::Confusable`; form rendering uses the enum's backing `->value`, not its storage token.
   - **`top1m_source` → `PfbTop1mSource`** (issue #877 review, registry adapters
     `pfb_cfg_top1m_source_read/write`): tokens `'tranco'` (default) / `'cisco'` /
     `'openpagerank'` (#928, replacing ADR-59 P4's `'domcop'`) /
@@ -171,9 +186,10 @@ Authorization is a property of the **write**, not the call site (the
     round-trip, just identity pass-through like any other plain field. Validated on POST
     by `PFB_FILTER_TOKEN` (`pfblockerng.inc`) — a base64url/JWT charset
     (`[A-Za-z0-9._~+/=-]`), NOT `PFB_FILTER_WORD` (which would reject a real token).
-- **Python** (`pfb_unbound.py`): the **`IdnMode` enum** shares that vocabulary — `All = 'on'`,
-  `Confusable = 'confusable'`, `Off = 'off'` — and reads the ini `idn_mode` token directly (the
-  legacy `python_idn` fallback is retained for a config predating the key). The toggle enum has
+- **Python** (`pfb_unbound.py`): the **`IdnMode` enum** keeps the internal cases
+  `All = 'on'`, `Confusable = 'confusable'`, `Off = 'off'`. A present empty or legacy
+  `'off'` ini value reads Off; absent `idn_mode` and unrecognised junk retain the legacy
+  `python_idn` fallback. The toggle enum has
   **no Python consumer** (`config.getboolean()` reads all bool toggles), so it is a
   PHP-only adapter.
 
@@ -209,10 +225,10 @@ The gateway preserves existing behaviour while configurations move forward:
 
 - **Legacy-read invariant** (old store → new code): `PfbConfig::read($key)` on any supported
   legacy stored token returns a well-formed runtime value — no crash, correct type, sane default
-  for absent. `''` and absent are the SAME not-configured state (issue #1887): every gateway
-  entry point (`read()`, `write()`, `writeSection()`) resolves both to the registered default
-  through one shared helper, so a stored `''` can never mean different things to the read and
-  the normalising write paths.
+  for absent. Issue #2120 deliberately reverses #1887's `''`-equals-absence identity for
+  adapter-bearing entries only: genuine absence resolves to the registered default; stored
+  `''` reaches the adapter. Plain scalars retain the #1887 identity. The shared normalization
+  still makes `read()`, `write()`, and `writeSection()` agree on the same distinction.
 - **Grandfather invariant (issue #1921)**: when an absent current default — or a raw legacy
   stored value — would change established behaviour, the registry entry carries a
   `grandfather` map: raw stored value → new value, with the dedicated `PFB_GF_ABSENT` marker
@@ -227,12 +243,10 @@ The gateway preserves existing behaviour while configurations move forward:
 
   | Field | Grandfather map | Why |
   | --- | --- | --- |
-  | `gen/pfb_keep` | `[ABSENT => 'on', '' => 'off']` | #281 upgrade keeps settings; #1887 preserves a 3.2 deliberate uncheck |
+  | `gen/pfb_keep` | `[ABSENT => 'on']` | #281 upgrade keeps settings; #2120's runtime adapter owns the legacy `''` uncheck |
   | `gen/pfb_feed_internal_filter` | `[ABSENT => 'off']` | #1770 — existing feeds are never silently dropped |
   | `gen/pfb_alias_delta_mode` | `[ABSENT => 'replace']` | ADR-40 — an upgrade keeps the pre-ADR-40 full replace |
   | `dnsbl/pfb_dnsbl_lenient` | `[ABSENT => 'on']` | ADR-22 — an upgrade keeps permissive parsing |
-  | `dnsbl/pfb_idn_block_malicious` | `['' => 'off']` | #1887 — the old `?: ''` unchecked save |
-  | `dnsbl/pfb_cache` · `dnsbl/pfb_py_reply` · `dnsbl/pfb_hsts` · `ip/suppression` | `['' => 'off']` | #1907 — default flipped to the page-claimed `'on'`; a 3.2 uncheck stored `''` |
 
   **Every entry carries its decision.** Exactly one of a `grandfather` map or a
   `no_grandfather` reason string per registry entry, with two exceptions carrying neither:
@@ -267,6 +281,10 @@ left untouched) and carries **both** a read and a write adapter, the value is ro
 `read_adapter()` then `write_adapter()` before the section is persisted. A key with no adapter
 pair (plain string) or not present in `$data` passes through byte-identical; `writeSection()`
 never calls `write_config()`.
+
+For an adapter-bearing key, an explicit `NULL` removes that key from the section before the
+section is persisted; an omitted key remains omitted. This matches single-key `write(NULL)`
+deletion. Plain registered scalars retain their existing byte-preserving section behavior.
 
 Before this fix, `writeSection()` called `config_set_path($section, $data)` directly, bypassing
 every adapter — a legacy read-only token (`top1m_source` `'domcop'`/`'alexa'`, `pfb_idn` alpha-only
@@ -342,9 +360,9 @@ legacy token, e.g. `top1m_source` `'alexa'` → `'tranco'`).
 **Migrations persist raw.** `pfb_run_migrations()` and every legacy-reshape write earlier in
 `pfblockerng_install.inc` persist via `PfbConfig::writeSectionRawSystem()` (direct
 `config_set_path()`, no adapter round-trip) — an adapter-riding write-back before the pass
-would resolve a bystander raw `''` to its registered default (`gen/pfb_keep` `''` → `'on'`)
-and destroy the very evidence the grandfather maps key on. Canonicalisation is the pass's
-job. Pinned by `tests/php/InstallPrePassWriteOrderTest.php` (no `writeSectionSystem` before
+would canonicalise a bystander legacy token (for example `top1m_source = 'alexa'`) before
+the registry pass can inspect it. Canonicalisation is the pass's job. Pinned by
+`tests/php/InstallPrePassWriteOrderTest.php` (no `writeSectionSystem` before
 the pass call in the installer) and the raw-bystander regression in
 `MigrationRegistryTest`.
 
@@ -378,8 +396,8 @@ ordering), `tests/php/LegacyKeyRenameMigrationTest.php` (row rename).
 
 | Adapter type | Stored vocabulary |
 | ------------ | ----------------- |
-| `toggle`            | `{'on', 'off'}` (issue #1887; case-insensitive read, lowercase write; a stored `''` ≡ absent → registered default) |
-| `idn`               | write `{'on' (=All), 'confusable', 'off'}`; legacy reads `'all'`→Off, `''`→Off (4.0.0-alpha `'all'` not carried) |
+| `toggle`            | write `{'on', ''}`; case-insensitive `on` read; `''`, legacy `'off'`, and junk → Off; only absence → registered default |
+| `idn`               | write `{'on' (=All), 'confusable', '' (=Off)}`; legacy `'off'` → Off; unrecognised `'all'`/junk keep the Off fallback |
 | `alias_delta_mode`  | `{'auto', 'delta', 'replace'}` — unknown/absent token reads as `'auto'` (ADR-40, since 4.0.0) |
 | `top1m_source`      | write `{'tranco' (default), 'cisco', 'openpagerank', 'majestic', 'cloudflare'}` (majestic ADR-59 P4, cloudflare ADR-59 P5, openpagerank replaced P4's domcop in #928); legacy read `'alexa'`→Tranco (dead service, #872) and `'domcop'`→OpenPageRank (list moved hosting, #928), neither re-emitted |
 | `plain`             | identity — any stored value passes through unchanged |
