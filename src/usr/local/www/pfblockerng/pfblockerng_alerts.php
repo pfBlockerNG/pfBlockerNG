@@ -963,7 +963,7 @@ if (isset($_POST) && !empty($_POST)) {
 			$cname_lookup_timeout = 30;
 			$cname_lookup_kill_grace = 5;
 			$cname_lookup_file = "{$g['tmp_path']}/pfb_alerts_cname_" . getmypid() . '_' . bin2hex(random_bytes(8));
-			$cname_lookup_pipeline = "{$drill_esc} {$domain_esc} {$ext_dns} | /usr/bin/awk '/CNAME/ {sub(\"\.\$\", \"\", \$5); print \$5;}'";
+			$cname_lookup_pipeline = "{$drill_esc} {$domain_esc} {$ext_dns} | /usr/bin/awk '/CNAME/ {sub(\"[.]\$\", \"\", \$5); print \$5;}'";
 			$cname_lookup_cmd = "{$timeout_esc} -s TERM -k {$cname_lookup_kill_grace} {$cname_lookup_timeout} /bin/sh -c " .
 				escapeshellarg($cname_lookup_pipeline) . ' > ' . escapeshellarg($cname_lookup_file) . " 2>&1 < /dev/null";
 			$cname_lookup_output = array();

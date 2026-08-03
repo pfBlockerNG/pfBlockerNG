@@ -52,7 +52,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		$this->assertStringContainsString(escapeshellarg($run['drill_path']), $pipeline, 'pipeline must carry the escaped injected drill fixture path');
 		$this->assertStringContainsString(escapeshellarg('example.com'), $pipeline, 'pipeline must carry the escaped domain argument');
 		$this->assertStringContainsString(escapeshellarg('@127.0.0.1'), $pipeline, 'pipeline must carry the escaped resolver argument');
-		$this->assertStringContainsString("/usr/bin/awk '/CNAME/ {sub(\"\\.\$\", \"\", \$5); print \$5;}'", $pipeline, 'pipeline must retain the CNAME awk transform');
+		$this->assertStringContainsString("/usr/bin/awk '/CNAME/ {sub(\"[.]\$\", \"\", \$5); print \$5;}'", $pipeline, 'pipeline must retain the CNAME awk transform');
 		$this->assertNotContains('--foreground', $argv, 'pipeline timeout must retain FreeBSD default reaper mode');
 		$this->assertNotContains('-f', $argv, 'pipeline timeout must retain FreeBSD default reaper mode');
 		$this->assertStringContainsString('CNAME lookup TIMED OUT', $run['log']);
@@ -89,7 +89,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		$drill = $this->fixture('drill fixture.sh',
 			"printf '%s\\n' --START-- \"\$\$\" >> " . escapeshellarg($marker) . "\n"
 			. "printf '%b\\n' 'partial.example.com.\\t300\\tIN\\tCNAME\\talias.example.com.'\n"
-			. ($stall ? "while :; do sleep 1; done\n" : '')
+			. ($stall ? "while true; do sleep 1; done\n" : '')
 		);
 		$timeout = $this->fixture('timeout fixture.sh',
 			"printf '%s\\n' --CALL-- >> " . escapeshellarg($timeout_log) . "\n"
