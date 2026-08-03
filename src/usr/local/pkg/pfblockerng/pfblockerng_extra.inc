@@ -1147,8 +1147,8 @@ function pfb_cfg_registry(): array
 		],
 
 		// Resolver cache backup/restore option. Default on (the de-facto page default
-		// since 3.2 -- #1907 owner decision). '' grandfather preserves a 3.2 deliberate
-		// uncheck.
+		// since 3.2 -- #1907 owner decision). A present '' remains an explicit uncheck;
+		// no grandfather arm is needed.
 		'dnsbl/pfb_cache' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
@@ -1606,8 +1606,8 @@ function pfb_cfg_registry(): array
 
 		// issue #1931: IP page "Enable Suppression" toggle -- path-addressed, no longer
 		// collides with dnsbl/whitelist. Default on (the de-facto page default since
-		// 3.2 -- #1907 owner decision). '' grandfather preserves a 3.2 deliberate
-		// uncheck.
+		// 3.2 -- #1907 owner decision). A present '' remains an explicit uncheck;
+		// no grandfather arm is needed.
 		'ip/suppression' => [
 			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',

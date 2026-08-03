@@ -244,7 +244,6 @@ The gateway preserves existing behaviour while configurations move forward:
   | Field | Grandfather map | Why |
   | --- | --- | --- |
   | `gen/pfb_keep` | `[ABSENT => 'on']` | #281 upgrade keeps settings; #2120's runtime adapter owns the legacy `''` uncheck |
-  | `gen/pfb_feed_internal_filter` | `[ABSENT => 'off']` | #1770 — existing feeds are never silently dropped |
   | `gen/pfb_alias_delta_mode` | `[ABSENT => 'replace']` | ADR-40 — an upgrade keeps the pre-ADR-40 full replace |
   | `dnsbl/pfb_dnsbl_lenient` | `[ABSENT => 'on']` | ADR-22 — an upgrade keeps permissive parsing |
 
