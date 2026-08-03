@@ -162,10 +162,8 @@ _EXEMPT_DATA_PATHS = (
 
 
 def test_upstream_data_snapshot_refresh_is_neutral() -> None:
-    # Scenario: the weekly hsts-refresh/psl-refresh automation opens a PR whose
-    # whole diff is a regenerated upstream data snapshot. There is no behaviour
-    # to pair a test with, so the gate must stay silent (issue #2132; PR #2130
-    # was merged past a red gate for exactly this diff shape).
+    # A diff whose whole content is a regenerated upstream snapshot has nothing
+    # hand-authored to pair a test with, so the gate stays silent (issue #2132).
     for path in _EXEMPT_DATA_PATHS:
         assert ccp.evaluate([path]) == [], f"{path} is upstream data, must never fire a rule"
 
@@ -202,15 +200,13 @@ def test_every_exempt_path_still_exists_in_the_tree() -> None:
 
 
 def test_exempt_www_asset_clears_the_tier_a_rule_too() -> None:
-    # The vendored CodeMirror digest manifest lives under src/usr/local/www/, so
-    # the exemption has to reach the stricter www<->ui rule as well, not just
-    # rule 1 -- otherwise the Tier-A message alone would still fail the gate.
+    # The manifest lives under src/usr/local/www/, so its neutrality must reach
+    # the stricter www<->ui rule too, not just rule 1.
     manifest = "src/usr/local/www/pfblockerng/vendor/codemirror/MANIFEST.sha256"
     assert ccp.evaluate([manifest]) == [], "the vendored digest manifest must clear BOTH rules"
-    # Discriminating sibling: a genuine www asset in that same vendor directory
-    # still fires both rules, proving the exemption is path-exact, not a blanket
-    # pass for everything under vendor/. Named after a really-shipped asset so
-    # the case documents the true tree rather than an invented filename.
+    # Discriminating sibling: a really-shipped asset in the same vendor
+    # directory still fires both rules -- the exemption is path-exact, not a
+    # blanket pass for everything under vendor/.
     sibling = ccp.evaluate(["src/usr/local/www/pfblockerng/vendor/codemirror/cm-hooks.min.js"])
     assert len(sibling) == 2, f"a real vendored asset must still fire both rules; got {sibling}"
 
