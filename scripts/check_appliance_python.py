@@ -33,7 +33,8 @@ SCOPE (deliberately low false-positive)
 * Flags the literal appliance interpreter path ``/usr/local/bin/python`` (covers
   ``python``, ``python3``, ``python3.11``, ...) everywhere in the scan roots.
 * Also flags bare ``python3`` and hardcoded ``python3.NN`` commands in shipped
-  source. Test-runner and client-VM commands remain outside that appliance rule.
+  source and direct pfSense-guest SSH calls in the smoke suite. Test-runner and
+  client-VM commands remain outside that appliance rule.
 
 Exit status: 0 = clean, 1 = one or more violations (printed with file:line).
 """
@@ -51,6 +52,7 @@ from pathlib import Path
 # scanned, so the literal here is harmless.
 _FORBIDDEN = "/usr/local/bin/python"
 _BARE_PYTHON = re.compile(r"(?<![A-Za-z0-9_./-])python3(?:\.[0-9]+)?(?=$|[\s\"'`;|&()<>\[\],])")
+_GUEST_SSH = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.ssh\s*\(")
 _SOURCE_EXTENSIONS = {"", ".html", ".inc", ".js", ".php", ".py", ".sh", ".xml"}
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -58,8 +60,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCAN_ROOTS = ("src", "tests")
 
 
-def _is_source_line(path: Path, line: str) -> bool:
-    """Return whether a line belongs to executable shipped source."""
+def _is_appliance_line(path: Path, line: str) -> bool:
+    """Return whether a line executes in shipped source or on a pfSense guest."""
     if path.suffix.lower() not in _SOURCE_EXTENSIONS:
         return False
     stripped = line.lstrip()
@@ -69,7 +71,10 @@ def _is_source_line(path: Path, line: str) -> bool:
         relative = path.resolve().relative_to(_REPO_ROOT)
     except (OSError, ValueError):
         return True
-    return bool(relative.parts) and relative.parts[0] == "src"
+    if relative.parts and relative.parts[0] == "src":
+        return True
+    is_smoke_guest = relative.parts[:2] == ("tests", "smoke") and _GUEST_SSH.search(line) is not None
+    return is_smoke_guest and "client_vm.ssh" not in line
 
 
 def _tracked_files(roots: tuple[str, ...]) -> list[Path]:
@@ -93,7 +98,7 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
         except (OSError, UnicodeError):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if _FORBIDDEN in line or (_is_source_line(path, line) and _BARE_PYTHON.search(line)):
+            if _FORBIDDEN in line or (_is_appliance_line(path, line) and _BARE_PYTHON.search(line)):
                 violations.append((path, lineno, line.strip()))
     return violations
 

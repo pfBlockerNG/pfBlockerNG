@@ -1,7 +1,7 @@
 """pfb_feed_normalize.py (issue #1797): detection + conversion contract.
 
 Runs the shipped script under the DEV interpreter (sys.executable — dev/CI
-tooling; the appliance reaches it only through pfb_python_interpreter()).
+tooling; the appliance reaches it only through the ``pfb_python.sh`` package wrapper).
 Skips when charset_normalizer is not installed in the dev environment.
 """
 

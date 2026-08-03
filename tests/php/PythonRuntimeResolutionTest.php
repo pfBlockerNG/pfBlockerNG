@@ -136,6 +136,8 @@ final class PythonRuntimeResolutionTest extends TestCase
 			$old_python_dir === FALSE ? putenv('PFB_PYTHON_DIR') : putenv('PFB_PYTHON_DIR=' . $old_python_dir);
 			@unlink($script);
 			@unlink($marker);
+			@unlink($python_dir . '/python3.11');
+			@rmdir($python_dir);
 			@rmdir($dir);
 		}
 	}
