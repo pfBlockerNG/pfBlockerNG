@@ -13,6 +13,7 @@ from scripts.release_version import (
     SnapshotRecord,
     generate_snapshot,
     next_patch_target,
+    validate_release_info,
 )
 
 TARGET = "4.0.0"
@@ -104,6 +105,22 @@ def test_nightly_snapshot_has_distinct_nightly_and_pkg_versions() -> None:
         pkg_version="4.0.0.snapshot.2.20260804.1",
         package=PACKAGE,
     )
+
+
+@pytest.mark.parametrize("generator", [_generate_edge, _generate_nightly])
+def test_snapshot_results_are_canonical_and_tampering_is_rejected(generator: object) -> None:
+    result = generator()  # type: ignore[operator]
+    validate_release_info(result)
+    tampered = [
+        replace(result, version=result.version + ".forged"),
+        replace(result, target_final="4.0.1"),
+        replace(result, release_line=result.release_line + "/forged"),
+        replace(result, pkg_version=result.pkg_version + ".forged"),
+        replace(result, sequence="20260804.2"),
+    ]
+    for forged in tampered:
+        with pytest.raises(ValueError):
+            validate_release_info(forged)
 
 
 def test_same_source_is_idempotent_even_when_requested_later() -> None:
