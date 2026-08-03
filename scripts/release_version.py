@@ -6,13 +6,13 @@ import re
 import sys
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from typing import Literal, Sequence
 
 PACKAGE = "pfSense-pkg-pfBlockerNG"
 
-Stage = Literal["final", "alpha", "beta", "rc", "edge"]
-Channel = Literal["stable", "testing", "edge"]
-GithubRelease = Literal["final", "prerelease"]
+Stage = Literal["final", "alpha", "beta", "rc", "edge", "nightly"]
+Channel = Literal["stable", "testing", "edge", "nightly"]
+GithubRelease = Literal["final", "prerelease", "none"]
 
 _CORE = r"(0|[1-9][0-9]*)"
 _FINAL_RE = re.compile(rf"^v(?P<major>{_CORE})\.(?P<minor>{_CORE})\.(?P<patch>{_CORE})$")
@@ -24,6 +24,9 @@ _EDGE_RE = re.compile(
     rf"^v(?P<major>{_CORE})\.(?P<minor>{_CORE})\.(?P<patch>{_CORE})\.edge\."
     r"(?P<date>[0-9]{8})\.(?P<count>[1-9][0-9]*)$"
 )
+_BARE_VERSION_RE = re.compile(rf"^(?P<major>{_CORE})\.(?P<minor>{_CORE})\.(?P<patch>{_CORE})$")
+_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_SEQUENCE_RE = re.compile(r"^(?P<date>[0-9]{8})\.(?P<count>[1-9][0-9]*)$")
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,12 @@ class ReleaseInfo:
     github_release: GithubRelease
     pkg_version: str
     package: str
+
+
+@dataclass(frozen=True)
+class SnapshotRecord:
+    source_sha: str
+    result: ReleaseInfo
 
 
 def _invalid(tag: str) -> ValueError:
@@ -127,8 +136,188 @@ def parse_release_tag(tag: str) -> ReleaseInfo:
     raise _invalid(tag)
 
 
+def _parse_bare_version(final_version: str) -> tuple[str, str, str]:
+    if not isinstance(final_version, str):
+        raise TypeError("target_final must be str")
+    if not final_version or len(final_version) > 128:
+        raise ValueError(f"invalid final version: {final_version!r}")
+    match = _BARE_VERSION_RE.fullmatch(final_version)
+    if not match:
+        raise ValueError(f"invalid final version: {final_version!r}")
+    return tuple(match.group(name) for name in ("major", "minor", "patch"))  # type: ignore[return-value]
+
+
+def next_patch_target(final_version: str) -> str:
+    """Return the next patch target for a strict bare X.Y.Z final version."""
+    major, minor, patch = _parse_bare_version(final_version)
+    return f"{major}.{minor}.{int(patch) + 1}"
+
+
+def _validate_source_sha(source_sha: str) -> None:
+    if not isinstance(source_sha, str) or not _SHA_RE.fullmatch(source_sha):
+        raise ValueError("source_sha must be lowercase 40- or 64-character hex")
+
+
+def _sequence_parts(sequence: str) -> tuple[date, int]:
+    if not isinstance(sequence, str):
+        raise ValueError("snapshot sequence must be YYYYMMDD.N")
+    match = _SEQUENCE_RE.fullmatch(sequence)
+    if not match:
+        raise ValueError("snapshot sequence must be YYYYMMDD.N")
+    raw_date = match.group("date")
+    try:
+        build_date = date(int(raw_date[:4]), int(raw_date[4:6]), int(raw_date[6:]))
+    except ValueError as exc:
+        raise ValueError(f"invalid snapshot calendar date: {raw_date}") from exc
+    return build_date, int(match.group("count"))
+
+
+def _date_text(build_date: date) -> str:
+    return f"{build_date.year:04d}{build_date.month:02d}{build_date.day:02d}"
+
+
+def _validate_nightly_result(result: ReleaseInfo) -> None:
+    major, minor, patch = _parse_bare_version(result.target_final)
+    build_date, count = _sequence_parts(result.sequence or "")
+    date_text = _date_text(build_date)
+    expected_version = f"{result.target_final}.nightly.{date_text}.{count}"
+    expected_pkg = f"{result.target_final}.snapshot.2.{date_text}.{count}"
+    if result.tag is not None or result.stage != "nightly" or result.channel != "nightly":
+        raise ValueError("invalid Nightly snapshot result")
+    if result.release_line != "devel" or result.version != expected_version or result.pkg_version != expected_pkg:
+        raise ValueError("invalid Nightly snapshot result")
+    if result.target_final != f"{major}.{minor}.{patch}" or result.prerelease is not True or result.final is not False:
+        raise ValueError("invalid Nightly snapshot result")
+    if result.notes_required is not False or result.github_release != "none" or result.package != PACKAGE:
+        raise ValueError("invalid Nightly snapshot result")
+
+
+def _validate_snapshot_result(result: ReleaseInfo) -> tuple[date, int]:
+    if not isinstance(result, ReleaseInfo) or result.package != PACKAGE:
+        raise ValueError("invalid snapshot result")
+    if result.channel == "edge":
+        if not isinstance(result.tag, str):
+            raise ValueError("invalid Edge snapshot result")
+        parsed = parse_release_tag(result.tag)
+        if parsed != result:
+            raise ValueError("invalid Edge snapshot result")
+        return _sequence_parts(result.sequence or "")
+    if result.channel == "nightly":
+        _validate_nightly_result(result)
+        return _sequence_parts(result.sequence or "")
+    raise ValueError("existing records must contain Edge or Nightly snapshots")
+
+
+def _snapshot_info(
+    channel: Literal["edge", "nightly"],
+    target_final: str,
+    release_line: str,
+    build_date: date,
+    count: int,
+) -> ReleaseInfo:
+    date_text = _date_text(build_date)
+    sequence = f"{date_text}.{count}"
+    if channel == "edge":
+        version = f"{target_final}.edge.{sequence}"
+        return ReleaseInfo(
+            tag=f"v{version}",
+            version=version,
+            stage="edge",
+            sequence=sequence,
+            target_final=target_final,
+            release_line=release_line,
+            channel="edge",
+            prerelease=True,
+            final=False,
+            notes_required=True,
+            github_release="prerelease",
+            pkg_version=f"{target_final}.snapshot.1.{sequence}",
+            package=PACKAGE,
+        )
+    return ReleaseInfo(
+        tag=None,
+        version=f"{target_final}.nightly.{sequence}",
+        stage="nightly",
+        sequence=sequence,
+        target_final=target_final,
+        release_line=release_line,
+        channel="nightly",
+        prerelease=True,
+        final=False,
+        notes_required=False,
+        github_release="none",
+        pkg_version=f"{target_final}.snapshot.2.{sequence}",
+        package=PACKAGE,
+    )
+
+
+def generate_snapshot(
+    *,
+    channel: Literal["edge", "nightly"],
+    target_final: str,
+    release_line: str,
+    source_sha: str,
+    build_date: date,
+    existing: Sequence[SnapshotRecord] = (),
+) -> ReleaseInfo:
+    """Generate a deterministic Edge or Nightly snapshot identity."""
+    if channel not in ("edge", "nightly"):
+        raise ValueError(f"unknown snapshot channel: {channel!r}")
+    major, minor, patch = _parse_bare_version(target_final)
+    expected_line = f"release/{major}.{minor}" if channel == "edge" else "devel"
+    if not isinstance(release_line, str) or release_line != expected_line:
+        raise ValueError(f"release line must be {expected_line!r}")
+    if type(build_date) is not date:
+        raise TypeError("build_date must be datetime.date")
+    _validate_source_sha(source_sha)
+
+    try:
+        records = tuple(existing)
+    except TypeError as exc:
+        raise ValueError("existing must be a sequence of SnapshotRecord") from exc
+    validated: list[tuple[SnapshotRecord, date, int]] = []
+    for record in records:
+        if not isinstance(record, SnapshotRecord):
+            raise ValueError("existing must contain SnapshotRecord values")
+        _validate_source_sha(record.source_sha)
+        build_date_existing, count_existing = _validate_snapshot_result(record.result)
+        validated.append((record, build_date_existing, count_existing))
+
+    scope = (channel, target_final, release_line)
+    scoped = [
+        item
+        for item in validated
+        if (item[0].result.channel, item[0].result.target_final, item[0].result.release_line) == scope
+    ]
+    seen_emitted: dict[tuple[str, str], str] = {}
+    for record, _, _ in validated:
+        key = (record.result.version, record.result.pkg_version)
+        previous_source = seen_emitted.get(key)
+        if previous_source is not None and previous_source != record.source_sha:
+            raise ValueError("snapshot version collision for different sources")
+        seen_emitted[key] = record.source_sha
+
+    same_source = [item for item in scoped if item[0].source_sha == source_sha]
+    if same_source:
+        first = same_source[0][0].result
+        if any(item[0].result != first for item in same_source[1:]):
+            raise ValueError("conflicting snapshot results for source")
+
+    latest = max((item[1] for item in scoped), default=None)
+    if latest is not None and build_date < latest:
+        raise ValueError("snapshot date is older than latest relevant snapshot")
+    if same_source:
+        return same_source[0][0].result
+    count = 1
+    if latest == build_date:
+        count = max(item[2] for item in scoped if item[1] == build_date) + 1
+    return _snapshot_info(channel, target_final, release_line, build_date, count)
+
+
 def validate_branch(info: ReleaseInfo, branch: str, legacy: bool = False) -> None:
     """Require a canonical release line, with optional legacy branch aliases."""
+    if not isinstance(legacy, bool):
+        raise TypeError("legacy must be bool")
     if not isinstance(branch, str):
         raise ValueError(f"branch {branch!r} is unknown")
     if branch == info.release_line:
