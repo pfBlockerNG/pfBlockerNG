@@ -1925,15 +1925,28 @@ def test_update_runnow_waits_for_update_lock_then_records_success(
     holder = "/tmp/pfb_issue_2122_holder.php"
     ready = "/tmp/pfb_issue_2122_holder.ready"
     stop = "/tmp/pfb_issue_2122_holder.stop"
+    pidfile = "/tmp/pfb_issue_2122_holder.pid"
+    output = "/tmp/pfb_issue_2122_holder.out"
     original_enabled = helpers.config_get(vm, _ENABLE_CB_CFG)
     if original_enabled != "on":
         helpers.set_package_enabled(vm, True)
 
     holder_php = f"""<?php
 $fp = fopen('{helpers.PFB_DBDIR}/pfb_feed_pass.lock', 'c');
-if ($fp === false || !flock($fp, LOCK_EX)) {{ exit(1); }}
+if ($fp === false) {{ fwrite(STDERR, "lock open failed\\n"); exit(1); }}
+$deadline = microtime(true) + 45.0;
+$acquired = false;
+do {{
+    if (flock($fp, LOCK_EX | LOCK_NB)) {{ $acquired = true; break; }}
+    usleep(100000);
+}} while (microtime(true) < $deadline);
+if (!$acquired) {{ fwrite(STDERR, "lock acquire timed out\\n"); fclose($fp); exit(2); }}
 touch('{ready}');
-while (!file_exists('{stop}')) {{ usleep(100000); }}
+for ($i = 0; $i < 600; $i++) {{
+    clearstatcache(true, '{stop}');
+    if (file_exists('{stop}')) {{ break; }}
+    usleep(100000);
+}}
 flock($fp, LOCK_UN);
 fclose($fp);
 @unlink('{ready}');
@@ -1941,17 +1954,22 @@ fclose($fp);
 
     try:
         helpers.wait_no_active_pfb_task(vm)
-        vm.ssh("/bin/rm", "-f", holder, ready, stop)
-        vm.ssh(
-            "/bin/sh",
-            "-c",
-            f"cat > {holder} <<'PFBEOF'\n{holder_php}\nPFBEOF\n"
-            f"nohup /usr/local/bin/php {holder} >/tmp/pfb_issue_2122_holder.out 2>&1 &",
-        )
-        assert helpers.wait_until(
-            lambda: vm.ssh("/usr/bin/test", "-f", ready).returncode == 0,
-            timeout=10.0,
-        ), "test holder did not acquire the update lock"
+        vm.ssh("/bin/rm", "-f", holder, ready, stop, pidfile, output)
+        vm.ssh(f"cat > {holder} <<'PFBEOF'\n{holder_php}\nPFBEOF")
+        launch = vm.ssh(f"nohup /usr/local/bin/php {holder} >{output} 2>&1 & echo $! > {pidfile}")
+        assert launch.returncode == 0, f"test holder launch failed: {launch.stderr!r}"
+        try:
+            helpers.wait_until(
+                lambda: vm.ssh("/usr/bin/test", "-f", ready).returncode == 0,
+                timeout=50.0,
+            )
+        except RuntimeError as exc:
+            diag = vm.ssh(
+                f"cat {output} 2>/dev/null; "
+                f"p=$(cat {pidfile} 2>/dev/null); "
+                'test -n "$p" && ps -p "$p" -o pid=,stat=,command= || true'
+            )
+            raise AssertionError(f"test holder did not acquire the update lock: {diag.stdout!r}") from exc
 
         before_ts = int(vm.ssh("/bin/date", "+%s").stdout.strip())
         response = webui.post(
@@ -1995,11 +2013,14 @@ fclose($fp);
         )
     finally:
         vm.ssh("/usr/bin/touch", stop)
-        helpers.wait_until(
-            lambda: vm.ssh("/usr/bin/test", "!", "-f", ready).returncode == 0,
-            timeout=10.0,
-        )
-        vm.ssh("/bin/rm", "-f", holder, ready, stop, "/tmp/pfb_issue_2122_holder.out")
+        try:
+            helpers.wait_until(
+                lambda: vm.ssh("/usr/bin/test", "!", "-f", ready).returncode == 0,
+                timeout=15.0,
+            )
+        except RuntimeError:
+            vm.ssh(f'p=$(cat {pidfile} 2>/dev/null); test -z "$p" || kill "$p" 2>/dev/null || true')
+        vm.ssh("/bin/rm", "-f", holder, ready, stop, pidfile, output)
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)
 
