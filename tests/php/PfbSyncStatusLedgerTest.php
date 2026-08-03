@@ -760,11 +760,15 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 	public function testExtraOnlyLockTimeoutDoesNotRequireMain(): void
 	{
-		$dataPath = $this->dir . '/pfb_sync_status.json';
-		file_put_contents($dataPath, '{}');
-		$holder = fopen($dataPath, 'c');
-		$this->assertNotFalse($holder, 'test fixture must open the sync-status data file');
-		$this->assertTrue(flock($holder, LOCK_EX), 'test fixture must hold the sync-status data lock');
+		$holders = [];
+		foreach (['pfb_due_ledger.json' => '{}', 'pfb_sync_status.json' => '{}', 'pfb_sync_status.json.lock' => ''] as $name => $contents) {
+			$path = $this->dir . '/' . $name;
+			file_put_contents($path, $contents);
+			$holder = fopen($path, 'c');
+			$this->assertNotFalse($holder, "test fixture must open {$name}");
+			$this->assertTrue(flock($holder, LOCK_EX), "test fixture must lock {$name}");
+			$holders[] = $holder;
+		}
 
 		$extraPath = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
 		$childCode = <<<'PHP'
@@ -772,28 +776,58 @@ require $argv[1];
 if (function_exists('pfb_logger') || !function_exists('logger')) {
 	exit(3);
 }
-$unavailable = FALSE;
-$data = pfb_sync_status_read_all($argv[2], 0.05, $unavailable);
-echo json_encode(['data' => $data, 'unavailable' => $unavailable], JSON_THROW_ON_ERROR), "\n";
+$dueUnavailable = FALSE;
+$due = pfb_due_ledger_read_entry('dcc', $argv[2], 0.05, $dueUnavailable);
+$syncUnavailable = FALSE;
+$sync = pfb_sync_status_read_all($argv[2], 0.05, $syncUnavailable);
+$callbackRan = FALSE;
+pfb_sync_status_locked($argv[2], static function () use (&$callbackRan): void {
+	$callbackRan = TRUE;
+}, 0.05);
+echo json_encode([
+	'due' => $due,
+	'due_unavailable' => $dueUnavailable,
+	'sync' => $sync,
+	'sync_unavailable' => $syncUnavailable,
+	'callback_ran' => $callbackRan,
+], JSON_THROW_ON_ERROR), "\n";
 PHP;
-		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+		$descriptors = [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 		$process = proc_open([PHP_BINARY, '-r', $childCode, $extraPath, $this->dir], $descriptors, $pipes);
 		$this->assertIsResource($process, 'test fixture must launch an extra-only child process');
-		stream_set_timeout($pipes[1], 5);
-		stream_set_timeout($pipes[2], 5);
+		$deadline = hrtime(TRUE) + 5_000_000_000;
+		do {
+			$status = proc_get_status($process);
+			if (!$status['running']) {
+				break;
+			}
+			usleep(10000);
+		} while (hrtime(TRUE) < $deadline);
+		$timedOut = $status['running'];
+		if ($timedOut) {
+			proc_terminate($process, 9);
+		}
 		$output = stream_get_contents($pipes[1]);
 		$errors = stream_get_contents($pipes[2]);
 		fclose($pipes[1]);
 		fclose($pipes[2]);
-		$exitCode = proc_close($process);
-		flock($holder, LOCK_UN);
-		fclose($holder);
+		$closeExitCode = proc_close($process);
+		foreach ($holders as $holder) {
+			flock($holder, LOCK_UN);
+			fclose($holder);
+		}
 
+		$this->assertFalse($timedOut, 'extra-only child exceeded the 5-second hard deadline');
+		$exitCode = $status['exitcode'] !== -1 ? $status['exitcode'] : $closeExitCode;
 		$this->assertSame(0, $exitCode, "extra-only child failed: {$errors}");
 		$result = json_decode($output, TRUE);
 		$this->assertIsArray($result, "extra-only child output was invalid JSON: {$output}");
-		$this->assertSame([], $result['data'] ?? NULL, 'a timed-out extra-only read must return an empty ledger');
-		$this->assertTrue($result['unavailable'] ?? FALSE, 'a timed-out extra-only read must report unavailable');
+		$this->assertArrayHasKey('due', $result, 'extra-only child must report the due-read result');
+		$this->assertNull($result['due'], 'a timed-out extra-only due read must return no entry');
+		$this->assertTrue($result['due_unavailable'] ?? FALSE, 'a timed-out extra-only due read must report unavailable');
+		$this->assertSame([], $result['sync'] ?? NULL, 'a timed-out extra-only sync read must return an empty ledger');
+		$this->assertTrue($result['sync_unavailable'] ?? FALSE, 'a timed-out extra-only sync read must report unavailable');
+		$this->assertTrue($result['callback_ran'] ?? FALSE, 'a timed-out extra-only sync lock must run its callback');
 	}
 
 	/**
