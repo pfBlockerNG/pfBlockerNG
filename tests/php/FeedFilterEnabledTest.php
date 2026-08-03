@@ -11,9 +11,8 @@ use PHPUnit\Framework\TestCase;
  * feed-host guard at all.
  *
  * Default-ON contract: a fresh, never-configured install (key absent) reads as ON, so
- * the filter ships active. An explicit stored 'off' (written by an unchecked save, or
- * pinned by the install-time grandfather migration on an existing box) reads as OFF.
- * Any other stored value reads as ON (the value the UI writes when checked is 'on').
+ * the filter ships active. Case-insensitive 'on' reads as On; every other present token
+ * reads as Off. Unchecked saves write canonical empty; legacy 'off' remains read-compatible.
  */
 #[CoversFunction('pfb_feed_filter_enabled')]
 final class FeedFilterEnabledTest extends TestCase
@@ -43,7 +42,7 @@ final class FeedFilterEnabledTest extends TestCase
 	{
 		// Before: absent -> enabled.
 		$this->assertTrue(pfb_feed_filter_enabled());
-		// After: a stored 'off' (unchecked save / grandfather pin) -> disabled.
+		// After: a legacy stored 'off' (hand-edited or HA-synchronised) -> disabled.
 		$this->setToggle('off');
 		$this->assertFalse(pfb_feed_filter_enabled());
 	}
