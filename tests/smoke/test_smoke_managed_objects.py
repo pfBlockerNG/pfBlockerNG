@@ -508,7 +508,7 @@ def test_managed_objects_uninstall_sweeps_orphan_preserves_user_objects(deployed
     vm = deployed_vm
 
     # GIVEN — select the full-removal uninstall path (pfb_keep defaults to 'on'; a test that
-    # asserts sections-gone must set pfb_keep=off explicitly — see issue #484).
+    # asserts sections-gone must set pfb_keep to Off explicitly — see issue #484).
     h.set_pfb_keep(vm, False)
     # GIVEN — seed the three objects; first confirm DNSBL is disabled / clean.
     h.set_dnsbl_enabled(vm, False)

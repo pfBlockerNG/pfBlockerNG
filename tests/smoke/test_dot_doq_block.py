@@ -843,7 +843,7 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM, p
         h.set_package_enabled(vm, True)
         h.set_dnsbl_enabled(vm, True)
         # GIVEN — select the full-removal uninstall path (pfb_keep defaults to 'on'; a test that
-        # asserts sections-gone must set pfb_keep=off explicitly — see issue #484).
+        # asserts sections-gone must set pfb_keep to Off explicitly — see issue #484).
         h.set_pfb_keep(vm, False)
         # GIVEN — seed the user filter rule; assert block is disabled.
         _set_dot_block(vm, enabled=False, ifaces=[], exception="")
@@ -1094,7 +1094,7 @@ def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM, prima
     h.set_package_enabled(vm, True)
     h.set_dnsbl_enabled(vm, True)
     # GIVEN — select the full-removal uninstall path (pfb_keep defaults to 'on'; a test
-    # that asserts sections-gone must set pfb_keep=off explicitly — see issue #484).
+    # that asserts sections-gone must set pfb_keep to Off explicitly — see issue #484).
     h.set_pfb_keep(vm, False)
     # GIVEN — enable DoT block on the primary interface and seed a user filter rule.
     # The seed is wrapped so the finally can remove it: it carries no pfB marker, so
