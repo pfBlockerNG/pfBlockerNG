@@ -971,6 +971,10 @@ if (isset($_POST) && !empty($_POST)) {
 			exec($cname_lookup_cmd, $cname_lookup_output, $cname_lookup_status);
 			if ($cname_lookup_status === 124) {
 				pfb_logger("\npfblockerng_alerts: CNAME lookup TIMED OUT (killed); discarding partial output\n", 2);
+			} elseif ($cname_lookup_status !== 0) {
+				pfb_logger("\npfblockerng_alerts: CNAME lookup FAILED (exit {$cname_lookup_status}); discarding output\n", 2);
+			} elseif (!is_file($cname_lookup_file)) {
+				pfb_logger("\npfblockerng_alerts: CNAME lookup FAILED (capture missing); discarding output\n", 2);
 			} else {
 				$cname_list = file($cname_lookup_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: array();
 			}

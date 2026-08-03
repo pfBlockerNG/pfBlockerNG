@@ -59,6 +59,17 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		$this->assertSame([], $run['capture_files'], 'timed-out capture files must be cleaned up');
 	}
 
+	public function testCaptureFailureIsLoggedWithoutReadingMissingFile(): void
+	{
+		$run = $this->runLookup(FALSE, FALSE, FALSE);
+
+		$this->assertTrue($run['completed'], 'capture failure must not abort the request; child output: ' . $run['child_log']);
+		$this->assertSame([], $run['cname_list'], 'capture failure must not produce CNAME data');
+		$this->assertSame([], $run['timeout_calls'], 'failed outer redirection must not launch the lookup');
+		$this->assertStringContainsString('CNAME lookup FAILED', $run['log']);
+		$this->assertStringNotContainsString('file(', $run['child_log'], 'missing capture file must not emit a PHP warning');
+	}
+
 	public function testLookupUsesDefaultReaperAndRegularFileCapture(): void
 	{
 		$source = file_get_contents(self::ALERTS_PHP);
@@ -77,7 +88,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 	/**
 	 * @return array{completed:bool,cname_list:list<string>,timeout_calls:list<list<string>>,log:string,capture_files:list<string>,child_log:string,drill_path:string}
 	 */
-	private function runLookup(bool $stall, bool $expectTimeout): array
+	private function runLookup(bool $stall, bool $expectTimeout, bool $captureAvailable = TRUE): array
 	{
 		$marker = "{$this->tmp}/stall marker.log";
 		$drill_log = "{$this->tmp}/drill args.log";
@@ -114,7 +125,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 			. '$GLOBALS[\'pfb\'][\'extdns\'] = \'127.0.0.1\';' . "\n"
 			. '$GLOBALS[\'pfb\'][\'drill\'] = ' . var_export($drill, TRUE) . ";\n"
 			. '$GLOBALS[\'pfb\'][\'timeout\'] = ' . var_export($timeout, TRUE) . ";\n"
-			. '$GLOBALS[\'g\'][\'tmp_path\'] = ' . var_export($this->tmp, TRUE) . ";\n"
+			. '$GLOBALS[\'g\'][\'tmp_path\'] = ' . var_export($captureAvailable ? $this->tmp : "{$this->tmp}/missing", TRUE) . ";\n"
 			. '$GLOBALS[\'pfb\'][\'log\'] = ' . var_export("{$this->tmp}/pfblockerng.log", TRUE) . ";\n"
 			. '$GLOBALS[\'pfb\'][\'errlog\'] = ' . var_export("{$this->tmp}/pfblockerng.errlog", TRUE) . ";\n"
 			. '$list = pfb_alerts_test_cname_lookup(\'example.com\');' . "\n"
