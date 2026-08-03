@@ -118,11 +118,10 @@ _PY_PATH_CLOSE = "<<<PFBPYEND>>>"
 
 
 def _guest_python(vm: SmokeVM) -> str:
-    """The package Python on the guest, via the canonical dependency resolver.
+    """The package Python wrapper on the guest, cross-checked with PHP.
 
-    ``pfb_python_interpreter()`` is the SAME resolver the lint endpoint uses —
-    the appliance ships no unversioned ``python3``, and the no-appliance-python
-    rule forbids constructing the path any other way.  Runs through
+    ``pfb_python_interpreter()`` is the PHP readiness resolver; the wrapper is
+    the SAME launcher the lint endpoint uses. Runs through
     ``helpers.php_eval`` (pfSsh.php, the fully-bootstrapped pfSense shell): a
     bare ``php -r`` require of ``pfblockerng.inc`` dies in pfSense's own error
     handler with exit 0, so the path is delimited the same way
@@ -130,7 +129,7 @@ def _guest_python(vm: SmokeVM) -> str:
     """
     snippet = (
         'require_once("/usr/local/pkg/pfblockerng/pfblockerng.inc"); '
-        f'echo "{_PY_PATH_OPEN}" . pfb_python_interpreter() . "{_PY_PATH_CLOSE}";'
+        f'echo "{_PY_PATH_OPEN}" . pfb_python_interpreter() . "\\n" . PFB_PYTHON_WRAPPER . "{_PY_PATH_CLOSE}";'
     )
     result = h.php_eval(vm, snippet, timeout=120)
     out = result.stdout
@@ -139,9 +138,23 @@ def _guest_python(vm: SmokeVM) -> str:
     assert result.returncode == 0 and start != -1 and end != -1, (
         f"pfb_python_interpreter() resolution failed: rc={result.returncode} stdout={out!r} stderr={result.stderr!r}"
     )
-    path = out[start + len(_PY_PATH_OPEN) : end].strip()
-    assert path, f"pfb_python_interpreter() returned an empty path: stdout={out!r}"
-    return path
+    resolved, wrapper = out[start + len(_PY_PATH_OPEN) : end].strip().splitlines()
+    assert resolved, f"pfb_python_interpreter() returned an empty path: stdout={out!r}"
+    assert wrapper, f"PFB_PYTHON_WRAPPER was empty: stdout={out!r}"
+    wrapper_result = vm.ssh(
+        f"printf %s {_PY_PATH_OPEN!r}; {shlex.quote(wrapper)} --print-interpreter; printf %s {_PY_PATH_CLOSE!r}",
+        timeout=120,
+    )
+    wrapped_out = wrapper_result.stdout
+    wrapped_start = wrapped_out.find(_PY_PATH_OPEN)
+    wrapped_end = wrapped_out.find(_PY_PATH_CLOSE)
+    assert wrapper_result.returncode == 0 and wrapped_start != -1 and wrapped_end != -1, (
+        f"pfb_python.sh --print-interpreter failed: rc={wrapper_result.returncode} "
+        f"stdout={wrapped_out!r} stderr={wrapper_result.stderr!r}"
+    )
+    wrapped = wrapped_out[wrapped_start + len(_PY_PATH_OPEN) : wrapped_end].strip()
+    assert wrapped == resolved, f"PHP resolver {resolved!r} differs from wrapper {wrapped!r}"
+    return wrapper
 
 
 def test_py_compile_probe_valid_script_is_silent_and_zero(deployed_vm: SmokeVM) -> None:

@@ -6037,14 +6037,10 @@ function pfb_hook_editor_template(string $when, string $lang): string {
 		"  PFB_CHANGED_DNSBL_GROUPS -- space-separated DNSBL_* groups updated this pass\n";
 
 	if ($lang === 'py') {
-		// env-based, versioned shebang: pfSense ships python3.11 with NO unversioned
-		// 'python3' symlink, so a bare '#!/usr/bin/env python3' is an rc=127 footgun
-		// here -- the version must be spelled out. (This is a template string for a
-		// hook SCRIPT the OS execs directly via its own shebang -- not this package
-		// invoking an appliance interpreter itself; see scripts/check_appliance_python.py.)
-		$header = "#!/usr/bin/env python3.11\n" .
-			"# NOTE: verify the interpreter version above matches this box's installed python3\n" .
-			"# (pfSense CE ships python3.11 with no unversioned 'python3' symlink).\n";
+		// The hook runner invokes the package wrapper explicitly; this shebang keeps
+		// direct execution on the same resolver path.
+		$header = "#!/usr/local/pkg/pfblockerng/pfb_python.sh\n" .
+			"# The package wrapper resolves this box's installed Python dependency.\n";
 		$comment = "#\n# " . str_replace("\n", "\n# ", rtrim($contract)) . "\n#\n";
 		$body = "import os\n" .
 			"\n" .
@@ -6342,12 +6338,12 @@ function pfb_lint_diagnostics(
 		// sees them, so a long description warns without blocking a save.
 		'regex' => array_merge(
 			pfb_lint_parse_regex_errors(
-				pfb_dnsbl_regex_validation_errors($content, $python ?? pfb_python_interpreter(), $cap, $timeout_bin)
+				pfb_dnsbl_regex_validation_errors($content, $python ?? PFB_PYTHON_WRAPPER, $cap, $timeout_bin)
 			),
 			pfb_dnsbl_regex_description_warnings($content)
 		),
 		'sh' => pfb_lint_sh_diagnostics($content, $sh ?? '/bin/sh', $timeout_bin),
-		'py' => pfb_lint_py_diagnostics($content, $python ?? pfb_python_interpreter(), $timeout_bin),
+		'py' => pfb_lint_py_diagnostics($content, $python ?? PFB_PYTHON_WRAPPER, $timeout_bin),
 		default => [],
 	};
 }

@@ -1,6 +1,6 @@
 """Tests for scripts/check_appliance_python.py.
 
-Per CLAUDE.md's test-coverage rule, every flagged case is paired with the correct
+Per AGENTS.md's test-coverage rule, every flagged case is paired with the correct
 form that must stay clean, so a green proves the check DISCRIMINATES (the appliance
 interpreter path is rejected) rather than always firing or never firing.
 
@@ -49,35 +49,27 @@ def test_flags_any_literal_interpreter_path(tmp_path: Path) -> None:
         assert _find(tmp_path, line), f"/usr/local/bin/{suffix} should be flagged"
 
 
-def test_dependency_derived_interpreter_construction_is_allowed(
+def test_dependency_derived_interpreter_construction_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The exemption is repo-root-anchored, not a suffix match, so anchor _REPO_ROOT at
-    # tmp_path to exercise it without touching the real repo tree.
     monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path.resolve())
     prefix = "/usr/local/bin/" + "python"
     line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
     relative_path = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
-    assert _find(tmp_path, line, relative_path) == [], "resolver's dependency-derived construction must be allowed"
+    assert _find(tmp_path, line, relative_path), "only the shell wrapper may construct the interpreter path"
 
 
-def test_resolver_path_with_dot_segments_still_exempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Normalization must not break the legitimate case: an absolute path to the real
-    # resolver file, spelled with "./" and "../" segments, still resolves to it.
+def test_resolver_path_with_dot_segments_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cap, "_REPO_ROOT", tmp_path.resolve())
     prefix = "/usr/local/bin/" + "python"
     line = f"    $interpreter = '{prefix}' . $version; // appliance-python-ok: dependency-derived\n"
     real = tmp_path / "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
     real.parent.mkdir(parents=True, exist_ok=True)
     real.write_text(line, encoding="utf-8")
-    # "other" must exist for the OS to traverse the literal path: without it the read
-    # raises FileNotFoundError, find_violations skips the file, and the assertion below
-    # would pass without the exemption ever being consulted.
+    # "other" must exist so the OS can traverse the literal path.
     (tmp_path / "src/usr/local/pkg/other").mkdir(parents=True, exist_ok=True)
     non_normalized = tmp_path / "src/usr/local/pkg/other/../pfblockerng/./pfblockerng.inc"
-    assert cap.find_violations([non_normalized]) == [], (
-        "a non-normalized (./,../) path to the resolver must stay exempt"
-    )
+    assert cap.find_violations([non_normalized]), "the PHP resolver has no construction exemption"
 
 
 def test_annotation_does_not_allow_literal_interpreter(tmp_path: Path) -> None:
@@ -138,6 +130,27 @@ def test_bare_python3_is_not_flagged(tmp_path: Path) -> None:
     # or scripts/ bench tooling on the dev box) — out of scope, must NOT be flagged.
     bare = '    client_vm.ssh("python3 /tmp/tcp_rst_probe.py 2.0")\n'
     assert _find(tmp_path, bare) == [], "bare python3 (dev/client) must not be flagged"
+
+
+def test_bare_python3_source_command_is_flagged(tmp_path: Path) -> None:
+    source = '    subprocess.run(["python3", "-c", snippet], check=True)\n'
+    violations = _find(tmp_path, source)
+    assert len(violations) == 1, f"bare appliance python3 source command must be flagged; got {violations}"
+
+
+def test_hardcoded_versioned_python_source_command_is_flagged(tmp_path: Path) -> None:
+    source = '    subprocess.run(["python3.11", script], check=True)\n'
+    violations = _find(tmp_path, source)
+    assert len(violations) == 1, f"hardcoded versioned python source command must be flagged; got {violations}"
+
+
+def test_comment_only_python_mentions_are_not_flagged(tmp_path: Path) -> None:
+    assert _find(tmp_path, "# documentation mentions python3 and python3.11\n") == []
+
+
+def test_wrapper_invocation_is_not_flagged(tmp_path: Path) -> None:
+    wrapper = '    subprocess.run(["/usr/local/pkg/pfblockerng/pfb_python.sh", script], check=True)\n'
+    assert _find(tmp_path, wrapper) == []
 
 
 def test_unbound_embedded_loader_not_flagged(tmp_path: Path) -> None:

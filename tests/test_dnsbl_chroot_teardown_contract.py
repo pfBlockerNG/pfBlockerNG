@@ -15,6 +15,7 @@ STATIC_CHROOT_FILES = (
     "pfb_unbound.py",
     "pfb_unbound_include.inc",
     "pfb_py_hsts.txt",
+    "pfb_python.sh",
     "pfb_py_tld.txt",
 )
 

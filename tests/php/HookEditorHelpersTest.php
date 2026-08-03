@@ -261,7 +261,7 @@ final class HookEditorHelpersTest extends TestCase
 	public function testPythonTemplateHasPythonShebangAndHelloWorldUsesVar(): void
 	{
 		$tpl = pfb_hook_editor_template('post', 'py');
-		$this->assertStringStartsWith('#!', $tpl);
+		$this->assertStringStartsWith("#!/usr/local/pkg/pfblockerng/pfb_python.sh\n", $tpl);
 		$this->assertStringContainsString('import os', $tpl);
 		$this->assertStringContainsString("os.environ.get('PFB_WHEN')", $tpl);
 	}

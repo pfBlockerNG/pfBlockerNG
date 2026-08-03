@@ -9,8 +9,8 @@ use PHPUnit\Framework\TestCase;
 /**
  * Pins the appliance Python runtime boundary used by DNSBL validation and
  * update hooks. The package dependency is authoritative: py311/python311
- * selects the matching versioned interpreter, while module dependencies and
- * malformed or ambiguous versions must never be treated as the interpreter.
+ * selects the matching versioned interpreter through the shared wrapper, while
+ * module dependencies and malformed or ambiguous versions must never be treated as it.
  */
 #[CoversFunction('pfb_python_interpreter')]
 #[CoversFunction('pfb_hook_script_command')]
@@ -41,6 +41,9 @@ final class PythonRuntimeResolutionTest extends TestCase
 		return [
 			'py311' => [['py311']],
 			'python311' => [['python311']],
+			'whitespace is trimmed' => [['  py311  ']],
+			'duplicate aliases collapse' => [['py311', 'python311', 'py311-sqlite3']],
+			'non-string array member is ignored' => [[123, 'py311']],
 			'module dependency is not interpreter' => [['py311-sqlite3']],
 		];
 	}
@@ -60,6 +63,8 @@ final class PythonRuntimeResolutionTest extends TestCase
 			'ambiguous versions' => [['py311', 'python312']],
 			'malformed nonnumeric version' => [['python3x']],
 			'python dotted name is not package dependency' => [['python3.11']],
+			'one digit version is rejected' => [['py3']],
+			'whitespace-only dependency is ignored' => [['   ']],
 		];
 	}
 
@@ -69,14 +74,13 @@ final class PythonRuntimeResolutionTest extends TestCase
 		$this->assertSame('', pfb_python_interpreter($dependencies), json_encode($dependencies));
 	}
 
-	public function testPythonHookUsesVersionedInterpreterAndEscapedScriptPath(): void
+	public function testPythonHookUsesWrapperAndEscapedScriptPath(): void
 	{
-		$python = '/usr/local/bin/' . 'python3.11';
 		$path = '/usr/local/pkg/pfblockerng/hooks/hook_post_delta.py';
 
 		$this->assertSame(
-			escapeshellarg($python) . ' ' . escapeshellarg($path),
-			pfb_hook_script_command('hook_post_delta.py', $path, $python)
+			escapeshellarg(PFB_PYTHON_WRAPPER) . ' ' . escapeshellarg($path),
+			pfb_hook_script_command('hook_post_delta.py', $path, PFB_PYTHON_WRAPPER)
 		);
 	}
 
@@ -84,10 +88,7 @@ final class PythonRuntimeResolutionTest extends TestCase
 	{
 		$path = '/usr/local/pkg/pfblockerng/hooks/hook_post_delta.sh';
 
-		$this->assertSame(
-			escapeshellarg($path),
-			pfb_hook_script_command('hook_post_delta.sh', $path, '/usr/local/bin/' . 'python3.11')
-		);
+		$this->assertSame(escapeshellarg($path), pfb_hook_script_command('hook_post_delta.sh', $path, PFB_PYTHON_WRAPPER));
 	}
 
 	public function testPythonHookFailsClosedWhenInterpreterUnavailable(): void
@@ -116,14 +117,23 @@ final class PythonRuntimeResolutionTest extends TestCase
 			"Path({$python_marker}).write_text('ran\\n')\n"
 		);
 		chmod($script, 0600);
+		$python_dir = $dir . '/bin';
+		mkdir($python_dir, 0700);
+		$this->assertTrue(symlink(self::$python, $python_dir . '/python3.11'));
+		$old_dependencies = getenv('PFB_PYTHON_DEPENDENCIES');
+		$old_python_dir = getenv('PFB_PYTHON_DIR');
+		putenv('PFB_PYTHON_DEPENDENCIES=py311');
+		putenv('PFB_PYTHON_DIR=' . $python_dir);
 		try {
-			$command = pfb_hook_script_command('hook_post_invalid.py', $script, self::$python);
+			$command = pfb_hook_script_command('hook_post_invalid.py', $script, PFB_PYTHON_WRAPPER);
 			$output = [];
 			$status = -1;
 			exec($command . ' 2>&1', $output, $status);
 			$this->assertSame(0, $status, implode("\n", $output));
 			$this->assertSame("ran\n", file_get_contents($marker));
 		} finally {
+			$old_dependencies === FALSE ? putenv('PFB_PYTHON_DEPENDENCIES') : putenv('PFB_PYTHON_DEPENDENCIES=' . $old_dependencies);
+			$old_python_dir === FALSE ? putenv('PFB_PYTHON_DIR') : putenv('PFB_PYTHON_DIR=' . $old_python_dir);
 			@unlink($script);
 			@unlink($marker);
 			@rmdir($dir);
