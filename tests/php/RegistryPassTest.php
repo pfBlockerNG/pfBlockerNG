@@ -252,17 +252,10 @@ final class RegistryPassTest extends TestCase
 	/**
 	 * Row 9: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
 	 * issue #1907 owner decision: default flipped to 'on' (the de-facto page default
-	 * since 3.2). '' -> 'off' (the grandfather map's one entry, unchanged -- a 3.2
-	 * deliberate uncheck still survives upgrade); 'on' -> 'on'; absent (OLDCFG and
-	 * NEWCFG alike) -> 'on'.
-	 *
-	 * OLDCFG-absent seeds 'on' because this map carries no PFB_GF_ABSENT entry (only
-	 * '' => 'off'), so the OLDCFG absent-seed branch falls straight to the stabilised
-	 * default -- see pfb_registry_pass()'s docblock. Stabilisation is a no-op here: 'on'
-	 * is not itself one of the map's non-ABSENT inputs (only '' is), unlike before this
-	 * default flip when the default ('') collided with the map's own '' => 'off' entry.
+	 * since 3.2). Present empty remains canonical Off; 'on' remains On; absent (OLDCFG
+	 * and NEWCFG alike) seeds the registered On default. No grandfather arm remains.
 	 */
-	public function testGrandfatherEmptyStringToOffGroup(): void
+	public function testDefaultOnGroupPreservesEmptyAndSeedsAbsent(): void
 	{
 		$cases = [
 			[self::DNSBL_SECTION, 'pfb_cache',    ['pfb_dnsbl' => 'on']],
@@ -277,8 +270,7 @@ final class RegistryPassTest extends TestCase
 
 			$oldcfg_absent = pfb_registry_pass([$section => $populated]);
 			$this->assertSame('on', $oldcfg_absent[$section][$key] ?? '__missing__',
-				"{$key}: OLDCFG absent must seed the registry default 'on' -- this map carries no "
-				. 'PFB_GF_ABSENT entry');
+				"{$key}: OLDCFG absent must seed the registry default 'on'");
 
 			$newcfg_absent = pfb_registry_pass([$section => []]);
 			$this->assertSame('on', $newcfg_absent[$section][$key] ?? '__missing__',

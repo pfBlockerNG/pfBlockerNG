@@ -88,7 +88,7 @@ final class CfgAdaptersTest extends TestCase
 	public function testToggleReadJunkReturnsDefault(): void
 	{
 		// Given an unrecognised stored value — maps to Off (the default). 'off' is NOT
-		// junk since issue #1887 — it is the canonical Off token (round-trip tests below).
+		// junk since issue #1887 — it is a recognised legacy read token.
 		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read('yes'));
 		$this->assertSame(PfbToggle::Off, pfb_cfg_toggle_read('1'));
 	}
@@ -311,7 +311,7 @@ final class CfgAdaptersTest extends TestCase
 	{
 		// "enum or string" contract: raw string normalises through read adapter.
 		// 'on'  -> All (canonical) — round-trips losslessly.
-		// 'confusable' and 'off' are canonical and round-trip.
+		// 'confusable' is canonical; legacy 'off' normalises to canonical empty Off.
 		// '', junk, and the dropped 4.0.0-alpha 'all' normalise to Off -> ''.
 		$this->assertSame('on',          pfb_cfg_idn_mode_write('on'));
 		$this->assertSame('confusable',  pfb_cfg_idn_mode_write('confusable'));
@@ -326,8 +326,8 @@ final class CfgAdaptersTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	// testOffValuesAreDifferentAcrossFields retired by issue #1887: the premise inverted.
-	// There is ONE off vocabulary now — PfbToggle::Off and PfbIdnMode::Off both store
-	// 'off' by design, so distinct Off tokens are no longer a property to defend.
+	// Both enums keep the internal 'off' backing value and write canonical empty Off,
+	// so distinct stored Off tokens are no longer a property to defend.
 
 	// -----------------------------------------------------------------------
 	// Scenario D — Seam behaviour: pfb_global() adapter expressions produce
@@ -388,9 +388,9 @@ final class CfgAdaptersTest extends TestCase
 		// Old seam: $pfb_idn_raw = $stored ?? ''; $pfb['dnsbl_idn'] = ($pfb_idn_raw === 'on') ? 'all' : $pfb_idn_raw;
 		$cases = [
 			['on',          'all'],         // legacy migration: 'on' -> 'all'
-			['all',         'all'],         // canonical
-			['confusable',  'confusable'],  // canonical
-			['off',         'off'],         // canonical
+			['all',         'all'],         // old seam pass-through
+			['confusable',  'confusable'],  // old seam pass-through
+			['off',         'off'],         // legacy old seam pass-through
 			['',            ''],            // absent/blank: passes through as '' (NOT 'off')
 			['junk',        'junk'],        // junk: passes through unchanged
 		];

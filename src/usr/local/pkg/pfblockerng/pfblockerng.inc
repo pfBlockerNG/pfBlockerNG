@@ -10518,7 +10518,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	}
 
 	// When pfBlockerNG is disabled and 'keep blocklists' is disabled.
-	// Toggles are 'on'/'off' (PfbToggle, issue #1887); != 'on' covers 'off' and a legacy ''.
+	// Runtime values are PfbToggle enums; anything other than On is disabled.
 	if ($pfb['enable'] !== PfbToggle::On && $pfb['keep'] !== PfbToggle::On && !$pfb['install']) {
 		unlink_if_exists("{$pfb['dnsbl_file']}{$ext}");
 	}
@@ -12138,9 +12138,8 @@ function pfb_legacy_key_rename_migrate($sections) {
  * NEWCFG: the key takes its registered default -- passed once through the grandfather
  * map's own non-ABSENT entries (the ABSENT entry itself is never consulted; it
  * specifically signals an EXISTING install, which a NEWCFG section by definition is
- * not). A handful of registered defaults happen to collide with their own map's
- * non-ABSENT input (e.g. a default of '' where 'grandfather' also carries '' => 'off'
- * -- issue #1907's still-open divergence): materialising the raw default there would
+	 * not). A registered default can collide with its own map's non-ABSENT input;
+	 * materialising the raw default there would
  * mint a value only to have the very next OLDCFG pass (the section is no longer empty
  * once seeded) immediately re-map it, breaking idempotency across a fresh install's
  * first upgrade. Running the default through the SAME lookup once, up front, is a
@@ -12269,11 +12268,10 @@ function pfb_registry_pass(array $sections, ?array $registry = NULL): array {
 
 
 // Whether the feed-host internal-address filter is enabled. Reads the General-settings
-// 'pfb_feed_internal_filter' on/off flag, defaulting to ON when the key is absent (a
-// fresh install ships the filter active; the registry pass's grandfather pins it OFF on an
-// already-configured box so existing feeds are never silently dropped, issue #1921). issue
-// #1887: reads the enum through the gateway — junk now falls back to Off like every other
-// toggle (it was "anything but 'off' is ON"), and case variants are recognised.
+// 'pfb_feed_internal_filter' on/off flag. Absence uses the registered On default; present
+// empty and legacy 'off' are Off. issue #1887: reads the enum through the gateway — junk
+// now falls back to Off like every other toggle (it was "anything but 'off' is ON"), and
+// case variants are recognised.
 function pfb_feed_filter_enabled(): bool {
 
 	return PfbConfig::read('gen/pfb_feed_internal_filter') === PfbToggle::On;

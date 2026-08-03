@@ -30,10 +30,8 @@ use PHPUnit\Framework\TestCase;
  *       pfb_software_check's pass-through value).
  *   K - same seeding as J, but the privilege-gated field's value actually CHANGES --
  *       enforcement is retained: exception, section unmodified.
- *   L - equivalence subtlety: the privilege-gated field is ABSENT from stored config
- *       entirely; the incoming blob carries the registered default -- canonicalises
- *       identical to "unchanged", so it is a pass-through too (notConfigured()'s
- *       identity riding the delta comparison).
+	 *   L - deletion subtlety: stored ABSENT and incoming NULL are the same no-op state;
+	 *       deleting an explicit value remains an authorization event.
  */
 final class CfgWriteAuthorizationTest extends TestCase
 {
@@ -146,6 +144,19 @@ final class CfgWriteAuthorizationTest extends TestCase
 		$this->assertSame('', config_get_path($path),
 			'write must succeed and persist the canonical stored token'
 		);
+	}
+
+	public function testWriteAllowedNullDeletesStoredAdapterKey(): void
+	{
+		$path = self::GEN . '/pfb_software_check';
+		config_set_path($path, 'on');
+		$GLOBALS['pfb_test_allowed_pages'] = [
+			'pkg_mgr_installed.php' => true,
+		];
+
+		PfbConfig::write('gen/pfb_software_check', NULL);
+
+		$this->assertNull(config_get_path($path), 'public write(NULL) must delete the adapted key');
 	}
 
 	// -----------------------------------------------------------------------

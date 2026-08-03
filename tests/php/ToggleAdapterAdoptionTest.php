@@ -17,7 +17,7 @@ use PHPUnit\Framework\TestCase;
  * junk falls back to Off — the same convention as every other toggle — and the case
  * variants an operator would plausibly hand-edit ('OFF', 'On') are now recognised
  * instead of being junk. Junk can only exist via a hand-edited config.xml: both save
- * paths emit canonical tokens, and the #1770 install seed writes 'off'/nothing.
+	 * paths emit canonical 'on'/empty tokens, and the registry seeds registered defaults.
  *
  * No global setters exist for either field (the #1895 interim confinement decision):
  * the Software page's privilege gate (issue #485) stays meaningful because the write
@@ -118,7 +118,7 @@ final class ToggleAdapterAdoptionTest extends TestCase
 	}
 
 	/**
-	 * The unchecked-save round trip: the Software page's inline write ('off') survives
+	 * The unchecked-save round trip: the Software page's inline empty write survives
 	 * the gateway and reads back as a disabled check.
 	 */
 	public function testSoftwareCheckUncheckedSaveRoundTrips(): void

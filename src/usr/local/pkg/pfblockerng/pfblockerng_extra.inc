@@ -93,13 +93,13 @@ enum PfbToggle: string implements PfbStoredEnum
 	/**
 	 * Recognise either token in ANY case before giving up (issue #1887).
 	 *
-	 * The write path is unchanged and still emits lowercase, so this only affects input
-	 * the package did not write itself: a hand-edited config.xml, a restored backup, an
+	 * Writes emit canonical 'on'/empty storage, so this only affects legacy or foreign
+	 * input: a hand-edited config.xml, a restored backup, an
 	 * HA sync, another tool touching installedpackages/*. Without it, 'On' or 'OFF' fell
 	 * past tryFrom() into the Off fallback and silently disabled a feature for an
 	 * operator who spelled it the obvious way, with nothing logged.
 	 *
-	 * Deliberately narrow: only a case variant of the two canonical tokens is accepted.
+	 * Deliberately narrow: only a case variant of the recognised 'on'/'off' read tokens is accepted.
 	 * 'yes', 'true' and '1' remain junk and still fall back to Off, so a typo cannot
 	 * enable something. Pinned in both directions by ToggleCaseInsensitiveTest.
 	 */
@@ -108,9 +108,8 @@ enum PfbToggle: string implements PfbStoredEnum
 		return self::tryFrom(strtolower($raw)) ?? self::default();
 	}
 
-	// Parse-fallback ONLY (unknown/non-scalar -> "not On"). NOT the absent default: a
-	// direct fromStored('') caller lands here, while a gateway read never does (PfbConfig
-	// has already substituted the registry default for '').
+	// Parse-fallback ONLY (empty/unknown/non-scalar -> "not On"). NOT the absent default:
+	// the gateway substitutes the registry default only for NULL and passes present empty here.
 	public static function default(): static
 	{
 		return self::Off;
@@ -1980,7 +1979,7 @@ final class PfbConfig
 				unset($data[$bare]);
 				continue;
 			}
-			$data[$bare] = $write_adapter($read_adapter($data[$bare]));
+			$data[$bare] = $write_adapter($read_adapter(self::notConfigured($entry, $data[$bare])));
 		}
 		config_set_path($section, $data);
 	}
@@ -2119,8 +2118,7 @@ final class PfbConfig
 	 * Adapter-backed fields distinguish absence (NULL) from a present empty token:
 	 * NULL uses the registered default, while '' remains raw and the adapter parses it
 	 * as Off. Plain scalar fields retain their existing NULL/'' defaulting behaviour.
-	 * This shared rule is used by read(), write(), and canonicalize(); section writes
-	 * apply adapter round-tripping directly so present empty values stay byte-identical.
+	 * This shared rule is used by read(), write(), writeSection(), and canonicalize().
 	 *
 	 * @param  array{default:string,read_adapter:callable|null,write_adapter:callable|null} $entry
 	 * @param  mixed $value  Raw stored value, or the runtime value on a write path.
