@@ -57,26 +57,27 @@ def exact_ip_block_log(smoke_vm: SmokeVM) -> Iterator[None]:
         moved = vm.ssh("mv", IP_BLOCK_LOG, backup, timeout=15)
         assert moved.returncode == 0, f"failed to back up {IP_BLOCK_LOG}: {moved.stderr!r}"
 
-    written = subprocess.run(
-        vm.ssh_argv("tee", IP_BLOCK_LOG),
-        input="".join(_ip_row(ip, hostname) for ip, hostname in CASES),
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert written.returncode == 0, f"failed to seed {IP_BLOCK_LOG}: {written.stderr!r}"
+    try:
+        written = subprocess.run(
+            vm.ssh_argv("tee", IP_BLOCK_LOG),
+            input="".join(_ip_row(ip, hostname) for ip, hostname in CASES),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert written.returncode == 0, f"failed to seed {IP_BLOCK_LOG}: {written.stderr!r}"
 
-    yield
-
-    removed = vm.ssh("rm", "-f", IP_BLOCK_LOG, timeout=15)
-    assert removed.returncode == 0, f"failed to remove seeded {IP_BLOCK_LOG}: {removed.stderr!r}"
-    if had_file:
-        restored = vm.ssh("mv", backup, IP_BLOCK_LOG, timeout=15)
-        assert restored.returncode == 0, f"failed to restore {IP_BLOCK_LOG}: {restored.stderr!r}"
-    assert vm.ssh("test", "!", "-e", backup, timeout=15).returncode == 0, (
-        f"{IP_BLOCK_LOG} restore did not take; backup {backup!r} remains"
-    )
+        yield
+    finally:
+        removed = vm.ssh("rm", "-f", IP_BLOCK_LOG, timeout=15)
+        assert removed.returncode == 0, f"failed to remove seeded {IP_BLOCK_LOG}: {removed.stderr!r}"
+        if had_file:
+            restored = vm.ssh("mv", backup, IP_BLOCK_LOG, timeout=15)
+            assert restored.returncode == 0, f"failed to restore {IP_BLOCK_LOG}: {restored.stderr!r}"
+        assert vm.ssh("test", "!", "-e", backup, timeout=15).returncode == 0, (
+            f"{IP_BLOCK_LOG} restore did not take; backup {backup!r} remains"
+        )
 
 
 def test_ip_block_stats_truncates_only_beyond_45_characters(

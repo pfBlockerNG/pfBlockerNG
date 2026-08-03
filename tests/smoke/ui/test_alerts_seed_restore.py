@@ -16,6 +16,7 @@ from typing import Any, Callable, cast
 import pytest
 
 from . import test_alerts_render_verify as alerts
+from . import test_alerts_stat_hostname_boundary as hostname_boundary
 
 
 def test_alert_fixture_ip_rows_match_current_csv_schema() -> None:
@@ -86,6 +87,27 @@ class _WrappedVM:
         if self.raise_after is not None and self.raise_after(remote):
             raise subprocess.TimeoutExpired(remote, timeout)
         return result
+
+
+def test_hostname_boundary_fixture_restores_log_after_seed_write_failure(tmp_path: Path, monkeypatch: Any) -> None:
+    log = tmp_path / "ip_block.log"
+    original = b"original log contents\n"
+    log.write_bytes(original)
+
+    class _SeedWriteFailure:
+        @staticmethod
+        def run(*args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args[0], 1, "", "injected seed failure")
+
+    monkeypatch.setattr(hostname_boundary, "IP_BLOCK_LOG", str(log))
+    monkeypatch.setattr(hostname_boundary, "subprocess", _SeedWriteFailure)
+    fixture = cast(Any, hostname_boundary.exact_ip_block_log).__wrapped__(_LocalVM())
+
+    with pytest.raises(AssertionError, match="failed to seed"):
+        next(fixture)
+
+    assert log.read_bytes() == original
+    assert not Path(f"{log}.bak-2117").exists()
 
 
 def _matrix_paths(tmp_path: Path) -> tuple[list[Path], Path, Path]:
