@@ -126,7 +126,7 @@ def _set_quiet_hours(vm: SmokeVM, window: str) -> None:
 
     pfSsh.php is a no-session CLI caller, so this uses the config gateway's
     system-context entry point (``PfbConfig::writeSystem``) rather than the
-    page-authorized ``write()`` a UI save would use (issue #2071).
+    page-authorized ``PfbConfig::write()`` a UI save would use (issue #2071).
     """
     snippet = (
         f"require_once('{_PFB_EXTRA}');"
