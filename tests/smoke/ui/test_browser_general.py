@@ -105,7 +105,7 @@ def test_gateway_pfb_keep_save_roundtrip(
     # GIVEN: read the starting value so we know which direction to flip first.
     # An absent pfb_keep reads as the registered default 'on' (issue #1887), so resolve
     # absent -> 'on': the restore must return the box to its EFFECTIVE original state,
-    # never pin an explicit 'off' onto a merely-unconfigured default-on field.
+    # never pin an explicit Off onto a merely-unconfigured default-on field.
     original_raw = helpers.config_get(smoke_vm, _CFG_KEEP)
     original = "on" if original_raw in (None, "on") else ""
     flipped = "" if original == "on" else "on"

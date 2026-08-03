@@ -1789,9 +1789,9 @@ def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: Php
 
 # issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts (DNSBL page) and
 # ip/suppression (IP page) flipped their registry default to 'on' -- the checkbox must
-# render CHECKED with no stored config, and still render UNCHECKED once a save stores
-# the explicit 'off' token (RegistryPassTest/CfgGatewayTest/PfbGlobalParityTest cover the
-# gateway-level contract off-box; this is the reachable Tier-A UI proof of the same
+# render CHECKED with no stored config, and still render UNCHECKED for a present Off token
+# (RegistryPassTest/CfgGatewayTest/PfbGlobalParityTest cover the gateway-level contract
+# off-box; this is the reachable Tier-A UI proof of the same
 # contract per testing.md #4).
 _ISSUE1907_DNSBL_TOGGLES = (
     ("pfb_cache", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache"),
