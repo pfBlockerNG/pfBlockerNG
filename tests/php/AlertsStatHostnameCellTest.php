@@ -15,9 +15,9 @@ use PHPUnit\Framework\TestCase;
  *   Background:
  *     Given a resolved hostname folded into a <span title="..."><small> cell
  *
- * Branch coverage (both sides of the >=45 length gate, asserted):
- *   - short (<45): encoded in full, no title attr, no "..." ellipsis.
- *   - long (>=45): truncated cell + full value in the title attr.
+ * Branch coverage (both sides of the >45 length gate, asserted):
+ *   - short (<=45): encoded in full, no title attr, no "..." ellipsis.
+ *   - long (>45): truncated cell + full value in the title attr.
  *
  * Regression (issue #1069): the value must be truncated RAW then encoded.
  * Encoding first then substr() can split a named entity ("&quot;" -> "&qu") or a
@@ -100,6 +100,32 @@ final class AlertsStatHostnameCellTest extends TestCase
         $this->assertStringContainsString('title="', $cell, 'a long value keeps the full value in a title attr');
         $this->assertStringNotContainsString('&lt;', $cell, 'benign input must not produce stray entities');
         $this->assertStringNotContainsString('&amp;', $cell, 'benign input has no & to encode');
+    }
+
+    public function test_hostname_truncation_boundary_keeps_exact_limit_without_ellipsis(): void
+    {
+        $resolved = [
+            44 => str_repeat('a', 44),
+            45 => str_repeat('b', 45),
+            46 => str_repeat('c', 46),
+        ];
+        $actual = [];
+
+        foreach ($resolved as $length => $hostname) {
+            $this->assertSame($length, mb_strlen($hostname, 'UTF-8'));
+            $cell = pfb_stat_hostname_cell($hostname);
+            $actual[$length] = [
+                'visible' => strip_tags($cell),
+                'ellipsis' => str_contains($cell, '<small>...</small>'),
+                'title' => str_contains($cell, 'title="' . $hostname . '"'),
+            ];
+        }
+
+        $this->assertSame([
+            44 => ['visible' => $resolved[44], 'ellipsis' => FALSE, 'title' => FALSE],
+            45 => ['visible' => $resolved[45], 'ellipsis' => FALSE, 'title' => FALSE],
+            46 => ['visible' => str_repeat('c', 45) . '...', 'ellipsis' => TRUE, 'title' => TRUE],
+        ], $actual);
     }
 
     public function test_invalid_utf8_in_truncated_hostname_uses_replacement_character(): void
