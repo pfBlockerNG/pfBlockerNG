@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -1922,11 +1923,12 @@ def test_update_runnow_waits_for_update_lock_then_records_success(
 ) -> None:
     """Run Now queues behind an active update lock instead of barging or skipping."""
     vm = smoke_vm
-    holder = "/tmp/pfb_issue_2122_holder.php"
-    ready = "/tmp/pfb_issue_2122_holder.ready"
-    stop = "/tmp/pfb_issue_2122_holder.stop"
-    pidfile = "/tmp/pfb_issue_2122_holder.pid"
-    output = "/tmp/pfb_issue_2122_holder.out"
+    run_id = uuid.uuid4().hex
+    legacy_holder_pattern = "[/]tmp/pfb_issue_2122_holder[.]php"
+    holder = f"/tmp/pfb_issue_2122_holder_{run_id}.php"
+    holder_pattern = re.escape(holder).replace("/", "[/]")
+    ready = f"/tmp/pfb_issue_2122_holder_{run_id}.ready"
+    output = f"/tmp/pfb_issue_2122_holder_{run_id}.out"
     original_enabled = helpers.config_get(vm, _ENABLE_CB_CFG)
     if original_enabled != "on":
         helpers.set_package_enabled(vm, True)
@@ -1937,14 +1939,15 @@ if ($fp === false) {{ fwrite(STDERR, "lock open failed\\n"); exit(1); }}
 $deadline = microtime(true) + 45.0;
 $acquired = false;
 do {{
-    if (flock($fp, LOCK_EX | LOCK_NB)) {{ $acquired = true; break; }}
+    $would_block = 0;
+    if (flock($fp, LOCK_EX | LOCK_NB, $would_block)) {{ $acquired = true; break; }}
+    if ($would_block !== 1) {{ fwrite(STDERR, "lock acquire failed\\n"); fclose($fp); exit(3); }}
     usleep(100000);
 }} while (microtime(true) < $deadline);
 if (!$acquired) {{ fwrite(STDERR, "lock acquire timed out\\n"); fclose($fp); exit(2); }}
-touch('{ready}');
-for ($i = 0; $i < 600; $i++) {{
-    clearstatcache(true, '{stop}');
-    if (file_exists('{stop}')) {{ break; }}
+if (!touch('{ready}')) {{ fwrite(STDERR, "ready marker failed\\n"); flock($fp, LOCK_UN); fclose($fp); exit(4); }}
+$hold_deadline = microtime(true) + 15.0;
+for ($i = 0; $i < 150 && microtime(true) < $hold_deadline; $i++) {{
     usleep(100000);
 }}
 flock($fp, LOCK_UN);
@@ -1953,10 +1956,17 @@ fclose($fp);
 """
 
     try:
+        vm.ssh(f"pkill -f '{legacy_holder_pattern}' 2>/dev/null || true")
+        helpers.wait_until(
+            lambda: vm.ssh(f"pgrep -f '{legacy_holder_pattern}' >/dev/null 2>&1").returncode != 0,
+            timeout=5.0,
+            interval=0.5,
+        )
         helpers.wait_no_active_pfb_task(vm)
-        vm.ssh("/bin/rm", "-f", holder, ready, stop, pidfile, output)
-        vm.ssh(f"cat > {holder} <<'PFBEOF'\n{holder_php}\nPFBEOF")
-        launch = vm.ssh(f"nohup /usr/local/bin/php {holder} >{output} 2>&1 & echo $! > {pidfile}")
+        vm.ssh("/bin/rm", "-f", holder, ready, output)
+        write_holder = vm.ssh(f"cat > {holder} <<'PFBEOF'\n{holder_php}\nPFBEOF")
+        assert write_holder.returncode == 0, f"test holder write failed: {write_holder.stderr!r}"
+        launch = vm.ssh(f"nohup /usr/local/bin/php {holder} >{output} 2>&1 &")
         assert launch.returncode == 0, f"test holder launch failed: {launch.stderr!r}"
         try:
             helpers.wait_until(
@@ -1964,11 +1974,7 @@ fclose($fp);
                 timeout=50.0,
             )
         except RuntimeError as exc:
-            diag = vm.ssh(
-                f"cat {output} 2>/dev/null; "
-                f"p=$(cat {pidfile} 2>/dev/null); "
-                'test -n "$p" && ps -p "$p" -o pid=,stat=,command= || true'
-            )
+            diag = vm.ssh(f"cat {output} 2>/dev/null; pgrep -af '{holder_pattern}' 2>/dev/null || true")
             raise AssertionError(f"test holder did not acquire the update lock: {diag.stdout!r}") from exc
 
         before_ts = int(vm.ssh("/bin/date", "+%s").stdout.strip())
@@ -1993,7 +1999,10 @@ fclose($fp);
         assert helpers.wait_until(_child_waiting, timeout=10.0), (
             "Run Now child did not stay alive and report update-lock wait progress"
         )
-        vm.ssh("/usr/bin/touch", stop)
+        helpers.wait_until(
+            lambda: vm.ssh("/usr/bin/test", "!", "-f", ready).returncode == 0,
+            timeout=20.0,
+        )
         assert helpers.wait_until(
             lambda: (
                 vm.ssh(
@@ -2012,15 +2021,20 @@ fclose($fp);
             f"successful queued child did not advance cron cadence: {ledger!r}"
         )
     finally:
-        vm.ssh("/usr/bin/touch", stop)
-        try:
-            helpers.wait_until(
-                lambda: vm.ssh("/usr/bin/test", "!", "-f", ready).returncode == 0,
-                timeout=15.0,
-            )
-        except RuntimeError:
-            vm.ssh(f'p=$(cat {pidfile} 2>/dev/null); test -z "$p" || kill "$p" 2>/dev/null || true')
-        vm.ssh("/bin/rm", "-f", holder, ready, stop, pidfile, output)
+
+        def _holder_alive() -> bool:
+            probe = vm.ssh(f"pgrep -f '{holder_pattern}' >/dev/null 2>&1")
+            return probe.returncode == 0
+
+        if _holder_alive():
+            vm.ssh(f"pkill -TERM -f '{holder_pattern}' 2>/dev/null || true")
+            try:
+                helpers.wait_until(lambda: not _holder_alive(), timeout=5.0, interval=0.5)
+            except RuntimeError:
+                vm.ssh(f"pkill -KILL -f '{holder_pattern}' 2>/dev/null || true")
+                helpers.wait_until(lambda: not _holder_alive(), timeout=5.0, interval=0.5)
+        assert not _holder_alive(), "test holder survived bounded TERM/KILL cleanup"
+        vm.ssh("/bin/rm", "-f", holder, ready, output)
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)
 
