@@ -2166,9 +2166,10 @@ def set_feed_internal_allowlist(vm: SmokeVM, value: str, *, timeout: float = 60.
 def set_feed_sanity(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Set the ADR-49 opt-in plain-text feed sanity scan (``pfb_feed_sanity``, default OFF).
 
-    Config-only knob (no www/ checkbox) -- written through the ADR-29 gateway
-    (``PfbConfig::write``), the same call a future UI save path would make. Gates
-    ``pfb_text_sanity()`` inside ``pfb_download()`` on accepted ``text/plain`` /
+    Config-only knob (no www/ checkbox) -- written through the ADR-29 gateway's
+    system-context entry point (``PfbConfig::writeSystem``): this helper runs from
+    ``pfSsh.php``, a no-session CLI caller, not a page-authorized UI save (issue #2071).
+    Gates ``pfb_text_sanity()`` inside ``pfb_download()`` on accepted ``text/plain`` /
     ``text/html`` / ``text/csv`` feeds: ON rejects a feed whose sampled body looks
     like an HTML error page / NUL-laden / near-empty (``stage=plaintext``); OFF
     (the default) never calls the scanner. Call BEFORE the reload under test --
@@ -2177,7 +2178,7 @@ def set_feed_sanity(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     value = "PfbToggle::On" if on else "PfbToggle::Off"
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        f"PfbConfig::write('gen/pfb_feed_sanity', {value});\n"
+        f"PfbConfig::writeSystem('gen/pfb_feed_sanity', {value});\n"
         "write_config('pfBlockerNG smoke: set pfb_feed_sanity');\n"
         "echo 'OK';"
     )

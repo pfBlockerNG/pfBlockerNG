@@ -122,11 +122,15 @@ def _write_ledger_entry(vm: SmokeVM, job_key: str, last_run: int, next_due: int,
 
 
 def _set_quiet_hours(vm: SmokeVM, window: str) -> None:
-    """Set pfb_quiet_hours in config.xml via pfSsh.php."""
-    # Use the config gateway rather than direct xml munging.
+    """Set pfb_quiet_hours in config.xml via pfSsh.php.
+
+    pfSsh.php is a no-session CLI caller, so this uses the config gateway's
+    system-context entry point (``PfbConfig::writeSystem``) rather than the
+    page-authorized ``write()`` a UI save would use (issue #2071).
+    """
     snippet = (
         f"require_once('{_PFB_EXTRA}');"
-        f"PfbConfig::write('gen/pfb_quiet_hours', {json.dumps(window)});"
+        f"PfbConfig::writeSystem('gen/pfb_quiet_hours', {json.dumps(window)});"
         "write_config('ADR-43 smoke: set quiet-hours');"
         "echo 'OK';"
     )

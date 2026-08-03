@@ -344,13 +344,16 @@ def _runtime_state(vm: SmokeVM, *, root: str = "") -> dict:
 
 
 def _configure_top1m(vm: SmokeVM) -> None:
+    """Configure TOP1M via pfSsh.php -- a no-session CLI caller, hence writeSystem()
+    (the gateway's system-context entry point) rather than the page-authorized
+    writeSection() the DNSBL UI save uses (issue #2071)."""
     result = h.php_eval(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        "PfbConfig::write('dnsbl/top1m_enable', 'on');\n"
-        "PfbConfig::write('dnsbl/top1m_source', PfbTop1mSource::Tranco);\n"
-        "PfbConfig::write('dnsbl/top1m_count', '1');\n"
-        "PfbConfig::write('dnsbl/top1m_inclusion', 'com');\n"
+        "PfbConfig::writeSystem('dnsbl/top1m_enable', 'on');\n"
+        "PfbConfig::writeSystem('dnsbl/top1m_source', PfbTop1mSource::Tranco);\n"
+        "PfbConfig::writeSystem('dnsbl/top1m_count', '1');\n"
+        "PfbConfig::writeSystem('dnsbl/top1m_inclusion', 'com');\n"
         "write_config('pfBlockerNG #1542 smoke: enable deterministic TOP1M fixture');\n"
         "echo 'OK';",
     )
@@ -556,7 +559,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     teardown = _json_eval(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
-        "PfbConfig::write('gen/pfb_keep', PfbToggle::On);\n"
+        "PfbConfig::writeSystem('gen/pfb_keep', PfbToggle::On);\n"
         "write_config('pfBlockerNG #1542 smoke: keep-on callable teardown');\n"
         "pfb_global();\n"
         "$ok = pfb_unbound_py_teardown_raw_set();\n"
