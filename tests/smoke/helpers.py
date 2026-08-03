@@ -1105,7 +1105,7 @@ def _php_kv_array(data: dict[str, str]) -> str:
 
 
 def pin_cron_due(vm: SmokeVM) -> int:
-    """Set pfb_reuse='' and pfb_dailystart=date('G') on the guest so an EveryDay feed is due.
+    """Set pfb_reuse='off' and pfb_dailystart=date('G') on the guest so an EveryDay feed is due.
 
     Returns the guest's wall-clock hour (0-23) pinned into ``pfb_dailystart``, echoed back
     atomically with the write. Callers that later run ``cron`` should fast-guard against an
@@ -1116,7 +1116,7 @@ def pin_cron_due(vm: SmokeVM) -> int:
     sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
     snippet = (
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
-        "$g['pfb_reuse'] = '';\n"
+        "$g['pfb_reuse'] = 'off';\n"
         "$hour = date('G');\n"
         "$g['pfb_dailystart'] = $hour;\n"
         f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"

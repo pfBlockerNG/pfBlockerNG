@@ -35,7 +35,7 @@ def _capture_php_eval(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     def capture(_vm: object, snippet: str, *, timeout: float = 60.0) -> SimpleNamespace:
         del timeout
         snippets.append(snippet)
-        return SimpleNamespace(returncode=0, stdout="OK", stderr="")
+        return SimpleNamespace(returncode=0, stdout="OK<<<HOUR>>>12<<<END>>>", stderr="")
 
     monkeypatch.setattr(h, "php_eval", capture)
     return snippets
@@ -53,6 +53,7 @@ def test_explicit_off_toggle_helpers_write_canonical_adapter_token(monkeypatch: 
     h.set_ip_reputation(vm)
     h.set_ip_suppression(vm)
     h.set_dnsbl_nonat(vm, False)
+    h.pin_cron_due(vm)
 
     expected = (
         "$d['pfb_dnsvip_auto'] = 'off';",
@@ -63,6 +64,7 @@ def test_explicit_off_toggle_helpers_write_canonical_adapter_token(monkeypatch: 
         "$rep['enable_pdup'] = 'off';",
         "$ip['suppression'] = 'off';",
         "$d['pfb_dnsbl_nonat'] = 'off';",
+        "$g['pfb_reuse'] = 'off';",
     )
     for assignment in expected:
         assert any(assignment in snippet for snippet in snippets), f"missing explicit Off assignment: {assignment}"
