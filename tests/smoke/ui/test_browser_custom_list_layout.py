@@ -49,7 +49,7 @@ expect = sync_api.expect
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from playwright.sync_api import Page, ViewportSize
+    from playwright.sync_api import Locator, Page, ViewportSize
 
     from .webui import WebUI
 
@@ -88,6 +88,12 @@ def _open_custom_list(page: Page) -> None:
 def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
     mask_page_identity(page)
     page.screenshot(path=str(screenshot_dir / f"{name}.png"), full_page=True)
+
+
+def _custom_list_control(page: Page) -> Locator:
+    """Return the rendered editor, falling back to the raw textarea."""
+    cm_editor = page.locator("#IPv4customlist_panel-body .cm-editor")
+    return cm_editor.first if cm_editor.count() else page.locator("#custom")
 
 
 def test_section_heading_says_custom_list_not_the_internal_identifier(
@@ -131,26 +137,25 @@ def test_custom_list_textarea_fills_its_column(
     _open(page, webui, IP_EDITOR)
     _open_custom_list(page)
 
-    textarea = page.locator("#custom")
-    expect(textarea).to_be_visible(timeout=JS_TIMEOUT_MS)
+    control = _custom_list_control(page)
+    expect(control).to_be_visible(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, f"custom_list_width_{label}")
 
-    measured = page.evaluate(
+    measured = control.evaluate(
         """
-        () => {
-          const ta = document.getElementById('custom');
-          const column = ta.closest('div[class*="col-sm-"]');
+        (control) => {
+          const column = control.closest('div[class*="col-sm-"]');
           return {
-            textarea: Math.round(ta.getBoundingClientRect().width),
+            control: Math.round(control.getBoundingClientRect().width),
             column: Math.round(column.getBoundingClientRect().width),
           };
         }
         """
     )
-    shortfall = measured["column"] - measured["textarea"]
+    shortfall = measured["column"] - measured["control"]
 
     assert shortfall <= MAX_WIDTH_SHORTFALL_PX, (
-        f"[{label} {viewport['width']}px] the Custom List text area is {measured['textarea']}px "
+        f"[{label} {viewport['width']}px] the Custom List editing control is {measured['control']}px "
         f"inside a {measured['column']}px column -- {shortfall}px short, over the "
         f"{MAX_WIDTH_SHORTFALL_PX}px allowance"
     )
