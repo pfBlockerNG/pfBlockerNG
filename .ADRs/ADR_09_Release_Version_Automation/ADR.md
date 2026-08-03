@@ -304,3 +304,16 @@ Probe reactions in `version-tracker.yml`:
 | `tests/test_version_probe.py` | New — branch-covering unit tests |
 | `tests/fixtures/netgate_versions_*.html` | New — real Netgate page table markup |
 | `.github/workflows/version-tracker.yml` | Rewrite `probe` job; remove RELENG scan |
+
+## Amendment 3 — 2026-08-03: maintained release-line authoring contract (issue #2140)
+
+Release versions are now modeled independently from the legacy `main`/`devel` workflow shape.
+Stable `vX.Y.Z` and Testing `vX.Y.Z.(alpha|beta|rc).N` are authored from their maintained
+`release/X.Y` line. Edge is a generated, immutable-source prerelease on one explicitly configured
+`release/X.Y` line: `vX.Y.Z.edge.YYYYMMDD.N`, with authored notes. Nightly is a generated,
+untagged `devel` snapshot with no GitHub Release and no notes. Generated counters are deterministic
+per UTC date and idempotent per source commit.
+
+The existing workflow remains a compatibility consumer through its first five shell-parser fields;
+issue #2143 owns its migration to canonical fields and generation. This amendment defines no
+publisher, workflow dispatch, branch discovery, or repository mutation.

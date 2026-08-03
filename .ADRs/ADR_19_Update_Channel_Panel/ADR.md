@@ -459,3 +459,14 @@ logic is pinned by oracle tests first.
 - **DEGRADE** "Update now" to a documented CLI step if an in-GUI same-channel
   `pkg upgrade` is unreliable on the live VM (Phase-1 premise 3) — the display + notice
   still ship.
+
+## Amendment — 2026-08-03: channel no longer derives from package name (issue #2140)
+
+The four-channel release contract uses one exact package identity,
+`pfSense-pkg-pfBlockerNG`. Consequently, package-name suffixes cannot remain the channel oracle
+after catalog migration. Issue #2148 owns the on-box channel source, update behavior, and UI
+transition, including explicit cross-channel movement. Until that work lands, this ADR's existing
+runtime and package-name detection remain unchanged.
+
+This amendment does not reinstate package downgrade. It only records the future client boundary
+required by the release model; #2140 changes no PHP, cron, repository configuration, or UI.

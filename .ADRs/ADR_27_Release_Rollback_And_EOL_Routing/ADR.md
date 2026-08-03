@@ -369,3 +369,17 @@ retained artifacts provide availability, diagnostics, and reproducibility, not a
 downgrade contract. No config/runtime backward-compatibility work, downgrade preparation, or
 downgrade smoke is required. Recovery across incompatible state is restore of a pre-upgrade pfSense
 configuration backup or reinstallation of the current package followed by forward operation.
+
+## Amendment — 2026-08-03: maintained lines preserve retention and routing (issue #2140)
+
+The release-line model does not alter retained artifacts, EOL `route-only` catalogs, or the
+unsupported-downgrade decision above. Pre-#1806 artifacts do not become valid merely because a
+release line is maintained. Stable and Testing may exist on every maintained `release/X.Y`, while
+one explicitly configured line supplies Edge and `devel` supplies Nightly. Supporting simultaneous
+Edge lines requires an owner decision and separate/equal-priority catalog treatment; automation
+must not infer one by sorting branches.
+
+Fixes start on the oldest affected maintained line and are cherry-picked with `-x` through newer
+lines and then `devel`, each through its own PR and gates. This preserves linear history and does
+not create a downgrade path. Issue #2148 may add explicit cross-channel return behavior, but cannot
+generally supersede the no-downgrade contract without a separate owner decision.
