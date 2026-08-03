@@ -3083,6 +3083,25 @@ def test_pfblockerng_download_extras_uses_typed_download_result() -> None:
     )
 
 
+def test_dnsbl_regex_save_uses_package_python_wrapper() -> None:
+    """Pin the POST-only validator path that a Tier-A GET cannot execute.
+
+    PHP may probe ``pfb_python_interpreter()`` for readiness, but the validator
+    itself must invoke the package wrapper so interpreter selection stays in one
+    implementation.
+    """
+    source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php"
+    source = source_path.read_text(encoding="utf-8")
+    block = source.split("// A usable validator always runs", 1)[1].split("// Validate DNSBL VIP address", 1)[0]
+
+    assert "$pfb_regex_python = pfb_python_interpreter();" in block
+    assert re.search(
+        r"pfb_dnsbl_regex_validation_errors\(\(string\).*?,\s*PFB_PYTHON_WRAPPER,",
+        block,
+        flags=re.DOTALL,
+    ), "DNSBL regex save validation must execute through PFB_PYTHON_WRAPPER"
+
+
 def test_pfblockerng_tick_delegates_safesearch_to_due_ledger() -> None:
     """Pin the CLI-only tick dispatch that Tier-A HTTP rendering cannot execute."""
     source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng.php"
