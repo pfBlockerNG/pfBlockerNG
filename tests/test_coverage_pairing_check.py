@@ -209,8 +209,9 @@ def test_exempt_www_asset_clears_the_tier_a_rule_too() -> None:
     assert ccp.evaluate([manifest]) == [], "the vendored digest manifest must clear BOTH rules"
     # Discriminating sibling: a genuine www asset in that same vendor directory
     # still fires both rules, proving the exemption is path-exact, not a blanket
-    # pass for everything under vendor/.
-    sibling = ccp.evaluate(["src/usr/local/www/pfblockerng/vendor/codemirror/codemirror.js"])
+    # pass for everything under vendor/. Named after a really-shipped asset so
+    # the case documents the true tree rather than an invented filename.
+    sibling = ccp.evaluate(["src/usr/local/www/pfblockerng/vendor/codemirror/cm-hooks.min.js"])
     assert len(sibling) == 2, f"a real vendored asset must still fire both rules; got {sibling}"
 
 
