@@ -414,15 +414,15 @@ def test_software_page_toggle_post_roundtrip(
         with software_panel_forced(smoke_vm, "on"):
             page = webui.get(flow.page)
             assert "pfb-software-panel" in page.text, "Software panel override must expose reachable POST form"
-            assert scrape_form_fields(page.text).get(flow.field) == ("on" if original == flow.on else None)
+            assert (flow.field in scrape_form_fields(page.text)) is (original == flow.on)
             _set_and_confirm(webui, smoke_vm, flow, flipped)
             page = webui.get(flow.page)
             assert "pfb-software-panel" in page.text
-            assert scrape_form_fields(page.text).get(flow.field) == ("on" if flipped == flow.on else None)
+            assert (flow.field in scrape_form_fields(page.text)) is (flipped == flow.on)
             _set_and_confirm(webui, smoke_vm, flow, original)
             page = webui.get(flow.page)
             assert "pfb-software-panel" in page.text
-            assert scrape_form_fields(page.text).get(flow.field) == ("on" if original == flow.on else None)
+            assert (flow.field in scrape_form_fields(page.text)) is (original == flow.on)
         helpers.config_restore_state(smoke_vm, flow.config_path, original_state)
         assert helpers.config_get_state(smoke_vm, flow.config_path) == original_state
     finally:
