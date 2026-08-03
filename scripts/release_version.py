@@ -315,7 +315,9 @@ def generate_snapshot(
     count = 1
     if latest == build_date:
         count = max(item[2] for item in scoped if item[1] == build_date) + 1
-    return _snapshot_info(channel, target_final, release_line, build_date, count)
+    candidate = _snapshot_info(channel, target_final, release_line, build_date, count)
+    validate_release_info(candidate)
+    return candidate
 
 
 def validate_branch(info: ReleaseInfo, branch: str, legacy: bool = False) -> None:

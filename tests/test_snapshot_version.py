@@ -107,6 +107,18 @@ def test_nightly_snapshot_has_distinct_nightly_and_pkg_versions() -> None:
     )
 
 
+def test_oversized_but_valid_target_is_rejected_before_edge_emission() -> None:
+    major = "1" * 110
+    with pytest.raises(ValueError):
+        generate_snapshot(
+            channel="edge",
+            target_final=f"{major}.0.0",
+            release_line=f"release/{major}.0",
+            source_sha=SOURCE_A,
+            build_date=DAY_ONE,
+        )
+
+
 @pytest.mark.parametrize("generator", [_generate_edge, _generate_nightly])
 def test_snapshot_results_are_canonical_and_tampering_is_rejected(generator: object) -> None:
     result = generator()  # type: ignore[operator]
