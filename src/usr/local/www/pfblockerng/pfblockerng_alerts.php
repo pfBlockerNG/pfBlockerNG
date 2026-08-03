@@ -1901,14 +1901,14 @@ function pfb_truncate($value, $length) {
 }
 
 // Compose the resolved-hostname stats cell for the IP src/dst-in stats. The raw
-// hostname is attacker-influenceable, so HTML-encode it; a >=45-char value is
+// hostname is attacker-influenceable, so HTML-encode it; a >45-char value is
 // truncated for display with the full value kept in the title attribute.
 // issue #1069: truncate the RAW value THEN encode -- encoding first then substr()
 // can split a named entity (&quot; -> &qu) or a multibyte char.
 function pfb_stat_hostname_cell($resolved) {
 	$resolved = (string) $resolved;
 	$full = pfb_hsc($resolved);
-	if (mb_strlen($resolved, 'UTF-8') >= 45) {
+	if (mb_strlen($resolved, 'UTF-8') > 45) {
 		$title = "title=\"{$full}\"";
 		$cell  = pfb_hsc(pfb_truncate($resolved, 45)) . "<small>...</small>";
 	} else {
