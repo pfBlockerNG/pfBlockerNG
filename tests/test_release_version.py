@@ -15,11 +15,20 @@ rejects malformed tags, and (when a branch is supplied) enforces branch<->channe
 from __future__ import annotations
 
 import subprocess
+from dataclasses import fields
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "release-version.sh"
+
+
+def _api() -> tuple[Any, Any, Any, Any]:
+    """Load the public Python API only in tests that exercise it directly."""
+    from scripts.release_version import PACKAGE, ReleaseInfo, parse_release_tag, validate_branch
+
+    return PACKAGE, ReleaseInfo, parse_release_tag, validate_branch
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -138,3 +147,218 @@ def test_ordering_documented_matches_pkg_semantics() -> None:
         _fields(_run(t).stdout)["portversion"] for t in ("v4.0.0.alpha.1", "v4.0.0.beta.1", "v4.0.0.rc.1", "v4.0.0")
     ]
     assert versions == ["4.0.0.alpha.1", "4.0.0.beta.1", "4.0.0.rc.1", "4.0.0"]
+
+
+def test_release_info_public_shape_is_frozen() -> None:
+    """The parser result exposes the canonical release contract, immutably."""
+    PACKAGE, ReleaseInfo, _, _ = _api()
+    assert [field.name for field in fields(ReleaseInfo)] == [
+        "tag",
+        "version",
+        "stage",
+        "sequence",
+        "target_final",
+        "release_line",
+        "channel",
+        "prerelease",
+        "final",
+        "notes_required",
+        "github_release",
+        "pkg_version",
+        "package",
+    ]
+    assert ReleaseInfo.__dataclass_params__.frozen  # type: ignore[attr-defined]
+    assert PACKAGE == "pfSense-pkg-pfBlockerNG"
+
+
+@pytest.mark.parametrize(
+    "tag,expected",
+    [
+        (
+            "v4.0.0",
+            {
+                "stage": "final",
+                "sequence": None,
+                "target_final": "4.0.0",
+                "release_line": "release/4.0",
+                "channel": "stable",
+                "prerelease": False,
+                "final": True,
+                "notes_required": True,
+                "github_release": "final",
+                "pkg_version": "4.0.0",
+            },
+        ),
+        (
+            "v4.0.0.alpha.1",
+            {
+                "stage": "alpha",
+                "sequence": "1",
+                "target_final": "4.0.0",
+                "release_line": "release/4.0",
+                "channel": "testing",
+                "prerelease": True,
+                "final": False,
+                "notes_required": True,
+                "github_release": "prerelease",
+                "pkg_version": "4.0.0.alpha.1",
+            },
+        ),
+        (
+            "v4.0.0.beta.12",
+            {
+                "stage": "beta",
+                "sequence": "12",
+                "target_final": "4.0.0",
+                "release_line": "release/4.0",
+                "channel": "testing",
+                "prerelease": True,
+                "final": False,
+                "notes_required": True,
+                "github_release": "prerelease",
+                "pkg_version": "4.0.0.beta.12",
+            },
+        ),
+        (
+            "v4.0.0.rc.1",
+            {
+                "stage": "rc",
+                "sequence": "1",
+                "target_final": "4.0.0",
+                "release_line": "release/4.0",
+                "channel": "testing",
+                "prerelease": True,
+                "final": False,
+                "notes_required": True,
+                "github_release": "prerelease",
+                "pkg_version": "4.0.0.rc.1",
+            },
+        ),
+        (
+            "v4.0.0.edge.20240229.3",
+            {
+                "stage": "edge",
+                "sequence": "20240229.3",
+                "target_final": "4.0.0",
+                "release_line": "release/4.0",
+                "channel": "edge",
+                "prerelease": True,
+                "final": False,
+                "notes_required": True,
+                "github_release": "prerelease",
+                "pkg_version": "4.0.0.snapshot.1.20240229.3",
+            },
+        ),
+    ],
+)
+def test_parse_release_tag_derives_canonical_release_info(tag: str, expected: dict[str, object]) -> None:
+    """Stable, Testing, and Edge tags map to one canonical result shape."""
+    PACKAGE, _, parse_release_tag, _ = _api()
+    info = parse_release_tag(tag)
+    assert info.tag == tag
+    assert info.version == tag[1:]
+    for field, value in expected.items():
+        assert getattr(info, field) == value, f"{field}: expected {value!r}, got {getattr(info, field)!r}"
+    assert info.package == PACKAGE
+
+
+@pytest.mark.parametrize(
+    "tag,branch,legacy",
+    [
+        ("v4.0.0", "release/4.0", False),
+        ("v4.0.0.alpha.1", "release/4.0", False),
+        ("v4.0.0.edge.20240229.3", "release/4.0", False),
+        ("v4.0.0", "main", True),
+        ("v4.0.0.alpha.1", "devel", True),
+    ],
+)
+def test_validate_branch_accepts_canonical_and_legacy_contexts(tag: str, branch: str, legacy: bool) -> None:
+    """Canonical release lines admit every channel; legacy aliases are opt-in."""
+    _, _, parse_release_tag, validate_branch = _api()
+    validate_branch(parse_release_tag(tag), branch, legacy=legacy)
+
+
+@pytest.mark.parametrize(
+    "tag,branch,legacy",
+    [
+        ("v4.0.0", "release/4.1", False),
+        ("v4.0.0", "main", False),
+        ("v4.0.0.alpha.1", "devel", False),
+        ("v4.0.0.alpha.1", "main", True),
+        ("v4.0.0", "devel", True),
+        ("v4.0.0.edge.20240229.3", "main", True),
+        ("v4.0.0", "feature/release", True),
+    ],
+)
+def test_validate_branch_rejects_wrong_unknown_and_cross_legacy_contexts(tag: str, branch: str, legacy: bool) -> None:
+    """Branch admission fails closed for wrong, unknown, and Edge legacy branches."""
+    _, _, parse_release_tag, validate_branch = _api()
+    with pytest.raises(ValueError):
+        validate_branch(parse_release_tag(tag), branch, legacy=legacy)
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "",
+        "4.0.0",
+        "v4.0.0.alpha.0",
+        "v4.0.0.alpha.01",
+        "v4.0.0.beta.00",
+        "v4.0.0.rc.0",
+        "v4.0.0.edge.20230229.1",
+        "v4.0.0.edge.20240229.0",
+        "v4.0.0.edge.20240229.01",
+        "v4.0.0.edge.2024022.1",
+        "v4.0.0.pre.1",
+        "v4.0.0.gamma.1",
+        "v4.0.0.alpha.1.extra",
+        "v4.0.0\t",
+        "v4.0.0;echo pwned",
+        "v4.0.0.é",
+        "v" + "1" * 129,
+    ],
+)
+def test_parser_and_wrapper_reject_hostile_tags_without_assignments(tag: str) -> None:
+    """Malformed, unsafe, non-ASCII, and oversized input produces no shell assignments."""
+    _, _, parse_release_tag, _ = _api()
+    with pytest.raises(ValueError):
+        parse_release_tag(tag)
+    result = _run(tag)
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+def test_wrapper_emits_canonical_keys_and_accepts_release_branch() -> None:
+    """The shell facade preserves legacy keys and appends canonical parser fields."""
+    result = _run("v4.0.0.edge.20240229.3", "release/4.0")
+    assert result.returncode == 0, result.stderr
+    fields_out = _fields(result.stdout)
+    assert fields_out == {
+        "version": "4.0.0.edge.20240229.3",
+        "channel": "edge",
+        "prerelease": "true",
+        "prekind": "edge",
+        "portversion": "4.0.0.snapshot.1.20240229.3",
+        "release_channel": "edge",
+        "tag": "v4.0.0.edge.20240229.3",
+        "stage": "edge",
+        "sequence": "20240229.3",
+        "target_final": "4.0.0",
+        "release_line": "release/4.0",
+        "final": "false",
+        "notes_required": "true",
+        "github_release": "prerelease",
+        "package": "pfSense-pkg-pfBlockerNG",
+    }
+
+
+@pytest.mark.parametrize(
+    "tag,branch",
+    [("v4.0.0", "release/4.1"), ("v4.0.0", "feature/release"), ("v4.0.0.edge.20240229.3", "main")],
+)
+def test_wrapper_rejects_wrong_or_unknown_branches_without_assignments(tag: str, branch: str) -> None:
+    """Wrapper branch validation uses legacy compatibility only where explicitly allowed."""
+    result = _run(tag, branch)
+    assert result.returncode != 0
+    assert result.stdout == ""
