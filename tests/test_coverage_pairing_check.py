@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -146,6 +147,97 @@ def test_docs_only_diff_is_neutral() -> None:
         ]
     )
     assert violations == [], f"docs-only diff must never fire either rule; got {violations}"
+
+
+# ---- Upstream data snapshots (issue #2132) --------------------------------
+
+# Spelled out rather than imported from the tool: the exempt set is a policy
+# decision, so the test states it independently and a silent widening of the
+# tool's own set cannot rewrite the expectation it is checked against.
+_EXEMPT_DATA_PATHS = (
+    "src/usr/local/pkg/pfblockerng/dnsbl_tld",
+    "src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt",
+    "src/usr/local/pkg/pfblockerng/shallalist_global_usage",
+    "src/usr/local/pkg/pfblockerng/ut1_global_usage",
+    "src/usr/local/www/pfblockerng/vendor/codemirror/MANIFEST.sha256",
+)
+
+
+def test_upstream_data_snapshot_refresh_is_neutral() -> None:
+    # Scenario: the weekly hsts-refresh/psl-refresh automation opens a PR whose
+    # whole diff is a regenerated upstream data snapshot. There is no behaviour
+    # to pair a test with, so the gate must stay silent (issue #2132; PR #2130
+    # was merged past a red gate for exactly this diff shape).
+    for path in _EXEMPT_DATA_PATHS:
+        assert ccp.evaluate([path]) == [], f"{path} is upstream data, must never fire a rule"
+
+
+def test_exempt_set_matches_the_documented_policy_set() -> None:
+    # The tool's set and the policy set above are the same set: an addition made
+    # in the tool alone (widening the exemption unreviewed) fails here.
+    assert ccp._DATA_ONLY == frozenset(_EXEMPT_DATA_PATHS), (
+        f"tool exemption set drifted from the documented policy set; got {sorted(ccp._DATA_ONLY)}"
+    )
+
+
+def test_data_snapshot_neutrality_does_not_excuse_a_real_src_change() -> None:
+    # Discriminating sibling: neutral means "ignored", never "satisfies". A real
+    # src file riding along in the same diff still demands its paired test.
+    both = ["src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt", "src/usr/local/pkg/pfblockerng/pfblockerng.inc"]
+    violations = ccp.evaluate(both)
+    assert len(violations) == 1, f"a real src file alongside data must still fire rule 1; got {violations}"
+    assert "tests/**" in violations[0], f"rule-1 message must name tests/**; got {violations[0]!r}"
+
+
+def test_every_exempt_path_still_exists_in_the_tree() -> None:
+    # A rename or deletion upstream of the exemption would leave a dead entry
+    # silently exempting nothing while the renamed file goes back to being
+    # gated with no one noticing. Pin each entry to a real tracked file.
+    repo = Path(__file__).resolve().parent.parent
+    tracked = set(
+        subprocess.run(["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True).stdout.split()
+    )
+    dead = [p for p in _EXEMPT_DATA_PATHS if p not in tracked]
+    assert dead == [], f"exempt paths no longer tracked (renamed/deleted?): {dead}"
+
+
+def test_exempt_www_asset_clears_the_tier_a_rule_too() -> None:
+    # The vendored CodeMirror digest manifest lives under src/usr/local/www/, so
+    # the exemption has to reach the stricter www<->ui rule as well, not just
+    # rule 1 -- otherwise the Tier-A message alone would still fail the gate.
+    manifest = "src/usr/local/www/pfblockerng/vendor/codemirror/MANIFEST.sha256"
+    assert ccp.evaluate([manifest]) == [], "the vendored digest manifest must clear BOTH rules"
+    # Discriminating sibling: a genuine www asset in that same vendor directory
+    # still fires both rules, proving the exemption is path-exact, not a blanket
+    # pass for everything under vendor/.
+    sibling = ccp.evaluate(["src/usr/local/www/pfblockerng/vendor/codemirror/codemirror.js"])
+    assert len(sibling) == 2, f"a real vendored asset must still fire both rules; got {sibling}"
+
+
+def test_data_exemption_is_exact_path_not_a_prefix() -> None:
+    # Hostile row: the exemption matches whole paths only. A neighbour whose name
+    # merely EXTENDS an exempt path is ordinary src code and stays gated -- a
+    # prefix/startswith implementation would silently exempt it.
+    assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/dnsbl_tld_overrides"]) != [], (
+        "a path that only extends an exempt name is still src code"
+    )
+    assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt.in"]) != [], (
+        "a generator template beside an exempt snapshot is still src code"
+    )
+
+
+def test_behaviour_bearing_data_files_stay_gated() -> None:
+    # The exemption is deliberately narrow: files under src/ that LOOK like data
+    # but change what the appliance does are NOT exempt (issue #2132's
+    # out-of-scope list). Unbound config decides what the resolver answers; the
+    # feed/ASN catalogs decide what the UI offers.
+    for path in (
+        "src/usr/local/pkg/pfblockerng/pfb_dnsbl.safesearch.conf",
+        "src/usr/local/pkg/pfblockerng/pfb_dnsbl.doh.conf",
+        "src/usr/local/www/pfblockerng/pfblockerng_feeds.json",
+        "src/usr/local/www/pfblockerng/pfblockerng_asn.txt",
+    ):
+        assert ccp.evaluate([path]) != [], f"{path} is behaviour, not data -- it must stay gated"
 
 
 # ---- Hostile-input rows ---------------------------------------------------
