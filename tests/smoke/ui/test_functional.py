@@ -507,15 +507,13 @@ def test_dnsbl_idn_mode_select_round_trips_all_modes(
     """
     page = "/pfblockerng/pfblockerng_dnsbl.php"
     cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn"
-    original = helpers.config_get(smoke_vm, cfg)
+    original_state = helpers.config_get_state(smoke_vm, cfg)
     try:
         for posted, expected in (("confusable", "confusable"), ("on", "on"), ("off", "")):
             got = _post_and_get(webui, smoke_vm, page, {"pfb_idn": posted}, cfg)
             assert got == expected, f"pfb_idn select: POSTing {posted!r} stored {got!r} (expected {expected!r})"
     finally:
-        # Restore the original; fall back to 'off' since the save validator rejects an
-        # empty/absent value (only off/confusable/on are accepted), leaving the box clean.
-        _post_and_get(webui, smoke_vm, page, {"pfb_idn": original or "off"}, cfg)
+        helpers.config_restore_state(smoke_vm, cfg, original_state)
 
 
 def test_dnsbl_top1m_token_masked_field_persists_and_is_never_echoed(

@@ -1899,22 +1899,24 @@ def test_ip_suppression_renders_checked_when_absent(
         _set_scalar_or_absent(vm, path, prior)
 
 
-def test_ip_suppression_renders_unchecked_when_stored_off(
+def test_ip_suppression_renders_unchecked_for_empty_and_legacy_off(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """The polarity pair: a stored 'off' still renders unchecked."""
+    """Canonical empty and legacy ``off`` suppression tokens render unchecked."""
     vm = smoke_vm
     path = _ISSUE1907_IP_SUPPRESSION_PATH
     prior = helpers.config_get(vm, path) if _config_path_exists(vm, path) else None
-    _set_scalar_or_absent(vm, path, "off")
     try:
-        resp = webui.get(_IP_PAGE)
-        result = evaluate_render(_IP_PAGE, resp.status_code, resp.text, ("IP Configuration",))
-        assert result.ok, f"IP render oracle failed: {result.detail}"
-        fields = scrape_form_fields(resp.text)
-        assert "suppression" not in fields, (
-            f"suppression must render UNCHECKED when stored 'off', got checked with value {fields.get('suppression')!r}"
-        )
+        for stored in ("", "off"):
+            _set_scalar_or_absent(vm, path, stored)
+            resp = webui.get(_IP_PAGE)
+            result = evaluate_render(_IP_PAGE, resp.status_code, resp.text, ("IP Configuration",))
+            assert result.ok, f"IP render oracle failed for {stored!r}: {result.detail}"
+            fields = scrape_form_fields(resp.text)
+            assert "suppression" not in fields, (
+                f"suppression must render UNCHECKED when stored {stored!r}, "
+                f"got checked with value {fields.get('suppression')!r}"
+            )
     finally:
         _set_scalar_or_absent(vm, path, prior)
 

@@ -7,8 +7,8 @@ use PHPUnit\Framework\TestCase;
 /**
  * issue #1887 — PfbToggle accepts its two tokens in any case.
  *
- * The canonical stored form stays lowercase 'on'/'off' — the write path is unchanged and
- * still emits exactly those. This is about the READ path being forgiving of input the
+	 * Canonical writes are 'on'/empty; legacy 'off' remains readable in any case. This is
+	 * about the READ path being forgiving of input the
  * package did not write itself: a hand-edited config.xml, a restored backup, an HA sync,
  * or another tool touching installedpackages/*. Before this, 'On' or 'OFF' fell through
  * tryFrom() to the parse fallback and silently read as Off — a disabled feature for an

@@ -163,7 +163,7 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');
 $defined = function_exists('isAllowedPage') ? 'YES' : 'NO';
 echo "PFB1904:ISALLOWEDPAGE_DEFINED:{$defined}\\n";
 
-$before = (string) config_get_path('installedpackages/pfblockerng/config/0/pfb_keep', '');
+$before = config_get_path('installedpackages/pfblockerng/config/0/pfb_keep', NULL);
 
 $caught = 'NO_EXCEPTION';
 try {
@@ -175,7 +175,7 @@ try {
 }
 echo "PFB1904:WRITE_CAUGHT:{$caught}\\n";
 
-$afterWrite = (string) config_get_path('installedpackages/pfblockerng/config/0/pfb_keep', '');
+$afterWrite = config_get_path('installedpackages/pfblockerng/config/0/pfb_keep', NULL);
 echo 'PFB1904:AFTER_WRITE_UNCHANGED:' . (($afterWrite === $before) ? 'YES' : 'NO') . "\\n";
 
 PfbConfig::writeSystem('gen/pfb_keep', 'off');
@@ -331,7 +331,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
     username = f"pfbop{uuid.uuid4().hex[:10]}"
     password = uuid.uuid4().hex
 
-    orig_software_check = helpers.config_get(vm, SOFTWARE_CHECK_CFG)
+    orig_software_state = helpers.config_get_state(vm, SOFTWARE_CHECK_CFG)
     orig_interval = helpers.config_get(vm, INTERVAL_CFG)
     orig_nextuid = helpers.config_get(vm, "system/nextuid")
 
@@ -414,7 +414,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
     finally:
         # Field restores run BEFORE the user delete: a raised delete must never skip
         # putting the box's config back the way it was.
-        _set_config_value(vm, SOFTWARE_CHECK_CFG, orig_software_check)
+        helpers.config_restore_state(vm, SOFTWARE_CHECK_CFG, orig_software_state)
         _set_config_value(vm, INTERVAL_CFG, orig_interval)
         if user_created:
             _delete_scoped_user(vm, username, orig_nextuid)
@@ -455,7 +455,7 @@ def test_cli_gateway_write_fails_closed_writesystem_succeeds(
         and the sentinel is never reached / the snippet aborts.
     """
     vm = smoke_vm
-    orig = helpers.config_get(vm, PFB_KEEP_CFG)
+    orig_state = helpers.config_get_state(vm, PFB_KEEP_CFG)
     try:
         result = helpers.php_eval(vm, _CLI_GATEWAY_PHP, timeout=90.0)
         assert result.returncode == 0, (
@@ -482,12 +482,9 @@ def test_cli_gateway_write_fails_closed_writesystem_succeeds(
         stored = _extract_sentinel(out, "PFB1904:WRITESYSTEM_STORED:")
         assert stored == "", f"PfbConfig::writeSystem() did not persist canonical empty storage: {stored!r}"
 
-        # Confirms the in-snippet writeSystem() restore call itself did not throw
-        # (its exact resulting stored token is not asserted -- notConfigured()
-        # canonicalises an originally-absent value to the registered default,
-        # which is a correct, if not byte-identical, restoration).
+        # Confirms writeSystem() restored the exact pre-test value, including absence.
         _extract_sentinel(out, "PFB1904:RESTORED:")
     finally:
         # Safety net: guarantee pfb_keep is back to its pre-test raw value even if
         # the snippet above raised before reaching its own writeSystem() restore.
-        _set_config_value(vm, PFB_KEEP_CFG, orig)
+        helpers.config_restore_state(vm, PFB_KEEP_CFG, orig_state)

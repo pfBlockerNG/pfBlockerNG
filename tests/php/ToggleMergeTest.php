@@ -111,7 +111,7 @@ final class ToggleMergeTest extends TestCase
 	/**
 	 * A stored '' is explicit Off; absent uses the field's registered default.
 	 */
-	public function testStoredEmptyStringResolvesToTheRegisteredDefault(): void
+	public function testStoredEmptyStringResolvesToOff(): void
 	{
 		config_set_path(self::KEEP, '');
 		$this->assertSame('', config_get_path(self::KEEP), "before: pfb_keep seed is ''");
@@ -132,7 +132,7 @@ final class ToggleMergeTest extends TestCase
 	/**
 	 * A stored '' and an absent key remain distinguishable through the gateway.
 	 */
-	public function testStoredEmptyStringIsIndistinguishableFromAbsent(): void
+	public function testStoredEmptyStringRemainsDistinctFromAbsent(): void
 	{
 		$absent = PfbConfig::read('gen/pfb_keep');
 
@@ -175,12 +175,12 @@ final class ToggleMergeTest extends TestCase
 	}
 
 	/**
-	 * write() also resolves '' to the registered default rather than to Off.
+	 * write() preserves a present empty string as explicit Off.
 	 *
-	 * Covers the third gateway entry point: a caller passing a legacy '' string
-	 * (rather than an enum) must not pin a default-on field to Off.
+	 * Covers the third gateway entry point: a caller passing the canonical empty
+	 * checkbox token (rather than an enum) must pin the field to Off.
 	 */
-	public function testWriteResolvesLegacyEmptyStringToTheDefault(): void
+	public function testWritePreservesExplicitEmptyOff(): void
 	{
 		PfbConfig::write('gen/pfb_keep', '');
 

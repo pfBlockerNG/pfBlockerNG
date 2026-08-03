@@ -142,8 +142,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Background: pfb_dnsbl_lenient stored as 'on', legacy 'off', or ''.
 	 *     Given v.  When read/write.
-	 *     Then 'on' and 'off' round-trip losslessly.
-	 *     And Off writes the canonical empty token.
+	 *     Then 'on' remains 'on'; legacy 'off' and empty both write canonical empty Off.
 	 */
 	public function testLenientFieldRoundTripOn(): void
 	{
@@ -265,7 +264,7 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * issue #1669 slice C: pfb_syntax_highlight (toggle adapter, default on):
-	 * 'on'/'off' round-trip losslessly. Mirrors testPfbKeepLenientRoundTripOn/Off --
+	 * 'on' remains 'on' and legacy 'off' normalises to empty. Mirrors testPfbKeepLenientRoundTripOn/Off --
 	 * this field is the same default-on-checkbox shape as pfb_keep, using PfbToggle.
 	 *
 	 * Scenario:
@@ -590,11 +589,10 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
-	 * same default-on shape as pfb_idn_block_malicious/pfb_keep above. Absent AND a
-	 * stored '' resolves to Off (presence is the adapter discriminator); an
-	 * stored 'off'/'on' round-trip losslessly.
+	 * same default-on shape as pfb_idn_block_malicious/pfb_keep above. Absent resolves
+	 * to On; present empty and legacy 'off' resolve to Off; present 'on' resolves to On.
 	 */
-	public function testIssue1907FieldsResolveAbsentAndEmptyStringToOnDefault(): void
+	public function testIssue1907FieldsDistinguishAbsentFromEmpty(): void
 	{
 		$fields = [
 			'dnsbl/pfb_cache'    => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
@@ -2509,7 +2507,7 @@ final class CfgGatewayTest extends TestCase
 	 * Scenario:
 	 *   Given a DNSBL settings blob with pfb_idn = the alpha-only 'all' token.
 	 *   When PfbConfig::writeSection() persists it.
-	 *   Then the stored pfb_idn is 'off', never the dropped 'all' token.
+	 *   Then the stored pfb_idn is empty Off, never the dropped 'all' token.
 	 *   And a canonical 'on' token riding the same path stays 'on'.
 	 */
 	public function testWriteSectionPfbIdnAlphaOnlyAllNormalisesToOff(): void
@@ -2605,7 +2603,7 @@ final class CfgGatewayTest extends TestCase
 	 *   When PfbConfig::writeSection() persists it.
 	 *   Then the stored pfb_keep key is absent, no crash.
 	 */
-	public function testWriteSectionNullValueNormalisesViaDefaultCollapse(): void
+	public function testWriteSectionNullValueDeletesAdapterKey(): void
 	{
 		$section = 'installedpackages/pfblockerng/config/0';
 		$path    = $section . '/pfb_keep';
