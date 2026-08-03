@@ -130,7 +130,7 @@ def _seeded_idn_exclusion(smoke_vm: SmokeVM) -> Iterator[None]:
     )
 
     # Restore VERBATIM, not through the boolean helper: the box may hold the
-    # canonical 'off' token, which set_dnsbl_enabled would degrade to the raw ''
+    # legacy 'off' token, which set_dnsbl_enabled would canonicalise to raw ''
     # and fail the strict round-trip assert below (issue #1947).
     helpers.config_set(vm, CFG_DNSBL_ENABLE, prior_dnsbl)
     assert helpers.config_get(vm, CFG_DNSBL_ENABLE) == prior_dnsbl, (

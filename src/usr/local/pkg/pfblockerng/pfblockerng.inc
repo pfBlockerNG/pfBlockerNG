@@ -4555,9 +4555,9 @@ function pfb_update_available(?string $installed, ?string $latest): bool {
 
 /*
  * Whether the "Check for new versions" setting (pfb_software_check) is enabled. Default
- * ENABLED: an our-repo install checks for and notifies of new versions out of the box. Only
- * an explicit 'off' (the user un-ticking the box, persisted by the Software page) disables it;
- * an unset value (never saved) or 'on' reads as enabled.
+ * ENABLED: an our-repo install checks for and notifies of new versions out of the box. An
+ * absent value receives that default; case-insensitive 'on' enables it, and every other
+ * present token disables it. The Software page persists unchecked as canonical empty Off.
  */
 function pfb_software_check_enabled(): bool {
 	// issue #1887: the ON default lives in the registry now; the accessor just asks.

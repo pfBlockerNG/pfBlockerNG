@@ -11,14 +11,13 @@ use PHPUnit\Framework\TestCase;
  * pfb_global() used to publish these mirrors as `PfbConfig::read($key)->value`, i.e. it
  * read the enum and immediately threw the type away. Consumers then re-derived the
  * meaning with hand-written string comparisons, and the vocabulary drifted three ways:
- * 'on', the newly explicit 'off', and a bare '' assigned by the force-disable paths.
+ * 'on', legacy 'off', and a bare '' assigned by the force-disable paths.
  *
- * That is what produced the fail-dangerous class this issue had to repair: `== ''` stops
- * matching a disabled package the moment Off is stored as 'off', and `!empty()` inverts
- * outright because '' is falsy while 'off' is truthy. Neither mistake is visible at the
- * call site, and both fail silently.
+ * That is what produced the fail-dangerous class this issue had to repair: `== ''` does not
+ * match legacy 'off', and `!empty()` inverts outright because '' is falsy while 'off' is
+ * truthy. Neither mistake is visible at the call site, and both fail silently.
  *
- * Publishing the enum itself is the fix: one vocabulary, no '' anywhere, and a comparison
+ * Publishing the enum itself is the fix: one runtime vocabulary, no raw tokens, and a comparison
  * that has to name PfbToggle::On or PfbToggle::Off to mean anything. www/ already
  * re-parsed these mirrors through pfb_cfg_toggle_read() to get an enum back — with the
  * mirror typed, that re-parsing is deleted rather than rewritten.
