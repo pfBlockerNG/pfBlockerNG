@@ -11,21 +11,16 @@ description: >
 Use for a request to prepare a Stable, Testing, or Edge release. Require an explicit
 channel and configured `release/X.Y` source line. The channel is explicit and configured;
 store `pfBlockerNG-Release-Channel: <stable|testing|edge>` in each distinct release's
-immutable tag trailer and never infer it from a suffix. A follower Edge reuses the Testing
-tag and its `testing` trailer. Use a pinned source SHA for every channel.
+immutable tag trailer. It must agree with the tag's prerelease patch rule.
+Use a pinned source SHA for every channel.
 
 ## Contract
 
 - Stable uses `vX.Y.Z` / `X.Y.Z`.
-- Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN`; the package version is the
-  exact `X.Y.Z.aN`, `X.Y.Z.bN`, or `X.Y.Z.rN` value.
-- Edge uses the same Testing grammar and package version. Edge follows Testing only when no distinct target
-  exists; distinct-target Edge uses its configured target/line. With no
-  distinct Edge target, mirror the exact existing
-  Testing Release and artifact bytes, checksums, source, provenance, tag, and notes:
-  the result has the same Release and artifact bytes, no second Release, and no rebuild.
-  When that target becomes Stable, Edge keeps
-  following Testing until a new target is configured.
+- Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` when `Z != 0`; the package version
+  is the exact `X.Y.Z.aN`, `X.Y.Z.bN`, or `X.Y.Z.rN` value.
+- Edge uses the same prerelease grammar when `Z == 0`. In short, `Z == 0` selects Edge and
+  `Z != 0` selects Testing.
 - Nightly is untagged, has no GitHub Release, and has no release notes. It is generated
   independently from its pinned source when its input changes. A changed input uses UTC date
   `YYYYMMDD`; another changed input on the same date uses `YYYYMMDD_1`, then `_2`. An
@@ -37,20 +32,17 @@ tag and its `testing` trailer. Use a pinned source SHA for every channel.
 
 ## Procedure
 
-1. Decide whether Edge has a distinct target. Follower Edge must not dispatch `release.yml`:
-   reuse the existing Testing identity without a new draft, tag, or build. Catalog routing is
-   owned by #2144; until that path exists, stop and report the missing route.
-2. Validate the tag with `scripts/release-version.sh` and the explicit channel/source
+1. Validate the tag with `scripts/release-version.sh` and the explicit channel/source
    line. Do not reimplement its grammar.
-3. Confirm the selected line is current, the immutable source and tag trailer agree, and
+2. Confirm the selected line is current, the immutable source and tag trailer agree, and
    no published Release already owns the tag.
-4. Confirm the required checks are green for that source. A docs-only tip may inherit the
+3. Confirm the required checks are green for that source. A docs-only tip may inherit the
    nearest checked ancestor; do not silently ignore a failed check.
-5. For Stable, Testing, or distinct-target Edge, dispatch the current release workflow from
-   its supported workflow ref. The workflow
+4. For Stable, Testing, or Edge, dispatch the current release workflow from its supported
+   workflow ref. The workflow
    builds and verifies exact artifacts before creating a tag and draft Release; do not
    create or push a tag by hand.
-6. Stop at the complete draft. Report its URL and state that notes and publication remain
+5. Stop at the complete draft. Report its URL and state that notes and publication remain
    for `release-with-changelog`.
 
 `release.yml` at the current repository revision is authoritative for inputs and job

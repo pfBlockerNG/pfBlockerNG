@@ -15,31 +15,19 @@ skill must refuse a Nightly request.
 ## Release contract
 
 - Stable uses `vX.Y.Z` / `X.Y.Z`.
-- Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` with the exact matching package
-  version.
-- Edge uses the same Testing grammar. Edge follows Testing only when no distinct target
-  exists; distinct-target Edge uses its configured target/line. Without a distinct Edge
-  target, use the exact Testing Release and artifact bytes,
-  checksums, source, provenance, tag, and notes; this means the same Release and artifact
-  bytes, no second Release, and no rebuild.
-  When the target becomes Stable, continue following Testing until a new target exists.
+- Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` with `Z != 0` and the exact matching
+  package version.
+- Edge uses the same prerelease grammar with `Z == 0`. In short, `Z == 0` selects Edge and
+  `Z != 0` selects Testing.
 
 The channel is explicit and configured, and `pfBlockerNG-Release-Channel: <stable|testing|edge>`
-is carried in each distinct release's immutable tag trailer; channel is never inferred from
-a suffix. A follower Edge reuses the Testing tag and its `testing` trailer. Every operation
-uses a pinned source SHA.
-
-The same Release and artifact bytes are reused when Edge follows Testing; no second Release
-or rebuild is permitted.
+is carried in each distinct release's immutable tag trailer and must agree with the tag's
+prerelease patch rule. Every operation uses a pinned source SHA.
 
 ## Notes procedure
 
-Follower Edge must not dispatch `release.yml` or enter this notes procedure. Reuse the
-existing Testing Release and notes. Catalog routing is owned by #2144; until that path
-exists, stop and report the missing route instead of creating another draft.
-
-1. For Stable, Testing, or distinct-target Edge, run the `release` skill first and wait for
-   the draft. Confirm the draft URL, assets, and
+1. For Stable, Testing, or Edge, run the `release` skill first and wait for the draft. Confirm
+   the draft URL, assets, and
    immutable source identity.
 2. Resolve the previous same-channel tag from the current workflow's rules. Use the exact
    commit range and omit internal tooling, tests, ADRs, and workflow mechanics from notes.

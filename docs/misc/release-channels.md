@@ -12,32 +12,28 @@ pfSense-pkg-pfBlockerNG
 ```
 
 Channel is metadata and catalog placement, never a package-name suffix. Channel and release
-line are explicit/configured. The tag trailer carries only the channel, using
+line are explicit/configured. The tag trailer carries the channel, using
 `pfBlockerNG-Release-Channel: <stable|testing|edge>`; the parser derives the exact
-`release/X.Y` line from the tag and validates it against the configured line. It must never
-infer channel from a suffix. Every operation uses a pinned source SHA.
+`release/X.Y` line from the tag and validates it against the configured line. The explicit
+channel must agree with the tag rule. Every operation uses a pinned source SHA.
 
 ## Channel shapes
 
 | Channel | Source | Tag / package version | GitHub Release | Notes |
 | --- | --- | --- | --- | --- |
 | Stable | configured `release/X.Y` | `vX.Y.Z` / `X.Y.Z` | final | required |
-| Testing | configured `release/X.Y` | `vX.Y.Z.aN`, `.bN`, or `.rN` / exact | prerelease | required |
-| Edge | configured `release/X.Y` | same Testing grammar / exact | prerelease | required |
+| Testing | configured `release/X.Y` | `vX.Y.Z.aN`, `.bN`, or `.rN` with `Z != 0` / exact | prerelease | required |
+| Edge | configured `release/X.Y` | `vX.Y.0.aN`, `.bN`, or `.rN` / exact | prerelease | required |
 | Nightly | explicit pinned source SHA | untagged date counter | none | none |
 
-Stable, Testing, and Edge share a maintained release-line target. Edge follows Testing only when no distinct target
-exists; distinct-target Edge uses its configured target/line. In that
-case, reuse the exact existing Testing Release and
-artifact bytes, checksums, source, provenance, tag, and notes. This preserves the same Release
-and artifact bytes, with no second Release and no rebuild. When the target becomes Stable, Edge
-continues to follow Testing until a new target is configured.
+Stable, Testing, and Edge may share a release line. For a prerelease tag, `Z == 0` selects Edge
+and `Z != 0` selects Testing.
 
 ## Version and tag rules
 
 - Stable `vX.Y.Z` maps to package version `X.Y.Z`.
-- Testing `vX.Y.Z.aN`, `vX.Y.Z.bN`, and `vX.Y.Z.rN` map to the exact matching package
-  versions. Edge uses this same grammar and mapping.
+- Testing `vX.Y.Z.aN`, `vX.Y.Z.bN`, and `vX.Y.Z.rN` with `Z != 0` map to the exact matching
+  package versions. Edge uses the same grammar with `Z == 0`.
 - The immutable tag trailer records the selected channel. The configured release line is
   validated against the line derived from the tag. Source identity, package version,
   artifact bytes, checksum, and provenance are one immutable record.
