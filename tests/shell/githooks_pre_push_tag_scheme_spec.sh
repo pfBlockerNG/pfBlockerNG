@@ -29,7 +29,10 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
     push_tag() {
       # No origin/main or origin/devel exists here, so a versioned tag must
       # hit the reachability error — proving the loop actually read the line.
-      cd "${base}/repo" && printf '%s\n' "refs/tags/v9.9.9.r1 $sha refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
+      cd "${base}/repo" || return
+      git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing' "$sha"
+      tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
+      printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
         | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
           sh "$hook" origin "${base}/repo"
     }
@@ -43,7 +46,37 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
       cd "${base}/repo" || return
       git_fixture update-ref refs/remotes/origin/release/9.9 "$sha"
       git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing' "$sha"
-      printf '%s\n' "refs/tags/v9.9.9.r1 $sha refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
+      tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
+      printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+          sh "$hook" origin "${base}/repo"
+    }
+    When run push_tag
+    The status should equal 0
+  End
+
+  It 'rejects a non-tag source ref targeting a versioned remote tag'
+    push_tag() {
+      cd "${base}/repo" || return
+      git_fixture update-ref refs/remotes/origin/release/9.9 "$sha"
+      git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing' "$sha"
+      printf '%s\n' "HEAD $sha refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+          sh "$hook" origin "${base}/repo"
+    }
+    When run push_tag
+    The status should equal 1
+    The stderr should include 'source ref'
+  End
+
+  It 'accepts a header-shaped body line plus one terminal channel trailer'
+    push_tag() {
+      cd "${base}/repo" || return
+      git_fixture update-ref refs/remotes/origin/release/9.9 "$sha"
+      git_fixture tag -a v9.9.9.r1 -m 'body mentions
+pfBlockerNG-Release-Channel: edge' -m 'pfBlockerNG-Release-Channel: testing' "$sha"
+      tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
+      printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
         | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
           sh "$hook" origin "${base}/repo"
     }
@@ -69,8 +102,10 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
     push_tag() {
       cd "${base}/repo" || return
       git_fixture update-ref refs/remotes/origin/release/9.9 "$sha"
-      git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing' -m 'pfBlockerNG-Release-Channel: testing' "$sha"
-      printf '%s\n' "refs/tags/v9.9.9.r1 $sha refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
+      git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing
+pfBlockerNG-Release-Channel: testing' "$sha"
+      tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
+      printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
         | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
           sh "$hook" origin "${base}/repo"
     }
@@ -85,7 +120,8 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
       git_fixture update-ref refs/remotes/origin/release/9.9 "$sha"
       git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing
 pfblockerng-release-channel: edge' "$sha"
-      printf '%s\n' "refs/tags/v9.9.9.r1 $sha refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
+      tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
+      printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
         | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
           sh "$hook" origin "${base}/repo"
     }
@@ -101,7 +137,8 @@ pfblockerng-release-channel: edge' "$sha"
       git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing
 pfblockerng-release-channel:edge
 PFBLOCKERNG-RELEASE-CHANNEL:	edge' "$sha"
-      printf '%s\n' "refs/tags/v9.9.9.r1 $sha refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
+      tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
+      printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
         | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
           sh "$hook" origin "${base}/repo"
     }
