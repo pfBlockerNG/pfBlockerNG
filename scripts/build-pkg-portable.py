@@ -43,6 +43,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import glob
 import hashlib
 import io
@@ -59,7 +60,15 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pfb_pkg import zstd_compress
+from pfb_pkg import (
+    CANONICAL_EMITTED_IDENTITY,
+    PFB_BUILD_RECORD_KEY,
+    PkgError,
+    load_build_record,
+    validate_build_record,
+    validate_project_pkg,
+    zstd_compress,
+)
 
 # --------------------------------------------------------------------------- #
 # Small FreeBSD-ports Makefile evaluator
@@ -1376,9 +1385,59 @@ def seed_vars(portdir: Path, workdir: Path, py_flavor: str) -> dict[str, str]:
 
 _CHANNEL_PORT_SUB = {
     "stable": "pfSense-pkg-pfBlockerNG",
-    "devel": "pfSense-pkg-pfBlockerNG-devel",
+    "testing": "pfSense-pkg-pfBlockerNG-testing",
+    "edge": "pfSense-pkg-pfBlockerNG-edge",
     "nightly": "pfSense-pkg-pfBlockerNG-nightly",
 }
+
+_NIGHTLY_VERSION = re.compile(r"^(?P<day>[0-9]{8})(?:_(?P<revision>[1-9][0-9]*))?$")
+
+
+def _git_probe(path: Path, *args: str) -> str:
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        raise BuildError(f"git probe failed for {path}: {detail}") from None
+    return result.stdout.strip()
+
+
+def _attest_checkout(path: Path, expected_sha: str, label: str) -> None:
+    path = path.resolve()
+    if not (path / ".git").exists():
+        raise BuildError(f"{label} checkout is missing .git: {path}")
+    status = _git_probe(path, "status", "--porcelain", "--untracked-files=all")
+    if status:
+        raise BuildError(f"{label} checkout is dirty: {path}")
+    head = _git_probe(path, "rev-parse", "HEAD")
+    if head != expected_sha:
+        raise BuildError(f"{label} checkout HEAD {head!r} does not match record {expected_sha!r}")
+
+
+def _validate_nightly_version(version: str) -> str:
+    version = validate_pkgversion(version)
+    match = _NIGHTLY_VERSION.fullmatch(version)
+    if match is None:
+        raise BuildError("nightly --pkgversion must be YYYYMMDD or YYYYMMDD_N")
+    day = match.group("day")
+    try:
+        datetime.date(int(day[:4]), int(day[4:6]), int(day[6:]))
+    except ValueError:
+        raise BuildError(f"nightly --pkgversion has invalid calendar date: {version!r}") from None
+    return version
+
+
+def _record_annotation(record: dict[str, object]) -> str:
+    return json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def print_build_origins(args: argparse.Namespace) -> int:
@@ -1496,6 +1555,18 @@ def run_build(args: argparse.Namespace) -> Build:
     args._workdir = workdir
     seed = seed_vars(portdir, workdir, py_flavor)
     mk = Makefile(makefile, seed)
+    native_portname = mk.get("PORTNAME")
+    project_record: dict[str, object] | None = None
+    if args.build_record:
+        try:
+            project_record = load_build_record(args.build_record)
+        except PkgError as exc:
+            raise BuildError(str(exc)) from None
+    elif getattr(args, "_channel_explicit", False) and native_portname != _CHANNEL_PORT_SUB[args.channel]:
+        raise BuildError(
+            f"--channel {args.channel} requires native recipe identity {_CHANNEL_PORT_SUB[args.channel]!r}; "
+            f"got {native_portname!r}"
+        )
 
     # NO_ARCH (issue #1806): a real Netgate noarch package's manifest stamps a
     # CPU-wildcarded abi/arch (e.g. "FreeBSD:15:*" / "freebsd:15:*") — probed
@@ -1514,11 +1585,50 @@ def run_build(args: argparse.Namespace) -> Build:
             manifest_arch = f"freebsd:{major}:*"
 
     prefix = mk.get("PREFIX")
-    portname = mk.get("PORTNAME")
-    # The version is computed from the Makefile by default; a nightly build overrides
-    # it with `--pkgversion <target>.YYYYMMDD.N` (CI passes it). Must be pkg-safe (no
-    # '-'); the commit / pretty string rides the annotation + comment, not the version.
-    pkgversion = validate_pkgversion(args.pkgversion) if args.pkgversion else compute_pkgversion(mk)
+    if project_record:
+        try:
+            project_record = validate_build_record(
+                project_record,
+                abi=abi,
+                php_version=args.php,
+                py_flavor=py_flavor,
+            )
+        except PkgError as exc:
+            raise BuildError(str(exc)) from None
+        row = project_record["matrix_row"]
+        if args.variant != row["variant"]:
+            raise BuildError(f"--variant {args.variant!r} does not match record matrix row {row['variant']!r}")
+        if project_record["channel"] != args.channel:
+            raise BuildError("build record channel does not match --channel")
+        if project_record["native_recipe_identity"] != native_portname:
+            raise BuildError("build record native recipe identity does not match the Makefile PORTNAME")
+        expected_abi = f"FreeBSD:{row['freebsd_major']}:*"
+        expected_arch = f"freebsd:{row['freebsd_major']}:*"
+        if args.arch and args.arch != expected_arch:
+            raise BuildError(f"project build requires --arch {expected_arch!r}")
+        manifest_abi, manifest_arch = expected_abi, expected_arch
+        try:
+            portdir.relative_to(ports_root)
+        except ValueError:
+            raise BuildError("project build --port-dir must be inside --ports") from None
+        _attest_checkout(ports_root, project_record["freebsd_ports_sha"], "FreeBSD-ports")
+        if not args.pkgversion:
+            raise BuildError("project build requires explicit --pkgversion")
+        pkgversion = validate_pkgversion(args.pkgversion)
+        if pkgversion != project_record["canonical_package_version"]:
+            raise BuildError("--pkgversion does not match build record canonical_package_version")
+    elif args.channel == "nightly":
+        if not args.pkgversion:
+            raise BuildError("nightly builds require explicit --pkgversion")
+        pkgversion = _validate_nightly_version(args.pkgversion)
+    else:
+        # The version is computed from the Makefile by default. A nightly build must
+        # always provide its explicit comparable calendar version above.
+        pkgversion = validate_pkgversion(args.pkgversion) if args.pkgversion else compute_pkgversion(mk)
+    portname = native_portname
+    if project_record:
+        mk._raw["PORTNAME"] = ("=", CANONICAL_EMITTED_IDENTITY)
+        portname = CANONICAL_EMITTED_IDENTITY
     # PKGVERSION/PKGNAME are framework-derived, not assigned in the Makefile, but
     # the recipe references them (e.g. the info.xml %%PKGVERSION%% reinplace). Seed
     # them so they expand to real values instead of empty.
@@ -1545,6 +1655,8 @@ def run_build(args: argparse.Namespace) -> Build:
     # AND appends `(K=V, …)` to the comment, so both `pkg info` and `pkg info -A`
     # surface it (e.g. commit=<sha>). Default empty -> release build unchanged.
     extra_annotations = parse_annotations(args.annotate)
+    if PFB_BUILD_RECORD_KEY in extra_annotations:
+        raise BuildError(f"--annotate {PFB_BUILD_RECORD_KEY}=... is reserved")
     comment = mk.get("COMMENT")
     if extra_annotations:
         comment += " (" + ", ".join(f"{k}={v}" for k, v in extra_annotations.items()) + ")"
@@ -1563,10 +1675,22 @@ def run_build(args: argparse.Namespace) -> Build:
         abi=manifest_abi,
         arch=manifest_arch,
     )
+    if project_record:
+        b.annotations[PFB_BUILD_RECORD_KEY] = _record_annotation(project_record)
 
     # --- source + recipe -------------------------------------------------- #
     Path(seed["STAGEDIR"]).mkdir(parents=True, exist_ok=True)
     Path(mk.get("WRKDIR")).mkdir(parents=True, exist_ok=True)
+    if project_record and _truthy(mk.get("USE_GITHUB")):
+        if args.local_src and args.gh_tagname:
+            raise BuildError("project USE_GITHUB build cannot combine --local-src and --gh-tagname")
+        if args.local_src:
+            _attest_checkout(Path(args.local_src), project_record["source_sha"], "source")
+        elif args.gh_tagname:
+            if args.gh_tagname != project_record["source_sha"]:
+                raise BuildError("--gh-tagname does not match build record source_sha")
+        else:
+            raise BuildError("project USE_GITHUB build requires --local-src or explicit --gh-tagname")
     acquire_source(mk, workdir, args)
 
     recipe = Recipe(mk)
@@ -1580,6 +1704,12 @@ def run_build(args: argparse.Namespace) -> Build:
     recipe.run("do-install")
     if "post-install" in mk.recipes:
         recipe.run("post-install")
+
+    if project_record:
+        epoch = _checked_mtime(project_record["source_date_epoch"], "build record source_date_epoch")
+        for staged_file in Path(seed["STAGEDIR"]).rglob("*"):
+            if staged_file.is_file():
+                os.utime(staged_file, (epoch, epoch))
 
     # --- collect staged files, validate against the plist ----------------- #
     stagedir = Path(seed["STAGEDIR"])
@@ -1641,9 +1771,11 @@ def run_build(args: argparse.Namespace) -> Build:
         sys.stderr.write(f"==> pinning dep versions from repo catalogue ({args.repo_catalogue})\n")
         apply_repo_catalogue(b.deps, args.repo_catalogue, abi)
     if args.freebsd_version:
-        b.annotations = {"FreeBSD_version": args.freebsd_version}
+        b.annotations["FreeBSD_version"] = args.freebsd_version
     # `--annotate K=V` merges on top (e.g. commit=<sha>); release build adds nothing.
     b.annotations.update(extra_annotations)
+    if project_record:
+        args._build_record = project_record
     return b
 
 
@@ -1678,11 +1810,12 @@ def main(argv: list[str]) -> int:
     g_port = ap.add_argument_group("port selection")
     g_port.add_argument(
         "--channel",
-        choices=("devel", "stable", "nightly"),
-        default="devel",
-        help="which port: devel/stable release, or nightly (default: devel)",
+        choices=("stable", "testing", "edge", "nightly"),
+        default="testing",
+        help="which port: stable, testing, edge, or nightly (default: testing)",
     )
     g_port.add_argument("--port-dir", help="explicit port directory (overrides --channel)")
+    g_port.add_argument("--variant", default="", help="matrix variant for a project build record")
 
     g_target = ap.add_argument_group(
         "target facts (version-dependent; asked if omitted — never read from the ports tree)"
@@ -1713,6 +1846,7 @@ def main(argv: list[str]) -> int:
             "version, e.g. 3.2.16.20260606.1 (must not contain '-')."
         ),
     )
+    g_snap.add_argument("--build-record", default="", help="normalized build record as JSON text or a JSON file path")
     g_snap.add_argument(
         "--annotate",
         action="append",
@@ -1759,13 +1893,14 @@ def main(argv: list[str]) -> int:
         "--print-port-origin",
         action="store_true",
         help=(
-            "print the port origin dir (e.g. net/pfSense-pkg-pfBlockerNG-devel) for "
+            "print the port origin dir (e.g. net/pfSense-pkg-pfBlockerNG-testing) for "
             "--channel, then exit 0.  No --ports tree required.  Single source of truth "
             "for the channel→origin mapping; used by scripts/sparse-clone-ports.sh."
         ),
     )
 
     args = ap.parse_args(argv)
+    args._channel_explicit = "--channel" in argv
 
     if args.print_port_origin:
         channel = args.channel
@@ -1796,6 +1931,13 @@ def main(argv: list[str]) -> int:
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{b.pkgname}.pkg"
         write_pkg(b, out_path, args.compression)
+        if getattr(args, "_build_record", None) is not None:
+            try:
+                validate_project_pkg(out_path, args._build_record, expected_manifest=make_manifest(b, compact=False))
+            except PkgError as exc:
+                out_path.unlink(missing_ok=True)
+                sys.stderr.write(f"build-pkg-portable: project package validation failed: {exc}\n")
+                return 1
         sys.stderr.write(f"==> wrote {out_path}  ({out_path.stat().st_size} bytes, {len(b.files)} files)\n")
         print(out_path)
         return 0

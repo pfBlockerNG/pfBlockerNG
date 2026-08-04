@@ -17,13 +17,17 @@ import io
 import json
 import lzma
 import os
+import subprocess
 import sys
 import tarfile
 import time
 from pathlib import Path
 from typing import Any
 
+import pfb_pkg
 import pytest
+
+from tests.gitenv import scrubbed_git_env
 
 # --------------------------------------------------------------------------- #
 # Load the hyphen-named tool as a module.
@@ -1376,3 +1380,370 @@ def test_source_file_mtime_the_archive_cannot_carry_fails_cleanly(tmp_path: Path
                 "--out", str(out),
             ]
         )  # fmt: skip
+
+
+# --------------------------------------------------------------------------- #
+# Channel/provenance records (issue #2142).
+# --------------------------------------------------------------------------- #
+
+
+_CHANNEL_IDENTITIES = {
+    "stable": "pfSense-pkg-pfBlockerNG",
+    "testing": "pfSense-pkg-pfBlockerNG-testing",
+    "edge": "pfSense-pkg-pfBlockerNG-edge",
+    "nightly": "pfSense-pkg-pfBlockerNG-nightly",
+}
+
+
+def _git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=repo, env=scrubbed_git_env(drop_git_vars=True), capture_output=True, text=True, check=True
+    )
+    return result.stdout.strip()
+
+
+def _git_init(repo: Path) -> str:
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.name", "test")
+    _git(repo, "config", "user.email", "test@example.org")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _record(channel: str, ports_sha: str, *, source_sha: str = "a" * 40, version: str | None = None) -> dict:
+    if version is None:
+        version = {"stable": "4.0.0", "testing": "4.0.0.a1", "edge": "4.0.0.b1", "nightly": "20260804_1"}[channel]
+    row = {
+        "variant": "CE",
+        "pfsense_version": "2.8.0",
+        "freebsd_major": "15",
+        "php_version": "8.3",
+        "py_flavor": "py311",
+    }
+    record = {
+        "schema": 1,
+        "channel": channel,
+        "release_line": "devel" if channel == "nightly" else "release/4.0",
+        "classification": "nightly"
+        if channel == "nightly"
+        else {"stable": "final", "testing": "alpha", "edge": "beta"}[channel],
+        "source_tag": None
+        if channel == "nightly"
+        else {"stable": "v4.0.0", "testing": "v4.0.0.a1", "edge": "v4.0.0.b1"}[channel],
+        "source_sha": source_sha,
+        "canonical_package_version": version,
+        "native_recipe_identity": _CHANNEL_IDENTITIES[channel],
+        "emitted_identity": "pfSense-pkg-pfBlockerNG",
+        "matrix_row": row,
+        "freebsd_ports_sha": ports_sha,
+        "route": f"{channel}/ce-2.8",
+        "source_date_epoch": 1700000000,
+        "build_input_digest": "",
+    }
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    return record
+
+
+def _make_channel_port(tmp_path: Path, channel: str, *, github: bool = False) -> tuple[Path, Path, str, str]:
+    ports = tmp_path / "ports"
+    portname = _CHANNEL_IDENTITIES[channel]
+    portdir = ports / "net" / portname
+    files = portdir / "files"
+    canonical_share = "pfSense-pkg-pfBlockerNG"
+    (files / "usr/local/share" / canonical_share).mkdir(parents=True)
+    (files / "usr/local/share" / canonical_share / "info.xml").write_text(
+        "<package><name>%%PKGNAME%%</name><version>%%PKGVERSION%%</version></package>\n"
+    )
+    (files / "pkg-install.in").write_text("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages %%PORTNAME%% ${2}\n")
+    (files / "pkg-deinstall.in").write_text("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages %%PORTNAME%% ${2}\n")
+    portdir.joinpath("pkg-descr").write_text("Channel fixture.\n\nWWW: https://example.org/pfblockerng\n")
+    portdir.joinpath("pkg-plist").write_text("%%DATADIR%%/info.xml\n")
+    version = {"stable": "4.0.0", "testing": "4.0.0.a1", "edge": "4.0.0.b1", "nightly": "4.0.0"}[channel]
+    gh_block = "USE_GITHUB=\tyes\nGH_ACCOUNT=\tfixture\nGH_PROJECT=\tpfsense\nGH_TAGNAME=\tstatic\n" if github else ""
+    source_expr = (
+        "${WRKSRC}/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml"
+        if github
+        else ("${FILESDIR}${PREFIX}/share/pfSense-pkg-pfBlockerNG/info.xml")
+    )
+    portdir.joinpath("Makefile").write_text(
+        f"PORTNAME=\t{portname}\nPORTVERSION=\t{version}\nCATEGORIES=\tnet\n"
+        "MAINTAINER=\tdev@example.org\nCOMMENT=\tChannel fixture\nLICENSE=\tAPACHE20\n"
+        "USES=\tphp python\nUSE_PHP=\tintl\n"
+        f"{gh_block}SUB_FILES=\tpkg-install pkg-deinstall\n"
+        "do-install:\n"
+        "\t${MKDIR} ${STAGEDIR}${DATADIR}\n"
+        f"\t${{INSTALL_DATA}} {source_expr} ${{STAGEDIR}}${{DATADIR}}\n"
+        "\t@${REINPLACE_CMD} -i '' -e \"s|%%PKGVERSION%%|${PKGVERSION}|\" ${STAGEDIR}${DATADIR}/info.xml\n"
+        "\t@${REINPLACE_CMD} -i '' -e \"s|%%PKGNAME%%|${PORTNAME:S/pfSense-pkg-//}|\" ${STAGEDIR}${DATADIR}/info.xml\n"
+        ".include <bsd.port.mk>\n"
+    )
+    write_port(ports, "lang/php83", "PORTNAME=\tphp83\nPORTVERSION=\t8.3.30\n")
+    write_port(ports, "devel/php83-intl", "PORTNAME=\tphp83-intl\n")
+    write_port(ports, "lang/python311", "PORTNAME=\tpython311\nPORTVERSION=\t3.11.15\n")
+    ports_sha = _git_init(ports)
+    source_sha = "a" * 40
+    source = tmp_path / "source"
+    if github:
+        (source / "src/usr/local/share" / "pfSense-pkg-pfBlockerNG").mkdir(parents=True)
+        (source / "src/usr/local/share" / "pfSense-pkg-pfBlockerNG" / "info.xml").write_text(
+            "<package><name>%%PKGNAME%%</name><version>%%PKGVERSION%%</version></package>\n"
+        )
+        source_sha = _git_init(source)
+    return ports, portdir, ports_sha, source_sha
+
+
+@pytest.mark.parametrize("channel", ["stable", "testing", "edge", "nightly"])
+def test_native_channel_identities_remain_distinct(tmp_path: Path, channel: str) -> None:
+    ports, portdir, _ports_sha, _source_sha = _make_channel_port(tmp_path, channel)
+    out = tmp_path / "native-out"
+    args = [
+        "--ports",
+        str(ports),
+        "--port-dir",
+        str(portdir),
+        "--channel",
+        channel,
+        "--abi",
+        "FreeBSD:15:amd64",
+        "--py-flavor",
+        "py311",
+        "--php",
+        "8.3",
+        "--compression",
+        "xz",
+        "--out",
+        str(out),
+    ]
+    if channel == "nightly":
+        args += ["--pkgversion", "20260804_1"]
+    assert bpp.main(args) == 0
+    expected_version = {"stable": "4.0.0", "testing": "4.0.0.a1", "edge": "4.0.0.b1", "nightly": "20260804_1"}[channel]
+    pkg = out / f"{_CHANNEL_IDENTITIES[channel]}-{expected_version}.pkg"
+    full, _compact, _tf = _read_pkg(pkg)
+    assert full["name"] == _CHANNEL_IDENTITIES[channel]
+    assert full["origin"] == f"net/{_CHANNEL_IDENTITIES[channel]}"
+
+
+@pytest.mark.parametrize("channel", ["stable", "testing", "edge", "nightly"])
+def test_project_record_normalizes_complete_identity_cascade(tmp_path: Path, channel: str) -> None:
+    ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, channel)
+    record = _record(channel, ports_sha)
+    out = tmp_path / "project-out"
+    args = [
+        "--ports",
+        str(ports),
+        "--port-dir",
+        str(portdir),
+        "--channel",
+        channel,
+        "--variant",
+        "CE",
+        "--abi",
+        "FreeBSD:15:amd64",
+        "--arch",
+        "freebsd:15:*",
+        "--py-flavor",
+        "py311",
+        "--php",
+        "8.3",
+        "--pkgversion",
+        record["canonical_package_version"],
+        "--build-record",
+        json.dumps(record),
+        "--compression",
+        "xz",
+        "--out",
+        str(out),
+    ]
+    assert bpp.main(args) == 0
+    pkg = out / f"pfSense-pkg-pfBlockerNG-{record['canonical_package_version']}.pkg"
+    result = bpp.validate_project_pkg(pkg, record)
+    full = result["inspection"]["manifest"]
+    assert full["name"] == "pfSense-pkg-pfBlockerNG"
+    assert full["origin"] == "net/pfSense-pkg-pfBlockerNG"
+    assert full["abi"] == "FreeBSD:15:*" and full["arch"] == "freebsd:15:*"
+    info = result["inspection"]["payload"]["/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml"].decode()
+    assert "<name>pfBlockerNG</name>" in info
+    assert f"<version>{record['canonical_package_version']}</version>" in info
+    assert full["annotations"]["pfb_build_record"] == json.dumps(
+        record, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    assert "pfSense-pkg-pfBlockerNG-testing" not in full["scripts"]["install"]
+
+
+def test_nightly_requires_explicit_calendar_pkgversion(tmp_path: Path) -> None:
+    ports, portdir, _ports_sha, _source_sha = _make_channel_port(tmp_path, "nightly")
+    out = tmp_path / "out"
+    assert (
+        bpp.main(
+            [
+                "--ports",
+                str(ports),
+                "--port-dir",
+                str(portdir),
+                "--channel",
+                "nightly",
+                "--abi",
+                "FreeBSD:15:amd64",
+                "--py-flavor",
+                "py311",
+                "--compression",
+                "xz",
+                "--out",
+                str(out),
+            ]
+        )
+        == 1
+    )
+    assert not out.exists() or not list(out.glob("*.pkg"))
+
+
+def test_project_rejects_recipe_identity_and_record_mismatches(tmp_path: Path) -> None:
+    ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "testing")
+    record = _record("testing", ports_sha)
+    (portdir / "Makefile").write_text(
+        (portdir / "Makefile")
+        .read_text()
+        .replace("PORTNAME=\tpfSense-pkg-pfBlockerNG-testing", "PORTNAME=\tpfSense-pkg-pfBlockerNG-edge")
+    )
+    args = [
+        "--ports",
+        str(ports),
+        "--port-dir",
+        str(portdir),
+        "--channel",
+        "testing",
+        "--variant",
+        "CE",
+        "--abi",
+        "FreeBSD:15:amd64",
+        "--py-flavor",
+        "py311",
+        "--php",
+        "8.3",
+        "--pkgversion",
+        record["canonical_package_version"],
+        "--build-record",
+        json.dumps(record),
+        "--dry-run",
+    ]
+    assert bpp.main(args) == 1
+
+
+def test_project_rejects_reserved_annotation_and_wrong_matrix_facts(tmp_path: Path) -> None:
+    ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "stable")
+    record = _record("stable", ports_sha)
+    base = [
+        "--ports",
+        str(ports),
+        "--port-dir",
+        str(portdir),
+        "--channel",
+        "stable",
+        "--variant",
+        "CE",
+        "--abi",
+        "FreeBSD:15:amd64",
+        "--py-flavor",
+        "py311",
+        "--php",
+        "8.3",
+        "--pkgversion",
+        record["canonical_package_version"],
+        "--build-record",
+        json.dumps(record),
+        "--dry-run",
+    ]
+    assert bpp.main(base + ["--annotate", "pfb_build_record=forged"]) == 1
+    wrong = dict(record)
+    wrong["matrix_row"] = dict(record["matrix_row"], php_version="8.5")
+    wrong["build_input_digest"] = pfb_pkg.build_input_digest(wrong)
+    wrong_args = list(base)
+    wrong_args[wrong_args.index(json.dumps(record))] = json.dumps(wrong)
+    assert bpp.main(wrong_args) == 1
+
+
+def test_project_git_source_attestation_and_deterministic_mtime(tmp_path: Path) -> None:
+    ports, portdir, ports_sha, source_sha = _make_channel_port(tmp_path, "stable", github=True)
+    record = _record("stable", ports_sha, source_sha=source_sha)
+    out1, out2 = tmp_path / "one", tmp_path / "two"
+    common = [
+        "--ports",
+        str(ports),
+        "--port-dir",
+        str(portdir),
+        "--channel",
+        "stable",
+        "--variant",
+        "CE",
+        "--abi",
+        "FreeBSD:15:amd64",
+        "--py-flavor",
+        "py311",
+        "--php",
+        "8.3",
+        "--pkgversion",
+        record["canonical_package_version"],
+        "--build-record",
+        json.dumps(record),
+        "--local-src",
+        str(tmp_path / "source"),
+        "--compression",
+        "xz",
+    ]
+    assert bpp.main(common + ["--out", str(out1)]) == 0
+    assert bpp.main(common + ["--out", str(out2)]) == 0
+    pkg1 = out1 / "pfSense-pkg-pfBlockerNG-4.0.0.pkg"
+    pkg2 = out2 / "pfSense-pkg-pfBlockerNG-4.0.0.pkg"
+    assert pkg1.read_bytes() == pkg2.read_bytes()
+    full, _compact, _tf = _read_pkg(pkg1)
+    assert {entry["mtime"] for entry in full["files"].values()} == {1700000000}
+    wrong = dict(record, source_sha="b" * 40)
+    wrong["build_input_digest"] = pfb_pkg.build_input_digest(wrong)
+    wrong_args = list(common)
+    wrong_args[wrong_args.index(json.dumps(record))] = json.dumps(wrong)
+    assert bpp.main(wrong_args + ["--out", str(tmp_path / "sha-mismatch-out")]) == 1
+    (ports / "dirty.txt").write_text("dirty")
+    assert bpp.main(common + ["--out", str(tmp_path / "ports-dirty-out")]) == 1
+    (tmp_path / "source" / "dirty.txt").write_text("dirty")
+    assert bpp.main(common + ["--out", str(tmp_path / "dirty-out")]) == 1
+
+
+def test_project_post_write_validation_removes_output_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "stable")
+    record = _record("stable", ports_sha)
+    monkeypatch.setattr(bpp, "validate_project_pkg", lambda *a, **k: (_ for _ in ()).throw(bpp.PkgError("bad package")))
+    out = tmp_path / "out"
+    assert (
+        bpp.main(
+            [
+                "--ports",
+                str(ports),
+                "--port-dir",
+                str(portdir),
+                "--channel",
+                "stable",
+                "--variant",
+                "CE",
+                "--abi",
+                "FreeBSD:15:amd64",
+                "--py-flavor",
+                "py311",
+                "--php",
+                "8.3",
+                "--pkgversion",
+                record["canonical_package_version"],
+                "--build-record",
+                json.dumps(record),
+                "--compression",
+                "xz",
+                "--out",
+                str(out),
+            ]
+        )
+        == 1
+    )
+    assert not list(out.glob("*.pkg"))
