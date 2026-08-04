@@ -27,11 +27,18 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeGuard
 
-from pfb_pkg import PkgError, pkg_version_sort_key, read_compact_manifest, zstd_compress
+from pfb_pkg import (
+    PkgError,
+    load_build_record,
+    pkg_version_sort_key,
+    read_compact_manifest,
+    validate_build_record,
+    zstd_compress,
+)
 
 # --------------------------------------------------------------------------- #
 # Catalog descriptor (meta.conf / meta) — byte-identical to real `pkg repo`.
@@ -545,7 +552,8 @@ def _pkg_version_key(version: str) -> tuple[list[int], int, int]:
     """A monotone sort key for a pkg version — see ``pfb_pkg.pkg_version_sort_key``.
 
     Used for nightly retention (``<target>.YYYYMMDD.N``, all-numeric — a later build
-    sorts higher) AND release-channel retention (``vX.Y.Z(.alpha|beta|rc.N)?`` tags,
+    sorts higher) AND release-channel retention (canonical ``X.Y.Z.aN|bN|rN`` and
+    retained legacy expanded versions,
     via ``retain_by_channel``'s ``--release-keep-devel``/``--release-keep-stable`` >
     1), so it must also order the alpha/beta/rc prerelease stages correctly, not just
     the nightly date/counter shape. Kept as a thin alias — this module's ``_retain_newest``
@@ -767,12 +775,52 @@ def retain_by_channel(
     return kept_devel + kept_stable + nightly
 
 
+BuildRecordInput = str | Path | Mapping[str, object]
+
+
+def _load_build_record_input(source: BuildRecordInput) -> tuple[dict[str, object], str]:
+    """Load one normalized record and retain the exact source passed downstream."""
+    try:
+        if isinstance(source, Mapping):
+            record = validate_build_record(dict(source))
+            forwarded = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        else:
+            record = load_build_record(source)
+            forwarded = str(source)
+    except (PkgError, OSError, TypeError, ValueError) as exc:
+        raise BuildRepoError(f"invalid normalized build record {source!r}: {exc}") from None
+    return record, forwarded
+
+
+def _load_build_records(inputs: list[BuildRecordInput] | None) -> dict[tuple[str, str], tuple[dict[str, object], str]]:
+    """Load normalized records and index them by their route and channel.
+
+    The record is forwarded to the package builder using its original path/text where
+    possible.  A mapping supplied by a programmatic caller is serialized once so the
+    subprocess receives the same validated bytes represented by the caller.
+    """
+    indexed: dict[tuple[str, str], tuple[dict[str, object], str]] = {}
+    for source in inputs or []:
+        record, forwarded = _load_build_record_input(source)
+        route = record.get("route")
+        channel = record.get("channel")
+        if not isinstance(route, str) or not isinstance(channel, str):
+            raise BuildRepoError(f"normalized build record {source!r} has no route/channel")
+        key = (route, channel)
+        if key in indexed:
+            raise BuildRepoError(f"duplicate normalized build record for route {route!r} and channel {channel!r}")
+        indexed[key] = (record, forwarded)
+    return indexed
+
+
 def _subprocess_pkg_builder(
     channel: str,
     *,
     abi: str,
     php: str,
     py_flavor: str,
+    variant: str | None = None,
+    build_record: str | Path | Mapping[str, object] | None = None,
     out_dir: Path,
     ports: Path | None = None,
     local_src: Path | None = None,
@@ -781,13 +829,52 @@ def _subprocess_pkg_builder(
     **_ignored: object,
 ) -> Path:
     """Default builder: drive build-pkg-portable.py to produce ONE .pkg, return its path."""
+    if channel not in ("stable", "testing", "edge", "nightly"):
+        raise BuildRepoError(f"default package builder requires a supported channel, got {channel!r}")
+    if not variant:
+        raise BuildRepoError(f"default package builder requires --variant for {channel!r}; pass the matrix row variant")
+    if build_record is None:
+        raise BuildRepoError(
+            f"default package builder requires a normalized --build-record for {channel!r}; "
+            "the caller must supply one record per build route"
+        )
+    if not pkgversion:
+        raise BuildRepoError(
+            f"default package builder requires canonical --pkgversion for {channel!r}; "
+            "use the normalized build record's canonical_package_version"
+        )
+    record, forwarded = _load_build_record_input(build_record)
+    try:
+        record = validate_build_record(record, abi=abi, php_version=php, py_flavor=py_flavor)
+    except PkgError as exc:
+        raise BuildRepoError(f"invalid normalized build record for {channel!r}: {exc}") from None
+    if record.get("channel") != channel:
+        raise BuildRepoError(f"normalized build record channel {record.get('channel')!r} does not match {channel!r}")
+    row = record.get("matrix_row")
+    if not isinstance(row, Mapping) or row.get("variant") != variant:
+        raise BuildRepoError(
+            f"normalized build record variant {row.get('variant') if isinstance(row, Mapping) else None!r} "
+            f"does not match {variant!r}"
+        )
+    record_pkgversion = record.get("canonical_package_version")
+    emitted_identity = record.get("emitted_identity")
+    if not isinstance(record_pkgversion, str) or not isinstance(emitted_identity, str):
+        raise BuildRepoError("normalized build record lacks canonical package identity/version")
+    if record_pkgversion != pkgversion:
+        raise BuildRepoError(
+            f"canonical --pkgversion {pkgversion!r} does not match normalized record {record_pkgversion!r}"
+        )
+    expected = out_dir / f"{emitted_identity}-{record_pkgversion}.pkg"
+    record_arg = forwarded
     cmd = [
         sys.executable, str(_BUILD_PKG),
         "--channel", channel,
+        "--variant", variant,
         "--abi", abi,
         "--php", php,
         "--py-flavor", py_flavor,
         "--out", str(out_dir),
+        "--build-record", record_arg,
     ]  # fmt: skip
     if ports is not None:
         cmd += ["--ports", str(ports)]
@@ -797,12 +884,10 @@ def _subprocess_pkg_builder(
         cmd += ["--pkgversion", pkgversion]
     for k, v in (annotate or {}).items():
         cmd += ["--annotate", f"{k}={v}"]
-    before = set(out_dir.glob("*.pkg"))
     subprocess.run(cmd, check=True)
-    produced = sorted(set(out_dir.glob("*.pkg")) - before)
-    if not produced:
-        raise BuildRepoError(f"builder produced no .pkg (channel={channel}, abi={abi})")
-    return produced[-1]
+    if not expected.is_file():
+        raise BuildRepoError(f"builder produced no expected .pkg at {expected} (channel={channel}, abi={abi})")
+    return expected
 
 
 def build_repo_matrix(
@@ -823,6 +908,7 @@ def build_repo_matrix(
     route_only_pkgs: dict[str, list[Path]] | None = None,
     release_pkgs: dict[str, list[Path]] | None = None,
     dep_pkgs: list[Path] | None = None,
+    build_records: list[BuildRecordInput] | None = None,
     **builder_kwargs: object,
 ) -> dict:
     """Build the full variant repository tree from the version matrix.
@@ -847,7 +933,7 @@ def build_repo_matrix(
 
     **build entries** (``role`` absent or ``"build"`` — the default, unchanged path):
 
-      * RELEASE subtree ``release/<varver>/`` — the devel .pkg, plus the stable
+      * RELEASE subtree ``release/<varver>/`` — the testing .pkg, plus the stable
         .pkg built from ``stable_tag`` (skipped when no stable tag exists), optionally
         folded with pre-built older-release .pkg from ``release_extra_pkgs``, pruned to
         the ``release_keep_devel`` newest devel + ``release_keep_stable`` newest stable.
@@ -858,7 +944,7 @@ def build_repo_matrix(
         pruned to the ``nightly_keep`` newest. Skipped when ``build_nightly`` is False.
     **route-only entries** (``role == "route-only"`` — EOL versions served from frozen .pkg):
 
-      * NO builder call for a fresh devel-HEAD .pkg — the version is EOL, no new build.
+      * NO builder call for a fresh testing-HEAD .pkg — the version is EOL, no new build.
       * NO nightly subtree — a route-only entry never gets a nightly build.
       * RELEASE subtree ``release/<varver>/`` — built EXCLUSIVELY from the frozen
         .pkg supplied in ``route_only_pkgs[varver]`` (pre-downloaded Release assets
@@ -907,11 +993,34 @@ def build_repo_matrix(
       still raise).
 
     ``builder`` is injectable (tests pass a stub); the default drives build-pkg-portable.py.
-    Extra ``builder_kwargs`` pass through to every builder call. Returns a summary dict.
+    Default builds require one validated normalized record per emitted channel route; pass
+    those paths through ``build_records``. Extra ``builder_kwargs`` pass through to every
+    builder call. Returns a summary dict.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     built: list[str] = []
+    record_index = _load_build_records(build_records)
+    use_default_builder = builder is _subprocess_pkg_builder
+
+    def _record_for(entry: dict, varver: str, channel: str) -> tuple[dict[str, object], str] | None:
+        key = (f"{channel}/{varver}", channel)
+        found = record_index.get(key)
+        if found is None:
+            if use_default_builder:
+                raise BuildRepoError(
+                    f"default package builder requires normalized build record for {key[0]!r}; "
+                    "supply one via --build-record PATH (one record per channel route)"
+                )
+            return None
+        record, forwarded = found
+        if record.get("matrix_row") != entry:
+            raise BuildRepoError(
+                f"normalized build record {key[0]!r} matrix_row does not exactly match the supplied BUILD row"
+            )
+        if record.get("channel") != channel:
+            raise BuildRepoError(f"normalized build record {key[0]!r} channel does not match requested {channel!r}")
+        return record, forwarded
 
     dep_entries: list[tuple[Path, dict]] = [(p, read_compact_manifest(p)) for p in (dep_pkgs or [])]
     dep_pkgs_matched: set[Path] = set()
@@ -932,7 +1041,15 @@ def build_repo_matrix(
                 f"invalid role {role!r} for version {version} ({variant}); expected 'build' or 'route-only'"
             )
         varver = catalog_name_from_version(version, variant)  # e.g. "ce-2.8"
-        common = dict(abi=abi, php=php, py_flavor=py_flavor, varver=varver, arch=arch, **builder_kwargs)
+        common = dict(
+            abi=abi,
+            php=php,
+            py_flavor=py_flavor,
+            variant=variant,
+            varver=varver,
+            arch=arch,
+            **builder_kwargs,
+        )
 
         if role == "route-only":
             # --- route-only: serve a frozen .pkg from a prior release; no rebuild, no nightly ---
@@ -997,20 +1114,48 @@ def build_repo_matrix(
                 else:
                     sys.stderr.write(f"==> WARNING: no Release .pkg for {varver} {abi} — release catalog skipped\n")
             else:
-                # --- source-build mode (legacy / back-compat): devel + (optional) stable + extras ---
-                # The freshly built devel (+ stable when a stable_tag exists) are always present.
+                # --- source-build mode: testing + (optional) stable + extras ---
+                # The freshly built testing (+ stable when a stable_tag exists) are always present.
                 # release_extra_pkgs supplies pre-built older releases (e.g. downloaded from GitHub
                 # Releases by publish.yml); together they form the full candidate pool, pruned via
                 # retain_by_channel to keep the newest release_keep_devel devel + release_keep_stable
                 # stable versions. Defaults of 1/1 reproduce today's latest-only behaviour.
                 with tempfile.TemporaryDirectory() as td:
                     staging = Path(td)
+                    testing_record = _record_for(entry, varver, "testing")
+                    testing_kwargs = dict(common)
+                    if testing_record is not None:
+                        record, forwarded = testing_record
+                        testing_kwargs.update(
+                            build_record=forwarded,
+                            pkgversion=record["canonical_package_version"],
+                        )
                     built_pkgs: list[Path] = [
-                        builder("devel", out_dir=staging, ports=ports, local_src=local_src, **common)
+                        builder("testing", out_dir=staging, ports=ports, local_src=local_src, **testing_kwargs)
                     ]
                     if stable_tag:
+                        stable_record = _record_for(entry, varver, "stable")
+                        stable_kwargs = dict(common)
+                        if stable_record is not None:
+                            record, forwarded = stable_record
+                            source_tag = record.get("source_tag")
+                            if source_tag != stable_tag:
+                                raise BuildRepoError(
+                                    f"stable_tag {stable_tag!r} does not match normalized record source_tag "
+                                    f"{source_tag!r} for {varver!r}"
+                                )
+                            stable_kwargs.update(
+                                build_record=forwarded,
+                                pkgversion=record["canonical_package_version"],
+                            )
                         built_pkgs.append(
-                            builder("stable", out_dir=staging, ports=ports, local_src=stable_src or local_src, **common)
+                            builder(
+                                "stable",
+                                out_dir=staging,
+                                ports=ports,
+                                local_src=stable_src or local_src,
+                                **stable_kwargs,
+                            )
                         )
                     # Fold in pre-built older-release candidates (caller-provided, e.g. from GitHub
                     # Releases), matched by OS+major (see _pkg_matches_abi).
@@ -1039,9 +1184,26 @@ def build_repo_matrix(
                 )
                 with tempfile.TemporaryDirectory() as td:
                     staging = Path(td)
+                    nightly_record = _record_for(entry, varver, "nightly")
+                    nightly_kwargs = dict(common)
                     pkgver = nightly_pkgversion(entry) if nightly_pkgversion else None
+                    if nightly_record is not None:
+                        record, forwarded = nightly_record
+                        record_pkgver = record["canonical_package_version"]
+                        if pkgver is not None and pkgver != record_pkgver:
+                            raise BuildRepoError(
+                                f"nightly pkgversion {pkgver!r} does not match normalized record "
+                                f"{record_pkgver!r} for {varver!r}"
+                            )
+                        pkgver = record_pkgver
+                        nightly_kwargs.update(build_record=forwarded)
                     new_nightly = builder(
-                        "nightly", out_dir=staging, ports=ports, local_src=local_src, pkgversion=pkgver, **common
+                        "nightly",
+                        out_dir=staging,
+                        ports=ports,
+                        local_src=local_src,
+                        pkgversion=pkgver,
+                        **nightly_kwargs,
                     )
                     kept = _retain_newest([*existing, new_nightly], nightly_keep)
                     # dep_for_abi folds in AFTER retention here too — the SAME dep pkg
@@ -1229,6 +1391,17 @@ def main(argv: list[str]) -> int:
         ),
     )
     g_matrix.add_argument(
+        "--build-record",
+        action="append",
+        default=[],
+        dest="build_records",
+        metavar="PATH",
+        help=(
+            "normalized #2142 build record JSON file for a source-built channel route "
+            "(repeatable; one record per stable/testing/edge/nightly route)"
+        ),
+    )
+    g_matrix.add_argument(
         "--route-only-pkgs",
         action="append",
         default=[],
@@ -1293,6 +1466,7 @@ def main(argv: list[str]) -> int:
             annotate[k] = v
         extra_pkgs = [Path(p) for p in args.release_extra_pkgs] if args.release_extra_pkgs else None
         dep_pkgs_arg = [Path(p) for p in args.dep_pkgs] if args.dep_pkgs else None
+        build_records_arg = [Path(p) for p in args.build_records] if args.build_records else None
         route_only: dict[str, list[Path]] | None = None
         if args.route_only_pkgs:
             route_only = {}
@@ -1324,6 +1498,7 @@ def main(argv: list[str]) -> int:
                 release_keep_stable=args.release_keep_stable,
                 release_extra_pkgs=extra_pkgs,
                 dep_pkgs=dep_pkgs_arg,
+                build_records=build_records_arg,
                 route_only_pkgs=route_only,
                 release_pkgs=release_pkgs_arg,
                 annotate=annotate or None,

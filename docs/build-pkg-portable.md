@@ -79,19 +79,26 @@ static native identities are:
 Pass `--build-record JSON|PATH` for a project build. The builder validates one
 normalized record carrying `channel`, `release_line`, `classification`,
 `source_tag`, `source_sha`, `canonical_package_version`, native and emitted
-identities, the matrix row, FreeBSD-ports SHA, route, `source_date_epoch`, and a
-deterministic build-input digest. It then emits exactly
+identities, the complete row emitted by `read-version-matrix.sh --print-build`,
+FreeBSD-ports SHA, route, `source_date_epoch`, and a deterministic build-input
+digest. It then emits exactly
 `pfSense-pkg-pfBlockerNG` regardless of the native recipe. The record's source
-SHA and Ports SHA must be clean Git checkouts; `SOURCE_DATE_EPOCH` (when set)
-must equal the record. Nightly project versions must be explicitly validated
-`YYYYMMDD` or `YYYYMMDD_N` values — never the static recipe version.
+tag/SHA and Ports SHA must resolve in clean Git checkouts with no hidden index
+flags or escaping tracked symlinks. Project mode therefore requires a
+`USE_GITHUB` recipe and `--local-src`; embedded recipes and remote-only source
+fetches remain native-only. `SOURCE_DATE_EPOCH` (when set) must equal the
+record. Nightly project versions must be explicitly validated `YYYYMMDD` or
+`YYYYMMDD_N` values — never the static recipe version.
 
 After writing a project package, the builder re-inspects the complete identity
 cascade (manifest and filename, PKGBASE/origin, share path, `info.xml`, hooks,
 dependencies, scripts, annotations, ABI/arch, payload inventory/checksums,
-source, channel, and route). Any mismatch, divergent bytes, provenance, or
-input digest fails closed and removes the output. This tool does not publish
-packages or start repository/workflow/catalogue jobs.
+source, channel, and route). Output is first validated under its canonical
+basename in a private temporary directory, then installed without following or
+replacing an existing path. An existing byte-identical package is accepted;
+different bytes or a non-regular destination fail closed and leave the prior
+output untouched. This tool does not publish packages or start
+repository/workflow/catalogue jobs.
 
 ## Requirements
 
@@ -138,8 +145,8 @@ print the build plan (files, modes, dependencies) without writing an archive.
 | --- | --- | --- |
 | `--channel stable\|testing\|edge\|nightly` | `testing` | Which static native recipe to build. |
 | `--port-dir PATH` | — | Build an explicit port directory instead, overriding `--channel`. |
-| `--variant CE\|Plus` | `CE` | Matrix variant for a normalized project record. |
-| `--build-record JSON\|PATH` | — | Validate and carry the normalized project record; switches emitted identity to exactly `pfSense-pkg-pfBlockerNG`. |
+| `--variant CE\|Plus` | — | Required in project mode; must match the normalized BUILD row exactly. |
+| `--build-record JSON\|PATH` | — | Validate and carry the normalized project record; switches emitted identity to exactly `pfSense-pkg-pfBlockerNG`. Requires `--local-src`; `--annotate`, `--freebsd-version`, and `--repo-catalogue` are rejected because they would add inputs outside the record. |
 | `--pkgversion VERSION` | — | Explicit canonical package version. Required in project mode; Nightly accepts only `YYYYMMDD` or `YYYYMMDD_N`. |
 
 ### Target facts (version-dependent; asked if omitted)
@@ -155,21 +162,21 @@ interactive, the tool prompts; otherwise it exits with an error naming the flag.
 | `--arch TRIPLET` | `freebsd:15:x86:64` | The manifest `arch` triplet. Default: derived from `--abi` (`amd64` → `x86:64`, etc.). |
 | `--py-flavor FLAVOR` | `py311` | The Python flavor used in dependency names (`py311-sqlite3`, …) and the `python<XY>` dep. |
 | `--php VERSION` | `8.3` | The PHP version for the `USES=php` dependency (`php83`, `php83-intl`). Asked **only** when the port uses PHP. |
-| `--freebsd-version N` | `1500068` | The build host's `__FreeBSD_version`, written to the manifest `annotations` block. Optional; the block is omitted if unset. |
+| `--freebsd-version N` | `1500068` | Native mode only: the build host's `__FreeBSD_version`, written to the manifest `annotations` block. Optional; the block is omitted if unset. |
 | `--no-arch` | off | Force the manifest `abi`/`arch` to the CPU-wildcarded form (`FreeBSD:<major>:*` / `freebsd:<major>:*`) even when the port Makefile has no `NO_ARCH=yes` — e.g. a frozen ports snapshot that predates that Makefile setting. Same effect as `NO_ARCH=yes`; an explicit `--arch` still overrides the derived wildcard. |
 
 ### Source (USE_GITHUB ports)
 
 | Option | Description |
 | --- | --- |
-| `--local-src PATH` | Build from a local pfBlockerNG checkout (its `src/` tree) instead of fetching the GitHub tag. Fast for iterating on code under test. The working tree is never modified (it is copied into the staging area first). |
-| `--gh-tagname REF` | Override `GH_TAGNAME` — fetch this commit SHA, tag, or branch from GitHub. Default: the Makefile's `v${PORTVERSION}`. The ref must contain a `src/` tree (see [Troubleshooting](#troubleshooting)). |
+| `--local-src PATH` | Build from a local pfBlockerNG checkout (its `src/` tree) instead of fetching the GitHub tag. Required in project mode so HEAD and the literal source tag can both be attested. The working tree is never modified. |
+| `--gh-tagname REF` | Native mode only: override `GH_TAGNAME` and fetch this commit SHA, tag, or branch from GitHub. Default: the Makefile's `v${PORTVERSION}`. |
 
 ### Dependency versions
 
 | Option | Description |
 | --- | --- |
-| `--repo-catalogue SRC` | Pin exact dependency versions from a binary-repo `packagesite`. `SRC` may be a path or URL to a `packagesite.yaml` or `packagesite.pkg`/`.txz`, or the literal `auto` to fetch FreeBSD.org's catalogue for `--abi`. Without it, versions are best-effort from the ports tree. See [Dependency resolution](#dependency-resolution). |
+| `--repo-catalogue SRC` | Native mode only: pin exact dependency versions from a binary-repo `packagesite`. `SRC` may be a path or URL to a `packagesite.yaml` or `packagesite.pkg`/`.txz`, or the literal `auto` to fetch FreeBSD.org's catalogue for `--abi`. See [Dependency resolution](#dependency-resolution). |
 
 ### Output
 
@@ -182,8 +189,9 @@ interactive, the tool prompts; otherwise it exits with an error naming the flag.
 
 ## The two port layouts
 
-The four channel recipes can use either source shape; the tool detects which
-from the `Makefile` and handles both:
+Native builds can use either source shape; the tool detects which from the
+`Makefile` and handles both. Project builds require the `USE_GITHUB` layout so
+source tag/SHA provenance can be attested:
 
 | Layout | Branch | Source of files | Build source |
 | --- | --- | --- | --- |
