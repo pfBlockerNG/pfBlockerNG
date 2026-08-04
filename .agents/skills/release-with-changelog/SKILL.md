@@ -25,15 +25,21 @@ skill must refuse a Nightly request.
   When the target becomes Stable, continue following Testing until a new target exists.
 
 The channel is explicit and configured, and `pfBlockerNG-Release-Channel: <stable|testing|edge>`
-is carried in the immutable tag trailer; channel is never inferred from a suffix. Every
-operation uses a pinned source SHA.
+is carried in each distinct release's immutable tag trailer; channel is never inferred from
+a suffix. A follower Edge reuses the Testing tag and its `testing` trailer. Every operation
+uses a pinned source SHA.
 
 The same Release and artifact bytes are reused when Edge follows Testing; no second Release
 or rebuild is permitted.
 
 ## Notes procedure
 
-1. Run the `release` skill first and wait for the draft. Confirm the draft URL, assets, and
+Follower Edge must not dispatch `release.yml` or enter this notes procedure. Reuse the
+existing Testing Release and notes. Catalog routing is owned by #2144; until that path
+exists, stop and report the missing route instead of creating another draft.
+
+1. For Stable, Testing, or distinct-target Edge, run the `release` skill first and wait for
+   the draft. Confirm the draft URL, assets, and
    immutable source identity.
 2. Resolve the previous same-channel tag from the current workflow's rules. Use the exact
    commit range and omit internal tooling, tests, ADRs, and workflow mechanics from notes.

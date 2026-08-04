@@ -191,12 +191,10 @@ def apply_release_mutation(
     recovery = _validate_tag_state(nightly, request.result, request, state)
     if nightly:
         assert isinstance(request.result, NightlyAllocation)
-        if request.result.outcome == "unchanged" and state.existing_pkg_version is None:
-            raise ValueError("Nightly no-op requires observed existing package")
+        if request.result.outcome == "unchanged" and state.existing_pkg_version != pkg_version:
+            raise ValueError("Nightly no-op requires exact observed existing package")
     if not nightly and request.selected_release_line != request.result.release_line:  # type: ignore[union-attr]
         raise ValueError("selected release line does not match result")
-    if state.candidate_vs_latest == "<":
-        raise ValueError("candidate package is stale")
 
     if state.existing_pkg_version == pkg_version:
         if state.existing_artifact_sha256 != request.artifact_sha256:
@@ -213,6 +211,9 @@ def apply_release_mutation(
             mutate()
             return "mutated"
         return "unchanged"
+
+    if state.candidate_vs_latest == "<":
+        raise ValueError("candidate package is stale")
 
     if state.candidate_vs_latest == "=" and not recovery:
         raise ValueError("candidate package already exists")

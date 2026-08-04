@@ -737,14 +737,22 @@ def test_tag_step_writes_and_validates_the_release_channel_trailer() -> None:
     combined = prepare + "\n" + tag
     assert "git interpret-trailers" in combined, combined
     assert "pfBlockerNG-Release-Channel" in combined, combined
+    assert combined.count("grep -Eic '^pfBlockerNG-Release-Channel: '") == 2, combined
     assert 'git cat-file -t "refs/tags/${TAG}"' in tag, tag
     assert 'git rev-parse "refs/tags/${TAG}^{commit}"' in tag, tag
 
 
 @pytest.mark.parametrize(
     "trailer",
-    [None, (), ("testing", "testing"), ("testing", "edge"), ("bogus",)],
-    ids=["lightweight", "missing", "duplicate", "conflicting", "unknown"],
+    [
+        None,
+        (),
+        ("testing", "testing"),
+        ("testing", "edge"),
+        ("testing\npfblockerng-release-channel: edge",),
+        ("bogus",),
+    ],
+    ids=["lightweight", "missing", "duplicate", "conflicting", "case-conflicting", "unknown"],
 )
 def test_published_workflow_rejects_invalid_channel_trailers(tmp_path: Path, trailer: object) -> None:
     values = trailer if isinstance(trailer, tuple) else trailer
@@ -941,8 +949,15 @@ def test_tag_step_refuses_a_stale_tag_pointing_at_other_code(tmp_path: Path) -> 
 
 @pytest.mark.parametrize(
     "trailers",
-    [None, (), ("testing", "testing"), ("testing", "edge"), ("bogus",)],
-    ids=["lightweight", "missing", "duplicate", "conflicting", "unknown"],
+    [
+        None,
+        (),
+        ("testing", "testing"),
+        ("testing", "edge"),
+        ("testing\npfblockerng-release-channel: edge",),
+        ("bogus",),
+    ],
+    ids=["lightweight", "missing", "duplicate", "conflicting", "case-conflicting", "unknown"],
 )
 def test_tag_step_refuses_existing_tags_without_exact_channel_metadata(tmp_path: Path, trailers: object) -> None:
     repo, head, _older = _tag_repo(tmp_path)

@@ -10,8 +10,9 @@ description: >
 
 Use for a request to prepare a Stable, Testing, or Edge release. Require an explicit
 channel and configured `release/X.Y` source line. The channel is explicit and configured;
-store `pfBlockerNG-Release-Channel: <stable|testing|edge>` in the immutable tag trailer and
-never infer it from a suffix. Use a pinned source SHA for every channel.
+store `pfBlockerNG-Release-Channel: <stable|testing|edge>` in each distinct release's
+immutable tag trailer and never infer it from a suffix. A follower Edge reuses the Testing
+tag and its `testing` trailer. Use a pinned source SHA for every channel.
 
 ## Contract
 
@@ -36,16 +37,20 @@ never infer it from a suffix. Use a pinned source SHA for every channel.
 
 ## Procedure
 
-1. Validate the tag with `scripts/release-version.sh` and the explicit channel/source
+1. Decide whether Edge has a distinct target. Follower Edge must not dispatch `release.yml`:
+   reuse the existing Testing identity without a new draft, tag, or build. Catalog routing is
+   owned by #2144; until that path exists, stop and report the missing route.
+2. Validate the tag with `scripts/release-version.sh` and the explicit channel/source
    line. Do not reimplement its grammar.
-2. Confirm the selected line is current, the immutable source and tag trailer agree, and
+3. Confirm the selected line is current, the immutable source and tag trailer agree, and
    no published Release already owns the tag.
-3. Confirm the required checks are green for that source. A docs-only tip may inherit the
+4. Confirm the required checks are green for that source. A docs-only tip may inherit the
    nearest checked ancestor; do not silently ignore a failed check.
-4. Dispatch the current release workflow from its supported workflow ref. The workflow
+5. For Stable, Testing, or distinct-target Edge, dispatch the current release workflow from
+   its supported workflow ref. The workflow
    builds and verifies exact artifacts before creating a tag and draft Release; do not
    create or push a tag by hand.
-5. Stop at the complete draft. Report its URL and state that notes and publication remain
+6. Stop at the complete draft. Report its URL and state that notes and publication remain
    for `release-with-changelog`.
 
 `release.yml` at the current repository revision is authoritative for inputs and job

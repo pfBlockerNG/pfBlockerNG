@@ -78,4 +78,19 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
     The status should equal 1
     The stderr should include 'trailer'
   End
+
+  It 'rejects a conflicting case-variant channel trailer'
+    push_tag() {
+      cd "${base}/repo" || return
+      git_fixture update-ref refs/remotes/origin/release/9.9 "$sha"
+      git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing
+pfblockerng-release-channel: edge' "$sha"
+      printf '%s\n' "refs/tags/v9.9.9.r1 $sha refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+          sh "$hook" origin "${base}/repo"
+    }
+    When run push_tag
+    The status should equal 1
+    The stderr should include 'trailer'
+  End
 End

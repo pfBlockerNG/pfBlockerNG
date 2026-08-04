@@ -6,15 +6,14 @@ release, changing release workflows, or updating the publication path.
 Load this context when authoring a release, changing release workflows, or updating the
 Ports/package publication path. The authoring contract is issue #2140; the workflow at the
 current repository revision supplies the operational job names and inputs.
-The workflow state is current at `f6db736b`.
 
 ## Channel contract
 
 All channels publish the exact package identity `pfSense-pkg-pfBlockerNG`. Channel is
 metadata and catalog placement, not a package-name suffix. Channel is explicit and
-configured, carried in an immutable tag trailer, and never inferred from a tag suffix. The
-trailer key is `pfBlockerNG-Release-Channel: <stable|testing|edge>`; every operation uses a
-pinned source SHA.
+configured, and never inferred from a tag suffix. The tag trailer carries only the channel,
+using `pfBlockerNG-Release-Channel: <stable|testing|edge>`; the exact configured release line
+is validated separately. Every operation uses a pinned source SHA.
 
 | Channel | Source | Tag and package version | Release and notes |
 | --- | --- | --- | --- |
