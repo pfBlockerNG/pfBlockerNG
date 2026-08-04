@@ -661,7 +661,7 @@ def test_print_conf_matches_template(capsys: pytest.CaptureFixture[str]) -> None
     rc = brp.main(["--print-conf", "--catalog-path", "ce-2.8/amd64"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "pfblockerng: {" in out  # the shared release repo (stable + devel)
+    assert "pfblockerng: {" in out  # the shared release repo (stable + testing)
     assert 'url: "https://pfblockerng.github.io/pkg/release/ce-2.8/amd64"' in out
     assert "${ABI}" not in out, "ADR-39: ${ABI} must not appear in the resolved conf"
     assert "signature_type: none," in out
@@ -757,7 +757,7 @@ def test_catalog_name_rejects_pkg_catalog_plumbing_names(tmp_path: Path) -> None
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
     brp.build_repo(in_dir, out)  # lay a root-level catalog, so the names exist as FILES
@@ -785,7 +785,7 @@ def test_catalog_dest_symlinked_prefix_cannot_escape_out(tmp_path: Path) -> None
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
     outside = tmp_path / "outside"
@@ -812,7 +812,7 @@ def test_catalog_dest_symlinked_leaf_cannot_escape_out(tmp_path: Path) -> None:
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
     outside = tmp_path / "outside"
@@ -836,7 +836,7 @@ def test_catalog_dest_symlinked_leaf_inside_root_is_still_refused(tmp_path: Path
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
     real = out / "real"
@@ -860,7 +860,7 @@ def test_catalog_dest_that_is_a_plain_file_is_refused(tmp_path: Path) -> None:
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
     (out / "ce-2.8").write_text("not a directory")
@@ -881,7 +881,7 @@ def test_catalog_dest_with_a_non_directory_parent_is_refused(tmp_path: Path) -> 
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
     (out / "release").write_text("not a directory")
@@ -901,7 +901,7 @@ def test_output_root_that_is_not_a_directory_is_refused(tmp_path: Path) -> None:
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:15:*")
 
     for catalog_name in (None, "release/ce-2.8"):
         out = tmp_path / f"out_{catalog_name or 'bare'}".replace("/", "_")
@@ -920,7 +920,7 @@ def test_catalog_dest_containment_allows_a_real_nested_dir(tmp_path: Path) -> No
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
 
@@ -948,7 +948,7 @@ def test_build_repo_rejects_unsafe_catalog_name(tmp_path: Path) -> None:
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
     victim = tmp_path / "victim"
@@ -1015,7 +1015,7 @@ def test_catalog_under_versioned_subdir(tmp_path: Path) -> None:
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:15:*")
+    make_pkg(in_dir / "ce-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:15:*")
     out = tmp_path / "out"
     out.mkdir()
 
@@ -1041,7 +1041,7 @@ def test_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
-    make_pkg(in_dir / "plus-pkg.pkg", name="pfBlockerNG-devel", abi="FreeBSD:16:*")
+    make_pkg(in_dir / "plus-pkg.pkg", name="pfBlockerNG-testing", abi="FreeBSD:16:*")
     out = tmp_path / "out"
     out.mkdir()
 
@@ -1248,7 +1248,7 @@ def test_nightly_plus_catalog_under_versioned_subdir(tmp_path: Path) -> None:
 # These pin the LITERAL projection of the version matrix onto the tree
 # (release/<varver>/ + nightly/<varver>/ — arch-less since issue #1806: all
 # three pfSense-pkg-pfBlockerNG ports are NO_ARCH, so one varver directory
-# serves every arch of its FreeBSD major), the release channel-group (devel +
+# serves every arch of its FreeBSD major), the release channel-group (testing +
 # stable in one catalog), full-matrix/no-dedup placement, and nightly
 # retention. The DUMB pkg builder is stubbed so the tests exercise the BRAIN
 # (arrangement) without a ports tree — build-pkg-portable.py's own behaviour
@@ -1279,10 +1279,9 @@ _PLUS = {
 _PLUS_ARM = {**_PLUS, "arch": "aarch64", "status": "active"}
 
 _CHANNEL_NAME = {
-    "devel": "pfBlockerNG-devel",  # legacy fixture inputs remain devel-named
-    "testing": "pfBlockerNG-devel",  # source-build seam now selects testing
+    "testing": "pfBlockerNG-testing",
     "stable": "pfBlockerNG",
-    "edge": "pfBlockerNG-devel",  # edge fan-out shares fixture identity without provenance records
+    "edge": "pfBlockerNG-edge",
     "nightly": "pfBlockerNG-nightly",
 }
 
@@ -1324,9 +1323,97 @@ def _stub_builder(
     return out
 
 
+def _build_record_for(entry: dict[str, Any], channel: str, version: str) -> dict[str, object]:
+    row = {key: value for key, value in entry.items() if key != "arch"}
+    record: dict[str, object] = {
+        "schema": 1,
+        "channel": channel,
+        "release_line": "devel" if channel == "nightly" else "release/4.0",
+        "classification": (
+            "nightly" if channel == "nightly" else {"stable": "final", "testing": "alpha", "edge": "beta"}[channel]
+        ),
+        "source_tag": (
+            None if channel == "nightly" else {"stable": "v4.0.0", "testing": "v4.0.1.a1", "edge": "v4.0.0.b1"}[channel]
+        ),
+        "source_sha": "a" * 40,
+        "canonical_package_version": version,
+        "native_recipe_identity": (
+            "pfSense-pkg-pfBlockerNG" if channel == "stable" else f"pfSense-pkg-pfBlockerNG-{channel}"
+        ),
+        "emitted_identity": "pfSense-pkg-pfBlockerNG",
+        "matrix_row": row,
+        "freebsd_ports_sha": "b" * 64,
+        "route": f"{channel}/ce-2.8",
+        "source_date_epoch": 1_700_000_000,
+        "build_input_digest": "",
+    }
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    return record
+
+
 def _names_in(catalog_pkg: Path) -> set[str]:
     raw = _read_member(catalog_pkg, "packagesite.yaml").decode()
     return {json.loads(ln)["name"] for ln in raw.splitlines() if ln}
+
+
+def test_build_matrix_forwards_records_for_testing_stable_edge_nightly(tmp_path: Path) -> None:
+    """Every source route receives its matching validated record and canonical version."""
+    entry = {**_CE, "channel": "CE", "freebsd_version": "15.0-RELEASE", "extra_pkgs": []}
+    entry.pop("arch")
+    records = [
+        _build_record_for(entry, "testing", "4.0.1.a1"),
+        _build_record_for(entry, "stable", "4.0.0"),
+        _build_record_for(entry, "edge", "4.0.0.b1"),
+        _build_record_for(entry, "nightly", "20260804"),
+    ]
+    calls: dict[str, tuple[str | None, str | None]] = {}
+
+    def recording_builder(
+        channel: str, *, build_record: str | None = None, pkgversion: str | None = None, **kwargs: Any
+    ) -> Path:
+        calls[channel] = (build_record, pkgversion)
+        return _stub_builder(channel, **kwargs)
+
+    brp.build_repo_matrix(
+        [entry],
+        tmp_path / "site",
+        builder=recording_builder,
+        stable_tag="v4.0.0",
+        build_records=records,
+    )
+
+    assert set(calls) == {"testing", "stable", "edge", "nightly"}
+    expected_versions = {"testing": "4.0.1.a1", "stable": "4.0.0", "edge": "4.0.0.b1", "nightly": "20260804"}
+    for channel, record in zip(("testing", "stable", "edge", "nightly"), records):
+        forwarded, pkgversion = calls[channel]
+        assert isinstance(forwarded, str)
+        assert json.loads(forwarded) == record
+        assert pkgversion == expected_versions[channel]
+
+
+def test_build_matrix_rejects_mismatched_record_row(tmp_path: Path) -> None:
+    """A record with the right route but a different matrix row fails closed."""
+    entry = {**_CE, "channel": "CE", "freebsd_version": "15.0-RELEASE", "extra_pkgs": []}
+    entry.pop("arch")
+    mismatched = _build_record_for(entry, "testing", "4.0.1.a1")
+    mismatched["matrix_row"] = {**entry, "status": "beta"}
+    mismatched["build_input_digest"] = pfb_pkg.build_input_digest(mismatched)
+
+    with pytest.raises(brp.BuildRepoError, match="matrix_row does not exactly match"):
+        brp.build_repo_matrix(
+            [entry],
+            tmp_path / "site",
+            builder=_stub_builder,
+            build_records=[mismatched],
+        )
+
+
+def test_retain_by_channel_rejects_legacy_devel_identity(tmp_path: Path) -> None:
+    """Legacy ``-devel`` package names are not silently treated as Testing."""
+    legacy = _make_pkg_channel(tmp_path, "pfBlockerNG-devel", "4.0.1.a1")
+
+    with pytest.raises(brp.BuildRepoError, match="legacy.*-devel"):
+        brp.retain_by_channel([legacy], keep_testing=1, keep_stable=1)
 
 
 def test_pkg_version_key_orders_nightlies_chronologically() -> None:
@@ -1392,15 +1479,15 @@ def test_pkg_version_key_full_multi_version_sort_matches_pkg_order() -> None:
     assert sorted(shuffled, key=brp._pkg_version_key) == expected
 
 
-def test_retain_by_channel_devel_retains_prerelease_stages_in_pkg_order(tmp_path: Path) -> None:
-    """retain_by_channel(keep_devel>1) keeps the newest N devel builds in REAL pkg order.
+def test_retain_by_channel_testing_retains_prerelease_stages_in_pkg_order(tmp_path: Path) -> None:
+    """retain_by_channel(keep_testing>1) keeps the newest N testing builds in REAL pkg order.
 
-    Scenario: a devel series progressing alpha.1 -> alpha.2 -> beta.1 -> rc.1, retained 3-deep,
+    Scenario: a testing series progressing alpha.1 -> alpha.2 -> beta.1 -> rc.1, retained 3-deep,
     with mtimes set ADVERSARIALLY (oldest-stage file gets the NEWEST mtime) so the result can
     only be right via the VERSION key, never via _retain_newest's mtime tie-break falling back
     on file-creation order.
-      Given 4 devel .pkg spanning the alpha/beta/rc lifecycle of one series
-        And keep_devel=3 (artifact retention, --release-keep-devel > 1)
+      Given 4 testing .pkg spanning the alpha/beta/rc lifecycle of one series
+        And keep_testing=3 (artifact retention, --release-keep-testing > 1)
         And mtimes DELIBERATELY inverted vs. stage order (alpha.1 is newest-on-disk)
       When retain_by_channel is called
       Then the 3 NEWEST BY VERSION survive: alpha.2, beta.1, rc.1
@@ -1409,10 +1496,10 @@ def test_retain_by_channel_devel_retains_prerelease_stages_in_pkg_order(tmp_path
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    a1 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.alpha.1")
-    a2 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.alpha.2")
-    b1 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.beta.1")
-    r1 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.rc.1")
+    a1 = _make_pkg_channel(d, "pfBlockerNG-testing", "4.0.0.alpha.1")
+    a2 = _make_pkg_channel(d, "pfBlockerNG-testing", "4.0.0.alpha.2")
+    b1 = _make_pkg_channel(d, "pfBlockerNG-testing", "4.0.0.beta.1")
+    r1 = _make_pkg_channel(d, "pfBlockerNG-testing", "4.0.0.rc.1")
     # Invert mtimes vs. version-stage order: the OLDEST version (alpha.1) gets the
     # NEWEST mtime, and vice versa. A tie-break-by-mtime alone would then pick the
     # WRONG 3 (a1, a2, b1) — only a version key that keeps alpha/beta/rc DISTINCT
@@ -1423,10 +1510,10 @@ def test_retain_by_channel_devel_retains_prerelease_stages_in_pkg_order(tmp_path
 
     # Before-state: all 4 present.
     all_paths = [a1, a2, b1, r1]
-    kept_all = brp.retain_by_channel(all_paths, keep_devel=0, keep_stable=0)
+    kept_all = brp.retain_by_channel(all_paths, keep_testing=0, keep_stable=0)
     assert len(kept_all) == 4
 
-    kept = brp.retain_by_channel(all_paths, keep_devel=3, keep_stable=0)
+    kept = brp.retain_by_channel(all_paths, keep_testing=3, keep_stable=0)
     kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
     assert kept_versions == {"4.0.0.alpha.2", "4.0.0.beta.1", "4.0.0.rc.1"}
     assert "4.0.0.alpha.1" not in kept_versions
@@ -1460,25 +1547,25 @@ def test_build_matrix_tree_layout_arch_less(tmp_path: Path) -> None:
     assert not (out / "release" / "plus-26.03" / "FreeBSD:16:amd64").exists()
 
 
-def test_build_matrix_release_holds_devel_and_stable(tmp_path: Path) -> None:
-    """The release channel-group is devel-only without a stable tag, devel+stable with one.
+def test_build_matrix_release_holds_testing_and_stable(tmp_path: Path) -> None:
+    """The release channel-group is testing-only without a stable tag, testing+stable with one.
 
     Scenario: stable tag absent -> present (the branch + the before/after)
       Given build_repo_matrix([CE]) with NO stable_tag
-      Then release/ce-2.8 holds ONLY the devel package
+      Then release/ce-2.8 holds ONLY the testing package
       When re-run WITH stable_tag set
-      Then the release catalog holds BOTH the devel and the stable package
+      Then the release catalog holds BOTH the testing and the stable package
     """
     out = tmp_path / "site"
 
-    # Off branch: no stable tag -> devel only.
+    # Off branch: no stable tag -> testing only.
     brp.build_repo_matrix([_CE], out, builder=_stub_builder)
     rel = out / "release" / "ce-2.8" / "packagesite.pkg"
-    assert _names_in(rel) == {"pfBlockerNG-devel"}
+    assert _names_in(rel) == {"pfBlockerNG-testing", "pfBlockerNG-edge"}
 
-    # On branch: a stable tag -> devel + stable coexist in ONE catalog.
+    # On branch: a stable tag -> testing + stable coexist in ONE catalog.
     brp.build_repo_matrix([_CE], out, builder=_stub_builder, stable_tag="v3.2.15")
-    assert _names_in(rel) == {"pfBlockerNG-devel", "pfBlockerNG"}
+    assert _names_in(rel) == {"pfBlockerNG-testing", "pfBlockerNG-edge", "pfBlockerNG"}
 
 
 def test_build_matrix_calls_all_live_channels(tmp_path: Path) -> None:
@@ -1516,7 +1603,7 @@ def test_build_matrix_multi_arch_rows_share_one_varver_catalog(tmp_path: Path) -
     Scenario: a Plus amd64 row + a Plus aarch64 row, same varver
       When build_repo_matrix runs over [Plus(amd64), Plus(aarch64)]
       Then exactly ONE release/plus-26.03/ catalog exists (no amd64/aarch64 subdirs)
-       And it carries the (wildcard-ABI) devel package
+       And it carries the (wildcard-ABI) testing package
     """
     out = tmp_path / "site"
     brp.build_repo_matrix([_PLUS, _PLUS_ARM], out, builder=_stub_builder, build_nightly=False)
@@ -1524,7 +1611,7 @@ def test_build_matrix_multi_arch_rows_share_one_varver_catalog(tmp_path: Path) -
     assert (rel / "meta.conf").is_file()
     assert not (rel / "amd64").exists()
     assert not (rel / "aarch64").exists()
-    assert _names_in(rel / "packagesite.pkg") == {"pfBlockerNG-devel"}
+    assert _names_in(rel / "packagesite.pkg") == {"pfBlockerNG-testing", "pfBlockerNG-edge"}
 
 
 def test_build_matrix_no_nightly(tmp_path: Path) -> None:
@@ -1736,11 +1823,11 @@ def test_default_builder_reuses_existing_exact_output(tmp_path: Path, monkeypatc
 #
 # These tests pin the helper in isolation (no call-site change in build_repo_matrix
 # yet — Phase 2 wires it in). They cover every branch:
-#   * devel vs stable bucketed independently (one does not affect the other)
+#   * testing vs stable bucketed independently (one does not affect the other)
 #   * keep < len(bucket) → prune to newest keep (version order + determinism)
 #   * keep >= len(bucket) → no-op (keep all)
 #   * keep == 0 → keep all of that channel (the "unbounded/disabled" sentinel)
-#   * mixed devel+stable+nightly input: nightly left untouched regardless
+#   * mixed testing+stable+nightly input: nightly left untouched regardless
 #   * before-state assertions where the outcome depends on keep value
 # --------------------------------------------------------------------------- #
 
@@ -1818,12 +1905,12 @@ def test_retain_by_channel_uses_validated_annotation_for_canonical_packages(tmp_
     Given canonical packages whose filenames carry misleading channel suffixes
       And each package has a validated ``pfb_build_record`` annotation
       When one package per retention channel is requested
-      Then testing is retained in the devel bucket and stable in the stable bucket
+      Then testing is retained in the testing bucket and stable in the stable bucket
     """
     testing = _make_annotated_project_pkg(tmp_path, "testing", "4.0.1.a1", "pfSense-pkg-pfBlockerNG-stable-looking.pkg")
-    stable = _make_annotated_project_pkg(tmp_path, "stable", "4.0.0", "pfSense-pkg-pfBlockerNG-devel-looking.pkg")
+    stable = _make_annotated_project_pkg(tmp_path, "stable", "4.0.0", "pfSense-pkg-pfBlockerNG-testing-looking.pkg")
 
-    kept = brp.retain_by_channel([testing, stable], keep_devel=1, keep_stable=1)
+    kept = brp.retain_by_channel([testing, stable], keep_testing=1, keep_stable=1)
 
     assert set(kept) == {testing, stable}
 
@@ -1834,7 +1921,7 @@ def test_retain_by_channel_keeps_annotated_edge_outside_testing_window(tmp_path:
     edge_old = _make_annotated_project_pkg(tmp_path, "edge", "4.0.0.b1", "edge-old.pkg")
     edge_new = _make_annotated_project_pkg(tmp_path, "edge", "4.0.0.b2", "edge-new.pkg")
 
-    kept = brp.retain_by_channel([testing, edge_old, edge_new], keep_devel=1, keep_stable=1)
+    kept = brp.retain_by_channel([testing, edge_old, edge_new], keep_testing=1, keep_stable=1)
 
     assert set(kept) == {testing, edge_old, edge_new}
 
@@ -1855,11 +1942,11 @@ def test_retention_rejects_divergent_duplicate_before_pruning(tmp_path: Path) ->
     """Retention must not discard one divergent archive before collision checking."""
     first = tmp_path / "first.pkg"
     duplicate = tmp_path / "duplicate.pkg"
-    make_pkg(first, name="pfBlockerNG-devel", version="4.0.0", payload=b"hey")
-    make_pkg(duplicate, name="pfBlockerNG-devel", version="4.0.0", payload=b"heY")
+    make_pkg(first, name="pfBlockerNG-testing", version="4.0.0", payload=b"hey")
+    make_pkg(duplicate, name="pfBlockerNG-testing", version="4.0.0", payload=b"heY")
 
     with pytest.raises(brp.BuildRepoError, match="PACKAGE COLLISION"):
-        brp.retain_by_channel([first, duplicate], keep_devel=1, keep_stable=0)
+        brp.retain_by_channel([first, duplicate], keep_testing=1, keep_stable=0)
 
 
 def test_emit_rejects_partial_annotated_canonical_package(tmp_path: Path) -> None:
@@ -1894,55 +1981,55 @@ def test_retention_rejects_malformed_annotation_container(tmp_path: Path) -> Non
         brp._retention_channel(tmp_path / "fixture.pkg", manifest)
 
 
-def test_retain_by_channel_devel_pruned_independently(tmp_path: Path) -> None:
-    """Devel bucket is pruned to keep_devel; stable bucket is untouched when keep_stable=0.
+def test_retain_by_channel_testing_pruned_independently(tmp_path: Path) -> None:
+    """Devel bucket is pruned to keep_testing; stable bucket is untouched when keep_stable=0.
 
-    Scenario: 3 devel versions + 2 stable versions; keep_devel=2, keep_stable=0
-      Given 3 devel pkgs (v1, v2, v3) and 2 stable pkgs (s1.0, s2.0)
-        And keep_devel=2, keep_stable=0 (stable unbounded)
+    Scenario: 3 testing versions + 2 stable versions; keep_testing=2, keep_stable=0
+      Given 3 testing pkgs (v1, v2, v3) and 2 stable pkgs (s1.0, s2.0)
+        And keep_testing=2, keep_stable=0 (stable unbounded)
       When retain_by_channel is called
-      Then devel result contains only the 2 newest (v2, v3) — v1 dropped
+      Then testing result contains only the 2 newest (v2, v3) — v1 dropped
        And stable result contains BOTH stable pkgs (keep_stable=0 = keep all)
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    dv1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
-    dv2 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.2")
-    dv3 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.3")
+    dv1 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.1")
+    dv2 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.2")
+    dv3 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.3")
     sv1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
     sv2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
 
     # Before-state: all 5 paths provided.
     all_paths = [dv1, dv2, dv3, sv1, sv2]
 
-    kept = brp.retain_by_channel(all_paths, keep_devel=2, keep_stable=0)
+    kept = brp.retain_by_channel(all_paths, keep_testing=2, keep_stable=0)
 
     kept_names_versions = {
         (brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept
     }
     # Devel: newest 2 kept (v2, v3); v1 dropped.
-    assert ("pfBlockerNG-devel", "3.0.3") in kept_names_versions
-    assert ("pfBlockerNG-devel", "3.0.2") in kept_names_versions
-    assert ("pfBlockerNG-devel", "3.0.1") not in kept_names_versions
+    assert ("pfBlockerNG-testing", "3.0.3") in kept_names_versions
+    assert ("pfBlockerNG-testing", "3.0.2") in kept_names_versions
+    assert ("pfBlockerNG-testing", "3.0.1") not in kept_names_versions
     # Stable: both kept (keep_stable=0 = unbounded).
     assert ("pfBlockerNG", "2.0.1") in kept_names_versions
     assert ("pfBlockerNG", "2.0.2") in kept_names_versions
 
 
 def test_retain_by_channel_stable_pruned_independently(tmp_path: Path) -> None:
-    """Stable bucket is pruned to keep_stable; devel bucket is untouched when keep_devel=0.
+    """Stable bucket is pruned to keep_stable; testing bucket is untouched when keep_testing=0.
 
-    Scenario: 2 devel versions + 3 stable versions; keep_devel=0, keep_stable=1
-      Given 2 devel pkgs (v1, v2) and 3 stable pkgs (s1.0, s2.0, s3.0)
-        And keep_devel=0 (unbounded), keep_stable=1
+    Scenario: 2 testing versions + 3 stable versions; keep_testing=0, keep_stable=1
+      Given 2 testing pkgs (v1, v2) and 3 stable pkgs (s1.0, s2.0, s3.0)
+        And keep_testing=0 (unbounded), keep_stable=1
       When retain_by_channel is called
       Then stable result contains only s3.0 (newest 1); s1.0 and s2.0 dropped
-       And devel result contains BOTH devel pkgs (keep_devel=0 = keep all)
+       And testing result contains BOTH testing pkgs (keep_testing=0 = keep all)
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    dv1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
-    dv2 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.2")
+    dv1 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.1")
+    dv2 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.2")
     sv1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
     sv2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
     sv3 = _make_pkg_channel(d, "pfBlockerNG", "2.0.3")
@@ -1950,7 +2037,7 @@ def test_retain_by_channel_stable_pruned_independently(tmp_path: Path) -> None:
     # Before-state: all 5 paths.
     all_paths = [dv1, dv2, sv1, sv2, sv3]
 
-    kept = brp.retain_by_channel(all_paths, keep_devel=0, keep_stable=1)
+    kept = brp.retain_by_channel(all_paths, keep_testing=0, keep_stable=1)
 
     kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
     # Stable: only newest (s3.0).
@@ -1958,63 +2045,63 @@ def test_retain_by_channel_stable_pruned_independently(tmp_path: Path) -> None:
     assert ("pfBlockerNG", "2.0.2") not in kept_nv
     assert ("pfBlockerNG", "2.0.1") not in kept_nv
     # Devel: both kept.
-    assert ("pfBlockerNG-devel", "3.0.1") in kept_nv
-    assert ("pfBlockerNG-devel", "3.0.2") in kept_nv
+    assert ("pfBlockerNG-testing", "3.0.1") in kept_nv
+    assert ("pfBlockerNG-testing", "3.0.2") in kept_nv
 
 
 def test_retain_by_channel_keep_zero_is_unbounded_sentinel(tmp_path: Path) -> None:
     """keep==0 for a channel keeps ALL of that channel (the unbounded/disabled sentinel).
 
-    Scenario: keep_devel=0, keep_stable=0
-      Given 3 devel pkgs and 3 stable pkgs
+    Scenario: keep_testing=0, keep_stable=0
+      Given 3 testing pkgs and 3 stable pkgs
       When retain_by_channel with both keeps=0
       Then ALL 6 paths are returned (no pruning)
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    all_paths = [_make_pkg_channel(d, "pfBlockerNG-devel", f"3.0.{i}") for i in range(1, 4)] + [
+    all_paths = [_make_pkg_channel(d, "pfBlockerNG-testing", f"3.0.{i}") for i in range(1, 4)] + [
         _make_pkg_channel(d, "pfBlockerNG", f"2.0.{i}") for i in range(1, 4)
     ]
 
     # Before-state: 6 paths in.
     assert len(all_paths) == 6
 
-    kept = brp.retain_by_channel(all_paths, keep_devel=0, keep_stable=0)
+    kept = brp.retain_by_channel(all_paths, keep_testing=0, keep_stable=0)
 
     # All 6 kept.
     assert len(kept) == 6
-    kept_versions_devel = {
+    kept_versions_testing = {
         brp.read_compact_manifest(p)["version"]
         for p in kept
-        if brp.read_compact_manifest(p)["name"] == "pfBlockerNG-devel"
+        if brp.read_compact_manifest(p)["name"] == "pfBlockerNG-testing"
     }
     kept_versions_stable = {
         brp.read_compact_manifest(p)["version"] for p in kept if brp.read_compact_manifest(p)["name"] == "pfBlockerNG"
     }
-    assert kept_versions_devel == {"3.0.1", "3.0.2", "3.0.3"}
+    assert kept_versions_testing == {"3.0.1", "3.0.2", "3.0.3"}
     assert kept_versions_stable == {"2.0.1", "2.0.2", "2.0.3"}
 
 
 def test_retain_by_channel_keep_larger_than_bucket_is_noop(tmp_path: Path) -> None:
     """keep >= len(bucket) is a no-op — all paths in that bucket are retained.
 
-    Scenario: keep_devel=100, keep_stable=100 with only 2 devel and 2 stable pkgs
-      Given 2 devel pkgs and 2 stable pkgs
+    Scenario: keep_testing=100, keep_stable=100 with only 2 testing and 2 stable pkgs
+      Given 2 testing pkgs and 2 stable pkgs
         And keep values far larger than the buckets
       When retain_by_channel is called
       Then all 4 paths are returned (no pruning)
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    dv1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
-    dv2 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.2")
+    dv1 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.1")
+    dv2 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.2")
     sv1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
     sv2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
 
     # Before-state: 4 inputs.
     all_paths = [dv1, dv2, sv1, sv2]
 
-    kept = brp.retain_by_channel(all_paths, keep_devel=100, keep_stable=100)
+    kept = brp.retain_by_channel(all_paths, keep_testing=100, keep_stable=100)
 
     assert len(kept) == 4
 
@@ -2022,54 +2109,54 @@ def test_retain_by_channel_keep_larger_than_bucket_is_noop(tmp_path: Path) -> No
 def test_retain_by_channel_version_order_deterministic(tmp_path: Path) -> None:
     """The newest-N selection uses version order (not filesystem order or name order).
 
-    Scenario: devel pkgs with non-lexicographic versions, keep_devel=2
-      Given devel pkgs at versions 3.0.1, 3.0.9, 3.0.10 (lexicographic order differs)
-        And keep_devel=2
+    Scenario: testing pkgs with non-lexicographic versions, keep_testing=2
+      Given testing pkgs at versions 3.0.1, 3.0.9, 3.0.10 (lexicographic order differs)
+        And keep_testing=2
       When retain_by_channel is called
       Then 3.0.10 and 3.0.9 are kept (numerically newest 2), 3.0.1 dropped
     """
     d = tmp_path / "pkgs"
     d.mkdir()
     # Write in reverse order so filesystem order can't accidentally "win".
-    p10 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.10")
-    p9 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.9")
-    p1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    p10 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.10")
+    p9 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.9")
+    p1 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.1")
 
     # Before-state: all 3 present.
-    kept_all = brp.retain_by_channel([p10, p9, p1], keep_devel=0, keep_stable=0)
+    kept_all = brp.retain_by_channel([p10, p9, p1], keep_testing=0, keep_stable=0)
     assert len(kept_all) == 3
 
-    # With keep_devel=2: 3.0.10 and 3.0.9 must survive; 3.0.1 dropped.
-    kept = brp.retain_by_channel([p10, p9, p1], keep_devel=2, keep_stable=0)
+    # With keep_testing=2: 3.0.10 and 3.0.9 must survive; 3.0.1 dropped.
+    kept = brp.retain_by_channel([p10, p9, p1], keep_testing=2, keep_stable=0)
     kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
     assert kept_versions == {"3.0.10", "3.0.9"}
     assert "3.0.1" not in kept_versions
 
 
 def test_retain_by_channel_nightly_untouched(tmp_path: Path) -> None:
-    """Nightly pkgs pass through unchanged regardless of keep_devel / keep_stable.
+    """Nightly pkgs pass through unchanged regardless of keep_testing / keep_stable.
 
-    Scenario: mixed input with devel, stable, AND nightly pkgs
-      Given 1 devel, 1 stable, 2 nightly pkgs; keep_devel=1, keep_stable=1
+    Scenario: mixed input with testing, stable, AND nightly pkgs
+      Given 1 testing, 1 stable, 2 nightly pkgs; keep_testing=1, keep_stable=1
       When retain_by_channel is called
-      Then devel: 1 kept (the only one)
+      Then testing: 1 kept (the only one)
        And stable: 1 kept (the only one)
        And BOTH nightly pkgs pass through — nightly is left untouched
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    dv = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    dv = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.1")
     sv = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
     nv1 = _make_pkg_channel(d, "pfBlockerNG-nightly", "3.0.20260601.1")
     nv2 = _make_pkg_channel(d, "pfBlockerNG-nightly", "3.0.20260602.1")
 
     all_paths = [dv, sv, nv1, nv2]
 
-    kept = brp.retain_by_channel(all_paths, keep_devel=1, keep_stable=1)
+    kept = brp.retain_by_channel(all_paths, keep_testing=1, keep_stable=1)
 
     kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
-    # Devel: the one devel pkg kept.
-    assert ("pfBlockerNG-devel", "3.0.1") in kept_nv
+    # Devel: the one testing pkg kept.
+    assert ("pfBlockerNG-testing", "3.0.1") in kept_nv
     # Stable: the one stable pkg kept.
     assert ("pfBlockerNG", "2.0.1") in kept_nv
     # Both nightly pkgs retained untouched.
@@ -2079,22 +2166,22 @@ def test_retain_by_channel_nightly_untouched(tmp_path: Path) -> None:
 
 
 def test_retain_by_channel_mixed_prune_nightly_untouched(tmp_path: Path) -> None:
-    """Mixed input: devel pruned, stable pruned, nightly passed through.
+    """Mixed input: testing pruned, stable pruned, nightly passed through.
 
     Scenario: prune both channels from a 3+3+2 mixed input
-      Given 3 devel pkgs, 3 stable pkgs, 2 nightly pkgs
-        And keep_devel=1, keep_stable=2
+      Given 3 testing pkgs, 3 stable pkgs, 2 nightly pkgs
+        And keep_testing=1, keep_stable=2
       When retain_by_channel is called
-      Then devel: only the newest 1 kept
+      Then testing: only the newest 1 kept
        And stable: only the newest 2 kept
        And both nightly pkgs pass through (untouched)
-       AND each channel is pruned independently (devel prune does not affect stable)
+       AND each channel is pruned independently (testing prune does not affect stable)
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    d1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
-    d2 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.2")
-    d3 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.3")
+    d1 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.1")
+    d2 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.2")
+    d3 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.3")
     s1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
     s2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
     s3 = _make_pkg_channel(d, "pfBlockerNG", "2.0.3")
@@ -2104,14 +2191,14 @@ def test_retain_by_channel_mixed_prune_nightly_untouched(tmp_path: Path) -> None
     # Before-state: 8 pkgs in, each channel has its full set.
     all_paths = [d1, d2, d3, s1, s2, s3, n1, n2]
 
-    kept = brp.retain_by_channel(all_paths, keep_devel=1, keep_stable=2)
+    kept = brp.retain_by_channel(all_paths, keep_testing=1, keep_stable=2)
 
     kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
 
     # Devel: only newest 1 (3.0.3).
-    assert ("pfBlockerNG-devel", "3.0.3") in kept_nv
-    assert ("pfBlockerNG-devel", "3.0.2") not in kept_nv
-    assert ("pfBlockerNG-devel", "3.0.1") not in kept_nv
+    assert ("pfBlockerNG-testing", "3.0.3") in kept_nv
+    assert ("pfBlockerNG-testing", "3.0.2") not in kept_nv
+    assert ("pfBlockerNG-testing", "3.0.1") not in kept_nv
 
     # Stable: newest 2 (2.0.2, 2.0.3); 2.0.1 dropped.
     assert ("pfBlockerNG", "2.0.3") in kept_nv
@@ -2122,24 +2209,24 @@ def test_retain_by_channel_mixed_prune_nightly_untouched(tmp_path: Path) -> None
     assert ("pfBlockerNG-nightly", "3.0.20260601.1") in kept_nv
     assert ("pfBlockerNG-nightly", "3.0.20260602.1") in kept_nv
 
-    # Total: 1 devel + 2 stable + 2 nightly = 5.
+    # Total: 1 testing + 2 stable + 2 nightly = 5.
     assert len(kept) == 5
 
 
 def test_retain_by_channel_empty_channel_is_noop(tmp_path: Path) -> None:
     """An empty channel bucket is a no-op — no KeyError, no side effects.
 
-    Scenario: only stable pkgs provided, no devel, no nightly
-      Given 2 stable pkgs and keep_devel=5
+    Scenario: only stable pkgs provided, no testing, no nightly
+      Given 2 stable pkgs and keep_testing=5
       When retain_by_channel is called
-      Then both stable pkgs are returned; no error from the empty devel bucket
+      Then both stable pkgs are returned; no error from the empty testing bucket
     """
     d = tmp_path / "pkgs"
     d.mkdir()
     sv1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
     sv2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
 
-    kept = brp.retain_by_channel([sv1, sv2], keep_devel=5, keep_stable=0)
+    kept = brp.retain_by_channel([sv1, sv2], keep_testing=5, keep_stable=0)
 
     kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
     assert kept_nv == {("pfBlockerNG", "2.0.1"), ("pfBlockerNG", "2.0.2")}
@@ -2147,34 +2234,34 @@ def test_retain_by_channel_empty_channel_is_noop(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("keep_devel", "keep_stable"),
+    ("keep_testing", "keep_stable"),
     [(-1, 1), (1, -1), (-1, -1)],
 )
-def test_retain_by_channel_rejects_negative_keep(tmp_path: Path, keep_devel: int, keep_stable: int) -> None:
+def test_retain_by_channel_rejects_negative_keep(tmp_path: Path, keep_testing: int, keep_stable: int) -> None:
     """A negative keep value is rejected up front (fail fast), not slice-applied silently.
 
     A negative ``keep`` would otherwise reach ``_retain_newest``'s ``[:keep]`` slice — e.g.
     ``keep=-1`` drops the NEWEST build instead of pruning the oldest — losing data with no
     error. ``retain_by_channel`` must raise ``BuildRepoError`` for any negative input.
 
-    Scenario: 2 devel + 2 stable pkgs, one (or both) keep value negative
+    Scenario: 2 testing + 2 stable pkgs, one (or both) keep value negative
       Given a valid set of pkgs
-      When retain_by_channel is called with a negative keep_devel and/or keep_stable
+      When retain_by_channel is called with a negative keep_testing and/or keep_stable
       Then it raises BuildRepoError (no silent slice, no partial result)
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    dv1 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
-    dv2 = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.2")
+    dv1 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.1")
+    dv2 = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.2")
     sv1 = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
     sv2 = _make_pkg_channel(d, "pfBlockerNG", "2.0.2")
 
     # Positive control: the non-negative call DOES return (proves the inputs are valid and
     # only the negative value triggers the raise — not some unrelated failure).
-    assert len(brp.retain_by_channel([dv1, dv2, sv1, sv2], keep_devel=1, keep_stable=1)) == 2
+    assert len(brp.retain_by_channel([dv1, dv2, sv1, sv2], keep_testing=1, keep_stable=1)) == 2
 
     with pytest.raises(brp.BuildRepoError, match=">= 0"):
-        brp.retain_by_channel([dv1, dv2, sv1, sv2], keep_devel=keep_devel, keep_stable=keep_stable)
+        brp.retain_by_channel([dv1, dv2, sv1, sv2], keep_testing=keep_testing, keep_stable=keep_stable)
 
 
 # --------------------------------------------------------------------------- #
@@ -2183,7 +2270,7 @@ def test_retain_by_channel_rejects_negative_keep(tmp_path: Path, keep_devel: int
 # Spec (docs/specs/reversible-settings-transitions-v3-v4.md:189-192): each channel
 # retains its newest-N rolling window PLUS the newest package of every major/minor
 # LINE, so a version like v3.2.15 stays available after it ages out of the window.
-# These tests cover: the union of window + pins, per-channel isolation (a devel
+# These tests cover: the union of window + pins, per-channel isolation (a testing
 # pin can't satisfy stable), multi-patch lines (only the newest patch pins),
 # prerelease version ordering, the keep=0/nightly no-op paths, and the malformed
 # major/minor fail-closed guard.
@@ -2210,7 +2297,7 @@ def test_retain_by_channel_line_pin_survives_outside_window(tmp_path: Path) -> N
     assert len(versions) == 13
     paths = {v: _make_pkg_channel(d, "pfBlockerNG", v) for v in versions}
 
-    kept = brp.retain_by_channel(list(paths.values()), keep_devel=0, keep_stable=10)
+    kept = brp.retain_by_channel(list(paths.values()), keep_testing=0, keep_stable=10)
     kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
 
     # Window: newest 10 by global version order = 4.0.0..4.0.7, 3.2.15, 3.2.14.
@@ -2228,29 +2315,29 @@ def test_retain_by_channel_line_pin_survives_outside_window(tmp_path: Path) -> N
 def test_retain_by_channel_line_pin_is_channel_specific(tmp_path: Path) -> None:
     """The spec's named case: v3.2.15 Stable and v3.2.16 Devel both pin, independently.
 
-    Scenario: Stable pfBlockerNG-3.2.15 and Devel pfBlockerNG-devel-3.2.16, both far
+    Scenario: Stable pfBlockerNG-3.2.15 and Devel pfBlockerNG-testing-3.2.16, both far
     outside a keep=1 window built from many newer versions in each channel.
       Given a Stable channel: 3.2.15 (old) + 5 newer 5.0.x releases; keep_stable=1
-        And a Devel channel: 3.2.16 (old) + 5 newer 5.0.x devel builds; keep_devel=1
+        And a Devel channel: 3.2.16 (old) + 5 newer 5.0.x testing builds; keep_testing=1
       When retain_by_channel is called
-      Then BOTH 3.2.15 (stable) and 3.2.16 (devel) survive as their channel's 3.2 pin
+      Then BOTH 3.2.15 (stable) and 3.2.16 (testing) survive as their channel's 3.2 pin
        And neither channel's pin satisfies the other (no cross-channel leakage)
     """
     d = tmp_path / "pkgs"
     d.mkdir()
     stable_old = _make_pkg_channel(d, "pfBlockerNG", "3.2.15")
     stable_new = [_make_pkg_channel(d, "pfBlockerNG", f"5.0.{i}") for i in range(5)]
-    devel_old = _make_pkg_channel(d, "pfBlockerNG-devel", "3.2.16")
-    devel_new = [_make_pkg_channel(d, "pfBlockerNG-devel", f"5.0.{i}") for i in range(5)]
+    testing_old = _make_pkg_channel(d, "pfBlockerNG-testing", "3.2.16")
+    testing_new = [_make_pkg_channel(d, "pfBlockerNG-testing", f"5.0.{i}") for i in range(5)]
 
-    kept = brp.retain_by_channel([stable_old, *stable_new, devel_old, *devel_new], keep_devel=1, keep_stable=1)
+    kept = brp.retain_by_channel([stable_old, *stable_new, testing_old, *testing_new], keep_testing=1, keep_stable=1)
     kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
 
     assert ("pfBlockerNG", "3.2.15") in kept_nv
-    assert ("pfBlockerNG-devel", "3.2.16") in kept_nv
+    assert ("pfBlockerNG-testing", "3.2.16") in kept_nv
     # Each channel's window (newest 1) plus its own 3.2 pin only — no cross bleed.
     assert ("pfBlockerNG", "5.0.4") in kept_nv
-    assert ("pfBlockerNG-devel", "5.0.4") in kept_nv
+    assert ("pfBlockerNG-testing", "5.0.4") in kept_nv
     assert len(kept_nv) == 4
 
 
@@ -2273,7 +2360,7 @@ def test_retain_by_channel_line_pin_keeps_only_newest_patch(tmp_path: Path) -> N
     p50_0 = _make_pkg_channel(d, "pfBlockerNG", "5.0.0")
     p50_1 = _make_pkg_channel(d, "pfBlockerNG", "5.0.1")
 
-    kept = brp.retain_by_channel([p13, p14, p15, p50_0, p50_1], keep_devel=0, keep_stable=2)
+    kept = brp.retain_by_channel([p13, p14, p15, p50_0, p50_1], keep_testing=0, keep_stable=2)
     kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
 
     assert kept_versions == {"5.0.1", "5.0.0", "3.2.15"}
@@ -2284,19 +2371,19 @@ def test_retain_by_channel_line_pin_uses_pkg_version_order_for_prerelease(tmp_pa
 
     Scenario: an old 4.0 line with alpha.9 and alpha.10 (lexically "10" < "9"),
     pushed out of the window by newer 5.0.x releases.
-      Given devel pkgs 4.0.0.alpha.9, 4.0.0.alpha.10, 5.0.0, 5.0.1; keep_devel=2
+      Given testing pkgs 4.0.0.alpha.9, 4.0.0.alpha.10, 5.0.0, 5.0.1; keep_testing=2
       When retain_by_channel is called
       Then the window keeps 5.0.1, 5.0.0
        And the 4.0 pin is 4.0.0.alpha.10 (pkg version order), NOT alpha.9
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    a9 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.alpha.9")
-    a10 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.alpha.10")
-    n0 = _make_pkg_channel(d, "pfBlockerNG-devel", "5.0.0")
-    n1 = _make_pkg_channel(d, "pfBlockerNG-devel", "5.0.1")
+    a9 = _make_pkg_channel(d, "pfBlockerNG-testing", "4.0.0.alpha.9")
+    a10 = _make_pkg_channel(d, "pfBlockerNG-testing", "4.0.0.alpha.10")
+    n0 = _make_pkg_channel(d, "pfBlockerNG-testing", "5.0.0")
+    n1 = _make_pkg_channel(d, "pfBlockerNG-testing", "5.0.1")
 
-    kept = brp.retain_by_channel([a9, a10, n0, n1], keep_devel=2, keep_stable=0)
+    kept = brp.retain_by_channel([a9, a10, n0, n1], keep_testing=2, keep_stable=0)
     kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
 
     assert kept_versions == {"5.0.1", "5.0.0", "4.0.0.alpha.10"}
@@ -2314,7 +2401,7 @@ def test_retain_by_channel_keep_zero_sentinel_unaffected_by_line_pins(tmp_path: 
     d.mkdir()
     all_paths = [_make_pkg_channel(d, "pfBlockerNG", v) for v in ["3.0.1", "3.2.15", "5.0.0", "5.0.1"]]
 
-    kept = brp.retain_by_channel(all_paths, keep_devel=0, keep_stable=0)
+    kept = brp.retain_by_channel(all_paths, keep_testing=0, keep_stable=0)
 
     assert len(kept) == 4
 
@@ -2325,15 +2412,15 @@ def test_retain_by_channel_nightly_never_gets_line_pins(tmp_path: Path) -> None:
     A nightly VERSION (<target>.YYYYMMDD.N) has no major/minor line concept; if pin
     logic ever leaked into the nightly path it would either misbucket (numeric date
     treated as a line) or crash on the malformed-version guard. Assert nightly count
-    is exactly the input count, unchanged, even with a devel/stable prune alongside.
+    is exactly the input count, unchanged, even with a testing/stable prune alongside.
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    dv = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
+    dv = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.1")
     sv = _make_pkg_channel(d, "pfBlockerNG", "2.0.1")
     nightlies = [_make_pkg_channel(d, "pfBlockerNG-nightly", f"amd64.2026060{i}.1") for i in range(1, 4)]
 
-    kept = brp.retain_by_channel([dv, sv, *nightlies], keep_devel=1, keep_stable=1)
+    kept = brp.retain_by_channel([dv, sv, *nightlies], keep_testing=1, keep_stable=1)
     kept_nightly_versions = {
         brp.read_compact_manifest(p)["version"]
         for p in kept
@@ -2365,7 +2452,7 @@ def test_retain_by_channel_malformed_line_version_raises(tmp_path: Path) -> None
     bad = _make_pkg_channel(d, "pfBlockerNG", "weird")
 
     with pytest.raises(brp.BuildRepoError, match="weird"):
-        brp.retain_by_channel([p1, p2, p3, bad], keep_devel=0, keep_stable=1)
+        brp.retain_by_channel([p1, p2, p3, bad], keep_testing=0, keep_stable=1)
 
 
 def test_retain_by_channel_line_pin_determinism(tmp_path: Path) -> None:
@@ -2379,8 +2466,8 @@ def test_retain_by_channel_line_pin_determinism(tmp_path: Path) -> None:
     versions = ["3.0.1", "3.0.2", "3.2.13", "3.2.14", "3.2.15"] + [f"4.0.{i}" for i in range(8)]
     paths = [_make_pkg_channel(d, "pfBlockerNG", v) for v in versions]
 
-    kept1 = brp.retain_by_channel(list(paths), keep_devel=0, keep_stable=10)
-    kept2 = brp.retain_by_channel(list(reversed(paths)), keep_devel=0, keep_stable=10)
+    kept1 = brp.retain_by_channel(list(paths), keep_testing=0, keep_stable=10)
+    kept2 = brp.retain_by_channel(list(reversed(paths)), keep_testing=0, keep_stable=10)
 
     assert {p.name for p in kept1} == {p.name for p in kept2}
     assert len(kept1) == len(kept2) == 11
@@ -2401,23 +2488,23 @@ def test_retain_by_channel_duplicate_identity_resolves_to_one_path(tmp_path: Pat
     php/py flavor.
 
     Scenario: one (name, version) identity, two files, tied mtime
-      Given two .pkg files for pfBlockerNG-devel 3.0.1 with identical mtime
-        And keep_devel=1 (keep < bucket size, so the window+line-pin union runs)
+      Given two .pkg files for pfBlockerNG-testing 3.0.1 with identical mtime
+        And keep_testing=1 (keep < bucket size, so the window+line-pin union runs)
       When retain_by_channel is called
       Then exactly one path is retained for that identity
        And it is the first-processed file (deterministic first-wins tie-break)
     """
     d = tmp_path / "pkgs"
     d.mkdir()
-    first = _make_pkg_channel(d, "pfBlockerNG-devel", "3.0.1")
-    duplicate = d / "pfBlockerNG-devel-3.0.1-dup.pkg"
-    make_pkg(duplicate, name="pfBlockerNG-devel", version="3.0.1", abi="FreeBSD:15:amd64")
+    first = _make_pkg_channel(d, "pfBlockerNG-testing", "3.0.1")
+    duplicate = d / "pfBlockerNG-testing-3.0.1-dup.pkg"
+    make_pkg(duplicate, name="pfBlockerNG-testing", version="3.0.1", abi="FreeBSD:15:amd64")
     # Force an exact tie: without it, the higher-mtime file would legitimately win
     # in both helpers and the test would prove nothing about the tie-break itself.
     tie_mtime = first.stat().st_mtime
     os.utime(duplicate, (tie_mtime, tie_mtime))
 
-    kept = brp.retain_by_channel([first, duplicate], keep_devel=1, keep_stable=0)
+    kept = brp.retain_by_channel([first, duplicate], keep_testing=1, keep_stable=0)
 
     assert len(kept) == 1, f"one (name, version) identity must resolve to one file, got {len(kept)}: {kept}"
     assert kept[0] == first, "first-processed file must win the tie deterministically"
@@ -2427,7 +2514,7 @@ def test_retain_by_channel_duplicate_identity_resolves_to_one_path(tmp_path: Pat
 # ADR-27 Phase 2: release-subtree retention in build_repo_matrix
 #
 # These tests pin the retention behaviour of the release subtree:
-#   * defaults (release_keep_devel=1, release_keep_stable=1) reproduce today's
+#   * defaults (release_keep_testing=1, release_keep_stable=1) reproduce today's
 #     latest-only output — the BEFORE state (inert change)
 #   * with N=M=3 and 4 of each channel provided, the catalog lists exactly the
 #     newest 3 of each — the 4th is absent (AFTER state)
@@ -2452,14 +2539,14 @@ def _names_versions_in_release(catalog_pkg: Path) -> set[tuple[str, str]]:
 
 
 def test_release_default_is_latest_only(tmp_path: Path) -> None:
-    """Defaults (release_keep_devel=1, release_keep_stable=1) produce exactly one devel +
+    """Defaults (release_keep_testing=1, release_keep_stable=1) produce exactly one testing +
     one stable in the release catalog — the BEFORE state (latest-only retention).
 
-    Scenario: default keep values with devel + stable
+    Scenario: default keep values with testing + stable
       Given build_repo_matrix with NO release_extra_pkgs and default keep values
         And a stable tag is set (so one stable is built)
       When the matrix runs
-      Then the release catalog lists exactly ONE devel version (before-state)
+      Then the release catalog lists exactly ONE testing version (before-state)
        And exactly ONE stable version (before-state)
        And the total entry count is 2
     """
@@ -2476,23 +2563,24 @@ def test_release_default_is_latest_only(tmp_path: Path) -> None:
     objs = _catalog_objects(rel)
     names = {o["name"] for o in objs}
 
-    # Exactly one devel + one stable (latest-only — the before/default state).
-    assert "pfBlockerNG-devel" in names
+    # Exactly one testing + one stable (latest-only — the before/default state).
+    assert "pfBlockerNG-testing" in names
     assert "pfBlockerNG" in names
-    assert len(objs) == 2
+    assert "pfBlockerNG-edge" in names
+    assert len(objs) == 3
 
 
-def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
-    """With release_keep_devel=3, release_keep_stable=3 and 4 of each provided,
+def test_release_subtree_retains_testing_and_stable(tmp_path: Path) -> None:
+    """With release_keep_testing=3, release_keep_stable=3 and 4 of each provided,
     the catalog lists the newest 3 of each channel — the 4th (oldest) is absent.
 
     Scenario: retention depth 3, 4 candidates per channel
-      Given 4 pre-built devel pkgs (versions 3.0.1..3.0.4)
+      Given 4 pre-built testing pkgs (versions 3.0.1..3.0.4)
         And 4 pre-built stable pkgs (versions 2.0.1..2.0.4)
-        And release_keep_devel=3, release_keep_stable=3
+        And release_keep_testing=3, release_keep_stable=3
       When build_repo_matrix runs with those extra pkgs + the fresh build
-      Then devel: versions 3.0.2, 3.0.3, 3.0.4 are in the catalog
-       And devel: version 3.0.1 (the oldest) is NOT in the catalog
+      Then testing: versions 3.0.2, 3.0.3, 3.0.4 are in the catalog
+       And testing: version 3.0.1 (the oldest) is NOT in the catalog
        And stable: versions 2.0.2, 2.0.3, 2.0.4 are in the catalog
        And stable: version 2.0.1 (the oldest) is NOT in the catalog
     """
@@ -2500,14 +2588,14 @@ def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
     extras.mkdir()
     abi = "FreeBSD:15:*"
 
-    # 4 pre-built devel candidates (the fresh build will be version "1.0_1" from the
+    # 4 pre-built testing candidates (the fresh build will be version "1.0_1" from the
     # stub, so all 4 extras sit below "1.0_1" as older versions). Use 3.0.1..3.0.4 as
     # clearly ordered versions to make the test readable.
-    devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}", abi=abi) for i in range(1, 5)]
+    testing_extras = [_make_pkg_channel(extras, "pfBlockerNG-testing", f"3.0.{i}", abi=abi) for i in range(1, 5)]
     # 4 pre-built stable candidates.
     stable_extras = [_make_pkg_channel(extras, "pfBlockerNG", f"2.0.{i}", abi=abi) for i in range(1, 5)]
 
-    all_extras = devel_extras + stable_extras
+    all_extras = testing_extras + stable_extras
 
     # Before-state: with defaults (keep=1), only the freshest 1 of each is kept.
     out_before = tmp_path / "before"
@@ -2517,7 +2605,7 @@ def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
         builder=_stub_builder,
         stable_tag="v3.2.15",
         release_extra_pkgs=all_extras,
-        release_keep_devel=1,
+        release_keep_testing=1,
         release_keep_stable=1,
     )
     rel_before = out_before / "release" / "ce-2.8" / "packagesite.pkg"
@@ -2525,7 +2613,7 @@ def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
     # 1 window + 1 line pin per channel: the stub's fresh build is version "1.0_1",
     # a major/minor line ("1.0") distinct from the 3.0.x/2.0.x extras, so it survives
     # as that line's pin even though the 3.0.x/2.0.x window doesn't include it.
-    assert len(objs_before) == 4  # (1 window + 1 pin) devel + (1 window + 1 pin) stable
+    assert len(objs_before) == 5  # testing + edge + (1 window + 1 pin) stable
 
     # After-state: with keep=3, the newest 3 of each channel are retained.
     out = tmp_path / "site"
@@ -2535,17 +2623,17 @@ def test_release_subtree_retains_devel_and_stable(tmp_path: Path) -> None:
         builder=_stub_builder,
         stable_tag="v3.2.15",
         release_extra_pkgs=all_extras,
-        release_keep_devel=3,
+        release_keep_testing=3,
         release_keep_stable=3,
     )
     rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     nv_set = _names_versions_in_release(rel)
 
     # Devel: 3.0.2, 3.0.3, 3.0.4 present; 3.0.1 dropped (4th/oldest).
-    assert ("pfBlockerNG-devel", "3.0.4") in nv_set
-    assert ("pfBlockerNG-devel", "3.0.3") in nv_set
-    assert ("pfBlockerNG-devel", "3.0.2") in nv_set
-    assert ("pfBlockerNG-devel", "3.0.1") not in nv_set
+    assert ("pfBlockerNG-testing", "3.0.4") in nv_set
+    assert ("pfBlockerNG-testing", "3.0.3") in nv_set
+    assert ("pfBlockerNG-testing", "3.0.2") in nv_set
+    assert ("pfBlockerNG-testing", "3.0.1") not in nv_set
 
     # Stable: 2.0.2, 2.0.3, 2.0.4 present; 2.0.1 dropped.
     assert ("pfBlockerNG", "2.0.4") in nv_set
@@ -2559,15 +2647,15 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
     newest is still the highest version (newest-wins default, contract §2.2.2).
 
     Scenario: multi-version catalog integrity
-      Given release_keep_devel=2, release_keep_stable=2, 3 of each provided as extras
-        And a fresh devel build (the stub produces version "1.0_1")
-        And the newest extras are 3.0.3 (devel) and 2.0.3 (stable)
+      Given release_keep_testing=2, release_keep_stable=2, 3 of each provided as extras
+        And a fresh testing build (the stub produces version "1.0_1")
+        And the newest extras are 3.0.3 (testing) and 2.0.3 (stable)
       When build_repo_matrix runs
-      Then the catalog has exactly 6 objects: 2-window + 1 line-pin devel, and
+      Then the catalog has exactly 6 objects: 2-window + 1 line-pin testing, and
         2-window + 1 line-pin stable (the stub's fresh build "1.0_1" is its own
         major/minor line "1.0", distinct from the 3.0.x/2.0.x extras, so it
         survives as that line's pin alongside the newest-2 window)
-       And the highest-version devel object is at least 3.0.3
+       And the highest-version testing object is at least 3.0.3
        And the highest-version stable object is at least 2.0.3
        And every kept (name, version) pair appears exactly once (no duplicates)
     """
@@ -2576,7 +2664,7 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
     abi = "FreeBSD:15:*"
 
     # 3 extras each channel; with keep=2 only the newest 2 survive per channel.
-    devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}", abi=abi) for i in range(1, 4)]
+    testing_extras = [_make_pkg_channel(extras, "pfBlockerNG-testing", f"3.0.{i}", abi=abi) for i in range(1, 4)]
     stable_extras = [_make_pkg_channel(extras, "pfBlockerNG", f"2.0.{i}", abi=abi) for i in range(1, 4)]
 
     out = tmp_path / "site"
@@ -2585,32 +2673,34 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
         out,
         builder=_stub_builder,
         stable_tag="v3.2.15",
-        release_extra_pkgs=devel_extras + stable_extras,
-        release_keep_devel=2,
+        release_extra_pkgs=testing_extras + stable_extras,
+        release_keep_testing=2,
         release_keep_stable=2,
     )
 
     rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     objs = _catalog_objects(rel)
 
-    # 6 catalog entries: (2-window + 1 line-pin) devel + (2-window + 1 line-pin) stable.
+    # 6 catalog entries: (2-window + 1 line-pin) testing + (2-window + 1 line-pin) stable.
     # The stub's fresh build ("1.0_1") is its own major/minor line ("1.0"), distinct
     # from the 3.0.x/2.0.x extras, so it survives as that line's pin alongside the
     # newest-2 window.
-    assert len(objs) == 6
+    assert len(objs) == 7
 
-    devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
+    testing_objs = [o for o in objs if o["name"] == "pfBlockerNG-testing"]
+    edge_objs = [o for o in objs if o["name"] == "pfBlockerNG-edge"]
     stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
-    assert len(devel_objs) == 3
+    assert len(testing_objs) == 3
+    assert len(edge_objs) == 1
     assert len(stable_objs) == 3
 
     # No duplicate (name, version) pairs.
     nv_list = [(o["name"], o["version"]) for o in objs]
     assert len(nv_list) == len(set(nv_list)), "duplicate (name, version) pair in catalog"
 
-    # Newest-wins: the highest devel version in the catalog is 3.0.3 (the extras newest).
-    devel_versions = sorted(
-        [brp._pkg_version_key(o["version"]) for o in devel_objs],
+    # Newest-wins: the highest testing version in the catalog is 3.0.3 (the extras newest).
+    testing_versions = sorted(
+        [brp._pkg_version_key(o["version"]) for o in testing_objs],
         reverse=True,
     )
     stable_versions = sorted(
@@ -2618,7 +2708,7 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
         reverse=True,
     )
     # The retained top versions must be at least 3.0.3 and 2.0.3 respectively.
-    assert devel_versions[0] >= brp._pkg_version_key("3.0.3")
+    assert testing_versions[0] >= brp._pkg_version_key("3.0.3")
     assert stable_versions[0] >= brp._pkg_version_key("2.0.3")
 
 
@@ -2629,8 +2719,8 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
 # (brp.main([...])) rather than the Python API, so the actual command-line
 # wiring (argparse → extra_pkgs conversion → build_repo_matrix) is proven.
 #
-# Pattern: synthetic devel_1..4 + stable_1..4 passed as --release-extra-pkgs;
-# --release-keep-devel / --release-keep-stable assert that the catalog holds
+# Pattern: synthetic testing_1..4 + stable_1..4 passed as --release-extra-pkgs;
+# --release-keep-testing / --release-keep-stable assert that the catalog holds
 # exactly the newest N/M and the oldest candidate is absent. Before-and-after
 # assertions confirm the pruning is genuine, not a coincidental match.
 # --------------------------------------------------------------------------- #
@@ -2650,32 +2740,32 @@ def _with_stub_builder(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cli_release_extra_pkgs_default_keeps_latest_plus_line_pins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CLI defaults (--release-keep-devel 1, --release-keep-stable 1) keep only the
+    """CLI defaults (--release-keep-testing 1, --release-keep-stable 1) keep only the
     latest release PER CHANNEL WINDOW when --release-extra-pkgs carry older versions
     too — plus any major/minor line pin outside that window (issue #1676).
 
     Scenario: CLI latest-only default with older extras supplied
-      Given 3 pre-built devel extras (3.0.1, 3.0.2, 3.0.3) passed via --release-extra-pkgs
+      Given 3 pre-built testing extras (3.0.1, 3.0.2, 3.0.3) passed via --release-extra-pkgs
         And 3 pre-built stable extras (2.0.1, 2.0.2, 2.0.3) passed via --release-extra-pkgs
-        And no --release-keep-devel / --release-keep-stable override (default 1)
+        And no --release-keep-testing / --release-keep-stable override (default 1)
       When brp.main([--build-matrix, ...]) is called
-      Then the release catalog has exactly 2 devel entries: the 1-window entry
+      Then the release catalog has exactly 2 testing entries: the 1-window entry
         plus the stub's own fresh build as a line pin (its version "1.0_1" is
         major/minor line "1.0", distinct from the 3.0.x extras)
        And the release catalog has exactly 1 stable entry (no --stable-tag on this
         CLI path, so no fresh build and no phantom pin)
-       And the highest-version devel (3.0.3) is the one retained by the window
+       And the highest-version testing (3.0.3) is the one retained by the window
        And the highest-version stable (2.0.3) is the one retained
     """
     _with_stub_builder(monkeypatch)
 
     extras = tmp_path / "extras"
     extras.mkdir()
-    devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}") for i in range(1, 4)]
+    testing_extras = [_make_pkg_channel(extras, "pfBlockerNG-testing", f"3.0.{i}") for i in range(1, 4)]
     stable_extras = [_make_pkg_channel(extras, "pfBlockerNG", f"2.0.{i}") for i in range(1, 4)]
 
     # Before-state: confirm the extra pkgs exist and span all 6 versions.
-    assert len(devel_extras) == 3
+    assert len(testing_extras) == 3
     assert len(stable_extras) == 3
 
     out = tmp_path / "site"
@@ -2683,7 +2773,7 @@ def test_cli_release_extra_pkgs_default_keeps_latest_plus_line_pins(
     mfile.write_text(json.dumps({"versions": [_CE]}))
 
     extra_flags: list[str] = []
-    for p in devel_extras + stable_extras:
+    for p in testing_extras + stable_extras:
         extra_flags += ["--release-extra-pkgs", str(p)]
 
     rc = brp.main(
@@ -2694,7 +2784,7 @@ def test_cli_release_extra_pkgs_default_keeps_latest_plus_line_pins(
             "--out",
             str(out),
             "--no-nightly",
-            # No --release-keep-devel / --release-keep-stable  → default 1
+            # No --release-keep-testing / --release-keep-stable  → default 1
         ]
         + extra_flags
     )
@@ -2704,44 +2794,44 @@ def test_cli_release_extra_pkgs_default_keeps_latest_plus_line_pins(
     assert rel.is_file()
     objs = _catalog_objects(rel)
 
-    devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
+    testing_objs = [o for o in objs if o["name"] == "pfBlockerNG-testing"]
     stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
 
-    # Before-state (default keep=1): devel gets the 1-window entry PLUS the stub's own
+    # Before-state (default keep=1): testing gets the 1-window entry PLUS the stub's own
     # fresh build as a line pin ("1.0_1" is major/minor line "1.0", distinct from the
     # 3.0.x extras). No --stable-tag is passed on this CLI path, so no stable build is
     # produced — stable stays a plain 1-window result (no phantom pin).
-    assert len(devel_objs) == 2, f"expected 2 devel (window + line pin), got {len(devel_objs)}"
+    assert len(testing_objs) == 2, f"expected 2 testing (window + line pin), got {len(testing_objs)}"
     assert len(stable_objs) == 1, f"expected 1 stable, got {len(stable_objs)}"
 
     # The window's retained entry is the highest-version one (newest-wins).
-    devel_versions = {o["version"] for o in devel_objs}
-    assert "3.0.3" in devel_versions
+    testing_versions = {o["version"] for o in testing_objs}
+    assert "3.0.3" in testing_versions
     assert stable_objs[0]["version"] >= "2.0.3"
 
 
 def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The CLI correctly prunes to newest N/M when --release-keep-devel/stable are set.
+    """The CLI correctly prunes to newest N/M when --release-keep-testing/stable are set.
 
     Scenario: retention depth 3, 4 candidates per channel via CLI
-      Given 4 pre-built devel extras (3.0.1..3.0.4) passed as --release-extra-pkgs
+      Given 4 pre-built testing extras (3.0.1..3.0.4) passed as --release-extra-pkgs
         And 4 pre-built stable extras (2.0.1..2.0.4) passed as --release-extra-pkgs
-        And --release-keep-devel 3, --release-keep-stable 3
+        And --release-keep-testing 3, --release-keep-stable 3
       When brp.main([--build-matrix, ...]) is called
-      Then the release catalog has exactly 4 devel entries: the 3-window plus
+      Then the release catalog has exactly 4 testing entries: the 3-window plus
         1 line pin (the stub's "1.0_1" fresh build, its own major/minor line)
        And the release catalog has exactly 3 stable entries (no fresh build on
         this CLI path, so a plain 3-window, no phantom pin)
-       And the oldest devel (3.0.1) is absent from the catalog
+       And the oldest testing (3.0.1) is absent from the catalog
        And the oldest stable (2.0.1) is absent from the catalog
-       And the 3 newest devel versions (3.0.2, 3.0.3, 3.0.4) are present
+       And the 3 newest testing versions (3.0.2, 3.0.3, 3.0.4) are present
        And the 3 newest stable versions (2.0.2, 2.0.3, 2.0.4) are present
     """
     _with_stub_builder(monkeypatch)
 
     extras = tmp_path / "extras"
     extras.mkdir()
-    devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}") for i in range(1, 5)]
+    testing_extras = [_make_pkg_channel(extras, "pfBlockerNG-testing", f"3.0.{i}") for i in range(1, 5)]
     stable_extras = [_make_pkg_channel(extras, "pfBlockerNG", f"2.0.{i}") for i in range(1, 5)]
 
     out = tmp_path / "site"
@@ -2749,10 +2839,10 @@ def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pyte
     mfile.write_text(json.dumps({"versions": [_CE]}))
 
     extra_flags: list[str] = []
-    for p in devel_extras + stable_extras:
+    for p in testing_extras + stable_extras:
         extra_flags += ["--release-extra-pkgs", str(p)]
 
-    # Before-state: with default keep=1 only 1 devel + 1 stable appear.
+    # Before-state: with default keep=1 only 1 testing + 1 stable appear.
     out_before = tmp_path / "before"
     mfile_before = tmp_path / "matrix_before.json"
     mfile_before.write_text(json.dumps({"versions": [_CE]}))
@@ -2769,15 +2859,15 @@ def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pyte
     )
     assert rc_before == 0
     before_objs = _catalog_objects(out_before / "release" / "ce-2.8" / "packagesite.pkg")
-    before_devel = [o for o in before_objs if o["name"] == "pfBlockerNG-devel"]
+    before_testing = [o for o in before_objs if o["name"] == "pfBlockerNG-testing"]
     before_stable = [o for o in before_objs if o["name"] == "pfBlockerNG"]
-    # No --stable-tag on this CLI path, so only devel gets a fresh build: default
+    # No --stable-tag on this CLI path, so only testing gets a fresh build: default
     # keep=1 window + the stub fresh build's own line pin ("1.0_1" is line "1.0",
     # distinct from the 3.0.x extras). Stable has no fresh build, so no phantom pin.
-    assert len(before_devel) == 2, "before-state: default keep=1 must yield 1 window + 1 line pin devel"
+    assert len(before_testing) == 2, "before-state: default keep=1 must yield 1 window + 1 line pin testing"
     assert len(before_stable) == 1, "before-state: default keep=1 must yield exactly 1 stable"
 
-    # After-state: with keep=3 the catalog lists 3 devel + 3 stable.
+    # After-state: with keep=3 the catalog lists 3 testing + 3 stable.
     rc = brp.main(
         [
             "--build-matrix",
@@ -2786,7 +2876,7 @@ def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pyte
             "--out",
             str(out),
             "--no-nightly",
-            "--release-keep-devel",
+            "--release-keep-testing",
             "3",
             "--release-keep-stable",
             "3",
@@ -2800,36 +2890,36 @@ def test_cli_release_extra_pkgs_keeps_newest_n(tmp_path: Path, monkeypatch: pyte
     objs = _catalog_objects(rel)
     nv = {(o["name"], o["version"]) for o in objs}
 
-    devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
+    testing_objs = [o for o in objs if o["name"] == "pfBlockerNG-testing"]
     stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
 
-    # After-state: devel = 3-window + 1 line pin (the stub's "1.0_1" fresh build) = 4;
+    # After-state: testing = 3-window + 1 line pin (the stub's "1.0_1" fresh build) = 4;
     # stable has no fresh build on this CLI path, so it's a plain 3-window = 3.
-    assert len(devel_objs) == 4, f"expected 4 devel after (window + line pin), got {len(devel_objs)}"
+    assert len(testing_objs) == 4, f"expected 4 testing after (window + line pin), got {len(testing_objs)}"
     assert len(stable_objs) == 3, f"expected 3 stable after, got {len(stable_objs)}"
 
     # Oldest excluded.
-    assert ("pfBlockerNG-devel", "3.0.1") not in nv, "oldest devel must be pruned"
+    assert ("pfBlockerNG-testing", "3.0.1") not in nv, "oldest testing must be pruned"
     assert ("pfBlockerNG", "2.0.1") not in nv, "oldest stable must be pruned"
 
     # Newest 3 present.
     for v in ("3.0.2", "3.0.3", "3.0.4"):
-        assert ("pfBlockerNG-devel", v) in nv, f"devel {v} must be retained"
+        assert ("pfBlockerNG-testing", v) in nv, f"testing {v} must be retained"
     for v in ("2.0.2", "2.0.3", "2.0.4"):
         assert ("pfBlockerNG", v) in nv, f"stable {v} must be retained"
 
 
 def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With multiple retained devel versions the highest version ranks first (newest-wins).
+    """With multiple retained testing versions the highest version ranks first (newest-wins).
 
     Scenario: pkg install <name> without version must resolve to the highest kept version
-      Given 4 devel extras (3.0.1..3.0.4) and keep=2
+      Given 4 testing extras (3.0.1..3.0.4) and keep=2
         And 4 stable extras (2.0.1..2.0.4) and keep=2
       When brp.main([--build-matrix, ...]) is called
-      Then the catalog lists exactly 3 devel entries (2-window + 1 line pin,
+      Then the catalog lists exactly 3 testing entries (2-window + 1 line pin,
         the stub's "1.0_1" fresh build on its own line) and 2 stable entries
         (no fresh build on this CLI path, so a plain 2-window, no phantom pin)
-       And the highest devel version in the catalog is >= 3.0.4 (newest-wins)
+       And the highest testing version in the catalog is >= 3.0.4 (newest-wins)
        And the highest stable version in the catalog is >= 2.0.4 (newest-wins)
        And no (name, version) pair is duplicated in the catalog
     """
@@ -2837,7 +2927,7 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
 
     extras = tmp_path / "extras"
     extras.mkdir()
-    devel_extras = [_make_pkg_channel(extras, "pfBlockerNG-devel", f"3.0.{i}") for i in range(1, 5)]
+    testing_extras = [_make_pkg_channel(extras, "pfBlockerNG-testing", f"3.0.{i}") for i in range(1, 5)]
     stable_extras = [_make_pkg_channel(extras, "pfBlockerNG", f"2.0.{i}") for i in range(1, 5)]
 
     out = tmp_path / "site"
@@ -2845,7 +2935,7 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
     mfile.write_text(json.dumps({"versions": [_CE]}))
 
     extra_flags: list[str] = []
-    for p in devel_extras + stable_extras:
+    for p in testing_extras + stable_extras:
         extra_flags += ["--release-extra-pkgs", str(p)]
 
     rc = brp.main(
@@ -2856,7 +2946,7 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
             "--out",
             str(out),
             "--no-nightly",
-            "--release-keep-devel",
+            "--release-keep-testing",
             "2",
             "--release-keep-stable",
             "2",
@@ -2868,12 +2958,12 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
     rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     objs = _catalog_objects(rel)
 
-    devel_objs = [o for o in objs if o["name"] == "pfBlockerNG-devel"]
+    testing_objs = [o for o in objs if o["name"] == "pfBlockerNG-testing"]
     stable_objs = [o for o in objs if o["name"] == "pfBlockerNG"]
 
-    # devel = 2-window + 1 line pin (the stub's "1.0_1" fresh build, its own line "1.0") = 3.
+    # testing = 2-window + 1 line pin (the stub's "1.0_1" fresh build, its own line "1.0") = 3.
     # No --stable-tag on this CLI path, so stable has no fresh build: plain 2-window.
-    assert len(devel_objs) == 3
+    assert len(testing_objs) == 3
     assert len(stable_objs) == 2
 
     # No duplicate (name, version) pairs.
@@ -2881,9 +2971,9 @@ def test_cli_release_extra_pkgs_newest_wins(tmp_path: Path, monkeypatch: pytest.
     assert len(nv_list) == len(set(nv_list)), "duplicate (name, version) pair in catalog"
 
     # Newest-wins: highest version in the retained set is >= 3.0.4 / 2.0.4.
-    devel_top = max(brp._pkg_version_key(o["version"]) for o in devel_objs)
+    testing_top = max(brp._pkg_version_key(o["version"]) for o in testing_objs)
     stable_top = max(brp._pkg_version_key(o["version"]) for o in stable_objs)
-    assert devel_top >= brp._pkg_version_key("3.0.4")
+    assert testing_top >= brp._pkg_version_key("3.0.4")
     assert stable_top >= brp._pkg_version_key("2.0.4")
 
 
@@ -2934,12 +3024,12 @@ def test_route_only_release_catalog_contains_exactly_frozen_pkg(tmp_path: Path) 
       Given a frozen CE 2.7 .pkg (version 3.1.0_5) in route_only_pkgs
        When build_repo_matrix runs with role=route-only for CE 2.7
       Then release/ce-2.7/packagesite.pkg lists exactly that one package
-       And the name is pfBlockerNG-devel and the version is 3.1.0_5
+       And the name is pfBlockerNG-testing and the version is 3.1.0_5
     """
     out = tmp_path / "site"
-    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-testing-3.1.0_5.pkg"
     frozen_pkg.parent.mkdir()
-    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
+    make_pkg(frozen_pkg, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:14:*")
 
     # Before-state: no release subtree yet.
     assert not (out / "release" / "ce-2.7").exists()
@@ -2957,7 +3047,7 @@ def test_route_only_release_catalog_contains_exactly_frozen_pkg(tmp_path: Path) 
 
     # Exactly one entry, the frozen .pkg.
     assert len(objs) == 1
-    assert objs[0]["name"] == "pfBlockerNG-devel"
+    assert objs[0]["name"] == "pfBlockerNG-testing"
     assert objs[0]["version"] == "3.1.0_5"
 
 
@@ -2971,9 +3061,9 @@ def test_route_only_no_nightly_subtree(tmp_path: Path) -> None:
        And nightly/ce-2.8/ DOES exist      (build entry: nightly built as normal)
     """
     out = tmp_path / "site"
-    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-testing-3.1.0_5.pkg"
     frozen_pkg.parent.mkdir()
-    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
+    make_pkg(frozen_pkg, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:14:*")
 
     # Before-state: neither nightly subtree exists.
     assert not (out / "nightly" / "ce-2.7").exists()
@@ -3003,9 +3093,9 @@ def test_route_only_additive_parity_build_entry_unchanged(tmp_path: Path) -> Non
       (route-only is purely additive — no regression on the build path)
     """
     out = tmp_path / "site"
-    frozen_ce = tmp_path / "frozen_ce" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_ce = tmp_path / "frozen_ce" / "pfBlockerNG-testing-3.1.0_5.pkg"
     frozen_ce.parent.mkdir()
-    make_pkg(frozen_ce, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
+    make_pkg(frozen_ce, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:14:*")
 
     # BEFORE: build-only matrix (CE 2.8 only).
     brp.build_repo_matrix([_CE], out, builder=_stub_builder)
@@ -3041,13 +3131,13 @@ def test_route_only_ce_and_plus_both_served(tmp_path: Path) -> None:
        And NO nightly/ subtrees exist for either route-only entry
     """
     out = tmp_path / "site"
-    frozen_ce = tmp_path / "frozen_ce" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_ce = tmp_path / "frozen_ce" / "pfBlockerNG-testing-3.1.0_5.pkg"
     frozen_ce.parent.mkdir()
-    make_pkg(frozen_ce, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
+    make_pkg(frozen_ce, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:14:*")
 
-    frozen_plus = tmp_path / "frozen_plus" / "pfBlockerNG-devel-3.0.9_1.pkg"
+    frozen_plus = tmp_path / "frozen_plus" / "pfBlockerNG-testing-3.0.9_1.pkg"
     frozen_plus.parent.mkdir()
-    make_pkg(frozen_plus, name="pfBlockerNG-devel", version="3.0.9_1", abi="FreeBSD:15:*")
+    make_pkg(frozen_plus, name="pfBlockerNG-testing", version="3.0.9_1", abi="FreeBSD:15:*")
 
     brp.build_repo_matrix(
         [_CE, _CE_EOL, _PLUS_EOL],
@@ -3120,10 +3210,10 @@ def test_route_only_multiple_frozen_pkgs_all_indexed(tmp_path: Path) -> None:
     out = tmp_path / "site"
     frozen_dir = tmp_path / "frozen"
     frozen_dir.mkdir()
-    frozen_a = frozen_dir / "pfBlockerNG-devel-3.1.0_4.pkg"
-    frozen_b = frozen_dir / "pfBlockerNG-devel-3.1.0_5.pkg"
-    make_pkg(frozen_a, name="pfBlockerNG-devel", version="3.1.0_4", abi="FreeBSD:14:*")
-    make_pkg(frozen_b, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
+    frozen_a = frozen_dir / "pfBlockerNG-testing-3.1.0_4.pkg"
+    frozen_b = frozen_dir / "pfBlockerNG-testing-3.1.0_5.pkg"
+    make_pkg(frozen_a, name="pfBlockerNG-testing", version="3.1.0_4", abi="FreeBSD:14:*")
+    make_pkg(frozen_b, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:14:*")
 
     brp.build_repo_matrix(
         [_CE_EOL],
@@ -3170,8 +3260,8 @@ def test_route_only_wildcard_frozen_pkg_serves_all_arch_rows_of_varver(tmp_path:
     plus_arm = {**_PLUS_EOL, "freebsd_major": "15", "arch": "aarch64"}
     frozen_dir = tmp_path / "frozen"
     frozen_dir.mkdir()
-    frozen_pkg = frozen_dir / "plus-devel.pkg"
-    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:15:*")
+    frozen_pkg = frozen_dir / "plus-testing.pkg"
+    make_pkg(frozen_pkg, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:15:*")
 
     brp.build_repo_matrix(
         [plus_amd64, plus_arm],
@@ -3199,9 +3289,9 @@ def test_route_only_pre_1806_concrete_abi_fails_explicitly(tmp_path: Path) -> No
        And it emits no route-only catalog
     """
     out = tmp_path / "site"
-    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-testing-3.1.0_5.pkg"
     frozen_pkg.parent.mkdir()
-    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:amd64")
+    make_pkg(frozen_pkg, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:14:amd64")
 
     with pytest.raises(brp.BuildRepoError, match=r"pre-#1806 tag is unservable as route-only") as exc_info:
         brp.build_repo_matrix(
@@ -3223,7 +3313,7 @@ def test_route_only_no_frozen_pkg_for_abi_raises(tmp_path: Path) -> None:
     out = tmp_path / "site"
     frozen = tmp_path / "wrong-abi.pkg"
     # _CE_EOL is FreeBSD:14:amd64; supply only a FreeBSD:16:amd64 .pkg → no ABI match.
-    make_pkg(frozen, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:16:amd64")
+    make_pkg(frozen, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:16:amd64")
 
     with pytest.raises(brp.BuildRepoError, match="none match ABI"):
         brp.build_repo_matrix(
@@ -3256,8 +3346,8 @@ def test_cli_route_only_pkgs_flag_builds_frozen_catalog(tmp_path: Path) -> None:
     out = tmp_path / "site"
     frozen_dir = tmp_path / "frozen"
     frozen_dir.mkdir()
-    frozen_pkg = frozen_dir / "pfBlockerNG-devel-3.1.0_5.pkg"
-    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
+    frozen_pkg = frozen_dir / "pfBlockerNG-testing-3.1.0_5.pkg"
+    make_pkg(frozen_pkg, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:14:*")
 
     matrix_json = json.dumps([_CE_EOL])
     matrix_file = tmp_path / "matrix.json"
@@ -3301,10 +3391,10 @@ def test_cli_route_only_pkgs_flag_repeatable_for_multiple_frozen(tmp_path: Path)
     out = tmp_path / "site"
     frozen_dir = tmp_path / "frozen"
     frozen_dir.mkdir()
-    frozen_a = frozen_dir / "pfBlockerNG-devel-3.1.0_4.pkg"
-    frozen_b = frozen_dir / "pfBlockerNG-devel-3.1.0_5.pkg"
-    make_pkg(frozen_a, name="pfBlockerNG-devel", version="3.1.0_4", abi="FreeBSD:14:*")
-    make_pkg(frozen_b, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:14:*")
+    frozen_a = frozen_dir / "pfBlockerNG-testing-3.1.0_4.pkg"
+    frozen_b = frozen_dir / "pfBlockerNG-testing-3.1.0_5.pkg"
+    make_pkg(frozen_a, name="pfBlockerNG-testing", version="3.1.0_4", abi="FreeBSD:14:*")
+    make_pkg(frozen_b, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:14:*")
 
     matrix_file = tmp_path / "matrix.json"
     matrix_file.write_text(json.dumps([_CE_EOL]))
@@ -3361,13 +3451,13 @@ def test_cli_route_only_pkgs_bad_format_errors(tmp_path: Path) -> None:
 #
 # When release_pkgs is supplied to build_repo_matrix, the release/<varver>/
 # catalog is served from caller-supplied pre-built .pkg files (ABI-filtered, pruned
-# via retain_by_channel) instead of rebuilding devel+stable from source.
+# via retain_by_channel) instead of rebuilding testing+stable from source.
 # Nightly is always built from source regardless.
 #
 # These tests pin every guarantee of the consume-mode path:
 #   * release/<varver>/ catalog lists exactly the consumed .pkg(s)
 #   * ABI filter: a mixed-ABI pool is filtered to the matching FreeBSD major
-#   * devel + stable both present in one pool -> retain_by_channel keeps both
+#   * testing + stable both present in one pool -> retain_by_channel keeps both
 #   * empty pool for a varver -> no release catalog emitted, no exception, nightly OK
 #   * nightly is still built from source when build_nightly=True
 #   * back-compat: release_pkgs=None reproduces the build-from-source path
@@ -3379,19 +3469,19 @@ def test_cli_route_only_pkgs_bad_format_errors(tmp_path: Path) -> None:
 def test_consume_mode_release_catalog_contains_consumed_pkg(tmp_path: Path) -> None:
     """Consume mode places the pool into release/<varver>/ under the canonical name.
 
-    Scenario: CE 2.8 build entry + one pre-built devel .pkg supplied via release_pkgs
-      Given a pre-built pfBlockerNG-devel 4.0.0_1 .pkg (amd64)
+    Scenario: CE 2.8 build entry + one pre-built testing .pkg supplied via release_pkgs
+      Given a pre-built pfBlockerNG-testing 4.0.0_1 .pkg (amd64)
         And release_pkgs={"ce-2.8": [pkg]} passed to build_repo_matrix
        When build_repo_matrix runs with build_nightly=False
       Then release/ce-2.8/packagesite.pkg lists that package
-       And the catalog entry name is pfBlockerNG-devel and version is 4.0.0_1
-       And the builder was NOT called for devel/stable (consume, not rebuild)
+       And the catalog entry name is pfBlockerNG-testing and version is 4.0.0_1
+       And the builder was NOT called for testing/stable (consume, not rebuild)
     """
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
-    prebuilt = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
-    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:*")
+    prebuilt = pkg_dir / "pfBlockerNG-testing-4.0.0_1.pkg"
+    make_pkg(prebuilt, name="pfBlockerNG-testing", version="4.0.0_1", abi="FreeBSD:15:*")
 
     # Before-state: no release subtree yet.
     assert not (out / "release" / "ce-2.8").exists()
@@ -3415,11 +3505,11 @@ def test_consume_mode_release_catalog_contains_consumed_pkg(tmp_path: Path) -> N
     assert catalog.is_file(), "release catalog must exist in consume mode"
     objs = _catalog_objects(catalog)
     assert len(objs) == 1
-    assert objs[0]["name"] == "pfBlockerNG-devel"
+    assert objs[0]["name"] == "pfBlockerNG-testing"
     assert objs[0]["version"] == "4.0.0_1"
 
-    # Builder must NOT have been called for devel or stable.
-    assert "devel" not in builder_calls, "builder must not be called for devel in consume mode"
+    # Builder must NOT have been called for testing or stable.
+    assert "testing" not in builder_calls, "builder must not be called for testing in consume mode"
     assert "stable" not in builder_calls, "builder must not be called for stable in consume mode"
 
 
@@ -3432,15 +3522,15 @@ def test_consume_mode_wildcard_pkg_serves_all_arch_rows_of_varver(tmp_path: Path
     serves both the amd64 AND the aarch64 matrix row.
 
     Scenario: Plus 26.03 on amd64 + aarch64 (two arch rows, one varver)
-      Given a pool with ONE wildcard-ABI (FreeBSD:16:*) devel .pkg under "plus-26.03"
+      Given a pool with ONE wildcard-ABI (FreeBSD:16:*) testing .pkg under "plus-26.03"
        When build_repo_matrix runs for both _PLUS (amd64) + _PLUS_ARM (aarch64)
       Then release/plus-26.03/ (no arch subdir) holds exactly that one package
     """
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
-    pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
-    make_pkg(pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:16:*")
+    pkg = pkg_dir / "pfBlockerNG-testing-4.0.0_1.pkg"
+    make_pkg(pkg, name="pfBlockerNG-testing", version="4.0.0_1", abi="FreeBSD:16:*")
 
     # Before-state: no catalog exists.
     assert not (out / "release" / "plus-26.03").exists()
@@ -3466,7 +3556,7 @@ def test_consume_mode_concrete_abi_pkg_rejected_at_emission(tmp_path: Path) -> N
     a NO_ARCH (wildcard-ABI) package (issue #1806): a concrete one would silently
     install on only one arch.
 
-    Scenario: a concrete FreeBSD:16:amd64 devel .pkg served via release_pkgs
+    Scenario: a concrete FreeBSD:16:amd64 testing .pkg served via release_pkgs
       When build_repo_matrix runs
       Then it raises BuildRepoError with generic NO_ARCH guidance
        And it does not mislabel the package as a pre-#1806 route-only asset
@@ -3474,8 +3564,8 @@ def test_consume_mode_concrete_abi_pkg_rejected_at_emission(tmp_path: Path) -> N
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
-    pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
-    make_pkg(pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:16:amd64")
+    pkg = pkg_dir / "pfBlockerNG-testing-4.0.0_1.pkg"
+    make_pkg(pkg, name="pfBlockerNG-testing", version="4.0.0_1", abi="FreeBSD:16:amd64")
 
     with pytest.raises(brp.BuildRepoError, match="NO_ARCH") as exc_info:
         brp.build_repo_matrix(
@@ -3492,22 +3582,22 @@ def test_consume_mode_concrete_abi_pkg_rejected_at_emission(tmp_path: Path) -> N
     assert "route-only" not in message
 
 
-def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
-    """With a devel + stable .pkg in the pool, retain_by_channel keeps both.
+def test_consume_mode_testing_and_stable_both_retained(tmp_path: Path) -> None:
+    """With a testing + stable .pkg in the pool, retain_by_channel keeps both.
 
-    Scenario: pool carries one devel and one stable .pkg for ce-2.8
-      Given pfBlockerNG-devel (devel channel) + pfBlockerNG (stable channel) .pkg in pool
-       When build_repo_matrix runs in consume mode (release_keep_devel=1, release_keep_stable=1)
-      Then release/ce-2.8 catalog lists BOTH the devel and stable packages
+    Scenario: pool carries one testing and one stable .pkg for ce-2.8
+      Given pfBlockerNG-testing (testing channel) + pfBlockerNG (stable channel) .pkg in pool
+       When build_repo_matrix runs in consume mode (release_keep_testing=1, release_keep_stable=1)
+      Then release/ce-2.8 catalog lists BOTH the testing and stable packages
     """
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
-    devel_pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
+    testing_pkg = pkg_dir / "pfBlockerNG-testing-4.0.0_1.pkg"
     stable_pkg = pkg_dir / "pfBlockerNG-4.0.0.pkg"
-    # devel channel: name ends in "-devel" (retain_by_channel uses the name to classify)
-    make_pkg(devel_pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:*")
-    # stable channel: base name without "-devel" suffix
+    # testing channel: name ends in "-testing" (retain_by_channel uses the name to classify)
+    make_pkg(testing_pkg, name="pfBlockerNG-testing", version="4.0.0_1", abi="FreeBSD:15:*")
+    # stable channel: base name without "-testing" suffix
     make_pkg(stable_pkg, name="pfBlockerNG", version="4.0.0", abi="FreeBSD:15:*")
 
     # Before-state: no release catalog.
@@ -3518,7 +3608,7 @@ def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
         out,
         builder=_stub_builder,
         build_nightly=False,
-        release_pkgs={"ce-2.8": [devel_pkg, stable_pkg]},
+        release_pkgs={"ce-2.8": [testing_pkg, stable_pkg]},
     )
 
     catalog = out / "release" / "ce-2.8" / "packagesite.pkg"
@@ -3527,32 +3617,32 @@ def test_consume_mode_devel_and_stable_both_retained(tmp_path: Path) -> None:
     names = {o["name"] for o in objs}
 
     # Both channels present in the catalog.
-    assert "pfBlockerNG-devel" in names, "devel package must be in release catalog"
+    assert "pfBlockerNG-testing" in names, "testing package must be in release catalog"
     assert "pfBlockerNG" in names, "stable package must be in release catalog"
-    assert len(objs) == 2, "exactly one devel + one stable expected"
+    assert len(objs) == 2, "exactly one testing + one stable expected"
 
 
 def test_consume_mode_release_extra_pkgs_abi_filtered(tmp_path: Path) -> None:
     """release_extra_pkgs is ABI-filtered before channel retention in consume mode.
 
     Scenario: a wrong-major extra with a HIGHER version must not contaminate this catalog
-      Given a ce-2.8 (FreeBSD major 15) entry, a correct-major devel pkg in the pool, and
+      Given a ce-2.8 (FreeBSD major 15) entry, a correct-major testing pkg in the pool, and
             release_extra_pkgs carrying a correct-major stable pkg PLUS a wrong-major
-            (FreeBSD:16) devel pkg whose version (9.9.9) is higher than the pool's devel (4.0.0_1)
-       When build_repo_matrix runs in consume mode (keep_devel=1, keep_stable=1)
+            (FreeBSD:16) testing pkg whose version (9.9.9) is higher than the pool's testing (4.0.0_1)
+       When build_repo_matrix runs in consume mode (keep_testing=1, keep_stable=1)
       Then the release catalog holds ONLY the FreeBSD:15:* packages — the higher-version
-           wrong-major devel is excluded by the ABI filter, not retained over the right-major devel
-           (without the filter, retain_by_channel would pick the 9.9.9 wrong-major devel).
+           wrong-major testing is excluded by the ABI filter, not retained over the right-major testing
+           (without the filter, retain_by_channel would pick the 9.9.9 wrong-major testing).
     """
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
-    devel_pkg = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
+    testing_pkg = pkg_dir / "pfBlockerNG-testing-4.0.0_1.pkg"
     stable_extra = pkg_dir / "pfBlockerNG-4.0.0.pkg"
-    wrong_abi_devel = pkg_dir / "pfBlockerNG-devel-9.9.9.pkg"
-    make_pkg(devel_pkg, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:*")
+    wrong_abi_testing = pkg_dir / "pfBlockerNG-testing-9.9.9.pkg"
+    make_pkg(testing_pkg, name="pfBlockerNG-testing", version="4.0.0_1", abi="FreeBSD:15:*")
     make_pkg(stable_extra, name="pfBlockerNG", version="4.0.0", abi="FreeBSD:15:*")
-    make_pkg(wrong_abi_devel, name="pfBlockerNG-devel", version="9.9.9", abi="FreeBSD:16:*")
+    make_pkg(wrong_abi_testing, name="pfBlockerNG-testing", version="9.9.9", abi="FreeBSD:16:*")
 
     assert not (out / "release" / "ce-2.8").exists()
 
@@ -3561,17 +3651,17 @@ def test_consume_mode_release_extra_pkgs_abi_filtered(tmp_path: Path) -> None:
         out,
         builder=_stub_builder,
         build_nightly=False,
-        release_pkgs={"ce-2.8": [devel_pkg]},
-        release_extra_pkgs=[stable_extra, wrong_abi_devel],
+        release_pkgs={"ce-2.8": [testing_pkg]},
+        release_extra_pkgs=[stable_extra, wrong_abi_testing],
     )
 
     objs = _catalog_objects(out / "release" / "ce-2.8" / "packagesite.pkg")
     abis = {o["abi"] for o in objs}
     versions = {(o["name"], o["version"]) for o in objs}
     assert abis == {"FreeBSD:15:*"}, "only this major's ABI may appear in the catalog"
-    assert ("pfBlockerNG-devel", "4.0.0_1") in versions, "right-ABI devel must be kept"
+    assert ("pfBlockerNG-testing", "4.0.0_1") in versions, "right-ABI testing must be kept"
     assert ("pfBlockerNG", "4.0.0") in versions, "right-ABI stable extra must be kept"
-    assert ("pfBlockerNG-devel", "9.9.9") not in versions, "wrong-ABI extra must be filtered out"
+    assert ("pfBlockerNG-testing", "9.9.9") not in versions, "wrong-ABI extra must be filtered out"
     assert len(objs) == 2
 
 
@@ -3613,7 +3703,7 @@ def test_consume_mode_nightly_still_built_from_source(tmp_path: Path) -> None:
     """Nightly is always built from source in consume mode, even when release is consumed.
 
     Scenario: CE 2.8 in consume mode with build_nightly=True
-      Given a pre-built devel .pkg in release_pkgs for ce-2.8
+      Given a pre-built testing .pkg in release_pkgs for ce-2.8
         And build_nightly=True
        When build_repo_matrix runs
       Then nightly/ce-2.8/ catalog exists (builder called for 'nightly')
@@ -3622,8 +3712,8 @@ def test_consume_mode_nightly_still_built_from_source(tmp_path: Path) -> None:
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
-    prebuilt = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
-    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:*")
+    prebuilt = pkg_dir / "pfBlockerNG-testing-4.0.0_1.pkg"
+    make_pkg(prebuilt, name="pfBlockerNG-testing", version="4.0.0_1", abi="FreeBSD:15:*")
 
     builder_channels: list[str] = []
 
@@ -3639,9 +3729,9 @@ def test_consume_mode_nightly_still_built_from_source(tmp_path: Path) -> None:
         release_pkgs={"ce-2.8": [prebuilt]},
     )
 
-    # Builder called for nightly but NOT for devel/stable.
+    # Builder called for nightly but NOT for testing/stable.
     assert "nightly" in builder_channels, "builder must be called for nightly in consume mode"
-    assert "devel" not in builder_channels, "builder must NOT be called for devel in consume mode"
+    assert "devel" not in builder_channels, "builder must NOT be called for testing in consume mode"
 
     # Nightly catalog exists.
     assert (out / "nightly" / "ce-2.8" / "packagesite.pkg").is_file()
@@ -3649,7 +3739,7 @@ def test_consume_mode_nightly_still_built_from_source(tmp_path: Path) -> None:
     # Release catalog exists and lists the consumed pkg (not the nightly build).
     rel_objs = _catalog_objects(out / "release" / "ce-2.8" / "packagesite.pkg")
     assert len(rel_objs) == 1
-    assert rel_objs[0]["name"] == "pfBlockerNG-devel"
+    assert rel_objs[0]["name"] == "pfBlockerNG-testing"
     assert rel_objs[0]["version"] == "4.0.0_1"
 
 
@@ -3662,7 +3752,7 @@ def test_consume_mode_none_reproduces_source_build_path(tmp_path: Path) -> None:
     Scenario: CE 2.8 entry, release_pkgs omitted
       Given build_repo_matrix called WITHOUT release_pkgs (default None)
        When the matrix runs with the stub builder
-      Then release/ce-2.8/ catalog exists (built via _stub_builder for 'devel')
+      Then release/ce-2.8/ catalog exists (built via _stub_builder for 'testing')
        And nightly/ce-2.8/ catalog exists (built via _stub_builder for 'nightly')
     """
     out = tmp_path / "site"
@@ -3677,10 +3767,10 @@ def test_consume_mode_none_reproduces_source_build_path(tmp_path: Path) -> None:
     assert (out / "release" / "ce-2.8" / "packagesite.pkg").is_file()
     assert (out / "nightly" / "ce-2.8" / "packagesite.pkg").is_file()
 
-    # Verify the catalog lists the stub-built devel package (confirms source-build path ran).
+    # Verify the catalog lists the stub-built testing package (confirms source-build path ran).
     rel_objs = _catalog_objects(out / "release" / "ce-2.8" / "packagesite.pkg")
-    assert any(o["name"] == "pfBlockerNG-devel" for o in rel_objs), (
-        "devel package from stub builder must appear in release catalog on source-build path"
+    assert any(o["name"] == "pfBlockerNG-testing" for o in rel_objs), (
+        "testing package from stub builder must appear in release catalog on source-build path"
     )
 
 
@@ -3688,7 +3778,7 @@ def test_cli_release_pkgs_flag_serves_consumed_catalog(tmp_path: Path) -> None:
     """``--release-pkgs VARVER:PATH`` wires release_pkgs through the CLI end-to-end.
 
     Scenario: CE 2.8 build entry + one pre-built .pkg supplied via --release-pkgs flag
-      Given a pre-built pfBlockerNG-devel 4.0.0_1 .pkg
+      Given a pre-built pfBlockerNG-testing 4.0.0_1 .pkg
         And --release-pkgs ce-2.8:<path> passed on the CLI
        When brp.main is called with --no-nightly
       Then rc == 0
@@ -3697,8 +3787,8 @@ def test_cli_release_pkgs_flag_serves_consumed_catalog(tmp_path: Path) -> None:
     out = tmp_path / "site"
     pkg_dir = tmp_path / "pkgs"
     pkg_dir.mkdir()
-    prebuilt = pkg_dir / "pfBlockerNG-devel-4.0.0_1.pkg"
-    make_pkg(prebuilt, name="pfBlockerNG-devel", version="4.0.0_1", abi="FreeBSD:15:*")
+    prebuilt = pkg_dir / "pfBlockerNG-testing-4.0.0_1.pkg"
+    make_pkg(prebuilt, name="pfBlockerNG-testing", version="4.0.0_1", abi="FreeBSD:15:*")
 
     matrix_file = tmp_path / "matrix.json"
     matrix_file.write_text(json.dumps([_CE]))
@@ -3908,7 +3998,7 @@ def test_dep_pkgs_fold_after_retention_stable_pin_survives(tmp_path: Path) -> No
     # NOTHING left outside the window for line "3.0" (the dep IS that line's
     # newest) — so the real stable pin is evicted. This proves the scenario
     # actually discriminates between fold-before and fold-after.
-    pre_retention_result = brp.retain_by_channel([stable_pkg, dep_pkg], keep_devel=1, keep_stable=1)
+    pre_retention_result = brp.retain_by_channel([stable_pkg, dep_pkg], keep_testing=1, keep_stable=1)
     pre_retention_versions = {brp.read_compact_manifest(p)["version"] for p in pre_retention_result}
     assert "3.0.1" not in pre_retention_versions, (
         "simulated pre-retention fold must evict the stable pin (proves the scenario discriminates)"
@@ -4003,9 +4093,9 @@ def test_dep_pkgs_route_only_entry_never_folds_dep_shared_major_build_entry_does
        And no error is raised (the dep WAS emitted somewhere)
     """
     out = tmp_path / "site"
-    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-devel-3.1.0_5.pkg"
+    frozen_pkg = tmp_path / "frozen" / "pfBlockerNG-testing-3.1.0_5.pkg"
     frozen_pkg.parent.mkdir()
-    make_pkg(frozen_pkg, name="pfBlockerNG-devel", version="3.1.0_5", abi="FreeBSD:15:*")
+    make_pkg(frozen_pkg, name="pfBlockerNG-testing", version="3.1.0_5", abi="FreeBSD:15:*")
 
     dep_pkg = tmp_path / "py311-charset-normalizer-3.4.4.pkg"
     make_pkg(dep_pkg, name="py311-charset-normalizer", version="3.4.4", abi="FreeBSD:15:*")
@@ -4025,12 +4115,12 @@ def test_dep_pkgs_route_only_entry_never_folds_dep_shared_major_build_entry_does
         dep_pkgs=[dep_pkg],
     )
 
-    # Build entry: dep folded in alongside the fresh devel build.
+    # Build entry: dep folded in alongside the fresh testing build.
     build_names = _names_in(out / "release" / "plus-15.0" / "packagesite.pkg")
     assert "py311-charset-normalizer" in build_names, "dep must land in the build entry's release catalog"
 
     # Route-only entry: frozen .pkg ONLY — the dep must never be folded in.
     route_only_objs = _catalog_objects(out / "release" / "ce-2.7" / "packagesite.pkg")
-    assert {o["name"] for o in route_only_objs} == {"pfBlockerNG-devel"}, (
+    assert {o["name"] for o in route_only_objs} == {"pfBlockerNG-testing"}, (
         "a route-only entry must never receive a dep pkg, even sharing a major with a build entry"
     )
