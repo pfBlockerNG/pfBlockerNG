@@ -26,6 +26,8 @@ require_once('/usr/local/www/pfblockerng/pfblockerng.php');
 
 global $g, $pfb;
 pfb_global();
+$pfb_installed_family = pfb_install_settings_family_capture_restore();
+pfb_global();
 
 // Set 'Install flag' to skip sync process during installations.
 $g['pfblockerng_install'] = TRUE;
@@ -668,6 +670,7 @@ if ($ufound) {
 	update_status(" no changes required ... done.\n");
 }
 
+pfb_install_settings_family_finalize();
 unset($g['pfblockerng_install']);	// Remove 'Install flag'
 update_status("Upgrading... done\n\nCustom commands completed ... ");
 
