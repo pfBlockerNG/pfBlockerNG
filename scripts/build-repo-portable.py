@@ -39,6 +39,7 @@ from pfb_pkg import (
     pkg_version_sort_key,
     read_compact_manifest,
     validate_build_record,
+    validate_project_pkg,
     zstd_compress,
 )
 
@@ -527,7 +528,7 @@ def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict
 # --------------------------------------------------------------------------- #
 # ADR-20: the matrix-driven BRAIN. build_repo_matrix() drives the DUMB
 # build-pkg-portable.py builder per (ci-metadata entry x channel) and projects
-# the matrix onto release/<variant>-<major.minor>/... (stable+devel, one
+# the matrix onto release/<variant>-<major.minor>/... (stable+testing+edge, one
 # catalog) and nightly/<variant>-<major.minor>/... (retained to N). Arch-less
 # since issue #1806 (NO_ARCH): the leaf is the varver, not an ABI/arch — every
 # package here is CPU-wildcarded, so one directory serves every arch of that
@@ -629,6 +630,8 @@ def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path], *, root: Path, r
     """
     _require_contained(root, dest)
     entries: list[tuple[Path, dict]] = [(p, read_compact_manifest(p)) for p in sorted(set(pkg_paths))]
+    for path, manifest in entries:
+        _validate_annotated_project_pkg(path, manifest)
     _check_collisions(entries)
     for path, manifest in entries:
         _require_wildcard_abi(path, manifest.get("abi"), route_only=route_only)
@@ -712,33 +715,20 @@ def _line_pins(bucket: list[Path]) -> list[Path]:
 
 def _retention_channel(path: Path, manifest: Mapping[str, object]) -> str:
     """Return a package's retention bucket from provenance, with legacy name fallback."""
-    name = manifest.get("name")
-    if name == CANONICAL_EMITTED_IDENTITY:
-        annotations = manifest.get("annotations")
-        if annotations is not None and not isinstance(annotations, Mapping):
-            raise BuildRepoError(f"{path.name}: annotations must be an object")
-        annotation = annotations.get(PFB_BUILD_RECORD_KEY) if isinstance(annotations, Mapping) else None
-        if annotation is not None:
-            if not isinstance(annotation, str):
-                raise BuildRepoError(f"{path.name}: {PFB_BUILD_RECORD_KEY} annotation must be JSON text")
-            if not annotation.lstrip().startswith("{"):
-                raise BuildRepoError(f"{path.name}: {PFB_BUILD_RECORD_KEY} annotation must be a JSON object")
-            try:
-                channel = load_build_record(annotation)["channel"]
-            except (PkgError, TypeError, ValueError) as exc:
-                raise BuildRepoError(f"{path.name}: invalid {PFB_BUILD_RECORD_KEY} annotation: {exc}") from None
-            if channel == "stable":
-                return "stable"
-            if channel == "nightly":
-                return "nightly"
-            if channel == "edge":
-                return "edge"
-            if channel == "testing":
-                return "testing"
-            raise BuildRepoError(f"{path.name}: unsupported retention channel {channel!r}")
-        # Native stable artifacts predate the provenance annotation.
-        return "stable"
+    record = _canonical_build_record(path, manifest)
+    if record is not None:
+        channel = record["channel"]
+        if channel == "stable":
+            return "stable"
+        if channel == "nightly":
+            return "nightly"
+        if channel == "edge":
+            return "edge"
+        if channel == "testing":
+            return "testing"
+        raise BuildRepoError(f"{path.name}: unsupported retention channel {channel!r}")
 
+    name = manifest.get("name")
     if isinstance(name, str):
         if name.endswith("-nightly"):
             return "nightly"
@@ -747,6 +737,39 @@ def _retention_channel(path: Path, manifest: Mapping[str, object]) -> str:
         if name.endswith("-edge"):
             return "edge"
     return "stable"
+
+
+def _canonical_build_record(path: Path, manifest: Mapping[str, object]) -> dict[str, object] | None:
+    """Load a canonical package's optional provenance annotation, if present."""
+    name = manifest.get("name")
+    if name != CANONICAL_EMITTED_IDENTITY:
+        return None
+    annotations = manifest.get("annotations")
+    if annotations is not None and not isinstance(annotations, Mapping):
+        raise BuildRepoError(f"{path.name}: annotations must be an object")
+    annotation = annotations.get(PFB_BUILD_RECORD_KEY) if isinstance(annotations, Mapping) else None
+    if annotation is None:
+        # Native stable artifacts predate the provenance annotation.
+        return None
+    if not isinstance(annotation, str):
+        raise BuildRepoError(f"{path.name}: {PFB_BUILD_RECORD_KEY} annotation must be JSON text")
+    if not annotation.lstrip().startswith("{"):
+        raise BuildRepoError(f"{path.name}: {PFB_BUILD_RECORD_KEY} annotation must be a JSON object")
+    try:
+        return load_build_record(annotation)
+    except (PkgError, TypeError, ValueError) as exc:
+        raise BuildRepoError(f"{path.name}: invalid {PFB_BUILD_RECORD_KEY} annotation: {exc}") from None
+
+
+def _validate_annotated_project_pkg(path: Path, manifest: Mapping[str, object]) -> None:
+    """Require full archive validation for canonical packages carrying provenance."""
+    record = _canonical_build_record(path, manifest)
+    if record is None:
+        return
+    try:
+        validate_project_pkg(path, record)
+    except (PkgError, OSError, TypeError, ValueError) as exc:
+        raise BuildRepoError(f"{path.name}: project package validation failed: {exc}") from None
 
 
 def retain_by_channel(
@@ -789,6 +812,8 @@ def retain_by_channel(
         raise BuildRepoError(
             f"release keep values must be >= 0 (got keep_devel={keep_devel}, keep_stable={keep_stable})"
         )
+
+    _check_collisions([(path, read_compact_manifest(path)) for path in sorted(set(pkg_paths))])
 
     devel: list[Path] = []
     stable: list[Path] = []
@@ -981,7 +1006,7 @@ def build_repo_matrix(
 
     **build entries** (``role`` absent or ``"build"`` — the default, unchanged path):
 
-      * RELEASE subtree ``release/<varver>/`` — the testing .pkg, plus the stable
+      * RELEASE subtree ``release/<varver>/`` — the testing and edge .pkgs, plus the stable
         .pkg built from ``stable_tag`` (skipped when no stable tag exists), optionally
         folded with pre-built older-release .pkg from ``release_extra_pkgs``, pruned to
         the ``release_keep_devel`` newest devel + ``release_keep_stable`` newest stable.
@@ -1162,8 +1187,8 @@ def build_repo_matrix(
                 else:
                     sys.stderr.write(f"==> WARNING: no Release .pkg for {varver} {abi} — release catalog skipped\n")
             else:
-                # --- source-build mode: testing + (optional) stable + extras ---
-                # The freshly built testing (+ stable when a stable_tag exists) are always present.
+                # --- source-build mode: testing + edge + (optional) stable + extras ---
+                # The freshly built testing and edge (+ stable when a stable_tag exists) are always present.
                 # release_extra_pkgs supplies pre-built older releases (e.g. downloaded from GitHub
                 # Releases by publish.yml); together they form the full candidate pool, pruned via
                 # retain_by_channel to keep the newest release_keep_devel devel + release_keep_stable
@@ -1205,6 +1230,23 @@ def build_repo_matrix(
                                 **stable_kwargs,
                             )
                         )
+                    edge_record = _record_for(entry, varver, "edge")
+                    edge_kwargs = dict(common)
+                    if edge_record is not None:
+                        record, forwarded = edge_record
+                        edge_kwargs.update(
+                            build_record=forwarded,
+                            pkgversion=record["canonical_package_version"],
+                        )
+                    built_pkgs.append(
+                        builder(
+                            "edge",
+                            out_dir=staging,
+                            ports=ports,
+                            local_src=local_src,
+                            **edge_kwargs,
+                        )
+                    )
                     # Fold in pre-built older-release candidates (caller-provided, e.g. from GitHub
                     # Releases), matched by OS+major (see _pkg_matches_abi).
                     extras = [p for p in (release_extra_pkgs or []) if _pkg_matches_abi(read_compact_manifest(p), abi)]
