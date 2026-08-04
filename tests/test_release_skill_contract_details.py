@@ -92,3 +92,26 @@ def test_scripts_readme_nightly_contract_is_branch_independent() -> None:
     assert "Nightly is an independent untagged" in paragraph
     assert "pinned source SHA" in paragraph
     assert not any(branch in paragraph for branch in ("`devel`", "`main`", "release/X.Y"))
+
+
+def test_branch_independent_adr_contract_is_current() -> None:
+    active = (
+        ROOT / ".agents/skills/release/SKILL.md",
+        ROOT / ".agents/skills/release-with-changelog/SKILL.md",
+        ROOT / ".agents/context/release.md",
+        ROOT / "docs/misc/release-channels.md",
+    )
+    for path in active:
+        assert "Nightly follows devel" not in _text(path), path
+
+    for name in ("ADR_09_Release_Version_Automation", "ADR_18_Nightly_Channel"):
+        content = _text(ROOT / f".ADRs/{name}/ADR.md")
+        amendment = content.rsplit("## Amendment — 2026-08-04", 1)[-1]
+        assert "pinned source SHA" in amendment, name
+        assert "devel` snapshot" not in amendment, name
+
+    for name in ("ADR_17_Pkg_Repository", "ADR_27_Release_Rollback_And_EOL_Routing"):
+        content = _text(ROOT / f".ADRs/{name}/ADR.md")
+        amendment = content.rsplit("## Amendment — 2026-08-04", 1)[-1]
+        assert "pinned pfBlockerNG SHA" in amendment, name
+        assert "no branch inference" in amendment, name
