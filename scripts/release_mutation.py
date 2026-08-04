@@ -189,6 +189,10 @@ def apply_release_mutation(
         raise ValueError("Nightly request provenance does not match allocation")
     state = _validate_observed(observed)
     recovery = _validate_tag_state(nightly, request.result, request, state)
+    if nightly:
+        assert isinstance(request.result, NightlyAllocation)
+        if request.result.outcome == "unchanged" and state.existing_pkg_version is None:
+            raise ValueError("Nightly no-op requires observed existing package")
     if not nightly and request.selected_release_line != request.result.release_line:  # type: ignore[union-attr]
         raise ValueError("selected release line does not match result")
     if state.candidate_vs_latest == "<":
