@@ -2624,10 +2624,10 @@ def test_release_subtree_retains_testing_and_stable(tmp_path: Path) -> None:
     )
     rel_before = out_before / "release" / "ce-2.8" / "packagesite.pkg"
     objs_before = _catalog_objects(rel_before)
-    # 1 window + 1 line pin per channel: the stub's fresh build is version "1.0_1",
-    # a major/minor line ("1.0") distinct from the 3.0.x/2.0.x extras, so it survives
-    # as that line's pin even though the 3.0.x/2.0.x window doesn't include it.
-    assert len(objs_before) == 5  # testing + edge + (1 window + 1 pin) stable
+    # Testing and Stable each keep 1 window entry + 1 line pin; Edge keeps 1.
+    # The stub's fresh build is version "1.0_1", a major/minor line ("1.0")
+    # distinct from the 3.0.x/2.0.x extras, so it survives as that line's pin.
+    assert len(objs_before) == 5
 
     # After-state: with keep=3, the newest 3 of each channel are retained.
     out = tmp_path / "site"
@@ -2665,10 +2665,10 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
         And a fresh testing build (the stub produces version "1.0_1")
         And the newest extras are 3.0.3 (testing) and 2.0.3 (stable)
       When build_repo_matrix runs
-      Then the catalog has exactly 6 objects: 2-window + 1 line-pin testing, and
-        2-window + 1 line-pin stable (the stub's fresh build "1.0_1" is its own
-        major/minor line "1.0", distinct from the 3.0.x/2.0.x extras, so it
-        survives as that line's pin alongside the newest-2 window)
+      Then the catalog has exactly 7 objects: 2-window + 1 line-pin testing,
+        2-window + 1 line-pin stable, and 1 edge (the stub's fresh build "1.0_1"
+        is its own major/minor line "1.0", distinct from the 3.0.x/2.0.x extras,
+        so it survives as that line's pin alongside the newest-2 window)
        And the highest-version testing object is at least 3.0.3
        And the highest-version stable object is at least 2.0.3
        And every kept (name, version) pair appears exactly once (no duplicates)
@@ -2695,7 +2695,8 @@ def test_release_catalog_lists_all_kept_versions(tmp_path: Path) -> None:
     rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     objs = _catalog_objects(rel)
 
-    # 6 catalog entries: (2-window + 1 line-pin) testing + (2-window + 1 line-pin) stable.
+    # 7 catalog entries: (2-window + 1 line-pin) testing + (2-window + 1 line-pin)
+    # stable + 1 edge.
     # The stub's fresh build ("1.0_1") is its own major/minor line ("1.0"), distinct
     # from the 3.0.x/2.0.x extras, so it survives as that line's pin alongside the
     # newest-2 window.
