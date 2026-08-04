@@ -330,9 +330,8 @@ corrected here; the accepted body and that earlier amendment remain immutable hi
   distinct Edge target, reuse the exact Testing Release and artifact bytes, checksums, source,
   provenance, tag, and notes. No rebuild or second Release is allowed. When its target becomes
   Stable, Edge follows Testing until a new target is configured.
-- Nightly is an independent untagged snapshot from an explicit pinned source SHA. It creates
-  no tag, GitHub Release, or release notes. A changed input uses UTC `YYYYMMDD`, then
-  `YYYYMMDD_1`, `_2`, and so on for
+- Nightly is an independent untagged `devel` snapshot. It creates no tag, GitHub Release, or
+  release notes. A changed input uses UTC `YYYYMMDD`, then `YYYYMMDD_1`, `_2`, and so on for
   same-day changes; unchanged or skipped days are no-ops. Identity includes source SHA,
   FreeBSD-ports SHA, and matrix/dependency digest.
 - The Ports recipe is static: no routine version commit, no target final, and no PORTEPOCH.
@@ -341,3 +340,10 @@ corrected here; the accepted body and that earlier amendment remain immutable hi
 
 This correction is authoring-only. Workflow implementation remains at the current base
 revision and later builder, publisher, catalog, and client issues own migration.
+
+## Amendment — 2026-08-04: branch-independent Nightly source clarification (issue #2140)
+
+Nightly source is an explicit pinned source SHA (the pinned pfBlockerNG SHA) plus the FreeBSD-ports SHA and
+matrix/dependency digest; no branch inference selects it. The preceding amendment's `devel`
+wording remains historical compatibility context and does not define the current authoring
+contract.
