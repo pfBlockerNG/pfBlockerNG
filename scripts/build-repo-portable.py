@@ -719,6 +719,8 @@ def _retention_channel(path: Path, manifest: Mapping[str, object]) -> str:
         if annotation is not None:
             if not isinstance(annotation, str):
                 raise BuildRepoError(f"{path.name}: {PFB_BUILD_RECORD_KEY} annotation must be JSON text")
+            if not annotation.lstrip().startswith("{"):
+                raise BuildRepoError(f"{path.name}: {PFB_BUILD_RECORD_KEY} annotation must be a JSON object")
             try:
                 channel = load_build_record(annotation)["channel"]
             except (PkgError, TypeError, ValueError) as exc:
@@ -777,8 +779,9 @@ def retain_by_channel(
     otherwise flow into ``_retain_newest``'s ``[:keep]`` slice and silently drop the newest
     builds — fail fast instead).
 
-    Returns the kept paths in a deterministic stable order (devel first, then stable, then
-    nightly; within each bucket the window newest-first, then any line pins newest-first).
+    Returns the kept paths in a deterministic stable order (devel first, then stable, edge,
+    and nightly; within each pruned bucket the window newest-first, then any line pins
+    newest-first).
     """
     if keep_devel < 0 or keep_stable < 0:
         raise BuildRepoError(
