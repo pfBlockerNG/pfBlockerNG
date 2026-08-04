@@ -207,7 +207,7 @@ SHEOF
         --abi 'FreeBSD:15:amd64' \
         --py-flavor 'py311' \
         --php '8.3' \
-        --pkgversion '4.0.0.rc.1' \
+        --pkgversion '4.0.0.r1' \
         --annotate 'created=1750000000' \
         --annotate 'commit=abc1234567890abcdef' \
         2>/dev/null
@@ -231,7 +231,7 @@ SHEOF
       # When: builder argv is recorded.
       # Then: all three flags and their values appear in the recorded argv.
       When call check_release_leg
-      The output should include 'pkgversion=4.0.0.rc.1'
+      The output should include 'pkgversion=4.0.0.r1'
       The output should include 'annotate_created=present'
       The output should include 'annotate_commit=present'
     End
@@ -274,7 +274,7 @@ SHEOF
     check_no_arch_combined() {
       sh "${FAKE_SCRIPTS}/build-leg.sh" \
         --channel testing \
-        --pkgversion '4.0.0.rc.1' \
+        --pkgversion '4.0.0.r1' \
         --annotate 'created=1750000000' \
         --annotate 'commit=abc1234567890abcdef' \
         --no-arch \
@@ -300,7 +300,7 @@ SHEOF
     It '--no-arch combined with --pkgversion and repeated --annotate: all present, arg order unbroken'
       When call check_no_arch_combined
       The output should include 'no_arch=present'
-      The output should include 'pkgversion=4.0.0.rc.1'
+      The output should include 'pkgversion=4.0.0.r1'
       The output should include 'annotate_created=present'
       The output should include 'annotate_commit=present'
     End
@@ -319,7 +319,7 @@ SHEOF
       fi
       # release leg: with --pkgversion (different argv file)
       export BUILDER_ARGV_FILE="${WORK}/argv_release"
-      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel testing --pkgversion '4.0.0.rc.1' 2>/dev/null
+      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel testing --pkgversion '4.0.0.r1' 2>/dev/null
       if grep -qF -- '--pkgversion' "${WORK}/argv_release" 2>/dev/null; then
         echo "release_pv=present"
       else
@@ -346,7 +346,7 @@ SHEOF
         --abi 'FreeBSD:15:amd64' \
         --py-flavor 'py311' \
         --php '8.3' \
-        --pkgversion '3.2.16.20260606.2' \
+        --pkgversion '20260606_2' \
         --annotate 'commit=deadbeef00000000cafebabe' \
         2>/dev/null
       echo "channel=$(arg_after '--channel' "$BUILDER_ARGV_FILE")"
@@ -358,14 +358,14 @@ SHEOF
       fi
     }
 
-    It 'records channel nightly, --pkgversion 3.2.16.20260606.2, and --annotate commit in builder argv'
+    It 'records channel nightly, --pkgversion 20260606_2, and --annotate commit in builder argv'
       # Scenario: smoke repo-leg builds a nightly .pkg with a pinned version + commit annotation.
       # Given: build-leg.sh called with nightly channel, hard-coded pkgversion, annotate commit.
       # When: builder argv is recorded.
       # Then: channel=nightly, pkgversion and annotate commit match the inputs.
       When call check_smoke_leg
       The output should include 'channel=nightly'
-      The output should include 'pkgversion=3.2.16.20260606.2'
+      The output should include 'pkgversion=20260606_2'
       The output should include 'annotate_commit=present'
     End
   End

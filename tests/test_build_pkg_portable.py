@@ -152,9 +152,9 @@ def test_makefile_line_continuation_and_recipe_capture(tmp_path: Path) -> None:
         ("1.0", "2", "3", "1.0_2,3"),
         # bsd.port.mk: PKGVERSION = ${PORTVERSION:C/[-_,]/./g}… — '-'/'_'/',' in
         # PORTVERSION become '.' BEFORE the _REV/,EPOCH suffixes are appended
-        # (else a '4.0.0-rc1' edit would break the <name>-<version>.pkg split).
-        ("4.0.0-rc1", "", "", "4.0.0.rc1"),
-        ("4.0.0-rc1", "2", "", "4.0.0.rc1_2"),
+        # (else a '4.0.0-r1' edit would break the <name>-<version>.pkg split).
+        ("4.0.0-r1", "", "", "4.0.0.r1"),
+        ("4.0.0-r1", "2", "", "4.0.0.r1_2"),
         ("1_0,x", "", "", "1.0.x"),
     ],
 )
@@ -995,9 +995,9 @@ def test_makefile_apply_mods_rejects_uninterpretable_s_body(mods: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Nightly overrides (ADR-18 --channel nightly): --pkgversion / --annotate.
+# Explicit version and annotation overrides: --pkgversion / --annotate.
 # The pair below is the branch contrast — OFF (release build, default flags) vs
-# ON (nightly overrides) — proving the overrides are a real branch, not an
+# ON (explicit overrides) — proving the overrides are a real branch, not an
 # always-on path. Neither ever emits a `conflicts` key (the portable builder
 # never does — mutual exclusion with the release builds is by file overlap).
 # --------------------------------------------------------------------------- #
@@ -1007,7 +1007,7 @@ def test_overrides_off_release_build_is_plain(tmp_path: Path) -> None:
     """OFF: with no --pkgversion/--annotate the manifest is the plain release shape.
 
     Given the synthetic port built with default flags,
-    When no nightly override is passed,
+    When no explicit override is passed,
     Then version comes from PORTVERSION(_PORTREVISION), the comment is verbatim, the
       only annotation is the FreeBSD_version, and there is no `conflicts` key.
     """
@@ -1025,11 +1025,11 @@ def test_overrides_off_release_build_is_plain(tmp_path: Path) -> None:
     assert "conflicts" not in full and "conflicts" not in compact
 
 
-def test_overrides_on_nightly_version_and_annotation(tmp_path: Path) -> None:
-    """ON: --pkgversion sets the comparable version; --annotate rides annotations + comment.
+def test_explicit_version_and_annotation_overrides(tmp_path: Path) -> None:
+    """ON: --pkgversion sets the version; --annotate rides annotations + comment.
 
     Given the SAME synthetic port,
-    When --pkgversion <target>.YYYYMMDD.N and repeatable --annotate K=V are passed,
+    When --pkgversion 4.0.0.a24 and repeatable --annotate K=V are passed,
     Then the manifest version is the override (NOT PORTVERSION), each K=V merges into
       `annotations` (on top of FreeBSD_version) AND appends to `comment` (so both
       `pkg info` and `pkg info -A` surface the provenance) — still NO `conflicts` key.
@@ -1039,19 +1039,19 @@ def test_overrides_on_nightly_version_and_annotation(tmp_path: Path) -> None:
     rc = bpp.main(
         ["--ports", str(ports), "--port-dir", str(portdir), "--abi", "FreeBSD:15:amd64",
          "--py-flavor", "py311", "--compression", "xz", "--freebsd-version", "1500068",
-         "--pkgversion", "3.2.16.20260606.1", "--annotate", "commit=deadbeef", "--annotate", "build=ci",
+         "--pkgversion", "4.0.0.a24", "--annotate", "commit=deadbeef", "--annotate", "build=ci",
          "--out", str(out)]
     )  # fmt: skip
     assert rc == 0
-    full, compact, _ = _read_pkg(out / "testpkg-3.2.16.20260606.1.pkg")
-    assert full["version"] == "3.2.16.20260606.1"  # the override, NOT 1.0_2
+    full, compact, _ = _read_pkg(out / "testpkg-4.0.0.a24.pkg")
+    assert full["version"] == "4.0.0.a24"  # the override, NOT 1.0_2
     assert full["annotations"] == {"FreeBSD_version": "1500068", "commit": "deadbeef", "build": "ci"}
     assert full["comment"] == "Test port (commit=deadbeef, build=ci)"
     assert "conflicts" not in full and "conflicts" not in compact
 
 
-@pytest.mark.parametrize("ver", ["20260606", "3.2.16.20260606.1", "4.0.0.20260606.10"])
-def test_validate_pkgversion_accepts_pkg_safe_dotted(ver: str) -> None:
+@pytest.mark.parametrize("ver", ["20260606", "20260606_2", "4.0.0.a24", "4.0.0.r1"])
+def test_validate_pkgversion_accepts_pkg_safe_versions(ver: str) -> None:
     assert bpp.validate_pkgversion(ver) == ver
 
 
