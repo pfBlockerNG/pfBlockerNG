@@ -81,8 +81,8 @@ Missing, malformed, conflicting, or changed observations fail closed before muta
 
 Stable and Testing may coexist for each maintained `release/X.Y`; exactly one explicitly
 configured line supplies Edge. Supporting simultaneous Edge lines requires an owner decision
-and separate/equal-priority catalogs; branch sorting is never a substitute. Nightly follows
-`devel`.
+and separate/equal-priority catalogs; branch sorting is never a substitute. Nightly uses an
+explicit pinned source SHA; no branch inference selects it.
 
 Fixes start on the oldest affected maintained line. Land that line through its own PR and
 gates, then cherry-pick forward with `git cherry-pick -x` through newer maintained lines and

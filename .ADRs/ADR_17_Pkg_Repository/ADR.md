@@ -468,3 +468,10 @@ Issue #2140 defines the version/classification and mutation-precondition seams o
 change this ADR's deployed catalogs. Issues #2144–#2147 own builder, publisher, and catalog
 migration; issue #2148 owns the client transition. Existing catalogs stay operational until those
 changes land.
+
+## Amendment — 2026-08-04: Nightly source identity is explicit (issue #2140)
+
+Nightly source identity is an explicit pinned pfBlockerNG SHA plus the FreeBSD-ports SHA and
+matrix/dependency digest; no branch inference selects the source. Earlier `devel` statements
+remain historical descriptions of the compatibility publication path and do not define the
+issue #2140 authoring contract.

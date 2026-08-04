@@ -573,8 +573,8 @@ own that migration. Retention still provides availability, not downgrade support
 
 The preceding snapshot-rank amendment is historical and is superseded for release authoring by
 this correction; accepted text remains immutable. Nightly uses the exact package identity
-`pfSense-pkg-pfBlockerNG` and is an independent untagged `devel` snapshot. It creates no tag,
-GitHub Release, or release notes. A changed input uses UTC `YYYYMMDD`; another changed input on
+`pfSense-pkg-pfBlockerNG` and is an independent untagged snapshot from an explicit pinned source SHA.
+It creates no tag, GitHub Release, or release notes. A changed input uses UTC `YYYYMMDD`; another changed input on
 the same day uses `YYYYMMDD_1`, then `_2`, while an unchanged input or skipped day is a no-op.
 
 Nightly identity includes source SHA, FreeBSD-ports SHA, and matrix/dependency digest. The Ports
