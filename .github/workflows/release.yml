@@ -787,7 +787,7 @@ jobs:
                 git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null || continue
                 tch=$(git for-each-ref --format='%(contents)' "refs/tags/${t}" \
                   | git interpret-trailers --parse \
-                  | sed -n 's/^pfBlockerNG-Release-Channel: \(stable\|testing\|edge\)$/\1/p') || true
+                  | sed -n 's/^pfBlockerNG-Release-Channel: \(stable\|testing\|edge\)$/\1/p') || true # retired-token-ok: exact canonical trailer extraction
                 [ "$(printf '%s\n' "$tch" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 1 ] || continue
                 [ "$tch" = "$CHANNEL" ] && { echo "$t"; break; }
               done) || true
