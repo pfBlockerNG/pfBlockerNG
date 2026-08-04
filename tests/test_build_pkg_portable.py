@@ -1449,7 +1449,7 @@ def _record(
     row: dict[str, object] | None = None,
 ) -> dict:
     if version is None:
-        version = {"stable": "4.0.0", "testing": "4.0.0.a1", "edge": "4.0.0.b1", "nightly": "20260804_1"}[channel]
+        version = {"stable": "4.0.0", "testing": "4.0.1.a1", "edge": "4.0.0.b1", "nightly": "20260804_1"}[channel]
     row = dict(row or _LIVE_BUILD_ROWS[0])
     version_parts = str(row["pfsense_version"]).split(".")
     route = f"{channel}/{str(row['variant']).lower()}-{version_parts[0]}.{version_parts[1]}"
@@ -1462,7 +1462,7 @@ def _record(
         else {"stable": "final", "testing": "alpha", "edge": "beta"}[channel],
         "source_tag": None
         if channel == "nightly"
-        else {"stable": "v4.0.0", "testing": "v4.0.0.a1", "edge": "v4.0.0.b1"}[channel],
+        else {"stable": "v4.0.0", "testing": "v4.0.1.a1", "edge": "v4.0.0.b1"}[channel],
         "source_sha": source_sha,
         "canonical_package_version": version,
         "native_recipe_identity": _CHANNEL_IDENTITIES[channel],
@@ -1493,7 +1493,7 @@ def _make_channel_port(
     (files / "pkg-deinstall.in").write_text("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages %%PORTNAME%% ${2}\n")
     portdir.joinpath("pkg-descr").write_text("Channel fixture.\n\nWWW: https://example.org/pfblockerng\n")
     portdir.joinpath("pkg-plist").write_text("%%DATADIR%%/info.xml\n")
-    version = {"stable": "4.0.0", "testing": "4.0.0.a1", "edge": "4.0.0.b1", "nightly": "4.0.0"}[channel]
+    version = {"stable": "4.0.0", "testing": "4.0.1.a1", "edge": "4.0.0.b1", "nightly": "4.0.0"}[channel]
     gh_block = "USE_GITHUB=\tyes\nGH_ACCOUNT=\tfixture\nGH_PROJECT=\tpfsense\nGH_TAGNAME=\tstatic\n" if github else ""
     source_expr = (
         "${WRKSRC}/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml"
@@ -1525,7 +1525,7 @@ def _make_channel_port(
             "<package><name>%%PKGNAME%%</name><version>%%PKGVERSION%%</version></package>\n"
         )
         source_sha = _git_init(source)
-        source_tag = {"stable": "v4.0.0", "testing": "v4.0.0.a1", "edge": "v4.0.0.b1", "nightly": "v4.0.0"}[channel]
+        source_tag = {"stable": "v4.0.0", "testing": "v4.0.1.a1", "edge": "v4.0.0.b1", "nightly": "v4.0.0"}[channel]
         _git(source, "tag", source_tag)
     return ports, portdir, ports_sha, source_sha
 
@@ -1600,7 +1600,7 @@ def test_native_channel_identities_remain_distinct(tmp_path: Path, channel: str)
     if channel == "nightly":
         args += ["--pkgversion", "20260804_1"]
     assert bpp.main(args) == 0
-    expected_version = {"stable": "4.0.0", "testing": "4.0.0.a1", "edge": "4.0.0.b1", "nightly": "20260804_1"}[channel]
+    expected_version = {"stable": "4.0.0", "testing": "4.0.1.a1", "edge": "4.0.0.b1", "nightly": "20260804_1"}[channel]
     pkg = out / f"{_CHANNEL_IDENTITIES[channel]}-{expected_version}.pkg"
     full, _compact, _tf = _read_pkg(pkg)
     assert full["name"] == _CHANNEL_IDENTITIES[channel]

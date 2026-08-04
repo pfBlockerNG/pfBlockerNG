@@ -67,6 +67,12 @@ def test_context_classifies_shared_tag_grammar(
         ("v3.2.15.a1", "stable"),
         ("v3.2.15", "testing"),
         ("v4.0.0.a1", "stable"),
+        ("v4.0.0.a1", "testing"),
+        ("v4.0.0.b1", "testing"),
+        ("v4.0.0.r1", "testing"),
+        ("v3.2.16.a1", "edge"),
+        ("v3.2.16.b1", "edge"),
+        ("v3.2.16.r1", "edge"),
         ("v4.0.0", "edge"),
         ("v4.0.0.alpha.1", "testing"),
         ("v4.0.0.edge.20260804.1", "edge"),
@@ -141,7 +147,7 @@ def test_hostile_wrapper_inputs_emit_no_assignments(tag: str, channel: str) -> N
 def test_matching_release_line_is_required_for_tagged_context() -> None:
     info = parse_release_tag("v3.2.15", "stable")  # type: ignore[arg-type,call-arg]
     validate_branch(info, "release/3.2")
-    validate_branch(parse_release_tag("v3.2.16.a1", "edge"), "release/3.2")  # type: ignore[arg-type,call-arg]
+    validate_branch(parse_release_tag("v3.2.16.a1", "testing"), "release/3.2")  # type: ignore[arg-type,call-arg]
 
 
 @pytest.mark.parametrize("branch", ["main", "devel", "release/3.3", "feature/release", ""])
