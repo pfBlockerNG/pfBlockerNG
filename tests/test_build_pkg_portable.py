@@ -1478,7 +1478,7 @@ def _record(
     record = {
         "schema": 1,
         "channel": channel,
-        "release_line": "devel" if channel == "nightly" else "release/4.0",
+        "release_line": "release/4.0",
         "classification": "nightly"
         if channel == "nightly"
         else {"stable": "final", "testing": "alpha", "edge": "beta"}[channel],

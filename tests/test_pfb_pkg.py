@@ -150,7 +150,7 @@ def test_build_record_channel_identities(
     record = _record(
         channel=channel,
         source_tag=tag,
-        release_line="devel" if channel == "nightly" else "release/2.8",
+        release_line="release/4.0" if channel == "nightly" else "release/2.8",
         classification=classification,
         canonical_package_version=version,
         native_recipe_identity=recipe,
@@ -184,7 +184,7 @@ def test_build_record_nightly_calendar_and_null_rules() -> None:
         record = _record(
             channel="nightly",
             source_tag=None,
-            release_line="devel",
+            release_line="release/4.0",
             classification="nightly",
             canonical_package_version=value,
             native_recipe_identity="pfSense-pkg-pfBlockerNG-nightly",
@@ -196,7 +196,7 @@ def test_build_record_nightly_calendar_and_null_rules() -> None:
     record = _record(
         channel="nightly",
         source_tag=None,
-        release_line="devel",
+        release_line="release/4.0",
         classification="nightly",
         canonical_package_version="20260101",
         native_recipe_identity="pfSense-pkg-pfBlockerNG-nightly",

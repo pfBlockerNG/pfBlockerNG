@@ -277,7 +277,7 @@ def validate_build_record(
     if not isinstance(version, str) or not isinstance(release_line, str) or not isinstance(classification, str):
         raise _record_error("version, release_line, and classification must be strings")
     if channel == "nightly":
-        if source_tag is not None or release_line != "devel" or classification != "nightly":
+        if source_tag is not None or not release_line or classification != "nightly":
             raise _record_error("nightly source/provenance fields are invalid")
         match = _NIGHTLY_VERSION.fullmatch(version)
         if not match:
