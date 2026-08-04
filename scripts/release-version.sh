@@ -1,9 +1,7 @@
 #!/bin/sh
-# Usage: release-version.sh <tag> [branch]
-# Tags: vX.Y.Z (Stable), vX.Y.Z.{alpha|beta|rc}.N (Testing), or
-#       vX.Y.Z.edge.YYYYMMDD.N (Edge); optional branch must be release/X.Y,
-#       with main/devel accepted as legacy aliases for Stable/Testing only.
-# Python API branch validation is canonical by default; pass legacy=True for those aliases.
+# Usage: release-version.sh <tag> <channel> [branch]
+# Tags: vX.Y.Z (stable), or vX.Y.Z.{a|b|r}N (testing/edge); optional branch
+# must be the matching release/X.Y line.
 # Output: legacy version/channel/prerelease/prekind/portversion first, then
 #         canonical release_channel/tag/stage/sequence/target_final/release_line/
 #         final/notes_required/github_release/package KEY=VALUE assignments.
