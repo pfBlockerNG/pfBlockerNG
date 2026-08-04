@@ -1818,12 +1818,16 @@ def test_project_record_rejects_conflicting_source_date_epoch(
     assert not out.exists() or not list(out.glob("*.pkg"))
 
 
+@pytest.mark.parametrize("ambient", [None, "1700000000"])
 def test_project_record_source_date_epoch_controls_package_mtime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ambient: str | None
 ) -> None:
     ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "stable")
     record = _record("stable", ports_sha)
-    monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
+    if ambient is None:
+        monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
+    else:
+        monkeypatch.setenv("SOURCE_DATE_EPOCH", ambient)
     out = tmp_path / "out"
     assert (
         bpp.main(
