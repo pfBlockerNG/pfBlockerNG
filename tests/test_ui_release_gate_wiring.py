@@ -913,8 +913,12 @@ def test_smoke_single_nightly_fixture_uses_a_utc_date_and_optional_counter() -> 
     assert "date -u +%Y%m%d" in nightly, nightly
     assert re.search(r"YYYYMMDD|NIGHTLY_DATE", nightly), nightly
     assert 'NIGHTLY_COUNT="${NIGHTLY_COUNT:-0}"' in nightly, nightly
-    assert 'NIGHTLY_VERSION="$NIGHTLY_DATE"' in nightly, nightly
-    assert 'NIGHTLY_VERSION="${NIGHTLY_DATE}_${NIGHTLY_COUNT}"' in nightly, nightly
+    assert re.search(
+        r'NIGHTLY_VERSION="\$NIGHTLY_DATE"\s+'
+        r'if \[ "\$NIGHTLY_COUNT" -gt 0 \]; then\s+'
+        r'NIGHTLY_VERSION="\${NIGHTLY_DATE}_\${NIGHTLY_COUNT}"\s+fi',
+        nightly,
+    ), nightly
     assert 'NIGHTLY_VERSION="3.2.16.${NIGHTLY_DATE}' not in nightly, nightly
     assert "20260606" not in nightly, nightly
 
