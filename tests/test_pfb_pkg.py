@@ -363,6 +363,7 @@ def test_inspect_and_validate_project_pkg_full_cascade(tmp_path: Path, compressi
     [
         "/usr/local/share/pfSense-pkg-pfBlockerNG-testing/rogue",
         "/usr/local/pkg/pfSense-pkg-pfBlockerNG-testing/rogue",
+        "/usr/local/pkg/rogue-pfSense-pkg-pfBlockerNG-testing/file",
     ],
 )
 def test_validate_project_pkg_rejects_native_identity_in_payload_path(tmp_path: Path, native_path: str) -> None:
@@ -456,6 +457,13 @@ def test_inspect_pkg_decodes_archive_once_and_returns_only_used_evidence(
             lambda c, f, p: (
                 c["annotations"].update(channel_alias="pfSense-pkg-pfBlockerNG-testing"),
                 f["annotations"].update(channel_alias="pfSense-pkg-pfBlockerNG-testing"),
+            ),
+            "native identity.*annotation",
+        ),
+        (
+            lambda c, f, p: (
+                c["annotations"].update({"pfSense-pkg-pfBlockerNG-testing": "legacy"}),
+                f["annotations"].update({"pfSense-pkg-pfBlockerNG-testing": "legacy"}),
             ),
             "native identity.*annotation",
         ),
