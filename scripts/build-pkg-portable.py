@@ -1456,24 +1456,21 @@ def _reject_index_overrides(path: Path, label: str) -> None:
             raise BuildError(f"{label} checkout has materialized skip-worktree path: {relative}")
 
 
-def _reject_external_tracked_symlinks(path: Path, payload_root: Path, label: str) -> None:
-    repo_root = path.resolve()
+def _reject_external_payload_symlinks(payload_root: Path, label: str) -> None:
     payload_root = payload_root.absolute()
     payload_target = payload_root.resolve(strict=False)
-    if not payload_target.is_relative_to(repo_root):
-        raise BuildError(f"{label} checkout payload root escapes source tree: {payload_root}")
-    for entry in _git_probe(path, "ls-files", "--stage", "-z").split("\0"):
-        if "\t" not in entry:
-            continue
-        metadata, relative = entry.split("\t", 1)
-        if not metadata.startswith("120000 "):
-            continue
-        link = repo_root / relative
-        if not link.is_relative_to(payload_root):
-            continue
-        target = link.resolve(strict=False)
-        if not target.is_relative_to(payload_target):
-            raise BuildError(f"{label} checkout tracked symlink escapes source tree: {relative}")
+    for root, dirs, files in os.walk(payload_root, followlinks=False):
+        for name in (*dirs, *files):
+            link = Path(root) / name
+            if not link.is_symlink():
+                continue
+            relative = link.relative_to(payload_root)
+            try:
+                target = link.resolve(strict=False)
+            except (OSError, RuntimeError) as exc:
+                raise BuildError(f"{label} checkout payload symlink cannot be resolved: {relative}: {exc}") from None
+            if not target.is_relative_to(payload_target):
+                raise BuildError(f"{label} checkout payload symlink escapes source tree: {relative}")
 
 
 def _attest_checkout(
@@ -1502,7 +1499,10 @@ def _attest_checkout(
         if tag_sha != expected_sha:
             raise BuildError(f"{label} source tag {source_tag!r} resolves to {tag_sha!r}, not {expected_sha!r}")
     if payload_root is not None:
-        _reject_external_tracked_symlinks(path, payload_root, label)
+        payload_target = payload_root.resolve(strict=False)
+        if not payload_target.is_relative_to(path):
+            raise BuildError(f"{label} checkout payload root escapes source tree: {payload_root}")
+        _reject_external_payload_symlinks(payload_root, label)
 
 
 def _validate_nightly_version(version: str) -> str:

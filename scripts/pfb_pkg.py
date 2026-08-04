@@ -480,6 +480,8 @@ def _manifest_annotation(manifest: Mapping[str, object], record: Mapping[str, ob
 def _check_script(script: object, pkg_name: str) -> None:
     if not isinstance(script, str):
         raise PkgError(f"{pkg_name}: install/deinstall script is not text")
+    if not script.startswith("#!/bin/sh\n"):
+        raise PkgError(f"{pkg_name}: lifecycle hook must use an exact #!/bin/sh shebang")
     commands: list[tuple[str, ...]] = []
     for line in script.splitlines():
         try:
