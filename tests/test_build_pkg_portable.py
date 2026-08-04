@@ -17,9 +17,11 @@ import io
 import json
 import lzma
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -1411,33 +1413,31 @@ def _git_init(repo: Path) -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
-_LIVE_BUILD_ROWS = (
-    {
-        "variant": "CE",
-        "pfsense_version": "2.8",
-        "channel": "CE",
-        "freebsd_version": "15.0-RELEASE",
-        "freebsd_major": "15",
-        "php_version": "8.3",
-        "py_flavor": "py311",
-        "status": "active",
-        "extra_pkgs": ["textproc/py-charset-normalizer"],
-        "upgrade": {"available": False},
-    },
-    {
-        "variant": "Plus",
-        "pfsense_version": "26.07",
-        "channel": "Plus",
-        "freebsd_version": "16.0-RELEASE",
-        "freebsd_major": "16",
-        "php_version": "8.5",
-        "py_flavor": "py311",
-        "status": "beta",
-        "extra_pkgs": [],
-        "upgrade": {"available": False},
-        "image_name": "pfsense-plus",
-    },
-)
+def _live_build_rows() -> tuple[dict[str, object], ...]:
+    matrix_script = Path(__file__).resolve().parent.parent / "scripts" / "read-version-matrix.sh"
+    try:
+        result = subprocess.run(
+            ["sh", str(matrix_script), "--print-build"],
+            cwd=matrix_script.parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip("ci-metadata matrix not available in this environment", allow_module_level=True)
+    if result.returncode != 0 or not result.stdout.strip():
+        pytest.skip("ci-metadata matrix not available in this environment", allow_module_level=True)
+    try:
+        rows = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        pytest.skip("ci-metadata matrix output is invalid", allow_module_level=True)
+    if not isinstance(rows, list) or not rows:
+        pytest.skip("ci-metadata build matrix is empty", allow_module_level=True)
+    return tuple(rows)
+
+
+_LIVE_BUILD_ROWS = _live_build_rows()
 
 
 def _record(
@@ -1537,6 +1537,8 @@ def _project_args(
     *,
     source: Path | None = None,
     extra: list[str] | None = None,
+    dry_run: bool = True,
+    out: Path | None = None,
 ) -> list[str]:
     args = [
         "--ports",
@@ -1561,8 +1563,11 @@ def _project_args(
         json.dumps(record),
         "--compression",
         "xz",
-        "--dry-run",
     ]
+    if dry_run:
+        args.append("--dry-run")
+    if out is not None:
+        args += ["--out", str(out)]
     if source is not None:
         args += ["--local-src", str(source)]
     if extra:
@@ -2144,6 +2149,42 @@ def test_output_parent_symlink_returns_failure_without_following(tmp_path: Path)
     assert not (target / "nested").exists()
 
 
+@pytest.mark.parametrize("alias,canonical", [("/tmp", "/private/tmp"), ("/var", "/private/var")])
+def test_output_macos_os_alias_is_allowed(tmp_path: Path, alias: str, canonical: str) -> None:
+    if not Path(alias).is_symlink() or Path(alias).resolve() != Path(canonical):
+        pytest.skip(f"{alias} is not the documented macOS alias")
+    ports, portdir = _make_classic_port(tmp_path)
+    if alias == "/tmp":
+        canonical_out = Path(tempfile.mkdtemp(prefix="pfbng-portable-", dir="/private/tmp"))
+        out = Path(alias) / canonical_out.relative_to("/private/tmp")
+    else:
+        canonical_out = Path(tempfile.mkdtemp(prefix="pfbng-portable-", dir=tmp_path))
+        out = Path(alias) / canonical_out.relative_to("/private/var")
+    try:
+        assert (
+            bpp.main(
+                [
+                    "--ports",
+                    str(ports),
+                    "--port-dir",
+                    str(portdir),
+                    "--abi",
+                    "FreeBSD:15:amd64",
+                    "--py-flavor",
+                    "py311",
+                    "--compression",
+                    "xz",
+                    "--out",
+                    str(out),
+                ]
+            )
+            == 0
+        )
+        assert list(out.glob("*.pkg"))
+    finally:
+        shutil.rmtree(out)
+
+
 @pytest.mark.parametrize(
     "flag",
     [
@@ -2188,13 +2229,24 @@ def test_project_matrix_rows_cover_all_channels(tmp_path: Path, channel: str, ro
         tmp_path, channel, github=True, php_version=str(row["php_version"])
     )
     record = _record(channel, ports_sha, source_sha=source_sha, row=row)
-    args = _project_args(ports, portdir, record, source=tmp_path / "source")
+    out = tmp_path / "out"
+    args = _project_args(ports, portdir, record, source=tmp_path / "source", dry_run=False, out=out)
     args[args.index("--variant") + 1] = str(row["variant"])
     args[args.index("--abi") + 1] = f"FreeBSD:{row['freebsd_major']}:amd64"
     args[args.index("--arch") + 1] = f"freebsd:{row['freebsd_major']}:*"
     args[args.index("--py-flavor") + 1] = str(row["py_flavor"])
     args[args.index("--php") + 1] = str(row["php_version"])
     assert bpp.main(args) == 0
+    pkg = out / f"pfSense-pkg-pfBlockerNG-{record['canonical_package_version']}.pkg"
+    result = bpp.validate_project_pkg(pkg, record)
+    manifest = result["inspection"]["manifest"]
+    assert manifest["name"] == "pfSense-pkg-pfBlockerNG"
+    assert manifest["origin"] == "net/pfSense-pkg-pfBlockerNG"
+    assert manifest["abi"] == f"FreeBSD:{row['freebsd_major']}:*"
+    assert manifest["arch"] == f"freebsd:{row['freebsd_major']}:*"
+    assert manifest["annotations"]["pfb_build_record"] == json.dumps(
+        record, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
 
 
 @pytest.mark.parametrize("index_flag", ["--assume-unchanged", "--skip-worktree"])
@@ -2258,6 +2310,47 @@ def test_project_rejects_tracked_source_root_symlink(tmp_path: Path) -> None:
     _git(source, "tag", "-f", "v4.0.0")
     record = _record("stable", ports_sha, source_sha=source_sha)
     assert bpp.main(_project_args(ports, portdir, record, source=source)) == 1
+
+
+def test_project_rejects_in_tree_source_payload_symlink(tmp_path: Path) -> None:
+    ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "stable", github=True)
+    source = tmp_path / "source"
+    payload = source / "src/usr/local/share/pfSense-pkg-pfBlockerNG"
+    (payload / "alias.xml").symlink_to("info.xml")
+    _git(source, "add", "-A")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-qm", "in-tree-link")
+    source_sha = _git(source, "rev-parse", "HEAD")
+    _git(source, "tag", "-f", "v4.0.0")
+    record = _record("stable", ports_sha, source_sha=source_sha)
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+
+    assert bpp.main(_project_args(ports, portdir, record, source=source)) == 1
+
+
+def test_project_source_snapshot_ignores_post_attestation_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ports, portdir, ports_sha, source_sha = _make_channel_port(tmp_path, "stable", github=True)
+    source = tmp_path / "source"
+    record = _record("stable", ports_sha, source_sha=source_sha)
+    original = (source / "src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml").read_bytes()
+    real_attest = bpp._attest_checkout
+
+    def attest_then_mutate(*args: Any, **kwargs: Any) -> None:
+        real_attest(*args, **kwargs)
+        if args[2] == "source":
+            (source / "src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml").write_bytes(b"tampered\n")
+
+    monkeypatch.setattr(bpp, "_attest_checkout", attest_then_mutate)
+    out = tmp_path / "out"
+    args = _project_args(ports, portdir, record, source=source, dry_run=False, out=out)
+    assert bpp.main(args) == 0
+    pkg = out / f"pfSense-pkg-pfBlockerNG-{record['canonical_package_version']}.pkg"
+    result = bpp.validate_project_pkg(pkg, record)
+    payload = result["inspection"]["payload"]["/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml"]
+    assert payload == original.replace(b"%%PKGNAME%%", b"pfBlockerNG").replace(
+        b"%%PKGVERSION%%", record["canonical_package_version"].encode()
+    )
 
 
 def test_project_ignores_tracked_symlink_outside_source_payload(tmp_path: Path) -> None:
