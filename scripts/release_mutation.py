@@ -1,4 +1,4 @@
-"""Fail-closed preconditions for release artifact mutation."""
+"""Fail-closed preconditions for tagged and independent Nightly mutation."""
 
 from __future__ import annotations
 
@@ -6,13 +6,16 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Literal
 
-from scripts.release_version import ReleaseInfo, validate_release_info
+from scripts import release_version as rv
 
+ReleaseInfo = rv.ReleaseInfo
+NightlyAllocation = rv.NightlyAllocation
 ReleaseState = Literal["absent", "draft_assetless", "draft_with_assets", "published"]
 Comparison = Literal["<", "=", ">"]
 MutationOutcome = Literal["mutated", "unchanged"]
 
 _SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _ARTIFACT_RE = re.compile(r"^[0-9a-f]{64}$")
 _RELEASE_STATES = ("absent", "draft_assetless", "draft_with_assets", "published")
 _COMPARISONS = ("<", "=", ">")
@@ -20,9 +23,11 @@ _COMPARISONS = ("<", "=", ">")
 
 @dataclass(frozen=True)
 class MutationRequest:
-    result: ReleaseInfo
-    selected_release_line: str
+    result: ReleaseInfo | NightlyAllocation
+    selected_release_line: str | None
     source_sha: str
+    ports_sha: str
+    input_digest: str
     artifact_sha256: str
 
 
@@ -36,11 +41,19 @@ class ObservedMutationState:
     candidate_vs_latest: Comparison | None = None
     existing_pkg_version: str | None = None
     existing_artifact_sha256: str | None = None
+    existing_source_sha: str | None = None
+    existing_ports_sha: str | None = None
+    existing_input_digest: str | None = None
 
 
 def _validate_sha(value: object, *, name: str) -> None:
     if not isinstance(value, str) or not _SHA_RE.fullmatch(value):
         raise ValueError(f"{name} must be lowercase 40- or 64-character hex")
+
+
+def _validate_digest(value: object, *, name: str) -> None:
+    if not isinstance(value, str) or not _DIGEST_RE.fullmatch(value):
+        raise ValueError(f"{name} must be lowercase 64-character hex")
 
 
 def _validate_artifact_sha(value: object) -> None:
@@ -71,11 +84,16 @@ def _validate_observed_tag(value: object) -> None:
         raise ValueError("tag must be a printable ASCII release tag of at most 128 characters")
 
 
-def _validate_result(result: object) -> ReleaseInfo:
-    if type(result) is not ReleaseInfo:
-        raise TypeError("request.result must be ReleaseInfo")
-    validate_release_info(result)
-    return result
+def _validate_result(result: object) -> tuple[bool, str, str, str, str]:
+    if type(result) is ReleaseInfo:
+        rv.validate_release_info(result)
+        if result.tag is None:
+            raise ValueError("Nightly must use NightlyAllocation")
+        return False, result.pkg_version, "", "", ""
+    if type(result) is NightlyAllocation:
+        rv.validate_nightly_allocation(result)
+        return True, result.pkg_version, result.source_sha, result.ports_sha, result.input_digest
+    raise TypeError("request.result must be ReleaseInfo or NightlyAllocation")
 
 
 def _validate_observed(observed: object) -> ObservedMutationState:
@@ -83,22 +101,33 @@ def _validate_observed(observed: object) -> ObservedMutationState:
         raise TypeError("observed must be ObservedMutationState")
     if observed.source_reachable is not True:
         raise ValueError("source must be reachable")
-    if not isinstance(observed.release_state, str) or observed.release_state not in _RELEASE_STATES:
+    if observed.release_state not in _RELEASE_STATES:
         raise ValueError("invalid release state")
     if observed.tag is not None:
         _validate_observed_tag(observed.tag)
-    if observed.candidate_vs_latest is not None and (
-        not isinstance(observed.candidate_vs_latest, str) or observed.candidate_vs_latest not in _COMPARISONS
-    ):
+    if observed.candidate_vs_latest is not None and observed.candidate_vs_latest not in _COMPARISONS:
         raise ValueError("invalid package comparison")
     if (observed.latest_pkg_version is None) != (observed.candidate_vs_latest is None):
         raise ValueError("latest package version and comparison must be paired")
-    if (observed.existing_pkg_version is None) != (observed.existing_artifact_sha256 is None):
-        raise ValueError("existing package version and artifact digest must be paired")
+    existing_values = (
+        observed.existing_pkg_version,
+        observed.existing_artifact_sha256,
+        observed.existing_source_sha,
+        observed.existing_ports_sha,
+        observed.existing_input_digest,
+    )
+    if any(value is None for value in existing_values) and any(value is not None for value in existing_values):
+        raise ValueError("existing package and provenance observations must be paired")
     _validate_pkg_observation(observed.latest_pkg_version, name="latest_pkg_version")
     _validate_pkg_observation(observed.existing_pkg_version, name="existing_pkg_version")
     if observed.existing_artifact_sha256 is not None:
         _validate_artifact_sha(observed.existing_artifact_sha256)
+    if observed.existing_source_sha is not None:
+        _validate_sha(observed.existing_source_sha, name="existing_source_sha")
+    if observed.existing_ports_sha is not None:
+        _validate_sha(observed.existing_ports_sha, name="existing_ports_sha")
+    if observed.existing_input_digest is not None:
+        _validate_digest(observed.existing_input_digest, name="existing_input_digest")
     if observed.tag_source_sha is not None:
         _validate_sha(observed.tag_source_sha, name="tag_source_sha")
     if (observed.tag is None) != (observed.tag_source_sha is None):
@@ -106,16 +135,22 @@ def _validate_observed(observed: object) -> ObservedMutationState:
     return observed
 
 
-def _validate_tag_state(result: ReleaseInfo, request: MutationRequest, observed: ObservedMutationState) -> bool:
+def _validate_tag_state(
+    nightly: bool, result: ReleaseInfo | NightlyAllocation, request: MutationRequest, observed: ObservedMutationState
+) -> bool:
     """Validate tag/release identity; return whether assetless recovery is allowed."""
-    nightly = result.tag is None
     if observed.release_state in {"draft_with_assets", "published"}:
         raise ValueError("existing release is immutable")
     if nightly:
+        if request.selected_release_line is not None:
+            raise ValueError("Nightly has no selected release line")
         if observed.tag is not None or observed.tag_source_sha is not None or observed.release_state != "absent":
             raise ValueError("Nightly mutation requires an absent untagged release")
         return False
 
+    assert isinstance(result, ReleaseInfo)
+    if request.selected_release_line != result.release_line:
+        raise ValueError("selected release line does not match result")
     if observed.release_state == "absent":
         if observed.tag is None and observed.tag_source_sha is None:
             return False
@@ -123,10 +158,8 @@ def _validate_tag_state(result: ReleaseInfo, request: MutationRequest, observed:
             return True
         raise ValueError("existing tag is already present or moved")
     if observed.release_state == "draft_assetless":
-        if observed.tag != result.tag:
-            raise ValueError("assetless draft has a different tag")
-        if observed.tag_source_sha != request.source_sha:
-            raise ValueError("tag moved to a different source")
+        if observed.tag != result.tag or observed.tag_source_sha != request.source_sha:
+            raise ValueError("assetless draft tag/source mismatch")
         return True
     raise ValueError("invalid tagged release state")
 
@@ -136,32 +169,48 @@ def apply_release_mutation(
     observed: ObservedMutationState,
     mutate: Callable[[], object],
 ) -> MutationOutcome:
-    """Apply mutation only after all release identity and artifact preconditions pass."""
+    """Apply mutation only after release, artifact, and input provenance checks pass."""
     if type(request) is not MutationRequest:
         raise TypeError("request must be MutationRequest")
     if not callable(mutate):
         raise TypeError("mutate must be callable")
-    result = _validate_result(request.result)
-    if not isinstance(request.selected_release_line, str) or request.selected_release_line != result.release_line:
-        raise ValueError("selected release line does not match result")
+    nightly, pkg_version, result_source, result_ports, result_digest = _validate_result(request.result)
+    if not isinstance(request.selected_release_line, (str, type(None))):
+        raise TypeError("selected_release_line must be str or None")
     _validate_sha(request.source_sha, name="source_sha")
+    _validate_sha(request.ports_sha, name="ports_sha")
+    _validate_digest(request.input_digest, name="input_digest")
     _validate_artifact_sha(request.artifact_sha256)
+    if nightly and (request.source_sha, request.ports_sha, request.input_digest) != (
+        result_source,
+        result_ports,
+        result_digest,
+    ):
+        raise ValueError("Nightly request provenance does not match allocation")
     state = _validate_observed(observed)
-    recovery = _validate_tag_state(result, request, state)
-    comparison = state.candidate_vs_latest
-    if comparison == "<":
+    recovery = _validate_tag_state(nightly, request.result, request, state)
+    if not nightly and request.selected_release_line != request.result.release_line:  # type: ignore[union-attr]
+        raise ValueError("selected release line does not match result")
+    if state.candidate_vs_latest == "<":
         raise ValueError("candidate package is stale")
 
-    if state.existing_pkg_version == result.pkg_version:
+    if state.existing_pkg_version == pkg_version:
         if state.existing_artifact_sha256 != request.artifact_sha256:
             raise ValueError("artifact collision for existing package version")
+        if (
+            state.existing_source_sha,
+            state.existing_ports_sha,
+            state.existing_input_digest,
+        ) != (request.source_sha, request.ports_sha, request.input_digest):
+            raise ValueError("build input collision for existing package version")
+        if nightly:
+            return "unchanged"
         if recovery:
             mutate()
             return "mutated"
         return "unchanged"
 
-    if comparison == "=" and not recovery:
+    if state.candidate_vs_latest == "=" and not recovery:
         raise ValueError("candidate package already exists")
-
     mutate()
     return "mutated"
