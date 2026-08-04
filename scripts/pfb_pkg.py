@@ -68,7 +68,7 @@ _MATRIX_FIELDS = {
     "status",
     "extra_pkgs",
 }
-_MATRIX_OPTIONAL_FIELDS = {"image_name", "upgrade", "role"}
+_MATRIX_OPTIONAL_FIELDS = {"image_name", "upgrade", "role", "last_tag"}
 _MATRIX_ORIGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.-]*/[A-Za-z0-9][A-Za-z0-9+_.-]*$")
 _MATRIX_FREEBSD_VERSION = re.compile(r"^[0-9]+\.[0-9]+-[A-Za-z0-9][A-Za-z0-9._-]*$")
 _MATRIX_PHP_VERSION = re.compile(r"^[0-9]+\.[0-9]+$")
@@ -189,6 +189,13 @@ def validate_build_matrix_row(row: Mapping[str, object]) -> dict[str, object]:
         raise _record_error("matrix_row.image_name is malformed")
     if "role" in row and row["role"] != "build":
         raise _record_error("matrix_row.role must be build")
+    if "last_tag" in row and (
+        not isinstance(row["last_tag"], str)
+        or not row["last_tag"]
+        or len(row["last_tag"]) > 128
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in row["last_tag"])
+    ):
+        raise _record_error("matrix_row.last_tag is malformed")
     if "upgrade" in row:
         upgrade = row["upgrade"]
         if not isinstance(upgrade, dict):
@@ -473,7 +480,7 @@ def _manifest_annotation(manifest: Mapping[str, object], record: Mapping[str, ob
 def _check_script(script: object, pkg_name: str) -> None:
     if not isinstance(script, str):
         raise PkgError(f"{pkg_name}: install/deinstall script is not text")
-    found = False
+    commands: list[tuple[str, ...]] = []
     for line in script.splitlines():
         try:
             tokens = shlex.split(line, comments=True, posix=True)
@@ -483,14 +490,18 @@ def _check_script(script: object, pkg_name: str) -> None:
             continue
         if any(token.startswith(f"{CANONICAL_EMITTED_IDENTITY}-") for token in tokens):
             raise PkgError(f"{pkg_name}: hook contains a suffixed native identity")
-        if not any("rc.packages" in token for token in tokens):
-            continue
-        if any(any(char in token for char in ";|&`<>") or "$((" in token or "$(" in token for token in tokens):
-            raise PkgError(f"{pkg_name}: hook contains shell metacharacters")
-        if tuple(tokens) not in (_HOOK_UNPREFIXED, _HOOK_PREFIXED):
-            raise PkgError(f"{pkg_name}: hook must invoke rc.packages {CANONICAL_EMITTED_IDENTITY}")
-        found = True
-    if not found:
+        commands.append(tuple(tokens))
+    allowed = (
+        (_HOOK_UNPREFIXED,),
+        (_HOOK_PREFIXED,),
+        (
+            ("if", "[", "${2}", "!=", "POST-INSTALL", "];", "then"),
+            ("exit", "0"),
+            ("fi",),
+            _HOOK_PREFIXED,
+        ),
+    )
+    if tuple(commands) not in allowed:
         raise PkgError(f"{pkg_name}: hook must invoke rc.packages {CANONICAL_EMITTED_IDENTITY}")
 
 
