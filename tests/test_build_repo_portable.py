@@ -1825,6 +1825,18 @@ def test_retain_by_channel_keeps_annotated_edge_outside_testing_window(tmp_path:
     assert set(kept) == {testing, edge_old, edge_new}
 
 
+def test_retention_annotation_cannot_be_interpreted_as_a_record_path(tmp_path: Path) -> None:
+    record_path = tmp_path / "record.json"
+    record_path.write_text(json.dumps(_canonical_retention_record("stable", "4.0.0")))
+    manifest = {
+        "name": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+        "annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: str(record_path)},
+    }
+
+    with pytest.raises(brp.BuildRepoError, match="JSON object"):
+        brp._retention_channel(tmp_path / "fixture.pkg", manifest)
+
+
 def test_retain_by_channel_devel_pruned_independently(tmp_path: Path) -> None:
     """Devel bucket is pruned to keep_devel; stable bucket is untouched when keep_stable=0.
 
