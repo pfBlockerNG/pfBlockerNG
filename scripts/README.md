@@ -25,7 +25,7 @@ or inferred tag shape. Every operation uses a pinned source SHA.
   same Release and artifact bytes, checksums, source,
   provenance, tag, and notes: no rebuild and no second Release. If its target becomes Stable,
   Edge follows Testing until a new target is configured.
-- Nightly is an independent untagged `devel` snapshot with no GitHub Release and no release
+- Nightly is an independent untagged snapshot from a pinned source SHA with no GitHub Release and no release
   notes. Changed input uses UTC `YYYYMMDD`, then `YYYYMMDD_1`/`_2` for same-day changes;
   unchanged or skipped days are no-ops. Identity includes source SHA, FreeBSD-ports SHA,
   and matrix/dependency digest.
