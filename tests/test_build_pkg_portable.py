@@ -2115,6 +2115,35 @@ def test_output_directory_symlink_returns_failure_without_writing_target(tmp_pat
     assert sentinel.read_bytes() == b"safe" and not list(target.glob("*.pkg"))
 
 
+def test_output_parent_symlink_returns_failure_without_following(tmp_path: Path) -> None:
+    ports, portdir = _make_classic_port(tmp_path)
+    target = tmp_path / "real-parent"
+    target.mkdir()
+    link = tmp_path / "out-link"
+    link.symlink_to(target, target_is_directory=True)
+    nested = link / "nested"
+    assert (
+        bpp.main(
+            [
+                "--ports",
+                str(ports),
+                "--port-dir",
+                str(portdir),
+                "--abi",
+                "FreeBSD:15:amd64",
+                "--py-flavor",
+                "py311",
+                "--compression",
+                "xz",
+                "--out",
+                str(nested),
+            ]
+        )
+        == 1
+    )
+    assert not (target / "nested").exists()
+
+
 @pytest.mark.parametrize(
     "flag",
     [
@@ -2190,6 +2219,46 @@ def test_project_rejects_tracked_symlink_outside_source_tree(tmp_path: Path) -> 
     record = _record("stable", ports_sha, source_sha=source_sha)
     record["build_input_digest"] = pfb_pkg.build_input_digest(record)
     assert bpp.main(_project_args(ports, portdir, record, source=source)) == 1
+
+
+def test_project_rejects_tracked_source_root_symlink(tmp_path: Path) -> None:
+    ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "stable", github=True)
+    source = tmp_path / "source"
+    outside = tmp_path / "outside-src"
+    (source / "src").rename(outside)
+    (source / "src").symlink_to(outside, target_is_directory=True)
+    _git(source, "add", "-A")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-qm", "source-root-link")
+    source_sha = _git(source, "rev-parse", "HEAD")
+    _git(source, "tag", "-f", "v4.0.0")
+    record = _record("stable", ports_sha, source_sha=source_sha)
+    assert bpp.main(_project_args(ports, portdir, record, source=source)) == 1
+
+
+def test_project_ignores_tracked_symlink_outside_source_payload(tmp_path: Path) -> None:
+    ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "stable", github=True)
+    source = tmp_path / "source"
+    outside = tmp_path / "outside-config"
+    outside.write_text("editor config")
+    (source / ".claude").symlink_to(outside)
+    _git(source, "add", "-A")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-qm", "external-config-link")
+    source_sha = _git(source, "rev-parse", "HEAD")
+    _git(source, "tag", "-f", "v4.0.0")
+    record = _record("stable", ports_sha, source_sha=source_sha)
+    assert bpp.main(_project_args(ports, portdir, record, source=source)) == 0
+
+
+def test_project_rejects_tracked_ports_symlink_outside_checkout(tmp_path: Path) -> None:
+    ports, portdir, _ports_sha, source_sha = _make_channel_port(tmp_path, "stable", github=True)
+    outside = tmp_path / "outside-port"
+    outside.write_text("not in ports")
+    (ports / "external-port-link").symlink_to(outside)
+    _git(ports, "add", "-A")
+    _git(ports, "-c", "commit.gpgsign=false", "commit", "-qm", "ports-external-link")
+    ports_sha = _git(ports, "rev-parse", "HEAD")
+    record = _record("stable", ports_sha, source_sha=source_sha)
+    assert bpp.main(_project_args(ports, portdir, record, source=tmp_path / "source")) == 1
 
 
 def test_manifest_includes_recipe_conflicts(tmp_path: Path) -> None:

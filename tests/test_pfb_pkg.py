@@ -95,10 +95,12 @@ def test_build_record_valid_and_digest_is_canonical() -> None:
             "extra_pkgs": [],
             "upgrade": {"available": False},
             "image_name": "pfsense-plus",
+            "role": "build",
+            "last_tag": "v4.0.0.a1",
         },
     ],
 )
-def test_build_matrix_row_accepts_each_live_complete_row(row: dict[str, object]) -> None:
+def test_build_matrix_row_accepts_live_and_supported_optional_fields(row: dict[str, object]) -> None:
     assert pfb_pkg.validate_build_matrix_row(row) == row
 
 
@@ -112,6 +114,7 @@ def test_build_matrix_row_accepts_each_live_complete_row(row: dict[str, object])
         lambda row: row.update(freebsd_major="16"),
         lambda row: row.update(image_name="pfsense plus"),
         lambda row: row.update(upgrade={"available": "false"}),
+        lambda row: row.update(last_tag="bad\ntag"),
     ],
 )
 def test_build_matrix_row_rejects_missing_unknown_wrong_type_and_non_live(mutator: Callable[..., object]) -> None:
@@ -219,7 +222,8 @@ def test_load_build_record_json_and_path(tmp_path: Path) -> None:
     [
         ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\n", True),
         (
-            "#!/bin/sh\n${PKG_ROOTDIR}/usr/local/bin/php -f ${PKG_ROOTDIR}/etc/rc.packages "
+            '#!/bin/sh\n\nif [ "${2}" != "POST-INSTALL" ]; then\n\texit 0\nfi\n\n'
+            "${PKG_ROOTDIR}/usr/local/bin/php -f ${PKG_ROOTDIR}/etc/rc.packages "
             "pfSense-pkg-pfBlockerNG ${2}\n",
             True,
         ),
@@ -229,13 +233,29 @@ def test_load_build_record_json_and_path(tmp_path: Path) -> None:
         ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages 'pfSense-pkg-pfBlockerNG; echo pwned' ${2}\n", False),
         (
             "#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\necho '# ignored'\n",
-            True,
+            False,
         ),
         ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG-testing ${2}\n", False),
         ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages\npfSense-pkg-pfBlockerNG ${2}\n", False),
         ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2} extra\n", False),
         ("#!/bin/sh\necho safe; /usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\n", False),
         ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2} $(echo pwned)\n", False),
+        (
+            "#!/bin/sh\necho safe; echo pwned\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\n",
+            False,
+        ),
+        (
+            "#!/bin/sh\necho $(echo pwned)\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\n",
+            False,
+        ),
+        (
+            "#!/bin/sh\necho pwned > /tmp/x\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\n",
+            False,
+        ),
+        (
+            "#!/bin/sh\necho pwned | cat\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\n",
+            False,
+        ),
     ],
 )
 def test_hook_validation_uses_shell_tokens_not_regex(script: str, valid: bool) -> None:
