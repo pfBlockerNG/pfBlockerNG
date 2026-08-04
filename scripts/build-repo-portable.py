@@ -715,6 +715,8 @@ def _retention_channel(path: Path, manifest: Mapping[str, object]) -> str:
     name = manifest.get("name")
     if name == CANONICAL_EMITTED_IDENTITY:
         annotations = manifest.get("annotations")
+        if annotations is not None and not isinstance(annotations, Mapping):
+            raise BuildRepoError(f"{path.name}: annotations must be an object")
         annotation = annotations.get(PFB_BUILD_RECORD_KEY) if isinstance(annotations, Mapping) else None
         if annotation is not None:
             if not isinstance(annotation, str):
