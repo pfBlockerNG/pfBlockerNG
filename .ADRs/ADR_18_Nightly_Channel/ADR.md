@@ -573,8 +573,8 @@ own that migration. Retention still provides availability, not downgrade support
 
 The preceding snapshot-rank amendment is historical and is superseded for release authoring by
 this correction; accepted text remains immutable. Nightly uses the exact package identity
-`pfSense-pkg-pfBlockerNG` and is an independent untagged snapshot from an explicit pinned source SHA.
-It creates no tag, GitHub Release, or release notes. A changed input uses UTC `YYYYMMDD`; another changed input on
+`pfSense-pkg-pfBlockerNG` and is an independent untagged `devel` snapshot. It creates no tag,
+GitHub Release, or release notes. A changed input uses UTC `YYYYMMDD`; another changed input on
 the same day uses `YYYYMMDD_1`, then `_2`, while an unchanged input or skipped day is a no-op.
 
 Nightly identity includes source SHA, FreeBSD-ports SHA, and matrix/dependency digest. The Ports
@@ -586,3 +586,10 @@ distinct target exists.
 
 This amendment changes authoring semantics only. Existing `-nightly` package and publication
 implementation remain the compatibility surface until the follow-up migration issues land.
+
+## Amendment — 2026-08-04: branch-independent Nightly source clarification (issue #2140)
+
+Nightly source is an explicit pinned source SHA (the pinned pfBlockerNG SHA) plus the FreeBSD-ports SHA and
+matrix/dependency digest; no branch inference selects it. The preceding amendment's `devel`
+wording remains historical compatibility context and does not define the current authoring
+contract.
