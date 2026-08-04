@@ -2264,7 +2264,11 @@ def test_project_requires_local_checkout_for_source_attestation(
 
 
 @pytest.mark.parametrize("channel", ["stable", "testing", "edge", "nightly"])
-@pytest.mark.parametrize("row", _LIVE_BUILD_ROWS, ids=["ce-2.8", "plus-26.07"])
+@pytest.mark.parametrize(
+    "row",
+    _LIVE_BUILD_ROWS,
+    ids=[f"{str(row['variant']).lower()}-{row['pfsense_version']}" for row in _LIVE_BUILD_ROWS],
+)
 def test_project_matrix_rows_cover_all_channels(tmp_path: Path, channel: str, row: dict[str, object]) -> None:
     ports, portdir, ports_sha, source_sha = _make_channel_port(
         tmp_path, channel, github=True, php_version=str(row["php_version"])
@@ -2297,6 +2301,15 @@ def test_project_checkout_attestation_rejects_materialized_index_flags(tmp_path:
     tracked = portdir / "Makefile"
     _git(ports, "update-index", index_flag, str(tracked.relative_to(ports)))
     assert bpp.main(_project_args(ports, portdir, record, source=tmp_path / "source")) == 1
+
+
+def test_checkout_attestation_rejects_every_lowercase_index_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bpp, "_git_probe", lambda *_args: "m tracked\0")
+
+    with pytest.raises(bpp.BuildError, match="assume-unchanged path: tracked"):
+        bpp._reject_index_overrides(tmp_path, "source")
 
 
 @pytest.mark.parametrize(

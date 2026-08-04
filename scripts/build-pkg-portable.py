@@ -1456,7 +1456,7 @@ def _reject_index_overrides(path: Path, label: str) -> None:
         if len(entry) < 3 or entry[1] != " ":
             continue
         marker, relative = entry[0], entry[2:]
-        if marker == "h":
+        if marker.islower():
             raise BuildError(f"{label} checkout has assume-unchanged path: {relative}")
         if marker == "S" and (path / relative).exists():
             raise BuildError(f"{label} checkout has materialized skip-worktree path: {relative}")
