@@ -2,7 +2,7 @@ name: Release published (downstream)
 
 # The one thing that must wait for a GitHub Release to actually be PUBLISHED.
 #
-# release.yml deliberately stops at a complete DRAFT (issue #1855): the release notes
+# The dispatch workflow deliberately stops at a complete DRAFT (issue #1855): the release notes
 # and the final title are authored onto that draft by a human or by Claude, who then
 # publishes it. pfBlockerNG/pkg's publish.yml enumerates this repo's PUBLISHED Releases
 # and downloads their assets, so it genuinely cannot run before that moment — hence this
@@ -10,13 +10,13 @@ name: Release published (downstream)
 # publishing a release would silently stop refreshing the catalog.
 #
 # The FreeBSD-ports PORTVERSION bump is NOT here: it runs at the END of the release run
-# (release.yml's terminal sync-ports-fork job), so that when a run finishes the only
+# (the terminal sync-ports-fork job), so that when a run finishes the only
 # things left are "write the changelog" and "publish".
 #
 # ORDERING, for the record: pfBlockerNG/pkg derives the NIGHTLY version from the
 # `-nightly` port's PORTVERSION in the FreeBSD-ports fork, so it must never read that
 # fork before the bump lands — racing it shipped a stale-versioned nightly (e.g.
-# 4.0.0.alpha.3.* on the alpha.4 commit). That used to be a `needs: [sync-ports-fork]`
+# an older prerelease on the newer commit). That used to be a `needs: [sync-ports-fork]`
 # edge here. It is now STRUCTURAL — the bump happens inside the release run, strictly
 # before any publish can occur — so do NOT re-add a dependency on a job that is no
 # longer in this workflow.
@@ -31,13 +31,13 @@ permissions:
 
 jobs:
   # ── 0. Classify the published tag ────────────────────────────────────────
-  # Everything downstream needs is derived from the tag alone, via the single source
-  # of truth (scripts/release-version.sh). A published release whose tag is not in the
-  # scheme is a hard error, not a silent skip — the ports bump would be meaningless.
+  # Everything downstream needs is derived from the tag plus its explicit channel
+  # trailer, via the single source of truth (scripts/release-version.sh). A published
+  # release whose tag or metadata is invalid is a hard error, not a silent skip.
   resolve:
     name: Resolve the published tag
     runs-on: ubuntu-latest
-    # No job-level `outputs:`. This job published tag/branch/portversion for the ports
+    # No job-level `outputs:`. This job previously published tag/source/portversion for the ports
     # bump; that bump moved into the release run and took every consumer with it, and an
     # output nobody reads reads as a live contract. What survives is the GATE: an
     # off-scheme published tag fails here, and `repo-publish` hangs off it via `needs:`.
@@ -50,7 +50,7 @@ jobs:
           # came from instead. The blast radius is small today (no App token, a
           # read-scoped GITHUB_TOKEN, nothing pushed), but that is a property of this
           # job's current body, not of the design: the next credential added here would
-          # silently inherit the hole. Same rule as release.yml's ports helper. Do not
+          # silently inherit the hole. Same rule as the dispatch workflow's ports helper. Do not
           # "simplify" this to the event ref or the release tag.
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
@@ -62,22 +62,37 @@ jobs:
         run: |
           set -eu
           [ -n "$TAG" ] || { echo "::error::the published release carries no tag"; exit 1; }
+          git fetch --tags --force origin
+          TYPE=$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)
+          [ "$TYPE" = tag ] || { echo "::error::published tag ${TAG} is not an annotated tag"; exit 1; }
+          RAW_TAG_MESSAGE=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}")
+          TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | git interpret-trailers --parse)
+          CHANNEL_COUNT=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Ec '^pfBlockerNG-Release-Channel: ' || true)
+          [ "$CHANNEL_COUNT" -eq 1 ] || { echo "::error::published tag ${TAG} must carry exactly one release-channel trailer"; exit 1; }
+          CHANNEL_LINE=$(printf '%s\n' "$TRAILERS" | grep -F 'pfBlockerNG-Release-Channel:' || true)
+          case "$CHANNEL_LINE" in
+            'pfBlockerNG-Release-Channel: stable') CHANNEL=stable ;;
+            'pfBlockerNG-Release-Channel: testing') CHANNEL=testing ;;
+            'pfBlockerNG-Release-Channel: edge') CHANNEL=edge ;;
+            *) CHANNEL= ;;
+          esac
+          [ -n "$CHANNEL" ] || { echo "::error::published tag ${TAG} carries an unknown release-channel trailer"; exit 1; }
           # release-version.sh writes its diagnostics to STDERR, so capturing stdout
           # alone annotated an empty line and buried the real reason in the raw log.
           # On success the script writes nothing to stderr, so `eval` still sees only
           # the KEY=VALUE lines. Newlines are folded out: an annotation is one line.
-          if ! OUT=$(sh scripts/release-version.sh "$TAG" 2>&1); then
+          if ! OUT=$(sh scripts/release-version.sh "$TAG" "$CHANNEL" 2>&1); then
             echo "::error::cannot classify the published tag ${TAG} — $(printf '%s' "$OUT" | tr '\n' ' ')"
             exit 1
           fi
           eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
-          if [ "$channel" = "devel" ]; then BRANCH="devel"; else BRANCH="main"; fi
           {
             echo "tag=${TAG}"
-            echo "branch=${BRANCH}"
+            echo "channel=${release_channel}"
+            echo "source=${release_line}"
             echo "portversion=${portversion}"
           } >> "$GITHUB_OUTPUT"
-          echo "Published ${TAG}: channel=${channel} branch=${BRANCH} portversion=${portversion}"
+          echo "Published ${TAG}: channel=${release_channel} source=${release_line} portversion=${portversion}"
 
   # ── 1. Poke the self-hosted pkg repository to republish (ADR-17) ──────────
   # The pkg catalog is hosted + deployed by the SEPARATE pfBlockerNG/pkg repo: its own

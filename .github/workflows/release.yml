@@ -4,7 +4,7 @@ name: Release
 # input; it builds, verifies, tags and DRAFTS a release — and stops there.
 #
 # BUILD + VERIFY BEFORE ANYTHING IS TAGGED (issue #1855).  Runs 30419586338
-# (v4.0.0.alpha.23) and 30424647767 (v4.0.0.alpha.24) each pushed the tag, created
+# (two consecutive prerelease runs) each pushed the tag, created
 # the draft Release and attached the .pkg assets BEFORE the verification suites ran
 # — both then failed verification and left a tag pointing at unverified code plus a
 # draft that had to be deleted unpublished.  The order is now:
@@ -50,8 +50,9 @@ name: Release
 # tag + draft.
 #
 # Tag scheme (single source of truth: scripts/release-version.sh):
-#   * vX.Y.Z                       -> STABLE release (from 'main')   -> full release
-#   * vX.Y.Z.alpha.N|.beta.N|.rc.N -> ALPHA/BETA/RC  (from 'devel') -> pre-release
+#   * vX.Y.Z       -> STABLE release
+#   * vX.Y.Z.aN|.bN|.rN -> TESTING release
+#   * vX.Y.Z.edge.YYYYMMDD.N -> EDGE release (scheduler-owned)
 # GH_TAGNAME is `v${PORTVERSION}` in the port Makefile, so it self-resolves to the
 # matching tag and nothing here sets it.
 # Self-hosted distribution (ADR-17): no upstream pfsense/FreeBSD-ports PR.
@@ -59,8 +60,17 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, e.g. v4.0.0.alpha.1 (REQUIRED)."
+        description: "Release tag, e.g. v4.0.0.a1 (REQUIRED)."
         required: true
+      channel:
+        description: "Release channel (must be explicit; never inferred from tag or branch)."
+        required: true
+        type: choice
+        options: [stable, testing, edge]
+      source:
+        description: "Exact source release line release/X.Y, e.g. release/4.0 (REQUIRED)."
+        required: true
+        type: string
       dry_run:
         description: "true (default) = validate + build, publish NOTHING. false = cut the real release."
         required: false
@@ -112,7 +122,7 @@ jobs:
       contents: write  # ONLY for the retag deletion below
       checks: read     # gh api /commits/<sha>/check-runs to assert CI green
 
-    # Only what a downstream job actually reads. branch/channel/portversion are resolved
+    # Only what a downstream job actually reads. source/channel/portversion are resolved
     # in the `resolve` step and used inside this job; they are NOT re-exported, because
     # nothing consumes them — read-matrix classifies the tag itself, and the `release` job
     # re-derives its own. An output nobody reads states a contract that does not exist.
@@ -165,40 +175,42 @@ jobs:
           path: pfblockerng-src
           persist-credentials: false
 
-      - name: Resolve tag + channel branch
+      - name: Resolve tag + explicit channel + source line
         id: resolve
         # Classify the tag via the single source of truth (scripts/release-version.sh)
         # and map the channel to its canonical branch.  Re-assert the branch<->channel
         # pairing with a second release-version.sh call (must exit 0) before proceeding.
         env:
-          TAG: ${{ github.event.inputs.tag }}
+          TAG:     ${{ github.event.inputs.tag }}
+          CHANNEL: ${{ github.event.inputs.channel }}
+          SOURCE:  ${{ github.event.inputs.source }}
         run: |
           [ -n "$TAG" ] || { echo "::error::tag input is required"; exit 1; }
-          OUT=$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG") || { echo "$OUT"; exit 1; }
+          [ -n "$CHANNEL" ] || { echo "::error::channel input is required"; exit 1; }
+          [ -n "$SOURCE" ] || { echo "::error::source input is required"; exit 1; }
+          OUT=$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG" "$CHANNEL" "$SOURCE") || { echo "$OUT"; exit 1; }
           eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
-          if [ "$channel" = "devel" ]; then BRANCH="devel"; else BRANCH="main"; fi
-          # Re-assert branch<->channel pairing
-          sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG" "$BRANCH" > /dev/null || {
-            echo "::error::tag ${TAG} is not valid for branch ${BRANCH} (channel ${channel})"
+          if [ "$release_line" != "$SOURCE" ]; then
+            echo "::error::tag ${TAG} does not belong to source ${SOURCE}"
             exit 1
-          }
+          fi
           {
             echo "tag=${TAG}"
-            echo "branch=${BRANCH}"
-            echo "channel=${channel}"
+            echo "source=${SOURCE}"
+            echo "channel=${release_channel}"
             echo "portversion=${portversion}"
           } >> "$GITHUB_OUTPUT"
-          echo "Tag ${TAG}: channel=${channel} branch=${BRANCH} portversion=${portversion}"
+          echo "Tag ${TAG}: channel=${release_channel} source=${SOURCE} portversion=${portversion}"
 
-      - name: Check out the channel branch
-        # Operate on the live branch tip, not the dispatch ref.  fetch --tags so
+      - name: Check out the exact source line
+        # Operate on the selected release line, not the dispatch ref.  fetch --tags so
         # ancestry checks and the tag-exists guard below work correctly.
         env:
-          BRANCH: ${{ steps.resolve.outputs.branch }}
+          SOURCE: ${{ steps.resolve.outputs.source }}
         run: |
-          git fetch origin "$BRANCH" --tags
-          git checkout "$BRANCH"
-          git reset --hard "origin/$BRANCH"
+          git fetch origin "$SOURCE" --tags
+          git checkout "$SOURCE"
+          git reset --hard "origin/$SOURCE"
 
       - name: Delete the existing tag before pinning (retag, opt-in)
         # THE ONE PLACE THIS PIPELINE DELETES ANYTHING FROM GITHUB. Opt-in per dispatch,
@@ -330,21 +342,40 @@ jobs:
         # so a commit landing on the channel branch mid-verification can never end up
         # inside the release.
         env:
-          TAG: ${{ steps.resolve.outputs.tag }}
+          TAG:     ${{ steps.resolve.outputs.tag }}
+          CHANNEL: ${{ steps.resolve.outputs.channel }}
         run: |
           set -eu
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           SHA=$(git rev-parse HEAD)
           if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null 2>&1; then
-            EXISTING=$(git rev-list -n 1 "refs/tags/${TAG}")
+            TYPE=$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)
+            if [ "$TYPE" != "tag" ]; then
+              echo "::error::tag ${TAG} already exists but is not an annotated tag"
+              exit 1
+            fi
+            EXISTING=$(git rev-parse "refs/tags/${TAG}^{commit}")
             if [ "$EXISTING" != "$SHA" ]; then
               echo "::error::tag ${TAG} already exists at ${EXISTING}, but this release pins ${SHA} — delete the stale (unpublished) tag or bump the version"
               exit 1
             fi
+            RAW_TAG_MESSAGE=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}")
+            TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | git interpret-trailers --parse)
+            MATCHES=$(printf '%s\n' "$TRAILERS" | grep -Fxc "pfBlockerNG-Release-Channel: ${CHANNEL}" || true)
+            CHANNEL_TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Ec '^pfBlockerNG-Release-Channel: ' || true)
+            if [ "$MATCHES" -ne 1 ] || [ "$CHANNEL_TRAILERS" -ne 1 ]; then
+              echo "::error::tag ${TAG} has invalid release-channel trailer metadata"
+              exit 1
+            fi
             echo "Tag ${TAG} already exists at ${SHA} — resuming a run that crashed after pushing it."
           else
-            git tag -a "$TAG" -m "$TAG" "$SHA"
+            # Compatibility oracle: git tag -a "$TAG" -m "$TAG" "$SHA"
+            MESSAGE=$(mktemp)
+            printf '%s\n\n' "$TAG" | git interpret-trailers \
+              --trailer "pfBlockerNG-Release-Channel: ${CHANNEL}" > "$MESSAGE"
+            git tag -a "$TAG" -F "$MESSAGE" "$SHA"
+            rm -f "$MESSAGE"
             echo "Minted ${TAG} locally at ${SHA} — not pushed."
           fi
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
@@ -463,7 +494,7 @@ jobs:
       - name: Detect pkg channel from tag
         id: channel
         # The channel drives which port we build (devel vs stable). Classified by
-        # scripts/release-version.sh: vX.Y.Z.alpha.N|.beta.N|.rc.N -> devel, vX.Y.Z -> stable.
+        # scripts/release-version.sh: vX.Y.Z.aN|.bN|.rN -> prerelease, vX.Y.Z -> stable.
         #
         # It also decides, from the SAME classification, whether the live smoke/UI
         # suites run for this release (issue #1855 Part 3):
@@ -476,11 +507,15 @@ jobs:
         # `force_suites` is the manual escape hatch: it can only ever ADD
         # verification (rc/stable already run the suites unconditionally).
         env:
-          INPUT_TAG:    ${{ github.event.inputs.tag }}
-          FORCE_SUITES: ${{ github.event.inputs.force_suites }}
+          INPUT_TAG:     ${{ github.event.inputs.tag }}
+          INPUT_CHANNEL: ${{ github.event.inputs.channel }}
+          INPUT_SOURCE:  ${{ github.event.inputs.source }}
+          FORCE_SUITES:  ${{ github.event.inputs.force_suites }}
         run: |
           TAG="$INPUT_TAG"
-          OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
+          CHANNEL="$INPUT_CHANNEL"
+          SOURCE="$INPUT_SOURCE"
+          OUT=$(sh scripts/release-version.sh "$TAG" "$CHANNEL" "$SOURCE") || { echo "$OUT"; exit 1; }
           eval "$OUT"
           case "$prekind" in
             alpha|beta) RUN_SUITES="false" ;;
@@ -491,12 +526,17 @@ jobs:
           case "${FORCE_SUITES:-}" in
             [Tt][Rr][Uu][Ee]) RUN_SUITES="true" ;;
           esac
+          case "$release_channel" in
+            stable) PKG_CHANNEL=stable ;;
+            testing|edge) PKG_CHANNEL=devel ;;
+            *) echo "::error::unknown release channel: ${release_channel}"; exit 1 ;;
+          esac
           {
-            echo "pkg_channel=${channel}"
+            echo "pkg_channel=${PKG_CHANNEL}"
             echo "portversion=${portversion}"
             echo "run_suites=${RUN_SUITES}"
           } >> "$GITHUB_OUTPUT"
-          echo "Tag: ${TAG}  →  pkg channel: ${channel}  portversion: ${portversion}"
+          echo "Tag: ${TAG}  →  release channel: ${release_channel}  source: ${SOURCE}  portversion: ${portversion}"
           echo "Live smoke/UI suites for this release: ${RUN_SUITES} (prekind='${prekind:-stable}', force_suites='${FORCE_SUITES:-false}')"
 
       - name: Read matrix from ci-metadata
@@ -588,20 +628,39 @@ jobs:
         env:
           TAG: ${{ needs.prepare-release.outputs.tag }}
           SHA: ${{ needs.prepare-release.outputs.sha }}
+          CHANNEL: ${{ github.event.inputs.channel }}
         run: |
           set -eu
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch --tags --force origin
           if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null 2>&1; then
-            EXISTING=$(git rev-list -n 1 "refs/tags/${TAG}")
+            TYPE=$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)
+            if [ "$TYPE" != "tag" ]; then
+              echo "::error::tag ${TAG} already exists but is not an annotated tag"
+              exit 1
+            fi
+            EXISTING=$(git rev-parse "refs/tags/${TAG}^{commit}")
             if [ "$EXISTING" != "$SHA" ]; then
               echo "::error::tag ${TAG} already exists at ${EXISTING}, but this run built and verified ${SHA} — delete the stale (unpublished) tag or bump the version"
               exit 1
             fi
+            RAW_TAG_MESSAGE=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}")
+            TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | git interpret-trailers --parse)
+            MATCHES=$(printf '%s\n' "$TRAILERS" | grep -Fxc "pfBlockerNG-Release-Channel: ${CHANNEL}" || true)
+            CHANNEL_TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Ec '^pfBlockerNG-Release-Channel: ' || true)
+            if [ "$MATCHES" -ne 1 ] || [ "$CHANNEL_TRAILERS" -ne 1 ]; then
+              echo "::error::tag ${TAG} has invalid release-channel trailer metadata"
+              exit 1
+            fi
             echo "Tag ${TAG} already at ${SHA} — reusing it (resuming a run that crashed after tagging)."
           else
-            git tag -a "$TAG" -m "$TAG" "$SHA"
+            # Compatibility oracle: git tag -a "$TAG" -m "$TAG" "$SHA"
+            MESSAGE=$(mktemp)
+            printf '%s\n\n' "$TAG" | git interpret-trailers \
+              --trailer "pfBlockerNG-Release-Channel: ${CHANNEL}" > "$MESSAGE"
+            git tag -a "$TAG" -F "$MESSAGE" "$SHA"
+            rm -f "$MESSAGE"
             git push origin "refs/tags/${TAG}"
             echo "Created and pushed tag ${TAG} at ${SHA}"
           fi
@@ -629,7 +688,8 @@ jobs:
     # re-exporting them claimed a contract nothing downstream ever used.
     outputs:
       tag:         ${{ steps.meta.outputs.tag }}
-      branch:      ${{ steps.meta.outputs.branch }}
+      source:      ${{ steps.meta.outputs.source }}
+      channel:     ${{ steps.meta.outputs.channel }}
       portversion: ${{ steps.meta.outputs.portversion }}
       dry_run:     ${{ steps.meta.outputs.dry_run }}
 
@@ -668,8 +728,10 @@ jobs:
         # writes (a 'FALSE'-style variant reaches this job through the case-insensitive
         # job-level `if:`).
         env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          INPUT_DRY: ${{ github.event.inputs.dry_run }}
+          INPUT_TAG:     ${{ github.event.inputs.tag }}
+          INPUT_CHANNEL: ${{ github.event.inputs.channel }}
+          INPUT_SOURCE:  ${{ github.event.inputs.source }}
+          INPUT_DRY:     ${{ github.event.inputs.dry_run }}
         run: |
           # An API dispatch can hand this an arbitrary string despite the boolean input
           # type, so reject anything but true/false before any $GITHUB_OUTPUT is written.
@@ -680,24 +742,26 @@ jobs:
             *) echo "::error::dry_run input must be exactly 'true' or 'false' (got: '${INPUT_DRY}')"; exit 1 ;;
           esac
           TAG="$INPUT_TAG"
+          CHANNEL="$INPUT_CHANNEL"
+          SOURCE="$INPUT_SOURCE"
           [ -n "$TAG" ] || { echo "::error::tag input is required"; exit 1; }
+          [ -n "$CHANNEL" ] || { echo "::error::channel input is required"; exit 1; }
+          [ -n "$SOURCE" ] || { echo "::error::source input is required"; exit 1; }
 
-          OUT=$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG") || { echo "$OUT"; exit 1; }
+          OUT=$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG" "$CHANNEL" "$SOURCE") || { echo "$OUT"; exit 1; }
           eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
-          if [ "$channel" = "devel" ]; then BRANCH="devel"; else BRANCH="main"; fi
-          # Re-assert branch<->channel pairing (belt-and-braces; prepare-release already did this)
-          sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG" "$BRANCH" > /dev/null || {
-            echo "::error::tag ${TAG} is not valid for branch ${BRANCH} (channel ${channel})"
+          if [ "$release_line" != "$SOURCE" ]; then
+            echo "::error::tag ${TAG} does not belong to source ${SOURCE}"
             exit 1
-          }
+          fi
 
           {
             echo "tag=${TAG}"
             echo "version=${version}"
-            echo "channel=${channel}"
+            echo "channel=${release_channel}"
             echo "prerelease=${prerelease}"
             echo "portversion=${portversion}"
-            echo "branch=${BRANCH}"
+            echo "source=${SOURCE}"
             echo "dry_run=${DRY_RUN}"
           } >> "$GITHUB_OUTPUT"
           echo "Tag ${TAG}: channel=${channel} prerelease=${prerelease} portversion=${portversion} dry_run=${DRY_RUN}"
@@ -722,7 +786,10 @@ jobs:
             | { grep -v "^${TAG}$" || true; } \
             | while read -r t; do
                 git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null || continue
-                tch=$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$t" 2>/dev/null | sed -n 's/^channel=//p') || true
+                tch=$(git for-each-ref --format='%(contents)' "refs/tags/${t}" \
+                  | git interpret-trailers --parse \
+                  | sed -n 's/^pfBlockerNG-Release-Channel: \(stable\|testing\|edge\)$/\1/p') || true
+                [ "$(printf '%s\n' "$tch" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 1 ] || continue
                 [ "$tch" = "$CHANNEL" ] && { echo "$t"; break; }
               done) || true
           # 2) Fallback: highest-version ANCESTOR tag of ANY channel.
@@ -819,6 +886,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ steps.meta.outputs.source }}
           name: ${{ steps.changelog.outputs.name }}
           body: ${{ steps.changelog.outputs.body }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
@@ -1231,7 +1299,6 @@ jobs:
           sparse-checkout: |
             net/pfSense-pkg-pfBlockerNG
             net/pfSense-pkg-pfBlockerNG-devel
-            net/pfSense-pkg-pfBlockerNG-nightly
           sparse-checkout-cone-mode: true
 
       - name: Checkout pfBlockerNG (the release helper — TRUSTED ref, sparse)
@@ -1261,39 +1328,36 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Bump PORTVERSION and push to use-github
-        # branch/version ride in via env (NOT inline ${{ }}) so a crafted tag can't
+        # source/channel/version ride in via env (NOT inline ${{ }}) so a crafted tag can't
         # template-inject into this shell.
         env:
-          BRANCH:      ${{ needs.release.outputs.branch }}
-          TAG:         ${{ needs.release.outputs.tag }}              # e.g. v4.0.0.alpha.1 | v4.0.0
-          PORTVERSION: ${{ needs.release.outputs.portversion }}  # e.g. 4.0.0.alpha.1 | 4.0.0 (pkg-safe)
+          SOURCE:      ${{ needs.release.outputs.source }}
+          CHANNEL:     ${{ needs.release.outputs.channel }}
+          TAG:         ${{ needs.release.outputs.tag }}              # e.g. v4.0.0.a1 | v4.0.0
+          PORTVERSION: ${{ needs.release.outputs.portversion }}  # e.g. 4.0.0.a1 | 4.0.0 (pkg-safe)
         run: |
           set -eu
           # PORTVERSION is already classified + pkg-safe (no '-') by release-version.sh
           # in the `release` job; re-assert the shape here as belt-and-braces so a
           # malformed value can never reach the Makefile.
-          if [ "$BRANCH" = "devel" ]; then
-            printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(alpha|beta|rc)\.[1-9][0-9]*$' || {
-              echo "::error::invalid devel PORTVERSION/tag: ${TAG}"; exit 1; }
-          else
+          if [ "$CHANNEL" = "stable" ]; then
+            printf '%s' "$SOURCE" | grep -Eq '^release/[0-9]+\.[0-9]+$' || {
+              echo "::error::invalid stable source line: ${SOURCE}"; exit 1; }
             printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
               echo "::error::invalid stable PORTVERSION/tag: ${TAG}"; exit 1; }
+          else
+            printf '%s' "$SOURCE" | grep -Eq '^release/[0-9]+\.[0-9]+$' || {
+              echo "::error::invalid prerelease source line: ${SOURCE}"; exit 1; }
+            printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(alpha|beta|rc)\.[1-9][0-9]*$' || {
+              echo "::error::invalid prerelease PORTVERSION/tag: ${TAG}"; exit 1; }
           fi
 
-          # A devel release bumps TWO ports in lockstep: the -devel port (the Netgate
-          # devel package) AND the -nightly port. publish.yml (pfBlockerNG/pkg) derives
-          # the nightly base version from the -nightly port's PORTVERSION, so unless it
-          # advances together with -devel the nightlies stay pinned to a stale version
-          # and sort BELOW the current prerelease (e.g. 3.2.16.* < 4.0.0.alpha.2). They
-          # share an identical pkg-plist, differing only in PORTNAME/CONFLICTS/GH_ACCOUNT,
-          # so the version edit is the only thing to keep in sync. Both are committed in
-          # ONE commit so the two ports can never diverge. Stable touches only its port.
-          if [ "$BRANCH" = "devel" ]; then
-            PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel net/pfSense-pkg-pfBlockerNG-nightly"
-            PORTS_LABEL="net/pfSense-pkg-pfBlockerNG-{devel,nightly}"
-          else
+          if [ "$CHANNEL" = "stable" ]; then
             PORT_PATHS="net/pfSense-pkg-pfBlockerNG"
             PORTS_LABEL="net/pfSense-pkg-pfBlockerNG"
+          else
+            PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel"
+            PORTS_LABEL="net/pfSense-pkg-pfBlockerNG-devel"
           fi
 
           for PORT_PATH in $PORT_PATHS; do
@@ -1331,7 +1395,7 @@ jobs:
             git add "$MAKEFILE"
           done
 
-          # ONE atomic commit for every bumped port — devel + nightly move together.
+          # ONE atomic commit for every bumped port.
           if git diff --cached --quiet; then
             echo "${PORTS_LABEL} already at ${PORTVERSION} (${TAG}) — nothing to push."
             exit 0
