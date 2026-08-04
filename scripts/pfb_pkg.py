@@ -558,8 +558,8 @@ def validate_project_pkg(
             mtime = int(entry["mtime"])
         except (KeyError, TypeError, ValueError):
             raise PkgError(f"{pkg_path.name}: malformed mode/mtime for {name}") from None
-        if member.mode != mode or int(member.mtime) != mtime:
-            raise PkgError(f"{pkg_path.name}: mode/mtime mismatch for {name}")
+        if member.mode != mode or int(member.mtime) != mtime or mtime != record["source_date_epoch"]:
+            raise PkgError(f"{pkg_path.name}: mode/mtime mismatch for {name} (source_date_epoch)")
         if "size" in entry and (type(entry["size"]) is not int or entry["size"] != len(data)):
             raise PkgError(f"{pkg_path.name}: size mismatch for {name}")
     if _INFO_PATH not in payload or any(name.endswith("/info.xml") and name != _INFO_PATH for name in payload):

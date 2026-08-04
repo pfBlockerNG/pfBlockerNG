@@ -998,7 +998,7 @@ def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Pat
     wrksrc.parent.mkdir(parents=True, exist_ok=True)
 
     if args.local_src:
-        local = Path(args.local_src).resolve()
+        local = Path(getattr(args, "_source_snapshot", args.local_src)).resolve()
         src_root = local / "src" if (local / "src").is_dir() else local
         if not (src_root / "usr").is_dir():
             raise BuildError(
@@ -1291,6 +1291,12 @@ def _reject_symlink_components(path: Path) -> None:
         except (FileNotFoundError, NotADirectoryError):
             break
         if stat.S_ISLNK(mode):
+            trusted_aliases = {
+                Path("/tmp"): Path("/private/tmp"),
+                Path("/var"): Path("/private/var"),
+            }
+            if current in trusted_aliases and current.resolve() == trusted_aliases[current]:
+                continue
             raise BuildError(f"output path component must not be a symlink: {current}")
 
 
@@ -1456,21 +1462,15 @@ def _reject_index_overrides(path: Path, label: str) -> None:
             raise BuildError(f"{label} checkout has materialized skip-worktree path: {relative}")
 
 
-def _reject_external_payload_symlinks(payload_root: Path, label: str) -> None:
+def _reject_payload_symlinks(payload_root: Path, label: str) -> None:
     payload_root = payload_root.absolute()
-    payload_target = payload_root.resolve(strict=False)
     for root, dirs, files in os.walk(payload_root, followlinks=False):
         for name in (*dirs, *files):
             link = Path(root) / name
             if not link.is_symlink():
                 continue
             relative = link.relative_to(payload_root)
-            try:
-                target = link.resolve(strict=True)
-            except (OSError, RuntimeError) as exc:
-                raise BuildError(f"{label} checkout payload symlink cannot be resolved: {relative}: {exc}") from None
-            if not target.is_relative_to(payload_target):
-                raise BuildError(f"{label} checkout payload symlink escapes source tree: {relative}")
+            raise BuildError(f"{label} checkout payload symlink is not allowed: {relative}")
 
 
 def _attest_checkout(
@@ -1499,10 +1499,47 @@ def _attest_checkout(
         if tag_sha != expected_sha:
             raise BuildError(f"{label} source tag {source_tag!r} resolves to {tag_sha!r}, not {expected_sha!r}")
     if payload_root is not None:
+        try:
+            if stat.S_ISLNK(payload_root.lstat().st_mode):
+                raise BuildError(f"{label} checkout payload root must not be a symlink: {payload_root}")
+        except FileNotFoundError:
+            raise BuildError(f"{label} checkout payload root is missing: {payload_root}") from None
         payload_target = payload_root.resolve(strict=False)
         if not payload_target.is_relative_to(path):
             raise BuildError(f"{label} checkout payload root escapes source tree: {payload_root}")
-        _reject_external_payload_symlinks(payload_root, label)
+        _reject_payload_symlinks(payload_root, label)
+
+
+def _snapshot_checkout(path: Path, commit: str, dest: Path, payload_root: Path | None = None) -> Path:
+    """Materialize tracked source bytes from an attested Git object."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    command = ["git", "-C", str(path), "archive", "--format=tar", commit]
+    if payload_root is not None:
+        try:
+            command.append(str(payload_root.relative_to(path)))
+        except ValueError:
+            raise BuildError(f"source snapshot payload root escapes checkout: {payload_root}") from None
+    try:
+        result = subprocess.run(
+            command,
+            env=env,
+            capture_output=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = (
+            exc.stderr.decode("utf-8", "replace").strip()
+            if isinstance(exc, subprocess.CalledProcessError)
+            else str(exc)
+        )
+        raise BuildError(f"git snapshot failed for {path}: {detail}") from None
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as tf:
+        _safe_extract(tf, dest)
+    _reject_payload_symlinks(dest, "source snapshot")
+    return dest
 
 
 def _validate_nightly_version(version: str) -> str:
@@ -1796,6 +1833,9 @@ def run_build(args: argparse.Namespace) -> Build:
                 "source",
                 source_tag=project_record["source_tag"],
                 payload_root=source_root,
+            )
+            args._source_snapshot = _snapshot_checkout(
+                local_src, project_record["source_sha"], workdir / "source-snapshot", source_root
             )
         elif args.gh_tagname:
             raise BuildError("project build requires --local-src for source tag attestation")
