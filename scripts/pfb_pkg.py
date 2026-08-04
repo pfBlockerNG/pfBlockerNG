@@ -18,6 +18,7 @@ import json
 import lzma
 import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -56,6 +57,31 @@ _RECORD_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _NIGHTLY_VERSION = re.compile(r"^(?P<day>[0-9]{8})(?:_(?P<revision>[1-9][0-9]*))?$")
 _VARIANT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _PF_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+)+$")
+_MATRIX_FIELDS = {
+    "pfsense_version",
+    "channel",
+    "freebsd_version",
+    "freebsd_major",
+    "php_version",
+    "py_flavor",
+    "variant",
+    "status",
+    "extra_pkgs",
+}
+_MATRIX_OPTIONAL_FIELDS = {"image_name", "upgrade", "role"}
+_MATRIX_ORIGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.-]*/[A-Za-z0-9][A-Za-z0-9+_.-]*$")
+_MATRIX_FREEBSD_VERSION = re.compile(r"^[0-9]+\.[0-9]+-[A-Za-z0-9][A-Za-z0-9._-]*$")
+_MATRIX_PHP_VERSION = re.compile(r"^[0-9]+\.[0-9]+$")
+_MATRIX_PY_FLAVOR = re.compile(r"^py[0-9]+$")
+_MATRIX_IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_HOOK_UNPREFIXED = ("/usr/local/bin/php", "-f", "/etc/rc.packages", CANONICAL_EMITTED_IDENTITY, "${2}")
+_HOOK_PREFIXED = (
+    "${PKG_ROOTDIR}/usr/local/bin/php",
+    "-f",
+    "${PKG_ROOTDIR}/etc/rc.packages",
+    CANONICAL_EMITTED_IDENTITY,
+    "${2}",
+)
 _DEP_PHP = re.compile(r"^php[0-9]+(?:[-+_.].*)?$")
 _DEP_PYTHON = re.compile(r"^python[0-9]+(?:[-+_.].*)?$")
 _DEP_PY_FLAVOR = re.compile(r"^py[0-9]+-")
@@ -111,6 +137,73 @@ def _require_string(record: Mapping[str, object], key: str) -> str:
     return value
 
 
+def validate_build_matrix_row(row: Mapping[str, object]) -> dict[str, object]:
+    """Validate one complete row emitted by ``read-version-matrix.sh --print-build``."""
+    if not isinstance(row, dict):
+        raise _record_error("matrix_row must be an object")
+    _json_safe(row, path="$.matrix_row")
+    keys = set(row)
+    allowed = _MATRIX_FIELDS | _MATRIX_OPTIONAL_FIELDS
+    missing = sorted(_MATRIX_FIELDS - keys)
+    unknown = sorted(keys - allowed)
+    if missing or unknown:
+        raise _record_error(f"matrix_row exact fields required (missing={missing}, unknown={unknown})")
+
+    text_fields = ("pfsense_version", "channel", "freebsd_version", "freebsd_major", "php_version", "py_flavor")
+    for field in text_fields:
+        value = row[field]
+        if not isinstance(value, str) or not value:
+            raise _record_error(f"matrix_row.{field} must be a non-empty string")
+    if row["channel"] not in ("CE", "Plus"):
+        raise _record_error("matrix_row.channel is invalid")
+    if row["variant"] != row["channel"]:
+        raise _record_error("matrix_row.variant must match channel")
+    if not _PF_VERSION.fullmatch(row["pfsense_version"]):
+        raise _record_error("matrix_row.pfsense_version is malformed")
+    if not re.fullmatch(r"[0-9]+", row["freebsd_major"]):
+        raise _record_error("matrix_row.freebsd_major is malformed")
+    if not _MATRIX_FREEBSD_VERSION.fullmatch(row["freebsd_version"]):
+        raise _record_error("matrix_row.freebsd_version is malformed")
+    if row["freebsd_version"].split(".", 1)[0] != row["freebsd_major"]:
+        raise _record_error("matrix_row.freebsd_version does not match freebsd_major")
+    if not _MATRIX_PHP_VERSION.fullmatch(row["php_version"]):
+        raise _record_error("matrix_row.php_version is malformed")
+    if not _MATRIX_PY_FLAVOR.fullmatch(row["py_flavor"]):
+        raise _record_error("matrix_row.py_flavor is malformed")
+    if row["status"] not in ("active", "beta", "GA"):
+        raise _record_error("matrix_row.status is invalid")
+
+    extra_pkgs = row["extra_pkgs"]
+    if not isinstance(extra_pkgs, list) or any(
+        not isinstance(origin, str) or not _MATRIX_ORIGIN.fullmatch(origin) for origin in extra_pkgs
+    ):
+        raise _record_error("matrix_row.extra_pkgs must be a list of safe origins")
+    if extra_pkgs != sorted(set(extra_pkgs)):
+        raise _record_error("matrix_row.extra_pkgs must be sorted and unique")
+
+    if "image_name" in row and (
+        not isinstance(row["image_name"], str)
+        or not row["image_name"]
+        or not _MATRIX_IMAGE.fullmatch(row["image_name"])
+    ):
+        raise _record_error("matrix_row.image_name is malformed")
+    if "role" in row and row["role"] != "build":
+        raise _record_error("matrix_row.role must be build")
+    if "upgrade" in row:
+        upgrade = row["upgrade"]
+        if not isinstance(upgrade, dict):
+            raise _record_error("matrix_row.upgrade must be an object")
+        upgrade_keys = set(upgrade)
+        if not upgrade_keys <= {"available", "branch", "target", "from"} or "available" not in upgrade:
+            raise _record_error("matrix_row.upgrade has unknown or missing fields")
+        if type(upgrade["available"]) is not bool:
+            raise _record_error("matrix_row.upgrade.available must be boolean")
+        for field in ("branch", "target", "from"):
+            if field in upgrade and (not isinstance(upgrade[field], str) or not upgrade[field]):
+                raise _record_error(f"matrix_row.upgrade.{field} must be a non-empty string")
+    return dict(row)
+
+
 def _route_for(record: Mapping[str, object]) -> str:
     row = record.get("matrix_row")
     if not isinstance(row, dict):
@@ -146,18 +239,7 @@ def validate_build_record(
     channel = record["channel"]
     if channel not in ("stable", "testing", "edge", "nightly"):
         raise _record_error("channel is invalid")
-    row = record["matrix_row"]
-    if not isinstance(row, dict):
-        raise _record_error("matrix_row must be an object")
-    for field in ("variant", "pfsense_version", "freebsd_major", "php_version", "py_flavor"):
-        if not isinstance(row.get(field), str) or not row[field]:
-            raise _record_error(f"matrix_row.{field} must be a non-empty string")
-    if not _VARIANT.fullmatch(row["variant"]) or ".." in row["variant"]:
-        raise _record_error("matrix_row.variant is unsafe")
-    if not _PF_VERSION.fullmatch(row["pfsense_version"]):
-        raise _record_error("matrix_row.pfsense_version is malformed")
-    if not re.fullmatch(r"[0-9]+", row["freebsd_major"]):
-        raise _record_error("matrix_row.freebsd_major is malformed")
+    row = validate_build_matrix_row(record["matrix_row"])
     if abi is not None:
         if not isinstance(abi, str) or not re.fullmatch(r"FreeBSD:[0-9]+:[A-Za-z0-9._+-]+", abi):
             raise _record_error("abi is malformed")
@@ -212,7 +294,9 @@ def validate_build_record(
     digest = record["build_input_digest"]
     if not isinstance(digest, str) or not _RECORD_DIGEST.fullmatch(digest) or digest != build_input_digest(record):
         raise _record_error("build_input_digest is not the canonical digest")
-    return dict(record)
+    validated = dict(record)
+    validated["matrix_row"] = row
+    return validated
 
 
 def _load_json_object(raw: bytes, what: str) -> dict[str, object]:
@@ -289,17 +373,22 @@ def zstd_compress(data: bytes, err_cls: type[Exception], err_msg: str) -> bytes:
 def read_compact_manifest(pkg_path: str | Path) -> dict:
     """Return the +COMPACT_MANIFEST JSON object of a .pkg (pure Python, no libpkg)."""
     pkg_path = Path(pkg_path)
-    raw = pkg_path.read_bytes()
-    tar_bytes = lzma.decompress(raw) if raw[:6] == XZ_MAGIC else zstd_decompress(raw)
-    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
-        try:
-            member = tf.extractfile("+COMPACT_MANIFEST")
-        except KeyError:
-            member = None
-        if member is None:
-            raise PkgError(f"{pkg_path.name}: no +COMPACT_MANIFEST member — not a libpkg .pkg?")
-        data = member.read()
-    return _load_json_object(data, f"{pkg_path.name}: +COMPACT_MANIFEST")
+    try:
+        raw = pkg_path.read_bytes()
+        tar_bytes = lzma.decompress(raw) if raw[:6] == XZ_MAGIC else zstd_decompress(raw)
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
+            try:
+                member = tf.extractfile("+COMPACT_MANIFEST")
+            except KeyError:
+                member = None
+            if member is None:
+                raise PkgError(f"{pkg_path.name}: no +COMPACT_MANIFEST member — not a libpkg .pkg?")
+            data = member.read()
+        return _load_json_object(data, f"{pkg_path.name}: +COMPACT_MANIFEST")
+    except PkgError:
+        raise
+    except (OSError, EOFError, lzma.LZMAError, tarfile.TarError, ValueError) as exc:
+        raise PkgError(f"{pkg_path.name}: invalid package archive: {exc}") from None
 
 
 def _archive_tar(path: Path) -> list[tarfile.TarInfo]:
@@ -384,10 +473,24 @@ def _manifest_annotation(manifest: Mapping[str, object], record: Mapping[str, ob
 def _check_script(script: object, pkg_name: str) -> None:
     if not isinstance(script, str):
         raise PkgError(f"{pkg_name}: install/deinstall script is not text")
-    if f"{CANONICAL_EMITTED_IDENTITY}-" in script:
-        raise PkgError(f"{pkg_name}: hook contains a suffixed native identity")
-    match = re.search(r"rc\.packages\s+([^\s]+)", script)
-    if match is None or match.group(1) != CANONICAL_EMITTED_IDENTITY:
+    found = False
+    for line in script.splitlines():
+        try:
+            tokens = shlex.split(line, comments=True, posix=True)
+        except ValueError as exc:
+            raise PkgError(f"{pkg_name}: hook is not valid shell text: {exc}") from None
+        if not tokens:
+            continue
+        if any(token.startswith(f"{CANONICAL_EMITTED_IDENTITY}-") for token in tokens):
+            raise PkgError(f"{pkg_name}: hook contains a suffixed native identity")
+        if not any("rc.packages" in token for token in tokens):
+            continue
+        if any(any(char in token for char in ";|&`<>") or "$((" in token or "$(" in token for token in tokens):
+            raise PkgError(f"{pkg_name}: hook contains shell metacharacters")
+        if tuple(tokens) not in (_HOOK_UNPREFIXED, _HOOK_PREFIXED):
+            raise PkgError(f"{pkg_name}: hook must invoke rc.packages {CANONICAL_EMITTED_IDENTITY}")
+        found = True
+    if not found:
         raise PkgError(f"{pkg_name}: hook must invoke rc.packages {CANONICAL_EMITTED_IDENTITY}")
 
 
@@ -494,11 +597,14 @@ def validate_project_pkg(
 # --------------------------------------------------------------------------- #
 
 # FreeBSD pkg ranks a prerelease stage BELOW the bare release, and alpha < beta <
-# rc between themselves (see scripts/release-version.sh, the tag scheme's single
-# source of truth: vX.Y.Z(.alpha|beta|rc.N)?). A version with no stage keyword —
+# rc between themselves (see scripts/release_version.py, whose canonical tags use
+# vX.Y.Z.aN|bN|rN). Retained legacy expanded package versions remain sortable.
+# A version with no stage keyword —
 # a genuine stable release, a bare edition version like "2.8.1", or a nightly's
 # all-numeric "<target>.YYYYMMDD.N" — ranks as RELEASE (highest).
 _STAGE_RANK = {"alpha": 0, "beta": 1, "rc": 2}
+_COMPACT_STAGE_RANK = {"a": 0, "b": 1, "r": 2}
+_COMPACT_STAGE = re.compile(r"^([abr])([1-9][0-9]*)$", re.IGNORECASE)
 _RELEASE_RANK = 3
 
 
@@ -506,15 +612,16 @@ def pkg_version_sort_key(version: str) -> tuple[list[int], int, int]:
     """Monotone sort key for a pfBlockerNG pkg VERSION string.
 
     Splits on ``.``/``_``/``,`` like a plain numeric-run compare, but a component
-    matching one of the FreeBSD-pkg prerelease stage keywords (``alpha``/``beta``/
-    ``rc``) is pulled OUT of the numeric base and turned into a stage rank + stage
-    number, instead of being folded away. The historical bug this fixes: a plain
+    matching a canonical compact prerelease (``aN``/``bN``/``rN``), or a retained
+    legacy stage keyword (``alpha.N``/``beta.N``/``rc.N``), is pulled OUT of the
+    numeric base and turned into a stage rank + number. The historical bug this
+    fixes: a plain
     ``re.findall(r"\\d+", v)``-style key drops the keyword entirely, so
     ``4.0.0.alpha.1`` / ``.beta.1`` / ``.rc.1`` all collapsed to the SAME key, and
     the bare ``4.0.0`` release (whose key was a *shorter* list) sorted BELOW every
     prerelease. This key instead reproduces pkg's real ordering::
 
-        4.0.0.alpha.1 < 4.0.0.alpha.2 < 4.0.0.beta.1 < 4.0.0.rc.1 < 4.0.0
+        4.0.0.a1 < 4.0.0.a2 < 4.0.0.b1 < 4.0.0.r1 < 4.0.0
 
     A version with no stage keyword (a nightly's all-numeric
     ``<target>.YYYYMMDD.N``, a bare ``pfsense_version`` like ``2.8.1``, or a
@@ -549,6 +656,12 @@ def pkg_version_sort_key(version: str) -> tuple[list[int], int, int]:
                 i += 2
             else:
                 i += 1
+            continue
+        compact = _COMPACT_STAGE.fullmatch(part)
+        if compact is not None:
+            stage_rank = _COMPACT_STAGE_RANK[compact.group(1).lower()]
+            stage_num = int(compact.group(2))
+            i += 1
             continue
         base.append(int(part) if part.isdigit() else 0)
         i += 1

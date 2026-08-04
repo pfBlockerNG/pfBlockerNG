@@ -51,6 +51,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -348,6 +349,7 @@ class Build:
     files: list[StagedFile] = field(default_factory=list)
     directories: list[str] = field(default_factory=list)
     scripts: dict[str, str] = field(default_factory=dict)
+    conflicts: list[str] = field(default_factory=list)
     annotations: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -1151,6 +1153,8 @@ def make_manifest(b: Build, *, compact: bool) -> dict:
     # {"FreeBSD_version": <__FreeBSD_version of the build host>}).
     if b.annotations:
         m["annotations"] = b.annotations
+    if b.conflicts:
+        m["conflicts"] = b.conflicts
     if compact:
         return m
     # `fflags: 0` matches `pkg create` (no file flags set). mtime is the staged file's
@@ -1256,6 +1260,25 @@ def write_pkg(b: Build, out_path: Path, compression: str) -> None:
                 "module (brew install zstd / apt install zstd), or pass --compression xz",
             )
         )
+
+
+def _install_output_no_clobber(temp_path: Path, final_path: Path) -> None:
+    """Install a validated package atomically without following or replacing a target."""
+    try:
+        mode = final_path.lstat().st_mode
+    except FileNotFoundError:
+        try:
+            os.link(temp_path, final_path)
+        except FileExistsError:
+            return _install_output_no_clobber(temp_path, final_path)
+        temp_path.unlink()
+        return
+    if not stat.S_ISREG(mode):
+        raise BuildError(f"output path exists and is not a regular file: {final_path}")
+    if final_path.read_bytes() == temp_path.read_bytes():
+        temp_path.unlink()
+        return
+    raise BuildError(f"output path already contains different bytes: {final_path}")
 
 
 def _add_meta(tf: tarfile.TarFile, name: str, data: bytes) -> None:
@@ -1409,16 +1432,58 @@ def _git_probe(path: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _attest_checkout(path: Path, expected_sha: str, label: str) -> None:
+def _reject_index_overrides(path: Path, label: str) -> None:
+    for entry in _git_probe(path, "ls-files", "-v", "-z").split("\0"):
+        if len(entry) < 3 or entry[1] != " ":
+            continue
+        marker, relative = entry[0], entry[2:]
+        if marker == "h":
+            raise BuildError(f"{label} checkout has assume-unchanged path: {relative}")
+        if marker == "S" and (path / relative).exists():
+            raise BuildError(f"{label} checkout has materialized skip-worktree path: {relative}")
+
+
+def _reject_external_tracked_symlinks(path: Path, payload_root: Path, label: str) -> None:
+    repo_root = path.resolve()
+    payload_root = payload_root.resolve()
+    for entry in _git_probe(path, "ls-files", "--stage", "-z").split("\0"):
+        if "\t" not in entry:
+            continue
+        metadata, relative = entry.split("\t", 1)
+        if not metadata.startswith("120000 "):
+            continue
+        target = (repo_root / relative).resolve(strict=False)
+        if not target.is_relative_to(payload_root):
+            raise BuildError(f"{label} checkout tracked symlink escapes source tree: {relative}")
+
+
+def _attest_checkout(
+    path: Path,
+    expected_sha: str,
+    label: str,
+    *,
+    source_tag: str | None = None,
+    payload_root: Path | None = None,
+) -> None:
     path = path.resolve()
     if not (path / ".git").exists():
         raise BuildError(f"{label} checkout is missing .git: {path}")
+    _reject_index_overrides(path, label)
     status = _git_probe(path, "status", "--porcelain", "--untracked-files=all")
     if status:
         raise BuildError(f"{label} checkout is dirty: {path}")
     head = _git_probe(path, "rev-parse", "HEAD")
     if head != expected_sha:
         raise BuildError(f"{label} checkout HEAD {head!r} does not match record {expected_sha!r}")
+    if source_tag is not None:
+        try:
+            tag_sha = _git_probe(path, "rev-parse", "--verify", f"refs/tags/{source_tag}^{{commit}}")
+        except BuildError:
+            raise BuildError(f"{label} checkout is missing source tag {source_tag!r}") from None
+        if tag_sha != expected_sha:
+            raise BuildError(f"{label} source tag {source_tag!r} resolves to {tag_sha!r}, not {expected_sha!r}")
+    if payload_root is not None:
+        _reject_external_tracked_symlinks(path, payload_root, label)
 
 
 def _validate_nightly_version(version: str) -> str:
@@ -1560,6 +1625,12 @@ def run_build(args: argparse.Namespace) -> Build:
             project_record = load_build_record(args.build_record)
         except PkgError as exc:
             raise BuildError(str(exc)) from None
+        if args.annotate:
+            raise BuildError("project builds cannot use --annotate; provenance is carried by --build-record")
+        if args.freebsd_version:
+            raise BuildError("project builds cannot use --freebsd-version; provenance is carried by --build-record")
+        if args.repo_catalogue:
+            raise BuildError("project builds cannot use --repo-catalogue; dependency versions are record-bound")
     elif getattr(args, "_channel_explicit", False) and native_portname != _CHANNEL_PORT_SUB[args.channel]:
         raise BuildError(
             f"--channel {args.channel} requires native recipe identity {_CHANNEL_PORT_SUB[args.channel]!r}; "
@@ -1584,6 +1655,8 @@ def run_build(args: argparse.Namespace) -> Build:
 
     prefix = mk.get("PREFIX")
     if project_record:
+        if not _truthy(mk.get("USE_GITHUB")):
+            raise BuildError("project builds require a USE_GITHUB recipe")
         try:
             project_record = validate_build_record(
                 project_record,
@@ -1691,10 +1764,17 @@ def run_build(args: argparse.Namespace) -> Build:
         if args.local_src and args.gh_tagname:
             raise BuildError("project USE_GITHUB build cannot combine --local-src and --gh-tagname")
         if args.local_src:
-            _attest_checkout(Path(args.local_src), project_record["source_sha"], "source")
+            local_src = Path(args.local_src).resolve()
+            source_root = local_src / "src" if (local_src / "src").is_dir() else local_src
+            _attest_checkout(
+                local_src,
+                project_record["source_sha"],
+                "source",
+                source_tag=project_record["source_tag"],
+                payload_root=source_root,
+            )
         elif args.gh_tagname:
-            if args.gh_tagname != project_record["source_sha"]:
-                raise BuildError("--gh-tagname does not match build record source_sha")
+            raise BuildError("project build requires --local-src for source tag attestation")
         else:
             raise BuildError("project USE_GITHUB build requires --local-src or explicit --gh-tagname")
     acquire_source(mk, workdir, args)
@@ -1749,6 +1829,7 @@ def run_build(args: argparse.Namespace) -> Build:
 
     b.directories = plist_dirs
     b.scripts = build_scripts(mk, portdir / "files")
+    b.conflicts = mk.get("CONFLICTS").split()
     # Declared RUN_DEPENDS/LIB_DEPENDS + the deps USES injects (php/python), as
     # `make package` records them. Dedup by name (declared win).
     deps: dict[str, Dep] = {}
@@ -1933,17 +2014,52 @@ def main(argv: list[str]) -> int:
         if args.dry_run:
             _print_plan(b)
             return 0
-        out_dir = Path(args.out).resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            out_input = Path(args.out)
+            if out_input.is_symlink():
+                raise BuildError(f"output directory must not be a symlink: {out_input}")
+            out_dir = out_input.resolve()
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except (BuildError, OSError) as exc:
+            sys.stderr.write(f"build-pkg-portable: {exc}\n")
+            return 1
         out_path = out_dir / f"{b.pkgname}.pkg"
-        write_pkg(b, out_path, args.compression)
-        if getattr(args, "_build_record", None) is not None:
+        temp_path: Path | None = None
+        temp_dir: Path | None = None
+        try:
             try:
-                validate_project_pkg(out_path, args._build_record, expected_manifest=make_manifest(b, compact=False))
-            except PkgError as exc:
-                out_path.unlink(missing_ok=True)
-                sys.stderr.write(f"build-pkg-portable: project package validation failed: {exc}\n")
+                temp_dir = Path(tempfile.mkdtemp(prefix=f".{b.pkgname}.", dir=out_dir))
+            except OSError as exc:
+                sys.stderr.write(f"build-pkg-portable: {exc}\n")
                 return 1
+            temp_path = temp_dir / out_path.name
+            try:
+                temp_path.touch(mode=0o600)
+            except OSError as exc:
+                sys.stderr.write(f"build-pkg-portable: {exc}\n")
+                return 1
+            if not stat.S_ISREG(temp_path.lstat().st_mode):
+                raise BuildError(f"temporary output path is not a regular file: {temp_path}")
+            write_pkg(b, temp_path, args.compression)
+            if getattr(args, "_build_record", None) is not None:
+                try:
+                    validate_project_pkg(
+                        temp_path, args._build_record, expected_manifest=make_manifest(b, compact=False)
+                    )
+                except PkgError as exc:
+                    sys.stderr.write(f"build-pkg-portable: project package validation failed: {exc}\n")
+                    return 1
+            try:
+                _install_output_no_clobber(temp_path, out_path)
+            except BuildError as exc:
+                sys.stderr.write(f"build-pkg-portable: {exc}\n")
+                return 1
+            temp_path = None
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            if temp_dir is not None:
+                shutil.rmtree(temp_dir, ignore_errors=True)
         sys.stderr.write(f"==> wrote {out_path}  ({out_path.stat().st_size} bytes, {len(b.files)} files)\n")
         print(out_path)
         return 0

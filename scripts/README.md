@@ -275,9 +275,13 @@ canonical `pfSense-pkg-pfBlockerNG`. The normalized record carries channel,
 release line, classification, source tag/SHA, canonical version, native and
 emitted identities, matrix row, Ports SHA, route, `SOURCE_DATE_EPOCH`, and a
 deterministic input digest. Clean Git source/Ports attestations and the full
-post-write identity/payload validation are mandatory; failures remove output.
-Nightly versions are explicit `YYYYMMDD[_N]`. The builder publishes nothing and
-does not start workflow/catalogue jobs.
+post-write identity/payload validation are mandatory. Project mode requires a
+`USE_GITHUB` recipe plus a clean local source checkout; native-only annotation,
+catalogue, and FreeBSD-version overrides are rejected. Output uses an atomic
+no-clobber boundary: identical bytes are reusable, while divergent bytes or a
+symlink/non-regular destination fail without replacing prior output. Nightly
+versions are explicit `YYYYMMDD[_N]`. The builder publishes nothing and does
+not start workflow/catalogue jobs.
 
 Its output was **diffed field-by-field against a real `make package` build** (CI,
 FreeBSD VM) for the same commit: metadata, file set + checksums + perms
@@ -516,6 +520,12 @@ The scheduled version-tracking + release-automation design is its own ADR.
 of each channel per varver, plus the newest package of each major/minor line (line pins,
 below) — the window itself is identical to the pre-ADR-27 behaviour. Three flags control
 retention:
+
+Its default source-build seam accepts repeatable `--build-record PATH` values,
+matches each record's channel route and complete matrix row exactly, and forwards
+that record, its variant, and canonical package version to
+`build-pkg-portable.py`. Missing, duplicate, or mismatched records fail closed;
+an injected custom builder remains responsible for its own inputs.
 
 | Flag | Default | Purpose |
 | ---- | ------- | ------- |
