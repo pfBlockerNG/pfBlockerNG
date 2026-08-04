@@ -890,6 +890,31 @@ def test_release_side_artifact_name_matches_both_consumer_sides(tmp_path: Path) 
     assert not failures, "producer/consumer artifact-name mismatch:\n" + "\n".join(failures)
 
 
+def test_release_channel_metadata_and_edge_following_do_not_start_a_second_release() -> None:
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    published = (ROOT / ".github/workflows/release-published.yml").read_text(encoding="utf-8")
+    assert "pfBlockerNG-Release-Channel" in release, release
+    assert "pfBlockerNG-Release-Channel" in published, published
+    assert "workflow_dispatch" not in published, published
+    assert "release.yml" not in published, published
+    assert "build-pkg" not in published, published
+
+
+def test_tagged_release_recipe_never_mutates_the_nightly_port() -> None:
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    sync = release.split("sync-ports-fork:", 1)[1]
+    assert "pfSense-pkg-pfBlockerNG-nightly" not in sync, sync
+    assert 'PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel net/pfSense-pkg-pfBlockerNG-nightly"' not in release
+
+
+def test_smoke_single_nightly_fixture_uses_a_utc_date_and_optional_counter() -> None:
+    text = SMOKE_SINGLE_WORKFLOW.read_text(encoding="utf-8")
+    nightly = text.split("- name: Build a nightly .pkg", 1)[1].split("\n      # ADR-24", 1)[0]
+    assert "date -u +%Y%m%d" in nightly, nightly
+    assert re.search(r"YYYYMMDD|NIGHTLY_DATE", nightly), nightly
+    assert "20260606" not in nightly, nightly
+
+
 # --------------------------------------------------------------------------- #
 # draft-healthcheck: EXPECTED_PKGS floor (issue #1662 I1)
 # --------------------------------------------------------------------------- #

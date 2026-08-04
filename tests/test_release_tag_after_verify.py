@@ -37,6 +37,7 @@ the suite AND-gates fails here.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -558,14 +559,45 @@ def test_the_tag_classifier_runs_from_a_trusted_ref() -> None:
         assert untrusted not in ref_line, f"the classifier must not run from the released tree, got: {ref_line}"
 
 
-def _run_classify_step(tmp_path: Path, tag: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+def _published_tag_fixture(tmp_path: Path, tag: str, trailer: str | tuple[str, ...] | None = "testing") -> Path:
+    """Create a fetched tag object for the published-workflow step."""
+    origin = tmp_path / "origin.git"
+    repo = tmp_path / "published"
+    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True, env=scrubbed_git_env())  # noqa: S603
+    subprocess.run(["git", "init", "-q", "-b", "devel", str(repo)], check=True, env=scrubbed_git_env())  # noqa: S603
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    (repo / "a.txt").write_text("one\n")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "-qm", "one")
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "push", "-q", "origin", "devel")
+    if trailer is None:
+        _git(repo, "tag", tag)
+    else:
+        trailers = (trailer,) if isinstance(trailer, str) else trailer
+        args = ["tag", "-a", tag, "-m", tag]
+        for value in trailers:
+            args.extend(("-m", f"pfBlockerNG-Release-Channel: {value}"))
+        _git(repo, *args)
+    _git(repo, "push", "-q", "origin", f"refs/tags/{tag}")
+    (repo / "scripts").mkdir()
+    for helper in ("release-version.sh", "release_version.py"):
+        shutil.copy2(ROOT / "scripts" / helper, repo / "scripts" / helper)
+    return repo
+
+
+def _run_classify_step(
+    tmp_path: Path, tag: str, trailer: str | tuple[str, ...] | None = "testing"
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
     """Execute the REAL tag-classification step body under sh."""
     script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["resolve"], "Classify the tag"))
+    repo = _published_tag_fixture(tmp_path, tag, trailer)
     output_file = tmp_path / "gh_output"
     output_file.write_text("")
     completed = subprocess.run(  # noqa: S603
         ["sh", "-c", script],
-        cwd=ROOT,
+        cwd=repo,
         env={
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "TAG": tag,
@@ -599,15 +631,64 @@ def test_an_off_scheme_published_tag_reports_the_real_reason(tmp_path: Path) -> 
 
 
 def test_a_scheme_tag_classifies_cleanly(tmp_path: Path) -> None:
-    completed, outputs = _run_classify_step(tmp_path, "v4.0.0.alpha.7")
+    completed, outputs = _run_classify_step(tmp_path, "v4.0.0.a7")
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert outputs["branch"] == "devel", outputs
-    assert outputs["portversion"] == "4.0.0.alpha.7", outputs
+    assert outputs["channel"] == "testing", outputs
+    assert outputs["source"] == "release/4.0", outputs
+    assert outputs["portversion"] == "4.0.0.a7", outputs
 
 
 def test_the_published_workflow_reads_the_tag_from_the_release_payload() -> None:
     text = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
     assert "github.event.release.tag_name" in text, "the tag must come from the release that was published"
+
+
+def test_release_dispatch_requires_explicit_channel_and_source() -> None:
+    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    dispatch = text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    channel = dispatch.split("      channel:\n", 1)[1].split("\n\n", 1)[0]
+    assert re.search(r"^\s+type:\s*choice\s*$", channel, re.MULTILINE), channel
+    assert re.search(r"^\s+options:\s*\[stable, testing, edge\]\s*$", channel, re.MULTILINE), channel
+    source = dispatch.split("      source:\n", 1)[1].split("\n\n", 1)[0]
+    assert re.search(r"^\s+required:\s*true\s*$", source, re.MULTILINE), source
+    assert "release/X.Y" in source, source
+
+
+def test_release_uses_explicit_channel_and_exact_source_line() -> None:
+    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert 'release-version.sh "$TAG" "$CHANNEL" "$SOURCE"' in text, text
+    assert 'release-version.sh "$TAG")' not in text, text
+    assert 'git checkout "$SOURCE"' in text, text
+    assert 'if [ "$channel" = "devel" ]' not in text, text
+
+
+def test_tag_step_writes_and_validates_the_release_channel_trailer() -> None:
+    jobs = _jobs()
+    prepare = "\n".join(_jobs()["prepare-release"])
+    tag = _step_run_script(_step(jobs["tag-release"], "Create + push the tag on the verified commit"))
+    combined = prepare + "\n" + tag
+    assert "git interpret-trailers" in combined, combined
+    assert "pfBlockerNG-Release-Channel" in combined, combined
+    assert 'git cat-file -t "refs/tags/${TAG}"' in tag, tag
+    assert 'git rev-parse "refs/tags/${TAG}^{commit}"' in tag, tag
+
+
+@pytest.mark.parametrize(
+    "trailer",
+    [None, (), ("testing", "testing"), ("testing", "edge"), ("bogus",)],
+    ids=["lightweight", "missing", "duplicate", "conflicting", "unknown"],
+)
+def test_published_workflow_rejects_invalid_channel_trailers(tmp_path: Path, trailer: object) -> None:
+    values = trailer if isinstance(trailer, tuple) else trailer
+    completed, _outputs = _run_classify_step(tmp_path, "v4.0.0.a7", values)  # type: ignore[arg-type]
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+
+
+def test_published_workflow_passes_the_validated_channel_to_classifier(tmp_path: Path) -> None:
+    completed, outputs = _run_classify_step(tmp_path, "v4.0.0.a7", "testing")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert outputs["channel"] == "testing", outputs
+    assert outputs["source"] == "release/4.0", outputs
 
 
 # --------------------------------------------------------------------------- #
@@ -626,6 +707,8 @@ def _run_suites_decision(tmp_path: Path, tag: str, force_suites: str) -> dict[st
         env={
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "INPUT_TAG": tag,
+            "INPUT_CHANNEL": "stable" if tag == "v4.0.0" else "testing",
+            "INPUT_SOURCE": "release/4.0",
             "FORCE_SUITES": force_suites,
             "GITHUB_OUTPUT": str(output_file),
         },
@@ -643,9 +726,9 @@ def _run_suites_decision(tmp_path: Path, tag: str, force_suites: str) -> dict[st
 @pytest.mark.parametrize(
     ("tag", "expected_run_suites"),
     [
-        ("v4.0.0.alpha.1", "false"),  # alpha: verify-checks (CI green) is the mandatory gate
-        ("v4.0.0.beta.1", "false"),  # beta: same
-        ("v4.0.0.rc.1", "true"),  # rc: full live verification before the tag
+        ("v4.0.0.a1", "false"),  # alpha: verify-checks (CI green) is the mandatory gate
+        ("v4.0.0.b1", "false"),  # beta: same
+        ("v4.0.0.r1", "true"),  # rc: full live verification before the tag
         ("v4.0.0", "true"),  # stable: full live verification before the tag
     ],
 )
@@ -654,14 +737,14 @@ def test_run_suites_per_channel(tmp_path: Path, tag: str, expected_run_suites: s
     assert outputs["run_suites"] == expected_run_suites, outputs
 
 
-@pytest.mark.parametrize("tag", ["v4.0.0.alpha.1", "v4.0.0.beta.1"])
+@pytest.mark.parametrize("tag", ["v4.0.0.a1", "v4.0.0.b1"])
 def test_force_suites_turns_the_live_suites_back_on_for_an_alpha_or_beta(tmp_path: Path, tag: str) -> None:
     """The manual escape hatch: default off for alpha/beta, forceable per dispatch."""
     assert _run_suites_decision(tmp_path, tag, "false")["run_suites"] == "false"
     assert _run_suites_decision(tmp_path, tag, "true")["run_suites"] == "true"
 
 
-@pytest.mark.parametrize("tag", ["v4.0.0.rc.1", "v4.0.0"])
+@pytest.mark.parametrize("tag", ["v4.0.0.r1", "v4.0.0"])
 def test_force_suites_cannot_turn_the_live_suites_off(tmp_path: Path, tag: str) -> None:
     """rc/stable always verify; the input only ever ADDS verification."""
     assert _run_suites_decision(tmp_path, tag, "false")["run_suites"] == "true"
@@ -745,6 +828,8 @@ def _run_tag_step(repo: Path, tag: str, sha: str) -> subprocess.CompletedProcess
             "HOME": str(repo),
             "TAG": tag,
             "SHA": sha,
+            "CHANNEL": "testing",
+            "SOURCE": "release/9.9",
             "GITHUB_OUTPUT": str(repo / "gh_output"),
         },
         capture_output=True,
@@ -754,10 +839,10 @@ def _run_tag_step(repo: Path, tag: str, sha: str) -> subprocess.CompletedProcess
 
 def test_tag_step_creates_and_pushes_the_tag_on_the_pinned_sha(tmp_path: Path) -> None:
     repo, head, _older = _tag_repo(tmp_path)
-    result = _run_tag_step(repo, "v9.9.9.rc.1", head)
+    result = _run_tag_step(repo, "v9.9.9.r1", head)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert _git(repo, "rev-list", "-n", "1", "refs/tags/v9.9.9.rc.1") == head
-    assert "v9.9.9.rc.1" in _git(repo, "ls-remote", "--tags", "origin")
+    assert _git(repo, "rev-list", "-n", "1", "refs/tags/v9.9.9.r1") == head
+    assert "v9.9.9.r1" in _git(repo, "ls-remote", "--tags", "origin")
     assert f"sha={head}" in (repo / "gh_output").read_text()
 
 
@@ -765,11 +850,11 @@ def test_tag_step_resumes_a_tag_that_already_points_at_the_verified_sha(tmp_path
     """Scenario: a prior run crashed after tagging. Given the tag already exists on the
     SAME pinned SHA, when the step re-runs, then it reuses the tag and still succeeds."""
     repo, head, _older = _tag_repo(tmp_path)
-    _git(repo, "tag", "-a", "v9.9.9.rc.1", "-m", "v9.9.9.rc.1", head)
-    _git(repo, "push", "-q", "origin", "refs/tags/v9.9.9.rc.1")
-    result = _run_tag_step(repo, "v9.9.9.rc.1", head)
+    _git(repo, "tag", "-a", "v9.9.9.r1", "-m", "v9.9.9.r1", "-m", "pfBlockerNG-Release-Channel: testing", head)
+    _git(repo, "push", "-q", "origin", "refs/tags/v9.9.9.r1")
+    result = _run_tag_step(repo, "v9.9.9.r1", head)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert _git(repo, "rev-list", "-n", "1", "refs/tags/v9.9.9.rc.1") == head
+    assert _git(repo, "rev-list", "-n", "1", "refs/tags/v9.9.9.r1") == head
 
 
 def test_tag_step_refuses_a_stale_tag_pointing_at_other_code(tmp_path: Path) -> None:
@@ -778,12 +863,34 @@ def test_tag_step_refuses_a_stale_tag_pointing_at_other_code(tmp_path: Path) -> 
     artifacts belong to the pinned SHA, so silently reusing the old tag would publish
     assets that do not match their tag."""
     repo, head, older = _tag_repo(tmp_path)
-    _git(repo, "tag", "-a", "v9.9.9.rc.1", "-m", "v9.9.9.rc.1", older)
-    _git(repo, "push", "-q", "origin", "refs/tags/v9.9.9.rc.1")
-    result = _run_tag_step(repo, "v9.9.9.rc.1", head)
+    _git(repo, "tag", "-a", "v9.9.9.r1", "-m", "v9.9.9.r1", "-m", "pfBlockerNG-Release-Channel: testing", older)
+    _git(repo, "push", "-q", "origin", "refs/tags/v9.9.9.r1")
+    result = _run_tag_step(repo, "v9.9.9.r1", head)
     assert result.returncode != 0, result.stdout + result.stderr
     assert "::error::" in (result.stdout + result.stderr)
-    assert _git(repo, "rev-list", "-n", "1", "refs/tags/v9.9.9.rc.1") == older, "the stale tag must not be moved"
+    assert _git(repo, "rev-list", "-n", "1", "refs/tags/v9.9.9.r1") == older, "the stale tag must not be moved"
+
+
+@pytest.mark.parametrize(
+    "trailers",
+    [None, (), ("testing", "testing"), ("testing", "edge"), ("bogus",)],
+    ids=["lightweight", "missing", "duplicate", "conflicting", "unknown"],
+)
+def test_tag_step_refuses_existing_tags_without_exact_channel_metadata(tmp_path: Path, trailers: object) -> None:
+    repo, head, _older = _tag_repo(tmp_path)
+    tag = "v9.9.9.r1"
+    if trailers is None:
+        _git(repo, "tag", tag, head)
+    else:
+        args = ["tag", "-a", tag, "-m", tag]
+        assert isinstance(trailers, tuple)
+        for value in trailers:
+            args.extend(("-m", f"pfBlockerNG-Release-Channel: {value}"))
+        _git(repo, *args, head)
+    _git(repo, "push", "-q", "origin", f"refs/tags/{tag}")
+    result = _run_tag_step(repo, tag, head)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "::error::" in result.stdout + result.stderr
 
 
 # --------------------------------------------------------------------------- #
@@ -906,12 +1013,12 @@ def test_retag_refuses_a_published_release(tmp_path: Path) -> None:
     """Given the tag already carries a PUBLISHED Release, when retag runs, then it
     refuses: a published release is immutable, so retagging cannot rescue it and the
     only way forward is the next .N."""
-    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", '{"isDraft":false,"assets":[]}')
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.r1", '{"isDraft":false,"assets":[]}')
     assert completed.returncode != 0, completed.stdout + completed.stderr
     assert "::error::" in completed.stdout + completed.stderr
     assert "PUBLISHED" in completed.stdout + completed.stderr
     assert not [c for c in calls if "delete" in c or "DELETE" in c], calls
-    assert _tag_still_there(tmp_path, "v9.9.9.rc.1")
+    assert _tag_still_there(tmp_path, "v9.9.9.r1")
 
 
 def test_retag_refuses_a_draft_that_already_has_assets(tmp_path: Path) -> None:
@@ -926,12 +1033,12 @@ def test_retag_refuses_a_draft_that_already_has_assets(tmp_path: Path) -> None:
     the operator both routes rather than pick one for them: re-dispatch the same tag
     with `retag=false` to finish the draft, or delete it by hand to start over.
     """
-    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", '{"isDraft":true,"assets":[{"name":"x.pkg"}]}')
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.r1", '{"isDraft":true,"assets":[{"name":"x.pkg"}]}')
     message = completed.stdout + completed.stderr
     assert completed.returncode != 0, message
     assert "::error::" in message
     assert not [c for c in calls if "delete" in c or "DELETE" in c], calls
-    assert _tag_still_there(tmp_path, "v9.9.9.rc.1")
+    assert _tag_still_there(tmp_path, "v9.9.9.r1")
     assert "retag=false" in message, f"the refusal must name the way to FINISH that draft: {message}"
     assert "by hand" in message, f"the refusal must name the way to START OVER: {message}"
 
@@ -939,23 +1046,23 @@ def test_retag_refuses_a_draft_that_already_has_assets(tmp_path: Path) -> None:
 def test_retag_deletes_an_assetless_draft_together_with_the_tag(tmp_path: Path) -> None:
     """An assetless draft is the debris of a crashed run. Leaving it while deleting its
     tag would orphan it and produce two drafts for the same tag, so both go."""
-    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", '{"isDraft":true,"assets":[]}')
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.r1", '{"isDraft":true,"assets":[]}')
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert any(c.startswith("release delete v9.9.9.rc.1") for c in calls), calls
-    assert any("git/refs/tags/v9.9.9.rc.1" in c for c in calls), calls
-    assert not _tag_still_there(tmp_path, "v9.9.9.rc.1"), "the local ref must go too, or the pin re-finds it"
+    assert any(c.startswith("release delete v9.9.9.r1") for c in calls), calls
+    assert any("git/refs/tags/v9.9.9.r1" in c for c in calls), calls
+    assert not _tag_still_there(tmp_path, "v9.9.9.r1"), "the local ref must go too, or the pin re-finds it"
 
 
 def test_retag_with_no_release_deletes_only_the_tag(tmp_path: Path) -> None:
-    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", None)
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.r1", None)
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert not [c for c in calls if c.startswith("release delete")], calls
-    assert any("git/refs/tags/v9.9.9.rc.1" in c for c in calls), calls
-    assert not _tag_still_there(tmp_path, "v9.9.9.rc.1")
+    assert any("git/refs/tags/v9.9.9.r1" in c for c in calls), calls
+    assert not _tag_still_there(tmp_path, "v9.9.9.r1")
 
 
 def test_retag_is_a_silent_no_op_when_no_tag_exists(tmp_path: Path) -> None:
-    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", None, make_tag=False)
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.r1", None, make_tag=False)
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert not [c for c in calls if "delete" in c or "DELETE" in c], calls
 
@@ -965,8 +1072,8 @@ def test_a_dry_run_never_deletes_anything(tmp_path: Path, release_json: str | No
     """Defence in depth: the job is real-publish only, so this step cannot run in a dry
     run at all -- but if that gate is ever relaxed, the step still refuses to delete and
     only reports what it would have removed."""
-    completed, calls = _run_retag_step(tmp_path, "v9.9.9.rc.1", release_json, dry_run="true")
+    completed, calls = _run_retag_step(tmp_path, "v9.9.9.r1", release_json, dry_run="true")
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert not [c for c in calls if "delete" in c or "DELETE" in c], calls
-    assert _tag_still_there(tmp_path, "v9.9.9.rc.1")
+    assert _tag_still_there(tmp_path, "v9.9.9.r1")
     assert "would delete" in completed.stdout.lower(), completed.stdout
