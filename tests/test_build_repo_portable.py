@@ -1328,7 +1328,7 @@ def _build_record_for(entry: dict[str, Any], channel: str, version: str) -> dict
     record: dict[str, object] = {
         "schema": 1,
         "channel": channel,
-        "release_line": "devel" if channel == "nightly" else "release/4.0",
+        "release_line": "release/4.0",
         "classification": (
             "nightly" if channel == "nightly" else {"stable": "final", "testing": "alpha", "edge": "beta"}[channel]
         ),
@@ -1982,7 +1982,7 @@ def test_retention_rejects_malformed_annotation_container(tmp_path: Path) -> Non
 
 
 def test_retain_by_channel_testing_pruned_independently(tmp_path: Path) -> None:
-    """Devel bucket is pruned to keep_testing; stable bucket is untouched when keep_stable=0.
+    """Testing bucket is pruned to keep_testing; stable bucket is untouched when keep_stable=0.
 
     Scenario: 3 testing versions + 2 stable versions; keep_testing=2, keep_stable=0
       Given 3 testing pkgs (v1, v2, v3) and 2 stable pkgs (s1.0, s2.0)
@@ -2007,7 +2007,7 @@ def test_retain_by_channel_testing_pruned_independently(tmp_path: Path) -> None:
     kept_names_versions = {
         (brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept
     }
-    # Devel: newest 2 kept (v2, v3); v1 dropped.
+    # Testing: newest 2 kept (v2, v3); v1 dropped.
     assert ("pfBlockerNG-testing", "3.0.3") in kept_names_versions
     assert ("pfBlockerNG-testing", "3.0.2") in kept_names_versions
     assert ("pfBlockerNG-testing", "3.0.1") not in kept_names_versions
@@ -2044,7 +2044,7 @@ def test_retain_by_channel_stable_pruned_independently(tmp_path: Path) -> None:
     assert ("pfBlockerNG", "2.0.3") in kept_nv
     assert ("pfBlockerNG", "2.0.2") not in kept_nv
     assert ("pfBlockerNG", "2.0.1") not in kept_nv
-    # Devel: both kept.
+    # Testing: both kept.
     assert ("pfBlockerNG-testing", "3.0.1") in kept_nv
     assert ("pfBlockerNG-testing", "3.0.2") in kept_nv
 
@@ -2155,7 +2155,7 @@ def test_retain_by_channel_nightly_untouched(tmp_path: Path) -> None:
     kept = brp.retain_by_channel(all_paths, keep_testing=1, keep_stable=1)
 
     kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
-    # Devel: the one testing pkg kept.
+    # Testing: the one testing pkg kept.
     assert ("pfBlockerNG-testing", "3.0.1") in kept_nv
     # Stable: the one stable pkg kept.
     assert ("pfBlockerNG", "2.0.1") in kept_nv
@@ -2195,7 +2195,7 @@ def test_retain_by_channel_mixed_prune_nightly_untouched(tmp_path: Path) -> None
 
     kept_nv = {(brp.read_compact_manifest(p)["name"], brp.read_compact_manifest(p)["version"]) for p in kept}
 
-    # Devel: only newest 1 (3.0.3).
+    # Testing: only newest 1 (3.0.3).
     assert ("pfBlockerNG-testing", "3.0.3") in kept_nv
     assert ("pfBlockerNG-testing", "3.0.2") not in kept_nv
     assert ("pfBlockerNG-testing", "3.0.1") not in kept_nv
@@ -2313,12 +2313,12 @@ def test_retain_by_channel_line_pin_survives_outside_window(tmp_path: Path) -> N
 
 
 def test_retain_by_channel_line_pin_is_channel_specific(tmp_path: Path) -> None:
-    """The spec's named case: v3.2.15 Stable and v3.2.16 Devel both pin, independently.
+    """The spec's named case: v3.2.15 Stable and v3.2.16 Testing both pin, independently.
 
-    Scenario: Stable pfBlockerNG-3.2.15 and Devel pfBlockerNG-testing-3.2.16, both far
+    Scenario: Stable pfBlockerNG-3.2.15 and Testing pfBlockerNG-testing-3.2.16, both far
     outside a keep=1 window built from many newer versions in each channel.
       Given a Stable channel: 3.2.15 (old) + 5 newer 5.0.x releases; keep_stable=1
-        And a Devel channel: 3.2.16 (old) + 5 newer 5.0.x testing builds; keep_testing=1
+        And a Testing channel: 3.2.16 (old) + 5 newer 5.0.x testing builds; keep_testing=1
       When retain_by_channel is called
       Then BOTH 3.2.15 (stable) and 3.2.16 (testing) survive as their channel's 3.2 pin
        And neither channel's pin satisfies the other (no cross-channel leakage)
@@ -2629,7 +2629,7 @@ def test_release_subtree_retains_testing_and_stable(tmp_path: Path) -> None:
     rel = out / "release" / "ce-2.8" / "packagesite.pkg"
     nv_set = _names_versions_in_release(rel)
 
-    # Devel: 3.0.2, 3.0.3, 3.0.4 present; 3.0.1 dropped (4th/oldest).
+    # Testing: 3.0.2, 3.0.3, 3.0.4 present; 3.0.1 dropped (4th/oldest).
     assert ("pfBlockerNG-testing", "3.0.4") in nv_set
     assert ("pfBlockerNG-testing", "3.0.3") in nv_set
     assert ("pfBlockerNG-testing", "3.0.2") in nv_set
@@ -3731,7 +3731,7 @@ def test_consume_mode_nightly_still_built_from_source(tmp_path: Path) -> None:
 
     # Builder called for nightly but NOT for testing/stable.
     assert "nightly" in builder_channels, "builder must be called for nightly in consume mode"
-    assert "devel" not in builder_channels, "builder must NOT be called for testing in consume mode"
+    assert "testing" not in builder_channels, "builder must NOT be called for testing in consume mode"
 
     # Nightly catalog exists.
     assert (out / "nightly" / "ce-2.8" / "packagesite.pkg").is_file()
