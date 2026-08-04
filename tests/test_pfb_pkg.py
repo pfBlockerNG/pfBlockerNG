@@ -491,6 +491,15 @@ def test_validate_project_pkg_expected_manifest_mismatch(tmp_path: Path) -> None
         pfb_pkg.validate_project_pkg(pkg, record, expected_manifest=wrong)
 
 
+def test_validate_project_pkg_binds_payload_mtime_to_record_epoch(tmp_path: Path) -> None:
+    """Project provenance is incomplete when payload mtimes ignore source_date_epoch."""
+    record = _record(source_date_epoch=1)
+    pkg, _, _ = _synthetic_pkg(tmp_path, record)
+
+    with pytest.raises(pfb_pkg.PkgError, match="source_date_epoch"):
+        pfb_pkg.validate_project_pkg(pkg, record)
+
+
 def _zstd_frame(data: bytes) -> bytes:
     """Compress with whatever zstd encoder is available (mirrors the decoder fallback)."""
     try:

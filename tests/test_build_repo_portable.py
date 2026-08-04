@@ -1282,6 +1282,7 @@ _CHANNEL_NAME = {
     "devel": "pfBlockerNG-devel",  # legacy fixture inputs remain devel-named
     "testing": "pfBlockerNG-devel",  # source-build seam now selects testing
     "stable": "pfBlockerNG",
+    "edge": "pfBlockerNG-devel",  # edge fan-out shares fixture identity without provenance records
     "nightly": "pfBlockerNG-nightly",
 }
 
@@ -1480,6 +1481,19 @@ def test_build_matrix_release_holds_devel_and_stable(tmp_path: Path) -> None:
     assert _names_in(rel) == {"pfBlockerNG-devel", "pfBlockerNG"}
 
 
+def test_build_matrix_calls_all_live_channels(tmp_path: Path) -> None:
+    """Every build-role row invokes stable, testing, edge, and nightly seams."""
+    seen: list[str] = []
+
+    def recording_builder(channel: str, **kwargs: Any) -> Path:
+        seen.append(channel)
+        return _stub_builder(channel, **kwargs)
+
+    brp.build_repo_matrix([_CE], tmp_path / "site", builder=recording_builder, stable_tag="v3.2.15")
+
+    assert seen == ["testing", "stable", "edge", "nightly"]
+
+
 def test_build_matrix_full_matrix_no_dedup(tmp_path: Path) -> None:
     """Two versions sharing ABI+php+py still get their OWN subtree (full matrix, no dedup)."""
     ce_28 = _CE
@@ -1614,7 +1628,7 @@ def test_build_matrix_annotate_passthrough(tmp_path: Path) -> None:
 
     Given a recording builder,
       When build_repo_matrix runs with annotate={commit, created},
-      Then every build (devel + nightly) receives that exact annotate dict.
+      Then every build (testing + edge + nightly) receives that exact annotate dict.
     """
     seen: list[dict] = []
 
@@ -1628,7 +1642,7 @@ def test_build_matrix_annotate_passthrough(tmp_path: Path) -> None:
     assert seen, "builder was never called"
     for call in seen:
         assert call["annotate"] == {"commit": "deadbeef", "created": "123"}
-    assert {c["channel"] for c in seen} == {"testing", "nightly"}
+    assert {c["channel"] for c in seen} == {"testing", "edge", "nightly"}
 
 
 def test_default_builder_forwards_project_record_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1835,6 +1849,42 @@ def test_retention_annotation_cannot_be_interpreted_as_a_record_path(tmp_path: P
 
     with pytest.raises(brp.BuildRepoError, match="JSON object"):
         brp._retention_channel(tmp_path / "fixture.pkg", manifest)
+
+
+def test_retention_rejects_divergent_duplicate_before_pruning(tmp_path: Path) -> None:
+    """Retention must not discard one divergent archive before collision checking."""
+    first = tmp_path / "first.pkg"
+    duplicate = tmp_path / "duplicate.pkg"
+    make_pkg(first, name="pfBlockerNG-devel", version="4.0.0", payload=b"hey")
+    make_pkg(duplicate, name="pfBlockerNG-devel", version="4.0.0", payload=b"heY")
+
+    with pytest.raises(brp.BuildRepoError, match="PACKAGE COLLISION"):
+        brp.retain_by_channel([first, duplicate], keep_devel=1, keep_stable=0)
+
+
+def test_emit_rejects_partial_annotated_canonical_package(tmp_path: Path) -> None:
+    """A canonical package carrying a build record must pass full archive validation."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    _make_annotated_project_pkg(in_dir, "stable", "4.0.0", "partial.pkg")
+
+    with pytest.raises(brp.BuildRepoError, match="manifests must be the first two archive members"):
+        brp.build_repo(in_dir, tmp_path / "out")
+
+
+def test_emit_allows_legacy_canonical_package_without_record(tmp_path: Path) -> None:
+    """Native legacy stable packages without provenance remain publishable."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(
+        in_dir / "legacy.pkg",
+        name=pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+        version="4.0.0",
+        abi="FreeBSD:15:*",
+    )
+
+    brp.build_repo(in_dir, tmp_path / "out")
+    assert (tmp_path / "out" / "pfSense-pkg-pfBlockerNG-4.0.0.pkg").is_file()
 
 
 def test_retention_rejects_malformed_annotation_container(tmp_path: Path) -> None:
