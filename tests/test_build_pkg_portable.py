@@ -2206,15 +2206,26 @@ def test_project_checkout_attestation_rejects_materialized_index_flags(tmp_path:
     assert bpp.main(_project_args(ports, portdir, record, source=tmp_path / "source")) == 1
 
 
-def test_project_rejects_tracked_symlink_outside_source_tree(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "link_name,ignored",
+    [("ignored-external.txt", True), ("tracked-trailing-space ", False)],
+)
+def test_project_rejects_external_source_symlinks_in_payload(tmp_path: Path, link_name: str, ignored: bool) -> None:
     ports, portdir, ports_sha, source_sha = _make_channel_port(tmp_path, "stable", github=True)
     source = tmp_path / "source"
     outside = tmp_path / "outside.txt"
     outside.write_text("mutable")
-    link = source / "src/usr/local/share/pfSense-pkg-pfBlockerNG/external.txt"
+    if ignored:
+        (source / ".gitignore").write_text(f"src/usr/local/share/pfSense-pkg-pfBlockerNG/{link_name}\n")
+        _git(source, "add", ".gitignore")
+        _git(source, "-c", "commit.gpgsign=false", "commit", "-qm", "ignore-external-link")
+    link = source / "src/usr/local/share/pfSense-pkg-pfBlockerNG" / link_name
     link.symlink_to(outside)
-    _git(source, "add", "-A")
-    source_sha = _git(source, "-c", "commit.gpgsign=false", "commit", "-qm", "external-link")
+    if not ignored:
+        _git(source, "add", "-A")
+        _git(source, "-c", "commit.gpgsign=false", "commit", "-qm", "external-link")
+    assert _git(source, "status", "--porcelain", "--untracked-files=all") == ""
+    source_sha = _git(source, "rev-parse", "HEAD")
     _git(source, "tag", "-f", "v4.0.0")
     record = _record("stable", ports_sha, source_sha=source_sha)
     record["build_input_digest"] = pfb_pkg.build_input_digest(record)
@@ -2247,6 +2258,20 @@ def test_project_ignores_tracked_symlink_outside_source_payload(tmp_path: Path) 
     _git(source, "tag", "-f", "v4.0.0")
     record = _record("stable", ports_sha, source_sha=source_sha)
     assert bpp.main(_project_args(ports, portdir, record, source=source)) == 0
+
+
+def test_project_rejects_ignored_ports_symlink_outside_checkout(tmp_path: Path) -> None:
+    ports, portdir, _ports_sha, source_sha = _make_channel_port(tmp_path, "stable", github=True)
+    outside = tmp_path / "outside-port"
+    outside.write_text("not in ports")
+    (ports / ".gitignore").write_text("ignored-port-link\n")
+    _git(ports, "add", ".gitignore")
+    _git(ports, "-c", "commit.gpgsign=false", "commit", "-qm", "ignore-port-link")
+    (ports / "ignored-port-link").symlink_to(outside)
+    assert _git(ports, "status", "--porcelain", "--untracked-files=all") == ""
+    ports_sha = _git(ports, "rev-parse", "HEAD")
+    record = _record("stable", ports_sha, source_sha=source_sha)
+    assert bpp.main(_project_args(ports, portdir, record, source=tmp_path / "source")) == 1
 
 
 def test_project_rejects_tracked_ports_symlink_outside_checkout(tmp_path: Path) -> None:
