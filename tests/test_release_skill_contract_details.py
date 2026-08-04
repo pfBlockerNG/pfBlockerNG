@@ -84,3 +84,11 @@ def test_channel_targets_are_explicit_and_nightly_is_not_branch_bound() -> None:
         assert "Nightly" in content and "devel` branch" not in content, path
         assert "Edge follows Testing only when no distinct target" in content, path
         assert "distinct-target Edge uses its configured target/line" in content, path
+
+
+def test_scripts_readme_nightly_contract_is_branch_independent() -> None:
+    content = _text(ROOT / "scripts/README.md")
+    paragraph = content.split("## Release channel contract", 1)[1].split("## ", 1)[0]
+    assert "Nightly is an independent untagged" in paragraph
+    assert "pinned source SHA" in paragraph
+    assert not any(branch in paragraph for branch in ("`devel`", "`main`", "release/X.Y"))
