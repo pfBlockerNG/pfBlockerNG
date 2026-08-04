@@ -11,15 +11,14 @@
 # hardcoded, pfBlockerNG-specific file list. So when the port gains files or
 # changes dependencies, this tool keeps up with the real `make package` inputs.
 #
-# It supports BOTH port layouts:
-#   * USE_GITHUB  (FreeBSD-ports branch pfblockerng/use-github): source fetched
-#     from GitHub into ${WRKSRC} (= <project>-<ver>/src); do-install copies thence.
-#   * classic     (FreeBSD-ports branch devel, pre-src/ move): source embedded in
-#     the port's files/ dir (${FILESDIR}); do-install copies thence.
-# It picks the right one from the Makefile (USE_GITHUB present or not). For the
-# USE_GITHUB variant you can pass --local-src to build from a local pfBlockerNG
-# working tree instead of fetching the GitHub tag — handy for iterating on code
-# under test, the way scripts/build-pkg.sh pins GH_TAGNAME on a FreeBSD VM.
+# It supports both source layouts used by the four static native recipes:
+#   * USE_GITHUB: source fetched from GitHub into ${WRKSRC}
+#     (= <project>-<ver>/src); do-install copies thence.
+#   * embedded files: source is in the port's files/ directory (${FILESDIR}).
+# It picks the right layout from the Makefile (USE_GITHUB present or not). For
+# USE_GITHUB, --local-src builds from a local pfBlockerNG working tree instead
+# of fetching a tag. Native output keeps the recipe identity; a validated
+# --build-record makes the portable builder emit only pfSense-pkg-pfBlockerNG.
 #
 # The result is a real libpkg archive: zstd-compressed tar with +COMPACT_MANIFEST
 # and +MANIFEST first, then payload files at their absolute paths. `pkg add` on
@@ -989,8 +988,7 @@ def _decompress(data: bytes) -> bytes:
 
 
 def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Path | None:
-    """Populate ${WRKSRC} for a USE_GITHUB port; return the WRKSRC path, or None
-    for a classic port (which installs from ${FILESDIR}, nothing to fetch)."""
+    """Populate ${WRKSRC} for a USE_GITHUB port; return None for an embedded-files port."""
     if not _truthy(mk.get("USE_GITHUB")):
         return None
 
@@ -1702,7 +1700,7 @@ def run_build(args: argparse.Namespace) -> Build:
     acquire_source(mk, workdir, args)
 
     recipe = Recipe(mk)
-    # do-extract only matters for the classic port (mkdir WRKSRC); harmless for GH.
+    # do-extract only matters for an embedded-files port (mkdir WRKSRC); harmless for GH.
     if "do-extract" in mk.recipes and not _truthy(mk.get("USE_GITHUB")):
         recipe.run("do-extract")
     if "post-extract" in mk.recipes:
@@ -1810,7 +1808,7 @@ def main(argv: list[str]) -> int:
         "--ports",
         default=None,
         help=(
-            "FreeBSD-ports checkout (contains net/pfSense-pkg-pfBlockerNG[-devel]); "
+            "FreeBSD-ports checkout (contains one of the stable/testing/edge/nightly recipes); "
             "not required for --print-port-origin"
         ),
     )
@@ -1845,13 +1843,13 @@ def main(argv: list[str]) -> int:
         help="force the NO_ARCH manifest abi/arch wildcard even when the port Makefile lacks NO_ARCH=yes (issue #1676)",
     )
 
-    g_snap = ap.add_argument_group("nightly overrides (ADR-18; default off — release build byte-identical)")
+    g_snap = ap.add_argument_group("version and normalized project record (default off)")
     g_snap.add_argument(
         "--pkgversion",
         default="",
         help=(
-            "override the computed package version with the nightly's pkg-safe comparable "
-            "version, e.g. 3.2.16.20260606.1 (must not contain '-')."
+            "set the explicit package version (required with --build-record; Nightly uses "
+            "YYYYMMDD or YYYYMMDD_N; must not contain '-')."
         ),
     )
     g_snap.add_argument("--build-record", default="", help="normalized build record as JSON text or a JSON file path")

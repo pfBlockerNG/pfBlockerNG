@@ -5,7 +5,8 @@
 #
 # USAGE:
 #   build-leg.sh [--ports-repo OWNER/NAME|URL] [--ports-ref REF]
-#                [--channel devel|stable|nightly] [--abi ABI]
+#                [--channel stable|testing|edge|nightly] [--variant CE|Plus]
+#                [--build-record JSON|PATH] [--abi ABI]
 #                [--py-flavor PYxx] [--php X.Y] [--local-src DIR]
 #                [--pkgversion V] [--annotate K=V]... [--no-arch]
 #                [--ports-dir DEST] [--out-dir OUT]
@@ -18,7 +19,9 @@
 #   --ports-repo  pfBlockerNG/FreeBSD-ports   → https://github.com/<repo>
 #                 (file:// and https:// URLs pass through unchanged)
 #   --ports-ref   pfblockerng/use-github
-#   --channel     devel          (→ sparse-clone arg4 AND builder --channel)
+#   --channel     testing        (→ sparse-clone arg4 AND builder --channel)
+#   --variant     CE             (→ builder --variant; native builds ignore it)
+#   --build-record (empty)       → --build-record JSON|PATH when supplied
 #   --abi         FreeBSD:15:amd64
 #   --py-flavor   py311
 #   --php         8.3
@@ -61,7 +64,9 @@ pfb_scrub_git_env
 # ── Defaults ─────────────────────────────────────────────────────────────────
 PORTS_REPO='pfBlockerNG/FreeBSD-ports'
 PORTS_REF='pfblockerng/use-github'
-CHANNEL='devel'
+CHANNEL='testing'
+VARIANT='CE'
+BUILD_RECORD=''
 ABI='FreeBSD:15:amd64'  # version-literal-ok: default; overridden by --abi (CI passes the matrix ABI)
 PYFLAVOR='py311'  # version-literal-ok: default; overridden by --py-flavor (CI passes the matrix flavor)
 PHP='8.3'
@@ -84,6 +89,8 @@ while [ $# -gt 0 ]; do
         --ports-repo)  PORTS_REPO="${1?build-leg.sh: --ports-repo requires an argument}"; shift ;;
         --ports-ref)   PORTS_REF="${1?build-leg.sh: --ports-ref requires an argument}";   shift ;;
         --channel)     CHANNEL="${1?build-leg.sh: --channel requires an argument}";       shift ;;
+        --variant)     VARIANT="${1?build-leg.sh: --variant requires an argument}";       shift ;;
+        --build-record) BUILD_RECORD="${1?build-leg.sh: --build-record requires an argument}"; shift ;;
         --abi)         ABI="${1?build-leg.sh: --abi requires an argument}";               shift ;;
         --py-flavor)   PYFLAVOR="${1?build-leg.sh: --py-flavor requires an argument}";   shift ;;
         --php)         PHP="${1?build-leg.sh: --php requires an argument}";               shift ;;
@@ -160,6 +167,7 @@ sh "${SCRIPT_DIR}/sparse-clone-ports.sh" \
 set -- \
     --ports     "$DEST"     \
     --channel   "$CHANNEL"  \
+    --variant   "$VARIANT"  \
     --local-src "$LOCAL_SRC" \
     --abi       "$ABI"      \
     --py-flavor "$PYFLAVOR" \
@@ -168,6 +176,10 @@ set -- \
 
 # Append --pkgversion only when supplied (empty → omit so builder uses Makefile).
 [ -n "$PKGVERSION" ] && set -- "$@" --pkgversion "$PKGVERSION"
+
+# Pass the normalized record only when project mode is requested; native builds
+# remain recipe-driven and keep their existing argv.
+[ -n "$BUILD_RECORD" ] && set -- "$@" --build-record "$BUILD_RECORD"
 
 # Append --no-arch only when the flag was given (default off).
 [ -n "$NO_ARCH" ] && set -- "$@" --no-arch

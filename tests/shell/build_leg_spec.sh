@@ -32,7 +32,9 @@ Describe 'build-leg.sh'
 
     BUILDER_ARGV="${WORK}/builder_argv"
     CLONE_ARGV="${WORK}/clone_argv"
-    FAKE_PKG="${WORK}/pfBlockerNG-devel-4.0.0.pkg"
+    FAKE_PKG="${WORK}/pfSense-pkg-pfBlockerNG-testing-4.0.0.pkg"
+    BUILD_RECORD="${WORK}/build-record.json"
+    printf '%s\n' '{}' > "$BUILD_RECORD"
     touch "$FAKE_PKG"
 
     # Fake build-pkg-portable.py: records argv (one per line) and prints FAKE_PKG_PATH.
@@ -83,6 +85,49 @@ SHEOF
 
   # ── Layer (a): argv-assembly parity ──────────────────────────────────────
 
+  Describe 'channel and project record forwarding'
+    check_defaults() {
+      sh "${FAKE_SCRIPTS}/build-leg.sh" 2>/dev/null
+      echo "channel=$(arg_after '--channel' "$BUILDER_ARGV_FILE")"
+      echo "variant=$(arg_after '--variant' "$BUILDER_ARGV_FILE")"
+      if grep -qF -- '--build-record' "$BUILDER_ARGV_FILE" 2>/dev/null; then
+        echo 'record=present'
+      else
+        echo 'record=absent'
+      fi
+      echo "clone_channel=$(sed -n '4p' "$CLONE_ARGV")"
+    }
+
+    It 'defaults to testing channel and CE variant, omits absent build record'
+      When call check_defaults
+      The output should include 'channel=testing'
+      The output should include 'variant=CE'
+      The output should include 'record=absent'
+      The output should include 'clone_channel=testing'
+    End
+
+    check_project_record() {
+      sh "${FAKE_SCRIPTS}/build-leg.sh" \
+        --channel edge \
+        --variant Plus \
+        --build-record "$BUILD_RECORD" \
+        --pkgversion '4.0.0.b1' \
+        2>/dev/null
+      echo "channel=$(arg_after '--channel' "$BUILDER_ARGV_FILE")"
+      echo "variant=$(arg_after '--variant' "$BUILDER_ARGV_FILE")"
+      echo "record=$(arg_after '--build-record' "$BUILDER_ARGV_FILE")"
+      echo "pkgversion=$(arg_after '--pkgversion' "$BUILDER_ARGV_FILE")"
+    }
+
+    It 'forwards channel, variant, build record, and pkgversion to portable builder'
+      When call check_project_record
+      The output should include 'channel=edge'
+      The output should include 'variant=Plus'
+      The output should include "record=${BUILD_RECORD}"
+      The output should include 'pkgversion=4.0.0.b1'
+    End
+  End
+
   # ── Amendment-1: stdout contract ─────────────────────────────────────────
   #
   # The sparse-clone fake prints "Your branch is up to date with ..." to stdout.
@@ -95,7 +140,7 @@ SHEOF
   # `The output should equal "$FAKE_PKG"` assertion below FAILS.  With the 1>&2
   # redirect it is exactly one line and PASSES.  The red output was recorded manually:
   #   Your branch is up to date with origin/pfblockerng/use-github.
-  #   /tmp/buildleg.XXXXXX/pfBlockerNG-devel-4.0.0.pkg
+  #   /tmp/buildleg.XXXXXX/pfSense-pkg-pfBlockerNG-testing-4.0.0.pkg
   # (see RESULTS/03_Results.txt for the full red evidence).
   Describe 'amendment-1: stdout contract'
     run_default() {
@@ -119,7 +164,7 @@ SHEOF
       sh "${FAKE_SCRIPTS}/build-leg.sh" \
         --ports-repo 'pfBlockerNG/FreeBSD-ports' \
         --ports-ref 'pfblockerng/use-github' \
-        --channel 'devel' \
+        --channel 'testing' \
         --abi 'FreeBSD:15:amd64' \
         --py-flavor 'py311' \
         --php '8.3' \
@@ -149,7 +194,7 @@ SHEOF
       When call check_linux_leg
       The output should include 'pkgversion=absent'
       The output should include 'annotate=absent'
-      The output should include 'channel=devel'
+      The output should include 'channel=testing'
       The output should include 'php=8.3'
     End
   End
@@ -158,7 +203,7 @@ SHEOF
   Describe 'release leg'
     check_release_leg() {
       sh "${FAKE_SCRIPTS}/build-leg.sh" \
-        --channel 'devel' \
+        --channel 'testing' \
         --abi 'FreeBSD:15:amd64' \
         --py-flavor 'py311' \
         --php '8.3' \
@@ -195,7 +240,7 @@ SHEOF
   # ── --no-arch passthrough (issue #1676) ───────────────────────────────────
   Describe '--no-arch passthrough'
     check_no_arch_given() {
-      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel devel --no-arch 2>/dev/null
+      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel testing --no-arch 2>/dev/null
       if grep -qF -- '--no-arch' "$BUILDER_ARGV_FILE" 2>/dev/null; then
         echo "no_arch=present"
       else
@@ -213,7 +258,7 @@ SHEOF
     End
 
     check_no_arch_omitted() {
-      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel devel 2>/dev/null
+      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel testing 2>/dev/null
       if grep -qF -- '--no-arch' "$BUILDER_ARGV_FILE" 2>/dev/null; then
         echo "no_arch=present"
       else
@@ -228,7 +273,7 @@ SHEOF
 
     check_no_arch_combined() {
       sh "${FAKE_SCRIPTS}/build-leg.sh" \
-        --channel devel \
+        --channel testing \
         --pkgversion '4.0.0.rc.1' \
         --annotate 'created=1750000000' \
         --annotate 'commit=abc1234567890abcdef' \
@@ -266,7 +311,7 @@ SHEOF
   Describe 'branch coverage: --pkgversion absence vs presence'
     linux_then_release() {
       # linux leg: no --pkgversion
-      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel devel 2>/dev/null
+      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel testing 2>/dev/null
       if grep -qF -- '--pkgversion' "$BUILDER_ARGV_FILE" 2>/dev/null; then
         echo "linux_pv=present"
       else
@@ -274,7 +319,7 @@ SHEOF
       fi
       # release leg: with --pkgversion (different argv file)
       export BUILDER_ARGV_FILE="${WORK}/argv_release"
-      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel devel --pkgversion '4.0.0.rc.1' 2>/dev/null
+      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel testing --pkgversion '4.0.0.rc.1' 2>/dev/null
       if grep -qF -- '--pkgversion' "${WORK}/argv_release" 2>/dev/null; then
         echo "release_pv=present"
       else
@@ -331,13 +376,13 @@ SHEOF
       # First invocation with RUN_ID=run-key-001
       BUILDER_ARGV_FILE="${WORK}/argv_key1"
       export BUILDER_ARGV_FILE
-      RUN_ID="run-key-001" sh "${FAKE_SCRIPTS}/build-leg.sh" --channel devel >/dev/null 2>/dev/null
+      RUN_ID="run-key-001" sh "${FAKE_SCRIPTS}/build-leg.sh" --channel testing >/dev/null 2>/dev/null
       out1="$(arg_after '--out' "${WORK}/argv_key1")"
 
       # Second invocation with a different RUN_ID
       BUILDER_ARGV_FILE="${WORK}/argv_key2"
       export BUILDER_ARGV_FILE
-      RUN_ID="run-key-002" sh "${FAKE_SCRIPTS}/build-leg.sh" --channel devel >/dev/null 2>/dev/null
+      RUN_ID="run-key-002" sh "${FAKE_SCRIPTS}/build-leg.sh" --channel testing >/dev/null 2>/dev/null
       out2="$(arg_after '--out' "${WORK}/argv_key2")"
 
       if [ "$out1" != "$out2" ]; then
