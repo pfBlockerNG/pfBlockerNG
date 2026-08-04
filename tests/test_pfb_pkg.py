@@ -396,7 +396,9 @@ def test_inspect_and_validate_project_pkg_full_cascade(tmp_path: Path, compressi
             "payload inventory differs",
         ),
         (
-            lambda c, f, p: f["scripts"].update(install="/etc/rc.packages pfSense-pkg-pfBlockerNG-testing"),
+            lambda c, f, p: f["scripts"].update(
+                install="#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG-testing ${2}\n"
+            ),
             "suffixed native identity",
         ),
         (

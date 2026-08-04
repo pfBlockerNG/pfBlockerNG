@@ -1837,6 +1837,13 @@ def test_retention_annotation_cannot_be_interpreted_as_a_record_path(tmp_path: P
         brp._retention_channel(tmp_path / "fixture.pkg", manifest)
 
 
+def test_retention_rejects_malformed_annotation_container(tmp_path: Path) -> None:
+    manifest = {"name": pfb_pkg.CANONICAL_EMITTED_IDENTITY, "annotations": []}
+
+    with pytest.raises(brp.BuildRepoError, match="annotations must be an object"):
+        brp._retention_channel(tmp_path / "fixture.pkg", manifest)
+
+
 def test_retain_by_channel_devel_pruned_independently(tmp_path: Path) -> None:
     """Devel bucket is pruned to keep_devel; stable bucket is untouched when keep_stable=0.
 
