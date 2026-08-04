@@ -12,7 +12,7 @@ Given:
     A full FreeBSD-ports checkout is available at PORTS_DIR.
 
 When (test 1):
-    --print-build-origins is called for (devel, php=8.3, py311).
+    --print-build-origins is called for (testing, php=8.3, py311).
 
 Then (test 1):
     The output includes every dir in the known-good set, including devel/php83-intl
@@ -46,7 +46,7 @@ import pytest
 _DEFAULT_PORTS = Path(__file__).parent.parent.parent / "FreeBSD-ports"
 _BUILDER = Path(__file__).parent.parent / "scripts" / "build-pkg-portable.py"
 
-# Known-good origin set for (channel=devel, php=8.3, py_flavor=py311)
+# Known-good origin set for (channel=testing, php=8.3, py_flavor=py311)
 _EXPECTED_ORIGINS = {
     "databases/py-sqlite3",
     "devel/php83-intl",
@@ -55,7 +55,7 @@ _EXPECTED_ORIGINS = {
     "net-mgmt/grepcidr",
     "net-mgmt/iprange",
     "net/libmaxminddb",
-    "net/pfSense-pkg-pfBlockerNG-devel",
+    "net/pfSense-pkg-pfBlockerNG-testing",
     "net/py-maxminddb",
     "net/rsync",
     "textproc/gnugrep",
@@ -63,7 +63,7 @@ _EXPECTED_ORIGINS = {
     "www/lighttpd",
 }
 
-_CHANNEL = "devel"
+_CHANNEL = "testing"
 _PHP = "8.3"
 _PY = "py311"
 _ABI = "FreeBSD:15:amd64"
@@ -77,7 +77,7 @@ _ABI = "FreeBSD:15:amd64"
 def _ports_dir() -> Path | None:
     env = os.environ.get("FREEBSD_PORTS_DIR")
     p = Path(env) if env else _DEFAULT_PORTS
-    if p.is_dir() and (p / "net" / "pfSense-pkg-pfBlockerNG-devel" / "Makefile").is_file():
+    if p.is_dir() and (p / "net" / "pfSense-pkg-pfBlockerNG-testing" / "Makefile").is_file():
         return p
     return None
 
@@ -98,10 +98,10 @@ def _run_builder(*args: str, ports: Path) -> subprocess.CompletedProcess[str]:
 
 @pytest.mark.skipif(_ports_dir() is None, reason="FreeBSD-ports checkout not found locally; skip in CI")
 def test_print_build_origins_includes_expected_dirs() -> None:
-    """--print-build-origins for (devel, php=8.3, py311) emits every expected dir.
+    """--print-build-origins for (testing, php=8.3, py311) emits every expected dir.
 
     Given a full FreeBSD-ports checkout.
-    When  --print-build-origins is called with the devel channel + CE 2.8 variants.
+    When  --print-build-origins is called with the testing channel + CE 2.8 variants.
     Then  the output is a superset of the 13 known-good origin dirs, including
           devel/php83-intl resolved via the filesystem glob.
     """

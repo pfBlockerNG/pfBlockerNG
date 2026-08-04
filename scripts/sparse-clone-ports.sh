@@ -13,7 +13,7 @@
 #   REF        branch, tag, or full 40-hex commit SHA to fetch (e.g. pfblockerng/use-github)
 #   DEST       destination directory — created (fresh clone) if absent; an EXISTING
 #              git work-tree is fetched + checked out at REF (idempotent reuse)
-#   CHANNEL    build-pkg-portable --channel value (devel|stable|nightly)
+#   CHANNEL    build-pkg-portable --channel value (stable|testing|edge|nightly)
 #   PHP        build-pkg-portable --php value (e.g. 8.3)
 #   PYFLAVOR   build-pkg-portable --py-flavor value (e.g. py311)
 #
@@ -21,8 +21,8 @@
 # builds — CI hits the fresh-clone branch on an empty runner dir, a local/repeat build
 # hits the reuse branch on a persistent clone, and both end on REF with the same sparse
 # checkout. Reuse FETCHES + checks out REF rather than trusting whatever branch happens
-# to be checked out: a tree left on e.g. devel installs an EMPTY pfblockerng_extra.inc
-# stub and builds a silently-broken .pkg. So the build never depends on a human having
+# to be checked out: a tree left on the wrong recipe installs an EMPTY
+# pfblockerng_extra.inc stub and builds a silently-broken .pkg. So the build never depends on a human having
 # remembered to switch branches.
 #
 # The script leaves DEST ready for:

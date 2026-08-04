@@ -244,8 +244,9 @@ in `read-version-matrix.sh`.
 | [`update-pfsense-stubs.py`](update-pfsense-stubs.py) | Regenerate `stubs/pfsense/` after a CE bump. |
 | [`claude-stop-guard.py`](claude-stop-guard.py) | Claude Code Stop-hook: blocks a done/fixed/implemented claim made after editing `src/`/`tests/` with no gate command run since (issue #925). Not yet registered in `.claude/settings.json`. |
 
-`install-from-repo.sh` syncs the files then runs the port's real install hook —
-`php -f /etc/rc.packages pfSense-pkg-pfBlockerNG-devel POST-INSTALL` (exactly what
+`install-from-repo.sh` syncs the files then runs the selected static recipe's real
+install hook — for example
+`php -f /etc/rc.packages pfSense-pkg-pfBlockerNG-testing POST-INSTALL` (exactly what
 `pkg` runs) — which registers the menu/services and runs `pfblockerng_install.inc`.
 It is **all local: no internet, no Netgate pkg**, so it works even with egress blocked
 (and is also handy for installing onto a local dev VM).
@@ -263,8 +264,20 @@ it executes the port's own `do-extract`/`post-extract`/`do-install` recipe and
 reads its `pkg-plist` — so it tracks new files and dependency changes
 automatically, rather than hardcoding pfBlockerNG's current layout — then writes
 a real `.pkg` (zstd tar: `+COMPACT_MANIFEST` + `+MANIFEST` + payload). It handles
-**both** ports layouts: `USE_GITHUB` (branch `pfblockerng/use-github`, source
-fetched from GitHub) and the classic embedded-`files/` layout (branch `devel`).
+**both** source layouts used by the four static native recipes: `USE_GITHUB`
+(recipe-defined source ref, fetched from GitHub) and embedded `files/` content.
+
+Native mode preserves the recipe identity: Stable, Testing, Edge, and Nightly
+emit `pfSense-pkg-pfBlockerNG`, `pfSense-pkg-pfBlockerNG-testing`,
+`pfSense-pkg-pfBlockerNG-edge`, and `pfSense-pkg-pfBlockerNG-nightly`. Project
+mode takes `--build-record JSON|PATH` plus `--pkgversion` and always emits the
+canonical `pfSense-pkg-pfBlockerNG`. The normalized record carries channel,
+release line, classification, source tag/SHA, canonical version, native and
+emitted identities, matrix row, Ports SHA, route, `SOURCE_DATE_EPOCH`, and a
+deterministic input digest. Clean Git source/Ports attestations and the full
+post-write identity/payload validation are mandatory; failures remove output.
+Nightly versions are explicit `YYYYMMDD[_N]`. The builder publishes nothing and
+does not start workflow/catalogue jobs.
 
 Its output was **diffed field-by-field against a real `make package` build** (CI,
 FreeBSD VM) for the same commit: metadata, file set + checksums + perms
@@ -292,9 +305,9 @@ for if omitted — see
 `--freebsd-version` sets the `annotations` block.
 
 ```sh
-# build from a local working tree (fast dev iteration), targeting CE 2.8
+# build from a local working tree (fast dev iteration), targeting CE 2.8/testing
 python3 scripts/build-pkg-portable.py --ports ../FreeBSD-ports \
-    --local-src . --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out /tmp
+    --channel testing --local-src . --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out /tmp
 
 # or build exactly what the port fetches (a commit/tag with a src/ tree), targeting Plus
 # (flag values from the target version's ci-metadata matrix entry)

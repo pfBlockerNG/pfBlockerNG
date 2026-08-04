@@ -46,8 +46,8 @@ or dependencies, so it tracks changes to the port automatically:
    best-effort name/version mining, are exempt: real tree ports routinely carry
    `.if` blocks.)
 2. **Acquire the source** (USE_GITHUB ports): fetch the GitHub tarball for
-   `GH_TAGNAME`, or use a local checkout (`--local-src`). Classic ports install
-   from the port's embedded `files/` directory, so nothing is fetched.
+   `GH_TAGNAME`, or use a local checkout (`--local-src`). Embedded-files recipes
+   install from their `files/` directory, so nothing is fetched.
 3. **Replay the recipe.** The tool interprets the port's `do-extract`,
    `post-extract` and `do-install` targets with a small command vocabulary
    (`MKDIR`, `INSTALL_DATA`, `INSTALL_SCRIPT`, `MV`, `REINPLACE_CMD`/`SED` —
@@ -63,6 +63,35 @@ or dependencies, so it tracks changes to the port automatically:
    (UCL/JSON) plus the payload, as a zstd- (or xz-) compressed tar — a real
    libpkg `.pkg` that `pkg add` installs and registers on pfSense, running the
    package's POST-INSTALL hook just like a port-built `.pkg`.
+
+### Channel identity and normalized build records
+
+Native mode follows the selected Ports recipe and keeps its identity. The four
+static native identities are:
+
+| Channel | Native recipe identity |
+| --- | --- |
+| `stable` | `pfSense-pkg-pfBlockerNG` |
+| `testing` | `pfSense-pkg-pfBlockerNG-testing` |
+| `edge` | `pfSense-pkg-pfBlockerNG-edge` |
+| `nightly` | `pfSense-pkg-pfBlockerNG-nightly` |
+
+Pass `--build-record JSON|PATH` for a project build. The builder validates one
+normalized record carrying `channel`, `release_line`, `classification`,
+`source_tag`, `source_sha`, `canonical_package_version`, native and emitted
+identities, the matrix row, FreeBSD-ports SHA, route, `source_date_epoch`, and a
+deterministic build-input digest. It then emits exactly
+`pfSense-pkg-pfBlockerNG` regardless of the native recipe. The record's source
+SHA and Ports SHA must be clean Git checkouts; `SOURCE_DATE_EPOCH` (when set)
+must equal the record. Nightly project versions must be explicitly validated
+`YYYYMMDD` or `YYYYMMDD_N` values — never the static recipe version.
+
+After writing a project package, the builder re-inspects the complete identity
+cascade (manifest and filename, PKGBASE/origin, share path, `info.xml`, hooks,
+dependencies, scripts, annotations, ABI/arch, payload inventory/checksums,
+source, channel, and route). Any mismatch, divergent bytes, provenance, or
+input digest fails closed and removes the output. This tool does not publish
+packages or start repository/workflow/catalogue jobs.
 
 ## Requirements
 
@@ -89,7 +118,7 @@ python3 scripts/build-pkg-portable.py \
     --py-flavor py311 \
     --php 8.3 \
     --out /tmp
-# -> /tmp/pfSense-pkg-pfBlockerNG-devel-<version>.pkg
+# -> /tmp/pfSense-pkg-pfBlockerNG-testing-<version>.pkg
 ```
 
 The built path is printed to stdout; progress goes to stderr. Add `--dry-run` to
@@ -101,14 +130,17 @@ print the build plan (files, modes, dependencies) without writing an archive.
 
 | Option | Description |
 | --- | --- |
-| `--ports PATH` | FreeBSD-ports checkout. Must contain `net/pfSense-pkg-pfBlockerNG[-devel]` and the dependency ports (e.g. `textproc/jq`, `lang/php83`) used to resolve dependency names. |
+| `--ports PATH` | FreeBSD-ports checkout. Must contain the selected stable/testing/edge/nightly recipe and dependency ports (e.g. `textproc/jq`, `lang/php83`) used to resolve dependency names. |
 
 ### Port selection
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--channel devel\|stable` | `devel` | Which port to build: `devel` → `net/pfSense-pkg-pfBlockerNG-devel`, `stable` → `net/pfSense-pkg-pfBlockerNG`. |
+| `--channel stable\|testing\|edge\|nightly` | `testing` | Which static native recipe to build. |
 | `--port-dir PATH` | — | Build an explicit port directory instead, overriding `--channel`. |
+| `--variant CE\|Plus` | `CE` | Matrix variant for a normalized project record. |
+| `--build-record JSON\|PATH` | — | Validate and carry the normalized project record; switches emitted identity to exactly `pfSense-pkg-pfBlockerNG`. |
+| `--pkgversion VERSION` | — | Explicit canonical package version. Required in project mode; Nightly accepts only `YYYYMMDD` or `YYYYMMDD_N`. |
 
 ### Target facts (version-dependent; asked if omitted)
 
@@ -150,17 +182,17 @@ interactive, the tool prompts; otherwise it exits with an error naming the flag.
 
 ## The two port layouts
 
-pfBlockerNG's port has existed in two shapes; the tool detects which from the
-`Makefile` and handles both:
+The four channel recipes can use either source shape; the tool detects which
+from the `Makefile` and handles both:
 
 | Layout | Branch | Source of files | Build source |
 | --- | --- | --- | --- |
-| `USE_GITHUB` | `pfblockerng/use-github` | fetched from GitHub (`GH_ACCOUNT`/`GH_PROJECT`/`GH_TAGNAME`), `WRKSRC = <project>-<ver>/src` | the fetched tag, or `--local-src` |
-| classic | `devel` (pre-`src/` move) | embedded in the port's `files/` directory (`${FILESDIR}`) | the ports checkout itself |
+| `USE_GITHUB` | recipe-defined source ref | fetched from GitHub (`GH_ACCOUNT`/`GH_PROJECT`/`GH_TAGNAME`), `WRKSRC = <project>-<ver>/src` | the fetched tag, or `--local-src` |
+| embedded-files | recipe-defined source files | embedded in the port's `files/` directory (`${FILESDIR}`) | the ports checkout itself |
 
 For the `USE_GITHUB` layout, `--local-src` substitutes a local checkout for the
 GitHub fetch — useful to package code under test without cutting a tag.
-`--local-src` does not apply to the classic layout (its source is the embedded
+`--local-src` does not apply to the embedded-files layout (its source is the embedded
 `files/`).
 
 ## Target facts (ABI / Python / PHP)
@@ -309,11 +341,11 @@ the version each example targets — always take them from the ci-metadata versi
 matrix (`supported-versions.json`), never treat them as fixed per edition.
 
 ```sh
-# 1) Build the local working tree for CE 2.8 (devel channel), into /tmp.
+# 1) Build the local working tree for CE 2.8 (testing channel), into /tmp.
 python3 scripts/build-pkg-portable.py --ports ../FreeBSD-ports --local-src . \
-    --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out /tmp
+    --channel testing --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out /tmp
 
-# 2) Build the stable channel from the FreeBSD-ports embedded files (classic
+# 2) Build the stable channel from the FreeBSD-ports embedded files (embedded-files
 #    layout — no --local-src needed; the ports tree carries the code).
 python3 scripts/build-pkg-portable.py --ports ../FreeBSD-ports --channel stable \
     --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3
@@ -361,7 +393,7 @@ runs:
 
 ```sh
 python3 scripts/build-pkg-portable.py \
-  --ports "$PORTS" --channel devel --local-src . \
+  --ports "$PORTS" --channel testing --local-src . \
   --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out out
 ```
 

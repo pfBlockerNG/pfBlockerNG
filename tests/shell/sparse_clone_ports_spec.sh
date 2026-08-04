@@ -23,7 +23,7 @@
 
 Describe 'sparse-clone-ports.sh'
   SCRIPT="${PFB_ROOT}/scripts/sparse-clone-ports.sh"
-  PORT_SUB="net/pfSense-pkg-pfBlockerNG-devel"
+  PORT_SUB="net/pfSense-pkg-pfBlockerNG-testing"
 
   # Build a local git 'remote' with two branches at the port Makefile (devel = stub; the
   # use-github branch = USE_GITHUB=yes) and a fake python3 covering the builder's two query
@@ -47,10 +47,10 @@ Describe 'sparse-clone-ports.sh'
       git_fixture config user.name CI
       git_fixture config uploadpack.allowFilter true
       git_fixture checkout -q -b devel
-      printf 'PORTNAME=pfBlockerNG-devel\n# classic: pfblockerng_extra.inc from FILESDIR (stub)\n' > "${PORT_SUB}/Makefile"
+      printf 'PORTNAME=pfSense-pkg-pfBlockerNG-testing\n# classic: pfblockerng_extra.inc from FILESDIR (stub)\n' > "${PORT_SUB}/Makefile"
       git_fixture add -A && git_fixture -c commit.gpgsign=false commit -qm devel
       git_fixture checkout -q -b pfblockerng/use-github
-      printf 'PORTNAME=pfBlockerNG-devel\nUSE_GITHUB=yes\n' > "${PORT_SUB}/Makefile"
+      printf 'PORTNAME=pfSense-pkg-pfBlockerNG-testing\nUSE_GITHUB=yes\n' > "${PORT_SUB}/Makefile"
       git_fixture add -A && git_fixture -c commit.gpgsign=false commit -qm use-github
       git_fixture tag use-github-tag
       git_fixture checkout -q devel
@@ -61,10 +61,10 @@ Describe 'sparse-clone-ports.sh'
     cat > "${BIN}/python3" <<'PYEOF'
 #!/bin/sh
 # stand-in for `python3 build-pkg-portable.py ...` — only the clone script's two query
-# subcommands; echo the devel port dir for both, ignore everything else.
+# subcommands; echo the testing port dir for both, ignore everything else.
 for _a in "$@"; do
 	case "$_a" in
-		--print-port-origin|--print-build-origins) echo "net/pfSense-pkg-pfBlockerNG-devel"; exit 0 ;;
+		--print-port-origin|--print-build-origins) echo "net/pfSense-pkg-pfBlockerNG-testing"; exit 0 ;;
 	esac
 done
 exit 0
@@ -78,7 +78,7 @@ PYEOF
 
   # Discard git's incidental clone/checkout chatter and echo only the meaningful outcome, so
   # the assertions pin behaviour (which branch variant materialised) not volatile git wording.
-  run_clone() { sh "$SCRIPT" "$URL" pfblockerng/use-github "$DEST" devel 8.3 py311; }
+  run_clone() { sh "$SCRIPT" "$URL" pfblockerng/use-github "$DEST" testing 8.3 py311; }
   is_build_input_variant() { grep -q '^USE_GITHUB=yes' "$MAKEFILE"; }
 
   fresh_result() {
@@ -94,7 +94,7 @@ PYEOF
   # issue #1676: `git clone -b REF` only accepts a branch/tag NAME — a bare 40-hex
   # commit SHA fails ("fatal: Remote branch <sha> not found in upstream origin").
   # Fresh clone with a full-SHA REF must still land on that commit.
-  run_clone_sha() { sh "$SCRIPT" "$URL" "$USE_GITHUB_SHA" "$DEST" devel 8.3 py311; }
+  run_clone_sha() { sh "$SCRIPT" "$URL" "$USE_GITHUB_SHA" "$DEST" testing 8.3 py311; }
 
   fresh_sha_result() {
     run_clone_sha >/dev/null 2>&1 || { echo "script-failed=$?"; return 1; }
@@ -108,7 +108,7 @@ PYEOF
     The line 2 of output should equal "head=${USE_GITHUB_SHA}"
   End
 
-  run_clone_tag() { sh "$SCRIPT" "$URL" use-github-tag "$DEST" devel 8.3 py311; }
+  run_clone_tag() { sh "$SCRIPT" "$URL" use-github-tag "$DEST" testing 8.3 py311; }
   fresh_tag_result() {
     run_clone_tag >/dev/null 2>&1 || { echo "script-failed=$?"; return 1; }
     if is_build_input_variant; then echo 'variant=usegithub'; else echo 'variant=stub'; fi
@@ -121,7 +121,7 @@ PYEOF
 
   # REF is 40 chars but not hex ("z" is outside [0-9a-f]) -> not a SHA -> unchanged
   # branch/tag fast path -> fails exactly as before (no branch named this).
-  run_clone_zzz() { sh "$SCRIPT" "$URL" 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz' "$DEST" devel 8.3 py311 2>&1; }
+  run_clone_zzz() { sh "$SCRIPT" "$URL" 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz' "$DEST" testing 8.3 py311 2>&1; }
   It 'fresh-clone: a 40-char non-hex REF (40 zs) is not a SHA -> branch path, fails as before'
     When call run_clone_zzz
     The status should be failure
@@ -132,7 +132,7 @@ PYEOF
   # fast path (git's fetch-by-oid needs the full oid, not an abbreviation) -> fails.
   run_clone_short_sha() {
     _short="$(printf '%.7s' "$USE_GITHUB_SHA")"
-    sh "$SCRIPT" "$URL" "$_short" "$DEST" devel 8.3 py311 2>&1
+    sh "$SCRIPT" "$URL" "$_short" "$DEST" testing 8.3 py311 2>&1
   }
   It 'fresh-clone: a short 7-hex SHA abbreviation is not a full SHA -> branch path, fails as before'
     When call run_clone_short_sha
@@ -186,7 +186,7 @@ PYEOF
   # path) and fail exactly as it always did. `git clone -b` prints "Remote branch ...
   # not found" only on that fast path (the fetch-by-oid path, when reachable, prints a
   # different message) — asserting that phrase proves the REF was NOT treated as a SHA.
-  run_clone_hostile() { sh "$SCRIPT" "$URL" "$1" "$DEST" devel 8.3 py311 2>&1; }
+  run_clone_hostile() { sh "$SCRIPT" "$URL" "$1" "$DEST" testing 8.3 py311 2>&1; }
 
   It 'empty REF is not a SHA -> branch path (not fetch-by-oid)'
     When call run_clone_hostile ''
