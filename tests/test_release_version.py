@@ -43,7 +43,7 @@ def test_context_classifies_shared_tag_grammar(
     tag: str, channel: str, expected: tuple[str, str, str | None, str, bool, bool, str]
 ) -> None:
     info = parse_release_tag(tag, channel)  # type: ignore[arg-type,call-arg]
-    version, stage, sequence, channel, prerelease, final, pkg_version = expected
+    version, _stage, _sequence, _expected_channel, _prerelease, final, _pkg_version = expected
     assert (
         info.version,
         info.stage,
@@ -58,7 +58,7 @@ def test_context_classifies_shared_tag_grammar(
     assert info.release_line == f"release/{info.target_final.rsplit('.', 1)[0]}"
     assert info.package == PACKAGE
     assert info.notes_required is True
-    assert info.github_release == "final" if final else info.github_release == "prerelease"
+    assert info.github_release == ("final" if final else "prerelease")
 
 
 @pytest.mark.parametrize(
@@ -138,11 +138,10 @@ def test_hostile_wrapper_inputs_emit_no_assignments(tag: str, channel: str) -> N
     assert result.stdout == ""
 
 
-@pytest.mark.parametrize("branch", ["release/3.2"])
-def test_matching_release_line_is_required_for_tagged_context(branch: str) -> None:
+def test_matching_release_line_is_required_for_tagged_context() -> None:
     info = parse_release_tag("v3.2.15", "stable")  # type: ignore[arg-type,call-arg]
-    validate_branch(info, branch)
-    validate_branch(parse_release_tag("v3.2.16.a1", "edge"), branch)  # type: ignore[arg-type,call-arg]
+    validate_branch(info, "release/3.2")
+    validate_branch(parse_release_tag("v3.2.16.a1", "edge"), "release/3.2")  # type: ignore[arg-type,call-arg]
 
 
 @pytest.mark.parametrize("branch", ["main", "devel", "release/3.3", "feature/release", ""])

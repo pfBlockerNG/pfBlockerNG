@@ -568,8 +568,12 @@ def _published_tag_fixture(
     """Create a fetched tag object for the published-workflow step."""
     origin = tmp_path / "origin.git"
     repo = tmp_path / "published"
-    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True, env=scrubbed_git_env())  # noqa: S603
-    subprocess.run(["git", "init", "-q", "-b", "devel", str(repo)], check=True, env=scrubbed_git_env())  # noqa: S603
+    subprocess.run(  # noqa: S603
+        ["git", "init", "--bare", "-q", str(origin)], check=True, env=scrubbed_git_env(drop_git_vars=True)
+    )
+    subprocess.run(  # noqa: S603
+        ["git", "init", "-q", "-b", "devel", str(repo)], check=True, env=scrubbed_git_env(drop_git_vars=True)
+    )
     _git(repo, "config", "user.email", "t@example.invalid")
     _git(repo, "config", "user.name", "t")
     (repo / "a.txt").write_text("one\n")
@@ -583,8 +587,7 @@ def _published_tag_fixture(
     else:
         trailers = (trailer,) if isinstance(trailer, str) else trailer
         args = ["tag", "-a", tag, "-m", tag]
-        for value in trailers:
-            args.extend(("-m", f"pfBlockerNG-Release-Channel: {value}"))
+        args.extend(("-m", "\n".join(f"pfBlockerNG-Release-Channel: {value}" for value in trailers)))
         _git(repo, *args)
     _git(repo, "push", "-q", "origin", f"refs/tags/{tag}")
     (repo / "scripts").mkdir()
@@ -742,7 +745,7 @@ def test_tag_step_writes_and_validates_the_release_channel_trailer() -> None:
     combined = prepare + "\n" + tag
     assert "git interpret-trailers" in combined, combined
     assert "pfBlockerNG-Release-Channel" in combined, combined
-    assert combined.count("grep -Eic '^pfBlockerNG-Release-Channel[[:space:]]*:'") == 2, combined
+    assert combined.count("grep -Eic '^pfBlockerNG-Release-Channel:'") == 2, combined
     assert 'git cat-file -t "refs/tags/${TAG}"' in tag, tag
     assert 'git rev-parse "refs/tags/${TAG}^{commit}"' in tag, tag
 
@@ -899,7 +902,7 @@ def _git(repo: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         check=True,
-        env=scrubbed_git_env(),
+        env=scrubbed_git_env(drop_git_vars=True),
     ).stdout.strip()
 
 
@@ -907,8 +910,12 @@ def _tag_repo(tmp_path: Path) -> tuple[Path, str, str]:
     """A work repo with a bare `origin`, two commits; returns (repo, head_sha, older_sha)."""
     origin = tmp_path / "origin.git"
     repo = tmp_path / "work"
-    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True, env=scrubbed_git_env())  # noqa: S603
-    subprocess.run(["git", "init", "-q", "-b", "devel", str(repo)], check=True, env=scrubbed_git_env())  # noqa: S603
+    subprocess.run(  # noqa: S603
+        ["git", "init", "--bare", "-q", str(origin)], check=True, env=scrubbed_git_env(drop_git_vars=True)
+    )
+    subprocess.run(  # noqa: S603
+        ["git", "init", "-q", "-b", "devel", str(repo)], check=True, env=scrubbed_git_env(drop_git_vars=True)
+    )
     _git(repo, "config", "user.email", "t@example.invalid")
     _git(repo, "config", "user.name", "t")
     (repo / "a.txt").write_text("one\n")
@@ -952,8 +959,7 @@ def test_tag_step_creates_and_pushes_the_tag_on_the_pinned_sha(tmp_path: Path) -
 
 
 def test_tag_step_resumes_a_tag_that_already_points_at_the_verified_sha(tmp_path: Path) -> None:
-    """Scenario: a prior run crashed after tagging. Given the tag already exists on the
-    SAME pinned SHA, when the step re-runs, then it reuses the tag and still succeeds."""
+    """Reuse an existing annotated tag only when it points to the pinned SHA."""
     repo, head, _older = _tag_repo(tmp_path)
     _git(repo, "tag", "-a", "v9.9.9.r1", "-m", "v9.9.9.r1", "-m", "pfBlockerNG-Release-Channel: testing", head)
     _git(repo, "push", "-q", "origin", "refs/tags/v9.9.9.r1")
@@ -1007,8 +1013,7 @@ def test_tag_step_refuses_existing_tags_without_exact_channel_metadata(tmp_path:
     else:
         args = ["tag", "-a", tag, "-m", tag]
         assert isinstance(trailers, tuple)
-        for value in trailers:
-            args.extend(("-m", f"pfBlockerNG-Release-Channel: {value}"))
+        args.extend(("-m", "\n".join(f"pfBlockerNG-Release-Channel: {value}" for value in trailers)))
         _git(repo, *args, head)
     _git(repo, "push", "-q", "origin", f"refs/tags/{tag}")
     result = _run_tag_step(repo, tag, head)
@@ -1126,7 +1131,7 @@ def _tag_still_there(tmp_path: Path, tag: str) -> bool:
             ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
             cwd=tmp_path / "work",
             capture_output=True,
-            env=scrubbed_git_env(),
+            env=scrubbed_git_env(drop_git_vars=True),
         ).returncode
         == 0
     )

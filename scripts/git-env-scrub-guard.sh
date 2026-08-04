@@ -83,7 +83,7 @@ agent_work_branch_spec.sh:5
 composer_cloud_install_spec.sh:4
 git_no_docs_spec.sh:5
 githooks_pre_push_lease_spec.sh:33
-githooks_pre_push_tag_scheme_spec.sh:17
+githooks_pre_push_tag_scheme_spec.sh:28
 githooks_prepare_commit_msg_guard_spec.sh:18
 pfblockerng_truncate_survival_spec.sh:4
 precommit_composer_vendor_spec.sh:2

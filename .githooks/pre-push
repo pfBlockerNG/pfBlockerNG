@@ -23,7 +23,7 @@ CLASSIFY="${ROOT}/scripts/release-version.sh"
 # Both loops below consume the per-ref update list, so capture stdin once.
 updates=$(cat)
 
-while IFS=' ' read -r _local_ref local_sha remote_ref _remote_sha; do
+while IFS=' ' read -r local_ref local_sha remote_ref _remote_sha; do
     # Only inspect tag pushes
     case "$remote_ref" in refs/tags/*) ;; *) continue ;; esac
 
@@ -41,7 +41,16 @@ while IFS=' ' read -r _local_ref local_sha remote_ref _remote_sha; do
     fi
 
     tag_ref="refs/tags/${tag}"
-    type=$(git cat-file -t "$tag_ref" 2>/dev/null || true)
+    if [ "$local_ref" != "$tag_ref" ]; then
+        echo "error: versioned tag '$tag' must be pushed from source ref '$tag_ref'" >&2
+        exit 1
+    fi
+    ref_sha=$(git rev-parse --verify "$tag_ref" 2>/dev/null || true)
+    if [ "$ref_sha" != "$local_sha" ]; then
+        echo "error: tag '$tag' update does not match its local tag object" >&2
+        exit 1
+    fi
+    type=$(git cat-file -t "$local_sha" 2>/dev/null || true)
     if [ "$type" != "tag" ]; then
         if [ -z "$type" ]; then
             echo "error: '$tag' does not point to a commit reachable from an exact release/X.Y line" >&2
@@ -53,7 +62,7 @@ while IFS=' ' read -r _local_ref local_sha remote_ref _remote_sha; do
 
     raw_tag_message=$(git for-each-ref --format='%(contents)' "$tag_ref")
     trailers=$(printf '%s\n' "$raw_tag_message" | git interpret-trailers --parse)
-    channel_count=$(printf '%s\n' "$raw_tag_message" | grep -Eic '^pfBlockerNG-Release-Channel[[:space:]]*:' || true)
+    channel_count=$(printf '%s\n' "$trailers" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
     if [ "$channel_count" -ne 1 ]; then
         echo "error: tag '$tag' must carry exactly one release-channel trailer" >&2
         exit 1
@@ -78,7 +87,7 @@ while IFS=' ' read -r _local_ref local_sha remote_ref _remote_sha; do
     fi
 
     release_line=$(sh "$CLASSIFY" "$tag" "$channel" | sed -n 's/^release_line=//p')
-    commit=$(git rev-parse --verify "${tag_ref}^{commit}" 2>/dev/null) || {
+    commit=$(git rev-parse --verify "${local_sha}^{commit}" 2>/dev/null) || {
         echo "error: tag '$tag' does not resolve to a commit" >&2
         exit 1
     }

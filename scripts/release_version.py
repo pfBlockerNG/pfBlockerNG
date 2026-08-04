@@ -121,9 +121,9 @@ def parse_release_tag(tag: str, channel: Channel | None = None) -> ReleaseInfo:
     raise _invalid(tag)
 
 
-def _validate_source_sha(source_sha: str) -> None:
+def _validate_source_sha(source_sha: str, *, name: str = "source_sha") -> None:
     if not isinstance(source_sha, str) or not _SHA_RE.fullmatch(source_sha):
-        raise ValueError("source_sha must be lowercase 40- or 64-character hex")
+        raise ValueError(f"{name} must be lowercase 40- or 64-character hex")
 
 
 def validate_release_info(info: ReleaseInfo) -> None:
@@ -166,7 +166,7 @@ def _validate_nightly_allocation(value: object) -> NightlyAllocation:
     if value.pkg_version != expected_pkg or not _NIGHTLY_PKG_RE.fullmatch(value.pkg_version):
         raise ValueError("invalid Nightly package version")
     _validate_source_sha(value.source_sha)
-    _validate_source_sha(value.ports_sha)
+    _validate_source_sha(value.ports_sha, name="ports_sha")
     _validate_digest(value.input_digest)
     return value
 
@@ -179,7 +179,7 @@ def validate_nightly_allocation(value: NightlyAllocation) -> None:
 def combined_nightly_input_digest(source_sha: str, ports_sha: str, input_digest: str) -> str:
     """Return deterministic provenance digest for downstream build annotations."""
     _validate_source_sha(source_sha)
-    _validate_source_sha(ports_sha)
+    _validate_source_sha(ports_sha, name="ports_sha")
     _validate_digest(input_digest)
     payload = "\0".join((source_sha, ports_sha, input_digest)).encode("ascii")
     return hashlib.sha256(payload).hexdigest()
@@ -196,7 +196,7 @@ def allocate_nightly(
     if type(build_date) is not date:
         raise TypeError("build_date must be datetime.date")
     _validate_source_sha(source_sha)
-    _validate_source_sha(ports_sha)
+    _validate_source_sha(ports_sha, name="ports_sha")
     _validate_digest(input_digest)
     try:
         records = tuple(existing)

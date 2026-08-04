@@ -125,6 +125,11 @@ def test_ports_sha_is_strict_lowercase_hex(ports_sha: str) -> None:
         _allocate(ports_sha=ports_sha)
 
 
+def test_ports_sha_error_names_the_invalid_field() -> None:
+    with pytest.raises(ValueError, match="ports_sha"):
+        _allocate(ports_sha="")
+
+
 @pytest.mark.parametrize("input_digest", ["", "A" * 64, "e" * 63, "e" * 65, "g" * 64, "e" * 40])
 def test_input_digest_is_strict_lowercase_64_hex(input_digest: str) -> None:
     with pytest.raises(ValueError):
@@ -193,7 +198,7 @@ def test_malformed_allocation_result_fields_fail_closed(field: str, value: objec
         _allocate(existing=(malformed,))
 
 
-def test_edge_snapshot_generation_and_target_final_are_removed() -> None:
+def test_edge_snapshot_generation_is_removed() -> None:
     with pytest.raises((AttributeError, TypeError, ValueError)):
         API.generate_snapshot(
             channel="edge",
