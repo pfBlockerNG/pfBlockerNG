@@ -153,6 +153,27 @@ def test_malformed_durable_records_fail_closed(record_kind: str) -> None:
         _allocate(existing=(record,))  # type: ignore[arg-type]
 
 
+def test_oversized_durable_nightly_version_fails_closed() -> None:
+    revision = int("9" * 120)
+    malformed = replace(_allocate(), portrevision=revision, pkg_version=f"20260804_{revision}")
+    with pytest.raises(ValueError, match="128"):
+        _allocate(existing=(malformed,))
+
+
+def test_next_nightly_revision_cannot_cross_the_identity_limit() -> None:
+    revision = int("9" * 119)
+    existing = replace(_allocate(), portrevision=revision, pkg_version=f"20260804_{revision}")
+    with pytest.raises(ValueError, match="128"):
+        _allocate(source_sha=SOURCE_B, existing=(existing,))
+
+
+def test_nightly_noop_result_can_be_replayed_with_its_build_result() -> None:
+    first = _allocate()
+    retry = _allocate(existing=(first,))
+    assert retry.outcome == "unchanged"
+    assert _allocate(existing=(first, retry)) == retry
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

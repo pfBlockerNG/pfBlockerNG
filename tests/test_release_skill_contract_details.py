@@ -81,6 +81,8 @@ def test_scripts_readme_documents_shared_identity_and_provenance() -> None:
         "repo-qualified downgrade",
     ):
         assert phrase in content, f"scripts/README.md: missing {phrase!r}"
+    assert "follower Edge reuses the Testing tag" in content
+    assert "`testing` trailer" in content
 
 
 def test_channel_targets_are_explicit_and_nightly_is_not_branch_bound() -> None:
@@ -141,3 +143,12 @@ def test_published_workflow_has_no_retired_nightly_ports_bump_contract() -> None
     content = _text(ROOT / ".github/workflows/release-published.yml")
     assert "`-nightly` port's PORTVERSION" not in content
     assert "the bump happens inside the release run" not in content
+    assert "nightly still built from devel HEAD" not in content
+    assert "from devel HEAD" not in _text(ROOT / ".github/workflows/smoke-single.yml")
+
+
+def test_latest_adr09_amendment_matches_the_implemented_trailer_and_workflows() -> None:
+    content = _text(ROOT / ".ADRs/ADR_09_Release_Version_Automation/ADR.md")
+    amendment = content.rsplit("## Amendment — 2026-08-04", 1)[-1]
+    assert "tag trailer carries only the channel" in amendment
+    assert "workflow consumers are updated" in amendment

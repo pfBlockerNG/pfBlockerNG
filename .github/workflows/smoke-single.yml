@@ -552,8 +552,8 @@ jobs:
 
       # ADR-18: the `repo` flow's nightly cases (test_nightly_install.py) need a
       # builder-produced -nightly .pkg (the deep rename can't be cheaply forged).
-      # Build it here from devel HEAD via the portable builder + the new --channel
-      # nightly, off the SAME ports ref build-pkg-linux uses; export its path.
+      # Build it here from the exact checked-out source via the portable builder +
+      # --channel nightly, off the SAME ports ref build-pkg-linux uses; export its path.
       # Only for the `repo` marker (the default `smoke` flow doesn't read it).
       - name: Build a nightly .pkg (repo-flow nightly smoke)
         # build-leg.sh: shared build path; prints the resolved .pkg path on stdout.

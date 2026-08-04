@@ -594,7 +594,10 @@ def _published_tag_fixture(
 
 
 def _run_classify_step(
-    tmp_path: Path, tag: str, trailer: str | tuple[str, ...] | None = "testing"
+    tmp_path: Path,
+    tag: str,
+    trailer: str | tuple[str, ...] | None = "testing",
+    release_prerelease: str = "true",
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
     """Execute the REAL tag-classification step body under sh."""
     script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["resolve"], "Classify the tag"))
@@ -607,6 +610,7 @@ def _run_classify_step(
         env={
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "TAG": tag,
+            "RELEASE_PRERELEASE": release_prerelease,
             "GITHUB_OUTPUT": str(output_file),
         },
         capture_output=True,
@@ -631,6 +635,7 @@ def _run_classify_with_source_line(tmp_path: Path, tag: str, source_line: str) -
         env={
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "TAG": tag,
+            "RELEASE_PRERELEASE": "true",
             "GITHUB_OUTPUT": str(output_file),
         },
         capture_output=True,
@@ -737,7 +742,7 @@ def test_tag_step_writes_and_validates_the_release_channel_trailer() -> None:
     combined = prepare + "\n" + tag
     assert "git interpret-trailers" in combined, combined
     assert "pfBlockerNG-Release-Channel" in combined, combined
-    assert combined.count("grep -Eic '^pfBlockerNG-Release-Channel: '") == 2, combined
+    assert combined.count("grep -Eic '^pfBlockerNG-Release-Channel[[:space:]]*:'") == 2, combined
     assert 'git cat-file -t "refs/tags/${TAG}"' in tag, tag
     assert 'git rev-parse "refs/tags/${TAG}^{commit}"' in tag, tag
 
@@ -750,9 +755,20 @@ def test_tag_step_writes_and_validates_the_release_channel_trailer() -> None:
         ("testing", "testing"),
         ("testing", "edge"),
         ("testing\npfblockerng-release-channel: edge",),
+        ("testing\npfblockerng-release-channel:edge",),
+        ("testing\nPFBLOCKERNG-RELEASE-CHANNEL:\tedge",),
         ("bogus",),
     ],
-    ids=["lightweight", "missing", "duplicate", "conflicting", "case-conflicting", "unknown"],
+    ids=[
+        "lightweight",
+        "missing",
+        "duplicate",
+        "conflicting",
+        "case-conflicting",
+        "no-space-conflicting",
+        "tab-conflicting",
+        "unknown",
+    ],
 )
 def test_published_workflow_rejects_invalid_channel_trailers(tmp_path: Path, trailer: object) -> None:
     values = trailer if isinstance(trailer, tuple) else trailer
@@ -765,6 +781,19 @@ def test_published_workflow_passes_the_validated_channel_to_classifier(tmp_path:
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert outputs["channel"] == "testing", outputs
     assert outputs["source"] == "release/4.0", outputs
+
+
+@pytest.mark.parametrize(
+    ("tag", "trailer", "release_prerelease"),
+    [("v4.0.0", "stable", "true"), ("v4.0.0.a7", "testing", "false")],
+)
+def test_published_workflow_rejects_release_flag_mismatch(
+    tmp_path: Path, tag: str, trailer: str, release_prerelease: str
+) -> None:
+    step = "\n".join(_step(_jobs(PUBLISHED_WORKFLOW)["resolve"], "Classify the tag"))
+    assert "github.event.release.prerelease" in step, step
+    completed, _outputs = _run_classify_step(tmp_path, tag, trailer, release_prerelease)
+    assert completed.returncode != 0, completed.stdout + completed.stderr
 
 
 # --------------------------------------------------------------------------- #
@@ -955,9 +984,20 @@ def test_tag_step_refuses_a_stale_tag_pointing_at_other_code(tmp_path: Path) -> 
         ("testing", "testing"),
         ("testing", "edge"),
         ("testing\npfblockerng-release-channel: edge",),
+        ("testing\npfblockerng-release-channel:edge",),
+        ("testing\nPFBLOCKERNG-RELEASE-CHANNEL:\tedge",),
         ("bogus",),
     ],
-    ids=["lightweight", "missing", "duplicate", "conflicting", "case-conflicting", "unknown"],
+    ids=[
+        "lightweight",
+        "missing",
+        "duplicate",
+        "conflicting",
+        "case-conflicting",
+        "no-space-conflicting",
+        "tab-conflicting",
+        "unknown",
+    ],
 )
 def test_tag_step_refuses_existing_tags_without_exact_channel_metadata(tmp_path: Path, trailers: object) -> None:
     repo, head, _older = _tag_repo(tmp_path)
