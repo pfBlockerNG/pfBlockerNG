@@ -291,8 +291,8 @@ def _pkg_matches_abi(manifest: dict, row_abi: str) -> bool:
 
 
 def _check_collisions(entries: list[tuple[Path, dict]]) -> None:
-    """Fail loud if two .pkg share name+version+ABI but differ in php/py flavor."""
-    seen: dict[str, str] = {}  # "name|version|ABI" -> flavor signature
+    """Fail loud if same-identity packages differ in flavor or archive bytes."""
+    seen: dict[str, tuple[str, Path, bytes]] = {}  # key -> flavor, source, archive
     for path, manifest in entries:
         name = manifest.get("name")
         version = manifest.get("version")
@@ -305,16 +305,21 @@ def _check_collisions(entries: list[tuple[Path, dict]]) -> None:
         sig = _flavor_signature(manifest)
         prev = seen.get(key)
         if prev is None:
-            seen[key] = sig
-        elif prev != sig:
+            seen[key] = (sig, path, path.read_bytes())
+        elif prev[0] != sig:
             raise BuildRepoError(
                 f"FLAVOR COLLISION — two packages share name+version+ABI '{key}'\n"
                 f"  but differ in php/py flavor:\n"
-                f"    flavor A: {prev or '<none>'}\n"
+                f"    flavor A: {prev[0] or '<none>'}\n"
                 f"    flavor B: {sig or '<none>'}\n"
                 f"  They cannot coexist in one catalog (the second would shadow the first).\n"
                 f"  Resolve by splitting into a flavored layout: <out>/<ABI>-<php><py>/\n"
                 f"  (not implemented — no colliding combo exists today; teach the tool when one does)."
+            )
+        elif prev[2] != path.read_bytes():
+            raise BuildRepoError(
+                f"PACKAGE COLLISION — two packages share name+version+ABI+flavor '{key}'\n"
+                f"  but archive bytes differ: {prev[1].name} vs {path.name}"
             )
 
 
