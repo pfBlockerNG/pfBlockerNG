@@ -1466,7 +1466,7 @@ def _reject_external_payload_symlinks(payload_root: Path, label: str) -> None:
                 continue
             relative = link.relative_to(payload_root)
             try:
-                target = link.resolve(strict=False)
+                target = link.resolve(strict=True)
             except (OSError, RuntimeError) as exc:
                 raise BuildError(f"{label} checkout payload symlink cannot be resolved: {relative}: {exc}") from None
             if not target.is_relative_to(payload_target):
