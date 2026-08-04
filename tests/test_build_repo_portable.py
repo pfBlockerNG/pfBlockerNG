@@ -67,6 +67,7 @@ def make_pkg(
     abi: str = "FreeBSD:15:*",
     deps: dict[str, dict[str, str]] | None = None,
     extra: dict[str, Any] | None = None,
+    payload: bytes = b"hey",
 ) -> dict:
     """Write a minimal but libpkg-shaped .pkg to ``path``; return its compact manifest."""
     # Key order mirrors a real +COMPACT_MANIFEST: ...licenselogic, desc, deps,
@@ -99,7 +100,6 @@ def make_pkg(
         ti.size = len(compact)
         ti.mode = 0o644
         tf.addfile(ti, io.BytesIO(compact))
-        payload = b"hey"
         tf2 = tarfile.TarInfo(name="/usr/local/bin/demo")
         tf2.size = len(payload)
         tf2.mode = 0o555
@@ -525,6 +525,38 @@ def test_same_flavor_duplicate_passes(tmp_path: Path) -> None:
     out = tmp_path / "out"
     abis = brp.build_repo(in_dir, out)  # must not raise
     assert abis == ["FreeBSD:15:*"]
+
+
+def test_same_flavor_payload_collision_fails_loud(tmp_path: Path) -> None:
+    """Same identity and flavor with one differing payload byte is a hard collision."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "x-a.pkg", name="x", version="1.0", payload=b"hey")
+    make_pkg(in_dir / "x-b.pkg", name="x", version="1.0", payload=b"heY")
+    out = tmp_path / "out"
+    with pytest.raises(brp.BuildRepoError, match="PACKAGE COLLISION"):
+        brp.build_repo(in_dir, out)
+
+
+def test_same_flavor_annotation_collision_fails_loud(tmp_path: Path) -> None:
+    """Same identity and flavor with differing annotation bytes is a hard collision."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(
+        in_dir / "x-a.pkg",
+        name="x",
+        version="1.0",
+        extra={"annotation": "path;$(printf collision)"},
+    )
+    make_pkg(
+        in_dir / "x-b.pkg",
+        name="x",
+        version="1.0",
+        extra={"annotation": "path;$(printf different)"},
+    )
+    out = tmp_path / "out"
+    with pytest.raises(brp.BuildRepoError, match="PACKAGE COLLISION"):
+        brp.build_repo(in_dir, out)
 
 
 def test_unsafe_abi_is_rejected(tmp_path: Path) -> None:
