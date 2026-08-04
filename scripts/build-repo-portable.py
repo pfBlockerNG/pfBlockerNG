@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import TypeGuard
 
 from pfb_pkg import (
+    CANONICAL_EMITTED_IDENTITY,
+    PFB_BUILD_RECORD_KEY,
     PkgError,
     load_build_record,
     pkg_version_sort_key,
@@ -708,20 +710,58 @@ def _line_pins(bucket: list[Path]) -> list[Path]:
     return [p for p, _rank in sorted(lines.values(), key=lambda pr: pr[1], reverse=True)]
 
 
+def _retention_channel(path: Path, manifest: Mapping[str, object]) -> str:
+    """Return a package's retention bucket from provenance, with legacy name fallback."""
+    name = manifest.get("name")
+    if name == CANONICAL_EMITTED_IDENTITY:
+        annotations = manifest.get("annotations")
+        annotation = annotations.get(PFB_BUILD_RECORD_KEY) if isinstance(annotations, Mapping) else None
+        if annotation is not None:
+            if not isinstance(annotation, str):
+                raise BuildRepoError(f"{path.name}: {PFB_BUILD_RECORD_KEY} annotation must be JSON text")
+            try:
+                channel = load_build_record(annotation)["channel"]
+            except (PkgError, TypeError, ValueError) as exc:
+                raise BuildRepoError(f"{path.name}: invalid {PFB_BUILD_RECORD_KEY} annotation: {exc}") from None
+            if channel == "stable":
+                return "stable"
+            if channel == "nightly":
+                return "nightly"
+            if channel == "edge":
+                return "edge"
+            if channel == "testing":
+                return "testing"
+            raise BuildRepoError(f"{path.name}: unsupported retention channel {channel!r}")
+        # Native stable artifacts predate the provenance annotation.
+        return "stable"
+
+    if isinstance(name, str):
+        if name.endswith("-nightly"):
+            return "nightly"
+        if name.endswith(("-devel", "-testing")):
+            return "devel"
+        if name.endswith("-edge"):
+            return "edge"
+    return "stable"
+
+
 def retain_by_channel(
     pkg_paths: list[Path],
     *,
     keep_devel: int,
     keep_stable: int,
 ) -> list[Path]:
-    """Bucket paths by package-name channel and keep the newest ``keep_*`` per channel,
+    """Bucket paths by package provenance/name and keep the newest ``keep_*`` per channel,
     PLUS the newest package of every major/minor line (the "line pin").
 
-    Channel detection (by the package ``name`` field in each path's manifest):
-      * name ending ``-devel``   → devel channel
-      * name ending ``-nightly`` → nightly channel (left untouched: not pruned here,
-        no line pins either)
-      * anything else            → stable channel
+    Canonical project packages use their validated ``pfb_build_record`` annotation:
+      * ``stable`` → stable channel
+      * ``testing`` → devel retention bucket
+      * ``edge``/``nightly`` → untouched channels
+    Legacy native packages fall back to manifest-name suffixes (``-devel``, ``-testing``,
+    ``-edge``, ``-nightly``); an unsuffixed native package is stable. Filenames are never
+    consulted. Edge and nightly are passthrough channels because no retention limit exists
+    for either one.
 
     Pruning rules (reuses ``_retain_newest`` for version-sorted ordering):
       * ``keep == 0`` → keep ALL of that channel (the "unbounded / disabled" sentinel).
@@ -747,15 +787,18 @@ def retain_by_channel(
 
     devel: list[Path] = []
     stable: list[Path] = []
+    edge: list[Path] = []
     nightly: list[Path] = []
 
     for p in pkg_paths:
         m = read_compact_manifest(p)
-        name: str = m.get("name", "")
-        if name.endswith("-nightly"):
+        channel = _retention_channel(p, m)
+        if channel == "nightly":
             nightly.append(p)
-        elif name.endswith("-devel"):
+        elif channel in ("devel", "testing"):
             devel.append(p)
+        elif channel == "edge":
+            edge.append(p)
         else:
             stable.append(p)
 
@@ -771,8 +814,8 @@ def retain_by_channel(
 
     kept_devel = _prune(devel, keep_devel)
     kept_stable = _prune(stable, keep_stable)
-    # Nightly is left untouched (caller handles its own retention).
-    return kept_devel + kept_stable + nightly
+    # Edge and nightly are left untouched (no retention limits for either channel).
+    return kept_devel + kept_stable + edge + nightly
 
 
 BuildRecordInput = str | Path | Mapping[str, object]

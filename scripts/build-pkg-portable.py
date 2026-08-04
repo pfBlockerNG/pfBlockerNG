@@ -1281,6 +1281,19 @@ def _install_output_no_clobber(temp_path: Path, final_path: Path) -> None:
     raise BuildError(f"output path already contains different bytes: {final_path}")
 
 
+def _reject_symlink_components(path: Path) -> None:
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for component in absolute.parts[1:]:
+        current /= component
+        try:
+            mode = current.lstat().st_mode
+        except (FileNotFoundError, NotADirectoryError):
+            break
+        if stat.S_ISLNK(mode):
+            raise BuildError(f"output path component must not be a symlink: {current}")
+
+
 def _add_meta(tf: tarfile.TarFile, name: str, data: bytes) -> None:
     ti = tarfile.TarInfo(name=name)
     ti.size = len(data)
@@ -1445,15 +1458,21 @@ def _reject_index_overrides(path: Path, label: str) -> None:
 
 def _reject_external_tracked_symlinks(path: Path, payload_root: Path, label: str) -> None:
     repo_root = path.resolve()
-    payload_root = payload_root.resolve()
+    payload_root = payload_root.absolute()
+    payload_target = payload_root.resolve(strict=False)
+    if not payload_target.is_relative_to(repo_root):
+        raise BuildError(f"{label} checkout payload root escapes source tree: {payload_root}")
     for entry in _git_probe(path, "ls-files", "--stage", "-z").split("\0"):
         if "\t" not in entry:
             continue
         metadata, relative = entry.split("\t", 1)
         if not metadata.startswith("120000 "):
             continue
-        target = (repo_root / relative).resolve(strict=False)
-        if not target.is_relative_to(payload_root):
+        link = repo_root / relative
+        if not link.is_relative_to(payload_root):
+            continue
+        target = link.resolve(strict=False)
+        if not target.is_relative_to(payload_target):
             raise BuildError(f"{label} checkout tracked symlink escapes source tree: {relative}")
 
 
@@ -1690,7 +1709,12 @@ def run_build(args: argparse.Namespace) -> Build:
             portdir.relative_to(ports_root)
         except ValueError:
             raise BuildError("project build --port-dir must be inside --ports") from None
-        _attest_checkout(ports_root, project_record["freebsd_ports_sha"], "FreeBSD-ports")
+        _attest_checkout(
+            ports_root,
+            project_record["freebsd_ports_sha"],
+            "FreeBSD-ports",
+            payload_root=ports_root,
+        )
         if not args.pkgversion:
             raise BuildError("project build requires explicit --pkgversion")
         pkgversion = validate_pkgversion(args.pkgversion)
@@ -2016,8 +2040,7 @@ def main(argv: list[str]) -> int:
             return 0
         try:
             out_input = Path(args.out)
-            if out_input.is_symlink():
-                raise BuildError(f"output directory must not be a symlink: {out_input}")
+            _reject_symlink_components(out_input)
             out_dir = out_input.resolve()
             out_dir.mkdir(parents=True, exist_ok=True)
         except (BuildError, OSError) as exc:
