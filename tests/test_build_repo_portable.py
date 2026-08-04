@@ -1339,26 +1339,20 @@ def test_pkg_version_key_orders_nightlies_chronologically() -> None:
     assert brp._pkg_version_key("3.2.16.20260606.10") > brp._pkg_version_key("3.2.16.20260606.2")
 
 
-def test_pkg_version_key_orders_prerelease_stages_alpha_beta_rc_then_release() -> None:
-    """_pkg_version_key ranks release-tag stages the way FreeBSD pkg does (release-version.sh).
-
-    A naive component-numeric key folds the stage keyword to 0: 4.0.0.alpha.1 /
-    .beta.1 / .rc.1 all collapsed to the SAME key, and the bare 4.0.0 release
-    sorted BELOW every prerelease. This bites when more than one devel build is
-    retained (--release-keep-devel > 1): builds mis-order and collapse. Correct
-    order: alpha < beta < rc < release.
-    """
-    versions = ["4.0.0.alpha.1", "4.0.0.beta.1", "4.0.0.rc.1", "4.0.0"]
-    assert sorted(versions, key=brp._pkg_version_key) == versions
-
-    # Stage keywords must NOT compare equal — each is a distinct, ordered stage.
-    assert brp._pkg_version_key("4.0.0.alpha.1") < brp._pkg_version_key("4.0.0.beta.1")
-    assert brp._pkg_version_key("4.0.0.beta.1") < brp._pkg_version_key("4.0.0.rc.1")
-    # The bare release ranks ABOVE every prerelease, not below.
-    assert brp._pkg_version_key("4.0.0.rc.1") < brp._pkg_version_key("4.0.0")
-
-    # The stage NUMBER still tie-breaks within one stage.
-    assert brp._pkg_version_key("4.0.0.alpha.1") < brp._pkg_version_key("4.0.0.alpha.2")
+@pytest.mark.parametrize(
+    "versions",
+    [
+        ["4.0.0.a1", "4.0.0.b1", "4.0.0.r1", "4.0.0"],
+        ["4.0.0.alpha.1", "4.0.0.beta.1", "4.0.0.rc.1", "4.0.0"],
+    ],
+    ids=["canonical-compact", "legacy-expanded"],
+)
+def test_pkg_version_key_orders_prerelease_stages_alpha_beta_rc_then_release(versions: list[str]) -> None:
+    """Canonical compact and retained legacy versions order alpha < beta < rc < final."""
+    keys = [brp._pkg_version_key(version) for version in versions]
+    assert all(keys[index] < keys[index + 1] for index in range(len(keys) - 1))
+    next_alpha = versions[0].replace("1", "2")
+    assert brp._pkg_version_key(versions[0]) < brp._pkg_version_key(next_alpha) < brp._pkg_version_key(versions[1])
 
 
 def test_pkg_version_key_preserves_numeric_prefix_ordering() -> None:
