@@ -559,7 +559,12 @@ def test_the_tag_classifier_runs_from_a_trusted_ref() -> None:
         assert untrusted not in ref_line, f"the classifier must not run from the released tree, got: {ref_line}"
 
 
-def _published_tag_fixture(tmp_path: Path, tag: str, trailer: str | tuple[str, ...] | None = "testing") -> Path:
+def _published_tag_fixture(
+    tmp_path: Path,
+    tag: str,
+    trailer: str | tuple[str, ...] | None = "testing",
+    source_line: str = "release/4.0",
+) -> Path:
     """Create a fetched tag object for the published-workflow step."""
     origin = tmp_path / "origin.git"
     repo = tmp_path / "published"
@@ -572,6 +577,7 @@ def _published_tag_fixture(tmp_path: Path, tag: str, trailer: str | tuple[str, .
     _git(repo, "commit", "-qm", "one")
     _git(repo, "remote", "add", "origin", str(origin))
     _git(repo, "push", "-q", "origin", "devel")
+    _git(repo, "push", "-q", "origin", f"HEAD:refs/heads/{source_line}")
     if trailer is None:
         _git(repo, "tag", tag)
     else:
@@ -611,6 +617,68 @@ def _run_classify_step(
         key, _, value = line.partition("=")
         outputs[key] = value
     return completed, outputs
+
+
+def _run_classify_with_source_line(tmp_path: Path, tag: str, source_line: str) -> subprocess.CompletedProcess[str]:
+    """Run the published classifier against an explicitly chosen remote release line."""
+    script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["resolve"], "Classify the tag"))
+    repo = _published_tag_fixture(tmp_path, tag, "testing", source_line)
+    output_file = tmp_path / "gh_output_route"
+    output_file.write_text("")
+    return subprocess.run(  # noqa: S603
+        ["sh", "-c", script],
+        cwd=repo,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "TAG": tag,
+            "GITHUB_OUTPUT": str(output_file),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_port_sync_validation(portversion: str) -> subprocess.CompletedProcess[str]:
+    """Execute only the release port-version guard from sync-ports-fork."""
+    script = _step_run_script(_step(_jobs()["sync-ports-fork"], "Bump PORTVERSION and push"))
+    marker = 'if [ "$CHANNEL" = "stable" ]; then'
+    _before, validation = script.split(marker, 1)
+    validation = marker + validation.split('\n\nif [ "$CHANNEL" = "stable" ]; then', 1)[0]
+    return subprocess.run(  # noqa: S603
+        ["sh", "-c", "set -eu\n" + validation],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "SOURCE": "release/4.0",
+            "CHANNEL": "testing",
+            "TAG": "v4.0.0.a1",
+            "PORTVERSION": portversion,
+        },
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize("stage", ["a", "b", "r"])
+def test_sync_ports_accepts_short_prerelease_versions(stage: str) -> None:
+    result = _run_port_sync_validation(f"4.0.0.{stage}1")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("stage", ["alpha", "beta", "rc"])
+def test_sync_ports_rejects_long_prerelease_versions(stage: str) -> None:
+    result = _run_port_sync_validation(f"4.0.0.{stage}.1")
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
+def test_published_classifier_rejects_tag_outside_derived_release_line(tmp_path: Path) -> None:
+    result = _run_classify_with_source_line(tmp_path, "v4.0.0.a1", "release/5.0")
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
+def test_published_classifier_accepts_tag_on_derived_release_line(tmp_path: Path) -> None:
+    result = _run_classify_with_source_line(tmp_path, "v4.0.0.a1", "release/4.0")
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_an_off_scheme_published_tag_reports_the_real_reason(tmp_path: Path) -> None:
