@@ -469,6 +469,10 @@ def _manifest_annotation(manifest: Mapping[str, object], record: Mapping[str, ob
     expected = _canonical_json(record)
     if annotations.get(PFB_BUILD_RECORD_KEY) != expected:
         raise PkgError(f"{pkg_name}: {PFB_BUILD_RECORD_KEY} annotation mismatch")
+    native_marker = f"{CANONICAL_EMITTED_IDENTITY}-"
+    for key, value in annotations.items():
+        if key != PFB_BUILD_RECORD_KEY and (native_marker in key or native_marker in _canonical_json(value)):
+            raise PkgError(f"{pkg_name}: native identity leaked into annotation {key!r}")
 
 
 def _check_script(script: object, pkg_name: str) -> None:
@@ -516,13 +520,10 @@ def validate_project_pkg(
     member_info = evidence["member_info"]
     if not isinstance(compact, dict) or not isinstance(manifest, dict) or not isinstance(payload, dict):
         raise PkgError(f"{pkg_path.name}: malformed inspection evidence")
-    share_prefix = "/usr/local/share/"
+    native_marker = f"{CANONICAL_EMITTED_IDENTITY}-"
     for name in payload:
-        if not name.startswith(share_prefix):
-            continue
-        for index, component in enumerate(name[len(share_prefix) :].split("/")):
-            if CANONICAL_EMITTED_IDENTITY in component and not (index == 0 and component == CANONICAL_EMITTED_IDENTITY):
-                raise PkgError(f"{pkg_path.name}: native identity leaked into payload path {name}")
+        if any(component.startswith(native_marker) for component in name.split("/")):
+            raise PkgError(f"{pkg_path.name}: native identity leaked into payload path {name}")
     expected_name = f"{CANONICAL_EMITTED_IDENTITY}-{record['canonical_package_version']}"
     if pkg_path.name != expected_name + ".pkg":
         raise PkgError(f"{pkg_path.name}: filename must be {expected_name}.pkg")
@@ -572,8 +573,8 @@ def validate_project_pkg(
     if root.findtext(".//name") != "pfBlockerNG" or root.findtext(".//version") != record["canonical_package_version"]:
         raise PkgError(f"{pkg_path.name}: info.xml name/version mismatch")
     scripts = manifest.get("scripts")
-    if not isinstance(scripts, dict) or "install" not in scripts or "deinstall" not in scripts:
-        raise PkgError(f"{pkg_path.name}: install/deinstall hooks missing")
+    if not isinstance(scripts, dict) or set(scripts) != {"install", "deinstall"}:
+        raise PkgError(f"{pkg_path.name}: unexpected lifecycle scripts; require install/deinstall only")
     _check_script(scripts["install"], pkg_path.name)
     _check_script(scripts["deinstall"], pkg_path.name)
     deps = manifest.get("deps")
