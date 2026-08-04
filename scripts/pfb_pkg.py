@@ -522,7 +522,7 @@ def validate_project_pkg(
         raise PkgError(f"{pkg_path.name}: malformed inspection evidence")
     native_marker = f"{CANONICAL_EMITTED_IDENTITY}-"
     for name in payload:
-        if any(component.startswith(native_marker) for component in name.split("/")):
+        if any(native_marker in component for component in name.split("/")):
             raise PkgError(f"{pkg_path.name}: native identity leaked into payload path {name}")
     expected_name = f"{CANONICAL_EMITTED_IDENTITY}-{record['canonical_package_version']}"
     if pkg_path.name != expected_name + ".pkg":
