@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 from dataclasses import dataclass
@@ -22,7 +23,9 @@ _PREVIEW_RE = re.compile(
 )
 _BARE_VERSION_RE = re.compile(rf"^(?P<major>{_CORE})\.(?P<minor>{_CORE})\.(?P<patch>{_CORE})$")
 _SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-_SEQUENCE_RE = re.compile(r"^(?P<date>[0-9]{8})\.(?P<count>[1-9][0-9]*)$")
+_NIGHTLY_RE = re.compile(r"^(?P<date>[0-9]{8})$")
+_NIGHTLY_PKG_RE = re.compile(r"^(?P<date>[0-9]{8})(?:_(?P<revision>[1-9][0-9]*))?$")
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_RELEASE_TEXT = 128
 
 
@@ -43,10 +46,18 @@ class ReleaseInfo:
     package: str
 
 
+NightlyOutcome = Literal["build", "unchanged"]
+
+
 @dataclass(frozen=True)
-class SnapshotRecord:
+class NightlyAllocation:
+    outcome: NightlyOutcome
+    portversion: str
+    portrevision: int
+    pkg_version: str
     source_sha: str
-    result: ReleaseInfo
+    ports_sha: str
+    input_digest: str
 
 
 def _invalid(tag: str) -> ValueError:
@@ -133,167 +144,121 @@ def _validate_source_sha(source_sha: str) -> None:
         raise ValueError("source_sha must be lowercase 40- or 64-character hex")
 
 
-def _sequence_parts(sequence: str) -> tuple[date, int]:
-    if not isinstance(sequence, str):
-        raise ValueError("snapshot sequence must be YYYYMMDD.N")
-    match = _SEQUENCE_RE.fullmatch(sequence)
-    if not match:
-        raise ValueError("snapshot sequence must be YYYYMMDD.N")
-    raw_date = match.group("date")
-    try:
-        build_date = date(int(raw_date[:4]), int(raw_date[4:6]), int(raw_date[6:]))
-    except ValueError as exc:
-        raise ValueError(f"invalid snapshot calendar date: {raw_date}") from exc
-    return build_date, int(match.group("count"))
-
-
-def _date_text(build_date: date) -> str:
-    return f"{build_date.year:04d}{build_date.month:02d}{build_date.day:02d}"
-
-
-def _validate_nightly_result(result: ReleaseInfo) -> None:
-    major, minor, patch = _parse_bare_version(result.target_final)
-    build_date, count = _sequence_parts(result.sequence or "")
-    date_text = _date_text(build_date)
-    expected_version = f"{result.target_final}.nightly.{date_text}.{count}"
-    expected_pkg = f"{result.target_final}.snapshot.2.{date_text}.{count}"
-    if result.tag is not None or result.stage != "nightly" or result.channel != "nightly":
-        raise ValueError("invalid Nightly snapshot result")
-    if result.release_line != "devel" or result.version != expected_version or result.pkg_version != expected_pkg:
-        raise ValueError("invalid Nightly snapshot result")
-    if result.target_final != f"{major}.{minor}.{patch}" or result.prerelease is not True or result.final is not False:
-        raise ValueError("invalid Nightly snapshot result")
-    if result.notes_required is not False or result.github_release != "none" or result.package != PACKAGE:
-        raise ValueError("invalid Nightly snapshot result")
-
-
 def validate_release_info(info: ReleaseInfo) -> None:
     """Require a ReleaseInfo value to be exactly one canonical release identity."""
     if type(info) is not ReleaseInfo:
         raise TypeError("release info must be ReleaseInfo")
     if info.tag is None:
-        _validate_nightly_result(info)
-    elif parse_release_tag(info.tag, info.channel) != info:
+        raise ValueError("Nightly uses NightlyAllocation, not ReleaseInfo")
+    if parse_release_tag(info.tag, info.channel) != info:
         raise ValueError("release info does not match its release tag")
     if len(info.version) > _MAX_RELEASE_TEXT or len(info.pkg_version) > _MAX_RELEASE_TEXT:
         raise ValueError(f"release identity exceeds {_MAX_RELEASE_TEXT} characters")
 
 
-def _validate_snapshot_result(result: ReleaseInfo) -> tuple[date, int]:
-    validate_release_info(result)
-    if result.channel == "edge":
-        return _sequence_parts(result.sequence or "")
-    if result.channel == "nightly":
-        return _sequence_parts(result.sequence or "")
-    raise ValueError("existing records must contain Edge or Nightly snapshots")
+def _validate_digest(value: object, *, name: str = "input_digest") -> None:
+    if not isinstance(value, str) or not _DIGEST_RE.fullmatch(value):
+        raise ValueError(f"{name} must be lowercase 64-character hex")
 
 
-def _snapshot_info(
-    channel: Literal["edge", "nightly"],
-    target_final: str,
-    release_line: str,
+def _nightly_date(value: object) -> date:
+    if not isinstance(value, str) or not _NIGHTLY_RE.fullmatch(value):
+        raise ValueError("portversion must be YYYYMMDD")
+    try:
+        return date(int(value[:4]), int(value[4:6]), int(value[6:]))
+    except ValueError as exc:
+        raise ValueError(f"invalid Nightly calendar date: {value}") from exc
+
+
+def _validate_nightly_allocation(value: object) -> NightlyAllocation:
+    if type(value) is not NightlyAllocation:
+        raise TypeError("allocation must be NightlyAllocation")
+    if value.outcome not in ("build", "unchanged"):
+        raise ValueError("invalid Nightly outcome")
+    _nightly_date(value.portversion)
+    if type(value.portrevision) is not int or value.portrevision < 0:
+        raise ValueError("portrevision must be a non-negative integer")
+    expected_pkg = value.portversion if value.portrevision == 0 else f"{value.portversion}_{value.portrevision}"
+    if value.pkg_version != expected_pkg or not _NIGHTLY_PKG_RE.fullmatch(value.pkg_version):
+        raise ValueError("invalid Nightly package version")
+    _validate_source_sha(value.source_sha)
+    _validate_source_sha(value.ports_sha)
+    _validate_digest(value.input_digest)
+    return value
+
+
+def validate_nightly_allocation(value: NightlyAllocation) -> None:
+    """Require one Nightly allocation to match the date/revision contract."""
+    _validate_nightly_allocation(value)
+
+
+def combined_nightly_input_digest(source_sha: str, ports_sha: str, input_digest: str) -> str:
+    """Return deterministic provenance digest for downstream build annotations."""
+    _validate_source_sha(source_sha)
+    _validate_source_sha(ports_sha)
+    _validate_digest(input_digest)
+    payload = "\0".join((source_sha, ports_sha, input_digest)).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def allocate_nightly(
     build_date: date,
-    count: int,
-) -> ReleaseInfo:
-    date_text = _date_text(build_date)
-    sequence = f"{date_text}.{count}"
-    if channel == "edge":
-        version = f"{target_final}.edge.{sequence}"
-        return ReleaseInfo(
-            tag=f"v{version}",
-            version=version,
-            stage="edge",
-            sequence=sequence,
-            target_final=target_final,
-            release_line=release_line,
-            channel="edge",
-            prerelease=True,
-            final=False,
-            notes_required=True,
-            github_release="prerelease",
-            pkg_version=f"{target_final}.snapshot.1.{sequence}",
-            package=PACKAGE,
-        )
-    return ReleaseInfo(
-        tag=None,
-        version=f"{target_final}.nightly.{sequence}",
-        stage="nightly",
-        sequence=sequence,
-        target_final=target_final,
-        release_line=release_line,
-        channel="nightly",
-        prerelease=True,
-        final=False,
-        notes_required=False,
-        github_release="none",
-        pkg_version=f"{target_final}.snapshot.2.{sequence}",
-        package=PACKAGE,
-    )
-
-
-def generate_snapshot(
-    *,
-    channel: Literal["edge", "nightly"],
-    target_final: str,
-    release_line: str,
     source_sha: str,
-    build_date: date,
-    existing: Sequence[SnapshotRecord] = (),
-) -> ReleaseInfo:
-    """Generate a deterministic Edge or Nightly snapshot identity."""
-    if channel not in ("edge", "nightly"):
-        raise ValueError(f"unknown snapshot channel: {channel!r}")
-    major, minor, patch = _parse_bare_version(target_final)
-    expected_line = f"release/{major}.{minor}" if channel == "edge" else "devel"
-    if not isinstance(release_line, str) or release_line != expected_line:
-        raise ValueError(f"release line must be {expected_line!r}")
+    ports_sha: str,
+    input_digest: str,
+    existing: Sequence[NightlyAllocation] = (),
+) -> NightlyAllocation:
+    """Allocate a monotonic date/revision Nightly identity for one full input."""
     if type(build_date) is not date:
         raise TypeError("build_date must be datetime.date")
     _validate_source_sha(source_sha)
-
+    _validate_source_sha(ports_sha)
+    _validate_digest(input_digest)
     try:
         records = tuple(existing)
     except TypeError as exc:
-        raise ValueError("existing must be a sequence of SnapshotRecord") from exc
-    validated: list[tuple[SnapshotRecord, date, int]] = []
+        raise ValueError("existing must be a sequence of NightlyAllocation") from exc
+
+    identity = (source_sha, ports_sha, input_digest)
+    by_identity: dict[tuple[str, str, str], NightlyAllocation] = {}
+    by_version: dict[str, tuple[str, str, str]] = {}
+    parsed: list[tuple[NightlyAllocation, date]] = []
     for record in records:
-        if not isinstance(record, SnapshotRecord):
-            raise ValueError("existing must contain SnapshotRecord values")
-        _validate_source_sha(record.source_sha)
-        build_date_existing, count_existing = _validate_snapshot_result(record.result)
-        validated.append((record, build_date_existing, count_existing))
+        allocation = _validate_nightly_allocation(record)
+        record_identity = (allocation.source_sha, allocation.ports_sha, allocation.input_digest)
+        previous = by_identity.get(record_identity)
+        if previous is not None and previous != allocation:
+            raise ValueError("conflicting Nightly results for one input")
+        version_identity = by_version.get(allocation.pkg_version)
+        if version_identity is not None and version_identity != record_identity:
+            raise ValueError("Nightly version collision for different inputs")
+        by_identity[record_identity] = allocation
+        by_version[allocation.pkg_version] = record_identity
+        parsed.append((allocation, _nightly_date(allocation.portversion)))
 
-    scope = (channel, target_final, release_line)
-    scoped = [
-        item
-        for item in validated
-        if (item[0].result.channel, item[0].result.target_final, item[0].result.release_line) == scope
-    ]
-    seen_emitted: dict[tuple[str, str], str] = {}
-    for record, _, _ in validated:
-        key = (record.result.version, record.result.pkg_version)
-        previous_source = seen_emitted.get(key)
-        if previous_source is not None and previous_source != record.source_sha:
-            raise ValueError("snapshot version collision for different sources")
-        seen_emitted[key] = record.source_sha
+    repeated = by_identity.get(identity)
+    if repeated is not None:
+        return NightlyAllocation(
+            "unchanged",
+            repeated.portversion,
+            repeated.portrevision,
+            repeated.pkg_version,
+            repeated.source_sha,
+            repeated.ports_sha,
+            repeated.input_digest,
+        )
 
-    same_source = [item for item in scoped if item[0].source_sha == source_sha]
-    if same_source:
-        first = same_source[0][0].result
-        if any(item[0].result != first for item in same_source[1:]):
-            raise ValueError("conflicting snapshot results for source")
-
-    latest = max((item[1] for item in scoped), default=None)
-    if latest is not None and build_date < latest:
-        raise ValueError("snapshot date is older than latest relevant snapshot")
-    if same_source:
-        return same_source[0][0].result
-    count = 1
-    if latest == build_date:
-        count = max(item[2] for item in scoped if item[1] == build_date) + 1
-    candidate = _snapshot_info(channel, target_final, release_line, build_date, count)
-    validate_release_info(candidate)
-    return candidate
+    latest_date = max((record_date for _, record_date in parsed), default=None)
+    if latest_date is not None and build_date < latest_date:
+        raise ValueError("Nightly date is older than the latest allocation")
+    revision = 0
+    if latest_date == build_date:
+        revision = max(allocation.portrevision for allocation, record_date in parsed if record_date == build_date) + 1
+    portversion = f"{build_date.year:04d}{build_date.month:02d}{build_date.day:02d}"
+    pkg_version = portversion if revision == 0 else f"{portversion}_{revision}"
+    if pkg_version in by_version:
+        raise ValueError("Nightly version collision for different inputs")
+    return NightlyAllocation("build", portversion, revision, pkg_version, source_sha, ports_sha, input_digest)
 
 
 def validate_branch(info: ReleaseInfo, branch: str) -> None:
