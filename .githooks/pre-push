@@ -53,7 +53,7 @@ while IFS=' ' read -r _local_ref local_sha remote_ref _remote_sha; do
 
     raw_tag_message=$(git for-each-ref --format='%(contents)' "$tag_ref")
     trailers=$(printf '%s\n' "$raw_tag_message" | git interpret-trailers --parse)
-    channel_count=$(printf '%s\n' "$raw_tag_message" | grep -Eic '^pfBlockerNG-Release-Channel: ' || true)
+    channel_count=$(printf '%s\n' "$raw_tag_message" | grep -Eic '^pfBlockerNG-Release-Channel[[:space:]]*:' || true)
     if [ "$channel_count" -ne 1 ]; then
         echo "error: tag '$tag' must carry exactly one release-channel trailer" >&2
         exit 1

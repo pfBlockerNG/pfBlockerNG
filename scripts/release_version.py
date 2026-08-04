@@ -161,6 +161,8 @@ def _validate_nightly_allocation(value: object) -> NightlyAllocation:
     if type(value.portrevision) is not int or value.portrevision < 0:
         raise ValueError("portrevision must be a non-negative integer")
     expected_pkg = value.portversion if value.portrevision == 0 else f"{value.portversion}_{value.portrevision}"
+    if len(value.pkg_version) > _MAX_RELEASE_TEXT:
+        raise ValueError(f"Nightly package identity exceeds {_MAX_RELEASE_TEXT} characters")
     if value.pkg_version != expected_pkg or not _NIGHTLY_PKG_RE.fullmatch(value.pkg_version):
         raise ValueError("invalid Nightly package version")
     _validate_source_sha(value.source_sha)
@@ -209,7 +211,15 @@ def allocate_nightly(
         allocation = _validate_nightly_allocation(record)
         record_identity = (allocation.source_sha, allocation.ports_sha, allocation.input_digest)
         previous = by_identity.get(record_identity)
-        if previous is not None and previous != allocation:
+        if previous is not None and (
+            previous.portversion,
+            previous.portrevision,
+            previous.pkg_version,
+        ) != (
+            allocation.portversion,
+            allocation.portrevision,
+            allocation.pkg_version,
+        ):
             raise ValueError("conflicting Nightly results for one input")
         version_identity = by_version.get(allocation.pkg_version)
         if version_identity is not None and version_identity != record_identity:
@@ -240,7 +250,8 @@ def allocate_nightly(
     pkg_version = portversion if revision == 0 else f"{portversion}_{revision}"
     if pkg_version in by_version:
         raise ValueError("Nightly version collision for different inputs")
-    return NightlyAllocation("build", portversion, revision, pkg_version, source_sha, ports_sha, input_digest)
+    allocation = NightlyAllocation("build", portversion, revision, pkg_version, source_sha, ports_sha, input_digest)
+    return _validate_nightly_allocation(allocation)
 
 
 def validate_branch(info: ReleaseInfo, branch: str) -> None:

@@ -54,6 +54,7 @@ jobs:
         id: classify
         env:
           TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           set -eu
           [ -n "$TAG" ] || { echo "::error::the published release carries no tag"; exit 1; }
@@ -62,7 +63,7 @@ jobs:
           [ "$TYPE" = tag ] || { echo "::error::published tag ${TAG} is not an annotated tag"; exit 1; }
           RAW_TAG_MESSAGE=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}")
           TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | git interpret-trailers --parse)
-          CHANNEL_COUNT=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Eic '^pfBlockerNG-Release-Channel: ' || true)
+          CHANNEL_COUNT=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Eic '^pfBlockerNG-Release-Channel[[:space:]]*:' || true)
           [ "$CHANNEL_COUNT" -eq 1 ] || { echo "::error::published tag ${TAG} must carry exactly one release-channel trailer"; exit 1; }
           CHANNEL_LINE=$(printf '%s\n' "$TRAILERS" | grep -F 'pfBlockerNG-Release-Channel:' || true)
           case "$CHANNEL_LINE" in
@@ -81,6 +82,10 @@ jobs:
             exit 1
           fi
           eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
+          case "${RELEASE_PRERELEASE}:${prerelease}" in
+            false:false|true:true) ;;
+            *) echo "::error::published Release prerelease flag does not match ${TAG}"; exit 1 ;;
+          esac
           if ! git fetch origin "$release_line" --tags; then
             echo "::error::cannot fetch the derived source line origin/${release_line} for ${TAG}"; exit 1
           fi
@@ -101,7 +106,7 @@ jobs:
   # The pkg catalog is hosted + deployed by the SEPARATE pfBlockerNG/pkg repo: its own
   # publish.yml enumerates this repo's PUBLISHED Releases (the durable store), consumes
   # their .pkg assets for the release/<varver>/ subtree (arch-less; issue #1806 — devel
-  # = latest prerelease, stable = latest stable; nightly still built from devel HEAD),
+  # = latest prerelease, stable = latest stable),
   # and deploys to its OWN GitHub Pages via same-repo OIDC — no cross-repo deploy key.
   # We just trigger it so the new Release appears at pfblockerng.github.io/pkg within
   # seconds (its daily schedule is the backstop).

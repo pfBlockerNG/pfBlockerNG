@@ -14,9 +14,10 @@ none of this ships in the release archive (which contains only `src/`).
 ## Release channel contract
 
 Release authoring follows issue #2140. All channels publish the exact package identity
-`pfSense-pkg-pfBlockerNG`; channel is explicit/configured metadata carried in an immutable
-`pfBlockerNG-Release-Channel: <stable|testing|edge>` tag trailer, never a package-name suffix
-or inferred tag shape. Every operation uses a pinned source SHA.
+`pfSense-pkg-pfBlockerNG`; channel is explicit/configured metadata carried in each distinct
+release's immutable `pfBlockerNG-Release-Channel: <stable|testing|edge>` tag trailer, never a
+package-name suffix or inferred tag shape. A follower Edge reuses the Testing tag and its
+`testing` trailer. Every operation uses a pinned source SHA.
 
 - Stable uses `vX.Y.Z` / `X.Y.Z`.
 - Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` with the exact package version.

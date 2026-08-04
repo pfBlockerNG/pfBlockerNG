@@ -362,7 +362,7 @@ jobs:
             RAW_TAG_MESSAGE=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}")
             TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | git interpret-trailers --parse)
             MATCHES=$(printf '%s\n' "$TRAILERS" | grep -Fxc "pfBlockerNG-Release-Channel: ${CHANNEL}" || true)
-            CHANNEL_TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Eic '^pfBlockerNG-Release-Channel: ' || true)
+            CHANNEL_TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Eic '^pfBlockerNG-Release-Channel[[:space:]]*:' || true)
             if [ "$MATCHES" -ne 1 ] || [ "$CHANNEL_TRAILERS" -ne 1 ]; then
               echo "::error::tag ${TAG} has invalid release-channel trailer metadata"
               exit 1
@@ -647,7 +647,7 @@ jobs:
             RAW_TAG_MESSAGE=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}")
             TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | git interpret-trailers --parse)
             MATCHES=$(printf '%s\n' "$TRAILERS" | grep -Fxc "pfBlockerNG-Release-Channel: ${CHANNEL}" || true)
-            CHANNEL_TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Eic '^pfBlockerNG-Release-Channel: ' || true)
+            CHANNEL_TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Eic '^pfBlockerNG-Release-Channel[[:space:]]*:' || true)
             if [ "$MATCHES" -ne 1 ] || [ "$CHANNEL_TRAILERS" -ne 1 ]; then
               echo "::error::tag ${TAG} has invalid release-channel trailer metadata"
               exit 1

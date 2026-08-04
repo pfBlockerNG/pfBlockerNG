@@ -347,3 +347,12 @@ Nightly source is an explicit pinned source SHA (the pinned pfBlockerNG SHA) plu
 matrix/dependency digest; no branch inference selects it. The preceding amendment's `devel`
 wording remains historical compatibility context and does not define the current authoring
 contract.
+
+## Amendment — 2026-08-04: trailer and workflow clarification (issue #2140)
+
+The tag trailer carries only the channel. The exact configured `release/X.Y` line is derived
+from the tag and validated separately; a follower Edge reuses the Testing tag and its
+`testing` trailer. Current release and published-Release workflow consumers are updated for
+this contract. Nightly continues to use an explicit pinned source SHA. The preceding
+amendment's authoring-only and base-revision statements remain immutable historical context
+and no longer describe the implemented boundary.
