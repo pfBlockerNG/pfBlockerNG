@@ -42,7 +42,7 @@ input changes. Use UTC date `YYYYMMDD`; changed inputs on the same date receive
 The Ports recipe is static: publication must not make a routine version commit. Nightly has
 no target final and no PORTEPOCH. Bare date versions intentionally outrank semantic releases;
 reverse movement is an explicit repo-qualified downgrade, never an inferred fallback.
-Machine-readable contract marker: `bare date versions intentionally outrank semantic releases`.
+The ordering rule is that bare date versions intentionally outrank semantic releases.
 
 ## Publication boundaries
 
