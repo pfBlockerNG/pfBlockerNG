@@ -13,7 +13,9 @@ pfSense-pkg-pfBlockerNG
 
 Channel is metadata and catalog placement, never a package-name suffix. The channel and
 release line are explicit/configured and carried in an immutable tag trailer. The channel is
-explicit and configured; a parser must never infer channel from a suffix.
+explicit and configured; `pfBlockerNG-Release-Channel: <stable|testing|edge>` is the trailer
+key, and a parser must never infer channel from a suffix. Every operation uses a pinned source
+SHA.
 
 ## Channel shapes
 
@@ -22,10 +24,11 @@ explicit and configured; a parser must never infer channel from a suffix.
 | Stable | configured `release/X.Y` | `vX.Y.Z` / `X.Y.Z` | final | required |
 | Testing | configured `release/X.Y` | `vX.Y.Z.aN`, `.bN`, or `.rN` / exact | prerelease | required |
 | Edge | configured `release/X.Y` | same Testing grammar / exact | prerelease | required |
-| Nightly | `devel` | untagged date counter | none | none |
+| Nightly | explicit pinned source SHA | untagged date counter | none | none |
 
-Stable, Testing, and Edge share a maintained release-line target. Edge follows Testing when
-there is no distinct Edge target. In that case, reuse the exact existing Testing Release and
+Stable, Testing, and Edge share a maintained release-line target. Edge follows Testing only when no distinct target
+exists; distinct-target Edge uses its configured target/line. In that
+case, reuse the exact existing Testing Release and
 artifact bytes, checksums, source, provenance, tag, and notes. This preserves the same Release
 and artifact bytes, with no second Release and no rebuild. When the target becomes Stable, Edge
 continues to follow Testing until a new target is configured.
@@ -43,7 +46,7 @@ continues to follow Testing until a new target is configured.
 ## Nightly generation
 
 Nightly is independent and untagged. It creates no GitHub Release and no release notes. Generate
-it from the `devel` branch when the input changes:
+it when the pinned source input changes:
 
 - the first changed input on a UTC date uses `YYYYMMDD`;
 - another changed input on that date uses `YYYYMMDD_1`, then `YYYYMMDD_2` and so on; and
@@ -51,7 +54,7 @@ it from the `devel` branch when the input changes:
 
 Nightly identity includes the source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
 The Ports recipe remains static: no routine version commit, no target final, and no PORTEPOCH.
-bare date versions intentionally outrank semantic releases. Reverse movement requires an
+Bare date versions intentionally outrank semantic releases. Reverse movement requires an
 explicit repo-qualified downgrade; no branch or suffix inference may select one.
 
 ## Package order
@@ -69,7 +72,8 @@ with lexical, SemVer, or tuple comparisons.
 ## Inputs and provenance
 
 The caller selects the source line before generation. Stable, Testing, and Edge receive their
-configured `release/X.Y`; Nightly receives `devel`. Source identity is immutable and exact.
+configured `release/X.Y`; Nightly receives an explicit pinned source SHA. Source identity is
+immutable and exact.
 Every generated artifact records source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
 Missing, malformed, conflicting, or changed observations fail closed before mutation.
 
