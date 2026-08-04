@@ -1277,7 +1277,12 @@ _PLUS = {
 }
 _PLUS_ARM = {**_PLUS, "arch": "aarch64", "status": "active"}
 
-_CHANNEL_NAME = {"devel": "pfBlockerNG-devel", "stable": "pfBlockerNG", "nightly": "pfBlockerNG-nightly"}
+_CHANNEL_NAME = {
+    "devel": "pfBlockerNG-devel",  # legacy fixture inputs remain devel-named
+    "testing": "pfBlockerNG-devel",  # source-build seam now selects testing
+    "stable": "pfBlockerNG",
+    "nightly": "pfBlockerNG-nightly",
+}
 
 
 def _stub_builder(
@@ -1628,7 +1633,93 @@ def test_build_matrix_annotate_passthrough(tmp_path: Path) -> None:
     assert seen, "builder was never called"
     for call in seen:
         assert call["annotate"] == {"commit": "deadbeef", "created": "123"}
-    assert {c["channel"] for c in seen} == {"devel", "nightly"}
+    assert {c["channel"] for c in seen} == {"testing", "nightly"}
+
+
+def test_default_builder_forwards_project_record_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The repository's default seam must pass the project-build contract through unchanged."""
+    out = tmp_path / "staging"
+    out.mkdir()
+    record = tmp_path / "record.json"
+    record.write_text("{}\n")
+    record_data = {
+        "channel": "testing",
+        "canonical_package_version": "4.0.0.a1",
+        "emitted_identity": "pfSense-pkg-pfBlockerNG",
+        "matrix_row": {"variant": "CE"},
+    }
+    seen: list[str] = []
+
+    monkeypatch.setattr(brp, "load_build_record", lambda _source: record_data)
+    monkeypatch.setattr(brp, "validate_build_record", lambda value, **_kw: value)
+
+    def fake_run(cmd: list[str], *, check: bool) -> None:
+        seen.extend(cmd)
+        (out / "pfSense-pkg-pfBlockerNG-4.0.0.a1.pkg").touch()
+        assert check is True
+
+    monkeypatch.setattr(brp.subprocess, "run", fake_run)
+
+    result = brp._subprocess_pkg_builder(
+        "testing",
+        abi="FreeBSD:15:amd64",
+        php="8.3",
+        py_flavor="py311",
+        variant="CE",
+        build_record=record,
+        pkgversion="4.0.0.a1",
+        out_dir=out,
+    )
+
+    assert result.name == "pfSense-pkg-pfBlockerNG-4.0.0.a1.pkg"
+    assert seen[seen.index("--channel") + 1] == "testing"
+    assert "devel" not in seen
+    assert seen[seen.index("--variant") + 1] == "CE"
+    assert seen[seen.index("--build-record") + 1] == str(record)
+    assert seen[seen.index("--pkgversion") + 1] == "4.0.0.a1"
+
+
+def test_default_matrix_builder_fails_closed_without_record(tmp_path: Path) -> None:
+    """The default source seam cannot invent provenance absent a matching record."""
+    with pytest.raises(brp.BuildRepoError, match="requires normalized build record.*testing/ce-2.8"):
+        brp.build_repo_matrix([_CE], tmp_path / "site")
+
+
+def test_default_builder_reuses_existing_exact_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An idempotent package-builder rerun returns its pre-existing exact output."""
+    out = tmp_path / "staging"
+    out.mkdir()
+    record_path = tmp_path / "record.json"
+    record_path.write_text("{}\n")
+    expected = out / "pfSense-pkg-pfBlockerNG-4.0.0.a1.pkg"
+    expected.write_bytes(b"already-built")
+    record = {
+        "channel": "testing",
+        "canonical_package_version": "4.0.0.a1",
+        "emitted_identity": "pfSense-pkg-pfBlockerNG",
+        "matrix_row": {"variant": "CE"},
+    }
+
+    monkeypatch.setattr(brp, "load_build_record", lambda _source: record)
+    monkeypatch.setattr(brp, "validate_build_record", lambda value, **_kw: value)
+
+    def fake_run(_cmd: list[str], *, check: bool) -> None:
+        assert check is True
+
+    monkeypatch.setattr(brp.subprocess, "run", fake_run)
+
+    result = brp._subprocess_pkg_builder(
+        "testing",
+        abi="FreeBSD:15:amd64",
+        php="8.3",
+        py_flavor="py311",
+        variant="CE",
+        build_record=record_path,
+        pkgversion="4.0.0.a1",
+        out_dir=out,
+    )
+
+    assert result == expected
 
 
 # --------------------------------------------------------------------------- #
