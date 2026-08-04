@@ -261,7 +261,7 @@ def test_load_build_record_json_and_path(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_hook_validation_uses_shell_tokens_not_regex(script: str, valid: bool) -> None:
+def test_lifecycle_hooks_accept_only_safe_canonical_commands(script: str, valid: bool) -> None:
     if valid:
         pfb_pkg._check_script(script, "fixture.pkg")
     else:
@@ -356,6 +356,60 @@ def test_inspect_and_validate_project_pkg_full_cascade(tmp_path: Path, compressi
     evidence = pfb_pkg.inspect_pkg(pkg)
     assert evidence["manifest"] == full
     assert pfb_pkg.validate_project_pkg(pkg, record, expected_manifest=full)["record"] == record
+
+
+def test_validate_project_pkg_rejects_native_identity_in_share_payload(tmp_path: Path) -> None:
+    payload = {
+        "/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml": (
+            b"<pfsensepkgs><package><name>pfBlockerNG</name><version>2.8.0</version></package></pfsensepkgs>"
+        ),
+        "/usr/local/share/pfSense-pkg-pfBlockerNG-testing/rogue": b"native payload",
+        "/usr/local/pkg/pfblockerng/pfb_stub.py": b"print('ok')\n",
+    }
+    pkg, record, _ = _synthetic_pkg(tmp_path, payload=payload, compression="plain")
+    with pytest.raises(pfb_pkg.PkgError, match="native identity"):
+        pfb_pkg.validate_project_pkg(pkg, record)
+
+
+@pytest.mark.parametrize(
+    ("dependency_name", "dependency_origin"),
+    [
+        ("pfSense-pkg-pfBlockerNG-testing", "net/harmless"),
+        ("harmless", "net/pfSense-pkg-pfBlockerNG-testing"),
+    ],
+)
+def test_validate_project_pkg_rejects_native_identity_in_dependency(
+    tmp_path: Path, dependency_name: str, dependency_origin: str
+) -> None:
+    pkg, record, baseline = _synthetic_pkg(tmp_path, compression="plain")
+    compact = json.loads(json.dumps(baseline))
+    compact.pop("files", None)
+    compact.pop("scripts", None)
+    full = json.loads(json.dumps(baseline))
+    dependency = {"origin": dependency_origin, "version": "1"}
+    compact["deps"][dependency_name] = dependency
+    full["deps"][dependency_name] = dependency
+    pkg, _, _ = _synthetic_pkg(tmp_path, record, compression="plain", compact=compact, full=full)
+    with pytest.raises(pfb_pkg.PkgError, match="native identity"):
+        pfb_pkg.validate_project_pkg(pkg, record)
+
+
+def test_inspect_pkg_decodes_archive_once_and_returns_only_used_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pkg, _, _ = _synthetic_pkg(tmp_path, compression="zstd")
+    calls = 0
+    real_decompress = pfb_pkg.zstd_decompress
+
+    def count_decompress(data: bytes) -> bytes:
+        nonlocal calls
+        calls += 1
+        return real_decompress(data)
+
+    monkeypatch.setattr(pfb_pkg, "zstd_decompress", count_decompress)
+    evidence = pfb_pkg.inspect_pkg(pkg)
+    assert calls == 1
+    assert set(evidence) == {"path", "members", "compact_manifest", "manifest", "payload", "member_info"}
 
 
 @pytest.mark.parametrize(

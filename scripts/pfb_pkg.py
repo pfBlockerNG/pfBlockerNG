@@ -398,7 +398,7 @@ def read_compact_manifest(pkg_path: str | Path) -> dict:
         raise PkgError(f"{pkg_path.name}: invalid package archive: {exc}") from None
 
 
-def _archive_tar(path: Path) -> list[tarfile.TarInfo]:
+def _archive_tar(path: Path) -> tuple[bytes, list[tarfile.TarInfo]]:
     try:
         raw = path.read_bytes()
         if raw[:6] == XZ_MAGIC:
@@ -428,7 +428,7 @@ def _archive_tar(path: Path) -> list[tarfile.TarInfo]:
                     raise PkgError(f"{path.name}: unsafe archive member {name!r}")
                 if not member.isreg():
                     raise PkgError(f"{path.name}: non-regular archive member {name!r}")
-            return members
+            return raw, members
     except PkgError:
         raise
     except (OSError, EOFError, lzma.LZMAError, tarfile.TarError, ValueError) as exc:
@@ -438,11 +438,8 @@ def _archive_tar(path: Path) -> list[tarfile.TarInfo]:
 def inspect_pkg(path: str | Path) -> dict[str, object]:
     """Strictly parse metadata and payload evidence from a libpkg archive."""
     pkg_path = Path(path)
-    members = _archive_tar(pkg_path)
+    tar_raw, members = _archive_tar(pkg_path)
     by_name: dict[str, bytes] = {}
-    with pkg_path.open("rb") as handle:
-        raw = handle.read()
-    tar_raw = lzma.decompress(raw) if raw[:6] == XZ_MAGIC else zstd_decompress(raw)
     with tarfile.open(fileobj=io.BytesIO(tar_raw), mode="r:") as tf:
         for member in members:
             extracted = tf.extractfile(member)
@@ -462,9 +459,6 @@ def inspect_pkg(path: str | Path) -> dict[str, object]:
         "manifest": manifest,
         "payload": payload,
         "member_info": {member.name: member for member in members},
-        "compact": compact,
-        "full": manifest,
-        "files": payload,
     }
 
 
@@ -522,6 +516,13 @@ def validate_project_pkg(
     member_info = evidence["member_info"]
     if not isinstance(compact, dict) or not isinstance(manifest, dict) or not isinstance(payload, dict):
         raise PkgError(f"{pkg_path.name}: malformed inspection evidence")
+    share_prefix = "/usr/local/share/"
+    for name in payload:
+        if not name.startswith(share_prefix):
+            continue
+        for index, component in enumerate(name[len(share_prefix) :].split("/")):
+            if CANONICAL_EMITTED_IDENTITY in component and not (index == 0 and component == CANONICAL_EMITTED_IDENTITY):
+                raise PkgError(f"{pkg_path.name}: native identity leaked into payload path {name}")
     expected_name = f"{CANONICAL_EMITTED_IDENTITY}-{record['canonical_package_version']}"
     if pkg_path.name != expected_name + ".pkg":
         raise PkgError(f"{pkg_path.name}: filename must be {expected_name}.pkg")
@@ -586,6 +587,8 @@ def validate_project_pkg(
             or not isinstance(dependency.get("version"), str)
         ):
             raise PkgError(f"{pkg_path.name}: malformed dependency {name!r}")
+        if CANONICAL_EMITTED_IDENTITY in name or CANONICAL_EMITTED_IDENTITY in dependency["origin"]:
+            raise PkgError(f"{pkg_path.name}: native identity leaked into dependency {name!r}")
     row = record["matrix_row"]
     expected_php = "php" + row["php_version"].replace(".", "")
     py_digits = row["py_flavor"][2:] if row["py_flavor"].startswith("py") else row["py_flavor"]
