@@ -10,15 +10,287 @@ that both build-repo-portable.py and gen_landing.py now depend on.
 from __future__ import annotations
 
 import builtins
+import hashlib
 import io
 import json
+import lzma
 import shutil
 import subprocess
 import tarfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pfb_pkg
 import pytest
+
+
+def _record(**overrides: object) -> dict:
+    row = {
+        "variant": "CE",
+        "pfsense_version": "2.8.0",
+        "freebsd_major": "15",
+        "php_version": "8.3",
+        "py_flavor": "py311",
+    }
+    record: dict[str, object] = {
+        "schema": 1,
+        "channel": "stable",
+        "release_line": "release/2.8",
+        "classification": "final",
+        "source_tag": "v2.8.0",
+        "source_sha": "a" * 40,
+        "canonical_package_version": "2.8.0",
+        "native_recipe_identity": "pfSense-pkg-pfBlockerNG",
+        "emitted_identity": "pfSense-pkg-pfBlockerNG",
+        "matrix_row": row,
+        "freebsd_ports_sha": "b" * 64,
+        "route": "stable/ce-2.8",
+        "source_date_epoch": 0,
+        "build_input_digest": "",
+    }
+    record.update(overrides)
+    channel = record["channel"]
+    if channel != "stable" and "route" not in overrides:
+        record["route"] = f"{channel}/ce-2.8"
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    return record
+
+
+def test_build_record_valid_and_digest_is_canonical() -> None:
+    record = _record()
+    assert pfb_pkg.validate_build_record(record) == record
+    changed = dict(record, source_sha="c" * 40)
+    assert pfb_pkg.build_input_digest(changed) != record["build_input_digest"]
+
+
+@pytest.mark.parametrize(
+    "channel,tag,classification,version,recipe",
+    [
+        ("stable", "v2.8.0", "final", "2.8.0", "pfSense-pkg-pfBlockerNG"),
+        ("testing", "v2.8.0.a1", "alpha", "2.8.0.a1", "pfSense-pkg-pfBlockerNG-testing"),
+        ("edge", "v2.8.0.r1", "rc", "2.8.0.r1", "pfSense-pkg-pfBlockerNG-edge"),
+        ("nightly", None, "nightly", "20260804_1", "pfSense-pkg-pfBlockerNG-nightly"),
+    ],
+)
+def test_build_record_channel_identities(
+    channel: str, tag: str | None, classification: str, version: str, recipe: str
+) -> None:
+    record = _record(
+        channel=channel,
+        source_tag=tag,
+        release_line="devel" if channel == "nightly" else "release/2.8",
+        classification=classification,
+        canonical_package_version=version,
+        native_recipe_identity=recipe,
+    )
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    assert pfb_pkg.validate_build_record(record)["emitted_identity"] == pfb_pkg.CANONICAL_EMITTED_IDENTITY
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda r: r.pop("route"),
+        lambda r: r.update(unknown=True),
+        lambda r: r.update(schema=True),
+        lambda r: r["matrix_row"].update(extra=1.25),
+        lambda r: r.update(source_sha="A" * 40),
+        lambda r: r.update(build_input_digest="0" * 64),
+        lambda r: r.update(source_tag="v2.8.0.r1"),
+        lambda r: r.update(route="stable/../ce-2.8"),
+    ],
+)
+def test_build_record_rejects_malformed_or_tampered(mutator: Callable[..., object]) -> None:
+    record = _record()
+    mutator(record)
+    with pytest.raises(pfb_pkg.PkgError):
+        pfb_pkg.validate_build_record(record)
+
+
+def test_build_record_nightly_calendar_and_null_rules() -> None:
+    for value in ("20260230", "20260804_0", "20260804_01", "4.0.0.alpha.24"):
+        record = _record(
+            channel="nightly",
+            source_tag=None,
+            release_line="devel",
+            classification="nightly",
+            canonical_package_version=value,
+            native_recipe_identity="pfSense-pkg-pfBlockerNG-nightly",
+        )
+        record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+        with pytest.raises(pfb_pkg.PkgError):
+            pfb_pkg.validate_build_record(record)
+
+    record = _record(
+        channel="nightly",
+        source_tag=None,
+        release_line="devel",
+        classification="nightly",
+        canonical_package_version="20260101",
+        native_recipe_identity="pfSense-pkg-pfBlockerNG-nightly",
+    )
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    assert pfb_pkg.validate_build_record(record)["canonical_package_version"] == "20260101"
+
+
+def test_load_build_record_json_and_path(tmp_path: Path) -> None:
+    record = _record()
+    raw = json.dumps(record)
+    assert pfb_pkg.load_build_record(raw) == record
+    path = tmp_path / "record.json"
+    path.write_text(raw)
+    assert pfb_pkg.load_build_record(path) == record
+    for bad in ("[]", "not-json", "{bad"):
+        with pytest.raises(pfb_pkg.PkgError):
+            pfb_pkg.load_build_record(bad)
+
+
+def _synthetic_pkg(
+    tmp_path: Path,
+    record: dict | None = None,
+    *,
+    compression: str = "zstd",
+    compact: dict | None = None,
+    full: dict | None = None,
+    payload: dict[str, bytes] | None = None,
+    members: list[tuple[str, bytes, int, int, bool]] | None = None,
+) -> tuple[Path, dict, dict]:
+    record = record or _record()
+    payload = payload or {
+        "/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml": (
+            "<pfsensepkgs><package><name>pfBlockerNG</name><version>2.8.0</version></package></pfsensepkgs>"
+        ).encode(),
+        "/usr/local/pkg/pfblockerng/pfb_stub.py": b"print('ok')\n",
+    }
+    common = {
+        "name": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+        "origin": "net/pfSense-pkg-pfBlockerNG",
+        "version": "2.8.0",
+        "abi": "FreeBSD:15:*",
+        "arch": "freebsd:15:*",
+        "prefix": "/usr/local",
+        "annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: json.dumps(record, separators=(",", ":"), sort_keys=True)},
+    }
+    deps = {
+        "php83": {"origin": "lang/php83", "version": "8.3.0"},
+        "python311": {"origin": "lang/python311", "version": "3.11.0"},
+    }
+    file_manifest = {
+        path: {
+            "sum": "1$" + hashlib.sha256(data).hexdigest(),
+            "perm": "0644",
+            "mtime": 0,
+            "size": len(data),
+        }
+        for path, data in payload.items()
+    }
+    full_obj = {
+        **common,
+        "deps": deps,
+        "files": file_manifest,
+        "scripts": {
+            "install": "#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\n",
+            "deinstall": "#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\n",
+        },
+    }
+    compact_obj = {**common, "deps": deps}
+    compact_obj = compact if compact is not None else compact_obj
+    full_obj = full if full is not None else full_obj
+    tar_members = [
+        ("+COMPACT_MANIFEST", json.dumps(compact_obj, separators=(",", ":")).encode(), 0o644, 0, True),
+        ("+MANIFEST", json.dumps(full_obj, separators=(",", ":")).encode(), 0o644, 0, True),
+    ]
+    if members is None:
+        tar_members.extend((name, data, 0o644, 0, True) for name, data in payload.items())
+    else:
+        tar_members.extend(members)
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tf:
+        for name, data, mode, mtime, regular in tar_members:
+            ti = tarfile.TarInfo(name=name)
+            ti.size = len(data)
+            ti.mode = mode
+            ti.mtime = mtime
+            if not regular:
+                ti.type = tarfile.SYMTYPE
+                ti.linkname = "target"
+                tf.addfile(ti)
+            else:
+                tf.addfile(ti, io.BytesIO(data))
+    pkg = tmp_path / f"{pfb_pkg.CANONICAL_EMITTED_IDENTITY}-2.8.0.pkg"
+    pkg.write_bytes(
+        lzma.compress(raw.getvalue())
+        if compression == "xz"
+        else (_zstd_frame(raw.getvalue()) if compression == "zstd" else raw.getvalue())
+    )
+    return pkg, record, full_obj
+
+
+@pytest.mark.parametrize("compression", ["zstd", "xz", "plain"])
+def test_inspect_and_validate_project_pkg_full_cascade(tmp_path: Path, compression: str) -> None:
+    pkg, record, full = _synthetic_pkg(tmp_path, compression=compression)
+    evidence = pfb_pkg.inspect_pkg(pkg)
+    assert evidence["manifest"] == full
+    assert pfb_pkg.validate_project_pkg(pkg, record, expected_manifest=full)["record"] == record
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda c, f, p: (c.update(name="pfSense-pkg-pfBlockerNG-testing"), None, p),
+        lambda c, f, p: (f.update(origin="evil/origin"), None, p),
+        lambda c, f, p: (f.update(version="9.9.9"), None, p),
+        lambda c, f, p: (f.update(abi="FreeBSD:16:*"), None, p),
+        lambda c, f, p: (f.update(arch="freebsd:16:*"), None, p),
+        lambda c, f, p: (f["annotations"].update({pfb_pkg.PFB_BUILD_RECORD_KEY: "{}"}), None, p),
+        lambda c, f, p: (p.update({"/usr/local/share/pfSense-pkg-pfBlockerNG-testing/info.xml": b"x"}), None, p),
+        lambda c, f, p: (f["scripts"].update(install="/etc/rc.packages pfSense-pkg-pfBlockerNG-testing"), None, p),
+        lambda c, f, p: (f["deps"].update({"python312": {}}), None, p),
+        lambda c, f, p: (f["files"][next(iter(f["files"]))].update(sum="1$" + "0" * 64), None, p),
+        lambda c, f, p: (f["files"][next(iter(f["files"]))].update(perm="0755"), None, p),
+        lambda c, f, p: (f["files"][next(iter(f["files"]))].update(mtime=1), None, p),
+        lambda c, f, p: (p.update({next(iter(p)): b"tampered"}), None, p),
+    ],
+)
+def test_validate_project_pkg_tamper_rows(tmp_path: Path, mutate: Callable[..., object]) -> None:
+    record = _record()
+    payload = {
+        "/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml": (
+            b"<pfsensepkgs><package><name>pfBlockerNG</name><version>2.8.0</version></package></pfsensepkgs>"
+        ),
+        "/usr/local/pkg/pfblockerng/pfb_stub.py": b"print('ok')\n",
+    }
+    _, _, baseline = _synthetic_pkg(tmp_path, record, compression="plain", payload=payload)
+    compact = {k: v for k, v in baseline.items() if k not in ("files", "scripts")}
+    full = json.loads(json.dumps(baseline))
+    mutate(compact, full, payload)
+    pkg, _, _ = _synthetic_pkg(tmp_path, record, compression="plain", compact=compact, full=full, payload=payload)
+    with pytest.raises(pfb_pkg.PkgError):
+        pfb_pkg.validate_project_pkg(pkg, record)
+
+
+@pytest.mark.parametrize("bad_member", ["+MANIFEST", "../escape", "/tmp/../extra"])
+def test_inspect_pkg_rejects_duplicate_or_unsafe_members(tmp_path: Path, bad_member: str) -> None:
+    record = _record()
+    pkg, _, _ = _synthetic_pkg(tmp_path, record, compression="plain", members=[(bad_member, b"x", 0o644, 0, True)])
+    with pytest.raises(pfb_pkg.PkgError):
+        pfb_pkg.inspect_pkg(pkg)
+
+
+def test_inspect_pkg_rejects_nonregular_payload(tmp_path: Path) -> None:
+    record = _record()
+    pkg, _, _ = _synthetic_pkg(
+        tmp_path, record, compression="plain", members=[("/usr/local/pkg/link", b"", 0o777, 0, False)]
+    )
+    with pytest.raises(pfb_pkg.PkgError):
+        pfb_pkg.inspect_pkg(pkg)
+
+
+def test_validate_project_pkg_expected_manifest_mismatch(tmp_path: Path) -> None:
+    pkg, record, full = _synthetic_pkg(tmp_path)
+    wrong = dict(full, version="2.8.1")
+    with pytest.raises(pfb_pkg.PkgError):
+        pfb_pkg.validate_project_pkg(pkg, record, expected_manifest=wrong)
 
 
 def _zstd_frame(data: bytes) -> bytes:
