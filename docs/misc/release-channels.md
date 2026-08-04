@@ -1,136 +1,92 @@
 # Release channels and version order
 
-Issue #2140 defines the authoring contract used by later release automation. It does not
-publish packages, create releases, select branches, or change the on-box update client.
+Issue #2140 defines the release authoring contract consumed by later automation. It does
+not publish packages, discover release lines, or change the on-box update client.
 
-## Package identity
+## Shared identity and explicit channel
 
-Every channel publishes the same package identity:
+Every channel publishes the exact package identity:
 
 ```text
 pfSense-pkg-pfBlockerNG
 ```
 
-Channel is metadata and catalog placement, never a package-name suffix. This preserves the
-single-package model established by issues #1806 and #1828: the package remains architecture
-independent where the port permits it, and EOL `route-only` catalog behavior remains unchanged.
+Channel is metadata and catalog placement, never a package-name suffix. The channel and
+release line are explicit/configured and carried in an immutable tag trailer. The channel is
+explicit and configured; a parser must never infer channel from a suffix.
 
 ## Channel shapes
 
-Given target final version `X.Y.Z`:
-
-| Channel | Source | Version or tag | GitHub Release | Notes |
+| Channel | Source | Tag / package version | GitHub Release | Notes |
 | --- | --- | --- | --- | --- |
-| Stable | `release/X.Y` | tag `vX.Y.Z` | final | required |
-| Testing | `release/X.Y` | tag `vX.Y.Z.alpha.N`, `.beta.N`, or `.rc.N` | prerelease | required |
-| Edge | configured `release/X.Y` | tag `vX.Y.Z.edge.YYYYMMDD.N` | prerelease | required |
-| Nightly | `devel` | no tag | none | none |
+| Stable | configured `release/X.Y` | `vX.Y.Z` / `X.Y.Z` | final | required |
+| Testing | configured `release/X.Y` | `vX.Y.Z.aN`, `.bN`, or `.rN` / exact | prerelease | required |
+| Edge | configured `release/X.Y` | same Testing grammar / exact | prerelease | required |
+| Nightly | `devel` | untagged date counter | none | none |
 
-Stable and Testing tags are selected by a human. Edge and Nightly identifiers are generated
-from an immutable source commit, UTC date, and daily count. Edge notes use the same authored
-changelog path as Stable and Testing; there is no separate generated-notes path. Nightly is an
-untagged `devel` snapshot and therefore cannot create a GitHub Release or release notes.
+Stable, Testing, and Edge share a maintained release-line target. Edge follows Testing when
+there is no distinct Edge target. In that case, reuse the exact existing Testing Release and
+artifact bytes, checksums, source, provenance, tag, and notes. This preserves the same Release
+and artifact bytes, with no second Release and no rebuild. When the target becomes Stable, Edge
+continues to follow Testing until a new target is configured.
 
-The canonical parser result records package, channel, stage, target final, source line, tag,
-version, package version, prerelease/final flags, notes requirement, and GitHub Release kind.
-Nightly has `tag = None` and GitHub Release kind `none`.
+## Version and tag rules
 
-## FreeBSD package order
+- Stable `vX.Y.Z` maps to package version `X.Y.Z`.
+- Testing `vX.Y.Z.aN`, `vX.Y.Z.bN`, and `vX.Y.Z.rN` map to the exact matching package
+  versions. Edge uses this same grammar and mapping.
+- The immutable tag trailer records the selected channel and release line. Source identity,
+  package version, artifact bytes, checksum, and provenance are one immutable record.
+- Stable, Testing, and Edge create at most one Release for an exact tag. Published Releases
+  are immutable; retry only the exact same identity without rebuilding.
 
-The package versions targeting one final release are:
+## Nightly generation
 
-```text
-X.Y.(Z-1)
-X.Y.Z.alpha.N
-X.Y.Z.beta.N
-X.Y.Z.rc.N
-X.Y.Z.snapshot.1.YYYYMMDD.N   # Edge
-X.Y.Z.snapshot.2.YYYYMMDD.N   # Nightly
-X.Y.Z
-```
+Nightly is independent and untagged. It creates no GitHub Release and no release notes. Generate
+it from the `devel` branch when the input changes:
 
-The required strict order is:
+- the first changed input on a UTC date uses `YYYYMMDD`;
+- another changed input on that date uses `YYYYMMDD_1`, then `YYYYMMDD_2` and so on; and
+- an unchanged input or skipped day is a no-op.
+
+Nightly identity includes the source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
+The Ports recipe remains static: no routine version commit, no target final, and no PORTEPOCH.
+bare date versions intentionally outrank semantic releases. Reverse movement requires an
+explicit repo-qualified downgrade; no branch or suffix inference may select one.
+
+## Package order
+
+FreeBSD `pkg` is the ordering oracle. The intended order for one target is:
 
 ```text
 previous final < alpha < beta < rc < Edge < Nightly < target final
 ```
 
-Within Edge or Nightly, a later UTC date sorts after an earlier date and a higher same-day
-count sorts after a lower count. Code must not reproduce this comparison with SemVer, lexical,
-or tuple logic. Mutation callers supply the result observed from FreeBSD `pkg`/libpkg.
+Edge and Nightly use the exact package version emitted by their selected channel contract.
+Callers must ask FreeBSD `pkg`/libpkg to compare versions rather than reimplementing ordering
+with lexical, SemVer, or tuple comparisons.
 
-The external oracle was run on 2026-08-03 against every supported FreeBSD/pkg family:
+## Inputs and provenance
 
-| pfSense | FreeBSD | `pkg` | Result |
-| --- | --- | --- | --- |
-| CE 2.8 | 15 | 1.21.3 | full adjacent-pair table passed |
-| Plus 26.03 | 16 | 2.7.5 | full adjacent-pair table passed |
-| Plus 26.07 | 16 | 2.7.5 | full adjacent-pair table passed |
+The caller selects the source line before generation. Stable, Testing, and Edge receive their
+configured `release/X.Y`; Nightly receives `devel`. Source identity is immutable and exact.
+Every generated artifact records source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
+Missing, malformed, conflicting, or changed observations fail closed before mutation.
 
-The smoke oracle invokes `/usr/local/sbin/pkg version -t` directly on each appliance. Unit
-tests pin the exact generated strings; they do not claim to implement libpkg ordering.
+## Maintained lines and fixes
 
-## Snapshot generation
+Stable and Testing may coexist for each maintained `release/X.Y`; exactly one explicitly
+configured line supplies Edge. Supporting simultaneous Edge lines requires an owner decision
+and separate/equal-priority catalogs; branch sorting is never a substitute. Nightly follows
+`devel`.
 
-Snapshot generation is deterministic and fail-closed:
+Fixes start on the oldest affected maintained line. Land that line through its own PR and
+gates, then cherry-pick forward with `git cherry-pick -x` through newer maintained lines and
+finally `devel`, with separate PRs, conflict resolution, and gates. Merge commits are not
+used.
 
-- The caller selects the source line before generation. Edge must receive the configured exact
-  `release/X.Y`; Nightly must receive `devel`. The generator never lists or sorts branches.
-- The source is an exact lowercase 40- or 64-hex commit ID. Mutable names are rejected.
-- The date is an explicit UTC `date`. The first new source on a date receives count `1`; each
-  different source on that date receives the next count; a later date restarts at `1`.
-- Repeating the same channel, target, line, and source returns its original result, including
-  when retried on a later date. Conflicting records for one source fail.
-- A date older than an existing relevant snapshot fails. Duplicate versions, package versions,
-  or source records with conflicting content fail.
-- After final `X.Y.Z`, the next development target is `X.Y.(Z+1)` until a human chooses a
-  different maintained release line.
+## Scope and follow-ups
 
-The channel-specific generated values are:
-
-```text
-Edge tag:       vX.Y.Z.edge.YYYYMMDD.N
-Edge version:   X.Y.Z.edge.YYYYMMDD.N
-Edge pkg:       X.Y.Z.snapshot.1.YYYYMMDD.N
-
-Nightly tag:    none
-Nightly version:X.Y.Z.nightly.YYYYMMDD.N
-Nightly pkg:    X.Y.Z.snapshot.2.YYYYMMDD.N
-```
-
-## Mutation preconditions
-
-Later publication code must call the mutation boundary before its first write. The boundary
-permits a mutation only when all caller-observed facts are valid:
-
-- package identity and selected source line exactly match the canonical result;
-- the immutable source commit is reachable and an existing tag has not moved;
-- an existing published Release or draft with assets is never modified;
-- an assetless draft, or an absent release after creating the exact tag at the exact source,
-  is eligible for safe recovery;
-- `pkg`/libpkg reports the candidate newer than the current package version;
-- one package version cannot map to different artifact bytes; identical bytes are a no-op.
-
-Missing or malformed observations fail closed. The mutation callback is invoked only after all
-checks pass. This seam authorizes no publication in issue #2140; later publisher issues provide
-the observations and side effects.
-
-## Maintained release lines and fixes
-
-Stable and Testing may coexist for every maintained `release/X.Y` line. Exactly one release line
-is configured as active Edge. Supporting simultaneous Edge streams requires an owner decision
-and separate/equal-priority catalogs; branch-name ordering is never a substitute for that choice.
-Nightly always follows `devel`.
-
-Fixes start on the oldest affected maintained release line. Land that line through its own PR and
-gates, then cherry-pick forward with `git cherry-pick -x` through each newer maintained release
-line and finally `devel`. Each forward port gets its own PR, conflict resolution, and gates. A
-`devel`-only fix stays on `devel`. Merge commits are not used.
-
-## Compatibility and follow-ups
-
-The shell parser keeps its first five legacy assignments for existing workflows and appends the
-canonical fields. Temporary `main`/`devel` branch aliases are restricted to Stable/Testing legacy
-callers. Issue #2143 owns workflow migration to canonical release lines and generation.
-Builder, publisher, catalog, and client/UI behavior belongs to issues #2144–#2148.
-FreeBSD-ports changes belong to issue #2141. None of those surfaces change in #2140.
+This contract authorizes no publication or workflow implementation by itself. Existing
+workflow consumers remain current at the issue #2140 base revision. Builder, publisher,
+catalog, client/UI, and Ports changes belong to their separately scoped follow-up issues.

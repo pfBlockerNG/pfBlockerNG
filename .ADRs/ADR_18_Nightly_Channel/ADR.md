@@ -568,3 +568,21 @@ same identifier when the same immutable source is retried.
 The package identity converges to `pfSense-pkg-pfBlockerNG`; the current `-nightly` package and
 publication path remain untouched in #2140. Builder/publisher/catalog/client issues #2144–#2148
 own that migration. Retention still provides availability, not downgrade support.
+
+## Amendment — 2026-08-04: independent Nightly input contract (issue #2140)
+
+The preceding snapshot-rank amendment is historical and is superseded for release authoring by
+this correction; accepted text remains immutable. Nightly uses the exact package identity
+`pfSense-pkg-pfBlockerNG` and is an independent untagged `devel` snapshot. It creates no tag,
+GitHub Release, or release notes. A changed input uses UTC `YYYYMMDD`; another changed input on
+the same day uses `YYYYMMDD_1`, then `_2`, while an unchanged input or skipped day is a no-op.
+
+Nightly identity includes source SHA, FreeBSD-ports SHA, and matrix/dependency digest. The Ports
+recipe is static: no routine version commit, no target final, and no PORTEPOCH. Bare date
+versions intentionally outrank semantic releases; reverse movement requires an explicit
+repo-qualified downgrade. Stable, Testing, and configured Edge own their tagged Release and
+notes contract; Edge follows Testing without rebuilding or creating a second Release when no
+distinct target exists.
+
+This amendment changes authoring semantics only. Existing `-nightly` package and publication
+implementation remain the compatibility surface until the follow-up migration issues land.

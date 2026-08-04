@@ -11,6 +11,28 @@ none of this ships in the release archive (which contains only `src/`).
 | [`mcp-token-savior.sh`](mcp-token-savior.sh) | Install the pinned upstream Token Savior release in a shared per-user venv and launch its MCP server for Claude or Codex. |
 | [`ts-hook.sh`](ts-hook.sh) | Run Token Savior's shared tool-capture hook for Claude or Codex. |
 
+## Release channel contract
+
+Release authoring follows issue #2140. All channels publish the exact package identity
+`pfSense-pkg-pfBlockerNG`; channel is explicit/configured metadata carried in an immutable
+tag trailer, never a package-name suffix or inferred tag shape.
+
+- Stable uses `vX.Y.Z` / `X.Y.Z`.
+- Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` with the exact package version.
+- Edge uses the same Testing grammar and follows Testing on one configured `release/X.Y`.
+  Without a distinct target, reuse the same Release and artifact bytes, checksums, source,
+  provenance, tag, and notes: no rebuild and no second Release. If its target becomes Stable,
+  Edge follows Testing until a new target is configured.
+- Nightly is an independent untagged `devel` snapshot with no GitHub Release and no release
+  notes. Changed input uses UTC `YYYYMMDD`, then `YYYYMMDD_1`/`_2` for same-day changes;
+  unchanged or skipped days are no-ops. Identity includes source SHA, FreeBSD-ports SHA,
+  and matrix/dependency digest.
+
+Keep the Ports recipe static: no routine version commit, no target final, and no PORTEPOCH.
+Bare date versions intentionally outrank semantic releases; reverse movement requires an
+explicit repo-qualified downgrade. `scripts/release-version.sh` remains the parser; callers
+must pass explicit channel context and must not reimplement or infer its grammar.
+
 ## Supported-version matrix
 
 The single source of truth for which pfSense versions pfBlockerNG supports lives on
@@ -143,7 +165,7 @@ pfBlockerNG is a `NO_BUILD` port (nothing compiles) and `pkg add` checks a depen
 
 ### Where `.pkg` artifacts land
 
-A tag push (`vX.Y.Z[-devel]`) triggers `release.yml`, which reads `build_matrix` — already
+A Stable, Testing, or Edge release dispatch triggers `release.yml`, which reads `build_matrix` — already
 deduplicated by `read-version-matrix.sh` to one row per distinct FreeBSD major (issue #1806) —
 and builds one `.pkg` per row against its `(freebsd_version, php_version)` pair. Artifacts
 are attached to the **GitHub Release** named `pfBlockerNG-relpkg-fbsd<major>`; one `.pkg`

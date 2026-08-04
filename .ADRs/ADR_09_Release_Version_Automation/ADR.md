@@ -317,3 +317,26 @@ per UTC date and idempotent per source commit.
 The existing workflow remains a compatibility consumer through its first five shell-parser fields;
 issue #2143 owns its migration to canonical fields and generation. This amendment defines no
 publisher, workflow dispatch, branch discovery, or repository mutation.
+
+## Amendment — 2026-08-04: corrected channel and snapshot contract (issue #2140)
+
+The preceding issue #2140 amendment recorded a superseded shape. The authoring contract is
+corrected here; the accepted body and that earlier amendment remain immutable history.
+
+- Stable is `vX.Y.Z` / `X.Y.Z`. Testing is `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN`,
+  with the exact matching package version. Channel and configured `release/X.Y` line are
+  explicit and carried in an immutable tag trailer; channel is never inferred from a suffix.
+- Edge uses the same Testing grammar and follows Testing on one configured line. With no
+  distinct Edge target, reuse the exact Testing Release and artifact bytes, checksums, source,
+  provenance, tag, and notes. No rebuild or second Release is allowed. When its target becomes
+  Stable, Edge follows Testing until a new target is configured.
+- Nightly is an independent untagged `devel` snapshot. It creates no tag, GitHub Release, or
+  release notes. A changed input uses UTC `YYYYMMDD`, then `YYYYMMDD_1`, `_2`, and so on for
+  same-day changes; unchanged or skipped days are no-ops. Identity includes source SHA,
+  FreeBSD-ports SHA, and matrix/dependency digest.
+- The Ports recipe is static: no routine version commit, no target final, and no PORTEPOCH.
+  Bare date versions intentionally outrank semantic releases. Reverse movement requires an
+  explicit repo-qualified downgrade.
+
+This correction is authoring-only. Workflow implementation remains at the current base
+revision and later builder, publisher, catalog, and client issues own migration.
