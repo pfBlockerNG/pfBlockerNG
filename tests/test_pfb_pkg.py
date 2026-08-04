@@ -27,10 +27,15 @@ import pytest
 def _record(**overrides: object) -> dict:
     row = {
         "variant": "CE",
-        "pfsense_version": "2.8.0",
+        "pfsense_version": "2.8",
+        "channel": "CE",
+        "freebsd_version": "15.0-RELEASE",
         "freebsd_major": "15",
         "php_version": "8.3",
         "py_flavor": "py311",
+        "status": "active",
+        "extra_pkgs": ["textproc/py-charset-normalizer"],
+        "upgrade": {"available": False},
     }
     record: dict[str, object] = {
         "schema": 1,
@@ -61,6 +66,70 @@ def test_build_record_valid_and_digest_is_canonical() -> None:
     assert pfb_pkg.validate_build_record(record) == record
     changed = dict(record, source_sha="c" * 40)
     assert pfb_pkg.build_input_digest(changed) != record["build_input_digest"]
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {
+            "pfsense_version": "2.8",
+            "channel": "CE",
+            "freebsd_version": "15.0-RELEASE",
+            "freebsd_major": "15",
+            "php_version": "8.3",
+            "py_flavor": "py311",
+            "variant": "CE",
+            "status": "active",
+            "extra_pkgs": ["textproc/py-charset-normalizer"],
+            "upgrade": {"available": False},
+        },
+        {
+            "pfsense_version": "26.07",
+            "channel": "Plus",
+            "freebsd_version": "16.0-RELEASE",
+            "freebsd_major": "16",
+            "php_version": "8.5",
+            "py_flavor": "py311",
+            "variant": "Plus",
+            "status": "beta",
+            "extra_pkgs": [],
+            "upgrade": {"available": False},
+            "image_name": "pfsense-plus",
+        },
+    ],
+)
+def test_build_matrix_row_accepts_each_live_complete_row(row: dict[str, object]) -> None:
+    assert pfb_pkg.validate_build_matrix_row(row) == row
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda row: row.pop("freebsd_version"),
+        lambda row: row.update(ci=True),
+        lambda row: row.update(extra_pkgs=["textproc/py-charset-normalizer", 1]),
+        lambda row: row.update(channel="Plus"),
+        lambda row: row.update(freebsd_major="16"),
+        lambda row: row.update(image_name="pfsense plus"),
+        lambda row: row.update(upgrade={"available": "false"}),
+    ],
+)
+def test_build_matrix_row_rejects_missing_unknown_wrong_type_and_non_live(mutator: Callable[..., object]) -> None:
+    row = {
+        "pfsense_version": "2.8",
+        "channel": "CE",
+        "freebsd_version": "15.0-RELEASE",
+        "freebsd_major": "15",
+        "php_version": "8.3",
+        "py_flavor": "py311",
+        "variant": "CE",
+        "status": "active",
+        "extra_pkgs": ["textproc/py-charset-normalizer"],
+        "upgrade": {"available": False},
+    }
+    mutator(row)
+    with pytest.raises(pfb_pkg.PkgError):
+        pfb_pkg.validate_build_matrix_row(row)
 
 
 @pytest.mark.parametrize(
@@ -143,6 +212,38 @@ def test_load_build_record_json_and_path(tmp_path: Path) -> None:
     for bad in ("[]", "not-json", "{bad"):
         with pytest.raises(pfb_pkg.PkgError):
             pfb_pkg.load_build_record(bad)
+
+
+@pytest.mark.parametrize(
+    ("script", "valid"),
+    [
+        ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\n", True),
+        (
+            "#!/bin/sh\n${PKG_ROOTDIR}/usr/local/bin/php -f ${PKG_ROOTDIR}/etc/rc.packages "
+            "pfSense-pkg-pfBlockerNG ${2}\n",
+            True,
+        ),
+        ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2} # comment\n", True),
+        ("#!/bin/sh\n# /etc/rc.packages pfSense-pkg-pfBlockerNG\necho safe\n", False),
+        ("#!/bin/sh\n/usr/local/bin/php -f '/etc/rc.packages' 'pfSense-pkg-pfBlockerNG' ${2}\n", True),
+        ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages 'pfSense-pkg-pfBlockerNG; echo pwned' ${2}\n", False),
+        (
+            "#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\necho '# ignored'\n",
+            True,
+        ),
+        ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG-testing ${2}\n", False),
+        ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages\npfSense-pkg-pfBlockerNG ${2}\n", False),
+        ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2} extra\n", False),
+        ("#!/bin/sh\necho safe; /usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2}\n", False),
+        ("#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG ${2} $(echo pwned)\n", False),
+    ],
+)
+def test_hook_validation_uses_shell_tokens_not_regex(script: str, valid: bool) -> None:
+    if valid:
+        pfb_pkg._check_script(script, "fixture.pkg")
+    else:
+        with pytest.raises(pfb_pkg.PkgError):
+            pfb_pkg._check_script(script, "fixture.pkg")
 
 
 def _synthetic_pkg(
@@ -235,24 +336,72 @@ def test_inspect_and_validate_project_pkg_full_cascade(tmp_path: Path, compressi
 
 
 @pytest.mark.parametrize(
-    "mutate",
+    ("mutate", "error"),
     [
-        lambda c, f, p: (c.update(name="pfSense-pkg-pfBlockerNG-testing"), None, p),
-        lambda c, f, p: (f.update(origin="evil/origin"), None, p),
-        lambda c, f, p: (f.update(version="9.9.9"), None, p),
-        lambda c, f, p: (f.update(abi="FreeBSD:16:*"), None, p),
-        lambda c, f, p: (f.update(arch="freebsd:16:*"), None, p),
-        lambda c, f, p: (f["annotations"].update({pfb_pkg.PFB_BUILD_RECORD_KEY: "{}"}), None, p),
-        lambda c, f, p: (p.update({"/usr/local/share/pfSense-pkg-pfBlockerNG-testing/info.xml": b"x"}), None, p),
-        lambda c, f, p: (f["scripts"].update(install="/etc/rc.packages pfSense-pkg-pfBlockerNG-testing"), None, p),
-        lambda c, f, p: (f["deps"].update({"python312": {}}), None, p),
-        lambda c, f, p: (f["files"][next(iter(f["files"]))].update(sum="1$" + "0" * 64), None, p),
-        lambda c, f, p: (f["files"][next(iter(f["files"]))].update(perm="0755"), None, p),
-        lambda c, f, p: (f["files"][next(iter(f["files"]))].update(mtime=1), None, p),
-        lambda c, f, p: (p.update({next(iter(p)): b"tampered"}), None, p),
+        (
+            lambda c, f, p: (
+                c.update(name="pfSense-pkg-pfBlockerNG-testing"),
+                f.update(name="pfSense-pkg-pfBlockerNG-testing"),
+            ),
+            "canonical package identity/origin mismatch",
+        ),
+        (
+            lambda c, f, p: (c.update(origin="evil/origin"), f.update(origin="evil/origin")),
+            "canonical package identity/origin mismatch",
+        ),
+        (
+            lambda c, f, p: (c.update(version="9.9.9"), f.update(version="9.9.9")),
+            "package version mismatch",
+        ),
+        (
+            lambda c, f, p: (c.update(abi="FreeBSD:16:*"), f.update(abi="FreeBSD:16:*")),
+            "ABI/arch mismatch",
+        ),
+        (
+            lambda c, f, p: (c.update(arch="freebsd:16:*"), f.update(arch="freebsd:16:*")),
+            "ABI/arch mismatch",
+        ),
+        (
+            lambda c, f, p: (
+                c["annotations"].update({pfb_pkg.PFB_BUILD_RECORD_KEY: "{}"}),
+                f["annotations"].update({pfb_pkg.PFB_BUILD_RECORD_KEY: "{}"}),
+            ),
+            "annotation mismatch",
+        ),
+        (
+            lambda c, f, p: p.update({"/usr/local/pkg/new": b"x"}),
+            "payload inventory differs",
+        ),
+        (
+            lambda c, f, p: f["scripts"].update(install="/etc/rc.packages pfSense-pkg-pfBlockerNG-testing"),
+            "suffixed native identity",
+        ),
+        (
+            lambda c, f, p: (
+                c["deps"].update({"python312": {"origin": "lang/python312", "version": "0"}}),
+                f["deps"].update({"python312": {"origin": "lang/python312", "version": "0"}}),
+            ),
+            "Python dependency flavor mismatch",
+        ),
+        (
+            lambda c, f, p: f["files"][next(iter(f["files"]))].update(sum="1$" + "0" * 64),
+            "checksum mismatch",
+        ),
+        (
+            lambda c, f, p: f["files"][next(iter(f["files"]))].update(perm="0755"),
+            "mode/mtime mismatch",
+        ),
+        (
+            lambda c, f, p: f["files"][next(iter(f["files"]))].update(mtime=1),
+            "mode/mtime mismatch",
+        ),
+        (
+            lambda c, f, p: p.update({next(iter(p)): b"tampered"}),
+            "checksum mismatch",
+        ),
     ],
 )
-def test_validate_project_pkg_tamper_rows(tmp_path: Path, mutate: Callable[..., object]) -> None:
+def test_validate_project_pkg_tamper_rows(tmp_path: Path, mutate: Callable[..., object], error: str) -> None:
     record = _record()
     payload = {
         "/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml": (
@@ -265,7 +414,7 @@ def test_validate_project_pkg_tamper_rows(tmp_path: Path, mutate: Callable[..., 
     full = json.loads(json.dumps(baseline))
     mutate(compact, full, payload)
     pkg, _, _ = _synthetic_pkg(tmp_path, record, compression="plain", compact=compact, full=full, payload=payload)
-    with pytest.raises(pfb_pkg.PkgError):
+    with pytest.raises(pfb_pkg.PkgError, match=error):
         pfb_pkg.validate_project_pkg(pkg, record)
 
 
@@ -400,4 +549,11 @@ def test_read_compact_manifest_non_object(tmp_path: Path) -> None:
     pkg = tmp_path / "x.pkg"
     pkg.write_bytes(_zstd_frame(_tar_with({"+COMPACT_MANIFEST": b"[1, 2, 3]"})))
     with pytest.raises(pfb_pkg.PkgError, match="not an object"):
+        pfb_pkg.read_compact_manifest(pkg)
+
+
+def test_read_compact_manifest_malformed_xz_is_pkg_error(tmp_path: Path) -> None:
+    pkg = tmp_path / "broken.pkg"
+    pkg.write_bytes(pfb_pkg.XZ_MAGIC + b"not-an-xz-stream")
+    with pytest.raises(pfb_pkg.PkgError, match="invalid package archive"):
         pfb_pkg.read_compact_manifest(pkg)
