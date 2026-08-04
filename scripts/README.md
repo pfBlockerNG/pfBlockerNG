@@ -327,7 +327,7 @@ Full reference (every option, the fidelity comparison, troubleshooting):
 ### Frozen v3.2 build (issue #1676)
 
 [`build-frozen-v3.py`](build-frozen-v3.py) builds and identity-validates the frozen pfBlockerNG
-`v3.2.15` (Stable) and `v3.2.16` (Devel) `.pkg` artifacts for every BUILD-matrix row, on top of
+`v3.2.15` (Stable) and `v3.2.16` (Testing) `.pkg` artifacts for every BUILD-matrix row, on top of
 `build-leg.sh`/`build-pkg-portable.py`. It exists because those two source tags predate the
 2026-06-05 `list_scripts/` move: a current `devel`-branch ports ref cannot build a v3.2 source
 tree, and a current source tree cannot be built by the frozen ports ref either. The tool
@@ -527,17 +527,17 @@ an injected custom builder remains responsible for its own inputs.
 
 | Flag | Default | Purpose |
 | ---- | ------- | ------- |
-| `--release-keep-devel N` | `1` (latest-only) | Retain the N newest devel releases per varver in the `release/` catalog. |
+| `--release-keep-testing N` | `1` (latest-only) | Retain the N newest Testing releases per varver in the `release/` catalog. |
 | `--release-keep-stable M` | `1` (latest-only) | Same for the stable channel. |
 | `--release-extra-pkgs PATH` | (none) | Pre-built older-release `.pkg` to fold into the release pool alongside the fresh build (repeatable — pass one per file). The generator prunes the merged pool to `N` / `M` after folding. |
 
-`--release-keep-devel 0` / `--release-keep-stable 0` is the **unbounded** sentinel (keep all).
+`--release-keep-testing 0` / `--release-keep-stable 0` is the **unbounded** sentinel (keep all).
 
 **Line pins are retained on top of the N/M window** (issue #1676): the newest package of
 every pfBlockerNG major/minor line survives per channel even when it falls outside the
 rolling window, so an aged-out release stays installable by exact version. A catalog can
 therefore hold more than `N` + `M` packages — budget for one extra per aged-out line per
-channel. Pins are per channel, so a devel pin never satisfies or evicts a stable one; the
+channel. Pins are per channel, so a Testing pin never satisfies or evicts a stable one; the
 `0` sentinel and the nightly subtree are unaffected.
 
 ### How the publish pipeline uses these flags
@@ -545,8 +545,8 @@ channel. Pins are per channel, so a devel pin never satisfies or evicts a stable
 `pfBlockerNG/pkg`'s `publish.yml` passes:
 
 - one `--release-extra-pkgs <path>` per older `.pkg` it downloaded from GitHub Releases
-  (pre-release assets → devel pool; full-release assets → stable pool), and
-- `--release-keep-devel N` / `--release-keep-stable M` at the configured retention depth
+  (pre-release assets → Testing pool; full-release assets → stable pool), and
+- `--release-keep-testing N` / `--release-keep-stable M` at the configured retention depth
   (default 10 when retention is enabled; overridable via `workflow_dispatch` inputs).
 
 The generator is the backstop: even if `publish.yml` passes more `.pkg` files than the

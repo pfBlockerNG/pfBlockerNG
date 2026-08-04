@@ -557,7 +557,7 @@ def _pkg_version_key(version: str) -> tuple[list[int], int, int]:
     Used for nightly retention (``<target>.YYYYMMDD.N``, all-numeric — a later build
     sorts higher) AND release-channel retention (canonical ``X.Y.Z.aN|bN|rN`` and
     retained legacy expanded versions,
-    via ``retain_by_channel``'s ``--release-keep-devel``/``--release-keep-stable`` >
+    via ``retain_by_channel``'s ``--release-keep-testing``/``--release-keep-stable`` >
     1), so it must also order the alpha/beta/rc prerelease stages correctly, not just
     the nightly date/counter shape. Kept as a thin alias — this module's ``_retain_newest``
     callers reference it by this name.
@@ -714,7 +714,7 @@ def _line_pins(bucket: list[Path]) -> list[Path]:
 
 
 def _retention_channel(path: Path, manifest: Mapping[str, object]) -> str:
-    """Return a package's retention bucket from provenance, with legacy name fallback."""
+    """Return a package's retention bucket from provenance, with native fallback."""
     record = _canonical_build_record(path, manifest)
     if record is not None:
         channel = record["channel"]
@@ -732,8 +732,10 @@ def _retention_channel(path: Path, manifest: Mapping[str, object]) -> str:
     if isinstance(name, str):
         if name.endswith("-nightly"):
             return "nightly"
-        if name.endswith(("-devel", "-testing")):
-            return "devel"
+        if name.endswith("-devel"):
+            raise BuildRepoError(f"{path.name}: legacy -devel package identity is unsupported; use -testing")
+        if name.endswith("-testing"):
+            return "testing"
         if name.endswith("-edge"):
             return "edge"
     return "stable"
@@ -775,7 +777,7 @@ def _validate_annotated_project_pkg(path: Path, manifest: Mapping[str, object]) 
 def retain_by_channel(
     pkg_paths: list[Path],
     *,
-    keep_devel: int,
+    keep_testing: int,
     keep_stable: int,
 ) -> list[Path]:
     """Bucket paths by package provenance/name and keep the newest ``keep_*`` per channel,
@@ -783,10 +785,11 @@ def retain_by_channel(
 
     Canonical project packages use their validated ``pfb_build_record`` annotation:
       * ``stable`` → stable channel
-      * ``testing`` → devel retention bucket
+      * ``testing`` → testing retention bucket
       * ``edge``/``nightly`` → untouched channels
-    Legacy native packages fall back to manifest-name suffixes (``-devel``, ``-testing``,
-    ``-edge``, ``-nightly``); an unsuffixed native package is stable. Filenames are never
+    Native packages fall back to manifest-name suffixes (``-testing``, ``-edge``,
+    ``-nightly``); legacy ``-devel`` identities are rejected and an unsuffixed native package
+    is stable. Filenames are never
     consulted. Edge and nightly are passthrough channels because no retention limit exists
     for either one.
 
@@ -796,26 +799,26 @@ def retain_by_channel(
       * ``keep < len(bucket)`` → prune to the ``keep`` newest, THEN union in each
         major/minor line's newest package (``_line_pins``) that isn't already in that
         window — e.g. an aged-out v3.2.15 stays available after newer lines push it
-        out of the rolling window. Pins are per-channel: a devel pin can never satisfy
+        out of the rolling window. Pins are per-channel: a testing pin can never satisfy
         stable or vice versa. A malformed version in a bucket that needs pruning raises
         ``BuildRepoError`` (fail closed, never silently misbucketed or dropped).
 
-    ``keep_devel`` / ``keep_stable`` must be ``>= 0``; a negative value is rejected (it would
+    ``keep_testing`` / ``keep_stable`` must be ``>= 0``; a negative value is rejected (it would
     otherwise flow into ``_retain_newest``'s ``[:keep]`` slice and silently drop the newest
     builds — fail fast instead).
 
-    Returns the kept paths in a deterministic stable order (devel first, then stable, edge,
+    Returns the kept paths in a deterministic stable order (testing first, then stable, edge,
     and nightly; within each pruned bucket the window newest-first, then any line pins
     newest-first).
     """
-    if keep_devel < 0 or keep_stable < 0:
+    if keep_testing < 0 or keep_stable < 0:
         raise BuildRepoError(
-            f"release keep values must be >= 0 (got keep_devel={keep_devel}, keep_stable={keep_stable})"
+            f"release keep values must be >= 0 (got keep_testing={keep_testing}, keep_stable={keep_stable})"
         )
 
     _check_collisions([(path, read_compact_manifest(path)) for path in sorted(set(pkg_paths))])
 
-    devel: list[Path] = []
+    testing: list[Path] = []
     stable: list[Path] = []
     edge: list[Path] = []
     nightly: list[Path] = []
@@ -825,8 +828,8 @@ def retain_by_channel(
         channel = _retention_channel(p, m)
         if channel == "nightly":
             nightly.append(p)
-        elif channel in ("devel", "testing"):
-            devel.append(p)
+        elif channel == "testing":
+            testing.append(p)
         elif channel == "edge":
             edge.append(p)
         else:
@@ -842,10 +845,10 @@ def retain_by_channel(
         pins = [p for p in _line_pins(bucket) if p not in seen]
         return window + pins
 
-    kept_devel = _prune(devel, keep_devel)
+    kept_testing = _prune(testing, keep_testing)
     kept_stable = _prune(stable, keep_stable)
     # Edge and nightly are left untouched (no retention limits for either channel).
-    return kept_devel + kept_stable + edge + nightly
+    return kept_testing + kept_stable + edge + nightly
 
 
 BuildRecordInput = str | Path | Mapping[str, object]
@@ -975,7 +978,7 @@ def build_repo_matrix(
     nightly_keep: int = 14,
     nightly_pkgversion: Callable[[dict], str] | None = None,
     build_nightly: bool = True,
-    release_keep_devel: int = 1,
+    release_keep_testing: int = 1,
     release_keep_stable: int = 1,
     release_extra_pkgs: list[Path] | None = None,
     route_only_pkgs: dict[str, list[Path]] | None = None,
@@ -1009,7 +1012,7 @@ def build_repo_matrix(
       * RELEASE subtree ``release/<varver>/`` — the testing and edge .pkgs, plus the stable
         .pkg built from ``stable_tag`` (skipped when no stable tag exists), optionally
         folded with pre-built older-release .pkg from ``release_extra_pkgs``, pruned to
-        the ``release_keep_devel`` newest devel + ``release_keep_stable`` newest stable.
+        the ``release_keep_testing`` newest testing + ``release_keep_stable`` newest stable.
         Defaults (1/1) reproduce today's latest-only behaviour; setting higher values
         retains older artifacts in the catalog for diagnostics and reproducibility.
       * NIGHTLY subtree ``nightly/<varver>/`` — the freshly built nightly folded in
@@ -1037,13 +1040,13 @@ def build_repo_matrix(
       pool (``_emit_catalog_from_paths`` deduplicates by (name, version)).
 
     ``release_pkgs`` (optional) — consume pre-built Release .pkg files instead of
-      rebuilding devel/stable from source for build-entry matrix rows:
+      rebuilding testing/stable from source for build-entry matrix rows:
       ``dict[varver, list[Path]]`` mapping ``catalog_name_from_version()`` keys to lists
       of pre-built Release .pkg paths (e.g. all assets downloaded from GitHub Releases
       by publish.yml). When provided, the ``release/<varver>/`` catalog is SERVED
       from these (matched by OS+major via ``_pkg_matches_abi``, then pruned by
-      ``retain_by_channel`` with ``release_keep_devel`` / ``release_keep_stable``)
-      instead of calling the builder for devel/stable. ``release_extra_pkgs`` is
+      ``retain_by_channel`` with ``release_keep_testing`` / ``release_keep_stable``)
+      instead of calling the builder for testing/stable. ``release_extra_pkgs`` is
       still folded in after the pool.
       An empty pool for a varver skips that release catalog with a warning
       (no exception raised — a newly-added version with no Release asset yet simply has
@@ -1175,7 +1178,7 @@ def build_repo_matrix(
                 candidates = pool + extras
                 kept_release = retain_by_channel(
                     candidates,
-                    keep_devel=release_keep_devel,
+                    keep_testing=release_keep_testing,
                     keep_stable=release_keep_stable,
                 )
                 if kept_release:
@@ -1191,7 +1194,7 @@ def build_repo_matrix(
                 # The freshly built testing and edge (+ stable when a stable_tag exists) are always present.
                 # release_extra_pkgs supplies pre-built older releases (e.g. downloaded from GitHub
                 # Releases by publish.yml); together they form the full candidate pool, pruned via
-                # retain_by_channel to keep the newest release_keep_devel devel + release_keep_stable
+                # retain_by_channel to keep the newest release_keep_testing testing + release_keep_stable
                 # stable versions. Defaults of 1/1 reproduce today's latest-only behaviour.
                 with tempfile.TemporaryDirectory() as td:
                     staging = Path(td)
@@ -1253,7 +1256,7 @@ def build_repo_matrix(
                     all_release_pkgs = built_pkgs + extras
                     kept_release = retain_by_channel(
                         all_release_pkgs,
-                        keep_devel=release_keep_devel,
+                        keep_testing=release_keep_testing,
                         keep_stable=release_keep_stable,
                     )
                     # dep_for_abi folds in AFTER retention (never competes for a slot).
@@ -1428,16 +1431,16 @@ def main(argv: list[str]) -> int:
     )
     g_matrix.add_argument("--no-nightly", action="store_true", help="skip the nightly subtree (release + routing only)")
     g_matrix.add_argument(
-        "--release-keep-devel",
+        "--release-keep-testing",
         type=_non_negative_int,
         default=1,
-        dest="release_keep_devel",
+        dest="release_keep_testing",
         help=(
-            "devel releases retained per varver in the release catalog (default 1 = latest-only). "
-            "Set >1 to retain multiple devel artifacts for diagnostics and reproducibility. "
+            "testing releases retained per varver in the release catalog (default 1 = latest-only). "
+            "Set >1 to retain multiple testing artifacts for diagnostics and reproducibility. "
             "The publish job must supply the older .pkg via --release-extra-pkgs. "
             "The newest package of every major/minor line is pinned on top of this window, "
-            "so the catalog can hold more than N devel packages."
+            "so the catalog can hold more than N testing packages."
         ),
     )
     g_matrix.add_argument(
@@ -1462,7 +1465,7 @@ def main(argv: list[str]) -> int:
         help=(
             "pre-built older-release .pkg file to fold into the release catalog alongside the fresh build "
             "(repeatable; e.g. downloaded from GitHub Releases by publish.yml). "
-            "Pruned by --release-keep-devel / --release-keep-stable after folding."
+            "Pruned by --release-keep-testing / --release-keep-stable after folding."
         ),
     )
     g_matrix.add_argument(
@@ -1513,7 +1516,7 @@ def main(argv: list[str]) -> int:
         help=(
             "pre-built Release .pkg to SERVE the release/<varver>/ catalog from, "
             "in VARVER:PATH form (repeatable; matched by OS+major, arch-less; issue #1806). "
-            "When supplied, devel+stable are consumed from these instead of rebuilt from source. "
+            "When supplied, testing+stable are consumed from these instead of rebuilt from source. "
             "An empty pool for a varver skips that release catalog (no error)."
         ),
     )
@@ -1584,7 +1587,7 @@ def main(argv: list[str]) -> int:
                 nightly_keep=args.nightly_keep,
                 nightly_pkgversion=(lambda _e: pkgver) if pkgver else None,
                 build_nightly=not args.no_nightly,
-                release_keep_devel=args.release_keep_devel,
+                release_keep_testing=args.release_keep_testing,
                 release_keep_stable=args.release_keep_stable,
                 release_extra_pkgs=extra_pkgs,
                 dep_pkgs=dep_pkgs_arg,
