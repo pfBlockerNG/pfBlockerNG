@@ -1636,7 +1636,9 @@ def print_build_origins(args: argparse.Namespace) -> int:
 
 def run_build(args: argparse.Namespace) -> Build:
     ports_root = Path(args.ports).resolve()
-    if args.port_dir:
+    if args.build_record:
+        portdir = ports_root / "net" / _CHANNEL_PORT_SUB[args.channel]
+    elif args.port_dir:
         portdir = Path(args.port_dir).resolve()
     else:
         portdir = ports_root / "net" / _CHANNEL_PORT_SUB[args.channel]

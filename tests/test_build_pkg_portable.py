@@ -1424,20 +1424,42 @@ def _live_build_rows() -> tuple[dict[str, object], ...]:
             timeout=30.0,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
-        pytest.skip("ci-metadata matrix not available in this environment", allow_module_level=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"build matrix reader failed: {exc}") from exc
     if result.returncode != 0 or not result.stdout.strip():
-        pytest.skip("ci-metadata matrix not available in this environment", allow_module_level=True)
+        raise RuntimeError(f"build matrix reader failed with exit {result.returncode}")
     try:
         rows = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        pytest.skip("ci-metadata matrix output is invalid", allow_module_level=True)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"build matrix reader returned invalid JSON: {exc}") from exc
     if not isinstance(rows, list) or not rows:
-        pytest.skip("ci-metadata build matrix is empty", allow_module_level=True)
+        raise RuntimeError("build matrix reader returned no rows")
     return tuple(rows)
 
 
 _LIVE_BUILD_ROWS = _live_build_rows()
+
+
+@pytest.mark.parametrize("failure", ["missing", "reader", "invalid", "empty"])
+def test_live_build_matrix_reader_fails_closed(monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if failure == "missing":
+            raise FileNotFoundError("sh")
+        if failure == "reader":
+            return subprocess.CompletedProcess("sh", 1, "", "reader failed")
+        if failure == "invalid":
+            return subprocess.CompletedProcess("sh", 0, "not-json\n", "")
+        return subprocess.CompletedProcess("sh", 0, "\n", "")
+
+    monkeypatch.setattr(bpp.subprocess, "run", fake_run)
+    try:
+        _live_build_rows()
+    except RuntimeError as exc:
+        assert "build matrix" in str(exc)
+    except pytest.skip.Exception as exc:
+        pytest.fail(f"matrix reader must fail, not skip: {exc}", pytrace=False)
+    else:
+        pytest.fail("matrix reader unexpectedly accepted failing output", pytrace=False)
 
 
 def _record(
@@ -1654,6 +1676,25 @@ def test_project_record_normalizes_complete_identity_cascade(tmp_path: Path, cha
         record, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     assert "pfSense-pkg-pfBlockerNG-testing" not in full["scripts"]["install"]
+
+
+def test_project_build_uses_canonical_channel_recipe_not_moved_substitute(tmp_path: Path) -> None:
+    ports, canonical, _ports_sha, source_sha = _make_channel_port(tmp_path, "stable", github=True)
+    substitute = ports / "net" / "moved-pfblockerng"
+    shutil.copytree(canonical, substitute)
+    substitute_makefile = substitute / "Makefile"
+    substitute_makefile.write_text(
+        substitute_makefile.read_text().replace("COMMENT=\tChannel fixture", "COMMENT=\tSubstitute")
+    )
+    _git(ports, "add", "-A")
+    _git(ports, "-c", "commit.gpgsign=false", "commit", "-qm", "moved-substitute")
+    ports_sha = _git(ports, "rev-parse", "HEAD")
+    record = _record("stable", ports_sha, source_sha=source_sha)
+    out = tmp_path / "out"
+    args = _project_args(ports, substitute, record, source=tmp_path / "source", dry_run=False, out=out)
+    assert bpp.main(args) == 0
+    full, _, _ = _read_pkg(out / "pfSense-pkg-pfBlockerNG-4.0.0.pkg")
+    assert full["comment"] == "Channel fixture"
 
 
 def test_nightly_requires_explicit_calendar_pkgversion(tmp_path: Path) -> None:
