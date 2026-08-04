@@ -40,7 +40,7 @@ class ReleaseInfo:
     prerelease: bool
     final: bool
     notes_required: bool
-    github_release: str
+    github_release: GithubRelease
     pkg_version: str
     package: str
 

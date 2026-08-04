@@ -912,6 +912,10 @@ def test_smoke_single_nightly_fixture_uses_a_utc_date_and_optional_counter() -> 
     nightly = text.split("- name: Build a nightly .pkg", 1)[1].split("\n      # ADR-24", 1)[0]
     assert "date -u +%Y%m%d" in nightly, nightly
     assert re.search(r"YYYYMMDD|NIGHTLY_DATE", nightly), nightly
+    assert 'NIGHTLY_COUNT="${NIGHTLY_COUNT:-0}"' in nightly, nightly
+    assert 'NIGHTLY_VERSION="$NIGHTLY_DATE"' in nightly, nightly
+    assert 'NIGHTLY_VERSION="${NIGHTLY_DATE}_${NIGHTLY_COUNT}"' in nightly, nightly
+    assert 'NIGHTLY_VERSION="3.2.16.${NIGHTLY_DATE}' not in nightly, nightly
     assert "20260606" not in nightly, nightly
 
 

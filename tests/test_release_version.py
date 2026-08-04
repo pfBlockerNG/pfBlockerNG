@@ -5,10 +5,18 @@ from __future__ import annotations
 import subprocess
 from dataclasses import fields, replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from scripts.release_version import PACKAGE, ReleaseInfo, parse_release_tag, validate_branch, validate_release_info
+from scripts.release_version import (
+    PACKAGE,
+    GithubRelease,
+    ReleaseInfo,
+    parse_release_tag,
+    validate_branch,
+    validate_release_info,
+)
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "release-version.sh"
 
@@ -218,7 +226,7 @@ def test_every_canonical_field_tampering_is_rejected(tag: str, channel: str) -> 
         replace(info, final=not info.final),
         replace(info, prerelease=not info.prerelease),
         replace(info, notes_required=not info.notes_required),
-        replace(info, github_release="none"),
+        replace(info, github_release=cast(GithubRelease, "none")),
         replace(info, package="wrong"),
     ]
     for forged in tampered:

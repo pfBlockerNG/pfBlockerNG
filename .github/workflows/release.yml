@@ -51,8 +51,7 @@ name: Release
 #
 # Tag scheme (single source of truth: scripts/release-version.sh):
 #   * vX.Y.Z       -> STABLE release
-#   * vX.Y.Z.aN|.bN|.rN -> TESTING release
-#   * vX.Y.Z.edge.YYYYMMDD.N -> EDGE release (scheduler-owned)
+#   * vX.Y.Z.aN|.bN|.rN -> TESTING or distinct-target EDGE release
 # GH_TAGNAME is `v${PORTVERSION}` in the port Makefile, so it self-resolves to the
 # matching tag and nothing here sets it.
 # Self-hosted distribution (ADR-17): no upstream pfsense/FreeBSD-ports PR.
