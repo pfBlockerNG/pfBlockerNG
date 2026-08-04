@@ -11,11 +11,11 @@ Every channel publishes the exact package identity:
 pfSense-pkg-pfBlockerNG
 ```
 
-Channel is metadata and catalog placement, never a package-name suffix. The channel and
-release line are explicit/configured and carried in an immutable tag trailer. The channel is
-explicit and configured; `pfBlockerNG-Release-Channel: <stable|testing|edge>` is the trailer
-key, and a parser must never infer channel from a suffix. Every operation uses a pinned source
-SHA.
+Channel is metadata and catalog placement, never a package-name suffix. Channel and release
+line are explicit/configured. The tag trailer carries only the channel, using
+`pfBlockerNG-Release-Channel: <stable|testing|edge>`; the parser derives the exact
+`release/X.Y` line from the tag and validates it against the configured line. It must never
+infer channel from a suffix. Every operation uses a pinned source SHA.
 
 ## Channel shapes
 
@@ -38,8 +38,9 @@ continues to follow Testing until a new target is configured.
 - Stable `vX.Y.Z` maps to package version `X.Y.Z`.
 - Testing `vX.Y.Z.aN`, `vX.Y.Z.bN`, and `vX.Y.Z.rN` map to the exact matching package
   versions. Edge uses this same grammar and mapping.
-- The immutable tag trailer records the selected channel and release line. Source identity,
-  package version, artifact bytes, checksum, and provenance are one immutable record.
+- The immutable tag trailer records the selected channel. The configured release line is
+  validated against the line derived from the tag. Source identity, package version,
+  artifact bytes, checksum, and provenance are one immutable record.
 - Stable, Testing, and Edge create at most one Release for an exact tag. Published Releases
   are immutable; retry only the exact same identity without rebuilding.
 
@@ -62,7 +63,7 @@ explicit repo-qualified downgrade; no branch or suffix inference may select one.
 FreeBSD `pkg` is the ordering oracle. The intended order for one target is:
 
 ```text
-previous final < alpha < beta < rc < Edge < Nightly < target final
+previous final < alpha < beta < rc < target final < bare Nightly date
 ```
 
 Edge and Nightly use the exact package version emitted by their selected channel contract.
@@ -91,6 +92,6 @@ used.
 
 ## Scope and follow-ups
 
-This contract authorizes no publication or workflow implementation by itself. Existing
-workflow consumers remain current at the issue #2140 base revision. Builder, publisher,
-catalog, client/UI, and Ports changes belong to their separately scoped follow-up issues.
+This contract updates the classifier and existing release workflow consumers. New builder,
+publisher, catalog, client/UI, and Ports mechanisms belong to their separately scoped
+follow-up issues.

@@ -89,6 +89,35 @@ def test_nightly_noop_requires_observed_existing_package() -> None:
     assert calls == []
 
 
+def test_nightly_noop_requires_the_exact_allocated_package() -> None:
+    nightly = replace(_nightly(), outcome="unchanged")
+    observed = _observed(
+        existing_pkg_version="20260803",
+        existing_artifact_sha256=ARTIFACT_SHA,
+        existing_source_sha=SOURCE_SHA,
+        existing_ports_sha=PORTS_SHA,
+        existing_input_digest=INPUT_DIGEST,
+    )
+    calls: list[str] = []
+    with pytest.raises(ValueError, match="no-op"):
+        API.apply_release_mutation(_request(nightly, None), observed, lambda: calls.append("mutate"))
+    assert calls == []
+
+
+def test_exact_nightly_noop_wins_over_a_newer_catalog_version() -> None:
+    nightly = replace(_nightly(), outcome="unchanged")
+    observed = _observed(
+        latest_pkg_version="20260805",
+        candidate_vs_latest="<",
+        existing_pkg_version=nightly.pkg_version,
+        existing_artifact_sha256=ARTIFACT_SHA,
+        existing_source_sha=SOURCE_SHA,
+        existing_ports_sha=PORTS_SHA,
+        existing_input_digest=INPUT_DIGEST,
+    )
+    assert _run(_request(nightly, None), observed) == ("unchanged", [])
+
+
 def test_exact_existing_artifact_and_build_input_are_unchanged() -> None:
     observed = _observed(
         existing_pkg_version=STABLE.pkg_version,

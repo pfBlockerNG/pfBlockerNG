@@ -43,6 +43,13 @@ def test_each_release_skill_carries_the_minimum_procedure() -> None:
         assert not missing, f"{path}: missing release procedure phrases {missing}"
 
 
+def test_release_skills_refuse_unimplemented_follower_edge_publication() -> None:
+    for path in SKILLS:
+        content = _text(path)
+        assert "Follower Edge must not dispatch `release.yml`" in content, path
+        assert "#2144" in content, path
+
+
 def test_all_active_release_surfaces_reject_superseded_shapes() -> None:
     rejected = (
         "vX.Y.Z.edge.YYYYMMDD.N",
@@ -115,3 +122,22 @@ def test_branch_independent_adr_contract_is_current() -> None:
         amendment = content.rsplit("## Amendment — 2026-08-04", 1)[-1]
         assert "pinned pfBlockerNG SHA" in amendment, name
         assert "no branch inference" in amendment, name
+
+
+def test_active_docs_describe_the_implemented_channel_trailer_and_order() -> None:
+    docs = (
+        ROOT / ".agents/context/release.md",
+        ROOT / "docs/misc/release-channels.md",
+    )
+    for path in docs:
+        content = _text(path)
+        assert "tag trailer carries only the channel" in content, path
+        assert "Nightly < target final" not in content, path
+        assert "f6db736b" not in content, path
+        assert "remain current at the issue #2140 base revision" not in content, path
+
+
+def test_published_workflow_has_no_retired_nightly_ports_bump_contract() -> None:
+    content = _text(ROOT / ".github/workflows/release-published.yml")
+    assert "`-nightly` port's PORTVERSION" not in content
+    assert "the bump happens inside the release run" not in content

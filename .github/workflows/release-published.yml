@@ -13,13 +13,8 @@ name: Release published (downstream)
 # (the terminal sync-ports-fork job), so that when a run finishes the only
 # things left are "write the changelog" and "publish".
 #
-# ORDERING, for the record: pfBlockerNG/pkg derives the NIGHTLY version from the
-# `-nightly` port's PORTVERSION in the FreeBSD-ports fork, so it must never read that
-# fork before the bump lands — racing it shipped a stale-versioned nightly (e.g.
-# an older prerelease on the newer commit). That used to be a `needs: [sync-ports-fork]`
-# edge here. It is now STRUCTURAL — the bump happens inside the release run, strictly
-# before any publish can occur — so do NOT re-add a dependency on a job that is no
-# longer in this workflow.
+# Nightly is independent and untagged. This published-Release workflow must not allocate,
+# build, or mutate it; tagged release publication never changes the static Nightly port.
 #
 # Fires for prereleases too (`published` covers a pre-release being published).
 on:
@@ -67,7 +62,7 @@ jobs:
           [ "$TYPE" = tag ] || { echo "::error::published tag ${TAG} is not an annotated tag"; exit 1; }
           RAW_TAG_MESSAGE=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}")
           TRAILERS=$(printf '%s\n' "$RAW_TAG_MESSAGE" | git interpret-trailers --parse)
-          CHANNEL_COUNT=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Ec '^pfBlockerNG-Release-Channel: ' || true)
+          CHANNEL_COUNT=$(printf '%s\n' "$RAW_TAG_MESSAGE" | grep -Eic '^pfBlockerNG-Release-Channel: ' || true)
           [ "$CHANNEL_COUNT" -eq 1 ] || { echo "::error::published tag ${TAG} must carry exactly one release-channel trailer"; exit 1; }
           CHANNEL_LINE=$(printf '%s\n' "$TRAILERS" | grep -F 'pfBlockerNG-Release-Channel:' || true)
           case "$CHANNEL_LINE" in
