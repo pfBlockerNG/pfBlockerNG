@@ -1322,13 +1322,13 @@ def compute_pkgversion(mk: Makefile) -> str:
 
 
 def validate_pkgversion(ver: str) -> str:
-    """Validate a `--pkgversion` override (the nightly's comparable version).
+    """Validate an explicit `--pkgversion` override.
 
     `pkg` orders versions component-wise on `.`/`_`/`,`. The nightly carries a
-    pkg-safe `<target>.YYYYMMDD.N` (e.g. `3.2.16.20260606.1`), compared only
-    nightly-to-nightly (separate package name) so a later build always supersedes.
-    A `-` is the pkg name/version separator (`<name>-<version>.pkg`), so it MUST NOT
-    appear in the version — the commit / pretty string rides the annotation + comment.
+    calendar version (`YYYYMMDD` or `YYYYMMDD_N`); channel-specific callers apply
+    that grammar before building. A `-` is the pkg name/version separator
+    (`<name>-<version>.pkg`), so it MUST NOT appear in the version — the commit /
+    pretty string rides the annotation + comment.
     """
     ver = ver.strip()
     if not ver:
