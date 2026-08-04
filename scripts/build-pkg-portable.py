@@ -1595,6 +1595,14 @@ def run_build(args: argparse.Namespace) -> Build:
             )
         except PkgError as exc:
             raise BuildError(str(exc)) from None
+        if "SOURCE_DATE_EPOCH" in os.environ:
+            ambient = os.environ["SOURCE_DATE_EPOCH"].strip()
+            try:
+                ambient_epoch = int(ambient)
+            except ValueError:
+                raise BuildError("project SOURCE_DATE_EPOCH must match build record source_date_epoch") from None
+            if ambient_epoch != project_record["source_date_epoch"]:
+                raise BuildError("project SOURCE_DATE_EPOCH must match build record source_date_epoch")
         row = project_record["matrix_row"]
         if args.variant != row["variant"]:
             raise BuildError(f"--variant {args.variant!r} does not match record matrix row {row['variant']!r}")
@@ -1900,7 +1908,7 @@ def main(argv: list[str]) -> int:
     )
 
     args = ap.parse_args(argv)
-    args._channel_explicit = "--channel" in argv
+    args._channel_explicit = any(arg == "--channel" or arg.startswith("--channel=") for arg in argv)
 
     if args.print_port_origin:
         channel = args.channel

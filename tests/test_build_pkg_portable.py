@@ -1747,3 +1747,113 @@ def test_project_post_write_validation_removes_output_on_failure(
         == 1
     )
     assert not list(out.glob("*.pkg"))
+
+
+def test_inline_channel_spelling_enforces_native_recipe_identity(tmp_path: Path) -> None:
+    ports, stable_portdir, _ports_sha, _source_sha = _make_channel_port(tmp_path, "stable")
+    out = tmp_path / "out"
+    assert (
+        bpp.main(
+            [
+                "--ports",
+                str(ports),
+                "--port-dir",
+                str(stable_portdir),
+                "--channel=testing",
+                "--abi",
+                "FreeBSD:15:amd64",
+                "--py-flavor",
+                "py311",
+                "--php",
+                "8.3",
+                "--compression",
+                "xz",
+                "--dry-run",
+                "--out",
+                str(out),
+            ]
+        )
+        == 1
+    )
+    assert not out.exists() or not list(out.glob("*.pkg"))
+
+
+@pytest.mark.parametrize("ambient", ["1700000001", "not-a-number"])
+def test_project_record_rejects_conflicting_source_date_epoch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ambient: str
+) -> None:
+    ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "stable")
+    record = _record("stable", ports_sha)
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", ambient)
+    out = tmp_path / "out"
+    assert (
+        bpp.main(
+            [
+                "--ports",
+                str(ports),
+                "--port-dir",
+                str(portdir),
+                "--channel",
+                "stable",
+                "--variant",
+                "CE",
+                "--abi",
+                "FreeBSD:15:amd64",
+                "--py-flavor",
+                "py311",
+                "--php",
+                "8.3",
+                "--pkgversion",
+                record["canonical_package_version"],
+                "--build-record",
+                json.dumps(record),
+                "--compression",
+                "xz",
+                "--out",
+                str(out),
+            ]
+        )
+        == 1
+    )
+    assert not out.exists() or not list(out.glob("*.pkg"))
+
+
+def test_project_record_source_date_epoch_controls_package_mtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "stable")
+    record = _record("stable", ports_sha)
+    monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
+    out = tmp_path / "out"
+    assert (
+        bpp.main(
+            [
+                "--ports",
+                str(ports),
+                "--port-dir",
+                str(portdir),
+                "--channel",
+                "stable",
+                "--variant",
+                "CE",
+                "--abi",
+                "FreeBSD:15:amd64",
+                "--py-flavor",
+                "py311",
+                "--php",
+                "8.3",
+                "--pkgversion",
+                record["canonical_package_version"],
+                "--build-record",
+                json.dumps(record),
+                "--compression",
+                "xz",
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    pkg = out / "pfSense-pkg-pfBlockerNG-4.0.0.pkg"
+    full, _compact, _tf = _read_pkg(pkg)
+    assert {entry["mtime"] for entry in full["files"].values()} == {record["source_date_epoch"]}
