@@ -11,9 +11,9 @@ from typing import Literal, Sequence
 
 PACKAGE = "pfSense-pkg-pfBlockerNG"
 
-Stage = Literal["final", "alpha", "beta", "rc", "edge", "nightly"]
-Channel = Literal["stable", "testing", "edge", "nightly"]
-GithubRelease = Literal["final", "prerelease", "none"]
+Stage = Literal["final", "alpha", "beta", "rc"]
+Channel = Literal["stable", "testing", "edge"]
+GithubRelease = Literal["final", "prerelease"]
 
 _CORE = r"(0|[1-9][0-9]*)"
 _FINAL_RE = re.compile(rf"^v(?P<major>{_CORE})\.(?P<minor>{_CORE})\.(?P<patch>{_CORE})$")
@@ -21,7 +21,6 @@ _PREVIEW_RE = re.compile(
     rf"^v(?P<major>{_CORE})\.(?P<minor>{_CORE})\.(?P<patch>{_CORE})\."
     r"(?P<stage>[abr])(?P<sequence>[1-9][0-9]*)$"
 )
-_BARE_VERSION_RE = re.compile(rf"^(?P<major>{_CORE})\.(?P<minor>{_CORE})\.(?P<patch>{_CORE})$")
 _SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _NIGHTLY_RE = re.compile(r"^(?P<date>[0-9]{8})$")
 _NIGHTLY_PKG_RE = re.compile(r"^(?P<date>[0-9]{8})(?:_(?P<revision>[1-9][0-9]*))?$")
@@ -41,7 +40,7 @@ class ReleaseInfo:
     prerelease: bool
     final: bool
     notes_required: bool
-    github_release: GithubRelease
+    github_release: str
     pkg_version: str
     package: str
 
@@ -120,23 +119,6 @@ def parse_release_tag(tag: str, channel: Channel | None = None) -> ReleaseInfo:
         )
 
     raise _invalid(tag)
-
-
-def _parse_bare_version(final_version: str) -> tuple[str, str, str]:
-    if not isinstance(final_version, str):
-        raise TypeError("target_final must be str")
-    if not final_version or len(final_version) > 128:
-        raise ValueError(f"invalid final version: {final_version!r}")
-    match = _BARE_VERSION_RE.fullmatch(final_version)
-    if not match:
-        raise ValueError(f"invalid final version: {final_version!r}")
-    return tuple(match.group(name) for name in ("major", "minor", "patch"))  # type: ignore[return-value]
-
-
-def next_patch_target(final_version: str) -> str:
-    """Return the next patch target for a strict bare X.Y.Z final version."""
-    major, minor, patch = _parse_bare_version(final_version)
-    return f"{major}.{minor}.{int(patch) + 1}"
 
 
 def _validate_source_sha(source_sha: str) -> None:
