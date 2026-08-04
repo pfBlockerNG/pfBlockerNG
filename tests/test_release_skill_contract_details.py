@@ -28,9 +28,8 @@ def test_each_release_skill_carries_the_minimum_procedure() -> None:
         "vX.Y.Z.aN",
         "vX.Y.Z.bN",
         "vX.Y.Z.rN",
-        "same Release and artifact bytes",
-        "no second Release",
-        "no rebuild",
+        "`Z == 0` selects Edge",
+        "`Z != 0` selects Testing",
         "Nightly",
         "untagged",
         "YYYYMMDD",
@@ -43,11 +42,12 @@ def test_each_release_skill_carries_the_minimum_procedure() -> None:
         assert not missing, f"{path}: missing release procedure phrases {missing}"
 
 
-def test_release_skills_refuse_unimplemented_follower_edge_publication() -> None:
+def test_release_skills_enforce_prerelease_patch_routing() -> None:
     for path in SKILLS:
         content = _text(path)
-        assert "Follower Edge must not dispatch `release.yml`" in content, path
-        assert "#2144" in content, path
+        assert "`Z == 0` selects Edge" in content, path
+        assert "`Z != 0` selects Testing" in content, path
+        assert "follower Edge" not in content, path
 
 
 def test_all_active_release_surfaces_reject_superseded_shapes() -> None:
@@ -71,7 +71,7 @@ def test_scripts_readme_documents_shared_identity_and_provenance() -> None:
     content = _text(ROOT / "scripts/README.md")
     for phrase in (
         "pfSense-pkg-pfBlockerNG",
-        "explicit/configured",
+        "tag and trailer must agree",
         "immutable",
         "FreeBSD-ports SHA",
         "matrix/dependency digest",
@@ -81,8 +81,8 @@ def test_scripts_readme_documents_shared_identity_and_provenance() -> None:
         "repo-qualified downgrade",
     ):
         assert phrase in content, f"scripts/README.md: missing {phrase!r}"
-    assert "follower Edge reuses the Testing tag" in content
-    assert "`testing` trailer" in content
+    assert "`Z == 0`" in content
+    assert "`Z != 0`" in content
 
 
 def test_channel_targets_are_explicit_and_nightly_is_not_branch_bound() -> None:
@@ -91,8 +91,8 @@ def test_channel_targets_are_explicit_and_nightly_is_not_branch_bound() -> None:
         assert "pfBlockerNG-Release-Channel: <stable|testing|edge>" in content, path
         assert "pinned source SHA" in content, path
         assert "Nightly" in content and "devel` branch" not in content, path
-        assert "Edge follows Testing only when no distinct target" in content, path
-        assert "distinct-target Edge uses its configured target/line" in content, path
+        assert "`Z == 0` selects Edge" in content, path
+        assert "`Z != 0` selects Testing" in content, path
 
 
 def test_scripts_readme_nightly_contract_is_branch_independent() -> None:
@@ -135,7 +135,7 @@ def test_active_docs_describe_the_implemented_channel_trailer_and_order() -> Non
     )
     for path in docs:
         content = _text(path)
-        assert "tag trailer carries only the channel" in content, path
+        assert "tag trailer carries the channel" in content, path
         assert "Nightly < target final" not in content, path
         assert "f6db736b" not in content, path
         assert "remain current at the issue #2140 base revision" not in content, path

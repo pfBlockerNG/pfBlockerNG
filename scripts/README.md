@@ -17,7 +17,7 @@ Release authoring follows issue #2140. All channels publish the exact package id
 `pfSense-pkg-pfBlockerNG`; channel is metadata carried in each distinct release's immutable
 `pfBlockerNG-Release-Channel: <stable|testing|edge>` tag trailer, never a package-name suffix.
 The tag and trailer must agree with the deterministic rule below. Every operation uses a
-pinned source SHA.
+pinned source SHA. For prereleases, `Z == 0` selects Edge and `Z != 0` selects Testing.
 
 - Stable uses `vX.Y.Z` / `X.Y.Z`.
 - Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` with the exact package version when

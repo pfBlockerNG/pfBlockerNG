@@ -10,8 +10,8 @@ current repository revision supplies the operational job names and inputs.
 ## Channel contract
 
 All channels publish the exact package identity `pfSense-pkg-pfBlockerNG`. Channel is
-metadata and catalog placement, not a package-name suffix. The tag trailer carries the
-channel using `pfBlockerNG-Release-Channel: <stable|testing|edge>`; the tag and trailer must
+metadata and catalog placement, not a package-name suffix. The tag trailer carries the channel
+using `pfBlockerNG-Release-Channel: <stable|testing|edge>`; the tag and trailer must
 agree with the deterministic version rule below. The exact configured release line is
 validated separately. Every operation uses a pinned source SHA.
 
@@ -22,8 +22,8 @@ validated separately. Every operation uses a pinned source SHA.
 | Edge | configured `release/X.Y` | `vX.Y.0.aN`, `.bN`, or `.rN` / exact version | prerelease; authored notes |
 | Nightly | explicit pinned source SHA | untagged; date counter only | no GitHub Release; no release notes |
 
-Stable, Testing, and Edge may share a release line, but their tagged versions select the
-channel mechanically: patch zero is Edge; a nonzero patch is Testing.
+Stable, Testing, and Edge may share a release line. For a prerelease tag, `Z == 0` selects Edge
+and `Z != 0` selects Testing.
 
 ## Nightly identity and ordering
 
