@@ -277,6 +277,30 @@ def test_inspect_pkg_rejects_duplicate_or_unsafe_members(tmp_path: Path, bad_mem
         pfb_pkg.inspect_pkg(pkg)
 
 
+@pytest.mark.parametrize(
+    ("payload_path", "canonical"),
+    [
+        ("/usr/local//pkg/x", False),
+        ("/usr/local/pkg/x/", False),
+        ("/", False),
+        ("/usr/local/pkg/x", True),
+    ],
+)
+def test_inspect_pkg_requires_canonical_absolute_payload_paths(
+    tmp_path: Path, payload_path: str, canonical: bool
+) -> None:
+    pkg, _, _ = _synthetic_pkg(
+        tmp_path,
+        compression="plain",
+        members=[(payload_path, b"x", 0o644, 0, True)],
+    )
+    if canonical:
+        assert pfb_pkg.inspect_pkg(pkg)["payload"] == {payload_path: b"x"}
+    else:
+        with pytest.raises(pfb_pkg.PkgError, match="unsafe archive member"):
+            pfb_pkg.inspect_pkg(pkg)
+
+
 def test_inspect_pkg_rejects_nonregular_payload(tmp_path: Path) -> None:
     record = _record()
     pkg, _, _ = _synthetic_pkg(
