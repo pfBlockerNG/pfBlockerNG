@@ -39,6 +39,7 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
+import pfb_pkg
 import pytest
 
 # --------------------------------------------------------------------------- #
@@ -1747,6 +1748,81 @@ def _make_pkg_channel(
     p = tmp_path / f"{name}-{version}.pkg"
     make_pkg(p, name=name, version=version, abi=abi)
     return p
+
+
+def _canonical_retention_record(channel: str, version: str) -> dict[str, object]:
+    row = {
+        "pfsense_version": "2.8",
+        "channel": "CE",
+        "freebsd_version": "15.0-RELEASE",
+        "freebsd_major": "15",
+        "php_version": "8.3",
+        "py_flavor": "py311",
+        "variant": "CE",
+        "status": "active",
+        "extra_pkgs": [],
+        "upgrade": {"available": False},
+    }
+    source_tag = "v" + version
+    record: dict[str, object] = {
+        "schema": 1,
+        "channel": channel,
+        "release_line": "release/4.0",
+        "classification": {"stable": "final", "testing": "alpha", "edge": "beta"}[channel],
+        "source_tag": source_tag,
+        "source_sha": "a" * 40,
+        "canonical_package_version": version,
+        "native_recipe_identity": (
+            "pfSense-pkg-pfBlockerNG" if channel == "stable" else f"pfSense-pkg-pfBlockerNG-{channel}"
+        ),
+        "emitted_identity": "pfSense-pkg-pfBlockerNG",
+        "matrix_row": row,
+        "freebsd_ports_sha": "b" * 64,
+        "route": f"{channel}/ce-2.8",
+        "source_date_epoch": 1_700_000_000,
+        "build_input_digest": "",
+    }
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    return record
+
+
+def _make_annotated_project_pkg(tmp_path: Path, channel: str, version: str, filename: str) -> Path:
+    record = _canonical_retention_record(channel, version)
+    path = tmp_path / filename
+    make_pkg(
+        path,
+        name="pfSense-pkg-pfBlockerNG",
+        version=version,
+        extra={"annotations": {"pfb_build_record": json.dumps(record, sort_keys=True, separators=(",", ":"))}},
+    )
+    return path
+
+
+def test_retain_by_channel_uses_validated_annotation_for_canonical_packages(tmp_path: Path) -> None:
+    """Canonical project packages retain testing and stable independently of filenames.
+
+    Given canonical packages whose filenames carry misleading channel suffixes
+      And each package has a validated ``pfb_build_record`` annotation
+      When one package per retention channel is requested
+      Then testing is retained in the devel bucket and stable in the stable bucket
+    """
+    testing = _make_annotated_project_pkg(tmp_path, "testing", "4.0.0.a1", "pfSense-pkg-pfBlockerNG-stable-looking.pkg")
+    stable = _make_annotated_project_pkg(tmp_path, "stable", "4.0.0", "pfSense-pkg-pfBlockerNG-devel-looking.pkg")
+
+    kept = brp.retain_by_channel([testing, stable], keep_devel=1, keep_stable=1)
+
+    assert set(kept) == {testing, stable}
+
+
+def test_retain_by_channel_keeps_annotated_edge_outside_testing_window(tmp_path: Path) -> None:
+    """Canonical edge packages remain untouched while testing is retention-limited."""
+    testing = _make_annotated_project_pkg(tmp_path, "testing", "4.0.0.a1", "testing.pkg")
+    edge_old = _make_annotated_project_pkg(tmp_path, "edge", "4.0.0.b1", "edge-old.pkg")
+    edge_new = _make_annotated_project_pkg(tmp_path, "edge", "4.0.0.b2", "edge-new.pkg")
+
+    kept = brp.retain_by_channel([testing, edge_old, edge_new], keep_devel=1, keep_stable=1)
+
+    assert set(kept) == {testing, edge_old, edge_new}
 
 
 def test_retain_by_channel_devel_pruned_independently(tmp_path: Path) -> None:
