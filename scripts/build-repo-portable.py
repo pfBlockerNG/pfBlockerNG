@@ -1090,7 +1090,7 @@ def build_repo_matrix(
                 )
             return None
         record, forwarded = found
-        if record.get("matrix_row") != entry:
+        if record.get("matrix_row") != {key: value for key, value in entry.items() if key != "arch"}:
             raise BuildRepoError(
                 f"normalized build record {key[0]!r} matrix_row does not exactly match the supplied BUILD row"
             )

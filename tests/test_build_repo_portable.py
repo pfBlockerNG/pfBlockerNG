@@ -1408,6 +1408,20 @@ def test_build_matrix_rejects_mismatched_record_row(tmp_path: Path) -> None:
         )
 
 
+def test_build_matrix_ignores_legacy_arch_when_matching_record_row(tmp_path: Path) -> None:
+    """The documented legacy arch input is separate from the normalized BUILD row."""
+    entry = {**_CE, "channel": "CE", "freebsd_version": "15.0-RELEASE", "extra_pkgs": []}
+    record_row = {key: value for key, value in entry.items() if key != "arch"}
+    record = _build_record_for(record_row, "testing", "4.0.1.a1")
+
+    brp.build_repo_matrix(
+        [entry],
+        tmp_path / "site",
+        builder=_stub_builder,
+        build_records=[record],
+    )
+
+
 def test_retain_by_channel_rejects_legacy_devel_identity(tmp_path: Path) -> None:
     """Legacy ``-devel`` package names are not silently treated as Testing."""
     legacy = _make_pkg_channel(tmp_path, "pfBlockerNG-devel", "4.0.1.a1")
