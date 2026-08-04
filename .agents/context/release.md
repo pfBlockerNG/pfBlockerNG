@@ -12,17 +12,20 @@ The workflow state is current at `f6db736b`.
 
 All channels publish the exact package identity `pfSense-pkg-pfBlockerNG`. Channel is
 metadata and catalog placement, not a package-name suffix. Channel is explicit and
-configured, carried in an immutable tag trailer, and never inferred from a tag suffix.
+configured, carried in an immutable tag trailer, and never inferred from a tag suffix. The
+trailer key is `pfBlockerNG-Release-Channel: <stable|testing|edge>`; every operation uses a
+pinned source SHA.
 
 | Channel | Source | Tag and package version | Release and notes |
 | --- | --- | --- | --- |
 | Stable | configured `release/X.Y` | `vX.Y.Z` / `X.Y.Z` | final Release; authored notes |
 | Testing | configured `release/X.Y` | `vX.Y.Z.aN`, `.bN`, or `.rN` / exact version | prerelease; authored notes |
 | Edge | configured `release/X.Y` | same Testing grammar / exact version | follows Testing; authored notes |
-| Nightly | `devel` | untagged; date counter only | no GitHub Release; no release notes |
+| Nightly | explicit pinned source SHA | untagged; date counter only | no GitHub Release; no release notes |
 
-Stable, Testing, and Edge share one release-line target. Edge follows Testing when no
-distinct target is configured: mirror the exact existing Testing Release and artifact bytes,
+Stable, Testing, and Edge share one release-line target. Edge follows Testing only when no distinct target
+exists; distinct-target Edge uses its configured target/line. With no distinct
+target configured, mirror the exact existing Testing Release and artifact bytes,
 checksums, source, provenance, tag, and notes. Do not rebuild or create a second Release.
 When the target becomes Stable, Edge follows Testing until a new target exists.
 
@@ -37,8 +40,9 @@ input changes. Use UTC date `YYYYMMDD`; changed inputs on the same date receive
 - matrix/dependency digest.
 
 The Ports recipe is static: publication must not make a routine version commit. Nightly has
-no target final and no PORTEPOCH. bare date versions intentionally outrank semantic releases;
+no target final and no PORTEPOCH. Bare date versions intentionally outrank semantic releases;
 reverse movement is an explicit repo-qualified downgrade, never an inferred fallback.
+Machine-readable contract marker: `bare date versions intentionally outrank semantic releases`.
 
 ## Publication boundaries
 
@@ -57,7 +61,7 @@ must remain paired, and an existing identity may be retried only without rebuild
 Stable and Testing can coexist on every maintained `release/X.Y`; one explicitly configured
 line supplies Edge. Branch-name ordering never selects an Edge line. Fixes start on the oldest
 affected maintained line, then move forward with `git cherry-pick -x` through newer lines and
-finally `devel`, with separate PRs and gates.
+finally the configured development source, with separate PRs and gates.
 
 The self-hosted catalog keeps the exact package identity and records channel metadata outside
 the package name. EOL route-only behavior and unsupported downgrade policy remain unchanged;

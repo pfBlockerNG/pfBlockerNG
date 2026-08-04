@@ -15,12 +15,14 @@ none of this ships in the release archive (which contains only `src/`).
 
 Release authoring follows issue #2140. All channels publish the exact package identity
 `pfSense-pkg-pfBlockerNG`; channel is explicit/configured metadata carried in an immutable
-tag trailer, never a package-name suffix or inferred tag shape.
+`pfBlockerNG-Release-Channel: <stable|testing|edge>` tag trailer, never a package-name suffix
+or inferred tag shape. Every operation uses a pinned source SHA.
 
 - Stable uses `vX.Y.Z` / `X.Y.Z`.
 - Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` with the exact package version.
-- Edge uses the same Testing grammar and follows Testing on one configured `release/X.Y`.
-  Without a distinct target, reuse the same Release and artifact bytes, checksums, source,
+- Edge uses the same Testing grammar. Edge follows Testing only when no distinct target exists;
+  distinct-target Edge uses its configured target/line. Without a distinct target, reuse the
+  same Release and artifact bytes, checksums, source,
   provenance, tag, and notes: no rebuild and no second Release. If its target becomes Stable,
   Edge follows Testing until a new target is configured.
 - Nightly is an independent untagged `devel` snapshot with no GitHub Release and no release

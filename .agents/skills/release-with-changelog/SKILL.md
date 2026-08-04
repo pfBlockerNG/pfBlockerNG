@@ -17,14 +17,16 @@ skill must refuse a Nightly request.
 - Stable uses `vX.Y.Z` / `X.Y.Z`.
 - Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` with the exact matching package
   version.
-- Edge uses the same Testing grammar and follows Testing on the configured release line.
-  Without a distinct Edge target, use the exact Testing Release and artifact bytes,
+- Edge uses the same Testing grammar. Edge follows Testing only when no distinct target
+  exists; distinct-target Edge uses its configured target/line. Without a distinct Edge
+  target, use the exact Testing Release and artifact bytes,
   checksums, source, provenance, tag, and notes; this means the same Release and artifact
   bytes, no second Release, and no rebuild.
   When the target becomes Stable, continue following Testing until a new target exists.
 
-The channel is explicit and configured, and its value is carried in the immutable tag trailer;
-channel is never inferred from a suffix.
+The channel is explicit and configured, and `pfBlockerNG-Release-Channel: <stable|testing|edge>`
+is carried in the immutable tag trailer; channel is never inferred from a suffix. Every
+operation uses a pinned source SHA.
 
 The same Release and artifact bytes are reused when Edge follows Testing; no second Release
 or rebuild is permitted.
@@ -46,7 +48,7 @@ or rebuild is permitted.
 Nightly input identity includes source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
 Its changed-input counter uses UTC `YYYYMMDD`, then `YYYYMMDD_1`/`_2` for same-day changes;
 unchanged or skipped days are no-ops. Keep its Ports recipe static: no routine version
-commit, no target final, and no PORTEPOCH. bare date versions intentionally outrank semantic
+commit, no target final, and no PORTEPOCH. Bare date versions intentionally outrank semantic
 releases; a reverse movement requires an explicit repo-qualified downgrade.
 
 Never commit notes to the repository. If publication stops, report the draft URL and the

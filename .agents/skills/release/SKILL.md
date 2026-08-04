@@ -10,26 +10,28 @@ description: >
 
 Use for a request to prepare a Stable, Testing, or Edge release. Require an explicit
 channel and configured `release/X.Y` source line. The channel is explicit and configured;
-store that choice in the immutable tag trailer and never infer it from a suffix.
+store `pfBlockerNG-Release-Channel: <stable|testing|edge>` in the immutable tag trailer and
+never infer it from a suffix. Use a pinned source SHA for every channel.
 
 ## Contract
 
 - Stable uses `vX.Y.Z` / `X.Y.Z`.
 - Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN`; the package version is the
   exact `X.Y.Z.aN`, `X.Y.Z.bN`, or `X.Y.Z.rN` value.
-- Edge uses the same Testing grammar and package version. It follows Testing on the
-  configured release line. With no distinct Edge target, mirror the exact existing
+- Edge uses the same Testing grammar and package version. Edge follows Testing only when no distinct target
+  exists; distinct-target Edge uses its configured target/line. With no
+  distinct Edge target, mirror the exact existing
   Testing Release and artifact bytes, checksums, source, provenance, tag, and notes:
   the result has the same Release and artifact bytes, no second Release, and no rebuild.
   When that target becomes Stable, Edge keeps
   following Testing until a new target is configured.
 - Nightly is untagged, has no GitHub Release, and has no release notes. It is generated
-  independently from the `devel` branch when its input changes. A changed input uses UTC date
+  independently from its pinned source when its input changes. A changed input uses UTC date
   `YYYYMMDD`; another changed input on the same date uses `YYYYMMDD_1`, then `_2`. An
   unchanged input or skipped day is a no-op.
 - Nightly identity includes source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
   Keep the Ports recipe static: no routine version commit, no target final, and no
-  PORTEPOCH. bare date versions intentionally outrank semantic releases; a reverse
+  PORTEPOCH. Bare date versions intentionally outrank semantic releases; a reverse
   movement requires an explicit repo-qualified downgrade.
 
 ## Procedure
