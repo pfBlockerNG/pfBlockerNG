@@ -16,6 +16,7 @@ import hashlib
 import io
 import json
 import lzma
+import posixpath
 import re
 import shutil
 import subprocess
@@ -327,6 +328,8 @@ def _archive_tar(path: Path) -> list[tarfile.TarInfo]:
                     raise PkgError(f"{path.name}: unexpected metadata member {name!r}")
                 if not name.startswith("+") and not name.startswith("/"):
                     raise PkgError(f"{path.name}: payload member must be absolute {name!r}")
+                if not name.startswith("+") and (name == "/" or "" in pieces[1:] or posixpath.normpath(name) != name):
+                    raise PkgError(f"{path.name}: unsafe archive member {name!r}")
                 if not member.isreg():
                     raise PkgError(f"{path.name}: non-regular archive member {name!r}")
             return members
